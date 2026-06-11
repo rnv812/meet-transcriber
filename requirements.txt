@@ -1,0 +1,6 @@
+faster-whisper>=1.1
+pyannote.audio>=3.3
+pyaudiowpatch>=0.2.12.7
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
+pytest
