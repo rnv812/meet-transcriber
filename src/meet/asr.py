@@ -1,5 +1,12 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+
+@dataclass
+class Word:
+    start: float
+    end: float
+    text: str
 
 
 @dataclass
@@ -8,6 +15,7 @@ class Segment:
     end: float
     text: str
     speaker: str | None = None
+    words: list[Word] = field(default_factory=list)
 
 
 def _add_nvidia_dll_dirs() -> None:
@@ -21,8 +29,13 @@ def _add_nvidia_dll_dirs() -> None:
             os.add_dll_directory(str(bin_dir))
 
 
-def transcribe_wav(path: Path) -> list[Segment]:
-    """Распознать русскую речь; при нехватке видеопамяти — квантованная модель."""
+def transcribe_wav(path: Path, hotwords: str | None = None) -> list[Segment]:
+    """Распознать русскую речь; при нехватке видеопамяти — квантованная модель.
+
+    Пословные таймкоды нужны для точной привязки спикеров.
+    condition_on_previous_text оставлен включённым (по умолчанию): проверка
+    на реальной встрече показала, что без него пунктуация и термины заметно
+    деградируют, а зацикливаний и так не было благодаря vad_filter."""
     _add_nvidia_dll_dirs()
     from faster_whisper import WhisperModel
 
@@ -31,8 +44,22 @@ def transcribe_wav(path: Path) -> list[Segment]:
         try:
             model = WhisperModel("large-v3", device="cuda", compute_type=compute_type)
             print(f"Распознавание ({compute_type})...")
-            segments, _ = model.transcribe(str(path), language="ru", vad_filter=True)
-            result = [Segment(s.start, s.end, s.text.strip()) for s in segments]
+            segments, _ = model.transcribe(
+                str(path),
+                language="ru",
+                vad_filter=True,
+                word_timestamps=True,
+                hotwords=hotwords,
+            )
+            result = [
+                Segment(
+                    s.start,
+                    s.end,
+                    s.text.strip(),
+                    words=[Word(w.start, w.end, w.word) for w in (s.words or [])],
+                )
+                for s in segments
+            ]
             del model
             return result
         except RuntimeError as e:

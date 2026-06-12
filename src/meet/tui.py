@@ -21,11 +21,18 @@ def latest_recording(root: Path) -> Path | None:
     return max(complete, key=lambda d: d.name, default=None)
 
 
+def _ask_speakers() -> int | None:
+    raw = input(
+        "Сколько говорящих? (для папок записи — не считая вас; Enter — авто): "
+    ).strip()
+    return int(raw) if raw.isdigit() and int(raw) > 0 else None
+
+
 def _transcribe(path: Path) -> None:
     from meet.transcribe import transcribe
 
     try:
-        transcribe(str(path))
+        transcribe(str(path), speakers=_ask_speakers())
     except SystemExit as e:  # не закрывать меню из-за ошибки одной расшифровки
         print(e)
 

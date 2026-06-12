@@ -1,13 +1,12 @@
 import os
 from pathlib import Path
 
-from meet.asr import Segment
+from meet.asr import Segment, Word
 
 _TOKEN_HELP = (
     "Нет токена HuggingFace (нужен для моделей диаризации pyannote).\n"
     "1) Токен: https://hf.co/settings/tokens\n"
-    "2) Принять условия: https://hf.co/pyannote/speaker-diarization-3.1\n"
-    "   и https://hf.co/pyannote/segmentation-3.0\n"
+    "2) Принять условия: https://hf.co/pyannote/speaker-diarization-community-1\n"
     "3) setx HF_TOKEN hf_... и перезапустить терминал."
 )
 
@@ -28,8 +27,16 @@ def _load_wav(path: Path):
     return waveform, rate
 
 
-def diarize_wav(path: Path) -> list[tuple[float, float, str]]:
-    """Интервалы (start, end, SPEAKER_XX) по записи."""
+def diarize_wav(
+    path: Path,
+    num_speakers: int | None = None,
+    min_speakers: int | None = None,
+    max_speakers: int | None = None,
+) -> list[tuple[float, float, str]]:
+    """Интервалы (start, end, SPEAKER_XX) по записи.
+
+    Берём exclusive-раскладку («в каждый момент говорит ровно один») —
+    она сделана именно для сшивки с неточными таймкодами ASR."""
     token = os.environ.get("HF_TOKEN")
     if not token:
         raise SystemExit(_TOKEN_HELP)
@@ -38,25 +45,73 @@ def diarize_wav(path: Path) -> list[tuple[float, float, str]]:
     from pyannote.audio import Pipeline
 
     print("Диаризация...")
-    pipe = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=token)
+    pipe = Pipeline.from_pretrained(
+        "pyannote/speaker-diarization-community-1", token=token
+    )
     pipe.to(torch.device("cuda"))
     waveform, rate = _load_wav(path)
-    result = pipe({"waveform": waveform, "sample_rate": rate})
-    annotation = getattr(result, "speaker_diarization", result)
+    result = pipe(
+        {"waveform": waveform, "sample_rate": rate},
+        num_speakers=num_speakers,
+        min_speakers=min_speakers,
+        max_speakers=max_speakers,
+    )
+    annotation = getattr(result, "exclusive_speaker_diarization", None)
+    if annotation is None:
+        annotation = getattr(result, "speaker_diarization", result)
     return [
         (turn.start, turn.end, label)
         for turn, _, label in annotation.itertracks(yield_label=True)
     ]
 
 
-def assign_speakers(
+def _word_speaker(word: Word, turns: list[tuple[float, float, str]]) -> str | None:
+    """Спикер с максимальным перекрытием; без перекрытия — ближайший интервал."""
+    best, best_overlap = None, 0.0
+    for start, end, label in turns:
+        overlap = min(word.end, end) - max(word.start, start)
+        if overlap > best_overlap:
+            best, best_overlap = label, overlap
+    if best is not None:
+        return best
+    nearest = min(
+        turns,
+        key=lambda t: max(t[0] - word.end, word.start - t[1], 0.0),
+        default=None,
+    )
+    return nearest[2] if nearest else None
+
+
+def split_by_speaker(
     segments: list[Segment], turns: list[tuple[float, float, str]]
-) -> None:
-    """Каждому сегменту — спикер с максимальным перекрытием по времени (in-place)."""
+) -> list[Segment]:
+    """Разрезать сегменты ASR по сменам спикера, назначая спикера пословно.
+
+    Сегмент whisper может захватить смену говорящего — короткая вставка
+    («Ага», «Понял») при посегментной привязке растворяется в чужой реплике."""
+    if not turns:
+        return segments
+
+    out: list[Segment] = []
     for seg in segments:
-        best, best_overlap = None, 0.0
-        for start, end, label in turns:
-            overlap = min(seg.end, end) - max(seg.start, start)
-            if overlap > best_overlap:
-                best, best_overlap = label, overlap
-        seg.speaker = best
+        if not seg.words:
+            whole = Word(seg.start, seg.end, seg.text)
+            out.append(Segment(seg.start, seg.end, seg.text, _word_speaker(whole, turns)))
+            continue
+        run: list[Word] = []
+        run_speaker: str | None = None
+        for word in seg.words:
+            speaker = _word_speaker(word, turns)
+            if run and speaker != run_speaker:
+                out.append(_run_to_segment(run, run_speaker))
+                run = []
+            run.append(word)
+            run_speaker = speaker
+        if run:
+            out.append(_run_to_segment(run, run_speaker))
+    return out
+
+
+def _run_to_segment(run: list[Word], speaker: str | None) -> Segment:
+    text = "".join(w.text for w in run).strip()
+    return Segment(run[0].start, run[-1].end, text, speaker)
