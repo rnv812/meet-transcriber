@@ -12,6 +12,17 @@ def main() -> None:
 
     p_tr = sub.add_parser("transcribe", help="транскрибировать запись")
     p_tr.add_argument("path", help="папка записи (sys.wav+mic.wav) или аудио/видеофайл")
+    p_tr.add_argument(
+        "--speakers",
+        type=int,
+        help="число говорящих в записи (для папки записи — не считая вас); "
+        "помогает не потерять тех, кто говорил мало",
+    )
+    p_tr.add_argument(
+        "--hotwords",
+        help="термины через запятую, подсказка распознаванию "
+        "(например: 'джоба, экшен, коррелятор')",
+    )
 
     args = parser.parse_args()
     if args.command == "record":
@@ -21,4 +32,4 @@ def main() -> None:
     else:
         from meet.transcribe import transcribe
 
-        transcribe(args.path)
+        transcribe(args.path, speakers=args.speakers, hotwords=args.hotwords)
