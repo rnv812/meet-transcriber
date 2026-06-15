@@ -3,7 +3,8 @@ from meet.asr import Segment
 
 def fmt_ts(seconds: float) -> str:
     s = int(seconds)
-    return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
+    h, m, sec = s // 3600, s % 3600 // 60, s % 60
+    return f"{h:02d}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
 
 
 def merge_consecutive(segments: list[Segment], max_gap: float = 2.0) -> list[Segment]:
@@ -28,12 +29,26 @@ def speaker_names(segments: list[Segment]) -> dict[str, str]:
     return names
 
 
-def to_markdown(title: str, segments: list[Segment]) -> str:
+def to_markdown(title: str, segments: list[Segment], date: str = "") -> str:
+    """Транскрипт в формате скилла transcript-to-md: «## ВРЕМЯ — Спикер».
+
+    Если задан date (ISO YYYY-MM-DD), сверху добавляется frontmatter для Obsidian
+    с пустым task (заполняется вручную при переносе в хранилище).
+    """
     names = speaker_names(segments)
-    duration_min = int(segments[-1].end // 60) if segments else 0
-    lines = [f"# {title}", f"Длительность: {duration_min} мин", ""]
+    lines: list[str] = []
+    if date:
+        lines += [
+            "---",
+            f"date: {date}",
+            "task:",
+            "type: transcript",
+            "tags: [claude-generated, transcript]",
+            "---",
+            "",
+        ]
+    lines += [f"# {title}", ""]
     for seg in merge_consecutive(segments):
         who = names.get(seg.speaker, seg.speaker) if seg.speaker else "Спикер ?"
-        lines.append(f"**[{fmt_ts(seg.start)}] {who}:** {seg.text}")
-        lines.append("")
+        lines += [f"## {fmt_ts(seg.start)} — {who}", "", seg.text, ""]
     return "\n".join(lines)

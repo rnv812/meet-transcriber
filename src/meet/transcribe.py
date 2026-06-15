@@ -1,10 +1,30 @@
+import re
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from meet.asr import Segment, transcribe_wav
 from meet.audio import to_wav16k
 from meet.diarize import diarize_wav, split_by_speaker
 from meet.output import to_markdown
+
+
+def _folder_dates(name: str) -> tuple[str, str]:
+    """Дата из имени папки записи (recorder именует папки YYYY-MM-DD_...).
+
+    → (ISO YYYY-MM-DD, ДД.ММ.ГГГГ); если префикс не распознан — текущая дата.
+    """
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", name)
+    if m:
+        y, mo, d = m.groups()
+        return f"{y}-{mo}-{d}", f"{d}.{mo}.{y}"
+    dt = datetime.now()
+    return f"{dt:%Y-%m-%d}", f"{dt:%d.%m.%Y}"
+
+
+def _file_dates(p: Path) -> tuple[str, str]:
+    dt = datetime.fromtimestamp(p.stat().st_mtime)
+    return f"{dt:%Y-%m-%d}", f"{dt:%d.%m.%Y}"
 
 
 def transcribe(
@@ -18,14 +38,16 @@ def transcribe(
 
     if path.is_dir():
         segments = _transcribe_two_track(path, speakers, hotwords)
-        out_md = path / "transcript.md"
-        title = f"Встреча {path.name}"
+        iso, dmy = _folder_dates(path.name)
+        out_md = path / f"{iso}_transcript.md"
+        title = f"Встреча — {dmy}"
     else:
         segments = _transcribe_single(path, speakers, hotwords)
+        iso, dmy = _file_dates(path)
         out_md = path.with_suffix(".md")
-        title = f"Встреча: {path.stem}"
+        title = f"{path.stem} — {dmy}"
 
-    out_md.write_text(to_markdown(title, segments), encoding="utf-8")
+    out_md.write_text(to_markdown(title, segments, iso), encoding="utf-8")
     print(f"Готово: {out_md}")
     return out_md
 

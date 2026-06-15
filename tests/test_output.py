@@ -3,7 +3,8 @@ from meet.output import fmt_ts, merge_consecutive, speaker_names, to_markdown
 
 
 def test_fmt_ts():
-    assert fmt_ts(0) == "00:00:00"
+    assert fmt_ts(0) == "00:00"
+    assert fmt_ts(75) == "01:15"
     assert fmt_ts(3725.9) == "01:02:05"
 
 
@@ -52,9 +53,16 @@ def test_to_markdown():
         Segment(25.0, 30.0, "Да, по первому вопросу.", "SPEAKER_00"),
         Segment(31.0, 32.0, "Угу.", None),
     ]
-    md = to_markdown("Встреча 2026-06-12 15:30", segs)
-    assert md.startswith("# Встреча 2026-06-12 15:30\n")
-    assert "Длительность: 0 мин" in md
-    assert "**[00:00:12] Вы:** Коллеги, начнём." in md
-    assert "**[00:00:25] Спикер 1:** Да, по первому вопросу." in md
-    assert "**[00:00:31] Спикер ?:** Угу." in md
+    md = to_markdown("Встреча — 12.06.2026", segs, date="2026-06-12")
+    assert md.startswith("---\ndate: 2026-06-12\ntask:\ntype: transcript\n")
+    assert "tags: [claude-generated, transcript]" in md
+    assert "# Встреча — 12.06.2026" in md
+    assert "## 00:12 — Вы\n\nКоллеги, начнём." in md
+    assert "## 00:25 — Спикер 1\n\nДа, по первому вопросу." in md
+    assert "## 00:31 — Спикер ?\n\nУгу." in md
+
+
+def test_to_markdown_without_date_has_no_frontmatter():
+    md = to_markdown("Заголовок", [Segment(0.0, 1.0, "Раз.", "Вы")])
+    assert not md.startswith("---")
+    assert md.startswith("# Заголовок\n")
