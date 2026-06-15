@@ -9,6 +9,27 @@ from meet.diarize import diarize_wav, split_by_speaker
 from meet.output import to_markdown
 
 
+HOTWORDS_FILE = Path("hotwords.txt")
+
+
+def _load_hotwords(extra: str | None, path: Path = HOTWORDS_FILE) -> str | None:
+    """Подсказка лексики для распознавания: накопительный список из hotwords.txt
+    (по термину на строку, # — комментарий) плюс разовые термины из --hotwords.
+
+    Возвращает термины через запятую (как ждёт faster-whisper) или None.
+    """
+    terms: list[str] = []
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            term = line.split("#", 1)[0].strip()
+            if term:
+                terms.append(term)
+    if extra:
+        terms += [t.strip() for t in extra.split(",") if t.strip()]
+    seen: dict[str, None] = dict.fromkeys(terms)  # дедуп с сохранением порядка
+    return ", ".join(seen) if seen else None
+
+
 def _folder_dates(name: str) -> tuple[str, str]:
     """Дата из имени папки записи (recorder именует папки YYYY-MM-DD_...).
 
@@ -35,6 +56,8 @@ def transcribe(
     path = Path(path_str)
     if not path.exists():
         raise SystemExit(f"Не найдено: {path}")
+
+    hotwords = _load_hotwords(hotwords)
 
     if path.is_dir():
         segments = _transcribe_two_track(path, speakers, hotwords)
