@@ -1,7 +1,33 @@
 import argparse
 
 
+def _quiet_known_warnings() -> None:
+    """Глушит безобидные ворнинги зависимостей, чтобы не зашумлять вывод.
+
+    Все они ожидаемы на Windows/GPU и на результат не влияют; см. CLAUDE.md.
+    """
+    import logging
+    import warnings
+
+    # torchcodec не грузится на Windows — diarize.py сам читает wav (см. CLAUDE.md).
+    # Сообщение многострочное и начинается с переноса, поэтому ведущий \s*.
+    warnings.filterwarnings(
+        "ignore", message=r"\s*torchcodec is not installed correctly"
+    )
+    # pyannote осознанно выключает TF32 ради воспроизводимости.
+    warnings.filterwarnings(
+        "ignore", message=r"TensorFloat-32 .* has been disabled"
+    )
+    # Краевой случай пулинга эмбеддингов на сверхкоротком сегменте.
+    warnings.filterwarnings(
+        "ignore", message=r"std\(\): degrees of freedom is <= 0"
+    )
+    # triton не ставится на Windows; flop-профилирование не используется.
+    logging.getLogger("torch.utils.flop_counter").setLevel(logging.ERROR)
+
+
 def main() -> None:
+    _quiet_known_warnings()
     parser = argparse.ArgumentParser(
         prog="meet", description="Локальный транскрибатор встреч"
     )
