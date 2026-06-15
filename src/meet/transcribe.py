@@ -92,7 +92,7 @@ def _transcribe_two_track(
     if not (sys_src.exists() and mic_src.exists()):
         raise SystemExit(f"В {folder} нет sys.wav и mic.wav")
     with tempfile.TemporaryDirectory() as td:
-        sys_wav = to_wav16k(sys_src, Path(td) / "sys16.wav")
+        sys_wav = to_wav16k(sys_src, Path(td) / "sys16.wav", normalize=True)
         mic_wav = to_wav16k(mic_src, Path(td) / "mic16.wav")
         sys_segs = transcribe_wav(sys_wav, hotwords)
         sys_segs = split_by_speaker(
