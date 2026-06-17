@@ -53,6 +53,27 @@ def _segments_from_whisper(raw_segments, offset_s: float = 0.0) -> list[Segment]
     return result
 
 
+def drop_hallucinations(
+    segments: list[Segment],
+    *,
+    max_no_speech: float = 0.6,
+    min_avg_logprob: float = -1.0,
+) -> list[Segment]:
+    """Убрать пустые сегменты и похожие на галлюцинации Whisper на тишине/шуме:
+    высокая вероятность «не речь» или слишком низкая средняя уверенность.
+    None-метрики (офлайн-путь) не фильтруются."""
+    kept: list[Segment] = []
+    for s in segments:
+        if not s.text:
+            continue
+        if s.no_speech_prob is not None and s.no_speech_prob > max_no_speech:
+            continue
+        if s.avg_logprob is not None and s.avg_logprob < min_avg_logprob:
+            continue
+        kept.append(s)
+    return kept
+
+
 def transcribe_wav(path: Path, hotwords: str | None = None) -> list[Segment]:
     """Распознать русскую речь; при нехватке видеопамяти — квантованная модель.
 
