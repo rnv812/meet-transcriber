@@ -78,7 +78,7 @@ def drop_hallucinations(
     """Убрать пустые сегменты и похожие на галлюцинации Whisper на тишине/шуме:
     высокая вероятность «не речь» или слишком низкая средняя уверенность,
     а также сегменты с фразами из денилиста известных артефактов Whisper.
-    None-метрики (офлайн-путь) не фильтруются."""
+    None-метрики (офлайн-путь) по порогам не фильтруются; денилист — всегда."""
     kept: list[Segment] = []
     for s in segments:
         if not s.text:
@@ -87,6 +87,7 @@ def drop_hallucinations(
             continue
         if s.avg_logprob is not None and s.avg_logprob < min_avg_logprob:
             continue
+        # денилист независим от метрик: сработает даже при None-метриках
         norm = s.text.lower().strip()
         if any(phrase in norm for phrase in _HALLUCINATION_PHRASES):
             continue
