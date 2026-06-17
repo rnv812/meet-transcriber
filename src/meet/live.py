@@ -102,3 +102,99 @@ class LiveEngine:
             self._out = open(self._transcript, "a", encoding="utf-8")
         self._out.write(line + "\n")
         self._out.flush()
+
+    def start(self) -> None:
+        import pyaudiowpatch as pyaudio
+
+        from meet.recorder import WavWriter, _find_loopback
+
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self._transcriber.load()
+        self._p = pyaudio.PyAudio()
+        wasapi = self._p.get_host_api_info_by_type(pyaudio.paWASAPI)
+        devices = (
+            (_find_loopback(self._p), "sys.wav", True),
+            (self._p.get_device_info_by_index(wasapi["defaultInputDevice"]), "mic.wav", False),
+        )
+        for dev, fname, normalize in devices:
+            channels = max(1, int(dev["maxInputChannels"]))
+            rate = int(dev["defaultSampleRate"])
+            writer = WavWriter(self.out_dir / fname, channels, rate)
+            self.register_track(fname, rate, channels, normalize=normalize)
+            buf = self._tracks[fname]["buffer"]
+
+            def make_cb(w: WavWriter, b: TrackBuffer):
+                def cb(in_data, frame_count, time_info, status):
+                    w.write(in_data)
+                    b.push(in_data)
+                    return (None, pyaudio.paContinue)
+
+                return cb
+
+            stream = self._p.open(
+                format=pyaudio.paInt16,
+                channels=channels,
+                rate=rate,
+                input=True,
+                input_device_index=int(dev["index"]),
+                frames_per_buffer=1024,
+                stream_callback=make_cb(writer, buf),
+            )
+            self._streams.append((stream, writer))
+            print(f"  {fname}: {dev['name']} ({rate} Hz, {channels} ch)")
+
+        self._worker = threading.Thread(target=self._run, daemon=True)
+        self._worker.start()
+        print(f"Живой режим идёт. Транскрипт: {self._transcript}")
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.window_seconds):
+            try:
+                self.process_window()
+            except Exception as e:  # окно не должно валить весь режим
+                self._write_line(f"<!-- ошибка окна: {e} -->")
+
+    def stop(self) -> Path:
+        self._stop.set()
+        if self._worker is not None:
+            self._worker.join(timeout=self.window_seconds + 30)
+        try:
+            self.process_window()  # финальный слив остатка буфера
+        except Exception:
+            pass
+        for stream, writer in self._streams:
+            stream.stop_stream()
+            stream.close()
+            writer.close()
+        if self._p is not None:
+            self._p.terminate()
+        if self._out is not None:
+            self._out.close()
+        self._transcriber.unload()
+        return self.out_dir
+
+
+def run_live(out_root: str, window_seconds: float = 20.0,
+             hotwords: str | None = None) -> Path:
+    from datetime import datetime
+
+    from meet.asr import Transcriber
+    from meet.transcribe import _load_hotwords
+
+    out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
+    engine = LiveEngine(
+        out_dir,
+        Transcriber(),
+        window_seconds=window_seconds,
+        hotwords=_load_hotwords(hotwords),
+    )
+    engine.start()
+    try:
+        while True:
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        pass
+    engine.stop()
+    print(f"\nОстановлено: {out_dir}")
+    print(f'Точный транскрипт: meet transcribe "{out_dir}"')
+    return out_dir
