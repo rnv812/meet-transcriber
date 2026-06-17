@@ -16,6 +16,8 @@ class Segment:
     text: str
     speaker: str | None = None
     words: list[Word] = field(default_factory=list)
+    no_speech_prob: float | None = None
+    avg_logprob: float | None = None
 
 
 def _add_nvidia_dll_dirs() -> None:
@@ -27,6 +29,28 @@ def _add_nvidia_dll_dirs() -> None:
     for sp in site.getsitepackages():
         for bin_dir in (Path(sp) / "nvidia").glob("*/bin"):
             os.add_dll_directory(str(bin_dir))
+
+
+def _segments_from_whisper(raw_segments, offset_s: float = 0.0) -> list[Segment]:
+    """Сегменты faster-whisper → list[Segment]; offset_s переводит таймкоды окна
+    (всегда от нуля) в абсолютное время встречи. no_speech_prob/avg_logprob
+    сохраняются для фильтра галлюцинаций (drop_hallucinations)."""
+    result: list[Segment] = []
+    for s in raw_segments:
+        words = [
+            Word(w.start + offset_s, w.end + offset_s, w.word) for w in (s.words or [])
+        ]
+        result.append(
+            Segment(
+                s.start + offset_s,
+                s.end + offset_s,
+                s.text.strip(),
+                words=words,
+                no_speech_prob=getattr(s, "no_speech_prob", None),
+                avg_logprob=getattr(s, "avg_logprob", None),
+            )
+        )
+    return result
 
 
 def transcribe_wav(path: Path, hotwords: str | None = None) -> list[Segment]:
@@ -51,15 +75,7 @@ def transcribe_wav(path: Path, hotwords: str | None = None) -> list[Segment]:
                 word_timestamps=True,
                 hotwords=hotwords,
             )
-            result = [
-                Segment(
-                    s.start,
-                    s.end,
-                    s.text.strip(),
-                    words=[Word(w.start, w.end, w.word) for w in (s.words or [])],
-                )
-                for s in segments
-            ]
+            result = _segments_from_whisper(segments)
             del model
             return result
         except RuntimeError as e:
