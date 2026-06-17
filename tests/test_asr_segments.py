@@ -43,3 +43,18 @@ def test_drop_hallucinations_filters_noise_lowconf_and_empty():
 def test_drop_hallucinations_keeps_when_metrics_none():
     seg = Segment(0, 1, "офлайн без метрик")
     assert drop_hallucinations([seg]) == [seg]
+
+
+def test_drop_hallucinations_drops_credits_phrase_despite_normal_metrics():
+    seg = Segment(0, 1, "Субтитры сделал DimaTorzok", no_speech_prob=0.2, avg_logprob=-0.3)
+    assert drop_hallucinations([seg]) == []
+
+
+def test_drop_hallucinations_drops_thanks_for_watching():
+    seg = Segment(0, 1, "Спасибо за просмотр!", no_speech_prob=0.2, avg_logprob=-0.3)
+    assert drop_hallucinations([seg]) == []
+
+
+def test_drop_hallucinations_keeps_benign_subtitles_mention():
+    seg = Segment(0, 1, "Субтитры мы пока не делали.", no_speech_prob=0.2, avg_logprob=-0.3)
+    assert drop_hallucinations([seg]) == [seg]

@@ -53,6 +53,22 @@ def _segments_from_whisper(raw_segments, offset_s: float = 0.0) -> list[Segment]
     return result
 
 
+# Консервативный денилист известных артефактов Whisper из обучающих данных
+# (титры/«спасибо за просмотр»), которых в реальной рабочей речи не бывает.
+# Совпадение по конкретным многословным фразам / уникальным токенам
+# (НЕ по голому слову «субтитры»), чтобы не выкинуть легитимную речь.
+_HALLUCINATION_PHRASES = (
+    "dimatorzok",
+    "amara.org",
+    "субтитры сделал",
+    "субтитры создавал",
+    "субтитры подготовил",
+    "редактор субтитров",
+    "спасибо за просмотр",
+    "продолжение следует",
+)
+
+
 def drop_hallucinations(
     segments: list[Segment],
     *,
@@ -60,7 +76,8 @@ def drop_hallucinations(
     min_avg_logprob: float = -1.0,
 ) -> list[Segment]:
     """Убрать пустые сегменты и похожие на галлюцинации Whisper на тишине/шуме:
-    высокая вероятность «не речь» или слишком низкая средняя уверенность.
+    высокая вероятность «не речь» или слишком низкая средняя уверенность,
+    а также сегменты с фразами из денилиста известных артефактов Whisper.
     None-метрики (офлайн-путь) не фильтруются."""
     kept: list[Segment] = []
     for s in segments:
@@ -69,6 +86,9 @@ def drop_hallucinations(
         if s.no_speech_prob is not None and s.no_speech_prob > max_no_speech:
             continue
         if s.avg_logprob is not None and s.avg_logprob < min_avg_logprob:
+            continue
+        norm = s.text.lower().strip()
+        if any(phrase in norm for phrase in _HALLUCINATION_PHRASES):
             continue
         kept.append(s)
     return kept
