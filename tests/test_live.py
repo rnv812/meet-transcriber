@@ -8,9 +8,11 @@ class FakeTranscriber:
     def __init__(self, scripted):
         self.scripted = list(scripted)
         self.offsets = []
+        self.initial_prompts = []
 
     def transcribe_window(self, audio, *, offset_s=0.0, hotwords=None, initial_prompt=None):
         self.offsets.append(round(offset_s, 3))
+        self.initial_prompts.append(initial_prompt)
         rel = self.scripted.pop(0) if self.scripted else []
         return [
             Segment(
@@ -79,3 +81,38 @@ def test_track_buffer_fifo_drain():
     b.push(b"cd")
     assert b.drain() == b"abcd"
     assert b.drain() == b""
+
+
+def test_process_window_feeds_previous_tail_as_initial_prompt(tmp_path):
+    scripted = [
+        [Segment(0.0, 0.5, "первое окно", no_speech_prob=0.1, avg_logprob=-0.3)],
+        [Segment(0.2, 0.4, "второе окно", no_speech_prob=0.1, avg_logprob=-0.3)],
+    ]
+    fake = FakeTranscriber(scripted)
+    engine = LiveEngine(tmp_path, fake, window_seconds=20.0)
+    engine.register_track("sys.wav", rate=48000, channels=2, normalize=False)
+    buf = engine._tracks["sys.wav"]["buffer"]
+
+    buf.push(_one_second_2ch_48k())
+    engine.process_window()
+    buf.push(_one_second_2ch_48k())
+    engine.process_window()
+
+    assert fake.initial_prompts == [None, "первое окно"]
+
+
+def test_near_silent_first_window_does_not_freeze_gain(tmp_path):
+    fake = FakeTranscriber([[], []])
+    engine = LiveEngine(tmp_path, fake, window_seconds=20.0)
+    engine.register_track("sys.wav", rate=48000, channels=2, normalize=True)
+    buf = engine._tracks["sys.wav"]["buffer"]
+
+    # Near-silent opening window: must not lock in a gain of 1.0.
+    buf.push(np.zeros(48000 * 2, dtype=np.int16).tobytes())
+    engine.process_window()
+    assert engine._tracks["sys.wav"]["gain"] is None
+
+    # Later loud window: now calibrate and freeze a real gain.
+    buf.push((np.zeros(48000 * 2, dtype=np.int16) + 1000).tobytes())
+    engine.process_window()
+    assert isinstance(engine._tracks["sys.wav"]["gain"], float)

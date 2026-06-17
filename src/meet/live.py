@@ -3,6 +3,10 @@ import time
 from collections import deque
 from pathlib import Path
 
+# Ниже этого RMS окно считаем (почти) тишиной и НЕ замораживаем по нему гейн
+# far-end: иначе тихое стартовое окно навсегда зафиксировало бы gain=1.0.
+CALIBRATION_MIN_RMS = 1e-3
+
 
 def fmt_hms(seconds: float) -> str:
     s = int(seconds)
@@ -63,9 +67,12 @@ class LiveEngine:
             "elapsed": 0.0,
             "normalize": normalize,
             "gain": None,
+            "last_text": None,  # хвост прошлого окна → initial_prompt следующего
         }
 
     def process_window(self) -> None:
+        import numpy as np
+
         from meet.asr import drop_hallucinations
         from meet.audio import (
             apply_gain,
@@ -82,16 +89,31 @@ class LiveEngine:
             audio = resample_to_16k(mono, tr["rate"])
             duration = len(audio) / 16000.0
             if tr["normalize"]:
-                if tr["gain"] is None:
+                # Гейн far-end калибруем один раз и фиксируем. Сознательное
+                # упрощение спекового «измерить по первым ~30 с»: калибруемся по
+                # первому окну с реальной энергией far-end (тихое стартовое окно
+                # дало бы gain=1.0 на всю встречу). Точная EBU R128-нормализация
+                # всё равно делается в офлайн-проходе.
+                rms = float(np.sqrt(np.mean(np.square(audio)))) if len(audio) else 0.0
+                if tr["gain"] is None and rms >= CALIBRATION_MIN_RMS:
                     tr["gain"] = compute_gain(audio)
-                audio = apply_gain(audio, tr["gain"])
+                # На текущее окно применяем зафиксированный гейн, иначе разовый
+                # для этого окна (на тихом окне даст ~1.0 — ничего не ломает).
+                audio = apply_gain(
+                    audio, tr["gain"] if tr["gain"] is not None else compute_gain(audio)
+                )
             offset = tr["elapsed"]
             tr["elapsed"] = offset + duration  # двигаем по длительности захвата
             segs = drop_hallucinations(
                 self._transcriber.transcribe_window(
-                    audio, offset_s=offset, hotwords=self.hotwords
+                    audio,
+                    offset_s=offset,
+                    hotwords=self.hotwords,
+                    initial_prompt=tr.get("last_text"),
                 )
             )
+            if segs:
+                tr["last_text"] = segs[-1].text  # хвост → контекст следующего окна
             speaker = self.SPEAKERS.get(fname, fname)
             for s in segs:
                 self._write_line(format_live_line(s.start, speaker, s.text))
