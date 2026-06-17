@@ -108,3 +108,64 @@ def transcribe_wav(path: Path, hotwords: str | None = None) -> list[Segment]:
 
             torch.cuda.empty_cache()
     raise SystemExit(f"Модель не загрузилась даже в int8: {last_error}")
+
+
+class Transcriber:
+    """Резидентная модель Whisper для живого режима: грузится один раз,
+    расшифровывает окна аудио без перезагрузки на каждый вызов."""
+
+    def __init__(self) -> None:
+        self._model = None
+        self.compute_type: str | None = None
+
+    def load(self) -> None:
+        _add_nvidia_dll_dirs()
+        from faster_whisper import WhisperModel
+
+        last_error: Exception | None = None
+        for compute_type in ("float16", "int8_float16"):
+            try:
+                self._model = WhisperModel(
+                    "large-v3", device="cuda", compute_type=compute_type
+                )
+                self.compute_type = compute_type
+                print(f"Модель загружена ({compute_type})")
+                return
+            except RuntimeError as e:
+                if "memory" not in str(e).lower():
+                    raise
+                last_error = e
+                print(f"Не хватило видеопамяти ({compute_type}), пробую компактнее...")
+                import torch
+
+                torch.cuda.empty_cache()
+        raise SystemExit(f"Модель не загрузилась даже в int8: {last_error}")
+
+    def transcribe_window(
+        self,
+        audio,
+        *,
+        offset_s: float = 0.0,
+        hotwords: str | None = None,
+        initial_prompt: str | None = None,
+    ) -> list[Segment]:
+        if self._model is None:
+            raise RuntimeError("Transcriber.load() не был вызван")
+        segments, _ = self._model.transcribe(
+            audio,
+            language="ru",
+            vad_filter=True,
+            word_timestamps=True,
+            hotwords=hotwords,
+            initial_prompt=initial_prompt,
+        )
+        return _segments_from_whisper(segments, offset_s)
+
+    def unload(self) -> None:
+        self._model = None
+        try:
+            import torch
+
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
