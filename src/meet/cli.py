@@ -50,11 +50,26 @@ def main() -> None:
         "(например: 'джоба, экшен, коррелятор')",
     )
 
+    p_live = sub.add_parser(
+        "live", help="живой режим: запись + потоковая расшифровка для ассистента"
+    )
+    p_live.add_argument("--out", default="recordings", help="папка для записей")
+    p_live.add_argument(
+        "--window", type=float, default=20.0, help="длина окна расшифровки, сек"
+    )
+    p_live.add_argument(
+        "--hotwords", help="термины через запятую, подсказка распознаванию"
+    )
+
     args = parser.parse_args()
     if args.command == "record":
         from meet.recorder import record
 
         record(args.out)
+    elif args.command == "live":
+        from meet.live import run_live
+
+        run_live(args.out, window_seconds=args.window, hotwords=args.hotwords)
     else:
         from meet.transcribe import transcribe
 
