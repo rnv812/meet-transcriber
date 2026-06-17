@@ -45,11 +45,14 @@ class LiveEngine:
     SPEAKERS = {"sys.wav": "Собеседник", "mic.wav": "Вы"}
 
     def __init__(self, out_dir, transcriber, window_seconds: float = 20.0,
-                 hotwords: str | None = None) -> None:
+                 hotwords: str | None = None, clock=None) -> None:
         self.out_dir = Path(out_dir)
         self._transcriber = transcriber
         self.window_seconds = window_seconds
         self.hotwords = hotwords
+        self._clock = clock or time.monotonic
+        self._t0 = None  # wall-clock at first process_window tick
+        self._tick_origin = None  # clock at previous tick → this window's start offset
         self._tracks: dict[str, dict] = {}
         self._transcript = self.out_dir / "live_transcript.md"
         self._out = None
@@ -64,7 +67,6 @@ class LiveEngine:
             "buffer": TrackBuffer(),
             "rate": rate,
             "channels": channels,
-            "elapsed": 0.0,
             "normalize": normalize,
             "gain": None,
             "last_text": None,  # хвост прошлого окна → initial_prompt следующего
@@ -81,13 +83,22 @@ class LiveEngine:
             resample_to_16k,
         )
 
+        # Окно N покрывает интервал стенных часов [tick_{N-1}, tick_N], поэтому
+        # стартовый offset окна — это часы предыдущего тика. Один offset на весь
+        # тик → обе дорожки используют общее начало координат и не расходятся,
+        # даже если одна дорожка в начале почти молчит (loopback без звука).
+        if self._t0 is None:
+            self._t0 = self._clock()
+            self._tick_origin = self._t0
+        offset = self._tick_origin - self._t0
+        now = self._clock()
+
         for fname, tr in self._tracks.items():
             raw = tr["buffer"].drain()
             if not raw:
                 continue
             mono = pcm16_to_float32_mono(raw, tr["channels"])
             audio = resample_to_16k(mono, tr["rate"])
-            duration = len(audio) / 16000.0
             if tr["normalize"]:
                 # Гейн far-end калибруем один раз и фиксируем. Сознательное
                 # упрощение спекового «измерить по первым ~30 с»: калибруемся по
@@ -102,8 +113,6 @@ class LiveEngine:
                 audio = apply_gain(
                     audio, tr["gain"] if tr["gain"] is not None else compute_gain(audio)
                 )
-            offset = tr["elapsed"]
-            tr["elapsed"] = offset + duration  # двигаем по длительности захвата
             segs = drop_hallucinations(
                 self._transcriber.transcribe_window(
                     audio,
@@ -117,6 +126,8 @@ class LiveEngine:
             speaker = self.SPEAKERS.get(fname, fname)
             for s in segs:
                 self._write_line(format_live_line(s.start, speaker, s.text))
+
+        self._tick_origin = now  # этот тик станет origin для следующего окна
 
     def _write_line(self, line: str) -> None:
         if self._out is None:
