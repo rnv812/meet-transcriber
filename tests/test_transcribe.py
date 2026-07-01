@@ -1,4 +1,5 @@
-from meet.transcribe import _find_track
+from meet.transcribe import _find_track, _maybe_align
+from meet.asr import Segment
 
 
 def test_find_track_returns_opus(tmp_path):
@@ -19,3 +20,20 @@ def test_find_track_prefers_opus_over_wav(tmp_path):
 
 def test_find_track_missing_returns_none(tmp_path):
     assert _find_track(tmp_path, "sys") is None
+
+
+def test_maybe_align_disabled_returns_input_unchanged():
+    segs = [Segment(0.0, 1.0, "привет")]
+    assert _maybe_align(segs, "x.wav", enabled=False) is segs
+
+
+def test_maybe_align_falls_back_on_error(monkeypatch):
+    segs = [Segment(0.0, 1.0, "привет")]
+    import meet.align
+
+    def boom(*a, **k):
+        raise RuntimeError("модель недоступна")
+
+    monkeypatch.setattr(meet.align, "align_segments", boom)
+    # ошибка alignment не должна ронять транскрибацию — откат на исходные сегменты
+    assert _maybe_align(segs, "x.wav", enabled=True) is segs

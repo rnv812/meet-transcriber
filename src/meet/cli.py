@@ -49,6 +49,12 @@ def main() -> None:
         help="термины через запятую, подсказка распознаванию "
         "(например: 'джоба, экшен, коррелятор')",
     )
+    p_tr.add_argument(
+        "--no-align",
+        dest="align",
+        action="store_false",
+        help="без forced alignment (быстрее, но грубее стыки спикеров)",
+    )
 
     p_live = sub.add_parser(
         "live", help="живой режим: запись + потоковая расшифровка для ассистента"
@@ -73,4 +79,9 @@ def main() -> None:
     else:
         from meet.transcribe import transcribe
 
-        transcribe(args.path, speakers=args.speakers, hotwords=args.hotwords)
+        transcribe(
+            args.path,
+            speakers=args.speakers,
+            hotwords=args.hotwords,
+            align=args.align,
+        )

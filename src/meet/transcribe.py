@@ -74,6 +74,21 @@ def _find_track(folder: Path, stem: str) -> Path | None:
     return None
 
 
+def _maybe_align(segments: list[Segment], wav: Path, enabled: bool) -> list[Segment]:
+    """При enabled — уточнить пословные таймкоды forced alignment'ом (точнее стыки
+    спикеров). Ошибка выравнивания не должна ронять транскрибацию: откатываемся на
+    исходные таймкоды whisper."""
+    if not enabled:
+        return segments
+    try:
+        from meet.align import align_segments
+
+        return align_segments(segments, wav)
+    except Exception as e:
+        print(f"forced alignment пропущен (ошибка: {e}); беру таймкоды whisper")
+        return segments
+
+
 def _folder_dates(name: str) -> tuple[str, str]:
     """Дата из имени папки записи (recorder именует папки YYYY-MM-DD_...).
 
@@ -96,6 +111,7 @@ def transcribe(
     path_str: str,
     speakers: int | None = None,
     hotwords: str | None = None,
+    align: bool = True,
 ) -> Path:
     path = Path(path_str)
     if not path.exists():
@@ -104,12 +120,12 @@ def transcribe(
     hotwords = _load_hotwords(hotwords)
 
     if path.is_dir():
-        segments = _transcribe_two_track(path, speakers, hotwords)
+        segments = _transcribe_two_track(path, speakers, hotwords, align)
         iso, dmy = _folder_dates(path.name)
         out_md = path / f"{iso}_transcript.md"
         title = f"Встреча — {dmy}"
     else:
-        segments = _transcribe_single(path, speakers, hotwords)
+        segments = _transcribe_single(path, speakers, hotwords, align)
         iso, dmy = _file_dates(path)
         out_md = path.with_suffix(".md")
         title = f"{path.stem} — {dmy}"
@@ -120,17 +136,18 @@ def transcribe(
 
 
 def _transcribe_single(
-    src: Path, speakers: int | None, hotwords: str | None
+    src: Path, speakers: int | None, hotwords: str | None, align: bool = True
 ) -> list[Segment]:
     with tempfile.TemporaryDirectory() as td:
         wav = to_wav16k(src, Path(td) / "audio16.wav")
         segments = transcribe_wav(wav, hotwords)
+        segments = _maybe_align(segments, wav, align)
         segments = split_by_speaker(segments, diarize_wav(wav, num_speakers=speakers))
     return segments
 
 
 def _transcribe_two_track(
-    folder: Path, speakers: int | None, hotwords: str | None
+    folder: Path, speakers: int | None, hotwords: str | None, align: bool = True
 ) -> list[Segment]:
     sys_src, mic_src = _find_track(folder, "sys"), _find_track(folder, "mic")
     if not (sys_src and mic_src):
@@ -139,6 +156,8 @@ def _transcribe_two_track(
         sys_wav = to_wav16k(sys_src, Path(td) / "sys16.wav", normalize=True)
         mic_wav = to_wav16k(mic_src, Path(td) / "mic16.wav")
         sys_segs = transcribe_wav(sys_wav, hotwords)
+        # forced alignment только для sys: mic — один спикер («Вы»), стыки не важны
+        sys_segs = _maybe_align(sys_segs, sys_wav, align)
         sys_segs = split_by_speaker(
             sys_segs, diarize_wav(sys_wav, num_speakers=speakers)
         )

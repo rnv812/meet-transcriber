@@ -1,5 +1,6 @@
 faster-whisper>=1.1
 pyannote.audio>=3.3
+transformers>=4.40
 scipy>=1.11
 pyaudiowpatch>=0.2.12.7
 nvidia-cublas-cu12
