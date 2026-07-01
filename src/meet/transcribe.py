@@ -11,6 +11,35 @@ from meet.output import to_markdown
 
 HOTWORDS_FILE = Path("hotwords.txt")
 
+# IMPORTANT: контекст Whisper — 448 токенов, и faster-whisper НЕЗАВИСИМО усекает
+# до 223 токенов и hotwords, и предыдущий текст (condition_on_previous_text);
+# вместе они переполняют окно (223+223+служебные > 448) и роняют декодирование
+# («maximum decoding length must be > 0»). Поэтому держим hotwords заведомо ниже.
+# Бюджет в символах: при замеренной плотности лексики ~2.4 симв./токен это ~160
+# токенов, и даже при пессимистичных 2.0 симв./токен ≈198 — итог с предыдущим
+# текстом остаётся < 448. Список можно пополнять и дальше: лишнее отсекается.
+HOTWORDS_CHAR_BUDGET = 400
+
+
+def _cap_hotwords(terms: list[str], budget: int = HOTWORDS_CHAR_BUDGET) -> list[str]:
+    """Ограничить набор подсказок бюджетом символов, чтобы он не переполнял
+    контекст Whisper. Приоритет — более свежим терминам (конец списка: разовые
+    --hotwords и свежие строки внизу hotwords.txt); итоговый порядок исходный."""
+    kept_reversed: list[str] = []
+    used = 0
+    for term in reversed(terms):
+        extra = len(term) + (2 if kept_reversed else 0)  # ", " между терминами
+        if used + extra > budget:
+            break
+        kept_reversed.append(term)
+        used += extra
+    if len(kept_reversed) < len(terms):
+        print(
+            f"hotwords: оставлено {len(kept_reversed)} из {len(terms)} терминов "
+            f"(бюджет {budget} симв.), чтобы не переполнить контекст Whisper"
+        )
+    return list(reversed(kept_reversed))
+
 
 def _load_hotwords(extra: str | None, path: Path = HOTWORDS_FILE) -> str | None:
     """Подсказка лексики для распознавания: накопительный список из hotwords.txt
@@ -26,8 +55,9 @@ def _load_hotwords(extra: str | None, path: Path = HOTWORDS_FILE) -> str | None:
                 terms.append(term)
     if extra:
         terms += [t.strip() for t in extra.split(",") if t.strip()]
-    seen: dict[str, None] = dict.fromkeys(terms)  # дедуп с сохранением порядка
-    return ", ".join(seen) if seen else None
+    seen = list(dict.fromkeys(terms))  # дедуп с сохранением порядка
+    kept = _cap_hotwords(seen)
+    return ", ".join(kept) if kept else None
 
 
 def _folder_dates(name: str) -> tuple[str, str]:
