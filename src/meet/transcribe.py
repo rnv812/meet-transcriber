@@ -60,6 +60,20 @@ def _load_hotwords(extra: str | None, path: Path = HOTWORDS_FILE) -> str | None:
     return ", ".join(kept) if kept else None
 
 
+# Форматы дорожек в порядке предпочтения: сейчас пишем .opus, но старые записи
+# в .wav должны продолжать транскрибироваться.
+_TRACK_EXTS = (".opus", ".wav", ".ogg", ".flac", ".mp3", ".m4a")
+
+
+def _find_track(folder: Path, stem: str) -> Path | None:
+    """Файл дорожки (sys/mic) в папке записи, независимо от формата."""
+    for ext in _TRACK_EXTS:
+        p = folder / f"{stem}{ext}"
+        if p.exists():
+            return p
+    return None
+
+
 def _folder_dates(name: str) -> tuple[str, str]:
     """Дата из имени папки записи (recorder именует папки YYYY-MM-DD_...).
 
@@ -118,9 +132,9 @@ def _transcribe_single(
 def _transcribe_two_track(
     folder: Path, speakers: int | None, hotwords: str | None
 ) -> list[Segment]:
-    sys_src, mic_src = folder / "sys.wav", folder / "mic.wav"
-    if not (sys_src.exists() and mic_src.exists()):
-        raise SystemExit(f"В {folder} нет sys.wav и mic.wav")
+    sys_src, mic_src = _find_track(folder, "sys"), _find_track(folder, "mic")
+    if not (sys_src and mic_src):
+        raise SystemExit(f"В {folder} нет дорожек sys/mic")
     with tempfile.TemporaryDirectory() as td:
         sys_wav = to_wav16k(sys_src, Path(td) / "sys16.wav", normalize=True)
         mic_wav = to_wav16k(mic_src, Path(td) / "mic16.wav")

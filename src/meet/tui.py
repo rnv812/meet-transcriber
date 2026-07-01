@@ -11,12 +11,14 @@ _MENU = """
 def latest_recording(root: Path) -> Path | None:
     """Самая свежая папка записи с обеими дорожками.
     Имена вида 2026-06-12_10-59 сортируются как даты."""
+    from meet.transcribe import _find_track
+
     if not root.is_dir():
         return None
     complete = [
         d
         for d in root.iterdir()
-        if d.is_dir() and (d / "sys.wav").exists() and (d / "mic.wav").exists()
+        if d.is_dir() and _find_track(d, "sys") and _find_track(d, "mic")
     ]
     return max(complete, key=lambda d: d.name, default=None)
 

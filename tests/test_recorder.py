@@ -1,7 +1,28 @@
 import struct
 import wave
 
-from meet.recorder import WavWriter
+from meet.recorder import WavWriter, _stopped_tracks
+
+
+class _FakeStream:
+    def __init__(self, active: bool) -> None:
+        self._active = active
+
+    def is_active(self) -> bool:
+        return self._active
+
+
+def test_stopped_tracks_reports_inactive_once():
+    streams = [("sys.opus", _FakeStream(True)), ("mic.opus", _FakeStream(False))]
+    reported: set[str] = set()
+    assert _stopped_tracks(streams, reported) == ["mic.opus"]
+    # уже сообщили — второй такт молчит, чтобы не спамить
+    assert _stopped_tracks(streams, reported) == []
+
+
+def test_stopped_tracks_all_active_reports_nothing():
+    streams = [("sys.opus", _FakeStream(True)), ("mic.opus", _FakeStream(True))]
+    assert _stopped_tracks(streams, set()) == []
 
 
 def test_closed_file_is_valid_wav(tmp_path):

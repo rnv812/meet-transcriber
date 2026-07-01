@@ -47,9 +47,9 @@ pyannote/speaker-diarization-community-1).
     .venv\Scripts\meet record
 
 Потом перенести папку `recordings/<дата_время>/` на машину с GPU и там
-запустить `meet transcribe recordings/<папка>`. Файлы `sys.wav` и `mic.wav`
-внутри не переименовывать. Учтите размер: wav без сжатия — порядка 1–1.5 ГБ
-на час встречи. Звук встречи должен играть через устройство вывода ноутбука
+запустить `meet transcribe recordings/<папка>`. Файлы `sys.opus` и `mic.opus`
+внутри не переименовывать. Запись сжата в Ogg/Opus 16 кГц моно — порядка
+25 МБ на час встречи. Звук встречи должен играть через устройство вывода ноутбука
 (наушники/динамики) — loopback пишет именно его.
 
 Подробности: docs/superpowers/specs/2026-06-12-transcriber-design.md

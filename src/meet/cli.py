@@ -37,7 +37,7 @@ def main() -> None:
     p_rec.add_argument("--out", default="recordings", help="папка для записей")
 
     p_tr = sub.add_parser("transcribe", help="транскрибировать запись")
-    p_tr.add_argument("path", help="папка записи (sys.wav+mic.wav) или аудио/видеофайл")
+    p_tr.add_argument("path", help="папка записи (sys+mic) или аудио/видеофайл")
     p_tr.add_argument(
         "--speakers",
         type=int,

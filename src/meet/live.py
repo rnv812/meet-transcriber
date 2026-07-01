@@ -139,7 +139,7 @@ class LiveEngine:
     def start(self) -> None:
         import pyaudiowpatch as pyaudio
 
-        from meet.recorder import WavWriter, _find_loopback
+        from meet.recorder import OpusWriter, _find_loopback
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self._transcriber.load()
@@ -152,11 +152,14 @@ class LiveEngine:
         for dev, fname, normalize in devices:
             channels = max(1, int(dev["maxInputChannels"]))
             rate = int(dev["defaultSampleRate"])
-            writer = WavWriter(self.out_dir / fname, channels, rate)
+            # fname — внутренний ключ дорожки (завязан на SPEAKERS); на диск для
+            # офлайн-прохода пишем сжатый .opus.
+            writer = OpusWriter(self.out_dir / fname.replace(".wav", ".opus"),
+                                channels, rate)
             self.register_track(fname, rate, channels, normalize=normalize)
             buf = self._tracks[fname]["buffer"]
 
-            def make_cb(w: WavWriter, b: TrackBuffer):
+            def make_cb(w: OpusWriter, b: TrackBuffer):
                 def cb(in_data, frame_count, time_info, status):
                     w.write(in_data)
                     b.push(in_data)
