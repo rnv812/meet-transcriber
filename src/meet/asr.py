@@ -1,6 +1,11 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Русский fine-tune large-v3 (CT2-конвертация antony66/whisper-large-v3-russian),
+# тот же чекпойнт, что в проекте voice-control: заметно ниже WER на русском, чем
+# стоковая large-v3. WhisperModel сам скачает репозиторий с HuggingFace.
+MODEL_NAME = "bzikst/faster-whisper-large-v3-russian"
+
 
 @dataclass
 class Word:
@@ -108,7 +113,7 @@ def transcribe_wav(path: Path, hotwords: str | None = None) -> list[Segment]:
     last_error: Exception | None = None
     for compute_type in ("float16", "int8_float16"):
         try:
-            model = WhisperModel("large-v3", device="cuda", compute_type=compute_type)
+            model = WhisperModel(MODEL_NAME, device="cuda", compute_type=compute_type)
             print(f"Распознавание ({compute_type})...")
             segments, _ = model.transcribe(
                 str(path),
@@ -147,7 +152,7 @@ class Transcriber:
         for compute_type in ("float16", "int8_float16"):
             try:
                 self._model = WhisperModel(
-                    "large-v3", device="cuda", compute_type=compute_type
+                    MODEL_NAME, device="cuda", compute_type=compute_type
                 )
                 self.compute_type = compute_type
                 print(f"Модель загружена ({compute_type})")
