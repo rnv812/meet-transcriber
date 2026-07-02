@@ -102,8 +102,12 @@ class OpusWriter:
         ]
         # stderr наследуется (loglevel error → тихо, пока всё хорошо; при ошибке
         # ffmpeg сообщение видно в логе записи, а не глотается).
+        # CREATE_NO_WINDOW: под meet-tray (GUI-процесс без консоли) каждый ffmpeg
+        # иначе открывает собственное окно терминала; при консольном запуске
+        # унаследованные хэндлы stderr продолжают работать как раньше.
         self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
-                                      stdout=subprocess.DEVNULL)
+                                      stdout=subprocess.DEVNULL,
+                                      creationflags=subprocess.CREATE_NO_WINDOW)
 
     def write(self, data: bytes) -> None:
         try:

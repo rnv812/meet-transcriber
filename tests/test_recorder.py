@@ -180,3 +180,20 @@ def test_record_refuses_second_start(tmp_path, monkeypatch):
     )
     with pytest.raises(SystemExit, match="уже идёт"):
         record(str(tmp_path), stop_event=threading.Event())
+
+
+def test_opus_writer_spawns_ffmpeg_without_console_window(monkeypatch):
+    # meet-tray — GUI-процесс без консоли: без CREATE_NO_WINDOW каждый
+    # ffmpeg-подпроцесс открывал собственное окно терминала (приёмка 02.07)
+    captured = {}
+
+    class _FakeProc:
+        stdin = None
+
+    def fake_popen(cmd, **kwargs):
+        captured.update(kwargs)
+        return _FakeProc()
+
+    monkeypatch.setattr(recorder.subprocess, "Popen", fake_popen)
+    recorder.OpusWriter(Path("x.opus"), channels=1, rate=16000)
+    assert captured["creationflags"] & recorder.subprocess.CREATE_NO_WINDOW
