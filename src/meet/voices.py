@@ -96,9 +96,12 @@ def match_speakers(
         second = scores[1][0] if len(scores) > 1 else None
         if best_score >= threshold and (second is None or best_score - second >= margin):
             matched[label] = best_name
-            print(f"голоса: {label} → {best_name} (cos {best_score:.2f})")
+            # IMPORTANT: в консольных логах только ASCII-пунктуация («->», не «→»):
+            # консоль Windows (cp866) не кодирует стрелки/тире, print падает
+            # UnicodeEncodeError, и except в _match_names глотает весь матчинг.
+            print(f"голоса: {label} -> {best_name} (cos {best_score:.2f})")
         else:
-            print(f"голоса: {label} → не распознан (лучший кандидат: {best_name}, cos {best_score:.2f})")
+            print(f"голоса: {label} -> не распознан (лучший кандидат: {best_name}, cos {best_score:.2f})")
     return matched
 
 

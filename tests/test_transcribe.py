@@ -115,3 +115,10 @@ def test_write_sidecar_warns_when_no_embeddings(tmp_path, capsys):
     _write_sidecar(out_md, Path("r"), "2026-07-01", [], diar, {})
     assert not sidecar_path(out_md).exists()
     assert "не вернул эмбеддинги" in capsys.readouterr().out
+
+
+def test_no_embeddings_warning_survives_cp866(tmp_path, capsys):
+    # предупреждение должно печататься и в консоли cp866 (без «→» и «—»)
+    diar = Diarization(turns=[(0.0, 1.0, "SPEAKER_00")], embeddings=None)
+    _write_sidecar(tmp_path / "x.md", Path("r"), "2026-07-01", [], diar, {})
+    capsys.readouterr().out.encode("cp866")

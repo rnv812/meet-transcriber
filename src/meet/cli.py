@@ -1,4 +1,5 @@
 import argparse
+import sys
 
 
 def _quiet_known_warnings() -> None:
@@ -28,6 +29,10 @@ def _quiet_known_warnings() -> None:
 
 def main() -> None:
     _quiet_known_warnings()
+    # Страховка от UnicodeEncodeError: cp866-консоль Windows не кодирует часть
+    # Юникода, а падение print не должно ломать пайплайн — лучше '?' в логе.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     parser = argparse.ArgumentParser(
         prog="meet", description="Локальный транскрибатор встреч"
     )

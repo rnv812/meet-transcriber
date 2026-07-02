@@ -170,7 +170,8 @@ def _write_sidecar(out_md, path, iso, segments, diar, name_map) -> None:
     остальные — «Спикер N» той же нумерацией, что в выводе."""
     if not (diar and diar.embeddings):
         if diar and diar.turns:
-            print("голоса: pyannote не вернул эмбеддинги — матчинг и сайдкар пропущены")
+            # только ASCII-пунктуация: cp866-консоль не кодирует тире (см. voices.py)
+            print("голоса: pyannote не вернул эмбеддинги, матчинг и сайдкар пропущены")
         return
     from meet.voices import write_sidecar
 

@@ -172,3 +172,13 @@ def test_enroll_broken_sidecar_friendly_error(tmp_path):
     (rec / "2026-07-01_speakers.json").write_text("{не json", encoding="utf-8")
     with pytest.raises(SystemExit, match="Битый сайдкар"):
         enroll(str(rec), ["Спикер 1=Демьян"], folder=tmp_path / "voices")
+
+
+def test_match_log_survives_cp866_console(capsys):
+    # реальный сбой 02.07.2026: «→» в логе не кодируется в cp866 (консоль Windows),
+    # print падал UnicodeEncodeError и except в _match_names глотал весь матчинг
+    voices = _voices(Демьян=[[1.0, 0.0]])
+    match_speakers(
+        {"SPEAKER_00": np.asarray([0.9, 0.1]), "SPEAKER_01": np.asarray([0.0, 1.0])}, voices
+    )
+    capsys.readouterr().out.encode("cp866")
