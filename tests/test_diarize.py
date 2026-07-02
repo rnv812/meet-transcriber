@@ -40,3 +40,64 @@ def test_segment_without_words_assigned_by_overlap():
     result = split_by_speaker([seg], turns)
     assert result[0].speaker == "SPEAKER_00"
     assert result[0].text == "Привет"
+
+
+from types import SimpleNamespace
+
+import numpy as np
+
+from meet.diarize import Diarization, _to_diarization
+
+
+class _FakeAnnotation:
+    def __init__(self, turns, labels):
+        self._turns = turns
+        self._labels = labels
+
+    def itertracks(self, yield_label=False):
+        for start, end, label in self._turns:
+            yield SimpleNamespace(start=start, end=end), None, label
+
+    def labels(self):
+        return self._labels
+
+
+def test_to_diarization_extracts_turns_and_embeddings():
+    turns = [(0.0, 1.0, "SPEAKER_00"), (1.0, 2.0, "SPEAKER_01")]
+    result = SimpleNamespace(
+        exclusive_speaker_diarization=_FakeAnnotation(turns, ["SPEAKER_00", "SPEAKER_01"]),
+        speaker_diarization=_FakeAnnotation(turns, ["SPEAKER_00", "SPEAKER_01"]),
+        speaker_embeddings=np.asarray([[1.0, 0.0], [0.0, 1.0]]),
+    )
+    diar = _to_diarization(result)
+    assert isinstance(diar, Diarization)
+    assert diar.turns == turns
+    assert np.allclose(diar.embeddings["SPEAKER_01"], [0.0, 1.0])
+
+
+def test_to_diarization_without_embeddings():
+    turns = [(0.0, 1.0, "SPEAKER_00")]
+    result = SimpleNamespace(
+        exclusive_speaker_diarization=_FakeAnnotation(turns, ["SPEAKER_00"]),
+        speaker_diarization=_FakeAnnotation(turns, ["SPEAKER_00"]),
+        speaker_embeddings=None,
+    )
+    assert _to_diarization(result).embeddings is None
+
+
+def test_to_diarization_legacy_bare_annotation():
+    # старый путь pyannote: результат — голая Annotation без эмбеддингов
+    turns = [(0.0, 1.0, "SPEAKER_00")]
+    diar = _to_diarization(_FakeAnnotation(turns, ["SPEAKER_00"]))
+    assert diar.turns == turns
+    assert diar.embeddings is None
+
+
+def test_to_diarization_label_count_mismatch_drops_embeddings():
+    turns = [(0.0, 1.0, "SPEAKER_00")]
+    result = SimpleNamespace(
+        exclusive_speaker_diarization=_FakeAnnotation(turns, ["SPEAKER_00"]),
+        speaker_diarization=_FakeAnnotation(turns, ["SPEAKER_00"]),
+        speaker_embeddings=np.zeros((3, 2)),
+    )
+    assert _to_diarization(result).embeddings is None

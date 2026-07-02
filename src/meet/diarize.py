@@ -1,7 +1,23 @@
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from meet.asr import Segment, Word
+
+DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
+
+
+@dataclass
+class Diarization:
+    """Результат диаризации: интервалы + эмбеддинг-центроид на спикера.
+
+    embeddings может быть None: краевой путь pyannote без центроидов
+    или легаси-результат (голая Annotation)."""
+    turns: list[tuple[float, float, str]]
+    embeddings: dict[str, np.ndarray] | None = None
+
 
 _TOKEN_HELP = (
     "Нет токена HuggingFace (нужен для моделей диаризации pyannote).\n"
@@ -32,7 +48,7 @@ def diarize_wav(
     num_speakers: int | None = None,
     min_speakers: int | None = None,
     max_speakers: int | None = None,
-) -> list[tuple[float, float, str]]:
+) -> Diarization:
     """Интервалы (start, end, SPEAKER_XX) по записи.
 
     Берём exclusive-раскладку («в каждый момент говорит ровно один») —
@@ -45,9 +61,7 @@ def diarize_wav(
     from pyannote.audio import Pipeline
 
     print("Диаризация...")
-    pipe = Pipeline.from_pretrained(
-        "pyannote/speaker-diarization-community-1", token=token
-    )
+    pipe = Pipeline.from_pretrained(DIARIZATION_MODEL, token=token)
     pipe.to(torch.device("cuda"))
     waveform, rate = _load_wav(path)
     result = pipe(
@@ -56,13 +70,26 @@ def diarize_wav(
         min_speakers=min_speakers,
         max_speakers=max_speakers,
     )
+    return _to_diarization(result)
+
+
+def _to_diarization(result) -> Diarization:
+    """Достать интервалы и эмбеддинги из результата pyannote (устойчиво к легаси)."""
     annotation = getattr(result, "exclusive_speaker_diarization", None)
     if annotation is None:
         annotation = getattr(result, "speaker_diarization", result)
-    return [
+    turns = [
         (turn.start, turn.end, label)
         for turn, _, label in annotation.itertracks(yield_label=True)
     ]
+    embeddings = None
+    centroids = getattr(result, "speaker_embeddings", None)
+    full = getattr(result, "speaker_diarization", None)
+    if centroids is not None and full is not None:
+        labels = list(full.labels())
+        if labels and len(labels) == len(centroids):
+            embeddings = {label: centroids[i] for i, label in enumerate(labels)}
+    return Diarization(turns=turns, embeddings=embeddings)
 
 
 def _word_speaker(word: Word, turns: list[tuple[float, float, str]]) -> str | None:

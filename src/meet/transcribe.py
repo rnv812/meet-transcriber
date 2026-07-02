@@ -142,7 +142,7 @@ def _transcribe_single(
         wav = to_wav16k(src, Path(td) / "audio16.wav")
         segments = transcribe_wav(wav, hotwords)
         segments = _maybe_align(segments, wav, align)
-        segments = split_by_speaker(segments, diarize_wav(wav, num_speakers=speakers))
+        segments = split_by_speaker(segments, diarize_wav(wav, num_speakers=speakers).turns)
     return segments
 
 
@@ -159,7 +159,7 @@ def _transcribe_two_track(
         # forced alignment только для sys: mic — один спикер («Вы»), стыки не важны
         sys_segs = _maybe_align(sys_segs, sys_wav, align)
         sys_segs = split_by_speaker(
-            sys_segs, diarize_wav(sys_wav, num_speakers=speakers)
+            sys_segs, diarize_wav(sys_wav, num_speakers=speakers).turns
         )
         mic_segs = transcribe_wav(mic_wav, hotwords)
         for seg in mic_segs:
