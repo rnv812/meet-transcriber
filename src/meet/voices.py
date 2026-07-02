@@ -84,6 +84,8 @@ def match_speakers(
     Уверенность: близость лучшего кандидата ≥ threshold И отрыв от лучшего
     ДРУГОГО человека ≥ margin (иначе честный «Спикер N», а не угаданное имя).
     Человек = максимум косинуса по его образцам."""
+    if not voices:
+        return {}
     matched: dict[str, str] = {}
     for label, emb in embeddings.items():
         scores = sorted(
@@ -123,9 +125,15 @@ def enroll(path_str: str, mappings: list[str], folder: Path = VOICES_DIR) -> Non
 
     mappings: «Спикер 1=Демьян Петров» (имя из транскрипта или сырая метка SPEAKER_XX)."""
     sidecar = _find_sidecar(Path(path_str))
-    data = read_sidecar(sidecar)
+    try:
+        data = read_sidecar(sidecar)
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"Битый сайдкар {sidecar.name}: {e}")
     by_key: dict[str, dict] = {}
     for s in data["speakers"]:
+        # если два кластера авто-совпали с одним человеком, их display-имена
+        # совпадают и побеждает последняя запись — приемлемо: авто-совпавших
+        # спикеров в описанном сценарии повторно не энроллят
         by_key[s["display"]] = s
         by_key[s["label"]] = s
     source = data.get("source", str(sidecar))

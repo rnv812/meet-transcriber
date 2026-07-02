@@ -169,6 +169,8 @@ def _write_sidecar(out_md, path, iso, segments, diar, name_map) -> None:
     display повторяет имена транскрипта: уверенно распознанные — по базе,
     остальные — «Спикер N» той же нумерацией, что в выводе."""
     if not (diar and diar.embeddings):
+        if diar and diar.turns:
+            print("голоса: pyannote не вернул эмбеддинги — матчинг и сайдкар пропущены")
         return
     from meet.voices import write_sidecar
 
@@ -176,6 +178,8 @@ def _write_sidecar(out_md, path, iso, segments, diar, name_map) -> None:
     speakers = [
         {
             "label": label,
+            # спикер с эмбеддингом, но без расшифрованных сегментов, остаётся под
+            # сырой меткой «SPEAKER_XX» — enroll принимает и сырые метки тоже
             "display": name_map.get(label) or names.get(label, label),
             "embedding": [float(x) for x in emb],
         }

@@ -49,7 +49,7 @@ def diarize_wav(
     min_speakers: int | None = None,
     max_speakers: int | None = None,
 ) -> Diarization:
-    """Интервалы (start, end, SPEAKER_XX) по записи.
+    """Diarization (интервалы + эмбеддинги спикеров) по записи.
 
     Берём exclusive-раскладку («в каждый момент говорит ровно один») —
     она сделана именно для сшивки с неточными таймкодами ASR."""

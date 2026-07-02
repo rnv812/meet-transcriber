@@ -113,3 +113,11 @@ def test_write_sidecar_no_embeddings_writes_nothing(tmp_path):
     out_md = tmp_path / "x.md"
     _write_sidecar(out_md, Path("r"), "2026-07-01", [], Diarization(turns=[]), {})
     assert not sidecar_path(out_md).exists()
+
+
+def test_write_sidecar_warns_when_no_embeddings(tmp_path, capsys):
+    out_md = tmp_path / "x.md"
+    diar = Diarization(turns=[(0.0, 1.0, "SPEAKER_00")], embeddings=None)
+    _write_sidecar(out_md, Path("r"), "2026-07-01", [], diar, {})
+    assert not sidecar_path(out_md).exists()
+    assert "не вернул эмбеддинги" in capsys.readouterr().out

@@ -78,6 +78,10 @@ def test_match_best_sample_of_person_wins():
     assert got == {"SPEAKER_00": "Демьян"}
 
 
+def test_match_empty_base_returns_empty():
+    assert match_speakers({"SPEAKER_00": np.asarray([1.0])}, {}) == {}
+
+
 def test_two_clusters_may_match_same_person():
     # диаризация разорвала одного говорящего — оба кластера получают одно имя
     voices = _voices(Демьян=[[1.0, 0.0]])
@@ -163,3 +167,11 @@ def test_enroll_bad_mapping_format(tmp_path):
     _make_sidecar(rec)
     with pytest.raises(SystemExit, match="="):
         enroll(str(rec), ["Спикер 1 Демьян"], folder=tmp_path / "voices")
+
+
+def test_enroll_broken_sidecar_friendly_error(tmp_path):
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    (rec / "2026-07-01_speakers.json").write_text("{не json", encoding="utf-8")
+    with pytest.raises(SystemExit, match="Битый сайдкар"):
+        enroll(str(rec), ["Спикер 1=Демьян"], folder=tmp_path / "voices")
