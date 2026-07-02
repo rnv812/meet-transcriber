@@ -23,6 +23,24 @@
 
 Имена спикеров («Спикер 1» → «Демьян») проще всего поправить заменой в md.
 
+## Кнопка записи (трей)
+
+Запись без Claude: ярлык запускает `meet-tray` — в трее появляется красная
+иконка (наведение — сколько идёт запись), правый клик → «Остановить запись»
+→ уведомление с папкой записи. Повторный запуск при идущей записи просто
+сообщит «Запись уже идёт».
+
+Создать ярлык на рабочем столе (из корня репозитория, powershell):
+
+    $root = (Get-Location).Path
+    $s = (New-Object -ComObject WScript.Shell).CreateShortcut("$env:USERPROFILE\Desktop\Запись встречи.lnk")
+    $s.TargetPath = "$root\.venv\Scripts\meet-tray.exe"
+    $s.WorkingDirectory = $root
+    $s.Save()
+
+На ноутбуке: `git pull`, `.venv/Scripts/pip install -e .` (подтянет pystray),
+затем та же команда ярлыка.
+
 ## Установка
 
     py -3.12 -m venv .venv
