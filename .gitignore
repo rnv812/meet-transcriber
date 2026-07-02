@@ -2,6 +2,7 @@
 __pycache__/
 *.egg-info/
 recordings/
+voices/
 .token
 .idea/
 hotwords.txt
