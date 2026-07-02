@@ -43,3 +43,35 @@ def add_sample(
     samples.append({"embedding": [float(x) for x in embedding], "source": source, "date": date})
     f.write_text(json.dumps({"samples": samples}, ensure_ascii=False), encoding="utf-8")
     return f
+
+
+def _cos(a: np.ndarray, b: np.ndarray) -> float:
+    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+    return float(np.dot(a, b) / denom) if denom else -1.0
+
+
+def match_speakers(
+    embeddings: dict[str, np.ndarray],
+    voices: dict[str, list[np.ndarray]],
+    threshold: float = THRESHOLD,
+    margin: float = MARGIN,
+) -> dict[str, str]:
+    """Уверенные совпадения «метка диаризации → имя из базы».
+
+    Уверенность: близость лучшего кандидата ≥ threshold И отрыв от лучшего
+    ДРУГОГО человека ≥ margin (иначе честный «Спикер N», а не угаданное имя).
+    Человек = максимум косинуса по его образцам."""
+    matched: dict[str, str] = {}
+    for label, emb in embeddings.items():
+        scores = sorted(
+            ((max(_cos(emb, s) for s in samples), name) for name, samples in voices.items()),
+            reverse=True,
+        )
+        best_score, best_name = scores[0]
+        second = scores[1][0] if len(scores) > 1 else None
+        if best_score >= threshold and (second is None or best_score - second >= margin):
+            matched[label] = best_name
+            print(f"голоса: {label} → {best_name} (cos {best_score:.2f})")
+        else:
+            print(f"голоса: {label} → не распознан (лучший кандидат: {best_name}, cos {best_score:.2f})")
+    return matched

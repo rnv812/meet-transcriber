@@ -36,3 +36,52 @@ def test_load_voices_skips_broken_json(tmp_path, capsys):
     voices = load_voices(tmp_path)
     assert list(voices) == ["Демьян"]
     assert "Битый.json" in capsys.readouterr().out
+
+
+from meet.voices import match_speakers
+
+
+def _voices(**people):
+    return {name: [np.asarray(v, dtype=np.float32) for v in vecs] for name, vecs in people.items()}
+
+
+def test_match_confident_hit():
+    voices = _voices(Демьян=[[1.0, 0.0]], Пётр=[[0.0, 1.0]])
+    got = match_speakers({"SPEAKER_00": np.asarray([0.9, 0.1])}, voices)
+    assert got == {"SPEAKER_00": "Демьян"}
+
+
+def test_match_below_threshold_rejected(capsys):
+    voices = _voices(Демьян=[[1.0, 0.0]])
+    got = match_speakers({"SPEAKER_00": np.asarray([0.3, 0.95])}, voices)
+    assert got == {}
+    assert "не распознан" in capsys.readouterr().out
+
+
+def test_match_small_margin_rejected():
+    # два человека почти одинаково близки — не угадываем
+    voices = _voices(Демьян=[[1.0, 0.0]], Пётр=[[0.95, 0.31]])
+    got = match_speakers({"SPEAKER_00": np.asarray([0.99, 0.15])}, voices, threshold=0.5, margin=0.05)
+    assert got == {}
+
+
+def test_match_single_person_needs_only_threshold():
+    voices = _voices(Демьян=[[1.0, 0.0]])
+    got = match_speakers({"SPEAKER_00": np.asarray([0.9, 0.1])}, voices)
+    assert got == {"SPEAKER_00": "Демьян"}
+
+
+def test_match_best_sample_of_person_wins():
+    # у человека несколько образцов — берётся максимум по ним
+    voices = _voices(Демьян=[[0.0, 1.0], [1.0, 0.0]], Пётр=[[0.5, 0.5]])
+    got = match_speakers({"SPEAKER_00": np.asarray([1.0, 0.05])}, voices)
+    assert got == {"SPEAKER_00": "Демьян"}
+
+
+def test_two_clusters_may_match_same_person():
+    # диаризация разорвала одного говорящего — оба кластера получают одно имя
+    voices = _voices(Демьян=[[1.0, 0.0]])
+    got = match_speakers(
+        {"SPEAKER_00": np.asarray([0.95, 0.05]), "SPEAKER_01": np.asarray([0.9, 0.1])}, voices
+    )
+    assert got == {"SPEAKER_00": "Демьян", "SPEAKER_01": "Демьян"}
