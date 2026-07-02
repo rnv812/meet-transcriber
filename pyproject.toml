@@ -2,9 +2,15 @@
 name = "meet-transcriber"
 version = "0.1.0"
 requires-python = ">=3.12"
+# Остальные зависимости (faster-whisper, pyannote, pyaudiowpatch...) исторически
+# ставятся в venv вручную; здесь объявлены только нужные трею.
+dependencies = ["pystray", "pillow"]
 
 [project.scripts]
 meet = "meet.cli:main"
+
+[project.gui-scripts]
+meet-tray = "meet.tray:main"
 
 [build-system]
 requires = ["setuptools>=68"]
