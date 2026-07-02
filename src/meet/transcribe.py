@@ -6,6 +6,7 @@ from pathlib import Path
 from meet.asr import Segment, transcribe_wav
 from meet.audio import to_wav16k
 from meet.diarize import diarize_wav, split_by_speaker
+from meet.interleave import interleave_tracks
 from meet.output import speaker_names, to_markdown
 
 
@@ -221,4 +222,4 @@ def _transcribe_two_track(
         mic_segs = transcribe_wav(mic_wav, hotwords)
         for seg in mic_segs:
             seg.speaker = "Вы"
-    return sorted(sys_segs + mic_segs, key=lambda s: s.start), diar, name_map
+    return interleave_tracks(sys_segs, mic_segs), diar, name_map
