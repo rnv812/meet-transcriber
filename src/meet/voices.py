@@ -10,8 +10,9 @@ import numpy as np
 from meet.diarize import DIARIZATION_MODEL
 
 VOICES_DIR = Path("voices")
-# Пороги матчинга; калибруются на реальных встречах (см. спеку, «Приёмка»).
-THRESHOLD = 0.5
+# Калибровка 02.07.2026 на встречах 26.06 (enroll) -> 01.07 (узнавание):
+# свои cos 0.91-0.93, чужие (нет в базе) 0.32-0.36. Порог — середина зазора.
+THRESHOLD = 0.6
 MARGIN = 0.05
 
 
