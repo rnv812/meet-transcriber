@@ -98,3 +98,47 @@ def match_speakers(
         else:
             print(f"голоса: {label} → не распознан (лучший кандидат: {best_name}, cos {best_score:.2f})")
     return matched
+
+
+def _find_sidecar(path: Path) -> Path:
+    """Сайдкар по папке записи, транскрипту или прямому пути к .json."""
+    retry = "перетранскрибируй запись (meet transcribe) — сайдкар появится рядом с транскриптом"
+    if path.is_dir():
+        found = sorted(path.glob("*_speakers.json"))
+        if not found:
+            raise SystemExit(f"В {path} нет *_speakers.json — {retry}")
+        return found[-1]
+    if path.suffix == ".json" and path.exists():
+        return path
+    if path.suffix == ".md":
+        p = sidecar_path(path)
+        if p.exists():
+            return p
+        raise SystemExit(f"Рядом с {path.name} нет {p.name} — {retry}")
+    raise SystemExit(f"Не найден сайдкар для {path} — дай папку записи или *_speakers.json")
+
+
+def enroll(path_str: str, mappings: list[str], folder: Path = VOICES_DIR) -> None:
+    """Перенести эмбеддинги из сайдкара записи в базу голосов.
+
+    mappings: «Спикер 1=Демьян Петров» (имя из транскрипта или сырая метка SPEAKER_XX)."""
+    sidecar = _find_sidecar(Path(path_str))
+    data = read_sidecar(sidecar)
+    by_key: dict[str, dict] = {}
+    for s in data["speakers"]:
+        by_key[s["display"]] = s
+        by_key[s["label"]] = s
+    source = data.get("source", str(sidecar))
+    date = data.get("date", "")
+    for m in mappings:
+        who, sep, name = m.partition("=")
+        who, name = who.strip(), name.strip()
+        if not sep or not who or not name:
+            raise SystemExit(f"Непонятное соответствие «{m}» — формат: \"Спикер 1=Демьян Петров\" (со знаком =)")
+        entry = by_key.get(who)
+        if entry is None:
+            known = ", ".join(s["display"] for s in data["speakers"])
+            raise SystemExit(f"В {sidecar.name} нет спикера «{who}»; есть: {known}")
+        f = add_sample(name, entry["embedding"], source=source, date=date, folder=folder)
+        total = len(json.loads(f.read_text(encoding="utf-8"))["samples"])
+        print(f"голоса: {name} += образец из {source} (всего образцов: {total})")

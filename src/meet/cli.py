@@ -67,6 +67,14 @@ def main() -> None:
         "--hotwords", help="термины через запятую, подсказка распознаванию"
     )
 
+    p_en = sub.add_parser(
+        "enroll", help="запомнить голоса: «Спикер N» из записи → имя в базе голосов"
+    )
+    p_en.add_argument("path", help="папка записи (или транскрипт / *_speakers.json)")
+    p_en.add_argument(
+        "mapping", nargs="+", help="соответствия вида 'Спикер 1=Демьян Петров'"
+    )
+
     args = parser.parse_args()
     if args.command == "record":
         from meet.recorder import record
@@ -76,6 +84,10 @@ def main() -> None:
         from meet.live import run_live
 
         run_live(args.out, window_seconds=args.window, hotwords=args.hotwords)
+    elif args.command == "enroll":
+        from meet.voices import enroll
+
+        enroll(args.path, args.mapping)
     else:
         from meet.transcribe import transcribe
 

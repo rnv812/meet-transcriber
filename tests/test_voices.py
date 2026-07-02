@@ -108,3 +108,58 @@ def test_sidecar_roundtrip(tmp_path):
     data = read_sidecar(p)
     assert data["source"] == "recordings/x"
     assert data["speakers"][0]["display"] == "Спикер 1"
+
+
+import pytest
+
+from meet.voices import enroll
+
+
+def _make_sidecar(folder, name="2026-07-01_speakers.json"):
+    speakers = [
+        {"label": "SPEAKER_00", "display": "Спикер 1", "embedding": [1.0, 0.0]},
+        {"label": "SPEAKER_01", "display": "Спикер 2", "embedding": [0.0, 1.0]},
+    ]
+    p = folder / name
+    p.write_text(
+        json.dumps(
+            {"model": "m", "source": "recordings/x", "date": "2026-07-01", "speakers": speakers},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return p
+
+
+def test_enroll_by_display_and_label(tmp_path):
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    _make_sidecar(rec)
+    base = tmp_path / "voices"
+    enroll(str(rec), ["Спикер 1=Демьян Петров", "SPEAKER_01=Пётр"], folder=base)
+    voices = load_voices(base)
+    assert set(voices) == {"Демьян Петров", "Пётр"}
+    assert np.allclose(voices["Демьян Петров"][0], [1.0, 0.0])
+
+
+def test_enroll_unknown_speaker_lists_available(tmp_path):
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    _make_sidecar(rec)
+    with pytest.raises(SystemExit, match="Спикер 1"):
+        enroll(str(rec), ["Спикер 9=Демьян"], folder=tmp_path / "voices")
+
+
+def test_enroll_no_sidecar_says_retranscribe(tmp_path):
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    with pytest.raises(SystemExit, match="перетранскриб"):
+        enroll(str(rec), ["Спикер 1=Демьян"], folder=tmp_path / "voices")
+
+
+def test_enroll_bad_mapping_format(tmp_path):
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    _make_sidecar(rec)
+    with pytest.raises(SystemExit, match="="):
+        enroll(str(rec), ["Спикер 1 Демьян"], folder=tmp_path / "voices")
