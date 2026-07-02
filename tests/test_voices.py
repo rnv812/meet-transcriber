@@ -85,3 +85,26 @@ def test_two_clusters_may_match_same_person():
         {"SPEAKER_00": np.asarray([0.95, 0.05]), "SPEAKER_01": np.asarray([0.9, 0.1])}, voices
     )
     assert got == {"SPEAKER_00": "Демьян", "SPEAKER_01": "Демьян"}
+
+
+from pathlib import Path
+
+from meet.voices import read_sidecar, sidecar_path, write_sidecar
+
+
+def test_sidecar_path_for_folder_transcript():
+    assert sidecar_path(Path("r/2026-07-01_transcript.md")) == Path("r/2026-07-01_speakers.json")
+
+
+def test_sidecar_path_for_single_file():
+    assert sidecar_path(Path("r/meeting.md")) == Path("r/meeting_speakers.json")
+
+
+def test_sidecar_roundtrip(tmp_path):
+    out_md = tmp_path / "2026-07-01_transcript.md"
+    speakers = [{"label": "SPEAKER_00", "display": "Спикер 1", "embedding": [1.0, 0.0]}]
+    p = write_sidecar(out_md, source="recordings/x", date="2026-07-01", speakers=speakers)
+    assert p == tmp_path / "2026-07-01_speakers.json"
+    data = read_sidecar(p)
+    assert data["source"] == "recordings/x"
+    assert data["speakers"][0]["display"] == "Спикер 1"

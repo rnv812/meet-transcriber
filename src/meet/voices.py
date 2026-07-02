@@ -7,6 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
+from meet.diarize import DIARIZATION_MODEL
+
 VOICES_DIR = Path("voices")
 # Пороги матчинга; калибруются на реальных встречах (см. спеку, «Приёмка»).
 THRESHOLD = 0.5
@@ -43,6 +45,27 @@ def add_sample(
     samples.append({"embedding": [float(x) for x in embedding], "source": source, "date": date})
     f.write_text(json.dumps({"samples": samples}, ensure_ascii=False), encoding="utf-8")
     return f
+
+
+def sidecar_path(out_md: Path) -> Path:
+    """Путь сайдкара эмбеддингов рядом с транскриптом."""
+    return out_md.with_name(f"{out_md.stem.removesuffix('_transcript')}_speakers.json")
+
+
+def write_sidecar(out_md: Path, source: str, date: str, speakers: list[dict]) -> Path:
+    p = sidecar_path(out_md)
+    p.write_text(
+        json.dumps(
+            {"model": DIARIZATION_MODEL, "source": source, "date": date, "speakers": speakers},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return p
+
+
+def read_sidecar(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _cos(a: np.ndarray, b: np.ndarray) -> float:

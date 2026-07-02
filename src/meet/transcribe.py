@@ -6,7 +6,7 @@ from pathlib import Path
 from meet.asr import Segment, transcribe_wav
 from meet.audio import to_wav16k
 from meet.diarize import diarize_wav, split_by_speaker
-from meet.output import to_markdown
+from meet.output import speaker_names, to_markdown
 
 
 HOTWORDS_FILE = Path("hotwords.txt")
@@ -158,8 +158,31 @@ def transcribe(
         title = f"{path.stem} — {dmy}"
 
     out_md.write_text(to_markdown(title, segments, iso), encoding="utf-8")
+    _write_sidecar(out_md, path, iso, segments, diar, name_map)
     print(f"Готово: {out_md}")
     return out_md
+
+
+def _write_sidecar(out_md, path, iso, segments, diar, name_map) -> None:
+    """Сайдкар с эмбеддингами спикеров — сырьё для meet enroll.
+
+    display повторяет имена транскрипта: уверенно распознанные — по базе,
+    остальные — «Спикер N» той же нумерацией, что в выводе."""
+    if not (diar and diar.embeddings):
+        return
+    from meet.voices import write_sidecar
+
+    names = speaker_names(segments)
+    speakers = [
+        {
+            "label": label,
+            "display": name_map.get(label) or names.get(label, label),
+            "embedding": [float(x) for x in emb],
+        }
+        for label, emb in diar.embeddings.items()
+    ]
+    p = write_sidecar(out_md, source=str(path), date=iso, speakers=speakers)
+    print(f"Голосовые отпечатки: {p}")
 
 
 def _transcribe_single(

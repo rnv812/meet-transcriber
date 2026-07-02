@@ -76,3 +76,40 @@ def test_match_names_error_does_not_crash(monkeypatch, capsys):
     diar = Diarization(turns=[], embeddings={"SPEAKER_00": [1.0]})
     assert _match_names(diar) == {}
     assert "матчинг пропущен" in capsys.readouterr().out
+
+
+from pathlib import Path
+
+import numpy as np
+
+from meet.transcribe import _write_sidecar
+from meet.voices import read_sidecar, sidecar_path
+
+
+def test_write_sidecar_display_matches_transcript_names(tmp_path):
+    out_md = tmp_path / "2026-07-01_transcript.md"
+    # в сегментах SPEAKER_01 появляется раньше SPEAKER_00 → он «Спикер 1»;
+    # SPEAKER_02 совпал с базой и уже переименован в сегментах
+    segments = [
+        Segment(0.0, 1.0, "а", "SPEAKER_01"),
+        Segment(1.0, 2.0, "б", "Демьян Петров"),
+        Segment(2.0, 3.0, "в", "SPEAKER_00"),
+    ]
+    diar = Diarization(
+        turns=[],
+        embeddings={
+            "SPEAKER_00": np.asarray([1.0]),
+            "SPEAKER_01": np.asarray([2.0]),
+            "SPEAKER_02": np.asarray([3.0]),
+        },
+    )
+    _write_sidecar(out_md, Path("recordings/x"), "2026-07-01", segments, diar, {"SPEAKER_02": "Демьян Петров"})
+    data = read_sidecar(sidecar_path(out_md))
+    display = {s["label"]: s["display"] for s in data["speakers"]}
+    assert display == {"SPEAKER_01": "Спикер 1", "SPEAKER_00": "Спикер 2", "SPEAKER_02": "Демьян Петров"}
+
+
+def test_write_sidecar_no_embeddings_writes_nothing(tmp_path):
+    out_md = tmp_path / "x.md"
+    _write_sidecar(out_md, Path("r"), "2026-07-01", [], Diarization(turns=[]), {})
+    assert not sidecar_path(out_md).exists()
