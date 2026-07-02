@@ -1,5 +1,9 @@
+from types import SimpleNamespace
+
+import numpy as np
+
 from meet.asr import Segment, Word
-from meet.diarize import split_by_speaker
+from meet.diarize import Diarization, _to_diarization, split_by_speaker
 
 
 def _seg(start: float, end: float, words: list[tuple[float, float, str]]) -> Segment:
@@ -40,13 +44,6 @@ def test_segment_without_words_assigned_by_overlap():
     result = split_by_speaker([seg], turns)
     assert result[0].speaker == "SPEAKER_00"
     assert result[0].text == "Привет"
-
-
-from types import SimpleNamespace
-
-import numpy as np
-
-from meet.diarize import Diarization, _to_diarization
 
 
 class _FakeAnnotation:

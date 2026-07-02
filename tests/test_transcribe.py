@@ -1,5 +1,11 @@
-from meet.transcribe import _find_track, _maybe_align
+from pathlib import Path
+
+import numpy as np
+
 from meet.asr import Segment
+from meet.diarize import Diarization
+from meet.transcribe import _apply_names, _find_track, _match_names, _maybe_align, _write_sidecar
+from meet.voices import read_sidecar, sidecar_path
 
 
 def test_find_track_returns_opus(tmp_path):
@@ -39,10 +45,6 @@ def test_maybe_align_falls_back_on_error(monkeypatch):
     assert _maybe_align(segs, "x.wav", enabled=True) is segs
 
 
-from meet.diarize import Diarization
-from meet.transcribe import _apply_names, _match_names
-
-
 def test_apply_names_renames_matched_labels():
     turns = [(0.0, 1.0, "SPEAKER_00"), (1.0, 2.0, "SPEAKER_01")]
     got = _apply_names(turns, {"SPEAKER_00": "Демьян Петров"})
@@ -76,14 +78,6 @@ def test_match_names_error_does_not_crash(monkeypatch, capsys):
     diar = Diarization(turns=[], embeddings={"SPEAKER_00": [1.0]})
     assert _match_names(diar) == {}
     assert "матчинг пропущен" in capsys.readouterr().out
-
-
-from pathlib import Path
-
-import numpy as np
-
-from meet.transcribe import _write_sidecar
-from meet.voices import read_sidecar, sidecar_path
 
 
 def test_write_sidecar_display_matches_transcript_names(tmp_path):

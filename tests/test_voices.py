@@ -1,8 +1,18 @@
 import json
+from pathlib import Path
 
 import numpy as np
+import pytest
 
-from meet.voices import add_sample, load_voices
+from meet.voices import (
+    add_sample,
+    enroll,
+    load_voices,
+    match_speakers,
+    read_sidecar,
+    sidecar_path,
+    write_sidecar,
+)
 
 
 def test_add_sample_creates_file_and_load_roundtrips(tmp_path):
@@ -36,9 +46,6 @@ def test_load_voices_skips_broken_json(tmp_path, capsys):
     voices = load_voices(tmp_path)
     assert list(voices) == ["Демьян"]
     assert "Битый.json" in capsys.readouterr().out
-
-
-from meet.voices import match_speakers
 
 
 def _voices(**people):
@@ -91,11 +98,6 @@ def test_two_clusters_may_match_same_person():
     assert got == {"SPEAKER_00": "Демьян", "SPEAKER_01": "Демьян"}
 
 
-from pathlib import Path
-
-from meet.voices import read_sidecar, sidecar_path, write_sidecar
-
-
 def test_sidecar_path_for_folder_transcript():
     assert sidecar_path(Path("r/2026-07-01_transcript.md")) == Path("r/2026-07-01_speakers.json")
 
@@ -112,11 +114,6 @@ def test_sidecar_roundtrip(tmp_path):
     data = read_sidecar(p)
     assert data["source"] == "recordings/x"
     assert data["speakers"][0]["display"] == "Спикер 1"
-
-
-import pytest
-
-from meet.voices import enroll
 
 
 def _make_sidecar(folder, name="2026-07-01_speakers.json"):
