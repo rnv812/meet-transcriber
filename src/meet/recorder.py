@@ -1,5 +1,8 @@
+import json
+import os
 import struct
 import subprocess
+import threading  # noqa: F401 — только для аннотации stop_event
 import time
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +12,42 @@ import pyaudiowpatch as pyaudio
 # Битрейт Opus на дорожку: для речи 16 кГц моно 24 кбит/с на слух прозрачно,
 # а место — ~40x меньше несжатого стерео 48 кГц wav.
 OPUS_BITRATE = "24k"
+
+LOCK_NAME = ".recording.lock"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Жив ли процесс. IMPORTANT: os.kill(pid, 0) на Windows НЕ проверка —
+    это безусловный TerminateProcess (убьёт запись); поэтому ctypes."""
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    handle = ctypes.windll.kernel32.OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+    )
+    if not handle:
+        return False
+    ctypes.windll.kernel32.CloseHandle(handle)
+    return True
+
+
+def _acquire_lock(out_root: Path, out_dir: Path) -> Path:
+    """Lock-файл записи: защита от второй записи и стоп-точка для Claude
+    (сценарий «Останови запись» читает pid отсюда). Протухший lock (pid мёртв,
+    процесс убили без finally) молча перезаписывается."""
+    lock = out_root / LOCK_NAME
+    if lock.exists():
+        try:
+            old = json.loads(lock.read_text(encoding="utf-8"))
+            if _pid_alive(int(old["pid"])):
+                raise SystemExit(f"Запись уже идёт (папка {old.get('folder', '?')})")
+        except (ValueError, KeyError):
+            pass  # битый lock — перезаписываем
+    lock.write_text(
+        json.dumps({"pid": os.getpid(), "folder": str(out_dir)}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return lock
 
 
 class WavWriter:
@@ -107,9 +146,10 @@ def _find_loopback(p: "pyaudio.PyAudio") -> dict:
     raise RuntimeError(f"Не найден loopback для устройства: {speakers['name']}")
 
 
-def record(out_root: str) -> Path:
+def record(out_root: str, stop_event: "threading.Event | None" = None) -> Path:
     out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
     out_dir.mkdir(parents=True, exist_ok=True)
+    lock = _acquire_lock(Path(out_root), out_dir)
 
     p = pyaudio.PyAudio()
     wasapi = p.get_host_api_info_by_type(pyaudio.paWASAPI)
@@ -148,7 +188,7 @@ def record(out_root: str) -> Path:
         health = [(fname, stream) for fname, stream, _ in streams]
         reported: set = set()
         try:
-            while True:
+            while not (stop_event and stop_event.is_set()):
                 time.sleep(0.5)
                 for fname in _stopped_tracks(health, reported):
                     print(
@@ -165,6 +205,7 @@ def record(out_root: str) -> Path:
             stream.close()
             writer.close()
         p.terminate()
+        lock.unlink(missing_ok=True)
 
     print(f"\nЗапись остановлена: {out_dir}")
     print(f"Транскрибировать: meet transcribe \"{out_dir}\"")
