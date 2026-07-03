@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from meet.voices import (
+    THRESHOLD,
     add_sample,
     enroll,
     load_voices,
@@ -13,6 +14,12 @@ from meet.voices import (
     sidecar_path,
     write_sidecar,
 )
+
+
+def test_threshold_above_similar_impostor():
+    # 0.75 — по кейсу 03.07.2026 (встреча 16-31): похожий чужой голос дал
+    # cos 0.61 и при прежнем пороге 0.6 забрал чужое имя; свои — 0.89-1.00.
+    assert THRESHOLD == 0.75
 
 
 def test_add_sample_creates_file_and_load_roundtrips(tmp_path):
