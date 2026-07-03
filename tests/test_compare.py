@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from meet.compare import Word, parse_transcript
+from meet.compare import Word, build_zones, compare_words, parse_transcript, render_report
 
 SAMPLE = """---
 date: 2026-07-02
@@ -52,3 +52,64 @@ def test_parse_block_attribution_and_time(tmp_path):
 def test_parse_not_a_transcript_returns_empty(tmp_path):
     words = parse_transcript(_write(tmp_path, "просто текст\nбез блоков\n"))
     assert words == []
+
+
+def _words(pairs: list[tuple[str, str]], start: float = 0.0) -> list:
+    """[('текст', 'спикер'), ...] -> list[Word]; каждому слову своё время."""
+    return [Word(t, s, start + i) for i, (t, s) in enumerate(pairs)]
+
+
+def test_compare_counts_speaker_changes():
+    a = _words([("раз", "Ева"), ("два", "Ева"), ("три", "Ева")])
+    b = _words([("раз", "Ева"), ("два", "Гена"), ("три", "Ева")])
+    res = compare_words(a, b)
+    assert res.matched == 3
+    assert res.changed == 1
+    assert res.unmatched == 0
+    assert res.pairs[1][0].text == "два"
+
+
+def test_compare_text_mismatch_not_counted_as_change():
+    a = _words([("раз", "Ева"), ("кот", "Ева"), ("три", "Ева")])
+    b = _words([("раз", "Ева"), ("пёс", "Гена"), ("три", "Ева")])
+    res = compare_words(a, b)
+    assert res.matched == 2      # "раз" и "три"
+    assert res.changed == 0      # разный текст — не смена спикера
+    assert res.unmatched == 2    # "кот" из A + "пёс" из B
+
+
+def test_zones_merge_within_gap():
+    # две смены спикера через 3 стабильных слова (<= ZONE_GAP=5) -> одна зона
+    stable = [(f"с{i}", "Ева") for i in range(3)]
+    a = _words([("x", "Ева")] + stable + [("y", "Ева")])
+    b = _words([("x", "Гена")] + stable + [("y", "Гена")])
+    zones = build_zones(compare_words(a, b))
+    assert len(zones) == 1
+    assert zones[0].words == 2
+    assert zones[0].moves == ["Ева -> Гена"]
+
+
+def test_zones_split_beyond_gap():
+    # смены через 6 стабильных слов (> ZONE_GAP=5) -> две зоны
+    stable = [(f"с{i}", "Ева") for i in range(6)]
+    a = _words([("x", "Ева")] + stable + [("y", "Ева")])
+    b = _words([("x", "Гена")] + stable + [("y", "Гена")])
+    zones = build_zones(compare_words(a, b))
+    assert len(zones) == 2
+
+
+def test_zone_snippet_and_start():
+    a = _words([("привет", "Ева"), ("как", "Ева"), ("дела", "Ева")], start=100.0)
+    b = _words([("привет", "Зоя"), ("как", "Зоя"), ("дела", "Зоя")])
+    zone = build_zones(compare_words(a, b))[0]
+    assert zone.start == 100.0            # время из A
+    assert zone.snippet == "привет как дела"
+
+
+def test_report_is_cp866_safe_and_has_sections():
+    a = _words([("раз", "Ева"), ("два", "Ева")])
+    b = _words([("раз", "Ева"), ("два", "Гена")])
+    text = render_report("a.md", "b.md", compare_words(a, b))
+    text.encode("cp866")                  # регрессия ловушки cp866
+    assert "Сменили спикера: 1" in text
+    assert "Ева -> Гена" in text        # и в матрице/зонах только ASCII-стрелки
