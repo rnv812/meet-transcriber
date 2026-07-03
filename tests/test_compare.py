@@ -113,3 +113,53 @@ def test_report_is_cp866_safe_and_has_sections():
     text.encode("cp866")                  # регрессия ловушки cp866
     assert "Сменили спикера: 1" in text
     assert "Ева -> Гена" in text        # и в матрице/зонах только ASCII-стрелки
+
+
+import pytest
+
+from meet.compare import run_compare
+
+TWO_BLOCKS = """# Встреча
+
+## 00:00 — Ева
+
+Привет, начнём работу.
+
+## 00:10 — Гена
+
+Да, поехали.
+"""
+
+
+def test_run_compare_prints_report(tmp_path, capsys):
+    p = _write(tmp_path, TWO_BLOCKS)
+    run_compare(str(p), str(p))
+    out = capsys.readouterr().out
+    assert "Сменили спикера: 0" in out
+    assert "Похоже" not in out  # предупреждение не печатается на той же записи
+
+
+def test_run_compare_rejects_missing_file(tmp_path):
+    p = _write(tmp_path, TWO_BLOCKS)
+    with pytest.raises(SystemExit, match="Не найден файл"):
+        run_compare(str(tmp_path / "нет.md"), str(p))
+
+
+def test_run_compare_rejects_non_transcript(tmp_path):
+    good = _write(tmp_path, TWO_BLOCKS)
+    bad = tmp_path / "bad.md"
+    bad.write_text("просто текст без блоков", encoding="utf-8")
+    with pytest.raises(SystemExit, match="Не транскрипт текущего формата"):
+        run_compare(str(good), str(bad))
+
+
+def test_run_compare_warns_on_different_meetings(tmp_path, capsys):
+    a = _write(tmp_path, TWO_BLOCKS)
+    other = tmp_path / "other.md"
+    other.write_text(
+        "# Другая\n\n## 00:00 — Зоя\n\nСовершенно иные слова тут звучат.\n",
+        encoding="utf-8",
+    )
+    run_compare(str(a), str(other))
+    out = capsys.readouterr().out
+    assert "Похоже, это транскрипты разных записей" in out

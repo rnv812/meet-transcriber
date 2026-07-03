@@ -80,6 +80,12 @@ def main() -> None:
         "mapping", nargs="+", help="соответствия вида 'Спикер 1=Демьян Петров'"
     )
 
+    p_cmp = sub.add_parser(
+        "compare", help="пословный диф спикеров между двумя транскриптами"
+    )
+    p_cmp.add_argument("a", help="транскрипт A (например, текущий пайплайн)")
+    p_cmp.add_argument("b", help="транскрипт B (вариант для сравнения)")
+
     args = parser.parse_args()
     if args.command == "record":
         from meet.recorder import record
@@ -93,6 +99,10 @@ def main() -> None:
         from meet.voices import enroll
 
         enroll(args.path, args.mapping)
+    elif args.command == "compare":
+        from meet.compare import run_compare
+
+        run_compare(args.a, args.b)
     else:
         from meet.transcribe import transcribe
 

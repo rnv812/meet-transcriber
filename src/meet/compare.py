@@ -162,3 +162,21 @@ def render_report(name_a: str, name_b: str, result: CompareResult) -> str:
         moves = ", ".join(z.moves)
         lines.append(f'  [{_fmt_ts(z.start)}] {moves}: {z.words} слов: "{z.snippet}"')
     return "\n".join(lines)
+
+
+def run_compare(path_a: str, path_b: str) -> None:
+    """CLI-обёртка: `meet compare A.md B.md`."""
+    parsed = []
+    for p in (path_a, path_b):
+        path = Path(p)
+        if not path.is_file():
+            raise SystemExit(f"Не найден файл: {p}")
+        words = parse_transcript(path)
+        if not words:
+            raise SystemExit(f"Не транскрипт текущего формата: {p}")
+        parsed.append(words)
+    result = compare_words(*parsed)
+    if result.matched * 2 < result.total_a + result.total_b:
+        print("ВНИМАНИЕ: сопоставлено меньше половины слов. "
+              "Похоже, это транскрипты разных записей.")
+    print(render_report(Path(path_a).name, Path(path_b).name, result))
