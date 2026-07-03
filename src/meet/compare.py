@@ -181,7 +181,9 @@ def run_compare(path_a: str, path_b: str) -> None:
             raise SystemExit(f"Не транскрипт текущего формата: {p}")
         parsed.append(words)
     result = compare_words(*parsed)
-    if result.matched * 2 < result.total_a + result.total_b:
+    # «Меньше половины»: matched < 0.5 * средний размер (= (total_a+total_b)/2).
+    # Не *2: это было бы «меньше среднего размера» и срабатывало почти всегда.
+    if result.matched * 4 < result.total_a + result.total_b:
         print("ВНИМАНИЕ: сопоставлено меньше половины слов. "
               "Похоже, это транскрипты разных записей.")
     print(render_report(Path(path_a).name, Path(path_b).name, result))

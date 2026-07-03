@@ -158,6 +158,18 @@ def test_run_compare_rejects_non_transcript(tmp_path):
         run_compare(str(good), str(bad))
 
 
+def test_run_compare_no_warning_on_partial_text_drift(tmp_path, capsys):
+    # Тот же митинг, но ASR разошёлся в одном слове из пяти (80% сопоставлено) —
+    # предупреждение «разные записи» не должно срабатывать (регрессия: старый
+    # порог matched*2 < total_a+total_b срабатывал почти всегда).
+    a = _write(tmp_path, TWO_BLOCKS)
+    drifted = tmp_path / "drifted.md"
+    drifted.write_text(TWO_BLOCKS.replace("работу", "отдых"), encoding="utf-8")
+    run_compare(str(a), str(drifted))
+    out = capsys.readouterr().out
+    assert "Похоже" not in out
+
+
 def test_run_compare_warns_on_different_meetings(tmp_path, capsys):
     a = _write(tmp_path, TWO_BLOCKS)
     other = tmp_path / "other.md"
