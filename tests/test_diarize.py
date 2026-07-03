@@ -133,11 +133,14 @@ def test_to_diarization_overlaps_filtered_by_min_overlap():
     from pyannote.core import Annotation
     from pyannote.core import Segment as PySegment
 
-    assert MIN_OVERLAP == 0.3
+    # 1.0 — по приёмке 03.07.2026: при 0.3 пометки ловили суб-секундные
+    # поддакивания («ага» на фоне) — 204 блока «(нахлёст)» на встречу против
+    # 75 при 1.0, а реальная переатрибуция почти не менялась (124 -> 114 слов).
+    assert MIN_OVERLAP == 1.0
     ann = Annotation()
     ann[PySegment(0.0, 10.0), 0] = "SPEAKER_00"
     ann[PySegment(4.0, 5.0), 1] = "SPEAKER_01"  # нахлёст 1.0 с >= MIN_OVERLAP
-    ann[PySegment(8.0, 8.1), 2] = "SPEAKER_01"  # 0.1 с < MIN_OVERLAP — отсев
+    ann[PySegment(8.0, 8.4), 2] = "SPEAKER_01"  # 0.4 с < MIN_OVERLAP — отсев
     result = SimpleNamespace(
         exclusive_speaker_diarization=None,
         speaker_diarization=ann,
