@@ -96,7 +96,8 @@ def align_segments(segments, wav_path, device=None):
             new_words = _regroup_words(seg.words, counts, spans, seg.start, spf)
             out_segments.append(
                 Segment(seg.start, seg.end, seg.text, seg.speaker, new_words,
-                        seg.no_speech_prob, seg.avg_logprob)
+                        seg.no_speech_prob, seg.avg_logprob,
+                        uncertain=seg.uncertain)
             )
             aligned += 1
     finally:

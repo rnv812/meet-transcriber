@@ -125,7 +125,11 @@ def _overlap_regions(annotation) -> list[tuple[float, float]] | None:
 
 
 def _word_speaker(word: Word, turns: list[tuple[float, float, str]]) -> str | None:
-    """Спикер с максимальным перекрытием; без перекрытия — ближайший интервал."""
+    """Спикер с максимальным перекрытием; без перекрытия — ближайший интервал.
+
+    При равном перекрытии (overlap-aware turns: слово целиком накрыто двумя
+    спикерами) строгий `>` оставляет более ранний turn — обычно это длинная
+    фраза, поверх которой легло перебивание; first-wins здесь осознанный."""
     best, best_overlap = None, 0.0
     for start, end, label in turns:
         overlap = min(word.end, end) - max(word.start, start)
