@@ -122,3 +122,45 @@ def test_no_embeddings_warning_survives_cp866(tmp_path, capsys):
     diar = Diarization(turns=[(0.0, 1.0, "SPEAKER_00")], embeddings=None)
     _write_sidecar(tmp_path / "x.md", Path("r"), "2026-07-01", [], diar, {})
     capsys.readouterr().out.encode("cp866")
+
+
+def _run_single_capturing(monkeypatch, tmp_path, **kwargs):
+    """Запустить _transcribe_single с заглушками аудио/моделей и снять,
+    что дошло до diarize_wav (exclusive) и split_by_speaker (overlaps)."""
+    import meet.transcribe as tr
+
+    calls = {}
+    monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
+    monkeypatch.setattr(
+        tr, "transcribe_wav", lambda p, h: [Segment(0.0, 1.0, "привет")]
+    )
+
+    def fake_diarize(path, num_speakers=None, exclusive=False):
+        calls["exclusive"] = exclusive
+        return Diarization(
+            turns=[(0.0, 1.0, "SPEAKER_00")],
+            overlaps=None if exclusive else [(0.4, 0.8)],
+        )
+
+    def fake_split(segments, turns, overlaps=None):
+        calls["overlaps"] = overlaps
+        return segments
+
+    monkeypatch.setattr(tr, "diarize_wav", fake_diarize)
+    monkeypatch.setattr(tr, "split_by_speaker", fake_split)
+    src = tmp_path / "a.wav"
+    src.write_bytes(b"x")
+    tr._transcribe_single(src, None, None, align=False, **kwargs)
+    return calls
+
+
+def test_transcribe_single_default_is_overlap_aware(monkeypatch, tmp_path):
+    calls = _run_single_capturing(monkeypatch, tmp_path)
+    assert calls["exclusive"] is False
+    assert calls["overlaps"] == [(0.4, 0.8)]
+
+
+def test_transcribe_single_no_overlap_goes_exclusive(monkeypatch, tmp_path):
+    calls = _run_single_capturing(monkeypatch, tmp_path, overlap=False)
+    assert calls["exclusive"] is True
+    assert calls["overlaps"] is None

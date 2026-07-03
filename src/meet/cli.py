@@ -60,6 +60,13 @@ def main() -> None:
         action="store_false",
         help="без forced alignment (быстрее, но грубее стыки спикеров)",
     )
+    p_tr.add_argument(
+        "--no-overlap",
+        dest="overlap",
+        action="store_false",
+        help="без overlap-aware диаризации: прежний exclusive-режим, "
+        "без пометок зон нахлёста",
+    )
 
     p_live = sub.add_parser(
         "live", help="живой режим: запись + потоковая расшифровка для ассистента"
@@ -111,4 +118,5 @@ def main() -> None:
             speakers=args.speakers,
             hotwords=args.hotwords,
             align=args.align,
+            overlap=args.overlap,
         )
