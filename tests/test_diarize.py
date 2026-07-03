@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from meet.asr import Segment, Word
-from meet.diarize import MIN_OVERLAP, Diarization, _to_diarization, split_by_speaker
+from meet.diarize import MIN_OVERLAP, Diarization, _to_diarization, _word_uncertain, split_by_speaker
 
 
 def _seg(start: float, end: float, words: list[tuple[float, float, str]]) -> Segment:
@@ -152,3 +152,45 @@ def test_to_diarization_overlaps_none_without_get_overlap():
     turns = [(0.0, 1.0, "SPEAKER_00")]
     diar = _to_diarization(_result(turns, turns, ["SPEAKER_00"]))
     assert diar.overlaps is None
+
+
+def test_word_uncertain_requires_strict_intersection():
+    overlaps = [(4.0, 5.0)]
+    assert _word_uncertain(Word(4.2, 4.8, "ага"), overlaps) is True
+    assert _word_uncertain(Word(3.0, 4.0, "до"), overlaps) is False  # касание границы
+    assert _word_uncertain(Word(5.0, 6.0, "после"), overlaps) is False
+    assert _word_uncertain(Word(0.0, 1.0, "вне"), overlaps) is False
+
+
+def test_word_uncertain_none_overlaps_is_false():
+    assert _word_uncertain(Word(0.0, 1.0, "х"), None) is False
+
+
+def test_overlap_zone_split_into_uncertain_block():
+    # overlap-aware turns: фраза SPEAKER_00 непрерывна, вставка SPEAKER_01 поверх;
+    # слова остаются у SPEAKER_00 (фраза не рвётся), зона нахлёста — отдельный
+    # блок с uncertain=True
+    seg = _seg(0.0, 10.0, [
+        (0.0, 2.0, " Мы"), (2.0, 4.0, " решили"),
+        (4.0, 5.0, " так"), (5.0, 7.0, " и"), (7.0, 10.0, " сделаем"),
+    ])
+    turns = [(0.0, 10.0, "SPEAKER_00"), (4.0, 5.0, "SPEAKER_01")]
+    result = split_by_speaker([seg], turns, overlaps=[(4.0, 5.0)])
+    assert [(s.text, s.speaker, s.uncertain) for s in result] == [
+        ("Мы решили", "SPEAKER_00", False),
+        ("так", "SPEAKER_00", True),
+        ("и сделаем", "SPEAKER_00", False),
+    ]
+
+
+def test_split_without_overlaps_marks_nothing():
+    seg = _seg(0.0, 4.0, [(0.0, 1.0, " Привет"), (3.0, 4.0, " Ага")])
+    turns = [(0.0, 2.5, "SPEAKER_00"), (2.5, 4.0, "SPEAKER_01")]
+    assert all(s.uncertain is False for s in split_by_speaker([seg], turns))
+
+
+def test_segment_without_words_gets_uncertain():
+    seg = Segment(4.0, 5.0, "Ага")
+    turns = [(0.0, 10.0, "SPEAKER_00"), (4.0, 5.0, "SPEAKER_01")]
+    result = split_by_speaker([seg], turns, overlaps=[(4.0, 5.0)])
+    assert result[0].uncertain is True

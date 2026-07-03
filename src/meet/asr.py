@@ -23,6 +23,10 @@ class Segment:
     words: list[Word] = field(default_factory=list)
     no_speech_prob: float | None = None
     avg_logprob: float | None = None
+    # Блок в зоне нахлёста спикеров: атрибуция ненадёжна, в транскрипте
+    # помечается «(нахлёст)». Поле последнее: существующие позиционные
+    # конструкторы (align.py передаёт 7 аргументов) не меняются.
+    uncertain: bool = False
 
 
 def _add_nvidia_dll_dirs() -> None:

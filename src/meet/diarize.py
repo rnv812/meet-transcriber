@@ -141,13 +141,24 @@ def _word_speaker(word: Word, turns: list[tuple[float, float, str]]) -> str | No
     return nearest[2] if nearest else None
 
 
+def _word_uncertain(word: Word, overlaps: list[tuple[float, float]] | None) -> bool:
+    """Слово в зоне нахлёста: строгое пересечение (длина > 0) с любым регионом."""
+    if not overlaps:
+        return False
+    return any(min(word.end, e) - max(word.start, s) > 0 for s, e in overlaps)
+
+
 def split_by_speaker(
-    segments: list[Segment], turns: list[tuple[float, float, str]]
+    segments: list[Segment],
+    turns: list[tuple[float, float, str]],
+    overlaps: list[tuple[float, float]] | None = None,
 ) -> list[Segment]:
     """Разрезать сегменты ASR по сменам спикера, назначая спикера пословно.
 
     Сегмент whisper может захватить смену говорящего — короткая вставка
-    («Ага», «Понял») при посегментной привязке растворяется в чужой реплике."""
+    («Ага», «Понял») при посегментной привязке растворяется в чужой реплике.
+    overlaps — регионы нахлёста: прогон режется по паре (спикер, uncertain),
+    зона нахлёста становится отдельным блоком с uncertain=True."""
     if not turns:
         return segments
 
@@ -155,22 +166,32 @@ def split_by_speaker(
     for seg in segments:
         if not seg.words:
             whole = Word(seg.start, seg.end, seg.text)
-            out.append(Segment(seg.start, seg.end, seg.text, _word_speaker(whole, turns)))
+            out.append(
+                Segment(
+                    seg.start,
+                    seg.end,
+                    seg.text,
+                    _word_speaker(whole, turns),
+                    uncertain=_word_uncertain(whole, overlaps),
+                )
+            )
             continue
         run: list[Word] = []
-        run_speaker: str | None = None
+        run_key: tuple[str | None, bool] | None = None
         for word in seg.words:
-            speaker = _word_speaker(word, turns)
-            if run and speaker != run_speaker:
-                out.append(_run_to_segment(run, run_speaker))
+            key = (_word_speaker(word, turns), _word_uncertain(word, overlaps))
+            if run and key != run_key:
+                out.append(_run_to_segment(run, *run_key))
                 run = []
             run.append(word)
-            run_speaker = speaker
+            run_key = key
         if run:
-            out.append(_run_to_segment(run, run_speaker))
+            out.append(_run_to_segment(run, *run_key))
     return out
 
 
-def _run_to_segment(run: list[Word], speaker: str | None) -> Segment:
+def _run_to_segment(
+    run: list[Word], speaker: str | None, uncertain: bool = False
+) -> Segment:
     text = "".join(w.text for w in run).strip()
-    return Segment(run[0].start, run[-1].end, text, speaker)
+    return Segment(run[0].start, run[-1].end, text, speaker, uncertain=uncertain)
