@@ -8,15 +8,26 @@ def fmt_ts(seconds: float) -> str:
 
 
 def merge_consecutive(segments: list[Segment], max_gap: float = 2.0) -> list[Segment]:
-    """Склеить подряд идущие сегменты одного спикера с паузой не больше max_gap сек."""
+    """Склеить подряд идущие сегменты одного спикера с паузой не больше max_gap сек.
+
+    Блоки с разным uncertain не клеятся: зона нахлёста остаётся отдельным блоком."""
     merged: list[Segment] = []
     for seg in segments:
         last = merged[-1] if merged else None
-        if last and last.speaker == seg.speaker and seg.start - last.end <= max_gap:
+        if (
+            last
+            and last.speaker == seg.speaker
+            and last.uncertain == seg.uncertain
+            and seg.start - last.end <= max_gap
+        ):
             last.text = f"{last.text} {seg.text}"
             last.end = seg.end
         else:
-            merged.append(Segment(seg.start, seg.end, seg.text, seg.speaker))
+            merged.append(
+                Segment(
+                    seg.start, seg.end, seg.text, seg.speaker, uncertain=seg.uncertain
+                )
+            )
     return merged
 
 
@@ -50,5 +61,6 @@ def to_markdown(title: str, segments: list[Segment], date: str = "") -> str:
     lines += [f"# {title}", ""]
     for seg in merge_consecutive(segments):
         who = names.get(seg.speaker, seg.speaker) if seg.speaker else "Спикер ?"
-        lines += [f"## {fmt_ts(seg.start)} — {who}", "", seg.text, ""]
+        mark = " (нахлёст)" if seg.uncertain else ""
+        lines += [f"## {fmt_ts(seg.start)} — {who}{mark}", "", seg.text, ""]
     return "\n".join(lines)

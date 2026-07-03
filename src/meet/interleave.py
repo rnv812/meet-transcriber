@@ -20,7 +20,8 @@ def _cut_segment(seg: Segment, times: list[float]) -> list[Segment]:
     """Разрезать сегмент по точкам times, попавшим строго внутрь него.
 
     Слово с word.start < t уходит в левую часть. Часть без слов не создаётся;
-    сегмент без пословных таймкодов не режется."""
+    сегмент без пословных таймкодов не режется. Каждая часть наследует
+    uncertain исходного сегмента."""
     if not seg.words:
         return [seg]
     cuts = sorted(t for t in times if seg.start < t < seg.end)
@@ -32,12 +33,16 @@ def _cut_segment(seg: Segment, times: list[float]) -> list[Segment]:
         left = [w for w in words if w.start < t]
         right = [w for w in words if w.start >= t]
         if left and right:
-            parts.append(_words_to_segment(left, seg.speaker))
+            parts.append(_words_to_segment(left, seg.speaker, seg.uncertain))
             words = right
-    parts.append(_words_to_segment(words, seg.speaker))
+    parts.append(_words_to_segment(words, seg.speaker, seg.uncertain))
     return parts
 
 
-def _words_to_segment(words: list[Word], speaker: str | None) -> Segment:
+def _words_to_segment(
+    words: list[Word], speaker: str | None, uncertain: bool = False
+) -> Segment:
     text = "".join(w.text for w in words).strip()
-    return Segment(words[0].start, words[-1].end, text, speaker, words=words)
+    return Segment(
+        words[0].start, words[-1].end, text, speaker, words=words, uncertain=uncertain
+    )

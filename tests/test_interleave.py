@@ -73,3 +73,11 @@ def test_equal_start_tie_break_short_first():
     assert [(s.speaker, s.text) for s in got] == [
         ("Даня", "а"), ("Вы", "ок"), ("Даня", "продолжение"),
     ]
+
+
+def test_cut_parts_inherit_uncertain_flag():
+    long = _seg("Даня", [(0.0, 2.0, " а"), (6.0, 8.0, " б")])
+    long.uncertain = True
+    got = _cut_segment(long, [3.0])
+    assert len(got) == 2
+    assert [p.uncertain for p in got] == [True, True]

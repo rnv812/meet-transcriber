@@ -66,3 +66,38 @@ def test_to_markdown_without_date_has_no_frontmatter():
     md = to_markdown("Заголовок", [Segment(0.0, 1.0, "Раз.", "Вы")])
     assert not md.startswith("---")
     assert md.startswith("# Заголовок\n")
+
+
+def test_merge_does_not_glue_uncertain_with_certain():
+    segs = [
+        Segment(0.0, 2.0, "Раз.", "SPEAKER_00"),
+        Segment(2.5, 3.0, "Два.", "SPEAKER_00", uncertain=True),
+        Segment(3.5, 4.0, "Три.", "SPEAKER_00"),
+    ]
+    merged = merge_consecutive(segs, max_gap=2.0)
+    assert [(m.text, m.uncertain) for m in merged] == [
+        ("Раз.", False),
+        ("Два.", True),
+        ("Три.", False),
+    ]
+
+
+def test_merge_glues_consecutive_uncertain_blocks():
+    segs = [
+        Segment(0.0, 1.0, "Раз.", "SPEAKER_00", uncertain=True),
+        Segment(1.5, 2.0, "Два.", "SPEAKER_00", uncertain=True),
+    ]
+    merged = merge_consecutive(segs, max_gap=2.0)
+    assert len(merged) == 1
+    assert merged[0].uncertain is True
+    assert merged[0].text == "Раз. Два."
+
+
+def test_to_markdown_marks_overlap_block():
+    segs = [
+        Segment(12.0, 14.0, "Коллеги, начнём.", "SPEAKER_00"),
+        Segment(25.0, 26.0, "Ага.", "SPEAKER_00", uncertain=True),
+    ]
+    md = to_markdown("Т", segs)
+    assert "## 00:12 — Спикер 1\n\nКоллеги, начнём." in md
+    assert "## 00:25 — Спикер 1 (нахлёст)\n\nАга." in md
