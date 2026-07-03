@@ -141,8 +141,13 @@ def render_report(name_a: str, name_b: str, result: CompareResult) -> str:
         "Сравнение транскриптов:",
         f"  A: {name_a} - {result.total_a} слов",
         f"  B: {name_b} - {result.total_b} слов",
-        f"  Сопоставлено: {result.matched}; текст разошёлся: {result.unmatched}",
     ]
+    total = result.total_a + result.total_b
+    un_pct = 100.0 * result.unmatched / total if total else 0.0
+    lines.append(
+        f"  Сопоставлено: {result.matched}; "
+        f"текст разошёлся: {result.unmatched} ({un_pct:.1f}% всех слов)"
+    )
     pct = 100.0 * result.changed / result.matched if result.matched else 0.0
     lines.append(f"  Сменили спикера: {result.changed} ({pct:.1f}% сопоставленных)")
 

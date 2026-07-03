@@ -1,6 +1,15 @@
 from pathlib import Path
 
-from meet.compare import Word, build_zones, compare_words, parse_transcript, render_report
+import pytest
+
+from meet.compare import (
+    Word,
+    build_zones,
+    compare_words,
+    parse_transcript,
+    render_report,
+    run_compare,
+)
 
 SAMPLE = """---
 date: 2026-07-02
@@ -114,10 +123,6 @@ def test_report_is_cp866_safe_and_has_sections():
     assert "Сменили спикера: 1" in text
     assert "Ева -> Гена" in text        # и в матрице/зонах только ASCII-стрелки
 
-
-import pytest
-
-from meet.compare import run_compare
 
 TWO_BLOCKS = """# Встреча
 
