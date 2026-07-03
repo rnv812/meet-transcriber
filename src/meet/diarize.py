@@ -8,15 +8,22 @@ from meet.asr import Segment, Word
 
 DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
 
+# Минимальная длительность региона нахлёста (сек): короче — дребезг на стыках
+# реплик, а не осмысленное перебивание; такие регионы не помечаем.
+MIN_OVERLAP = 0.3
+
 
 @dataclass
 class Diarization:
     """Результат диаризации: интервалы + эмбеддинг-центроид на спикера.
 
     embeddings может быть None: краевой путь pyannote без центроидов
-    или легаси-результат (голая Annotation)."""
+    или легаси-результат (голая Annotation).
+    overlaps — регионы нахлёста (сек), где звучат >= 2 спикеров; None в
+    exclusive-режиме и на легаси-результатах без get_overlap()."""
     turns: list[tuple[float, float, str]]
     embeddings: dict[str, np.ndarray] | None = None
+    overlaps: list[tuple[float, float]] | None = None
 
 
 _TOKEN_HELP = (
@@ -48,11 +55,14 @@ def diarize_wav(
     num_speakers: int | None = None,
     min_speakers: int | None = None,
     max_speakers: int | None = None,
+    exclusive: bool = False,
 ) -> Diarization:
-    """Diarization (интервалы + эмбеддинги спикеров) по записи.
+    """Diarization (интервалы + эмбеддинги + регионы нахлёста) по записи.
 
-    Берём exclusive-раскладку («в каждый момент говорит ровно один») —
-    она сделана именно для сшивки с неточными таймкодами ASR."""
+    По умолчанию — overlap-aware раскладка: turn говорящего непрерывен,
+    перебивание лежит поверх, зоны нахлёста возвращаются отдельно.
+    exclusive=True — прежняя упрощённая раскладка («в каждый момент говорит
+    ровно один»), без регионов нахлёста; путь отката (--no-overlap)."""
     token = os.environ.get("HF_TOKEN")
     if not token:
         raise SystemExit(_TOKEN_HELP)
@@ -70,26 +80,48 @@ def diarize_wav(
         min_speakers=min_speakers,
         max_speakers=max_speakers,
     )
-    return _to_diarization(result)
+    return _to_diarization(result, exclusive=exclusive)
 
 
-def _to_diarization(result) -> Diarization:
-    """Достать интервалы и эмбеддинги из результата pyannote (устойчиво к легаси)."""
-    annotation = getattr(result, "exclusive_speaker_diarization", None)
-    if annotation is None:
-        annotation = getattr(result, "speaker_diarization", result)
+def _to_diarization(result, exclusive: bool = False) -> Diarization:
+    """Достать интервалы, эмбеддинги и нахлёсты из результата pyannote.
+
+    По умолчанию turns — из overlap-aware speaker_diarization; exclusive=True —
+    из exclusive_speaker_diarization (прежнее поведение, без overlaps).
+    Устойчиво к легаси-результату (голая Annotation)."""
+    full = getattr(result, "speaker_diarization", None)
+    if exclusive:
+        annotation = getattr(result, "exclusive_speaker_diarization", None)
+        if annotation is None:
+            annotation = full if full is not None else result
+    else:
+        annotation = full if full is not None else result
     turns = [
         (turn.start, turn.end, label)
         for turn, _, label in annotation.itertracks(yield_label=True)
     ]
+    overlaps = None if exclusive else _overlap_regions(annotation)
     embeddings = None
     centroids = getattr(result, "speaker_embeddings", None)
-    full = getattr(result, "speaker_diarization", None)
     if centroids is not None and full is not None:
         labels = list(full.labels())
         if labels and len(labels) == len(centroids):
             embeddings = {label: centroids[i] for i, label in enumerate(labels)}
-    return Diarization(turns=turns, embeddings=embeddings)
+    return Diarization(turns=turns, embeddings=embeddings, overlaps=overlaps)
+
+
+def _overlap_regions(annotation) -> list[tuple[float, float]] | None:
+    """Регионы, где звучат >= 2 разных спикеров, длительностью от MIN_OVERLAP.
+
+    Annotation без get_overlap() (легаси/синтетика) -> None."""
+    get_overlap = getattr(annotation, "get_overlap", None)
+    if get_overlap is None:
+        return None
+    return [
+        (seg.start, seg.end)
+        for seg in get_overlap()
+        if seg.end - seg.start >= MIN_OVERLAP
+    ]
 
 
 def _word_speaker(word: Word, turns: list[tuple[float, float, str]]) -> str | None:

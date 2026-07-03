@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from meet.asr import Segment, Word
-from meet.diarize import Diarization, _to_diarization, split_by_speaker
+from meet.diarize import MIN_OVERLAP, Diarization, _to_diarization, split_by_speaker
 
 
 def _seg(start: float, end: float, words: list[tuple[float, float, str]]) -> Segment:
@@ -98,3 +98,57 @@ def test_to_diarization_label_count_mismatch_drops_embeddings():
         speaker_embeddings=np.zeros((3, 2)),
     )
     assert _to_diarization(result).embeddings is None
+
+
+def _result(full_turns, exclusive_turns, labels):
+    return SimpleNamespace(
+        exclusive_speaker_diarization=_FakeAnnotation(exclusive_turns, labels),
+        speaker_diarization=_FakeAnnotation(full_turns, labels),
+        speaker_embeddings=None,
+    )
+
+
+_FULL = [(0.0, 10.0, "SPEAKER_00"), (4.0, 5.0, "SPEAKER_01")]
+_EXCLUSIVE = [
+    (0.0, 4.0, "SPEAKER_00"),
+    (4.0, 5.0, "SPEAKER_01"),
+    (5.0, 10.0, "SPEAKER_00"),
+]
+
+
+def test_to_diarization_default_takes_overlap_aware_turns():
+    diar = _to_diarization(_result(_FULL, _EXCLUSIVE, ["SPEAKER_00", "SPEAKER_01"]))
+    assert diar.turns == _FULL
+
+
+def test_to_diarization_exclusive_flag_keeps_old_behavior():
+    diar = _to_diarization(
+        _result(_FULL, _EXCLUSIVE, ["SPEAKER_00", "SPEAKER_01"]), exclusive=True
+    )
+    assert diar.turns == _EXCLUSIVE
+    assert diar.overlaps is None
+
+
+def test_to_diarization_overlaps_filtered_by_min_overlap():
+    from pyannote.core import Annotation
+    from pyannote.core import Segment as PySegment
+
+    assert MIN_OVERLAP == 0.3
+    ann = Annotation()
+    ann[PySegment(0.0, 10.0), 0] = "SPEAKER_00"
+    ann[PySegment(4.0, 5.0), 1] = "SPEAKER_01"  # нахлёст 1.0 с >= MIN_OVERLAP
+    ann[PySegment(8.0, 8.1), 2] = "SPEAKER_01"  # 0.1 с < MIN_OVERLAP — отсев
+    result = SimpleNamespace(
+        exclusive_speaker_diarization=None,
+        speaker_diarization=ann,
+        speaker_embeddings=None,
+    )
+    diar = _to_diarization(result)
+    assert diar.overlaps == [(4.0, 5.0)]
+
+
+def test_to_diarization_overlaps_none_without_get_overlap():
+    # легаси/синтетическая annotation без get_overlap(): нахлёсты неизвестны
+    turns = [(0.0, 1.0, "SPEAKER_00")]
+    diar = _to_diarization(_result(turns, turns, ["SPEAKER_00"]))
+    assert diar.overlaps is None
