@@ -46,8 +46,11 @@ def make_permission_callback(allowed_dirs: tuple[Path, ...]):
         if tool_name in READ_TOOLS and allowed_dirs:
             raw = (input_data or {}).get("file_path") or (input_data or {}).get("path")
             if raw is None:
-                # Grep/Glob без path работают от cwd — это папка записи, ок.
-                return PermissionResultAllow()
+                # Grep/Glob без path работают от cwd (папка записи) — ок.
+                # Read без file_path не имеет смысла и не должен проходить.
+                if tool_name in ("Grep", "Glob"):
+                    return PermissionResultAllow()
+                return PermissionResultDeny(message="Read без file_path")
             try:
                 target = Path(raw).resolve()
             except (OSError, ValueError):

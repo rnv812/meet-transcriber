@@ -71,7 +71,7 @@ async def _main(state: AssistState, port: int) -> None:
     stop = asyncio.Event()
     runner = await run_web(state, port)
     webbrowser.open(f"http://127.0.0.1:{port}/")
-    print(f"Ассистент: http://127.0.0.1:{port}/ (Ctrl-C — стоп)")
+    print(f"Ассистент: http://127.0.0.1:{port}/ (Ctrl-C — стоп)", flush=True)
     try:
         await state.digester.run(stop)
     finally:
@@ -126,5 +126,5 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
         pass
     finally:
         engine.stop()
-        print(f"\nОстановлено: {out_dir}")
-        print(f'Точный транскрипт: meet transcribe "{out_dir}"')
+        print(f"\nОстановлено: {out_dir}", flush=True)
+        print(f'Точный транскрипт: meet transcribe "{out_dir}"', flush=True)

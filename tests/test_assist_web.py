@@ -59,6 +59,28 @@ def test_index_ask_and_task():
     _run(scenario())
 
 
+def test_ask_broken_json_returns_400():
+    async def scenario():
+        async with TestClient(TestServer(build_app(FakeState()))) as client:
+            r = await client.post(
+                "/ask", data=b"{broken",
+                headers={"Content-Type": "application/json"})
+            assert r.status == 400
+
+    _run(scenario())
+
+
+def test_ask_non_utf8_body_returns_400():
+    async def scenario():
+        async with TestClient(TestServer(build_app(FakeState()))) as client:
+            r = await client.post(
+                "/ask", data="вопрос".encode("cp1251"),
+                headers={"Content-Type": "application/json"})
+            assert r.status == 400
+
+    _run(scenario())
+
+
 def test_sse_first_event_has_digest():
     async def scenario():
         async with TestClient(TestServer(build_app(FakeState()))) as client:

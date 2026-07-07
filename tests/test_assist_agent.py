@@ -35,6 +35,20 @@ def test_write_and_bash_always_denied(tmp_path):
     )
 
 
+def test_read_without_file_path_denied(tmp_path):
+    from claude_agent_sdk import PermissionResultDeny
+
+    cb = make_permission_callback((tmp_path,))
+    assert isinstance(_decide(cb, "Read", {}), PermissionResultDeny)
+
+
+def test_grep_without_path_allowed(tmp_path):
+    from claude_agent_sdk import PermissionResultAllow
+
+    cb = make_permission_callback((tmp_path,))
+    assert isinstance(_decide(cb, "Grep", {}), PermissionResultAllow)
+
+
 def test_no_allowed_dirs_denies_read(tmp_path):
     from claude_agent_sdk import PermissionResultDeny
 

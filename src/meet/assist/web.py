@@ -79,21 +79,40 @@ def build_app(state) -> web.Application:
         })
         await resp.prepare(request)
         sent: tuple | None = None
-        while True:
-            lines, _ = state.bus.since(max(0, state.bus.size() - TRANSCRIPT_TAIL))
-            snapshot = (state.digest.version, state.bus.size(), state.status())
-            if snapshot != sent:
-                payload = json.dumps({
-                    "digest": state.digest.render(),
-                    "transcript": lines,
-                    "status": state.status(),
-                }, ensure_ascii=False)
-                await resp.write(f"event: state\ndata: {payload}\n\n".encode())
-                sent = snapshot
-            await asyncio.sleep(1.0)
+        # Клиент закрыл вкладку → ConnectionResetError (в т.ч. наследник
+        # aiohttp.ClientConnectionResetError). Тихо завершаем хендлер без
+        # traceback'а. CancelledError не глотаем — это штатная отмена задачи.
+        try:
+            while True:
+                lines, _ = state.bus.since(
+                    max(0, state.bus.size() - TRANSCRIPT_TAIL))
+                snapshot = (state.digest.version, state.bus.size(),
+                            state.status())
+                if snapshot != sent:
+                    payload = json.dumps({
+                        "digest": state.digest.render(),
+                        "transcript": lines,
+                        "status": state.status(),
+                    }, ensure_ascii=False)
+                    await resp.write(
+                        f"event: state\ndata: {payload}\n\n".encode())
+                    sent = snapshot
+                await asyncio.sleep(1.0)
+        except ConnectionResetError:
+            pass
+        return resp
+
+    def _json_response(data):
+        # ensure_ascii=False — не экранировать кириллицу в JSON-ответе.
+        return web.json_response(
+            data, dumps=lambda o: json.dumps(o, ensure_ascii=False))
 
     async def ask(request):
-        question = (await request.json()).get("question", "").strip()
+        try:
+            body = await request.json()
+        except Exception:
+            raise web.HTTPBadRequest(text="ожидается JSON (UTF-8)")
+        question = body.get("question", "").strip()
         if not question:
             raise web.HTTPBadRequest(text="пустой вопрос")
         # QA-раннер может пробросить исключение (ревью Task 9) —
@@ -101,11 +120,15 @@ def build_app(state) -> web.Application:
         try:
             answer = await state.qa.ask(question)
         except Exception as e:
-            return web.json_response({"answer": f"⚠ внутренняя ошибка: {e}"})
-        return web.json_response({"answer": answer})
+            return _json_response({"answer": f"⚠ внутренняя ошибка: {e}"})
+        return _json_response({"answer": answer})
 
     async def set_task(request):
-        task = (await request.json()).get("task", "").strip()
+        try:
+            body = await request.json()
+        except Exception:
+            raise web.HTTPBadRequest(text="ожидается JSON (UTF-8)")
+        task = body.get("task", "").strip()
         if task:
             await state.set_task(task)
         raise web.HTTPNoContent()
