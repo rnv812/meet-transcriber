@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 
 
@@ -79,6 +80,24 @@ def main() -> None:
         "--hotwords", help="термины через запятую, подсказка распознаванию"
     )
 
+    p_as = sub.add_parser(
+        "assist", help="live-ассистент: расшифровка + дайджест + вопросы (веб)"
+    )
+    p_as.add_argument("--out", default="recordings", help="папка для записей")
+    p_as.add_argument(
+        "--window", type=float, default=20.0, help="длина окна расшифровки, сек"
+    )
+    p_as.add_argument(
+        "--hotwords", help="термины через запятую, подсказка распознаванию"
+    )
+    p_as.add_argument("--task", help="задача из Obsidian — контекст встречи")
+    p_as.add_argument(
+        "--vault",
+        default=os.environ.get("MEET_VAULT"),
+        help="папка заметок Claude в Obsidian (default: env MEET_VAULT)",
+    )
+    p_as.add_argument("--port", type=int, default=8765, help="порт веб-страницы")
+
     p_en = sub.add_parser(
         "enroll", help="запомнить голоса: «Спикер N» из записи → имя в базе голосов"
     )
@@ -102,6 +121,11 @@ def main() -> None:
         from meet.live import run_live
 
         run_live(args.out, window_seconds=args.window, hotwords=args.hotwords)
+    elif args.command == "assist":
+        from meet.assist.app import run_assist
+
+        run_assist(args.out, window_seconds=args.window, hotwords=args.hotwords,
+                   task=args.task, vault=args.vault, port=args.port)
     elif args.command == "enroll":
         from meet.voices import enroll
 

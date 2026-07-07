@@ -28,3 +28,20 @@ def test_cli_transcribe_defaults_overlap_on(monkeypatch):
 def test_cli_no_overlap_flag(monkeypatch):
     called = _run_cli(monkeypatch, ["transcribe", "x", "--no-overlap"])
     assert called["overlap"] is False
+
+
+def test_cli_assist_parses_flags(monkeypatch):
+    called = {}
+
+    def fake_run_assist(out_root, window_seconds, hotwords, task, vault, port):
+        called.update(locals())
+
+    monkeypatch.setattr("meet.assist.app.run_assist", fake_run_assist)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["meet", "assist", "--task", "demo", "--port", "9000"],
+    )
+    from meet import cli
+
+    cli.main()
+    assert called["task"] == "demo" and called["port"] == 9000

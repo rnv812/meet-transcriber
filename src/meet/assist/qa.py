@@ -27,6 +27,10 @@ class QAService:
         self._session_id: str | None = None
         self._lock = asyncio.Lock()
 
+    def set_system_prompt(self, text: str) -> None:
+        """Сменить системный промпт на лету (при смене задачи-контекста)."""
+        self._system = text
+
     async def ask(self, question: str) -> str:
         async with self._lock:
             if self._on_fresh_audio is not None:
