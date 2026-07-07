@@ -68,9 +68,6 @@ class AssistState:
 
 
 async def _main(state: AssistState, port: int) -> None:
-    auth_error = await check_auth()
-    if auth_error:
-        raise SystemExit(f"Авторизация Claude не прошла: {auth_error}")
     stop = asyncio.Event()
     runner = await run_web(state, port)
     webbrowser.open(f"http://127.0.0.1:{port}/")
@@ -88,6 +85,12 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
     from meet.asr import Transcriber
     from meet.live import LiveEngine
     from meet.transcribe import _load_hotwords
+
+    # Авторизация — до прогрева моделей и создания папки записи: при мёртвой
+    # авторизации пользователь не должен ждать минуту и получать пустую папку.
+    auth_error = asyncio.run(check_auth())
+    if auth_error:
+        raise SystemExit(f"Авторизация Claude не прошла: {auth_error}")
 
     out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
     bus = TranscriptBus()
