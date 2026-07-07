@@ -140,6 +140,28 @@ def test_process_window_feeds_previous_tail_as_initial_prompt(tmp_path):
     assert fake.initial_prompts == [None, "первое окно"]
 
 
+def test_on_line_callback_receives_lines(tmp_path):
+    fake = FakeTranscriber([[Segment(0.0, 0.5, "привет", no_speech_prob=0.1, avg_logprob=-0.3)]])
+    got: list[str] = []
+    engine = LiveEngine(tmp_path, fake, on_line=got.append)
+    engine.register_track("mic.wav", rate=48000, channels=2, normalize=False)
+    engine._tracks["mic.wav"]["buffer"].push(_one_second_2ch_48k())
+    engine.process_window()
+    assert got and got[0].endswith("Вы: привет")
+
+
+def test_on_line_error_does_not_break_window(tmp_path):
+    def boom(line):
+        raise RuntimeError("consumer failed")
+
+    fake = FakeTranscriber([[Segment(0.0, 0.5, "привет", no_speech_prob=0.1, avg_logprob=-0.3)]])
+    engine = LiveEngine(tmp_path, fake, on_line=boom)
+    engine.register_track("mic.wav", rate=48000, channels=2, normalize=False)
+    engine._tracks["mic.wav"]["buffer"].push(_one_second_2ch_48k())
+    engine.process_window()  # не должен упасть
+    assert (tmp_path / "live_transcript.md").read_text(encoding="utf-8")
+
+
 def test_near_silent_first_window_does_not_freeze_gain(tmp_path):
     fake = FakeTranscriber([[], []])
     engine = LiveEngine(tmp_path, fake, window_seconds=20.0)
