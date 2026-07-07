@@ -39,10 +39,15 @@ class Digester:
         lines, new_cursor = self._bus.since(self._cursor)
         if not lines:
             return False
-        reply = await self._runner(
-            build_tick_prompt(self._digest.render(), lines),
-            system_prompt=self._system, model=self._model,
-        )
+        try:
+            reply = await self._runner(
+                build_tick_prompt(self._digest.render(), lines),
+                system_prompt=self._system, model=self._model,
+            )
+        except Exception as e:  # ошибка тика не валит процесс (см. докстринг)
+            self._last_tick = self._clock()
+            self.status = f"дайджестер: {type(e).__name__}: {e}"
+            return False  # курсор не двигаем — строки уйдут в ретрай
         self._last_tick = self._clock()
         if reply.error:
             self.status = f"дайджестер: {reply.error}"
@@ -62,4 +67,7 @@ class Digester:
             pending, _ = self._bus.since(self._cursor)
             chars = sum(len(line) for line in pending)
             if self.should_tick(chars, self._clock() - self._last_tick):
-                await self.tick_once()
+                try:
+                    await self.tick_once()
+                except Exception as e:  # страховка: цикл живёт при любом сбое
+                    self.status = f"дайджестер: {type(e).__name__}: {e}"

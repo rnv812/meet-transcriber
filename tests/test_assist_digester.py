@@ -49,3 +49,23 @@ def test_garbage_delta_discarded_status_set():
     bus.publish("[00:00:05] Вы: привет")
     assert asyncio.run(d.tick_once()) is False
     assert digest.version == 0 and d.status
+
+
+def test_runner_exception_sets_status_and_keeps_lines_for_retry():
+    bus, digest = TranscriptBus(), Digest()
+
+    async def boom(prompt, **kw):
+        raise RuntimeError("sdk упал")
+
+    d = Digester(bus, digest, system_prompt="s", runner=boom)
+    bus.publish("[00:00:05] Вы: решили X")
+    assert asyncio.run(d.tick_once()) is False  # исключение не вылетает наружу
+    assert "RuntimeError" in (d.status or "")
+    assert digest.version == 0
+
+    async def ok(prompt, **kw):
+        return AgentReply(text="ADD Тема :: Решили X")
+
+    d._runner = ok  # ретрай с рабочим runner'ом: курсор не сдвинулся
+    assert asyncio.run(d.tick_once()) is True
+    assert digest.version == 1 and "Решили X" in digest.render()
