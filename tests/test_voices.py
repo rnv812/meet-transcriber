@@ -7,6 +7,7 @@ import pytest
 from meet.voices import (
     THRESHOLD,
     add_sample,
+    best_match,
     enroll,
     load_voices,
     match_speakers,
@@ -57,6 +58,35 @@ def test_load_voices_skips_broken_json(tmp_path, capsys):
 
 def _voices(**people):
     return {name: [np.asarray(v, dtype=np.float32) for v in vecs] for name, vecs in people.items()}
+
+
+def test_best_match_returns_score_name_second():
+    voices = {
+        "Демьян": [np.array([1.0, 0.0], dtype=np.float32)],
+        "Пётр": [np.array([0.0, 1.0], dtype=np.float32)],
+    }
+    score, name, second = best_match(np.array([1.0, 0.1], dtype=np.float32), voices)
+    assert name == "Демьян"
+    assert score > 0.99
+    assert second is not None and second < 0.2
+
+
+def test_best_match_single_person_second_is_none():
+    voices = {"Демьян": [np.array([1.0, 0.0], dtype=np.float32)]}
+    score, name, second = best_match(np.array([1.0, 0.0], dtype=np.float32), voices)
+    assert name == "Демьян"
+    assert second is None
+
+
+def test_best_match_takes_max_over_samples():
+    voices = {
+        "Демьян": [
+            np.array([0.0, 1.0], dtype=np.float32),
+            np.array([1.0, 0.0], dtype=np.float32),
+        ],
+    }
+    score, _, _ = best_match(np.array([1.0, 0.0], dtype=np.float32), voices)
+    assert score > 0.99
 
 
 def test_match_confident_hit():

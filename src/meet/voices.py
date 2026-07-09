@@ -77,6 +77,21 @@ def _cos(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / denom) if denom else -1.0
 
 
+def best_match(
+    emb: np.ndarray, voices: dict[str, list[np.ndarray]]
+) -> tuple[float, str, float | None]:
+    """Лучший человек по косинусу (максимум по его образцам) и score
+    ближайшего ДРУГОГО человека (None, если в базе один человек).
+    voices должен быть непустым — проверяет вызывающий."""
+    scores = sorted(
+        ((max(_cos(emb, s) for s in samples), name) for name, samples in voices.items()),
+        reverse=True,
+    )
+    best_score, best_name = scores[0]
+    second = scores[1][0] if len(scores) > 1 else None
+    return best_score, best_name, second
+
+
 def match_speakers(
     embeddings: dict[str, np.ndarray],
     voices: dict[str, list[np.ndarray]],
@@ -92,12 +107,7 @@ def match_speakers(
         return {}
     matched: dict[str, str] = {}
     for label, emb in embeddings.items():
-        scores = sorted(
-            ((max(_cos(emb, s) for s in samples), name) for name, samples in voices.items()),
-            reverse=True,
-        )
-        best_score, best_name = scores[0]
-        second = scores[1][0] if len(scores) > 1 else None
+        best_score, best_name, second = best_match(emb, voices)
         if best_score >= threshold and (second is None or best_score - second >= margin):
             matched[label] = best_name
             # IMPORTANT: в консольных логах только ASCII-пунктуация («->», не «→»):
