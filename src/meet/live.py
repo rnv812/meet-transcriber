@@ -46,13 +46,14 @@ class LiveEngine:
 
     def __init__(self, out_dir, transcriber, window_seconds: float = 20.0,
                  hotwords: str | None = None, clock=None,
-                 on_line=None) -> None:
+                 on_line=None, voice_matcher=None) -> None:
         self.out_dir = Path(out_dir)
         self._transcriber = transcriber
         self.window_seconds = window_seconds
         self.hotwords = hotwords
         self._clock = clock or time.monotonic
         self.on_line = on_line  # колбэк на каждую записанную строку (Q&A-сервис)
+        self._matcher = voice_matcher  # опознание голоса far-end (duck-typed)
         self._window_lock = threading.Lock()  # process_window зовут и внеочередно
         self._t0 = None  # wall-clock at first process_window tick
         self._tick_origin = None  # clock at previous tick → this window's start offset
@@ -65,12 +66,13 @@ class LiveEngine:
         self._p = None
 
     def register_track(self, fname: str, rate: int, channels: int,
-                       normalize: bool = False) -> None:
+                       normalize: bool = False, identify: bool = False) -> None:
         self._tracks[fname] = {
             "buffer": TrackBuffer(),
             "rate": rate,
             "channels": channels,
             "normalize": normalize,
+            "identify": identify,  # опознавать говорящего по голосу (far-end)
             "gain": None,
             "last_text": None,  # хвост прошлого окна → initial_prompt следующего
         }
@@ -130,8 +132,13 @@ class LiveEngine:
                 )
                 if segs:
                     tr["last_text"] = segs[-1].text  # хвост → контекст следующего окна
-                speaker = self.SPEAKERS.get(fname, fname)
+                default_speaker = self.SPEAKERS.get(fname, fname)
                 for s in segs:
+                    speaker = default_speaker
+                    if tr["identify"] and self._matcher is not None:
+                        name = self._segment_name(audio, s.start - offset, s.end - offset)
+                        if name:
+                            speaker = name
                     line = format_live_line(s.start, speaker, s.text)
                     self._write_line(line)
                     if self.on_line is not None:
@@ -141,6 +148,15 @@ class LiveEngine:
                             pass  # потребитель не должен валить запись
 
             self._tick_origin = now  # этот тик станет origin для следующего окна
+
+    def _segment_name(self, audio, start_s: float, end_s: float):
+        """Имя по голосу сегмента; любой сбой -> None (окно важнее имени)."""
+        try:
+            lo = max(0, int(start_s * 16000))
+            hi = min(len(audio), int(end_s * 16000))
+            return self._matcher.name_for(audio[lo:hi])
+        except Exception:
+            return None
 
     def _write_line(self, line: str) -> None:
         if self._out is None:
@@ -156,20 +172,23 @@ class LiveEngine:
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self._transcriber.load()
+        if self._matcher is not None:
+            self._matcher.load()
         self._p = pyaudio.PyAudio()
         wasapi = self._p.get_host_api_info_by_type(pyaudio.paWASAPI)
         devices = (
-            (_find_loopback(self._p), "sys.wav", True),
-            (self._p.get_device_info_by_index(wasapi["defaultInputDevice"]), "mic.wav", False),
+            (_find_loopback(self._p), "sys.wav", True, True),
+            (self._p.get_device_info_by_index(wasapi["defaultInputDevice"]), "mic.wav", False, False),
         )
-        for dev, fname, normalize in devices:
+        for dev, fname, normalize, identify in devices:
             channels = max(1, int(dev["maxInputChannels"]))
             rate = int(dev["defaultSampleRate"])
             # fname — внутренний ключ дорожки (завязан на SPEAKERS); на диск для
             # офлайн-прохода пишем сжатый .opus.
             writer = OpusWriter(self.out_dir / fname.replace(".wav", ".opus"),
                                 channels, rate)
-            self.register_track(fname, rate, channels, normalize=normalize)
+            self.register_track(fname, rate, channels, normalize=normalize,
+                                identify=identify)
             buf = self._tracks[fname]["buffer"]
 
             def make_cb(w: OpusWriter, b: TrackBuffer):

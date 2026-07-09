@@ -162,6 +162,111 @@ def test_on_line_error_does_not_break_window(tmp_path):
     assert (tmp_path / "live_transcript.md").read_text(encoding="utf-8")
 
 
+class FakeMatcher:
+    def __init__(self, names):
+        self.names = names  # список ответов name_for по порядку вызовов
+        self.slices = []    # длины полученных кусков аудио (в сэмплах)
+
+    def load(self):
+        pass
+
+    def name_for(self, audio):
+        self.slices.append(len(audio))
+        return self.names.pop(0) if self.names else None
+
+
+def test_identify_track_uses_matcher_name(tmp_path):
+    fake = FakeTranscriber([[Segment(0.5, 2.5, "тезис про токены")]])
+    matcher = FakeMatcher(["Григорий Лебедев"])
+    engine = LiveEngine(tmp_path, fake, voice_matcher=matcher)
+    engine.register_track("sys.wav", rate=16000, channels=1, identify=True)
+    engine._tracks["sys.wav"]["buffer"].push(
+        np.zeros(16000 * 3, dtype=np.int16).tobytes()
+    )
+    engine.process_window()
+    text = (tmp_path / "live_transcript.md").read_text(encoding="utf-8")
+    assert "Григорий Лебедев: тезис про токены" in text
+    assert "Собеседник" not in text
+    # матчеру ушёл кусок аудио примерно длины сегмента (2 с) на 16 кГц
+    assert 16000 * 1.5 <= matcher.slices[0] <= 16000 * 2.5
+
+
+def test_identify_no_match_keeps_default_speaker(tmp_path):
+    fake = FakeTranscriber([[Segment(0.5, 2.5, "неизвестный голос")]])
+    engine = LiveEngine(tmp_path, fake, voice_matcher=FakeMatcher([None]))
+    engine.register_track("sys.wav", rate=16000, channels=1, identify=True)
+    engine._tracks["sys.wav"]["buffer"].push(
+        np.zeros(16000 * 3, dtype=np.int16).tobytes()
+    )
+    engine.process_window()
+    text = (tmp_path / "live_transcript.md").read_text(encoding="utf-8")
+    assert "Собеседник: неизвестный голос" in text
+
+
+def test_track_without_identify_never_calls_matcher(tmp_path):
+    fake = FakeTranscriber([[Segment(0.0, 2.0, "моя реплика")]])
+    matcher = FakeMatcher(["Кто-То"])
+    engine = LiveEngine(tmp_path, fake, voice_matcher=matcher)
+    engine.register_track("mic.wav", rate=16000, channels=1)
+    engine._tracks["mic.wav"]["buffer"].push(
+        np.zeros(16000 * 3, dtype=np.int16).tobytes()
+    )
+    engine.process_window()
+    text = (tmp_path / "live_transcript.md").read_text(encoding="utf-8")
+    assert "Вы: моя реплика" in text
+    assert matcher.slices == []
+
+
+def test_matcher_error_falls_back_to_default(tmp_path):
+    class BrokenMatcher:
+        def load(self):
+            pass
+
+        def name_for(self, audio):
+            raise RuntimeError("cuda died")
+
+    fake = FakeTranscriber([[Segment(0.5, 2.5, "реплика")]])
+    engine = LiveEngine(tmp_path, fake, voice_matcher=BrokenMatcher())
+    engine.register_track("sys.wav", rate=16000, channels=1, identify=True)
+    engine._tracks["sys.wav"]["buffer"].push(
+        np.zeros(16000 * 3, dtype=np.int16).tobytes()
+    )
+    engine.process_window()
+    text = (tmp_path / "live_transcript.md").read_text(encoding="utf-8")
+    assert "Собеседник: реплика" in text
+
+
+def test_identify_without_matcher_is_noop(tmp_path):
+    fake = FakeTranscriber([[Segment(0.5, 2.5, "реплика")]])
+    engine = LiveEngine(tmp_path, fake)  # voice_matcher не передан
+    engine.register_track("sys.wav", rate=16000, channels=1, identify=True)
+    engine._tracks["sys.wav"]["buffer"].push(
+        np.zeros(16000 * 3, dtype=np.int16).tobytes()
+    )
+    engine.process_window()
+    text = (tmp_path / "live_transcript.md").read_text(encoding="utf-8")
+    assert "Собеседник: реплика" in text
+
+
+def test_identify_slices_by_window_relative_times(tmp_path):
+    fake = FakeTranscriber([
+        [Segment(0.0, 2.0, "первое окно")],
+        [Segment(1.0, 3.0, "второе окно")],  # станет [21.0, 23.0] после offset 20
+    ])
+    matcher = FakeMatcher(["Демьян", "Демьян"])
+    clock = FakeClock([0.0, 20.0, 40.0])
+    engine = LiveEngine(tmp_path, fake, window_seconds=20.0, clock=clock,
+                        voice_matcher=matcher)
+    engine.register_track("sys.wav", rate=16000, channels=1, identify=True)
+    buf = engine._tracks["sys.wav"]["buffer"]
+    buf.push(np.zeros(16000 * 4, dtype=np.int16).tobytes())
+    engine.process_window()
+    buf.push(np.zeros(16000 * 4, dtype=np.int16).tobytes())
+    engine.process_window()
+    # оба куска ~2 с: если бы offset не вычитался, второй вылез бы за аудио и был бы пуст
+    assert all(16000 * 1.5 <= n <= 16000 * 2.5 for n in matcher.slices)
+
+
 def test_near_silent_first_window_does_not_freeze_gain(tmp_path):
     fake = FakeTranscriber([[], []])
     engine = LiveEngine(tmp_path, fake, window_seconds=20.0)
