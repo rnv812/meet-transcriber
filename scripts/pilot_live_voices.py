@@ -43,7 +43,7 @@ def main() -> None:
     matcher = VoiceMatcher()
     matcher.load()
     if not matcher.enabled:
-        raise SystemExit("база голосов пуста — пилоту нечего опознавать")
+        raise SystemExit("база голосов пуста - пилоту нечего опознавать")
 
     import torch
 

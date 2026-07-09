@@ -19,6 +19,17 @@ def test_matches_confident_embedding():
     assert m.name_for(_audio()) == "Демьян"
 
 
+def test_margin_too_small_returns_none():
+    # Два человека с почти одинаковыми образцами: у обоих cos ~1.0 к запросу,
+    # так что лучший проходит порог, но отрыв от второго меньше MARGIN -> None.
+    base = {
+        "Демьян": [np.array([1.0, 0.0], dtype=np.float32)],
+        "Пётр": [np.array([1.0, 0.02], dtype=np.float32)],
+    }
+    m = VoiceMatcher(base=base, embed_fn=lambda a: np.array([1.0, 0.0], dtype=np.float32))
+    assert m.name_for(_audio()) is None
+
+
 def test_below_threshold_returns_none():
     m = VoiceMatcher(base=_base(), embed_fn=lambda a: np.array([1.0, 0.9], dtype=np.float32))
     assert m.name_for(_audio()) is None

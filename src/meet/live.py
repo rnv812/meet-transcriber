@@ -7,6 +7,9 @@ from pathlib import Path
 # far-end: иначе тихое стартовое окно навсегда зафиксировало бы gain=1.0.
 CALIBRATION_MIN_RMS = 1e-3
 
+# Частота, к которой resample_to_16k приводит аудио — в ней считаем сэмпл-офсеты.
+WINDOW_RATE = 16000
+
 
 def fmt_hms(seconds: float) -> str:
     s = int(seconds)
@@ -152,8 +155,8 @@ class LiveEngine:
     def _segment_name(self, audio, start_s: float, end_s: float):
         """Имя по голосу сегмента; любой сбой -> None (окно важнее имени)."""
         try:
-            lo = max(0, int(start_s * 16000))
-            hi = min(len(audio), int(end_s * 16000))
+            lo = max(0, int(start_s * WINDOW_RATE))
+            hi = min(len(audio), int(end_s * WINDOW_RATE))
             return self._matcher.name_for(audio[lo:hi])
         except Exception:
             return None

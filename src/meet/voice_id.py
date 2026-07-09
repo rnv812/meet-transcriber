@@ -59,7 +59,7 @@ class VoiceMatcher:
         if self.base is None:
             self.base = load_voices()
         if not self.base:
-            print("голоса: база пуста — live-имена выключены")
+            print("голоса: база пуста - live-имена выключены")
             return
         if self._embed is None:
             self._embed = _load_embedder()
