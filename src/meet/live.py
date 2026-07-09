@@ -243,11 +243,12 @@ class LiveEngine:
 
 
 def run_live(out_root: str, window_seconds: float = 20.0,
-             hotwords: str | None = None) -> Path:
+             hotwords: str | None = None, no_voices: bool = False) -> Path:
     from datetime import datetime
 
     from meet.asr import Transcriber
     from meet.transcribe import _load_hotwords
+    from meet.voice_id import VoiceMatcher
 
     out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
     engine = LiveEngine(
@@ -255,6 +256,7 @@ def run_live(out_root: str, window_seconds: float = 20.0,
         Transcriber(),
         window_seconds=window_seconds,
         hotwords=_load_hotwords(hotwords),
+        voice_matcher=None if no_voices else VoiceMatcher(),
     )
     engine.start()
     try:

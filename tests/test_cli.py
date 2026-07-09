@@ -33,7 +33,8 @@ def test_cli_no_overlap_flag(monkeypatch):
 def test_cli_assist_parses_flags(monkeypatch):
     called = {}
 
-    def fake_run_assist(out_root, window_seconds, hotwords, task, vault, port):
+    def fake_run_assist(out_root, window_seconds, hotwords, task, vault, port,
+                        no_voices=False):
         called.update(locals())
 
     monkeypatch.setattr("meet.assist.app.run_assist", fake_run_assist)
@@ -45,3 +46,61 @@ def test_cli_assist_parses_flags(monkeypatch):
 
     cli.main()
     assert called["task"] == "demo" and called["port"] == 9000
+
+
+def test_cli_live_no_voices_default_false(monkeypatch):
+    called = {}
+
+    def fake_run_live(out_root, window_seconds, hotwords, no_voices=False):
+        called.update(locals())
+
+    monkeypatch.setattr("meet.live.run_live", fake_run_live)
+    monkeypatch.setattr("sys.argv", ["meet", "live"])
+    from meet import cli
+
+    cli.main()
+    assert called["no_voices"] is False
+
+
+def test_cli_live_no_voices_flag(monkeypatch):
+    called = {}
+
+    def fake_run_live(out_root, window_seconds, hotwords, no_voices=False):
+        called.update(locals())
+
+    monkeypatch.setattr("meet.live.run_live", fake_run_live)
+    monkeypatch.setattr("sys.argv", ["meet", "live", "--no-voices"])
+    from meet import cli
+
+    cli.main()
+    assert called["no_voices"] is True
+
+
+def test_cli_assist_no_voices_default_false(monkeypatch):
+    called = {}
+
+    def fake_run_assist(out_root, window_seconds, hotwords, task, vault, port,
+                        no_voices=False):
+        called.update(locals())
+
+    monkeypatch.setattr("meet.assist.app.run_assist", fake_run_assist)
+    monkeypatch.setattr("sys.argv", ["meet", "assist"])
+    from meet import cli
+
+    cli.main()
+    assert called["no_voices"] is False
+
+
+def test_cli_assist_no_voices_flag(monkeypatch):
+    called = {}
+
+    def fake_run_assist(out_root, window_seconds, hotwords, task, vault, port,
+                        no_voices=False):
+        called.update(locals())
+
+    monkeypatch.setattr("meet.assist.app.run_assist", fake_run_assist)
+    monkeypatch.setattr("sys.argv", ["meet", "assist", "--no-voices"])
+    from meet import cli
+
+    cli.main()
+    assert called["no_voices"] is True

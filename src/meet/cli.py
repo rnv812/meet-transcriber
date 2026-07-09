@@ -79,6 +79,10 @@ def main() -> None:
     p_live.add_argument(
         "--hotwords", help="термины через запятую, подсказка распознаванию"
     )
+    p_live.add_argument(
+        "--no-voices", action="store_true",
+        help="не подписывать сегменты именами из базы голосов",
+    )
 
     p_as = sub.add_parser(
         "assist", help="live-ассистент: расшифровка + дайджест + вопросы (веб)"
@@ -97,6 +101,10 @@ def main() -> None:
         help="папка заметок Claude в Obsidian (default: env MEET_VAULT)",
     )
     p_as.add_argument("--port", type=int, default=8765, help="порт веб-страницы")
+    p_as.add_argument(
+        "--no-voices", action="store_true",
+        help="не подписывать сегменты именами из базы голосов",
+    )
 
     p_en = sub.add_parser(
         "enroll", help="запомнить голоса: «Спикер N» из записи → имя в базе голосов"
@@ -120,12 +128,14 @@ def main() -> None:
     elif args.command == "live":
         from meet.live import run_live
 
-        run_live(args.out, window_seconds=args.window, hotwords=args.hotwords)
+        run_live(args.out, window_seconds=args.window, hotwords=args.hotwords,
+                 no_voices=args.no_voices)
     elif args.command == "assist":
         from meet.assist.app import run_assist
 
         run_assist(args.out, window_seconds=args.window, hotwords=args.hotwords,
-                   task=args.task, vault=args.vault, port=args.port)
+                   task=args.task, vault=args.vault, port=args.port,
+                   no_voices=args.no_voices)
     elif args.command == "enroll":
         from meet.voices import enroll
 

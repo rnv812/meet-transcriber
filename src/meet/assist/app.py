@@ -81,10 +81,12 @@ async def _main(state: AssistState, port: int) -> None:
 
 def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
                hotwords: str | None = None, task: str | None = None,
-               vault: str | None = None, port: int = 8765) -> None:
+               vault: str | None = None, port: int = 8765,
+               no_voices: bool = False) -> None:
     from meet.asr import Transcriber
     from meet.live import LiveEngine
     from meet.transcribe import _load_hotwords
+    from meet.voice_id import VoiceMatcher
 
     # Авторизация — до прогрева моделей и создания папки записи: при мёртвой
     # авторизации пользователь не должен ждать минуту и получать пустую папку.
@@ -103,7 +105,8 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
     )
     engine = LiveEngine(out_dir, Transcriber(), window_seconds=window_seconds,
                         hotwords=_load_hotwords(hotwords),
-                        on_line=bus.publish)
+                        on_line=bus.publish,
+                        voice_matcher=None if no_voices else VoiceMatcher())
     digest_file = out_dir / "live_digest.md"
 
     def _write_digest() -> None:
