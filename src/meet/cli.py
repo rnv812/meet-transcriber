@@ -126,16 +126,20 @@ def main() -> None:
 
         record(args.out)
     elif args.command == "live":
+        from meet.gpu_lock import hold_gpu_lock
         from meet.live import run_live
 
-        run_live(args.out, window_seconds=args.window, hotwords=args.hotwords,
-                 no_voices=args.no_voices)
+        with hold_gpu_lock("live"):
+            run_live(args.out, window_seconds=args.window, hotwords=args.hotwords,
+                     no_voices=args.no_voices)
     elif args.command == "assist":
         from meet.assist.app import run_assist
+        from meet.gpu_lock import hold_gpu_lock
 
-        run_assist(args.out, window_seconds=args.window, hotwords=args.hotwords,
-                   task=args.task, vault=args.vault, port=args.port,
-                   no_voices=args.no_voices)
+        with hold_gpu_lock("assist"):
+            run_assist(args.out, window_seconds=args.window, hotwords=args.hotwords,
+                       task=args.task, vault=args.vault, port=args.port,
+                       no_voices=args.no_voices)
     elif args.command == "enroll":
         from meet.voices import enroll
 
@@ -145,12 +149,14 @@ def main() -> None:
 
         run_compare(args.a, args.b)
     else:
+        from meet.gpu_lock import hold_gpu_lock
         from meet.transcribe import transcribe
 
-        transcribe(
-            args.path,
-            speakers=args.speakers,
-            hotwords=args.hotwords,
-            align=args.align,
-            overlap=args.overlap,
-        )
+        with hold_gpu_lock("transcribe"):
+            transcribe(
+                args.path,
+                speakers=args.speakers,
+                hotwords=args.hotwords,
+                align=args.align,
+                overlap=args.overlap,
+            )
