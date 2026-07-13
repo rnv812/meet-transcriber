@@ -16,11 +16,14 @@ OUT_ROOT = Path(__file__).resolve().parents[2] / "recordings"
 
 
 def _icon_image():
-    """Красный кружок 64x64 — рисуем на лету, без файлов-ресурсов."""
+    """Синий кружок 64x64 — рисуем на лету, без файлов-ресурсов.
+
+    Синий, а не красный: красным кружком запись показывает voice-control,
+    два одинаковых красных в трее путаются."""
     from PIL import Image, ImageDraw
 
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    ImageDraw.Draw(img).ellipse((8, 8, 56, 56), fill=(220, 40, 40, 255))
+    ImageDraw.Draw(img).ellipse((8, 8, 56, 56), fill=(40, 110, 220, 255))
     return img
 
 
