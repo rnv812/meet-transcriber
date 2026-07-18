@@ -4,6 +4,9 @@
 Без консольного окна: точка входа meet-tray в [project.gui-scripts].
 См. спеку docs/superpowers/specs/2026-07-02-tray-record-design.md."""
 
+import json
+import os
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -13,6 +16,48 @@ from meet.recorder import record
 
 # recordings от корня репозитория: ярлык запускается с произвольным cwd
 OUT_ROOT = Path(__file__).resolve().parents[2] / "recordings"
+
+
+def _config() -> dict:
+    """%LOCALAPPDATA%/meet/config.json — машинно-локальные настройки трея.
+
+    Файла может не быть (на ноуте) — тогда пустой конфиг."""
+    path = Path(os.environ.get("LOCALAPPDATA", ".")) / "meet" / "config.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _launch_claude(folder: str) -> None:
+    """Post-recording hook: окно терминала с Claude Code, который предлагает
+    транскрибировать свежую запись. Включается флагом post_record_hook в
+    config.json — он есть только на десктопе. Best effort: проблемы запуска
+    не должны мешать завершению записи."""
+    if not _config().get("post_record_hook"):
+        return
+    prompt = (
+        f"Завершилась запись встречи, папка: {folder}. "
+        "Предложи транскрибировать её."
+    )
+    project_root = OUT_ROOT.parent
+    try:
+        # powershell с профилем: там задан шорткат cc (claude с нужными
+        # флагами) и proxy-переменные; -NoExit — не закрывать окно при ошибке.
+        # Промпт в одинарных кавычках PS — апострофов в тексте быть не должно
+        subprocess.Popen(
+            [
+                "wt",
+                "-d",
+                str(project_root),
+                "powershell",
+                "-NoExit",
+                "-Command",
+                f"cc '{prompt}'",
+            ]
+        )
+    except OSError:
+        pass
 
 
 def _icon_image():
@@ -47,6 +92,7 @@ def main() -> None:
         thread.join(timeout=60)
         if "folder" in result:
             icon.notify(f"Сохранено: {result['folder']}", "Запись встречи")
+            _launch_claude(result["folder"])
             time.sleep(3)  # дать уведомлению показаться до выхода процесса
         icon.stop()
 
