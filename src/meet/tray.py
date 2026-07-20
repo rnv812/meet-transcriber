@@ -42,8 +42,9 @@ def _launch_claude(folder: str) -> None:
     )
     project_root = OUT_ROOT.parent
     try:
-        # powershell с профилем: там задан шорткат cc (claude с нужными
-        # флагами) и proxy-переменные; -NoExit — не закрывать окно при ошибке.
+        # powershell с профилем: там proxy-переменные; -NoExit — не закрывать
+        # окно при ошибке. claude напрямую, не через шорткат cc: у CLI один
+        # позиционный промпт, и "/color red" внутри cc вытесняет наш.
         # Промпт в одинарных кавычках PS — апострофов в тексте быть не должно
         subprocess.Popen(
             [
@@ -53,7 +54,7 @@ def _launch_claude(folder: str) -> None:
                 "powershell",
                 "-NoExit",
                 "-Command",
-                f"cc '{prompt}'",
+                f"claude --permission-mode auto '{prompt}'",
             ]
         )
     except OSError:
