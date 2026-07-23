@@ -7,3 +7,4 @@ voices/
 .idea/
 hotwords.txt
 glossary.txt
+*.stackdump
