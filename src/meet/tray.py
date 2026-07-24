@@ -6,6 +6,7 @@
 
 import json
 import os
+import re
 import subprocess
 import threading
 import time
@@ -16,6 +17,9 @@ from meet.recorder import record
 
 # recordings от корня репозитория: ярлык запускается с произвольным cwd
 OUT_ROOT = Path(__file__).resolve().parents[2] / "recordings"
+
+# окно старта записи, в котором встреча похожа на дейлик (сам дейлик в 11-30)
+DAILY_WINDOW = ("11:00", "12:00")
 
 
 def _config() -> dict:
@@ -29,6 +33,17 @@ def _config() -> dict:
         return {}
 
 
+def _in_daily_window(folder: str) -> bool:
+    """Похоже ли время записи (из имени папки YYYY-MM-DD_HH-MM) на слот дейлика.
+
+    Только гипотеза для промпта — что за встреча на самом деле, решает
+    календарь; см. скилл daily-notes."""
+    m = re.search(r"_(\d{2})-(\d{2})$", Path(folder).name)
+    if not m:
+        return False
+    return DAILY_WINDOW[0] <= f"{m.group(1)}:{m.group(2)}" <= DAILY_WINDOW[1]
+
+
 def _launch_claude(folder: str) -> None:
     """Post-recording hook: окно терминала с Claude Code, который предлагает
     транскрибировать свежую запись. Включается флагом post_record_hook в
@@ -40,6 +55,13 @@ def _launch_claude(folder: str) -> None:
         f"Завершилась запись встречи, папка: {folder}. "
         "Предложи транскрибировать её."
     )
+    if _in_daily_window(folder):
+        prompt += (
+            " Время похоже на слот дейлика — сверься с календарём "
+            "(scripts/calendar_lookup.ps1): дейлик оформляй скиллом "
+            "my-plugin:daily-notes, другую встречу в этом слоте — "
+            "обычным сценарием."
+        )
     project_root = OUT_ROOT.parent
     try:
         # powershell с профилем: там proxy-переменные; -NoExit — не закрывать
