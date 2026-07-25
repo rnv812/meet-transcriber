@@ -93,7 +93,9 @@ def test_process_window_aligns_tracks_in_same_tick(tmp_path):
 
 
 def test_process_window_drops_hallucinations(tmp_path):
-    scripted = [[Segment(0.0, 0.5, "шшш", no_speech_prob=0.95, avg_logprob=-0.3)]]
+    # денилист, а не порог по no_speech_prob: та метрика относится ко всему окну
+    # декодирования и по ней больше не фильтруем (см. drop_hallucinations)
+    scripted = [[Segment(0.0, 0.5, "Спасибо за просмотр!", no_speech_prob=0.2, avg_logprob=-0.3)]]
     fake = FakeTranscriber(scripted)
     engine = LiveEngine(tmp_path, fake)
     engine.register_track("sys.wav", rate=16000, channels=1, normalize=False)

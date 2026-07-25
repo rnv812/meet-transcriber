@@ -31,13 +31,30 @@ def test_segments_from_whisper_zero_offset_default():
     assert segs[0].start == 3.0
 
 
-def test_drop_hallucinations_filters_noise_lowconf_and_empty():
+def test_drop_hallucinations_filters_lowconf_and_empty():
     keep = Segment(0, 1, "норм", no_speech_prob=0.2, avg_logprob=-0.4)
-    noise = Segment(1, 2, "шшш", no_speech_prob=0.9, avg_logprob=-0.5)
     lowconf = Segment(2, 3, "ммм", no_speech_prob=0.2, avg_logprob=-2.0)
     empty = Segment(3, 4, "", no_speech_prob=0.1, avg_logprob=-0.1)
-    out = drop_hallucinations([keep, noise, lowconf, empty])
+    out = drop_hallucinations([keep, lowconf, empty])
     assert [s.text for s in out] == ["норм"]
+
+
+def test_drop_hallucinations_keeps_confident_speech_despite_high_no_speech_prob():
+    # no_speech_prob faster-whisper выдаёт на всё окно декодирования, а не на
+    # сегмент: порог по ней выбрасывал уверенно распознанную речь вместе со всем
+    # окном (в live-режиме — весь 20-секундный тик).
+    seg = Segment(0, 20, "уверенная речь", no_speech_prob=0.998, avg_logprob=-0.07)
+    assert drop_hallucinations([seg]) == [seg]
+
+
+def test_drop_hallucinations_logs_dropped_segment(caplog):
+    import logging
+
+    seg = Segment(2, 3, "ммм", no_speech_prob=0.2, avg_logprob=-2.0)
+    with caplog.at_level(logging.WARNING, logger="meet.asr"):
+        assert drop_hallucinations([seg]) == []
+    assert "отброшен" in caplog.text
+    assert "ммм" in caplog.text
 
 
 def test_drop_hallucinations_keeps_when_metrics_none():

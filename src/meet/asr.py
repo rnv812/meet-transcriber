@@ -1,5 +1,8 @@
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Русский fine-tune large-v3 (CT2-конвертация antony66/whisper-large-v3-russian),
 # тот же чекпойнт, что в проекте voice-control: заметно ниже WER на русском, чем
@@ -78,27 +81,49 @@ _HALLUCINATION_PHRASES = (
 )
 
 
+def _log_dropped(s: Segment, reason: str) -> None:
+    """Дроп сегмента — потеря речи, если фильтр ошибся, поэтому WARNING со всеми
+    метриками: иначе выброшенный кусок встречи не оставляет никаких следов."""
+    logger.warning(
+        "Сегмент отброшен (%s): %r [%.2f-%.2f, no_speech_prob=%s, avg_logprob=%s]",
+        reason,
+        s.text,
+        s.start,
+        s.end,
+        s.no_speech_prob,
+        s.avg_logprob,
+    )
+
+
 def drop_hallucinations(
     segments: list[Segment],
     *,
-    max_no_speech: float = 0.6,
     min_avg_logprob: float = -1.0,
 ) -> list[Segment]:
     """Убрать пустые сегменты и похожие на галлюцинации Whisper на тишине/шуме:
-    высокая вероятность «не речь» или слишком низкая средняя уверенность,
-    а также сегменты с фразами из денилиста известных артефактов Whisper.
-    None-метрики (офлайн-путь) по порогам не фильтруются; денилист — всегда."""
+    слишком низкая средняя уверенность либо фраза из денилиста известных
+    артефактов Whisper. None-метрики (офлайн-путь) по порогам не фильтруются;
+    денилист — всегда.
+
+    IMPORTANT: по no_speech_prob не фильтруем сознательно, хотя метрика есть.
+    faster-whisper выдаёт её на всё 30-секундное окно декодирования, а не на
+    сегмент — все сегменты окна получают одно значение, и порог по нему выносил
+    окно целиком, включая уверенно распознанную речь. Окно live-режима (20 с)
+    короче окна декодирования, так что терялся весь тик. Тот же баг был в
+    voice-control и там подтверждён на реальной надиктовке (no_speech_prob
+    0.9985 при avg_logprob -0.07). Тишину отсекает vad_filter до декодера,
+    а уверенный бред на шуме ловит денилист ниже."""
     kept: list[Segment] = []
     for s in segments:
         if not s.text:
             continue
-        if s.no_speech_prob is not None and s.no_speech_prob > max_no_speech:
-            continue
         if s.avg_logprob is not None and s.avg_logprob < min_avg_logprob:
+            _log_dropped(s, "avg_logprob ниже порога")
             continue
         # денилист независим от метрик: сработает даже при None-метриках
         norm = s.text.lower().strip()
         if any(phrase in norm for phrase in _HALLUCINATION_PHRASES):
+            _log_dropped(s, "денилист галлюцинаций")
             continue
         kept.append(s)
     return kept
