@@ -37,7 +37,7 @@ def _in_daily_window(folder: str) -> bool:
     """Похоже ли время записи (из имени папки YYYY-MM-DD_HH-MM) на слот дейлика.
 
     Только гипотеза для промпта — что за встреча на самом деле, решает
-    календарь; см. скилл daily-notes."""
+    календарь; см. скилл transcriber (режим дейлика)."""
     m = re.search(r"_(\d{2})-(\d{2})$", Path(folder).name)
     if not m:
         return False
@@ -53,14 +53,14 @@ def _launch_claude(folder: str) -> None:
         return
     prompt = (
         f"Завершилась запись встречи, папка: {folder}. "
-        "Предложи транскрибировать её."
+        "Предложи транскрибировать её скиллом my-plugin:transcriber."
     )
     if _in_daily_window(folder):
         prompt += (
             " Время похоже на слот дейлика — сверься с календарём "
-            "(scripts/calendar_lookup.ps1): дейлик оформляй скиллом "
-            "my-plugin:daily-notes, другую встречу в этом слоте — "
-            "обычным сценарием."
+            "(scripts/calendar_lookup.ps1) и, если это дейлик, веди его "
+            "режимом дейлика из того же скилла; другую встречу в этом "
+            "слоте — обычным режимом."
         )
     project_root = OUT_ROOT.parent
     try:
