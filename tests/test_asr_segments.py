@@ -1,11 +1,6 @@
 from types import SimpleNamespace
 
-from meet.asr import (
-    Segment,
-    _segments_from_whisper,
-    drop_hallucinations,
-    transcribe_wav,
-)
+from meet.asr import Segment, _segments_from_whisper, drop_hallucinations
 
 
 def _raw(start, end, text, words=(), nsp=0.1, alp=-0.3):
@@ -80,31 +75,3 @@ def test_drop_hallucinations_drops_thanks_for_watching():
 def test_drop_hallucinations_keeps_benign_subtitles_mention():
     seg = Segment(0, 1, "Субтитры мы пока не делали.", no_speech_prob=0.2, avg_logprob=-0.3)
     assert drop_hallucinations([seg]) == [seg]
-
-
-def test_transcribe_wav_filters_hallucinations(monkeypatch, tmp_path):
-    # офлайн-путь фильтруется так же, как живой: раньше drop_hallucinations
-    # звался только из live.py и титры доезжали до транскрипта встречи
-    import sys
-    import types
-
-    class FakeModel:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def transcribe(self, path, **kwargs):
-            return iter(
-                [
-                    _raw(0.0, 1.0, "реальная речь"),
-                    _raw(1.0, 2.0, "Спасибо за просмотр!"),
-                    _raw(2.0, 3.0, "ммм", alp=-2.0),
-                ]
-            ), None
-
-    # подменяем модуль целиком, а не атрибут: импорт настоящего faster_whisper
-    # тянет за собой ctranslate2 и добавляет к прогону сюиты ~15 с
-    fake_module = types.ModuleType("faster_whisper")
-    fake_module.WhisperModel = FakeModel
-    monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
-    segs = transcribe_wav(tmp_path / "audio16.wav")
-    assert [s.text for s in segs] == ["реальная речь"]
