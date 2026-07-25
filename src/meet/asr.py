@@ -132,6 +132,10 @@ def drop_hallucinations(
 def transcribe_wav(path: Path, hotwords: str | None = None) -> list[Segment]:
     """Распознать русскую речь; при нехватке видеопамяти — квантованная модель.
 
+    Сегменты сразу проходят drop_hallucinations — так же, как в живом режиме:
+    титры и «спасибо за просмотр» не должны доезжать ни до выравнивания, ни до
+    транскрипта.
+
     Пословные таймкоды нужны для точной привязки спикеров.
     condition_on_previous_text оставлен включённым (по умолчанию): проверка
     на реальной встрече показала, что без него пунктуация и термины заметно
@@ -151,7 +155,7 @@ def transcribe_wav(path: Path, hotwords: str | None = None) -> list[Segment]:
                 word_timestamps=True,
                 hotwords=hotwords,
             )
-            result = _segments_from_whisper(segments)
+            result = drop_hallucinations(_segments_from_whisper(segments))
             del model
             return result
         except RuntimeError as e:
