@@ -33,8 +33,8 @@ def test_launch_claude_opens_terminal_in_project_root(monkeypatch):
     # запуск через powershell с профилем, claude напрямую: промпт с папкой внутри
     assert "powershell" in cmd
     assert any(part.startswith("claude ") and folder in part for part in cmd)
-    # 10-00 — не слот дейлика, подсказки про скилл быть не должно
-    assert not any("daily-notes" in part for part in cmd)
+    # 10-00 — не слот дейлика, подсказки про календарь быть не должно
+    assert not any("calendar_lookup" in part for part in cmd)
 
 
 def test_launch_claude_hints_daily_skill_inside_window(monkeypatch):
@@ -44,9 +44,18 @@ def test_launch_claude_hints_daily_skill_inside_window(monkeypatch):
     tray._launch_claude(r"C:\rec\2026-07-24_11-28")
     (cmd,) = calls
     prompt = next(part for part in cmd if part.startswith("claude "))
-    assert "daily-notes" in prompt and "calendar_lookup" in prompt
+    assert "дейлик" in prompt and "calendar_lookup" in prompt
     # промпт идёт в одинарных кавычках powershell — апостроф внутри его сломает
     assert prompt.count("'") == 2
+    # ';' wt считает разделителем команд: хвост промпта уходил в запуск файла
+    assert ";" not in prompt
+
+
+def test_wt_safe_neutralizes_command_line_metachars():
+    assert tray._wt_safe("режимом дейлика; другую встречу") == (
+        "режимом дейлика, другую встречу"
+    )
+    assert tray._wt_safe("папка 'rec'") == "папка ''rec''"
 
 
 def test_daily_window_bounds():

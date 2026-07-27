@@ -44,6 +44,16 @@ def _in_daily_window(folder: str) -> bool:
     return DAILY_WINDOW[0] <= f"{m.group(1)}:{m.group(2)}" <= DAILY_WINDOW[1]
 
 
+def _wt_safe(text: str) -> str:
+    """Обезвредить метасимволы командной строки в тексте промпта.
+
+    IMPORTANT: ';' для wt — разделитель команд: хвост после него Windows
+    Terminal пытается запустить как программу (ошибка 0x80070002), а первой
+    вкладке достаётся обрезанный промпт с незакрытой кавычкой. Апостроф
+    закрывает одинарные кавычки powershell — в PS он удваивается."""
+    return text.replace(";", ",").replace("'", "''")
+
+
 def _launch_claude(folder: str) -> None:
     """Post-recording hook: окно терминала с Claude Code, который предлагает
     транскрибировать свежую запись. Включается флагом post_record_hook в
@@ -67,7 +77,7 @@ def _launch_claude(folder: str) -> None:
         # powershell с профилем: там proxy-переменные; -NoExit — не закрывать
         # окно при ошибке. claude напрямую, не через шорткат cc: у CLI один
         # позиционный промпт, и "/color red" внутри cc вытесняет наш.
-        # Промпт в одинарных кавычках PS — апострофов в тексте быть не должно
+        # Промпт в одинарных кавычках PS, метасимволы — через _wt_safe
         subprocess.Popen(
             [
                 "wt",
@@ -76,7 +86,7 @@ def _launch_claude(folder: str) -> None:
                 "powershell",
                 "-NoExit",
                 "-Command",
-                f"claude --permission-mode auto '{prompt}'",
+                f"claude --permission-mode auto '{_wt_safe(prompt)}'",
             ]
         )
     except OSError:
