@@ -174,6 +174,40 @@ def _make_converter(src_rate: int, src_ch: int, dst_rate: int, dst_ch: int):
     return convert
 
 
+class _RecordLog:
+    """Журнал записи — record.log рядом с дорожками, с дублированием в stdout.
+    Файл нужен потому, что под meet-tray (pythonw) stdout'а нет и вся
+    диагностика вотчдога иначе пропадает. Ошибки самого лога глотаются —
+    журнал не должен ронять запись."""
+
+    def __init__(self, out_dir: Path) -> None:
+        try:
+            # buffering=1: строка на диске сразу — при жёстком убийстве
+            # процесса теряется максимум последняя
+            self._f = open(
+                out_dir / "record.log", "a", encoding="utf-8", buffering=1
+            )
+        except OSError:
+            self._f = None
+
+    def __call__(self, msg: str) -> None:
+        line = f"[{datetime.now():%H:%M:%S}] {msg}"
+        print(line, flush=True)  # под pythonw молча уходит в никуда — это ок
+        if self._f is not None:
+            try:
+                self._f.write(line + "\n")
+            except OSError:
+                pass
+
+    def close(self) -> None:
+        if self._f is not None:
+            try:
+                self._f.close()
+            except OSError:
+                pass
+            self._f = None
+
+
 class _DefaultEndpoints:
     """ID дефолтных аудио-endpoint'ов Windows (вывод, ввод) через COM
     IMMDeviceEnumerator. Нужен потому, что PortAudio смену дефолта не видит:
@@ -268,11 +302,13 @@ class _Track:
     разъезжаются, и слияние дорожек при транскрибации (interleave по
     абсолютным таймкодам) остаётся корректным."""
 
-    def __init__(self, fname: str, pick_device, role: int, out_dir: Path) -> None:
+    def __init__(self, fname: str, pick_device, role: int, out_dir: Path,
+                 log) -> None:
         self.fname = fname
         self.pick = pick_device  # PyAudio -> device info (или исключение)
         self.role = role  # индекс в _DefaultEndpoints.ids(): 0 вывод, 1 ввод
         self.path = out_dir / fname
+        self.log = log  # журнал записи (_RecordLog)
         self.stream = None
         self.device_name = None
         self.src_rate = None
@@ -411,8 +447,7 @@ class _Track:
                 self.bytes_written += len(pad)
 
     def _log(self, msg: str) -> None:
-        # flush: сообщение должно всплыть в лог сразу, не из буфера
-        print(f"[{datetime.now():%H:%M:%S}] {self.fname}: {msg}", flush=True)
+        self.log(f"{self.fname}: {msg}")
 
 
 def _default_mic(p: "pyaudio.PyAudio") -> dict:
@@ -441,22 +476,26 @@ class _Session:
 
     def __init__(self, out_dir: Path) -> None:
         self.p = None
+        self.log = _RecordLog(out_dir)
         self.endpoints = _DefaultEndpoints()
         self.ids = None  # ID дефолтных endpoint'ов на момент последнего запуска
         self.last_restart = 0.0
         self.retry_wait = RETRY_S  # растёт при безуспешных ретраях (backoff)
         self.tracks = (
-            _Track("sys.opus", _find_loopback, 0, out_dir),
-            _Track("mic.opus", _default_mic, 1, out_dir),
+            _Track("sys.opus", _find_loopback, 0, out_dir, self.log),
+            _Track("mic.opus", _default_mic, 1, out_dir, self.log),
         )
 
     def start(self) -> None:
+        self.log(f"запись начата {datetime.now():%Y-%m-%d}, pid {os.getpid()}")
         self.p = pyaudio.PyAudio()
         self.ids = self.endpoints.ids()
+        if self.ids is None:
+            self.log("COM недоступен — смену дефолтного устройства не отслеживаю")
         for t in self.tracks:
             t.first_open(self.p)
-            print(
-                f"  {t.fname}: {t.device_name} "
+            self.log(
+                f"{t.fname}: {t.device_name} "
                 f"({t.src_rate} Hz, {t.src_channels} ch)"
             )
 
@@ -497,30 +536,23 @@ class _Session:
             try:
                 t.close()
             except Exception as e:
-                print(
-                    f"[{datetime.now():%H:%M:%S}] {t.fname}: закрытие: {e!r}",
-                    flush=True,
-                )
+                self.log(f"{t.fname}: закрытие: {e!r}")
         self._terminate()
         self.endpoints.close()
+        self.log("запись остановлена штатно")  # нет этой строки → процесс убили
+        self.log.close()
 
     def _restart(self, ids, reason) -> None:
         self.last_restart = time.monotonic()
         if reason:
-            print(
-                f"[{datetime.now():%H:%M:%S}] {reason} — перезапускаю дорожки",
-                flush=True,
-            )
+            self.log(f"{reason} — перезапускаю дорожки")
         for t in self.tracks:
             t.close_stream()
         self._terminate()
         try:
             self.p = pyaudio.PyAudio()  # холодный старт: свежий список устройств
         except Exception as e:
-            print(
-                f"[{datetime.now():%H:%M:%S}] PyAudio не инициализировался: {e!r}",
-                flush=True,
-            )
+            self.log(f"PyAudio не инициализировался: {e!r}")
         if self.p is not None:
             for t in self.tracks:
                 t.reopen(self.p)
@@ -546,10 +578,7 @@ class _Session:
                 p._streams.clear()
                 p.terminate()
             except Exception as e:
-                print(
-                    f"[{datetime.now():%H:%M:%S}] PyAudio.terminate: {e!r}",
-                    flush=True,
-                )
+                self.log(f"PyAudio.terminate: {e!r}")
 
 
 def record(out_root: str, stop_event: "threading.Event | None" = None) -> Path:
@@ -567,7 +596,7 @@ def record(out_root: str, stop_event: "threading.Event | None" = None) -> Path:
                 try:
                     session.tick()
                 except Exception as e:  # вотчдог не должен ронять запись
-                    print(f"[{datetime.now():%H:%M:%S}] вотчдог: {e!r}", flush=True)
+                    session.log(f"вотчдог: {e!r}")
         except KeyboardInterrupt:
             pass
     finally:

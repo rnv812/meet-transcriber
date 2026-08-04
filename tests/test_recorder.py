@@ -299,7 +299,7 @@ def _session(monkeypatch, tmp_path, **kw):
 
 
 def _bare_track(tmp_path):
-    t = recorder._Track("mic.opus", lambda p: None, 1, tmp_path)
+    t = recorder._Track("mic.opus", lambda p: None, 1, tmp_path, log=lambda m: None)
     t.writer = _DummyWriter("x", 1, 16000)
     t.rate, t.channels = 16000, 1
     return t
@@ -497,6 +497,33 @@ def test_callback_exception_aborts_stream(tmp_path, monkeypatch):
 
 
 # --- record(): запуск, остановка, восстановление ---
+
+
+def test_record_writes_log_file_next_to_tracks(tmp_path, monkeypatch):
+    _fake_audio(monkeypatch)
+    ev = threading.Event()
+    ev.set()
+    out_dir = record(str(tmp_path), stop_event=ev)
+    log = (out_dir / "record.log").read_text(encoding="utf-8")
+    assert "sys.opus" in log and "mic.opus" in log  # устройства обеих дорожек
+    assert "Колонки" in log and "Микрофон" in log
+    assert "запись остановлена штатно" in log  # маркер штатного завершения
+
+
+def test_watchdog_events_land_in_log_file(tmp_path, monkeypatch):
+    s = _session(monkeypatch, tmp_path)
+    _FakePyAudio.devices["capture"] = _dev("Наушники")
+    s.tick()  # миграция на новое дефолтное устройство
+    s.close()
+    log = (tmp_path / "record.log").read_text(encoding="utf-8")
+    assert "сменилось дефолтное аудио-устройство" in log
+    assert "запись возобновлена: Наушники" in log
+
+
+def test_log_survives_unwritable_file(tmp_path, monkeypatch):
+    log = recorder._RecordLog(tmp_path / "нет_такой_папки")
+    log("строка в никуда")  # файл не открылся — не падаем, только stdout
+    log.close()
 
 
 def test_record_stops_on_event_and_cleans_lock(tmp_path, monkeypatch):
