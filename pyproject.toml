@@ -4,7 +4,9 @@ version = "0.1.0"
 requires-python = ">=3.12"
 # Остальные зависимости (faster-whisper, pyannote, pyaudiowpatch...) исторически
 # ставятся в venv вручную; здесь объявлены только нужные трею.
-dependencies = ["pystray", "pillow"]
+# pycaw — второй сигнал детектора звонка (WASAPI-сессии); без него трей
+# работает, но видит только микрофон. comtypes и psutil приходят вместе с ним.
+dependencies = ["pystray", "pillow", "pycaw"]
 
 [project.scripts]
 meet = "meet.cli:main"
