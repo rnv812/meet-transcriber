@@ -8,9 +8,11 @@
   мьюта: если Дион на выключенном микрофоне закрывает поток захвата, первый
   сигнал пропадёт посреди встречи, а этот держится, пока слышно собеседников.
 
-`в звонке = микрофон занят ИЛИ что-то воспроизводится`. Обе проверки возвращают
-None, когда ответить нечем (ключа нет, pycaw не встал, COM отказал) — решение
-тогда принимается по оставшемуся сигналу, а не по домыслу.
+`в звонке = микрофон занят ИЛИ что-то воспроизводится`, но только пока процесс
+жив: метки в реестре переживают смерть приложения, и без проверки процесса
+незакрытый интервал означал бы «в звонке» вечно. Обе проверки возвращают None,
+когда ответить нечем (ключа нет, pycaw не встал, COM отказал) — решение тогда
+принимается по оставшемуся сигналу, а не по домыслу.
 
 Стейт-машина (`Watcher`) отделена от чтения реестра и COM и принимает время
 параметром — грейс проверяется юнитом без Диона и без ожидания.
@@ -33,10 +35,18 @@ NONE = "none"
 
 GRACE_S = 180.0  # держим запись после выхода из звонка: реконнект не рвёт файл
 POLL_S = 2.0
+# Перечисление аудио-сессий течёт нативной памятью в comtypes/pycaw (~0.3 КБ на
+# вызов, измерено) и стоит ~18 мс против 0.2 мс у реестра. Резидент живёт
+# месяцами, поэтому этот сигнал опрашивается реже микрофонного: начало звонка
+# почти всегда ловится микрофоном, а роль render'а — пережить мьют, где
+# несколько секунд задержки ничего не решают.
+RENDER_PERIOD_S = 6.0
 LOG_MAX_BYTES = 1_000_000
+LOG_CHECK_EVERY = 200  # тактов между проверками размера журнала
 
 _AUDIO_SESSION_ACTIVE = 1  # AudioSessionState.Active
 _com_ready = False
+_pycaw_warned = False
 
 
 def _qword(key, name: str) -> "int | None":
@@ -96,34 +106,65 @@ def mic_busy(exe_name: str) -> "bool | None":
     return verdict
 
 
-def _ensure_com() -> None:
+def process_running(exe_name: str) -> "bool | None":
+    """Запущен ли процесс с таким именем. None — psutil недоступен.
+
+    Нужно потому, что метки в реестре переживают процесс: если Дион убит
+    (питание, taskkill) до того, как Windows записала LastUsedTimeStop, пара
+    остаётся в состоянии «занят» бессрочно — и запись без этой проверки шла бы
+    вечно, в том числе после перезагрузки."""
+    try:
+        import psutil
+    except Exception:
+        return None
+    target = exe_name.lower()
+    try:
+        for proc in psutil.process_iter(["name"]):
+            name = proc.info.get("name")
+            if name and name.lower() == target:
+                return True
+    except Exception:
+        return None
+    return False
+
+
+def _ensure_com() -> bool:
     """CoInitialize один раз на процесс: pycaw дёргает COM, а вотчер живёт в
     отдельном потоке трея, где COM сам собой не инициализирован. Повторные
-    вызовы наращивали бы счётчик, который никто не разматывает, — поэтому флаг.
+    вызовы наращивали бы счётчик, который никто не разматывает, — поэтому флаг,
+    и взводится он только после успеха, чтобы разовый сбой не отключал сигнал
+    навсегда.
     IMPORTANT: инициализация привязана к потоку; вызывать render_active
     только из потока вотчера."""
     global _com_ready
     if _com_ready:
-        return
-    _com_ready = True
+        return True
     try:
         import comtypes
 
         comtypes.CoInitialize()
     except Exception:
-        pass
+        return False
+    _com_ready = True
+    return True
 
 
-def render_active(exe_name: str) -> "bool | None":
+def render_active(exe_name: str, log=None) -> "bool | None":
     """Воспроизводит ли что-нибудь процесс с таким именем exe.
 
     None — если ответить нечем: pycaw не установлен или COM отказал. False —
     сессий нет или все неактивны (в том числе когда процесс не запущен)."""
+    global _pycaw_warned
     try:
         from pycaw.pycaw import AudioUtilities
-    except Exception:
+    except Exception as e:
+        if log is not None and not _pycaw_warned:
+            _pycaw_warned = True
+            log(f"pycaw недоступен ({e!r}) — сигнал воспроизведения отключён, "
+                f"решения принимаются только по микрофону")
         return None
-    _ensure_com()
+    if not _ensure_com():
+        return None
     try:
         sessions = AudioUtilities.GetAllSessions()
     except Exception:
@@ -159,17 +200,59 @@ def in_call(exe_names) -> "tuple[bool, bool | None, bool | None]":
     return bool(mic) or bool(render), mic, render
 
 
+class Signals:
+    """Опрос сигналов с разной частотой и проверкой живости процесса.
+
+    Держит последнее значение render между опросами: перечисление сессий
+    дорогое и подтекающее (см. RENDER_PERIOD_S), а микрофон читается дёшево."""
+
+    def __init__(self, exe_names, render_period: float = RENDER_PERIOD_S,
+                 log=None) -> None:
+        self.exe_names = list(exe_names)
+        self.render_period = render_period
+        self.log = log
+        self._render = None
+        self._render_at = None
+
+    def read(self, now: float) -> "tuple[bool, bool | None, bool | None]":
+        mic = None
+        for name in self.exe_names:
+            one = mic_busy(name)
+            if one is not None:
+                mic = bool(mic) or one
+        if self._render_at is None or now - self._render_at >= self.render_period:
+            self._render_at = now
+            render = None
+            for name in self.exe_names:
+                one = render_active(name, log=self.log)
+                if one is not None:
+                    render = bool(render) or one
+            self._render = render
+        render = self._render
+        call = bool(mic) or bool(render)
+        if call and not self._any_running():
+            # метки реестра переживают процесс: без этой проверки убитый
+            # мид-звонком Дион означал бы «в звонке» до скончания века
+            return False, mic, render
+        return call, mic, render
+
+    def _any_running(self) -> bool:
+        for name in self.exe_names:
+            running = process_running(name)
+            if running is None:
+                return True  # psutil нет — не мешаем детекту
+            if running:
+                return True
+        return False
+
+
 class Watcher:
     """Стейт-машина «звонок → запись» с грейсом на выходе.
 
     Грейс — не пауза перед решением, а продолжение записи: пока он тикает,
     запись идёт. Вернулся в комнату (сеть моргнула, перезашёл починить звук) —
     таймер сброшен, файл остаётся цельным. Не вернулся — стоп, и в хвосте
-    лишние минуты фона, которые VAD в транскрипт всё равно не пустит.
-
-    Отслеживает намерение, а не факт: решения START/STOP трей может
-    проигнорировать (запись уже идёт, запущена вручную, не стартовала из-за
-    ошибки устройства) — состояние машины от этого не зависит."""
+    лишние минуты фона, которые VAD в транскрипт всё равно не пустит."""
 
     IDLE = "idle"
     RECORDING = "recording"
@@ -199,6 +282,14 @@ class Watcher:
             return STOP
         return NONE
 
+    def release(self) -> None:
+        """Запись перестала идти не по решению машины: не стартовала из-за
+        ошибки, остановлена руками, отменена. Без этого машина осталась бы
+        в RECORDING до конца звонка и не подняла бы запись повторно — а звонок
+        может идти ещё два часа."""
+        self.state = self.IDLE
+        self.grace_until = 0.0
+
 
 class WatchLog:
     """Журнал детектора — `%LOCALAPPDATA%/meet/watch.log`.
@@ -210,19 +301,35 @@ class WatchLog:
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self._writes = 0
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists() and path.stat().st_size > LOG_MAX_BYTES:
-                backup = path.with_suffix(path.suffix + ".old")
-                backup.unlink(missing_ok=True)
-                path.rename(backup)
         except OSError:
             pass
+        self._rotate()
 
     def __call__(self, msg: str) -> None:
         try:
             with open(self.path, "a", encoding="utf-8") as f:
                 f.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n")
+        except OSError:
+            return
+        # резидент живёт месяцами и при старте ротацию проходит один раз —
+        # без проверки на ходу журнал рос бы без предела
+        self._writes += 1
+        if self._writes >= LOG_CHECK_EVERY:
+            self._writes = 0
+            self._rotate()
+
+    def _rotate(self) -> None:
+        try:
+            if not self.path.exists():
+                return
+            if self.path.stat().st_size <= LOG_MAX_BYTES:
+                return
+            backup = self.path.with_suffix(self.path.suffix + ".old")
+            backup.unlink(missing_ok=True)
+            self.path.rename(backup)
         except OSError:
             pass
 

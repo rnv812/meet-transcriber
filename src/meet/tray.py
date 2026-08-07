@@ -2,9 +2,10 @@
 Дионе и сам её останавливает, когда звонок кончился.
 
 Дежурит с серой иконкой, на записи — синяя с секундомером и пунктами
-«Остановить запись» / «Отменить (удалить)». Ярлык на рабочем столе
-(`meet-tray --record`) по-прежнему начинает запись руками — и такую запись
-детектор не останавливает никогда: писать можно не только конференцию.
+«Остановить запись» / «Отменить (удалить)». Ярлык на рабочем столе запускает
+`meet-tray` без аргументов — это по-прежнему означает «начать запись», и такую
+запись детектор не останавливает никогда: писать можно не только конференцию.
+Дежурный режим — флаг `--watch`, с ним трей стоит в автозагрузке.
 
 Детектор звонка — `watch.py`; включается секцией `auto_record` в
 `%LOCALAPPDATA%/meet/config.json`. Без консольного окна: точка входа meet-tray
@@ -24,7 +25,7 @@ from pathlib import Path
 
 from meet import watch
 from meet.output import fmt_ts
-from meet.recorder import _pid_alive, record
+from meet.recorder import LOCK_NAME, _pid_alive, record
 
 # recordings от корня репозитория: ярлык запускается с произвольным cwd
 OUT_ROOT = Path(__file__).resolve().parents[2] / "recordings"
@@ -36,6 +37,11 @@ IDLE_COLOR = (130, 130, 130, 255)  # дежурю
 REC_COLOR = (40, 110, 220, 255)  # пишу
 HEARTBEAT_S = 60.0
 TICK_S = 1.0
+# Короче этого автозапись считается ложной тревогой (звук уведомления Диона,
+# отклонённый вызов) и Claude на неё не зовут: папка остаётся, но окна с
+# предложением транскрибировать полминуты тишины не появляется. Длительность
+# берётся по звонку, а не по файлу: в файле всегда есть ещё и грейс.
+MIN_CALL_S = 120.0
 
 AUTO = "auto"
 MANUAL = "manual"
@@ -57,6 +63,29 @@ def _config() -> dict:
         return {}
 
 
+def _flag(value, default: bool) -> bool:
+    """Булево из конфига, правленного руками: строковое "false" не должно
+    означать True только потому, что непустая строка истинна."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on", "да")
+    if value is None:
+        return default
+    return bool(value)
+
+
+def _positive(value, default: float, minimum: float) -> float:
+    """Число из конфига. Мусор и значения вне смысла — молча к дефолту:
+    трей запускается из автозагрузки под pythonw, и исключение здесь означало
+    бы, что резидент не поднялся вообще, без иконки и без строки в журнале."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number != number or number < minimum:  # NaN тоже сюда
+        return default
+    return number
+
+
 def _auto_config() -> dict:
     """Настройки автозаписи с дефолтами. Секции нет — автозапись выключена,
     но детектор всё равно опрашивается и пишет журнал: так можно неделю
@@ -65,23 +94,56 @@ def _auto_config() -> dict:
     if not isinstance(section, dict):
         section = {}
     processes = section.get("processes")
+    if isinstance(processes, str):
+        processes = [processes]
     if not isinstance(processes, list) or not processes:
         processes = ["Dion.exe"]
     return {
-        "enabled": bool(section.get("enabled", False)),
+        "enabled": _flag(section.get("enabled"), False),
         "processes": [str(p) for p in processes],
-        "grace_seconds": float(section.get("grace_seconds", watch.GRACE_S)),
-        "poll_seconds": float(section.get("poll_seconds", watch.POLL_S)),
+        "grace_seconds": _positive(section.get("grace_seconds"), watch.GRACE_S, 0.0),
+        "poll_seconds": _positive(section.get("poll_seconds"), watch.POLL_S, 0.5),
     }
 
 
+def _proc_ident(pid: int) -> dict:
+    """Отпечаток процесса для lock: имя и время старта.
+
+    Имя одно не годится — gui-script живёт под `pythonw.exe`, а таких на машине
+    несколько (тот же виджет-маскот). Время старта с точностью до микросекунд
+    делает пару уникальной."""
+    try:
+        import psutil
+
+        proc = psutil.Process(pid)
+        return {"name": proc.name(), "started": proc.create_time()}
+    except Exception:
+        return {}
+
+
 def _resident_alive() -> bool:
-    """Уже есть живой дежурный трей? Протухший lock (процесс убили) — нет."""
+    """Уже есть живой дежурный трей?
+
+    Мало проверить, что pid жив: Windows переиспользует номера, и чужой
+    процесс на месте убитого трея заставил бы ярлык слать команды в никуда —
+    запись просто не начиналась бы, молча. Поэтому сверяем отпечаток."""
     try:
         data = json.loads((_state_dir() / "tray.lock").read_text(encoding="utf-8"))
-        return _pid_alive(int(data["pid"]))
+        pid = int(data["pid"])
     except (OSError, ValueError, KeyError, TypeError):
         return False
+    if not _pid_alive(pid):
+        return False
+    actual = _proc_ident(pid)
+    if not actual or "name" not in data:
+        return True  # psutil нет или lock старого формата — верим pid'у
+    if data.get("name") != actual.get("name"):
+        return False
+    expected_start = data.get("started")
+    if expected_start is not None and actual.get("started") is not None:
+        # разные запуски одного и того же exe различаются временем старта
+        return abs(float(expected_start) - float(actual["started"])) < 1.0
+    return True
 
 
 def _send_command(cmd: str) -> None:
@@ -107,6 +169,16 @@ def _take_command() -> "str | None":
     except OSError:
         pass
     return cmd or None
+
+
+def _drop_command() -> None:
+    """Снять команду, не выполняя. Нужно при старте резидента: команда,
+    записанная в момент, когда прошлый трей умирал, пролежала бы до следующей
+    загрузки Windows и запустила бы запись на пустом месте."""
+    try:
+        (_state_dir() / "command").unlink()
+    except OSError:
+        pass
 
 
 def _in_daily_window(folder: str) -> bool:
@@ -188,12 +260,19 @@ class TrayApp:
     Источник записи (`auto`/`manual`) решает всё про автостоп: запись, начатую
     ярлыком или из меню, детектор не останавливает — иначе надиктовка или
     телефонный разговор оборвались бы просто потому, что в Дионе нет
-    конференции."""
+    конференции.
+
+    Старт и стоп ходят под общим локом: их дёргают три потока (тикер, меню
+    pystray, команда снаружи), а между проверкой «пишу ли я» и фактической
+    остановкой лежит join на финализацию ffmpeg — без лока в это окно
+    проваливался второй стоп и папку успевали удалить и отдать Claude
+    одновременно."""
 
     def __init__(self, start_now: bool = False) -> None:
         self.cfg = _auto_config()
         self.log = watch.WatchLog(watch.default_log_path())
         self.watcher = watch.Watcher(self.cfg["grace_seconds"])
+        self.signals = watch.Signals(self.cfg["processes"], log=self.log)
         self.icon = None
         self.start_now = start_now
         self.recording = False
@@ -202,44 +281,79 @@ class TrayApp:
         self.stop_event = None
         self.result: dict = {}
         self.started = 0.0
+        self._mutex = threading.Lock()
         self._alive = True
+        self._call_end = None
         self._last_poll = 0.0
         self._last_beat = 0.0
         self._last_signals = None
+        self._title = None
 
     # --- запись ---------------------------------------------------------
 
     def start_recording(self, source: str) -> bool:
         """Поднять запись. False — если запись уже идёт."""
-        if self.recording:
-            return False
-        self.result = {}
-        self.stop_event = threading.Event()
-        self.source = source
-        self.started = time.monotonic()
-        self.recording = True
-        self.thread = threading.Thread(target=self._run_record, daemon=True)
-        self.thread.start()
+        with self._mutex:
+            if self.recording:
+                return False
+            self._clear_own_lock()
+            result: dict = {}
+            stop_event = threading.Event()
+            self.result = result
+            self.stop_event = stop_event
+            self.source = source
+            self.started = time.monotonic()
+            self._call_end = None
+            self.recording = True
+            # result и stop_event уходят в поток значениями, а не через self:
+            # если join истечёт по таймауту, доживающий поток допишет их в свой
+            # словарь, а не в состояние следующей записи
+            self.thread = threading.Thread(
+                target=self._run_record, args=(result, stop_event), daemon=True
+            )
+            self.thread.start()
         self._refresh()
         return True
 
-    def _run_record(self) -> None:
+    def _run_record(self, result: dict, stop_event: threading.Event) -> None:
         try:
-            self.result["folder"] = record(str(OUT_ROOT), stop_event=self.stop_event)
+            result["folder"] = record(str(OUT_ROOT), stop_event=stop_event)
         except BaseException as e:  # и SystemExit «запись уже идёт»
-            self.result["error"] = str(e) or repr(e)
+            result["error"] = str(e) or repr(e)
 
-    def stop_recording(self, discard: bool = False) -> None:
+    def _clear_own_lock(self) -> None:
+        """Снять lock записи, оставшийся от нас самих.
+
+        Протухший lock раньше опознавался по мёртвому pid, но теперь этот pid —
+        сам резидент, и он всегда жив: недоснятый lock (поток записи не успел
+        отработать finally к моменту join) заблокировал бы все следующие записи
+        до перезапуска трея."""
+        lock = OUT_ROOT / LOCK_NAME
+        try:
+            data = json.loads(lock.read_text(encoding="utf-8"))
+            if int(data["pid"]) == os.getpid():
+                lock.unlink(missing_ok=True)
+                self.log(f"снял свой протухший lock записи: {data.get('folder', '?')}")
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+
+    def stop_recording(self, discard: bool = False, hook: bool = True) -> None:
         """Штатно остановить запись. discard — отменить: удалить папку и не
         звать Claude (автозапись поймала то, что писать не надо)."""
-        if not self.recording:
-            return
-        self.stop_event.set()
-        if self.thread is not None:
-            self.thread.join(timeout=60)
-        self.recording = False
-        source, self.source = self.source, None
-        folder = self.result.get("folder")
+        with self._mutex:
+            if not self.recording:
+                return
+            self.stop_event.set()
+            thread, result = self.thread, self.result
+            if thread is not None:
+                thread.join(timeout=60)
+            self.recording = False
+            source, self.source = self.source, None
+            self.thread = None
+            alive = thread is not None and thread.is_alive()
+        folder = result.get("folder")
+        if alive:
+            self.log("поток записи не завершился за 60 с — дорожки может дописывать")
         if folder is None:
             self.log("запись остановлена, но папка не получена")
             self._notify("Запись не сохранена")
@@ -247,27 +361,48 @@ class TrayApp:
             return
         if discard:
             shutil.rmtree(folder, ignore_errors=True)
-            self.log(f"запись отменена и удалена: {folder}")
-            self._notify(f"Удалено: {folder}")
+            gone = not Path(folder).exists()
+            self.log(f"запись отменена, папка {'удалена' if gone else 'удалена не до конца'}: {folder}")
+            self._notify(f"{'Удалено' if gone else 'Удалено частично'}: {folder}")
         else:
             self.log(f"запись остановлена ({source}): {folder}")
             self._notify(f"Сохранено: {folder}")
-            _launch_claude(str(folder))
+            if hook:
+                _launch_claude(str(folder))
+            else:
+                self.log("звонок был короткий — Claude не зову, папка осталась")
         self._refresh()
 
     # --- пункты меню ----------------------------------------------------
 
     def _on_start(self, icon=None, item=None) -> None:
-        if not self.start_recording(MANUAL):
-            self._notify("Запись уже идёт")
+        if self.start_recording(MANUAL):
+            self.log("запись запущена вручную")
             return
-        self.log("запись запущена вручную")
+        if self.source == AUTO:
+            # нажал кнопку поверх автозаписи — значит берёт её под свою руку:
+            # автостоп такую запись больше не тронет
+            self.source = MANUAL
+            self.watcher.release()
+            self.log("автозапись переведена в ручную по кнопке")
+            self._notify("Запись продолжается, автостоп отключён")
+            return
+        folder = self.result.get("folder") or "папка ещё не создана"
+        self._notify(f"Запись уже идёт ({folder})")
 
     def _on_stop(self, icon=None, item=None) -> None:
+        was_auto = self.recording and self.source == AUTO
         self.stop_recording()
+        if was_auto:
+            # звонок может идти ещё два часа: без сброса машина осталась бы
+            # в RECORDING и не подняла бы запись снова
+            self.watcher.release()
 
     def _on_cancel(self, icon=None, item=None) -> None:
+        was_auto = self.recording and self.source == AUTO
         self.stop_recording(discard=True)
+        if was_auto:
+            self.watcher.release()
 
     def _on_exit(self, icon=None, item=None) -> None:
         if self.recording:
@@ -282,15 +417,18 @@ class TrayApp:
 
     def ticker(self, icon) -> None:
         """Фон pystray: команды от ярлыка, секундомер и опрос детектора."""
-        icon.visible = True
-        self.log(
-            f"трей запущен, автозапись "
-            f"{'включена' if self.cfg['enabled'] else 'выключена'}, "
-            f"процессы {', '.join(self.cfg['processes'])}, "
-            f"грейс {self.cfg['grace_seconds']:.0f} с"
-        )
-        if self.start_now:
-            self._on_start()
+        try:
+            icon.visible = True
+            self.log(
+                f"трей запущен, автозапись "
+                f"{'включена' if self.cfg['enabled'] else 'выключена'}, "
+                f"процессы {', '.join(self.cfg['processes'])}, "
+                f"грейс {self.cfg['grace_seconds']:.0f} с"
+            )
+            if self.start_now:
+                self._on_start()
+        except Exception as e:  # старт не должен убивать тикер насовсем
+            self.log(f"старт трея: {e!r}")
         while self._alive:
             try:
                 self._tick()
@@ -308,6 +446,8 @@ class TrayApp:
             # pid — сам резидент: taskkill погасил бы и дежурного вместе с ним.
             self.log("остановка по команде")
             self._on_stop()
+        elif command is not None:
+            self.log(f"неизвестная команда, пропускаю: {command!r}")
         self._collect_error()
         self._update_title()
         self._watch_tick()
@@ -315,12 +455,19 @@ class TrayApp:
     def _collect_error(self) -> None:
         """Запись не стартовала (нет устройства, чужой lock) — вернуться в
         дежурное состояние, а не висеть с иконкой записи."""
-        if not self.recording or "error" not in self.result:
+        if "error" not in self.result:
             return
         error = self.result.pop("error")
+        if not self.recording:
+            self.log(f"запись завершилась ошибкой: {error}")
+            return
         self.recording = False
+        was_auto = self.source == AUTO
         self.source = None
         self.log(f"запись не стартовала: {error}")
+        if was_auto:
+            # иначе до конца звонка повторной попытки не будет вовсе
+            self.watcher.release()
         self._notify(error)
         self._refresh()
 
@@ -328,16 +475,19 @@ class TrayApp:
         if self.icon is None:
             return
         if self.recording:
-            self.icon.title = f"Запись: {fmt_ts(time.monotonic() - self.started)}"
+            title = f"Запись: {fmt_ts(time.monotonic() - self.started)}"
         else:
-            self.icon.title = "Жду встречу"
+            title = "Жду встречу"
+        if title != self._title:  # сеттер pystray дёргает Shell_NotifyIcon
+            self._title = title
+            self.icon.title = title
 
     def _watch_tick(self) -> None:
         now = time.monotonic()
         if now - self._last_poll < self.cfg["poll_seconds"]:
             return
         self._last_poll = now
-        call, mic, render = watch.in_call(self.cfg["processes"])
+        call, mic, render = self.signals.read(now)
         if (mic, render) != self._last_signals:
             self._last_signals = (mic, render)
             self.log(
@@ -355,29 +505,33 @@ class TrayApp:
         decision = self.watcher.poll(call, now)
         if self.watcher.state != before:
             self.log(f"{before} → {self.watcher.state}")
+            if self.watcher.state == watch.Watcher.GRACE:
+                self._call_end = now  # длительность звонка без хвоста грейса
         if not self.cfg["enabled"]:
             return
         if decision == watch.START:
             self._auto_start()
         elif decision == watch.STOP:
-            self._auto_stop()
+            self._auto_stop(now)
 
     def _auto_start(self) -> None:
         if self.recording:
             self.log("звонок начался, запись уже идёт — не вмешиваюсь")
             return
-        self.start_recording(AUTO)
+        if not self.start_recording(AUTO):
+            return
         self.log("звонок начался — запись запущена")
         self._notify("Пишу встречу. Отменить — в меню трея")
 
-    def _auto_stop(self) -> None:
+    def _auto_stop(self, now: float) -> None:
         if not self.recording:
             return
         if self.source != AUTO:
             self.log("звонок кончился, но запись запущена вручную — не трогаю")
             return
-        self.log("звонок кончился — останавливаю запись")
-        self.stop_recording()
+        call_seconds = (self._call_end or now) - self.started
+        self.log(f"звонок кончился ({call_seconds:.0f} с) — останавливаю запись")
+        self.stop_recording(hook=call_seconds >= MIN_CALL_S)
 
     # --- UI -------------------------------------------------------------
 
@@ -401,12 +555,19 @@ class TrayApp:
     def run(self) -> None:
         import pystray
 
+        if _resident_alive():  # успел подняться, пока мы шли сюда
+            return
         lock = _state_dir() / "tray.lock"
         try:
             lock.parent.mkdir(parents=True, exist_ok=True)
-            lock.write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+            lock.write_text(
+                json.dumps({"pid": os.getpid(), **_proc_ident(os.getpid())}),
+                encoding="utf-8",
+            )
         except OSError:
             pass
+        if not self.start_now:
+            _drop_command()  # команда от прошлой, уже мёртвой сессии
         menu = pystray.Menu(
             pystray.MenuItem(
                 "Начать запись", self._on_start, visible=lambda i: not self.recording
@@ -426,10 +587,17 @@ class TrayApp:
             self.icon.run(setup=self.ticker)
         finally:
             self._alive = False
-            try:
+            self._release_lock(lock)
+
+    def _release_lock(self, lock: Path) -> None:
+        """Снять свой lock — но только свой: за время работы его мог перехватить
+        другой экземпляр."""
+        try:
+            data = json.loads(lock.read_text(encoding="utf-8"))
+            if int(data["pid"]) == os.getpid():
                 lock.unlink(missing_ok=True)
-            except OSError:
-                pass
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
 
 
 def main() -> None:

@@ -227,3 +227,106 @@ def test_log_survives_unwritable_path(tmp_path):
 def test_default_log_path_follows_localappdata(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     assert watch.default_log_path() == tmp_path / "meet" / "watch.log"
+
+
+def test_log_rotates_while_running(monkeypatch, tmp_path):
+    # резидент живёт месяцами: ротация только при старте означала бы, что
+    # журнал не ротируется никогда
+    monkeypatch.setattr(watch, "LOG_MAX_BYTES", 200)
+    monkeypatch.setattr(watch, "LOG_CHECK_EVERY", 5)
+    path = tmp_path / "watch.log"
+    log = watch.WatchLog(path)
+    for i in range(40):
+        log("строка достаточной длины, чтобы быстро набрать лимит " + str(i))
+    log("после ротации")  # файл переименован — новый заводится следующей строкой
+    assert (tmp_path / "watch.log.old").exists()
+    assert path.stat().st_size <= 200 * 5  # активный журнал не растёт без предела
+
+
+# --- сброс стейт-машины --------------------------------------------------
+
+
+def test_release_allows_restart_within_the_same_call():
+    # запись остановили руками или она не стартовала: без сброса машина
+    # осталась бы в RECORDING до конца звонка, а он может идти два часа
+    w = Watcher(grace_seconds=180)
+    w.poll(True, now=0)
+    w.release()
+    assert w.state == Watcher.IDLE
+    assert w.poll(True, now=1) == START
+
+
+# --- живость процесса ----------------------------------------------------
+
+
+def test_signals_ignore_stale_registry_marks_when_process_is_gone(monkeypatch):
+    # метки ConsentStore переживают процесс: убитый мид-звонком Дион иначе
+    # означал бы «в звонке» бессрочно, и запись шла бы вечно
+    monkeypatch.setattr(watch, "mic_busy", lambda name: True)
+    monkeypatch.setattr(watch, "render_active", lambda name, log=None: False)
+    monkeypatch.setattr(watch, "process_running", lambda name: False)
+    signals = watch.Signals(["Dion.exe"])
+    assert signals.read(now=0)[0] is False
+
+
+def test_signals_trust_marks_when_process_lives(monkeypatch):
+    monkeypatch.setattr(watch, "mic_busy", lambda name: True)
+    monkeypatch.setattr(watch, "render_active", lambda name, log=None: False)
+    monkeypatch.setattr(watch, "process_running", lambda name: True)
+    signals = watch.Signals(["Dion.exe"])
+    assert signals.read(now=0)[0] is True
+
+
+def test_signals_do_not_block_detection_without_psutil(monkeypatch):
+    monkeypatch.setattr(watch, "mic_busy", lambda name: True)
+    monkeypatch.setattr(watch, "render_active", lambda name, log=None: None)
+    monkeypatch.setattr(watch, "process_running", lambda name: None)
+    signals = watch.Signals(["Dion.exe"])
+    assert signals.read(now=0)[0] is True
+
+
+# --- троттлинг дорогого сигнала -------------------------------------------
+
+
+def test_render_is_polled_less_often_than_the_microphone(monkeypatch):
+    # перечисление аудио-сессий течёт нативной памятью и стоит ~18 мс —
+    # опрашивать его на каждом такте нельзя
+    mic_calls, render_calls = [], []
+    monkeypatch.setattr(watch, "mic_busy", lambda name: mic_calls.append(name) or False)
+    monkeypatch.setattr(
+        watch, "render_active",
+        lambda name, log=None: render_calls.append(name) or False,
+    )
+    monkeypatch.setattr(watch, "process_running", lambda name: True)
+    signals = watch.Signals(["Dion.exe"], render_period=6.0)
+    for tick in range(0, 12, 2):  # такты 0,2,4,6,8,10 — шесть опросов
+        signals.read(now=tick)
+    assert len(mic_calls) == 6
+    assert len(render_calls) == 2  # на 0 и на 6
+
+
+def test_render_value_is_kept_between_polls(monkeypatch):
+    monkeypatch.setattr(watch, "mic_busy", lambda name: False)
+    monkeypatch.setattr(watch, "render_active", lambda name, log=None: True)
+    monkeypatch.setattr(watch, "process_running", lambda name: True)
+    signals = watch.Signals(["Dion.exe"], render_period=6.0)
+    assert signals.read(now=0) == (True, False, True)
+    monkeypatch.setattr(watch, "render_active", lambda name, log=None: 1 / 0)
+    assert signals.read(now=1)[0] is True  # значение взято из кэша, не опрошено
+
+
+def test_com_flag_is_not_set_on_failure(monkeypatch):
+    # разовый сбой CoInitialize не должен отключать сигнал до перезапуска
+    monkeypatch.setattr(watch, "_com_ready", False)
+    import builtins
+
+    real_import = builtins.__import__
+
+    def broken(name, *args, **kwargs):
+        if name == "comtypes":
+            raise ImportError("нет comtypes")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", broken)
+    assert watch._ensure_com() is False
+    assert watch._com_ready is False
