@@ -118,31 +118,42 @@ def test_mic_busy_unknown_without_consent_store(monkeypatch):
 # --- сведение сигналов ---------------------------------------------------
 
 
-def _signals(monkeypatch, mic, render):
+def _signals(monkeypatch, mic, render, running=True):
     monkeypatch.setattr(watch, "mic_busy", lambda name: mic)
-    monkeypatch.setattr(watch, "render_active", lambda name: render)
+    monkeypatch.setattr(watch, "render_active", lambda name, log=None: render)
+    monkeypatch.setattr(watch, "process_running", lambda name, log=None: running)
+    return watch.Signals(["Dion.exe"])
 
 
 def test_in_call_by_microphone_alone(monkeypatch):
-    _signals(monkeypatch, True, None)  # pycaw не встал — решаем по микрофону
-    assert watch.in_call(["Dion.exe"]) == (True, True, None)
+    signals = _signals(monkeypatch, True, None)  # pycaw не встал — решаем по микрофону
+    assert signals.read(now=0) == (True, True, None)
 
 
 def test_in_call_by_playback_when_muted(monkeypatch):
     # ради этого случая второй сигнал и существует: мьют отпустил микрофон
-    _signals(monkeypatch, False, True)
-    assert watch.in_call(["Dion.exe"]) == (True, False, True)
+    signals = _signals(monkeypatch, False, True)
+    assert signals.read(now=0) == (True, False, True)
 
 
 def test_not_in_call_when_both_signals_quiet(monkeypatch):
-    _signals(monkeypatch, False, False)
-    assert watch.in_call(["Dion.exe"]) == (False, False, False)
+    signals = _signals(monkeypatch, False, False)
+    assert signals.read(now=0) == (False, False, False)
 
 
 def test_not_in_call_when_nothing_to_measure(monkeypatch):
     # нечем мерить — молчим, а не выдумываем звонок
-    _signals(monkeypatch, None, None)
-    assert watch.in_call(["Dion.exe"]) == (False, None, None)
+    signals = _signals(monkeypatch, None, None)
+    assert signals.read(now=0) == (False, None, None)
+
+
+def test_signals_merge_several_processes(monkeypatch):
+    busy = {"Teams.exe": True, "Dion.exe": False}
+    monkeypatch.setattr(watch, "mic_busy", lambda name: busy[name])
+    monkeypatch.setattr(watch, "render_active", lambda name, log=None: False)
+    monkeypatch.setattr(watch, "process_running", lambda name, log=None: True)
+    signals = watch.Signals(["Dion.exe", "Teams.exe"])
+    assert signals.read(now=0) == (True, True, False)
 
 
 # --- стейт-машина --------------------------------------------------------
@@ -264,7 +275,7 @@ def test_signals_ignore_stale_registry_marks_when_process_is_gone(monkeypatch):
     # означал бы «в звонке» бессрочно, и запись шла бы вечно
     monkeypatch.setattr(watch, "mic_busy", lambda name: True)
     monkeypatch.setattr(watch, "render_active", lambda name, log=None: False)
-    monkeypatch.setattr(watch, "process_running", lambda name: False)
+    monkeypatch.setattr(watch, "process_running", lambda name, log=None: False)
     signals = watch.Signals(["Dion.exe"])
     assert signals.read(now=0)[0] is False
 
@@ -272,7 +283,7 @@ def test_signals_ignore_stale_registry_marks_when_process_is_gone(monkeypatch):
 def test_signals_trust_marks_when_process_lives(monkeypatch):
     monkeypatch.setattr(watch, "mic_busy", lambda name: True)
     monkeypatch.setattr(watch, "render_active", lambda name, log=None: False)
-    monkeypatch.setattr(watch, "process_running", lambda name: True)
+    monkeypatch.setattr(watch, "process_running", lambda name, log=None: True)
     signals = watch.Signals(["Dion.exe"])
     assert signals.read(now=0)[0] is True
 
@@ -280,7 +291,7 @@ def test_signals_trust_marks_when_process_lives(monkeypatch):
 def test_signals_do_not_block_detection_without_psutil(monkeypatch):
     monkeypatch.setattr(watch, "mic_busy", lambda name: True)
     monkeypatch.setattr(watch, "render_active", lambda name, log=None: None)
-    monkeypatch.setattr(watch, "process_running", lambda name: None)
+    monkeypatch.setattr(watch, "process_running", lambda name, log=None: None)
     signals = watch.Signals(["Dion.exe"])
     assert signals.read(now=0)[0] is True
 
@@ -297,7 +308,7 @@ def test_render_is_polled_less_often_than_the_microphone(monkeypatch):
         watch, "render_active",
         lambda name, log=None: render_calls.append(name) or False,
     )
-    monkeypatch.setattr(watch, "process_running", lambda name: True)
+    monkeypatch.setattr(watch, "process_running", lambda name, log=None: True)
     signals = watch.Signals(["Dion.exe"], render_period=6.0)
     for tick in range(0, 12, 2):  # такты 0,2,4,6,8,10 — шесть опросов
         signals.read(now=tick)
@@ -308,7 +319,7 @@ def test_render_is_polled_less_often_than_the_microphone(monkeypatch):
 def test_render_value_is_kept_between_polls(monkeypatch):
     monkeypatch.setattr(watch, "mic_busy", lambda name: False)
     monkeypatch.setattr(watch, "render_active", lambda name, log=None: True)
-    monkeypatch.setattr(watch, "process_running", lambda name: True)
+    monkeypatch.setattr(watch, "process_running", lambda name, log=None: True)
     signals = watch.Signals(["Dion.exe"], render_period=6.0)
     assert signals.read(now=0) == (True, False, True)
     monkeypatch.setattr(watch, "render_active", lambda name, log=None: 1 / 0)

@@ -42,6 +42,10 @@ TICK_S = 1.0
 # предложением транскрибировать полминуты тишины не появляется. Длительность
 # берётся по звонку, а не по файлу: в файле всегда есть ещё и грейс.
 MIN_CALL_S = 120.0
+# Пауза перед повторной попыткой автозаписи после сорвавшегося старта: без неё
+# трей долбился бы в занятое устройство каждые poll_seconds и засыпал бы
+# уведомлениями, а без повтора вовсе — потерял бы встречу целиком.
+RETRY_AFTER_S = 30.0
 
 AUTO = "auto"
 MANUAL = "manual"
@@ -284,6 +288,7 @@ class TrayApp:
         self._mutex = threading.Lock()
         self._alive = True
         self._call_end = None
+        self._retry_after = 0.0
         self._last_poll = 0.0
         self._last_beat = 0.0
         self._last_signals = None
@@ -327,7 +332,14 @@ class TrayApp:
         Протухший lock раньше опознавался по мёртвому pid, но теперь этот pid —
         сам резидент, и он всегда жив: недоснятый lock (поток записи не успел
         отработать finally к моменту join) заблокировал бы все следующие записи
-        до перезапуска трея."""
+        до перезапуска трея.
+
+        IMPORTANT: снимаем только когда прошлый поток записи действительно
+        завершился. Совпадения pid мало — он общий у всех наших потоков, и у
+        доживающего после истёкшего join lock ещё рабочий: сняв его, мы пустили
+        бы вторую запись параллельно первой, в ту же папку."""
+        if self.thread is not None and self.thread.is_alive():
+            return
         lock = OUT_ROOT / LOCK_NAME
         try:
             data = json.loads(lock.read_text(encoding="utf-8"))
@@ -352,8 +364,13 @@ class TrayApp:
             self.thread = None
             alive = thread is not None and thread.is_alive()
         folder = result.get("folder")
-        if alive:
-            self.log("поток записи не завершился за 60 с — дорожки может дописывать")
+        if folder is None and alive:
+            # поток жив и дописывает дорожки — данные целы, просто ещё не наши
+            folder = self._current_folder()
+            self.log(f"поток записи не завершился за 60 с, дописывает: {folder}")
+            self._notify(f"Ещё сохраняется: {folder}")
+            self._refresh()
+            return
         if folder is None:
             self.log("запись остановлена, но папка не получена")
             self._notify("Запись не сохранена")
@@ -383,26 +400,38 @@ class TrayApp:
             # нажал кнопку поверх автозаписи — значит берёт её под свою руку:
             # автостоп такую запись больше не тронет
             self.source = MANUAL
-            self.watcher.release()
+            self.watcher.suppress()
             self.log("автозапись переведена в ручную по кнопке")
             self._notify("Запись продолжается, автостоп отключён")
             return
-        folder = self.result.get("folder") or "папка ещё не создана"
-        self._notify(f"Запись уже идёт ({folder})")
+        self._notify(f"Запись уже идёт ({self._current_folder()})")
+
+    def _current_folder(self) -> str:
+        """Папка идущей записи. В self.result она появляется только когда
+        record() вернулась, то есть уже после остановки, — поэтому во время
+        записи берём её из lock-файла."""
+        folder = self.result.get("folder")
+        if folder:
+            return str(folder)
+        try:
+            data = json.loads((OUT_ROOT / LOCK_NAME).read_text(encoding="utf-8"))
+            return str(data.get("folder") or "папка ещё не создана")
+        except (OSError, ValueError, TypeError):
+            return "папка ещё не создана"
 
     def _on_stop(self, icon=None, item=None) -> None:
         was_auto = self.recording and self.source == AUTO
         self.stop_recording()
         if was_auto:
-            # звонок может идти ещё два часа: без сброса машина осталась бы
-            # в RECORDING и не подняла бы запись снова
-            self.watcher.release()
+            # человек остановил сам, а звонок идёт: без этого машина через
+            # такт выдала бы START и запись пошла бы заново
+            self.watcher.suppress()
 
     def _on_cancel(self, icon=None, item=None) -> None:
         was_auto = self.recording and self.source == AUTO
         self.stop_recording(discard=True)
         if was_auto:
-            self.watcher.release()
+            self.watcher.suppress()
 
     def _on_exit(self, icon=None, item=None) -> None:
         if self.recording:
@@ -466,8 +495,11 @@ class TrayApp:
         self.source = None
         self.log(f"запись не стартовала: {error}")
         if was_auto:
-            # иначе до конца звонка повторной попытки не будет вовсе
+            # иначе до конца звонка повторной попытки не будет вовсе и встреча
+            # не запишется; но и долбиться каждые две секунды нельзя —
+            # следующая попытка не раньше RETRY_AFTER_S
             self.watcher.release()
+            self._retry_after = time.monotonic() + RETRY_AFTER_S
         self._notify(error)
         self._refresh()
 
@@ -518,6 +550,11 @@ class TrayApp:
         if self.recording:
             self.log("звонок начался, запись уже идёт — не вмешиваюсь")
             return
+        left = self._retry_after - time.monotonic()
+        if left > 0:
+            self.log(f"предыдущая попытка сорвалась — повторю через {left:.0f} с")
+            self.watcher.release()  # чтобы попытка повторилась на этом же звонке
+            return
         if not self.start_recording(AUTO):
             return
         self.log("звонок начался — запись запущена")
@@ -566,8 +603,10 @@ class TrayApp:
             )
         except OSError:
             pass
-        if not self.start_now:
-            _drop_command()  # команда от прошлой, уже мёртвой сессии
+        # команда от прошлой, уже мёртвой сессии: пролежав до следующей
+        # загрузки Windows, «start» запустил бы запись на пустом месте, а
+        # «stop» погасил бы ту, которую только что начали ярлыком
+        _drop_command()
         menu = pystray.Menu(
             pystray.MenuItem(
                 "Начать запись", self._on_start, visible=lambda i: not self.recording

@@ -42,11 +42,12 @@ POLL_S = 2.0
 # несколько секунд задержки ничего не решают.
 RENDER_PERIOD_S = 6.0
 LOG_MAX_BYTES = 1_000_000
-LOG_CHECK_EVERY = 200  # тактов между проверками размера журнала
+LOG_CHECK_EVERY = 200  # записей в журнал между проверками его размера
 
 _AUDIO_SESSION_ACTIVE = 1  # AudioSessionState.Active
 _com_ready = False
 _pycaw_warned = False
+_psutil_warned = False
 
 
 def _qword(key, name: str) -> "int | None":
@@ -106,16 +107,21 @@ def mic_busy(exe_name: str) -> "bool | None":
     return verdict
 
 
-def process_running(exe_name: str) -> "bool | None":
+def process_running(exe_name: str, log=None) -> "bool | None":
     """Запущен ли процесс с таким именем. None — psutil недоступен.
 
     Нужно потому, что метки в реестре переживают процесс: если Дион убит
     (питание, taskkill) до того, как Windows записала LastUsedTimeStop, пара
     остаётся в состоянии «занят» бессрочно — и запись без этой проверки шла бы
     вечно, в том числе после перезагрузки."""
+    global _psutil_warned
     try:
         import psutil
-    except Exception:
+    except Exception as e:
+        if log is not None and not _psutil_warned:
+            _psutil_warned = True
+            log(f"psutil недоступен ({e!r}) — живость процесса не проверяю, "
+                f"незакрытая метка в реестре может означать «в звонке» бессрочно")
         return None
     target = exe_name.lower()
     try:
@@ -184,22 +190,6 @@ def render_active(exe_name: str, log=None) -> "bool | None":
     return False
 
 
-def in_call(exe_names) -> "tuple[bool, bool | None, bool | None]":
-    """(в звонке, сигнал микрофона, сигнал воспроизведения) по списку процессов.
-
-    Оба сигнала None (нечем мерить) → не в звонке: молчим, а не выдумываем."""
-    mic = None
-    render = None
-    for name in exe_names:
-        one_mic = mic_busy(name)
-        if one_mic is not None:
-            mic = bool(mic) or one_mic
-        one_render = render_active(name)
-        if one_render is not None:
-            render = bool(render) or one_render
-    return bool(mic) or bool(render), mic, render
-
-
 class Signals:
     """Опрос сигналов с разной частотой и проверкой живости процесса.
 
@@ -238,7 +228,7 @@ class Signals:
 
     def _any_running(self) -> bool:
         for name in self.exe_names:
-            running = process_running(name)
+            running = process_running(name, log=self.log)
             if running is None:
                 return True  # psutil нет — не мешаем детекту
             if running:
@@ -257,6 +247,7 @@ class Watcher:
     IDLE = "idle"
     RECORDING = "recording"
     GRACE = "grace"
+    SUPPRESSED = "suppressed"
 
     def __init__(self, grace_seconds: float = GRACE_S) -> None:
         self.grace_seconds = grace_seconds
@@ -274,6 +265,10 @@ class Watcher:
                 self.state = self.GRACE
                 self.grace_until = now + self.grace_seconds
             return NONE
+        if self.state == self.SUPPRESSED:
+            if not call:  # звонок кончился — со следующего начинаем как обычно
+                self.state = self.IDLE
+            return NONE
         if call:  # GRACE: вернулся — грейс сброшен, запись не прерывалась
             self.state = self.RECORDING
             return NONE
@@ -282,11 +277,22 @@ class Watcher:
             return STOP
         return NONE
 
+    def suppress(self) -> None:
+        """Человек сам остановил или отменил запись посреди звонка.
+
+        Возвращать машину в IDLE здесь нельзя: звонок-то продолжается, и на
+        следующем такте она немедленно выдала бы START — кнопка «Остановить»
+        не работала бы вовсе, а «Отменить (удалить)» удаляла бы папку, после
+        чего запись начиналась заново. Поэтому до конца этого звонка не
+        стартуем, а со следующего работаем как обычно."""
+        self.state = self.SUPPRESSED
+        self.grace_until = 0.0
+
     def release(self) -> None:
-        """Запись перестала идти не по решению машины: не стартовала из-за
-        ошибки, остановлена руками, отменена. Без этого машина осталась бы
-        в RECORDING до конца звонка и не подняла бы запись повторно — а звонок
-        может идти ещё два часа."""
+        """Запись не пошла не по решению человека — например, не стартовала
+        из-за занятого устройства. Машина возвращается в IDLE, чтобы попытку
+        можно было повторить: иначе встреча не записалась бы вовсе, а звонок
+        может идти ещё два часа. Темп повторов ограничивает вызывающий."""
         self.state = self.IDLE
         self.grace_until = 0.0
 

@@ -348,15 +348,58 @@ def test_failed_recording_returns_tray_to_idle(monkeypatch, tmp_path):
     assert app.watcher.state == watch.Watcher.IDLE
 
 
-def test_manual_stop_of_auto_recording_allows_restart(monkeypatch, tmp_path):
+def test_manual_stop_during_a_call_does_not_restart_recording(monkeypatch, tmp_path):
+    # нажал «Остановить», а звонок идёт: сброс в IDLE заставил бы машину через
+    # такт выдать START, то есть кнопка не работала бы вовсе
     app = _app(monkeypatch, tmp_path)
     app.recording = True
     app.source = tray.AUTO
     app.watcher.state = watch.Watcher.RECORDING
     monkeypatch.setattr(app, "stop_recording", lambda **k: setattr(app, "recording", False))
     app._on_stop()
-    assert app.watcher.state == watch.Watcher.IDLE
-    assert app.watcher.poll(True, now=1.0) == watch.START
+    assert app.watcher.poll(True, now=1.0) == watch.NONE
+    assert app.watcher.poll(True, now=100.0) == watch.NONE
+
+
+def test_cancel_during_a_call_does_not_restart_recording(monkeypatch, tmp_path):
+    # иначе «Отменить (удалить)» удаляет папку, и через две секунды пишется заново
+    app = _app(monkeypatch, tmp_path)
+    app.recording = True
+    app.source = tray.AUTO
+    app.watcher.state = watch.Watcher.RECORDING
+    monkeypatch.setattr(app, "stop_recording", lambda **k: setattr(app, "recording", False))
+    app._on_cancel()
+    assert app.watcher.poll(True, now=1.0) == watch.NONE
+
+
+def test_next_call_records_again_after_manual_stop(monkeypatch, tmp_path):
+    # подавление действует только до конца текущего звонка
+    app = _app(monkeypatch, tmp_path)
+    app.recording = True
+    app.source = tray.AUTO
+    app.watcher.state = watch.Watcher.RECORDING
+    monkeypatch.setattr(app, "stop_recording", lambda **k: setattr(app, "recording", False))
+    app._on_stop()
+    app.watcher.poll(True, now=1.0)
+    app.watcher.poll(False, now=2.0)  # звонок кончился
+    assert app.watcher.poll(True, now=3.0) == watch.START
+
+
+def test_failed_start_retries_later_not_immediately(monkeypatch, tmp_path):
+    # повтор нужен, иначе встреча теряется целиком; но не каждые две секунды
+    app = _app(monkeypatch, tmp_path)
+    app.recording = True
+    app.source = tray.AUTO
+    app.watcher.state = watch.Watcher.RECORDING
+    app.result = {"error": "нет устройства"}
+    app._collect_error()
+    attempts = []
+    monkeypatch.setattr(app, "start_recording", lambda source: attempts.append(source))
+    app._auto_start()
+    assert attempts == []  # слишком рано
+    app._retry_after = time.monotonic() - 1
+    app._auto_start()
+    assert attempts == [tray.AUTO]
 
 
 def test_manual_start_over_auto_recording_disables_autostop(monkeypatch, tmp_path):
@@ -524,3 +567,65 @@ def test_resident_drops_command_left_by_dead_session(monkeypatch, tmp_path):
     tray._send_command("start")
     tray._drop_command()
     assert tray._take_command() is None
+
+
+def test_stale_command_dropped_on_every_startup(monkeypatch, tmp_path):
+    # в том числе при запуске ярлыком: залипший «stop» иначе погасил бы
+    # запись, которую этим же запуском только что начали
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    tray._send_command("stop")
+    started = []
+
+    class _FakeIcon:
+        def __init__(self, *a, **k):
+            pass
+
+        def run(self, setup=None):
+            started.append(tray._take_command())
+
+    import sys
+    import types
+
+    fake = types.ModuleType("pystray")
+    fake.Icon = _FakeIcon
+    fake.Menu = lambda *items: None
+    fake.MenuItem = lambda *a, **k: None
+    monkeypatch.setitem(sys.modules, "pystray", fake)
+    tray.TrayApp(start_now=True).run()
+    assert started == [None]  # команда снята до запуска цикла
+
+
+def test_folder_of_running_recording_comes_from_lock(monkeypatch, tmp_path):
+    # в self.result папка появляется только когда record() вернулась, то есть
+    # уже после остановки — во время записи её знает только lock
+    recordings = tmp_path / "recordings"
+    recordings.mkdir()
+    (recordings / tray.LOCK_NAME).write_text(
+        json.dumps({"pid": os.getpid(), "folder": str(recordings / "2026-08-07_12-00")}),
+        encoding="utf-8",
+    )
+    app = _app(monkeypatch, tmp_path)
+    monkeypatch.setattr(tray, "OUT_ROOT", recordings)
+    assert "2026-08-07_12-00" in app._current_folder()
+
+
+def test_own_lock_of_a_living_thread_is_kept(monkeypatch, tmp_path):
+    # доживающий после истёкшего join поток ещё пишет и держит рабочий lock:
+    # сняв его, мы пустили бы вторую запись в ту же папку
+    recordings = tmp_path / "recordings"
+    recordings.mkdir()
+    lock = recordings / tray.LOCK_NAME
+    lock.write_text(json.dumps({"pid": os.getpid(), "folder": "X"}), encoding="utf-8")
+    app = _app(monkeypatch, tmp_path)
+    monkeypatch.setattr(tray, "OUT_ROOT", recordings)
+    alive = threading.Event()
+    app.thread = threading.Thread(target=alive.wait, daemon=True)
+    app.thread.start()
+    try:
+        app._clear_own_lock()
+        assert lock.exists()
+    finally:
+        alive.set()
+        app.thread.join(timeout=5)
+    app._clear_own_lock()  # поток кончился — теперь снять можно
+    assert not lock.exists()

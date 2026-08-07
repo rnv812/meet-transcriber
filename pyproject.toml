@@ -5,8 +5,10 @@ requires-python = ">=3.12"
 # Остальные зависимости (faster-whisper, pyannote, pyaudiowpatch...) исторически
 # ставятся в venv вручную; здесь объявлены только нужные трею.
 # pycaw — второй сигнал детектора звонка (WASAPI-сессии); без него трей
-# работает, но видит только микрофон. comtypes и psutil приходят вместе с ним.
-dependencies = ["pystray", "pillow", "pycaw"]
+# работает, но видит только микрофон. psutil объявлен явно, хотя приходит и с
+# pycaw: на нём держатся проверка живости Диона и отпечаток процесса в
+# tray.lock, а сценарий «pycaw не встал» — ровно тот, где psutil тоже пропал бы.
+dependencies = ["pystray", "pillow", "pycaw", "psutil"]
 
 [project.scripts]
 meet = "meet.cli:main"
