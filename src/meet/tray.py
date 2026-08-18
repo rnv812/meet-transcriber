@@ -23,15 +23,17 @@ import threading
 import time
 from pathlib import Path
 
-from meet import watch
+from meet import paths, settings, watch
 from meet.output import fmt_ts
 from meet.recorder import LOCK_NAME, _pid_alive, record
 
-# recordings от корня репозитория: ярлык запускается с произвольным cwd
-OUT_ROOT = Path(__file__).resolve().parents[2] / "recordings"
+# Куда писать по умолчанию: из репозитория — его `recordings/` (ярлык
+# запускается с произвольным cwd), из установленного приложения — data_dir.
+# Осознанный выбор пользователя живёт в настройках, см. _out_root().
+OUT_ROOT = paths.default_recordings_dir()
 
 # окно старта записи, в котором встреча похожа на дейлик (сам дейлик в 11-30)
-DAILY_WINDOW = ("11:00", "12:00")
+DAILY_WINDOW = settings.DEFAULT_DAILY_WINDOW
 
 IDLE_COLOR = (130, 130, 130, 255)  # дежурю
 REC_COLOR = (40, 110, 220, 255)  # пишу
@@ -54,60 +56,38 @@ MANUAL = "manual"
 def _state_dir() -> Path:
     """Машинно-локальное состояние трея. Не константа: LOCALAPPDATA читается
     каждый раз, иначе тесты не могут подменить его на tmp_path."""
-    return Path(os.environ.get("LOCALAPPDATA", ".")) / "meet"
+    return paths.data_dir()
 
 
 def _config() -> dict:
-    """%LOCALAPPDATA%/meet/config.json — машинно-локальные настройки трея.
+    """Сырое содержимое config.json — точка, которую подменяют тесты.
 
-    Файла может не быть — тогда пустой конфиг."""
-    try:
-        return json.loads((_state_dir() / "config.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def _flag(value, default: bool) -> bool:
-    """Булево из конфига, правленного руками: строковое "false" не должно
-    означать True только потому, что непустая строка истинна."""
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on", "да")
-    if value is None:
-        return default
-    return bool(value)
+    Схему и дефолты держит meet.settings; здесь остаётся только чтение файла,
+    чтобы монкипатч `_config` продолжал изолировать трей от реального конфига
+    машины."""
+    return settings.read_raw()
 
 
-def _positive(value, default: float, minimum: float) -> float:
-    """Число из конфига. Мусор и значения вне смысла — молча к дефолту:
-    трей запускается из автозагрузки под pythonw, и исключение здесь означало
-    бы, что резидент не поднялся вообще, без иконки и без строки в журнале."""
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return default
-    if number != number or number < minimum:  # NaN тоже сюда
-        return default
-    return number
+def _settings() -> settings.Settings:
+    """Настройки поверх того же сырого конфига, что читает `_config()`.
+
+    Именно через `_config()`, а не напрямую из файла: тесты подменяют его, и
+    обход сломал бы их изоляцию."""
+    return settings.Settings.from_raw(_config())
+
+
+def _out_root() -> Path:
+    """Куда писать запись: осознанный выбор из настроек, иначе OUT_ROOT.
+
+    Через OUT_ROOT, а не paths напрямую: тесты подменяют именно его."""
+    return _settings().recording.out_dir or OUT_ROOT
 
 
 def _auto_config() -> dict:
     """Настройки автозаписи с дефолтами. Секции нет — автозапись выключена,
     но детектор всё равно опрашивается и пишет журнал: так можно неделю
     смотреть на поведение сигналов, ничего не записывая."""
-    section = _config().get("auto_record")
-    if not isinstance(section, dict):
-        section = {}
-    processes = section.get("processes")
-    if isinstance(processes, str):
-        processes = [processes]
-    if not isinstance(processes, list) or not processes:
-        processes = ["Dion.exe"]
-    return {
-        "enabled": _flag(section.get("enabled"), False),
-        "processes": [str(p) for p in processes],
-        "grace_seconds": _positive(section.get("grace_seconds"), watch.GRACE_S, 0.0),
-        "poll_seconds": _positive(section.get("poll_seconds"), watch.POLL_S, 0.5),
-    }
+    return _settings().auto_record.to_raw()
 
 
 def _proc_ident(pid: int) -> dict:
@@ -185,7 +165,7 @@ def _drop_command() -> None:
         pass
 
 
-def _in_daily_window(folder: str) -> bool:
+def _in_daily_window(folder: str, window: tuple[str, str] | None = None) -> bool:
     """Похоже ли время записи (из имени папки YYYY-MM-DD_HH-MM) на слот дейлика.
 
     Только гипотеза для промпта — что за встреча на самом деле, решает
@@ -193,7 +173,8 @@ def _in_daily_window(folder: str) -> bool:
     m = re.search(r"_(\d{2})-(\d{2})$", Path(folder).name)
     if not m:
         return False
-    return DAILY_WINDOW[0] <= f"{m.group(1)}:{m.group(2)}" <= DAILY_WINDOW[1]
+    lo, hi = window or _settings().hooks.daily_window
+    return lo <= f"{m.group(1)}:{m.group(2)}" <= hi
 
 
 def _wt_safe(text: str) -> str:
@@ -212,20 +193,24 @@ def _launch_claude(folder: str) -> None:
     config.json — на ноуте он выключен: транскрибация идёт на десктопе, куда
     запись потом забирают. Best effort: проблемы запуска не должны мешать
     завершению записи."""
-    if not _config().get("post_record_hook"):
+    hooks = _settings().hooks
+    if not hooks.post_record:
         return
     prompt = (
         f"Завершилась запись встречи, папка: {folder}. "
         "Предложи транскрибировать её скиллом my-plugin:transcriber."
     )
-    if _in_daily_window(folder):
+    if _in_daily_window(folder, hooks.daily_window):
         prompt += (
             " Время похоже на слот дейлика — сверься с календарём "
             "(scripts/calendar_lookup.ps1) и, если это дейлик, веди его "
             "режимом дейлика из того же скилла; другую встречу в этом "
             "слоте — обычным режимом."
         )
-    project_root = OUT_ROOT.parent
+    # Папка, из которой открывается Claude Code: корень репозитория, где лежат
+    # скрипты и скиллы. Из установленного приложения репозитория нет — тогда
+    # родитель папки записей (лучше, чем ничего: там сама запись).
+    project_root = paths.repo_root() or _out_root().parent
     try:
         # powershell с профилем: там proxy-переменные; -NoExit — не закрывать
         # окно при ошибке. claude напрямую, не через шорткат cc: у CLI один
@@ -322,7 +307,7 @@ class TrayApp:
 
     def _run_record(self, result: dict, stop_event: threading.Event) -> None:
         try:
-            result["folder"] = record(str(OUT_ROOT), stop_event=stop_event)
+            result["folder"] = record(str(_out_root()), stop_event=stop_event)
         except BaseException as e:  # и SystemExit «запись уже идёт»
             result["error"] = str(e) or repr(e)
 
@@ -340,7 +325,7 @@ class TrayApp:
         бы вторую запись параллельно первой, в ту же папку."""
         if self.thread is not None and self.thread.is_alive():
             return
-        lock = OUT_ROOT / LOCK_NAME
+        lock = _out_root() / LOCK_NAME
         try:
             data = json.loads(lock.read_text(encoding="utf-8"))
             if int(data["pid"]) == os.getpid():
@@ -414,7 +399,7 @@ class TrayApp:
         if folder:
             return str(folder)
         try:
-            data = json.loads((OUT_ROOT / LOCK_NAME).read_text(encoding="utf-8"))
+            data = json.loads((_out_root() / LOCK_NAME).read_text(encoding="utf-8"))
             return str(data.get("folder") or "папка ещё не создана")
         except (OSError, ValueError, TypeError):
             return "папка ещё не создана"

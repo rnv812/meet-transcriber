@@ -10,6 +10,7 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 
+from meet import paths
 from meet.assist.agent import check_auth, run_agent_query
 from meet.assist.bus import TranscriptBus
 from meet.assist.context import collect_task_context
@@ -100,7 +101,10 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
     vault_path = Path(vault) if vault else None
     state = AssistState(
         bus=bus, digest=digest,
-        glossary=load_glossary(Path.cwd()),
+        # Лексика лежит рядом с настройками (в dev-режиме — в корне репозитория),
+        # а не в рабочей папке процесса: под треем и из установленного
+        # приложения cwd произвольная.
+        glossary=load_glossary(paths.lexicon_dir()),
         vault=vault_path, cwd=out_dir,
     )
     engine = LiveEngine(out_dir, Transcriber(), window_seconds=window_seconds,

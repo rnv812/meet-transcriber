@@ -1,6 +1,7 @@
 import argparse
-import os
 import sys
+
+from meet import settings
 
 
 def _quiet_known_warnings() -> None:
@@ -28,6 +29,9 @@ def _quiet_known_warnings() -> None:
     logging.getLogger("torch.utils.flop_counter").setLevel(logging.ERROR)
 
 
+OUT_HELP = "папка для записей (по умолчанию — из настроек)"
+
+
 def main() -> None:
     _quiet_known_warnings()
     # Страховка от UnicodeEncodeError: cp866-консоль Windows не кодирует часть
@@ -40,7 +44,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_rec = sub.add_parser("record", help="записать встречу (системный звук + микрофон)")
-    p_rec.add_argument("--out", default="recordings", help="папка для записей")
+    p_rec.add_argument("--out", default=None, help=OUT_HELP)
 
     p_tr = sub.add_parser("transcribe", help="транскрибировать запись")
     p_tr.add_argument("path", help="папка записи (sys+mic) или аудио/видеофайл")
@@ -59,12 +63,14 @@ def main() -> None:
         "--no-align",
         dest="align",
         action="store_false",
+        default=None,
         help="без forced alignment (быстрее, но грубее стыки спикеров)",
     )
     p_tr.add_argument(
         "--no-overlap",
         dest="overlap",
         action="store_false",
+        default=None,
         help="без overlap-aware диаризации: прежний exclusive-режим, "
         "без пометок зон нахлёста",
     )
@@ -72,9 +78,9 @@ def main() -> None:
     p_live = sub.add_parser(
         "live", help="живой режим: запись + потоковая расшифровка для ассистента"
     )
-    p_live.add_argument("--out", default="recordings", help="папка для записей")
+    p_live.add_argument("--out", default=None, help=OUT_HELP)
     p_live.add_argument(
-        "--window", type=float, default=20.0, help="длина окна расшифровки, сек"
+        "--window", type=float, default=None, help="длина окна расшифровки, сек"
     )
     p_live.add_argument(
         "--hotwords", help="термины через запятую, подсказка распознаванию"
@@ -87,20 +93,20 @@ def main() -> None:
     p_as = sub.add_parser(
         "assist", help="live-ассистент: расшифровка + дайджест + вопросы (веб)"
     )
-    p_as.add_argument("--out", default="recordings", help="папка для записей")
+    p_as.add_argument("--out", default=None, help=OUT_HELP)
     p_as.add_argument(
-        "--window", type=float, default=20.0, help="длина окна расшифровки, сек"
+        "--window", type=float, default=None, help="длина окна расшифровки, сек"
     )
     p_as.add_argument(
         "--hotwords", help="термины через запятую, подсказка распознаванию"
     )
-    p_as.add_argument("--task", help="задача из Obsidian — контекст встречи")
+    p_as.add_argument("--task", help="задача из заметок — контекст встречи")
     p_as.add_argument(
         "--vault",
-        default=os.environ.get("MEET_VAULT"),
-        help="папка заметок Claude в Obsidian (default: env MEET_VAULT)",
+        default=None,
+        help="папка заметок (по умолчанию — из настроек или env MEET_VAULT)",
     )
-    p_as.add_argument("--port", type=int, default=8765, help="порт веб-страницы")
+    p_as.add_argument("--port", type=int, default=None, help="порт веб-страницы")
     p_as.add_argument(
         "--no-voices", action="store_true",
         help="не подписывать сегменты именами из базы голосов",
@@ -121,25 +127,37 @@ def main() -> None:
     p_cmp.add_argument("b", help="транскрипт B (вариант для сравнения)")
 
     args = parser.parse_args()
+    # Настройки — источник значений по умолчанию: флаг командной строки их
+    # перекрывает, но не дублирует. Так одно и то же (папка записей, окно,
+    # порт, лексика) настраивается в приложении и одинаково видно из CLI.
+    cfg = settings.load()
+    # Команды без --out (transcribe/enroll/compare) значение просто не используют.
+    out_root = getattr(args, "out", None) or str(cfg.recording.recordings)
     if args.command == "record":
         from meet.recorder import record
 
-        record(args.out)
+        record(out_root)
     elif args.command == "live":
         from meet.gpu_lock import hold_gpu_lock
         from meet.live import run_live
 
         with hold_gpu_lock("live"):
-            run_live(args.out, window_seconds=args.window, hotwords=args.hotwords,
-                     no_voices=args.no_voices)
+            run_live(out_root,
+                     window_seconds=args.window or cfg.assist.window_seconds,
+                     hotwords=args.hotwords,
+                     no_voices=args.no_voices or not cfg.assist.voices)
     elif args.command == "assist":
         from meet.assist.app import run_assist
         from meet.gpu_lock import hold_gpu_lock
 
+        vault = args.vault or (str(cfg.assist.vault) if cfg.assist.vault else None)
         with hold_gpu_lock("assist"):
-            run_assist(args.out, window_seconds=args.window, hotwords=args.hotwords,
-                       task=args.task, vault=args.vault, port=args.port,
-                       no_voices=args.no_voices)
+            run_assist(out_root,
+                       window_seconds=args.window or cfg.assist.window_seconds,
+                       hotwords=args.hotwords,
+                       task=args.task, vault=vault,
+                       port=args.port or cfg.assist.port,
+                       no_voices=args.no_voices or not cfg.assist.voices)
     elif args.command == "enroll":
         from meet.voices import enroll
 
@@ -157,6 +175,6 @@ def main() -> None:
                 args.path,
                 speakers=args.speakers,
                 hotwords=args.hotwords,
-                align=args.align,
-                overlap=args.overlap,
+                align=cfg.asr.align if args.align is None else args.align,
+                overlap=cfg.asr.overlap if args.overlap is None else args.overlap,
             )

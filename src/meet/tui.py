@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from meet import settings
+
 _MENU = """
 1. Записать встречу (Ctrl+C — стоп)
 2. Транскрибировать последнюю запись
@@ -48,12 +50,12 @@ def main() -> None:
             if choice == "1":
                 from meet.recorder import record
 
-                folder = record("recordings")
+                folder = record(str(settings.load().recording.recordings))
                 answer = input("Транскрибировать сейчас? (д/н): ").strip().lower()
                 if answer in ("д", "да", "y", "yes"):
                     _transcribe(folder)
             elif choice == "2":
-                folder = latest_recording(Path("recordings"))
+                folder = latest_recording(settings.load().recording.recordings)
                 if folder is None:
                     print("Записей пока нет.")
                 else:

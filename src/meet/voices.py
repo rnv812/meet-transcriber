@@ -7,9 +7,19 @@ from pathlib import Path
 
 import numpy as np
 
+from meet import paths
 from meet.diarize import DIARIZATION_MODEL
 
-VOICES_DIR = Path("voices")
+
+def voices_dir() -> Path:
+    """Папка базы голосов: настройка, иначе путь по умолчанию из paths.
+
+    Функция, а не константа: раньше путь был относительным (`Path("voices")`) и
+    зависел от рабочей папки процесса, а под треем и в установленном режиме она
+    произвольная."""
+    from meet import settings
+
+    return settings.load().recording.voices
 # Калибровка 03.07.2026 (встреча 16-31): свои cos 0.89-1.00, дальние чужие
 # 0.32-0.54, а ПОХОЖИЙ чужой голос — 0.61 (кластер Соколова ложно прошёл
 # прежний порог 0.6 по образцу Вадима и «исчез» под чужим именем). Порог
@@ -19,8 +29,9 @@ THRESHOLD = 0.75
 MARGIN = 0.05
 
 
-def load_voices(folder: Path = VOICES_DIR) -> dict[str, list[np.ndarray]]:
+def load_voices(folder: Path | None = None) -> dict[str, list[np.ndarray]]:
     """Имя → список эмбеддингов. Битый файл пропускается с предупреждением."""
+    folder = folder or voices_dir()
     out: dict[str, list[np.ndarray]] = {}
     if not folder.is_dir():
         return out
@@ -37,9 +48,14 @@ def load_voices(folder: Path = VOICES_DIR) -> dict[str, list[np.ndarray]]:
 
 
 def add_sample(
-    name: str, embedding: list[float], source: str, date: str, folder: Path = VOICES_DIR
+    name: str,
+    embedding: list[float],
+    source: str,
+    date: str,
+    folder: Path | None = None,
 ) -> Path:
     """Дописать образец голоса; повтор из того же source заменяет старый образец."""
+    folder = folder or voices_dir()
     folder.mkdir(parents=True, exist_ok=True)
     f = folder / f"{name}.json"
     data = {"samples": []}
@@ -137,10 +153,11 @@ def _find_sidecar(path: Path) -> Path:
     raise SystemExit(f"Не найден сайдкар для {path} — дай папку записи или *_speakers.json")
 
 
-def enroll(path_str: str, mappings: list[str], folder: Path = VOICES_DIR) -> None:
+def enroll(path_str: str, mappings: list[str], folder: Path | None = None) -> None:
     """Перенести эмбеддинги из сайдкара записи в базу голосов.
 
     mappings: «Спикер 1=Демьян Петров» (имя из транскрипта или сырая метка SPEAKER_XX)."""
+    folder = folder or voices_dir()
     sidecar = _find_sidecar(Path(path_str))
     try:
         data = read_sidecar(sidecar)

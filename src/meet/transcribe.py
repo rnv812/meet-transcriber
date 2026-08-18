@@ -3,14 +3,12 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from meet import paths
 from meet.asr import Segment, transcribe_wav
 from meet.audio import to_wav16k
 from meet.diarize import diarize_wav, split_by_speaker
 from meet.interleave import interleave_tracks
 from meet.output import speaker_names, to_markdown
-
-
-HOTWORDS_FILE = Path("hotwords.txt")
 
 # IMPORTANT: контекст Whisper — 448 токенов, и faster-whisper НЕЗАВИСИМО усекает
 # до 223 токенов и hotwords, и предыдущий текст (condition_on_previous_text);
@@ -42,12 +40,17 @@ def _cap_hotwords(terms: list[str], budget: int = HOTWORDS_CHAR_BUDGET) -> list[
     return list(reversed(kept_reversed))
 
 
-def _load_hotwords(extra: str | None, path: Path = HOTWORDS_FILE) -> str | None:
+def _load_hotwords(extra: str | None, path: Path | None = None) -> str | None:
     """Подсказка лексики для распознавания: накопительный список из hotwords.txt
     (по термину на строку, # — комментарий) плюс разовые термины из --hotwords.
 
+    Путь по умолчанию берётся из paths.hotwords_path() (корень репозитория в
+    dev-режиме, data_dir в установленном) — раньше он был относительным и потому
+    зависел от рабочей папки процесса.
+
     Возвращает термины через запятую (как ждёт faster-whisper) или None.
     """
+    path = path or paths.hotwords_path()
     terms: list[str] = []
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():

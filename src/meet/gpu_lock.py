@@ -11,10 +11,15 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
+from meet import paths
+
 
 def lock_path() -> Path:
-    """%LOCALAPPDATA%/meet/gpu.lock — путь известен обоим проектам."""
-    return Path(os.environ.get("LOCALAPPDATA", ".")) / "meet" / "gpu.lock"
+    """%LOCALAPPDATA%/meet/gpu.lock — путь известен обоим проектам.
+
+    Идёт через paths.data_dir(), но остаётся тем же файлом: это публичный
+    контракт с voice-control, и переносить его нельзя."""
+    return paths.data_dir() / "gpu.lock"
 
 
 @contextmanager
