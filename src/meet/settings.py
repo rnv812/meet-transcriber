@@ -29,7 +29,7 @@ from pathlib import Path
 from meet import paths
 from meet.asr import MODEL_NAME as DEFAULT_WHISPER_MODEL
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Дефолты автозаписи продублированы здесь, а не взяты из meet.watch: watch.py
 # импортирует winreg, то есть существует только на Windows, а настройки должны
@@ -37,9 +37,52 @@ SCHEMA_VERSION = 1
 # test_settings.py — он сверяет эти числа с константами watch.
 DEFAULT_GRACE_S = 180.0
 DEFAULT_POLL_S = 2.0
-DEFAULT_PROCESSES = ("Dion.exe",)
-# Окно старта записи, в котором встреча похожа на дейлик (см. tray.DAILY_WINDOW).
-DEFAULT_DAILY_WINDOW = ("11:00", "12:00")
+# Короче этого звонок считается ложной тревогой (звук уведомления, отклонённый
+# вызов): папка остаётся, но пост-хук на неё не зовут.
+DEFAULT_MIN_CALL_S = 120.0
+
+# Клиенты конференций, за которыми детектор следит по умолчанию.
+#
+# IMPORTANT: только те приложения, у которых активная звуковая сессия почти
+# всегда означает разговор. Мессенджеры (Slack, Discord, Telegram) сюда
+# сознательно не входят: они постоянно проигрывают звуки уведомлений, а признак
+# «что-то воспроизводится» читается детектором как звонок — автозапись включалась
+# бы на каждый бип. Добавить их можно руками, зная эту цену.
+DEFAULT_PROCESSES = (
+    "Dion.exe",
+    "Teams.exe",
+    "ms-teams.exe",
+    "Zoom.exe",
+    "Webex.exe",
+)
+
+# Текст, который пост-хук передаёт запускаемой команде. Плейсхолдеры: {folder},
+# {project}, {date}, {prompt} — см. Hooks.
+DEFAULT_HOOK_PROMPT = (
+    "Завершилась запись встречи, папка: {folder}. Предложи её транскрибировать."
+)
+
+# Как выглядел пост-хук до того, как стал настройкой: окно Windows Terminal с
+# Claude Code. Нужно для миграции — у кого он был включён, у того и останется.
+HISTORIC_HOOK_COMMAND = (
+    "wt",
+    "-d",
+    "{project}",
+    "powershell",
+    "-NoExit",
+    "-Command",
+    "claude --permission-mode auto '{prompt}'",
+)
+HISTORIC_HOOK_PROMPT = (
+    "Завершилась запись встречи, папка: {folder}. "
+    "Предложи транскрибировать её скиллом my-plugin:transcriber."
+)
+HISTORIC_RECURRING_PROMPT = (
+    " Время похоже на слот регулярной встречи — сверься с календарём "
+    "(scripts/calendar_lookup.ps1) и, если это она, веди её соответствующим "
+    "режимом скилла; другую встречу в этом слоте — обычным режимом."
+)
+HISTORIC_RECURRING_WINDOW = ("11:00", "12:00")
 
 ASR_BACKENDS = ("faster-whisper", "whisper.cpp")
 LLM_PROVIDERS = ("claude-code", "openai-compatible")
@@ -116,6 +159,7 @@ class AutoRecord:
     processes: list[str] = field(default_factory=lambda: list(DEFAULT_PROCESSES))
     grace_seconds: float = DEFAULT_GRACE_S
     poll_seconds: float = DEFAULT_POLL_S
+    min_call_seconds: float = DEFAULT_MIN_CALL_S
 
     @classmethod
     def from_raw(cls, raw: dict) -> "AutoRecord":
@@ -124,6 +168,9 @@ class AutoRecord:
             processes=as_str_list(raw.get("processes"), DEFAULT_PROCESSES),
             grace_seconds=as_positive(raw.get("grace_seconds"), DEFAULT_GRACE_S, 0.0),
             poll_seconds=as_positive(raw.get("poll_seconds"), DEFAULT_POLL_S, 0.5),
+            min_call_seconds=as_positive(
+                raw.get("min_call_seconds"), DEFAULT_MIN_CALL_S, 0.0
+            ),
         )
 
     def to_raw(self) -> dict:
@@ -132,36 +179,70 @@ class AutoRecord:
             "processes": list(self.processes),
             "grace_seconds": self.grace_seconds,
             "poll_seconds": self.poll_seconds,
+            "min_call_seconds": self.min_call_seconds,
         }
 
 
 @dataclass(frozen=True)
 class Hooks:
-    """Что происходит после остановки записи."""
+    """Что запускать после остановки записи.
+
+    Раньше здесь был зашит конкретный сценарий: окно Windows Terminal с Claude
+    Code и промптом про конкретный скилл. Теперь это шаблон команды —
+    `["explorer", "{folder}"]` работает ровно так же, как запуск ассистента, а у
+    нового пользователя по умолчанию не запускается ничего.
+
+    Плейсхолдеры подставляются в каждый аргумент по отдельности, без шелла:
+    `{folder}` — папка записи, `{project}` — корень репозитория (или папка
+    записей), `{date}` — дата из имени папки, `{prompt}` — текст-подсказка.
+    """
 
     post_record: bool = False
-    daily_window: tuple[str, str] = DEFAULT_DAILY_WINDOW
+    command: tuple[str, ...] = ()
+    prompt: str = DEFAULT_HOOK_PROMPT
+    # Окно старта, в котором встреча похожа на регулярную (дейлик, статус).
+    # None — про регулярность ничего не говорим.
+    recurring_window: tuple[str, str] | None = None
+    recurring_prompt: str = ""
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Hooks":
-        window = raw.get("daily_window")
+        window = raw.get("recurring_window")
+        recurring: tuple[str, str] | None = None
         if (
             isinstance(window, (list, tuple))
             and len(window) == 2
-            and all(isinstance(x, str) for x in window)
+            and all(isinstance(x, str) and x.strip() for x in window)
         ):
-            daily = (window[0], window[1])
-        else:
-            daily = DEFAULT_DAILY_WINDOW
+            recurring = (str(window[0]), str(window[1]))
+        command = raw.get("command")
+        if isinstance(command, str):
+            # Строку разбираем как командную строку Windows: так проще писать
+            # руками, а список остаётся точным способом задать аргумент с
+            # пробелами.
+            import shlex
+
+            command = shlex.split(command, posix=False)
+        if not isinstance(command, list):
+            command = []
+        prompt = raw.get("prompt")
         return cls(
             post_record=as_flag(raw.get("post_record"), False),
-            daily_window=daily,
+            command=tuple(str(part) for part in command),
+            prompt=str(prompt) if isinstance(prompt, str) and prompt else DEFAULT_HOOK_PROMPT,
+            recurring_window=recurring,
+            recurring_prompt=str(raw.get("recurring_prompt") or ""),
         )
 
     def to_raw(self) -> dict:
         return {
             "post_record": self.post_record,
-            "daily_window": list(self.daily_window),
+            "command": list(self.command),
+            "prompt": self.prompt,
+            "recurring_window": list(self.recurring_window)
+            if self.recurring_window
+            else None,
+            "recurring_prompt": self.recurring_prompt,
         }
 
 
@@ -173,18 +254,24 @@ class Recording:
 
     out_dir: Path | None = None
     voices_dir: Path | None = None
+    # Как подписывать микрофонную дорожку в транскрипте: это всегда владелец
+    # машины. «Вы» — обращение к читателю транскрипта, но кому-то удобнее имя.
+    speaker_name: str = "Вы"
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Recording":
+        name = raw.get("speaker_name")
         return cls(
             out_dir=as_path(raw.get("out_dir")),
             voices_dir=as_path(raw.get("voices_dir")),
+            speaker_name=str(name).strip() if name and str(name).strip() else "Вы",
         )
 
     def to_raw(self) -> dict:
         return {
             "out_dir": str(self.out_dir) if self.out_dir else None,
             "voices_dir": str(self.voices_dir) if self.voices_dir else None,
+            "speaker_name": self.speaker_name,
         }
 
     @property
@@ -300,6 +387,42 @@ class Assist:
 
 
 @dataclass(frozen=True)
+class Integrations:
+    """Связи с чужими программами. Все выключаемые: приложение обязано быть
+    полезным само по себе."""
+
+    # Маркер «GPU занят» для внешнего наблюдателя (у автора — voice-control,
+    # который по нему выгружает свою копию Whisper из видеопамяти). Кому это не
+    # нужно — выключает, и файл не создаётся вовсе.
+    gpu_marker: bool = True
+    gpu_marker_path: Path | None = None
+    # Токен Hugging Face: нужен только гейтед-модели диаризации. Хранится в
+    # config.json рядом с настройками — не идеал, но честнее прежнего: раньше
+    # он жил переменной среды пользователя, которая тоже лежит открытым
+    # текстом. Переменная продолжает работать и имеет приоритет, если поле
+    # пустое (см. models.token).
+    hf_token: str = ""
+
+    @classmethod
+    def from_raw(cls, raw: dict) -> "Integrations":
+        token = raw.get("hf_token")
+        return cls(
+            gpu_marker=as_flag(raw.get("gpu_marker"), True),
+            gpu_marker_path=as_path(raw.get("gpu_marker_path")),
+            hf_token=str(token).strip() if token else "",
+        )
+
+    def to_raw(self) -> dict:
+        return {
+            "gpu_marker": self.gpu_marker,
+            "gpu_marker_path": str(self.gpu_marker_path)
+            if self.gpu_marker_path
+            else None,
+            "hf_token": self.hf_token,
+        }
+
+
+@dataclass(frozen=True)
 class Settings:
     version: int = SCHEMA_VERSION
     auto_record: AutoRecord = field(default_factory=AutoRecord)
@@ -308,6 +431,7 @@ class Settings:
     asr: Asr = field(default_factory=Asr)
     llm: Llm = field(default_factory=Llm)
     assist: Assist = field(default_factory=Assist)
+    integrations: Integrations = field(default_factory=Integrations)
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Settings":
@@ -320,6 +444,7 @@ class Settings:
             asr=Asr.from_raw(_section(raw, "asr")),
             llm=Llm.from_raw(_section(raw, "llm")),
             assist=Assist.from_raw(_section(raw, "assist")),
+            integrations=Integrations.from_raw(_section(raw, "integrations")),
         )
 
     def to_raw(self) -> dict:
@@ -331,25 +456,46 @@ class Settings:
             "asr": self.asr.to_raw(),
             "llm": self.llm.to_raw(),
             "assist": self.assist.to_raw(),
+            "integrations": self.integrations.to_raw(),
         }
 
 
 def migrate(raw: dict) -> dict:
     """Старый формат → текущая схема, в памяти.
 
-    v0 — файл без `version`: `post_record_hook` лежал на верхнем уровне, а
-    секция `auto_record` уже имела нынешний вид. Старые ключи оставляем в
-    словаре: `save()` их сохранит, а следующие версии смогут доложить миграции,
-    не потеряв то, чего не поняли.
+    Главное правило миграции: **у того, кто уже пользуется meet, поведение не
+    меняется**. Дефолты новой схемы рассчитаны на человека, который ставит
+    приложение впервые (пост-хук ничего не запускает, про регулярные встречи
+    ничего не знает), поэтому существующему конфигу мы явным образом
+    достраиваем то, что раньше было зашито в коде.
+
+    * v0 — файл без `version`: `post_record_hook` на верхнем уровне, зашитый
+      запуск Claude Code в Windows Terminal, окно дейлика 11:00–12:00.
+    * v1 — первая схема: то же, но флаг уже в `hooks.post_record`, а окно
+      называлось `daily_window`.
+
+    Старые ключи из словаря не выбрасываем: `save()` их сохранит, и файл
+    останется понятным предыдущей версии кода.
     """
     if not isinstance(raw, dict):
         return {}
-    if raw.get("version") == SCHEMA_VERSION:
+    version = raw.get("version")
+    if version == SCHEMA_VERSION:
         return raw
     migrated = dict(raw)
-    if "post_record_hook" in raw:
-        hooks = dict(_section(migrated, "hooks"))
+    hooks = dict(_section(migrated, "hooks"))
+    if "post_record_hook" in raw:  # v0
         hooks.setdefault("post_record", raw["post_record_hook"])
+    # Пустой конфиг мигрировать не от чего — это новая установка, и ей
+    # достаются новые дефолты, а не чужой сценарий из прошлого.
+    if raw:
+        hooks.setdefault("command", list(HISTORIC_HOOK_COMMAND))
+        hooks.setdefault("prompt", HISTORIC_HOOK_PROMPT)
+        hooks.setdefault("recurring_prompt", HISTORIC_RECURRING_PROMPT)
+        window = hooks.pop("daily_window", None)  # v1
+        hooks.setdefault(
+            "recurring_window", list(window) if window else list(HISTORIC_RECURRING_WINDOW)
+        )
         migrated["hooks"] = hooks
     return migrated
 
@@ -390,6 +536,14 @@ def save(settings: Settings, path: Path | None = None) -> None:
     os.replace(tmp, target)
 
 
+# Секции, которые умеет обновлять patch(). Выводятся из самой схемы, а не
+# перечислены руками: раньше список отставал (integrations добавили в схему, а
+# сюда забыли — и токен HF молча не сохранялся). `version` — не секция.
+PATCHABLE_SECTIONS = tuple(
+    name for name in Settings.__dataclass_fields__ if name != "version"
+)
+
+
 def patch(updates: dict, path: Path | None = None) -> Settings:
     """Точка для UI настроек: частичное обновление по секциям.
 
@@ -399,7 +553,7 @@ def patch(updates: dict, path: Path | None = None) -> Settings:
     """
     current = load(path)
     changed = {}
-    for name in ("auto_record", "hooks", "recording", "asr", "llm", "assist"):
+    for name in PATCHABLE_SECTIONS:
         section_update = updates.get(name)
         if not isinstance(section_update, dict):
             continue

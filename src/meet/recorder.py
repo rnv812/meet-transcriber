@@ -10,9 +10,15 @@ from pathlib import Path
 
 import pyaudiowpatch as pyaudio
 
+from meet import events
+
 # Битрейт Opus на дорожку: для речи 16 кГц моно 24 кбит/с на слух прозрачно,
 # а место — ~40x меньше несжатого стерео 48 кГц wav.
 OPUS_BITRATE = "24k"
+
+# Шаг разреженной выборки при замере уровня дорожки: на буфере 1024 кадра это
+# 32 сравнения вместо 1024. Уровень нужен метру в UI, а не измерению.
+LEVEL_STRIDE = 32
 
 LOCK_NAME = ".recording.lock"
 
@@ -174,13 +180,38 @@ def _make_converter(src_rate: int, src_ch: int, dst_rate: int, dst_ch: int):
     return convert
 
 
+def _peak(data: bytes, stride: int = LEVEL_STRIDE) -> float:
+    """Пиковый уровень 0..1 из int16-PCM по каждому stride-му сэмплу.
+
+    Зовётся из аудио-callback'а, поэтому: без аллокаций (memoryview.cast —
+    представление, а не копия), без numpy (минимальная установка для записи на
+    ноутбуке — только pyaudiowpatch, см. README) и без лока. Разреженная
+    выборка достаточна: метру в UI нужен масштаб, а не измерение.
+    """
+    if len(data) % 2:  # PCM16 всегда чётный, но битый буфер не должен падать
+        data = data[:-1]
+    samples = memoryview(data).cast("h")
+    peak = 0
+    for i in range(0, len(samples), stride):
+        value = samples[i]
+        if value < 0:
+            value = -value
+        if value > peak:
+            peak = value
+    return peak / 32768.0
+
+
 class _RecordLog:
     """Журнал записи — record.log рядом с дорожками, с дублированием в stdout.
     Файл нужен потому, что под meet-tray (pythonw) stdout'а нет и вся
     диагностика вотчдога иначе пропадает. Ошибки самого лога глотаются —
-    журнал не должен ронять запись."""
+    журнал не должен ронять запись.
 
-    def __init__(self, out_dir: Path) -> None:
+    Строки дублируются в шину событий (`kind: "log"`): UI показывает журнал
+    живьём, не вычитывая файл по таймеру."""
+
+    def __init__(self, out_dir: Path, bus=None) -> None:
+        self.bus = bus if bus is not None else events.EventBus()
         try:
             # buffering=1: строка на диске сразу — при жёстком убийстве
             # процесса теряется максимум последняя
@@ -193,6 +224,7 @@ class _RecordLog:
     def __call__(self, msg: str) -> None:
         line = f"[{datetime.now():%H:%M:%S}] {msg}"
         print(line, flush=True)  # под pythonw молча уходит в никуда — это ок
+        self.bus.emit(events.LOG, text=msg)
         if self._f is not None:
             try:
                 self._f.write(line + "\n")
@@ -303,12 +335,14 @@ class _Track:
     абсолютным таймкодам) остаётся корректным."""
 
     def __init__(self, fname: str, pick_device, role: int, out_dir: Path,
-                 log) -> None:
+                 log, bus=None) -> None:
         self.fname = fname
         self.pick = pick_device  # PyAudio -> device info (или исключение)
         self.role = role  # индекс в _DefaultEndpoints.ids(): 0 вывод, 1 ввод
         self.path = out_dir / fname
         self.log = log  # журнал записи (_RecordLog)
+        self.bus = bus if bus is not None else events.EventBus()
+        self.level = 0.0  # пик с прошлого опроса, см. take_level()
         self.stream = None
         self.device_name = None
         self.src_rate = None
@@ -340,11 +374,16 @@ class _Track:
             if not self._waiting:
                 self._waiting = True
                 self._log("устройство недоступно — жду (пауза уйдёт в тишину)")
+                self.bus.emit(events.RECORD_WAITING, track=self.fname)
             return False
         self._waiting = False
         self._log(
             f"запись возобновлена: {self.device_name} "
             f"({self.src_rate} Hz, {self.src_channels} ch)"
+        )
+        self.bus.emit(
+            events.RECORD_DEVICE, track=self.fname, device=self.device_name,
+            rate=self.src_rate, channels=self.src_channels, resumed=True,
         )
         return True
 
@@ -372,7 +411,20 @@ class _Track:
         if not self._stalled:
             self._stalled = True
             self._log(f"нет данных ~{gap:.0f} с — дополняю тишиной")
+            self.bus.emit(
+                events.RECORD_SILENCE, track=self.fname, gap_s=round(gap, 1)
+            )
         self._pad_silence()
+
+    def take_level(self) -> float:
+        """Пик уровня с прошлого опроса — и сброс.
+
+        Пишет аудио-callback, читает поток вотчдога; обе операции атомарны в
+        CPython, а лок здесь стоил бы дороже, чем неточность в один буфер на
+        границе опроса. Пик, а не мгновенное значение: при опросе дважды в
+        секунду мгновенный отсчёт пропускал бы речь между тактами."""
+        level, self.level = self.level, 0.0
+        return level
 
     def close_stream(self) -> None:
         stream, self.stream = self.stream, None
@@ -407,6 +459,9 @@ class _Track:
                     self.writer.write(data)
                     self.bytes_written += len(data)
                 self._stalled = False
+                peak = _peak(data)
+                if peak > self.level:
+                    self.level = peak
             except Exception as e:
                 self._log(f"ошибка в аудио-callback: {e!r} — стрим будет переоткрыт")
                 return (None, pyaudio.paAbort)
@@ -474,16 +529,18 @@ class _Session:
     считает ссылки), поэтому перезапуск всегда полный: закрыть оба стрима →
     terminate → свежий PyAudio → переоткрыть дорожки."""
 
-    def __init__(self, out_dir: Path) -> None:
+    def __init__(self, out_dir: Path, bus=None) -> None:
         self.p = None
-        self.log = _RecordLog(out_dir)
+        self.out_dir = out_dir
+        self.bus = bus if bus is not None else events.EventBus()
+        self.log = _RecordLog(out_dir, self.bus)
         self.endpoints = _DefaultEndpoints()
         self.ids = None  # ID дефолтных endpoint'ов на момент последнего запуска
         self.last_restart = 0.0
         self.retry_wait = RETRY_S  # растёт при безуспешных ретраях (backoff)
         self.tracks = (
-            _Track("sys.opus", _find_loopback, 0, out_dir, self.log),
-            _Track("mic.opus", _default_mic, 1, out_dir, self.log),
+            _Track("sys.opus", _find_loopback, 0, out_dir, self.log, self.bus),
+            _Track("mic.opus", _default_mic, 1, out_dir, self.log, self.bus),
         )
 
     def start(self) -> None:
@@ -498,6 +555,20 @@ class _Session:
                 f"{t.fname}: {t.device_name} "
                 f"({t.src_rate} Hz, {t.src_channels} ch)"
             )
+        self.bus.emit(
+            events.RECORD_STARTED,
+            folder=str(self.out_dir),
+            pid=os.getpid(),
+            tracks=[
+                {"track": t.fname, "device": t.device_name,
+                 "rate": t.src_rate, "channels": t.src_channels}
+                for t in self.tracks
+            ],
+        )
+
+    def levels(self) -> dict:
+        """Уровни дорожек с прошлого опроса — для метра в UI."""
+        return {t.fname: t.take_level() for t in self.tracks}
 
     def tick(self) -> None:
         for t in self.tracks:
@@ -529,6 +600,8 @@ class _Session:
             reason = "дорожка остановилась (устройство пропало?)"
         else:
             reason = None  # тихий ретрай ждущей дорожки
+        if reason:
+            self.bus.emit(events.RECORD_DEVICE, reason=reason, restart=True)
         self._restart(ids, reason)
 
     def close(self) -> None:
@@ -540,6 +613,16 @@ class _Session:
         self._terminate()
         self.endpoints.close()
         self.log("запись остановлена штатно")  # нет этой строки → процесс убили
+        # Длительность — от старта самой ранней открывшейся дорожки: столько и
+        # длится файл (паузы долиты тишиной). Дорожка, которая не открылась,
+        # держит started == 0.0 и в расчёт не идёт — иначе в длительность попало
+        # бы монотонное время машины.
+        started = [t.started for t in self.tracks if t.started]
+        self.bus.emit(
+            events.RECORD_STOPPED,
+            folder=str(self.out_dir),
+            duration_s=round(time.monotonic() - min(started), 1) if started else 0.0,
+        )
         self.log.close()
 
     def _restart(self, ids, reason) -> None:
@@ -581,12 +664,19 @@ class _Session:
                 self.log(f"PyAudio.terminate: {e!r}")
 
 
-def record(out_root: str, stop_event: "threading.Event | None" = None) -> Path:
+def record(out_root: str, stop_event: "threading.Event | None" = None,
+           bus=None) -> Path:
+    """Записать встречу двумя дорожками. `bus` — шина событий для UI: без неё
+    всё работает как раньше, только события уходят в никуда."""
     out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
     out_dir.mkdir(parents=True, exist_ok=True)
     lock = _acquire_lock(Path(out_root), out_dir)
 
-    session = _Session(out_dir)
+    session = _Session(out_dir, bus)
+    # Машинный двойник record.log рядом с дорожками: по нему экран диагностики
+    # разбирает запись после того, как она кончилась. Уровни в файл не идут.
+    sink = events.JsonlSink(out_dir / "events.jsonl")
+    unsubscribe = session.bus.subscribe(sink)
     try:
         session.start()
         print(f"Запись идёт... Остановить: Ctrl+C. Папка: {out_dir}")
@@ -597,10 +687,13 @@ def record(out_root: str, stop_event: "threading.Event | None" = None) -> Path:
                     session.tick()
                 except Exception as e:  # вотчдог не должен ронять запись
                     session.log(f"вотчдог: {e!r}")
+                session.bus.emit(events.RECORD_LEVEL, levels=session.levels())
         except KeyboardInterrupt:
             pass
     finally:
         session.close()
+        unsubscribe()
+        sink.close()
         lock.unlink(missing_ok=True)
 
     print(f"\nЗапись остановлена: {out_dir}")

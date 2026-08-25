@@ -49,7 +49,14 @@ class LiveEngine:
 
     def __init__(self, out_dir, transcriber, window_seconds: float = 20.0,
                  hotwords: str | None = None, clock=None,
-                 on_line=None, voice_matcher=None) -> None:
+                 on_line=None, voice_matcher=None, speaker_name=None) -> None:
+        # Имя владельца микрофона — из настроек, как и в офлайн-проходе, чтобы
+        # живая лента и точный транскрипт называли человека одинаково.
+        if speaker_name is None:
+            from meet import settings
+
+            speaker_name = settings.load().recording.speaker_name
+        self.SPEAKERS = {**LiveEngine.SPEAKERS, "mic.wav": speaker_name}
         self.out_dir = Path(out_dir)
         self._transcriber = transcriber
         self.window_seconds = window_seconds

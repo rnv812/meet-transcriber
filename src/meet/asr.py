@@ -4,10 +4,24 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Русский fine-tune large-v3 (CT2-конвертация antony66/whisper-large-v3-russian),
-# тот же чекпойнт, что в проекте voice-control: заметно ниже WER на русском, чем
-# стоковая large-v3. WhisperModel сам скачает репозиторий с HuggingFace.
+# Русский fine-tune large-v3 (CT2-конвертация antony66/whisper-large-v3-russian):
+# заметно ниже WER на русском, чем стоковая large-v3. WhisperModel сам скачает
+# репозиторий с HuggingFace. Это дефолт настройки `asr.model`, а не константа
+# пайплайна: язык и модель выбираются в настройках.
 MODEL_NAME = "bzikst/faster-whisper-large-v3-russian"
+DEFAULT_LANGUAGE = "ru"
+
+
+def _asr_settings() -> tuple[str, str]:
+    """Модель и язык из настроек. Импорт отложенный: meet.settings берёт отсюда
+    дефолт модели, и импорт на уровне модуля замкнул бы круг."""
+    try:
+        from meet import settings
+
+        cfg = settings.load().asr
+        return cfg.model or MODEL_NAME, cfg.language or DEFAULT_LANGUAGE
+    except Exception:  # настройки не должны мешать расшифровке
+        return MODEL_NAME, DEFAULT_LANGUAGE
 
 
 @dataclass
@@ -41,6 +55,28 @@ def _add_nvidia_dll_dirs() -> None:
     for sp in site.getsitepackages():
         for bin_dir in (Path(sp) / "nvidia").glob("*/bin"):
             os.add_dll_directory(str(bin_dir))
+
+
+def _apply_hf_token() -> None:
+    """Пробросить токен HF в окружение до загрузки модели.
+
+    faster-whisper качает веса своим huggingface_hub и наш токен не принимает
+    параметром — берёт из окружения. Без него HF шлёт предупреждение и режет
+    скорость загрузки. Ставим только если переменной ещё нет: явный env
+    приоритетнее настройки."""
+    import os
+
+    if os.environ.get("HF_TOKEN"):
+        return
+    try:
+        from meet import models
+
+        token = models.token()
+        if token:
+            os.environ["HF_TOKEN"] = token
+            os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", token)
+    except Exception:
+        pass
 
 
 def _segments_from_whisper(raw_segments, offset_s: float = 0.0) -> list[Segment]:
@@ -129,24 +165,37 @@ def drop_hallucinations(
     return kept
 
 
-def transcribe_wav(path: Path, hotwords: str | None = None) -> list[Segment]:
-    """Распознать русскую речь; при нехватке видеопамяти — квантованная модель.
+def transcribe_wav(
+    path: Path,
+    hotwords: str | None = None,
+    *,
+    model_name: str | None = None,
+    language: str | None = None,
+) -> list[Segment]:
+    """Распознать речь; при нехватке видеопамяти — квантованная модель.
+
+    Модель и язык по умолчанию берутся из настроек (русский fine-tune и `ru`),
+    но задаются и параметрами: вызывающий может знать лучше.
 
     Пословные таймкоды нужны для точной привязки спикеров.
     condition_on_previous_text оставлен включённым (по умолчанию): проверка
     на реальной встрече показала, что без него пунктуация и термины заметно
     деградируют, а зацикливаний и так не было благодаря vad_filter."""
     _add_nvidia_dll_dirs()
+    _apply_hf_token()
     from faster_whisper import WhisperModel
 
+    default_model, default_language = _asr_settings()
+    model_name = model_name or default_model
+    language = language or default_language
     last_error: Exception | None = None
     for compute_type in ("float16", "int8_float16"):
         try:
-            model = WhisperModel(MODEL_NAME, device="cuda", compute_type=compute_type)
+            model = WhisperModel(model_name, device="cuda", compute_type=compute_type)
             print(f"Распознавание ({compute_type})...")
             segments, _ = model.transcribe(
                 str(path),
-                language="ru",
+                language=language,
                 vad_filter=True,
                 word_timestamps=True,
                 hotwords=hotwords,
@@ -169,19 +218,24 @@ class Transcriber:
     """Резидентная модель Whisper для живого режима: грузится один раз,
     расшифровывает окна аудио без перезагрузки на каждый вызов."""
 
-    def __init__(self) -> None:
+    def __init__(self, model_name: str | None = None,
+                 language: str | None = None) -> None:
         self._model = None
         self.compute_type: str | None = None
+        default_model, default_language = _asr_settings()
+        self.model_name = model_name or default_model
+        self.language = language or default_language
 
     def load(self) -> None:
         _add_nvidia_dll_dirs()
+        _apply_hf_token()
         from faster_whisper import WhisperModel
 
         last_error: Exception | None = None
         for compute_type in ("float16", "int8_float16"):
             try:
                 self._model = WhisperModel(
-                    MODEL_NAME, device="cuda", compute_type=compute_type
+                    self.model_name, device="cuda", compute_type=compute_type
                 )
                 self.compute_type = compute_type
                 print(f"Модель загружена ({compute_type})")
@@ -208,7 +262,7 @@ class Transcriber:
             raise RuntimeError("Transcriber.load() не был вызван")
         segments, _ = self._model.transcribe(
             audio,
-            language="ru",
+            language=self.language,
             vad_filter=True,
             word_timestamps=True,
             hotwords=hotwords,

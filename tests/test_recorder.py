@@ -115,13 +115,22 @@ def test_unclosed_file_has_streamable_header(tmp_path):
 def _finished_pid() -> int:
     """PID уже завершившегося процесса. Именно subprocess.run, не Popen:
     Popen держит хэндл процесса, и Windows сохраняет объект процесса живым
-    (OpenProcess на «мёртвый» pid сработал бы) — run() закрывает хэндл."""
+    (OpenProcess на «мёртвый» pid сработал бы) — run() закрывает хэндл.
+
+    IMPORTANT: после выхода объект процесса освобождается не мгновенно, и
+    OpenProcess ещё несколько миллисекунд отдаёт хэндл на завершившийся pid.
+    Поэтому ждём здесь, а не в каждом тесте: иначе они флейкают в общем прогоне.
+    """
     out = subprocess.run(
         [sys.executable, "-c", "import os; print(os.getpid())"],
         capture_output=True,
         text=True,
     )
-    return int(out.stdout.strip())
+    pid = int(out.stdout.strip())
+    deadline = time.monotonic() + 2.0
+    while _pid_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return pid
 
 
 def test_pid_alive_for_self():
@@ -129,6 +138,7 @@ def test_pid_alive_for_self():
 
 
 def test_pid_alive_for_dead_process():
+    # ожидание освобождения объекта процесса — внутри _finished_pid
     assert _pid_alive(_finished_pid()) is False
 
 
@@ -596,3 +606,118 @@ def test_opus_writer_spawns_ffmpeg_without_console_window(monkeypatch):
     monkeypatch.setattr(recorder.subprocess, "Popen", fake_popen)
     recorder.OpusWriter(Path("x.opus"), channels=1, rate=16000)
     assert captured["creationflags"] & recorder.subprocess.CREATE_NO_WINDOW
+
+
+# --- уровни дорожек и события для UI ---
+
+
+def test_peak_scales_int16_to_unit():
+    loud = struct.pack("<4h", 32767, -32768, 0, 0)
+    assert recorder._peak(loud, stride=1) == pytest.approx(1.0, abs=0.001)
+
+
+def test_peak_of_silence_is_zero():
+    assert recorder._peak(b"\x00\x00" * 512) == 0.0
+
+
+def test_peak_survives_odd_buffer():
+    # битый буфер не должен ронять аудио-callback
+    assert recorder._peak(b"\x00\x01\x00") >= 0.0
+
+
+def test_peak_reads_sparsely():
+    # шаг выборки пропускает сэмплы между отсчётами — это осознанный компромисс:
+    # метру нужен масштаб, а callback'у дешевизна
+    data = struct.pack("<4h", 0, 32767, 0, 0)
+    assert recorder._peak(data, stride=4) == 0.0
+
+
+def test_callback_updates_track_level(tmp_path, monkeypatch):
+    s = _session(monkeypatch, tmp_path)
+    mic = s.tracks[1]
+    assert mic.level == 0.0
+    mic.stream.pump(struct.pack("<2h", 16000, -16000))
+    assert mic.level > 0.4
+
+
+def test_take_level_returns_peak_and_resets(tmp_path):
+    t = _bare_track(tmp_path)
+    t.level = 0.7
+    assert t.take_level() == 0.7
+    assert t.take_level() == 0.0  # пик за интервал, а не накопленный максимум
+
+
+def test_session_levels_snapshot_both_tracks(tmp_path, monkeypatch):
+    s = _session(monkeypatch, tmp_path)
+    s.tracks[0].level = 0.3
+    assert s.levels() == {"sys.opus": 0.3, "mic.opus": 0.0}
+
+
+def test_log_lines_mirror_to_bus(tmp_path):
+    bus = recorder.events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    log = recorder._RecordLog(tmp_path, bus)
+    log("строка журнала")
+    log.close()
+    assert [e.data["text"] for e in seen] == ["строка журнала"]
+
+
+def test_record_emits_started_and_stopped(tmp_path, monkeypatch):
+    _fake_audio(monkeypatch)
+    bus = recorder.events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    ev = threading.Event()
+    ev.set()
+    out_dir = record(str(tmp_path), stop_event=ev, bus=bus)
+    kinds = [e.kind for e in seen]
+    assert kinds.index("record.started") < kinds.index("record.stopped")
+    started = next(e for e in seen if e.kind == "record.started")
+    assert started.data["folder"] == str(out_dir)
+    assert {t["track"] for t in started.data["tracks"]} == {"sys.opus", "mic.opus"}
+    stopped = next(e for e in seen if e.kind == "record.stopped")
+    # длительность не должна быть монотонным временем машины (дорожки только что
+    # открылись, у неоткрытых started == 0.0)
+    assert 0.0 <= stopped.data["duration_s"] < 60.0
+
+
+def test_record_writes_events_jsonl_next_to_tracks(tmp_path, monkeypatch):
+    _fake_audio(monkeypatch)
+    ev = threading.Event()
+    ev.set()
+    out_dir = record(str(tmp_path), stop_event=ev)
+    lines = (out_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    kinds = [json.loads(x)["kind"] for x in lines]
+    assert "record.started" in kinds and "record.stopped" in kinds
+    assert "record.level" not in kinds  # уровни в историю не пишем
+
+
+def test_device_migration_emits_event(tmp_path, monkeypatch):
+    bus = recorder.events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    _fake_audio(monkeypatch)
+    s = recorder._Session(tmp_path, bus)
+    s.start()
+    _FakePyAudio.devices["capture"] = _dev("Наушники")
+    s.tick()
+    s.close()
+    device = [e for e in seen if e.kind == "record.device"]
+    assert any(e.data.get("reason") for e in device)  # причина перезапуска
+    assert any(e.data.get("device") == "Наушники" for e in device)  # и возобновление
+
+
+def test_silence_padding_emits_event_once(tmp_path):
+    bus = recorder.events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    t = recorder._Track("mic.opus", lambda p: None, 1, tmp_path,
+                        log=lambda m: None, bus=bus)
+    t.writer = _DummyWriter("x", 1, 16000)
+    t.rate, t.channels = 16000, 1
+    t.started = time.monotonic() - 5.0
+    t.tick_pad()
+    t.tick_pad()  # повторный такт того же простоя не должен спамить событиями
+    silence = [e for e in seen if e.kind == "record.silence"]
+    assert len(silence) == 1 and silence[0].data["gap_s"] >= 4.0

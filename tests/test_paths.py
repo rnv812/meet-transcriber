@@ -80,3 +80,30 @@ def test_all_paths_absolute(monkeypatch, tmp_path):
         paths.engine_dir(),
     ):
         assert isinstance(value, Path) and value.is_absolute()
+
+
+def test_watch_log_follows_data_dir(monkeypatch, tmp_path):
+    """Журнал дежурного — единственный файл, который раньше не слушался
+    MEET_DATA_DIR: изолированный прогон писал его в чужое место."""
+    from meet import watch
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "portable"))
+    assert watch.default_log_path() == tmp_path / "portable" / "watch.log"
+
+
+def test_watch_log_keeps_historic_place_without_override(monkeypatch, tmp_path):
+    from meet import watch
+
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert watch.default_log_path() == tmp_path / "meet" / "watch.log"
+
+
+def test_gpu_lock_follows_data_dir(monkeypatch, tmp_path):
+    """gpu.lock — публичный контракт с voice-control: путь обязан остаться тем
+    же в обычном запуске."""
+    from meet import gpu_lock
+
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert gpu_lock.lock_path() == tmp_path / "meet" / "gpu.lock"

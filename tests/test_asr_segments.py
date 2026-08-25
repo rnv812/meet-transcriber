@@ -75,3 +75,21 @@ def test_drop_hallucinations_drops_thanks_for_watching():
 def test_drop_hallucinations_keeps_benign_subtitles_mention():
     seg = Segment(0, 1, "Субтитры мы пока не делали.", no_speech_prob=0.2, avg_logprob=-0.3)
     assert drop_hallucinations([seg]) == [seg]
+
+
+def test_model_and_language_come_from_settings(monkeypatch, tmp_path):
+    """Русская модель — дефолт настройки, а не константа пайплайна."""
+    import json
+
+    from meet.asr import DEFAULT_LANGUAGE, MODEL_NAME, _asr_settings
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "пусто"))
+    assert _asr_settings() == (MODEL_NAME, DEFAULT_LANGUAGE)
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "state" / "config.json").write_text(
+        json.dumps({"asr": {"model": "ggml-large-v3", "language": "en"}}),
+        encoding="utf-8",
+    )
+    assert _asr_settings() == ("ggml-large-v3", "en")

@@ -164,3 +164,111 @@ def test_transcribe_single_no_overlap_goes_exclusive(monkeypatch, tmp_path):
     calls = _run_single_capturing(monkeypatch, tmp_path, overlap=False)
     assert calls["exclusive"] is True
     assert calls["overlaps"] is None
+
+
+# --- прогресс по ступеням пайплайна ---
+
+
+def _progress_stages(monkeypatch, tmp_path, folder=False, align=False):
+    """Прогнать пайплайн с заглушками и снять последовательность ступеней."""
+    import meet.transcribe as tr
+    from meet import events
+
+    monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
+    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h: [Segment(0.0, 1.0, "а")])
+    monkeypatch.setattr(
+        tr, "diarize_wav",
+        lambda p, num_speakers=None, exclusive=False: Diarization(turns=[]),
+    )
+    monkeypatch.setattr(tr, "split_by_speaker", lambda s, t, o=None: s)
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
+
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    if folder:
+        (tmp_path / "sys.opus").write_bytes(b"x")
+        (tmp_path / "mic.opus").write_bytes(b"x")
+        tr.transcribe(str(tmp_path), align=align, bus=bus)
+    else:
+        src = tmp_path / "a.wav"
+        src.write_bytes(b"x")
+        tr.transcribe(str(src), align=align, bus=bus)
+    return [e.data["stage"] for e in seen if e.kind == "progress"], seen
+
+
+def test_progress_reports_pipeline_order_for_folder(monkeypatch, tmp_path):
+    stages, _ = _progress_stages(monkeypatch, tmp_path, folder=True)
+    # порядок ступеней, как их проходит двухдорожечный пайплайн
+    assert stages[0] == "convert" and stages[-1] == "render"
+    assert stages.index("diarize") < stages.index("voices")
+    assert "asr" in stages
+
+
+def test_progress_skips_align_when_disabled(monkeypatch, tmp_path):
+    stages, _ = _progress_stages(monkeypatch, tmp_path, folder=True, align=False)
+    assert "align" not in stages
+
+
+def test_progress_reports_align_when_enabled(monkeypatch, tmp_path):
+    stages, _ = _progress_stages(monkeypatch, tmp_path, folder=True, align=True)
+    assert "align" in stages
+
+
+def test_progress_counts_both_tracks(monkeypatch, tmp_path):
+    _, seen = _progress_stages(monkeypatch, tmp_path, folder=True)
+    convert = [e for e in seen if e.data.get("stage") == "convert"]
+    assert convert[0].data["total"] == 2  # sys и mic
+    assert convert[-1].data["done"] == 2
+
+
+def test_progress_final_event_names_result(monkeypatch, tmp_path):
+    _, seen = _progress_stages(monkeypatch, tmp_path, folder=True)
+    last = [e for e in seen if e.data.get("stage") == "render"][-1]
+    assert last.data["note"].endswith("_transcript.md")
+
+
+def test_single_file_progress_has_one_track(monkeypatch, tmp_path):
+    _, seen = _progress_stages(monkeypatch, tmp_path, folder=False)
+    convert = [e for e in seen if e.data.get("stage") == "convert"]
+    assert convert[0].data["total"] == 1
+
+
+def test_transcribe_works_without_bus(monkeypatch, tmp_path):
+    """Шина необязательна: CLI зовёт transcribe как раньше."""
+    stages, _ = _progress_stages(monkeypatch, tmp_path, folder=True)
+    assert stages  # заглушки те же, но вызов без bus проверяем отдельно
+    import meet.transcribe as tr
+
+    src = tmp_path / "b.wav"
+    src.write_bytes(b"x")
+    assert tr.transcribe(str(src), align=False).suffix == ".md"
+
+
+# --- имя владельца микрофона ---------------------------------------------
+
+
+def test_mic_track_uses_speaker_name_from_settings(monkeypatch, tmp_path):
+    """«Вы» — дефолт, а не константа: кому-то удобнее собственное имя."""
+    import json
+
+    import meet.transcribe as tr
+    from meet.asr import Segment as Seg
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "state" / "config.json").write_text(
+        json.dumps({"recording": {"speaker_name": "Алексей"}}), encoding="utf-8"
+    )
+    monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
+    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h: [Seg(0.0, 1.0, "а")])
+    monkeypatch.setattr(
+        tr, "diarize_wav",
+        lambda p, num_speakers=None, exclusive=False: Diarization(turns=[]),
+    )
+    monkeypatch.setattr(tr, "split_by_speaker", lambda s, t, o=None: s)
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
+    (tmp_path / "sys.opus").write_bytes(b"x")
+    (tmp_path / "mic.opus").write_bytes(b"x")
+    segments, _, _ = tr._transcribe_two_track(tmp_path, None, None, align=False)
+    assert any(seg.speaker == "Алексей" for seg in segments)

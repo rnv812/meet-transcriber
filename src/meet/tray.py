@@ -1,5 +1,5 @@
 """Трей записи встреч: резидент, который сам поднимает запись на звонке в
-Дионе и сам её останавливает, когда звонок кончился.
+клиенте конференций и сам её останавливает, когда звонок кончился.
 
 Дежурит с серой иконкой, на записи — синяя с секундомером и пунктами
 «Остановить запись» / «Отменить (удалить)». Ярлык на рабочем столе запускает
@@ -23,34 +23,30 @@ import threading
 import time
 from pathlib import Path
 
-from meet import paths, settings, watch
+from meet import events, paths, settings, watch
 from meet.output import fmt_ts
 from meet.recorder import LOCK_NAME, _pid_alive, record
+from meet.tray_control import AUTO, MANUAL, TrayControl
 
 # Куда писать по умолчанию: из репозитория — его `recordings/` (ярлык
 # запускается с произвольным cwd), из установленного приложения — data_dir.
 # Осознанный выбор пользователя живёт в настройках, см. _out_root().
 OUT_ROOT = paths.default_recordings_dir()
 
-# окно старта записи, в котором встреча похожа на дейлик (сам дейлик в 11-30)
-DAILY_WINDOW = settings.DEFAULT_DAILY_WINDOW
-
 IDLE_COLOR = (130, 130, 130, 255)  # дежурю
 REC_COLOR = (40, 110, 220, 255)  # пишу
 HEARTBEAT_S = 60.0
 TICK_S = 1.0
-# Короче этого автозапись считается ложной тревогой (звук уведомления Диона,
-# отклонённый вызов) и Claude на неё не зовут: папка остаётся, но окна с
-# предложением транскрибировать полминуты тишины не появляется. Длительность
+# Короче этого автозапись считается ложной тревогой (звук уведомления,
+# отклонённый вызов), и пост-хук на неё не зовут: папка остаётся, но окна с
+# предложением расшифровать полминуты тишины не появляется. Длительность
 # берётся по звонку, а не по файлу: в файле всегда есть ещё и грейс.
-MIN_CALL_S = 120.0
+# Значение — дефолт настройки auto_record.min_call_seconds.
+MIN_CALL_S = settings.DEFAULT_MIN_CALL_S
 # Пауза перед повторной попыткой автозаписи после сорвавшегося старта: без неё
 # трей долбился бы в занятое устройство каждые poll_seconds и засыпал бы
 # уведомлениями, а без повтора вовсе — потерял бы встречу целиком.
 RETRY_AFTER_S = 30.0
-
-AUTO = "auto"
-MANUAL = "manual"
 
 
 def _state_dir() -> Path:
@@ -165,15 +161,19 @@ def _drop_command() -> None:
         pass
 
 
-def _in_daily_window(folder: str, window: tuple[str, str] | None = None) -> bool:
-    """Похоже ли время записи (из имени папки YYYY-MM-DD_HH-MM) на слот дейлика.
+def _in_recurring_window(folder: str, window: tuple[str, str] | None) -> bool:
+    """Похоже ли время записи (из имени папки YYYY-MM-DD_HH-MM) на слот
+    регулярной встречи.
 
-    Только гипотеза для промпта — что за встреча на самом деле, решает
-    календарь; см. скилл transcriber (режим дейлика)."""
+    Окно задаётся настройкой и по умолчанию не задано вовсе: у каждого свои
+    регулярные встречи, а у кого-то их нет. Это только гипотеза для подсказки —
+    что за встреча на самом деле, решает календарь."""
+    if not window:
+        return False
     m = re.search(r"_(\d{2})-(\d{2})$", Path(folder).name)
     if not m:
         return False
-    lo, hi = window or _settings().hooks.daily_window
+    lo, hi = window
     return lo <= f"{m.group(1)}:{m.group(2)}" <= hi
 
 
@@ -187,48 +187,70 @@ def _wt_safe(text: str) -> str:
     return text.replace(";", ",").replace("'", "''")
 
 
-def _launch_claude(folder: str) -> None:
-    """Post-recording hook: окно терминала с Claude Code, который предлагает
-    транскрибировать свежую запись. Включается флагом post_record_hook в
-    config.json — на ноуте он выключен: транскрибация идёт на десктопе, куда
-    запись потом забирают. Best effort: проблемы запуска не должны мешать
-    завершению записи."""
+def _hook_prompt(folder: str, hooks) -> str:
+    """Текст-подсказка для команды пост-хука."""
+    prompt = hooks.prompt.replace("{folder}", folder)
+    if _in_recurring_window(folder, hooks.recurring_window):
+        prompt += hooks.recurring_prompt
+    return prompt
+
+
+def _hook_argv(folder: str, hooks) -> list[str]:
+    """Команда пост-хука с подставленными плейсхолдерами.
+
+    Подстановка идёт в каждый аргумент по отдельности, и запуск — без шелла:
+    команда из конфига не должна превращаться в исполняемую строку. Текст
+    промпта дополнительно обезврежен `_wt_safe` — он может попасть внутрь
+    кавычек чужой командной строки."""
+    date = Path(folder).name.split("_")[0]
+    # Папка, из которой открывается команда: корень репозитория, где лежат
+    # скрипты. Из установленного приложения репозитория нет — тогда родитель
+    # папки записей (лучше, чем ничего: там сама запись).
+    project = str(paths.repo_root() or _out_root().parent)
+    values = {
+        "{folder}": folder,
+        "{project}": project,
+        "{date}": date,
+        "{prompt}": _wt_safe(_hook_prompt(folder, hooks)),
+    }
+    argv = []
+    for part in hooks.command:
+        for key, value in values.items():
+            part = part.replace(key, value)
+        argv.append(part)
+    return argv
+
+
+def _run_post_hook(folder: str) -> None:
+    """Пост-хук: запустить команду из настроек по окончании записи.
+
+    Раньше здесь был зашит один сценарий — окно Windows Terminal с Claude Code.
+    Теперь это шаблон: у нового пользователя команда пуста и не запускается
+    ничего, а у того, кто пользовался хуком раньше, миграция настроек оставила
+    прежнюю команду. Best effort: проблемы запуска не должны мешать завершению
+    записи."""
     hooks = _settings().hooks
-    if not hooks.post_record:
+    if not hooks.post_record or not hooks.command:
         return
-    prompt = (
-        f"Завершилась запись встречи, папка: {folder}. "
-        "Предложи транскрибировать её скиллом my-plugin:transcriber."
-    )
-    if _in_daily_window(folder, hooks.daily_window):
-        prompt += (
-            " Время похоже на слот дейлика — сверься с календарём "
-            "(scripts/calendar_lookup.ps1) и, если это дейлик, веди его "
-            "режимом дейлика из того же скилла; другую встречу в этом "
-            "слоте — обычным режимом."
-        )
-    # Папка, из которой открывается Claude Code: корень репозитория, где лежат
-    # скрипты и скиллы. Из установленного приложения репозитория нет — тогда
-    # родитель папки записей (лучше, чем ничего: там сама запись).
-    project_root = paths.repo_root() or _out_root().parent
     try:
-        # powershell с профилем: там proxy-переменные; -NoExit — не закрывать
-        # окно при ошибке. claude напрямую, не через шорткат cc: у CLI один
-        # позиционный промпт, и "/color red" внутри cc вытесняет наш.
-        # Промпт в одинарных кавычках PS, метасимволы — через _wt_safe
-        subprocess.Popen(
-            [
-                "wt",
-                "-d",
-                str(project_root),
-                "powershell",
-                "-NoExit",
-                "-Command",
-                f"claude --permission-mode auto '{_wt_safe(prompt)}'",
-            ]
-        )
+        subprocess.Popen(_hook_argv(folder, hooks))
     except OSError:
         pass
+
+
+class _BusLog:
+    """Журнал дежурного с дублированием строк в шину событий.
+
+    Панель показывает решения детектора живьём, не вычитывая `watch.log` по
+    таймеру. Файл остаётся первоисточником — сюда только копия."""
+
+    def __init__(self, log, bus) -> None:
+        self._log = log
+        self._bus = bus
+
+    def __call__(self, msg: str) -> None:
+        self._log(msg)
+        self._bus.emit(events.LOG, text=msg, source="watch")
 
 
 def _icon_image(color=REC_COLOR):
@@ -259,7 +281,11 @@ class TrayApp:
 
     def __init__(self, start_now: bool = False) -> None:
         self.cfg = _auto_config()
-        self.log = watch.WatchLog(watch.default_log_path())
+        # Шина событий: по ней панель видит запись живьём (уровни дорожек,
+        # решения дежурного, ступени расшифровки). Без подписчиков publish —
+        # пустой цикл, так что на работу без UI она не влияет.
+        self.bus = events.EventBus()
+        self.log = _BusLog(watch.WatchLog(watch.default_log_path()), self.bus)
         self.watcher = watch.Watcher(self.cfg["grace_seconds"])
         self.signals = watch.Signals(self.cfg["processes"], log=self.log)
         self.icon = None
@@ -307,7 +333,9 @@ class TrayApp:
 
     def _run_record(self, result: dict, stop_event: threading.Event) -> None:
         try:
-            result["folder"] = record(str(_out_root()), stop_event=stop_event)
+            result["folder"] = record(
+                str(_out_root()), stop_event=stop_event, bus=self.bus
+            )
         except BaseException as e:  # и SystemExit «запись уже идёт»
             result["error"] = str(e) or repr(e)
 
@@ -346,8 +374,12 @@ class TrayApp:
                 thread.join(timeout=60)
             self.recording = False
             source, self.source = self.source, None
-            self.thread = None
             alive = thread is not None and thread.is_alive()
+            # Обнуляем ссылку только если поток действительно завершился. Иначе
+            # доживающий поток (join истёк за 60 с — ffmpeg ещё финализирует)
+            # стал бы невидим для _clear_own_lock, и тот снял бы ещё рабочий
+            # lock, пустив вторую запись в ту же папку.
+            self.thread = None if not alive else thread
         folder = result.get("folder")
         if folder is None and alive:
             # поток жив и дописывает дорожки — данные целы, просто ещё не наши
@@ -366,11 +398,15 @@ class TrayApp:
             gone = not Path(folder).exists()
             self.log(f"запись отменена, папка {'удалена' if gone else 'удалена не до конца'}: {folder}")
             self._notify(f"{'Удалено' if gone else 'Удалено частично'}: {folder}")
+            # Отдельное событие после удаления: recorder уже отправил
+            # record.stopped{folder} (он про discard не знает), и панель успела
+            # предложить расшифровать уже удалённую папку. Это отменяет предложение.
+            self.bus.emit(events.RECORD_DISCARDED, folder=str(folder))
         else:
             self.log(f"запись остановлена ({source}): {folder}")
             self._notify(f"Сохранено: {folder}")
             if hook:
-                _launch_claude(str(folder))
+                _run_post_hook(str(folder))
             else:
                 self.log("звонок был короткий — Claude не зову, папка осталась")
         self._refresh()
@@ -553,7 +589,7 @@ class TrayApp:
             return
         call_seconds = (self._call_end or now) - self.started
         self.log(f"звонок кончился ({call_seconds:.0f} с) — останавливаю запись")
-        self.stop_recording(hook=call_seconds >= MIN_CALL_S)
+        self.stop_recording(hook=call_seconds >= self.cfg["min_call_seconds"])
 
     # --- UI -------------------------------------------------------------
 
@@ -607,11 +643,45 @@ class TrayApp:
         self.icon = pystray.Icon(
             "meet-record", _icon_image(IDLE_COLOR), "Жду встречу", menu=menu
         )
+        api = self._start_control_api()
         try:
             self.icon.run(setup=self.ticker)
         finally:
             self._alive = False
+            if api is not None:
+                # Гасим очередь задач раньше сервера: иначе идущая расшифровка
+                # (подпроцесс job_worker) осиротеет, продолжая держать VRAM и
+                # gpu.lock, невидимая для очереди перезапущенного резидента.
+                try:
+                    api.state.queue.stop()
+                except Exception:
+                    pass
+                api.stop(pid=os.getpid())
             self._release_lock(lock)
+
+    def _start_control_api(self):
+        """Поднять control API для панели и окна настроек.
+
+        Best effort: запись важнее панели. Не поднялся (порт занят, что-то ещё)
+        — пишем строку в журнал и работаем как раньше, без UI."""
+        from meet import control
+
+        try:
+            # Фиксированный порт + постоянный токен: адрес API не меняется между
+            # перезапусками, UI не дёргает переподключение. fallback — откат на
+            # эфемерный, если предпочтительный порт занят.
+            server = control.ControlServer(
+                TrayControl(self),
+                port=control.PREFERRED_PORT,
+                token=control.persisted_token(),
+                log=self.log,
+                fallback=True,
+            )
+            server.start(pid=os.getpid())
+            return server
+        except Exception as e:
+            self.log(f"control API не поднялся ({e!r}) — работаю без панели")
+            return None
 
     def _release_lock(self, lock: Path) -> None:
         """Снять свой lock — но только свой: за время работы его мог перехватить

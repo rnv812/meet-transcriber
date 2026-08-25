@@ -3,7 +3,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from meet import paths
+from meet import events, paths
 from meet.asr import Segment, transcribe_wav
 from meet.audio import to_wav16k
 from meet.diarize import diarize_wav, split_by_speaker
@@ -144,32 +144,64 @@ def transcribe(
     hotwords: str | None = None,
     align: bool = True,
     overlap: bool = True,
+    bus=None,
 ) -> Path:
+    """Расшифровать папку записи или отдельный файл.
+
+    `bus` — шина событий: ступени пайплайна уходят в неё как `progress`, чтобы
+    UI показывал, на чём стоим. Без шины поведение прежнее (печать в stdout).
+    """
     path = Path(path_str)
     if not path.exists():
         raise SystemExit(f"Не найдено: {path}")
 
+    bus = bus if bus is not None else events.EventBus()
     hotwords = _load_hotwords(hotwords)
 
     if path.is_dir():
         segments, diar, name_map = _transcribe_two_track(
-            path, speakers, hotwords, align, overlap
+            path, speakers, hotwords, align, overlap, bus
         )
         iso, dmy = _folder_dates(path.name)
         out_md = path / f"{iso}_transcript.md"
         title = f"Встреча — {dmy}"
     else:
         segments, diar, name_map = _transcribe_single(
-            path, speakers, hotwords, align, overlap
+            path, speakers, hotwords, align, overlap, bus
         )
         iso, dmy = _file_dates(path)
         out_md = path.with_suffix(".md")
         title = f"{path.stem} — {dmy}"
 
+    bus.progress("render")
     out_md.write_text(to_markdown(title, segments, iso), encoding="utf-8")
     _write_sidecar(out_md, path, iso, segments, diar, name_map)
+    _write_structured(path, segments, title, name_map)
     print(f"Готово: {out_md}")
+    bus.progress("render", done=1, total=1, note=str(out_md))
     return out_md
+
+
+def _write_structured(path: Path, segments, title: str, name_map: dict) -> None:
+    """`transcript.json` рядом с записью — структурный источник для редактора.
+
+    Markdown остаётся человеческим артефактом и форматом экспорта, но править
+    в редакторе реплики и имена по разметке — гадание; здесь те же данные, что
+    видит человек, но в виде данных. Пишем только для папки записи: у одиночного
+    файла нет своей папки, и класть json рядом с чужим видео некрасиво."""
+    if not path.is_dir():
+        return
+    from meet import library
+
+    try:
+        library.write_transcript(
+            path,
+            library.segments_to_raw(
+                segments, speakers=name_map, title=title, source=str(path)
+            ),
+        )
+    except OSError as e:  # транскрипт уже написан — это не повод падать
+        print(f"structured: не записал transcript.json ({e})")
 
 
 def _write_sidecar(out_md, path, iso, segments, diar, name_map) -> None:
@@ -205,12 +237,22 @@ def _transcribe_single(
     hotwords: str | None,
     align: bool = True,
     overlap: bool = True,
+    bus=None,
 ):
+    bus = bus if bus is not None else events.EventBus()
     with tempfile.TemporaryDirectory() as td:
+        bus.progress("convert", done=0, total=1)
         wav = to_wav16k(src, Path(td) / "audio16.wav")
+        bus.progress("convert", done=1, total=1)
+        bus.progress("asr", done=0, total=1)
         segments = transcribe_wav(wav, hotwords)
+        bus.progress("asr", done=1, total=1)
+        if align:
+            bus.progress("align")
         segments = _maybe_align(segments, wav, align)
+        bus.progress("diarize")
         diar = diarize_wav(wav, num_speakers=speakers, exclusive=not overlap)
+        bus.progress("voices")
         name_map = _match_names(diar)
         segments = split_by_speaker(
             segments, _apply_names(diar.turns, name_map), diar.overlaps
@@ -224,22 +266,40 @@ def _transcribe_two_track(
     hotwords: str | None,
     align: bool = True,
     overlap: bool = True,
+    bus=None,
 ):
+    bus = bus if bus is not None else events.EventBus()
     sys_src, mic_src = _find_track(folder, "sys"), _find_track(folder, "mic")
     if not (sys_src and mic_src):
         raise SystemExit(f"В {folder} нет дорожек sys/mic")
     with tempfile.TemporaryDirectory() as td:
+        bus.progress("convert", done=0, total=2)
         sys_wav = to_wav16k(sys_src, Path(td) / "sys16.wav", normalize=True)
+        bus.progress("convert", done=1, total=2, note="sys")
         mic_wav = to_wav16k(mic_src, Path(td) / "mic16.wav")
+        bus.progress("convert", done=2, total=2, note="mic")
+        bus.progress("asr", done=0, total=2, note="sys")
         sys_segs = transcribe_wav(sys_wav, hotwords)
+        bus.progress("asr", done=1, total=2, note="sys")
         # forced alignment только для sys: mic — один спикер («Вы»), стыки не важны
+        if align:
+            bus.progress("align", note="sys")
         sys_segs = _maybe_align(sys_segs, sys_wav, align)
+        bus.progress("diarize", note="sys")
         diar = diarize_wav(sys_wav, num_speakers=speakers, exclusive=not overlap)
+        bus.progress("voices")
         name_map = _match_names(diar)
         sys_segs = split_by_speaker(
             sys_segs, _apply_names(diar.turns, name_map), diar.overlaps
         )
+        bus.progress("asr", done=1, total=2, note="mic")
         mic_segs = transcribe_wav(mic_wav, hotwords)
+        bus.progress("asr", done=2, total=2, note="mic")
+        # Микрофонная дорожка — всегда владелец машины; как его подписывать,
+        # решает настройка (по умолчанию «Вы»).
+        from meet import settings
+
+        speaker = settings.load().recording.speaker_name
         for seg in mic_segs:
-            seg.speaker = "Вы"
+            seg.speaker = speaker
     return interleave_tracks(sys_segs, mic_segs), diar, name_map

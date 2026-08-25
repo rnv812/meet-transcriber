@@ -13,10 +13,68 @@ def test_defaults_without_file(tmp_path):
     cfg = settings.load(tmp_path / "нет.json")
     assert cfg.version == settings.SCHEMA_VERSION
     assert cfg.auto_record.enabled is False
-    assert cfg.auto_record.processes == ["Dion.exe"]
+    assert cfg.auto_record.processes == list(settings.DEFAULT_PROCESSES)
     assert cfg.hooks.post_record is False
     assert cfg.asr.backend == "faster-whisper"
     assert cfg.llm.provider == "claude-code"
+
+
+def test_fresh_install_runs_nothing_after_recording(tmp_path):
+    """Новый пользователь не должен получить чужой сценарий: команда пуста, про
+    регулярные встречи ничего не известно."""
+    cfg = settings.load(tmp_path / "нет.json")
+    assert cfg.hooks.command == ()
+    assert cfg.hooks.recurring_window is None
+    assert "скилл" not in cfg.hooks.prompt
+
+
+def test_default_processes_are_conferencing_clients_only():
+    """Мессенджеры сюда не входят намеренно: они постоянно проигрывают звуки
+    уведомлений, а «что-то воспроизводится» детектор читает как звонок."""
+    assert "Dion.exe" in settings.DEFAULT_PROCESSES
+    assert "Zoom.exe" in settings.DEFAULT_PROCESSES
+    for chat in ("Slack.exe", "Discord.exe", "Telegram.exe"):
+        assert chat not in settings.DEFAULT_PROCESSES
+
+
+def test_v0_config_keeps_the_historic_hook(tmp_path):
+    """Тот, кто уже пользовался хуком, ничего не теряет: миграция достраивает
+    команду и окно, которые раньше были зашиты в коде."""
+    f = tmp_path / "config.json"
+    _write(f, {"post_record_hook": True})
+    hooks = settings.load(f).hooks
+    assert hooks.post_record is True
+    assert hooks.command == settings.HISTORIC_HOOK_COMMAND
+    assert hooks.recurring_window == settings.HISTORIC_RECURRING_WINDOW
+    assert "my-plugin:transcriber" in hooks.prompt
+
+
+def test_v1_daily_window_becomes_recurring(tmp_path):
+    f = tmp_path / "config.json"
+    _write(f, {"version": 1, "hooks": {"post_record": True,
+                                       "daily_window": ["09:30", "10:00"]}})
+    hooks = settings.load(f).hooks
+    assert hooks.recurring_window == ("09:30", "10:00")
+
+
+def test_hook_command_may_be_a_string(tmp_path):
+    f = tmp_path / "config.json"
+    _write(f, {"version": 2, "hooks": {"command": 'notepad "{folder}"'}})
+    assert settings.load(f).hooks.command == ("notepad", '"{folder}"')
+
+
+def test_speaker_name_defaults_and_overrides(tmp_path):
+    assert settings.load(tmp_path / "нет.json").recording.speaker_name == "Вы"
+    f = tmp_path / "config.json"
+    _write(f, {"recording": {"speaker_name": "Алексей"}})
+    assert settings.load(f).recording.speaker_name == "Алексей"
+
+
+def test_gpu_marker_can_be_turned_off(tmp_path):
+    assert settings.load(tmp_path / "нет.json").integrations.gpu_marker is True
+    f = tmp_path / "config.json"
+    _write(f, {"integrations": {"gpu_marker": False}})
+    assert settings.load(f).integrations.gpu_marker is False
 
 
 def test_auto_record_defaults_match_watch_constants():
@@ -149,3 +207,19 @@ def test_roundtrip_through_file(tmp_path):
     assert loaded.auto_record == original.auto_record
     assert loaded.asr == original.asr
     assert loaded.llm == original.llm
+
+
+def test_patch_covers_every_section_of_the_schema():
+    """Список patchable-секций выводится из схемы, а не перечислен руками:
+    иначе новая секция молча не сохраняется (так было с integrations/hf_token)."""
+    from dataclasses import fields
+
+    schema = {f.name for f in fields(settings.Settings)} - {"version"}
+    assert set(settings.PATCHABLE_SECTIONS) == schema
+
+
+def test_patch_saves_integrations(tmp_path):
+    f = tmp_path / "config.json"
+    cfg = settings.patch({"integrations": {"hf_token": "hf_secret"}}, f)
+    assert cfg.integrations.hf_token == "hf_secret"
+    assert settings.load(f).integrations.hf_token == "hf_secret"

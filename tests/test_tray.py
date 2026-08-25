@@ -5,6 +5,7 @@ import time
 
 import meet.tray as tray
 import meet.watch as watch
+from meet import settings
 from meet.tray import OUT_ROOT, _icon_image
 
 
@@ -26,41 +27,84 @@ def test_out_root_is_repo_recordings():
     assert (OUT_ROOT.parent / "pyproject.toml").exists()
 
 
-def test_launch_claude_silent_without_config_flag(monkeypatch):
+def test_post_hook_silent_for_a_fresh_install(monkeypatch):
+    """У нового пользователя команда пуста — не запускается ничего."""
     calls = []
     monkeypatch.setattr(tray, "_config", lambda: {})
     monkeypatch.setattr(tray.subprocess, "Popen", lambda *a, **k: calls.append(a))
-    tray._launch_claude(r"C:\rec\2026-07-19_10-00")
+    tray._run_post_hook(r"C:\rec\2026-07-19_10-00")
     assert calls == []
 
 
-def test_launch_claude_opens_terminal_in_project_root(monkeypatch):
+def test_post_hook_silent_while_flag_is_off(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        tray, "_config",
+        lambda: {"hooks": {"post_record": False, "command": ["notepad", "{folder}"]}},
+    )
+    monkeypatch.setattr(tray.subprocess, "Popen", lambda *a, **k: calls.append(a))
+    tray._run_post_hook(r"C:\rec\2026-07-19_10-00")
+    assert calls == []
+
+
+def test_post_hook_substitutes_placeholders(monkeypatch):
+    """Шаблон команды — обычная программа с аргументами, не обязательно ассистент."""
+    calls = []
+    monkeypatch.setattr(
+        tray, "_config",
+        lambda: {"hooks": {"post_record": True,
+                           "command": ["explorer", "{folder}", "{date}"]}},
+    )
+    monkeypatch.setattr(tray.subprocess, "Popen", lambda cmd, **k: calls.append(cmd))
+    tray._run_post_hook(r"C:\rec\2026-07-19_10-00")
+    assert calls == [["explorer", r"C:\rec\2026-07-19_10-00", "2026-07-19"]]
+
+
+def test_migrated_config_keeps_the_historic_hook(monkeypatch):
+    """У того, кто пользовался хуком раньше, он остаётся прежним: миграция
+    достраивает старому конфигу команду, которая была зашита в коде."""
     calls = []
     monkeypatch.setattr(tray, "_config", lambda: {"post_record_hook": True})
     monkeypatch.setattr(tray.subprocess, "Popen", lambda cmd, **k: calls.append(cmd))
     folder = r"C:\rec\2026-07-19_10-00"
-    tray._launch_claude(folder)
+    tray._run_post_hook(folder)
     (cmd,) = calls
     assert cmd[:3] == ["wt", "-d", str(OUT_ROOT.parent)]
-    # запуск через powershell с профилем, claude напрямую: промпт с папкой внутри
     assert "powershell" in cmd
     assert any(part.startswith("claude ") and folder in part for part in cmd)
-    # 10-00 — не слот дейлика, подсказки про календарь быть не должно
+    # 10-00 — не слот регулярной встречи, подсказки про календарь быть не должно
     assert not any("calendar_lookup" in part for part in cmd)
 
 
-def test_launch_claude_hints_daily_skill_inside_window(monkeypatch):
+def test_recurring_hint_added_inside_window(monkeypatch):
     calls = []
     monkeypatch.setattr(tray, "_config", lambda: {"post_record_hook": True})
     monkeypatch.setattr(tray.subprocess, "Popen", lambda cmd, **k: calls.append(cmd))
-    tray._launch_claude(r"C:\rec\2026-07-24_11-28")
+    tray._run_post_hook(r"C:\rec\2026-07-24_11-28")
     (cmd,) = calls
     prompt = next(part for part in cmd if part.startswith("claude "))
-    assert "дейлик" in prompt and "calendar_lookup" in prompt
+    assert "регулярной" in prompt and "calendar_lookup" in prompt
     # промпт идёт в одинарных кавычках powershell — апостроф внутри его сломает
     assert prompt.count("'") == 2
     # ';' wt считает разделителем команд: хвост промпта уходил в запуск файла
     assert ";" not in prompt
+
+
+def test_hook_command_is_not_a_shell_string(monkeypatch):
+    """Команда запускается списком аргументов: значение из конфига не должно
+    превращаться в исполняемую строку шелла."""
+    seen = {}
+    monkeypatch.setattr(
+        tray, "_config",
+        lambda: {"hooks": {"post_record": True, "command": ["echo", "{folder}"]}},
+    )
+    monkeypatch.setattr(
+        tray.subprocess, "Popen",
+        lambda cmd, **kwargs: seen.update(cmd=cmd, kwargs=kwargs),
+    )
+    tray._run_post_hook(r"C:\rec\2026-07-19_10-00")
+    assert isinstance(seen["cmd"], list)
+    assert "shell" not in seen["kwargs"]
 
 
 def test_wt_safe_neutralizes_command_line_metachars():
@@ -70,12 +114,20 @@ def test_wt_safe_neutralizes_command_line_metachars():
     assert tray._wt_safe("папка 'rec'") == "папка ''rec''"
 
 
-def test_daily_window_bounds():
-    assert tray._in_daily_window(r"C:\rec\2026-07-24_11-00")
-    assert tray._in_daily_window(r"C:\rec\2026-07-24_12-00")
-    assert not tray._in_daily_window(r"C:\rec\2026-07-24_10-59")
-    assert not tray._in_daily_window(r"C:\rec\2026-07-24_12-01")
-    assert not tray._in_daily_window(r"C:\rec\test")  # папка без времени в имени
+WINDOW = ("11:00", "12:00")
+
+
+def test_recurring_window_bounds():
+    assert tray._in_recurring_window(r"C:\rec\2026-07-24_11-00", WINDOW)
+    assert tray._in_recurring_window(r"C:\rec\2026-07-24_12-00", WINDOW)
+    assert not tray._in_recurring_window(r"C:\rec\2026-07-24_10-59", WINDOW)
+    assert not tray._in_recurring_window(r"C:\rec\2026-07-24_12-01", WINDOW)
+    assert not tray._in_recurring_window(r"C:\rec\test", WINDOW)  # без времени в имени
+
+
+def test_no_recurring_window_means_no_hint():
+    # у нового пользователя окно не задано: про регулярность молчим
+    assert not tray._in_recurring_window(r"C:\rec\2026-07-24_11-30", None)
 
 
 def test_config_empty_when_file_missing(monkeypatch, tmp_path):
@@ -96,8 +148,10 @@ def test_auto_config_defaults_to_disabled(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     cfg = tray._auto_config()
     assert cfg["enabled"] is False
-    assert cfg["processes"] == ["Dion.exe"]
+    # список клиентов конференций, а не один Дион: приложение общего назначения
+    assert "Dion.exe" in cfg["processes"] and "Zoom.exe" in cfg["processes"]
     assert cfg["grace_seconds"] == watch.GRACE_S
+    assert cfg["min_call_seconds"] == tray.MIN_CALL_S
 
 
 def test_auto_config_reads_file(monkeypatch, tmp_path):
@@ -112,13 +166,14 @@ def test_auto_config_reads_file(monkeypatch, tmp_path):
     assert cfg == {
         "enabled": True, "processes": ["Foo.exe"],
         "grace_seconds": 30.0, "poll_seconds": 5.0,
+        "min_call_seconds": tray.MIN_CALL_S,
     }
 
 
 def test_auto_config_survives_garbage_section(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     _write_config(tmp_path, {"auto_record": {"processes": []}})
-    assert tray._auto_config()["processes"] == ["Dion.exe"]
+    assert tray._auto_config()["processes"] == list(settings.DEFAULT_PROCESSES)
 
 
 def test_bad_numbers_fall_back_instead_of_killing_the_tray(monkeypatch, tmp_path):
@@ -414,9 +469,13 @@ def test_manual_start_over_auto_recording_disables_autostop(monkeypatch, tmp_pat
 
 
 def _stub_record(folder, finalize=0.0):
-    """Заглушка record(): ждёт stop_event, «финализирует» и отдаёт папку."""
+    """Заглушка record(): ждёт stop_event, «финализирует» и отдаёт папку.
 
-    def rec(out_root, stop_event=None):
+    bus без default: трей обязан передавать свою шину событий — без неё панель
+    не видит ни уровней дорожек, ни хода записи, и тест падает TypeError."""
+
+    def rec(out_root, stop_event=None, *, bus):
+        assert bus is not None
         stop_event.wait(timeout=5)
         time.sleep(finalize)
         return folder
@@ -436,7 +495,7 @@ def test_stop_saves_and_calls_claude_once(monkeypatch, tmp_path):
     folder = tmp_path / "rec" / "2026-08-07_12-00"
     folder.mkdir(parents=True)
     hooks = []
-    monkeypatch.setattr(tray, "_launch_claude", lambda f: hooks.append(f))
+    monkeypatch.setattr(tray, "_run_post_hook", lambda f: hooks.append(f))
     app = _recording_app(monkeypatch, tmp_path, folder)
     app.stop_recording()
     assert hooks == [str(folder)]
@@ -448,7 +507,7 @@ def test_cancel_deletes_folder_and_skips_claude(monkeypatch, tmp_path):
     folder = tmp_path / "rec" / "2026-08-07_12-00"
     folder.mkdir(parents=True)
     (folder / "mic.opus").write_bytes(b"x")
-    monkeypatch.setattr(tray, "_launch_claude", lambda f: 1 / 0)
+    monkeypatch.setattr(tray, "_run_post_hook", lambda f: 1 / 0)
     app = _recording_app(monkeypatch, tmp_path, folder)
     app.stop_recording(discard=True)
     assert not folder.exists()
@@ -457,7 +516,7 @@ def test_cancel_deletes_folder_and_skips_claude(monkeypatch, tmp_path):
 def test_stop_without_hook_keeps_folder(monkeypatch, tmp_path):
     folder = tmp_path / "rec" / "2026-08-07_12-00"
     folder.mkdir(parents=True)
-    monkeypatch.setattr(tray, "_launch_claude", lambda f: 1 / 0)
+    monkeypatch.setattr(tray, "_run_post_hook", lambda f: 1 / 0)
     app = _recording_app(monkeypatch, tmp_path, folder)
     app.stop_recording(hook=False)
     assert folder.exists()
@@ -469,7 +528,7 @@ def test_concurrent_stops_run_exactly_once(monkeypatch, tmp_path):
     folder = tmp_path / "rec" / "2026-08-07_12-00"
     folder.mkdir(parents=True)
     hooks = []
-    monkeypatch.setattr(tray, "_launch_claude", lambda f: hooks.append(f))
+    monkeypatch.setattr(tray, "_run_post_hook", lambda f: hooks.append(f))
     removed = []
     monkeypatch.setattr(tray.shutil, "rmtree", lambda f, **k: removed.append(f))
     app = _recording_app(monkeypatch, tmp_path, folder, finalize=0.3)
@@ -494,7 +553,7 @@ def test_second_stop_is_a_noop(monkeypatch, tmp_path):
     folder = tmp_path / "rec" / "2026-08-07_12-00"
     folder.mkdir(parents=True)
     hooks = []
-    monkeypatch.setattr(tray, "_launch_claude", lambda f: hooks.append(f))
+    monkeypatch.setattr(tray, "_run_post_hook", lambda f: hooks.append(f))
     app = _recording_app(monkeypatch, tmp_path, folder)
     app.stop_recording()
     app.stop_recording()
@@ -543,7 +602,7 @@ def test_stop_command_stops_real_recording_and_keeps_resident(monkeypatch, tmp_p
     # дежурного, поэтому остановка снаружи идёт командой
     folder = tmp_path / "rec" / "2026-08-07_12-00"
     folder.mkdir(parents=True)
-    monkeypatch.setattr(tray, "_launch_claude", lambda f: None)
+    monkeypatch.setattr(tray, "_run_post_hook", lambda f: None)
     app = _recording_app(monkeypatch, tmp_path, folder, source=tray.MANUAL)
     monkeypatch.setattr(app, "_watch_tick", lambda: None)
     tray._send_command("stop")

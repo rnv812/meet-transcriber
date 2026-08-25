@@ -8,3 +8,9 @@ voices/
 hotwords.txt
 glossary.txt
 *.stackdump
+
+# оболочка (app/): зависимости и сборки
+node_modules/
+app/dist/
+app/src-tauri/target/
+app/src-tauri/gen/

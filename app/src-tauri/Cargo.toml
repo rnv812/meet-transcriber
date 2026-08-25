@@ -1,0 +1,28 @@
+[package]
+name = "meet-desktop"
+version = "0.1.0"
+description = "Плавающая панель и окно настроек meet"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+# Позиция и размер окон между запусками: панель должна оставаться там, куда её
+# поставили, а не прыгать в центр экрана при каждом запуске.
+tauri-plugin-window-state = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+# Дефолт Tauri: в релизе окно без консоли.
+default = []
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

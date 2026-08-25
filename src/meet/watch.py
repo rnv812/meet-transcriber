@@ -18,7 +18,6 @@
 параметром — грейс проверяется юнитом без Диона и без ожидания.
 См. спеку docs/superpowers/specs/2026-08-07-dion-auto-record-design.md."""
 
-import os
 import winreg
 from datetime import datetime
 from pathlib import Path
@@ -341,7 +340,15 @@ class WatchLog:
 
 
 def default_log_path() -> Path:
-    return Path(os.environ.get("LOCALAPPDATA", ".")) / "meet" / "watch.log"
+    """Журнал решений дежурного рядом с остальным состоянием.
+
+    Через paths.data_dir(), а не напрямую по LOCALAPPDATA: иначе журнал остаётся
+    единственным файлом, который не слушается MEET_DATA_DIR, и портативный режим
+    (как и изолированный прогон) пишет его в чужое место. В обычном запуске путь
+    тот же, что был."""
+    from meet import paths
+
+    return paths.data_dir() / "watch.log"
 
 
 def describe(signal: "bool | None") -> str:

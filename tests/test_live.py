@@ -284,3 +284,22 @@ def test_near_silent_first_window_does_not_freeze_gain(tmp_path):
     buf.push((np.zeros(48000 * 2, dtype=np.int16) + 1000).tobytes())
     engine.process_window()
     assert isinstance(engine._tracks["sys.wav"]["gain"], float)
+
+
+def test_speaker_name_comes_from_settings(tmp_path, monkeypatch):
+    """Живая лента и точный транскрипт должны называть человека одинаково."""
+    import json
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "state" / "config.json").write_text(
+        json.dumps({"recording": {"speaker_name": "Алексей"}}), encoding="utf-8"
+    )
+    engine = LiveEngine(tmp_path, transcriber=None)
+    assert engine.SPEAKERS["mic.wav"] == "Алексей"
+    assert engine.SPEAKERS["sys.wav"] == "Собеседник"
+
+
+def test_speaker_name_defaults_to_you(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "пусто"))
+    assert LiveEngine(tmp_path, transcriber=None).SPEAKERS["mic.wav"] == "Вы"

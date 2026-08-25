@@ -32,6 +32,50 @@ def _quiet_known_warnings() -> None:
 OUT_HELP = "папка для записей (по умолчанию — из настроек)"
 
 
+def _yes_no_unknown(value) -> str:
+    """Сигнал детектора: None значит «ответить нечем» (ключа в реестре нет,
+    pycaw не встал) — это не то же самое, что «нет»."""
+    return "неизвестно" if value is None else ("да" if value else "нет")
+
+
+def print_status() -> None:
+    """Состояние резидента человеку в консоль.
+
+    Идёт через тот же control API, что и панель: если печать здесь врёт, врёт и
+    панель — один источник правды вместо двух."""
+    from meet import control
+    from meet.output import fmt_ts
+
+    try:
+        snap = control.request("/state")
+    except RuntimeError as e:
+        raise SystemExit(f"Статус недоступен: {e}")
+    if snap.get("status") == "recording":
+        source = "вручную" if snap.get("source") == "manual" else "автоматически"
+        print(f"Идёт запись ({source}): {snap.get('folder')}")
+        print(f"Длительность: {fmt_ts(snap.get('elapsed_s') or 0)}")
+        levels = snap.get("levels") or {}
+        if levels:
+            print("Уровни: " + ", ".join(
+                f"{name} {value:.2f}" for name, value in sorted(levels.items())
+            ))
+    else:
+        print("Записи нет.")
+    auto = snap.get("auto_record") or {}
+    print(
+        f"Автозапись: {'включена' if auto.get('enabled') else 'выключена'}"
+        f", процессы: {', '.join(auto.get('processes') or []) or 'нет'}"
+    )
+    print(
+        f"Детектор: состояние {auto.get('state')}, "
+        f"микрофон {_yes_no_unknown(auto.get('mic'))}, "
+        f"звук {_yes_no_unknown(auto.get('render'))}"
+    )
+    print(f"Папка записей: {snap.get('recordings_dir')}")
+    if snap.get("gpu_busy"):
+        print("GPU занят: идёт транскрибация или живой режим")
+
+
 def main() -> None:
     _quiet_known_warnings()
     # Страховка от UnicodeEncodeError: cp866-консоль Windows не кодирует часть
@@ -120,6 +164,11 @@ def main() -> None:
         "mapping", nargs="+", help="соответствия вида 'Спикер 1=Демьян Петров'"
     )
 
+    sub.add_parser(
+        "status",
+        help="состояние резидента: идёт ли запись, что видит детектор звонка",
+    )
+
     p_cmp = sub.add_parser(
         "compare", help="пословный диф спикеров между двумя транскриптами"
     )
@@ -158,6 +207,8 @@ def main() -> None:
                        task=args.task, vault=vault,
                        port=args.port or cfg.assist.port,
                        no_voices=args.no_voices or not cfg.assist.voices)
+    elif args.command == "status":
+        print_status()
     elif args.command == "enroll":
         from meet.voices import enroll
 

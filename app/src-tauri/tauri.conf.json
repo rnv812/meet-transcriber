@@ -1,0 +1,78 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "meet",
+  "version": "0.1.0",
+  "identifier": "com.meet.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "panel",
+        "title": "meet",
+        "url": "panel.html",
+        "width": 368,
+        "height": 92,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "focus": false,
+        "center": false
+      },
+      {
+        "label": "settings",
+        "title": "meet — настройки",
+        "url": "index.html",
+        "width": 940,
+        "height": 760,
+        "minWidth": 560,
+        "minHeight": 420,
+        "resizable": true,
+        "center": true,
+        "visible": false
+      },
+      {
+        "label": "editor",
+        "title": "meet — редактор",
+        "url": "editor.html",
+        "width": 1120,
+        "height": 780,
+        "minWidth": 720,
+        "minHeight": 480,
+        "resizable": true,
+        "center": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:* ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "Russian",
+          "English"
+        ]
+      }
+    }
+  }
+}
