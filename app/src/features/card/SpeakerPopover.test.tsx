@@ -83,3 +83,26 @@ test("флажок снят: saveTranscript с заменой спикера, б
   expect(t.segments.map((s) => s.speaker)).toEqual(["Матвей", "Демьян"]);
   expect(t.segments[0]).toMatchObject({ text: "a", uncertain: true, start: 0 });
 });
+
+test("Enter выбирает точное совпадение, а не первое по префиксу", async () => {
+  vi.mocked(api.nameSpeakers).mockResolvedValue({ ok: true, renamed: 1, enrolled: [], voices_error: null });
+  const two = [{ ...people[0]!, name: "Демьян Петров" }, people[0]!];
+  render(<SpeakerPopover endpoint={ep} recordingId="r1" label="Спикер 2" people={two} onDone={vi.fn()} />);
+  await userEvent.type(screen.getByRole("textbox"), "демьян{Enter}");
+  expect(api.nameSpeakers).toHaveBeenCalledWith(ep, "r1", { "Спикер 2": "Демьян" });
+});
+
+test("двойной Enter отправляет один раз", async () => {
+  vi.mocked(api.nameSpeakers).mockImplementation(() => new Promise(() => {}));
+  setup();
+  await userEvent.type(screen.getByRole("textbox"), "Пётр{Enter}{Enter}");
+  expect(api.nameSpeakers).toHaveBeenCalledTimes(1);
+});
+
+test("после ошибки фокус возвращается в поле", async () => {
+  vi.mocked(api.nameSpeakers).mockRejectedValue(new Error("плохо"));
+  setup();
+  await userEvent.type(screen.getByRole("textbox"), "x{Enter}");
+  await screen.findByRole("alert");
+  await waitFor(() => expect(screen.getByRole("textbox")).toHaveFocus());
+});

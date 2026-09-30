@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { type Endpoint, getRecording, nameSpeakers, saveTranscript } from "../../lib/api";
 import { Avatar } from "../../ui/Avatar";
 import { Button } from "../../ui/Button";
@@ -21,6 +21,8 @@ export function SpeakerPopover({ endpoint, recordingId, label, people, onApplied
   const [text, setText] = useState("");
   const [remember, setRemember] = useState(true);
   const [busy, setBusy] = useState(false);
+  const inflight = useRef(false);
+  const input = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 
@@ -31,10 +33,13 @@ export function SpeakerPopover({ endpoint, recordingId, label, people, onApplied
     for (const p of people) if (fold(p.name).startsWith(q)) options.push({ name: p.name, existing: true, person: p });
     if (!people.some((p) => fold(p.name) === q)) options.push({ name: typed, existing: false });
   }
-  const exact = options.find((o) => o.existing && fold(o.name) === q)?.name;
+  const ei = options.findIndex((o) => o.existing && fold(o.name) === q);
+  if (ei > 0) options.unshift(...options.splice(ei, 1));
+  const choice = options[0]?.name;
 
   const apply = async (name: string) => {
-    if (!name.trim() || busy) return;
+    if (!name.trim() || inflight.current) return;
+    inflight.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -53,7 +58,9 @@ export function SpeakerPopover({ endpoint, recordingId, label, people, onApplied
       onDone();
     } catch (e) {
       setError(errText(e));
+      setTimeout(() => input.current?.focus(), 0);
     } finally {
+      inflight.current = false;
       setBusy(false);
     }
   };
@@ -75,14 +82,14 @@ export function SpeakerPopover({ endpoint, recordingId, label, people, onApplied
         className="speaker-pop__input"
         aria-label="Кто это?"
         autoFocus
+        ref={input}
         value={text}
         disabled={busy}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
-            const o = options[0];
-            if (o) void apply(o.name);
+            if (choice) void apply(choice);
           }
         }}
       />
@@ -108,7 +115,7 @@ export function SpeakerPopover({ endpoint, recordingId, label, people, onApplied
       </label>
       {error && <div className="card__error speaker-pop__error" role="alert">{error}</div>}
       <div className="speaker-pop__actions">
-        <Button variant="primary" disabled={!typed || busy} onClick={() => void apply(exact ?? typed)}>
+        <Button variant="primary" disabled={!typed || busy} onClick={() => void apply(choice ?? typed)}>
           Готово
         </Button>
       </div>
