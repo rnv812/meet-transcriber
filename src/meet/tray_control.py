@@ -285,7 +285,10 @@ class TrayControl:
 
     def recordings(self, limit: int = 200, q: str | None = None) -> dict:
         root = self._root()
-        items = library.search(root, q, limit=limit) if (q or "").strip()             else library.listing(root, limit=limit)
+        if (q or "").strip():
+            items = library.search(root, q, limit=limit)
+        else:
+            items = library.listing(root, limit=limit)
         return {"root": str(root), "items": items}
 
     def delete_recording(self, recording_id: str) -> dict:
@@ -296,7 +299,8 @@ class TrayControl:
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
-        if self.tray.recording and                 Path(self.tray._current_folder()).resolve() == folder:
+        if (self.tray.recording
+                and Path(self.tray._current_folder()).resolve() == folder):
             raise _bad_request("запись ещё идёт")
         if self.queue.active_for(str(folder), (jobs.TRANSCRIBE, jobs.IMPORT)):
             raise _bad_request("идёт расшифровка — отмените её или дождитесь")
@@ -348,7 +352,7 @@ class TrayControl:
         if card is None:
             return {"error": "записи нет"}
         raw = card.to_raw()
-        raw["transcript"] = library.read_transcript(folder)
+        raw["transcript"] = library.with_display_names(library.read_transcript(folder))
         return raw
 
     def update_recording(self, recording_id: str, body: dict) -> dict:
@@ -369,7 +373,7 @@ class TrayControl:
     def transcript(self, recording_id: str) -> dict:
         folder = self._folder(recording_id)
         data = library.read_transcript(folder) if folder else None
-        return data or {"error": "транскрипта нет"}
+        return library.with_display_names(data) or {"error": "транскрипта нет"}
 
     def export(self, recording_id: str, fmt: str) -> dict:
         from meet import export
@@ -424,6 +428,13 @@ class TrayControl:
         data = library.read_transcript(folder)
         renamed = 0
         if data:
+            # Старые транскрипты хранят сырые SPEAKER_XX: приводим к «Спикер N»
+            # (та же нумерация, что у сайдкара) и переводим ключи pairs.
+            raw_to_display = library.display_names(data.get("segments", []))
+            for segment in data.get("segments", []):
+                segment["speaker"] = raw_to_display.get(segment.get("speaker"),
+                                                        segment.get("speaker"))
+            pairs = {raw_to_display.get(k, k): v for k, v in pairs.items()}
             for segment in data.get("segments", []):
                 if segment.get("speaker") in pairs:
                     segment["speaker"] = pairs[segment["speaker"]]

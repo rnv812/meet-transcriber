@@ -840,3 +840,39 @@ def test_recordings_query_filters(control_state, tmp_path, monkeypatch):
 
 def test_person_card_unknown(control_state):
     assert control_state.person("Никто") == {"error": "человека нет"}
+
+
+def test_old_transcript_is_served_with_display_names_and_can_be_named(control_state,
+                                                                      tmp_path, monkeypatch):
+    from meet import library
+
+    folder = _saved_folder(tmp_path)
+    library.write_transcript(folder, {"segments": [
+        {"start": 0, "end": 1, "speaker": "SPEAKER_00", "text": "а"},
+        {"start": 1, "end": 2, "speaker": "SPEAKER_01", "text": "б"}]})
+    monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
+    monkeypatch.setattr(control_state, "_enroll", lambda f, pairs: ([], None))
+    served = control_state.recording(folder.name)["transcript"]["segments"]
+    assert [s["speaker"] for s in served] == ["Спикер 1", "Спикер 2"]
+    assert [s["speaker"] for s in control_state.transcript(folder.name)["segments"]] == [
+        "Спикер 1", "Спикер 2"]
+    control_state.name_speakers(folder.name, {"Спикер 2": "Матвей"})
+    stored = library.read_transcript(folder)["segments"]
+    assert [s["speaker"] for s in stored] == ["Спикер 1", "Матвей"]
+
+
+def test_name_speakers_accepts_raw_label_keys(control_state, tmp_path, monkeypatch):
+    from meet import library
+
+    folder = _saved_folder(tmp_path)
+    library.write_transcript(folder, {"segments": [
+        {"start": 0, "end": 1, "speaker": "SPEAKER_00", "text": "а"},
+        {"start": 1, "end": 2, "speaker": "SPEAKER_01", "text": "б"}]})
+    monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
+    seen = {}
+    monkeypatch.setattr(control_state, "_enroll",
+                        lambda f, pairs: (seen.update(pairs) or [], None))
+    control_state.name_speakers(folder.name, {"SPEAKER_01": "Матвей"})
+    stored = library.read_transcript(folder)["segments"]
+    assert [s["speaker"] for s in stored] == ["Спикер 1", "Матвей"]
+    assert seen == {"Спикер 2": "Матвей"}

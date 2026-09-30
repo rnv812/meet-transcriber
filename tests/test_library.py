@@ -211,3 +211,9 @@ def test_search_matches_title_and_text(tmp_path):
     assert [r["id"] for r in library.search(tmp_path, "cmdb")] == [a.name]
     assert [r["id"] for r in library.search(tmp_path, "acme")] == ["2026-09-30_16-04"]
     assert len(library.search(tmp_path, "")) == 2
+
+
+def test_display_names_number_raw_labels_in_order():
+    segs = [{"speaker": "SPEAKER_03"}, {"speaker": "Вы"}, {"speaker": "SPEAKER_01"},
+            {"speaker": "SPEAKER_03"}]
+    assert library.display_names(segs) == {"SPEAKER_03": "Спикер 1", "SPEAKER_01": "Спикер 2"}

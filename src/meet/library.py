@@ -108,6 +108,30 @@ def read_transcript(folder: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def display_names(segments: list[dict]) -> dict[str, str]:
+    """Сырая метка SPEAKER_XX → «Спикер N» в порядке первого появления.
+
+    Нумерация та же, что в output.speaker_names; прочие метки (имена, «Вы») не трогаем."""
+    names: dict[str, str] = {}
+    for seg in segments:
+        label = seg.get("speaker")
+        if isinstance(label, str) and label.startswith("SPEAKER_") and label not in names:
+            names[label] = f"Спикер {len(names) + 1}"
+    return names
+
+
+def with_display_names(data: dict | None) -> dict | None:
+    """Копия транскрипта, где сырые метки заменены отображаемыми именами."""
+    if not data or not isinstance(data.get("segments"), list):
+        return data
+    names = display_names(data["segments"])
+    if not names:
+        return data
+    segments = [{**seg, "speaker": names.get(seg.get("speaker"), seg.get("speaker"))}
+                for seg in data["segments"]]
+    return {**data, "segments": segments}
+
+
 def write_transcript(folder: Path, data: dict) -> Path:
     """Атомарная запись: редактор читает файл в любой момент."""
     path = transcript_path(folder)
