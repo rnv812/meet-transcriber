@@ -14,7 +14,7 @@ export function CardHeader({
   people: PersonColor[];
   endpoint: Endpoint;
   onRename: (title: string) => void;
-  onNameSpeaker?: (label: string) => void;
+  onNameSpeaker?: (label: string, anchor: HTMLElement) => void;
 }) {
   const when = rec.started_at ? dayLabel(rec.started_at) : "";
   const shown = rec.title ?? (when || rec.id);
@@ -62,7 +62,7 @@ export function CardHeader({
             );
             return isUnnamed(name) ? (
               <button key={name} type="button" className="chip chip--unnamed"
-                onClick={() => onNameSpeaker?.(name)}>{chip}</button>
+                onClick={(e) => onNameSpeaker?.(name, e.currentTarget)}>{chip}</button>
             ) : (
               <span key={name} className="chip">{chip}</span>
             );

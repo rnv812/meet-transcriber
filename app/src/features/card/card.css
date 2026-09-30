@@ -54,3 +54,23 @@ button.turn__speaker { padding: 0; border: 0; background: none; font-family: inh
 .turn__speaker--unnamed:hover { color: var(--accent-hover); }
 .turn__flag { color: var(--amber); font-size: 11px; }
 .turn__text { margin: 2px 0 0; color: var(--text); line-height: 1.55; }
+.popover {
+  position: fixed; z-index: 50; padding: 10px; background: var(--surface-2);
+  border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: 0 8px 24px #0008;
+}
+.speaker-pop { display: flex; flex-direction: column; gap: 6px; }
+.speaker-pop__title { color: var(--text); font-weight: 600; }
+.speaker-pop__input {
+  padding: 4px 8px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
+  color: var(--text); font: inherit;
+}
+.speaker-pop__input:focus { outline: none; border-color: var(--accent); }
+.speaker-pop__sug {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 6px; border: 0;
+  border-radius: var(--r-sm); background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer;
+}
+.speaker-pop__sug:hover { background: var(--surface-hover); }
+.speaker-pop__remember { display: flex; gap: 6px; align-items: center; color: var(--text-2); font-size: 12px; }
+.speaker-pop__warn { color: var(--amber); font-size: 12px; }
+.speaker-pop__error { margin: 0; }
+.speaker-pop__actions { display: flex; justify-content: flex-end; }

@@ -52,13 +52,15 @@ test("ready: реплики и участники", async () => {
   expect(screen.getByRole("button", { name: /▶ 00:00/ })).toBeInTheDocument();
 });
 
-test("клик по безымянному спикеру зовёт onNameSpeaker", async () => {
+test("клик по безымянному спикеру открывает «Кто это?», Esc закрывает", async () => {
   load();
-  const onNameSpeaker = vi.fn();
-  render(<RecordingCard id="r1" endpoint={ep} onNameSpeaker={onNameSpeaker} />);
+  render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
   await userEvent.click(screen.getAllByRole("button", { name: /Спикер 2/ })[0]!);
-  expect(onNameSpeaker).toHaveBeenCalledWith("Спикер 2");
+  expect(await screen.findByRole("dialog", { name: "Кто это?" })).toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "Кто это?" })).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
 });
 
 test("удаление во время расшифровки: ошибка видна", async () => {

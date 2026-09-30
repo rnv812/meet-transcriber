@@ -8,20 +8,23 @@ import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
 import { statusOf } from "../../lib/status";
 import type { Job, Recording, Snapshot, Transcript } from "../../lib/types";
 import { Button } from "../../ui/Button";
+import { Popover } from "../../ui/Popover";
 import { EmptyState } from "../../ui/EmptyState";
 import { AudioPlayer, type AudioPlayerHandle, type Track } from "./AudioPlayer";
 import { CardActions } from "./CardActions";
 import { CardHeader } from "./CardHeader";
+import { SpeakerPopover } from "./SpeakerPopover";
 import { Turns, type PersonColor } from "./Turns";
 import "./card.css";
 
 type Loaded = Recording & { transcript: Transcript | null };
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const NO_PEOPLE: PersonColor[] = [];
 const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 
 export function RecordingCard({
-  id, endpoint, jobs = [], snapshot = null, people = [], onDeleted, onChanged, onNameSpeaker,
+  id, endpoint, jobs = [], snapshot = null, people = NO_PEOPLE, onDeleted, onChanged, onPeopleChanged,
 }: {
   id: string;
   endpoint: Endpoint;
@@ -30,11 +33,12 @@ export function RecordingCard({
   people?: PersonColor[];
   onDeleted?: () => void;
   onChanged?: () => void;
-  onNameSpeaker?: (label: string) => void;
+  onPeopleChanged?: () => void;
 }) {
   const [rec, setRec] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [naming, setNaming] = useState<{ label: string; anchor: HTMLElement } | null>(null);
   const player = useRef<AudioPlayerHandle>(null);
 
   const [owner, setOwner] = useState("Вы");
@@ -85,6 +89,8 @@ export function RecordingCard({
   const segments = rec?.transcript?.segments;
   const turns = useMemo(() => mergeTurns(segments ?? []), [segments]);
   const speakers = useMemo(() => speakersOf(segments ?? []), [segments]);
+  const nameSpeaker = useCallback((label: string, anchor: HTMLElement) => setNaming({ label, anchor }), []);
+  const closeNaming = useCallback(() => setNaming(null), []);
   const colors = useMemo(() => new Map(people.map((p) => [p.name, p.color])), [people]);
 
   tracksRef.current = rec?.tracks ?? {};
@@ -121,7 +127,7 @@ export function RecordingCard({
   switch (status.kind) {
     case "ready":
       body = turns.length ? (
-        <Turns turns={turns} colors={colors} playable={hasAudio} onPlay={play} onNameSpeaker={onNameSpeaker} />
+        <Turns turns={turns} colors={colors} playable={hasAudio} onPlay={play} onNameSpeaker={nameSpeaker} />
       ) : <EmptyState title="В записи нет речи" />;
       break;
     case "untranscribed":
@@ -160,7 +166,7 @@ export function RecordingCard({
   return (
     <section className="card">
       <CardHeader rec={rec} speakers={speakers} people={people} endpoint={endpoint}
-        onRename={rename} onNameSpeaker={onNameSpeaker} />
+        onRename={rename} onNameSpeaker={nameSpeaker} />
       <CardActions
         canExport={status.kind === "ready"}
         canRetranscribe={status.kind === "ready"}
@@ -172,6 +178,16 @@ export function RecordingCard({
       />
       {error && <div className="card__error" role="alert">{error}</div>}
       <div className="card__body">{body}</div>
+      {naming && (
+        <Popover anchor={naming.anchor} onClose={closeNaming} label="Кто это?">
+          <SpeakerPopover
+            endpoint={endpoint} recordingId={id} label={naming.label}
+            people={people}
+            onApplied={() => { void load(); onChanged?.(); onPeopleChanged?.(); }}
+            onDone={closeNaming}
+          />
+        </Popover>
+      )}
       {hasAudio && <AudioPlayer ref={player} endpoint={endpoint} id={id} />}
     </section>
   );

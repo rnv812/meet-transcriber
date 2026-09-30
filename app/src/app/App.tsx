@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useLibrary } from "../state/useLibrary";
+import { usePeople } from "../state/usePeople";
 import { useResident } from "../state/useResident";
 import { RecordingsList } from "../features/recordings/RecordingsList";
 import { RecordingCard } from "../features/card/RecordingCard";
@@ -13,6 +14,7 @@ export function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const resident = useResident();
   const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick);
+  const { people, refresh: refreshPeople } = usePeople(resident.endpoint ?? null);
   const offline = resident.status === "offline";
 
   return (
@@ -45,6 +47,8 @@ export function App() {
                 endpoint={resident.endpoint}
                 jobs={library.jobs}
                 snapshot={resident.snapshot ?? null}
+                people={people}
+                onPeopleChanged={() => void refreshPeople()}
                 onChanged={() => void library.refresh()}
                 onDeleted={() => { setSelected(null); void library.refresh(); }}
               />
