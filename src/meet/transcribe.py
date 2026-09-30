@@ -246,7 +246,9 @@ def _write_sidecar(out_md, path, iso, segments, diar, name_map) -> None:
         }
         for label, emb in diar.embeddings.items()
     ]
-    p = write_sidecar(out_md, source=str(path), date=iso, speakers=speakers)
+    # Абсолютный путь: образец голоса помнит, откуда взят, и относительный
+    # (запуск `meet transcribe recordings/x`) зависел бы от рабочей папки.
+    p = write_sidecar(out_md, source=str(Path(path).resolve()), date=iso, speakers=speakers)
     print(f"Голосовые отпечатки: {p}")
 
 

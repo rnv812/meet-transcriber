@@ -240,3 +240,31 @@ def test_enroll_bad_name_is_friendly_and_writes_nothing(tmp_path):
     with pytest.raises(SystemExit, match="имя"):
         enroll(str(rec), ["Спикер 1=Демьян", r"Спикер 2=..\..\x"], folder=base)
     assert load_voices(base) == {}
+
+
+def test_enroll_renames_speakers_in_recording_transcript(tmp_path):
+    """CLI/Claude-путь (`meet enroll`) должен давать тот же итог, что и окно:
+    в transcript.json записи — имена, а не «Спикер N», иначе редактор и
+    статистика людей их не видят."""
+    from meet import library
+
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    _make_sidecar(rec)
+    library.write_transcript(rec, {"version": 1, "segments": [
+        {"start": 0.0, "end": 1.0, "speaker": "Спикер 1", "text": "раз"},
+        {"start": 1.0, "end": 2.0, "speaker": "Спикер 2", "text": "два"},
+        {"start": 2.0, "end": 3.0, "speaker": "Спикер 3", "text": "три"}]})
+    enroll(str(rec), ["Спикер 1=Демьян Петров", "SPEAKER_01=Пётр"], folder=tmp_path / "voices")
+    data = library.read_transcript(rec)
+    assert [s["speaker"] for s in data["segments"]] == ["Демьян Петров", "Пётр", "Спикер 3"]
+    assert data["names"] == {"Спикер 1": "Демьян Петров", "Спикер 2": "Пётр"}
+    assert not list(rec.glob("*.tmp"))
+
+
+def test_enroll_without_transcript_creates_none(tmp_path):
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    _make_sidecar(rec)
+    enroll(str(rec), ["Спикер 1=Демьян"], folder=tmp_path / "voices")
+    assert not (rec / "transcript.json").exists()

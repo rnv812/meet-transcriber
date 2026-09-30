@@ -308,3 +308,17 @@ def test_structured_transcript_uses_display_speaker_names(tmp_path):
     data = json.loads((tmp_path / "transcript.json").read_text(encoding="utf-8"))
     assert [s["speaker"] for s in data["segments"]] == [
         "Спикер 1", "Спикер 2", "Спикер 1", "Демьян"]
+
+
+def test_write_sidecar_stores_absolute_source(tmp_path, monkeypatch):
+    """source сайдкара — абсолютный путь: образец голоса помнит, откуда взят,
+    независимо от рабочей папки, из которой запускали `meet transcribe`."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "recordings" / "x").mkdir(parents=True)
+    out_md = tmp_path / "recordings" / "x" / "x_transcript.md"
+    diar = Diarization(turns=[], embeddings={"SPEAKER_00": np.asarray([1.0])})
+    _write_sidecar(out_md, Path("recordings/x"), "2026-07-01",
+                   [Segment(0.0, 1.0, "а", "SPEAKER_00")], diar, {})
+    source = read_sidecar(sidecar_path(out_md))["source"]
+    assert Path(source).is_absolute()
+    assert Path(source) == (tmp_path / "recordings" / "x").resolve()

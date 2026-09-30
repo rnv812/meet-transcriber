@@ -202,3 +202,32 @@ def enroll(path_str: str, mappings: list[str], folder: Path | None = None) -> No
         f = add_sample(name, entry["embedding"], source=source, date=date, folder=folder)
         total = len(json.loads(f.read_text(encoding="utf-8"))["samples"])
         print(f"голоса: {name} += образец из {source} (всего образцов: {total})")
+    renamed = _name_in_transcript(sidecar.parent, {entry["display"]: name for _, name, entry in pairs})
+    if renamed:
+        print(f"транскрипт: переименовано реплик: {renamed}")
+
+
+def _name_in_transcript(recording: Path, pairs: dict[str, str]) -> int:
+    """Имена в transcript.json папки записи — как при «Назвать спикеров» в окне
+    (tray_control.name_speakers): реплики «Спикер N» → имя, соответствие
+    в `names`. Иначе `meet enroll` из консоли пополнял базу, а транскрипт
+    оставался с «Спикер N» — редактор и статистика людей имени не видели.
+    Нет transcript.json (одиночный файл, запись до v1) — нечего править.
+    Пишем только при изменениях: окно зовёт enroll уже после своей правки."""
+    from meet import library
+
+    data = library.read_transcript(recording)
+    if not data or not pairs:
+        return 0
+    renamed = 0
+    segments = data.get("segments")
+    for segment in segments if isinstance(segments, list) else []:
+        if isinstance(segment, dict) and segment.get("speaker") in pairs:
+            segment["speaker"] = pairs[segment["speaker"]]
+            renamed += 1
+    names = data.get("names") if isinstance(data.get("names"), dict) else {}
+    updated = {**names, **pairs}
+    if renamed or updated != names:
+        data["names"] = updated
+        library.write_transcript(recording, data)
+    return renamed
