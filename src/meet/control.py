@@ -537,6 +537,7 @@ _ROUTES = {
     ("POST", "/recordings/import"): lambda h, p: _server_of(h).state.import_file(
         h._body()
     ),
+    ("POST", "/shutdown"): lambda h, p: _server_of(h).state.shutdown(),
     ("GET", "/"): lambda h, p: {"ok": True, "api": "meet-control"},
     ("GET", "/state"): lambda h, p: _server_of(h).state.snapshot(),
     ("GET", "/diagnostics"): lambda h, p: _server_of(h).state.diagnostics(

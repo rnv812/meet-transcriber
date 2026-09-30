@@ -580,3 +580,13 @@ def test_merge_into_self_is_bad_request(voices_state):
 def test_set_avatar_unknown_person(voices_state):
     state, _ = voices_state
     assert state.set_avatar("Никто", _png_bytes()) == {"error": "человека нет"}
+
+
+def test_shutdown_saves_recording_and_requests_exit(control_state, app, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app, "stop_recording", lambda discard=False, hook=True:
+                        calls.append(("stop", discard)))
+    monkeypatch.setattr(app, "request_exit", lambda: calls.append("exit"))
+    app.recording = True
+    assert control_state.shutdown() == {"ok": True}
+    assert calls == [("stop", False), "exit"]

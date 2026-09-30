@@ -265,6 +265,12 @@ def _icon_image(color=REC_COLOR):
     return img
 
 
+class _NoIcon:
+    """Иконка-пустышка для тикера в режиме --headless."""
+
+    visible = False
+
+
 class TrayApp:
     """Состояние трея: дежурю или пишу, и кто эту запись начал.
 
@@ -469,6 +475,12 @@ class TrayApp:
         if self.icon is not None:
             self.icon.stop()
 
+    def request_exit(self) -> None:
+        """Штатный выход: тикер и (если есть) иконка останавливаются."""
+        self._alive = False
+        if self.icon is not None:
+            self.icon.stop()
+
     # --- цикл -----------------------------------------------------------
 
     def ticker(self, icon) -> None:
@@ -665,6 +677,52 @@ class TrayApp:
                 api.stop(pid=os.getpid())
             self._release_lock(lock)
 
+    def run_headless(self, parent_pid: int | None = None) -> None:
+        """Дежурный без своей иконки: иконку, меню и уведомления держит оболочка
+        (Tauri), резидент отдаёт только API, запись и автозапись.
+
+        parent_pid — оболочка: умерла она — выходим сами, штатно сохранив
+        запись, иначе осиротевший резидент держал бы микрофон невидимым."""
+        if _resident_alive():
+            return
+        lock = _state_dir() / "tray.lock"
+        try:
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            lock.write_text(
+                json.dumps({"pid": os.getpid(), **_proc_ident(os.getpid())}),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+        _drop_command()
+        api = self._start_control_api()
+        if parent_pid:
+
+            def watch_parent() -> None:
+                while self._alive:
+                    if not _pid_alive(parent_pid):
+                        self.log("оболочка завершилась — выхожу")
+                        if self.recording:
+                            self.stop_recording()
+                        self.request_exit()
+                        return
+                    time.sleep(1.0)
+
+            threading.Thread(
+                target=watch_parent, name="meet-parent", daemon=True
+            ).start()
+        try:
+            self.ticker(_NoIcon())
+        finally:
+            self._alive = False
+            if api is not None:
+                try:
+                    api.state.queue.stop()
+                except Exception:
+                    pass
+                api.stop(pid=os.getpid())
+            self._release_lock(lock)
+
     def _start_control_api(self):
         """Поднять control API для панели и окна настроек.
 
@@ -701,14 +759,26 @@ class TrayApp:
 
 
 def main() -> None:
-    """Без аргументов — начать запись сразу: так работает ярлык «Запись
-    встречи», и это поведение сохранено с прежней версии трея. `--watch` —
-    дежурить и ждать звонка, с этим флагом трей стоит в автозагрузке.
+    """Без аргументов — начать запись сразу (ярлык «Запись встречи»). `--watch` —
+    дежурить с иконкой pystray (автозагрузка без оболочки). `--headless` —
+    дежурить без иконки под оболочкой приложения; `--parent-pid N` — pid
+    оболочки, с которой резидент живёт и умирает.
 
     Второй экземпляр не поднимает вторую иконку: живому дежурному уходит
     команда, а сам он выходит. Поэтому ярлык работает одинаково — и когда
     дежурный висит, и когда его нет."""
-    start_now = "--watch" not in sys.argv[1:]
+    args = sys.argv[1:]
+    if "--headless" in args:
+        parent = None
+        if "--parent-pid" in args:
+            try:
+                parent = int(args[args.index("--parent-pid") + 1])
+            except (IndexError, ValueError):
+                parent = None
+        if not _resident_alive():
+            TrayApp(start_now=False).run_headless(parent_pid=parent)
+        return
+    start_now = "--watch" not in args
     if _resident_alive():
         if start_now:
             _send_command("start")

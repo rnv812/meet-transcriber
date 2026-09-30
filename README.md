@@ -13,6 +13,8 @@
     meet transcribe recordings/...   # папка записи → transcript.md
     meet transcribe запись.mp4       # или любой аудио/видеофайл → запись.md
 
+Импорт чужой записи: окно приложения → перетащить файл; из API — POST /recordings/import.
+
 Полезные флаги transcribe:
 
     --speakers N      # число говорящих, если уверены (обычно авто точнее;

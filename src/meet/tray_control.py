@@ -165,6 +165,13 @@ class TrayControl:
             "folder": folder,
         }
 
+    def shutdown(self) -> dict:
+        """Выход по просьбе оболочки: идущая запись сохраняется штатно."""
+        if self.tray.recording:
+            self.tray.stop_recording()
+        self.tray.request_exit()
+        return {"ok": True}
+
     def adopt_recording(self) -> dict:
         """Автозапись → ручная: детектор её больше не остановит."""
         if not self.tray.recording:

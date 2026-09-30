@@ -688,3 +688,42 @@ def test_own_lock_of_a_living_thread_is_kept(monkeypatch, tmp_path):
         app.thread.join(timeout=5)
     app._clear_own_lock()  # поток кончился — теперь снять можно
     assert not lock.exists()
+
+
+def test_headless_runs_ticker_without_icon_and_exits_on_request(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    app = tray.TrayApp(start_now=False)
+    monkeypatch.setattr(app, "_start_control_api", lambda: None)
+    ticks = []
+    monkeypatch.setattr(app, "_tick", lambda: (ticks.append(1),
+                                               len(ticks) >= 3 and app.request_exit()))
+    monkeypatch.setattr(tray, "TICK_S", 0.01)
+    app.run_headless(parent_pid=None)
+    assert app.icon is None
+    assert len(ticks) >= 3
+    assert not (tmp_path / "meet" / "tray.lock").exists()  # lock снят при выходе
+
+
+def test_headless_exits_when_parent_dies(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    app = tray.TrayApp(start_now=False)
+    monkeypatch.setattr(app, "_start_control_api", lambda: None)
+    monkeypatch.setattr(app, "_tick", lambda: None)
+    monkeypatch.setattr(tray, "TICK_S", 0.01)
+    monkeypatch.setattr(tray, "_pid_alive", lambda pid: False)
+    app.run_headless(parent_pid=999999)  # возвращается, а не висит
+    assert app._alive is False
+
+
+def test_main_headless_flag(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    seen = {}
+    monkeypatch.setattr(tray, "_resident_alive", lambda: False)
+    monkeypatch.setattr(tray.TrayApp, "run_headless",
+                        lambda self, parent_pid: seen.update(start=self.start_now,
+                                                             parent=parent_pid))
+    monkeypatch.setattr(tray.sys, "argv", ["meet-tray", "--headless", "--parent-pid", "42"])
+    tray.main()
+    assert seen == {"start": False, "parent": 42}
