@@ -1,14 +1,16 @@
+import { memo } from "react";
 import { clock } from "../../lib/format";
 import { isUnnamed, type Turn } from "../../lib/speakers";
 
 export type PersonColor = { name: string; color: string; has_avatar: boolean };
 
 /** Плоский список без компонента на реплику: 2 часа записи — около тысячи блоков. */
-export function Turns({
-  turns, colors, onPlay, onNameSpeaker,
+export const Turns = memo(function Turns({
+  turns, colors, playable, onPlay, onNameSpeaker,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
+  playable: boolean;
   onPlay: (turn: Turn) => void;
   onNameSpeaker?: (label: string) => void;
 }) {
@@ -19,9 +21,13 @@ export function Turns({
         const color = colors.get(t.speaker);
         return (
           <div className="turn" key={i}>
-            <button type="button" className="turn__time num" onClick={() => onPlay(t)}>
-              {`▶ ${clock(t.start)}`}
-            </button>
+            {playable ? (
+              <button type="button" className="turn__time num" onClick={() => onPlay(t)}>
+                {`▶ ${clock(t.start)}`}
+              </button>
+            ) : (
+              <span className="turn__time num">{clock(t.start)}</span>
+            )}
             <div className="turn__body">
               <div className="turn__head">
                 {unnamed ? (
@@ -39,4 +45,4 @@ export function Turns({
       })}
     </div>
   );
-}
+});

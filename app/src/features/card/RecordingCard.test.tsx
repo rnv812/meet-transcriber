@@ -8,6 +8,7 @@ import type { Job, Recording, Transcript } from "../../lib/types";
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
   getRecording: vi.fn(),
+  getSettings: vi.fn(),
   patchRecording: vi.fn(),
   deleteRecording: vi.fn(),
   transcribe: vi.fn(),
@@ -34,7 +35,12 @@ const base: Recording = {
 const load = (extra: Partial<Recording> = {}, t: Transcript | null = transcript) =>
   vi.mocked(api.getRecording).mockResolvedValue({ ...base, ...extra, transcript: t });
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(api.getSettings).mockResolvedValue({ recording: { speaker_name: "Демьян Петров" } });
+  HTMLMediaElement.prototype.play = vi.fn(async () => {});
+  HTMLMediaElement.prototype.load = vi.fn();
+});
 
 test("ready: реплики и участники", async () => {
   load();
@@ -147,4 +153,55 @@ test("пустое название не сохраняется", async () => {
   await userEvent.clear(input);
   await userEvent.type(input, "   {Enter}");
   expect(api.patchRecording).not.toHaveBeenCalled();
+});
+
+test("первый клик по реплике: src, currentTime и play сразу", async () => {
+  load({ tracks: { sys: "s.wav", mic: "m.wav" } });
+  const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  await userEvent.click(screen.getAllByRole("button", { name: /▶/ })[1]!);
+  const a = container.querySelector("audio")!;
+  expect(a.getAttribute("src")).toBe(api.audioUrl(ep, "r1", "sys"));
+  expect(a.currentTime).toBe(6);
+  expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+});
+
+test("реплика владельца микрофона играет дорожку mic", async () => {
+  load({ tracks: { sys: "s.wav", mic: "m.wav" } });
+  const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+  await new Promise((r) => setTimeout(r, 0));
+  await userEvent.click(screen.getAllByRole("button", { name: /▶/ })[0]!);
+  expect(container.querySelector("audio")!.getAttribute("src")).toBe(api.audioUrl(ep, "r1", "mic"));
+});
+
+test("без дорожек кнопок воспроизведения нет", async () => {
+  load({ tracks: {} });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  expect(screen.queryByRole("button", { name: /▶/ })).toBeNull();
+});
+
+test("устаревший ответ не перекрывает текущую запись", async () => {
+  let resolveA!: (v: never) => void;
+  vi.mocked(api.getRecording).mockImplementation((_ep, rid) =>
+    rid === "a" ? new Promise((r) => { resolveA = r as never; })
+      : Promise.resolve({ ...base, id: "b", title: "Запись B", transcript }));
+  const { rerender } = render(<RecordingCard id="a" endpoint={ep} />);
+  rerender(<RecordingCard id="b" endpoint={ep} />);
+  expect(await screen.findByRole("heading", { name: "Запись B" })).toBeInTheDocument();
+  resolveA({ ...base, id: "a", title: "Запись A", transcript } as never);
+  await new Promise((r) => setTimeout(r, 0));
+  expect(screen.getByRole("heading", { name: "Запись B" })).toBeInTheDocument();
+});
+
+test("переименование вызывает onChanged", async () => {
+  load();
+  vi.mocked(api.patchRecording).mockResolvedValue({ ...base, title: "Z" });
+  const onChanged = vi.fn();
+  render(<RecordingCard id="r1" endpoint={ep} onChanged={onChanged} />);
+  await userEvent.click(await screen.findByRole("heading", { name: "Встреча" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Название записи" }), "Z{Enter}");
+  await waitFor(() => expect(onChanged).toHaveBeenCalled());
 });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  deleteRecording, exportRecording, getRecording, patchRecording, transcribe,
+  deleteRecording, exportRecording, getRecording, getSettings, patchRecording, transcribe,
   type Endpoint,
 } from "../../lib/api";
 import { openFolder, saveText } from "../../lib/shell";
@@ -21,7 +21,7 @@ const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 
 export function RecordingCard({
-  id, endpoint, jobs = [], snapshot = null, people = [], onDeleted, onNameSpeaker,
+  id, endpoint, jobs = [], snapshot = null, people = [], onDeleted, onChanged, onNameSpeaker,
 }: {
   id: string;
   endpoint: Endpoint;
@@ -29,6 +29,7 @@ export function RecordingCard({
   snapshot?: Snapshot | null;
   people?: PersonColor[];
   onDeleted?: () => void;
+  onChanged?: () => void;
   onNameSpeaker?: (label: string) => void;
 }) {
   const [rec, setRec] = useState<Loaded | null>(null);
@@ -36,14 +37,38 @@ export function RecordingCard({
   const [busy, setBusy] = useState(false);
   const player = useRef<AudioPlayerHandle>(null);
 
+  const [owner, setOwner] = useState("Вы");
+  const current = useRef({ endpoint, id });
+  current.current = { endpoint, id };
+  const tracksRef = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    let live = true;
+    getSettings(endpoint).then((s) => {
+      const name = (s.recording as { speaker_name?: unknown } | undefined)?.speaker_name;
+      if (live && typeof name === "string" && name) setOwner(name);
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [endpoint]);
+
   const load = useCallback(async () => {
+    const stale = () => current.current.id !== id || current.current.endpoint !== endpoint;
     try {
-      setRec(await getRecording(endpoint, id));
+      const data = await getRecording(endpoint, id);
+      if (stale()) return;
+      setRec(data);
       setError(null);
     } catch (e) {
-      setError(errText(e));
+      if (!stale()) setError(errText(e));
     }
   }, [endpoint, id]);
+
+  const play = useCallback((t: Turn) => {
+    const tr = tracksRef.current;
+    const track: Track = tr.mic && t.speaker === owner ? "mic"
+      : tr.source ? "source" : tr.sys ? "sys" : "mic";
+    player.current?.play(track, t.start);
+  }, [owner]);
 
   // Состояние задач этой записи: при смене (очередь, готово) карточку надо перечитать.
   const jobSig = useMemo(
@@ -62,6 +87,8 @@ export function RecordingCard({
   const speakers = useMemo(() => speakersOf(segments ?? []), [segments]);
   const colors = useMemo(() => new Map(people.map((p) => [p.name, p.color])), [people]);
 
+  tracksRef.current = rec?.tracks ?? {};
+
   if (!rec) {
     return error ? <div className="card__error" role="alert">{error}</div> : <EmptyState title="Загрузка…" />;
   }
@@ -73,14 +100,14 @@ export function RecordingCard({
     try { await fn(); } catch (e) { setError(errText(e)); } finally { setBusy(false); }
   };
 
-  const track: Track = rec.tracks.source ? "source" : rec.tracks.sys ? "sys" : rec.tracks.mic ? "mic" : "source";
-  const play = (t: Turn) => player.current?.play(track, t.start);
+  const hasAudio = Object.keys(rec.tracks).length > 0;
 
   const rename = (title: string) => act(async () => {
     const updated = await patchRecording(endpoint, id, { title });
     setRec((cur) => (cur ? { ...cur, ...updated, transcript: cur.transcript } : cur));
+    onChanged?.();
   });
-  const doTranscribe = () => act(async () => { await transcribe(endpoint, id); await load(); });
+  const doTranscribe = () => act(async () => { await transcribe(endpoint, id); onChanged?.(); await load(); });
   const doDelete = () => act(async () => {
     await deleteRecording(endpoint, id);
     onDeleted?.();
@@ -94,7 +121,7 @@ export function RecordingCard({
   switch (status.kind) {
     case "ready":
       body = turns.length ? (
-        <Turns turns={turns} colors={colors} onPlay={play} onNameSpeaker={onNameSpeaker} />
+        <Turns turns={turns} colors={colors} playable={hasAudio} onPlay={play} onNameSpeaker={onNameSpeaker} />
       ) : <EmptyState title="В записи нет речи" />;
       break;
     case "untranscribed":
@@ -130,7 +157,6 @@ export function RecordingCard({
       break;
   }
 
-  const hasAudio = Object.keys(rec.tracks).length > 0;
   return (
     <section className="card">
       <CardHeader rec={rec} speakers={speakers} people={people} endpoint={endpoint}

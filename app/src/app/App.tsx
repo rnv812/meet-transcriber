@@ -40,10 +40,12 @@ export function App() {
               <EmptyState title="Сервис записи не запущен" hint="Окно переподключится само" />
             ) : selected && resident.endpoint ? (
               <RecordingCard
+                key={selected}
                 id={selected}
                 endpoint={resident.endpoint}
                 jobs={library.jobs}
                 snapshot={resident.snapshot ?? null}
+                onChanged={() => void library.refresh()}
                 onDeleted={() => { setSelected(null); void library.refresh(); }}
               />
             ) : (
