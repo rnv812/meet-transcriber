@@ -191,6 +191,18 @@ class TrayControl:
         self.tray.log("автозапись переведена в ручную из панели")
         return {**self.snapshot(), "ok": True, "action": "adopted"}
 
+    def set_auto_record(self, body: dict) -> dict:
+        """Переключатель автозаписи из трея и настроек. Детектор читает
+        cfg["enabled"] на каждом такте, поэтому применяется сразу — в отличие
+        от остальных полей auto_record, которые требуют перезапуска."""
+        enabled = (body or {}).get("enabled")
+        if not isinstance(enabled, bool):
+            raise _bad_request("ожидается enabled: true/false")
+        self.tray.cfg["enabled"] = enabled
+        settings.patch({"auto_record": {"enabled": enabled}})
+        self.tray.log(f"автозапись {'включена' if enabled else 'выключена'} из приложения")
+        return self.snapshot()
+
     # --- настройки и диагностика ----------------------------------------
 
     def settings(self) -> dict:

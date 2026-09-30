@@ -79,6 +79,10 @@ class FakeState:
         self.calls.append(("update", rid, body))
         return {"id": rid, "title": body.get("title")}
 
+    def set_auto_record(self, body):
+        self.calls.append(("auto", body))
+        return {"status": "idle", "auto_record": {"enabled": body["enabled"]}}
+
 
 class BoomState(FakeState):
     def snapshot(self) -> dict:
@@ -183,6 +187,12 @@ def test_recording_commands_reach_state(server):
     assert _post(server, "/recording/stop")["action"] == "stopped"
     assert _post(server, "/recording/cancel")["action"] == "cancelled"
     assert server.state_obj.calls == ["start", "adopt", "stop", "cancel"]
+
+
+def test_auto_record_route(server):
+    reply = _post(server, "/auto-record", {"enabled": False})
+    assert reply["auto_record"]["enabled"] is False
+    assert ("auto", {"enabled": False}) in server.state_obj.calls
 
 
 def test_trailing_slash_is_the_same_route(server):

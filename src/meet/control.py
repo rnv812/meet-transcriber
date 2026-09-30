@@ -579,6 +579,7 @@ _ROUTES = {
         discard=True
     ),
     ("POST", "/recording/adopt"): lambda h, p: _server_of(h).state.adopt_recording(),
+    ("POST", "/auto-record"): lambda h, p: _server_of(h).state.set_auto_record(h._body()),
     ("GET", "/recordings"): lambda h, p: _server_of(h).state.recordings(
         limit=_int_param(p, "limit", 200)
     ),

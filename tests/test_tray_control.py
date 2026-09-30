@@ -754,3 +754,18 @@ def test_saved_recording_is_queued_even_if_meta_cannot_be_written(app, tmp_path,
     folder = _saved_folder(tmp_path)
     app.on_saved(str(folder), tray_control.AUTO, True)
     assert queue.submitted == [(jobs.TRANSCRIBE, str(folder))]
+
+
+def test_auto_record_toggle_applies_live_and_persists(control_state, app):
+    assert app.cfg["enabled"] is True
+    snap = control_state.set_auto_record({"enabled": False})
+    assert snap["auto_record"]["enabled"] is False
+    assert app.cfg["enabled"] is False
+    assert settings.load().auto_record.enabled is False
+
+
+def test_auto_record_toggle_needs_bool(control_state):
+    import pytest
+    from meet import control
+    with pytest.raises(control.BadRequest):
+        control_state.set_auto_record({"enabled": "да"})
