@@ -380,6 +380,33 @@ def test_disabled_auto_record_only_logs(monkeypatch, tmp_path):
     assert "микрофон да" in (tmp_path / "meet" / "watch.log").read_text("utf-8")
 
 
+def test_auto_record_off_mid_auto_recording_still_auto_stops(monkeypatch, tmp_path):
+    """Выключили автозапись, пока она пишет звонок: STOP детектор выдаёт один
+    раз, и проглоти его трей — запись шла бы до выхода, вечно."""
+    app = _app(monkeypatch, tmp_path)
+    app.recording = True
+    app.source = tray.AUTO
+    app.started = time.monotonic() - 600
+    app.watcher.state = watch.Watcher.RECORDING
+    app.cfg["enabled"] = False  # переключатель в трее/настройках
+    _fixed_signals(app, monkeypatch, call=False)
+    monkeypatch.setattr(app.watcher, "poll", lambda call, now: watch.STOP)
+    stops = []
+    monkeypatch.setattr(app, "stop_recording", lambda hook=True: stops.append(hook))
+    app._watch_tick()
+    assert stops == [True]
+
+
+def test_auto_record_off_never_starts_a_recording(monkeypatch, tmp_path):
+    app = _app(monkeypatch, tmp_path)
+    app.cfg["enabled"] = False
+    _fixed_signals(app, monkeypatch, call=True)
+    monkeypatch.setattr(app.watcher, "poll", lambda call, now: watch.START)
+    monkeypatch.setattr(app, "start_recording", lambda source: 1 / 0)
+    app._watch_tick()
+    assert app.recording is False
+
+
 def test_enabled_auto_record_reacts_to_call(monkeypatch, tmp_path):
     app = _app(monkeypatch, tmp_path)
     _fixed_signals(app, monkeypatch, call=True)

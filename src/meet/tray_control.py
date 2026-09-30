@@ -198,8 +198,10 @@ class TrayControl:
         enabled = (body or {}).get("enabled")
         if not isinstance(enabled, bool):
             raise _bad_request("ожидается enabled: true/false")
-        self.tray.cfg["enabled"] = enabled
+        # Сначала на диск, потом вживую: не сохранилось — трей не должен
+        # разойтись с config.json (после перезапуска вернулось бы старое).
         settings.patch({"auto_record": {"enabled": enabled}})
+        self.tray.cfg["enabled"] = enabled
         self.tray.log(f"автозапись {'включена' if enabled else 'выключена'} из приложения")
         return self.snapshot()
 

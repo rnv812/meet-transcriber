@@ -764,6 +764,19 @@ def test_auto_record_toggle_applies_live_and_persists(control_state, app):
     assert settings.load().auto_record.enabled is False
 
 
+def test_auto_record_toggle_keeps_live_state_when_saving_fails(control_state, app,
+                                                               monkeypatch):
+    """Не сохранилось — не применяем и вживую: иначе трей и config.json
+    разошлись бы, и после перезапуска автозапись «сама» включилась бы обратно."""
+    def broken(updates):
+        raise OSError("диск только для чтения")
+
+    monkeypatch.setattr(settings, "patch", broken)
+    with pytest.raises(OSError):
+        control_state.set_auto_record({"enabled": False})
+    assert app.cfg["enabled"] is True
+
+
 def test_auto_record_toggle_needs_bool(control_state):
     import pytest
     from meet import control

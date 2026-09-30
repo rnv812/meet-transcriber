@@ -578,9 +578,10 @@ class TrayApp:
             self.log(f"{before} → {self.watcher.state}")
             if self.watcher.state == watch.Watcher.GRACE:
                 self._call_end = now  # длительность звонка без хвоста грейса
-        if not self.cfg["enabled"]:
-            return
-        if decision == watch.START:
+        # Выключатель автозаписи запрещает только новые старты. STOP детектор
+        # выдаёт ровно один раз: проглоти его, пока идёт автозапись, начатая до
+        # выключения, — и она писала бы до выхода трея.
+        if decision == watch.START and self.cfg["enabled"]:
             self._auto_start()
         elif decision == watch.STOP:
             self._auto_stop(now)
