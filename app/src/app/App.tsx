@@ -3,6 +3,7 @@ import { useLibrary } from "../state/useLibrary";
 import { usePeople } from "../state/usePeople";
 import { useResident } from "../state/useResident";
 import { RecordingsList } from "../features/recordings/RecordingsList";
+import { VoicesPane } from "../features/voices/VoicesPane";
 import { RecordingCard } from "../features/card/RecordingCard";
 import { EmptyState } from "../ui/EmptyState";
 import { Nav, type Section } from "./Nav";
@@ -16,6 +17,8 @@ export function App() {
   const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick);
   const { people, refresh: refreshPeople } = usePeople(resident.endpoint ?? null);
   const offline = resident.status === "offline";
+
+  const openRecording = (id: string) => { setSelected(id); setSection("recordings"); };
 
   return (
     <div className="app">
@@ -40,6 +43,13 @@ export function App() {
           <main className="pane-detail" data-pane="detail">
             {offline ? (
               <EmptyState title="Сервис записи не запущен" hint="Окно переподключится само" />
+            ) : section === "voices" && resident.endpoint ? (
+              <VoicesPane
+                endpoint={resident.endpoint}
+                people={people}
+                onChanged={() => void refreshPeople()}
+                onOpenRecording={openRecording}
+              />
             ) : selected && resident.endpoint ? (
               <RecordingCard
                 key={selected}
