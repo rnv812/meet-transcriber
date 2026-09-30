@@ -17,7 +17,7 @@ export function ImportZone({ endpoint, onImported }: { endpoint: Endpoint | null
         try {
           await importFile(endpoint, path);
         } catch (cause) {
-          const name = path.split(/[\/]/).pop() || path;
+          const name = path.split(/[\\/]/).pop() || path;
           failed.push(`${name}: ${cause instanceof Error ? cause.message : String(cause)}`);
         }
       }
