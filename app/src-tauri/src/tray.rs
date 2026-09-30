@@ -504,6 +504,9 @@ pub fn icon_for(view: Option<&View>) -> TrayIconKind {
 }
 
 pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
+    if *status == ResidentStatus::Quitting {
+        return "meet — сохраняю запись и выхожу".to_string();
+    }
     if *status == ResidentStatus::ExternalNoApi {
         return "meet — работает старая версия записи (меню недоступно)".to_string();
     }
@@ -550,17 +553,25 @@ pub struct MenuState {
     pub auto: bool,
     /// Журнал упавшего резидента (пункт «Открыть журнал»).
     pub log: Option<PathBuf>,
+    /// Резидент сдался — пункт «Перезапустить сервис».
+    pub restart: bool,
+    /// Идёт «Выход»: меню целиком недоступно.
+    pub quitting: bool,
 }
 
 pub fn menu_state(view: Option<&View>, status: &ResidentStatus) -> MenuState {
+    let quitting = *status == ResidentStatus::Quitting;
+    let failed = matches!(status, ResidentStatus::Failed { .. });
     MenuState {
-        online: view.is_some(),
+        online: view.is_some() && !quitting,
         recording: view.is_some_and(|view| view.recording),
         auto: view.is_some_and(|view| view.auto),
         log: match status {
             ResidentStatus::Failed { log } => Some(log.clone()),
             _ => None,
         },
+        restart: failed,
+        quitting,
     }
 }
 
@@ -696,8 +707,10 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
 
 fn build_menu(app: &AppHandle, state: &MenuState) -> tauri::Result<Menu<Wry>> {
     let menu = Menu::new(app)?;
+    // «Выход» уже идёт: ни окно, ни команды, ни второй «Выход» — только ждать.
+    let usable = !state.quitting;
     let item = |id: &str, text: &str, enabled: bool| {
-        MenuItem::with_id(app, id, text, enabled, None::<&str>)
+        MenuItem::with_id(app, id, text, enabled && usable, None::<&str>)
     };
     menu.append(&item("open", "Открыть", true)?)?;
     if state.recording {
@@ -721,6 +734,9 @@ fn build_menu(app: &AppHandle, state: &MenuState) -> tauri::Result<Menu<Wry>> {
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     if state.log.is_some() {
         menu.append(&item("log", "Открыть журнал", true)?)?;
+    }
+    if state.restart {
+        menu.append(&item("restart", "Перезапустить сервис", true)?)?;
     }
     menu.append(&item("quit", "Выход", true)?)?;
     Ok(menu)
@@ -746,6 +762,7 @@ fn on_menu(app: &AppHandle, id: &str) {
         }
         "import" => import(app),
         "log" => open_log(app),
+        "restart" => app.state::<Supervisor>().restart(app),
         "quit" => quit(app),
         _ => {}
     }
@@ -920,7 +937,11 @@ fn poll_loop(app: &AppHandle, initial_menu: MenuState) {
             }
         }
 
-        let alive = matches!(status, ResidentStatus::Running | ResidentStatus::External);
+        // «Выход» — частый опрос: тултип и меню должны смениться сразу.
+        let alive = matches!(
+            status,
+            ResidentStatus::Running | ResidentStatus::External | ResidentStatus::Quitting
+        );
         thread::sleep(if alive { TICK } else { TICK_SLOW });
     }
 }
@@ -1313,7 +1334,9 @@ mod tests {
                 online: true,
                 recording: true,
                 auto: true,
-                log: None
+                log: None,
+                restart: false,
+                quitting: false,
             }
         );
         // Идущие секунды записи не пересобирают меню.
@@ -1326,6 +1349,24 @@ mod tests {
         let m = menu_state(None, &failed);
         assert!(!m.online);
         assert_eq!(m.log, Some(log));
+        assert!(m.restart, "рядом с журналом — «Перезапустить сервис»");
+    }
+
+    #[test]
+    fn quitting_disables_the_menu_and_says_so() {
+        let mut rec = idle();
+        rec.recording = true;
+        let quitting = ResidentStatus::Quitting;
+        // Резидент ещё отвечает (сохраняет запись), но меню уже не действует.
+        let m = menu_state(Some(&rec), &quitting);
+        assert!(m.quitting);
+        assert!(!m.online);
+        assert!(!m.restart);
+        assert_eq!(
+            tooltip(Some(&rec), &quitting),
+            "meet — сохраняю запись и выхожу"
+        );
+        assert_eq!(tooltip(None, &quitting), "meet — сохраняю запись и выхожу");
     }
 
     #[test]

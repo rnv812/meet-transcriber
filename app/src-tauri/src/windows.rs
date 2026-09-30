@@ -212,6 +212,7 @@ pub fn resident_status(app: AppHandle) -> String {
         ResidentStatus::External => "external",
         ResidentStatus::ExternalNoApi => "external-no-api",
         ResidentStatus::Failed { .. } => "failed",
+        ResidentStatus::Quitting => "quitting",
     }
     .to_string()
 }

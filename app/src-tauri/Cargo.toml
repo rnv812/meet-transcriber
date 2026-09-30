@@ -14,13 +14,15 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 # оставили, а не прыгает в центр экрана.
 tauri-plugin-window-state = "2"
 # Уведомления Windows («идёт запись», «расшифровка готова», сбои резидента).
-tauri-plugin-notification = "2"
+tauri-plugin-notification = "~2.4"
 # Диалоги выбора файла (импорт записи) и «Сохранить как».
-tauri-plugin-dialog = "2"
+tauri-plugin-dialog = "~2.7"
 # Один экземпляр: повторный запуск (ярлык, `--recording <id>`) не плодит
 # второй трей и второй резидент, а открывает окно в уже запущенной оболочке.
-# 2.5+ требует tauri 2.12 — в Cargo.lock закреплена 2.4.5 под tauri 2.11.
-tauri-plugin-single-instance = "2"
+# 2.5+ требует tauri 2.12 — закреплено на 2.4.x под tauri 2.11 (как в
+# Cargo.lock), чтобы `cargo update` не утащил несовместимую версию. Так же
+# закреплены notification и dialog: их минорные версии идут в ногу с tauri.
+tauri-plugin-single-instance = "~2.4"
 # Синхронный HTTP-клиент к control API резидента: вызывается из рабочих
 # потоков надзора и опроса, async-рантайм там не нужен. Только http на
 # 127.0.0.1 — TLS и gzip (фичи по умолчанию) не нужны.

@@ -102,8 +102,10 @@ fn endpoint_answers() -> bool {
 
 /// Где искать резидента, по порядку: `MEET_RESIDENT`, рядом с оболочкой
 /// (`resident\meet-tray.exe` установленного приложения), `.venv` репозитория
-/// (dev: оболочка в `app\src-tauri\target\debug`), затем PATH.
-pub fn candidates(exe_dir: &Path, env_override: Option<&OsStr>) -> Vec<PathBuf> {
+/// (только `dev` — отладочная сборка в `app\src-tauri\target\debug`), затем
+/// PATH. Релиз в `.venv` не заглядывает: четырьмя уровнями выше
+/// установленного exe может оказаться что угодно.
+pub fn candidates(exe_dir: &Path, env_override: Option<&OsStr>, dev: bool) -> Vec<PathBuf> {
     let mut list = Vec::new();
     if let Some(chosen) = env_override {
         let chosen = chosen.to_string_lossy();
@@ -113,7 +115,7 @@ pub fn candidates(exe_dir: &Path, env_override: Option<&OsStr>) -> Vec<PathBuf> 
     }
     list.push(exe_dir.join("resident").join(EXE));
     // target\debug → target → src-tauri → app → корень репозитория
-    if let Some(repo) = exe_dir.ancestors().nth(4) {
+    if let Some(repo) = exe_dir.ancestors().nth(4).filter(|_| dev) {
         list.push(repo.join(".venv").join("Scripts").join(EXE));
     }
     list.push(PathBuf::from(EXE));
@@ -314,6 +316,19 @@ pub enum ResidentStatus {
     Failed {
         log: PathBuf,
     },
+    /// «Выход»: резидент сохраняет запись и гасится, затем выйдет оболочка.
+    Quitting,
+}
+
+/// «Перезапустить сервис»: только из `Failed` (надзор уже закончился).
+/// Статус сразу `Starting` — второй клик до старта нового надзора ничего не
+/// делает. `true` — надо поднять надзор заново.
+pub fn begin_restart(status: &mut ResidentStatus) -> bool {
+    if !matches!(status, ResidentStatus::Failed { .. }) {
+        return false;
+    }
+    *status = ResidentStatus::Starting;
+    true
 }
 
 /// Надзор за резидентом. Живёт в состоянии приложения:
@@ -346,6 +361,13 @@ impl Supervisor {
             }),
         };
         app.manage(supervisor.clone());
+        supervisor.supervise_in_background(app);
+    }
+
+    /// Поток надзора. Счётчик перезапусков живёт в нём, так что новый поток —
+    /// это и сброс счётчика.
+    fn supervise_in_background(&self, app: &AppHandle) {
+        let supervisor = self.clone();
         let app = app.clone();
         let spawned = thread::Builder::new()
             .name("meet-resident".into())
@@ -355,11 +377,26 @@ impl Supervisor {
         }
     }
 
+    /// «Перезапустить сервис» из трея: сдавшийся надзор начинается заново,
+    /// с нулевым счётчиком перезапусков.
+    pub fn restart(&self, app: &AppHandle) {
+        if self.quitting() || !begin_restart(&mut lock(&self.inner.status)) {
+            return;
+        }
+        shell_log!("перезапуск сервиса по просьбе пользователя");
+        self.supervise_in_background(app);
+    }
+
     pub fn status(&self) -> ResidentStatus {
         lock(&self.inner.status).clone()
     }
 
+    /// После «Выхода» статус остаётся `Quitting`: надзор, ещё не заметивший
+    /// флаг, не должен вернуть трею «запускается» или «работает».
     fn set_status(&self, status: ResidentStatus) {
+        if self.quitting() && status != ResidentStatus::Quitting {
+            return;
+        }
         *lock(&self.inner.status) = status;
     }
 
@@ -372,7 +409,11 @@ impl Supervisor {
             .ok()
             .and_then(|exe| exe.parent().map(Path::to_path_buf))
             .unwrap_or_default();
-        let list = candidates(&exe_dir, std::env::var_os(OVERRIDE_ENV).as_deref());
+        let list = candidates(
+            &exe_dir,
+            std::env::var_os(OVERRIDE_ENV).as_deref(),
+            cfg!(debug_assertions),
+        );
         let mut restarts = 0;
         let mut mode = if endpoint_answers() {
             Mode::External
@@ -594,6 +635,7 @@ impl Supervisor {
         if self.inner.quitting.swap(true, Ordering::SeqCst) {
             return; // уже погашен предыдущим вызовом
         }
+        self.set_status(ResidentStatus::Quitting);
         let Some(pid) = self.child_pid() else {
             // Своего процесса нет. External-резидент принадлежит пользователю
             // (например, `--watch` из автозагрузки) — «Выход» его не гасит.
@@ -705,7 +747,7 @@ mod tests {
     #[test]
     fn candidates_prefer_bundled_then_dev_venv_then_path() {
         let exe_dir = Path::new(r"C:\repo\app\src-tauri\target\debug");
-        let list = candidates(exe_dir, None);
+        let list = candidates(exe_dir, None, true);
         assert_eq!(list[0], exe_dir.join("resident").join("meet-tray.exe"));
         assert_eq!(list[1], Path::new(r"C:\repo\.venv\Scripts\meet-tray.exe"));
         assert_eq!(list.last().unwrap(), Path::new("meet-tray.exe"));
@@ -715,7 +757,7 @@ mod tests {
     fn meet_resident_env_goes_before_everything() {
         let exe_dir = Path::new(r"C:\repo\app\src-tauri\target\debug");
         let chosen = r"D:\other\.venv\Scripts\meet-tray.exe";
-        let list = candidates(exe_dir, Some(OsStr::new(chosen)));
+        let list = candidates(exe_dir, Some(OsStr::new(chosen)), true);
         assert_eq!(list[0], Path::new(chosen));
         assert_eq!(list[1], exe_dir.join("resident").join("meet-tray.exe"));
         assert_eq!(list.last().unwrap(), Path::new("meet-tray.exe"));
@@ -724,8 +766,39 @@ mod tests {
     #[test]
     fn blank_meet_resident_env_is_ignored() {
         let exe_dir = Path::new(r"C:\repo\app\src-tauri\target\debug");
-        let list = candidates(exe_dir, Some(OsStr::new("  ")));
+        let list = candidates(exe_dir, Some(OsStr::new("  ")), true);
         assert_eq!(list[0], exe_dir.join("resident").join("meet-tray.exe"));
+    }
+
+    #[test]
+    fn release_build_never_looks_into_a_dev_venv() {
+        // Установленное приложение не должно подхватить .venv из папки,
+        // которая случайно лежит на 4 уровня выше exe.
+        let exe_dir = Path::new(r"C:\repo\app\src-tauri\target\release");
+        let list = candidates(exe_dir, None, false);
+        assert_eq!(
+            list,
+            vec![
+                exe_dir.join("resident").join("meet-tray.exe"),
+                PathBuf::from("meet-tray.exe")
+            ]
+        );
+    }
+
+    #[test]
+    fn restart_is_only_for_a_failed_resident() {
+        let mut status = ResidentStatus::Failed {
+            log: PathBuf::from(r"C:\data\logs\resident.log"),
+        };
+        assert!(begin_restart(&mut status));
+        assert_eq!(status, ResidentStatus::Starting);
+        // Уже перезапускается (второй клик) или работает — не трогаем.
+        assert!(!begin_restart(&mut status));
+        let mut running = ResidentStatus::Running;
+        assert!(!begin_restart(&mut running));
+        assert_eq!(running, ResidentStatus::Running);
+        let mut quitting = ResidentStatus::Quitting;
+        assert!(!begin_restart(&mut quitting));
     }
 
     /// Временная папка теста с заданными файлами; удаляется в конце теста.
