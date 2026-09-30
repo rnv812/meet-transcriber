@@ -1,0 +1,111 @@
+/* Тёмный стиль Linear (макет A). Только тёмная тема, без стекла и градиентов. */
+@import "@fontsource-variable/onest";
+
+:root {
+  --bg: #0f1012;
+  --surface: #15161a;
+  --surface-2: #1a1b21;
+  --surface-hover: #1f2026;
+  --line: #1f2126;
+  --line-2: #2a2c33;
+  --text: #d6d7dc;
+  --text-2: #8e9099;
+  --text-3: #6f717b;
+  --accent: #5e6ad2;
+  --accent-hover: #6e79f7;
+  --red: #e5484d;
+  --ok: #4cc38a;
+  --run: #5e6ad2;
+  --err: #e5484d;
+  --amber: #f5a524;
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 12px;
+  --t: 120ms;
+  --nav-w: 200px;
+  --list-w: 320px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 "Onest Variable", "Onest", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 10px;
+  background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--line-2); border-radius: var(--r-md);
+  font: inherit; cursor: pointer;
+  transition: background var(--t), border-color var(--t), color var(--t);
+}
+.btn:hover { background: var(--surface-hover); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn--primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn--primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn--danger { color: var(--red); }
+.btn--danger:hover { background: rgba(229, 72, 77, 0.12); border-color: var(--red); }
+
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;
+  background: transparent; color: var(--text-2);
+  border: 0; border-radius: var(--r-md); cursor: pointer;
+  transition: background var(--t), color var(--t);
+}
+.icon-btn:hover { background: var(--surface-hover); color: var(--text); }
+
+.eyebrow {
+  font-size: 11px; font-weight: 500; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-3);
+}
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--text-2); }
+
+.badge {
+  display: inline-flex; align-items: center; height: 18px; padding: 0 7px;
+  border-radius: 9px; font-size: 11px;
+  color: var(--text-2); background: var(--surface-2);
+}
+.badge--ok { color: var(--ok); background: rgba(76, 195, 138, 0.12); }
+.badge--run { color: #9aa3ff; background: rgba(94, 106, 210, 0.16); }
+.badge--err { color: var(--err); background: rgba(229, 72, 77, 0.12); }
+
+/* Каркас окна: навигация · список · карточка */
+.app { display: flex; height: 100%; min-width: 820px; }
+.nav {
+  width: var(--nav-w); flex: none; padding: 12px 8px;
+  background: var(--surface); border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.nav__item {
+  display: flex; align-items: center; height: 30px; padding: 0 10px;
+  border: 0; border-radius: var(--r-md); background: transparent;
+  color: var(--text-2); font: inherit; text-align: left; cursor: pointer;
+  transition: background var(--t), color var(--t);
+}
+.nav__item:hover { background: var(--surface-hover); color: var(--text); }
+.nav__item[aria-current="page"] { background: var(--surface-2); color: #fff; }
+.pane-list {
+  width: var(--list-w); flex: none; overflow: auto;
+  border-right: 1px solid var(--line); background: var(--bg);
+}
+.pane-detail { flex: 1; min-width: 0; overflow: auto; background: var(--bg); }
+
+.empty {
+  height: 100%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 6px;
+  padding: 24px; text-align: center; color: var(--text-2);
+}
+.empty__title { color: var(--text); font-size: 14px; font-weight: 500; }

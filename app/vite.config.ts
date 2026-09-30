@@ -30,17 +30,9 @@ const daemon = daemonEndpoint();
 
 export default defineConfig({
   plugins: [react()],
-  // Панель и окно приложения — две страницы одной сборки: у них разные окна
-  // Tauri, но общий код клиента и стилей.
   build: {
     target: "chrome110", // WebView2 на Win10/11; лишние полифилы не нужны
-    rollupOptions: {
-      input: {
-        panel: "panel.html",
-        index: "index.html",
-        editor: "editor.html",
-      },
-    },
+    rollupOptions: { input: "index.html" },
   },
   // Вывод cargo не должен затираться очисткой экрана Vite.
   clearScreen: false,
