@@ -12,37 +12,13 @@
 
 mod api;
 mod resident;
-
-use std::path::PathBuf;
-use std::process::Command;
+mod windows;
 
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent};
 
-use resident::{Endpoint, Supervisor};
-
-#[tauri::command]
-fn endpoint() -> Option<Endpoint> {
-    resident::read_endpoint()
-}
-
-/// Показать папку записи в проводнике. Приложение не заменяет файловый
-/// менеджер: иногда быстрее открыть папку, чем искать её в библиотеке.
-#[tauri::command]
-fn open_folder(path: String) -> Result<(), String> {
-    let target = PathBuf::from(&path);
-    if !target.exists() {
-        return Err(format!("папки нет: {path}"));
-    }
-    Command::new("explorer")
-        .arg(&target)
-        .spawn()
-        .map(|_| ())
-        // explorer возвращает ненулевой код даже при успехе, поэтому ждать
-        // завершения нельзя — нас интересует только сам запуск.
-        .map_err(|error| format!("не удалось открыть папку: {error}"))
-}
+use resident::Supervisor;
 
 /// «Выход»: резидент сохраняет идущую запись и гасится (до 70 с), и только
 /// потом выходит оболочка. Ждём в отдельном потоке — главный поток держит
@@ -62,14 +38,27 @@ fn quit(app: &AppHandle) {
 /// и уведомления — в `tray.rs` (следующий шаг).
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let quit_item = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&quit_item])?;
+    let open_item = MenuItem::with_id(app, "open", "Открыть", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open_item, &quit_item])?;
     let mut tray = TrayIconBuilder::with_id("meet")
         .tooltip("meet")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
-            if event.id().as_ref() == "quit" {
-                quit(app);
+            match event.id().as_ref() {
+                "open" => windows::open_main(app, None),
+                "quit" => quit(app),
+                _ => {}
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                windows::open_main(tray.app_handle(), None);
             }
         });
     if let Some(icon) = app.default_window_icon() {
@@ -84,7 +73,13 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
-        .invoke_handler(tauri::generate_handler![endpoint, open_folder])
+        .invoke_handler(tauri::generate_handler![
+            windows::endpoint,
+            windows::open_folder,
+            windows::save_text,
+            windows::pick_media,
+            windows::resident_status
+        ])
         .setup(|app| {
             Supervisor::start(app.handle());
             build_tray(app)?;
