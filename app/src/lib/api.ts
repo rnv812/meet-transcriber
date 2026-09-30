@@ -87,7 +87,7 @@ export const patchRecording = (ep: Endpoint, id: string, patch: { title: string 
 export const deleteRecording = (ep: Endpoint, id: string) =>
   json<{ ok: boolean }>(ep, `/recordings/${enc(id)}`, { method: "DELETE" });
 export const importFile = (ep: Endpoint, path: string) =>
-  json<{ recording: Recording; job: Job }>(ep, "/recordings/import", body("POST", { path }));
+  json<{ recording: string; job: Job }>(ep, "/recordings/import", body("POST", { path }));
 export const transcribe = (ep: Endpoint, id: string) =>
   json<Job>(ep, `/recordings/${enc(id)}/transcribe`, body("POST", {}));
 export const saveTranscript = (ep: Endpoint, id: string, transcript: Transcript) =>
@@ -95,7 +95,7 @@ export const saveTranscript = (ep: Endpoint, id: string, transcript: Transcript)
     ep, `/recordings/${enc(id)}/transcript`, body("PUT", transcript));
 export const nameSpeakers = (ep: Endpoint, id: string, mapping: Record<string, string>) =>
   json<{ ok: boolean; renamed: number; enrolled: string[]; voices_error: string | null }>(
-    ep, `/recordings/${enc(id)}/speakers`, body("POST", { mapping }));
+    ep, `/recordings/${enc(id)}/speakers`, body("POST", mapping));
 export const exportRecording = (ep: Endpoint, id: string, format: string) =>
   json<{ filename: string; content: string }>(ep, `/recordings/${enc(id)}/export?format=${enc(format)}`);
 
@@ -177,9 +177,10 @@ export type ModelsState = {
 export const getSettings = (ep: Endpoint) => json<Record<string, unknown>>(ep, "/settings");
 export const patchSettings = (ep: Endpoint, updates: Record<string, unknown>) =>
   json<{ settings: Record<string, unknown>; restart_required: string[] }>(ep, "/settings", body("PATCH", updates));
-export const getHotwords = (ep: Endpoint) => json<{ words: string[] }>(ep, "/hotwords");
-export const putHotwords = (ep: Endpoint, words: string[]) =>
-  json<{ words: string[] }>(ep, "/hotwords", body("PUT", { words }));
+export type Hotwords = { text: string; budget: number; used: number };
+export const getHotwords = (ep: Endpoint) => json<Hotwords>(ep, "/hotwords");
+export const putHotwords = (ep: Endpoint, text: string) =>
+  json<Hotwords>(ep, "/hotwords", body("PUT", { text }));
 export const getEngine = (ep: Endpoint) => json<EngineState>(ep, "/engine");
 export const installEngine = (ep: Endpoint, flavor?: "cuda" | "cpu") =>
   json<Job>(ep, "/engine/install", body("POST", flavor ? { flavor } : {}));

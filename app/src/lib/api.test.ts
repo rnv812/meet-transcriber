@@ -1,4 +1,4 @@
-import { ApiError, deleteRecording, avatarUrl, saveTranscript } from "./api";
+import { ApiError, deleteRecording, avatarUrl, saveTranscript, nameSpeakers, putHotwords } from "./api";
 
 test("ошибка резидента приходит текстом", async () => {
   globalThis.fetch = vi.fn().mockResolvedValue(new Response(
@@ -17,4 +17,25 @@ test("saveTranscript: PUT с телом-транскриптом", async () => {
   await saveTranscript({ base: "http://h", token: "t" }, "a b", t);
   expect(f.mock.calls[0]![0]).toBe("http://h/recordings/a%20b/transcript");
   expect(f.mock.calls[0]![1]).toMatchObject({ method: "PUT", body: JSON.stringify(t) });
+});
+
+const ep = { base: "http://h", token: "t" };
+const okFetch = () => {
+  const f = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+  globalThis.fetch = f;
+  return f;
+};
+
+test("nameSpeakers: тело — сам словарь", async () => {
+  const f = okFetch();
+  await nameSpeakers(ep, "a b", { SPEAKER_00: "Демьян" });
+  expect(f.mock.calls[0]![0]).toBe("http://h/recordings/a%20b/speakers");
+  expect(f.mock.calls[0]![1]).toMatchObject({ method: "POST", body: JSON.stringify({ SPEAKER_00: "Демьян" }) });
+});
+
+test("putHotwords: PUT {text}", async () => {
+  const f = okFetch();
+  await putHotwords(ep, "Вася, Петя");
+  expect(f.mock.calls[0]![0]).toBe("http://h/hotwords");
+  expect(f.mock.calls[0]![1]).toMatchObject({ method: "PUT", body: JSON.stringify({ text: "Вася, Петя" }) });
 });

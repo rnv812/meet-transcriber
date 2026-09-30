@@ -647,3 +647,13 @@ def test_handler_oserror_is_500_not_silence(server):
     server.state_obj.settings = boom  # GET /settings вызывает state.settings()
     reply = _get(server, "/settings", expect=500)
     assert "только для чтения" in reply["error"]
+
+
+def test_recording_id_in_path_is_url_decoded(server):
+    # атрибут `recording` у FakeState — флаг; для этого теста подменяем его методом
+    def lookup(rid):
+        server.state_obj.calls.append(("recording", rid))
+        return {"id": rid}
+    server.state_obj.recording = lookup
+    assert _get(server, "/recordings/a%20b") == {"id": "a b"}
+    assert ("recording", "a b") in server.state_obj.calls

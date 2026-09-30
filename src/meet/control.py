@@ -426,7 +426,7 @@ def _make_handler(server: ControlServer):
             if method == "GET" and audio:
                 # Не JSON: дорожка отдаётся байтами, с поддержкой Range —
                 # без него плеер не умеет перематывать.
-                self._stream_audio(audio.group(1), params)
+                self._stream_audio(unquote(audio.group(1)), params)
                 return _STREAMED
             avatar = re.match(r"^/voices/([^/]+)/avatar$", path)
             if method == "GET" and avatar:
@@ -612,20 +612,20 @@ _ROUTES = {
 # лишний слой абстракции здесь читался бы хуже, чем сам список.
 _PATTERNS = (
     ("GET", re.compile(r"^/recordings/([^/]+)$"),
-     lambda h, p, rid: _server_of(h).state.recording(rid)),
+     lambda h, p, rid: _server_of(h).state.recording(unquote(rid))),
     ("GET", re.compile(r"^/recordings/([^/]+)/transcript$"),
-     lambda h, p, rid: _server_of(h).state.transcript(rid)),
+     lambda h, p, rid: _server_of(h).state.transcript(unquote(rid))),
     ("PUT", re.compile(r"^/recordings/([^/]+)/transcript$"),
-     lambda h, p, rid: _server_of(h).state.save_transcript(rid, h._body())),
+     lambda h, p, rid: _server_of(h).state.save_transcript(unquote(rid), h._body())),
     ("GET", re.compile(r"^/recordings/([^/]+)/export$"),
      lambda h, p, rid: _server_of(h).state.export(
-         rid, (p.get("format") or ["md"])[0])),
+         unquote(rid), (p.get("format") or ["md"])[0])),
     ("PATCH", re.compile(r"^/recordings/([^/]+)$"),
-     lambda h, p, rid: _server_of(h).state.update_recording(rid, h._body())),
+     lambda h, p, rid: _server_of(h).state.update_recording(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers$"),
-     lambda h, p, rid: _server_of(h).state.name_speakers(rid, h._body())),
+     lambda h, p, rid: _server_of(h).state.name_speakers(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/transcribe$"),
-     lambda h, p, rid: _server_of(h).state.transcribe(rid, h._body())),
+     lambda h, p, rid: _server_of(h).state.transcribe(unquote(rid), h._body())),
     ("DELETE", re.compile(r"^/jobs/([^/]+)$"),
      lambda h, p, job_id: _server_of(h).state.cancel_job(job_id)),
     ("GET", re.compile(r"^/voices/([^/]+)/sample$"),
@@ -639,7 +639,7 @@ _PATTERNS = (
     ("POST", re.compile(r"^/voices/([^/]+)/merge$"),
      lambda h, p, n: _server_of(h).state.person_action(unquote(n), "merge", h._body())),
     ("DELETE", re.compile(r"^/recordings/([^/]+)$"),
-     lambda h, p, rid: _server_of(h).state.delete_recording(rid)),
+     lambda h, p, rid: _server_of(h).state.delete_recording(unquote(rid))),
     ("GET", re.compile(r"^/voices/([^/]+)$"),
      lambda h, p, n: _server_of(h).state.person(unquote(n))),
     ("DELETE", re.compile(r"^/voices/([^/]+)$"),

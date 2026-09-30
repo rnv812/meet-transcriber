@@ -80,7 +80,20 @@ export type Person = {
   color: string;
 };
 
-export type PersonCard = Person & { [key: string]: unknown };
+export type PersonMeeting = {
+  recording: string;
+  title: string | null;
+  started_at: string | null;
+  seconds: number;
+};
+
+export type PersonCard = {
+  name: string;
+  color: string;
+  has_avatar: boolean;
+  samples: number;
+  meetings: PersonMeeting[];
+};
 
 export type Sample = { recording: string; start: number; end: number; track: string };
 

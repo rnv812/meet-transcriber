@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type Endpoint, getJobs, getRecordings } from "../lib/api";
-import type { BusEvent, Job, Recording } from "../lib/types";
+import type { Job, Recording } from "../lib/types";
 
 const SEARCH_DELAY_MS = 250;
-
-const refreshes = (e: BusEvent | null | undefined) =>
-  !!e && (e.kind.startsWith("job.") || e.kind === "record.stopped" || e.kind === "record.discarded");
 
 export type Library = {
   items: Recording[];
@@ -16,7 +13,7 @@ export type Library = {
   refresh: () => Promise<void>;
 };
 
-export function useLibrary(ep: Endpoint | null, q: string, lastEvent?: BusEvent | null): Library {
+export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0): Library {
   const [items, setItems] = useState<Recording[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(false);
@@ -52,9 +49,10 @@ export function useLibrary(ep: Endpoint | null, q: string, lastEvent?: BusEvent 
     return () => clearTimeout(timer);
   }, [ep, q, refresh]);
 
+  // Обновление по событиям: первый тик (0) — начальная загрузка, её делает эффект выше.
   useEffect(() => {
-    if (refreshes(lastEvent)) void refresh();
-  }, [lastEvent, refresh]);
+    if (libraryTick > 0) void refresh();
+  }, [libraryTick, refresh]);
 
   return { items, jobs, loading, error, refresh };
 }
