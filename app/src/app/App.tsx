@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useLibrary } from "../state/useLibrary";
 import { useResident } from "../state/useResident";
 import { RecordingsList } from "../features/recordings/RecordingsList";
+import { RecordingCard } from "../features/card/RecordingCard";
 import { EmptyState } from "../ui/EmptyState";
 import { Nav, type Section } from "./Nav";
 import { RecordingBadge } from "./RecordingBadge";
@@ -37,6 +38,14 @@ export function App() {
           <main className="pane-detail" data-pane="detail">
             {offline ? (
               <EmptyState title="Сервис записи не запущен" hint="Окно переподключится само" />
+            ) : selected && resident.endpoint ? (
+              <RecordingCard
+                id={selected}
+                endpoint={resident.endpoint}
+                jobs={library.jobs}
+                snapshot={resident.snapshot ?? null}
+                onDeleted={() => { setSelected(null); void library.refresh(); }}
+              />
             ) : (
               <EmptyState title="Выберите запись" />
             )}
