@@ -166,18 +166,42 @@ def create_import(root: Path, src: Path) -> Path:
     return folder
 
 
-def describe(folder: Path) -> Recording | None:
-    """Папка записи → карточка для библиотеки. Не папка записи — None."""
-    if not folder.is_dir():
-        return None
+def _tracks(folder: Path) -> dict:
     tracks = {}
     for stem in TRACK_STEMS:
         track = find_track(folder, stem)
         if track is not None:
             tracks[stem] = track
+    return tracks
+
+
+def _recognised(tracks: dict, meta: dict) -> bool:
+    # без дорожек это не запись (импорт — запись ещё до копии)
+    return bool(tracks) or meta.get("source") == "import"
+
+
+def is_recording(folder: Path) -> bool:
+    """Та же проверка «это папка записи», что у describe, но без чтения
+    транскрипта: обходу всей библиотеки (статистика людей) хватает одного
+    разбора transcript.json на папку."""
+    return folder.is_dir() and _recognised(_tracks(folder), read_meta(folder))
+
+
+def recording_folders(root: Path) -> list[Path]:
+    """Папки записей библиотеки по имени (= по дате), от старых к новым."""
+    if not root.is_dir():
+        return []
+    return [f for f in sorted(root.iterdir(), key=lambda p: p.name) if is_recording(f)]
+
+
+def describe(folder: Path) -> Recording | None:
+    """Папка записи → карточка для библиотеки. Не папка записи — None."""
+    if not folder.is_dir():
+        return None
+    tracks = _tracks(folder)
     meta = read_meta(folder)
-    if not tracks and meta.get("source") != "import":
-        return None  # без дорожек это не запись (импорт — запись ещё до копии)
+    if not _recognised(tracks, meta):
+        return None
     transcript = read_transcript(folder)
     title = None
     if isinstance(transcript, dict):

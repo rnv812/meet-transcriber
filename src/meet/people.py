@@ -3,14 +3,18 @@
 
 Голоса хранит voices.py (`<voices>/<имя>.json`); здесь — всё, что про человека,
 а не про эмбеддинги. Аватар — `<voices>/<имя>.png`, квадрат 256×256.
-Статистика не хранится, а считается из транскриптов записей, откуда взяты
-образцы голоса: файлы — источник истины, и копия папки с другой машины не
-разъезжается с «базой»."""
+Статистика не хранится, а считается по transcript.json всех записей
+библиотеки — по репликам, где спикер назван именем человека (узнан ли он сам
+или назван вручную, неважно): файлы — источник истины, и копия папки с другой
+машины не разъезжается с «базой». Поэтому переименование и слияние людей
+переписывают имя и в транскриптах — иначе статистика и образец терялись бы."""
 
 import hashlib
 import io
 import json
+import os
 import re
+import uuid
 from pathlib import Path
 
 from meet import library
@@ -56,23 +60,6 @@ def _samples(path: Path) -> list[dict]:
         return []
 
 
-def _meeting_folders(samples: list[dict], recordings: Path) -> list[Path]:
-    """Папки записей из источников образцов, которые ещё существуют в
-    библиотеке. Источник-файл (импорт до v1, расшифровка файла в «Загрузках»)
-    — не запись библиотеки, его не считаем."""
-    root = recordings.resolve()
-    seen, out = set(), []
-    for s in samples:
-        try:
-            folder = Path(str(s.get("source") or "")).resolve()
-        except (OSError, ValueError):
-            continue
-        if folder.parent == root and folder.is_dir() and folder not in seen:
-            seen.add(folder)
-            out.append(folder)
-    return sorted(out, key=lambda p: p.name)
-
-
 def _duration(t: dict) -> float | None:
     """Длительность реплики или None, если start/end битые (руками правили
     transcript.json): одна такая реплика не должна ронять весь список."""
@@ -82,27 +69,44 @@ def _duration(t: dict) -> float | None:
         return None
 
 
-def _turns(folder: Path, name: str) -> list[dict]:
-    data = library.read_transcript(folder) or {}
-    segments = data.get("segments", [])
-    return [s for s in segments if isinstance(s, dict)
-            and s.get("speaker") == name and _duration(s) is not None]
+def _segments(data: dict | None) -> list[dict]:
+    segments = (data or {}).get("segments")
+    return [s for s in segments if isinstance(s, dict)] if isinstance(segments, list) else []
+
+
+def _turns(data: dict | None, name: str) -> list[dict]:
+    return [s for s in _segments(data)
+            if s.get("speaker") == name and _duration(s) is not None]
+
+
+def _speech_index(recordings: Path) -> dict[str, tuple[int, float]]:
+    """Имя → (встреч, секунд речи) по всей библиотеке за один проход: каждый
+    transcript.json разбирается один раз, сколько бы людей ни было в базе."""
+    index: dict[str, tuple[int, float]] = {}
+    for folder in library.recording_folders(recordings):
+        per_name: dict[str, float] = {}
+        for s in _segments(library.read_transcript(folder)):
+            speaker, duration = s.get("speaker"), _duration(s)
+            if isinstance(speaker, str) and duration is not None:
+                per_name[speaker] = per_name.get(speaker, 0.0) + duration
+        for speaker, seconds in per_name.items():
+            meetings, total = index.get(speaker, (0, 0.0))
+            index[speaker] = (meetings + 1, total + seconds)
+    return index
 
 
 def listing(voices: Path, recordings: Path) -> list[dict]:
     if not voices.is_dir():
         return []
+    index = _speech_index(recordings)
     out = []
     for f in sorted(voices.glob("*.json"), key=lambda p: p.stem.lower()):
         name = f.stem
-        samples = _samples(f)
-        folders = _meeting_folders(samples, recordings)
-        seconds = sum(_duration(t)
-                      for folder in folders for t in _turns(folder, name))
+        meetings, seconds = index.get(name, (0, 0.0))
         out.append({
             "name": name,
-            "samples": len(samples),
-            "meetings": len(folders),
+            "samples": len(_samples(f)),
+            "meetings": meetings,
             "seconds": round(seconds),
             "has_avatar": (voices / f"{name}.png").exists(),
             "color": color(name),
@@ -111,17 +115,54 @@ def listing(voices: Path, recordings: Path) -> list[dict]:
 
 
 def sample(name: str, voices: Path, recordings: Path) -> dict | None:
-    """Самая длинная реплика человека в последней по дате встрече с ним."""
-    folders = _meeting_folders(_samples(_voice_file(name, voices)), recordings)
-    for folder in reversed(folders):
-        turns = _turns(folder, name)
+    """Самая длинная реплика человека в последней по дате записи, где он
+    говорит. `voices` — для единообразия с остальными вызовами: образец берётся
+    из транскриптов, а не из базы голосов."""
+    name = valid_name(name)
+    for folder in reversed(library.recording_folders(recordings)):
+        turns = _turns(library.read_transcript(folder), name)
         if turns:
             best = max(turns, key=_duration)
-            card = library.describe(folder)
-            track = "sys" if card and "sys" in card.tracks else "source"
+            track = next((stem for stem in ("sys", "source", "mic")
+                          if library.find_track(folder, stem)), "source")
             return {"recording": folder.name, "start": best["start"],
                     "end": best["end"], "track": track}
     return None
+
+
+def _rewrite_speaker(recordings: Path, old: str, new: str) -> int:
+    """Переписать имя спикера во всех транскриптах библиотеки (атомарно,
+    файл за файлом). Возвращает число изменённых записей."""
+    changed = 0
+    for folder in library.recording_folders(recordings):
+        data = library.read_transcript(folder)
+        if not data:
+            continue
+        hit = False
+        for segment in _segments(data):
+            if segment.get("speaker") == old:
+                segment["speaker"] = new
+                hit = True
+        # «names» (названо из окна) и «speakers» (узнано по базе): метка → имя.
+        for key in ("names", "speakers"):
+            mapping = data.get(key)
+            if isinstance(mapping, dict):
+                for label, value in mapping.items():
+                    if value == old:
+                        mapping[label] = new
+                        hit = True
+        if hit:
+            library.write_transcript(folder, data)
+            changed += 1
+    return changed
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """Один и тот же файл под двумя именами — на Windows это «демьян» и «Демьян»."""
+    try:
+        return a.exists() and b.exists() and os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def set_avatar(name: str, data: bytes, voices: Path) -> Path:
@@ -152,25 +193,45 @@ def clear_avatar(name: str, voices: Path) -> None:
     avatar_path(name, voices).unlink(missing_ok=True)
 
 
-def rename(old: str, new: str, voices: Path) -> None:
+def _move(src: Path, dst: Path, via_temp: bool) -> None:
+    """Переименовать файл; при смене одного регистра — через временное имя:
+    на регистронезависимой ФС прямой rename в «тот же» файл ничего не меняет."""
+    if via_temp:
+        tmp = src.with_name(f".{uuid.uuid4().hex}.renaming")
+        src.rename(tmp)
+        tmp.rename(dst)
+    else:
+        src.rename(dst)
+
+
+def rename(old: str, new: str, voices: Path, recordings: Path) -> None:
+    """Переименовать человека: голос, аватар и имя в транскриптах библиотеки."""
+    old, new = valid_name(old), valid_name(new)
     src, dst = _voice_file(old, voices), _voice_file(new, voices)
     if not src.exists():
         raise KeyError(old)
-    if dst.exists():
+    if old == new:
+        return
+    case_only = _same_file(src, dst)
+    if dst.exists() and not case_only:
         raise FileExistsError(new)
     old_avatar, new_avatar = avatar_path(old, voices), avatar_path(new, voices)
-    # Картинка без голоса — сирота прежнего человека; она не должна ломать
-    # переименование уже после того, как голос переехал.
-    new_avatar.unlink(missing_ok=True)
-    src.rename(dst)
+    if not case_only:
+        # Картинка без голоса — сирота прежнего человека; она не должна ломать
+        # переименование уже после того, как голос переехал.
+        new_avatar.unlink(missing_ok=True)
+    _move(src, dst, case_only)
     if old_avatar.exists():
-        old_avatar.rename(new_avatar)
+        _move(old_avatar, new_avatar, case_only)
+    _rewrite_speaker(recordings, old, new)
 
 
-def merge(src_name: str, into: str, voices: Path) -> None:
-    """Слить два голоса одного человека: образцы src дописываются в into."""
+def merge(src_name: str, into: str, voices: Path, recordings: Path) -> None:
+    """Слить два голоса одного человека: образцы src дописываются в into, а
+    его реплики в транскриптах переходят к into."""
+    src_name, into = valid_name(src_name), valid_name(into)
     src, dst = _voice_file(src_name, voices), _voice_file(into, voices)
-    if src == dst:
+    if src == dst or _same_file(src, dst):
         # Слияние с самим собой удалило бы человека целиком.
         raise ValueError("нельзя слить человека с самим собой")
     if not src.exists():
@@ -178,8 +239,12 @@ def merge(src_name: str, into: str, voices: Path) -> None:
     if not dst.exists():
         raise KeyError(into)
     merged = _samples(dst) + _samples(src)
-    dst.write_text(json.dumps({"samples": merged}, ensure_ascii=False), encoding="utf-8")
+    # Атомарно: оборванная запись не должна оставить into без голоса.
+    tmp = dst.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"samples": merged}, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, dst)
     delete(src_name, voices)
+    _rewrite_speaker(recordings, src_name, into)
 
 
 def delete(name: str, voices: Path) -> None:

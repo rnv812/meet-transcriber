@@ -516,10 +516,14 @@ class TrayControl:
 
         voices = self._voices()
         try:
+            # rename/merge переписывают имя и в транскриптах библиотеки: по ним
+            # считается статистика и берётся образец.
             if action == "rename":
-                people.rename(name, people.valid_name(str((body or {}).get("to") or "")), voices)
+                people.rename(name, people.valid_name(str((body or {}).get("to") or "")),
+                              voices, self._root())
             elif action == "merge":
-                people.merge(name, people.valid_name(str((body or {}).get("into") or "")), voices)
+                people.merge(name, people.valid_name(str((body or {}).get("into") or "")),
+                             voices, self._root())
             elif action == "delete":
                 people.delete(name, voices)
             elif action == "clear-avatar":

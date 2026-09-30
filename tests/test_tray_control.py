@@ -640,3 +640,24 @@ def test_naming_speakers_rejects_unsafe_names(with_recordings, app, tmp_path):
     assert library.read_transcript(with_recordings) == original
     assert sorted(p.name for p in tmp_path.rglob("*")) == before
     assert not (tmp_path.parent / "x.json").exists()  # мимо папки голосов
+
+
+def test_person_rename_and_merge_rewrite_library_transcripts(voices_state, monkeypatch, tmp_path):
+    """Статистика людей считается по транскриптам библиотеки — rename/merge из
+    окна обязаны переписать имя и там, иначе у человека обнулится речь."""
+    from meet import library
+
+    state, voices = voices_state
+    root = tmp_path / "recordings"
+    folder = _recording(tmp_path)
+    library.write_transcript(folder, {"version": 1, "segments": [
+        {"start": 0.0, "end": 4.0, "speaker": "Демьян", "text": "раз"},
+        {"start": 4.0, "end": 6.0, "speaker": "Пётр", "text": "два"}]})
+    (voices / "Пётр.json").write_text('{"samples": []}', encoding="utf-8")
+    monkeypatch.setattr(state, "_root", lambda: root)
+    assert state.person_action("Демьян", "rename", {"to": "Демьян Петров"}) == {"ok": True}
+    assert state.person_action("Пётр", "merge", {"into": "Демьян Петров"}) == {"ok": True}
+    speakers = [s["speaker"] for s in library.read_transcript(folder)["segments"]]
+    assert speakers == ["Демьян Петров", "Демьян Петров"]
+    items = state.people()["items"]
+    assert [(p["name"], p["meetings"], p["seconds"]) for p in items] == [("Демьян Петров", 1, 6)]
