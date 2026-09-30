@@ -618,3 +618,25 @@ def test_state_endpoint_survives_unavailable_recordings_drive(app, monkeypatch, 
     finally:
         srv.stop()
     assert body["disk_free_gb"] is None and body["status"] == "idle"
+
+
+def test_naming_speakers_rejects_unsafe_names(with_recordings, app, tmp_path):
+    """Имя уходит в имя файла базы голосов: `..\\..\\x` писал бы мимо папки
+    голосов. Отказ — до любых изменений: ни транскрипт, ни база не тронуты."""
+    from meet import control, library
+
+    original = {"version": 1, "segments": [
+        {"start": 0.0, "end": 1.0, "speaker": "Спикер 1", "text": "раз"}]}
+    library.write_transcript(with_recordings, original)
+    (with_recordings / "2026-08-18_11-00_speakers.json").write_text(json.dumps({
+        "model": "m", "source": str(with_recordings), "date": "2026-08-18",
+        "speakers": [{"label": "SPEAKER_00", "display": "Спикер 1",
+                      "embedding": [1.0, 0.0]}]}, ensure_ascii=False), encoding="utf-8")
+    before = sorted(p.name for p in tmp_path.rglob("*"))
+    state = tray_control.TrayControl(app)
+    for bad in (r"..\..\x", "Демьян: ПМ", "x" * 81):
+        with pytest.raises(control.BadRequest):
+            state.name_speakers("2026-08-18_11-00", {"Спикер 1": bad})
+    assert library.read_transcript(with_recordings) == original
+    assert sorted(p.name for p in tmp_path.rglob("*")) == before
+    assert not (tmp_path.parent / "x.json").exists()  # мимо папки голосов

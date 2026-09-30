@@ -219,3 +219,24 @@ def test_match_log_survives_cp866_console(capsys):
         {"SPEAKER_00": np.asarray([0.9, 0.1]), "SPEAKER_01": np.asarray([0.0, 1.0])}, voices
     )
     capsys.readouterr().out.encode("cp866")
+
+
+@pytest.mark.parametrize("bad", [r"..\..\x", "../x", "Демьян: ПМ", "x" * 81, " "])
+def test_add_sample_rejects_unsafe_names(tmp_path, bad):
+    """Имя человека = имя файла: `..`, `:` (альтернативный поток NTFS) и
+    сверхдлинные имена не должны попасть на диск ни мимо папки голосов, ни в неё."""
+    base = tmp_path / "voices"
+    with pytest.raises(ValueError):
+        add_sample(bad, [1.0, 0.0], source="recordings/a", date="2026-06-26", folder=base)
+    assert not base.exists() or list(base.iterdir()) == []
+    assert sorted(p.name for p in tmp_path.iterdir()) in ([], ["voices"])
+
+
+def test_enroll_bad_name_is_friendly_and_writes_nothing(tmp_path):
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    _make_sidecar(rec)
+    base = tmp_path / "voices"
+    with pytest.raises(SystemExit, match="имя"):
+        enroll(str(rec), ["Спикер 1=Демьян", r"Спикер 2=..\..\x"], folder=base)
+    assert load_voices(base) == {}

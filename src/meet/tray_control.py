@@ -332,10 +332,19 @@ class TrayControl:
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
+        from meet import people
+
         pairs = {str(k): str(v).strip() for k, v in (mapping or {}).items()
                  if str(v).strip()}
         if not pairs:
             return {"error": "нечего сохранять"}
+        # Имя становится именем файла базы голосов: проверяем все до того, как
+        # тронуть транскрипт, — иначе отказ оставил бы его наполовину переименованным.
+        for label, name in pairs.items():
+            try:
+                pairs[label] = people.valid_name(name)
+            except ValueError as e:
+                raise _bad_request(f"«{name}»: {e}")
         data = library.read_transcript(folder)
         renamed = 0
         if data:

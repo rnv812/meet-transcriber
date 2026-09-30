@@ -54,7 +54,14 @@ def add_sample(
     date: str,
     folder: Path | None = None,
 ) -> Path:
-    """Дописать образец голоса; повтор из того же source заменяет старый образец."""
+    """Дописать образец голоса; повтор из того же source заменяет старый образец.
+
+    Имя = имя файла: `..\\..\\x` писал бы мимо папки голосов, `Демьян: ПМ` —
+    в альтернативный поток NTFS, а сверхдлинное потом не переименовать и не
+    удалить из окна. Недопустимое имя — ValueError до записи чего-либо."""
+    from meet.people import valid_name
+
+    name = valid_name(name)
     folder = folder or voices_dir()
     folder.mkdir(parents=True, exist_ok=True)
     f = folder / f"{name}.json"
@@ -172,6 +179,11 @@ def enroll(path_str: str, mappings: list[str], folder: Path | None = None) -> No
         by_key[s["label"]] = s
     source = data.get("source", str(sidecar))
     date = data.get("date", "")
+    from meet.people import valid_name
+
+    # Сначала разобрать и проверить все соответствия, потом писать: опечатка во
+    # втором не должна оставить первое наполовину применённым.
+    pairs: list[tuple[str, str, dict]] = []
     for m in mappings:
         who, sep, name = m.partition("=")
         who, name = who.strip(), name.strip()
@@ -181,6 +193,12 @@ def enroll(path_str: str, mappings: list[str], folder: Path | None = None) -> No
         if entry is None:
             known = ", ".join(s["display"] for s in data["speakers"])
             raise SystemExit(f"В {sidecar.name} нет спикера «{who}»; есть: {known}")
+        try:
+            name = valid_name(name)
+        except ValueError as e:
+            raise SystemExit(f"Недопустимое имя «{name}»: {e} (имя становится именем файла)")
+        pairs.append((who, name, entry))
+    for who, name, entry in pairs:
         f = add_sample(name, entry["embedding"], source=source, date=date, folder=folder)
         total = len(json.loads(f.read_text(encoding="utf-8"))["samples"])
         print(f"голоса: {name} += образец из {source} (всего образцов: {total})")
