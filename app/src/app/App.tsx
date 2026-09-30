@@ -15,7 +15,7 @@ export function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const resident = useResident();
   const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick);
-  const { people, refresh: refreshPeople } = usePeople(resident.endpoint ?? null);
+  const { people, refresh: refreshPeople, avatarVersion, bumpAvatar } = usePeople(resident.endpoint ?? null);
   const offline = resident.status === "offline";
 
   const openRecording = (id: string) => { setSelected(id); setSection("recordings"); };
@@ -47,6 +47,8 @@ export function App() {
               <VoicesPane
                 endpoint={resident.endpoint}
                 people={people}
+                avatarVersion={avatarVersion}
+                onAvatar={(name) => { bumpAvatar(name); void refreshPeople(); }}
                 onChanged={() => void refreshPeople()}
                 onOpenRecording={openRecording}
               />
@@ -58,6 +60,7 @@ export function App() {
                 jobs={library.jobs}
                 snapshot={resident.snapshot ?? null}
                 people={people}
+                avatarVersion={avatarVersion}
                 onPeopleChanged={() => void refreshPeople()}
                 onChanged={() => void library.refresh()}
                 onDeleted={() => { setSelected(null); void library.refresh(); }}

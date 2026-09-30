@@ -24,13 +24,14 @@ const NO_PEOPLE: PersonColor[] = [];
 const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 
 export function RecordingCard({
-  id, endpoint, jobs = [], snapshot = null, people = NO_PEOPLE, onDeleted, onChanged, onPeopleChanged,
+  id, endpoint, jobs = [], snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
 }: {
   id: string;
   endpoint: Endpoint;
   jobs?: Job[];
   snapshot?: Snapshot | null;
   people?: PersonColor[];
+  avatarVersion?: Record<string, number>;
   onDeleted?: () => void;
   onChanged?: () => void;
   onPeopleChanged?: () => void;
@@ -165,7 +166,7 @@ export function RecordingCard({
 
   return (
     <section className="card">
-      <CardHeader rec={rec} speakers={speakers} people={people} endpoint={endpoint}
+      <CardHeader rec={rec} speakers={speakers} people={people} endpoint={endpoint} avatarVersion={avatarVersion}
         onRename={rename} onNameSpeaker={nameSpeaker} />
       <CardActions
         canExport={status.kind === "ready"}
@@ -182,7 +183,7 @@ export function RecordingCard({
         <Popover anchor={naming.anchor} onClose={closeNaming} label="Кто это?">
           <SpeakerPopover
             endpoint={endpoint} recordingId={id} label={naming.label}
-            people={people}
+            people={people} avatarVersion={avatarVersion}
             onApplied={() => { void load(); onChanged?.(); onPeopleChanged?.(); }}
             onDone={closeNaming}
           />

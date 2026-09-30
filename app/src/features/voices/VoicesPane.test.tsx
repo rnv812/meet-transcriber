@@ -2,10 +2,13 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { VoicesPane } from "./VoicesPane";
 import * as api from "../../lib/api";
+import { usePeople } from "../../state/usePeople";
+import { CardHeader } from "../card/CardHeader";
 import type { Person } from "../../lib/types";
 
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
+  getPeople: vi.fn(),
   getPerson: vi.fn(),
   getSample: vi.fn(),
   putAvatar: vi.fn(),
@@ -32,8 +35,32 @@ beforeEach(() => {
   HTMLMediaElement.prototype.load = vi.fn();
 });
 
+const noop = () => {};
 const setup = (p = people, extra: Partial<Parameters<typeof VoicesPane>[0]> = {}) =>
-  render(<VoicesPane endpoint={ep} people={p} onChanged={() => {}} onOpenRecording={() => {}} {...extra} />);
+  render(
+    <VoicesPane endpoint={ep} people={p} avatarVersion={{}} onAvatar={noop} onChanged={noop}
+      onOpenRecording={noop} {...extra} />,
+  );
+
+const rec = {
+  id: "r1", path: "p", started_at: null, duration_s: 60, tracks: {}, has_transcript: true,
+  has_voices: false, title: "Встреча", source: "record",
+};
+
+/** Как App: одна usePeople на окно, аватар-версия уходит и в «Голоса», и в карточку записи. */
+function Harness() {
+  const { people: list, refresh, avatarVersion, bumpAvatar } = usePeople(ep);
+  return (
+    <>
+      <VoicesPane endpoint={ep} people={list} avatarVersion={avatarVersion} onChanged={noop}
+        onAvatar={(n) => { bumpAvatar(n); void refresh(); }} onOpenRecording={noop} />
+      <div data-testid="rec">
+        <CardHeader rec={rec} speakers={["Демьян"]} people={list} endpoint={ep} avatarVersion={avatarVersion}
+          onRename={noop} />
+      </div>
+    </>
+  );
+}
 
 test("сетка людей с заголовком и сводкой", () => {
   setup(people.slice(0, 2));
@@ -56,16 +83,60 @@ test("клик по человеку открывает карточку со в
   expect(onOpenRecording).toHaveBeenCalledWith("r1");
 });
 
-test("загрузка файла: putAvatar, затем аватар с картинкой и новой версией", async () => {
+test("загрузка файла: putAvatar, refresh, аватар везде с картинкой и новой версией", async () => {
   vi.mocked(api.putAvatar).mockResolvedValue();
-  const { container } = setup();
-  await userEvent.click(screen.getByText("Демьян"));
+  vi.mocked(api.getPeople)
+    .mockResolvedValueOnce({ items: people })
+    .mockResolvedValue({ items: people.map((p) => (p.name === "Демьян" ? { ...p, has_avatar: true } : p)) });
+  render(<Harness />);
+  await userEvent.click(await screen.findByText("Демьян", { selector: ".person__name" }));
+  const before = screen.getByTestId("rec").querySelector("img");
+  expect(before).toBeNull();
   const file = new File(["x"], "a.png", { type: "image/png" });
   await userEvent.upload(await screen.findByTestId("avatar-file"), file);
   await waitFor(() => expect(api.putAvatar).toHaveBeenCalledWith(ep, "Демьян", file));
-  await waitFor(() => expect(container.querySelector(".pcard img")).not.toBeNull());
-  expect(container.querySelector<HTMLImageElement>(".pcard img")!.src).toMatch(/voices\/%D0.*\/avatar\?v=\d+$/);
-  expect(container.querySelector(".person img")).not.toBeNull();
+  await waitFor(() => expect(screen.getByTestId("rec").querySelector("img")).not.toBeNull());
+  expect(api.getPeople).toHaveBeenCalledTimes(2);
+  const src = screen.getByTestId("rec").querySelector("img")!.getAttribute("src")!;
+  expect(src).toMatch(/\/avatar\?v=\d{5,}$/);
+  expect(document.querySelector(".pcard img")!.getAttribute("src")).toBe(src);
+});
+
+test("слишком большой файл не отправляется", async () => {
+  setup();
+  await userEvent.click(screen.getByText("Демьян"));
+  const big = new File(["x"], "big.png", { type: "image/png" });
+  Object.defineProperty(big, "size", { value: 11 * 1024 * 1024 });
+  await userEvent.upload(await screen.findByTestId("avatar-file"), big);
+  expect(await screen.findByText("Файл больше 10 МБ")).toBeInTheDocument();
+  expect(api.putAvatar).not.toHaveBeenCalled();
+});
+
+test("сброс к инициалам: deleteAvatar и onAvatar", async () => {
+  vi.mocked(api.deleteAvatar).mockResolvedValue({ ok: true });
+  const onAvatar = vi.fn();
+  setup([{ ...people[0]!, has_avatar: true }, ...people.slice(1)], { onAvatar });
+  await userEvent.click(screen.getByText("Демьян"));
+  await userEvent.click(await screen.findByRole("button", { name: "Аватар" }));
+  await userEvent.click(screen.getByRole("button", { name: "Сбросить к инициалам" }));
+  await waitFor(() => expect(api.deleteAvatar).toHaveBeenCalledWith(ep, "Демьян"));
+  expect(onAvatar).toHaveBeenCalledWith("Демьян");
+});
+
+test("Escape в имени отменяет переименование", async () => {
+  setup();
+  await userEvent.click(screen.getByText("Демьян"));
+  const input = await screen.findByLabelText("Имя");
+  await userEvent.clear(input);
+  await userEvent.type(input, "Пётр{Escape}");
+  expect(api.renamePerson).not.toHaveBeenCalled();
+  expect(input).toHaveValue("Демьян");
+});
+
+test("карточка получает фокус для Ctrl+V", async () => {
+  setup();
+  await userEvent.click(screen.getByText("Демьян"));
+  await waitFor(() => expect(document.querySelector(".pcard")).toHaveFocus());
 });
 
 test("ошибка загрузки: текст виден", async () => {
@@ -111,7 +182,7 @@ test("удаление: подтверждение, deletePerson, карточк
 });
 
 test("переименование: ошибка дубликата текстом", async () => {
-  vi.mocked(api.renamePerson).mockRejectedValue(new api.ApiError(409, "человек с таким именем уже есть"));
+  vi.mocked(api.renamePerson).mockRejectedValue(new api.ApiError(400, "человек с таким именем уже есть"));
   setup();
   await userEvent.click(screen.getByText("Демьян"));
   const input = await screen.findByLabelText("Имя");

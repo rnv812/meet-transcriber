@@ -6,8 +6,16 @@ import type { Person } from "../lib/types";
 const NONE: Person[] = [];
 
 /** База людей: один экземпляр на окно; массив стабилен, пока не пришли новые данные. */
-export function usePeople(ep: Endpoint | null): { people: Person[]; refresh: () => Promise<void> } {
+export function usePeople(ep: Endpoint | null): {
+  people: Person[];
+  refresh: () => Promise<void>;
+  avatarVersion: Record<string, number>;
+  bumpAvatar: (name: string) => void;
+} {
   const [people, setPeople] = useState<Person[]>(NONE);
+  const [avatarVersion, setAvatarVersion] = useState<Record<string, number>>({});
+  const bumpAvatar = useCallback(
+    (name: string) => setAvatarVersion((m) => ({ ...m, [name]: Date.now() })), []);
   const seq = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -23,5 +31,5 @@ export function usePeople(ep: Endpoint | null): { people: Person[]; refresh: () 
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  return { people, refresh };
+  return { people, refresh, avatarVersion, bumpAvatar };
 }

@@ -12,18 +12,18 @@ type Props = {
   endpoint: Endpoint;
   person: Person;
   others: Person[];
-  hasAvatar: boolean;
-  version: number;
-  onAvatar: (has: boolean) => void;
+  version?: number;
+  onAvatar: () => void;
   onRenamed: (to: string) => void;
   onRemoved: (next: string | null) => void;
   onOpenRecording: (id: string) => void;
 };
 
+const MAX_AVATAR = 10 * 1024 * 1024;
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function PersonCard({
-  endpoint, person, others, hasAvatar, version, onAvatar, onRenamed, onRemoved, onOpenRecording,
+  endpoint, person, others, version, onAvatar, onRenamed, onRemoved, onOpenRecording,
 }: Props) {
   const name = person.name;
   const [data, setData] = useState<PersonData | null>(null);
@@ -32,6 +32,10 @@ export function PersonCard({
   const [confirm, setConfirm] = useState<null | "delete" | { merge: string }>(null);
   const audio = useRef<HTMLAudioElement>(null);
   const stopAt = useRef<number | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const cancelled = useRef(false);
+
+  useEffect(() => root.current?.focus(), []);
 
   useEffect(() => {
     let live = true;
@@ -49,14 +53,16 @@ export function PersonCard({
   }
 
   const upload = (blob: Blob) => run(async () => {
+    if (blob.size > MAX_AVATAR) throw new Error("Файл больше 10 МБ");
     await putAvatar(endpoint, name, blob);
-    onAvatar(true);
+    onAvatar();
   });
   const reset = () => run(async () => {
     await deleteAvatar(endpoint, name);
-    onAvatar(false);
+    onAvatar();
   });
   const rename = () => {
+    if (cancelled.current) { cancelled.current = false; setDraft(name); return; }
     const to = draft.trim();
     if (!to || to === name) { setDraft(name); return; }
     void run(async () => {
@@ -91,6 +97,7 @@ export function PersonCard({
   return (
     <div
       className="pcard"
+      ref={root}
       tabIndex={0}
       onPaste={(e) => {
         const f = pastedImage(e);
@@ -101,7 +108,7 @@ export function PersonCard({
         <AvatarEditor
           endpoint={endpoint}
           person={person}
-          hasAvatar={hasAvatar}
+          hasAvatar={person.has_avatar}
           version={version}
           onUpload={(b) => void upload(b)}
           onReset={() => void reset()}
@@ -115,7 +122,7 @@ export function PersonCard({
           onBlur={rename}
           onKeyDown={(e) => {
             if (e.key === "Enter") e.currentTarget.blur();
-            if (e.key === "Escape") { setDraft(name); e.currentTarget.blur(); }
+            if (e.key === "Escape") { cancelled.current = true; e.currentTarget.blur(); }
           }}
         />
       </div>

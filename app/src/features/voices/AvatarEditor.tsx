@@ -7,7 +7,7 @@ type Props = {
   endpoint: Endpoint;
   person: Person;
   hasAvatar: boolean;
-  version: number;
+  version?: number;
   onUpload: (blob: Blob) => void;
   onReset: () => void;
   onError: (message: string) => void;

@@ -10,11 +10,12 @@ const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 type Option = { name: string; existing: boolean; person?: PersonColor };
 
 /** «Кто это?»: имя спикера из базы или новое; по умолчанию голос запоминается. */
-export function SpeakerPopover({ endpoint, recordingId, label, people, onApplied, onDone }: {
+export function SpeakerPopover({ endpoint, recordingId, label, people, avatarVersion, onApplied, onDone }: {
   endpoint: Endpoint;
   recordingId: string;
   label: string;
   people: PersonColor[];
+  avatarVersion?: Record<string, number>;
   onApplied?: () => void;
   onDone: () => void;
 }) {
@@ -100,7 +101,7 @@ export function SpeakerPopover({ endpoint, recordingId, label, people, onApplied
             onClick={() => void apply(o.name)}>
             {o.existing ? (
               <>
-                <Avatar name={o.name} color={o.person?.color} hasAvatar={o.person?.has_avatar} size={16}
+                <Avatar name={o.name} color={o.person?.color} hasAvatar={o.person?.has_avatar} version={avatarVersion?.[o.name]} size={16}
                   endpoint={endpoint} />
                 <span>{o.name} <span className="muted">— уже в базе</span></span>
               </>

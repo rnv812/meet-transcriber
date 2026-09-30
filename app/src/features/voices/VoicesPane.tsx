@@ -11,20 +11,15 @@ import "./voices.css";
 type Props = {
   endpoint: Endpoint;
   people: Person[];
+  avatarVersion: Record<string, number>;
+  onAvatar: (name: string) => void;
   onChanged: () => void;
   onOpenRecording: (id: string) => void;
 };
 
-type Override = { has: boolean; v: number };
-
-export function VoicesPane({ endpoint, people, onChanged, onOpenRecording }: Props) {
+export function VoicesPane({ endpoint, people, avatarVersion, onAvatar, onChanged, onOpenRecording }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
-  const [overrides, setOverrides] = useState<Record<string, Override>>({});
   const current = people.find((p) => p.name === selected) ?? null;
-  const info = (p: Person) => {
-    const o = overrides[p.name];
-    return { has: o?.has ?? p.has_avatar, v: o?.v ?? 0 };
-  };
 
   if (people.length === 0) {
     return <EmptyState title="Пока никого. Назовите спикеров в карточке записи — голоса запомнятся здесь." />;
@@ -38,7 +33,6 @@ export function VoicesPane({ endpoint, people, onChanged, onOpenRecording }: Pro
         </h2>
         <div className="voices__grid">
           {people.map((p) => {
-            const a = info(p);
             return (
               <button
                 key={p.name}
@@ -46,7 +40,7 @@ export function VoicesPane({ endpoint, people, onChanged, onOpenRecording }: Pro
                 className={`person${p.name === selected ? " person--on" : ""}`}
                 onClick={() => setSelected(p.name)}
               >
-                <Avatar name={p.name} color={p.color} hasAvatar={a.has} version={a.v} size={40} endpoint={endpoint} />
+                <Avatar name={p.name} color={p.color} hasAvatar={p.has_avatar} version={avatarVersion[p.name]} size={40} endpoint={endpoint} />
                 <span className="person__name">{p.name}</span>
                 <span className="person__meta">
                   {p.meetings} {plural(p.meetings, "встреча", "встречи", "встреч")} · {duration(p.seconds)} речи
@@ -63,9 +57,8 @@ export function VoicesPane({ endpoint, people, onChanged, onOpenRecording }: Pro
             endpoint={endpoint}
             person={current}
             others={people.filter((p) => p.name !== current.name)}
-            hasAvatar={info(current).has}
-            version={info(current).v}
-            onAvatar={(has) => setOverrides((m) => ({ ...m, [current.name]: { has, v: Date.now() } }))}
+            version={avatarVersion[current.name]}
+            onAvatar={() => onAvatar(current.name)}
             onRenamed={(to) => { setSelected(to); onChanged(); }}
             onRemoved={(next) => { setSelected(next); onChanged(); }}
             onOpenRecording={onOpenRecording}

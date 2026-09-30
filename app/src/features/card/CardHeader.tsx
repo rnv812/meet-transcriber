@@ -7,12 +7,13 @@ import { Avatar } from "../../ui/Avatar";
 import type { PersonColor } from "./Turns";
 
 export function CardHeader({
-  rec, speakers, people, endpoint, onRename, onNameSpeaker,
+  rec, speakers, people, endpoint, avatarVersion, onRename, onNameSpeaker,
 }: {
   rec: Recording;
   speakers: string[];
   people: PersonColor[];
   endpoint: Endpoint;
+  avatarVersion?: Record<string, number>;
   onRename: (title: string) => void;
   onNameSpeaker?: (label: string, anchor: HTMLElement) => void;
 }) {
@@ -56,7 +57,7 @@ export function CardHeader({
             const p = people.find((x) => x.name === name);
             const chip = (
               <>
-                <Avatar name={name} color={p?.color} hasAvatar={p?.has_avatar} size={20} endpoint={endpoint} />
+                <Avatar name={name} color={p?.color} hasAvatar={p?.has_avatar} version={avatarVersion?.[name]} size={20} endpoint={endpoint} />
                 <span>{name}</span>
               </>
             );
