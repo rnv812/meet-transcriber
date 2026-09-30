@@ -4,6 +4,7 @@ import { usePeople } from "../state/usePeople";
 import { useResident } from "../state/useResident";
 import { RecordingsList } from "../features/recordings/RecordingsList";
 import { VoicesPane } from "../features/voices/VoicesPane";
+import { SettingsPane } from "../features/settings/SettingsPane";
 import { RecordingCard } from "../features/card/RecordingCard";
 import { EmptyState } from "../ui/EmptyState";
 import { Nav, type Section } from "./Nav";
@@ -52,6 +53,8 @@ export function App() {
                 onChanged={() => void refreshPeople()}
                 onOpenRecording={openRecording}
               />
+            ) : section === "settings" && resident.endpoint ? (
+              <SettingsPane endpoint={resident.endpoint} recordingsDir={resident.snapshot?.recordings_dir ?? null} />
             ) : selected && resident.endpoint ? (
               <RecordingCard
                 key={selected}

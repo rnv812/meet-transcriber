@@ -1,0 +1,338 @@
+/**
+ * Настройки: слева разделы, справа строки «подпись — значение».
+ *
+ * Черновик по группам (`auto_record`, `asr`, …) + «Сохранить/Сбросить»; PATCH
+ * принимает секции целиком. Исключение — переключатель автозаписи: резидент
+ * применяет его на лету (`POST /auto-record`). Всё остальное в `auto_record`
+ * читается при старте — честно говорим, что нужен перезапуск.
+ */
+
+import { useCallback, useEffect, useState } from "react";
+import {
+  type Devices, type Endpoint, type Processes,
+  NoResidentError, getDevices, getProcesses, getSettings, patchSettings, setAutoRecord,
+} from "../../lib/api";
+import { openFolder } from "../../lib/shell";
+import { Button } from "../../ui/Button";
+import { EmptyState } from "../../ui/EmptyState";
+import { About } from "./About";
+import { DiagnosticsPane } from "./DiagnosticsPane";
+import { EnginePane } from "./EnginePane";
+import { HotwordsEditor } from "./HotwordsEditor";
+import { ModelsPane } from "./ModelsPane";
+import { Radio, Row, Switch, type Raw, type SetFn } from "./Section";
+import "./settings.css";
+
+type SectionId = "recording" | "auto" | "asr" | "engine" | "diagnostics" | "about" | "advanced";
+
+const MENU: { id: SectionId; title: string }[] = [
+  { id: "recording", title: "Запись и устройства" },
+  { id: "auto", title: "Автозапись" },
+  { id: "asr", title: "Распознавание" },
+  { id: "engine", title: "Движок и модели" },
+  { id: "diagnostics", title: "Диагностика" },
+  { id: "about", title: "О программе" },
+  { id: "advanced", title: "Дополнительно" },
+];
+
+const NO_DRAFT: SectionId[] = ["diagnostics", "about"];
+
+function TextRow({ id, label, hint, value, placeholder, short, onChange }: {
+  id: string; label: string; hint?: string; value: string; placeholder?: string; short?: boolean;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <Row label={label} hint={hint} htmlFor={id}>
+      <input id={id} type="text" className={short ? "input--short" : undefined} placeholder={placeholder}
+        value={value} onChange={(e) => onChange(e.target.value)} />
+    </Row>
+  );
+}
+
+function SecondsRow({ id, label, hint, value, onChange }: {
+  id: string; label: string; hint: string; value: number; onChange: (v: number) => void;
+}) {
+  return (
+    <Row label={label} hint={hint} htmlFor={id}>
+      <span className="with-unit">
+        <input id={id} type="number" min={0} className="num" value={value}
+          onChange={(e) => onChange(Number(e.target.value))} />
+        <span className="unit">секунд</span>
+      </span>
+    </Row>
+  );
+}
+
+function RecordingSection({ draft, set, devices, recordingsDir }: {
+  draft: Raw; set: SetFn; devices: Devices | null; recordingsDir: string | null;
+}) {
+  const v = (k: string) => draft.recording?.[k];
+  return (
+    <>
+      <Row label="Папка записей" hint="где лежат встречи; менять путь — в файле настроек">
+        {recordingsDir ? (
+          <>
+            <code className="path">{recordingsDir}</code>
+            <Button onClick={() => void openFolder(recordingsDir)}>Открыть</Button>
+          </>
+        ) : <span className="muted">неизвестно</span>}
+      </Row>
+      <Row label="Устройства записи" hint="следим за системными по умолчанию: наушники ушли и вернулись — запись переживёт">
+        <span className="tags">
+          {devices?.available ? (
+            <>
+              <code className="path">звук: {devices.system?.name}</code>
+              <code className="path">микрофон: {devices.mic?.name}</code>
+            </>
+          ) : <span className="muted">{devices?.error ?? "неизвестно"}</span>}
+        </span>
+      </Row>
+      <TextRow id="speaker-name" label="Как подписывать вас" short
+        hint="микрофонная дорожка — всегда владелец машины; в транскрипте она подписана так"
+        value={String(v("speaker_name") ?? "Вы")} onChange={(x) => set("recording", "speaker_name", x)} />
+      <Switch label="Расшифровывать сразу после записи" value={Boolean(v("auto_transcribe"))}
+        onChange={(x) => set("recording", "auto_transcribe", x)} />
+      <Radio label="Уведомления" value={(draft.ui?.notifications as "all" | "important" | "off") ?? "all"}
+        options={[
+          { value: "all", label: "Все" },
+          { value: "important", label: "Только важные" },
+          { value: "off", label: "Выключены" },
+        ]}
+        onChange={(x) => set("ui", "notifications", x)} />
+    </>
+  );
+}
+
+function AutoSection({ draft, set, processes, onToggle }: {
+  draft: Raw; set: SetFn; processes: Processes | null; onToggle: (v: boolean) => void;
+}) {
+  const v = (k: string) => draft.auto_record?.[k];
+  const selected = (v("processes") as string[] | undefined) ?? [];
+  const names = [...new Set([...(processes?.running ?? []), ...selected])].sort();
+  const toggle = (name: string) =>
+    set("auto_record", "processes", selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
+  return (
+    <>
+      <Switch label="Поднимать запись, когда начинается звонок"
+        hint="кончился звонок — запись останавливается сама"
+        value={Boolean(v("enabled"))} onChange={onToggle} />
+      <p className="muted sdesc">Эти параметры применятся после перезапуска приложения</p>
+      <Row label="Программы звонков"
+        hint="отметьте те, что сейчас запущены и ведут звонки. Мессенджеры добавлять осторожно: звук уведомления детектор читает как звонок">
+        <div className="checks">
+          {names.length === 0 && <span className="muted">{processes?.error ?? "нет запущенных программ"}</span>}
+          {names.map((n) => (
+            <label key={n} className="checks__item">
+              <input type="checkbox" checked={selected.includes(n)} onChange={() => toggle(n)} />
+              {n}
+            </label>
+          ))}
+        </div>
+      </Row>
+      <SecondsRow id="grace" label="Хвост после звонка"
+        hint="обрыв связи и перезаход не рвут файл надвое; в хвост попадает и сказанное после встречи"
+        value={Number(v("grace_seconds") ?? 0)} onChange={(x) => set("auto_record", "grace_seconds", x)} />
+      <SecondsRow id="min-call" label="Короткий звонок"
+        hint="запись короче этого считается ложной тревогой"
+        value={Number(v("min_call_seconds") ?? 0)} onChange={(x) => set("auto_record", "min_call_seconds", x)} />
+    </>
+  );
+}
+
+function AsrSection({ draft, set, endpoint }: { draft: Raw; set: SetFn; endpoint: Endpoint }) {
+  const v = (k: string) => draft.asr?.[k];
+  return (
+    <>
+      <Row label="Устройство" htmlFor="asr-device" hint="Авто — видеокарта, если есть">
+        <select id="asr-device" value={String(v("device") ?? "auto")} onChange={(e) => set("asr", "device", e.target.value)}>
+          <option value="auto">Авто</option>
+          <option value="cuda">Видеокарта</option>
+          <option value="cpu">Процессор</option>
+        </select>
+      </Row>
+      <TextRow id="asr-model" label="Модель для видеокарты" value={String(v("model") ?? "")}
+        onChange={(x) => set("asr", "model", x)} />
+      <TextRow id="asr-cpu-model" label="Модель для процессора" value={String(v("cpu_model") ?? "")}
+        onChange={(x) => set("asr", "cpu_model", x)} />
+      <TextRow id="asr-language" label="Язык" short value={String(v("language") ?? "ru")}
+        onChange={(x) => set("asr", "language", x)} />
+      <Switch label="Уточнять пословные таймкоды" hint="точнее стыки спикеров, чуть дольше"
+        value={Boolean(v("align"))} onChange={(x) => set("asr", "align", x)} />
+      <Switch label="Учитывать перебивания" hint="блоки в зонах нахлёста получают пометку — атрибуция там ненадёжна"
+        value={Boolean(v("overlap"))} onChange={(x) => set("asr", "overlap", x)} />
+      <HotwordsEditor endpoint={endpoint} />
+    </>
+  );
+}
+
+function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
+  const hooks = (k: string) => draft.hooks?.[k];
+  const win = hooks("recurring_window") as string[] | null | undefined;
+  const setWin = (i: 0 | 1, t: string) => {
+    const pair = [win?.[0] ?? "", win?.[1] ?? ""];
+    pair[i] = t;
+    set("hooks", "recurring_window", pair[0] && pair[1] ? pair : null);
+  };
+  return (
+    <>
+      <details className="sdetails">
+        <summary>Команда после записи</summary>
+        <Switch label="Запускать команду после остановки записи" value={Boolean(hooks("post_record"))}
+          onChange={(x) => set("hooks", "post_record", x)} />
+        <TextRow id="hook-command" label="Команда" placeholder="ничего не запускать"
+          hint="аргументы через пробел; плейсхолдеры {folder}, {date}, {project}, {prompt}"
+          value={((hooks("command") as string[] | undefined) ?? []).join(" ")}
+          onChange={(x) => set("hooks", "command", x.split(" ").filter(Boolean))} />
+        <TextRow id="hook-prompt" label="Текст-подсказка" hint="подставляется в {prompt}"
+          value={String(hooks("prompt") ?? "")} onChange={(x) => set("hooks", "prompt", x)} />
+        <Row label="Окно регулярной встречи" hint="запись в этом окне похожа на регулярную встречу. Пусто — не учитываем">
+          <span className="with-unit">
+            <input type="text" aria-label="Начало окна" className="input--short" placeholder="11:00"
+              value={win?.[0] ?? ""} onChange={(e) => setWin(0, e.target.value)} />
+            <span className="unit">—</span>
+            <input type="text" aria-label="Конец окна" className="input--short" placeholder="12:00"
+              value={win?.[1] ?? ""} onChange={(e) => setWin(1, e.target.value)} />
+          </span>
+        </Row>
+      </details>
+      <details className="sdetails">
+        <summary>Интеграции</summary>
+        <Switch label="Сообщать другим программам, что GPU занят"
+          hint="файл-маркер на время расшифровки. Некому читать — выключите"
+          value={Boolean(draft.integrations?.gpu_marker)} onChange={(x) => set("integrations", "gpu_marker", x)} />
+        <TextRow id="gpu-marker-path" label="Путь маркера" placeholder="по умолчанию"
+          hint="пусто — рядом с остальным состоянием"
+          value={String(draft.integrations?.gpu_marker_path ?? "")}
+          onChange={(x) => set("integrations", "gpu_marker_path", x || null)} />
+      </details>
+    </>
+  );
+}
+
+export function SettingsPane({ endpoint, recordingsDir }: { endpoint: Endpoint; recordingsDir: string | null }) {
+  const [section, setSection] = useState<SectionId>("recording");
+  const [settings, setSettings] = useState<Raw | null>(null);
+  const [draft, setDraft] = useState<Raw>({});
+  const [processes, setProcesses] = useState<Processes | null>(null);
+  const [devices, setDevices] = useState<Devices | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+
+  const reload = useCallback(async () => {
+    try {
+      const next = (await getSettings(endpoint)) as Raw;
+      setSettings(next);
+      setDraft(next);
+      setError(null);
+      setNotice(null);
+    } catch (e) {
+      setError(e instanceof NoResidentError ? "Сервис записи не отвечает" : String(e));
+    }
+    // Справочные данные: их отсутствие не мешает править настройки.
+    setProcesses(await getProcesses(endpoint).catch(() => null));
+    setDevices(await getDevices(endpoint).catch(() => null));
+  }, [endpoint]);
+
+  useEffect(() => { void reload(); }, [reload]);
+
+  const set: SetFn = (group, key, value) => {
+    setNotice(null);
+    setDraft((cur) => ({ ...cur, [group]: { ...(cur[group] ?? {}), [key]: value } }));
+  };
+
+  const dirty = settings
+    ? Object.keys(draft).filter((g) => JSON.stringify(draft[g]) !== JSON.stringify(settings[g]))
+    : [];
+
+  const save = async () => {
+    if (dirty.length === 0) return;
+    setPending(true);
+    try {
+      const updates: Record<string, unknown> = {};
+      for (const g of dirty) updates[g] = draft[g];
+      const result = await patchSettings(endpoint, updates);
+      setSettings(result.settings as Raw);
+      setDraft(result.settings as Raw);
+      setError(null);
+      setNotice(result.restart_required.length > 0
+        ? "Сохранено. Часть параметров применится после перезапуска приложения."
+        : "Сохранено.");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  /** Переключатель живёт вне черновика: применяется и сохраняется сразу. */
+  const toggleAuto = async (enabled: boolean) => {
+    try {
+      await setAutoRecord(endpoint, enabled);
+      const patch = (cur: Raw): Raw => ({ ...cur, auto_record: { ...cur.auto_record, enabled } });
+      setSettings((cur) => (cur ? patch(cur) : cur));
+      setDraft(patch);
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const showBar = !NO_DRAFT.includes(section);
+
+  return (
+    <div className="settings">
+      <nav className="settings__menu" aria-label="Разделы настроек">
+        {MENU.map((m) => (
+          <button key={m.id} type="button" className="settings__item"
+            aria-current={m.id === section ? "page" : undefined} onClick={() => setSection(m.id)}>
+            {m.title}
+          </button>
+        ))}
+      </nav>
+      <div className="settings__body">
+        <header className="settings__head">
+          <h2>{MENU.find((m) => m.id === section)?.title}</h2>
+          {showBar && (
+            <div className="settings__actions">
+              {notice && <span className="notice">{notice}</span>}
+              {dirty.length > 0 && <span className="muted">есть несохранённое</span>}
+              <Button onClick={() => void reload()} disabled={pending}>Сбросить</Button>
+              <Button variant="primary" onClick={() => void save()} disabled={pending || dirty.length === 0}>
+                {pending ? "Сохраняю…" : "Сохранить"}
+              </Button>
+            </div>
+          )}
+        </header>
+        {error && <p className="error">{error}</p>}
+        <div className="settings__content">
+          {!settings && section !== "about" && section !== "diagnostics" ? (
+            error ? <EmptyState title="Настройки недоступны" /> : <p className="muted">Загружаю…</p>
+          ) : section === "recording" ? (
+            <RecordingSection draft={draft} set={set} devices={devices} recordingsDir={recordingsDir} />
+          ) : section === "auto" ? (
+            <AutoSection draft={draft} set={set} processes={processes} onToggle={(v) => void toggleAuto(v)} />
+          ) : section === "asr" ? (
+            <AsrSection draft={draft} set={set} endpoint={endpoint} />
+          ) : section === "engine" ? (
+            <>
+              <EnginePane endpoint={endpoint} />
+              <h3 className="shead">Модели</h3>
+              <ModelsPane endpoint={endpoint}
+                selectedModel={(draft.asr?.model as string | undefined) ?? null}
+                onSelect={(id) => { set("asr", "model", id); setNotice("Модель выбрана — не забудьте сохранить"); }}
+                token={String(draft.integrations?.hf_token ?? "")}
+                onToken={(x) => set("integrations", "hf_token", x)} />
+            </>
+          ) : section === "diagnostics" ? (
+            <DiagnosticsPane endpoint={endpoint} />
+          ) : section === "about" ? (
+            <About endpoint={endpoint} />
+          ) : (
+            <AdvancedSection draft={draft} set={set} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
