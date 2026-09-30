@@ -9,18 +9,20 @@
 // порядок кандидатов, аргументы, решение после выхода процесса.
 
 use std::ffi::OsStr;
+use std::io::Write;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::api;
+use crate::logs::{self, shell_log};
 use crate::tray::{self, Notice};
 
 const EXE: &str = "meet-tray.exe";
@@ -259,7 +261,7 @@ impl Supervisor {
             .name("meet-resident".into())
             .spawn(move || supervisor.supervise(&app));
         if let Err(error) = spawned {
-            eprintln!("meet: поток надзора за резидентом не запустился: {error}");
+            shell_log!("поток надзора за резидентом не запустился: {error}");
         }
     }
 
@@ -290,19 +292,19 @@ impl Supervisor {
             if external {
                 // Чужой резидент не вечен: это может быть осиротевший резидент
                 // прошлой оболочки, который дописывает запись и сейчас выйдет.
-                eprintln!("meet: резидент уже работает вне приложения — подключаюсь к нему");
+                shell_log!("резидент уже работает вне приложения — подключаюсь к нему");
                 self.set_status(ResidentStatus::External);
                 self.watch_external();
                 if self.quitting() {
                     return;
                 }
-                eprintln!("meet: внешний резидент больше не отвечает — запускаю свой");
+                shell_log!("внешний резидент больше не отвечает — запускаю свой");
                 external = false;
             }
             self.set_status(ResidentStatus::Starting);
             let Some(pid) = self.spawn(&list) else {
                 if !self.quitting() {
-                    eprintln!("meet: резидент не найден ни по одному пути");
+                    shell_log!("резидент не найден ни по одному пути");
                     self.give_up(app);
                 }
                 return;
@@ -316,8 +318,8 @@ impl Supervisor {
             match next_action(code, restarts) {
                 Action::Restart => {
                     restarts += 1;
-                    eprintln!(
-                        "meet: резидент вышел (код {code:?}), перезапуск {restarts} из {MAX_RESTARTS}"
+                    shell_log!(
+                        "резидент вышел (код {code:?}), перезапуск {restarts} из {MAX_RESTARTS}"
                     );
                     thread::sleep(RESTART_PAUSE);
                 }
@@ -325,7 +327,7 @@ impl Supervisor {
                 // следим за тем, кто держит tray.lock.
                 Action::AdoptExternal => external = true,
                 Action::GiveUp => {
-                    eprintln!("meet: резидент падает раз за разом (код {code:?}) — сдаюсь");
+                    shell_log!("резидент падает раз за разом (код {code:?}) — сдаюсь");
                     self.give_up(app);
                     return;
                 }
@@ -357,8 +359,16 @@ impl Supervisor {
     fn spawn(&self, list: &[PathBuf]) -> Option<u32> {
         for candidate in list {
             let (program, arguments) = launch(candidate, std::process::id());
-            let mut command = Command::new(program);
-            command.args(&arguments).stdin(Stdio::null());
+            let mut command = Command::new(&program);
+            command
+                .args(&arguments)
+                .stdin(Stdio::null())
+                // Вывод резидента — в resident.log: UTF-8 (иначе кириллица в
+                // cp1251) и без буфера (traceback падения не должен
+                // потеряться в буфере умирающего процесса).
+                .env("PYTHONIOENCODING", "utf-8")
+                .env("PYTHONUNBUFFERED", "1");
+            redirect_output(&mut command, &program);
             hide_console(&mut command);
             match command.spawn() {
                 Ok(mut child) => {
@@ -373,13 +383,10 @@ impl Supervisor {
                         return None;
                     }
                     *slot = Some(child);
-                    eprintln!(
-                        "meet: резидент запущен: {} (pid {pid})",
-                        candidate.display()
-                    );
+                    shell_log!("резидент запущен: {} (pid {pid})", candidate.display());
                     return Some(pid);
                 }
-                Err(error) => eprintln!("meet: {}: {error}", candidate.display()),
+                Err(error) => shell_log!("{}: {error}", candidate.display()),
             }
         }
         None
@@ -407,7 +414,7 @@ impl Supervisor {
                     }
                     Ok(None) => {}
                     Err(error) => {
-                        eprintln!("meet: не удалось проверить резидента (pid {pid}): {error}");
+                        shell_log!("не удалось проверить резидента (pid {pid}): {error}");
                         *slot = None;
                         return None;
                     }
@@ -418,8 +425,8 @@ impl Supervisor {
                     self.set_status(ResidentStatus::Running);
                 } else if !warned && started.elapsed() >= PUBLISH_TIMEOUT {
                     warned = true;
-                    eprintln!(
-                        "meet: резидент (pid {pid}) за {} с не опубликовал daemon.json",
+                    shell_log!(
+                        "резидент (pid {pid}) за {} с не опубликовал daemon.json",
                         PUBLISH_TIMEOUT.as_secs()
                     );
                 }
@@ -432,8 +439,11 @@ impl Supervisor {
     /// заканчивается, повторить его некому. Уведомление идёт через трей: оно
     /// подчиняется `ui.notifications` (при «off» молчит).
     fn give_up(&self, app: &AppHandle) {
+        // resident.log, а не watch.log: причина падения (traceback, «модуль
+        // не найден») — в выводе процесса, в журнал решений детектора она не
+        // попадает.
         self.set_status(ResidentStatus::Failed {
-            log: data_dir().join("watch.log"),
+            log: logs::resident_log(&data_dir()),
         });
         tray::notify(
             app,
@@ -464,10 +474,10 @@ impl Supervisor {
                 if let Err(error) =
                     api::Client::new(&endpoint).post("/shutdown", serde_json::Value::Null)
                 {
-                    eprintln!("meet: /shutdown не прошёл: {error}");
+                    shell_log!("/shutdown не прошёл: {error}");
                 }
             }
-            None => eprintln!("meet: резидент не опубликовал адрес — /shutdown некуда слать"),
+            None => shell_log!("резидент не опубликовал адрес — /shutdown некуда слать"),
         }
         let deadline = Instant::now() + EXIT_GRACE;
         while Instant::now() < deadline {
@@ -476,7 +486,7 @@ impl Supervisor {
             }
             thread::sleep(POLL);
         }
-        eprintln!("meet: резидент (pid {pid}) не вышел сам — завершаю дерево процессов");
+        shell_log!("резидент (pid {pid}) не вышел сам — завершаю дерево процессов");
         kill_tree(pid);
         if let Some(mut child) = lock(&self.inner.child).take() {
             let _ = child.wait();
@@ -508,6 +518,28 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// stdout и stderr резидента — в `logs\resident.log` (дописыванием, большой
+/// файл сначала уезжает в `.1`), с заголовком запуска. Журнал не открылся —
+/// вывод в никуда, но резидент всё равно запускается.
+fn redirect_output(command: &mut Command, program: &Path) {
+    let path = logs::resident_log(&data_dir());
+    let opened = logs::open_append(&path).and_then(|mut file| {
+        let header = format!("--- запуск резидента: {}", program.display());
+        file.write_all(logs::line(SystemTime::now(), &header).as_bytes())?;
+        let copy = file.try_clone()?;
+        Ok((file, copy))
+    });
+    match opened {
+        Ok((out, err)) => {
+            command.stdout(out).stderr(err);
+        }
+        Err(error) => {
+            shell_log!("журнал резидента {} не открылся: {error}", path.display());
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+    }
+}
+
 /// Без окна консоли: резидент и taskkill — консольные программы.
 fn hide_console(command: &mut Command) {
     #[cfg(windows)]
@@ -530,7 +562,7 @@ fn kill_tree(pid: u32) {
         .stderr(Stdio::null());
     hide_console(&mut command);
     if let Err(error) = command.status() {
-        eprintln!("meet: taskkill не запустился: {error}");
+        shell_log!("taskkill не запустился: {error}");
     }
 }
 

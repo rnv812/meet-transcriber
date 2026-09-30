@@ -11,6 +11,7 @@ use std::process::Command;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::logs::shell_log;
 use crate::resident::{self, Endpoint, ResidentStatus, Supervisor};
 
 /// Расширения, которые резидент принимает при импорте (`IMPORT_EXTS`).
@@ -82,7 +83,7 @@ pub fn open_main(app: &AppHandle, recording: Option<String>) {
     .center()
     .build();
     if let Err(error) = built {
-        eprintln!("meet: окно не открылось: {error}");
+        shell_log!("окно не открылось: {error}");
     }
 }
 

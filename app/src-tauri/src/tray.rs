@@ -26,6 +26,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::api::{self, Client};
+use crate::logs::shell_log;
 use crate::resident::{self, lock, ResidentStatus, Supervisor};
 use crate::windows;
 
@@ -631,7 +632,7 @@ pub fn notify(app: &AppHandle, notices: Vec<Notice>) {
             .body(&notice.body)
             .show();
         if let Err(error) = shown {
-            eprintln!("meet: уведомление не показалось: {error}");
+            shell_log!("уведомление не показалось: {error}");
         }
     }
 }
@@ -762,7 +763,7 @@ fn command(app: &AppHandle, action: Action) {
             }
         }
         if let Some(notice) = action_notice(action, reply.as_ref()) {
-            eprintln!("meet: {}: {}", action.path(), notice.body);
+            shell_log!("{}: {}", action.path(), notice.body);
             notify(&app, vec![notice]);
         }
     });
@@ -800,7 +801,7 @@ fn import_file(path: &Path) -> Result<(), String> {
             None => Ok(()),
         },
         Err(api::Error::Status { code, message }) => {
-            eprintln!("meet: импорт отклонён резидентом ({code})");
+            shell_log!("импорт отклонён резидентом ({code})");
             Err(message)
         }
         Err(other) => Err(other.to_string()),
@@ -811,17 +812,22 @@ fn open_log(app: &AppHandle) {
     let ResidentStatus::Failed { log } = app.state::<Supervisor>().status() else {
         return;
     };
-    // Журнала может не быть (резидент не дожил до первой строки) — тогда
-    // хотя бы папка, где он должен был появиться.
-    let target = if log.exists() {
-        log
-    } else {
-        resident::data_dir()
-    };
+    // Папка, а не файл: рядом лежат shell.log и архивы `.1`, а причина
+    // бывает в любом из них.
+    let target = log_folder(&log, &resident::data_dir());
     // explorer возвращает ненулевой код и при успехе — ждём только запуска.
     if let Err(error) = Command::new("explorer").arg(&target).spawn() {
-        eprintln!("meet: журнал не открылся: {error}");
+        shell_log!("журнал не открылся: {error}");
     }
+}
+
+/// Что открывает «Открыть журнал»: папку журнала резидента (`logs`), а если
+/// её нет (резидент не дожил до первой строки) — `data_dir`.
+fn log_folder(log: &Path, data_dir: &Path) -> PathBuf {
+    log.parent()
+        .filter(|dir| dir.is_dir())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| data_dir.to_path_buf())
 }
 
 /// «Выход»: резидент сохраняет идущую запись и гасится (до 70 с), и только
@@ -893,7 +899,7 @@ fn poll_loop(app: &AppHandle, initial_menu: MenuState) {
             if shown_icon != Some(kind) {
                 match kind.image().and_then(|image| tray.set_icon(Some(image))) {
                     Ok(()) => shown_icon = Some(kind),
-                    Err(error) => eprintln!("meet: иконка трея не сменилась: {error}"),
+                    Err(error) => shell_log!("иконка трея не сменилась: {error}"),
                 }
             }
             let text = tooltip(view.as_ref(), &status);
@@ -906,7 +912,7 @@ fn poll_loop(app: &AppHandle, initial_menu: MenuState) {
             if dirty || shown_menu.as_ref() != Some(&wanted) {
                 match build_menu(app, &wanted).and_then(|menu| tray.set_menu(Some(menu))) {
                     Ok(()) => shown_menu = Some(wanted),
-                    Err(error) => eprintln!("meet: меню трея не пересобралось: {error}"),
+                    Err(error) => shell_log!("меню трея не пересобралось: {error}"),
                 }
             }
         }
@@ -1305,6 +1311,18 @@ mod tests {
         let m = menu_state(None, &failed);
         assert!(!m.online);
         assert_eq!(m.log, Some(log));
+    }
+
+    #[test]
+    fn open_log_shows_the_logs_folder() {
+        let data = std::env::temp_dir().join(format!("meet-tray-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        let log = crate::logs::resident_log(&data);
+        // Резидент не дожил до первой строки — папки logs нет.
+        assert_eq!(log_folder(&log, &data), data);
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        assert_eq!(log_folder(&log, &data), data.join("logs"));
+        let _ = std::fs::remove_dir_all(&data);
     }
 
     // --- фильтр уведомлений ----------------------------------------------
