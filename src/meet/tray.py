@@ -292,6 +292,7 @@ class TrayApp:
         self.start_now = start_now
         self.recording = False
         self.source = None
+        self.on_saved = None  # колбэк «запись сохранена»: (folder, source, full)
         self.thread = None
         self.stop_event = None
         self.result: dict = {}
@@ -405,6 +406,11 @@ class TrayApp:
         else:
             self.log(f"запись остановлена ({source}): {folder}")
             self._notify(f"Сохранено: {folder}")
+            if self.on_saved is not None:
+                try:
+                    self.on_saved(str(folder), source, hook)
+                except Exception as e:  # колбэк UI не должен ломать остановку
+                    self.log(f"после сохранения: {e!r}")
             if hook:
                 _run_post_hook(str(folder))
             else:

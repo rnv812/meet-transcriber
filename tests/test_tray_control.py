@@ -422,3 +422,65 @@ def test_update_recording_rejects_stray_folder(control_state, app, monkeypatch, 
     assert result == {"error": "записи нет"}
     # meta.json не создался
     assert not (stray / "meta.json").exists()
+
+
+def _saved_folder(tmp_path, name="2026-09-30_16-04"):
+    folder = tmp_path / "recordings" / name
+    folder.mkdir(parents=True)
+    (folder / "sys.opus").write_bytes(b"x")
+    (folder / "mic.opus").write_bytes(b"x")
+    return folder
+
+
+class _Queue:
+    def __init__(self):
+        self.submitted = []
+
+    def submit(self, kind, folder, options=None):
+        self.submitted.append((kind, folder))
+        return jobs.Job(id="j1", kind=kind, folder=folder)
+
+    def stop(self):
+        pass
+
+
+def test_saved_recording_is_queued_and_marked(app, tmp_path):
+    queue = _Queue()
+    tray_control.TrayControl(app, queue=queue)
+    folder = _saved_folder(tmp_path)
+    app.on_saved(str(folder), tray_control.AUTO, True)
+    assert queue.submitted == [(jobs.TRANSCRIBE, str(folder))]
+    assert (folder / "meta.json").exists()
+    from meet import library
+    assert library.read_meta(folder)["source"] == "auto"
+
+
+def test_short_auto_call_is_not_transcribed(app, tmp_path):
+    queue = _Queue()
+    tray_control.TrayControl(app, queue=queue)
+    app.on_saved(str(_saved_folder(tmp_path)), tray_control.AUTO, False)
+    assert queue.submitted == []
+
+
+def test_auto_transcribe_off_skips_queue(app, tmp_path, monkeypatch):
+    queue = _Queue()
+    tray_control.TrayControl(app, queue=queue)
+    monkeypatch.setattr(settings, "load", lambda path=None: settings.Settings.from_raw(
+        {"recording": {"auto_transcribe": False}}))
+    app.on_saved(str(_saved_folder(tmp_path)), tray_control.MANUAL, True)
+    assert queue.submitted == []
+
+
+def test_discarded_recording_never_reaches_on_saved(app, tmp_path, monkeypatch):
+    """Отменённая запись удалена — ставить её в очередь нельзя."""
+    calls = []
+    app.on_saved = lambda *a: calls.append(a)
+    folder = _saved_folder(tmp_path)
+    app.recording = True
+    app.source = tray_control.MANUAL
+    app.stop_event = __import__("threading").Event()
+    app.thread = None
+    app.result = {"folder": str(folder)}
+    app.stop_recording(discard=True)
+    assert calls == []
+    assert not folder.exists()

@@ -79,6 +79,19 @@ class TrayControl:
         self._devices_cache: dict | None = None
         self._devices_at = 0.0
         self.bus.subscribe(self._remember_levels)
+        tray.on_saved = self._on_saved
+
+    def _on_saved(self, folder: str, source: str | None, full: bool) -> None:
+        """Запись штатно сохранена: пометить, откуда она, и поставить в очередь.
+
+        Короткий автозвонок (full=False) — чаще ложное срабатывание детектора
+        (звук уведомления): его сохраняем, но GPU на него не тратим."""
+        path = Path(folder)
+        library.write_meta(path, {"source": "auto" if source == AUTO else "record"})
+        if not full or not settings.load().recording.auto_transcribe:
+            return
+        job = self.queue.submit(jobs.TRANSCRIBE, str(path), {})
+        self.tray.log(f"расшифровка поставлена в очередь: {path.name} ({job.id})")
 
     def _remember_levels(self, event) -> None:
         """Последние уровни дорожек — чтобы снимок состояния не ждал события."""

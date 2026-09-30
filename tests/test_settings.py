@@ -240,3 +240,34 @@ def test_asr_device_and_cpu_model_defaults_and_roundtrip():
     assert settings.Settings.from_raw(
         {"version": settings.SCHEMA_VERSION,
          "asr": {"device": "gpu!"}}).asr.device == "auto"
+
+
+def test_auto_transcribe_default_for_new_user():
+    assert settings.Settings.from_raw({}).recording.auto_transcribe is True
+
+
+def test_auto_transcribe_off_when_claude_hook_is_on():
+    """У того, кто уже расшифровывает через хук Claude, второй автоматической
+    расшифровки быть не должно — поведение не меняется без его выбора."""
+    cfg = settings.Settings.from_raw({"hooks": {"post_record": True}})
+    assert cfg.recording.auto_transcribe is False
+    explicit = settings.Settings.from_raw(
+        {"hooks": {"post_record": True}, "recording": {"auto_transcribe": True}})
+    assert explicit.recording.auto_transcribe is True
+
+
+def test_auto_transcribe_rule_for_current_version_config():
+    v = settings.SCHEMA_VERSION
+    cfg = settings.Settings.from_raw({"version": v, "hooks": {"post_record": True}})
+    assert cfg.recording.auto_transcribe is False
+    explicit = settings.Settings.from_raw(
+        {"version": v, "hooks": {"post_record": True},
+         "recording": {"auto_transcribe": True}})
+    assert explicit.recording.auto_transcribe is True
+    assert settings.Settings.from_raw({"version": v}).recording.auto_transcribe is True
+
+
+def test_auto_transcribe_off_for_legacy_v0_top_level_hook():
+    cfg = settings.Settings.from_raw({"post_record_hook": True})
+    assert cfg.recording.auto_transcribe is False
+    assert settings.Settings.from_raw(cfg.to_raw()).recording.auto_transcribe is False

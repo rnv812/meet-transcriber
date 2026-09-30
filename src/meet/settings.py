@@ -259,6 +259,9 @@ class Recording:
     # Как подписывать микрофонную дорожку в транскрипте: это всегда владелец
     # машины. «Вы» — обращение к читателю транскрипта, но кому-то удобнее имя.
     speaker_name: str = "Вы"
+    # Расшифровывать сразу после записи. Если ключа нет в сыром конфиге —
+    # пользователь не решал, и дефолт вычисляет Settings.from_raw.
+    auto_transcribe: bool = True
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Recording":
@@ -267,6 +270,7 @@ class Recording:
             out_dir=as_path(raw.get("out_dir")),
             voices_dir=as_path(raw.get("voices_dir")),
             speaker_name=str(name).strip() if name and str(name).strip() else "Вы",
+            auto_transcribe=as_flag(raw.get("auto_transcribe"), True),
         )
 
     def to_raw(self) -> dict:
@@ -274,6 +278,7 @@ class Recording:
             "out_dir": str(self.out_dir) if self.out_dir else None,
             "voices_dir": str(self.voices_dir) if self.voices_dir else None,
             "speaker_name": self.speaker_name,
+            "auto_transcribe": self.auto_transcribe,
         }
 
     @property
@@ -444,11 +449,17 @@ class Settings:
     @classmethod
     def from_raw(cls, raw: dict) -> "Settings":
         raw = migrate(raw)
+        hooks = Hooks.from_raw(_section(raw, "hooks"))
+        recording = Recording.from_raw(_section(raw, "recording"))
+        if "auto_transcribe" not in _section(raw, "recording") and hooks.post_record:
+            # Хук Claude уже расшифровывает запись — вторая автоматическая
+            # расшифровка была бы дублем. Поведение меняет только явный выбор.
+            recording = replace(recording, auto_transcribe=False)
         return cls(
             version=SCHEMA_VERSION,
             auto_record=AutoRecord.from_raw(_section(raw, "auto_record")),
-            hooks=Hooks.from_raw(_section(raw, "hooks")),
-            recording=Recording.from_raw(_section(raw, "recording")),
+            hooks=hooks,
+            recording=recording,
             asr=Asr.from_raw(_section(raw, "asr")),
             llm=Llm.from_raw(_section(raw, "llm")),
             assist=Assist.from_raw(_section(raw, "assist")),
