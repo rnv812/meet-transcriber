@@ -203,6 +203,15 @@ def _write_structured(path: Path, segments, title: str, name_map: dict) -> None:
         return
     from meet import library
 
+    # Как в Markdown и сайдкаре: «Спикер N», а не сырая SPEAKER_XX. Иначе
+    # переименование из окна (ключи «Спикер N») не находит реплик, а статистика
+    # людей не видит их речи.
+    labels = speaker_names(segments)
+    segments = [
+        Segment(s.start, s.end, s.text, labels.get(s.speaker, s.speaker),
+                uncertain=getattr(s, "uncertain", False))
+        for s in segments
+    ]
     try:
         library.write_transcript(
             path,

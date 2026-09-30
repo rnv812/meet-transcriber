@@ -292,3 +292,19 @@ def test_import_folder_uses_single_track_and_writes_into_folder(tmp_path, monkey
     assert seen["src"] == folder / "source.mp4"
     assert out == folder / "2026-09-28_transcript.md"
     assert library.read_transcript(folder)["segments"][0]["text"] == "привет"
+
+
+def test_structured_transcript_uses_display_speaker_names(tmp_path):
+    """transcript.json хранит «Спикер N», как Markdown и сайдкар: ключи
+    переименования из окна — именно они, сырой SPEAKER_XX их не находит."""
+    import json
+
+    from meet.asr import Segment
+    from meet.transcribe import _write_structured
+
+    segs = [Segment(0, 1, "a", "SPEAKER_03"), Segment(1, 2, "b", "SPEAKER_00"),
+            Segment(2, 3, "c", "SPEAKER_03"), Segment(3, 4, "d", "Демьян")]
+    _write_structured(tmp_path, segs, "t", {})
+    data = json.loads((tmp_path / "transcript.json").read_text(encoding="utf-8"))
+    assert [s["speaker"] for s in data["segments"]] == [
+        "Спикер 1", "Спикер 2", "Спикер 1", "Демьян"]
