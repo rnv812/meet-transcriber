@@ -73,9 +73,20 @@ def _meeting_folders(samples: list[dict], recordings: Path) -> list[Path]:
     return sorted(out, key=lambda p: p.name)
 
 
+def _duration(t: dict) -> float | None:
+    """Длительность реплики или None, если start/end битые (руками правили
+    transcript.json): одна такая реплика не должна ронять весь список."""
+    try:
+        return float(t["end"]) - float(t["start"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def _turns(folder: Path, name: str) -> list[dict]:
     data = library.read_transcript(folder) or {}
-    return [s for s in data.get("segments", []) if s.get("speaker") == name]
+    segments = data.get("segments", [])
+    return [s for s in segments if isinstance(s, dict)
+            and s.get("speaker") == name and _duration(s) is not None]
 
 
 def listing(voices: Path, recordings: Path) -> list[dict]:
@@ -86,7 +97,7 @@ def listing(voices: Path, recordings: Path) -> list[dict]:
         name = f.stem
         samples = _samples(f)
         folders = _meeting_folders(samples, recordings)
-        seconds = sum(float(t["end"]) - float(t["start"])
+        seconds = sum(_duration(t)
                       for folder in folders for t in _turns(folder, name))
         out.append({
             "name": name,
@@ -105,7 +116,7 @@ def sample(name: str, voices: Path, recordings: Path) -> dict | None:
     for folder in reversed(folders):
         turns = _turns(folder, name)
         if turns:
-            best = max(turns, key=lambda t: float(t["end"]) - float(t["start"]))
+            best = max(turns, key=_duration)
             card = library.describe(folder)
             track = "sys" if card and "sys" in card.tracks else "source"
             return {"recording": folder.name, "start": best["start"],
@@ -147,10 +158,13 @@ def rename(old: str, new: str, voices: Path) -> None:
         raise KeyError(old)
     if dst.exists():
         raise FileExistsError(new)
+    old_avatar, new_avatar = avatar_path(old, voices), avatar_path(new, voices)
+    # Картинка без голоса — сирота прежнего человека; она не должна ломать
+    # переименование уже после того, как голос переехал.
+    new_avatar.unlink(missing_ok=True)
     src.rename(dst)
-    old_avatar = avatar_path(old, voices)
     if old_avatar.exists():
-        old_avatar.rename(avatar_path(new, voices))
+        old_avatar.rename(new_avatar)
 
 
 def merge(src_name: str, into: str, voices: Path) -> None:

@@ -141,3 +141,26 @@ def test_merge_with_self_is_rejected_and_keeps_voice(tmp_path):
     with pytest.raises(ValueError):
         people.merge("Демьян", "Демьян", voices)
     assert (voices / "Демьян.json").exists()
+
+
+def test_malformed_turns_are_skipped(tmp_path):
+    rec, voices = tmp_path / "rec", tmp_path / "voices"
+    m = _meeting(rec, "2026-09-29_15-30", [
+        {"start": 0, "end": 10, "speaker": "Демьян", "text": "ок"},
+        {"start": 1, "speaker": "Демьян", "text": "нет end"},
+        {"start": None, "end": 5, "speaker": "Демьян", "text": "None"},
+        {"start": 1, "end": "abc", "speaker": "Демьян", "text": "мусор"}])
+    _voice(voices, "Демьян", [m])
+    assert people.listing(voices, rec)[0]["seconds"] == 10
+    assert people.sample("Демьян", voices, rec)["end"] == 10
+
+
+def test_rename_over_orphan_avatar(tmp_path):
+    voices = tmp_path / "voices"
+    _voice(voices, "Аркаша", [])
+    people.set_avatar("Аркаша", _png((50, 50)), voices)
+    (voices / "Аркадий.png").write_bytes(b"stale")
+    want = (voices / "Аркаша.png").read_bytes()
+    people.rename("Аркаша", "Аркадий", voices)
+    assert sorted(p.name for p in voices.iterdir()) == ["Аркадий.json", "Аркадий.png"]
+    assert (voices / "Аркадий.png").read_bytes() == want

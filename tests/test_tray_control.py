@@ -507,3 +507,52 @@ def test_import_missing_or_bad_file_is_an_error(app, tmp_path, monkeypatch):
     doc.write_bytes(b"x")
     assert "формат" in state.import_file({"path": str(doc)})["error"]
     assert not root.exists() or not any(root.iterdir())
+
+
+@pytest.fixture
+def voices_state(control_state, tmp_path, monkeypatch):
+    voices = tmp_path / "voices"
+    voices.mkdir()
+    (voices / "Демьян.json").write_text('{"samples": []}', encoding="utf-8")
+    monkeypatch.setattr(control_state, "_voices", lambda: voices)
+    return control_state, voices
+
+
+def _png_bytes():
+    import io
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (10, 10), (1, 2, 3)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_set_avatar_not_an_image_is_bad_request(voices_state):
+    from meet import control
+
+    state, voices = voices_state
+    with pytest.raises(control.BadRequest, match="не изображение"):
+        state.set_avatar("Демьян", b"not an image")
+    assert sorted(p.name for p in voices.iterdir()) == ["Демьян.json"]
+
+
+def test_rename_to_path_trick_is_bad_request(voices_state):
+    from meet import control
+
+    state, _ = voices_state
+    with pytest.raises(control.BadRequest):
+        state.person_action("Демьян", "rename", {"to": "a/b"})
+
+
+def test_merge_into_self_is_bad_request(voices_state):
+    from meet import control
+
+    state, voices = voices_state
+    with pytest.raises(control.BadRequest):
+        state.person_action("Демьян", "merge", {"into": "Демьян"})
+    assert (voices / "Демьян.json").exists()
+
+
+def test_set_avatar_unknown_person(voices_state):
+    state, _ = voices_state
+    assert state.set_avatar("Никто", _png_bytes()) == {"error": "человека нет"}

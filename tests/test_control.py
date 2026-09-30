@@ -29,6 +29,8 @@ class FakeState:
         return None
 
     def set_avatar(self, name, data):
+        if data.startswith(b"bad"):
+            raise control.BadRequest("не изображение")
         self.calls.append(("avatar", name, len(data)))
         return {"ok": True}
 
@@ -547,3 +549,14 @@ def test_put_avatar_passes_raw_bytes_and_decodes_name(server):
 
 def test_missing_avatar_is_404(server):
     assert _get(server, "/voices/x/avatar", expect=404) == {"error": "файла нет"}
+
+
+def test_bad_avatar_is_400_and_server_keeps_serving(server):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{server.port}/voices/x/avatar", data=b"bad bytes",
+        method="PUT", headers={"Authorization": f"Bearer {server.token}"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(req, timeout=5)
+    assert e.value.code == 400
+    assert json.loads(e.value.read()) == {"error": "не изображение"}
+    assert _get(server, "/voices") == {"items": [{"name": "Демьян"}]}
