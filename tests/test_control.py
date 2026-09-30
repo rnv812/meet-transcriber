@@ -560,3 +560,11 @@ def test_bad_avatar_is_400_and_server_keeps_serving(server):
     assert e.value.code == 400
     assert json.loads(e.value.read()) == {"error": "не изображение"}
     assert _get(server, "/voices") == {"items": [{"name": "Демьян"}]}
+
+
+def test_handler_oserror_is_500_not_silence(server):
+    def boom():
+        raise PermissionError("диск только для чтения")
+    server.state_obj.settings = boom  # GET /settings вызывает state.settings()
+    reply = _get(server, "/settings", expect=500)
+    assert "только для чтения" in reply["error"]

@@ -255,6 +255,20 @@ class ControlServer:
         clear_endpoint(pid)
 
 
+# Сентинел: маршрут сам записал ответ потоком (SSE, Range-аудио, файл).
+_STREAMED = object()
+
+
+def _status_of(result) -> tuple[int, dict | None]:
+    """Доменную ошибку `{"error": ...}` отдаём как 404, а не 200: клиент
+    бросает только на !ok, и иначе действие, которое не выполнилось (нет
+    записи, нет папки), выглядело бы как успех — панель думала бы, что
+    расшифровка пошла."""
+    if isinstance(result, dict) and set(result) == {"error"}:
+        return 404, result
+    return 200, result
+
+
 def _make_handler(server: ControlServer):
     class Handler(BaseHTTPRequestHandler):
         # HTTP/1.1 — иначе часть клиентов рвёт keep-alive на каждом запросе.
@@ -323,16 +337,19 @@ def _make_handler(server: ControlServer):
             if path is None or not path.exists():
                 self._send(404, {"error": "файла нет"})
                 return
-            data = path.read_bytes()
-            self.send_response(200)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-cache")
-            origin = self.headers.get("Origin")
-            if origin and _origin_allowed(origin):
-                self.send_header("Access-Control-Allow-Origin", origin)
-            self.end_headers()
-            self.wfile.write(data)
+            data = path.read_bytes()  # ошибка диска -> 500 из _dispatch
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-cache")
+                origin = self.headers.get("Origin")
+                if origin and _origin_allowed(origin):
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                self.end_headers()
+                self.wfile.write(data)
+            except ConnectionError:
+                pass  # клиент оборвал соединение посреди ответа
 
         # --- маршруты ---
 
@@ -364,52 +381,56 @@ def _make_handler(server: ControlServer):
                 self._send(401, {"error": "нужен токен из daemon.json"})
                 return
             path = url.path.rstrip("/") or "/"
-            route = (method, path)
             try:
-                if route == ("GET", "/events"):
-                    self._stream_events()
-                    return
-                audio = re.match(r"^/recordings/([^/]+)/audio$", path)
-                if method == "GET" and audio:
-                    # Не JSON: дорожка отдаётся байтами, с поддержкой Range —
-                    # без него плеер не умеет перематывать.
-                    self._stream_audio(audio.group(1), params)
-                    return
-                avatar = re.match(r"^/voices/([^/]+)/avatar$", path)
-                if method == "GET" and avatar:
-                    self._send_file(server.state.avatar_path(unquote(avatar.group(1))),
-                                    "image/png")
-                    return
-                handler = _ROUTES.get(route)
-                if handler is not None:
-                    self._reply(handler(self, params))
-                    return
-                for pattern_method, pattern, pattern_handler in _PATTERNS:
-                    match = pattern.match(path)
-                    if match and pattern_method == method:
-                        self._reply(pattern_handler(self, params, *match.groups()))
-                        return
-                self._send(404, {"error": f"нет маршрута {method} {url.path}"})
+                result = self._handle(method, path, params)
             except BadRequest as e:
-                self._send(400, {"error": str(e)})
-            except (ConnectionError, BrokenPipeError, OSError):
-                # Клиент закрыл вкладку/дёрнул плеер посреди ответа — это норма,
-                # не 500. Отвечать уже некому, а traceback только зашумил бы лог.
-                pass
+                self._send_safely(400, {"error": str(e)})
+                return
             except Exception as e:
-                # Резидент не должен падать из-за запроса от UI.
+                # Резидент не должен падать из-за запроса от UI; ошибка диска
+                # и т.п. — это 500 с текстом, а не молчаливый обрыв соединения.
                 server.log(f"control API: {type(e).__name__}: {e}")
-                self._send(500, {"error": f"{type(e).__name__}: {e}"})
+                self._send_safely(500, {"error": f"{type(e).__name__}: {e}"})
+                return
+            if result is _STREAMED:  # обработчик сам отдал байты
+                return
+            self._send_safely(*_status_of(result))
 
-        def _reply(self, result) -> None:
-            """Ответ обработчика. Доменную ошибку `{"error": ...}` отдаём как
-            4xx, а не 200: клиент бросает только на !ok, и иначе действие,
-            которое не выполнилось (нет записи, нет папки), выглядело бы как
-            успех — панель думала бы, что расшифровка пошла."""
-            if isinstance(result, dict) and set(result) == {"error"}:
-                self._send(404, result)
-            else:
-                self._send(200, result)
+        def _send_safely(self, status: int, payload: dict | None = None) -> None:
+            """Запись ответа: обрыв соединения клиентом — норма, не ошибка.
+            OSError ловим только здесь, вокруг записи в сокет."""
+            try:
+                self._send(status, payload)
+            except (ConnectionError, OSError):
+                # Клиент закрыл вкладку посреди ответа; traceback только шумел бы.
+                pass
+
+        def _handle(self, method: str, path: str, params: dict):
+            """Маршрутизация. Возвращает результат обработчика (dict) или
+            _STREAMED, если ответ уже записан потоком."""
+            route = (method, path)
+            if route == ("GET", "/events"):
+                self._stream_events()
+                return _STREAMED
+            audio = re.match(r"^/recordings/([^/]+)/audio$", path)
+            if method == "GET" and audio:
+                # Не JSON: дорожка отдаётся байтами, с поддержкой Range —
+                # без него плеер не умеет перематывать.
+                self._stream_audio(audio.group(1), params)
+                return _STREAMED
+            avatar = re.match(r"^/voices/([^/]+)/avatar$", path)
+            if method == "GET" and avatar:
+                self._send_file(server.state.avatar_path(unquote(avatar.group(1))),
+                                "image/png")
+                return _STREAMED
+            handler = _ROUTES.get(route)
+            if handler is not None:
+                return handler(self, params)
+            for pattern_method, pattern, pattern_handler in _PATTERNS:
+                match = pattern.match(path)
+                if match and pattern_method == method:
+                    return pattern_handler(self, params, *match.groups())
+            return {"error": f"нет маршрута {method} {path}"}
 
         def _stream_events(self) -> None:
             """SSE-поток событий записи и расшифровки.
@@ -496,25 +517,30 @@ def _make_handler(server: ControlServer):
                 self._send(416, {"error": "запрошен кусок за концом файла"})
                 return
             length = max(0, end - start + 1)
-            self.send_response(status)
-            self.send_header("Content-Type", _audio_type(path))
-            self.send_header("Content-Length", str(length))
-            self.send_header("Accept-Ranges", "bytes")
-            if status == 206:
-                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-            origin = self.headers.get("Origin")
-            if origin and _origin_allowed(origin):
-                self.send_header("Access-Control-Allow-Origin", origin)
-            self.end_headers()
-            with path.open("rb") as f:
-                f.seek(start)
-                left = length
-                while left > 0:
-                    chunk = f.read(min(64 * 1024, left))
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                    left -= len(chunk)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", _audio_type(path))
+                self.send_header("Content-Length", str(length))
+                self.send_header("Accept-Ranges", "bytes")
+                if status == 206:
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                origin = self.headers.get("Origin")
+                if origin and _origin_allowed(origin):
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                self.end_headers()
+                with path.open("rb") as f:
+                    f.seek(start)
+                    left = length
+                    while left > 0:
+                        chunk = f.read(min(64 * 1024, left))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        left -= len(chunk)
+            except ConnectionError:
+                # Плеер закрыл запрос/перемотал — норма. Ошибки диска
+                # (OSError не из сокета) наружу: это 500, а не тишина.
+                self.close_connection = True
 
         def _write_sse(self, name: str, payload: dict) -> None:
             data = json.dumps(payload, ensure_ascii=False)
