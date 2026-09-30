@@ -55,10 +55,19 @@ DOWNLOAD_HINT_GB = {"cuda": 3.0, "cpu": 0.6}
 SPEED_FACTOR = {"cuda": 0.22, "cpu": 1.26}
 
 
-def _device() -> str:
-    from meet.asr import resolve_device
+def _device(gpu_available: bool) -> str:
+    """Устройство для оценки времени — без ctranslate2/torch: state() зовут в
+    резиденте и в воркере установки, где загруженная DLL мешает pip обновить её.
+    Явный выбор из настроек побеждает, «auto» опирается на nvidia-smi."""
+    try:
+        from meet import settings
 
-    return resolve_device()
+        setting = settings.load().asr.device
+    except Exception:
+        setting = "auto"
+    if setting in ("cuda", "cpu"):
+        return setting
+    return "cuda" if gpu_available else "cpu"
 
 
 def estimate_seconds(duration_s: float, device: str) -> float:
@@ -107,7 +116,7 @@ def state() -> dict:
     ]
     missing = [c["module"] for c in components if not c["installed"]]
     card = gpu()
-    device = _device()
+    device = _device(card["available"])
     return {
         "installed": not missing,
         "missing": missing,

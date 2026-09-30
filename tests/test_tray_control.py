@@ -386,6 +386,11 @@ def test_gpu_busy_uses_liveness_not_existence(control_state, app, monkeypatch):
     assert control_state.snapshot()["gpu_busy"] is False
 
 
-def test_snapshot_reports_free_disk_for_recordings(control_state):
+def test_snapshot_reports_free_disk_for_recordings(control_state, monkeypatch):
+    from meet import engine
+
+    seen = []
+    monkeypatch.setattr(engine, "_free_gb", lambda path: seen.append(path) or 12.5)
     snap = control_state.snapshot()
+    assert seen == [settings.load().recording.recordings]
     assert isinstance(snap["disk_free_gb"], float) and snap["disk_free_gb"] > 0

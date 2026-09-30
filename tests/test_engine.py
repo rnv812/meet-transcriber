@@ -171,7 +171,7 @@ def test_pyav_is_pinned_below_19():
 
 
 def test_state_reports_device_speed_and_disk(monkeypatch):
-    monkeypatch.setattr(engine, "_device", lambda: "cpu")
+    monkeypatch.setattr(engine, "_device", lambda available: "cpu")
     state = engine.state()
     assert state["device"] == "cpu"
     assert state["speed_factor"] == engine.SPEED_FACTOR["cpu"]
@@ -182,3 +182,39 @@ def test_estimate_seconds_scales_with_duration():
     assert engine.estimate_seconds(600, "cuda") == 600 * engine.SPEED_FACTOR["cuda"]
     assert engine.estimate_seconds(600, "cpu") > engine.estimate_seconds(600, "cuda")
     assert engine.estimate_seconds(600, "непонятно") == 600 * engine.SPEED_FACTOR["cpu"]
+
+
+def _with_setting(monkeypatch, value, gpu_available):
+    from meet import settings
+
+    monkeypatch.setattr(
+        settings, "load",
+        lambda *a, **k: type("S", (), {"asr": type("A", (), {"device": value})()})(),
+    )
+    monkeypatch.setattr(engine, "gpu", lambda: {"available": gpu_available, "name": None})
+
+
+def test_auto_device_follows_nvidia_smi(monkeypatch):
+    _with_setting(monkeypatch, "auto", False)
+    assert engine.state()["device"] == "cpu"
+    _with_setting(monkeypatch, "auto", True)
+    assert engine.state()["device"] == "cuda"
+
+
+def test_explicit_device_setting_wins_over_gpu_probe(monkeypatch):
+    _with_setting(monkeypatch, "cuda", False)
+    assert engine.state()["device"] == "cuda"
+    _with_setting(monkeypatch, "cpu", True)
+    assert engine.state()["device"] == "cpu"
+
+
+def test_state_does_not_import_ctranslate2(monkeypatch):
+    from meet import asr
+
+    def boom():
+        raise AssertionError("state() не должен трогать ctranslate2")
+
+    monkeypatch.setitem(sys.modules, "ctranslate2", None)
+    monkeypatch.setattr(asr, "cuda_available", boom)
+    _with_setting(monkeypatch, "auto", False)
+    assert engine.state()["device"] == "cpu"
