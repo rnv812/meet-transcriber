@@ -25,7 +25,7 @@ test("ошибки по каждому файлу с именем, удачны�
   });
   render(<ImportZone endpoint={ep} />);
   await vi.waitFor(() => expect(h.handler).not.toBeNull());
-  h.handler!({ payload: { type: "drop", paths: ["C:\m\a.mp3", "C:\m\b.mp3", "/m/c.mp3"] } });
+  h.handler!({ payload: { type: "drop", paths: ["C:\\m\\a.mp3", "C:\\m\\b.mp3", "/m/c.mp3"] } });
   expect(await screen.findByText("a.mp3: формат не поддержан")).toBeInTheDocument();
   expect(screen.getByText("c.mp3: файл занят")).toBeInTheDocument();
   expect(h.importFile).toHaveBeenCalledTimes(3);
