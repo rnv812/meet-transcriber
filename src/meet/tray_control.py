@@ -66,6 +66,13 @@ def _tail(path: Path, lines: int) -> list[str]:
     return text.splitlines()[-lines:]
 
 
+def _bad_request(text: str):
+    """400 для API: ошибка ввода (имя, картинка), а не «не найдено»."""
+    from meet.control import BadRequest
+
+    return BadRequest(text)
+
+
 class TrayControl:
     """Состояние для `meet.control.ControlServer` поверх объекта трея."""
 
@@ -429,3 +436,64 @@ class TrayControl:
             },
             "dev_mode": paths.is_dev(),
         }
+
+    # --- люди -----------------------------------------------------------
+
+    def _voices(self) -> Path:
+        return settings.load().recording.voices
+
+    def people(self) -> dict:
+        from meet import people
+
+        return {"items": people.listing(self._voices(), self._root())}
+
+    def person_sample(self, name: str) -> dict:
+        from meet import people
+
+        try:
+            found = people.sample(name, self._voices(), self._root())
+        except ValueError as e:
+            return {"error": str(e)}
+        return found or {"error": "образца нет"}
+
+    def avatar_path(self, name: str) -> Path | None:
+        from meet import people
+
+        try:
+            path = people.avatar_path(name, self._voices())
+        except ValueError:
+            return None
+        return path if path.exists() else None
+
+    def set_avatar(self, name: str, data: bytes) -> dict:
+        from meet import people
+
+        try:
+            people.set_avatar(name, data, self._voices())
+        except KeyError:
+            return {"error": "человека нет"}
+        except ValueError as e:
+            raise _bad_request(str(e))
+        return {"ok": True}
+
+    def person_action(self, name: str, action: str, body: dict | None = None) -> dict:
+        """rename / merge / delete / clear-avatar — одним входом, ошибки текстом."""
+        from meet import people
+
+        voices = self._voices()
+        try:
+            if action == "rename":
+                people.rename(name, people.valid_name(str((body or {}).get("to") or "")), voices)
+            elif action == "merge":
+                people.merge(name, people.valid_name(str((body or {}).get("into") or "")), voices)
+            elif action == "delete":
+                people.delete(name, voices)
+            elif action == "clear-avatar":
+                people.clear_avatar(name, voices)
+        except KeyError:
+            return {"error": "человека нет"}
+        except FileExistsError:
+            raise _bad_request("человек с таким именем уже есть")
+        except ValueError as e:
+            raise _bad_request(str(e))
+        return {"ok": True}

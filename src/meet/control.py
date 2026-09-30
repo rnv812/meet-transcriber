@@ -60,7 +60,7 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from meet import paths
 
@@ -307,8 +307,32 @@ def _make_handler(server: ControlServer):
             try:
                 data = json.loads(self.rfile.read(length).decode("utf-8"))
             except (ValueError, UnicodeDecodeError):
-                raise _BadRequest("ожидается JSON (UTF-8)")
+                raise BadRequest("ожидается JSON (UTF-8)")
             return data if isinstance(data, dict) else {}
+
+        def _raw_body(self, limit: int = 10 * 1024 * 1024) -> bytes:
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            if length <= 0 or length > limit:
+                raise BadRequest("пустое или слишком большое тело (до 10 МБ)")
+            return self.rfile.read(length)
+
+        def _send_file(self, path, content_type: str) -> None:
+            if path is None or not path.exists():
+                self._send(404, {"error": "файла нет"})
+                return
+            data = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-cache")
+            origin = self.headers.get("Origin")
+            if origin and _origin_allowed(origin):
+                self.send_header("Access-Control-Allow-Origin", origin)
+            self.end_headers()
+            self.wfile.write(data)
 
         # --- маршруты ---
 
@@ -351,6 +375,11 @@ def _make_handler(server: ControlServer):
                     # без него плеер не умеет перематывать.
                     self._stream_audio(audio.group(1), params)
                     return
+                avatar = re.match(r"^/voices/([^/]+)/avatar$", path)
+                if method == "GET" and avatar:
+                    self._send_file(server.state.avatar_path(unquote(avatar.group(1))),
+                                    "image/png")
+                    return
                 handler = _ROUTES.get(route)
                 if handler is not None:
                     self._reply(handler(self, params))
@@ -361,7 +390,7 @@ def _make_handler(server: ControlServer):
                         self._reply(pattern_handler(self, params, *match.groups()))
                         return
                 self._send(404, {"error": f"нет маршрута {method} {url.path}"})
-            except _BadRequest as e:
+            except BadRequest as e:
                 self._send(400, {"error": str(e)})
             except (ConnectionError, BrokenPipeError, OSError):
                 # Клиент закрыл вкладку/дёрнул плеер посреди ответа — это норма,
@@ -495,8 +524,11 @@ def _make_handler(server: ControlServer):
     return Handler
 
 
-class _BadRequest(Exception):
+class BadRequest(Exception):
     """400: запрос понятен по маршруту, но не по содержимому."""
+
+
+_BadRequest = BadRequest
 
 
 # Маршруты вынесены из класса, чтобы читались одним списком. Каждый получает
@@ -523,6 +555,7 @@ _ROUTES = {
     ("GET", "/recordings"): lambda h, p: _server_of(h).state.recordings(
         limit=_int_param(p, "limit", 200)
     ),
+    ("GET", "/voices"): lambda h, p: _server_of(h).state.people(),
     ("GET", "/jobs"): lambda h, p: _server_of(h).state.jobs(),
     ("GET", "/engine"): lambda h, p: _server_of(h).state.engine(),
     ("GET", "/models"): lambda h, p: _server_of(h).state.models(),
@@ -552,6 +585,18 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.transcribe(rid, h._body())),
     ("DELETE", re.compile(r"^/jobs/([^/]+)$"),
      lambda h, p, job_id: _server_of(h).state.cancel_job(job_id)),
+    ("GET", re.compile(r"^/voices/([^/]+)/sample$"),
+     lambda h, p, n: _server_of(h).state.person_sample(unquote(n))),
+    ("PUT", re.compile(r"^/voices/([^/]+)/avatar$"),
+     lambda h, p, n: _server_of(h).state.set_avatar(unquote(n), h._raw_body())),
+    ("DELETE", re.compile(r"^/voices/([^/]+)/avatar$"),
+     lambda h, p, n: _server_of(h).state.person_action(unquote(n), "clear-avatar")),
+    ("POST", re.compile(r"^/voices/([^/]+)/rename$"),
+     lambda h, p, n: _server_of(h).state.person_action(unquote(n), "rename", h._body())),
+    ("POST", re.compile(r"^/voices/([^/]+)/merge$"),
+     lambda h, p, n: _server_of(h).state.person_action(unquote(n), "merge", h._body())),
+    ("DELETE", re.compile(r"^/voices/([^/]+)$"),
+     lambda h, p, n: _server_of(h).state.person_action(unquote(n), "delete")),
 )
 
 _AUDIO_TYPES = {

@@ -22,6 +22,16 @@ class FakeState:
         self.calls: list = []
         self.recording = False
 
+    def people(self):
+        return {"items": [{"name": "Демьян"}]}
+
+    def avatar_path(self, name):
+        return None
+
+    def set_avatar(self, name, data):
+        self.calls.append(("avatar", name, len(data)))
+        return {"ok": True}
+
     def snapshot(self) -> dict:
         return {"status": "recording" if self.recording else "idle",
                 "folder": "C:/rec/2026-08-18_11-00" if self.recording else None,
@@ -518,3 +528,22 @@ def test_no_fallback_raises_when_port_taken(monkeypatch, tmp_path):
                 srv.start(pid=1)
         finally:
             srv.stop(pid=1)
+
+
+def test_voices_listing_route(server):
+    assert _get(server, "/voices") == {"items": [{"name": "Демьян"}]}
+
+
+def test_put_avatar_passes_raw_bytes_and_decodes_name(server):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{server.port}/voices/%D0%94%D0%B5%D0%BC%D1%8C%D1%8F%D0%BD/avatar",
+        data=b"\x89PNG....", method="PUT",
+        headers={"Authorization": f"Bearer {server.token}",
+                 "Content-Type": "image/png"})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        assert json.loads(r.read()) == {"ok": True}
+    assert ("avatar", "Демьян", 8) in server.state_obj.calls
+
+
+def test_missing_avatar_is_404(server):
+    assert _get(server, "/voices/x/avatar", expect=404) == {"error": "файла нет"}
