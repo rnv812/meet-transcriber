@@ -108,6 +108,7 @@ def _copy_import(folder_str: str) -> int:
     """Скопировать исходник импорта в папку записи как source.<ext>.
 
     Оригинал не трогаем: человек мог импортировать файл из общей папки."""
+    import os
     import shutil
     from pathlib import Path
 
@@ -121,7 +122,17 @@ def _copy_import(folder_str: str) -> int:
         _emit({"kind": "error", "text": f"исходный файл пропал: {src}"})
         return 3
     bus.progress("copy", label="копирование файла", done=0, total=1, note=src.name)
-    shutil.copy2(src, folder / f"source{src.suffix.lower()}")
+    # Во временный .part и переименование в конце: оборванная копия (отмена
+    # убивает процесс) не должна остаться валидной дорожкой source.<ext>.
+    final = folder / f"source{src.suffix.lower()}"
+    part = folder / (final.name + ".part")
+    try:
+        shutil.copy2(src, part)
+        os.replace(part, final)
+    except Exception as e:
+        part.unlink(missing_ok=True)
+        _emit({"kind": "error", "text": f"не удалось скопировать файл: {e}"})
+        return 3
     bus.progress("copy", label="копирование файла", done=1, total=1, note=src.name)
     return 0
 
