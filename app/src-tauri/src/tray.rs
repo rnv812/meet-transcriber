@@ -504,6 +504,9 @@ pub fn icon_for(view: Option<&View>) -> TrayIconKind {
 }
 
 pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
+    if *status == ResidentStatus::ExternalNoApi {
+        return "meet — работает старая версия записи (меню недоступно)".to_string();
+    }
     let text = match view {
         None => "сервис записи не запущен".to_string(),
         Some(view) if view.recording => {
@@ -1283,6 +1286,18 @@ mod tests {
             tooltip(None, &ResidentStatus::Starting),
             "meet — сервис записи не запущен"
         );
+    }
+
+    #[test]
+    fn old_resident_without_api_is_explained_and_menu_is_off() {
+        let status = ResidentStatus::ExternalNoApi;
+        assert_eq!(
+            tooltip(None, &status),
+            "meet — работает старая версия записи (меню недоступно)"
+        );
+        let m = menu_state(None, &status);
+        assert!(!m.online, "действиям с записью нужен API");
+        assert_eq!(m.log, None);
     }
 
     #[test]

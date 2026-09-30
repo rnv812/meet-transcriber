@@ -45,6 +45,8 @@ const EXIT_GRACE: Duration = Duration::from_secs(10);
 /// значат, что его больше нет.
 const EXTERNAL_POLL: Duration = Duration::from_secs(3);
 const EXTERNAL_MISSES: u32 = 2;
+/// Как часто проверяем старый резидент без API (жив ли держатель tray.lock).
+const NO_API_POLL: Duration = Duration::from_secs(10);
 
 /// Адрес и токен резидента из `daemon.json`. Debug нет нарочно — токен не
 /// должен попасть в лог даже случайным `{:?}`.
@@ -214,12 +216,100 @@ pub fn external_next(answers: bool, misses: u32) -> (ExternalStep, u32) {
     }
 }
 
+/// Что делает надзор на очередном круге.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Запустить свой резидент.
+    Spawn,
+    /// Чужой резидент с API — пользуемся им, пока отвечает.
+    External,
+    /// Чужой резидент без API держит tray.lock — ждём, пока он жив.
+    ExternalNoApi,
+}
+
+/// Резидент вышел с кодом 3 (tray.lock занят): кто его держит? Отвечает API
+/// — обычный чужой резидент; нет — старая версия (upstream `meet-tray
+/// --watch` пишет tray.lock, но не daemon.json).
+pub fn adopt_mode(api_answers: bool) -> Mode {
+    if api_answers {
+        Mode::External
+    } else {
+        Mode::ExternalNoApi
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoApiStep {
+    /// Держатель tray.lock жив — свой резидент не запускаем (он вышел бы с
+    /// кодом 3, и так по кругу каждые несколько секунд).
+    Stay,
+    /// API ответил — это всё-таки резидент с API.
+    Adopt,
+    /// Держателя больше нет — запускаем свой.
+    Takeover,
+}
+
+/// Очередная проверка старого резидента без API.
+pub fn no_api_next(api_answers: bool, holder_alive: bool) -> NoApiStep {
+    if api_answers {
+        NoApiStep::Adopt
+    } else if holder_alive {
+        NoApiStep::Stay
+    } else {
+        NoApiStep::Takeover
+    }
+}
+
+/// pid держателя из содержимого tray.lock (`{"pid": N, ...}`).
+pub fn lock_holder(raw: &str) -> Option<u32> {
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    u32::try_from(value.get("pid")?.as_u64()?).ok()
+}
+
+fn tray_lock_holder() -> Option<u32> {
+    lock_holder(&std::fs::read_to_string(data_dir().join("tray.lock")).ok()?)
+}
+
+/// Жив ли процесс. Нет доступа к чужому процессу — значит, он есть.
+#[cfg(windows)]
+pub fn pid_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_ACCESS_DENIED, STILL_ACTIVE,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    if pid == 0 {
+        return false;
+    }
+    // SAFETY: хэндл проверяется на null и закрывается ровно один раз;
+    // GetExitCodeProcess пишет в локальную переменную.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return GetLastError() == ERROR_ACCESS_DENIED;
+        }
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(handle, &mut code);
+        CloseHandle(handle);
+        ok != 0 && code == STILL_ACTIVE as u32
+    }
+}
+
+#[cfg(not(windows))]
+pub fn pid_alive(pid: u32) -> bool {
+    pid != 0 && Path::new(&format!("/proc/{pid}")).exists()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResidentStatus {
     Starting,
     Running,
     /// Резидент запущен вне приложения (`--watch` из автозагрузки).
     External,
+    /// tray.lock держит резидент без API (старая версия `meet-tray --watch`):
+    /// записью он управляет сам, меню оболочки ему не указ.
+    ExternalNoApi,
     /// Перезапуски исчерпаны; `log` — журнал, который стоит открыть.
     Failed {
         log: PathBuf,
@@ -284,22 +374,39 @@ impl Supervisor {
             .unwrap_or_default();
         let list = candidates(&exe_dir, std::env::var_os(OVERRIDE_ENV).as_deref());
         let mut restarts = 0;
-        let mut external = endpoint_answers();
+        let mut mode = if endpoint_answers() {
+            Mode::External
+        } else {
+            Mode::Spawn
+        };
         loop {
             if self.quitting() {
                 return;
             }
-            if external {
-                // Чужой резидент не вечен: это может быть осиротевший резидент
-                // прошлой оболочки, который дописывает запись и сейчас выйдет.
-                shell_log!("резидент уже работает вне приложения — подключаюсь к нему");
-                self.set_status(ResidentStatus::External);
-                self.watch_external();
-                if self.quitting() {
-                    return;
+            match mode {
+                Mode::External => {
+                    // Чужой резидент не вечен: это может быть осиротевший
+                    // резидент прошлой оболочки, который дописывает запись и
+                    // сейчас выйдет.
+                    shell_log!("резидент уже работает вне приложения — подключаюсь к нему");
+                    self.set_status(ResidentStatus::External);
+                    self.watch_external();
+                    if self.quitting() {
+                        return;
+                    }
+                    shell_log!("внешний резидент больше не отвечает — запускаю свой");
+                    mode = Mode::Spawn;
+                    continue;
                 }
-                shell_log!("внешний резидент больше не отвечает — запускаю свой");
-                external = false;
+                Mode::ExternalNoApi => {
+                    shell_log!(
+                        "tray.lock держит резидент без API (старая версия) — жду его выхода"
+                    );
+                    self.set_status(ResidentStatus::ExternalNoApi);
+                    mode = self.watch_no_api();
+                    continue;
+                }
+                Mode::Spawn => {}
             }
             self.set_status(ResidentStatus::Starting);
             let Some(pid) = self.spawn(&list) else {
@@ -325,11 +432,34 @@ impl Supervisor {
                 }
                 // Код 3 — не падение: счётчик перезапусков не растёт, дальше
                 // следим за тем, кто держит tray.lock.
-                Action::AdoptExternal => external = true,
+                Action::AdoptExternal => {
+                    mode = adopt_mode(read_endpoint().is_some_and(|endpoint| answers(&endpoint)))
+                }
                 Action::GiveUp => {
                     shell_log!("резидент падает раз за разом (код {code:?}) — сдаюсь");
                     self.give_up(app);
                     return;
+                }
+            }
+        }
+    }
+
+    /// Ждать, пока жив держатель tray.lock без API; вернуть, что дальше:
+    /// API ответил — `External`, держателя нет — `Spawn`.
+    fn watch_no_api(&self) -> Mode {
+        loop {
+            thread::sleep(NO_API_POLL);
+            if self.quitting() {
+                return Mode::Spawn; // надзор увидит флаг и выйдет
+            }
+            let api = read_endpoint().is_some_and(|endpoint| answers(&endpoint));
+            let alive = tray_lock_holder().is_some_and(pid_alive);
+            match no_api_next(api, alive) {
+                NoApiStep::Stay => {}
+                NoApiStep::Adopt => return Mode::External,
+                NoApiStep::Takeover => {
+                    shell_log!("старый резидент вышел — запускаю свой");
+                    return Mode::Spawn;
                 }
             }
         }
@@ -722,5 +852,58 @@ mod tests {
         let (step, misses) = external_next(false, 0);
         assert_eq!(step, ExternalStep::Stay);
         assert_eq!(external_next(false, misses).0, ExternalStep::Takeover);
+    }
+
+    // --- чужой резидент без API (`meet-tray --watch` из upstream) ----------
+
+    #[test]
+    fn exit_3_without_answering_api_is_an_old_resident() {
+        assert_eq!(adopt_mode(true), Mode::External);
+        assert_eq!(adopt_mode(false), Mode::ExternalNoApi);
+    }
+
+    #[test]
+    fn old_resident_is_left_alone_while_its_lock_holder_lives() {
+        // Без этого оболочка запускала своего каждые ~6 с: запуск → код 3 →
+        // API нет → «пропал» → запуск…
+        assert_eq!(no_api_next(false, true), NoApiStep::Stay);
+    }
+
+    #[test]
+    fn dead_lock_holder_means_takeover() {
+        assert_eq!(no_api_next(false, false), NoApiStep::Takeover);
+    }
+
+    #[test]
+    fn answering_api_means_an_external_resident_after_all() {
+        assert_eq!(no_api_next(true, true), NoApiStep::Adopt);
+        assert_eq!(no_api_next(true, false), NoApiStep::Adopt);
+    }
+
+    #[test]
+    fn tray_lock_names_its_holder() {
+        assert_eq!(
+            lock_holder(r#"{"pid": 4242, "name": "pythonw.exe", "started": 1.5}"#),
+            Some(4242)
+        );
+        assert_eq!(lock_holder(r#"{"pid": 7}"#), Some(7));
+        assert_eq!(lock_holder(r#"{"name": "pythonw.exe"}"#), None);
+        assert_eq!(lock_holder(r#"{"pid": -1}"#), None);
+        assert_eq!(lock_holder("мусор"), None);
+    }
+
+    #[test]
+    fn pid_alive_tells_a_living_process_from_a_finished_one() {
+        assert!(pid_alive(std::process::id()));
+        assert!(!pid_alive(0));
+        let mut child = Command::new("cmd")
+            .args(["/C", "exit 0"])
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        drop(child); // закрыть свой хэндл — иначе процесс-зомби держит pid
+        assert!(!pid_alive(pid));
     }
 }
