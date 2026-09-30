@@ -1,30 +1,48 @@
 import { useState } from "react";
 import { useLibrary } from "../state/useLibrary";
 import { useResident } from "../state/useResident";
+import { RecordingsList } from "../features/recordings/RecordingsList";
 import { EmptyState } from "../ui/EmptyState";
 import { Nav, type Section } from "./Nav";
+import { RecordingBadge } from "./RecordingBadge";
 
 export function App() {
   const [section, setSection] = useState<Section>("recordings");
+  const [q, setQ] = useState("");
+  const [selected, setSelected] = useState<string | null>(null);
   const resident = useResident();
-  const library = useLibrary(resident.endpoint, "", resident.libraryTick);
+  const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick);
   const offline = resident.status === "offline";
 
   return (
     <div className="app">
       <Nav section={section} onSelect={setSection} />
-      {section === "recordings" && (
-        <div className="pane-list" data-pane="list">
-          {library.items.length === 0 && <EmptyState title="Записей пока нет" />}
+      <div className="content">
+        <header className="topbar">
+          <RecordingBadge endpoint={resident.endpoint ?? null} snapshot={resident.snapshot ?? null} />
+        </header>
+        <div className="panes">
+          {section === "recordings" && (
+            <div className="pane-list" data-pane="list">
+              <RecordingsList
+                selected={selected}
+                onSelect={setSelected}
+                library={library}
+                resident={resident}
+                q={q}
+                onQ={setQ}
+              />
+            </div>
+          )}
+          <main className="pane-detail" data-pane="detail">
+            {offline ? (
+              <EmptyState title="Сервис записи не запущен" hint="Окно переподключится само" />
+            ) : (
+              <EmptyState title="Выберите запись" />
+            )}
+          </main>
         </div>
-      )}
-      <main className="pane-detail" data-pane="detail">
-        {offline ? (
-          <EmptyState title="Сервис записи не запущен" hint="Окно переподключится само" />
-        ) : (
-          <EmptyState title="Выберите запись" />
-        )}
-      </main>
+      </div>
     </div>
   );
 }
