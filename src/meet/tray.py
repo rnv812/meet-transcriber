@@ -238,6 +238,16 @@ def _run_post_hook(folder: str) -> None:
         pass
 
 
+def _stop_reason(discard: bool, hook: bool) -> str:
+    """Причина остановки для `last_stop` в снимке состояния.
+
+    «interrupted» здесь не бывает: оборвавшуюся запись резидент не переживает
+    и сказать о ней не может — это оболочка выводит сама, по обрыву связи."""
+    if discard:
+        return "discarded"
+    return "saved" if hook else "short"
+
+
 class _BusLog:
     """Журнал дежурного с дублированием строк в шину событий.
 
@@ -299,6 +309,9 @@ class TrayApp:
         self.recording = False
         self.source = None
         self.on_saved = None  # колбэк «запись сохранена»: (folder, source, full)
+        # Чем кончилась последняя запись: {"folder", "reason", "at"} (см.
+        # stop_recording). None — остановок ещё не было.
+        self.last_stop: dict | None = None
         self.thread = None
         self.stop_event = None
         self.result: dict = {}
@@ -379,9 +392,21 @@ class TrayApp:
             thread, result = self.thread, self.result
             if thread is not None:
                 thread.join(timeout=60)
+            alive = thread is not None and thread.is_alive()
+            # Причина — раньше флага записи: снимок, увидевший «не пишу», должен
+            # видеть и её, иначе отмена, пойманная опросом до удаления папки,
+            # прочиталась бы оболочкой как «Запись сохранена». Поток, не
+            # успевший за join, дописывает дорожки и папку не удаляет — это
+            # сохранение, даже если просили отмену.
+            stopped = result.get("folder") or (self._current_folder() if alive else None)
+            if stopped:
+                self.last_stop = {
+                    "folder": str(stopped),
+                    "reason": _stop_reason(discard and not alive, hook),
+                    "at": time.time(),
+                }
             self.recording = False
             source, self.source = self.source, None
-            alive = thread is not None and thread.is_alive()
             # Обнуляем ссылку только если поток действительно завершился. Иначе
             # доживающий поток (join истёк за 60 с — ffmpeg ещё финализирует)
             # стал бы невидим для _clear_own_lock, и тот снял бы ещё рабочий

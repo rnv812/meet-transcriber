@@ -141,6 +141,10 @@ class TrayControl:
                 "render": tray._last_signals[1] if tray._last_signals else None,
             },
             "recordings_dir": str(settings.load().recording.recordings),
+            # Чем кончилась последняя запись ("saved" | "discarded" | "short"):
+            # оболочка по нему не говорит «сохранена» об отменённой. Ключ есть
+            # всегда — его наличие отличает этот резидент от старого.
+            "last_stop": dict(tray.last_stop) if tray.last_stop else None,
             # По живости pid, а не по наличию файла: убитая расшифровка оставляет
             # протухший маркер, и панель показывала бы «GPU занят» вечно.
             "gpu_busy": gpu_lock.held_by_live_process(),

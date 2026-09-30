@@ -3,6 +3,8 @@ import os
 import threading
 import time
 
+import pytest
+
 import meet.tray as tray
 import meet.watch as watch
 from meet import settings
@@ -547,6 +549,45 @@ def test_stop_without_hook_keeps_folder(monkeypatch, tmp_path):
     app = _recording_app(monkeypatch, tmp_path, folder)
     app.stop_recording(hook=False)
     assert folder.exists()
+
+
+@pytest.mark.parametrize("kwargs, reason", [
+    ({}, "saved"),
+    ({"discard": True}, "discarded"),
+    ({"hook": False}, "short"),
+])
+def test_every_stop_leaves_its_reason(monkeypatch, tmp_path, kwargs, reason):
+    """Оболочка по last_stop отличает «сохранена» от «отменена»: отмену из окна
+    приложения она иначе не видит и сообщала бы «Запись сохранена»."""
+    folder = tmp_path / "rec" / "2026-08-07_12-00"
+    folder.mkdir(parents=True)
+    monkeypatch.setattr(tray, "_run_post_hook", lambda f: None)
+    app = _recording_app(monkeypatch, tmp_path, folder)
+    assert app.last_stop is None
+    before = time.time()
+    app.stop_recording(**kwargs)
+    assert app.last_stop["folder"] == str(folder)
+    assert app.last_stop["reason"] == reason
+    assert before - 1 <= app.last_stop["at"] <= time.time() + 1
+
+
+def test_last_stop_is_known_by_the_time_recording_flag_drops(monkeypatch, tmp_path):
+    """Опрос оболочки может прийти между снятием флага и удалением папки: в
+    этот момент причина уже должна быть видна, иначе отмена прочиталась бы
+    как сохранение."""
+    folder = tmp_path / "rec" / "2026-08-07_12-00"
+    folder.mkdir(parents=True)
+    app = _recording_app(monkeypatch, tmp_path, folder)
+    seen = []
+    real_rmtree = tray.shutil.rmtree
+
+    def rmtree(path, **kwargs):
+        seen.append((app.recording, dict(app.last_stop or {}).get("reason")))
+        real_rmtree(path, **kwargs)
+
+    monkeypatch.setattr(tray.shutil, "rmtree", rmtree)
+    app.stop_recording(discard=True)
+    assert seen == [(False, "discarded")]
 
 
 def test_concurrent_stops_run_exactly_once(monkeypatch, tmp_path):

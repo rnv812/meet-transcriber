@@ -64,6 +64,18 @@ def test_snapshot_while_recording_reads_folder_from_lock(
     assert snap["elapsed_s"] >= 5.0
 
 
+def test_snapshot_reports_last_stop(control_state, app):
+    """Ключ есть всегда (None до первой остановки): по его наличию оболочка
+    отличает резидент, который сообщает причину, от старого."""
+    snap = control_state.snapshot()
+    assert "last_stop" in snap and snap["last_stop"] is None
+    app.last_stop = {"folder": "C:/rec/a", "reason": "discarded", "at": 1.0}
+    snap = control_state.snapshot()
+    assert snap["last_stop"] == {"folder": "C:/rec/a", "reason": "discarded", "at": 1.0}
+    snap["last_stop"]["reason"] = "saved"
+    assert app.last_stop["reason"] == "discarded"  # снимок — копия
+
+
 def test_snapshot_carries_last_levels(control_state, app):
     app.recording = True
     app.started = time.monotonic()

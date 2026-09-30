@@ -86,6 +86,31 @@ pub struct View {
     pub jobs_done: Vec<String>,
     /// (папка, текст ошибки) упавших расшифровок и импортов.
     pub jobs_failed: Vec<(String, String)>,
+    /// Чем кончилась последняя запись, по словам резидента.
+    pub last_stop: Option<LastStop>,
+    /// Резидент сообщает причину остановок (в `/state` есть ключ `last_stop`,
+    /// пусть и `null`). Старый резидент — нет, и тогда отмену из трея
+    /// распознаёт `CancelMark`.
+    pub reports_stops: bool,
+}
+
+/// `/state.last_stop`: папка, причина (`saved` | `discarded` | `short`) и
+/// время (epoch). По времени остановки различаются между собой.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LastStop {
+    pub folder: String,
+    pub reason: String,
+    pub at: f64,
+}
+
+impl LastStop {
+    fn from_json(value: &Value) -> Option<LastStop> {
+        Some(LastStop {
+            folder: str_at(value, "folder").unwrap_or_default().to_string(),
+            reason: str_at(value, "reason")?.to_string(),
+            at: value.get("at").and_then(Value::as_f64).unwrap_or(0.0),
+        })
+    }
 }
 
 impl View {
@@ -104,6 +129,8 @@ impl View {
             busy: false,
             jobs_done: Vec::new(),
             jobs_failed: Vec::new(),
+            last_stop: state.get("last_stop").and_then(LastStop::from_json),
+            reports_stops: state.get("last_stop").is_some(),
         };
         let items = jobs
             .get("items")
@@ -191,7 +218,16 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
             ));
         }
     }
-    if prev.recording && !next.recording {
+    // Отменённая запись не «сохранена»: причину говорит сам резидент, если
+    // умеет (`last_stop`). Считается только свежая причина — та, что
+    // появилась вместе с этой остановкой; без неё — как раньше, «сохранена»
+    // (отмену из трея тогда уберёт `CancelMark`).
+    let fresh_stop = next
+        .last_stop
+        .as_ref()
+        .filter(|stop| prev.last_stop.as_ref() != Some(*stop));
+    let discarded = fresh_stop.is_some_and(|stop| stop.reason == "discarded");
+    if prev.recording && !next.recording && !discarded {
         // Будет ли расшифровка (`auto_transcribe`), оболочка не знает — о ней
         // скажет своё уведомление, когда задача закончится.
         out.push(Notice::new(
@@ -331,6 +367,16 @@ impl CancelMark {
 
     /// Уведомления очередного тика с учётом отметки → (новая отметка, что
     /// показывать).
+    /// `settle` с учётом резидента: если он сам сообщает причину остановки
+    /// (`View::reports_stops`), отмену уже отсеял `transitions`, а отметка
+    /// не нужна — снимаем её, чтобы она не проглотила чужую остановку.
+    fn settle_for(self, view: Option<&View>, notices: Vec<Notice>) -> (CancelMark, Vec<Notice>) {
+        if view.is_some_and(|view| view.reports_stops) {
+            return (CancelMark::None, notices);
+        }
+        self.settle(notices)
+    }
+
     fn settle(self, notices: Vec<Notice>) -> (CancelMark, Vec<Notice>) {
         let has = |title: &str| notices.iter().any(|notice| notice.title == title);
         if has(RECORDING_INTERRUPTED) {
@@ -835,7 +881,7 @@ fn poll_loop(app: &AppHandle, initial_menu: MenuState) {
         if !notices.is_empty() {
             let notices = {
                 let mut mark = lock(&state.cancel);
-                let (next, kept) = mark.settle(notices);
+                let (next, kept) = mark.settle_for(view.as_ref(), notices);
                 *mark = next;
                 kept
             };
@@ -886,6 +932,16 @@ mod tests {
             busy: false,
             jobs_done: vec![],
             jobs_failed: vec![],
+            last_stop: None,
+            reports_stops: true,
+        }
+    }
+
+    fn stopped(reason: &str, at: f64) -> LastStop {
+        LastStop {
+            folder: r"D:\rec\2026-09-30_16-04".into(),
+            reason: reason.into(),
+            at,
         }
     }
 
@@ -934,6 +990,62 @@ mod tests {
         prev.recording = true;
         let n = transitions(Some(&prev), &idle());
         assert_eq!(n[0].title, "Запись сохранена");
+    }
+
+    #[test]
+    fn discarded_stop_is_not_reported_as_saved() {
+        // Отмену из окна приложения трей иначе не видит: резидент говорит
+        // причину сам.
+        let mut prev = idle();
+        prev.recording = true;
+        let mut next = idle();
+        next.last_stop = Some(stopped("discarded", 10.0));
+        assert!(transitions(Some(&prev), &next).is_empty());
+    }
+
+    #[test]
+    fn saved_and_short_stops_are_saves() {
+        for reason in ["saved", "short"] {
+            let mut prev = idle();
+            prev.recording = true;
+            let mut next = idle();
+            next.last_stop = Some(stopped(reason, 10.0));
+            assert_eq!(
+                titles(&transitions(Some(&prev), &next)),
+                vec!["Запись сохранена"],
+                "{reason}"
+            );
+        }
+    }
+
+    #[test]
+    fn stale_last_stop_does_not_decide_a_new_stop() {
+        // Прошлая запись была отменена; эта остановка причины не оставила
+        // (папка не получена) — старая причина к ней не относится.
+        let mut prev = idle();
+        prev.recording = true;
+        prev.last_stop = Some(stopped("discarded", 10.0));
+        let mut next = idle();
+        next.last_stop = Some(stopped("discarded", 10.0));
+        assert_eq!(
+            titles(&transitions(Some(&prev), &next)),
+            vec!["Запись сохранена"]
+        );
+    }
+
+    #[test]
+    fn old_resident_without_last_stop_still_says_saved() {
+        let mut prev = idle();
+        prev.recording = true;
+        prev.reports_stops = false;
+        let next = View {
+            reports_stops: false,
+            ..idle()
+        };
+        assert_eq!(
+            titles(&transitions(Some(&prev), &next)),
+            vec!["Запись сохранена"]
+        );
     }
 
     #[test]
@@ -1078,6 +1190,23 @@ mod tests {
     }
 
     #[test]
+    fn view_reads_last_stop() {
+        let state = json!({"status": "idle", "last_stop": {
+            "folder": r"D:\rec\2026-09-30_16-04", "reason": "discarded", "at": 10.0}});
+        let v = View::from_json(&state, &json!({"items": []}));
+        assert!(v.reports_stops);
+        assert_eq!(v.last_stop, Some(stopped("discarded", 10.0)));
+        // Ключ есть, остановок ещё не было.
+        let v = View::from_json(&json!({"status": "idle", "last_stop": null}), &json!({}));
+        assert!(v.reports_stops);
+        assert_eq!(v.last_stop, None);
+        // Старый резидент ключа не знает.
+        let v = View::from_json(&json!({"status": "idle"}), &json!({}));
+        assert!(!v.reports_stops);
+        assert_eq!(v.last_stop, None);
+    }
+
+    #[test]
     fn view_from_idle_state_without_jobs() {
         let state = json!({"status": "idle", "source": null, "elapsed_s": 0.0,
                            "auto_record": {"enabled": false}});
@@ -1086,6 +1215,7 @@ mod tests {
             v,
             View {
                 auto: false,
+                reports_stops: false,
                 ..idle()
             }
         );
@@ -1289,6 +1419,20 @@ mod tests {
         assert_eq!(titles(&kept), vec!["Запись прервана"]);
         let (_, later) = mark.settle(vec![notice("Запись сохранена")]);
         assert_eq!(titles(&later), vec!["Запись сохранена"]);
+    }
+
+    #[test]
+    fn resident_that_reports_stops_makes_the_cancel_mark_moot() {
+        let mut view = idle();
+        let mark = CancelMark::default().requested().replied(true);
+        let (mark, kept) = mark.settle_for(Some(&view), vec![notice("Запись сохранена")]);
+        assert_eq!(mark, CancelMark::None);
+        assert_eq!(titles(&kept), vec!["Запись сохранена"]);
+        // Старый резидент (без last_stop) — отметка работает как раньше.
+        view.reports_stops = false;
+        let mark = CancelMark::default().requested().replied(true);
+        let (_, kept) = mark.settle_for(Some(&view), vec![notice("Запись сохранена")]);
+        assert!(kept.is_empty());
     }
 
     #[test]
