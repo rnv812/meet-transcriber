@@ -12,8 +12,9 @@ MODEL_NAME = "bzikst/faster-whisper-large-v3-russian"
 DEFAULT_LANGUAGE = "ru"
 
 # Модель для машин без NVIDIA: большой русский fine-tune на CPU идёт часами.
-# Выбор между turbo и medium — замер задачи 3 плана этапа 1 (встреча 30.09).
-CPU_MODEL_NAME = "deepdml/faster-whisper-large-v3-turbo-ct2"
+# Выбрана medium: замер 30.09 (docs/2026-09-30-cpu-profile-bench.md) — turbo
+# быстрее всего в 1.34 раза, но искажает имена и часть фраз.
+CPU_MODEL_NAME = "Systran/faster-whisper-medium"
 DEVICES = ("auto", "cuda", "cpu")
 # Порядок попыток по устройству: на CUDA при нехватке VRAM откатываемся на
 # квантованную, на CPU float16 не бывает — сразу int8.

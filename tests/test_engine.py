@@ -168,3 +168,17 @@ def test_pyav_is_pinned_below_19():
     assert "av>=11,<19" in engine.PACKAGES
     extras = engine.install_steps("cpu")[1]
     assert "av>=11,<19" in extras
+
+
+def test_state_reports_device_speed_and_disk(monkeypatch):
+    monkeypatch.setattr(engine, "_device", lambda: "cpu")
+    state = engine.state()
+    assert state["device"] == "cpu"
+    assert state["speed_factor"] == engine.SPEED_FACTOR["cpu"]
+    assert state["disk_free_gb"] > 0
+
+
+def test_estimate_seconds_scales_with_duration():
+    assert engine.estimate_seconds(600, "cuda") == 600 * engine.SPEED_FACTOR["cuda"]
+    assert engine.estimate_seconds(600, "cpu") > engine.estimate_seconds(600, "cuda")
+    assert engine.estimate_seconds(600, "непонятно") == 600 * engine.SPEED_FACTOR["cpu"]

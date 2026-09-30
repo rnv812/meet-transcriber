@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-from meet import events, gpu_lock, jobs, library, paths, settings, watch
+from meet import engine, events, gpu_lock, jobs, library, paths, settings, watch
 
 # Источник записи. Константы живут здесь, а не в tray.py: адаптер не должен
 # зависеть от модуля, который тянет pystray, — наоборот, tray импортирует их
@@ -97,6 +97,9 @@ class TrayControl:
             "folder": tray._current_folder() if recording else None,
             "elapsed_s": round(elapsed, 1),
             "levels": dict(self._levels) if recording else {},
+            # Свободное место под записи: UI предупреждает при < 5 ГБ до старта
+            # записи, а не когда ffmpeg упрётся в полный диск посреди встречи.
+            "disk_free_gb": engine._free_gb(settings.load().recording.recordings),
             "auto_record": {
                 "enabled": bool(tray.cfg["enabled"]),
                 "processes": list(tray.cfg["processes"]),

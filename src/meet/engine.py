@@ -48,6 +48,29 @@ CUDA_RUNTIME = ("nvidia-cublas-cu12", "nvidia-cudnn-cu12")
 # человек должен узнать об этом до нажатия, а не по счётчику трафика.
 DOWNLOAD_HINT_GB = {"cuda": 3.0, "cpu": 0.6}
 
+# Время расшифровки / длительность записи, замер 30.09.2026 на 6-минутном
+# фрагменте встречи (docs/2026-09-30-cpu-profile-bench.md). Оценка для UI,
+# не обещание: на коротком фрагменте загрузка моделей весит больше, так что
+# на длинных записях фактическое время обычно ниже.
+SPEED_FACTOR = {"cuda": 0.22, "cpu": 1.26}
+
+
+def _device() -> str:
+    from meet.asr import resolve_device
+
+    return resolve_device()
+
+
+def estimate_seconds(duration_s: float, device: str) -> float:
+    return duration_s * SPEED_FACTOR.get(device, SPEED_FACTOR["cpu"])
+
+
+def _free_gb(path: Path) -> float:
+    target = path
+    while not target.exists() and target != target.parent:
+        target = target.parent
+    return round(shutil.disk_usage(target).free / 1024**3, 1)
+
 
 def installed(name: str) -> bool:
     """Есть ли модуль. `find_spec` не импортирует — проверка дешёвая и не
@@ -84,6 +107,7 @@ def state() -> dict:
     ]
     missing = [c["module"] for c in components if not c["installed"]]
     card = gpu()
+    device = _device()
     return {
         "installed": not missing,
         "missing": missing,
@@ -94,6 +118,9 @@ def state() -> dict:
         "python": sys.executable,
         "target": str(Path(sys.prefix)),
         "ffmpeg": bool(shutil.which("ffmpeg")),
+        "device": device,
+        "speed_factor": SPEED_FACTOR.get(device, SPEED_FACTOR["cpu"]),
+        "disk_free_gb": _free_gb(Path(sys.prefix)),
     }
 
 
