@@ -3,21 +3,16 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from meet import events, paths
+from meet import events, hotwords, paths
 from meet.asr import Segment, transcribe_wav
 from meet.audio import to_wav16k
 from meet.diarize import diarize_wav, split_by_speaker
 from meet.interleave import interleave_tracks
 from meet.output import speaker_names, to_markdown
 
-# IMPORTANT: контекст Whisper — 448 токенов, и faster-whisper НЕЗАВИСИМО усекает
-# до 223 токенов и hotwords, и предыдущий текст (condition_on_previous_text);
-# вместе они переполняют окно (223+223+служебные > 448) и роняют декодирование
-# («maximum decoding length must be > 0»). Поэтому держим hotwords заведомо ниже.
-# Бюджет в символах: при замеренной плотности лексики ~2.4 симв./токен это ~160
-# токенов, и даже при пессимистичных 2.0 симв./токен ≈198 — итог с предыдущим
-# текстом остаётся < 448. Список можно пополнять и дальше: лишнее отсекается.
-HOTWORDS_CHAR_BUDGET = 400
+# Бюджет подсказок в символах; почему именно столько — в meet.hotwords. Живёт
+# там, чтобы счётчик в настройках резидента брал его, не импортируя этот модуль.
+HOTWORDS_CHAR_BUDGET = hotwords.HOTWORDS_CHAR_BUDGET
 
 
 def _cap_hotwords(terms: list[str], budget: int = HOTWORDS_CHAR_BUDGET) -> list[str]:
@@ -53,10 +48,7 @@ def _load_hotwords(extra: str | None, path: Path | None = None) -> str | None:
     path = path or paths.hotwords_path()
     terms: list[str] = []
     if path.exists():
-        for line in path.read_text(encoding="utf-8").splitlines():
-            term = line.split("#", 1)[0].strip()
-            if term:
-                terms.append(term)
+        terms = hotwords.terms(path.read_text(encoding="utf-8"))
     if extra:
         terms += [t.strip() for t in extra.split(",") if t.strip()]
     seen = list(dict.fromkeys(terms))  # дедуп с сохранением порядка

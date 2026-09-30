@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from meet import engine, events, gpu_lock, jobs, library, paths, settings, watch
+from meet import engine, events, gpu_lock, hotwords, jobs, library, paths, settings, watch
 
 # Источник записи. Константы живут здесь, а не в tray.py: адаптер не должен
 # зависеть от модуля, который тянет pystray, — наоборот, tray импортирует их
@@ -318,16 +318,11 @@ class TrayControl:
 
     # --- hotwords ---------------------------------------------------------
 
-    HOTWORDS_BUDGET = 400
-
     def _hotwords_reply(self, text: str) -> dict:
-        terms = []
-        for line in text.splitlines():
-            term = line.split("#", 1)[0].strip()
-            if term:
-                terms.append(term)
-        return {"text": text, "budget": self.HOTWORDS_BUDGET,
-                "used": len(", ".join(terms))}
+        # Те же правила, что у расшифровки (meet.hotwords): повторы не
+        # считаются, бюджет общий — счётчик не должен врать о лимите.
+        return {"text": text, "budget": hotwords.HOTWORDS_CHAR_BUDGET,
+                "used": len(", ".join(hotwords.terms(text)))}
 
     def get_hotwords(self) -> dict:
         try:
@@ -385,7 +380,8 @@ class TrayControl:
         from meet import export
 
         folder = self._folder(recording_id)
-        data = library.read_transcript(folder) if folder else None
+        # Как в редакторе: сырые SPEAKER_XX старых транскриптов — «Спикер N».
+        data = library.with_display_names(library.read_transcript(folder)) if folder else None
         if data is None:
             return {"error": "транскрипта нет"}
         card = library.describe(folder)

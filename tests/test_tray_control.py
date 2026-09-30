@@ -397,6 +397,22 @@ def test_export_sanitizes_filename(with_recordings, app, monkeypatch):
     assert "Привет" in result["content"]
 
 
+def test_export_of_old_transcript_uses_display_names(control_state, tmp_path,
+                                                     monkeypatch):
+    """Старый транскрипт хранит сырые SPEAKER_XX — экспорт показывает их так
+    же, как редактор: «Спикер N»."""
+    from meet import library
+
+    folder = _saved_folder(tmp_path)
+    library.write_transcript(folder, {"segments": [
+        {"start": 0, "end": 1, "speaker": "SPEAKER_00", "text": "а"},
+        {"start": 1, "end": 2, "speaker": "SPEAKER_01", "text": "б"}]})
+    monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
+    content = control_state.export(folder.name, "txt")["content"]
+    assert "Спикер 1: а" in content and "Спикер 2: б" in content
+    assert "SPEAKER_" not in content
+
+
 def test_devices_error_is_not_cached(control_state):
     """Мгновенный сбой подпроцесса не должен залипать на 15 с — «Сбросить»
     обязано повторить попытку."""
@@ -863,6 +879,34 @@ def test_hotwords_roundtrip(control_state, monkeypatch, tmp_path):
     assert reply == {"text": "SIEM\nSOC\n# комментарий\nCMDB", "budget": 400,
                      "used": len("SIEM, SOC, CMDB")}
     assert control_state.get_hotwords() == reply
+
+
+def test_hotwords_budget_and_count_match_what_transcription_uses(control_state,
+                                                                  monkeypatch, tmp_path):
+    """Счётчик в настройках обязан совпадать с тем, что реально уйдёт в
+    распознавание: тот же бюджет и тот же дедуп повторов."""
+    from meet import paths, transcribe
+
+    target = tmp_path / "hotwords.txt"
+    monkeypatch.setattr(paths, "hotwords_path", lambda: target)
+    text = "SIEM\nSOC\nSIEM  # повтор\nCMDB\nSOC"
+    reply = control_state.put_hotwords({"text": text})
+    assert reply["budget"] == transcribe.HOTWORDS_CHAR_BUDGET
+    assert reply["used"] == len(transcribe._load_hotwords(None, target))
+    assert reply["used"] == len("SIEM, SOC, CMDB")
+
+
+def test_resident_import_stays_light():
+    """Список слов делит бюджет с расшифровкой, но резидент не тянет её
+    модуль (numpy, ASR): минимальная установка для записи их не содержит."""
+    import subprocess
+    import sys
+
+    code = ("import sys, meet.tray, meet.tray_control; "
+            "print('meet.transcribe' in sys.modules, 'numpy' in sys.modules)")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                         text=True, check=True)
+    assert out.stdout.split() == ["False", "False"]
 
 
 def test_hotwords_rejects_non_text(control_state, monkeypatch, tmp_path):

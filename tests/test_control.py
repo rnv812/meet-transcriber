@@ -184,6 +184,34 @@ def test_tauri_origin_allowed_and_echoed(server):
         assert r.headers["Access-Control-Allow-Origin"] == "tauri://localhost"
 
 
+def test_lookalike_origin_rejected(server):
+    """Проверка по префиксу пропускала бы чужие домены, начинающиеся с
+    разрешённого имени."""
+    _get(server, "/state", headers={"Origin": "http://localhost.evil.com"}, expect=403)
+
+
+@pytest.mark.parametrize("origin, allowed", [
+    ("http://localhost", True),
+    ("http://localhost:5173", True),
+    ("http://127.0.0.1:8766", True),
+    ("tauri://localhost", True),
+    ("http://tauri.localhost", True),
+    ("https://tauri.localhost", True),
+    ("http://localhost.evil.com", False),
+    ("http://127.0.0.1.evil.com", False),
+    ("tauri://localhost.evil.com", False),
+    ("tauri://evil", False),
+    ("https://tauri.localhost.evil.com:443", False),
+    ("http://localhost:", False),
+    ("http://localhost:80abc", False),
+    ("http://localhost/", False),
+    ("http://evil.com#http://localhost", False),
+    ("https://localhost", False),
+])
+def test_origin_is_matched_exactly(origin, allowed):
+    assert control._origin_allowed(origin) is allowed
+
+
 def test_binds_only_loopback(server):
     """Наружу порт не смотрит: запись микрофона — не сетевая услуга."""
     assert server._httpd.server_address[0] == "127.0.0.1"

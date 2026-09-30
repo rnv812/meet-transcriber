@@ -69,15 +69,21 @@ from meet import paths
 
 ENDPOINT_NAME = "daemon.json"
 
-# Откуда разрешено ходить. tauri:// — оболочка приложения, localhost — dev-сервер
-# фронта и браузер. Запрос без Origin (curl, CLI) проходит: там нет чужой
-# страницы, от которой мы защищаемся, а токен всё равно обязателен.
-ALLOWED_ORIGIN_PREFIXES = (
-    "tauri://",
+# Откуда разрешено ходить. tauri://localhost и (http|https)://tauri.localhost —
+# оболочка приложения, localhost/127.0.0.1 — dev-сервер фронта и браузер. Запрос
+# без Origin (curl, CLI) проходит: там нет чужой страницы, от которой мы
+# защищаемся, а токен всё равно обязателен.
+#
+# IMPORTANT: сравнение точное (схема и хост целиком, порт по желанию), не по
+# префиксу: префикс «http://localhost» пропускал http://localhost.evil.com.
+ALLOWED_ORIGINS = frozenset({
+    "tauri://localhost",
     "http://localhost",
     "http://127.0.0.1",
+    "http://tauri.localhost",
     "https://tauri.localhost",
-)
+})
+_ORIGIN_RE = re.compile(r"(?P<base>[a-z][a-z0-9+.-]*://[^:/?#\s]+)(?::\d{1,5})?")
 
 SSE_KEEPALIVE_S = 15.0  # комментарий-пинг, чтобы прокси и клиент не заснули
 SSE_QUEUE_MAX = 1000  # переполнение = клиент не читает; такого выкидываем
@@ -156,7 +162,8 @@ def clear_endpoint(pid: int | None = None) -> None:
 def _origin_allowed(origin: str | None) -> bool:
     if not origin:
         return True  # CLI/curl: чужой страницы нет, а токен всё равно нужен
-    return origin.startswith(ALLOWED_ORIGIN_PREFIXES)
+    match = _ORIGIN_RE.fullmatch(origin)
+    return match is not None and match.group("base") in ALLOWED_ORIGINS
 
 
 class _QuietServer(ThreadingHTTPServer):
