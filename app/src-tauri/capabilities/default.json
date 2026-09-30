@@ -1,22 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Права окон панели и настроек. В Tauri 2 системные команды закрыты по умолчанию: без этого файла окно нельзя ни потащить, ни спрятать — вызов отвергается с указанием недостающего права.",
+  "description": "Права главного окна приложения. В Tauri 2 системные команды закрыты по умолчанию: без этого файла окно не может ни сфокусироваться, ни закрыться, ни показать уведомление — вызов отвергается с указанием недостающего права.",
   "windows": [
-    "panel",
-    "settings",
-    "editor"
+    "main"
   ],
   "permissions": [
     "core:default",
-    "core:window:allow-start-dragging",
-    "core:window:allow-hide",
-    "core:window:allow-show",
     "core:window:allow-set-focus",
-    "core:window:allow-unminimize",
-    "core:window:allow-is-visible",
-    "core:window:allow-set-size",
+    "core:window:allow-close",
     "core:event:default",
-    "core:window:allow-close"
+    "notification:default",
+    "dialog:default"
   ]
 }
