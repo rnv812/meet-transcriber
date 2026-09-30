@@ -36,6 +36,7 @@ export function SpeakerPopover({ endpoint, recordingId, label, people, onApplied
   const ei = options.findIndex((o) => o.existing && fold(o.name) === q);
   if (ei > 0) options.unshift(...options.splice(ei, 1));
   const choice = options[0]?.name;
+  const exact = options.find((o) => o.existing && fold(o.name) === q)?.name;
 
   const apply = async (name: string) => {
     if (!name.trim() || inflight.current) return;
@@ -115,7 +116,7 @@ export function SpeakerPopover({ endpoint, recordingId, label, people, onApplied
       </label>
       {error && <div className="card__error speaker-pop__error" role="alert">{error}</div>}
       <div className="speaker-pop__actions">
-        <Button variant="primary" disabled={!typed || busy} onClick={() => void apply(choice ?? typed)}>
+        <Button variant="primary" disabled={!typed || busy} onClick={() => void apply(exact ?? typed)}>
           Готово
         </Button>
       </div>

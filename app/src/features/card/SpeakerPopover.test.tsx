@@ -106,3 +106,31 @@ test("после ошибки фокус возвращается в поле", 
   await screen.findByRole("alert");
   await waitFor(() => expect(screen.getByRole("textbox")).toHaveFocus());
 });
+
+const serg = [{ ...people[0]!, name: "Матвей" }];
+const renderWith = (list: Person[]) =>
+  render(<SpeakerPopover endpoint={ep} recordingId="r1" label="Спикер 2" people={list} onDone={vi.fn()} />);
+const ok = () => vi.mocked(api.nameSpeakers).mockResolvedValue({ ok: true, renamed: 1, enrolled: [], voices_error: null });
+
+test("«Готово» без точного совпадения создаёт введённое имя", async () => {
+  ok();
+  renderWith(serg);
+  await userEvent.type(screen.getByRole("textbox"), "Мат");
+  await userEvent.click(screen.getByRole("button", { name: "Готово" }));
+  expect(api.nameSpeakers).toHaveBeenCalledWith(ep, "r1", { "Спикер 2": "Мат" });
+});
+
+test("Enter без точного совпадения берёт первую подсказку", async () => {
+  ok();
+  renderWith(serg);
+  await userEvent.type(screen.getByRole("textbox"), "Мат{Enter}");
+  expect(api.nameSpeakers).toHaveBeenCalledWith(ep, "r1", { "Спикер 2": "Матвей" });
+});
+
+test("«Готово» с точным совпадением берёт каноничное имя", async () => {
+  ok();
+  renderWith([{ ...people[0]!, name: "Демьян Петров" }, people[0]!]);
+  await userEvent.type(screen.getByRole("textbox"), "демьян");
+  await userEvent.click(screen.getByRole("button", { name: "Готово" }));
+  expect(api.nameSpeakers).toHaveBeenCalledWith(ep, "r1", { "Спикер 2": "Демьян" });
+});
