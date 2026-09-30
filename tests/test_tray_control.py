@@ -484,3 +484,26 @@ def test_discarded_recording_never_reaches_on_saved(app, tmp_path, monkeypatch):
     app.stop_recording(discard=True)
     assert calls == []
     assert not folder.exists()
+
+
+def test_import_file_creates_recording_and_queues(app, tmp_path, monkeypatch):
+    queue = _Queue()
+    state = tray_control.TrayControl(app, queue=queue)
+    root = tmp_path / "recordings"
+    monkeypatch.setattr(state, "_root", lambda: root)
+    src = tmp_path / "встреча.mp3"
+    src.write_bytes(b"media")
+    result = state.import_file({"path": str(src)})
+    assert result["recording"].endswith("_import")
+    assert queue.submitted == [(jobs.IMPORT, str(root / result["recording"]))]
+
+
+def test_import_missing_or_bad_file_is_an_error(app, tmp_path, monkeypatch):
+    state = tray_control.TrayControl(app, queue=_Queue())
+    root = tmp_path / "recordings"
+    monkeypatch.setattr(state, "_root", lambda: root)
+    assert state.import_file({"path": str(tmp_path / "нет.mp3")}) == {"error": "файла нет"}
+    doc = tmp_path / "notes.docx"
+    doc.write_bytes(b"x")
+    assert "формат" in state.import_file({"path": str(doc)})["error"]
+    assert not root.exists() or not any(root.iterdir())

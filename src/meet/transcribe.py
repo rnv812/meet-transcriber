@@ -66,7 +66,8 @@ def _load_hotwords(extra: str | None, path: Path | None = None) -> str | None:
 
 # Форматы дорожек в порядке предпочтения: сейчас пишем .opus, но старые записи
 # в .wav должны продолжать транскрибироваться.
-_TRACK_EXTS = (".opus", ".wav", ".ogg", ".flac", ".mp3", ".m4a")
+_TRACK_EXTS = (".opus", ".wav", ".ogg", ".flac", ".mp3", ".m4a",
+               ".mp4", ".webm", ".mkv")
 
 
 def _find_track(folder: Path, stem: str) -> Path | None:
@@ -158,7 +159,16 @@ def transcribe(
     bus = bus if bus is not None else events.EventBus()
     hotwords = _load_hotwords(hotwords)
 
-    if path.is_dir():
+    if path.is_dir() and _find_track(path, "source") and not _find_track(path, "sys"):
+        # Папка импорта: одна дорожка чужой записи, но вывод — внутрь папки,
+        # как у обычной записи, чтобы библиотека и редактор её видели.
+        segments, diar, name_map = _transcribe_single(
+            _find_track(path, "source"), speakers, hotwords, align, overlap, bus
+        )
+        iso, dmy = _folder_dates(path.name)
+        out_md = path / f"{iso}_transcript.md"
+        title = f"Встреча — {dmy}"
+    elif path.is_dir():
         segments, diar, name_map = _transcribe_two_track(
             path, speakers, hotwords, align, overlap, bus
         )

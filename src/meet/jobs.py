@@ -34,9 +34,10 @@ CANCELLED = "cancelled"
 # Виды задач. Расшифровка сейчас одна, но очередь заводится общая: следом
 # приходят чистовой проход и протокол встречи (см. план, Ф7c).
 TRANSCRIBE = "transcribe"
+IMPORT = "import"
 INSTALL_ENGINE = "install-engine"
 DOWNLOAD_MODEL = "download-model"
-KINDS = (TRANSCRIBE, INSTALL_ENGINE, DOWNLOAD_MODEL)
+KINDS = (TRANSCRIBE, IMPORT, INSTALL_ENGINE, DOWNLOAD_MODEL)
 
 JOB_QUEUED = "job.queued"
 JOB_STARTED = "job.started"

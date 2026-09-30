@@ -42,7 +42,7 @@ def _apply_hf_token() -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="meet-job")
     parser.add_argument("kind",
-                        choices=["transcribe", "install-engine", "download-model"])
+                        choices=["transcribe", "import", "install-engine", "download-model"])
     parser.add_argument("path")
     parser.add_argument("--speakers", type=int)
     parser.add_argument("--hotwords")
@@ -56,6 +56,11 @@ def main(argv: list[str] | None = None) -> int:
         return _install_engine(args.flavor)
     if args.kind == "download-model":
         return _download_model(args.path)
+
+    if args.kind == "import":
+        code = _copy_import(args.path)
+        if code != 0:
+            return code
 
     from meet import events, settings
 
@@ -96,6 +101,28 @@ def main(argv: list[str] | None = None) -> int:
         _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
         return 1
     _emit({"kind": "job.result", "path": str(out)})
+    return 0
+
+
+def _copy_import(folder_str: str) -> int:
+    """Скопировать исходник импорта в папку записи как source.<ext>.
+
+    Оригинал не трогаем: человек мог импортировать файл из общей папки."""
+    import shutil
+    from pathlib import Path
+
+    from meet import events, library
+
+    bus = events.EventBus()
+    bus.subscribe(lambda event: _emit(event.to_dict()))
+    folder = Path(folder_str)
+    src = Path(library.read_meta(folder).get("original_path") or "")
+    if not src.is_file():
+        _emit({"kind": "error", "text": f"исходный файл пропал: {src}"})
+        return 3
+    bus.progress("copy", label="копирование файла", done=0, total=1, note=src.name)
+    shutil.copy2(src, folder / f"source{src.suffix.lower()}")
+    bus.progress("copy", label="копирование файла", done=1, total=1, note=src.name)
     return 0
 
 

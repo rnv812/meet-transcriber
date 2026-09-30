@@ -388,9 +388,22 @@ class TrayControl:
     def cancel_job(self, job_id: str) -> dict:
         return {"ok": self.queue.cancel(job_id)}
 
+    def import_file(self, body: dict) -> dict:
+        """Импорт чужой записи: папка + задача (копия и расшифровка)."""
+        raw = str((body or {}).get("path") or "").strip()
+        src = Path(raw) if raw else None
+        if src is None or not src.is_file():
+            return {"error": "файла нет"}
+        try:
+            folder = library.create_import(self._root(), src)
+        except ValueError as e:
+            return {"error": str(e)}
+        job = self.queue.submit(jobs.IMPORT, str(folder), {})
+        return {"recording": folder.name, "job": job.to_raw()}
+
     def track_path(self, recording_id: str, track: str) -> Path | None:
         folder = self._folder(recording_id)
-        if folder is None or track not in ("sys", "mic"):
+        if folder is None or track not in library.TRACK_STEMS:
             return None
         return library.find_track(folder, track)
 

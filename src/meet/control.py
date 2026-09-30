@@ -502,6 +502,9 @@ class _BadRequest(Exception):
 # Маршруты вынесены из класса, чтобы читались одним списком. Каждый получает
 # handler и разобранные query-параметры, возвращает то, что уйдёт в JSON.
 _ROUTES = {
+    ("POST", "/recordings/import"): lambda h, p: _server_of(h).state.import_file(
+        h._body()
+    ),
     ("GET", "/"): lambda h, p: {"ok": True, "api": "meet-control"},
     ("GET", "/state"): lambda h, p: _server_of(h).state.snapshot(),
     ("GET", "/diagnostics"): lambda h, p: _server_of(h).state.diagnostics(
@@ -554,6 +557,7 @@ _PATTERNS = (
 _AUDIO_TYPES = {
     ".opus": "audio/ogg", ".ogg": "audio/ogg", ".wav": "audio/wav",
     ".flac": "audio/flac", ".mp3": "audio/mpeg", ".m4a": "audio/mp4",
+    ".mp4": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska",
 }
 
 

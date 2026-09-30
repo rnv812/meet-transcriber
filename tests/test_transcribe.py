@@ -272,3 +272,23 @@ def test_mic_track_uses_speaker_name_from_settings(monkeypatch, tmp_path):
     (tmp_path / "mic.opus").write_bytes(b"x")
     segments, _, _ = tr._transcribe_two_track(tmp_path, None, None, align=False)
     assert any(seg.speaker == "Алексей" for seg in segments)
+
+
+def test_import_folder_uses_single_track_and_writes_into_folder(tmp_path, monkeypatch):
+    import meet.transcribe as tr
+    from meet import library
+
+    folder = tmp_path / "2026-09-28_16-04_import"
+    folder.mkdir()
+    (folder / "source.mp4").write_bytes(b"media")
+    seen = {}
+
+    def fake_single(src, speakers, hotwords, align, overlap, bus):
+        seen["src"] = src
+        return [Segment(0.0, 1.0, "привет", speaker="SPEAKER_00")], None, {}
+
+    monkeypatch.setattr(tr, "_transcribe_single", fake_single)
+    out = tr.transcribe(str(folder))
+    assert seen["src"] == folder / "source.mp4"
+    assert out == folder / "2026-09-28_transcript.md"
+    assert library.read_transcript(folder)["segments"][0]["text"] == "привет"

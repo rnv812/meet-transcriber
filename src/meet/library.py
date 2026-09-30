@@ -17,9 +17,15 @@ from pathlib import Path
 
 TRANSCRIPT_JSON = "transcript.json"
 META_JSON = "meta.json"
-FOLDER_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})$")
+FOLDER_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})(?:_.+)?$")
 # Форматы дорожек в порядке предпочтения — те же, что понимает transcribe.
-TRACK_EXTS = (".opus", ".wav", ".ogg", ".flac", ".mp3", ".m4a")
+TRACK_EXTS = (".opus", ".wav", ".ogg", ".flac", ".mp3", ".m4a",
+              ".mp4", ".webm", ".mkv")
+# Дорожки папки записи: запись пишет sys+mic, импорт кладёт один source.
+TRACK_STEMS = ("sys", "mic", "source")
+# Что принимаем на импорт: всё это декодирует ffmpeg.
+IMPORT_EXTS = (".mp3", ".mp4", ".m4a", ".wav", ".ogg", ".opus", ".webm", ".mkv",
+               ".flac")
 SOURCES = ("record", "auto", "import")
 
 
@@ -136,23 +142,47 @@ def write_meta(folder: Path, updates: dict) -> dict:
     return data
 
 
+def create_import(root: Path, src: Path) -> Path:
+    """Папка записи под импортируемый файл. Сам файл копирует задача `import`
+    (это может быть гигабайт видео — не в потоке HTTP), здесь только папка и
+    meta.json. Время в имени — время изменения файла: обычно это конец встречи,
+    ближе к правде, чем «сейчас»."""
+    if src.suffix.lower() not in IMPORT_EXTS:
+        raise ValueError(f"формат {src.suffix or 'без расширения'} не поддерживается")
+    stamp = datetime.fromtimestamp(src.stat().st_mtime).strftime("%Y-%m-%d_%H-%M")
+    root.mkdir(parents=True, exist_ok=True)
+    folder = root / f"{stamp}_import"
+    n = 2
+    while folder.exists():
+        folder = root / f"{stamp}_import-{n}"
+        n += 1
+    folder.mkdir()
+    write_meta(folder, {
+        "source": "import",
+        "original_path": str(src),
+        "original_name": src.name,
+        "title": src.stem,
+    })
+    return folder
+
+
 def describe(folder: Path) -> Recording | None:
     """Папка записи → карточка для библиотеки. Не папка записи — None."""
     if not folder.is_dir():
         return None
     tracks = {}
-    for stem in ("sys", "mic"):
+    for stem in TRACK_STEMS:
         track = find_track(folder, stem)
         if track is not None:
             tracks[stem] = track
-    if not tracks:
-        return None  # без дорожек это не запись
+    meta = read_meta(folder)
+    if not tracks and meta.get("source") != "import":
+        return None  # без дорожек это не запись (импорт — запись ещё до копии)
     transcript = read_transcript(folder)
     title = None
     if isinstance(transcript, dict):
         raw_title = transcript.get("title")
         title = str(raw_title) if raw_title else None
-    meta = read_meta(folder)
     if meta.get("title"):
         title = str(meta["title"])
     source = meta.get("source") if meta.get("source") in SOURCES else "record"

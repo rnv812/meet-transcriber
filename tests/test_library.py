@@ -132,3 +132,51 @@ def test_meta_title_wins_over_transcript_title(tmp_path):
     card = library.describe(folder)
     assert card.title == "Дейлик"
     assert card.source == "record"  # нет meta.source — обычная запись
+
+
+import os
+import time
+
+
+def _media(tmp_path, name="созвон.mp4", mtime=None):
+    src = tmp_path / "in" / name
+    src.parent.mkdir(exist_ok=True)
+    src.write_bytes(b"media")
+    if mtime is not None:
+        os.utime(src, (mtime, mtime))
+    return src
+
+
+def test_create_import_makes_folder_with_meta(tmp_path):
+    stamp = time.mktime((2026, 9, 28, 16, 4, 0, 0, 0, -1))
+    src = _media(tmp_path, mtime=stamp)
+    folder = library.create_import(tmp_path / "rec", src)
+    assert folder.name == "2026-09-28_16-04_import"
+    meta = library.read_meta(folder)
+    assert meta["source"] == "import"
+    assert meta["original_name"] == "созвон.mp4"
+    assert meta["title"] == "созвон"
+    card = library.describe(folder)  # ещё без дорожки — но уже в библиотеке
+    assert card is not None and card.source == "import" and card.tracks == {}
+    assert card.started_at == "2026-09-28T16:04:00"
+
+
+def test_two_imports_with_same_mtime_get_distinct_folders(tmp_path):
+    stamp = time.mktime((2026, 9, 28, 16, 4, 0, 0, 0, -1))
+    a = library.create_import(tmp_path / "rec", _media(tmp_path, "a.mp3", stamp))
+    b = library.create_import(tmp_path / "rec", _media(tmp_path, "b.mp3", stamp))
+    assert a != b and b.name == "2026-09-28_16-04_import-2"
+
+
+def test_create_import_rejects_unknown_format(tmp_path):
+    import pytest
+
+    with pytest.raises(ValueError, match="формат"):
+        library.create_import(tmp_path / "rec", _media(tmp_path, "notes.docx"))
+    assert not (tmp_path / "rec").exists() or not any((tmp_path / "rec").iterdir())
+
+
+def test_import_folder_track_is_source(tmp_path):
+    folder = library.create_import(tmp_path / "rec", _media(tmp_path))
+    (folder / "source.mp4").write_bytes(b"media")
+    assert set(library.describe(folder).tracks) == {"source"}

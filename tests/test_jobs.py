@@ -228,3 +228,10 @@ def test_worker_runs_below_normal_priority():
         subprocess, "CREATE_NO_WINDOW", 0)
     assert flags & getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0) == getattr(
         subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+
+
+def test_import_job_argv(tmp_path):
+    job = jobs.Job(id="x", kind=jobs.IMPORT, folder=str(tmp_path))
+    argv = jobs.worker_argv(job)
+    assert argv[-2:] == ["import", str(tmp_path)]
+    assert jobs.IMPORT in jobs.KINDS
