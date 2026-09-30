@@ -200,3 +200,14 @@ def test_create_import_survives_folder_appearing_after_check(tmp_path, monkeypat
     monkeypatch.undo()
     assert folder.name == "2026-09-28_16-04_import-2"
     assert library.read_meta(taken)["title"] == "чужой"
+
+
+def test_search_matches_title_and_text(tmp_path):
+    a = _recording(tmp_path, "2026-09-29_15-30", transcript={
+        "title": "Созвон", "segments": [{"start": 0, "end": 1, "speaker": "Демьян",
+                                         "text": "Обсудим CMDB"}]})
+    _recording(tmp_path, "2026-09-30_16-04", transcript={
+        "title": "Acme", "segments": []})
+    assert [r["id"] for r in library.search(tmp_path, "cmdb")] == [a.name]
+    assert [r["id"] for r in library.search(tmp_path, "acme")] == ["2026-09-30_16-04"]
+    assert len(library.search(tmp_path, "")) == 2

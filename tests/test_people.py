@@ -331,3 +331,16 @@ def test_failed_avatar_save_leaves_no_temp_file(tmp_path, monkeypatch):
     with pytest.raises(OSError):
         people.set_avatar("Демьян", data, voices)
     assert sorted(p.name for p in voices.iterdir()) == ["Демьян.json"]
+
+
+def test_person_lists_meetings_newest_first(tmp_path):
+    rec, voices = tmp_path / "rec", tmp_path / "voices"
+    _meeting(rec, "2026-09-01_10-00", [{"start": 0, "end": 5, "speaker": "Демьян", "text": "а"}])
+    _meeting(rec, "2026-09-29_15-30", [{"start": 0, "end": 30, "speaker": "Демьян", "text": "б"}])
+    _voice(voices, "Демьян", [])
+    card = people.person("Демьян", voices, rec)
+    assert [m["recording"] for m in card["meetings"]] == ["2026-09-29_15-30", "2026-09-01_10-00"]
+    assert card["meetings"][0]["seconds"] == 30
+    assert card["name"] == "Демьян" and card["has_avatar"] is False
+    with pytest.raises(KeyError):
+        people.person("Никто", voices, rec)

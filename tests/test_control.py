@@ -79,6 +79,25 @@ class FakeState:
         self.calls.append(("update", rid, body))
         return {"id": rid, "title": body.get("title")}
 
+    def recordings(self, limit=200, q=None):
+        self.calls.append(("recordings", limit, q))
+        return {"items": []}
+
+    def delete_recording(self, rid):
+        self.calls.append(("delete", rid))
+        return {"ok": True}
+
+    def get_hotwords(self):
+        return {"text": "SIEM", "budget": 400, "used": 4}
+
+    def put_hotwords(self, body):
+        self.calls.append(("hotwords", body))
+        return {"text": body["text"], "budget": 400, "used": 0}
+
+    def person(self, name):
+        self.calls.append(("person", name))
+        return {"name": name, "meetings": []}
+
     def set_auto_record(self, body):
         self.calls.append(("auto", body))
         return {"status": "idle", "auto_record": {"enabled": body["enabled"]}}
@@ -230,6 +249,28 @@ def test_patch_recording_routes_to_update(server):
                   method="PATCH")
     assert reply == {"id": "2026-09-30_16-04", "title": "Acme"}
     assert ("update", "2026-09-30_16-04", {"title": "Acme"}) in server.state_obj.calls
+
+
+def test_delete_recording_routes(server):
+    assert _post(server, "/recordings/2026-09-30_16-04", method="DELETE") == {"ok": True}
+    assert ("delete", "2026-09-30_16-04") in server.state_obj.calls
+
+
+def test_hotwords_routes(server):
+    assert _get(server, "/hotwords")["text"] == "SIEM"
+    reply = _post(server, "/hotwords", {"text": "SOC"}, method="PUT")
+    assert reply["text"] == "SOC"
+    assert ("hotwords", {"text": "SOC"}) in server.state_obj.calls
+
+
+def test_recordings_search_passes_query(server):
+    _get(server, "/recordings?q=cmdb")
+    assert ("recordings", 200, "cmdb") in server.state_obj.calls
+
+
+def test_person_card_route(server):
+    assert _get(server, "/voices/%D0%94%D0%B5%D0%BC%D1%8C%D1%8F%D0%BD")["name"] == "Демьян"
+    assert ("person", "Демьян") in server.state_obj.calls
 
 
 def test_state_error_does_not_kill_server(monkeypatch, tmp_path):

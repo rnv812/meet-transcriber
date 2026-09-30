@@ -283,9 +283,64 @@ class TrayControl:
             return None
         return candidate
 
-    def recordings(self, limit: int = 200) -> dict:
-        return {"root": str(self._root()),
-                "items": library.listing(self._root(), limit=limit)}
+    def recordings(self, limit: int = 200, q: str | None = None) -> dict:
+        root = self._root()
+        items = library.search(root, q, limit=limit) if (q or "").strip()             else library.listing(root, limit=limit)
+        return {"root": str(root), "items": items}
+
+    def delete_recording(self, recording_id: str) -> dict:
+        """Удалить папку записи целиком. Отказ, пока в неё пишут или над ней
+        работает расшифровка/импорт: иначе задача упала бы на исчезнувших файлах."""
+        import shutil
+
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        if self.tray.recording and                 Path(self.tray._current_folder()).resolve() == folder:
+            raise _bad_request("запись ещё идёт")
+        if self.queue.active_for(str(folder), (jobs.TRANSCRIBE, jobs.IMPORT)):
+            raise _bad_request("идёт расшифровка — отмените её или дождитесь")
+        try:
+            shutil.rmtree(folder)
+        except OSError as e:
+            raise RuntimeError(f"не удалось удалить запись: {e}") from e
+        return {"ok": True}
+
+    # --- hotwords ---------------------------------------------------------
+
+    HOTWORDS_BUDGET = 400
+
+    def _hotwords_reply(self, text: str) -> dict:
+        terms = []
+        for line in text.splitlines():
+            term = line.split("#", 1)[0].strip()
+            if term:
+                terms.append(term)
+        return {"text": text, "budget": self.HOTWORDS_BUDGET,
+                "used": len(", ".join(terms))}
+
+    def get_hotwords(self) -> dict:
+        try:
+            text = paths.hotwords_path().read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        return self._hotwords_reply(text)
+
+    def put_hotwords(self, body: dict) -> dict:
+        import os
+
+        text = (body or {}).get("text")
+        if not isinstance(text, str):
+            raise _bad_request("text должен быть строкой")
+        path = paths.hotwords_path()
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError as e:
+            raise RuntimeError(f"не удалось сохранить список слов: {e}") from e
+        return self._hotwords_reply(text)
 
     def recording(self, recording_id: str) -> dict:
         folder = self._folder(recording_id)
@@ -518,6 +573,16 @@ class TrayControl:
         from meet import people
 
         return {"items": people.listing(self._voices(), self._root())}
+
+    def person(self, name: str) -> dict:
+        from meet import people
+
+        try:
+            return people.person(name, self._voices(), self._root())
+        except KeyError:
+            return {"error": "человека нет"}
+        except ValueError as e:
+            raise _bad_request(str(e))
 
     def person_sample(self, name: str) -> dict:
         from meet import people

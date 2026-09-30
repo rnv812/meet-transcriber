@@ -33,7 +33,10 @@ IMPORTANT: токен принимается и в query-параметре `?to
     patch_settings(updates) -> dict      частичное обновление, возвращает новые
     processes() -> dict                  запущенные процессы для выбора клиента
     devices() -> dict                    какие устройства увидит запись
-    recordings(limit) -> dict            библиотека записей
+    recordings(limit, q) -> dict         библиотека записей (q — поиск)
+    delete_recording(id) -> dict         удалить запись
+    get_hotwords() / put_hotwords(body)  список слов распознавания
+    person(name) -> dict                 карточка человека
     recording(id) -> dict                одна запись
     transcript(id) -> dict               структурный транскрипт для редактора
     save_transcript(id, data) -> dict     правки редактора
@@ -581,8 +584,10 @@ _ROUTES = {
     ("POST", "/recording/adopt"): lambda h, p: _server_of(h).state.adopt_recording(),
     ("POST", "/auto-record"): lambda h, p: _server_of(h).state.set_auto_record(h._body()),
     ("GET", "/recordings"): lambda h, p: _server_of(h).state.recordings(
-        limit=_int_param(p, "limit", 200)
+        limit=_int_param(p, "limit", 200), q=(p.get("q") or [""])[0]
     ),
+    ("GET", "/hotwords"): lambda h, p: _server_of(h).state.get_hotwords(),
+    ("PUT", "/hotwords"): lambda h, p: _server_of(h).state.put_hotwords(h._body()),
     ("GET", "/voices"): lambda h, p: _server_of(h).state.people(),
     ("GET", "/jobs"): lambda h, p: _server_of(h).state.jobs(),
     ("GET", "/engine"): lambda h, p: _server_of(h).state.engine(),
@@ -626,6 +631,10 @@ _PATTERNS = (
      lambda h, p, n: _server_of(h).state.person_action(unquote(n), "rename", h._body())),
     ("POST", re.compile(r"^/voices/([^/]+)/merge$"),
      lambda h, p, n: _server_of(h).state.person_action(unquote(n), "merge", h._body())),
+    ("DELETE", re.compile(r"^/recordings/([^/]+)$"),
+     lambda h, p, rid: _server_of(h).state.delete_recording(rid)),
+    ("GET", re.compile(r"^/voices/([^/]+)$"),
+     lambda h, p, n: _server_of(h).state.person(unquote(n))),
     ("DELETE", re.compile(r"^/voices/([^/]+)$"),
      lambda h, p, n: _server_of(h).state.person_action(unquote(n), "delete")),
 )

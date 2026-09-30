@@ -114,6 +114,34 @@ def listing(voices: Path, recordings: Path) -> list[dict]:
     return out
 
 
+def person(name: str, voices: Path, recordings: Path) -> dict:
+    """Карточка человека: голос плюс встречи, где он говорил (новые сверху).
+    Нет такого голоса — KeyError."""
+    name = valid_name(name)
+    voice = _voice_file(name, voices)
+    if not voice.exists():
+        raise KeyError(name)
+    meetings = []
+    for folder in reversed(library.recording_folders(recordings)):
+        seconds = sum(_duration(s) for s in _turns(library.read_transcript(folder), name))
+        if not seconds:
+            continue
+        card = library.describe(folder)
+        meetings.append({
+            "recording": folder.name,
+            "title": card.title if card else None,
+            "started_at": card.started_at if card else None,
+            "seconds": round(seconds),
+        })
+    return {
+        "name": name,
+        "color": color(name),
+        "has_avatar": avatar_path(name, voices).exists(),
+        "samples": len(_samples(voice)),
+        "meetings": meetings,
+    }
+
+
 def sample(name: str, voices: Path, recordings: Path) -> dict | None:
     """Самая длинная реплика человека в последней по дате записи, где он
     говорит. `voices` — для единообразия с остальными вызовами: образец берётся

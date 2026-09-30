@@ -769,3 +769,74 @@ def test_auto_record_toggle_needs_bool(control_state):
     from meet import control
     with pytest.raises(control.BadRequest):
         control_state.set_auto_record({"enabled": "да"})
+
+
+def test_delete_recording_removes_folder(control_state, tmp_path, monkeypatch):
+    folder = _saved_folder(tmp_path)
+    monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
+    assert control_state.delete_recording(folder.name) == {"ok": True}
+    assert not folder.exists()
+
+
+def test_delete_unknown_recording(control_state, tmp_path, monkeypatch):
+    folder = _saved_folder(tmp_path)
+    monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
+    assert control_state.delete_recording("nope") == {"error": "записи нет"}
+
+
+def test_delete_refuses_current_recording(app, tmp_path, monkeypatch):
+    from meet import control
+
+    state = tray_control.TrayControl(app)
+    folder = _saved_folder(tmp_path)
+    monkeypatch.setattr(state, "_root", lambda: folder.parent)
+    monkeypatch.setattr(app, "recording", True)
+    monkeypatch.setattr(app, "_current_folder", lambda: str(folder))
+    with pytest.raises(control.BadRequest, match="запись ещё идёт"):
+        state.delete_recording(folder.name)
+    assert folder.exists()
+
+
+def test_delete_refuses_while_transcribing(app, tmp_path, monkeypatch):
+    from meet import control
+    queue = jobs.JobQueue(spawn=lambda job, on_line: __import__("time").sleep(1) or 0)
+    state = tray_control.TrayControl(app, queue=queue)
+    folder = _saved_folder(tmp_path)
+    monkeypatch.setattr(state, "_root", lambda: folder.parent)
+    state.transcribe(folder.name, {})
+    with pytest.raises(control.BadRequest, match="расшифровка"):
+        state.delete_recording(folder.name)
+    assert folder.exists()
+    queue.stop()
+
+
+def test_hotwords_roundtrip(control_state, monkeypatch, tmp_path):
+    from meet import paths
+    target = tmp_path / "hotwords.txt"
+    monkeypatch.setattr(paths, "hotwords_path", lambda: target)
+    assert control_state.get_hotwords() == {"text": "", "budget": 400, "used": 0}
+    reply = control_state.put_hotwords({"text": "SIEM\nSOC\n# комментарий\nCMDB"})
+    assert target.read_text(encoding="utf-8").startswith("SIEM")
+    assert reply == {"text": "SIEM\nSOC\n# комментарий\nCMDB", "budget": 400,
+                     "used": len("SIEM, SOC, CMDB")}
+    assert control_state.get_hotwords() == reply
+
+
+def test_hotwords_rejects_non_text(control_state, monkeypatch, tmp_path):
+    from meet import control, paths
+    monkeypatch.setattr(paths, "hotwords_path", lambda: tmp_path / "h.txt")
+    with pytest.raises(control.BadRequest):
+        control_state.put_hotwords({"text": 5})
+
+
+def test_recordings_query_filters(control_state, tmp_path, monkeypatch):
+    folder = _saved_folder(tmp_path)
+    from meet import library
+    library.write_transcript(folder, {"title": "Созвон", "segments": []})
+    monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
+    assert len(control_state.recordings(q="созв")["items"]) == 1
+    assert control_state.recordings(q="zzz")["items"] == []
+
+
+def test_person_card_unknown(control_state):
+    assert control_state.person("Никто") == {"error": "человека нет"}

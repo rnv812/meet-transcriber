@@ -242,6 +242,28 @@ def listing(root: Path, limit: int = 200) -> list[dict]:
     return found
 
 
+def search(root: Path, q: str, limit: int = 200) -> list[dict]:
+    """Записи, где запрос (без учёта регистра) есть в названии или в тексте
+    любой реплики. Пустой запрос — вся библиотека, как у `listing`. Полный
+    обход с чтением transcript.json: библиотека — сотни папок, индекс был бы
+    вторым источником истины."""
+    q = (q or "").strip().lower()
+    if not q:
+        return listing(root, limit)
+    found = []
+    for card in listing(root, limit=10**9):
+        transcript = read_transcript(Path(card["path"])) or {}
+        haystack = [card.get("title") or "", str(transcript.get("title") or "")]
+        segments = transcript.get("segments")
+        if isinstance(segments, list):
+            haystack += [str(s.get("text") or "") for s in segments if isinstance(s, dict)]
+        if any(q in part.lower() for part in haystack):
+            found.append(card)
+            if len(found) >= limit:
+                break
+    return found
+
+
 def latest(root: Path) -> Recording | None:
     for folder in sorted(root.iterdir(), key=lambda p: p.name, reverse=True):
         card = describe(folder)
