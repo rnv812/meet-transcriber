@@ -21,6 +21,15 @@ use resident::Supervisor;
 
 fn main() {
     tauri::Builder::default()
+        // Первым: второй экземпляр должен выйти до того, как другие плагины и
+        // `setup` успеют что-то сделать (второй трей, второй резидент). Колбэк
+        // приходит в первый экземпляр внутри WM_COPYDATA, пока второй ждёт
+        // ответа, — окно строим позже, отдельной задачей главного потока.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            let recording = windows::recording_arg(&args);
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || windows::open_main(&handle, recording));
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
@@ -34,6 +43,12 @@ fn main() {
         .setup(|app| {
             Supervisor::start(app.handle());
             tray::build(app)?;
+            // Обычный запуск — только трей. `--recording <id>` (например, из
+            // уведомления) — сразу окно на этой записи.
+            let args: Vec<String> = std::env::args().collect();
+            if let Some(recording) = windows::recording_arg(&args) {
+                windows::open_main(app.handle(), Some(recording));
+            }
             Ok(())
         })
         .build(tauri::generate_context!())

@@ -39,6 +39,27 @@ fn encode_component(text: &str) -> String {
     out
 }
 
+/// Запись из командной строки: `meet.exe --recording <id>` (или
+/// `--recording=<id>`). `args` — полный argv, `args[0]` — сам exe. Флаг без
+/// значения или со следующим флагом вместо id — `None`: окно откроется без
+/// записи.
+pub fn recording_arg(args: &[String]) -> Option<String> {
+    let mut rest = args.iter().skip(1);
+    while let Some(arg) = rest.next() {
+        let value = if arg == "--recording" {
+            rest.next().map(String::as_str)
+        } else if let Some(value) = arg.strip_prefix("--recording=") {
+            Some(value)
+        } else {
+            continue;
+        };
+        return value
+            .filter(|id| !id.is_empty() && !id.starts_with("--"))
+            .map(str::to_string);
+    }
+    None
+}
+
 /// Показать окно, создав при необходимости. Только с главного потока.
 pub fn open_main(app: &AppHandle, recording: Option<String>) {
     if let Some(window) = app.get_webview_window("main") {
@@ -154,5 +175,37 @@ mod tests {
             "index.html?recording=2026-09-30_16-04_import"
         );
         assert_eq!(main_url(Some("a b")), "index.html?recording=a%20b");
+    }
+
+    fn argv(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| item.to_string()).collect()
+    }
+
+    #[test]
+    fn recording_arg_reads_the_id_after_the_flag() {
+        assert_eq!(
+            recording_arg(&argv(&["meet.exe", "--recording", "2026-09-30_16-04"])),
+            Some("2026-09-30_16-04".to_string())
+        );
+        assert_eq!(
+            recording_arg(&argv(&["meet.exe", "--recording=2026-09-30_16-04"])),
+            Some("2026-09-30_16-04".to_string())
+        );
+    }
+
+    #[test]
+    fn recording_arg_is_none_without_a_usable_id() {
+        assert_eq!(recording_arg(&argv(&["meet.exe"])), None);
+        assert_eq!(recording_arg(&argv(&[])), None);
+        // Флаг без значения — просто окно, без записи.
+        assert_eq!(recording_arg(&argv(&["meet.exe", "--recording"])), None);
+        assert_eq!(recording_arg(&argv(&["meet.exe", "--recording="])), None);
+        // Следующий флаг — не id записи.
+        assert_eq!(
+            recording_arg(&argv(&["meet.exe", "--recording", "--other"])),
+            None
+        );
+        // Сам exe (argv[0]) не разбирается как флаг.
+        assert_eq!(recording_arg(&argv(&["--recording", "x"])), None);
     }
 }
