@@ -223,3 +223,20 @@ def test_patch_saves_integrations(tmp_path):
     cfg = settings.patch({"integrations": {"hf_token": "hf_secret"}}, f)
     assert cfg.integrations.hf_token == "hf_secret"
     assert settings.load(f).integrations.hf_token == "hf_secret"
+
+
+def test_asr_device_and_cpu_model_defaults_and_roundtrip():
+    from meet.asr import CPU_MODEL_NAME
+
+    cfg = settings.Settings.from_raw({"version": settings.SCHEMA_VERSION})
+    assert cfg.asr.device == "auto"
+    assert cfg.asr.cpu_model == CPU_MODEL_NAME
+    raw = cfg.to_raw()
+    assert raw["asr"]["device"] == "auto"
+    again = settings.Settings.from_raw(
+        {"version": settings.SCHEMA_VERSION,
+         "asr": {"device": "cpu", "cpu_model": "medium"}})
+    assert again.asr.device == "cpu" and again.asr.cpu_model == "medium"
+    assert settings.Settings.from_raw(
+        {"version": settings.SCHEMA_VERSION,
+         "asr": {"device": "gpu!"}}).asr.device == "auto"

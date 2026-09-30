@@ -75,7 +75,12 @@ def diarize_wav(
 
     print("Диаризация...")
     pipe = Pipeline.from_pretrained(DIARIZATION_MODEL, token=token)
-    pipe.to(torch.device("cuda"))
+    from meet.asr import resolve_device
+
+    # На машине без NVIDIA (или с CPU-сборкой torch) pyannote идёт на CPU —
+    # медленнее, но работает; раньше здесь был жёсткий cuda и падение.
+    use_cuda = resolve_device() == "cuda" and torch.cuda.is_available()
+    pipe.to(torch.device("cuda" if use_cuda else "cpu"))
     waveform, rate = _load_wav(path)
     result = pipe(
         {"waveform": waveform, "sample_rate": rate},

@@ -27,6 +27,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from meet import paths
+from meet.asr import CPU_MODEL_NAME as DEFAULT_CPU_WHISPER_MODEL
+from meet.asr import DEVICES as ASR_DEVICES
 from meet.asr import MODEL_NAME as DEFAULT_WHISPER_MODEL
 
 SCHEMA_VERSION = 2
@@ -298,6 +300,8 @@ class Asr:
     language: str = "ru"
     align: bool = True
     overlap: bool = True
+    device: str = "auto"
+    cpu_model: str = DEFAULT_CPU_WHISPER_MODEL
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Asr":
@@ -308,6 +312,8 @@ class Asr:
             language=str(raw.get("language") or "ru").strip() or "ru",
             align=as_flag(raw.get("align"), True),
             overlap=as_flag(raw.get("overlap"), True),
+            device=as_choice(raw.get("device"), ASR_DEVICES, "auto"),
+            cpu_model=str(raw.get("cpu_model") or "").strip() or DEFAULT_CPU_WHISPER_MODEL,
         )
 
     def to_raw(self) -> dict:
@@ -317,6 +323,8 @@ class Asr:
             "language": self.language,
             "align": self.align,
             "overlap": self.overlap,
+            "device": self.device,
+            "cpu_model": self.cpu_model,
         }
 
 

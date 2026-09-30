@@ -11,6 +11,49 @@ logger = logging.getLogger(__name__)
 MODEL_NAME = "bzikst/faster-whisper-large-v3-russian"
 DEFAULT_LANGUAGE = "ru"
 
+# Модель для машин без NVIDIA: большой русский fine-tune на CPU идёт часами.
+# Выбор между turbo и medium — замер задачи 3 плана этапа 1 (встреча 30.09).
+CPU_MODEL_NAME = "deepdml/faster-whisper-large-v3-turbo-ct2"
+DEVICES = ("auto", "cuda", "cpu")
+# Порядок попыток по устройству: на CUDA при нехватке VRAM откатываемся на
+# квантованную, на CPU float16 не бывает — сразу int8.
+COMPUTE_TYPES = {"cuda": ("float16", "int8_float16"), "cpu": ("int8",)}
+
+
+def cuda_available() -> bool:
+    """Видит ли ctranslate2 карту NVIDIA. Любая ошибка — «нет»: на ноутбуке
+    без карты это штатная ситуация, а не сбой."""
+    try:
+        import ctranslate2
+
+        return ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        return False
+
+
+def resolve_device(setting: str | None = None) -> str:
+    """Устройство распознавания: явный выбор из настроек или автоопределение.
+    None — прочитать настройку `asr.device`; опечатка — как «auto»."""
+    if setting is None:
+        try:
+            from meet import settings
+
+            setting = settings.load().asr.device
+        except Exception:
+            setting = "auto"
+    if setting in ("cuda", "cpu"):
+        return setting
+    return "cuda" if cuda_available() else "cpu"
+
+
+def _cpu_model_setting() -> str:
+    try:
+        from meet import settings
+
+        return settings.load().asr.cpu_model or CPU_MODEL_NAME
+    except Exception:
+        return CPU_MODEL_NAME
+
 
 def _asr_settings() -> tuple[str, str]:
     """Модель и язык из настроек. Импорт отложенный: meet.settings берёт отсюда
@@ -22,6 +65,24 @@ def _asr_settings() -> tuple[str, str]:
         return cfg.model or MODEL_NAME, cfg.language or DEFAULT_LANGUAGE
     except Exception:  # настройки не должны мешать расшифровке
         return MODEL_NAME, DEFAULT_LANGUAGE
+
+
+def _model_for(device: str, model_name: str | None) -> str:
+    """Явно переданная модель важнее; иначе своя для каждого устройства."""
+    if model_name:
+        return model_name
+    if device == "cuda":
+        return _asr_settings()[0]
+    return _cpu_model_setting()
+
+
+def _whisper_kwargs(device: str) -> dict:
+    """На CPU — все ядра, кроме одного: встреча и UI должны оставаться живыми."""
+    if device != "cpu":
+        return {}
+    import os
+
+    return {"cpu_threads": max(1, (os.cpu_count() or 2) - 1)}
 
 
 @dataclass
@@ -192,14 +253,15 @@ def transcribe_wav(
     _apply_hf_token()
     from faster_whisper import WhisperModel
 
-    default_model, default_language = _asr_settings()
-    model_name = model_name or default_model
-    language = language or default_language
+    device = resolve_device()
+    model_name = _model_for(device, model_name)
+    language = language or _asr_settings()[1]
     last_error: Exception | None = None
-    for compute_type in ("float16", "int8_float16"):
+    for compute_type in COMPUTE_TYPES[device]:
         try:
-            model = WhisperModel(model_name, device="cuda", compute_type=compute_type)
-            print(f"Распознавание ({compute_type})...")
+            model = WhisperModel(model_name, device=device, compute_type=compute_type,
+                                 **_whisper_kwargs(device))
+            print(f"Распознавание ({device}, {compute_type})...")
             segments, _ = model.transcribe(
                 str(path),
                 language=language,
@@ -214,10 +276,11 @@ def transcribe_wav(
             if "memory" not in str(e).lower():
                 raise
             last_error = e
-            print(f"Не хватило видеопамяти ({compute_type}), пробую компактнее...")
-            import torch
+            print(f"Не хватило памяти ({compute_type}), пробую компактнее...")
+            if device == "cuda":
+                import torch
 
-            torch.cuda.empty_cache()
+                torch.cuda.empty_cache()
     raise SystemExit(f"Модель не загрузилась даже в int8: {last_error}")
 
 
@@ -230,7 +293,8 @@ class Transcriber:
         self._model = None
         self.compute_type: str | None = None
         default_model, default_language = _asr_settings()
-        self.model_name = model_name or default_model
+        self.device = resolve_device()
+        self.model_name = _model_for(self.device, model_name)
         self.language = language or default_language
 
     def load(self) -> None:
@@ -239,22 +303,24 @@ class Transcriber:
         from faster_whisper import WhisperModel
 
         last_error: Exception | None = None
-        for compute_type in ("float16", "int8_float16"):
+        for compute_type in COMPUTE_TYPES[self.device]:
             try:
                 self._model = WhisperModel(
-                    self.model_name, device="cuda", compute_type=compute_type
+                    self.model_name, device=self.device, compute_type=compute_type,
+                    **_whisper_kwargs(self.device),
                 )
                 self.compute_type = compute_type
-                print(f"Модель загружена ({compute_type})")
+                print(f"Модель загружена ({self.device}, {compute_type})")
                 return
             except RuntimeError as e:
                 if "memory" not in str(e).lower():
                     raise
                 last_error = e
-                print(f"Не хватило видеопамяти ({compute_type}), пробую компактнее...")
-                import torch
+                print(f"Не хватило памяти ({compute_type}), пробую компактнее...")
+                if self.device == "cuda":
+                    import torch
 
-                torch.cuda.empty_cache()
+                    torch.cuda.empty_cache()
         raise SystemExit(f"Модель не загрузилась даже в int8: {last_error}")
 
     def transcribe_window(
