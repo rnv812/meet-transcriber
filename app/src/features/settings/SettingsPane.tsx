@@ -56,7 +56,7 @@ function SecondsRow({ id, label, hint, value, onChange }: {
     <Row label={label} hint={hint} htmlFor={id}>
       <span className="with-unit">
         <input id={id} type="number" min={0} className="num" value={value}
-          onChange={(e) => onChange(Number(e.target.value))} />
+          onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) onChange(Math.max(0, n)); }} />
         <span className="unit">секунд</span>
       </span>
     </Row>
@@ -241,17 +241,24 @@ export function SettingsPane({ endpoint, recordingsDir }: { endpoint: Endpoint; 
     setDraft((cur) => ({ ...cur, [group]: { ...(cur[group] ?? {}), [key]: value } }));
   };
 
-  const dirty = settings
-    ? Object.keys(draft).filter((g) => JSON.stringify(draft[g]) !== JSON.stringify(settings[g]))
-    : [];
+  // Only changed keys are sent, so edits made elsewhere (e.g. the tray) are not clobbered.
+  // auto_record.enabled lives outside the draft: it goes through /auto-record.
+  const changes: Record<string, Record<string, unknown>> = {};
+  if (settings) {
+    for (const g of Object.keys(draft)) {
+      for (const [k, val] of Object.entries(draft[g] ?? {})) {
+        if (g === "auto_record" && k === "enabled") continue;
+        if (JSON.stringify(val) !== JSON.stringify(settings[g]?.[k])) (changes[g] ??= {})[k] = val;
+      }
+    }
+  }
+  const dirty = Object.keys(changes);
 
   const save = async () => {
     if (dirty.length === 0) return;
     setPending(true);
     try {
-      const updates: Record<string, unknown> = {};
-      for (const g of dirty) updates[g] = draft[g];
-      const result = await patchSettings(endpoint, updates);
+      const result = await patchSettings(endpoint, changes);
       setSettings(result.settings as Raw);
       setDraft(result.settings as Raw);
       setError(null);

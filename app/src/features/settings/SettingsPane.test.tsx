@@ -65,6 +65,7 @@ test("«Хвост после звонка» сохраняется патчем
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
   const call = vi.mocked(api.patchSettings).mock.calls[0]?.[1] as { auto_record: { grace_seconds: number } };
   expect(call.auto_record.grace_seconds).toBe(45);
+  expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1]).toEqual({ auto_record: { grace_seconds: 45 } });
 });
 
 test("уведомления: радио «Только важные» сохраняется в ui.notifications", async () => {

@@ -20,16 +20,28 @@ export function EnginePane({ endpoint }: { endpoint: Endpoint }) {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Returning to the section while a task runs: pick it up so progress shows.
+  useEffect(() => {
+    let live = true;
+    getJobs(endpoint).then((r) => {
+      const mine = r.items.find((i) => i.kind === "install-engine" && active(i));
+      if (live && mine) setJob((cur) => cur ?? mine);
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [endpoint]);
+
   // Установка идёт минутами; опрос переживает любые обрывы.
   useEffect(() => {
     if (!job || !active(job)) return;
+    let live = true;
     const timer = window.setInterval(async () => {
       const jobs = await getJobs(endpoint).catch(() => null);
+      if (!live) return;
       const mine = jobs?.items.find((i) => i.id === job.id);
       if (mine) setJob(mine);
       if (mine && (mine.state === "done" || mine.state === "failed")) void load();
     }, 2000);
-    return () => window.clearInterval(timer);
+    return () => { live = false; window.clearInterval(timer); };
   }, [endpoint, job, load]);
 
   const install = async () => {

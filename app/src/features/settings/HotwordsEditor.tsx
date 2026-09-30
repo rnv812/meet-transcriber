@@ -4,14 +4,16 @@ import { Button } from "../../ui/Button";
 
 /** Как считает резидент: строки без пустых и `# комментариев`, через «, ». */
 export function countHotwords(text: string): number {
-  const terms = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
-  return terms.join(", ").length;
+  // Mirror of meet.hotwords.terms: from the first `#` is a comment; empties and repeats dropped.
+  const found = text.split(/\r?\n/).map((l) => (l.split("#", 1)[0] ?? "").trim()).filter(Boolean);
+  return [...new Set(found)].join(", ").length;
 }
 
 export function HotwordsEditor({ endpoint }: { endpoint: Endpoint }) {
   const [text, setText] = useState("");
   const [saved, setSaved] = useState("");
   const [budget, setBudget] = useState(400);
+  const [serverUsed, setServerUsed] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -19,19 +21,19 @@ export function HotwordsEditor({ endpoint }: { endpoint: Endpoint }) {
     let live = true;
     getHotwords(endpoint).then((h) => {
       if (!live) return;
-      setText(h.text); setSaved(h.text); setBudget(h.budget);
+      setText(h.text); setSaved(h.text); setBudget(h.budget); setServerUsed(h.used);
     }).catch((e) => live && setError(String(e)));
     return () => { live = false; };
   }, [endpoint]);
 
-  const used = countHotwords(text);
+  const used = text === saved && serverUsed !== null ? serverUsed : countHotwords(text);
   const over = used > budget;
 
   const save = async () => {
     setPending(true); setError(null);
     try {
       const h = await putHotwords(endpoint, text);
-      setSaved(h.text); setBudget(h.budget);
+      setSaved(h.text); setBudget(h.budget); setServerUsed(h.used);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -54,7 +56,7 @@ export function HotwordsEditor({ endpoint }: { endpoint: Endpoint }) {
         {over && <span className="error">Лишнее отбросится при расшифровке</span>}
         {error && <span className="error">{error}</span>}
         <Button variant="primary" onClick={() => void save()} disabled={pending || text === saved && !over}>
-          Сохранить
+          Сохранить термины
         </Button>
       </div>
     </div>

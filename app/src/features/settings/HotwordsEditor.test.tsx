@@ -33,8 +33,31 @@ test("сверх бюджета: счётчик красный, предупре
   const counter = screen.getByTestId("hotwords-counter");
   expect(counter).toHaveClass("hotwords__counter--over");
   expect(screen.getByText("Лишнее отбросится при расшифровке")).toBeInTheDocument();
-  const save = screen.getByRole("button", { name: "Сохранить" });
+  const save = screen.getByRole("button", { name: "Сохранить термины" });
   expect(save).toBeEnabled();
   await userEvent.click(save);
   await waitFor(() => expect(api.putHotwords).toHaveBeenCalledWith(ep, "я".repeat(401)));
+});
+
+test("встроенный комментарий отрезается: «SIEM, siem-like»", async () => {
+  render(<HotwordsEditor endpoint={ep} />);
+  await userEvent.click(await screen.findByRole("textbox"));
+  await userEvent.paste("SIEM\nsiem-like # note");
+  expect(screen.getByTestId("hotwords-counter")).toHaveTextContent("15 / 400");
+});
+
+test("повторы считаются один раз", async () => {
+  render(<HotwordsEditor endpoint={ep} />);
+  await userEvent.click(await screen.findByRole("textbox"));
+  await userEvent.paste("SOC\nSOC");
+  expect(screen.getByTestId("hotwords-counter")).toHaveTextContent("3 / 400");
+});
+
+test("после сохранения показывается used сервера", async () => {
+  vi.mocked(api.putHotwords).mockResolvedValue({ text: "SOC", budget: 400, used: 99 });
+  render(<HotwordsEditor endpoint={ep} />);
+  await userEvent.click(await screen.findByRole("textbox"));
+  await userEvent.paste("SOC");
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить термины" }));
+  await waitFor(() => expect(screen.getByTestId("hotwords-counter")).toHaveTextContent("99 / 400"));
 });
