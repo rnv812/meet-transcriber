@@ -83,3 +83,17 @@ test("«О программе» показывает путь к данным", 
   expect(await screen.findByText("C:\data\meet")).toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: "Копировать" })).toHaveLength(2);
 });
+
+test("«Открыть» папку записей — только в оболочке: в браузере открыть нечем", async () => {
+  const { unmount } = render(<SettingsPane endpoint={ep} recordingsDir="D:/rec" />);
+  expect(await screen.findByText("D:/rec")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Открыть" })).toBeNull();
+  unmount();
+  (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+  try {
+    render(<SettingsPane endpoint={ep} recordingsDir="D:/rec" />);
+    expect(await screen.findByRole("button", { name: "Открыть" })).toBeInTheDocument();
+  } finally {
+    delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  }
+});

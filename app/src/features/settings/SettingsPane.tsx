@@ -12,7 +12,7 @@ import {
   type Devices, type Endpoint, type Processes,
   NoResidentError, getDevices, getProcesses, getSettings, patchSettings, setAutoRecord,
 } from "../../lib/api";
-import { openFolder } from "../../lib/shell";
+import { inTauri, openFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { About } from "./About";
@@ -73,7 +73,7 @@ function RecordingSection({ draft, set, devices, recordingsDir }: {
         {recordingsDir ? (
           <>
             <code className="path">{recordingsDir}</code>
-            <Button onClick={() => void openFolder(recordingsDir)}>Открыть</Button>
+            {inTauri() && <Button onClick={() => void openFolder(recordingsDir)}>Открыть</Button>}
           </>
         ) : <span className="muted">неизвестно</span>}
       </Row>
