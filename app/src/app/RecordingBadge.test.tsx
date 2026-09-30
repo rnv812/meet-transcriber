@@ -31,3 +31,10 @@ test("вне записи — Начать запись; мало места —
   await userEvent.click(screen.getByRole("button", { name: "Начать запись" }));
   expect(spy).toHaveBeenCalledWith(ep, "start");
 });
+
+test("ошибка команды видна рядом с кнопкой", async () => {
+  vi.spyOn(api, "recordingCommand").mockRejectedValue(new Error("микрофон занят"));
+  render(<RecordingBadge endpoint={ep} snapshot={snap({})} />);
+  await userEvent.click(screen.getByRole("button", { name: "Начать запись" }));
+  expect(await screen.findByText("микрофон занят")).toBeInTheDocument();
+});

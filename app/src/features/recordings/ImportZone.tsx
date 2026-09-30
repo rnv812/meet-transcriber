@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type Endpoint, importFile } from "../../lib/api";
 import { inTauri, pickMedia } from "../../lib/shell";
@@ -6,24 +6,30 @@ import { inTauri, pickMedia } from "../../lib/shell";
 const BROWSER_HINT = "Импорт — из приложения или перетаскиванием в окно приложения";
 
 export function ImportZone({ endpoint, onImported }: { endpoint: Endpoint | null; onImported?: () => void }) {
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<string[]>([]);
   const [over, setOver] = useState(false);
 
   const importPaths = useCallback(
     async (paths: string[]) => {
       if (!endpoint) return;
-      setError(null);
+      const failed: string[] = [];
       for (const path of paths) {
         try {
           await importFile(endpoint, path);
         } catch (cause) {
-          setError(cause instanceof Error ? cause.message : String(cause));
+          const name = path.split(/[\/]/).pop() || path;
+          failed.push(`${name}: ${cause instanceof Error ? cause.message : String(cause)}`);
         }
       }
+      setErrors(failed);
       onImported?.();
     },
     [endpoint, onImported],
   );
+
+  // Подписка на перетаскивание одна на всё время жизни: актуальный обработчик — через ref.
+  const importRef = useRef(importPaths);
+  importRef.current = importPaths;
 
   useEffect(() => {
     if (!inTauri()) return;
@@ -37,7 +43,7 @@ export function ImportZone({ endpoint, onImported }: { endpoint: Endpoint | null
         else if (p.type === "leave") setOver(false);
         else if (p.type === "drop") {
           setOver(false);
-          void importPaths(p.paths);
+          void importRef.current(p.paths);
         }
       });
       if (dead) un();
@@ -47,11 +53,11 @@ export function ImportZone({ endpoint, onImported }: { endpoint: Endpoint | null
       dead = true;
       off?.();
     };
-  }, [importPaths]);
+  }, []);
 
   const choose = async () => {
     if (!inTauri()) {
-      setError(BROWSER_HINT);
+      setErrors([BROWSER_HINT]);
       return;
     }
     const path = await pickMedia();
@@ -69,7 +75,7 @@ export function ImportZone({ endpoint, onImported }: { endpoint: Endpoint | null
         onDrop={(e) => {
           if (inTauri()) return;
           e.preventDefault();
-          setError(BROWSER_HINT);
+          setErrors([BROWSER_HINT]);
         }}
       >
         Перетащите аудио или видео сюда · или{" "}
@@ -77,9 +83,11 @@ export function ImportZone({ endpoint, onImported }: { endpoint: Endpoint | null
           выбрать файл
         </button>
       </div>
-      {error && (
+      {errors.length > 0 && (
         <div className="import__error" role="alert">
-          {error}
+          {errors.map((line) => (
+            <div key={line}>{line}</div>
+          ))}
         </div>
       )}
     </div>
