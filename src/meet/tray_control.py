@@ -287,6 +287,23 @@ class TrayControl:
         data = library.read_transcript(folder) if folder else None
         return data or {"error": "транскрипта нет"}
 
+    def export(self, recording_id: str, fmt: str) -> dict:
+        from meet import export
+
+        folder = self._folder(recording_id)
+        data = library.read_transcript(folder) if folder else None
+        if data is None:
+            return {"error": "транскрипта нет"}
+        card = library.describe(folder)
+        title = (card.title if card else None) or data.get("title") or folder.name
+        try:
+            content = export.render({**data, "title": title}, fmt,
+                                    date=(card.started_at or "")[:10] if card else "")
+        except ValueError as e:
+            raise _bad_request(str(e))
+        safe_name = export.safe_filename(title, recording_id)
+        return {"filename": f"{safe_name}.{fmt}", "content": content}
+
     def save_transcript(self, recording_id: str, data: dict) -> dict:
         """Сохранить правки редактора. Пишем как есть: редактор — владелец
         текста после расшифровки."""

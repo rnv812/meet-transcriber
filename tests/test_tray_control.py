@@ -358,6 +358,30 @@ def test_naming_survives_missing_voice_sidecar(with_recordings, app, monkeypatch
     assert library.read_transcript(with_recordings)["segments"][0]["speaker"] == "Демьян"
 
 
+def test_export_sanitizes_filename(with_recordings, app, monkeypatch):
+    """Export должен безопасно создавать имена файлов: заменять опасные
+    символы, использовать recording_id как fallback при пустом названии."""
+    from meet import library
+
+    # Setup: recording with meta.json title that has unsafe characters
+    library.write_meta(with_recordings, {"title": "Итоги: 1/2"})
+    library.write_transcript(with_recordings, {
+        "version": 1,
+        "segments": [
+            {"start": 0.0, "end": 1.0, "speaker": "Спикер", "text": "Привет"},
+        ],
+    })
+    monkeypatch.setattr(app, "cfg", tray._auto_config())
+
+    state = tray_control.TrayControl(app)
+    result = state.export("2026-08-18_11-00", "txt")
+
+    # Filename should have unsafe chars replaced with underscore
+    assert result["filename"] == "Итоги_ 1_2.txt"
+    # Content should contain the segment text
+    assert "Привет" in result["content"]
+
+
 def test_devices_error_is_not_cached(control_state):
     """Мгновенный сбой подпроцесса не должен залипать на 15 с — «Сбросить»
     обязано повторить попытку."""
