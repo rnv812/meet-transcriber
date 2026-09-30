@@ -727,3 +727,23 @@ def test_main_headless_flag(monkeypatch, tmp_path):
     monkeypatch.setattr(tray.sys, "argv", ["meet-tray", "--headless", "--parent-pid", "42"])
     tray.main()
     assert seen == {"start": False, "parent": 42}
+
+
+def test_main_headless_when_resident_already_runs_exits_distinctly(monkeypatch, tmp_path, capsys):
+    """Оболочка запускает `--headless`, а дежурный уже есть (ярлык, автозагрузка):
+    внятная строка и отдельный код выхода 3, а не тихий 0 — иначе оболочка
+    сочла бы, что резидент поднялся и тут же упал, и крутила бы перезапуски."""
+    import pytest
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    monkeypatch.setattr(tray, "_resident_alive", lambda: True)
+    ran = []
+    monkeypatch.setattr(tray.TrayApp, "run_headless",
+                        lambda self, parent_pid: ran.append(parent_pid))
+    monkeypatch.setattr(tray.sys, "argv", ["meet-tray", "--headless"])
+    with pytest.raises(SystemExit) as exc:
+        tray.main()
+    assert exc.value.code == tray.EXIT_ALREADY_RUNNING == 3
+    assert ran == []
+    assert "уже" in capsys.readouterr().err

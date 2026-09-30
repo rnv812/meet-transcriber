@@ -758,6 +758,11 @@ class TrayApp:
             pass
 
 
+# Код выхода `--headless`, когда резидент уже работает: не сбой, а отказ
+# поднимать второго (см. main).
+EXIT_ALREADY_RUNNING = 3
+
+
 def main() -> None:
     """Без аргументов — начать запись сразу (ярлык «Запись встречи»). `--watch` —
     дежурить с иконкой pystray (автозагрузка без оболочки). `--headless` —
@@ -775,8 +780,14 @@ def main() -> None:
                 parent = int(args[args.index("--parent-pid") + 1])
             except (IndexError, ValueError):
                 parent = None
-        if not _resident_alive():
-            TrayApp(start_now=False).run_headless(parent_pid=parent)
+        if _resident_alive():
+            # Не тихий 0: оболочка должна отличить «дежурный уже есть» от
+            # «поднялся и упал», иначе крутила бы перезапуски впустую.
+            text = "meet-tray --headless: дежурный уже запущен (tray.lock занят), выхожу"
+            print(text, file=sys.stderr)
+            watch.WatchLog(watch.default_log_path())(text)
+            sys.exit(EXIT_ALREADY_RUNNING)
+        TrayApp(start_now=False).run_headless(parent_pid=parent)
         return
     start_now = "--watch" not in args
     if _resident_alive():

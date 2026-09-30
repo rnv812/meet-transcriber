@@ -9,6 +9,7 @@
 whisperX для русского. Модуль самодостаточный, в основной пайплайн НЕ вплетён:
 экспериментальный шаг, вызывается явно.
 """
+from meet import asr
 from meet.asr import Segment, Word
 
 ALIGN_MODEL = "jonatasgrosman/wav2vec2-large-xlsr-53-russian"
@@ -46,6 +47,17 @@ def _load_align_model(device):
     return processor, model
 
 
+def _align_device() -> str:
+    """Устройство выравнивания — по тому же выбору, что у распознавания
+    (`asr.device`): профиль CPU держит на CPU и wav2vec2, даже если карта есть.
+    CUDA — только если её выбрали (или «auto» её нашёл) и torch её видит."""
+    import torch
+
+    if asr.resolve_device() == "cuda" and torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
+
+
 def align_segments(segments, wav_path, device=None):
     """Вернуть сегменты с точными пословными таймкодами (forced alignment).
     wav_path — mono 16 kHz wav (выход to_wav16k). Текст и границы сегментов
@@ -56,7 +68,7 @@ def align_segments(segments, wav_path, device=None):
     import torch
     import torchaudio.functional as AF
 
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    device = device or _align_device()
     with wave.open(str(wav_path), "rb") as wf:
         sr = wf.getframerate()
         audio = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)

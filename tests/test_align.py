@@ -32,3 +32,44 @@ def test_regroup_words_keeps_unalignable_word_unchanged():
     out = _regroup_words(words, counts, spans, seg_start=0.0, spf=0.02)
     assert out[1] is orig  # исходное время сохранено
     assert abs(out[0].end - 10 * 0.02) < 1e-6
+
+
+class _FakeCuda:
+    @staticmethod
+    def is_available():
+        return True
+
+
+class _FakeTorch:
+    cuda = _FakeCuda()
+
+
+def test_align_device_follows_cpu_profile(monkeypatch):
+    """Профиль CPU (asr.device = cpu) держит на CPU и выравнивание, даже если
+    карта есть: иначе wav2vec2 полез бы в видеопамять, которую профиль
+    сознательно не трогает. torch подменён — тест не тянет CUDA."""
+    import sys
+
+    from meet import align, asr
+
+    monkeypatch.setitem(sys.modules, "torch", _FakeTorch())
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
+    assert align._align_device() == "cpu"
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
+    assert align._align_device() == "cuda"
+
+
+def test_align_device_needs_a_visible_card(monkeypatch):
+    import sys
+
+    from meet import align, asr
+
+    class NoCuda:
+        class cuda:
+            @staticmethod
+            def is_available():
+                return False
+
+    monkeypatch.setitem(sys.modules, "torch", NoCuda())
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
+    assert align._align_device() == "cpu"
