@@ -217,3 +217,14 @@ def test_cancel_during_spawn_window_is_not_lost(tmp_path):
         release.set()
         queue.stop()
     assert queue.get(job.id).state == jobs.CANCELLED
+
+
+def test_worker_runs_below_normal_priority():
+    """Расшифровка не должна тормозить встречу и остальную работу."""
+    import subprocess
+
+    flags = jobs._creationflags()
+    assert flags & getattr(subprocess, "CREATE_NO_WINDOW", 0) == getattr(
+        subprocess, "CREATE_NO_WINDOW", 0)
+    assert flags & getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0) == getattr(
+        subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)

@@ -161,3 +161,10 @@ def test_state_flags_download_capability():
     state = models.state()
     assert "can_download" in state
     assert state["can_download"] == models._hub_available()
+
+
+def test_pyav_is_pinned_below_19():
+    """faster-whisper 1.2 зовёт av.open(metadata_errors=...), которого нет в av 19."""
+    assert "av>=11,<19" in engine.PACKAGES
+    extras = engine.install_steps("cpu")[1]
+    assert "av>=11,<19" in extras

@@ -35,6 +35,9 @@ TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 
 PACKAGES = (
     "faster-whisper>=1.1",
+    # faster-whisper 1.2 передаёт av.open(metadata_errors=...), которого нет в
+    # av 19: без пина чистая установка падает на первом же файле.
+    "av>=11,<19",
     "pyannote.audio>=3.3",
     "transformers>=4.40",
     "scipy>=1.11",

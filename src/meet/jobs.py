@@ -152,6 +152,15 @@ def _safe_cwd(folder: str) -> str | None:
     return None
 
 
+def _creationflags() -> int:
+    """Флаги подпроцесса задачи: без окна консоли и с пониженным приоритетом —
+    расшифровка грузит все ядра, а встреча и остальная работа тормозить не
+    должны. Вне Windows констант нет — тогда 0."""
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(
+        subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0
+    )
+
+
 class JobQueue:
     """Последовательная очередь на один слот.
 
@@ -331,7 +340,7 @@ class JobQueue:
 
     def _spawn_subprocess(self, job: Job, on_line) -> int:
         """Запустить задачу подпроцессом и прокачать её вывод построчно."""
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        creationflags = _creationflags()
         try:
             process = subprocess.Popen(
                 worker_argv(job),

@@ -48,13 +48,20 @@ class Segment:
 
 def _add_nvidia_dll_dirs() -> None:
     """ctranslate2 на Windows ищет DLL cuBLAS/cuDNN; pip-пакеты nvidia-*
-    кладут их в site-packages, откуда система их сама не находит."""
+    кладут их в site-packages, откуда система их сама не находит.
+
+    IMPORTANT: add_dll_directory мало. cuBLAS ctranslate2 грузит лениво обычным
+    LoadLibrary, а тот смотрит PATH, — без CUDA Toolkit в PATH расшифровка падала
+    с «cublas64_12.dll is not found» (поймано 30.09.2026 на чистой машине)."""
     import os
     import site
 
     for sp in site.getsitepackages():
         for bin_dir in (Path(sp) / "nvidia").glob("*/bin"):
             os.add_dll_directory(str(bin_dir))
+            current = os.environ.get("PATH", "")
+            if str(bin_dir) not in current.split(os.pathsep):
+                os.environ["PATH"] = str(bin_dir) + os.pathsep + current
 
 
 def _apply_hf_token() -> None:
