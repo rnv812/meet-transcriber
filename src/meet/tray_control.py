@@ -247,6 +247,21 @@ class TrayControl:
         raw["transcript"] = library.read_transcript(folder)
         return raw
 
+    def update_recording(self, recording_id: str, body: dict) -> dict:
+        """Переименовать запись. Название живёт в meta.json, а не в транскрипте:
+        его можно дать и записи, которая ещё не расшифрована."""
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        card = library.describe(folder)
+        if card is None:
+            return {"error": "записи нет"}
+        title = str((body or {}).get("title") or "").strip()
+        if not title:
+            return {"error": "пустое название"}
+        library.write_meta(folder, {"title": title})
+        return library.describe(folder).to_raw()
+
     def transcript(self, recording_id: str) -> dict:
         folder = self._folder(recording_id)
         data = library.read_transcript(folder) if folder else None

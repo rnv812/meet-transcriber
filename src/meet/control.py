@@ -541,6 +541,8 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.transcript(rid)),
     ("PUT", re.compile(r"^/recordings/([^/]+)/transcript$"),
      lambda h, p, rid: _server_of(h).state.save_transcript(rid, h._body())),
+    ("PATCH", re.compile(r"^/recordings/([^/]+)$"),
+     lambda h, p, rid: _server_of(h).state.update_recording(rid, h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers$"),
      lambda h, p, rid: _server_of(h).state.name_speakers(rid, h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/transcribe$"),

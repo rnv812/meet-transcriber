@@ -108,3 +108,27 @@ def test_write_transcript_leaves_no_temp(tmp_path):
     folder = _recording(tmp_path)
     library.write_transcript(folder, {"version": 1, "segments": []})
     assert list(folder.glob("*.tmp")) == []
+
+
+def test_meta_roundtrip_merges(tmp_path):
+    folder = _recording(tmp_path)
+    assert library.read_meta(folder) == {}
+    library.write_meta(folder, {"source": "auto"})
+    library.write_meta(folder, {"title": "Встреча с Acme"})
+    assert library.read_meta(folder) == {"source": "auto", "title": "Встреча с Acme"}
+
+
+def test_broken_meta_is_empty_not_error(tmp_path):
+    folder = _recording(tmp_path)
+    (folder / "meta.json").write_text("{битый", encoding="utf-8")
+    assert library.read_meta(folder) == {}
+
+
+def test_meta_title_wins_over_transcript_title(tmp_path):
+    folder = _recording(tmp_path, transcript={"title": "Встреча — 18.08.2026",
+                                              "segments": []})
+    assert library.describe(folder).title == "Встреча — 18.08.2026"
+    library.write_meta(folder, {"title": "Дейлик"})
+    card = library.describe(folder)
+    assert card.title == "Дейлик"
+    assert card.source == "record"  # нет meta.source — обычная запись

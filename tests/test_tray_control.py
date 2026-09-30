@@ -394,3 +394,31 @@ def test_snapshot_reports_free_disk_for_recordings(control_state, monkeypatch):
     snap = control_state.snapshot()
     assert seen == [settings.load().recording.recordings]
     assert isinstance(snap["disk_free_gb"], float) and snap["disk_free_gb"] > 0
+
+
+def test_update_recording_sets_title(control_state, app, monkeypatch, tmp_path):
+    root = tmp_path / "recordings"
+    folder = root / "2026-09-30_16-04"
+    folder.mkdir(parents=True)
+    (folder / "sys.opus").write_bytes(b"x")
+    (folder / "mic.opus").write_bytes(b"x")
+    monkeypatch.setattr(control_state, "_root", lambda: root)
+    result = control_state.update_recording("2026-09-30_16-04", {"title": "  Acme  "})
+    assert result["title"] == "Acme"
+    assert control_state.update_recording("2026-09-30_16-04", {"title": ""}) == {
+        "error": "пустое название"}
+    assert control_state.update_recording("../../etc", {"title": "x"}) == {
+        "error": "записи нет"}
+
+
+def test_update_recording_rejects_stray_folder(control_state, app, monkeypatch, tmp_path):
+    """Папка есть, но это не запись (нет дорожек sys/mic) — не записываем meta.json."""
+    root = tmp_path / "recordings"
+    stray = root / "2026-09-30_stray"
+    stray.mkdir(parents=True)
+    # нет дорожек — describe вернёт None
+    monkeypatch.setattr(control_state, "_root", lambda: root)
+    result = control_state.update_recording("2026-09-30_stray", {"title": "Попытка"})
+    assert result == {"error": "записи нет"}
+    # meta.json не создался
+    assert not (stray / "meta.json").exists()

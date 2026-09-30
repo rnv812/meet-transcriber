@@ -63,6 +63,10 @@ class FakeState:
         return {"available": True, "system": {"name": "Колонки"},
                 "mic": {"name": "Микрофон"}, "pinning": False}
 
+    def update_recording(self, rid, body):
+        self.calls.append(("update", rid, body))
+        return {"id": rid, "title": body.get("title")}
+
 
 class BoomState(FakeState):
     def snapshot(self) -> dict:
@@ -197,6 +201,13 @@ def test_diagnostics_passes_lines_param(server):
 
 def test_diagnostics_bad_lines_falls_back_to_default(server):
     assert _get(server, "/diagnostics?lines=abc")["lines"] == 200
+
+
+def test_patch_recording_routes_to_update(server):
+    reply = _post(server, "/recordings/2026-09-30_16-04", {"title": "Acme"},
+                  method="PATCH")
+    assert reply == {"id": "2026-09-30_16-04", "title": "Acme"}
+    assert ("update", "2026-09-30_16-04", {"title": "Acme"}) in server.state_obj.calls
 
 
 def test_state_error_does_not_kill_server(monkeypatch, tmp_path):

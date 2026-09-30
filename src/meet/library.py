@@ -16,9 +16,11 @@ from datetime import datetime
 from pathlib import Path
 
 TRANSCRIPT_JSON = "transcript.json"
+META_JSON = "meta.json"
 FOLDER_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})$")
 # Форматы дорожек в порядке предпочтения — те же, что понимает transcribe.
 TRACK_EXTS = (".opus", ".wav", ".ogg", ".flac", ".mp3", ".m4a")
+SOURCES = ("record", "auto", "import")
 
 
 @dataclass
@@ -33,6 +35,7 @@ class Recording:
     has_transcript: bool = False
     has_voices: bool = False
     title: str | None = None
+    source: str = "record"
 
     def to_raw(self) -> dict:
         return {
@@ -44,6 +47,7 @@ class Recording:
             "has_transcript": self.has_transcript,
             "has_voices": self.has_voices,
             "title": self.title,
+            "source": self.source,
         }
 
 
@@ -111,6 +115,27 @@ def write_transcript(folder: Path, data: dict) -> Path:
     return path
 
 
+def read_meta(folder: Path) -> dict:
+    """Метаданные папки записи. Нет файла или он битый — пустой словарь: у
+    записей, сделанных до v1, meta.json нет, и это норма."""
+    try:
+        data = json.loads((folder / META_JSON).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_meta(folder: Path, updates: dict) -> dict:
+    """Дописать поля в meta.json атомарно (UI читает его в любой момент)."""
+    import os
+
+    data = {**read_meta(folder), **updates}
+    tmp = folder / (META_JSON + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, folder / META_JSON)
+    return data
+
+
 def describe(folder: Path) -> Recording | None:
     """Папка записи → карточка для библиотеки. Не папка записи — None."""
     if not folder.is_dir():
@@ -127,6 +152,10 @@ def describe(folder: Path) -> Recording | None:
     if isinstance(transcript, dict):
         raw_title = transcript.get("title")
         title = str(raw_title) if raw_title else None
+    meta = read_meta(folder)
+    if meta.get("title"):
+        title = str(meta["title"])
+    source = meta.get("source") if meta.get("source") in SOURCES else "record"
     return Recording(
         id=folder.name,
         path=folder,
@@ -136,6 +165,7 @@ def describe(folder: Path) -> Recording | None:
         has_transcript=transcript is not None or bool(list(folder.glob("*_transcript.md"))),
         has_voices=bool(list(folder.glob("*_speakers.json"))),
         title=title,
+        source=source,
     )
 
 
