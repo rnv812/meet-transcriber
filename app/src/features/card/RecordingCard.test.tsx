@@ -207,3 +207,17 @@ test("переименование вызывает onChanged", async () => {
   await userEvent.type(screen.getByRole("textbox", { name: "Название записи" }), "Z{Enter}");
   await waitFor(() => expect(onChanged).toHaveBeenCalled());
 });
+
+test("записи нет (404, например старая ссылка из уведомления) — понятное пустое состояние", async () => {
+  vi.mocked(api.getRecording).mockRejectedValue(new api.ApiError(404, "записи нет"));
+  render(<RecordingCard id="gone" endpoint={ep} jobs={[]} snapshot={null} people={[]} />);
+  expect(await screen.findByText("Запись не найдена")).toBeInTheDocument();
+  expect(screen.getByText("Возможно, её удалили. Выберите другую в списке.")).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("другая ошибка загрузки показывается как есть", async () => {
+  vi.mocked(api.getRecording).mockRejectedValue(new api.ApiError(500, "сломалось"));
+  render(<RecordingCard id="x" endpoint={ep} jobs={[]} snapshot={null} people={[]} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("сломалось");
+});

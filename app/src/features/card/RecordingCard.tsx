@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  deleteRecording, exportRecording, getRecording, getSettings, patchRecording, transcribe,
+  ApiError, deleteRecording, exportRecording, getRecording, getSettings, patchRecording, transcribe,
   type Endpoint,
 } from "../../lib/api";
 import { openFolder, saveText } from "../../lib/shell";
@@ -38,6 +38,7 @@ export function RecordingCard({
 }) {
   const [rec, setRec] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [naming, setNaming] = useState<{ label: string; anchor: HTMLElement } | null>(null);
   const player = useRef<AudioPlayerHandle>(null);
@@ -63,8 +64,12 @@ export function RecordingCard({
       if (stale()) return;
       setRec(data);
       setError(null);
+      setMissing(false);
     } catch (e) {
-      if (!stale()) setError(errText(e));
+      if (stale()) return;
+      // 404 — запись удалили, а ссылка на неё осталась (уведомление, ?recording=).
+      if (e instanceof ApiError && e.status === 404) setMissing(true);
+      else setError(errText(e));
     }
   }, [endpoint, id]);
 
@@ -81,7 +86,7 @@ export function RecordingCard({
     [jobs, rec],
   );
 
-  useEffect(() => { setRec(null); setError(null); void load(); }, [load]);
+  useEffect(() => { setRec(null); setError(null); setMissing(false); void load(); }, [load]);
   const lastSig = useRef(jobSig);
   useEffect(() => {
     if (jobSig !== lastSig.current) { lastSig.current = jobSig; void load(); }
@@ -97,6 +102,7 @@ export function RecordingCard({
   tracksRef.current = rec?.tracks ?? {};
 
   if (!rec) {
+    if (missing) return <EmptyState title="Запись не найдена" hint="Возможно, её удалили. Выберите другую в списке." />;
     return error ? <div className="card__error" role="alert">{error}</div> : <EmptyState title="Загрузка…" />;
   }
 
