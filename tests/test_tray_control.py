@@ -797,6 +797,24 @@ def test_delete_unknown_recording(control_state, tmp_path, monkeypatch):
     assert control_state.delete_recording("nope") == {"error": "записи нет"}
 
 
+@pytest.mark.parametrize("bad_id", ["..", "../x", "../recordings", "{absolute}"])
+def test_delete_never_escapes_the_recordings_root(control_state, tmp_path,
+                                                  monkeypatch, bad_id):
+    """id приходит из сети: `..` или абсолютный путь в нём снёс бы с диска
+    родителя папки записей или что угодно ещё."""
+    folder = _saved_folder(tmp_path)
+    root = folder.parent
+    outside = tmp_path / "x"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(control_state, "_root", lambda: root)
+    bad_id = bad_id.replace("{absolute}", str(outside))
+    assert control_state.delete_recording(bad_id) == {"error": "записи нет"}
+    assert root.is_dir() and folder.is_dir()
+    assert (outside / "keep.txt").is_file()
+    assert tmp_path.is_dir()
+
+
 def test_delete_refuses_current_recording(app, tmp_path, monkeypatch):
     from meet import control
 
