@@ -9,3 +9,13 @@ export function EmptyState({ title, hint, action }: { title: string; hint?: stri
     </div>
   );
 }
+
+/** Резидента нет: оболочка перезапускает его, окно переподключится само. */
+export function OfflineState() {
+  return (
+    <EmptyState
+      title="Сервис записи не запущен."
+      hint="Приложение перезапускает его — подождите несколько секунд."
+    />
+  );
+}

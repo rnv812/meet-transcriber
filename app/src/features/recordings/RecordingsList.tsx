@@ -35,8 +35,9 @@ export function RecordingsList({ selected, onSelect, library, resident, q, onQ }
           />
         ))}
       </div>
-      {library.items.length === 0 && !library.loading && (
-        <EmptyState title={q ? "Ничего не найдено" : "Записей пока нет"} />
+      {library.items.length === 0 && !library.loading && resident.endpoint && (
+        q ? <EmptyState title="Ничего не найдено" />
+          : <EmptyState title="Записей пока нет" hint="Нажмите «Начать запись» или перетащите файл" />
       )}
     </div>
   );
