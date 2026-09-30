@@ -74,11 +74,19 @@ def estimate_seconds(duration_s: float, device: str) -> float:
     return duration_s * SPEED_FACTOR.get(device, SPEED_FACTOR["cpu"])
 
 
-def _free_gb(path: Path) -> float:
+def _free_gb(path: Path) -> float | None:
+    """Свободное место на диске пути, ГБ; None — узнать нельзя.
+
+    Отключённый диск или недоступная UNC-шара — штатная ситуация (ноутбук
+    отстыкован от сети), а не сбой: снимок состояния без этого числа
+    собирается, с исключением — нет вовсе."""
     target = path
-    while not target.exists() and target != target.parent:
-        target = target.parent
-    return round(shutil.disk_usage(target).free / 1024**3, 1)
+    try:
+        while not target.exists() and target != target.parent:
+            target = target.parent
+        return round(shutil.disk_usage(target).free / 1024**3, 1)
+    except OSError:
+        return None
 
 
 def installed(name: str) -> bool:

@@ -590,3 +590,31 @@ def test_shutdown_saves_recording_and_requests_exit(control_state, app, monkeypa
     app.recording = True
     assert control_state.shutdown() == {"ok": True}
     assert calls == [("stop", False), "exit"]
+
+
+def test_state_endpoint_survives_unavailable_recordings_drive(app, monkeypatch, tmp_path):
+    """Папка записей на отключённом диске: /state отвечает 200 с
+    disk_free_gb = null, а не рвёт соединение (OSError из disk_usage глотался
+    веткой «клиент ушёл», и панель оставалась без состояния)."""
+    import urllib.request
+
+    from meet import control, engine
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+
+    def unavailable(path):
+        raise FileNotFoundError(2, "Не удаётся найти указанный путь", str(path))
+
+    monkeypatch.setattr(engine.shutil, "disk_usage", unavailable)
+    srv = control.ControlServer(tray_control.TrayControl(app, queue=_Queue()))
+    srv.start(publish=False)
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{srv.port}/state",
+            headers={"Authorization": f"Bearer {srv.token}"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            assert r.status == 200
+            body = json.loads(r.read().decode("utf-8"))
+    finally:
+        srv.stop()
+    assert body["disk_free_gb"] is None and body["status"] == "idle"

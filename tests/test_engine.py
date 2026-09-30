@@ -218,3 +218,20 @@ def test_state_does_not_import_ctranslate2(monkeypatch):
     monkeypatch.setattr(asr, "cuda_available", boom)
     _with_setting(monkeypatch, "auto", False)
     assert engine.state()["device"] == "cpu"
+
+
+def _unavailable_disk(path):
+    raise FileNotFoundError(2, "Не удаётся найти указанный путь", str(path))
+
+
+def test_free_gb_is_none_for_unavailable_location(monkeypatch, tmp_path):
+    """Отключённый диск или недоступная UNC-шара — «не знаю», а не исключение:
+    иначе снимок состояния не собирается вовсе."""
+    monkeypatch.setattr(engine.shutil, "disk_usage", _unavailable_disk)
+    assert engine._free_gb(tmp_path / "нет" / "папки") is None
+
+
+def test_state_carries_unknown_free_space(monkeypatch):
+    monkeypatch.setattr(engine, "_device", lambda available: "cpu")
+    monkeypatch.setattr(engine.shutil, "disk_usage", _unavailable_disk)
+    assert engine.state()["disk_free_gb"] is None
