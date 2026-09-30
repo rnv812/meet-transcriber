@@ -15,6 +15,7 @@ CUDA или ctranslate2 не должно ронять резидента вме
 """
 
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -153,6 +154,13 @@ def _safe_cwd(folder: str) -> str | None:
     return None
 
 
+def _folder_key(folder: str) -> str:
+    try:
+        return os.path.normcase(str(Path(folder).resolve()))
+    except (OSError, ValueError):
+        return os.path.normcase(str(folder))
+
+
 def _creationflags() -> int:
     """Флаги подпроцесса задачи: без окна консоли и с пониженным приоритетом —
     расшифровка грузит все ядра, а встреча и остальная работа тормозить не
@@ -208,6 +216,21 @@ class JobQueue:
     def active(self) -> Job | None:
         with self._lock:
             return self._current
+
+    def active_for(self, folder: str, kinds) -> Job | None:
+        """Ждущая или идущая задача одного из видов `kinds` над той же папкой.
+
+        Сравниваем разрешённые пути без учёта регистра (Windows): «Расшифровать»
+        дважды, автопостановка после записи поверх ручной — всё это одна и та
+        же запись, и вторая расшифровка только заняла бы GPU."""
+        key = _folder_key(folder)
+        with self._lock:
+            for job_id in self._order:
+                job = self._jobs[job_id]
+                if (job.state in (QUEUED, RUNNING) and job.kind in kinds
+                        and _folder_key(job.folder) == key):
+                    return job
+        return None
 
     def cancel(self, job_id: str) -> bool:
         """Снять задачу: ждущую — из очереди, идущую — убив подпроцесс.

@@ -299,6 +299,9 @@ def test_transcribe_puts_a_job_in_the_queue(with_recordings, app):
         def cancel(self, job_id):
             return True
 
+        def active_for(self, folder, kinds):
+            return None
+
     state = tray_control.TrayControl(app, queue=FakeQueue())
     got = state.transcribe("2026-08-18_11-00", {"speakers": 2})
     assert got["id"] == "j1"
@@ -463,6 +466,9 @@ class _Queue:
     def submit(self, kind, folder, options=None):
         self.submitted.append((kind, folder))
         return jobs.Job(id="j1", kind=kind, folder=folder)
+
+    def active_for(self, folder, kinds):
+        return None
 
     def stop(self):
         pass
@@ -661,3 +667,59 @@ def test_person_rename_and_merge_rewrite_library_transcripts(voices_state, monke
     assert speakers == ["Демьян Петров", "Демьян Петров"]
     items = state.people()["items"]
     assert [(p["name"], p["meetings"], p["seconds"]) for p in items] == [("Демьян Петров", 1, 6)]
+
+
+
+def _blocked_queue(app):
+    """Настоящая очередь, чья задача «идёт», пока её не отпустят."""
+    import threading
+
+    release = threading.Event()
+
+    def spawn(job, on_line):
+        release.wait(timeout=5)
+        return 0
+
+    return jobs.JobQueue(app.bus, spawn=spawn), release
+
+
+def test_transcribe_does_not_queue_duplicates(with_recordings, app):
+    queue, release = _blocked_queue(app)
+    state = tray_control.TrayControl(app, queue=queue)
+    try:
+        first = state.transcribe("2026-08-18_11-00")
+        second = state.transcribe("2026-08-18_11-00")
+        assert second["id"] == first["id"]
+        assert len(queue.listing()) == 1
+    finally:
+        release.set()
+        queue.stop()
+
+
+def test_saved_recording_already_in_queue_is_not_queued_again(with_recordings, app):
+    queue, release = _blocked_queue(app)
+    state = tray_control.TrayControl(app, queue=queue)
+    try:
+        state.transcribe("2026-08-18_11-00")
+        app.on_saved(str(with_recordings), tray_control.MANUAL, True)
+        assert len(queue.listing()) == 1
+    finally:
+        release.set()
+        queue.stop()
+
+
+def test_transcribe_of_trackless_import_retries_the_import(with_recordings, app, tmp_path):
+    """Импорт упал до копии (файл был недоступен) — «Расшифровать» повторяет
+    импорт целиком: без дорожки расшифровывать нечего."""
+    from meet import library
+
+    folder = tmp_path / "recordings" / "2026-09-01_10-00_import"
+    folder.mkdir()
+    library.write_meta(folder, {"source": "import", "original_path": str(tmp_path / "a.mp3")})
+    queue = _Queue()
+    state = tray_control.TrayControl(app, queue=queue)
+    state.transcribe(folder.name)
+    assert queue.submitted == [(jobs.IMPORT, str(folder.resolve()))]
+    (folder / "source.mp3").write_bytes(b"x")
+    state.transcribe(folder.name)
+    assert queue.submitted[-1] == (jobs.TRANSCRIBE, str(folder.resolve()))

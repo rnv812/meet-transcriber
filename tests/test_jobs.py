@@ -235,3 +235,44 @@ def test_import_job_argv(tmp_path):
     argv = jobs.worker_argv(job)
     assert argv[-2:] == ["import", str(tmp_path)]
     assert jobs.IMPORT in jobs.KINDS
+
+
+def test_active_for_finds_queued_and_running_jobs_of_a_folder(tmp_path):
+    """Дубли расшифровки ловятся по папке: та же запись, пока её задача ждёт
+    или идёт, второй раз в очередь не встаёт."""
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    started, release = threading.Event(), threading.Event()
+    queue = jobs.JobQueue(events.EventBus(), spawn=_fake_spawn(
+        [{"kind": "job.result", "path": "x"}], started=started, release=release))
+    try:
+        first = queue.submit(jobs.TRANSCRIBE, str(a))
+        assert started.wait(5)
+        second = queue.submit(jobs.IMPORT, str(b))
+        kinds = (jobs.TRANSCRIBE, jobs.IMPORT)
+        assert queue.active_for(str(a / "."), kinds).id == first.id    # идёт
+        assert queue.active_for(str(b), kinds).id == second.id        # ждёт
+        assert queue.active_for(str(a), (jobs.INSTALL_ENGINE,)) is None
+        assert queue.active_for(str(tmp_path / "c"), kinds) is None
+        release.set()
+        _wait(lambda: queue.get(second.id).state == jobs.DONE)
+        assert queue.active_for(str(a), kinds) is None                # закончилась
+    finally:
+        release.set()
+        queue.stop()
+
+
+def test_active_for_ignores_cancelled_jobs(tmp_path):
+    started, release = threading.Event(), threading.Event()
+    queue = jobs.JobQueue(events.EventBus(), spawn=_fake_spawn(
+        [], started=started, release=release))
+    try:
+        queue.submit(jobs.TRANSCRIBE, str(tmp_path / "busy"))
+        assert started.wait(5)
+        waiting = queue.submit(jobs.TRANSCRIBE, str(tmp_path / "x"))
+        assert queue.cancel(waiting.id)
+        assert queue.active_for(str(tmp_path / "x"), (jobs.TRANSCRIBE,)) is None
+    finally:
+        release.set()
+        queue.stop()

@@ -12,6 +12,7 @@
 import json
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -82,6 +83,7 @@ class TrayControl:
         # Очередь задач живёт рядом с записью, в том же резиденте: расшифровка
         # идёт подпроцессом и не мешает ни записи, ни панели.
         self.queue = queue if queue is not None else jobs.JobQueue(self.bus)
+        self._submit_lock = threading.Lock()
         self._levels: dict = {}
         self._devices_cache: dict | None = None
         self._devices_at = 0.0
@@ -97,8 +99,11 @@ class TrayControl:
         library.write_meta(path, {"source": "auto" if source == AUTO else "record"})
         if not full or not settings.load().recording.auto_transcribe:
             return
-        job = self.queue.submit(jobs.TRANSCRIBE, str(path), {})
-        self.tray.log(f"расшифровка поставлена в очередь: {path.name} ({job.id})")
+        job, created = self._submit_once(jobs.TRANSCRIBE, path)
+        if created:
+            self.tray.log(f"расшифровка поставлена в очередь: {path.name} ({job.id})")
+        else:
+            self.tray.log(f"расшифровка уже в очереди: {path.name} ({job.id})")
 
     def _remember_levels(self, event) -> None:
         """Последние уровни дорожек — чтобы снимок состояния не ждал события."""
@@ -408,11 +413,28 @@ class TrayControl:
         job = self.queue.submit(jobs.DOWNLOAD_MODEL, repo_id, {})
         return job.to_raw()
 
+    def _submit_once(self, kind: str, folder: Path, options: dict | None = None):
+        """Поставить задачу над записью, если над ней уже не ждёт и не идёт
+        расшифровка или импорт. Возвращает (задача, поставлена ли новая).
+
+        Проверка и постановка под одним локом: два почти одновременных запроса
+        (двойной клик, автопостановка поверх ручной) не должны оба пройти."""
+        with self._submit_lock:
+            existing = self.queue.active_for(str(folder), (jobs.TRANSCRIBE, jobs.IMPORT))
+            if existing is not None:
+                return existing, False
+            return self.queue.submit(kind, str(folder), options or {}), True
+
     def transcribe(self, recording_id: str, options: dict | None = None) -> dict:
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
-        job = self.queue.submit(jobs.TRANSCRIBE, str(folder), options or {})
+        # Импорт, упавший до копии (исходник был недоступен), оставляет папку
+        # без дорожки: расшифровывать нечего, повторяем импорт целиком.
+        card = library.describe(folder)
+        kind = jobs.IMPORT if card and card.source == "import" and not card.tracks \
+            else jobs.TRANSCRIBE
+        job, _ = self._submit_once(kind, folder, options)
         return job.to_raw()
 
     def submit_job(self, body: dict) -> dict:
