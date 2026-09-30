@@ -96,7 +96,11 @@ class TrayControl:
         Короткий автозвонок (full=False) — чаще ложное срабатывание детектора
         (звук уведомления): его сохраняем, но GPU на него не тратим."""
         path = Path(folder)
-        library.write_meta(path, {"source": "auto" if source == AUTO else "record"})
+        try:
+            library.write_meta(path, {"source": "auto" if source == AUTO else "record"})
+        except Exception as e:
+            # Пометка «откуда запись» — не повод не расшифровывать её.
+            self.tray.log(f"meta.json не записан ({path.name}): {e}")
         if not full or not settings.load().recording.auto_transcribe:
             return
         job, created = self._submit_once(jobs.TRANSCRIBE, path)

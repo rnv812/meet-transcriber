@@ -180,3 +180,23 @@ def test_import_folder_track_is_source(tmp_path):
     folder = library.create_import(tmp_path / "rec", _media(tmp_path))
     (folder / "source.mp4").write_bytes(b"media")
     assert set(library.describe(folder).tracks) == {"source"}
+
+
+def test_create_import_survives_folder_appearing_after_check(tmp_path, monkeypatch):
+    """Папку с тем же именем создал кто-то ещё между проверкой и mkdir (два
+    импорта одновременно): берём следующий суффикс, чужую папку не трогаем."""
+    from pathlib import Path
+
+    stamp = time.mktime((2026, 9, 28, 16, 4, 0, 0, 0, -1))
+    rec = tmp_path / "rec"
+    taken = rec / "2026-09-28_16-04_import"
+    taken.mkdir(parents=True)
+    library.write_meta(taken, {"source": "import", "title": "чужой"})
+    real_exists = Path.exists
+    # «Проверка» не видит папку — так выглядит гонка изнутри.
+    monkeypatch.setattr(Path, "exists", lambda self, *a, **k:
+                        False if self.name.endswith("_import") else real_exists(self, *a, **k))
+    folder = library.create_import(rec, _media(tmp_path, mtime=stamp))
+    monkeypatch.undo()
+    assert folder.name == "2026-09-28_16-04_import-2"
+    assert library.read_meta(taken)["title"] == "чужой"

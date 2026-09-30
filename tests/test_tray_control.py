@@ -738,3 +738,19 @@ def test_set_avatar_save_failure_is_an_error_not_a_dropped_reply(voices_state, m
     monkeypatch.setattr(people, "set_avatar", full_disk)
     with pytest.raises(RuntimeError, match="не удалось сохранить"):
         state.set_avatar("Демьян", _png_bytes())
+
+
+def test_saved_recording_is_queued_even_if_meta_cannot_be_written(app, tmp_path, monkeypatch):
+    """meta.json — пометка «откуда запись», расшифровка важнее: сбой записи
+    метаданных (антивирус держит файл, диск отвалился) не должен её отменять."""
+    from meet import library
+
+    def locked(folder, updates):
+        raise PermissionError(13, "Отказано в доступе", str(folder / "meta.json"))
+
+    monkeypatch.setattr(library, "write_meta", locked)
+    queue = _Queue()
+    tray_control.TrayControl(app, queue=queue)
+    folder = _saved_folder(tmp_path)
+    app.on_saved(str(folder), tray_control.AUTO, True)
+    assert queue.submitted == [(jobs.TRANSCRIBE, str(folder))]

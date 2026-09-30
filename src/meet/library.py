@@ -151,12 +151,17 @@ def create_import(root: Path, src: Path) -> Path:
         raise ValueError(f"формат {src.suffix or 'без расширения'} не поддерживается")
     stamp = datetime.fromtimestamp(src.stat().st_mtime).strftime("%Y-%m-%d_%H-%M")
     root.mkdir(parents=True, exist_ok=True)
+    # mkdir как проверка: exists()+mkdir() — гонка при двух импортах сразу, и
+    # проигравший получал бы FileExistsError вместо своей папки.
     folder = root / f"{stamp}_import"
     n = 2
-    while folder.exists():
-        folder = root / f"{stamp}_import-{n}"
-        n += 1
-    folder.mkdir()
+    while True:
+        try:
+            folder.mkdir()
+            break
+        except FileExistsError:
+            folder = root / f"{stamp}_import-{n}"
+            n += 1
     write_meta(folder, {
         "source": "import",
         "original_path": str(src),
