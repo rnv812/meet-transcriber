@@ -125,6 +125,38 @@ pub fn args(parent_pid: u32) -> Vec<String> {
     ]
 }
 
+/// Программа и аргументы запуска кандидата.
+///
+/// IMPORTANT: gui-script из venv (`Scripts\meet-tray.exe`) не запускаем
+/// напрямую. Это GUI-лаунчер: CREATE_NO_WINDOW на него не действует, а сам он
+/// запускает `Scripts\pythonw.exe`, который в venv от uv — консольный
+/// трамплин. Консоли унаследовать неоткуда, и Windows открывает новую — на
+/// Windows 11 это вкладка Windows Terminal с заголовком `meet-tray.exe`.
+/// Консольный `Scripts\python.exe` получает скрытую консоль от
+/// CREATE_NO_WINDOW, и настоящий интерпретатор наследует её, окна нет.
+pub fn launch(candidate: &Path, parent_pid: u32) -> (PathBuf, Vec<String>) {
+    let venv_python = candidate
+        .parent()
+        .filter(|scripts| {
+            scripts
+                .parent()
+                .is_some_and(|venv| venv.join("pyvenv.cfg").is_file())
+        })
+        .map(|scripts| scripts.join("python.exe"))
+        .filter(|python| python.is_file());
+    match venv_python {
+        Some(python) => {
+            let mut arguments = vec![
+                "-c".to_string(),
+                "import sys; from meet.tray import main; sys.exit(main())".to_string(),
+            ];
+            arguments.extend(args(parent_pid));
+            (python, arguments)
+        }
+        None => (candidate.to_path_buf(), args(parent_pid)),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Restart,
@@ -323,10 +355,10 @@ impl Supervisor {
 
     /// Запустить первого нашедшегося кандидата; pid или `None`.
     fn spawn(&self, list: &[PathBuf]) -> Option<u32> {
-        let args = args(std::process::id());
         for candidate in list {
-            let mut command = Command::new(candidate);
-            command.args(&args).stdin(Stdio::null());
+            let (program, arguments) = launch(candidate, std::process::id());
+            let mut command = Command::new(program);
+            command.args(&arguments).stdin(Stdio::null());
             hide_console(&mut command);
             match command.spawn() {
                 Ok(mut child) => {
@@ -532,6 +564,68 @@ mod tests {
         let exe_dir = Path::new(r"C:\repo\app\src-tauri\target\debug");
         let list = candidates(exe_dir, Some(OsStr::new("  ")));
         assert_eq!(list[0], exe_dir.join("resident").join("meet-tray.exe"));
+    }
+
+    /// Временная папка теста с заданными файлами; удаляется в конце теста.
+    struct TempTree(PathBuf);
+
+    impl TempTree {
+        fn new(name: &str, files: &[&str]) -> Self {
+            let root =
+                std::env::temp_dir().join(format!("meet-shell-test-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            for file in files {
+                let path = root.join(file);
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, b"").unwrap();
+            }
+            TempTree(root)
+        }
+    }
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn venv_launcher_runs_through_console_python() {
+        let tree = TempTree::new(
+            "venv",
+            &[
+                "pyvenv.cfg",
+                r"Scripts\python.exe",
+                r"Scripts\pythonw.exe",
+                r"Scripts\meet-tray.exe",
+            ],
+        );
+        let candidate = tree.0.join("Scripts").join("meet-tray.exe");
+        let (program, arguments) = launch(&candidate, 4242);
+        assert_eq!(program, tree.0.join("Scripts").join("python.exe"));
+        assert_eq!(
+            arguments,
+            vec![
+                "-c",
+                "import sys; from meet.tray import main; sys.exit(main())",
+                "--headless",
+                "--parent-pid",
+                "4242"
+            ]
+        );
+    }
+
+    #[test]
+    fn non_venv_resident_is_run_as_is() {
+        // Установленное приложение: resident\meet-tray.exe без pyvenv.cfg.
+        let tree = TempTree::new("bundled", &[r"resident\meet-tray.exe"]);
+        let candidate = tree.0.join("resident").join("meet-tray.exe");
+        let (program, arguments) = launch(&candidate, 7);
+        assert_eq!(program, candidate);
+        assert_eq!(arguments, args(7));
+        // Голое имя (поиск по PATH) — тоже как есть.
+        let (program, _) = launch(Path::new("meet-tray.exe"), 7);
+        assert_eq!(program, Path::new("meet-tray.exe"));
     }
 
     #[test]
