@@ -39,8 +39,6 @@ const TICK_SLOW: Duration = Duration::from_secs(3);
 const OFFLINE_AFTER_MISSES: u32 = 2;
 /// Сколько после уведомления о записи открытие окна из трея ведёт к ней.
 const REMEMBER_RECORDING: Duration = Duration::from_secs(5 * 60);
-/// «Отменить запись» из трея: остановка в этом окне — отмена, а не сохранение.
-const CANCEL_WINDOW: Duration = Duration::from_secs(10);
 /// Уровень уведомлений перечитывается хотя бы так часто (и перед каждым
 /// показом): его помнит и уведомление о сбое резидента, когда спросить уже
 /// некого.
@@ -54,8 +52,24 @@ pub const TRANSCRIPT_READY: &str = "Расшифровка готова";
 pub const TRANSCRIPT_FAILED: &str = "Ошибка расшифровки";
 pub const RESIDENT_FAILED: &str = "Сервис записи не запускается";
 pub const IMPORT_FAILED: &str = "Не удалось импортировать";
-/// Что проходит при `ui.notifications = "important"`.
-const IMPORTANT: &[&str] = &[AUTO_RECORDING_STARTED, TRANSCRIPT_FAILED, RESIDENT_FAILED];
+pub const RECORDING_INTERRUPTED: &str = "Запись прервана";
+pub const START_FAILED: &str = "Не удалось начать запись";
+pub const STOP_FAILED: &str = "Не удалось остановить запись";
+pub const CANCEL_FAILED: &str = "Не удалось отменить запись";
+pub const AUTO_FAILED: &str = "Не удалось переключить автозапись";
+/// Что проходит при `ui.notifications = "important"`: ошибки и автоматический
+/// старт записи (спека: «важное — ошибки и автостарт»).
+const IMPORTANT: &[&str] = &[
+    AUTO_RECORDING_STARTED,
+    TRANSCRIPT_FAILED,
+    RESIDENT_FAILED,
+    IMPORT_FAILED,
+    START_FAILED,
+    STOP_FAILED,
+    CANCEL_FAILED,
+    AUTO_FAILED,
+    RECORDING_INTERRUPTED,
+];
 
 /// Сводка `/state` + `/jobs`, из которой рисуется трей.
 #[derive(Debug, Clone, PartialEq)]
@@ -232,10 +246,15 @@ fn shorten(text: &str, limit: usize) -> String {
 
 /// Память опроса между тиками.
 ///
-/// IMPORTANT: промах связи не затирает последний снимок. Иначе резидент,
-/// перезапустившийся посреди записи, давал бы `None → recording` (первый
-/// снимок, молчание) или, хуже, `recording → None → idle` — «запись
-/// сохранена», которой не было. Сравниваем всегда с последним *полученным*.
+/// IMPORTANT: промах связи не затирает последний снимок — сравниваем всегда с
+/// последним *полученным*. Иначе восстановление связи было бы «первым
+/// снимком» и глотало бы всё, что случилось за время обрыва.
+///
+/// Но `recording → (обрыв) → idle` — это не штатная остановка: резидент упал
+/// или перезапустился посреди записи, и сообщать «Запись сохранена» было бы
+/// неправдой. После обрыва (не меньше `OFFLINE_AFTER_MISSES` промахов) такой
+/// переход сообщается как «Запись прервана». Единичный промах — не обрыв:
+/// остановка, попавшая на него, остаётся «сохранена».
 #[derive(Default)]
 pub struct Tracker {
     last: Option<View>,
@@ -247,8 +266,18 @@ impl Tracker {
     pub fn observe(&mut self, polled: Option<View>) -> (Option<View>, Vec<Notice>) {
         match polled {
             Some(view) => {
+                let after_gap = self.misses >= OFFLINE_AFTER_MISSES;
                 self.misses = 0;
-                let notices = transitions(self.last.as_ref(), &view);
+                let mut notices = transitions(self.last.as_ref(), &view);
+                if after_gap {
+                    for notice in notices.iter_mut().filter(|n| n.title == RECORDING_SAVED) {
+                        *notice = Notice::new(
+                            RECORDING_INTERRUPTED,
+                            "Сервис записи перезапустился во время записи — часть встречи могла не сохраниться",
+                            None,
+                        );
+                    }
+                }
                 self.last = Some(view.clone());
                 (Some(view), notices)
             }
@@ -265,21 +294,137 @@ impl Tracker {
     }
 }
 
-/// «Отменить запись» из трея останавливает запись без сохранения — сообщать
-/// «Запись сохранена» было бы неправдой. Отмену из окна трей не видит.
-fn without_cancelled_save(
-    notices: Vec<Notice>,
-    cancelled_at: Option<Instant>,
-    now: Instant,
-) -> Vec<Notice> {
-    let recent = cancelled_at.is_some_and(|at| now.saturating_duration_since(at) <= CANCEL_WINDOW);
-    if !recent {
-        return notices;
+/// «Отменить запись» из трея останавливает запись без сохранения — сообщать о
+/// ней «Запись сохранена» было бы неправдой. Отметка привязана к ближайшему
+/// переходу `recording → idle`, а не к окну времени, и снимается неудачной
+/// отменой: иначе она проглотила бы следующую настоящую остановку. Отмену из
+/// окна трей не видит.
+///
+/// Отметка ставится до запроса (`requested`), а не по ответу: резидент снимает
+/// флаг записи раньше, чем отвечает, и опрос может увидеть idle до ответа.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum CancelMark {
+    #[default]
+    None,
+    /// `/recording/cancel` отправлен, ответа ещё нет.
+    InFlight,
+    /// Резидент подтвердил отмену (`action: "cancelled"`); остановку ещё не
+    /// видели.
+    Confirmed,
+    /// Остановку увидели (и промолчали) раньше, чем пришёл ответ.
+    SeenEarly,
+}
+
+impl CancelMark {
+    fn requested(self) -> CancelMark {
+        CancelMark::InFlight
     }
-    notices
-        .into_iter()
-        .filter(|notice| notice.title != RECORDING_SAVED)
-        .collect()
+
+    /// Ответ на `/recording/cancel`: `confirmed` — отмена состоялась.
+    fn replied(self, confirmed: bool) -> CancelMark {
+        match (self, confirmed) {
+            (CancelMark::InFlight, true) => CancelMark::Confirmed,
+            // Неудача снимает отметку; SeenEarly — отмена уже отработала.
+            _ => CancelMark::None,
+        }
+    }
+
+    /// Уведомления очередного тика с учётом отметки → (новая отметка, что
+    /// показывать).
+    fn settle(self, notices: Vec<Notice>) -> (CancelMark, Vec<Notice>) {
+        let has = |title: &str| notices.iter().any(|notice| notice.title == title);
+        if has(RECORDING_INTERRUPTED) {
+            // Запись оборвалась сама — отменять больше нечего, а сообщение о
+            // сбое важнее.
+            return (CancelMark::None, notices);
+        }
+        if !has(RECORDING_SAVED) {
+            return (self, notices);
+        }
+        let next = match self {
+            CancelMark::InFlight => CancelMark::SeenEarly,
+            CancelMark::Confirmed => CancelMark::None,
+            CancelMark::None | CancelMark::SeenEarly => return (self, notices),
+        };
+        let kept = notices
+            .into_iter()
+            .filter(|notice| notice.title != RECORDING_SAVED)
+            .collect();
+        (next, kept)
+    }
+}
+
+fn cancel_confirmed(reply: Option<&api::Result<Value>>) -> bool {
+    matches!(reply, Some(Ok(body)) if str_at(body, "action") == Some("cancelled"))
+}
+
+/// Команда резиденту из меню трея.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Start,
+    Stop,
+    Cancel,
+    AutoRecord(bool),
+}
+
+impl Action {
+    fn path(self) -> &'static str {
+        match self {
+            Action::Start => "/recording/start",
+            Action::Stop => "/recording/stop",
+            Action::Cancel => "/recording/cancel",
+            Action::AutoRecord(_) => "/auto-record",
+        }
+    }
+
+    fn body(self) -> Value {
+        match self {
+            Action::AutoRecord(enabled) => json!({ "enabled": enabled }),
+            _ => Value::Null,
+        }
+    }
+
+    fn failure_title(self) -> &'static str {
+        match self {
+            Action::Start => START_FAILED,
+            Action::Stop => STOP_FAILED,
+            Action::Cancel => CANCEL_FAILED,
+            Action::AutoRecord(_) => AUTO_FAILED,
+        }
+    }
+}
+
+/// Итог команды → уведомление о неудаче или `None`, если всё прошло.
+/// `reply = None` — резидент не опубликовал адрес (`daemon.json` нет).
+///
+/// Резидент отвечает на отказ не ошибкой, а `200 {"ok": false, "action": …}`
+/// («запись уже идёт», «запись не идёт») — это тоже неудача для человека,
+/// нажавшего пункт меню.
+pub fn action_notice(action: Action, reply: Option<&api::Result<Value>>) -> Option<Notice> {
+    let body = match reply {
+        None => "Сервис записи не запущен".to_string(),
+        Some(Err(api::Error::Transport(_))) => "Сервис записи не отвечает".to_string(),
+        Some(Err(api::Error::Status { message, .. })) => message.clone(),
+        Some(Err(error)) => error.to_string(),
+        Some(Ok(reply)) => {
+            let refused = reply.get("ok").and_then(Value::as_bool) == Some(false);
+            let error = str_at(reply, "error").filter(|text| !text.trim().is_empty());
+            if !refused && error.is_none() {
+                return None;
+            }
+            match (str_at(reply, "action"), error) {
+                (Some("already-recording"), _) => "Запись уже идёт".to_string(),
+                (Some("not-recording"), _) => "Запись не идёт".to_string(),
+                (_, Some(error)) => error.to_string(),
+                _ => "Сервис записи отказался".to_string(),
+            }
+        }
+    };
+    Some(Notice::new(
+        action.failure_title(),
+        shorten(&body, ERROR_CHARS),
+        None,
+    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -416,7 +561,7 @@ pub struct TrayState {
     level: Mutex<Level>,
     /// Запись из последнего показанного уведомления и когда оно было.
     last_recording: Mutex<Option<(String, Instant)>>,
-    cancel_requested: Mutex<Option<Instant>>,
+    cancel: Mutex<CancelMark>,
     /// Пересобрать меню на следующем тике, даже если `MenuState` не сменился:
     /// галочку «Автозапись» Windows переключает сам по клику, и при неудачном
     /// запросе она врала бы до следующей смены состояния.
@@ -534,19 +679,20 @@ fn build_menu(app: &AppHandle, state: &MenuState) -> tauri::Result<Menu<Wry>> {
 fn on_menu(app: &AppHandle, id: &str) {
     match id {
         "open" => open_window(app),
-        "start" => command("/recording/start", Value::Null),
-        "stop" => command("/recording/stop", Value::Null),
+        "start" => command(app, Action::Start),
+        "stop" => command(app, Action::Stop),
         "cancel" => {
             if let Some(state) = app.try_state::<TrayState>() {
-                *lock(&state.cancel_requested) = Some(Instant::now());
+                let mut mark = lock(&state.cancel);
+                *mark = mark.requested();
             }
-            command("/recording/cancel", Value::Null);
+            command(app, Action::Cancel);
         }
         "auto-on" | "auto-off" => {
             if let Some(state) = app.try_state::<TrayState>() {
                 state.menu_dirty.store(true, Ordering::SeqCst);
             }
-            command("/auto-record", json!({ "enabled": id == "auto-on" }));
+            command(app, Action::AutoRecord(id == "auto-on"));
         }
         "import" => import(app),
         "log" => open_log(app),
@@ -556,15 +702,22 @@ fn on_menu(app: &AppHandle, id: &str) {
 }
 
 /// Команда резиденту в отдельном потоке: обработчик меню — главный поток.
-/// Результат виден на следующем тике опроса.
-fn command(path: &'static str, body: Value) {
+/// Удача видна на следующем тике опроса; неудача — уведомлением, иначе клик
+/// по меню просто ничего бы не сделал.
+fn command(app: &AppHandle, action: Action) {
+    let app = app.clone();
     thread::spawn(move || {
-        let Some(endpoint) = resident::read_endpoint() else {
-            eprintln!("meet: резидент не опубликовал адрес — {path} некуда слать");
-            return;
-        };
-        if let Err(error) = Client::new(&endpoint).post(path, body) {
-            eprintln!("meet: {path}: {error}");
+        let reply = resident::read_endpoint()
+            .map(|endpoint| Client::new(&endpoint).post(action.path(), action.body()));
+        if action == Action::Cancel {
+            if let Some(state) = app.try_state::<TrayState>() {
+                let mut mark = lock(&state.cancel);
+                *mark = mark.replied(cancel_confirmed(reply.as_ref()));
+            }
+        }
+        if let Some(notice) = action_notice(action, reply.as_ref()) {
+            eprintln!("meet: {}: {}", action.path(), notice.body);
+            notify(&app, vec![notice]);
         }
     });
 }
@@ -680,12 +833,12 @@ fn poll_loop(app: &AppHandle, initial_menu: MenuState) {
             }
         }
         if !notices.is_empty() {
-            let cancelled_at = *lock(&state.cancel_requested);
-            let had_save = notices.iter().any(|notice| notice.title == RECORDING_SAVED);
-            let notices = without_cancelled_save(notices, cancelled_at, Instant::now());
-            if had_save {
-                *lock(&state.cancel_requested) = None;
-            }
+            let notices = {
+                let mut mark = lock(&state.cancel);
+                let (next, kept) = mark.settle(notices);
+                *mark = next;
+                kept
+            };
             notify(app, notices);
         }
 
@@ -840,6 +993,35 @@ mod tests {
         assert!(notices.is_empty());
         let (shown, _) = tracker.observe(None);
         assert_eq!(shown, None, "два промаха подряд — резидента нет");
+    }
+
+    #[test]
+    fn crash_mid_recording_is_interrupted_not_saved() {
+        let mut rec = idle();
+        rec.recording = true;
+        let mut tracker = Tracker::default();
+        tracker.observe(Some(rec));
+        for _ in 0..OFFLINE_AFTER_MISSES {
+            tracker.observe(None);
+        }
+        let (_, notices) = tracker.observe(Some(idle()));
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0].title, "Запись прервана");
+        assert_eq!(
+            notices[0].body,
+            "Сервис записи перезапустился во время записи — часть встречи могла не сохраниться"
+        );
+    }
+
+    #[test]
+    fn stop_during_a_single_blip_is_still_a_save() {
+        let mut rec = idle();
+        rec.recording = true;
+        let mut tracker = Tracker::default();
+        tracker.observe(Some(rec));
+        tracker.observe(None);
+        let (_, notices) = tracker.observe(Some(idle()));
+        assert_eq!(titles(&notices), vec!["Запись сохранена"]);
     }
 
     #[test]
@@ -1006,6 +1188,11 @@ mod tests {
             "Ошибка расшифровки",
             "Сервис записи не запускается",
             "Не удалось импортировать",
+            "Не удалось начать запись",
+            "Не удалось остановить запись",
+            "Не удалось отменить запись",
+            "Не удалось переключить автозапись",
+            "Запись прервана",
         ]
         .into_iter()
         .map(notice)
@@ -1022,14 +1209,20 @@ mod tests {
     }
 
     #[test]
-    fn level_important_passes_three_kinds() {
+    fn level_important_passes_errors_and_auto_start() {
         let kept = filter(all_kinds(), Level::Important);
         assert_eq!(
             titles(&kept),
             vec![
                 "Идёт запись (авто)",
                 "Ошибка расшифровки",
-                "Сервис записи не запускается"
+                "Сервис записи не запускается",
+                "Не удалось импортировать",
+                "Не удалось начать запись",
+                "Не удалось остановить запись",
+                "Не удалось отменить запись",
+                "Не удалось переключить автозапись",
+                "Запись прервана",
             ]
         );
     }
@@ -1056,15 +1249,135 @@ mod tests {
         );
     }
 
+    // --- отмена из трея -------------------------------------------------
+
     #[test]
-    fn cancelled_recording_is_not_announced_as_saved() {
-        let t0 = Instant::now();
-        let notices = vec![notice("Запись сохранена"), notice("Расшифровка готова")];
-        let kept = without_cancelled_save(notices.clone(), Some(t0), t0 + Duration::from_secs(3));
+    fn confirmed_cancel_hides_the_next_save_once() {
+        let mark = CancelMark::default().requested().replied(true);
+        let (mark, kept) = mark.settle(vec![
+            notice("Запись сохранена"),
+            notice("Расшифровка готова"),
+        ]);
         assert_eq!(titles(&kept), vec!["Расшифровка готова"]);
-        let late = without_cancelled_save(notices.clone(), Some(t0), t0 + Duration::from_secs(30));
-        assert_eq!(late, notices);
-        assert_eq!(without_cancelled_save(notices.clone(), None, t0), notices);
+        let (_, later) = mark.settle(vec![notice("Запись сохранена")]);
+        assert_eq!(titles(&later), vec!["Запись сохранена"]);
+    }
+
+    #[test]
+    fn failed_cancel_does_not_hide_a_later_save() {
+        let mark = CancelMark::default().requested().replied(false);
+        let (_, kept) = mark.settle(vec![notice("Запись сохранена")]);
+        assert_eq!(titles(&kept), vec!["Запись сохранена"]);
+    }
+
+    #[test]
+    fn stop_seen_before_the_cancel_reply_is_still_the_cancel() {
+        // Резидент снимает флаг записи до ответа: опрос может увидеть idle
+        // раньше, чем придёт ответ на /recording/cancel.
+        let mark = CancelMark::default().requested();
+        let (mark, kept) = mark.settle(vec![notice("Запись сохранена")]);
+        assert!(kept.is_empty());
+        let mark = mark.replied(true);
+        let (_, later) = mark.settle(vec![notice("Запись сохранена")]);
+        assert_eq!(titles(&later), vec!["Запись сохранена"]);
+    }
+
+    #[test]
+    fn interrupted_recording_clears_a_pending_cancel() {
+        let mark = CancelMark::default().requested().replied(true);
+        let (mark, kept) = mark.settle(vec![notice("Запись прервана")]);
+        assert_eq!(titles(&kept), vec!["Запись прервана"]);
+        let (_, later) = mark.settle(vec![notice("Запись сохранена")]);
+        assert_eq!(titles(&later), vec!["Запись сохранена"]);
+    }
+
+    #[test]
+    fn cancel_is_confirmed_only_by_its_action() {
+        let ok: api::Result<Value> = Ok(json!({"ok": true, "action": "cancelled"}));
+        assert!(cancel_confirmed(Some(&ok)));
+        let refused: api::Result<Value> = Ok(json!({"ok": false, "action": "not-recording"}));
+        assert!(!cancel_confirmed(Some(&refused)));
+        let broken: api::Result<Value> = Err(api::Error::Transport("x".into()));
+        assert!(!cancel_confirmed(Some(&broken)));
+        assert!(!cancel_confirmed(None));
+    }
+
+    // --- неудачные команды из меню ---------------------------------------
+
+    fn body_of(action: Action, reply: Option<&api::Result<Value>>) -> (String, String) {
+        let notice = action_notice(action, reply).expect("ожидали уведомление");
+        (notice.title, notice.body)
+    }
+
+    #[test]
+    fn action_without_resident_says_so() {
+        assert_eq!(
+            body_of(Action::Start, None),
+            (
+                "Не удалось начать запись".into(),
+                "Сервис записи не запущен".into()
+            )
+        );
+        let broken: api::Result<Value> = Err(api::Error::Transport("connection refused".into()));
+        assert_eq!(
+            body_of(Action::Stop, Some(&broken)),
+            (
+                "Не удалось остановить запись".into(),
+                "Сервис записи не отвечает".into()
+            )
+        );
+    }
+
+    #[test]
+    fn action_http_error_carries_resident_text() {
+        let error: api::Result<Value> = Err(api::Error::Status {
+            code: 500,
+            message: "OSError: диск".into(),
+        });
+        assert_eq!(
+            body_of(Action::Cancel, Some(&error)),
+            ("Не удалось отменить запись".into(), "OSError: диск".into())
+        );
+        let bad: api::Result<Value> = Err(api::Error::Status {
+            code: 400,
+            message: "ожидается enabled: true/false".into(),
+        });
+        assert_eq!(
+            body_of(Action::AutoRecord(true), Some(&bad)),
+            (
+                "Не удалось переключить автозапись".into(),
+                "ожидается enabled: true/false".into()
+            )
+        );
+    }
+
+    #[test]
+    fn action_refusals_are_explained() {
+        let already: api::Result<Value> = Ok(json!({"ok": false, "action": "already-recording"}));
+        assert_eq!(body_of(Action::Start, Some(&already)).1, "Запись уже идёт");
+        let idle: api::Result<Value> = Ok(json!({"ok": false, "action": "not-recording"}));
+        assert_eq!(body_of(Action::Stop, Some(&idle)).1, "Запись не идёт");
+        assert_eq!(body_of(Action::Cancel, Some(&idle)).1, "Запись не идёт");
+        let odd: api::Result<Value> = Ok(json!({"ok": false, "action": "что-то новое"}));
+        assert_eq!(
+            body_of(Action::Start, Some(&odd)).1,
+            "Сервис записи отказался"
+        );
+    }
+
+    #[test]
+    fn successful_actions_stay_quiet() {
+        for (action, reply) in [
+            (Action::Start, json!({"ok": true, "action": "started"})),
+            (Action::Start, json!({"ok": true, "action": "adopted"})),
+            (Action::Stop, json!({"ok": true, "action": "stopped"})),
+            (Action::Cancel, json!({"ok": true, "action": "cancelled"})),
+            // /auto-record отвечает снимком состояния, без ok.
+            (Action::AutoRecord(false), json!({"status": "idle"})),
+        ] {
+            let reply: api::Result<Value> = Ok(reply);
+            assert_eq!(action_notice(action, Some(&reply)), None, "{action:?}");
+        }
     }
 
     // --- «клик по уведомлению» -------------------------------------------

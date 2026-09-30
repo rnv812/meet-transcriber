@@ -15,8 +15,10 @@ use crate::resident::Endpoint;
 /// Обычный запрос: резидент на той же машине отвечает мгновенно, а трей не
 /// должен подвисать, если он занят или умер.
 const TIMEOUT: Duration = Duration::from_secs(3);
-/// `/shutdown` сохраняет идущую запись до ответа — это может занять до минуты.
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(70);
+/// `/shutdown`, `/recording/stop` и `/recording/cancel` отвечают только после
+/// того, как резидент дождётся потока записи (до 60 с): короткий таймаут дал бы
+/// ложную ошибку при медленной, но успешной остановке.
+const LONG_TIMEOUT: Duration = Duration::from_secs(70);
 
 #[derive(Debug)]
 pub enum Error {
@@ -89,10 +91,9 @@ impl Client {
 }
 
 fn timeout_for(path: &str) -> Duration {
-    if path == "/shutdown" {
-        SHUTDOWN_TIMEOUT
-    } else {
-        TIMEOUT
+    match path {
+        "/shutdown" | "/recording/stop" | "/recording/cancel" => LONG_TIMEOUT,
+        _ => TIMEOUT,
     }
 }
 
@@ -233,5 +234,13 @@ mod tests {
     fn shutdown_waits_longer_than_other_calls() {
         assert_eq!(timeout_for("/shutdown"), Duration::from_secs(70));
         assert_eq!(timeout_for("/state"), Duration::from_secs(3));
+    }
+
+    #[test]
+    fn stop_and_cancel_wait_for_the_recorder() {
+        // Резидент ждёт поток записи до 60 с, прежде чем ответить.
+        assert_eq!(timeout_for("/recording/stop"), Duration::from_secs(70));
+        assert_eq!(timeout_for("/recording/cancel"), Duration::from_secs(70));
+        assert_eq!(timeout_for("/recording/start"), Duration::from_secs(3));
     }
 }
