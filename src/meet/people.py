@@ -170,13 +170,17 @@ def set_avatar(name: str, data: bytes, voices: Path) -> Path:
     UI: так файл пригоден и для круга, и для квадрата."""
     if not _voice_file(name, voices).exists():
         raise KeyError(name)
-    from PIL import Image, UnidentifiedImageError
+    from PIL import Image, ImageOps, UnidentifiedImageError
 
     try:
         with Image.open(io.BytesIO(data)) as img:
             img.load()
-            rgb = img.convert("RGBA")
-    except (UnidentifiedImageError, OSError, ValueError):
+            # Фото с телефона хранятся «на боку» с пометкой EXIF Orientation:
+            # без поворота аватар выйдет лежащим.
+            rgb = ImageOps.exif_transpose(img).convert("RGBA")
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError, ValueError):
+        # Бомба декомпрессии (крошечный файл на гигапиксели) — тоже «не
+        # изображение», а не 500 и не съеденная память резидента.
         raise ValueError("не изображение")
     side = min(rgb.size)
     left, top = (rgb.width - side) // 2, (rgb.height - side) // 2
@@ -184,8 +188,12 @@ def set_avatar(name: str, data: bytes, voices: Path) -> Path:
         (AVATAR_SIZE, AVATAR_SIZE), Image.LANCZOS)
     path = avatar_path(name, voices)
     tmp = path.with_suffix(".png.tmp")
-    square.save(tmp, "PNG")
-    tmp.replace(path)
+    try:
+        square.save(tmp, "PNG")
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)  # огрызок не должен остаться рядом с голосом
+        raise
     return path
 
 

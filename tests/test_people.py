@@ -2,6 +2,7 @@
 
 import io
 import json
+from pathlib import Path
 
 import pytest
 
@@ -273,3 +274,60 @@ def test_rename_over_orphan_avatar(tmp_path):
     people.rename("Аркаша", "Аркадий", voices, tmp_path / "rec")
     assert sorted(p.name for p in voices.iterdir()) == ["Аркадий.json", "Аркадий.png"]
     assert (voices / "Аркадий.png").read_bytes() == want
+
+
+def _jpeg_with_orientation(orientation: int) -> bytes:
+    """40×20: левая половина красная, правая синяя; EXIF Orientation задан."""
+    from PIL import Image
+
+    img = Image.new("RGB", (40, 20), (0, 0, 255))
+    img.paste((255, 0, 0), (0, 0, 20, 20))
+    exif = Image.Exif()
+    exif[0x0112] = orientation
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=95, exif=exif.tobytes())
+    return buf.getvalue()
+
+
+def test_avatar_respects_exif_orientation(tmp_path):
+    """Фото с телефона лежит «на боку» с пометкой Orientation=6: без поворота по
+    EXIF аватар вышел бы повёрнутым. 40×20 после поворота — портрет 20×40:
+    красная половина сверху, синяя снизу."""
+    from PIL import Image
+
+    voices = tmp_path / "voices"
+    _voice(voices, "Демьян", [])
+    path = people.set_avatar("Демьян", _jpeg_with_orientation(6), voices)
+    with Image.open(path) as img:
+        top = img.convert("RGB").getpixel((128, 40))
+        bottom = img.convert("RGB").getpixel((128, 215))
+    assert top[0] > 180 and top[2] < 80, top          # красный
+    assert bottom[2] > 180 and bottom[0] < 80, bottom  # синий
+
+
+def test_decompression_bomb_is_not_an_image(tmp_path, monkeypatch):
+    from PIL import Image
+
+    voices = tmp_path / "voices"
+    _voice(voices, "Демьян", [])
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)
+    with pytest.raises(ValueError, match="не изображение"):
+        people.set_avatar("Демьян", _png((40, 30)), voices)
+    assert sorted(p.name for p in voices.iterdir()) == ["Демьян.json"]
+
+
+def test_failed_avatar_save_leaves_no_temp_file(tmp_path, monkeypatch):
+    from PIL import Image
+
+    voices = tmp_path / "voices"
+    _voice(voices, "Демьян", [])
+
+    def broken_save(self, fp, *args, **kwargs):
+        Path(fp).write_bytes(b"half")
+        raise OSError(28, "На диске недостаточно места")
+
+    data = _png()
+    monkeypatch.setattr(Image.Image, "save", broken_save)
+    with pytest.raises(OSError):
+        people.set_avatar("Демьян", data, voices)
+    assert sorted(p.name for p in voices.iterdir()) == ["Демьян.json"]

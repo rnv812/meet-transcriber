@@ -530,6 +530,10 @@ class TrayControl:
             return {"error": "человека нет"}
         except ValueError as e:
             raise _bad_request(str(e))
+        except OSError as e:
+            # Не OSError наружу: control API принимает его за «клиент ушёл» и
+            # молча не отвечает. RuntimeError станет честным 500 с текстом.
+            raise RuntimeError(f"не удалось сохранить аватар: {e}") from e
         return {"ok": True}
 
     def person_action(self, name: str, action: str, body: dict | None = None) -> dict:

@@ -723,3 +723,18 @@ def test_transcribe_of_trackless_import_retries_the_import(with_recordings, app,
     (folder / "source.mp3").write_bytes(b"x")
     state.transcribe(folder.name)
     assert queue.submitted[-1] == (jobs.TRANSCRIBE, str(folder.resolve()))
+
+
+def test_set_avatar_save_failure_is_an_error_not_a_dropped_reply(voices_state, monkeypatch):
+    """OSError из обработчика control API глотается как «клиент ушёл» — ответа
+    не было бы вовсе. Сбой записи файла должен дойти до панели ошибкой."""
+    from meet import people
+
+    state, _ = voices_state
+
+    def full_disk(*a, **k):
+        raise OSError(28, "На диске недостаточно места")
+
+    monkeypatch.setattr(people, "set_avatar", full_disk)
+    with pytest.raises(RuntimeError, match="не удалось сохранить"):
+        state.set_avatar("Демьян", _png_bytes())
