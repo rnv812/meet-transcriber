@@ -39,6 +39,10 @@ const PUBLISH_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(250);
 /// После ответа `/shutdown` резиденту нужно погасить сервер и снять lock.
 const EXIT_GRACE: Duration = Duration::from_secs(10);
+/// Как часто проверяем, жив ли чужой резидент, и сколько промахов подряд
+/// значат, что его больше нет.
+const EXTERNAL_POLL: Duration = Duration::from_secs(3);
+const EXTERNAL_MISSES: u32 = 2;
 
 /// Адрес и токен резидента из `daemon.json`. Debug нет нарочно — токен не
 /// должен попасть в лог даже случайным `{:?}`.
@@ -151,6 +155,31 @@ pub fn restarts_after_exit(restarts: u32, lived: Duration) -> u32 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalStep {
+    /// Чужой резидент на месте — продолжаем им пользоваться.
+    Stay,
+    /// Чужой резидент пропал — запускаем свой.
+    Takeover,
+}
+
+/// Очередная проверка чужого резидента (`answers`) при `misses` промахах
+/// подряд до неё → шаг и новый счётчик промахов. Один промах — не повод:
+/// резидент мог на миг не принять соединение; два подряд — его нет. Так
+/// оболочка, запущенная, пока осиротевший прежний резидент ещё дописывал
+/// запись, не остаётся без резидента, когда тот выйдет.
+pub fn external_next(answers: bool, misses: u32) -> (ExternalStep, u32) {
+    if answers {
+        return (ExternalStep::Stay, 0);
+    }
+    let misses = misses + 1;
+    if misses >= EXTERNAL_MISSES {
+        (ExternalStep::Takeover, 0)
+    } else {
+        (ExternalStep::Stay, misses)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResidentStatus {
     Starting,
@@ -216,20 +245,28 @@ impl Supervisor {
     }
 
     fn supervise(&self, app: &AppHandle) {
-        if endpoint_answers() {
-            eprintln!("meet: резидент уже работает вне приложения — подключаюсь к нему");
-            self.set_status(ResidentStatus::External);
-            return;
-        }
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(Path::to_path_buf))
             .unwrap_or_default();
         let list = candidates(&exe_dir, std::env::var_os(OVERRIDE_ENV).as_deref());
         let mut restarts = 0;
+        let mut external = endpoint_answers();
         loop {
             if self.quitting() {
                 return;
+            }
+            if external {
+                // Чужой резидент не вечен: это может быть осиротевший резидент
+                // прошлой оболочки, который дописывает запись и сейчас выйдет.
+                eprintln!("meet: резидент уже работает вне приложения — подключаюсь к нему");
+                self.set_status(ResidentStatus::External);
+                self.watch_external();
+                if self.quitting() {
+                    return;
+                }
+                eprintln!("meet: внешний резидент больше не отвечает — запускаю свой");
+                external = false;
             }
             self.set_status(ResidentStatus::Starting);
             let Some(pid) = self.spawn(&list) else {
@@ -253,16 +290,34 @@ impl Supervisor {
                     );
                     thread::sleep(RESTART_PAUSE);
                 }
-                Action::AdoptExternal => {
-                    eprintln!("meet: резидент уже работает вне приложения — подключаюсь к нему");
-                    self.set_status(ResidentStatus::External);
-                    return;
-                }
+                // Код 3 — не падение: счётчик перезапусков не растёт, дальше
+                // следим за тем, кто держит tray.lock.
+                Action::AdoptExternal => external = true,
                 Action::GiveUp => {
                     eprintln!("meet: резидент падает раз за разом (код {code:?}) — сдаюсь");
                     self.give_up(app);
                     return;
                 }
+            }
+        }
+    }
+
+    /// Ждать, пока чужой резидент не перестанет отвечать (или пока не выходим).
+    ///
+    /// Проверка без удаления `daemon.json`: файл принадлежит живому чужому
+    /// резиденту, и единичный промах не должен стирать его публикацию.
+    fn watch_external(&self) {
+        let mut misses = 0;
+        loop {
+            thread::sleep(EXTERNAL_POLL);
+            if self.quitting() {
+                return;
+            }
+            let answers = read_endpoint().is_some_and(|endpoint| answers(&endpoint));
+            let (step, next) = external_next(answers, misses);
+            misses = next;
+            if step == ExternalStep::Takeover {
+                return;
             }
         }
     }
@@ -369,6 +424,8 @@ impl Supervisor {
             return; // уже погашен предыдущим вызовом
         }
         let Some(pid) = self.child_pid() else {
+            // Своего процесса нет. External-резидент принадлежит пользователю
+            // (например, `--watch` из автозагрузки) — «Выход» его не гасит.
             return;
         };
         match read_endpoint() {
@@ -522,5 +579,23 @@ mod tests {
     fn a_minute_of_stable_work_forgives_earlier_crashes() {
         assert_eq!(restarts_after_exit(3, Duration::from_secs(60)), 0);
         assert_eq!(restarts_after_exit(3, Duration::from_secs(59)), 3);
+    }
+
+    #[test]
+    fn answering_external_resident_is_kept_and_misses_reset() {
+        assert_eq!(external_next(true, 0), (ExternalStep::Stay, 0));
+        assert_eq!(external_next(true, 1), (ExternalStep::Stay, 0));
+    }
+
+    #[test]
+    fn one_miss_is_not_enough_to_take_over() {
+        assert_eq!(external_next(false, 0), (ExternalStep::Stay, 1));
+    }
+
+    #[test]
+    fn two_misses_in_a_row_take_over() {
+        let (step, misses) = external_next(false, 0);
+        assert_eq!(step, ExternalStep::Stay);
+        assert_eq!(external_next(false, misses).0, ExternalStep::Takeover);
     }
 }
