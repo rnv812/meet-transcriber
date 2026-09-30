@@ -5,12 +5,13 @@
 // поток) или через `app.run_on_main_thread`: создание окна из async-команды
 // роняло приложение на Windows.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::api::Client;
 use crate::logs::shell_log;
 use crate::resident::{self, Endpoint, ResidentStatus, Supervisor};
 
@@ -94,19 +95,69 @@ pub fn endpoint() -> Option<Endpoint> {
 
 /// Показать папку записи в проводнике. Приложение не заменяет файловый
 /// менеджер: иногда быстрее открыть папку, чем искать её в библиотеке.
+///
+/// IMPORTANT: `explorer <файл>` файл запускает, поэтому только папки и только
+/// свои: данные приложения и папка записей. Async — чтобы вопрос резиденту о
+/// папке записей не держал главный поток.
 #[tauri::command]
-pub fn open_folder(path: String) -> Result<(), String> {
-    let target = PathBuf::from(&path);
-    if !target.exists() {
-        return Err(format!("папки нет: {path}"));
+pub async fn open_folder(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let target = PathBuf::from(&path);
+        if !target.is_dir() {
+            return Err(format!("папки нет: {path}"));
+        }
+        if !folder_allowed(&target, &allowed_roots()) {
+            shell_log!("open_folder: отказ, папка вне данных и записей: {path}");
+            return Err(format!("эту папку приложение не открывает: {path}"));
+        }
+        Command::new("explorer")
+            .arg(&target)
+            .spawn()
+            .map(|_| ())
+            // explorer возвращает ненулевой код даже при успехе, поэтому ждать
+            // завершения нельзя — нас интересует только сам запуск.
+            .map_err(|error| format!("не удалось открыть папку: {error}"))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Папка, и внутри одного из корней. Пути сравниваются после canonicalize:
+/// `..`, короткие имена и регистр не выводят за корень, а сравнение по
+/// компонентам не путает `root2` с `root`. Несуществующий путь — отказ.
+pub fn folder_allowed(path: &Path, roots: &[PathBuf]) -> bool {
+    let Ok(target) = path.canonicalize() else {
+        return false;
+    };
+    target.is_dir()
+        && roots
+            .iter()
+            .filter_map(|root| root.canonicalize().ok())
+            .any(|root| target.starts_with(root))
+}
+
+/// Корни для `open_folder`: данные приложения всегда, папка записей — если
+/// резидент отвечает. Не отвечает — только данные приложения.
+fn allowed_roots() -> Vec<PathBuf> {
+    let mut roots = vec![resident::data_dir()];
+    let state =
+        resident::read_endpoint().and_then(|endpoint| Client::new(&endpoint).get_state().ok());
+    if let Some(dir) = state.as_ref().and_then(recordings_root) {
+        roots.push(dir);
     }
-    Command::new("explorer")
-        .arg(&target)
-        .spawn()
-        .map(|_| ())
-        // explorer возвращает ненулевой код даже при успехе, поэтому ждать
-        // завершения нельзя — нас интересует только сам запуск.
-        .map_err(|error| format!("не удалось открыть папку: {error}"))
+    roots
+}
+
+/// Папка записей из `/state`: `recordings_dir` — это уже `recording.out_dir`
+/// или умолчание, разрешённое самим резидентом (в dev — `recordings\`
+/// репозитория, которого оболочка сама не вычислит).
+pub fn recordings_root(state: &serde_json::Value) -> Option<PathBuf> {
+    state
+        .get("recordings_dir")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
 }
 
 /// «Сохранить как» и запись UTF-8. `None` — пользователь отказался.
@@ -192,6 +243,92 @@ mod tests {
         assert_eq!(
             recording_arg(&argv(&["meet.exe", "--recording=2026-09-30_16-04"])),
             Some("2026-09-30_16-04".to_string())
+        );
+    }
+
+    /// Временное дерево: `root` (разрешённый корень) и `outside` рядом.
+    struct Tree(PathBuf);
+
+    impl Tree {
+        fn new(name: &str) -> Self {
+            let base = std::env::temp_dir()
+                .join(format!("meet-open-folder-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(base.join("root").join("2026-09-30_16-04")).unwrap();
+            std::fs::create_dir_all(base.join("outside")).unwrap();
+            std::fs::write(base.join("root").join("run.bat"), b"calc").unwrap();
+            Tree(base)
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn folder_under_a_root_is_allowed() {
+        let tree = Tree::new("inside");
+        let roots = [tree.0.join("root")];
+        assert!(folder_allowed(
+            &tree.0.join("root").join("2026-09-30_16-04"),
+            &roots
+        ));
+        assert!(folder_allowed(&tree.0.join("root"), &roots));
+    }
+
+    #[test]
+    fn file_is_never_opened() {
+        // explorer.exe <файл> — это запуск файла, а не показ папки.
+        let tree = Tree::new("file");
+        let roots = [tree.0.join("root")];
+        assert!(!folder_allowed(
+            &tree.0.join("root").join("run.bat"),
+            &roots
+        ));
+    }
+
+    #[test]
+    fn folder_outside_the_roots_is_refused() {
+        let tree = Tree::new("outside");
+        let roots = [tree.0.join("root")];
+        assert!(!folder_allowed(&tree.0.join("outside"), &roots));
+        assert!(!folder_allowed(&tree.0.join("missing"), &roots));
+        assert!(!folder_allowed(&tree.0.join("outside"), &[]));
+    }
+
+    #[test]
+    fn dot_dot_cannot_escape_a_root() {
+        let tree = Tree::new("dotdot");
+        let roots = [tree.0.join("root")];
+        let escape = tree.0.join("root").join("..").join("outside");
+        assert!(
+            escape.is_dir(),
+            "путь существует — отказ только из-за корня"
+        );
+        assert!(!folder_allowed(&escape, &roots));
+    }
+
+    #[test]
+    fn root_name_prefix_is_not_a_root() {
+        // «root2» начинается с «root», но в корень не входит.
+        let tree = Tree::new("prefix");
+        std::fs::create_dir_all(tree.0.join("root2")).unwrap();
+        assert!(!folder_allowed(
+            &tree.0.join("root2"),
+            &[tree.0.join("root")]
+        ));
+    }
+
+    #[test]
+    fn recordings_root_comes_from_the_state_snapshot() {
+        let state = serde_json::json!({"recordings_dir": r"D:\rec"});
+        assert_eq!(recordings_root(&state), Some(PathBuf::from(r"D:\rec")));
+        assert_eq!(recordings_root(&serde_json::json!({})), None);
+        assert_eq!(
+            recordings_root(&serde_json::json!({"recordings_dir": " "})),
+            None
         );
     }
 
