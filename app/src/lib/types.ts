@@ -1,16 +1,9 @@
 /**
  * Формы, которые отдаёт control API резидента (`meet.control`).
- *
- * Держим ровно то, что панель показывает: снимок состояния и события шины.
- * Виды событий совпадают со строками из `meet/events.py` — они уходят в SSE
- * как есть.
+ * Виды событий совпадают со строками из `meet/events.py` — они уходят в SSE как есть.
  */
 
-/** Сигнал детектора звонка. null значит «ответить нечем» (ключа в реестре нет,
- *  pycaw не встал) — это не то же самое, что «нет». */
 export type Signal = boolean | null;
-
-/** Состояние машины детектора: про звонок, а не про нашу запись. */
 export type WatcherState = "idle" | "recording" | "grace" | "suppressed" | null;
 
 export type AutoRecord = {
@@ -31,14 +24,12 @@ export type Snapshot = {
   auto_record: AutoRecord;
   recordings_dir: string;
   gpu_busy: boolean;
+  disk_free_gb: number | null;
+  last_stop: { folder: string; reason: "saved" | "discarded" | "short"; at: number } | null;
 };
 
-export type CommandResult = Snapshot & {
-  ok: boolean;
-  action: string;
-};
+export type CommandResult = Snapshot & { ok: boolean; action: string };
 
-/** Событие шины. `kind` — вид, остальное зависит от вида (см. events.py). */
 export type Job = {
   id: string;
   kind: string;
@@ -58,17 +49,42 @@ export type Recording = {
   path: string;
   started_at: string | null;
   duration_s: number | null;
+  tracks: Record<string, string>;
   has_transcript: boolean;
   has_voices: boolean;
   title: string | null;
+  source: string;
 };
 
-export type BusEvent = {
-  kind: string;
-  at: number;
-  [key: string]: unknown;
+export type Segment = {
+  start: number;
+  end: number;
+  speaker: string | null;
+  text: string;
+  uncertain: boolean;
 };
 
+export type Transcript = {
+  version: number;
+  title: string | null;
+  segments: Segment[];
+  names?: Record<string, string>;
+};
+
+export type Person = {
+  name: string;
+  samples: number;
+  meetings: number;
+  seconds: number;
+  has_avatar: boolean;
+  color: string;
+};
+
+export type PersonCard = Person & { [key: string]: unknown };
+
+export type Sample = { recording: string; start: number; end: number; track: string };
+
+export type BusEvent = { kind: string; at: number; [key: string]: unknown };
 export type ProgressEvent = BusEvent & {
   stage: string;
   label: string;
@@ -76,21 +92,8 @@ export type ProgressEvent = BusEvent & {
   total: number | null;
   note: string | null;
 };
-
-export type LevelEvent = BusEvent & {
-  levels: Record<string, number>;
-};
-
-export type LogEvent = BusEvent & {
-  text: string;
-  source?: string;
-};
-
+export type LevelEvent = BusEvent & { levels: Record<string, number> };
 export type JobEvent = BusEvent & { job: Job };
 
-export const isProgress = (e: BusEvent): e is ProgressEvent =>
-  e.kind === "progress";
 export const isJob = (e: BusEvent): e is JobEvent => e.kind.startsWith("job.");
-export const isLevel = (e: BusEvent): e is LevelEvent =>
-  e.kind === "record.level";
-export const isLog = (e: BusEvent): e is LogEvent => e.kind === "log";
+export const isLevel = (e: BusEvent): e is LevelEvent => e.kind === "record.level";

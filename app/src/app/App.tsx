@@ -7,7 +7,7 @@ import { Nav, type Section } from "./Nav";
 export function App() {
   const [section, setSection] = useState<Section>("recordings");
   const resident = useResident();
-  const library = useLibrary();
+  const library = useLibrary(resident.endpoint, "", resident.lastEvent);
   const offline = resident.status === "offline";
 
   return (

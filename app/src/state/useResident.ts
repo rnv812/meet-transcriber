@@ -1,6 +1,129 @@
-// Заглушка: настоящий хук — в задаче 2 (см. src/legacy/useResident.ts).
+/**
+ * Связь с резидентом: SSE даёт мгновенные события, редкий опрос `/state`
+ * страхует от молча умершего потока. Резидент при каждом запуске берёт новый
+ * порт и токен, поэтому при обрыве адрес перечитывается.
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { type Endpoint, NoResidentError, getState, openEvents, resolveEndpoint } from "../lib/api";
+import { type BusEvent, type Snapshot, isLevel } from "../lib/types";
+
+const POLL_MS = 4000;
+const RECONNECT_MS = 2000;
+
 export type ResidentStatus = "connecting" | "online" | "offline";
 
-export function useResident(): { status: ResidentStatus } {
-  return { status: "offline" };
+export type Resident = {
+  status: ResidentStatus;
+  endpoint: Endpoint | null;
+  snapshot: Snapshot | null;
+  /** Последнее событие шины (кроме уровней) — библиотека обновляется по нему. */
+  lastEvent: BusEvent | null;
+};
+
+export function useResident(): Resident {
+  const [endpoint, setEndpoint] = useState<Endpoint | null>(null);
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [lastEvent, setLastEvent] = useState<BusEvent | null>(null);
+  const [status, setStatus] = useState<ResidentStatus>("connecting");
+  const levels = useRef<Record<string, number>>({});
+  const lastEventAt = useRef(0);
+
+  const reresolve = useCallback(async () => {
+    try {
+      const found = await resolveEndpoint();
+      setEndpoint((cur) => (cur && cur.base === found.base && cur.token === found.token ? cur : found));
+      return true;
+    } catch (cause) {
+      setStatus("offline");
+      if (!(cause instanceof NoResidentError)) console.warn("resolveEndpoint:", cause);
+      return false;
+    }
+  }, []);
+  const reresolveRef = useRef(reresolve);
+  reresolveRef.current = reresolve;
+
+  const apply = useCallback((next: Snapshot | null) => {
+    if (next) setSnapshot({ ...next, levels: next.levels ?? levels.current });
+    setStatus("online");
+  }, []);
+
+  // Поиск резидента: пока его нет, пробуем снова.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const find = async () => {
+      if (cancelled) return;
+      const ok = await reresolve();
+      if (!ok && !cancelled) timer = setTimeout(find, RECONNECT_MS);
+    };
+    void find();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [reresolve]);
+
+  // Поток событий с переподключением.
+  useEffect(() => {
+    if (!endpoint) return;
+    let closed = false;
+    let close: (() => void) | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const connect = () => {
+      close = openEvents(endpoint, {
+        onSnapshot: apply,
+        onEvent: (event) => {
+          lastEventAt.current = Date.now();
+          if (isLevel(event)) {
+            levels.current = event.levels ?? {};
+            setSnapshot((cur) => (cur ? { ...cur, levels: levels.current } : cur));
+            return;
+          }
+          setLastEvent(event);
+        },
+        onError: () => {
+          setStatus("offline");
+          close?.();
+          if (!closed) {
+            void reresolveRef.current();
+            timer = setTimeout(connect, RECONNECT_MS);
+          }
+        },
+      });
+    };
+    connect();
+    return () => {
+      closed = true;
+      if (timer) clearTimeout(timer);
+      close?.();
+    };
+  }, [endpoint, apply]);
+
+  // Страховочный опрос.
+  useEffect(() => {
+    if (!endpoint) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const next = await getState(endpoint);
+        if (!cancelled) apply(next);
+      } catch {
+        // Пока SSE жив, разовый промах опроса панель не гасит.
+        if (!cancelled && Date.now() - lastEventAt.current > POLL_MS * 2) {
+          setStatus("offline");
+          void reresolveRef.current();
+        }
+      }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [endpoint, apply]);
+
+  return { status, endpoint, snapshot, lastEvent };
 }
