@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_notification::NotificationExt;
 
 use crate::api;
+use crate::tray::{self, Notice};
 
 const EXE: &str = "meet-tray.exe";
 /// Явный путь к резиденту — первым кандидатом. Для разработки из рабочей
@@ -187,7 +187,6 @@ pub enum ResidentStatus {
     /// Резидент запущен вне приложения (`--watch` из автозагрузки).
     External,
     /// Перезапуски исчерпаны; `log` — журнал, который стоит открыть.
-    #[allow(dead_code)] // `log` читает трей (задача 6)
     Failed {
         log: PathBuf,
     },
@@ -398,20 +397,20 @@ impl Supervisor {
     }
 
     /// Сдаться: статус `Failed` и ровно одно уведомление — после него надзор
-    /// заканчивается, повторить его некому.
+    /// заканчивается, повторить его некому. Уведомление идёт через трей: оно
+    /// подчиняется `ui.notifications` (при «off» молчит).
     fn give_up(&self, app: &AppHandle) {
         self.set_status(ResidentStatus::Failed {
             log: data_dir().join("watch.log"),
         });
-        let shown = app
-            .notification()
-            .builder()
-            .title("Сервис записи не запускается")
-            .body("Откройте журнал из меню трея")
-            .show();
-        if let Err(error) = shown {
-            eprintln!("meet: уведомление не показалось: {error}");
-        }
+        tray::notify(
+            app,
+            vec![Notice {
+                title: tray::RESIDENT_FAILED.into(),
+                body: "Откройте журнал из меню трея".into(),
+                recording: None,
+            }],
+        );
     }
 
     /// Штатно погасить свой резидент: `POST /shutdown` (идущая запись
@@ -471,7 +470,7 @@ impl Supervisor {
 
 /// Замок, переживающий панику другого потока: состояние здесь простое, и
 /// оставить оболочку без надзора из-за отравленного мьютекса хуже.
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

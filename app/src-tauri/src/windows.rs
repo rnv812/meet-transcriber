@@ -14,7 +14,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::resident::{self, Endpoint, ResidentStatus, Supervisor};
 
 /// Расширения, которые резидент принимает при импорте (`IMPORT_EXTS`).
-const MEDIA_EXTS: &[&str] = &[
+pub const MEDIA_EXTS: &[&str] = &[
     "mp3", "mp4", "m4a", "wav", "ogg", "opus", "webm", "mkv", "flac",
 ];
 

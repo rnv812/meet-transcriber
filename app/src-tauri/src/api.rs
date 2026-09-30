@@ -21,11 +21,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(70);
 #[derive(Debug)]
 pub enum Error {
     /// Резидент ответил ошибкой; `message` — поле `error` из его ответа.
-    Status {
-        #[allow(dead_code)] // различать 400/404/500 будет трей (задача 6)
-        code: u16,
-        message: String,
-    },
+    Status { code: u16, message: String },
     /// Не достучались: резидента нет, он перезапускается или не успел ответить.
     Transport(String),
     /// Ответ пришёл, но это не JSON.
@@ -61,17 +57,14 @@ impl Client {
         }
     }
 
-    #[allow(dead_code)] // потребитель — опрос трея (задача 6)
     pub fn get_state(&self) -> Result<Value> {
         self.get("/state")
     }
 
-    #[allow(dead_code)] // потребитель — опрос трея (задача 6)
     pub fn get_jobs(&self) -> Result<Value> {
         self.get("/jobs")
     }
 
-    #[allow(dead_code)] // потребитель — опрос трея (задача 6)
     pub fn get(&self, path: &str) -> Result<Value> {
         let request = self.request("GET", path);
         read(request.call())

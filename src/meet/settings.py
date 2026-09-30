@@ -91,6 +91,9 @@ LLM_PROVIDERS = ("claude-code", "openai-compatible")
 # Локальная модель по умолчанию адресуется как OpenAI-совместимый эндпоинт:
 # так работают и LM Studio (1234), и Ollama (11434) — своего рантайма не нужно.
 DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:1234/v1"
+# Уровни уведомлений оболочки: всё; только важное (автозапись началась, ошибка
+# расшифровки, сервис записи не запускается); ничего.
+NOTIFICATION_LEVELS = ("all", "important", "off")
 
 
 def as_flag(value, default: bool) -> bool:
@@ -436,6 +439,30 @@ class Integrations:
 
 
 @dataclass(frozen=True)
+class Ui:
+    """Настройки самого приложения, а не записи: их читает оболочка (уровень
+    уведомлений трея) и окно (пройден ли мастер первого запуска)."""
+
+    notifications: str = NOTIFICATION_LEVELS[0]
+    wizard_done: bool = False
+
+    @classmethod
+    def from_raw(cls, raw: dict) -> "Ui":
+        return cls(
+            notifications=as_choice(
+                raw.get("notifications"), NOTIFICATION_LEVELS, NOTIFICATION_LEVELS[0]
+            ),
+            wizard_done=as_flag(raw.get("wizard_done"), False),
+        )
+
+    def to_raw(self) -> dict:
+        return {
+            "notifications": self.notifications,
+            "wizard_done": self.wizard_done,
+        }
+
+
+@dataclass(frozen=True)
 class Settings:
     version: int = SCHEMA_VERSION
     auto_record: AutoRecord = field(default_factory=AutoRecord)
@@ -445,6 +472,7 @@ class Settings:
     llm: Llm = field(default_factory=Llm)
     assist: Assist = field(default_factory=Assist)
     integrations: Integrations = field(default_factory=Integrations)
+    ui: Ui = field(default_factory=Ui)
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Settings":
@@ -464,6 +492,7 @@ class Settings:
             llm=Llm.from_raw(_section(raw, "llm")),
             assist=Assist.from_raw(_section(raw, "assist")),
             integrations=Integrations.from_raw(_section(raw, "integrations")),
+            ui=Ui.from_raw(_section(raw, "ui")),
         )
 
     def to_raw(self) -> dict:
@@ -476,6 +505,7 @@ class Settings:
             "llm": self.llm.to_raw(),
             "assist": self.assist.to_raw(),
             "integrations": self.integrations.to_raw(),
+            "ui": self.ui.to_raw(),
         }
 
 

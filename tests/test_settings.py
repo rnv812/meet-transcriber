@@ -271,3 +271,35 @@ def test_auto_transcribe_off_for_legacy_v0_top_level_hook():
     cfg = settings.Settings.from_raw({"post_record_hook": True})
     assert cfg.recording.auto_transcribe is False
     assert settings.Settings.from_raw(cfg.to_raw()).recording.auto_transcribe is False
+
+
+def test_ui_defaults_notify_everything_and_wizard_not_done():
+    cfg = settings.Settings.from_raw({"version": settings.SCHEMA_VERSION})
+    assert cfg.ui.notifications == "all"
+    assert cfg.ui.wizard_done is False
+    assert cfg.to_raw()["ui"] == {"notifications": "all", "wizard_done": False}
+
+
+def test_ui_roundtrip_through_file(tmp_path):
+    f = tmp_path / "config.json"
+    original = settings.Settings(
+        ui=settings.Ui(notifications="important", wizard_done=True))
+    settings.save(original, f)
+    assert settings.load(f).ui == original.ui
+    patched = settings.patch({"ui": {"notifications": "off"}}, f)
+    assert patched.ui == settings.Ui(notifications="off", wizard_done=True)
+    assert settings.load(f).ui.notifications == "off"
+
+
+def test_ui_invalid_values_fall_back_to_defaults():
+    cfg = settings.Settings.from_raw(
+        {"version": settings.SCHEMA_VERSION,
+         "ui": {"notifications": "громко", "wizard_done": "false"}})
+    assert cfg.ui.notifications == "all"
+    assert cfg.ui.wizard_done is False
+    garbage = settings.Settings.from_raw(
+        {"version": settings.SCHEMA_VERSION, "ui": ["не", "словарь"]})
+    assert garbage.ui == settings.Ui()
+    padded = settings.Settings.from_raw(
+        {"version": settings.SCHEMA_VERSION, "ui": {"notifications": " off "}})
+    assert padded.ui.notifications == "off"
