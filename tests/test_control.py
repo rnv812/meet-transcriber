@@ -123,6 +123,17 @@ class FakeState:
             raise control.BadRequest("нечего применять")
         return {"pos": 1}
 
+    def speakers_undo(self, rid):
+        self.calls.append(("speakers_undo", rid))
+        raise control.Conflict("уже нельзя")
+
+    def speakers_redo(self, rid):
+        self.calls.append(("speakers_redo", rid))
+        return {"pos": 1}
+
+    def speakers_revert(self, rid, body):
+        self.calls.append(("speakers_revert", rid, body))
+        return {"pos": 0}
 
     def set_auto_record(self, body):
         self.calls.append(("auto", body))
@@ -1088,6 +1099,10 @@ def test_speakers_panel_routes(server):
     body = {"ops": [{"type": "reset", "label": "Анна"}], "remember": {}}
     assert _post(server, f"/recordings/{rid}/speakers/apply", body) == {"pos": 1}
     _post(server, f"/recordings/{rid}/speakers/apply", {"bad": True}, expect=400)
+    _post(server, f"/recordings/{rid}/speakers/undo", {}, expect=409)
+    assert _post(server, f"/recordings/{rid}/speakers/redo", {}) == {"pos": 1}
+    assert _post(server, f"/recordings/{rid}/speakers/revert", {"to_step_id": "a1"}) == {"pos": 0}
     calls = [c for c in server.state_obj.calls if isinstance(c, tuple) and c[0].startswith("speakers")]
     assert calls == [("speakers", rid), ("speakers_apply", rid, body),
-                     ("speakers_apply", rid, {"bad": True})]
+                     ("speakers_apply", rid, {"bad": True}), ("speakers_undo", rid),
+                     ("speakers_redo", rid), ("speakers_revert", rid, {"to_step_id": "a1"})]

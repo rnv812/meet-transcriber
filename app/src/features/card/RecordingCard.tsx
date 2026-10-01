@@ -57,6 +57,7 @@ export function RecordingCard({
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const player = useRef<AudioPlayerHandle>(null);
+  const cardEl = useRef<HTMLElement>(null);
   /** Панель «Спикеры»: открыта ли, к какой строке перейти; `mounted` — уже открывали (правки живут скрытыми). */
   const [panel, setPanel] = useState<{ open: boolean; mounted: boolean; focus: { label: string; n: number } | null }>(
     { open: false, mounted: false, focus: null });
@@ -255,7 +256,7 @@ export function RecordingCard({
   }
 
   return (
-    <section className={`card${panel.open && status.kind === "ready" ? " card--with-spk" : ""}`}>
+    <section className={`card${panel.open && status.kind === "ready" ? " card--with-spk" : ""}`} ref={cardEl}>
       <CardHeader rec={rec} durationS={rec.duration_s ?? spokenUntil} speakers={speakers} people={people}
         endpoint={endpoint} avatarVersion={avatarVersion} onRename={rename} onNameSpeaker={nameSpeaker}
         onOpenSpeakers={status.kind === "ready" ? () => openSpeakers() : undefined} speakersOpen={panel.open} />
@@ -311,7 +312,7 @@ export function RecordingCard({
       <div className="card__body">{body}</div>
       {panel.mounted && status.kind === "ready" && (
         <SpeakersPanel endpoint={endpoint} recordingId={id} people={people} avatarVersion={avatarVersion}
-          open={panel.open} focus={panel.focus} version={rec.transcript} playable={playable}
+          open={panel.open} focus={panel.focus} version={rec.transcript} playable={playable} cardRef={cardEl}
           onClose={closeSpeakers} onPlay={playPhrase} onShowTurns={showTurns} onChanged={speakersChanged} />
       )}
       {status.kind !== "recording" && (hasAudio ? (

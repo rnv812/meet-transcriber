@@ -1519,7 +1519,7 @@ def _speaker_meeting(with_recordings):
     return with_recordings.name
 
 
-def test_speakers_panel_apply_and_overview(with_recordings, app, tmp_path):
+def test_speakers_panel_apply_undo_redo_and_overview(with_recordings, app, tmp_path):
     rid = _speaker_meeting(with_recordings)
     state = tray_control.TrayControl(app, queue=_Queue())
     seen = []
@@ -1535,6 +1535,12 @@ def test_speakers_panel_apply_and_overview(with_recordings, app, tmp_path):
     assert (tmp_path / "voices" / "Анна.json").exists()
     assert any(getattr(e, "kind", None) == tray_control.RECORDING_UPDATED for e in seen)
 
+    got = state.speakers_undo(rid)
+    assert got["pos"] == 0 and [r["label"] for r in got["speakers"]] == ["Спикер 1", "Спикер 2"]
+    assert not (tmp_path / "voices" / "Анна.json").exists()
+    assert state.speakers_redo(rid)["pos"] == 1
+    assert state.speakers_revert(rid, {"to_step_id": None})["pos"] == 0
+
 
 def test_speakers_panel_errors_map_to_api_statuses(with_recordings, app):
     from meet import control
@@ -1544,6 +1550,14 @@ def test_speakers_panel_errors_map_to_api_statuses(with_recordings, app):
     assert state.speakers("../чужое") == {"error": "записи нет"}
     with pytest.raises(control.BadRequest):
         state.speakers_apply(rid, {"ops": [{"type": "rename", "label": "Спикер 1", "to": "a/b"}]})
+    with pytest.raises(control.BadRequest):
+        state.speakers_undo(rid)
+    state.speakers_apply(rid, {"ops": [{"type": "rename", "label": "Спикер 1", "to": "Борис"}]})
+    data = library.read_transcript(with_recordings)
+    data["segments"][0]["speaker"] = "Кто-то"
+    library.write_transcript(with_recordings, data)
+    with pytest.raises(control.Conflict):
+        state.speakers_undo(rid)
 
 
 def test_speakers_panel_refuses_while_the_recording_is_transcribed(with_recordings, app):
@@ -1559,6 +1573,8 @@ def test_speakers_panel_refuses_while_the_recording_is_transcribed(with_recordin
     before = library.read_transcript(with_recordings)
     with pytest.raises(control.Conflict, match="расшифровка"):
         state.speakers_apply(rid, {"ops": [{"type": "rename", "label": "Спикер 1", "to": "Борис"}]})
+    with pytest.raises(control.Conflict):
+        state.speakers_undo(rid)
     assert library.read_transcript(with_recordings) == before
     assert state.speakers(rid)["speakers"]  # смотреть можно
 

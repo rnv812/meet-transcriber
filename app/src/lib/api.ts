@@ -113,6 +113,13 @@ export const getSpeakers = (ep: Endpoint, id: string) =>
 /** Набор правок одним шагом истории; `remember` — запомнить голос строки в базе. */
 export const applySpeakers = (ep: Endpoint, id: string, ops: SpeakerOpInput[], remember: Record<string, boolean>) =>
   json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/apply`, body("POST", { ops, remember }));
+export const undoSpeakers = (ep: Endpoint, id: string) =>
+  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/undo`, body("POST", {}));
+export const redoSpeakers = (ep: Endpoint, id: string) =>
+  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/redo`, body("POST", {}));
+/** К состоянию сразу после шага; null — до всех правок. */
+export const revertSpeakers = (ep: Endpoint, id: string, toStepId: string | null) =>
+  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/revert`, body("POST", { to_step_id: toStepId }));
 export const exportRecording = (ep: Endpoint, id: string, format: string) =>
   json<{ filename: string; content: string }>(ep, `/recordings/${enc(id)}/export?format=${enc(format)}`);
 

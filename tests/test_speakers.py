@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from meet import library, speakers
+from meet import library, speakers, voices
 
 SOURCE = "C:/rec/2026-09-30_16-04"
 
@@ -190,3 +190,119 @@ def test_remember_without_voice_prints_reason_but_names_are_kept(meeting, base):
                          {"Спикер 1": True}, base)
     assert got["voices_error"] and _speakers_of(meeting)[0] == "Анна"
     assert got["step"]["enrolled"] == []
+
+
+# --- отмена, повтор, история --------------------------------------------------
+
+
+def test_undo_restores_labels_and_removes_enrolled_voice_and_created_person(meeting, base):
+    _person(base, "Анна", [0.0, 0.9, 0.1])
+    before = library.read_transcript(meeting)
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Анна"},
+                             {"type": "merge", "label": "Спикер 3", "to": "Спикер 1"},
+                             {"type": "rename", "label": "Спикер 1", "to": "Новый Коллега"}],
+                   {"Спикер 2": True, "Спикер 1": True}, base)
+    assert len(_samples(base, "Анна")) == 2 and (base / "Новый Коллега.json").exists()
+    got = speakers.undo(meeting, base)
+    after = library.read_transcript(meeting)
+    assert after["segments"] == before["segments"]
+    assert after.get("names") == before.get("names")
+    assert len(_samples(base, "Анна")) == 1  # прежний образец на месте
+    assert not (base / "Новый Коллега.json").exists()  # создан этим шагом — убран
+    assert got["pos"] == 0 and len(got["history"]) == 1
+
+
+def test_undo_restores_a_replaced_old_sample_of_the_same_meeting(meeting, base):
+    _person(base, "Анна", [0.0, 0.8, 0.2], source=SOURCE)  # старый «meet enroll» той же встречи
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Анна"}],
+                   {"Спикер 2": True}, base)
+    assert [s["embedding"] for s in _samples(base, "Анна")] == [[0.0, 1.0, 0.0]]
+    speakers.undo(meeting, base)
+    assert [s["embedding"] for s in _samples(base, "Анна")] == [[0.0, 0.8, 0.2]]
+
+
+def test_undo_keeps_a_created_person_who_appears_in_another_meeting(meeting, base):
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Анна"}],
+                   {"Спикер 2": True}, base)
+    other = meeting.parent / "2026-09-29_10-00"
+    other.mkdir()
+    (other / "sys.opus").write_bytes(b"x")
+    library.write_transcript(other, {"segments": [_seg(0, 3, "Анна", "Привет.")]})
+    speakers.undo(meeting, base)
+    assert (base / "Анна.json").exists() and _samples(base, "Анна") == []
+
+
+def test_redo_reapplies_and_reenrolls_from_the_sidecar(meeting, base):
+    first = speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Анна"}],
+                           {"Спикер 2": True}, base)["step"]
+    speakers.undo(meeting, base)
+    got = speakers.redo(meeting, base)
+    assert _speakers_of(meeting)[1] == "Анна"
+    samples = _samples(base, "Анна")
+    assert len(samples) == 1 and samples[0]["label"] == "SPEAKER_01"
+    assert got["pos"] == 1 and got["history"][0]["id"] == first["id"]
+    assert got["history"][0]["enrolled"][0]["sample_id"] == samples[0]["id"]
+
+
+def test_new_apply_after_undo_truncates_the_redo_tail(meeting, base):
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 1", "to": "Анна"}], {}, base)
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Борис"}], {}, base)
+    speakers.undo(meeting, base)
+    got = speakers.apply(meeting, [{"type": "rename", "label": "Спикер 3", "to": "Вера"}], {}, base)
+    assert [o["to"] for st in got["history"] for o in st["ops"]] == ["Анна", "Вера"]
+    with pytest.raises(speakers.SpeakerError, match="повторять нечего"):
+        speakers.redo(meeting, base)
+
+
+def test_revert_walks_back_and_forward_through_history(meeting, base):
+    a = speakers.apply(meeting, [{"type": "rename", "label": "Спикер 1", "to": "Анна"}],
+                       {"Спикер 1": True}, base)["step"]
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Борис"}],
+                   {"Спикер 2": True}, base)
+    speakers.apply(meeting, [{"type": "merge", "label": "Спикер 3", "to": "Анна"}], {}, base)
+    got = speakers.revert(meeting, a["id"], base)
+    assert got["pos"] == 1 and _speakers_of(meeting)[:4] == ["Анна", "Спикер 2", "Анна", "Спикер 3"]
+    assert not (base / "Борис.json").exists() and (base / "Анна.json").exists()
+    got = speakers.revert(meeting, None, base)
+    assert got["pos"] == 0 and _speakers_of(meeting) == [s["speaker"] for s in SEGMENTS]
+    assert list(base.iterdir()) == []
+    got = speakers.revert(meeting, got["history"][-1]["id"], base)
+    assert got["pos"] == 3 and _speakers_of(meeting)[3] == "Анна"
+    with pytest.raises(speakers.SpeakerError):
+        speakers.revert(meeting, "нет-такого", base)
+
+
+def test_undo_refuses_when_the_transcript_changed_after_the_step(meeting, base):
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 1", "to": "Анна"}], {}, base)
+    data = library.read_transcript(meeting)
+    data["segments"][0]["speaker"] = "Кто-то ещё"
+    library.write_transcript(meeting, data)
+    with pytest.raises(speakers.Stale):
+        speakers.undo(meeting, base)
+    assert library.read_meta(meeting)["speaker_history_pos"] == 1
+
+
+def test_retranscription_starts_a_fresh_history(meeting, base):
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 1", "to": "Анна"}], {}, base)
+    library.write_transcript(meeting, {"version": 1, "created_at": "2026-10-01T09:00:00",
+                                       "segments": [dict(s) for s in SEGMENTS]})
+    got = speakers.overview(meeting, base)
+    assert got["history"] == [] and got["pos"] == 0
+    with pytest.raises(speakers.SpeakerError, match="отменять нечего"):
+        speakers.undo(meeting, base)
+    step = speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Борис"}],
+                          {}, base)
+    assert len(step["history"]) == 1
+
+
+def test_a_person_merge_after_the_step_makes_undo_refuse_honestly(meeting, base):
+    from meet import people
+
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Анна"}],
+                   {"Спикер 2": True}, base)
+    _person(base, "Анна Смирнова", [0.0, 0.9, 0.1])
+    people.merge("Анна", "Анна Смирнова", base, meeting.parent)
+    # Слияние людей переписало имя в транскрипте: шаг уже не отменить честно.
+    with pytest.raises(speakers.Stale):
+        speakers.undo(meeting, base)
+    assert voices.load_voices(base)["Анна Смирнова"]

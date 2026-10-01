@@ -46,6 +46,8 @@ IMPORTANT: токен принимается и в query-параметре `?to
     name_speakers(id, mapping) -> dict    имена спикеров + запись голосов в базу
     speakers(id) -> dict                  панель «Спикеры»: доли, подсказки, история
     speakers_apply(id, body) -> dict      набор правок {"ops", "remember"} одним шагом
+    speakers_undo(id) / speakers_redo(id) отменить / повторить шаг (409 — уже нельзя)
+    speakers_revert(id, body) -> dict     к состоянию после шага {"to_step_id"}
     transcribe(id, options) -> dict       поставить расшифровку в очередь
     jobs() -> dict                        очередь задач
     submit_job(body) -> dict              новая задача
@@ -761,6 +763,12 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.speakers(unquote(rid))),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers/apply$"),
      lambda h, p, rid: _server_of(h).state.speakers_apply(unquote(rid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/speakers/undo$"),
+     lambda h, p, rid: _server_of(h).state.speakers_undo(unquote(rid))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/speakers/redo$"),
+     lambda h, p, rid: _server_of(h).state.speakers_redo(unquote(rid))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/speakers/revert$"),
+     lambda h, p, rid: _server_of(h).state.speakers_revert(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/transcribe$"),
      lambda h, p, rid: _server_of(h).state.transcribe(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/summary$"),

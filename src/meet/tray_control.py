@@ -1437,6 +1437,23 @@ class TrayControl:
         return self._speakers_change(recording_id, lambda folder, voices: speakers.apply(
             folder, body.get("ops"), body.get("remember"), voices))
 
+    def speakers_undo(self, recording_id: str) -> dict:
+        from meet import speakers
+
+        return self._speakers_change(recording_id, speakers.undo)
+
+    def speakers_redo(self, recording_id: str) -> dict:
+        from meet import speakers
+
+        return self._speakers_change(recording_id, speakers.redo)
+
+    def speakers_revert(self, recording_id: str, body: dict | None) -> dict:
+        from meet import speakers
+
+        to = (body or {}).get("to_step_id")
+        return self._speakers_change(recording_id, lambda folder, voices: speakers.revert(
+            folder, str(to) if to else None, voices))
+
     def _enroll(self, folder: Path, pairs: dict) -> tuple[list, str | None]:
         """Записать голоса в базу. Сайдкара нет (расшифровка без эмбеддингов) —
         не ошибка: имена в транскрипте всё равно сохранены."""

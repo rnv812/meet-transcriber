@@ -2,19 +2,26 @@ import { createRef } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as api from "../../../lib/api";
-import type { SpeakerRow, SpeakersView } from "../../../lib/types";
+import type { SpeakerRow, SpeakersView, SpeakerStep } from "../../../lib/types";
 import { SpeakersPanel } from "./SpeakersPanel";
 
 vi.mock("../../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../../lib/api")>()),
   getSpeakers: vi.fn(),
   applySpeakers: vi.fn(),
+  undoSpeakers: vi.fn(),
+  redoSpeakers: vi.fn(),
+  revertSpeakers: vi.fn(),
 }));
 
 const ep = { base: "/api", token: null };
 const row = (label: string, extra: Partial<SpeakerRow> = {}): SpeakerRow => ({
   label, name: /^Спикер/.test(label) ? null : label, seconds: 60, share: 0.25, turns: 4,
   samples: [], has_voice: true, suggestions: [], ...extra,
+});
+const step = (id: string, extra: Partial<SpeakerStep> = {}): SpeakerStep => ({
+  id, at: "2026-09-30T17:05:00", created_people: [], enrolled: [],
+  ops: [{ type: "rename", label: "Спикер 2", from: "Спикер 2", to: "Анна Смирнова" }], ...extra,
 });
 const view = (extra: Partial<SpeakersView> = {}): SpeakersView => ({
   owner: "Вы", history: [], pos: 0,
@@ -41,7 +48,7 @@ function setup(props: Partial<Parameters<typeof SpeakersPanel>[0]> = {}) {
       <input aria-label="поле в карточке" />
       <button type="button">кнопка в карточке</button>
       <SpeakersPanel endpoint={ep} recordingId="r1" people={people} open focus={null} version={1}
-        playable {...handlers} {...props} {...p} />
+        playable cardRef={cardRef} {...handlers} {...props} {...p} />
     </section>
   );
   const utils = render(ui({}));
@@ -73,7 +80,7 @@ test("без звука ▶ у фраз неактивна", async () => {
 });
 
 test("подсказка из базы: щелчок намечает имя, «Применить» шлёт набор и запоминает голос", async () => {
-  vi.mocked(api.applySpeakers).mockResolvedValue(view({ pos: 1 }));
+  vi.mocked(api.applySpeakers).mockResolvedValue(view({ pos: 1, history: [step("s1")] }));
   const { onChanged } = setup();
   await screen.findByRole("region", { name: /^Спикер 2/ });
   await userEvent.click(within(rowOf("Спикер 2")).getByRole("button", { name: "Это Анна Смирнова, сходство 87%" }));
@@ -161,4 +168,79 @@ test("фокус на строке участника, Esc закрывает п
   await waitFor(() => expect(rowOf("Спикер 3")).toHaveFocus());
   fireEvent.keyDown(rowOf("Спикер 3"), { key: "Escape" });
   expect(onClose).toHaveBeenCalled();
+});
+
+test("«Отменить» и «Повторить»: кнопки и Ctrl+Z / Ctrl+Shift+Z в карточке, но не в поле ввода", async () => {
+  vi.mocked(api.getSpeakers).mockResolvedValue(view({ pos: 1, history: [step("s1")] }));
+  vi.mocked(api.undoSpeakers).mockResolvedValue(view({ pos: 0, history: [step("s1")] }));
+  vi.mocked(api.redoSpeakers).mockResolvedValue(view({ pos: 1, history: [step("s1")] }));
+  const { onChanged } = setup();
+  const undo = await screen.findByRole("button", { name: /Отменить/ });
+  await waitFor(() => expect(undo).toBeEnabled());
+  expect(screen.getByRole("button", { name: /Повторить/ })).toBeDisabled();
+
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "поле в карточке" }), { key: "z", code: "KeyZ", ctrlKey: true });
+  expect(api.undoSpeakers).not.toHaveBeenCalled();
+
+  fireEvent.keyDown(screen.getByRole("button", { name: "кнопка в карточке" }), { key: "z", code: "KeyZ", ctrlKey: true });
+  await waitFor(() => expect(api.undoSpeakers).toHaveBeenCalledWith(ep, "r1"));
+  await waitFor(() => expect(screen.getByRole("button", { name: /Повторить/ })).toBeEnabled());
+  expect(onChanged).toHaveBeenCalled();
+  expect(screen.getByRole("status")).toHaveTextContent("Шаг отменён");
+
+  fireEvent.keyDown(screen.getByRole("button", { name: "кнопка в карточке" }),
+    { key: "Z", code: "KeyZ", ctrlKey: true, shiftKey: true });
+  await waitFor(() => expect(api.redoSpeakers).toHaveBeenCalledWith(ep, "r1"));
+  await waitFor(() => expect(screen.getByRole("button", { name: /Отменить/ })).toBeEnabled());
+  await userEvent.click(screen.getByRole("button", { name: /Отменить/ }));
+  expect(api.undoSpeakers).toHaveBeenCalledTimes(2);
+});
+
+test("закрытая панель Ctrl+Z не перехватывает", async () => {
+  vi.mocked(api.getSpeakers).mockResolvedValue(view({ pos: 1, history: [step("s1")] }));
+  setup({ open: false });
+  await waitFor(() => expect(api.getSpeakers).toHaveBeenCalled());
+  fireEvent.keyDown(screen.getByTestId("card"), { key: "z", code: "KeyZ", ctrlKey: true });
+  expect(api.undoSpeakers).not.toHaveBeenCalled();
+});
+
+test("история изменений: шаги словами, текущий отмечен, возврат к любому состоянию", async () => {
+  const history = [
+    step("s1", { enrolled: [{ person: "Анна Смирнова", sample_id: "x", label: "SPEAKER_01", created: true }] }),
+    step("s2", { at: "2026-09-30T17:20:00", ops: [
+      { type: "merge", label: "Спикер 3", from: "Спикер 3", to: "Анна Смирнова", into: "Спикер 2" }] }),
+  ];
+  vi.mocked(api.getSpeakers).mockResolvedValue(view({ pos: 1, history }));
+  vi.mocked(api.revertSpeakers).mockResolvedValueOnce(view({ pos: 2, history }))
+    .mockResolvedValueOnce(view({ pos: 0, history }));
+  setup();
+  await userEvent.click(await screen.findByRole("button", { name: /История изменений \(2\)/ }));
+  const list = within(screen.getByRole("region", { name: "История изменений" })).getByRole("list");
+  const items = within(list).getAllByRole("listitem");
+  expect(items.map((li) => li.textContent)).toEqual([
+    "Исходное состояниеВернуть к этому состоянию",
+    expect.stringContaining("Спикер 2 → Анна Смирнова · голос запомнен: Анна Смирновасейчас"),
+    expect.stringContaining("Спикер 3 объединён со спикером «Анна Смирнова» (отменено)Вернуть к этому состоянию"),
+  ]);
+  expect(items[1]).toHaveAttribute("aria-current", "step");
+  await userEvent.click(within(items[2]!).getByRole("button", { name: "Вернуть к этому состоянию" }));
+  expect(api.revertSpeakers).toHaveBeenCalledWith(ep, "r1", "s2");
+  await waitFor(() => expect(within(list).getAllByRole("listitem")[2]).toHaveAttribute("aria-current", "step"));
+  await userEvent.click(within(within(list).getAllByRole("listitem")[0]!).getByRole("button",
+    { name: "Вернуть к этому состоянию" }));
+  expect(api.revertSpeakers).toHaveBeenLastCalledWith(ep, "r1", null);
+});
+
+test("после отмены наметки исчезнувших строк отбрасываются", async () => {
+  vi.mocked(api.getSpeakers).mockResolvedValue(view({ pos: 1, history: [step("s1")] }));
+  vi.mocked(api.undoSpeakers).mockResolvedValue(view({
+    pos: 0, history: [step("s1")], speakers: [row("Спикер 1"), row("Спикер 4")] }));
+  setup();
+  await screen.findByRole("region", { name: /^Спикер 2/ });
+  await userEvent.click(within(rowOf("Спикер 1")).getByRole("button", { name: "Назначить…" }));
+  await userEvent.type(screen.getByRole("combobox"), "Глеб{Enter}");
+  await userEvent.click(within(rowOf("Спикер 2")).getByRole("button", { name: /Это Анна Смирнова/ }));
+  expect(screen.getByText("Будет изменено: Спикер 1 → Глеб, Спикер 2 → Анна Смирнова")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /Отменить/ }));
+  await waitFor(() => expect(screen.getByText("Будет изменено: Спикер 1 → Глеб")).toBeInTheDocument());
 });

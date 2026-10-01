@@ -1,5 +1,5 @@
 import {
-  ApiError, applySpeakers, avatarUrl, deleteRecording, getSpeakers, putHotwords,
+  ApiError, applySpeakers, avatarUrl, deleteRecording, getSpeakers, putHotwords, redoSpeakers, revertSpeakers, undoSpeakers,
 } from "./api";
 import * as api from "./api";
 import { FakeEventSource } from "../test/setup";
@@ -21,15 +21,21 @@ const okFetch = () => {
   return f;
 };
 
-test("панель «Спикеры»: обзор и набор правок", async () => {
+test("панель «Спикеры»: обзор, набор правок, отмена, повтор и возврат к шагу", async () => {
   const f = okFetch();
   await getSpeakers(ep, "a b");
   await applySpeakers(ep, "a b", [{ type: "rename", label: "Спикер 2", to: "Анна" }], { "Спикер 2": true });
+  await undoSpeakers(ep, "a b");
+  await redoSpeakers(ep, "a b");
+  await revertSpeakers(ep, "a b", null);
   const calls = f.mock.calls.map(([url, init]) => [url, (init as RequestInit).method ?? "GET", (init as RequestInit).body]);
   expect(calls).toEqual([
     ["http://h/recordings/a%20b/speakers", "GET", undefined],
     ["http://h/recordings/a%20b/speakers/apply", "POST",
       JSON.stringify({ ops: [{ type: "rename", label: "Спикер 2", to: "Анна" }], remember: { "Спикер 2": true } })],
+    ["http://h/recordings/a%20b/speakers/undo", "POST", "{}"],
+    ["http://h/recordings/a%20b/speakers/redo", "POST", "{}"],
+    ["http://h/recordings/a%20b/speakers/revert", "POST", JSON.stringify({ to_step_id: null })],
   ]);
 });
 

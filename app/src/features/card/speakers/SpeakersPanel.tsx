@@ -3,11 +3,15 @@
  * (▶ у фраз), на кого из базы голосов похож — и назначение имён.
  *
  * Правки копятся в панели (`staging.ts`) и применяются одним набором — это
- * шаг истории встречи (резидент хранит его в meta.json записи).
+ * шаг истории встречи. Шаги отменяются и повторяются (Ctrl+Z / Ctrl+Shift+Z,
+ * пока фокус в карточке и не в поле ввода), из истории можно вернуться к
+ * любому состоянию. Отмена убирает и голоса, которые шаг запомнил в базе.
  */
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { applySpeakers, getSpeakers, type Endpoint } from "../../../lib/api";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import {
+  applySpeakers, getSpeakers, redoSpeakers, revertSpeakers, undoSpeakers, type Endpoint,
+} from "../../../lib/api";
 import { clock, errorText, plural } from "../../../lib/format";
 import { isUnnamed } from "../../../lib/speakers";
 import type { SpeakerRow, SpeakersView } from "../../../lib/types";
@@ -15,6 +19,7 @@ import { Avatar } from "../../../ui/Avatar";
 import { Button } from "../../../ui/Button";
 import { HelpTip, TipLine } from "../../../ui/HelpTip";
 import type { PersonColor } from "../Turns";
+import { HistoryList, HistoryTools, useUndoKeys } from "./SpeakerHistory";
 import {
   changeText, finalOf, preview, prune, rememberDefault, toOps, type Change, type Staged,
 } from "./staging";
@@ -32,7 +37,7 @@ type Pick = { label: string; mode: "assign" | "merge" };
 type Option = { key: string; text: string; hint?: string; change: Change; person?: PersonColor };
 
 export function SpeakersPanel({
-  endpoint, recordingId, people, avatarVersion, open, focus, version, playable,
+  endpoint, recordingId, people, avatarVersion, open, focus, version, playable, cardRef,
   onClose, onPlay, onShowTurns, onChanged,
 }: {
   endpoint: Endpoint;
@@ -45,11 +50,13 @@ export function SpeakersPanel({
   /** Меняется вместе с расшифровкой: перечитать спикеров. */
   version: unknown;
   playable: boolean;
+  /** Карточка: Ctrl+Z / Ctrl+Shift+Z работают, пока фокус в ней. */
+  cardRef: RefObject<HTMLElement | null>;
   onClose: () => void;
   onPlay: (start: number, until: number) => void;
   /** «Показать все реплики» этого спикера в расшифровке. */
   onShowTurns: (label: string) => void;
-  /** Правки применены: перечитать запись и базу голосов. */
+  /** Правки применены, отменены или повторены: перечитать запись и базу голосов. */
   onChanged: () => void;
 }) {
   const [view, setView] = useState<SpeakersView | null>(null);
@@ -86,6 +93,8 @@ export function SpeakersPanel({
 
   const order = useMemo(() => view?.speakers.map((r) => r.label) ?? [], [view]);
   const owner = view?.owner ?? "Вы";
+  const history = view?.history ?? [];
+  const pos = view?.pos ?? 0;
   const pending = Object.keys(staged).length > 0;
 
   const run = useCallback(async (call: () => Promise<SpeakersView>, done?: string) => {
@@ -108,6 +117,16 @@ export function SpeakersPanel({
       setBusy(false);
     }
   }, [show, onChanged]);
+
+  const canUndo = pos > 0 && !busy;
+  const canRedo = pos < history.length && !busy;
+  const undo = useCallback(() => {
+    if (pos > 0) void run(() => undoSpeakers(endpoint, recordingId), "Шаг отменён.");
+  }, [pos, run, endpoint, recordingId]);
+  const redo = useCallback(() => {
+    if (pos < history.length) void run(() => redoSpeakers(endpoint, recordingId), "Шаг повторён.");
+  }, [pos, history.length, run, endpoint, recordingId]);
+  useUndoKeys(open, cardRef, undo, redo);
 
   // Клик по участнику: прокрутить к его строке и поставить на неё фокус.
   useEffect(() => {
@@ -155,6 +174,8 @@ export function SpeakersPanel({
     }, "Изменения применены. Итоги не пересчитываются автоматически.");
   };
   const discard = () => { setStaged({}); setRemember({}); setPick(null); };
+  const revert = (stepId: string | null) =>
+    void run(() => revertSpeakers(endpoint, recordingId, stepId), "Состояние восстановлено.");
 
   const onPanelKey = (e: KeyboardEvent) => {
     if (e.key !== "Escape" || e.defaultPrevented) return;
@@ -169,6 +190,7 @@ export function SpeakersPanel({
       <div className="spk__head">
         <h3 className="spk__title">Спикеры встречи</h3>
         <div className="spk__tools">
+          <HistoryTools canUndo={canUndo} canRedo={canRedo} onUndo={undo} onRedo={redo} />
           <button type="button" className="spk__close" onClick={onClose} aria-label="Закрыть панель спикеров"
             title="Закрыть (Esc)">×</button>
         </div>
@@ -191,6 +213,7 @@ export function SpeakersPanel({
             onRemember={(v) => setRemember((r) => ({ ...r, [row.label]: v }))}
             onPlay={onPlay} onShowTurns={onShowTurns} />
         ))}
+        {view && <HistoryList history={history} pos={pos} busy={busy} onRevert={revert} />}
       </div>
       {pending && (
         <div className="spk__foot">

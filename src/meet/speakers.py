@@ -401,3 +401,122 @@ def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
     meta = library.update_meta(folder, record)
     return {"step": _public([step])[0], "history": _public(meta[HISTORY]), "pos": meta[POS],
             "voices_error": "; ".join(errors) or None}
+
+
+# --- отмена и повтор ----------------------------------------------------------
+
+STALE = ("Расшифровку изменили после этого шага (переименовали человека в базе голосов "
+         "или перерасшифровали запись) — отменить его уже нельзя")
+
+
+def _check(segments: list[dict], step: dict, side: str) -> None:
+    """Реплики стоят там, где их оставил (side="to") или застал (side="from") шаг."""
+    if step.get("count") != len(segments):
+        raise Stale(STALE)
+    for d in step.get("segments") or []:
+        for i in d.get("idx") or []:
+            if not (0 <= i < len(segments)) or segments[i].get("speaker") != d.get(side):
+                raise Stale(STALE)
+
+
+def _move(folder: Path, data: dict, step: dict, forward: bool) -> None:
+    side_from, side_to = ("from", "to") if forward else ("to", "from")
+    segments = data["segments"]
+    _check(segments, step, side_from)
+    for d in step.get("segments") or []:
+        for i in d.get("idx") or []:
+            segments[i]["speaker"] = d.get(side_to)
+    _set_names(data, step.get("names_after") if forward else step.get("names_before"))
+    library.write_transcript(folder, data)
+
+
+def _in_library(root: Path, name: str) -> bool:
+    for folder in library.recording_folders(root):
+        for s in (library.read_transcript(folder) or {}).get("segments") or []:
+            if isinstance(s, dict) and s.get("speaker") == name:
+                return True
+    return False
+
+
+def _unenroll(folder: Path, step: dict, voices_dir: Path) -> None:
+    """Убрать образцы шага (вернув вытесненные) и людей, которых он создал и у
+    которых больше ничего нет: ни образцов, ни встреч, ни аватара."""
+    for e in reversed(step.get("enrolled") or []):
+        left = voices.remove_sample(e["sample_id"], e["person"], voices_dir, e.get("replaced"))
+        if not e.get("created"):
+            continue
+        for person, count in left.items():
+            if count == 0 and not people.avatar_path(person, voices_dir).exists() \
+                    and not _in_library(folder.parent, person):
+                (voices_dir / f"{person}.json").unlink(missing_ok=True)
+
+
+def _reenroll(folder: Path, step: dict, voices_dir: Path) -> str | None:
+    sidecar = _sidecar(folder)
+    by_label = {str(e.get("label") or e.get("display")): e
+                for e in (sidecar or {}).get("speakers") or [] if isinstance(e, dict)}
+    fresh, errors = [], []
+    for e in step.get("enrolled") or []:
+        entry = by_label.get(e.get("label"))
+        if entry is None or not isinstance(entry.get("embedding"), list):
+            errors.append(f"«{e['person']}»: {NO_VOICE}")
+            continue
+        try:
+            fresh += _enroll(folder, sidecar, e["person"], [entry], voices_dir)
+        except (OSError, ValueError) as err:
+            errors.append(f"«{e['person']}»: голос не сохранён ({err})")
+    step["enrolled"] = fresh
+    step["created_people"] = sorted({e["person"] for e in fresh if e["created"]})
+    return "; ".join(errors) or None
+
+
+def _save(folder: Path, data: dict, steps: list[dict], pos: int) -> None:
+    library.update_meta(folder, lambda meta: {**meta, HISTORY: steps, POS: pos,
+                                              BASE: data.get("created_at")})
+
+
+def undo(folder: Path, voices_dir: Path) -> dict:
+    data = _transcript(folder)
+    steps, pos = _history(folder, data)
+    if pos == 0:
+        raise SpeakerError("отменять нечего")
+    step = steps[pos - 1]
+    _move(folder, data, step, forward=False)
+    _unenroll(folder, step, voices_dir)
+    _save(folder, data, steps, pos - 1)
+    return {"history": _public(steps), "pos": pos - 1, "voices_error": None}
+
+
+def redo(folder: Path, voices_dir: Path) -> dict:
+    data = _transcript(folder)
+    steps, pos = _history(folder, data)
+    if pos >= len(steps):
+        raise SpeakerError("повторять нечего")
+    step = steps[pos]
+    _move(folder, data, step, forward=True)
+    error = _reenroll(folder, step, voices_dir)
+    _save(folder, data, steps, pos + 1)
+    return {"history": _public(steps), "pos": pos + 1, "voices_error": error}
+
+
+def revert(folder: Path, to_step_id: str | None, voices_dir: Path) -> dict:
+    """К состоянию сразу после шага `to_step_id` (None — до всех правок):
+    отменяя или повторяя шаги по одному."""
+    data = _transcript(folder)
+    steps, pos = _history(folder, data)
+    if to_step_id in (None, "", "start"):
+        target = 0
+    else:
+        ids = [s.get("id") for s in steps]
+        if to_step_id not in ids:
+            raise SpeakerError("такого шага в истории нет")
+        target = ids.index(to_step_id) + 1
+    result = {"history": _public(steps), "pos": pos, "voices_error": None}
+    errors = []
+    while pos != target:
+        result = undo(folder, voices_dir) if pos > target else redo(folder, voices_dir)
+        pos = result["pos"]
+        if result.get("voices_error"):
+            errors.append(result["voices_error"])
+    result["voices_error"] = "; ".join(errors) or None
+    return result
