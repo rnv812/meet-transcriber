@@ -9,7 +9,8 @@
 
 * **Загрузка никогда не пишет на диск.** Резидентный трей читает файл на ходу, а
   ручные правки не должны исчезать из-за того, что их кто-то прочитал. Миграция
-  старого формата происходит в памяти.
+  старого формата происходит в памяти. Единственное исключение — токен HF:
+  найденный в файле, он переносится в диспетчер учётных данных и стирается.
 * **Запись сохраняет неизвестные ключи.** В файле может лежать то, чего этот код
   ещё не знает (правка руками, настройка из будущей версии) — `save()` сливает
   свои значения в прочитанный словарь, а не заменяет его.
@@ -24,6 +25,7 @@
 import json
 import os
 import sys
+import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -452,11 +454,11 @@ class Integrations:
     # нужно — выключает, и файл не создаётся вовсе.
     gpu_marker: bool = True
     gpu_marker_path: Path | None = None
-    # Токен Hugging Face: нужен только гейтед-модели диаризации. Хранится в
-    # config.json рядом с настройками — не идеал, но честнее прежнего: раньше
-    # он жил переменной среды пользователя, которая тоже лежит открытым
-    # текстом. Переменная продолжает работать и имеет приоритет, если поле
-    # пустое (см. models.token).
+    # Токен Hugging Face из config.json — только запасной путь: его место —
+    # диспетчер учётных данных (meet.credentials), куда load() переносит его
+    # при первой встрече. В файле он остаётся, лишь если диспетчер недоступен.
+    # Наружу (to_raw, GET /settings) не отдаётся никогда; пишут его только
+    # write_hf_token/drop_hf_token.
     hf_token: str = ""
 
     @classmethod
@@ -474,7 +476,6 @@ class Integrations:
             "gpu_marker_path": str(self.gpu_marker_path)
             if self.gpu_marker_path
             else None,
-            "hf_token": self.hf_token,
         }
 
 
@@ -655,29 +656,148 @@ def read_raw(path: Path | None = None) -> dict:
 
 
 def load(path: Path | None = None) -> Settings:
-    """Настройки из файла. Файла нет — дефолты. На диск ничего не пишет."""
-    return Settings.from_raw(read_raw(path))
+    """Настройки из файла. Файла нет — дефолты.
+
+    На диск не пишет — с одним исключением: токен HF, найденный в config.json
+    приложения, переносится в диспетчер учётных данных и из файла стирается
+    (см. _migrate_hf_token). Секрет открытым текстом важнее правила."""
+    raw = read_raw(path)
+    if _is_app_config(path):
+        raw = _migrate_hf_token(raw)
+    return Settings.from_raw(raw)
 
 
-def save(settings: Settings, path: Path | None = None) -> None:
-    """Записать настройки, сохранив неизвестные ключи из файла.
+def _write_raw(target: Path, data: dict) -> None:
+    """Атомарная запись словаря в файл настроек.
 
-    Пишем через временный файл и `os.replace`: резидент читает `config.json`
-    в любой момент, и он не должен увидеть половину записи.
-    """
-    target = Path(path or paths.config_path())
-    merged = dict(read_raw(target))
-    merged.update(settings.to_raw())
-    # post_record_hook больше не читается (его место — hooks.post_record), но и
-    # не удаляется: файл остаётся понятным старой версии кода.
-    if "post_record_hook" in merged:
-        merged["post_record_hook"] = settings.hooks.post_record
+    Через временный файл и `os.replace`: резидент читает `config.json` в любой
+    момент, и он не должен увидеть половину записи."""
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(".json.tmp")
     tmp.write_text(
-        json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     os.replace(tmp, target)
+
+
+def save(settings: Settings, path: Path | None = None) -> None:
+    """Записать настройки, сохранив неизвестные ключи из файла."""
+    target = Path(path or paths.config_path())
+    with _FILE_LOCK:
+        merged = dict(read_raw(target))
+        merged.update(settings.to_raw())
+        # Integrations.to_raw токена не содержит: запасная копия токена
+        # (диспетчер недоступен) приходит из файла выше и так и сохраняется.
+        # post_record_hook больше не читается (его место — hooks.post_record), но
+        # и не удаляется: файл остаётся понятным старой версии кода.
+        if "post_record_hook" in merged:
+            merged["post_record_hook"] = settings.hooks.post_record
+        _write_raw(target, merged)
+
+
+# --- токен Hugging Face в файле: только запасной путь ------------------------
+
+# Чтение-правка-запись config.json из разных потоков резидента (PATCH из окна,
+# миграция при загрузке) — под одним замком, иначе одна правка теряет другую.
+_FILE_LOCK = threading.RLock()
+
+MIGRATED_LINE = "токен HF перенесён в диспетчер учётных данных"
+KEYRING_UNAVAILABLE_LINE = (
+    "диспетчер учётных данных недоступен — токен остаётся в config.json"
+)
+# Диспетчер не принял токен: до конца процесса не пробуем снова (load зовут
+# часто) и строку в журнал пишем один раз.
+_MIGRATION_FAILED = False
+
+
+def _reset_secret_migration() -> None:
+    """Для тестов: забыть, что диспетчер уже отказал."""
+    global _MIGRATION_FAILED
+    _MIGRATION_FAILED = False
+
+
+def _is_app_config(path) -> bool:
+    """Файл настроек приложения, а не чужой (тест, утилита сравнения)."""
+    if path is None:
+        return True
+    try:
+        return Path(path).resolve() == paths.config_path().resolve()
+    except OSError:
+        return False
+
+
+def _log(line: str) -> None:
+    """Строка в watch.log — журнал резидента (под pythonw stderr не видно)."""
+    try:
+        from meet import watch
+
+        watch.WatchLog(watch.default_log_path())(line)
+    except Exception:
+        pass  # журнал не должен мешать работе
+
+
+def _hf_token_in(raw: dict) -> str:
+    value = _section(raw, "integrations").get("hf_token")
+    return str(value).strip() if value else ""
+
+
+def _without_hf_token(raw: dict) -> dict:
+    integrations = dict(_section(raw, "integrations"))
+    integrations.pop("hf_token", None)
+    return {**raw, "integrations": integrations}
+
+
+def _migrate_hf_token(raw: dict) -> dict:
+    """Перенести токен HF из config.json в диспетчер учётных данных.
+
+    Молча: ни уведомлений, ни вопросов — одна строка в watch.log. Диспетчер
+    недоступен — файл не трогаем, токен работает оттуда (credentials читает
+    его последним), строка в журнале — одна на процесс."""
+    global _MIGRATION_FAILED
+    if _MIGRATION_FAILED or not _hf_token_in(raw):
+        return raw
+    from meet import credentials
+
+    with _FILE_LOCK:
+        target = paths.config_path()
+        current = read_raw(target)
+        token = _hf_token_in(current)
+        if not token:  # другой поток уже перенёс
+            return current
+        try:
+            credentials.keyring_set(token)
+        except credentials.Unavailable:
+            _MIGRATION_FAILED = True
+            _log(KEYRING_UNAVAILABLE_LINE)
+            return raw
+        cleaned = _without_hf_token(current)
+        try:
+            _write_raw(target, cleaned)
+        except OSError:
+            # Токен уже в диспетчере; стереть копию не вышло — попробуем при
+            # следующей загрузке. Работать это не мешает.
+            return raw
+    _log(MIGRATED_LINE)
+    return cleaned
+
+
+def drop_hf_token(path: Path | None = None) -> None:
+    """Стереть копию токена из файла настроек, если она там есть."""
+    target = Path(path or paths.config_path())
+    with _FILE_LOCK:
+        raw = read_raw(target)
+        if "hf_token" in _section(raw, "integrations"):
+            _write_raw(target, _without_hf_token(raw))
+
+
+def write_hf_token(token: str, path: Path | None = None) -> None:
+    """Запасной путь: диспетчер недоступен — токен в файл настроек."""
+    target = Path(path or paths.config_path())
+    with _FILE_LOCK:
+        raw = read_raw(target)
+        integrations = dict(_section(raw, "integrations"))
+        integrations["hf_token"] = token
+        _write_raw(target, {**raw, "integrations": integrations})
 
 
 # Секции, которые умеет обновлять patch(). Выводятся из самой схемы, а не
@@ -695,6 +815,7 @@ def patch(updates: dict, path: Path | None = None) -> Settings:
     остальные поля секции. Неизвестные секции игнорируются — валидацию имён
     делает вызывающий (API), а не файл.
     """
+    updates = _route_hf_token(updates, path)
     current = load(path)
     changed = {}
     for name in PATCHABLE_SECTIONS:
@@ -707,3 +828,21 @@ def patch(updates: dict, path: Path | None = None) -> Settings:
     updated = replace(current, **changed) if changed else current
     save(updated, path)
     return updated
+
+
+def _route_hf_token(updates: dict, path: Path | None) -> dict:
+    """`integrations.hf_token` из PATCH уходит в диспетчер учётных данных, а
+    не в файл: окно настроек до мастера токена шлёт его именно так.
+    Пустая строка — забыть токен."""
+    integrations = updates.get("integrations") if isinstance(updates, dict) else None
+    if not isinstance(integrations, dict) or "hf_token" not in integrations:
+        return updates
+    from meet import credentials
+
+    rest = dict(integrations)
+    token = str(rest.pop("hf_token") or "").strip()
+    if token:
+        credentials.set_hf_token(token, path)
+    else:
+        credentials.clear_hf_token(path)
+    return {**updates, "integrations": rest}

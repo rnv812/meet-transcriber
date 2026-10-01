@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from meet.asr import Segment
 from meet.diarize import Diarization
@@ -322,3 +323,80 @@ def test_write_sidecar_stores_absolute_source(tmp_path, monkeypatch):
     source = read_sidecar(sidecar_path(out_md))["source"]
     assert Path(source).is_absolute()
     assert Path(source) == (tmp_path / "recordings" / "x").resolve()
+
+
+# --- расшифровка без токена Hugging Face ------------------------------------
+
+
+def test_diarize_wav_without_token_returns_none(tmp_path):
+    """Нет токена — диаризации нет, но и SystemExit нет: расшифровка идёт дальше."""
+    from meet.diarize import NO_TOKEN_NOTE, diarize_wav
+
+    assert diarize_wav(tmp_path / "x.wav") is None
+    NO_TOKEN_NOTE.encode("cp866")  # печатается в консоль: без тире и ёлочек
+
+
+def _no_token_pipeline(monkeypatch):
+    """Настоящий diarize_wav (токена нет — conftest), фейковое распознавание."""
+    import meet.transcribe as tr
+
+    monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
+    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h: (
+        [Segment(0.0, 1.0, "привет")] if "sys" in str(p) or "audio" in str(p)
+        else [Segment(2.0, 3.0, "здравствуйте")]))
+    return tr
+
+
+def test_two_track_without_token_labels_tracks_and_flags_transcript(monkeypatch, tmp_path):
+    from meet import library
+
+    tr = _no_token_pipeline(monkeypatch)
+    folder = tmp_path / "2026-10-01_10-00"
+    folder.mkdir()
+    (folder / "sys.opus").write_bytes(b"x")
+    (folder / "mic.opus").write_bytes(b"x")
+    out = tr.transcribe(str(folder), align=False)
+    data = library.read_transcript(folder)
+    assert data["diarization"] == "skipped_no_token"
+    assert [(s["speaker"], s["text"]) for s in data["segments"]] == [
+        ("Собеседник", "привет"), ("Вы", "здравствуйте")]
+    assert "Собеседник" in out.read_text(encoding="utf-8")
+    assert not list(folder.glob("*_speakers.json"))  # без диаризации нет и голосов
+    assert library.describe(folder).to_raw()["diarization"] == "skipped_no_token"
+
+
+def test_import_without_token_is_one_interlocutor(monkeypatch, tmp_path):
+    from meet import library
+
+    tr = _no_token_pipeline(monkeypatch)
+    folder = tmp_path / "2026-10-01_10-00_import"
+    folder.mkdir()
+    (folder / "source.mp4").write_bytes(b"x")
+    tr.transcribe(str(folder), align=False)
+    data = library.read_transcript(folder)
+    assert data["diarization"] == "skipped_no_token"
+    assert {s["speaker"] for s in data["segments"]} == {"Собеседник"}
+
+
+def test_no_token_skips_voice_matching(monkeypatch, tmp_path):
+    import meet.voices as voices
+
+    tr = _no_token_pipeline(monkeypatch)
+    monkeypatch.setattr(voices, "load_voices",
+                        lambda *a, **k: pytest.fail("матчинг голосов без диаризации"))
+    src = tmp_path / "a.wav"
+    src.write_bytes(b"x")
+    segments, diar, names = tr._transcribe_single(src, None, None, align=False)
+    assert diar is None and names == {}
+    assert [s.speaker for s in segments] == ["Собеседник"]
+
+
+def test_with_token_transcript_has_no_skip_flag(monkeypatch, tmp_path):
+    """С токеном поведение прежнее: поля-пометки нет."""
+    from meet import library
+
+    stages, _ = _progress_stages(monkeypatch, tmp_path, folder=True)
+    data = library.read_transcript(tmp_path)
+    assert "diarization" not in data
+    assert library.describe(tmp_path).to_raw()["diarization"] is None

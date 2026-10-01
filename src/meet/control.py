@@ -656,6 +656,10 @@ _ROUTES = {
     ("GET", "/jobs"): lambda h, p: _server_of(h).state.jobs(),
     ("GET", "/engine"): lambda h, p: _server_of(h).state.engine(),
     ("GET", "/models"): lambda h, p: _server_of(h).state.models(),
+    ("GET", "/hf/status"): lambda h, p: _server_of(h).state.hf_status(),
+    ("POST", "/hf/token"): lambda h, p: _server_of(h).state.set_hf_token(h._body()),
+    ("DELETE", "/hf/token"): lambda h, p: _server_of(h).state.clear_hf_token(),
+    ("POST", "/hf/check"): lambda h, p: _server_of(h).state.check_hf_token(h._body()),
     ("POST", "/models/download"): lambda h, p: _server_of(h).state.download_model(
         h._body()
     ),

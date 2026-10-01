@@ -213,6 +213,9 @@ class TrayControl:
         self._levels: dict = {}
         self._devices_cache: dict | None = None
         self._devices_at = 0.0
+        # Последняя проверка доступа к Hugging Face (без токена): окно рисует
+        # её по GET /hf/status, не дёргая сеть на каждый показ.
+        self._hf_check: dict | None = None
         self.bus.subscribe(self._remember_levels)
         tray.on_saved = self._on_saved
         # Живой режим — тоже запись, но дочерним процессом: резидент его
@@ -700,6 +703,53 @@ class TrayControl:
         from meet import models as models_module
 
         return models_module.state(selected=settings.load().asr.model)
+
+    # --- токен Hugging Face ------------------------------------------------
+    #
+    # Проверка — сетевой запрос до 10 с; идёт прямо в потоке запроса: сервер
+    # многопоточный, остальные запросы не ждут. Токен не уходит ни в ответ,
+    # ни в журнал.
+
+    def hf_status(self) -> dict:
+        from meet import credentials
+
+        source = credentials.hf_token_source()
+        return {"configured": source is not None, "source": source,
+                "check": self._hf_check}
+
+    def set_hf_token(self, body: dict | None) -> dict:
+        """Проверить токен и сохранить его, только если доступ есть."""
+        from meet import credentials, models as models_module
+
+        token = (body or {}).get("token") if isinstance(body, dict) else None
+        if not isinstance(token, str) or not token.strip():
+            raise _bad_request("пустой токен")
+        token = token.strip()
+        result = models_module.check_hf_access(token)
+        self._hf_check = result
+        if result.get("ok"):
+            where = credentials.set_hf_token(token)
+            self.tray.log(f"токен HF сохранён ({where})")
+        return result
+
+    def check_hf_token(self, body: dict | None = None) -> dict:
+        """Перепроверить сохранённый токен (условия могли принять с тех пор).
+        Тело не нужно; принимается, чтобы прочитать его из keep-alive сокета."""
+        from meet import credentials, models as models_module
+
+        token = credentials.get_hf_token()
+        if not token:
+            raise _bad_request("токен Hugging Face не задан")
+        self._hf_check = models_module.check_hf_access(token)
+        return self._hf_check
+
+    def clear_hf_token(self) -> dict:
+        from meet import credentials
+
+        credentials.clear_hf_token()
+        self._hf_check = None
+        self.tray.log("токен HF удалён")
+        return self.hf_status()
 
     def download_model(self, body: dict | None = None) -> dict:
         """Скачать модель задачей: это гигабайты, и резидент должен оставаться

@@ -3,8 +3,6 @@
 векторы косинус-совместимы с центроидами базы voices/) + тихий матч против базы.
 Работает без диаризации: один сегмент — один эмбеддинг — одно имя."""
 
-import os
-
 import numpy as np
 
 from meet.diarize import DIARIZATION_MODEL
@@ -23,10 +21,12 @@ def _load_embedder():
         PretrainedSpeakerEmbedding,
     )
 
+    from meet import credentials
+
     model = PretrainedSpeakerEmbedding(
         {"checkpoint": DIARIZATION_MODEL, "subfolder": "embedding"},
         device=torch.device("cuda"),
-        token=os.environ.get("HF_TOKEN"),
+        token=credentials.get_hf_token(),
     )
 
     def embed(audio: np.ndarray) -> np.ndarray:

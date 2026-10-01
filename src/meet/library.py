@@ -44,6 +44,9 @@ class Recording:
     source: str = "record"
     # mtime транскрипта: окно сравнивает его с концом упавшей перерасшифровки.
     transcript_at: float | None = None
+    # Пометка транскрипта о диаризации: "skipped_no_token" — расшифровано без
+    # разделения на спикеров (не было токена Hugging Face). None — как обычно.
+    diarization: str | None = None
 
     def to_raw(self) -> dict:
         return {
@@ -57,6 +60,7 @@ class Recording:
             "title": self.title,
             "source": self.source,
             "transcript_at": self.transcript_at,
+            "diarization": self.diarization,
         }
 
 
@@ -251,9 +255,12 @@ def describe(folder: Path) -> Recording | None:
         return None
     transcript = read_transcript(folder)
     title = None
+    diarization = None
     if isinstance(transcript, dict):
         raw_title = transcript.get("title")
         title = str(raw_title) if raw_title else None
+        flag = transcript.get("diarization")
+        diarization = str(flag) if isinstance(flag, str) and flag else None
     if meta.get("title"):
         title = str(meta["title"])
     source = meta.get("source") if meta.get("source") in SOURCES else "record"
@@ -272,6 +279,7 @@ def describe(folder: Path) -> Recording | None:
         title=title,
         source=source,
         transcript_at=transcript_at,
+        diarization=diarization,
     )
 
 

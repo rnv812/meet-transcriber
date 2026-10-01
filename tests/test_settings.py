@@ -222,9 +222,18 @@ def test_patch_covers_every_section_of_the_schema():
 
 def test_patch_saves_integrations(tmp_path):
     f = tmp_path / "config.json"
-    cfg = settings.patch({"integrations": {"hf_token": "hf_secret"}}, f)
-    assert cfg.integrations.hf_token == "hf_secret"
-    assert settings.load(f).integrations.hf_token == "hf_secret"
+    cfg = settings.patch({"integrations": {"gpu_marker": False}}, f)
+    assert cfg.integrations.gpu_marker is False
+    assert settings.load(f).integrations.gpu_marker is False
+
+
+def test_patch_sends_hf_token_to_credentials_not_file(tmp_path, memory_keyring):
+    """Токен из PATCH уходит в диспетчер учётных данных; в файл — нет."""
+    f = tmp_path / "config.json"
+    settings.patch({"integrations": {"hf_token": "hf_secret", "gpu_marker": False}}, f)
+    assert memory_keyring.store[("meet", "huggingface")] == "hf_secret"
+    assert "hf_secret" not in f.read_text(encoding="utf-8")
+    assert settings.load(f).integrations.gpu_marker is False
 
 
 def test_asr_device_and_cpu_model_defaults_and_roundtrip():

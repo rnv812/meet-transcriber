@@ -174,8 +174,10 @@ CLI, автозапись) продолжают работать без изме
     pip install -e .
 
 Также нужны: ffmpeg (`winget install Gyan.FFmpeg`) и токен HuggingFace
-в переменной `HF_TOKEN` (принять условия модели на hf.co:
-pyannote/speaker-diarization-community-1).
+(принять условия модели на hf.co: pyannote/speaker-diarization-community-1).
+Токен задаётся в окне приложения и хранится в диспетчере учётных данных
+Windows; переменная `HF_TOKEN` тоже работает. Без токена расшифровка идёт, но
+без разделения на спикеров: «Собеседник» и «Вы».
 
 Если в консоли кракозябры вместо русского — выполнить `set PYTHONUTF8=1`
 (или `setx PYTHONUTF8 1`), на сам транскрипт это не влияет.

@@ -963,3 +963,101 @@ def test_name_speakers_accepts_raw_label_keys(control_state, tmp_path, monkeypat
     stored = library.read_transcript(folder)["segments"]
     assert [s["speaker"] for s in stored] == ["Спикер 1", "Матвей"]
     assert seen == {"Спикер 2": "Матвей"}
+
+
+# --- токен Hugging Face ------------------------------------------------------
+
+HF = "hf_TRAY_secret_456"
+OK = {"ok": True, "reason": "ok", "message": "Доступ есть"}
+BAD = {"ok": False, "reason": "invalid_token", "message": "Неверный токен"}
+
+
+def test_hf_status_without_token(control_state):
+    assert control_state.hf_status() == {"configured": False, "source": None, "check": None}
+
+
+def test_hf_token_saved_only_when_check_passes(control_state, monkeypatch, memory_keyring):
+    from meet import models
+
+    seen = []
+    monkeypatch.setattr(models, "check_hf_access",
+                        lambda token, **kw: seen.append(token) or BAD)
+    assert control_state.set_hf_token({"token": f" {HF} "}) == BAD
+    assert seen == [HF]
+    assert memory_keyring.store == {}
+    assert control_state.hf_status() == {"configured": False, "source": None, "check": BAD}
+
+    monkeypatch.setattr(models, "check_hf_access", lambda token, **kw: OK)
+    assert control_state.set_hf_token({"token": HF}) == OK
+    assert memory_keyring.store[("meet", "huggingface")] == HF
+    status = control_state.hf_status()
+    assert status == {"configured": True, "source": "keyring", "check": OK}
+    assert HF not in json.dumps(status)
+
+
+def test_hf_token_empty_is_bad_request(control_state):
+    from meet import control
+
+    for body in ({}, {"token": ""}, {"token": "   "}, {"token": 5}, None):
+        with pytest.raises(control.BadRequest):
+            control_state.set_hf_token(body)
+
+
+def test_hf_token_delete(control_state, monkeypatch, memory_keyring):
+    from meet import models
+
+    monkeypatch.setattr(models, "check_hf_access", lambda token, **kw: OK)
+    control_state.set_hf_token({"token": HF})
+    assert control_state.clear_hf_token() == {
+        "configured": False, "source": None, "check": None}
+    assert memory_keyring.store == {}
+
+
+def test_hf_check_rechecks_stored_token(control_state, monkeypatch):
+    from meet import control, credentials, models
+
+    with pytest.raises(control.BadRequest):
+        control_state.check_hf_token()
+    credentials.set_hf_token(HF)
+    seen = []
+    monkeypatch.setattr(models, "check_hf_access",
+                        lambda token, **kw: seen.append(token) or OK)
+    assert control_state.check_hf_token() == OK
+    assert seen == [HF]
+    assert control_state.hf_status()["check"] == OK
+
+
+def test_hf_routes_over_http(app, monkeypatch, memory_keyring):
+    import urllib.error
+    import urllib.request
+
+    from meet import control, models
+
+    monkeypatch.setattr(models, "check_hf_access", lambda token, **kw: OK)
+    srv = control.ControlServer(tray_control.TrayControl(app, queue=_Queue()))
+    srv.start(publish=False)
+
+    def call(method, path, body=None):
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{srv.port}{path}", data=data, method=method,
+            headers={"Authorization": f"Bearer {srv.token}",
+                     "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, json.loads(r.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read().decode("utf-8"))
+
+    try:
+        assert call("GET", "/hf/status") == (
+            200, {"configured": False, "source": None, "check": None})
+        assert call("POST", "/hf/token", {"token": ""})[0] == 400
+        assert call("POST", "/hf/token", {"token": HF}) == (200, OK)
+        status = call("GET", "/hf/status")
+        assert status == (200, {"configured": True, "source": "keyring", "check": OK})
+        assert call("POST", "/hf/check", {}) == (200, OK)
+        assert call("DELETE", "/hf/token")[1]["configured"] is False
+    finally:
+        srv.stop()
+    assert memory_keyring.store == {}

@@ -19,19 +19,19 @@ def _emit(payload: dict) -> None:
 
 
 def _apply_hf_token() -> None:
-    """Токен HF из настроек — в переменную среды, если её ещё нет.
+    """Токен HF (meet.credentials: диспетчер учётных данных) — в переменную
+    среды, если её ещё нет.
 
-    Все загрузчики HF (faster-whisper, pyannote, transformers) читают его из
-    окружения; в настройках он есть, но подпроцессу не наследуется. Явный env
-    приоритетнее — не перетираем."""
+    Загрузчики HF (faster-whisper, transformers) читают его из окружения, а
+    там его нет: он в диспетчере. Явный env приоритетнее — не перетираем."""
     import os
 
     if os.environ.get("HF_TOKEN"):
         return
     try:
-        from meet import models
+        from meet import credentials
 
-        token = models.token()
+        token = credentials.get_hf_token()
         if token:
             os.environ["HF_TOKEN"] = token
             os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", token)

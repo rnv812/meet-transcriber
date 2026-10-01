@@ -1,4 +1,3 @@
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,11 +28,13 @@ class Diarization:
     overlaps: list[tuple[float, float]] | None = None
 
 
-_TOKEN_HELP = (
-    "Нет токена HuggingFace (нужен для моделей диаризации pyannote).\n"
-    "1) Токен: https://hf.co/settings/tokens\n"
-    "2) Принять условия: https://hf.co/pyannote/speaker-diarization-community-1\n"
-    "3) setx HF_TOKEN hf_... и перезапустить терминал."
+# Без токена диаризации нет, но расшифровка идёт: реплики подписываются по
+# дорожкам («Собеседник» / «Вы»), а транскрипт помечается skipped_no_token.
+# Печатается в консоль: только ASCII-пунктуация, cp866 не кодирует тире.
+NO_TOKEN_NOTE = (
+    "Нет токена Hugging Face: расшифровка без разделения на спикеров. Токен: "
+    "https://hf.co/settings/tokens, условия модели: "
+    "https://hf.co/pyannote/speaker-diarization-community-1"
 )
 
 
@@ -59,16 +60,22 @@ def diarize_wav(
     min_speakers: int | None = None,
     max_speakers: int | None = None,
     exclusive: bool = False,
-) -> Diarization:
+) -> Diarization | None:
     """Diarization (интервалы + эмбеддинги + регионы нахлёста) по записи.
+
+    Нет токена Hugging Face (модель гейтед) — None: вызывающий расшифровывает
+    без разделения на спикеров, а не падает.
 
     По умолчанию — overlap-aware раскладка: turn говорящего непрерывен,
     перебивание лежит поверх, зоны нахлёста возвращаются отдельно.
     exclusive=True — прежняя упрощённая раскладка («в каждый момент говорит
     ровно один»), без регионов нахлёста; путь отката (--no-overlap)."""
-    token = os.environ.get("HF_TOKEN")
+    from meet import credentials
+
+    token = credentials.get_hf_token()
     if not token:
-        raise SystemExit(_TOKEN_HELP)
+        print(NO_TOKEN_NOTE)
+        return None
 
     import torch
     from pyannote.audio import Pipeline

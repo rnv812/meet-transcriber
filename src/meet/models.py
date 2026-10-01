@@ -116,23 +116,93 @@ def size_on_disk(repo_id: str) -> int:
 
 
 def token() -> str | None:
-    """Токен Hugging Face: из настроек, иначе из переменной среды.
+    """Токен Hugging Face — из `meet.credentials` (диспетчер учётных данных,
+    затем переменные среды, затем запасная копия в config.json)."""
+    from meet import credentials
 
-    Переменная остаётся рабочей — так живут нынешние запуски CLI, и отбирать
-    этот путь незачем."""
+    return credentials.get_hf_token()
+
+
+# --- проверка доступа к гейтед-модели ---------------------------------------
+
+HF_BASE_URL = "https://huggingface.co"
+HF_CHECK_TIMEOUT_S = 10
+# Что проверяем: модель диаризации — единственная гейтед-модель каталога.
+GATED_REPO = "pyannote/speaker-diarization-community-1"
+GATED_PROBE_FILE = "config.yaml"
+
+HF_MESSAGES = {
+    "ok": "Доступ есть",
+    "invalid_token": "Неверный токен",
+    "terms_not_accepted": (
+        "Условия модели не приняты — откройте страницу модели и нажмите "
+        "«Agree and access repository»"
+    ),
+    "network": "Нет связи с huggingface.co",
+}
+
+
+def _hf_result(reason: str) -> dict:
+    return {"ok": reason == "ok", "reason": reason, "message": HF_MESSAGES[reason]}
+
+
+def _hf_status(url: str, token: str, method: str, timeout: float) -> int:
+    """HTTP-статус запроса к HF. Сетевая ошибка — OSError (URLError — её
+    наследник); текст исключений urllib заголовков не содержит.
+
+    По редиректу не идём: resolve отправляет на CDN, и заголовок с токеном
+    туда уходить не должен. Сам редирект уже значит «файл отдают»."""
+    import urllib.error
+    import urllib.request
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
+
+    opener = urllib.request.build_opener(NoRedirect())
+    request = urllib.request.Request(
+        url, method=method,
+        headers={"Authorization": f"Bearer {token}", "User-Agent": "meet"},
+    )
     try:
-        from meet import settings
+        with opener.open(request, timeout=timeout) as response:
+            return response.status
+    except urllib.error.HTTPError as e:
+        e.close()
+        return e.code
 
-        value = settings.load().integrations.hf_token
-        if value:
-            return value
-    except Exception:
-        pass
-    for env in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
-        value = os.environ.get(env)
-        if value and value.strip():
-            return value.strip()
-    return None
+
+def check_hf_access(token: str, base_url: str = HF_BASE_URL,
+                    timeout: float = HF_CHECK_TIMEOUT_S) -> dict:
+    """Проверить токен и доступ к модели диаризации.
+
+    `GET /api/whoami-v2`: 401/403 — неверный токен. `HEAD .../resolve/main/
+    config.yaml` гейтед-модели: 403 (или 401 — так HF отвечает на гейт) —
+    условия не приняты; 2xx/3xx — доступ есть. Нет сети, таймаут, 5xx — «нет
+    связи». Ответ: `{"ok", "reason", "message"}`; токена в нём нет ни в каком
+    виде — и в исключениях тоже: наружу ничего не пробрасывается.
+    """
+    token = str(token or "").strip()
+    # Пробел или перевод строки в токене — инъекция заголовка; urllib упал бы
+    # ValueError, в тексте которого — сам заголовок с токеном.
+    if not token or not token.isascii() or not token.isprintable() or " " in token:
+        return _hf_result("invalid_token")
+    base = base_url.rstrip("/")
+    try:
+        status = _hf_status(f"{base}/api/whoami-v2", token, "GET", timeout)
+        if status in (401, 403):
+            return _hf_result("invalid_token")
+        if not 200 <= status < 300:
+            return _hf_result("network")
+        status = _hf_status(
+            f"{base}/{GATED_REPO}/resolve/main/{GATED_PROBE_FILE}", token, "HEAD", timeout)
+    except Exception:  # сеть, таймаут, TLS — без текста: он не нужен и рискован
+        return _hf_result("network")
+    if status in (401, 403):
+        return _hf_result("terms_not_accepted")
+    if 200 <= status < 400:
+        return _hf_result("ok")
+    return _hf_result("network")
 
 
 def state(selected: str | None = None) -> dict:

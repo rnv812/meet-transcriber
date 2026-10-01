@@ -132,15 +132,15 @@ def _apply_hf_token() -> None:
     faster-whisper качает веса своим huggingface_hub и наш токен не принимает
     параметром — берёт из окружения. Без него HF шлёт предупреждение и режет
     скорость загрузки. Ставим только если переменной ещё нет: явный env
-    приоритетнее настройки."""
+    приоритетнее диспетчера учётных данных."""
     import os
 
     if os.environ.get("HF_TOKEN"):
         return
     try:
-        from meet import models
+        from meet import credentials
 
-        token = models.token()
+        token = credentials.get_hf_token()
         if token:
             os.environ["HF_TOKEN"] = token
             os.environ.setdefault("HUGGING_FACE_HUB_TOKEN", token)
