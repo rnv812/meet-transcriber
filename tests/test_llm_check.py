@@ -50,6 +50,9 @@ def test_codex_not_found(monkeypatch):
 
 
 def test_claude_not_logged_in(monkeypatch):
+    # Проверка Claude снимает ANTHROPIC_API_KEY с окружения процесса —
+    # настоящий ключ pytest-процесса трогать нельзя.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(detect, "find_claude", lambda: "C:/claude.exe")
     monkeypatch.setattr(detect, "logged_in", lambda name, p: (False, "loggedIn: false"))
     res = asyncio.run(check.check("claude-code"))
@@ -60,6 +63,7 @@ def test_claude_not_logged_in(monkeypatch):
 def test_claude_ok_via_check_auth(monkeypatch):
     from meet.llm import claude
 
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(detect, "find_claude", lambda: "C:/claude.exe")
     monkeypatch.setattr(detect, "logged_in", lambda name, p: (True, None))
 

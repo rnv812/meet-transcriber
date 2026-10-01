@@ -49,5 +49,6 @@ def test_check_auth_tolerates_api_key(monkeypatch):
 
 
 def test_check_auth_without_cli(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(claude, "find_cli", lambda: None)
     assert "не найден" in asyncio.run(claude.check_auth())

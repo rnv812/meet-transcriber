@@ -17,22 +17,36 @@ from urllib.parse import urlparse
 
 from meet.settings import DEFAULT_LOCAL_BASE_URL
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+_WINDOWS = sys.platform == "win32"
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if _WINDOWS else 0
+_BATCH_SUFFIXES = (".cmd", ".bat")
 
 
 def find_claude() -> str | None:
-    """Явный путь к CLI: shutil.which('claude') на Windows находит
-    bash-скрипт, который CreateProcess не исполняет (agent-sdk issue #252)."""
-    for name in ("claude.cmd", "claude.exe", "claude"):
-        p = shutil.which(name)
-        if p:
-            return p
+    """Путь к Claude Code CLI, который примет claude-agent-sdk.
+
+    На Windows — только claude.exe: SDK отказывается запускать .cmd/.bat-шим
+    от npm (`_reject_windows_batch_cli`), а `shutil.which('claude')` может
+    найти bash-скрипт, который CreateProcess не исполняет (agent-sdk #252).
+    Такая установка считается «не найден» — `auto` перейдёт к следующему.
+    """
+    if not _WINDOWS:
+        return shutil.which("claude")
+    p = shutil.which("claude.exe")
+    if p and not p.lower().endswith(_BATCH_SUFFIXES):
+        return p
+    home = os.environ.get("USERPROFILE")
+    if home:
+        exe = Path(home) / ".local" / "bin" / "claude.exe"
+        if exe.exists():
+            return str(exe)
     return None
 
 
 def find_codex() -> str | None:
-    """Codex CLI в PATH, иначе — место установки по умолчанию на Windows."""
-    for name in ("codex.cmd", "codex.exe", "codex"):
+    """Codex CLI в PATH (родной codex.exe раньше npm-шима), иначе — место
+    установки по умолчанию на Windows."""
+    for name in ("codex.exe", "codex.cmd", "codex"):
         p = shutil.which(name)
         if p:
             return p

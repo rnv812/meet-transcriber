@@ -5,15 +5,16 @@ from meet.llm import detect
 
 
 def test_find_codex_prefers_path(monkeypatch):
-    seen = []
-
-    def which(name):
-        seen.append(name)
-        return "C:/npm/codex.cmd" if name == "codex.cmd" else None
-
-    monkeypatch.setattr(detect.shutil, "which", which)
+    monkeypatch.setattr(
+        detect.shutil, "which",
+        lambda name: "C:/npm/codex.cmd" if name == "codex.cmd" else None)
     assert detect.find_codex() == "C:/npm/codex.cmd"
-    assert seen[0] == "codex.cmd"
+
+
+def test_find_codex_prefers_exe_over_cmd(monkeypatch):
+    found = {"codex.cmd": "C:/npm/codex.cmd", "codex.exe": "C:/bin/codex.exe"}
+    monkeypatch.setattr(detect.shutil, "which", lambda name: found.get(name))
+    assert detect.find_codex() == "C:/bin/codex.exe"
 
 
 def test_find_codex_falls_back_to_localappdata(monkeypatch, tmp_path):
@@ -32,10 +33,41 @@ def test_find_codex_none(monkeypatch, tmp_path):
     assert detect.find_codex() is None
 
 
-def test_find_claude_order(monkeypatch):
-    found = {"claude.exe": "C:/x/claude.exe", "claude": "C:/x/claude"}
+def test_find_claude_order(monkeypatch, tmp_path):
+    monkeypatch.setattr(detect, "_WINDOWS", True)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    found = {"claude.cmd": "C:/npm/claude.cmd", "claude.exe": "C:/x/claude.exe",
+             "claude": "C:/x/claude"}
     monkeypatch.setattr(detect.shutil, "which", lambda name: found.get(name))
     assert detect.find_claude() == "C:/x/claude.exe"
+
+
+def test_find_claude_cmd_only_is_not_found(monkeypatch, tmp_path):
+    # SDK отказывается запускать .cmd-шим на Windows — это «не найден».
+    monkeypatch.setattr(detect, "_WINDOWS", True)
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    found = {"claude.cmd": "C:/npm/claude.cmd", "claude": "C:/npm/claude.cmd"}
+    monkeypatch.setattr(detect.shutil, "which", lambda name: found.get(name))
+    assert detect.find_claude() is None
+
+
+def test_find_claude_native_install_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(detect, "_WINDOWS", True)
+    exe = tmp_path / ".local" / "bin" / "claude.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"")
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(
+        detect.shutil, "which",
+        lambda name: "C:/npm/claude.cmd" if name == "claude.cmd" else None)
+    assert detect.find_claude() == str(exe)
+
+
+def test_find_claude_posix(monkeypatch):
+    monkeypatch.setattr(detect, "_WINDOWS", False)
+    monkeypatch.setattr(detect.shutil, "which",
+                        lambda name: "/usr/bin/claude" if name == "claude" else None)
+    assert detect.find_claude() == "/usr/bin/claude"
 
 
 def test_local_reachable_true_and_false():

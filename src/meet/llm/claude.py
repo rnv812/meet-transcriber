@@ -152,7 +152,8 @@ async def check_auth() -> str | None:
     ANTHROPIC_API_KEY не ошибка: он убирается из окружения (подписка важнее)."""
     drop_api_key()
     if find_cli() is None:
-        return "не найден Claude Code CLI (claude.cmd) в PATH"
+        return ("не найден Claude Code CLI (claude.exe); npm-шим claude.cmd "
+                "не подходит — нужна родная установка Claude Code")
     reply = await run(
         "Ответь одним словом: ок",
         system_prompt="Отвечай одним словом.",

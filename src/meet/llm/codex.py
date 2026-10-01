@@ -47,12 +47,16 @@ def _workdir(allowed_dirs, cwd) -> str:
 
 
 def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float) -> AgentReply:
-    with tempfile.TemporaryDirectory(prefix="meet-codex-") as tmp:
+    # ignore_cleanup_errors: убитый по таймауту Codex может ещё держать файл.
+    with tempfile.TemporaryDirectory(prefix="meet-codex-",
+                                     ignore_cleanup_errors=True) as tmp:
         out_file = Path(tmp) / "last-message.txt"
         cmd = [
             exe, "exec",
             "--sandbox", "read-only",
             "--skip-git-repo-check",
+            # Транскрипты встреч не оседают в ~/.codex/sessions.
+            "--ephemeral",
             "-C", workdir,
             "--output-last-message", str(out_file),
             "-",

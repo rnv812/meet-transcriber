@@ -71,6 +71,7 @@ def test_success(monkeypatch, tmp_path):
     assert cmd[0] == "C:/codex.exe" and cmd[1] == "exec"
     assert cmd[cmd.index("--sandbox") + 1] == "read-only"
     assert "--skip-git-repo-check" in cmd
+    assert "--ephemeral" in cmd
     assert cmd[-1] == "-"
     assert call.input.decode("utf-8") == "Ты помощник.\n\nВопрос?"
 

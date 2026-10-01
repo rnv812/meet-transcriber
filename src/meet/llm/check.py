@@ -26,7 +26,7 @@ async def _check_claude() -> str | None:
     claude.drop_api_key()
     path = detect.find_claude()
     if path is None:
-        return "не найден Claude Code CLI (claude)"
+        return "не найден Claude Code CLI (claude.exe)"
     ok, why = detect.logged_in("claude-code", path)
     if not ok:
         return f"не авторизован: {why}"
