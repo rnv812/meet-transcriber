@@ -67,10 +67,12 @@ fn main() {
             autostart::set_autostart
         ])
         .setup(|app| {
-            // Движок, собранный из другого колеса той же версии, обслуживается
-            // в фоне; резидент ждёт конца, чтобы не подняться из старого кода.
+            // Движок, собранный из другого колеса той же версии, и движок
+            // новой версии после обновления приложения ставятся в фоне;
+            // резидент ждёт конца, чтобы не подняться из старого кода.
             let upkeep = engine::plan_upkeep(app.handle());
-            Supervisor::start(app.handle(), upkeep.holds_resident());
+            let engine_upkeep = upkeep.holds_resident();
+            Supervisor::start(app.handle(), engine_upkeep);
             // Автозапуск, снятый деинсталлятором прежней версии, — вернуть.
             autostart::restore_at_startup(app.handle());
             tray::build(app)?;
@@ -85,7 +87,7 @@ fn main() {
             } else if autostart::autostarted(&args) {
                 logs::shell_log!("автозапуск при входе в Windows: только трей");
             } else {
-                windows::open_wizard_on_first_run(app.handle());
+                windows::open_wizard_on_first_run(app.handle(), engine_upkeep);
             }
             Ok(())
         })

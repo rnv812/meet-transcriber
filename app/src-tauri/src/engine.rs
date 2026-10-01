@@ -277,24 +277,48 @@ pub enum Upkeep {
     /// установщик той же версии): переставить только пакет meet — секунды,
     /// всё остальное уже на месте.
     RefreshWheel { profile: String },
+    /// Движка этой версии нет, а движок прежней версии стоял (обновление
+    /// приложения): поставить новый тем же профилем, в фоне и без мастера —
+    /// пакеты почти все в кэше uv. Прежний удалится, когда новый заработает.
+    Upgrade { profile: String },
 }
 
 impl Upkeep {
     /// Резидент ждёт конца обслуживания: иначе он поднялся бы из старого
-    /// кода, чтобы через секунды быть погашенным.
+    /// кода, чтобы через секунды быть погашенным, или встал бы в «движок не
+    /// установлен», пока тот ставится.
     pub fn holds_resident(&self) -> bool {
         !matches!(self, Upkeep::Nothing)
     }
 }
 
+/// Профиль движка прежней версии из `engine\<версия>`: окружение с
+/// резидентом и маркером своей версии (законченная установка). Из
+/// нескольких — установленный последним.
+pub fn previous_profile(engine_root: &Path, current: &str) -> Option<String> {
+    stale_envs(engine_root, current)
+        .into_iter()
+        .filter(|env| launcher(env).is_file())
+        .filter_map(|env| {
+            let marker = read_marker(&env)?;
+            let name = env.file_name()?.to_string_lossy().into_owned();
+            (marker.version.eq_ignore_ascii_case(&name) && known_profile(&marker.profile))
+                .then_some(marker)
+        })
+        .max_by(|a, b| a.installed_at.cmp(&b.installed_at))
+        .map(|marker| marker.profile)
+}
+
 /// Что делать с движком при старте. `installed` — профиль и хэш колеса из
 /// маркера установленного движка этой версии (`None` — не установлен),
-/// `bundled_wheel` — хэш колеса в ресурсах (`None` — ресурсов нет, dev).
+/// `bundled_wheel` — хэш колеса в ресурсах (`None` — ресурсов нет, dev),
+/// `previous` — профиль движка прежней версии (`previous_profile`).
 /// Только в релизе: dev-сборка движок не трогает.
 pub fn upkeep_decision(
     release: bool,
     installed: Option<(&str, Option<&str>)>,
     bundled_wheel: Option<&str>,
+    previous: Option<&str>,
 ) -> Upkeep {
     if !release {
         return Upkeep::Nothing;
@@ -307,6 +331,12 @@ pub fn upkeep_decision(
                 profile: profile.to_string(),
             }
         }
+        (None, Some(_)) => match previous.filter(|profile| known_profile(profile)) {
+            Some(profile) => Upkeep::Upgrade {
+                profile: profile.to_string(),
+            },
+            None => Upkeep::Nothing,
+        },
         _ => Upkeep::Nothing,
     }
 }
@@ -1016,12 +1046,17 @@ pub fn plan_upkeep(app: &AppHandle) -> Upkeep {
     let bundled = resource_dir_with(app, UV)
         .and_then(|resources| find_wheel(&resources, &version))
         .and_then(|wheel| file_sha256(&wheel).ok());
+    let previous = marker
+        .is_none()
+        .then(|| previous_profile(&engine_root(&data), &version))
+        .flatten();
     upkeep_decision(
         !cfg!(debug_assertions),
         marker
             .as_ref()
             .map(|marker| (marker.profile.as_str(), marker.wheel_sha256.as_deref())),
         bundled.as_deref(),
+        previous.as_deref(),
     )
 }
 
@@ -1034,6 +1069,10 @@ pub fn run_upkeep_in_background(app: &AppHandle, upkeep: Upkeep) {
         Upkeep::RefreshWheel { profile } => {
             shell_log!("движок собран из другого колеса meet — переставляю пакет meet");
             (profile, InstallMode::RefreshWheel)
+        }
+        Upkeep::Upgrade { profile } => {
+            shell_log!("движка этой версии нет, у прежней был ({profile}) — ставлю новый в фоне");
+            (profile, InstallMode::Full { fresh: false })
         }
     };
     let handle = app.clone();
@@ -1344,37 +1383,106 @@ mod tests {
         };
         // rc1 → финальная 0.1.0: маркер без хэша, колесо в ресурсах другое.
         assert_eq!(
-            upkeep_decision(true, Some(("cuda", None)), Some("new")),
+            upkeep_decision(true, Some(("cuda", None)), Some("new"), None),
             refresh("cuda")
         );
         assert_eq!(
-            upkeep_decision(true, Some(("cpu", Some("old"))), Some("new")),
+            upkeep_decision(true, Some(("cpu", Some("old"))), Some("new"), None),
             refresh("cpu")
         );
         // То же колесо — делать нечего.
         assert_eq!(
-            upkeep_decision(true, Some(("cuda", Some("new"))), Some("new")),
+            upkeep_decision(true, Some(("cuda", Some("new"))), Some("new"), None),
             Upkeep::Nothing
         );
-        // Движка нет — его ставит мастер.
-        assert_eq!(upkeep_decision(true, None, Some("new")), Upkeep::Nothing);
+        // Движка нет и не было — его ставит мастер.
+        assert_eq!(
+            upkeep_decision(true, None, Some("new"), None),
+            Upkeep::Nothing
+        );
         // Колесо в ресурсах не нашлось/не прочлось — не трогаем.
         assert_eq!(
-            upkeep_decision(true, Some(("cuda", Some("old"))), None),
+            upkeep_decision(true, Some(("cuda", Some("old"))), None, None),
             Upkeep::Nothing
         );
         // Неизвестный профиль в маркере — не угадываем.
         assert_eq!(
-            upkeep_decision(true, Some(("rocm", None)), Some("new")),
+            upkeep_decision(true, Some(("rocm", None)), Some("new"), None),
             Upkeep::Nothing
         );
         // Dev-сборка движок не обслуживает.
         assert_eq!(
-            upkeep_decision(false, Some(("cuda", None)), Some("new")),
+            upkeep_decision(false, Some(("cuda", None)), Some("new"), None),
             Upkeep::Nothing
         );
         assert!(refresh("cuda").holds_resident());
         assert!(!Upkeep::Nothing.holds_resident());
+    }
+
+    #[test]
+    fn upgrade_installs_the_new_engine_with_the_previous_profile() {
+        let upgrade = |profile: &str| Upkeep::Upgrade {
+            profile: profile.into(),
+        };
+        // 0.1.0 → 0.2.0: движка 0.2.0 нет, у 0.1.0 был CPU-движок.
+        assert_eq!(
+            upkeep_decision(true, None, Some("w"), Some("cpu")),
+            upgrade("cpu")
+        );
+        assert!(upgrade("cuda").holds_resident());
+        // Свой движок стоит — прежний не важен.
+        assert_eq!(
+            upkeep_decision(true, Some(("cuda", Some("w"))), Some("w"), Some("cpu")),
+            Upkeep::Nothing
+        );
+        // Без колеса в ресурсах ставить нечем; dev не обслуживает.
+        assert_eq!(
+            upkeep_decision(true, None, None, Some("cuda")),
+            Upkeep::Nothing
+        );
+        assert_eq!(
+            upkeep_decision(false, None, Some("w"), Some("cuda")),
+            Upkeep::Nothing
+        );
+        assert_eq!(
+            upkeep_decision(true, None, Some("w"), Some("rocm")),
+            Upkeep::Nothing
+        );
+    }
+
+    #[test]
+    fn previous_profile_comes_from_a_finished_install_of_another_version() {
+        let tree = TempDir::new("previous");
+        let marker =
+            |version: &str, profile: &str, at: &str| marker_json(version, profile, at, Some("h"));
+        assert_eq!(previous_profile(&tree.0, "0.3.0"), None, "папки engine нет");
+        // Недостроенный 0.1.0 (без маркера) и 0.2.0 без резидента — не в счёт.
+        tree.file(r"0.1.0\Scripts\meet-tray.exe", "");
+        tree.file(
+            r"0.2.0\installed.json",
+            &marker("0.2.0", "cuda", "2026-10-02"),
+        );
+        tree.file(
+            r"python\installed.json",
+            &marker("python", "cuda", "2026-10-03"),
+        );
+        assert_eq!(previous_profile(&tree.0, "0.3.0"), None);
+        // Законченный 0.1.0 — его профиль.
+        tree.file(
+            r"0.1.0\installed.json",
+            &marker("0.1.0", "cpu", "2026-10-01"),
+        );
+        assert_eq!(previous_profile(&tree.0, "0.3.0").as_deref(), Some("cpu"));
+        // Два законченных — последний установленный.
+        tree.file(r"0.2.0\Scripts\meet-tray.exe", "");
+        assert_eq!(previous_profile(&tree.0, "0.3.0").as_deref(), Some("cuda"));
+        // Текущая версия — не «прежняя»; маркер чужой версии в папке — тоже.
+        assert_eq!(previous_profile(&tree.0, "0.2.0").as_deref(), Some("cpu"));
+        tree.file(
+            r"0.1.0\installed.json",
+            &marker("0.0.9", "cpu", "2026-10-09"),
+        );
+        assert_eq!(previous_profile(&tree.0, "0.2.0"), None);
     }
 
     #[test]

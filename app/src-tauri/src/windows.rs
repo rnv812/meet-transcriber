@@ -525,18 +525,30 @@ pub fn mark_wizard_done() -> Result<(), String> {
 
 /// Открыть ли окно с мастером при старте: только в установленном приложении
 /// (в dev резидент из .venv репозитория), пока движка нет и «Пропустить» не
-/// нажимали. Окно само решит показать мастер по тем же правилам.
-pub fn wizard_at_startup(release: bool, engine_installed: bool, wizard_done: bool) -> bool {
-    release && !engine_installed && !wizard_done
+/// нажимали. Окно само решит показать мастер по тем же правилам. Движок,
+/// который оболочка ставит в фоне сама (обновление приложения,
+/// `engine::Upkeep`), — не повод для мастера.
+pub fn wizard_at_startup(
+    release: bool,
+    engine_installed: bool,
+    wizard_done: bool,
+    engine_upkeep: bool,
+) -> bool {
+    release && !engine_installed && !wizard_done && !engine_upkeep
 }
 
 /// Первый запуск: сразу окно, а не молчаливая иконка в трее без движка.
 /// Из `setup` (главный поток).
-pub fn open_wizard_on_first_run(app: &AppHandle) {
+pub fn open_wizard_on_first_run(app: &AppHandle, engine_upkeep: bool) {
     let data = resident::data_dir();
     let version = app.package_info().version.to_string();
     let installed = engine::is_installed(&engine::env_dir(&data, &version), &version);
-    if wizard_at_startup(!cfg!(debug_assertions), installed, wizard_done(&data)) {
+    if wizard_at_startup(
+        !cfg!(debug_assertions),
+        installed,
+        wizard_done(&data),
+        engine_upkeep,
+    ) {
         shell_log!("движок {version} не установлен — открываю мастер первого запуска");
         open_main(app, None, None);
     }
@@ -809,13 +821,15 @@ mod tests {
 
     #[test]
     fn wizard_opens_at_startup_only_in_release_without_engine_and_without_skip() {
-        assert!(wizard_at_startup(true, false, false));
+        assert!(wizard_at_startup(true, false, false, false));
         // Движок есть — обычный запуск в трей.
-        assert!(!wizard_at_startup(true, true, false));
+        assert!(!wizard_at_startup(true, true, false, false));
         // «Пропустить» уже нажимали — мастер сам не открывается никогда.
-        assert!(!wizard_at_startup(true, false, true));
+        assert!(!wizard_at_startup(true, false, true, false));
         // dev: резидент из .venv репозитория, мастер не мешает.
-        assert!(!wizard_at_startup(false, false, false));
+        assert!(!wizard_at_startup(false, false, false, false));
+        // Обновление приложения: движок ставится в фоне сам — без мастера.
+        assert!(!wizard_at_startup(true, false, false, true));
     }
 
     #[test]
