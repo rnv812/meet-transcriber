@@ -23,6 +23,13 @@ export const Turns = memo(function Turns({
   return (
     <div className="turns">
       {turns.map((t, i) => {
+        if (t.kind === "break") {
+          return (
+            <div className="turn-break" role="separator" aria-label={t.texts.join(" ")} key={i}>
+              <span className="turn-break__text">{t.texts.join(" ")}</span>
+            </div>
+          );
+        }
         const unnamed = isUnnamed(t.speaker);
         const color = colors.get(t.speaker);
         // Как в поиске (lib/search.ts, prepare): подсветка — по тексту в NFC.

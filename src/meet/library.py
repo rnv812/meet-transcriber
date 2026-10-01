@@ -29,7 +29,7 @@ TRACK_STEMS = ("sys", "mic", "source")
 # Что принимаем на импорт: всё это декодирует ffmpeg.
 IMPORT_EXTS = (".mp3", ".mp4", ".m4a", ".wav", ".ogg", ".opus", ".webm", ".mkv",
                ".flac")
-SOURCES = ("record", "auto", "import", "live")
+SOURCES = ("record", "auto", "import", "live", "merge")
 
 
 @dataclass
@@ -53,6 +53,10 @@ class Recording:
     # Выгрузка в базу знаний (meta.json): {"path", "at", "files"} и, если
     # последняя не удалась, "error". Не выгружалась — None.
     kb_export: dict | None = None
+    # Объединённая встреча (meet.merge): {"parts", "state", "deleted",
+    # "kb_left"} — из скольких записей, удалены ли исходные и какие их папки в
+    # базе знаний остались нетронутыми. Не объединённая — None.
+    merge: dict | None = None
 
     def to_raw(self) -> dict:
         return {
@@ -68,6 +72,7 @@ class Recording:
             "transcript_at": self.transcript_at,
             "diarization": self.diarization,
             "kb_export": self.kb_export,
+            "merge": self.merge,
         }
 
 
@@ -258,8 +263,9 @@ def _tracks(folder: Path) -> dict:
 
 
 def _recognised(tracks: dict, meta: dict) -> bool:
-    # без дорожек это не запись (импорт — запись ещё до копии)
-    return bool(tracks) or meta.get("source") == "import"
+    # без дорожек это не запись (импорт — запись ещё до копии, объединение —
+    # пока собирается звук)
+    return bool(tracks) or meta.get("source") in ("import", "merge")
 
 
 def is_recording(folder: Path) -> bool:
@@ -327,7 +333,22 @@ def describe(folder: Path) -> Recording | None:
         transcript_at=transcript_at,
         diarization=diarization,
         kb_export=meta["kb_export"] if isinstance(meta.get("kb_export"), dict) else None,
+        merge=_merge_summary(meta),
     )
+
+
+def _merge_summary(meta: dict) -> dict | None:
+    info = meta.get("merge")
+    if meta.get("source") != "merge" or not isinstance(info, dict):
+        return None
+    sources = meta.get("merged_from")
+    kb_left = info.get("kb_exported")
+    return {
+        "parts": len(sources) if isinstance(sources, list) else 0,
+        "state": str(info.get("state") or "pending"),
+        "deleted": bool(info.get("deleted")),
+        "kb_left": [str(p) for p in kb_left] if isinstance(kb_left, list) else [],
+    }
 
 
 def listing(root: Path, limit: int = 200) -> list[dict]:
@@ -358,7 +379,8 @@ def search(root: Path, q: str, limit: int = 200) -> list[dict]:
         haystack = [card.get("title") or "", str(transcript.get("title") or "")]
         segments = transcript.get("segments")
         if isinstance(segments, list):
-            haystack += [str(s.get("text") or "") for s in segments if isinstance(s, dict)]
+            haystack += [str(s.get("text") or "") for s in segments
+                         if isinstance(s, dict) and s.get("kind") != "break"]
         if any(q in part.lower() for part in haystack):
             found.append(card)
             if len(found) >= limit:
@@ -393,6 +415,8 @@ def segments_to_raw(segments, speakers: dict | None = None,
                 "speaker": s.speaker,
                 "text": s.text,
                 "uncertain": bool(getattr(s, "uncertain", False)),
+                # отметка перерыва объединённой встречи (meet.merge)
+                **({"kind": s.kind} if getattr(s, "kind", None) else {}),
             }
             for s in segments
         ],

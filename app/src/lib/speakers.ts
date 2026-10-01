@@ -1,6 +1,10 @@
 import type { Segment } from "./types";
 
-export type Turn = { speaker: string; start: number; end: number; texts: string[]; uncertain: boolean };
+export type Turn = {
+  speaker: string; start: number; end: number; texts: string[]; uncertain: boolean;
+  /** "break" — отметка перерыва объединённой встречи: разделитель, не реплика. */
+  kind?: "break";
+};
 
 const GAP_S = 2;
 /** Подпись реплик без спикера: в транскрипте у них speaker = null, переименовать нечего. */
@@ -11,6 +15,12 @@ export function mergeTurns(segments: Segment[]): Turn[] {
   const out: Turn[] = [];
   let cur: Turn | null = null;
   for (const s of segments) {
+    if (s.kind === "break") {
+      // Сама по себе и соседей не склеивает (как meet/search.py).
+      out.push({ speaker: "", start: s.start, end: s.end, texts: [s.text], uncertain: false, kind: "break" });
+      cur = null;
+      continue;
+    }
     // Пустой спикер — как null (так же склеивает и поиск резидента, meet/search.py).
     const speaker = s.speaker || NO_SPEAKER;
     if (cur && cur.speaker === speaker && s.start - cur.end < GAP_S) {

@@ -1,14 +1,16 @@
 import "./recordings.css";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type KeyboardEvent } from "react";
 import type { Resident } from "../../state/useResident";
 import type { Library } from "../../state/useLibrary";
-import { deleteRecording, kbExport, patchRecording } from "../../lib/api";
+import { deleteRecording, kbExport, mergeRecordings, patchRecording } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { inTauri, openFolder } from "../../lib/shell";
-import { statusOf } from "../../lib/status";
+import { statusOf, type RecStatus } from "../../lib/status";
+import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
+import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { ImportZone } from "./ImportZone";
-import { RecordingItem, type ItemActions } from "./RecordingItem";
+import { RecordingItem, type ItemActions, type PickHow } from "./RecordingItem";
 import { SearchBox } from "./SearchBox";
 
 type Props = {
@@ -30,6 +32,9 @@ type Props = {
 /** Итог действия из меню: строка над списком, закрывается «×». */
 type Notice = { text: string; error: boolean };
 
+/** Запись ещё пишется или обрабатывается — объединять её нельзя: звук не окончательный. */
+const busy = (st: RecStatus) => st.kind === "recording" || st.kind === "queued" || st.kind === "running";
+
 export function RecordingsList({
   selected, onSelect, library, resident, q, onQ, onOpenHit, onChanged, onDeleting,
 }: Props) {
@@ -39,18 +44,24 @@ export function RecordingsList({
   const [notice, setNotice] = useState<Notice | null>(null);
   /** Новые названия, пока резидент не ответил и список не перечитан: видны сразу, при ошибке — откат. */
   const [pending, setPending] = useState<Record<string, string | null>>({});
+  /** Отмеченные для групповых действий (Ctrl/Shift+щелчок, Ctrl+A); пусто — обычный режим. */
+  const [picked, setPicked] = useState<string[]>([]);
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const [keepOriginals, setKeepOriginals] = useState(false);
+  const [merging, setMerging] = useState(false);
+
+  const run = useCallback(async (fn: () => Promise<string | null>) => {
+    setNotice(null);
+    try {
+      const text = await fn();
+      if (text) setNotice({ text, error: false });
+    } catch (cause) {
+      setNotice({ text: errorText(cause), error: true });
+    }
+  }, []);
 
   const actions = useMemo<ItemActions | undefined>(() => {
     if (!endpoint) return undefined;
-    const run = async (fn: () => Promise<string | null>) => {
-      setNotice(null);
-      try {
-        const text = await fn();
-        if (text) setNotice({ text, error: false });
-      } catch (cause) {
-        setNotice({ text: errorText(cause), error: true });
-      }
-    };
     return {
       onRename: (id, title) => run(async () => {
         setPending((cur) => ({ ...cur, [id]: title }));
@@ -81,7 +92,62 @@ export function RecordingsList({
         return null;
       }),
     };
-  }, [endpoint, meetingsDir, library, onChanged, onDeleting]);
+  }, [endpoint, meetingsDir, library, onChanged, onDeleting, run]);
+
+  // --- выбор нескольких записей ---------------------------------------------------
+
+  const ids = library.items.map((r) => r.id);
+  // Пропавшие из списка (удалены, отфильтрованы поиском) отмеченными не считаются.
+  const chosen = ids.filter((id) => picked.includes(id));
+  const picking = chosen.length > 0;
+  const statuses = new Map(library.items.map((rec) => [rec.id, statusOf(rec, library.jobs, snapshot)]));
+
+  const clearPicks = () => { setPicked([]); setAnchor(null); };
+  const pick = (id: string, how: PickHow) => {
+    // Первый Ctrl+щелчок берёт в выбор и открытую запись: так выбирают в проводнике.
+    let base = chosen;
+    if (!base.length && selected && selected !== id && ids.includes(selected)) base = [selected];
+    if (how === "range") {
+      const from = ids.indexOf(anchor && ids.includes(anchor) ? anchor : (base[0] ?? selected ?? id));
+      const to = ids.indexOf(id);
+      const range = from < 0 ? [id] : ids.slice(Math.min(from, to), Math.max(from, to) + 1);
+      setPicked([...new Set([...base, ...range])]);
+      return;
+    }
+    setPicked(base.includes(id) ? base.filter((x) => x !== id) : [...base, id]);
+    setAnchor(id);
+  };
+  const select = (id: string) => { clearPicks(); onSelect(id); };
+  const onListKey = (e: KeyboardEvent<HTMLUListElement>) => {
+    if ((e.target as HTMLElement).tagName === "INPUT" && (e.target as HTMLInputElement).type === "text") return;
+    if ((e.ctrlKey || e.metaKey) && e.code === "KeyA") {
+      e.preventDefault();
+      setPicked(ids);
+    } else if (e.key === "Escape" && picking) {
+      e.preventDefault();
+      clearPicks();
+    }
+  };
+
+  const anyBusy = chosen.some((id) => { const st = statuses.get(id); return st ? busy(st) : false; });
+  const blocked = chosen.length < 2 ? "Выберите ещё хотя бы одну запись"
+    : anyBusy ? "Записи, которые ещё пишутся или обрабатываются, объединить нельзя" : null;
+  const doMerge = () => {
+    if (!endpoint || blocked) return;
+    const keep = keepOriginals;
+    void run(async () => {
+      setMerging(true);
+      try {
+        const done = await mergeRecordings(endpoint, chosen, keep);
+        clearPicks();
+        await library.refresh();
+        onSelect(done.recording);
+        return keep ? "Встречи объединены" : "Встречи объединены. Исходные записи будут удалены после расшифровки";
+      } finally {
+        setMerging(false);
+      }
+    });
+  };
 
   return (
     <div className="rec-list">
@@ -94,16 +160,47 @@ export function RecordingsList({
           <button type="button" className="import__close" aria-label="Скрыть сообщение" onClick={() => setNotice(null)}>×</button>
         </div>
       )}
-      <ul aria-label="Записи" className="rec-list__items">
+      {picking && endpoint && (
+        <div className="rec-pickbar" role="toolbar" aria-label="Выбранные записи">
+          <div className="rec-pickbar__row">
+            <span className="rec-pickbar__count">Выбрано: {chosen.length}</span>
+            <HelpTip label="Как объединяются встречи" title="Объединение встреч">
+              <TipLine>
+                Записи склеиваются по времени в одну встречу и расшифровываются заново целиком — спикеры
+                получаются общими для всей встречи.
+              </TipLine>
+              <TipLine>Между частями в расшифровке появляется отметка «— перерыв N мин —».</TipLine>
+              <TipLine>
+                После расшифровки исходные записи удаляются, если не отмечено «Сохранить исходные записи».
+              </TipLine>
+            </HelpTip>
+          </div>
+          <label className="rec-pickbar__keep">
+            <input type="checkbox" checked={keepOriginals} onChange={(e) => setKeepOriginals(e.target.checked)} />
+            Сохранить исходные записи
+          </label>
+          <div className="rec-pickbar__row">
+            <Button variant="primary" disabled={blocked !== null || merging} onClick={doMerge}>
+              Объединить ({chosen.length})
+            </Button>
+            <Button onClick={clearPicks}>Снять выделение</Button>
+          </div>
+          {blocked && <span className="muted rec-pickbar__note">{blocked}</span>}
+        </div>
+      )}
+      <ul aria-label="Записи" aria-multiselectable={picking || undefined} className="rec-list__items" onKeyDown={onListKey}>
         {library.items.map((rec) => (
           <RecordingItem
             key={rec.id}
             rec={rec.id in pending ? { ...rec, title: pending[rec.id] ?? null } : rec}
-            status={statusOf(rec, library.jobs, snapshot)}
+            status={statuses.get(rec.id) ?? statusOf(rec, library.jobs, snapshot)}
             selected={rec.id === selected}
-            onSelect={onSelect}
+            onSelect={select}
             onOpenHit={onOpenHit}
             actions={actions}
+            picking={picking}
+            picked={chosen.includes(rec.id)}
+            onPick={endpoint ? pick : undefined}
           />
         ))}
       </ul>

@@ -271,3 +271,29 @@ def test_update_meta_is_read_modify_write_under_the_lock(tmp_path):
     for t in threads:
         t.join()
     assert library.read_meta(folder)["count"] == 100
+
+
+def test_segments_to_raw_keeps_break_kind_only_where_set():
+    from meet.asr import Segment
+
+    raw = library.segments_to_raw([Segment(0, 1, "а", "Вы"),
+                                   Segment(1, 1, "— перерыв 5 мин —", None, kind="break")])
+    assert "kind" not in raw["segments"][0]
+    assert raw["segments"][1]["kind"] == "break"
+
+
+def test_library_search_does_not_find_break_marks(tmp_path):
+    folder = tmp_path / "2026-09-30_10-00"
+    folder.mkdir()
+    (folder / "sys.opus").write_bytes(b"x")
+    library.write_transcript(folder, {"segments": [
+        {"start": 1, "end": 1, "speaker": None, "text": "— перерыв 5 мин —", "kind": "break"}]})
+    assert library.search(tmp_path, "перерыв") == []
+
+
+def test_merge_folder_without_sound_yet_is_a_recording(tmp_path):
+    folder = tmp_path / "2026-09-30_10-00_merged"
+    folder.mkdir()
+    library.write_meta(folder, {"source": "merge", "title": "Планёрка", "merged_from": ["a", "b"]})
+    card = library.describe(folder)
+    assert card is not None and card.source == "merge"

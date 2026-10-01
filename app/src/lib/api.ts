@@ -95,6 +95,13 @@ export const deleteRecording = (ep: Endpoint, id: string) =>
   json<{ ok: boolean }>(ep, `/recordings/${enc(id)}`, { method: "DELETE" });
 export const importFile = (ep: Endpoint, path: string) =>
   json<{ recording: string; job: Job }>(ep, "/recordings/import", body("POST", { path }));
+/**
+ * Объединить записи одной встречи: резидент создаёт новую запись, собирает звук,
+ * расшифровывает её заново и затем удаляет исходные (если не `keepOriginals`).
+ */
+export const mergeRecordings = (ep: Endpoint, ids: string[], keepOriginals = false) =>
+  json<{ recording: string; job: Job }>(ep, "/recordings/merge",
+    body("POST", { ids, keep_originals: keepOriginals }));
 export const transcribe = (ep: Endpoint, id: string) =>
   json<Job>(ep, `/recordings/${enc(id)}/transcribe`, body("POST", {}));
 export const saveTranscript = (ep: Endpoint, id: string, transcript: Transcript) =>

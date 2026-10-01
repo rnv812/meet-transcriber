@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="meet-job")
     parser.add_argument("kind",
                         choices=["transcribe", "import", "install-engine", "download-model",
-                                 "summary", "ask"])
+                                 "summary", "ask", "merge"])
     parser.add_argument("path")
     parser.add_argument("--speakers", type=int)
     parser.add_argument("--hotwords")
@@ -57,6 +57,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.kind in ("summary", "ask"):
         return _assistant(args.kind, args.path, args.question)
 
+    if args.kind == "merge":
+        return _merge(args.path)
     if args.kind == "install-engine":
         return _install_engine(args.flavor)
     if args.kind == "download-model":
@@ -142,6 +144,27 @@ def _copy_import(folder_str: str, emit=None) -> int:
         emit({"kind": "error", "text": f"не удалось скопировать файл: {e}"})
         return 3
     bus.progress("copy", label="копирование файла", done=1, total=1, note=src.name)
+    return 0
+
+
+def _merge(folder_str: str) -> int:
+    """Собрать звук объединённой встречи (meet.merge). Расшифровку следом
+    ставит резидент — обычной задачей, со своим прогрессом и отменой."""
+    from pathlib import Path
+
+    from meet import events, merge
+
+    bus = events.EventBus()
+    bus.subscribe(lambda event: _emit(event.to_dict()))
+    try:
+        out = merge.run(Path(folder_str), bus=bus)
+    except merge.MergeError as e:
+        _emit({"kind": "error", "text": str(e)})
+        return 3
+    except Exception as e:
+        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        return 1
+    _emit({"kind": "job.result", "path": str(out)})
     return 0
 
 

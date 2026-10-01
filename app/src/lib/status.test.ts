@@ -87,3 +87,12 @@ test("запись с ассистентом: папка живого режим
   expect(isLiveRecording(rec(), liveSnap({ active: true, folder: "C:/r/2026-09-30_16-04" }))).toBe(true);
   expect(isLiveRecording(rec(), null)).toBe(false);
 });
+
+test("объединение: сборка звука — ступень «Объединение», неудача — повторить", () => {
+  const r = rec({ id: "m", path: "C:/r/m", source: "merge", tracks: {} });
+  expect(statusOf(r, [job({ kind: "merge", folder: "C:/r/m", stage: "merge", done: 0, total: 2 })], null))
+    .toEqual({ kind: "running", stage: "merge", label: "Объединение", done: 0, total: 2 });
+  expect(statusOf(r, [job({ kind: "merge", folder: "C:/r/m", state: "failed", error: "Исходная запись пропала" })], null))
+    .toEqual({ kind: "failed", error: "Исходная запись пропала", retry: "transcribe" });
+  expect(statusOf(r, [], null)).toEqual({ kind: "failed", error: "Объединение прервано", retry: "transcribe" });
+});

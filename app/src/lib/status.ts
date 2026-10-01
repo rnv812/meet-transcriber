@@ -16,12 +16,14 @@ const STAGES: Record<string, string> = {
   voices: "Голоса",
   render: "Сохранение",
   copy: "Копирование",
+  merge: "Объединение",
 };
 
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 
 const INTERRUPTED = "Импорт прерван";
-const RETRANSCRIBE_KINDS = ["transcribe", "import"];
+const RETRANSCRIBE_KINDS = ["transcribe", "import", "merge"];
+const MERGE_INTERRUPTED = "Объединение прервано";
 
 /**
  * Задачи расшифровки этой записи. `/jobs` отдаёт и задачи модели (итоги,
@@ -65,6 +67,8 @@ export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null)
   const mine = jobsOf(rec, jobs);
   const noTracks = Object.keys(rec.tracks ?? {}).length === 0;
   const isImport = rec.source === "import" && noTracks;
+  // Объединённая встреча, звук которой ещё не собран (или сборка не удалась).
+  const isMerging = rec.source === "merge" && noTracks;
 
   if (snapshot?.status === "recording" && snapshot.folder && norm(snapshot.folder) === norm(rec.path))
     return { kind: "recording" };
@@ -89,6 +93,8 @@ export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null)
   // Импорт без дорожки и без живой задачи: задачу отменили или резидент
   // перезапустился (задачи живут только в его памяти) — копия не доедет.
   if (isImport) return { kind: "failed", error: last?.error || INTERRUPTED, retry: "import" };
+  // «Расшифровать» на ней резидент превращает в повтор сборки звука.
+  if (isMerging) return { kind: "failed", error: last?.error || MERGE_INTERRUPTED, retry: "transcribe" };
   return { kind: "untranscribed" };
 }
 

@@ -78,7 +78,16 @@ export type Recording = {
   diarization?: string | null;
   /** Выгрузка в базу знаний: куда и когда; `error` — последняя не удалась. Не выгружалась — null. */
   kb_export?: KbExportRecord | null;
+  /** Объединённая встреча (`source: "merge"`); у остальных — null. */
+  merge?: MergeInfo | null;
 };
+
+/**
+ * Объединённая встреча: из скольких записей, на каком шаге («pending» — собирается
+ * звук, «merged» — звук готов, «done» — расшифрована и исходные обработаны),
+ * удалены ли исходные и какие их папки в базе знаний остались нетронутыми.
+ */
+export type MergeInfo = { parts: number; state: "pending" | "merged" | "done"; deleted: boolean; kb_left: string[] };
 
 /** Фрагмент реплики из поиска по библиотеке: `t` — начало реплики, `ranges` — что подсветить в `snippet`. */
 export type SearchHit = { t: number; speaker: string; snippet: string; ranges: [number, number][] };
@@ -117,6 +126,8 @@ export type Segment = {
   speaker: string | null;
   text: string;
   uncertain: boolean;
+  /** "break" — отметка перерыва между частями объединённой встречи: разделитель, не реплика. */
+  kind?: "break";
 };
 
 export type Transcript = {

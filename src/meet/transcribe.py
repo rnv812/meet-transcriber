@@ -187,6 +187,11 @@ def transcribe(
         out_md = path.with_suffix(".md")
         title = f"{path.stem} — {dmy}"
 
+    if path.is_dir():
+        # Объединённая встреча: на стыках частей — отметки перерыва.
+        from meet import library, merge
+
+        segments = merge.with_breaks(segments, library.read_meta(path).get("parts"))
     bus.progress("render")
     out_md.write_text(to_markdown(title, segments, iso), encoding="utf-8")
     _write_sidecar(out_md, path, iso, segments, diar, name_map)
@@ -218,7 +223,7 @@ def _write_structured(path: Path, segments, title: str, name_map: dict,
     labels = speaker_names(segments)
     segments = [
         Segment(s.start, s.end, s.text, labels.get(s.speaker, s.speaker),
-                uncertain=getattr(s, "uncertain", False))
+                uncertain=getattr(s, "uncertain", False), kind=getattr(s, "kind", None))
         for s in segments
     ]
     raw = library.segments_to_raw(

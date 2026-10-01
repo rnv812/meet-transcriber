@@ -26,3 +26,12 @@ test("isUnnamed", () => {
   expect(isUnnamed("SPEAKER_01")).toBe(true);
   expect(isUnnamed("Демьян")).toBe(false);
 });
+test("отметка перерыва — отдельный элемент, не склеивает соседей", () => {
+  const t = mergeTurns([
+    { start: 0, end: 5, speaker: "Демьян", text: "а", uncertain: false },
+    { start: 5, end: 5, speaker: null, text: "— перерыв 5 мин —", uncertain: false, kind: "break" },
+    { start: 5.5, end: 9, speaker: "Демьян", text: "б", uncertain: false }]);
+  expect(t.map((x) => [x.kind ?? null, x.texts.join(" ")]))
+    .toEqual([[null, "а"], ["break", "— перерыв 5 мин —"], [null, "б"]]);
+  expect(speakersOf([{ speaker: null, kind: "break" }, { speaker: "Демьян" }] as any)).toEqual(["Демьян"]);
+});

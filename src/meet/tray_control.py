@@ -289,6 +289,9 @@ class TrayControl:
             return
         job = event.data.get("job") or {}
         kind, folder = job.get("kind"), job.get("folder")
+        if kind == jobs.MERGE and folder:
+            self._merge_sound_ready(Path(folder))
+            return
         if kind not in (jobs.TRANSCRIBE, jobs.IMPORT, jobs.SUMMARY) or not folder:
             return
         path = Path(folder)
@@ -297,25 +300,46 @@ class TrayControl:
             from meet import playback
 
             playback.schedule(path)
+        merged_exported = finish_merge = False
+        if kind == jobs.TRANSCRIBE:
+            info = self._merge_info(path)
+            if info is not None:
+                merged_exported = bool(info.get("kb_exported"))
+                finish_merge = info.get("state") != "done"
+        ready = self._kb_wanted(kind, path, merged_exported)
+        if ready or finish_merge:
+            # Сначала выгрузка, потом удаление исходных: пока они в библиотеке,
+            # их папки в базе знаний заняты, и объединённая встреча получит
+            # свою, а не ляжет в папку удалённой части.
+            def work() -> None:
+                if ready:
+                    self._auto_kb_export(path)
+                if finish_merge:
+                    self._finish_merge(path)
+
+            self._background(work)
+
+    def _kb_wanted(self, kind: str, path: Path, merged_exported: bool) -> bool:
+        """Выгружать ли встречу в базу знаний после задачи `kind`."""
         try:
             # Подписчик шины: исключение отсюда не должно доходить до очереди
             # задач — битый конфиг или недоступная папка только в журнал.
             cfg = settings.load().export
             if not cfg.meetings_dir:
-                return
+                return False
             if kind == jobs.SUMMARY:
                 from meet import kb_export
 
                 wanted = cfg.auto_export or kb_export.previously_exported(path)
             else:
-                wanted = cfg.auto_export
-            ready = wanted and library.read_transcript(path) is not None
+                # Объединённую встречу, части которой уже выгружались, —
+                # выгрузить и её (прежние папки в базе знаний не трогаем).
+                wanted = cfg.auto_export or merged_exported
+            return wanted and library.read_transcript(path) is not None
         except Exception as e:
             self.tray.log(f"выгрузка в базу знаний не проверена ({path.name}): "
                           f"{type(e).__name__}: {e}")
-            return
-        if ready:
-            self._background(lambda: self._auto_kb_export(path))
+            return False
 
     def _auto_kb_export(self, folder: Path) -> None:
         from meet import kb_export
@@ -709,28 +733,43 @@ class TrayControl:
     def delete_recording(self, recording_id: str) -> dict:
         """Удалить папку записи целиком. Отказ, пока в неё пишут или над ней
         работает расшифровка/импорт: иначе задача упала бы на исчезнувших файлах."""
-        import shutil
-
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
+        reason = self._busy_reason(folder)
+        if reason:
+            raise _bad_request(reason)
+        self._remove(folder)
+        return {"ok": True}
+
+    def _busy_reason(self, folder: Path) -> str | None:
+        """Почему запись сейчас нельзя удалить или объединить; None — можно."""
+        folder = Path(folder).resolve()
         if (self.tray.recording
                 and Path(self.tray._current_folder()).resolve() == folder):
-            raise _bad_request("запись ещё идёт")
+            return "запись ещё идёт"
         live_folder = self.live.status()["folder"]
         if live_folder and Path(live_folder).resolve() == folder:
-            raise _bad_request("запись ещё идёт")
-        if self.queue.active_for(str(folder), (jobs.TRANSCRIBE, jobs.IMPORT)):
-            raise _bad_request("идёт расшифровка — отмените её или дождитесь")
+            return "запись ещё идёт"
+        active = self.queue.active_for(str(folder), jobs.FOLDER_KINDS)
+        if active is not None:
+            if active.kind == jobs.MERGE:
+                return "идёт объединение записей — дождитесь его"
+            return "идёт расшифровка — отмените её или дождитесь"
         # Задача модели (и её CLI) работает с cwd в папке записи: на Windows
         # rmtree снёс бы файлы и упал на самой папке, а задача дописала бы
         # summary.md и meta.json в осиротевшую папку.
         if self.llm_queue.active_for(str(folder), (jobs.SUMMARY, jobs.ASK)):
-            raise _bad_request("Идёт работа модели — отмените или дождитесь")
-        # Плеер карточки мог только что запросить дорожку, а фоновое сведение —
-        # писать playback.opus: на Windows открытый файл не удалить, и rmtree
-        # снёс бы запись наполовину. Ответы плееру короткие (control.AUDIO_CHUNK),
-        # поэтому ждём недолго.
+            return "Идёт работа модели — отмените или дождитесь"
+        return None
+
+    def _remove(self, folder: Path) -> None:
+        """Удалить папку записи. Плеер карточки мог только что запросить
+        дорожку, а фоновое сведение — писать playback.opus: на Windows открытый
+        файл не удалить, и rmtree снёс бы запись наполовину. Ответы плееру
+        короткие (control.AUDIO_CHUNK), поэтому ждём недолго."""
+        import shutil
+
         from meet import playback
 
         playback.wait_idle(folder, DELETE_WAIT_S)
@@ -738,7 +777,85 @@ class TrayControl:
             shutil.rmtree(folder)
         except OSError as e:
             raise RuntimeError(f"не удалось удалить запись: {e}") from e
-        return {"ok": True}
+
+    # --- объединение встреч -------------------------------------------------
+
+    def merge_recordings(self, body: dict | None) -> dict:
+        """Объединить записи: новая папка и задача сборки звука; расшифровка —
+        следом, удаление исходных (если не просили оставить) — после неё
+        (см. meet.merge). Ни одна из записей не должна сейчас писаться или
+        обрабатываться: звук в ней ещё не окончательный."""
+        from meet import merge
+
+        body = body if isinstance(body, dict) else {}
+        ids = body.get("ids")
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise _bad_request("ожидается ids — список записей")
+        folders = []
+        for rid in ids:
+            folder = self._folder(rid)
+            if folder is None:
+                raise _bad_request(f"записи нет: {rid}")
+            reason = self._busy_reason(folder)
+            if reason:
+                raise _bad_request(f"{folder.name}: {reason}")
+            folders.append(folder)
+        keep = settings.as_flag(body.get("keep_originals"), False)
+        try:
+            target = merge.create(self._root(), folders, keep_originals=keep)
+        except merge.MergeError as e:
+            raise _bad_request(str(e))
+        job, _ = self._submit_once(jobs.MERGE, target)
+        self.tray.log(f"объединение записей: {', '.join(f.name for f in folders)} → "
+                      f"{target.name} ({job.id})")
+        return {"recording": target.name, "job": job.to_raw()}
+
+    @staticmethod
+    def _merge_info(folder: Path) -> dict | None:
+        meta = library.read_meta(folder)
+        info = meta.get("merge")
+        return info if meta.get("source") == "merge" and isinstance(info, dict) else None
+
+    def _merge_sound_ready(self, folder: Path) -> None:
+        """Звук объединённой записи собран — обычная расшифровка следом:
+        спикеры одни на всю встречу, перерывы встанут отметками."""
+        try:
+            job, created = self._submit_once(jobs.TRANSCRIBE, folder)
+        except Exception as e:  # подписчик шины: не ронять очередь задач
+            self.tray.log(f"расшифровка объединённой записи не поставлена ({folder.name}): {e}")
+            return
+        if created:
+            self.tray.log(f"записи объединены, расшифровка в очереди: {folder.name} ({job.id})")
+
+    def _finish_merge(self, folder: Path) -> None:
+        """Объединённая встреча расшифрована: удалить исходные записи, если не
+        просили оставить. Хоть одна занята (пишется, обрабатывается) — не
+        удаляем ни одной: половина удалённых частей хуже, чем все на месте."""
+        from meet import merge
+
+        info = self._merge_info(folder)
+        if info is None or info.get("state") == "done":
+            return
+        deleted: list[str] = []
+        kept_reason = None
+        if not info.get("keep_originals"):
+            sources = merge.originals(folder)
+            busy = [(f.name, r) for f in sources if (r := self._busy_reason(f))]
+            if busy:
+                kept_reason = f"{busy[0][0]}: {busy[0][1]}"
+                self.tray.log(f"исходные записи не удалены ({folder.name}): {kept_reason}")
+            else:
+                for source in sources:
+                    try:
+                        self._remove(source)
+                        deleted.append(source.name)
+                    except Exception as e:
+                        kept_reason = f"{source.name}: {e}"
+                        self.tray.log(f"исходная запись не удалена: {kept_reason}")
+        if info.get("kb_exported"):
+            self.tray.log("прежние папки исходных записей в базе знаний не тронуты: "
+                          + ", ".join(info["kb_exported"]))
+        merge.mark_done(folder, deleted, kept_reason)
 
     # --- hotwords ---------------------------------------------------------
 
@@ -1006,7 +1123,7 @@ class TrayControl:
         Проверка и постановка под одним локом: два почти одновременных запроса
         (двойной клик, автопостановка поверх ручной) не должны оба пройти."""
         with self._submit_lock:
-            existing = self.queue.active_for(str(folder), (jobs.TRANSCRIBE, jobs.IMPORT))
+            existing = self.queue.active_for(str(folder), jobs.FOLDER_KINDS)
             if existing is not None:
                 return existing, False
             return self.queue.submit(kind, str(folder), options or {}), True
@@ -1018,8 +1135,11 @@ class TrayControl:
         # Импорт, упавший до копии (исходник был недоступен), оставляет папку
         # без дорожки: расшифровывать нечего, повторяем импорт целиком.
         card = library.describe(folder)
-        kind = jobs.IMPORT if card and card.source == "import" and not card.tracks \
-            else jobs.TRANSCRIBE
+        kind = jobs.TRANSCRIBE
+        if card and not card.tracks and card.source == "import":
+            kind = jobs.IMPORT
+        elif card and not card.tracks and card.source == "merge":
+            kind = jobs.MERGE  # сборка звука не удалась или прервана — повторить её
         job, _ = self._submit_once(kind, folder, options)
         return job.to_raw()
 

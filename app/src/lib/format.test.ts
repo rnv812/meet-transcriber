@@ -1,4 +1,4 @@
-import { clock, duration, dayLabel, errorText } from "./format";
+import { clock, duration, dayLabel, errorText, plural } from "./format";
 
 test("форматы", () => {
   expect(clock(65)).toBe("01:05");
@@ -15,4 +15,10 @@ test("errorText: у Error — только сообщение", () => {
   expect(errorText(new Error("сломалось"))).toBe("сломалось");
   expect(errorText("строка")).toBe("строка");
   expect(errorText(42)).toBe("42");
+});
+
+test("plural: форма слова по числу", () => {
+  const w = (n: number) => `${n} ${plural(n, "запись", "записи", "записей")}`;
+  expect([1, 2, 5, 11, 12, 21, 22, 25, 111].map(w)).toEqual([
+    "1 запись", "2 записи", "5 записей", "11 записей", "12 записей", "21 запись", "22 записи", "25 записей", "111 записей"]);
 });

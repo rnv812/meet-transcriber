@@ -37,6 +37,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     recordings(limit, q) -> dict         библиотека записей (q — поиск)
     search(q, limit) -> dict             поиск по тексту встреч с фрагментами
     delete_recording(id) -> dict         удалить запись
+    merge_recordings(body) -> dict       объединить записи {"ids", "keep_originals"}
     get_hotwords() / put_hotwords(body)  список слов распознавания
     person(name) -> dict                 карточка человека
     recording(id) -> dict                одна запись
@@ -664,6 +665,9 @@ _BadRequest = BadRequest
 # handler и разобранные query-параметры, возвращает то, что уйдёт в JSON.
 _ROUTES = {
     ("POST", "/recordings/import"): lambda h, p: _server_of(h).state.import_file(
+        h._body()
+    ),
+    ("POST", "/recordings/merge"): lambda h, p: _server_of(h).state.merge_recordings(
         h._body()
     ),
     ("POST", "/shutdown"): lambda h, p: _server_of(h).state.shutdown(),

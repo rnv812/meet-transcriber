@@ -176,6 +176,13 @@ def _add_library_parsers(sub) -> None:
                           help="то же, что kb-export (прежнее имя)")
     p_no.add_argument("folder", help=folder_help)
 
+    p_mr = sub.add_parser("merge", parents=[as_json],
+                          help="объединить записи одной встречи в одну и расшифровать")
+    p_mr.add_argument("folders", nargs="+", metavar="запись",
+                      help=folder_help + "; не меньше двух, порядок — по времени записи")
+    p_mr.add_argument("--keep", action="store_true",
+                      help="не удалять исходные записи после объединения")
+
 
 def main(argv: list[str] | None = None) -> int | None:
     _quiet_known_warnings()

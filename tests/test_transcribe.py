@@ -476,3 +476,34 @@ def test_access_reason_names_class_and_status_only():
     error = GatedRepoError("Authorization: Bearer hf_secret ...")
     error.response = SimpleNamespace(status_code=403)
     assert _access_reason(error) == "GatedRepoError, HTTP 403"
+
+
+def test_merged_folder_gets_break_marks_in_markdown_and_json(monkeypatch, tmp_path):
+    """Объединённая встреча: на стыках частей — отметки перерыва, и в
+    Markdown, и в transcript.json (не реплика: без спикера, kind=break)."""
+    import json
+
+    import meet.transcribe as tr
+    from meet import library
+
+    folder = tmp_path / "2026-09-30_10-00_merged"
+    folder.mkdir()
+    for role in ("sys", "mic"):
+        (folder / f"{role}.opus").write_bytes(b"x")
+    library.write_meta(folder, {"source": "merge", "parts": [
+        {"id": "a", "start_offset_s": 0.0, "gap_s": 0.0},
+        {"id": "b", "start_offset_s": 10.0, "gap_s": 900.0},
+    ]})
+
+    def fake_two(path, speakers, hotwords, align, overlap, bus):
+        return [Segment(1.0, 2.0, "до перерыва", "Вы"), Segment(12.0, 13.0, "после", "Вы")], None, {}
+
+    monkeypatch.setattr(tr, "_transcribe_two_track", fake_two)
+    out = tr.transcribe(str(folder))
+    data = json.loads((folder / "transcript.json").read_text(encoding="utf-8"))
+    assert [(s["text"], s.get("kind")) for s in data["segments"]] == [
+        ("до перерыва", None), ("— перерыв 15 мин —", "break"), ("после", None)]
+    assert data["segments"][1]["speaker"] is None
+    md = out.read_text(encoding="utf-8")
+    assert "*— перерыв 15 мин —*" in md
+    assert "Спикер ?" not in md

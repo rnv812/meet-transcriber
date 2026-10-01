@@ -209,3 +209,14 @@ def test_tokens_are_parsed_once_per_turn(lib, monkeypatch):
 def test_one_letter_query_finds_nothing(lib):
     assert search.search_library(lib, " б ") == []
     assert search.search_library(lib, "бю") != []
+
+
+def test_break_mark_is_its_own_empty_turn():
+    from meet import search
+
+    turns = search.turns_of([
+        {"start": 0, "end": 1, "speaker": None, "text": "раз"},
+        {"start": 1, "end": 1, "speaker": None, "text": "— перерыв 5 мин —", "kind": "break"},
+        {"start": 1.5, "end": 2, "speaker": None, "text": "два"},
+    ])
+    assert [t.text for t in turns] == ["раз", "", "два"]

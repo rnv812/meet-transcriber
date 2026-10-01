@@ -162,3 +162,14 @@ def test_read_qa_skips_broken_lines(tmp_path):
         json.dumps({"q": "а", "a": "б", "at": 1.0, "provider": "x"}, ensure_ascii=False)
         + "\nмусор\n", encoding="utf-8")
     assert [x["q"] for x in assistant.read_qa(folder)] == ["а"]
+
+
+def test_transcript_text_shows_break_marks_as_lines():
+    from meet import assistant
+
+    text = assistant.transcript_text({"segments": [
+        {"start": 0, "end": 1, "speaker": "Вы", "text": "раз"},
+        {"start": 60, "end": 60, "speaker": None, "text": "— перерыв 5 мин —", "kind": "break"},
+        {"start": 61, "end": 62, "speaker": "Вы", "text": "два"},
+    ]})
+    assert text.splitlines() == ["[00:00] Вы: раз", "— перерыв 5 мин —", "[01:01] Вы: два"]

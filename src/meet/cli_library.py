@@ -23,7 +23,7 @@ from pathlib import Path
 
 from meet import library
 
-COMMANDS = ("import", "export", "voices", "summary", "ask", "notes", "kb-export")
+COMMANDS = ("import", "export", "voices", "summary", "ask", "notes", "kb-export", "merge")
 NO_PROVIDER_HINT = ("Подключите Claude Code или Codex: meet {command} … --provider codex "
                     "или настройка llm.provider")
 
@@ -179,6 +179,77 @@ def _transcribe(folder: Path, args, cfg) -> Path:
     except (SystemExit, Exception) as e:
         reason = str(e) if isinstance(e, SystemExit) else f"{type(e).__name__}: {e}"
         raise CliError(f"Расшифровка не удалась: {reason}. {retry}")
+
+
+def _recording_now(root: Path) -> Path | None:
+    """Папка, в которую сейчас пишет запись (по lock-файлу живого процесса)."""
+    from meet.recorder import LOCK_NAME, _pid_alive
+
+    try:
+        data = json.loads((root / LOCK_NAME).read_text(encoding="utf-8"))
+        pid, folder = int(data["pid"]), data.get("folder")
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return Path(folder) if folder and _pid_alive(pid) else None
+
+
+def _merge(args, cfg) -> None:
+    """`meet merge`: то же, что «Объединить» в окне, но в этом процессе:
+    собрать звук, расшифровать, выгрузить в базу знаний (если части уже там
+    были) и удалить исходные, если не `--keep`. Расшифровка не удалась —
+    объединённая запись остаётся, исходные тоже."""
+    from types import SimpleNamespace
+
+    from meet import events, merge
+
+    folders = [_recording(a, cfg) for a in args.folders]
+    parents = {os.path.normcase(str(f.resolve().parent)) for f in folders}
+    if len(parents) > 1:
+        raise CliError("Объединять можно только записи из одной папки записей")
+    root = folders[0].resolve().parent
+    busy = _recording_now(root)
+    for folder in folders:
+        if busy is not None and os.path.normcase(str(busy.resolve())) == \
+                os.path.normcase(str(folder.resolve())):
+            raise CliError(f"{folder.name}: запись ещё идёт")
+    try:
+        target = merge.create(root, folders, keep_originals=args.keep)
+    except merge.MergeError as e:
+        raise CliError(str(e))
+    errors: list[str] = []
+    printer = _progress_printer(errors)
+    bus = events.EventBus()
+    bus.subscribe(lambda event: printer(event.to_dict()))
+    try:
+        merge.run(target, bus=bus)
+    except merge.MergeError as e:
+        shutil.rmtree(target, ignore_errors=True)  # пустая карточка была бы мусором
+        raise CliError(f"Записи не объединены: {e}")
+    try:
+        transcript = _transcribe(target, SimpleNamespace(speakers=None, hotwords=None), cfg)
+    except CliError as e:
+        raise CliError(f"Записи объединены: {target}. {e} Исходные записи сохранены.")
+    info = library.read_meta(target).get("merge") or {}
+    kb_left = list(info.get("kb_exported") or [])
+    if kb_left and cfg.export.meetings_dir:
+        from meet import kb_export
+
+        try:
+            kb_export.export_recording(target, cfg)
+        except Exception as e:
+            _say(f"В базу знаний не выгружено: {e}")
+    deleted: list[str] = []
+    if not args.keep:
+        for source in merge.originals(target):
+            shutil.rmtree(source)
+            deleted.append(source.name)
+    merge.mark_done(target, deleted)
+    if kb_left:
+        _say("Прежние папки частей в базе знаний не тронуты: " + ", ".join(kb_left))
+    _result(args, {"folder": str(target), "id": target.name,
+                   "merged_from": library.read_meta(target).get("merged_from"),
+                   "transcript": str(transcript), "deleted": deleted, "kb_left": kb_left},
+            f"{target}\n")
 
 
 def _export(args, cfg) -> None:
@@ -368,6 +439,6 @@ def _kb_export(args, cfg) -> None:
 
 
 _HANDLERS = {"import": _import, "export": _export, "summary": _summary,
-             "ask": _ask, "notes": _kb_export, "kb-export": _kb_export}
+             "ask": _ask, "notes": _kb_export, "kb-export": _kb_export, "merge": _merge}
 _VOICES = {"list": _voices_list, "rename": _voices_rename, "merge": _voices_merge,
            "delete": _voices_delete, "avatar": _voices_avatar}

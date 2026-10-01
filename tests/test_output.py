@@ -101,3 +101,16 @@ def test_to_markdown_marks_overlap_block():
     md = to_markdown("Т", segs)
     assert "## 00:12 — Спикер 1\n\nКоллеги, начнём." in md
     assert "## 00:25 — Спикер 1 (нахлёст)\n\nАга." in md
+
+
+def test_break_mark_is_a_divider_not_a_turn():
+    from meet.asr import Segment
+    from meet.output import merge_consecutive, to_markdown
+
+    segs = [Segment(0, 1, "раз", "Вы"), Segment(1, 1, "— перерыв 5 мин —", None, kind="break"),
+            Segment(1.5, 2, "два", "Вы")]
+    merged = merge_consecutive(segs)
+    assert [s.kind for s in merged] == [None, "break", None]  # «раз» и «два» не склеены через перерыв
+    md = to_markdown("Встреча", segs)
+    assert "\n*— перерыв 5 мин —*\n" in md
+    assert md.count("## ") == 2

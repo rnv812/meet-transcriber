@@ -195,10 +195,17 @@ def turns_of(segments) -> list[Turn]:
     for seg in segments or []:
         if not isinstance(seg, dict):
             continue
-        speaker = nfc(str(seg.get("speaker") or "")) or NO_SPEAKER  # пустой — как null, как в окне
         start = float(seg.get("start") or 0.0)
+        if seg.get("kind") == "break":
+            # Отметка перерыва объединённой встречи: в окне — разделитель, не
+            # реплика. Своё место в списке (номера реплик — как в окне), но без
+            # текста: искать в ней нечего.
+            out.append(Turn(start, "", ""))
+            parts, end = [], start
+            continue
+        speaker = nfc(str(seg.get("speaker") or "")) or NO_SPEAKER  # пустой — как null, как в окне
         text = nfc(str(seg.get("text") or ""))
-        if out and out[-1].speaker == speaker and start - end < GAP_S:
+        if out and out[-1].speaker == speaker and out[-1].speaker and start - end < GAP_S:
             parts.append(text)
             end = max(end, float(seg.get("end") or start))
             out[-1].text = " ".join(parts)

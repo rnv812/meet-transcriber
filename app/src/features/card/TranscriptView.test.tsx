@@ -164,3 +164,14 @@ test("Esc после фокуса без источника не возвращ�
   await userEvent.keyboard("{Escape}");
   expect(before).not.toHaveFocus();
 });
+
+test("перерыв объединённой встречи — разделитель, не реплика и не находка поиска", async () => {
+  const brk: Turn = { start: 30, end: 30, speaker: "", texts: ["— перерыв 15 мин —"], uncertain: false, kind: "break" };
+  const { container } = setup({ turns: [TURNS[0]!, brk, TURNS[1]!] });
+  const sep = screen.getByRole("separator", { name: "— перерыв 15 мин —" });
+  expect(sep).toHaveTextContent("— перерыв 15 мин —");
+  expect(container.querySelectorAll(".turn")).toHaveLength(2);
+  await userEvent.type(field(), "перерыв");
+  await vi.waitFor(() => expect(counter()).toHaveTextContent(/0|Не найдено|нет/i));
+  expect(container.querySelectorAll("mark.hit")).toHaveLength(0);
+});

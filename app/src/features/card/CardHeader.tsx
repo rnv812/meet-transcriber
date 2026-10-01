@@ -1,10 +1,28 @@
 import { useRef, useState } from "react";
 import { TITLE_MAX, type Endpoint } from "../../lib/api";
-import { dayLabel, duration } from "../../lib/format";
+import { dayLabel, duration, plural } from "../../lib/format";
 import { isUnnamed } from "../../lib/speakers";
-import type { Recording } from "../../lib/types";
+import type { MergeInfo, Recording } from "../../lib/types";
 import { Avatar } from "../../ui/Avatar";
 import type { PersonColor } from "./Turns";
+
+/** Подпись объединённой встречи: из скольких записей и что стало с исходными. */
+function MergeNote({ info }: { info: MergeInfo }) {
+  const parts = `Объединена из ${info.parts} ${plural(info.parts, "записи", "записей", "записей")}`;
+  const step = info.state === "pending" ? "собирается звук"
+    : info.state === "done" && info.deleted ? "исходные записи удалены" : "";
+  return (
+    <div className="card__merge muted">
+      <div>{[parts, step].filter(Boolean).join(" · ")}</div>
+      {info.state === "done" && info.kb_left.length > 0 && (
+        <div>
+          Прежние папки частей в базе знаний не изменены — удалите их, если они больше не нужны:{" "}
+          {info.kb_left.map((p) => <code key={p} className="path">{p}</code>)}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function CardHeader({
   rec, durationS = rec.duration_s, speakers, people, endpoint, avatarVersion, onRename, onNameSpeaker,
@@ -56,6 +74,7 @@ export function CardHeader({
         <h2 className="card__title" title="Нажмите, чтобы переименовать" onClick={begin}>{shown}</h2>
       )}
       <div className="card__meta muted num">{meta}</div>
+      {rec.merge && <MergeNote info={rec.merge} />}
       {speakers.length > 0 && (
         <div className="card__people">
           {speakers.map((name) => {

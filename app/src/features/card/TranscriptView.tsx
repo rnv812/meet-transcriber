@@ -69,7 +69,9 @@ export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker,
     return () => clearTimeout(timer);
   }, [text, query]);
 
-  const prepared = useMemo(() => turns.map((t) => prepare(t.texts.join(" "), t.speaker)), [turns]);
+  // Отметка перерыва — не реплика: искать в ней нечего (как в meet/search.py).
+  const prepared = useMemo(
+    () => turns.map((t) => (t.kind === "break" ? prepare("") : prepare(t.texts.join(" "), t.speaker))), [turns]);
   const { hits, marks } = useMemo(() => {
     const found = findHits(prepared, parseQuery(query));
     const marks: TurnMarks = new Map();

@@ -35,6 +35,9 @@ export type ItemActions = {
   onDelete?: (id: string) => void;
 };
 
+/** Как отметить запись для групповых действий: Ctrl+щелчок — переключить, Shift+щелчок — диапазон. */
+export type PickHow = "toggle" | "range";
+
 export function RecordingItem({
   rec,
   status,
@@ -42,6 +45,9 @@ export function RecordingItem({
   onSelect,
   onOpenHit,
   actions,
+  picking = false,
+  picked = false,
+  onPick,
 }: {
   rec: LibraryItem;
   status: RecStatus;
@@ -50,6 +56,10 @@ export function RecordingItem({
   /** Фрагмент из поиска: открыть запись на этой реплике. */
   onOpenHit?: (id: string, t: number) => void;
   actions?: ItemActions;
+  /** Режим выбора нескольких записей: у каждой — флажок. */
+  picking?: boolean;
+  picked?: boolean;
+  onPick?: (id: string, how: PickHow) => void;
 }) {
   const when = rec.started_at ? dayLabel(rec.started_at) : "";
   const badge = badgeOf(status);
@@ -109,7 +119,7 @@ export function RecordingItem({
   ];
 
   return (
-    <li className={`rec-item${selected ? " rec-item--selected" : ""}`}
+    <li className={`rec-item${selected ? " rec-item--selected" : ""}${picking ? " rec-item--picking" : ""}${picked ? " rec-item--picked" : ""}`}
       onContextMenu={actions ? (e) => {
         if (editing) return;
         e.preventDefault();
@@ -117,6 +127,10 @@ export function RecordingItem({
         if (e.clientX === 0 && e.clientY === 0) openFromButton();
         else openMenuAt(e.clientX, e.clientY);
       } : undefined}>
+      {picking && !editing && (
+        <input type="checkbox" className="rec-item__pick" aria-label={`Выбрать «${title}»`} checked={picked}
+          onChange={() => onPick?.(rec.id, "toggle")} />
+      )}
       {editing ? (
         <div className="rec-item__main rec-item__main--editing">
           <input
@@ -139,7 +153,11 @@ export function RecordingItem({
       ) : (
         <button ref={main} type="button" className="rec-item__main" aria-current={selected ? "true" : undefined}
           aria-keyshortcuts={actions ? "F2" : undefined}
-          onClick={() => onSelect(rec.id)}
+          onClick={(e) => {
+            if (onPick && (e.ctrlKey || e.metaKey)) onPick(rec.id, "toggle");
+            else if (onPick && e.shiftKey) onPick(rec.id, "range");
+            else onSelect(rec.id);
+          }}
           onKeyDown={(e) => { if (e.key === "F2" && actions) { e.preventDefault(); begin(); } }}>
           <span className="rec-item__title" title={actions ? "Двойной щелчок или F2 — переименовать" : undefined}
             onDoubleClick={actions ? (e) => { e.preventDefault(); begin(); } : undefined}>{title}</span>

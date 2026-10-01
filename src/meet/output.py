@@ -10,12 +10,15 @@ def fmt_ts(seconds: float) -> str:
 def merge_consecutive(segments: list[Segment], max_gap: float = 2.0) -> list[Segment]:
     """Склеить подряд идущие сегменты одного спикера с паузой не больше max_gap сек.
 
-    Блоки с разным uncertain не клеятся: зона нахлёста остаётся отдельным блоком."""
+    Блоки с разным uncertain не клеятся: зона нахлёста остаётся отдельным блоком.
+    Отметка перерыва (kind="break") — сама по себе и не склеивает соседей."""
     merged: list[Segment] = []
     for seg in segments:
         last = merged[-1] if merged else None
         if (
             last
+            and not last.kind
+            and not seg.kind
             and last.speaker == seg.speaker
             and last.uncertain == seg.uncertain
             and seg.start - last.end <= max_gap
@@ -25,7 +28,8 @@ def merge_consecutive(segments: list[Segment], max_gap: float = 2.0) -> list[Seg
         else:
             merged.append(
                 Segment(
-                    seg.start, seg.end, seg.text, seg.speaker, uncertain=seg.uncertain
+                    seg.start, seg.end, seg.text, seg.speaker, uncertain=seg.uncertain,
+                    kind=seg.kind,
                 )
             )
     return merged
@@ -69,6 +73,9 @@ def turn_lines(segments: list[Segment], level: int = 2) -> list[str]:
     hashes = "#" * level
     lines: list[str] = []
     for seg in merge_consecutive(segments):
+        if seg.kind == "break":  # перерыв объединённой встречи — разделитель
+            lines += [f"*{seg.text}*", ""]
+            continue
         who = names.get(seg.speaker, seg.speaker) if seg.speaker else "Спикер ?"
         mark = " (нахлёст)" if seg.uncertain else ""
         lines += [f"{hashes} {fmt_ts(seg.start)} — {who}{mark}", "", seg.text, ""]

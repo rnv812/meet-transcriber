@@ -124,4 +124,17 @@
   background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
 }
 .rec-notice--error { color: var(--err); }
-.rec-notice__text { flex: 1; min-width: 0; word-break: break-all; }
+.rec-notice__text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+/* Выбор нескольких записей (Ctrl/Shift+щелчок, Ctrl+A) и групповые действия. */
+.rec-item--picking .rec-item__main { padding-left: 32px; }
+.rec-item__pick { position: absolute; left: 10px; top: 11px; margin: 0; z-index: 1; cursor: pointer; }
+.rec-item--picked, .rec-item--picked:hover { background: rgba(94, 106, 210, 0.14); }
+.rec-pickbar {
+  display: flex; flex-direction: column; gap: 6px; padding: 8px; font-size: 12px;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
+}
+.rec-pickbar__row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rec-pickbar__count { color: var(--text); font-weight: 500; }
+.rec-pickbar__keep { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); cursor: pointer; }
+.rec-pickbar__note { font-size: 12px; }

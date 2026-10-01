@@ -114,3 +114,30 @@ def test_engine_install_note_shows_the_download_with_a_decimal_comma(monkeypatch
 def test_engine_install_note_follows_the_chosen_flavor(monkeypatch, capsys):
     # Видеокарта есть, но выбран CPU — и объём скачивания у CPU.
     assert _engine_install_note(monkeypatch, capsys, "cpu", True) == "cpu, ~0,6 ГБ"
+
+
+def test_merge_job_runs_merge_and_reports_folder(tmp_path, monkeypatch, capsys):
+    import json
+
+    from meet import merge
+
+    calls = []
+    monkeypatch.setattr(merge, "run", lambda folder, bus=None: calls.append(folder) or folder)
+    assert job_worker.main(["merge", str(tmp_path)]) == 0
+    assert calls == [tmp_path]
+    lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert lines[-1] == {"kind": "job.result", "path": str(tmp_path)}
+
+
+def test_merge_job_failure_is_text_for_people(tmp_path, monkeypatch, capsys):
+    import json
+
+    from meet import merge
+
+    def broken(folder, bus=None):
+        raise merge.MergeError("Исходная запись пропала: 2026-09-30_10-30")
+
+    monkeypatch.setattr(merge, "run", broken)
+    assert job_worker.main(["merge", str(tmp_path)]) == 3
+    lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert lines[-1] == {"kind": "error", "text": "Исходная запись пропала: 2026-09-30_10-30"}

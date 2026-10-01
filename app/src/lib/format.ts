@@ -27,6 +27,16 @@ export function dayLabel(iso: string, now: Date = new Date()): string {
 }
 
 /** Текст ошибки для человека: у Error — сообщение без «Error: », иначе — как есть. */
+/** «2 записи», «5 записей», «21 запись»: форма слова по числу. */
+export function plural(n: number, one: string, few: string, many: string): string {
+  const d = Math.abs(n) % 100;
+  const u = d % 10;
+  if (d >= 11 && d <= 14) return many;
+  if (u === 1) return one;
+  if (u >= 2 && u <= 4) return few;
+  return many;
+}
+
 export function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }

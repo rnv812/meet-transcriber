@@ -57,8 +57,14 @@ def safe_filename(title: str, fallback: str) -> str:
 def md_segments(data: dict) -> list[Segment]:
     """Непустые реплики транскрипта как Segment — вход для output.to_markdown."""
     return [Segment(float(s["start"]), float(s["end"]), s["text"],
-                    speaker=s.get("speaker"), uncertain=bool(s.get("uncertain")))
+                    speaker=s.get("speaker"), uncertain=bool(s.get("uncertain")),
+                    kind="break" if is_break(s) else None)
             for s in data.get("segments", []) if str(s.get("text", "")).strip()]
+
+
+def is_break(seg: dict) -> bool:
+    """Отметка перерыва объединённой встречи (meet.merge), не реплика."""
+    return isinstance(seg, dict) and seg.get("kind") == "break"
 
 
 def render(data: dict, fmt: str, date: str = "") -> str:
@@ -68,10 +74,13 @@ def render(data: dict, fmt: str, date: str = "") -> str:
         return to_markdown(title, md_segments(data), date)
     if fmt == "txt":
         lines = [title, ""]
-        lines += [f"[{_hms(float(s['start']))}] {_who(s)}: {s['text'].strip()}"
+        lines += [s["text"].strip() if is_break(s)
+                  else f"[{_hms(float(s['start']))}] {_who(s)}: {s['text'].strip()}"
                   for s in segments]
         return "\n".join(lines) + "\n"
     if fmt == "srt":
+        # Субтитры — только речь: отметке перерыва нечего показывать на экране.
+        segments = [s for s in segments if not is_break(s)]
         blocks = [
             f"{i}\n{_srt_time(float(s['start']))} --> {_srt_time(float(s['end']))}\n"
             f"{_who(s)}: {s['text'].strip()}"

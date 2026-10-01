@@ -42,7 +42,13 @@ DOWNLOAD_MODEL = "download-model"
 # резидента: итоги не должны ждать часовую расшифровку и наоборот.
 SUMMARY = "summary"
 ASK = "ask"
-KINDS = (TRANSCRIBE, IMPORT, INSTALL_ENGINE, DOWNLOAD_MODEL, SUMMARY, ASK)
+# Объединение встреч (meet.merge): склейка дорожек в новую папку записи; за
+# ней резидент ставит обычную расшифровку.
+MERGE = "merge"
+KINDS = (TRANSCRIBE, IMPORT, INSTALL_ENGINE, DOWNLOAD_MODEL, SUMMARY, ASK, MERGE)
+# Задачи, которые пишут в папку записи звук или транскрипт: пока такая ждёт или
+# идёт, запись нельзя удалить, объединить или поставить вторую такую же.
+FOLDER_KINDS = (TRANSCRIBE, IMPORT, MERGE)
 
 JOB_QUEUED = "job.queued"
 JOB_STARTED = "job.started"
@@ -104,7 +110,7 @@ def worker_argv(job: Job) -> list[str]:
         return argv
     if job.kind == DOWNLOAD_MODEL:
         return argv  # путь задачи — это repo_id модели
-    if job.kind == SUMMARY:
+    if job.kind in (SUMMARY, MERGE):
         return argv
     if job.kind == ASK:
         # Одним аргументом через «=»: вопрос с ведущим дефисом argparse иначе

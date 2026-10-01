@@ -8,6 +8,7 @@ vi.mock("../../lib/api", async (orig) => ({
   patchRecording: vi.fn(async () => ({})),
   deleteRecording: vi.fn(async () => ({ ok: true })),
   kbExport: vi.fn(async () => ({ path: "D:/База/2026-09-30 - Планёрка", files: [], kept: [] })),
+  mergeRecordings: vi.fn(),
 }));
 import type { Job, Recording } from "../../lib/types";
 
@@ -197,4 +198,92 @@ test("повторное нажатие «⋯» закрывает меню", as
   await userEvent.click(more);
   expect(screen.queryByRole("menu")).toBeNull();
   expect(more).toHaveAttribute("aria-expanded", "false");
+});
+
+// --- выбор нескольких и объединение ----------------------------------------------
+
+const many = [
+  rec("d", { title: "Первая часть" }),
+  rec("e", { title: "Вторая часть" }),
+  rec("f", { title: "Третья часть" }),
+  rec("g", { title: "Пишется" }),
+];
+const pickLib = { ...library, items: many, jobs: [job("C:/rec/g", { state: "queued" })] };
+const mainOf = (title: string) => screen.getByText(title).closest("button")!;
+const pickBox = (title: string) => screen.queryByRole("checkbox", { name: `Выбрать «${title}»` });
+
+test("Ctrl+щелчок — режим выбора: открытая и отмеченная, флажки у всех, «Объединить (2)»", async () => {
+  vi.mocked(api.mergeRecordings).mockResolvedValue({ recording: "d_merged", job: job("C:/rec/d_merged", {}) });
+  const { onSelect } = setup({ library: pickLib, selected: "d" });
+  expect(pickBox("Первая часть")).toBeNull();
+  const user = userEvent.setup();
+  await user.keyboard("{Control>}");
+  await user.click(mainOf("Вторая часть"));
+  await user.keyboard("{/Control}");
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(pickBox("Первая часть")).toBeChecked();
+  expect(pickBox("Вторая часть")).toBeChecked();
+  expect(pickBox("Третья часть")).not.toBeChecked();
+  const bar = screen.getByRole("toolbar", { name: "Выбранные записи" });
+  expect(within(bar).getByText("Выбрано: 2")).toBeInTheDocument();
+  await user.click(within(bar).getByRole("button", { name: "Объединить (2)" }));
+  expect(api.mergeRecordings).toHaveBeenCalledWith(ep, ["d", "e"], false);
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Встречи объединены. Исходные записи будут удалены после расшифровки");
+  expect(onSelect).toHaveBeenCalledWith("d_merged");
+  expect(refresh).toHaveBeenCalled();
+  expect(screen.queryByRole("toolbar")).toBeNull();
+});
+
+test("Shift+щелчок — диапазон; флажок снимает; «Сохранить исходные записи» уходит в запрос", async () => {
+  vi.mocked(api.mergeRecordings).mockResolvedValue({ recording: "d_merged", job: job("C:/rec/d_merged", {}) });
+  setup({ library: pickLib, selected: "d" });
+  const user = userEvent.setup();
+  await user.keyboard("{Shift>}");
+  await user.click(mainOf("Третья часть"));
+  await user.keyboard("{/Shift}");
+  expect(screen.getByText("Выбрано: 3")).toBeInTheDocument();
+  await user.click(pickBox("Вторая часть")!);
+  expect(screen.getByText("Выбрано: 2")).toBeInTheDocument();
+  await user.click(screen.getByRole("checkbox", { name: "Сохранить исходные записи" }));
+  await user.click(screen.getByRole("button", { name: "Объединить (2)" }));
+  expect(api.mergeRecordings).toHaveBeenCalledWith(ep, ["d", "f"], true);
+  expect(await screen.findByRole("status")).toHaveTextContent(/^Встречи объединены×$/);
+});
+
+test("Ctrl+A — все записи; запись в обработке не даёт объединить; Esc снимает выбор", async () => {
+  setup({ library: pickLib, selected: "d" });
+  const user = userEvent.setup();
+  mainOf("Первая часть").focus();
+  await user.keyboard("{Control>}a{/Control}");
+  expect(screen.getByText("Выбрано: 4")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Объединить (4)" })).toBeDisabled();
+  expect(screen.getByText("Записи, которые ещё пишутся или обрабатываются, объединить нельзя")).toBeInTheDocument();
+  mainOf("Первая часть").focus();
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("toolbar")).toBeNull();
+});
+
+test("одна отмеченная — объединять нечего; обычный щелчок снимает выбор и открывает запись", async () => {
+  const { onSelect } = setup({ library: pickLib, selected: null });
+  const user = userEvent.setup();
+  await user.keyboard("{Control>}");
+  await user.click(mainOf("Вторая часть"));
+  await user.keyboard("{/Control}");
+  expect(screen.getByRole("button", { name: "Объединить (1)" })).toBeDisabled();
+  expect(screen.getByText("Выберите ещё хотя бы одну запись")).toBeInTheDocument();
+  await user.click(mainOf("Третья часть"));
+  expect(onSelect).toHaveBeenCalledWith("f");
+  expect(screen.queryByRole("toolbar")).toBeNull();
+});
+
+test("ошибка объединения — текстом резидента", async () => {
+  vi.mocked(api.mergeRecordings).mockRejectedValue(new api.ApiError(400, "2026-09-30_10-00: запись ещё идёт"));
+  setup({ library: pickLib, selected: "d" });
+  const user = userEvent.setup();
+  await user.keyboard("{Control>}");
+  await user.click(mainOf("Вторая часть"));
+  await user.keyboard("{/Control}");
+  await user.click(screen.getByRole("button", { name: "Объединить (2)" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("2026-09-30_10-00: запись ещё идёт");
 });

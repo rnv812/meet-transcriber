@@ -1,0 +1,409 @@
+"""Объединение встреч: несколько записей одной встречи (вышли и зашли заново,
+сеть оборвалась дольше ожидания) → одна запись с общей расшифровкой.
+
+Как это идёт:
+
+1. `create` — новая папка записи рядом с исходными: `meta.json` с
+   `source: "merge"`, названием, списком исходных (`merged_from`) и тем, что
+   делать с ними после (`merge.keep_originals`). Звука в ней ещё нет, но
+   библиотека её уже показывает — окно сразу открывает её карточку.
+2. `run` (задача `merge` очереди резидента или `meet merge`) — в порядке
+   времени склеивает ffmpeg'ом каждую дорожку: `sys`, `mic` или `source`
+   (импорт). Нет дорожки в какой-то части — на её место тишина той же длины:
+   дорожки обязаны остаться выровненными, иначе расшифровка двух дорожек
+   поставила бы реплики не туда. Части пишутся в `meta.parts`
+   (сдвиг в общей записи, исходное начало, перерыв перед частью).
+3. Обычная расшифровка общей папки — спикеры одни на всю встречу. Перерывы
+   вставляются в транскрипт отметками «— перерыв N мин —» (`with_breaks`,
+   зовёт `meet.transcribe`): это не реплика, а разделитель.
+4. После успешной расшифровки исходные записи удаляются, если не просили
+   оставить (это решает резидент или `meet merge`, см. `originals`).
+
+Импорт среди звонков: его звук — запись чужого разговора целиком, ближе всего
+к «собеседникам», поэтому он идёт в `sys`, а микрофон этой части — тишина.
+Одни импорты — одна дорожка `source`, как у обычного импорта.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+from meet import library
+
+SOURCE = "merge"
+FOLDER_SUFFIX = "merged"
+BREAK = "break"
+# Склеенные дорожки — тот же формат, что пишет запись (meet.recorder).
+RATE = 16000
+OPUS_BITRATE = "24k"
+FFMPEG_TIMEOUT_S = 3600
+PROBE_TIMEOUT_S = 60
+_DURATION = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
+
+
+class MergeError(Exception):
+    """Объединить нельзя или не вышло — текст для человека."""
+
+
+@dataclass
+class Part:
+    """Одна исходная запись в составе объединённой."""
+
+    id: str
+    folder: Path
+    start: datetime
+    duration_s: float
+    tracks: dict = field(default_factory=dict)
+    title: str | None = None
+
+
+# --- части ------------------------------------------------------------------------
+
+
+def _events(folder: Path) -> list[dict]:
+    try:
+        lines = (folder / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            out.append(event)
+    return out
+
+
+def part_start(folder: Path) -> datetime | None:
+    """Начало записи: точное — из `events.jsonl` (запись пишет его при старте),
+    иначе — по имени папки (с точностью до минуты)."""
+    for event in _events(folder):
+        if event.get("kind") == "record.started" and isinstance(event.get("at"), (int, float)):
+            return datetime.fromtimestamp(float(event["at"]))
+    started = library._started_at(folder.name)
+    return datetime.fromisoformat(started) if started else None
+
+
+def _events_duration(folder: Path) -> float | None:
+    for event in reversed(_events(folder)):
+        if event.get("kind") == "record.stopped" and isinstance(event.get("duration_s"), (int, float)):
+            return float(event["duration_s"])
+    return None
+
+
+def probe_duration(path: Path, run=subprocess.run) -> float | None:
+    """Длительность файла в секундах: ffprobe, без него — строка «Duration» из
+    ffmpeg. Не узнали — None."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    try:
+        if shutil.which("ffprobe"):
+            proc = run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                        "-of", "default=nw=1:nk=1", str(path)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=PROBE_TIMEOUT_S, creationflags=flags)
+            try:
+                return float((proc.stdout or "").strip().splitlines()[0])
+            except (ValueError, IndexError):
+                pass
+        if shutil.which("ffmpeg"):
+            proc = run(["ffmpeg", "-hide_banner", "-i", str(path)],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=PROBE_TIMEOUT_S, creationflags=flags)
+            m = _DURATION.search(proc.stderr or "")
+            if m:
+                h, mi, s = m.groups()
+                return int(h) * 3600 + int(mi) * 60 + float(s)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return None
+
+
+def describe_part(folder: Path, probe=probe_duration) -> Part:
+    """Исходная запись как часть: дорожки, начало и длительность (самая длинная
+    дорожка; не измерить — длительность записи из `events.jsonl`)."""
+    card = library.describe(folder)
+    if card is None or not card.tracks:
+        raise MergeError(f"В записи нет звука: {folder.name}")
+    start = part_start(folder)
+    if start is None:
+        raise MergeError(f"Неизвестно время начала записи: {folder.name}")
+    lengths = [d for d in (probe(Path(p)) for p in card.tracks.values()) if d]
+    duration = max(lengths) if lengths else _events_duration(folder)
+    if not duration or duration <= 0:
+        raise MergeError(f"Не удалось узнать длительность записи: {folder.name}")
+    return Part(id=folder.name, folder=folder, start=start, duration_s=float(duration),
+                tracks={k: Path(v) for k, v in card.tracks.items()}, title=card.title)
+
+
+def output_roles(parts: list[Part]) -> tuple[str, ...]:
+    """Дорожки объединённой записи: одни импорты — `source`, иначе `sys`+`mic`."""
+    if all(set(p.tracks) <= {"source"} for p in parts):
+        return ("source",)
+    return ("sys", "mic")
+
+
+def role_track(part: Part, role: str) -> Path | None:
+    """Файл части для дорожки `role`; импорт среди звонков идёт в `sys`."""
+    if role == "sys":
+        return part.tracks.get("sys") or part.tracks.get("source")
+    return part.tracks.get(role)
+
+
+def pieces(parts: list[Part], role: str) -> list[tuple[Path | None, float]]:
+    return [(role_track(p, role), p.duration_s) for p in parts]
+
+
+def concat_command(items: list[tuple[Path | None, float]], out: Path) -> list[str]:
+    """ffmpeg: куски подряд, каждый ровно длиной своей части.
+
+    Короткая дорожка части дополняется тишиной (`apad`) и обрезается до длины
+    части (`atrim`); отсутствующая — генератор тишины той же длины
+    (`anullsrc`). Всё приводится к формату записи — моно 16 кГц, — чтобы
+    `concat` склеивал одинаковое."""
+    args: list[str] = []
+    chains: list[str] = []
+    labels: list[str] = []
+    norm = f"aformat=sample_fmts=fltp:sample_rates={RATE}:channel_layouts=mono"
+    inputs = 0
+    for index, (path, seconds) in enumerate(items):
+        end = f"atrim=end={seconds:.3f}"
+        if path is None:
+            chains.append(f"anullsrc=r={RATE}:cl=mono,{end},{norm}[a{index}]")
+        else:
+            args += ["-i", str(path)]
+            chains.append(f"[{inputs}:a:0]aresample={RATE},{norm},asetpts=PTS-STARTPTS,"
+                          f"apad,{end},asetpts=PTS-STARTPTS[a{index}]")
+            inputs += 1
+        labels.append(f"[a{index}]")
+    graph = ";".join(chains) + ";" + "".join(labels) + f"concat=n={len(items)}:v=0:a=1[out]"
+    return [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        *args,
+        "-filter_complex", graph, "-map", "[out]",
+        "-ac", "1", "-ar", str(RATE), "-c:a", "libopus", "-b:a", OPUS_BITRATE,
+        "-application", "voip",
+        "-f", "ogg", str(out),
+    ]
+
+
+def parts_meta(parts: list[Part]) -> list[dict]:
+    """Части для `meta.parts`: сдвиг в общей записи, исходное начало,
+    длительность и перерыв перед частью (по времени, а не по звуку)."""
+    out = []
+    offset = 0.0
+    prev_end: datetime | None = None
+    for part in parts:
+        gap = 0.0 if prev_end is None else max(0.0, (part.start - prev_end).total_seconds())
+        out.append({
+            "id": part.id,
+            "start_offset_s": round(offset, 3),
+            "original_start": part.start.isoformat(timespec="seconds"),
+            "duration_s": round(part.duration_s, 3),
+            "gap_s": round(gap, 3),
+        })
+        offset += part.duration_s
+        prev_end = datetime.fromtimestamp(part.start.timestamp() + part.duration_s)
+    return out
+
+
+# --- перерывы в транскрипте --------------------------------------------------------------
+
+
+def break_text(gap_s: float | None) -> str:
+    gap = max(0.0, float(gap_s or 0.0))
+    if gap < 60:
+        return "— перерыв меньше минуты —"
+    if gap >= 86400:  # части разных дней — минуты уже ни о чём не говорят
+        days = int(round(gap / 86400))
+        return f"— перерыв {days} {_days_word(days)} —"
+    minutes = int(round(gap / 60))
+    hours, rest = divmod(minutes, 60)
+    if not hours:
+        return f"— перерыв {minutes} мин —"
+    return f"— перерыв {hours} ч —" if not rest else f"— перерыв {hours} ч {rest} мин —"
+
+
+def _days_word(n: int) -> str:
+    d, u = n % 100, n % 10
+    if 11 <= d <= 14:
+        return "дней"
+    return "день" if u == 1 else "дня" if 2 <= u <= 4 else "дней"
+
+
+def with_breaks(segments: list, parts: list[dict] | None) -> list:
+    """Сегменты расшифровки с отметками перерывов на стыках частей.
+
+    Отметка — `Segment(kind="break")` без спикера: вывод и окно рисуют её
+    разделителем, а не репликой. Встаёт перед первой репликой, начавшейся на
+    стыке или позже; реплика, начатая до стыка, остаётся в своей части."""
+    from meet.asr import Segment
+
+    if not isinstance(parts, list) or len(parts) < 2:
+        return segments
+    marks = []
+    for part in parts[1:]:
+        try:
+            at = float(part["start_offset_s"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        marks.append(Segment(at, at, break_text(part.get("gap_s")), None, kind=BREAK))
+    marks.sort(key=lambda s: s.start)
+    out = []
+    i = 0
+    for seg in segments:
+        while i < len(marks) and marks[i].start <= seg.start:
+            out.append(marks[i])
+            i += 1
+        out.append(seg)
+    out.extend(marks[i:])
+    return out
+
+
+# --- новая запись -------------------------------------------------------------------------
+
+
+def _new_folder(root: Path, start: datetime) -> Path:
+    stem = f"{start:%Y-%m-%d_%H-%M}_{FOLDER_SUFFIX}"
+    folder = root / stem
+    n = 2
+    while True:
+        try:
+            folder.mkdir(parents=True)
+            return folder
+        except FileExistsError:
+            folder = root / f"{stem}-{n}"
+            n += 1
+
+
+def create(root: Path, folders: list[Path], keep_originals: bool) -> Path:
+    """Папка объединённой записи с `meta.json`; звук собирает `run`.
+
+    Название — у самой ранней записи, иначе «Объединённая встреча <дата>».
+    Запоминаем, какие исходные уже выгружались в базу знаний: после их
+    удаления узнать это будет не у кого."""
+    unique: list[Path] = []
+    for folder in folders:
+        folder = Path(folder)
+        if all(os.path.normcase(str(folder.resolve())) != os.path.normcase(str(u.resolve()))
+               for u in unique):
+            unique.append(folder)
+    if len(unique) < 2:
+        raise MergeError("Для объединения нужно выбрать минимум две записи")
+    found = []
+    for folder in unique:
+        card = library.describe(folder)
+        if card is None:
+            raise MergeError(f"Записи нет: {folder.name}")
+        if not card.tracks:
+            raise MergeError(f"В записи нет звука: {card.title or folder.name}")
+        start = part_start(folder)
+        if start is None:
+            raise MergeError(f"Неизвестно время начала записи: {folder.name}")
+        found.append((start, folder, card))
+    found.sort(key=lambda item: item[0])
+    first_start, _, first = found[0]
+    title = first.title or f"Объединённая встреча {first_start:%d.%m.%Y}"
+    exported = []
+    for _, folder, _card in found:
+        record = library.read_meta(folder).get("kb_export")
+        if isinstance(record, dict) and record.get("path"):
+            exported.append(str(record["path"]))
+    target = _new_folder(Path(root), first_start)
+    library.write_meta(target, {
+        "source": SOURCE,
+        "title": title,
+        "merged_from": [folder.name for _, folder, _ in found],
+        "merge": {"keep_originals": bool(keep_originals), "state": "pending",
+                  "kb_exported": exported},
+    })
+    return target
+
+
+def originals(folder: Path) -> list[Path]:
+    """Исходные записи объединённой (те, что ещё на месте)."""
+    names = library.read_meta(folder).get("merged_from")
+    root = Path(folder).parent
+    return [root / n for n in names if isinstance(n, str) and (root / n).is_dir()] \
+        if isinstance(names, list) else []
+
+
+def mark_done(folder: Path, deleted: list[str], kept_reason: str | None = None) -> None:
+    """Объединение завершено: что из исходных удалено (и почему не всё)."""
+    library.update_meta(folder, lambda meta: {**meta, "merge": {
+        **(meta.get("merge") or {}), "state": "done", "deleted": list(deleted),
+        **({"kept_reason": kept_reason} if kept_reason else {}),
+    }})
+
+
+def _write_events(folder: Path, start: datetime, duration: float) -> None:
+    lines = [
+        {"kind": "record.started", "at": start.timestamp(), "folder": str(folder), "source": SOURCE},
+        {"kind": "record.stopped", "at": start.timestamp() + duration, "folder": str(folder),
+         "duration_s": round(duration, 3)},
+    ]
+    (folder / "events.jsonl").write_text(
+        "\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n", encoding="utf-8")
+
+
+def run(folder: Path, run=subprocess.run, probe=probe_duration, bus=None) -> Path:
+    """Собрать звук объединённой записи из исходных (см. docstring модуля).
+
+    Дорожка пишется во временный `.part` и переименовывается целиком:
+    оборванная сборка (отмена убивает процесс) не оставит полдорожки,
+    которую библиотека приняла бы за запись."""
+    folder = Path(folder)
+    if shutil.which("ffmpeg") is None:
+        raise MergeError("ffmpeg не найден — записи не объединить")
+    meta = library.read_meta(folder)
+    names = meta.get("merged_from")
+    if not isinstance(names, list) or len(names) < 2:
+        raise MergeError("Не сказано, какие записи объединять")
+    parts = []
+    for name in names:
+        source = folder.parent / str(name)
+        if not source.is_dir():
+            raise MergeError(f"Исходная запись пропала: {name}")
+        parts.append(describe_part(source, probe=probe))
+    parts.sort(key=lambda p: p.start)
+    roles = output_roles(parts)
+    for stale in [*folder.glob("*.opus"), *folder.glob("*.part")]:
+        stale.unlink(missing_ok=True)  # повтор после сбоя — начисто
+    for done, role in enumerate(roles):
+        if bus is not None:
+            bus.progress("merge", label="объединение", done=done, total=len(roles), note=role)
+        part_file = folder / f"{role}.opus.part"
+        try:
+            proc = run(concat_command(pieces(parts, role), part_file),
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=FFMPEG_TIMEOUT_S,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except subprocess.TimeoutExpired as e:
+            part_file.unlink(missing_ok=True)
+            raise MergeError("ffmpeg не успел объединить записи") from e
+        except OSError as e:
+            part_file.unlink(missing_ok=True)
+            raise MergeError(f"ffmpeg не запустился: {e}") from e
+        if proc.returncode != 0:
+            part_file.unlink(missing_ok=True)
+            for made in folder.glob("*.opus"):
+                made.unlink(missing_ok=True)
+            raise MergeError(f"ffmpeg не объединил записи: {(proc.stderr or '').strip()[-300:]}")
+        os.replace(part_file, folder / f"{role}.opus")
+    total = sum(p.duration_s for p in parts)
+    _write_events(folder, parts[0].start, total)
+    library.update_meta(folder, lambda m: {
+        **m, "parts": parts_meta(parts),
+        "merge": {**(m.get("merge") or {}), "state": "merged"},
+    })
+    if bus is not None:
+        bus.progress("merge", label="объединение", done=len(roles), total=len(roles))
+    return folder

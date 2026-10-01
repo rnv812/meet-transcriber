@@ -312,3 +312,9 @@ def test_worker_subprocess_gets_proxy_env(tmp_path, monkeypatch):
     env = {k.upper(): v for k, v in seen["env"].items()}
     assert env["HTTPS_PROXY"] == "http://10.1.1.1:3128"
     assert "PATH" in env
+
+
+def test_merge_kind_runs_worker_with_folder(tmp_path):
+    job = jobs.Job(id="m", kind=jobs.MERGE, folder=str(tmp_path))
+    assert jobs.MERGE in jobs.KINDS
+    assert jobs.worker_argv(job)[-2:] == ["merge", str(tmp_path)]

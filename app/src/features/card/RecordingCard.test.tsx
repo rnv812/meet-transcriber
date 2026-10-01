@@ -510,3 +510,20 @@ test("файлы, изменённые вручную, перечислены п
   const done = await screen.findByRole("status", { name: "Выгрузка в базу знаний" });
   expect(done).toHaveTextContent("Транскрипт.md изменён вручную — не перезаписан");
 });
+
+test("объединённая встреча: подпись о частях, перерыв в расшифровке и прежние папки в базе знаний", async () => {
+  load({ source: "merge", merge: { parts: 3, state: "done", deleted: true, kb_left: ["D:/База/2026-09-30 - Часть 2"] } }, {
+    ...transcript,
+    segments: [
+      transcript.segments[0]!,
+      { start: 5.5, end: 5.5, speaker: null, text: "— перерыв 15 мин —", uncertain: false, kind: "break" },
+      transcript.segments[1]!,
+    ],
+  });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  expect(await screen.findByText("Объединена из 3 записей · исходные записи удалены")).toBeInTheDocument();
+  expect(screen.getByText("D:/База/2026-09-30 - Часть 2")).toBeInTheDocument();
+  expect(screen.getByRole("separator", { name: "— перерыв 15 мин —" })).toBeInTheDocument();
+  // перерыв — не участник встречи
+  expect(screen.queryByRole("button", { name: /Неизвестный/ })).toBeNull();
+});

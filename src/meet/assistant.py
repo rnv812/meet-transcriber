@@ -88,6 +88,10 @@ def transcript_text(data: dict | None) -> str:
         text = str(seg.get("text") or "").strip()
         if not text:
             continue
+        if seg.get("kind") == "break":  # перерыв объединённой встречи
+            lines.append(text)
+            last_speaker = object()
+            continue
         speaker = seg.get("speaker") or "Спикер ?"
         if lines and speaker == last_speaker:
             lines[-1] += f" {text}"

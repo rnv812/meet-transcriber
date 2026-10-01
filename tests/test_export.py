@@ -100,3 +100,18 @@ def test_safe_filename_strips_trailing_dots_and_spaces_and_caps_length():
 def test_safe_filename_result_can_be_created_on_disk(tmp_path):
     for title in ("a*b", "CON", "x" * 300, "Итоги: план/факт?", "end. "):
         (tmp_path / export.safe_filename(title, "f")).mkdir()
+
+
+def test_break_mark_in_exports():
+    from meet import export
+
+    data = {"title": "Встреча", "segments": [
+        {"start": 0, "end": 1, "speaker": "Вы", "text": "раз"},
+        {"start": 1, "end": 1, "speaker": None, "text": "— перерыв 5 мин —", "kind": "break"},
+        {"start": 2, "end": 3, "speaker": "Вы", "text": "два"},
+    ]}
+    assert "*— перерыв 5 мин —*" in export.render(data, "md")
+    txt = export.render(data, "txt")
+    assert "\n— перерыв 5 мин —\n" in txt and "Спикер ?" not in txt
+    srt = export.render(data, "srt")
+    assert "перерыв" not in srt and srt.count("-->") == 2

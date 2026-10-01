@@ -664,3 +664,87 @@ def test_import_json_has_no_diarization_mark_without_transcript(env, capsys, mon
     assert _main(["import", str(_media(env)), "--no-transcribe", "--json"]) == 0
     got = _json_out(capsys)
     assert got["transcribed"] is False and got["diarization"] is None
+
+
+# --- merge ---------------------------------------------------------------------
+
+
+def _part(env, rid, title=None):
+    folder = env["rec"] / rid
+    folder.mkdir()
+    (folder / "sys.opus").write_bytes(b"x")
+    (folder / "mic.opus").write_bytes(b"x")
+    if title:
+        library.write_meta(folder, {"title": title})
+    return folder
+
+
+def _fake_merge_pipeline(monkeypatch, fail_transcribe=False):
+    import meet.transcribe
+    from meet import merge
+
+    def fake_run(folder, bus=None, **kw):
+        (folder / "sys.opus").write_bytes(b"m")
+        (folder / "mic.opus").write_bytes(b"m")
+        return folder
+
+    def fake_transcribe(path, speakers=None, hotwords=None, align=True, overlap=True, bus=None):
+        if fail_transcribe:
+            raise SystemExit("движок не установлен")
+        library.write_transcript(Path(path), {"version": 1, "segments": []})
+        return Path(path) / "t.md"
+
+    monkeypatch.setattr(merge, "run", fake_run)
+    monkeypatch.setattr(meet.transcribe, "transcribe", fake_transcribe)
+
+
+def test_merge_joins_transcribes_and_deletes_originals(env, capsys, monkeypatch):
+    _fake_merge_pipeline(monkeypatch)
+    a = _part(env, "2026-09-29_15-30", title="Планёрка")
+    b = _part(env, "2026-09-29_16-10")
+    assert _main(["merge", b.name, str(a), "--json"]) == 0
+    got = _json_out(capsys)
+    folder = Path(got["folder"])
+    assert folder.name == "2026-09-29_15-30_merged"
+    assert got["merged_from"] == [a.name, b.name]
+    assert got["deleted"] == [a.name, b.name]
+    assert not a.exists() and not b.exists()
+    meta = library.read_meta(folder)
+    assert meta["title"] == "Планёрка" and meta["merge"]["state"] == "done"
+
+
+def test_merge_keep_leaves_originals(env, capsys, monkeypatch):
+    _fake_merge_pipeline(monkeypatch)
+    a = _part(env, "2026-09-29_15-30")
+    b = _part(env, "2026-09-29_16-10")
+    assert _main(["merge", a.name, b.name, "--keep"]) == 0
+    assert a.exists() and b.exists()
+    assert capsys.readouterr().out.strip().endswith("2026-09-29_15-30_merged")
+
+
+def test_merge_failed_transcription_keeps_originals(env, capsys, monkeypatch):
+    _fake_merge_pipeline(monkeypatch, fail_transcribe=True)
+    a = _part(env, "2026-09-29_15-30")
+    b = _part(env, "2026-09-29_16-10")
+    assert _main(["merge", a.name, b.name]) == 1
+    err = capsys.readouterr().err
+    assert "движок не установлен" in err and "Исходные записи сохранены" in err
+    assert a.exists() and b.exists()
+
+
+def test_merge_needs_two_recordings(env, capsys):
+    a = _part(env, "2026-09-29_15-30")
+    assert _main(["merge", a.name, a.name]) == 1
+    assert "минимум две" in capsys.readouterr().err
+
+
+def test_merge_refuses_a_recording_in_progress(env, capsys, monkeypatch):
+    from meet.recorder import LOCK_NAME
+
+    _fake_merge_pipeline(monkeypatch)
+    a = _part(env, "2026-09-29_15-30")
+    b = _part(env, "2026-09-29_16-10")
+    (env["rec"] / LOCK_NAME).write_text(json.dumps({"pid": __import__("os").getpid(), "folder": str(b)}), encoding="utf-8")
+    assert _main(["merge", a.name, b.name]) == 1
+    assert "запись ещё идёт" in capsys.readouterr().err
+    assert not list(env["rec"].glob("*_merged*"))
