@@ -54,15 +54,6 @@ fn encode_component(text: &str) -> String {
     out
 }
 
-/// Флаг, с которым Windows запускает оболочку при входе в систему (значение
-/// автозапуска в `HKCU\…\Run`, `set_autostart`).
-pub const AUTOSTART_ARG: &str = "--autostart";
-
-/// Запуск при входе в систему: только трей, никаких окон — даже мастера.
-pub fn autostarted(args: &[String]) -> bool {
-    args.iter().skip(1).any(|arg| arg == AUTOSTART_ARG)
-}
-
 /// Запись из командной строки: `meet.exe --recording <id>` (или
 /// `--recording=<id>`). `args` — полный argv, `args[0]` — сам exe. Флаг без
 /// значения или со следующим флагом вместо id — `None`: окно откроется без
@@ -551,38 +542,6 @@ pub fn open_wizard_on_first_run(app: &AppHandle) {
     }
 }
 
-/// «Запускать вместе с Windows» (шаг «Готово» мастера). `enabled` —
-/// обязательный аргумент: окно проверяет наличие команды вызовом без
-/// аргументов и прячет переключатель только на «command not found».
-/// Выключить невключённое — не ошибка (плагин в этом случае отказывает:
-/// нечего удалять из реестра).
-#[tauri::command]
-pub async fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
-    use tauri_plugin_autostart::ManagerExt;
-
-    let manager = app.autolaunch();
-    let result = if enabled {
-        manager.enable()
-    } else {
-        manager
-            .disable()
-            .or_else(|error| match manager.is_enabled() {
-                Ok(false) => Ok(()),
-                _ => Err(error),
-            })
-    };
-    match result {
-        Ok(()) => {
-            shell_log!("автозапуск: {}", if enabled { "вкл" } else { "выкл" });
-            Ok(())
-        }
-        Err(error) => {
-            shell_log!("автозапуск не переключился: {error}");
-            Err(format!("Не удалось изменить автозапуск: {error}"))
-        }
-    }
-}
-
 #[tauri::command]
 pub fn resident_status(app: AppHandle) -> String {
     match app.state::<Supervisor>().status() {
@@ -801,22 +760,6 @@ mod tests {
         );
         // Сам exe (argv[0]) не разбирается как флаг.
         assert_eq!(recording_arg(&argv(&["--recording", "x"])), None);
-    }
-
-    #[test]
-    fn autostart_flag_is_recognised_only_after_the_exe() {
-        assert!(autostarted(&argv(&["meet.exe", "--autostart"])));
-        assert!(autostarted(&argv(&[
-            "meet.exe",
-            "--recording",
-            "x",
-            "--autostart"
-        ])));
-        assert!(!autostarted(&argv(&["meet.exe"])));
-        assert!(!autostarted(&argv(&["--autostart"])));
-        assert!(!autostarted(&argv(&["meet.exe", "--autostart=1"])));
-        // Обычный запуск с записью — не автозапуск.
-        assert_eq!(recording_arg(&argv(&["meet.exe", "--autostart"])), None);
     }
 
     #[test]

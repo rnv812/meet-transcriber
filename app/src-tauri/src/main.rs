@@ -11,6 +11,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod api;
+mod autostart;
 mod engine;
 mod logs;
 mod resident;
@@ -35,10 +36,10 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         // Автозапуск при входе в Windows (переключатель мастера,
-        // `windows::set_autostart`): `--autostart` — признак такого запуска.
+        // `autostart::set_autostart`): `--autostart` — признак такого запуска.
         .plugin(
             tauri_plugin_autostart::Builder::new()
-                .arg(windows::AUTOSTART_ARG)
+                .arg(autostart::AUTOSTART_ARG)
                 .build(),
         )
         .plugin(
@@ -63,10 +64,12 @@ fn main() {
             engine::gpu_info,
             windows::open_url,
             windows::mark_wizard_done,
-            windows::set_autostart
+            autostart::set_autostart
         ])
         .setup(|app| {
             Supervisor::start(app.handle());
+            // Автозапуск, снятый деинсталлятором прежней версии, — вернуть.
+            autostart::restore_at_startup(app.handle());
             tray::build(app)?;
             // Обычный запуск — только трей. `--recording <id>` (например, из
             // уведомления) — сразу окно на этой записи; первый запуск без
@@ -75,7 +78,7 @@ fn main() {
             let args: Vec<String> = std::env::args().collect();
             if let Some(recording) = windows::recording_arg(&args) {
                 windows::open_main(app.handle(), Some(recording), None);
-            } else if windows::autostarted(&args) {
+            } else if autostart::autostarted(&args) {
                 logs::shell_log!("автозапуск при входе в Windows: только трей");
             } else {
                 windows::open_wizard_on_first_run(app.handle());
