@@ -1128,12 +1128,92 @@ def test_device_test_rejects_bad_body(control_state, body):
         control_state.test_device(body, probe=lambda k, n: pytest.fail("не должен звать"))
 
 
-def test_device_test_failure_is_a_readable_error(control_state):
-    from meet.control import BadRequest
+def test_device_test_failure_is_a_readable_unavailable_error(control_state):
+    """Сбой проверки — не ошибка запроса (400), а недоступность (503)."""
+    from meet.control import Unavailable
 
-    with pytest.raises(BadRequest, match="Не удалось проверить устройство: занято"):
+    with pytest.raises(Unavailable, match="Не удалось проверить устройство: занято"):
         control_state.test_device({"kind": "mic", "name": None},
                                   probe=lambda k, n: {"ok": False, "error": "занято"})
+
+
+def test_second_concurrent_device_test_is_refused(control_state):
+    """Две проверки разом (двойной клик) — вторая 409, первая доходит."""
+    import threading
+
+    from meet.control import Conflict
+
+    entered, release = threading.Event(), threading.Event()
+    results: list = []
+
+    def slow(kind, name):
+        entered.set()
+        release.wait(5)
+        return {"ok": True, "peak": 0.1, "device": "Микрофон"}
+
+    first = threading.Thread(target=lambda: results.append(
+        control_state.test_device({"kind": "mic", "name": None}, probe=slow)))
+    first.start()
+    assert entered.wait(5)
+    with pytest.raises(Conflict, match="Проверка устройства уже идёт"):
+        control_state.test_device({"kind": "mic", "name": None}, probe=slow)
+    release.set()
+    first.join(5)
+    assert results and results[0]["device"] == "Микрофон"
+    # после первой — снова можно
+    got = control_state.test_device({"kind": "mic", "name": None},
+                                    probe=lambda k, n: {"ok": True, "peak": 0.0,
+                                                        "device": "Микрофон"})
+    assert got["ok"] is True
+
+
+def _fake_run(monkeypatch, result=None, raises=None):
+    import subprocess
+
+    calls = []
+
+    def run(args, **kw):
+        calls.append((args, kw))
+        if raises is not None:
+            raise raises
+        return subprocess.CompletedProcess(args, 0, stdout=result, stderr="")
+
+    monkeypatch.setattr(tray_control.subprocess, "run", run)
+    return calls
+
+
+def test_check_device_runs_probe_subprocess_with_args(monkeypatch):
+    # ASCII-JSON (ensure_ascii) читается при любой кодировке stdout ребёнка
+    calls = _fake_run(monkeypatch, '{"ok": true, "peak": 0.3, "device": "USB-\\u043c"}\n')
+    got = tray_control._check_device("mic", "USB-микрофон")
+    assert got == {"ok": True, "peak": 0.3, "device": "USB-м"}
+    args, kw = calls[0]
+    assert args[1:3] == ["-m", "meet.devices_probe"]
+    assert args[3:] == ["--check", "mic", "--seconds", "2.0", "--name", "USB-микрофон"]
+    assert kw["env"]["PYTHONIOENCODING"] == "utf-8"
+    assert kw["timeout"] > tray_control.DEVICE_CHECK_S
+    tray_control._check_device("output", None)
+    assert "--name" not in calls[1][0]
+
+
+def test_probe_timeout_says_device_did_not_answer(monkeypatch):
+    import subprocess
+
+    _fake_run(monkeypatch, raises=subprocess.TimeoutExpired(["python", "-m", "secret"], 22))
+    got = tray_control._check_device("mic", None)
+    assert got == {"ok": False, "error": "Устройство не ответило"}
+
+
+def test_probe_failure_shows_only_exception_type(monkeypatch):
+    _fake_run(monkeypatch, raises=OSError("C:/путь/python.exe -m meet.devices_probe"))
+    got = tray_control._probe_devices()
+    assert got == {"available": False, "error": "OSError"}
+
+
+def test_probe_list_gets_utf8_env_too(monkeypatch):
+    calls = _fake_run(monkeypatch, '{"available": true}')
+    tray_control._probe_devices()
+    assert calls[0][1]["env"]["PYTHONIOENCODING"] == "utf-8"
 
 
 def test_device_test_never_touches_portaudio_in_process(control_state, monkeypatch):
@@ -1155,3 +1235,26 @@ def test_snapshot_reports_device_fallback_while_recording(control_state, app):
         {"kind": "mic", "name": "USB-микрофон", "device": "Микрофон"}]
     control_state.bus.emit(events.RECORD_STOPPED, folder="x", duration_s=1.0)
     assert control_state.snapshot()["devices_fallback"] == []
+
+
+def test_snapshot_fallback_clears_when_device_returns(control_state, app):
+    app.recording = True
+    for role, wanted in (("mic", "USB-микрофон"), ("output", "Наушники")):
+        control_state.bus.emit(events.RECORD_DEVICE_FALLBACK, track="x", role=role,
+                               wanted=wanted, device="системное")
+    assert [f["kind"] for f in control_state.snapshot()["devices_fallback"]] == ["mic", "output"]
+    control_state.bus.emit(events.RECORD_DEVICE_PINNED, track="mic.opus", role="mic",
+                           wanted="USB-микрофон", device="USB-микрофон")
+    assert control_state.snapshot()["devices_fallback"] == [
+        {"kind": "output", "name": "Наушники", "device": "системное"}]
+    # пропал снова — снова в снимке, без дублей
+    for _ in range(2):
+        control_state.bus.emit(events.RECORD_DEVICE_FALLBACK, track="x", role="mic",
+                               wanted="USB-микрофон", device="системное")
+    assert [f["kind"] for f in control_state.snapshot()["devices_fallback"]] == ["output", "mic"]
+
+
+def test_snapshot_reports_live_mode_fallback(control_state, monkeypatch):
+    fallback = [{"kind": "mic", "name": "USB-микрофон", "device": "Микрофон"}]
+    monkeypatch.setattr(control_state.live, "devices_fallback", lambda: fallback)
+    assert control_state.snapshot()["devices_fallback"] == fallback

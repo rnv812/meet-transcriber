@@ -121,6 +121,17 @@ def _descends_from(pid, root: int) -> bool:
         return False
 
 
+def _fallback_of(info: dict) -> list[dict]:
+    """`devices_fallback` из файла эндпоинта — только понятные записи."""
+    items = info.get("devices_fallback")
+    if not isinstance(items, list):
+        return []
+    return [{"kind": item.get("kind"), "name": str(item.get("name") or ""),
+             "device": item.get("device")}
+            for item in items
+            if isinstance(item, dict) and item.get("kind") in ("mic", "output")]
+
+
 def _read_endpoint(path: Path, pid: int) -> dict | None:
     """Эндпоинт именно нашего ребёнка. Чужой pid — файл от прошлого,
     убитого запуска: его порт давно никому не принадлежит."""
@@ -280,6 +291,9 @@ class LiveControl:
         self._folder: str | None = None
         self._error: str | None = None
         self._started_at: float | None = None
+        # Выбранное в настройках устройство не нашлось — ассистент пишет с
+        # системного (из файла эндпоинта ребёнка): [{"kind", "name", "device"}].
+        self._fallback: list[dict] = []
         self._stop_requested = False
         self._stop_deadline: float | None = None
         self._streams: set = set()
@@ -294,6 +308,11 @@ class LiveControl:
         для секундомера панели."""
         with self._lock:
             return self._status_unlocked()
+
+    def devices_fallback(self) -> list[dict]:
+        """Подмены устройств у идущего ассистента; не идёт — пусто."""
+        with self._lock:
+            return [dict(f) for f in self._fallback] if self._active else []
 
     def busy(self) -> bool:
         """Идёт или поднимается — вторая запись сейчас невозможна."""
@@ -346,6 +365,7 @@ class LiveControl:
                     self._port = None
                     self._child_pid = None
                     self._folder = None
+                    self._fallback = []
                     self._error = None
                     self._started_at = None  # с live.started: прогрев модели не в счёт
                     self._stop_requested = False
@@ -513,6 +533,7 @@ class LiveControl:
                 self._active = False
                 self._port = None
                 self._folder = None
+                self._fallback = []
                 self._started_at = None
                 self._stop_requested = False
                 self._stop_deadline = None
@@ -559,6 +580,7 @@ class LiveControl:
                         self._port = int(info["port"])
                         self._child_pid = info["pid"]
                         self._folder = str(info.get("folder") or "") or None
+                        self._fallback = _fallback_of(info)
                         folder = self._folder
                     self._log(f"ассистент слушает встречу: {folder}")
                     self.bus.emit(LIVE_STARTED, folder=folder)

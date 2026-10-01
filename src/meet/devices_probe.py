@@ -108,7 +108,9 @@ def main(argv: "list[str] | None" = None) -> int:
             payload = probe()
         except Exception as e:
             payload = {"available": False, "error": f"{type(e).__name__}: {e}"}
-    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    # ASCII-JSON (ensure_ascii): строку прочитает резидент при любой
+    # кодировке stdout, которую унаследовал подпроцесс.
+    print(json.dumps(payload, ensure_ascii=True), flush=True)
     return 0
 
 

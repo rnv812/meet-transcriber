@@ -682,6 +682,8 @@ def test_live_capture_uses_pinned_devices(tmp_path, monkeypatch, capsys):
     assert "mic.wav: USB-микрофон" in out
     assert ("Выбранное устройство вывода Наушники не найдено — запись идёт с системного"
             in out)
+    assert engine.devices_fallback == [
+        {"kind": "output", "name": "Наушники", "device": "system-output"}]
 
 
 def test_live_capture_reads_devices_from_settings(tmp_path, monkeypatch):

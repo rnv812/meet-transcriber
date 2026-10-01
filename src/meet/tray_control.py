@@ -10,6 +10,7 @@
 """
 
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -46,16 +47,24 @@ DEVICE_CHECK_S = 2.0
 
 def _run_probe(args: list[str], failed: str, timeout: float) -> dict:
     """Спросить подпроцесс meet.devices_probe; ответ — его строка JSON, сбой —
-    `{failed: False, "error": ...}`."""
+    `{failed: False, "error": ...}`.
+
+    Текст сбоя — для человека: таймаут — «Устройство не ответило», прочее —
+    только тип исключения (в их тексте — командная строка и пути)."""
     try:
         out = subprocess.run(
             [sys.executable, "-m", "meet.devices_probe", *args],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=timeout,
+            # Ребёнок и так печатает ASCII-JSON; кодировка — чтобы и строки
+            # ошибок не зависели от унаследованной консоли.
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+    except subprocess.TimeoutExpired:
+        return {failed: False, "error": "Устройство не ответило"}
     except (OSError, subprocess.SubprocessError) as e:
-        return {failed: False, "error": f"{type(e).__name__}: {e}"}
+        return {failed: False, "error": type(e).__name__}
     line = (out.stdout or "").strip().splitlines()
     try:
         return json.loads(line[-1]) if line else {
@@ -234,9 +243,10 @@ class TrayControl:
         self._devices_cache: dict | None = None
         self._devices_at = 0.0
         self._device_check = threading.Lock()  # одна проверка устройства за раз
-        # Выбранное в настройках устройство не нашлось у идущей записи:
-        # [{"kind": "mic"|"output", "name": выбранное, "device": взятое}].
-        self._fallbacks: list[dict] = []
+        # Выбранное в настройках устройство не нашлось у идущей записи — по
+        # роли: {"mic"|"output": {"kind", "name": выбранное, "device": взятое}}.
+        # Вернулось — запись убирается; запись кончилась — всё.
+        self._fallbacks: dict[str, dict] = {}
         # Последняя проверка доступа к Hugging Face (без токена): окно рисует
         # её по GET /hf/status, не дёргая сеть на каждый показ.
         self._hf_check: dict | None = None
@@ -350,11 +360,16 @@ class TrayControl:
         if event.kind == events.RECORD_LEVEL:
             self._levels = event.data.get("levels") or {}
         elif event.kind == events.RECORD_DEVICE_FALLBACK:
-            self._fallbacks = [*self._fallbacks, {
-                "kind": event.data.get("role"), "name": event.data.get("wanted"),
-                "device": event.data.get("device")}]
+            role = event.data.get("role")
+            rest = {k: v for k, v in self._fallbacks.items() if k != role}
+            self._fallbacks = {**rest, role: {
+                "kind": role, "name": event.data.get("wanted"),
+                "device": event.data.get("device")}}
+        elif event.kind == events.RECORD_DEVICE_PINNED:
+            role = event.data.get("role")
+            self._fallbacks = {k: v for k, v in self._fallbacks.items() if k != role}
         elif event.kind == events.RECORD_STOPPED:
-            self._fallbacks = []
+            self._fallbacks = {}
 
     # --- что показывать -------------------------------------------------
 
@@ -371,8 +386,9 @@ class TrayControl:
             "elapsed_s": round(elapsed, 1),
             "levels": dict(self._levels) if recording else {},
             # Выбранный в настройках микрофон или вывод не найден — эта запись
-            # идёт с системного: [{"kind", "name", "device"}].
-            "devices_fallback": [dict(f) for f in self._fallbacks] if recording else [],
+            # (или запись ассистента) идёт с системного: [{"kind", "name",
+            # "device"}]. Окно показывает это у кнопки записи, трей — в подсказке.
+            "devices_fallback": self._devices_fallback(recording),
             # Свободное место под записи: UI предупреждает при < 5 ГБ до старта
             # записи, а не когда ffmpeg упрётся в полный диск посреди встречи.
             # None — диск недоступен (отключён, шара не отвечает).
@@ -406,6 +422,14 @@ class TrayControl:
             # при этом не идёт — status выше остаётся про неё.
             "live": self.live.status(),
         }
+
+    def _devices_fallback(self, recording: bool) -> list[dict]:
+        if recording:
+            return [dict(f) for f in self._fallbacks.values()]
+        try:
+            return self.live.devices_fallback()
+        except Exception:
+            return []  # подмена LiveControl в тестах/старый — не повод ронять снимок
 
     # --- команды панели -------------------------------------------------
 
@@ -616,7 +640,11 @@ class TrayControl:
         finally:
             self._device_check.release()
         if not result.get("ok"):
-            raise _bad_request(
+            # Сбой проверки — не ошибка запроса: устройство или подпроцесс
+            # сейчас недоступны (503), текст — человеку.
+            from meet.control import Unavailable
+
+            raise Unavailable(
                 f"Не удалось проверить устройство: {result.get('error') or 'нет ответа'}")
         return result
 

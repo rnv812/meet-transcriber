@@ -7,7 +7,7 @@
  * без учёта регистра, поэтому и здесь сравнение такое же.
  */
 
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Processes } from "../../lib/api";
 import { Button } from "../../ui/Button";
 import { HelpTip } from "./Section";
@@ -66,16 +66,29 @@ function PresetBox({ program, selected, onToggle }: {
     if (ref.current) ref.current.indeterminate = some;
   }, [some]);
   return (
-    <label className="callapps__item" title={program.exes.join(", ")}>
+    <label className="callapps__item">
       <input ref={ref} type="checkbox" checked={all} aria-label={program.title} onChange={onToggle} />
-      <span>{program.title}</span>
+      <span className="callapps__name">
+        <span>{program.title}</span>
+        <span className="callapps__exes">{program.exes.join(", ")}</span>
+      </span>
     </label>
   );
 }
 
-function AddProgram({ processes, selected, onAdd, onClose }: {
-  processes: Processes | null; selected: Set<string>; onAdd: (name: string) => void; onClose: () => void;
+function AddProgram({ processes: initial, loadProcesses, selected, onAdd, onClose }: {
+  processes: Processes | null; loadProcesses?: () => Promise<Processes>; selected: Set<string>;
+  onAdd: (name: string) => void; onClose: () => void;
 }) {
+  // Список запущенных — свежий на каждое открытие: пользователь мог только что
+  // запустить программу звонков. До ответа — то, что было при открытии настроек.
+  const [processes, setProcesses] = useState(initial);
+  useEffect(() => {
+    if (!loadProcesses) return;
+    let current = true;
+    loadProcesses().then((p) => { if (current) setProcesses(p); }).catch(() => {});
+    return () => { current = false; };
+  }, [loadProcesses]);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(-1);
   const listId = useId();
@@ -89,6 +102,7 @@ function AddProgram({ processes, selected, onAdd, onClose }: {
   }).slice(0, MAX_OPTIONS);
   const typed = query.trim();
   const problem = exeProblem(typed);
+  const expanded = options.length > 0;
 
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") {
@@ -111,7 +125,7 @@ function AddProgram({ processes, selected, onAdd, onClose }: {
   return (
     <div className="callapps__add">
       <span className="with-unit">
-        <input type="text" role="combobox" aria-label="Программа" aria-expanded="true" aria-controls={listId}
+        <input type="text" role="combobox" aria-label="Программа" aria-expanded={expanded} aria-controls={listId}
           aria-autocomplete="list" aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
           placeholder="Поиск по запущенным или имя.exe" autoFocus value={query}
           onChange={(e) => { setQuery(e.target.value); setActive(-1); }} onKeyDown={onKey} />
@@ -124,7 +138,7 @@ function AddProgram({ processes, selected, onAdd, onClose }: {
       {processes && !processes.available && (
         <span className="muted callapps__note">Список запущенных программ недоступен{processes.error ? `: ${processes.error}` : ""}</span>
       )}
-      <ul id={listId} role="listbox" aria-label="Запущенные программы" className="callapps__options">
+      <ul id={listId} role="listbox" aria-label="Запущенные программы" className="callapps__options" hidden={!expanded}>
         {options.map((name, i) => (
           <li key={name} id={`${listId}-${i}`} role="option" aria-selected={i === active}
             className={`callapps__option${i === active ? " callapps__option--active" : ""}`}
@@ -137,10 +151,24 @@ function AddProgram({ processes, selected, onAdd, onClose }: {
   );
 }
 
-export function CallPrograms({ value, processes, onChange }: {
-  value: string[]; processes: Processes | null; onChange: (v: string[]) => void;
+function AddButton({ buttonRef, onClick }: { buttonRef: RefObject<HTMLButtonElement | null>; onClick: () => void }) {
+  return <div><Button ref={buttonRef} onClick={onClick}>Добавить программу…</Button></div>;
+}
+
+export function CallPrograms({ value, processes, loadProcesses, onChange }: {
+  value: string[]; processes: Processes | null;
+  /** Перечитать запущенные программы — при каждом открытии поиска. */
+  loadProcesses?: () => Promise<Processes>;
+  onChange: (v: string[]) => void;
 }) {
   const [adding, setAdding] = useState(false);
+  const addButton = useRef<HTMLButtonElement>(null);
+  // Поиск закрылся (добавили или Esc) — фокус обратно на «Добавить программу…».
+  const wasAdding = useRef(false);
+  useEffect(() => {
+    if (wasAdding.current && !adding) addButton.current?.focus();
+    wasAdding.current = adding;
+  }, [adding]);
   const selected = new Set(value.map(lower));
   const custom = value.filter((name) => !PRESET_EXES.has(lower(name)));
 
@@ -164,7 +192,7 @@ export function CallPrograms({ value, processes, onChange }: {
     <div className="callapps" role="group" aria-label="Программы звонков">
       <div className="callapps__head">
         <span className="srow__label">Программы звонков</span>
-        <HelpTip label="Какие звонки распознаются" title="Как распознаётся звонок">
+        <HelpTip label="Какие звонки распознаются" title="Как распознаётся звонок" align="start">
           <span className="help__line">
             Запись начинается, когда отмеченная программа использует микрофон или воспроизводит звук.
           </span>
@@ -178,7 +206,7 @@ export function CallPrograms({ value, processes, onChange }: {
       <div className="callapps__grid">{group(false)}</div>
       <div className="callapps__head callapps__head--sub">
         <span className="srow__hint">Мессенджеры</span>
-        <HelpTip label="Почему осторожно с мессенджерами" title="Мессенджеры">
+        <HelpTip label="Почему осторожно с мессенджерами" title="Мессенджеры" align="start">
           <span className="help__line">
             Мессенджеры воспроизводят звуки уведомлений, и детектор может принять их за начало звонка.
             Короткие записи будут сохраняться, но не расшифровываться автоматически.
@@ -197,8 +225,9 @@ export function CallPrograms({ value, processes, onChange }: {
         </ul>
       )}
       {adding
-        ? <AddProgram processes={processes} selected={selected} onAdd={add} onClose={() => setAdding(false)} />
-        : <div><Button onClick={() => setAdding(true)}>Добавить программу…</Button></div>}
+        ? <AddProgram processes={processes} loadProcesses={loadProcesses} selected={selected} onAdd={add}
+            onClose={() => setAdding(false)} />
+        : <AddButton buttonRef={addButton} onClick={() => setAdding(true)} />}
       {value.length === 0 && (
         <p className="muted callapps__note">
           Не выбрано ни одной программы — будет использован список по умолчанию.

@@ -935,3 +935,62 @@ def test_pinned_output_matches_by_exact_name_only(tmp_path, monkeypatch):
     other = {**_HEADSET_LB, "name": "Наушники 2 [Loopback]"}
     s = _session(monkeypatch, tmp_path, output_device="Наушники", extras={3: other})
     assert s.tracks[0].device_name == "Колонки"
+
+
+def test_fallback_and_return_are_noted_each_time(tmp_path, monkeypatch):
+    """Выбранное пропало — сказали; вернулось — сказали; пропало снова —
+    сказали снова (а не «раз за запись»)."""
+    bus, seen = _bus()
+    s = _session(monkeypatch, tmp_path, mic_device="USB-микрофон", bus=bus)
+    mic = s.tracks[1]
+    assert len(_fallbacks(seen)) == 1
+    _FakePyAudio.extras[2] = dict(_USB_MIC)  # подключили — Windows сменила дефолт
+    _FakePyAudio.devices["capture"] = _dev("USB-микрофон")
+    s.tick()
+    assert mic.device_name == "USB-микрофон"
+    back = [e for e in seen if e.kind == events.RECORD_DEVICE_PINNED]
+    assert len(back) == 1 and back[0].data["role"] == "mic"
+    texts = [e.data["text"] for e in seen if e.kind == events.LOG]
+    assert "Выбранный микрофон USB-микрофон снова доступен — запись идёт с него" in texts
+    del _FakePyAudio.extras[2]  # выдернули снова — Windows вернула дефолт
+    _FakePyAudio.devices["capture"] = _dev("Микрофон")
+    mic.stream.active = False
+    s.tick()
+    assert mic.device_name == "Микрофон"
+    assert len(_fallbacks(seen)) == 2
+
+
+@pytest.mark.parametrize("wanted, present", [
+    ("Микрофон (2- PD100U)", "Микрофон (PD100U)"),
+    ("Микрофон (PD100U)", "Микрофон (3- PD100U)"),
+    ("Микрофон (2- PD100U)", "Микрофон (12- PD100U)"),
+])
+def test_pinned_name_ignores_windows_instance_number(monkeypatch, wanted, present):
+    """Windows нумерует повторно подключённое устройство: «(2- PD100U)»."""
+    _fake_audio(monkeypatch)
+    _FakePyAudio.extras = {2: {**_USB_MIC, "name": present}}
+    p = _FakePyAudio()
+    dev, fell_back = recorder.resolve_device(p, "mic", wanted)
+    p.terminate()
+    assert dev["name"] == present and fell_back is False
+
+
+def test_exact_name_wins_over_tolerant_match(monkeypatch):
+    _fake_audio(monkeypatch)
+    _FakePyAudio.extras = {2: {**_USB_MIC, "name": "Микрофон (2- PD100U)"},
+                           3: {**_USB_MIC, "name": "Микрофон (PD100U)"}}
+    p = _FakePyAudio()
+    dev, _ = recorder.resolve_device(p, "mic", "Микрофон (PD100U)")
+    assert dev["index"] == 3
+    dev, _ = recorder.resolve_device(p, "mic", "Микрофон (2- PD100U)")
+    assert dev["index"] == 2
+    p.terminate()
+
+
+def test_pinned_output_loopback_ignores_instance_number(monkeypatch):
+    _fake_audio(monkeypatch)
+    _FakePyAudio.extras = {3: {**_HEADSET_LB, "name": "Наушники (WF) [Loopback]"}}
+    p = _FakePyAudio()
+    dev, fell_back = recorder.resolve_device(p, "output", "Наушники (2- WF)")
+    p.terminate()
+    assert dev["name"] == "Наушники (WF) [Loopback]" and fell_back is False

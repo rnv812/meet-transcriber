@@ -104,8 +104,9 @@ function RecordingSection({ draft, set, recordingsDir }: {
   );
 }
 
-function AutoSection({ draft, set, processes, onToggle }: {
-  draft: Raw; set: SetFn; processes: Processes | null; onToggle: (v: boolean) => void;
+function AutoSection({ draft, set, processes, loadProcesses, onToggle }: {
+  draft: Raw; set: SetFn; processes: Processes | null; loadProcesses: () => Promise<Processes>;
+  onToggle: (v: boolean) => void;
 }) {
   const v = (k: string) => draft.auto_record?.[k];
   const selected = (v("processes") as string[] | undefined) ?? [];
@@ -115,7 +116,8 @@ function AutoSection({ draft, set, processes, onToggle }: {
         hint="кончился звонок — запись останавливается сама"
         value={Boolean(v("enabled"))} onChange={onToggle} />
       <p className="muted sdesc">Эти параметры применятся после перезапуска приложения</p>
-      <CallPrograms value={selected} processes={processes} onChange={(x) => set("auto_record", "processes", x)} />
+      <CallPrograms value={selected} processes={processes} loadProcesses={loadProcesses}
+        onChange={(x) => set("auto_record", "processes", x)} />
       <SecondsRow id="grace" label="Хвост после звонка"
         hint="обрыв связи и перезаход не рвут файл надвое; в хвост попадает и сказанное после встречи"
         value={Number(v("grace_seconds") ?? 0)} onChange={(x) => set("auto_record", "grace_seconds", x)} />
@@ -233,6 +235,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   }, [endpoint]);
 
   useEffect(() => { void reload(); }, [reload]);
+  // Поиск программы звонков перечитывает запущенные при каждом открытии.
+  const loadProcesses = useCallback(() => getProcesses(endpoint), [endpoint]);
 
   // Повторная просьба открыть раздел (новый `initialTick`) — даже если он уже был запрошен.
   useEffect(() => {
@@ -326,7 +330,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           ) : section === "sound" ? (
             <SoundSection draft={draft} set={set} devices={devices} endpoint={endpoint} />
           ) : section === "auto" ? (
-            <AutoSection draft={draft} set={set} processes={processes} onToggle={(v) => void toggleAuto(v)} />
+            <AutoSection draft={draft} set={set} processes={processes} loadProcesses={loadProcesses}
+              onToggle={(v) => void toggleAuto(v)} />
           ) : section === "asr" ? (
             <AsrSection draft={draft} set={set} endpoint={endpoint} />
           ) : section === "engine" ? (

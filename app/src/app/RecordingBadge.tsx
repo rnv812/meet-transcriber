@@ -12,6 +12,13 @@ const TICK_MS = 1000;
 const NO_PROVIDER = "Подключите Claude Code или Codex в настройках";
 const START_FAILED = "Не удалось запустить ассистента";
 
+/** Выбранное в настройках устройство не нашлось — с какого пишем вместо него. */
+export function fallbackText(f: { kind: "mic" | "output"; name: string }): string {
+  return f.kind === "mic"
+    ? `Микрофон «${f.name}» не найден — запись с системного`
+    : `Устройство вывода «${f.name}» не найдено — запись с системного`;
+}
+
 /** Общая часть ответов `/live/start` и `/live/stop` — новое `snapshot.live`. */
 const liveOf = (r: LiveStatus): LiveStatus => ({
   active: r.active, starting: r.starting, stopping: r.stopping,
@@ -133,6 +140,8 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
 
   if (!endpoint || !snapshot || !online) return null;
   const low = snapshot.disk_free_gb !== null && snapshot.disk_free_gb < LOW_DISK_GB;
+  // Подмена устройства — про идущую запись (свою или ассистента), не про простой.
+  const fallbacks = recording || liveActive ? snapshot.devices_fallback ?? [] : [];
   const since = Math.max(0, now - (snapshotAt ?? seenAt)) / 1000;
   const run = (cmd: "start" | "stop") => {
     setError(null);
@@ -218,6 +227,11 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
         </span>
       )}
       {low && <span className="rec-badge__warn">Мало места: {snapshot.disk_free_gb} ГБ</span>}
+      {fallbacks.map((f) => (
+        <span key={f.kind} className="rec-badge__warn" title={f.device ? `Запись идёт с «${f.device}»` : undefined}>
+          {fallbackText(f)}
+        </span>
+      ))}
       {main}
     </div>
   );

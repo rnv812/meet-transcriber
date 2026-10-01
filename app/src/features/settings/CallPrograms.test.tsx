@@ -112,3 +112,51 @@ test("ничего не выбрано — предупреждение про �
   render(<Harness initial={[]} />);
   expect(screen.getByText(/будет использован список по умолчанию/)).toBeInTheDocument();
 });
+
+test("combobox: aria-expanded — только когда список виден", async () => {
+  render(<Harness initial={[]} running={["alpha.exe"]} />);
+  await userEvent.click(screen.getByRole("button", { name: "Добавить программу…" }));
+  const box = screen.getByRole("combobox", { name: "Программа" });
+  expect(box).toHaveAttribute("aria-expanded", "true");
+  await userEvent.type(box, "zzz");
+  expect(box).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("listbox")).toBeNull();
+});
+
+test("после добавления и после Esc фокус возвращается на «Добавить программу…»", async () => {
+  render(<Harness initial={[]} running={["alpha.exe"]} />);
+  await userEvent.click(screen.getByRole("button", { name: "Добавить программу…" }));
+  await userEvent.click(screen.getByRole("option", { name: "alpha.exe" }));
+  expect(screen.getByRole("button", { name: "Добавить программу…" })).toHaveFocus();
+  await userEvent.click(screen.getByRole("button", { name: "Добавить программу…" }));
+  await userEvent.keyboard("{Escape}");
+  expect(screen.getByRole("button", { name: "Добавить программу…" })).toHaveFocus();
+});
+
+test("имена exe пресета видны вторым текстом", () => {
+  render(<Harness initial={[]} />);
+  expect(screen.getByText("ms-teams.exe, Teams.exe")).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "Microsoft Teams" })).toBeInTheDocument();
+});
+
+test("список запущенных перечитывается при каждом открытии поиска", async () => {
+  const load = vi.fn()
+    .mockResolvedValueOnce({ available: true, running: ["first.exe"] })
+    .mockResolvedValueOnce({ available: true, running: ["second.exe"] });
+  render(<CallPrograms value={[]} processes={{ available: true, running: ["old.exe"] }}
+    loadProcesses={load} onChange={() => {}} />);
+  await userEvent.click(screen.getByRole("button", { name: "Добавить программу…" }));
+  expect(await screen.findByRole("option", { name: "first.exe" })).toBeInTheDocument();
+  await userEvent.keyboard("{Escape}");
+  await userEvent.click(screen.getByRole("button", { name: "Добавить программу…" }));
+  expect(await screen.findByRole("option", { name: "second.exe" })).toBeInTheDocument();
+  expect(load).toHaveBeenCalledTimes(2);
+});
+
+test("подсказки «?» открываются вправо: они стоят после подписи слева", () => {
+  render(<Harness initial={[]} />);
+  const tip = screen.getByRole("button", { name: "Какие звонки распознаются" });
+  expect(tip.closest(".help")).toHaveClass("help--start");
+  const chat = screen.getByRole("button", { name: "Почему осторожно с мессенджерами" });
+  expect(chat.closest(".help")).toHaveClass("help--start");
+});

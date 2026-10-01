@@ -412,6 +412,9 @@ def _make_handler(server: ControlServer):
             except BadRequest as e:
                 self._send_safely(400, {"error": str(e)})
                 return
+            except Unavailable as e:
+                self._send_safely(503, {"error": str(e)})
+                return
             except Exception as e:
                 # Резидент не должен падать из-за запроса от UI; ошибка диска
                 # и т.п. — это 500 с текстом, а не молчаливый обрыв соединения.
@@ -621,6 +624,10 @@ class BadRequest(Exception):
 
 class Conflict(Exception):
     """409: действие сейчас невозможно (например, не подключена модель)."""
+
+
+class Unavailable(Exception):
+    """503: нужное сейчас недоступно (устройство не ответило на проверку)."""
 
 
 _BadRequest = BadRequest

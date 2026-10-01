@@ -36,6 +36,8 @@ RECORD_DEVICE = "record.device"  # дорожка открыта/переотк�
 RECORD_WAITING = "record.waiting"  # устройства нет, пауза уйдёт в тишину
 # выбранного в настройках устройства нет — дорожка пишет с системного
 RECORD_DEVICE_FALLBACK = "record.device_fallback"
+# выбранное устройство снова доступно — дорожка вернулась на него
+RECORD_DEVICE_PINNED = "record.device_pinned"
 RECORD_SILENCE = "record.silence"  # долив тишины по стенным часам
 RECORD_LEVEL = "record.level"  # уровни дорожек, только для живого UI
 LOG = "log"  # строка журнала записи (дубль record.log)

@@ -495,3 +495,16 @@ def test_parent_check_sees_death_while_someone_holds_its_handle():
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait()  # объект жив — хэндл процесса открыт
     assert app_mod._pid_alive(proc.pid) is False
+
+
+
+def test_endpoint_file_carries_device_fallback(tmp_path):
+    from meet.assist import app
+
+    path = tmp_path / "live.json"
+    fallback = [{"kind": "mic", "name": "USB-микрофон", "device": "Микрофон"}]
+    app.write_endpoint(path, port=5, folder=tmp_path, devices_fallback=fallback)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["devices_fallback"] == fallback
+    app.write_endpoint(path, port=5, folder=tmp_path)
+    assert "devices_fallback" not in json.loads(path.read_text(encoding="utf-8"))

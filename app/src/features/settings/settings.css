@@ -101,6 +101,7 @@
   background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--r-md);
   color: var(--text-2); font-size: 12px; text-align: left; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
 }
+.help--start .help__tip { left: 0; right: auto; }
 .help__title { color: var(--text); font-weight: 600; }
 .help__line code { color: var(--text); }
 
@@ -117,7 +118,10 @@
 .callapps__head { display: flex; align-items: center; gap: 8px; }
 .callapps__head--sub { margin-top: 6px; }
 .callapps__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px 16px; }
-.callapps__item { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.callapps__item { display: inline-flex; align-items: flex-start; gap: 6px; cursor: pointer; }
+.callapps__item input { margin-top: 3px; }
+.callapps__name { display: flex; flex-direction: column; min-width: 0; }
+.callapps__exes { color: var(--text-3); font-size: 11px; overflow-wrap: anywhere; }
 .callapps__chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
 .chip {
   display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 10px; border-radius: 12px;
@@ -137,7 +141,6 @@
   margin: 0; padding: 4px; list-style: none; max-height: 220px; overflow: auto;
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
 }
-.callapps__options:empty { display: none; }
 .callapps__option { padding: 4px 8px; border-radius: var(--r-md); cursor: pointer; }
 .callapps__option:hover, .callapps__option--active { background: var(--surface-hover); }
 .callapps__note { margin: 0; font-size: 12px; }

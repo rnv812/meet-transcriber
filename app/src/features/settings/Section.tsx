@@ -76,14 +76,20 @@ export function FolderRow({ label, hint, value, onChange }: {
   );
 }
 
-/** «?» с пояснением: по наведению, фокусу или нажатию; Esc закрывает. */
-export function HelpTip({ label, title, children }: { label: string; title?: string; children: ReactNode }) {
+/**
+ * «?» с пояснением: по наведению, фокусу или нажатию; Esc закрывает.
+ * `align="start"` — подсказка раскрывается вправо: для «?» сразу после подписи
+ * слева, где раскрытая влево она ушла бы за край прокручиваемой области.
+ */
+export function HelpTip({ label, title, align = "end", children }: {
+  label: string; title?: string; align?: "start" | "end"; children: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
   const id = useId();
   const shown = open || pinned;
   return (
-    <span className="help" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+    <span className={align === "start" ? "help help--start" : "help"} onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
       <button type="button" className="help__button" aria-label={label}
         aria-expanded={shown} aria-describedby={shown ? id : undefined}
         onClick={() => setPinned((v) => !v)} onFocus={() => setOpen(true)} onBlur={() => { setOpen(false); setPinned(false); }}

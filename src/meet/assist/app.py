@@ -149,15 +149,19 @@ def _knowledge_path(knowledge, vault: Path | None) -> Path | None:
     return path
 
 
-def write_endpoint(path: Path, *, port: int, folder: Path) -> None:
+def write_endpoint(path: Path, *, port: int, folder: Path,
+                   devices_fallback: list | None = None) -> None:
     """Атомарно (tmp + replace) записать, где слушает ассистент: резидент
-    не должен прочитать недописанный файл."""
+    не должен прочитать недописанный файл. `devices_fallback` — выбранные в
+    настройках устройства, которых не нашлось (резидент покажет это в окне
+    и в трее)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    info = {"port": port, "pid": os.getpid(), "folder": os.path.abspath(folder)}
+    if devices_fallback:
+        info["devices_fallback"] = devices_fallback
     try:
-        tmp.write_text(json.dumps(
-            {"port": port, "pid": os.getpid(), "folder": os.path.abspath(folder)},
-            ensure_ascii=False), encoding="utf-8")
+        tmp.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)  # после replace его уже нет
@@ -187,7 +191,8 @@ def remove_endpoint(path: Path | None) -> None:
 async def _main(state: AssistState, port: int, *, open_browser: bool = True,
                 endpoint_file: Path | None = None,
                 folder: Path | None = None,
-                parent_pid: int | None = None) -> None:
+                parent_pid: int | None = None,
+                devices_fallback: list | None = None) -> None:
     stop = asyncio.Event()
     state.stop_event = stop
     # Свой пул для asyncio.to_thread (вызовы Codex/локальной модели, дослив
@@ -203,7 +208,8 @@ async def _main(state: AssistState, port: int, *, open_browser: bool = True,
         actual_port = bound_port(runner)
         url = f"http://127.0.0.1:{actual_port}/"
         if endpoint_file is not None:
-            write_endpoint(endpoint_file, port=actual_port, folder=folder)
+            write_endpoint(endpoint_file, port=actual_port, folder=folder,
+                           devices_fallback=devices_fallback)
         if open_browser:
             webbrowser.open(url)
         print(f"Ассистент: {url} (Ctrl-C — стоп)", flush=True)
@@ -332,7 +338,8 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         started = True
         asyncio.run(_main(state, port, open_browser=open_browser,
                           endpoint_file=endpoint, folder=out_dir,
-                          parent_pid=parent_pid))
+                          parent_pid=parent_pid,
+                          devices_fallback=getattr(engine, "devices_fallback", None)))
     except KeyboardInterrupt:
         pass
     finally:

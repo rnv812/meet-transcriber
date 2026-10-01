@@ -1,6 +1,7 @@
 import ctypes
 import json
 import os
+import re
 import struct
 import subprocess
 import threading
@@ -355,7 +356,9 @@ class _Track:
         self._lock = threading.Lock()  # callback против паддинга из вотчдога
         self._waiting = False
         self._stalled = False
-        self._fallback_noted = False  # «выбранного нет» — раз за запись
+        # Дорожка сейчас пишет с системного вместо выбранного: сообщаем при
+        # каждом переходе туда и обратно, а не на каждом переоткрытии.
+        self._in_fallback = False
 
     @property
     def follows_default(self) -> bool:
@@ -397,16 +400,22 @@ class _Track:
         return True
 
     def _note_fallback(self) -> None:
-        """Выбранного в настройках устройства нет — пишем с системного и
-        говорим об этом один раз за запись (журнал + событие для UI)."""
-        if not getattr(self.pick, "fallback", False) or self._fallback_noted:
+        """Выбранного в настройках устройства нет — пишем с системного; оно
+        вернулось — снова с него. Каждый переход — строка журнала и событие
+        для UI (`record.device_fallback` / `record.device_pinned`)."""
+        fallback = bool(getattr(self.pick, "fallback", False))
+        if fallback == self._in_fallback:
             return
-        self._fallback_noted = True
-        self.log(fallback_text(self.pick.kind, self.pick.wanted))
-        self.bus.emit(
-            events.RECORD_DEVICE_FALLBACK, track=self.fname, role=self.pick.kind,
-            wanted=self.pick.wanted, device=self.device_name,
-        )
+        self._in_fallback = fallback
+        kind, wanted = self.pick.kind, self.pick.wanted
+        if fallback:
+            self.log(fallback_text(kind, wanted))
+            kind_event = events.RECORD_DEVICE_FALLBACK
+        else:
+            self.log(restored_text(kind, wanted))
+            kind_event = events.RECORD_DEVICE_PINNED
+        self.bus.emit(kind_event, track=self.fname, role=kind, wanted=wanted,
+                      device=self.device_name)
 
     def alive(self) -> bool:
         if self.stream is None:
@@ -550,9 +559,10 @@ def _loopback_for(p: "pyaudio.PyAudio", name: str,
     loopback системного вывода); выбранное пользователем — только точно, иначе
     «Наушники» нашлись бы в «Наушники 2»."""
     loopbacks = list(p.get_loopback_device_info_generator())
-    for lb in loopbacks:
-        if lb["name"] == f"{name} [Loopback]":
-            return lb
+    suffix = " [Loopback]"
+    found = _match(loopbacks, name, key=lambda lb: lb["name"].removesuffix(suffix))
+    if found is not None:
+        return found
     if loose:
         for lb in loopbacks:
             if name in lb["name"]:
@@ -575,14 +585,34 @@ def _wasapi_devices(p: "pyaudio.PyAudio") -> tuple[dict, list[dict]]:
     return wasapi, found
 
 
+# Windows нумерует повторно подключённое устройство внутри скобок:
+# «Микрофон (2- PD100U)» — тот же «Микрофон (PD100U)».
+_INSTANCE_NO = re.compile(r"\(\d+- ")
+
+
+def _same_device(a: str) -> str:
+    """Имя без номера экземпляра — для терпимого сравнения."""
+    return _INSTANCE_NO.sub("(", a)
+
+
+def _match(candidates: list[dict], name: str, key=lambda d: d["name"]) -> "dict | None":
+    """Сначала точное имя, потом — без номера экземпляра Windows."""
+    for dev in candidates:
+        if key(dev) == name:
+            return dev
+    tolerant = _same_device(name)
+    for dev in candidates:
+        if _same_device(key(dev)) == tolerant:
+            return dev
+    return None
+
+
 def _find_mic(p: "pyaudio.PyAudio", name: str) -> "dict | None":
     """Микрофон WASAPI с этим именем (loopback'и — не микрофоны)."""
     _, devices = _wasapi_devices(p)
-    for dev in devices:
-        if (dev["name"] == name and int(dev.get("maxInputChannels", 0)) > 0
-                and not dev.get("isLoopbackDevice")):
-            return dev
-    return None
+    mics = [dev for dev in devices
+            if int(dev.get("maxInputChannels", 0)) > 0 and not dev.get("isLoopbackDevice")]
+    return _match(mics, name)
 
 
 def _default_name(p, wasapi: dict, key: str) -> "str | None":
@@ -635,6 +665,12 @@ def resolve_device(p: "pyaudio.PyAudio", kind: str, wanted: "str | None") -> tup
             return dev, False
         return _SYSTEM[kind](p), True
     return _SYSTEM[kind](p), False
+
+
+def restored_text(kind: str, wanted: str) -> str:
+    if kind == "mic":
+        return f"Выбранный микрофон {wanted} снова доступен — запись идёт с него"
+    return f"Выбранное устройство вывода {wanted} снова доступно — запись идёт с него"
 
 
 def fallback_text(kind: str, wanted: str) -> str:

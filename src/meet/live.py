@@ -210,6 +210,9 @@ class LiveEngine:
         self._worker: "threading.Thread | None" = None
         self._streams: list = []
         self._p = None
+        # Выбранное устройство не нашлось — пишем с системного (для резидента:
+        # уходит в файл эндпоинта): [{"kind", "name", "device"}].
+        self.devices_fallback: list[dict] = []
 
     def register_track(self, fname: str, rate: int, channels: int,
                        normalize: bool = False, identify: bool = False) -> None:
@@ -357,6 +360,9 @@ class LiveEngine:
             dev, fell_back = recorder.resolve_device(self._p, kind, wanted)
             if fell_back:
                 print(recorder.fallback_text(kind, wanted))
+                self.devices_fallback.append(
+                    {"kind": kind, "name": wanted,
+                     "device": dev["name"].removesuffix(" [Loopback]")})
             picked.append(dev)
         devices = (
             (picked[0], "sys.wav", True, True),

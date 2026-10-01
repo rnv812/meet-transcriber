@@ -255,3 +255,24 @@ test("время начала живого режима неизвестно —
   render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live({ active: true, folder: "C:/r/x" }) })} />);
   expect(screen.getByText(/REC/)).toHaveTextContent(/^● REC · ассистент$/);
 });
+
+test("выбранный микрофон не найден — предупреждение у записи", () => {
+  render(<RecordingBadge endpoint={ep} snapshot={snap({
+    status: "recording", source: "manual", elapsed_s: 5,
+    devices_fallback: [
+      { kind: "mic", name: "USB-микрофон", device: "Микрофон" },
+      { kind: "output", name: "Наушники", device: "Колонки" },
+    ],
+  })} />);
+  expect(screen.getByText("Микрофон «USB-микрофон» не найден — запись с системного")).toBeInTheDocument();
+  expect(screen.getByText("Устройство вывода «Наушники» не найдено — запись с системного")).toBeInTheDocument();
+});
+
+test("подмена устройства у ассистента тоже видна; вне записи — нет", () => {
+  const fallback = [{ kind: "mic" as const, name: "USB-микрофон", device: "Микрофон" }];
+  const live: LiveStatus = { active: true, starting: false, stopping: false, folder: "f", error: null, started_at: null };
+  const { rerender } = render(<RecordingBadge endpoint={ep} snapshot={snap({ live, devices_fallback: fallback })} />);
+  expect(screen.getByText(/Микрофон «USB-микрофон» не найден/)).toBeInTheDocument();
+  rerender(<RecordingBadge endpoint={ep} snapshot={snap({ devices_fallback: fallback })} />);
+  expect(screen.queryByText(/не найден/)).toBeNull();
+});

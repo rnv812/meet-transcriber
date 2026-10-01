@@ -79,6 +79,8 @@ class FakeState:
                 "outputs": [{"name": "Колонки", "default": True}]}
 
     def test_device(self, body):
+        if body.get("name") == "сломан":
+            raise control.Unavailable("Не удалось проверить устройство: Устройство не ответило")
         if self.recording:
             raise control.Conflict("Идёт запись — проверка устройства недоступна")
         self.calls.append(("device-test", body))
@@ -931,3 +933,8 @@ def test_live_events_relays_stream_and_last_event_id(server):
 
 def test_live_events_without_live_is_409(server):
     _get(server, "/live/events", expect=409)
+
+
+def test_device_test_probe_failure_is_503_with_text(server):
+    got = _post(server, "/devices/test", {"kind": "mic", "name": "сломан"}, expect=503)
+    assert got["error"] == "Не удалось проверить устройство: Устройство не ответило"

@@ -111,7 +111,11 @@ if mode == "hang":
     note("grandchild", str(child.pid))
 tmp = endpoint + ".tmp"
 with open(tmp, "w", encoding="utf-8") as f:
-    json.dump({"port": srv.server_address[1], "pid": os.getpid(), "folder": folder}, f)
+    info = {"port": srv.server_address[1], "pid": os.getpid(), "folder": folder}
+    if mode == "fallback":
+        info["devices_fallback"] = [{"kind": "mic", "name": "USB-микрофон",
+                                     "device": "Микрофон"}]
+    json.dump(info, f)
 os.replace(tmp, endpoint)
 print("Ассистент: http://127.0.0.1:%d/" % srv.server_address[1], flush=True)
 stop.wait()
@@ -1007,3 +1011,26 @@ def test_spawn_process_passes_proxy_env(monkeypatch, tmp_path):
     env = {k.upper(): v for k, v in seen["env"].items()}
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:3067"
     assert env["PYTHONIOENCODING"] == "utf-8"
+
+
+def test_device_fallback_of_child_is_reported_while_live(make_live, tmp_path):
+    """Живой режим пишет с системного вместо выбранного — резидент знает об
+    этом из файла эндпоинта и показывает, пока ассистент слушает."""
+    live, _, _ = make_live("fallback")
+    assert live.devices_fallback() == []
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: _active(live))
+    assert live.devices_fallback() == [
+        {"kind": "mic", "name": "USB-микрофон", "device": "Микрофон"}]
+    live.stop()
+    _wait_for(lambda: _idle(live))
+    assert live.devices_fallback() == []
+
+
+def test_no_fallback_from_ordinary_child(make_live, tmp_path):
+    live, _, _ = make_live()
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: _active(live))
+    assert live.devices_fallback() == []
+    live.stop()
+    _wait_for(lambda: _idle(live))

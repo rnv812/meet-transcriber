@@ -121,6 +121,72 @@ pub struct View {
     /// сообщает о каждой встрече не больше одного раза; новое `at` — новое
     /// уведомление.
     pub kb_failed: Option<KbFailure>,
+    /// Выбранный в настройках микрофон или вывод не найден — идущая запись
+    /// (своя или ассистента) пишет с системного (`/state.devices_fallback`).
+    pub devices_fallback: Vec<DeviceFallback>,
+}
+
+/// Длиннее — имя устройства в подсказке трея сокращается: у Windows на всю
+/// подсказку 127 символов.
+const FALLBACK_NAME_MAX: usize = 32;
+/// szTip — 128 UTF-16 с завершающим нулём; tray-icon копирует не больше 128,
+/// и более длинная строка осталась бы без нуля.
+const TOOLTIP_MAX: usize = 127;
+
+/// Элемент `/state.devices_fallback`: что было выбрано и не нашлось.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceFallback {
+    /// Микрофон (`"mic"`); иначе устройство вывода (`"output"`).
+    pub mic: bool,
+    pub name: String,
+}
+
+impl DeviceFallback {
+    fn list(value: Option<&Value>) -> Vec<DeviceFallback> {
+        let Some(items) = value.and_then(Value::as_array) else {
+            return Vec::new();
+        };
+        items
+            .iter()
+            .filter_map(|item| {
+                let mic = match str_at(item, "kind")? {
+                    "mic" => true,
+                    "output" => false,
+                    _ => return None,
+                };
+                let name = str_at(item, "name").unwrap_or_default().to_string();
+                Some(DeviceFallback { mic, name })
+            })
+            .collect()
+    }
+
+    /// Та же строка, что у кнопки записи в окне (RecordingBadge).
+    pub fn text(&self) -> String {
+        let name = shorten(&self.name, FALLBACK_NAME_MAX);
+        if self.mic {
+            format!("Микрофон «{name}» не найден — запись с системного")
+        } else {
+            format!("Устройство вывода «{name}» не найдено — запись с системного")
+        }
+    }
+}
+
+/// Подсказка трея в пределах szTip: считаем UTF-16, а не символы.
+fn fit_tooltip(text: String) -> String {
+    if text.encode_utf16().count() <= TOOLTIP_MAX {
+        return text;
+    }
+    let mut out = String::new();
+    let mut used = 1; // место под «…»
+    for ch in text.chars() {
+        used += ch.len_utf16();
+        if used > TOOLTIP_MAX {
+            break;
+        }
+        out.push(ch);
+    }
+    out.push('…');
+    out
 }
 
 /// `/state.kb_export_failed`: какая встреча, почему и когда (epoch).
@@ -221,6 +287,7 @@ impl View {
             reports_stops: state.get("last_stop").is_some(),
             live: state.get("live").map(Live::from_json).unwrap_or_default(),
             kb_failed: state.get("kb_export_failed").and_then(KbFailure::from_json),
+            devices_fallback: DeviceFallback::list(state.get("devices_fallback")),
         };
         let items = jobs
             .get("items")
@@ -703,7 +770,15 @@ pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
         }
         Some(_) => "жду встречу".to_string(),
     };
-    format!("meet — {text}")
+    let mut tip = format!("meet — {text}");
+    // Подмена устройства — про идущую запись (свою или ассистента).
+    if let Some(view) = view.filter(|view| view.recording || view.live.active) {
+        for fallback in &view.devices_fallback {
+            tip.push('\n');
+            tip.push_str(&fallback.text());
+        }
+    }
+    fit_tooltip(tip)
 }
 
 /// 754 → «12:34», 3723 → «1:02:03».
@@ -1221,6 +1296,7 @@ mod tests {
             reports_stops: true,
             live: Live::default(),
             kb_failed: None,
+            devices_fallback: vec![],
         }
     }
 
@@ -2075,6 +2151,84 @@ mod tests {
         }
         let (_, notices) = tracker.observe(Some(idle()));
         assert_eq!(titles(&notices), vec!["Запись прервана"]);
+    }
+
+    #[test]
+    fn device_fallback_is_parsed_from_state() {
+        let state = json!({"status": "recording", "devices_fallback": [
+            {"kind": "mic", "name": "USB-микрофон", "device": "Микрофон"},
+            {"kind": "камера", "name": "мусор"},
+            "мусор",
+            {"kind": "output", "name": "Наушники", "device": null},
+        ]});
+        let v = View::from_json(&state, &json!({"items": []}));
+        assert_eq!(
+            v.devices_fallback,
+            vec![
+                DeviceFallback {
+                    mic: true,
+                    name: "USB-микрофон".into()
+                },
+                DeviceFallback {
+                    mic: false,
+                    name: "Наушники".into()
+                },
+            ]
+        );
+        let old = View::from_json(&json!({"status": "idle"}), &json!({"items": []}));
+        assert!(old.devices_fallback.is_empty());
+    }
+
+    #[test]
+    fn tooltip_warns_about_device_fallback_while_recording() {
+        let running = ResidentStatus::Running;
+        let mut rec = idle();
+        rec.recording = true;
+        rec.elapsed_s = 754.0;
+        rec.devices_fallback = vec![DeviceFallback {
+            mic: true,
+            name: "USB-микрофон".into(),
+        }];
+        assert_eq!(
+            tooltip(Some(&rec), &running),
+            "meet — запись 12:34\nМикрофон «USB-микрофон» не найден — запись с системного"
+        );
+        let mut live = with_live(true, false, false);
+        live.devices_fallback = vec![DeviceFallback {
+            mic: false,
+            name: "Наушники".into(),
+        }];
+        assert_eq!(
+            tooltip(Some(&live), &running),
+            "meet — ассистент слушает встречу\nУстройство вывода «Наушники» не найдено — запись с системного"
+        );
+        // вне записи подмена не показывается
+        let mut idle_view = idle();
+        idle_view.devices_fallback = rec.devices_fallback.clone();
+        assert_eq!(tooltip(Some(&idle_view), &running), "meet — жду встречу");
+    }
+
+    #[test]
+    fn tooltip_fits_the_windows_limit() {
+        let running = ResidentStatus::Running;
+        let mut rec = idle();
+        rec.recording = true;
+        let long = "Onboard MIC (Технология Intel Smart Sound для цифровых микрофонов)";
+        rec.devices_fallback = vec![
+            DeviceFallback {
+                mic: true,
+                name: long.into(),
+            },
+            DeviceFallback {
+                mic: false,
+                name: long.into(),
+            },
+        ];
+        let tip = tooltip(Some(&rec), &running);
+        // szTip — 128 UTF-16 с завершающим нулём
+        assert!(tip.encode_utf16().count() <= 127, "{tip}");
+        assert!(tip.contains("Микрофон «Onboard MIC"), "{tip}");
+        assert!(tip.ends_with('…'), "{tip}");
     }
 
     #[test]

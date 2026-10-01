@@ -126,6 +126,7 @@ def test_main_prints_one_json_line(fake_pa, capsys, monkeypatch):
                                "--seconds", "0.1"]) == 0
     line = capsys.readouterr().out.strip().splitlines()
     assert len(line) == 1 and json.loads(line[0])["device"] == "USB-микрофон"
+    assert line[0].isascii()  # читается при любой кодировке stdout
 
 
 def test_main_reports_errors_as_json(monkeypatch, capsys):
