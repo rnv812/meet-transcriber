@@ -15,7 +15,8 @@ import { useEffect, useState } from "react";
 import { type Endpoint, getExportPreview } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import type { ExportPreview } from "../../lib/types";
-import { FolderRow, HelpTip, Row, Switch, type Raw, type SetFn } from "./Section";
+import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { FolderRow, Row, Switch, type Raw, type SetFn } from "./Section";
 
 export const PREVIEW_DELAY_MS = 400;
 
@@ -30,7 +31,7 @@ export const TOKENS: { token: string; text: string }[] = [
 const KNOWN = new Set(TOKENS.map((t) => t.token.slice(1, -1)));
 const TEXT_KEYS = ["folder_template", "transcript_name", "summary_name"];
 const FLAGS: { key: string; label: string }[] = [
-  { key: "include_transcript", label: "Транскрипт" },
+  { key: "include_transcript", label: "Расшифровка" },
   { key: "include_summary", label: "Итоги встречи" },
   { key: "include_srt", label: "Субтитры (SRT)" },
   { key: "include_audio", label: "Аудиозапись" },
@@ -71,12 +72,12 @@ const mdName = (name: string) => {
   return (text.toLowerCase().endsWith(".md") ? text : `${text}.md`).toLowerCase();
 };
 
-/** Имена транскрипта и итогов совпадают друг с другом или с субтитрами/записью — текст, иначе null. */
+/** Имена расшифровки и итогов совпадают друг с другом или с субтитрами/записью — текст, иначе null. */
 export function fileNamesClash(transcriptName: string, summaryName: string): string | null {
   const transcript = mdName(transcriptName);
   const summary = mdName(summaryName);
-  if (transcript === summary) return "Имена файлов транскрипта и итогов совпадают — задайте разные";
-  const names: [string, string][] = [["транскрипта", transcript], ["итогов", summary]];
+  if (transcript === summary) return "Имена файлов расшифровки и итогов совпадают — задайте разные";
+  const names: [string, string][] = [["расшифровки", transcript], ["итогов", summary]];
   for (const [which, name] of names) {
     const stem = name.slice(0, -3);
     if (stem === "запись") return `Имя файла ${which} совпадает с именем записи «Запись» — выберите другое`;
@@ -111,9 +112,9 @@ function TokenHelp() {
   return (
     <HelpTip label="Подстановки в шаблоне" title="Подстановки в имени папки и файлов">
       {TOKENS.map((t) => (
-        <span key={t.token} className="help__line"><code>{t.token}</code> — {t.text}</span>
+        <TipLine key={t.token}><code>{t.token}</code> — {t.text}</TipLine>
       ))}
-      <span className="help__line">«/» в шаблоне создаёт вложенные папки: {"{year}/{date} - {title}"}</span>
+      <TipLine>«/» в шаблоне создаёт вложенные папки: <code>{"{year}/{date} - {title}"}</code></TipLine>
     </HelpTip>
   );
 }
@@ -147,17 +148,15 @@ export function ExportSection({ draft, set, endpoint }: { draft: Raw; set: SetFn
   return (
     <>
       <p className="muted sdesc">
-        Для каждой встречи в папке базы знаний создаётся своя папка, в неё кладутся транскрипт и итоги.
+        Для каждой встречи в базе знаний создаётся отдельная папка с расшифровкой и итогами.
       </p>
-      <FolderRow label="Папка для встреч" hint="корневая папка встреч в вашей базе знаний (например, в хранилище Obsidian)"
+      <FolderRow label="Папка для встреч" hint="Папка в вашей базе знаний (например, в хранилище Obsidian), куда выгружаются встречи"
         value={(v("meetings_dir") as string | null | undefined) ?? null}
         onChange={(x) => set("export", "meetings_dir", x)} />
-      <Row label="Шаблон папки" htmlFor="export-template" hint="имя папки встречи; «/» создаёт вложенные папки">
-        <span className="with-unit">
-          <input id="export-template" type="text" value={template}
-            onChange={(e) => set("export", "folder_template", e.target.value)} />
-          <TokenHelp />
-        </span>
+      <Row label="Шаблон имени папки" htmlFor="export-template" hint="Имя папки встречи; «/» создаёт вложенные папки"
+        help={<TokenHelp />}>
+        <input id="export-template" type="text" value={template}
+          onChange={(e) => set("export", "folder_template", e.target.value)} />
         <span className="export__preview" aria-live="polite">
           {problem ? <span className="error">{problem}</span>
             : previewError ? <span className="muted">Пример недоступен: {previewError}</span>
@@ -169,15 +168,15 @@ export function ExportSection({ draft, set, endpoint }: { draft: Raw; set: SetFn
               ) : null}
         </span>
       </Row>
-      <Row label="Имя файла транскрипта" htmlFor="export-transcript-name" hint="те же подстановки; «.md» добавится сам">
+      <Row label="Имя файла расшифровки" htmlFor="export-transcript-name" hint="Те же подстановки; расширение .md добавляется автоматически">
         <input id="export-transcript-name" type="text" value={transcriptName}
           onChange={(e) => set("export", "transcript_name", e.target.value)} />
       </Row>
-      <Row label="Имя файла итогов" htmlFor="export-summary-name" hint="те же подстановки; «.md» добавится сам">
+      <Row label="Имя файла итогов" htmlFor="export-summary-name" hint="Те же подстановки; расширение .md добавляется автоматически">
         <input id="export-summary-name" type="text" value={summaryName}
           onChange={(e) => set("export", "summary_name", e.target.value)} />
       </Row>
-      <Row label="Что выгружать" hint="итоги — если они уже подготовлены; две дорожки записи сводятся в одну">
+      <Row label="Что выгружать" hint="Итоги — если они уже подготовлены; две дорожки записи сводятся в одну">
         <div className="checks">
           {FLAGS.map((f) => (
             <label key={f.key} className="checks__item">
@@ -188,7 +187,7 @@ export function ExportSection({ draft, set, endpoint }: { draft: Raw; set: SetFn
         </div>
       </Row>
       <Switch label="Выгружать автоматически после расшифровки"
-        hint="и обновлять выгрузку, когда готовы итоги. Действует, если задана папка для встреч. Файлы, которые вы изменили вручную, не перезаписываются"
+        hint="Выгрузка обновляется, когда готовы итоги. Действует, если задана папка для встреч. Изменённые вами файлы не перезаписываются"
         value={Boolean(v("auto_export"))} onChange={(x) => set("export", "auto_export", x)} />
     </>
   );

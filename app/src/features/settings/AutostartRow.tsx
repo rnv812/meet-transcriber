@@ -40,7 +40,7 @@ export function AutostartRow() {
 
   return (
     <>
-      <Switch label="Запускать вместе с Windows" hint="приложение тихо стартует в трее и ловит звонки"
+      <Switch label="Запускать вместе с Windows" hint="Приложение запускается в области уведомлений и отслеживает звонки"
         value={value} onChange={(next) => void change(next)} />
       {error && <p className="error">{error}</p>}
     </>

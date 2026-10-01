@@ -62,7 +62,7 @@ vi.mock("../lib/shell", async (orig) => ({
   markWizardDone: vi.fn(async () => {}),
 }));
 
-const OFFLINE = /Сервис записи не запущен/;
+const OFFLINE = /Служба записи не запущена/;
 const online = () => ({ status: "online", endpoint: ep, snapshot: null, lastEvent: null, libraryTick: 0 });
 
 beforeEach(() => {
@@ -110,7 +110,7 @@ test("событие open-recording переключает на «Записи»
   expect(screen.getByTestId("card")).toHaveTextContent("rec-42");
 });
 
-test("офлайн: в списке и в карточке — «Сервис записи не запущен», данных нет", () => {
+test("офлайн: в списке и в карточке — «Служба записи не запущена», данных нет", () => {
   useLibrarySpy.mockReturnValue({
     items: [{ id: "a", path: "C:/rec/a", started_at: "2026-09-30T10:00:00", duration_s: 60, tracks: {},
       has_transcript: true, has_voices: false, title: "Старая", source: "record" }],

@@ -153,10 +153,12 @@ test("список запущенных перечитывается при ка
   expect(load).toHaveBeenCalledTimes(2);
 });
 
-test("подсказки «?» открываются вправо: они стоят после подписи слева", () => {
+test("подсказки «?» — общий HelpTip: открываются нажатием и описывают кнопку", async () => {
   render(<Harness initial={[]} />);
   const tip = screen.getByRole("button", { name: "Какие звонки распознаются" });
-  expect(tip.closest(".help")).toHaveClass("help--start");
+  await userEvent.click(tip);
+  expect(tip).toHaveAccessibleDescription(/Звонки в браузере/);
   const chat = screen.getByRole("button", { name: "Почему осторожно с мессенджерами" });
-  expect(chat.closest(".help")).toHaveClass("help--start");
+  await userEvent.click(chat);
+  expect(chat).toHaveAccessibleDescription(/звуки уведомлений/);
 });

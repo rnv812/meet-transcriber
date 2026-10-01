@@ -1,14 +1,23 @@
-import { useId, useState, type ReactNode } from "react";
+import { useId, type ReactNode } from "react";
 import { pickFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 
-export function Row({ label, hint, htmlFor, children }: {
-  label: string; hint?: string; htmlFor?: string; children: ReactNode;
+/**
+ * Строка настроек: слева подпись с пояснением (переносится, сжимается),
+ * справа элемент управления (не шире 420 px). Тесно — элемент уходит под
+ * подпись, а не наезжает на неё. `stack` — элемент всегда под подписью, во
+ * всю ширину (списки вариантов, длинные поля). `help` — «?» после подписи.
+ */
+export function Row({ label, hint, help, htmlFor, stack, children }: {
+  label: string; hint?: ReactNode; help?: ReactNode; htmlFor?: string; stack?: boolean; children: ReactNode;
 }) {
   return (
-    <div className="srow">
+    <div className={stack ? "srow srow--stack" : "srow"}>
       <div className="srow__text">
-        <label className="srow__label" htmlFor={htmlFor}>{label}</label>
+        <span className="srow__head">
+          <label className="srow__label" htmlFor={htmlFor}>{label}</label>
+          {help}
+        </span>
         {hint && <span className="srow__hint">{hint}</span>}
       </div>
       <div className="srow__control">{children}</div>
@@ -16,13 +25,16 @@ export function Row({ label, hint, htmlFor, children }: {
   );
 }
 
-export function Switch({ label, hint, value, onChange }: {
-  label: string; hint?: string; value: boolean; onChange: (v: boolean) => void;
+export function Switch({ label, hint, help, value, onChange }: {
+  label: string; hint?: ReactNode; help?: ReactNode; value: boolean; onChange: (v: boolean) => void;
 }) {
   return (
     <div className="srow">
       <div className="srow__text">
-        <span className="srow__label">{label}</span>
+        <span className="srow__head">
+          <span className="srow__label">{label}</span>
+          {help}
+        </span>
         {hint && <span className="srow__hint">{hint}</span>}
       </div>
       <div className="srow__control">
@@ -38,13 +50,13 @@ export function Switch({ label, hint, value, onChange }: {
   );
 }
 
-export function Radio<T extends string>({ label, hint, value, options, onChange }: {
-  label: string; hint?: string; value: T;
+export function Radio<T extends string>({ label, hint, help, value, options, onChange }: {
+  label: string; hint?: ReactNode; help?: ReactNode; value: T;
   options: { value: T; label: string }[]; onChange: (v: T) => void;
 }) {
   const name = useId();
   return (
-    <Row label={label} hint={hint}>
+    <Row label={label} hint={hint} help={help}>
       <div role="radiogroup" aria-label={label} className="radios">
         {options.map((o) => (
           <label key={o.value} className="radios__item">
@@ -57,9 +69,21 @@ export function Radio<T extends string>({ label, hint, value, options, onChange 
   );
 }
 
+/**
+ * Путь в строке настроек: в одну строку, длинный обрезается многоточием в
+ * начале (видна сама папка), целиком — во всплывающей подсказке.
+ */
+export function PathText({ path }: { path: string }) {
+  return (
+    <code className="path path--clip" title={path} dir="rtl">
+      <bdi dir="ltr">{path}</bdi>
+    </code>
+  );
+}
+
 /** Папка на диске: путь, «Выбрать папку…» (диалог оболочки) и «Очистить» (null). */
-export function FolderRow({ label, hint, value, onChange }: {
-  label: string; hint: string; value: string | null; onChange: (v: string | null) => void;
+export function FolderRow({ label, hint, help, value, onChange }: {
+  label: string; hint: ReactNode; help?: ReactNode; value: string | null; onChange: (v: string | null) => void;
 }) {
   const choose = async () => {
     const path = await pickFolder(value).catch(() => null);
@@ -67,42 +91,14 @@ export function FolderRow({ label, hint, value, onChange }: {
   };
   return (
     <div role="group" aria-label={label}>
-      <Row label={label} hint={hint}>
-        {value ? <code className="path">{value}</code> : <span className="muted">не задана</span>}
-        <Button onClick={() => void choose()}>Выбрать папку…</Button>
-        <Button onClick={() => onChange(null)} disabled={!value}>Очистить</Button>
+      <Row label={label} hint={hint} help={help}>
+        <span className="folder">
+          {value ? <PathText path={value} /> : <span className="muted folder__empty">Не задана</span>}
+          <Button onClick={() => void choose()}>Выбрать папку…</Button>
+          <Button onClick={() => onChange(null)} disabled={!value}>Очистить</Button>
+        </span>
       </Row>
     </div>
-  );
-}
-
-/**
- * «?» с пояснением: по наведению, фокусу или нажатию; Esc закрывает.
- * `align="start"` — подсказка раскрывается вправо: для «?» сразу после подписи
- * слева, где раскрытая влево она ушла бы за край прокручиваемой области.
- */
-export function HelpTip({ label, title, align = "end", children }: {
-  label: string; title?: string; align?: "start" | "end"; children: ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const [pinned, setPinned] = useState(false);
-  const id = useId();
-  const shown = open || pinned;
-  return (
-    <span className={align === "start" ? "help help--start" : "help"} onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
-      <button type="button" className="help__button" aria-label={label}
-        aria-expanded={shown} aria-describedby={shown ? id : undefined}
-        onClick={() => setPinned((v) => !v)} onFocus={() => setOpen(true)} onBlur={() => { setOpen(false); setPinned(false); }}
-        onKeyDown={(e) => { if (e.key === "Escape") { setOpen(false); setPinned(false); } }}>
-        ?
-      </button>
-      {shown && (
-        <span role="tooltip" id={id} className="help__tip">
-          {title && <span className="help__title">{title}</span>}
-          {children}
-        </span>
-      )}
-    </span>
   );
 }
 

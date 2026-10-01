@@ -39,12 +39,14 @@ export function StepDone({ onFinish }: { onFinish: () => void }) {
 
   return (
     <>
-      <p className="wizard__lead">Приложение живёт в трее. Клик по иконке — окно, правый клик — запись</p>
+      <p className="wizard__lead">
+        Приложение работает в области уведомлений: щелчок по значку открывает окно, правый щелчок — меню записи.
+      </p>
       <p className="muted">
         Мастер можно запустить снова: Настройки → Движок и модели → «Запустить мастер».
       </p>
       {available && (
-        <Switch label="Запускать вместе с Windows" hint="приложение тихо стартует в трее и ловит звонки"
+        <Switch label="Запускать вместе с Windows" hint="Приложение запускается в области уведомлений и отслеживает звонки"
           value={autostart} onChange={setAutostartValue} />
       )}
       <div className="wizard__bar">

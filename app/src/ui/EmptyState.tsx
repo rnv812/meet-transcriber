@@ -14,7 +14,7 @@ export function EmptyState({ title, hint, action }: { title: string; hint?: stri
 export function OfflineState() {
   return (
     <EmptyState
-      title="Сервис записи не запущен."
+      title="Служба записи не запущена"
       hint="Приложение перезапускает его — подождите несколько секунд."
     />
   );

@@ -17,7 +17,7 @@ import "./assistant.css";
 type Tab = "transcript" | "summary" | "qa";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "transcript", label: "Транскрипт" },
+  { id: "transcript", label: "Расшифровка" },
   { id: "summary", label: "Итоги" },
   { id: "qa", label: "Вопросы" },
 ];

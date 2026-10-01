@@ -67,7 +67,7 @@ test("папка для встреч: «Выбрать папку…» и «Оч
   vi.mocked(shell.pickFolder).mockResolvedValue("E:\\Vault\\Встречи");
   open();
   const row = await screen.findByRole("group", { name: "Папка для встреч" });
-  expect(within(row).getByText("не задана")).toBeInTheDocument();
+  expect(within(row).getByText("Не задана")).toBeInTheDocument();
   await userEvent.click(within(row).getByRole("button", { name: "Выбрать папку…" }));
   expect(await within(row).findByText("E:\\Vault\\Встречи")).toBeInTheDocument();
   await save();
@@ -80,7 +80,7 @@ test("шаблон папки: живой пример по /export/preview", as
   open();
   expect(await screen.findByText("Пример: 2026-09-30 - Планирование спринта")).toBeInTheDocument();
   expect(screen.getByText("В папке: Транскрипт.md, Итоги.md")).toBeInTheDocument();
-  const input = screen.getByLabelText("Шаблон папки");
+  const input = screen.getByLabelText("Шаблон имени папки");
   await userEvent.clear(input);
   await userEvent.type(input, "{{year}/{{date} - {{title}");
   expect(await screen.findByText("Пример: 2026/2026-09-30 - Планирование спринта")).toBeInTheDocument();
@@ -99,7 +99,7 @@ test.each([
   ["{{date} - {{name}", "Неизвестная подстановка {name}"],
 ])("шаблон «%s» — объяснение и «Сохранить» недоступно", async (typed, text) => {
   open();
-  const input = await screen.findByLabelText("Шаблон папки");
+  const input = await screen.findByLabelText("Шаблон имени папки");
   await userEvent.clear(input);
   await userEvent.type(input, typed);
   expect(screen.getByText(new RegExp(text.replace(/[{}.*?()]/g, "\\$&")))).toBeInTheDocument();
@@ -120,7 +120,7 @@ test("«?» у шаблона перечисляет подстановки", as
 
 test("имена файлов, состав и автоматика уходят в export", async () => {
   open();
-  const name = await screen.findByLabelText("Имя файла транскрипта");
+  const name = await screen.findByLabelText("Имя файла расшифровки");
   await userEvent.clear(name);
   await userEvent.type(name, "{{date} Транскрипт.md");
   await userEvent.click(screen.getByRole("checkbox", { name: "Аудиозапись" }));
@@ -154,11 +154,11 @@ test("одинаковые имена файлов — объяснение и �
   const name = await screen.findByLabelText("Имя файла итогов");
   await userEvent.clear(name);
   await userEvent.type(name, "Транскрипт");
-  expect(screen.getByText("Имена файлов транскрипта и итогов совпадают — задайте разные")).toBeInTheDocument();
+  expect(screen.getByText("Имена файлов расшифровки и итогов совпадают — задайте разные")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
 });
 
 test("подсказка автоматики говорит, что ручные правки не перезаписываются", async () => {
   open();
-  expect(await screen.findByText(/Файлы, которые вы изменили вручную, не перезаписываются/)).toBeInTheDocument();
+  expect(await screen.findByText(/Изменённые вами файлы не перезаписываются/)).toBeInTheDocument();
 });

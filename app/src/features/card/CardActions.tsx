@@ -40,7 +40,7 @@ export function CardActions({
       {inTauri() && <Button onClick={onOpenFolder}>Открыть папку</Button>}
       {canRetranscribe && (confirmRe ? (
         <span className="confirm">
-          <span>Транскрипт будет создан заново — ручные правки и имена без голоса пропадут. Продолжить?</span>
+          <span>Расшифровка будет создана заново: ручные правки и имена, не сохранённые в базе голосов, будут потеряны. Продолжить?</span>
           <Button variant="primary" disabled={busy}
             onClick={() => { setConfirmRe(false); onRetranscribe(); }}>Перерасшифровать</Button>
           <Button onClick={() => setConfirmRe(false)}>Отмена</Button>
@@ -50,7 +50,7 @@ export function CardActions({
       ))}
       {confirm ? (
         <span className="confirm">
-          <span>Удалить запись и транскрипт? Это необратимо.</span>
+          <span>Удалить запись и расшифровку? Это действие нельзя отменить.</span>
           <Button variant="danger" onClick={() => { setConfirm(false); onDelete(); }}>Удалить</Button>
           <Button onClick={() => setConfirm(false)}>Отмена</Button>
         </span>

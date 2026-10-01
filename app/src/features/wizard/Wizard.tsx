@@ -113,9 +113,9 @@ export function Wizard({
   if (NEEDS_RESIDENT.includes(step) && !service.endpoint) {
     body = service.failed === "crashed" ? (
       <>
-        <p className="error">Сервис не запустился</p>
+        <p className="error">Служба записи не запустилась</p>
         <p className="muted">
-          Причина — в журнале. Перезапустить сервис можно из меню значка в трее.
+          Причина указана в журнале. Перезапустить службу можно из меню значка в области уведомлений.
         </p>
         <div className="wizard__bar">
           <Button variant="primary" onClick={() => void openLogs().catch((cause) => console.warn("open_logs:", cause))}>
@@ -126,12 +126,12 @@ export function Wizard({
       </>
     ) : service.failed ? (
       <>
-        <p className="error">Сервис записи не запустился за 90 секунд.</p>
+        <p className="error">Служба записи не запустилась за 90 секунд.</p>
         <div className="wizard__bar">
           <Button variant="primary" onClick={service.retry}>Подождать ещё</Button>
         </div>
       </>
-    ) : <p className="muted wizard__wait">Запускаю сервис…</p>;
+    ) : <p className="muted wizard__wait">Запуск службы записи…</p>;
   } else {
     const ep = service.endpoint!;
     switch (step) {

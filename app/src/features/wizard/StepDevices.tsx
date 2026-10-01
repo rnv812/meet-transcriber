@@ -11,6 +11,7 @@ import {
 import { errorText } from "../../lib/format";
 import { Button } from "../../ui/Button";
 import { Switch } from "../settings/Section";
+import { AutoRecordTip } from "../settings/tips";
 
 export function StepDevices({ endpoint, onNext }: { endpoint: Endpoint; onNext: () => void }) {
   const [devices, setDevices] = useState<Devices | null>(null);
@@ -57,26 +58,27 @@ export function StepDevices({ endpoint, onNext }: { endpoint: Endpoint; onNext: 
   return (
     <>
       <p className="muted">
-        Пишем две дорожки: звук компьютера (собеседники) и микрофон (вы). Следим за устройствами по
-        умолчанию — сменили наушники, запись продолжится.
+        Запись идёт двумя дорожками: звук собеседников и ваш микрофон. Если сменить наушники или микрофон,
+        запись продолжится с нового устройства по умолчанию.
       </p>
       <div className="wizard__devices">
         {devices?.available ? (
           <>
-            <code className="path">звук: {devices.system?.name}</code>
-            <code className="path">микрофон: {devices.mic?.name}</code>
+            <code className="path">Собеседники: {devices.system?.name}</code>
+            <code className="path">Микрофон: {devices.mic?.name}</code>
           </>
-        ) : <span className="muted">{devices?.error ?? "устройства не определены"}</span>}
+        ) : <span className="muted">{devices?.error ?? "Устройства не определены"}</span>}
       </div>
-      <Switch label="Поднимать запись, когда начинается звонок" hint="кончился звонок — запись останавливается сама"
+      <Switch label="Записывать звонки автоматически" help={<AutoRecordTip />}
+        hint="Запись начинается со звонком и останавливается после его окончания"
         value={enabled} onChange={(v) => void toggleAuto(v)} />
       <div className="wizard__apps">
         <span>Программы звонков</span>
         <span className="wizard__hint">
-          отметьте те, в которых идут звонки; применится после перезапуска приложения
+          Отметьте программы, в которых вы созваниваетесь. Применится после перезапуска приложения
         </span>
         <div className="checks wizard__checks">
-          {names.length === 0 && <span className="muted">нет запущенных программ</span>}
+          {names.length === 0 && <span className="muted">Нет запущенных программ</span>}
           {names.map((n) => (
             <label key={n} className="checks__item">
               <input type="checkbox" checked={selected.includes(n)} onChange={() => void toggleProcess(n)} />

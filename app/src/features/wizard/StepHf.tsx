@@ -10,6 +10,7 @@ import { openUrl } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { CheckFailure, HfTokenForm } from "../hf/HfTokenForm";
 import { HF_MODEL_URL, HF_TOKENS_URL } from "../hf/links";
+import { DiarizationTip } from "../settings/tips";
 
 export function StepHf({ endpoint, onNext, onSkip }: {
   endpoint: Endpoint;
@@ -31,8 +32,8 @@ export function StepHf({ endpoint, onNext, onSkip }: {
   return (
     <>
       <p className="muted">
-        Разделение на спикеров делает модель pyannote. Она бесплатная, но скачать её можно, только
-        приняв условия на huggingface.co, — для этого нужен аккаунт и токен.
+        Разделение на спикеров <DiarizationTip /> выполняет модель pyannote. Она бесплатна, но скачать её
+        можно только после принятия условий на huggingface.co — для этого нужны учётная запись и токен.
       </p>
       {status?.configured && !saved && (
         stored?.ok ? <p className="notice">Токен уже сохранён — доступ есть</p>

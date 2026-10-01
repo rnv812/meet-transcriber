@@ -83,7 +83,7 @@ test("удаление во время расшифровки: ошибка ви
   render(<RecordingCard id="r1" endpoint={ep} onDeleted={onDeleted} />);
   await screen.findByText("Привет всем");
   await userEvent.click(screen.getByRole("button", { name: "Удалить" }));
-  expect(screen.getByText("Удалить запись и транскрипт? Это необратимо.")).toBeInTheDocument();
+  expect(screen.getByText("Удалить запись и расшифровку? Это действие нельзя отменить.")).toBeInTheDocument();
   await userEvent.click(screen.getAllByRole("button", { name: "Удалить" })[0]!);
   expect(await screen.findByRole("alert")).toHaveTextContent("идёт расшифровка, подождите");
   expect(onDeleted).not.toHaveBeenCalled();
@@ -339,7 +339,7 @@ test("«Перерасшифровать» спрашивает подтверж
   await userEvent.click(screen.getByRole("button", { name: "Перерасшифровать" }));
   expect(api.transcribe).not.toHaveBeenCalled();
   expect(screen.getByText(
-    "Транскрипт будет создан заново — ручные правки и имена без голоса пропадут. Продолжить?")).toBeInTheDocument();
+    "Расшифровка будет создана заново: ручные правки и имена, не сохранённые в базе голосов, будут потеряны. Продолжить?")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Отмена" }));
   expect(api.transcribe).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "Перерасшифровать" }));
@@ -369,13 +369,13 @@ test("импорт без duration_s: длительность по концу �
   expect(container.querySelector(".card__meta")).toHaveTextContent("2 мин");
 });
 
-test("готовая запись: вкладки «Транскрипт · Итоги · Вопросы», транскрипт по умолчанию", async () => {
+test("готовая запись: вкладки «Расшифровка · Итоги · Вопросы», расшифровка по умолчанию", async () => {
   load();
   const onOpenSettings = vi.fn();
   render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={onOpenSettings} />);
   await screen.findByText("Привет всем");
   const tabs = screen.getAllByRole("tab");
-  expect(tabs.map((t) => t.textContent)).toEqual(["Транскрипт", "Итоги", "Вопросы"]);
+  expect(tabs.map((t) => t.textContent)).toEqual(["Расшифровка", "Итоги", "Вопросы"]);
   expect(tabs[0]).toHaveAttribute("aria-selected", "true");
   await userEvent.click(tabs[1]!);
   expect(await screen.findByText("Итогов пока нет")).toBeVisible();

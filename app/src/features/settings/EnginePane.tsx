@@ -9,7 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { type Endpoint, type EngineState, getEngine } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { Button } from "../../ui/Button";
-import { Row } from "./Section";
+import { PathText, Row } from "./Section";
 
 export function EnginePane({ endpoint, onReinstall }: {
   endpoint: Endpoint;
@@ -33,26 +33,28 @@ export function EnginePane({ endpoint, onReinstall }: {
   }
   return (
     <>
-      <Row label="Состояние" hint="без движка приложение пишет встречи, но не расшифровывает их">
+      <Row label="Состояние" hint="Без движка встречи записываются, но не расшифровываются">
         <span className={engine.installed ? "tag tag--live" : "tag"}>{engine.installed ? "установлен" : "не установлен"}</span>
         {onReinstall && (
           <Button onClick={onReinstall}>{engine.installed ? "Переустановить движок" : "Установить движок…"}</Button>
         )}
       </Row>
-      <Row label="Видеокарта" hint="без неё расшифровка идёт на процессоре и заметно дольше">
+      <Row label="Видеокарта" hint="Без видеокарты расшифровка идёт на процессоре и занимает больше времени">
         <span className="tag">{engine.gpu.available ? (engine.gpu.name ?? "есть") : "не найдена"}</span>
       </Row>
-      <Row label="ffmpeg" hint="нужен и для записи, и для конвертации дорожек">
+      <Row label="ffmpeg" hint="Нужен для записи и преобразования аудио">
         <span className={engine.ffmpeg ? "tag tag--live" : "tag"}>{engine.ffmpeg ? "есть" : "нет"}</span>
       </Row>
-      <Row label="Компоненты" hint={`вариант ${engine.flavor === "cuda" ? "для видеокарты" : "для процессора"}`}>
+      <Row label="Компоненты" hint={engine.flavor === "cuda" ? "Сборка для видеокарты (CUDA)" : "Сборка для процессора (CPU)"}>
         <span className="tags">
           {engine.components.map((c) => (
             <span key={c.module} className={c.installed ? "tag tag--live" : "tag"}>{c.title}</span>
           ))}
         </span>
       </Row>
-      <Row label="Где" hint="окружение, которым резидент запускает задачи"><code className="path">{engine.target}</code></Row>
+      <Row label="Расположение" hint="Окружение, в котором служба записи выполняет расшифровку">
+        <span className="folder"><PathText path={engine.target} /></span>
+      </Row>
     </>
   );
 }

@@ -155,7 +155,7 @@ test("задача пропала, ответа нет — ошибка под �
   update({ jobs: [job({ state: "running" })] });
   update({ jobs: [] });
   const pending = screen.getByText("что решили?", { selector: ".qa__q" }).closest(".qa__item") as HTMLElement;
-  expect(await within(pending).findByText(/Ответ не пришёл/)).toBeInTheDocument();
+  expect(await within(pending).findByText(/Ответ не получен/)).toBeInTheDocument();
   expect(screen.queryByText("Модель думает…")).toBeNull();
   expect(box()).toBeEnabled();
 });

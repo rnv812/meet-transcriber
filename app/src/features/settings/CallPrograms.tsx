@@ -10,7 +10,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Processes } from "../../lib/api";
 import { Button } from "../../ui/Button";
-import { HelpTip } from "./Section";
+import { HelpTip, TipLine } from "../../ui/HelpTip";
 
 export type CallProgram = { id: string; title: string; exes: string[]; messenger?: boolean };
 
@@ -133,7 +133,7 @@ function AddProgram({ processes: initial, loadProcesses, selected, onAdd, onClos
       </span>
       {typed && problem && options.length === 0 && <span className="muted callapps__note">{problem}</span>}
       {typed && !problem && !options.some((o) => lower(o) === lower(typed)) && (
-        <span className="muted callapps__note">Enter — добавить «{typed}»</span>
+        <span className="muted callapps__note">Нажмите Enter, чтобы добавить «{typed}»</span>
       )}
       {processes && !processes.available && (
         <span className="muted callapps__note">Список запущенных программ недоступен{processes.error ? `: ${processes.error}` : ""}</span>
@@ -192,25 +192,23 @@ export function CallPrograms({ value, processes, loadProcesses, onChange }: {
     <div className="callapps" role="group" aria-label="Программы звонков">
       <div className="callapps__head">
         <span className="srow__label">Программы звонков</span>
-        <HelpTip label="Какие звонки распознаются" title="Как распознаётся звонок" align="start">
-          <span className="help__line">
-            Запись начинается, когда отмеченная программа использует микрофон или воспроизводит звук.
-          </span>
-          <span className="help__line">
+        <HelpTip label="Какие звонки распознаются" title="Как распознаётся звонок">
+          <TipLine>Запись начинается, когда отмеченная программа использует микрофон или воспроизводит звук.</TipLine>
+          <TipLine>
             Звонки в браузере (Google Meet, веб-версии Zoom и Телемоста) по программе распознать нельзя:
             браузер не отличается от обычного просмотра страниц. Такие встречи записывайте вручную.
-          </span>
+          </TipLine>
         </HelpTip>
       </div>
-      <span className="srow__hint">отметьте программы, в которых вы созваниваетесь</span>
+      <span className="srow__hint">Отметьте программы, в которых вы созваниваетесь</span>
       <div className="callapps__grid">{group(false)}</div>
       <div className="callapps__head callapps__head--sub">
         <span className="srow__hint">Мессенджеры</span>
-        <HelpTip label="Почему осторожно с мессенджерами" title="Мессенджеры" align="start">
-          <span className="help__line">
-            Мессенджеры воспроизводят звуки уведомлений, и детектор может принять их за начало звонка.
-            Короткие записи будут сохраняться, но не расшифровываться автоматически.
-          </span>
+        <HelpTip label="Почему осторожно с мессенджерами" title="Мессенджеры">
+          <TipLine>
+            Мессенджеры воспроизводят звуки уведомлений, и приложение может принять их за начало звонка.
+            Короткие записи сохраняются, но не расшифровываются автоматически.
+          </TipLine>
         </HelpTip>
       </div>
       <div className="callapps__grid">{group(true)}</div>

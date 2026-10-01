@@ -127,7 +127,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
     main = (
       <EmptyState
         title="Итогов пока нет"
-        hint="Модель прочитает транскрипт и выпишет решения, задачи и сроки."
+        hint="Модель прочитает расшифровку и выделит решения, задачи и сроки."
         action={<>
           <Button variant="primary" onClick={make} disabled={!canMake}>Сделать итоги</Button>
           {hint}

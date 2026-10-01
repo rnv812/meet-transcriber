@@ -33,7 +33,7 @@ export class ApiError extends Error {
 export async function resolveEndpoint(): Promise<Endpoint> {
   if (!inTauri()) return { base: "/api", token: null };
   const data = await invoke<{ port: number; token: string } | null>("endpoint");
-  if (!data?.port) throw new NoResidentError("резидент не запущен");
+  if (!data?.port) throw new NoResidentError("служба записи не запущена");
   return { base: `http://127.0.0.1:${data.port}`, token: data.token };
 }
 
@@ -49,9 +49,9 @@ async function request(ep: Endpoint, path: string, init: RequestInit, contentTyp
       headers: { ...auth(ep), ...(contentType ? { "Content-Type": contentType } : {}) },
     });
   } catch (cause) {
-    throw new NoResidentError(`резидент не отвечает: ${String(cause)}`);
+    throw new NoResidentError(`служба записи не отвечает: ${String(cause)}`);
   }
-  if (response.status === 401) throw new ApiError(401, "неверный токен резидента");
+  if (response.status === 401) throw new ApiError(401, "неверный токен службы записи");
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     let message = text;
@@ -61,7 +61,7 @@ async function request(ep: Endpoint, path: string, init: RequestInit, contentTyp
     } catch {
       /* не JSON — оставляем текст как есть */
     }
-    throw new ApiError(response.status, message || `резидент ответил ${response.status}`);
+    throw new ApiError(response.status, message || `служба записи ответила ${response.status}`);
   }
   return response;
 }

@@ -51,7 +51,7 @@ pub const AUTO_RECORDING_STARTED: &str = "Идёт запись (авто)";
 pub const RECORDING_SAVED: &str = "Запись сохранена";
 pub const TRANSCRIPT_READY: &str = "Расшифровка готова";
 pub const TRANSCRIPT_FAILED: &str = "Ошибка расшифровки";
-pub const RESIDENT_FAILED: &str = "Сервис записи не запускается";
+pub const RESIDENT_FAILED: &str = "Служба записи не запускается";
 /// Фоновое обслуживание движка при старте (`engine::Upkeep`) не удалось.
 pub const ENGINE_UPDATE_FAILED: &str = "Не удалось обновить движок";
 pub const IMPORT_FAILED: &str = "Не удалось импортировать";
@@ -64,7 +64,7 @@ pub const LIVE_LISTENING: &str = "Ассистент слушает встреч
 pub const LIVE_SAVED: &str = "Ассистент остановлен — запись сохранена";
 /// Остановлен, но с ошибкой (не дописал, вышел с кодом): текст — в теле.
 pub const LIVE_STOPPED_WITH_ERROR: &str = "Ассистент остановлен";
-pub const LIVE_FAILED: &str = "Ассистент упал";
+pub const LIVE_FAILED: &str = "Ассистент завершился с ошибкой";
 /// Остановлен раньше, чем загрузилась модель: записи нет.
 pub const LIVE_CANCELLED: &str = "Запуск ассистента отменён";
 pub const LIVE_START_FAILED: &str = "Не удалось запустить ассистента";
@@ -408,7 +408,7 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
     for id in added(&prev.jobs_done, &next.jobs_done) {
         out.push(Notice::new(
             TRANSCRIPT_READY,
-            format!("{id} — откройте meet значком в трее"),
+            format!("{id} — откройте окно meet из области уведомлений"),
             Some(id.clone()),
         ));
     }
@@ -526,7 +526,7 @@ impl Tracker {
                     {
                         *notice = Notice::new(
                             RECORDING_INTERRUPTED,
-                            "Сервис записи перезапустился во время записи — часть встречи могла не сохраниться",
+                            "Служба записи перезапустилась во время записи — часть встречи могла не сохраниться",
                             None,
                         );
                     }
@@ -672,8 +672,8 @@ impl Action {
 /// нажавшего пункт меню.
 pub fn action_notice(action: Action, reply: Option<&api::Result<Value>>) -> Option<Notice> {
     let body = match reply {
-        None => "Сервис записи не запущен".to_string(),
-        Some(Err(api::Error::Transport(_))) => "Сервис записи не отвечает".to_string(),
+        None => "Служба записи не запущена".to_string(),
+        Some(Err(api::Error::Transport(_))) => "Служба записи не отвечает".to_string(),
         Some(Err(api::Error::Status { message, .. })) => message.clone(),
         Some(Err(error)) => error.to_string(),
         Some(Ok(reply)) => {
@@ -687,7 +687,7 @@ pub fn action_notice(action: Action, reply: Option<&api::Result<Value>>) -> Opti
                 (Some("not-recording"), _) => "Запись не идёт".to_string(),
                 (Some("not-live"), _) => "Ассистент не запущен".to_string(),
                 (_, Some(error)) => error.to_string(),
-                _ => "Сервис записи отказался".to_string(),
+                _ => "Служба записи отклонила команду".to_string(),
             }
         }
     };
@@ -737,23 +737,23 @@ pub fn icon_for(view: Option<&View>) -> TrayIconKind {
 
 pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
     if *status == ResidentStatus::Quitting {
-        return "meet — сохраняю запись и выхожу".to_string();
+        return "meet — сохранение записи и выход".to_string();
     }
     if *status == ResidentStatus::ExternalNoApi {
-        return "meet — работает старая версия записи (меню недоступно)".to_string();
+        return "meet — запущена старая версия службы записи (меню недоступно)".to_string();
     }
     if *status == ResidentStatus::EngineMissing {
-        return "meet — движок не установлен — откройте окно".to_string();
+        return "meet — движок не установлен, откройте окно".to_string();
     }
     if let ResidentStatus::EngineUpdating { step, of } = *status {
         return if step > 0 {
-            format!("meet — обновляю движок: шаг {step} из {of}")
+            format!("meet — обновление движка: шаг {step} из {of}")
         } else {
-            "meet — обновляю движок".to_string()
+            "meet — обновление движка".to_string()
         };
     }
     let text = match view {
-        None => "сервис записи не запущен".to_string(),
+        None => "служба записи не запущена".to_string(),
         Some(view) if view.recording => {
             let mut text = format!("запись {}", clock(view.elapsed_s));
             if view.source.as_deref() == Some("auto") {
@@ -761,14 +761,14 @@ pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
             }
             text
         }
-        Some(view) if view.live.stopping => "ассистент дописывает запись".to_string(),
+        Some(view) if view.live.stopping => "ассистент завершает запись".to_string(),
         Some(view) if view.live.active => "ассистент слушает встречу".to_string(),
         Some(view) if view.live.starting => "ассистент запускается".to_string(),
-        Some(view) if view.busy => "расшифровываю".to_string(),
+        Some(view) if view.busy => "идёт расшифровка".to_string(),
         Some(_) if *status == ResidentStatus::External => {
-            "резидент запущен вне приложения".to_string()
+            "служба записи запущена вне приложения".to_string()
         }
-        Some(_) => "жду встречу".to_string(),
+        Some(_) => "ожидание звонка".to_string(),
     };
     let mut tip = format!("meet — {text}");
     // Подмена устройства — про идущую запись (свою или ассистента).
@@ -807,7 +807,7 @@ pub struct MenuState {
     pub auto: bool,
     /// Журнал упавшего резидента (пункт «Открыть журнал»).
     pub log: Option<PathBuf>,
-    /// Резидент сдался — пункт «Перезапустить сервис».
+    /// Резидент сдался — пункт «Перезапустить службу записи».
     pub restart: bool,
     /// Идёт «Выход»: меню целиком недоступно.
     pub quitting: bool,
@@ -1040,7 +1040,7 @@ fn build_menu(app: &AppHandle, state: &MenuState) -> tauri::Result<Menu<Wry>> {
         menu.append(&item("log", "Открыть журнал", true)?)?;
     }
     if state.restart {
-        menu.append(&item("restart", "Перезапустить сервис", true)?)?;
+        menu.append(&item("restart", "Перезапустить службу записи", true)?)?;
     }
     menu.append(&item("quit", "Выход", true)?)?;
     Ok(menu)
@@ -1125,7 +1125,7 @@ fn import(app: &AppHandle) {
 /// `POST /recordings/import`; `Err` — текст для уведомления. Удачный импорт
 /// отдельного уведомления не даёт: о нём скажет «Расшифровка готова».
 fn import_file(path: &Path) -> Result<(), String> {
-    let endpoint = resident::read_endpoint().ok_or("сервис записи не запущен")?;
+    let endpoint = resident::read_endpoint().ok_or("служба записи не запущена")?;
     let body = json!({ "path": path.to_string_lossy() });
     match Client::new(&endpoint).post("/recordings/import", body) {
         Ok(reply) => match str_at(&reply, "error") {
@@ -1484,7 +1484,7 @@ mod tests {
         assert_eq!(notices[0].title, "Запись прервана");
         assert_eq!(
             notices[0].body,
-            "Сервис записи перезапустился во время записи — часть встречи могла не сохраниться"
+            "Служба записи перезапустилась во время записи — часть встречи могла не сохраниться"
         );
     }
 
@@ -1620,7 +1620,7 @@ mod tests {
     #[test]
     fn tooltip_texts() {
         let running = ResidentStatus::Running;
-        assert_eq!(tooltip(Some(&idle()), &running), "meet — жду встречу");
+        assert_eq!(tooltip(Some(&idle()), &running), "meet — ожидание звонка");
         let mut rec = idle();
         rec.recording = true;
         rec.source = Some("auto".into());
@@ -1631,14 +1631,14 @@ mod tests {
         assert_eq!(tooltip(Some(&rec), &running), "meet — запись 1:02:03");
         let mut busy = idle();
         busy.busy = true;
-        assert_eq!(tooltip(Some(&busy), &running), "meet — расшифровываю");
+        assert_eq!(tooltip(Some(&busy), &running), "meet — идёт расшифровка");
         assert_eq!(
             tooltip(Some(&idle()), &ResidentStatus::External),
-            "meet — резидент запущен вне приложения"
+            "meet — служба записи запущена вне приложения"
         );
         assert_eq!(
             tooltip(None, &ResidentStatus::Starting),
-            "meet — сервис записи не запущен"
+            "meet — служба записи не запущена"
         );
     }
 
@@ -1647,7 +1647,7 @@ mod tests {
         let status = ResidentStatus::ExternalNoApi;
         assert_eq!(
             tooltip(None, &status),
-            "meet — работает старая версия записи (меню недоступно)"
+            "meet — запущена старая версия службы записи (меню недоступно)"
         );
         let m = menu_state(None, &status);
         assert!(!m.online, "действиям с записью нужен API");
@@ -1683,7 +1683,10 @@ mod tests {
         let m = menu_state(None, &failed);
         assert!(!m.online);
         assert_eq!(m.log, Some(log));
-        assert!(m.restart, "рядом с журналом — «Перезапустить сервис»");
+        assert!(
+            m.restart,
+            "рядом с журналом — «Перезапустить службу записи»"
+        );
     }
 
     #[test]
@@ -1691,7 +1694,7 @@ mod tests {
         let missing = ResidentStatus::EngineMissing;
         assert_eq!(
             tooltip(None, &missing),
-            "meet — движок не установлен — откройте окно"
+            "meet — движок не установлен, откройте окно"
         );
         let m = menu_state(None, &missing);
         assert!(!m.online);
@@ -1702,9 +1705,9 @@ mod tests {
     #[test]
     fn engine_update_shows_its_step_and_failure_is_important() {
         let waiting = ResidentStatus::EngineUpdating { step: 0, of: 0 };
-        assert_eq!(tooltip(None, &waiting), "meet — обновляю движок");
+        assert_eq!(tooltip(None, &waiting), "meet — обновление движка");
         let step = ResidentStatus::EngineUpdating { step: 3, of: 4 };
-        assert_eq!(tooltip(None, &step), "meet — обновляю движок: шаг 3 из 4");
+        assert_eq!(tooltip(None, &step), "meet — обновление движка: шаг 3 из 4");
         let m = menu_state(None, &step);
         assert!(!m.online);
         assert_eq!(m.log, None);
@@ -1725,9 +1728,9 @@ mod tests {
         assert!(!m.restart);
         assert_eq!(
             tooltip(Some(&rec), &quitting),
-            "meet — сохраняю запись и выхожу"
+            "meet — сохранение записи и выход"
         );
-        assert_eq!(tooltip(None, &quitting), "meet — сохраняю запись и выхожу");
+        assert_eq!(tooltip(None, &quitting), "meet — сохранение записи и выход");
     }
 
     #[test]
@@ -1751,7 +1754,7 @@ mod tests {
             "Запись сохранена",
             "Расшифровка готова",
             "Ошибка расшифровки",
-            "Сервис записи не запускается",
+            "Служба записи не запускается",
             "Не удалось импортировать",
             "Не удалось начать запись",
             "Не удалось остановить запись",
@@ -1761,7 +1764,7 @@ mod tests {
             "Ассистент слушает встречу",
             "Ассистент остановлен — расшифровываю",
             "Ассистент остановлен",
-            "Ассистент упал",
+            "Ассистент завершился с ошибкой",
             "Запуск ассистента отменён",
             "Не удалось запустить ассистента",
             "Не удалось остановить ассистента",
@@ -1789,7 +1792,7 @@ mod tests {
             vec![
                 "Идёт запись (авто)",
                 "Ошибка расшифровки",
-                "Сервис записи не запускается",
+                "Служба записи не запускается",
                 "Не удалось импортировать",
                 "Не удалось начать запись",
                 "Не удалось остановить запись",
@@ -1797,7 +1800,7 @@ mod tests {
                 "Не удалось переключить автозапись",
                 "Запись прервана",
                 "Ассистент остановлен",
-                "Ассистент упал",
+                "Ассистент завершился с ошибкой",
                 "Не удалось запустить ассистента",
                 "Не удалось остановить ассистента",
                 "Не удалось выгрузить встречу в базу знаний",
@@ -1937,7 +1940,7 @@ mod tests {
             body_of(Action::Start, None),
             (
                 "Не удалось начать запись".into(),
-                "Сервис записи не запущен".into()
+                "Служба записи не запущена".into()
             )
         );
         let broken: api::Result<Value> = Err(api::Error::Transport("connection refused".into()));
@@ -1945,7 +1948,7 @@ mod tests {
             body_of(Action::Stop, Some(&broken)),
             (
                 "Не удалось остановить запись".into(),
-                "Сервис записи не отвечает".into()
+                "Служба записи не отвечает".into()
             )
         );
     }
@@ -1983,7 +1986,7 @@ mod tests {
         let odd: api::Result<Value> = Ok(json!({"ok": false, "action": "что-то новое"}));
         assert_eq!(
             body_of(Action::Start, Some(&odd)).1,
-            "Сервис записи отказался"
+            "Служба записи отклонила команду"
         );
     }
 
@@ -2113,14 +2116,14 @@ mod tests {
             Some(&with_live(true, false, false)),
             &view_after_live(Some("CUDA out of memory")),
         );
-        assert_eq!(titles(&n), vec!["Ассистент упал"]);
+        assert_eq!(titles(&n), vec!["Ассистент завершился с ошибкой"]);
         assert_eq!(n[0].body, "CUDA out of memory");
         // Не поднялся вовсе.
         let n = transitions(
             Some(&with_live(false, true, false)),
             &view_after_live(Some("Ассистент не запустился за 120 с")),
         );
-        assert_eq!(titles(&n), vec!["Ассистент упал"]);
+        assert_eq!(titles(&n), vec!["Ассистент завершился с ошибкой"]);
         assert_eq!(n[0].recording, None);
         let long = "ё".repeat(300);
         let n = transitions(
@@ -2205,7 +2208,10 @@ mod tests {
         // вне записи подмена не показывается
         let mut idle_view = idle();
         idle_view.devices_fallback = rec.devices_fallback.clone();
-        assert_eq!(tooltip(Some(&idle_view), &running), "meet — жду встречу");
+        assert_eq!(
+            tooltip(Some(&idle_view), &running),
+            "meet — ожидание звонка"
+        );
     }
 
     #[test]
@@ -2244,7 +2250,7 @@ mod tests {
         assert_eq!(icon_for(Some(&stopping)), TrayIconKind::Recording);
         assert_eq!(
             tooltip(Some(&stopping), &running),
-            "meet — ассистент дописывает запись"
+            "meet — ассистент завершает запись"
         );
         let starting = with_live(false, true, false);
         assert_eq!(icon_for(Some(&starting)), TrayIconKind::Busy);

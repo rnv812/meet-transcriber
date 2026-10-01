@@ -178,13 +178,13 @@ test("движок уже стоит — «Далее» и переустано�
   expect(screen.getByRole("heading", { name: "Hugging Face" })).toBeInTheDocument();
 });
 
-test("после установки ждём сервис: «Запускаю сервис…», затем Hugging Face", async () => {
+test("после установки ждём службу записи: «Запуск службы записи…», затем Hugging Face", async () => {
   let found: (e: typeof ep) => void = () => {};
   vi.mocked(api.resolveEndpoint).mockImplementation(() => new Promise((r) => { found = r; }));
   vi.mocked(api.getState).mockResolvedValue({} as never);
   show({ start: "engine", engine: engine({ installed: true, profile: "cuda" }) });
   await userEvent.click(screen.getByRole("button", { name: "Далее" }));
-  expect(screen.getByText("Запускаю сервис…")).toBeInTheDocument();
+  expect(screen.getByText("Запуск службы записи…")).toBeInTheDocument();
   await act(async () => found(ep));
   expect(await screen.findByRole("heading", { name: "Hugging Face" })).toBeInTheDocument();
   await waitFor(() => expect(api.getHfStatus).toHaveBeenCalledWith(ep));
@@ -268,7 +268,7 @@ test("запись: устройства, автозапись и програм
   show({ start: "devices", endpoint: ep });
   expect(await screen.findByText(/Динамики/)).toBeInTheDocument();
   expect(screen.getByText(/Микрофон/)).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("switch", { name: /Поднимать запись/ }));
+  await userEvent.click(screen.getByRole("switch", { name: /Записывать звонки автоматически/ }));
   expect(api.setAutoRecord).toHaveBeenCalledWith(ep, true);
   await userEvent.click(await screen.findByRole("checkbox", { name: "Telegram.exe" }));
   expect(api.patchSettings).toHaveBeenCalledWith(ep, { auto_record: { processes: ["zoom.exe", "Telegram.exe"] } });
@@ -276,7 +276,7 @@ test("запись: устройства, автозапись и програм
 
 test("«Готово»: про трей; автозапуск по умолчанию включён и применяется при выходе", async () => {
   const { onClose } = show({ start: "done", endpoint: ep });
-  expect(screen.getByText("Приложение живёт в трее. Клик по иконке — окно, правый клик — запись")).toBeInTheDocument();
+  expect(screen.getByText(/Приложение работает в области уведомлений/)).toBeInTheDocument();
   const toggle = await screen.findByRole("switch", { name: "Запускать вместе с Windows" });
   expect(toggle).toBeChecked();
   await userEvent.click(screen.getByRole("button", { name: "Готово" }));
@@ -320,15 +320,15 @@ test("без оболочки (браузер) — шаг движка проп�
   expect(screen.getByRole("heading", { name: "Hugging Face" })).toBeInTheDocument();
 });
 
-test("сервис не поднялся за 90 попыток раз в секунду — сообщение и «Подождать ещё»", async () => {
+test("служба записи не поднялась за 90 попыток раз в секунду — сообщение и «Подождать ещё»", async () => {
   vi.useFakeTimers();
   try {
     vi.mocked(api.resolveEndpoint).mockRejectedValue(new api.NoResidentError("нет"));
     show({ start: "hf" });
-    expect(screen.getByText("Запускаю сервис…")).toBeInTheDocument();
+    expect(screen.getByText("Запуск службы записи…")).toBeInTheDocument();
     await act(async () => { await vi.advanceTimersByTimeAsync(89 * 1000); });
     expect(api.resolveEndpoint).toHaveBeenCalledTimes(90);
-    expect(screen.getByText("Сервис записи не запустился за 90 секунд.")).toBeInTheDocument();
+    expect(screen.getByText("Служба записи не запустилась за 90 секунд.")).toBeInTheDocument();
     vi.mocked(api.resolveEndpoint).mockResolvedValue(ep);
     vi.mocked(api.getState).mockResolvedValue({} as never);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Подождать ещё" })); });
@@ -339,11 +339,11 @@ test("сервис не поднялся за 90 попыток раз в сек
   }
 });
 
-test("после установки сервис упал — «Сервис не запустился» и «Открыть журнал»", async () => {
+test("после установки служба записи упала — «Служба записи не запустилась» и «Открыть журнал»", async () => {
   vi.mocked(api.resolveEndpoint).mockRejectedValue(new api.NoResidentError("нет"));
   vi.mocked(shell.residentStatus).mockResolvedValue("failed");
   show({ start: "hf" });
-  expect(await screen.findByText("Сервис не запустился")).toBeInTheDocument();
+  expect(await screen.findByText("Служба записи не запустилась")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Открыть журнал" }));
   expect(shell.openLogs).toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Подождать ещё" })).toBeInTheDocument();

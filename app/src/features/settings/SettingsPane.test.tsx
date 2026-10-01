@@ -55,18 +55,18 @@ beforeEach(() => {
 test("переключатель автозаписи сразу вызывает setAutoRecord, без «Сохранить»", async () => {
   render(<SettingsPane endpoint={ep} recordingsDir="C:\rec" />);
   await userEvent.click(await screen.findByRole("button", { name: "Автозапись" }));
-  const sw = await screen.findByRole("switch", { name: /Поднимать запись/ });
+  const sw = await screen.findByRole("switch", { name: /Записывать звонки автоматически/ });
   expect(sw).toBeChecked();
   await userEvent.click(sw);
   await waitFor(() => expect(api.setAutoRecord).toHaveBeenCalledWith(ep, false));
   expect(api.patchSettings).not.toHaveBeenCalled();
 });
 
-test("«Хвост после звонка» сохраняется патчем секции и предупреждает о перезапуске", async () => {
+test("«Продолжать запись после звонка» сохраняется патчем секции и предупреждает о перезапуске", async () => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   await userEvent.click(await screen.findByRole("button", { name: "Автозапись" }));
-  expect(screen.getByText("Эти параметры применятся после перезапуска приложения")).toBeInTheDocument();
-  const tail = await screen.findByLabelText("Хвост после звонка");
+  expect(screen.getByText("Параметры ниже применяются после перезапуска приложения.")).toBeInTheDocument();
+  const tail = await screen.findByLabelText("Продолжать запись после звонка");
   await userEvent.clear(tail);
   await userEvent.type(tail, "45");
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -110,7 +110,7 @@ test("ошибка сохранения — текстом резидента, �
   vi.mocked(api.patchSettings).mockRejectedValue(new api.ApiError(400, "неизвестный ключ"));
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   await userEvent.click(await screen.findByRole("button", { name: "Автозапись" }));
-  const grace = await screen.findByRole("spinbutton", { name: /Хвост после звонка/ });
+  const grace = await screen.findByRole("spinbutton", { name: /Продолжать запись после звонка/ });
   await userEvent.clear(grace);
   await userEvent.type(grace, "45");
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -166,7 +166,7 @@ test("«Удалить токен» — DELETE /hf/token, статус «не з
   const row = await screen.findByRole("group", { name: "Токен Hugging Face" });
   await userEvent.click(await within(row).findByRole("button", { name: "Удалить токен" }));
   expect(api.deleteHfToken).toHaveBeenCalledWith(ep);
-  expect(await within(row).findByText(/не задан/)).toBeInTheDocument();
+  expect(await within(row).findByText(/Не задан/)).toBeInTheDocument();
 });
 
 test("токен из переменной среды — удалить из приложения нельзя", async () => {

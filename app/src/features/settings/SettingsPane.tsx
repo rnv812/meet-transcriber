@@ -7,7 +7,7 @@
  * читается при старте — честно говорим, что нужен перезапуск.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   type Devices, type Endpoint, type Processes,
   NoResidentError, getDevices, getProcesses, getSettings, patchSettings, setAutoRecord,
@@ -25,7 +25,8 @@ import { EnginePane } from "./EnginePane";
 import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSection";
 import { HotwordsEditor } from "./HotwordsEditor";
 import { ModelsPane } from "./ModelsPane";
-import { Radio, Row, Switch, type Raw, type SetFn } from "./Section";
+import { PathText, Radio, Row, Switch, type Raw, type SetFn } from "./Section";
+import { AsrModelTip, AutoRecordTip, GpuMarkerTip, HookCommandTip, RecurringWindowTip } from "./tips";
 import { SoundSection } from "./SoundSection";
 import "./settings.css";
 
@@ -47,12 +48,12 @@ const MENU: { id: SectionId; title: string }[] = [
 
 const NO_DRAFT: SectionId[] = ["diagnostics", "about"];
 
-function TextRow({ id, label, hint, value, placeholder, short, onChange }: {
-  id: string; label: string; hint?: string; value: string; placeholder?: string; short?: boolean;
+function TextRow({ id, label, hint, help, value, placeholder, short, onChange }: {
+  id: string; label: string; hint?: string; help?: ReactNode; value: string; placeholder?: string; short?: boolean;
   onChange: (v: string) => void;
 }) {
   return (
-    <Row label={label} hint={hint} htmlFor={id}>
+    <Row label={label} hint={hint} help={help} htmlFor={id}>
       <input id={id} type="text" className={short ? "input--short" : undefined} placeholder={placeholder}
         value={value} onChange={(e) => onChange(e.target.value)} />
     </Row>
@@ -79,16 +80,16 @@ function RecordingSection({ draft, set, recordingsDir }: {
   const v = (k: string) => draft.recording?.[k];
   return (
     <>
-      <Row label="Папка записей" hint="где лежат встречи; менять путь — в файле настроек">
+      <Row label="Папка записей" hint="Здесь хранятся записи встреч. Путь задаётся в файле настроек">
         {recordingsDir ? (
-          <>
-            <code className="path">{recordingsDir}</code>
+          <span className="folder">
+            <PathText path={recordingsDir} />
             {inTauri() && <Button onClick={() => void openFolder(recordingsDir)}>Открыть</Button>}
-          </>
-        ) : <span className="muted">неизвестно</span>}
+          </span>
+        ) : <span className="muted">Неизвестно</span>}
       </Row>
-      <TextRow id="speaker-name" label="Как подписывать вас" short
-        hint="микрофонная дорожка — всегда владелец машины; в транскрипте она подписана так"
+      <TextRow id="speaker-name" label="Ваше имя в расшифровке" short
+        hint="Так подписываются реплики, записанные с вашего микрофона"
         value={String(v("speaker_name") ?? "Вы")} onChange={(x) => set("recording", "speaker_name", x)} />
       <Switch label="Расшифровывать сразу после записи" value={Boolean(v("auto_transcribe"))}
         onChange={(x) => set("recording", "auto_transcribe", x)} />
@@ -112,17 +113,17 @@ function AutoSection({ draft, set, processes, loadProcesses, onToggle }: {
   const selected = (v("processes") as string[] | undefined) ?? [];
   return (
     <>
-      <Switch label="Поднимать запись, когда начинается звонок"
-        hint="кончился звонок — запись останавливается сама"
+      <Switch label="Записывать звонки автоматически"
+        hint="Запись начинается со звонком и останавливается после его окончания" help={<AutoRecordTip />}
         value={Boolean(v("enabled"))} onChange={onToggle} />
-      <p className="muted sdesc">Эти параметры применятся после перезапуска приложения</p>
+      <p className="muted sdesc">Параметры ниже применяются после перезапуска приложения.</p>
       <CallPrograms value={selected} processes={processes} loadProcesses={loadProcesses}
         onChange={(x) => set("auto_record", "processes", x)} />
-      <SecondsRow id="grace" label="Хвост после звонка"
-        hint="обрыв связи и перезаход не рвут файл надвое; в хвост попадает и сказанное после встречи"
+      <SecondsRow id="grace" label="Продолжать запись после звонка"
+        hint="Обрыв связи или повторное подключение не разделят запись на две части"
         value={Number(v("grace_seconds") ?? 0)} onChange={(x) => set("auto_record", "grace_seconds", x)} />
-      <SecondsRow id="min-call" label="Короткий звонок"
-        hint="запись короче этого считается ложной тревогой"
+      <SecondsRow id="min-call" label="Минимальная длительность звонка"
+        hint="Более короткие записи сохраняются, но не расшифровываются автоматически"
         value={Number(v("min_call_seconds") ?? 0)} onChange={(x) => set("auto_record", "min_call_seconds", x)} />
     </>
   );
@@ -132,22 +133,24 @@ function AsrSection({ draft, set, endpoint }: { draft: Raw; set: SetFn; endpoint
   const v = (k: string) => draft.asr?.[k];
   return (
     <>
-      <Row label="Устройство" htmlFor="asr-device" hint="Авто — видеокарта, если есть">
+      <Row label="Устройство для распознавания" htmlFor="asr-device" help={<AsrModelTip />}
+        hint="Авто: видеокарта, если она доступна, иначе процессор">
         <select id="asr-device" value={String(v("device") ?? "auto")} onChange={(e) => set("asr", "device", e.target.value)}>
           <option value="auto">Авто</option>
           <option value="cuda">Видеокарта</option>
           <option value="cpu">Процессор</option>
         </select>
       </Row>
-      <TextRow id="asr-model" label="Модель для видеокарты" value={String(v("model") ?? "")}
+      <TextRow id="asr-model" label="Модель для видеокарты (CUDA)" value={String(v("model") ?? "")}
+        hint="Скачать и выбрать модель можно в разделе «Движок и модели»"
         onChange={(x) => set("asr", "model", x)} />
-      <TextRow id="asr-cpu-model" label="Модель для процессора" value={String(v("cpu_model") ?? "")}
+      <TextRow id="asr-cpu-model" label="Модель для процессора (CPU)" value={String(v("cpu_model") ?? "")}
         onChange={(x) => set("asr", "cpu_model", x)} />
-      <TextRow id="asr-language" label="Язык" short value={String(v("language") ?? "ru")}
+      <TextRow id="asr-language" label="Язык речи" short hint="Код языка, например ru или en" value={String(v("language") ?? "ru")}
         onChange={(x) => set("asr", "language", x)} />
-      <Switch label="Уточнять пословные таймкоды" hint="точнее стыки спикеров, чуть дольше"
+      <Switch label="Уточнять время каждого слова" hint="Точнее границы реплик; расшифровка занимает немного больше времени"
         value={Boolean(v("align"))} onChange={(x) => set("asr", "align", x)} />
-      <Switch label="Учитывать перебивания" hint="блоки в зонах нахлёста получают пометку — атрибуция там ненадёжна"
+      <Switch label="Отмечать одновременную речь" hint="Реплики, где говорят одновременно, помечаются «нахлёст»: спикер в них может быть определён неточно"
         value={Boolean(v("overlap"))} onChange={(x) => set("asr", "overlap", x)} />
       <HotwordsEditor endpoint={endpoint} />
     </>
@@ -166,31 +169,32 @@ function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
     <>
       <details className="sdetails">
         <summary>Команда после записи</summary>
-        <Switch label="Запускать команду после остановки записи" value={Boolean(hooks("post_record"))}
-          onChange={(x) => set("hooks", "post_record", x)} />
-        <TextRow id="hook-command" label="Команда" placeholder="ничего не запускать"
-          hint="аргументы через пробел; плейсхолдеры {folder}, {date}, {project}, {prompt}"
+        <Switch label="Запускать команду после записи" hint="Когда запись остановлена и сохранена"
+          value={Boolean(hooks("post_record"))} onChange={(x) => set("hooks", "post_record", x)} />
+        <TextRow id="hook-command" label="Команда" placeholder="Не задана" help={<HookCommandTip />}
+          hint="Программа и аргументы через пробел; подстановки — в подсказке «?»"
           value={((hooks("command") as string[] | undefined) ?? []).join(" ")}
           onChange={(x) => set("hooks", "command", x.split(" ").filter(Boolean))} />
-        <TextRow id="hook-prompt" label="Текст-подсказка" hint="подставляется в {prompt}"
+        <TextRow id="hook-prompt" label="Текст для {prompt}" hint="Подставляется в команду вместо {prompt}"
           value={String(hooks("prompt") ?? "")} onChange={(x) => set("hooks", "prompt", x)} />
-        <Row label="Окно регулярной встречи" hint="запись в этом окне похожа на регулярную встречу. Пусто — не учитываем">
+        <Row label="Окно регулярной встречи" help={<RecurringWindowTip />}
+          hint="Запись, начатая в этот промежуток, считается регулярной встречей">
           <span className="with-unit">
-            <input type="text" aria-label="Начало окна" className="input--short" placeholder="11:00"
+            <input type="text" aria-label="Начало окна" className="input--time" placeholder="11:00"
               value={win?.[0] ?? ""} onChange={(e) => setWin(0, e.target.value)} />
             <span className="unit">—</span>
-            <input type="text" aria-label="Конец окна" className="input--short" placeholder="12:00"
+            <input type="text" aria-label="Конец окна" className="input--time" placeholder="12:00"
               value={win?.[1] ?? ""} onChange={(e) => setWin(1, e.target.value)} />
           </span>
         </Row>
       </details>
       <details className="sdetails">
         <summary>Интеграции</summary>
-        <Switch label="Сообщать другим программам, что GPU занят"
-          hint="файл-маркер на время расшифровки. Некому читать — выключите"
+        <Switch label="Сообщать другим программам о занятости видеокарты" help={<GpuMarkerTip />}
+          hint="На время расшифровки создаётся файл-маркер"
           value={Boolean(draft.integrations?.gpu_marker)} onChange={(x) => set("integrations", "gpu_marker", x)} />
-        <TextRow id="gpu-marker-path" label="Путь маркера" placeholder="по умолчанию"
-          hint="пусто — рядом с остальным состоянием"
+        <TextRow id="gpu-marker-path" label="Путь к файлу-маркеру" placeholder="По умолчанию"
+          hint="Если не задан — gpu.lock в папке данных приложения"
           value={String(draft.integrations?.gpu_marker_path ?? "")}
           onChange={(x) => set("integrations", "gpu_marker_path", x || null)} />
       </details>
@@ -227,7 +231,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
       setError(null);
       setNotice(null);
     } catch (e) {
-      setError(e instanceof NoResidentError ? "Сервис записи не отвечает" : errorText(e));
+      setError(e instanceof NoResidentError ? "Служба записи не отвечает" : errorText(e));
     }
     // Справочные данные: их отсутствие не мешает править настройки.
     setProcesses(await getProcesses(endpoint).catch(() => null));
@@ -313,7 +317,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           {showBar && (
             <div className="settings__actions">
               {notice && <span className="notice">{notice}</span>}
-              {dirty.length > 0 && <span className="muted">есть несохранённое</span>}
+              {dirty.length > 0 && <span className="muted">Есть несохранённые изменения</span>}
               <Button onClick={() => void reload()} disabled={pending}>Сбросить</Button>
               <Button variant="primary" onClick={() => void save()} disabled={pending || dirty.length === 0 || invalid}>
                 {pending ? "Сохраняю…" : "Сохранить"}
@@ -337,7 +341,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           ) : section === "engine" ? (
             <>
               {onRunWizard && (
-                <Row label="Мастер первого запуска" hint="движок, токен Hugging Face, модели и запись — по шагам">
+                <Row label="Мастер первого запуска" hint="Пошаговая настройка: движок, токен Hugging Face, модели и запись">
                   <Button onClick={() => onRunWizard("hardware")}>Запустить мастер</Button>
                 </Row>
               )}
@@ -345,7 +349,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
               <h3 className="shead">Модели</h3>
               <ModelsPane endpoint={endpoint}
                 selectedModel={(draft.asr?.model as string | undefined) ?? null}
-                onSelect={(id) => { set("asr", "model", id); setNotice("Модель выбрана — не забудьте сохранить"); }} />
+                onSelect={(id) => { set("asr", "model", id); setNotice("Модель выбрана. Сохраните изменения"); }} />
             </>
           ) : section === "export" ? (
             <ExportSection draft={draft} set={set} endpoint={endpoint} />

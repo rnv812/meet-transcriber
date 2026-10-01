@@ -27,7 +27,7 @@ type Pending = {
   lost: boolean;
 };
 
-const LOST_TEXT = "Ответ не пришёл: задача пропала из очереди (резидент перезапускался?). Спросите ещё раз.";
+const LOST_TEXT = "Ответ не получен: задача пропала из очереди (возможно, служба записи перезапускалась). Задайте вопрос ещё раз.";
 const countOf = (items: QaItem[], q: string) => items.filter((it) => it.q === q).length;
 
 export function QaTab({ endpoint, id, folder, jobs, assistant, onOpenSettings }: {
@@ -144,7 +144,7 @@ export function QaTab({ endpoint, id, folder, jobs, assistant, onOpenSettings }:
       {loadError && <div className="assist__error" role="alert">{loadError}</div>}
       {items === null && !loadError && <EmptyState title="Загрузка…" />}
       {empty && (
-        <EmptyState title="Вопросов пока не было" hint="Спросите что-нибудь о встрече — модель ответит по транскрипту." />
+        <EmptyState title="Вопросов пока не было" hint="Задайте вопрос о встрече — модель ответит по расшифровке." />
       )}
       {(items?.length || pending.length) ? (
         <ol className="qa__list">

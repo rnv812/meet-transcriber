@@ -15,7 +15,9 @@ import { errorText } from "../../lib/format";
 import { openUrl } from "../../lib/shell";
 import type { AssistantInfo, ProxyInfo } from "../../lib/types";
 import { Button } from "../../ui/Button";
-import { FolderRow, HelpTip, Row, type Raw, type SetFn } from "./Section";
+import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { FolderRow, Row, type Raw, type SetFn } from "./Section";
+import { KnowledgeTip, LiveWindowTip, ProviderTip } from "./tips";
 
 type Provider = { value: string; label: string; link?: string };
 
@@ -30,8 +32,8 @@ const LOCAL = "openai-compatible";
 const LLM_KEYS = ["provider", "base_url", "local_model", "proxy"];
 
 const PROXY_LABEL = "Прокси для подключения к моделям";
-const PROXY_HELP = "Claude Code и Codex не используют системный прокси Windows сами — приложение передаёт его им. "
-  + "Нужен, если доступ к сервисам идёт через VPN/прокси.";
+const PROXY_HELP = "Claude Code и Codex сами не используют системный прокси Windows — приложение передаёт его им. "
+  + "Прокси нужен, если доступ к сервисам идёт через VPN или прокси-сервер.";
 const PROXY_SCHEMES = ["http", "https", "socks5", "socks5h"];
 const PROXY_EXAMPLE = "например http://127.0.0.1:8080";
 
@@ -169,8 +171,9 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
 
   return (
     <>
-      <Row label="Модель" hint="кто пишет итоги, отвечает на вопросы и ведёт живой дайджест">
-        <div role="radiogroup" aria-label="Модель" className="providers">
+      <Row label="Провайдер модели" hint="Готовит итоги, отвечает на вопросы и ведёт живой обзор встречи"
+        help={<ProviderTip />} stack>
+        <div role="radiogroup" aria-label="Провайдер модели" className="providers">
           {PROVIDERS.map((p) => {
             const line = status(p, info);
             const missing = p.link && info?.available[p.value]?.found === false;
@@ -207,18 +210,19 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
       </Row>
       {chosen === LOCAL && (
         <>
-          <p className="muted sdesc">Локальная модель не читает базу знаний</p>
-          <Row label="Адрес" htmlFor="llm-base-url" hint="OpenAI-совместимый адрес LM Studio или Ollama">
+          <p className="muted sdesc">Локальная модель не использует базу знаний.</p>
+          <Row label="Адрес сервера" htmlFor="llm-base-url" hint="OpenAI-совместимый адрес LM Studio или Ollama">
             <input id="llm-base-url" type="text" value={String(llm("base_url") ?? "")}
               onChange={(e) => set("llm", "base_url", e.target.value)} />
           </Row>
-          <Row label="Модель" htmlFor="llm-local-model" hint="как её называет LM Studio или Ollama">
+          <Row label="Имя модели" htmlFor="llm-local-model" hint="Как модель называется в LM Studio или Ollama">
             <input id="llm-local-model" type="text" value={String(llm("local_model") ?? "")}
               onChange={(e) => set("llm", "local_model", e.target.value.trim() ? e.target.value : null)} />
           </Row>
         </>
       )}
-      <Row label={PROXY_LABEL} hint="через него Claude Code и Codex выходят к своим сервисам">
+      <Row label={PROXY_LABEL} hint="Через него Claude Code и Codex подключаются к своим сервисам"
+        help={<HelpTip label="Зачем нужен прокси"><TipLine>{PROXY_HELP}</TipLine></HelpTip>}>
         <div role="radiogroup" aria-label={PROXY_LABEL} className="radios radios--column">
           <label className="radios__item">
             <input type="radio" name="llm-proxy" checked={proxyMode === "system"}
@@ -236,9 +240,6 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
             Свой адрес…
           </label>
         </div>
-        <HelpTip label="Зачем нужен прокси">
-          <span className="help__line">{PROXY_HELP}</span>
-        </HelpTip>
         {proxyMode === "custom" && (
           <>
             <input type="text" aria-label="Адрес прокси" placeholder="http://127.0.0.1:8080" value={proxy}
@@ -248,20 +249,20 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
         )}
       </Row>
       <h3 className="shead">База знаний</h3>
-      <FolderRow label="База знаний для ассистента"
-        hint="папка с материалами: ассистент сверяет по ней термины и имена, отвечая на вопросы"
+      <FolderRow label="База знаний для ассистента" help={<KnowledgeTip />}
+        hint="Папка с материалами, по которой ассистент сверяет термины и имена"
         value={(draft.assistant?.knowledge_dir as string | null | undefined) ?? null}
         onChange={(v) => set("assistant", "knowledge_dir", v)} />
       <h3 className="shead">Живой ассистент</h3>
-      <Row label="Окно живой расшифровки, с" htmlFor="assist-window"
-        hint="раз в столько секунд расшифровывается свежий звук: меньше — строки быстрее, больше — точнее. Применится со следующего запуска">
+      <Row label="Окно живой расшифровки, с" htmlFor="assist-window" help={<LiveWindowTip min={WINDOW_MIN} max={WINDOW_MAX} />}
+        hint="Как часто расшифровывается новый звук. Применяется со следующего запуска ассистента">
         <input id="assist-window" type="number" className="num" min={WINDOW_MIN} max={WINDOW_MAX} step={5}
           value={win ?? ""}
           onChange={(e) => {
             const n = e.target.value === "" ? null : Number(e.target.value);
             set("assist", "window_seconds", n !== null && Number.isFinite(n) ? n : null);
           }} />
-        {win !== undefined && windowInvalid(win) && <span className="error">от {WINDOW_MIN} до {WINDOW_MAX} секунд</span>}
+        {win !== undefined && windowInvalid(win) && <span className="error">От {WINDOW_MIN} до {WINDOW_MAX} секунд</span>}
       </Row>
     </>
   );

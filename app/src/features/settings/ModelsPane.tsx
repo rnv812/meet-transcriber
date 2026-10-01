@@ -4,9 +4,9 @@ import { errorText } from "../../lib/format";
 import { jobActive, useTrackedJob } from "../../state/useTrackedJob";
 import { Button } from "../../ui/Button";
 import { HfTokenRow } from "./HfTokenRow";
-import { Row } from "./Section";
+import { PathText, Row } from "./Section";
 
-const KIND: Record<string, string> = { asr: "распознавание", diarization: "спикеры", align: "выравнивание" };
+const KIND: Record<string, string> = { asr: "распознавание", diarization: "разделение на спикеров", align: "время слов" };
 
 function ModelRow({ model, busy, canDownload, selected, onDownload, onSelect }: {
   model: Model; busy: boolean; canDownload: boolean; selected: boolean;
@@ -22,17 +22,17 @@ function ModelRow({ model, busy, canDownload, selected, onDownload, onSelect }: 
         <span className="srow__hint">{model.note}</span>
         <span className="srow__hint">
           {KIND[model.kind] ?? model.kind} · {model.size_gb} ГБ · {model.id}
-          {model.downloaded ? " · скачана" : ""}{model.blocked ? " · нужен токен" : ""}
+          {model.downloaded ? " · скачана" : ""}{model.blocked ? " · нужен токен Hugging Face" : ""}
         </span>
       </div>
       <div className="srow__control">
         {model.kind === "asr" && (
           <Button variant={selected ? "primary" : "default"} onClick={onSelect} disabled={selected}>
-            {selected ? "выбрана" : "выбрать"}
+            {selected ? "Выбрана" : "Выбрать"}
           </Button>
         )}
         <Button onClick={onDownload} disabled={busy || model.blocked || !canDownload}>
-          {model.downloaded ? "обновить" : "скачать"}
+          {model.downloaded ? "Обновить" : "Скачать"}
         </Button>
       </div>
     </div>
@@ -74,8 +74,8 @@ export function ModelsPane({ endpoint, selectedModel, onSelect }: {
       {error && <p className="error">{error}</p>}
       {!models.can_download && (
         <p className="notice">
-          Загрузчик моделей приходит вместе с движком. Установите его выше — после этого модели можно
-          скачивать; выбранная модель распознавания и так скачается при первой расшифровке.
+          Загрузчик моделей устанавливается вместе с движком. После установки движка модели можно скачать
+          здесь; выбранная модель распознавания скачается и при первой расшифровке.
         </p>
       )}
       {models.items.map((m) => (
@@ -85,10 +85,10 @@ export function ModelsPane({ endpoint, selectedModel, onSelect }: {
           onDownload={() => void download(m.id)} onSelect={() => onSelect(m.id)}
         />
       ))}
-      <Row label="Кэш моделей" hint="общий с библиотеками движка: уже скачанное не качается заново">
-        <code className="path">{models.cache}</code>
+      <Row label="Папка моделей" hint="Общая с библиотеками движка: скачанные модели не загружаются повторно">
+        <span className="folder"><PathText path={models.cache} /></span>
       </Row>
-      {busy && <p className="muted">Качаю {job?.folder}: это гигабайты. Окно можно закрыть — задача идёт в резиденте.</p>}
+      {busy && <p className="muted">Скачивается {job?.folder}. Окно можно закрыть — загрузка продолжится в службе записи.</p>}
       {job?.state === "failed" && <p className="error">{job.error}</p>}
       {job?.state === "done" && <p className="notice">Скачано: {job.result}</p>}
     </>

@@ -150,11 +150,11 @@ test("ошибка запроса проверки — текстом, без «
 test("выбор «Локальная» — поля адреса и модели, предупреждение; сохранение перечитывает getAssistant", async () => {
   open();
   await screen.findByText("сейчас: Claude Code");
-  expect(screen.queryByText("Локальная модель не читает базу знаний")).toBeNull();
+  expect(screen.queryByText("Локальная модель не использует базу знаний.")).toBeNull();
   await userEvent.click(screen.getByRole("radio", { name: "Локальная (LM Studio / Ollama)" }));
-  expect(screen.getByText("Локальная модель не читает базу знаний")).toBeInTheDocument();
-  expect(screen.getByLabelText("Адрес")).toHaveValue("http://127.0.0.1:1234/v1");
-  await userEvent.type(screen.getByRole("textbox", { name: "Модель" }), "qwen3");
+  expect(screen.getByText("Локальная модель не использует базу знаний.")).toBeInTheDocument();
+  expect(screen.getByLabelText("Адрес сервера")).toHaveValue("http://127.0.0.1:1234/v1");
+  await userEvent.type(screen.getByRole("textbox", { name: "Имя модели" }), "qwen3");
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
     llm: { provider: "openai-compatible", local_model: "qwen3" },
@@ -175,7 +175,7 @@ test("пустое имя локальной модели уходит как nu
     llm: { provider: "openai-compatible", local_model: "qwen3" },
   }));
   open();
-  const model = await screen.findByRole("textbox", { name: "Модель" });
+  const model = await screen.findByRole("textbox", { name: "Имя модели" });
   await userEvent.clear(model);
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { llm: { local_model: null } }));
@@ -187,7 +187,7 @@ test("база знаний: «Выбрать папку…» берёт пут�
   const kb = await screen.findByRole("group", { name: "База знаний для ассистента" });
   expect(within(kb).getByText("D:\\kb")).toBeInTheDocument();
   await userEvent.click(within(kb).getByRole("button", { name: "Очистить" }));
-  expect(within(kb).getByText("не задана")).toBeInTheDocument();
+  expect(within(kb).getByText("Не задана")).toBeInTheDocument();
   await userEvent.click(within(kb).getByRole("button", { name: "Выбрать папку…" }));
   expect(await within(kb).findByText("E:\\materials")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -333,8 +333,8 @@ test("прокси: «?» объясняет, зачем он нужен", async
   await screen.findByText("сейчас: Claude Code");
   await userEvent.click(screen.getByRole("button", { name: "Зачем нужен прокси" }));
   expect(screen.getByRole("tooltip")).toHaveTextContent(
-    "Claude Code и Codex не используют системный прокси Windows сами — приложение передаёт его им. "
-    + "Нужен, если доступ к сервисам идёт через VPN/прокси.");
+    "Claude Code и Codex сами не используют системный прокси Windows — приложение передаёт его им. "
+    + "Прокси нужен, если доступ к сервисам идёт через VPN или прокси-сервер.");
 });
 
 test.each([

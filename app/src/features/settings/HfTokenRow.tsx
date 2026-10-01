@@ -11,6 +11,7 @@ import {
 import { errorText } from "../../lib/format";
 import { Button } from "../../ui/Button";
 import { CheckFailure, HfTokenForm } from "../hf/HfTokenForm";
+import { DiarizationTip, HfTokenTip } from "./tips";
 
 const SOURCE: Record<string, string> = {
   keyring: "сохранён в диспетчере учётных данных Windows",
@@ -19,7 +20,7 @@ const SOURCE: Record<string, string> = {
 };
 
 function StatusLine({ status }: { status: HfStatus }) {
-  if (!status.configured) return <span className="muted">не задан — расшифровка без разделения на спикеров</span>;
+  if (!status.configured) return <span className="muted">Не задан — расшифровка без разделения на спикеров</span>;
   const where = SOURCE[status.source ?? ""] ?? "задан";
   return (
     <span className="hf-status">
@@ -81,8 +82,10 @@ export function HfTokenRow({ endpoint, onChanged }: {
     <div role="group" aria-label="Токен Hugging Face" className="hf-row">
       <div className="srow">
         <div className="srow__text">
-          <span className="srow__label">Токен Hugging Face</span>
-          <span className="srow__hint">нужен модели спикеров: она за принятием условий на huggingface.co</span>
+          <span className="srow__head"><span className="srow__label">Токен Hugging Face</span><HfTokenTip /></span>
+          <span className="srow__hint">
+            Нужен для разделения на спикеров <DiarizationTip /> — модель доступна после принятия условий на huggingface.co
+          </span>
           {status && <StatusLine status={status} />}
         </div>
         <div className="srow__control">

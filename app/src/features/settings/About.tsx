@@ -3,7 +3,8 @@ import pkg from "../../../package.json";
 import { type Endpoint, getDiagnostics } from "../../lib/api";
 import { openUrl } from "../../lib/shell";
 import { Button } from "../../ui/Button";
-import { Row } from "./Section";
+import { PathText, Row } from "./Section";
+import { VoiceBaseTip } from "./tips";
 
 export const RELEASES_URL = "https://github.com/rnv812/ai_transcriber/releases";
 
@@ -31,15 +32,15 @@ export function About({ endpoint }: { endpoint: Endpoint }) {
   return (
     <>
       <Row label="Версия"><span>{pkg.version}</span></Row>
-      <Row label="Новые версии" hint="Releases форка на GitHub">
+      <Row label="Новые версии" hint="Страница выпусков на GitHub">
         <Button onClick={() => void openUrl(RELEASES_URL)}>Скачать новую версию</Button>
         <code className="path">{RELEASES_URL}</code>
         <CopyButton text={RELEASES_URL} />
       </Row>
-      <Row label="Папка данных" hint="настройки, журналы, база голосов">
+      <Row label="Папка данных" hint="Настройки, журналы и база голосов" help={<VoiceBaseTip />}>
         {dataDir
-          ? <><code className="path">{dataDir}</code><CopyButton text={dataDir} /></>
-          : <span className="muted">неизвестно</span>}
+          ? <span className="folder"><PathText path={dataDir} /><CopyButton text={dataDir} /></span>
+          : <span className="muted">Неизвестно</span>}
       </Row>
     </>
   );

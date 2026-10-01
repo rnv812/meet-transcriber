@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { type Endpoint, getHotwords, putHotwords } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { Button } from "../../ui/Button";
+import { HotwordsTip } from "./tips";
 
 /** Как считает резидент: строки без пустых и `# комментариев`, через «, ». */
 export function countHotwords(text: string): number {
@@ -44,20 +45,20 @@ export function HotwordsEditor({ endpoint }: { endpoint: Endpoint }) {
 
   return (
     <div className="hotwords">
-      <div className="srow__label">Термины и названия</div>
-      <div className="srow__hint">по одному в строке; строки с # — комментарии. Помогают распознавать аббревиатуры и имена</div>
+      <div className="srow__head"><span className="srow__label">Горячие слова</span><HotwordsTip /></div>
+      <div className="srow__hint">Термины и имена, по одному на строку; строки, начинающиеся с #, не учитываются</div>
       <textarea
-        aria-label="Термины" className="hotwords__text" rows={8} value={text}
+        aria-label="Горячие слова" className="hotwords__text" rows={8} value={text}
         onChange={(e) => setText(e.target.value)}
       />
       <div className="hotwords__bar">
         <span data-testid="hotwords-counter" className={`hotwords__counter${over ? " hotwords__counter--over" : ""}`}>
           {used} / {budget}
         </span>
-        {over && <span className="error">Лишнее отбросится при расшифровке</span>}
+        {over && <span className="error">Лимит превышен: лишние слова не будут учтены</span>}
         {error && <span className="error">{error}</span>}
         <Button variant="primary" onClick={() => void save()} disabled={pending || text === saved && !over}>
-          Сохранить термины
+          Сохранить слова
         </Button>
       </div>
     </div>

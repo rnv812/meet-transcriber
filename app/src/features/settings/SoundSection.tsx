@@ -14,7 +14,8 @@ import { useState, type ReactNode } from "react";
 import { type DeviceCheck, type DeviceItem, type DeviceKind, type Devices, type Endpoint, testDevice } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { Button } from "../../ui/Button";
-import { HelpTip, Row, type Raw, type SetFn } from "./Section";
+import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { Row, type Raw, type SetFn } from "./Section";
 
 /** Ниже этого пика считаем, что звука не было (шум тишины, а не речь). */
 const SILENCE = 0.02;
@@ -63,7 +64,7 @@ function DeviceRow({ id, kind, label, hint, help, items, value, onChange, endpoi
   const percent = check ? Math.round(Math.min(1, Math.max(0, check.peak)) * 100) : 0;
   return (
     <div role="group" aria-label={label}>
-      <Row label={label} hint={hint} htmlFor={id}>
+      <Row label={label} hint={hint} help={help} htmlFor={id}>
         <span className="sound__pick">
           <select id={id} className="sound__select" title={value ?? (system ? `Как в системе (сейчас: ${system})` : undefined)}
             value={value ?? ""}
@@ -72,7 +73,6 @@ function DeviceRow({ id, kind, label, hint, help, items, value, onChange, endpoi
             {missing && <option value={value}>{`${value} (не подключено)`}</option>}
             {names.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
-          {help}
         </span>
         <Button onClick={() => void run()} disabled={checking}>{checking ? "Проверяю…" : "Проверить"}</Button>
         {(check || error) && (
@@ -106,22 +106,20 @@ export function SoundSection({ draft, set, devices, endpoint }: {
         <p className="muted sdesc">Список устройств недоступен: {devices.error ?? "причина неизвестна"}</p>
       )}
       <DeviceRow id="sound-mic" kind="mic" label="Микрофон" endpoint={endpoint}
-        hint="ваш голос; «Как в системе» следует за микрофоном Windows по умолчанию"
+        hint="Ваш голос. «Как в системе» — микрофон Windows по умолчанию"
         items={devices?.inputs ?? []} value={v("mic_device")} onChange={choose("mic_device")} />
       <DeviceRow id="sound-output" kind="output" label="Звук собеседников (вывод)" endpoint={endpoint}
-        hint="устройство, через которое вы слышите собеседников: наушники или колонки"
+        hint="Устройство, через которое вы слышите собеседников: наушники или колонки"
         help={(
           <HelpTip label="Как записывается звук собеседников" title="Запись звука собеседников">
-            <span className="help__line">
+            <TipLine>
               Голоса собеседников записываются с выбранного устройства вывода через WASAPI loopback: программа
               получает копию звука, который Windows отправляет в наушники или колонки.
-            </span>
-            <span className="help__line">
-              Другие звуки компьютера (уведомления, музыка) тоже попадут в эту дорожку.
-            </span>
-            <span className="help__line">
+            </TipLine>
+            <TipLine>Другие звуки компьютера (уведомления, музыка) тоже попадут в эту дорожку.</TipLine>
+            <TipLine>
               «Как в системе» — запись перейдёт на новое устройство, если вы смените его во время звонка.
-            </span>
+            </TipLine>
           </HelpTip>
         )}
         items={devices?.outputs ?? []} value={v("output_device")} onChange={choose("output_device")} />

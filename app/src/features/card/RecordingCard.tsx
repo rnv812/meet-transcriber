@@ -153,7 +153,7 @@ export function RecordingCard({
   const openLogs = () => act(async () => {
     const diag = await getDiagnostics(endpoint, 1);
     const dir = (diag.paths as { data_dir?: unknown } | undefined)?.data_dir;
-    if (typeof dir !== "string" || !dir) throw new Error("Папка данных резидента неизвестна");
+    if (typeof dir !== "string" || !dir) throw new Error("Папка данных службы записи неизвестна");
     await openFolder(logsDir(dir));
   });
   const logsButton = inTauri() ? <Button onClick={openLogs} disabled={busy}>Открыть журнал</Button> : null;
@@ -259,7 +259,7 @@ export function RecordingCard({
         <div className="card__banner" role="status">
           <span>
             Перерасшифровка не удалась: {retranscribeFailed.error || "без подробностей"}
-            <span className="muted"> · показан прежний транскрипт</span>
+            <span className="muted"> · показана прежняя расшифровка</span>
           </span>
           <span className="card__row">
             <Button onClick={doTranscribe} disabled={busy}>Повторить</Button>

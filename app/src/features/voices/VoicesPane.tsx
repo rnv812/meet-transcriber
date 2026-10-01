@@ -4,6 +4,7 @@ import { duration } from "../../lib/format";
 import type { Person } from "../../lib/types";
 import { Avatar } from "../../ui/Avatar";
 import { EmptyState } from "../../ui/EmptyState";
+import { VoiceBaseTip } from "../settings/tips";
 import { PersonCard } from "./PersonCard";
 import { plural } from "./plural";
 import "./voices.css";
@@ -22,7 +23,10 @@ export function VoicesPane({ endpoint, people, avatarVersion, onAvatar, onChange
   const current = people.find((p) => p.name === selected) ?? null;
 
   if (people.length === 0) {
-    return <EmptyState title="Пока никого. Назовите спикеров в карточке записи — голоса запомнятся здесь." />;
+    return (
+      <EmptyState title="База голосов пуста"
+        hint="Назовите спикеров в карточке записи — их голоса сохранятся здесь и будут узнаваться автоматически." />
+    );
   }
 
   return (
@@ -30,6 +34,7 @@ export function VoicesPane({ endpoint, people, avatarVersion, onAvatar, onChange
       <section className="voices__main">
         <h2 className="voices__title">
           {people.length} {plural(people.length, "человек", "человека", "человек")} · узнаются автоматически
+          <VoiceBaseTip />
         </h2>
         <div className="voices__grid">
           {people.map((p) => {

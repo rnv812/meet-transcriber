@@ -94,11 +94,11 @@ def _md_name(name: str) -> str:
 
 
 def check_names(transcript_name: str, summary_name: str) -> str | None:
-    """Имена файлов транскрипта и итогов не должны совпадать друг с другом и
+    """Имена файлов расшифровки и итогов не должны совпадать друг с другом и
     с файлами субтитров и записи — иначе один файл затёр бы другой."""
-    names = {"транскрипта": _md_name(transcript_name), "итогов": _md_name(summary_name)}
-    if names["транскрипта"] == names["итогов"]:
-        return "Имена файлов транскрипта и итогов совпадают — задайте разные"
+    names = {"расшифровки": _md_name(transcript_name), "итогов": _md_name(summary_name)}
+    if names["расшифровки"] == names["итогов"]:
+        return "Имена файлов расшифровки и итогов совпадают — задайте разные"
     srt_stem = SRT_NAME.rsplit(".", 1)[0].lower()
     for which, name in names.items():
         stem = name[:-3]

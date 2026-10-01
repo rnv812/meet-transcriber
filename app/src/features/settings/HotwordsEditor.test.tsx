@@ -32,8 +32,8 @@ test("сверх бюджета: счётчик красный, предупре
   await userEvent.paste("я".repeat(401));
   const counter = screen.getByTestId("hotwords-counter");
   expect(counter).toHaveClass("hotwords__counter--over");
-  expect(screen.getByText("Лишнее отбросится при расшифровке")).toBeInTheDocument();
-  const save = screen.getByRole("button", { name: "Сохранить термины" });
+  expect(screen.getByText("Лимит превышен: лишние слова не будут учтены")).toBeInTheDocument();
+  const save = screen.getByRole("button", { name: "Сохранить слова" });
   expect(save).toBeEnabled();
   await userEvent.click(save);
   await waitFor(() => expect(api.putHotwords).toHaveBeenCalledWith(ep, "я".repeat(401)));
@@ -58,7 +58,7 @@ test("после сохранения показывается used сервер
   render(<HotwordsEditor endpoint={ep} />);
   await userEvent.click(await screen.findByRole("textbox"));
   await userEvent.paste("SOC");
-  await userEvent.click(screen.getByRole("button", { name: "Сохранить термины" }));
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить слова" }));
   await waitFor(() => expect(screen.getByTestId("hotwords-counter")).toHaveTextContent("99 / 400"));
 });
 
@@ -67,6 +67,6 @@ test("ошибка сохранения терминов — сообщение 
   render(<HotwordsEditor endpoint={ep} />);
   const box = await screen.findByRole("textbox");
   await userEvent.type(box, "SIEM");
-  await userEvent.click(screen.getByRole("button", { name: "Сохранить термины" }));
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить слова" }));
   expect(await screen.findByText("диск только для чтения")).toBeInTheDocument();
 });
