@@ -1319,52 +1319,44 @@ class TrayControl:
             return {"error": "записи нет"}
         if not isinstance(data, dict) or not isinstance(data.get("segments"), list):
             return {"error": "ожидается транскрипт с полем segments"}
-        library.write_transcript(folder, data)
+        with self._speakers_lock:  # не посреди правки спикеров
+            library.write_transcript(folder, data)
         return {"ok": True, "path": str(library.transcript_path(folder))}
 
     def name_speakers(self, recording_id: str, mapping: dict) -> dict:
-        """Назвать спикеров и запомнить их голоса.
+        """Назвать спикеров и запомнить их голоса (прежний вход API, `{метка:
+        имя}`). Тот же путь, что «Применить» в панели «Спикеры»: шаг истории
+        встречи (его можно отменить), отказ, пока запись обрабатывается.
 
         Это и есть «обучение клона»: эмбеддинги из сайдкара расшифровки уходят в
         базу голосов, и на следующей встрече человек узнаётся сам. Порог матчинга
         строгий (0.75 с запасом 0.05) — лучше «Спикер 2», чем чужое имя."""
-        folder = self._folder(recording_id)
-        if folder is None:
-            return {"error": "записи нет"}
-        from meet import people
+        from meet import speakers
 
-        pairs = {str(k): str(v).strip() for k, v in (mapping or {}).items()
-                 if str(v).strip()}
+        pairs = {str(k): str(v).strip() for k, v in (mapping or {}).items() if str(v).strip()}
         if not pairs:
             return {"error": "нечего сохранять"}
-        # Имя становится именем файла базы голосов: проверяем все до того, как
-        # тронуть транскрипт, — иначе отказ оставил бы его наполовину переименованным.
-        for label, name in pairs.items():
-            try:
-                pairs[label] = people.valid_name(name)
-            except ValueError as e:
-                raise _bad_request(f"«{name}»: {e}")
-        data = library.read_transcript(folder)
-        renamed = 0
-        if data:
-            # Старые транскрипты хранят сырые SPEAKER_XX: приводим к «Спикер N»
-            # (та же нумерация, что у сайдкара) и переводим ключи pairs.
-            raw_to_display = library.display_names(data.get("segments", []))
-            for segment in data.get("segments", []):
-                segment["speaker"] = raw_to_display.get(segment.get("speaker"),
-                                                        segment.get("speaker"))
-            pairs = {raw_to_display.get(k, k): v for k, v in pairs.items()}
-            for segment in data.get("segments", []):
-                if segment.get("speaker") in pairs:
-                    segment["speaker"] = pairs[segment["speaker"]]
-                    renamed += 1
-            names = dict(data.get("names") or {})
-            names.update(pairs)
-            data["names"] = names
-            library.write_transcript(folder, data)
-        enrolled, error = self._enroll(folder, pairs)
-        return {"ok": True, "renamed": renamed, "enrolled": enrolled,
-                "voices_error": error}
+        result: dict = {}
+
+        def change(folder: Path, voices: Path) -> dict:
+            # Ключи — и «Спикер N», и сырые SPEAKER_XX старых транскриптов
+            # (та же нумерация, что у сайдкара): переводим до нормализации.
+            data = library.read_transcript(folder) or {}
+            segments = data.get("segments") if isinstance(data.get("segments"), list) else []
+            raw = library.display_names([s for s in segments if isinstance(s, dict)])
+            ops = [{"type": "rename", "label": raw.get(label, label), "to": name}
+                   for label, name in pairs.items()]
+            got = speakers.apply(folder, ops, {op["label"]: True for op in ops}, voices)
+            result.update(got)
+            return got
+
+        reply = self._speakers_change(recording_id, change)
+        if "error" in reply:
+            return reply
+        step = result.get("step") or {}
+        return {"ok": True, "renamed": result.get("changed", 0),
+                "enrolled": sorted({e["person"] for e in step.get("enrolled") or []}),
+                "voices_error": result.get("voices_error")}
 
     # --- панель «Спикеры»: правки одним шагом и их откат ---------------------
 
@@ -1377,15 +1369,24 @@ class TrayControl:
     def speakers(self, recording_id: str) -> dict:
         """Спикеры встречи для панели: доли, образцы фраз, подсказки из базы
         голосов, история правок."""
-        from meet import speakers
+        from meet import search, speakers
 
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
-        try:
-            return self._speakers_view(folder)
-        except speakers.SpeakerError as e:
-            return {"error": str(e)}
+        # Старые сырые SPEAKER_XX — один раз в «Спикер N» (не шаг истории),
+        # пока над записью ничего не работает; иначе только показываем.
+        with self._speakers_lock:
+            if self._busy_reason(folder, model=False) is None:
+                try:
+                    if speakers.normalize(folder):
+                        search.forget(folder)
+                except OSError as e:
+                    self.tray.log(f"метки спикеров не переписаны ({folder.name}): {e}")
+            try:
+                return self._speakers_view(folder)
+            except speakers.SpeakerError as e:
+                return {"error": str(e)}
 
     def _speakers_change(self, recording_id: str, change) -> dict:
         """Правка спикеров записи (`change(folder, voices)`), по одной за раз.
@@ -1396,13 +1397,15 @@ class TrayControl:
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
-        reason = self._busy_reason(folder, model=False)
-        if reason:
-            raise _conflict(reason[:1].upper() + reason[1:])
+        # Проверка «занята ли запись» и сама правка — под одним замком: между
+        # ними не вклинится ни другая правка, ни сохранение транскрипта.
         with self._speakers_lock:
+            reason = self._busy_reason(folder, model=False)
+            if reason:
+                raise _conflict(reason[:1].upper() + reason[1:])
             try:
                 result = change(folder, self._voices())
-            except speakers.Stale as e:
+            except (speakers.Stale, speakers.VoiceBaseError) as e:
                 raise _conflict(str(e))
             except speakers.SpeakerError as e:
                 raise _bad_request(str(e))
@@ -1453,23 +1456,6 @@ class TrayControl:
         to = (body or {}).get("to_step_id")
         return self._speakers_change(recording_id, lambda folder, voices: speakers.revert(
             folder, str(to) if to else None, voices))
-
-    def _enroll(self, folder: Path, pairs: dict) -> tuple[list, str | None]:
-        """Записать голоса в базу. Сайдкара нет (расшифровка без эмбеддингов) —
-        не ошибка: имена в транскрипте всё равно сохранены."""
-        from meet import voices
-
-        try:
-            voices.enroll(
-                str(folder),
-                [f"{label}={name}" for label, name in pairs.items()],
-                folder=settings.load().recording.voices,
-            )
-        except SystemExit as e:  # «нет сайдкара», «битый сайдкар» — текстом
-            return [], str(e)
-        except Exception as e:
-            return [], f"{type(e).__name__}: {e}"
-        return sorted(pairs.values()), None
 
     def engine(self) -> dict:
         """Что установлено для расшифровки и что для неё нужно."""
@@ -1852,13 +1838,16 @@ class TrayControl:
         voices = self._voices()
         try:
             # rename/merge переписывают имя и в транскриптах библиотеки: по ним
-            # считается статистика и берётся образец.
+            # считается статистика и берётся образец. Под замком правок
+            # спикеров: не посреди «Применить» или отмены в панели.
             if action == "rename":
-                people.rename(name, people.valid_name(str((body or {}).get("to") or "")),
-                              voices, self._root())
+                target = people.valid_name(str((body or {}).get("to") or ""))
+                with self._speakers_lock:
+                    people.rename(name, target, voices, self._root())
             elif action == "merge":
-                people.merge(name, people.valid_name(str((body or {}).get("into") or "")),
-                             voices, self._root())
+                target = people.valid_name(str((body or {}).get("into") or ""))
+                with self._speakers_lock:
+                    people.merge(name, target, voices, self._root())
             elif action == "delete":
                 people.delete(name, voices)
             elif action == "clear-avatar":

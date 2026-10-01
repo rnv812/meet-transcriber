@@ -10,6 +10,8 @@
   padding: 12px 12px 10px 16px; border-bottom: 1px solid var(--line);
 }
 .spk__title { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
+.spk__title:focus { outline: none; }
+.spk__title:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
 .spk__tools { display: flex; align-items: center; gap: 4px; }
 .spk__tool, .spk__close {
   height: 26px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: var(--r-md);
@@ -126,6 +128,7 @@
 }
 .spk-hist__item[aria-current="step"] { border-left-color: var(--accent); background: var(--surface-2); }
 .spk-hist__item--undone { color: var(--text-3); }
+.spk-hist__note { padding: 4px 8px; font-size: 11px; }
 .spk-hist__text { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; line-height: 1.4; }
 .spk-hist__time { color: var(--text-3); font-size: 11px; }
 .spk-hist__now { color: var(--accent-hover); font-size: 11px; }

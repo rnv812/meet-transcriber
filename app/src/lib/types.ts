@@ -201,6 +201,8 @@ export type SpeakersView = {
   history: SpeakerStep[];
   /** Сколько шагов истории применено: дальше — отменённые (их можно повторить). */
   pos: number;
+  /** Самые старые шаги отброшены: история хранит последние 50. */
+  trimmed?: boolean;
   voices_error?: string | null;
   step?: SpeakerStep;
 };

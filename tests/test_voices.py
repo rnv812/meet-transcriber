@@ -336,7 +336,7 @@ def test_remove_sample_by_id_and_restore_replaced(tmp_path):
     got = enroll_sample("Демьян", [1.0, 0.0], source="rec/a", date="2026-06-26",
                         label="SPEAKER_01", recording="a", folder=tmp_path)
     left = remove_sample(got["sample_id"], "Демьян", folder=tmp_path, restore=got["replaced"])
-    assert left == {"Демьян": 2}
+    assert left == {"left": {"Демьян": 2}, "skipped": []}
     assert sorted(s["source"] for s in _file(tmp_path, "Демьян")) == ["rec/a", "rec/b"]
     assert all("id" not in s for s in _file(tmp_path, "Демьян"))  # старые — как были
 
@@ -347,7 +347,21 @@ def test_remove_sample_finds_it_after_the_person_was_renamed(tmp_path):
     got = enroll_sample("Демьян", [1.0, 0.0], source="rec/a", date="d", label="SPEAKER_01",
                         recording="a", folder=tmp_path)
     (tmp_path / "Демьян.json").rename(tmp_path / "Демьян Петров.json")
-    assert remove_sample(got["sample_id"], "Демьян", folder=tmp_path) == {"Демьян Петров": 0}
+    assert remove_sample(got["sample_id"], "Демьян", folder=tmp_path) == {
+        "left": {"Демьян Петров": 0}, "skipped": []}
+
+
+def test_remove_sample_does_not_resurrect_a_deleted_person(tmp_path):
+    from meet.voices import enroll_sample, remove_sample
+
+    enroll_sample("Демьян", [1.0, 0.0], source="rec/a", date="d", label="SPEAKER_01",
+                  recording="a", folder=tmp_path)
+    moved = enroll_sample("Пётр", [1.0, 0.0], source="rec/a", date="d", label="SPEAKER_01",
+                          recording="a", folder=tmp_path)
+    (tmp_path / "Демьян.json").unlink()  # удалили в окне «Голоса»
+    got = remove_sample(moved["sample_id"], "Пётр", folder=tmp_path, restore=moved["replaced"])
+    assert got == {"left": {"Пётр": 0}, "skipped": ["Демьян"]}
+    assert not (tmp_path / "Демьян.json").exists()
 
 
 def test_old_samples_without_id_still_load(tmp_path):

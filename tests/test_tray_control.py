@@ -386,8 +386,9 @@ def test_saving_transcript_requires_segments(with_recordings, app):
     assert got["ok"] is True
 
 
-def test_naming_speakers_renames_and_enrolls(with_recordings, app, monkeypatch):
-    """Названный спикер попадает в базу голосов — это и есть «обучение клона»."""
+def test_naming_speakers_renames_and_enrolls(with_recordings, app, tmp_path):
+    """Названный спикер попадает в базу голосов — это и есть «обучение клона».
+    Прежний вход API идёт тем же путём, что панель: шагом истории."""
     from meet import library, voices
 
     library.write_transcript(with_recordings, {
@@ -396,38 +397,51 @@ def test_naming_speakers_renames_and_enrolls(with_recordings, app, monkeypatch):
             {"start": 1.0, "end": 2.0, "speaker": "Спикер 2", "text": "два"},
         ],
     })
-    enrolled = []
-    monkeypatch.setattr(
-        voices, "enroll",
-        lambda path, mapping, folder=None: enrolled.append((path, mapping, folder)),
-    )
+    (with_recordings / "2026-08-18_11-00_speakers.json").write_text(json.dumps({
+        "source": str(with_recordings), "date": "2026-08-18", "speakers": [
+            {"label": "SPEAKER_00", "display": "Спикер 1", "embedding": [1.0, 0.0]}]},
+        ensure_ascii=False), encoding="utf-8")
     state = tray_control.TrayControl(app)
     got = state.name_speakers("2026-08-18_11-00", {"Спикер 1": "Демьян Петров"})
     assert got["renamed"] == 1 and got["enrolled"] == ["Демьян Петров"]
     data = library.read_transcript(with_recordings)
     assert data["segments"][0]["speaker"] == "Демьян Петров"
     assert data["segments"][1]["speaker"] == "Спикер 2"
-    assert enrolled[0][1] == ["Спикер 1=Демьян Петров"]
+    assert list(voices.load_voices(tmp_path / "voices")) == ["Демьян Петров"]
+    assert state.speakers("2026-08-18_11-00")["pos"] == 1  # отменяется из панели
 
 
-def test_naming_survives_missing_voice_sidecar(with_recordings, app, monkeypatch):
+def test_naming_survives_missing_voice_sidecar(with_recordings, app):
     """Расшифровка без эмбеддингов — не ошибка: имена всё равно сохранены."""
-    from meet import library, voices
+    from meet import library
+
+    library.write_transcript(with_recordings, {
+        "version": 1,
+        "segments": [{"start": 0.0, "end": 1.0, "speaker": "Спикер 1", "text": "раз"}],
+    })
+    got = tray_control.TrayControl(app).name_speakers(
+        "2026-08-18_11-00", {"Спикер 1": "Демьян"})
+    assert got["ok"] is True and got["renamed"] == 1
+    assert "голосовых отпечатков" in got["voices_error"]
+    assert library.read_transcript(with_recordings)["segments"][0]["speaker"] == "Демьян"
+
+
+def test_naming_speakers_refuses_while_the_recording_is_transcribed(with_recordings, app):
+    from meet import control, library
 
     library.write_transcript(with_recordings, {
         "version": 1,
         "segments": [{"start": 0.0, "end": 1.0, "speaker": "Спикер 1", "text": "раз"}],
     })
 
-    def no_sidecar(*a, **k):
-        raise SystemExit("Не найден сайдкар")
+    class Busy(_Queue):
+        def active_for(self, folder, kinds):
+            return jobs.Job(id="j1", kind=jobs.TRANSCRIBE, folder=folder)
 
-    monkeypatch.setattr(voices, "enroll", no_sidecar)
-    got = tray_control.TrayControl(app).name_speakers(
-        "2026-08-18_11-00", {"Спикер 1": "Демьян"})
-    assert got["ok"] is True and got["renamed"] == 1
-    assert "сайдкар" in got["voices_error"]
-    assert library.read_transcript(with_recordings)["segments"][0]["speaker"] == "Демьян"
+    with pytest.raises(control.Conflict):
+        tray_control.TrayControl(app, queue=Busy()).name_speakers(
+            "2026-08-18_11-00", {"Спикер 1": "Демьян"})
+    assert library.read_transcript(with_recordings)["segments"][0]["speaker"] == "Спикер 1"
 
 
 def test_export_sanitizes_filename(with_recordings, app, monkeypatch):
@@ -1054,12 +1068,13 @@ def test_old_transcript_is_served_with_display_names_and_can_be_named(control_st
         {"start": 0, "end": 1, "speaker": "SPEAKER_00", "text": "а"},
         {"start": 1, "end": 2, "speaker": "SPEAKER_01", "text": "б"}]})
     monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
-    monkeypatch.setattr(control_state, "_enroll", lambda f, pairs: ([], None))
+    monkeypatch.setattr(control_state, "_voices", lambda: tmp_path / "voices")
     served = control_state.recording(folder.name)["transcript"]["segments"]
     assert [s["speaker"] for s in served] == ["Спикер 1", "Спикер 2"]
     assert [s["speaker"] for s in control_state.transcript(folder.name)["segments"]] == [
         "Спикер 1", "Спикер 2"]
-    control_state.name_speakers(folder.name, {"Спикер 2": "Матвей"})
+    got = control_state.name_speakers(folder.name, {"Спикер 2": "Матвей"})
+    assert got["renamed"] == 1  # нормализация старых меток — не правка
     stored = library.read_transcript(folder)["segments"]
     assert [s["speaker"] for s in stored] == ["Спикер 1", "Матвей"]
 
@@ -1072,13 +1087,36 @@ def test_name_speakers_accepts_raw_label_keys(control_state, tmp_path, monkeypat
         {"start": 0, "end": 1, "speaker": "SPEAKER_00", "text": "а"},
         {"start": 1, "end": 2, "speaker": "SPEAKER_01", "text": "б"}]})
     monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
-    seen = {}
-    monkeypatch.setattr(control_state, "_enroll",
-                        lambda f, pairs: (seen.update(pairs) or [], None))
+    monkeypatch.setattr(control_state, "_voices", lambda: tmp_path / "voices")
     control_state.name_speakers(folder.name, {"SPEAKER_01": "Матвей"})
     stored = library.read_transcript(folder)["segments"]
     assert [s["speaker"] for s in stored] == ["Спикер 1", "Матвей"]
-    assert seen == {"Спикер 2": "Матвей"}
+
+
+def test_opening_the_panel_normalises_old_raw_labels(control_state, tmp_path, monkeypatch):
+    from meet import library
+
+    folder = _saved_folder(tmp_path)
+    library.write_transcript(folder, {"segments": [
+        {"start": 0, "end": 1, "speaker": "SPEAKER_00", "text": "а"}]})
+    monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
+    got = control_state.speakers(folder.name)
+    assert [r["label"] for r in got["speakers"]] == ["Спикер 1"] and got["history"] == []
+    assert library.read_transcript(folder)["segments"][0]["speaker"] == "Спикер 1"
+
+
+def test_voice_base_failure_is_a_conflict_and_changes_nothing(with_recordings, app, monkeypatch):
+    from meet import control, voices
+
+    rid = _speaker_meeting(with_recordings)
+    before = library.read_transcript(with_recordings)
+    monkeypatch.setattr(voices, "enroll_sample", lambda *a, **kw: (_ for _ in ()).throw(OSError("занято")))
+    state = tray_control.TrayControl(app, queue=_Queue())
+    with pytest.raises(control.Conflict, match="базу голосов"):
+        state.speakers_apply(rid, {"ops": [{"type": "rename", "label": "Спикер 2", "to": "Анна"}],
+                                   "remember": {"Спикер 2": True}})
+    assert library.read_transcript(with_recordings) == before
+    assert state.speakers(rid)["pos"] == 0
 
 
 # --- токен Hugging Face ------------------------------------------------------
@@ -1611,3 +1649,18 @@ def test_speakers_panel_change_refreshes_search_and_reexports(with_recordings, a
     state.speakers_apply(rid, {"ops": [{"type": "rename", "label": "Спикер 2", "to": "Анна"}]})
     assert [i["id"] for i in search.search_library(tmp_path / "recordings", "спикер:Анна")] == [rid]
     assert exported == [rid]
+
+
+def test_saving_transcript_waits_for_a_speaker_change(with_recordings, app):
+    """Сохранение из редактора не вклинивается посреди «Применить» или отмены."""
+    import threading
+
+    state = tray_control.TrayControl(app, queue=_Queue())
+    done = threading.Event()
+    with state._speakers_lock:
+        t = threading.Thread(target=lambda: (state.save_transcript(
+            "2026-08-18_11-00", {"version": 1, "segments": []}), done.set()))
+        t.start()
+        assert not done.wait(0.2)
+    assert done.wait(5)
+    t.join()

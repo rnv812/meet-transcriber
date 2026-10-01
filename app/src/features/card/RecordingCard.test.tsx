@@ -88,6 +88,19 @@ test("клик по безымянному спикеру открывает п�
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
+test("панель закрылась по Esc — фокус возвращается на «Спикеры (N)»", async () => {
+  load();
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  const opener = screen.getByRole("button", { name: "Спикеры (2)" });
+  await userEvent.click(opener);
+  const panel = await screen.findByRole("dialog", { name: "Спикеры встречи" });
+  expect(within(panel).getByRole("heading", { name: "Спикеры встречи" })).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(opener).toHaveFocus();
+});
+
 test("«Спикеры (N)»: фраза играет в плеере карточки, «Показать все реплики» — поиск по спикеру", async () => {
   load();
   const { container } = render(<RecordingCard id="r1" endpoint={ep} />);

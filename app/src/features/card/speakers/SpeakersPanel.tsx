@@ -8,7 +8,9 @@
  * любому состоянию. Отмена убирает и голоса, которые шаг запомнил в базе.
  */
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import {
+  useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject,
+} from "react";
 import {
   applySpeakers, getSpeakers, redoSpeakers, revertSpeakers, undoSpeakers, type Endpoint,
 } from "../../../lib/api";
@@ -128,6 +130,24 @@ export function SpeakersPanel({
   }, [pos, history.length, run, endpoint, recordingId]);
   useUndoKeys(open, cardRef, undo, redo);
 
+  // Открыли — фокус на заголовок панели (Esc сразу закрывает её); закрыли —
+  // фокус туда, откуда открывали (участник, «Спикеры (N)», подпись реплики).
+  const aside = useRef<HTMLElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (open) {
+      const was = document.activeElement;
+      if (was instanceof HTMLElement && !aside.current?.contains(was)) opener.current = was;
+      heading.current?.focus();
+      return;
+    }
+    const now = document.activeElement;
+    const lost = !now || now === document.body || aside.current?.contains(now);
+    if (lost && opener.current?.isConnected) opener.current.focus();
+    opener.current = null;
+  }, [open]);
+
   // Клик по участнику: прокрутить к его строке и поставить на неё фокус.
   useEffect(() => {
     if (!open || !focus || !view) return;
@@ -186,9 +206,9 @@ export function SpeakersPanel({
 
   return (
     <aside className="spk" role="dialog" aria-modal="false" aria-label="Спикеры встречи" hidden={!open}
-      onKeyDown={onPanelKey}>
+      ref={aside} onKeyDown={onPanelKey}>
       <div className="spk__head">
-        <h3 className="spk__title">Спикеры встречи</h3>
+        <h3 className="spk__title" ref={heading} tabIndex={-1}>Спикеры встречи</h3>
         <div className="spk__tools">
           <HistoryTools canUndo={canUndo} canRedo={canRedo} onUndo={undo} onRedo={redo} />
           <button type="button" className="spk__close" onClick={onClose} aria-label="Закрыть панель спикеров"
@@ -196,7 +216,7 @@ export function SpeakersPanel({
         </div>
       </div>
       {error && <div className="card__error spk__msg" role="alert">{error}</div>}
-      {warning && <div className="spk__msg spk__warn" role="status">Голос не сохранён: {warning}</div>}
+      {warning && <div className="spk__msg spk__warn" role="status">{warning}</div>}
       {notice && <div className="spk__msg spk__ok muted" role="status">{notice}</div>}
       <div className="spk__body">
         {!view && !error && <div className="muted spk__msg">Загрузка…</div>}
@@ -213,7 +233,7 @@ export function SpeakersPanel({
             onRemember={(v) => setRemember((r) => ({ ...r, [row.label]: v }))}
             onPlay={onPlay} onShowTurns={onShowTurns} />
         ))}
-        {view && <HistoryList history={history} pos={pos} busy={busy} onRevert={revert} />}
+        {view && <HistoryList history={history} pos={pos} busy={busy} trimmed={!!view.trimmed} onRevert={revert} />}
       </div>
       {pending && (
         <div className="spk__foot">
@@ -349,7 +369,7 @@ function SpeakerRowView({
           <input type="checkbox" checked={remember} onChange={(e) => onRemember(e.target.checked)} />
           Запомнить голос
           <HelpTip label="Что значит «Запомнить голос»" title="Запомнить голос">
-            <TipLine>Голосовой отпечаток этого спикера попадёт в базу голосов под выбранным именем.</TipLine>
+            <TipLine>Голос этого спикера будет записан под новым именем и убран у прежнего.</TipLine>
             <TipLine>На следующих встречах человек будет узнан автоматически.</TipLine>
             <TipLine>Отмена изменения убирает и запомненный голос.</TipLine>
           </HelpTip>

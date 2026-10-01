@@ -145,11 +145,15 @@ def add_sample(
 
 
 def remove_sample(sample_id: str, person: str, folder: Path | None = None,
-                  restore: list[dict] | None = None) -> dict[str, int]:
+                  restore: list[dict] | None = None) -> dict:
     """Убрать образец по id и вернуть вытесненные им (`restore` — как в
     ответе enroll_sample). Ищем у `person`, а если человека с тех пор
-    переименовали или слили — по всей базе. Ответ: {человек: сколько у него
-    осталось образцов} для файла, где образец нашёлся; не нашёлся — {}."""
+    переименовали или слили — по всей базе.
+
+    Ответ: {"left": {человек: сколько у него осталось образцов} — для файла,
+    где образец нашёлся (не нашёлся — {}), "skipped": [люди]} — кому вытесненные
+    не вернули, потому что их с тех пор удалили из базы: откат не воскрешает
+    удалённого человека. Ошибка записи файла — OSError наружу."""
     folder = folder or voices_dir()
     candidates = [folder / f"{person}.json"] + sorted(folder.glob("*.json"))
     found: dict[str, int] = {}
@@ -165,18 +169,24 @@ def remove_sample(sample_id: str, person: str, folder: Path | None = None,
             break
     from meet.people import valid_name
 
+    skipped: list[str] = []
     for item in restore or []:
+        name = str(item.get("person") or "")
         try:
-            f = folder / f"{valid_name(str(item.get('person') or ''))}.json"
-            samples = _read_samples(f)
-        except (OSError, ValueError):
+            f = folder / f"{valid_name(name)}.json"
+        except ValueError:
             continue
+        if not f.exists():
+            if name not in skipped:
+                skipped.append(name)
+            continue
+        samples = _read_samples(f)
         sample = item.get("sample")
         if isinstance(sample, dict) and sample not in samples:
             _write_samples(f, samples + [sample])
             if f.stem in found:
                 found[f.stem] += 1
-    return found
+    return {"left": found, "skipped": skipped}
 
 
 def sidecar_path(out_md: Path) -> Path:

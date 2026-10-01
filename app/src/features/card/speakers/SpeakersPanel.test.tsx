@@ -153,12 +153,13 @@ test("ошибка резидента видна, наметки остаютс�
 });
 
 test("голос не сохранён — предупреждение, имя применено", async () => {
-  vi.mocked(api.applySpeakers).mockResolvedValue(view({ voices_error: "у записи нет голосовых отпечатков" }));
+  vi.mocked(api.applySpeakers).mockResolvedValue(view({ voices_error: "Голос «Анна Смирнова» не сохранён: у записи нет голосовых отпечатков" }));
   setup();
   await screen.findByRole("region", { name: /^Спикер 2/ });
   await userEvent.click(within(rowOf("Спикер 2")).getByRole("button", { name: /Это Анна Смирнова/ }));
   await userEvent.click(screen.getByRole("button", { name: "Применить" }));
-  expect(await screen.findByText(/Голос не сохранён: у записи нет голосовых отпечатков/)).toBeInTheDocument();
+  expect(await screen.findByText("Голос «Анна Смирнова» не сохранён: у записи нет голосовых отпечатков"))
+    .toBeInTheDocument();
 });
 
 test("фокус на строке участника, Esc закрывает панель", async () => {
@@ -243,4 +244,19 @@ test("после отмены наметки исчезнувших строк �
   expect(screen.getByText("Будет изменено: Спикер 1 → Глеб, Спикер 2 → Анна Смирнова")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: /Отменить/ }));
   await waitFor(() => expect(screen.getByText("Будет изменено: Спикер 1 → Глеб")).toBeInTheDocument());
+});
+
+test("история обрезана: сказано, что более ранние изменения отменить нельзя", async () => {
+  vi.mocked(api.getSpeakers).mockResolvedValue(view({ pos: 1, history: [step("s1")], trimmed: true }));
+  setup();
+  await userEvent.click(await screen.findByRole("button", { name: /История изменений \(1\)/ }));
+  expect(screen.getByText("Хранятся последние 50 изменений — более ранние отменить нельзя")).toBeInTheDocument();
+  expect(screen.getByText("Состояние до этих изменений")).toBeInTheDocument();
+});
+
+test("открытие ставит фокус на заголовок панели: Esc сразу закрывает", async () => {
+  const { onClose } = setup();
+  expect(screen.getByRole("heading", { name: "Спикеры встречи" })).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  expect(onClose).toHaveBeenCalled();
 });

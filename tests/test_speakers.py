@@ -306,3 +306,131 @@ def test_a_person_merge_after_the_step_makes_undo_refuse_honestly(meeting, base)
     with pytest.raises(speakers.Stale):
         speakers.undo(meeting, base)
     assert voices.load_voices(base)["Анна Смирнова"]
+
+
+# --- исправления после ревью ---------------------------------------------------
+
+
+def test_undo_keeps_a_later_voices_pane_rename_of_another_person(meeting, base):
+    from meet import people
+
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 1", "to": "Борис"}],
+                   {"Спикер 1": True}, base)
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Анна"}], {}, base)
+    people.rename("Борис", "Борис Козлов", base, meeting.parent)
+    got = speakers.undo(meeting, base)
+    assert got["pos"] == 1
+    data = library.read_transcript(meeting)
+    assert data["names"] == {"Спикер 1": "Борис Козлов"}
+    assert _speakers_of(meeting)[:2] == ["Борис Козлов", "Спикер 2"]
+    rows = {r["label"]: r for r in speakers.overview(meeting, base)["speakers"]}
+    assert rows["Борис Козлов"]["has_voice"] is True
+
+
+def _snapshot(meeting, base):
+    return ((meeting / "transcript.json").read_bytes(), library.read_meta(meeting),
+            {f.name: f.read_bytes() for f in base.glob("*.json")})
+
+
+def test_voice_base_failure_rolls_the_whole_apply_back(meeting, base, monkeypatch):
+    _person(base, "Анна", [0.0, 0.9, 0.1], source=SOURCE)
+    before = _snapshot(meeting, base)
+    calls = []
+    real = voices.enroll_sample
+
+    def flaky(*a, **kw):
+        calls.append(1)
+        if len(calls) == 2:
+            raise OSError("диск недоступен")
+        return real(*a, **kw)
+
+    monkeypatch.setattr(voices, "enroll_sample", flaky)
+    with pytest.raises(speakers.VoiceBaseError, match="диск недоступен"):
+        speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Анна"},
+                                 {"type": "rename", "label": "Спикер 3", "to": "Вера"}],
+                       {"Спикер 2": True, "Спикер 3": True}, base)
+    assert _snapshot(meeting, base) == before
+
+
+def test_meta_failure_rolls_the_transcript_back(meeting, base, monkeypatch):
+    before = (meeting / "transcript.json").read_bytes()
+
+    def broken(folder, change):
+        raise OSError("meta.json занят")
+
+    monkeypatch.setattr(library, "update_meta", broken)
+    with pytest.raises(OSError):
+        speakers.apply(meeting, [{"type": "rename", "label": "Спикер 1", "to": "Анна"}], {}, base)
+    assert (meeting / "transcript.json").read_bytes() == before
+
+
+def test_voice_base_failure_rolls_undo_back(meeting, base, monkeypatch):
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Анна"}],
+                   {"Спикер 2": True}, base)
+    before = _snapshot(meeting, base)
+
+    def broken(*a, **kw):
+        raise OSError("файл голоса занят")
+
+    monkeypatch.setattr(voices, "remove_sample", broken)
+    with pytest.raises(speakers.VoiceBaseError):
+        speakers.undo(meeting, base)
+    assert _snapshot(meeting, base) == before
+
+
+def test_suggestions_ignore_samples_taken_from_this_meeting(meeting, base):
+    _person(base, "Анна", [0.1, 0.95, 0.0])
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Анна"}],
+                   {"Спикер 2": True}, base)
+    rows = {r["label"]: r for r in speakers.overview(meeting, base)["speakers"]}
+    # Свой же образец дал бы 100%; остаётся старый, с другой встречи.
+    assert rows["Анна"]["suggestions"][0]["name"] == "Анна"
+    assert rows["Анна"]["suggestions"][0]["score"] < 1.0
+
+
+def test_undo_does_not_resurrect_a_person_deleted_in_the_voices_pane(meeting, base):
+    _person(base, "Анна", [0.0, 0.8, 0.2], source=SOURCE)
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Анна"}],
+                   {"Спикер 2": True}, base)
+    (base / "Анна.json").unlink()
+    got = speakers.undo(meeting, base)
+    assert not (base / "Анна.json").exists()
+    assert got["voices_error"] == "Голос «Анна» удалён в базе — образцы не восстановлены"
+    assert _speakers_of(meeting)[1] == "Спикер 2"
+
+
+def test_history_keeps_only_the_latest_steps(meeting, base, monkeypatch):
+    monkeypatch.setattr(speakers, "HISTORY_MAX", 3)
+    for name in ("Анна", "Борис", "Вера", "Глеб"):
+        label = speakers.overview(meeting, base)["speakers"][0]["label"]
+        got = speakers.apply(meeting, [{"type": "rename", "label": label, "to": name}], {}, base)
+    assert [st["ops"][0]["to"] for st in got["history"]] == ["Борис", "Вера", "Глеб"]
+    assert got["pos"] == 3 and got["trimmed"] is True
+    assert speakers.overview(meeting, base)["trimmed"] is True
+    got = speakers.revert(meeting, None, base)
+    assert got["pos"] == 0 and _speakers_of(meeting)[0] == "Анна"
+
+
+def test_old_raw_labels_are_normalised_once_without_a_history_step(meeting, base):
+    data = library.read_transcript(meeting)
+    for s in data["segments"]:
+        s["speaker"] = {"Спикер 1": "SPEAKER_00", "Спикер 2": "SPEAKER_01",
+                        "Спикер 3": "SPEAKER_02"}.get(s["speaker"], s["speaker"])
+    library.write_transcript(meeting, data)
+    assert speakers.normalize(meeting) is True
+    assert _speakers_of(meeting) == [s["speaker"] for s in SEGMENTS]
+    assert speakers.normalize(meeting) is False
+    assert "speaker_history" not in library.read_meta(meeting)
+    with pytest.raises(speakers.SpeakerError, match="нечего применять"):
+        speakers.apply(meeting, [{"type": "reset", "label": "Спикер 1"}], {}, base)
+
+
+def test_apply_on_a_raw_transcript_records_only_the_real_change(meeting, base):
+    data = library.read_transcript(meeting)
+    for s in data["segments"]:
+        s["speaker"] = {"Спикер 1": "SPEAKER_00"}.get(s["speaker"], s["speaker"])
+    library.write_transcript(meeting, data)
+    step = speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Анна"}], {}, base)
+    speakers.undo(meeting, base)
+    assert _speakers_of(meeting) == [s["speaker"] for s in SEGMENTS]
+    assert len(step["history"]) == 1

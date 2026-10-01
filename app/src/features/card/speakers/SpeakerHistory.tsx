@@ -9,6 +9,8 @@ import { useEffect, useState, type RefObject } from "react";
 import type { SpeakerStep } from "../../../lib/types";
 import { describeStep, stepTime } from "./staging";
 
+/** Сколько шагов хранит резидент (meet/speakers.py, HISTORY_MAX). */
+export const HISTORY_MAX = 50;
 /** Где Ctrl+Z — это правка текста, а не отмена правок спикеров. */
 const TYPING = "input, textarea, select, [contenteditable=''], [contenteditable=true], [data-agent-terminal]";
 
@@ -46,10 +48,12 @@ export function HistoryTools({ canUndo, canRedo, onUndo, onRedo }: {
 }
 
 /** «История изменений»: исходное состояние и шаги; текущий отмечен, отменённые приглушены. */
-export function HistoryList({ history, pos, busy, onRevert }: {
+export function HistoryList({ history, pos, busy, trimmed = false, onRevert }: {
   history: SpeakerStep[];
   pos: number;
   busy: boolean;
+  /** Самые старые шаги отброшены (резидент хранит последние 50): до них не вернуться. */
+  trimmed?: boolean;
   /** Вернуться к состоянию после шага; null — до всех правок. */
   onRevert: (stepId: string | null) => void;
 }) {
@@ -61,7 +65,13 @@ export function HistoryList({ history, pos, busy, onRevert }: {
       </button>
       {shown && (
         <ol className="spk-hist__list">
-          <HistoryItem time="" text="Исходное состояние" current={pos === 0} undone={false}
+          {trimmed && (
+            <li className="spk-hist__note muted">
+              Хранятся последние {HISTORY_MAX} изменений — более ранние отменить нельзя
+            </li>
+          )}
+          <HistoryItem time="" text={trimmed ? "Состояние до этих изменений" : "Исходное состояние"}
+            current={pos === 0} undone={false}
             busy={busy} onRevert={() => onRevert(null)} />
           {history.map((step, i) => (
             <HistoryItem key={step.id} time={stepTime(step.at)} text={describeStep(step)}
