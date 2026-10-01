@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { type Endpoint, getHotwords, putHotwords } from "../../lib/api";
+import { errorText } from "../../lib/format";
 import { Button } from "../../ui/Button";
 
 /** Как считает резидент: строки без пустых и `# комментариев`, через «, ». */
@@ -22,7 +23,7 @@ export function HotwordsEditor({ endpoint }: { endpoint: Endpoint }) {
     getHotwords(endpoint).then((h) => {
       if (!live) return;
       setText(h.text); setSaved(h.text); setBudget(h.budget); setServerUsed(h.used);
-    }).catch((e) => live && setError(String(e)));
+    }).catch((e) => live && setError(errorText(e)));
     return () => { live = false; };
   }, [endpoint]);
 
@@ -35,7 +36,7 @@ export function HotwordsEditor({ endpoint }: { endpoint: Endpoint }) {
       const h = await putHotwords(endpoint, text);
       setSaved(h.text); setBudget(h.budget); setServerUsed(h.used);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(e));
     } finally {
       setPending(false);
     }

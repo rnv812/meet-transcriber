@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type Endpoint, importFile } from "../../lib/api";
+import { errorText } from "../../lib/format";
 import { inTauri, pickMedia } from "../../lib/shell";
 
 const BROWSER_HINT = "Импорт — из приложения или перетаскиванием в окно приложения";
@@ -18,10 +19,10 @@ export function ImportZone({ endpoint, onImported }: { endpoint: Endpoint | null
           await importFile(endpoint, path);
         } catch (cause) {
           const name = path.split(/[\\/]/).pop() || path;
-          failed.push(`${name}: ${cause instanceof Error ? cause.message : String(cause)}`);
+          failed.push(`${name}: ${errorText(cause)}`);
         }
       }
-      setErrors(failed);
+      setErrors(failed); // удачный импорт стирает ошибки прошлого раза
       onImported?.();
     },
     [endpoint, onImported],
@@ -84,10 +85,14 @@ export function ImportZone({ endpoint, onImported }: { endpoint: Endpoint | null
         </button>
       </div>
       {errors.length > 0 && (
-        <div className="import__error" role="alert">
-          {errors.map((line) => (
-            <div key={line}>{line}</div>
-          ))}
+        <div className="import__error import__error--box" role="alert">
+          <div className="import__lines">
+            {errors.map((line) => (
+              <div key={line}>{line}</div>
+            ))}
+          </div>
+          <button type="button" className="import__close" aria-label="Скрыть ошибки импорта"
+            onClick={() => setErrors([])}>×</button>
         </div>
       )}
     </div>

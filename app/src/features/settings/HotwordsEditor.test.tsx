@@ -61,3 +61,12 @@ test("после сохранения показывается used сервер
   await userEvent.click(screen.getByRole("button", { name: "Сохранить термины" }));
   await waitFor(() => expect(screen.getByTestId("hotwords-counter")).toHaveTextContent("99 / 400"));
 });
+
+test("ошибка сохранения терминов — сообщение без «Error:»", async () => {
+  vi.mocked(api.putHotwords).mockRejectedValue(new Error("диск только для чтения"));
+  render(<HotwordsEditor endpoint={ep} />);
+  const box = await screen.findByRole("textbox");
+  await userEvent.type(box, "SIEM");
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить термины" }));
+  expect(await screen.findByText("диск только для чтения")).toBeInTheDocument();
+});

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type Endpoint, getJobs, getRecordings } from "../lib/api";
+import { errorText } from "../lib/format";
 import type { Job, Recording } from "../lib/types";
 
 const SEARCH_DELAY_MS = 250;
@@ -33,7 +34,7 @@ export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0): Lib
       setJobs(jobList.items);
       setError(null);
     } catch (cause) {
-      if (mine === seq.current) setError(cause instanceof Error ? cause.message : String(cause));
+      if (mine === seq.current) setError(errorText(cause));
     } finally {
       if (mine === seq.current) setLoading(false);
     }

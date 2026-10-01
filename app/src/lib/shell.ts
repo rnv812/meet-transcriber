@@ -21,8 +21,13 @@ export async function saveText(name: string, content: string): Promise<string | 
   const a = document.createElement("a");
   a.href = url;
   a.download = name;
+  a.style.display = "none";
+  // Firefox качает только по ссылке из документа; URL отзываем после того,
+  // как браузер начал загрузку, — синхронный revoke её обрывает.
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
   return name;
 }
 

@@ -6,6 +6,13 @@
 }
 .import__zone--over { border-color: var(--accent); background: rgba(94, 106, 210, 0.08); }
 .import__error { margin-top: 6px; color: var(--err); font-size: 12px; }
+.import__error--box { display: flex; align-items: flex-start; gap: 6px; }
+.import__lines { flex: 1; min-width: 0; }
+.import__close {
+  flex: none; padding: 0 4px; border: 0; border-radius: var(--r-sm); background: none;
+  color: var(--text-3); font: inherit; font-size: 14px; line-height: 1; cursor: pointer;
+}
+.import__close:hover { color: var(--text); background: var(--surface-hover); }
 .link {
   padding: 0; border: 0; background: none; color: var(--accent-hover);
   font: inherit; cursor: pointer;

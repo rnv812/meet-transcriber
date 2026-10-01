@@ -3,7 +3,7 @@ import {
   audioUrl, deleteAvatar, deletePerson, getPerson, getSample, mergePerson, putAvatar, renamePerson,
   type Endpoint,
 } from "../../lib/api";
-import { dayLabel, duration } from "../../lib/format";
+import { dayLabel, duration, errorText } from "../../lib/format";
 import type { Person, PersonCard as PersonData } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { AvatarEditor, pastedImage } from "./AvatarEditor";
@@ -20,7 +20,6 @@ type Props = {
 };
 
 const MAX_AVATAR = 10 * 1024 * 1024;
-const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function PersonCard({
   endpoint, person, others, version, onAvatar, onRenamed, onRemoved, onOpenRecording,
@@ -39,7 +38,7 @@ export function PersonCard({
 
   useEffect(() => {
     let live = true;
-    getPerson(endpoint, name).then((d) => live && setData(d), (e) => live && setError(msg(e)));
+    getPerson(endpoint, name).then((d) => live && setData(d), (e) => live && setError(errorText(e)));
     return () => { live = false; };
   }, [endpoint, name]);
 
@@ -48,7 +47,7 @@ export function PersonCard({
     try {
       await fn();
     } catch (e) {
-      setError(msg(e));
+      setError(errorText(e));
     }
   }
 

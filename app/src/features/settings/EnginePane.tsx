@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { type Endpoint, type EngineState, getEngine, getJobs, installEngine } from "../../lib/api";
 import type { Job } from "../../lib/types";
+import { errorText } from "../../lib/format";
 import { Button } from "../../ui/Button";
 import { Row } from "./Section";
 
@@ -14,7 +15,7 @@ export function EnginePane({ endpoint }: { endpoint: Endpoint }) {
 
   const load = useCallback(async () => {
     try { setEngine(await getEngine(endpoint)); setError(null); }
-    catch (e) { setEngine(null); setError(`Движок не загрузился: ${String(e)}`); }
+    catch (e) { setEngine(null); setError(`Движок не загрузился: ${errorText(e)}`); }
     finally { setTried(true); }
   }, [endpoint]);
 
@@ -45,7 +46,7 @@ export function EnginePane({ endpoint }: { endpoint: Endpoint }) {
   }, [endpoint, job, load]);
 
   const install = async () => {
-    try { setJob(await installEngine(endpoint)); } catch (e) { setError(String(e)); }
+    try { setJob(await installEngine(endpoint)); } catch (e) { setError(errorText(e)); }
   };
 
   if (!engine) {

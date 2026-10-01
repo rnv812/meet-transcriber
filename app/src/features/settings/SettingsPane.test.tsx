@@ -97,3 +97,37 @@ test("«Открыть» папку записей — только в обол�
     delete (window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   }
 });
+
+test("ошибка сохранения — текстом резидента, без «Error:»", async () => {
+  vi.mocked(api.patchSettings).mockRejectedValue(new api.ApiError(400, "неизвестный ключ"));
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Автозапись" }));
+  const grace = await screen.findByRole("spinbutton", { name: /Хвост после звонка/ });
+  await userEvent.clear(grace);
+  await userEvent.type(grace, "45");
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  expect(await screen.findByText("неизвестный ключ")).toBeInTheDocument();
+  expect(screen.queryByText(/Error:/)).toBeNull();
+});
+
+test("токен Hugging Face скрыт; «Показать» открывает его", async () => {
+  vi.mocked(api.getModels).mockResolvedValue({ items: [], cache: "C:/hf", token: false, selected: null, can_download: true });
+  vi.mocked(api.getSettings).mockResolvedValue(
+    { ...structuredClone(settings), integrations: { gpu_marker: false, gpu_marker_path: null, hf_token: "hf_secret" } });
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Движок и модели" }));
+  const input = await screen.findByLabelText("Токен Hugging Face");
+  expect(input).toHaveAttribute("type", "password");
+  expect(input).toHaveValue("hf_secret");
+  await userEvent.click(screen.getByRole("button", { name: "Показать" }));
+  expect(input).toHaveAttribute("type", "text");
+  await userEvent.click(screen.getByRole("button", { name: "Скрыть" }));
+  expect(input).toHaveAttribute("type", "password");
+});
+
+test("движок не загрузился — сообщение без «Error:»", async () => {
+  vi.mocked(api.getEngine).mockRejectedValue(new Error("нет python"));
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Движок и модели" }));
+  expect(await screen.findByText("Движок не загрузился: нет python")).toBeInTheDocument();
+});

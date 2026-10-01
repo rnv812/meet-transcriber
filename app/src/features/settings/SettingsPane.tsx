@@ -12,6 +12,7 @@ import {
   type Devices, type Endpoint, type Processes,
   NoResidentError, getDevices, getProcesses, getSettings, patchSettings, setAutoRecord,
 } from "../../lib/api";
+import { errorText } from "../../lib/format";
 import { inTauri, openFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
@@ -227,7 +228,7 @@ export function SettingsPane({ endpoint, recordingsDir }: { endpoint: Endpoint; 
       setError(null);
       setNotice(null);
     } catch (e) {
-      setError(e instanceof NoResidentError ? "Сервис записи не отвечает" : String(e));
+      setError(e instanceof NoResidentError ? "Сервис записи не отвечает" : errorText(e));
     }
     // Справочные данные: их отсутствие не мешает править настройки.
     setProcesses(await getProcesses(endpoint).catch(() => null));
@@ -266,7 +267,7 @@ export function SettingsPane({ endpoint, recordingsDir }: { endpoint: Endpoint; 
         ? "Сохранено. Часть параметров применится после перезапуска приложения."
         : "Сохранено.");
     } catch (e) {
-      setError(String(e));
+      setError(errorText(e));
     } finally {
       setPending(false);
     }
@@ -281,7 +282,7 @@ export function SettingsPane({ endpoint, recordingsDir }: { endpoint: Endpoint; 
       setDraft(patch);
       setError(null);
     } catch (e) {
-      setError(String(e));
+      setError(errorText(e));
     }
   };
 

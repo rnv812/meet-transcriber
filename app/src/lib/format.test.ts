@@ -1,4 +1,4 @@
-import { clock, duration, dayLabel } from "./format";
+import { clock, duration, dayLabel, errorText } from "./format";
 
 test("форматы", () => {
   expect(clock(65)).toBe("01:05");
@@ -9,4 +9,10 @@ test("форматы", () => {
   expect(dayLabel("2026-09-30T16:04:00", now)).toBe("Сегодня 16:04");
   expect(dayLabel("2026-09-29T11:00:00", now)).toBe("Вчера 11:00");
   expect(dayLabel("2026-09-28T16:04:00", now)).toBe("28 сен 16:04");
+});
+
+test("errorText: у Error — только сообщение", () => {
+  expect(errorText(new Error("сломалось"))).toBe("сломалось");
+  expect(errorText("строка")).toBe("строка");
+  expect(errorText(42)).toBe("42");
 });

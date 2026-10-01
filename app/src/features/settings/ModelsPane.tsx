@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { type Endpoint, type Model, type ModelsState, downloadModel, getJobs, getModels } from "../../lib/api";
 import type { Job } from "../../lib/types";
+import { errorText } from "../../lib/format";
 import { Button } from "../../ui/Button";
 import { Row } from "./Section";
 
@@ -50,10 +51,11 @@ export function ModelsPane({ endpoint, selectedModel, onSelect, token, onToken }
   const [tried, setTried] = useState(false);
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showToken, setShowToken] = useState(false);
 
   const load = useCallback(async () => {
     try { setModels(await getModels(endpoint)); setError(null); }
-    catch (e) { setModels(null); setError(`Каталог моделей не загрузился: ${String(e)}`); }
+    catch (e) { setModels(null); setError(`Каталог моделей не загрузился: ${errorText(e)}`); }
     finally { setTried(true); }
   }, [endpoint]);
 
@@ -83,7 +85,7 @@ export function ModelsPane({ endpoint, selectedModel, onSelect, token, onToken }
   }, [endpoint, job, load]);
 
   const download = async (id: string) => {
-    try { setJob(await downloadModel(endpoint, id)); } catch (e) { setError(String(e)); }
+    try { setJob(await downloadModel(endpoint, id)); } catch (e) { setError(errorText(e)); }
   };
 
   if (!models) {
@@ -103,7 +105,13 @@ export function ModelsPane({ endpoint, selectedModel, onSelect, token, onToken }
         label="Токен Hugging Face" htmlFor="hf-token"
         hint="нужен только модели спикеров: она за принятием условий на huggingface.co. Пусто — берётся переменная среды HF_TOKEN"
       >
-        <input id="hf-token" type="text" placeholder={models.token ? "задан" : "не задан"} value={token} onChange={(e) => onToken(e.target.value)} />
+        <span className="with-unit">
+          <input id="hf-token" type={showToken ? "text" : "password"} autoComplete="off" spellCheck={false}
+            placeholder={models.token ? "задан" : "не задан"} value={token} onChange={(e) => onToken(e.target.value)} />
+          <Button onClick={() => setShowToken((v) => !v)} aria-pressed={showToken}>
+            {showToken ? "Скрыть" : "Показать"}
+          </Button>
+        </span>
       </Row>
       {models.items.map((m) => (
         <ModelRow
