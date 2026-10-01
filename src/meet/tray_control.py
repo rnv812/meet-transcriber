@@ -16,13 +16,18 @@ import threading
 import time
 from pathlib import Path
 
-from meet import engine, events, gpu_lock, hotwords, jobs, library, paths, settings, watch
+from meet import (engine, events, gpu_lock, hotwords, jobs, library, live_control, paths,
+                  settings, watch)
 
 # Источник записи. Константы живут здесь, а не в tray.py: адаптер не должен
 # зависеть от модуля, который тянет pystray, — наоборот, tray импортирует их
 # отсюда.
 AUTO = "auto"
 MANUAL = "manual"
+LIVE = "live"  # запись с ассистентом (дочерний `meet assist`)
+
+# Какой `source` пишется в meta.json записи по тому, кто её начал.
+_META_SOURCE = {AUTO: "auto", LIVE: "live"}
 
 # Поля, смена которых требует перезапуска резидента: секция auto_record читается
 # один раз при старте (грейс запечён в Watcher, процессы — в Signals). Панель
@@ -194,7 +199,7 @@ def _conflict(text: str):
 class TrayControl:
     """Состояние для `meet.control.ControlServer` поверх объекта трея."""
 
-    def __init__(self, tray, queue=None, llm_queue=None) -> None:
+    def __init__(self, tray, queue=None, llm_queue=None, live=None) -> None:
         self.tray = tray
         self.bus = tray.bus
         # Очередь задач живёт рядом с записью, в том же резиденте: расшифровка
@@ -210,6 +215,21 @@ class TrayControl:
         self._devices_at = 0.0
         self.bus.subscribe(self._remember_levels)
         tray.on_saved = self._on_saved
+        # Живой режим — тоже запись, но дочерним процессом: резидент его
+        # запускает, останавливает и ретранслирует. Пока он идёт, трей вторую
+        # запись не поднимает ни из меню, ни автозаписью (общий lock всё равно
+        # не дал бы, но с уведомлением об ошибке и повторами).
+        self.live = live if live is not None else live_control.LiveControl(
+            self.bus, log=tray.log)
+        tray.live_busy = self.live.busy
+        self.bus.subscribe(self._on_live_event)
+
+    def _on_live_event(self, event) -> None:
+        """Ассистент штатно остановлен — та же автоматическая расшифровка,
+        что после обычной записи. Упавший сюда не попадает: его папка в
+        библиотеке, расшифровать можно вручную."""
+        if event.kind == live_control.LIVE_STOPPED and event.data.get("folder"):
+            self._on_saved(event.data["folder"], LIVE, True)
 
     def _on_saved(self, folder: str, source: str | None, full: bool) -> None:
         """Запись штатно сохранена: пометить, откуда она, и поставить в очередь.
@@ -218,7 +238,7 @@ class TrayControl:
         (звук уведомления): его сохраняем, но GPU на него не тратим."""
         path = Path(folder)
         try:
-            library.write_meta(path, {"source": "auto" if source == AUTO else "record"})
+            library.write_meta(path, {"source": _META_SOURCE.get(source, "record")})
         except Exception as e:
             # Пометка «откуда запись» — не повод не расшифровывать её.
             self.tray.log(f"meta.json не записан ({path.name}): {e}")
@@ -269,6 +289,10 @@ class TrayControl:
             # По живости pid, а не по наличию файла: убитая расшифровка оставляет
             # протухший маркер, и панель показывала бы «GPU занят» вечно.
             "gpu_busy": gpu_lock.held_by_live_process(),
+            # Запись с ассистентом: {"active", "starting", "stopping", "folder",
+            # "error", "started_at"} (см. LiveControl.status). Обычная запись
+            # при этом не идёт — status выше остаётся про неё.
+            "live": self.live.status(),
         }
 
     # --- команды панели -------------------------------------------------
@@ -277,6 +301,8 @@ class TrayControl:
         """Начать вручную. Если запись уже идёт автоматически — это то же
         нажатие «Начать запись» поверх автозаписи, что и в меню трея: человек
         берёт её под свою руку, автостоп отключается."""
+        if self.live.busy():  # пишет ассистент — вторая запись не нужна
+            return {**self.snapshot(), "ok": False, "action": "already-recording"}
         if self.tray.start_recording(MANUAL):
             self.tray.log("запись запущена из панели")
             return {**self.snapshot(), "ok": True, "action": "started"}
@@ -301,11 +327,61 @@ class TrayControl:
         }
 
     def shutdown(self) -> dict:
-        """Выход по просьбе оболочки: идущая запись сохраняется штатно."""
+        """Выход по просьбе оболочки: идущая запись сохраняется штатно.
+
+        Ассистенту остановка уходит сразу (он начинает дописывать дорожки),
+        а дождётся его выхода сам резидент — до остановки API (TrayApp)."""
         if self.tray.recording:
             self.tray.stop_recording()
+        self.live.stop()
         self.tray.request_exit()
         return {"ok": True}
+
+    # --- живой режим (запись с ассистентом) -----------------------------
+
+    def live_start(self) -> dict:
+        """Запись с ассистентом. Ответ сразу (`starting`): модель грузится до
+        минуты, дальше — события `live.started` / `live.failed`."""
+        from meet import assistant
+
+        if self.tray.recording:
+            raise _bad_request("Идёт обычная запись — сначала остановите её")
+        if not _provider_installed(settings.load()):
+            raise _conflict(assistant.NO_PROVIDER)
+        try:
+            return self.live.start(self._root())
+        except live_control.LiveBusy as e:
+            raise _bad_request(str(e))
+
+    def live_stop(self) -> dict:
+        """Остановить ассистента. Ответ сразу; дорожки он дописывает сам, конец —
+        событием `live.stopped`, после которого запись встаёт в расшифровку."""
+        return self.live.stop()
+
+    def _live_call(self, call, *args) -> dict:
+        try:
+            return call(*args)
+        except live_control.LiveNotRunning as e:
+            raise _conflict(str(e))
+        except live_control.LiveError as e:
+            raise _bad_request(str(e))
+
+    def live_ask(self, body: dict | None) -> dict:
+        question = (body or {}).get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise _bad_request("пустой вопрос")
+        if len(question) > QUESTION_MAX_CHARS:
+            raise _bad_request(f"вопрос длиннее {QUESTION_MAX_CHARS} символов")
+        return self._live_call(self.live.ask, question.strip())
+
+    def live_task(self, body: dict | None) -> dict:
+        task = (body or {}).get("task")
+        if not isinstance(task, str) or not task.strip():
+            raise _bad_request("пустая задача")
+        return self._live_call(self.live.task, task.strip())
+
+    def live_events(self, last_event_id: str | None = None):
+        return self._live_call(self.live.open_events, last_event_id)
 
     def adopt_recording(self) -> dict:
         """Автозапись → ручная: детектор её больше не остановит."""
@@ -428,6 +504,9 @@ class TrayControl:
             return {"error": "записи нет"}
         if (self.tray.recording
                 and Path(self.tray._current_folder()).resolve() == folder):
+            raise _bad_request("запись ещё идёт")
+        live_folder = self.live.status()["folder"]
+        if live_folder and Path(live_folder).resolve() == folder:
             raise _bad_request("запись ещё идёт")
         if self.queue.active_for(str(folder), (jobs.TRANSCRIBE, jobs.IMPORT)):
             raise _bad_request("идёт расшифровка — отмените её или дождитесь")

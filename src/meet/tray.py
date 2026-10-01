@@ -309,6 +309,9 @@ class TrayApp:
         self.recording = False
         self.source = None
         self.on_saved = None  # колбэк «запись сохранена»: (folder, source, full)
+        # () -> bool: пишет ассистент (живой режим, дочерний процесс). Тогда
+        # вторую запись не поднимаем ни из меню, ни автозаписью.
+        self.live_busy = None
         # Чем кончилась последняя запись: {"folder", "reason", "at"} (см.
         # stop_recording). None — остановок ещё не было.
         self.last_stop: dict | None = None
@@ -328,9 +331,9 @@ class TrayApp:
     # --- запись ---------------------------------------------------------
 
     def start_recording(self, source: str) -> bool:
-        """Поднять запись. False — если запись уже идёт."""
+        """Поднять запись. False — если запись уже идёт (своя или ассистента)."""
         with self._mutex:
-            if self.recording:
+            if self.recording or self._live_busy():
                 return False
             self._clear_own_lock()
             result: dict = {}
@@ -350,6 +353,12 @@ class TrayApp:
             self.thread.start()
         self._refresh()
         return True
+
+    def _live_busy(self) -> bool:
+        try:
+            return bool(self.live_busy and self.live_busy())
+        except Exception:
+            return False  # сбой проверки не должен запрещать запись
 
     def _run_record(self, result: dict, stop_event: threading.Event) -> None:
         try:
@@ -615,6 +624,9 @@ class TrayApp:
         if self.recording:
             self.log("звонок начался, запись уже идёт — не вмешиваюсь")
             return
+        if self._live_busy():
+            self.log("звонок начался, пишет ассистент — не вмешиваюсь")
+            return
         left = self._retry_after - time.monotonic()
         if left > 0:
             self.log(f"предыдущая попытка сорвалась — повторю через {left:.0f} с")
@@ -692,16 +704,7 @@ class TrayApp:
             self.icon.run(setup=self.ticker)
         finally:
             self._alive = False
-            if api is not None:
-                # Гасим очередь задач раньше сервера: иначе идущая расшифровка
-                # (подпроцесс job_worker) осиротеет, продолжая держать VRAM и
-                # gpu.lock, невидимая для очереди перезапущенного резидента.
-                for queue in (api.state.queue, api.state.llm_queue):
-                    try:
-                        queue.stop()
-                    except Exception:
-                        pass
-                api.stop(pid=os.getpid())
+            self._stop_services(api)
             self._release_lock(lock)
 
     def run_headless(self, parent_pid: int | None = None) -> None:
@@ -742,14 +745,30 @@ class TrayApp:
             self.ticker(_NoIcon())
         finally:
             self._alive = False
-            if api is not None:
-                for queue in (api.state.queue, api.state.llm_queue):
-                    try:
-                        queue.stop()
-                    except Exception:
-                        pass
-                api.stop(pid=os.getpid())
+            self._stop_services(api)
             self._release_lock(lock)
+
+    def _stop_services(self, api) -> None:
+        """Погасить то, что резидент держит подпроцессами, и только потом API.
+
+        Ассистент первым и с ожиданием (до 90 с, дальше убийство дерева): он
+        пишет встречу, и осиротевший держал бы микрофон и lock записи. Его
+        `live.stopped` ставит расшифровку — очередь ещё жива. Очереди задач —
+        раньше сервера: иначе идущая расшифровка (подпроцесс job_worker)
+        осиротеет, продолжая держать VRAM и gpu.lock, невидимая для очереди
+        перезапущенного резидента."""
+        if api is None:
+            return
+        try:
+            api.state.live.stop(wait=True)
+        except Exception as e:
+            self.log(f"ассистент не остановился штатно: {e!r}")
+        for queue in (api.state.queue, api.state.llm_queue):
+            try:
+                queue.stop()
+            except Exception:
+                pass
+        api.stop(pid=os.getpid())
 
     def _start_control_api(self):
         """Поднять control API для панели и окна настроек.

@@ -57,6 +57,10 @@ IMPORTANT: токен принимается и в query-параметре `?to
     to_notes(id) -> dict                  положить заметку в папку заметок
     assistant() -> dict                   кто отвечает, что установлено, папки
     check_provider(body) -> dict          проверить провайдера коротким вызовом
+    live_start() -> dict                  живой режим (409 без провайдера, 400 при записи)
+    live_stop() -> dict                   остановить живой режим (ответ сразу)
+    live_ask(body) / live_task(body)      прокси к /ask и /task ассистента
+    live_events(last_event_id) -> stream  поток ассистента: get(timeout), close()
 """
 
 import json
@@ -432,6 +436,9 @@ def _make_handler(server: ControlServer):
             if route == ("GET", "/events"):
                 self._stream_events()
                 return _STREAMED
+            if route == ("GET", "/live/events"):
+                self._relay_live()
+                return _STREAMED
             audio = re.match(r"^/recordings/([^/]+)/audio$", path)
             if method == "GET" and audio:
                 # Не JSON: дорожка отдаётся байтами, с поддержкой Range —
@@ -506,6 +513,42 @@ def _make_handler(server: ControlServer):
                 pass  # клиент закрыл панель — штатный конец потока
             finally:
                 unsubscribe()
+
+        def _relay_live(self) -> None:
+            """SSE ассистента, ретранслированный клиенту панели.
+
+            Подписку открываем до заголовков: живого режима нет — 409 из
+            _dispatch, а не пустой поток. Конец потока ассистента (остановка,
+            падение) закрывает и наш; ушедший клиент замечаем на keepalive и
+            закрываем соединение с ассистентом — читающий поток не утекает.
+            Last-Event-ID клиента уходит ассистенту: переподключившаяся панель
+            получает только пропущенные строки."""
+            stream = server.state.live_events(self.headers.get("Last-Event-ID"))
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("X-Accel-Buffering", "no")
+                self.send_header("Connection", "close")
+                origin = self.headers.get("Origin")
+                if origin and _origin_allowed(origin):
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                self.end_headers()
+                self.close_connection = True
+                while True:
+                    block = stream.get(timeout=SSE_KEEPALIVE_S)
+                    if block is None:
+                        self.wfile.write(b": keepalive\n\n")
+                    elif not block:
+                        break  # живой режим кончился
+                    else:
+                        self.wfile.write(block)
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError,
+                    OSError):
+                pass  # клиент закрыл панель — штатный конец потока
+            finally:
+                stream.close()
 
         def _stream_audio(self, recording_id: str, params: dict) -> None:
             """Отдать дорожку записи плееру редактора.
@@ -624,6 +667,10 @@ _ROUTES = {
     ("POST", "/assistant/check"): lambda h, p: _server_of(h).state.check_provider(
         h._body()
     ),
+    ("POST", "/live/start"): lambda h, p: _server_of(h).state.live_start(),
+    ("POST", "/live/stop"): lambda h, p: _server_of(h).state.live_stop(),
+    ("POST", "/live/ask"): lambda h, p: _server_of(h).state.live_ask(h._body()),
+    ("POST", "/live/task"): lambda h, p: _server_of(h).state.live_task(h._body()),
 }
 
 # Маршруты с параметром в пути. Регулярка, а не роутер: их считаные штуки, и

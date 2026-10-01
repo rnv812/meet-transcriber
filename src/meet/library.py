@@ -26,7 +26,7 @@ TRACK_STEMS = ("sys", "mic", "source")
 # Что принимаем на импорт: всё это декодирует ffmpeg.
 IMPORT_EXTS = (".mp3", ".mp4", ".m4a", ".wav", ".ogg", ".opus", ".webm", ".mkv",
                ".flac")
-SOURCES = ("record", "auto", "import")
+SOURCES = ("record", "auto", "import", "live")
 
 
 @dataclass

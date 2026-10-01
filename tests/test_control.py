@@ -136,6 +136,54 @@ class FakeState:
         self.calls.append(("check", body))
         return {"ok": True, "error": None, "provider": body.get("provider")}
 
+    # --- живой режим ---
+
+    live_active = False
+    live_last_id = "нет"
+
+    def live_start(self):
+        if not self.provider_ready:
+            raise control.Conflict("Подключите Claude Code или Codex в настройках")
+        if self.recording:
+            raise control.BadRequest("Идёт обычная запись")
+        self.calls.append("live.start")
+        return {"ok": True, "active": False, "starting": True, "folder": None,
+                "error": None}
+
+    def live_stop(self):
+        self.calls.append("live.stop")
+        return {"ok": True, "action": "stopping"}
+
+    def live_ask(self, body):
+        self.calls.append(("live.ask", body))
+        return {"answer": "ответ"}
+
+    def live_task(self, body):
+        self.calls.append(("live.task", body))
+        return {"ok": True}
+
+    def live_events(self, last_event_id=None):
+        if not self.live_active:
+            raise control.Conflict("Ассистент не запущен")
+        self.live_last_id = last_event_id
+        return FakeLiveStream()
+
+
+class FakeLiveStream:
+    """Ретранслятор: два события и конец потока."""
+
+    def __init__(self) -> None:
+        self.blocks = [b'event: state\ndata: {"status": null}\n\n',
+                       'event: line\nid: 3\ndata: {"text": "а"}\n\n'.encode("utf-8"),
+                       b""]
+        self.closed = False
+
+    def get(self, timeout=None):
+        return self.blocks.pop(0) if self.blocks else b""
+
+    def close(self):
+        self.closed = True
+
 
 class BoomState(FakeState):
     def snapshot(self) -> dict:
@@ -722,3 +770,43 @@ def test_assistant_routes(server):
     assert _get(server, "/assistant")["checking"] is True
     got = _post(server, "/assistant/check", {"provider": "codex"})
     assert got == {"ok": True, "error": None, "provider": "codex"}
+
+
+# --- живой режим -------------------------------------------------------------
+
+
+def test_live_routes_reach_state(server):
+    assert _post(server, "/live/start")["starting"] is True
+    assert _post(server, "/live/stop")["action"] == "stopping"
+    assert _post(server, "/live/ask", {"question": "что решили?"}) == {"answer": "ответ"}
+    assert _post(server, "/live/task", {"task": "Ревью"}) == {"ok": True}
+    calls = server.state_obj.calls
+    assert calls == ["live.start", "live.stop", ("live.ask", {"question": "что решили?"}),
+                     ("live.task", {"task": "Ревью"})]
+
+
+def test_live_start_without_provider_is_409(server):
+    server.state_obj.provider_ready = False
+    assert _post(server, "/live/start", expect=409) == {
+        "error": "Подключите Claude Code или Codex в настройках"}
+
+
+def test_live_start_during_recording_is_400(server):
+    server.state_obj.recording = True
+    assert _post(server, "/live/start", expect=400) == {"error": "Идёт обычная запись"}
+
+
+def test_live_events_relays_stream_and_last_event_id(server):
+    server.state_obj.live_active = True
+    url = f"http://127.0.0.1:{server.port}/live/events?token={server.token}"
+    req = urllib.request.Request(url, headers={"Last-Event-ID": "2"})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        assert "text/event-stream" in r.headers["Content-Type"]
+        body = r.read().decode("utf-8")  # поток кончился вместе с живым режимом
+    assert body == ('event: state\ndata: {"status": null}\n\n'
+                    'event: line\nid: 3\ndata: {"text": "а"}\n\n')
+    assert server.state_obj.live_last_id == "2"
+
+
+def test_live_events_without_live_is_409(server):
+    _get(server, "/live/events", expect=409)
