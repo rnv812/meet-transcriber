@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from pathlib import Path
 
 from meet import paths, settings, watch
 
@@ -16,7 +17,8 @@ def test_defaults_without_file(tmp_path):
     assert cfg.auto_record.processes == list(settings.DEFAULT_PROCESSES)
     assert cfg.hooks.post_record is False
     assert cfg.asr.backend == "faster-whisper"
-    assert cfg.llm.provider == "claude-code"
+    assert cfg.llm.provider == "auto"
+    assert cfg.assistant.knowledge_dir is None
 
 
 def test_fresh_install_runs_nothing_after_recording(tmp_path):
@@ -94,7 +96,7 @@ def test_garbage_values_fall_back_to_defaults(tmp_path):
             "poll_seconds": -5,
         },
         "asr": {"backend": "опечатка"},
-        "llm": {"provider": "gpt"},
+        "llm": {"provider": "gpt"},  # есть секции — это не новый конфиг
     })
     cfg = settings.load(f)
     assert cfg.auto_record.enabled is False
@@ -303,3 +305,89 @@ def test_ui_invalid_values_fall_back_to_defaults():
     padded = settings.Settings.from_raw(
         {"version": settings.SCHEMA_VERSION, "ui": {"notifications": " off "}})
     assert padded.ui.notifications == "off"
+
+
+# --- ассистент: провайдер и папки -------------------------------------------
+
+
+def test_new_config_gets_auto_provider_and_no_folders(monkeypatch):
+    monkeypatch.delenv("MEET_VAULT", raising=False)
+    cfg = settings.Settings.from_raw({})
+    assert cfg.llm.provider == "auto"
+    assert cfg.assistant.knowledge_dir is None
+    assert cfg.assistant.notes_dir is None
+    assert cfg.assistant.notes_subdir == "Встречи"
+    assert settings.LLM_PROVIDERS == ("auto", "claude-code", "codex", "openai-compatible")
+
+
+def test_first_run_without_llm_sections_is_new():
+    cfg = settings.Settings.from_raw({"asr": {"model": "x"}, "ui": {"wizard_done": True}})
+    assert cfg.llm.provider == "auto"
+
+
+def test_v2_config_without_provider_keeps_claude_code():
+    cfg = settings.Settings.from_raw({"version": 2, "llm": {"model": "sonnet"}})
+    assert cfg.llm.provider == "claude-code"
+    assert settings.Settings.from_raw({"version": 2}).llm.provider == "claude-code"
+
+
+def test_legacy_config_without_version_keeps_claude_code():
+    cfg = settings.Settings.from_raw({"auto_record": {"enabled": True}})
+    assert cfg.llm.provider == "claude-code"
+
+
+def test_explicit_provider_is_kept():
+    for name in ("codex", "auto", "openai-compatible"):
+        raw = {"version": 2, "llm": {"provider": name}}
+        assert settings.Settings.from_raw(raw).llm.provider == name
+
+
+def test_unknown_provider_falls_back_by_config_age():
+    assert settings.Settings.from_raw({"llm": {"provider": "gpt"}}).llm.provider == "claude-code"
+    assert settings.Settings.from_raw(
+        {"version": 2, "llm": {"provider": "gpt"}}
+    ).llm.provider == "claude-code"
+    assert settings.Settings.from_raw({"asr": {}, "llm": "мусор"}).llm.provider == "claude-code"
+    # новый конфиг: нет ни version, ни llm/assist/hooks/auto_record
+    assert settings.Llm.from_raw({"provider": "gpt"}, default_provider="auto").provider == "auto"
+
+
+def test_vault_migrates_into_both_assistant_folders():
+    cfg = settings.Settings.from_raw({"version": 2, "assist": {"vault": "C:/vault"}})
+    assert cfg.assistant.knowledge_dir == Path("C:/vault")
+    assert cfg.assistant.notes_dir == Path("C:/vault")
+    assert cfg.assistant.notes_subdir == ""
+
+
+def test_explicit_assistant_folders_win_over_vault():
+    cfg = settings.Settings.from_raw({
+        "version": 2,
+        "assist": {"vault": "C:/vault"},
+        "assistant": {"knowledge_dir": "C:/kb", "notes_dir": "C:/notes",
+                      "notes_subdir": "Звонки"},
+    })
+    assert cfg.assistant.knowledge_dir == Path("C:/kb")
+    assert cfg.assistant.notes_dir == Path("C:/notes")
+    assert cfg.assistant.notes_subdir == "Звонки"
+
+
+def test_assistant_roundtrip_and_cleared_folder_stays_cleared(tmp_path):
+    f = tmp_path / "config.json"
+    original = settings.Settings(
+        assistant=settings.Assistant(knowledge_dir=Path("C:/kb"), notes_dir=None,
+                                     notes_subdir=""),
+    )
+    assert settings.Settings.from_raw(original.to_raw()).assistant == original.assistant
+    settings.save(original, f)
+    assert settings.load(f).assistant == original.assistant
+    # явный None не воскрешается из assist.vault
+    raw = {"version": 2, "assist": {"vault": "C:/v"},
+           "assistant": {"knowledge_dir": None, "notes_dir": None, "notes_subdir": "Встречи"}}
+    assert settings.Settings.from_raw(raw).assistant.knowledge_dir is None
+
+
+def test_patch_assistant_section(tmp_path):
+    f = tmp_path / "config.json"
+    updated = settings.patch({"assistant": {"notes_subdir": "Заметки"}}, f)
+    assert updated.assistant.notes_subdir == "Заметки"
+    assert settings.load(f).assistant.notes_subdir == "Заметки"

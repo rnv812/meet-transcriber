@@ -87,7 +87,12 @@ HISTORIC_RECURRING_PROMPT = (
 HISTORIC_RECURRING_WINDOW = ("11:00", "12:00")
 
 ASR_BACKENDS = ("faster-whisper", "whisper.cpp")
-LLM_PROVIDERS = ("claude-code", "openai-compatible")
+LLM_PROVIDERS = ("auto", "claude-code", "codex", "openai-compatible")
+# Провайдер для конфига без явного выбора у уже работавшего пользователя: до
+# появления "auto" ассистент ходил через Claude Code, и это не должно меняться.
+LEGACY_LLM_PROVIDER = "claude-code"
+# Подпапка заметок по умолчанию (для нового пользователя).
+DEFAULT_NOTES_SUBDIR = "Встречи"
 # Локальная модель по умолчанию адресуется как OpenAI-совместимый эндпоинт:
 # так работают и LM Studio (1234), и Ollama (11434) — своего рантайма не нужно.
 DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:1234/v1"
@@ -346,17 +351,17 @@ class Llm:
     провайдер не поддерживает — это учитывает слой assist.
     """
 
-    provider: str = LLM_PROVIDERS[0]
+    provider: str = "auto"
     model: str = "sonnet"
     base_url: str = DEFAULT_LOCAL_BASE_URL
     local_model: str | None = None
 
     @classmethod
-    def from_raw(cls, raw: dict) -> "Llm":
+    def from_raw(cls, raw: dict, default_provider: str = "auto") -> "Llm":
         local = raw.get("local_model")
         base = raw.get("base_url")
         return cls(
-            provider=as_choice(raw.get("provider"), LLM_PROVIDERS, LLM_PROVIDERS[0]),
+            provider=as_choice(raw.get("provider"), LLM_PROVIDERS, default_provider),
             model=str(raw.get("model") or "sonnet").strip() or "sonnet",
             base_url=str(base).strip() if base else DEFAULT_LOCAL_BASE_URL,
             local_model=str(local).strip() if local else None,
@@ -399,6 +404,40 @@ class Assist:
             "window_seconds": self.window_seconds,
             "port": self.port,
             "voices": self.voices,
+        }
+
+
+@dataclass(frozen=True)
+class Assistant:
+    """Где ассистент берёт знания и куда кладёт заметки о встречах.
+
+    `knowledge_dir` — папка с материалами (читает ассистент), `notes_dir` —
+    корень заметок, `notes_subdir` — подпапка внутри него. None — не задано.
+    """
+
+    knowledge_dir: Path | None = None
+    notes_dir: Path | None = None
+    notes_subdir: str = DEFAULT_NOTES_SUBDIR
+
+    @classmethod
+    def from_raw(cls, raw: dict, vault: Path | None = None) -> "Assistant":
+        """`vault` — прежний `assist.vault`: им заполняются папки, которых в
+        секции нет вовсе. Ключ, явно записанный как null, — осознанный выбор
+        «не задано» и из vault не воскрешается."""
+        knowledge = as_path(raw["knowledge_dir"]) if "knowledge_dir" in raw else vault
+        notes = as_path(raw["notes_dir"]) if "notes_dir" in raw else vault
+        if "notes_subdir" in raw:
+            subdir = str(raw["notes_subdir"] or "").strip()
+        else:
+            # Раскладка по задачам внутри vault остаётся за прежним владельцем.
+            subdir = "" if "notes_dir" not in raw and vault else DEFAULT_NOTES_SUBDIR
+        return cls(knowledge_dir=knowledge, notes_dir=notes, notes_subdir=subdir)
+
+    def to_raw(self) -> dict:
+        return {
+            "knowledge_dir": str(self.knowledge_dir) if self.knowledge_dir else None,
+            "notes_dir": str(self.notes_dir) if self.notes_dir else None,
+            "notes_subdir": self.notes_subdir,
         }
 
 
@@ -471,12 +510,26 @@ class Settings:
     asr: Asr = field(default_factory=Asr)
     llm: Llm = field(default_factory=Llm)
     assist: Assist = field(default_factory=Assist)
+    assistant: Assistant = field(default_factory=Assistant)
     integrations: Integrations = field(default_factory=Integrations)
     ui: Ui = field(default_factory=Ui)
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Settings":
+        # Конфиг «новый», если это первый запуск: нет `version` и нет ни одной
+        # секции, которую писал прежний код (llm/assist/hooks/auto_record, а
+        # также top-level post_record_hook). Такому достаётся провайдер "auto".
+        # Любой другой — существующий пользователь (v2 или старше): без явного
+        # провайдера у него остаётся "claude-code", как работало раньше.
+        is_new = not isinstance(raw, dict) or (
+            "version" not in raw
+            and not any(
+                key in raw
+                for key in ("llm", "assist", "hooks", "auto_record", "post_record_hook")
+            )
+        )
         raw = migrate(raw)
+        assist = Assist.from_raw(_section(raw, "assist"))
         hooks = Hooks.from_raw(_section(raw, "hooks"))
         recording = Recording.from_raw(_section(raw, "recording"))
         if "auto_transcribe" not in _section(raw, "recording") and hooks.post_record:
@@ -489,8 +542,12 @@ class Settings:
             hooks=hooks,
             recording=recording,
             asr=Asr.from_raw(_section(raw, "asr")),
-            llm=Llm.from_raw(_section(raw, "llm")),
-            assist=Assist.from_raw(_section(raw, "assist")),
+            llm=Llm.from_raw(
+                _section(raw, "llm"),
+                default_provider="auto" if is_new else LEGACY_LLM_PROVIDER,
+            ),
+            assist=assist,
+            assistant=Assistant.from_raw(_section(raw, "assistant"), vault=assist.vault),
             integrations=Integrations.from_raw(_section(raw, "integrations")),
             ui=Ui.from_raw(_section(raw, "ui")),
         )
@@ -504,6 +561,7 @@ class Settings:
             "asr": self.asr.to_raw(),
             "llm": self.llm.to_raw(),
             "assist": self.assist.to_raw(),
+            "assistant": self.assistant.to_raw(),
             "integrations": self.integrations.to_raw(),
             "ui": self.ui.to_raw(),
         }
