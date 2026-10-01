@@ -82,3 +82,11 @@ button.turn__speaker:hover { text-decoration: underline; }
 .speaker-pop__warn { color: var(--amber); font-size: 12px; }
 .speaker-pop__error { margin: 0; }
 .speaker-pop__actions { display: flex; justify-content: flex-end; }
+
+/* Запись с ассистентом: дайджест сверху, лента — всё место, вопрос внизу. */
+.live-card { height: 100%; min-height: 240px; display: flex; flex-direction: column; gap: 12px; }
+.live-card__head { display: flex; align-items: center; gap: 8px; }
+.live-card__title { color: var(--text); font-weight: 500; }
+.live-card .live-digest .md { max-height: 30vh; overflow-y: auto; }
+.live-card__feed { flex: 1; min-height: 120px; }
+.live-card__ask { padding-top: 10px; border-top: 1px solid var(--line); }

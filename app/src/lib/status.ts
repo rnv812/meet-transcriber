@@ -51,6 +51,16 @@ export function failedRetranscribe(rec: Recording, jobs: Job[]): Job | null {
   return last;
 }
 
+/**
+ * Эту запись пишет ассистент: живой режим идёт или дописывает дорожки
+ * (`stopping`). Запуск (`starting`) ещё без папки, а после конца запись встаёт
+ * в расшифровку обычным порядком.
+ */
+export function isLiveRecording(rec: Recording, snapshot: Snapshot | null): boolean {
+  const live = snapshot?.live;
+  return !!live?.folder && (live.active || live.stopping) && norm(live.folder) === norm(rec.path);
+}
+
 export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null): RecStatus {
   const mine = jobsOf(rec, jobs);
   const noTracks = Object.keys(rec.tracks ?? {}).length === 0;
@@ -58,6 +68,7 @@ export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null)
 
   if (snapshot?.status === "recording" && snapshot.folder && norm(snapshot.folder) === norm(rec.path))
     return { kind: "recording" };
+  if (isLiveRecording(rec, snapshot)) return { kind: "recording" };
   if (mine.some((j) => j.state === "queued")) return { kind: "queued" };
   const running = mine.find((j) => j.state === "running");
   if (running) {

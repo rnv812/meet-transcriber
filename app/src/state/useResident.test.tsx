@@ -77,3 +77,23 @@ test("doneTick растёт только на job.done", async () => {
   expect(result.current.doneTick).toBe(1);
   expect(result.current.libraryTick).toBe(2);
 });
+
+test("live.*: библиотека и снимок перечитываются сразу — папка живой записи появляется в списке", async () => {
+  vi.mocked(resolveEndpoint).mockResolvedValue({ base: "http://127.0.0.1:1", token: "t" });
+  const { result } = renderHook(() => useResident());
+  await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+  const live = { active: true, starting: false, stopping: false, folder: "C:/r/x", error: null, started_at: 1 };
+  vi.mocked(getState).mockResolvedValueOnce({ status: "idle", folder: null, levels: {}, live } as Partial<Snapshot> as Snapshot);
+  const es = FakeEventSource.instances.at(-1)!;
+  const before = result.current.libraryTick;
+  await act(async () => {
+    es.emit("live.started", { kind: "live.started", at: 1, folder: "C:/r/x" });
+    await vi.advanceTimersByTimeAsync(10);
+  });
+  expect(result.current.libraryTick).toBe(before + 1);
+  expect(result.current.snapshot?.live?.active).toBe(true);
+  act(() => {
+    for (const kind of ["live.starting", "live.stopping", "live.stopped", "live.failed"]) es.emit(kind, { kind, at: 2 });
+  });
+  expect(result.current.libraryTick).toBe(before + 5);
+});

@@ -290,26 +290,34 @@ export function openEvents(
 
 /**
  * Поток живого ассистента: `state` (дайджест, хвост ленты, статус) при каждом
- * изменении и `line` на каждую новую строку. Не живой режим — сервер отвечает
- * 409, и EventSource уходит в `onError`.
+ * изменении и `line` на каждую новую строку.
+ *
+ * `onLine` получает и номер строки (`id:` события, null — без него): поток,
+ * открытый заново, начинает с хвоста ленты, и по номеру повторы отбрасываются.
+ * `onError(closed)`: closed — браузер сдался (не 200: живого режима нет — 409)
+ * и сам больше не переподключится; иначе он переподключается сам, с
+ * Last-Event-ID, и получит только пропущенные строки.
  */
 export function openLiveEvents(
   ep: Endpoint,
   handlers: {
     onState?: (s: LiveState) => void;
-    onLine?: (l: LiveLine) => void;
-    onError?: () => void;
+    onLine?: (l: LiveLine, id: number | null) => void;
+    onError?: (closed: boolean) => void;
   },
 ): { close: () => void } {
   const query = ep.token ? `?token=${enc(ep.token)}` : "";
   const source = new EventSource(`${ep.base}/live/events${query}`);
-  const on = <T>(kind: string, fn?: (data: T) => void) =>
-    source.addEventListener(kind, (m) => {
-      const data = parseEvent((m as MessageEvent<string>).data);
-      if (data) fn?.(data as T);
-    });
-  on<LiveState>("state", handlers.onState);
-  on<LiveLine>("line", handlers.onLine);
-  source.onerror = () => handlers.onError?.();
+  source.addEventListener("state", (m) => {
+    const data = parseEvent((m as MessageEvent<string>).data);
+    if (data) handlers.onState?.(data as LiveState);
+  });
+  source.addEventListener("line", (m) => {
+    const event = m as MessageEvent<string>;
+    const data = parseEvent(event.data);
+    const id = event.lastEventId === "" ? NaN : Number(event.lastEventId);
+    if (data) handlers.onLine?.(data as LiveLine, Number.isFinite(id) ? id : null);
+  });
+  source.onerror = () => handlers.onError?.(source.readyState === EventSource.CLOSED);
   return { close: () => source.close() };
 }

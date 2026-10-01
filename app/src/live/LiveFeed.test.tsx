@@ -1,0 +1,72 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { LiveLine } from "../lib/types";
+import { LiveDigest, LiveFeed } from "./LiveFeed";
+
+const line = (i: number, speaker: string | null = "Демьян"): LiveLine => ({ t: 60 + i, speaker, text: `реплика ${i}` });
+
+/** jsdom не раскладывает: высоты ленты задаём сами, scrollTop — обычное поле. */
+function fakeScroll(el: HTMLElement, { scrollHeight, clientHeight }: { scrollHeight: number; clientHeight: number }) {
+  let top = 0;
+  Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => scrollHeight });
+  Object.defineProperty(el, "clientHeight", { configurable: true, get: () => clientHeight });
+  Object.defineProperty(el, "scrollTop", { configurable: true, get: () => top, set: (v: number) => { top = v; } });
+  return {
+    grow(by: number) { scrollHeight += by; },
+  };
+}
+
+test("строки: время от начала, спикер и текст; без спикера — только текст", () => {
+  render(<LiveFeed lines={[line(0), line(1, null)]} />);
+  const items = screen.getAllByRole("listitem");
+  expect(items[0]).toHaveTextContent("01:00");
+  expect(items[0]).toHaveTextContent("Демьян");
+  expect(items[0]).toHaveTextContent("реплика 0");
+  expect(items[1]).toHaveTextContent("реплика 1");
+  expect(items[1]).not.toHaveTextContent("Демьян");
+});
+
+test("пустая лента — подсказка", () => {
+  render(<LiveFeed lines={[]} />);
+  expect(screen.getByText(/Реплики появятся/)).toBeInTheDocument();
+});
+
+test("автопрокрутка к новой строке, пока пользователь не прокрутил вверх", () => {
+  const { rerender } = render(<LiveFeed lines={[line(0)]} />);
+  const feed = screen.getByRole("log");
+  const box = fakeScroll(feed, { scrollHeight: 500, clientHeight: 200 });
+  box.grow(20);
+  rerender(<LiveFeed lines={[line(0), line(1)]} />);
+  expect(feed.scrollTop).toBe(520);
+
+  // Прокрутил вверх — лента стоит на месте.
+  feed.scrollTop = 100;
+  fireEvent.scroll(feed);
+  box.grow(20);
+  rerender(<LiveFeed lines={[line(0), line(1), line(2)]} />);
+  expect(feed.scrollTop).toBe(100);
+
+  // Вернулся вниз — снова следим.
+  feed.scrollTop = 540 - 200;
+  fireEvent.scroll(feed);
+  box.grow(20);
+  rerender(<LiveFeed lines={[line(0), line(1), line(2), line(3)]} />);
+  expect(feed.scrollTop).toBe(560);
+});
+
+test("дайджест сворачивается", async () => {
+  render(<LiveDigest digest={"## Решения\n\n- релиз в пятницу"} />);
+  expect(screen.getByText("релиз в пятницу")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /Дайджест/ }));
+  expect(screen.queryByText("релиз в пятницу")).toBeNull();
+  expect(screen.getByRole("button", { name: /Дайджест/ })).toHaveAttribute("aria-expanded", "false");
+});
+
+test("дайджест свёрнут изначально, если попросили; пустой — подсказка", async () => {
+  const { rerender } = render(<LiveDigest digest="- пункт" defaultOpen={false} />);
+  expect(screen.queryByText("пункт")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: /Дайджест/ }));
+  expect(screen.getByText("пункт")).toBeInTheDocument();
+  rerender(<LiveDigest digest="" />);
+  expect(screen.getByText(/Дайджест появится/)).toBeInTheDocument();
+});

@@ -1,9 +1,10 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingCard } from "./RecordingCard";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
-import type { Job, Recording, Transcript } from "../../lib/types";
+import type { Job, LiveStatus, Recording, Transcript } from "../../lib/types";
+import { FakeEventSource } from "../../test/setup";
 
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
@@ -18,6 +19,7 @@ vi.mock("../../lib/api", async (orig) => ({
   getAssistant: vi.fn(),
   getSummary: vi.fn(),
   getQa: vi.fn(),
+  liveAsk: vi.fn(),
 }));
 vi.mock("../../lib/shell", () => ({
   inTauri: () => true,
@@ -125,6 +127,37 @@ test("recording: «Идёт запись…»", async () => {
   const snapshot = { status: "recording", folder: "C:/rec/r1" } as never;
   render(<RecordingCard id="r1" endpoint={ep} snapshot={snapshot} />);
   expect(await screen.findByText("Идёт запись…")).toBeInTheDocument();
+});
+
+const live = (o: Partial<LiveStatus> = {}): LiveStatus => ({
+  active: true, starting: false, stopping: false, folder: "C:\\rec\\r1", error: null, started_at: 1, ...o,
+});
+
+test("запись с ассистентом: в карточке живая лента, дайджест и вопросы", async () => {
+  load({ has_transcript: false, source: "live" }, null);
+  vi.mocked(api.liveAsk).mockResolvedValue({ answer: "Обсуждали релиз" });
+  const snapshot = { status: "idle", folder: null, live: live() } as never;
+  render(<RecordingCard id="r1" endpoint={ep} snapshot={snapshot} />);
+  expect(await screen.findByText("Идёт запись с ассистентом")).toBeInTheDocument();
+  expect(screen.queryByText("Идёт запись…")).toBeNull();
+  const stream = FakeEventSource.instances.find((s) => s.url.startsWith("/api/live/events"))!;
+  act(() => {
+    stream.emit("state", { digest: "- релиз в пятницу", transcript: [], status: null });
+    stream.emit("line", { t: 65, speaker: "Демьян", text: "давайте начнём" }, 0);
+  });
+  expect(screen.getByRole("log")).toHaveTextContent("давайте начнём");
+  expect(screen.getByText("релиз в пятницу")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Что я пропустил?" }));
+  expect(api.liveAsk).toHaveBeenCalledWith(ep, "Что я пропустил за последние минуты?");
+  expect(await screen.findByText("Обсуждали релиз")).toBeInTheDocument();
+});
+
+test("ассистент пишет другую папку — у этой записи обычный статус", async () => {
+  load({ has_transcript: false }, null);
+  const snapshot = { status: "idle", folder: null, live: live({ folder: "C:/rec/other" }) } as never;
+  render(<RecordingCard id="r1" endpoint={ep} snapshot={snapshot} />);
+  expect(await screen.findByText("Запись не расшифрована")).toBeInTheDocument();
+  expect(screen.queryByText("Идёт запись с ассистентом")).toBeNull();
 });
 
 test("экспорт srt сохраняет файл", async () => {

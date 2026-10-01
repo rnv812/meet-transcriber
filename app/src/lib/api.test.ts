@@ -98,9 +98,21 @@ test("openLiveEvents: токен в query, state и line разбираются,
   const source = FakeEventSource.instances.at(-1)!;
   expect(source.url).toBe("http://h/live/events?token=t%20k");
   source.emit("state", { digest: "# Д", transcript: ["[00:01] Демьян: привет"], status: null });
-  source.emit("line", { t: 1.5, speaker: "Демьян", text: "привет" });
+  source.emit("line", { t: 1.5, speaker: "Демьян", text: "привет" }, 7);
   expect(onState).toHaveBeenCalledWith({ digest: "# Д", transcript: ["[00:01] Демьян: привет"], status: null });
-  expect(onLine).toHaveBeenCalledWith({ t: 1.5, speaker: "Демьян", text: "привет" });
+  expect(onLine).toHaveBeenCalledWith({ t: 1.5, speaker: "Демьян", text: "привет" }, 7);
+  source.emit("line", { t: 2, speaker: null, text: "без id" });
+  expect(onLine).toHaveBeenLastCalledWith({ t: 2, speaker: null, text: "без id" }, null);
   live.close();
   expect(source.closed).toBe(true);
+});
+
+test("openLiveEvents: onError говорит, сдался ли браузер (409) или переподключается сам", () => {
+  const onError = vi.fn();
+  api.openLiveEvents({ base: "http://h", token: null }, { onError });
+  const source = FakeEventSource.instances.at(-1)!;
+  source.fail(false);
+  expect(onError).toHaveBeenLastCalledWith(false);
+  source.fail(true);
+  expect(onError).toHaveBeenLastCalledWith(true);
 });

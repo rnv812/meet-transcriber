@@ -1,17 +1,4 @@
-/* Окно `live` прозрачное (transparent в оболочке): фон рисует сама панель,
-   со скруглёнными углами. Цвета — из tokens.css (Linear-dark). */
-html, body { background: transparent; }
-
-.live-panel {
-  height: 100%;
-  display: flex; align-items: center; gap: 10px;
-  padding: 0 16px;
-  background: var(--bg);
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-xl);
-  overflow: hidden;
-  user-select: none;
-}
+/* Лента, дайджест и вопросы живой записи — в плавающей панели и в карточке. */
 
 .live-dot {
   width: 8px; height: 8px; flex: none;
@@ -20,13 +7,38 @@ html, body { background: transparent; }
   box-shadow: 0 0 0 3px rgba(94, 106, 210, 0.25);
   animation: live-pulse 1.6s ease-in-out infinite;
 }
+@keyframes live-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
 
-.live-title { color: var(--text); font-weight: 500; }
-
-@keyframes live-pulse {
-  50% { opacity: 0.45; }
+.live-feed {
+  display: flex; flex-direction: column; gap: 6px;
+  margin: 0; padding: 0; list-style: none; overflow-y: auto;
 }
+.live-feed__line { display: flex; gap: 8px; line-height: 1.45; }
+.live-feed__t { flex: none; color: var(--text-3); font-size: 11px; padding-top: 2px; }
+.live-feed__text { color: var(--text); overflow-wrap: anywhere; }
+.live-feed__who { margin-right: 6px; color: var(--accent-hover); font-weight: 500; }
+.live-feed__empty { font-size: 12px; }
 
-@media (prefers-reduced-motion: reduce) {
-  .live-dot { animation: none; }
+.live-digest { display: flex; flex-direction: column; gap: 6px; }
+.live-digest__toggle {
+  align-self: flex-start; display: inline-flex; gap: 6px; padding: 0; border: 0; background: none;
+  color: var(--text-2); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
 }
+.live-digest__toggle:hover { color: var(--text); }
+.live-digest__body { font-size: 12px; }
+
+.live-ask { display: flex; flex-direction: column; gap: 6px; }
+.live-ask__row { display: flex; gap: 6px; }
+.live-ask__input {
+  flex: 1; min-width: 0; height: 28px; padding: 0 8px;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
+  color: var(--text); font: inherit;
+}
+.live-ask__input:focus { outline: none; border-color: var(--accent); }
+.live-ask__input:disabled { opacity: 0.6; }
+.live-ask__missed { align-self: flex-start; }
+.live-ask__reply { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; }
+.live-ask__q { color: var(--text-2); font-size: 12px; white-space: pre-wrap; }
+.live-ask__stage { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 12px; }
+.live-ask__error { color: var(--err); font-size: 12px; white-space: pre-wrap; }

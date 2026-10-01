@@ -6,7 +6,7 @@ import {
 import { errorText } from "../../lib/format";
 import { inTauri, openFolder, saveText } from "../../lib/shell";
 import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
-import { activeJobOf, failedRetranscribe, statusOf } from "../../lib/status";
+import { activeJobOf, failedRetranscribe, isLiveRecording, statusOf } from "../../lib/status";
 import type { Job, Recording, Snapshot, Transcript } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { Popover } from "../../ui/Popover";
@@ -15,6 +15,7 @@ import { AudioPlayer, type AudioPlayerHandle, type Track } from "./AudioPlayer";
 import { CardActions } from "./CardActions";
 import { CardTabs } from "./CardTabs";
 import { CardHeader } from "./CardHeader";
+import { LiveCard } from "./LiveCard";
 import { SpeakerPopover } from "./SpeakerPopover";
 import { Turns, type PersonColor } from "./Turns";
 import "./card.css";
@@ -200,7 +201,9 @@ export function RecordingCard({
       );
       break;
     case "recording":
-      body = <EmptyState title="Идёт запись…" />;
+      body = snapshot?.live && isLiveRecording(rec, snapshot)
+        ? <LiveCard endpoint={endpoint} live={snapshot.live} />
+        : <EmptyState title="Идёт запись…" />;
       break;
   }
 

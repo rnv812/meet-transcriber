@@ -1,11 +1,12 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { RecordingBadge } from "./RecordingBadge";
 import * as api from "../lib/api";
-import type { Snapshot } from "../lib/types";
+import type { AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
 
 const ep = { base: "/api", token: null };
+afterEach(() => vi.restoreAllMocks());
 const snap = (extra: Partial<Snapshot>): Snapshot => ({
   status: "idle", source: null, folder: null, elapsed_s: 0, levels: {},
   auto_record: { enabled: false, processes: [], grace_seconds: 0, state: null, mic: null, render: null },
@@ -73,4 +74,95 @@ test("резидент не на связи — бейджа нет", () => {
   const { container } = render(<RecordingBadge endpoint={ep} online={false} snapshot={snap({})} />);
   expect(container).toBeEmptyDOMElement();
   expect(screen.queryByRole("button")).toBeNull();
+});
+
+const live = (o: Partial<LiveStatus> = {}): LiveStatus => ({
+  active: false, starting: false, stopping: false, folder: null, error: null, started_at: null, ...o,
+});
+const assistant = (o: Partial<AssistantInfo> = {}): AssistantInfo => ({
+  provider: "claude", setting: "auto", available: {}, knowledge_dir: null, notes_dir: null, checking: false, ...o,
+});
+const openMenu = async () => {
+  await userEvent.click(screen.getByRole("button", { name: "Другие варианты записи" }));
+  return screen.findByRole("menuitem", { name: /С ассистентом/ });
+};
+
+test("«▾» открывает меню: «С ассистентом» запускает живой режим, ответ применяется сразу", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
+  const start = vi.spyOn(api, "liveStart").mockResolvedValue({ ok: true, ...live({ starting: true }) });
+  function Harness() {
+    const [s, setS] = useState(snap({ live: live() }));
+    return <RecordingBadge endpoint={ep} snapshot={s} onSnapshot={setS} />;
+  }
+  render(<Harness />);
+  expect(screen.getByRole("button", { name: "Начать запись" })).toBeInTheDocument();
+  const item = await openMenu();
+  await waitFor(() => expect(api.getAssistant).toHaveBeenCalledWith(ep));
+  expect(item).toBeEnabled();
+  await userEvent.click(item);
+  expect(start).toHaveBeenCalledWith(ep);
+  expect(await screen.findByText("Ассистент запускается…")).toBeInTheDocument();
+  expect(screen.queryByRole("menu")).toBeNull();
+});
+
+test("без провайдера «С ассистентом» неактивен, с подсказкой", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant({ provider: null }));
+  const start = vi.spyOn(api, "liveStart");
+  render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
+  const item = await openMenu();
+  await waitFor(() => expect(item).toBeDisabled());
+  expect(screen.getByRole("menu")).toHaveTextContent("Подключите Claude Code или Codex в настройках");
+  await userEvent.click(item);
+  expect(start).not.toHaveBeenCalled();
+});
+
+test("провайдер ещё проверяется — пункт доступен", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant({ provider: null, checking: true }));
+  render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
+  const item = await openMenu();
+  await waitFor(() => expect(api.getAssistant).toHaveBeenCalled());
+  expect(item).toBeEnabled();
+});
+
+test("отказ живого режима (409) — текст ошибки рядом с кнопкой", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
+  vi.spyOn(api, "liveStart").mockRejectedValue(
+    new api.ApiError(409, "Подключите Claude Code или Codex в настройках"));
+  render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
+  await userEvent.click(await openMenu());
+  expect(await screen.findByRole("alert")).toHaveTextContent("Подключите Claude Code или Codex в настройках");
+});
+
+test("Esc закрывает меню", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
+  render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
+  await openMenu();
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("menu")).toBeNull();
+});
+
+test("при живом режиме: «● REC · ассистент», Стоп вызывает liveStop", async () => {
+  const stop = vi.spyOn(api, "liveStop").mockResolvedValue({ ok: true, action: "stopping", ...live({ stopping: true }) });
+  const rec = vi.spyOn(api, "recordingCommand");
+  render(<RecordingBadge endpoint={ep}
+    snapshot={snap({ live: live({ active: true, folder: "C:/r/x", started_at: Date.now() / 1000 - 65 }) })} />);
+  expect(screen.getByText(/REC/)).toHaveTextContent(/● REC 01:0\d · ассистент/);
+  expect(screen.queryByRole("button", { name: "Начать запись" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Стоп" }));
+  expect(stop).toHaveBeenCalledWith(ep);
+  expect(rec).not.toHaveBeenCalled();
+});
+
+test("ассистент запускается: подпись и Стоп (отмена запуска)", async () => {
+  const stop = vi.spyOn(api, "liveStop").mockResolvedValue({ ok: true, action: "cancelled", ...live() });
+  render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live({ starting: true }) })} />);
+  expect(screen.getByText("Ассистент запускается…")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Стоп" }));
+  expect(stop).toHaveBeenCalledWith(ep);
+});
+
+test("ассистент дописывает запись: «Останавливаю…», Стоп неактивен", () => {
+  render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live({ stopping: true, folder: "C:/r/x" }) })} />);
+  expect(screen.getByText("Останавливаю…")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Стоп" })).toBeDisabled();
 });

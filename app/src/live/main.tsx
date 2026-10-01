@@ -1,13 +1,14 @@
-// Плавающая панель ассистента (окно `live`, создаёт оболочка). Пока —
-// заглушка; настоящая панель — следующая задача.
+// Плавающая панель ассистента (окно `live`, создаёт оболочка).
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "../theme/tokens.css";
-import "./live.css";
-import { LiveApp } from "./LiveApp";
+// Стили Markdown модели (дайджест, ответы) — общие с вкладками карточки.
+import "../features/card/assistant.css";
+import "./panel.css";
+import { LiveWindow } from "./LivePanel";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <LiveApp />
+    <LiveWindow />
   </StrictMode>,
 );

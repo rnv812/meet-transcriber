@@ -1,4 +1,4 @@
-import { activeJobOf, failedRetranscribe, statusOf } from "./status";
+import { activeJobOf, failedRetranscribe, isLiveRecording, statusOf } from "./status";
 
 const rec = (o = {}) => ({ id: "2026-09-30_16-04", path: "C:/r/2026-09-30_16-04",
   started_at: null, duration_s: 60, tracks: { sys: "x" }, has_transcript: false,
@@ -70,4 +70,20 @@ test("задачи модели (итоги, вопросы) не выдают �
   // Упавшие итоги нерасшифрованной записи — это не «расшифровка упала».
   expect(statusOf(rec(), [job({ kind: "summary", state: "failed", error: "x" })], null))
     .toEqual({ kind: "untranscribed" });
+});
+
+const liveSnap = (live: object) => ({ status: "idle", folder: null,
+  live: { active: false, starting: false, stopping: false, folder: null, error: null, started_at: null, ...live } }) as any;
+
+test("запись с ассистентом: папка живого режима — «идёт запись», пока он идёт или дописывается", () => {
+  const win = ["C:", "r", "2026-09-30_16-04", ""].join(String.fromCharCode(92));
+  expect(statusOf(rec(), [], liveSnap({ active: true, folder: win }))).toEqual({ kind: "recording" });
+  expect(statusOf(rec(), [], liveSnap({ stopping: true, folder: "C:/r/2026-09-30_16-04" })))
+    .toEqual({ kind: "recording" });
+  // Чужая папка, ещё не начался (starting) или уже кончился — обычный статус.
+  expect(statusOf(rec(), [], liveSnap({ active: true, folder: "C:/r/other" })).kind).toBe("untranscribed");
+  expect(statusOf(rec(), [], liveSnap({ starting: true, folder: "C:/r/2026-09-30_16-04" })).kind).toBe("untranscribed");
+  expect(statusOf(rec(), [], liveSnap({ folder: "C:/r/2026-09-30_16-04" })).kind).toBe("untranscribed");
+  expect(isLiveRecording(rec(), liveSnap({ active: true, folder: "C:/r/2026-09-30_16-04" }))).toBe(true);
+  expect(isLiveRecording(rec(), null)).toBe(false);
 });

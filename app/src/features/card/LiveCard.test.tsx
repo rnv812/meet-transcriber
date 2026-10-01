@@ -1,0 +1,27 @@
+import { act, render, screen } from "@testing-library/react";
+import type { LiveStatus } from "../../lib/types";
+import { FakeEventSource } from "../../test/setup";
+import { LiveCard } from "./LiveCard";
+
+const ep = { base: "http://h", token: null };
+const live = (o: Partial<LiveStatus> = {}): LiveStatus => ({
+  active: true, starting: false, stopping: false, folder: "C:/rec/r1", error: null, started_at: 1, ...o,
+});
+const streams = () => FakeEventSource.instances.filter((s) => s.url.startsWith("http://h/live/events"));
+
+test("идёт: поток ассистента открыт, вопросы доступны", () => {
+  render(<LiveCard endpoint={ep} live={live()} />);
+  expect(screen.getByText("Идёт запись с ассистентом")).toBeInTheDocument();
+  expect(streams()).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Что я пропустил?" })).toBeEnabled();
+});
+
+test("ассистент дописывает запись: лента остаётся, поток закрыт, вопросы неактивны", () => {
+  const { rerender } = render(<LiveCard endpoint={ep} live={live()} />);
+  act(() => streams()[0]!.emit("line", { t: 1, speaker: "Демьян", text: "итог" }, 0));
+  rerender(<LiveCard endpoint={ep} live={live({ active: false, stopping: true })} />);
+  expect(screen.getByText("Останавливаю…")).toBeInTheDocument();
+  expect(screen.getByRole("log")).toHaveTextContent("итог");
+  expect(streams()[0]!.closed).toBe(true);
+  expect(screen.getByRole("button", { name: "Что я пропустил?" })).toBeDisabled();
+});

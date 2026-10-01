@@ -26,6 +26,8 @@ export type Snapshot = {
   gpu_busy: boolean;
   disk_free_gb: number | null;
   last_stop: { folder: string; reason: "saved" | "discarded" | "short"; at: number } | null;
+  /** Запись с ассистентом; `status` выше при ней остаётся "idle". Нет у старых резидентов. */
+  live?: LiveStatus;
 };
 
 export type CommandResult = Snapshot & { ok: boolean; action: string };
