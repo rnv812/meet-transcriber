@@ -158,10 +158,14 @@ def _provider_installed(cfg) -> bool:
 
 def _check_provider(provider: str) -> dict:
     """`python -m meet.llm.check <provider>` подпроцессом: вызов модели не
-    должен жить в резиденте, а SDK провайдера — грузиться в него."""
+    должен жить в резиденте, а SDK провайдера — грузиться в него. Прокси —
+    из настроек, как у задач (см. meet.netproxy)."""
+    from meet import netproxy
+
     try:
         out = subprocess.run(
             [sys.executable, "-m", "meet.llm.check", provider],
+            env=netproxy.settings_env(),
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=CHECK_TIMEOUT_S,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -961,6 +965,7 @@ class TrayControl:
     def assistant(self) -> dict:
         """Кто ответит и что для этого есть. Не ждёт проверки входа в CLI:
         `checking` — ответ ещё считается в фоне (см. ProviderCache)."""
+        from meet import netproxy
         from meet.llm import detect
 
         cfg = settings.load()
@@ -972,6 +977,8 @@ class TrayControl:
             "setting": cfg.llm.provider,
             "available": detect.available(cfg.llm.base_url),
             "knowledge_dir": str(knowledge) if knowledge else None,
+            # Какой прокси получат Claude Code/Codex (логин и пароль скрыты).
+            "proxy": netproxy.describe(cfg),
         }
 
     def check_provider(self, body: dict | None) -> dict:

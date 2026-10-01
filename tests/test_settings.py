@@ -2,6 +2,8 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from meet import paths, settings, watch
 
 
@@ -482,3 +484,24 @@ def test_non_object_config_is_reported(tmp_path, monkeypatch, capsys):
     path.write_text("[1, 2]", encoding="utf-8")
     assert settings.read_raw(path) == {}
     assert str(path) in capsys.readouterr().err
+
+
+def test_llm_proxy_default_and_garbage_is_system():
+    assert settings.Settings.from_raw({}).llm.proxy == "system"
+    assert settings.Settings.from_raw({"llm": {"proxy": "мусор"}}).llm.proxy == "system"
+    assert settings.Settings.from_raw({"llm": {"proxy": 42}}).llm.proxy == "system"
+    cfg = settings.Settings.from_raw({"llm": {"proxy": "http://127.0.0.1:8080"}})
+    assert cfg.llm.proxy == "http://127.0.0.1:8080"
+    assert cfg.llm.to_raw()["proxy"] == "http://127.0.0.1:8080"
+
+
+def test_patch_llm_proxy_saved_and_validated(tmp_path):
+    f = tmp_path / "config.json"
+    assert settings.patch({"llm": {"proxy": "none"}}, f).llm.proxy == "none"
+    assert settings.patch({"llm": {"proxy": "socks5://127.0.0.1:1080"}}, f).llm.proxy == (
+        "socks5://127.0.0.1:1080")
+    with pytest.raises(ValueError, match="http://, https:// или socks5://"):
+        settings.patch({"llm": {"proxy": "127.0.0.1:8080"}}, f)
+    with pytest.raises(ValueError, match="порта"):
+        settings.patch({"llm": {"proxy": "http://127.0.0.1"}}, f)
+    assert settings.load(f).llm.proxy == "socks5://127.0.0.1:1080"

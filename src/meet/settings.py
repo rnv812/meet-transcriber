@@ -357,15 +357,21 @@ class Llm:
     Claude Code CLI). `openai-compatible` — локальная модель через LM Studio или
     Ollama: своего рантайма не тащим, а инструменты чтения хранилища такой
     провайдер не поддерживает — это учитывает слой assist.
+
+    `proxy` — прокси для Claude Code/Codex (и загрузок моделей задачами):
+    `system` — как в Windows, `none` — без прокси, или адрес; см. meet.netproxy.
     """
 
     provider: str = "auto"
     model: str = "sonnet"
     base_url: str = DEFAULT_LOCAL_BASE_URL
     local_model: str | None = None
+    proxy: str = "system"
 
     @classmethod
     def from_raw(cls, raw: dict, default_provider: str = "auto") -> "Llm":
+        from meet import netproxy
+
         local = raw.get("local_model")
         base = raw.get("base_url")
         return cls(
@@ -373,7 +379,18 @@ class Llm:
             model=str(raw.get("model") or "sonnet").strip() or "sonnet",
             base_url=str(base).strip() if base else DEFAULT_LOCAL_BASE_URL,
             local_model=str(local).strip() if local else None,
+            proxy=netproxy.normalize(raw.get("proxy")),
         )
+
+    @staticmethod
+    def check(update: dict) -> None:
+        """Правка из окна: ValueError с текстом для человека (негодный адрес прокси)."""
+        from meet import netproxy
+
+        if "proxy" in update:
+            error = netproxy.check(update["proxy"])
+            if error:
+                raise ValueError(error)
 
     def to_raw(self) -> dict:
         return {
@@ -381,6 +398,7 @@ class Llm:
             "model": self.model,
             "base_url": self.base_url,
             "local_model": self.local_model,
+            "proxy": self.proxy,
         }
 
 
@@ -954,6 +972,8 @@ def patch(updates: dict, path: Path | None = None) -> Settings:
             continue
         if name == "export":
             Export.check(section_update)
+        if name == "llm":
+            Llm.check(section_update)
         merged = getattr(current, name).to_raw()
         merged.update(section_update)
         changed[name] = type(getattr(current, name)).from_raw(merged)

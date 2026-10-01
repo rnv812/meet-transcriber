@@ -67,7 +67,7 @@ def test_claude_ok_via_check_auth(monkeypatch):
     monkeypatch.setattr(detect, "find_claude", lambda: "C:/claude.exe")
     monkeypatch.setattr(detect, "logged_in", lambda name, p: (True, None))
 
-    async def fake_check_auth():
+    async def fake_check_auth(proxy=None):
         return None
 
     monkeypatch.setattr(claude, "check_auth", fake_check_auth)
@@ -89,3 +89,30 @@ def test_main_prints_json(monkeypatch, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out == {"ok": False, "error": "не авторизован: x", "provider": "codex"}
     assert code == 1
+
+
+def test_codex_check_uses_proxy_setting(monkeypatch, tmp_path):
+    from meet import settings
+
+    settings.patch({"llm": {"proxy": "none"}})
+    calls = _codex_env(monkeypatch)
+    asyncio.run(check.check("codex"))
+    assert calls[0][1]["proxy"] == "none"
+
+
+def test_claude_check_uses_proxy_setting(monkeypatch):
+    from meet import settings
+    from meet.llm import claude
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    settings.patch({"llm": {"proxy": "http://10.1.1.1:3128"}})
+    monkeypatch.setattr(detect, "find_claude", lambda: "C:/claude.exe")
+    monkeypatch.setattr(detect, "logged_in", lambda name, p: (True, None))
+    seen = {}
+
+    async def fake_check_auth(**kw):
+        seen.update(kw)
+
+    monkeypatch.setattr(claude, "check_auth", fake_check_auth)
+    assert asyncio.run(check.check("claude-code"))["ok"] is True
+    assert seen == {"proxy": "http://10.1.1.1:3128"}

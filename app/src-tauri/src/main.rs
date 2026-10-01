@@ -14,6 +14,7 @@ mod api;
 mod autostart;
 mod engine;
 mod logs;
+mod netproxy;
 mod resident;
 mod tray;
 mod windows;

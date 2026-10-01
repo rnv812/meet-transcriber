@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
-import { AUTO_ORDER, RECHECK_MS, RECHECK_TRIES } from "./AssistantSection";
+import { AUTO_ORDER, RECHECK_MS, RECHECK_TRIES, proxyError } from "./AssistantSection";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import type { AssistantInfo, ProviderCheck } from "../../lib/types";
@@ -267,4 +267,89 @@ test("«не найден — установите»: ссылка открыв�
   const codex = await within(group).findByRole("button", { name: "github.com/openai/codex" });
   await userEvent.click(codex);
   expect(shell.openUrl).toHaveBeenCalledWith("https://github.com/openai/codex");
+});
+
+const proxyGroup = () => screen.getByRole("radiogroup", { name: "Прокси для подключения к моделям" });
+
+test("прокси: «Как в системе» подписан адресом из getAssistant().proxy", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue({
+    ...structuredClone(info),
+    proxy: { mode: "system", effective: "http://127.0.0.1:3067", source: "system", system: "http://127.0.0.1:3067" },
+  });
+  open();
+  expect(await screen.findByRole("radio", { name: "Как в системе (сейчас: 127.0.0.1:3067)" })).toBeChecked();
+  expect(within(proxyGroup()).getByRole("radio", { name: "Без прокси" })).not.toBeChecked();
+  expect(screen.queryByLabelText("Адрес прокси")).toBeNull();
+});
+
+test("прокси: в системе не задан — так и сказано; без сведений резидента — просто «Как в системе»", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValueOnce({
+    ...structuredClone(info),
+    proxy: { mode: "system", effective: null, source: null, system: null },
+  });
+  open();
+  expect(await screen.findByRole("radio", { name: "Как в системе (сейчас: не задан)" })).toBeChecked();
+});
+
+test("прокси: прежний резидент без сведений — вариант без подписи", async () => {
+  open();
+  await screen.findByText("сейчас: Claude Code");
+  expect(within(proxyGroup()).getByRole("radio", { name: "Как в системе" })).toBeChecked();
+});
+
+test("прокси: «Без прокси» уходит в llm.proxy = none", async () => {
+  open();
+  await screen.findByText("сейчас: Claude Code");
+  await userEvent.click(within(proxyGroup()).getByRole("radio", { name: "Без прокси" }));
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { llm: { proxy: "none" } }));
+});
+
+test("прокси: свой адрес — проверка на месте, «Сохранить» недоступно, пока адрес негоден", async () => {
+  open();
+  await screen.findByText("сейчас: Claude Code");
+  await userEvent.click(within(proxyGroup()).getByRole("radio", { name: "Свой адрес…" }));
+  const input = screen.getByLabelText("Адрес прокси");
+  expect(screen.getByText(/Укажите адрес прокси/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  await userEvent.type(input, "127.0.0.1:8080");
+  expect(screen.getByText(/http:\/\/, https:\/\/ или socks5:\/\//)).toBeInTheDocument();
+  await userEvent.clear(input);
+  await userEvent.type(input, "http://10.0.0.1:3128");
+  expect(screen.queryByText(/http:\/\/, https:\/\/ или socks5:\/\//)).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { llm: { proxy: "http://10.0.0.1:3128" } }));
+});
+
+test("прокси: сохранённый свой адрес показан в поле", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { llm: { proxy: "socks5://127.0.0.1:1080" } }));
+  open();
+  expect(await screen.findByLabelText("Адрес прокси")).toHaveValue("socks5://127.0.0.1:1080");
+  expect(within(proxyGroup()).getByRole("radio", { name: "Свой адрес…" })).toBeChecked();
+});
+
+test("прокси: «?» объясняет, зачем он нужен", async () => {
+  open();
+  await screen.findByText("сейчас: Claude Code");
+  await userEvent.click(screen.getByRole("button", { name: "Зачем нужен прокси" }));
+  expect(screen.getByRole("tooltip")).toHaveTextContent(
+    "Claude Code и Codex не используют системный прокси Windows сами — приложение передаёт его им. "
+    + "Нужен, если доступ к сервисам идёт через VPN/прокси.");
+});
+
+test.each([
+  ["system", null],
+  ["none", null],
+  ["http://127.0.0.1:8080", null],
+  ["socks5://user:pass@[::1]:1080/", null],
+  ["", "Укажите адрес прокси"],
+  ["ftp://h:21", "http://, https:// или socks5://"],
+  ["http://h", "нет порта"],
+  ["http://:80", "нет узла"],
+  ["http://h:99999", "не распознан"],
+  ["http://h:80/path", "только схема"],
+])("proxyError(%j)", (value, fragment) => {
+  const error = proxyError(value);
+  if (fragment === null) expect(error).toBeNull();
+  else expect(error).toContain(fragment);
 });

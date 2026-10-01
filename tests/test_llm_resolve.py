@@ -112,3 +112,20 @@ def test_import_does_not_load_sdk():
                          text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == ""
+
+
+def test_runner_for_passes_proxy_setting(monkeypatch):
+    from meet.llm import claude, codex
+
+    seen = []
+
+    async def fake(prompt, **kw):
+        seen.append(kw.get("proxy"))
+
+    monkeypatch.setattr(claude, "run", fake)
+    monkeypatch.setattr(codex, "run", fake)
+    cfg = Settings.from_raw({"llm": {"proxy": "http://10.1.1.1:3128"}})
+    import asyncio
+    asyncio.run(llm.runner_for("claude-code", cfg)("q", system_prompt="s"))
+    asyncio.run(llm.runner_for("codex", cfg)("q", system_prompt="s"))
+    assert seen == ["http://10.1.1.1:3128", "http://10.1.1.1:3128"]

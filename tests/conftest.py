@@ -66,3 +66,14 @@ def _isolated_secrets(monkeypatch, tmp_path_factory):
 def memory_keyring(_isolated_secrets):
     """In-memory бэкенд текущего теста: `.store[(service, username)]`."""
     return _isolated_secrets
+
+
+@pytest.fixture(autouse=True)
+def _no_system_proxy(monkeypatch):
+    """Системный прокси машины разработчика (реестр WinINET) в тесты не
+    попадает: кому он нужен, подменяет `netproxy.read_registry` сам."""
+    try:
+        from meet import netproxy
+    except ImportError:
+        return
+    monkeypatch.setattr(netproxy, "read_registry", lambda: None)

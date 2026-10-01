@@ -12,6 +12,7 @@ import logging
 import os
 from pathlib import Path
 
+from meet import netproxy
 from meet.llm.base import TIMEOUT_ERROR, AgentReply
 from meet.llm.detect import find_claude
 
@@ -83,9 +84,13 @@ async def run(
     cwd: str | Path | None = None,
     timeout_s: float = 180.0,
     max_turns: int = 8,
+    proxy: str | None = None,
 ) -> AgentReply:
     """Один вызов Claude через Agent SDK: свежая сессия (или resume), строгий
-    системный промпт, без настроек проекта; ошибки — в AgentReply.error."""
+    системный промпт, без настроек проекта; ошибки — в AgentReply.error.
+
+    `proxy` — `llm.proxy` (по умолчанию «как в системе»): Claude Code сам
+    системный прокси Windows не видит, его передаём переменными."""
     import claude_agent_sdk
     from claude_agent_sdk import (
         AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock,
@@ -93,6 +98,7 @@ async def run(
 
     drop_api_key()
     options = ClaudeAgentOptions(
+        env=netproxy.prepare(proxy),
         system_prompt=system_prompt,
         model=model,
         resume=resume,
@@ -142,11 +148,11 @@ async def run(
     return AgentReply(
         text=(result_text or "".join(text_parts)).strip(),
         session_id=session_id,
-        error=error,
+        error=netproxy.with_hint(error),
     )
 
 
-async def check_auth() -> str | None:
+async def check_auth(proxy: str | None = None) -> str | None:
     """Проверка авторизации коротким вызовом. None = ок, иначе текст проблемы.
 
     ANTHROPIC_API_KEY не ошибка: он убирается из окружения (подписка важнее)."""
@@ -157,6 +163,6 @@ async def check_auth() -> str | None:
     reply = await run(
         "Ответь одним словом: ок",
         system_prompt="Отвечай одним словом.",
-        model="haiku", max_turns=1, timeout_s=60.0,
+        model="haiku", max_turns=1, timeout_s=60.0, proxy=proxy,
     )
     return reply.error

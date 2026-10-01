@@ -287,3 +287,28 @@ def test_assistant_job_argv(tmp_path):
                                     options={"question": "-что решили?"}))
     assert ask[-3:] == ["ask", str(tmp_path), "--question=-что решили?"]
     assert jobs.SUMMARY in jobs.KINDS and jobs.ASK in jobs.KINDS
+
+
+def test_worker_subprocess_gets_proxy_env(tmp_path, monkeypatch):
+    """Задача (итоги, вопросы, загрузка моделей) получает прокси из настроек:
+    Claude Code/Codex и Hugging Face берут его из переменных среды."""
+    from meet import settings
+
+    settings.patch({"llm": {"proxy": "http://10.1.1.1:3128"}})
+    seen = {}
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            seen.update(kwargs)
+            self.stdout = iter(())
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(jobs.subprocess, "Popen", FakePopen)
+    queue = jobs.JobQueue()
+    job = jobs.Job(id="x", kind=jobs.IMPORT, folder=str(tmp_path))
+    assert queue._spawn_subprocess(job, lambda line: None) == 0
+    env = {k.upper(): v for k, v in seen["env"].items()}
+    assert env["HTTPS_PROXY"] == "http://10.1.1.1:3128"
+    assert "PATH" in env

@@ -374,10 +374,15 @@ class JobQueue:
 
     def _spawn_subprocess(self, job: Job, on_line) -> int:
         """Запустить задачу подпроцессом и прокачать её вывод построчно."""
+        from meet import netproxy
+
         creationflags = _creationflags()
         try:
             process = subprocess.Popen(
                 worker_argv(job),
+                # Прокси из настроек: Claude Code/Codex и загрузки моделей
+                # (Hugging Face, pip) берут его только из переменных среды.
+                env=netproxy.settings_env(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

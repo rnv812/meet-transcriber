@@ -20,17 +20,23 @@ __all__ = ["PROVIDERS", "AgentReply", "Runner", "provider_ready", "resolve", "ru
 
 def runner_for(name: str, cfg: "Settings") -> Runner:
     """Функция вызова модели для провайдера (без проверки доступности)."""
+    # Ссылка на модуль, а не на функцию: тесты подменяют `claude.run`.
     if name == "claude-code":
         from meet.llm import claude
-        return claude.run
+        return partial(_call, claude, proxy=cfg.llm.proxy)
     if name == "codex":
         from meet.llm import codex
-        return codex.run
+        return partial(_call, codex, proxy=cfg.llm.proxy)
     if name == "openai-compatible":
         from meet.llm import openai_compat
         return partial(openai_compat.run, base_url=cfg.llm.base_url,
                        local_model=cfg.llm.local_model)
     raise ValueError(f"неизвестный провайдер: {name}")
+
+
+async def _call(module, *args, **kwargs):
+    """`module.run` с прокси из настроек (`llm.proxy`)."""
+    return await module.run(*args, **kwargs)
 
 
 def provider_ready(name: str, cfg: "Settings", *, need_login: bool) -> bool:

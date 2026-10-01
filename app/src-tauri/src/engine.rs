@@ -1083,7 +1083,9 @@ fn run_steps(
     );
     let of = steps.len();
     let plan = install_plan(steps, mode);
-    let envs = uv_env(data_dir);
+    let mut envs = uv_env(data_dir);
+    // Прокси из настроек Windows: uv их сам не читает (см. netproxy.rs).
+    envs.extend(crate::netproxy::system_proxy_env());
     let cwd = engine_root(data_dir);
     let mut log = InstallLog::open(data_dir);
     log.write(&format!(

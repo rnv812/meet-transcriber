@@ -11,11 +11,11 @@
  * (тексты те же): «Сохранить» недоступно сразу, не дожидаясь ответа резидента.
  */
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 import { type Endpoint, getExportPreview } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import type { ExportPreview } from "../../lib/types";
-import { FolderRow, Row, Switch, type Raw, type SetFn } from "./Section";
+import { FolderRow, HelpTip, Row, Switch, type Raw, type SetFn } from "./Section";
 
 export const PREVIEW_DELAY_MS = 400;
 
@@ -79,30 +79,15 @@ export function cleanSetting(group: string, key: string, value: unknown): unknow
   return group === "export" && TEXT_KEYS.includes(key) && typeof value === "string" ? value.trim() : value;
 }
 
-/** «?» со списком подстановок: по наведению, фокусу или нажатию; Esc закрывает. */
+/** «?» со списком подстановок. */
 function TokenHelp() {
-  const [open, setOpen] = useState(false);
-  const [pinned, setPinned] = useState(false);
-  const id = useId();
-  const shown = open || pinned;
   return (
-    <span className="help" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
-      <button type="button" className="help__button" aria-label="Подстановки в шаблоне"
-        aria-expanded={shown} aria-describedby={shown ? id : undefined}
-        onClick={() => setPinned((v) => !v)} onFocus={() => setOpen(true)} onBlur={() => { setOpen(false); setPinned(false); }}
-        onKeyDown={(e) => { if (e.key === "Escape") { setOpen(false); setPinned(false); } }}>
-        ?
-      </button>
-      {shown && (
-        <span role="tooltip" id={id} className="help__tip">
-          <span className="help__title">Подстановки в имени папки и файлов</span>
-          {TOKENS.map((t) => (
-            <span key={t.token} className="help__line"><code>{t.token}</code> — {t.text}</span>
-          ))}
-          <span className="help__line">«/» в шаблоне создаёт вложенные папки: {"{year}/{date} - {title}"}</span>
-        </span>
-      )}
-    </span>
+    <HelpTip label="Подстановки в шаблоне" title="Подстановки в имени папки и файлов">
+      {TOKENS.map((t) => (
+        <span key={t.token} className="help__line"><code>{t.token}</code> — {t.text}</span>
+      ))}
+      <span className="help__line">«/» в шаблоне создаёт вложенные папки: {"{year}/{date} - {title}"}</span>
+    </HelpTip>
   );
 }
 

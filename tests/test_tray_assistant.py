@@ -221,10 +221,17 @@ def test_provider_cache_survives_resolve_failure():
 
 
 def test_check_provider_runs_check_subprocess(state, monkeypatch):
+    from meet import netproxy
+
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(netproxy, "read_registry",
+                        lambda: {"ProxyEnable": 1, "ProxyServer": "127.0.0.1:3067"})
     seen = {}
 
     def fake_run(argv, **kwargs):
         seen["argv"], seen["timeout"] = argv, kwargs.get("timeout")
+        seen["env"] = kwargs.get("env")
         return subprocess.CompletedProcess(
             argv, 1, stdout='шум\n{"ok": false, "error": "не авторизован", '
                             '"provider": "codex"}\n', stderr="")
@@ -234,6 +241,8 @@ def test_check_provider_runs_check_subprocess(state, monkeypatch):
     assert got == {"ok": False, "error": "не авторизован", "provider": "codex"}
     assert seen["argv"][1:] == ["-m", "meet.llm.check", "codex"]
     assert seen["timeout"] == 90
+    # Системный прокси — ребёнку переменными (Claude Code/Codex его сами не видят).
+    assert {k.upper(): v for k, v in seen["env"].items()}["HTTPS_PROXY"] == "http://127.0.0.1:3067"
 
 
 def test_check_provider_timeout_is_an_answer(state, monkeypatch):
@@ -300,3 +309,18 @@ def test_invalidate_during_refresh_is_not_lost():
     _wait(lambda: answers == ["новый"] and not cache._running)
     assert cache.get(cfg) == ("старый", True)  # устаревшее, идёт пересчёт
     _wait(lambda: cache.get(cfg) == ("новый", False))
+
+
+def test_assistant_describes_proxy(state, monkeypatch):
+    """Окно показывает, какой прокси получат Claude Code и Codex."""
+    from meet import netproxy
+
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(netproxy, "read_registry",
+                        lambda: {"ProxyEnable": 1, "ProxyServer": "127.0.0.1:3067"})
+    _installed(monkeypatch, codex=True)
+    monkeypatch.setattr(llm, "resolve", lambda cfg: ("codex", None))
+    assert state.assistant()["proxy"] == {
+        "mode": "system", "effective": "http://127.0.0.1:3067", "source": "system",
+        "system": "http://127.0.0.1:3067"}

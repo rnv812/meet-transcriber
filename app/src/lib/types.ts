@@ -161,6 +161,20 @@ export type AssistantInfo = {
   available: Record<string, ProviderAvailability>;
   knowledge_dir: string | null;
   checking: boolean;
+  /** Нет у резидента прежней версии. */
+  proxy?: ProxyInfo;
+};
+
+/**
+ * Прокси, который получат Claude Code и Codex (`llm.proxy`): режим сохранённой
+ * настройки, действующий адрес (логин и пароль скрыты) и откуда он; `system` —
+ * что дал бы вариант «как в системе» (переменные среды или прокси Windows).
+ */
+export type ProxyInfo = {
+  mode: "system" | "none" | "custom";
+  effective: string | null;
+  source: "env" | "system" | "setting" | null;
+  system: string | null;
 };
 
 /** `POST /assistant/check`. */

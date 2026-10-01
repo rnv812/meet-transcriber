@@ -181,7 +181,10 @@ def _orphan_endpoint(path: Path) -> dict | None:
 
 def _spawn_process(argv: list[str], log_file):
     """Запустить ребёнка без окна консоли, весь вывод — в журнал."""
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+    from meet import netproxy
+
+    # Прокси из настроек: ребёнок зовёт Claude Code/Codex (см. meet.netproxy).
+    env = {**netproxy.settings_env(), "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
     return subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,

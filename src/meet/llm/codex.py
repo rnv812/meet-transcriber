@@ -12,6 +12,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from meet import netproxy
 from meet.llm.base import EMPTY_ERROR, TIMEOUT_ERROR, AgentReply
 from meet.llm.detect import find_codex
 
@@ -46,7 +47,8 @@ def _workdir(allowed_dirs, cwd) -> str:
     return tempfile.gettempdir()
 
 
-def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float) -> AgentReply:
+def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
+          env: dict | None = None) -> AgentReply:
     # ignore_cleanup_errors: убитый по таймауту Codex может ещё держать файл.
     with tempfile.TemporaryDirectory(prefix="meet-codex-",
                                      ignore_cleanup_errors=True) as tmp:
@@ -64,7 +66,7 @@ def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float) -> AgentRep
         try:
             proc = subprocess.Popen(
                 cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, creationflags=_NO_WINDOW,
+                stderr=subprocess.PIPE, creationflags=_NO_WINDOW, env=env,
             )
         except OSError as e:
             return AgentReply(text="", error=f"не удалось запустить Codex: {e}")
@@ -102,12 +104,17 @@ async def run(
     cwd: str | Path | None = None,
     timeout_s: float = 180.0,
     max_turns: int = 8,
+    proxy: str | None = None,
 ) -> AgentReply:
-    """Один вызов `codex exec`; ошибки — в AgentReply.error."""
+    """Один вызов `codex exec`; ошибки — в AgentReply.error. `proxy` —
+    `llm.proxy`: Codex системный прокси Windows сам не видит."""
     exe = find_codex()
     if exe is None:
         return AgentReply(text="", error="не найден Codex CLI (codex)")
     stdin_text = f"{system_prompt}\n\n{prompt}"
-    return await asyncio.to_thread(
+    reply = await asyncio.to_thread(
         _exec, exe, _workdir(allowed_dirs, cwd), stdin_text, timeout_s,
+        netproxy.child_env(proxy),
     )
+    reply.error = netproxy.with_hint(reply.error)
+    return reply

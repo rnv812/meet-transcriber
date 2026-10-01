@@ -124,3 +124,41 @@ def test_codex_not_found(monkeypatch, tmp_path):
     reply = _run(cwd=tmp_path)
     assert reply.text == "" and "Codex" in reply.error
     assert FakePopen.calls == []
+
+
+def test_system_proxy_reaches_codex(monkeypatch, tmp_path):
+    from meet import netproxy
+
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(netproxy, "read_registry",
+                        lambda: {"ProxyEnable": 1, "ProxyServer": "127.0.0.1:3067"})
+    _setup(monkeypatch)
+    _run(cwd=tmp_path)
+    env = {k.upper(): v for k, v in FakePopen.calls[0].kw["env"].items()}
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:3067"
+    assert "PATH" in env  # остальное окружение унаследовано
+
+
+def test_proxy_none_strips_inherited_for_codex(monkeypatch, tmp_path):
+    monkeypatch.setenv("HTTPS_PROXY", "http://10.1.1.1:3128")
+    _setup(monkeypatch)
+    _run(cwd=tmp_path, proxy="none")
+    env = FakePopen.calls[0].kw["env"]
+    assert not any(k.upper() == "HTTPS_PROXY" for k in env)
+
+
+def test_explicit_proxy_for_codex(monkeypatch, tmp_path):
+    _setup(monkeypatch)
+    _run(cwd=tmp_path, proxy="http://10.1.1.1:3128")
+    env = {k.upper(): v for k, v in FakePopen.calls[0].kw["env"].items()}
+    assert env["HTTPS_PROXY"] == "http://10.1.1.1:3128"
+
+
+def test_connection_error_gets_proxy_hint(monkeypatch, tmp_path):
+    from meet import netproxy
+
+    _setup(monkeypatch, code=1, answer=None,
+           stderr=b"stream error: error sending request for url (https://api.example.com/v1)")
+    reply = _run(cwd=tmp_path)
+    assert reply.error.endswith(netproxy.HINT)

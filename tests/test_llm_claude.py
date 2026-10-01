@@ -52,3 +52,83 @@ def test_check_auth_without_cli(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr(claude, "find_cli", lambda: None)
     assert "не найден" in asyncio.run(claude.check_auth())
+
+
+def _fake_query(monkeypatch, seen, messages=()):
+    def fake_query(*, prompt, options):
+        seen["options_env"] = dict(options.env)
+        seen["environ_https"] = os.environ.get("HTTPS_PROXY")
+
+        async def gen():
+            for m in messages:
+                yield m
+        return gen()
+
+    monkeypatch.setattr(claude_agent_sdk, "query", fake_query)
+    monkeypatch.setattr(claude, "find_cli", lambda: "C:/claude.exe")
+
+
+def _no_env_proxy(monkeypatch):
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_run_passes_system_proxy_to_cli(monkeypatch):
+    from meet import netproxy
+
+    _no_env_proxy(monkeypatch)
+    monkeypatch.setattr(netproxy, "read_registry",
+                        lambda: {"ProxyEnable": 1, "ProxyServer": "127.0.0.1:3067"})
+    seen = {}
+    _fake_query(monkeypatch, seen)
+    asyncio.run(claude.run("привет", system_prompt="s"))
+    env = {k.upper(): v for k, v in seen["options_env"].items()}
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:3067"
+    assert env["HTTP_PROXY"] == "http://127.0.0.1:3067"
+    assert "127.0.0.1" in env["NO_PROXY"]
+
+
+def test_run_explicit_proxy(monkeypatch):
+    _no_env_proxy(monkeypatch)
+    seen = {}
+    _fake_query(monkeypatch, seen)
+    asyncio.run(claude.run("привет", system_prompt="s", proxy="http://10.1.1.1:3128"))
+    env = {k.upper(): v for k, v in seen["options_env"].items()}
+    assert env["HTTPS_PROXY"] == "http://10.1.1.1:3128"
+
+
+def test_run_proxy_none_strips_inherited(monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://10.1.1.1:3128")
+    seen = {}
+    _fake_query(monkeypatch, seen)
+    asyncio.run(claude.run("привет", system_prompt="s", proxy="none"))
+    assert seen["environ_https"] is None
+    assert not any(k.upper() == "HTTPS_PROXY" for k in seen["options_env"])
+
+
+def test_run_blocked_error_gets_proxy_hint(monkeypatch):
+    from meet import netproxy
+
+    def boom(*, prompt, options):
+        raise RuntimeError("Claude Code returned an error result: Failed to authenticate. "
+                           "API Error: 403 Request not allowed")
+
+    monkeypatch.setattr(claude_agent_sdk, "query", boom)
+    monkeypatch.setattr(claude, "find_cli", lambda: "C:/claude.exe")
+    reply = asyncio.run(claude.run("привет", system_prompt="s"))
+    assert "403 Request not allowed" in reply.error
+    assert reply.error.endswith(netproxy.HINT)
+
+
+def test_check_auth_passes_proxy(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(claude, "find_cli", lambda: "C:/claude.exe")
+    seen = {}
+
+    async def fake_run(prompt, **kw):
+        seen.update(kw)
+        return base.AgentReply(text="ок")
+
+    monkeypatch.setattr(claude, "run", fake_run)
+    assert asyncio.run(claude.check_auth(proxy="none")) is None
+    assert seen["proxy"] == "none"

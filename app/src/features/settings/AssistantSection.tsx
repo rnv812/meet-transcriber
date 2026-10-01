@@ -13,9 +13,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type Endpoint, checkProvider, getAssistant } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { openUrl } from "../../lib/shell";
-import type { AssistantInfo } from "../../lib/types";
+import type { AssistantInfo, ProxyInfo } from "../../lib/types";
 import { Button } from "../../ui/Button";
-import { FolderRow, Row, type Raw, type SetFn } from "./Section";
+import { FolderRow, HelpTip, Row, type Raw, type SetFn } from "./Section";
 
 type Provider = { value: string; label: string; link?: string };
 
@@ -27,7 +27,43 @@ const PROVIDERS: Provider[] = [
 ];
 const LOCAL = "openai-compatible";
 /** Ключи `llm`, по которым идёт проверка и выбор «Авто». */
-const LLM_KEYS = ["provider", "base_url", "local_model"];
+const LLM_KEYS = ["provider", "base_url", "local_model", "proxy"];
+
+const PROXY_LABEL = "Прокси для подключения к моделям";
+const PROXY_HELP = "Claude Code и Codex не используют системный прокси Windows сами — приложение передаёт его им. "
+  + "Нужен, если доступ к сервисам идёт через VPN/прокси.";
+const PROXY_SCHEMES = ["http", "https", "socks5", "socks5h"];
+const PROXY_EXAMPLE = "например http://127.0.0.1:8080";
+
+/**
+ * Значение `llm.proxy` нельзя сохранить: текст для человека, иначе null.
+ * Та же проверка, что у резидента (`meet.netproxy.check`): схема, узел, порт.
+ */
+export function proxyError(value: string): string | null {
+  const text = value.trim();
+  if (text === "system" || text === "none") return null;
+  if (!text) return `Укажите адрес прокси, ${PROXY_EXAMPLE}`;
+  const [, scheme = "", tail = ""] = /^([a-z0-9+.-]+):\/\/(.*)$/i.exec(text) ?? [];
+  if (!PROXY_SCHEMES.includes(scheme.toLowerCase())) {
+    return "Адрес прокси должен начинаться с http://, https:// или socks5://";
+  }
+  const rest = tail.replace(/\/$/, "");
+  if (/[/?#]/.test(rest)) return `В адресе прокси нужны только схема, узел и порт, ${PROXY_EXAMPLE}`;
+  const [, host, port] = /^(\[[^\]]*\]|[^:]*)(?::(.*))?$/.exec(rest.slice(rest.lastIndexOf("@") + 1)) ?? [];
+  if (port !== undefined && port !== "" && (!/^\d+$/.test(port) || Number(port) > 65535)) {
+    return "Адрес прокси не распознан: проверьте узел и порт";
+  }
+  if (!host) return `В адресе прокси нет узла, ${PROXY_EXAMPLE}`;
+  if (!port) return `В адресе прокси нет порта, ${PROXY_EXAMPLE}`;
+  return null;
+}
+
+/** Подпись варианта «Как в системе»: что сейчас даёт система (без «http://»). */
+export function systemProxyLabel(proxy: ProxyInfo | undefined): string {
+  if (!proxy) return "Как в системе";
+  const now = proxy.system ? proxy.system.replace(/^http:\/\//i, "") : "не задан";
+  return `Как в системе (сейчас: ${now})`;
+}
 
 /**
  * Пока резидент проверяет вход в CLI (`checking`), спрашиваем снова через
@@ -50,7 +86,9 @@ const windowInvalid = (value: unknown): boolean =>
  */
 export function assistantChangesInvalid(changes: Raw): boolean {
   const win = changes.assist?.window_seconds;
-  return win !== undefined && windowInvalid(win);
+  const proxy = changes.llm?.proxy;
+  return (win !== undefined && windowInvalid(win))
+    || (typeof proxy === "string" && proxyError(proxy) !== null);
 }
 
 /** Подпись «Авто», пока выбран конкретный провайдер: порядок выбора (llm.resolve). */
@@ -121,6 +159,13 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
   const chosen = String(llm("provider") ?? "auto");
   const llmDirty = LLM_KEYS.some((k) => JSON.stringify(draft.llm?.[k] ?? null) !== JSON.stringify(saved.llm?.[k] ?? null));
   const win = draft.assist?.window_seconds as number | null | undefined;
+  const proxy = String(llm("proxy") ?? "system");
+  const proxyMode = proxy === "system" || proxy === "none" ? proxy : "custom";
+  const savedProxy = String(saved.llm?.proxy ?? "system");
+  // Вернуться к своему адресу после «Без прокси» — с прежним текстом в поле.
+  const [customProxy, setCustomProxy] = useState<string | null>(null);
+  const customStart = customProxy ?? (savedProxy === "system" || savedProxy === "none" ? "" : savedProxy);
+  const proxyProblem = proxyMode === "custom" ? proxyError(proxy) : null;
 
   return (
     <>
@@ -173,6 +218,35 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
           </Row>
         </>
       )}
+      <Row label={PROXY_LABEL} hint="через него Claude Code и Codex выходят к своим сервисам">
+        <div role="radiogroup" aria-label={PROXY_LABEL} className="radios radios--column">
+          <label className="radios__item">
+            <input type="radio" name="llm-proxy" checked={proxyMode === "system"}
+              onChange={() => set("llm", "proxy", "system")} />
+            {systemProxyLabel(info?.proxy)}
+          </label>
+          <label className="radios__item">
+            <input type="radio" name="llm-proxy" checked={proxyMode === "none"}
+              onChange={() => set("llm", "proxy", "none")} />
+            Без прокси
+          </label>
+          <label className="radios__item">
+            <input type="radio" name="llm-proxy" checked={proxyMode === "custom"}
+              onChange={() => set("llm", "proxy", customStart)} />
+            Свой адрес…
+          </label>
+        </div>
+        <HelpTip label="Зачем нужен прокси">
+          <span className="help__line">{PROXY_HELP}</span>
+        </HelpTip>
+        {proxyMode === "custom" && (
+          <>
+            <input type="text" aria-label="Адрес прокси" placeholder="http://127.0.0.1:8080" value={proxy}
+              onChange={(e) => { setCustomProxy(e.target.value); set("llm", "proxy", e.target.value); }} />
+            {proxyProblem && <span className="error proxy__error">{proxyProblem}</span>}
+          </>
+        )}
+      </Row>
       <h3 className="shead">База знаний</h3>
       <FolderRow label="База знаний для ассистента"
         hint="папка с материалами: ассистент сверяет по ней термины и имена, отвечая на вопросы"

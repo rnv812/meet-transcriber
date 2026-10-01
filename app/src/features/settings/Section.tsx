@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { pickFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 
@@ -73,6 +73,30 @@ export function FolderRow({ label, hint, value, onChange }: {
         <Button onClick={() => onChange(null)} disabled={!value}>Очистить</Button>
       </Row>
     </div>
+  );
+}
+
+/** «?» с пояснением: по наведению, фокусу или нажатию; Esc закрывает. */
+export function HelpTip({ label, title, children }: { label: string; title?: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const id = useId();
+  const shown = open || pinned;
+  return (
+    <span className="help" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <button type="button" className="help__button" aria-label={label}
+        aria-expanded={shown} aria-describedby={shown ? id : undefined}
+        onClick={() => setPinned((v) => !v)} onFocus={() => setOpen(true)} onBlur={() => { setOpen(false); setPinned(false); }}
+        onKeyDown={(e) => { if (e.key === "Escape") { setOpen(false); setPinned(false); } }}>
+        ?
+      </button>
+      {shown && (
+        <span role="tooltip" id={id} className="help__tip">
+          {title && <span className="help__title">{title}</span>}
+          {children}
+        </span>
+      )}
+    </span>
   );
 }
 

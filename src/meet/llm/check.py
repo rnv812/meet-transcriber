@@ -16,6 +16,13 @@ PROBE_SYSTEM = "Отвечай одним словом."
 PROBE_TIMEOUT_S = 60.0
 
 
+def _proxy() -> str:
+    """`llm.proxy` из настроек: проверка идёт тем же путём, что и работа."""
+    from meet import settings
+
+    return settings.load().llm.proxy
+
+
 def _result(provider: str, error: str | None) -> dict:
     return {"ok": error is None, "error": error, "provider": provider}
 
@@ -30,7 +37,7 @@ async def _check_claude() -> str | None:
     ok, why = detect.logged_in("claude-code", path)
     if not ok:
         return f"не авторизован: {why}"
-    return await claude.check_auth()
+    return await claude.check_auth(proxy=_proxy())
 
 
 async def _check_codex() -> str | None:
@@ -43,7 +50,7 @@ async def _check_codex() -> str | None:
     if not ok:
         return f"не авторизован: {why}"
     reply = await codex.run(PROBE_PROMPT, system_prompt=PROBE_SYSTEM,
-                            max_turns=1, timeout_s=PROBE_TIMEOUT_S)
+                            max_turns=1, timeout_s=PROBE_TIMEOUT_S, proxy=_proxy())
     return reply.error
 
 

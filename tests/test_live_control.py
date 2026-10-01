@@ -987,3 +987,23 @@ def test_live_routes_end_to_end(resident, monkeypatch):
         assert _call(srv, "/live/events", method="GET")[0] == 409
     finally:
         srv.stop()
+
+
+def test_spawn_process_passes_proxy_env(monkeypatch, tmp_path):
+    from meet import netproxy
+
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(netproxy, "read_registry",
+                        lambda: {"ProxyEnable": 1, "ProxyServer": "127.0.0.1:3067"})
+    seen = {}
+
+    def fake_popen(argv, **kwargs):
+        seen.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(live_control.subprocess, "Popen", fake_popen)
+    live_control._spawn_process(["x"], None)
+    env = {k.upper(): v for k, v in seen["env"].items()}
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:3067"
+    assert env["PYTHONIOENCODING"] == "utf-8"
