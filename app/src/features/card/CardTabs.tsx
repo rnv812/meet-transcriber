@@ -1,12 +1,12 @@
 /**
- * Вкладки готовой записи: «Транскрипт · Итоги · Вопросы».
+ * Вкладки готовой записи: «Расшифровка · Итоги · Вопросы».
  *
  * Вкладка монтируется при первом открытии и дальше живёт скрытой: ожидающий
  * вопрос и прокрутка не теряются при переключении, а итоги и вопросы не
  * запрашиваются у тех, кто их не открывал.
  */
 
-import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Endpoint } from "../../lib/api";
 import type { Job } from "../../lib/types";
 import { useAssistant } from "./assistant";
@@ -40,6 +40,26 @@ export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSetting
     setTab(next);
     setOpened((cur) => (cur.has(next) ? cur : new Set(cur).add(next)));
   };
+
+  // Ctrl+F — поиск по расшифровке с любой вкладки (по коду клавиши: и в русской раскладке).
+  const transcriptPanel = useRef<HTMLDivElement>(null);
+  const [findTick, setFindTick] = useState(0);
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.code !== "KeyF") return;
+      e.preventDefault();
+      setTab("transcript");
+      setFindTick((n) => n + 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  useEffect(() => {
+    if (!findTick) return;
+    const field = transcriptPanel.current?.querySelector<HTMLInputElement>("[data-transcript-search]");
+    field?.focus();
+    field?.select();
+  }, [findTick]);
   // Стрелки по списку вкладок — как у обычного tablist.
   const onKeyDown = (e: KeyboardEvent) => {
     const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
@@ -75,6 +95,7 @@ export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSetting
       </div>
       {TABS.map((t) => (
         <div key={t.id} className="tabs__panel" role="tabpanel"
+          ref={t.id === "transcript" ? transcriptPanel : undefined}
           id={`${base}-${t.id}-panel`} aria-labelledby={`${base}-${t.id}`} hidden={tab !== t.id}>
           {opened.has(t.id) && panels[t.id]()}
         </div>

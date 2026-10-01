@@ -74,6 +74,21 @@ export type Recording = {
   kb_export?: KbExportRecord | null;
 };
 
+/** Фрагмент реплики из поиска по библиотеке: `t` — начало реплики, `ranges` — что подсветить в `snippet`. */
+export type SearchHit = { t: number; speaker: string; snippet: string; ranges: [number, number][] };
+
+/** `GET /search`: карточка записи и что в ней нашлось (`total` — подходящих реплик). */
+export type SearchItem = Recording & {
+  date: string | null;
+  hits: SearchHit[];
+  total: number;
+  /** Запрос нашёлся в названии. */
+  title_match: boolean;
+};
+
+/** Элемент списка записей: при поиске — с фрагментами. */
+export type LibraryItem = Recording & Partial<Pick<SearchItem, "hits" | "total" | "title_match">>;
+
 export type KbExportRecord = {
   path?: string | null;
   at?: number | null;

@@ -11,7 +11,7 @@
 import { inTauri, invoke } from "./shell";
 import type {
   AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveLine, LiveState, LiveStatus, Person, PersonCard,
-  ProviderCheck, QaItem, Recording, Sample, Snapshot, Summary, Transcript,
+  ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, Summary, Transcript,
 } from "./types";
 
 export type Endpoint = {
@@ -81,6 +81,9 @@ export function getRecordings(ep: Endpoint, q?: string) {
   const qs = q ? `?q=${enc(q)}` : "";
   return json<{ root: string; items: Recording[] }>(ep, `/recordings${qs}`);
 }
+/** Поиск по тексту встреч и названиям (правила — lib/search.ts): записи с фрагментами. */
+export const searchLibrary = (ep: Endpoint, q: string) =>
+  json<{ items: SearchItem[] }>(ep, `/search?q=${enc(q)}`);
 export const getRecording = (ep: Endpoint, id: string) =>
   json<Recording & { transcript: Transcript | null }>(ep, `/recordings/${enc(id)}`);
 export const patchRecording = (ep: Endpoint, id: string, patch: { title: string | null }) =>

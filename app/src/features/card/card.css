@@ -132,3 +132,32 @@ button.turn__speaker:hover { text-decoration: underline; }
 .live-card .live-digest .md { max-height: 30vh; overflow-y: auto; }
 .live-card__feed { flex: 1; min-height: 120px; }
 .live-card__ask { padding-top: 10px; border-top: 1px solid var(--line); }
+
+/* Поиск по расшифровке (TranscriptView): поле прилипает к верху прокрутки. */
+.find {
+  position: sticky; top: -8px; z-index: 2; display: flex; align-items: center; gap: 6px;
+  margin: -8px 0 4px; padding: 8px 0; background: var(--bg);
+}
+.find__input {
+  flex: 1; min-width: 0; height: 28px; padding: 0 10px;
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--line-2); border-radius: var(--r-md); font: inherit;
+}
+.find__input::placeholder { color: var(--text-3); }
+.find__input:focus { outline: none; border-color: var(--accent); }
+.find__count { flex: none; min-width: 64px; color: var(--text-2); font-size: 12px; text-align: right; white-space: nowrap; }
+.find__count--none { color: var(--amber); }
+.find__nav {
+  flex: none; width: 28px; height: 28px; border: 1px solid var(--line-2); border-radius: var(--r-md);
+  background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer;
+  transition: background var(--t);
+}
+.find__nav:hover:not(:disabled) { background: var(--surface-hover); }
+.find__nav:disabled { opacity: 0.4; cursor: default; }
+/* Совпадения: все — мягкой подложкой цвета акцента, текущее — заливкой и рамкой. */
+mark.hit {
+  padding: 0 1px; border-radius: 3px; color: inherit;
+  background: rgba(94, 106, 210, 0.28); box-shadow: 0 0 0 1px rgba(94, 106, 210, 0.35);
+}
+mark.hit--current, .turn__text.hit--current mark.hit { background: var(--accent); color: #fff; box-shadow: 0 0 0 1px var(--accent-hover); }
+.turn__text.hit--current { box-shadow: -3px 0 0 var(--accent); padding-left: 6px; }

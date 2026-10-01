@@ -17,7 +17,8 @@ import { CardTabs } from "./CardTabs";
 import { CardHeader } from "./CardHeader";
 import { LiveCard } from "./LiveCard";
 import { SpeakerPopover } from "./SpeakerPopover";
-import { Turns, type PersonColor } from "./Turns";
+import { TranscriptView, type FindRequest } from "./TranscriptView";
+import type { PersonColor } from "./Turns";
 import "./card.css";
 
 type Loaded = Recording & { transcript: Transcript | null };
@@ -34,7 +35,7 @@ const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 
 export function RecordingCard({
   id, endpoint, jobs = NO_JOBS, snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
-  onOpenSettings,
+  onOpenSettings, find,
 }: {
   id: string;
   endpoint: Endpoint;
@@ -47,6 +48,8 @@ export function RecordingCard({
   onPeopleChanged?: () => void;
   /** Перейти в настройки; `section` — раздел, например "assistant". */
   onOpenSettings?: (section: string) => void;
+  /** Открыть с запросом в поиске по расшифровке (из поиска по записям). */
+  find?: FindRequest | null;
 }) {
   const [rec, setRec] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -183,7 +186,8 @@ export function RecordingCard({
       body = (
         <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
           transcript={turns.length ? (
-            <Turns turns={turns} colors={colors} playable={playable} onPlay={play} onNameSpeaker={nameSpeaker} />
+            <TranscriptView turns={turns} colors={colors} playable={playable} onPlay={play}
+              onNameSpeaker={nameSpeaker} find={find} />
           ) : <EmptyState title="В записи нет речи" />} />
       );
       break;

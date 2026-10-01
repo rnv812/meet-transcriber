@@ -94,6 +94,10 @@ class FakeState:
         self.calls.append(("recordings", limit, q))
         return {"items": []}
 
+    def search(self, q, limit=200):
+        self.calls.append(("search", q, limit))
+        return {"items": [{"id": "r1", "hits": [], "total": 0}]}
+
     def delete_recording(self, rid):
         self.calls.append(("delete", rid))
         return {"ok": True}
@@ -398,6 +402,12 @@ def test_hotwords_routes(server):
 def test_recordings_search_passes_query(server):
     _get(server, "/recordings?q=cmdb")
     assert ("recordings", 200, "cmdb") in server.state_obj.calls
+
+
+def test_full_text_search_route(server):
+    got = _get(server, "/search?q=%22%D0%BF%D0%BB%D0%B0%D0%BD%22%20%D0%B1%D1%8E%D0%B4%D0%B6%D0%B5%D1%82&limit=5")
+    assert got["items"][0]["id"] == "r1"
+    assert ("search", '"план" бюджет', 5) in server.state_obj.calls
 
 
 def test_person_card_route(server):

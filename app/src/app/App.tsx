@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLibrary } from "../state/useLibrary";
 import { usePeople } from "../state/usePeople";
 import { useResident } from "../state/useResident";
@@ -6,6 +6,7 @@ import { RecordingsList } from "../features/recordings/RecordingsList";
 import { VoicesPane } from "../features/voices/VoicesPane";
 import { SettingsPane } from "../features/settings/SettingsPane";
 import { RecordingCard } from "../features/card/RecordingCard";
+import type { FindRequest } from "../features/card/TranscriptView";
 import { initialRecording, initialSection, onOpenRecording, onOpenSection } from "../lib/shell";
 import { EmptyState, OfflineState } from "../ui/EmptyState";
 import { Button } from "../ui/Button";
@@ -23,6 +24,9 @@ export function App() {
   const [section, setSection] = useState<Section>(() => (settingsPart ? "settings" : "recordings"));
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<string | null>(() => initialRecording());
+  /** Запись открыта из поиска по записям: тот же запрос — в поиск по расшифровке. */
+  const [find, setFind] = useState<FindRequest | null>(null);
+  const findN = useRef(0);
   const resident = useResident();
   const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick);
   const { people, refresh: refreshPeople, avatarVersion, bumpAvatar } = usePeople(resident.endpoint ?? null, resident.doneTick);
@@ -30,7 +34,15 @@ export function App() {
   const gate = useWizardGate(resident.status, resident.endpoint ?? null);
   const recording = resident.snapshot?.status === "recording" || resident.snapshot?.live?.active === true;
 
-  const openRecording = (id: string) => { setSelected(id); setSection("recordings"); };
+  const openRecording = (id: string) => { setSelected(id); setFind(null); setSection("recordings"); };
+  const selectFromList = (id: string) => {
+    setSelected(id);
+    setFind(q.trim() ? { q, t: null, n: ++findN.current } : null);
+  };
+  const openHit = (id: string, t: number) => {
+    setSelected(id);
+    setFind({ q, t, n: ++findN.current });
+  };
   const select = (s: Section) => { setSettingsPart(undefined); setSection(s); };
   // Номер растёт с каждой просьбой: повторная возвращает в раздел, даже если он уже запрошен.
   const openSettings = (part: string) => {
@@ -47,7 +59,7 @@ export function App() {
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let gone = false;
-    onOpenRecording((id) => { setSelected(id); setSection("recordings"); })
+    onOpenRecording((id) => { setSelected(id); setFind(null); setSection("recordings"); })
       .then((off) => { if (gone) off(); else unlisten = off; })
       .catch((cause) => console.warn("open-recording:", cause));
     return () => { gone = true; unlisten?.(); };
@@ -94,7 +106,8 @@ export function App() {
             <div className="pane-list" data-pane="list">
               {offline ? offlineList : <RecordingsList
                 selected={selected}
-                onSelect={setSelected}
+                onSelect={selectFromList}
+                onOpenHit={openHit}
                 library={library}
                 resident={resident}
                 q={q}
@@ -129,6 +142,7 @@ export function App() {
                 avatarVersion={avatarVersion}
                 onPeopleChanged={() => void refreshPeople()}
                 onOpenSettings={openSettings}
+                find={find}
                 onChanged={() => void library.refresh()}
                 onDeleted={() => { setSelected(null); void library.refresh(); }}
               />

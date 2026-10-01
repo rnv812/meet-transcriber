@@ -1,13 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { type Endpoint, getJobs, getRecordings } from "../lib/api";
+import { ApiError, type Endpoint, getJobs, getRecordings, searchLibrary } from "../lib/api";
 import { errorText } from "../lib/format";
-import type { Job, Recording } from "../lib/types";
+import type { Job, LibraryItem } from "../lib/types";
 
 const SEARCH_DELAY_MS = 250;
 
+/** С запросом — поиск по тексту встреч (с фрагментами); резидент без него — прежний поиск по названию и тексту. */
+async function find(ep: Endpoint, q: string): Promise<LibraryItem[]> {
+  if (!q.trim()) return (await getRecordings(ep)).items;
+  try {
+    return (await searchLibrary(ep, q)).items;
+  } catch (cause) {
+    if (cause instanceof ApiError && cause.status === 404) return (await getRecordings(ep, q)).items;
+    throw cause;
+  }
+}
+
 export type Library = {
-  items: Recording[];
+  items: LibraryItem[];
   jobs: Job[];
   loading: boolean;
   error: string | null;
@@ -15,7 +26,7 @@ export type Library = {
 };
 
 export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0): Library {
-  const [items, setItems] = useState<Recording[]>([]);
+  const [items, setItems] = useState<LibraryItem[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,9 +39,9 @@ export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0): Lib
     const mine = ++seq.current;
     setLoading(true);
     try {
-      const [recs, jobList] = await Promise.all([getRecordings(ep, qRef.current || undefined), getJobs(ep)]);
+      const [recs, jobList] = await Promise.all([find(ep, qRef.current), getJobs(ep)]);
       if (mine !== seq.current) return; // пришёл более новый запрос
-      setItems(recs.items);
+      setItems(recs);
       setJobs(jobList.items);
       setError(null);
     } catch (cause) {

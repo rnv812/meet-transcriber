@@ -680,6 +680,12 @@ class TrayControl:
             items = library.listing(root, limit=limit)
         return {"root": str(root), "items": items}
 
+    def search(self, q: str, limit: int = 200) -> dict:
+        """Поиск по тексту встреч (и названиям): записи с фрагментами реплик."""
+        from meet import search
+
+        return {"items": search.search_library(self._root(), q or "", limit=limit)}
+
     def delete_recording(self, recording_id: str) -> dict:
         """Удалить папку записи целиком. Отказ, пока в неё пишут или над ней
         работает расшифровка/импорт: иначе задача упала бы на исчезнувших файлах."""

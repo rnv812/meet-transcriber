@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from meet import events, jobs, settings, tray, tray_control, watch
+from meet import events, jobs, library, settings, tray, tray_control, watch
 
 
 def _write_config(root, data: dict) -> None:
@@ -495,6 +495,23 @@ def test_update_recording_sets_title(control_state, app, monkeypatch, tmp_path):
         "error": "пустое название"}
     assert control_state.update_recording("../../etc", {"title": "x"}) == {
         "error": "записи нет"}
+
+
+def test_search_finds_text_across_recordings(control_state, monkeypatch, tmp_path):
+    from meet import search
+
+    search.clear_cache()
+    root = tmp_path / "recordings"
+    folder = root / "2026-09-30_16-04"
+    folder.mkdir(parents=True)
+    (folder / "sys.opus").write_bytes(b"x")
+    library.write_transcript(folder, {"version": 1, "segments": [
+        {"start": 3.0, "end": 4.0, "speaker": "Анна", "text": "Бюджет утвердили."}]})
+    monkeypatch.setattr(control_state, "_root", lambda: root)
+    got = control_state.search("бюджета")
+    assert [i["id"] for i in got["items"]] == ["2026-09-30_16-04"]
+    assert got["items"][0]["hits"][0]["ranges"] == [[0, 6]]
+    assert control_state.search("") == {"items": []}
 
 
 def test_update_recording_rejects_stray_folder(control_state, app, monkeypatch, tmp_path):

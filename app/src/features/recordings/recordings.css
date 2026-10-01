@@ -25,15 +25,33 @@
 }
 .search::placeholder { color: var(--text-3); }
 .search:focus { outline: none; border-color: var(--accent); }
-.rec-list__items { display: flex; flex-direction: column; gap: 2px; }
-.rec-item {
-  padding: 8px 10px; border-radius: var(--r-md); cursor: pointer;
-  transition: background var(--t);
-}
+.rec-list__items { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.rec-item { position: relative; border-radius: var(--r-md); transition: background var(--t); }
 .rec-item:hover { background: var(--surface-hover); }
-.rec-item[aria-selected="true"] { background: var(--surface-2); }
-.rec-item__title { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rec-item--selected, .rec-item--selected:hover { background: var(--surface-2); }
+.rec-item__main {
+  display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--r-md);
+  background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.rec-item__title { display: block; color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rec-item__meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; font-size: 12px; }
+/* Фрагменты из поиска по тексту: под записью, до трёх. */
+.rec-hits { margin: -2px 0 0; padding: 0 6px 6px; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.rec-hit {
+  display: flex; gap: 8px; width: 100%; padding: 4px; border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--text-2); font: inherit; font-size: 12px; line-height: 1.4; text-align: left; cursor: pointer;
+}
+.rec-hit:hover { background: var(--surface-hover); color: var(--text); }
+.rec-hit__time { flex: none; color: var(--text-3); }
+.rec-hit__text {
+  min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.rec-hit__who { color: var(--text); }
+.rec-hit mark.hit {
+  padding: 0 1px; border-radius: 3px; color: var(--text);
+  background: rgba(94, 106, 210, 0.32);
+}
+.rec-hits__more { padding: 0 10px 6px; font-size: 11px; }
 
 .topbar {
   height: 40px; flex: none; display: flex; align-items: center; justify-content: flex-end;

@@ -35,6 +35,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     devices() -> dict                    микрофоны и выводы для настроек «Звук»
     test_device(body) -> dict            ~2 с с устройства → пик (409 при записи)
     recordings(limit, q) -> dict         библиотека записей (q — поиск)
+    search(q, limit) -> dict             поиск по тексту встреч с фрагментами
     delete_recording(id) -> dict         удалить запись
     get_hotwords() / put_hotwords(body)  список слов распознавания
     person(name) -> dict                 карточка человека
@@ -685,6 +686,9 @@ _ROUTES = {
     ("POST", "/auto-record"): lambda h, p: _server_of(h).state.set_auto_record(h._body()),
     ("GET", "/recordings"): lambda h, p: _server_of(h).state.recordings(
         limit=_int_param(p, "limit", 200), q=(p.get("q") or [""])[0]
+    ),
+    ("GET", "/search"): lambda h, p: _server_of(h).state.search(
+        (p.get("q") or [""])[0], limit=_int_param(p, "limit", 200)
     ),
     ("GET", "/hotwords"): lambda h, p: _server_of(h).state.get_hotwords(),
     ("PUT", "/hotwords"): lambda h, p: _server_of(h).state.put_hotwords(h._body()),
