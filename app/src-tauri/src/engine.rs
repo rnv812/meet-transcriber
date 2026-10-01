@@ -11,6 +11,10 @@
 // Шаги установки — те же, что `meet.engine.uv_steps` в Python: тест сверяет
 // их с фикстурами tests/fixtures/uv_steps_*.json.
 //
+// Маркер установки хранит хэш колеса meet: установщик, пересобранный под той
+// же версией (rc → финальная), при старте переставляет только пакет meet
+// (`Upkeep`), резидент ждёт этого и поднимается уже из нового кода.
+//
 // Повторный запуск установки после сбоя просто повторяет все шаги: скачанное
 // лежит в кэше uv (`UV_CACHE_DIR` по умолчанию), второй раз из сети идёт
 // только недокачанное.
@@ -31,6 +35,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::logs::{self, shell_log};
 use crate::resident::{self, Supervisor};
+use crate::tray;
 
 /// Индексы колёс torch — как `TORCH_CUDA_INDEX`/`TORCH_CPU_INDEX` в
 /// `meet/engine.py` (cu128: без неё не работают карты RTX 50xx).
@@ -212,15 +217,40 @@ struct Marker {
     version: String,
     profile: String,
     installed_at: String,
+    /// SHA-256 колеса meet, из которого собран движок. Пересобранный
+    /// установщик той же версии (rc1 и финальная 0.1.0 делят `engine\0.1.0`)
+    /// несёт другое колесо — по этому полю оболочка видит, что код движка
+    /// устарел. У маркеров до него поля нет (`None`) — тоже «устарел».
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wheel_sha256: Option<String>,
 }
 
-pub fn marker_json(version: &str, profile: &str, installed_at: &str) -> String {
+pub fn marker_json(
+    version: &str,
+    profile: &str,
+    installed_at: &str,
+    wheel_sha256: Option<&str>,
+) -> String {
     let marker = Marker {
         version: version.into(),
         profile: profile.into(),
         installed_at: installed_at.into(),
+        wheel_sha256: wheel_sha256.map(String::from),
     };
     serde_json::to_string_pretty(&marker).unwrap_or_default()
+}
+
+/// SHA-256 файла строкой из 64 шестнадцатеричных цифр.
+pub fn file_sha256(path: &Path) -> io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    io::copy(&mut file, &mut hasher)?;
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 fn read_marker(env_dir: &Path) -> Option<Marker> {
@@ -232,6 +262,84 @@ fn read_marker(env_dir: &Path) -> Option<Marker> {
 pub fn is_installed(env_dir: &Path, version: &str) -> bool {
     launcher(env_dir).is_file()
         && read_marker(env_dir).is_some_and(|marker| marker.version == version)
+}
+
+fn known_profile(profile: &str) -> bool {
+    matches!(profile, "cuda" | "cpu")
+}
+
+/// Обслуживание движка при старте оболочки — без мастера и без окна.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Upkeep {
+    /// Делать нечего: движок свежий, либо его нет и ставить его будет мастер.
+    Nothing,
+    /// Движок этой версии стоит, но собран из другого колеса (пересобранный
+    /// установщик той же версии): переставить только пакет meet — секунды,
+    /// всё остальное уже на месте.
+    RefreshWheel { profile: String },
+}
+
+impl Upkeep {
+    /// Резидент ждёт конца обслуживания: иначе он поднялся бы из старого
+    /// кода, чтобы через секунды быть погашенным.
+    pub fn holds_resident(&self) -> bool {
+        !matches!(self, Upkeep::Nothing)
+    }
+}
+
+/// Что делать с движком при старте. `installed` — профиль и хэш колеса из
+/// маркера установленного движка этой версии (`None` — не установлен),
+/// `bundled_wheel` — хэш колеса в ресурсах (`None` — ресурсов нет, dev).
+/// Только в релизе: dev-сборка движок не трогает.
+pub fn upkeep_decision(
+    release: bool,
+    installed: Option<(&str, Option<&str>)>,
+    bundled_wheel: Option<&str>,
+) -> Upkeep {
+    if !release {
+        return Upkeep::Nothing;
+    }
+    match (installed, bundled_wheel) {
+        (Some((profile, recorded)), Some(bundled))
+            if recorded != Some(bundled) && known_profile(profile) =>
+        {
+            Upkeep::RefreshWheel {
+                profile: profile.to_string(),
+            }
+        }
+        _ => Upkeep::Nothing,
+    }
+}
+
+/// Как ставить.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallMode {
+    /// Все шаги; `fresh` — сперва удалить окружение.
+    Full { fresh: bool },
+    /// Только последний шаг (колесо meet) с `--reinstall-package`: та же
+    /// версия, другое колесо — uv иначе счёл бы пакет уже стоящим.
+    RefreshWheel,
+}
+
+/// Имя пакета meet для `--reinstall-package`.
+const PACKAGE: &str = "meet-transcriber";
+
+/// Шаги установки с их номерами из `uv_steps` (окну — «шаг N из 4»).
+pub fn install_plan(steps: Vec<Vec<String>>, mode: InstallMode) -> Vec<(usize, Vec<String>)> {
+    let mut numbered = steps
+        .into_iter()
+        .enumerate()
+        .map(|(index, argv)| (index + 1, argv));
+    match mode {
+        InstallMode::Full { .. } => numbered.collect(),
+        InstallMode::RefreshWheel => numbered
+            .next_back()
+            .map(|(step, mut argv)| {
+                argv.extend(["--reinstall-package".to_string(), PACKAGE.to_string()]);
+                vec![(step, argv)]
+            })
+            .unwrap_or_default(),
+    }
 }
 
 /// ГБ для человека: с точностью до десятой, вниз (4,96 — «4,9», не «5»),
@@ -705,8 +813,12 @@ fn app_version(app: &AppHandle) -> String {
 /// Поставить движок версии приложения (`fresh` — с нуля, удалив прежнее
 /// окружение). Блокирует на минуты: только из рабочего потока.
 pub fn install(app: &AppHandle, profile: &str, fresh: bool) -> Result<(), String> {
+    install_with(app, profile, InstallMode::Full { fresh })
+}
+
+pub fn install_with(app: &AppHandle, profile: &str, mode: InstallMode) -> Result<(), String> {
     let _busy = begin_install()?;
-    if !matches!(profile, "cuda" | "cpu") {
+    if !known_profile(profile) {
         return Err(format!("Неизвестный профиль движка: {profile}"));
     }
     let data = resident::data_dir();
@@ -714,10 +826,12 @@ pub fn install(app: &AppHandle, profile: &str, fresh: bool) -> Result<(), String
     let env = env_dir(&data, &version);
     let resources = resource_dir_with(app, UV).ok_or(NO_UV)?;
     let wheel = find_wheel(&resources, &version).ok_or(NO_WHEEL)?;
+    let fresh = mode == InstallMode::Full { fresh: true };
     // Повторная установка: места не хватает — отказ раньше, чем гасить
     // работающий резидент. Переустановка проверяет место после удаления
-    // окружения (`prepare`): оно само его и освобождает.
-    if !fresh {
+    // окружения (`prepare`): оно само его и освобождает. Замена колеса
+    // meet занимает мегабайты — её не проверяем.
+    if mode == (InstallMode::Full { fresh: false }) {
         check_space(&data, profile)?;
     }
     let _lock = InstallLock::acquire(&engine_root(&data))?;
@@ -725,15 +839,24 @@ pub fn install(app: &AppHandle, profile: &str, fresh: bool) -> Result<(), String
     // Резидент из этого окружения держит его файлы: uv не пересоздаст venv
     // под работающим python.exe, а удалить папку не даст Windows.
     let stopped = supervisor.stop_if_from(&env);
+    // Хэш колеса — в маркер: по нему следующий старт узнает пересборку той
+    // же версии. Не посчитался — маркер без хэша, колесо переставится при
+    // следующем старте (лишние секунды, не поломка).
+    let wheel_sha256 = file_sha256(&wheel)
+        .map_err(|error| shell_log!("хэш колеса {} не посчитался: {error}", wheel.display()))
+        .ok();
     let result = prepare(&data, &env, profile, fresh).and_then(|()| {
         run_steps(
             app,
-            &data,
-            &env,
-            &version,
-            profile,
+            &Target {
+                data_dir: &data,
+                env: &env,
+                version: &version,
+                profile,
+            },
             &resources.join(UV),
-            &wheel,
+            (&wheel, wheel_sha256.as_deref()),
+            mode,
         )
     });
     match &result {
@@ -786,15 +909,27 @@ fn prepare(data_dir: &Path, env: &Path, profile: &str, fresh: bool) -> Result<()
         .map_err(|error| format!("Не удалось создать папку движка: {error}"))
 }
 
+/// Куда и что ставится.
+struct Target<'a> {
+    data_dir: &'a Path,
+    env: &'a Path,
+    version: &'a str,
+    profile: &'a str,
+}
+
 fn run_steps(
     app: &AppHandle,
-    data_dir: &Path,
-    env: &Path,
-    version: &str,
-    profile: &str,
+    target: &Target,
     uv: &Path,
-    wheel: &Path,
+    (wheel, wheel_sha256): (&Path, Option<&str>),
+    mode: InstallMode,
 ) -> Result<(), String> {
+    let Target {
+        data_dir,
+        env,
+        version,
+        profile,
+    } = *target;
     // Ограничения версий лежат рядом с uv в ресурсах установщика.
     let constraints = uv
         .parent()
@@ -808,21 +943,30 @@ fn run_steps(
         constraints.as_deref(),
     );
     let of = steps.len();
+    let plan = install_plan(steps, mode);
     let envs = uv_env(data_dir);
     let cwd = engine_root(data_dir);
     let mut log = InstallLog::open(data_dir);
     log.write(&format!(
-        "--- установка движка {version} ({profile}) в {}",
+        "--- {} движка {version} ({profile}) в {}",
+        if mode == InstallMode::RefreshWheel {
+            "замена колеса meet"
+        } else {
+            "установка"
+        },
         env.display()
     ));
     let progress = |step: usize, line: String| {
         let _ = app.emit(PROGRESS_EVENT, Progress { step, of, line });
     };
-    for (index, argv) in steps.iter().enumerate() {
-        let step = index + 1;
-        let title = STEP_TITLES.get(index).copied().unwrap_or("Установка");
+    let supervisor = app.state::<Supervisor>();
+    for (step, argv) in &plan {
+        let step = *step;
+        let title = STEP_TITLES.get(step - 1).copied().unwrap_or("Установка");
         log.write(&format!("шаг {step} из {of}: {}", argv.join(" ")));
         progress(step, title.to_string());
+        // Фоновое обслуживание движка показывает шаг в подсказке трея.
+        supervisor.engine_step(step, of);
         let mut tail = VecDeque::new();
         let mut throttle = Throttle::new(LINE_GAP);
         let outcome = run_streamed(argv, &envs, &cwd, |line| {
@@ -851,13 +995,79 @@ fn run_steps(
             return Err(format!("Установка движка прервалась: {message}"));
         }
     }
-    let marker = marker_json(version, profile, &logs::utc_now());
+    let marker = marker_json(version, profile, &logs::utc_now(), wheel_sha256);
     let staged = env.join(format!("{MARKER}.tmp"));
     fs::write(&staged, marker)
         .and_then(|()| fs::rename(&staged, env.join(MARKER)))
         .map_err(|error| format!("Не удалось записать отметку установки: {error}"))?;
     log.write("движок установлен");
     Ok(())
+}
+
+/// Обслуживание движка для этого запуска — из `setup`, до надзора: от него
+/// зависит, ждать ли резиденту (`Upkeep::holds_resident`).
+pub fn plan_upkeep(app: &AppHandle) -> Upkeep {
+    let data = resident::data_dir();
+    let version = app_version(app);
+    let env = env_dir(&data, &version);
+    let marker = is_installed(&env, &version)
+        .then(|| read_marker(&env))
+        .flatten();
+    let bundled = resource_dir_with(app, UV)
+        .and_then(|resources| find_wheel(&resources, &version))
+        .and_then(|wheel| file_sha256(&wheel).ok());
+    upkeep_decision(
+        !cfg!(debug_assertions),
+        marker
+            .as_ref()
+            .map(|marker| (marker.profile.as_str(), marker.wheel_sha256.as_deref())),
+        bundled.as_deref(),
+    )
+}
+
+/// Обслужить движок в своём потоке. Резидент, придержанный до конца
+/// обслуживания (`Supervisor::start(.., held)`), поднимается после него —
+/// удачного или нет.
+pub fn run_upkeep_in_background(app: &AppHandle, upkeep: Upkeep) {
+    let (profile, mode) = match upkeep {
+        Upkeep::Nothing => return,
+        Upkeep::RefreshWheel { profile } => {
+            shell_log!("движок собран из другого колеса meet — переставляю пакет meet");
+            (profile, InstallMode::RefreshWheel)
+        }
+    };
+    let handle = app.clone();
+    let spawned = thread::Builder::new()
+        .name("meet-engine-upkeep".into())
+        .spawn(move || {
+            let result = install_with(&handle, &profile, mode);
+            upkeep_finished(&handle, result);
+        });
+    if let Err(error) = spawned {
+        shell_log!("поток обслуживания движка не запустился: {error}");
+        app.state::<Supervisor>().respawn(app);
+    }
+}
+
+/// Удача резидент уже подняла (`install_with` → `respawn`). Сбой: поднять
+/// надзор здесь (без движка он встанет в «движок не установлен», с прежним —
+/// запустит его) и сказать одним важным уведомлением: окно с мастером
+/// человек иначе не откроет — флаг мастера стоит, а автозапуск окон не
+/// показывает.
+fn upkeep_finished(app: &AppHandle, result: Result<(), String>) {
+    let Err(error) = result else {
+        return;
+    };
+    shell_log!("обслуживание движка не удалось: {error}");
+    app.state::<Supervisor>().respawn(app);
+    tray::notify(
+        app,
+        vec![tray::Notice {
+            title: tray::ENGINE_UPDATE_FAILED.into(),
+            body: "Откройте окно из трея".into(),
+            recording: None,
+        }],
+    );
 }
 
 static CLEANED: AtomicBool = AtomicBool::new(false);
@@ -1080,12 +1290,12 @@ mod tests {
         assert!(!is_installed(&env, "0.2.0"), "без маркера — недостроено");
         tree.file(
             r"0.2.0\installed.json",
-            &marker_json("0.1.0", "cuda", "2026-10-01 03:00:00Z"),
+            &marker_json("0.1.0", "cuda", "2026-10-01 03:00:00Z", None),
         );
         assert!(!is_installed(&env, "0.2.0"), "маркер другой версии");
         tree.file(
             r"0.2.0\installed.json",
-            &marker_json("0.2.0", "cuda", "2026-10-01 03:00:00Z"),
+            &marker_json("0.2.0", "cuda", "2026-10-01 03:00:00Z", None),
         );
         assert!(is_installed(&env, "0.2.0"));
         tree.file(r"0.2.0\installed.json", "мусор");
@@ -1094,11 +1304,89 @@ mod tests {
 
     #[test]
     fn marker_carries_version_profile_and_time() {
-        let raw = marker_json("0.2.0", "cpu", "2026-10-01 03:00:00Z");
+        let raw = marker_json("0.2.0", "cpu", "2026-10-01 03:00:00Z", Some("ab12"));
         let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(value["version"], "0.2.0");
         assert_eq!(value["profile"], "cpu");
         assert_eq!(value["installed_at"], "2026-10-01 03:00:00Z");
+        assert_eq!(value["wheel_sha256"], "ab12");
+    }
+
+    #[test]
+    fn marker_without_wheel_hash_still_reads_as_installed() {
+        // Маркер rc1 — без хэша колеса: движок установлен, хэш неизвестен.
+        let tree = TempDir::new("old-marker");
+        tree.file(r"0.1.0\Scripts\meet-tray.exe", "");
+        tree.file(
+            r"0.1.0\installed.json",
+            r#"{"version": "0.1.0", "profile": "cuda", "installed_at": "x"}"#,
+        );
+        let env = tree.0.join("0.1.0");
+        assert!(is_installed(&env, "0.1.0"));
+        assert_eq!(read_marker(&env).unwrap().wheel_sha256, None);
+    }
+
+    #[test]
+    fn file_hash_is_sha256_hex() {
+        let tree = TempDir::new("sha");
+        let file = tree.file("a.txt", "abc");
+        assert_eq!(
+            file_sha256(&file).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert!(file_sha256(&tree.0.join("missing")).is_err());
+    }
+
+    #[test]
+    fn same_version_rebuild_refreshes_only_the_meet_wheel() {
+        let refresh = |profile: &str| Upkeep::RefreshWheel {
+            profile: profile.into(),
+        };
+        // rc1 → финальная 0.1.0: маркер без хэша, колесо в ресурсах другое.
+        assert_eq!(
+            upkeep_decision(true, Some(("cuda", None)), Some("new")),
+            refresh("cuda")
+        );
+        assert_eq!(
+            upkeep_decision(true, Some(("cpu", Some("old"))), Some("new")),
+            refresh("cpu")
+        );
+        // То же колесо — делать нечего.
+        assert_eq!(
+            upkeep_decision(true, Some(("cuda", Some("new"))), Some("new")),
+            Upkeep::Nothing
+        );
+        // Движка нет — его ставит мастер.
+        assert_eq!(upkeep_decision(true, None, Some("new")), Upkeep::Nothing);
+        // Колесо в ресурсах не нашлось/не прочлось — не трогаем.
+        assert_eq!(
+            upkeep_decision(true, Some(("cuda", Some("old"))), None),
+            Upkeep::Nothing
+        );
+        // Неизвестный профиль в маркере — не угадываем.
+        assert_eq!(
+            upkeep_decision(true, Some(("rocm", None)), Some("new")),
+            Upkeep::Nothing
+        );
+        // Dev-сборка движок не обслуживает.
+        assert_eq!(
+            upkeep_decision(false, Some(("cuda", None)), Some("new")),
+            Upkeep::Nothing
+        );
+        assert!(refresh("cuda").holds_resident());
+        assert!(!Upkeep::Nothing.holds_resident());
+    }
+
+    #[test]
+    fn wheel_refresh_runs_only_the_last_step_with_reinstall() {
+        let steps = uv_steps("uv.exe", r"C:\env", WHEEL, "cuda", Some(r"C:\r\c.txt"));
+        let full = install_plan(steps.clone(), InstallMode::Full { fresh: false });
+        assert_eq!(full.len(), 4);
+        assert_eq!(full[2], (3, steps[2].clone()));
+        let refresh = install_plan(steps.clone(), InstallMode::RefreshWheel);
+        let mut expected = steps[3].clone();
+        expected.extend(["--reinstall-package".into(), "meet-transcriber".into()]);
+        assert_eq!(refresh, vec![(4, expected)]);
     }
 
     #[test]

@@ -551,6 +551,7 @@ pub fn resident_status(app: AppHandle) -> String {
         ResidentStatus::ExternalNoApi => "external-no-api",
         ResidentStatus::Failed { .. } => "failed",
         ResidentStatus::EngineMissing => "engine-missing",
+        ResidentStatus::EngineUpdating { .. } => "engine-updating",
         ResidentStatus::Quitting => "quitting",
     }
     .to_string()

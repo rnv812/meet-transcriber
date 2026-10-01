@@ -334,6 +334,12 @@ pub enum ResidentStatus {
     /// Релиз без движка своей версии (первый запуск, обновление): резидента
     /// ещё нет, его поставит мастер в окне. Не сбой — без уведомления.
     EngineMissing,
+    /// Оболочка обслуживает движок в фоне (`engine::Upkeep`), резидент ждёт
+    /// конца: `step` из `of` — идущий шаг установки (0 — ещё не начат).
+    EngineUpdating {
+        step: usize,
+        of: usize,
+    },
     /// «Выход»: резидент сохраняет запись и гасится, затем выйдет оболочка.
     Quitting,
 }
@@ -423,10 +429,16 @@ impl EngineContext {
 
 impl Supervisor {
     /// Поднять надзор в фоновом потоке и положить его в состояние приложения.
-    pub fn start(app: &AppHandle) {
+    /// `held` — резидент ждёт обслуживания движка (`EngineUpdating`): надзор
+    /// начнётся с `respawn` по его окончании.
+    pub fn start(app: &AppHandle, held: bool) {
         let supervisor = Supervisor {
             inner: Arc::new(Inner {
-                status: Mutex::new(ResidentStatus::Starting),
+                status: Mutex::new(if held {
+                    ResidentStatus::EngineUpdating { step: 0, of: 0 }
+                } else {
+                    ResidentStatus::Starting
+                }),
                 child: Mutex::new(None),
                 running_from: Mutex::new(None),
                 quitting: AtomicBool::new(false),
@@ -435,7 +447,18 @@ impl Supervisor {
             }),
         };
         app.manage(supervisor.clone());
-        supervisor.supervise_in_background(app);
+        if !held {
+            supervisor.supervise_in_background(app);
+        }
+    }
+
+    /// Шаг фонового обслуживания движка — в статус (подсказка трея). Только
+    /// пока резидент его ждёт: установка из мастера статус не трогает.
+    pub fn engine_step(&self, step: usize, of: usize) {
+        let mut status = lock(&self.inner.status);
+        if matches!(*status, ResidentStatus::EngineUpdating { .. }) {
+            *status = ResidentStatus::EngineUpdating { step, of };
+        }
     }
 
     /// Поток надзора текущего поколения. Счётчик перезапусков живёт в нём,
@@ -949,7 +972,7 @@ mod tests {
         if let Some(version) = marker {
             std::fs::write(
                 tree.0.join(r"engine\0.2.0\installed.json"),
-                engine::marker_json(version, "cuda", "2026-10-01 03:00:00Z"),
+                engine::marker_json(version, "cuda", "2026-10-01 03:00:00Z", None),
             )
             .unwrap();
         }

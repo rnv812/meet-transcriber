@@ -67,10 +67,14 @@ fn main() {
             autostart::set_autostart
         ])
         .setup(|app| {
-            Supervisor::start(app.handle());
+            // Движок, собранный из другого колеса той же версии, обслуживается
+            // в фоне; резидент ждёт конца, чтобы не подняться из старого кода.
+            let upkeep = engine::plan_upkeep(app.handle());
+            Supervisor::start(app.handle(), upkeep.holds_resident());
             // Автозапуск, снятый деинсталлятором прежней версии, — вернуть.
             autostart::restore_at_startup(app.handle());
             tray::build(app)?;
+            engine::run_upkeep_in_background(app.handle(), upkeep);
             // Обычный запуск — только трей. `--recording <id>` (например, из
             // уведомления) — сразу окно на этой записи; первый запуск без
             // движка — окно с мастером; автозапуск при входе в Windows —

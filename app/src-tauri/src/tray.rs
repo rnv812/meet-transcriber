@@ -52,6 +52,8 @@ pub const RECORDING_SAVED: &str = "Запись сохранена";
 pub const TRANSCRIPT_READY: &str = "Расшифровка готова";
 pub const TRANSCRIPT_FAILED: &str = "Ошибка расшифровки";
 pub const RESIDENT_FAILED: &str = "Сервис записи не запускается";
+/// Фоновое обслуживание движка при старте (`engine::Upkeep`) не удалось.
+pub const ENGINE_UPDATE_FAILED: &str = "Не удалось обновить движок";
 pub const IMPORT_FAILED: &str = "Не удалось импортировать";
 pub const RECORDING_INTERRUPTED: &str = "Запись прервана";
 pub const START_FAILED: &str = "Не удалось начать запись";
@@ -75,6 +77,7 @@ const IMPORTANT: &[&str] = &[
     AUTO_RECORDING_STARTED,
     TRANSCRIPT_FAILED,
     RESIDENT_FAILED,
+    ENGINE_UPDATE_FAILED,
     IMPORT_FAILED,
     START_FAILED,
     STOP_FAILED,
@@ -637,6 +640,13 @@ pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
     }
     if *status == ResidentStatus::EngineMissing {
         return "meet — движок не установлен — откройте окно".to_string();
+    }
+    if let ResidentStatus::EngineUpdating { step, of } = *status {
+        return if step > 0 {
+            format!("meet — обновляю движок: шаг {step} из {of}")
+        } else {
+            "meet — обновляю движок".to_string()
+        };
     }
     let text = match view {
         None => "сервис записи не запущен".to_string(),
@@ -1573,6 +1583,20 @@ mod tests {
         assert!(!m.online);
         assert_eq!(m.log, None);
         assert!(!m.restart, "перезапускать нечего — движок ставит мастер");
+    }
+
+    #[test]
+    fn engine_update_shows_its_step_and_failure_is_important() {
+        let waiting = ResidentStatus::EngineUpdating { step: 0, of: 0 };
+        assert_eq!(tooltip(None, &waiting), "meet — обновляю движок");
+        let step = ResidentStatus::EngineUpdating { step: 3, of: 4 };
+        assert_eq!(tooltip(None, &step), "meet — обновляю движок: шаг 3 из 4");
+        let m = menu_state(None, &step);
+        assert!(!m.online);
+        assert_eq!(m.log, None);
+        assert!(!m.restart);
+        let failed = vec![notice(ENGINE_UPDATE_FAILED)];
+        assert_eq!(filter(failed.clone(), Level::Important), failed);
     }
 
     #[test]
