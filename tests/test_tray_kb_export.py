@@ -133,6 +133,17 @@ def test_auto_export_after_transcription(app, state, tmp_path, vault):
     assert (vault / "2026-09-30 - Планирование спринта" / "Транскрипт.md").exists()
 
 
+def test_playback_is_mixed_in_background_after_transcription_or_import(
+        app, state, tmp_path, _no_background_playback_mix):
+    """Первое «▶» без ожидания: сведение для плеера ставится сразу после
+    расшифровки и импорта (итоги дорожек не меняют)."""
+    folder = _folder(tmp_path)
+    _done(app, jobs.TRANSCRIBE, folder)
+    _done(app, jobs.IMPORT, folder)
+    _done(app, jobs.SUMMARY, folder)
+    assert _no_background_playback_mix == [folder, folder]
+
+
 def test_auto_export_after_import(app, state, tmp_path, vault):
     _write_config(tmp_path, {"meetings_dir": str(vault)})
     _done(app, jobs.IMPORT, _folder(tmp_path))

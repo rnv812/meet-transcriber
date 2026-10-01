@@ -26,7 +26,6 @@ import hashlib
 import os
 import re
 import shutil
-import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
@@ -46,7 +45,6 @@ FALLBACK_TITLE = "Встреча"
 # Пример для предпросмотра шаблона, когда в библиотеке ещё нет записей.
 SAMPLE_TITLE = "Планирование спринта"
 SAMPLE_START = datetime(2026, 9, 30, 10, 0)
-MIX_TIMEOUT_S = 1800
 
 
 # --- шаблоны ---------------------------------------------------------------------
@@ -247,28 +245,23 @@ def _fresh(target: Path, sources: list[Path]) -> bool:
         return False
 
 
-def mix_tracks(a: Path, b: Path, out: Path) -> None:
-    """Свести две дорожки в одну (Ogg/Opus) через ffmpeg."""
-    if shutil.which("ffmpeg") is None:
-        raise RuntimeError("ffmpeg не найден — запись не выгружена")
-    proc = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(a), "-i", str(b),
-         "-filter_complex", "amix=inputs=2:duration=longest", "-c:a", "libopus",
-         "-b:a", "48k", "-f", "ogg", str(out)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=MIX_TIMEOUT_S, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg не свёл дорожки: {(proc.stderr or '').strip()[-300:]}")
-
-
-def _write_audio(sources: list[Path], target: Path, mix) -> None:
+def _write_audio(folder: Path, sources: list[Path], target: Path, mix) -> None:
+    """Запись встречи в базу знаний. Две дорожки — то же сведение, что слышит
+    плеер карточки (`playback.opus`, микрофон выровнен по громкости): кэш
+    сведения общий, второй раз ffmpeg не запускается. `mix` — подмена для тестов."""
     if _fresh(target, sources):
         return
     tmp = target.with_name(target.name + ".tmp")
     try:
-        if len(sources) > 1:
+        if len(sources) > 1 and mix is not None:
             mix(sources[0], sources[1], tmp)
+        elif len(sources) > 1:
+            from meet import playback
+
+            mixed = playback.playback_path(folder)
+            if mixed is None:
+                raise RuntimeError("дорожек записи нет")
+            shutil.copyfile(mixed, tmp)
         else:
             shutil.copyfile(sources[0], tmp)
         os.replace(tmp, target)
@@ -358,7 +351,7 @@ def _export(folder: Path, cfg, mix) -> dict:
             kept.append(name)
             continue
         if kind == "audio":
-            _write_audio(sources, path, mix)
+            _write_audio(folder, sources, path, mix)
             recorded[name] = None  # гигабайты не хешируем: аудио не правят
         else:
             if kind == "transcript":
@@ -387,7 +380,7 @@ def export_recording(folder, cfg, *, mix=None) -> dict:
     cfg = getattr(cfg, "export", cfg)
     folder = Path(folder)
     try:
-        return _export(folder, cfg, mix or mix_tracks)
+        return _export(folder, cfg, mix)
     except Exception as e:
         if str(e) != NOT_SET:
             _remember_error(folder, e)

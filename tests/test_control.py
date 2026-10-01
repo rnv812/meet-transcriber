@@ -768,6 +768,49 @@ def test_audio_token_in_query_like_the_app_player(server, tmp_path):
     assert asked == [("2026-09-30_10-00", "playback")]
 
 
+@pytest.mark.parametrize("asked, expected", [
+    ("bytes=0-", "bytes 0-2097151/5242880"),            # открытый запрос плеера
+    ("bytes=100-4000000", "bytes 100-2097251/5242880"),  # слишком длинный кусок
+    ("bytes=5000000-", "bytes 5000000-5242879/5242880"),  # хвост короче лимита — целиком
+])
+def test_audio_range_is_served_in_bounded_chunks(server, tmp_path, asked, expected):
+    """Ответ на Range — не больше 2 МБ: файл открыт недолго, удаление записи его не ждёт."""
+    track = tmp_path / "playback.opus"
+    track.write_bytes(bytes(5 * 1024 * 1024))
+    server.state.track_path = lambda rid, t: track
+    url = f"http://127.0.0.1:{server.port}/recordings/x/audio?track=playback&token={server.token}"
+    req = urllib.request.Request(url, headers={"Range": asked})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        assert r.status == 206
+        assert r.headers["Content-Range"] == expected
+        first, last = expected.split()[1].split("/")[0].split("-")
+        assert len(r.read()) == int(last) - int(first) + 1 == int(r.headers["Content-Length"])
+
+
+def test_audio_stream_marks_the_folder_busy(server, tmp_path, monkeypatch):
+    """Пока дорожка отдаётся, папка занята — удаление записи подождёт."""
+    from contextlib import contextmanager
+
+    from meet import playback
+
+    track = tmp_path / "rec" / "playback.opus"
+    track.parent.mkdir()
+    track.write_bytes(b"x" * 100)
+    used = []
+
+    @contextmanager
+    def using(folder):
+        used.append(folder)
+        yield
+
+    monkeypatch.setattr(playback, "using", using)
+    server.state.track_path = lambda rid, t: track
+    url = f"http://127.0.0.1:{server.port}/recordings/x/audio?track=playback&token={server.token}"
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"Range": "bytes=0-"}), timeout=5) as r:
+        r.read()
+    assert used == [track.parent]
+
+
 def test_audio_without_token_is_refused(server, tmp_path):
     server.state.track_path = lambda rid, t: tmp_path / "x.opus"
     url = f"http://127.0.0.1:{server.port}/recordings/x/audio?track=playback"

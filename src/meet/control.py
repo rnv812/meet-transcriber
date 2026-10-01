@@ -98,6 +98,10 @@ ALLOWED_ORIGINS = frozenset({
 })
 _ORIGIN_RE = re.compile(r"(?P<base>[a-z][a-z0-9+.-]*://[^:/?#\s]+)(?::\d{1,5})?")
 
+# Плееру — кусками: ответ на Range не длиннее этого (файл открыт недолго),
+# запись в сокет не дольше этого (плеер, переставший читать, файл не держит).
+AUDIO_CHUNK = 2 * 1024 * 1024
+AUDIO_WRITE_TIMEOUT_S = 15.0
 SSE_KEEPALIVE_S = 15.0  # комментарий-пинг, чтобы прокси и клиент не заснули
 SSE_QUEUE_MAX = 1000  # переполнение = клиент не читает; такого выкидываем
 
@@ -556,16 +560,30 @@ def _make_handler(server: ControlServer):
                 stream.close()
 
         def _stream_audio(self, recording_id: str, params: dict) -> None:
-            """Отдать дорожку записи плееру редактора.
+            """Отдать дорожку записи плееру карточки.
 
             С поддержкой `Range`: без неё браузерный плеер не перематывает и на
             длинной встрече качает файл целиком ради секунды в середине.
+
+            IMPORTANT: ответ на Range — не больше `AUDIO_CHUNK` байт (206 с
+            честным Content-Range; плеер дозапросит дальше), запись в сокет — с
+            таймаутом. Открытый `bytes=0-` держал бы файл открытым, пока
+            плеер не дочитает или не бросит соединение, а на Windows открытый
+            файл не удалить: «Удалить» на открытой карточке сносил запись
+            наполовину. Папка помечена занятой (`playback.using`) на время
+            отдачи — удаление её дождётся.
             """
+            from meet import playback
+
             track = (params.get("track") or ["sys"])[0]
             path = server.state.track_path(recording_id, track)
             if path is None:
                 self._send(404, {"error": "дорожки нет"})
                 return
+            with playback.using(path.parent):
+                self._send_audio(path)
+
+        def _send_audio(self, path) -> None:
             size = path.stat().st_size
             start, end = 0, size - 1
             status = 200
@@ -578,6 +596,7 @@ def _make_handler(server: ControlServer):
                         end = min(int(match.group(2)), size - 1)
                 else:  # суффиксный запрос: последние N байт
                     start = max(0, size - int(match.group(2)))
+                end = min(end, start + AUDIO_CHUNK - 1)
                 status = 206
             # 416 уместен только для запроса с Range (status 206). Обычный GET
             # пустого файла (0 байт) должен вернуть пустой 200, а не 416.
@@ -585,6 +604,8 @@ def _make_handler(server: ControlServer):
                 self._send(416, {"error": "запрошен кусок за концом файла"})
                 return
             length = max(0, end - start + 1)
+            previous = self.connection.gettimeout()
+            self.connection.settimeout(AUDIO_WRITE_TIMEOUT_S)
             try:
                 self.send_response(status)
                 self.send_header("Content-Type", _audio_type(path))
@@ -605,10 +626,15 @@ def _make_handler(server: ControlServer):
                             break
                         self.wfile.write(chunk)
                         left -= len(chunk)
-            except ConnectionError:
-                # Плеер закрыл запрос/перемотал — норма. Ошибки диска
-                # (OSError не из сокета) наружу: это 500, а не тишина.
+            except (ConnectionError, TimeoutError):
+                # Плеер закрыл запрос/перемотал или перестал читать — норма.
+                # Ошибки диска (OSError не из сокета) наружу: это 500, а не тишина.
                 self.close_connection = True
+            finally:
+                try:
+                    self.connection.settimeout(previous)
+                except OSError:
+                    pass
 
         def _write_sse(self, name: str, payload: dict) -> None:
             data = json.dumps(payload, ensure_ascii=False)

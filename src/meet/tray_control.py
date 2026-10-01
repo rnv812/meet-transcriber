@@ -225,6 +225,10 @@ def _conflict(text: str):
     return Conflict(text)
 
 
+# Сколько «Удалить» ждёт, пока плеер и сведение отпустят файлы записи.
+DELETE_WAIT_S = 3.0
+
+
 class TrayControl:
     """Состояние для `meet.control.ControlServer` поверх объекта трея."""
 
@@ -285,6 +289,11 @@ class TrayControl:
         if kind not in (jobs.TRANSCRIBE, jobs.IMPORT, jobs.SUMMARY) or not folder:
             return
         path = Path(folder)
+        if kind in (jobs.TRANSCRIBE, jobs.IMPORT):
+            # Свести дорожки для плеера заранее, в фоне: первое «▶» — без ожидания.
+            from meet import playback
+
+            playback.schedule(path)
         try:
             # Подписчик шины: исключение отсюда не должно доходить до очереди
             # задач — битый конфиг или недоступная папка только в журнал.
@@ -692,6 +701,13 @@ class TrayControl:
         # summary.md и meta.json в осиротевшую папку.
         if self.llm_queue.active_for(str(folder), (jobs.SUMMARY, jobs.ASK)):
             raise _bad_request("Идёт работа модели — отмените или дождитесь")
+        # Плеер карточки мог только что запросить дорожку, а фоновое сведение —
+        # писать playback.opus: на Windows открытый файл не удалить, и rmtree
+        # снёс бы запись наполовину. Ответы плееру короткие (control.AUDIO_CHUNK),
+        # поэтому ждём недолго.
+        from meet import playback
+
+        playback.wait_idle(folder, DELETE_WAIT_S)
         try:
             shutil.rmtree(folder)
         except OSError as e:

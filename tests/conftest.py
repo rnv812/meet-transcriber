@@ -77,3 +77,15 @@ def _no_system_proxy(monkeypatch):
     except ImportError:
         return
     monkeypatch.setattr(netproxy, "read_registry", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_background_playback_mix(monkeypatch):
+    """Фоновое сведение дорожек для плеера (после расшифровки/импорта) в тестах
+    не запускается: ffmpeg на фальшивых дорожках во временной папке только
+    шумел бы. Тесты сведения зовут `playback` напрямую."""
+    from meet import playback
+
+    calls: list = []
+    monkeypatch.setattr(playback, "schedule", calls.append)
+    return calls

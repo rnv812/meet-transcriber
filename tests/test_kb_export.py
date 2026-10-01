@@ -150,6 +150,41 @@ def test_include_flags(tmp_path, vault, monkeypatch):
         target / "Субтитры.srt").read_text(encoding="utf-8")
 
 
+def test_two_tracks_reuse_the_player_mix(tmp_path, vault, monkeypatch):
+    """Без подмены `mix` запись в базу знаний — копия сведения плеера
+    (`playback.playback_path`): та же нормализация, без второго ffmpeg."""
+    from meet import playback
+
+    folder = _recording(tmp_path)
+    (folder / "mic.opus").write_bytes(b"mic")
+    asked = []
+
+    def fake(where):
+        asked.append(where)
+        mixed = where / playback.PLAYBACK_NAME
+        mixed.write_bytes(b"player-mix")
+        return mixed
+
+    monkeypatch.setattr(playback, "playback_path", fake)
+    got = kb_export.export_recording(folder, _cfg(vault, include_audio=True))
+    assert (Path(got["path"]) / "Запись.opus").read_bytes() == b"player-mix"
+    assert asked == [folder]
+
+
+def test_player_mix_failure_is_an_export_error(tmp_path, vault, monkeypatch):
+    from meet import playback
+
+    folder = _recording(tmp_path)
+    (folder / "mic.opus").write_bytes(b"mic")
+
+    def broken(where):
+        raise RuntimeError("ffmpeg не найден — дорожки записи не сведены")
+
+    monkeypatch.setattr(playback, "playback_path", broken)
+    with pytest.raises(RuntimeError, match="ffmpeg"):
+        kb_export.export_recording(folder, _cfg(vault, include_audio=True))
+
+
 def test_single_track_audio_is_copied(tmp_path, vault):
     folder = tmp_path / "rec" / "2026-09-30_11-00_import"
     folder.mkdir(parents=True)

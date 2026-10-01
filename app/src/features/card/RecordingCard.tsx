@@ -157,6 +157,8 @@ export function RecordingCard({
   const cancelButton = active ? <Button onClick={doCancel} disabled={busy}>Отменить</Button> : null;
   const retranscribeFailed = status.kind === "ready" ? failedRetranscribe(rec, jobs) : null;
   const doDelete = () => act(async () => {
+    // Плеер отпускает файл до запроса: резидент не удалит открытый playback.opus.
+    player.current?.release();
     await deleteRecording(endpoint, id);
     onDeleted?.();
   });

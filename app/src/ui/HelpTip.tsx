@@ -49,30 +49,46 @@ export function HelpTip({ label, title, children }: {
   const close = useCallback(() => { setHover(false); setFocus(false); setPinned(false); }, []);
   useEffect(() => () => clearTimeout(timer.current), []);
 
-  useLayoutEffect(() => {
-    if (!shown) { setPos(null); return; }
+  const place = useCallback(() => {
     const a = button.current?.getBoundingClientRect();
     const t = tip.current?.getBoundingClientRect();
     if (!a || !t) return;
     setPos(placeTip(a, { width: t.width || WIDTH, height: t.height }, { width: window.innerWidth, height: window.innerHeight }));
-  }, [shown]);
+  }, []);
 
-  // Открытая подсказка: Esc закрывает её откуда угодно, клик снаружи — тоже;
-  // прокрутка уводит кнопку из-под подсказки — закрываем, а не держим висящей.
+  useLayoutEffect(() => {
+    if (!shown) { setPos(null); return; }
+    place();
+  }, [shown, place]);
+
+  // Открытая подсказка: Esc закрывает её откуда угодно — и только её (не
+  // всплывающее окно или диалог вокруг: перехват на window, дальше событие не
+  // идёт); клик снаружи — тоже. Прокрутка контейнера, в котором стоит «?»,
+  // уводит кнопку из-под подсказки — закрываем; прокрутка соседнего списка или
+  // самой подсказки её не касается. Окно изменило размер — пересчитать место.
   useEffect(() => {
     if (!shown) return;
-    const key = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      close();
+    };
     const down = (e: MouseEvent) => { if (!root.current?.contains(e.target as Node)) close(); };
-    const scroll = (e: Event) => { if (!tip.current?.contains(e.target as Node)) close(); };
-    document.addEventListener("keydown", key);
+    const scroll = (e: Event) => {
+      const target = e.target;
+      if (target instanceof Node && root.current && target.contains(root.current)) close();
+    };
+    window.addEventListener("keydown", key, true);
     document.addEventListener("mousedown", down);
     window.addEventListener("scroll", scroll, true);
+    window.addEventListener("resize", place);
     return () => {
-      document.removeEventListener("keydown", key);
+      window.removeEventListener("keydown", key, true);
       document.removeEventListener("mousedown", down);
       window.removeEventListener("scroll", scroll, true);
+      window.removeEventListener("resize", place);
     };
-  }, [shown, close]);
+  }, [shown, close, place]);
 
   return (
     <span ref={root} className="help"

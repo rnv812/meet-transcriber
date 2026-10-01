@@ -234,6 +234,23 @@ test("клик по реплике перематывает общий плее�
     expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(2);
   });
 
+test("удаление: плеер отпускает файл до запроса к резиденту", async () => {
+  load({ tracks: { sys: "s.wav", mic: "m.wav" } });
+  const { container } = render(<RecordingCard id="r1" endpoint={ep} onDeleted={() => {}} />);
+  await screen.findByText("Привет всем");
+  const audio = container.querySelector("audio")!;
+  let srcAtDelete: string | null = "не вызвано";
+  vi.mocked(api.deleteRecording).mockImplementation(async () => {
+    srcAtDelete = audio.getAttribute("src");
+    return { ok: true };
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Удалить" }));
+  await userEvent.click(within(screen.getByText(/Удалить запись и расшифровку/).parentElement!)
+    .getByRole("button", { name: "Удалить" }));
+  expect(api.deleteRecording).toHaveBeenCalled();
+  expect(srcAtDelete).toBeNull();
+});
+
 test("без дорожек: кнопок воспроизведения нет, внизу — «Аудио недоступно»", async () => {
   load({ tracks: {} });
   const { container } = render(<RecordingCard id="r1" endpoint={ep} />);

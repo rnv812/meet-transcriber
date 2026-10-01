@@ -850,6 +850,44 @@ def test_delete_recording_removes_folder(control_state, tmp_path, monkeypatch):
     assert not folder.exists()
 
 
+def test_delete_waits_for_the_player_to_release_the_files(control_state, tmp_path, monkeypatch):
+    """Плеер открытой карточки держит playback.opus: удаление ждёт, пока его
+    отпустят (на Windows открытый файл не удалить — запись снесло бы наполовину)."""
+    import threading
+    import time as _time
+
+    from meet import playback
+
+    folder = _saved_folder(tmp_path)
+    (folder / playback.PLAYBACK_NAME).write_bytes(b"mixed")
+    monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
+    released = []
+    held = threading.Event()
+
+    def stream():
+        with playback.using(folder):
+            held.set()
+            _time.sleep(0.3)
+            released.append(_time.monotonic())
+
+    threading.Thread(target=stream).start()
+    assert held.wait(2)
+    assert control_state.delete_recording(folder.name) == {"ok": True}
+    assert released, "удаление началось, пока поток плеера держал файл"
+    assert not folder.exists()
+
+
+def test_delete_does_not_wait_forever(control_state, tmp_path, monkeypatch):
+    from meet import playback
+
+    folder = _saved_folder(tmp_path)
+    monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
+    waited = []
+    monkeypatch.setattr(playback, "wait_idle", lambda f, timeout: waited.append(timeout) or False)
+    assert control_state.delete_recording(folder.name) == {"ok": True}
+    assert waited == [tray_control.DELETE_WAIT_S] and tray_control.DELETE_WAIT_S <= 3
+
+
 def test_delete_unknown_recording(control_state, tmp_path, monkeypatch):
     folder = _saved_folder(tmp_path)
     monkeypatch.setattr(control_state, "_root", lambda: folder.parent)

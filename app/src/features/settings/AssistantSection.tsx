@@ -222,7 +222,7 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
         </>
       )}
       <Row label={PROXY_LABEL} hint="Через него Claude Code и Codex подключаются к своим сервисам"
-        help={<HelpTip label="Зачем нужен прокси"><TipLine>{PROXY_HELP}</TipLine></HelpTip>}>
+        help={<HelpTip label="Зачем нужен прокси"><TipLine>{PROXY_HELP}</TipLine></HelpTip>} stack>
         <div role="radiogroup" aria-label={PROXY_LABEL} className="radios radios--column">
           <label className="radios__item">
             <input type="radio" name="llm-proxy" checked={proxyMode === "system"}

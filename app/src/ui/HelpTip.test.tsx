@@ -64,6 +64,49 @@ test("Esc закрывает и подсказку, открытую навед�
   expect(screen.queryByRole("tooltip")).toBeNull();
 });
 
+test("Esc закрывает подсказку и не доходит до окна вокруг неё", () => {
+  const outer = vi.fn();
+  document.addEventListener("keydown", outer);
+  try {
+    render(tip());
+    fireEvent.click(screen.getByRole("button", { name: "Что такое база голосов" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(outer).not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: "Escape" }); // подсказки нет — Esc снова общий
+    expect(outer).toHaveBeenCalledTimes(1);
+  } finally {
+    document.removeEventListener("keydown", outer);
+  }
+});
+
+test("прокрутка закрывает подсказку, только если прокручен её контейнер", () => {
+  render(
+    <div>
+      <div data-testid="scroller">{tip()}</div>
+      <div data-testid="other" />
+    </div>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Что такое база голосов" }));
+  fireEvent.scroll(screen.getByTestId("other"));
+  expect(screen.getByRole("tooltip")).toBeInTheDocument();
+  fireEvent.scroll(screen.getByRole("tooltip"));
+  expect(screen.getByRole("tooltip")).toBeInTheDocument();
+  fireEvent.scroll(screen.getByTestId("scroller"));
+  expect(screen.queryByRole("tooltip")).toBeNull();
+});
+
+test("изменение размера окна пересчитывает положение", () => {
+  render(tip());
+  const button = screen.getByRole("button", { name: "Что такое база голосов" });
+  fireEvent.click(button);
+  const tooltip = screen.getByRole("tooltip");
+  button.getBoundingClientRect = () => ({ left: 500, right: 518, top: 40, bottom: 58 }) as DOMRect;
+  act(() => { window.dispatchEvent(new Event("resize")); });
+  expect(tooltip.style.left).toBe("500px");
+  expect(tooltip.style.top).toBe("64px");
+});
+
 describe("placeTip", () => {
   const view = { width: 1000, height: 700 };
   const size = { width: 300, height: 120 };

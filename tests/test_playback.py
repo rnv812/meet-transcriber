@@ -1,12 +1,18 @@
 """Файл для плеера карточки: обе стороны разговора в одной дорожке."""
 
+import json
 import os
 import shutil
 import subprocess
+import threading
+import time
 
 import pytest
 
 from meet import playback
+
+# conftest глушит фоновое сведение во всех тестах; здесь проверяется настоящее.
+REAL_SCHEDULE = playback.schedule
 
 
 def _touch(path, data=b"x", mtime=None):
@@ -84,30 +90,156 @@ def test_two_tracks_are_mixed_once_and_cached(tmp_path):
     assert len(run.calls) == 1
     assert run.calls[0][-1] != str(path), "пишется во временный файл, затем подменяется"
     assert not list(tmp_path.glob("*.tmp"))
+    stamp = json.loads((tmp_path / playback.STAMP_NAME).read_text(encoding="utf-8"))
+    assert [s["name"] for s in stamp["sources"]] == ["sys.opus", "mic.opus"]
     # Второй запрос (перемотка, Range) — из кэша, без ffmpeg.
     assert playback.playback_path(tmp_path, run=run) == path
     assert len(run.calls) == 1
 
 
-def test_mix_is_rebuilt_when_a_track_is_newer(tmp_path):
+def _mixed_once(tmp_path):
     _touch(tmp_path / "sys.opus", mtime=1_000_000)
-    mic = _touch(tmp_path / "mic.opus", mtime=1_000_000)
-    _touch(tmp_path / playback.PLAYBACK_NAME, b"old", mtime=1_000_100)
+    _touch(tmp_path / "mic.opus", mtime=1_000_000)
     run = FakeRun()
-    assert playback.playback_path(tmp_path, run=run).read_bytes() == b"old"
-    assert run.calls == []
-    os.utime(mic, (1_000_200, 1_000_200))  # перерасшифровка/дозапись
+    playback.playback_path(tmp_path, run=run)
+    assert len(run.calls) == 1
+    return run
+
+
+def test_mix_is_rebuilt_when_a_track_changes_time(tmp_path):
+    run = _mixed_once(tmp_path)
+    os.utime(tmp_path / "mic.opus", (1_000_200, 1_000_200))  # дозапись/замена дорожки
+    playback.playback_path(tmp_path, run=run)
+    assert len(run.calls) == 2
+
+
+def test_mix_is_rebuilt_when_a_track_changes_size_at_the_same_time(tmp_path):
+    run = _mixed_once(tmp_path)
+    _touch(tmp_path / "sys.opus", b"longer track", mtime=1_000_000)
+    playback.playback_path(tmp_path, run=run)
+    assert len(run.calls) == 2
+
+
+def test_cache_without_stamp_is_not_trusted(tmp_path):
+    """Обрезанный/чужой playback.opus без отметки о дорожках свежим не считается,
+    даже если он новее дорожек."""
+    _touch(tmp_path / "sys.opus", mtime=1_000_000)
+    _touch(tmp_path / "mic.opus", mtime=1_000_000)
+    _touch(tmp_path / playback.PLAYBACK_NAME, b"trunc", mtime=1_000_100)
+    run = FakeRun()
     assert playback.playback_path(tmp_path, run=run).read_bytes() == b"OggS-mixed"
     assert len(run.calls) == 1
 
 
 def test_empty_cache_is_rebuilt(tmp_path):
-    _touch(tmp_path / "sys.opus", mtime=1_000_000)
-    _touch(tmp_path / "mic.opus", mtime=1_000_000)
-    _touch(tmp_path / playback.PLAYBACK_NAME, b"", mtime=1_000_100)
-    run = FakeRun()
+    run = _mixed_once(tmp_path)
+    (tmp_path / playback.PLAYBACK_NAME).write_bytes(b"")
     playback.playback_path(tmp_path, run=run)
-    assert len(run.calls) == 1
+    assert len(run.calls) == 2
+
+
+def test_busy_old_file_is_served_when_replace_is_refused(tmp_path, monkeypatch):
+    """Старое сведение отдаётся плееру (файл открыт) — подменить нельзя: отдаём старое, не 500."""
+    run = _mixed_once(tmp_path)
+    (tmp_path / playback.PLAYBACK_NAME).write_bytes(b"old")
+    os.utime(tmp_path / "mic.opus", (1_000_200, 1_000_200))
+    monkeypatch.setattr(playback, "REPLACE_PAUSE_S", 0)
+    real = os.replace
+
+    def busy(src, dst):
+        if str(dst).endswith(playback.PLAYBACK_NAME):
+            raise PermissionError(32, "файл занят")
+        return real(src, dst)
+
+    monkeypatch.setattr(playback.os, "replace", busy)
+    assert playback.playback_path(tmp_path, run=run).read_bytes() == b"old"
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_busy_replace_without_old_file_is_an_error(tmp_path, monkeypatch):
+    _touch(tmp_path / "sys.opus")
+    _touch(tmp_path / "mic.opus")
+    monkeypatch.setattr(playback, "REPLACE_PAUSE_S", 0)
+    monkeypatch.setattr(playback.os, "replace", lambda *a: (_ for _ in ()).throw(PermissionError(32, "занят")))
+    with pytest.raises(RuntimeError, match="занят"):
+        playback.playback_path(tmp_path, run=FakeRun())
+
+
+@pytest.mark.parametrize("error", [subprocess.TimeoutExpired("ffmpeg", 1), OSError("нет доступа")])
+def test_ffmpeg_timeout_or_os_error_is_runtime_error(tmp_path, error):
+    _touch(tmp_path / "sys.opus")
+    _touch(tmp_path / "mic.opus")
+
+    def run(cmd, **kwargs):
+        raise error
+
+    with pytest.raises(RuntimeError):
+        playback.playback_path(tmp_path, run=run)
+    assert not (tmp_path / playback.PLAYBACK_NAME).exists()
+
+
+def test_mixes_share_a_global_limit(tmp_path, monkeypatch):
+    entered = []
+
+    class Slots:
+        def __enter__(self):
+            entered.append("in")
+
+        def __exit__(self, *exc):
+            entered.append("out")
+
+    monkeypatch.setattr(playback, "_slots", Slots())
+    _touch(tmp_path / "sys.opus")
+    _touch(tmp_path / "mic.opus")
+    playback.playback_path(tmp_path, run=FakeRun())
+    assert entered == ["in", "out"]
+
+
+def test_wait_idle_waits_for_open_streams(tmp_path):
+    with playback.using(tmp_path):
+        assert playback.wait_idle(tmp_path, timeout=0.05) is False
+    assert playback.wait_idle(tmp_path, timeout=0.05) is True
+
+    held = threading.Event()
+    done = threading.Event()
+
+    def stream():
+        with playback.using(tmp_path):
+            held.set()
+            time.sleep(0.2)
+        done.set()
+
+    threading.Thread(target=stream).start()
+    held.wait(1)
+    assert playback.wait_idle(tmp_path, timeout=2) is True
+    assert done.is_set()
+
+
+def test_schedule_mixes_in_background_one_at_a_time(tmp_path, monkeypatch):
+    first, second = tmp_path / "a", tmp_path / "b"
+    first.mkdir()
+    second.mkdir()
+    seen = []
+    started, gate, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def fake(folder):
+        if folder == first:
+            started.set()
+            gate.wait(2)
+        seen.append(folder)
+        if folder == second:
+            finished.set()
+
+    monkeypatch.setattr(playback, "playback_path", fake)
+    monkeypatch.setattr(playback, "schedule", REAL_SCHEDULE)
+    playback.schedule(first)
+    assert started.wait(2)
+    playback.schedule(second)
+    playback.schedule(second)  # пока ждёт в очереди — повтор не добавляется
+    gate.set()
+    assert finished.wait(2)
+    time.sleep(0.1)
+    assert seen == [first, second]
 
 
 def test_failed_mix_raises_and_leaves_nothing(tmp_path):

@@ -31,7 +31,8 @@ test("играет сведённую дорожку playback (обе сторо
   expect(audio.getAttribute("src")).toContain("track=playback");
   expect(audio.getAttribute("src")).toContain("token=");
   expect(audio).not.toHaveAttribute("controls");
-  expect(audio).toHaveAttribute("preload", "metadata");
+  // Открытая карточка файл не запрашивает: сведение — по первому «▶» (или заранее, в фоне резидента).
+  expect(audio).toHaveAttribute("preload", "none");
 });
 
 test("время: текущее и общее; до метаданных — длительность из карточки", () => {
@@ -129,4 +130,27 @@ test("дорожка не загрузилась — «Аудио недосту
   expect(screen.queryByRole("button", { name: "Воспроизвести" })).toBeNull();
   expect(screen.queryByRole("slider")).toBeNull();
   expect(onAvailable).toHaveBeenLastCalledWith(false);
+});
+
+test("пока данных нет — «Подготовка аудио…», с готовностью — снова время", async () => {
+  const { audio } = setup();
+  await userEvent.click(screen.getByRole("button", { name: "Воспроизвести" }));
+  expect(screen.getByRole("status")).toHaveTextContent("Подготовка аудио…");
+  fireEvent.canPlay(audio);
+  expect(screen.queryByText("Подготовка аудио…")).toBeNull();
+  fireEvent.waiting(audio);
+  expect(screen.getByText("Подготовка аудио…")).toBeInTheDocument();
+  fireEvent.playing(audio);
+  expect(screen.queryByText("Подготовка аудио…")).toBeNull();
+  expect(screen.getAllByText("00:00")).toHaveLength(2); // текущее и общее время
+});
+
+test("release() отпускает файл: src снят, load(), без «Аудио недоступно»", () => {
+  const { ref, audio } = setup();
+  act(() => ref.current!.release());
+  expect(audio).not.toHaveAttribute("src");
+  expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled();
+  expect(HTMLMediaElement.prototype.load).toHaveBeenCalled();
+  fireEvent.error(audio); // пустой src браузер считает ошибкой — это не сбой дорожки
+  expect(screen.queryByText("Аудио недоступно")).toBeNull();
 });

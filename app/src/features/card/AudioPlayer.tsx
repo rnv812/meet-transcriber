@@ -8,8 +8,12 @@
  * тишина. Теперь реплика лишь перематывает общий плеер (`seek`).
  *
  * Токен — в query (`audioUrl`): <audio> в WebView2 не умеет ставить заголовок.
- * `preload="metadata"` запрашивает файл, как только карточка открыта: резидент
- * успевает свести дорожки до первого нажатия.
+ * `preload="none"`: открытая карточка файл не запрашивает (и не заставляет
+ * резидент сводить дорожки каждой просмотренной записи) — запрос идёт с первым
+ * «▶». Обычно сведение уже готово: резидент делает его в фоне после
+ * расшифровки; иначе, пока оно идёт, плеер показывает «Подготовка аудио…».
+ * `release()` — отпустить файл перед удалением записи (на Windows открытый
+ * файл не удалить).
  *
  * Состояние — на одну запись: карточка монтирует плеер заново с `key={id}`.
  *
@@ -21,7 +25,11 @@ import { forwardRef, useCallback, useImperativeHandle, useRef, useState, type Ke
 import { audioUrl, type Endpoint } from "../../lib/api";
 import { clock } from "../../lib/format";
 
-export type AudioPlayerHandle = { seek: (at: number, play?: boolean) => void };
+export type AudioPlayerHandle = {
+  seek: (at: number, play?: boolean) => void;
+  /** Остановить и отпустить файл (перед удалением записи). */
+  release: () => void;
+};
 
 export const SPEEDS = [1, 1.25, 1.5, 2];
 export const SEEK_STEP_S = 5;
@@ -65,6 +73,9 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   const [rate, setRate] = useState(1);
   const [muted, setMuted] = useState(false);
   const [failed, setFailed] = useState(false);
+  /** Запросили воспроизведение, а данных ещё нет: резидент сводит дорожки или файл грузится. */
+  const [loading, setLoading] = useState(false);
+  const [released, setReleased] = useState(false);
   const available = useRef(onAvailable);
   available.current = onAvailable;
 
@@ -73,6 +84,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   const start = useCallback(() => {
     const a = el.current;
     if (!a) return;
+    if (a.readyState < 3) setLoading(true); // HAVE_FUTURE_DATA: иначе играет сразу
     // Отказ play() (нет данных, формат) придёт и событием error — его и показываем.
     void a.play?.()?.catch?.(() => {});
   }, []);
@@ -90,6 +102,14 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
     seek(at, play = false) {
       seek(at);
       if (play) start();
+    },
+    release() {
+      const a = el.current;
+      if (!a) return;
+      a.pause?.();
+      a.removeAttribute("src");
+      a.load?.();
+      setReleased(true);
     },
   }), [seek, start]);
 
@@ -139,8 +159,8 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
     <div className="player" role="group" aria-label="Проигрыватель записи" onKeyDown={onKey}>
       <audio
         ref={el}
-        src={audioUrl(endpoint, id, "playback")}
-        preload="metadata"
+        src={released ? undefined : audioUrl(endpoint, id, "playback")}
+        preload="none"
         onLoadedMetadata={(e) => {
           const d = e.currentTarget.duration;
           if (Number.isFinite(d) && d > 0) setDuration(d);
@@ -152,14 +172,24 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
         }}
         onTimeUpdate={(e) => setCurrent(e.currentTarget.currentTime)}
         onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
+        onPause={() => { setPlaying(false); setLoading(false); }}
+        onWaiting={() => setLoading(true)}
+        onCanPlay={() => setLoading(false)}
+        onPlaying={() => setLoading(false)}
         onEnded={() => setPlaying(false)}
-        onError={() => { setFailed(true); setPlaying(false); available.current?.(false); }}
+        onError={() => {
+          if (released) return; // src убрали сами перед удалением
+          setFailed(true); setPlaying(false); setLoading(false); available.current?.(false);
+        }}
       />
       <button type="button" className="player__play" onClick={toggle} aria-label={playing ? "Пауза" : "Воспроизвести"}>
         {playing ? <PauseIcon /> : <PlayIcon />}
       </button>
-      <span className="player__time num">{clock(current)}</span>
+      {loading ? (
+        <span className="player__status" role="status">
+          <span className="player__spinner" aria-hidden="true" />Подготовка аудио…
+        </span>
+      ) : <span className="player__time num">{clock(current)}</span>}
       <input
         type="range" className="player__seek" aria-label="Позиция"
         min={0} max={total || 0} step="any" value={Math.min(current, total || current)}
