@@ -32,7 +32,9 @@ export default defineConfig({
   plugins: [react()],
   build: {
     target: "chrome110", // WebView2 на Win10/11; лишние полифилы не нужны
-    rollupOptions: { input: "index.html" },
+    // Две страницы: окно приложения и плавающая панель ассистента (окно
+    // `live` оболочки грузит live.html и в dev, и в сборке).
+    rollupOptions: { input: { main: "index.html", live: "live.html" } },
   },
   // Вывод cargo не должен затираться очисткой экрана Vite.
   clearScreen: false,

@@ -1,0 +1,32 @@
+/* Окно `live` прозрачное (transparent в оболочке): фон рисует сама панель,
+   со скруглёнными углами. Цвета — из tokens.css (Linear-dark). */
+html, body { background: transparent; }
+
+.live-panel {
+  height: 100%;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 16px;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  user-select: none;
+}
+
+.live-dot {
+  width: 8px; height: 8px; flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(94, 106, 210, 0.25);
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+.live-title { color: var(--text); font-weight: 500; }
+
+@keyframes live-pulse {
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+}

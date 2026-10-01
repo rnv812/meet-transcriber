@@ -58,6 +58,17 @@ pub const START_FAILED: &str = "Не удалось начать запись";
 pub const STOP_FAILED: &str = "Не удалось остановить запись";
 pub const CANCEL_FAILED: &str = "Не удалось отменить запись";
 pub const AUTO_FAILED: &str = "Не удалось переключить автозапись";
+pub const LIVE_LISTENING: &str = "Ассистент слушает встречу";
+pub const LIVE_SAVED: &str = "Ассистент остановлен — расшифровываю";
+/// Остановлен, но с ошибкой (не дописал, вышел с кодом): текст — в теле.
+pub const LIVE_STOPPED_WITH_ERROR: &str = "Ассистент остановлен";
+pub const LIVE_FAILED: &str = "Ассистент упал";
+/// Остановлен раньше, чем загрузилась модель: записи нет.
+pub const LIVE_CANCELLED: &str = "Запуск ассистента отменён";
+pub const LIVE_START_FAILED: &str = "Не удалось запустить ассистента";
+pub const LIVE_STOP_FAILED: &str = "Не удалось остановить ассистента";
+/// Раздел настроек, куда ведёт отказ `/live/start` без провайдера (409).
+pub const ASSISTANT_SECTION: &str = "assistant";
 /// Что проходит при `ui.notifications = "important"`: ошибки и автоматический
 /// старт записи (спека: «важное — ошибки и автостарт»).
 const IMPORTANT: &[&str] = &[
@@ -70,6 +81,10 @@ const IMPORTANT: &[&str] = &[
     CANCEL_FAILED,
     AUTO_FAILED,
     RECORDING_INTERRUPTED,
+    LIVE_STOPPED_WITH_ERROR,
+    LIVE_FAILED,
+    LIVE_START_FAILED,
+    LIVE_STOP_FAILED,
 ];
 
 /// Сводка `/state` + `/jobs`, из которой рисуется трей.
@@ -93,6 +108,50 @@ pub struct View {
     /// пусть и `null`). Старый резидент — нет, и тогда отмену из трея
     /// распознаёт `CancelMark`.
     pub reports_stops: bool,
+    /// Запись с ассистентом (`/state.live`). Обычная запись при этом не идёт:
+    /// `recording` — только про неё.
+    pub live: Live,
+}
+
+/// `/state.live` без `started_at`: секундомер — забота панели, а меню и
+/// уведомлениям он не нужен.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Live {
+    /// Ассистент слушает встречу (модель загружена, запись идёт). Остаётся
+    /// `true` и во время остановки — пока ассистент дописывает запись.
+    pub active: bool,
+    /// Процесс запущен, модель ещё грузится.
+    pub starting: bool,
+    /// Остановка запрошена, ассистент дописывает запись.
+    pub stopping: bool,
+    pub folder: Option<String>,
+    /// Почему упал или остановился с ошибкой последний запуск; сбрасывается
+    /// следующим стартом.
+    pub error: Option<String>,
+}
+
+impl Live {
+    fn from_json(value: &Value) -> Live {
+        let flag = |key: &str| value.get(key).and_then(Value::as_bool).unwrap_or(false);
+        let text = |key: &str| {
+            str_at(value, key)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+        };
+        Live {
+            active: flag("active"),
+            starting: flag("starting"),
+            stopping: flag("stopping"),
+            folder: text("folder"),
+            error: text("error"),
+        }
+    }
+
+    /// Процесс ассистента жив: грузится, слушает или дописывает.
+    pub fn running(&self) -> bool {
+        self.active || self.starting || self.stopping
+    }
 }
 
 /// `/state.last_stop`: папка, причина (`saved` | `discarded` | `short`) и
@@ -132,6 +191,7 @@ impl View {
             jobs_failed: Vec::new(),
             last_stop: state.get("last_stop").and_then(LastStop::from_json),
             reports_stops: state.get("last_stop").is_some(),
+            live: state.get("live").map(Live::from_json).unwrap_or_default(),
         };
         let items = jobs
             .get("items")
@@ -237,6 +297,16 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
             None,
         ));
     }
+    if !prev.live.active && next.live.active {
+        out.push(Notice::new(
+            LIVE_LISTENING,
+            "Остановить — в меню значка meet",
+            None,
+        ));
+    }
+    if prev.live.running() && !next.live.running() {
+        out.push(live_ended(&prev.live, &next.live));
+    }
     for id in added(&prev.jobs_done, &next.jobs_done) {
         out.push(Notice::new(
             TRANSCRIPT_READY,
@@ -252,6 +322,38 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
         ));
     }
     out
+}
+
+/// Ассистент был жив (`was`) и больше нет (`now`). Различаем по снимку, без
+/// событий шины: ошибку резидент оставляет в `live.error` до следующего
+/// старта, а была ли просьба остановиться — видно по прошлому снимку.
+///
+/// `live.failed` всегда несёт ошибку, а `live.stopped` — только неудачный:
+/// ошибки нет — это штатная остановка (или ассистент вышел сам, кодом 0).
+/// Ошибка без просьбы остановиться — падение.
+fn live_ended(was: &Live, now: &Live) -> Notice {
+    let recording = was.folder.as_deref().and_then(recording_id);
+    match now.error.as_deref() {
+        None if was.active => Notice::new(
+            LIVE_SAVED,
+            "О готовой расшифровке придёт отдельное уведомление",
+            recording,
+        ),
+        None => Notice::new(LIVE_CANCELLED, "Запись не началась", None),
+        Some(error) if was.stopping => Notice::new(
+            LIVE_STOPPED_WITH_ERROR,
+            shorten(error, ERROR_CHARS),
+            recording,
+        ),
+        Some(error) => Notice::new(LIVE_FAILED, shorten(error, ERROR_CHARS), recording),
+    }
+}
+
+/// Окно ассистента по фронту `live.active`: `Some(true)` — открыть,
+/// `Some(false)` — закрыть, `None` — ничего. Только по фронтам: закрытое
+/// человеком окно не возвращается до следующего старта.
+pub fn live_window_change(was_active: bool, active: bool) -> Option<bool> {
+    (was_active != active).then_some(active)
 }
 
 /// Элементы `next`, которых нет в `prev`, с учётом кратности.
@@ -307,7 +409,12 @@ impl Tracker {
                 self.misses = 0;
                 let mut notices = transitions(self.last.as_ref(), &view);
                 if after_gap {
-                    for notice in notices.iter_mut().filter(|n| n.title == RECORDING_SAVED) {
+                    // Ассистент — та же запись: «остановлен — расшифровываю»
+                    // после обрыва было бы неправдой.
+                    for notice in notices
+                        .iter_mut()
+                        .filter(|n| n.title == RECORDING_SAVED || n.title == LIVE_SAVED)
+                    {
                         *notice = Notice::new(
                             RECORDING_INTERRUPTED,
                             "Сервис записи перезапустился во время записи — часть встречи могла не сохраниться",
@@ -412,6 +519,9 @@ pub enum Action {
     Stop,
     Cancel,
     AutoRecord(bool),
+    /// Запись с ассистентом.
+    LiveStart,
+    LiveStop,
 }
 
 impl Action {
@@ -421,6 +531,8 @@ impl Action {
             Action::Stop => "/recording/stop",
             Action::Cancel => "/recording/cancel",
             Action::AutoRecord(_) => "/auto-record",
+            Action::LiveStart => "/live/start",
+            Action::LiveStop => "/live/stop",
         }
     }
 
@@ -437,6 +549,8 @@ impl Action {
             Action::Stop => STOP_FAILED,
             Action::Cancel => CANCEL_FAILED,
             Action::AutoRecord(_) => AUTO_FAILED,
+            Action::LiveStart => LIVE_START_FAILED,
+            Action::LiveStop => LIVE_STOP_FAILED,
         }
     }
 }
@@ -462,6 +576,7 @@ pub fn action_notice(action: Action, reply: Option<&api::Result<Value>>) -> Opti
             match (str_at(reply, "action"), error) {
                 (Some("already-recording"), _) => "Запись уже идёт".to_string(),
                 (Some("not-recording"), _) => "Запись не идёт".to_string(),
+                (Some("not-live"), _) => "Ассистент не запущен".to_string(),
                 (_, Some(error)) => error.to_string(),
                 _ => "Сервис записи отказался".to_string(),
             }
@@ -472,6 +587,12 @@ pub fn action_notice(action: Action, reply: Option<&api::Result<Value>>) -> Opti
         shorten(&body, ERROR_CHARS),
         None,
     ))
+}
+
+/// `/live/start` ответил 409: не подключён ни Claude Code, ни Codex. Кроме
+/// уведомления — открыть окно на разделе настроек ассистента.
+pub fn needs_provider(action: Action, reply: Option<&api::Result<Value>>) -> bool {
+    action == Action::LiveStart && matches!(reply, Some(Err(api::Error::Status { code: 409, .. })))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -494,11 +615,13 @@ impl TrayIconKind {
 }
 
 /// Запись важнее расшифровки: идёт встреча — это главное, что нужно видеть.
+/// Ассистент слушает или дописывает — тоже запись; грузит модель — «занят».
 pub fn icon_for(view: Option<&View>) -> TrayIconKind {
     match view {
         None => TrayIconKind::Offline,
         Some(view) if view.recording => TrayIconKind::Recording,
-        Some(view) if view.busy => TrayIconKind::Busy,
+        Some(view) if view.live.active || view.live.stopping => TrayIconKind::Recording,
+        Some(view) if view.live.starting || view.busy => TrayIconKind::Busy,
         Some(_) => TrayIconKind::Idle,
     }
 }
@@ -519,6 +642,9 @@ pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
             }
             text
         }
+        Some(view) if view.live.stopping => "ассистент дописывает запись".to_string(),
+        Some(view) if view.live.active => "ассистент слушает встречу".to_string(),
+        Some(view) if view.live.starting => "ассистент запускается".to_string(),
         Some(view) if view.busy => "расшифровываю".to_string(),
         Some(_) if *status == ResidentStatus::External => {
             "резидент запущен вне приложения".to_string()
@@ -550,6 +676,7 @@ pub struct MenuState {
     /// Резидент отвечает — действия с записью доступны.
     pub online: bool,
     pub recording: bool,
+    pub live: LivePhase,
     pub auto: bool,
     /// Журнал упавшего резидента (пункт «Открыть журнал»).
     pub log: Option<PathBuf>,
@@ -559,12 +686,65 @@ pub struct MenuState {
     pub quitting: bool,
 }
 
+/// Где ассистент, с точки зрения меню.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LivePhase {
+    #[default]
+    Off,
+    Starting,
+    Active,
+    Stopping,
+}
+
+impl LivePhase {
+    fn of(live: &Live) -> LivePhase {
+        if live.stopping {
+            LivePhase::Stopping
+        } else if live.active {
+            LivePhase::Active
+        } else if live.starting {
+            LivePhase::Starting
+        } else {
+            LivePhase::Off
+        }
+    }
+}
+
+/// Пункты записи в меню: (id, текст, доступен ли). Пока идёт любая запись —
+/// обычная или с ассистентом — пунктов «Начать…» нет. У ассистента своя
+/// остановка (`/live/stop`) и нет отмены: резидент её не умеет.
+pub fn record_items(state: &MenuState) -> Vec<(&'static str, &'static str, bool)> {
+    let online = state.online;
+    if state.recording {
+        return vec![
+            ("stop", "Остановить запись", online),
+            ("cancel", "Отменить запись", online),
+        ];
+    }
+    match state.live {
+        LivePhase::Off => vec![
+            ("start", "Начать запись", online),
+            ("live-start", "Начать запись с ассистентом", online),
+        ],
+        LivePhase::Starting => vec![
+            ("live-starting", "Ассистент запускается…", false),
+            ("live-stop", "Остановить запись", online),
+        ],
+        LivePhase::Active => vec![("live-stop", "Остановить запись", online)],
+        // Остановка уже идёт — второй раз нажимать нечего.
+        LivePhase::Stopping => vec![("live-stop", "Остановить запись", false)],
+    }
+}
+
 pub fn menu_state(view: Option<&View>, status: &ResidentStatus) -> MenuState {
     let quitting = *status == ResidentStatus::Quitting;
     let failed = matches!(status, ResidentStatus::Failed { .. });
     MenuState {
         online: view.is_some() && !quitting,
         recording: view.is_some_and(|view| view.recording),
+        live: view
+            .map(|view| LivePhase::of(&view.live))
+            .unwrap_or_default(),
         auto: view.is_some_and(|view| view.auto),
         log: match status {
             ResidentStatus::Failed { log } => Some(log.clone()),
@@ -671,7 +851,7 @@ fn open_window(app: &AppHandle) {
         *slot = None;
         id
     });
-    windows::open_main(app, recording);
+    windows::open_main(app, recording, None);
 }
 
 /// Иконка в трее и поток опроса. Вызывать из `setup` после `Supervisor::start`.
@@ -713,11 +893,8 @@ fn build_menu(app: &AppHandle, state: &MenuState) -> tauri::Result<Menu<Wry>> {
         MenuItem::with_id(app, id, text, enabled && usable, None::<&str>)
     };
     menu.append(&item("open", "Открыть", true)?)?;
-    if state.recording {
-        menu.append(&item("stop", "Остановить запись", state.online)?)?;
-        menu.append(&item("cancel", "Отменить запись", state.online)?)?;
-    } else {
-        menu.append(&item("start", "Начать запись", state.online)?)?;
+    for (id, text, enabled) in record_items(state) {
+        menu.append(&item(id, text, enabled)?)?;
     }
     menu.append(&item("import", "Импортировать файл…", state.online)?)?;
     // id несёт действие: клик по включённой галочке выключает, и наоборот —
@@ -747,6 +924,8 @@ fn on_menu(app: &AppHandle, id: &str) {
         "open" => open_window(app),
         "start" => command(app, Action::Start),
         "stop" => command(app, Action::Stop),
+        "live-start" => command(app, Action::LiveStart),
+        "live-stop" => command(app, Action::LiveStop),
         "cancel" => {
             if let Some(state) = app.try_state::<TrayState>() {
                 let mut mark = lock(&state.cancel);
@@ -785,6 +964,12 @@ fn command(app: &AppHandle, action: Action) {
         if let Some(notice) = action_notice(action, reply.as_ref()) {
             shell_log!("{}: {}", action.path(), notice.body);
             notify(&app, vec![notice]);
+        }
+        if needs_provider(action, reply.as_ref()) {
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                windows::open_main(&handle, None, Some(ASSISTANT_SECTION))
+            });
         }
     });
 }
@@ -884,6 +1069,9 @@ fn poll_loop(app: &AppHandle, initial_menu: MenuState) {
     let mut shown_tip: Option<String> = None;
     let mut shown_menu = Some(initial_menu);
     let mut level_read: Option<Instant> = None;
+    // Окно ассистента открыто нами (по последнему полученному снимку). Без
+    // связи не трогаем: обрыв — не конец ассистента.
+    let mut live_shown = false;
     loop {
         let status = app.state::<Supervisor>().status();
         let state = app.state::<TrayState>();
@@ -912,6 +1100,21 @@ fn poll_loop(app: &AppHandle, initial_menu: MenuState) {
                 kept
             };
             notify(app, notices);
+        }
+
+        if let Some(view) = view.as_ref() {
+            match live_window_change(live_shown, view.live.active) {
+                Some(true) => {
+                    let handle = app.clone();
+                    let _ = app.run_on_main_thread(move || windows::open_live(&handle));
+                }
+                Some(false) => {
+                    let handle = app.clone();
+                    let _ = app.run_on_main_thread(move || windows::close_live(&handle));
+                }
+                None => {}
+            }
+            live_shown = view.live.active;
         }
 
         if let Some(tray) = app.tray_by_id(TRAY_ID) {
@@ -964,6 +1167,7 @@ mod tests {
             jobs_failed: vec![],
             last_stop: None,
             reports_stops: true,
+            live: Live::default(),
         }
     }
 
@@ -1333,6 +1537,7 @@ mod tests {
             MenuState {
                 online: true,
                 recording: true,
+                live: LivePhase::Off,
                 auto: true,
                 log: None,
                 restart: false,
@@ -1397,6 +1602,13 @@ mod tests {
             "Не удалось отменить запись",
             "Не удалось переключить автозапись",
             "Запись прервана",
+            "Ассистент слушает встречу",
+            "Ассистент остановлен — расшифровываю",
+            "Ассистент остановлен",
+            "Ассистент упал",
+            "Запуск ассистента отменён",
+            "Не удалось запустить ассистента",
+            "Не удалось остановить ассистента",
         ]
         .into_iter()
         .map(notice)
@@ -1427,6 +1639,10 @@ mod tests {
                 "Не удалось отменить запись",
                 "Не удалось переключить автозапись",
                 "Запись прервана",
+                "Ассистент остановлен",
+                "Ассистент упал",
+                "Не удалось запустить ассистента",
+                "Не удалось остановить ассистента",
             ]
         );
     }
@@ -1596,6 +1812,295 @@ mod tests {
             let reply: api::Result<Value> = Ok(reply);
             assert_eq!(action_notice(action, Some(&reply)), None, "{action:?}");
         }
+    }
+
+    // --- запись с ассистентом -------------------------------------------
+
+    const LIVE_FOLDER: &str = r"D:\rec\2026-10-01_10-00";
+
+    fn with_live(active: bool, starting: bool, stopping: bool) -> View {
+        View {
+            live: Live {
+                active,
+                starting,
+                stopping,
+                folder: active.then(|| LIVE_FOLDER.to_string()),
+                error: None,
+            },
+            ..idle()
+        }
+    }
+
+    fn live_ended(error: Option<&str>) -> View {
+        let mut view = idle();
+        view.live.error = error.map(str::to_string);
+        view
+    }
+
+    #[test]
+    fn view_reads_live() {
+        let state = json!({"status": "idle", "live": {
+            "active": true, "starting": false, "stopping": true,
+            "folder": LIVE_FOLDER, "error": null, "started_at": 1759300000.0}});
+        let v = View::from_json(&state, &json!({"items": []}));
+        assert!(!v.recording, "живой режим — не обычная запись");
+        assert_eq!(
+            v.live,
+            Live {
+                active: true,
+                starting: false,
+                stopping: true,
+                folder: Some(LIVE_FOLDER.into()),
+                error: None,
+            }
+        );
+        let v = View::from_json(
+            &json!({"live": {"active": false, "error": "  упал  "}}),
+            &json!({}),
+        );
+        assert_eq!(v.live.error.as_deref(), Some("упал"));
+        // Резидент без живого режима — «ассистента нет».
+        let v = View::from_json(&json!({"status": "idle"}), &json!({}));
+        assert_eq!(v.live, Live::default());
+        let v = View::from_json(&json!({"live": {"error": " "}}), &json!({}));
+        assert_eq!(v.live.error, None);
+    }
+
+    #[test]
+    fn live_start_says_listening() {
+        let n = transitions(
+            Some(&with_live(false, true, false)),
+            &with_live(true, false, false),
+        );
+        assert_eq!(titles(&n), vec!["Ассистент слушает встречу"]);
+        // Тик за тиком — тишина.
+        let active = with_live(true, false, false);
+        assert!(transitions(Some(&active), &active).is_empty());
+    }
+
+    #[test]
+    fn first_snapshot_with_live_never_notifies() {
+        assert!(transitions(None, &with_live(true, false, false)).is_empty());
+    }
+
+    #[test]
+    fn live_clean_stop_says_transcribing() {
+        let n = transitions(Some(&with_live(true, false, true)), &live_ended(None));
+        assert_eq!(titles(&n), vec!["Ассистент остановлен — расшифровываю"]);
+        assert_eq!(n[0].recording.as_deref(), Some("2026-10-01_10-00"));
+        // Ассистент вышел сам, без ошибки — это тоже штатная остановка.
+        let n = transitions(Some(&with_live(true, false, false)), &live_ended(None));
+        assert_eq!(titles(&n), vec!["Ассистент остановлен — расшифровываю"]);
+    }
+
+    #[test]
+    fn live_stop_with_error_carries_the_error() {
+        let n = transitions(
+            Some(&with_live(true, false, true)),
+            &live_ended(Some("Ассистент не дописал запись за отведённое время")),
+        );
+        assert_eq!(titles(&n), vec!["Ассистент остановлен"]);
+        assert_eq!(n[0].body, "Ассистент не дописал запись за отведённое время");
+        assert_eq!(n[0].recording.as_deref(), Some("2026-10-01_10-00"));
+    }
+
+    #[test]
+    fn live_error_without_stop_is_a_crash() {
+        let n = transitions(
+            Some(&with_live(true, false, false)),
+            &live_ended(Some("CUDA out of memory")),
+        );
+        assert_eq!(titles(&n), vec!["Ассистент упал"]);
+        assert_eq!(n[0].body, "CUDA out of memory");
+        // Не поднялся вовсе.
+        let n = transitions(
+            Some(&with_live(false, true, false)),
+            &live_ended(Some("Ассистент не запустился за 120 с")),
+        );
+        assert_eq!(titles(&n), vec!["Ассистент упал"]);
+        assert_eq!(n[0].recording, None);
+        let long = "ё".repeat(300);
+        let n = transitions(
+            Some(&with_live(true, false, false)),
+            &live_ended(Some(&long)),
+        );
+        assert_eq!(n[0].body.chars().count(), 120);
+    }
+
+    #[test]
+    fn live_stopped_before_start_is_a_cancel() {
+        let n = transitions(Some(&with_live(false, true, true)), &live_ended(None));
+        assert_eq!(titles(&n), vec!["Запуск ассистента отменён"]);
+    }
+
+    #[test]
+    fn stale_live_error_is_not_repeated() {
+        let failed = live_ended(Some("упал"));
+        assert!(transitions(Some(&failed), &failed).is_empty());
+    }
+
+    #[test]
+    fn resident_restart_mid_live_is_interrupted() {
+        let mut tracker = Tracker::default();
+        tracker.observe(Some(with_live(true, false, false)));
+        for _ in 0..OFFLINE_AFTER_MISSES {
+            tracker.observe(None);
+        }
+        let (_, notices) = tracker.observe(Some(idle()));
+        assert_eq!(titles(&notices), vec!["Запись прервана"]);
+    }
+
+    #[test]
+    fn live_icon_and_tooltip() {
+        let running = ResidentStatus::Running;
+        let active = with_live(true, false, false);
+        assert_eq!(icon_for(Some(&active)), TrayIconKind::Recording);
+        assert_eq!(
+            tooltip(Some(&active), &running),
+            "meet — ассистент слушает встречу"
+        );
+        let stopping = with_live(true, false, true);
+        assert_eq!(icon_for(Some(&stopping)), TrayIconKind::Recording);
+        assert_eq!(
+            tooltip(Some(&stopping), &running),
+            "meet — ассистент дописывает запись"
+        );
+        let starting = with_live(false, true, false);
+        assert_eq!(icon_for(Some(&starting)), TrayIconKind::Busy);
+        assert_eq!(
+            tooltip(Some(&starting), &running),
+            "meet — ассистент запускается"
+        );
+    }
+
+    #[test]
+    fn live_phase_follows_the_snapshot() {
+        let running = ResidentStatus::Running;
+        let phase = |view: &View| menu_state(Some(view), &running).live;
+        assert_eq!(phase(&idle()), LivePhase::Off);
+        assert_eq!(phase(&with_live(false, true, false)), LivePhase::Starting);
+        assert_eq!(phase(&with_live(true, false, false)), LivePhase::Active);
+        assert_eq!(phase(&with_live(true, false, true)), LivePhase::Stopping);
+        // Остановлен ещё до старта — тоже «останавливается».
+        assert_eq!(phase(&with_live(false, true, true)), LivePhase::Stopping);
+        assert_eq!(menu_state(None, &running).live, LivePhase::Off);
+    }
+
+    fn items(recording: bool, live: LivePhase) -> Vec<(&'static str, &'static str, bool)> {
+        record_items(&MenuState {
+            online: true,
+            recording,
+            live,
+            auto: false,
+            log: None,
+            restart: false,
+            quitting: false,
+        })
+    }
+
+    #[test]
+    fn record_items_offer_both_starts_when_idle() {
+        assert_eq!(
+            items(false, LivePhase::Off),
+            vec![
+                ("start", "Начать запись", true),
+                ("live-start", "Начать запись с ассистентом", true),
+            ]
+        );
+        assert_eq!(
+            items(true, LivePhase::Off),
+            vec![
+                ("stop", "Остановить запись", true),
+                ("cancel", "Отменить запись", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn record_items_during_live_stop_the_assistant() {
+        assert_eq!(
+            items(false, LivePhase::Starting),
+            vec![
+                ("live-starting", "Ассистент запускается…", false),
+                ("live-stop", "Остановить запись", true),
+            ]
+        );
+        assert_eq!(
+            items(false, LivePhase::Active),
+            vec![("live-stop", "Остановить запись", true)]
+        );
+        assert_eq!(
+            items(false, LivePhase::Stopping),
+            vec![("live-stop", "Остановить запись", false)]
+        );
+    }
+
+    #[test]
+    fn live_window_follows_active_edges() {
+        assert_eq!(live_window_change(false, true), Some(true));
+        assert_eq!(live_window_change(true, false), Some(false));
+        assert_eq!(live_window_change(true, true), None);
+        assert_eq!(live_window_change(false, false), None);
+    }
+
+    #[test]
+    fn live_start_without_provider_points_to_settings() {
+        let conflict: api::Result<Value> = Err(api::Error::Status {
+            code: 409,
+            message: "Подключите Claude Code или Codex в настройках".into(),
+        });
+        assert_eq!(
+            body_of(Action::LiveStart, Some(&conflict)),
+            (
+                "Не удалось запустить ассистента".into(),
+                "Подключите Claude Code или Codex в настройках".into()
+            )
+        );
+        assert!(needs_provider(Action::LiveStart, Some(&conflict)));
+        assert!(!needs_provider(Action::Start, Some(&conflict)));
+        let busy: api::Result<Value> = Err(api::Error::Status {
+            code: 400,
+            message: "Идёт обычная запись — сначала остановите её".into(),
+        });
+        assert!(!needs_provider(Action::LiveStart, Some(&busy)));
+        assert_eq!(
+            body_of(Action::LiveStart, Some(&busy)).1,
+            "Идёт обычная запись — сначала остановите её"
+        );
+        assert!(!needs_provider(Action::LiveStart, None));
+    }
+
+    #[test]
+    fn live_actions_report_refusals_and_stay_quiet_on_success() {
+        let spawn_failed: api::Result<Value> = Ok(json!({
+            "ok": false, "active": false, "error": "Не удалось запустить ассистента: нет python"}));
+        assert_eq!(
+            body_of(Action::LiveStart, Some(&spawn_failed)).1,
+            "Не удалось запустить ассистента: нет python"
+        );
+        let not_live: api::Result<Value> = Ok(json!({"ok": false, "action": "not-live"}));
+        assert_eq!(
+            body_of(Action::LiveStop, Some(&not_live)),
+            (
+                "Не удалось остановить ассистента".into(),
+                "Ассистент не запущен".into()
+            )
+        );
+        for (action, reply) in [
+            (
+                Action::LiveStart,
+                json!({"ok": true, "starting": true, "active": false, "error": null}),
+            ),
+            (
+                Action::LiveStop,
+                json!({"ok": true, "action": "stopping", "error": null}),
+            ),
+        ] {
+            let reply: api::Result<Value> = Ok(reply);
+            assert_eq!(action_notice(action, Some(&reply)), None, "{action:?}");
+        }
+        assert_eq!(Action::LiveStart.path(), "/live/start");
+        assert_eq!(Action::LiveStop.path(), "/live/stop");
     }
 
     // --- «клик по уведомлению» -------------------------------------------

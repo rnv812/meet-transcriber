@@ -8,7 +8,10 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
+    WebviewWindowBuilder,
+};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::api::Client;
@@ -20,11 +23,20 @@ pub const MEDIA_EXTS: &[&str] = &[
     "mp3", "mp4", "m4a", "wav", "ogg", "opus", "webm", "mkv", "flac",
 ];
 
-/// Адрес страницы окна; `recording` — запись, которую нужно открыть сразу.
-pub fn main_url(recording: Option<&str>) -> String {
-    match recording {
-        None => "index.html".to_string(),
-        Some(id) => format!("index.html?recording={}", encode_component(id)),
+/// Адрес страницы окна; `recording` — запись, которую нужно открыть сразу,
+/// `section` — раздел (`assistant` — настройки ассистента).
+pub fn main_url(recording: Option<&str>, section: Option<&str>) -> String {
+    let mut query = Vec::new();
+    if let Some(id) = recording {
+        query.push(format!("recording={}", encode_component(id)));
+    }
+    if let Some(section) = section {
+        query.push(format!("section={}", encode_component(section)));
+    }
+    if query.is_empty() {
+        "index.html".to_string()
+    } else {
+        format!("index.html?{}", query.join("&"))
     }
 }
 
@@ -63,7 +75,10 @@ pub fn recording_arg(args: &[String]) -> Option<String> {
 }
 
 /// Показать окно, создав при необходимости. Только с главного потока.
-pub fn open_main(app: &AppHandle, recording: Option<String>) {
+///
+/// `section` новому окну уходит в адрес (`?section=…`), открытому — событием
+/// `open-section` (как запись — `open-recording`).
+pub fn open_main(app: &AppHandle, recording: Option<String>, section: Option<&str>) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
@@ -71,12 +86,15 @@ pub fn open_main(app: &AppHandle, recording: Option<String>) {
         if let Some(id) = recording {
             let _ = app.emit_to("main", "open-recording", id);
         }
+        if let Some(section) = section {
+            let _ = app.emit_to("main", "open-section", section);
+        }
         return;
     }
     let built = WebviewWindowBuilder::new(
         app,
         "main",
-        WebviewUrl::App(main_url(recording.as_deref()).into()),
+        WebviewUrl::App(main_url(recording.as_deref(), section).into()),
     )
     .title("meet")
     .inner_size(1180.0, 760.0)
@@ -86,6 +104,140 @@ pub fn open_main(app: &AppHandle, recording: Option<String>) {
     if let Err(error) = built {
         shell_log!("окно не открылось: {error}");
     }
+}
+
+/// Плавающая панель ассистента (`live.html`).
+pub const LIVE_LABEL: &str = "live";
+const LIVE_WIDTH: f64 = 360.0;
+const LIVE_MIN_HEIGHT: f64 = 120.0;
+const LIVE_MAX_HEIGHT: f64 = 520.0;
+/// Отступ от краёв рабочей области, логические пиксели.
+const LIVE_MARGIN: f64 = 16.0;
+
+/// Рабочая область монитора (без панели задач) в физических пикселях и его
+/// масштаб — как их отдаёт `Monitor`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Screen {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f64,
+}
+
+impl Screen {
+    fn of(monitor: &Monitor) -> Screen {
+        let area = monitor.work_area();
+        Screen {
+            x: area.position.x,
+            y: area.position.y,
+            width: area.size.width,
+            height: area.size.height,
+            scale: monitor.scale_factor(),
+        }
+    }
+}
+
+/// Где встаёт панель: правый нижний угол рабочей области (над панелью задач)
+/// с отступом 16 px. (x, y, ширина, высота) — логические пиксели, как их
+/// берёт `WebviewWindowBuilder`.
+pub fn live_window_rect(screen: Screen) -> (f64, f64, f64, f64) {
+    let scale = if screen.scale.is_finite() && screen.scale > 0.0 {
+        screen.scale
+    } else {
+        1.0
+    };
+    let right = (f64::from(screen.x) + f64::from(screen.width)) / scale;
+    let bottom = (f64::from(screen.y) + f64::from(screen.height)) / scale;
+    (
+        right - LIVE_MARGIN - LIVE_WIDTH,
+        bottom - LIVE_MARGIN - LIVE_MIN_HEIGHT,
+        LIVE_WIDTH,
+        LIVE_MIN_HEIGHT,
+    )
+}
+
+/// Высота, которую просит панель, в пределах 120..520 (логические пиксели).
+pub fn live_height(requested: f64) -> f64 {
+    if requested.is_nan() {
+        return LIVE_MIN_HEIGHT;
+    }
+    requested.clamp(LIVE_MIN_HEIGHT, LIVE_MAX_HEIGHT)
+}
+
+/// Новый верх окна, чтобы при смене высоты нижний край остался на месте:
+/// панель растёт вверх, от панели задач.
+pub fn anchored_top(top: f64, height: f64, new_height: f64) -> f64 {
+    top + height - new_height
+}
+
+/// Открыть панель ассистента. Только с главного потока (`run_on_main_thread`
+/// из опроса трея). Уже открыта — не трогаем: фокус она не забирает.
+pub fn open_live(app: &AppHandle) {
+    if app.get_webview_window(LIVE_LABEL).is_some() {
+        return;
+    }
+    let mut builder =
+        WebviewWindowBuilder::new(app, LIVE_LABEL, WebviewUrl::App("live.html".into()))
+            .title("meet — ассистент")
+            .inner_size(LIVE_WIDTH, LIVE_MIN_HEIGHT)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            // Тень Windows у окна без рамки — светлая каёмка вокруг
+            // скруглённой панели.
+            .shadow(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .focused(false);
+    match app.primary_monitor() {
+        Ok(Some(monitor)) => {
+            let (x, y, _, _) = live_window_rect(Screen::of(&monitor));
+            builder = builder.position(x, y);
+        }
+        Ok(None) => shell_log!("панель ассистента: монитор не найден, позиция по умолчанию"),
+        Err(error) => shell_log!("панель ассистента: монитор не прочитан: {error}"),
+    }
+    if let Err(error) = builder.build() {
+        shell_log!("панель ассистента не открылась: {error}");
+    }
+}
+
+/// Закрыть панель ассистента (ассистент остановился). Закрыта человеком —
+/// ничего не делаем.
+pub fn close_live(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(LIVE_LABEL) {
+        if let Err(error) = window.destroy() {
+            shell_log!("панель ассистента не закрылась: {error}");
+        }
+    }
+}
+
+/// Панель меняет высоту под содержимое (120..520), нижний край на месте.
+#[tauri::command]
+pub fn live_resize(app: AppHandle, height: f64) -> Result<(), String> {
+    let window = app
+        .get_webview_window(LIVE_LABEL)
+        .ok_or("панели ассистента нет")?;
+    let scale = window.scale_factor().map_err(|error| error.to_string())?;
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    // Без рамки и тени внешний размер совпадает с внутренним; для якоря
+    // берём внешний (это край окна на экране), задаём — внутренний.
+    let outer = window.outer_size().map_err(|error| error.to_string())?;
+    let inner = window.inner_size().map_err(|error| error.to_string())?;
+    let new_height = (live_height(height) * scale).round();
+    let frame = f64::from(outer.height) - f64::from(inner.height);
+    let top = anchored_top(
+        f64::from(position.y),
+        f64::from(outer.height),
+        new_height + frame,
+    );
+    window
+        .set_size(PhysicalSize::new(inner.width, new_height as u32))
+        .map_err(|error| error.to_string())?;
+    window
+        .set_position(PhysicalPosition::new(position.x, top.round() as i32))
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -223,12 +375,76 @@ mod tests {
 
     #[test]
     fn main_url_carries_recording() {
-        assert_eq!(main_url(None), "index.html");
+        assert_eq!(main_url(None, None), "index.html");
         assert_eq!(
-            main_url(Some("2026-09-30_16-04_import")),
+            main_url(Some("2026-09-30_16-04_import"), None),
             "index.html?recording=2026-09-30_16-04_import"
         );
-        assert_eq!(main_url(Some("a b")), "index.html?recording=a%20b");
+        assert_eq!(main_url(Some("a b"), None), "index.html?recording=a%20b");
+    }
+
+    #[test]
+    fn main_url_carries_section() {
+        assert_eq!(
+            main_url(None, Some("assistant")),
+            "index.html?section=assistant"
+        );
+        assert_eq!(
+            main_url(Some("rec"), Some("assistant")),
+            "index.html?recording=rec&section=assistant"
+        );
+    }
+
+    fn screen(width: u32, height: u32, scale: f64) -> Screen {
+        Screen {
+            x: 0,
+            y: 0,
+            width,
+            height,
+            scale,
+        }
+    }
+
+    #[test]
+    fn live_window_sits_bottom_right_above_the_taskbar() {
+        // 1920×1080, панель задач 40 px снизу: рабочая область 1920×1040.
+        assert_eq!(
+            live_window_rect(screen(1920, 1040, 1.0)),
+            (1544.0, 904.0, 360.0, 120.0)
+        );
+        // 150 %: физические пиксели → логические, отступ тот же в логических.
+        assert_eq!(
+            live_window_rect(screen(2880, 1560, 1.5)),
+            (1544.0, 904.0, 360.0, 120.0)
+        );
+        // Рабочая область не с нуля (панель задач слева/сверху).
+        let shifted = Screen {
+            x: 60,
+            y: 40,
+            ..screen(1860, 1040, 1.0)
+        };
+        assert_eq!(live_window_rect(shifted), (1544.0, 944.0, 360.0, 120.0));
+        // Масштаб не известен — как 100 %.
+        assert_eq!(
+            live_window_rect(screen(1920, 1040, 0.0)),
+            (1544.0, 904.0, 360.0, 120.0)
+        );
+    }
+
+    #[test]
+    fn live_height_is_clamped() {
+        assert_eq!(live_height(300.0), 300.0);
+        assert_eq!(live_height(10.0), 120.0);
+        assert_eq!(live_height(900.0), 520.0);
+        assert_eq!(live_height(f64::NAN), 120.0);
+        assert_eq!(live_height(f64::INFINITY), 520.0);
+    }
+
+    #[test]
+    fn resize_keeps_the_bottom_edge() {
+        // Было 120 высотой с верхом на 904 (низ 1024) — стало 520.
+        assert_eq!(anchored_top(904.0, 120.0, 520.0), 504.0);
+        assert_eq!(anchored_top(504.0, 520.0, 120.0), 904.0);
     }
 
     fn argv(items: &[&str]) -> Vec<String> {

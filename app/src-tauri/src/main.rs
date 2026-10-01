@@ -29,17 +29,24 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             let recording = windows::recording_arg(&args);
             let handle = app.clone();
-            let _ = app.run_on_main_thread(move || windows::open_main(&handle, recording));
+            let _ = app.run_on_main_thread(move || windows::open_main(&handle, recording, None));
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            // Панель ассистента встаёт в угол по монитору при каждом старте:
+            // сохранённая позиция и размер ей не нужны.
+            tauri_plugin_window_state::Builder::default()
+                .with_denylist(&[windows::LIVE_LABEL])
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             windows::endpoint,
             windows::open_folder,
             windows::save_text,
             windows::pick_media,
-            windows::resident_status
+            windows::resident_status,
+            windows::live_resize
         ])
         .setup(|app| {
             Supervisor::start(app.handle());
@@ -48,7 +55,7 @@ fn main() {
             // уведомления) — сразу окно на этой записи.
             let args: Vec<String> = std::env::args().collect();
             if let Some(recording) = windows::recording_arg(&args) {
-                windows::open_main(app.handle(), Some(recording));
+                windows::open_main(app.handle(), Some(recording), None);
             }
             Ok(())
         })
