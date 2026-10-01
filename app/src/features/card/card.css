@@ -177,3 +177,37 @@ mark.hit {
 }
 mark.hit--current, .turn__text.hit--current mark.hit { background: var(--accent); color: #fff; box-shadow: 0 0 0 1px var(--accent-hover); }
 .turn__text.hit--current { box-shadow: -3px 0 0 var(--accent); padding-left: 6px; }
+.tmenu__quote { padding: 4px 6px; border-radius: var(--r-sm); background: var(--surface); line-height: 1.45; }
+.tmenu__cut { margin: 0 1px; color: var(--accent-hover); font-weight: 700; }
+
+/* Окно поверх карточки («Переразделить на спикеров»). */
+.modal {
+  position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: #0009;
+}
+.modal__box {
+  display: flex; flex-direction: column; gap: 10px; width: min(560px, 100%); max-height: 100%; overflow-y: auto;
+  padding: 16px 18px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  box-shadow: 0 16px 48px #000a; font-size: 13px; color: var(--text);
+}
+.redia__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.redia__head h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.redia__head h3:focus { outline: none; }
+.redia__lead, .redia__hint { margin: 0; font-size: 12px; line-height: 1.45; }
+.redia__form, .redia__work, .redia__preview { display: flex; flex-direction: column; gap: 10px; }
+.redia__count { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; }
+.redia__count legend { margin-bottom: 6px; font-weight: 500; }
+.redia__count label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.redia__n {
+  width: 56px; height: 26px; padding: 0 6px; background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--line-2); border-radius: var(--r-sm); font: inherit;
+}
+.redia__sens { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.redia__sens > label { font-weight: 500; }
+.redia__slider { display: flex; flex-basis: 100%; align-items: center; gap: 8px; font-size: 12px; }
+.redia__slider input { flex: 1; accent-color: var(--accent); }
+.redia__summary { margin: 0; line-height: 1.5; }
+.redia__list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.redia__list .spk-row { margin-top: 0; gap: 4px; }
+.redia__actions { display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
+.tmenu__links .spk-link { text-align: left; }

@@ -5,7 +5,7 @@ import { Button } from "../../ui/Button";
 const FORMATS = ["md", "txt", "srt"] as const;
 
 export function CardActions({
-  canExport, canRetranscribe, busy, onExport, onKbExport, onOpenFolder, onRetranscribe, onDelete,
+  canExport, canRetranscribe, busy, onExport, onKbExport, onOpenFolder, onRetranscribe, onRediarize, onDelete,
 }: {
   canExport: boolean;
   canRetranscribe: boolean;
@@ -15,6 +15,8 @@ export function CardActions({
   onKbExport?: () => void;
   onOpenFolder: () => void;
   onRetranscribe: () => void;
+  /** «Переразделить на спикеров…» (только разделение, без распознавания); нет — кнопки нет. */
+  onRediarize?: () => void;
   onDelete: () => void;
 }) {
   const [menu, setMenu] = useState(false);
@@ -38,6 +40,10 @@ export function CardActions({
       )}
       {onKbExport && <Button onClick={onKbExport} disabled={busy}>В базу знаний</Button>}
       {inTauri() && <Button onClick={onOpenFolder}>Открыть папку</Button>}
+      {onRediarize && (
+        <Button onClick={onRediarize} disabled={busy}
+          title="Заново определить, кто говорит, не распознавая речь повторно">Переразделить на спикеров…</Button>
+      )}
       {canRetranscribe && (confirmRe ? (
         <span className="confirm">
           <span>Расшифровка будет создана заново: ручные правки и имена, не сохранённые в базе голосов, будут потеряны. Продолжить?</span>

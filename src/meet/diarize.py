@@ -103,6 +103,7 @@ def diarize_wav(
     min_speakers: int | None = None,
     max_speakers: int | None = None,
     exclusive: bool = False,
+    clustering_threshold: float | None = None,
 ) -> Diarization:
     """Diarization (интервалы + эмбеддинги + регионы нахлёста) по записи.
 
@@ -113,7 +114,11 @@ def diarize_wav(
     По умолчанию — overlap-aware раскладка: turn говорящего непрерывен,
     перебивание лежит поверх, зоны нахлёста возвращаются отдельно.
     exclusive=True — прежняя упрощённая раскладка («в каждый момент говорит
-    ровно один»), без регионов нахлёста; путь отката (--no-overlap)."""
+    ровно один»), без регионов нахлёста; путь отката (--no-overlap).
+
+    clustering_threshold — порог кластеризации голосов пайплайна (у
+    community-1 по умолчанию 0.6): ниже — людей различается больше, выше —
+    меньше («Переразделить на спикеров», чувствительность)."""
     from meet import credentials
 
     token = credentials.get_hf_token()
@@ -133,6 +138,10 @@ def diarize_wav(
     # медленнее, но работает; раньше здесь был жёсткий cuda и падение.
     use_cuda = resolve_device() == "cuda" and torch.cuda.is_available()
     pipe.to(torch.device("cuda" if use_cuda else "cpu"))
+    if clustering_threshold is not None:
+        params = pipe.parameters(instantiated=True)
+        params.setdefault("clustering", {})["threshold"] = float(clustering_threshold)
+        pipe.instantiate(params)
     waveform, rate = _load_wav(path)
     result = pipe(
         {"waveform": waveform, "sample_rate": rate},
@@ -237,6 +246,7 @@ def split_by_speaker(
                     seg.text,
                     _word_speaker(whole, turns),
                     uncertain=_word_uncertain(whole, overlaps),
+                    track=seg.track,
                 )
             )
             continue
@@ -245,17 +255,20 @@ def split_by_speaker(
         for word in seg.words:
             key = (_word_speaker(word, turns), _word_uncertain(word, overlaps))
             if run and key != run_key:
-                out.append(_run_to_segment(run, *run_key))
+                out.append(_run_to_segment(run, *run_key, track=seg.track))
                 run = []
             run.append(word)
             run_key = key
         if run:
-            out.append(_run_to_segment(run, *run_key))
+            out.append(_run_to_segment(run, *run_key, track=seg.track))
     return out
 
 
 def _run_to_segment(
-    run: list[Word], speaker: str | None, uncertain: bool = False
+    run: list[Word], speaker: str | None, uncertain: bool = False, track: str | None = None
 ) -> Segment:
+    """Слова одного спикера — сегмент; слова остаются при нём: по ним правка
+    спикеров режет реплику на границе слова (транскрипт хранит их)."""
     text = "".join(w.text for w in run).strip()
-    return Segment(run[0].start, run[-1].end, text, speaker, uncertain=uncertain)
+    return Segment(run[0].start, run[-1].end, text, speaker, words=list(run),
+                   uncertain=uncertain, track=track)

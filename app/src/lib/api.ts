@@ -12,7 +12,7 @@ import { inTauri, invoke } from "./shell";
 import type {
   AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveLine, LiveState, LiveStatus, Person, PersonCard,
   ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
-  SplitRequest, SplitStatus, ThresholdPlan, Summary,
+  SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   Transcript,
 } from "./types";
 
@@ -121,6 +121,19 @@ export const applySpeakers = (ep: Endpoint, id: string, ops: SpeakerOpInput[], r
  */
 export const relabelTurns = (ep: Endpoint, id: string, req: RelabelRequest) =>
   json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/relabel`, body("POST", req));
+/** «Разделить реплику здесь»: вторая часть (и остаток реплики) — другому спикеру. */
+export const splitTurn = (ep: Endpoint, id: string, req: SplitTurnRequest) =>
+  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/split-turn`, body("POST", req));
+/** «Переразделить на спикеров»: задача только диаризации (без распознавания). */
+export const rediarize = (ep: Endpoint, id: string, params: RediarizeParams) =>
+  json<{ job: Job }>(ep, `/recordings/${enc(id)}/speakers/rediarize`, body("POST", params));
+/** Посчитанное разделение для предпросмотра; нет — 404. */
+export const getRediarized = (ep: Endpoint, id: string) =>
+  json<RediarizePreview>(ep, `/recordings/${enc(id)}/speakers/rediarize`);
+export const applyRediarized = (ep: Endpoint, id: string) =>
+  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/rediarize/apply`, body("POST", {}));
+export const discardRediarized = (ep: Endpoint, id: string) =>
+  json<{ ok: boolean }>(ep, `/recordings/${enc(id)}/speakers/rediarize`, { method: "DELETE" });
 /** «Разделить спикера»: голоса его реплик готовы? Нет — резидент ставит задачу (`job`). */
 export const prepareSplit = (ep: Endpoint, id: string, label: string) =>
   json<SplitStatus>(ep, `/recordings/${enc(id)}/speakers/split/prepare`, body("POST", { label }));

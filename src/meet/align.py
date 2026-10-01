@@ -109,7 +109,7 @@ def align_segments(segments, wav_path, device=None):
             out_segments.append(
                 Segment(seg.start, seg.end, seg.text, seg.speaker, new_words,
                         seg.no_speech_prob, seg.avg_logprob,
-                        uncertain=seg.uncertain)
+                        uncertain=seg.uncertain, track=seg.track)
             )
             aligned += 1
     finally:

@@ -601,7 +601,8 @@ def sidecar_for_write(folder: Path) -> tuple[Path, dict]:
 
 
 def _side_labels(entries) -> list:
-    return sorted(str(e.get("label")) for e in entries or [] if isinstance(e, dict))
+    return sorted((str(e.get("label")), str(e.get("display")))
+                  for e in entries or [] if isinstance(e, dict))
 
 
 def _put_back(path: Path, data: bytes) -> None:
@@ -1113,3 +1114,104 @@ def threshold_apply(folder: Path, value: float, voices_dir: Path, now: datetime 
                 "voices_error": None, "changed": 0}
     return apply(folder, ops, {}, voices_dir, now, lead={"type": "threshold", "value": value},
                  threshold=[old, value])
+
+
+# --- разделить реплику по слову -------------------------------------------------
+
+
+def _cut_at(segment: dict, char: int) -> int | None:
+    """Номер слова, с которого начинается вторая часть, для места `char` в
+    тексте сегмента (ближайшая граница слов); None — слов нет или режется по
+    краю сегмента (0 — весь сегмент во вторую часть, len — в первую)."""
+    import unicodedata
+
+    text = unicodedata.normalize("NFC", str(segment.get("text") or "").strip())
+    if char <= 0:
+        return 0
+    if char >= len(text):
+        return len(segment.get("words") or []) or None
+    if not library.words_match(segment):
+        return None
+    words = [unicodedata.normalize("NFC", str(w[2])) for w in segment["words"]]
+    lead = len("".join(words)) - len("".join(words).lstrip())
+    starts, pos = [], 0
+    for w in words:
+        starts.append(pos + (len(w) - len(w.lstrip())) - lead)
+        pos += len(w)
+    if len(words) < 2:
+        return None
+    return min(range(1, len(words)), key=lambda k: (abs(starts[k] - char), k))
+
+
+def _part(segment: dict, words: list, first: bool) -> dict:
+    text = "".join(str(w[2]) for w in words).strip()
+    start = segment["start"] if first else round(float(words[0][0]), 2)
+    end = round(float(words[-1][1]), 2) if first else segment["end"]
+    return {**segment, "start": start, "end": end, "text": text, "words": [list(w) for w in words]}
+
+
+def split_turn(folder: Path, turn, at: int, char: int, to, voices_dir: Path, *,
+               count=None, labels=None, now: datetime | None = None) -> dict:
+    """Разделить реплику в месте `char` сегмента `at` и отдать вторую часть
+    (с остатком реплики — сегментами `turn` после него) другому спикеру.
+    Сегмент со словами режется по ближайшей границе слова; без слов (старые
+    расшифровки) — по ближайшему краю сегмента. Один шаг истории."""
+    normalize(folder)
+    data = _transcript(folder)
+    segments = data["segments"]
+    chosen = _indices(turn, segments)
+    if labels is not None:
+        if not isinstance(labels, list) or len(labels) != len(turn):
+            raise SpeakerError("непонятный набор реплик")
+        by_index = dict(zip(turn, labels))
+        labels = [by_index[i] for i in chosen]
+    _expect(segments, chosen, count, labels)
+    if not isinstance(at, int) or at not in chosen or not isinstance(char, int):
+        raise SpeakerError("место разделения вне реплики")
+    label = segments[at].get("speaker")
+    if not label or any(segments[i].get("speaker") != label for i in chosen):
+        raise Stale(STALE_VIEW)
+    target = _target(to, data, _sidecar(folder), set(_order(_shown(segments))))
+    if target == label:
+        raise SpeakerError("вторая часть уже у этого спикера — выберите другого")
+    seg = segments[at]
+    k = _cut_at(seg, char)
+    if k is None:  # без слов — к ближайшему краю сегмента
+        text = str(seg.get("text") or "").strip()
+        k = 0 if char <= len(text) / 2 else len(seg.get("words") or [None])
+        inside = False
+    else:
+        inside = 0 < k < len(seg.get("words") or [])
+    rest = [i for i in chosen if i > at]
+    replace = []
+    if inside:
+        first, second = _part(seg, seg["words"][:k], True), _part(seg, seg["words"][k:], False)
+        second["speaker"] = target
+        replace = [{"at": at, "before": seg, "after": [first, second]}]
+        cut_time = second["start"]
+        moved = [i + 1 for i in rest]
+    else:
+        whole = k == 0
+        moved = ([at] if whole else []) + rest
+        cut_time = seg["start"] if whole else (segments[rest[0]]["start"] if rest else seg["end"])
+    if not inside and not moved:
+        raise SpeakerError("после этого места в реплике ничего нет")
+    after = _replace(segments, replace, True)
+    targets = [target if i in set(moved) else None for i in range(len(after))]
+    deltas = _deltas(after, targets)
+    op = {"type": "split_turn", "label": label, "to": target, "at": round(float(cut_time), 2),
+          "cut": "word" if inside else "segment"}
+    step = _new_step([op], deltas, len(segments), now)
+    if replace:
+        step["count_after"] = len(after)
+        step["payload"] = True
+    for d in deltas:
+        for i in d["idx"]:
+            after[i]["speaker"] = d["to"]
+    data["segments"] = after
+    meta, _ = _commit(folder, data, _recorder(data, step), voices_dir, lambda meta: None,
+                      payload=(step["id"], {"replace": replace}) if replace else None)
+    steps, pos = _history_of(meta, data)
+    return {"step": _public([step])[0], "history": _public(steps), "pos": pos,
+            "trimmed": _trimmed(meta, data), "voices_error": None,
+            "changed": sum(len(d["idx"]) for d in deltas) + (1 if inside else 0)}

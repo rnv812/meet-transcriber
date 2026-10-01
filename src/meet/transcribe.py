@@ -244,7 +244,9 @@ def _write_structured(path: Path, segments, title: str, name_map: dict,
     labels = speaker_names(segments)
     segments = [
         Segment(s.start, s.end, s.text, labels.get(s.speaker, s.speaker),
-                uncertain=getattr(s, "uncertain", False), kind=getattr(s, "kind", None))
+                words=list(getattr(s, "words", None) or []),
+                uncertain=getattr(s, "uncertain", False), kind=getattr(s, "kind", None),
+                track=getattr(s, "track", None))
         for s in segments
     ]
     raw = library.segments_to_raw(
@@ -252,6 +254,10 @@ def _write_structured(path: Path, segments, title: str, name_map: dict,
     )
     if diarization:
         raw["diarization"] = diarization
+    if _find_track(path, "sys") and _find_track(path, "mic"):
+        # Микрофонные сегменты помечены пайплайном (`track`): выводить их по
+        # подписям, как у старых расшифровок (meet.segvoices), не нужно.
+        raw["track_marks"] = "pipeline"
     try:
         library.write_transcript(path, raw)
     except OSError as e:  # транскрипт уже написан — это не повод падать
@@ -369,4 +375,5 @@ def _transcribe_two_track(
         speaker = settings.load().recording.speaker_name
         for seg in mic_segs:
             seg.speaker = speaker
+            seg.track = "mic"
     return interleave_tracks(sys_segs, mic_segs), diar, name_map

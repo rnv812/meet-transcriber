@@ -143,6 +143,26 @@ class FakeState:
         self.calls.append(("speakers_threshold_apply", rid, body))
         return {"pos": 4}
 
+    def speakers_split_turn(self, rid, body):
+        self.calls.append(("speakers_split_turn", rid, body))
+        return {"pos": 5}
+
+    def speakers_rediarize(self, rid, body):
+        self.calls.append(("speakers_rediarize", rid, body))
+        return {"job": {"id": "r1"}}
+
+    def speakers_rediarized(self, rid):
+        self.calls.append(("speakers_rediarized", rid))
+        return {"error": "нового разделения нет"}
+
+    def speakers_rediarize_apply(self, rid):
+        self.calls.append(("speakers_rediarize_apply", rid))
+        return {"pos": 6}
+
+    def speakers_rediarize_discard(self, rid):
+        self.calls.append(("speakers_rediarize_discard", rid))
+        return {"ok": True}
+
     def speakers_relabel(self, rid, body):
         self.calls.append(("speakers_relabel", rid, body))
         return {"pos": 2}
@@ -1146,3 +1166,16 @@ def test_speaker_split_and_threshold_routes(server):
     calls = [c[0] for c in server.state_obj.calls if isinstance(c, tuple) and c[0].startswith("speakers_")]
     assert calls[-5:] == ["speakers_split_prepare", "speakers_split_preview", "speakers_split_apply",
                           "speakers_threshold", "speakers_threshold_apply"]
+
+
+def test_split_turn_and_rediarize_routes(server):
+    rid = "2026-09-30_16-04"
+    base = f"/recordings/{rid}/speakers"
+    assert _post(server, f"{base}/split-turn", {"turn": [1], "at": 1, "char": 3}) == {"pos": 5}
+    assert _post(server, f"{base}/rediarize", {"num_speakers": 4}) == {"job": {"id": "r1"}}
+    _get(server, f"{base}/rediarize", expect=404)
+    assert _post(server, f"{base}/rediarize/apply", {}) == {"pos": 6}
+    assert _post(server, f"{base}/rediarize", method="DELETE") == {"ok": True}
+    calls = [c[0] for c in server.state_obj.calls if isinstance(c, tuple) and c[0].startswith("speakers_")]
+    assert calls[-5:] == ["speakers_split_turn", "speakers_rediarize", "speakers_rediarized",
+                          "speakers_rediarize_apply", "speakers_rediarize_discard"]

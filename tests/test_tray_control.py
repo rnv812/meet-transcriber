@@ -1692,6 +1692,45 @@ def test_split_prepare_queues_voices_once_then_preview_and_apply(with_recordings
                                          "groups": [{"idx": [0], "to": None}]})
 
 
+def test_rediarize_queues_validates_previews_applies_and_discards(with_recordings, app, monkeypatch):
+    from meet import control, rediarize
+
+    rid = _speaker_meeting(with_recordings)
+    queue = _SplitQueue()
+    state = tray_control.TrayControl(app, queue=queue)
+    for bad in ({"num_speakers": 0}, {"num_speakers": "3"}, {"num_speakers": 3, "max_speakers": 4},
+                {"min_speakers": 5, "max_speakers": 2}, {"sensitivity": 2}):
+        with pytest.raises(control.BadRequest):
+            state.speakers_rediarize(rid, bad)
+    got = state.speakers_rediarize(rid, {"num_speakers": 3, "sensitivity": 0.7})
+    assert got["job"]["kind"] == jobs.REDIARIZE
+    assert queue.options == [{"num_speakers": 3, "sensitivity": 0.7}]
+    state.speakers_rediarize(rid, {})                       # уже идёт — вторую не ставим
+    assert len(queue.options) == 1
+    assert state.speakers_rediarized(rid) == {"error": "нового разделения нет"}
+
+    data = library.read_transcript(with_recordings)
+    (with_recordings / rediarize.PREVIEW_NAME).write_text(json.dumps({
+        "base": rediarize.fingerprint(data), "params": {"num_speakers": 3},
+        "parts": [[{**data["segments"][0], "speaker": "Спикер 2"}], [dict(data["segments"][1])]],
+        "voices": []}, ensure_ascii=False), encoding="utf-8")
+    prev = state.speakers_rediarized(rid)
+    assert prev["stale"] is False and [r["label"] for r in prev["speakers"]] == ["Спикер 2"]
+    got = state.speakers_rediarize_apply(rid)
+    assert got["step"]["ops"][0]["type"] == "rediarize"
+    assert [s["speaker"] for s in library.read_transcript(with_recordings)["segments"]] == ["Спикер 2"] * 2
+    assert state.speakers_rediarize_discard(rid) == {"ok": True}
+
+
+def test_split_turn_through_the_panel_lock(with_recordings, app):
+    rid = _speaker_meeting(with_recordings)
+    state = tray_control.TrayControl(app, queue=_Queue())
+    got = state.speakers_split_turn(rid, {"turn": [0], "at": 0, "char": 0, "to": "Анна",
+                                          "labels": ["Спикер 1"], "count": 2})
+    assert got["step"]["ops"][0]["type"] == "split_turn"
+    assert [r["label"] for r in got["speakers"]] == ["Анна", "Спикер 2"]
+
+
 def test_threshold_preview_apply_and_bad_value(with_recordings, app, tmp_path):
     from meet import control
 

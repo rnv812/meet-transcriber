@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="meet-job")
     parser.add_argument("kind",
                         choices=["transcribe", "import", "install-engine", "download-model",
-                                 "summary", "ask", "merge", "speaker_split"])
+                                 "summary", "ask", "merge", "speaker_split", "rediarize"])
     parser.add_argument("path")
     parser.add_argument("--speakers", type=int)
     parser.add_argument("--hotwords")
@@ -53,6 +53,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--flavor", choices=["cuda", "cpu"])
     parser.add_argument("--question")
     parser.add_argument("--label")
+    parser.add_argument("--num-speakers", type=int)
+    parser.add_argument("--min-speakers", type=int)
+    parser.add_argument("--max-speakers", type=int)
+    parser.add_argument("--sensitivity", type=float)
     args = parser.parse_args(argv)
 
     if args.kind in ("summary", "ask"):
@@ -62,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
         return _merge(args.path)
     if args.kind == "speaker_split":
         return _speaker_split(args.path, args.label or "")
+    if args.kind == "rediarize":
+        return _rediarize(args.path, args)
 
     if args.kind == "install-engine":
         return _install_engine(args.flavor)
@@ -215,6 +221,21 @@ def _speaker_split(folder_str: str, label: str) -> int:
         return folder / segvoices.CACHE_NAME
 
     return _speaker_voices(work, "speaker_split")
+
+
+def _rediarize(folder_str: str, args) -> int:
+    """Повторная диаризация без распознавания (meet.rediarize): результат —
+    предпросмотр рядом с записью, применяет его резидент."""
+    from pathlib import Path
+
+    def work(bus):
+        from meet import rediarize
+
+        return rediarize.run(Path(folder_str), num_speakers=args.num_speakers,
+                             min_speakers=args.min_speakers, max_speakers=args.max_speakers,
+                             sensitivity=args.sensitivity, bus=bus)
+
+    return _speaker_voices(work, "rediarize")
 
 
 def _install_engine(flavor: str | None) -> int:

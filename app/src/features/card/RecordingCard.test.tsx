@@ -23,6 +23,7 @@ vi.mock("../../lib/api", async (orig) => ({
   kbExport: vi.fn(),
   getSpeakers: vi.fn(),
   applySpeakers: vi.fn(),
+  getRediarized: vi.fn(async () => { throw new Error("нового разделения нет"); }),
 }));
 vi.mock("../../lib/shell", () => ({
   inTauri: () => true,
@@ -593,4 +594,16 @@ test("объединённая встреча: подпись о частях, �
   expect(screen.getByRole("separator", { name: "— перерыв 15 мин —" })).toBeInTheDocument();
   // перерыв — не участник встречи
   expect(screen.queryByRole("button", { name: /Неизвестный/ })).toBeNull();
+});
+
+test("«Переразделить на спикеров…» открывает окно; готовый результат — баннер «Посмотреть»", async () => {
+  load({ rediarize_ready: true });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  expect(screen.getByText(/Новое разделение на спикеров готово/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Переразделить на спикеров…" }));
+  const dialog = await screen.findByRole("dialog", { name: "Переразделить на спикеров" });
+  expect(screen.queryByText(/Новое разделение на спикеров готово/)).toBeNull();
+  await userEvent.click(within(dialog).getByRole("button", { name: "Закрыть" }));
+  expect(screen.queryByRole("dialog", { name: "Переразделить на спикеров" })).toBeNull();
 });

@@ -33,16 +33,17 @@ def _cut_segment(seg: Segment, times: list[float]) -> list[Segment]:
         left = [w for w in words if w.start < t]
         right = [w for w in words if w.start >= t]
         if left and right:
-            parts.append(_words_to_segment(left, seg.speaker, seg.uncertain))
+            parts.append(_words_to_segment(left, seg.speaker, seg.uncertain, seg.track))
             words = right
-    parts.append(_words_to_segment(words, seg.speaker, seg.uncertain))
+    parts.append(_words_to_segment(words, seg.speaker, seg.uncertain, seg.track))
     return parts
 
 
 def _words_to_segment(
-    words: list[Word], speaker: str | None, uncertain: bool = False
+    words: list[Word], speaker: str | None, uncertain: bool = False, track: str | None = None
 ) -> Segment:
     text = "".join(w.text for w in words).strip()
     return Segment(
-        words[0].start, words[-1].end, text, speaker, words=words, uncertain=uncertain
+        words[0].start, words[-1].end, text, speaker, words=words, uncertain=uncertain,
+        track=track,
     )

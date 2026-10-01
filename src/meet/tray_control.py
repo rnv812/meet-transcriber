@@ -258,6 +258,42 @@ PROCESSING = "Запись ещё обрабатывается (обрезка �
 RECOVER_DAYS = 7
 
 
+def _for_window(segment):
+    if not isinstance(segment, dict) or "words" not in segment:
+        return segment
+    out = {k: v for k, v in segment.items() if k != "words"}
+    if library.words_match(segment):
+        out["has_words"] = True
+    return out
+
+
+def _window_transcript(data: dict | None) -> dict | None:
+    """Транскрипт для окна: сырые SPEAKER_XX — «Спикер N», слова с таймкодами
+    убраны (их много), вместо них — `has_words` у сегмента."""
+    data = library.with_display_names(data)
+    if not data or not isinstance(data.get("segments"), list):
+        return data
+    return {**data, "segments": [_for_window(s) for s in data["segments"]]}
+
+
+def _keep_words(folder: Path, data: dict) -> dict:
+    """Сохранение из редактора: окно слов не видит (см. transcript) — вернуть
+    их сегментам, текст которых не изменился; у правленных слова уже врут."""
+    old = library.read_transcript(folder) or {}
+    words = {(s.get("start"), s.get("end"), s.get("text")): s["words"]
+             for s in old.get("segments") or [] if isinstance(s, dict) and library.words_match(s)}
+    segments = []
+    for s in data["segments"]:
+        if isinstance(s, dict):
+            s = {k: v for k, v in s.items() if k != "has_words"}
+            if "words" in s and not library.words_match(s):
+                s.pop("words")
+            elif "words" not in s and (s.get("start"), s.get("end"), s.get("text")) in words:
+                s["words"] = words[(s.get("start"), s.get("end"), s.get("text"))]
+        segments.append(s)
+    return {**data, "segments": segments}
+
+
 class TrayControl:
     """Состояние для `meet.control.ControlServer` поверх объекта трея."""
 
@@ -1208,7 +1244,7 @@ class TrayControl:
         if card is None:
             return {"error": "записи нет"}
         raw = card.to_raw()
-        raw["transcript"] = library.with_display_names(library.read_transcript(folder))
+        raw["transcript"] = _window_transcript(library.read_transcript(folder))
         return raw
 
     def update_recording(self, recording_id: str, body: dict) -> dict:
@@ -1259,9 +1295,11 @@ class TrayControl:
         self._auto_kb_export(folder)
 
     def transcript(self, recording_id: str) -> dict:
+        """Транскрипт для окна: без слов с таймкодами (их много, окну нужно
+        только знать, можно ли резать реплику по слову — `has_words`)."""
         folder = self._folder(recording_id)
-        data = library.read_transcript(folder) if folder else None
-        return library.with_display_names(data) or {"error": "транскрипта нет"}
+        data = _window_transcript(library.read_transcript(folder) if folder else None)
+        return data or {"error": "транскрипта нет"}
 
     def export(self, recording_id: str, fmt: str) -> dict:
         from meet import export
@@ -1324,7 +1362,7 @@ class TrayControl:
         if not isinstance(data, dict) or not isinstance(data.get("segments"), list):
             return {"error": "ожидается транскрипт с полем segments"}
         with self._speakers_lock:  # не посреди правки спикеров
-            library.write_transcript(folder, data)
+            library.write_transcript(folder, _keep_words(folder, data))
         return {"ok": True, "path": str(library.transcript_path(folder))}
 
     def name_speakers(self, recording_id: str, mapping: dict) -> dict:
@@ -1455,6 +1493,18 @@ class TrayControl:
             folder, body.get("idx"), body.get("to"), voices,
             count=body.get("count"), labels=body.get("labels")))
 
+    def speakers_split_turn(self, recording_id: str, body: dict | None) -> dict:
+        """«Разделить реплику здесь»: {"turn": номера сегментов реплики, "at":
+        сегмент, "char": место в его тексте, "to", "labels", "count"}."""
+        from meet import speakers
+
+        body = body or {}
+        at, char = body.get("at"), body.get("char")
+        return self._speakers_change(recording_id, lambda folder, voices: speakers.split_turn(
+            folder, body.get("turn"), at if isinstance(at, int) else -1,
+            char if isinstance(char, int) else 0, body.get("to"), voices,
+            count=body.get("count"), labels=body.get("labels")))
+
     # --- «Разделить спикера» и порог узнавания ----------------------------------
 
     def _speakers_read(self, recording_id: str, read) -> dict:
@@ -1519,6 +1569,79 @@ class TrayControl:
         return self._speakers_change(recording_id, lambda folder, voices: speaker_split.apply(
             folder, str(body.get("label") or ""), body.get("groups"), body.get("fingerprint"), voices,
             mode="people" if body.get("mode") == "people" else "auto"))
+
+    # --- «Переразделить на спикеров» -----------------------------------------------
+
+    def speakers_rediarize(self, recording_id: str, body: dict | None) -> dict:
+        """Поставить повторную диаризацию: {"num_speakers"} или {"min_speakers",
+        "max_speakers"} и {"sensitivity": 0..1}. Уже идёт — вернуть её."""
+        from meet import rediarize
+
+        body = body or {}
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        options: dict = {}
+        for name in ("num_speakers", "min_speakers", "max_speakers"):
+            value = body.get(name)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= rediarize.MAX_SPEAKERS:
+                raise _bad_request(f"Число собеседников — от 1 до {rediarize.MAX_SPEAKERS}")
+            options[name] = value
+        if "num_speakers" in options and ("min_speakers" in options or "max_speakers" in options):
+            raise _bad_request("Укажите либо точное число собеседников, либо диапазон")
+        if options.get("min_speakers", 0) > options.get("max_speakers", rediarize.MAX_SPEAKERS):
+            raise _bad_request("Наименьшее число собеседников больше наибольшего")
+        sensitivity = body.get("sensitivity")
+        if sensitivity is not None:
+            if isinstance(sensitivity, bool) or not isinstance(sensitivity, (int, float))                     or not 0 <= sensitivity <= 1:
+                raise _bad_request("Чувствительность — число от 0 до 1")
+            options["sensitivity"] = float(sensitivity)
+        with self._speakers_lock:
+            reason = self._busy_reason(folder, model=False)
+            if reason:
+                raise _conflict(reason[:1].upper() + reason[1:])
+            if library.read_transcript(folder) is None:
+                raise _bad_request("у записи нет расшифровки")
+            from meet import speakers
+
+            # Сырые SPEAKER_XX — в «Спикер N» до расчёта: иначе применение,
+            # переписав их, сочло бы результат устаревшим.
+            if speakers.normalize(folder, tracks=True):
+                from meet import search
+
+                search.forget(folder)
+        with self._submit_lock:
+            job = self.queue.active_for(str(folder), (jobs.REDIARIZE,))
+            if job is None:
+                rediarize.discard(folder)  # прежний результат уже не нужен
+                job = self.queue.submit(jobs.REDIARIZE, str(folder), options)
+        self._updated(folder)
+        return {"job": job.to_raw()}
+
+    def speakers_rediarized(self, recording_id: str) -> dict:
+        """Предпросмотр посчитанного разделения (нет — 404)."""
+        from meet import rediarize
+
+        got = self._speakers_read(recording_id, rediarize.preview)
+        return got if got is not None else {"error": "нового разделения нет"}
+
+    def speakers_rediarize_apply(self, recording_id: str) -> dict:
+        from meet import rediarize
+
+        return self._speakers_change(recording_id, rediarize.apply)
+
+    def speakers_rediarize_discard(self, recording_id: str) -> dict:
+        from meet import rediarize
+
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        with self._speakers_lock:
+            rediarize.discard(folder)
+        self._updated(folder)
+        return {"ok": True}
 
     @staticmethod
     def _threshold_value(body: dict | None) -> float:

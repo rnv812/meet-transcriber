@@ -11,7 +11,8 @@
  */
 
 import {
-  useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode,
+  useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent,
+  type ReactNode,
 } from "react";
 import { findHits, parseQuery, prepare } from "../../lib/search";
 import type { Turn } from "../../lib/speakers";
@@ -39,7 +40,7 @@ const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce
 const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
 
 export function TranscriptView({
-  turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, toolbar, find,
+  turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
@@ -50,6 +51,7 @@ export function TranscriptView({
   onSpeaker?: (turn: number, anchor: HTMLElement) => void;
   selected?: ReadonlySet<number>;
   onSelect?: (turn: number, how: "toggle" | "range") => void;
+  onSplitAt?: (turn: number, event: MouseEvent<HTMLElement>) => void;
   /** Полоса над репликами (выбранные, итог назначения). */
   toolbar?: ReactNode;
   find?: FindRequest | null;
@@ -190,7 +192,8 @@ export function TranscriptView({
       </div>
       {toolbar}
       <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onNameSpeaker={onNameSpeaker}
-        onSpeaker={onSpeaker} selected={selected} onSelect={onSelect} marks={active ? marks : undefined} />
+        onSpeaker={onSpeaker} selected={selected} onSelect={onSelect} onSplitAt={onSplitAt}
+        marks={active ? marks : undefined} />
     </div>
   );
 }

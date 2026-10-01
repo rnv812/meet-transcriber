@@ -11,7 +11,7 @@ export type TurnMarks = Map<number, { ranges: Range[]; first: number }>;
 
 /** Плоский список без компонента на реплику: 2 часа записи — около тысячи блоков. */
 export const Turns = memo(function Turns({
-  turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, marks,
+  turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, marks,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
@@ -23,6 +23,8 @@ export const Turns = memo(function Turns({
   /** Выбранные реплики (Ctrl/Shift+щелчок). */
   selected?: ReadonlySet<number>;
   onSelect?: (turn: number, how: "toggle" | "range") => void;
+  /** Правый щелчок по тексту: «Разделить реплику здесь». */
+  onSplitAt?: (turn: number, event: MouseEvent<HTMLElement>) => void;
   marks?: TurnMarks;
 }) {
   // Ctrl/Shift+щелчок по реплике — выбор; простой щелчок по тексту остаётся выделением текста.
@@ -80,7 +82,8 @@ export const Turns = memo(function Turns({
                 {t.uncertain && <span className="turn__flag">(нахлёст)</span>}
               </div>
               {/* Реплика, найденная только по спикеру, — совпадение целиком. */}
-              <p className="turn__text" data-hit={mark && !mark.ranges.length ? mark.first : undefined}>
+              <p className="turn__text" data-hit={mark && !mark.ranges.length ? mark.first : undefined}
+                onContextMenu={onSplitAt && t.speaker !== NO_SPEAKER ? (e) => onSplitAt(i, e) : undefined}>
                 {mark?.ranges.length ? <Highlight text={text} ranges={mark.ranges} firstHit={mark.first} /> : text}
               </p>
             </div>

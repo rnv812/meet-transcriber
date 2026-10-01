@@ -6,7 +6,7 @@
  * набором — одним шагом истории, который можно отменить целиком.
  */
 
-import { plural } from "../../../lib/format";
+import { clock, plural } from "../../../lib/format";
 import { isUnnamed } from "../../../lib/speakers";
 import type { SpeakerOp, SpeakerOpInput, SpeakerRow, SpeakerStep } from "../../../lib/types";
 
@@ -73,6 +73,8 @@ export function prune(staged: Staged, labels: string[]): Staged {
 
 function opText(op: SpeakerOp): string {
   if (op.type === "split") return `${op.label} разделён: ${op.into.join(", ")}`;
+  if (op.type === "split_turn") return `Реплика ${op.label} разделена (${clock(op.at)}), вторая часть → ${op.to}`;
+  if (op.type === "rediarize") return `Заново разделено на спикеров: ${op.speakers}`;
   if (op.type === "threshold") return `Порог узнавания ${Math.round(op.value * 100)}%`;
   if (op.type === "relabel") {
     const n = op.turns;

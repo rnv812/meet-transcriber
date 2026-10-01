@@ -58,6 +58,8 @@ class Recording:
     # "kb_left"} — из скольких записей, удалены ли исходные и какие их папки в
     # базе знаний остались нетронутыми. Не объединённая — None.
     merge: dict | None = None
+    # «Переразделить на спикеров» посчитано и ждёт решения (rediarize.json).
+    rediarize_ready: bool = False
 
     def to_raw(self) -> dict:
         return {
@@ -74,7 +76,12 @@ class Recording:
             "diarization": self.diarization,
             "kb_export": self.kb_export,
             "merge": self.merge,
+            "rediarize_ready": self.rediarize_ready,
         }
+
+
+# Результат «Переразделить на спикеров», ждущий применения (meet.rediarize).
+REDIARIZE_PREVIEW = "rediarize.json"
 
 
 def find_track(folder: Path, stem: str) -> Path | None:
@@ -153,13 +160,35 @@ def with_display_names(data: dict | None) -> dict | None:
     return {**data, "segments": segments}
 
 
+def _dumps_transcript(data: dict) -> str:
+    """JSON транскрипта с отступами, но слова сегмента — одной строкой:
+    иначе на каждое слово ушло бы пять строк файла."""
+    segments = data.get("segments")
+    if not isinstance(segments, list) or not any(
+            isinstance(s, dict) and isinstance(s.get("words"), list) for s in segments):
+        return json.dumps(data, ensure_ascii=False, indent=1)
+    import uuid
+
+    nonce = uuid.uuid4().hex
+    packed: dict[str, str] = {}
+    out_segments = []
+    for i, s in enumerate(segments):
+        if isinstance(s, dict) and isinstance(s.get("words"), list):
+            mark = f"@@words-{nonce}-{i}@@"
+            packed[json.dumps(mark)] = json.dumps(s["words"], ensure_ascii=False, separators=(",", ":"))
+            s = {**s, "words": mark}
+        out_segments.append(s)
+    text = json.dumps({**data, "segments": out_segments}, ensure_ascii=False, indent=1)
+    for mark, value in packed.items():
+        text = text.replace(mark, value, 1)
+    return text
+
+
 def write_transcript(folder: Path, data: dict) -> Path:
     """Атомарная запись: редактор читает файл в любой момент."""
     path = transcript_path(folder)
     tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(
-        json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8"
-    )
+    tmp.write_text(_dumps_transcript(data), encoding="utf-8")
     import os
 
     os.replace(tmp, path)
@@ -569,6 +598,7 @@ def describe(folder: Path) -> Recording | None:
         diarization=diarization,
         kb_export=meta["kb_export"] if isinstance(meta.get("kb_export"), dict) else None,
         merge=_merge_summary(meta),
+        rediarize_ready=(folder / REDIARIZE_PREVIEW).is_file(),
     )
 
 
@@ -652,7 +682,29 @@ def segments_to_raw(segments, speakers: dict | None = None,
                 "uncertain": bool(getattr(s, "uncertain", False)),
                 # отметка перерыва объединённой встречи (meet.merge)
                 **({"kind": s.kind} if getattr(s, "kind", None) else {}),
+                # микрофон владельца в записи звонка (без поля — собеседники)
+                **({"track": s.track} if getattr(s, "track", None) else {}),
+                # слова с таймкодами: по ним правка спикеров режет реплику
+                **({"words": words_to_raw(s.words)} if getattr(s, "words", None) else {}),
             }
             for s in segments
         ],
     }
+
+
+def words_to_raw(words) -> list[list]:
+    """Слова сегмента компактно: [начало, конец, текст]. Текст — как у
+    распознавания, с ведущим пробелом: "".join(текстов).strip() == текст
+    сегмента."""
+    return [[round(float(w.start), 2), round(float(w.end), 2), str(w.text)] for w in words]
+
+
+def words_match(segment: dict) -> bool:
+    """Слова сегмента ещё описывают его текст (текст не правили руками)."""
+    words = segment.get("words")
+    if not isinstance(words, list) or not words:
+        return False
+    try:
+        return "".join(str(w[2]) for w in words).strip() == str(segment.get("text") or "").strip()
+    except (IndexError, TypeError, KeyError):
+        return False

@@ -82,6 +82,8 @@ export type Recording = {
   kb_export?: KbExportRecord | null;
   /** Объединённая встреча (`source: "merge"`); у остальных — null. */
   merge?: MergeInfo | null;
+  /** «Переразделить на спикеров» посчитано и ждёт решения. */
+  rediarize_ready?: boolean;
 };
 
 /**
@@ -133,6 +135,8 @@ export type Segment = {
   uncertain: boolean;
   /** "break" — отметка перерыва между частями объединённой встречи: разделитель, не реплика. */
   kind?: "break";
+  /** У сегмента есть слова с таймкодами: реплику можно разделить по слову. */
+  has_words?: boolean;
 };
 
 export type Transcript = {
@@ -193,7 +197,11 @@ export type SpeakerOp =
   /** Спикер разделён по голосу на группы `into`. */
   | { type: "split"; label: string; mode: "auto" | "people"; into: string[] }
   /** Имена пересчитаны с порогом узнавания `value`. */
-  | { type: "threshold"; value: number };
+  | { type: "threshold"; value: number }
+  /** Реплика разделена в `at` секунд, вторая часть — спикеру `to`. */
+  | { type: "split_turn"; label: string; to: string; at: number; cut: "word" | "segment" }
+  /** Заново разделено на спикеров: `speakers` — сколько их стало. */
+  | { type: "rediarize"; speakers: number; params: Record<string, number> };
 export type SpeakerStep = {
   id: string;
   at: string;
@@ -241,6 +249,23 @@ export type SplitApply = {
   label: string; mode: "auto" | "people"; fingerprint: string;
   groups: { idx: number[]; to: string | null; remember: boolean }[];
 };
+/** Параметры «Переразделить на спикеров»: точное число или диапазон и чувствительность 0..1. */
+export type RediarizeParams = {
+  num_speakers?: number; min_speakers?: number; max_speakers?: number; sensitivity?: number;
+};
+export type RediarizePreview = {
+  created_at: string | null;
+  params: RediarizeParams;
+  /** Расшифровку меняли после расчёта — применить нельзя. */
+  stale: boolean;
+  speakers: { label: string; seconds: number; share: number; turns: number; samples: SpeakerPhrase[] }[];
+  /** Сколько спикеров было. */
+  before: number;
+  /** Сколько сегментов сменят спикера и сколько разрежутся по слову. */
+  changed: number;
+  cut: number;
+  segments: number;
+};
 /** Порог узнавания: что станет с именами спикеров встречи. */
 export type ThresholdRow = { label: string; auto: boolean; best: string | null; score: number | null; to: string | null };
 export type ThresholdPlan = { value: number; rows: ThresholdRow[]; changes: ThresholdRow[] };
@@ -260,6 +285,10 @@ export type SpeakersView = {
   voice_threshold?: number | null;
   /** Общий порог (Настройки → Распознавание). */
   voice_threshold_default?: number;
+};
+/** «Разделить реплику здесь» (`POST …/speakers/split-turn`): место — символ `char` сегмента `at`. */
+export type SplitTurnRequest = {
+  turn: number[]; at: number; char: number; to: string | null; labels: string[]; count: number;
 };
 /** Реплики — другому спикеру (`POST …/speakers/relabel`). */
 export type RelabelRequest = { idx: number[]; labels: string[]; count: number; to: string | null };

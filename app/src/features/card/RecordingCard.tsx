@@ -15,6 +15,7 @@ import { CardActions } from "./CardActions";
 import { CardTabs } from "./CardTabs";
 import { CardHeader } from "./CardHeader";
 import { LiveCard } from "./LiveCard";
+import { RediarizeDialog, rediarizeJobOf } from "./RediarizeDialog";
 import { SpeakersPanel } from "./speakers/SpeakersPanel";
 import { TranscriptView, type FindRequest } from "./TranscriptView";
 import { useTurnEdit } from "./TurnEdit";
@@ -63,6 +64,8 @@ export function RecordingCard({
   /** Панель «Спикеры»: открыта ли, к какой строке перейти; `mounted` — уже открывали (правки живут скрытыми). */
   const [panel, setPanel] = useState<{ open: boolean; mounted: boolean; focus: { label: string; n: number } | null }>(
     { open: false, mounted: false, focus: null });
+  /** «Переразделить на спикеров…»: открыт ли диалог. */
+  const [rediarizeOpen, setRediarizeOpen] = useState(false);
   /** «Показать все реплики» из панели: свой запрос к поиску по расшифровке. */
   const [ownFind, setOwnFind] = useState<FindRequest | null>(null);
 
@@ -118,7 +121,7 @@ export function RecordingCard({
 
   useEffect(() => {
     setRec(null); setError(null); setMissing(false); setKbDone(null); setAudioFailed(false);
-    setPanel({ open: false, mounted: false, focus: null }); setOwnFind(null);
+    setPanel({ open: false, mounted: false, focus: null }); setOwnFind(null); setRediarizeOpen(false);
     void load();
   }, [load]);
   // Просьба из поиска по записям важнее прежней своей.
@@ -170,6 +173,7 @@ export function RecordingCard({
   };
 
   const hasAudio = Object.keys(rec.tracks).length > 0;
+  const rediarizing = rediarizeJobOf(rec.path, jobs) !== null;
   const playable = hasAudio && !audioFailed;
 
   const rename = (title: string | null) => act(async () => {
@@ -226,7 +230,7 @@ export function RecordingCard({
           transcript={turns.length ? (
             <TranscriptView turns={turns} colors={colors} playable={playable} onPlay={play}
               onNameSpeaker={nameSpeaker} onSpeaker={turnEdit.onSpeaker} selected={turnEdit.selected}
-              onSelect={turnEdit.onSelect} toolbar={turnEdit.bar} find={shownFind} />
+              onSelect={turnEdit.onSelect} onSplitAt={turnEdit.onSplitAt} toolbar={turnEdit.bar} find={shownFind} />
           ) : <EmptyState title="В записи нет речи" />} />
       );
       break;
@@ -279,6 +283,7 @@ export function RecordingCard({
         onKbExport={meetingsDir && status.kind === "ready" ? doKbExport : undefined}
         onOpenFolder={() => void openFolder(rec.path)}
         onRetranscribe={doTranscribe}
+        onRediarize={status.kind === "ready" && hasAudio ? () => setRediarizeOpen(true) : undefined}
         onDelete={doDelete}
       />
       {error && <div className="card__error" role="alert">{error}</div>}
@@ -313,6 +318,12 @@ export function RecordingCard({
           </span>
         </div>
       )}
+      {status.kind === "ready" && !rediarizeOpen && (rec.rediarize_ready || rediarizing) && (
+        <div className="card__banner" role="status">
+          <span>{rediarizing ? "Идёт переразделение на спикеров…" : "Новое разделение на спикеров готово — посмотрите и примените или откажитесь"}</span>
+          <Button onClick={() => setRediarizeOpen(true)}>{rediarizing ? "Подробнее" : "Посмотреть"}</Button>
+        </div>
+      )}
       {status.kind === "ready" && rec.diarization?.startsWith("skipped_") && (
         // Без токена HF (или без доступа к модели) расшифровка идёт одним потоком.
         <div className="card__banner" role="status">
@@ -322,6 +333,11 @@ export function RecordingCard({
       )}
       <div className="card__body">{body}</div>
       {status.kind === "ready" && turnEdit.menu}
+      {status.kind === "ready" && rediarizeOpen && (
+        <RediarizeDialog endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} ready={!!rec.rediarize_ready}
+          twoTrack={"sys" in rec.tracks && "mic" in rec.tracks} playable={playable} onPlay={playPhrase}
+          onClose={() => setRediarizeOpen(false)} onApplied={speakersChanged} />
+      )}
       {panel.mounted && status.kind === "ready" && (
         <SpeakersPanel endpoint={endpoint} recordingId={id} people={people} avatarVersion={avatarVersion}
           open={panel.open} focus={panel.focus} version={rec.transcript} playable={playable} cardRef={cardEl} jobs={jobs}

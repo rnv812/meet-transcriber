@@ -13,6 +13,7 @@ vi.mock("../../lib/api", async (orig) => ({
   getQa: vi.fn(),
   getSpeakers: vi.fn(),
   relabelTurns: vi.fn(),
+  splitTurn: vi.fn(),
   undoSpeakers: vi.fn(),
 }));
 vi.mock("../../lib/shell", () => ({
@@ -140,4 +141,38 @@ test("из меню — все реплики спикера в панели «�
   const menu = await screen.findByRole("dialog", { name: "Кому отдать реплики" });
   await userEvent.click(within(menu).getByRole("button", { name: "Все реплики спикера — в панели «Спикеры»" }));
   expect(await screen.findByRole("dialog", { name: "Спикеры встречи" })).toBeInTheDocument();
+});
+
+test("locate: место в тексте реплики → сегмент и символ в нём", async () => {
+  const { locate } = await import("./TurnEdit");
+  expect(locate(["Склад готов.", "Да."], 3)).toEqual({ k: 0, char: 3 });
+  expect(locate(["Склад готов.", "Да."], 12)).toEqual({ k: 0, char: 12 });
+  expect(locate(["Склад готов.", "Да."], 13)).toEqual({ k: 1, char: 0 });
+  expect(locate(["Склад готов.", "Да."], 15)).toEqual({ k: 1, char: 2 });
+  expect(locate(["Склад готов.", "Да."], 99)).toEqual({ k: 1, char: 3 });
+});
+
+test("правый щелчок по тексту — «Разделить реплику здесь», вторая часть другому спикеру", async () => {
+  vi.mocked(api.getRecording).mockResolvedValue({ ...rec, transcript: { ...transcript, segments: transcript.segments.map(
+    (s, i) => (i === 1 ? { ...s, has_words: true } : s)) } });
+  vi.mocked(api.splitTurn).mockResolvedValue({ ...view, step: { ...view.step!,
+    ops: [{ type: "split_turn", label: "Спикер 1", to: "Спикер 2", at: 5, cut: "word" }] } });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  const p = (await screen.findByText(/Начинаем планёрку/)).closest("p")!;
+  // Место под указателем: 23-й символ текста реплики — внутри второго сегмента («Первый| пункт.»).
+  const text = p.firstChild!;
+  (document as unknown as { caretRangeFromPoint: unknown }).caretRangeFromPoint = () => {
+    const r = document.createRange();
+    r.setStart(text, 25);
+    return r;
+  };
+  fireEvent.contextMenu(p, { clientX: 10, clientY: 10 });
+  const menu = await screen.findByRole("dialog", { name: "Разделить реплику здесь" });
+  expect(within(menu).getByText(/Начинаем планёрку\. Первый/)).toBeInTheDocument();
+  expect(within(menu).queryByText(/нет времени отдельных слов/)).toBeNull();
+  await userEvent.click(within(menu).getByRole("option", { name: /^Спикер 2/ }));
+  expect(api.splitTurn).toHaveBeenCalledWith(ep, "r1", {
+    turn: [0, 1], at: 1, char: 6, to: "Спикер 2", labels: ["Спикер 1", "Спикер 1"], count: 5 });
+  expect(await screen.findByText("Реплика разделена: вторая часть → Спикер 2")).toBeInTheDocument();
+  delete (document as unknown as { caretRangeFromPoint?: unknown }).caretRangeFromPoint;
 });

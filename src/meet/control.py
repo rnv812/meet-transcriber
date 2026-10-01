@@ -47,6 +47,10 @@ IMPORTANT: токен принимается и в query-параметре `?to
     speakers(id) -> dict                  панель «Спикеры»: доли, подсказки, история
     speakers_apply(id, body) -> dict      набор правок {"ops", "remember"} одним шагом
     speakers_relabel(id, body) -> dict    реплики {"idx", "labels", "count", "to"} — другому спикеру
+    speakers_split_turn(id, body)         «Разделить реплику здесь» по слову, вторую часть — другому
+    speakers_rediarize(id, body)          «Переразделить на спикеров»: задача без распознавания
+    speakers_rediarized(id)               её результат для предпросмотра (нет — 404)
+    speakers_rediarize_apply(id)          применить его одним шагом / _discard(id) — отказаться
     speakers_split_prepare(id, body)      «Разделить спикера»: голоса реплик готовы? иначе задача
     speakers_split_preview(id, body)      группы по голосу {"label", "mode", "k" | "people"}
     speakers_split_apply(id, body)        развести реплики по группам одним шагом
@@ -771,6 +775,16 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.speakers_apply(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers/relabel$"),
      lambda h, p, rid: _server_of(h).state.speakers_relabel(unquote(rid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/speakers/rediarize$"),
+     lambda h, p, rid: _server_of(h).state.speakers_rediarize(unquote(rid), h._body())),
+    ("GET", re.compile(r"^/recordings/([^/]+)/speakers/rediarize$"),
+     lambda h, p, rid: _server_of(h).state.speakers_rediarized(unquote(rid))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/speakers/rediarize/apply$"),
+     lambda h, p, rid: _server_of(h).state.speakers_rediarize_apply(unquote(rid))),
+    ("DELETE", re.compile(r"^/recordings/([^/]+)/speakers/rediarize$"),
+     lambda h, p, rid: _server_of(h).state.speakers_rediarize_discard(unquote(rid))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/speakers/split-turn$"),
+     lambda h, p, rid: _server_of(h).state.speakers_split_turn(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers/split/prepare$"),
      lambda h, p, rid: _server_of(h).state.speakers_split_prepare(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers/split/preview$"),
