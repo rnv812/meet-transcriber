@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingCard } from "./RecordingCard";
 import * as api from "../../lib/api";
@@ -13,6 +13,8 @@ vi.mock("../../lib/api", async (orig) => ({
   deleteRecording: vi.fn(),
   transcribe: vi.fn(),
   exportRecording: vi.fn(),
+  cancelJob: vi.fn(),
+  getDiagnostics: vi.fn(),
 }));
 vi.mock("../../lib/shell", () => ({
   inTauri: () => true,
@@ -220,4 +222,101 @@ test("другая ошибка загрузки показывается как
   vi.mocked(api.getRecording).mockRejectedValue(new api.ApiError(500, "сломалось"));
   render(<RecordingCard id="x" endpoint={ep} jobs={[]} snapshot={null} people={[]} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("сломалось");
+});
+
+const job = (o: Partial<Job> = {}): Job => ({
+  id: "j1", kind: "transcribe", folder: "C:/rec/r1", state: "running", stage: "asr", label: null,
+  done: 1, total: 4, note: null, result: null, error: null, ...o,
+});
+
+test.each([
+  ["queued", "В очереди на расшифровку"],
+  ["running", "Распознавание 25%"],
+] as const)("%s: «Отменить» снимает задачу и перечитывает", async (state, title) => {
+  load({ has_transcript: false }, null);
+  vi.mocked(api.cancelJob).mockResolvedValue({ ok: true });
+  const onChanged = vi.fn();
+  render(<RecordingCard id="r1" endpoint={ep} jobs={[job({ state })]} onChanged={onChanged} />);
+  expect(await screen.findByText(title)).toBeInTheDocument();
+  await new Promise((r) => setTimeout(r, 0));
+  const loads = vi.mocked(api.getRecording).mock.calls.length;
+  await userEvent.click(screen.getByRole("button", { name: "Отменить" }));
+  await waitFor(() => expect(api.cancelJob).toHaveBeenCalledWith(ep, "j1"));
+  expect(onChanged).toHaveBeenCalled();
+  await waitFor(() => expect(vi.mocked(api.getRecording).mock.calls.length).toBe(loads + 1));
+});
+
+test("прерванный импорт (задачи нет): ошибка, а не вечное «Копирование…»", async () => {
+  load({ has_transcript: false, source: "import", tracks: {} }, null);
+  render(<RecordingCard id="r1" endpoint={ep} jobs={[]} />);
+  expect(await screen.findByText("Импорт прерван")).toBeInTheDocument();
+  expect(screen.queryByText("Копирование…")).toBeNull();
+  expect(screen.getByRole("button", { name: "Повторить" })).toBeInTheDocument();
+});
+
+test("ошибка: «Открыть журнал» открывает <data_dir>/logs", async () => {
+  load({ has_transcript: false }, null);
+  vi.mocked(api.getDiagnostics).mockResolvedValue({ paths: { data_dir: "C:\\Users\\me\\meet" } });
+  render(<RecordingCard id="r1" endpoint={ep} jobs={[job({ state: "failed", error: "CUDA out of memory" })]} />);
+  expect(await screen.findByText("CUDA out of memory")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Открыть журнал" }));
+  await waitFor(() => expect(shell.openFolder).toHaveBeenCalledWith("C:\\Users\\me\\meet\\logs"));
+});
+
+test("упавшая перерасшифровка готовой записи видна баннером с «Повторить»", async () => {
+  load({ transcript_at: 1000 });
+  vi.mocked(api.transcribe).mockResolvedValue({} as Job);
+  render(<RecordingCard id="r1" endpoint={ep}
+    jobs={[job({ state: "failed", error: "диск переполнен", finished_at: 2000 })]} />);
+  expect(await screen.findByText("Привет всем")).toBeInTheDocument();
+  const banner = screen.getByRole("status");
+  expect(banner).toHaveTextContent("Перерасшифровка не удалась: диск переполнен");
+  await userEvent.click(within(banner).getByRole("button", { name: "Повторить" }));
+  expect(api.transcribe).toHaveBeenCalledWith(ep, "r1");
+});
+
+test("ошибка старее транскрипта — баннера нет", async () => {
+  load({ transcript_at: 3000 });
+  render(<RecordingCard id="r1" endpoint={ep}
+    jobs={[job({ state: "failed", error: "старое", finished_at: 2000 })]} />);
+  expect(await screen.findByText("Привет всем")).toBeInTheDocument();
+  expect(screen.queryByText(/Перерасшифровка не удалась/)).toBeNull();
+});
+
+test("«Перерасшифровать» спрашивает подтверждение", async () => {
+  load();
+  vi.mocked(api.transcribe).mockResolvedValue({} as Job);
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  await userEvent.click(screen.getByRole("button", { name: "Перерасшифровать" }));
+  expect(api.transcribe).not.toHaveBeenCalled();
+  expect(screen.getByText(
+    "Транскрипт будет создан заново — ручные правки и имена без голоса пропадут. Продолжить?")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Отмена" }));
+  expect(api.transcribe).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Перерасшифровать" }));
+  await userEvent.click(screen.getByRole("button", { name: "Перерасшифровать" }));
+  await waitFor(() => expect(api.transcribe).toHaveBeenCalledWith(ep, "r1"));
+});
+
+test("названный спикер тоже кликабелен: «Кто это?» с текущим именем", async () => {
+  load();
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  const named = screen.getAllByRole("button", { name: /Демьян Петров/ });
+  expect(named.length).toBe(2); // участник в шапке и подпись реплики
+  await userEvent.click(named[1]!);
+  expect(await screen.findByRole("dialog", { name: "Кто это?" })).toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "Кто это?" })).toHaveValue("Демьян Петров");
+});
+
+test("импорт без duration_s: длительность по концу последней реплики", async () => {
+  load({ duration_s: null, source: "import" }, {
+    version: 1, title: null,
+    segments: [{ start: 0, end: 30, speaker: "Спикер 1", text: "а", uncertain: false },
+               { start: 100, end: 125, speaker: "Спикер 1", text: "б", uncertain: false }],
+  });
+  const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("б");
+  expect(container.querySelector(".card__meta")).toHaveTextContent("2 мин");
 });

@@ -7,9 +7,11 @@ import { Avatar } from "../../ui/Avatar";
 import type { PersonColor } from "./Turns";
 
 export function CardHeader({
-  rec, speakers, people, endpoint, avatarVersion, onRename, onNameSpeaker,
+  rec, durationS = rec.duration_s, speakers, people, endpoint, avatarVersion, onRename, onNameSpeaker,
 }: {
   rec: Recording;
+  /** Длительность для подписи: у импорта без неё — конец последней реплики. */
+  durationS?: number | null;
   speakers: string[];
   people: PersonColor[];
   endpoint: Endpoint;
@@ -30,7 +32,7 @@ export function CardHeader({
     const v = draft.trim();
     if (v && v !== (rec.title ?? "")) onRename(v);
   };
-  const meta = [when, rec.duration_s ? duration(rec.duration_s) : ""].filter(Boolean).join(" · ");
+  const meta = [when, durationS ? duration(durationS) : ""].filter(Boolean).join(" · ");
 
   return (
     <header className="card__header">
@@ -61,11 +63,10 @@ export function CardHeader({
                 <span>{name}</span>
               </>
             );
-            return isUnnamed(name) ? (
-              <button key={name} type="button" className="chip chip--unnamed"
-                onClick={(e) => onNameSpeaker?.(name, e.currentTarget)}>{chip}</button>
-            ) : (
-              <span key={name} className="chip">{chip}</span>
+            // Узнанное автоматически имя тоже бывает ошибочным: исправить можно любое.
+            return (
+              <button key={name} type="button" className={isUnnamed(name) ? "chip chip--unnamed" : "chip"}
+                title="Кто это?" onClick={(e) => onNameSpeaker?.(name, e.currentTarget)}>{chip}</button>
             );
           })}
         </div>

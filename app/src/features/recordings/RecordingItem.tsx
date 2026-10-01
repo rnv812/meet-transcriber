@@ -17,8 +17,6 @@ export function badgeOf(st: RecStatus): { text: string; tone: "run" | "err" | ""
       return { text: "Ошибка", tone: "err" };
     case "untranscribed":
       return { text: "Не расшифровано", tone: "" };
-    case "importing":
-      return { text: "Копирование…", tone: "run" };
     case "ready":
       return null;
   }

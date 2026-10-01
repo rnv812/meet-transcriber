@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ApiError, deleteRecording, exportRecording, getRecording, getSettings, patchRecording, transcribe,
-  type Endpoint,
+  ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
+  patchRecording, transcribe, type Endpoint,
 } from "../../lib/api";
-import { openFolder, saveText } from "../../lib/shell";
+import { errorText } from "../../lib/format";
+import { inTauri, openFolder, saveText } from "../../lib/shell";
 import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
-import { statusOf } from "../../lib/status";
+import { activeJobOf, failedRetranscribe, statusOf } from "../../lib/status";
 import type { Job, Recording, Snapshot, Transcript } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { Popover } from "../../ui/Popover";
@@ -19,8 +20,12 @@ import "./card.css";
 
 type Loaded = Recording & { transcript: Transcript | null };
 
-const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const NO_PEOPLE: PersonColor[] = [];
+/** `<data_dir>/logs` с разделителем, каким пишет путь сам резидент. */
+function logsDir(dataDir: string): string {
+  const sep = dataDir.includes("\\") ? "\\" : "/";
+  return `${dataDir.replace(/[\\/]+$/, "")}${sep}logs`;
+}
 const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 
 export function RecordingCard({
@@ -69,7 +74,7 @@ export function RecordingCard({
       if (stale()) return;
       // 404 — запись удалили, а ссылка на неё осталась (уведомление, ?recording=).
       if (e instanceof ApiError && e.status === 404) setMissing(true);
-      else setError(errText(e));
+      else setError(errorText(e));
     }
   }, [endpoint, id]);
 
@@ -93,6 +98,9 @@ export function RecordingCard({
   }, [jobSig, load]);
 
   const segments = rec?.transcript?.segments;
+  // Импорт не знает длительность заранее: по транскрипту она известна точно.
+  const spokenUntil = useMemo(
+    () => (segments?.length ? segments.reduce((m, x) => Math.max(m, x.end), 0) : null), [segments]);
   const turns = useMemo(() => mergeTurns(segments ?? []), [segments]);
   const speakers = useMemo(() => speakersOf(segments ?? []), [segments]);
   const nameSpeaker = useCallback((label: string, anchor: HTMLElement) => setNaming({ label, anchor }), []);
@@ -110,7 +118,7 @@ export function RecordingCard({
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
-    try { await fn(); } catch (e) { setError(errText(e)); } finally { setBusy(false); }
+    try { await fn(); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   };
 
   const hasAudio = Object.keys(rec.tracks).length > 0;
@@ -121,6 +129,22 @@ export function RecordingCard({
     onChanged?.();
   });
   const doTranscribe = () => act(async () => { await transcribe(endpoint, id); onChanged?.(); await load(); });
+  const active = activeJobOf(rec, jobs);
+  const doCancel = () => act(async () => {
+    if (!active) return;
+    await cancelJob(endpoint, active.id);
+    onChanged?.();
+    await load();
+  });
+  const openLogs = () => act(async () => {
+    const diag = await getDiagnostics(endpoint, 1);
+    const dir = (diag.paths as { data_dir?: unknown } | undefined)?.data_dir;
+    if (typeof dir !== "string" || !dir) throw new Error("Папка данных резидента неизвестна");
+    await openFolder(logsDir(dir));
+  });
+  const logsButton = inTauri() ? <Button onClick={openLogs} disabled={busy}>Открыть журнал</Button> : null;
+  const cancelButton = active ? <Button onClick={doCancel} disabled={busy}>Отменить</Button> : null;
+  const retranscribeFailed = status.kind === "ready" ? failedRetranscribe(rec, jobs) : null;
   const doDelete = () => act(async () => {
     await deleteRecording(endpoint, id);
     onDeleted?.();
@@ -142,7 +166,7 @@ export function RecordingCard({
         action={<Button variant="primary" onClick={doTranscribe} disabled={busy}>Расшифровать</Button>} />;
       break;
     case "queued":
-      body = <EmptyState title="В очереди на расшифровку" />;
+      body = <EmptyState title="В очереди на расшифровку" action={cancelButton} />;
       break;
     case "running": {
       const pct = status.total ? Math.round(((status.done ?? 0) / status.total) * 100) : null;
@@ -150,18 +174,19 @@ export function RecordingCard({
         <div className="card__progress">
           <div>{status.label}{pct !== null ? ` ${pct}%` : "…"}</div>
           <div className="progress"><div className="progress__bar" style={{ width: `${pct ?? 100}%` }} /></div>
+          {cancelButton && <div>{cancelButton}</div>}
         </div>
       );
       break;
     }
-    case "importing":
-      body = <EmptyState title="Копирование…" />;
-      break;
     case "failed":
       body = (
         <div className="card__failed">
           <div className="card__error">{status.error || "Расшифровка не удалась"}</div>
-          <Button variant="primary" onClick={doTranscribe} disabled={busy}>Повторить</Button>
+          <div className="card__row">
+            <Button variant="primary" onClick={doTranscribe} disabled={busy}>Повторить</Button>
+            {logsButton}
+          </div>
         </div>
       );
       break;
@@ -172,8 +197,8 @@ export function RecordingCard({
 
   return (
     <section className="card">
-      <CardHeader rec={rec} speakers={speakers} people={people} endpoint={endpoint} avatarVersion={avatarVersion}
-        onRename={rename} onNameSpeaker={nameSpeaker} />
+      <CardHeader rec={rec} durationS={rec.duration_s ?? spokenUntil} speakers={speakers} people={people}
+        endpoint={endpoint} avatarVersion={avatarVersion} onRename={rename} onNameSpeaker={nameSpeaker} />
       <CardActions
         canExport={status.kind === "ready"}
         canRetranscribe={status.kind === "ready"}
@@ -184,6 +209,18 @@ export function RecordingCard({
         onDelete={doDelete}
       />
       {error && <div className="card__error" role="alert">{error}</div>}
+      {retranscribeFailed && (
+        <div className="card__banner" role="status">
+          <span>
+            Перерасшифровка не удалась: {retranscribeFailed.error || "без подробностей"}
+            <span className="muted"> · показан прежний транскрипт</span>
+          </span>
+          <span className="card__row">
+            <Button onClick={doTranscribe} disabled={busy}>Повторить</Button>
+            {logsButton}
+          </span>
+        </div>
+      )}
       <div className="card__body">{body}</div>
       {naming && (
         <Popover anchor={naming.anchor} onClose={closeNaming} label="Кто это?">

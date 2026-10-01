@@ -42,6 +42,8 @@ class Recording:
     has_voices: bool = False
     title: str | None = None
     source: str = "record"
+    # mtime транскрипта: окно сравнивает его с концом упавшей перерасшифровки.
+    transcript_at: float | None = None
 
     def to_raw(self) -> dict:
         return {
@@ -54,6 +56,7 @@ class Recording:
             "has_voices": self.has_voices,
             "title": self.title,
             "source": self.source,
+            "transcript_at": self.transcript_at,
         }
 
 
@@ -239,6 +242,10 @@ def describe(folder: Path) -> Recording | None:
     if meta.get("title"):
         title = str(meta["title"])
     source = meta.get("source") if meta.get("source") in SOURCES else "record"
+    try:
+        transcript_at = transcript_path(folder).stat().st_mtime
+    except OSError:
+        transcript_at = None
     return Recording(
         id=folder.name,
         path=folder,
@@ -249,6 +256,7 @@ def describe(folder: Path) -> Recording | None:
         has_voices=bool(list(folder.glob("*_speakers.json"))),
         title=title,
         source=source,
+        transcript_at=transcript_at,
     )
 
 

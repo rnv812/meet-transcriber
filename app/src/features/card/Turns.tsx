@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { clock } from "../../lib/format";
-import { isUnnamed, type Turn } from "../../lib/speakers";
+import { NO_SPEAKER, isUnnamed, type Turn } from "../../lib/speakers";
 
 export type PersonColor = { name: string; color: string; has_avatar: boolean };
 
@@ -30,11 +30,12 @@ export const Turns = memo(function Turns({
             )}
             <div className="turn__body">
               <div className="turn__head">
-                {unnamed ? (
-                  <button type="button" className="turn__speaker turn__speaker--unnamed"
-                    onClick={(e) => onNameSpeaker?.(t.speaker, e.currentTarget)}>{t.speaker}</button>
+                {t.speaker === NO_SPEAKER ? (
+                  <span className="turn__speaker turn__speaker--unnamed">{t.speaker}</span>
                 ) : (
-                  <span className="turn__speaker" style={color ? { color } : undefined}>{t.speaker}</span>
+                  <button type="button" className={`turn__speaker${unnamed ? " turn__speaker--unnamed" : ""}`}
+                    style={!unnamed && color ? { color } : undefined}
+                    onClick={(e) => onNameSpeaker?.(t.speaker, e.currentTarget)}>{t.speaker}</button>
                 )}
                 {t.uncertain && <span className="turn__flag">(нахлёст)</span>}
               </div>

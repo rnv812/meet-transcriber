@@ -6,8 +6,7 @@ export type RecStatus =
   | { kind: "running"; stage: string; label: string; done?: number; total?: number }
   | { kind: "failed"; error: string; retry: "transcribe" | "import" }
   | { kind: "ready" }
-  | { kind: "untranscribed" }
-  | { kind: "importing" };
+  | { kind: "untranscribed" };
 
 const STAGES: Record<string, string> = {
   convert: "Конвертация",
@@ -21,8 +20,34 @@ const STAGES: Record<string, string> = {
 
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 
+const INTERRUPTED = "Импорт прерван";
+const RETRANSCRIBE_KINDS = ["transcribe", "import"];
+
+const jobsOf = (rec: Recording, jobs: Job[]) => jobs.filter((j) => norm(j.folder) === norm(rec.path));
+
+/** Ждущая или идущая задача записи — её можно отменить. */
+export function activeJobOf(rec: Recording, jobs: Job[]): Job | null {
+  const mine = jobsOf(rec, jobs);
+  return mine.find((j) => j.state === "running") ?? mine.find((j) => j.state === "queued") ?? null;
+}
+
+/**
+ * Перерасшифровка готовой записи упала: транскрипт остался старый, а статус
+ * «готово» об ошибке молчит. Возвращает упавшую задачу, если она последняя из
+ * расшифровок этой записи и закончилась позже, чем записан транскрипт.
+ */
+export function failedRetranscribe(rec: Recording, jobs: Job[]): Job | null {
+  if (!rec.has_transcript) return null;
+  const last = jobsOf(rec, jobs).filter((j) => RETRANSCRIBE_KINDS.includes(j.kind)).at(-1);
+  if (last?.state !== "failed") return null;
+  const failedAt = last.finished_at ?? last.created_at ?? null;
+  const writtenAt = rec.transcript_at ?? null;
+  if (failedAt !== null && writtenAt !== null && failedAt <= writtenAt) return null;
+  return last;
+}
+
 export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null): RecStatus {
-  const mine = jobs.filter((j) => norm(j.folder) === norm(rec.path));
+  const mine = jobsOf(rec, jobs);
   const noTracks = Object.keys(rec.tracks ?? {}).length === 0;
   const isImport = rec.source === "import" && noTracks;
 
@@ -45,6 +70,8 @@ export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null)
   if (last?.state === "failed" && !rec.has_transcript)
     return { kind: "failed", error: last.error ?? "", retry: isImport ? "import" : "transcribe" };
   if (rec.has_transcript) return { kind: "ready" };
-  if (isImport) return { kind: "importing" };
+  // Импорт без дорожки и без живой задачи: задачу отменили или резидент
+  // перезапустился (задачи живут только в его памяти) — копия не доедет.
+  if (isImport) return { kind: "failed", error: last?.error || INTERRUPTED, retry: "import" };
   return { kind: "untranscribed" };
 }

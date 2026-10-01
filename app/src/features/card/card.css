@@ -36,6 +36,12 @@ button.chip:hover { background: var(--surface-hover); }
 .card__body { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 20px 16px; }
 .card__failed { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
 .card__failed .card__error { margin: 0; }
+.card__row { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.card__banner {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+  margin: 8px 20px 0; padding: 8px 10px; font-size: 12px; color: var(--amber);
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
+}
 .card__progress { display: flex; flex-direction: column; gap: 8px; color: var(--text-2); }
 .progress { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
 .progress__bar { height: 100%; background: var(--accent); transition: width var(--t); }
@@ -51,6 +57,7 @@ button.chip:hover { background: var(--surface-hover); }
 .turn__speaker { font-weight: 600; font-size: 12px; color: var(--text); }
 button.turn__speaker { padding: 0; border: 0; background: none; font-family: inherit; cursor: pointer; }
 .turn__speaker--unnamed { color: var(--text-2); }
+button.turn__speaker:hover { text-decoration: underline; }
 .turn__speaker--unnamed:hover { color: var(--accent-hover); }
 .turn__flag { color: var(--amber); font-size: 11px; }
 .turn__text { margin: 2px 0 0; color: var(--text); line-height: 1.55; }
@@ -71,6 +78,7 @@ button.turn__speaker { padding: 0; border: 0; background: none; font-family: inh
 }
 .speaker-pop__sug:hover { background: var(--surface-hover); }
 .speaker-pop__remember { display: flex; gap: 6px; align-items: center; color: var(--text-2); font-size: 12px; }
+.speaker-pop__hint { font-size: 12px; }
 .speaker-pop__warn { color: var(--amber); font-size: 12px; }
 .speaker-pop__error { margin: 0; }
 .speaker-pop__actions { display: flex; justify-content: flex-end; }

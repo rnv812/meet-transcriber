@@ -42,6 +42,10 @@ export type Job = {
   note: string | null;
   result: string | null;
   error: string | null;
+  /** Секунды эпохи; старые резиденты их не присылали. */
+  created_at?: number;
+  started_at?: number | null;
+  finished_at?: number | null;
 };
 
 export type Recording = {
@@ -54,6 +58,8 @@ export type Recording = {
   has_voices: boolean;
   title: string | null;
   source: string;
+  /** Когда записан транскрипт (секунды эпохи), нет — null. */
+  transcript_at?: number | null;
 };
 
 export type Segment = {

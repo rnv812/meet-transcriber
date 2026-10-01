@@ -17,6 +17,7 @@ export function CardActions({
 }) {
   const [menu, setMenu] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [confirmRe, setConfirmRe] = useState(false);
 
   return (
     <div className="card__actions">
@@ -34,7 +35,16 @@ export function CardActions({
         </span>
       )}
       {inTauri() && <Button onClick={onOpenFolder}>Открыть папку</Button>}
-      {canRetranscribe && <Button onClick={onRetranscribe} disabled={busy}>Перерасшифровать</Button>}
+      {canRetranscribe && (confirmRe ? (
+        <span className="confirm">
+          <span>Транскрипт будет создан заново — ручные правки и имена без голоса пропадут. Продолжить?</span>
+          <Button variant="primary" disabled={busy}
+            onClick={() => { setConfirmRe(false); onRetranscribe(); }}>Перерасшифровать</Button>
+          <Button onClick={() => setConfirmRe(false)}>Отмена</Button>
+        </span>
+      ) : (
+        <Button onClick={() => setConfirmRe(true)} disabled={busy}>Перерасшифровать</Button>
+      ))}
       {confirm ? (
         <span className="confirm">
           <span>Удалить запись и транскрипт? Это необратимо.</span>

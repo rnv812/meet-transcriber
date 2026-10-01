@@ -1,15 +1,23 @@
 import { useRef, useState } from "react";
 import { type Endpoint, getRecording, nameSpeakers, saveTranscript } from "../../lib/api";
+import { errorText } from "../../lib/format";
+import { isUnnamed } from "../../lib/speakers";
 import { Avatar } from "../../ui/Avatar";
 import { Button } from "../../ui/Button";
 import type { PersonColor } from "./Turns";
 
 const fold = (s: string) => s.trim().toLowerCase().replace(/ё/g, "е");
-const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 type Option = { name: string; existing: boolean; person?: PersonColor };
 
-/** «Кто это?»: имя спикера из базы или новое; по умолчанию голос запоминается. */
+/**
+ * «Кто это?»: имя спикера из базы или новое; по умолчанию голос запоминается.
+ *
+ * Уже названного спикера (узнан автоматически или назван раньше) тоже можно
+ * исправить. Голос у него в сайдкаре лежит под меткой «Спикер N», а не под
+ * именем, — запомнить его по имени резидент не сможет. Поэтому для такой метки
+ * флажок по умолчанию снят и имя меняется только в транскрипте этой записи.
+ */
 export function SpeakerPopover({ endpoint, recordingId, label, people, avatarVersion, onApplied, onDone }: {
   endpoint: Endpoint;
   recordingId: string;
@@ -19,8 +27,9 @@ export function SpeakerPopover({ endpoint, recordingId, label, people, avatarVer
   onApplied?: () => void;
   onDone: () => void;
 }) {
-  const [text, setText] = useState("");
-  const [remember, setRemember] = useState(true);
+  const named = !isUnnamed(label);
+  const [text, setText] = useState(named ? label : "");
+  const [remember, setRemember] = useState(!named);
   const [busy, setBusy] = useState(false);
   const inflight = useRef(false);
   const input = useRef<HTMLInputElement>(null);
@@ -41,6 +50,7 @@ export function SpeakerPopover({ endpoint, recordingId, label, people, avatarVer
 
   const apply = async (name: string) => {
     if (!name.trim() || inflight.current) return;
+    if (name === label) { onDone(); return; }
     inflight.current = true;
     setBusy(true);
     setError(null);
@@ -54,12 +64,16 @@ export function SpeakerPopover({ endpoint, recordingId, label, people, avatarVer
         const t = rec.transcript;
         if (!t) throw new Error("У записи нет расшифровки");
         const segments = t.segments.map((s) => (s.speaker === label ? { ...s, speaker: name } : s));
-        await saveTranscript(endpoint, recordingId, { ...t, segments });
+        // `names` (метка → имя) ведёт резидент; исправленное имя меняем и там.
+        const names = t.names
+          ? Object.fromEntries(Object.entries(t.names).map(([k, v]) => [k, v === label ? name : v]))
+          : undefined;
+        await saveTranscript(endpoint, recordingId, { ...t, segments, ...(names ? { names } : {}) });
         onApplied?.();
       }
       onDone();
     } catch (e) {
-      setError(errText(e));
+      setError(errorText(e));
       setTimeout(() => input.current?.focus(), 0);
     } finally {
       inflight.current = false;
@@ -88,6 +102,7 @@ export function SpeakerPopover({ endpoint, recordingId, label, people, avatarVer
         value={text}
         disabled={busy}
         onChange={(e) => setText(e.target.value)}
+        onFocus={(e) => e.currentTarget.select()}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
@@ -115,6 +130,9 @@ export function SpeakerPopover({ endpoint, recordingId, label, people, avatarVer
         <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
         Запомнить голос — узнавать дальше
       </label>
+      {named && !remember && (
+        <div className="speaker-pop__hint muted">Имя будет исправлено только в этой записи</div>
+      )}
       {error && <div className="card__error speaker-pop__error" role="alert">{error}</div>}
       <div className="speaker-pop__actions">
         <Button variant="primary" disabled={!typed || busy} onClick={() => void apply(exact ?? typed)}>

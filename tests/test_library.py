@@ -33,6 +33,15 @@ def test_describe_reads_folder(tmp_path):
     assert card.has_transcript is False and card.has_voices is False
 
 
+def test_transcript_time_is_reported(tmp_path):
+    """Окну нужно время транскрипта, чтобы понять, свежее ли упавшая перерасшифровка."""
+    assert library.describe(_recording(tmp_path)).transcript_at is None
+    folder = _recording(tmp_path, "2026-08-19_11-00", transcript={"segments": []})
+    card = library.describe(folder)
+    assert card.transcript_at == library.transcript_path(folder).stat().st_mtime
+    assert card.to_raw()["transcript_at"] == card.transcript_at
+
+
 def test_folder_without_tracks_is_not_a_recording(tmp_path):
     empty = tmp_path / "2026-08-18_11-00"
     empty.mkdir()

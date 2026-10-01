@@ -134,3 +134,59 @@ test("«Готово» с точным совпадением берёт кан�
   await userEvent.click(screen.getByRole("button", { name: "Готово" }));
   expect(api.nameSpeakers).toHaveBeenCalledWith(ep, "r1", { "Спикер 2": "Демьян" });
 });
+
+test("безымянный спикер: поле пустое, голос запоминается по умолчанию", () => {
+  setup();
+  expect(screen.getByRole("textbox", { name: "Кто это?" })).toHaveValue("");
+  expect(screen.getByRole("checkbox", { name: /Запомнить голос/ })).toBeChecked();
+  expect(screen.queryByText("Имя будет исправлено только в этой записи")).toBeNull();
+});
+
+test("названный спикер: имя в поле, флажок снят, исправление только в этой записи", async () => {
+  vi.mocked(api.getRecording).mockResolvedValue({
+    id: "r1", transcript: {
+      version: 1, title: null, names: { "Спикер 1": "Демьян Петров" },
+      segments: [
+        { start: 0, end: 1, speaker: "Демьян Петров", text: "a", uncertain: false },
+        { start: 2, end: 3, speaker: "Спикер 2", text: "b", uncertain: false },
+      ],
+    },
+  } as never);
+  vi.mocked(api.saveTranscript).mockResolvedValue({ ok: true });
+  const onDone = vi.fn();
+  render(<SpeakerPopover endpoint={ep} recordingId="r1" label="Демьян Петров" people={people} onDone={onDone} />);
+  const input = screen.getByRole("textbox", { name: "Кто это?" });
+  expect(input).toHaveValue("Демьян Петров");
+  expect(screen.getByRole("checkbox", { name: /Запомнить голос/ })).not.toBeChecked();
+  expect(screen.getByText("Имя будет исправлено только в этой записи")).toBeInTheDocument();
+  await userEvent.clear(input);
+  await userEvent.type(input, "Пётр Демьянов");
+  await userEvent.click(screen.getByRole("button", { name: "Готово" }));
+  await waitFor(() => expect(onDone).toHaveBeenCalled());
+  expect(api.nameSpeakers).not.toHaveBeenCalled();
+  const t = vi.mocked(api.saveTranscript).mock.calls[0]![2];
+  expect(t.segments.map((x) => x.speaker)).toEqual(["Пётр Демьянов", "Спикер 2"]);
+  expect(t.names).toEqual({ "Спикер 1": "Пётр Демьянов" });
+});
+
+test("названный спикер: флажок включён вручную — nameSpeakers, voices_error предупреждением", async () => {
+  vi.mocked(api.nameSpeakers).mockResolvedValue(
+    { ok: true, renamed: 1, enrolled: [], voices_error: "в сайдкаре нет «Демьян Петров»" });
+  render(<SpeakerPopover endpoint={ep} recordingId="r1" label="Демьян Петров" people={people} onDone={vi.fn()} />);
+  await userEvent.click(screen.getByRole("checkbox", { name: /Запомнить голос/ }));
+  expect(screen.queryByText("Имя будет исправлено только в этой записи")).toBeNull();
+  const input = screen.getByRole("textbox", { name: "Кто это?" });
+  await userEvent.clear(input);
+  await userEvent.type(input, "Пётр{Enter}");
+  expect(api.nameSpeakers).toHaveBeenCalledWith(ep, "r1", { "Демьян Петров": "Пётр" });
+  expect(await screen.findByText(/в сайдкаре нет/)).toBeInTheDocument();
+});
+
+test("имя не изменилось — просто закрыть", async () => {
+  const onDone = vi.fn();
+  render(<SpeakerPopover endpoint={ep} recordingId="r1" label="Демьян Петров" people={people} onDone={onDone} />);
+  await userEvent.click(screen.getByRole("button", { name: "Готово" }));
+  expect(onDone).toHaveBeenCalled();
+  expect(api.saveTranscript).not.toHaveBeenCalled();
+  expect(api.nameSpeakers).not.toHaveBeenCalled();
+});

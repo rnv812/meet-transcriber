@@ -3,7 +3,8 @@ import type { Segment } from "./types";
 export type Turn = { speaker: string; start: number; end: number; texts: string[]; uncertain: boolean };
 
 const GAP_S = 2;
-const NO_SPEAKER = "Неизвестный";
+/** Подпись реплик без спикера: в транскрипте у них speaker = null, переименовать нечего. */
+export const NO_SPEAKER = "Неизвестный";
 
 /** Склеивает подряд идущие реплики одного спикера, если пауза меньше 2 с. */
 export function mergeTurns(segments: Segment[]): Turn[] {
