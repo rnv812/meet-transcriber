@@ -172,7 +172,8 @@ test("порог узнавания: предпросмотр изменений
     changes: value < 0.75 ? [{ label: "Спикер 1", auto: true, best: "Анна Смирнова", score: 0.71, to: "Анна Смирнова" }] : [],
   }));
   vi.mocked(api.applyThreshold).mockResolvedValue(view({ voice_threshold: 0.7, pos: 1,
-    step: { id: "t", at: "2026-09-30T17:00:00", enrolled: [], created_people: [], ops: [{ type: "threshold", value: 0.7 }] } }));
+    step: { id: "t", at: "2026-09-30T17:00:00", enrolled: [], created_people: [], ops: [{ type: "threshold", value: 0.7 },
+      { type: "rename", label: "Спикер 1", from: "Спикер 1", to: "Анна Смирнова" }] } }));
   const { onChanged } = setup();
   await screen.findByRole("region", { name: /^Спикер 1/ });
   await userEvent.click(screen.getByRole("button", { name: /Порог узнавания голоса: 75% \(общий\)/ }));

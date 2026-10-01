@@ -1,4 +1,4 @@
-import { memo, type MouseEvent } from "react";
+import { memo, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { clock } from "../../lib/format";
 import { nfc, type Range } from "../../lib/search";
 import { NO_SPEAKER, isUnnamed, type Turn } from "../../lib/speakers";
@@ -35,6 +35,26 @@ export const Turns = memo(function Turns({
     else return false;
     return true;
   };
+  // Выбор с клавиатуры: реплики — одна точка Tab (roving tabindex), стрелки
+  // ходят по ним, Пробел — выбрать или снять, Shift+Пробел — диапазон.
+  const [focusAt, setFocusAt] = useState(0);
+  const rowKey = (e: KeyboardEvent<HTMLDivElement>, i: number) => {
+    if (!onSelect || e.target !== e.currentTarget) return;
+    const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+    if (step || e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      const rows = [...(e.currentTarget.parentElement?.querySelectorAll<HTMLElement>("[data-turn]") ?? [])];
+      const here = rows.indexOf(e.currentTarget);
+      const next = e.key === "Home" ? rows[0] : e.key === "End" ? rows.at(-1) : rows[here + step];
+      next?.focus();
+      next?.scrollIntoView?.({ block: "nearest" });
+    } else if (e.key === " ") {
+      e.preventDefault();
+      onSelect(i, e.shiftKey ? "range" : "toggle");
+    }
+  };
+  const first = turns.findIndex((t) => t.kind !== "break");
+  const roving = turns[focusAt] && turns[focusAt]!.kind !== "break" ? focusAt : first;
   return (
     <div className="turns">
       {turns.map((t, i) => {
@@ -53,7 +73,13 @@ export const Turns = memo(function Turns({
         const on = selected?.has(i) ?? false;
         return (
           <div className={`turn${mark ? " turn--found" : ""}${on ? " turn--selected" : ""}`} key={i}
-            data-selected={on || undefined}
+            data-selected={on || undefined} data-turn={i}
+            tabIndex={onSelect ? (i === roving ? 0 : -1) : undefined}
+            role={onSelect ? "group" : undefined}
+            aria-label={onSelect ? `Реплика ${clock(t.start)}, ${t.speaker}${on ? ", выбрана" : ""}` : undefined}
+            aria-keyshortcuts={onSelect ? "Space Shift+Space" : undefined}
+            onFocus={onSelect ? () => setFocusAt(i) : undefined}
+            onKeyDown={onSelect ? (e) => rowKey(e, i) : undefined}
             onMouseDown={onSelect ? (e) => { if (e.shiftKey) e.preventDefault(); } : undefined}
             onClick={onSelect ? (e) => { if (pick(e, i)) e.preventDefault(); } : undefined}>
             {on && <span className="sr-only">Выбрано.</span>}

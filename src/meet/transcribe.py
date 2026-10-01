@@ -1,5 +1,4 @@
 import re
-import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -8,6 +7,7 @@ from meet.asr import Segment, transcribe_wav
 from meet.audio import to_wav16k
 from meet.diarize import SKIPPED_NO_ACCESS, SKIPPED_NO_TOKEN, diarize_wav, split_by_speaker
 from meet.interleave import interleave_tracks
+from meet.jobs import temp_dir
 from meet.output import speaker_names, to_markdown
 
 # Бюджет подсказок в символах; почему именно столько — в meet.hotwords. Живёт
@@ -302,7 +302,7 @@ def _transcribe_single(
     bus=None,
 ):
     bus = bus if bus is not None else events.EventBus()
-    with tempfile.TemporaryDirectory() as td:
+    with temp_dir() as td:
         bus.progress("convert", done=0, total=1)
         wav = to_wav16k(src, Path(td) / "audio16.wav")
         bus.progress("convert", done=1, total=1)
@@ -339,7 +339,7 @@ def _transcribe_two_track(
     sys_src, mic_src = _find_track(folder, "sys"), _find_track(folder, "mic")
     if not (sys_src and mic_src):
         raise SystemExit(f"В {folder} нет дорожек sys/mic")
-    with tempfile.TemporaryDirectory() as td:
+    with temp_dir() as td:
         bus.progress("convert", done=0, total=2)
         sys_wav = to_wav16k(sys_src, Path(td) / "sys16.wav", normalize=True)
         bus.progress("convert", done=1, total=2, note="sys")

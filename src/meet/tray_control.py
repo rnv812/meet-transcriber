@@ -276,22 +276,12 @@ def _window_transcript(data: dict | None) -> dict | None:
     return {**data, "segments": [_for_window(s) for s in data["segments"]]}
 
 
-def _keep_words(folder: Path, data: dict) -> dict:
-    """Сохранение из редактора: окно слов не видит (см. transcript) — вернуть
-    их сегментам, текст которых не изменился; у правленных слова уже врут."""
-    old = library.read_transcript(folder) or {}
-    words = {(s.get("start"), s.get("end"), s.get("text")): s["words"]
-             for s in old.get("segments") or [] if isinstance(s, dict) and library.words_match(s)}
-    segments = []
-    for s in data["segments"]:
-        if isinstance(s, dict):
-            s = {k: v for k, v in s.items() if k != "has_words"}
-            if "words" in s and not library.words_match(s):
-                s.pop("words")
-            elif "words" not in s and (s.get("start"), s.get("end"), s.get("text")) in words:
-                s["words"] = words[(s.get("start"), s.get("end"), s.get("text"))]
-        segments.append(s)
-    return {**data, "segments": segments}
+def _without_marks(data: dict) -> dict:
+    """Сохранение из редактора: служебное `has_words` окна — не в файл. Слов
+    окно не видит, они остаются в words.json; у сегментов, текст или время
+    которых поменяли, они при чтении больше не подставляются."""
+    return {**data, "segments": [{k: v for k, v in s.items() if k != "has_words"} if isinstance(s, dict) else s
+                                 for s in data["segments"]]}
 
 
 class TrayControl:
@@ -542,6 +532,12 @@ class TrayControl:
         """Доделать прерванное прошлым выходом — в фоне: резидент сразу пишет
         и отвечает окну (см. recover)."""
         def work() -> None:
+            try:
+                swept = jobs.sweep_temp()
+                if swept:
+                    self.tray.log(f"удалены временные папки прерванных задач: {len(swept)}")
+            except Exception as e:
+                self.tray.log(f"временные папки задач не проверены: {type(e).__name__}: {e}")
             try:
                 done = self.recover()
             except Exception as e:
@@ -1244,7 +1240,7 @@ class TrayControl:
         if card is None:
             return {"error": "записи нет"}
         raw = card.to_raw()
-        raw["transcript"] = _window_transcript(library.read_transcript(folder))
+        raw["transcript"] = _window_transcript(library.read_transcript_full(folder))
         return raw
 
     def update_recording(self, recording_id: str, body: dict) -> dict:
@@ -1298,7 +1294,7 @@ class TrayControl:
         """Транскрипт для окна: без слов с таймкодами (их много, окну нужно
         только знать, можно ли резать реплику по слову — `has_words`)."""
         folder = self._folder(recording_id)
-        data = _window_transcript(library.read_transcript(folder) if folder else None)
+        data = _window_transcript(library.read_transcript_full(folder) if folder else None)
         return data or {"error": "транскрипта нет"}
 
     def export(self, recording_id: str, fmt: str) -> dict:
@@ -1362,7 +1358,7 @@ class TrayControl:
         if not isinstance(data, dict) or not isinstance(data.get("segments"), list):
             return {"error": "ожидается транскрипт с полем segments"}
         with self._speakers_lock:  # не посреди правки спикеров
-            library.write_transcript(folder, _keep_words(folder, data))
+            library.write_transcript(folder, _without_marks(data))
         return {"ok": True, "path": str(library.transcript_path(folder))}
 
     def name_speakers(self, recording_id: str, mapping: dict) -> dict:
@@ -1774,6 +1770,12 @@ class TrayControl:
             if existing is not None:
                 return existing, False
             self._mark_pending(folder, True)
+            # Посчитанное «Переразделить на спикеров» относится к прежней
+            # расшифровке — после новой оно ни к чему.
+            try:
+                (folder / library.REDIARIZE_PREVIEW).unlink(missing_ok=True)
+            except OSError:
+                pass
             return self.queue.submit(kind, str(folder), options or {}), True
 
     def transcribe(self, recording_id: str, options: dict | None = None) -> dict:

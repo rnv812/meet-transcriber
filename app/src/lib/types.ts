@@ -265,6 +265,8 @@ export type RediarizePreview = {
   changed: number;
   cut: number;
   segments: number;
+  /** Имена, которые новое разделение сохранило по сходству голоса. */
+  kept?: string[];
 };
 /** Порог узнавания: что станет с именами спикеров встречи. */
 export type ThresholdRow = { label: string; auto: boolean; best: string | null; score: number | null; to: string | null };

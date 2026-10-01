@@ -42,7 +42,7 @@ def test_interleave_keeps_track_of_cut_parts():
     assert [(s.text, s.track) for s in out] == [("раз", None), ("ага", "mic"), ("два", None)]
 
 
-def test_transcript_stores_words_compactly_and_track_marks(tmp_path):
+def test_words_live_in_words_json_and_transcript_stays_lean(tmp_path):
     from meet.transcribe import _write_structured
 
     (tmp_path / "sys.opus").write_bytes(b"x")
@@ -51,23 +51,56 @@ def test_transcript_stores_words_compactly_and_track_marks(tmp_path):
                     words=_words((0.0, 0.6, " Добрый"), (0.6, 1.2, " день."))),
             Segment(1.3, 2.0, "Да.", "Вы", words=_words((1.3, 2.0, " Да.")), track="mic")]
     _write_structured(tmp_path, segs, "t", {})
-    data = library.read_transcript(tmp_path)
-    assert data["track_marks"] == "pipeline"
-    first, second = data["segments"]
+    lean = library.read_transcript(tmp_path)
+    assert lean["track_marks"] == "pipeline"
+    assert all("words" not in s for s in lean["segments"])
+    assert "\"words\"" not in (tmp_path / "transcript.json").read_text(encoding="utf-8")
+    first, second = library.read_transcript_full(tmp_path)["segments"]
     assert first["words"] == [[0.0, 0.6, " Добрый"], [0.6, 1.2, " день."]]
     assert "track" not in first and second["track"] == "mic"
-    text = (tmp_path / "transcript.json").read_text(encoding="utf-8")
-    # Слова — одной строкой на сегмент, а не строкой на число.
-    assert '"words": [[0.0,0.6," Добрый"],[0.6,1.2," день."]]' in text
-    assert library.words_match(first)
-    json.loads(text)
+    raw = json.loads((tmp_path / "words.json").read_text(encoding="utf-8"))
+    assert raw["items"][0] == [0.0, 1.2, [[0.0, 0.6, " Добрый"], [0.6, 1.2, " день."]]]
 
 
-def test_compact_writer_survives_marker_like_text(tmp_path):
-    data = {"segments": [{"start": 0, "end": 1, "speaker": "А", "text": "@@words-x-0@@",
-                          "words": [[0, 1, " @@words-x-0@@"]]}]}
-    library.write_transcript(tmp_path, data)
-    assert library.read_transcript(tmp_path) == data
+def test_words_of_edited_or_shifted_segments_are_not_attached(tmp_path):
+    library.write_transcript(tmp_path, {"segments": [
+        {"start": 0, "end": 1, "speaker": "А", "text": "раз два", "words": [[0, 0.5, " раз"], [0.5, 1, " два"]]},
+        {"start": 1, "end": 2, "speaker": "Б", "text": "три", "words": [[1, 2, " три"]]}]})
+    # Окно (без слов) поправило текст первого и время второго — words.json не трогается,
+    # но устаревшие записи больше не подставляются.
+    library.write_transcript(tmp_path, {"segments": [
+        {"start": 0, "end": 1, "speaker": "А", "text": "раз три"},
+        {"start": 1, "end": 2.5, "speaker": "Б", "text": "три"}]})
+    assert [("words" in s) for s in library.read_transcript_full(tmp_path)["segments"]] == [False, False]
+
+
+def test_words_left_in_transcript_json_by_older_builds_move_out_on_write(tmp_path):
+    (tmp_path / "transcript.json").write_text(json.dumps({"segments": [
+        {"start": 0, "end": 1, "speaker": "А", "text": "раз", "words": [[0, 1, " раз"]]}]},
+        ensure_ascii=False), encoding="utf-8")
+    full = library.read_transcript_full(tmp_path)
+    assert full["segments"][0]["words"] == [[0, 1, " раз"]]
+    library.write_transcript(tmp_path, full)
+    assert "words" not in library.read_transcript(tmp_path)["segments"][0]
+    assert library.read_transcript_full(tmp_path)["segments"][0]["words"] == [[0, 1, " раз"]]
+
+
+def test_listing_does_not_reparse_unchanged_transcripts(tmp_path, monkeypatch):
+    folder = tmp_path / "2026-09-30_16-04"
+    folder.mkdir()
+    (folder / "sys.opus").write_bytes(b"x")
+    library.write_transcript(folder, {"title": "Планёрка", "segments": []})
+    calls = []
+    real = library.read_transcript
+    monkeypatch.setattr(library, "read_transcript", lambda f: calls.append(f) or real(f))
+    assert library.describe(folder).title == "Планёрка"
+    assert library.describe(folder).title == "Планёрка"
+    assert len(calls) == 1
+    library.write_transcript(folder, {"title": "Планёрка отдела", "diarization": "skipped_no_token",
+                                      "segments": []})
+    card = library.describe(folder)
+    assert (card.title, card.diarization, card.has_transcript) == ("Планёрка отдела", "skipped_no_token", True)
+    assert len(calls) == 2
 
 
 def test_window_gets_no_words_but_knows_where_they_are(app, tmp_path, monkeypatch):
@@ -89,12 +122,12 @@ def test_window_gets_no_words_but_knows_where_they_are(app, tmp_path, monkeypatc
 
     # Редактор шлёт без слов: у неправленого сегмента они остаются, у правленого — нет.
     edited = [dict(s) for s in served]
-    edited[0]["text"] = "Добрый день."
     edited[1]["speaker"] = "Анна"
     state.save_transcript(folder.name, {"segments": edited})
-    stored = library.read_transcript(folder)["segments"]
+    assert "has_words" not in library.read_transcript(folder)["segments"][0]
+    stored = library.read_transcript_full(folder)["segments"]
     assert stored[0]["words"] == [[0, 0.6, " Добрый"], [0.6, 1.2, " день."]]
-    assert "words" not in stored[1] and "has_words" not in stored[0]
+    assert "words" not in stored[1]
     edited[0]["text"] = "Добрый вечер."
     state.save_transcript(folder.name, {"segments": edited})
-    assert "words" not in library.read_transcript(folder)["segments"][0]
+    assert "words" not in library.read_transcript_full(folder)["segments"][0]

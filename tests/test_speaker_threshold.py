@@ -76,9 +76,23 @@ def test_threshold_leaves_names_given_by_hand(meeting, base):
     rows = {r["label"]: r for r in plan["rows"]}
     assert rows["Глеб Демьянов"]["auto"] is False
     assert plan["changes"] == []
-    got = speakers.threshold_apply(meeting, 0.6, base)   # имён не меняет — только запоминает порог
+    got = speakers.threshold_apply(meeting, 0.6, base)   # имён не меняет — шаг только с порогом
     assert got["changed"] == 0 and library.read_meta(meeting)["voice_threshold"] == 0.6
+    assert got["step"]["ops"] == [{"type": "threshold", "value": 0.6}]
     assert _labels(meeting)[0] == "Глеб Демьянов"
+    with pytest.raises(speakers.SpeakerError):
+        speakers.threshold_apply(meeting, 0.6, base)
+    speakers.undo(meeting, base)
+    assert "voice_threshold" not in library.read_meta(meeting)
+
+
+def test_threshold_ignores_samples_from_this_meeting(meeting, base):
+    """Голос, запомненный из этой же встречи, совпал бы сам с собой."""
+    (base / "Глеб Демьянов.json").write_text(json.dumps({"samples": [
+        {"embedding": [0.0, 0.0, 1.0], "source": "C:/rec/x", "date": "2026-09-30"}]}, ensure_ascii=False),
+        encoding="utf-8")
+    rows = {r["label"]: r for r in speakers.threshold_plan(meeting, 0.75, base)["rows"]}
+    assert rows["Спикер 3"]["to"] is None and rows["Спикер 3"]["best"] != "Глеб Демьянов"
 
 
 def test_transcription_uses_the_meeting_threshold_then_settings(meeting, monkeypatch, tmp_path):

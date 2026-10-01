@@ -213,7 +213,8 @@ export function SpeakersPanel({
     show(next);
     setError(null);
     setWarning(null);
-    setNotice(next.step ? "Имена пересчитаны с новым порогом." : "Порог сохранён для этой встречи.");
+    const renamed = next.step?.ops.some((op) => op.type !== "threshold") ?? false;
+    setNotice(renamed ? "Имена пересчитаны с новым порогом." : "Порог сохранён для этой встречи, имена не изменились.");
     onChanged();
   };
   const revert = (stepId: string | null) =>

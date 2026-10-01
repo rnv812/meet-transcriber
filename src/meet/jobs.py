@@ -16,11 +16,14 @@ CUDA или ctranslate2 не должно ронять резидента вме
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -106,6 +109,43 @@ class Job:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
         }
+
+
+# Временные папки задач (WAV 16 кГц на время распознавания и диаризации):
+# в имени — pid процесса. Задачу, убитую отменой или выходом резидента,
+# finally не дочищает; при следующем запуске резидент удаляет папки с этим
+# префиксом, чей процесс уже не жив (чужих не трогает).
+TEMP_PREFIX = "meet-job-"
+
+
+@contextmanager
+def temp_dir():
+    with tempfile.TemporaryDirectory(prefix=f"{TEMP_PREFIX}{os.getpid()}-") as td:
+        yield td
+
+
+def sweep_temp(root: Path | None = None, alive=None) -> list[str]:
+    """Удалить временные папки задач умерших процессов. → имена удалённых."""
+    if alive is None:
+        from meet.gpu_lock import _pid_alive as alive
+    root = Path(root or tempfile.gettempdir())
+    removed = []
+    for d in root.glob(f"{TEMP_PREFIX}*"):
+        try:
+            pid = int(d.name[len(TEMP_PREFIX):].split("-", 1)[0])
+        except ValueError:
+            continue
+        if not d.is_dir() or pid == os.getpid():
+            continue
+        try:
+            if alive(pid):
+                continue
+        except Exception:
+            continue
+        shutil.rmtree(d, ignore_errors=True)
+        if not d.exists():
+            removed.append(d.name)
+    return removed
 
 
 def worker_argv(job: Job) -> list[str]:

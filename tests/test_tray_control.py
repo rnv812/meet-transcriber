@@ -1712,13 +1712,13 @@ def test_rediarize_queues_validates_previews_applies_and_discards(with_recording
     data = library.read_transcript(with_recordings)
     (with_recordings / rediarize.PREVIEW_NAME).write_text(json.dumps({
         "base": rediarize.fingerprint(data), "params": {"num_speakers": 3},
-        "parts": [[{**data["segments"][0], "speaker": "Спикер 2"}], [dict(data["segments"][1])]],
-        "voices": []}, ensure_ascii=False), encoding="utf-8")
+        "parts": [[{**s, "speaker": "SPEAKER_00"}] for s in data["segments"]],
+        "voices": {}, "names": {}}, ensure_ascii=False), encoding="utf-8")
     prev = state.speakers_rediarized(rid)
-    assert prev["stale"] is False and [r["label"] for r in prev["speakers"]] == ["Спикер 2"]
+    assert prev["stale"] is False and [r["label"] for r in prev["speakers"]] == ["Спикер 1"]
     got = state.speakers_rediarize_apply(rid)
     assert got["step"]["ops"][0]["type"] == "rediarize"
-    assert [s["speaker"] for s in library.read_transcript(with_recordings)["segments"]] == ["Спикер 2"] * 2
+    assert [s["speaker"] for s in library.read_transcript(with_recordings)["segments"]] == ["Спикер 1"] * 2
     assert state.speakers_rediarize_discard(rid) == {"ok": True}
 
 

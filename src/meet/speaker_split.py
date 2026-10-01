@@ -64,8 +64,8 @@ def _unit(x: np.ndarray) -> np.ndarray:
     return x / np.where(n == 0, 1.0, n)
 
 
-def _load(folder: Path, label: str) -> tuple[dict, list[dict], list[int]]:
-    data = speakers._transcript(folder)
+def _load(folder: Path, label: str, data: dict | None = None) -> tuple[dict, list[dict], list[int]]:
+    data = data if data is not None else speakers._transcript(folder)
     segments = data["segments"]
     own = _own(segments, label)
     if not own:
@@ -335,8 +335,7 @@ def apply(folder: Path, label: str, groups, fp: str | None, voices_dir: Path, *,
     groups: [{"idx": [...], "to": имя | подпись спикера встречи | None (новый
     «Спикер N»), "remember": bool}]; `to` == label — группа остаётся за ним.
     `fp` — отпечаток из предпросмотра: реплики с тех пор менялись — Stale."""
-    speakers.normalize(folder)
-    data, segments, own = _load(folder, label)
+    data, segments, own = _load(folder, label, speakers.editable(folder))
     if fp is not None and fp != fingerprint(segments, own):
         raise speakers.Stale(speakers.STALE_VIEW)
     if not isinstance(groups, list) or not groups:

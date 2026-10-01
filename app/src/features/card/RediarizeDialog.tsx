@@ -133,12 +133,26 @@ export function RediarizeDialog({
     }
   };
 
-  // Esc закрывает окно, где бы ни был фокус (окно модальное).
+  // Окно модальное: Esc закрывает его, где бы ни был фокус, а Tab ходит по
+  // кругу внутри окна и не уходит в карточку под ним.
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === "Escape" && !e.defaultPrevented) {
         e.preventDefault();
         onClose();
+        return;
+      }
+      if (e.key !== "Tab" || !box.current) return;
+      const items = [...box.current.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex='0']")];
+      if (!items.length) return;
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const at = document.activeElement;
+      const inside = at instanceof HTMLElement && box.current.contains(at);
+      if (!inside || (e.shiftKey && at === first) || (!e.shiftKey && at === last)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
       }
     };
     document.addEventListener("keydown", onKey);
@@ -232,6 +246,7 @@ export function RediarizeDialog({
                 Сменят спикера {phase.preview.changed} из {phase.preview.segments}{" "}
                 {plural(phase.preview.segments, "фразы", "фраз", "фраз")}
                 {phase.preview.cut ? `, разделятся по словам: ${phase.preview.cut}` : ""}.
+                {phase.preview.kept?.length ? ` Сохранены имена: ${phase.preview.kept.join(", ")}.` : ""}
               </p>
             )}
             <ul className="redia__list" aria-label="Спикеры после переразделения">
@@ -257,7 +272,7 @@ export function RediarizeDialog({
               ))}
             </ul>
             <p className="muted redia__hint">
-              Имена, данные вручную, и правки отдельных реплик будут заменены новым разделением. Изменение можно отменить в панели «Спикеры».
+              Имена переходят к новым спикерам по сходству голоса; правки отдельных реплик сохраняются, если голос их спикера узнан. Изменение можно отменить в панели «Спикеры».
             </p>
             <div className="redia__actions">
               <Button onClick={() => void discard(true)} disabled={busy}>Другие параметры</Button>

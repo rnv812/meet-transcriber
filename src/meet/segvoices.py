@@ -52,19 +52,34 @@ def default_track(folder: Path) -> str:
     return "mic" if _has(folder, "mic") else "sys"
 
 
-def _diarized_labels(data: dict, sidecar: dict | None) -> set[str]:
-    """Подписи, к которым ведёт кластер диаризации (через цепочку `names`)."""
+def _diarized_labels(data: dict, sidecar: dict | None, steps: list[dict] | None = None,
+                     owners: set[str] = frozenset()) -> set[str]:
+    """Подписи, к которым ведёт кластер диаризации (через цепочку `names`), и
+    те, куда правки истории перенесли реплики таких подписей (кроме
+    владельца микрофона)."""
     from meet.speakers import _resolve
 
     names = data.get("names") if isinstance(data.get("names"), dict) else {}
     out = set()
     for entry in (sidecar or {}).get("speakers") or []:
         if isinstance(entry, dict) and isinstance(entry.get("display"), str):
+            out.add(entry["display"])
             out.add(_resolve(names, entry["display"]))
+    for step in steps or []:
+        for op in step.get("ops") or []:
+            if not isinstance(op, dict):
+                continue
+            src = op.get("from")
+            sources = src if isinstance(src, list) else [src, op.get("label")]
+            if not any(isinstance(x, str) and x in out for x in sources):
+                continue
+            targets = [op.get("to")] + (op.get("into") if isinstance(op.get("into"), list) else [op.get("into")])
+            out.update(t for t in targets if isinstance(t, str) and t not in owners)
     return out
 
 
-def stamp_tracks(folder: Path, data: dict, sidecar: dict | None, owners: set[str]) -> bool:
+def stamp_tracks(folder: Path, data: dict, sidecar: dict | None, owners: set[str],
+                 steps: list[dict] | None = None) -> bool:
     """Старой расшифровке звонка (без пометок `track`) — пометить микрофонные
     сегменты. Владелец микрофона — подпись без кластера диаризации (а без
     сайдкара — подпись владельца из настроек или «Вы»); «Собеседник» —
@@ -75,7 +90,7 @@ def stamp_tracks(folder: Path, data: dict, sidecar: dict | None, owners: set[str
     if any(isinstance(s, dict) and s.get("track") for s in segments):
         data["track_marks"] = "pipeline"
         return True
-    diarized = _diarized_labels(data, sidecar)
+    diarized = _diarized_labels(data, sidecar, steps, owners)
     mic: set[str] = set()
     labels = {s.get("speaker") for s in segments if isinstance(s, dict) and s.get("kind") != "break"}
     for label in labels:
@@ -164,6 +179,30 @@ def write_cache(folder: Path, fresh: dict[str, np.ndarray], failed: list[str] = 
     finally:
         tmp.unlink(missing_ok=True)
     return path
+
+
+def prune(folder: Path, segments: list[dict]) -> int:
+    """Убрать из кэша голоса сегментов, которых в транскрипте больше нет
+    (разрезаны, переразделены, перерасшифрованы). → сколько убрано."""
+    items = _items(folder)
+    if not items:
+        return 0
+    tracks = tracks_of(folder, segments)
+    alive = {key(t, s) for s, t in zip(segments, tracks) if t is not None}
+    stale = [k for k in items if k not in alive]
+    if not stale:
+        return 0
+    from meet.diarize import DIARIZATION_MODEL
+
+    path = folder / CACHE_NAME
+    keep = {k: v for k, v in items.items() if k in alive}
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(json.dumps({"model": DIARIZATION_MODEL, "items": keep}), encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return len(stale)
 
 
 def _duration(seg: dict) -> float:

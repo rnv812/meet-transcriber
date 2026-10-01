@@ -39,7 +39,7 @@ def base(tmp_path):
 
 
 def _segs(folder):
-    return library.read_transcript(folder)["segments"]
+    return library.read_transcript_full(folder)["segments"]
 
 
 def test_split_inside_a_segment_at_the_nearest_word(meeting, base):
@@ -92,7 +92,7 @@ def test_split_turn_refusals_write_nothing(meeting, base):
 
 def test_undo_refuses_when_the_cut_part_was_edited_since(meeting, base):
     speakers.split_turn(meeting, [0, 1, 2], 0, 14, "Спикер 2", base)
-    data = library.read_transcript(meeting)
+    data = library.read_transcript_full(meeting)
     data["segments"][1]["text"] = "Правка вручную."
     library.write_transcript(meeting, data)
     with pytest.raises(speakers.Stale):

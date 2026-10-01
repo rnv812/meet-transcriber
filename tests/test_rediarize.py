@@ -84,7 +84,7 @@ def _run(meeting, base, monkeypatch, **kw):
 
 
 def _segs(folder):
-    return library.read_transcript(folder)["segments"]
+    return library.read_transcript_full(folder)["segments"]
 
 
 def test_sensitivity_maps_to_pipeline_clustering_threshold():
@@ -134,7 +134,7 @@ def test_apply_cuts_at_words_relabels_and_undoes(meeting, base, monkeypatch):
     assert rows["Анна Смирнова"]["has_voice"]
 
     speakers.undo(meeting, base)
-    data = library.read_transcript(meeting)
+    data = library.read_transcript_full(meeting)
     assert data["segments"] == SEGMENTS and data["names"] == {"Спикер 3": "Спикер 1"}
     side = json.loads((meeting / "2026-09-30_speakers.json").read_text(encoding="utf-8"))
     assert [e["display"] for e in side["speakers"]] == ["Спикер 1", "Спикер 2"]
@@ -147,9 +147,14 @@ def test_apply_cuts_at_words_relabels_and_undoes(meeting, base, monkeypatch):
     assert _segs(meeting) == SEGMENTS
 
 
-def test_apply_refuses_if_transcript_changed_since_the_run(meeting, base, monkeypatch):
+def test_apply_refuses_if_text_changed_since_the_run_but_not_after_a_rename(meeting, base, monkeypatch):
     _run(meeting, base, monkeypatch)
-    speakers.relabel(meeting, [4], "Спикер 1", base)
+    # Переименование после расчёта результат не портит: подписи раздаются заново.
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Олег"}], {}, base)
+    assert rediarize.preview(meeting)["stale"] is False
+    data = library.read_transcript_full(meeting)
+    data["segments"][4]["text"] = "Договор продлим на год."
+    library.write_transcript(meeting, data)
     assert rediarize.preview(meeting)["stale"] is True
     with pytest.raises(speakers.Stale, match="запустите"):
         rediarize.apply(meeting, base)
@@ -157,6 +162,32 @@ def test_apply_refuses_if_transcript_changed_since_the_run(meeting, base, monkey
     assert rediarize.preview(meeting) is None
     with pytest.raises(speakers.SpeakerError):
         rediarize.apply(meeting, base)
+
+
+def test_names_given_by_hand_and_turn_fixes_survive_by_voice(meeting, base, monkeypatch):
+    from meet import voices
+
+    monkeypatch.setattr(voices, "voices_dir", lambda: base)
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 2", "to": "Олег"}], {}, base)
+    speakers.relabel(meeting, [2], "Вера", base)          # ручная правка одной реплики
+    emb = {"SPEAKER_00": np.array([0.9, 0.3, 0.0]),       # тот же голос, что прежний «Спикер 1»
+           "SPEAKER_01": np.array([0.0, 1.0, 0.0]),       # новый — узнаётся по базе (Анна)
+           "SPEAKER_02": np.array([0.0, 0.05, 1.0])}      # тот же, что «Олег»
+    rediarize.run(meeting, diarize=lambda wav, **kw: Diarization(turns=TURNS, embeddings=emb, overlaps=[]),
+                  to_wav=_to_wav)
+    got = rediarize.preview(meeting)
+    assert got["kept"] == ["Олег"]
+    assert [r["label"] for r in got["speakers"]] == ["Спикер 1", "Анна Смирнова", "Вы", "Вера", "Олег"]
+    assert got["changed"] == 1      # только разрезанная реплика: имена и правка на месте
+    rediarize.apply(meeting, base)
+    assert [s["speaker"] for s in _segs(meeting)] == [
+        "Спикер 1", "Анна Смирнова", "Вы", "Вера", None, "Олег"]
+
+
+def test_voice_pairs_are_one_to_one_above_the_floor():
+    sim = np.array([[0.9, 0.8], [0.85, 0.3], [0.5, 0.6]])
+    assert sorted(rediarize._pairs(sim)) == [(0, 1), (1, 0)]
+    assert rediarize._pairs(np.array([[0.6]])) == []
 
 
 def test_rediarize_job_argv_and_worker(meeting, monkeypatch, capsys):
@@ -172,3 +203,76 @@ def test_rediarize_job_argv_and_worker(meeting, monkeypatch, capsys):
     assert seen["num_speakers"] == 4 and seen["sensitivity"] is None
     last = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert last == {"kind": "job.result", "path": str(meeting / "x.json")}
+
+
+def test_new_transcription_drops_a_pending_rediarize_result(meeting, monkeypatch, tmp_path):
+    from meet import tray, tray_control
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    (meeting / rediarize.PREVIEW_NAME).write_text("{}", encoding="utf-8")
+
+    class Queue:
+        def submit(self, kind, folder, options=None):
+            return jobs.Job(id="t", kind=kind, folder=folder)
+
+        def active_for(self, folder, kinds):
+            return None
+
+    state = tray_control.TrayControl(tray.TrayApp(), queue=Queue())
+    state._submit_once(jobs.TRANSCRIBE, meeting)
+    assert not (meeting / rediarize.PREVIEW_NAME).exists()
+
+
+def test_temp_dirs_of_dead_jobs_are_swept(tmp_path):
+    dead = tmp_path / f"{jobs.TEMP_PREFIX}999999-abc"
+    live = tmp_path / f"{jobs.TEMP_PREFIX}123-abc"
+    foreign = tmp_path / "other-999999-abc"
+    for d in (dead, live, foreign):
+        d.mkdir()
+        (d / "audio16.wav").write_bytes(b"wav")
+    got = jobs.sweep_temp(tmp_path, alive=lambda pid: pid == 123)
+    assert got == [dead.name]
+    assert not dead.exists() and live.exists() and foreign.exists()
+    with jobs.temp_dir() as td:
+        assert Path(td).name.startswith(f"{jobs.TEMP_PREFIX}")
+
+
+def _got(parts, voices, names=None):
+    return {"parts": parts, "voices": {k: list(v) for k, v in voices.items()}, "names": names or {}}
+
+
+def test_labels_follow_what_the_transcript_shows_even_if_sidecar_displays_are_stale(meeting, base):
+    """Имена поменяли местами в базе голосов: транскрипт переписан, подписи
+    кластеров в сайдкаре — нет. Новый кластер берёт подпись по времени речи."""
+    data = library.read_transcript_full(meeting)
+    data["segments"][2]["speaker"] = "Борис"     # голос прежнего кластера «Спикер 1»
+    data["segments"][4]["speaker"] = "Анна"      # голос прежнего «Спикер 2»
+    data["segments"][0]["speaker"] = "Борис"
+    library.write_transcript(meeting, data)
+    data = speakers._transcript(meeting)
+    seg = data["segments"]
+    parts = [[{**seg[0], "speaker": "R0"}], None, [{**seg[2], "speaker": "R0"}], None,
+             [{**seg[4], "speaker": "R1"}]]
+    done = rediarize.finish(meeting, data, _got(parts, {"R0": [0.0, 0.0, 1.0], "R1": [0.7, 0.7, 0.0]}))
+    # По голосу R0 похож на прежний «Спикер 2», но по расшифровке это «Борис».
+    assert [p[0]["speaker"] for p in done["parts"]] == ["Борис", "Вы", "Борис", None, "Анна"]
+    assert done["kept"] == ["Анна", "Борис"]
+
+
+def test_label_falls_back_to_voice_when_time_does_not_decide(meeting, base, monkeypatch):
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 1", "to": "Глеб"}], {}, base)
+    data = speakers._transcript(meeting)
+    seg = data["segments"]
+    # Все реплики R0 исправлены вручную — по времени он не голосует.
+    monkeypatch.setattr(rediarize, "_manual_keys", lambda folder, data: {(0.0, 4.0), (6.0, 9.0)})
+    parts = [[{**seg[0], "speaker": "R0"}], None, [{**seg[2], "speaker": "R0"}], None,
+             [{**seg[4], "speaker": "R1"}]]
+    done = rediarize.finish(meeting, data, _got(parts, {"R0": [0.7, 0.7, 0.0], "R1": [0.0, 0.05, 1.0]}))
+    # По голосу R0 — прежний «Спикер 1», ныне «Глеб».
+    assert [v["display"] for v in done["voices"]] == ["Глеб", "Спикер 2"]
+    assert done["kept"] == ["Глеб"]
+    assert [p[0]["speaker"] for p in done["parts"]] == ["Глеб", "Вы", "Глеб", None, "Спикер 2"]
+    # Голос не похож — новый номер, не занятый оставшимися подписями.
+    done = rediarize.finish(meeting, data, _got(parts, {"R0": [1.0, -1.0, 0.0], "R1": [0.0, 0.05, 1.0]}))
+    assert [v["display"] for v in done["voices"]] == ["Спикер 1", "Спикер 2"]
+    assert done["kept"] == []

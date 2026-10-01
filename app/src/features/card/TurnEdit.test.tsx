@@ -176,3 +176,19 @@ test("правый щелчок по тексту — «Разделить ре�
   expect(await screen.findByText("Реплика разделена: вторая часть → Спикер 2")).toBeInTheDocument();
   delete (document as unknown as { caretRangeFromPoint?: unknown }).caretRangeFromPoint;
 });
+
+test("клавиатура: стрелки по репликам, Пробел — выбрать, Shift+Пробел — диапазон", async () => {
+  const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText(/Начинаем планёрку/);
+  const rows = () => [...container.querySelectorAll<HTMLElement>(".turn")];
+  expect(rows().map((r) => r.tabIndex)).toEqual([0, -1, -1, -1]);
+  rows()[0]!.focus();
+  await userEvent.keyboard(" ");
+  expect(screen.getByText("Выбрано: 1 реплика")).toBeInTheDocument();
+  await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+  expect(rows()[2]).toHaveFocus();
+  expect(rows().map((r) => r.tabIndex)).toEqual([-1, -1, 0, -1]);
+  await userEvent.keyboard("{Shift>} {/Shift}");
+  expect(rows().filter((r) => r.dataset.selected)).toHaveLength(3);
+  expect(rows()[2]).toHaveAccessibleName(/Реплика 00:12, Спикер 2, выбрана/);
+});

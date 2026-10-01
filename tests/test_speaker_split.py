@@ -262,3 +262,56 @@ def test_apply_split_new_unnamed_speakers_and_refusals(meeting, base):
                         prev["fingerprint"], base)
     labels = _labels(meeting)
     assert {labels[i] for i in a["idx"]} == {"Спикер 3"} and {labels[i] for i in b["idx"]} == {"Спикер 4"}
+
+
+def _old_call(meeting):
+    """Старая расшифровка звонка: без пометок дорожек."""
+    data = library.read_transcript_full(meeting)
+    data.pop("track_marks")
+    for s in data["segments"]:
+        s.pop("track", None)
+    library.write_transcript(meeting, data)
+
+
+def test_hand_named_remote_turn_stays_on_the_remote_track(meeting, base):
+    _old_call(meeting)
+    speakers.relabel(meeting, [2], "Ольга Петрова", base)   # имени нет ни у одного кластера
+    speakers.normalize(meeting, tracks=True)                 # потом открыли панель
+    segs = library.read_transcript(meeting)["segments"]
+    assert segs[2]["speaker"] == "Ольга Петрова" and segs[2].get("track") is None
+    assert segs[10]["track"] == "mic"
+
+
+def test_refused_edit_writes_no_track_marks(meeting, base):
+    _old_call(meeting)
+    before = (meeting / "transcript.json").read_bytes()
+    with pytest.raises(speakers.SpeakerError):
+        speakers.relabel(meeting, [2], "a/b", base)
+    assert (meeting / "transcript.json").read_bytes() == before
+
+
+def test_track_inference_follows_history_from_diarized_labels(meeting, base):
+    """Правка, сделанная до пометок (ранняя сборка): подпись «Ольга» ни к
+    одному кластеру не ведёт, но история знает, что её реплики — от «Спикер 2»."""
+    _old_call(meeting)
+    data = library.read_transcript(meeting)
+    data["segments"][2]["speaker"] = "Ольга Петрова"
+    library.write_transcript(meeting, data)
+    library.write_meta(meeting, {
+        speakers.HISTORY: [{"id": "a1", "at": "2026-09-30T18:00:00", "count": 11, "segments": [],
+                            "ops": [{"type": "relabel", "from": ["Спикер 2"], "to": "Ольга Петрова",
+                                     "segments": 1, "turns": 1}]}],
+        speakers.POS: 1, speakers.BASE: "2026-09-30T17:00:00"})
+    speakers.normalize(meeting, tracks=True)
+    segs = library.read_transcript(meeting)["segments"]
+    assert segs[2].get("track") is None and segs[10]["track"] == "mic"
+
+
+def test_voices_of_segments_that_no_longer_exist_are_pruned_on_commit(meeting, base):
+    _cache(meeting)
+    segs = library.read_transcript(meeting)["segments"]
+    segvoices.write_cache(meeting, {"sys:999.00-1000.00": A})
+    speakers.relabel(meeting, [0], "Спикер 2", base)
+    cache = segvoices.read_cache(meeting)
+    assert "sys:999.00-1000.00" not in cache
+    assert segvoices.key("sys", segs[1]) in cache

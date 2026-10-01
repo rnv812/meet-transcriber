@@ -74,7 +74,7 @@ def unnamed(label: str) -> bool:
 
 
 def _transcript(folder: Path) -> dict:
-    data = library.read_transcript(folder)
+    data = library.read_transcript_full(folder)
     if not data or not isinstance(data.get("segments"), list):
         raise SpeakerError("у записи нет расшифровки")
     if not all(isinstance(s, dict) for s in data["segments"]):
@@ -101,7 +101,7 @@ def normalize(folder: Path, tracks: bool = False) -> bool:
     True — переписан."""
     from meet import segvoices
 
-    data = library.read_transcript(folder)
+    data = library.read_transcript_full(folder)
     segments = (data or {}).get("segments")
     if not isinstance(segments, list) or not all(isinstance(s, dict) for s in segments):
         return False
@@ -109,11 +109,31 @@ def normalize(folder: Path, tracks: bool = False) -> bool:
     for s in segments:
         if s.get("speaker") in raw:
             s["speaker"] = raw[s["speaker"]]
-    stamped = tracks and segvoices.stamp_tracks(folder, data, _sidecar(folder), _owners())
+    stamped = tracks and segvoices.stamp_tracks(folder, data, _sidecar(folder), _owners(),
+                                                _applied(folder, data))
     if not raw and not stamped:
         return False
     library.write_transcript(folder, data)
     return True
+
+
+def _applied(folder: Path, data: dict) -> list[dict]:
+    steps, pos = _history_of(library.read_meta(folder), data)
+    return steps[:pos]
+
+
+def editable(folder: Path) -> dict:
+    """Транскрипт для правки: сырые метки уже «Спикер N» (normalize), а у
+    старой записи звонка микрофонные сегменты помечены — в памяти, до любой
+    правки: иначе реплика собеседника, отданная человеку вручную, потом
+    выглядела бы микрофоном (её подпись не ведёт ни к одному кластеру).
+    Пометки уходят в файл вместе с правкой; отказ ничего не пишет."""
+    from meet import segvoices
+
+    normalize(folder)
+    data = _transcript(folder)
+    segvoices.stamp_tracks(folder, data, _sidecar(folder), _owners(), _applied(folder, data))
+    return data
 
 
 def _shown(segments: list[dict]) -> list[str | None]:
@@ -501,6 +521,8 @@ def _commit(folder: Path, data: dict, meta_change, voices_dir: Path, voice_ops,
     читается списком записей и раздуваться не должен."""
     path = library.transcript_path(folder)
     before = path.read_bytes()
+    words = library.words_path(folder)
+    words_before = words.read_bytes() if words.exists() else None
     saved = _meta_keys(library.read_meta(folder))
     side_before = sidecar[0].read_bytes() if sidecar and sidecar[0].exists() else None
     blob = None
@@ -511,6 +533,10 @@ def _commit(folder: Path, data: dict, meta_change, voices_dir: Path, voice_ops,
 
     def put_back() -> None:
         _put_back(path, before)
+        if words_before is None:
+            words.unlink(missing_ok=True)
+        else:
+            _put_back(words, words_before)
         if sidecar is not None:
             if side_before is None:
                 sidecar[0].unlink(missing_ok=True)
@@ -539,6 +565,12 @@ def _commit(folder: Path, data: dict, meta_change, voices_dir: Path, voice_ops,
             pass
         raise VoiceBaseError(f"Не удалось изменить базу голосов ({e}) — изменение не применено")
     _prune_payloads(folder, meta)
+    try:
+        from meet import segvoices
+
+        segvoices.prune(folder, [x for x in data["segments"] if isinstance(x, dict)])
+    except (OSError, ValueError):
+        pass  # кэш — только ускорение
     return meta, result
 
 
@@ -628,8 +660,7 @@ def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
     отказ не оставляет транскрипт наполовину переименованным. `lead` — что
     это за шаг, если не ручные правки (порог узнавания); `threshold` — [было,
     стало] порога встречи: шаг помнит и его."""
-    normalize(folder)
-    data = _transcript(folder)
+    data = editable(folder)
     segments = data["segments"]
     shown = _shown(segments)
     order = _order(shown)
@@ -794,8 +825,7 @@ def relabel(folder: Path, idx, to, voices_dir: Path, *, count=None, labels=None,
     каждого выбранного): разошлось — Stale, а не правка не тех реплик. `to`:
     спикер встречи, имя человека или None — новый «Спикер N». Имена в `names`
     не трогаются: это правка реплик, а не переименование кластера."""
-    normalize(folder)
-    data = _transcript(folder)
+    data = editable(folder)
     segments = data["segments"]
     order = _order(_shown(segments))
     chosen = _indices(idx, segments)
@@ -818,7 +848,15 @@ def relabel(folder: Path, idx, to, voices_dir: Path, *, count=None, labels=None,
     for d in deltas:
         for i in d["idx"]:
             segments[i]["speaker"] = d["to"]
-    return _record_simple(folder, data, _new_step([op], deltas, len(segments), now), voices_dir)
+    step = _new_step([op], deltas, len(segments), now)
+    step["keys"] = _keys(segments, [i for d in deltas for i in d["idx"]])
+    return _record_simple(folder, data, step, voices_dir)
+
+
+def _keys(segments: list[dict], idx: list[int]) -> list[list[float]]:
+    """Время сегментов, подпись которых дали вручную: по нему переразделение
+    узнаёт ручные правки (номера сегментов после разрезов уже другие)."""
+    return [[float(segments[i]["start"]), float(segments[i]["end"])] for i in sorted(set(idx))]
 
 
 def _turn_count(segments: list[dict], chosen: list[int]) -> int:
@@ -1071,8 +1109,11 @@ def threshold_plan(folder: Path, value: float, voices_dir: Path) -> dict:
     data = _transcript(folder)
     segments = data["segments"]
     order = _order(_shown(segments))
-    clusters = _clusters(data, _sidecar(folder), set(order))
-    base = voices.load_voices(voices_dir)
+    sidecar = _sidecar(folder)
+    clusters = _clusters(data, sidecar, set(order))
+    # Как подсказки панели: образцы из этой же встречи не в счёт — голос,
+    # запомненный отсюда, совпал бы сам с собой.
+    base = _base_without(voices_dir, folder.name, (sidecar or {}).get("source"))
     meta = library.read_meta(folder)
     steps, pos = _history_of(meta, data)
     manual = _manual(steps[:pos])
@@ -1100,18 +1141,19 @@ def threshold_apply(folder: Path, value: float, voices_dir: Path, now: datetime 
     """Пересчитать имена автоматически названных спикеров с порогом `value`
     одним шагом истории; порог запоминается для встречи (и откатывается с
     шагом). Если ничего не меняется — только запомнить порог."""
-    normalize(folder)
+    data = editable(folder)
     plan = threshold_plan(folder, value, voices_dir)
     meta = library.read_meta(folder)
     old = own_threshold(meta)
     ops = [{"type": "rename", "label": r["label"], "to": r["to"]} if r["to"] is not None
            else {"type": "reset", "label": r["label"]} for r in plan["changes"]]
     if not ops:
-        library.update_meta(folder, lambda m: {**m, VOICE_THRESHOLD: value})
-        data = _transcript(folder)
-        steps, pos = _history_of(library.read_meta(folder), data)
-        return {"history": _public(steps), "pos": pos, "trimmed": _trimmed(library.read_meta(folder), data),
-                "voices_error": None, "changed": 0}
+        if old == value:
+            raise SpeakerError("нечего применять — порог уже такой")
+        # Имена не меняются — шаг только с порогом (его тоже можно отменить).
+        step = _new_step([{"type": "threshold", "value": value}], [], len(data["segments"]), now)
+        step["threshold"] = [old, value]
+        return _record_simple(folder, data, step, voices_dir)
     return apply(folder, ops, {}, voices_dir, now, lead={"type": "threshold", "value": value},
                  threshold=[old, value])
 
@@ -1156,8 +1198,7 @@ def split_turn(folder: Path, turn, at: int, char: int, to, voices_dir: Path, *,
     (с остатком реплики — сегментами `turn` после него) другому спикеру.
     Сегмент со словами режется по ближайшей границе слова; без слов (старые
     расшифровки) — по ближайшему краю сегмента. Один шаг истории."""
-    normalize(folder)
-    data = _transcript(folder)
+    data = editable(folder)
     segments = data["segments"]
     chosen = _indices(turn, segments)
     if labels is not None:
@@ -1202,6 +1243,7 @@ def split_turn(folder: Path, turn, at: int, char: int, to, voices_dir: Path, *,
     op = {"type": "split_turn", "label": label, "to": target, "at": round(float(cut_time), 2),
           "cut": "word" if inside else "segment"}
     step = _new_step([op], deltas, len(segments), now)
+    step["keys"] = _keys(after, [i for d in deltas for i in d["idx"]] + ([at + 1] if inside else []))
     if replace:
         step["count_after"] = len(after)
         step["payload"] = True

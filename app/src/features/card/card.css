@@ -211,3 +211,5 @@ mark.hit--current, .turn__text.hit--current mark.hit { background: var(--accent)
 .redia__list .spk-row { margin-top: 0; gap: 4px; }
 .redia__actions { display: flex; justify-content: flex-end; gap: 6px; flex-wrap: wrap; }
 .tmenu__links .spk-link { text-align: left; }
+.turn:focus { outline: none; }
+.turn:focus-visible { margin: 0 -8px; padding: 8px; border-radius: var(--r-md); box-shadow: 0 0 0 1px var(--accent); }

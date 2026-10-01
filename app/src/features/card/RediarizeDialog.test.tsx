@@ -20,7 +20,7 @@ const job = (state: Job["state"], stage: string | null = null): Job => ({
 });
 const preview: RediarizePreview = {
   created_at: "2026-09-30T18:00:00", params: { num_speakers: 3 }, stale: false, before: 2, changed: 14, cut: 3,
-  segments: 120,
+  segments: 120, kept: ["Анна Смирнова"],
   speakers: [
     { label: "Анна Смирнова", seconds: 600, share: 0.5, turns: 20, samples: [{ start: 12, end: 20, text: "Склад готов." }] },
     { label: "Спикер 1", seconds: 300, share: 0.25, turns: 9, samples: [] },
@@ -73,7 +73,14 @@ test("параметры: точное число собеседников и ч
 
 test("готовый результат открывается сразу; «Отказаться» удаляет его", async () => {
   const { onClose } = setup({ ready: true });
-  expect(await screen.findByText(/Было спикеров: 2, станет: 3/)).toBeInTheDocument();
+  expect(await screen.findByText(/Было спикеров: 2, станет: 3.*Сохранены имена: Анна Смирнова\./)).toBeInTheDocument();
+  // Tab не выходит из окна: с последней кнопки — на первую.
+  const buttons = screen.getAllByRole("button");
+  buttons.at(-1)!.focus();
+  await userEvent.tab();
+  expect(screen.getByRole("button", { name: "Закрыть" })).toHaveFocus();
+  await userEvent.tab({ shift: true });
+  expect(buttons.at(-1)).toHaveFocus();
   await userEvent.keyboard("{Escape}");
   expect(onClose).toHaveBeenCalledTimes(1);
   await userEvent.click(screen.getByRole("button", { name: "Отказаться" }));

@@ -20,6 +20,10 @@ from datetime import datetime
 from pathlib import Path
 
 TRANSCRIPT_JSON = "transcript.json"
+# Слова сегментов с таймкодами — отдельно от transcript.json: их много, а
+# транскрипт читают список записей, поиск и окно. Выравнивание — по номеру
+# сегмента, у каждого слова сегмента его время и текст для сверки.
+WORDS_JSON = "words.json"
 META_JSON = "meta.json"
 FOLDER_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})(?:_.+)?$")
 # Форматы дорожек в порядке предпочтения — те же, что понимает transcribe.
@@ -127,8 +131,47 @@ def transcript_path(folder: Path) -> Path:
     return folder / TRANSCRIPT_JSON
 
 
+def words_path(folder: Path) -> Path:
+    return folder / WORDS_JSON
+
+
+def _words_ok(segment: dict, entry) -> bool:
+    """Запись words.json ещё описывает сегмент: то же время и тот же текст."""
+    if not isinstance(entry, list) or len(entry) != 3 or not isinstance(entry[2], list) or not entry[2]:
+        return False
+    try:
+        same_time = float(entry[0]) == float(segment.get("start")) and float(entry[1]) == float(segment.get("end"))
+    except (TypeError, ValueError):
+        return False
+    return same_time and words_match({**segment, "words": entry[2]})
+
+
+def read_transcript_full(folder: Path) -> dict | None:
+    """Транскрипт со словами сегментов (из words.json; у расшифровок, где слова
+    ещё лежат в transcript.json, — оттуда). Слова сегмента, у которого с тех
+    пор поменяли время или текст, не подставляются."""
+    data = read_transcript(folder)
+    segments = (data or {}).get("segments")
+    if not isinstance(segments, list):
+        return data
+    try:
+        raw = json.loads(words_path(folder).read_text(encoding="utf-8"))
+        items = raw.get("items") if isinstance(raw, dict) else None
+    except (OSError, ValueError):
+        items = None
+    if not isinstance(items, list):
+        return data
+    out = []
+    for i, s in enumerate(segments):
+        if isinstance(s, dict) and "words" not in s and i < len(items) and _words_ok(s, items[i]):
+            s = {**s, "words": items[i][2]}
+        out.append(s)
+    return {**data, "segments": out}
+
+
 def read_transcript(folder: Path) -> dict | None:
-    """Структурный транскрипт папки; нет или битый — None."""
+    """Структурный транскрипт папки (без слов — они в words.json, см.
+    read_transcript_full); нет или битый — None."""
     try:
         data = json.loads(transcript_path(folder).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -160,39 +203,63 @@ def with_display_names(data: dict | None) -> dict | None:
     return {**data, "segments": segments}
 
 
-def _dumps_transcript(data: dict) -> str:
-    """JSON транскрипта с отступами, но слова сегмента — одной строкой:
-    иначе на каждое слово ушло бы пять строк файла."""
-    segments = data.get("segments")
-    if not isinstance(segments, list) or not any(
-            isinstance(s, dict) and isinstance(s.get("words"), list) for s in segments):
-        return json.dumps(data, ensure_ascii=False, indent=1)
-    import uuid
-
-    nonce = uuid.uuid4().hex
-    packed: dict[str, str] = {}
-    out_segments = []
-    for i, s in enumerate(segments):
-        if isinstance(s, dict) and isinstance(s.get("words"), list):
-            mark = f"@@words-{nonce}-{i}@@"
-            packed[json.dumps(mark)] = json.dumps(s["words"], ensure_ascii=False, separators=(",", ":"))
-            s = {**s, "words": mark}
-        out_segments.append(s)
-    text = json.dumps({**data, "segments": out_segments}, ensure_ascii=False, indent=1)
-    for mark, value in packed.items():
-        text = text.replace(mark, value, 1)
-    return text
+def _atomic_text(path: Path, text: str) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def write_transcript(folder: Path, data: dict) -> Path:
-    """Атомарная запись: редактор читает файл в любой момент."""
-    path = transcript_path(folder)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(_dumps_transcript(data), encoding="utf-8")
-    import os
+    """Атомарная запись: редактор читает файл в любой момент.
 
-    os.replace(tmp, path)
+    Слова сегментов (`words`, если они есть в данных) уходят в words.json —
+    целиком, по номерам сегментов; transcript.json остаётся без них. Данные
+    без слов (окно, переименования) words.json не трогают: запись, которая
+    уже не сходится с сегментом, при чтении просто не подставляется."""
+    path = transcript_path(folder)
+    segments = data.get("segments")
+    has_words = isinstance(segments, list) and any(isinstance(s, dict) and "words" in s for s in segments)
+    if has_words:
+        items = [[s.get("start"), s.get("end"), s["words"]]
+                 if isinstance(s, dict) and isinstance(s.get("words"), list) and s["words"] else None
+                 for s in segments]
+        _atomic_text(words_path(folder), json.dumps({"version": 1, "items": items}, ensure_ascii=False,
+                                                    separators=(",", ":")))
+        data = {**data, "segments": [{k: v for k, v in s.items() if k != "words"} if isinstance(s, dict) else s
+                                     for s in segments]}
+    _atomic_text(path, json.dumps(data, ensure_ascii=False, indent=1))
     return path
+
+
+# Заголовок транскрипта для списка записей: (path, mtime_ns, size) → (есть ли
+# транскрипт, название, пометка диаризации). Список не разбирает каждый раз
+# все транскрипты целиком.
+_heads: dict[str, tuple] = {}
+_heads_lock = threading.Lock()
+
+
+def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None]:
+    path = transcript_path(folder)
+    try:
+        st = path.stat()
+    except OSError:
+        return False, None, None
+    key = (st.st_mtime_ns, st.st_size)
+    with _heads_lock:
+        hit = _heads.get(str(path))
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    transcript = read_transcript(folder)
+    title = diarization = None
+    if isinstance(transcript, dict):
+        raw_title = transcript.get("title")
+        title = str(raw_title) if raw_title else None
+        flag = transcript.get("diarization")
+        diarization = str(flag) if isinstance(flag, str) and flag else None
+    head = (transcript is not None, title, diarization)
+    with _heads_lock:
+        _heads[str(path)] = (key, head)
+    return head
 
 
 def read_meta(folder: Path) -> dict:
@@ -569,14 +636,7 @@ def describe(folder: Path) -> Recording | None:
     meta = read_meta(folder)
     if not _recognised(tracks, meta):
         return None
-    transcript = read_transcript(folder)
-    title = None
-    diarization = None
-    if isinstance(transcript, dict):
-        raw_title = transcript.get("title")
-        title = str(raw_title) if raw_title else None
-        flag = transcript.get("diarization")
-        diarization = str(flag) if isinstance(flag, str) and flag else None
+    has_json, title, diarization = _transcript_head(folder)
     if meta.get("title"):
         title = str(meta["title"])
     source = meta.get("source") if meta.get("source") in SOURCES else "record"
@@ -590,7 +650,7 @@ def describe(folder: Path) -> Recording | None:
         started_at=_started_at(folder.name),
         tracks=tracks,
         duration_s=_duration_from_events(folder),
-        has_transcript=transcript is not None or bool(list(folder.glob("*_transcript.md"))),
+        has_transcript=has_json or bool(list(folder.glob("*_transcript.md"))),
         has_voices=bool(list(folder.glob("*_speakers.json"))),
         title=title,
         source=source,

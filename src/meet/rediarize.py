@@ -19,10 +19,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
+
+import numpy as np
 
 from meet import library, segvoices, speakers
 
@@ -46,12 +47,14 @@ def clustering_threshold(sensitivity: float | None) -> float | None:
 
 
 def fingerprint(data: dict) -> str:
-    """Отпечаток расшифровки: реплики (время, подпись, текст) и её версия."""
+    """Отпечаток текста расшифровки: время и текст реплик и её версия. Подписи
+    в него не входят — переименование после расчёта результат не портит:
+    имена раздаются заново при предпросмотре и применении."""
     h = hashlib.sha1(str(data.get("created_at")).encode("utf-8"))
     for s in data.get("segments") or []:
         if isinstance(s, dict):
-            h.update(json.dumps([s.get("start"), s.get("end"), s.get("speaker"), s.get("text"),
-                                 s.get("kind"), s.get("track")], ensure_ascii=False).encode("utf-8"))
+            h.update(json.dumps([s.get("start"), s.get("end"), s.get("text"), s.get("kind")],
+                                ensure_ascii=False).encode("utf-8"))
     return h.hexdigest()[:16]
 
 
@@ -89,36 +92,159 @@ def _parts(segment: dict, turns, overlaps) -> list[dict]:
     return out
 
 
-def reassign(folder: Path, segments: list[dict], turns, overlaps) -> list[list[dict]]:
-    """Части каждого сегмента (по номеру прежнего): отметки перерыва и
-    микрофон владельца — как были, реплики собеседников — новым спикерам.
-    Сырые метки SPEAKER_XX ещё не переименованы."""
+def reassign(folder: Path, segments: list[dict], turns, overlaps) -> list[list[dict] | None]:
+    """Части каждого сегмента (по номеру прежнего) с сырыми метками SPEAKER_XX
+    новой диаризации; None — сегмент остаётся как есть (отметка перерыва,
+    микрофон владельца)."""
     tracks = segvoices.tracks_of(folder, segments)
-    out = []
+    out: list[list[dict] | None] = []
     for s, track in zip(segments, tracks):
         if track is None or track == "mic" or not turns:
-            out.append([dict(s)])
+            out.append(None)
         else:
             out.append(_parts(s, turns, overlaps))
     return out
 
 
-def _display(parts: list[list[dict]], name_map: dict[str, str]) -> dict[str, str]:
-    """Сырая метка → подпись: узнанное по базе имя или «Спикер N» по порядку
-    появления (как у расшифровки)."""
-    out: dict[str, str] = {}
-    n = 0
-    for group in parts:
+# Сходство нового кластера с прежним (косинус центров), с которого новый
+# наследует прежнюю подпись — имя, данное вручную, тоже.
+SAME_SPEAKER = 0.65
+# Доля речи нового кластера под одной нынешней подписью, с которой он её
+# наследует (голосование по времени).
+MAJORITY = 0.5
+
+
+def _cos(a: np.ndarray, b: np.ndarray) -> float:
+    d = float(np.linalg.norm(a) * np.linalg.norm(b))
+    return float(a @ b / d) if d else -1.0
+
+
+def _pairs(sim: np.ndarray, floor: float = SAME_SPEAKER) -> list[tuple[int, int]]:
+    """Один к одному: новый кластер i ↔ прежний j с наибольшей суммой
+    сходства (венгерский алгоритм; без scipy — жадно), не ниже `floor`."""
+    if not sim.size:
+        return []
+    try:
+        from scipy.optimize import linear_sum_assignment
+
+        rows, cols = linear_sum_assignment(-sim)
+        pairs = list(zip(rows.tolist(), cols.tolist()))
+    except ImportError:
+        pairs, used_r, used_c = [], set(), set()
+        for flat in np.argsort(-sim, axis=None):
+            r, c = divmod(int(flat), sim.shape[1])
+            if r not in used_r and c not in used_c:
+                pairs.append((r, c))
+                used_r.add(r)
+                used_c.add(c)
+    return [(r, c) for r, c in pairs if sim[r, c] >= floor]
+
+
+def _manual_keys(folder: Path, data: dict) -> set[tuple]:
+    """Время сегментов, которым подпись дали вручную (реплики, разделение)
+    после последнего переразделения."""
+    keys: set[tuple] = set()
+    for step in speakers._applied(folder, data):
+        if any(isinstance(op, dict) and op.get("type") == "rediarize" for op in step.get("ops") or []):
+            keys = set()
+            continue
+        for k in step.get("keys") or []:
+            if isinstance(k, list) and len(k) == 2:
+                keys.add((float(k[0]), float(k[1])))
+    return keys
+
+
+def finish(folder: Path, data: dict, got: dict) -> dict:
+    """Подписи нового разделения по нынешнему транскрипту.
+
+    - Новый кластер получает прежнюю подпись, один к одному: сначала по
+      времени (большая часть его речи сейчас под этой подписью), затем по
+      голосу (косинус с прежним кластером ≥ SAME_SPEAKER). Имя, данное
+      вручную, не теряется. Прежний «Спикер N» уступает имени из базы.
+    - Остальные — имя из базы или «Спикер N» с номером, не занятым ни одной
+      оставшейся подписью.
+    - Реплика, исправленная вручную (по времени из истории), остаётся у своего
+      спикера, если её сегмент не разрезан, а голос нового кластера — тот же,
+      что у прежнего (best effort).
+
+    → {"parts": части по прежним сегментам, "voices": сайдкар, "kept": имена,
+    сохранённые по голосу}."""
+    segments = data["segments"]
+    raw_parts = got["parts"]
+    base_names = got.get("names") or {}
+    new_voices = {str(k): np.asarray(v, dtype=np.float32) for k, v in (got.get("voices") or {}).items()}
+    order: list[str] = []
+    for group in raw_parts:
+        for p in group or []:
+            raw = p.get("speaker")
+            if isinstance(raw, str) and raw not in order:
+                order.append(raw)
+    present = set(speakers._order(speakers._shown(segments)))
+    manual = _manual_keys(folder, data)
+    # 1. По времени: какой нынешней подписью размечена большая часть речи
+    # нового кластера (реплики, исправленные вручную, не голосуют). Так
+    # подпись берётся из того, что человек видит в расшифровке, — даже если
+    # подписи кластеров в сайдкаре устарели (переименования в базе голосов).
+    votes: dict[str, dict[str, float]] = {}
+    for s, group in zip(segments, raw_parts):
+        label = s.get("speaker")
+        if group is None or not label or (float(s["start"]), float(s["end"])) in manual:
+            continue
         for p in group:
             raw = p.get("speaker")
-            if not isinstance(raw, str) or not raw.startswith("SPEAKER_") or raw in out:
-                continue
-            if raw in name_map:
-                out[raw] = name_map[raw]
-            else:
-                n += 1
-                out[raw] = f"Спикер {n}"
-    return out
+            share = votes.setdefault(raw, {})
+            share[label] = share.get(label, 0.0) + speakers._duration(p)
+    labels = sorted({label for v in votes.values() for label in v})
+    vote_raws = [r for r in order if r in votes]
+    shares = np.array([[votes[r].get(label, 0.0) / (sum(votes[r].values()) or 1.0) for label in labels]
+                       for r in vote_raws]) if vote_raws and labels else np.zeros((0, 0))
+    inherited = {vote_raws[r]: labels[c] for r, c in _pairs(shares, MAJORITY)}
+    # 2. Остальные — по голосу: центр нового кластера против прежних кластеров
+    # сайдкара (их нынешние подписи), один к одному.
+    names = data.get("names") if isinstance(data.get("names"), dict) else {}
+    old = []
+    for e in (speakers._sidecar(folder) or {}).get("speakers") or []:
+        if isinstance(e, dict) and isinstance(e.get("display"), str) and isinstance(e.get("embedding"), list):
+            label = speakers._resolve(names, e["display"])
+            if label in present and label not in inherited.values():
+                old.append((label, np.asarray(e["embedding"], dtype=np.float32)))
+    raws = [r for r in order if r in new_voices and r not in inherited]
+    sim = np.array([[_cos(new_voices[r], v) if new_voices[r].shape == v.shape else -1.0 for _, v in old]
+                    for r in raws]) if raws and old else np.zeros((0, 0))
+    for r, c in _pairs(sim):
+        if old[c][0] not in inherited.values():
+            inherited[raws[r]] = old[c][0]
+    label_of: dict[str, str] = {}
+    kept: list[str] = []
+    for raw in order:
+        prior = inherited.get(raw)
+        if prior is not None and not speakers.unnamed(prior):
+            label_of[raw] = prior
+            kept.append(prior)
+        elif base_names.get(raw):
+            label_of[raw] = base_names[raw]
+        elif prior is not None:
+            label_of[raw] = prior
+    used = {s.get("speaker") for s, group in zip(segments, raw_parts) if group is None and s.get("speaker")}
+    used |= set(label_of.values())
+    for raw in order:
+        if raw not in label_of:
+            label_of[raw] = speakers.fresh_label(used)
+            used.add(label_of[raw])
+    parts: list[list[dict]] = []
+    for s, group in zip(segments, raw_parts):
+        if group is None:
+            parts.append([dict(s)])
+            continue
+        out = [{**p, "speaker": label_of.get(p.get("speaker"), p.get("speaker"))} for p in group]
+        if (len(group) == 1 and (float(group[0]["start"]), float(group[0]["end"])) in manual
+                and (float(s["start"]), float(s["end"])) == (float(group[0]["start"]), float(group[0]["end"]))
+                and group[0].get("speaker") in inherited and s.get("speaker")):
+            out[0]["speaker"] = s["speaker"]  # ручная правка реплики переживает переразделение
+        parts.append(out)
+    voices = [{"label": raw, "display": label_of.get(raw, raw), "embedding": [float(x) for x in vec]}
+              for raw, vec in new_voices.items()]
+    return {"parts": parts, "voices": voices, "kept": sorted(set(kept))}
 
 
 # --- задача (подпроцесс) --------------------------------------------------------
@@ -132,7 +258,7 @@ def run(folder: Path, *, num_speakers: int | None = None, min_speakers: int | No
     from meet import events, settings, transcribe
 
     bus = bus if bus is not None else events.EventBus()
-    data = library.read_transcript(folder)
+    data = library.read_transcript_full(folder)
     if not data or not isinstance(data.get("segments"), list):
         raise ValueError("у записи нет расшифровки")
     segments = [s for s in data["segments"] if isinstance(s, dict)]
@@ -145,7 +271,9 @@ def run(folder: Path, *, num_speakers: int | None = None, min_speakers: int | No
     if to_wav is None:
         from meet.audio import to_wav16k as to_wav
     threshold = clustering_threshold(sensitivity)
-    with tempfile.TemporaryDirectory() as td:
+    from meet.jobs import temp_dir
+
+    with temp_dir() as td:
         bus.progress("convert", done=0, total=1)
         # Как у расшифровки: дорожку собеседников выравниваем по громкости.
         wav = to_wav(src, Path(td) / "audio16.wav", normalize=stem == "sys")
@@ -159,13 +287,7 @@ def run(folder: Path, *, num_speakers: int | None = None, min_speakers: int | No
     bus.progress("voices")
     name_map = transcribe._match_names(diar, transcribe.voice_threshold(folder))
     parts = reassign(folder, segments, diar.turns, diar.overlaps)
-    display = _display(parts, name_map)
-    for group in parts:
-        for p in group:
-            p["speaker"] = display.get(p.get("speaker"), p.get("speaker"))
-    voices = [{"label": raw, "display": name_map.get(raw) or display.get(raw, raw),
-               "embedding": [float(x) for x in emb]}
-              for raw, emb in (diar.embeddings or {}).items()]
+    voices = {raw: [float(x) for x in emb] for raw, emb in (diar.embeddings or {}).items()}
     out = folder / PREVIEW_NAME
     payload = {
         "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -174,6 +296,7 @@ def run(folder: Path, *, num_speakers: int | None = None, min_speakers: int | No
                    "max_speakers": max_speakers, "sensitivity": sensitivity, "threshold": threshold},
         "parts": parts,
         "voices": voices,
+        "names": name_map,
     }
     tmp = out.with_name(f".{out.name}.{uuid.uuid4().hex}.tmp")
     try:
@@ -207,8 +330,13 @@ def preview(folder: Path) -> dict | None:
         return None
     data = speakers._transcript(folder)
     old = data["segments"]
-    parts = got["parts"]
-    stale = got.get("base") != fingerprint(data) or len(parts) != len(old)
+    stale = got.get("base") != fingerprint(data) or len(got["parts"]) != len(old)
+    if stale:
+        return {"created_at": got.get("created_at"), "params": got.get("params") or {}, "stale": True,
+                "speakers": [], "before": len(speakers._order(speakers._shown(old))), "changed": 0, "cut": 0,
+                "segments": len(old), "kept": []}
+    done = finish(folder, data, got)
+    parts = done["parts"]
     flat = [p for group in parts for p in group]
     shown = speakers._shown(flat)
     order = speakers._order(shown)
@@ -219,12 +347,11 @@ def preview(folder: Path) -> dict | None:
     total = sum(seconds.values()) or 1.0
     turns = speakers._turns(flat, shown)
     changed = cut = 0
-    if not stale:
-        for s, group in zip(old, parts):
-            if len(group) > 1:
-                cut += 1
-            if any(p.get("speaker") != s.get("speaker") for p in group):
-                changed += 1
+    for s, group in zip(old, parts):
+        if len(group) > 1:
+            cut += 1
+        if any(p.get("speaker") != s.get("speaker") for p in group):
+            changed += 1
     before = speakers._order(speakers._shown(old))
     rows = [{"label": label, "seconds": round(seconds.get(label, 0.0), 2),
              "share": round(seconds.get(label, 0.0) / total, 4),
@@ -232,7 +359,7 @@ def preview(folder: Path) -> dict | None:
              "samples": speakers._samples(turns, label)} for label in order]
     return {"created_at": got.get("created_at"), "params": got.get("params") or {}, "stale": stale,
             "speakers": rows, "before": len(before), "changed": changed, "cut": cut,
-            "segments": len(old)}
+            "segments": len(old), "kept": done["kept"]}
 
 
 def discard(folder: Path) -> bool:
@@ -245,15 +372,15 @@ def discard(folder: Path) -> bool:
 
 def apply(folder: Path, voices_dir: Path, now: datetime | None = None) -> dict:
     """Применить посчитанное разделение одним шагом истории."""
-    speakers.normalize(folder)
     got = _read(folder)
     if got is None:
         raise speakers.SpeakerError("Нового разделения нет — запустите «Переразделить на спикеров»")
-    data = speakers._transcript(folder)
+    data = speakers.editable(folder)
     old = data["segments"]
-    parts = got["parts"]
-    if got.get("base") != fingerprint(data) or len(parts) != len(old):
+    if got.get("base") != fingerprint(data) or len(got["parts"]) != len(old):
         raise speakers.Stale(STALE)
+    done = finish(folder, data, got)  # подписи — по нынешним, не по тем, что были при расчёте
+    parts = done["parts"]
     replace, after = [], []
     for i, (s, group) in enumerate(zip(old, parts)):
         if len(group) == 1 and {k: v for k, v in group[0].items() if k != "speaker"} == \
@@ -272,7 +399,7 @@ def apply(folder: Path, voices_dir: Path, now: datetime | None = None) -> dict:
     deltas = speakers._deltas(after, targets)
     side_path, side = speakers.sidecar_for_write(folder)
     voices_before = [e for e in side.get("speakers") or [] if isinstance(e, dict)]
-    voices_after = [e for e in got.get("voices") or [] if isinstance(e, dict)]
+    voices_after = done["voices"]
     names_before = data.get("names") if isinstance(data.get("names"), dict) else None
     if not deltas and not replace and _labels(voices_before) == _labels(voices_after):
         discard(folder)
