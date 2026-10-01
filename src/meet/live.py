@@ -327,10 +327,12 @@ class LiveEngine:
 
         from meet.recorder import OpusWriter, _find_loopback
 
-        self.out_dir.mkdir(parents=True, exist_ok=True)
         self._transcriber.load()
         if self._matcher is not None:
             self._matcher.load()
+        # Папка встречи — после загрузки моделей (до минуты): остановка или
+        # сбой на загрузке не оставляют пустую датированную папку.
+        self.out_dir.mkdir(parents=True, exist_ok=True)
         self._p = pyaudio.PyAudio()
         wasapi = self._p.get_host_api_info_by_type(pyaudio.paWASAPI)
         devices = (

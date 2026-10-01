@@ -437,6 +437,25 @@ def test_partial_start_failure_releases_lock(tmp_path, monkeypatch):
     engine.stop()  # повторная уборка после сбоя безопасна
 
 
+def test_meeting_folder_appears_only_after_models_load(tmp_path, monkeypatch):
+    """Остановка во время загрузки модели (резидент убивает ребёнка, пока
+    порта ещё нет) не должна оставлять пустую датированную папку."""
+    _fake_audio(monkeypatch)
+    out_dir = tmp_path / "2026-10-01_10-00"
+    seen = {}
+
+    class Spy(_LoadSpy):
+        def load(self):
+            seen["folder_during_load"] = out_dir.exists()
+            raise RuntimeError("убит во время загрузки")
+
+    engine = LiveEngine(out_dir, Spy(), speaker_name="Вы")
+    with pytest.raises(RuntimeError):
+        engine.start()
+    assert seen["folder_during_load"] is False
+    assert not out_dir.exists()
+
+
 # --- Дорожки живого режима держатся у стенных часов ---------------------------
 
 from meet.live import WallClockWriter  # noqa: E402

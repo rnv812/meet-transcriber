@@ -260,8 +260,10 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
 
     if cfg is None:
         cfg = settings.load()
-    # Провайдер и авторизация — до прогрева моделей и создания папки записи:
-    # без модели пользователь не должен ждать минуту и получать пустую папку.
+    # Провайдер и авторизация — до engine.start(): без провайдера пользователь
+    # не должен ждать минуту загрузки распознавания. Папку встречи создаёт
+    # engine.start() уже после загрузки моделей — ни отказ здесь, ни остановка
+    # во время загрузки пустой датированной папки не оставляют.
     provider_name, runner = _pick_runner(provider, cfg)
     if provider_name == "claude-code":
         auth_error = asyncio.run(check_auth())

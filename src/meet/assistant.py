@@ -112,13 +112,6 @@ def _cut_middle(text: str, limit: int) -> str:
     return f"{head}\n[… пропущено {skipped} символов из середины записи …]\n{tail}"
 
 
-def _title_and_date(folder: Path, data: dict | None) -> tuple[str, str]:
-    card = library.describe(folder)
-    title = (card.title if card else None) or (data or {}).get("title") or folder.name
-    date = ((card.started_at if card else None) or "")[:10]
-    return str(title), date or datetime.now().strftime("%Y-%m-%d")
-
-
 def _read_transcript(folder: Path) -> dict:
     data = library.read_transcript(folder)
     if data is None:
@@ -164,7 +157,7 @@ def summarize(folder: Path, runner, knowledge_dir, *, provider: str | None = Non
     summary.md при этом не трогается."""
     folder = Path(folder)
     data = _read_transcript(folder)
-    title, date = _title_and_date(folder, data)
+    title, date = library.title_and_date(folder, data, today_if_unknown=True)
     dirs = _allowed_dirs(folder, knowledge_dir)
     prompt = (f"Встреча: {title} ({date})\n\nТранскрипт:\n{transcript_text(data)}"
               f"{_knowledge_hint(dirs)}")
@@ -219,7 +212,7 @@ def ask(folder: Path, question: str, runner, knowledge_dir, *,
     """Вопрос по записи. Ответ дописывается в qa.jsonl; ошибка — RuntimeError."""
     folder = Path(folder)
     data = _read_transcript(folder)
-    title, date = _title_and_date(folder, data)
+    title, date = library.title_and_date(folder, data, today_if_unknown=True)
     dirs = _allowed_dirs(folder, knowledge_dir)
     parts = [f"Встреча: {title} ({date})", "", "Транскрипт:", transcript_text(data)]
     summary = read_summary(folder)
@@ -293,7 +286,7 @@ def to_notes(folder: Path, notes_dir, subdir: str) -> Path:
     target = _notes_target(notes_dir, subdir)
     if data is None:
         raise ValueError("транскрипта нет")
-    title, date = _title_and_date(folder, data)
+    title, date = library.title_and_date(folder, data, today_if_unknown=True)
     body = _note_body(folder, data, title, date)
     stem = f"{date} {export.safe_filename(title, folder.name)}"
     target.mkdir(parents=True, exist_ok=True)

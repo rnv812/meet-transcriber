@@ -415,3 +415,61 @@ def test_patch_takes_what_the_assistant_settings_window_sends(tmp_path):
     assert loaded.assistant.knowledge_dir is None
     assert loaded.assistant.notes_dir == tmp_path
     assert loaded.assistant.notes_subdir == "Встречи"
+
+
+def test_broken_config_is_reported_once_with_file_and_reason(tmp_path, monkeypatch, capsys):
+    """Битый config.json — по-прежнему дефолты, но не молча: одна строка в
+    stderr и в watch.log (журнал резидента) с файлом и причиной."""
+    from meet import settings
+
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setenv("MEET_DATA_DIR", str(data))
+    monkeypatch.setattr(settings, "_REPORTED", set())
+    path = data / "config.json"
+    path.write_text("{битый", encoding="utf-8")
+    assert settings.read_raw() == {}
+    assert settings.load().auto_record.enabled is False
+    assert settings.read_raw() == {}  # резидент читает часто — без спама
+    err = capsys.readouterr().err
+    assert err.count(str(path)) == 1 and "по умолчанию" in err
+    log = (data / "watch.log").read_text(encoding="utf-8")
+    assert log.count(str(path)) == 1
+
+
+def test_broken_explicit_config_is_reported_to_stderr_only(tmp_path, monkeypatch, capsys):
+    """Чужой файл (не config.json этого data dir) — только stderr: журнал
+    резидента не засоряется (и тесты не пишут в настоящий watch.log)."""
+    from meet import settings
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(settings, "_REPORTED", set())
+    path = tmp_path / "config.json"
+    path.write_text("{битый", encoding="utf-8")
+    assert settings.read_raw(path) == {}
+    assert str(path) in capsys.readouterr().err
+    assert not (tmp_path / "data" / "watch.log").exists()
+
+
+def test_missing_or_valid_config_is_not_reported(tmp_path, monkeypatch, capsys):
+    from meet import settings
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(settings, "_REPORTED", set())
+    assert settings.read_raw(tmp_path / "нет.json") == {}
+    ok = tmp_path / "ok.json"
+    ok.write_text("{}", encoding="utf-8")
+    assert settings.read_raw(ok) == {}
+    assert capsys.readouterr().err == ""
+    assert not (tmp_path / "data" / "watch.log").exists()
+
+
+def test_non_object_config_is_reported(tmp_path, monkeypatch, capsys):
+    from meet import settings
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(settings, "_REPORTED", set())
+    path = tmp_path / "config.json"
+    path.write_text("[1, 2]", encoding="utf-8")
+    assert settings.read_raw(path) == {}
+    assert str(path) in capsys.readouterr().err

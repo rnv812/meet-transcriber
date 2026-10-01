@@ -226,6 +226,21 @@ def recording_folders(root: Path) -> list[Path]:
     return [f for f in sorted(root.iterdir(), key=lambda p: p.name) if is_recording(f)]
 
 
+def title_and_date(folder: Path, data: dict | None, *,
+                   today_if_unknown: bool = False) -> tuple[str, str]:
+    """Название и дата (ГГГГ-ММ-ДД) встречи — одни для экспорта, итогов,
+    вопросов и заметки: название из карточки, иначе из транскрипта, иначе имя
+    папки; дата — начало записи. Неизвестна — "" (экспорт не выдумывает), а
+    с `today_if_unknown` — сегодня (заметке нужна дата в имени файла)."""
+    folder = Path(folder)
+    card = describe(folder)
+    title = (card.title if card else None) or (data or {}).get("title") or folder.name
+    date = ((card.started_at if card else None) or "")[:10]
+    if not date and today_if_unknown:
+        date = datetime.now().strftime("%Y-%m-%d")
+    return str(title), date
+
+
 def describe(folder: Path) -> Recording | None:
     """Папка записи → карточка для библиотеки. Не папка записи — None."""
     if not folder.is_dir():

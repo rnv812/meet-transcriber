@@ -12,7 +12,9 @@
 `--json` — ровно один JSON-документ в stdout.
 """
 
+import errno
 import json
+import os
 import shutil
 import sys
 from contextlib import redirect_stdout
@@ -40,22 +42,43 @@ def run(args, cfg) -> int:
     except KeyboardInterrupt:  # Ctrl+C посреди расшифровки — не трейсбек
         print("Прервано", file=sys.stderr)
         return 1
+    except BrokenPipeError:
+        # Читатель закрыл вывод (`meet export … | head`): он получил, что
+        # хотел, — выходим тихо. stdout — в никуда, иначе его сброс при
+        # выходе интерпретатора напечатал бы ту же ошибку.
+        _silence_stdout()
+        return 0
     return 0
 
 
 # --- вывод -------------------------------------------------------------------
 
 
+def _silence_stdout() -> None:
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+    except (OSError, ValueError, AttributeError):
+        pass  # подменённый stdout (тесты) — сбрасывать нечего
+
+
 def _out(text: str) -> None:
     """Текст в stdout как UTF-8. Интерактивная консоль Windows и так UTF-8,
-    а перенаправленный stdout — cp1251: экспорт и JSON в нём теряли бы символы."""
-    sys.stdout.flush()
-    buffer = getattr(sys.stdout, "buffer", None)
-    if buffer is None:
-        sys.stdout.write(text)
-        return
-    buffer.write(text.encode("utf-8"))
-    buffer.flush()
+    а перенаправленный stdout — cp1251: экспорт и JSON в нём теряли бы символы.
+    Закрытый читателем пайп — BrokenPipeError (на Windows он приходит и как
+    OSError EINVAL)."""
+    try:
+        sys.stdout.flush()
+        buffer = getattr(sys.stdout, "buffer", None)
+        if buffer is None:
+            sys.stdout.write(text)
+            return
+        buffer.write(text.encode("utf-8"))
+        buffer.flush()
+    except OSError as e:
+        if isinstance(e, BrokenPipeError) or e.errno in (errno.EPIPE, errno.EINVAL):
+            raise BrokenPipeError(errno.EPIPE, "читатель закрыл вывод") from None
+        raise
 
 
 def _result(args, doc, text: str) -> None:
@@ -160,10 +183,8 @@ def _export(args, cfg) -> None:
     folder = _recording(args.folder, cfg)
     # Как в окне: сырые SPEAKER_XX старых транскриптов — «Спикер N».
     data = library.with_display_names(_transcript(folder))
-    card = library.describe(folder)
-    title = (card.title if card else None) or data.get("title") or folder.name
-    content = export.render({**data, "title": title}, args.format,
-                            date=(card.started_at or "")[:10] if card else "")
+    title, date = library.title_and_date(folder, data)
+    content = export.render({**data, "title": title}, args.format, date=date)
     if args.out_file is None:
         _result(args, {"format": args.format, "content": content}, content)
         return

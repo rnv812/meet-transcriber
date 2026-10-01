@@ -66,6 +66,10 @@ STOP_TIMEOUT_S = 90.0  # финализация дорожек; дальше —
 # 70 с (app/src-tauri/src/api.rs, LONG_TIMEOUT) — укладываемся с запасом, как
 # остановка обычной записи (join 60 с).
 SHUTDOWN_WAIT_S = 60.0
+# Сверх дедлайна stop(wait=True) ждёт поток наблюдения ещё столько (убийство
+# дерева и событие): 60 + 5 < 70 с оболочки.
+JOIN_SLACK_S = 5.0
+STOPPED_MARK = "Остановлено:"  # run_assist печатает после удачного engine.stop()
 # Файл эндпоинта исчез после /stop — ребёнок дописал запись (run_assist убирает
 # его после engine.stop()). Даём ему столько, чтобы выйти самому и успеть
 # напечатать ошибку финализации; дальше добиваем зависший вызов модели.
@@ -213,15 +217,26 @@ def _open_log() -> tuple:
     return f, path, f.tell()
 
 
-def _last_line(path: Path | None, offset: int) -> str | None:
-    """Последняя непустая строка вывода этого запуска."""
+def _run_output(path: Path | None, offset: int) -> str | None:
+    """Вывод ребёнка за этот запуск (журнал с `offset`)."""
     if path is None:
         return None
     try:
         with open(path, "rb") as f:
             f.seek(offset)
-            text = f.read().decode("utf-8", errors="replace")
+            return f.read().decode("utf-8", errors="replace")
     except OSError:
+        return None
+
+
+def _log_has(path: Path | None, offset: int, mark: str) -> bool:
+    return mark in (_run_output(path, offset) or "")
+
+
+def _last_line(path: Path | None, offset: int) -> str | None:
+    """Последняя непустая строка вывода этого запуска."""
+    text = _run_output(path, offset)
+    if text is None:
         return None
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     return lines[-1][:ERROR_MAX_CHARS] if lines else None
@@ -405,7 +420,7 @@ class LiveControl:
             while thread.ident is None and time.monotonic() - began < 2.0:
                 time.sleep(0.01)
             if thread.ident is not None:
-                thread.join(timeout=max(0.0, deadline - time.monotonic()) + 10.0)
+                thread.join(timeout=max(0.0, deadline - time.monotonic()) + JOIN_SLACK_S)
         return {"ok": True, "action": "stopping", **self.status()}
 
     def _send_stop(self, port: int) -> None:
@@ -478,6 +493,11 @@ class LiveControl:
                         error = _last_line(path, offset) or \
                             f"Ассистент завершился с кодом {code}"
                         complete = True
+                    elif killed and not _log_has(path, offset, STOPPED_MARK):
+                        # Дописал (убрал эндпоинт), но «Остановлено:» не
+                        # напечатал — engine.stop() упал, а процесс держал
+                        # вызов модели и был добит: причину не прячем.
+                        error, complete = _last_line(path, offset), True
                     else:
                         error, complete = None, True
                 else:

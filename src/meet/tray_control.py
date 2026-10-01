@@ -599,11 +599,9 @@ class TrayControl:
         data = library.with_display_names(library.read_transcript(folder)) if folder else None
         if data is None:
             return {"error": "транскрипта нет"}
-        card = library.describe(folder)
-        title = (card.title if card else None) or data.get("title") or folder.name
+        title, date = library.title_and_date(folder, data)
         try:
-            content = export.render({**data, "title": title}, fmt,
-                                    date=(card.started_at or "")[:10] if card else "")
+            content = export.render({**data, "title": title}, fmt, date=date)
         except ValueError as e:
             raise _bad_request(str(e))
         safe_name = export.safe_filename(title, recording_id)

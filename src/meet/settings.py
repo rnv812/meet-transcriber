@@ -23,6 +23,7 @@
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -607,14 +608,50 @@ def migrate(raw: dict) -> dict:
     return migrated
 
 
-def read_raw(path: Path | None = None) -> dict:
-    """Сырое содержимое файла настроек. Нет файла или мусор — пустой словарь."""
-    target = path or paths.config_path()
+# Уже сообщённые (файл, причина): резидент читает настройки часто, а строка
+# о битом файле нужна одна — до исправления файла или новой причины.
+_REPORTED: set = set()
+
+
+def _report_unreadable(target: Path, reason: str) -> None:
+    """Битый config.json — дефолты, но не молча: строка в stderr и, для
+    config.json этого data dir, в watch.log (журнал резидента: под pythonw
+    stderr не видно)."""
+    key = (str(target), reason)
+    if key in _REPORTED:
+        return
+    _REPORTED.add(key)
+    line = f"настройки: {target} не читается ({reason}) — работаю с настройками по умолчанию"
+    if sys.stderr is not None:
+        try:
+            print(line, file=sys.stderr, flush=True)
+        except (OSError, ValueError):
+            pass
     try:
-        data = json.loads(Path(target).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        if Path(target).resolve() != paths.config_path().resolve():
+            return
+        from meet import watch
+
+        watch.WatchLog(watch.default_log_path())(line)
+    except Exception:
+        pass  # журнал не должен мешать работе
+
+
+def read_raw(path: Path | None = None) -> dict:
+    """Сырое содержимое файла настроек. Нет файла — пустой словарь; мусор —
+    тоже, плюс одна строка о нём (см. _report_unreadable)."""
+    target = Path(path or paths.config_path())
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return {}
-    return data if isinstance(data, dict) else {}
+    except (OSError, ValueError) as e:
+        _report_unreadable(target, f"{type(e).__name__}: {e}")
+        return {}
+    if not isinstance(data, dict):
+        _report_unreadable(target, "ожидался JSON-объект")
+        return {}
+    return data
 
 
 def load(path: Path | None = None) -> Settings:

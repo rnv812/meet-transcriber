@@ -567,3 +567,60 @@ def test_import_copy_failure_is_exit_1_and_leaves_no_empty_card(env, capsys, mon
     assert _main(["import", str(_media(env)), "--no-transcribe"]) == 1
     assert "диск полон" in capsys.readouterr().err
     assert list(env["rec"].iterdir()) == []
+
+
+# --- мелочи CLI: обрыв пайпа, заметки без папки, общий заголовок ----------------
+
+
+class _ClosedPipe:
+    """stdout, который читатель уже закрыл (`meet export … | head -1`)."""
+
+    class _Buffer:
+        def write(self, data):
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def flush(self):
+            pass
+
+    buffer = _Buffer()
+
+    def write(self, text):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    def flush(self):
+        pass
+
+
+def test_closed_pipe_exits_quietly(env, capsys, monkeypatch):
+    from meet import cli_library
+
+    _meeting(env)
+    args = type("A", (), {"command": "export", "folder": RID, "format": "txt",
+                          "out_file": None, "json": False})()
+    from meet import settings
+
+    monkeypatch.setattr("sys.stdout", _ClosedPipe())
+    assert cli_library.run(args, settings.load()) == 0
+    assert capsys.readouterr().err == ""  # без трейсбека и без ругани
+
+
+def test_notes_without_notes_dir_says_which_setting(env, capsys, tmp_path):
+    _meeting(env)
+    cfg = tmp_path / "data" / "config.json"
+    raw = json.loads(cfg.read_text(encoding="utf-8"))
+    raw["assistant"] = {"notes_dir": None}
+    cfg.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    assert _main(["notes", RID]) == 1
+    err = capsys.readouterr().err
+    assert "Папка заметок не задана" in err and "assistant.notes_dir" in err
+    assert "Traceback" not in err
+
+
+def test_export_and_notes_share_title_and_date(env, capsys, monkeypatch):
+    """Один помощник заголовка и даты: экспорт и заметка не расходятся."""
+    from meet import assistant
+
+    folder = _meeting(env)
+    title, date = library.title_and_date(folder, library.read_transcript(folder))
+    assert (title, date) == ("Планёрка", "2026-09-29")
+    assert not hasattr(assistant, "_title_and_date")

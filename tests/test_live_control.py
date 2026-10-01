@@ -129,6 +129,10 @@ for attempt in range(20):  # как remove_endpoint: резидент мог ч�
 if mode == "stop-error":
     print("RuntimeError: финальный проход упал", flush=True)
     sys.exit(1)
+if mode == "linger-error":
+    # engine.stop() упал, а застрявший вызов модели держит процесс
+    print("RuntimeError: дорожка не закрылась", flush=True)
+    time.sleep(60)
 print("Остановлено: " + folder, flush=True)
 if mode == "linger":
     time.sleep(60)  # дописал, но застрявший вызов модели держит процесс
@@ -347,7 +351,9 @@ def test_stop_during_start_does_not_wait_for_the_model(make_live, tmp_path):
 
 def test_stuck_child_is_killed_with_its_tree_after_stop_timeout(make_live, tmp_path):
     psutil = pytest.importorskip("psutil")
-    live, stub, rec = make_live("hang", stop_timeout=0.5)
+    # Дедлайн с запасом: заглушка должна успеть записать заметку о /stop до
+    # убийства (0.5 с под нагрузкой проигрывали эту гонку).
+    live, stub, rec = make_live("hang", stop_timeout=3.0)
     live.start(tmp_path / "recordings")
     _wait_for(lambda: _active(live))
     _wait_for(lambda: stub.note("grandchild"))
@@ -378,6 +384,25 @@ def test_finalized_child_is_released_without_waiting_for_its_exit(make_live, tmp
     assert stopped["complete"] is True and stopped["error"] is None
     assert live.status()["error"] is None
     assert stub.processes[0].poll() is not None
+
+
+def test_finalize_error_of_lingering_child_is_not_hidden(make_live, tmp_path):
+    """Убрал эндпоинт, но «Остановлено:» не напечатал (engine.stop() упал) и
+    висит на вызове модели: добитый процесс — не повод терять причину."""
+    live, stub, rec = make_live("linger-error", finalize_grace=0.3)
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: _active(live))
+    live.stop()
+    _wait_for(lambda: not live.busy(), timeout=5)
+    stopped = rec.last(live_control.LIVE_STOPPED).data
+    assert stopped["error"] == "RuntimeError: дорожка не закрылась"
+    assert stopped["complete"] is True  # дорожки на диске — расшифровывать
+
+
+def test_shutdown_join_fits_the_shell_timeout():
+    """Оболочка ждёт ответа /shutdown 70 с (api.rs LONG_TIMEOUT)."""
+    assert live_control.JOIN_SLACK_S == 5.0
+    assert live_control.SHUTDOWN_WAIT_S + live_control.JOIN_SLACK_S < 70
 
 
 def test_stop_error_is_surfaced_and_recording_kept(make_live, tmp_path):
@@ -639,7 +664,7 @@ def test_closing_relay_closes_upstream_and_thread(make_live, tmp_path):
 
 
 def test_live_stopping_closes_open_relays(make_live, tmp_path):
-    live, stub, _ = make_live("hang", stop_timeout=0.5)
+    live, stub, _ = make_live("hang", stop_timeout=3.0)
     live.start(tmp_path / "recordings")
     _wait_for(lambda: _active(live))
     stream = live.open_events()
