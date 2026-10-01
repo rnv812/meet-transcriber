@@ -197,6 +197,18 @@ class _QuietServer(ThreadingHTTPServer):
 
     log = staticmethod(lambda message: None)
 
+    # Порт — только наш. ThreadingHTTPServer ставит SO_REUSEADDR, а на Windows
+    # он разрешает второму процессу привязаться к уже слушающему порту: два
+    # резидента с разными папками данных садились на один 127.0.0.1:8766, и
+    # запросы уходили не тому. SO_EXCLUSIVEADDRUSE делает второй bind ошибкой —
+    # и срабатывает откат на эфемерный порт (ControlServer.start).
+    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+        allow_reuse_address = False
+
+        def server_bind(self) -> None:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            super().server_bind()
+
     def handle_error(self, request, client_address) -> None:
         import sys
         import traceback

@@ -877,6 +877,27 @@ def test_fallback_to_ephemeral_when_preferred_port_taken(monkeypatch, tmp_path):
             srv.stop(pid=1)
 
 
+def test_second_resident_on_the_same_port_falls_back(monkeypatch, tmp_path):
+    """Два резидента (разные папки данных) с одним предпочтительным портом:
+    второй не должен «разделить» порт с первым (на Windows SO_REUSEADDR это
+    позволяет, и запросы уходили бы не тому) — он берёт другой."""
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        preferred = probe.getsockname()[1]
+    first = control.ControlServer(FakeState(), port=preferred, fallback=True)
+    second = control.ControlServer(FakeState(), port=preferred, fallback=True)
+    try:
+        assert first.start(publish=False) == preferred
+        port = second.start(publish=False)
+        assert port != preferred and port > 0
+    finally:
+        second.stop(pid=1)
+        first.stop(pid=1)
+
+
 def test_no_fallback_raises_when_port_taken(monkeypatch, tmp_path):
     """Без fallback (тесты, явные вызовы) занятый порт — ошибка, не молчание."""
     monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))

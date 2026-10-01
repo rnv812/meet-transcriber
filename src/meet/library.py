@@ -308,18 +308,43 @@ REMOVE_WAIT_S = 2.0
 REMOVE_POLL_S = 0.25
 FOLDER_BUSY = ("Папку занимает другая программа (например, агент в терминале) — "
                "закройте её и повторите")
+PROBE_STUCK = ("Папку {name} не удалось вернуть после проверки — она вернётся "
+               "на место при следующем запуске приложения")
 # Папка, отложенная к удалению: с точки — библиотека её не показывает.
 DELETING_MARK = ".deleting-"
+# Папка, отложенная на время проверки «можно ли удалить» (wait_removable):
+# своя метка, чтобы восстановление после сбоя вернуло её, а не удалило.
+PROBING_MARK = ".probing-"
+# Обратное переименование: короткая помеха (антивирус, индексатор заглянул в
+# папку) не должна оставлять запись спрятанной — пробуем несколько раз.
+RENAME_BACK_TRIES = 20
+RENAME_BACK_PAUSE_S = 0.1
 
 
 class FolderBusy(RuntimeError):
     """Папку записи держит другая программа — удалять нельзя (текст — человеку)."""
 
 
-def _aside(folder: Path) -> Path:
+def _aside(folder: Path, mark: str = DELETING_MARK) -> Path:
     import uuid
 
-    return folder.with_name(f".{folder.name}{DELETING_MARK}{uuid.uuid4().hex[:8]}")
+    return folder.with_name(f".{folder.name}{mark}{uuid.uuid4().hex[:8]}")
+
+
+def _rename_back(aside: Path, folder: Path, *, rename=os.rename, sleep=time.sleep) -> bool:
+    """Вернуть отложенную папку под прежнее имя, с повторами. False — так и
+    не вышло (папка осталась отложенной)."""
+    for attempt in range(RENAME_BACK_TRIES):
+        if attempt:
+            sleep(RENAME_BACK_PAUSE_S)
+        try:
+            rename(aside, folder)
+            return True
+        except FileNotFoundError:
+            return False
+        except OSError:
+            continue
+    return False
 
 
 def remove_folders(folders, wait_s: float = REMOVE_WAIT_S, *, sleep=time.sleep,
@@ -354,31 +379,32 @@ def remove_folders(folders, wait_s: float = REMOVE_WAIT_S, *, sleep=time.sleep,
             if aside is not None:
                 moved.append((folder, aside))
     except BaseException:
+        # Удаление отменено: вернуть всё. Не вернулась — останется `.deleting-`,
+        # и восстановление её удалит, поэтому с повторами.
         for folder, aside in reversed(moved):
-            try:
-                os.rename(aside, folder)
-            except OSError:
-                pass
+            _rename_back(aside, folder, rename=rename, sleep=sleep)
         raise
     for folder, aside in moved:
         try:
             shutil.rmtree(aside)
         except OSError as e:
-            try:
-                os.rename(aside, folder)  # что осталось — под прежним именем
-            except OSError:
-                pass
+            # что осталось — под прежним именем
+            _rename_back(aside, folder, rename=rename, sleep=sleep)
             raise RuntimeError(f"не удалось удалить запись {folder.name}: {e}") from e
 
 
 def wait_removable(folders, wait_s: float = REMOVE_WAIT_S, *, sleep=time.sleep,
                    clock=time.monotonic, rename=os.rename) -> None:
     """Проверить заранее, что папки можно будет удалить: переименовать туда и
-    обратно (см. remove_folders). Занята дольше `wait_s` — FolderBusy."""
+    обратно (см. remove_folders). Занята дольше `wait_s` — FolderBusy.
+
+    Отложенная папка помечена `.probing-`: если вернуть её не вышло даже с
+    повторами (или процесс упал посередине), восстановление при следующем
+    запуске вернёт её на место (restore_probes), а не удалит."""
     deadline = clock() + wait_s
     for folder in (Path(f) for f in folders):
         while True:
-            aside = _aside(folder)
+            aside = _aside(folder, PROBING_MARK)
             try:
                 rename(folder, aside)
             except FileNotFoundError:
@@ -388,17 +414,47 @@ def wait_removable(folders, wait_s: float = REMOVE_WAIT_S, *, sleep=time.sleep,
                     raise FolderBusy(FOLDER_BUSY) from None
                 sleep(REMOVE_POLL_S)
                 continue
-            os.rename(aside, folder)
+            if not _rename_back(aside, folder, rename=rename, sleep=sleep):
+                raise FolderBusy(PROBE_STUCK.format(name=folder.name))
             break
+
+
+def _marked(root: Path, mark: str) -> list[Path]:
+    try:
+        return [p for p in Path(root).iterdir()
+                if p.is_dir() and p.name.startswith(".") and mark in p.name]
+    except OSError:
+        return []
 
 
 def leftover_deletions(root: Path) -> list[Path]:
     """Отложенные к удалению папки, оставшиеся от сбоя посреди удаления."""
-    try:
-        return [p for p in Path(root).iterdir()
-                if p.is_dir() and p.name.startswith(".") and DELETING_MARK in p.name]
-    except OSError:
-        return []
+    return _marked(root, DELETING_MARK)
+
+
+def leftover_probes(root: Path) -> list[Path]:
+    """Папки, отложенные проверкой wait_removable и не вернувшиеся на место."""
+    return _marked(root, PROBING_MARK)
+
+
+def restore_probes(root: Path) -> list[str]:
+    """Вернуть под прежние имена папки, застрявшие посреди проверки
+    wait_removable (`.<id>.probing-…` → `<id>`). Имя уже занято — не трогаем
+    ни ту, ни другую. Возвращает имена возвращённых записей."""
+    restored = []
+    for probe in leftover_probes(root):
+        name = probe.name[1:probe.name.rfind(PROBING_MARK)]
+        if not name:
+            continue
+        target = probe.with_name(name)
+        if target.exists():
+            continue
+        try:
+            os.rename(probe, target)
+        except OSError:
+            continue
+        restored.append(name)
+    return restored
 
 
 def create_import(root: Path, src: Path) -> Path:

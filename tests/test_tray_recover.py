@@ -197,13 +197,28 @@ def test_recover_removes_unfinished_files(state, root):
     assert (root / A / "sys.opus").exists()
 
 
+def test_recover_restores_a_folder_stuck_in_a_probe(state, root):
+    """Проверку «можно ли удалить» прервал сбой: папку `.<id>.probing-…` никто
+    удалять не просил — восстановление возвращает её на место, а настоящая
+    отложенная к удалению (`.deleting-`) удаляется, как раньше."""
+    probe = root / f".{B}{library.PROBING_MARK}1234abcd"
+    (root / B).rename(probe)
+    deleting = root / f".2026-09-29_09-00{library.DELETING_MARK}1234abcd"
+    deleting.mkdir()
+    done = state.recover(now=_now_of(B) + 60)
+    assert not probe.exists() and (root / B / "sys.opus").exists()
+    assert not deleting.exists()
+    assert done["restored"] == [B]
+    assert done["cleaned"] == [deleting.name]
+
+
 def test_recover_leaves_the_folder_being_recorded_alone(state, app, root, monkeypatch):
     (root / A / "sys.opus.part").write_bytes(b"half")
     library.write_meta(root / A, {"pending_transcribe": _now_of(A) + 60})
     monkeypatch.setattr(app, "recording", True)
     monkeypatch.setattr(app, "_current_folder", lambda: str(root / A))
     done = state.recover(now=_now_of(A) + 60)
-    assert done == {"trim": [], "queued": [], "cleaned": []}
+    assert done == {"trim": [], "queued": [], "cleaned": [], "restored": []}
     assert (root / A / "sys.opus.part").exists()
 
 

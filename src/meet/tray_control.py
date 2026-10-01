@@ -511,7 +511,8 @@ class TrayControl:
             if any(done.values()):
                 self.tray.log("восстановлено после перезапуска: "
                               f"обрезка — {len(done['trim'])}, задачи — {len(done['queued'])}, "
-                              f"удалены недописанные файлы — {len(done['cleaned'])}")
+                              f"удалены недописанные файлы — {len(done['cleaned'])}, "
+                              f"возвращены папки — {len(done['restored'])}")
 
         self._background(work, "meet-recover")
 
@@ -542,6 +543,8 @@ class TrayControl:
         """Доделать то, что прервал прошлый выход резидента (обновление,
         «Выход», сбой), в записях не старше RECOVER_DAYS:
 
+        * вернуть на место папки, застрявшие посреди проверки «можно ли
+          удалить» (`.<id>.probing-…` → `<id>`): удалять их никто не просил;
         * удалить недоудалённые папки (`.<id>.deleting-…`) и брошенные `*.part`
           (недописанные дорожки обрезки и объединения: дорожками они не
           считаются, но занимают место) — первым проходом, пока ничего не
@@ -552,7 +555,8 @@ class TrayControl:
         * задача над записью стояла в очереди или шла (`pending_transcribe`) —
           поставить снова (объединение, импорт — тем же путём, что «Расшифровать»).
 
-        Возвращает {"trim": [...], "queued": [...], "cleaned": [...]}."""
+        Возвращает {"trim": [...], "queued": [...], "cleaned": [...],
+        "restored": [...]}."""
         import shutil
 
         from meet import tail
@@ -560,7 +564,10 @@ class TrayControl:
         now = time.time() if now is None else now
         cutoff = now - RECOVER_DAYS * 86400
         root = self._root()
-        done: dict[str, list[str]] = {"trim": [], "queued": [], "cleaned": []}
+        done: dict[str, list[str]] = {"trim": [], "queued": [], "cleaned": [],
+                                      "restored": []}
+        # До обхода записей: возвращённая папка — снова обычная запись.
+        done["restored"] = library.restore_probes(root)
         for leftover in library.leftover_deletions(root):
             shutil.rmtree(leftover, ignore_errors=True)
             done["cleaned"].append(leftover.name)
