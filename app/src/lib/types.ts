@@ -40,6 +40,8 @@ export type Snapshot = {
   devices_fallback?: { kind: "mic" | "output"; name: string; device: string | null }[];
   /** Последний сбой автоматической выгрузки в базу знаний. */
   kb_export_failed?: { folder: string; error: string; at: number } | null;
+  /** Папки записей, которые сейчас обрабатываются в фоне (обрезка ожидания после звонка). */
+  processing?: string[];
 };
 
 export type CommandResult = Snapshot & { ok: boolean; action: string };

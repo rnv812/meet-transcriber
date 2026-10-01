@@ -324,6 +324,8 @@ const EVENT_KINDS = [
   "record.started", "record.stopped", "record.discarded", "record.device", "record.device_fallback", "record.device_pinned",
   "record.waiting", "record.silence", "record.level", "progress", "log", "error",
   "live.starting", "live.started", "live.stopping", "live.stopped", "live.failed",
+  // Запись изменилась вне задач: обрезка ожидания после звонка, выгрузка в базу знаний.
+  "recording.processing", "recording.updated",
 ];
 
 function parseEvent(raw: string): unknown {

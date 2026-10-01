@@ -22,6 +22,8 @@ const STAGES: Record<string, string> = {
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 
 const INTERRUPTED = "Импорт прерван";
+/** Обрезка ожидания после звонка: дорожки подменяются, запись пока не трогать. */
+const PROCESSING: RecStatus = { kind: "running", stage: "trim", label: "Обработка" };
 const RETRANSCRIBE_KINDS = ["transcribe", "import", "merge"];
 const MERGE_INTERRUPTED = "Объединение прервано";
 
@@ -74,6 +76,7 @@ export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null)
   if (snapshot?.status === "recording" && snapshot.folder && norm(snapshot.folder) === norm(rec.path))
     return { kind: "recording" };
   if (isLiveRecording(rec, snapshot)) return { kind: "recording" };
+  if (snapshot?.processing?.some((p) => norm(p) === norm(rec.path))) return PROCESSING;
   if (mine.some((j) => j.state === "queued")) return { kind: "queued" };
   const running = mine.find((j) => j.state === "running");
   if (running) {

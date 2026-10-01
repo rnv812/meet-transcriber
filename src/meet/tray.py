@@ -843,6 +843,11 @@ class TrayApp:
             server.state.live.adopt_orphan()
         except Exception as e:
             self.log(f"не удалось проверить прошлого ассистента: {e!r}")
+        try:
+            # Обрезка и задачи, прерванные прошлым выходом (обновление, сбой).
+            server.state.recover_in_background()
+        except Exception as e:
+            self.log(f"восстановление после перезапуска не запущено: {e!r}")
         return server
 
     def _release_lock(self, lock: Path) -> None:

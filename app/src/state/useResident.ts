@@ -15,11 +15,14 @@ const RECONNECT_MS = 2000;
 /**
  * События, после которых снимок устарел сразу, а не к следующему опросу.
  * `live.*` — запись с ассистентом: её папка появляется в списке после
- * `live.started`, а встаёт в расшифровку после `live.stopped`.
+ * `live.started`, а встаёт в расшифровку после `live.stopped`. `recording.*` —
+ * запись изменилась вне задач: обрезка ожидания после звонка началась
+ * (`recording.processing`) или закончилась, выгрузка в базу знаний, объединение
+ * завершено (`recording.updated`).
  */
 const stateChanging = (e: BusEvent) =>
   e.kind === "record.started" || e.kind === "record.stopped" || e.kind === "record.discarded"
-  || e.kind.startsWith("live.");
+  || e.kind.startsWith("live.") || e.kind.startsWith("recording.");
 
 const refreshWorthy = (e: BusEvent) => e.kind.startsWith("job.") || stateChanging(e);
 /** После них меняется само содержимое библиотеки, а не только прогресс задачи. */

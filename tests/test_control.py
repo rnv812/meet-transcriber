@@ -160,7 +160,8 @@ class FakeState:
         self.calls.append(("agent-context", rid))
         return {"folder": f"D:/rec/{rid}", "files": ["transcript.md"]}
 
-    def assistant(self):
+    def assistant(self, probe_local=True):
+        self.calls.append(("assistant", probe_local))
         return {"provider": None, "checking": True, "setting": "auto",
                 "available": {}, "knowledge_dir": None}
 
@@ -996,6 +997,10 @@ def test_export_preview_route_passes_query(server):
 
 def test_assistant_routes(server):
     assert _get(server, "/assistant")["checking"] is True
+    # Запуск агента в терминале не ждёт проверки локальной модели.
+    assert _get(server, "/assistant?local=0")["checking"] is True
+    assert [c for c in server.state_obj.calls if c[0] == "assistant"] == [
+        ("assistant", True), ("assistant", False)]
     got = _post(server, "/assistant/check", {"provider": "codex"})
     assert got == {"ok": True, "error": None, "provider": "codex"}
 

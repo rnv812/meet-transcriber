@@ -220,6 +220,12 @@ class JobQueue:
         self._wake.set()
         return job
 
+    @property
+    def stopping(self) -> bool:
+        """Очередь гасится вместе с резидентом: задача, упавшая сейчас, убита
+        остановкой, а не провалилась сама."""
+        return not self._alive
+
     def get(self, job_id: str) -> Job | None:
         with self._lock:
             return self._jobs.get(job_id)

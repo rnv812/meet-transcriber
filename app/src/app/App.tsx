@@ -53,6 +53,12 @@ export function App() {
     setSection("settings");
   };
 
+  // Открытая запись изменилась в фоне (обрезка, выгрузка в базу знаний) — карточка перечитывается.
+  const changed = resident.lastEvent?.kind === "recording.updated" ? resident.lastEvent : null;
+  useEffect(() => {
+    if (changed && changed.id === selected) setCardTick((n) => n + 1);
+  }, [changed, selected]);
+
   // В «Голоса» — со свежей базой: её меняют и расшифровки, и карточки записей.
   useEffect(() => {
     if (section === "voices") void refreshPeople();

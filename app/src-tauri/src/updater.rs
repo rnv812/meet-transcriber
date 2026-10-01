@@ -50,6 +50,10 @@ pub const RATE_LIMITED: &str =
     "Не удалось проверить: GitHub временно ограничил число запросов, попробуйте позже";
 pub const BAD_REPLY: &str = "Не удалось проверить: непонятный ответ GitHub";
 pub const RECORDING: &str = "Остановите запись, чтобы обновиться";
+/// Не отказ, а вопрос: окно показывает его с кнопкой «Обновить сейчас» и
+/// повторяет установку с `confirmed`. Окно сверяет текст дословно.
+pub const WORK_IN_PROGRESS: &str =
+    "Идёт расшифровка — она будет прервана и продолжится после обновления. Обновить сейчас?";
 pub const CORRUPTED: &str = "Файл обновления повреждён";
 pub const NOTHING_NEWER: &str = "Новой версии нет";
 pub const NO_INSTALLER: &str = "В выпуске нет установщика для Windows";
@@ -369,11 +373,23 @@ pub fn check_error(status: Option<u16>) -> String {
 }
 
 /// Можно ли обновляться сейчас: `state` — `/state` резидента (`None` — его
-/// нет, тогда и записи нет). Идёт запись или ассистент — отказ.
-pub fn install_refusal(state: Option<&Value>) -> Option<&'static str> {
-    state
-        .filter(|state| upgrade::resident_busy(state))
-        .map(|_| RECORDING)
+/// нет, тогда нет ни записи, ни задач), `jobs` — его `/jobs`. Идёт запись
+/// или ассистент — отказ. Идёт или ждёт задача (GPU занят) — вопрос
+/// WORK_IN_PROGRESS, пока человек не подтвердил (`confirmed`): прерванную
+/// задачу резидент новой версии поставит снова.
+pub fn install_refusal(
+    state: Option<&Value>,
+    jobs: Option<&Value>,
+    confirmed: bool,
+) -> Option<&'static str> {
+    let state = state?;
+    if upgrade::resident_busy(state) {
+        return Some(RECORDING);
+    }
+    if !confirmed && upgrade::resident_working(state, jobs) {
+        return Some(WORK_IN_PROGRESS);
+    }
+    None
 }
 
 /// Прокси для запросов к GitHub: переменные среды (`HTTPS_PROXY`,
@@ -502,23 +518,37 @@ impl Drop for Busy {
     }
 }
 
-fn resident_state() -> Option<Value> {
-    let endpoint = resident::read_endpoint()?;
-    api::Client::new(&endpoint).get_state().ok()
+/// `/state` и `/jobs` резидента; нет его — (None, None).
+fn resident_load() -> (Option<Value>, Option<Value>) {
+    let Some(endpoint) = resident::read_endpoint() else {
+        return (None, None);
+    };
+    let client = api::Client::new(&endpoint);
+    let state = client.get_state().ok();
+    let jobs = state.as_ref().and_then(|_| client.get_jobs().ok());
+    (state, jobs)
+}
+
+fn refusal_now(confirmed: bool) -> Option<&'static str> {
+    let (state, jobs) = resident_load();
+    install_refusal(state.as_ref(), jobs.as_ref(), confirmed)
 }
 
 /// «Скачать и установить»: скачать установщик последнего выпуска, сверить
 /// SHA-256 с `SHA256SUMS.txt` выпуска, запустить его и штатно выйти.
+/// `confirmed` — человек согласился прервать идущую расшифровку
+/// (см. WORK_IN_PROGRESS).
 #[tauri::command]
-pub async fn install_update(app: AppHandle) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || install_blocking(&app))
+pub async fn install_update(app: AppHandle, confirmed: Option<bool>) -> Result<(), String> {
+    let confirmed = confirmed.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || install_blocking(&app, confirmed))
         .await
         .map_err(|error| error.to_string())?
 }
 
-fn install_blocking(app: &AppHandle) -> Result<(), String> {
+fn install_blocking(app: &AppHandle, confirmed: bool) -> Result<(), String> {
     let _busy = Busy::begin()?;
-    if let Some(refusal) = install_refusal(resident_state().as_ref()) {
+    if let Some(refusal) = refusal_now(confirmed) {
         return Err(refusal.to_string());
     }
     let current = app_version(app);
@@ -592,10 +622,12 @@ fn install_blocking(app: &AppHandle) -> Result<(), String> {
         std::fs::rename(&partial, &target)
             .map_err(|error| format!("Не удалось сохранить обновление: {error}"))?;
     }
-    // Пока качали, могла начаться запись: файл оставляем, установщик не
-    // запускаем.
-    if install_refusal(resident_state().as_ref()).is_some() {
-        return Err(RECORDING_AFTER_DOWNLOAD.to_string());
+    // Пока качали, могла начаться запись (или расшифровка): файл оставляем,
+    // установщик не запускаем; следующий щелчок возьмёт уже скачанный.
+    match refusal_now(confirmed) {
+        Some(RECORDING) => return Err(RECORDING_AFTER_DOWNLOAD.to_string()),
+        Some(other) => return Err(other.to_string()),
+        None => {}
     }
     launch_and_quit(app, &target)
 }
@@ -970,14 +1002,37 @@ mod tests {
     #[test]
     fn update_is_refused_while_recording() {
         assert_eq!(
-            install_refusal(Some(&json!({"status": "recording"}))),
+            install_refusal(Some(&json!({"status": "recording"})), None, true),
             Some(RECORDING)
         );
         let live = json!({"status": "idle", "live": {"active": true}});
-        assert_eq!(install_refusal(Some(&live)), Some(RECORDING));
+        assert_eq!(install_refusal(Some(&live), None, true), Some(RECORDING));
         let idle = json!({"status": "idle", "live": {"active": false}});
-        assert_eq!(install_refusal(Some(&idle)), None);
-        assert_eq!(install_refusal(None), None);
+        assert_eq!(install_refusal(Some(&idle), None, false), None);
+        assert_eq!(install_refusal(None, None, false), None);
+    }
+
+    #[test]
+    fn update_during_transcription_needs_a_confirmation() {
+        let idle = json!({"status": "idle", "gpu_busy": false});
+        let running = json!({"items": [{"kind": "transcribe", "state": "running"}]});
+        assert_eq!(
+            install_refusal(Some(&idle), Some(&running), false),
+            Some(WORK_IN_PROGRESS)
+        );
+        assert_eq!(install_refusal(Some(&idle), Some(&running), true), None);
+        let gpu = json!({"status": "idle", "gpu_busy": true});
+        assert_eq!(
+            install_refusal(Some(&gpu), None, false),
+            Some(WORK_IN_PROGRESS)
+        );
+        // Запись важнее подтверждения: её не прерывают.
+        let recording = json!({"status": "recording", "gpu_busy": true});
+        assert_eq!(
+            install_refusal(Some(&recording), Some(&running), true),
+            Some(RECORDING)
+        );
+        assert!(WORK_IN_PROGRESS.ends_with("Обновить сейчас?"));
     }
 
     #[test]

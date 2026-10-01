@@ -75,15 +75,19 @@ def local_reachable(base_url: str, timeout: float = 0.5) -> bool:
         return False
 
 
-def available(base_url: str | None = None) -> dict:
-    """Что установлено: CLI найдены, локальная модель отвечает."""
+def available(base_url: str | None = None, probe_local: bool = True) -> dict:
+    """Что установлено: CLI найдены, локальная модель отвечает. Без
+    `probe_local` локальную модель не спрашиваем (`found: None` — не
+    проверялась): это сетевое соединение, а агенту в терминале нужны только
+    пути к CLI."""
     url = base_url or DEFAULT_LOCAL_BASE_URL
     claude = find_claude()
     codex = find_codex()
     return {
         "claude-code": {"found": claude is not None, "path": claude},
         "codex": {"found": codex is not None, "path": codex},
-        "openai-compatible": {"found": local_reachable(url), "base_url": url},
+        "openai-compatible": {"found": local_reachable(url) if probe_local else None,
+                              "base_url": url},
     }
 
 

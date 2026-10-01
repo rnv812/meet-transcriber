@@ -20,7 +20,7 @@ vi.mock("../../lib/shell", () => ({
 }));
 
 import * as shell from "../../lib/shell";
-import { About, megabytes } from "./About";
+import { About, UPDATE_CONFIRM_WORK, megabytes } from "./About";
 
 const endpoint = { base: "http://127.0.0.1:1", token: "t" };
 const check = vi.mocked(shell.checkUpdate);
@@ -128,6 +128,31 @@ test("отказ во время записи виден рядом с кноп�
   expect(await screen.findByText("Остановите запись, чтобы обновиться")).toBeInTheDocument();
   // Можно попробовать снова, когда запись закончится.
   expect(screen.getByRole("button", { name: "Скачать и установить" })).toBeEnabled();
+});
+
+test("идёт расшифровка — сначала вопрос, «Обновить сейчас» повторяет с согласием", async () => {
+  check.mockResolvedValue(newer);
+  install.mockRejectedValueOnce(UPDATE_CONFIRM_WORK).mockResolvedValueOnce(undefined);
+  await renderAbout();
+  await userEvent.click(checkButton());
+  await userEvent.click(await screen.findByRole("button", { name: "Скачать и установить" }));
+  expect(await screen.findByText(UPDATE_CONFIRM_WORK)).toBeInTheDocument();
+  expect(install).toHaveBeenLastCalledWith(false);
+  await userEvent.click(screen.getByRole("button", { name: "Обновить сейчас" }));
+  expect(install).toHaveBeenLastCalledWith(true);
+  expect(await screen.findByText("Установщик запущен, приложение закрывается…")).toBeInTheDocument();
+});
+
+test("вопрос о расшифровке можно отклонить — обновление не начинается", async () => {
+  check.mockResolvedValue(newer);
+  install.mockRejectedValueOnce(UPDATE_CONFIRM_WORK);
+  await renderAbout();
+  await userEvent.click(checkButton());
+  await userEvent.click(await screen.findByRole("button", { name: "Скачать и установить" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Отмена" }));
+  expect(screen.queryByText(UPDATE_CONFIRM_WORK)).toBeNull();
+  expect(screen.getByRole("button", { name: "Скачать и установить" })).toBeEnabled();
+  expect(install).toHaveBeenCalledTimes(1);
 });
 
 test("выпуск без установщика — только ссылка на выпуски", async () => {

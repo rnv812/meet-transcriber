@@ -721,12 +721,14 @@ impl Supervisor {
             let Ok(state) = client.get_state() else {
                 continue;
             };
+            // Задачи — чтобы не прервать расшифровку резидента прежней версии.
+            let jobs = client.get_jobs().ok();
             let version = state
                 .get("version")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("0.1.0 или раньше")
                 .to_string();
-            match upgrade::external_version(&state, app_version) {
+            match upgrade::external_version(&state, jobs.as_ref(), app_version) {
                 upgrade::ExternalVersion::Keep => {
                     waiting = false;
                     kept = Some(identity);
@@ -734,7 +736,7 @@ impl Supervisor {
                 upgrade::ExternalVersion::WaitIdle => {
                     if !waiting {
                         shell_log!(
-                            "внешний резидент версии {version} занят записью — заменю его, когда закончит"
+                            "внешний резидент версии {version} занят записью или задачей — заменю его, когда закончит"
                         );
                         waiting = true;
                     }

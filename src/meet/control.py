@@ -711,7 +711,10 @@ _ROUTES = {
         h._body()
     ),
     ("POST", "/jobs"): lambda h, p: _server_of(h).state.submit_job(h._body()),
-    ("GET", "/assistant"): lambda h, p: _server_of(h).state.assistant(),
+    # `?local=0` — без проверки локальной модели (запуск агента в терминале).
+    ("GET", "/assistant"): lambda h, p: _server_of(h).state.assistant(
+        probe_local=(p.get("local") or ["1"])[0] != "0"
+    ),
     ("POST", "/assistant/check"): lambda h, p: _server_of(h).state.check_provider(
         h._body()
     ),

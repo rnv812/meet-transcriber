@@ -111,3 +111,23 @@ test("contentTick — без прогресса задач: поставлена
   expect(result.current.libraryTick).toBe(7);
   expect(result.current.contentTick).toBe(4);
 });
+
+test("recording.*: запись изменилась в фоне — список и снимок перечитываются", async () => {
+  vi.mocked(resolveEndpoint).mockResolvedValue({ base: "http://127.0.0.1:1", token: "t" });
+  const { result } = renderHook(() => useResident());
+  await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+  vi.mocked(getState).mockResolvedValueOnce(
+    { status: "idle", folder: null, levels: {}, processing: ["C:/r/x"] } as Partial<Snapshot> as Snapshot);
+  const es = FakeEventSource.instances.at(-1)!;
+  const before = result.current.libraryTick;
+  const content = result.current.contentTick;
+  await act(async () => {
+    es.emit("recording.processing", { kind: "recording.processing", at: 1, id: "x" });
+    await vi.advanceTimersByTimeAsync(10);
+  });
+  expect(result.current.snapshot?.processing).toEqual(["C:/r/x"]);
+  act(() => { es.emit("recording.updated", { kind: "recording.updated", at: 2, id: "x" }); });
+  expect(result.current.libraryTick).toBe(before + 2);
+  expect(result.current.contentTick).toBe(content + 2);
+  expect(result.current.lastEvent?.kind).toBe("recording.updated");
+});

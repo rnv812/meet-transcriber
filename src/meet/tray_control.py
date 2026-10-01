@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 from meet import (engine, events, gpu_lock, hotwords, jobs, library, live_control, paths,
@@ -249,6 +250,13 @@ AGENT_TRANSCRIPT_MD = "transcript.md"
 # Сколько «Удалить» ждёт, пока плеер и сведение отпустят файлы записи.
 DELETE_WAIT_S = 3.0
 
+# События шины о записи вне задач очереди: окно перечитывает список и снимок.
+RECORDING_PROCESSING = "recording.processing"  # {"id"}: началась обработка в фоне
+RECORDING_UPDATED = "recording.updated"  # {"id"}: запись изменилась (обрезка, выгрузка)
+PROCESSING = "Запись ещё обрабатывается (обрезка ожидания после звонка) — подождите минуту"
+# Восстановление после перезапуска берёт записи не старше этого.
+RECOVER_DAYS = 7
+
 
 class TrayControl:
     """Состояние для `meet.control.ControlServer` поверх объекта трея."""
@@ -292,21 +300,78 @@ class TrayControl:
         self._kb_lock = threading.Lock()
         self._kb_failed: dict | None = None
         self._kb_reported: set[str] = set()
+        # Записи, которые сейчас обрабатываются в фоне (обрезка хвоста):
+        # ключ — путь без регистра, значение — путь для снимка.
+        self._processing: dict[str, str] = {}
+        self._processing_lock = threading.Lock()
         self.bus.subscribe(self._on_job_event)
 
     @staticmethod
-    def _background(fn) -> None:
+    def _background(fn, name: str = "meet-background") -> None:
         """Фоновая работа вне потока очереди задач (тесты подменяют на вызов)."""
-        threading.Thread(target=fn, name="meet-kb-export", daemon=True).start()
+        threading.Thread(target=fn, name=name, daemon=True).start()
+
+    # --- отметки о записи: обрабатывается, ждёт расшифровки, изменилась ----
+
+    @staticmethod
+    def _key(folder: Path) -> str:
+        try:
+            return os.path.normcase(str(Path(folder).resolve()))
+        except OSError:
+            return os.path.normcase(str(folder))
+
+    def _processing_now(self, folder: Path) -> bool:
+        """Запись сейчас обрабатывается в фоне (обрезка хвоста): её дорожки
+        подменяются, и ни расшифровать, ни удалить, ни объединить, ни слушать
+        её нельзя."""
+        with self._processing_lock:
+            return self._key(folder) in self._processing
+
+    def _set_processing(self, folder: Path, on: bool) -> None:
+        with self._processing_lock:
+            if on:
+                self._processing[self._key(folder)] = str(folder)
+            else:
+                self._processing.pop(self._key(folder), None)
+        self.bus.emit(RECORDING_PROCESSING if on else RECORDING_UPDATED, id=Path(folder).name)
+
+    def _updated(self, folder: Path) -> None:
+        """Запись изменилась вне задач очереди (обрезка, выгрузка, переименование
+        папки в базе знаний, объединение завершено) — окно перечитает список."""
+        try:
+            self.bus.emit(RECORDING_UPDATED, id=Path(folder).name)
+        except Exception:
+            pass  # шина — не повод ронять фоновую работу
+
+    def _mark_pending(self, folder: Path, on: bool) -> None:
+        """`pending_transcribe` в meta.json: задача над записью (расшифровка,
+        импорт, объединение) поставлена, но не закончилась. Резидент, закрытый
+        посреди неё (обновление, «Выход»), при следующем запуске поставит её
+        снова (см. recover)."""
+        try:
+            if on:
+                library.write_meta(folder, {"pending_transcribe": time.time()})
+            elif "pending_transcribe" in library.read_meta(folder):
+                library.update_meta(folder, lambda meta: {
+                    k: v for k, v in meta.items() if k != "pending_transcribe"})
+        except Exception as e:
+            self.tray.log(f"отметка о задаче не записана ({Path(folder).name}): {e}")
 
     def _on_job_event(self, event) -> None:
         """Расшифровка или импорт готовы — выгрузить встречу в базу знаний, если
         включена автоматика; итоги готовы — выгрузить заново (итоги ложатся
         рядом), если включена автоматика или встречу уже выгружали вручную."""
-        if event.kind != jobs.JOB_DONE:
+        if event.kind not in (jobs.JOB_DONE, jobs.JOB_FAILED):
             return
         job = event.data.get("job") or {}
         kind, folder = job.get("kind"), job.get("folder")
+        if (kind in jobs.FOLDER_KINDS and folder
+                and not getattr(self.queue, "stopping", False)):
+            # Задача кончилась (или её отменили) — повторять после перезапуска
+            # нечего. Задачи, убитые остановкой резидента, отметку сохраняют.
+            self._mark_pending(Path(folder), False)
+        if event.kind != jobs.JOB_DONE:
+            return
         if kind == jobs.MERGE and folder:
             self._merge_sound_ready(Path(folder))
             return
@@ -335,7 +400,7 @@ class TrayControl:
                 if finish_merge:
                     self._finish_merge(path)
 
-            self._background(work)
+            self._background(work, "meet-kb-export")
 
     def _kb_wanted(self, kind: str, path: Path, merged_exported: bool) -> bool:
         """Выгружать ли встречу в базу знаний после задачи `kind`."""
@@ -368,11 +433,16 @@ class TrayControl:
         except Exception as e:
             error = str(e) or type(e).__name__
             self.tray.log(f"не удалось выгрузить встречу в базу знаний ({folder.name}): {error}")
+            if not folder.is_dir():
+                return  # запись удалили, пока шла выгрузка, — сообщать не о чем
             if folder.name not in self._kb_reported:
                 self._kb_reported.add(folder.name)
                 self._kb_failed = {"folder": folder.name, "error": error, "at": time.time()}
             return
         self.tray.log(f"встреча выгружена в базу знаний: {result['path']}")
+        for note in result.get("notes") or []:
+            self.tray.log(note)
+        self._updated(folder)
 
     def _on_live_event(self, event) -> None:
         """Ассистент остановлен — та же автоматическая расшифровка, что после
@@ -417,14 +487,136 @@ class TrayControl:
             try:
                 from meet import tail
 
-                tail.write_call_end(path, call_end, self.tray.cfg["grace_minutes"] * 60.0)
+                tail.write_call_end(path, call_end, self.tray.cfg["grace_minutes"] * 60.0,
+                                    transcribe=transcribe)
             except Exception as e:
                 self.tray.log(f"конец звонка не записан ({path.name}): {e}")
             else:
-                self._background(lambda: self._trim_then_queue(path, transcribe))
+                self._start_trim(path, transcribe)
                 return
         if transcribe:
             self._queue_transcription(path)
+
+    # --- восстановление после перезапуска ---------------------------------
+
+    def recover_in_background(self) -> None:
+        """Доделать прерванное прошлым выходом — в фоне: резидент сразу пишет
+        и отвечает окну (см. recover)."""
+        def work() -> None:
+            try:
+                done = self.recover()
+            except Exception as e:
+                self.tray.log(f"восстановление после перезапуска не прошло: {type(e).__name__}: {e}")
+                return
+            if any(done.values()):
+                self.tray.log("восстановлено после перезапуска: "
+                              f"обрезка — {len(done['trim'])}, задачи — {len(done['queued'])}, "
+                              f"удалены недописанные файлы — {len(done['cleaned'])}")
+
+        self._background(work, "meet-recover")
+
+    def _busy_now(self) -> set[str]:
+        """Папки, в которые сейчас пишут (обычная запись, ассистент)."""
+        out = set()
+        if self.tray.recording:
+            out.add(self._key(Path(self.tray._current_folder())))
+        live_folder = self.live.status().get("folder")
+        if live_folder:
+            out.add(self._key(Path(live_folder)))
+        return out
+
+    @staticmethod
+    def _started(folder: Path) -> float | None:
+        started = library._started_at(folder.name)
+        if started:
+            try:
+                return datetime.fromisoformat(started).timestamp()
+            except ValueError:
+                pass
+        try:
+            return folder.stat().st_mtime
+        except OSError:
+            return None
+
+    def recover(self, now: float | None = None) -> dict:
+        """Доделать то, что прервал прошлый выход резидента (обновление,
+        «Выход», сбой), в записях не старше RECOVER_DAYS:
+
+        * удалить недоудалённые папки (`.<id>.deleting-…`) и брошенные `*.part`
+          (недописанные дорожки обрезки и объединения: дорожками они не
+          считаются, но занимают место) — первым проходом, пока ничего не
+          запущено;
+        * автозапись остановлена, а хвост ожидания не обрезан (`record.call_end`
+          без `record.trimmed`) и расшифровки нет — обрезать и, если собирались
+          и автоматическая расшифровка включена, поставить её;
+        * задача над записью стояла в очереди или шла (`pending_transcribe`) —
+          поставить снова (объединение, импорт — тем же путём, что «Расшифровать»).
+
+        Возвращает {"trim": [...], "queued": [...], "cleaned": [...]}."""
+        import shutil
+
+        from meet import tail
+
+        now = time.time() if now is None else now
+        cutoff = now - RECOVER_DAYS * 86400
+        root = self._root()
+        done: dict[str, list[str]] = {"trim": [], "queued": [], "cleaned": []}
+        for leftover in library.leftover_deletions(root):
+            shutil.rmtree(leftover, ignore_errors=True)
+            done["cleaned"].append(leftover.name)
+        busy = self._busy_now()
+        folders = []
+        for folder in library.recording_folders(root):
+            started = self._started(folder)
+            if self._key(folder) in busy or started is None or started < cutoff:
+                continue
+            folders.append(folder)
+            for part in folder.glob("*.part"):
+                try:
+                    part.unlink()
+                    done["cleaned"].append(f"{folder.name}/{part.name}")
+                except OSError:
+                    pass
+        auto_transcribe = settings.load().recording.auto_transcribe
+        trims: list[tuple[Path, bool]] = []
+        for folder in folders:
+            has_transcript = library.read_transcript(folder) is not None
+            if tail.pending(folder) and not has_transcript:
+                event = tail.call_end(folder) or {}
+                wanted = bool(event.get("transcribe", True)) and auto_transcribe
+                # Сразу «обрабатывается»: пока очередь до неё не дошла, её не
+                # расшифруют и не удалят из-под ffmpeg.
+                self._set_processing(folder, True)
+                trims.append((folder, wanted))
+                done["trim"].append(folder.name)
+                continue
+            meta = library.read_meta(folder)
+            info = meta.get("merge")
+            if (meta.get("source") == "merge" and has_transcript and isinstance(info, dict)
+                    and info.get("state") == "merged"):
+                # Расшифровано, а исходные не обработаны: выход пришёлся между ними.
+                self._background(lambda f=folder: self._finish_merge(f), "meet-merge-finish")
+            pending = meta.get("pending_transcribe")
+            if not isinstance(pending, (int, float)) or isinstance(pending, bool):
+                continue
+            written = library.transcript_path(folder)
+            if pending < cutoff or (written.is_file() and written.stat().st_mtime > pending):
+                self._mark_pending(folder, False)  # старая или уже сделанная
+                continue
+            try:
+                job = self.transcribe(folder.name)
+            except Exception as e:
+                self.tray.log(f"задача не восстановлена ({folder.name}): {e}")
+                continue
+            if isinstance(job, dict) and job.get("id"):
+                done["queued"].append(folder.name)
+                self.tray.log(f"задача восстановлена после перезапуска: {folder.name} "
+                              f"({job.get('kind')}, {job['id']})")
+        # Обрезки — по одной, в этом же (фоновом) потоке: несколько ffmpeg разом
+        # после перезапуска только мешали бы записи.
+        for folder, wanted in trims:
+            self._trim_then_queue(folder, wanted)
+        return done
 
     def _queue_transcription(self, path: Path) -> None:
         job, created = self._submit_once(jobs.TRANSCRIBE, path)
@@ -433,20 +625,35 @@ class TrayControl:
         else:
             self.tray.log(f"расшифровка уже в очереди: {path.name} ({job.id})")
 
+    def _start_trim(self, path: Path, transcribe: bool) -> None:
+        """Обрезка хвоста в фоне; пока она идёт, запись «обрабатывается»."""
+        self._set_processing(path, True)
+        self._background(lambda: self._trim_then_queue(path, transcribe), "meet-trim")
+
     def _trim_then_queue(self, path: Path, transcribe: bool) -> None:
         """Обрезать хвост автозаписи (meet.tail), затем — расшифровка. Сбой
-        обрезки — запись остаётся целой и всё равно расшифровывается."""
+        обрезки — запись остаётся целой и всё равно расшифровывается. Фоновый
+        поток: любой сбой — строкой в журнал, отметка «обрабатывается»
+        снимается в любом случае."""
         from meet import tail
 
         try:
-            cut = tail.trim(path)
+            try:
+                cut = tail.trim(path)
+            except Exception as e:
+                self.tray.log(f"хвост записи не обрезан ({path.name}): {e}")
+            else:
+                if cut is not None:
+                    self.tray.log(f"ожидание после звонка обрезано: {path.name}, осталось {cut:.0f} с")
+            self._set_processing(path, False)
+            if transcribe:
+                self._queue_transcription(path)
         except Exception as e:
-            self.tray.log(f"хвост записи не обрезан ({path.name}): {e}")
-        else:
-            if cut is not None:
-                self.tray.log(f"хвост записи без разговора обрезан: {path.name}, осталось {cut:.0f} с")
-        if transcribe:
-            self._queue_transcription(path)
+            self.tray.log(f"обработка записи после остановки не завершена ({path.name}): "
+                          f"{type(e).__name__}: {e}")
+        finally:
+            if self._processing_now(path):
+                self._set_processing(path, False)
 
     def _remember_levels(self, event) -> None:
         """Последние уровни дорожек и подмены устройств — чтобы снимок
@@ -521,7 +728,14 @@ class TrayControl:
             # "error", "started_at"} (см. LiveControl.status). Обычная запись
             # при этом не идёт — status выше остаётся про неё.
             "live": self.live.status(),
+            # Папки записей, которые сейчас обрабатываются в фоне (обрезка
+            # ожидания после звонка): окно показывает «Обработка».
+            "processing": self._processing_list(),
         }
+
+    def _processing_list(self) -> list[str]:
+        with self._processing_lock:
+            return sorted(self._processing.values())
 
     def _browser_call(self) -> dict | None:
         call = getattr(getattr(self.tray, "signals", None), "browser_call", None)
@@ -790,7 +1004,10 @@ class TrayControl:
         reason = self._busy_reason(folder)
         if reason:
             raise _bad_request(reason)
-        self._remove(folder)
+        try:
+            self._remove(folder)
+        except library.FolderBusy as e:
+            raise _conflict(str(e))
         return {"ok": True}
 
     def _busy_reason(self, folder: Path, merging: Path | None = None) -> str | None:
@@ -800,7 +1017,10 @@ class TrayControl:
         folder = Path(folder).resolve()
         owner = self._merge_owner(folder, merging)
         if owner is not None:
-            return f"запись входит в объединение «{owner}», которое ещё не завершено"
+            return (f"запись входит в объединение «{owner}», которое ещё не завершено. "
+                    "Дождитесь расшифровки объединённой записи или удалите её")
+        if self._processing_now(folder):
+            return PROCESSING[:1].lower() + PROCESSING[1:]
         if (self.tray.recording
                 and Path(self.tray._current_folder()).resolve() == folder):
             return "запись ещё идёт"
@@ -825,20 +1045,18 @@ class TrayControl:
 
         return merge.unfinished_owner(folder, ignore)
 
-    def _remove(self, folder: Path) -> None:
-        """Удалить папку записи. Плеер карточки мог только что запросить
-        дорожку, а фоновое сведение — писать playback.opus: на Windows открытый
-        файл не удалить, и rmtree снёс бы запись наполовину. Ответы плееру
-        короткие (control.AUDIO_CHUNK), поэтому ждём недолго."""
-        import shutil
-
+    def _remove(self, *folders: Path) -> None:
+        """Удалить папки записей — все или ни одной. Плеер карточки мог только
+        что запросить дорожку, а фоновое сведение — писать playback.opus: на
+        Windows открытый файл не удалить, и rmtree снёс бы запись наполовину.
+        Ответы плееру короткие (control.AUDIO_CHUNK), поэтому ждём недолго.
+        Папку держит другая программа (агент во вкладке «Агент» работает в ней)
+        дольше пары секунд — library.FolderBusy, ничего не тронуто."""
         from meet import playback
 
-        playback.wait_idle(folder, DELETE_WAIT_S)
-        try:
-            shutil.rmtree(folder)
-        except OSError as e:
-            raise RuntimeError(f"не удалось удалить запись: {e}") from e
+        for folder in folders:
+            playback.wait_idle(folder, DELETE_WAIT_S)
+        library.remove_folders(folders)
 
     # --- объединение встреч -------------------------------------------------
 
@@ -863,6 +1081,13 @@ class TrayControl:
                 raise _bad_request(f"{folder.name}: {reason}")
             folders.append(folder)
         keep = settings.as_flag(body.get("keep_originals"), False)
+        if not keep:
+            # Исходные удалятся после расшифровки: занятую папку (агент в ней)
+            # лучше назвать сейчас, чем молча оставить исходные потом.
+            try:
+                library.wait_removable(folders)
+            except library.FolderBusy as e:
+                raise _conflict(str(e))
         try:
             target = merge.create(self._root(), folders, keep_originals=keep)
         except merge.MergeError as e:
@@ -891,8 +1116,15 @@ class TrayControl:
 
     def _finish_merge(self, folder: Path) -> None:
         """Объединённая встреча расшифрована: удалить исходные записи, если не
-        просили оставить. Хоть одна занята (пишется, обрабатывается) — не
-        удаляем ни одной: половина удалённых частей хуже, чем все на месте."""
+        просили оставить. Хоть одна занята (пишется, обрабатывается, папку
+        держит агент) — не удаляем ни одной: половина удалённых частей хуже,
+        чем все на месте. Работает в фоновом потоке: любой сбой — в журнал."""
+        try:
+            self._finish_merge_now(folder)
+        except Exception as e:
+            self.tray.log(f"объединение не завершено ({folder.name}): {type(e).__name__}: {e}")
+
+    def _finish_merge_now(self, folder: Path) -> None:
         from meet import merge
 
         info = self._merge_info(folder)
@@ -911,17 +1143,17 @@ class TrayControl:
                 kept_reason = f"{busy[0][0]}: {busy[0][1]}"
                 self.tray.log(f"исходные записи не удалены ({folder.name}): {kept_reason}")
             else:
-                for source in sources:
-                    try:
-                        self._remove(source)
-                        deleted.append(source.name)
-                    except Exception as e:
-                        kept_reason = f"{source.name}: {e}"
-                        self.tray.log(f"исходная запись не удалена: {kept_reason}")
+                try:
+                    self._remove(*sources)
+                    deleted = [source.name for source in sources]
+                except Exception as e:
+                    kept_reason = str(e) or type(e).__name__
+                    self.tray.log(f"исходные записи не удалены ({folder.name}): {kept_reason}")
         if info.get("kb_exported"):
             self.tray.log("прежние папки исходных записей в базе знаний не тронуты: "
                           + ", ".join(info["kb_exported"]))
         merge.mark_done(folder, deleted, kept_reason)
+        self._updated(folder)
 
     # --- hotwords ---------------------------------------------------------
 
@@ -1007,6 +1239,7 @@ class TrayControl:
         else:
             if moved is not None:
                 self.tray.log(f"папка встречи в базе знаний переименована: {before} → {moved}")
+                self._updated(folder)
         self._auto_kb_export(folder)
 
     def transcript(self, recording_id: str) -> dict:
@@ -1044,13 +1277,22 @@ class TrayControl:
         rendered = self.export(recording_id, "md")
         if "error" in rendered:
             return rendered
+        import tempfile
+
         path = folder / AGENT_TRANSCRIPT_MD
-        tmp = path.with_name(path.name + ".tmp")
+        tmp = None
         try:
-            tmp.write_text(rendered["content"], encoding="utf-8")
+            # Временный файл — уникальный: два запуска агента подряд (двойной
+            # щелчок, перезапуск) не пишут в один и тот же.
+            fd, name = tempfile.mkstemp(prefix=f".{AGENT_TRANSCRIPT_MD}.", suffix=".tmp",
+                                        dir=folder)
+            tmp = Path(name)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(rendered["content"])
             os.replace(tmp, path)
         except OSError as e:
-            tmp.unlink(missing_ok=True)
+            if tmp is not None:
+                tmp.unlink(missing_ok=True)
             raise RuntimeError(f"не удалось подготовить расшифровку для агента: {e}") from e
         files = [AGENT_TRANSCRIPT_MD]
         if (folder / assistant.SUMMARY_MD).is_file():
@@ -1219,12 +1461,15 @@ class TrayControl:
             existing = self.queue.active_for(str(folder), jobs.FOLDER_KINDS)
             if existing is not None:
                 return existing, False
+            self._mark_pending(folder, True)
             return self.queue.submit(kind, str(folder), options or {}), True
 
     def transcribe(self, recording_id: str, options: dict | None = None) -> dict:
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
+        if self._processing_now(folder):
+            raise _conflict(PROCESSING)
         # Импорт, упавший до копии (исходник был недоступен), оставляет папку
         # без дорожки: расшифровывать нечего, повторяем импорт целиком.
         card = library.describe(folder)
@@ -1253,7 +1498,13 @@ class TrayControl:
         return {"items": items}
 
     def cancel_job(self, job_id: str) -> dict:
-        return {"ok": self.queue.cancel(job_id) or self.llm_queue.cancel(job_id)}
+        get = getattr(self.queue, "get", None)
+        job = get(job_id) if get else None
+        ok = self.queue.cancel(job_id) or self.llm_queue.cancel(job_id)
+        if ok and job is not None and job.kind in jobs.FOLDER_KINDS:
+            # Отменённую человеком задачу после перезапуска не повторяем.
+            self._mark_pending(Path(job.folder), False)
+        return {"ok": ok}
 
     # --- ассистент: итоги и вопросы ---------------------------------------
 
@@ -1346,9 +1597,11 @@ class TrayControl:
 
         return kb_export.preview(settings.load(), self._root(), dict(params or {}))
 
-    def assistant(self) -> dict:
+    def assistant(self, probe_local: bool = True) -> dict:
         """Кто ответит и что для этого есть. Не ждёт проверки входа в CLI:
-        `checking` — ответ ещё считается в фоне (см. ProviderCache)."""
+        `checking` — ответ ещё считается в фоне (см. ProviderCache).
+        `probe_local=False` — не проверять, отвечает ли локальная модель
+        (запуск агента во вкладке «Агент»: ему нужны только пути к CLI)."""
         from meet import netproxy
         from meet.llm import detect
 
@@ -1359,7 +1612,7 @@ class TrayControl:
             "provider": provider,
             "checking": checking,
             "setting": cfg.llm.provider,
-            "available": detect.available(cfg.llm.base_url),
+            "available": detect.available(cfg.llm.base_url, probe_local=probe_local),
             "knowledge_dir": str(knowledge) if knowledge else None,
             # Какой прокси получат Claude Code/Codex (логин и пароль скрыты).
             "proxy": netproxy.describe(cfg),
@@ -1388,6 +1641,7 @@ class TrayControl:
             folder = library.create_import(self._root(), src)
         except ValueError as e:
             return {"error": str(e)}
+        self._mark_pending(folder, True)
         job = self.queue.submit(jobs.IMPORT, str(folder), {})
         return {"recording": folder.name, "job": job.to_raw()}
 
@@ -1398,6 +1652,10 @@ class TrayControl:
         folder = self._folder(recording_id)
         if folder is None:
             return None
+        if self._processing_now(folder):
+            from meet.control import Unavailable
+
+            raise Unavailable(PROCESSING)
         if track == "playback":
             from meet import playback
 

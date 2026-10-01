@@ -27,6 +27,14 @@ function CopyButton({ text }: { text: string }) {
 const errorText = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
 
+/**
+ * Ответ оболочки, когда идёт или ждёт расшифровка: не отказ, а вопрос
+ * (тот же текст — `updater::WORK_IN_PROGRESS`). Прерванную задачу служба
+ * записи новой версии поставит снова.
+ */
+export const UPDATE_CONFIRM_WORK =
+  "Идёт расшифровка — она будет прервана и продолжится после обновления. Обновить сейчас?";
+
 /** «12,5 МБ». */
 export function megabytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toLocaleString("ru-RU", { maximumFractionDigits: 1 })} МБ`;
@@ -54,6 +62,7 @@ type State =
   | { kind: "failed"; error: string }
   | { kind: "installing"; result: UpdateCheck; progress: UpdateProgress | null }
   | { kind: "launched" }
+  | { kind: "confirm"; result: UpdateCheck }
   | { kind: "install-failed"; result: UpdateCheck; error: string };
 
 function UpdateRow() {
@@ -83,18 +92,22 @@ function UpdateRow() {
     }
   };
 
-  const install = async (result: UpdateCheck) => {
+  const install = async (result: UpdateCheck, confirmed = false) => {
     setState({ kind: "installing", result, progress: null });
     try {
-      await installUpdate();
+      await installUpdate(confirmed);
       setState({ kind: "launched" });
     } catch (cause) {
-      setState({ kind: "install-failed", result, error: errorText(cause) });
+      const error = errorText(cause);
+      setState(error === UPDATE_CONFIRM_WORK
+        ? { kind: "confirm", result }
+        : { kind: "install-failed", result, error });
     }
   };
 
   const busy = state.kind === "checking" || state.kind === "installing" || state.kind === "launched";
   const result = state.kind === "checked" || state.kind === "install-failed" ? state.result : null;
+  const asking = state.kind === "confirm" ? state.result : null;
   const notes = result?.notes_url ?? null;
 
   return (
@@ -129,6 +142,13 @@ function UpdateRow() {
           </>
         )}
         {state.kind === "install-failed" && <span className="update__error">{state.error}</span>}
+        {asking && (
+          <>
+            <span>{UPDATE_CONFIRM_WORK}</span>
+            <Button variant="primary" onClick={() => void install(asking, true)}>Обновить сейчас</Button>
+            <Button onClick={() => setState({ kind: "checked", result: asking })}>Отмена</Button>
+          </>
+        )}
         {state.kind === "installing" && <InstallProgress progress={state.progress} />}
         {state.kind === "launched" && <span>Установщик запущен, приложение закрывается…</span>}
       </div>

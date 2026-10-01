@@ -177,7 +177,7 @@ pub enum ExternalVersion {
 /// версии после 0.1.0; его нет — резидент заведомо старый. `null` —
 /// резидент из исходников без установленного пакета (разработка): версию не
 /// узнать, и такой резидент не трогаем.
-pub fn external_version(state: &Value, app_version: &str) -> ExternalVersion {
+pub fn external_version(state: &Value, jobs: Option<&Value>, app_version: &str) -> ExternalVersion {
     match state.get("version") {
         Some(Value::Null) => return ExternalVersion::Keep,
         Some(Value::String(version)) if crate::updater::same_version(version, app_version) => {
@@ -185,11 +185,33 @@ pub fn external_version(state: &Value, app_version: &str) -> ExternalVersion {
         }
         _ => {}
     }
-    if resident_busy(state) {
+    if resident_busy(state) || resident_working(state, jobs) {
         ExternalVersion::WaitIdle
     } else {
         ExternalVersion::Replace
     }
+}
+
+/// Идёт работа, которую выход резидента прервёт: задача стоит в очереди или
+/// идёт (расшифровка, объединение, итоги, установка движка), или GPU занят
+/// задачей. `jobs` — ответ GET /jobs (`None` — не узнали: судим по GPU).
+pub fn resident_working(state: &Value, jobs: Option<&Value>) -> bool {
+    let gpu = state
+        .get("gpu_busy")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let queued = jobs
+        .and_then(|jobs| jobs.get("items"))
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|job| {
+                matches!(
+                    job.get("state").and_then(Value::as_str),
+                    Some("queued" | "running")
+                )
+            })
+        });
+    gpu || queued
 }
 
 /// Идёт запись (обычная или с ассистентом) — гасить резидент нельзя.
@@ -337,30 +359,46 @@ mod tests {
     #[test]
     fn external_resident_of_this_version_is_kept() {
         let state = json!({"version": "0.1.1", "status": "idle"});
-        assert_eq!(external_version(&state, "0.1.1"), ExternalVersion::Keep);
+        assert_eq!(
+            external_version(&state, None, "0.1.1"),
+            ExternalVersion::Keep
+        );
         // Запись идёт — всё равно своя версия, ничего не ждём.
         let busy = json!({"version": "0.1.1", "status": "recording"});
-        assert_eq!(external_version(&busy, "0.1.1"), ExternalVersion::Keep);
+        assert_eq!(
+            external_version(&busy, None, "0.1.1"),
+            ExternalVersion::Keep
+        );
         // Резидент из исходников без пакета: версию не узнать — не трогаем.
         let source = json!({"version": null, "status": "idle"});
-        assert_eq!(external_version(&source, "0.1.1"), ExternalVersion::Keep);
+        assert_eq!(
+            external_version(&source, None, "0.1.1"),
+            ExternalVersion::Keep
+        );
         // Версия пакета Python (PEP 440) против версии приложения (semver).
         let python = json!({"version": "0.2.0rc1", "status": "idle"});
         assert_eq!(
-            external_version(&python, "0.2.0-rc1"),
+            external_version(&python, None, "0.2.0-rc1"),
             ExternalVersion::Keep
         );
-        assert_eq!(external_version(&python, "0.2.0"), ExternalVersion::Replace);
+        assert_eq!(
+            external_version(&python, None, "0.2.0"),
+            ExternalVersion::Replace
+        );
     }
 
     #[test]
     fn idle_resident_of_another_version_is_replaced() {
         let older = json!({"version": "0.1.0", "status": "idle", "live": {"active": false}});
-        assert_eq!(external_version(&older, "0.1.1"), ExternalVersion::Replace);
+        let done = json!({"items": [{"kind": "transcribe", "state": "done"}]});
+        assert_eq!(
+            external_version(&older, Some(&done), "0.1.1"),
+            ExternalVersion::Replace
+        );
         // Резидент 0.1.0 версию в /state не присылает — заведомо старый.
         let unversioned = json!({"status": "idle"});
         assert_eq!(
-            external_version(&unversioned, "0.1.1"),
+            external_version(&unversioned, None, "0.1.1"),
             ExternalVersion::Replace
         );
     }
@@ -369,16 +407,50 @@ mod tests {
     fn busy_resident_of_another_version_is_left_to_finish() {
         let recording = json!({"status": "recording"});
         assert_eq!(
-            external_version(&recording, "0.1.1"),
+            external_version(&recording, None, "0.1.1"),
             ExternalVersion::WaitIdle
         );
         for key in ["active", "starting", "stopping"] {
             let live = json!({"version": "0.1.0", "status": "idle", "live": {key: true}});
             assert_eq!(
-                external_version(&live, "0.1.1"),
+                external_version(&live, None, "0.1.1"),
                 ExternalVersion::WaitIdle,
                 "{key}"
             );
         }
+    }
+
+    #[test]
+    fn resident_of_another_version_finishes_its_jobs_first() {
+        let idle = json!({"version": "0.1.0", "status": "idle"});
+        for state in ["queued", "running"] {
+            let jobs = json!({"items": [{"kind": "transcribe", "state": state}]});
+            assert_eq!(
+                external_version(&idle, Some(&jobs), "0.1.1"),
+                ExternalVersion::WaitIdle,
+                "{state}"
+            );
+        }
+        // /jobs не ответил — судим по занятому GPU.
+        let gpu = json!({"version": "0.1.0", "status": "idle", "gpu_busy": true});
+        assert_eq!(
+            external_version(&gpu, None, "0.1.1"),
+            ExternalVersion::WaitIdle
+        );
+    }
+
+    #[test]
+    fn working_means_jobs_in_flight_or_a_busy_gpu() {
+        let idle = json!({"status": "idle", "gpu_busy": false});
+        assert!(!resident_working(&idle, None));
+        assert!(!resident_working(
+            &idle,
+            Some(&json!({"items": [{"state": "failed"}, {"state": "done"}]}))
+        ));
+        assert!(resident_working(
+            &idle,
+            Some(&json!({"items": [{"state": "queued"}]}))
+        ));
+        assert!(resident_working(&json!({"gpu_busy": true}), None));
     }
 }

@@ -1414,7 +1414,7 @@ def test_auto_recording_after_the_wait_is_trimmed_before_transcription(app, tmp_
 
     queue = _Queue()
     state = tray_control.TrayControl(app, queue=queue)
-    state._background = lambda fn: fn()
+    state._background = lambda fn, name=None: fn()
     folder = _saved_folder(tmp_path)
     (folder / "events.jsonl").write_text(_json.dumps({"kind": "record.started", "at": 1000.0}) + "\n",
                                          encoding="utf-8")
@@ -1425,7 +1425,7 @@ def test_auto_recording_after_the_wait_is_trimmed_before_transcription(app, tmp_
     assert order == [("trim", [])]  # обрезка — до постановки расшифровки
     assert queue.submitted == [(jobs.TRANSCRIBE, str(folder))]
     events = [_json.loads(x) for x in (folder / "events.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert events[-1] == {"kind": "record.call_end", "at": 1300.0, "wait_s": 600.0}
+    assert events[-1] == {"kind": "record.call_end", "at": 1300.0, "wait_s": 600.0, "transcribe": True}
 
 
 def test_failed_trim_still_transcribes(app, tmp_path, monkeypatch):
@@ -1433,7 +1433,7 @@ def test_failed_trim_still_transcribes(app, tmp_path, monkeypatch):
 
     queue = _Queue()
     state = tray_control.TrayControl(app, queue=queue)
-    state._background = lambda fn: fn()
+    state._background = lambda fn, name=None: fn()
     folder = _saved_folder(tmp_path)
 
     def broken(path):

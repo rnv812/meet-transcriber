@@ -142,3 +142,14 @@ def test_logged_in_cli_missing(monkeypatch):
     monkeypatch.setattr(detect.subprocess, "run", boom)
     ok, why = detect.logged_in("codex", "codex.exe")
     assert ok is False and why
+
+
+def test_available_can_skip_the_local_model_probe(monkeypatch):
+    """Запуск агента во вкладке «Агент» не ждёт сетевой проверки локальной модели."""
+    monkeypatch.setattr(detect, "find_claude", lambda: "C:/claude.exe")
+    monkeypatch.setattr(detect, "find_codex", lambda: None)
+    monkeypatch.setattr(detect, "local_reachable",
+                        lambda url, timeout=0.5: (_ for _ in ()).throw(AssertionError("проверка")))
+    av = detect.available(base_url="http://127.0.0.1:1234/v1", probe_local=False)
+    assert av["claude-code"] == {"found": True, "path": "C:/claude.exe"}
+    assert av["openai-compatible"] == {"found": None, "base_url": "http://127.0.0.1:1234/v1"}

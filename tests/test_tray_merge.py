@@ -78,7 +78,7 @@ def queue():
 @pytest.fixture
 def state(app, queue):
     st = tray_control.TrayControl(app, queue=queue, llm_queue=FakeQueue())
-    st._background = lambda fn: fn()  # в тестах — сразу, в этом потоке
+    st._background = lambda fn, name=None: fn()  # в тестах — сразу, в этом потоке
     return st
 
 

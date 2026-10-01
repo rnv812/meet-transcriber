@@ -51,7 +51,7 @@ def state(app):
     queue = jobs.JobQueue(app.bus, spawn=spawn)
     llm_queue = jobs.JobQueue(app.bus, spawn=spawn)
     st = tray_control.TrayControl(app, queue=queue, llm_queue=llm_queue)
-    st._background = lambda fn: fn()  # выгрузка в тестах — сразу, в этом потоке
+    st._background = lambda fn, name=None: fn()  # выгрузка в тестах — сразу, в этом потоке
     try:
         yield st
     finally:

@@ -102,3 +102,10 @@ test("объединение, сорванное посередине: доро�
                   merge: { parts: 2, state: "pending", deleted: false, kb_left: [] } });
   expect(statusOf(r, [], null)).toEqual({ kind: "failed", error: "Объединение прервано", retry: "transcribe" });
 });
+
+test("обрезка ожидания после звонка — «Обработка», пока резидент не закончит", () => {
+  const snap = { status: "idle", folder: null, processing: ["C:\\r\\2026-09-30_16-04"] } as any;
+  expect(statusOf(rec(), [job({ state: "queued" })], snap))
+    .toEqual({ kind: "running", stage: "trim", label: "Обработка" });
+  expect(statusOf(rec(), [], { ...snap, processing: [] })).toEqual({ kind: "untranscribed" });
+});
