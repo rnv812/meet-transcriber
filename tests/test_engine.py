@@ -5,6 +5,7 @@
 """
 
 import sys
+from pathlib import Path
 
 from meet import engine
 
@@ -170,6 +171,13 @@ def test_pyav_is_pinned_below_19():
     assert "av>=11,<19" in extras
 
 
+def test_engine_packages_have_upper_bounds():
+    """Новая мажорная версия не должна приезжать к пользователю сама: каждая
+    из них ломала API (pyannote 3→4, transformers 4→5)."""
+    for spec in ("faster-whisper>=1.2,<2", "pyannote.audio>=4.0,<5", "transformers>=4.40,<6"):
+        assert spec in engine.PACKAGES
+
+
 def test_state_reports_device_speed_and_disk(monkeypatch):
     monkeypatch.setattr(engine, "_device", lambda available: "cpu")
     state = engine.state()
@@ -244,6 +252,7 @@ UV_INPUTS = dict(
     env_dir="C:\\env",
     wheel="C:\\w\\meet_transcriber-0.1.0-py3-none-any.whl",
 )
+UV_CONSTRAINTS = {p: f"C:\\r\\constraints-{p}.txt" for p in ("cuda", "cpu")}
 
 
 def test_profile_for_follows_gpu_shape():
@@ -257,7 +266,7 @@ def test_uv_steps_cuda_shape():
     assert engine.uv_steps(profile="cuda", **UV_INPUTS) == [
         ["uv.exe", "python", "install", "3.12"],
         ["uv.exe", "venv", "--python", "3.12", "C:\\env"],
-        ["uv.exe", "pip", "install", "--python", py, "torch", "torchaudio",
+        ["uv.exe", "pip", "install", "--python", py, "torch==2.11.*", "torchaudio==2.11.*",
          "--index-url", engine.TORCH_CUDA_INDEX],
         ["uv.exe", "pip", "install", "--python", py,
          UV_INPUTS["wheel"] + "[engine-cuda]"],
@@ -268,6 +277,33 @@ def test_uv_steps_cpu_uses_cpu_index_and_extra():
     steps = engine.uv_steps(profile="cpu", **UV_INPUTS)
     assert steps[2][-1] == engine.TORCH_CPU_INDEX
     assert steps[3][-1].endswith("[engine-cpu]")
+
+
+def test_uv_steps_pin_torch_to_one_minor_for_both_profiles():
+    # Без пина CPU-индекс отдавал torch 2.14, CUDA-индекс — 2.11: два разных
+    # движка под одной версией приложения.
+    assert list(engine.TORCH_SPECS) == ["torch==2.11.*", "torchaudio==2.11.*"]
+    for profile in ("cuda", "cpu"):
+        step = engine.uv_steps(profile=profile, **UV_INPUTS)[2]
+        assert step[5:7] == list(engine.TORCH_SPECS)
+
+
+def test_uv_steps_add_constraints_to_torch_and_engine_steps():
+    c = UV_CONSTRAINTS["cuda"]
+    steps = engine.uv_steps(profile="cuda", constraints=c, **UV_INPUTS)
+    assert steps[:2] == engine.uv_steps(profile="cuda", **UV_INPUTS)[:2]
+    assert steps[2][-2:] == ["--constraint", c]
+    assert steps[3][-2:] == ["--constraint", c]
+    assert steps[3][-3].endswith("[engine-cuda]")
+
+
+def test_build_script_compiles_constraints_with_the_same_torch_pins():
+    script = (Path(__file__).resolve().parents[1] / "scripts" / "build_release.ps1").read_text(
+        encoding="utf-8-sig")
+    for spec in engine.TORCH_SPECS:
+        assert f"'{spec}'" in script
+    assert engine.TORCH_CUDA_INDEX in script and engine.TORCH_CPU_INDEX in script
+    assert "constraints-$flavor.txt" in script
 
 
 def test_estimate_text_cpu():
@@ -287,6 +323,11 @@ def test_uv_steps_fixtures_are_current():
     for profile in ("cuda", "cpu"):
         path = Path(__file__).parent / "fixtures" / f"uv_steps_{profile}.json"
         expected = engine.uv_steps(profile=profile, **UV_INPUTS)
+        assert json.loads(path.read_text(encoding="utf-8")) == expected
+        # С файлом ограничений версий: его кладёт в ресурсы релизная сборка.
+        path = Path(__file__).parent / "fixtures" / f"uv_steps_{profile}_constrained.json"
+        expected = engine.uv_steps(profile=profile, constraints=UV_CONSTRAINTS[profile],
+                                   **UV_INPUTS)
         assert json.loads(path.read_text(encoding="utf-8")) == expected
 
 

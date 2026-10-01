@@ -21,7 +21,9 @@
     "torch==2.11.*",
     "torchaudio==2.11.*",
     "--index-url",
-    "https://download.pytorch.org/whl/cpu"
+    "https://download.pytorch.org/whl/cpu",
+    "--constraint",
+    "C:\\r\\constraints-cpu.txt"
   ],
   [
     "uv.exe",
@@ -29,6 +31,8 @@
     "install",
     "--python",
     "C:\\env\\Scripts\\python.exe",
-    "C:\\w\\meet_transcriber-0.1.0-py3-none-any.whl[engine-cpu]"
+    "C:\\w\\meet_transcriber-0.1.0-py3-none-any.whl[engine-cpu]",
+    "--constraint",
+    "C:\\r\\constraints-cpu.txt"
   ]
 ]

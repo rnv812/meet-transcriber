@@ -36,6 +36,9 @@ use crate::resident::{self, Supervisor};
 /// `meet/engine.py` (cu128: без неё не работают карты RTX 50xx).
 pub const TORCH_CUDA_INDEX: &str = "https://download.pytorch.org/whl/cu128";
 pub const TORCH_CPU_INDEX: &str = "https://download.pytorch.org/whl/cpu";
+/// torch — одна минорная версия на оба профиля, как `TORCH_SPECS` в
+/// `meet/engine.py` (без пина CPU-индекс отдавал 2.14, CUDA — 2.11).
+pub const TORCH_SPECS: [&str; 2] = ["torch==2.11.*", "torchaudio==2.11.*"];
 
 /// Событие прогресса: `{step, of, line}` — номер шага с 1, всего шагов,
 /// строка вывода (первое событие шага — его название).
@@ -96,8 +99,16 @@ pub fn launcher(env_dir: &Path) -> PathBuf {
 
 /// Команды установки колеса в приватное окружение — порт
 /// `meet.engine.uv_steps`. Путь к python склеивается строкой с «\», как в
-/// Python, чтобы шаги совпадали байт в байт.
-pub fn uv_steps(uv: &str, env_dir: &str, wheel: &str, profile: &str) -> Vec<Vec<String>> {
+/// Python, чтобы шаги совпадали байт в байт. `constraints` — файл точных
+/// версий из ресурсов (`constraints-<профиль>.txt`, собирает
+/// `build_release.ps1`): шаги 3 и 4 ставят ровно то, с чем собран релиз.
+pub fn uv_steps(
+    uv: &str,
+    env_dir: &str,
+    wheel: &str,
+    profile: &str,
+    constraints: Option<&str>,
+) -> Vec<Vec<String>> {
     let python = format!(r"{env_dir}\Scripts\python.exe");
     let index = if profile == "cuda" {
         TORCH_CUDA_INDEX
@@ -111,16 +122,26 @@ pub fn uv_steps(uv: &str, env_dir: &str, wheel: &str, profile: &str) -> Vec<Vec<
             .collect::<Vec<_>>()
     };
     let pip = owned(&[uv, "pip", "install", "--python", &python]);
+    let pinned = constraints
+        .map(|file| owned(&["--constraint", file]))
+        .unwrap_or_default();
     vec![
         owned(&[uv, "python", "install", "3.12"]),
         owned(&[uv, "venv", "--python", "3.12", env_dir]),
         [
             pip.clone(),
-            owned(&["torch", "torchaudio", "--index-url", index]),
+            owned(&TORCH_SPECS),
+            owned(&["--index-url", index]),
+            pinned.clone(),
         ]
         .concat(),
-        [pip, vec![format!("{wheel}[engine-{profile}]")]].concat(),
+        [pip, vec![format!("{wheel}[engine-{profile}]")], pinned].concat(),
     ]
+}
+
+/// Файл точных версий профиля в ресурсах; нет (dev, старая сборка) — `None`.
+pub fn constraints_file(resources: &Path, profile: &str) -> Option<PathBuf> {
+    Some(resources.join(format!("constraints-{profile}.txt"))).filter(|file| file.is_file())
 }
 
 /// Окружение uv: всё своё — внутри папки приложения. Python ставится в
@@ -774,11 +795,17 @@ fn run_steps(
     uv: &Path,
     wheel: &Path,
 ) -> Result<(), String> {
+    // Ограничения версий лежат рядом с uv в ресурсах установщика.
+    let constraints = uv
+        .parent()
+        .and_then(|resources| constraints_file(resources, profile))
+        .map(|file| file.to_string_lossy().into_owned());
     let steps = uv_steps(
         &uv.to_string_lossy(),
         &env.to_string_lossy(),
         &wheel.to_string_lossy(),
         profile,
+        constraints.as_deref(),
     );
     let of = steps.len();
     let envs = uv_env(data_dir);
@@ -981,17 +1008,46 @@ mod tests {
     #[test]
     fn uv_steps_match_python_for_cuda() {
         assert_eq!(
-            uv_steps("uv.exe", r"C:\env", WHEEL, "cuda"),
+            uv_steps("uv.exe", r"C:\env", WHEEL, "cuda", None),
             fixture("uv_steps_cuda.json")
+        );
+        assert_eq!(
+            uv_steps(
+                "uv.exe",
+                r"C:\env",
+                WHEEL,
+                "cuda",
+                Some(r"C:\r\constraints-cuda.txt")
+            ),
+            fixture("uv_steps_cuda_constrained.json")
         );
     }
 
     #[test]
     fn uv_steps_match_python_for_cpu() {
         assert_eq!(
-            uv_steps("uv.exe", r"C:\env", WHEEL, "cpu"),
+            uv_steps("uv.exe", r"C:\env", WHEEL, "cpu", None),
             fixture("uv_steps_cpu.json")
         );
+        assert_eq!(
+            uv_steps(
+                "uv.exe",
+                r"C:\env",
+                WHEEL,
+                "cpu",
+                Some(r"C:\r\constraints-cpu.txt")
+            ),
+            fixture("uv_steps_cpu_constrained.json")
+        );
+    }
+
+    #[test]
+    fn constraints_file_is_used_only_when_shipped() {
+        let tree = TempDir::new("constraints");
+        assert_eq!(constraints_file(&tree.0, "cuda"), None, "dev: файла нет");
+        let file = tree.file("constraints-cuda.txt", "torch==2.11.0+cu128\n");
+        assert_eq!(constraints_file(&tree.0, "cuda"), Some(file));
+        assert_eq!(constraints_file(&tree.0, "cpu"), None);
     }
 
     #[test]

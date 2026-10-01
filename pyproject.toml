@@ -15,17 +15,17 @@ dependencies = [
 
 [project.optional-dependencies]
 engine-cpu = [
-    "faster-whisper>=1.2",
+    "faster-whisper>=1.2,<2",
     "av>=11,<19",
-    "pyannote.audio>=4.0",
-    "transformers>=4.40",
+    "pyannote.audio>=4.0,<5",
+    "transformers>=4.40,<6",
     "scipy>=1.11",
 ]
 engine-cuda = [
-    "faster-whisper>=1.2",
+    "faster-whisper>=1.2,<2",
     "av>=11,<19",
-    "pyannote.audio>=4.0",
-    "transformers>=4.40",
+    "pyannote.audio>=4.0,<5",
+    "transformers>=4.40,<6",
     "scipy>=1.11",
     "nvidia-cublas-cu12",
     "nvidia-cudnn-cu12",

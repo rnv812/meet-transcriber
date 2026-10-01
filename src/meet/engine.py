@@ -32,15 +32,19 @@ COMPONENTS = (
 # и на часовой встрече это часы вместо минут.
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+# torch для движка установщика — одна минорная версия на оба профиля: без пина
+# CPU-индекс отдавал 2.14, CUDA-индекс — 2.11. Смена пина — вместе со
+# scripts/build_release.ps1 ($TorchSpecs, тест следит).
+TORCH_SPECS = ("torch==2.11.*", "torchaudio==2.11.*")
 
 PACKAGES = (
-    "faster-whisper>=1.2",
+    "faster-whisper>=1.2,<2",
     # faster-whisper 1.2 передаёт av.open(metadata_errors=...), которого нет в
     # av 19: без пина чистая установка падает на первом же файле.
     "av>=11,<19",
     # community-1 (пайплайн диаризации) требует pyannote 4.x.
-    "pyannote.audio>=4.0",
-    "transformers>=4.40",
+    "pyannote.audio>=4.0,<5",
+    "transformers>=4.40,<6",
     "scipy>=1.11",
 )
 CUDA_RUNTIME = ("nvidia-cublas-cu12", "nvidia-cudnn-cu12")
@@ -190,21 +194,27 @@ def estimate_text(duration_s: float, profile: str) -> str:
     )
 
 
-def uv_steps(uv: str, env_dir: str, wheel: str, profile: str) -> list[list[str]]:
+def uv_steps(uv: str, env_dir: str, wheel: str, profile: str,
+             constraints: str | None = None) -> list[list[str]]:
     """Команды установки колеса в приватный venv через uv.
 
     Путь к python собирается склейкой строк, а не через os.path: шаги
     воспроизводит и инсталлятор на Rust, и фикстуры в tests/fixtures должны
     совпадать на любой ОС. Установка только под Windows, разделитель — «\».
+
+    `constraints` — файл точных версий всего дерева (`uv pip compile` при
+    сборке установщика, ресурс `constraints-<профиль>.txt`): без него каждый
+    пользователь получал бы те версии, что вышли к дню установки.
     """
     python = env_dir + chr(92) + "Scripts" + chr(92) + "python.exe"
     index = TORCH_CUDA_INDEX if profile == "cuda" else TORCH_CPU_INDEX
     pip = [uv, "pip", "install", "--python", python]
+    pinned = ["--constraint", constraints] if constraints else []
     return [
         [uv, "python", "install", "3.12"],
         [uv, "venv", "--python", "3.12", env_dir],
-        pip + ["torch", "torchaudio", "--index-url", index],
-        pip + [f"{wheel}[engine-{profile}]"],
+        pip + list(TORCH_SPECS) + ["--index-url", index] + pinned,
+        pip + [f"{wheel}[engine-{profile}]"] + pinned,
     ]
 
 

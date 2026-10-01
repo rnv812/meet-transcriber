@@ -6,11 +6,13 @@
   1. Сверяет версию в pyproject.toml, app/src-tauri/tauri.conf.json,
      app/src-tauri/Cargo.toml и app/package.json с -Version (с -SetVersion —
      проставляет её во все файлы, включая корень app/package-lock.json).
-  2. Собирает колесо meet (uv build --wheel).
+  2. Собирает колесо meet (uv build --wheel) и точные версии зависимостей
+     движка под каждый профиль (uv pip compile -> constraints-cuda.txt,
+     constraints-cpu.txt): установка у пользователя ставит ровно их.
   3. Скачивает uv и ffmpeg (LGPL, статическая сборка) с закреплённых
      релизов GitHub в build/cache (повторный запуск не качает заново) и
      сверяет SHA-256 с scripts/uv.sha256 и scripts/ffmpeg.sha256.
-  4. Кладёт uv.exe, ffmpeg.exe (+ лицензию ffmpeg) и колесо в
+  4. Кладёт uv.exe, ffmpeg.exe (+ лицензию ffmpeg), колесо и файлы версий в
      app/src-tauri/resources/ — их подхватывает tauri.release.conf.json.
   5. npm ci и tauri build с релизным конфигом.
   6. Печатает путь и размер установщика и пишет рядом SHA256SUMS.txt.
@@ -44,6 +46,12 @@ $UvUrl = "https://github.com/astral-sh/uv/releases/download/$UvVersion/$UvAsset"
 $FfmpegTag = 'autobuild-2026-09-30-13-08'
 $FfmpegAsset = 'ffmpeg-n8.1.3-9-g29e619e767-win64-lgpl-8.1.zip'
 $FfmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/$FfmpegTag/$FfmpegAsset"
+# torch движка — как TORCH_SPECS и индексы в src/meet/engine.py (тест сверяет).
+$TorchSpecs = @('torch==2.11.*', 'torchaudio==2.11.*')
+$TorchIndex = @{
+    cuda = 'https://download.pytorch.org/whl/cu128'
+    cpu  = 'https://download.pytorch.org/whl/cpu'
+}
 
 $Root = Split-Path -Parent $PSScriptRoot
 $AppDir = Join-Path $Root 'app'
@@ -51,6 +59,7 @@ $TauriDir = Join-Path $AppDir 'src-tauri'
 $Resources = Join-Path $TauriDir 'resources'
 $Cache = Join-Path $Root 'build\cache'
 $WheelOut = Join-Path $Root 'build\wheel'
+$ConstraintsOut = Join-Path $Root 'build\constraints'
 $Utf8 = New-Object System.Text.UTF8Encoding $false
 $Started = Get-Date
 
@@ -174,6 +183,54 @@ if (-not (Test-Path $wheel)) {
     throw "uv build не оставил $wheelName в $WheelOut"
 }
 
+# --- 2b. Точные версии движка -------------------------------------------------
+# Без них каждый пользователь получал бы то, что вышло к дню установки, — с
+# новыми мажорными версиями и поломками. Два прохода на профиль:
+#  1) torch и его зависимости — только с индекса PyTorch, как шаг 3
+#     установки (`--index-url`): версии этих пакетов обязаны там быть;
+#  2) всё дерево (ядро + extra профиля) — только с PyPI, как шаг 4, с
+#     версиями прохода 1 как ограничениями; torch здесь — PyPI-близнец той же
+#     версии, его строка заменяется строкой прохода 1 (с меткой +cu128/+cpu).
+# Один общий индекс (unsafe-best-match) не годится: он подсовывает пакеты с
+# меткой индекса PyTorch (torchcodec==0.17.0+cpu), которых нет на PyPI.
+Write-Step 'Точные версии движка (uv pip compile)'
+if (Test-Path $ConstraintsOut) { Remove-Item -Recurse -Force $ConstraintsOut }
+New-Item -ItemType Directory -Force $ConstraintsOut | Out-Null
+$torchIn = Join-Path $ConstraintsOut 'torch.in'
+Write-Text $torchIn (($TorchSpecs -join "`n") + "`n")
+$compileArgs = @('--python-version', '3.12', '--python-platform', 'x86_64-pc-windows-msvc',
+    '--no-config', '--no-header', '--no-annotate', '--quiet')
+$torchLine = '^(torch|torchaudio)=='
+$constraintFiles = @()
+foreach ($flavor in @('cuda', 'cpu')) {
+    $torchLock = Join-Path $ConstraintsOut "torch-$flavor.txt"
+    Invoke-Native "uv pip compile (torch, $flavor)" {
+        uv pip compile $torchIn @compileArgs --index-url $TorchIndex[$flavor] -o $torchLock
+    }
+    $torchPins = @(Get-Content -Encoding UTF8 $torchLock | Where-Object { $_ -match $torchLine })
+    if ($torchPins.Count -ne 2) { throw "В $torchLock нет строк torch и torchaudio" }
+    $torchDeps = Join-Path $ConstraintsOut "torch-deps-$flavor.txt"
+    Write-Text $torchDeps ((@(Get-Content -Encoding UTF8 $torchLock | Where-Object { $_ -notmatch $torchLine }) -join "`n") + "`n")
+    $treeLock = Join-Path $ConstraintsOut "tree-$flavor.txt"
+    Invoke-Native "uv pip compile (движок, $flavor)" {
+        uv pip compile (Join-Path $Root 'pyproject.toml') $torchIn --extra "engine-$flavor" @compileArgs --constraint $torchDeps -o $treeLock
+    }
+    $lines = foreach ($line in Get-Content -Encoding UTF8 $treeLock) {
+        if ($line -match $torchLine) {
+            $torchPins | Where-Object { $_.StartsWith($Matches[0]) }
+        } else {
+            $line
+        }
+    }
+    $tag = if ($flavor -eq 'cuda') { '+cu' } else { '+cpu' }
+    $pinned = @($lines | Where-Object { $_ -match $torchLine -and $_.Contains($tag) })
+    if ($pinned.Count -ne 2) { throw "constraints-$flavor.txt: torch и torchaudio без метки $tag" }
+    $out = Join-Path $ConstraintsOut "constraints-$flavor.txt"
+    Write-Text $out ((@($lines) -join "`n") + "`n")
+    Write-Host ("  {0}: {1} пакетов, {2}" -f (Split-Path -Leaf $out), @($lines).Count, ($pinned -join ', '))
+    $constraintFiles += $out
+}
+
 # --- 3. uv и ffmpeg -----------------------------------------------------------
 function Get-PinnedHash([string]$ShaFile, [string]$Asset) {
     foreach ($line in Get-Content -Encoding UTF8 (Join-Path $PSScriptRoot $ShaFile)) {
@@ -239,6 +296,7 @@ Expand-One $uvZip 'uv.exe' (Join-Path $Resources 'uv.exe')
 Expand-One $ffmpegZip 'bin/ffmpeg.exe' (Join-Path $Resources 'ffmpeg.exe')
 Expand-One $ffmpegZip 'LICENSE.txt' (Join-Path $Resources 'ffmpeg-LICENSE.txt')
 Copy-Item $wheel (Join-Path $Resources $wheelName)
+foreach ($file in $constraintFiles) { Copy-Item $file $Resources }
 Invoke-Native 'uv.exe --version' { & (Join-Path $Resources 'uv.exe') --version }
 Invoke-Native 'ffmpeg.exe -version' { $script:ffmpegVersion = & (Join-Path $Resources 'ffmpeg.exe') -hide_banner -version }
 Write-Host "  $(@($ffmpegVersion)[0])"
