@@ -625,6 +625,7 @@ class TrayApp:
             self.log("звонок начался, запись уже идёт — не вмешиваюсь")
             return
         if self._live_busy():
+            # Нарочно: запись с ассистентом уже пишет этот звонок.
             self.log("звонок начался, пишет ассистент — не вмешиваюсь")
             return
         left = self._retry_after - time.monotonic()
@@ -751,7 +752,7 @@ class TrayApp:
     def _stop_services(self, api) -> None:
         """Погасить то, что резидент держит подпроцессами, и только потом API.
 
-        Ассистент первым и с ожиданием (до 90 с, дальше убийство дерева): он
+        Ассистент первым и с ожиданием (до 60 с, дальше убийство дерева): он
         пишет встречу, и осиротевший держал бы микрофон и lock записи. Его
         `live.stopped` ставит расшифровку — очередь ещё жива. Очереди задач —
         раньше сервера: иначе идущая расшифровка (подпроцесс job_worker)
@@ -759,8 +760,10 @@ class TrayApp:
         перезапущенного резидента."""
         if api is None:
             return
+        from meet.live_control import SHUTDOWN_WAIT_S
+
         try:
-            api.state.live.stop(wait=True)
+            api.state.live.stop(wait=True, timeout=SHUTDOWN_WAIT_S)
         except Exception as e:
             self.log(f"ассистент не остановился штатно: {e!r}")
         for queue in (api.state.queue, api.state.llm_queue):

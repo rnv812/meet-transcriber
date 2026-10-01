@@ -116,10 +116,17 @@ os.replace(tmp, endpoint)
 print("Ассистент: http://127.0.0.1:%d/" % srv.server_address[1], flush=True)
 stop.wait()
 if mode == "hang":
-    time.sleep(60)  # застрявший вызов модели держит процесс после финализации
+    time.sleep(60)  # не дописывает запись вовсе (застрял до финализации)
+if mode == "slow-finalize":
+    time.sleep(1.0)  # финальный проход распознавания
 time.sleep(0.1)
-os.remove(endpoint)
+os.remove(endpoint)  # как run_assist: после engine.stop(), до выхода
+if mode == "stop-error":
+    print("RuntimeError: финальный проход упал", flush=True)
+    sys.exit(1)
 print("Остановлено: " + folder, flush=True)
+if mode == "linger":
+    time.sleep(60)  # дописал, но застрявший вызов модели держит процесс
 '''
 
 
@@ -339,10 +346,116 @@ def test_stuck_child_is_killed_with_its_tree_after_stop_timeout(make_live, tmp_p
     live.stop(wait=True)
     assert _idle(live)
     assert stub.note("stop") == [""]
-    # Убит после финализации — ничего не потеряно, это штатная остановка.
+    # Не дописал запись к дедлайну: остановка, но запись неполная — с ошибкой.
     assert rec.kinds()[-1] == live_control.LIVE_STOPPED
+    stopped = rec.last(live_control.LIVE_STOPPED).data
+    assert stopped["complete"] is False and "не дописал" in stopped["error"]
+    assert live.status()["error"] == stopped["error"]
     _wait_for(lambda: not psutil.pid_exists(grandchild)
               or psutil.Process(grandchild).status() == psutil.STATUS_ZOMBIE)
+
+
+def test_finalized_child_is_released_without_waiting_for_its_exit(make_live, tmp_path):
+    """Дописал запись (убрал файл эндпоинта), но висит на вызове модели: конец
+    живого режима — сразу, а не через 90 с; остаток дерева добит."""
+    live, stub, rec = make_live("linger", finalize_grace=0.3)
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: _active(live))
+    began = time.monotonic()
+    live.stop()
+    _wait_for(lambda: not live.busy(), timeout=5)
+    assert time.monotonic() - began < 5
+    stopped = rec.last(live_control.LIVE_STOPPED).data
+    assert stopped["complete"] is True and stopped["error"] is None
+    assert live.status()["error"] is None
+    assert stub.processes[0].poll() is not None
+
+
+def test_stop_error_is_surfaced_and_recording_kept(make_live, tmp_path):
+    live, stub, rec = make_live("stop-error")
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: _active(live))
+    live.stop(wait=True)
+    stopped = rec.last(live_control.LIVE_STOPPED).data
+    assert stopped["error"] == "RuntimeError: финальный проход упал"
+    assert stopped["complete"] is True  # дорожки на диске — расшифровывать
+    assert live.status()["error"] == "RuntimeError: финальный проход упал"
+    assert live_control.LIVE_FAILED not in rec.kinds()
+
+
+def test_failed_stop_request_is_retried_once(make_live, tmp_path):
+    live, stub, rec = make_live()
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: _active(live))
+    real, calls = live._request, []
+
+    def flaky(port, path, payload, timeout):
+        calls.append(path)
+        if len(calls) == 1:
+            raise RuntimeError("ассистент не отвечает: timed out")
+        return real(port, path, payload, timeout)
+
+    live._request = flaky
+    live.stop(wait=True)
+    assert calls == ["/stop", "/stop"]
+    assert stub.note("stop") == [""]
+    assert rec.last(live_control.LIVE_STOPPED).data["complete"] is True
+
+
+def test_undelivered_stop_waits_for_deadline_instead_of_killing(make_live, tmp_path):
+    live, stub, rec = make_live(stop_timeout=1.0)
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: _active(live))
+
+    def down(port, path, payload, timeout):
+        raise RuntimeError("ассистент не отвечает")
+
+    live._request = down
+    live.stop()
+    time.sleep(0.3)
+    assert stub.processes[0].poll() is None  # не убит сразу
+    _wait_for(lambda: not live.busy())
+    stopped = rec.last(live_control.LIVE_STOPPED).data
+    assert stopped["complete"] is False and stopped["error"]
+
+
+def test_previous_stopped_precedes_next_starting(data_dir, tmp_path):
+    """Медленный подписчик на `live.stopped` не даёт следующему старту
+    обогнать конец прошлого запуска в шине."""
+    stub = Stub(tmp_path)
+    bus = events.EventBus()
+    in_stopped = threading.Event()
+
+    def slow(event):
+        if event.kind == live_control.LIVE_STOPPED:
+            in_stopped.set()
+            time.sleep(0.5)
+
+    bus.subscribe(slow)
+    rec = Recorder(bus)
+    live = live_control.LiveControl(bus, spawn=stub)
+    try:
+        live.start(tmp_path / "recordings")
+        _wait_for(lambda: _active(live))
+        live.stop()
+        assert in_stopped.wait(timeout=10)
+        live.start(tmp_path / "recordings")
+        kinds = rec.kinds()
+        last_starting = len(kinds) - 1 - kinds[::-1].index(live_control.LIVE_STARTING)
+        assert kinds.index(live_control.LIVE_STOPPED) < last_starting
+    finally:
+        live.stop(wait=True)
+        stub.cleanup()
+
+
+def test_stop_timeout_argument_shortens_the_deadline(make_live, tmp_path):
+    live, stub, rec = make_live("hang", stop_timeout=60)
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: _active(live))
+    began = time.monotonic()
+    live.stop(wait=True, timeout=0.5)
+    assert time.monotonic() - began < 10
+    assert not live.busy()
 
 
 def test_stale_endpoint_file_is_removed_before_spawn(make_live, data_dir, tmp_path):
@@ -586,6 +699,57 @@ def test_shutdown_stops_live_mode(resident, monkeypatch):
     assert exits == [True]
 
 
+def test_shutdown_waits_until_live_finalizes(resident, monkeypatch):
+    """После ответа /shutdown оболочка даёт резиденту 10 с и гасит его вместе
+    с ребёнком — поэтому дописать запись ассистент должен до ответа."""
+    monkeypatch.setattr(resident.tray, "request_exit", lambda: None)
+    resident.stub.mode = "slow-finalize"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["active"])
+    folder = resident.live.status()["folder"]
+    began = time.monotonic()
+    resident.shutdown()
+    assert time.monotonic() - began >= 1.0  # ждал финального прохода
+    assert not resident.live.busy()
+    assert resident.queue.submitted == [(jobs.TRANSCRIBE, folder)]
+
+
+def test_shutdown_wait_is_bounded(resident, monkeypatch):
+    monkeypatch.setattr(resident.tray, "request_exit", lambda: None)
+    monkeypatch.setattr(live_control, "SHUTDOWN_WAIT_S", 0.5)
+    resident.stub.mode = "hang"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["active"])
+    began = time.monotonic()
+    resident.shutdown()
+    assert time.monotonic() - began < 10
+    assert not resident.live.busy()
+
+
+def test_unfinalized_kill_is_marked_but_not_transcribed(resident):
+    from pathlib import Path
+
+    resident.stub.mode = "hang"
+    resident.live._stop_timeout = 0.5
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["active"])
+    folder = resident.live.status()["folder"]
+    resident.live.stop(wait=True)
+    assert resident.queue.submitted == []
+    assert library.read_meta(Path(folder))["source"] == "live"
+    assert "не дописал" in resident.snapshot()["live"]["error"]
+
+
+def test_stop_with_error_still_transcribes_existing_tracks(resident):
+    resident.stub.mode = "stop-error"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["active"])
+    folder = resident.live.status()["folder"]
+    resident.live.stop(wait=True)
+    assert resident.queue.submitted == [(jobs.TRANSCRIBE, folder)]
+    assert resident.snapshot()["live"]["error"] == "RuntimeError: финальный проход упал"
+
+
 def test_live_ask_validates_question(resident):
     with pytest.raises(control.BadRequest):
         resident.live_ask({"question": "  "})
@@ -604,8 +768,8 @@ class _FakeLive:
     def __init__(self, calls):
         self.calls = calls
 
-    def stop(self, wait=False):
-        self.calls.append(("live.stop", wait))
+    def stop(self, wait=False, timeout=None):
+        self.calls.append(("live.stop", wait, timeout))
         return {"ok": True}
 
 
@@ -641,7 +805,9 @@ def test_resident_exit_stops_live_before_api(monkeypatch, tmp_path):
     monkeypatch.setattr(tray, "TICK_S", 0.01)
     monkeypatch.setattr(tray, "_pid_alive", lambda pid: False)
     app.run_headless(parent_pid=999999)  # оболочка «умерла»
-    assert calls == [("live.stop", True), "queue.stop", "llm_queue.stop", "api.stop"]
+    assert calls == [("live.stop", True, live_control.SHUTDOWN_WAIT_S),
+                     "queue.stop", "llm_queue.stop", "api.stop"]
+    assert live_control.SHUTDOWN_WAIT_S == 60.0
 
 
 # --- сквозь control API ------------------------------------------------------

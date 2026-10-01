@@ -11,9 +11,11 @@
 * ребёнок атомарно пишет `{"port", "pid", "folder"}` в файл эндпоинта, когда
   его сервер поднялся (модели к этому моменту загружены — до минуты);
 * `POST /stop` → `{"ok": true}` сразу, затем финализация (дорожки, снятие
-  `.recording.lock`) и выход с кодом 0. Застрявший вызов модели может держать
-  процесс ещё до ~180 с уже после финализации — поэтому через STOP_TIMEOUT_S
-  дерево процессов убивается: после финализации это ничего не теряет;
+  `.recording.lock`), удаление файла эндпоинта и выход с кодом 0. Застрявший
+  вызов модели может держать процесс ещё до ~180 с уже после финализации —
+  поэтому исчезнувший после `/stop` файл эндпоинта и есть сигнал «запись
+  дописана»: остаток дерева добиваем (FINALIZE_GRACE_S), не дожидаясь. Не
+  дописал к STOP_TIMEOUT_S — убиваем всё равно, но запись помечаем неполной;
 * `GET /events` — SSE `state`/`line` с `id:`, понимает Last-Event-ID;
 * POST'ы с чужим Origin ребёнок отвергает, а без Origin пускает — urllib
   Origin не ставит, и это нам и нужно.
@@ -56,6 +58,15 @@ LOG_MAX_BYTES = 1024 * 1024  # больше — прежний журнал уе
 
 START_TIMEOUT_S = 60.0  # модель распознавания грузится до минуты
 STOP_TIMEOUT_S = 90.0  # финализация дорожек; дальше — убийство дерева
+# Выход резидента (/shutdown, смерть оболочки): оболочка ждёт ответа /shutdown
+# 70 с (app/src-tauri/src/api.rs, LONG_TIMEOUT) — укладываемся с запасом, как
+# остановка обычной записи (join 60 с).
+SHUTDOWN_WAIT_S = 60.0
+# Файл эндпоинта исчез после /stop — ребёнок дописал запись (run_assist убирает
+# его после engine.stop()). Даём ему столько, чтобы выйти самому и успеть
+# напечатать ошибку финализации; дальше добиваем зависший вызов модели.
+FINALIZE_GRACE_S = 2.0
+STOP_ATTEMPTS = 2  # /stop не дошёл — ещё одна попытка, потом только дедлайн
 POLL_S = 0.1
 REQUEST_TIMEOUT_S = 5.0
 ASK_TIMEOUT_S = 240.0  # вопрос — вызов модели (у ребёнка до 180 с) плюс дослив окна
@@ -116,6 +127,18 @@ def _read_endpoint(path: Path, pid: int) -> dict | None:
     return data
 
 
+def _endpoint_is(path: Path, pid: int) -> bool:
+    """Файл эндпоинта ещё лежит и он — этого ребёнка (pid уже известен,
+    psutil не нужен). Ребёнок убирает его, только когда дописал запись."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return True  # недочитали (замена файла) — считаем, что ещё на месте
+    return isinstance(data, dict) and data.get("pid") == pid
+
+
 def _spawn_process(argv: list[str], log_file):
     """Запустить ребёнка без окна консоли, весь вывод — в журнал."""
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
@@ -172,19 +195,29 @@ class LiveControl:
     """Один дочерний `meet assist` под присмотром резидента.
 
     `spawn(argv, log_file) -> Popen` и `kill(process)` подменяются в тестах;
-    таймауты — тоже, чтобы тесты не ждали минуту."""
+    таймауты — тоже, чтобы тесты не ждали минуту.
+
+    Порядок событий. Каждый переход состояния и его событие идут под
+    `_emit_lock` (реентерабельным: подписчик вправе сам дёрнуть start/stop):
+    иначе `live.stopped` прошлого запуска мог бы прийти после `live.starting`
+    следующего, а `live.stopping` — после `live.stopped`. Шина при этом
+    вызывается вне `_lock` состояния — подписчики спрашивают status()."""
 
     def __init__(self, bus, spawn=None, *, kill=None, log=None,
                  start_timeout: float = START_TIMEOUT_S,
-                 stop_timeout: float = STOP_TIMEOUT_S, poll_s: float = POLL_S) -> None:
+                 stop_timeout: float = STOP_TIMEOUT_S,
+                 finalize_grace: float = FINALIZE_GRACE_S,
+                 poll_s: float = POLL_S) -> None:
         self.bus = bus
         self._spawn = spawn or _spawn_process
         self._kill = kill or _kill_tree
         self._log = log or (lambda message: None)
         self._start_timeout = start_timeout
         self._stop_timeout = stop_timeout
+        self._finalize_grace = finalize_grace
         self._poll_s = poll_s
         self._lock = threading.Lock()
+        self._emit_lock = threading.RLock()
         self._process = None
         self._thread: threading.Thread | None = None
         self._active = False
@@ -201,8 +234,9 @@ class LiveControl:
 
     def status(self) -> dict:
         """{"active", "starting", "stopping", "folder", "error", "started_at"}:
-        error — почему упал последний запуск (сбрасывается следующим стартом),
-        started_at — стенное время старта для секундомера панели."""
+        error — почему упал (или остановился с ошибкой) последний запуск,
+        сбрасывается следующим стартом; started_at — стенное время старта для
+        секундомера панели."""
         with self._lock:
             return self._status_unlocked()
 
@@ -211,143 +245,201 @@ class LiveControl:
         with self._lock:
             return self._process is not None
 
-    # --- старт и стоп ---------------------------------------------------
-
-    def start(self, out_root) -> dict:
-        """Запустить ассистента. Не ждёт загрузки модели: статус `starting`
-        сразу, дальше — события `live.started` / `live.failed`."""
-        with self._lock:
-            if self._process is not None:
-                raise LiveBusy("Ассистент уже запущен")
-            endpoint = endpoint_path()
-            try:
-                endpoint.unlink(missing_ok=True)  # от убитого прошлого запуска
-            except OSError:
-                pass
-            argv = [sys.executable, "-m", "meet.cli", "assist", "--no-browser",
-                    "--port", "0", "--endpoint-file", str(endpoint),
-                    "--out", str(out_root)]
-            log_file = None
-            try:
-                log_file, path, offset = _open_log()
-                process = self._spawn(argv, log_file)
-            except OSError as e:
-                self._error = f"Не удалось запустить ассистента: {e}"
-                process = None
-            finally:
-                if log_file is not None:
-                    log_file.close()  # у ребёнка свой дескриптор
-            if process is not None:
-                self._process = process
-                self._active = False
-                self._port = None
-                self._child_pid = None
-                self._folder = None
-                self._error = None
-                self._started_at = time.time()
-                self._stop_requested = False
-                self._stop_deadline = None
-                self._thread = threading.Thread(
-                    target=self._watch, args=(process, endpoint, path, offset),
-                    name="meet-live", daemon=True)
-            thread, error = self._thread, self._error
-            reply = self._status_unlocked()
-        # События — вне лока (подписчики шины вправе спросить status()), и
-        # `live.starting` — раньше потока: его `started`/`failed` не должны
-        # обогнать начало.
-        if process is None:
-            self._log(f"ассистент: {error}")
-            self.bus.emit(LIVE_FAILED, error=error, folder=None)
-            return {"ok": False, **reply}
-        self._log(f"ассистент запускается (pid {process.pid})")
-        self.bus.emit(LIVE_STARTING)
-        thread.start()
-        return {"ok": True, **reply}
-
     def _status_unlocked(self) -> dict:
         running = self._process is not None
         return {"active": self._active, "starting": running and not self._active,
                 "stopping": running and self._stop_requested, "folder": self._folder,
                 "error": self._error, "started_at": self._started_at}
 
-    def stop(self, wait: bool = False) -> dict:
-        """Штатная остановка: `POST /stop`, через STOP_TIMEOUT_S — убийство
-        дерева. `wait=True` ждёт выхода (выход резидента); без него ответ
-        сразу, а конец — событием `live.stopped`."""
-        with self._lock:
-            process, thread = self._process, self._thread
+    # --- старт и стоп ---------------------------------------------------
+
+    def start(self, out_root) -> dict:
+        """Запустить ассистента. Не ждёт загрузки модели: статус `starting`
+        сразу, дальше — события `live.started` / `live.failed`."""
+        with self._emit_lock:
+            with self._lock:
+                if self._process is not None:
+                    raise LiveBusy("Ассистент уже запущен")
+                endpoint = endpoint_path()
+                try:
+                    endpoint.unlink(missing_ok=True)  # от убитого прошлого запуска
+                except OSError:
+                    pass
+                argv = [sys.executable, "-m", "meet.cli", "assist", "--no-browser",
+                        "--port", "0", "--endpoint-file", str(endpoint),
+                        "--out", str(out_root)]
+                log_file = None
+                try:
+                    log_file, path, offset = _open_log()
+                    process = self._spawn(argv, log_file)
+                except OSError as e:
+                    self._error = f"Не удалось запустить ассистента: {e}"
+                    process = None
+                finally:
+                    if log_file is not None:
+                        log_file.close()  # у ребёнка свой дескриптор
+                if process is not None:
+                    self._process = process
+                    self._active = False
+                    self._port = None
+                    self._child_pid = None
+                    self._folder = None
+                    self._error = None
+                    self._started_at = time.time()
+                    self._stop_requested = False
+                    self._stop_deadline = None
+                    self._thread = threading.Thread(
+                        target=self._watch, args=(process, endpoint, path, offset),
+                        name="meet-live", daemon=True)
+                thread, error = self._thread, self._error
+                reply = self._status_unlocked()
             if process is None:
-                return {"ok": False, "action": "not-live", **self._status_unlocked()}
-            first = not self._stop_requested
-            self._stop_requested = True
-            port = self._port
+                self._log(f"ассистент: {error}")
+                self.bus.emit(LIVE_FAILED, error=error, folder=None)
+                return {"ok": False, **reply}
+            self._log(f"ассистент запускается (pid {process.pid})")
+            self.bus.emit(LIVE_STARTING)
+            # Поток — после `live.starting`: его started/failed не обгонят начало.
+            thread.start()
+        return {"ok": True, **reply}
+
+    def stop(self, wait: bool = False, timeout: float | None = None) -> dict:
+        """Штатная остановка: `POST /stop` (не дошёл — ещё раз), конец — когда
+        ребёнок дописал запись (исчез файл эндпоинта) или вышел. Не уложился
+        в STOP_TIMEOUT_S (или в `timeout`, если он короче) — убийство дерева.
+
+        `wait=True` — ждать конца (выход резидента, /shutdown); без него ответ
+        сразу, а конец — событием `live.stopped`."""
+        with self._emit_lock:
+            with self._lock:
+                process, thread = self._process, self._thread
+                if process is None:
+                    return {"ok": False, "action": "not-live", **self._status_unlocked()}
+                first = not self._stop_requested
+                self._stop_requested = True
+                port = self._port
+                now = time.monotonic()
+                deadline = now + self._stop_timeout
+                if timeout is not None:
+                    deadline = min(deadline, now + timeout)
+                if self._stop_deadline is not None:
+                    deadline = min(deadline, self._stop_deadline)
+                self._stop_deadline = deadline
             if first:
-                self._stop_deadline = time.monotonic() + self._stop_timeout
+                self.bus.emit(LIVE_STOPPING)
         if first:
-            self.bus.emit(LIVE_STOPPING)
             if port is None:
                 # Ещё грузит модель: записи нет, ждать минуту незачем.
                 self._log("ассистент остановлен до старта")
                 self._kill(process)
             else:
-                try:
-                    self._request(port, "/stop", {}, REQUEST_TIMEOUT_S)
-                    self._log("ассистенту отправлена остановка")
-                except Exception as e:  # не отвечает — значит, только убить
-                    self._log(f"ассистент не принял остановку ({e}) — убиваю")
-                    self._kill(process)
+                self._send_stop(port)
         if wait and thread is not None and thread is not threading.current_thread():
             # start() запускает поток сразу после лока — дождаться этого мига.
             began = time.monotonic()
             while thread.ident is None and time.monotonic() - began < 2.0:
                 time.sleep(0.01)
             if thread.ident is not None:
-                thread.join(timeout=self._stop_timeout + 15.0)
+                thread.join(timeout=max(0.0, deadline - time.monotonic()) + 10.0)
         return {"ok": True, "action": "stopping", **self.status()}
+
+    def _send_stop(self, port: int) -> None:
+        """`POST /stop` с одной повторной попыткой. Не дошёл и он — не убиваем
+        сразу: ребёнок мог быть занят, а убийство до финализации теряет хвост
+        записи. Дальше решает дедлайн остановки."""
+        for attempt in range(1, STOP_ATTEMPTS + 1):
+            try:
+                self._request(port, "/stop", {}, REQUEST_TIMEOUT_S)
+                self._log("ассистенту отправлена остановка")
+                return
+            except Exception as e:
+                self._log(f"ассистент не принял остановку (попытка {attempt}): {e}")
+        self._log("остановка не дошла — жду дедлайна, потом убью дерево процессов")
 
     # --- наблюдение -----------------------------------------------------
 
     def _watch(self, process, endpoint: Path, path: Path, offset: int) -> None:
         error = self._await_endpoint(process, endpoint)
-        killed = False
+        killed = False  # убит по дедлайну, не дописав запись
+        finalized_at = None  # когда после /stop исчез файл эндпоинта
         while True:
             try:
                 code = process.wait(timeout=self._poll_s)
                 break
             except subprocess.TimeoutExpired:
-                with self._lock:
-                    deadline = self._stop_deadline
-                if not killed and deadline is not None and time.monotonic() >= deadline:
-                    self._log(f"ассистент не вышел за {self._stop_timeout:.0f} с — "
-                              "убиваю дерево процессов")
+                pass
+            if killed:
+                continue
+            with self._lock:
+                deadline, stopping = self._stop_deadline, self._stop_requested
+                child_pid = self._child_pid
+            now = time.monotonic()
+            if finalized_at is None and stopping and child_pid is not None \
+                    and not _endpoint_is(endpoint, child_pid):
+                finalized_at = now
+                continue
+            if finalized_at is not None:
+                if now - finalized_at >= self._finalize_grace:
+                    # Запись дописана, а процесс держит застрявший вызов
+                    # модели (до 180 с) — он больше ничего не сохранит.
+                    self._log("ассистент дописал запись, но не вышел — добиваю")
                     self._kill(process)
                     killed = True
+                continue
+            if deadline is not None and now >= deadline:
+                self._log("ассистент не дописал запись к дедлайну — "
+                          "убиваю дерево процессов")
+                self._kill(process)
+                killed = True
+        finalized = finalized_at is not None
         self._drop_endpoint(endpoint, {process.pid, self._child_pid})
-        with self._lock:
-            stopped = self._stop_requested or (code == 0 and self._active
-                                               and error is None)
-            folder = self._folder
-            if not stopped:
-                error = error or _last_line(path, offset) or \
-                    f"Ассистент завершился (код {code})"
-            self._process = None
-            self._thread = None
-            self._active = False
-            self._port = None
-            self._folder = None
-            self._started_at = None
-            self._stop_requested = False
-            self._stop_deadline = None
-            self._error = None if stopped else error
-            streams = list(self._streams)
-        for stream in streams:
-            stream.close()
-        if stopped:
-            self._log(f"ассистент остановлен: {folder}")
-            self.bus.emit(LIVE_STOPPED, folder=folder)
-        else:
-            self._log(f"ассистент упал (код {code}): {error}")
-            self.bus.emit(LIVE_FAILED, error=error, folder=folder)
+        with self._emit_lock:
+            with self._lock:
+                stop_requested = self._stop_requested
+                active = self._active
+                folder = self._folder
+                if stop_requested or (code == 0 and active and error is None):
+                    kind = LIVE_STOPPED
+                    if not active:
+                        error, complete = None, False  # остановлен до старта
+                    elif killed and not finalized:
+                        error = ("Ассистент не дописал запись за отведённое время — "
+                                 "процесс убит, запись может быть неполной")
+                        complete = False
+                    elif not killed and code != 0:
+                        # Вышел сам, но с ошибкой (например, упал финальный
+                        # проход): дорожки на диске, запись оставляем и
+                        # расшифровываем, причину показываем — из журнала.
+                        error = _last_line(path, offset) or \
+                            f"Ассистент завершился с кодом {code}"
+                        complete = True
+                    else:
+                        error, complete = None, True
+                else:
+                    kind = LIVE_FAILED
+                    complete = False
+                    error = error or _last_line(path, offset) or \
+                        f"Ассистент завершился (код {code})"
+                self._process = None
+                self._thread = None
+                self._active = False
+                self._port = None
+                self._folder = None
+                self._started_at = None
+                self._stop_requested = False
+                self._stop_deadline = None
+                self._error = error
+                streams = list(self._streams)
+            for stream in streams:
+                stream.close()
+            if kind == LIVE_STOPPED:
+                self._log(f"ассистент остановлен: {folder}"
+                          + (f" ({error})" if error else ""))
+                self.bus.emit(LIVE_STOPPED, folder=folder, error=error,
+                              complete=complete)
+            else:
+                self._log(f"ассистент упал (код {code}): {error}")
+                self.bus.emit(LIVE_FAILED, error=error, folder=folder)
 
     @staticmethod
     def _drop_endpoint(endpoint: Path, pids: set) -> None:
@@ -370,16 +462,17 @@ class LiveControl:
                     return None
             info = _read_endpoint(endpoint, process.pid)
             if info is not None:
-                with self._lock:
-                    if self._stop_requested:
-                        return None  # остановлен до старта — его уже убивают
-                    self._active = True
-                    self._port = int(info["port"])
-                    self._child_pid = info["pid"]
-                    self._folder = str(info.get("folder") or "") or None
-                    folder = self._folder
-                self._log(f"ассистент слушает встречу: {folder}")
-                self.bus.emit(LIVE_STARTED, folder=folder)
+                with self._emit_lock:
+                    with self._lock:
+                        if self._stop_requested:
+                            return None  # остановлен до старта — его уже убивают
+                        self._active = True
+                        self._port = int(info["port"])
+                        self._child_pid = info["pid"]
+                        self._folder = str(info.get("folder") or "") or None
+                        folder = self._folder
+                    self._log(f"ассистент слушает встречу: {folder}")
+                    self.bus.emit(LIVE_STARTED, folder=folder)
                 return None
             if time.monotonic() >= deadline:
                 self._kill(process)
@@ -459,7 +552,7 @@ class LiveStream:
         self._queue: queue.Queue = queue.Queue()
         self._closed = threading.Event()
         self._close_lock = threading.Lock()
-        self._conn =http.client.HTTPConnection("127.0.0.1", port,
+        self._conn = http.client.HTTPConnection("127.0.0.1", port,
                                                 timeout=REQUEST_TIMEOUT_S)
         headers = {"Accept": "text/event-stream"}
         if last_event_id:

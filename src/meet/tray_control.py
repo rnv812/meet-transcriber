@@ -225,11 +225,19 @@ class TrayControl:
         self.bus.subscribe(self._on_live_event)
 
     def _on_live_event(self, event) -> None:
-        """Ассистент штатно остановлен — та же автоматическая расшифровка,
-        что после обычной записи. Упавший сюда не попадает: его папка в
-        библиотеке, расшифровать можно вручную."""
-        if event.kind == live_control.LIVE_STOPPED and event.data.get("folder"):
-            self._on_saved(event.data["folder"], LIVE, True)
+        """Ассистент остановлен — та же автоматическая расшифровка, что после
+        обычной записи, если запись дописана (`complete`) и дорожки на месте.
+        Убитый до финализации только помечается (`source: live`), без
+        расшифровки: она шла бы по неполным дорожкам. Упавший (`live.failed`)
+        сюда не попадает: его папка в библиотеке, расшифровать можно вручную."""
+        if event.kind != live_control.LIVE_STOPPED or not event.data.get("folder"):
+            return
+        folder = Path(event.data["folder"])
+        if not folder.is_dir():
+            return
+        card = library.describe(folder)
+        full = bool(event.data.get("complete")) and bool(card and card.tracks)
+        self._on_saved(str(folder), LIVE, full)
 
     def _on_saved(self, folder: str, source: str | None, full: bool) -> None:
         """Запись штатно сохранена: пометить, откуда она, и поставить в очередь.
@@ -329,11 +337,13 @@ class TrayControl:
     def shutdown(self) -> dict:
         """Выход по просьбе оболочки: идущая запись сохраняется штатно.
 
-        Ассистенту остановка уходит сразу (он начинает дописывать дорожки),
-        а дождётся его выхода сам резидент — до остановки API (TrayApp)."""
+        Ассистента ждём здесь же, как и обычную запись (до 60 с, дальше —
+        убийство дерева): после ответа оболочка даёт резиденту всего 10 с на
+        выход, а потом гасит его вместе с ребёнком — финальный проход и
+        закрытие дорожек потерялись бы."""
         if self.tray.recording:
             self.tray.stop_recording()
-        self.live.stop()
+        self.live.stop(wait=True, timeout=live_control.SHUTDOWN_WAIT_S)
         self.tray.request_exit()
         return {"ok": True}
 
