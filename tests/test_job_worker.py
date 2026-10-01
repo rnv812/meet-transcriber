@@ -89,3 +89,28 @@ def test_model_error_becomes_job_error(tmp_path, monkeypatch, capsys):
     assert job_worker.main(["summary", str(folder)]) == 1
     errors = [x for x in _lines(capsys) if x.get("kind") == "error"]
     assert errors[-1]["text"] == "rate_limit"
+
+
+def _engine_install_note(monkeypatch, capsys, flavor, available):
+    import json
+
+    from meet import engine
+
+    card = {"flavor": "cuda" if available else "cpu", "installed": True, "missing": [],
+            "target": "C:/env",
+            "download_gb": engine.DOWNLOAD_HINT_GB["cuda" if available else "cpu"]}
+    monkeypatch.setattr(engine, "state", lambda: card)
+    monkeypatch.setattr(engine, "install", lambda flavor, on_line: 0)
+    assert job_worker._install_engine(flavor) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    return next(e["note"] for e in events if e.get("note"))
+
+
+def test_engine_install_note_shows_the_download_with_a_decimal_comma(monkeypatch, capsys):
+    # 4.5 через :.0f печаталось «~4 ГБ» (банковское округление).
+    assert _engine_install_note(monkeypatch, capsys, None, True) == "cuda, ~4,5 ГБ"
+
+
+def test_engine_install_note_follows_the_chosen_flavor(monkeypatch, capsys):
+    # Видеокарта есть, но выбран CPU — и объём скачивания у CPU.
+    assert _engine_install_note(monkeypatch, capsys, "cpu", True) == "cpu, ~0,6 ГБ"

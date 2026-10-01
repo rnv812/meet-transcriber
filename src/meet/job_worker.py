@@ -156,8 +156,11 @@ def _install_engine(flavor: str | None) -> int:
     bus.subscribe(lambda event: _emit(event.to_dict()))
     card = engine.state()
     chosen = flavor or card["flavor"]
-    bus.progress("engine", label="установка движка",
-                 note=f"{chosen}, ~{card['download_gb']:.0f} ГБ")
+    # Объём — выбранной сборки (CPU можно выбрать и при видеокарте), с
+    # десятыми через запятую: «~4,5 ГБ», а не округлённое до «~4».
+    gb = engine.DOWNLOAD_HINT_GB.get(chosen, card["download_gb"])
+    gb_text = f"{gb:.1f}".replace(".", ",").removesuffix(",0")
+    bus.progress("engine", label="установка движка", note=f"{chosen}, ~{gb_text} ГБ")
     code = engine.install(chosen, on_line=lambda line: _emit({"kind": "log", "text": line}))
     if code != 0:
         _emit({"kind": "error", "text": f"установка движка не удалась (код {code})"})

@@ -177,8 +177,8 @@ export function StepEngine({ engine, profile, recording, onRefresh, onPhase, onN
   return (
     <>
       <dl className="wizard__facts">
-        <dt>Объём</dt>
-        <dd>около {gb(engine.needs_gb)} ГБ — PyTorch и модели распознавания</dd>
+        <dt>Нужно места на диске</dt>
+        <dd>около {gb(engine.needs_gb)} ГБ — PyTorch и библиотеки распознавания (модели скачиваются отдельно, на шаге «Модели»)</dd>
         <dt>Свободно</dt>
         <dd>{engine.free_gb === null ? "неизвестно" : `${gb(engine.free_gb)} ГБ${drive ? ` на диске ${drive}` : ""}`}</dd>
       </dl>
