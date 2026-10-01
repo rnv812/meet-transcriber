@@ -215,9 +215,9 @@ export function CallPrograms({ value, processes, loadProcesses, onChange }: {
       {custom.length > 0 && (
         <ul className="callapps__chips" aria-label="Другие программы">
           {custom.map((name) => (
-            <li key={name} className="chip">
+            <li key={name} className="callchip">
               <span>{name}</span>
-              <button type="button" className="chip__remove" aria-label={`Убрать ${name}`} onClick={() => remove(name)}>×</button>
+              <button type="button" className="callchip__remove" aria-label={`Убрать ${name}`} onClick={() => remove(name)}>×</button>
             </li>
           ))}
         </ul>

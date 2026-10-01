@@ -102,9 +102,9 @@ export function BrowserCalls({ browsers, requireSite, sites, onBrowsers, onRequi
       </div>
       <ul className="callapps__chips" aria-label="Сайты звонков">
         {sites.map((site) => (
-          <li key={site} className="chip">
+          <li key={site} className="callchip">
             <span>{site}</span>
-            <button type="button" className="chip__remove" aria-label={`Убрать ${site}`}
+            <button type="button" className="callchip__remove" aria-label={`Убрать ${site}`}
               onClick={() => onSites(sites.filter((s) => s !== site))}>×</button>
           </li>
         ))}

@@ -139,15 +139,15 @@
 .callapps__name { display: flex; flex-direction: column; min-width: 0; }
 .callapps__exes { color: var(--text-3); font-size: 11px; overflow-wrap: anywhere; }
 .callapps__chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
-.chip {
+.callchip {
   display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 10px; border-radius: 12px;
   background: var(--surface-2); color: var(--text); font-size: 12px;
 }
-.chip__remove {
+.callchip__remove {
   width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none;
   color: var(--text-2); font: inherit; line-height: 1; cursor: pointer;
 }
-.chip__remove:hover, .chip__remove:focus-visible { background: var(--surface-hover); color: var(--text); }
+.callchip__remove:hover, .callchip__remove:focus-visible { background: var(--surface-hover); color: var(--text); }
 .callapps__add { display: flex; flex-direction: column; gap: 4px; max-width: 420px; }
 .callapps__add input[type="text"] {
   flex: 1; min-width: 0; background: var(--surface); color: var(--text); border: 1px solid var(--line-2);

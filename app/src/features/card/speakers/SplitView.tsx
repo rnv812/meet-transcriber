@@ -155,21 +155,21 @@ export function SplitView({
     setChoices((cur) => ({ ...cur, [key]: { ...(cur[key] ?? { to: "keep", remember: false }), ...c } }));
 
   return (
-    <section className="split" aria-label={`Разделить спикера «${label}»`}>
-      <div className="split__head">
+    <section className="spk-split" aria-label={`Разделить спикера «${label}»`}>
+      <div className="spk-split__head">
         <button type="button" className="spk-link" onClick={onBack}>← К списку спикеров</button>
-        <h4 className="split__title" ref={heading} tabIndex={-1}>Разделить «{label}» по голосу</h4>
-        <p className="muted split__lead">
+        <h4 className="spk-split__title" ref={heading} tabIndex={-1}>Разделить «{label}» по голосу</h4>
+        <p className="muted spk-split__lead">
           Если под одним спикером оказались разные люди, их реплики можно развести по голосу без повторной расшифровки.
         </p>
       </div>
       {error && <div className="card__error spk__msg" role="alert">{error}</div>}
 
       {phase.kind === "setup" && (
-        <div className="split__setup">
-          <fieldset className="split__modes">
+        <div className="spk-split__setup">
+          <fieldset className="spk-split__modes">
             <legend className="sr-only">Способ разделения</legend>
-            <label className="split__mode">
+            <label className="spk-split__mode">
               <input type="radio" name="split-mode" checked={mode === "auto"} onChange={() => setMode("auto")} />
               <span>Автоматически на</span>
               <select aria-label="Сколько голосов" value={k} disabled={mode !== "auto"}
@@ -183,7 +183,7 @@ export function SplitView({
                 <TipLine>Перед применением можно прослушать фразы каждой группы и назвать их.</TipLine>
               </HelpTip>
             </label>
-            <label className="split__mode">
+            <label className="spk-split__mode">
               <input type="radio" name="split-mode" checked={mode === "people"} onChange={() => setMode("people")} />
               <span>По образцам из базы голосов</span>
               <HelpTip label="Как работает разделение по образцам" title="По образцам из базы">
@@ -196,34 +196,34 @@ export function SplitView({
             <PeopleChoice people={people} chosen={chosen} endpoint={endpoint} avatarVersion={avatarVersion}
               onChange={setChosen} />
           )}
-          <div className="split__actions">
+          <div className="spk-split__actions">
             <Button onClick={onBack}>Отмена</Button>
             <Button variant="primary" disabled={busy || (mode === "people" && chosen.length < 2)} onClick={() => void start()}>
               Разделить по голосу
             </Button>
           </div>
-          {mode === "people" && chosen.length < 2 && <div className="muted split__hint">Выберите хотя бы двух людей</div>}
+          {mode === "people" && chosen.length < 2 && <div className="muted spk-split__hint">Выберите хотя бы двух людей</div>}
         </div>
       )}
 
       {phase.kind === "working" && (
-        <div className="split__work" role="status" aria-live="polite">
+        <div className="spk-split__work" role="status" aria-live="polite">
           <div>Считаются голоса реплик{job?.total ? `: ${job.done ?? 0} из ${job.total}` : "…"}</div>
           <div className="progress">
             <div className="progress__bar" style={{ width: job?.total ? `${Math.round(((job.done ?? 0) / job.total) * 100)}%` : "100%" }} />
           </div>
-          <div className="muted split__hint">
+          <div className="muted spk-split__hint">
             {job?.state === "queued" ? "Задача в очереди. " : ""}
             Это делается один раз: следующие разделения этой встречи будут мгновенными.
           </div>
-          <div className="split__actions"><Button onClick={() => void cancel()}>Отменить</Button></div>
+          <div className="spk-split__actions"><Button onClick={() => void cancel()}>Отменить</Button></div>
         </div>
       )}
 
       {phase.kind === "preview" && (
-        <div className="split__preview">
+        <div className="spk-split__preview">
           {phase.preview.mode === "auto" && (
-            <label className="split__k">
+            <label className="spk-split__k">
               Голосов:
               <select aria-label="Сколько голосов" value={k} disabled={busy}
                 onChange={(e) => {
@@ -236,12 +236,12 @@ export function SplitView({
               </select>
             </label>
           )}
-          <div className="muted split__hint">
+          <div className="muted spk-split__hint">
             {phase.preview.segments} {plural(phase.preview.segments, "реплика", "реплики", "реплик")}, голос посчитан у {phase.preview.voiced}.
             Прослушайте фразы и выберите, кому отдать каждую группу.
           </div>
           {phase.preview.mode === "auto" && (phase.preview.similar ?? 0) >= SAME_VOICE && (
-            <div className="spk__warn split__hint" role="status">
+            <div className="spk__warn spk-split__hint" role="status">
               Голоса групп очень похожи ({pct(phase.preview.similar ?? 0)}): скорее всего, это один человек.
               Прослушайте фразы, прежде чем применять разделение.
             </div>
@@ -262,8 +262,8 @@ export function SplitView({
               onPick={() => setPicking((p) => (p === "unsure" ? null : "unsure"))}
               onChoice={(c) => { setChoice("unsure", c); setPicking(null); }} />
           )}
-          <div className="muted split__hint">Итоги не пересчитываются автоматически. Изменение можно отменить.</div>
-          <div className="split__actions">
+          <div className="muted spk-split__hint">Итоги не пересчитываются автоматически. Изменение можно отменить.</div>
+          <div className="spk-split__actions">
             <Button onClick={() => setPhase({ kind: "setup" })} disabled={busy}>Назад</Button>
             <Button variant="primary" disabled={busy} onClick={() => void apply(phase.preview)}>Применить разделение</Button>
           </div>
@@ -301,7 +301,7 @@ function GroupCard({
 }) {
   const named = choice.to !== "keep" && choice.to !== null && !isUnnamed(choice.to);
   return (
-    <section className={`spk-row split-group${unsure ? " split-group--unsure" : ""}`} aria-label={title}>
+    <section className={`spk-row spk-split-group${unsure ? " spk-split-group--unsure" : ""}`} aria-label={title}>
       <div className="spk-row__who">
         <div className="spk-row__name">{title}</div>
         <div className="spk-row__stats muted num">
@@ -310,7 +310,7 @@ function GroupCard({
         <div className="spk-row__bar" aria-hidden="true"><span style={{ width: pct(group.share) }} /></div>
       </div>
       {unsure && (
-        <div className="muted split__hint">
+        <div className="muted spk-split__hint">
           Голос этих реплик не похож уверенно ни на одного из выбранных людей. По умолчанию они остаются за «{label}» — проверьте их вручную.
         </div>
       )}
@@ -353,7 +353,7 @@ function GroupCard({
         </button>
       </div>
       {picking && (
-        <div className="split__pick">
+        <div className="spk-split__pick">
           <button type="button" className="spk-opt" onClick={() => onChoice({ to: "keep", remember: false })}>
             <span className="spk-opt__icon" aria-hidden="true">=</span>
             <span>Оставить за «{label}»</span>
@@ -386,12 +386,12 @@ function PeopleChoice({ people, chosen, endpoint, avatarVersion, onChange }: {
   const [q, setQ] = useState("");
   const fold = (s: string) => s.trim().toLowerCase().replace(/ё/g, "е");
   const shown = people.filter((p) => !q || fold(p.name).includes(fold(q)));
-  if (!people.length) return <div className="muted split__hint">В базе голосов пока никого нет.</div>;
+  if (!people.length) return <div className="muted spk-split__hint">В базе голосов пока никого нет.</div>;
   return (
-    <div className="split__people" role="group" aria-label="Кто говорил под этим спикером">
+    <div className="spk-split__people" role="group" aria-label="Кто говорил под этим спикером">
       <input className="spk-pick__input" type="search" placeholder="Поиск по базе голосов" aria-label="Поиск по базе голосов"
         value={q} onChange={(e) => setQ(e.target.value)} />
-      <ul className="split__plist">
+      <ul className="spk-split__plist">
         {shown.map((p) => (
           <li key={p.name}>
             <label className="spk-opt">
