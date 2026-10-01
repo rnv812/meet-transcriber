@@ -310,6 +310,10 @@ class ControlServer:
         clear_endpoint(pid)
 
 
+# Сколько непрочитанного маршрутом тела запроса дочитывать перед закрытием
+# соединения (см. Handler._drain); больше — соединение просто закрывается.
+DRAIN_LIMIT = 16 * 1024 * 1024
+
 # Сентинел: маршрут сам записал ответ потоком (SSE, Range-аудио, файл).
 _STREAMED = object()
 
@@ -366,27 +370,52 @@ def _make_handler(server: ControlServer):
                 given = params["token"][0]
             return bool(given) and secrets.compare_digest(given, server.token)
 
-        def _body(self) -> dict:
+        def _length(self) -> int:
             try:
-                length = int(self.headers.get("Content-Length") or 0)
+                return max(0, int(self.headers.get("Content-Length") or 0))
             except ValueError:
-                return {}
+                return 0
+
+        def _read(self, length: int) -> bytes:
+            self._consumed = True
+            return self.rfile.read(length)
+
+        def _drain(self) -> None:
+            """Дочитать тело, которое маршрут не прочёл (ему оно не нужно,
+            запрос отклонён до разбора). Закрытый с непрочитанными байтами сокет
+            Windows обрывает RST вместо FIN — и клиент теряет уже отправленный
+            ответ (WinError 10053/10054). Слишком большое тело не читаем:
+            соединение и так закрывается."""
+            if getattr(self, "_consumed", False):
+                return
+            self._consumed = True
+            length = self._length()
+            if not length:
+                return
+            if length > DRAIN_LIMIT:
+                self.close_connection = True
+                return
+            try:
+                self.rfile.read(length)
+            except OSError:
+                self.close_connection = True
+
+        def _body(self) -> dict:
+            length = self._length()
             if length <= 0:
+                self._consumed = True
                 return {}
             try:
-                data = json.loads(self.rfile.read(length).decode("utf-8"))
+                data = json.loads(self._read(length).decode("utf-8"))
             except (ValueError, UnicodeDecodeError):
                 raise BadRequest("ожидается JSON (UTF-8)")
             return data if isinstance(data, dict) else {}
 
         def _raw_body(self, limit: int = 10 * 1024 * 1024) -> bytes:
-            try:
-                length = int(self.headers.get("Content-Length") or 0)
-            except ValueError:
-                length = 0
+            length = self._length()
             if length <= 0 or length > limit:
                 raise BadRequest("пустое или слишком большое тело (до 10 МБ)")
-            return self.rfile.read(length)
+            return self._read(length)
 
         def _send_file(self, path, content_type: str) -> None:
             if path is None or not path.exists():
@@ -427,6 +456,13 @@ def _make_handler(server: ControlServer):
             self._dispatch("DELETE")
 
         def _dispatch(self, method: str) -> None:
+            self._consumed = False
+            try:
+                self._route(method)
+            finally:
+                self._drain()
+
+        def _route(self, method: str) -> None:
             url = urlparse(self.path)
             params = parse_qs(url.query)
             if not _origin_allowed(self.headers.get("Origin")):

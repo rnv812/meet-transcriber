@@ -735,6 +735,41 @@ def test_live_stop_command_when_not_live(server, capsys):
     assert "не запущен" in capsys.readouterr().out
 
 
+def _raw_post(srv, path: str, body: bytes, *, token: str | None = None) -> bytes:
+    """POST сырым сокетом, как его шлёт urllib: Connection: close, заголовки и
+    тело — двумя send() (так делает http.client). Перед чтением ответа —
+    пауза: к этому моменту сервер уже ответил и закрыл соединение."""
+    head = (f"POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n"
+            f"Authorization: Bearer {token or srv.token}\r\n"
+            f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n")
+    with socket.create_connection(("127.0.0.1", srv.port), timeout=5) as sock:
+        sock.sendall(head.encode("utf-8"))
+        time.sleep(0.05)
+        sock.sendall(body)
+        time.sleep(0.3)
+        chunks = []
+        while True:
+            chunk = sock.recv(65536)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+
+
+@pytest.mark.parametrize("token", [None, "wrong"])
+@pytest.mark.parametrize("size", [0, 200_000])
+def test_unread_request_body_does_not_reset_the_connection(server, token, size):
+    """Маршрут, которому тело не нужно (`POST /live/stop` от `meet live-stop`
+    шлёт `{}`), всё равно его дочитывает. Иначе сервер закрывал сокет с
+    непрочитанными байтами, Windows отвечала RST вместо FIN, и клиент терял
+    уже отправленный ответ (WinError 10053/10054) — тот самый «флакающий»
+    test_live_stop_command_when_not_live в полном прогоне."""
+    server.state.live_stop = lambda: {"ok": False, "action": "not-live"}
+    body = b"{}" if not size else b'{"x": "' + b"a" * size + b'"}'
+    reply = _raw_post(server, "/live/stop", body, token=token)
+    assert reply.startswith(b"HTTP/1.1 200" if token is None else b"HTTP/1.1 401")
+    assert reply.rstrip().endswith(b"}")
+
+
 def test_live_stop_command_without_resident(monkeypatch, tmp_path):
     monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
     from meet import cli
