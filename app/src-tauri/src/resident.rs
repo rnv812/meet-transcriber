@@ -331,8 +331,31 @@ pub enum ResidentStatus {
     Failed {
         log: PathBuf,
     },
+    /// Релиз без движка своей версии (первый запуск, обновление): резидента
+    /// ещё нет, его поставит мастер в окне. Не сбой — без уведомления.
+    EngineMissing,
     /// «Выход»: резидент сохраняет запись и гасится, затем выйдет оболочка.
     Quitting,
+}
+
+/// Что делать, когда ни один кандидат не запустился.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoCandidate {
+    /// Ждать установки движка молча (`EngineMissing`).
+    EngineMissing,
+    /// Сдаться: `Failed` и уведомление.
+    GiveUp,
+}
+
+/// Релиз без установленного движка текущей версии — резидента и не должно
+/// быть, пока мастер его не поставит. В dev резидент берётся из `.venv`, и
+/// его отсутствие — по-прежнему сбой.
+pub fn no_candidate(dev: bool, engine_installed: bool) -> NoCandidate {
+    if !dev && !engine_installed {
+        NoCandidate::EngineMissing
+    } else {
+        NoCandidate::GiveUp
+    }
 }
 
 /// «Перезапустить сервис»: только из `Failed` (надзор уже закончился).
@@ -431,11 +454,23 @@ impl Supervisor {
 
     /// «Перезапустить сервис» из трея: сдавшийся надзор начинается заново,
     /// с нулевым счётчиком перезапусков.
+    ///
+    /// Под тем же замком, что `respawn`/`stop_if_from`/`shutdown`, и с новым
+    /// поколением: иначе клик посреди `respawn` поднял бы второй поток надзора
+    /// того же поколения — и второй резидент. Замок занят (идёт `respawn` или
+    /// «Выход») — клик ничего не делает: зовётся из меню трея, главный поток
+    /// ждать не должен, а надзор и так начинается заново.
     pub fn restart(&self, app: &AppHandle) {
+        let _gate = match self.inner.shutdown_gate.try_lock() {
+            Ok(gate) => gate,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => return,
+        };
         if self.quitting() || !begin_restart(&mut lock(&self.inner.status)) {
             return;
         }
         shell_log!("перезапуск сервиса по просьбе пользователя");
+        self.inner.generation.fetch_add(1, Ordering::SeqCst);
         self.supervise_in_background(app);
     }
 
@@ -555,8 +590,20 @@ impl Supervisor {
             self.set_status(generation, ResidentStatus::Starting);
             let Some((pid, from_engine)) = self.spawn(&list, generation, &engine) else {
                 if self.current(generation) {
-                    shell_log!("резидент не найден ни по одному пути");
-                    self.give_up(app, generation);
+                    let installed = engine::is_installed(&engine.env_dir, &engine.version);
+                    match no_candidate(cfg!(debug_assertions), installed) {
+                        NoCandidate::EngineMissing => {
+                            shell_log!(
+                                "движок {} не установлен — резидент запустится после мастера",
+                                engine.version
+                            );
+                            self.set_status(generation, ResidentStatus::EngineMissing);
+                        }
+                        NoCandidate::GiveUp => {
+                            shell_log!("резидент не найден ни по одному пути");
+                            self.give_up(app, generation);
+                        }
+                    }
                 }
                 return;
             };
@@ -990,6 +1037,18 @@ mod tests {
         let exe_dir = Path::new(r"C:\repo\app\src-tauri\target\release");
         let list = candidates(exe_dir, None, &data.0, "0.2.0", false);
         assert_eq!(list, vec![PathBuf::from("meet-tray.exe")]);
+    }
+
+    #[test]
+    fn release_without_engine_waits_for_the_wizard_silently() {
+        // Первый запуск и каждое обновление версии: резидента ещё нет — это
+        // не сбой, уведомлять не о чем.
+        assert_eq!(no_candidate(false, false), NoCandidate::EngineMissing);
+        // Движок стоит, а резидент не нашёлся/не запустился — сбой.
+        assert_eq!(no_candidate(false, true), NoCandidate::GiveUp);
+        // Dev — как раньше: без .venv это сбой с уведомлением.
+        assert_eq!(no_candidate(true, false), NoCandidate::GiveUp);
+        assert_eq!(no_candidate(true, true), NoCandidate::GiveUp);
     }
 
     #[test]

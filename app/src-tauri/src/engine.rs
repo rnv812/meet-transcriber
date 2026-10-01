@@ -48,6 +48,8 @@ const ENGINE: &str = "engine";
 const PYTHON: &str = "python";
 /// Маркер законченной установки: пишется последним, после всех шагов.
 const MARKER: &str = "installed.json";
+/// Межпроцессный замок установки в `engine` (pid держателя).
+const INSTALL_LOCK: &str = "install.lock";
 const LAUNCHER: &str = "meet-tray.exe";
 const WHEEL_PREFIX: &str = "meet_transcriber-";
 const UV: &str = "uv.exe";
@@ -124,8 +126,11 @@ pub fn uv_steps(uv: &str, env_dir: &str, wheel: &str, profile: &str) -> Vec<Vec<
 /// окружение строится только на этом Python, а не на системном (удалят
 /// системный — движок не сломается). `UV_VENV_CLEAR`: uv 0.8+ отказывается
 /// создавать venv поверх существующего, а повторная установка после сбоя
-/// должна просто пройти все шаги заново. Кэш uv — по умолчанию: на нём
-/// держится докачка.
+/// должна просто пройти все шаги заново. Он же делает правильной смену
+/// профиля cpu↔cuda на той же версии: без очистки `uv pip install torch` с
+/// другим индексом счёл бы стоящий torch подходящим и оставил чужую сборку.
+/// Кэш uv — по умолчанию: на нём держится докачка, так что очистка стоит
+/// только перекладки файлов из кэша.
 pub fn uv_env(data_dir: &Path) -> Vec<(&'static str, OsString)> {
     vec![
         (
@@ -237,26 +242,30 @@ pub fn parse_gpu(stdout: &str) -> Option<String> {
         .map(String::from)
 }
 
-/// Колесо meet в ресурсах: своей версии, а если такого нет — любое
-/// `meet_transcriber-*.whl` (последнее по имени).
+/// Колесо meet в ресурсах: своей версии, а если такого нет — самое свежее
+/// по времени изменения `meet_transcriber-*.whl`. Сравнивать версии из имён
+/// не берёмся: PEP 440 (`0.2.0rc1`, `0.2.0.post1`) не сводится к сортировке
+/// строк, а сборка кладёт ровно одно колесо — запасной путь лишь на случай
+/// расхождения версий колеса и приложения.
 pub fn find_wheel(dir: &Path, version: &str) -> Option<PathBuf> {
     let exact = dir.join(format!("{WHEEL_PREFIX}{version}-py3-none-any.whl"));
     if exact.is_file() {
         return Some(exact);
     }
-    let mut wheels: Vec<PathBuf> = fs::read_dir(dir)
+    fs::read_dir(dir)
         .ok()?
         .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file())
-        .filter(|path| {
-            path.file_name()
-                .map(|name| name.to_string_lossy())
-                .is_some_and(|name| name.starts_with(WHEEL_PREFIX) && name.ends_with(".whl"))
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(WHEEL_PREFIX) && name.ends_with(".whl")
         })
-        .collect();
-    wheels.sort();
-    wheels.pop()
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok().filter(|meta| meta.is_file())?;
+            Some((meta.modified().ok()?, entry.path()))
+        })
+        .max()
+        .map(|(_, path)| path)
 }
 
 /// Где лежит `file` из ресурсов. Релизный конфиг (`tauri.release.conf.json`,
@@ -294,27 +303,184 @@ pub fn push_tail(tail: &mut VecDeque<String>, line: String) {
     }
 }
 
-/// Не чаще одного раза за `gap`.
+/// Строки в окно — не чаще одной за `gap`. Придержанная последней строка
+/// не теряется: `flush` в конце шага отдаёт её, чтобы окно показывало, чем
+/// шаг на самом деле закончился.
 pub struct Throttle {
     gap: Duration,
     last: Option<Instant>,
+    pending: Option<String>,
 }
 
 impl Throttle {
     pub fn new(gap: Duration) -> Self {
-        Throttle { gap, last: None }
+        Throttle {
+            gap,
+            last: None,
+            pending: None,
+        }
     }
 
-    pub fn allow(&mut self, now: Instant) -> bool {
+    /// Строку пора показать — `Some`; рано — она придержана до следующей
+    /// или до `flush`.
+    pub fn offer(&mut self, now: Instant, line: String) -> Option<String> {
         if self
             .last
             .is_some_and(|last| now.saturating_duration_since(last) < self.gap)
         {
-            return false;
+            self.pending = Some(line);
+            return None;
         }
         self.last = Some(now);
-        true
+        self.pending = None;
+        Some(line)
     }
+
+    /// Придержанная строка, если последней показана не она.
+    pub fn flush(&mut self) -> Option<String> {
+        self.pending.take()
+    }
+}
+
+/// Что делать с `install.lock`, оставленным установкой (`raw` — его
+/// содержимое, `None` — файла нет).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockDecision {
+    /// Файла нет — создаём свой.
+    Create,
+    /// Держатель умер (или файл не читается) — забираем.
+    TakeOver,
+    /// Держатель жив — установка уже идёт в другом процессе.
+    Busy,
+}
+
+pub fn lock_decision(raw: Option<&str>, alive: impl Fn(u32) -> bool) -> LockDecision {
+    let Some(raw) = raw else {
+        return LockDecision::Create;
+    };
+    match resident::lock_holder(raw) {
+        Some(pid) if pid != std::process::id() && alive(pid) => LockDecision::Busy,
+        _ => LockDecision::TakeOver,
+    }
+}
+
+/// Межпроцессный замок установки `engine\install.lock` с pid держателя:
+/// вторая оболочка (другой `MEET_DATA_DIR` не в счёт — у неё своя папка)
+/// или оболочка, перезапущенная, пока uv прежней ещё дорабатывал, не
+/// запускает второй uv в то же окружение. Снимается при выходе из `install`.
+struct InstallLock(PathBuf);
+
+impl InstallLock {
+    fn acquire(engine_root: &Path) -> Result<InstallLock, String> {
+        let path = engine_root.join(INSTALL_LOCK);
+        fs::create_dir_all(engine_root)
+            .map_err(|error| format!("Не удалось создать папку движка: {error}"))?;
+        let raw = fs::read_to_string(&path).ok();
+        match lock_decision(raw.as_deref(), resident::pid_alive) {
+            LockDecision::Busy => return Err(BUSY.to_string()),
+            LockDecision::TakeOver => {
+                shell_log!("забираю брошенный замок установки {}", path.display());
+                let _ = fs::remove_file(&path);
+            }
+            LockDecision::Create => {}
+        }
+        let body = format!("{{\"pid\": {}}}", std::process::id());
+        // create_new: из двух процессов, одновременно забравших брошенный
+        // замок, файл создаст только один.
+        File::options()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .and_then(|mut file| file.write_all(body.as_bytes()))
+            .map_err(|error| match error.kind() {
+                io::ErrorKind::AlreadyExists => BUSY.to_string(),
+                _ => format!("Не удалось создать замок установки: {error}"),
+            })?;
+        Ok(InstallLock(path))
+    }
+}
+
+impl Drop for InstallLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+/// Job object с KILL_ON_JOB_CLOSE: uv и всё, что он запустил, умирают
+/// вместе с оболочкой — при «Выходе» и при падении (хэндл закрывает
+/// Windows). Иначе скрытый uv остался бы сиротой и дописывал окружение
+/// наперегонки со следующей установкой.
+#[cfg(windows)]
+pub struct Job(windows_sys::Win32::Foundation::HANDLE);
+
+// SAFETY: хэндл job object — просто число ядра; вызовы с ним потокобезопасны.
+#[cfg(windows)]
+unsafe impl Send for Job {}
+#[cfg(windows)]
+unsafe impl Sync for Job {}
+
+#[cfg(windows)]
+impl Job {
+    pub fn kill_on_close() -> Option<Job> {
+        use windows_sys::Win32::System::JobObjects::{
+            CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+        // SAFETY: безымянный job без атрибутов; структура лимитов — локальная,
+        // нулевая инициализация для неё допустима (POD), размер передаётся.
+        unsafe {
+            let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if handle.is_null() {
+                return None;
+            }
+            let job = Job(handle);
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                job.0,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            (ok != 0).then_some(job)
+        }
+    }
+
+    pub fn assign(&self, child: &std::process::Child) -> bool {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+        // SAFETY: оба хэндла живы на время вызова.
+        unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) != 0 }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for Job {
+    fn drop(&mut self) {
+        // SAFETY: хэндл наш и закрывается ровно один раз.
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+/// Job оболочки для процессов установки: живёт до конца процесса (static
+/// не освобождается), закрывает его Windows при выходе.
+#[cfg(windows)]
+fn install_job() -> Option<&'static Job> {
+    static JOB: std::sync::OnceLock<Option<Job>> = std::sync::OnceLock::new();
+    JOB.get_or_init(Job::kill_on_close).as_ref()
+}
+
+/// Привязать процесс установки к job оболочки. Не вышло — установка идёт
+/// дальше: без job хуже только уборка после аварийного выхода.
+fn bind_to_shell(child: &std::process::Child) {
+    #[cfg(windows)]
+    if !install_job().is_some_and(|job| job.assign(child)) {
+        shell_log!("процесс установки (pid {}) не привязан к job", child.id());
+    }
+    #[cfg(not(windows))]
+    let _ = child;
 }
 
 static INSTALLING: AtomicBool = AtomicBool::new(false);
@@ -415,6 +581,9 @@ pub fn run_streamed(
     }
     resident::hide_console(&mut command);
     let mut child = command.spawn()?;
+    // Сразу после запуска: дочерние процессы uv, созданные после привязки,
+    // попадают в тот же job сами.
+    bind_to_shell(&child);
     let (sender, receiver) = mpsc::channel();
     let streams: [Option<Box<dyn Read + Send>>; 2] = [
         child
@@ -469,8 +638,9 @@ fn forward_lines(stream: impl Read, sender: &mpsc::Sender<String>) {
     }
 }
 
-/// `logs\engine-install.log`: весь вывод uv со временем. Журнал не открылся
-/// — установка идёт без него.
+/// `logs\engine-install.log`: весь вывод uv со временем. Открывается тем же
+/// `logs::open_append`, что `resident.log`: больше 1 МБ — сначала уезжает в
+/// `.1` (`logs::rotate`). Журнал не открылся — установка идёт без него.
 struct InstallLog(Option<File>);
 
 impl InstallLog {
@@ -521,6 +691,13 @@ pub fn install(app: &AppHandle, profile: &str, fresh: bool) -> Result<(), String
     let env = env_dir(&data, &version);
     let resources = resource_dir_with(app, UV).ok_or(NO_UV)?;
     let wheel = find_wheel(&resources, &version).ok_or(NO_WHEEL)?;
+    // Повторная установка: места не хватает — отказ раньше, чем гасить
+    // работающий резидент. Переустановка проверяет место после удаления
+    // окружения (`prepare`): оно само его и освобождает.
+    if !fresh {
+        check_space(&data, profile)?;
+    }
+    let _lock = InstallLock::acquire(&engine_root(&data))?;
     let supervisor = app.state::<Supervisor>();
     // Резидент из этого окружения держит его файлы: uv не пересоздаст venv
     // под работающим python.exe, а удалить папку не даст Windows.
@@ -552,24 +729,35 @@ pub fn install(app: &AppHandle, profile: &str, fresh: bool) -> Result<(), String
     result
 }
 
-/// До шагов: переустановка удаляет окружение, проверяется место, снимается
-/// маркер (прерванная установка не должна выглядеть законченной).
+/// Хватит ли места на диске с данными под профиль; не узнать — не мешаем.
+fn check_space(data_dir: &Path, profile: &str) -> Result<(), String> {
+    match free_gb(data_dir).and_then(|free| space_error(needs_gb(profile), free)) {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+/// До шагов: снимается маркер (прерванная установка не должна выглядеть
+/// законченной — в том числе когда удаление ниже споткнулось на занятом
+/// файле и окружение осталось наполовину), переустановка удаляет окружение
+/// и проверяет место.
 fn prepare(data_dir: &Path, env: &Path, profile: &str, fresh: bool) -> Result<(), String> {
-    if fresh && env.exists() {
-        fs::remove_dir_all(env).map_err(|error| {
-            format!(
-                "Не удалось удалить прежний движок ({}): {error}",
-                env.display()
-            )
-        })?;
-    }
-    if let Some(error) = free_gb(data_dir).and_then(|free| space_error(needs_gb(profile), free)) {
-        return Err(error);
-    }
     match fs::remove_file(env.join(MARKER)) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(format!("Не удалось снять отметку установки: {error}")),
+    }
+    if fresh {
+        if env.exists() {
+            fs::remove_dir_all(env).map_err(|error| {
+                format!(
+                    "Не удалось удалить прежний движок ({}): {error}. Закройте программы, \
+                     запущенные из движка, и повторите",
+                    env.display()
+                )
+            })?;
+        }
+        check_space(data_dir, profile)?;
     }
     fs::create_dir_all(engine_root(data_dir))
         .map_err(|error| format!("Не удалось создать папку движка: {error}"))
@@ -610,11 +798,14 @@ fn run_steps(
         let mut throttle = Throttle::new(LINE_GAP);
         let outcome = run_streamed(argv, &envs, &cwd, |line| {
             log.write(&line);
-            if throttle.allow(Instant::now()) {
-                progress(step, line.clone());
+            if let Some(shown) = throttle.offer(Instant::now(), line.clone()) {
+                progress(step, shown);
             }
             push_tail(&mut tail, line);
         });
+        if let Some(last) = throttle.flush() {
+            progress(step, last);
+        }
         let failure = match outcome {
             Ok(Some(0)) => None,
             Ok(Some(code)) => Some(format!("шаг {step} из {of} ({title}): код выхода {code}")),
@@ -643,9 +834,12 @@ fn run_steps(
 static CLEANED: AtomicBool = AtomicBool::new(false);
 
 /// Удалить окружения прежних версий — один раз за жизнь оболочки, в своём
-/// потоке (гигабайты). Зовётся, когда резидент из окружения текущей версии
-/// ответил: до этого старое — запасной вариант. Не удалилось (файлы заняты)
-/// — попробуем при следующем запуске.
+/// потоке (гигабайты). Старые окружения резидентом не используются никогда
+/// (кандидат — только окружение своей версии); ждём ответа резидента
+/// текущей версии лишь затем, чтобы не удалять, пока новый движок не
+/// доказал, что работает: откат на прежнюю версию приложения найдёт своё
+/// окружение на месте. Не удалилось (файлы заняты) — попробуем при
+/// следующем запуске.
 pub fn remove_stale_in_background(data_dir: PathBuf, current: String) {
     if CLEANED.swap(true, Ordering::SeqCst) {
         return;
@@ -892,6 +1086,22 @@ mod tests {
     }
 
     #[test]
+    fn without_exact_wheel_the_newest_file_wins_not_the_name_order() {
+        // По строкам «0.1.9» > «0.1.10»; решает время файла, а не имя.
+        let tree = TempDir::new("wheel-mtime");
+        let older = tree.file("meet_transcriber-0.1.9-py3-none-any.whl", "");
+        let newer = tree.file("meet_transcriber-0.1.10-py3-none-any.whl", "");
+        let hour_ago = SystemTime::now() - Duration::from_secs(3600);
+        File::options()
+            .write(true)
+            .open(&older)
+            .unwrap()
+            .set_modified(hour_ago)
+            .unwrap();
+        assert_eq!(find_wheel(&tree.0, "0.2.0"), Some(newer));
+    }
+
+    #[test]
     fn ffmpeg_dir_goes_first_in_path() {
         let joined = path_with(
             Path::new(r"C:\app\resources"),
@@ -921,13 +1131,112 @@ mod tests {
     #[test]
     fn throttle_lets_through_at_most_one_line_per_gap() {
         let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
         let mut throttle = Throttle::new(Duration::from_millis(100));
-        assert!(throttle.allow(start), "первая строка — сразу");
-        assert!(!throttle.allow(start + Duration::from_millis(30)));
-        assert!(!throttle.allow(start + Duration::from_millis(99)));
-        assert!(throttle.allow(start + Duration::from_millis(100)));
-        assert!(!throttle.allow(start + Duration::from_millis(150)));
-        assert!(throttle.allow(start + Duration::from_millis(260)));
+        let mut offer = |ms: u64, line: &str| throttle.offer(at(ms), line.to_string());
+        assert_eq!(offer(0, "a").as_deref(), Some("a"), "первая строка — сразу");
+        assert_eq!(offer(30, "b"), None);
+        assert_eq!(offer(99, "c"), None);
+        assert_eq!(offer(100, "d").as_deref(), Some("d"));
+        assert_eq!(offer(150, "e"), None);
+        assert_eq!(offer(260, "f").as_deref(), Some("f"));
+    }
+
+    #[test]
+    fn throttle_flushes_the_last_held_line_at_step_end() {
+        let start = Instant::now();
+        let mut throttle = Throttle::new(Duration::from_millis(100));
+        assert!(throttle.offer(start, "скачиваю".into()).is_some());
+        assert_eq!(
+            throttle.offer(start + Duration::from_millis(10), "a".into()),
+            None
+        );
+        assert_eq!(
+            throttle.offer(start + Duration::from_millis(20), "готово".into()),
+            None
+        );
+        assert_eq!(throttle.flush().as_deref(), Some("готово"));
+        assert_eq!(throttle.flush(), None, "второй раз — нечего");
+        // Последняя строка уже показана — досылать нечего.
+        assert!(throttle
+            .offer(start + Duration::from_millis(500), "x".into())
+            .is_some());
+        assert_eq!(throttle.flush(), None);
+    }
+
+    #[test]
+    fn install_lock_belongs_to_a_living_other_process() {
+        let me = std::process::id();
+        assert_eq!(lock_decision(None, |_| true), LockDecision::Create);
+        assert_eq!(
+            lock_decision(Some(r#"{"pid": 4242}"#), |pid| pid == 4242),
+            LockDecision::Busy
+        );
+        assert_eq!(
+            lock_decision(Some(r#"{"pid": 4242}"#), |_| false),
+            LockDecision::TakeOver,
+            "держатель умер — замок брошен"
+        );
+        assert_eq!(
+            lock_decision(Some("мусор"), |_| true),
+            LockDecision::TakeOver
+        );
+        // Свой pid в файле — остаток этого же процесса, а не чужая установка.
+        assert_eq!(
+            lock_decision(Some(&format!(r#"{{"pid": {me}}}"#)), |_| true),
+            LockDecision::TakeOver
+        );
+    }
+
+    #[test]
+    fn install_lock_file_is_created_refused_taken_over_and_removed() {
+        let root = TempDir::new("install-lock");
+        let path = root.0.join("install.lock");
+        let lock = InstallLock::acquire(&root.0).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert_eq!(resident::lock_holder(&raw), Some(std::process::id()));
+        drop(lock);
+        assert!(!path.exists(), "снимается по окончании");
+        // Живой чужой держатель — отдельный процесс на время проверки.
+        let mut parent = Command::new("cmd")
+            .args(["/C", "ping -n 30 127.0.0.1 >nul"])
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        fs::write(&path, format!(r#"{{"pid": {}}}"#, parent.id())).unwrap();
+        assert_eq!(
+            InstallLock::acquire(&root.0).err().as_deref(),
+            Some("Установка уже идёт")
+        );
+        parent.kill().unwrap();
+        parent.wait().unwrap();
+        drop(parent);
+        // Держатель умер — замок забирается.
+        let lock = InstallLock::acquire(&root.0).unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        assert_eq!(resident::lock_holder(&raw), Some(std::process::id()));
+        drop(lock);
+    }
+
+    #[test]
+    fn closing_the_job_kills_its_processes() {
+        let job = Job::kill_on_close().unwrap();
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping -n 30 127.0.0.1 >nul"])
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        assert!(job.assign(&child));
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "пока job жив — работает"
+        );
+        drop(job); // как выход оболочки: Windows закрывает хэндл
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while child.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "процесс пережил закрытие job");
+            thread::sleep(Duration::from_millis(50));
+        }
     }
 
     #[test]

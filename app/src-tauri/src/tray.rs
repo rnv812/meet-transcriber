@@ -635,6 +635,9 @@ pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
     if *status == ResidentStatus::ExternalNoApi {
         return "meet — работает старая версия записи (меню недоступно)".to_string();
     }
+    if *status == ResidentStatus::EngineMissing {
+        return "meet — движок не установлен — откройте окно".to_string();
+    }
     let text = match view {
         None => "сервис записи не запущен".to_string(),
         Some(view) if view.recording => {
@@ -1557,6 +1560,19 @@ mod tests {
         assert!(!m.online);
         assert_eq!(m.log, Some(log));
         assert!(m.restart, "рядом с журналом — «Перезапустить сервис»");
+    }
+
+    #[test]
+    fn missing_engine_points_to_the_window_without_log_or_restart() {
+        let missing = ResidentStatus::EngineMissing;
+        assert_eq!(
+            tooltip(None, &missing),
+            "meet — движок не установлен — откройте окно"
+        );
+        let m = menu_state(None, &missing);
+        assert!(!m.online);
+        assert_eq!(m.log, None);
+        assert!(!m.restart, "перезапускать нечего — движок ставит мастер");
     }
 
     #[test]

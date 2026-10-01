@@ -33,10 +33,13 @@ serde_json = "1"
 [target.'cfg(windows)'.dependencies]
 # Жив ли держатель tray.lock (OpenProcess + GetExitCodeProcess): старый
 # резидент без API оболочка не трогает, пока он жив. Свободное место перед
-# установкой движка — GetDiskFreeSpaceExW.
+# установкой движка — GetDiskFreeSpaceExW; uv в job object, чтобы он умирал
+# вместе с оболочкой.
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Storage_FileSystem",
+    "Win32_System_JobObjects",
     "Win32_System_Threading",
 ] }
 
