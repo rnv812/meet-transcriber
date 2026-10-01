@@ -28,8 +28,9 @@ const liveOf = (r: LiveStatus): LiveStatus => ({
  * «▾» рядом с «Начать запись» — меню с записью «С ассистентом» (живой режим).
  * При нём `snapshot.status` остаётся "idle", а состояние — в `snapshot.live`;
  * часы живого режима идут от `started_at` (стенное время резидента, когда
- * ассистент начал слушать; неизвестно — без часов). Чем кончился прошлый
- * живой режим (`live.error`), видно, пока не начат следующий.
+ * ассистент начал слушать; неизвестно — без часов). Ошибка живого режима
+ * (`live.error`) видна несколько секунд с момента, как появилась в снимке;
+ * любую ошибку можно скрыть «×».
  */
 export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, onSnapshot }: {
   endpoint: Endpoint | null;
@@ -50,6 +51,31 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   }, [error]);
   const recording = snapshot?.status === "recording";
   const live = snapshot?.live;
+  // Ошибка прошлого живого режима — уведомление о событии, а не состояние:
+  // показываем, только когда она появилась (переход), а не всё время
+  // простоя. Первый снимок — точка отсчёта: окно, открытое через час после
+  // сбоя, старую ошибку не показывает.
+  const liveError = live?.error?.trim() || null;
+  const [liveNotice, setLiveNotice] = useState<string | null>(null);
+  const seenLiveError = useRef<{ ready: boolean; value: string | null }>({ ready: false, value: null });
+  const hasSnapshot = snapshot != null;
+  useEffect(() => {
+    if (!hasSnapshot) return;
+    const seen = seenLiveError.current;
+    if (!seen.ready) {
+      seen.ready = true;
+      seen.value = liveError;
+      return;
+    }
+    if (liveError === seen.value) return;
+    seen.value = liveError;
+    setLiveNotice(liveError);
+  }, [hasSnapshot, liveError]);
+  useEffect(() => {
+    if (!liveNotice) return;
+    const t = setTimeout(() => setLiveNotice(null), ERROR_MS);
+    return () => clearTimeout(t);
+  }, [liveNotice]);
   const liveActive = !!live?.active;
   const idle = !recording && !liveActive && !live?.starting && !live?.stopping;
   const elapsedS = snapshot?.elapsed_s;
@@ -125,8 +151,11 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
       })
       .catch((e) => setError(errorText(e)));
   };
-  const lastLiveError = idle ? live?.error?.trim() || null : null;
-  const shownError = error ?? lastLiveError;
+  const shownError = error ?? (idle ? liveNotice : null);
+  const dismiss = () => {
+    setError(null);
+    setLiveNotice(null);
+  };
 
   let main;
   if (live?.stopping) {
@@ -181,7 +210,13 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
 
   return (
     <div className="rec-badge">
-      {shownError && <span className="import__error" role="alert">{shownError}</span>}
+      {shownError && (
+        <span className="import__error import__error--box" role="alert">
+          {shownError}
+          <button type="button" className="import__close" aria-label="Скрыть ошибку"
+            onClick={dismiss}>×</button>
+        </span>
+      )}
       {low && <span className="rec-badge__warn">Мало места: {snapshot.disk_free_gb} ГБ</span>}
       {main}
     </div>

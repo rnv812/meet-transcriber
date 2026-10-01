@@ -176,13 +176,49 @@ test("запуск не удался (ok:false) — ошибка видна", as
   expect(await screen.findByRole("alert")).toHaveTextContent("Не удалось запустить ассистента: нет python");
 });
 
-test("ошибка прошлого живого режима из снимка видна, пока режим не идёт", () => {
-  const { rerender } = render(<RecordingBadge endpoint={ep}
+test("старая ошибка живого режима из первого снимка не висит в простое", () => {
+  render(<RecordingBadge endpoint={ep}
     snapshot={snap({ live: live({ error: "Ассистент завершился (код 1)" }) })} />);
-  expect(screen.getByRole("alert")).toHaveTextContent("Ассистент завершился (код 1)");
-  rerender(<RecordingBadge endpoint={ep} snapshot={snap({ live: live({ starting: true, error: "старое" }) })} />);
   expect(screen.queryByRole("alert")).toBeNull();
-  rerender(<RecordingBadge endpoint={ep} snapshot={snap({ live: live({ error: "  " }) })} />);
+});
+
+test("новая ошибка живого режима видна, гаснет сама через несколько секунд", () => {
+  vi.useFakeTimers();
+  try {
+    const { rerender } = render(<RecordingBadge endpoint={ep}
+      snapshot={snap({ live: live({ active: true, started_at: Date.now() / 1000 }) })} />);
+    expect(screen.queryByRole("alert")).toBeNull();
+    rerender(<RecordingBadge endpoint={ep}
+      snapshot={snap({ live: live({ error: "Ассистент завершился (код 1)" }) })} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Ассистент завершился (код 1)");
+    // Следующий снимок с той же ошибкой — не новая ошибка.
+    act(() => { vi.advanceTimersByTime(5000); });
+    rerender(<RecordingBadge endpoint={ep}
+      snapshot={snap({ live: live({ error: "Ассистент завершился (код 1)" }) })} />);
+    act(() => { vi.advanceTimersByTime(1500); });
+    expect(screen.queryByRole("alert")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("ошибку живого режима можно скрыть; при запуске она не видна", async () => {
+  const { rerender } = render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
+  rerender(<RecordingBadge endpoint={ep} snapshot={snap({ live: live({ error: "упал" }) })} />);
+  expect(screen.getByRole("alert")).toHaveTextContent("упал");
+  await userEvent.click(screen.getByRole("button", { name: "Скрыть ошибку" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+  rerender(<RecordingBadge endpoint={ep} snapshot={snap({ live: live({ starting: true }) })} />);
+  rerender(<RecordingBadge endpoint={ep} snapshot={snap({ live: live({ starting: true, error: "снова" }) })} />);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("ошибку команды тоже можно скрыть", async () => {
+  vi.spyOn(api, "recordingCommand").mockRejectedValue(new Error("микрофон занят"));
+  render(<RecordingBadge endpoint={ep} snapshot={snap({})} />);
+  await userEvent.click(screen.getByRole("button", { name: "Начать запись" }));
+  await screen.findByText("микрофон занят");
+  await userEvent.click(screen.getByRole("button", { name: "Скрыть ошибку" }));
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
