@@ -103,6 +103,40 @@ class FakeState:
         return {"status": "idle", "auto_record": {"enabled": body["enabled"]}}
 
 
+    # --- ассистент ---
+
+    provider_ready = True
+
+    def make_summary(self, rid):
+        if not self.provider_ready:
+            raise control.Conflict("Подключите Claude Code или Codex в настройках")
+        self.calls.append(("summary", rid))
+        return {"id": "j1", "kind": "summary"}
+
+    def summary(self, rid):
+        if rid == "нет":
+            return {"error": "итогов нет"}
+        return {"markdown": "# Итоги", "created_at": 1.0}
+
+    def ask(self, rid, body):
+        self.calls.append(("ask", rid, body))
+        return {"id": "j2", "kind": "ask"}
+
+    def qa(self, rid):
+        return {"items": [{"q": "а", "a": "б"}]}
+
+    def to_notes(self, rid):
+        raise control.BadRequest("Папка заметок не задана")
+
+    def assistant(self):
+        return {"provider": None, "checking": True, "setting": "auto",
+                "available": {}, "knowledge_dir": None, "notes_dir": None}
+
+    def check_provider(self, body):
+        self.calls.append(("check", body))
+        return {"ok": True, "error": None, "provider": body.get("provider")}
+
+
 class BoomState(FakeState):
     def snapshot(self) -> dict:
         raise RuntimeError("состояние сломалось")
@@ -657,3 +691,34 @@ def test_recording_id_in_path_is_url_decoded(server):
     server.state_obj.recording = lookup
     assert _get(server, "/recordings/a%20b") == {"id": "a b"}
     assert ("recording", "a b") in server.state_obj.calls
+
+
+# --- ассистент ---------------------------------------------------------------
+
+
+def test_summary_routes(server):
+    assert _post(server, "/recordings/r%201/summary")["kind"] == "summary"
+    assert ("summary", "r 1") in server.state_obj.calls
+    assert _get(server, "/recordings/r1/summary")["markdown"] == "# Итоги"
+    assert _get(server, "/recordings/нет/summary".replace("нет", "%D0%BD%D0%B5%D1%82"),
+                expect=404) == {"error": "итогов нет"}
+
+
+def test_summary_without_provider_is_409_with_text(server):
+    server.state_obj.provider_ready = False
+    got = _post(server, "/recordings/r1/summary", expect=409)
+    assert got == {"error": "Подключите Claude Code или Codex в настройках"}
+
+
+def test_ask_qa_notes_routes(server):
+    assert _post(server, "/recordings/r1/ask", {"question": "что решили?"})["kind"] == "ask"
+    assert ("ask", "r1", {"question": "что решили?"}) in server.state_obj.calls
+    assert _get(server, "/recordings/r1/qa")["items"][0]["q"] == "а"
+    assert _post(server, "/recordings/r1/notes", expect=400) == {
+        "error": "Папка заметок не задана"}
+
+
+def test_assistant_routes(server):
+    assert _get(server, "/assistant")["checking"] is True
+    got = _post(server, "/assistant/check", {"provider": "codex"})
+    assert got == {"ok": True, "error": None, "provider": "codex"}

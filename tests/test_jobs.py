@@ -276,3 +276,14 @@ def test_active_for_ignores_cancelled_jobs(tmp_path):
     finally:
         release.set()
         queue.stop()
+
+
+def test_assistant_job_argv(tmp_path):
+    """Вопрос передаётся одним аргументом `--question=…`: текст, начинающийся
+    с дефиса, argparse иначе принял бы за флаг."""
+    summary = jobs.worker_argv(jobs.Job(id="s", kind=jobs.SUMMARY, folder=str(tmp_path)))
+    assert summary[-2:] == ["summary", str(tmp_path)]
+    ask = jobs.worker_argv(jobs.Job(id="a", kind=jobs.ASK, folder=str(tmp_path),
+                                    options={"question": "-что решили?"}))
+    assert ask[-3:] == ["ask", str(tmp_path), "--question=-что решили?"]
+    assert jobs.SUMMARY in jobs.KINDS and jobs.ASK in jobs.KINDS

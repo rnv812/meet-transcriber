@@ -42,7 +42,8 @@ def _apply_hf_token() -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="meet-job")
     parser.add_argument("kind",
-                        choices=["transcribe", "import", "install-engine", "download-model"])
+                        choices=["transcribe", "import", "install-engine", "download-model",
+                                 "summary", "ask"])
     parser.add_argument("path")
     parser.add_argument("--speakers", type=int)
     parser.add_argument("--hotwords")
@@ -50,7 +51,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-overlap", dest="overlap", action="store_false",
                         default=None)
     parser.add_argument("--flavor", choices=["cuda", "cpu"])
+    parser.add_argument("--question")
     args = parser.parse_args(argv)
+
+    if args.kind in ("summary", "ask"):
+        return _assistant(args.kind, args.path, args.question)
 
     if args.kind == "install-engine":
         return _install_engine(args.flavor)
@@ -181,6 +186,48 @@ def _download_model(repo_id: str) -> int:
         _emit({"kind": "error", "text": lines[-1] if lines else "не скачалось"})
         return code
     _emit({"kind": "job.result", "path": repo_id})
+    return 0
+
+
+def _assistant(kind: str, folder_str: str, question: str | None) -> int:
+    """Итоги или ответ на вопрос по записи (meet.assistant).
+
+    Провайдер выбирается здесь, а не в резиденте: `llm.resolve` проверяет вход
+    в CLI (секунды), а SDK провайдера резиденту не нужен вовсе."""
+    from pathlib import Path
+
+    from meet import assistant, events, llm, settings
+
+    bus = events.EventBus()
+    bus.subscribe(lambda event: _emit(event.to_dict()))
+    bus.progress("llm", label="модель думает")
+    cfg = settings.load()
+    try:
+        provider, runner = llm.resolve(cfg)
+    except Exception as e:
+        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        return 2
+    if runner is None:
+        _emit({"kind": "error", "text": assistant.NO_PROVIDER})
+        return 2
+    folder = Path(folder_str)
+    knowledge = cfg.assistant.knowledge_dir
+    try:
+        if kind == "summary":
+            out = assistant.summarize(folder, runner, knowledge, provider=provider)
+        else:
+            if not (question or "").strip():
+                _emit({"kind": "error", "text": "пустой вопрос"})
+                return 3
+            assistant.ask(folder, question.strip(), runner, knowledge, provider=provider)
+            out = folder / assistant.QA_JSONL
+    except RuntimeError as e:
+        _emit({"kind": "error", "text": str(e)})
+        return 1
+    except Exception as e:
+        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        return 1
+    _emit({"kind": "job.result", "path": str(out)})
     return 0
 
 

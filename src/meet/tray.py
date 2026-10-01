@@ -696,10 +696,11 @@ class TrayApp:
                 # Гасим очередь задач раньше сервера: иначе идущая расшифровка
                 # (подпроцесс job_worker) осиротеет, продолжая держать VRAM и
                 # gpu.lock, невидимая для очереди перезапущенного резидента.
-                try:
-                    api.state.queue.stop()
-                except Exception:
-                    pass
+                for queue in (api.state.queue, api.state.llm_queue):
+                    try:
+                        queue.stop()
+                    except Exception:
+                        pass
                 api.stop(pid=os.getpid())
             self._release_lock(lock)
 
@@ -742,10 +743,11 @@ class TrayApp:
         finally:
             self._alive = False
             if api is not None:
-                try:
-                    api.state.queue.stop()
-                except Exception:
-                    pass
+                for queue in (api.state.queue, api.state.llm_queue):
+                    try:
+                        queue.stop()
+                    except Exception:
+                        pass
                 api.stop(pid=os.getpid())
             self._release_lock(lock)
 

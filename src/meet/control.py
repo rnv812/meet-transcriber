@@ -50,6 +50,13 @@ IMPORTANT: токен принимается и в query-параметре `?to
     install_engine(options) -> dict       поставить движок задачей
     models() -> dict                      каталог моделей и что уже скачано
     download_model(body) -> dict          скачать модель задачей
+    make_summary(id) -> dict              итоги записи задачей (409 без провайдера)
+    summary(id) -> dict                   готовые итоги {"markdown", "created_at"}
+    ask(id, body) -> dict                 вопрос по записи задачей
+    qa(id) -> dict                        прошлые вопросы и ответы
+    to_notes(id) -> dict                  положить заметку в папку заметок
+    assistant() -> dict                   кто отвечает, что установлено, папки
+    check_provider(body) -> dict          проверить провайдера коротким вызовом
 """
 
 import json
@@ -393,6 +400,9 @@ def _make_handler(server: ControlServer):
             path = url.path.rstrip("/") or "/"
             try:
                 result = self._handle(method, path, params)
+            except Conflict as e:
+                self._send_safely(409, {"error": str(e)})
+                return
             except BadRequest as e:
                 self._send_safely(400, {"error": str(e)})
                 return
@@ -564,6 +574,10 @@ class BadRequest(Exception):
     """400: запрос понятен по маршруту, но не по содержимому."""
 
 
+class Conflict(Exception):
+    """409: действие сейчас невозможно (например, не подключена модель)."""
+
+
 _BadRequest = BadRequest
 
 
@@ -606,6 +620,10 @@ _ROUTES = {
         h._body()
     ),
     ("POST", "/jobs"): lambda h, p: _server_of(h).state.submit_job(h._body()),
+    ("GET", "/assistant"): lambda h, p: _server_of(h).state.assistant(),
+    ("POST", "/assistant/check"): lambda h, p: _server_of(h).state.check_provider(
+        h._body()
+    ),
 }
 
 # Маршруты с параметром в пути. Регулярка, а не роутер: их считаные штуки, и
@@ -626,6 +644,16 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.name_speakers(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/transcribe$"),
      lambda h, p, rid: _server_of(h).state.transcribe(unquote(rid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/summary$"),
+     lambda h, p, rid: _server_of(h).state.make_summary(unquote(rid))),
+    ("GET", re.compile(r"^/recordings/([^/]+)/summary$"),
+     lambda h, p, rid: _server_of(h).state.summary(unquote(rid))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/ask$"),
+     lambda h, p, rid: _server_of(h).state.ask(unquote(rid), h._body())),
+    ("GET", re.compile(r"^/recordings/([^/]+)/qa$"),
+     lambda h, p, rid: _server_of(h).state.qa(unquote(rid))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/notes$"),
+     lambda h, p, rid: _server_of(h).state.to_notes(unquote(rid))),
     ("DELETE", re.compile(r"^/jobs/([^/]+)$"),
      lambda h, p, job_id: _server_of(h).state.cancel_job(job_id)),
     ("GET", re.compile(r"^/voices/([^/]+)/sample$"),

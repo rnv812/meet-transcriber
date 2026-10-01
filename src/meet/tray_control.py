@@ -67,6 +67,107 @@ def _tail(path: Path, lines: int) -> list[str]:
     return text.splitlines()[-lines:]
 
 
+# Выбор провайдера (`llm.resolve`) спрашивает CLI о входе — до 20 с на каждый.
+# HTTP-обработчик этого ждать не должен: считаем в фоне и держим ответ минуту.
+PROVIDER_TTL_S = 60.0
+CHECK_TIMEOUT_S = 90
+QUESTION_MAX_CHARS = 4000
+
+
+class ProviderCache:
+    """Кто ответит на вопрос (`llm.resolve`), посчитанный в фоновом потоке.
+
+    `get(cfg)` никогда не ждёт проверки входа: отдаёт (провайдер, checking).
+    Пока ответа нет или он устарел — запускает фоновый пересчёт и отдаёт
+    прежний ответ (или None, если сменилась настройка) с checking=True."""
+
+    def __init__(self, resolve=None, ttl: float = PROVIDER_TTL_S,
+                 clock=time.monotonic) -> None:
+        self._resolve = resolve
+        self._ttl = ttl
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._key = None
+        self._value: str | None = None
+        self._at: float | None = None
+        self._running = False
+
+    @staticmethod
+    def _key_of(cfg):
+        return (cfg.llm.provider, cfg.llm.base_url)
+
+    def get(self, cfg) -> tuple[str | None, bool]:
+        key = self._key_of(cfg)
+        with self._lock:
+            same = self._key == key and self._at is not None
+            if same and self._clock() - self._at < self._ttl:
+                return self._value, False
+            if not self._running:
+                self._running = True
+                threading.Thread(target=self._refresh, args=(cfg, key),
+                                 name="meet-llm-resolve", daemon=True).start()
+            return (self._value if same else None), True
+
+    def invalidate(self) -> None:
+        with self._lock:
+            if self._at is not None:
+                self._at = float("-inf")  # прежний ответ — до пересчёта
+
+    def _refresh(self, cfg, key) -> None:
+        try:
+            resolve = self._resolve
+            if resolve is None:
+                from meet import llm
+
+                resolve = llm.resolve
+            name = resolve(cfg)[0]
+        except Exception:
+            name = None  # сбой проверки — «никто не ответит», а не падение потока
+        with self._lock:
+            self._key, self._value, self._at = key, name, self._clock()
+            self._running = False
+
+
+def _provider_installed(cfg) -> bool:
+    """Дешёвая проверка «есть кому ответить» (без проверки входа и без SDK).
+
+    Задача всё равно спросит `llm.resolve` и, если вход не выполнен, упадёт с
+    тем же текстом — это осознанно: ждать проверки входа в HTTP нельзя."""
+    from meet.llm import detect
+
+    found = detect.available(cfg.llm.base_url)
+    choice = cfg.llm.provider
+    if choice == "auto":
+        return any(item.get("found") for item in found.values())
+    return bool(found.get(choice, {}).get("found"))
+
+
+def _check_provider(provider: str) -> dict:
+    """`python -m meet.llm.check <provider>` подпроцессом: вызов модели не
+    должен жить в резиденте, а SDK провайдера — грузиться в него."""
+    try:
+        out = subprocess.run(
+            [sys.executable, "-m", "meet.llm.check", provider],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=CHECK_TIMEOUT_S,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "provider": provider,
+                "error": f"проверка не уложилась в {CHECK_TIMEOUT_S} с"}
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"ok": False, "provider": provider, "error": f"{type(e).__name__}: {e}"}
+    lines = (out.stdout or "").strip().splitlines()
+    try:
+        data = json.loads(lines[-1]) if lines else None
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        tail = (out.stderr or out.stdout or "нет ответа").strip()[-300:]
+        return {"ok": False, "provider": provider, "error": tail}
+    return data
+
+
 def _bad_request(text: str):
     """400 для API: ошибка ввода (имя, картинка), а не «не найдено»."""
     from meet.control import BadRequest
@@ -74,15 +175,26 @@ def _bad_request(text: str):
     return BadRequest(text)
 
 
+def _conflict(text: str):
+    """409 для API: действие сейчас невозможно (не подключена модель)."""
+    from meet.control import Conflict
+
+    return Conflict(text)
+
+
 class TrayControl:
     """Состояние для `meet.control.ControlServer` поверх объекта трея."""
 
-    def __init__(self, tray, queue=None) -> None:
+    def __init__(self, tray, queue=None, llm_queue=None) -> None:
         self.tray = tray
         self.bus = tray.bus
         # Очередь задач живёт рядом с записью, в том же резиденте: расшифровка
         # идёт подпроцессом и не мешает ни записи, ни панели.
         self.queue = queue if queue is not None else jobs.JobQueue(self.bus)
+        # Итоги и вопросы — своя очередь: GPU им не нужен, и ждать за часовой
+        # расшифровкой ответ на вопрос было бы странно.
+        self.llm_queue = llm_queue if llm_queue is not None else jobs.JobQueue(self.bus)
+        self._providers = ProviderCache()
         self._submit_lock = threading.Lock()
         self._levels: dict = {}
         self._devices_cache: dict | None = None
@@ -530,10 +642,114 @@ class TrayControl:
         return self.transcribe(recording_id, body.get("options"))
 
     def jobs(self) -> dict:
-        return {"items": self.queue.listing()}
+        items = self.queue.listing() + self.llm_queue.listing()
+        items.sort(key=lambda item: item.get("created_at") or 0.0)
+        return {"items": items}
 
     def cancel_job(self, job_id: str) -> dict:
-        return {"ok": self.queue.cancel(job_id)}
+        return {"ok": self.queue.cancel(job_id) or self.llm_queue.cancel(job_id)}
+
+    # --- ассистент: итоги, вопросы, заметки -------------------------------
+
+    def _transcribed(self, recording_id: str) -> Path | dict:
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        if library.read_transcript(folder) is None:
+            return {"error": "транскрипта нет"}
+        return folder
+
+    def _require_provider(self) -> None:
+        from meet import assistant
+
+        if not _provider_installed(settings.load()):
+            raise _conflict(assistant.NO_PROVIDER)
+
+    def make_summary(self, recording_id: str) -> dict:
+        """Итоги задачей. Вторая просьба, пока первая ждёт или идёт, — та же задача."""
+        folder = self._transcribed(recording_id)
+        if isinstance(folder, dict):
+            return folder
+        self._require_provider()
+        with self._submit_lock:
+            job = self.llm_queue.active_for(str(folder), (jobs.SUMMARY,))
+            if job is None:
+                job = self.llm_queue.submit(jobs.SUMMARY, str(folder), {})
+        return job.to_raw()
+
+    def summary(self, recording_id: str) -> dict:
+        from meet import assistant
+
+        folder = self._folder(recording_id)
+        found = assistant.read_summary(folder) if folder else None
+        return found or {"error": "итогов нет"}
+
+    def ask(self, recording_id: str, body: dict | None) -> dict:
+        question = (body or {}).get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise _bad_request("пустой вопрос")
+        question = question.strip()
+        if len(question) > QUESTION_MAX_CHARS:
+            raise _bad_request(f"вопрос длиннее {QUESTION_MAX_CHARS} символов")
+        folder = self._transcribed(recording_id)
+        if isinstance(folder, dict):
+            return folder
+        self._require_provider()
+        return self.llm_queue.submit(jobs.ASK, str(folder), {"question": question}).to_raw()
+
+    def qa(self, recording_id: str) -> dict:
+        from meet import assistant
+
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        return {"items": assistant.read_qa(folder)}
+
+    def to_notes(self, recording_id: str) -> dict:
+        from meet import assistant
+
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        cfg = settings.load().assistant
+        try:
+            path = assistant.to_notes(folder, cfg.notes_dir, cfg.notes_subdir)
+        except ValueError as e:
+            raise _bad_request(str(e))
+        except OSError as e:
+            # Не OSError наружу: control API принял бы его за обрыв клиента.
+            raise RuntimeError(f"не удалось записать заметку: {e}") from e
+        return {"path": str(path)}
+
+    def assistant(self) -> dict:
+        """Кто ответит и что для этого есть. Не ждёт проверки входа в CLI:
+        `checking` — ответ ещё считается в фоне (см. ProviderCache)."""
+        from meet.llm import detect
+
+        cfg = settings.load()
+        provider, checking = self._providers.get(cfg)
+        knowledge, notes = cfg.assistant.knowledge_dir, cfg.assistant.notes_dir
+        return {
+            "provider": provider,
+            "checking": checking,
+            "setting": cfg.llm.provider,
+            "available": detect.available(cfg.llm.base_url),
+            "knowledge_dir": str(knowledge) if knowledge else None,
+            "notes_dir": str(notes) if notes else None,
+        }
+
+    def check_provider(self, body: dict | None) -> dict:
+        """Кнопка «Проверить»: короткий вызов модели подпроцессом (до 90 с;
+        HTTP-сервер многопоточный, остальные запросы не ждут)."""
+        from meet import llm
+
+        provider = str((body or {}).get("provider") or "auto")
+        if provider != "auto" and provider not in llm.PROVIDERS:
+            raise _bad_request(f"неизвестный провайдер: {provider}")
+        result = _check_provider(provider)
+        # Человек мог только что войти в CLI — выбор провайдера пересчитаем.
+        self._providers.invalidate()
+        return result
 
     def import_file(self, body: dict) -> dict:
         """Импорт чужой записи: папка + задача (копия и расшифровка)."""

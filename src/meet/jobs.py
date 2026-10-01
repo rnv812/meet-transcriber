@@ -38,7 +38,11 @@ TRANSCRIBE = "transcribe"
 IMPORT = "import"
 INSTALL_ENGINE = "install-engine"
 DOWNLOAD_MODEL = "download-model"
-KINDS = (TRANSCRIBE, IMPORT, INSTALL_ENGINE, DOWNLOAD_MODEL)
+# Задачи модели по готовой записи (meet.assistant). Идут отдельной очередью
+# резидента: итоги не должны ждать часовую расшифровку и наоборот.
+SUMMARY = "summary"
+ASK = "ask"
+KINDS = (TRANSCRIBE, IMPORT, INSTALL_ENGINE, DOWNLOAD_MODEL, SUMMARY, ASK)
 
 JOB_QUEUED = "job.queued"
 JOB_STARTED = "job.started"
@@ -100,6 +104,12 @@ def worker_argv(job: Job) -> list[str]:
         return argv
     if job.kind == DOWNLOAD_MODEL:
         return argv  # путь задачи — это repo_id модели
+    if job.kind == SUMMARY:
+        return argv
+    if job.kind == ASK:
+        # Одним аргументом через «=»: вопрос с ведущим дефисом argparse иначе
+        # принял бы за флаг.
+        return argv + [f"--question={options.get('question') or ''}"]
     if options.get("speakers"):
         argv += ["--speakers", str(int(options["speakers"]))]
     if options.get("hotwords"):

@@ -23,7 +23,12 @@ const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCas
 const INTERRUPTED = "Импорт прерван";
 const RETRANSCRIBE_KINDS = ["transcribe", "import"];
 
-const jobsOf = (rec: Recording, jobs: Job[]) => jobs.filter((j) => norm(j.folder) === norm(rec.path));
+/**
+ * Задачи расшифровки этой записи. `/jobs` отдаёт и задачи модели (итоги,
+ * вопросы) над той же папкой — статус записи они не меняют.
+ */
+const jobsOf = (rec: Recording, jobs: Job[]) =>
+  jobs.filter((j) => RETRANSCRIBE_KINDS.includes(j.kind) && norm(j.folder) === norm(rec.path));
 
 /** Ждущая или идущая задача записи — её можно отменить. */
 export function activeJobOf(rec: Recording, jobs: Job[]): Job | null {
@@ -38,7 +43,7 @@ export function activeJobOf(rec: Recording, jobs: Job[]): Job | null {
  */
 export function failedRetranscribe(rec: Recording, jobs: Job[]): Job | null {
   if (!rec.has_transcript) return null;
-  const last = jobsOf(rec, jobs).filter((j) => RETRANSCRIBE_KINDS.includes(j.kind)).at(-1);
+  const last = jobsOf(rec, jobs).at(-1);
   if (last?.state !== "failed") return null;
   const failedAt = last.finished_at ?? last.created_at ?? null;
   const writtenAt = rec.transcript_at ?? null;

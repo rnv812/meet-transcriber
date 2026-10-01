@@ -60,3 +60,14 @@ test("failedRetranscribe: последняя расшифровка упала �
   expect(failedRetranscribe(ready, [job({ state: "failed", finished_at: 200 }), job({ state: "done" })])).toBeNull();
   expect(failedRetranscribe(rec({ transcript_at: 100 }), [job({ state: "failed", finished_at: 200 })])).toBeNull();
 });
+test("задачи модели (итоги, вопросы) не выдают себя за расшифровку", () => {
+  const ready = rec({ has_transcript: true, transcript_at: 100 });
+  const summary = job({ kind: "summary", state: "running", stage: "llm" });
+  expect(statusOf(ready, [summary], null)).toEqual({ kind: "ready" });
+  expect(activeJobOf(ready, [summary])).toBeNull();
+  expect(statusOf(ready, [job({ kind: "ask", state: "queued" })], null)).toEqual({ kind: "ready" });
+  expect(failedRetranscribe(ready, [job({ kind: "summary", state: "failed", finished_at: 200 })])).toBeNull();
+  // Упавшие итоги нерасшифрованной записи — это не «расшифровка упала».
+  expect(statusOf(rec(), [job({ kind: "summary", state: "failed", error: "x" })], null))
+    .toEqual({ kind: "untranscribed" });
+});
