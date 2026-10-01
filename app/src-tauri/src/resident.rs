@@ -13,7 +13,7 @@ use std::io::Write;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -22,6 +22,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 use crate::api;
+use crate::engine;
 use crate::logs::{self, shell_log};
 use crate::tray::{self, Notice};
 
@@ -100,12 +101,23 @@ fn endpoint_answers() -> bool {
     alive
 }
 
-/// Где искать резидента, по порядку: `MEET_RESIDENT`, рядом с оболочкой
-/// (`resident\meet-tray.exe` установленного приложения), `.venv` репозитория
-/// (только `dev` — отладочная сборка в `app\src-tauri\target\debug`), затем
-/// PATH. Релиз в `.venv` не заглядывает: четырьмя уровнями выше
-/// установленного exe может оказаться что угодно.
-pub fn candidates(exe_dir: &Path, env_override: Option<&OsStr>, dev: bool) -> Vec<PathBuf> {
+/// Где искать резидента, по порядку: `MEET_RESIDENT`, движок, поставленный
+/// оболочкой (`<data_dir>\engine\<версия>\Scripts\meet-tray.exe` — только с
+/// маркером `installed.json` этой версии: недостроенное или чужой версии
+/// окружение не годится), `.venv` репозитория (только `dev` — отладочная
+/// сборка в `app\src-tauri\target\debug`), затем PATH. Релиз в `.venv` не
+/// заглядывает: четырьмя уровнями выше установленного exe может оказаться
+/// что угодно.
+///
+/// Резидента рядом с оболочкой (`resident\meet-tray.exe`) больше нет:
+/// установщик несёт uv и колесо, а не готовый резидент.
+pub fn candidates(
+    exe_dir: &Path,
+    env_override: Option<&OsStr>,
+    data_dir: &Path,
+    version: &str,
+    dev: bool,
+) -> Vec<PathBuf> {
     let mut list = Vec::new();
     if let Some(chosen) = env_override {
         let chosen = chosen.to_string_lossy();
@@ -113,7 +125,10 @@ pub fn candidates(exe_dir: &Path, env_override: Option<&OsStr>, dev: bool) -> Ve
             list.push(PathBuf::from(chosen.trim()));
         }
     }
-    list.push(exe_dir.join("resident").join(EXE));
+    let engine = engine::env_dir(data_dir, version);
+    if engine::is_installed(&engine, version) {
+        list.push(engine::launcher(&engine));
+    }
     // target\debug → target → src-tauri → app → корень репозитория
     if let Some(repo) = exe_dir.ancestors().nth(4).filter(|_| dev) {
         list.push(repo.join(".venv").join("Scripts").join(EXE));
@@ -342,11 +357,45 @@ struct Inner {
     status: Mutex<ResidentStatus>,
     /// Свой дочерний процесс; `None` — не запущен, вышел или резидент чужой.
     child: Mutex<Option<Child>>,
+    /// Кандидат, из которого запущен свой процесс: установке движка надо
+    /// знать, не держит ли резидент файлы окружения.
+    running_from: Mutex<Option<PathBuf>>,
     /// «Выходим»: надзор больше не перезапускает и не запускает.
     quitting: AtomicBool,
+    /// Поколение надзора. `respawn`/`stop_if_from` его увеличивают: поток
+    /// надзора прежнего поколения видит это и уходит, ничего не трогая, —
+    /// иначе он перезапустил бы остановленный резидент или принял бы новый
+    /// процесс за свой.
+    generation: AtomicU64,
     /// Второй «Выход» ждёт первый, а не выходит раньше, чем резидент сохранил
-    /// запись.
+    /// запись. Под этим же замком — остановка ради установки движка.
     shutdown_gate: Mutex<()>,
+}
+
+/// Окружение движка текущей версии и PATH с ffmpeg для резидента из него.
+struct EngineContext {
+    data_dir: PathBuf,
+    version: String,
+    env_dir: PathBuf,
+    ffmpeg_dir: Option<PathBuf>,
+}
+
+impl EngineContext {
+    fn of(app: &AppHandle) -> Self {
+        let data_dir = data_dir();
+        let version = app.package_info().version.to_string();
+        EngineContext {
+            env_dir: engine::env_dir(&data_dir, &version),
+            ffmpeg_dir: engine::ffmpeg_dir(app),
+            data_dir,
+            version,
+        }
+    }
+
+    /// Кандидат из окружения движка (текущей версии).
+    fn owns(&self, candidate: &Path) -> bool {
+        candidate.starts_with(&self.env_dir)
+    }
 }
 
 impl Supervisor {
@@ -356,7 +405,9 @@ impl Supervisor {
             inner: Arc::new(Inner {
                 status: Mutex::new(ResidentStatus::Starting),
                 child: Mutex::new(None),
+                running_from: Mutex::new(None),
                 quitting: AtomicBool::new(false),
+                generation: AtomicU64::new(0),
                 shutdown_gate: Mutex::new(()),
             }),
         };
@@ -364,14 +415,15 @@ impl Supervisor {
         supervisor.supervise_in_background(app);
     }
 
-    /// Поток надзора. Счётчик перезапусков живёт в нём, так что новый поток —
-    /// это и сброс счётчика.
+    /// Поток надзора текущего поколения. Счётчик перезапусков живёт в нём,
+    /// так что новый поток — это и сброс счётчика.
     fn supervise_in_background(&self, app: &AppHandle) {
         let supervisor = self.clone();
         let app = app.clone();
+        let generation = self.inner.generation.load(Ordering::SeqCst);
         let spawned = thread::Builder::new()
             .name("meet-resident".into())
-            .spawn(move || supervisor.supervise(&app));
+            .spawn(move || supervisor.supervise(&app, generation));
         if let Err(error) = spawned {
             shell_log!("поток надзора за резидентом не запустился: {error}");
         }
@@ -387,31 +439,82 @@ impl Supervisor {
         self.supervise_in_background(app);
     }
 
+    /// Начать надзор заново, в каком бы состоянии он ни был: свой резидент
+    /// штатно гасится (`/shutdown` — идущая запись сохраняется), новый поток
+    /// заново собирает кандидатов. Так после установки движка резидент
+    /// переезжает в новое окружение. Чужой резидент не трогаем. Блокирует до
+    /// 80 с: вызывать не из главного потока.
+    pub fn respawn(&self, app: &AppHandle) {
+        let _gate = lock(&self.inner.shutdown_gate);
+        if self.quitting() {
+            return;
+        }
+        self.inner.generation.fetch_add(1, Ordering::SeqCst);
+        if self.child_pid().is_some() {
+            shell_log!("перезапуск резидента: движок обновлён");
+        }
+        self.stop_child();
+        *lock(&self.inner.status) = ResidentStatus::Starting;
+        self.supervise_in_background(app);
+    }
+
+    /// Остановить свой резидент, если он запущен из `dir` (окружение движка,
+    /// которое сейчас будут пересобирать), и не запускать его снова до
+    /// `respawn`. `true` — остановили.
+    pub fn stop_if_from(&self, dir: &Path) -> bool {
+        let _gate = lock(&self.inner.shutdown_gate);
+        if self.quitting() || self.child_pid().is_none() {
+            return false;
+        }
+        let from_dir = lock(&self.inner.running_from)
+            .as_deref()
+            .is_some_and(|from| from.starts_with(dir));
+        if !from_dir {
+            return false;
+        }
+        shell_log!("останавливаю резидент: его движок переустанавливается");
+        self.inner.generation.fetch_add(1, Ordering::SeqCst);
+        self.stop_child();
+        *lock(&self.inner.status) = ResidentStatus::Starting;
+        true
+    }
+
     pub fn status(&self) -> ResidentStatus {
         lock(&self.inner.status).clone()
     }
 
-    /// После «Выхода» статус остаётся `Quitting`: надзор, ещё не заметивший
-    /// флаг, не должен вернуть трею «запускается» или «работает».
-    fn set_status(&self, status: ResidentStatus) {
-        if self.quitting() && status != ResidentStatus::Quitting {
-            return;
+    /// Статус от надзора поколения `generation`. Прежнее поколение молчит:
+    /// его поток уже не отвечает за резидент. После «Выхода» статус остаётся
+    /// `Quitting`: надзор, ещё не заметивший флаг, не должен вернуть трею
+    /// «запускается» или «работает».
+    fn set_status(&self, generation: u64, status: ResidentStatus) {
+        let mut slot = lock(&self.inner.status);
+        if self.current(generation) {
+            *slot = status;
         }
-        *lock(&self.inner.status) = status;
     }
 
     fn quitting(&self) -> bool {
         self.inner.quitting.load(Ordering::SeqCst)
     }
 
-    fn supervise(&self, app: &AppHandle) {
+    /// Надзор поколения `generation` всё ещё в силе: не выходим и не начат
+    /// заново.
+    fn current(&self, generation: u64) -> bool {
+        !self.quitting() && self.inner.generation.load(Ordering::SeqCst) == generation
+    }
+
+    fn supervise(&self, app: &AppHandle, generation: u64) {
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(Path::to_path_buf))
             .unwrap_or_default();
+        let engine = EngineContext::of(app);
         let list = candidates(
             &exe_dir,
             std::env::var_os(OVERRIDE_ENV).as_deref(),
+            &engine.data_dir,
+            &engine.version,
             cfg!(debug_assertions),
         );
         let mut restarts = 0;
@@ -421,7 +524,7 @@ impl Supervisor {
             Mode::Spawn
         };
         loop {
-            if self.quitting() {
+            if !self.current(generation) {
                 return;
             }
             match mode {
@@ -430,9 +533,9 @@ impl Supervisor {
                     // резидент прошлой оболочки, который дописывает запись и
                     // сейчас выйдет.
                     shell_log!("резидент уже работает вне приложения — подключаюсь к нему");
-                    self.set_status(ResidentStatus::External);
-                    self.watch_external();
-                    if self.quitting() {
+                    self.set_status(generation, ResidentStatus::External);
+                    self.watch_external(generation);
+                    if !self.current(generation) {
                         return;
                     }
                     shell_log!("внешний резидент больше не отвечает — запускаю свой");
@@ -443,23 +546,26 @@ impl Supervisor {
                     shell_log!(
                         "tray.lock держит резидент без API (старая версия) — жду его выхода"
                     );
-                    self.set_status(ResidentStatus::ExternalNoApi);
-                    mode = self.watch_no_api();
+                    self.set_status(generation, ResidentStatus::ExternalNoApi);
+                    mode = self.watch_no_api(generation);
                     continue;
                 }
                 Mode::Spawn => {}
             }
-            self.set_status(ResidentStatus::Starting);
-            let Some(pid) = self.spawn(&list) else {
-                if !self.quitting() {
+            self.set_status(generation, ResidentStatus::Starting);
+            let Some((pid, from_engine)) = self.spawn(&list, generation, &engine) else {
+                if self.current(generation) {
                     shell_log!("резидент не найден ни по одному пути");
-                    self.give_up(app);
+                    self.give_up(app, generation);
                 }
                 return;
             };
             let started = Instant::now();
-            let code = self.wait(pid);
-            if self.quitting() {
+            // Ответил резидент из движка текущей версии — окружения прежних
+            // версий больше не нужны.
+            let cleanup = from_engine.then_some(&engine);
+            let code = self.wait(pid, generation, cleanup);
+            if !self.current(generation) {
                 return;
             }
             restarts = restarts_after_exit(restarts, started.elapsed());
@@ -478,7 +584,7 @@ impl Supervisor {
                 }
                 Action::GiveUp => {
                     shell_log!("резидент падает раз за разом (код {code:?}) — сдаюсь");
-                    self.give_up(app);
+                    self.give_up(app, generation);
                     return;
                 }
             }
@@ -487,11 +593,11 @@ impl Supervisor {
 
     /// Ждать, пока жив держатель tray.lock без API; вернуть, что дальше:
     /// API ответил — `External`, держателя нет — `Spawn`.
-    fn watch_no_api(&self) -> Mode {
+    fn watch_no_api(&self, generation: u64) -> Mode {
         loop {
             thread::sleep(NO_API_POLL);
-            if self.quitting() {
-                return Mode::Spawn; // надзор увидит флаг и выйдет
+            if !self.current(generation) {
+                return Mode::Spawn; // надзор увидит это и выйдет
             }
             let api = read_endpoint().is_some_and(|endpoint| answers(&endpoint));
             let alive = tray_lock_holder().is_some_and(pid_alive);
@@ -506,15 +612,16 @@ impl Supervisor {
         }
     }
 
-    /// Ждать, пока чужой резидент не перестанет отвечать (или пока не выходим).
+    /// Ждать, пока чужой резидент не перестанет отвечать (или пока надзор
+    /// не кончился).
     ///
     /// Проверка без удаления `daemon.json`: файл принадлежит живому чужому
     /// резиденту, и единичный промах не должен стирать его публикацию.
-    fn watch_external(&self) {
+    fn watch_external(&self, generation: u64) {
         let mut misses = 0;
         loop {
             thread::sleep(EXTERNAL_POLL);
-            if self.quitting() {
+            if !self.current(generation) {
                 return;
             }
             let answers = read_endpoint().is_some_and(|endpoint| answers(&endpoint));
@@ -526,8 +633,14 @@ impl Supervisor {
         }
     }
 
-    /// Запустить первого нашедшегося кандидата; pid или `None`.
-    fn spawn(&self, list: &[PathBuf]) -> Option<u32> {
+    /// Запустить первого нашедшегося кандидата; pid и «из движка текущей
+    /// версии» или `None`.
+    fn spawn(
+        &self,
+        list: &[PathBuf],
+        generation: u64,
+        engine: &EngineContext,
+    ) -> Option<(u32, bool)> {
         for candidate in list {
             let (program, arguments) = launch(candidate, std::process::id());
             let mut command = Command::new(&program);
@@ -539,23 +652,34 @@ impl Supervisor {
                 // потеряться в буфере умирающего процесса).
                 .env("PYTHONIOENCODING", "utf-8")
                 .env("PYTHONUNBUFFERED", "1");
+            let from_engine = engine.owns(candidate);
+            // ffmpeg установленного приложения лежит в ресурсах, а не в PATH
+            // пользователя: резидент (и его задачи) находят его по PATH.
+            if let Some(ffmpeg) = engine.ffmpeg_dir.as_deref().filter(|_| from_engine) {
+                command.env(
+                    "PATH",
+                    engine::path_with(ffmpeg, std::env::var_os("PATH").as_deref()),
+                );
+            }
             redirect_output(&mut command, &program);
             hide_console(&mut command);
             match command.spawn() {
                 Ok(mut child) => {
                     let pid = child.id();
                     let mut slot = lock(&self.inner.child);
-                    // shutdown() ставит флаг до того, как берёт этот замок:
-                    // либо он увидит процесс здесь, либо мы увидим флаг.
-                    if self.quitting() {
+                    // shutdown()/respawn() меняют флаг или поколение до того,
+                    // как берут этот замок: либо они увидят процесс здесь,
+                    // либо мы увидим перемену.
+                    if !self.current(generation) {
                         drop(slot);
                         kill_tree(pid);
                         let _ = child.wait();
                         return None;
                     }
                     *slot = Some(child);
+                    *lock(&self.inner.running_from) = Some(candidate.clone());
                     shell_log!("резидент запущен: {} (pid {pid})", candidate.display());
-                    return Some(pid);
+                    return Some((pid, from_engine));
                 }
                 Err(error) => shell_log!("{}: {error}", candidate.display()),
             }
@@ -564,17 +688,24 @@ impl Supervisor {
     }
 
     /// Ждать выхода своего процесса; попутно отметить публикацию API.
+    /// `cleanup` — резидент из движка текущей версии: когда он ответит,
+    /// убрать окружения прежних версий.
     ///
     /// pid из `daemon.json` с `pid` процесса не сравниваем: `meet-tray.exe` из
     /// venv — лаунчер, а сам Python — его дочерний процесс с другим pid.
     /// Протухшая публикация уже убрана `endpoint_answers()`, так что
     /// отвечающий адрес после запуска — наш.
-    fn wait(&self, pid: u32) -> Option<i32> {
+    fn wait(&self, pid: u32, generation: u64, cleanup: Option<&EngineContext>) -> Option<i32> {
         let started = Instant::now();
         let mut warned = false;
         loop {
             {
                 let mut slot = lock(&self.inner.child);
+                // Надзор начат заново или выходим: процессом распоряжается
+                // тот, кто это сделал, а в слоте может быть уже новый.
+                if !self.current(generation) {
+                    return None;
+                }
                 let Some(child) = slot.as_mut() else {
                     return None; // процесс забрал shutdown()
                 };
@@ -593,7 +724,13 @@ impl Supervisor {
             }
             if self.status() == ResidentStatus::Starting {
                 if read_endpoint().is_some_and(|endpoint| answers(&endpoint)) {
-                    self.set_status(ResidentStatus::Running);
+                    self.set_status(generation, ResidentStatus::Running);
+                    if let Some(engine) = cleanup {
+                        engine::remove_stale_in_background(
+                            engine.data_dir.clone(),
+                            engine.version.clone(),
+                        );
+                    }
                 } else if !warned && started.elapsed() >= PUBLISH_TIMEOUT {
                     warned = true;
                     shell_log!(
@@ -609,13 +746,16 @@ impl Supervisor {
     /// Сдаться: статус `Failed` и ровно одно уведомление — после него надзор
     /// заканчивается, повторить его некому. Уведомление идёт через трей: оно
     /// подчиняется `ui.notifications` (при «off» молчит).
-    fn give_up(&self, app: &AppHandle) {
+    fn give_up(&self, app: &AppHandle, generation: u64) {
         // resident.log, а не watch.log: причина падения (traceback, «модуль
         // не найден») — в выводе процесса, в журнал решений детектора она не
         // попадает.
-        self.set_status(ResidentStatus::Failed {
-            log: logs::resident_log(&data_dir()),
-        });
+        self.set_status(
+            generation,
+            ResidentStatus::Failed {
+                log: logs::resident_log(&data_dir()),
+            },
+        );
         tray::notify(
             app,
             vec![Notice {
@@ -626,19 +766,25 @@ impl Supervisor {
         );
     }
 
-    /// Штатно погасить свой резидент: `POST /shutdown` (идущая запись
-    /// сохраняется, ответ — до 70 с), затем, если процесс ещё жив, — убить
-    /// дерево. Чужой резидент (`External`) не трогаем. Блокирует: вызывать не
-    /// из главного потока.
+    /// Штатно погасить свой резидент перед выходом из приложения. Чужой
+    /// резидент (`External`) не трогаем. Блокирует: вызывать не из главного
+    /// потока.
     pub fn shutdown(&self) {
         let _gate = lock(&self.inner.shutdown_gate);
         if self.inner.quitting.swap(true, Ordering::SeqCst) {
             return; // уже погашен предыдущим вызовом
         }
-        self.set_status(ResidentStatus::Quitting);
+        *lock(&self.inner.status) = ResidentStatus::Quitting;
+        // Своего процесса нет — External-резидент принадлежит пользователю
+        // (например, `--watch` из автозагрузки), «Выход» его не гасит.
+        self.stop_child();
+    }
+
+    /// Погасить свой процесс: `POST /shutdown` (идущая запись сохраняется,
+    /// ответ — до 70 с), затем, если процесс ещё жив, — убить дерево.
+    /// Своего процесса нет — ничего не делает.
+    fn stop_child(&self) {
         let Some(pid) = self.child_pid() else {
-            // Своего процесса нет. External-резидент принадлежит пользователю
-            // (например, `--watch` из автозагрузки) — «Выход» его не гасит.
             return;
         };
         match read_endpoint() {
@@ -654,6 +800,7 @@ impl Supervisor {
         let deadline = Instant::now() + EXIT_GRACE;
         while Instant::now() < deadline {
             if self.child_exited() {
+                *lock(&self.inner.running_from) = None;
                 return;
             }
             thread::sleep(POLL);
@@ -663,6 +810,7 @@ impl Supervisor {
         if let Some(mut child) = lock(&self.inner.child).take() {
             let _ = child.wait();
         }
+        *lock(&self.inner.running_from) = None;
     }
 
     fn child_pid(&self) -> Option<u32> {
@@ -712,8 +860,9 @@ fn redirect_output(command: &mut Command, program: &Path) {
     }
 }
 
-/// Без окна консоли: резидент и taskkill — консольные программы.
-fn hide_console(command: &mut Command) {
+/// Без окна консоли: резидент, taskkill, uv и nvidia-smi — консольные
+/// программы.
+pub(crate) fn hide_console(command: &mut Command) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -744,45 +893,103 @@ mod tests {
     use std::ffi::OsStr;
     use std::path::Path;
 
+    const DEV_EXE_DIR: &str = r"C:\repo\app\src-tauri\target\debug";
+    const DEV_VENV: &str = r"C:\repo\.venv\Scripts\meet-tray.exe";
+
+    /// Папка данных с окружением движка `0.2.0`, маркер — версии `marker`.
+    fn data_with_engine(name: &str, marker: Option<&str>) -> TempTree {
+        let tree = TempTree::new(name, &[r"engine\0.2.0\Scripts\meet-tray.exe"]);
+        if let Some(version) = marker {
+            std::fs::write(
+                tree.0.join(r"engine\0.2.0\installed.json"),
+                engine::marker_json(version, "cuda", "2026-10-01 03:00:00Z"),
+            )
+            .unwrap();
+        }
+        tree
+    }
+
     #[test]
-    fn candidates_prefer_bundled_then_dev_venv_then_path() {
-        let exe_dir = Path::new(r"C:\repo\app\src-tauri\target\debug");
-        let list = candidates(exe_dir, None, true);
-        assert_eq!(list[0], exe_dir.join("resident").join("meet-tray.exe"));
-        assert_eq!(list[1], Path::new(r"C:\repo\.venv\Scripts\meet-tray.exe"));
-        assert_eq!(list.last().unwrap(), Path::new("meet-tray.exe"));
+    fn without_engine_dev_venv_then_path() {
+        // Dev-режим как раньше: движок не установлен — резидент из .venv.
+        let data = TempTree::new("cand-none", &[]);
+        let list = candidates(Path::new(DEV_EXE_DIR), None, &data.0, "0.2.0", true);
+        assert_eq!(
+            list,
+            vec![PathBuf::from(DEV_VENV), PathBuf::from("meet-tray.exe")]
+        );
+    }
+
+    #[test]
+    fn installed_engine_goes_before_dev_venv() {
+        let data = data_with_engine("cand-engine", Some("0.2.0"));
+        let engine = data.0.join(r"engine\0.2.0\Scripts\meet-tray.exe");
+        let list = candidates(Path::new(DEV_EXE_DIR), None, &data.0, "0.2.0", true);
+        assert_eq!(
+            list,
+            vec![
+                engine.clone(),
+                PathBuf::from(DEV_VENV),
+                PathBuf::from("meet-tray.exe")
+            ]
+        );
+        let list = candidates(Path::new(DEV_EXE_DIR), None, &data.0, "0.2.0", false);
+        assert_eq!(list, vec![engine, PathBuf::from("meet-tray.exe")]);
+    }
+
+    #[test]
+    fn engine_of_another_version_is_not_a_candidate() {
+        // Маркер 0.1.0 в папке 0.2.0 — окружение не этой версии.
+        let data = data_with_engine("cand-other", Some("0.1.0"));
+        let list = candidates(Path::new(DEV_EXE_DIR), None, &data.0, "0.2.0", false);
+        assert_eq!(list, vec![PathBuf::from("meet-tray.exe")]);
+        // Приложение обновилось до 0.3.0, а движок есть только для 0.2.0.
+        let data = data_with_engine("cand-update", Some("0.2.0"));
+        let list = candidates(Path::new(DEV_EXE_DIR), None, &data.0, "0.3.0", false);
+        assert_eq!(list, vec![PathBuf::from("meet-tray.exe")]);
+        // Недостроенное окружение без маркера — тоже нет.
+        let data = data_with_engine("cand-half", None);
+        let list = candidates(Path::new(DEV_EXE_DIR), None, &data.0, "0.2.0", false);
+        assert_eq!(list, vec![PathBuf::from("meet-tray.exe")]);
     }
 
     #[test]
     fn meet_resident_env_goes_before_everything() {
-        let exe_dir = Path::new(r"C:\repo\app\src-tauri\target\debug");
+        let data = data_with_engine("cand-env", Some("0.2.0"));
         let chosen = r"D:\other\.venv\Scripts\meet-tray.exe";
-        let list = candidates(exe_dir, Some(OsStr::new(chosen)), true);
+        let list = candidates(
+            Path::new(DEV_EXE_DIR),
+            Some(OsStr::new(chosen)),
+            &data.0,
+            "0.2.0",
+            true,
+        );
         assert_eq!(list[0], Path::new(chosen));
-        assert_eq!(list[1], exe_dir.join("resident").join("meet-tray.exe"));
+        assert_eq!(list[1], data.0.join(r"engine\0.2.0\Scripts\meet-tray.exe"));
         assert_eq!(list.last().unwrap(), Path::new("meet-tray.exe"));
     }
 
     #[test]
     fn blank_meet_resident_env_is_ignored() {
-        let exe_dir = Path::new(r"C:\repo\app\src-tauri\target\debug");
-        let list = candidates(exe_dir, Some(OsStr::new("  ")), true);
-        assert_eq!(list[0], exe_dir.join("resident").join("meet-tray.exe"));
+        let data = TempTree::new("cand-blank", &[]);
+        let list = candidates(
+            Path::new(DEV_EXE_DIR),
+            Some(OsStr::new("  ")),
+            &data.0,
+            "0.2.0",
+            true,
+        );
+        assert_eq!(list[0], Path::new(DEV_VENV));
     }
 
     #[test]
     fn release_build_never_looks_into_a_dev_venv() {
         // Установленное приложение не должно подхватить .venv из папки,
         // которая случайно лежит на 4 уровня выше exe.
+        let data = TempTree::new("cand-release", &[]);
         let exe_dir = Path::new(r"C:\repo\app\src-tauri\target\release");
-        let list = candidates(exe_dir, None, false);
-        assert_eq!(
-            list,
-            vec![
-                exe_dir.join("resident").join("meet-tray.exe"),
-                PathBuf::from("meet-tray.exe")
-            ]
-        );
+        let list = candidates(exe_dir, None, &data.0, "0.2.0", false);
+        assert_eq!(list, vec![PathBuf::from("meet-tray.exe")]);
     }
 
     #[test]
@@ -852,7 +1059,7 @@ mod tests {
 
     #[test]
     fn non_venv_resident_is_run_as_is() {
-        // Установленное приложение: resident\meet-tray.exe без pyvenv.cfg.
+        // MEET_RESIDENT на exe вне venv (без pyvenv.cfg рядом).
         let tree = TempTree::new("bundled", &[r"resident\meet-tray.exe"]);
         let candidate = tree.0.join("resident").join("meet-tray.exe");
         let (program, arguments) = launch(&candidate, 7);

@@ -36,6 +36,11 @@ pub fn shell_log_path(data_dir: &Path) -> PathBuf {
     logs_dir(data_dir).join("shell.log")
 }
 
+/// Вывод uv при установке движка (`engine.rs`).
+pub fn engine_install_log(data_dir: &Path) -> PathBuf {
+    logs_dir(data_dir).join("engine-install.log")
+}
+
 /// Журнал больше `limit` — переименовать в `<имя>.1` (прежний `.1` теряется).
 /// `Ok(true)` — ротация была; нет файла — `Ok(false)`.
 pub fn rotate(path: &Path, limit: u64) -> io::Result<bool> {
@@ -76,6 +81,15 @@ pub fn line(at: SystemTime, text: &str) -> String {
         .map(|since| since.as_secs())
         .unwrap_or(0);
     format!("{} {text}\n", utc(seconds))
+}
+
+/// Сейчас (UTC) — «2026-09-21 14:13:20Z».
+pub fn utc_now() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_secs())
+        .unwrap_or(0);
+    utc(seconds)
 }
 
 /// Секунды эпохи → «2026-09-21 14:13:20Z». Без крейта времени ради одной
@@ -140,6 +154,10 @@ mod tests {
         assert_eq!(logs_dir(data), data.join("logs"));
         assert_eq!(resident_log(data), data.join("logs").join("resident.log"));
         assert_eq!(shell_log_path(data), data.join("logs").join("shell.log"));
+        assert_eq!(
+            engine_install_log(data),
+            data.join("logs").join("engine-install.log")
+        );
     }
 
     #[test]

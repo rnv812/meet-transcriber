@@ -1,0 +1,999 @@
+// Движок расшифровки: приватное окружение Python, которое оболочка ставит
+// через uv при первом запуске (мастер вызывает команды внизу файла).
+//
+// Установщик (NSIS) несёт только uv.exe, ffmpeg.exe и колесо meet — тяжёлый
+// стек (torch, faster-whisper, pyannote) скачивается на машине пользователя
+// под её железо: CUDA-сборка для карты NVIDIA, CPU — иначе. Окружение живёт в
+// `<data_dir>\engine\<версия приложения>`: новая версия приложения ставит
+// своё окружение рядом, старое удаляется, когда резидент новой версии
+// ответил (`resident.rs`). Python от uv — общий, в `engine\python`.
+//
+// Шаги установки — те же, что `meet.engine.uv_steps` в Python: тест сверяет
+// их с фикстурами tests/fixtures/uv_steps_*.json.
+//
+// Повторный запуск установки после сбоя просто повторяет все шаги: скачанное
+// лежит в кэше uv (`UV_CACHE_DIR` по умолчанию), второй раз из сети идёт
+// только недокачанное.
+
+use std::collections::VecDeque;
+use std::ffi::{OsStr, OsString};
+use std::fs::{self, File};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager};
+
+use crate::logs::{self, shell_log};
+use crate::resident::{self, Supervisor};
+
+/// Индексы колёс torch — как `TORCH_CUDA_INDEX`/`TORCH_CPU_INDEX` в
+/// `meet/engine.py` (cu128: без неё не работают карты RTX 50xx).
+pub const TORCH_CUDA_INDEX: &str = "https://download.pytorch.org/whl/cu128";
+pub const TORCH_CPU_INDEX: &str = "https://download.pytorch.org/whl/cpu";
+
+/// Событие прогресса: `{step, of, line}` — номер шага с 1, всего шагов,
+/// строка вывода (первое событие шага — его название).
+pub const PROGRESS_EVENT: &str = "engine-progress";
+/// Событие сбоя шага: `{step, tail}` — номер шага и последние строки вывода.
+pub const FAILED_EVENT: &str = "engine-failed";
+
+const ENGINE: &str = "engine";
+/// Python от uv — общий для всех версий окружения, `stale_envs` его не трогает.
+const PYTHON: &str = "python";
+/// Маркер законченной установки: пишется последним, после всех шагов.
+const MARKER: &str = "installed.json";
+const LAUNCHER: &str = "meet-tray.exe";
+const WHEEL_PREFIX: &str = "meet_transcriber-";
+const UV: &str = "uv.exe";
+const FFMPEG: &str = "ffmpeg.exe";
+/// Места на диске с данными, ГБ: окружение с CUDA-сборкой torch весит около
+/// 4,5 ГБ, CPU — около 2 ГБ; сверху запас на распаковку.
+const NEEDS_CUDA_GB: f64 = 5.0;
+const NEEDS_CPU_GB: f64 = 3.0;
+const TAIL_LINES: usize = 30;
+/// Не чаще 10 строк в секунду в окно: uv сыплет сотнями строк, журнал
+/// получает все, интерфейсу хватает «что сейчас происходит».
+const LINE_GAP: Duration = Duration::from_millis(100);
+const GPU_TIMEOUT: Duration = Duration::from_secs(5);
+/// Названия шагов `uv_steps` для окна установки — по порядку.
+const STEP_TITLES: [&str; 4] = [
+    "Загрузка Python 3.12",
+    "Создание окружения движка",
+    "Установка PyTorch",
+    "Установка движка meet",
+];
+
+pub const NO_UV: &str = "Установщик собран без движка: нет uv.exe";
+pub const NO_WHEEL: &str = "Установщик собран без движка: нет колеса meet_transcriber";
+pub const BUSY: &str = "Установка уже идёт";
+
+pub fn engine_root(data_dir: &Path) -> PathBuf {
+    data_dir.join(ENGINE)
+}
+
+pub fn env_dir(data_dir: &Path, version: &str) -> PathBuf {
+    engine_root(data_dir).join(version)
+}
+
+pub fn python_dir(data_dir: &Path) -> PathBuf {
+    engine_root(data_dir).join(PYTHON)
+}
+
+/// gui-script резидента в окружении движка.
+pub fn launcher(env_dir: &Path) -> PathBuf {
+    env_dir.join("Scripts").join(LAUNCHER)
+}
+
+/// Команды установки колеса в приватное окружение — порт
+/// `meet.engine.uv_steps`. Путь к python склеивается строкой с «\», как в
+/// Python, чтобы шаги совпадали байт в байт.
+pub fn uv_steps(uv: &str, env_dir: &str, wheel: &str, profile: &str) -> Vec<Vec<String>> {
+    let python = format!(r"{env_dir}\Scripts\python.exe");
+    let index = if profile == "cuda" {
+        TORCH_CUDA_INDEX
+    } else {
+        TORCH_CPU_INDEX
+    };
+    let owned = |items: &[&str]| {
+        items
+            .iter()
+            .map(|item| item.to_string())
+            .collect::<Vec<_>>()
+    };
+    let pip = owned(&[uv, "pip", "install", "--python", &python]);
+    vec![
+        owned(&[uv, "python", "install", "3.12"]),
+        owned(&[uv, "venv", "--python", "3.12", env_dir]),
+        [
+            pip.clone(),
+            owned(&["torch", "torchaudio", "--index-url", index]),
+        ]
+        .concat(),
+        [pip, vec![format!("{wheel}[engine-{profile}]")]].concat(),
+    ]
+}
+
+/// Окружение uv: всё своё — внутри папки приложения. Python ставится в
+/// `engine\python` без ярлыков в `~\.local\bin` и без записи в реестр;
+/// окружение строится только на этом Python, а не на системном (удалят
+/// системный — движок не сломается). `UV_VENV_CLEAR`: uv 0.8+ отказывается
+/// создавать venv поверх существующего, а повторная установка после сбоя
+/// должна просто пройти все шаги заново. Кэш uv — по умолчанию: на нём
+/// держится докачка.
+pub fn uv_env(data_dir: &Path) -> Vec<(&'static str, OsString)> {
+    vec![
+        (
+            "UV_PYTHON_INSTALL_DIR",
+            python_dir(data_dir).into_os_string(),
+        ),
+        ("UV_PYTHON_INSTALL_BIN", "0".into()),
+        ("UV_PYTHON_INSTALL_REGISTRY", "0".into()),
+        ("UV_MANAGED_PYTHON", "1".into()),
+        ("UV_VENV_CLEAR", "1".into()),
+        // Чужой uv.toml (в профиле пользователя) не должен подменить индекс.
+        ("UV_NO_CONFIG", "1".into()),
+        ("UV_NO_PROGRESS", "1".into()),
+        ("NO_COLOR", "1".into()),
+    ]
+}
+
+/// Окружения других версий в `engine` — всё, кроме текущей и общего Python.
+pub fn stale_envs(engine_root: &Path, current: &str) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(engine_root) else {
+        return Vec::new();
+    };
+    let mut stale: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            !name.eq_ignore_ascii_case(current) && !name.eq_ignore_ascii_case(PYTHON)
+        })
+        .map(|entry| entry.path())
+        .collect();
+    stale.sort();
+    stale
+}
+
+pub fn needs_gb(profile: &str) -> f64 {
+    if profile == "cuda" {
+        NEEDS_CUDA_GB
+    } else {
+        NEEDS_CPU_GB
+    }
+}
+
+/// Профиль по видеокарте: NVIDIA видна — cuda, иначе cpu.
+pub fn profile_for(gpu: Option<&str>) -> &'static str {
+    if gpu.is_some() {
+        "cuda"
+    } else {
+        "cpu"
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct Marker {
+    version: String,
+    profile: String,
+    installed_at: String,
+}
+
+pub fn marker_json(version: &str, profile: &str, installed_at: &str) -> String {
+    let marker = Marker {
+        version: version.into(),
+        profile: profile.into(),
+        installed_at: installed_at.into(),
+    };
+    serde_json::to_string_pretty(&marker).unwrap_or_default()
+}
+
+fn read_marker(env_dir: &Path) -> Option<Marker> {
+    serde_json::from_str(&fs::read_to_string(env_dir.join(MARKER)).ok()?).ok()
+}
+
+/// Движок этой версии установлен: есть резидент и маркер с версией
+/// приложения. Без маркера окружение недостроено (установка прервалась).
+pub fn is_installed(env_dir: &Path, version: &str) -> bool {
+    launcher(env_dir).is_file()
+        && read_marker(env_dir).is_some_and(|marker| marker.version == version)
+}
+
+/// ГБ для человека: с точностью до десятой, вниз (4,96 — «4,9», не «5»),
+/// запятая — по-русски, целое — без «,0».
+fn gb_text(gb: f64) -> String {
+    let tenths = (gb * 10.0 + 1e-9).floor().max(0.0) as u64;
+    if tenths % 10 == 0 {
+        format!("{}", tenths / 10)
+    } else {
+        format!("{},{}", tenths / 10, tenths % 10)
+    }
+}
+
+/// Хватит ли места; нет — текст отказа.
+pub fn space_error(needs_gb: f64, free_gb: f64) -> Option<String> {
+    (free_gb + 1e-9 < needs_gb).then(|| {
+        format!(
+            "Недостаточно места: нужно {} ГБ, свободно {} ГБ",
+            gb_text(needs_gb),
+            gb_text(free_gb)
+        )
+    })
+}
+
+/// Имя карты из вывода `nvidia-smi --query-gpu=name --format=csv,noheader`.
+pub fn parse_gpu(stdout: &str) -> Option<String> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(String::from)
+}
+
+/// Колесо meet в ресурсах: своей версии, а если такого нет — любое
+/// `meet_transcriber-*.whl` (последнее по имени).
+pub fn find_wheel(dir: &Path, version: &str) -> Option<PathBuf> {
+    let exact = dir.join(format!("{WHEEL_PREFIX}{version}-py3-none-any.whl"));
+    if exact.is_file() {
+        return Some(exact);
+    }
+    let mut wheels: Vec<PathBuf> = fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .filter(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy())
+                .is_some_and(|name| name.starts_with(WHEEL_PREFIX) && name.ends_with(".whl"))
+        })
+        .collect();
+    wheels.sort();
+    wheels.pop()
+}
+
+/// Где лежит `file` из ресурсов. Релизный конфиг (`tauri.release.conf.json`,
+/// `resources/*`) кладёт файлы в `<resource_dir>\resources`; плоскую
+/// раскладку тоже понимаем. В dev ресурсов нет — `None`.
+pub fn find_resource_dir(base: &Path, file: &str) -> Option<PathBuf> {
+    [base.join("resources"), base.to_path_buf()]
+        .into_iter()
+        .find(|dir| dir.join(file).is_file())
+}
+
+fn resource_dir_with(app: &AppHandle, file: &str) -> Option<PathBuf> {
+    find_resource_dir(&app.path().resource_dir().ok()?, file)
+}
+
+/// Папка с `ffmpeg.exe` из ресурсов — в PATH резидента из окружения движка.
+pub fn ffmpeg_dir(app: &AppHandle) -> Option<PathBuf> {
+    resource_dir_with(app, FFMPEG)
+}
+
+/// PATH с `dir` в начале.
+pub fn path_with(dir: &Path, current: Option<&OsStr>) -> OsString {
+    let mut parts = vec![dir.to_path_buf()];
+    if let Some(current) = current {
+        parts.extend(std::env::split_paths(current).filter(|part| !part.as_os_str().is_empty()));
+    }
+    std::env::join_paths(parts).unwrap_or_else(|_| dir.as_os_str().to_owned())
+}
+
+/// Хвост вывода для окна ошибки — последние `TAIL_LINES` строк.
+pub fn push_tail(tail: &mut VecDeque<String>, line: String) {
+    tail.push_back(line);
+    while tail.len() > TAIL_LINES {
+        tail.pop_front();
+    }
+}
+
+/// Не чаще одного раза за `gap`.
+pub struct Throttle {
+    gap: Duration,
+    last: Option<Instant>,
+}
+
+impl Throttle {
+    pub fn new(gap: Duration) -> Self {
+        Throttle { gap, last: None }
+    }
+
+    pub fn allow(&mut self, now: Instant) -> bool {
+        if self
+            .last
+            .is_some_and(|last| now.saturating_duration_since(last) < self.gap)
+        {
+            return false;
+        }
+        self.last = Some(now);
+        true
+    }
+}
+
+static INSTALLING: AtomicBool = AtomicBool::new(false);
+
+/// Идёт установка; снимается при выходе из `install`, как бы он ни
+/// закончился. Второй вызов (двойной клик, второе окно) получает отказ, а не
+/// вторую копию uv в той же папке.
+pub struct Busy(());
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        INSTALLING.store(false, Ordering::SeqCst);
+    }
+}
+
+pub fn begin_install() -> Result<Busy, String> {
+    INSTALLING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .map(|_| Busy(()))
+        .map_err(|_| BUSY.to_string())
+}
+
+/// Свободно на диске пути (ближайшая существующая папка), ГБ.
+#[cfg(windows)]
+pub fn free_gb(path: &Path) -> Option<f64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let existing = path.ancestors().find(|dir| dir.exists())?;
+    let wide: Vec<u16> = existing.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut free = 0u64;
+    // SAFETY: строка с нулём на конце живёт до конца вызова; счётчик пишется
+    // в локальную переменную, необязательные выходы — null.
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then(|| free as f64 / f64::from(1u32 << 30))
+}
+
+#[cfg(not(windows))]
+pub fn free_gb(_path: &Path) -> Option<f64> {
+    None
+}
+
+/// Видеокарта NVIDIA по `nvidia-smi` (без окна, не дольше 5 с); нет
+/// nvidia-smi или карты — `None`. Это штатно для ноутбука, не сбой.
+pub fn detect_gpu() -> Option<String> {
+    let mut command = Command::new("nvidia-smi");
+    command
+        .args(["--query-gpu=name", "--format=csv,noheader"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    resident::hide_console(&mut command);
+    let mut child = command.spawn().ok()?;
+    let deadline = Instant::now() + GPU_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(Some(_)) => return None,
+            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let mut out = String::new();
+    child.stdout.take()?.read_to_string(&mut out).ok()?;
+    parse_gpu(&out)
+}
+
+/// Запустить программу без окна и отдавать её stdout и stderr построчно, по
+/// мере появления. Код выхода (`None` — процесс убит).
+pub fn run_streamed(
+    argv: &[String],
+    envs: &[(&str, OsString)],
+    cwd: &Path,
+    mut on_line: impl FnMut(String),
+) -> io::Result<Option<i32>> {
+    let (program, rest) = argv
+        .split_first()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "пустая команда"))?;
+    let mut command = Command::new(program);
+    command
+        .args(rest)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    resident::hide_console(&mut command);
+    let mut child = command.spawn()?;
+    let (sender, receiver) = mpsc::channel();
+    let streams: [Option<Box<dyn Read + Send>>; 2] = [
+        child
+            .stdout
+            .take()
+            .map(|out| Box::new(out) as Box<dyn Read + Send>),
+        child
+            .stderr
+            .take()
+            .map(|err| Box::new(err) as Box<dyn Read + Send>),
+    ];
+    let readers: Vec<_> = streams
+        .into_iter()
+        .flatten()
+        .map(|stream| {
+            let sender = sender.clone();
+            thread::spawn(move || forward_lines(stream, &sender))
+        })
+        .collect();
+    drop(sender);
+    for line in receiver {
+        on_line(line);
+    }
+    for reader in readers {
+        let _ = reader.join();
+    }
+    Ok(child.wait()?.code())
+}
+
+/// Строки потока — в канал. `\r` внутри строки — перерисовка прогресса:
+/// берём последнюю версию.
+fn forward_lines(stream: impl Read, sender: &mpsc::Sender<String>) {
+    let mut reader = BufReader::new(stream);
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        match reader.read_until(b'\n', &mut buffer) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {
+                let text = String::from_utf8_lossy(&buffer);
+                let line = text
+                    .trim_end_matches(['\r', '\n'])
+                    .rsplit('\r')
+                    .next()
+                    .unwrap_or_default()
+                    .trim_end();
+                if !line.is_empty() && sender.send(line.to_string()).is_err() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// `logs\engine-install.log`: весь вывод uv со временем. Журнал не открылся
+/// — установка идёт без него.
+struct InstallLog(Option<File>);
+
+impl InstallLog {
+    fn open(data_dir: &Path) -> Self {
+        let path = logs::engine_install_log(data_dir);
+        match logs::open_append(&path) {
+            Ok(file) => InstallLog(Some(file)),
+            Err(error) => {
+                shell_log!("журнал установки {} не открылся: {error}", path.display());
+                InstallLog(None)
+            }
+        }
+    }
+
+    fn write(&mut self, text: &str) {
+        if let Some(file) = self.0.as_mut() {
+            let _ = file.write_all(logs::line(SystemTime::now(), text).as_bytes());
+        }
+    }
+}
+
+#[derive(Serialize, Clone)]
+struct Progress {
+    step: usize,
+    of: usize,
+    line: String,
+}
+
+#[derive(Serialize, Clone)]
+struct Failed {
+    step: usize,
+    tail: String,
+}
+
+fn app_version(app: &AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+/// Поставить движок версии приложения (`fresh` — с нуля, удалив прежнее
+/// окружение). Блокирует на минуты: только из рабочего потока.
+pub fn install(app: &AppHandle, profile: &str, fresh: bool) -> Result<(), String> {
+    let _busy = begin_install()?;
+    if !matches!(profile, "cuda" | "cpu") {
+        return Err(format!("Неизвестный профиль движка: {profile}"));
+    }
+    let data = resident::data_dir();
+    let version = app_version(app);
+    let env = env_dir(&data, &version);
+    let resources = resource_dir_with(app, UV).ok_or(NO_UV)?;
+    let wheel = find_wheel(&resources, &version).ok_or(NO_WHEEL)?;
+    let supervisor = app.state::<Supervisor>();
+    // Резидент из этого окружения держит его файлы: uv не пересоздаст venv
+    // под работающим python.exe, а удалить папку не даст Windows.
+    let stopped = supervisor.stop_if_from(&env);
+    let result = prepare(&data, &env, profile, fresh).and_then(|()| {
+        run_steps(
+            app,
+            &data,
+            &env,
+            &version,
+            profile,
+            &resources.join(UV),
+            &wheel,
+        )
+    });
+    match &result {
+        Ok(()) => {
+            shell_log!("движок {version} ({profile}) установлен: {}", env.display());
+            // Новый надзор заново соберёт кандидатов и возьмёт движок.
+            supervisor.respawn(app);
+        }
+        Err(error) => {
+            shell_log!("установка движка не удалась: {error}");
+            if stopped {
+                supervisor.respawn(app);
+            }
+        }
+    }
+    result
+}
+
+/// До шагов: переустановка удаляет окружение, проверяется место, снимается
+/// маркер (прерванная установка не должна выглядеть законченной).
+fn prepare(data_dir: &Path, env: &Path, profile: &str, fresh: bool) -> Result<(), String> {
+    if fresh && env.exists() {
+        fs::remove_dir_all(env).map_err(|error| {
+            format!(
+                "Не удалось удалить прежний движок ({}): {error}",
+                env.display()
+            )
+        })?;
+    }
+    if let Some(error) = free_gb(data_dir).and_then(|free| space_error(needs_gb(profile), free)) {
+        return Err(error);
+    }
+    match fs::remove_file(env.join(MARKER)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("Не удалось снять отметку установки: {error}")),
+    }
+    fs::create_dir_all(engine_root(data_dir))
+        .map_err(|error| format!("Не удалось создать папку движка: {error}"))
+}
+
+fn run_steps(
+    app: &AppHandle,
+    data_dir: &Path,
+    env: &Path,
+    version: &str,
+    profile: &str,
+    uv: &Path,
+    wheel: &Path,
+) -> Result<(), String> {
+    let steps = uv_steps(
+        &uv.to_string_lossy(),
+        &env.to_string_lossy(),
+        &wheel.to_string_lossy(),
+        profile,
+    );
+    let of = steps.len();
+    let envs = uv_env(data_dir);
+    let cwd = engine_root(data_dir);
+    let mut log = InstallLog::open(data_dir);
+    log.write(&format!(
+        "--- установка движка {version} ({profile}) в {}",
+        env.display()
+    ));
+    let progress = |step: usize, line: String| {
+        let _ = app.emit(PROGRESS_EVENT, Progress { step, of, line });
+    };
+    for (index, argv) in steps.iter().enumerate() {
+        let step = index + 1;
+        let title = STEP_TITLES.get(index).copied().unwrap_or("Установка");
+        log.write(&format!("шаг {step} из {of}: {}", argv.join(" ")));
+        progress(step, title.to_string());
+        let mut tail = VecDeque::new();
+        let mut throttle = Throttle::new(LINE_GAP);
+        let outcome = run_streamed(argv, &envs, &cwd, |line| {
+            log.write(&line);
+            if throttle.allow(Instant::now()) {
+                progress(step, line.clone());
+            }
+            push_tail(&mut tail, line);
+        });
+        let failure = match outcome {
+            Ok(Some(0)) => None,
+            Ok(Some(code)) => Some(format!("шаг {step} из {of} ({title}): код выхода {code}")),
+            Ok(None) => Some(format!("шаг {step} из {of} ({title}): процесс прерван")),
+            Err(error) => Some(format!(
+                "шаг {step} из {of} ({title}) не запустился: {error}"
+            )),
+        };
+        if let Some(message) = failure {
+            log.write(&message);
+            push_tail(&mut tail, message.clone());
+            let tail = Vec::from(tail).join("\n");
+            let _ = app.emit(FAILED_EVENT, Failed { step, tail });
+            return Err(format!("Установка движка прервалась: {message}"));
+        }
+    }
+    let marker = marker_json(version, profile, &logs::utc_now());
+    let staged = env.join(format!("{MARKER}.tmp"));
+    fs::write(&staged, marker)
+        .and_then(|()| fs::rename(&staged, env.join(MARKER)))
+        .map_err(|error| format!("Не удалось записать отметку установки: {error}"))?;
+    log.write("движок установлен");
+    Ok(())
+}
+
+static CLEANED: AtomicBool = AtomicBool::new(false);
+
+/// Удалить окружения прежних версий — один раз за жизнь оболочки, в своём
+/// потоке (гигабайты). Зовётся, когда резидент из окружения текущей версии
+/// ответил: до этого старое — запасной вариант. Не удалилось (файлы заняты)
+/// — попробуем при следующем запуске.
+pub fn remove_stale_in_background(data_dir: PathBuf, current: String) {
+    if CLEANED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let spawned = thread::Builder::new()
+        .name("meet-engine-cleanup".into())
+        .spawn(move || {
+            for dir in stale_envs(&engine_root(&data_dir), &current) {
+                match fs::remove_dir_all(&dir) {
+                    Ok(()) => shell_log!("удалён движок прежней версии: {}", dir.display()),
+                    Err(error) => shell_log!("движок {} не удалён: {error}", dir.display()),
+                }
+            }
+        });
+    if let Err(error) = spawned {
+        shell_log!("поток очистки движков не запустился: {error}");
+    }
+}
+
+/// Состояние движка для мастера первого запуска.
+#[derive(Serialize, Clone, Debug)]
+pub struct EngineStatus {
+    pub installed: bool,
+    pub version: String,
+    pub env_dir: String,
+    /// Профиль установленного движка (`cuda`/`cpu`); не установлен — `None`.
+    pub profile: Option<String>,
+    pub gpu: Option<String>,
+    /// Свободно на диске с данными, ГБ (вниз до десятой); `None` — узнать
+    /// не удалось (тогда установку не блокируем).
+    pub free_gb: Option<f64>,
+    /// Нужно места под профиль, который подсказывает видеокарта.
+    pub needs_gb: f64,
+}
+
+pub fn status(app: &AppHandle) -> EngineStatus {
+    let data = resident::data_dir();
+    let version = app_version(app);
+    let env = env_dir(&data, &version);
+    let installed = is_installed(&env, &version);
+    let profile = installed
+        .then(|| read_marker(&env))
+        .flatten()
+        .map(|marker| marker.profile);
+    let gpu = detect_gpu();
+    EngineStatus {
+        installed,
+        version,
+        env_dir: env.to_string_lossy().into_owned(),
+        profile,
+        needs_gb: needs_gb(profile_for(gpu.as_deref())),
+        gpu,
+        free_gb: free_gb(&data).map(|gb| (gb * 10.0).floor() / 10.0),
+    }
+}
+
+#[tauri::command]
+pub async fn engine_status(app: AppHandle) -> Result<EngineStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || status(&app))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn gpu_info() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(detect_gpu)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Поставить движок (или достроить после сбоя). Ответ — по окончании;
+/// прогресс — событиями `engine-progress`, сбой шага — `engine-failed`.
+#[tauri::command]
+pub async fn install_engine(app: AppHandle, profile: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || install(&app, &profile, false))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Удалить окружение текущей версии и поставить заново.
+#[tauri::command]
+pub async fn reinstall_engine(app: AppHandle, profile: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || install(&app, &profile, true))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Временная папка теста; удаляется в конце теста.
+    pub(crate) struct TempDir(pub PathBuf);
+
+    impl TempDir {
+        pub fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("meet-engine-test-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+
+        pub fn file(&self, relative: &str, content: &str) -> PathBuf {
+            let path = self.0.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, content).unwrap();
+            path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn env_dir_is_versioned_under_engine() {
+        let data = Path::new(r"C:\Users\u\AppData\Local\meet");
+        assert_eq!(engine_root(data), data.join("engine"));
+        assert_eq!(env_dir(data, "0.2.0"), data.join("engine").join("0.2.0"));
+    }
+
+    fn fixture(name: &str) -> Vec<Vec<String>> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures")
+            .join(name);
+        let raw =
+            fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        serde_json::from_str(&raw).unwrap()
+    }
+
+    const WHEEL: &str = r"C:\w\meet_transcriber-0.1.0-py3-none-any.whl";
+
+    #[test]
+    fn uv_steps_match_python_for_cuda() {
+        assert_eq!(
+            uv_steps("uv.exe", r"C:\env", WHEEL, "cuda"),
+            fixture("uv_steps_cuda.json")
+        );
+    }
+
+    #[test]
+    fn uv_steps_match_python_for_cpu() {
+        assert_eq!(
+            uv_steps("uv.exe", r"C:\env", WHEEL, "cpu"),
+            fixture("uv_steps_cpu.json")
+        );
+    }
+
+    #[test]
+    fn stale_envs_are_other_versions_but_not_python() {
+        let root = TempDir::new("stale");
+        for dir in ["0.1.0", "0.2.0", "0.3.0", "python"] {
+            fs::create_dir_all(root.0.join(dir)).unwrap();
+        }
+        root.file("notes.txt", "не папка");
+        assert_eq!(
+            stale_envs(&root.0, "0.2.0"),
+            vec![root.0.join("0.1.0"), root.0.join("0.3.0")]
+        );
+        // Нет папки engine — нечего удалять.
+        assert!(stale_envs(&root.0.join("missing"), "0.2.0").is_empty());
+    }
+
+    #[test]
+    fn cuda_needs_more_space_than_cpu() {
+        assert_eq!(needs_gb("cuda"), 5.0);
+        assert_eq!(needs_gb("cpu"), 3.0);
+    }
+
+    #[test]
+    fn installed_means_launcher_and_marker_of_this_version() {
+        let tree = TempDir::new("installed");
+        let env = tree.0.join("0.2.0");
+        assert!(!is_installed(&env, "0.2.0"), "пустая папка");
+        tree.file(r"0.2.0\Scripts\meet-tray.exe", "");
+        assert!(!is_installed(&env, "0.2.0"), "без маркера — недостроено");
+        tree.file(
+            r"0.2.0\installed.json",
+            &marker_json("0.1.0", "cuda", "2026-10-01 03:00:00Z"),
+        );
+        assert!(!is_installed(&env, "0.2.0"), "маркер другой версии");
+        tree.file(
+            r"0.2.0\installed.json",
+            &marker_json("0.2.0", "cuda", "2026-10-01 03:00:00Z"),
+        );
+        assert!(is_installed(&env, "0.2.0"));
+        tree.file(r"0.2.0\installed.json", "мусор");
+        assert!(!is_installed(&env, "0.2.0"), "битый маркер");
+    }
+
+    #[test]
+    fn marker_carries_version_profile_and_time() {
+        let raw = marker_json("0.2.0", "cpu", "2026-10-01 03:00:00Z");
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(value["version"], "0.2.0");
+        assert_eq!(value["profile"], "cpu");
+        assert_eq!(value["installed_at"], "2026-10-01 03:00:00Z");
+    }
+
+    #[test]
+    fn not_enough_space_is_reported_in_gigabytes() {
+        assert_eq!(
+            space_error(5.0, 2.34).as_deref(),
+            Some("Недостаточно места: нужно 5 ГБ, свободно 2,3 ГБ")
+        );
+        // 4,96 не округляется до «5»: «нужно 5, свободно 5» читалось бы как
+        // ошибка самой проверки.
+        assert_eq!(
+            space_error(5.0, 4.96).as_deref(),
+            Some("Недостаточно места: нужно 5 ГБ, свободно 4,9 ГБ")
+        );
+        assert_eq!(space_error(3.0, 3.0), None);
+        assert_eq!(space_error(5.0, 120.5), None);
+    }
+
+    #[test]
+    fn gpu_name_is_the_first_line_of_nvidia_smi() {
+        assert_eq!(
+            parse_gpu("NVIDIA GeForce RTX 5070 Ti\r\n").as_deref(),
+            Some("NVIDIA GeForce RTX 5070 Ti")
+        );
+        assert_eq!(
+            parse_gpu("\n  NVIDIA A\nNVIDIA B\n").as_deref(),
+            Some("NVIDIA A")
+        );
+        assert_eq!(parse_gpu(""), None);
+        assert_eq!(parse_gpu("  \r\n"), None);
+    }
+
+    #[test]
+    fn wheel_of_this_version_is_preferred() {
+        let tree = TempDir::new("wheel");
+        assert_eq!(find_wheel(&tree.0, "0.2.0"), None);
+        let other = tree.file("meet_transcriber-0.1.9-py3-none-any.whl", "");
+        tree.file("uv.exe", "");
+        assert_eq!(find_wheel(&tree.0, "0.2.0"), Some(other));
+        let exact = tree.file("meet_transcriber-0.2.0-py3-none-any.whl", "");
+        assert_eq!(find_wheel(&tree.0, "0.2.0"), Some(exact));
+        assert_eq!(find_wheel(&tree.0.join("missing"), "0.2.0"), None);
+    }
+
+    #[test]
+    fn ffmpeg_dir_goes_first_in_path() {
+        let joined = path_with(
+            Path::new(r"C:\app\resources"),
+            Some(OsStr::new(r"C:\Windows;C:\tools")),
+        );
+        assert_eq!(
+            joined,
+            OsString::from(r"C:\app\resources;C:\Windows;C:\tools")
+        );
+        assert_eq!(
+            path_with(Path::new(r"C:\app\resources"), None),
+            OsString::from(r"C:\app\resources")
+        );
+    }
+
+    #[test]
+    fn tail_keeps_the_last_30_lines() {
+        let mut tail = VecDeque::new();
+        for n in 0..45 {
+            push_tail(&mut tail, format!("строка {n}"));
+        }
+        assert_eq!(tail.len(), 30);
+        assert_eq!(tail.front().unwrap(), "строка 15");
+        assert_eq!(tail.back().unwrap(), "строка 44");
+    }
+
+    #[test]
+    fn throttle_lets_through_at_most_one_line_per_gap() {
+        let start = Instant::now();
+        let mut throttle = Throttle::new(Duration::from_millis(100));
+        assert!(throttle.allow(start), "первая строка — сразу");
+        assert!(!throttle.allow(start + Duration::from_millis(30)));
+        assert!(!throttle.allow(start + Duration::from_millis(99)));
+        assert!(throttle.allow(start + Duration::from_millis(100)));
+        assert!(!throttle.allow(start + Duration::from_millis(150)));
+        assert!(throttle.allow(start + Duration::from_millis(260)));
+    }
+
+    #[test]
+    fn second_install_is_refused_while_the_first_runs() {
+        let first = begin_install().unwrap();
+        assert_eq!(begin_install().err().as_deref(), Some("Установка уже идёт"));
+        drop(first);
+        assert!(begin_install().is_ok(), "после окончания — снова можно");
+    }
+
+    #[test]
+    fn uv_keeps_python_inside_the_app_folder() {
+        let data = Path::new(r"C:\Users\u\AppData\Local\meet");
+        let env = uv_env(data);
+        let get = |key: &str| env.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone());
+        assert_eq!(
+            get("UV_PYTHON_INSTALL_DIR"),
+            Some(data.join("engine").join("python").into_os_string())
+        );
+        assert_eq!(get("UV_PYTHON_INSTALL_BIN"), Some("0".into()));
+        assert_eq!(get("UV_PYTHON_INSTALL_REGISTRY"), Some("0".into()));
+        // Кэш uv — по умолчанию: на нём держится докачка после сбоя.
+        assert_eq!(get("UV_CACHE_DIR"), None);
+    }
+
+    #[test]
+    fn resources_are_found_in_resources_subfolder_or_flat() {
+        let tree = TempDir::new("resources");
+        assert_eq!(
+            find_resource_dir(&tree.0, "uv.exe"),
+            None,
+            "dev: ресурсов нет"
+        );
+        tree.file("uv.exe", "");
+        assert_eq!(find_resource_dir(&tree.0, "uv.exe"), Some(tree.0.clone()));
+        tree.file(r"resources\uv.exe", "");
+        assert_eq!(
+            find_resource_dir(&tree.0, "uv.exe"),
+            Some(tree.0.join("resources"))
+        );
+    }
+
+    #[test]
+    fn free_space_is_known_for_an_existing_drive() {
+        let free = free_gb(&std::env::temp_dir().join("нет-такой-папки")).unwrap();
+        assert!(free > 0.0);
+    }
+
+    #[test]
+    fn streamed_run_gives_stdout_and_stderr_lines_and_exit_code() {
+        let argv: Vec<String> = ["cmd", "/C", "echo one& echo two 1>&2& exit /b 3"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut lines = Vec::new();
+        let code = run_streamed(
+            &argv,
+            &[("MEET_TEST", "1".into())],
+            &std::env::temp_dir(),
+            |line| lines.push(line),
+        )
+        .unwrap();
+        lines.sort();
+        assert_eq!(lines, vec!["one", "two"]);
+        assert_eq!(code, Some(3));
+        let missing = vec!["meet-no-such-program.exe".to_string()];
+        assert!(run_streamed(&missing, &[], &std::env::temp_dir(), |_| {}).is_err());
+    }
+}

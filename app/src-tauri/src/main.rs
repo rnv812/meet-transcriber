@@ -11,6 +11,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod api;
+mod engine;
 mod logs;
 mod resident;
 mod tray;
@@ -47,7 +48,12 @@ fn main() {
             windows::pick_media,
             windows::pick_folder,
             windows::resident_status,
-            windows::live_resize
+            windows::live_resize,
+            // Мастер первого запуска: движок расшифровки.
+            engine::engine_status,
+            engine::install_engine,
+            engine::reinstall_engine,
+            engine::gpu_info
         ])
         .setup(|app| {
             Supervisor::start(app.handle());
