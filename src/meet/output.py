@@ -46,7 +46,6 @@ def to_markdown(title: str, segments: list[Segment], date: str = "") -> str:
     Если задан date (ISO YYYY-MM-DD), сверху добавляется frontmatter для Obsidian
     с пустым task (заполняется вручную при переносе в хранилище).
     """
-    names = speaker_names(segments)
     lines: list[str] = []
     if date:
         lines += [
@@ -59,8 +58,18 @@ def to_markdown(title: str, segments: list[Segment], date: str = "") -> str:
             "",
         ]
     lines += [f"# {title}", ""]
+    lines += turn_lines(segments)
+    return "\n".join(lines)
+
+
+def turn_lines(segments: list[Segment], level: int = 2) -> list[str]:
+    """Реплики в формате to_markdown: «## ВРЕМЯ — Спикер», пустая строка, текст.
+    `level` — уровень заголовка реплики (в заметке над ними стоят разделы итогов)."""
+    names = speaker_names(segments)
+    hashes = "#" * level
+    lines: list[str] = []
     for seg in merge_consecutive(segments):
         who = names.get(seg.speaker, seg.speaker) if seg.speaker else "Спикер ?"
         mark = " (нахлёст)" if seg.uncertain else ""
-        lines += [f"## {fmt_ts(seg.start)} — {who}{mark}", "", seg.text, ""]
-    return "\n".join(lines)
+        lines += [f"{hashes} {fmt_ts(seg.start)} — {who}{mark}", "", seg.text, ""]
+    return lines

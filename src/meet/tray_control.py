@@ -91,6 +91,9 @@ class ProviderCache:
         self._value: str | None = None
         self._at: float | None = None
         self._running = False
+        # Растёт на каждое invalidate(): ответ проверки, начатой до сброса
+        # (человек вошёл в CLI, пока она шла), не должен стать «свежим».
+        self._generation = 0
 
     @staticmethod
     def _key_of(cfg):
@@ -104,16 +107,18 @@ class ProviderCache:
                 return self._value, False
             if not self._running:
                 self._running = True
-                threading.Thread(target=self._refresh, args=(cfg, key),
+                threading.Thread(target=self._refresh,
+                                 args=(cfg, key, self._generation),
                                  name="meet-llm-resolve", daemon=True).start()
             return (self._value if same else None), True
 
     def invalidate(self) -> None:
         with self._lock:
+            self._generation += 1
             if self._at is not None:
                 self._at = float("-inf")  # прежний ответ — до пересчёта
 
-    def _refresh(self, cfg, key) -> None:
+    def _refresh(self, cfg, key, generation: int) -> None:
         try:
             resolve = self._resolve
             if resolve is None:
@@ -124,7 +129,11 @@ class ProviderCache:
         except Exception:
             name = None  # сбой проверки — «никто не ответит», а не падение потока
         with self._lock:
-            self._key, self._value, self._at = key, name, self._clock()
+            self._key, self._value = key, name
+            # Сброшено, пока шла проверка: ответ показываем, но как устаревший —
+            # следующий get() проверит заново.
+            fresh = generation == self._generation
+            self._at = self._clock() if fresh else float("-inf")
             self._running = False
 
 
@@ -422,6 +431,11 @@ class TrayControl:
             raise _bad_request("запись ещё идёт")
         if self.queue.active_for(str(folder), (jobs.TRANSCRIBE, jobs.IMPORT)):
             raise _bad_request("идёт расшифровка — отмените её или дождитесь")
+        # Задача модели (и её CLI) работает с cwd в папке записи: на Windows
+        # rmtree снёс бы файлы и упал на самой папке, а задача дописала бы
+        # summary.md и meta.json в осиротевшую папку.
+        if self.llm_queue.active_for(str(folder), (jobs.SUMMARY, jobs.ASK)):
+            raise _bad_request("Идёт работа модели — отмените или дождитесь")
         try:
             shutil.rmtree(folder)
         except OSError as e:
@@ -659,9 +673,13 @@ class TrayControl:
             return {"error": "транскрипта нет"}
         return folder
 
-    def _require_provider(self) -> None:
+    def _ready_for_model(self, folder: Path) -> None:
+        """409, если модели сейчас нечего дать: транскрипт вот-вот перепишет
+        расшифровка (итоги по нему устарели бы сразу) или не подключён провайдер."""
         from meet import assistant
 
+        if self.queue.active_for(str(folder), (jobs.TRANSCRIBE, jobs.IMPORT)):
+            raise _conflict("Дождитесь окончания расшифровки")
         if not _provider_installed(settings.load()):
             raise _conflict(assistant.NO_PROVIDER)
 
@@ -670,7 +688,7 @@ class TrayControl:
         folder = self._transcribed(recording_id)
         if isinstance(folder, dict):
             return folder
-        self._require_provider()
+        self._ready_for_model(folder)
         with self._submit_lock:
             job = self.llm_queue.active_for(str(folder), (jobs.SUMMARY,))
             if job is None:
@@ -694,7 +712,7 @@ class TrayControl:
         folder = self._transcribed(recording_id)
         if isinstance(folder, dict):
             return folder
-        self._require_provider()
+        self._ready_for_model(folder)
         return self.llm_queue.submit(jobs.ASK, str(folder), {"question": question}).to_raw()
 
     def qa(self, recording_id: str) -> dict:

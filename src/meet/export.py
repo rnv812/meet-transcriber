@@ -42,14 +42,18 @@ def safe_filename(title: str, fallback: str) -> str:
     return safe if safe else fallback
 
 
+def md_segments(data: dict) -> list[Segment]:
+    """Непустые реплики транскрипта как Segment — вход для output.to_markdown."""
+    return [Segment(float(s["start"]), float(s["end"]), s["text"],
+                    speaker=s.get("speaker"), uncertain=bool(s.get("uncertain")))
+            for s in data.get("segments", []) if str(s.get("text", "")).strip()]
+
+
 def render(data: dict, fmt: str, date: str = "") -> str:
     segments = [s for s in data.get("segments", []) if str(s.get("text", "")).strip()]
     title = data.get("title") or "Встреча"
     if fmt == "md":
-        segs = [Segment(float(s["start"]), float(s["end"]), s["text"],
-                        speaker=s.get("speaker"), uncertain=bool(s.get("uncertain")))
-                for s in segments]
-        return to_markdown(title, segs, date)
+        return to_markdown(title, md_segments(data), date)
     if fmt == "txt":
         lines = [title, ""]
         lines += [f"[{_hms(float(s['start']))}] {_who(s)}: {s['text'].strip()}"

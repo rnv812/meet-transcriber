@@ -168,10 +168,10 @@ def test_notes_with_escaping_subdir_is_400(state, tmp_path):
 
 def test_jobs_lists_both_queues_and_cancel_finds_either(state, monkeypatch):
     _installed(monkeypatch, codex=True)
-    transcribe = state.transcribe(RID)
     summary = state.make_summary(RID)
+    transcribe = state.transcribe(RID)
     ids = [item["id"] for item in state.jobs()["items"]]
-    assert ids == [transcribe["id"], summary["id"]]
+    assert ids == [summary["id"], transcribe["id"]]
     assert state.cancel_job(summary["id"]) == {"ok": True}
     assert state.llm_queue.get(summary["id"]).state == jobs.CANCELLED
     assert state.cancel_job("нет-такой") == {"ok": False}
@@ -269,3 +269,55 @@ def test_check_provider_timeout_is_an_answer(state, monkeypatch):
 def test_check_provider_rejects_unknown(state):
     with pytest.raises(control.BadRequest):
         state.check_provider({"provider": "rm -rf"})
+
+
+def test_delete_refused_while_model_works_on_recording(state, monkeypatch, tmp_path):
+    """Подпроцесс задачи (и CLI модели) живут с cwd в папке записи: rmtree
+    снёс бы файлы и упал на папке, а задача дописала бы итоги в призрак."""
+    _installed(monkeypatch, codex=True)
+    state.make_summary(RID)
+    with pytest.raises(control.BadRequest, match="Идёт работа модели"):
+        state.delete_recording(RID)
+    assert (tmp_path / "recordings" / RID / "transcript.json").exists()
+
+
+def test_delete_refused_while_question_is_queued(state, monkeypatch):
+    _installed(monkeypatch, codex=True)
+    state.ask(RID, {"question": "что решили?"})
+    with pytest.raises(control.BadRequest, match="Идёт работа модели"):
+        state.delete_recording(RID)
+
+
+@pytest.mark.parametrize("action", [
+    lambda st: st.make_summary(RID),
+    lambda st: st.ask(RID, {"question": "что решили?"}),
+])
+def test_summary_and_ask_wait_for_transcription(state, monkeypatch, action):
+    """Итоги по транскрипту, который вот-вот перепишет расшифровка, устарели
+    бы сразу."""
+    _installed(monkeypatch, codex=True)
+    state.transcribe(RID)
+    with pytest.raises(control.Conflict, match="Дождитесь окончания расшифровки"):
+        action(state)
+    assert state.llm_queue.listing() == []
+
+
+def test_invalidate_during_refresh_is_not_lost():
+    """Человек вошёл в CLI, пока шла проверка: её ответ (снятый до входа) не
+    должен закэшироваться как свежий."""
+    gate = threading.Event()
+    answers = ["старый", "новый"]
+
+    def resolve(cfg):
+        gate.wait(timeout=5)
+        return answers.pop(0), None
+
+    cache = tray_control.ProviderCache(resolve=resolve)
+    cfg = type("Cfg", (), {"llm": type("L", (), {"provider": "auto",
+                                                 "base_url": "u"})()})()
+    assert cache.get(cfg) == (None, True)
+    cache.invalidate()  # проверка ещё идёт
+    gate.set()
+    _wait(lambda: answers == ["новый"] and not cache._running)
+    assert cache.get(cfg) == ("старый", True)  # устаревшее, идёт пересчёт
+    _wait(lambda: cache.get(cfg) == ("новый", False))

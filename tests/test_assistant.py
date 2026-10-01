@@ -218,3 +218,16 @@ def test_to_notes_without_transcript_is_an_error(tmp_path):
     notes.mkdir()
     with pytest.raises(ValueError, match="транскрипта нет"):
         assistant.to_notes(folder, notes, "")
+
+
+def test_note_layout_is_built_from_segments_not_parsed(tmp_path):
+    """Шапка и реплики собираются из сегментов: название, совпадающее с текстом
+    реплики, не сбивает раскладку заметки."""
+    folder = _folder(tmp_path, title="Начнём.")
+    notes = tmp_path / "vault"
+    notes.mkdir()
+    text = assistant.to_notes(folder, notes, "").read_text(encoding="utf-8")
+    assert text.startswith("---\ndate: 2026-09-30\n")
+    assert text.count("# Начнём.\n") == 1
+    assert "## Транскрипт\n\n### 00:05 — Демьян\n\nНачнём. Срок пятница." in text
+    assert "### 01:05 — Спикер 1" in text

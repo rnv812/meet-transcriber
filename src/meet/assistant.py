@@ -264,15 +264,13 @@ def _notes_target(notes_dir, subdir: str) -> Path:
 
 
 def _note_body(folder: Path, data: dict, title: str, date: str) -> str:
-    from meet import export
+    from meet import export, output
 
-    rendered = export.render({**data, "title": title}, "md", date=date)
-    heading = f"# {title}\n"
-    head, _, turns = rendered.partition(heading)
-    # Реплики — на уровень ниже: в заметке над ними стоят разделы итогов.
-    turns = "\n".join("#" + line if line.startswith("## ") else line
-                      for line in turns.lstrip("\n").splitlines())
-    parts = [head + heading]
+    # Шапка (frontmatter + «# название») и реплики собираются по отдельности
+    # теми же функциями, что и экспорт .md; реплики — на уровень ниже, над
+    # ними в заметке стоят разделы итогов.
+    parts = [output.to_markdown(title, [], date)]
+    turns = "\n".join(output.turn_lines(export.md_segments(data), level=3))
     summary = read_summary(folder)
     if summary:
         body = summary["markdown"].strip()
