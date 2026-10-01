@@ -20,10 +20,18 @@ def format_live_line(start_s: float, speaker: str, text: str) -> str:
     return f"[{fmt_hms(start_s)}] {speaker}: {text}"
 
 
+class _Silence(bytes):
+    """Чанк доливки тишины (а не звук устройства) в TrackBuffer."""
+
+
 class TrackBuffer:
     """Очередь аудио-чанков: callback докидывает push(), рабочий поток забирает
     drain(). Потокобезопасность — за счёт атомарности append/popleft у deque в
-    CPython; явных локов нет, чтобы не блокировать аудио-callback."""
+    CPython; явных локов нет, чтобы не блокировать аудио-callback.
+
+    push_silence() — доливка тишины по стенным часам: окно видит паузу там,
+    где она была (таймкоды ленты не уезжают), а окно из одной доливки
+    расшифровывать незачем — drain_window() это сообщает."""
 
     def __init__(self) -> None:
         self._chunks: "deque[bytes]" = deque()
@@ -31,14 +39,27 @@ class TrackBuffer:
     def push(self, data: bytes) -> None:
         self._chunks.append(data)
 
+    def push_silence(self, data: bytes) -> None:
+        self._chunks.append(_Silence(data))
+
     def drain(self) -> bytes:
+        return self.drain_window()[0]
+
+    def drain_window(self) -> tuple[bytes, bool]:
+        """(байты окна, окно — сплошь доливка тишины)."""
         out: list[bytes] = []
         try:
             while True:
                 out.append(self._chunks.popleft())
         except IndexError:
             pass
-        return b"".join(out)
+        silent = bool(out) and all(isinstance(c, _Silence) for c in out)
+        return b"".join(out), silent
+
+
+# Такт тикера доливки живого режима: файл отстаёт от часов не больше чем на
+# PAD_GAP_S + такт, и callback'у остаётся доливать не больше этого.
+PAD_TICK_S = 0.5
 
 
 class WallClockWriter:
@@ -48,48 +69,85 @@ class WallClockWriter:
     тоже может замолчать. Без доливки тишины sys.opus оставался пустым (офлайн-
     расшифровка записи падала на ffmpeg), а после паузы реплики уезжали к
     началу дорожки — interleave sys/mic по абсолютным таймкодам врал. Тот же
-    приём, что у `recorder._Track`, но без вотчдога: пауза доливается в
-    callback'е перед возобновившимися данными и при close() — хвостом.
+    приём, что у `recorder._Track.tick_pad()`: паузу доливает тикер движка
+    (`tick()` раз в PAD_TICK_S, кусками ≤1 с), а не аудио-callback — тот
+    доливает перед возобновившимися данными только остаток не больше
+    MAX_INLINE_PAD_S (минуты нулей в пайп ffmpeg из callback'а PortAudio
+    рвали бы звук). close() дописывает лишь последний миг.
+
+    `buffer` (TrackBuffer окна расшифровки) получает тот же поток: звук и
+    доливку, в том же порядке. Точность после паузы — до PAD_GAP_S, как у
+    записи.
     """
 
     PAD_GAP_S = 1.0  # пауза короче — латентность/джиттер callback'а, не тишина
     TAIL_GAP_S = 0.05
+    MAX_INLINE_PAD_S = 2.0  # больше callback не доливает (тикер не успел)
 
-    def __init__(self, writer, channels: int, rate: int, clock=time.monotonic) -> None:
+    def __init__(self, writer, channels: int, rate: int, clock=time.monotonic,
+                 buffer: "TrackBuffer | None" = None) -> None:
         self._writer = writer
+        self._buffer = buffer
         self._frame = 2 * max(1, int(channels))
         self._rate = int(rate)
         self._clock = clock
         self._started = clock()
         self._written = 0
+        self._closed = False
         self._lock = threading.Lock()
 
     def write(self, data: bytes) -> None:
         with self._lock:
-            self._pad(len(data) / (self._frame * self._rate), self.PAD_GAP_S)
+            self._pad(len(data) / (self._frame * self._rate), self.PAD_GAP_S,
+                      limit_s=self.MAX_INLINE_PAD_S)
             self._writer.write(data)
             self._written += len(data)
+            if self._buffer is not None:
+                self._buffer.push(data)
+
+    def tick(self) -> None:
+        """Долить паузу до часов (поток тикера). Кусками ≤1 с, лок — на кусок:
+        возобновившийся callback не ждёт всю доливку целиком."""
+        with self._lock:
+            if self._closed or self._gap(0.0) <= self.PAD_GAP_S:
+                return
+        while True:
+            with self._lock:
+                if self._closed or not self._pad(0.0, self.TAIL_GAP_S, limit_s=1.0):
+                    return
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             try:
                 self._pad(0.0, self.TAIL_GAP_S)
             finally:
                 self._writer.close()
 
-    def _pad(self, incoming_s: float, min_gap: float) -> None:
-        """Тишина до момента, с которого начинаются `incoming_s` секунд данных.
-        Кусками ≤1 с: пауза может быть долгой, а ffmpeg читает из пайпа."""
-        gap = (self._clock() - self._started) - incoming_s \
+    def _gap(self, incoming_s: float) -> float:
+        return (self._clock() - self._started) - incoming_s \
             - self._written / (self._frame * self._rate)
+
+    def _pad(self, incoming_s: float, min_gap: float,
+             limit_s: float | None = None) -> bool:
+        """Тишина до момента, с которого начинаются `incoming_s` секунд данных
+        (не больше `limit_s`). Кусками ≤1 с: ffmpeg читает из пайпа. True —
+        что-то дописано."""
+        gap = self._gap(incoming_s)
         if gap <= min_gap:
-            return
+            return False
+        if limit_s is not None:
+            gap = min(gap, limit_s)
         frames = int(round(gap * self._rate))
         while frames > 0:
             n = min(frames, self._rate)
-            self._writer.write(b"\x00" * (n * self._frame))
-            self._written += n * self._frame
+            chunk = b"\x00" * (n * self._frame)
+            self._writer.write(chunk)
+            self._written += len(chunk)
+            if self._buffer is not None:
+                self._buffer.push_silence(chunk)
             frames -= n
+        return True
 
 
 class LiveEngine:
@@ -126,8 +184,11 @@ class LiveEngine:
         self._lock_path: Path | None = None  # наш .recording.lock, пока держим
         self._matcher = voice_matcher  # опознание голоса far-end (duck-typed)
         self._window_lock = threading.Lock()  # process_window зовут и внеочередно
-        self._t0 = None  # wall-clock at first process_window tick
+        # Начало координат ленты: старт захвата (start()), без него — первый
+        # тик (тесты, которые кормят буферы руками).
+        self._t0 = None
         self._tick_origin = None  # clock at previous tick → this window's start offset
+        self._pad_thread: "threading.Thread | None" = None
         self._tracks: dict[str, dict] = {}
         self._transcript = self.out_dir / "live_transcript.md"
         self._out = None
@@ -174,9 +235,9 @@ class LiveEngine:
             now = self._clock()
 
             for fname, tr in self._tracks.items():
-                raw = tr["buffer"].drain()
-                if not raw:
-                    continue
+                raw, silent = tr["buffer"].drain_window()
+                if not raw or silent:
+                    continue  # окно из одной доливки тишины: речи там нет
                 mono = pcm16_to_float32_mono(raw, tr["channels"])
                 audio = resample_to_16k(mono, tr["rate"])
                 if tr["normalize"]:
@@ -185,13 +246,16 @@ class LiveEngine:
                     # первому окну с реальной энергией far-end (тихое стартовое окно
                     # дало бы gain=1.0 на всю встречу). Точная EBU R128-нормализация
                     # всё равно делается в офлайн-проходе.
-                    rms = float(np.sqrt(np.mean(np.square(audio)))) if len(audio) else 0.0
+                    # Мерим по звуку, без доливки тишины: нули паузы занизили
+                    # бы RMS и завысили гейн на всю встречу.
+                    voiced = audio[audio != 0]
+                    rms = float(np.sqrt(np.mean(np.square(voiced)))) if len(voiced) else 0.0
                     if tr["gain"] is None and rms >= CALIBRATION_MIN_RMS:
-                        tr["gain"] = compute_gain(audio)
+                        tr["gain"] = compute_gain(voiced)
                     # На текущее окно применяем зафиксированный гейн, иначе разовый
                     # для этого окна (на тихом окне даст ~1.0 — ничего не ломает).
                     audio = apply_gain(
-                        audio, tr["gain"] if tr["gain"] is not None else compute_gain(audio)
+                        audio, tr["gain"] if tr["gain"] is not None else compute_gain(voiced)
                     )
                 segs = drop_hallucinations(
                     self._transcriber.transcribe_window(
@@ -273,23 +337,25 @@ class LiveEngine:
             (_find_loopback(self._p), "sys.wav", True, True),
             (self._p.get_device_info_by_index(wasapi["defaultInputDevice"]), "mic.wav", False, False),
         )
+        # Начало координат ленты — старт захвата: окно N покрывает
+        # [tick_{N-1}, tick_N] от него, как и дорожки на диске.
+        self._t0 = self._tick_origin = self._clock()
         for dev, fname, normalize, identify in devices:
             channels = max(1, int(dev["maxInputChannels"]))
             rate = int(dev["defaultSampleRate"])
+            self.register_track(fname, rate, channels, normalize=normalize,
+                                identify=identify)
             # fname — внутренний ключ дорожки (завязан на SPEAKERS); на диск для
-            # офлайн-прохода пишем сжатый .opus.
+            # офлайн-прохода пишем сжатый .opus. Буфер окна получает тот же
+            # поток, что и файл, — с доливкой пауз.
             writer = WallClockWriter(
                 OpusWriter(self.out_dir / fname.replace(".wav", ".opus"),
                            channels, rate),
-                channels, rate)
-            self.register_track(fname, rate, channels, normalize=normalize,
-                                identify=identify)
-            buf = self._tracks[fname]["buffer"]
+                channels, rate, buffer=self._tracks[fname]["buffer"])
 
-            def make_cb(w: WallClockWriter, b: TrackBuffer):
+            def make_cb(w: WallClockWriter):
                 def cb(in_data, frame_count, time_info, status):
                     w.write(in_data)
-                    b.push(in_data)
                     return (None, pyaudio.paContinue)
 
                 return cb
@@ -301,11 +367,14 @@ class LiveEngine:
                 input=True,
                 input_device_index=int(dev["index"]),
                 frames_per_buffer=1024,
-                stream_callback=make_cb(writer, buf),
+                stream_callback=make_cb(writer),
             )
             self._streams.append((stream, writer))
             print(f"  {fname}: {dev['name']} ({rate} Hz, {channels} ch)")
 
+        self._pad_thread = threading.Thread(target=self._pad_loop,
+                                            name="meet-live-pad", daemon=True)
+        self._pad_thread.start()
         self._worker = threading.Thread(target=self._run, daemon=True)
         self._worker.start()
         print(f"Живой режим идёт. Транскрипт: {self._transcript}")
@@ -316,6 +385,16 @@ class LiveEngine:
                 self.process_window()
             except Exception as e:  # окно не должно валить весь режим
                 self._write_line(f"<!-- ошибка окна: {e} -->")
+
+    def _pad_loop(self) -> None:
+        """Тикер доливки: молчащие дорожки растут по часам кусками, а не
+        одним залпом из callback'а или при остановке."""
+        while not self._stop.wait(PAD_TICK_S):
+            for _, writer in list(self._streams):
+                try:
+                    writer.tick()
+                except Exception:
+                    pass  # сбой доливки не валит запись; хвост дольёт close()
 
     def _close_capture(self) -> Exception | None:
         """Закрыть стримы, дорожки и PyAudio; безопасно при частичном старте
@@ -347,6 +426,8 @@ class LiveEngine:
             self._stop.set()
             if self._worker is not None:
                 self._worker.join(timeout=self.window_seconds + 30)
+            if self._pad_thread is not None:
+                self._pad_thread.join(timeout=10)
             try:
                 self.process_window()  # финальный слив остатка буфера
             except Exception:

@@ -1,3 +1,6 @@
+import threading
+import time
+
 import numpy as np
 
 from meet.asr import Segment
@@ -371,12 +374,15 @@ def _fake_audio(monkeypatch):
         def terminate(self):
             pass
 
+    written: dict = {}
+
     class Writer:
         def __init__(self, path, channels, rate):
-            pass
+            self.name = path.name
+            written[self.name] = 0
 
         def write(self, data):
-            pass
+            written[self.name] += len(data)
 
         def close(self):
             pass
@@ -387,6 +393,7 @@ def _fake_audio(monkeypatch):
     monkeypatch.setattr(recorder, "_find_loopback", lambda p: {
         "index": 0, "name": "loopback", "maxInputChannels": 2,
         "defaultSampleRate": 48000})
+    return written
 
 
 def test_start_refuses_when_recording_lock_busy(tmp_path):
@@ -479,14 +486,20 @@ def test_gap_in_stream_is_filled_before_resumed_audio():
     first = b"\x01\x00" * 1000  # 1 с звука, пришла к t=1
     clock.now += 1.0
     w.write(first)
-    clock.now += 5.0  # 4 с тишины, затем ещё секунда звука к t=6
-    second = b"\x02\x00" * 1000
+    for _ in range(8):  # 4 с тишины; тикер доливает раз в полсекунды
+        clock.now += 0.5
+        w.tick()
+    clock.now += 0.02  # звук вернулся: первый буфер callback'а к t=5.02
+    second = b"\x02\x00" * 20
     w.write(second)
     data = sink.data
     assert data[:2000] == first
-    assert data[-2000:] == second
-    assert len(data) == 6 * 1000 * 2
-    assert set(data[2000:-2000]) == {0}
+    assert data[-40:] == second
+    assert set(data[2000:-40]) == {0}
+    # Возобновившийся звук — на своём месте с точностью до порога паузы
+    # (как у записи, recorder._Track.tick_pad), а не сразу после первой секунды.
+    resumed_at = (len(data) - 40) / 2000
+    assert 5.0 - WallClockWriter.PAD_GAP_S <= resumed_at <= 5.0
 
 
 def test_callback_jitter_is_not_padded():
@@ -501,3 +514,119 @@ def test_callback_jitter_is_not_padded():
     clock.now += 0.4  # запаздывание последнего буфера
     w.write(chunk)
     assert sink.data == chunk * 11
+
+
+def test_callback_never_pads_more_than_about_a_tick():
+    """Доливка — из тикера, не из аудио-callback'а: callback PortAudio не
+    должен писать в пайп ffmpeg минуты нулей одним куском после долгой паузы."""
+    sink, clock = _Sink(), _Clock()
+    w = WallClockWriter(sink, channels=1, rate=1000, clock=clock)
+    clock.now += 600.0  # 10 минут без callback'ов и без тикера
+    chunk = b"\x01\x00" * 100
+    w.write(chunk)
+    padded = len(sink.data) - len(chunk)
+    assert 0 < padded <= WallClockWriter.MAX_INLINE_PAD_S * 1000 * 2
+
+
+def test_tick_pads_silence_incrementally_and_close_only_the_tail():
+    sink, clock = _Sink(), _Clock()
+    w = WallClockWriter(sink, channels=1, rate=1000, clock=clock)
+    sizes = []
+    for _ in range(20):  # 10 с тишины, тик каждые полсекунды
+        clock.now += 0.5
+        before = len(sink.data)
+        w.tick()
+        sizes.append(len(sink.data) - before)
+    assert max(sizes) <= 1.5 * 1000 * 2  # не больше пары тиков за раз
+    assert len(sink.data) >= 9 * 1000 * 2  # файл держится у часов
+    before = len(sink.data)
+    clock.now += 0.3
+    w.close()
+    assert len(sink.data) - before <= 1.5 * 1000 * 2
+    assert len(sink.data) == round(10.3 * 1000) * 2
+
+
+def test_padding_and_audio_reach_the_window_buffer_in_order():
+    """Окно расшифровки видит ту же тишину, что и файл: после паузы реплики
+    ленты не уезжают к началу окна (таймкоды не отстают)."""
+    sink, clock, buf = _Sink(), _Clock(), TrackBuffer()
+    w = WallClockWriter(sink, channels=1, rate=1000, clock=clock, buffer=buf)
+    clock.now += 3.0
+    w.tick()
+    w.write(b"\x01\x00" * 100)
+    raw, silent = buf.drain_window()
+    assert raw == sink.data
+    assert silent is False
+    clock.now += 3.0
+    w.tick()
+    raw, silent = buf.drain_window()
+    assert raw and set(raw) == {0} and silent is True
+
+
+def test_window_of_pure_padding_is_not_transcribed(tmp_path):
+    fake = FakeTranscriber([[Segment(0.0, 0.5, "галлюцинация")]])
+    engine = LiveEngine(tmp_path, fake, speaker_name="Вы")
+    engine.register_track("sys.wav", rate=16000, channels=1)
+    engine._tracks["sys.wav"]["buffer"].push_silence(b"\x00" * 32000)
+    engine.process_window()
+    assert fake.offsets == []  # loopback без звука не гоняет ASR впустую
+
+
+def test_gain_is_calibrated_on_audio_not_on_padding(tmp_path):
+    from meet.audio import compute_gain, pcm16_to_float32_mono
+
+    fake = FakeTranscriber([[]])
+    engine = LiveEngine(tmp_path, fake, speaker_name="Вы")
+    engine.register_track("sys.wav", rate=16000, channels=1, normalize=True)
+    buf = engine._tracks["sys.wav"]["buffer"]
+    loud = (np.zeros(16000, dtype=np.int16) + 1000).tobytes()
+    buf.push_silence(b"\x00" * 16000 * 2 * 3)
+    buf.push(loud)
+    engine.process_window()
+    expected = compute_gain(pcm16_to_float32_mono(loud, 1))
+    assert abs(engine._tracks["sys.wav"]["gain"] - expected) < 1e-3
+
+
+def test_window_offsets_start_at_capture_start(tmp_path, monkeypatch):
+    """Окно N покрывает [tick_{N-1}, tick_N] от начала захвата: второе окно —
+    со сдвигом в окно, а не снова с нуля (раньше t0 ставился первым тиком)."""
+    _fake_audio(monkeypatch)
+    now = {"t": 10.0}  # как настоящие часы: чтения внутри тика совпадают
+    fake = FakeTranscriber([[], []])
+    engine = LiveEngine(tmp_path / "2026-10-01_10-00", fake, window_seconds=3600,
+                        speaker_name="Вы", clock=lambda: now["t"])
+    fake.load = fake.unload = lambda: None
+    engine.start()  # захват пошёл в t=10
+    try:
+        for fname in ("sys.wav", "mic.wav"):
+            engine._tracks[fname]["buffer"].drain()
+        now["t"] = 30.0
+        engine._tracks["mic.wav"]["buffer"].push(b"\x01\x00" * 16000)
+        engine.process_window()  # окно [10, 30] → offset 0
+        now["t"] = 50.0
+        engine._tracks["mic.wav"]["buffer"].push(b"\x01\x00" * 16000)
+        engine.process_window()  # окно [30, 50] → offset 20
+    finally:
+        engine.stop()
+    assert fake.offsets == [0.0, 20.0]
+
+
+def test_engine_pads_silent_tracks_from_a_ticker(tmp_path, monkeypatch):
+    """Живой режим без единого callback'а: дорожки растут тикером, а не
+    одним куском при остановке."""
+    import meet.live as live_mod
+
+    written = _fake_audio(monkeypatch)
+    monkeypatch.setattr(live_mod, "PAD_TICK_S", 0.02)
+    monkeypatch.setattr(WallClockWriter, "PAD_GAP_S", 0.05)
+    engine = LiveEngine(tmp_path / "2026-10-01_10-00", _LoadSpy(), window_seconds=3600,
+                        speaker_name="Вы")
+    engine.start()
+    try:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and not (written and all(written.values())):
+            time.sleep(0.02)
+        assert written and all(written.values())  # обе дорожки уже растут
+    finally:
+        engine.stop()
+    assert not any(t.name == "meet-live-pad" for t in threading.enumerate())
