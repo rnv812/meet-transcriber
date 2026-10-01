@@ -302,7 +302,7 @@ class TrayApp:
         # пустой цикл, так что на работу без UI она не влияет.
         self.bus = events.EventBus()
         self.log = _BusLog(watch.WatchLog(watch.default_log_path()), self.bus)
-        self.watcher = watch.Watcher(self.cfg["grace_seconds"])
+        self.watcher = watch.Watcher(self.cfg["grace_minutes"] * 60.0)
         self.signals = watch.Signals(
             self.cfg["processes"], log=self.log,
             browsers=self.cfg.get("browsers") or (),
@@ -537,7 +537,7 @@ class TrayApp:
                 f"процессы {', '.join(self.cfg['processes'])}, "
                 f"браузеры {', '.join(self.cfg.get('browsers') or []) or 'нет'}"
                 f"{' (только сайты звонков)' if self.cfg.get('browser_require_site') else ''}, "
-                f"грейс {self.cfg['grace_seconds']:.0f} с"
+                f"ожидание повторного подключения {self.cfg['grace_minutes']:g} мин"
             )
             if self.start_now:
                 self._on_start()

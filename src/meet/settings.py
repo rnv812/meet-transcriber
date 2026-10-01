@@ -40,7 +40,12 @@ SCHEMA_VERSION = 2
 # импортирует winreg, то есть существует только на Windows, а настройки должны
 # читаться где угодно (тесты, будущий mac/Linux). За расхождением следит
 # test_settings.py — он сверяет эти числа с константами watch.
-DEFAULT_GRACE_S = 180.0
+# Сколько ждать повторного подключения, прежде чем остановить автозапись
+# (`auto_record.grace_minutes`, 1–60 мин). Прежний `grace_seconds` (180 с) не
+# читается: 10 минут действуют и для старых конфигов — перезаход в звонок после
+# сбоя сети или смены устройства занимает дольше трёх минут.
+DEFAULT_GRACE_MIN = 10.0
+GRACE_MIN_RANGE = (1.0, 60.0)
 DEFAULT_POLL_S = 2.0
 # Короче этого звонок считается ложной тревогой (звук уведомления, отклонённый
 # вызов): папка остаётся, но пост-хук на неё не зовут.
@@ -149,6 +154,17 @@ def as_positive(value, default: float, minimum: float) -> float:
     return number
 
 
+def as_clamped(value, default: float, low: float, high: float) -> float:
+    """Число в пределах [low, high]: выход за край — к краю, мусор — дефолт."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number != number:  # NaN
+        return default
+    return min(high, max(low, number))
+
+
 def as_int(value, default: int, minimum: int) -> int:
     try:
         number = int(value)
@@ -238,7 +254,7 @@ class AutoRecord:
 
     enabled: bool = False
     processes: list[str] = field(default_factory=lambda: list(DEFAULT_PROCESSES))
-    grace_seconds: float = DEFAULT_GRACE_S
+    grace_minutes: float = DEFAULT_GRACE_MIN
     poll_seconds: float = DEFAULT_POLL_S
     min_call_seconds: float = DEFAULT_MIN_CALL_S
     # Браузеры — отдельно от программ: у них звонок только по микрофону
@@ -252,7 +268,8 @@ class AutoRecord:
         return cls(
             enabled=as_flag(raw.get("enabled"), False),
             processes=as_process_list(raw.get("processes")),
-            grace_seconds=as_positive(raw.get("grace_seconds"), DEFAULT_GRACE_S, 0.0),
+            grace_minutes=as_clamped(raw.get("grace_minutes"), DEFAULT_GRACE_MIN,
+                                     *GRACE_MIN_RANGE),
             poll_seconds=as_positive(raw.get("poll_seconds"), DEFAULT_POLL_S, 0.5),
             min_call_seconds=as_positive(
                 raw.get("min_call_seconds"), DEFAULT_MIN_CALL_S, 0.0
@@ -262,11 +279,15 @@ class AutoRecord:
             call_sites=as_site_list(raw.get("call_sites")),
         )
 
+    @property
+    def grace_seconds(self) -> float:
+        return self.grace_minutes * 60.0
+
     def to_raw(self) -> dict:
         return {
             "enabled": self.enabled,
             "processes": list(self.processes),
-            "grace_seconds": self.grace_seconds,
+            "grace_minutes": self.grace_minutes,
             "poll_seconds": self.poll_seconds,
             "min_call_seconds": self.min_call_seconds,
             "browsers": list(self.browsers),

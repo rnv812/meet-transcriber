@@ -10,6 +10,8 @@ export type AutoRecord = {
   enabled: boolean;
   processes: string[];
   grace_seconds: number;
+  /** Ожидание повторного подключения (`auto_record.grace_minutes`). Нет у старых резидентов. */
+  grace_minutes?: number;
   state: WatcherState;
   mic: Signal;
   render: Signal;

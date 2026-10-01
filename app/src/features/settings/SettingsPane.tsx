@@ -27,7 +27,7 @@ import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSecti
 import { HotwordsEditor } from "./HotwordsEditor";
 import { ModelsPane } from "./ModelsPane";
 import { PathText, Radio, Row, Switch, type Raw, type SetFn } from "./Section";
-import { AsrModelTip, AutoRecordTip, GpuMarkerTip, HookCommandTip, RecurringWindowTip } from "./tips";
+import { AsrModelTip, AutoRecordTip, GpuMarkerTip, GraceTip, HookCommandTip, RecurringWindowTip } from "./tips";
 import { SoundSection } from "./SoundSection";
 import "./settings.css";
 
@@ -70,6 +70,39 @@ function SecondsRow({ id, label, hint, value, onChange }: {
         <input id={id} type="number" min={0} className="num" value={value}
           onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) onChange(Math.max(0, n)); }} />
         <span className="unit">секунд</span>
+      </span>
+    </Row>
+  );
+}
+
+/**
+ * Целое число минут в пределах [min, max]. Пока человек печатает, в черновик
+ * уходят только допустимые значения (стёртое поле не превращается в 1, а «15»
+ * не проходит через «1»); на выходе из поля текст приводится к краю диапазона.
+ */
+function MinutesRow({ id, label, hint, help, value, min, max, onChange }: {
+  id: string; label: string; hint?: string; help?: ReactNode; value: number; min: number; max: number;
+  onChange: (v: number) => void;
+}) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => { setText((cur) => (Number(cur) === value ? cur : String(value))); }, [value]);
+  const parse = (t: string) => (t.trim() === "" ? NaN : Math.round(Number(t)));
+  return (
+    <Row label={label} hint={hint} help={help} htmlFor={id}>
+      <span className="with-unit">
+        <input id={id} type="number" min={min} max={max} step={1} className="num" value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            const n = parse(e.target.value);
+            if (Number.isFinite(n) && n >= min && n <= max) onChange(n);
+          }}
+          onBlur={() => {
+            const n = parse(text);
+            const next = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : value;
+            setText(String(next));
+            if (next !== value) onChange(next);
+          }} />
+        <span className="unit">минут</span>
       </span>
     </Row>
   );
@@ -125,9 +158,9 @@ function AutoSection({ draft, set, processes, loadProcesses, onToggle }: {
         onBrowsers={(x) => set("auto_record", "browsers", x)}
         onRequireSite={(x) => set("auto_record", "browser_require_site", x)}
         onSites={(x) => set("auto_record", "call_sites", x)} />
-      <SecondsRow id="grace" label="Продолжать запись после звонка"
-        hint="Обрыв связи или повторное подключение не разделят запись на две части"
-        value={Number(v("grace_seconds") ?? 0)} onChange={(x) => set("auto_record", "grace_seconds", x)} />
+      <MinutesRow id="grace" label="Ждать повторного подключения, мин" min={1} max={60}
+        hint="Запись остановится, если за это время вы не вернётесь в звонок" help={<GraceTip />}
+        value={Number(v("grace_minutes") ?? 10)} onChange={(x) => set("auto_record", "grace_minutes", x)} />
       <SecondsRow id="min-call" label="Минимальная длительность звонка"
         hint="Более короткие записи сохраняются, но не расшифровываются автоматически"
         value={Number(v("min_call_seconds") ?? 0)} onChange={(x) => set("auto_record", "min_call_seconds", x)} />

@@ -42,6 +42,7 @@ def test_snapshot_idle(control_state):
     assert snap["auto_record"]["enabled"] is True
     assert snap["auto_record"]["processes"] == ["Zoom.exe"]
     assert snap["auto_record"]["grace_seconds"] == watch.GRACE_S
+    assert snap["auto_record"]["grace_minutes"] == watch.GRACE_S / 60
 
 
 def test_snapshot_while_recording_reads_folder_from_lock(
@@ -158,7 +159,7 @@ def test_settings_roundtrip_through_api(control_state, tmp_path):
 def test_auto_record_patch_admits_restart_needed(control_state):
     """Секция auto_record читается один раз при старте резидента — панель
     обязана сказать это, а не делать вид, что применила."""
-    got = control_state.patch_settings({"auto_record": {"grace_seconds": 60}})
+    got = control_state.patch_settings({"auto_record": {"grace_minutes": 5}})
     assert got["restart_required"] == ["auto_record"]
 
 

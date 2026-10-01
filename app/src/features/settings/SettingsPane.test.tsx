@@ -24,7 +24,7 @@ vi.mock("../../lib/api", async (orig) => ({
 
 const ep = { base: "/api", token: null };
 const settings = {
-  auto_record: { enabled: true, processes: ["zoom.exe"], grace_seconds: 30, min_call_seconds: 60 },
+  auto_record: { enabled: true, processes: ["zoom.exe"], grace_minutes: 10, min_call_seconds: 60 },
   hooks: { post_record: false, command: [], prompt: "", recurring_window: null },
   recording: { out_dir: null, voices_dir: null, speaker_name: "Вы", auto_transcribe: true },
   asr: { backend: "faster-whisper", model: "large-v3", cpu_model: "small", device: "auto", language: "ru", align: true, overlap: true },
@@ -62,18 +62,33 @@ test("переключатель автозаписи сразу вызывае�
   expect(api.patchSettings).not.toHaveBeenCalled();
 });
 
-test("«Продолжать запись после звонка» сохраняется патчем секции и предупреждает о перезапуске", async () => {
+test("«Ждать повторного подключения, мин» сохраняется патчем секции и предупреждает о перезапуске", async () => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   await userEvent.click(await screen.findByRole("button", { name: "Автозапись" }));
   expect(screen.getByText("Параметры ниже применяются после перезапуска приложения.")).toBeInTheDocument();
-  const tail = await screen.findByLabelText("Продолжать запись после звонка");
-  await userEvent.clear(tail);
-  await userEvent.type(tail, "45");
+  const wait = await screen.findByLabelText("Ждать повторного подключения, мин");
+  expect(wait).toHaveValue(10);
+  expect(wait).toHaveAttribute("min", "1");
+  expect(wait).toHaveAttribute("max", "60");
+  await userEvent.clear(wait);
+  await userEvent.type(wait, "15");
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
-  const call = vi.mocked(api.patchSettings).mock.calls[0]?.[1] as { auto_record: { grace_seconds: number } };
-  expect(call.auto_record.grace_seconds).toBe(45);
-  expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1]).toEqual({ auto_record: { grace_seconds: 45 } });
+  expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1]).toEqual({ auto_record: { grace_minutes: 15 } });
+});
+
+test("ожидание повторного подключения: вне 1–60 не сохраняется, на выходе из поля — к краю", async () => {
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Автозапись" }));
+  const wait = await screen.findByLabelText("Ждать повторного подключения, мин");
+  await userEvent.clear(wait);
+  await userEvent.type(wait, "90");
+  await userEvent.tab();
+  expect(wait).toHaveValue(60);
+  const tip = screen.getByRole("button", { name: "Что такое ожидание повторного подключения" });
+  await userEvent.click(tip);
+  expect(tip).toHaveAccessibleDescription(
+    /Если вы вышли из звонка и вернулись в течение этого времени, запись продолжится в тот же файл/);
 });
 
 test("уведомления: радио «Только важные» сохраняется в ui.notifications", async () => {
@@ -110,7 +125,7 @@ test("ошибка сохранения — текстом резидента, �
   vi.mocked(api.patchSettings).mockRejectedValue(new api.ApiError(400, "неизвестный ключ"));
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   await userEvent.click(await screen.findByRole("button", { name: "Автозапись" }));
-  const grace = await screen.findByRole("spinbutton", { name: /Продолжать запись после звонка/ });
+  const grace = await screen.findByRole("spinbutton", { name: /Ждать повторного подключения/ });
   await userEvent.clear(grace);
   await userEvent.type(grace, "45");
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));

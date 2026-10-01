@@ -152,7 +152,7 @@ def test_auto_config_defaults_to_disabled(monkeypatch, tmp_path):
     assert cfg["enabled"] is False
     # список клиентов конференций, а не один Дион: приложение общего назначения
     assert "Dion.exe" in cfg["processes"] and "Zoom.exe" in cfg["processes"]
-    assert cfg["grace_seconds"] == watch.GRACE_S
+    assert cfg["grace_minutes"] * 60 == watch.GRACE_S
     assert cfg["min_call_seconds"] == tray.MIN_CALL_S
 
 
@@ -160,15 +160,15 @@ def test_auto_config_reads_file(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     _write_config(tmp_path, {
         "auto_record": {
-            "enabled": True, "processes": ["Foo.exe"], "grace_seconds": 30,
+            "enabled": True, "processes": ["Foo.exe"], "grace_minutes": 30,
             "poll_seconds": 5,
         }
     })
     cfg = tray._auto_config()
-    assert {k: cfg[k] for k in ("enabled", "processes", "grace_seconds",
+    assert {k: cfg[k] for k in ("enabled", "processes", "grace_minutes",
                                  "poll_seconds", "min_call_seconds", "browsers")} == {
         "enabled": True, "processes": ["Foo.exe"],
-        "grace_seconds": 30.0, "poll_seconds": 5.0,
+        "grace_minutes": 30.0, "poll_seconds": 5.0,
         "min_call_seconds": tray.MIN_CALL_S, "browsers": [],
     }
 
@@ -185,13 +185,19 @@ def test_bad_numbers_fall_back_instead_of_killing_the_tray(monkeypatch, tmp_path
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     for bad in ("три минуты", None, -5, 0):
         _write_config(tmp_path, {
-            "auto_record": {"grace_seconds": bad, "poll_seconds": bad}
+            "auto_record": {"grace_minutes": bad, "poll_seconds": bad}
         })
         cfg = tray._auto_config()
-        assert cfg["grace_seconds"] >= 0
+        assert 1 <= cfg["grace_minutes"] <= 60
         assert cfg["poll_seconds"] >= 0.5
-    _write_config(tmp_path, {"auto_record": {"grace_seconds": "три минуты"}})
-    assert tray.TrayApp().cfg["grace_seconds"] == watch.GRACE_S
+    _write_config(tmp_path, {"auto_record": {"grace_minutes": "три минуты"}})
+    assert tray.TrayApp().watcher.grace_seconds == watch.GRACE_S
+
+
+def test_watcher_waits_the_configured_minutes(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    _write_config(tmp_path, {"auto_record": {"grace_minutes": 25}})
+    assert tray.TrayApp().watcher.grace_seconds == 25 * 60
 
 
 def test_string_false_does_not_enable_auto_record(monkeypatch, tmp_path):

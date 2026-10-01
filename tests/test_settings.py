@@ -84,7 +84,7 @@ def test_gpu_marker_can_be_turned_off(tmp_path):
 def test_auto_record_defaults_match_watch_constants():
     """Дефолты продублированы в settings (watch.py импортирует winreg и потому
     Windows-only) — расхождение поймать здесь, а не в проде."""
-    assert settings.DEFAULT_GRACE_S == watch.GRACE_S
+    assert settings.DEFAULT_GRACE_MIN * 60 == watch.GRACE_S
     assert settings.DEFAULT_POLL_S == watch.POLL_S
 
 
@@ -94,7 +94,7 @@ def test_garbage_values_fall_back_to_defaults(tmp_path):
         "auto_record": {
             "enabled": "false",          # строка не должна стать True
             "processes": "Teams.exe",    # одна строка — список из неё
-            "grace_seconds": "нет",
+            "grace_minutes": "нет",
             "poll_seconds": -5,
         },
         "asr": {"backend": "опечатка"},
@@ -103,7 +103,7 @@ def test_garbage_values_fall_back_to_defaults(tmp_path):
     cfg = settings.load(f)
     assert cfg.auto_record.enabled is False
     assert cfg.auto_record.processes == ["Teams.exe"]
-    assert cfg.auto_record.grace_seconds == settings.DEFAULT_GRACE_S
+    assert cfg.auto_record.grace_minutes == settings.DEFAULT_GRACE_MIN
     assert cfg.auto_record.poll_seconds == settings.DEFAULT_POLL_S
     assert cfg.asr.backend == "faster-whisper"
     assert cfg.llm.provider == "claude-code"
@@ -202,7 +202,7 @@ def test_roundtrip_through_file(tmp_path):
     f = tmp_path / "config.json"
     original = settings.Settings(
         auto_record=settings.AutoRecord(enabled=True, processes=["Teams.exe"],
-                                       grace_seconds=60.0, poll_seconds=1.0),
+                                       grace_minutes=5.0, poll_seconds=1.0),
         asr=settings.Asr(backend="whisper.cpp", model="ggml-large-v3", align=False),
         llm=settings.Llm(provider="openai-compatible", local_model="qwen2.5-7b"),
     )
@@ -594,3 +594,32 @@ def test_empty_browser_list_stays_empty_and_garbage_sites_fall_back(tmp_path):
     cfg = settings.load(f).auto_record
     assert cfg.browsers == []
     assert cfg.call_sites == list(settings.DEFAULT_CALL_SITES)
+
+
+# --- ожидание повторного подключения ---------------------------------------------
+
+
+def test_reconnect_wait_defaults_to_ten_minutes_for_everyone(tmp_path):
+    """Прежний `grace_seconds` (180 с) больше не читается: новое значение по
+    умолчанию — 10 минут — действует и для старых конфигов."""
+    f = tmp_path / "config.json"
+    _write(f, {"auto_record": {"enabled": True, "grace_seconds": 180}})
+    cfg = settings.load(f).auto_record
+    assert cfg.grace_minutes == 10
+    assert cfg.grace_seconds == 600
+    assert "grace_seconds" not in cfg.to_raw()
+
+
+@pytest.mark.parametrize("raw, expected", [
+    (25, 25), ("15", 15), (0, 1), (-3, 1), (90, 60), (60, 60), ("много", 10), (None, 10),
+])
+def test_reconnect_wait_is_kept_within_one_to_sixty_minutes(tmp_path, raw, expected):
+    f = tmp_path / "config.json"
+    _write(f, {"auto_record": {"grace_minutes": raw}})
+    assert settings.load(f).auto_record.grace_minutes == expected
+
+
+def test_reconnect_wait_round_trips_through_patch(tmp_path):
+    f = tmp_path / "config.json"
+    settings.patch({"auto_record": {"grace_minutes": 20}}, f)
+    assert settings.load(f).auto_record.grace_minutes == 20

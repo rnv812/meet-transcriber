@@ -417,7 +417,8 @@ class TrayControl:
             "auto_record": {
                 "enabled": bool(tray.cfg["enabled"]),
                 "processes": list(tray.cfg["processes"]),
-                "grace_seconds": tray.cfg["grace_seconds"],
+                "grace_minutes": tray.cfg["grace_minutes"],
+                "grace_seconds": tray.cfg["grace_minutes"] * 60.0,
                 "state": getattr(tray.watcher, "state", None),
                 # Сигналы детектора: None означает «ответить нечем» (ключа в
                 # реестре нет, pycaw не встал) — это не то же самое, что «нет».
