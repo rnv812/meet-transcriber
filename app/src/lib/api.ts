@@ -11,7 +11,7 @@
 import { inTauri, invoke } from "./shell";
 import type {
   AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveLine, LiveState, LiveStatus, Person, PersonCard,
-  ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, Summary,
+  ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, Summary,
   Transcript,
 } from "./types";
 
@@ -113,6 +113,13 @@ export const getSpeakers = (ep: Endpoint, id: string) =>
 /** Набор правок одним шагом истории; `remember` — запомнить голос строки в базе. */
 export const applySpeakers = (ep: Endpoint, id: string, ops: SpeakerOpInput[], remember: Record<string, boolean>) =>
   json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/apply`, body("POST", { ops, remember }));
+/**
+ * Реплики (номера сегментов) — другому спикеру одним шагом истории. `labels` и
+ * `count` — как их видит окно: расшифровка изменилась — 409, а не правка не тех реплик.
+ * `to`: спикер встречи или имя человека; null — новый «Спикер N».
+ */
+export const relabelTurns = (ep: Endpoint, id: string, req: RelabelRequest) =>
+  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/relabel`, body("POST", req));
 export const undoSpeakers = (ep: Endpoint, id: string) =>
   json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/undo`, body("POST", {}));
 export const redoSpeakers = (ep: Endpoint, id: string) =>

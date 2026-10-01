@@ -544,14 +544,6 @@ def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
         "names": _names_diff(names_before, names_after),
     }
 
-    def record(meta: dict) -> dict:
-        steps, pos = _history_of(meta, data)
-        steps = steps[:pos] + [step]
-        trimmed = _trimmed(meta, data)
-        if len(steps) > HISTORY_MAX:
-            steps, trimmed = steps[-HISTORY_MAX:], True
-        return {**meta, HISTORY: steps, POS: len(steps), BASE: data.get("created_at"), TRIMMED: trimmed}
-
     def enroll(meta: dict) -> dict:
         enrolled: list[dict] = []
         for label in wanted:
@@ -564,11 +556,163 @@ def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
         return library.update_meta(folder, lambda m: {**m, HISTORY: [
             step if isinstance(x, dict) and x.get("id") == step["id"] else x for x in m.get(HISTORY) or []]})
 
-    _, meta = _commit(folder, data, record, voices_dir, enroll)
+    _, meta = _commit(folder, data, _recorder(data, step), voices_dir, enroll)
     steps, pos = _history_of(meta, data)
     return {"step": _public([step])[0], "history": _public(steps), "pos": pos,
             "trimmed": _trimmed(meta, data), "voices_error": "; ".join(errors) or None,
             "changed": sum(len(d["idx"]) for d in deltas)}
+
+
+def _recorder(data: dict, step: dict):
+    """Изменение meta.json: шаг — в конец применённых (отменённый хвост
+    отбрасывается), история не длиннее HISTORY_MAX."""
+    def record(meta: dict) -> dict:
+        steps, pos = _history_of(meta, data)
+        steps = steps[:pos] + [step]
+        trimmed = _trimmed(meta, data)
+        if len(steps) > HISTORY_MAX:
+            steps, trimmed = steps[-HISTORY_MAX:], True
+        return {**meta, HISTORY: steps, POS: len(steps), BASE: data.get("created_at"), TRIMMED: trimmed}
+    return record
+
+
+def _new_step(ops: list, deltas: list, count: int, now: datetime | None = None) -> dict:
+    return {
+        "id": uuid.uuid4().hex[:12],
+        "at": (now or datetime.now()).isoformat(timespec="seconds"),
+        "ops": ops,
+        "enrolled": [],
+        "created_people": [],
+        "segments": deltas,
+        "count": count,
+        "names": {},
+    }
+
+
+def _record_simple(folder: Path, data: dict, step: dict, voices_dir: Path) -> dict:
+    """Шаг без голосов: транскрипт и история одним коммитом."""
+    meta, _ = _commit(folder, data, _recorder(data, step), voices_dir, lambda meta: None)
+    steps, pos = _history_of(meta, data)
+    return {"step": _public([step])[0], "history": _public(steps), "pos": pos,
+            "trimmed": _trimmed(meta, data), "voices_error": None,
+            "changed": sum(len(d["idx"]) for d in step.get("segments") or [])}
+
+
+# --- реплики: назначить другому спикеру ---------------------------------------
+
+STALE_VIEW = "Расшифровка изменилась — обновите карточку и повторите"
+
+
+def _used_labels(data: dict, sidecar: dict | None) -> set[str]:
+    """Подписи, которые уже что-то значат: реплики, цепочки `names`, кластеры
+    сайдкара. Новый «Спикер N» не должен совпасть ни с одной."""
+    used = {s.get("speaker") for s in data["segments"] if isinstance(s.get("speaker"), str)}
+    names = data.get("names") if isinstance(data.get("names"), dict) else {}
+    used |= {k for k in names} | {v for v in names.values() if isinstance(v, str)}
+    used |= {e["display"] for e in (sidecar or {}).get("speakers") or []
+             if isinstance(e, dict) and isinstance(e.get("display"), str)}
+    return used
+
+
+def fresh_label(used: set[str]) -> str:
+    n = 1
+    while f"Спикер {n}" in used:
+        n += 1
+    return f"Спикер {n}"
+
+
+def _target(to, data: dict, sidecar: dict | None, present: set[str]) -> str:
+    """Кому отдать реплики: спикер этой встречи (как есть, и «Спикер N» тоже),
+    человек (имя проверяется) или None — новый безымянный «Спикер N»."""
+    if to is None:
+        return fresh_label(_used_labels(data, sidecar))
+    to = str(to).strip()
+    if to in present:
+        return to
+    try:
+        to = people.valid_name(to)
+    except ValueError as e:
+        raise SpeakerError(f"«{to}»: {e}")
+    if unnamed(to):
+        raise SpeakerError(f"«{to}» — служебная подпись; выберите «Новый спикер без имени»")
+    return to
+
+
+def _indices(idx, segments: list[dict]) -> list[int]:
+    if not isinstance(idx, list) or not idx:
+        raise SpeakerError("не выбрано ни одной реплики")
+    out: list[int] = []
+    for i in idx:
+        if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < len(segments):
+            raise Stale(STALE_VIEW)
+        if i not in out:
+            out.append(i)
+    return sorted(out)
+
+
+def _expect(segments: list[dict], idx: list[int], count, labels) -> None:
+    """Окно видит те же реплики под теми же подписями, что и транскрипт сейчас."""
+    if count is not None and count != len(segments):
+        raise Stale(STALE_VIEW)
+    if labels is None:
+        return
+    for i, label in zip(idx, labels):
+        s = segments[i]
+        if s.get("kind") == "break" or s.get("speaker") != label:
+            raise Stale(STALE_VIEW)
+
+
+def relabel(folder: Path, idx, to, voices_dir: Path, *, count=None, labels=None,
+            now: datetime | None = None) -> dict:
+    """Отдать выбранные реплики (индексы сегментов) другому спикеру одним шагом
+    истории: исправить одну реплику, серию подряд или выбранные вручную.
+
+    `count` и `labels` — как их видит окно (сколько сегментов, чья подпись у
+    каждого выбранного): разошлось — Stale, а не правка не тех реплик. `to`:
+    спикер встречи, имя человека или None — новый «Спикер N». Имена в `names`
+    не трогаются: это правка реплик, а не переименование кластера."""
+    normalize(folder)
+    data = _transcript(folder)
+    segments = data["segments"]
+    order = _order(_shown(segments))
+    chosen = _indices(idx, segments)
+    if labels is not None:
+        if not isinstance(labels, list) or len(labels) != len(idx):
+            raise SpeakerError("непонятный набор реплик")
+        by_index = dict(zip(idx, labels))
+        labels = [by_index[i] for i in chosen]
+    _expect(segments, chosen, count, labels)
+    if any(segments[i].get("kind") == "break" or not segments[i].get("speaker") for i in chosen):
+        raise SpeakerError("у отметки перерыва нет спикера")
+    target = _target(to, data, _sidecar(folder), set(order))
+    deltas = _deltas(segments, [target if i in set(chosen) else None for i in range(len(segments))])
+    if not deltas:
+        raise SpeakerError("нечего применять — реплики уже у этого спикера")
+    froms = list(dict.fromkeys(d["from"] for d in deltas))
+    turns = _turn_count(segments, chosen)
+    op = {"type": "relabel", "from": froms, "to": target,
+          "segments": sum(len(d["idx"]) for d in deltas), "turns": turns}
+    for d in deltas:
+        for i in d["idx"]:
+            segments[i]["speaker"] = d["to"]
+    return _record_simple(folder, data, _new_step([op], deltas, len(segments), now), voices_dir)
+
+
+def _turn_count(segments: list[dict], chosen: list[int]) -> int:
+    """Сколько реплик (как их склеивает окно) среди выбранных сегментов."""
+    n, prev = 0, None
+    for i in chosen:
+        s = segments[i]
+        if prev is not None and i == prev + 1 and segments[prev].get("speaker") == s.get("speaker"):
+            try:
+                if float(s["start"]) - float(segments[prev]["end"]) < GAP_S:
+                    prev = i
+                    continue
+            except (KeyError, TypeError, ValueError):
+                pass
+        n += 1
+        prev = i
+    return n
 
 
 # --- отмена и повтор ----------------------------------------------------------

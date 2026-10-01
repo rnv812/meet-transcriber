@@ -6,6 +6,7 @@
  * набором — одним шагом истории, который можно отменить целиком.
  */
 
+import { plural } from "../../../lib/format";
 import { isUnnamed } from "../../../lib/speakers";
 import type { SpeakerOp, SpeakerOpInput, SpeakerRow, SpeakerStep } from "../../../lib/types";
 
@@ -71,6 +72,10 @@ export function prune(staged: Staged, labels: string[]): Staged {
 }
 
 function opText(op: SpeakerOp): string {
+  if (op.type === "relabel") {
+    const n = op.turns;
+    return `${n} ${plural(n, "реплика", "реплики", "реплик")} (${op.from.join(", ")}) → ${op.to}`;
+  }
   if (op.type === "merge") return `${op.from} объединён со спикером «${op.to}»`;
   if (op.type === "reset") return `${op.from} → без имени (${op.to})`;
   return `${op.from} → ${op.to}`;

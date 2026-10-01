@@ -7,7 +7,7 @@ import { errorText } from "../../lib/format";
 import { agentKillRecording, inTauri, openFolder, saveText } from "../../lib/shell";
 import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
 import { activeJobOf, failedRetranscribe, isLiveRecording, statusOf } from "../../lib/status";
-import type { Job, KbExport, Recording, Snapshot, Transcript } from "../../lib/types";
+import type { Job, KbExport, Recording, Segment, Snapshot, Transcript } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { AudioPlayer, type AudioPlayerHandle } from "./AudioPlayer";
@@ -17,12 +17,14 @@ import { CardHeader } from "./CardHeader";
 import { LiveCard } from "./LiveCard";
 import { SpeakersPanel } from "./speakers/SpeakersPanel";
 import { TranscriptView, type FindRequest } from "./TranscriptView";
+import { useTurnEdit } from "./TurnEdit";
 import type { PersonColor } from "./Turns";
 import "./card.css";
 
 type Loaded = Recording & { transcript: Transcript | null };
 
 const NO_PEOPLE: PersonColor[] = [];
+const NO_SEGMENTS: Segment[] = [];
 /** Одна ссылка на «задач нет»: новая ссылка `jobs` для вкладок — это обновление списка. */
 const NO_JOBS: Job[] = [];
 /** `<data_dir>/logs` с разделителем, каким пишет путь сам резидент. */
@@ -66,6 +68,8 @@ export function RecordingCard({
 
   /** Папка для встреч в базе знаний (`export.meetings_dir`): нет — нет и кнопки «В базу знаний». */
   const [meetingsDir, setMeetingsDir] = useState<string | null>(null);
+  /** Как подписан владелец микрофона (настройка) — «Это я» в меню реплики. */
+  const [owner, setOwner] = useState("Вы");
   /** Куда выгружено нажатием «В базу знаний» (для этой записи) и что не перезаписано. */
   const [kbDone, setKbDone] = useState<KbExport | null>(null);
   /** Дорожка плеера не загрузилась: реплики не перематывают, внизу — «Аудио недоступно». */
@@ -79,6 +83,8 @@ export function RecordingCard({
       if (!live) return;
       const dir = (s.export as { meetings_dir?: unknown } | undefined)?.meetings_dir;
       setMeetingsDir(typeof dir === "string" && dir ? dir : null);
+      const name = (s.recording as { speaker_name?: unknown } | undefined)?.speaker_name;
+      if (typeof name === "string" && name.trim()) setOwner(name.trim());
     }).catch(() => {});
     return () => { live = false; };
   }, [endpoint]);
@@ -146,6 +152,10 @@ export function RecordingCard({
   }, [load, onChanged, onPeopleChanged]);
   const shownFind = ownFind ?? find;
   const colors = useMemo(() => new Map(people.map((p) => [p.name, p.color])), [people]);
+  const turnEdit = useTurnEdit({
+    endpoint, id, turns, segments: segments ?? NO_SEGMENTS, people, owner, avatarVersion,
+    onOpenPanel: nameSpeaker, onChanged: speakersChanged,
+  });
 
   if (!rec) {
     if (missing) return <EmptyState title="Запись не найдена" hint="Возможно, её удалили. Выберите другую в списке." />;
@@ -215,7 +225,8 @@ export function RecordingCard({
           showTranscript={shownFind?.n}
           transcript={turns.length ? (
             <TranscriptView turns={turns} colors={colors} playable={playable} onPlay={play}
-              onNameSpeaker={nameSpeaker} find={shownFind} />
+              onNameSpeaker={nameSpeaker} onSpeaker={turnEdit.onSpeaker} selected={turnEdit.selected}
+              onSelect={turnEdit.onSelect} toolbar={turnEdit.bar} find={shownFind} />
           ) : <EmptyState title="В записи нет речи" />} />
       );
       break;
@@ -310,6 +321,7 @@ export function RecordingCard({
         </div>
       )}
       <div className="card__body">{body}</div>
+      {status.kind === "ready" && turnEdit.menu}
       {panel.mounted && status.kind === "ready" && (
         <SpeakersPanel endpoint={endpoint} recordingId={id} people={people} avatarVersion={avatarVersion}
           open={panel.open} focus={panel.focus} version={rec.transcript} playable={playable} cardRef={cardEl}

@@ -1440,6 +1440,16 @@ class TrayControl:
         return self._speakers_change(recording_id, lambda folder, voices: speakers.apply(
             folder, body.get("ops"), body.get("remember"), voices))
 
+    def speakers_relabel(self, recording_id: str, body: dict | None) -> dict:
+        """Реплики (индексы сегментов) — другому спикеру: одна, серия подряд или
+        выбранные в расшифровке. `count`/`labels` — как их видит окно."""
+        from meet import speakers
+
+        body = body or {}
+        return self._speakers_change(recording_id, lambda folder, voices: speakers.relabel(
+            folder, body.get("idx"), body.get("to"), voices,
+            count=body.get("count"), labels=body.get("labels")))
+
     def speakers_undo(self, recording_id: str) -> dict:
         from meet import speakers
 

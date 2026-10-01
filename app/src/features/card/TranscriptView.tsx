@@ -10,7 +10,9 @@
  * следующее / предыдущее, Esc — очистить и вернуть фокус, где он был.
  */
 
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode,
+} from "react";
 import { findHits, parseQuery, prepare } from "../../lib/search";
 import type { Turn } from "../../lib/speakers";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
@@ -36,12 +38,20 @@ function hitAt(turns: Turn[], hits: { turn: number }[], t: number): number {
 const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
 
-export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker, find }: {
+export function TranscriptView({
+  turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, toolbar, find,
+}: {
   turns: Turn[];
   colors: Map<string, string>;
   playable: boolean;
   onPlay: (turn: Turn) => void;
   onNameSpeaker?: (label: string) => void;
+  /** Правка спикера у реплики (TurnEdit): меню, выбор нескольких. */
+  onSpeaker?: (turn: number, anchor: HTMLElement) => void;
+  selected?: ReadonlySet<number>;
+  onSelect?: (turn: number, how: "toggle" | "range") => void;
+  /** Полоса над репликами (выбранные, итог назначения). */
+  toolbar?: ReactNode;
   find?: FindRequest | null;
 }) {
   const [text, setText] = useState(find?.q ?? "");
@@ -178,8 +188,9 @@ export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker,
           <TipLine>Ctrl+F — к поиску, Enter и Shift+Enter — следующее и предыдущее совпадение, Esc — очистить.</TipLine>
         </HelpTip>
       </div>
+      {toolbar}
       <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onNameSpeaker={onNameSpeaker}
-        marks={active ? marks : undefined} />
+        onSpeaker={onSpeaker} selected={selected} onSelect={onSelect} marks={active ? marks : undefined} />
     </div>
   );
 }

@@ -120,6 +120,27 @@ button.turn__speaker:hover { text-decoration: underline; }
   border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: 0 8px 24px #0008;
 }
 
+/* Правка спикера в расшифровке: выбранные реплики, полоса выбора, меню «Кому отдать». */
+.turn--selected { margin: 0 -8px; padding: 8px; border-radius: var(--r-md); background: rgba(94, 106, 210, 0.14);
+  box-shadow: inset 3px 0 0 var(--accent); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.tsel {
+  position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin: 4px 0; padding: 6px 10px; border: 1px solid var(--line-2); border-radius: var(--r-md);
+  background: var(--surface-2); color: var(--text); font-size: 12px;
+}
+.tsel .spk-link { align-self: center; }
+.tsel__hint { flex-basis: 100%; font-size: 11px; }
+.tsel__close { margin-left: auto; color: var(--text-2); font-size: 14px; }
+.tmenu { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.tmenu__title { color: var(--text); font-weight: 600; }
+.tmenu__scope { display: flex; flex-direction: column; gap: 4px; color: var(--text); }
+.tmenu__scope label { display: flex; gap: 6px; align-items: baseline; cursor: pointer; }
+.tmenu__hint { font-size: 11px; }
+.tmenu__error { margin: 0; font-size: 12px; }
+.tmenu__links { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+.tpick { padding: 4px; }
+
 /* Запись с ассистентом: дайджест сверху, лента — всё место, вопрос внизу. */
 .live-card { height: 100%; min-height: 240px; display: flex; flex-direction: column; gap: 12px; }
 .live-card__head { display: flex; align-items: center; gap: 8px; }

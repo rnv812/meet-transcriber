@@ -445,13 +445,15 @@ test("«Перерасшифровать» спрашивает подтверж
   await waitFor(() => expect(api.transcribe).toHaveBeenCalledWith(ep, "r1"));
 });
 
-test("названный спикер тоже кликабелен: панель на его строке", async () => {
+test("названный спикер тоже кликабелен: в шапке — панель, у реплики — меню правки", async () => {
   load();
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
   const named = screen.getAllByRole("button", { name: /Демьян Петров/ });
   expect(named.length).toBe(2); // участник в шапке и подпись реплики
   await userEvent.click(named[1]!);
+  const menu = await screen.findByRole("dialog", { name: "Кому отдать реплики" });
+  await userEvent.click(within(menu).getByRole("button", { name: "Все реплики спикера — в панели «Спикеры»" }));
   const panel = await screen.findByRole("dialog", { name: "Спикеры встречи" });
   await waitFor(() => expect(within(panel).getByRole("region", { name: /^Демьян Петров/ })).toHaveFocus());
 });

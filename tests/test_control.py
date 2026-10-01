@@ -123,6 +123,10 @@ class FakeState:
             raise control.BadRequest("нечего применять")
         return {"pos": 1}
 
+    def speakers_relabel(self, rid, body):
+        self.calls.append(("speakers_relabel", rid, body))
+        return {"pos": 2}
+
     def speakers_undo(self, rid):
         self.calls.append(("speakers_undo", rid))
         raise control.Conflict("уже нельзя")
@@ -1102,7 +1106,10 @@ def test_speakers_panel_routes(server):
     _post(server, f"/recordings/{rid}/speakers/undo", {}, expect=409)
     assert _post(server, f"/recordings/{rid}/speakers/redo", {}) == {"pos": 1}
     assert _post(server, f"/recordings/{rid}/speakers/revert", {"to_step_id": "a1"}) == {"pos": 0}
+    turn = {"idx": [3], "labels": ["Анна"], "count": 9, "to": None}
+    assert _post(server, f"/recordings/{rid}/speakers/relabel", turn) == {"pos": 2}
     calls = [c for c in server.state_obj.calls if isinstance(c, tuple) and c[0].startswith("speakers")]
     assert calls == [("speakers", rid), ("speakers_apply", rid, body),
                      ("speakers_apply", rid, {"bad": True}), ("speakers_undo", rid),
-                     ("speakers_redo", rid), ("speakers_revert", rid, {"to_step_id": "a1"})]
+                     ("speakers_redo", rid), ("speakers_revert", rid, {"to_step_id": "a1"}),
+                     ("speakers_relabel", rid, turn)]

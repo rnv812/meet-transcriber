@@ -1617,6 +1617,28 @@ def test_speakers_panel_refuses_while_the_recording_is_transcribed(with_recordin
     assert state.speakers(rid)["speakers"]  # смотреть можно
 
 
+def test_speakers_relabel_turns_through_the_panel_lock(with_recordings, app):
+    from meet import control
+
+    rid = _speaker_meeting(with_recordings)
+    state = tray_control.TrayControl(app, queue=_Queue())
+    got = state.speakers_relabel(rid, {"idx": [1], "labels": ["Спикер 2"], "count": 2, "to": "Спикер 1"})
+    assert got["step"]["ops"][0]["type"] == "relabel" and got["pos"] == 1
+    assert [r["label"] for r in got["speakers"]] == ["Спикер 1"]
+    with pytest.raises(control.Conflict, match="обновите"):
+        state.speakers_relabel(rid, {"idx": [1], "labels": ["Спикер 2"], "count": 2, "to": "Анна"})
+    with pytest.raises(control.BadRequest):
+        state.speakers_relabel(rid, {"idx": [], "to": "Анна"})
+
+    class Busy(_Queue):
+        def active_for(self, folder, kinds):
+            return jobs.Job(id="j1", kind=jobs.TRANSCRIBE, folder=folder)
+
+    busy = tray_control.TrayControl(app, queue=Busy())
+    with pytest.raises(control.Conflict, match="расшифровка"):
+        busy.speakers_relabel(rid, {"idx": [0], "to": "Анна"})
+
+
 def test_speakers_panel_works_while_a_summary_is_written(with_recordings, app):
     rid = _speaker_meeting(with_recordings)
 

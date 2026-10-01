@@ -186,7 +186,10 @@ export type SpeakerRow = {
   suggestions: SpeakerSuggestion[];
 };
 /** Правка из набора: rename — имя, reset — «Неизвестный», merge — объединить с `into`. */
-export type SpeakerOp = { type: "rename" | "merge" | "reset"; label: string; from: string; to: string; into?: string };
+export type SpeakerOp =
+  | { type: "rename" | "merge" | "reset"; label: string; from: string; to: string; into?: string }
+  /** Реплики другому спикеру: `from` — чьи были, `segments` — сколько сегментов, `turns` — реплик. */
+  | { type: "relabel"; from: string[]; to: string; segments: number; turns: number };
 export type SpeakerStep = {
   id: string;
   at: string;
@@ -206,6 +209,8 @@ export type SpeakersView = {
   voices_error?: string | null;
   step?: SpeakerStep;
 };
+/** Реплики — другому спикеру (`POST …/speakers/relabel`). */
+export type RelabelRequest = { idx: number[]; labels: string[]; count: number; to: string | null };
 /** Правка, как её шлёт окно: `to` — имя (rename) или подпись другого спикера (merge). */
 export type SpeakerOpInput = { type: "rename" | "merge" | "reset"; label: string; to?: string };
 
