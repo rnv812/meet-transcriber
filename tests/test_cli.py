@@ -128,6 +128,7 @@ def test_cli_assist_without_new_flags_is_old_path(monkeypatch):
     assert called["endpoint_file"] is None
     assert called["provider"] is None
     assert called["knowledge_dir"] is None
+    assert called["parent_pid"] is None
 
 
 def test_cli_assist_knowledge_dir_from_settings(monkeypatch, tmp_path):
@@ -146,7 +147,8 @@ def test_cli_assist_knowledge_dir_from_settings(monkeypatch, tmp_path):
 def test_cli_assist_child_mode_flags(monkeypatch):
     called = _assist_call(monkeypatch, [
         "--no-browser", "--port", "0", "--endpoint-file", "C:/run/a.json",
-        "--provider", "codex"])
+        "--provider", "codex", "--parent-pid", "4321"])
+    assert called["parent_pid"] == 4321
     assert called["port"] == 0  # 0 — эфемерный порт, а не «взять из настроек»
     assert called["open_browser"] is False
     assert called["endpoint_file"] == "C:/run/a.json"

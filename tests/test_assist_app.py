@@ -375,6 +375,27 @@ def test_slow_model_call_does_not_delay_finalization(tmp_path, monkeypatch):
     assert returned - started < 5
 
 
+def test_child_stops_itself_when_parent_resident_dies(tmp_path, monkeypatch):
+    """Резидент умер жёстко: ребёнок сам штатно дописывает дорожки и выходит,
+    а не держит микрофон и `.recording.lock` сиротой."""
+    from meet.assist import app as app_mod
+
+    heavy = _Heavy(monkeypatch)
+    alive = iter([True, True])
+    monkeypatch.setattr(app_mod, "PARENT_POLL_S", 0.01)
+    monkeypatch.setattr(app_mod, "_pid_alive", lambda pid: next(alive, False))
+    watchdog = threading.Timer(30, heavy.emergency_stop)
+    watchdog.daemon = True
+    watchdog.start()
+    started = time.monotonic()
+    try:
+        _run(tmp_path, open_browser=False, port=0, parent_pid=4321)
+    finally:
+        watchdog.cancel()
+    assert time.monotonic() - started < 10
+    assert heavy.engine.started and heavy.engine.stopped
+
+
 # --- база знаний в живом режиме ---------------------------------------------
 
 
@@ -423,3 +444,25 @@ def test_run_assist_passes_knowledge_dir_to_qa_and_digester(tmp_path, monkeypatc
     assert kb in heavy.qa_kwargs["allowed_dirs"]
     assert kb in heavy.digester_kwargs["allowed_dirs"]
     assert heavy.digester_kwargs["cwd"] == heavy.engine.out_dir
+
+
+def test_remove_endpoint_retries_while_resident_reads_it(tmp_path, monkeypatch):
+    """Windows: резидент читает live.json в тот миг, когда ребёнок его
+    удаляет, — sharing violation. Файл должен уйти со второй попытки, иначе
+    резидент ждёт выхода процесса вместо сигнала «запись дописана»."""
+    from meet.assist import app as app_mod
+
+    ep = tmp_path / "live.json"
+    ep.write_text("{}", encoding="utf-8")
+    real, calls = Path.unlink, []
+
+    def busy_once(self, missing_ok=False):
+        calls.append(self)
+        if len(calls) == 1:
+            raise PermissionError(32, "занят другим процессом")
+        return real(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", busy_once)
+    monkeypatch.setattr(app_mod, "REMOVE_RETRY_S", 0.01)
+    app_mod.remove_endpoint(ep)
+    assert len(calls) == 2 and not ep.exists()

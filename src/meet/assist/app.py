@@ -11,6 +11,7 @@
 import asyncio
 import json
 import os
+import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -31,6 +32,25 @@ from meet.assist.qa import QAService
 from meet.assist.web import bound_port, run_web
 
 NO_PROVIDER_ERROR = "Подключите Claude Code или Codex в настройках"
+PARENT_POLL_S = 1.0  # как резидент следит за оболочкой (tray.run_headless)
+
+
+def _pid_alive(pid: int) -> bool:
+    from meet.recorder import _pid_alive as alive
+
+    return alive(pid)
+
+
+async def _watch_parent(parent_pid: int, stop: asyncio.Event) -> None:
+    """Резидент умер жёстко (без /stop) — останавливаемся сами, штатно
+    дописав дорожки: сирота держал бы микрофон и `.recording.lock`, а новый
+    резидент о нём не знал бы."""
+    while not stop.is_set():
+        if not _pid_alive(parent_pid):
+            print("Резидент завершился — останавливаю ассистента", flush=True)
+            stop.set()
+            return
+        await asyncio.sleep(PARENT_POLL_S)
 
 
 class AssistState:
@@ -126,18 +146,31 @@ def write_endpoint(path: Path, *, port: int, folder: Path) -> None:
         tmp.unlink(missing_ok=True)  # после replace его уже нет
 
 
+REMOVE_ATTEMPTS = 5
+REMOVE_RETRY_S = 0.05
+
+
 def remove_endpoint(path: Path | None) -> None:
+    """Убрать файл эндпоинта — сигнал резиденту «запись дописана». На Windows
+    удаление падает, пока резидент читает файл (sharing violation), — тогда
+    ещё пара попыток, а не молчаливый отказ."""
     if path is None:
         return
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        pass  # уборка не должна заслонять настоящую причину выхода
+    for attempt in range(REMOVE_ATTEMPTS):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if attempt + 1 < REMOVE_ATTEMPTS:
+                time.sleep(REMOVE_RETRY_S)
+        except OSError:
+            return  # уборка не должна заслонять настоящую причину выхода
 
 
 async def _main(state: AssistState, port: int, *, open_browser: bool = True,
                 endpoint_file: Path | None = None,
-                folder: Path | None = None) -> None:
+                folder: Path | None = None,
+                parent_pid: int | None = None) -> None:
     stop = asyncio.Event()
     state.stop_event = stop
     # Свой пул для asyncio.to_thread (вызовы Codex/локальной модели, дослив
@@ -159,6 +192,8 @@ async def _main(state: AssistState, port: int, *, open_browser: bool = True,
         print(f"Ассистент: {url} (Ctrl-C — стоп)", flush=True)
         digester = asyncio.ensure_future(state.digester.run(stop))
         tasks = [digester, asyncio.ensure_future(stop.wait())]
+        if parent_pid:
+            tasks.append(asyncio.ensure_future(_watch_parent(parent_pid, stop)))
         # Выход — по /stop (не ждём сна дайджестера и его вызова модели) или
         # если дайджестер кончился сам; его сбой пробрасываем наружу.
         await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -197,23 +232,26 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
                vault: str | None = None, port: int = 8765,
                no_voices: bool = False, *, open_browser: bool = True,
                endpoint_file: str | None = None, provider: str | None = None,
-               cfg=None, knowledge_dir: str | None = None) -> None:
+               cfg=None, knowledge_dir: str | None = None,
+               parent_pid: int | None = None) -> None:
     """`port=0` — эфемерный порт; `endpoint_file` получает
     `{"port", "pid", "folder"}` после старта сервера и удаляется при любом
     выходе; `provider` — имя провайдера вместо `llm.resolve(cfg)`;
-    `knowledge_dir` — база знаний на чтение для вопросов и дайджеста."""
+    `knowledge_dir` — база знаний на чтение для вопросов и дайджеста;
+    `parent_pid` — резидент: умер он — штатная остановка, как по /stop."""
     endpoint = Path(endpoint_file) if endpoint_file else None
     try:
         _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                     no_voices, open_browser=open_browser, endpoint=endpoint,
-                    provider=provider, cfg=cfg, knowledge_dir=knowledge_dir)
+                    provider=provider, cfg=cfg, knowledge_dir=knowledge_dir,
+                    parent_pid=parent_pid)
     finally:
         remove_endpoint(endpoint)
 
 
 def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                 no_voices, *, open_browser, endpoint, provider, cfg,
-                knowledge_dir=None) -> None:
+                knowledge_dir=None, parent_pid=None) -> None:
     from meet import settings
     from meet.asr import Transcriber
     from meet.live import LiveEngine
@@ -272,7 +310,8 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         engine.start()
         started = True
         asyncio.run(_main(state, port, open_browser=open_browser,
-                          endpoint_file=endpoint, folder=out_dir))
+                          endpoint_file=endpoint, folder=out_dir,
+                          parent_pid=parent_pid))
     except KeyboardInterrupt:
         pass
     finally:

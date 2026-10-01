@@ -120,7 +120,12 @@ if mode == "hang":
 if mode == "slow-finalize":
     time.sleep(1.0)  # финальный проход распознавания
 time.sleep(0.1)
-os.remove(endpoint)  # как run_assist: после engine.stop(), до выхода
+for attempt in range(20):  # как remove_endpoint: резидент мог читать файл
+    try:
+        os.remove(endpoint)  # как run_assist: после engine.stop(), до выхода
+        break
+    except PermissionError:
+        time.sleep(0.05)
 if mode == "stop-error":
     print("RuntimeError: финальный проход упал", flush=True)
     sys.exit(1)
@@ -470,6 +475,96 @@ def test_stale_endpoint_file_is_removed_before_spawn(make_live, data_dir, tmp_pa
     live.start(tmp_path / "recordings")
     assert not (data_dir / "live.json").exists()
     assert live.status()["folder"] is None
+
+
+def _spawn_orphan(stub, data_dir, tmp_path):
+    """Ребёнок прошлого резидента, умершего жёстко: процесс жив, файл
+    эндпоинта на месте, а нового LiveControl он не знает."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    endpoint = data_dir / "live.json"
+    argv = [sys.executable, "-m", "meet.cli", "assist", "--no-browser", "--port", "0",
+            "--endpoint-file", str(endpoint), "--out", str(tmp_path / "recordings")]
+    with open(tmp_path / "orphan.log", "ab") as log_file:
+        process = stub(argv, log_file)
+    _wait_for(lambda: endpoint.exists())
+    return process, endpoint
+
+
+def test_orphan_child_of_dead_resident_is_adopted_and_stopped(data_dir, tmp_path):
+    pytest.importorskip("psutil")
+    stub = Stub(tmp_path)
+    try:
+        process, endpoint = _spawn_orphan(stub, data_dir, tmp_path)
+        logged = []
+        live = live_control.LiveControl(events.EventBus(), spawn=stub,
+                                        log=logged.append)
+        assert live.adopt_orphan() is True
+        _wait_for(lambda: stub.note("stop") == [""])
+        process.wait(timeout=10)  # дописал запись и вышел сам
+        assert not endpoint.exists()  # файл убрал он, а не мы до /stop
+        assert any("прошлого запуска" in line for line in logged)
+    finally:
+        stub.cleanup()
+
+
+def test_adopt_without_orphan_removes_stale_file(data_dir):
+    data_dir.mkdir(parents=True, exist_ok=True)
+    endpoint = data_dir / "live.json"
+    endpoint.write_text(json.dumps({"port": 1, "pid": 999999, "folder": "F"}),
+                        encoding="utf-8")
+    live = live_control.LiveControl(events.EventBus(), spawn=None)
+    assert live.adopt_orphan() is False
+    assert not endpoint.exists()
+    assert live.adopt_orphan() is False  # файла нет — тихо
+
+
+def test_start_while_orphan_finalizes_is_refused_and_keeps_its_file(data_dir, tmp_path):
+    pytest.importorskip("psutil")
+    stub = Stub(tmp_path, "slow-finalize")
+    try:
+        process, endpoint = _spawn_orphan(stub, data_dir, tmp_path)
+        live = live_control.LiveControl(events.EventBus(), spawn=stub)
+        with pytest.raises(live_control.LiveBusy, match="дописывает"):
+            live.start(tmp_path / "recordings")
+        assert len(stub.processes) == 1  # нового ребёнка не запускали
+        _wait_for(lambda: stub.note("stop") == [""])  # и прошлого остановили
+        process.wait(timeout=10)
+    finally:
+        stub.cleanup()
+
+
+def test_child_gets_resident_pid_as_parent(make_live, tmp_path):
+    live, stub, _ = make_live("slow")
+    live.start(tmp_path / "recordings")
+    assert stub.argv[stub.argv.index("--parent-pid") + 1] == str(os.getpid())
+
+
+def test_resident_start_adopts_orphan(monkeypatch, tmp_path):
+    """Резидент при старте API забирает ребёнка прошлого запуска."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    adopted = []
+
+    class FakeLive:
+        def adopt_orphan(self):
+            adopted.append(True)
+            return False
+
+    class FakeServer:
+        def __init__(self, state, **kw):
+            self.state = state
+
+        def start(self, pid=None):
+            pass
+
+    class FakeState:
+        def __init__(self, app):
+            self.live = FakeLive()
+
+    monkeypatch.setattr(control, "ControlServer", FakeServer)
+    monkeypatch.setattr(tray, "TrayControl", FakeState)
+    tray.TrayApp(start_now=False)._start_control_api()
+    assert adopted == [True]
 
 
 def test_endpoint_of_another_process_is_ignored(tmp_path):

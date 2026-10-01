@@ -6,7 +6,7 @@
 здесь только stdlib: subprocess, urllib и http.client.
 
 Протокол с ребёнком (`python -m meet.cli assist --no-browser --port 0
---endpoint-file <data_dir>/live.json --out <папка записей>`):
+--endpoint-file <data_dir>/live.json --out <папка записей> --parent-pid <pid>`):
 
 * ребёнок атомарно пишет `{"port", "pid", "folder"}` в файл эндпоинта, когда
   его сервер поднялся (модели к этому моменту загружены — до минуты);
@@ -16,6 +16,10 @@
   поэтому исчезнувший после `/stop` файл эндпоинта и есть сигнал «запись
   дописана»: остаток дерева добиваем (FINALIZE_GRACE_S), не дожидаясь. Не
   дописал к STOP_TIMEOUT_S — убиваем всё равно, но запись помечаем неполной;
+* `--parent-pid` — pid резидента: умер он жёстко — ребёнок сам штатно
+  дописывает запись и выходит. Если сирота всё же остался (ребёнок старой
+  версии), новый резидент при старте находит его по файлу эндпоинта и шлёт
+  `/stop` (`adopt_orphan`), а не удаляет файл;
 * `GET /events` — SSE `state`/`line` с `id:`, понимает Last-Event-ID;
 * POST'ы с чужим Origin ребёнок отвергает, а без Origin пускает — urllib
   Origin не ставит, и это нам и нужно.
@@ -137,6 +141,38 @@ def _endpoint_is(path: Path, pid: int) -> bool:
     except (OSError, ValueError):
         return True  # недочитали (замена файла) — считаем, что ещё на месте
     return isinstance(data, dict) and data.get("pid") == pid
+
+
+def _is_assist_process(pid) -> bool:
+    """pid — живой `meet assist` в режиме ребёнка (или процесс внутри него:
+    лаунчер venv'а запускает настоящий интерпретатор дочерним). Признак —
+    `assist` и `--endpoint-file` в командной строке; psutil нет — не знаем,
+    считаем, что нет (файл тогда уберётся как протухший)."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        import psutil
+
+        proc = psutil.Process(pid)
+        for p in [proc, *proc.parents()]:
+            cmd = " ".join(p.cmdline())
+            if "assist" in cmd and "--endpoint-file" in cmd:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _orphan_endpoint(path: Path) -> dict | None:
+    """Файл эндпоинта, чей ребёнок ещё жив (резидент, который его запустил,
+    умер жёстко). None — файла нет или он протух."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not data.get("port"):
+        return None
+    return data if _is_assist_process(data.get("pid")) else None
 
 
 def _spawn_process(argv: list[str], log_file):
@@ -262,13 +298,20 @@ class LiveControl:
                 if self._process is not None:
                     raise LiveBusy("Ассистент уже запущен")
                 endpoint = endpoint_path()
+                orphan = _orphan_endpoint(endpoint)
+                if orphan is not None:
+                    # Ребёнок прошлого резидента ещё пишет (или дописывает)
+                    # встречу и держит lock записи: его файл не трогаем.
+                    self._stop_orphan(orphan)
+                    raise LiveBusy("Прошлый ассистент ещё дописывает запись — "
+                                   "попробуйте через минуту")
                 try:
                     endpoint.unlink(missing_ok=True)  # от убитого прошлого запуска
                 except OSError:
                     pass
                 argv = [sys.executable, "-m", "meet.cli", "assist", "--no-browser",
                         "--port", "0", "--endpoint-file", str(endpoint),
-                        "--out", str(out_root)]
+                        "--out", str(out_root), "--parent-pid", str(os.getpid())]
                 log_file = None
                 try:
                     log_file, path, offset = _open_log()
@@ -303,6 +346,27 @@ class LiveControl:
             # Поток — после `live.starting`: его started/failed не обгонят начало.
             thread.start()
         return {"ok": True, **reply}
+
+    def adopt_orphan(self) -> bool:
+        """Старт резидента: ребёнок прошлого (умершего жёстко) резидента ещё
+        жив — штатно остановить его (`/stop` в фоне: старт не ждёт), файл
+        эндпоинта он уберёт сам. Протухший файл — убрать. True — сирота был."""
+        endpoint = endpoint_path()
+        orphan = _orphan_endpoint(endpoint)
+        if orphan is None:
+            try:
+                endpoint.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+        self._log(f"ассистент прошлого запуска ещё жив (pid {orphan.get('pid')}, "
+                  f"{orphan.get('folder')}) — останавливаю")
+        self._stop_orphan(orphan)
+        return True
+
+    def _stop_orphan(self, orphan: dict) -> None:
+        threading.Thread(target=self._send_stop, args=(int(orphan["port"]),),
+                         name="meet-live-orphan", daemon=True).start()
 
     def stop(self, wait: bool = False, timeout: float | None = None) -> dict:
         """Штатная остановка: `POST /stop` (не дошёл — ещё раз), конец — когда

@@ -792,10 +792,16 @@ class TrayApp:
                 fallback=True,
             )
             server.start(pid=os.getpid())
-            return server
         except Exception as e:
             self.log(f"control API не поднялся ({e!r}) — работаю без панели")
             return None
+        try:
+            # Ассистент прошлого резидента, умершего жёстко, мог остаться
+            # сиротой с микрофоном и lock'ом записи — остановить штатно.
+            server.state.live.adopt_orphan()
+        except Exception as e:
+            self.log(f"не удалось проверить прошлого ассистента: {e!r}")
+        return server
 
     def _release_lock(self, lock: Path) -> None:
         """Снять свой lock — но только свой: за время работы его мог перехватить

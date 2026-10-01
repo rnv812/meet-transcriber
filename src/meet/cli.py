@@ -230,6 +230,10 @@ def main(argv: list[str] | None = None) -> int | None:
         help='записать {"port", "pid", "folder"} после старта; удаляется при выходе',
     )
     p_as.add_argument(
+        "--parent-pid", type=int, default=None,
+        help="pid резидента: он умер — ассистент штатно останавливается сам",
+    )
+    p_as.add_argument(
         "--provider", default=None, choices=PROVIDERS,
         help="провайдер модели (по умолчанию — из настроек)",
     )
@@ -296,7 +300,8 @@ def main(argv: list[str] | None = None) -> int | None:
                        open_browser=not args.no_browser,
                        endpoint_file=args.endpoint_file,
                        provider=args.provider, cfg=cfg,
-                       knowledge_dir=str(knowledge) if knowledge else None)
+                       knowledge_dir=str(knowledge) if knowledge else None,
+                       parent_pid=args.parent_pid)
     elif args.command == "status":
         print_status()
     elif args.command == "enroll":
