@@ -147,6 +147,21 @@ def as_str_list(value, default: tuple[str, ...]) -> list[str]:
     return [str(v) for v in value]
 
 
+def as_process_list(value) -> list[str]:
+    """Программы звонков (имена exe). Пробелы по краям и повторы (без учёта
+    регистра — детектор сравнивает имена так же) убираются. Пустой список, как
+    и мусор, — список по умолчанию: детектор без программ не видел бы звонков
+    вовсе, а выключатель для этого есть отдельный (`enabled`)."""
+    seen: set[str] = set()
+    names: list[str] = []
+    for name in as_str_list(value, DEFAULT_PROCESSES):
+        name = name.strip()
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            names.append(name)
+    return names or list(DEFAULT_PROCESSES)
+
+
 def as_choice(value, allowed: tuple[str, ...], default: str) -> str:
     """Значение из закрытого списка: опечатка не должна ломать запуск."""
     if isinstance(value, str) and value.strip() in allowed:
@@ -194,7 +209,7 @@ class AutoRecord:
     def from_raw(cls, raw: dict) -> "AutoRecord":
         return cls(
             enabled=as_flag(raw.get("enabled"), False),
-            processes=as_str_list(raw.get("processes"), DEFAULT_PROCESSES),
+            processes=as_process_list(raw.get("processes")),
             grace_seconds=as_positive(raw.get("grace_seconds"), DEFAULT_GRACE_S, 0.0),
             poll_seconds=as_positive(raw.get("poll_seconds"), DEFAULT_POLL_S, 0.5),
             min_call_seconds=as_positive(

@@ -554,3 +554,9 @@ def test_patch_pins_and_unpins_audio_device(tmp_path):
     assert cfg.recording.mic_device is None
     assert settings.load(f).recording.mic_device is None
 
+
+
+def test_process_list_is_trimmed_and_deduplicated(tmp_path):
+    f = tmp_path / "config.json"
+    _write(f, {"auto_record": {"processes": [" Zoom.exe ", "zoom.exe", "", "Telegram.exe"]}})
+    assert settings.load(f).auto_record.processes == ["Zoom.exe", "Telegram.exe"]

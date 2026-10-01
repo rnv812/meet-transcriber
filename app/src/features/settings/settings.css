@@ -111,3 +111,33 @@
 .sound__result { flex-basis: 100%; display: flex; align-items: center; justify-content: flex-end; gap: 8px; font-size: 12px; text-align: right; }
 .sound__level { flex: none; width: 120px; height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
 .sound__fill { display: block; height: 100%; background: var(--ok); transition: width var(--t); }
+
+/* «Автозапись» → программы звонков: пресеты сеткой, свои — чипами, поиск по запущенным. */
+.callapps { display: flex; flex-direction: column; gap: 6px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.callapps__head { display: flex; align-items: center; gap: 8px; }
+.callapps__head--sub { margin-top: 6px; }
+.callapps__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px 16px; }
+.callapps__item { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.callapps__chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; padding: 0; list-style: none; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 10px; border-radius: 12px;
+  background: var(--surface-2); color: var(--text); font-size: 12px;
+}
+.chip__remove {
+  width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none;
+  color: var(--text-2); font: inherit; line-height: 1; cursor: pointer;
+}
+.chip__remove:hover, .chip__remove:focus-visible { background: var(--surface-hover); color: var(--text); }
+.callapps__add { display: flex; flex-direction: column; gap: 4px; max-width: 420px; }
+.callapps__add input[type="text"] {
+  flex: 1; min-width: 0; background: var(--surface); color: var(--text); border: 1px solid var(--line-2);
+  border-radius: var(--r-md); padding: 5px 8px; font: inherit;
+}
+.callapps__options {
+  margin: 0; padding: 4px; list-style: none; max-height: 220px; overflow: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+}
+.callapps__options:empty { display: none; }
+.callapps__option { padding: 4px 8px; border-radius: var(--r-md); cursor: pointer; }
+.callapps__option:hover, .callapps__option--active { background: var(--surface-hover); }
+.callapps__note { margin: 0; font-size: 12px; }

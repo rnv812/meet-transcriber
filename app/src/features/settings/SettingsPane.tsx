@@ -19,6 +19,7 @@ import { EmptyState } from "../../ui/EmptyState";
 import { About } from "./About";
 import { AssistantSection, assistantChangesInvalid } from "./AssistantSection";
 import { AutostartRow } from "./AutostartRow";
+import { CallPrograms } from "./CallPrograms";
 import { DiagnosticsPane } from "./DiagnosticsPane";
 import { EnginePane } from "./EnginePane";
 import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSection";
@@ -108,27 +109,13 @@ function AutoSection({ draft, set, processes, onToggle }: {
 }) {
   const v = (k: string) => draft.auto_record?.[k];
   const selected = (v("processes") as string[] | undefined) ?? [];
-  const names = [...new Set([...(processes?.running ?? []), ...selected])].sort();
-  const toggle = (name: string) =>
-    set("auto_record", "processes", selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
   return (
     <>
       <Switch label="Поднимать запись, когда начинается звонок"
         hint="кончился звонок — запись останавливается сама"
         value={Boolean(v("enabled"))} onChange={onToggle} />
       <p className="muted sdesc">Эти параметры применятся после перезапуска приложения</p>
-      <Row label="Программы звонков"
-        hint="отметьте те, что сейчас запущены и ведут звонки. Мессенджеры добавлять осторожно: звук уведомления детектор читает как звонок">
-        <div className="checks">
-          {names.length === 0 && <span className="muted">{processes?.error ?? "нет запущенных программ"}</span>}
-          {names.map((n) => (
-            <label key={n} className="checks__item">
-              <input type="checkbox" checked={selected.includes(n)} onChange={() => toggle(n)} />
-              {n}
-            </label>
-          ))}
-        </div>
-      </Row>
+      <CallPrograms value={selected} processes={processes} onChange={(x) => set("auto_record", "processes", x)} />
       <SecondsRow id="grace" label="Хвост после звонка"
         hint="обрыв связи и перезаход не рвут файл надвое; в хвост попадает и сказанное после встречи"
         value={Number(v("grace_seconds") ?? 0)} onChange={(x) => set("auto_record", "grace_seconds", x)} />

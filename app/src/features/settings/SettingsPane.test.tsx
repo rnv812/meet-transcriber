@@ -224,3 +224,15 @@ test("«Звук»: выбранный микрофон сохраняется �
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
   expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1]).toEqual({ recording: { mic_device: { name: "USB-микрофон" } } });
 });
+
+test("«Автозапись»: пресет программы звонков сохраняется списком exe", async () => {
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Автозапись" }));
+  expect(await screen.findByRole("checkbox", { name: "Zoom" })).toBeChecked();
+  expect(screen.queryByRole("checkbox", { name: "teams.exe" })).toBeNull(); // не стена процессов
+  await userEvent.click(screen.getByRole("checkbox", { name: "Microsoft Teams" }));
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
+  expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1])
+    .toEqual({ auto_record: { processes: ["zoom.exe", "ms-teams.exe", "Teams.exe"] } });
+});
