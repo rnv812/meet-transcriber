@@ -35,7 +35,7 @@ const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 
 export function RecordingCard({
   id, endpoint, jobs = NO_JOBS, snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
-  onOpenSettings, find,
+  onOpenSettings, find, refreshKey = 0,
 }: {
   id: string;
   endpoint: Endpoint;
@@ -50,6 +50,8 @@ export function RecordingCard({
   onOpenSettings?: (section: string) => void;
   /** Открыть с запросом в поиске по расшифровке (из поиска по записям). */
   find?: FindRequest | null;
+  /** Растёт, когда запись изменили снаружи (переименовали в списке): перечитать. */
+  refreshKey?: number;
 }) {
   const [rec, setRec] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,6 +109,10 @@ export function RecordingCard({
   useEffect(() => {
     setRec(null); setError(null); setMissing(false); setKbDone(null); setAudioFailed(false); void load();
   }, [load]);
+  const lastRefresh = useRef(refreshKey);
+  useEffect(() => {
+    if (refreshKey !== lastRefresh.current) { lastRefresh.current = refreshKey; void load(); }
+  }, [refreshKey, load]);
   const lastSig = useRef(jobSig);
   useEffect(() => {
     if (jobSig !== lastSig.current) { lastSig.current = jobSig; void load(); }
@@ -137,7 +143,7 @@ export function RecordingCard({
   const hasAudio = Object.keys(rec.tracks).length > 0;
   const playable = hasAudio && !audioFailed;
 
-  const rename = (title: string) => act(async () => {
+  const rename = (title: string | null) => act(async () => {
     const updated = await patchRecording(endpoint, id, { title });
     setRec((cur) => (cur ? { ...cur, ...updated, transcript: cur.transcript } : cur));
     onChanged?.();

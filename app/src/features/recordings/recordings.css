@@ -83,3 +83,45 @@
 .rec-menu__item:disabled { opacity: 0.5; cursor: default; }
 .rec-menu__note { color: var(--text-3); font-size: 11px; }
 .rec-menu__hint { padding: 0 8px 6px; color: var(--amber); font-size: 12px; }
+
+/* «⋯» записи: виден при наведении, фокусе и у выбранной. */
+.rec-item__main { padding-right: 34px; }
+.rec-item__more {
+  position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: var(--r-sm); background: none; color: var(--text-3);
+  font: inherit; font-size: 16px; line-height: 1; cursor: pointer; opacity: 0;
+  transition: opacity var(--t), background var(--t), color var(--t);
+}
+.rec-item:hover .rec-item__more, .rec-item--selected .rec-item__more,
+.rec-item__more:focus-visible, .rec-item__more[aria-expanded="true"] { opacity: 1; }
+.rec-item__more:hover, .rec-item__more[aria-expanded="true"] { background: var(--surface-hover); color: var(--text); }
+/* Переименование на месте. */
+.rec-item__main--editing { cursor: default; padding-right: 10px; }
+.rec-item__input {
+  height: 24px; padding: 0 6px; margin: -2px 0 0 -6px; width: calc(100% + 6px);
+  background: var(--surface); color: var(--text); font: inherit; font-weight: 500;
+  border: 1px solid var(--accent); border-radius: var(--r-sm);
+}
+.rec-item__input:focus { outline: none; }
+.rec-item__hint { display: block; margin-top: 4px; font-size: 11px; }
+/* Меню действий записи (ItemMenu). */
+.item-menu {
+  position: fixed; z-index: 60; min-width: 200px; max-width: 280px; padding: 4px;
+  display: flex; flex-direction: column; gap: 2px;
+  background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.item-menu__note { padding: 6px 8px; color: var(--text-2); font-size: 12px; }
+.item-menu__item {
+  display: block; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--r-md);
+  background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer;
+}
+.item-menu__item:hover, .item-menu__item:focus-visible { background: var(--surface-hover); outline: none; }
+.item-menu__item--danger { color: var(--red); }
+/* Итог действия из меню. */
+.rec-notice {
+  display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px; font-size: 12px; color: var(--text-2);
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
+}
+.rec-notice--error { color: var(--err); }
+.rec-notice__text { flex: 1; min-width: 0; word-break: break-all; }

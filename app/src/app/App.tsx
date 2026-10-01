@@ -27,6 +27,8 @@ export function App() {
   /** Запись открыта из поиска по записям: тот же запрос — в поиск по расшифровке. */
   const [find, setFind] = useState<FindRequest | null>(null);
   const findN = useRef(0);
+  /** Запись изменили в списке (название, выгрузка): открытая карточка перечитывается. */
+  const [cardTick, setCardTick] = useState(0);
   const resident = useResident();
   const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick);
   const { people, refresh: refreshPeople, avatarVersion, bumpAvatar } = usePeople(resident.endpoint ?? null, resident.doneTick);
@@ -108,6 +110,8 @@ export function App() {
                 selected={selected}
                 onSelect={selectFromList}
                 onOpenHit={openHit}
+                onChanged={(id) => { if (id === selected) setCardTick((n) => n + 1); }}
+                onDeleting={(id) => { if (id === selected) setSelected(null); }}
                 library={library}
                 resident={resident}
                 q={q}
@@ -143,6 +147,7 @@ export function App() {
                 onPeopleChanged={() => void refreshPeople()}
                 onOpenSettings={openSettings}
                 find={find}
+                refreshKey={cardTick}
                 onChanged={() => void library.refresh()}
                 onDeleted={() => { setSelected(null); void library.refresh(); }}
               />

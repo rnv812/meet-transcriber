@@ -442,3 +442,79 @@ def test_file_names_must_not_clash(tmp_path, update, fragment):
         settings.patch({"export": update}, f)
     got = kb_export.preview(_cfg(None), tmp_path, update)
     assert fragment in got["error"]
+
+
+# --- переименование встречи: папка в базе знаний следует за названием ------------------
+
+
+def _exported(tmp_path, vault, **cfg):
+    folder = _recording(tmp_path, summary="# Итоги\n")
+    old = Path(kb_export.export_recording(folder, _cfg(vault, **cfg))["path"])
+    return folder, old
+
+
+def _rename(folder, title):
+    old_title = kb_export.meeting(folder)[0]
+    library.write_meta(folder, {"title": title})
+    return old_title
+
+
+def test_renamed_meeting_moves_its_own_folder(tmp_path, vault):
+    folder, old = _exported(tmp_path, vault)
+    old_title = _rename(folder, "Ретроспектива")
+    new = kb_export.follow_title(folder, _cfg(vault), old_title)
+    assert new == vault / "2026-09-30 - Ретроспектива"
+    assert not old.exists() and sorted(p.name for p in new.iterdir()) == ["Итоги.md", "Транскрипт.md"]
+    assert library.read_meta(folder)["kb_export"]["path"] == str(new)
+    # Следующая выгрузка — в переименованную папку, без второй.
+    got = kb_export.export_recording(folder, _cfg(vault))
+    assert got["path"] == str(new) and got["kept"] == []
+    assert [p.name for p in vault.iterdir()] == [new.name]
+    assert "# Ретроспектива" in (new / "Транскрипт.md").read_text(encoding="utf-8")
+
+
+def test_file_names_with_title_follow_too(tmp_path, vault):
+    cfg = {"summary_name": "Итоги {title}"}
+    folder, old = _exported(tmp_path, vault, **cfg)
+    old_title = _rename(folder, "Ретро")
+    new = kb_export.follow_title(folder, _cfg(vault, **cfg), old_title)
+    assert sorted(p.name for p in new.iterdir()) == ["Итоги Ретро.md", "Транскрипт.md"]
+    assert set(library.read_meta(folder)["kb_export"]["files"]) == {"Итоги Ретро.md", "Транскрипт.md"}
+    got = kb_export.export_recording(folder, _cfg(vault, **cfg))
+    assert got["kept"] == [] and sorted(p.name for p in new.iterdir()) == ["Итоги Ретро.md", "Транскрипт.md"]
+
+
+def test_folder_with_foreign_files_stays(tmp_path, vault):
+    folder, old = _exported(tmp_path, vault)
+    (old / "Мои заметки.md").write_text("своё", encoding="utf-8")
+    old_title = _rename(folder, "Ретроспектива")
+    assert kb_export.follow_title(folder, _cfg(vault), old_title) is None
+    assert old.is_dir() and library.read_meta(folder)["kb_export"]["path"] == str(old)
+
+
+def test_folder_missing_our_file_stays(tmp_path, vault):
+    folder, old = _exported(tmp_path, vault)
+    (old / "Итоги.md").unlink()
+    old_title = _rename(folder, "Ретроспектива")
+    assert kb_export.follow_title(folder, _cfg(vault), old_title) is None
+    assert old.is_dir()
+
+
+def test_existing_target_folder_is_not_touched(tmp_path, vault):
+    folder, old = _exported(tmp_path, vault)
+    taken = vault / "2026-09-30 - Ретроспектива"
+    taken.mkdir()
+    old_title = _rename(folder, "Ретроспектива")
+    assert kb_export.follow_title(folder, _cfg(vault), old_title) is None
+    assert old.is_dir() and list(taken.iterdir()) == []
+
+
+def test_not_exported_or_gone_folder_is_nothing_to_follow(tmp_path, vault):
+    import shutil
+
+    folder = _recording(tmp_path)
+    assert kb_export.follow_title(folder, _cfg(vault), "Планирование спринта") is None
+    exported, old = _exported(tmp_path / "b", vault)
+    shutil.rmtree(old)
+    assert kb_export.follow_title(exported, _cfg(vault), _rename(exported, "Ретро")) is None
+    assert kb_export.follow_title(exported, _cfg(None), "x") is None

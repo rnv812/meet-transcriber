@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { Endpoint } from "../../lib/api";
+import { TITLE_MAX, type Endpoint } from "../../lib/api";
 import { dayLabel, duration } from "../../lib/format";
 import { isUnnamed } from "../../lib/speakers";
 import type { Recording } from "../../lib/types";
@@ -16,7 +16,8 @@ export function CardHeader({
   people: PersonColor[];
   endpoint: Endpoint;
   avatarVersion?: Record<string, number>;
-  onRename: (title: string) => void;
+  /** Новое название; null — вернуть автоматическое. */
+  onRename: (title: string | null) => void;
   onNameSpeaker?: (label: string, anchor: HTMLElement) => void;
 }) {
   const when = rec.started_at ? dayLabel(rec.started_at) : "";
@@ -29,8 +30,8 @@ export function CardHeader({
   const finish = () => {
     if (cancelled.current) return;
     setEditing(false);
-    const v = draft.trim();
-    if (v && v !== (rec.title ?? "")) onRename(v);
+    const v = draft.trim().slice(0, TITLE_MAX);
+    if (v !== (rec.title ?? "")) onRename(v || null);
   };
   const meta = [when, durationS ? duration(durationS) : ""].filter(Boolean).join(" · ");
 
@@ -41,6 +42,8 @@ export function CardHeader({
           className="card__title-input"
           aria-label="Название записи"
           autoFocus
+          maxLength={TITLE_MAX}
+          placeholder={when || "Название"}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={finish}

@@ -208,3 +208,34 @@ def test_broken_settings_in_job_subscriber_only_log(app, state, monkeypatch):
     _done(app, jobs.TRANSCRIBE, "C:/rec/" + RID)  # не бросает в очередь задач
     assert any("config.json сломан" in line for line in lines)
     assert app.bus.failures == 0
+
+
+# --- переименование встречи ----------------------------------------------------------
+
+
+def test_rename_moves_exported_folder_and_reexports(app, state, tmp_path, vault, monkeypatch):
+    lines = []
+    monkeypatch.setattr(app, "log", lines.append)
+    _write_config(tmp_path, {"meetings_dir": str(vault), "auto_export": False})
+    old = Path(state.kb_export(RID)["path"])
+    state.update_recording(RID, {"title": "Ретроспектива"})
+    new = vault / "2026-09-30 - Ретроспектива"
+    assert not old.exists() and new.is_dir()
+    assert "# Ретроспектива" in (new / "Транскрипт.md").read_text(encoding="utf-8")
+    assert state.recording(RID)["kb_export"]["path"] == str(new)
+    assert any("переименована" in line and new.name in line for line in lines)
+
+
+def test_rename_with_foreign_files_reexports_into_old_folder(app, state, tmp_path, vault):
+    _write_config(tmp_path, {"meetings_dir": str(vault)})
+    old = Path(state.kb_export(RID)["path"])
+    (old / "Заметки.md").write_text("своё", encoding="utf-8")
+    state.update_recording(RID, {"title": "Ретроспектива"})
+    assert [p.name for p in vault.iterdir()] == [old.name]
+    assert "# Ретроспектива" in (old / "Транскрипт.md").read_text(encoding="utf-8")
+
+
+def test_rename_of_never_exported_meeting_exports_nothing(app, state, tmp_path, vault):
+    _write_config(tmp_path, {"meetings_dir": str(vault)})
+    state.update_recording(RID, {"title": "Ретроспектива"})
+    assert list(vault.iterdir()) == []

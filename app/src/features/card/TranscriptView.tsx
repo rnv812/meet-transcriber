@@ -10,7 +10,7 @@
  * следующее / предыдущее, Esc — очистить и вернуть фокус, где он был.
  */
 
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { findHits, parseQuery, prepare } from "../../lib/search";
 import type { Turn } from "../../lib/speakers";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
@@ -78,8 +78,9 @@ export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker,
 
   // Новый результат: к нужной реплике (просьба из списка), новый запрос — к
   // первому совпадению; тот же запрос по перечитанной записи — остаёмся на месте.
+  // Layout-эффекты: счётчик и выделение текущего меняются в одном кадре, без мигания.
   const lastQuery = useRef(query);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const t = jump.current;
     jump.current = null;
     const same = lastQuery.current === query;
@@ -89,7 +90,7 @@ export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker,
   }, [hits, turns, query]);
 
   // Текущее совпадение: выделить сильнее и прокрутить к нему (по центру).
-  useEffect(() => {
+  useLayoutEffect(() => {
     const root = box.current;
     if (!root) return;
     for (const el of root.querySelectorAll(".hit--current")) el.classList.remove("hit--current");

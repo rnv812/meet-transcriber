@@ -197,14 +197,25 @@ test("переименование: Enter сохраняет, Esc отменяе
   expect(screen.getByRole("heading", { name: "Acme" })).toBeInTheDocument();
 });
 
-test("пустое название не сохраняется", async () => {
+test("пустое название возвращает автоматическое, как в списке", async () => {
   load();
+  vi.mocked(api.patchRecording).mockResolvedValue({ ...base, title: null });
   render(<RecordingCard id="r1" endpoint={ep} />);
   await userEvent.click(await screen.findByRole("heading", { name: "Встреча" }));
   const input = screen.getByRole("textbox", { name: "Название записи" });
+  expect(input).toHaveAttribute("maxLength", "200");
   await userEvent.clear(input);
   await userEvent.type(input, "   {Enter}");
-  expect(api.patchRecording).not.toHaveBeenCalled();
+  await waitFor(() => expect(api.patchRecording).toHaveBeenCalledWith(ep, "r1", { title: null }));
+});
+
+test("переименовали в списке — карточка перечитывает запись", async () => {
+  load();
+  const { rerender } = render(<RecordingCard id="r1" endpoint={ep} refreshKey={0} />);
+  await screen.findByRole("heading", { name: "Встреча" });
+  load({ title: "Из списка" });
+  rerender(<RecordingCard id="r1" endpoint={ep} refreshKey={1} />);
+  expect(await screen.findByRole("heading", { name: "Из списка" })).toBeInTheDocument();
 });
 
 test("плеер карточки играет сведённую дорожку playback — обе стороны звонка", async () => {

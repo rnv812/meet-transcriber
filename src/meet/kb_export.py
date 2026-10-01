@@ -18,6 +18,9 @@
   свежей версии, а новую всегда можно получить, удалив файл. Заметки рядом и
   уже существующая папка с тем же именем остаются как были. Папка, занятая
   другой встречей, получает суффикс « (2)».
+* **Переименовали встречу — папка следует за названием** (`follow_title`),
+  но только своя: в ней ровно наши файлы прошлой выгрузки, а папки с новым
+  именем ещё нет. Иначе папка остаётся прежней, и выгрузка идёт в неё.
 * **Запись атомарная:** временный файл рядом и `os.replace` — база знаний
   (синхронизация, индексатор Obsidian) не увидит половину файла.
 """
@@ -404,6 +407,66 @@ def _remember_error(folder: Path, error: Exception) -> None:
 def previously_exported(folder: Path) -> bool:
     record = library.read_meta(Path(folder)).get("kb_export")
     return isinstance(record, dict) and bool(record.get("path"))
+
+
+# --- переименование встречи ---------------------------------------------------------
+
+
+def follow_title(folder, cfg, old_title: str) -> Path | None:
+    """Встречу переименовали (название уже в meta.json): переименовать и её
+    папку в базе знаний по шаблону — атомарно, `os.rename`. Только если папка
+    наша целиком (есть все наши файлы прошлой выгрузки и ничего чужого) и
+    папки с новым именем нет; имена наших файлов с `{title}` в шаблоне тоже
+    следуют за названием. Новый путь — или None, если папка осталась прежней
+    (не выгружалась, чужие файлы, имя занято, ошибка диска)."""
+    cfg = getattr(cfg, "export", cfg)
+    folder = Path(folder)
+    if not cfg.meetings_dir:
+        return None
+    root = Path(cfg.meetings_dir)
+    record = library.read_meta(folder).get("kb_export")
+    if not isinstance(record, dict) or not isinstance(record.get("path"), str) or not record["path"]:
+        return None
+    old = Path(record["path"])
+    recorded = _recorded(record)
+    try:
+        if not old.is_dir() or not _inside(old, root) or not recorded:
+            return None
+        if {p.name for p in old.iterdir()} != set(recorded):
+            return None  # чужие файлы или наших не хватает: папка уже не только наша
+    except OSError:
+        return None
+    title, start = meeting(folder)
+    new = root.joinpath(*render_folder(cfg.folder_template, title, start))
+    if (_same(new, old) or new.exists() or not _inside(new, root)
+            or _claimed_by_other(new, folder)):
+        return None
+    try:
+        new.parent.mkdir(parents=True, exist_ok=True)
+        os.rename(old, new)
+    except OSError:
+        return None
+    # Файлы с {title} в имени: та же раскладка по старому и новому названию.
+    audio = _audio_name(_audio_sources(folder))
+    before = dict(_plan(cfg, old_title, start, True, audio))
+    for kind, name in _plan(cfg, title, start, True, audio):
+        was = before.get(kind)
+        if not was or was == name or was not in recorded or (new / name).exists():
+            continue
+        try:
+            os.rename(new / was, new / name)
+        except OSError:
+            continue
+        recorded[name] = recorded.pop(was)
+
+    def change(meta: dict) -> dict:
+        current = meta.get("kb_export")
+        current = dict(current) if isinstance(current, dict) else {}
+        current.update(path=str(new), files=recorded)
+        return {**meta, "kb_export": current}
+
+    library.update_meta(folder, change)
+    return new
 
 
 # --- предпросмотр ------------------------------------------------------------------

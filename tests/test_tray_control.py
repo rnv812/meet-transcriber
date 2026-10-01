@@ -491,8 +491,12 @@ def test_update_recording_sets_title(control_state, app, monkeypatch, tmp_path):
     monkeypatch.setattr(control_state, "_root", lambda: root)
     result = control_state.update_recording("2026-09-30_16-04", {"title": "  Acme  "})
     assert result["title"] == "Acme"
-    assert control_state.update_recording("2026-09-30_16-04", {"title": ""}) == {
-        "error": "пустое название"}
+    assert control_state.update_recording("2026-09-30_16-04", {"title": "я" * 300})["title"] == "я" * 200
+    # Пустое название — вернуть автоматическое (из транскрипта или даты).
+    reverted = control_state.update_recording("2026-09-30_16-04", {"title": "  "})
+    assert reverted["title"] is None
+    assert "title" not in library.read_meta(folder)
+    assert control_state.update_recording("2026-09-30_16-04", {"title": None})["title"] is None
     assert control_state.update_recording("../../etc", {"title": "x"}) == {
         "error": "записи нет"}
 

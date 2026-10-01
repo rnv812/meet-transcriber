@@ -225,6 +225,9 @@ def _conflict(text: str):
     return Conflict(text)
 
 
+# Название записи длиннее не бывает: окно ограничивает поле тем же.
+TITLE_MAX = 200
+
 # Сколько «Удалить» ждёт, пока плеер и сведение отпустят файлы записи.
 DELETE_WAIT_S = 3.0
 
@@ -762,18 +765,49 @@ class TrayControl:
 
     def update_recording(self, recording_id: str, body: dict) -> dict:
         """Переименовать запись. Название живёт в meta.json, а не в транскрипте:
-        его можно дать и записи, которая ещё не расшифрована."""
+        его можно дать и записи, которая ещё не расшифрована. Пустое — вернуть
+        автоматическое (из транскрипта или по дате). Выгруженную в базу знаний
+        встречу выгружаем заново, и её папка следует за названием
+        (`kb_export.follow_title`) — в фоне, как и прочая выгрузка."""
+        from meet import kb_export
+
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
         card = library.describe(folder)
         if card is None:
             return {"error": "записи нет"}
-        title = str((body or {}).get("title") or "").strip()
-        if not title:
-            return {"error": "пустое название"}
-        library.write_meta(folder, {"title": title})
+        title = str((body or {}).get("title") or "").strip()[:TITLE_MAX]
+        exported = kb_export.previously_exported(folder)
+        old_title = kb_export.meeting(folder)[0] if exported else None
+        if title:
+            library.write_meta(folder, {"title": title})
+        else:
+            library.update_meta(folder, lambda meta: {k: v for k, v in meta.items() if k != "title"})
+        if exported:
+            self._background(lambda: self._follow_title(folder, old_title))
         return library.describe(folder).to_raw()
+
+    def _follow_title(self, folder: Path, old_title: str) -> None:
+        """Папка встречи в базе знаний — под новое название (если она целиком
+        наша и имя свободно), затем выгрузка заново: новое название в файлах."""
+        from meet import kb_export
+
+        try:
+            cfg = settings.load()
+            if not cfg.export.meetings_dir:
+                return
+            before = (library.read_meta(folder).get("kb_export") or {}).get("path")
+            with self._kb_lock:
+                moved = kb_export.follow_title(folder, cfg, old_title)
+        except Exception as e:
+            self.tray.log(f"папка встречи в базе знаний не переименована ({folder.name}): "
+                          f"{type(e).__name__}: {e}")
+            moved = None
+        else:
+            if moved is not None:
+                self.tray.log(f"папка встречи в базе знаний переименована: {before} → {moved}")
+        self._auto_kb_export(folder)
 
     def transcript(self, recording_id: str) -> dict:
         folder = self._folder(recording_id)

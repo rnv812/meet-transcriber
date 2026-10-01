@@ -86,6 +86,9 @@ export const searchLibrary = (ep: Endpoint, q: string) =>
   json<{ items: SearchItem[] }>(ep, `/search?q=${enc(q)}`);
 export const getRecording = (ep: Endpoint, id: string) =>
   json<Recording & { transcript: Transcript | null }>(ep, `/recordings/${enc(id)}`);
+/** Название записи не длиннее (резидент обрезает так же). */
+export const TITLE_MAX = 200;
+/** `title: null` (или пустое) — вернуть автоматическое название. */
 export const patchRecording = (ep: Endpoint, id: string, patch: { title: string | null }) =>
   json<Recording>(ep, `/recordings/${enc(id)}`, body("PATCH", patch));
 export const deleteRecording = (ep: Endpoint, id: string) =>
