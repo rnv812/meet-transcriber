@@ -12,7 +12,8 @@
   3. Скачивает uv и ffmpeg (LGPL, статическая сборка) с закреплённых
      релизов GitHub в build/cache (повторный запуск не качает заново) и
      сверяет SHA-256 с scripts/uv.sha256 и scripts/ffmpeg.sha256.
-  4. Кладёт uv.exe, ffmpeg.exe (+ лицензию ffmpeg), колесо и файлы версий в
+  4. Кладёт uv.exe, ffmpeg.exe, лицензии (ffmpeg-LICENSE.txt, uv-LICENSE.txt,
+     LICENSE и NOTICE самого meet), колесо и файлы версий в
      app/src-tauri/resources/ — их подхватывает tauri.release.conf.json.
   5. npm ci и tauri build с релизным конфигом.
   6. Печатает путь и размер установщика и пишет рядом SHA256SUMS.txt.
@@ -295,6 +296,10 @@ New-Item -ItemType Directory -Force $Resources | Out-Null
 Expand-One $uvZip 'uv.exe' (Join-Path $Resources 'uv.exe')
 Expand-One $ffmpegZip 'bin/ffmpeg.exe' (Join-Path $Resources 'ffmpeg.exe')
 Expand-One $ffmpegZip 'LICENSE.txt' (Join-Path $Resources 'ffmpeg-LICENSE.txt')
+# Лицензии: uv (в его архиве их нет — текст лежит в репозитории), и самого meet.
+Copy-Item (Join-Path (Join-Path $PSScriptRoot 'licenses') 'uv-LICENSE.txt') (Join-Path $Resources 'uv-LICENSE.txt')
+Copy-Item (Join-Path $Root 'LICENSE') (Join-Path $Resources 'LICENSE')
+Copy-Item (Join-Path $Root 'NOTICE') (Join-Path $Resources 'NOTICE')
 Copy-Item $wheel (Join-Path $Resources $wheelName)
 foreach ($file in $constraintFiles) { Copy-Item $file $Resources }
 Invoke-Native 'uv.exe --version' { & (Join-Path $Resources 'uv.exe') --version }

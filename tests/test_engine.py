@@ -306,6 +306,21 @@ def test_build_script_compiles_constraints_with_the_same_torch_pins():
     assert "constraints-$flavor.txt" in script
 
 
+def test_installer_resources_carry_the_licenses():
+    """Установщик несёт лицензии всего, что в нём лежит: ffmpeg (из его
+    архива), uv (в архиве uv её нет — текст в репозитории) и самого meet."""
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "build_release.ps1").read_text(encoding="utf-8-sig")
+    for name in ("'ffmpeg-LICENSE.txt'", "'uv-LICENSE.txt'", "'LICENSE'", "'NOTICE'"):
+        assert f"(Join-Path $Resources {name})" in script
+    uv = (root / "scripts" / "licenses" / "uv-LICENSE.txt").read_text(encoding="utf-8")
+    assert "MIT License" in uv and "Apache License" in uv and "Astral Software Inc." in uv
+    notice = (root / "NOTICE").read_text(encoding="utf-8")
+    for part in ("Onest", "SIL Open Font License", "wav2vec2-large-xlsr-53-russian",
+                 "faster-whisper-large-v3-russian", "faster-whisper-medium", "CC-BY-4.0"):
+        assert part in notice
+
+
 def test_estimate_text_cpu():
     text = engine.estimate_text(2264, "cpu")
     assert "38 мин" in text and "48 мин" in text

@@ -18,20 +18,37 @@ its own license:
   the GNU Lesser General Public License; its license text ships next to it as
   ffmpeg-LICENSE.txt. Source code: https://ffmpeg.org/ and
   https://github.com/BtbN/FFmpeg-Builds.
-* uv (uv.exe) by Astral — dual-licensed under Apache-2.0 or MIT.
-  https://github.com/astral-sh/uv
+* uv (uv.exe) by Astral — dual-licensed under Apache-2.0 or MIT; both texts
+  ship next to it as uv-LICENSE.txt. https://github.com/astral-sh/uv
 
-Python packages (faster-whisper, CTranslate2, pyannote.audio, PyTorch and
-others) are installed from their package indexes on first run under their own
-licenses; they are not part of this repository.
+The application window bundles the Onest typeface (variable font, Cyrillic
+and Latin), Copyright 2021 The Onest Project Authors
+(https://github.com/simpals/onest), licensed under the SIL Open Font License,
+Version 1.1; it is taken from the @fontsource-variable/onest package.
+
+JavaScript and Rust libraries compiled into the application window and shell
+(React, Tauri, xterm.js and others) keep their own licenses, listed in
+app/package-lock.json and app/src-tauri/Cargo.lock.
+
+Python packages (faster-whisper, CTranslate2, pyannote.audio, PyTorch,
+transformers and others) are installed from their package indexes on first
+run under their own licenses; they are not part of this repository.
 
 Models
 ------
 Models are downloaded at runtime from Hugging Face and are not distributed
 with this product; each is governed by its own license:
 
-* Speech recognition: Whisper models in the faster-whisper / CTranslate2
-  format (faster-whisper and CTranslate2 are MIT-licensed).
-* Speaker diarization: pyannote.audio (MIT-licensed code) with the
-  pyannote/speaker-diarization-community-1 pipeline, which requires accepting
-  its terms of use on Hugging Face before download.
+* Speech recognition (GPU profile): bzikst/faster-whisper-large-v3-russian —
+  a CTranslate2 conversion of antony66/whisper-large-v3-russian (a Russian
+  fine-tune of OpenAI Whisper large-v3); Apache-2.0.
+* Speech recognition (CPU profile): Systran/faster-whisper-medium —
+  OpenAI Whisper medium in CTranslate2 format; MIT.
+  (faster-whisper and CTranslate2 themselves are MIT-licensed.)
+* Word timestamps (forced alignment):
+  jonatasgrosman/wav2vec2-large-xlsr-53-russian — wav2vec2 XLSR-53
+  fine-tuned for Russian; Apache-2.0.
+* Speaker diarization and voice embeddings:
+  pyannote/speaker-diarization-community-1 — CC-BY-4.0 (pyannote.audio code
+  is MIT-licensed); requires accepting its terms of use on Hugging Face
+  before download.
