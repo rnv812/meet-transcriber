@@ -80,3 +80,10 @@ export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null)
   if (isImport) return { kind: "failed", error: last?.error || INTERRUPTED, retry: "import" };
   return { kind: "untranscribed" };
 }
+
+/** Задачи модели (итоги, вопросы) над папкой записи — в порядке постановки. */
+export function modelJobsOf(folder: string, jobs: Job[], kind: "summary" | "ask"): Job[] {
+  return jobs.filter((j) => j.kind === kind && norm(j.folder) === norm(folder));
+}
+
+export const isActiveJob = (j: Job): boolean => j.state === "queued" || j.state === "running";

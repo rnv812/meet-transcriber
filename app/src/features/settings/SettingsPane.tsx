@@ -210,8 +210,14 @@ function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
   );
 }
 
-export function SettingsPane({ endpoint, recordingsDir }: { endpoint: Endpoint; recordingsDir: string | null }) {
-  const [section, setSection] = useState<SectionId>("recording");
+export function SettingsPane({ endpoint, recordingsDir, initial }: {
+  endpoint: Endpoint;
+  recordingsDir: string | null;
+  /** Открыть сразу этот раздел (id из MENU); неизвестный — с первого. */
+  initial?: string;
+}) {
+  const [section, setSection] = useState<SectionId>(
+    () => MENU.find((m) => m.id === initial)?.id ?? "recording");
   const [settings, setSettings] = useState<Raw | null>(null);
   const [draft, setDraft] = useState<Raw>({});
   const [processes, setProcesses] = useState<Processes | null>(null);

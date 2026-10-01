@@ -13,6 +13,7 @@ import { Popover } from "../../ui/Popover";
 import { EmptyState } from "../../ui/EmptyState";
 import { AudioPlayer, type AudioPlayerHandle, type Track } from "./AudioPlayer";
 import { CardActions } from "./CardActions";
+import { CardTabs } from "./CardTabs";
 import { CardHeader } from "./CardHeader";
 import { SpeakerPopover } from "./SpeakerPopover";
 import { Turns, type PersonColor } from "./Turns";
@@ -30,6 +31,7 @@ const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 
 export function RecordingCard({
   id, endpoint, jobs = [], snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
+  onOpenSettings,
 }: {
   id: string;
   endpoint: Endpoint;
@@ -40,6 +42,8 @@ export function RecordingCard({
   onDeleted?: () => void;
   onChanged?: () => void;
   onPeopleChanged?: () => void;
+  /** Перейти в настройки; `section` — раздел, например "assistant". */
+  onOpenSettings?: (section: string) => void;
 }) {
   const [rec, setRec] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -157,9 +161,12 @@ export function RecordingCard({
   let body;
   switch (status.kind) {
     case "ready":
-      body = turns.length ? (
-        <Turns turns={turns} colors={colors} playable={hasAudio} onPlay={play} onNameSpeaker={nameSpeaker} />
-      ) : <EmptyState title="В записи нет речи" />;
+      body = (
+        <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
+          transcript={turns.length ? (
+            <Turns turns={turns} colors={colors} playable={hasAudio} onPlay={play} onNameSpeaker={nameSpeaker} />
+          ) : <EmptyState title="В записи нет речи" />} />
+      );
       break;
     case "untranscribed":
       body = <EmptyState title="Запись не расшифрована"

@@ -12,10 +12,14 @@ vi.mock("../state/usePeople", () => ({
   usePeople: () => ({ people: [], refresh: refreshPeople, avatarVersion: {}, bumpAvatar: () => {} }),
 }));
 vi.mock("../features/card/RecordingCard", () => ({
-  RecordingCard: ({ id }: { id: string }) => <div data-testid="card">{id}</div>,
+  RecordingCard: ({ id, onOpenSettings }: { id: string; onOpenSettings?: (s: string) => void }) => (
+    <div data-testid="card">{id}<button onClick={() => onOpenSettings?.("assistant")}>в настройки</button></div>
+  ),
 }));
 vi.mock("../features/voices/VoicesPane", () => ({ VoicesPane: () => <div data-testid="voices" /> }));
-vi.mock("../features/settings/SettingsPane", () => ({ SettingsPane: () => <div data-testid="settings" /> }));
+vi.mock("../features/settings/SettingsPane", () => ({
+  SettingsPane: ({ initial }: { initial?: string }) => <div data-testid="settings" data-initial={initial ?? ""} />,
+}));
 const openCb = vi.hoisted(() => ({ current: null as ((id: string) => void) | null }));
 vi.mock("../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../lib/shell")>()),
@@ -102,4 +106,16 @@ test("вход в «Голоса» перечитывает базу людей"
   refreshPeople.mockClear();
   await userEvent.click(screen.getByText("Голоса"));
   expect(refreshPeople).toHaveBeenCalledTimes(1);
+});
+
+test("карточка просит настройки «Ассистент» — открыт раздел настроек с нужной секцией", async () => {
+  residentState.current = online();
+  window.history.replaceState({}, "", "/?recording=abc");
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "в настройки" }));
+  expect(screen.getByTestId("settings")).toHaveAttribute("data-initial", "assistant");
+  // Обычный переход в настройки из меню — с начала, без запомненной секции.
+  await userEvent.click(screen.getByText("Записи"));
+  await userEvent.click(screen.getByText("Настройки"));
+  expect(screen.getByTestId("settings")).toHaveAttribute("data-initial", "");
 });

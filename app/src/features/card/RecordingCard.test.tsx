@@ -15,6 +15,9 @@ vi.mock("../../lib/api", async (orig) => ({
   exportRecording: vi.fn(),
   cancelJob: vi.fn(),
   getDiagnostics: vi.fn(),
+  getAssistant: vi.fn(),
+  getSummary: vi.fn(),
+  getQa: vi.fn(),
 }));
 vi.mock("../../lib/shell", () => ({
   inTauri: () => true,
@@ -40,6 +43,11 @@ const load = (extra: Partial<Recording> = {}, t: Transcript | null = transcript)
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getSettings).mockResolvedValue({ recording: { speaker_name: "Демьян Петров" } });
+  vi.mocked(api.getAssistant).mockResolvedValue({
+    provider: null, setting: "auto", available: {}, knowledge_dir: null, notes_dir: null, checking: false,
+  });
+  vi.mocked(api.getSummary).mockRejectedValue(new api.ApiError(404, "итогов нет"));
+  vi.mocked(api.getQa).mockResolvedValue({ items: [] });
   HTMLMediaElement.prototype.play = vi.fn(async () => {});
   HTMLMediaElement.prototype.load = vi.fn();
 });
@@ -319,4 +327,33 @@ test("импорт без duration_s: длительность по концу �
   const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("б");
   expect(container.querySelector(".card__meta")).toHaveTextContent("2 мин");
+});
+
+test("готовая запись: вкладки «Транскрипт · Итоги · Вопросы», транскрипт по умолчанию", async () => {
+  load();
+  const onOpenSettings = vi.fn();
+  render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={onOpenSettings} />);
+  await screen.findByText("Привет всем");
+  const tabs = screen.getAllByRole("tab");
+  expect(tabs.map((t) => t.textContent)).toEqual(["Транскрипт", "Итоги", "Вопросы"]);
+  expect(tabs[0]).toHaveAttribute("aria-selected", "true");
+  await userEvent.click(tabs[1]!);
+  expect(await screen.findByText("Итогов пока нет")).toBeVisible();
+  expect(screen.getByRole("tab", { name: "Итоги" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByText("Привет всем")).not.toBeVisible();
+  // Без провайдера — ссылка в настройки, раздел «Ассистент».
+  await userEvent.click(await screen.findByRole("button", { name: "Открыть настройки" }));
+  expect(onOpenSettings).toHaveBeenCalledWith("assistant");
+  await userEvent.click(screen.getByRole("tab", { name: "Вопросы" }));
+  expect(await screen.findByText("Вопросов пока не было")).toBeVisible();
+  expect(api.getSummary).toHaveBeenCalledWith(ep, "r1");
+  expect(api.getQa).toHaveBeenCalledWith(ep, "r1");
+});
+
+test("не расшифрованная запись — без вкладок", async () => {
+  load({ has_transcript: false }, null);
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Запись не расшифрована");
+  expect(screen.queryByRole("tablist")).toBeNull();
+  expect(api.getSummary).not.toHaveBeenCalled();
 });

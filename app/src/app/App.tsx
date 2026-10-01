@@ -13,6 +13,8 @@ import { RecordingBadge } from "./RecordingBadge";
 
 export function App() {
   const [section, setSection] = useState<Section>("recordings");
+  /** Раздел настроек, куда просили перейти (карточка: «Открыть настройки»). */
+  const [settingsPart, setSettingsPart] = useState<string | undefined>(undefined);
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<string | null>(() => initialRecording());
   const resident = useResident();
@@ -21,6 +23,8 @@ export function App() {
   const offline = resident.status === "offline";
 
   const openRecording = (id: string) => { setSelected(id); setSection("recordings"); };
+  const select = (s: Section) => { setSettingsPart(undefined); setSection(s); };
+  const openSettings = (part: string) => { setSettingsPart(part); setSection("settings"); };
 
   // В «Голоса» — со свежей базой: её меняют и расшифровки, и карточки записей.
   useEffect(() => {
@@ -39,7 +43,7 @@ export function App() {
 
   return (
     <div className="app">
-      <Nav section={section} onSelect={setSection} />
+      <Nav section={section} onSelect={select} />
       <div className="content">
         <header className="topbar">
           <RecordingBadge endpoint={resident.endpoint ?? null} snapshot={resident.snapshot ?? null}
@@ -72,7 +76,8 @@ export function App() {
                 onOpenRecording={openRecording}
               />
             ) : section === "settings" && resident.endpoint ? (
-              <SettingsPane endpoint={resident.endpoint} recordingsDir={resident.snapshot?.recordings_dir ?? null} />
+              <SettingsPane endpoint={resident.endpoint} recordingsDir={resident.snapshot?.recordings_dir ?? null}
+                initial={settingsPart} />
             ) : selected && resident.endpoint ? (
               <RecordingCard
                 key={selected}
@@ -83,6 +88,7 @@ export function App() {
                 people={people}
                 avatarVersion={avatarVersion}
                 onPeopleChanged={() => void refreshPeople()}
+                onOpenSettings={openSettings}
                 onChanged={() => void library.refresh()}
                 onDeleted={() => { setSelected(null); void library.refresh(); }}
               />

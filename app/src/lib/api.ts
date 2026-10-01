@@ -10,7 +10,8 @@
 
 import { inTauri, invoke } from "./shell";
 import type {
-  BusEvent, CommandResult, Job, Person, PersonCard, Recording, Sample, Snapshot, Transcript,
+  AssistantInfo, BusEvent, CommandResult, Job, LiveLine, LiveState, LiveStatus, Person, PersonCard,
+  ProviderCheck, QaItem, Recording, Sample, Snapshot, Summary, Transcript,
 } from "./types";
 
 export type Endpoint = {
@@ -192,6 +193,38 @@ export const getDiagnostics = (ep: Endpoint, lines = 200) =>
 export const getDevices = (ep: Endpoint) => json<Devices>(ep, "/devices");
 export const getProcesses = (ep: Endpoint) => json<Processes>(ep, "/processes");
 
+// --- ассистент: итоги, вопросы, заметки -------------------------------------
+
+/** Итоги задачей (kind "summary"); 409 — нет провайдера или идёт расшифровка. */
+export const makeSummary = (ep: Endpoint, id: string) =>
+  json<Job>(ep, `/recordings/${enc(id)}/summary`, { method: "POST" });
+/** Итогов нет — ApiError 404. */
+export const getSummary = (ep: Endpoint, id: string) => json<Summary>(ep, `/recordings/${enc(id)}/summary`);
+/** Вопрос задачей (kind "ask"); ответ ляжет в `getQa` к `job.done`. */
+export const ask = (ep: Endpoint, id: string, question: string) =>
+  json<Job>(ep, `/recordings/${enc(id)}/ask`, body("POST", { question }));
+export const getQa = (ep: Endpoint, id: string) => json<{ items: QaItem[] }>(ep, `/recordings/${enc(id)}/qa`);
+/** Заметка в папку заметок; 400 — папка не задана. */
+export const toNotes = (ep: Endpoint, id: string) =>
+  json<{ path: string }>(ep, `/recordings/${enc(id)}/notes`, { method: "POST" });
+export const getAssistant = (ep: Endpoint) => json<AssistantInfo>(ep, "/assistant");
+/** Короткий вызов модели — до полутора минут. */
+export const checkProvider = (ep: Endpoint, provider: string) =>
+  json<ProviderCheck>(ep, "/assistant/check", body("POST", { provider }));
+
+// --- живой режим ---------------------------------------------------------------
+
+/** Ответ сразу (`starting`); дальше — события `live.started` / `live.failed`. 409/400 — ApiError. */
+export const liveStart = (ep: Endpoint) => json<{ ok: boolean } & LiveStatus>(ep, "/live/start", { method: "POST" });
+/** Ответ сразу; конец — событием `live.stopped`. */
+export const liveStop = (ep: Endpoint) =>
+  json<{ ok: boolean; action: string } & LiveStatus>(ep, "/live/stop", { method: "POST" });
+/** Ответ модели может идти минуты. */
+export const liveAsk = (ep: Endpoint, question: string) =>
+  json<{ answer: string }>(ep, "/live/ask", body("POST", { question }));
+export const liveTask = (ep: Endpoint, task: string) =>
+  json<{ ok: boolean }>(ep, "/live/task", body("POST", { task }));
+
 // --- URL для <audio>/<img> ---------------------------------------------------
 
 export function audioUrl(ep: Endpoint, id: string, track: "sys" | "mic" | "source"): string {
@@ -214,7 +247,16 @@ const EVENT_KINDS = [
   "job.queued", "job.started", "job.progress", "job.done", "job.failed",
   "record.started", "record.stopped", "record.discarded", "record.device",
   "record.waiting", "record.silence", "record.level", "progress", "log", "error",
+  "live.starting", "live.started", "live.stopping", "live.stopped", "live.failed",
 ];
+
+function parseEvent(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
 
 /** Первым сообщением сервер присылает `state` со снимком. Возвращает закрытие. */
 export function openEvents(
@@ -227,28 +269,47 @@ export function openEvents(
 ): () => void {
   const query = ep.token ? `?token=${enc(ep.token)}` : "";
   const source = new EventSource(`${ep.base}/events${query}`);
-  const parse = (raw: string): unknown => {
-    try {
-      return JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  };
   source.addEventListener("state", (m) => {
-    const data = parse((m as MessageEvent<string>).data);
+    const data = parseEvent((m as MessageEvent<string>).data);
     if (data) handlers.onSnapshot?.(data as Snapshot);
   });
   source.onmessage = (m) => {
-    const data = parse(m.data as string);
+    const data = parseEvent(m.data as string);
     if (data) handlers.onEvent?.(data as BusEvent);
   };
   // Подписываемся широко: новый вид события в Python не требует правки фронта.
   for (const kind of EVENT_KINDS) {
     source.addEventListener(kind, (m) => {
-      const data = parse((m as MessageEvent<string>).data);
+      const data = parseEvent((m as MessageEvent<string>).data);
       if (data) handlers.onEvent?.(data as BusEvent);
     });
   }
   source.onerror = () => handlers.onError?.();
   return () => source.close();
+}
+
+/**
+ * Поток живого ассистента: `state` (дайджест, хвост ленты, статус) при каждом
+ * изменении и `line` на каждую новую строку. Не живой режим — сервер отвечает
+ * 409, и EventSource уходит в `onError`.
+ */
+export function openLiveEvents(
+  ep: Endpoint,
+  handlers: {
+    onState?: (s: LiveState) => void;
+    onLine?: (l: LiveLine) => void;
+    onError?: () => void;
+  },
+): { close: () => void } {
+  const query = ep.token ? `?token=${enc(ep.token)}` : "";
+  const source = new EventSource(`${ep.base}/live/events${query}`);
+  const on = <T>(kind: string, fn?: (data: T) => void) =>
+    source.addEventListener(kind, (m) => {
+      const data = parseEvent((m as MessageEvent<string>).data);
+      if (data) fn?.(data as T);
+    });
+  on<LiveState>("state", handlers.onState);
+  on<LiveLine>("line", handlers.onLine);
+  source.onerror = () => handlers.onError?.();
+  return { close: () => source.close() };
 }

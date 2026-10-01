@@ -116,3 +116,46 @@ export type JobEvent = BusEvent & { job: Job };
 
 export const isJob = (e: BusEvent): e is JobEvent => e.kind.startsWith("job.");
 export const isLevel = (e: BusEvent): e is LevelEvent => e.kind === "record.level";
+
+// --- ассистент ---------------------------------------------------------------
+
+/** `GET /recordings/{id}/summary`; итогов нет — 404. */
+export type Summary = { markdown: string; created_at: number | null };
+
+/** Пара из `qa.jsonl`; `at` — секунды эпохи. */
+export type QaItem = { q: string; a: string; at: number; provider: string | null };
+
+/** Что видит резидент: CLI найдены, локальная модель отвечает. */
+export type ProviderAvailability = { found: boolean; path?: string | null; base_url?: string };
+
+/**
+ * `GET /assistant`. `provider` — кто ответит сейчас; null при `checking` значит
+ * «ещё считается», а не «никого нет».
+ */
+export type AssistantInfo = {
+  provider: string | null;
+  setting: string;
+  available: Record<string, ProviderAvailability>;
+  knowledge_dir: string | null;
+  notes_dir: string | null;
+  checking: boolean;
+};
+
+/** `POST /assistant/check`. */
+export type ProviderCheck = { ok: boolean; error?: string | null; provider?: string | null };
+
+/** Состояние живого режима, общая часть ответов `/live/start` и `/live/stop`. */
+export type LiveStatus = {
+  active: boolean;
+  starting: boolean;
+  stopping: boolean;
+  folder: string | null;
+  error: string | null;
+  started_at: number | null;
+};
+
+/** `event: state` потока `/live/events`: дайджест, хвост ленты, статус дайджестера. */
+export type LiveState = { digest: string; transcript: string[]; status: string | null };
+
+/** `event: line`: новая строка ленты; `t` — секунды от начала записи. */
+export type LiveLine = { t: number; speaker: string | null; text: string };
