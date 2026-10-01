@@ -466,3 +466,17 @@ def test_remove_endpoint_retries_while_resident_reads_it(tmp_path, monkeypatch):
     monkeypatch.setattr(app_mod, "REMOVE_RETRY_S", 0.01)
     app_mod.remove_endpoint(ep)
     assert len(calls) == 2 and not ep.exists()
+
+
+def test_parent_check_sees_death_while_someone_holds_its_handle():
+    """Оболочка держит хэндл резидента (std::process::Child): OpenProcess на
+    умерший процесс при открытом хэндле удаётся. Мёртвый — по коду выхода."""
+    import subprocess
+    import sys
+
+    from meet.assist import app as app_mod
+
+    assert app_mod._pid_alive(os.getpid()) is True
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()  # объект жив — хэндл процесса открыт
+    assert app_mod._pid_alive(proc.pid) is False
