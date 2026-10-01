@@ -20,6 +20,10 @@ class FakeState:
             return (["[00:00:01] Вы: привет"], 1)
 
         @staticmethod
+        def entries_since(i):
+            return ([{"t": 1.0, "speaker": "Вы", "text": "привет"}][i:], 1)
+
+        @staticmethod
         def size():
             return 1
 
@@ -91,5 +95,97 @@ def test_sse_first_event_has_digest():
                     raw.decode("utf-8").split("data: ", 1)[1].strip()
                 )
                 assert "Тезис" in payload["digest"]
+
+    _run(scenario())
+
+
+class LiveState(FakeState):
+    """Состояние с настоящей шиной и событием остановки."""
+
+    def __init__(self):
+        from meet.assist.bus import TranscriptBus
+
+        self.bus = TranscriptBus()
+        self.stop_event = asyncio.Event()
+        self.stop_requests = 0
+
+    def request_stop(self):
+        self.stop_requests += 1
+        self.stop_event.set()
+
+
+async def _read_events(resp, count):
+    """Читает из SSE `count` событий как (event, id, data)."""
+    out = []
+    while len(out) < count:
+        raw = (await asyncio.wait_for(resp.content.readuntil(b"\n\n"), 5)).decode()
+        fields = {}
+        for row in raw.strip().splitlines():
+            key, _, value = row.partition(": ")
+            fields[key] = value
+        out.append((fields.get("event"), fields.get("id"),
+                    json.loads(fields["data"])))
+    return out
+
+
+def test_stop_route_requests_shutdown():
+    async def scenario():
+        state = LiveState()
+        async with TestClient(TestServer(build_app(state))) as client:
+            r = await client.post("/stop")
+            assert r.status == 200 and await r.json() == {"ok": True}
+            assert state.stop_requests == 1 and state.stop_event.is_set()
+
+    _run(scenario())
+
+
+def test_sse_sends_structured_line_for_each_new_line():
+    async def scenario():
+        state = LiveState()
+        state.bus.publish("[00:00:03] Вы: привет",
+                          {"t": 3.0, "speaker": "Вы", "text": "привет"})
+        async with TestClient(TestServer(build_app(state))) as client:
+            async with client.get("/events") as resp:
+                events = await _read_events(resp, 2)
+                kinds = {e[0] for e in events}
+                assert kinds == {"state", "line"}
+                line = next(e for e in events if e[0] == "line")
+                assert line[1] == "0"
+                assert line[2] == {"t": 3.0, "speaker": "Вы", "text": "привет"}
+                state.bus.publish("[00:00:09] Собеседник: да",
+                                  {"t": 9.5, "speaker": "Собеседник", "text": "да"})
+                new = [e for e in await _read_events(resp, 2) if e[0] == "line"]
+                assert new[0][1] == "1"
+                assert new[0][2]["speaker"] == "Собеседник"
+                assert new[0][2]["text"] == "да"
+
+    _run(scenario())
+
+
+def test_sse_resumes_after_last_event_id():
+    """Переподключившийся EventSource шлёт Last-Event-ID — строки не дублируются."""
+    async def scenario():
+        state = LiveState()
+        for i in range(3):
+            state.bus.publish(f"l{i}", {"t": float(i), "speaker": "Вы", "text": f"l{i}"})
+        async with TestClient(TestServer(build_app(state))) as client:
+            async with client.get("/events",
+                                  headers={"Last-Event-ID": "1"}) as resp:
+                events = await _read_events(resp, 2)
+                lines = [e for e in events if e[0] == "line"]
+                assert [e[2]["text"] for e in lines] == ["l2"]
+
+    _run(scenario())
+
+
+def test_sse_closes_when_stop_requested():
+    async def scenario():
+        state = LiveState()
+        async with TestClient(TestServer(build_app(state))) as client:
+            async with client.get("/events") as resp:
+                await _read_events(resp, 1)
+                state.request_stop()
+                rest = await asyncio.wait_for(resp.content.read(), 5)
+                assert b"event: line" not in rest  # поток просто закончился
 
     _run(scenario())

@@ -51,3 +51,32 @@ def test_error_returned_as_message_session_kept():
     _, qa = _service([AgentReply(text="", error="rate_limit")], calls)
     answer = asyncio.run(qa.ask("вопрос"))
     assert "rate_limit" in answer
+
+
+def test_without_resume_history_goes_into_prompt():
+    """Провайдер без сессий (Codex, локальная модель) не возвращает session_id —
+    память диалога (последние 6 пар) кладётся в сам промпт."""
+    calls = []
+    replies = [AgentReply(text=f"ответ {i}") for i in range(8)]
+    _, qa = _service(replies, calls)
+    for i in range(8):
+        asyncio.run(qa.ask(f"вопрос {i}"))
+    first_prompt = calls[0][0]
+    assert "Предыдущие вопросы" not in first_prompt
+    assert "вопрос 0" in calls[1][0] and "ответ 0" in calls[1][0]
+    last = calls[7][0]
+    # В последнем промпте — пары 1..6 (шесть последних), пары 0 уже нет.
+    assert "вопрос 0" not in last and "ответ 0" not in last
+    for i in range(1, 7):
+        assert f"вопрос {i}" in last and f"ответ {i}" in last
+    assert all(kw["resume"] is None for _, kw in calls)
+
+
+def test_with_resume_history_not_duplicated():
+    calls = []
+    _, qa = _service([AgentReply(text="ответ 1", session_id="s"),
+                      AgentReply(text="ответ 2", session_id="s")], calls)
+    asyncio.run(qa.ask("вопрос 1"))
+    asyncio.run(qa.ask("вопрос 2"))
+    assert "ответ 1" not in calls[1][0]
+    assert calls[1][1]["resume"] == "s"

@@ -303,3 +303,128 @@ def test_speaker_name_comes_from_settings(tmp_path, monkeypatch):
 def test_speaker_name_defaults_to_you(tmp_path, monkeypatch):
     monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "пусто"))
     assert LiveEngine(tmp_path, transcriber=None).SPEAKERS["mic.wav"] == "Вы"
+
+
+def test_on_entry_gets_structure_next_to_line(tmp_path):
+    fake = FakeTranscriber([[Segment(0.0, 0.5, "привет", no_speech_prob=0.1, avg_logprob=-0.3)]])
+    got = []
+    engine = LiveEngine(tmp_path, fake, speaker_name="Вы",
+                        on_entry=lambda line, entry: got.append((line, entry)))
+    engine.register_track("mic.wav", rate=48000, channels=2, normalize=False)
+    engine._tracks["mic.wav"]["buffer"].push(_one_second_2ch_48k())
+    engine.process_window()
+    line, entry = got[0]
+    assert line == format_live_line(0.0, "Вы", "привет")
+    assert entry == {"t": 0.0, "speaker": "Вы", "text": "привет"}
+
+
+# --- общий lock записи ------------------------------------------------------
+
+import json  # noqa: E402
+import os  # noqa: E402
+import sys  # noqa: E402
+import types  # noqa: E402
+
+import pytest  # noqa: E402
+
+import meet.recorder as recorder  # noqa: E402  (реальный pyaudio — до подмены)
+
+
+class _LoadSpy:
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.loaded = False
+        self.unloaded = False
+
+    def load(self):
+        if self.fail:
+            raise RuntimeError("модель не загрузилась")
+        self.loaded = True
+
+    def unload(self):
+        self.unloaded = True
+
+    def transcribe_window(self, audio, **kw):
+        return []
+
+
+def _fake_audio(monkeypatch):
+    """Подменяет устройства: start() не открывает настоящий звук."""
+    class Stream:
+        def stop_stream(self):
+            pass
+
+        def close(self):
+            pass
+
+    class PA:
+        def get_host_api_info_by_type(self, t):
+            return {"defaultInputDevice": 1}
+
+        def get_device_info_by_index(self, i):
+            return {"index": i, "name": "mic", "maxInputChannels": 1,
+                    "defaultSampleRate": 16000}
+
+        def open(self, **kw):
+            return Stream()
+
+        def terminate(self):
+            pass
+
+    class Writer:
+        def __init__(self, path, channels, rate):
+            pass
+
+        def write(self, data):
+            pass
+
+        def close(self):
+            pass
+
+    fake = types.SimpleNamespace(paWASAPI=13, paInt16=8, paContinue=0, PyAudio=PA)
+    monkeypatch.setitem(sys.modules, "pyaudiowpatch", fake)
+    monkeypatch.setattr(recorder, "OpusWriter", Writer)
+    monkeypatch.setattr(recorder, "_find_loopback", lambda p: {
+        "index": 0, "name": "loopback", "maxInputChannels": 2,
+        "defaultSampleRate": 48000})
+
+
+def test_start_refuses_when_recording_lock_busy(tmp_path):
+    lock = tmp_path / recorder.LOCK_NAME
+    lock.write_text(json.dumps({"pid": os.getpid(), "folder": "другая"}),
+                    encoding="utf-8")
+    spy = _LoadSpy()
+    engine = LiveEngine(tmp_path / "2026-10-01_10-00", spy, speaker_name="Вы")
+    with pytest.raises(SystemExit, match="Запись уже идёт"):
+        engine.start()
+    assert not spy.loaded  # модели не грузились: отказ сразу
+    assert not (tmp_path / "2026-10-01_10-00").exists()  # пустой папки нет
+    engine.stop()  # штатный finally вызывающего не трогает чужой lock
+    assert json.loads(lock.read_text(encoding="utf-8"))["folder"] == "другая"
+
+
+def test_start_takes_shared_lock_and_stop_releases_it(tmp_path, monkeypatch):
+    _fake_audio(monkeypatch)
+    out_dir = tmp_path / "2026-10-01_10-00"
+    engine = LiveEngine(out_dir, _LoadSpy(), window_seconds=0.05, speaker_name="Вы")
+    engine.start()
+    lock = tmp_path / recorder.LOCK_NAME
+    try:
+        data = json.loads(lock.read_text(encoding="utf-8"))
+        assert data == {"pid": os.getpid(), "folder": str(out_dir)}
+        # Резидентная запись при идущем живом режиме — та же ошибка.
+        with pytest.raises(SystemExit, match="Запись уже идёт"):
+            recorder._acquire_lock(tmp_path, tmp_path / "другая")
+    finally:
+        engine.stop()
+    assert not lock.exists()
+
+
+def test_partial_start_failure_releases_lock(tmp_path, monkeypatch):
+    _fake_audio(monkeypatch)
+    engine = LiveEngine(tmp_path / "2026-10-01_10-00", _LoadSpy(fail=True),
+                        speaker_name="Вы")
+    with pytest.raises(RuntimeError):
+        engine.start()
+    assert not (tmp_path / recorder.LOCK_NAME).exists()
+    engine.stop()  # повторная уборка после сбоя безопасна

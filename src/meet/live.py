@@ -43,13 +43,19 @@ class TrackBuffer:
 
 class LiveEngine:
     """Движок живого режима: callback пишет дорожки и копит аудио в буферы,
-    рабочий поток окнами расшифровывает и дописывает live_transcript.md."""
+    рабочий поток окнами расшифровывает и дописывает live_transcript.md.
+
+    Живой режим — тоже запись: start() берёт общий `.recording.lock` в папке
+    записей (`out_root`, по умолчанию — родитель `out_dir`), поэтому
+    резидентная запись и второй живой режим получают «Запись уже идёт».
+    stop() снимает lock в finally."""
 
     SPEAKERS = {"sys.wav": "Собеседник", "mic.wav": "Вы"}
 
     def __init__(self, out_dir, transcriber, window_seconds: float = 20.0,
                  hotwords: str | None = None, clock=None,
-                 on_line=None, voice_matcher=None, speaker_name=None) -> None:
+                 on_line=None, voice_matcher=None, speaker_name=None,
+                 on_entry=None, out_root=None) -> None:
         # Имя владельца микрофона — из настроек, как и в офлайн-проходе, чтобы
         # живая лента и точный транскрипт называли человека одинаково.
         if speaker_name is None:
@@ -63,6 +69,10 @@ class LiveEngine:
         self.hotwords = hotwords
         self._clock = clock or time.monotonic
         self.on_line = on_line  # колбэк на каждую записанную строку (Q&A-сервис)
+        # Колбэк (line, {"t", "speaker", "text"}): та же строка и её структура.
+        self.on_entry = on_entry
+        self.out_root = Path(out_root) if out_root is not None else self.out_dir.parent
+        self._lock_path: Path | None = None  # наш .recording.lock, пока держим
         self._matcher = voice_matcher  # опознание голоса far-end (duck-typed)
         self._window_lock = threading.Lock()  # process_window зовут и внеочередно
         self._t0 = None  # wall-clock at first process_window tick
@@ -151,13 +161,20 @@ class LiveEngine:
                             speaker = name
                     line = format_live_line(s.start, speaker, s.text)
                     self._write_line(line)
-                    if self.on_line is not None:
-                        try:
-                            self.on_line(line)
-                        except Exception:
-                            pass  # потребитель не должен валить запись
+                    self._notify(line, {"t": round(s.start, 2),
+                                        "speaker": speaker, "text": s.text})
 
             self._tick_origin = now  # этот тик станет origin для следующего окна
+
+    def _notify(self, line: str, entry: dict) -> None:
+        for callback, args in ((self.on_line, (line,)),
+                               (self.on_entry, (line, entry))):
+            if callback is None:
+                continue
+            try:
+                callback(*args)
+            except Exception:
+                pass  # потребитель не должен валить запись
 
     def _segment_name(self, audio, start_s: float, end_s: float):
         """Имя по голосу сегмента; любой сбой -> None (окно важнее имени)."""
@@ -176,6 +193,21 @@ class LiveEngine:
         self._out.flush()
 
     def start(self) -> None:
+        from meet.recorder import _acquire_lock
+
+        # Lock — первым делом: при идущей записи отказ мгновенный, без
+        # минуты загрузки моделей и без пустой папки встречи.
+        self.out_root.mkdir(parents=True, exist_ok=True)
+        self._lock_path = _acquire_lock(self.out_root, self.out_dir)
+        try:
+            self._start_capture()
+        except BaseException:
+            # Частичный старт: закрыть то, что успело открыться, и отдать lock.
+            self._close_capture()
+            self._release_lock()
+            raise
+
+    def _start_capture(self) -> None:
         import pyaudiowpatch as pyaudio
 
         from meet.recorder import OpusWriter, _find_loopback
@@ -232,23 +264,50 @@ class LiveEngine:
             except Exception as e:  # окно не должно валить весь режим
                 self._write_line(f"<!-- ошибка окна: {e} -->")
 
+    def _close_capture(self) -> Exception | None:
+        """Закрыть стримы, дорожки и PyAudio; безопасно при частичном старте
+        и повторном вызове. Сбой одной дорожки не мешает закрыть остальные —
+        первая ошибка возвращается вызывающему."""
+        first: Exception | None = None
+        streams, self._streams = self._streams, []
+        closers = [c for stream, writer in streams
+                   for c in (stream.stop_stream, stream.close, writer.close)]
+        p, self._p = self._p, None
+        if p is not None:
+            closers.append(p.terminate)
+        for close in closers:
+            try:
+                close()
+            except Exception as e:
+                first = first or e
+        return first
+
+    def _release_lock(self) -> None:
+        lock, self._lock_path = self._lock_path, None
+        if lock is not None:
+            lock.unlink(missing_ok=True)
+
     def stop(self) -> Path:
-        self._stop.set()
-        if self._worker is not None:
-            self._worker.join(timeout=self.window_seconds + 30)
+        """Остановить и дописать хвост. Безопасен после неудачного start()
+        и повторно; чужой lock (start отказал) не трогает."""
         try:
-            self.process_window()  # финальный слив остатка буфера
-        except Exception:
-            pass
-        for stream, writer in self._streams:
-            stream.stop_stream()
-            stream.close()
-            writer.close()
-        if self._p is not None:
-            self._p.terminate()
-        if self._out is not None:
-            self._out.close()
-        self._transcriber.unload()
+            self._stop.set()
+            if self._worker is not None:
+                self._worker.join(timeout=self.window_seconds + 30)
+            try:
+                self.process_window()  # финальный слив остатка буфера
+            except Exception:
+                pass
+            close_error = self._close_capture()
+            if self._out is not None:
+                self._out.close()
+                self._out = None
+            if self._transcriber is not None:
+                self._transcriber.unload()
+            if close_error is not None:
+                raise close_error  # всё закрыто; сбой дорожки не прячем
+        finally:
+            self._release_lock()
         return self.out_dir
 
 
@@ -268,13 +327,14 @@ def run_live(out_root: str, window_seconds: float = 20.0,
         hotwords=_load_hotwords(hotwords),
         voice_matcher=None if no_voices else VoiceMatcher(),
     )
-    engine.start()
     try:
+        engine.start()
         while True:
             time.sleep(0.5)
     except KeyboardInterrupt:
         pass
-    engine.stop()
+    finally:
+        engine.stop()
     print(f"\nОстановлено: {out_dir}")
     print(f'Точный транскрипт: meet transcribe "{out_dir}"')
     return out_dir

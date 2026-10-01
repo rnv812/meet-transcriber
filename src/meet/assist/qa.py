@@ -1,12 +1,21 @@
 import asyncio
+from collections import deque
 from pathlib import Path
 
 RECAP_QUESTION = ("Что я пропустил? Дай короткую сводку последних минут "
                   "обсуждения: темы, решения, что требует моей реакции.")
 
+# Сколько последних пар «вопрос-ответ» класть в промпт провайдеру без сессий.
+HISTORY_PAIRS = 6
+
 
 class QAService:
-    """Вопросы по встрече: дайджест + свежие реплики + память диалога (resume).
+    """Вопросы по встрече: дайджест + свежие реплики + память диалога.
+
+    Память диалога — сессия провайдера (resume), если раннер вернул
+    session_id (Claude Code). Провайдеры без сессий (Codex, локальная модель)
+    его не возвращают — тогда последние HISTORY_PAIRS пар вопрос-ответ
+    кладутся прямо в промпт.
 
     Перед вопросом дёргает внеочередную дотранскрибацию (on_fresh_audio),
     чтобы ответ учитывал последние секунды речи.
@@ -25,6 +34,7 @@ class QAService:
         self._model = model
         self._cursor = 0
         self._session_id: str | None = None
+        self._history: deque[tuple[str, str]] = deque(maxlen=HISTORY_PAIRS)
         self._lock = asyncio.Lock()
 
     def set_system_prompt(self, text: str) -> None:
@@ -47,10 +57,15 @@ class QAService:
             self._cursor = cursor
             if reply.session_id:
                 self._session_id = reply.session_id
+            self._history.append((question, reply.text))
             return reply.text
 
     def _build_prompt(self, question: str, new_lines: list[str]) -> str:
         parts = ["Текущий дайджест встречи:", self._digest.render()]
+        if self._session_id is None and self._history:
+            parts += ["", "Предыдущие вопросы и ответы (память диалога):"]
+            for q, a in self._history:
+                parts += [f"Вопрос: {q}", f"Ответ: {a}"]
         if new_lines:
             parts += ["", "Свежие реплики (с прошлого вопроса):",
                       "\n".join(new_lines)]

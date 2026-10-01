@@ -2,6 +2,7 @@ import argparse
 import sys
 
 from meet import settings
+from meet.llm import PROVIDERS
 
 
 def _quiet_known_warnings() -> None:
@@ -150,10 +151,25 @@ def main() -> None:
         default=None,
         help="папка заметок (по умолчанию — из настроек или env MEET_VAULT)",
     )
-    p_as.add_argument("--port", type=int, default=None, help="порт веб-страницы")
+    p_as.add_argument(
+        "--port", type=int, default=None,
+        help="порт веб-страницы (0 — свободный, выберет система)",
+    )
     p_as.add_argument(
         "--no-voices", action="store_true",
         help="не подписывать сегменты именами из базы голосов",
+    )
+    # Режим дочернего процесса резидента: без браузера, порт — в файл.
+    p_as.add_argument(
+        "--no-browser", action="store_true", help="не открывать страницу в браузере"
+    )
+    p_as.add_argument(
+        "--endpoint-file", default=None,
+        help='записать {"port", "pid", "folder"} после старта; удаляется при выходе',
+    )
+    p_as.add_argument(
+        "--provider", default=None, choices=PROVIDERS,
+        help="провайдер модели (по умолчанию — из настроек)",
     )
 
     p_en = sub.add_parser(
@@ -205,8 +221,12 @@ def main() -> None:
                        window_seconds=args.window or cfg.assist.window_seconds,
                        hotwords=args.hotwords,
                        task=args.task, vault=vault,
-                       port=args.port or cfg.assist.port,
-                       no_voices=args.no_voices or not cfg.assist.voices)
+                       # 0 — осмысленное значение (свободный порт), не «нет флага».
+                       port=cfg.assist.port if args.port is None else args.port,
+                       no_voices=args.no_voices or not cfg.assist.voices,
+                       open_browser=not args.no_browser,
+                       endpoint_file=args.endpoint_file,
+                       provider=args.provider, cfg=cfg)
     elif args.command == "status":
         print_status()
     elif args.command == "enroll":

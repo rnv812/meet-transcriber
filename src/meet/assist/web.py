@@ -1,7 +1,13 @@
 """Локальный веб-интерфейс live-ассистента: дайджест, чат вопросов, лента транскрипта.
 
 Отдаёт одну HTML-страницу, поток состояния через SSE (`GET /events`),
-приём вопросов (`POST /ask`) и смену задачи-контекста (`POST /task`).
+приём вопросов (`POST /ask`), смену задачи-контекста (`POST /task`) и штатную
+остановку (`POST /stop` — так резидент гасит дочерний `meet assist`).
+
+SSE шлёт `event: state` (дайджест, хвост ленты, статус) при каждом изменении
+и `event: line` с `{"t", "speaker", "text"}` на каждую новую строку ленты;
+`id:` строки — её номер в шине, поэтому переподключившийся EventSource
+(заголовок Last-Event-ID) получает только пропущенные строки.
 Потребляет утиный объект состояния (в тестах — FakeState, в бою — AssistState).
 """
 
@@ -68,6 +74,19 @@ document.getElementById('q').addEventListener('keydown',
 TRANSCRIPT_TAIL = 50
 
 
+def _stop_requested(state) -> bool:
+    event = getattr(state, "stop_event", None)
+    return event is not None and event.is_set()
+
+
+def _first_line_index(request, size: int) -> int:
+    """С какой строки слать `line`: после Last-Event-ID, иначе — хвост ленты."""
+    try:
+        return min(size, max(0, int(request.headers["Last-Event-ID"]) + 1))
+    except (KeyError, ValueError):
+        return max(0, size - TRANSCRIPT_TAIL)
+
+
 def build_app(state) -> web.Application:
     async def index(request):
         return web.Response(text=PAGE, content_type="text/html")
@@ -79,11 +98,12 @@ def build_app(state) -> web.Application:
         })
         await resp.prepare(request)
         sent: tuple | None = None
+        cursor = _first_line_index(request, state.bus.size())
         # Клиент закрыл вкладку → ConnectionResetError (в т.ч. наследник
         # aiohttp.ClientConnectionResetError). Тихо завершаем хендлер без
         # traceback'а. CancelledError не глотаем — это штатная отмена задачи.
         try:
-            while True:
+            while not _stop_requested(state):
                 lines, _ = state.bus.since(
                     max(0, state.bus.size() - TRANSCRIPT_TAIL))
                 snapshot = (state.digest.version, state.bus.size(),
@@ -97,6 +117,12 @@ def build_app(state) -> web.Application:
                     await resp.write(
                         f"event: state\ndata: {payload}\n\n".encode())
                     sent = snapshot
+                entries, size = state.bus.entries_since(cursor)
+                for i, entry in enumerate(entries, start=cursor):
+                    data = json.dumps(entry, ensure_ascii=False)
+                    await resp.write(
+                        f"event: line\nid: {i}\ndata: {data}\n\n".encode())
+                cursor = size
                 await asyncio.sleep(1.0)
         except ConnectionResetError:
             pass
@@ -133,18 +159,32 @@ def build_app(state) -> web.Application:
             await state.set_task(task)
         raise web.HTTPNoContent()
 
+    async def stop(request):
+        # Только просим остановиться: дорожки дописывает run_assist уже после
+        # ответа, иначе клиент ждал бы финальную расшифровку.
+        state.request_stop()
+        return _json_response({"ok": True})
+
     app = web.Application()
     app.add_routes([
         web.get("/", index),
         web.get("/events", events),
         web.post("/ask", ask),
         web.post("/task", set_task),
+        web.post("/stop", stop),
     ])
     return app
 
 
+def bound_port(runner: web.AppRunner) -> int:
+    """Фактический порт сервера (при `port=0` его выбирает система)."""
+    return runner.addresses[0][1]
+
+
 async def run_web(state, port: int) -> web.AppRunner:
-    runner = web.AppRunner(build_app(state))
+    # shutdown_timeout: открытый SSE-поток не должен держать выход процесса
+    # минуту (дефолт aiohttp) — поток и так закрывается по stop_event.
+    runner = web.AppRunner(build_app(state), shutdown_timeout=5.0)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", port)
     await site.start()
