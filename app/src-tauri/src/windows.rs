@@ -424,18 +424,21 @@ pub async fn pick_folder(app: AppHandle, start: Option<String>) -> Result<Option
 }
 
 /// Страницы, которые окно открывает в браузере: мастер (Hugging Face),
-/// подсказки «не найден — установите» в настройках ассистента и «Скачать
-/// новую версию» (Releases форка) в «О программе». Префикс кончается на
-/// «/»: хост дальше не продолжить (`huggingface.co.evil`).
+/// подсказки «не найден — установите» в настройках ассистента, «Скачать
+/// новую версию» и «Что нового» в «О программе» — выпуски публичного
+/// репозитория обновлений (`updater::UPDATE_REPO`) и прежнего форка.
+/// Префикс кончается на «/»: хост дальше не продолжить (`huggingface.co.evil`).
 const URL_PREFIXES: &[&str] = &[
     "https://huggingface.co/",
     "https://claude.ai/",
     "https://github.com/openai/codex/",
     "https://github.com/rnv812/ai_transcriber/releases/",
+    "https://github.com/rnv812/meet-transcriber/releases/",
 ];
 const URL_EXACT: &[&str] = &[
     "https://github.com/openai/codex",
     "https://github.com/rnv812/ai_transcriber/releases",
+    "https://github.com/rnv812/meet-transcriber/releases",
 ];
 
 /// Адрес из списка и без символов, которые что-то значат для оболочки
@@ -468,7 +471,7 @@ pub async fn open_url(url: String) -> Result<(), String> {
 /// однопоточном режиме, как велит документация; поток пула blocking-задач
 /// инициализирует его на время вызова и освобождает после.
 #[cfg(windows)]
-fn shell_open(url: &str) -> Result<(), String> {
+pub(crate) fn shell_open(url: &str) -> Result<(), String> {
     use windows_sys::Win32::System::Com::{
         CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
     };
@@ -512,7 +515,7 @@ fn shell_open(url: &str) -> Result<(), String> {
 }
 
 #[cfg(not(windows))]
-fn shell_open(_url: &str) -> Result<(), String> {
+pub(crate) fn shell_open(_url: &str) -> Result<(), String> {
     Err("открыть страницу можно только в Windows".to_string())
 }
 
@@ -827,6 +830,8 @@ mod tests {
             "https://github.com/openai/codex/releases",
             "https://github.com/rnv812/ai_transcriber/releases",
             "https://github.com/rnv812/ai_transcriber/releases/tag/v0.1.0",
+            "https://github.com/rnv812/meet-transcriber/releases",
+            "https://github.com/rnv812/meet-transcriber/releases/tag/v0.2.0",
         ] {
             assert!(url_allowed(url), "{url}");
         }
@@ -844,6 +849,9 @@ mod tests {
             "https://github.com/rnv812/ai_transcriber/issues",
             "https://github.com/rnv812/ai_transcriber/releasesx",
             "https://github.com/rnv812/ai_transcriber_evil/releases",
+            "https://github.com/rnv812/meet-transcriber",
+            "https://github.com/rnv812/meet-transcriber/releasesx",
+            "https://github.com/rnv812/meet-transcriber-evil/releases",
             "https://github.com/evil/ai_transcriber/releases",
             "file:///C:/Windows/System32/calc.exe",
             "C:\\Windows\\System32\\calc.exe",

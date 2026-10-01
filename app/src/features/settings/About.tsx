@@ -1,12 +1,17 @@
 import { useEffect, useState } from "react";
 import pkg from "../../../package.json";
 import { type Endpoint, getDiagnostics } from "../../lib/api";
-import { openUrl } from "../../lib/shell";
+import {
+  checkUpdate, installUpdate, onUpdateProgress, openUrl,
+  type UpdateCheck, type UpdateProgress,
+} from "../../lib/shell";
 import { Button } from "../../ui/Button";
+import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { PathText, Row } from "./Section";
 import { VoiceBaseTip } from "./tips";
 
-export const RELEASES_URL = "https://github.com/rnv812/ai_transcriber/releases";
+/** Выпуски публичного репозитория обновлений (`UPDATE_REPO` оболочки). */
+export const RELEASES_URL = "https://github.com/rnv812/meet-transcriber/releases";
 
 function CopyButton({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -22,6 +27,138 @@ function CopyButton({ text }: { text: string }) {
   return <Button onClick={() => void copy()}>{done ? "Скопировано" : "Копировать"}</Button>;
 }
 
+const errorText = (cause: unknown) =>
+  cause instanceof Error ? cause.message : String(cause);
+
+/** «12,5 МБ». */
+export function megabytes(bytes: number): string {
+  return `${(bytes / 1024 / 1024).toLocaleString("ru-RU", { maximumFractionDigits: 1 })} МБ`;
+}
+
+function UpdateTip() {
+  return (
+    <HelpTip label="Как работает обновление" title="Обновление">
+      <TipLine>
+        Приложение проверяет обновления только по этой кнопке — само в сеть за ними не ходит.
+      </TipLine>
+      <TipLine>
+        «Скачать и установить» скачивает установщик новой версии с GitHub, сверяет его контрольную
+        сумму и запускает. Приложение закроется, установщик предложит «Обновить до» новой версии и
+        в конце запустит её. Записи, голоса и настройки сохранятся.
+      </TipLine>
+    </HelpTip>
+  );
+}
+
+type State =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "checked"; result: UpdateCheck }
+  | { kind: "failed"; error: string }
+  | { kind: "installing"; result: UpdateCheck; progress: UpdateProgress | null }
+  | { kind: "launched" }
+  | { kind: "install-failed"; result: UpdateCheck; error: string };
+
+function UpdateRow() {
+  const [state, setState] = useState<State>({ kind: "idle" });
+
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let gone = false;
+    void onUpdateProgress((progress) =>
+      setState((s) => (s.kind === "installing" ? { ...s, progress } : s)),
+    ).then((unlisten) => {
+      if (gone) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      gone = true;
+      stop?.();
+    };
+  }, []);
+
+  const check = async () => {
+    setState({ kind: "checking" });
+    try {
+      setState({ kind: "checked", result: await checkUpdate() });
+    } catch (cause) {
+      setState({ kind: "failed", error: errorText(cause) });
+    }
+  };
+
+  const install = async (result: UpdateCheck) => {
+    setState({ kind: "installing", result, progress: null });
+    try {
+      await installUpdate();
+      setState({ kind: "launched" });
+    } catch (cause) {
+      setState({ kind: "install-failed", result, error: errorText(cause) });
+    }
+  };
+
+  const busy = state.kind === "checking" || state.kind === "installing" || state.kind === "launched";
+  const result = state.kind === "checked" || state.kind === "install-failed" ? state.result : null;
+  const notes = result?.notes_url ?? null;
+
+  return (
+    <Row label="Обновления" hint="Проверка на GitHub — только по кнопке" help={<UpdateTip />}>
+      <Button onClick={() => void check()} disabled={busy}>
+        {state.kind === "checking" ? "Проверяю…" : "Проверить обновления"}
+      </Button>
+      <div className="update" role="status">
+        {state.kind === "failed" && <span className="update__error">{state.error}</span>}
+        {result && result.latest === null && (
+          <span className="muted">Обновления пока не опубликованы</span>
+        )}
+        {result && result.latest !== null && !result.newer && (
+          <span>У вас последняя версия ({result.current})</span>
+        )}
+        {result && result.latest !== null && result.newer && (
+          <>
+            <span>
+              Доступна версия {result.latest}
+              {result.size ? <span className="muted"> · {megabytes(result.size)}</span> : null}
+            </span>
+            {notes && <Button onClick={() => void openUrl(notes)}>Что нового</Button>}
+            {result.asset_name ? (
+              <Button variant="primary" onClick={() => void install(result)}>
+                Скачать и установить
+              </Button>
+            ) : (
+              <span className="muted">
+                В выпуске нет установщика — скачайте его со страницы выпусков
+              </span>
+            )}
+          </>
+        )}
+        {state.kind === "install-failed" && <span className="update__error">{state.error}</span>}
+        {state.kind === "installing" && <InstallProgress progress={state.progress} />}
+        {state.kind === "launched" && <span>Установщик запущен, приложение закрывается…</span>}
+      </div>
+    </Row>
+  );
+}
+
+function InstallProgress({ progress }: { progress: UpdateProgress | null }) {
+  const total = progress?.total ?? 0;
+  const done = progress?.done ?? 0;
+  const pct = total > 0 ? Math.min(100, (done / total) * 100) : 0;
+  return (
+    <div className="update__progress">
+      <span className="muted">
+        {progress === null
+          ? "Начинаю загрузку…"
+          : total > 0
+            ? `Скачиваю: ${megabytes(done)} из ${megabytes(total)}`
+            : `Скачиваю: ${megabytes(done)}`}
+      </span>
+      <div className="update__track" aria-hidden="true">
+        <div className="update__fill" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
 export function About({ endpoint }: { endpoint: Endpoint }) {
   const [dataDir, setDataDir] = useState<string | null>(null);
   useEffect(() => {
@@ -32,7 +169,11 @@ export function About({ endpoint }: { endpoint: Endpoint }) {
   return (
     <>
       <Row label="Версия"><span>{pkg.version}</span></Row>
-      <Row label="Новые версии" hint="Страница выпусков на GitHub">
+      <UpdateRow />
+      <Row
+        label="Как обновиться"
+        hint="Скачайте новый установщик и запустите его — данные сохранятся"
+      >
         <Button onClick={() => void openUrl(RELEASES_URL)}>Скачать новую версию</Button>
         <code className="path">{RELEASES_URL}</code>
         <CopyButton text={RELEASES_URL} />

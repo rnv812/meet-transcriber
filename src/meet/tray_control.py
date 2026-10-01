@@ -9,6 +9,8 @@
 по одному ответу, без дополнительных запросов.
 """
 
+import functools
+import importlib.metadata
 import json
 import os
 import subprocess
@@ -36,6 +38,20 @@ _META_SOURCE = {AUTO: "auto", LIVE: "live"}
 RESTART_REQUIRED_SECTIONS = ("auto_record",)
 
 TAIL_DEFAULT = 200
+
+PACKAGE = "meet-transcriber"
+
+
+@functools.lru_cache(maxsize=1)
+def app_version() -> str | None:
+    """Версия установленного пакета meet — она же версия приложения
+    (build_release.ps1 держит их одинаковыми). Оболочка по ней узнаёт резидент
+    прежней версии, оставшийся после обновления, и заменяет его своим.
+    Пакет не установлен (запуск из исходников без pip install) — None."""
+    try:
+        return importlib.metadata.version(PACKAGE)
+    except importlib.metadata.PackageNotFoundError:
+        return None
 
 # Список устройств меняется редко, а каждый запрос — подпроцесс: кэшируем,
 # чтобы открытая страница настроек не плодила их пачками.
@@ -459,6 +475,8 @@ class TrayControl:
         elapsed = time.monotonic() - tray.started if recording and tray.started else 0.0
         return {
             "status": "recording" if recording else "idle",
+            # Версия резидента: оболочка другой версии штатно его заменит.
+            "version": app_version(),
             "source": tray.source,
             "folder": tray._current_folder() if recording else None,
             "elapsed_s": round(elapsed, 1),

@@ -18,6 +18,8 @@ mod netproxy;
 mod pty;
 mod resident;
 mod tray;
+mod updater;
+mod upgrade;
 mod windows;
 
 use tauri::{RunEvent, WindowEvent};
@@ -30,7 +32,16 @@ fn main() {
         // `setup` успеют что-то сделать (второй трей, второй резидент). Колбэк
         // приходит в первый экземпляр внутри WM_COPYDATA, пока второй ждёт
         // ответа, — окно строим позже, отдельной задачей главного потока.
+        //
+        // `--quit` (установщик новой версии перед заменой файлов) — тот же
+        // «Выход», что в трее: резидент сохраняет запись и гасится, затем
+        // выходит оболочка. Установщик ждёт, пока процесс не исчезнет.
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if upgrade::quit_requested(&args) {
+                logs::shell_log!("выход по просьбе установщика (--quit)");
+                tray::quit(app);
+                return;
+            }
             let recording = windows::recording_arg(&args);
             let handle = app.clone();
             let _ = app.run_on_main_thread(move || windows::open_main(&handle, recording, None));
@@ -69,6 +80,9 @@ fn main() {
             windows::open_logs,
             autostart::set_autostart,
             autostart::get_autostart,
+            // «О программе»: обновление по кнопке с GitHub.
+            updater::check_update,
+            updater::install_update,
             // Вкладка «Агент»: Claude Code / Codex во встроенном терминале.
             pty::agent_spawn,
             pty::agent_write,
@@ -90,6 +104,13 @@ fn main() {
             }
         })
         .setup(|app| {
+            let args: Vec<String> = std::env::args().collect();
+            // `--quit`, а приложение не запущено (иначе плагин single-instance
+            // уже передал флаг ему и завершил этот процесс): выходить некому —
+            // выходим сами, не поднимая ни трей, ни резидент.
+            if upgrade::quit_requested(&args) {
+                std::process::exit(0);
+            }
             // Движок, собранный из другого колеса той же версии, и движок
             // новой версии после обновления приложения ставятся в фоне;
             // резидент ждёт конца, чтобы не подняться из старого кода.
@@ -99,12 +120,13 @@ fn main() {
             // Автозапуск, снятый деинсталлятором прежней версии, — вернуть.
             autostart::restore_at_startup(app.handle());
             tray::build(app)?;
+            // Версия сменилась (установщик поверх прежней) — одно уведомление.
+            upgrade::note_version_at_startup(app.handle());
             engine::run_upkeep_in_background(app.handle(), upkeep);
             // Обычный запуск — только трей. `--recording <id>` (например, из
             // уведомления) — сразу окно на этой записи; первый запуск без
             // движка — окно с мастером; автозапуск при входе в Windows —
             // только трей, без окон.
-            let args: Vec<String> = std::env::args().collect();
             if let Some(recording) = windows::recording_arg(&args) {
                 windows::open_main(app.handle(), Some(recording), None);
             } else if autostart::autostarted(&args) {

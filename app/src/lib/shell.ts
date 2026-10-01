@@ -111,6 +111,38 @@ async function listenShell<T>(event: string, cb: (payload: T) => void): Promise<
 export const onEngineProgress = (cb: (p: EngineProgress) => void) => listenShell("engine-progress", cb);
 export const onEngineFailed = (cb: (f: EngineFailed) => void) => listenShell("engine-failed", cb);
 
+// --- обновление по кнопке («О программе») ------------------------------------
+
+/** `check_update` оболочки: последний выпуск на GitHub против своей версии. */
+export type UpdateCheck = {
+  current: string;
+  /** null — выпусков ещё нет. */
+  latest: string | null;
+  newer: boolean;
+  notes_url: string | null;
+  /** Установщик в выпуске (с контрольной суммой); null — скачать нечего. */
+  asset_name: string | null;
+  size: number | null;
+};
+/** Событие `update-progress`: байты скачанного установщика (`total` 0 — неизвестно). */
+export type UpdateProgress = { done: number; total: number };
+
+export const NOT_IN_APP = "Обновление работает только в приложении";
+
+/** Проверить обновления (до 10 с). Ошибка — текст для человека. */
+export async function checkUpdate(): Promise<UpdateCheck> {
+  if (!inTauri()) throw new Error(NOT_IN_APP);
+  return invoke<UpdateCheck>("check_update");
+}
+
+/** Скачать, сверить и запустить установщик; после этого приложение выходит. */
+export async function installUpdate(): Promise<void> {
+  if (!inTauri()) throw new Error(NOT_IN_APP);
+  await invoke<void>("install_update");
+}
+
+export const onUpdateProgress = (cb: (p: UpdateProgress) => void) => listenShell("update-progress", cb);
+
 /** Что оболочка знает о резиденте ("running", "engine-missing", …); вне приложения — null. */
 export async function residentStatus(): Promise<string | null> {
   if (!inTauri()) return null;

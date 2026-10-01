@@ -32,7 +32,11 @@
         "languages": [
           "Russian",
           "English"
-        ]
+        ],
+        "customLanguageFiles": {
+          "Russian": "./windows/lang/Russian.nsh",
+          "English": "./windows/lang/English.nsh"
+        }
       }
     }
   }

@@ -28,6 +28,7 @@ use tauri_plugin_notification::NotificationExt;
 use crate::api::{self, Client};
 use crate::logs::shell_log;
 use crate::resident::{self, lock, ResidentStatus, Supervisor};
+use crate::upgrade;
 use crate::windows;
 
 const TRAY_ID: &str = "meet";
@@ -910,10 +911,18 @@ pub fn filter(notices: Vec<Notice>, level: Level) -> Vec<Notice> {
         Level::All => notices,
         Level::Important => notices
             .into_iter()
-            .filter(|notice| IMPORTANT.contains(&notice.title.as_str()))
+            .filter(|notice| important(&notice.title))
             .collect(),
         Level::Off => Vec::new(),
     }
+}
+
+/// Важное уведомление: из списка `IMPORTANT` или о смене версии приложения
+/// (его заголовок несёт номер версии — сверяем по началу).
+fn important(title: &str) -> bool {
+    IMPORTANT.contains(&title)
+        || title.starts_with(upgrade::UPDATED_PREFIX)
+        || title.starts_with(upgrade::DOWNGRADED_PREFIX)
 }
 
 /// Запись из недавнего уведомления, если оно было не дольше 5 минут назад.
@@ -942,6 +951,12 @@ pub fn notify(app: &AppHandle, notices: Vec<Notice>) {
         .try_state::<TrayState>()
         .map(|state| *lock(&state.level))
         .unwrap_or_default();
+    notify_with_level(app, notices, level);
+}
+
+/// То же с явным уровнем: при старте (`upgrade`) резидент ещё не ответил, и
+/// уровень трей пока не знает — его читают из `config.json`.
+pub fn notify_with_level(app: &AppHandle, notices: Vec<Notice>, level: Level) {
     for notice in filter(notices, level) {
         if let Some(id) = &notice.recording {
             remember(app, id);
@@ -1164,8 +1179,9 @@ pub(crate) fn log_folder(log: &Path, data_dir: &Path) -> PathBuf {
 
 /// «Выход»: резидент сохраняет идущую запись и гасится (до 70 с), и только
 /// потом выходит оболочка. Ждём в отдельном потоке — главный поток держит
-/// цикл событий и трей.
-fn quit(app: &AppHandle) {
+/// цикл событий и трей. Тот же путь — у `--quit` от установщика новой версии
+/// и у «Скачать и установить» (`updater`).
+pub fn quit(app: &AppHandle) {
     let app = app.clone();
     thread::spawn(move || {
         app.state::<Supervisor>().shutdown();

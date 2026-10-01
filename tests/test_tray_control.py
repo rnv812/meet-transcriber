@@ -45,6 +45,31 @@ def test_snapshot_idle(control_state):
     assert snap["auto_record"]["grace_minutes"] == watch.GRACE_S / 60
 
 
+def test_snapshot_reports_the_package_version(control_state):
+    # Оболочка сверяет её со своей: резидент прежней версии после обновления
+    # она штатно гасит и поднимает свой.
+    import importlib.metadata
+    try:
+        expected = importlib.metadata.version("meet-transcriber")
+    except importlib.metadata.PackageNotFoundError:
+        expected = None
+    assert control_state.snapshot()["version"] == expected
+
+
+def test_version_is_none_without_the_package(monkeypatch):
+    import importlib.metadata
+
+    def missing(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    tray_control.app_version.cache_clear()
+    monkeypatch.setattr(importlib.metadata, "version", missing)
+    try:
+        assert tray_control.app_version() is None
+    finally:
+        tray_control.app_version.cache_clear()
+
+
 def test_snapshot_while_recording_reads_folder_from_lock(
     control_state, app, monkeypatch, tmp_path
 ):

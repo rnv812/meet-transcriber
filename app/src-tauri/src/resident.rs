@@ -25,6 +25,7 @@ use crate::api;
 use crate::engine;
 use crate::logs::{self, shell_log};
 use crate::tray::{self, Notice};
+use crate::upgrade;
 
 const EXE: &str = "meet-tray.exe";
 /// Явный путь к резиденту — первым кандидатом. Для разработки из рабочей
@@ -592,11 +593,11 @@ impl Supervisor {
                     // сейчас выйдет.
                     shell_log!("резидент уже работает вне приложения — подключаюсь к нему");
                     self.set_status(generation, ResidentStatus::External);
-                    self.watch_external(generation);
+                    self.watch_external(generation, &engine.version);
                     if !self.current(generation) {
                         return;
                     }
-                    shell_log!("внешний резидент больше не отвечает — запускаю свой");
+                    shell_log!("внешнего резидента больше нет — запускаю свой");
                     mode = Mode::Spawn;
                     continue;
                 }
@@ -687,18 +688,63 @@ impl Supervisor {
     ///
     /// Проверка без удаления `daemon.json`: файл принадлежит живому чужому
     /// резиденту, и единичный промах не должен стирать его публикацию.
-    fn watch_external(&self, generation: u64) {
+    ///
+    /// Резидент другой версии (его оставила прежняя оболочка, пока дописывала
+    /// запись, или он из прежнего движка) после обновления работать не должен:
+    /// простаивает — просим штатно выйти (`/shutdown`) и поднимаем свой; идёт
+    /// запись — ждём её конца, проверяя каждые `EXTERNAL_POLL`.
+    fn watch_external(&self, generation: u64, app_version: &str) {
         let mut misses = 0;
+        let mut waiting = false;
         loop {
             thread::sleep(EXTERNAL_POLL);
             if !self.current(generation) {
                 return;
             }
-            let answers = read_endpoint().is_some_and(|endpoint| answers(&endpoint));
-            let (step, next) = external_next(answers, misses);
+            let endpoint = read_endpoint().filter(answers);
+            let (step, next) = external_next(endpoint.is_some(), misses);
             misses = next;
             if step == ExternalStep::Takeover {
                 return;
+            }
+            let Some(endpoint) = endpoint else {
+                continue;
+            };
+            let client = api::Client::new(&endpoint);
+            let Ok(state) = client.get_state() else {
+                continue;
+            };
+            let version = state
+                .get("version")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("0.1.0 или раньше")
+                .to_string();
+            match upgrade::external_version(&state, app_version) {
+                upgrade::ExternalVersion::Keep => waiting = false,
+                upgrade::ExternalVersion::WaitIdle => {
+                    if !waiting {
+                        shell_log!(
+                            "внешний резидент версии {version} занят записью — заменю его, когда закончит"
+                        );
+                        waiting = true;
+                    }
+                }
+                upgrade::ExternalVersion::Replace => {
+                    shell_log!(
+                        "внешний резидент версии {version}, приложение {app_version} — прошу его выйти"
+                    );
+                    if let Err(error) = client.post("/shutdown", serde_json::Value::Null) {
+                        shell_log!("/shutdown внешнему резиденту не прошёл: {error}");
+                    }
+                    let deadline = Instant::now() + EXIT_GRACE;
+                    while Instant::now() < deadline && answers(&endpoint) {
+                        if !self.current(generation) {
+                            return;
+                        }
+                        thread::sleep(POLL);
+                    }
+                    return;
+                }
             }
         }
     }

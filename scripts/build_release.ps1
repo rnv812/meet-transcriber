@@ -316,18 +316,20 @@ try {
 }
 
 # Папка установки — та же %LOCALAPPDATA%\meet, что и данные (записи, голоса,
-# движок). Деинсталлятор Tauri удаляет только свои файлы и пустую папку;
-# рекурсивное удаление $INSTDIR в шаблоне (новая версия Tauri, свой шаблон)
-# стёрло бы данные человека — такой установщик не выпускаем.
-$nsi = Join-Path $TauriDir 'target\release\nsis\x64\installer.nsi'
-if (-not (Test-Path $nsi)) { throw "Нет сгенерированного $nsi — проверить деинсталлятор нечем" }
-# Флаг /r в любом месте среди флагов, но не /REBOOTOK (тоже начинается с /r).
-$recursive = [regex]::Matches((Read-Text $nsi), '(?i)RMDir(\s+/\w+)*\s+/r\s[^\r\n]*\$INSTDIR')
-if ($recursive.Count -gt 0) {
-    throw ("Деинсталлятор рекурсивно удаляет папку установки (= папку данных): " +
-        (($recursive | ForEach-Object { $_.Value.Trim() }) -join '; '))
-}
-Write-Host '  деинсталлятор не удаляет папку установки рекурсивно'
+# настройки, движок). Установщик и деинсталлятор вправе удалять только свои
+# файлы: рекурсивное удаление или маска в $INSTDIR (новая версия Tauri, свой
+# шаблон, неосторожный хук) стёрли бы данные человека — такой установщик не
+# выпускаем. Правила и их примеры — scripts/nsis_tripwire.ps1. Там же проверка,
+# что шаблон Tauri устроен так, как ждёт страница обновления (hooks.nsh:
+# «Обновить до Y» выбрано по умолчанию, деинсталлятор не запускается).
+$nsiDir = Join-Path $TauriDir 'target\release\nsis\x64'
+$nsi = Join-Path $nsiDir 'installer.nsi'
+if (-not (Test-Path $nsi)) { throw "Нет сгенерированного $nsi — проверить установщик нечем" }
+$nsisFiles = @($nsi) + @(Get-ChildItem $nsiDir -Filter '*.nsh' | ForEach-Object { $_.FullName }) +
+    @(Get-ChildItem (Join-Path $TauriDir 'windows') -Recurse -Filter '*.nsh' | ForEach-Object { $_.FullName })
+& (Join-Path $PSScriptRoot 'nsis_tripwire.ps1') -Path $nsisFiles -Installer $nsi
+Write-Host "  установщик не удаляет данные из папки установки ($($nsisFiles.Count) файлов NSIS)"
+Write-Host '  страница обновления: «Обновить до» по умолчанию, без деинсталлятора'
 
 # --- 6. Результат -----------------------------------------------------------
 $installerName = "meet_${Version}_x64-setup.exe"

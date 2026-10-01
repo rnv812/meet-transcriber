@@ -28,9 +28,13 @@ tauri-plugin-single-instance = "~2.4"
 # закреплено на 2.5.x под tauri 2.11, как плагины выше.
 tauri-plugin-autostart = "~2.5"
 # Синхронный HTTP-клиент к control API резидента: вызывается из рабочих
-# потоков надзора и опроса, async-рантайм там не нужен. Только http на
-# 127.0.0.1 — TLS и gzip (фичи по умолчанию) не нужны.
-ureq = { version = "2", default-features = false, features = ["json"] }
+# потоков надзора и опроса, async-рантайм там не нужен. Для API резидента —
+# http на 127.0.0.1; HTTPS нужен только кнопке «Проверить обновления»
+# (GitHub, `updater.rs`): TLS через native-tls — на Windows это SChannel с
+# корневыми сертификатами системы (корпоративный прокси с подменой
+# сертификата работает так же, как в браузере). gzip не нужен.
+ureq = { version = "2", default-features = false, features = ["json", "native-tls"] }
+native-tls = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # SHA-256 колеса meet в маркере движка: пересборка той же версии видна по
