@@ -30,10 +30,28 @@ const KNOWN: AgentProvider[] = [
   { id: "codex", label: "Codex" },
 ];
 
-/** Агенты, которые можно запустить: установленные Claude Code и Codex. */
+/** Сценарий npm (codex.cmd), а не программа: встроенный терминал его не запускает. */
+const SCRIPT = /\.(cmd|bat)$/i;
+
+/**
+ * Codex найден только как сценарий npm (`codex.cmd`): оболочка запускает лишь
+ * codex.exe (аргументы через cmd.exe разбирались бы по его правилам).
+ */
+export function codexScriptOnly(info: AssistantInfo | null): boolean {
+  const codex = info?.available?.codex;
+  return !!codex?.found && SCRIPT.test(codex.path ?? "");
+}
+
+/** Как поставить Codex так, чтобы он запускался во вкладке. */
+export const CODEX_SCRIPT_NOTE =
+  "Codex установлен через npm (codex.cmd) — во встроенном терминале он не запускается. " +
+  "Установите Codex отдельной программой: codex.exe в PATH или в папке " +
+  "%LOCALAPPDATA%\\Programs\\OpenAI\\Codex\\bin.";
+
+/** Агенты, которые можно запустить: установленные Claude Code и Codex (Codex — только как программа). */
 export function agentProviders(info: AssistantInfo | null): AgentProvider[] {
   if (!info) return [];
-  return KNOWN.filter((p) => info.available?.[p.id]?.found);
+  return KNOWN.filter((p) => info.available?.[p.id]?.found && !(p.id === "codex" && codexScriptOnly(info)));
 }
 
 /** Агент по умолчанию: тот, что выбран для итогов и вопросов, иначе первый установленный. */
@@ -107,6 +125,7 @@ export function AgentTab({ id, assistant, onOpenSettings }: {
 }) {
   const shell = inTauri();
   const providers = agentProviders(assistant);
+  const codexNote = codexScriptOnly(assistant);
   const [choice, setChoice] = useState<string | null>(null);
   const provider = providers.some((p) => p.id === choice) ? choice : defaultProvider(assistant, providers);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -179,6 +198,17 @@ export function AgentTab({ id, assistant, onOpenSettings }: {
         term.current = null;
         fit.current = null;
         setReady(false);
+        // Терминал убран (агентов на время не видно — список ещё не пришёл):
+        // сеанс без экрана никто не увидит и не остановит — гасим его.
+        attempt.current++;
+        early.current = null;
+        const sid = session.current;
+        session.current = null;
+        if (sid) {
+          agentKill(sid).catch(() => {});
+          setPhase("idle");
+          setCode(null);
+        }
       };
       setReady(true);
     })();
@@ -280,7 +310,7 @@ export function AgentTab({ id, assistant, onOpenSettings }: {
     return (
       <div className="agent agent--empty">
         <EmptyState title="Подключите Claude Code или Codex в настройках"
-          hint="Во вкладке запускается агент, установленный на компьютере."
+          hint={codexNote ? CODEX_SCRIPT_NOTE : "Во вкладке запускается агент, установленный на компьютере."}
           action={onOpenSettings && <Button onClick={() => onOpenSettings("assistant")}>Открыть настройки</Button>} />
       </div>
     );
@@ -326,8 +356,9 @@ export function AgentTab({ id, assistant, onOpenSettings }: {
       </div>
       <div className="agent__hint">
         {active ? "Агент запущен в папке встречи" : "Агент откроется в папке встречи"}: transcript.md, summary.md.
-        База знаний — только чтение.
+        База знаний подключена для чтения; права на запись определяются настройками агента.
       </div>
+      {codexNote && <div className="agent__hint">{CODEX_SCRIPT_NOTE}</div>}
       {error && <div className="assist__error" role="alert">{error}</div>}
       <div className="agent__screen" onContextMenu={onContextMenu}>
         <div className="agent__xterm" ref={screen} data-agent-terminal />

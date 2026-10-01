@@ -95,7 +95,8 @@ fn main() {
             pty::agent_spawn,
             pty::agent_write,
             pty::agent_resize,
-            pty::agent_kill
+            pty::agent_kill,
+            pty::agent_kill_recording
         ])
         // Агенты вкладки «Агент» живут, пока открыта карточка: закрытое или
         // перезагруженное главное окно их гасит (карточка уже не размонтируется).

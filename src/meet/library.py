@@ -225,6 +225,106 @@ def write_meta(folder: Path, updates: dict) -> dict:
     return update_meta(folder, lambda data: {**data, **updates})
 
 
+# --- удаление папок записей ------------------------------------------------------
+
+# Сколько ждать, пока папку отпустят (плеер, агент во вкладке «Агент»).
+REMOVE_WAIT_S = 2.0
+REMOVE_POLL_S = 0.25
+FOLDER_BUSY = ("Папку занимает другая программа (например, агент в терминале) — "
+               "закройте её и повторите")
+# Папка, отложенная к удалению: с точки — библиотека её не показывает.
+DELETING_MARK = ".deleting-"
+
+
+class FolderBusy(RuntimeError):
+    """Папку записи держит другая программа — удалять нельзя (текст — человеку)."""
+
+
+def _aside(folder: Path) -> Path:
+    import uuid
+
+    return folder.with_name(f".{folder.name}{DELETING_MARK}{uuid.uuid4().hex[:8]}")
+
+
+def remove_folders(folders, wait_s: float = REMOVE_WAIT_S, *, sleep=time.sleep,
+                   clock=time.monotonic, rename=os.rename) -> None:
+    """Удалить папки записей — все или ни одной.
+
+    На Windows папку, которая служит рабочей папкой процесса (агент во вкладке
+    «Агент») или в которой открыт файл, удалить нельзя, а `rmtree` успевает
+    снести всё, что не занято, и падает на остальном — запись остаётся
+    наполовину. Поэтому сначала каждая папка переименовывается в скрытую
+    (переименование занятой папки не проходит и ничего не трогает); занята —
+    ждём до `wait_s` и, не дождавшись, возвращаем уже отложенные на место и
+    бросаем FolderBusy. Удаляем, только когда отложены все."""
+    import shutil
+
+    deadline = clock() + wait_s
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for folder in (Path(f) for f in folders):
+            aside: Path | None = _aside(folder)
+            while True:
+                try:
+                    rename(folder, aside)
+                    break
+                except FileNotFoundError:
+                    aside = None  # уже нет — удалять нечего
+                    break
+                except OSError:
+                    if clock() >= deadline:
+                        raise FolderBusy(FOLDER_BUSY) from None
+                    sleep(REMOVE_POLL_S)
+            if aside is not None:
+                moved.append((folder, aside))
+    except BaseException:
+        for folder, aside in reversed(moved):
+            try:
+                os.rename(aside, folder)
+            except OSError:
+                pass
+        raise
+    for folder, aside in moved:
+        try:
+            shutil.rmtree(aside)
+        except OSError as e:
+            try:
+                os.rename(aside, folder)  # что осталось — под прежним именем
+            except OSError:
+                pass
+            raise RuntimeError(f"не удалось удалить запись {folder.name}: {e}") from e
+
+
+def wait_removable(folders, wait_s: float = REMOVE_WAIT_S, *, sleep=time.sleep,
+                   clock=time.monotonic, rename=os.rename) -> None:
+    """Проверить заранее, что папки можно будет удалить: переименовать туда и
+    обратно (см. remove_folders). Занята дольше `wait_s` — FolderBusy."""
+    deadline = clock() + wait_s
+    for folder in (Path(f) for f in folders):
+        while True:
+            aside = _aside(folder)
+            try:
+                rename(folder, aside)
+            except FileNotFoundError:
+                break
+            except OSError:
+                if clock() >= deadline:
+                    raise FolderBusy(FOLDER_BUSY) from None
+                sleep(REMOVE_POLL_S)
+                continue
+            os.rename(aside, folder)
+            break
+
+
+def leftover_deletions(root: Path) -> list[Path]:
+    """Отложенные к удалению папки, оставшиеся от сбоя посреди удаления."""
+    try:
+        return [p for p in Path(root).iterdir()
+                if p.is_dir() and p.name.startswith(".") and DELETING_MARK in p.name]
+    except OSError:
+        return []
+
+
 def create_import(root: Path, src: Path) -> Path:
     """Папка записи под импортируемый файл. Сам файл копирует задача `import`
     (это может быть гигабайт видео — не в потоке HTTP), здесь только папка и
@@ -280,7 +380,9 @@ def recording_folders(root: Path) -> list[Path]:
     """Папки записей библиотеки по имени (= по дате), от старых к новым."""
     if not root.is_dir():
         return []
-    return [f for f in sorted(root.iterdir(), key=lambda p: p.name) if is_recording(f)]
+    # С точки — служебные (отложенная к удалению папка, см. remove_folders).
+    return [f for f in sorted(root.iterdir(), key=lambda p: p.name)
+            if not f.name.startswith(".") and is_recording(f)]
 
 
 def title_and_date(folder: Path, data: dict | None, *,

@@ -4,7 +4,7 @@ import {
   kbExport, patchRecording, transcribe, type Endpoint,
 } from "../../lib/api";
 import { errorText } from "../../lib/format";
-import { inTauri, openFolder, saveText } from "../../lib/shell";
+import { agentKillRecording, inTauri, openFolder, saveText } from "../../lib/shell";
 import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
 import { activeJobOf, failedRetranscribe, isLiveRecording, statusOf } from "../../lib/status";
 import type { Job, KbExport, Recording, Snapshot, Transcript } from "../../lib/types";
@@ -168,6 +168,8 @@ export function RecordingCard({
   const doDelete = () => act(async () => {
     // Плеер отпускает файл до запроса: резидент не удалит открытый playback.opus.
     player.current?.release();
+    // Агент во вкладке «Агент» работает в папке записи — Windows не удалит её, пока он жив.
+    await agentKillRecording(id);
     await deleteRecording(endpoint, id);
     onDeleted?.();
   });

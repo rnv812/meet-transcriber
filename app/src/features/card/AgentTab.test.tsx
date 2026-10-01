@@ -1,6 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { AgentTab, agentProviders, defaultProvider } from "./AgentTab";
+import { AgentTab, CODEX_SCRIPT_NOTE, agentProviders, codexScriptOnly, defaultProvider } from "./AgentTab";
 import { CardTabs } from "./CardTabs";
 import * as api from "../../lib/api";
 import type { AgentData, AgentExit } from "../../lib/shell";
@@ -111,6 +111,49 @@ test("агенты — только установленные Claude Code и Co
   expect(agentProviders(null)).toEqual([]);
 });
 
+test("Codex только как сценарий npm (codex.cmd) в список не попадает — вместо него подсказка", async () => {
+  const npm = assistant({ available: {
+    "claude-code": { found: true, path: "C:/bin/claude.exe" },
+    codex: { found: true, path: "C:/npm/codex.cmd" },
+  } });
+  expect(codexScriptOnly(npm)).toBe(true);
+  expect(agentProviders(npm).map((p) => p.id)).toEqual(["claude-code"]);
+  expect(codexScriptOnly(assistant())).toBe(false);
+  await show(npm);
+  const select = screen.getByRole("combobox", { name: "Агент" });
+  expect([...(select as HTMLSelectElement).options].map((o) => o.text)).toEqual(["Claude Code"]);
+  expect(screen.getByText(CODEX_SCRIPT_NOTE)).toBeInTheDocument();
+  expect(CODEX_SCRIPT_NOTE).toContain("codex.exe");
+});
+
+test("только codex.cmd — агентов нет, подсказка объясняет, как поставить codex.exe", async () => {
+  await show(assistant({ available: {
+    "claude-code": { found: false },
+    codex: { found: true, path: "C:\\npm\\codex.CMD" },
+  } }));
+  expect(screen.getByText("Подключите Claude Code или Codex в настройках")).toBeInTheDocument();
+  expect(screen.getByText(CODEX_SCRIPT_NOTE)).toBeInTheDocument();
+});
+
+test("подсказка о базе знаний не обещает того, что решают настройки агента", async () => {
+  await show();
+  expect(screen.getByText(/База знаний подключена для чтения; права на запись определяются настройками агента/))
+    .toBeInTheDocument();
+});
+
+test("экран терминала исчез (список агентов на время пуст) — сеанс гасится", async () => {
+  const view = await show();
+  await userEvent.click(startButton());
+  await screen.findByText("Работает");
+  view.rerender(<AgentTab id="r1" assistant={assistant({ available: {
+    "claude-code": { found: false }, codex: { found: false } } })} />);
+  expect(h.shell.agentKill).toHaveBeenCalledWith("agent-1");
+  view.rerender(<AgentTab id="r1" assistant={assistant()} />);
+  await waitFor(() => expect(h.FakeTerminal.all.length).toBe(2));
+  expect(await screen.findByRole("button", { name: "Запустить" })).toBeInTheDocument();
+  expect(screen.getByText("Не запущен")).toBeInTheDocument();
+});
+
 test("вкладка «Агент» в карточке готовой записи", async () => {
   vi.mocked(api.getAssistant).mockResolvedValue(assistant());
   h.shell.inTauri.mockReturnValue(false);
@@ -209,10 +252,10 @@ test("«Перезапустить» гасит прежний сеанс и з�
 });
 
 test("ошибка запуска видна", async () => {
-  h.shell.agentSpawn.mockRejectedValue("Сервис записи не отвечает — агент не может запуститься");
+  h.shell.agentSpawn.mockRejectedValue("Служба записи не отвечает — агент не может запуститься");
   await show();
   await userEvent.click(startButton());
-  expect(await screen.findByRole("alert")).toHaveTextContent("Сервис записи не отвечает");
+  expect(await screen.findByRole("alert")).toHaveTextContent("Служба записи не отвечает");
   expect(startButton()).toBeEnabled();
 });
 

@@ -10,6 +10,11 @@ vi.mock("../../lib/api", async (orig) => ({
   kbExport: vi.fn(async () => ({ path: "D:/База/2026-09-30 - Планёрка", files: [], kept: [] })),
   mergeRecordings: vi.fn(),
 }));
+const killed: string[] = [];
+vi.mock("../../lib/shell", async (orig) => ({
+  ...(await orig<typeof import("../../lib/shell")>()),
+  agentKillRecording: vi.fn(async (rid: string) => { killed.push(rid); }),
+}));
 import type { Job, Recording } from "../../lib/types";
 
 const ep = { base: "/api", token: null };
@@ -149,6 +154,12 @@ test("меню «⋯»: пункты, переименование и удале
   await userEvent.click(more);
   await userEvent.click(screen.getByRole("menuitem", { name: "Удалить…" }));
   expect(screen.getByRole("menu")).toHaveTextContent("Удалить запись и расшифровку? Это действие нельзя отменить.");
+  killed.length = 0;
+  vi.mocked(api.deleteRecording).mockImplementationOnce(async () => {
+    // Агент во вкладке «Агент» уже погашен: его рабочая папка не держит запись.
+    expect(killed).toEqual(["a"]);
+    return { ok: true };
+  });
   await userEvent.click(screen.getByRole("menuitem", { name: "Удалить" }));
   expect(onDeleting).toHaveBeenCalledWith("a");
   await vi.waitFor(() => expect(api.deleteRecording).toHaveBeenCalledWith(ep, "a"));
@@ -226,8 +237,11 @@ test("Ctrl+щелчок — режим выбора: открытая и отм�
   expect(pickBox("Третья часть")).not.toBeChecked();
   const bar = screen.getByRole("toolbar", { name: "Выбранные записи" });
   expect(within(bar).getByText("Выбрано: 2")).toBeInTheDocument();
+  killed.length = 0;
   await user.click(within(bar).getByRole("button", { name: "Объединить (2)" }));
-  expect(api.mergeRecordings).toHaveBeenCalledWith(ep, ["d", "e"], false);
+  await vi.waitFor(() => expect(api.mergeRecordings).toHaveBeenCalledWith(ep, ["d", "e"], false));
+  // Исходные удалятся после расшифровки — агенты в их папках погашены заранее.
+  expect(killed).toEqual(["d", "e"]);
   expect(await screen.findByRole("status")).toHaveTextContent(
     "Встречи объединены. Исходные записи будут удалены после расшифровки");
   expect(onSelect).toHaveBeenCalledWith("d_merged");
@@ -246,8 +260,10 @@ test("Shift+щелчок — диапазон; флажок снимает; «С
   await user.click(pickBox("Вторая часть")!);
   expect(screen.getByText("Выбрано: 2")).toBeInTheDocument();
   await user.click(screen.getByRole("checkbox", { name: "Сохранить исходные записи" }));
+  killed.length = 0;
   await user.click(screen.getByRole("button", { name: "Объединить (2)" }));
-  expect(api.mergeRecordings).toHaveBeenCalledWith(ep, ["d", "f"], true);
+  await vi.waitFor(() => expect(api.mergeRecordings).toHaveBeenCalledWith(ep, ["d", "f"], true));
+  expect(killed).toEqual([]);  // исходные остаются — агентов не трогаем
   expect(await screen.findByRole("status")).toHaveTextContent(/^Встречи объединены×$/);
 });
 

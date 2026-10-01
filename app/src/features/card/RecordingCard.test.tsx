@@ -26,6 +26,7 @@ vi.mock("../../lib/shell", () => ({
   inTauri: () => true,
   saveText: vi.fn(async () => "x"),
   openFolder: vi.fn(async () => {}),
+  agentKillRecording: vi.fn(async () => {}),
 }));
 
 const ep = { base: "/api", token: null };
@@ -260,6 +261,19 @@ test("удаление: плеер отпускает файл до запрос
     .getByRole("button", { name: "Удалить" }));
   expect(api.deleteRecording).toHaveBeenCalled();
   expect(srcAtDelete).toBeNull();
+});
+
+test("удаление: агент во вкладке «Агент» гасится и дожидается до запроса к резиденту", async () => {
+  load();
+  const order: string[] = [];
+  vi.mocked(shell.agentKillRecording).mockImplementation(async (rid) => { order.push(`kill ${rid}`); });
+  vi.mocked(api.deleteRecording).mockImplementation(async () => { order.push("delete"); return { ok: true }; });
+  render(<RecordingCard id="r1" endpoint={ep} onDeleted={() => {}} />);
+  await screen.findByText("Привет всем");
+  await userEvent.click(screen.getByRole("button", { name: "Удалить" }));
+  await userEvent.click(within(screen.getByText(/Удалить запись и расшифровку/).parentElement!)
+    .getByRole("button", { name: "Удалить" }));
+  await waitFor(() => expect(order).toEqual(["kill r1", "delete"]));
 });
 
 test("без дорожек: кнопок воспроизведения нет, внизу — «Аудио недоступно»", async () => {

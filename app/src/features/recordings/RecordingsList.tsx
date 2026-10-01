@@ -4,7 +4,7 @@ import type { Resident } from "../../state/useResident";
 import type { Library } from "../../state/useLibrary";
 import { deleteRecording, kbExport, mergeRecordings, patchRecording } from "../../lib/api";
 import { errorText } from "../../lib/format";
-import { inTauri, openFolder } from "../../lib/shell";
+import { agentKillRecording, inTauri, openFolder } from "../../lib/shell";
 import { statusOf, type RecStatus } from "../../lib/status";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
@@ -87,6 +87,8 @@ export function RecordingsList({
         onDeleting?.(id);
         // Карточка закрывается в этом же кадре: её плеер отпускает файл до запроса.
         await new Promise((resolve) => setTimeout(resolve, 0));
+        // Агент во вкладке «Агент» работает в папке записи — Windows не удалит её, пока он жив.
+        await agentKillRecording(id);
         await deleteRecording(endpoint, id);
         await library.refresh();
         return null;
@@ -138,6 +140,8 @@ export function RecordingsList({
     void run(async () => {
       setMerging(true);
       try {
+        // Исходные удалятся после расшифровки: агенты в их папках не должны их держать.
+        if (!keep) await Promise.all(chosen.map((rid) => agentKillRecording(rid)));
         const done = await mergeRecordings(endpoint, chosen, keep);
         clearPicks();
         await library.refresh();

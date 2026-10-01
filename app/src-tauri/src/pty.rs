@@ -21,9 +21,9 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{mpsc, Arc, Condvar, Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
@@ -57,6 +57,13 @@ const MAX_ROWS: u16 = 300;
 /// Сколько ждать после выхода агента, прежде чем закрыть псевдоконсоль:
 /// conhost успевает отдать последний кадр (например, вывод `--version`).
 const EXIT_GRACE: Duration = Duration::from_millis(200);
+
+/// Сколько «Удалить» и «Объединить» ждут, пока агенты записи выйдут: агент
+/// работает в папке записи, а Windows не удаляет папку, которая чья-то рабочая.
+pub const KILL_WAIT: Duration = Duration::from_secs(2);
+
+/// Ошибка, когда служба записи не отвечает.
+const NO_RESIDENT: &str = "Служба записи не отвечает — агент не может запуститься";
 
 // --- чистые функции -------------------------------------------------------------
 
@@ -345,6 +352,38 @@ pub struct SpawnSpec {
     pub rows: u16,
 }
 
+/// «Сеанс закончился»: агент вышел, псевдоконсоль закрыта, его job закрыт.
+#[derive(Default)]
+struct Exited {
+    done: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl Exited {
+    fn set(&self) {
+        let mut done = self.done.lock().unwrap_or_else(|p| p.into_inner());
+        *done = true;
+        self.changed.notify_all();
+    }
+
+    /// Дождаться конца сеанса до `deadline`; false — не дождались.
+    fn wait_until(&self, deadline: Instant) -> bool {
+        let mut done = self.done.lock().unwrap_or_else(|p| p.into_inner());
+        while !*done {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            done = self
+                .changed
+                .wait_timeout(done, left)
+                .unwrap_or_else(|p| p.into_inner())
+                .0;
+        }
+        true
+    }
+}
+
 struct Session {
     recording: String,
     /// Ввод агента; закрывается, когда он вышел (см. ожидание в `spawn`).
@@ -354,6 +393,7 @@ struct Session {
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     #[cfg(windows)]
     job: Mutex<Option<crate::engine::Job>>,
+    exited: Exited,
 }
 
 impl Session {
@@ -373,10 +413,22 @@ pub type DataSink = Box<dyn Fn(&str, String) + Send + 'static>;
 /// Конец сессии (id, код выхода).
 pub type ExitSink = Box<dyn FnOnce(&str, Option<u32>) + Send + 'static>;
 
+type SessionMap = Arc<Mutex<HashMap<String, Arc<Session>>>>;
+
+fn lock_map(map: &SessionMap) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Session>>> {
+    map.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Сеансы агента. Сеанс в списке, пока его процесс не вышел: «Остановить» и
+/// замена сеанса его гасят, а убирает из списка поток ожидания — так
+/// `kill_recording_wait` видит и уже погашенные, но ещё не вышедшие.
 #[derive(Default)]
 pub struct Sessions {
-    map: Mutex<HashMap<String, Arc<Session>>>,
+    map: SessionMap,
     next: AtomicU64,
+    /// Запуск целиком (погасить прежний сеанс записи → запустить → внести в
+    /// список) — под одним замком: два запуска одной записи не разойдутся.
+    spawning: Mutex<()>,
 }
 
 impl Sessions {
@@ -388,6 +440,10 @@ impl Sessions {
         on_data: DataSink,
         on_exit: ExitSink,
     ) -> Result<String, String> {
+        let _spawning = self
+            .spawning
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.kill_recording(&spec.recording);
         let (cols, rows) = clamp_size(spec.cols, spec.rows);
         let pair = native_pty_system()
@@ -432,43 +488,62 @@ impl Sessions {
             killer: Mutex::new(child.clone_killer()),
             #[cfg(windows)]
             job: Mutex::new(job),
+            exited: Exited::default(),
         });
-        self.lock().insert(id.clone(), session.clone());
 
         let pump_id = id.clone();
-        let pump = thread::Builder::new()
+        let pump = match thread::Builder::new()
             .name(format!("{id}-read"))
             .spawn(move || pump_output(reader, |text| on_data(&pump_id, text)))
-            .map_err(|e| format!("поток чтения агента не запустился: {e}"))?;
+        {
+            Ok(pump) => pump,
+            Err(e) => {
+                session.kill();
+                return Err(format!("поток чтения агента не запустился: {e}"));
+            }
+        };
+        // Поток ожидания убирает сеанс из списка и сообщает о конце только
+        // после того, как запуск внёс его туда: агент, вышедший мгновенно, не
+        // оставит в списке мёртвую запись.
+        let (registered, wait_registered) = mpsc::channel::<()>();
         let waiter_id = id.clone();
-        thread::Builder::new()
+        let waiter_session = session.clone();
+        let map = self.map.clone();
+        let waiter = thread::Builder::new()
             .name(format!("{id}-wait"))
             .spawn(move || {
+                let session = waiter_session;
                 let code = child.wait().ok().map(|status| status.exit_code());
                 thread::sleep(EXIT_GRACE);
                 // Ввод закрыт: conhost, который ещё ждёт от терминала ответа о
                 // позиции курсора (агента убили до ответа), иначе не завершился
                 // бы. Псевдоконсоль закрыта — читатель дочитывает и выходит.
-                if let Ok(mut writer) = session.writer.lock() {
-                    writer.take();
-                }
-                if let Ok(mut master) = session.master.lock() {
-                    master.take();
-                }
+                // Закрываем вне замков сеанса: ClosePseudoConsole может ждать,
+                // а запись и смена размера не должны висеть на нём.
+                let writer = session.writer.lock().ok().and_then(|mut w| w.take());
+                drop(writer);
+                let master = session.master.lock().ok().and_then(|mut m| m.take());
+                drop(master);
                 let _ = pump.join();
                 // Агент вышел сам — его оставшиеся дети уходят вместе с job.
                 session.kill();
+                let _ = wait_registered.recv();
+                lock_map(&map).remove(&waiter_id);
+                session.exited.set();
                 drop(session);
                 on_exit(&waiter_id, code);
-            })
-            .map_err(|e| format!("поток ожидания агента не запустился: {e}"))?;
+            });
+        if let Err(e) = waiter {
+            session.kill();
+            return Err(format!("поток ожидания агента не запустился: {e}"));
+        }
+        self.lock().insert(id.clone(), session);
+        let _ = registered.send(());
         Ok(id)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Session>>> {
-        self.map
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        lock_map(&self.map)
     }
 
     fn get(&self, id: &str) -> Result<Arc<Session>, String> {
@@ -518,30 +593,41 @@ impl Sessions {
         }
     }
 
-    /// «Остановить». Сессии уже нет — не ошибка.
+    /// «Остановить». Сессии уже нет — не ошибка. Из списка сеанс уберёт
+    /// поток ожидания, когда процесс выйдет.
     pub fn kill(&self, id: &str) {
-        let session = self.lock().remove(id);
+        let session = self.lock().get(id).cloned();
         if let Some(session) = session {
             session.kill();
         }
     }
 
+    /// Сеансы записи (в том числе погашенные, но ещё не вышедшие).
+    fn of_recording(&self, recording: &str) -> Vec<Arc<Session>> {
+        self.lock()
+            .values()
+            .filter(|s| s.recording == recording)
+            .cloned()
+            .collect()
+    }
+
     fn kill_recording(&self, recording: &str) {
-        let stale: Vec<Arc<Session>> = {
-            let mut map = self.lock();
-            let ids: Vec<String> = map
-                .iter()
-                .filter(|(_, s)| s.recording == recording)
-                .map(|(id, _)| id.clone())
-                .collect();
-            ids.iter().filter_map(|id| map.remove(id)).collect()
-        };
-        stale.iter().for_each(|s| s.kill());
+        self.of_recording(recording).iter().for_each(|s| s.kill());
+    }
+
+    /// Погасить агентов записи и дождаться, пока они выйдут (до `timeout`):
+    /// папку записи, которая рабочая у живого процесса, Windows не удалит.
+    /// false — кто-то не вышел за отведённое время.
+    pub fn kill_recording_wait(&self, recording: &str, timeout: Duration) -> bool {
+        let sessions = self.of_recording(recording);
+        sessions.iter().for_each(|s| s.kill());
+        let deadline = Instant::now() + timeout;
+        sessions.iter().all(|s| s.exited.wait_until(deadline))
     }
 
     /// Закрыто главное окно или выход из приложения — гасим всех.
     pub fn kill_all(&self) {
-        let all: Vec<Arc<Session>> = self.lock().drain().map(|(_, s)| s).collect();
+        let all: Vec<Arc<Session>> = self.lock().values().cloned().collect();
         if !all.is_empty() {
             shell_log!("агент: остановлено сессий: {}", all.len());
         }
@@ -636,11 +722,12 @@ fn prepare(recording: &str, provider: Provider, cols: u16, rows: u16) -> Result<
     if !recording_id_valid(recording) {
         return Err("неизвестная запись".into());
     }
-    let endpoint = resident::read_endpoint()
-        .ok_or_else(|| "Сервис записи не отвечает — агент не может запуститься".to_string())?;
+    let endpoint = resident::read_endpoint().ok_or_else(|| NO_RESIDENT.to_string())?;
     let client = Client::new(&endpoint);
     let fail = |e: crate::api::Error| e.to_string();
-    let assistant = client.get("/assistant").map_err(fail)?;
+    // Без проверки локальной модели: агенту нужны только пути к CLI, а
+    // проверка — сетевое соединение, которое задержало бы запуск.
+    let assistant = client.get("/assistant?local=0").map_err(fail)?;
     let program = text_at(&assistant, &["available", provider.key(), "path"]).unwrap_or("");
     check_executable(provider, program, cfg!(windows))?;
     let program = PathBuf::from(program);
@@ -655,7 +742,7 @@ fn prepare(recording: &str, provider: Provider, cols: u16, rows: u16) -> Result<
     let mode = proxy_mode(text_at(&settings, &["llm", "proxy"]));
     let state = client.get_state().map_err(fail)?;
     let root = windows::recordings_root(&state)
-        .ok_or_else(|| "Сервис записи не назвал папку записей".to_string())?;
+        .ok_or_else(|| "Служба записи не назвала папку записей".to_string())?;
     let context = client
         .post(
             &format!(
@@ -665,7 +752,7 @@ fn prepare(recording: &str, provider: Provider, cols: u16, rows: u16) -> Result<
             Value::Null,
         )
         .map_err(fail)?;
-    let folder = text_at(&context, &["folder"]).ok_or("Сервис записи не назвал папку записи")?;
+    let folder = text_at(&context, &["folder"]).ok_or("Служба записи не назвала папку записи")?;
     let folder = recording_folder(Path::new(folder), &root).ok_or_else(|| {
         shell_log!("агент: отказ, папка вне папки записей: {folder}");
         "Папка записи вне папки записей — агент не запущен".to_string()
@@ -725,13 +812,15 @@ pub async fn agent_spawn(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
+// Ввод и размер — не в главном потоке: запись в псевдоконсоль может ждать
+// (conhost занят), и окно не должно замирать вместе с ней.
+#[tauri::command(async)]
 pub fn agent_write(window: tauri::Window, id: String, data: String) -> Result<(), String> {
     main_only(&window)?;
     sessions().write(&id, &data)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn agent_resize(window: tauri::Window, id: String, cols: u16, rows: u16) -> Result<(), String> {
     main_only(&window)?;
     sessions().resize(&id, cols, rows)
@@ -742,6 +831,29 @@ pub fn agent_kill(window: tauri::Window, id: String) -> Result<(), String> {
     main_only(&window)?;
     sessions().kill(&id);
     Ok(())
+}
+
+/// Перед «Удалить» и «Объединить»: погасить агентов записи и дождаться (до
+/// 2 с), пока они выйдут, — иначе их рабочая папка не даст удалить запись.
+#[tauri::command]
+pub async fn agent_kill_recording(
+    window: tauri::Window,
+    recording_id: String,
+) -> Result<(), String> {
+    main_only(&window)?;
+    if !recording_id_valid(&recording_id) {
+        return Err("неизвестная запись".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        if sessions().kill_recording_wait(&recording_id, KILL_WAIT) {
+            Ok(())
+        } else {
+            shell_log!("агент записи {recording_id} не вышел за {KILL_WAIT:?}");
+            Err("Агент не завершился за 2 секунды".to_string())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -1114,5 +1226,65 @@ mod tests {
         assert_ne!(code, Some(0));
         assert_eq!(sessions.len(), 0);
         assert!(sessions.write(&second, "x").is_err());
+    }
+
+    /// «Удалить» запись: агенты в её папке гасятся, и вызов ждёт их выхода —
+    /// после него папку можно удалить (рабочая папка больше ничья).
+    #[cfg(windows)]
+    #[test]
+    fn kill_recording_wait_returns_once_the_folder_is_free() {
+        let tmp = TempDir::new("wait");
+        let folder = tmp.0.join("2026-09-30_10-00");
+        std::fs::create_dir_all(&folder).unwrap();
+        let sessions = Sessions::default();
+        let long = "ping -n 30 127.0.0.1 >nul";
+        let (id, data, exit) =
+            spawn_cmd(&sessions, cmd_spec("r1", &folder, long, EnvPlan::default()));
+        // Терминал отвечает на запрос позиции курсора — агент реально запущен.
+        let answer = {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut seen = String::new();
+            while Instant::now() < deadline && !seen.contains("[6n") {
+                if let Ok(chunk) = data.recv_timeout(Duration::from_millis(50)) {
+                    seen.push_str(&chunk);
+                }
+            }
+            seen.contains("[6n")
+        };
+        if answer {
+            let _ = sessions.write(&id, "\u{1b}[1;1R");
+        }
+        thread::sleep(Duration::from_millis(300));
+        assert!(
+            std::fs::rename(&folder, tmp.0.join("moved")).is_err(),
+            "папка занята агентом"
+        );
+        assert!(sessions.kill_recording_wait("r1", KILL_WAIT));
+        assert!(exit.recv_timeout(Duration::from_secs(5)).is_ok());
+        assert_eq!(sessions.len(), 0);
+        assert!(
+            sessions.kill_recording_wait("r1", KILL_WAIT),
+            "нечего ждать — сразу"
+        );
+        std::fs::rename(&folder, tmp.0.join("moved")).expect("папка свободна");
+    }
+
+    #[test]
+    fn exited_wait_times_out_and_wakes_up() {
+        let exited = Arc::new(Exited::default());
+        assert!(!exited.wait_until(Instant::now() + Duration::from_millis(30)));
+        let setter = exited.clone();
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            setter.set();
+        });
+        assert!(exited.wait_until(Instant::now() + Duration::from_secs(5)));
+        handle.join().unwrap();
+        assert!(exited.wait_until(Instant::now()));
+    }
+
+    #[test]
+    fn resident_errors_say_sluzhba() {
+        assert!(NO_RESIDENT.starts_with("Служба записи"));
     }
 }

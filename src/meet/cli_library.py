@@ -225,7 +225,8 @@ def _merge_busy(folder: Path, root: Path, merging: Path | None = None) -> str | 
             return "над записью сейчас работает приложение — дождитесь"
     owner = merge.unfinished_owner(folder, merging)
     if owner:
-        return f"запись входит в объединение «{owner}», которое ещё не завершено"
+        return (f"запись входит в объединение «{owner}», которое ещё не завершено. "
+                "Дождитесь расшифровки объединённой записи или удалите её")
     return None
 
 
@@ -284,19 +285,16 @@ def _merge(args, cfg) -> None:
         if busy:
             failed = [f"{name}: {reason}" for name, reason in busy]
         else:
-            for source in sources:
-                try:
-                    shutil.rmtree(source)
-                    deleted.append(source.name)
-                except OSError as e:
-                    failed.append(f"{source.name}: {e}")
-    if failed:
-        # Не все исходные удалены — объединение не «завершено»: резидент
-        # доделает его после следующей расшифровки, а части пока заняты.
-        library.update_meta(target, lambda meta: {**meta, "merge": {
-            **(meta.get("merge") or {}), "deleted": deleted}})
-    else:
-        merge.mark_done(target, deleted)
+            # Все или ни одной (папку может держать агент из окна приложения).
+            try:
+                library.remove_folders(sources)
+                deleted = [source.name for source in sources]
+            except (OSError, RuntimeError) as e:
+                failed = [f"{source}: {e}" for source in sources]
+    # Объединение завершено в любом случае: оставшиеся исходные — обычные
+    # записи, а не «части незавершённого объединения», которые нельзя ни
+    # удалить, ни объединить снова. Что не удалилось и почему — в meta.json.
+    merge.mark_done(target, deleted, "; ".join(failed) or None)
     if kb_left:
         _say("Прежние папки частей в базе знаний не тронуты: " + ", ".join(kb_left))
     _result(args, {"folder": str(target), "id": target.name,

@@ -752,27 +752,27 @@ def test_merge_refuses_a_recording_in_progress(env, capsys, monkeypatch):
 
 
 def test_merge_reports_originals_that_could_not_be_deleted(env, capsys, monkeypatch):
-    import shutil as _shutil
-
-    from meet import cli_library
+    """Исходную держит другая программа: не удаляется ни одна, объединение всё
+    равно завершено (исходные снова обычные записи), причина — в meta.json."""
+    from meet import merge
 
     _fake_merge_pipeline(monkeypatch)
     a = _part(env, "2026-09-29_15-30")
     b = _part(env, "2026-09-29_16-10")
-    real = _shutil.rmtree
 
-    def locked(path, *args, **kw):
-        if Path(path).name == b.name:
-            raise PermissionError(13, "файл занят другим процессом")
-        return real(path, *args, **kw)
+    def held(folders, *args, **kw):
+        raise library.FolderBusy(library.FOLDER_BUSY)
 
-    monkeypatch.setattr(cli_library.shutil, "rmtree", locked)
+    monkeypatch.setattr(library, "remove_folders", held)
     assert _main(["merge", a.name, b.name, "--json"]) == 1
     captured = capsys.readouterr()
     got = json.loads(captured.out)
-    assert got["deleted"] == [a.name] and got["not_deleted"][0].startswith(b.name)
+    assert got["deleted"] == [] and len(got["not_deleted"]) == 2
     assert "не все исходные удалены" in captured.err
-    assert library.read_meta(Path(got["folder"]))["merge"]["state"] == "merged"  # не «завершено»
+    info = library.read_meta(Path(got["folder"]))["merge"]
+    assert info["state"] == "done" and "агент в терминале" in info["kept_reason"]
+    assert a.exists() and b.exists()
+    assert merge.unfinished_owner(a) is None and merge.unfinished_owner(b) is None
 
 
 def test_merge_keeps_originals_the_resident_is_working_on(env, capsys, monkeypatch):

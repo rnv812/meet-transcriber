@@ -244,5 +244,19 @@ export const agentWrite = (id: string, data: string) => invoke<void>("agent_writ
 export const agentResize = (id: string, cols: number, rows: number) =>
   invoke<void>("agent_resize", { id, cols, rows });
 export const agentKill = (id: string) => invoke<void>("agent_kill", { id });
+/**
+ * Остановить агентов этой записи и дождаться (до 2 с), пока они выйдут: агент
+ * работает в папке встречи, и Windows не даёт удалить папку, пока она чья-то
+ * рабочая. Вне приложения агентов нет — сразу готово. Ошибка не мешает
+ * удалению: резидент сам подождёт и скажет, если папка занята.
+ */
+export async function agentKillRecording(recordingId: string): Promise<void> {
+  if (!inTauri()) return;
+  try {
+    await invoke<void>("agent_kill_recording", { recordingId });
+  } catch (cause) {
+    console.warn("agent_kill_recording:", cause);
+  }
+}
 export const onAgentData = (cb: (d: AgentData) => void) => listenShell("agent-data", cb);
 export const onAgentExit = (cb: (e: AgentExit) => void) => listenShell("agent-exit", cb);
