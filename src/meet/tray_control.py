@@ -227,6 +227,8 @@ def _conflict(text: str):
 
 # Название записи длиннее не бывает: окно ограничивает поле тем же.
 TITLE_MAX = 200
+# Расшифровка для агента во вкладке «Агент» (Claude Code / Codex в папке записи).
+AGENT_TRANSCRIPT_MD = "transcript.md"
 
 # Сколько «Удалить» ждёт, пока плеер и сведение отпустят файлы записи.
 DELETE_WAIT_S = 3.0
@@ -1009,6 +1011,33 @@ class TrayControl:
             raise _bad_request(str(e))
         safe_name = export.safe_filename(title, recording_id)
         return {"filename": f"{safe_name}.{fmt}", "content": content}
+
+    def agent_context(self, recording_id: str) -> dict:
+        """Файлы для вкладки «Агент» (Claude Code / Codex в папке встречи):
+        `transcript.md` — расшифровка тем же Markdown, что «Экспорт» (имена
+        спикеров, таймкоды), переписывается при каждом запуске агента
+        атомарно; `summary.md` — итоги, если они есть (пишет их задача итогов).
+        Папку оболочка проверяет сама: она должна лежать в папке записей."""
+        from meet import assistant
+
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        rendered = self.export(recording_id, "md")
+        if "error" in rendered:
+            return rendered
+        path = folder / AGENT_TRANSCRIPT_MD
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            tmp.write_text(rendered["content"], encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError as e:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError(f"не удалось подготовить расшифровку для агента: {e}") from e
+        files = [AGENT_TRANSCRIPT_MD]
+        if (folder / assistant.SUMMARY_MD).is_file():
+            files.append(assistant.SUMMARY_MD)
+        return {"folder": str(folder), "files": files}
 
     def save_transcript(self, recording_id: str, data: dict) -> dict:
         """Сохранить правки редактора. Пишем как есть: редактор — владелец

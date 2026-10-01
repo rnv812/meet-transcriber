@@ -715,9 +715,15 @@ impl Job {
 
     pub fn assign(&self, child: &std::process::Child) -> bool {
         use std::os::windows::io::AsRawHandle;
+        self.assign_handle(child.as_raw_handle())
+    }
+
+    /// Процесс по хэндлу — для детей, запущенных не через `std::process`
+    /// (агент во встроенном терминале, `pty.rs`). Хэндл должен быть жив.
+    pub fn assign_handle(&self, process: std::os::windows::io::RawHandle) -> bool {
         use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
-        // SAFETY: оба хэндла живы на время вызова.
-        unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) != 0 }
+        // SAFETY: оба хэндла живы на время вызова (вызывающий держит процесс).
+        unsafe { AssignProcessToJobObject(self.0, process) != 0 }
     }
 }
 

@@ -1,4 +1,5 @@
-// Системный прокси Windows для загрузок движка (uv).
+// Системный прокси Windows для загрузок движка (uv) и агентов вкладки
+// «Агент» (`pty.rs`: там же режим `llm.proxy`).
 //
 // uv, как и Claude Code с Codex, надёжно понимает только переменные
 // HTTPS_PROXY/HTTP_PROXY. Оболочка, запущенная из Проводника, их обычно не
@@ -22,7 +23,7 @@ pub struct InternetSettings {
 }
 
 /// `scheme://[user:pass@]host:port[/]` с известной схемой и числовым портом.
-fn valid_url(url: &str) -> bool {
+pub fn valid_url(url: &str) -> bool {
     let Some((scheme, rest)) = url.split_once("://") else {
         return false;
     };
@@ -132,14 +133,14 @@ pub fn proxy_env_from(
 }
 
 /// Задан ли прокси переменными среды этого процесса.
-fn env_has_proxy() -> bool {
+pub fn env_has_proxy() -> bool {
     ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"]
         .iter()
         .any(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()))
 }
 
 #[cfg(windows)]
-fn read_internet_settings() -> InternetSettings {
+pub fn read_internet_settings() -> InternetSettings {
     use std::ffi::c_void;
     use std::ptr::null_mut;
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
@@ -213,7 +214,7 @@ fn read_internet_settings() -> InternetSettings {
 }
 
 #[cfg(not(windows))]
-fn read_internet_settings() -> InternetSettings {
+pub fn read_internet_settings() -> InternetSettings {
     InternetSettings::default()
 }
 

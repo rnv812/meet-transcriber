@@ -42,7 +42,7 @@ pub fn main_url(recording: Option<&str>, section: Option<&str>) -> String {
     }
 }
 
-fn encode_component(text: &str) -> String {
+pub fn encode_component(text: &str) -> String {
     let mut out = String::new();
     for byte in text.bytes() {
         match byte {

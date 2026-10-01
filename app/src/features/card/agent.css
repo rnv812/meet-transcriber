@@ -1,0 +1,26 @@
+/* Вкладка «Агент»: строка управления, подсказка и терминал во всю высоту. */
+
+.agent { flex: 1; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.agent--empty > .empty { flex: 1; height: auto; }
+.agent__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.agent__label { color: var(--text-2); font-size: 12px; }
+.agent__select {
+  height: 28px; padding: 0 6px; background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--line-2); border-radius: var(--r-md); font: inherit;
+}
+.agent__bar .help { margin-right: 6px; }
+.agent__phase { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 12px; color: var(--text-2); }
+.agent__dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--text-3); }
+.agent__dot--run { background: var(--ok); }
+.agent__hint { font-size: 12px; color: var(--text-3); }
+/* Терминал занимает остаток вкладки; xterm подгоняется под .agent__xterm. */
+.agent__screen {
+  position: relative; flex: 1; min-height: 280px; overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg);
+}
+.agent__xterm { position: absolute; inset: 6px 4px 6px 10px; }
+.agent__xterm .xterm-viewport { scrollbar-color: var(--line-2) transparent; }
+.agent__idle {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  padding: 16px; color: var(--text-3); font-size: 13px; text-align: center; pointer-events: none;
+}

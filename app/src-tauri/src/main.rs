@@ -15,11 +15,12 @@ mod autostart;
 mod engine;
 mod logs;
 mod netproxy;
+mod pty;
 mod resident;
 mod tray;
 mod windows;
 
-use tauri::RunEvent;
+use tauri::{RunEvent, WindowEvent};
 
 use resident::Supervisor;
 
@@ -67,8 +68,27 @@ fn main() {
             windows::mark_wizard_done,
             windows::open_logs,
             autostart::set_autostart,
-            autostart::get_autostart
+            autostart::get_autostart,
+            // Вкладка «Агент»: Claude Code / Codex во встроенном терминале.
+            pty::agent_spawn,
+            pty::agent_write,
+            pty::agent_resize,
+            pty::agent_kill
         ])
+        // Агенты вкладки «Агент» живут, пока открыта карточка: закрытое или
+        // перезагруженное главное окно их гасит (карточка уже не размонтируется).
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, WindowEvent::Destroyed) {
+                pty::kill_all();
+            }
+        })
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main"
+                && payload.event() == tauri::webview::PageLoadEvent::Started
+            {
+                pty::kill_all();
+            }
+        })
         .setup(|app| {
             // Движок, собранный из другого колеса той же версии, и движок
             // новой версии после обновления приложения ставятся в фоне;
@@ -96,13 +116,12 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("оболочка meet не запустилась")
-        .run(|_app, event| {
+        .run(|_app, event| match event {
             // Закрытие последнего окна не завершает приложение: оно живёт в
             // трее. Выход — только «Выход» (app.exit(0), у него code = Some).
-            if let RunEvent::ExitRequested { api, code, .. } = event {
-                if code.is_none() {
-                    api.prevent_exit();
-                }
-            }
+            RunEvent::ExitRequested { api, code, .. } if code.is_none() => api.prevent_exit(),
+            // Job object агентов и так закроет Windows; гасим явно и раньше.
+            RunEvent::Exit => pty::kill_all(),
+            _ => {}
         });
 }

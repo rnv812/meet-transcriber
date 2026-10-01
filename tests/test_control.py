@@ -154,6 +154,12 @@ class FakeState:
         return {"folder": "2026-09-30 - Планирование спринта", "files": ["Транскрипт.md"],
                 "error": None}
 
+    def agent_context(self, rid):
+        if rid == "нет":
+            return {"error": "записи нет"}
+        self.calls.append(("agent-context", rid))
+        return {"folder": f"D:/rec/{rid}", "files": ["transcript.md"]}
+
     def assistant(self):
         return {"provider": None, "checking": True, "setting": "auto",
                 "available": {}, "knowledge_dir": None}
@@ -970,6 +976,14 @@ def test_kb_export_routes(server):
     # «В заметки» из прежнего окна — та же выгрузка.
     assert _post(server, "/recordings/r2/notes")["files"] == ["Транскрипт.md"]
     assert ("kb-export", "r2") in server.state_obj.calls
+
+
+def test_agent_context_route(server):
+    got = _post(server, "/recordings/r1/agent-context")
+    assert got == {"folder": "D:/rec/r1", "files": ["transcript.md"]}
+    assert ("agent-context", "r1") in server.state_obj.calls
+    assert _post(server, "/recordings/%D0%BD%D0%B5%D1%82/agent-context", expect=404) == {
+        "error": "записи нет"}
 
 
 def test_export_preview_route_passes_query(server):

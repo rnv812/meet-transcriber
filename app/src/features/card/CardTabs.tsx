@@ -1,29 +1,33 @@
 /**
- * Вкладки готовой записи: «Расшифровка · Итоги · Вопросы».
+ * Вкладки готовой записи: «Расшифровка · Итоги · Вопросы · Агент».
  *
  * Вкладка монтируется при первом открытии и дальше живёт скрытой: ожидающий
  * вопрос и прокрутка не теряются при переключении, а итоги и вопросы не
- * запрашиваются у тех, кто их не открывал.
+ * запрашиваются у тех, кто их не открывал. Агент (терминал с Claude Code или
+ * Codex) так же переживает переключение вкладок и останавливается вместе с
+ * карточкой.
  */
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Endpoint } from "../../lib/api";
 import type { Job } from "../../lib/types";
+import { AgentTab } from "./AgentTab";
 import { useAssistant } from "./assistant";
 import { QaTab } from "./QaTab";
 import { SummaryTab } from "./SummaryTab";
 import { TranscriptShown } from "./transcriptShown";
 import "./assistant.css";
 
-type Tab = "transcript" | "summary" | "qa";
+type Tab = "transcript" | "summary" | "qa" | "agent";
 
-/** Где Ctrl+F не уводит к поиску по расшифровке. */
-const FIND_IGNORED = ".rec-item__input, [role=dialog], [aria-modal=true], .popover, .item-menu";
+/** Где Ctrl+F не уводит к поиску по расшифровке (в терминале агента клавиши — агенту). */
+const FIND_IGNORED = ".rec-item__input, [role=dialog], [aria-modal=true], .popover, .item-menu, [data-agent-terminal]";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "transcript", label: "Расшифровка" },
   { id: "summary", label: "Итоги" },
   { id: "qa", label: "Вопросы" },
+  { id: "agent", label: "Агент" },
 ];
 
 export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSettings, showTranscript }: {
@@ -99,6 +103,7 @@ export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSetting
     transcript: () => <TranscriptShown.Provider value={shown}>{transcript}</TranscriptShown.Provider>,
     summary: () => <SummaryTab {...shared} />,
     qa: () => <QaTab {...shared} />,
+    agent: () => <AgentTab id={id} assistant={assistant} onOpenSettings={onOpenSettings} />,
   };
 
   return (

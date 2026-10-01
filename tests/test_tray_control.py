@@ -1429,3 +1429,50 @@ def test_manual_recording_is_not_trimmed(app, tmp_path, monkeypatch):
     app.call_end_at = 1300.0
     app.on_saved(str(_saved_folder(tmp_path)), tray_control.MANUAL, True)
     assert len(queue.submitted) == 1
+
+
+# --- вкладка «Агент»: файлы для Claude Code / Codex в папке встречи ----------
+
+
+def _agent_folder(tmp_path, control_state, monkeypatch):
+    from meet import library
+
+    folder = _saved_folder(tmp_path)
+    library.write_meta(folder, {"title": "Планирование спринта"})
+    library.write_transcript(folder, {"segments": [
+        {"start": 0, "end": 1, "speaker": "SPEAKER_00", "text": "Начнём."},
+        {"start": 65, "end": 66, "speaker": "Анна", "text": "Готово."}]})
+    monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
+    return folder
+
+
+def test_agent_context_writes_transcript_md(control_state, tmp_path, monkeypatch):
+    """transcript.md — тот же Markdown, что и экспорт: название, имена
+    спикеров (сырые SPEAKER_XX — «Спикер N»), таймкоды."""
+    folder = _agent_folder(tmp_path, control_state, monkeypatch)
+    got = control_state.agent_context(folder.name)
+    assert got == {"folder": str(folder), "files": ["transcript.md"]}
+    text = (folder / "transcript.md").read_text(encoding="utf-8")
+    assert "# Планирование спринта" in text
+    assert "Спикер 1" in text and "Анна" in text and "SPEAKER_" not in text
+    assert "01:05" in text
+    assert text == control_state.export(folder.name, "md")["content"]
+
+
+def test_agent_context_lists_summary_and_rewrites_atomically(control_state, tmp_path,
+                                                             monkeypatch):
+    folder = _agent_folder(tmp_path, control_state, monkeypatch)
+    (folder / "summary.md").write_text("## Итоги\n", encoding="utf-8")
+    (folder / "transcript.md").write_text("старое", encoding="utf-8")
+    got = control_state.agent_context(folder.name)
+    assert got["files"] == ["transcript.md", "summary.md"]
+    assert "старое" not in (folder / "transcript.md").read_text(encoding="utf-8")
+    assert sorted(p.name for p in folder.iterdir() if p.name.endswith(".tmp")) == []
+
+
+def test_agent_context_needs_a_transcript(control_state, tmp_path, monkeypatch):
+    folder = _saved_folder(tmp_path)
+    monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
+    assert control_state.agent_context(folder.name) == {"error": "транскрипта нет"}
+    assert control_state.agent_context("..") == {"error": "записи нет"}
+    assert not (folder / "transcript.md").exists()

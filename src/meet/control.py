@@ -750,6 +750,9 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.ask(unquote(rid), h._body())),
     ("GET", re.compile(r"^/recordings/([^/]+)/qa$"),
      lambda h, p, rid: _server_of(h).state.qa(unquote(rid))),
+    # Вкладка «Агент»: transcript.md в папке записи перед запуском Claude Code / Codex.
+    ("POST", re.compile(r"^/recordings/([^/]+)/agent-context$"),
+     lambda h, p, rid: _server_of(h).state.agent_context(unquote(rid))),
     ("POST", re.compile(r"^/recordings/([^/]+)/kb-export$"),
      lambda h, p, rid: _server_of(h).state.kb_export(unquote(rid))),
     # «В заметки» прежнего окна — та же выгрузка в базу знаний.

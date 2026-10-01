@@ -184,3 +184,24 @@ export async function openLogs(): Promise<void> {
   if (!inTauri()) return;
   await invoke<void>("open_logs");
 }
+
+// --- вкладка «Агент»: Claude Code / Codex во встроенном терминале -------------
+
+/** Событие `agent-data`: кусок вывода терминала сессии `id` (UTF-8, целые символы). */
+export type AgentData = { id: string; data: string };
+/** Событие `agent-exit`: сессия `id` закончилась; `code` — код выхода (null — неизвестен). */
+export type AgentExit = { id: string; code: number | null };
+
+/**
+ * Запустить агента (`claude-code` или `codex`) в папке записи. Оболочка
+ * сначала просит резидента обновить transcript.md, затем запускает CLI в
+ * псевдоконсоли. Возвращает id сессии; прежняя сессия этой записи гасится.
+ */
+export const agentSpawn = (recordingId: string, provider: string, cols: number, rows: number) =>
+  invoke<string>("agent_spawn", { recordingId, provider, cols, rows });
+export const agentWrite = (id: string, data: string) => invoke<void>("agent_write", { id, data });
+export const agentResize = (id: string, cols: number, rows: number) =>
+  invoke<void>("agent_resize", { id, cols, rows });
+export const agentKill = (id: string) => invoke<void>("agent_kill", { id });
+export const onAgentData = (cb: (d: AgentData) => void) => listenShell("agent-data", cb);
+export const onAgentExit = (cb: (e: AgentExit) => void) => listenShell("agent-exit", cb);
