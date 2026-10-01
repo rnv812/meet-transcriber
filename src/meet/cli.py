@@ -209,7 +209,7 @@ def main(argv: list[str] | None = None) -> int | None:
     p_tr.add_argument(
         "--hotwords",
         help="термины через запятую, подсказка распознаванию "
-        "(например: 'джоба, экшен, коррелятор')",
+        "(например: 'спринт, деплой, бэклог')",
     )
     p_tr.add_argument(
         "--no-align",

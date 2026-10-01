@@ -13,7 +13,7 @@ def test_repo_root_found_from_sources():
 
 def test_dev_mode_keeps_historic_locations():
     """Пути dev-режима — те же, что были до появления модуля: иначе записи и
-    лексика автора «переехали» бы при обновлении."""
+    лексика тех, кто запускает из исходников, «переехали» бы при обновлении."""
     root = paths.repo_root()
     assert paths.default_recordings_dir() == root / "recordings"
     assert paths.hotwords_path() == root / "hotwords.txt"
@@ -100,7 +100,7 @@ def test_watch_log_keeps_historic_place_without_override(monkeypatch, tmp_path):
 
 
 def test_gpu_lock_follows_data_dir(monkeypatch, tmp_path):
-    """gpu.lock — публичный контракт с voice-control: путь обязан остаться тем
+    """gpu.lock — публичный контракт с внешними программами: путь обязан остаться тем
     же в обычном запуске."""
     from meet import gpu_lock
 

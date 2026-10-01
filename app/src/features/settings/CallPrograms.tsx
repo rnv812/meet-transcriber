@@ -195,7 +195,7 @@ export function CallPrograms({ value, processes, loadProcesses, onChange }: {
         <HelpTip label="Какие звонки распознаются" title="Как распознаётся звонок">
           <TipLine>Запись начинается, когда отмеченная программа использует микрофон или воспроизводит звук.</TipLine>
           <TipLine>
-            Звонки в браузере (Dion, Google Meet, веб-версии Zoom и Телемоста) распознаются по микрофону —
+            Звонки в браузере (Google Meet, веб-версии Zoom, Teams и Телемоста) распознаются по микрофону —
             браузеры отмечаются ниже, в группе «Звонки в браузере».
           </TipLine>
         </HelpTip>

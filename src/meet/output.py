@@ -45,7 +45,7 @@ def speaker_names(segments: list[Segment]) -> dict[str, str]:
 
 
 def to_markdown(title: str, segments: list[Segment], date: str = "") -> str:
-    """Транскрипт в формате режима transcript скилла notes-vault: «## ВРЕМЯ — Спикер».
+    """Транскрипт в Markdown для базы заметок: «## ВРЕМЯ — Спикер».
 
     Если задан date (ISO YYYY-MM-DD), сверху добавляется frontmatter для Obsidian
     с пустым task (заполняется вручную при переносе в хранилище).

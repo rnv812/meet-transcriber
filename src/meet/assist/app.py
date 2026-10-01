@@ -133,8 +133,8 @@ class AssistState:
 def _knowledge_path(knowledge, vault: Path | None) -> Path | None:
     """База знаний живого режима: существующая папка, отличная от vault.
 
-    Совпала с vault (так мигрирует настройка автора) — её уже покрывают
-    правила хранилища в Q&A; путь `meet assist` у него остаётся прежним."""
+    Совпала с vault (так мигрирует прежняя настройка `assist.vault`) — её
+    уже покрывают правила хранилища в Q&A; путь `meet assist` остаётся прежним."""
     if not knowledge:
         return None
     path = Path(knowledge)

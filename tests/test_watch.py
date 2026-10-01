@@ -271,7 +271,7 @@ def test_release_allows_restart_within_the_same_call():
 
 
 def test_signals_ignore_stale_registry_marks_when_process_is_gone(monkeypatch):
-    # метки ConsentStore переживают процесс: убитый мид-звонком Дион иначе
+    # метки ConsentStore переживают процесс: убитый мид-звонком клиент иначе
     # означал бы «в звонке» бессрочно, и запись шла бы вечно
     monkeypatch.setattr(watch, "mic_busy", lambda name: True)
     monkeypatch.setattr(watch, "render_active", lambda name, log=None: False)

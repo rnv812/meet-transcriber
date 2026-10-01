@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 # за расхождением); torch ставится отдельным шагом с нужного индекса
 # (engine.uv_steps), поэтому в extras его нет.
 # pycaw — второй сигнал детектора звонка (WASAPI-сессии); psutil объявлен явно:
-# на нём держатся проверка живости Диона и отпечаток процесса в tray.lock.
+# на нём держатся проверка живости клиента конференций и отпечаток процесса в tray.lock.
 dependencies = [
     "pystray", "pillow", "pycaw", "psutil",
     "pyaudiowpatch", "numpy", "scipy", "aiohttp", "claude-agent-sdk", "keyring",

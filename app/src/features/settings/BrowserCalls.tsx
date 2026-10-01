@@ -66,7 +66,7 @@ export function BrowserCalls({ browsers, requireSite, sites, onBrowsers, onRequi
           </TipLine>
           <TipLine>
             Если в заголовке окна браузера есть сайт звонка, запись получит название по нему,
-            например «Dion — Планёрка». Название можно изменить.
+            например «Google Meet — Планёрка». Название можно изменить.
           </TipLine>
         </HelpTip>
       </div>
@@ -95,7 +95,7 @@ export function BrowserCalls({ browsers, requireSite, sites, onBrowsers, onRequi
         <span className="srow__hint">Сайты звонков</span>
         <HelpTip label="Что такое сайт звонка" title="Сайты звонков">
           <TipLine>
-            Часть заголовка окна браузера, по которой узнаётся звонок, например «Dion» или «Google Meet».
+            Часть заголовка окна браузера, по которой узнаётся звонок, например «Google Meet» или «Телемост».
             Регистр букв не важен.
           </TipLine>
         </HelpTip>

@@ -291,7 +291,7 @@ def test_endpoint_removed_when_engine_start_fails(tmp_path, monkeypatch):
 
 
 def test_default_cli_path_opens_browser_on_8765(tmp_path, monkeypatch):
-    """Путь автора: `meet assist` без новых флагов — страница в браузере, 8765."""
+    """Прежний путь: `meet assist` без новых флагов — страница в браузере, 8765."""
     async def done(stop):
         return None
 
@@ -427,8 +427,8 @@ def test_state_knowledge_dir_reaches_qa_and_digest(tmp_path):
     assert "superseded" not in state.qa_system  # конвенция хаба — только у vault
 
 
-def test_state_knowledge_same_as_vault_keeps_old_setup(tmp_path):
-    """У автора knowledge_dir мигрировал из vault: доступ и промпты — прежние."""
+def test_state_knowledge_same_as_vault_keeps_the_old_setup(tmp_path):
+    """knowledge_dir мигрировал из vault: доступ и промпты — прежние."""
     vault = tmp_path / "Claude"
     vault.mkdir()
     plain = AssistState(bus=TranscriptBus(), digest=Digest(), glossary="",

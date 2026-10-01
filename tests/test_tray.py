@@ -110,8 +110,8 @@ def test_hook_command_is_not_a_shell_string(monkeypatch):
 
 
 def test_wt_safe_neutralizes_command_line_metachars():
-    assert tray._wt_safe("режимом дейлика; другую встречу") == (
-        "режимом дейлика, другую встречу"
+    assert tray._wt_safe("регулярная встреча; другую встречу") == (
+        "регулярная встреча, другую встречу"
     )
     assert tray._wt_safe("папка 'rec'") == "папка ''rec''"
 
@@ -150,7 +150,7 @@ def test_auto_config_defaults_to_disabled(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     cfg = tray._auto_config()
     assert cfg["enabled"] is False
-    # список клиентов конференций, а не один Дион: приложение общего назначения
+    # список клиентов конференций, а не один клиент: приложение общего назначения
     assert "Dion.exe" in cfg["processes"] and "Zoom.exe" in cfg["processes"]
     assert cfg["grace_minutes"] * 60 == watch.GRACE_S
     assert cfg["min_call_seconds"] == tray.MIN_CALL_S
@@ -352,7 +352,7 @@ def test_auto_stop_stops_auto_recording(monkeypatch, tmp_path):
 
 
 def test_short_call_stops_without_calling_claude(monkeypatch, tmp_path):
-    # звук уведомления Диона не должен приводить к окну Claude с предложением
+    # звук уведомления клиента конференций не должен приводить к окну Claude с предложением
     # транскрибировать полминуты тишины
     app = _app(monkeypatch, tmp_path)
     app.recording = True
@@ -367,7 +367,7 @@ def test_short_call_stops_without_calling_claude(monkeypatch, tmp_path):
 
 def test_auto_stop_never_touches_manual_recording(monkeypatch, tmp_path):
     # надиктовка или телефонный разговор не должны обрываться из-за того,
-    # что в Дионе нет конференции
+    # что в клиенте конференций нет звонка
     app = _app(monkeypatch, tmp_path)
     app.recording = True
     app.source = tray.MANUAL

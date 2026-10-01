@@ -51,7 +51,10 @@ DEFAULT_POLL_S = 2.0
 # вызов): папка остаётся, но пост-хук на неё не зовут.
 DEFAULT_MIN_CALL_S = 120.0
 
-# Клиенты конференций, за которыми детектор следит по умолчанию.
+# Клиенты конференций, за которыми детектор следит по умолчанию: набор
+# распространённых клиентов для нового пользователя (exe — как у пресетов окна,
+# app/src/features/settings/CallPrograms.tsx). Сохранённый список пользователя
+# эти умолчания не трогают.
 #
 # IMPORTANT: только те приложения, у которых активная звуковая сессия почти
 # всегда означает разговор. Мессенджеры (Slack, Discord, Telegram) сюда
@@ -59,6 +62,16 @@ DEFAULT_MIN_CALL_S = 120.0
 # «что-то воспроизводится» читается детектором как звонок — автозапись включалась
 # бы на каждый бип. Добавить их можно руками, зная эту цену.
 DEFAULT_PROCESSES = (
+    "Zoom.exe",
+    "ms-teams.exe",
+    "Teams.exe",
+    "YandexTelemost.exe",
+    "Telemost.exe",
+    "Dion.exe",
+)
+# Прежние умолчания — для миграции: старый конфиг без списка программ жил на
+# них, у него они и остаются (см. migrate).
+HISTORIC_PROCESSES = (
     "Dion.exe",
     "Teams.exe",
     "ms-teams.exe",
@@ -71,7 +84,6 @@ DEFAULT_PROCESSES = (
 # (`browser_require_site`) — решается, звонок ли это вообще. «Meet –» — так
 # Google Meet подписывает вкладку («Meet – abc-defg-hij»).
 DEFAULT_CALL_SITES = (
-    "Dion",
     "Google Meet",
     "Meet –",
     "Телемост",
@@ -80,6 +92,7 @@ DEFAULT_CALL_SITES = (
     "Jitsi",
     "VK Звонки",
     "Контур.Толк",
+    "Dion",
     "Webex",
     "Discord",
     "Яндекс Телемост",
@@ -103,13 +116,12 @@ HISTORIC_HOOK_COMMAND = (
     "claude --permission-mode auto '{prompt}'",
 )
 HISTORIC_HOOK_PROMPT = (
-    "Завершилась запись встречи, папка: {folder}. "
-    "Предложи транскрибировать её скиллом my-plugin:transcriber."
+    "Завершилась запись встречи, папка: {folder}. Предложи её транскрибировать."
 )
 HISTORIC_RECURRING_PROMPT = (
     " Время похоже на слот регулярной встречи — сверься с календарём "
-    "(scripts/calendar_lookup.ps1) и, если это она, веди её соответствующим "
-    "режимом скилла; другую встречу в этом слоте — обычным режимом."
+    "(scripts/calendar_lookup.ps1) и, если это она, учти это в итогах; "
+    "другую встречу в этом слоте веди как обычно."
 )
 HISTORIC_RECURRING_WINDOW = ("11:00", "12:00")
 
@@ -301,7 +313,7 @@ class Hooks:
     """Что запускать после остановки записи.
 
     Раньше здесь был зашит конкретный сценарий: окно Windows Terminal с Claude
-    Code и промптом про конкретный скилл. Теперь это шаблон команды —
+    Code и готовым промптом. Теперь это шаблон команды —
     `["explorer", "{folder}"]` работает ровно так же, как запуск ассистента, а у
     нового пользователя по умолчанию не запускается ничего.
 
@@ -313,7 +325,8 @@ class Hooks:
     post_record: bool = False
     command: tuple[str, ...] = ()
     prompt: str = DEFAULT_HOOK_PROMPT
-    # Окно старта, в котором встреча похожа на регулярную (дейлик, статус).
+    # Окно старта, в котором встреча похожа на регулярную (ежедневная встреча,
+    # статус).
     # None — про регулярность ничего не говорим.
     recurring_window: tuple[str, str] | None = None
     recurring_prompt: str = ""
@@ -560,7 +573,7 @@ class Assistant:
         if "notes_subdir" in raw:
             subdir = str(raw["notes_subdir"] or "").strip()
         else:
-            # Раскладка по задачам внутри vault остаётся за прежним владельцем.
+            # Раскладка внутри прежнего vault остаётся такой, какой была.
             subdir = "" if "notes_dir" not in raw and vault else DEFAULT_NOTES_SUBDIR
         return cls(knowledge_dir=knowledge, notes_dir=notes, notes_subdir=subdir)
 
@@ -672,9 +685,9 @@ class Integrations:
     """Связи с чужими программами. Все выключаемые: приложение обязано быть
     полезным само по себе."""
 
-    # Маркер «GPU занят» для внешнего наблюдателя (у автора — voice-control,
-    # который по нему выгружает свою копию Whisper из видеопамяти). Кому это не
-    # нужно — выключает, и файл не создаётся вовсе.
+    # Маркер «GPU занят» для внешнего наблюдателя (например, утилиты голосового
+    # ввода, которая по нему выгружает свою копию Whisper из видеопамяти). Кому
+    # это не нужно — выключает, и файл не создаётся вовсе.
     gpu_marker: bool = True
     gpu_marker_path: Path | None = None
     # Токен Hugging Face из config.json — только запасной путь: его место —
@@ -815,7 +828,7 @@ def migrate(raw: dict) -> dict:
     достраиваем то, что раньше было зашито в коде.
 
     * v0 — файл без `version`: `post_record_hook` на верхнем уровне, зашитый
-      запуск Claude Code в Windows Terminal, окно дейлика 11:00–12:00.
+      запуск Claude Code в Windows Terminal, окно регулярной встречи 11:00–12:00.
     * v1 — первая схема: то же, но флаг уже в `hooks.post_record`, а окно
       называлось `daily_window`.
 
@@ -842,6 +855,10 @@ def migrate(raw: dict) -> dict:
             "recurring_window", list(window) if window else list(HISTORIC_RECURRING_WINDOW)
         )
         migrated["hooks"] = hooks
+        # Список программ звонков без явного значения — прежние умолчания.
+        auto_record = dict(_section(migrated, "auto_record"))
+        auto_record.setdefault("processes", list(HISTORIC_PROCESSES))
+        migrated["auto_record"] = auto_record
     return migrated
 
 

@@ -41,6 +41,38 @@ def test_default_processes_are_conferencing_clients_only():
         assert chat not in settings.DEFAULT_PROCESSES
 
 
+def test_default_processes_are_a_neutral_common_set():
+    """Новому пользователю — распространённые клиенты конференций (Zoom, Teams,
+    Телемост, Dion), без привязки к чьему-то рабочему набору."""
+    assert set(settings.DEFAULT_PROCESSES) == {
+        "Zoom.exe", "Teams.exe", "ms-teams.exe",
+        "YandexTelemost.exe", "Telemost.exe", "Dion.exe",
+    }
+
+
+def test_stored_process_list_is_kept_as_is(tmp_path):
+    """Сохранённый список не подменяется новыми умолчаниями — даже если в нём
+    программа, которой в умолчаниях больше нет."""
+    f = tmp_path / "config.json"
+    _write(f, {"version": 2, "auto_record": {"processes": ["Dion.exe", "Webex.exe"]}})
+    assert settings.load(f).auto_record.processes == ["Dion.exe", "Webex.exe"]
+
+
+def test_old_config_without_processes_keeps_the_historic_defaults(tmp_path):
+    """Старый конфиг без списка программ жил на прежних умолчаниях — с ними и
+    остаётся: у того, кто уже пользуется meet, поведение не меняется."""
+    f = tmp_path / "config.json"
+    _write(f, {"post_record_hook": False})
+    assert settings.load(f).auto_record.processes == list(settings.HISTORIC_PROCESSES)
+    assert "Webex.exe" in settings.HISTORIC_PROCESSES
+
+
+def test_historic_hook_prompts_name_no_particular_setup():
+    """Миграционные тексты хука — без чужих скиллов и личных сценариев."""
+    for text in (settings.HISTORIC_HOOK_PROMPT, settings.HISTORIC_RECURRING_PROMPT):
+        assert "скилл" not in text and "my-plugin" not in text
+
+
 def test_v0_config_keeps_the_historic_hook(tmp_path):
     """Тот, кто уже пользовался хуком, ничего не теряет: миграция достраивает
     команду и окно, которые раньше были зашиты в коде."""
@@ -50,7 +82,7 @@ def test_v0_config_keeps_the_historic_hook(tmp_path):
     assert hooks.post_record is True
     assert hooks.command == settings.HISTORIC_HOOK_COMMAND
     assert hooks.recurring_window == settings.HISTORIC_RECURRING_WINDOW
-    assert "my-plugin:transcriber" in hooks.prompt
+    assert hooks.prompt == settings.HISTORIC_HOOK_PROMPT
 
 
 def test_v1_daily_window_becomes_recurring(tmp_path):
