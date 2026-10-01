@@ -562,17 +562,25 @@ class Assist:
     window_seconds: float = 20.0
     port: int = 8765
     voices: bool = True
+    # Необязательная конвенция хранилища задач (meet.assist.context): заметка-
+    # индекс в корне и приставка имени заметки-хаба задачи.
+    vault_index: str = "Claude Docs.md"
+    hub_prefix: str = "_"
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Assist":
         vault = as_path(raw.get("vault"))
         if vault is None:
             vault = as_path(os.environ.get("MEET_VAULT"))
+        index = raw.get("vault_index")
+        prefix = raw.get("hub_prefix")
         return cls(
             vault=vault,
             window_seconds=as_positive(raw.get("window_seconds"), 20.0, 1.0),
             port=as_int(raw.get("port"), 8765, 1024),
             voices=as_flag(raw.get("voices"), True),
+            vault_index=index.strip() if isinstance(index, str) else "Claude Docs.md",
+            hub_prefix=prefix if isinstance(prefix, str) else "_",
         )
 
     def to_raw(self) -> dict:
@@ -581,6 +589,8 @@ class Assist:
             "window_seconds": self.window_seconds,
             "port": self.port,
             "voices": self.voices,
+            "vault_index": self.vault_index,
+            "hub_prefix": self.hub_prefix,
         }
 
 
@@ -864,6 +874,7 @@ def migrate(raw: dict) -> dict:
       запуск Claude Code в Windows Terminal, окно регулярной встречи 11:00–12:00.
     * v1 — первая схема: то же, но флаг уже в `hooks.post_record`, а окно
       называлось `daily_window`.
+    * v2 версии 0.1.0 — без `auto_record.processes`: прежние умолчания.
 
     Старые ключи из словаря не выбрасываем: `save()` их сохранит, и файл
     останется понятным предыдущей версии кода.
@@ -872,7 +883,13 @@ def migrate(raw: dict) -> dict:
         return {}
     version = raw.get("version")
     if version == SCHEMA_VERSION:
-        return raw
+        # v2 0.1.0 без сохранённого списка программ жил на прежних умолчаниях
+        # (с Webex) — с ними и остаётся. Эта версия пишет список всегда, так
+        # что новые умолчания достаются только новой установке.
+        auto_record = _section(raw, "auto_record")
+        if "processes" in auto_record:
+            return raw
+        return {**raw, "auto_record": {**auto_record, "processes": list(HISTORIC_PROCESSES)}}
     migrated = dict(raw)
     hooks = dict(_section(migrated, "hooks"))
     if "post_record_hook" in raw:  # v0

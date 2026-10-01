@@ -67,6 +67,24 @@ def test_old_config_without_processes_keeps_the_historic_defaults(tmp_path):
     assert "Webex.exe" in settings.HISTORIC_PROCESSES
 
 
+def test_v2_config_of_version_010_without_processes_keeps_the_old_defaults(tmp_path):
+    """Конфиг 0.1.0 уже v2, но без сохранённого списка программ:
+    у него тоже остаются прежние умолчания, Webex в том числе."""
+    f = tmp_path / "config.json"
+    _write(f, {"version": 2, "auto_record": {"enabled": True}, "ui": {"wizard_done": True}})
+    assert settings.load(f).auto_record.processes == list(settings.HISTORIC_PROCESSES)
+    _write(f, {"version": 2, "recording": {"speaker_name": "Вы"}})
+    assert settings.load(f).auto_record.processes == list(settings.HISTORIC_PROCESSES)
+
+
+def test_config_saved_by_this_version_keeps_the_new_defaults(tmp_path):
+    f = tmp_path / "config.json"
+    settings.patch({"ui": {"wizard_done": True}}, f)
+    raw = json.loads(f.read_text(encoding="utf-8"))
+    assert raw["auto_record"]["processes"] == list(settings.DEFAULT_PROCESSES)
+    assert settings.load(f).auto_record.processes == list(settings.DEFAULT_PROCESSES)
+
+
 def test_historic_hook_prompts_name_no_particular_setup():
     """Миграционные тексты хука — без чужих скиллов и личных сценариев."""
     for text in (settings.HISTORIC_HOOK_PROMPT, settings.HISTORIC_RECURRING_PROMPT):

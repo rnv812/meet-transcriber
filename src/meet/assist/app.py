@@ -79,11 +79,14 @@ class AssistState:
 
     def __init__(self, *, bus: TranscriptBus, digest: Digest, glossary: str,
                  vault: Path | None, cwd: Path,
-                 knowledge: Path | None = None) -> None:
+                 knowledge: Path | None = None,
+                 vault_index: str = "Claude Docs.md", hub_prefix: str = "_") -> None:
         self.bus = bus
         self.digest = digest
         self._glossary = glossary
         self._vault = vault
+        self._vault_index = vault_index
+        self._hub_prefix = hub_prefix
         self._cwd = cwd
         self._knowledge = _knowledge_path(knowledge, vault)
         self._task_context = ""
@@ -118,7 +121,8 @@ class AssistState:
     async def set_task(self, task: str) -> None:
         if self._vault is not None:
             self._task_context = await asyncio.to_thread(
-                collect_task_context, self._vault, task)
+                collect_task_context, self._vault, task,
+                index=self._vault_index, hub_prefix=self._hub_prefix)
         self._rebuild()
 
     def status(self) -> str | None:
@@ -307,6 +311,7 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         glossary=load_glossary(paths.lexicon_dir()),
         vault=vault_path, cwd=out_dir,
         knowledge=Path(knowledge_dir) if knowledge_dir else None,
+        vault_index=cfg.assist.vault_index, hub_prefix=cfg.assist.hub_prefix,
     )
     engine = LiveEngine(out_dir, Transcriber(), window_seconds=window_seconds,
                         hotwords=_load_hotwords(hotwords),
