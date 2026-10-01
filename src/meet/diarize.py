@@ -26,16 +26,59 @@ class Diarization:
     turns: list[tuple[float, float, str]]
     embeddings: dict[str, np.ndarray] | None = None
     overlaps: list[tuple[float, float]] | None = None
+    # Диаризация пропущена — почему (SKIPPED_NO_TOKEN / SKIPPED_NO_ACCESS).
+    # None — диаризация была. Пропущенная не несёт ни интервалов, ни голосов.
+    skipped: str | None = None
 
 
-# Без токена диаризации нет, но расшифровка идёт: реплики подписываются по
-# дорожкам («Собеседник» / «Вы»), а транскрипт помечается skipped_no_token.
+# Диаризации нет, но расшифровка идёт: реплики подписываются по дорожкам
+# («Собеседник» / «Вы»), а транскрипт получает пометку с причиной.
+SKIPPED_NO_TOKEN = "skipped_no_token"
+SKIPPED_NO_ACCESS = "skipped_no_access"
+
 # Печатается в консоль: только ASCII-пунктуация, cp866 не кодирует тире.
 NO_TOKEN_NOTE = (
     "Нет токена Hugging Face: расшифровка без разделения на спикеров. Токен: "
     "https://hf.co/settings/tokens, условия модели: "
     "https://hf.co/pyannote/speaker-diarization-community-1"
 )
+NO_ACCESS_NOTE = (
+    "Нет доступа к модели диаризации ({reason}): расшифровка без разделения на "
+    "спикеров. Проверьте токен и условия модели: "
+    "https://hf.co/pyannote/speaker-diarization-community-1"
+)
+
+
+def _access_reason(error: Exception) -> str:
+    """Причина отказа HF без текста исключения: только класс и HTTP-код."""
+    status = getattr(getattr(error, "response", None), "status_code", None)
+    return f"{type(error).__name__}, HTTP {status}" if status else type(error).__name__
+
+
+def _load_pipeline(token: str):
+    """Пайплайн pyannote или None, если Hugging Face не пустил.
+
+    Неверный, отозванный токен, непринятые условия, fine-grained токен без
+    доступа к гейтед-репозиториям: pyannote 4.x ловит HfHubHTTPError сам и
+    возвращает None (а `pipe.to` потом падал AttributeError — уже после
+    распознавания); часть путей бросает ошибку hub наружу. И то и другое —
+    «нет доступа», а не повод терять расшифровку."""
+    from pyannote.audio import Pipeline
+
+    try:
+        from huggingface_hub.errors import HfHubHTTPError, LocalEntryNotFoundError
+
+        access_errors: tuple = (HfHubHTTPError, LocalEntryNotFoundError)
+    except ImportError:
+        access_errors = ()
+    try:
+        pipe = Pipeline.from_pretrained(DIARIZATION_MODEL, token=token)
+    except access_errors as e:
+        print(NO_ACCESS_NOTE.format(reason=_access_reason(e)))
+        return None
+    if pipe is None:
+        print(NO_ACCESS_NOTE.format(reason="модель не загрузилась"))
+    return pipe
 
 
 def _load_wav(path: Path):
@@ -60,11 +103,12 @@ def diarize_wav(
     min_speakers: int | None = None,
     max_speakers: int | None = None,
     exclusive: bool = False,
-) -> Diarization | None:
+) -> Diarization:
     """Diarization (интервалы + эмбеддинги + регионы нахлёста) по записи.
 
-    Нет токена Hugging Face (модель гейтед) — None: вызывающий расшифровывает
-    без разделения на спикеров, а не падает.
+    Нет токена Hugging Face или нет доступа к гейтед-модели — пустая
+    Diarization со `skipped` (причина): вызывающий расшифровывает без
+    разделения на спикеров, а не падает.
 
     По умолчанию — overlap-aware раскладка: turn говорящего непрерывен,
     перебивание лежит поверх, зоны нахлёста возвращаются отдельно.
@@ -75,13 +119,14 @@ def diarize_wav(
     token = credentials.get_hf_token()
     if not token:
         print(NO_TOKEN_NOTE)
-        return None
-
-    import torch
-    from pyannote.audio import Pipeline
+        return Diarization(turns=[], skipped=SKIPPED_NO_TOKEN)
 
     print("Диаризация...")
-    pipe = Pipeline.from_pretrained(DIARIZATION_MODEL, token=token)
+    pipe = _load_pipeline(token)
+    if pipe is None:
+        return Diarization(turns=[], skipped=SKIPPED_NO_ACCESS)
+    import torch
+
     from meet.asr import resolve_device
 
     # На машине без NVIDIA (или с CPU-сборкой torch) pyannote идёт на CPU —

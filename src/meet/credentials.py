@@ -52,12 +52,17 @@ def keyring_get() -> str | None:
 
 
 def keyring_set(token: str) -> None:
-    """Записать в диспетчер. Ошибка бэкенда — Unavailable (без токена в тексте)."""
+    """Записать в диспетчер и прочитать обратно. Ошибка бэкенда или запись,
+    которая не читается тем же значением (бэкенд молча её потерял), —
+    Unavailable (без токена в тексте): тогда копию в config.json стирать
+    нельзя."""
     kr = _keyring()
     try:
         kr.set_password(SERVICE, USERNAME, token)
     except Exception as e:
         raise Unavailable(f"запись не удалась ({type(e).__name__})") from None
+    if keyring_get() != token:
+        raise Unavailable("запись не подтвердилась чтением")
 
 
 def keyring_delete() -> None:
@@ -105,6 +110,15 @@ def lookup() -> tuple[str | None, str | None]:
     value = _from_config()
     if value:
         return value, CONFIG
+    # Чтение config.json могло само перенести токен в диспетчер (миграция в
+    # settings.load) — или это сделал другой процесс между нашими чтениями.
+    # Тогда в файле его уже нет, а в диспетчере есть: смотрим ещё раз.
+    try:
+        value = keyring_get()
+    except Unavailable:
+        value = None
+    if value:
+        return value, KEYRING
     return None, None
 
 
@@ -135,6 +149,7 @@ def set_hf_token(token: str, config=None) -> str:
     except Unavailable:
         settings.write_hf_token(token, config)
         return CONFIG
+    settings.keyring_works_again()
     settings.drop_hf_token(config)
     return KEYRING
 

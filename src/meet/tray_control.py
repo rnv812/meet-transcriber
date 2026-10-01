@@ -425,6 +425,9 @@ class TrayControl:
         return settings.load().to_raw()
 
     def patch_settings(self, updates: dict) -> dict:
+        integrations = (updates or {}).get("integrations")
+        if isinstance(integrations, dict) and str(integrations.get("hf_token") or "").strip():
+            self._hf_check = None  # токен сменился — прежняя проверка не о нём
         updated = settings.patch(updates or {})
         touched = [name for name in RESTART_REQUIRED_SECTIONS if name in (updates or {})]
         return {
@@ -706,9 +709,9 @@ class TrayControl:
 
     # --- токен Hugging Face ------------------------------------------------
     #
-    # Проверка — сетевой запрос до 10 с; идёт прямо в потоке запроса: сервер
-    # многопоточный, остальные запросы не ждут. Токен не уходит ни в ответ,
-    # ни в журнал.
+    # Проверка — сетевые запросы, всего до 12 с (models.HF_CHECK_TOTAL_S); идёт
+    # прямо в потоке запроса: сервер многопоточный, остальные запросы не ждут.
+    # Токен не уходит ни в ответ, ни в журнал.
 
     def hf_status(self) -> dict:
         from meet import credentials
@@ -726,9 +729,11 @@ class TrayControl:
             raise _bad_request("пустой токен")
         token = token.strip()
         result = models_module.check_hf_access(token)
-        self._hf_check = result
         if result.get("ok"):
             where = credentials.set_hf_token(token)
+            # Кэш — о сохранённом токене: меняется только вместе с ним.
+            # Неудачная проверка нового токена старый не трогает.
+            self._hf_check = result
             self.tray.log(f"токен HF сохранён ({where})")
         return result
 

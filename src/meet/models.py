@@ -126,7 +126,11 @@ def token() -> str | None:
 # --- проверка доступа к гейтед-модели ---------------------------------------
 
 HF_BASE_URL = "https://huggingface.co"
-HF_CHECK_TIMEOUT_S = 10
+# Проверка целиком укладывается в HF_CHECK_TOTAL_S (жёстко, по часам, а не
+# по таймауту сокета): whoami получает до HF_WHOAMI_TIMEOUT_S, HEAD на модель —
+# остаток. Клиенту (мастер, окно) хватает таймаута 15 с.
+HF_CHECK_TOTAL_S = 12.0
+HF_WHOAMI_TIMEOUT_S = 8.0
 # Что проверяем: модель диаризации — единственная гейтед-модель каталога.
 GATED_REPO = "pyannote/speaker-diarization-community-1"
 GATED_PROBE_FILE = "config.yaml"
@@ -172,9 +176,38 @@ def _hf_status(url: str, token: str, method: str, timeout: float) -> int:
         return e.code
 
 
+def _bounded(call, seconds: float):
+    """Вызов не дольше `seconds` по часам. Таймаут сокета ограничивает каждую
+    операцию, а не запрос целиком (медленная отдача по байту его обходит),
+    поэтому запрос идёт в фоновом потоке, а мы ждём не дольше срока. Поток
+    доживает своё по таймауту сокета; его результат уже никому не нужен."""
+    import threading
+
+    box: dict = {}
+
+    def run() -> None:
+        try:
+            box["value"] = call()
+        except BaseException as e:  # noqa: BLE001 — передаём ждущему как есть
+            box["error"] = e
+
+    worker = threading.Thread(target=run, name="hf-check", daemon=True)
+    worker.start()
+    worker.join(max(seconds, 0.0))
+    if worker.is_alive():
+        raise TimeoutError("проверка не уложилась в срок")
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
 def check_hf_access(token: str, base_url: str = HF_BASE_URL,
-                    timeout: float = HF_CHECK_TIMEOUT_S) -> dict:
+                    total_s: float = HF_CHECK_TOTAL_S,
+                    whoami_s: float = HF_WHOAMI_TIMEOUT_S) -> dict:
     """Проверить токен и доступ к модели диаризации.
+
+    Время: не больше `total_s` (12 с) на всё — whoami до `whoami_s` (8 с),
+    HEAD на модель — остаток. Клиенту достаточно таймаута 15 с.
 
     `GET /api/whoami-v2`: 401/403 — неверный токен. `HEAD .../resolve/main/
     config.yaml` гейтед-модели: 403 (или 401 — так HF отвечает на гейт) —
@@ -187,15 +220,24 @@ def check_hf_access(token: str, base_url: str = HF_BASE_URL,
     # ValueError, в тексте которого — сам заголовок с токеном.
     if not token or not token.isascii() or not token.isprintable() or " " in token:
         return _hf_result("invalid_token")
+    import time
+
     base = base_url.rstrip("/")
+    deadline = time.monotonic() + total_s
     try:
-        status = _hf_status(f"{base}/api/whoami-v2", token, "GET", timeout)
+        first = min(whoami_s, total_s)
+        status = _bounded(
+            lambda: _hf_status(f"{base}/api/whoami-v2", token, "GET", first), first)
         if status in (401, 403):
             return _hf_result("invalid_token")
         if not 200 <= status < 300:
             return _hf_result("network")
-        status = _hf_status(
-            f"{base}/{GATED_REPO}/resolve/main/{GATED_PROBE_FILE}", token, "HEAD", timeout)
+        rest = deadline - time.monotonic()
+        if rest <= 0:
+            return _hf_result("network")
+        status = _bounded(lambda: _hf_status(
+            f"{base}/{GATED_REPO}/resolve/main/{GATED_PROBE_FILE}", token, "HEAD", rest),
+            rest)
     except Exception:  # сеть, таймаут, TLS — без текста: он не нужен и рискован
         return _hf_result("network")
     if status in (401, 403):

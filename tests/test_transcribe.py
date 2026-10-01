@@ -328,11 +328,12 @@ def test_write_sidecar_stores_absolute_source(tmp_path, monkeypatch):
 # --- расшифровка без токена Hugging Face ------------------------------------
 
 
-def test_diarize_wav_without_token_returns_none(tmp_path):
+def test_diarize_wav_without_token_is_skipped(tmp_path):
     """Нет токена — диаризации нет, но и SystemExit нет: расшифровка идёт дальше."""
     from meet.diarize import NO_TOKEN_NOTE, diarize_wav
 
-    assert diarize_wav(tmp_path / "x.wav") is None
+    diar = diarize_wav(tmp_path / "x.wav")
+    assert diar.skipped == "skipped_no_token" and diar.turns == []
     NO_TOKEN_NOTE.encode("cp866")  # печатается в консоль: без тире и ёлочек
 
 
@@ -388,7 +389,7 @@ def test_no_token_skips_voice_matching(monkeypatch, tmp_path):
     src = tmp_path / "a.wav"
     src.write_bytes(b"x")
     segments, diar, names = tr._transcribe_single(src, None, None, align=False)
-    assert diar is None and names == {}
+    assert diar.skipped == "skipped_no_token" and names == {}
     assert [s.speaker for s in segments] == ["Собеседник"]
 
 
@@ -400,3 +401,76 @@ def test_with_token_transcript_has_no_skip_flag(monkeypatch, tmp_path):
     data = library.read_transcript(tmp_path)
     assert "diarization" not in data
     assert library.describe(tmp_path).to_raw()["diarization"] is None
+
+
+# --- токен есть, а доступа к модели нет ---------------------------------------
+
+
+def _fake_pyannote(monkeypatch, from_pretrained):
+    """Подменить pyannote.audio.Pipeline: настоящий не грузим (секунды и GPU)."""
+    import sys
+    import types
+
+    fake = types.ModuleType("pyannote.audio")
+
+    class Pipeline:
+        @staticmethod
+        def from_pretrained(checkpoint, token=None, **kw):
+            return from_pretrained(checkpoint, token)
+
+    fake.Pipeline = Pipeline
+    monkeypatch.setitem(sys.modules, "pyannote.audio", fake)
+
+
+def test_no_access_pipeline_none_skips_diarization(monkeypatch, tmp_path, capsys):
+    """pyannote 4.x на 401/403 от hub возвращает None (а не бросает): раньше
+    `pipe.to` падал AttributeError уже после распознавания — задача терялась."""
+    from meet import credentials, library
+
+    credentials.set_hf_token("hf_REVOKED_secret")
+    _fake_pyannote(monkeypatch, lambda checkpoint, token: None)
+    tr = _no_token_pipeline(monkeypatch)
+    folder = tmp_path / "2026-10-01_10-00"
+    folder.mkdir()
+    (folder / "sys.opus").write_bytes(b"x")
+    (folder / "mic.opus").write_bytes(b"x")
+    tr.transcribe(str(folder), align=False)
+    data = library.read_transcript(folder)
+    assert data["diarization"] == "skipped_no_access"
+    assert [s["speaker"] for s in data["segments"]] == ["Собеседник", "Вы"]
+    assert library.describe(folder).to_raw()["diarization"] == "skipped_no_access"
+    out = capsys.readouterr().out
+    assert "Нет доступа к модели диаризации" in out
+    assert "hf_REVOKED_secret" not in out
+
+
+def test_no_access_hub_error_skips_diarization(monkeypatch, tmp_path, capsys):
+    """Ошибка hub наружу (нет в кэше и не пускают) — тоже «нет доступа»."""
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    from meet import credentials
+    from meet.diarize import NO_ACCESS_NOTE, diarize_wav
+
+    credentials.set_hf_token("hf_REVOKED_secret")
+
+    def refuse(checkpoint, token):
+        raise LocalEntryNotFoundError("нет доступа")
+
+    _fake_pyannote(monkeypatch, refuse)
+    assert diarize_wav(tmp_path / "x.wav").skipped == "skipped_no_access"
+    out = capsys.readouterr().out
+    assert "LocalEntryNotFoundError" in out and "hf_REVOKED_secret" not in out
+    NO_ACCESS_NOTE.format(reason="x").encode("cp866")
+
+
+def test_access_reason_names_class_and_status_only():
+    from types import SimpleNamespace
+
+    from meet.diarize import _access_reason
+
+    class GatedRepoError(Exception):
+        pass
+
+    error = GatedRepoError("Authorization: Bearer hf_secret ...")
+    error.response = SimpleNamespace(status_code=403)
+    assert _access_reason(error) == "GatedRepoError, HTTP 403"

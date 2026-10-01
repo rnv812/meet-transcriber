@@ -985,7 +985,8 @@ def test_hf_token_saved_only_when_check_passes(control_state, monkeypatch, memor
     assert control_state.set_hf_token({"token": f" {HF} "}) == BAD
     assert seen == [HF]
     assert memory_keyring.store == {}
-    assert control_state.hf_status() == {"configured": False, "source": None, "check": BAD}
+    # кэш — о сохранённом токене; неудачная проверка нового его не меняет
+    assert control_state.hf_status() == {"configured": False, "source": None, "check": None}
 
     monkeypatch.setattr(models, "check_hf_access", lambda token, **kw: OK)
     assert control_state.set_hf_token({"token": HF}) == OK
@@ -1061,3 +1062,23 @@ def test_hf_routes_over_http(app, monkeypatch, memory_keyring):
     finally:
         srv.stop()
     assert memory_keyring.store == {}
+
+
+def test_hf_check_cache_resets_when_token_changes_elsewhere(control_state, monkeypatch):
+    """PATCH /settings с новым токеном (прежнее окно) — старая проверка уже
+    не о нём; неудачный POST нового токена не трогает кэш сохранённого."""
+    from meet import models
+
+    monkeypatch.setattr(models, "check_hf_access", lambda token, **kw: OK)
+    control_state.set_hf_token({"token": HF})
+    assert control_state.hf_status()["check"] == OK
+    monkeypatch.setattr(models, "check_hf_access", lambda token, **kw: BAD)
+    control_state.set_hf_token({"token": "hf_other"})
+    assert control_state.hf_status()["check"] == OK
+    control_state.patch_settings({"integrations": {"hf_token": ""}})  # пустое — не смена
+    assert control_state.hf_status()["check"] == OK
+    control_state.patch_settings({"integrations": {"hf_token": "hf_new"}})
+    assert control_state.hf_status() == {"configured": True, "source": "keyring",
+                                         "check": None}
+    control_state.clear_hf_token()
+    assert control_state.hf_status()["check"] is None

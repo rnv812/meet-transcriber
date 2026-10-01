@@ -706,8 +706,11 @@ KEYRING_UNAVAILABLE_LINE = (
     "диспетчер учётных данных недоступен — токен остаётся в config.json"
 )
 # Диспетчер не принял токен: до конца процесса не пробуем снова (load зовут
-# часто) и строку в журнал пишем один раз.
+# часто). Строка в журнал — одна на data dir, а не на процесс: иначе каждая
+# задача расшифровки (свой подпроцесс) дописывала бы её заново. Отметка —
+# файл рядом с журналом; диспетчер заработал — файл стирается.
 _MIGRATION_FAILED = False
+KEYRING_UNAVAILABLE_MARK = "keyring-unavailable.flag"
 
 
 def _reset_secret_migration() -> None:
@@ -724,6 +727,31 @@ def _is_app_config(path) -> bool:
         return Path(path).resolve() == paths.config_path().resolve()
     except OSError:
         return False
+
+
+def _mark_path() -> Path:
+    return paths.data_dir() / KEYRING_UNAVAILABLE_MARK
+
+
+def _report_keyring_unavailable() -> None:
+    """Строка о недоступном диспетчере — один раз, пока он не заработает."""
+    mark = _mark_path()
+    if mark.exists():
+        return
+    _log(KEYRING_UNAVAILABLE_LINE)
+    try:
+        mark.parent.mkdir(parents=True, exist_ok=True)
+        mark.write_text("", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def keyring_works_again() -> None:
+    """Диспетчер принял токен: следующий отказ снова стоит строки в журнале."""
+    try:
+        _mark_path().unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _log(line: str) -> None:
@@ -765,11 +793,14 @@ def _migrate_hf_token(raw: dict) -> dict:
         if not token:  # другой поток уже перенёс
             return current
         try:
+            # keyring_set читает записанное обратно: поле в файле стираем, только
+            # если диспетчер действительно отдаёт тот же токен.
             credentials.keyring_set(token)
         except credentials.Unavailable:
             _MIGRATION_FAILED = True
-            _log(KEYRING_UNAVAILABLE_LINE)
+            _report_keyring_unavailable()
             return raw
+        keyring_works_again()
         cleaned = _without_hf_token(current)
         try:
             _write_raw(target, cleaned)
@@ -833,7 +864,10 @@ def patch(updates: dict, path: Path | None = None) -> Settings:
 def _route_hf_token(updates: dict, path: Path | None) -> dict:
     """`integrations.hf_token` из PATCH уходит в диспетчер учётных данных, а
     не в файл: окно настроек до мастера токена шлёт его именно так.
-    Пустая строка — забыть токен."""
+
+    Пустая строка — ничего не делать: прежнее окно шлёт поле пустым, просто
+    не показав сохранённый токен, и стирать из-за этого секрет нельзя.
+    Забыть токен — только явно, `DELETE /hf/token`."""
     integrations = updates.get("integrations") if isinstance(updates, dict) else None
     if not isinstance(integrations, dict) or "hf_token" not in integrations:
         return updates
@@ -843,6 +877,4 @@ def _route_hf_token(updates: dict, path: Path | None) -> dict:
     token = str(rest.pop("hf_token") or "").strip()
     if token:
         credentials.set_hf_token(token, path)
-    else:
-        credentials.clear_hf_token(path)
     return {**updates, "integrations": rest}

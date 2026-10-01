@@ -6,7 +6,7 @@ from pathlib import Path
 from meet import events, hotwords, paths
 from meet.asr import Segment, transcribe_wav
 from meet.audio import to_wav16k
-from meet.diarize import diarize_wav, split_by_speaker
+from meet.diarize import SKIPPED_NO_ACCESS, SKIPPED_NO_TOKEN, diarize_wav, split_by_speaker
 from meet.interleave import interleave_tracks
 from meet.output import speaker_names, to_markdown
 
@@ -14,13 +14,16 @@ from meet.output import speaker_names, to_markdown
 # там, чтобы счётчик в настройках резидента брал его, не импортируя этот модуль.
 HOTWORDS_CHAR_BUDGET = hotwords.HOTWORDS_CHAR_BUDGET
 
-# Без токена Hugging Face диаризации нет (модель гейтед), но расшифровка идёт:
-# системная дорожка и импорт — один «Собеседник», микрофон — владелец машины.
-# Транскрипт получает пометку, по которой окно говорит «без разделения на
-# спикеров — настройте Hugging Face».
+# Без токена Hugging Face (или без доступа к гейтед-модели) диаризации нет, но
+# расшифровка идёт: системная дорожка и импорт — один «Собеседник», микрофон —
+# владелец машины. Транскрипт получает пометку (`diarization`: skipped_no_token
+# / skipped_no_access), по которой окно говорит «без разделения на спикеров —
+# настройте Hugging Face».
 INTERLOCUTOR = "Собеседник"
-SKIPPED_NO_TOKEN = "skipped_no_token"
-_SKIPPED_NOTE = "пропущено: нет токена Hugging Face"
+_SKIPPED_NOTES = {
+    SKIPPED_NO_TOKEN: "пропущено: нет токена Hugging Face",
+    SKIPPED_NO_ACCESS: "пропущено: нет доступа к модели Hugging Face",
+}
 
 
 def _cap_hotwords(terms: list[str], budget: int = HOTWORDS_CHAR_BUDGET) -> list[str]:
@@ -99,8 +102,8 @@ def _match_names(diar) -> dict[str, str]:
 
     Пустая/отсутствующая база и любые ошибки матчинга не роняют
     транскрибацию (паттерн как у forced alignment). Нет диаризации (нет
-    токена) — нечего и сопоставлять."""
-    if diar is None or not diar.embeddings:
+    токена или доступа) — нечего и сопоставлять."""
+    if diar is None or diar.skipped or not diar.embeddings:
         return {}
     try:
         import meet.voices as voices
@@ -188,7 +191,7 @@ def transcribe(
     out_md.write_text(to_markdown(title, segments, iso), encoding="utf-8")
     _write_sidecar(out_md, path, iso, segments, diar, name_map)
     _write_structured(path, segments, title, name_map,
-                      diarization=SKIPPED_NO_TOKEN if diar is None else None)
+                      diarization=diar.skipped if diar is not None else None)
     print(f"Готово: {out_md}")
     bus.progress("render", done=1, total=1, note=str(out_md))
     return out_md
@@ -203,8 +206,8 @@ def _write_structured(path: Path, segments, title: str, name_map: dict,
     видит человек, но в виде данных. Пишем только для папки записи: у одиночного
     файла нет своей папки, и класть json рядом с чужим видео некрасиво.
 
-    `diarization` — пометка о пропущенной диаризации (`skipped_no_token`); с
-    диаризацией поля нет вовсе, как и раньше."""
+    `diarization` — пометка о пропущенной диаризации (`skipped_no_token`,
+    `skipped_no_access`); с диаризацией поля нет вовсе, как и раньше."""
     if not path.is_dir():
         return
     from meet import library
@@ -279,11 +282,11 @@ def _transcribe_single(
         segments = _maybe_align(segments, wav, align)
         bus.progress("diarize")
         diar = diarize_wav(wav, num_speakers=speakers, exclusive=not overlap)
-        if diar is None:
-            bus.progress("diarize", note=_SKIPPED_NOTE)
+        if diar.skipped:
+            bus.progress("diarize", note=_SKIPPED_NOTES.get(diar.skipped))
             for seg in segments:
                 seg.speaker = INTERLOCUTOR
-            return segments, None, {}
+            return segments, diar, {}
         bus.progress("voices")
         name_map = _match_names(diar)
         segments = split_by_speaker(
@@ -319,8 +322,8 @@ def _transcribe_two_track(
         sys_segs = _maybe_align(sys_segs, sys_wav, align)
         bus.progress("diarize", note="sys")
         diar = diarize_wav(sys_wav, num_speakers=speakers, exclusive=not overlap)
-        if diar is None:
-            bus.progress("diarize", note=_SKIPPED_NOTE)
+        if diar.skipped:
+            bus.progress("diarize", note=_SKIPPED_NOTES.get(diar.skipped))
             name_map = {}
             for seg in sys_segs:
                 seg.speaker = INTERLOCUTOR

@@ -172,8 +172,6 @@ def test_patch_with_token_goes_to_keyring(memory_keyring):
     raw = _raw_config()
     assert "hf_token" not in raw["integrations"]
     assert raw["integrations"]["gpu_marker"] is False
-    settings.patch({"integrations": {"hf_token": ""}})
-    assert memory_keyring.store == {}
 
 
 # --- проверка доступа -------------------------------------------------------
@@ -288,11 +286,112 @@ def test_check_rejects_malformed_token_without_network():
     assert "hf_abc" not in json.dumps(result, ensure_ascii=False)
 
 
-def test_check_timeout_is_ten_seconds():
-    assert models.HF_CHECK_TIMEOUT_S == 10
+def test_check_time_budget_constants():
+    """Мастер ставит клиенту таймаут 15 с: проверка обязана уложиться в 12."""
+    assert models.HF_CHECK_TOTAL_S == 12
+    assert models.HF_WHOAMI_TIMEOUT_S == 8
+
+
+def test_check_total_time_is_capped():
+    """Сервер принял соединение и молчит: проверка всё равно возвращается к
+    сроку (по часам, а не по таймауту сокета) — «нет связи»."""
+    import socket
+    import time
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(5)  # соединения принимаются ядром, ответа нет никогда
+    try:
+        port = listener.getsockname()[1]
+        started = time.monotonic()
+        result = models.check_hf_access(TOKEN, base_url=f"http://127.0.0.1:{port}",
+                                        total_s=1.0, whoami_s=0.6)
+        elapsed = time.monotonic() - started
+    finally:
+        listener.close()
+    assert result["reason"] == "network"
+    assert elapsed < 1.5
 
 
 def test_models_state_sees_keyring_token():
     assert models.state()["token"] is False
     credentials.set_hf_token(TOKEN)
     assert models.state()["token"] is True
+
+
+# --- доработки по ревью -------------------------------------------------------
+
+
+def test_first_get_in_process_sees_token_being_migrated(memory_keyring):
+    """Первый get_hf_token() сам запускает миграцию (через settings.load) и
+    не должен вернуть None: в файле токена уже нет, а в диспетчере — есть."""
+    _config({"integrations": {"hf_token": TOKEN}})
+    assert credentials.get_hf_token() == TOKEN
+    assert credentials.hf_token_source() == "keyring"
+    assert "hf_token" not in _raw_config()["integrations"]
+
+
+def test_unavailable_line_once_per_data_dir_not_per_process(failing_keyring):
+    """Каждая задача расшифровки — свой процесс: строка о недоступном
+    диспетчере не должна повторяться на каждой."""
+    _config({"integrations": {"hf_token": TOKEN}})
+    for _ in range(3):
+        settings._reset_secret_migration()  # «новый процесс»
+        settings.load()
+    line = "диспетчер учётных данных недоступен — токен остаётся в config.json"
+    assert _watch_log().count(line) == 1
+
+
+def test_unavailable_line_returns_after_keyring_worked_again(failing_keyring):
+    import keyring
+
+    from conftest import _memory_backend
+
+    line = "диспетчер учётных данных недоступен — токен остаётся в config.json"
+    _config({"integrations": {"hf_token": TOKEN}})
+    settings.load()
+    keyring.set_keyring(_memory_backend())  # диспетчер ожил: токен переехал
+    settings._reset_secret_migration()
+    settings.load()
+    assert "hf_token" not in _raw_config()["integrations"]
+    keyring.set_keyring(_FailingKeyring())  # и снова сломался
+    _config({"integrations": {"hf_token": TOKEN}})
+    settings._reset_secret_migration()
+    settings.load()
+    assert _watch_log().count(line) == 2
+
+
+def test_migration_keeps_field_when_keyring_loses_the_write():
+    """Бэкенд принял запись без ошибки, но читает другое (или ничего) — поле
+    в config.json стирать нельзя: иначе токен пропадёт совсем."""
+    import keyring
+    from keyring.backend import KeyringBackend
+
+    class Forgetful(KeyringBackend):
+        priority = 1
+
+        def get_password(self, service, username):
+            return None
+
+        def set_password(self, service, username, password):
+            pass
+
+        def delete_password(self, service, username):
+            pass
+
+    keyring.set_keyring(Forgetful())
+    _config({"integrations": {"hf_token": TOKEN}})
+    settings.load()
+    assert _raw_config()["integrations"]["hf_token"] == TOKEN
+    assert credentials.get_hf_token() == TOKEN
+    assert "перенесён" not in _watch_log()
+
+
+def test_patch_with_empty_token_keeps_stored_token(memory_keyring):
+    """Прежнее окно шлёт поле пустым, не зная сохранённого значения: это не
+    «забыть токен». Забыть — только DELETE /hf/token."""
+    credentials.set_hf_token(TOKEN)
+    settings.patch({"integrations": {"hf_token": "", "gpu_marker": False}})
+    settings.patch({"integrations": {"hf_token": None}})
+    assert memory_keyring.store[("meet", "huggingface")] == TOKEN
+    assert settings.load().integrations.gpu_marker is False
