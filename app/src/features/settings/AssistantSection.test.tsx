@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
+import { AUTO_ORDER } from "./AssistantSection";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import type { AssistantInfo, ProviderCheck } from "../../lib/types";
@@ -95,6 +96,15 @@ test("не найден Claude Code — ссылка claude.ai/code; локал�
   expect(within(option("Локальная (LM Studio / Ollama)"))
     .getByText("адрес: http://127.0.0.1:1234/v1 — доступен")).toBeInTheDocument();
   expect(within(option("Авто")).getByText("сейчас: Локальная (LM Studio / Ollama)")).toBeInTheDocument();
+});
+
+test("выбран Codex — «Авто» не выдаёт Codex за свой выбор, а показывает порядок", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(merge(structuredClone(settings), { llm: { provider: "codex" } }));
+  vi.mocked(api.getAssistant).mockResolvedValue({ ...structuredClone(info), provider: "codex", setting: "codex" });
+  open();
+  const auto = await screen.findByRole("group", { name: "Авто" });
+  expect(await within(auto).findByText(AUTO_ORDER)).toBeInTheDocument();
+  expect(within(auto).queryByText(/сейчас:/)).not.toBeInTheDocument();
 });
 
 test("пока резидент проверяет вход — у «Авто» «определяю…»", async () => {

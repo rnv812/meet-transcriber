@@ -58,6 +58,9 @@ export function assistantChangesInvalid(changes: Raw): boolean {
   return (typeof subdir === "string" && subdirInvalid(subdir)) || (win !== undefined && windowInvalid(win));
 }
 
+/** Подпись «Авто», пока выбран конкретный провайдер: порядок выбора (llm.resolve). */
+export const AUTO_ORDER = "первый готовый: Claude Code → Codex → локальная";
+
 const titleOf = (name: string) => PROVIDERS.find((p) => p.value === name)?.label ?? name;
 
 type Check = { busy: boolean; ok?: boolean; text?: string };
@@ -65,6 +68,9 @@ type Check = { busy: boolean; ok?: boolean; text?: string };
 function status(p: Provider, info: AssistantInfo | null): string | null {
   if (!info) return null;
   if (p.value === "auto") {
+    // `provider` — кто отвечает при СОХРАНЁННОМ выборе: при явном Codex это
+    // Codex, а не то, кого взял бы «Авто» (он предпочёл бы Claude Code).
+    if (info.setting !== "auto") return AUTO_ORDER;
     if (info.provider) return `сейчас: ${titleOf(info.provider)}`;
     return info.checking ? "определяю…" : "нет доступного провайдера";
   }
