@@ -59,7 +59,7 @@ pub const STOP_FAILED: &str = "Не удалось остановить запи
 pub const CANCEL_FAILED: &str = "Не удалось отменить запись";
 pub const AUTO_FAILED: &str = "Не удалось переключить автозапись";
 pub const LIVE_LISTENING: &str = "Ассистент слушает встречу";
-pub const LIVE_SAVED: &str = "Ассистент остановлен — расшифровываю";
+pub const LIVE_SAVED: &str = "Ассистент остановлен — запись сохранена";
 /// Остановлен, но с ошибкой (не дописал, вышел с кодом): текст — в теле.
 pub const LIVE_STOPPED_WITH_ERROR: &str = "Ассистент остановлен";
 pub const LIVE_FAILED: &str = "Ассистент упал";
@@ -199,12 +199,14 @@ impl View {
             .map(Vec::as_slice)
             .unwrap_or_default();
         for job in items {
+            // Только расшифровка и импорт: итоги и вопросы (summary/ask) —
+            // не «расшифровываю», у них своя очередь и своё место в окне.
+            if !matches!(str_at(job, "kind"), Some("transcribe" | "import")) {
+                continue;
+            }
             let job_state = str_at(job, "state").unwrap_or_default();
             if job_state == "running" {
                 view.busy = true;
-            }
-            if !matches!(str_at(job, "kind"), Some("transcribe" | "import")) {
-                continue;
             }
             let Some(id) = str_at(job, "folder").and_then(recording_id) else {
                 continue;
@@ -1831,10 +1833,25 @@ mod tests {
         }
     }
 
-    fn live_ended(error: Option<&str>) -> View {
+    fn view_after_live(error: Option<&str>) -> View {
         let mut view = idle();
         view.live.error = error.map(str::to_string);
         view
+    }
+
+    #[test]
+    fn busy_means_transcription_not_summary_or_question() {
+        // Итоги и вопросы (вторая очередь) — не «расшифровываю».
+        let jobs = json!({"items": [
+            {"kind": "summary", "folder": "D:\\rec\\a", "state": "running", "error": null},
+            {"kind": "ask", "folder": "D:\\rec\\b", "state": "running", "error": null},
+        ]});
+        let v = View::from_json(&json!({"status": "idle"}), &jobs);
+        assert!(!v.busy);
+        let jobs = json!({"items": [
+            {"kind": "import", "folder": "D:\\rec\\c", "state": "running", "error": null},
+        ]});
+        assert!(View::from_json(&json!({"status": "idle"}), &jobs).busy);
     }
 
     #[test]
@@ -1884,20 +1901,20 @@ mod tests {
     }
 
     #[test]
-    fn live_clean_stop_says_transcribing() {
-        let n = transitions(Some(&with_live(true, false, true)), &live_ended(None));
-        assert_eq!(titles(&n), vec!["Ассистент остановлен — расшифровываю"]);
+    fn live_clean_stop_says_recording_saved() {
+        let n = transitions(Some(&with_live(true, false, true)), &view_after_live(None));
+        assert_eq!(titles(&n), vec!["Ассистент остановлен — запись сохранена"]);
         assert_eq!(n[0].recording.as_deref(), Some("2026-10-01_10-00"));
         // Ассистент вышел сам, без ошибки — это тоже штатная остановка.
-        let n = transitions(Some(&with_live(true, false, false)), &live_ended(None));
-        assert_eq!(titles(&n), vec!["Ассистент остановлен — расшифровываю"]);
+        let n = transitions(Some(&with_live(true, false, false)), &view_after_live(None));
+        assert_eq!(titles(&n), vec!["Ассистент остановлен — запись сохранена"]);
     }
 
     #[test]
     fn live_stop_with_error_carries_the_error() {
         let n = transitions(
             Some(&with_live(true, false, true)),
-            &live_ended(Some("Ассистент не дописал запись за отведённое время")),
+            &view_after_live(Some("Ассистент не дописал запись за отведённое время")),
         );
         assert_eq!(titles(&n), vec!["Ассистент остановлен"]);
         assert_eq!(n[0].body, "Ассистент не дописал запись за отведённое время");
@@ -1908,34 +1925,34 @@ mod tests {
     fn live_error_without_stop_is_a_crash() {
         let n = transitions(
             Some(&with_live(true, false, false)),
-            &live_ended(Some("CUDA out of memory")),
+            &view_after_live(Some("CUDA out of memory")),
         );
         assert_eq!(titles(&n), vec!["Ассистент упал"]);
         assert_eq!(n[0].body, "CUDA out of memory");
         // Не поднялся вовсе.
         let n = transitions(
             Some(&with_live(false, true, false)),
-            &live_ended(Some("Ассистент не запустился за 120 с")),
+            &view_after_live(Some("Ассистент не запустился за 120 с")),
         );
         assert_eq!(titles(&n), vec!["Ассистент упал"]);
         assert_eq!(n[0].recording, None);
         let long = "ё".repeat(300);
         let n = transitions(
             Some(&with_live(true, false, false)),
-            &live_ended(Some(&long)),
+            &view_after_live(Some(&long)),
         );
         assert_eq!(n[0].body.chars().count(), 120);
     }
 
     #[test]
     fn live_stopped_before_start_is_a_cancel() {
-        let n = transitions(Some(&with_live(false, true, true)), &live_ended(None));
+        let n = transitions(Some(&with_live(false, true, true)), &view_after_live(None));
         assert_eq!(titles(&n), vec!["Запуск ассистента отменён"]);
     }
 
     #[test]
     fn stale_live_error_is_not_repeated() {
-        let failed = live_ended(Some("упал"));
+        let failed = view_after_live(Some("упал"));
         assert!(transitions(Some(&failed), &failed).is_empty());
     }
 

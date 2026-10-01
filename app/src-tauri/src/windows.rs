@@ -171,6 +171,26 @@ pub fn anchored_top(top: f64, height: f64, new_height: f64) -> f64 {
     top + height - new_height
 }
 
+/// Порядок двух вызовов при смене высоты панели.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ResizeOrder {
+    /// Растёт: сначала поднять верх, потом вытянуть.
+    MoveThenSize,
+    /// Сжимается: сначала укоротить, потом опустить.
+    SizeThenMove,
+}
+
+/// Между двумя вызовами окно на кадр видно: при обратном порядке растущая
+/// панель свисала бы ниже нижнего края (за панель задач), а сжимающаяся —
+/// на кадр уезжала бы вниз целиком.
+pub fn resize_order(height: f64, new_height: f64) -> ResizeOrder {
+    if new_height > height {
+        ResizeOrder::MoveThenSize
+    } else {
+        ResizeOrder::SizeThenMove
+    }
+}
+
 /// Открыть панель ассистента. Только с главного потока (`run_on_main_thread`
 /// из опроса трея). Уже открыта — не трогаем: фокус она не забирает.
 pub fn open_live(app: &AppHandle) {
@@ -232,12 +252,26 @@ pub fn live_resize(app: AppHandle, height: f64) -> Result<(), String> {
         f64::from(outer.height),
         new_height + frame,
     );
-    window
-        .set_size(PhysicalSize::new(inner.width, new_height as u32))
-        .map_err(|error| error.to_string())?;
-    window
-        .set_position(PhysicalPosition::new(position.x, top.round() as i32))
-        .map_err(|error| error.to_string())
+    let size = || {
+        window
+            .set_size(PhysicalSize::new(inner.width, new_height as u32))
+            .map_err(|error| error.to_string())
+    };
+    let place = || {
+        window
+            .set_position(PhysicalPosition::new(position.x, top.round() as i32))
+            .map_err(|error| error.to_string())
+    };
+    match resize_order(f64::from(outer.height), new_height + frame) {
+        ResizeOrder::MoveThenSize => {
+            place()?;
+            size()
+        }
+        ResizeOrder::SizeThenMove => {
+            size()?;
+            place()
+        }
+    }
 }
 
 #[tauri::command]
@@ -464,6 +498,16 @@ mod tests {
         // Было 120 высотой с верхом на 904 (низ 1024) — стало 520.
         assert_eq!(anchored_top(904.0, 120.0, 520.0), 504.0);
         assert_eq!(anchored_top(504.0, 520.0, 120.0), 904.0);
+    }
+
+    #[test]
+    fn resize_order_never_overshoots_the_bottom_edge() {
+        // Растёт — сначала поднять верх, потом вытянуть: иначе на кадр
+        // панель свисала бы ниже панели задач.
+        assert_eq!(resize_order(120.0, 520.0), ResizeOrder::MoveThenSize);
+        // Сжимается — сначала укоротить, потом опустить.
+        assert_eq!(resize_order(520.0, 120.0), ResizeOrder::SizeThenMove);
+        assert_eq!(resize_order(300.0, 300.0), ResizeOrder::SizeThenMove);
     }
 
     fn argv(items: &[&str]) -> Vec<String> {
