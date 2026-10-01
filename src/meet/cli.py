@@ -1,5 +1,6 @@
 import argparse
 import sys
+import time
 
 from meet import settings
 from meet.llm import PROVIDERS
@@ -51,7 +52,19 @@ def print_status() -> None:
         snap = control.request("/state")
     except RuntimeError as e:
         raise SystemExit(f"Статус недоступен: {e}")
-    if snap.get("status") == "recording":
+    live = snap.get("live") or {}
+    if live.get("active"):
+        # Запись с ассистентом: status резидента при ней остаётся idle —
+        # пишет дочерний `meet assist`, а не трей.
+        print(f"Идёт запись с ассистентом: {live.get('folder')}")
+        started = live.get("started_at")
+        if isinstance(started, (int, float)):
+            print(f"Длительность: {fmt_ts(max(0.0, time.time() - started))}")
+        if live.get("stopping"):
+            print("Ассистент останавливается — дописывает запись")
+    elif live.get("starting"):
+        print("Ассистент запускается (загружается модель распознавания)")
+    elif snap.get("status") == "recording":
         source = "вручную" if snap.get("source") == "manual" else "автоматически"
         print(f"Идёт запись ({source}): {snap.get('folder')}")
         print(f"Длительность: {fmt_ts(snap.get('elapsed_s') or 0)}")
@@ -62,6 +75,8 @@ def print_status() -> None:
             ))
     else:
         print("Записи нет.")
+    if live.get("error") and not live.get("active") and not live.get("starting"):
+        print(f"Ассистент, последний запуск: {live['error']}")
     auto = snap.get("auto_record") or {}
     print(
         f"Автозапись: {'включена' if auto.get('enabled') else 'выключена'}"
@@ -75,6 +90,26 @@ def print_status() -> None:
     print(f"Папка записей: {snap.get('recordings_dir')}")
     if snap.get("gpu_busy"):
         print("GPU занят: идёт транскрибация или живой режим")
+
+
+def live_stop() -> int:
+    """`meet live-stop`: остановить запись с ассистентом через резидента
+    (`POST /live/stop`) — штатно: ассистент дописывает дорожки, запись встаёт
+    в расшифровку. Убивать процесс по pid из lock'а нельзя: хвост пропадёт."""
+    from meet import control
+
+    try:
+        reply = control.request("/live/stop", method="POST", payload={})
+    except RuntimeError as e:
+        raise SystemExit(f"Не удалось остановить ассистента: {e}")
+    if reply.get("action") == "not-live":
+        print("Ассистент не запущен.")
+        return 1
+    folder = reply.get("folder")
+    print("Ассистент останавливается — дописывает запись"
+          + (f": {folder}" if folder else ""))
+    print("Готово, когда `meet status` перестанет показывать запись с ассистентом.")
+    return 0
 
 
 def _add_library_parsers(sub) -> None:
@@ -251,6 +286,11 @@ def main(argv: list[str] | None = None) -> int | None:
         help="состояние резидента: идёт ли запись, что видит детектор звонка",
     )
 
+    sub.add_parser(
+        "live-stop",
+        help="остановить запись с ассистентом (через резидента, штатно)",
+    )
+
     p_cmp = sub.add_parser(
         "compare", help="пословный диф спикеров между двумя транскриптами"
     )
@@ -304,6 +344,8 @@ def main(argv: list[str] | None = None) -> int | None:
                        parent_pid=args.parent_pid)
     elif args.command == "status":
         print_status()
+    elif args.command == "live-stop":
+        return live_stop()
     elif args.command == "enroll":
         from meet.voices import enroll
 

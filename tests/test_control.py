@@ -567,6 +567,77 @@ def test_status_prints_recording_details(server, capsys):
     assert "mic.opus 0.25" in out
 
 
+def _live_snapshot(server, **live):
+    base = {"active": False, "starting": False, "stopping": False, "folder": None,
+            "error": None, "started_at": None}
+    server.state.snapshot = lambda: {"status": "idle", "folder": None,
+                                     "live": {**base, **live}}
+
+
+def test_status_prints_live_recording(server, capsys):
+    """Запись с ассистентом — тоже запись: «Записи нет.» тут было бы враньём
+    (snapshot.status во время живого режима остаётся idle)."""
+    import time as _time
+
+    from meet.cli import print_status
+
+    _live_snapshot(server, active=True, folder="C:/rec/2026-10-01_10-00",
+                   started_at=_time.time() - 65)
+    print_status()
+    out = capsys.readouterr().out
+    assert "Записи нет." not in out
+    assert "Идёт запись с ассистентом: C:/rec/2026-10-01_10-00" in out
+    assert "Длительность: 01:0" in out
+
+
+def test_status_prints_live_starting_and_stopping(server, capsys):
+    from meet.cli import print_status
+
+    _live_snapshot(server, starting=True)
+    print_status()
+    assert "Ассистент запускается" in capsys.readouterr().out
+    _live_snapshot(server, active=True, stopping=True, folder="C:/rec/x",
+                   started_at=None)
+    print_status()
+    out = capsys.readouterr().out
+    assert "Идёт запись с ассистентом: C:/rec/x" in out
+    assert "останавливается" in out
+
+
+def test_status_prints_last_live_error_when_idle(server, capsys):
+    from meet.cli import print_status
+
+    _live_snapshot(server, error="Ассистент завершился (код 1)")
+    print_status()
+    out = capsys.readouterr().out
+    assert "Записи нет." in out
+    assert "Ассистент завершился (код 1)" in out
+
+
+def test_live_stop_command_posts_to_resident(server, capsys):
+    from meet import cli
+
+    assert cli.main(["live-stop"]) in (None, 0)
+    assert server.state.calls[-1] == "live.stop"
+    assert "останавливается" in capsys.readouterr().out
+
+
+def test_live_stop_command_when_not_live(server, capsys):
+    from meet import cli
+
+    server.state.live_stop = lambda: {"ok": False, "action": "not-live"}
+    assert cli.main(["live-stop"]) == 1
+    assert "не запущен" in capsys.readouterr().out
+
+
+def test_live_stop_command_without_resident(monkeypatch, tmp_path):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+    from meet import cli
+
+    with pytest.raises(SystemExit, match="Не удалось остановить ассистента"):
+        cli.main(["live-stop"])
+
+
 def test_processes_endpoint(server):
     assert _get(server, "/processes")["running"] == ["Zoom.exe"]
 
