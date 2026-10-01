@@ -513,6 +513,19 @@ test("ошибка прошлой выгрузки (kb_export.error) видна 
     .toBeInTheDocument();
 });
 
+test("заметка прежней версии упомянута после выгрузки", async () => {
+  load();
+  withMeetingsDir("D:/kb");
+  vi.mocked(api.kbExport).mockResolvedValue({
+    path: "D:/kb/2026-09-30 - Планирование спринта", files: ["Транскрипт.md"], kept: [],
+    notes: ["Старая заметка оставлена: 2026-09-30 Планирование спринта.md"],
+  });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await userEvent.click(await screen.findByRole("button", { name: "В базу знаний" }));
+  const done = await screen.findByRole("status", { name: "Выгрузка в базу знаний" });
+  expect(done).toHaveTextContent("Старая заметка оставлена: 2026-09-30 Планирование спринта.md");
+});
+
 test("файлы, изменённые вручную, перечислены после выгрузки", async () => {
   load();
   withMeetingsDir("D:/kb");

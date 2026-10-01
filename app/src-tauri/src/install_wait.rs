@@ -72,20 +72,40 @@ pub fn inside(path: &Path, root: &Path) -> bool {
     }
 }
 
-/// Процессы (pid, exe), которые держат папку установки, кроме самого
-/// помощника.
-pub fn blocking(processes: &[(u32, PathBuf)], root: &Path, own_pid: u32) -> Vec<u32> {
+/// Процессы (pid, exe), которые держат папку установки, кроме `skip`.
+pub fn blocking(processes: &[(u32, PathBuf)], root: &Path, skip: &[u32]) -> Vec<u32> {
     processes
         .iter()
-        .filter(|(pid, exe)| *pid != own_pid && inside(exe, root))
+        .filter(|(pid, exe)| !skip.contains(pid) && inside(exe, root))
         .map(|(pid, _)| *pid)
         .collect()
 }
 
+/// Кого помощник не ждёт: себя и того, кто его запустил. Деинсталлятор,
+/// запущенный на месте (`_?=$INSTDIR`, «Сначала удалить версию X»), лежит в
+/// папке установки и ждёт помощника — ждать его в ответ значит простоять все
+/// 90 секунд. `parents` — (pid, pid родителя) из снимка процессов.
+pub fn skipped(own: u32, parents: &[(u32, u32)]) -> Vec<u32> {
+    let mut skip = vec![own];
+    if let Some((_, parent)) = parents.iter().find(|(pid, _)| *pid == own) {
+        if *parent != 0 && *parent != own {
+            skip.push(*parent);
+        }
+    }
+    skip
+}
+
 /// Запуск помощника: код выхода процесса.
 pub fn run(mode: Mode, root: &Path) -> i32 {
-    let own = std::process::id();
-    let busy = || !blocking(&processes(), root, own).is_empty();
+    // Короткое имя 8.3 (`C:\Users\SOMEON~1\…`) не совпало бы с длинными
+    // путями процессов — сравниваем длинные.
+    let root = long_path(root);
+    let root = root.as_path();
+    let skip = skipped(std::process::id(), &parents());
+    let busy = || {
+        let list: Vec<(u32, PathBuf)> = processes();
+        !blocking(&list, root, &skip).is_empty()
+    };
     match mode {
         Mode::Busy => i32::from(busy() || resident_answers()),
         Mode::Wait => {
@@ -108,6 +128,69 @@ pub fn run(mode: Mode, root: &Path) -> i32 {
 
 fn resident_answers() -> bool {
     resident::read_endpoint().is_some_and(|endpoint| resident::answers(&endpoint))
+}
+
+/// Длинный путь (GetLongPathNameW): `C:\Users\SOMEON~1` → `C:\Users\someone.longname`.
+/// Не вышло (папки нет, ошибка) — путь как есть.
+#[cfg(windows)]
+pub fn long_path(path: &Path) -> PathBuf {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::Storage::FileSystem::GetLongPathNameW;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: строка с завершающим нулём; буфер — на `needed` символов,
+    // вызов с нулевым буфером только узнаёт размер.
+    unsafe {
+        let needed = GetLongPathNameW(wide.as_ptr(), std::ptr::null_mut(), 0);
+        if needed == 0 {
+            return path.to_path_buf();
+        }
+        let mut buffer = vec![0u16; needed as usize];
+        let got = GetLongPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), needed);
+        if got == 0 || got >= needed {
+            return path.to_path_buf();
+        }
+        PathBuf::from(std::ffi::OsString::from_wide(&buffer[..got as usize]))
+    }
+}
+
+#[cfg(not(windows))]
+pub fn long_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
+/// (pid, pid родителя) всех процессов.
+#[cfg(windows)]
+fn parents() -> Vec<(u32, u32)> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let mut list = Vec::new();
+    // SAFETY: снимок закрывается ровно один раз; структура инициализирована
+    // нулями с верным dwSize.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return list;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut more = Process32FirstW(snapshot, &mut entry) != 0;
+        while more {
+            list.push((entry.th32ProcessID, entry.th32ParentProcessID));
+            more = Process32NextW(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+    }
+    list
+}
+
+#[cfg(not(windows))]
+fn parents() -> Vec<(u32, u32)> {
+    Vec::new()
 }
 
 /// Все процессы, чей путь к exe удалось узнать.
@@ -217,8 +300,61 @@ mod tests {
             // «..» уводит из папки.
             (40, PathBuf::from(format!(r"{ROOT}\..\other\x.exe"))),
         ];
-        assert_eq!(blocking(&list, root, 30), vec![10, 11, 12]);
-        assert!(blocking(&[], root, 1).is_empty());
+        assert_eq!(blocking(&list, root, &[30]), vec![10, 11, 12]);
+        assert!(blocking(&[], root, &[1]).is_empty());
+        // Деинсталлятор на месте (родитель помощника) не ждётся.
+        let uninstaller = vec![
+            (50, PathBuf::from(format!(r"{ROOT}\uninstall.exe"))),
+            (51, PathBuf::from(format!(r"{ROOT}\meet-desktop.exe"))),
+        ];
+        assert!(blocking(&uninstaller, root, &[51, 50]).is_empty());
+    }
+
+    #[test]
+    fn helper_skips_itself_and_its_parent() {
+        let parents = [(4, 0), (50, 4), (51, 50), (60, 51)];
+        assert_eq!(skipped(51, &parents), vec![51, 50]);
+        // Родитель неизвестен (снимок не удался) — только сам помощник.
+        assert_eq!(skipped(51, &[]), vec![51]);
+        assert_eq!(skipped(4, &parents), vec![4]);
+    }
+
+    #[test]
+    fn the_running_helper_knows_its_parent() {
+        let own = std::process::id();
+        let skip = skipped(own, &parents());
+        assert_eq!(skip[0], own);
+        if cfg!(windows) {
+            assert_eq!(skip.len(), 2, "у тестового процесса есть родитель");
+        }
+    }
+
+    #[test]
+    fn long_path_expands_short_names_and_keeps_unknown_paths() {
+        let dir =
+            std::env::temp_dir().join(format!("meet-long-folder-name-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let long = long_path(&dir);
+        assert!(long
+            .to_string_lossy()
+            .to_lowercase()
+            .ends_with(&format!("meet-long-folder-name-{}", std::process::id())));
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::{OsStrExt, OsStringExt};
+            use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+            let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
+            let mut buffer = vec![0u16; 1024];
+            // SAFETY: строка с нулём, буфер на 1024 символа.
+            let got = unsafe { GetShortPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), 1024) };
+            if got > 0 && (got as usize) < buffer.len() {
+                let short = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..got as usize]));
+                assert!(inside(&long_path(&short).join("x.exe"), &long_path(&dir)));
+            }
+        }
+        let missing = Path::new(r"C:\нет-такой-папки-meet\x");
+        assert_eq!(long_path(missing), missing.to_path_buf());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

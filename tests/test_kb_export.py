@@ -102,7 +102,8 @@ def test_export_writes_folder_with_transcript_and_summary(tmp_path, vault):
     folder = _recording(tmp_path, summary="# Итоги — Планирование спринта\n\n## Решения\n- Да\n")
     got = kb_export.export_recording(folder, _cfg(vault))
     target = vault / "2026-09-30 - Планирование спринта"
-    assert got == {"path": str(target), "files": ["Транскрипт.md", "Итоги.md"], "kept": []}
+    assert got == {"path": str(target), "files": ["Транскрипт.md", "Итоги.md"], "kept": [],
+                   "notes": []}
     transcript = (target / "Транскрипт.md").read_text(encoding="utf-8")
     assert transcript.startswith("---\ndate: 2026-09-30\n")
     assert "# Планирование спринта\n" in transcript
@@ -169,6 +170,27 @@ def test_two_tracks_reuse_the_player_mix(tmp_path, vault, monkeypatch):
     got = kb_export.export_recording(folder, _cfg(vault, include_audio=True))
     assert (Path(got["path"]) / "Запись.opus").read_bytes() == b"player-mix"
     assert asked == [folder]
+
+
+def test_audio_copy_holds_the_recording_like_the_player(tmp_path, vault, monkeypatch):
+    """Пока сведение копируется в базу знаний, файлы записи открыты: «Удалить»
+    ждёт (playback.wait_idle), а не сносит запись наполовину."""
+    from meet import playback
+
+    folder = _recording(tmp_path)
+    (folder / "mic.opus").write_bytes(b"mic")
+    held = []
+
+    def fake(where):
+        held.append(playback.wait_idle(where, 0))
+        mixed = where / playback.PLAYBACK_NAME
+        mixed.write_bytes(b"player-mix")
+        return mixed
+
+    monkeypatch.setattr(playback, "playback_path", fake)
+    kb_export.export_recording(folder, _cfg(vault, include_audio=True))
+    assert held == [False]
+    assert playback.wait_idle(folder, 0) is True
 
 
 def test_player_mix_failure_is_an_export_error(tmp_path, vault, monkeypatch):
@@ -549,3 +571,32 @@ def test_failed_rename_removes_parents_it_created(tmp_path, vault, monkeypatch):
     monkeypatch.setattr(kb_export.os, "rename", busy)
     assert kb_export.follow_title(folder, _cfg(vault, **cfg), old_title) is None
     assert old.is_dir() and not (vault / "Ретро").exists()
+
+
+# --- заметки прежней версии (0.1.0) ------------------------------------------------------
+
+
+def test_old_note_is_kept_and_mentioned_on_the_first_export(tmp_path, vault):
+    folder = _recording(tmp_path)
+    old = vault / "2026-09-30 Планирование спринта.md"
+    old.write_text("# Планирование спринта\n\nмои пометки\n", encoding="utf-8")
+    got = kb_export.export_recording(folder, _cfg(vault))
+    assert got["notes"] == ["Старая заметка оставлена: 2026-09-30 Планирование спринта.md"]
+    assert old.read_text(encoding="utf-8").endswith("мои пометки\n")
+    assert Path(got["path"]) == vault / "2026-09-30 - Планирование спринта"
+    assert kb_export.export_recording(folder, _cfg(vault))["notes"] == []  # уже выгружена
+
+
+def test_old_note_named_after_the_transcript_title(tmp_path, vault):
+    """В 0.1.0 у встречи без своего названия заметка звалась по транскрипту."""
+    folder = _recording(tmp_path, title=None)
+    (vault / "2026-09-30 Встреча — 30.09.2026.md").write_text("x", encoding="utf-8")
+    got = kb_export.export_recording(folder, _cfg(vault))
+    assert got["notes"] == ["Старая заметка оставлена: 2026-09-30 Встреча — 30.09.2026.md"]
+    assert (vault / "2026-09-30 Встреча — 30.09.2026.md").read_text(encoding="utf-8") == "x"
+
+
+def test_unrelated_notes_are_not_mentioned(tmp_path, vault):
+    folder = _recording(tmp_path)
+    (vault / "2026-09-29 Планирование спринта.md").write_text("x", encoding="utf-8")
+    assert kb_export.export_recording(folder, _cfg(vault))["notes"] == []

@@ -116,8 +116,11 @@ export type KbExportRecord = {
   error?: string | null;
 };
 
-/** `POST /recordings/{id}/kb-export`: папка встречи, записанные файлы и не перезаписанные (правленые вручную). */
-export type KbExport = { path: string; files: string[]; kept: string[] };
+/**
+ * `POST /recordings/{id}/kb-export`: папка встречи, записанные файлы и не перезаписанные (правленые вручную);
+ * `notes` — строки для человека (например, «Старая заметка оставлена: …»), нет у старых резидентов.
+ */
+export type KbExport = { path: string; files: string[]; kept: string[]; notes?: string[] };
 
 /** `GET /export/preview`: как назовётся папка (относительно папки для встреч) и что в ней будет. */
 export type ExportPreview = { folder: string | null; files: string[]; error: string | null };

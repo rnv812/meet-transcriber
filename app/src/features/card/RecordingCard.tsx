@@ -258,6 +258,9 @@ export function RecordingCard({
             {(kbDone.kept ?? []).map((name) => (
               <span key={name} className="card__kept">{name} изменён вручную — не перезаписан</span>
             ))}
+            {(kbDone.notes ?? []).map((line) => (
+              <span key={line} className="card__kept">{line}</span>
+            ))}
           </span>
           {inTauri() && <Button onClick={() => act(() => openFolder(kbDone.path))}>Открыть папку</Button>}
         </div>

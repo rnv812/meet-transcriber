@@ -252,21 +252,23 @@ def _write_audio(folder: Path, sources: list[Path], target: Path, mix) -> None:
     """Запись встречи в базу знаний. Две дорожки — то же сведение, что слышит
     плеер карточки (`playback.opus`, микрофон выровнен по громкости): кэш
     сведения общий, второй раз ffmpeg не запускается. `mix` — подмена для тестов."""
+    from meet import playback
+
     if _fresh(target, sources):
         return
     tmp = target.with_name(target.name + ".tmp")
     try:
-        if len(sources) > 1 and mix is not None:
-            mix(sources[0], sources[1], tmp)
-        elif len(sources) > 1:
-            from meet import playback
-
-            mixed = playback.playback_path(folder)
-            if mixed is None:
-                raise RuntimeError("дорожек записи нет")
-            shutil.copyfile(mixed, tmp)
-        else:
-            shutil.copyfile(sources[0], tmp)
+        # Файлы записи открыты, пока копируем: «Удалить» подождёт (как плеер).
+        with playback.using(folder):
+            if len(sources) > 1 and mix is not None:
+                mix(sources[0], sources[1], tmp)
+            elif len(sources) > 1:
+                mixed = playback.playback_path(folder)
+                if mixed is None:
+                    raise RuntimeError("дорожек записи нет")
+                shutil.copyfile(mixed, tmp)
+            else:
+                shutil.copyfile(sources[0], tmp)
         os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)
@@ -324,6 +326,22 @@ def _transcript_md(data: dict, title: str, start: datetime) -> str:
     return output.to_markdown(title, export.md_segments(data), start.strftime("%Y-%m-%d"))
 
 
+OLD_NOTE = "Старая заметка оставлена: {}"
+
+
+def _old_note(root: Path, folder: Path, data: dict, title: str, start: datetime) -> str | None:
+    """Заметка прежней версии (0.1.0, «В заметки»): один файл
+    `<ГГГГ-ММ-ДД> <название>.md` в папке заметок — после переноса настроек это
+    папка для встреч. Название тогда бралось из карточки или транскрипта."""
+    from meet.export import safe_filename
+
+    titles = {title, library.title_and_date(folder, data)[0]}
+    for name in sorted(f"{start:%Y-%m-%d} {safe_filename(t, folder.name)}.md" for t in titles if t):
+        if (root / name).is_file():
+            return name
+    return None
+
+
 def _export(folder: Path, cfg, mix) -> dict:
     from meet import assistant, export
 
@@ -347,6 +365,13 @@ def _export(folder: Path, cfg, mix) -> dict:
     target.mkdir(parents=True, exist_ok=True)
     previous = library.read_meta(folder).get("kb_export")
     recorded = _recorded(previous if isinstance(previous, dict) else {})
+    notes = []
+    if not (isinstance(previous, dict) and previous.get("path")):
+        # Первая выгрузка встречи, у которой есть заметка прежней версии: новая
+        # папка — рядом, а заметку не трогаем (её могли дописать) и говорим о ней.
+        old_note = _old_note(root, folder, data, title, start)
+        if old_note:
+            notes.append(OLD_NOTE.format(old_note))
     written, kept = [], []
     for kind, name in plan:
         path = target / name
@@ -369,12 +394,13 @@ def _export(folder: Path, cfg, mix) -> dict:
         written.append(name)
     library.write_meta(folder, {"kb_export": {"path": str(target), "at": time.time(),
                                               "files": recorded, "kept": kept}})
-    return {"path": str(target), "files": written, "kept": kept}
+    return {"path": str(target), "files": written, "kept": kept, "notes": notes}
 
 
 def export_recording(folder, cfg, *, mix=None) -> dict:
     """Выгрузить встречу: `{"path": папка, "files": [записанные], "kept":
-    [не перезаписанные — изменены вручную или лежали в папке до нас]}`.
+    [не перезаписанные — изменены вручную или лежали в папке до нас], "notes":
+    [строки для человека — например, о заметке прежней версии]}`.
 
     `cfg` — секция `export` настроек (или настройки целиком). Ошибка —
     исключение; кроме «папка не задана», она запоминается в meta.json

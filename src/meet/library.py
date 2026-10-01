@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -205,11 +206,86 @@ def _replace(tmp: Path, target: Path) -> None:
             time.sleep(0.05 * (attempt + 1))
 
 
+META_FILE_LOCK_WAIT_S = 5.0
+
+
+def _meta_lock_path(folder: Path) -> Path:
+    import hashlib
+    import tempfile
+
+    try:
+        key = os.path.normcase(str(Path(folder).resolve()))
+    except OSError:
+        key = os.path.normcase(str(folder))
+    digest = hashlib.sha1(key.encode("utf-8", "surrogatepass")).hexdigest()[:20]
+    return Path(tempfile.gettempdir()) / "meet-meta-locks" / f"{digest}.lock"
+
+
+@contextmanager
+def _meta_file_lock(folder: Path):
+    """Замок meta.json между процессами: задачи-подпроцессы (итоги, объединение)
+    правят его одновременно с резидентом (переименование из окна), и замок
+    потоков одного процесса их не разводит. Файл замка — во временной папке,
+    а не в папке записи: там он мешал бы удалению и был бы виден агенту.
+    Не взяли за META_FILE_LOCK_WAIT_S (или замок недоступен) — правим без
+    него: потерять запись хуже, чем гонку."""
+    path = _meta_lock_path(folder)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(path, "a+b")
+    except OSError:
+        yield
+        return
+    locked = False
+    try:
+        deadline = time.monotonic() + META_FILE_LOCK_WAIT_S
+        while True:
+            try:
+                _lock_file(handle)
+                locked = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.01)
+        yield
+    finally:
+        if locked:
+            try:
+                _unlock_file(handle)
+            except OSError:
+                pass
+        handle.close()
+
+
+if os.name == "nt":
+    import msvcrt
+
+    def _lock_file(handle) -> None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+
+    def _unlock_file(handle) -> None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+
+    def _lock_file(handle) -> None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _unlock_file(handle) -> None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def update_meta(folder: Path, change) -> dict:
-    """Атомарно поправить meta.json: `change(текущее) -> новое` под замком папки.
-    Временный файл свой у каждой записи — параллельные записи не делят его."""
+    """Атомарно поправить meta.json: `change(текущее) -> новое` под замком папки
+    (и потоков резидента, и других процессов — см. _meta_file_lock): чтение,
+    правка и замена идут подряд, правка другого процесса между ними не
+    теряется. Временный файл свой у каждой записи — параллельные записи не
+    делят его."""
     folder = Path(folder)
-    with _meta_lock(folder):
+    with _meta_lock(folder), _meta_file_lock(folder):
         data = change(read_meta(folder))
         tmp = folder / f"{META_JSON}.{os.getpid()}.{threading.get_ident()}.tmp"
         try:
