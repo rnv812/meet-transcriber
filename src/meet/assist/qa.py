@@ -65,7 +65,7 @@ class QAService:
         if self._session_id is None and self._history:
             parts += ["", "Предыдущие вопросы и ответы (память диалога):"]
             for q, a in self._history:
-                parts += [f"Вопрос: {q}", f"Ответ: {a}"]
+                parts += [f"Ранее спросили: {q}", f"Ты ответил: {a}"]
         if new_lines:
             parts += ["", "Свежие реплики (с прошлого вопроса):",
                       "\n".join(new_lines)]

@@ -12,6 +12,7 @@ import asyncio
 import json
 import os
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -109,6 +110,13 @@ async def _main(state: AssistState, port: int, *, open_browser: bool = True,
                 folder: Path | None = None) -> None:
     stop = asyncio.Event()
     state.stop_event = stop
+    # Свой пул для asyncio.to_thread (вызовы Codex/локальной модели, дослив
+    # окна для Q&A): при выходе его бросаем без ожидания. Иначе asyncio.run
+    # ждал бы застрявший вызов модели (до 180 с), а engine.stop() — хвост
+    # ленты и снятие lock'а — стоял бы за ним.
+    loop = asyncio.get_running_loop()
+    workers = ThreadPoolExecutor(thread_name_prefix="assist-model")
+    loop.set_default_executor(workers)
     runner = await run_web(state, port)
     tasks: list[asyncio.Future] = []
     try:
@@ -132,7 +140,11 @@ async def _main(state: AssistState, port: int, *, open_browser: bool = True,
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await runner.cleanup()
-        remove_endpoint(endpoint_file)  # сервер погашен — эндпоинта больше нет
+        # Подменить пул на пустой: asyncio.run закроет его мгновенно, а поток
+        # с вызовом модели доработает сам. Файл эндпоинта удаляет run_assist
+        # при выходе процесса (после engine.stop), не здесь.
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        workers.shutdown(wait=False, cancel_futures=True)
 
 
 def _pick_runner(provider: str | None, cfg):

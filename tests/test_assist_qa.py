@@ -70,6 +70,9 @@ def test_without_resume_history_goes_into_prompt():
     for i in range(1, 7):
         assert f"вопрос {i}" in last and f"ответ {i}" in last
     assert all(kw["resume"] is None for _, kw in calls)
+    # «Вопрос:» — только у текущего вопроса; история помечена иначе.
+    assert last.count("Вопрос:") == 1 and "Вопрос: вопрос 7" in last
+    assert "Ранее спросили: вопрос 6" in last and "Ты ответил: ответ 6" in last
 
 
 def test_with_resume_history_not_duplicated():

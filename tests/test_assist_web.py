@@ -189,3 +189,39 @@ def test_sse_closes_when_stop_requested():
                 assert b"event: line" not in rest  # поток просто закончился
 
     _run(scenario())
+
+
+def test_post_routes_reject_foreign_origin():
+    async def scenario():
+        state = LiveState()
+        async with TestClient(TestServer(build_app(state))) as client:
+            evil = {"Origin": "http://evil.example"}
+            r = await client.post("/stop", headers=evil)
+            assert r.status == 403 and state.stop_requests == 0
+            r = await client.post("/ask", json={"question": "x"}, headers=evil)
+            assert r.status == 403
+            r = await client.post("/task", json={"task": "x"}, headers=evil)
+            assert r.status == 403
+            # Чужой порт на том же хосте — тоже чужой origin.
+            r = await client.post("/stop", headers={"Origin": "http://127.0.0.1:1"})
+            assert r.status == 403 and state.stop_requests == 0
+
+    _run(scenario())
+
+
+def test_post_routes_allow_own_origin_and_no_origin():
+    async def scenario():
+        state = LiveState()
+        async with TestClient(TestServer(build_app(state))) as client:
+            port = client.server.port
+            for origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
+                r = await client.post("/ask", json={"question": "срок?"},
+                                      headers={"Origin": origin})
+                assert r.status == 200
+            r = await client.post("/stop")  # резидент: без Origin
+            assert r.status == 200 and state.stop_requests == 1
+            r = await client.post("/stop",
+                                  headers={"Origin": f"http://localhost:{port}"})
+            assert r.status == 200 and state.stop_requests == 2
+
+    _run(scenario())

@@ -87,6 +87,23 @@ def _first_line_index(request, size: int) -> int:
         return max(0, size - TRANSCRIPT_TAIL)
 
 
+def _own_origins(request) -> set[str]:
+    sock = request.transport.get_extra_info("sockname") if request.transport else None
+    port = sock[1] if sock else request.url.port
+    return {f"http://127.0.0.1:{port}", f"http://localhost:{port}"}
+
+
+@web.middleware
+async def _same_origin_posts(request, handler):
+    """POST — только со своей страницы или без Origin (резидент, curl): чужая
+    вкладка браузера не может ни остановить запись, ни задавать вопросы."""
+    origin = request.headers.get("Origin")
+    if (request.method == "POST" and origin is not None
+            and origin not in _own_origins(request)):
+        raise web.HTTPForbidden(text="чужой Origin")
+    return await handler(request)
+
+
 def build_app(state) -> web.Application:
     async def index(request):
         return web.Response(text=PAGE, content_type="text/html")
@@ -165,7 +182,7 @@ def build_app(state) -> web.Application:
         state.request_stop()
         return _json_response({"ok": True})
 
-    app = web.Application()
+    app = web.Application(middlewares=[_same_origin_posts])
     app.add_routes([
         web.get("/", index),
         web.get("/events", events),

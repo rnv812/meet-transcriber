@@ -105,6 +105,9 @@ class _Heavy:
         self.digester_kwargs = None
         self.qa_kwargs = None
         self.opened = []
+        self.on_stop = None   # зовётся из FakeEngine.stop (проверки момента)
+        self.stop_event = None
+        self.loop = None
         heavy = self
 
         class FakeEngine:
@@ -120,6 +123,8 @@ class _Heavy:
                 self.started = True
 
             def stop(self):
+                if heavy.on_stop is not None:
+                    heavy.on_stop()
                 self.stopped = True
 
             def process_window(self):
@@ -135,6 +140,8 @@ class _Heavy:
                 pass
 
             async def run(self, stop):
+                heavy.stop_event = stop
+                heavy.loop = asyncio.get_running_loop()
                 if digester_run is not None:
                     await digester_run(stop)
                 else:
@@ -169,6 +176,15 @@ class _Heavy:
         monkeypatch.setattr("meet.live.LiveEngine", FakeEngine)
         monkeypatch.setattr("webbrowser.open", self.opened.append)
 
+    def emergency_stop(self):
+        """Сторож теста: погасить run_assist из другого потока, чтобы сбой
+        клиента всплыл ошибкой, а не вечным зависанием."""
+        if self.loop is not None and self.stop_event is not None:
+            try:
+                self.loop.call_soon_threadsafe(self.stop_event.set)
+            except RuntimeError:
+                pass  # цикл уже закрыт — run_assist и так вышел
+
 
 def _run(tmp_path, **kw):
     from meet.assist.app import run_assist
@@ -181,31 +197,45 @@ def test_child_mode_endpoint_file_and_stop_route(tmp_path, monkeypatch):
     heavy = _Heavy(monkeypatch)
     ep = tmp_path / "run" / "assist.json"
     seen = {}
+    # Эндпоинт живёт до выхода процесса: при финализации движка он ещё на месте.
+    heavy.on_stop = lambda: seen.update(ep_at_engine_stop=ep.exists())
 
     def client():
-        deadline = time.monotonic() + 30
-        while not ep.exists():
-            if time.monotonic() > deadline:
-                return
-            time.sleep(0.05)
-        seen.update(json.loads(ep.read_text(encoding="utf-8")))
-        base = f"http://127.0.0.1:{seen['port']}"
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        # Открытый SSE-поток (как у резидента) не должен держать выход.
-        with opener.open(f"{base}/events", timeout=10) as sse:
-            assert sse.readline().startswith(b"event: state")
-            req = urllib.request.Request(f"{base}/stop", data=b"", method="POST")
-            with opener.open(req, timeout=10) as r:
-                seen["reply"] = json.loads(r.read())
-            sse.read()  # поток закрывается сервером
-            seen["sse_closed"] = True
+        try:
+            deadline = time.monotonic() + 30
+            while not ep.exists():
+                if time.monotonic() > deadline:
+                    raise TimeoutError("файл эндпоинта не появился")
+                time.sleep(0.05)
+            seen.update(json.loads(ep.read_text(encoding="utf-8")))
+            base = f"http://127.0.0.1:{seen['port']}"
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            # Открытый SSE-поток (как у резидента) не должен держать выход.
+            with opener.open(f"{base}/events", timeout=10) as sse:
+                assert sse.readline().startswith(b"event: state")
+                req = urllib.request.Request(f"{base}/stop", data=b"", method="POST")
+                with opener.open(req, timeout=10) as r:
+                    seen["reply"] = json.loads(r.read())
+                sse.read()  # поток закрывается сервером
+                seen["sse_closed"] = True
+        except BaseException as e:  # сбой клиента — гасим run_assist, ошибку в ассерт
+            seen["client_error"] = repr(e)
+            heavy.emergency_stop()
 
     t = threading.Thread(target=client, daemon=True)
+    watchdog = threading.Timer(60, heavy.emergency_stop)
+    watchdog.daemon = True
     t.start()
+    watchdog.start()
     started = time.monotonic()
-    _run(tmp_path, open_browser=False, port=0, endpoint_file=str(ep))
+    try:
+        _run(tmp_path, open_browser=False, port=0, endpoint_file=str(ep))
+    finally:
+        watchdog.cancel()
     t.join(10)
+    assert "client_error" not in seen, seen.get("client_error")
     assert seen["reply"] == {"ok": True} and seen["sse_closed"]
+    assert seen["ep_at_engine_stop"] is True
     assert seen["pid"] == os.getpid()
     assert isinstance(seen["port"], int) and seen["port"] > 0
     assert Path(seen["folder"]).parent == tmp_path / "rec"
@@ -318,3 +348,28 @@ def test_explicit_provider_skips_resolve(tmp_path, monkeypatch):
     assert heavy.resolve_calls == 0
     assert heavy.runner_for_calls == ["codex"]
     assert heavy.digester_kwargs["runner"] is _never_called_runner
+
+
+def test_slow_model_call_does_not_delay_finalization(tmp_path, monkeypatch):
+    """Вызов модели в потоке (Codex/локальная, asyncio.to_thread) после /stop
+    не должен держать engine.stop(): хвост и lock — сразу, а не через 180 с."""
+    release = threading.Event()
+
+    async def slow_tick(stop):
+        asyncio.ensure_future(asyncio.to_thread(release.wait, 30))
+        await asyncio.sleep(0.1)  # поток модели занят
+        stop.set()  # как POST /stop
+        await asyncio.sleep(3600)
+
+    heavy = _Heavy(monkeypatch, digester_run=slow_tick)
+    stopped_at = {}
+    heavy.on_stop = lambda: stopped_at.setdefault("t", time.monotonic())
+    started = time.monotonic()
+    try:
+        _run(tmp_path, open_browser=False, port=0)
+        returned = time.monotonic()
+    finally:
+        release.set()
+    assert heavy.engine.stopped
+    assert stopped_at["t"] - started < 5
+    assert returned - started < 5
