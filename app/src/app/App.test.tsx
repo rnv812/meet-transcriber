@@ -1,6 +1,8 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
+import * as api from "../lib/api";
+import * as shell from "../lib/shell";
 
 const ep = { base: "/api", token: null };
 const residentState = vi.hoisted(() => ({ current: { status: "offline" } as Record<string, unknown> }));
@@ -18,10 +20,25 @@ vi.mock("../features/card/RecordingCard", () => ({
 }));
 vi.mock("../features/voices/VoicesPane", () => ({ VoicesPane: () => <div data-testid="voices" /> }));
 vi.mock("../features/settings/SettingsPane", () => ({
-  SettingsPane: ({ initial, initialTick }: { initial?: string; initialTick?: number }) => (
-    <div data-testid="settings" data-initial={initial ?? ""} data-tick={initialTick ?? ""} />
+  SettingsPane: ({ initial, initialTick, onRunWizard }: {
+    initial?: string; initialTick?: number; onRunWizard?: () => void;
+  }) => (
+    <div data-testid="settings" data-initial={initial ?? ""} data-tick={initialTick ?? ""}>
+      <button onClick={onRunWizard}>Запустить мастер</button>
+    </div>
   ),
 }));
+vi.mock("../features/wizard/Wizard", () => ({
+  Wizard: ({ start, onClose }: { start?: string; onClose: () => void }) => (
+    <div data-testid="wizard" data-start={start ?? ""}><button onClick={onClose}>закрыть мастер</button></div>
+  ),
+}));
+vi.mock("../lib/api", async (orig) => ({
+  ...(await orig<typeof import("../lib/api")>()),
+  getSettings: vi.fn(async () => ({ ui: { wizard_done: false } })),
+  patchSettings: vi.fn(async () => ({ settings: {}, restart_required: [] })),
+}));
+const engineState = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
 const openCb = vi.hoisted(() => ({ current: null as ((id: string) => void) | null }));
 const sectionCb = vi.hoisted(() => ({ current: null as ((s: string) => void) | null }));
 vi.mock("../lib/shell", async (orig) => ({
@@ -34,13 +51,19 @@ vi.mock("../lib/shell", async (orig) => ({
     sectionCb.current = cb;
     return () => {};
   }),
+  engineStatus: vi.fn(async () => engineState.current),
+  residentStatus: vi.fn(async () => "engine-missing"),
+  markWizardDone: vi.fn(async () => {}),
 }));
 
 const OFFLINE = /Сервис записи не запущен/;
 const online = () => ({ status: "online", endpoint: ep, snapshot: null, lastEvent: null, libraryTick: 0 });
 
 beforeEach(() => {
+  vi.clearAllMocks();
   residentState.current = { status: "offline" };
+  engineState.current = null;
+  localStorage.removeItem("meet.wizard_done");
   openCb.current = null;
   sectionCb.current = null;
   window.history.replaceState({}, "", "/");
@@ -147,4 +170,74 @@ test("событие open-section открывает настройки на н�
   const tick = pane.getAttribute("data-tick");
   act(() => sectionCb.current!("assistant"));
   expect(screen.getByTestId("settings").getAttribute("data-tick")).not.toBe(tick);
+});
+
+const missingEngine = () => ({
+  installed: false, version: "0.1.0", env_dir: "C:\meet\engine\0.1.0", profile: null,
+  gpu: null, free_gb: 50, needs_gb: 2,
+});
+
+test("движка нет, резидента нет — сам открывается мастер", async () => {
+  engineState.current = missingEngine();
+  render(<App />);
+  expect(await screen.findByTestId("wizard")).toHaveAttribute("data-start", "hardware");
+  expect(screen.queryByRole("navigation")).toBeNull();
+});
+
+test("«Пропустить» мастер: флаг в localStorage и в оболочке; вместо мастера — «Движок не установлен»", async () => {
+  engineState.current = missingEngine();
+  render(<App />);
+  await userEvent.click(await screen.findByRole("button", { name: "закрыть мастер" }));
+  expect(localStorage.getItem("meet.wizard_done")).toBe("1");
+  expect(shell.markWizardDone).toHaveBeenCalled();
+  expect(screen.queryByTestId("wizard")).toBeNull();
+  expect(screen.getByRole("navigation")).toBeInTheDocument();
+  expect(screen.getAllByText("Движок не установлен").length).toBeGreaterThan(0);
+});
+
+test("wizard_done — мастер сам не показывается при installed:false; «Установить» открывает его на движке", async () => {
+  localStorage.setItem("meet.wizard_done", "1");
+  engineState.current = missingEngine();
+  const { container } = render(<App />);
+  const detail = container.querySelector<HTMLElement>('[data-pane="detail"]')!;
+  await waitFor(() => expect(detail).toHaveTextContent("Движок не установлен"));
+  expect(screen.queryByTestId("wizard")).toBeNull();
+  expect(detail).not.toHaveTextContent(OFFLINE);
+  await userEvent.click(within(detail).getByRole("button", { name: "Установить" }));
+  expect(screen.getByTestId("wizard")).toHaveAttribute("data-start", "engine");
+});
+
+test("dev: резидент отвечает — мастер не показывается, даже если движка нет", async () => {
+  engineState.current = missingEngine();
+  residentState.current = online();
+  render(<App />);
+  await waitFor(() => expect(shell.engineStatus).toHaveBeenCalled());
+  await act(async () => {});
+  expect(screen.queryByTestId("wizard")).toBeNull();
+});
+
+test("оболочка говорит, что резидент работает, — мастер не показывается", async () => {
+  engineState.current = missingEngine();
+  vi.mocked(shell.residentStatus).mockResolvedValueOnce("running");
+  render(<App />);
+  await waitFor(() => expect(shell.residentStatus).toHaveBeenCalled());
+  await act(async () => {});
+  expect(screen.queryByTestId("wizard")).toBeNull();
+});
+
+test("пропуск без резидента дописывается в его настройки, когда он появится", async () => {
+  localStorage.setItem("meet.wizard_done", "1");
+  residentState.current = online();
+  render(<App />);
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { ui: { wizard_done: true } }));
+});
+
+test("настройки: «Запустить мастер» открывает его с начала; закрыли — снова настройки", async () => {
+  residentState.current = online();
+  render(<App />);
+  await userEvent.click(screen.getByText("Настройки"));
+  await userEvent.click(screen.getByRole("button", { name: "Запустить мастер" }));
+  expect(screen.getByTestId("wizard")).toHaveAttribute("data-start", "hardware");
+  await userEvent.click(screen.getByRole("button", { name: "закрыть мастер" }));
+  expect(screen.getByTestId("settings")).toBeInTheDocument();
 });

@@ -49,20 +49,25 @@ fn main() {
             windows::pick_folder,
             windows::resident_status,
             windows::live_resize,
-            // Мастер первого запуска: движок расшифровки.
+            // Мастер первого запуска: движок расшифровки, страницы HF.
             engine::engine_status,
             engine::install_engine,
             engine::reinstall_engine,
-            engine::gpu_info
+            engine::gpu_info,
+            windows::open_url,
+            windows::mark_wizard_done
         ])
         .setup(|app| {
             Supervisor::start(app.handle());
             tray::build(app)?;
             // Обычный запуск — только трей. `--recording <id>` (например, из
-            // уведомления) — сразу окно на этой записи.
+            // уведомления) — сразу окно на этой записи; первый запуск без
+            // движка — окно с мастером.
             let args: Vec<String> = std::env::args().collect();
             if let Some(recording) = windows::recording_arg(&args) {
                 windows::open_main(app.handle(), Some(recording), None);
+            } else {
+                windows::open_wizard_on_first_run(app.handle());
             }
             Ok(())
         })

@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { type Endpoint, type Model, type ModelsState, downloadModel, getJobs, getModels } from "../../lib/api";
-import type { Job } from "../../lib/types";
+import { type Endpoint, type Model, type ModelsState, downloadModel, getModels } from "../../lib/api";
 import { errorText } from "../../lib/format";
+import { jobActive, useTrackedJob } from "../../state/useTrackedJob";
 import { Button } from "../../ui/Button";
+import { HfTokenRow } from "./HfTokenRow";
 import { Row } from "./Section";
 
 const KIND: Record<string, string> = { asr: "распознавание", diarization: "спикеры", align: "выравнивание" };
-const active = (j: Job | null) => j?.state === "queued" || j?.state === "running";
 
 function ModelRow({ model, busy, canDownload, selected, onDownload, onSelect }: {
   model: Model; busy: boolean; canDownload: boolean; selected: boolean;
@@ -39,19 +39,15 @@ function ModelRow({ model, busy, canDownload, selected, onDownload, onSelect }: 
   );
 }
 
-export function ModelsPane({ endpoint, selectedModel, onSelect, token, onToken }: {
+export function ModelsPane({ endpoint, selectedModel, onSelect }: {
   endpoint: Endpoint;
   /** Модель распознавания из черновика (а не сохранённая). */
   selectedModel: string | null;
   onSelect: (id: string) => void;
-  token: string;
-  onToken: (v: string) => void;
 }) {
   const [models, setModels] = useState<ModelsState | null>(null);
   const [tried, setTried] = useState(false);
-  const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showToken, setShowToken] = useState(false);
 
   const load = useCallback(async () => {
     try { setModels(await getModels(endpoint)); setError(null); }
@@ -60,40 +56,21 @@ export function ModelsPane({ endpoint, selectedModel, onSelect, token, onToken }
   }, [endpoint]);
 
   useEffect(() => { void load(); }, [load]);
-
-  // Returning to the section while a task runs: pick it up so progress shows.
-  useEffect(() => {
-    let live = true;
-    getJobs(endpoint).then((r) => {
-      const mine = r.items.find((i) => i.kind === "download-model" && active(i));
-      if (live && mine) setJob((cur) => cur ?? mine);
-    }).catch(() => {});
-    return () => { live = false; };
-  }, [endpoint]);
-
-  useEffect(() => {
-    if (!job || !active(job)) return;
-    let live = true;
-    const timer = window.setInterval(async () => {
-      const list = await getJobs(endpoint).catch(() => null);
-      if (!live) return;
-      const mine = list?.items.find((i) => i.id === job.id);
-      if (mine) setJob(mine);
-      if (mine && (mine.state === "done" || mine.state === "failed")) void load();
-    }, 2000);
-    return () => { live = false; window.clearInterval(timer); };
-  }, [endpoint, job, load]);
+  const [job, setJob] = useTrackedJob(endpoint, "download-model", load);
 
   const download = async (id: string) => {
     try { setJob(await downloadModel(endpoint, id)); } catch (e) { setError(errorText(e)); }
   };
 
+  // Токен — до каталога: он нужен и тогда, когда каталог не загрузился.
+  const token = <HfTokenRow endpoint={endpoint} onChanged={() => void load()} />;
   if (!models) {
-    return <>{error && <p className="error">{error}</p>}<p className="muted">{tried ? "Нет данных." : "Загружаю…"}</p></>;
+    return <>{token}{error && <p className="error">{error}</p>}<p className="muted">{tried ? "Нет данных." : "Загружаю…"}</p></>;
   }
-  const busy = active(job);
+  const busy = jobActive(job);
   return (
     <>
+      {token}
       {error && <p className="error">{error}</p>}
       {!models.can_download && (
         <p className="notice">
@@ -101,18 +78,6 @@ export function ModelsPane({ endpoint, selectedModel, onSelect, token, onToken }
           скачивать; выбранная модель распознавания и так скачается при первой расшифровке.
         </p>
       )}
-      <Row
-        label="Токен Hugging Face" htmlFor="hf-token"
-        hint="нужен только модели спикеров: она за принятием условий на huggingface.co. Пусто — берётся переменная среды HF_TOKEN"
-      >
-        <span className="with-unit">
-          <input id="hf-token" type={showToken ? "text" : "password"} autoComplete="off" spellCheck={false}
-            placeholder={models.token ? "задан" : "не задан"} value={token} onChange={(e) => onToken(e.target.value)} />
-          <Button onClick={() => setShowToken((v) => !v)} aria-pressed={showToken}>
-            {showToken ? "Скрыть" : "Показать"}
-          </Button>
-        </span>
-      </Row>
       {models.items.map((m) => (
         <ModelRow
           key={m.id} model={m} busy={busy} canDownload={models.can_download}

@@ -18,6 +18,7 @@ vi.mock("../../lib/api", async (orig) => ({
 vi.mock("../../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../../lib/shell")>()),
   pickFolder: vi.fn(),
+  openUrl: vi.fn(async () => {}),
 }));
 
 const ep = { base: "/api", token: null };
@@ -293,4 +294,12 @@ test("«определяю…» переспрашивает резидента 
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("«не найден — установите»: ссылка открывается в браузере через оболочку", async () => {
+  open();
+  const group = await screen.findByRole("group", { name: "Codex" });
+  const codex = await within(group).findByRole("button", { name: "github.com/openai/codex" });
+  await userEvent.click(codex);
+  expect(shell.openUrl).toHaveBeenCalledWith("https://github.com/openai/codex");
 });

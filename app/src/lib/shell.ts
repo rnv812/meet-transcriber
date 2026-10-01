@@ -67,3 +67,90 @@ export async function onOpenSection(cb: (section: string) => void): Promise<() =
 export function initialSection(): string | null {
   return new URLSearchParams(window.location.search).get("section");
 }
+
+// --- мастер первого запуска: движок, ссылки, автозапуск ---------------------
+
+/** `engine_status` оболочки: движок расшифровки и место под него. */
+export type EngineStatus = {
+  installed: boolean;
+  version: string;
+  env_dir: string;
+  profile: "cuda" | "cpu" | null;
+  gpu: string | null;
+  /** Свободно на диске с данными, ГБ; null — узнать нельзя (не блокируем). */
+  free_gb: number | null;
+  needs_gb: number;
+};
+/** Событие `engine-progress`: первая строка шага — его название. */
+export type EngineProgress = { step: number; of: number; line: string };
+/** Событие `engine-failed`: хвост лога упавшего шага (до 30 строк). */
+export type EngineFailed = { step: number; tail: string };
+
+/** Состояние движка (до 5 с: nvidia-smi). Вне приложения — null: оболочки нет. */
+export async function engineStatus(): Promise<EngineStatus | null> {
+  if (!inTauri()) return null;
+  return invoke<EngineStatus>("engine_status");
+}
+
+/** Поставить движок (`fresh` — удалить окружение и поставить заново). Минуты. */
+export async function installEngine(profile: "cuda" | "cpu", fresh: boolean): Promise<void> {
+  await invoke<void>(fresh ? "reinstall_engine" : "install_engine", { profile });
+}
+
+async function listenShell<T>(event: string, cb: (payload: T) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<T>(event, (e) => cb(e.payload));
+}
+
+export const onEngineProgress = (cb: (p: EngineProgress) => void) => listenShell("engine-progress", cb);
+export const onEngineFailed = (cb: (f: EngineFailed) => void) => listenShell("engine-failed", cb);
+
+/** Что оболочка знает о резиденте ("running", "engine-missing", …); вне приложения — null. */
+export async function residentStatus(): Promise<string | null> {
+  if (!inTauri()) return null;
+  return invoke<string>("resident_status");
+}
+
+/**
+ * Открыть страницу в браузере. Оболочка открывает только свои адреса
+ * (huggingface.co, claude.ai, github.com/openai/codex) — см. `open_url`.
+ * Не открылась — только в журнал консоли: это ссылка, а не действие.
+ */
+export async function openUrl(url: string): Promise<void> {
+  if (!inTauri()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  await invoke<void>("open_url", { url }).catch((cause) => console.warn("open_url:", cause));
+}
+
+/** Отметка «мастер пройден» для оболочки: при старте она не откроет окно с мастером. */
+export async function markWizardDone(): Promise<void> {
+  if (!inTauri()) return;
+  await invoke<void>("mark_wizard_done");
+}
+
+/**
+ * Есть ли команда в оболочке: вызов без аргументов. Нет команды — Tauri
+ * отвечает «Command … not found»; есть — ругается на аргументы (или
+ * выполняется). Так окно работает и со старой оболочкой.
+ */
+export async function probeCommand(call: () => Promise<unknown>): Promise<boolean> {
+  try {
+    await call();
+    return true;
+  } catch (cause) {
+    return !/^Command \S+ not found$/.test(String(cause));
+  }
+}
+
+export async function autostartAvailable(): Promise<boolean> {
+  if (!inTauri()) return false;
+  return probeCommand(() => invoke("set_autostart"));
+}
+
+/** Запускать ли приложение вместе с Windows. */
+export async function setAutostart(enabled: boolean): Promise<void> {
+  await invoke<void>("set_autostart", { enabled });
+}

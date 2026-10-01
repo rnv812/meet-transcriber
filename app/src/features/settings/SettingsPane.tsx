@@ -212,13 +212,15 @@ function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
   );
 }
 
-export function SettingsPane({ endpoint, recordingsDir, initial, initialTick }: {
+export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, onRunWizard }: {
   endpoint: Endpoint;
   recordingsDir: string | null;
   /** Открыть сразу этот раздел (id из MENU); неизвестный — с первого. */
   initial?: string;
   /** Новый номер — снова перейти в `initial` (повторная просьба оболочки или карточки). */
   initialTick?: number;
+  /** «Запустить мастер» в «Движок и модели»: сам мастер после «Пропустить» не открывается. */
+  onRunWizard?: () => void;
 }) {
   const [section, setSection] = useState<SectionId>(
     () => MENU.find((m) => m.id === initial)?.id ?? "recording");
@@ -342,13 +344,16 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick }: 
             <AsrSection draft={draft} set={set} endpoint={endpoint} />
           ) : section === "engine" ? (
             <>
+              {onRunWizard && (
+                <Row label="Мастер первого запуска" hint="движок, токен Hugging Face, модели и запись — по шагам">
+                  <Button onClick={onRunWizard}>Запустить мастер</Button>
+                </Row>
+              )}
               <EnginePane endpoint={endpoint} />
               <h3 className="shead">Модели</h3>
               <ModelsPane endpoint={endpoint}
                 selectedModel={(draft.asr?.model as string | undefined) ?? null}
-                onSelect={(id) => { set("asr", "model", id); setNotice("Модель выбрана — не забудьте сохранить"); }}
-                token={String(draft.integrations?.hf_token ?? "")}
-                onToken={(x) => set("integrations", "hf_token", x)} />
+                onSelect={(id) => { set("asr", "model", id); setNotice("Модель выбрана — не забудьте сохранить"); }} />
             </>
           ) : section === "assistant" ? (
             <AssistantSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint} />

@@ -1,0 +1,10 @@
+.hf-form { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; }
+.hf-form__row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hf-form__label { color: var(--text-2); }
+.hf-form input {
+  flex: 1; min-width: 220px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--line-2);
+  border-radius: var(--r-md); padding: 5px 8px; font: inherit;
+}
+.hf-form__note { margin: 0; font-size: 12px; }
+.hf-result { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; }

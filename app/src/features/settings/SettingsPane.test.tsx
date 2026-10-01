@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
 import * as api from "../../lib/api";
@@ -16,6 +16,10 @@ vi.mock("../../lib/api", async (orig) => ({
   getDiagnostics: vi.fn(),
   getDevices: vi.fn(),
   getProcesses: vi.fn(),
+  getHfStatus: vi.fn(),
+  setHfToken: vi.fn(),
+  deleteHfToken: vi.fn(),
+  recheckHf: vi.fn(),
 }));
 
 const ep = { base: "/api", token: null };
@@ -42,6 +46,10 @@ beforeEach(() => {
   vi.mocked(api.getDiagnostics).mockResolvedValue({ paths: { data_dir: "C:\data\meet" } });
   vi.mocked(api.getDevices).mockResolvedValue({ available: true, pinning: false, system: { name: "Динамики", rate: 48000 }, mic: { name: "Микрофон", rate: 48000 } });
   vi.mocked(api.getProcesses).mockResolvedValue({ available: true, running: ["zoom.exe", "teams.exe"] });
+  vi.mocked(api.getHfStatus).mockResolvedValue({
+    configured: true, source: "keyring", check: { ok: true, reason: "ok", message: "Доступ есть" },
+  });
+  vi.mocked(api.deleteHfToken).mockResolvedValue({ configured: false, source: null, check: null });
 });
 
 test("переключатель автозаписи сразу вызывает setAutoRecord, без «Сохранить»", async () => {
@@ -110,19 +118,70 @@ test("ошибка сохранения — текстом резидента, �
   expect(screen.queryByText(/Error:/)).toBeNull();
 });
 
-test("токен Hugging Face скрыт; «Показать» открывает его", async () => {
-  vi.mocked(api.getModels).mockResolvedValue({ items: [], cache: "C:/hf", token: false, selected: null, can_download: true });
+const openEngine = async (props: { onRunWizard?: () => void } = {}) => {
+  render(<SettingsPane endpoint={ep} recordingsDir={null} {...props} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Движок и модели" }));
+};
+
+test("Hugging Face: статус из /hf/status, значение токена не показывается", async () => {
   vi.mocked(api.getSettings).mockResolvedValue(
     { ...structuredClone(settings), integrations: { gpu_marker: false, gpu_marker_path: null, hf_token: "hf_secret" } });
-  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
-  await userEvent.click(await screen.findByRole("button", { name: "Движок и модели" }));
-  const input = await screen.findByLabelText("Токен Hugging Face");
-  expect(input).toHaveAttribute("type", "password");
-  expect(input).toHaveValue("hf_secret");
-  await userEvent.click(screen.getByRole("button", { name: "Показать" }));
-  expect(input).toHaveAttribute("type", "text");
-  await userEvent.click(screen.getByRole("button", { name: "Скрыть" }));
-  expect(input).toHaveAttribute("type", "password");
+  await openEngine();
+  const row = await screen.findByRole("group", { name: "Токен Hugging Face" });
+  expect(await within(row).findByText(/сохранён в диспетчере учётных данных Windows/)).toBeInTheDocument();
+  expect(within(row).getByText("доступ есть")).toBeInTheDocument();
+  expect(screen.queryByDisplayValue("hf_secret")).toBeNull();
+  expect(document.body).not.toHaveTextContent("hf_secret");
+  expect(within(row).queryByLabelText("Новый токен")).toBeNull();
+});
+
+test("«Изменить токен» → «Проверить и сохранить»: успех перечитывает статус и модели", async () => {
+  vi.mocked(api.setHfToken).mockResolvedValue({ ok: true, reason: "ok", message: "Доступ есть" });
+  await openEngine();
+  const row = await screen.findByRole("group", { name: "Токен Hugging Face" });
+  await userEvent.click(await within(row).findByRole("button", { name: "Изменить токен" }));
+  await userEvent.type(within(row).getByLabelText("Новый токен"), "hf_new");
+  const models = vi.mocked(api.getModels).mock.calls.length;
+  const status = vi.mocked(api.getHfStatus).mock.calls.length;
+  await userEvent.click(within(row).getByRole("button", { name: "Проверить и сохранить" }));
+  expect(api.setHfToken).toHaveBeenCalledWith(ep, "hf_new");
+  await waitFor(() => expect(vi.mocked(api.getHfStatus).mock.calls.length).toBeGreaterThan(status));
+  expect(vi.mocked(api.getModels).mock.calls.length).toBeGreaterThan(models);
+  expect(within(row).queryByLabelText("Новый токен")).toBeNull();
+});
+
+test("неверный токен — «Неверный токен», поле остаётся для исправления", async () => {
+  vi.mocked(api.setHfToken).mockResolvedValue({ ok: false, reason: "invalid_token", message: "Неверный токен" });
+  await openEngine();
+  const row = await screen.findByRole("group", { name: "Токен Hugging Face" });
+  await userEvent.click(await within(row).findByRole("button", { name: "Изменить токен" }));
+  await userEvent.type(within(row).getByLabelText("Новый токен"), "hf_bad");
+  await userEvent.click(within(row).getByRole("button", { name: "Проверить и сохранить" }));
+  expect(await within(row).findByRole("alert")).toHaveTextContent("Неверный токен");
+  expect(within(row).getByLabelText("Новый токен")).toBeInTheDocument();
+});
+
+test("«Удалить токен» — DELETE /hf/token, статус «не задан»", async () => {
+  await openEngine();
+  const row = await screen.findByRole("group", { name: "Токен Hugging Face" });
+  await userEvent.click(await within(row).findByRole("button", { name: "Удалить токен" }));
+  expect(api.deleteHfToken).toHaveBeenCalledWith(ep);
+  expect(await within(row).findByText(/не задан/)).toBeInTheDocument();
+});
+
+test("токен из переменной среды — удалить из приложения нельзя", async () => {
+  vi.mocked(api.getHfStatus).mockResolvedValue({ configured: true, source: "env", check: null });
+  await openEngine();
+  const row = await screen.findByRole("group", { name: "Токен Hugging Face" });
+  expect(await within(row).findByText(/из переменной среды HF_TOKEN/)).toBeInTheDocument();
+  expect(within(row).queryByRole("button", { name: "Удалить токен" })).toBeNull();
+});
+
+test("«Движок и модели»: кнопка «Запустить мастер»", async () => {
+  const onRunWizard = vi.fn();
+  await openEngine({ onRunWizard });
+  await userEvent.click(await screen.findByRole("button", { name: "Запустить мастер" }));
+  expect(onRunWizard).toHaveBeenCalled();
 });
 
 test("движок не загрузился — сообщение без «Error:»", async () => {

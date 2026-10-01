@@ -15,6 +15,7 @@ use tauri::{
 use tauri_plugin_dialog::DialogExt;
 
 use crate::api::Client;
+use crate::engine;
 use crate::logs::shell_log;
 use crate::resident::{self, Endpoint, ResidentStatus, Supervisor};
 
@@ -409,6 +410,114 @@ pub async fn pick_folder(app: AppHandle, start: Option<String>) -> Result<Option
     .map_err(|error| error.to_string())?
 }
 
+/// Страницы, которые окно открывает в браузере: мастер (Hugging Face) и
+/// подсказки «не найден — установите» в настройках ассистента. Префикс
+/// кончается на «/»: хост дальше не продолжить (`huggingface.co.evil`).
+const URL_PREFIXES: &[&str] = &[
+    "https://huggingface.co/",
+    "https://claude.ai/",
+    "https://github.com/openai/codex/",
+];
+const URL_EXACT: &[&str] = &["https://github.com/openai/codex"];
+
+/// Адрес из списка и без символов, которые что-то значат для оболочки
+/// Windows (`&`, `|`, `"`, `^`, пробелы, `\`, управляющие).
+pub fn url_allowed(url: &str) -> bool {
+    let plain = url
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "-._~/:?=#%+".contains(c));
+    plain
+        && (URL_EXACT.contains(&url)
+            || URL_PREFIXES
+                .iter()
+                .any(|prefix| url.len() > prefix.len() && url.starts_with(prefix)))
+}
+
+/// Открыть страницу в браузере по умолчанию. Только адреса из списка.
+#[tauri::command]
+pub async fn open_url(url: String) -> Result<(), String> {
+    if !url_allowed(&url) {
+        shell_log!("open_url: отказ, адрес не из списка: {url}");
+        return Err("эту ссылку приложение не открывает".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || shell_open(&url))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// ShellExecuteW, а не `cmd /C start`: адрес не проходит через разбор cmd.
+#[cfg(windows)]
+fn shell_open(url: &str) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let wide = |text: &str| text.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let verb = wide("open");
+    let file = wide(url);
+    // SAFETY: обе строки заканчиваются нулём и живут до конца вызова;
+    // окно-владелец и параметры не нужны (null).
+    let code = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    } as isize;
+    // Больше 32 — успех (так устроен ответ ShellExecute).
+    if code > 32 {
+        Ok(())
+    } else {
+        Err(format!("браузер не открылся (код {code})"))
+    }
+}
+
+#[cfg(not(windows))]
+fn shell_open(_url: &str) -> Result<(), String> {
+    Err("открыть страницу можно только в Windows".to_string())
+}
+
+/// Отметка «мастер первого запуска пройден или пропущен» в папке данных.
+/// Окно хранит то же в localStorage и в настройках резидента, но ни то, ни
+/// другое оболочке при старте не прочитать (резидента без движка нет).
+pub const WIZARD_DONE_MARKER: &str = "wizard_done";
+
+pub fn wizard_done(data_dir: &Path) -> bool {
+    data_dir.join(WIZARD_DONE_MARKER).is_file()
+}
+
+pub fn write_wizard_done(data_dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(data_dir)?;
+    std::fs::write(data_dir.join(WIZARD_DONE_MARKER), b"")
+}
+
+#[tauri::command]
+pub fn mark_wizard_done() -> Result<(), String> {
+    write_wizard_done(&resident::data_dir())
+        .map_err(|error| format!("отметка мастера не записалась: {error}"))
+}
+
+/// Открыть ли окно с мастером при старте: только в установленном приложении
+/// (в dev резидент из .venv репозитория), пока движка нет и «Пропустить» не
+/// нажимали. Окно само решит показать мастер по тем же правилам.
+pub fn wizard_at_startup(release: bool, engine_installed: bool, wizard_done: bool) -> bool {
+    release && !engine_installed && !wizard_done
+}
+
+/// Первый запуск: сразу окно, а не молчаливая иконка в трее без движка.
+/// Из `setup` (главный поток).
+pub fn open_wizard_on_first_run(app: &AppHandle) {
+    let data = resident::data_dir();
+    let version = app.package_info().version.to_string();
+    let installed = engine::is_installed(&engine::env_dir(&data, &version), &version);
+    if wizard_at_startup(!cfg!(debug_assertions), installed, wizard_done(&data)) {
+        shell_log!("движок {version} не установлен — открываю мастер первого запуска");
+        open_main(app, None, None);
+    }
+}
+
 #[tauri::command]
 pub fn resident_status(app: AppHandle) -> String {
     match app.state::<Supervisor>().status() {
@@ -627,5 +736,65 @@ mod tests {
         );
         // Сам exe (argv[0]) не разбирается как флаг.
         assert_eq!(recording_arg(&argv(&["--recording", "x"])), None);
+    }
+
+    #[test]
+    fn url_allowed_only_for_known_pages() {
+        for url in [
+            "https://huggingface.co/pyannote/speaker-diarization-community-1",
+            "https://huggingface.co/settings/tokens",
+            "https://claude.ai/code",
+            "https://github.com/openai/codex",
+            "https://github.com/openai/codex/releases",
+        ] {
+            assert!(url_allowed(url), "{url}");
+        }
+        for url in [
+            // Чужой хост, похожий на свой.
+            "https://huggingface.co.evil.example/x",
+            "https://huggingface.com/x",
+            "http://huggingface.co/x",
+            "https://huggingface.co",
+            "https://github.com/openai/codexx",
+            "https://github.com/openai/other",
+            "https://github.com/evil/codex",
+            "file:///C:/Windows/System32/calc.exe",
+            "C:\\Windows\\System32\\calc.exe",
+            "",
+            // Метасимволы cmd и пробелы: адрес передаётся как есть, без них.
+            "https://huggingface.co/x&calc",
+            "https://huggingface.co/x|calc",
+            "https://huggingface.co/x\"calc",
+            "https://huggingface.co/x calc",
+            "https://huggingface.co/x^calc",
+            "https://huggingface.co/x\ncalc",
+            "https://huggingface.co/x\\..\\calc",
+        ] {
+            assert!(!url_allowed(url), "{url:?}");
+        }
+    }
+
+    #[test]
+    fn wizard_opens_at_startup_only_in_release_without_engine_and_without_skip() {
+        assert!(wizard_at_startup(true, false, false));
+        // Движок есть — обычный запуск в трей.
+        assert!(!wizard_at_startup(true, true, false));
+        // «Пропустить» уже нажимали — мастер сам не открывается никогда.
+        assert!(!wizard_at_startup(true, false, true));
+        // dev: резидент из .venv репозитория, мастер не мешает.
+        assert!(!wizard_at_startup(false, false, false));
+    }
+
+    #[test]
+    fn wizard_done_marker_lives_in_the_data_dir() {
+        let base = std::env::temp_dir().join(format!("meet-wizard-marker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(!wizard_done(&base));
+        write_wizard_done(&base).unwrap();
+        assert!(wizard_done(&base));
+        assert!(base.join(WIZARD_DONE_MARKER).is_file());
+        // Повторная отметка не ломается.
+        write_wizard_done(&base).unwrap();
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -116,3 +116,38 @@ test("openLiveEvents: onError говорит, сдался ли браузер (
   source.fail(true);
   expect(onError).toHaveBeenLastCalledWith(true);
 });
+
+test("setHfToken: POST /hf/token {token}; ответ — результат проверки", async () => {
+  const f = vi.fn().mockResolvedValue(new Response(
+    JSON.stringify({ ok: false, reason: "invalid_token", message: "Неверный токен" }), { status: 200 }));
+  globalThis.fetch = f;
+  expect(await api.setHfToken(ep, "hf_x")).toEqual({ ok: false, reason: "invalid_token", message: "Неверный токен" });
+  expect(f.mock.calls[0]![0]).toBe("http://h/hf/token");
+  expect(f.mock.calls[0]![1]).toMatchObject({ method: "POST", body: JSON.stringify({ token: "hf_x" }) });
+  expect(f.mock.calls[0]![1].signal).toBeInstanceOf(AbortSignal);
+});
+
+test("setHfToken: не уложился в 15 секунд — понятная ошибка", async () => {
+  vi.useFakeTimers();
+  try {
+    globalThis.fetch = vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_, reject) => {
+      init.signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    })) as unknown as typeof fetch;
+    const pending = api.setHfToken(ep, "hf_x");
+    const check = expect(pending).rejects.toThrow("Проверка не ответила за 15 секунд — попробуйте ещё раз");
+    await vi.advanceTimersByTimeAsync(api.HF_TIMEOUT_MS);
+    await check;
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("hf: статус, удаление и перепроверка — свои адреса", async () => {
+  const f = okFetch();
+  await api.getHfStatus(ep);
+  await api.deleteHfToken(ep);
+  await api.recheckHf(ep);
+  expect(f.mock.calls.map((c) => [c[0], (c[1] as RequestInit).method ?? "GET"])).toEqual([
+    ["http://h/hf/status", "GET"], ["http://h/hf/token", "DELETE"], ["http://h/hf/check", "POST"],
+  ]);
+});

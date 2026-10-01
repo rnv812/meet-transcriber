@@ -8,6 +8,9 @@ import { SettingsPane } from "../features/settings/SettingsPane";
 import { RecordingCard } from "../features/card/RecordingCard";
 import { initialRecording, initialSection, onOpenRecording, onOpenSection } from "../lib/shell";
 import { EmptyState, OfflineState } from "../ui/EmptyState";
+import { Button } from "../ui/Button";
+import { Wizard } from "../features/wizard/Wizard";
+import { useWizardGate } from "../features/wizard/useWizardGate";
 import { Nav, type Section } from "./Nav";
 import { RecordingBadge } from "./RecordingBadge";
 
@@ -24,6 +27,8 @@ export function App() {
   const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick);
   const { people, refresh: refreshPeople, avatarVersion, bumpAvatar } = usePeople(resident.endpoint ?? null, resident.doneTick);
   const offline = resident.status === "offline";
+  const gate = useWizardGate(resident.status, resident.endpoint ?? null);
+  const recording = resident.snapshot?.status === "recording" || resident.snapshot?.live?.active === true;
 
   const openRecording = (id: string) => { setSelected(id); setSection("recordings"); };
   const select = (s: Section) => { setSettingsPart(undefined); setSection(s); };
@@ -61,6 +66,20 @@ export function App() {
     return () => { gone = true; unlisten?.(); };
   }, []);
 
+  if (gate.wizard) {
+    return (
+      <Wizard start={gate.wizard} engine={gate.engine} endpoint={resident.endpoint ?? null} recording={recording}
+        onEngineChanged={() => void gate.refreshEngine()} onClose={gate.close} />
+    );
+  }
+
+  // Без движка резидент не запустится: вместо «перезапускаю» — предложение поставить.
+  const offlineList = gate.engineMissing ? <EmptyState title="Движок не установлен" /> : <OfflineState />;
+  const offlineDetail = gate.engineMissing ? (
+    <EmptyState title="Движок не установлен" hint="Без него приложение не записывает и не расшифровывает встречи."
+      action={<Button variant="primary" onClick={() => gate.open("engine")}>Установить</Button>} />
+  ) : <OfflineState />;
+
   return (
     <div className="app">
       <Nav section={section} onSelect={select} />
@@ -73,7 +92,7 @@ export function App() {
         <div className="panes">
           {section === "recordings" && (
             <div className="pane-list" data-pane="list">
-              {offline ? <OfflineState /> : <RecordingsList
+              {offline ? offlineList : <RecordingsList
                 selected={selected}
                 onSelect={setSelected}
                 library={library}
@@ -85,7 +104,7 @@ export function App() {
           )}
           <main className="pane-detail" data-pane="detail">
             {offline ? (
-              <OfflineState />
+              offlineDetail
             ) : section === "voices" && resident.endpoint ? (
               <VoicesPane
                 endpoint={resident.endpoint}
@@ -97,7 +116,8 @@ export function App() {
               />
             ) : section === "settings" && resident.endpoint ? (
               <SettingsPane endpoint={resident.endpoint} recordingsDir={resident.snapshot?.recordings_dir ?? null}
-                initial={settingsPart?.part} initialTick={settingsPart?.n} />
+                initial={settingsPart?.part} initialTick={settingsPart?.n}
+                onRunWizard={() => gate.open("hardware")} />
             ) : selected && resident.endpoint ? (
               <RecordingCard
                 key={selected}

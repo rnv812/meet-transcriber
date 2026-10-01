@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type Endpoint, checkProvider, getAssistant } from "../../lib/api";
 import { errorText } from "../../lib/format";
-import { pickFolder } from "../../lib/shell";
+import { openUrl, pickFolder } from "../../lib/shell";
 import type { AssistantInfo } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { Row, type Raw, type SetFn } from "./Section";
@@ -173,7 +173,12 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
                 </label>
                 <div className="provider__status">
                   {missing ? (
-                    <span className="muted">не найден — установите <span className="provider__link">{p.link}</span></span>
+                    <span className="muted">не найден — установите{" "}
+                      <button type="button" className="provider__link"
+                        onClick={() => void openUrl(`https://${p.link}`)}>
+                        {p.link}
+                      </button>
+                    </span>
                   ) : line ? <span className="muted">{line}</span> : null}
                 </div>
                 <div className="provider__check">

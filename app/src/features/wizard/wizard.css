@@ -1,0 +1,81 @@
+/* Мастер первого запуска: одна колонка по центру окна, шаги — строкой сверху. */
+.wizard { height: 100%; overflow: auto; background: var(--bg); }
+.wizard__frame { max-width: 680px; margin: 0 auto; padding: 28px 32px 40px; }
+.wizard__head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+
+.wizard__steps {
+  list-style: none; margin: 16px 0 0; padding: 0 0 16px;
+  display: flex; flex-wrap: wrap; gap: 6px 18px; border-bottom: 1px solid var(--line);
+}
+.wizard__steps li { display: inline-flex; align-items: center; gap: 8px; color: var(--text-3); font-size: 12px; }
+.wizard__steps li.is-done { color: var(--text-2); }
+.wizard__steps li.is-current { color: var(--text); }
+.wizard__num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%;
+  border: 1px solid var(--line-2); font-size: 11px; font-variant-numeric: tabular-nums;
+}
+.wizard__steps li.is-done .wizard__num { border-color: transparent; background: var(--surface-2); color: var(--ok); }
+.wizard__steps li.is-current .wizard__num { border-color: var(--accent); background: var(--accent); color: #fff; }
+
+.wizard__step { padding-top: 20px; display: flex; flex-direction: column; gap: 12px; }
+.wizard__step h1 { margin: 0; font-size: 18px; font-weight: 600; color: #fff; }
+.wizard__step p { margin: 0; }
+.wizard__lead { font-size: 14px; color: var(--text); }
+.wizard__hint { color: var(--text-3); font-size: 12px; }
+.wizard__wait { padding: 24px 0; }
+
+.wizard__facts {
+  display: grid; grid-template-columns: 140px 1fr; gap: 10px 16px; margin: 0;
+  padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg);
+}
+.wizard__facts dt { color: var(--text-2); }
+.wizard__facts dd { margin: 0; display: flex; flex-direction: column; gap: 2px; }
+
+.wizard__bar { display: flex; align-items: center; gap: 10px; padding-top: 8px; }
+.wizard__skip {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border: 1px dashed var(--line-2); border-radius: var(--r-md);
+}
+
+/* Установка движка */
+.wizard__install, .wizard__failed { display: flex; flex-direction: column; gap: 8px; }
+.wizard__progress { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.wizard__progress li { position: relative; padding-left: 22px; color: var(--text-3); }
+.wizard__progress li::before {
+  content: ""; position: absolute; left: 4px; top: 5px; width: 8px; height: 8px;
+  border-radius: 50%; border: 1px solid var(--line-2);
+}
+.wizard__progress li.is-done { color: var(--text-2); }
+.wizard__progress li.is-done::before { background: var(--ok); border-color: var(--ok); }
+.wizard__progress li.is-current { color: var(--text); }
+.wizard__progress li.is-current::before {
+  background: var(--accent); border-color: var(--accent);
+  animation: wizard-pulse 1.2s ease-in-out infinite;
+}
+@keyframes wizard-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) {
+  .wizard__progress li.is-current::before { animation: none; }
+}
+.wizard__log > summary { cursor: pointer; color: var(--text-2); padding: 2px 0 6px; }
+
+/* Hugging Face */
+.wizard__todo { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 14px; }
+.wizard__todo li { padding-left: 4px; }
+.wizard__todo li > span { display: block; margin-bottom: 6px; }
+
+/* Модели */
+.wizard__models { display: flex; flex-direction: column; }
+.wizard__model {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 10px 0; border-bottom: 1px solid var(--line);
+}
+.wizard__model-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.wizard__model-text .tag { margin-left: 8px; }
+.wizard__meter { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; max-width: 320px; }
+.wizard__meter-fill { height: 100%; background: var(--accent); transition: width var(--t); }
+
+/* Запись */
+.wizard__devices { display: flex; flex-wrap: wrap; gap: 8px; }
+.wizard__apps { display: flex; flex-direction: column; gap: 4px; padding: 4px 0; }
+.wizard__checks { justify-content: flex-start; padding-top: 6px; }

@@ -233,6 +233,13 @@ export function RecordingCard({
           </span>
         </div>
       )}
+      {status.kind === "ready" && rec.diarization?.startsWith("skipped_") && (
+        // Без токена HF (или без доступа к модели) расшифровка идёт одним потоком.
+        <div className="card__banner" role="status">
+          <span>Без разделения на спикеров — настройте Hugging Face</span>
+          {onOpenSettings && <Button onClick={() => onOpenSettings("engine")}>Настроить</Button>}
+        </div>
+      )}
       <div className="card__body">{body}</div>
       {naming && (
         <Popover anchor={naming.anchor} onClose={closeNaming} label="Кто это?">

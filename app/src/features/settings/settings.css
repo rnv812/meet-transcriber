@@ -79,4 +79,8 @@
 .provider__status { grid-column: 1; font-size: 12px; word-break: break-all; padding-left: 22px; }
 .provider__check { grid-column: 2; grid-row: 1 / span 2; display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
 .provider__check .error, .provider__check .notice { font-size: 12px; max-width: 220px; }
-.provider__link { color: var(--text-2); user-select: all; }
+.provider__link {
+  padding: 0; border: 0; background: none; font: inherit; color: var(--text-2);
+  text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.provider__link:hover { color: var(--text); }

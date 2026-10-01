@@ -390,3 +390,20 @@ test("не расшифрованная запись — без вкладок",
   expect(screen.queryByRole("tablist")).toBeNull();
   expect(api.getSummary).not.toHaveBeenCalled();
 });
+
+test.each(["skipped_no_token", "skipped_no_access"])(
+  "расшифровка без спикеров (%s) — подсказка и переход в настройки моделей", async (diarization) => {
+    load({ diarization });
+    const onOpenSettings = vi.fn();
+    render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={onOpenSettings} />);
+    expect(await screen.findByText("Без разделения на спикеров — настройте Hugging Face")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Настроить" }));
+    expect(onOpenSettings).toHaveBeenCalledWith("engine");
+  });
+
+test("со спикерами — подсказки про Hugging Face нет", async () => {
+  load({ diarization: null });
+  render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={() => {}} />);
+  expect(await screen.findByText("Привет всем")).toBeInTheDocument();
+  expect(screen.queryByText(/настройте Hugging Face/)).toBeNull();
+});

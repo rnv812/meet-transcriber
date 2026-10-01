@@ -193,6 +193,43 @@ export const getDiagnostics = (ep: Endpoint, lines = 200) =>
 export const getDevices = (ep: Endpoint) => json<Devices>(ep, "/devices");
 export const getProcesses = (ep: Endpoint) => json<Processes>(ep, "/processes");
 
+
+// --- Hugging Face ---------------------------------------------------------------
+
+export type HfCheck = {
+  ok: boolean;
+  reason: "ok" | "invalid_token" | "terms_not_accepted" | "network";
+  message: string;
+};
+/** Токен в ответ не уходит никогда — только где он лежит и итог последней проверки. */
+export type HfStatus = {
+  configured: boolean;
+  source: "keyring" | "env" | "config" | null;
+  check: HfCheck | null;
+};
+
+/** Резидент проверяет токен до 12 с; ждём с запасом. */
+export const HF_TIMEOUT_MS = 15_000;
+
+export const getHfStatus = (ep: Endpoint) => json<HfStatus>(ep, "/hf/status");
+
+/** Проверить токен и сохранить, только если доступ есть. */
+export async function setHfToken(ep: Endpoint, token: string): Promise<HfCheck> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), HF_TIMEOUT_MS);
+  try {
+    return await json<HfCheck>(ep, "/hf/token", { ...body("POST", { token }), signal: controller.signal });
+  } catch (cause) {
+    if (controller.signal.aborted) throw new Error("Проверка не ответила за 15 секунд — попробуйте ещё раз");
+    throw cause;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+export const deleteHfToken = (ep: Endpoint) => json<HfStatus>(ep, "/hf/token", { method: "DELETE" });
+/** Перепроверить сохранённый токен (условия модели могли принять с тех пор). */
+export const recheckHf = (ep: Endpoint) => json<HfCheck>(ep, "/hf/check", body("POST", {}));
+
 // --- ассистент: итоги, вопросы, заметки -------------------------------------
 
 /** Итоги задачей (kind "summary"); 409 — нет провайдера или идёт расшифровка. */

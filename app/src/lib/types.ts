@@ -62,6 +62,8 @@ export type Recording = {
   source: string;
   /** Когда записан транскрипт (секунды эпохи), нет — null. */
   transcript_at?: number | null;
+  /** Спикеры не разделены: "skipped_no_token" — нет токена HF, "skipped_no_access" — HF отказал. */
+  diarization?: string | null;
 };
 
 export type Segment = {

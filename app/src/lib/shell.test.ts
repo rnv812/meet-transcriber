@@ -24,3 +24,23 @@ test("браузер: ссылка в документе на время кли�
     vi.useRealTimers();
   }
 });
+
+test("браузер: openUrl открывает новую вкладку без доступа к окну", async () => {
+  const { openUrl } = await import("./shell");
+  const open = vi.spyOn(window, "open").mockImplementation(() => null);
+  try {
+    await openUrl("https://huggingface.co/settings/tokens");
+    expect(open).toHaveBeenCalledWith("https://huggingface.co/settings/tokens", "_blank", "noopener,noreferrer");
+  } finally {
+    open.mockRestore();
+  }
+});
+
+test("автозапуск: команды нет в оболочке — недоступен; есть (ругается на аргументы) — доступен", async () => {
+  const { probeCommand } = await import("./shell");
+  expect(await probeCommand(async () => { throw "Command set_autostart not found"; })).toBe(false);
+  expect(await probeCommand(async () => {
+    throw "invalid args `enabled` for command `set_autostart`: command set_autostart missing required key enabled";
+  })).toBe(true);
+  expect(await probeCommand(async () => undefined)).toBe(true);
+});
