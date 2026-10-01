@@ -7,8 +7,9 @@ const residentState = vi.hoisted(() => ({ current: { status: "offline" } as Reco
 vi.mock("../state/useResident", () => ({ useResident: () => residentState.current }));
 const useLibrarySpy = vi.hoisted(() => vi.fn());
 vi.mock("../state/useLibrary", () => ({ useLibrary: useLibrarySpy }));
+const refreshPeople = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../state/usePeople", () => ({
-  usePeople: () => ({ people: [], refresh: async () => {}, avatarVersion: {}, bumpAvatar: () => {} }),
+  usePeople: () => ({ people: [], refresh: refreshPeople, avatarVersion: {}, bumpAvatar: () => {} }),
 }));
 vi.mock("../features/card/RecordingCard", () => ({
   RecordingCard: ({ id }: { id: string }) => <div data-testid="card">{id}</div>,
@@ -93,4 +94,12 @@ test("пустой список при живом резиденте — под�
   render(<App />);
   expect(screen.getByText("Записей пока нет")).toBeInTheDocument();
   expect(screen.getByText("Нажмите «Начать запись» или перетащите файл")).toBeInTheDocument();
+});
+
+test("вход в «Голоса» перечитывает базу людей", async () => {
+  residentState.current = online();
+  render(<App />);
+  refreshPeople.mockClear();
+  await userEvent.click(screen.getByText("Голоса"));
+  expect(refreshPeople).toHaveBeenCalledTimes(1);
 });

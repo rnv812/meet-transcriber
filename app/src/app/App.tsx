@@ -17,10 +17,15 @@ export function App() {
   const [selected, setSelected] = useState<string | null>(() => initialRecording());
   const resident = useResident();
   const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick);
-  const { people, refresh: refreshPeople, avatarVersion, bumpAvatar } = usePeople(resident.endpoint ?? null);
+  const { people, refresh: refreshPeople, avatarVersion, bumpAvatar } = usePeople(resident.endpoint ?? null, resident.doneTick);
   const offline = resident.status === "offline";
 
   const openRecording = (id: string) => { setSelected(id); setSection("recordings"); };
+
+  // В «Голоса» — со свежей базой: её меняют и расшифровки, и карточки записей.
+  useEffect(() => {
+    if (section === "voices") void refreshPeople();
+  }, [section, refreshPeople]);
 
   // Клик по уведомлению: оболочка присылает id записи.
   useEffect(() => {
@@ -37,7 +42,9 @@ export function App() {
       <Nav section={section} onSelect={setSection} />
       <div className="content">
         <header className="topbar">
-          <RecordingBadge endpoint={resident.endpoint ?? null} snapshot={resident.snapshot ?? null} />
+          <RecordingBadge endpoint={resident.endpoint ?? null} snapshot={resident.snapshot ?? null}
+            snapshotAt={resident.snapshotAt} online={resident.status === "online"}
+            onSnapshot={resident.applySnapshot} />
         </header>
         <div className="panes">
           {section === "recordings" && (

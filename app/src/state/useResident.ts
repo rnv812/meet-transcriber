@@ -12,11 +12,11 @@ import { type BusEvent, type Snapshot, isLevel } from "../lib/types";
 const POLL_MS = 4000;
 const RECONNECT_MS = 2000;
 
-const refreshWorthy = (e: BusEvent) =>
-  e.kind.startsWith("job.") ||
-  e.kind === "record.started" ||
-  e.kind === "record.stopped" ||
-  e.kind === "record.discarded";
+/** События, после которых снимок устарел сразу, а не к следующему опросу. */
+const stateChanging = (e: BusEvent) =>
+  e.kind === "record.started" || e.kind === "record.stopped" || e.kind === "record.discarded";
+
+const refreshWorthy = (e: BusEvent) => e.kind.startsWith("job.") || stateChanging(e);
 
 export type ResidentStatus = "connecting" | "online" | "offline";
 
@@ -24,18 +24,27 @@ export type Resident = {
   status: ResidentStatus;
   endpoint: Endpoint | null;
   snapshot: Snapshot | null;
+  /** Когда пришёл снимок (Date.now()): от него тикает локальный таймер записи. */
+  snapshotAt: number;
+  /** Применить снимок, пришедший не из потока (ответ команды записи). */
+  applySnapshot: (s: Snapshot) => void;
   /** Последнее событие шины (кроме уровней). */
   lastEvent: BusEvent | null;
   /** Растёт на каждое событие, после которого библиотеку надо перечитать.
    *  Счётчик, а не слот: пачка событий не затирает друг друга. */
   libraryTick: number;
+  /** Растёт на каждое `job.done`: после расшифровки меняется база людей.
+   *  Отдельно от libraryTick — тот растёт и на каждый прогресс задачи. */
+  doneTick: number;
 };
 
 export function useResident(): Resident {
   const [endpoint, setEndpoint] = useState<Endpoint | null>(null);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [snapshotAt, setSnapshotAt] = useState(0);
   const [lastEvent, setLastEvent] = useState<BusEvent | null>(null);
   const [libraryTick, setLibraryTick] = useState(0);
+  const [doneTick, setDoneTick] = useState(0);
   const [status, setStatus] = useState<ResidentStatus>("connecting");
   const levels = useRef<Record<string, number>>({});
   const lastEventAt = useRef(0);
@@ -56,6 +65,7 @@ export function useResident(): Resident {
 
   const apply = useCallback((next: Snapshot) => {
     setSnapshot({ ...next, levels: next.levels ?? levels.current });
+    setSnapshotAt(Date.now());
     setStatus("online");
   }, []);
 
@@ -93,6 +103,10 @@ export function useResident(): Resident {
           }
           setLastEvent(event);
           if (refreshWorthy(event)) setLibraryTick((t) => t + 1);
+          if (event.kind === "job.done") setDoneTick((t) => t + 1);
+          if (stateChanging(event)) {
+            getState(endpoint).then((s) => { if (!closed) apply(s); }).catch(() => {});
+          }
         },
         onError: () => {
           setStatus("offline");
@@ -136,5 +150,5 @@ export function useResident(): Resident {
     };
   }, [endpoint, apply]);
 
-  return { status, endpoint, snapshot, lastEvent, libraryTick };
+  return { status, endpoint, snapshot, snapshotAt, applySnapshot: apply, lastEvent, libraryTick, doneTick };
 }

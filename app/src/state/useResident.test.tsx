@@ -5,7 +5,8 @@ vi.mock("../lib/api", async (orig) => ({
   resolveEndpoint: vi.fn(),
   getState: vi.fn().mockResolvedValue({ status: "idle", folder: null, levels: {} }),
 }));
-import { NoResidentError, resolveEndpoint } from "../lib/api";
+import { NoResidentError, getState, resolveEndpoint } from "../lib/api";
+import type { Snapshot } from "../lib/types";
 import { useResident } from "./useResident";
 import { FakeEventSource } from "../test/setup";
 
@@ -36,5 +37,43 @@ test("пачка событий в одном act не теряется: счё�
     es.emit("job.queued", { kind: "job.queued", at: 2 });
     es.emit("log", { kind: "log", at: 3 });
   });
+  expect(result.current.libraryTick).toBe(2);
+});
+
+test("applySnapshot сразу меняет снимок и время его прихода", async () => {
+  vi.mocked(resolveEndpoint).mockResolvedValue({ base: "http://127.0.0.1:1", token: "t" });
+  const { result } = renderHook(() => useResident());
+  await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+  const before = result.current.snapshotAt;
+  await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+  act(() => result.current.applySnapshot({ status: "recording", folder: "C:/r/x", elapsed_s: 0, levels: {} } as never));
+  expect(result.current.snapshot?.status).toBe("recording");
+  expect(result.current.snapshotAt).toBeGreaterThan(before);
+});
+
+test("record.started/stopped: снимок перечитывается сразу, не ждёт опроса", async () => {
+  vi.mocked(resolveEndpoint).mockResolvedValue({ base: "http://127.0.0.1:1", token: "t" });
+  const { result } = renderHook(() => useResident());
+  await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+  expect(result.current.snapshot?.status).toBe("idle");
+  vi.mocked(getState).mockResolvedValueOnce({ status: "recording", folder: "C:/r/x", elapsed_s: 1, levels: {} } as Partial<Snapshot> as Snapshot);
+  const es = FakeEventSource.instances.at(-1)!;
+  await act(async () => {
+    es.emit("record.started", { kind: "record.started", at: 1 });
+    await vi.advanceTimersByTimeAsync(10);
+  });
+  expect(result.current.snapshot?.status).toBe("recording");
+});
+
+test("doneTick растёт только на job.done", async () => {
+  vi.mocked(resolveEndpoint).mockResolvedValue({ base: "http://127.0.0.1:1", token: "t" });
+  const { result } = renderHook(() => useResident());
+  await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+  const es = FakeEventSource.instances.at(-1)!;
+  act(() => {
+    es.emit("job.progress", { kind: "job.progress", at: 1 });
+    es.emit("job.done", { kind: "job.done", at: 2 });
+  });
+  expect(result.current.doneTick).toBe(1);
   expect(result.current.libraryTick).toBe(2);
 });

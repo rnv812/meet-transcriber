@@ -5,8 +5,9 @@ import type { Person } from "../lib/types";
 
 const NONE: Person[] = [];
 
-/** База людей: один экземпляр на окно; массив стабилен, пока не пришли новые данные. */
-export function usePeople(ep: Endpoint | null): {
+/** База людей: один экземпляр на окно; массив стабилен, пока не пришли новые данные.
+ *  `doneTick` — счётчик `job.done` из useResident. */
+export function usePeople(ep: Endpoint | null, doneTick = 0): {
   people: Person[];
   refresh: () => Promise<void>;
   avatarVersion: Record<string, number>;
@@ -30,6 +31,10 @@ export function usePeople(ep: Endpoint | null): {
   }, [ep]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+  // Расшифровка узнаёт людей и пополняет базу: перечитываем после каждой готовой задачи.
+  useEffect(() => {
+    if (doneTick > 0) void refresh();
+  }, [doneTick, refresh]);
 
   return { people, refresh, avatarVersion, bumpAvatar };
 }

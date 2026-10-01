@@ -25,3 +25,8 @@ export function dayLabel(iso: string, now: Date = new Date()): string {
   if (diff === 1) return `Вчера ${time}`;
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${time}`;
 }
+
+/** Текст ошибки для человека: у Error — сообщение без «Error: », иначе — как есть. */
+export function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
