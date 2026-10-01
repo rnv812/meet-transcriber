@@ -264,3 +264,18 @@ test("«Автозапись»: браузер для звонков сохра�
   expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1])
     .toEqual({ auto_record: { browsers: ["chrome.exe"], browser_require_site: true } });
 });
+
+test("«Распознавание»: порог узнавания голоса — ползунок в процентах, сохраняется в asr.voice_threshold", async () => {
+  const { fireEvent } = await import("@testing-library/react");
+  render(<SettingsPane endpoint={ep} recordingsDir="C:\rec" />);
+  await userEvent.click(await screen.findByRole("button", { name: "Распознавание" }));
+  const slider = await screen.findByRole("slider", { name: /Порог узнавания голоса/ });
+  expect(slider).toHaveValue("75");
+  expect(screen.getByLabelText("Что такое порог узнавания голоса")).toBeInTheDocument();
+  fireEvent.change(slider, { target: { value: "82" } });
+  expect(screen.getByText("82%")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
+  const call = vi.mocked(api.patchSettings).mock.calls[0]?.[1] as { asr: { voice_threshold: number } };
+  expect(call.asr.voice_threshold).toBe(0.82);
+});

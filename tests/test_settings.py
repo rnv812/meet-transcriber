@@ -287,6 +287,21 @@ def test_asr_device_and_cpu_model_defaults_and_roundtrip():
          "asr": {"device": "gpu!"}}).asr.device == "auto"
 
 
+def test_voice_threshold_default_matches_calibration_and_is_clamped(tmp_path):
+    from meet import voices
+
+    cfg = settings.Settings.from_raw({"version": settings.SCHEMA_VERSION})
+    assert cfg.asr.voice_threshold == voices.THRESHOLD == settings.VOICE_THRESHOLD
+    assert cfg.to_raw()["asr"]["voice_threshold"] == 0.75
+    raw = lambda v: settings.Settings.from_raw({"asr": {"voice_threshold": v}}).asr.voice_threshold  # noqa: E731
+    assert raw(0.8) == 0.8
+    assert raw(0.1) == 0.5 and raw(2) == 0.95
+    assert raw("мусор") == 0.75 and raw(True) == 0.75 and raw(None) == 0.75
+    f = tmp_path / "config.json"
+    assert settings.patch({"asr": {"voice_threshold": 0.7}}, f).asr.voice_threshold == 0.7
+    assert settings.load(f).asr.voice_threshold == 0.7
+
+
 def test_auto_transcribe_default_for_new_user():
     assert settings.Settings.from_raw({}).recording.auto_transcribe is True
 

@@ -132,3 +132,34 @@
 .spk-hist__text { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; line-height: 1.4; }
 .spk-hist__time { color: var(--text-3); font-size: 11px; }
 .spk-hist__now { color: var(--accent-hover); font-size: 11px; }
+
+/* «Разделить спикера»: мастер вместо списка строк. */
+.split { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; }
+.split__head { display: flex; flex-direction: column; gap: 4px; }
+.split__title { margin: 4px 0 0; font-size: 13px; font-weight: 600; color: var(--text); }
+.split__title:focus { outline: none; }
+.split__lead, .split__hint { margin: 0; font-size: 12px; line-height: 1.45; }
+.split__setup, .split__preview, .split__work { display: flex; flex-direction: column; gap: 8px; }
+.split__modes { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; border: 0; }
+.split__mode { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text); font-size: 12px; cursor: pointer; }
+.split__mode select, .split__k select {
+  height: 24px; padding: 0 4px; background: var(--surface); color: var(--text);
+  border: 1px solid var(--line-2); border-radius: var(--r-sm); font: inherit;
+}
+.split__k { display: flex; align-items: center; gap: 6px; color: var(--text); font-size: 12px; }
+.split__actions { display: flex; justify-content: flex-end; gap: 6px; }
+.split__people { display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--line-2);
+  border-radius: var(--r-md); background: var(--surface-2); }
+.split__plist { max-height: 200px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+.split__plist .spk-opt { cursor: pointer; }
+.split-group { margin-top: 0; }
+.split-group--unsure { border-style: dashed; }
+.split__pick { display: flex; flex-direction: column; gap: 2px; }
+
+/* Порог узнавания голоса встречи. */
+.spk-thr { margin-top: 14px; }
+.spk-thr__body { display: flex; flex-direction: column; gap: 8px; padding: 6px 2px 0; font-size: 12px; }
+.spk-thr__row { display: flex; align-items: center; gap: 8px; }
+.spk-thr__row input[type="range"] { flex: 1; accent-color: var(--accent); }
+.spk-thr__value { min-width: 36px; color: var(--text); }
+.spk-thr__plan ul { margin: 0; padding-left: 16px; color: var(--text); line-height: 1.5; }

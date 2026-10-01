@@ -16,12 +16,14 @@ import {
 } from "../../../lib/api";
 import { clock, errorText, plural } from "../../../lib/format";
 import { isUnnamed } from "../../../lib/speakers";
-import type { SpeakerRow, SpeakersView } from "../../../lib/types";
+import type { Job, SpeakerRow, SpeakersView } from "../../../lib/types";
 import { Avatar } from "../../../ui/Avatar";
 import { Button } from "../../../ui/Button";
 import { HelpTip, TipLine } from "../../../ui/HelpTip";
 import type { PersonColor } from "../Turns";
 import { HistoryList, HistoryTools, useUndoKeys } from "./SpeakerHistory";
+import { SplitView } from "./SplitView";
+import { ThresholdBox } from "./ThresholdBox";
 import {
   changeText, finalOf, preview, prune, rememberDefault, toOps, type Change, type Staged,
 } from "./staging";
@@ -32,6 +34,7 @@ export const PHRASE_S = 6;
 /** Сколько людей базы показывать в списке «Кто это?». */
 const PICK_MAX = 8;
 
+const NO_JOBS: Job[] = [];
 const fold = (s: string) => s.trim().toLowerCase().replace(/ё/g, "е");
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
@@ -39,11 +42,13 @@ type Pick = { label: string; mode: "assign" | "merge" };
 type Option = { key: string; text: string; hint?: string; change: Change; person?: PersonColor };
 
 export function SpeakersPanel({
-  endpoint, recordingId, people, avatarVersion, open, focus, version, playable, cardRef,
+  endpoint, recordingId, people, avatarVersion, open, focus, version, playable, cardRef, jobs = NO_JOBS,
   onClose, onPlay, onShowTurns, onChanged,
 }: {
   endpoint: Endpoint;
   recordingId: string;
+  /** Задачи резидента: счёт голосов для «Разделить спикера». */
+  jobs?: Job[];
   people: PersonColor[];
   avatarVersion?: Record<string, number>;
   open: boolean;
@@ -70,6 +75,8 @@ export function SpeakersPanel({
   const [staged, setStaged] = useState<Staged>({});
   const [remember, setRemember] = useState<Record<string, boolean>>({});
   const [pick, setPick] = useState<Pick | null>(null);
+  /** «Разделить спикера…»: чья строка разделяется (панель показывает мастер вместо списка). */
+  const [split, setSplit] = useState<string | null>(null);
   const rows = useRef<Record<string, HTMLElement | null>>({});
   const current = useRef({ endpoint, recordingId });
   current.current = { endpoint, recordingId };
@@ -194,6 +201,21 @@ export function SpeakersPanel({
     }, "Изменения применены. Итоги не пересчитываются автоматически.");
   };
   const discard = () => { setStaged({}); setRemember({}); setPick(null); };
+  const splitDone = (next: SpeakersView) => {
+    setSplit(null);
+    show(next);
+    setError(null);
+    setWarning(next.voices_error ?? null);
+    setNotice("Спикер разделён. Итоги не пересчитываются автоматически.");
+    onChanged();
+  };
+  const thresholdDone = (next: SpeakersView) => {
+    show(next);
+    setError(null);
+    setWarning(null);
+    setNotice(next.step ? "Имена пересчитаны с новым порогом." : "Порог сохранён для этой встречи.");
+    onChanged();
+  };
   const revert = (stepId: string | null) =>
     void run(() => revertSpeakers(endpoint, recordingId, stepId), "Состояние восстановлено.");
 
@@ -219,6 +241,12 @@ export function SpeakersPanel({
       {warning && <div className="spk__msg spk__warn" role="status">{warning}</div>}
       {notice && <div className="spk__msg spk__ok muted" role="status">{notice}</div>}
       <div className="spk__body">
+        {split && view && (
+          <SplitView key={split} endpoint={endpoint} recordingId={recordingId} label={split}
+            speakers={order} people={people} owner={owner} avatarVersion={avatarVersion} jobs={jobs}
+            playable={playable} onPlay={onPlay} onDone={splitDone} onBack={() => setSplit(null)} />
+        )}
+        {!split && <>
         {!view && !error && <div className="muted spk__msg">Загрузка…</div>}
         {view && view.speakers.length === 0 && <div className="muted spk__msg">В расшифровке нет спикеров</div>}
         {view?.speakers.map((row) => (
@@ -231,11 +259,16 @@ export function SpeakersPanel({
             onPick={(mode) => setPick((p) => (p?.label === row.label && p.mode === mode ? null : { label: row.label, mode }))}
             onStage={(c) => stage(row.label, c)}
             onRemember={(v) => setRemember((r) => ({ ...r, [row.label]: v }))}
-            onPlay={onPlay} onShowTurns={onShowTurns} />
+            onPlay={onPlay} onShowTurns={onShowTurns} onSplit={() => { setPick(null); setNotice(null); setSplit(row.label); }} />
         ))}
+        {view && view.speakers.some((r) => r.has_voice) && (
+          <ThresholdBox endpoint={endpoint} recordingId={recordingId} own={view.voice_threshold ?? null}
+            fallback={view.voice_threshold_default ?? 0.75} busy={busy || pending} onApplied={thresholdDone} />
+        )}
         {view && <HistoryList history={history} pos={pos} busy={busy} trimmed={!!view.trimmed} onRevert={revert} />}
+        </>}
       </div>
-      {pending && (
+      {pending && !split && (
         <div className="spk__foot">
           <div className="spk__preview" aria-live="polite">{preview(order, staged)}</div>
           <div className="spk__note muted">Итоги не пересчитываются автоматически</div>
@@ -251,7 +284,7 @@ export function SpeakersPanel({
 
 function SpeakerRowView({
   row, rows, staged, owner, people, avatarVersion, endpoint, playable, focused, pick, remember, refEl,
-  onPick, onStage, onRemember, onPlay, onShowTurns,
+  onPick, onStage, onRemember, onPlay, onShowTurns, onSplit,
 }: {
   row: SpeakerRow;
   rows: SpeakerRow[];
@@ -271,6 +304,8 @@ function SpeakerRowView({
   onRemember: (v: boolean) => void;
   onPlay: (start: number, until: number) => void;
   onShowTurns: (label: string) => void;
+  /** «Разделить…»: под этим спикером оказались разные люди. */
+  onSplit: () => void;
 }) {
   const person = people.find((p) => p.name === row.label);
   const change = staged[row.label];
@@ -335,6 +370,11 @@ function SpeakerRowView({
         {rows.length > 1 && (
           <button type="button" className="spk-btn" aria-expanded={pick === "merge"} onClick={() => onPick("merge")}>
             Объединить с…
+          </button>
+        )}
+        {row.turns > 1 && !change && (
+          <button type="button" className="spk-btn" onClick={onSplit} title="Под этим спикером оказались разные люди">
+            Разделить…
           </button>
         )}
         {change && <button type="button" className="spk-link" onClick={() => onStage(null)}>Убрать правку</button>}

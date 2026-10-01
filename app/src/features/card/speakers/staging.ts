@@ -72,6 +72,8 @@ export function prune(staged: Staged, labels: string[]): Staged {
 }
 
 function opText(op: SpeakerOp): string {
+  if (op.type === "split") return `${op.label} разделён: ${op.into.join(", ")}`;
+  if (op.type === "threshold") return `Порог узнавания ${Math.round(op.value * 100)}%`;
   if (op.type === "relabel") {
     const n = op.turns;
     return `${n} ${plural(n, "реплика", "реплики", "реплик")} (${op.from.join(", ")}) → ${op.to}`;

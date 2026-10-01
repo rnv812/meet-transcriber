@@ -38,6 +38,9 @@ HISTORY = "speaker_history"
 POS = "speaker_history_pos"
 BASE = "speaker_history_base"
 TRIMMED = "speaker_history_trimmed"
+# Порог узнавания голоса этой встречи (панель «Спикеры»); нет — общий из настроек.
+VOICE_THRESHOLD = "voice_threshold"
+META_KEYS = (HISTORY, POS, BASE, TRIMMED, VOICE_THRESHOLD)
 # Сколько шагов помнить: старше — отбрасываются, отменить их уже нельзя.
 HISTORY_MAX = 50
 # Подсказки из базы голосов: ниже 40% — шум, а не похожий голос.
@@ -80,20 +83,35 @@ def _transcript(folder: Path) -> dict:
     return data
 
 
-def normalize(folder: Path) -> bool:
+def _owners() -> set[str]:
+    try:
+        from meet import settings
+
+        return {"Вы", settings.load().recording.speaker_name}
+    except Exception:
+        return {"Вы"}
+
+
+def normalize(folder: Path, tracks: bool = False) -> bool:
     """Старые транскрипты хранят сырые SPEAKER_XX: один раз переписать их в
     «Спикер N» (как их и показывает окно) — без шага истории, это не правка
-    человека. Иначе первая же правка «меняла» бы все реплики. True — переписан."""
+    человека. Иначе первая же правка «меняла» бы все реплики. С `tracks` —
+    заодно пометить микрофонные сегменты старой записи звонка (`track`, см.
+    segvoices): по ним разделение спикера берёт голос с нужной дорожки.
+    True — переписан."""
+    from meet import segvoices
+
     data = library.read_transcript(folder)
     segments = (data or {}).get("segments")
     if not isinstance(segments, list) or not all(isinstance(s, dict) for s in segments):
         return False
     raw = library.display_names(segments)
-    if not raw:
-        return False
     for s in segments:
         if s.get("speaker") in raw:
             s["speaker"] = raw[s["speaker"]]
+    stamped = tracks and segvoices.stamp_tracks(folder, data, _sidecar(folder), _owners())
+    if not raw and not stamped:
+        return False
     library.write_transcript(folder, data)
     return True
 
@@ -274,7 +292,7 @@ def overview(folder: Path, voices_dir: Path, owner: str = "Вы") -> dict:
     meta = library.read_meta(folder)
     steps, pos = _history_of(meta, data)
     return {"speakers": rows, "owner": owner, "history": _public(steps), "pos": pos,
-            "trimmed": _trimmed(meta, data)}
+            "trimmed": _trimmed(meta, data), "voice_threshold": own_threshold(meta)}
 
 
 # --- применение ---------------------------------------------------------------
@@ -454,40 +472,136 @@ def _voice_restore(voices_dir: Path, snap: dict[str, bytes]) -> None:
 
 
 def _meta_keys(meta: dict) -> dict:
-    return {k: meta[k] for k in (HISTORY, POS, BASE, TRIMMED) if k in meta}
+    return {k: meta[k] for k in META_KEYS if k in meta}
 
 
 def _put_meta_keys(saved: dict):
     def change(meta: dict) -> dict:
-        out = {k: v for k, v in meta.items() if k not in (HISTORY, POS, BASE, TRIMMED)}
+        out = {k: v for k, v in meta.items() if k not in META_KEYS}
         return {**out, **saved}
     return change
 
 
-def _commit(folder: Path, data: dict, meta_change, voices_dir: Path, voice_ops) -> tuple[dict, object]:
-    """Транскрипт и meta.json, затем база голосов (`voice_ops() -> что угодно`).
-    Сбой где угодно — всё назад: транскрипт, история, файлы голосов."""
+def _write_json(path: Path, data: dict) -> None:
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _commit(folder: Path, data: dict, meta_change, voices_dir: Path, voice_ops,
+            sidecar: tuple[Path, dict] | None = None,
+            payload: tuple[str, dict] | None = None) -> tuple[dict, object]:
+    """Транскрипт (и сайдкар голосов, если шаг его меняет) и meta.json, затем
+    база голосов (`voice_ops() -> что угодно`). Сбой где угодно — всё назад:
+    транскрипт, сайдкар, история, файлы голосов. `payload` — объёмная часть
+    шага (сайдкар до/после, разрезанные реплики) в своём файле: meta.json
+    читается списком записей и раздуваться не должен."""
     path = library.transcript_path(folder)
     before = path.read_bytes()
     saved = _meta_keys(library.read_meta(folder))
-    library.write_transcript(folder, data)
+    side_before = sidecar[0].read_bytes() if sidecar and sidecar[0].exists() else None
+    blob = None
+    if payload is not None:
+        blob = _payload_path(folder, payload[0])
+        blob.parent.mkdir(exist_ok=True)
+        _write_json(blob, payload[1])
+
+    def put_back() -> None:
+        _put_back(path, before)
+        if sidecar is not None:
+            if side_before is None:
+                sidecar[0].unlink(missing_ok=True)
+            else:
+                _put_back(sidecar[0], side_before)
+        if blob is not None:
+            blob.unlink(missing_ok=True)
+
     try:
+        library.write_transcript(folder, data)
+        if sidecar is not None:
+            _write_json(sidecar[0], sidecar[1])
         meta = library.update_meta(folder, meta_change)
     except Exception:
-        _put_back(path, before)
+        put_back()
         raise
     snap = _voice_snapshot(voices_dir)
     try:
         result = voice_ops(meta)
     except (OSError, ValueError) as e:
         _voice_restore(voices_dir, snap)
-        _put_back(path, before)
+        put_back()
         try:
             library.update_meta(folder, _put_meta_keys(saved))
         except Exception:
             pass
         raise VoiceBaseError(f"Не удалось изменить базу голосов ({e}) — изменение не применено")
+    _prune_payloads(folder, meta)
     return meta, result
+
+
+# --- объёмная часть шагов: speaker_history/<id>.json ---------------------------
+
+PAYLOAD_DIR = "speaker_history"
+
+
+def _payload_path(folder: Path, step_id: str) -> Path:
+    return folder / PAYLOAD_DIR / f"{step_id}.json"
+
+
+def _read_payload(folder: Path, step: dict) -> dict:
+    if not step.get("payload"):
+        return {}
+    try:
+        data = json.loads(_payload_path(folder, str(step["id"])).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise Stale("Данные этого шага потеряны — отменить его уже нельзя")
+    return data if isinstance(data, dict) else {}
+
+
+def _prune_payloads(folder: Path, meta: dict) -> None:
+    """Файлы шагов, которых в истории больше нет (отброшены, перерасшифровка)."""
+    keep = {f"{s.get('id')}.json" for s in meta.get(HISTORY) or [] if isinstance(s, dict)}
+    try:
+        for f in (folder / PAYLOAD_DIR).glob("*.json"):
+            if f.name not in keep:
+                f.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+# --- сайдкар голосов как часть шага -------------------------------------------
+
+
+def sidecar_file(folder: Path) -> Path | None:
+    for path in sorted(folder.glob("*_speakers.json"), reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("speakers"), list):
+            return path
+    return None
+
+
+def sidecar_for_write(folder: Path) -> tuple[Path, dict]:
+    """Сайдкар записи для изменения; нет его (запись без диаризации) — новый,
+    под тем же именем, что дал бы пайплайн."""
+    path = sidecar_file(folder)
+    if path is not None:
+        return path, json.loads(path.read_text(encoding="utf-8"))
+    md = sorted(folder.glob("*_transcript.md"))
+    path = voices.sidecar_path(md[-1]) if md else folder / f"{folder.name[:10]}_speakers.json"
+    from meet.diarize import DIARIZATION_MODEL
+
+    return path, {"model": DIARIZATION_MODEL, "source": str(folder.resolve()),
+                  "date": folder.name[:10], "speakers": []}
+
+
+def _side_labels(entries) -> list:
+    return sorted(str(e.get("label")) for e in entries or [] if isinstance(e, dict))
 
 
 def _put_back(path: Path, data: bytes) -> None:
@@ -507,9 +621,12 @@ def _set_names(data: dict, names: dict | None) -> None:
 
 
 def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
-          now: datetime | None = None) -> dict:
+          now: datetime | None = None, *, lead: dict | None = None,
+          threshold: list | None = None) -> dict:
     """Применить набор правок одним шагом истории. Всё проверяется до записи:
-    отказ не оставляет транскрипт наполовину переименованным."""
+    отказ не оставляет транскрипт наполовину переименованным. `lead` — что
+    это за шаг, если не ручные правки (порог узнавания); `threshold` — [было,
+    стало] порога встречи: шаг помнит и его."""
     normalize(folder)
     data = _transcript(folder)
     segments = data["segments"]
@@ -536,7 +653,7 @@ def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
     step = {
         "id": uuid.uuid4().hex[:12],
         "at": (now or datetime.now()).isoformat(timespec="seconds"),
-        "ops": normal,
+        "ops": ([lead] if lead else []) + normal,
         "enrolled": [],
         "created_people": [],
         "segments": deltas,
@@ -556,6 +673,8 @@ def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
         return library.update_meta(folder, lambda m: {**m, HISTORY: [
             step if isinstance(x, dict) and x.get("id") == step["id"] else x for x in m.get(HISTORY) or []]})
 
+    if threshold is not None:
+        step["threshold"] = threshold
     _, meta = _commit(folder, data, _recorder(data, step), voices_dir, enroll)
     steps, pos = _history_of(meta, data)
     return {"step": _public([step])[0], "history": _public(steps), "pos": pos,
@@ -565,14 +684,17 @@ def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
 
 def _recorder(data: dict, step: dict):
     """Изменение meta.json: шаг — в конец применённых (отменённый хвост
-    отбрасывается), история не длиннее HISTORY_MAX."""
+    отбрасывается), история не длиннее HISTORY_MAX; шаг порога — и порог."""
     def record(meta: dict) -> dict:
         steps, pos = _history_of(meta, data)
         steps = steps[:pos] + [step]
         trimmed = _trimmed(meta, data)
         if len(steps) > HISTORY_MAX:
             steps, trimmed = steps[-HISTORY_MAX:], True
-        return {**meta, HISTORY: steps, POS: len(steps), BASE: data.get("created_at"), TRIMMED: trimmed}
+        out = {**meta, HISTORY: steps, POS: len(steps), BASE: data.get("created_at"), TRIMMED: trimmed}
+        if isinstance(step.get("threshold"), list):
+            out[VOICE_THRESHOLD] = step["threshold"][1]
+        return out
     return record
 
 
@@ -721,9 +843,14 @@ STALE = ("Расшифровку изменили после этого шага
          "или перерасшифровали запись) — отменить его уже нельзя")
 
 
+def _count_after(step: dict):
+    return step.get("count_after", step.get("count"))
+
+
 def _check(segments: list[dict], step: dict, side: str) -> None:
-    """Реплики стоят там, где их оставил (side="to") или застал (side="from") шаг."""
-    if step.get("count") != len(segments):
+    """Реплики стоят там, где их оставил (side="to") или застал (side="from")
+    шаг; номера — после его разрезов."""
+    if _count_after(step) != len(segments):
         raise Stale(STALE)
     for d in step.get("segments") or []:
         for i in d.get("idx") or []:
@@ -731,14 +858,64 @@ def _check(segments: list[dict], step: dict, side: str) -> None:
                 raise Stale(STALE)
 
 
-def _move(data: dict, step: dict, forward: bool) -> None:
-    side_from, side_to = ("from", "to") if forward else ("to", "from")
-    segments = data["segments"]
-    _check(segments, step, side_from)
+def _replace(segments: list[dict], items: list | None, forward: bool) -> list[dict]:
+    """Разрезанные шагом реплики: вперёд — сегмент `before` на месте `at`
+    (номер до шага) становится частями `after`; назад — части снова один
+    сегмент. Всё сверяется: реплику с тех пор правили — Stale."""
+    if not items:
+        return segments
+    items = sorted(items, key=lambda x: x["at"])
+    out: list[dict] = []
+    if forward:
+        pos = 0
+        for item in items:
+            at = item["at"]
+            if not pos <= at < len(segments) or segments[at] != item["before"]:
+                raise Stale(STALE)
+            out += segments[pos:at] + [dict(x) for x in item["after"]]
+            pos = at + 1
+        return out + segments[pos:]
+    pos, shift = 0, 0
+    for item in items:
+        at = item["at"] + shift
+        after = item["after"]
+        if not pos <= at or segments[at:at + len(after)] != after:
+            raise Stale(STALE)
+        out += segments[pos:at] + [dict(item["before"])]
+        pos = at + len(after)
+        shift += len(after) - 1
+    return out + segments[pos:]
+
+
+def _move(folder: Path, data: dict, step: dict, forward: bool) -> tuple[Path, dict] | None:
+    """Шаг вперёд или назад в памяти: реплики (разрезы и подписи), `names`,
+    сайдкар голосов. Возвращает новый сайдкар, если шаг его меняет."""
+    payload = _read_payload(folder, step)
+    replace = payload.get("replace")
+    if forward:
+        if step.get("count") != len(data["segments"]):
+            raise Stale(STALE)
+        data["segments"] = _replace(data["segments"], replace, True)
+        _check(data["segments"], step, "from")
+    else:
+        _check(data["segments"], step, "to")
+    side_to = "to" if forward else "from"
     for d in step.get("segments") or []:
         for i in d.get("idx") or []:
-            segments[i]["speaker"] = d.get(side_to)
+            data["segments"][i]["speaker"] = d.get(side_to)
+    if not forward:
+        data["segments"] = _replace(data["segments"], replace, False)
+        if step.get("count") != len(data["segments"]):
+            raise Stale(STALE)
     _move_names(data, _step_names(step), forward)
+    side = payload.get("sidecar")
+    if not isinstance(side, dict):
+        return None
+    path, current = sidecar_for_write(folder)
+    expect, put = (side.get("before"), side.get("after")) if forward else (side.get("after"), side.get("before"))
+    if _side_labels(current.get("speakers")) != _side_labels(expect):
+        raise Stale(STALE)
+    return path, {**current, "speakers": list(put or [])}
 
 
 def _in_library(root: Path, name: str) -> bool:
@@ -796,11 +973,18 @@ def _shift(folder: Path, voices_dir: Path, forward: bool) -> dict:
     if not forward and pos == 0:
         raise SpeakerError("отменять нечего")
     step = steps[pos] if forward else steps[pos - 1]
-    _move(data, step, forward)
+    sidecar = _move(folder, data, step, forward)
     new_pos = pos + 1 if forward else pos - 1
 
     def move_pos(m: dict) -> dict:
-        return {**m, POS: new_pos}
+        out = {**m, POS: new_pos}
+        if isinstance(step.get("threshold"), list):  # шаг «порог узнавания» помнит и порог
+            value = step["threshold"][1 if forward else 0]
+            if value is None:
+                out.pop(VOICE_THRESHOLD, None)
+            else:
+                out[VOICE_THRESHOLD] = value
+        return out
 
     def voice_ops(m: dict) -> list[str]:
         if not forward:
@@ -810,7 +994,7 @@ def _shift(folder: Path, voices_dir: Path, forward: bool) -> dict:
             step if isinstance(s, dict) and s.get("id") == step["id"] else s for s in x.get(HISTORY) or []]})
         return notes
 
-    _, notes = _commit(folder, data, move_pos, voices_dir, voice_ops)
+    _, notes = _commit(folder, data, move_pos, voices_dir, voice_ops, sidecar=sidecar)
     meta = library.read_meta(folder)
     steps, pos = _history_of(meta, data)
     return {"history": _public(steps), "pos": pos, "trimmed": _trimmed(meta, data),
@@ -847,3 +1031,85 @@ def revert(folder: Path, to_step_id: str | None, voices_dir: Path) -> dict:
             errors.append(result["voices_error"])
     result["voices_error"] = "; ".join(errors) or None
     return result
+
+
+# --- порог узнавания голоса встречи ---------------------------------------------
+
+
+def _manual(steps: list[dict]) -> set[str]:
+    """Имена, которые человек дал сам (переименование, объединение, реплики,
+    разделение): их подбор по порогу не трогает."""
+    out: set[str] = set()
+    for step in steps:
+        ops = [op for op in step.get("ops") or [] if isinstance(op, dict)]
+        if any(op.get("type") == "threshold" for op in ops):
+            continue
+        for op in ops:
+            kind = op.get("type")
+            if kind in ("rename", "merge", "relabel", "split_turn"):
+                out.add(op.get("to"))
+            elif kind == "split":
+                out.update(op.get("into") or [])
+    return {x for x in out if isinstance(x, str) and not unnamed(x)}
+
+
+def own_threshold(meta: dict) -> float | None:
+    value = meta.get(VOICE_THRESHOLD)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
+def threshold_plan(folder: Path, value: float, voices_dir: Path) -> dict:
+    """Что сделает порог `value` с автоматически названными спикерами встречи:
+    по голосу каждой строки (кластеры сайдкара) — лучший человек из базы и
+    его сходство; строки, названные вручную, не трогаются.
+
+    → {"rows": [{"label", "auto", "best", "score", "to"}], "changes": [...]}:
+    `to` — имя или None («Спикер N»)."""
+    data = _transcript(folder)
+    segments = data["segments"]
+    order = _order(_shown(segments))
+    clusters = _clusters(data, _sidecar(folder), set(order))
+    base = voices.load_voices(voices_dir)
+    meta = library.read_meta(folder)
+    steps, pos = _history_of(meta, data)
+    manual = _manual(steps[:pos])
+    rows, changes = [], []
+    for label in order:
+        entries = clusters.get(label)
+        if not entries:
+            continue
+        embs = [np.asarray(e["embedding"], dtype=np.float32) for e in entries]
+        scored = sorted(((max((voices._cos(e, x) for e in embs for x in samples if e.shape == x.shape),
+                              default=-1.0), name) for name, samples in base.items()), reverse=True)
+        best, name = scored[0] if scored else (-1.0, None)
+        second = scored[1][0] if len(scored) > 1 else None
+        sure = name is not None and best >= value and (second is None or best - second >= voices.MARGIN)
+        to = name if sure else None
+        auto = label not in manual
+        row = {"label": label, "auto": auto, "best": name, "score": round(best, 3) if name else None, "to": to}
+        rows.append(row)
+        if auto and to != label and not (to is None and unnamed(label)):
+            changes.append(row)
+    return {"rows": rows, "changes": changes}
+
+
+def threshold_apply(folder: Path, value: float, voices_dir: Path, now: datetime | None = None) -> dict:
+    """Пересчитать имена автоматически названных спикеров с порогом `value`
+    одним шагом истории; порог запоминается для встречи (и откатывается с
+    шагом). Если ничего не меняется — только запомнить порог."""
+    normalize(folder)
+    plan = threshold_plan(folder, value, voices_dir)
+    meta = library.read_meta(folder)
+    old = own_threshold(meta)
+    ops = [{"type": "rename", "label": r["label"], "to": r["to"]} if r["to"] is not None
+           else {"type": "reset", "label": r["label"]} for r in plan["changes"]]
+    if not ops:
+        library.update_meta(folder, lambda m: {**m, VOICE_THRESHOLD: value})
+        data = _transcript(folder)
+        steps, pos = _history_of(library.read_meta(folder), data)
+        return {"history": _public(steps), "pos": pos, "trimmed": _trimmed(library.read_meta(folder), data),
+                "voices_error": None, "changed": 0}
+    return apply(folder, ops, {}, voices_dir, now, lead={"type": "threshold", "value": value},
+                 threshold=[old, value])

@@ -11,7 +11,8 @@
 import { inTauri, invoke } from "./shell";
 import type {
   AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveLine, LiveState, LiveStatus, Person, PersonCard,
-  ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, Summary,
+  ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
+  SplitRequest, SplitStatus, ThresholdPlan, Summary,
   Transcript,
 } from "./types";
 
@@ -120,6 +121,18 @@ export const applySpeakers = (ep: Endpoint, id: string, ops: SpeakerOpInput[], r
  */
 export const relabelTurns = (ep: Endpoint, id: string, req: RelabelRequest) =>
   json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/relabel`, body("POST", req));
+/** «Разделить спикера»: голоса его реплик готовы? Нет — резидент ставит задачу (`job`). */
+export const prepareSplit = (ep: Endpoint, id: string, label: string) =>
+  json<SplitStatus>(ep, `/recordings/${enc(id)}/speakers/split/prepare`, body("POST", { label }));
+export const previewSplit = (ep: Endpoint, id: string, req: SplitRequest) =>
+  json<SplitPreview>(ep, `/recordings/${enc(id)}/speakers/split/preview`, body("POST", req));
+export const applySplit = (ep: Endpoint, id: string, req: SplitApply) =>
+  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/split/apply`, body("POST", req));
+/** Что сделает порог узнавания голоса с именами спикеров встречи (без записи). */
+export const thresholdPlan = (ep: Endpoint, id: string, value: number) =>
+  json<ThresholdPlan>(ep, `/recordings/${enc(id)}/speakers/threshold`, body("POST", { value }));
+export const applyThreshold = (ep: Endpoint, id: string, value: number) =>
+  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/threshold/apply`, body("POST", { value }));
 export const undoSpeakers = (ep: Endpoint, id: string) =>
   json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/undo`, body("POST", {}));
 export const redoSpeakers = (ep: Endpoint, id: string) =>

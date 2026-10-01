@@ -1049,6 +1049,10 @@ class TrayControl:
         # summary.md и meta.json в осиротевшую папку.
         if model and self.llm_queue.active_for(str(folder), (jobs.SUMMARY, jobs.ASK)):
             return "Идёт работа модели — отмените или дождитесь"
+        # Голоса реплик и повторная диаризация читают звук записи: удалять или
+        # объединять её посреди счёта нельзя (правкам спикеров они не мешают).
+        if model and self.queue.active_for(str(folder), jobs.SPEAKER_KINDS):
+            return "идёт разбор голосов записи — отмените его или дождитесь"
         return None
 
     @staticmethod
@@ -1363,8 +1367,9 @@ class TrayControl:
     def _speakers_view(self, folder: Path) -> dict:
         from meet import speakers
 
-        cfg = settings.load().recording
-        return speakers.overview(folder, cfg.voices, owner=cfg.speaker_name)
+        cfg = settings.load()
+        view = speakers.overview(folder, cfg.recording.voices, owner=cfg.recording.speaker_name)
+        return {**view, "voice_threshold_default": cfg.asr.voice_threshold}
 
     def speakers(self, recording_id: str) -> dict:
         """Спикеры встречи для панели: доли, образцы фраз, подсказки из базы
@@ -1379,7 +1384,7 @@ class TrayControl:
         with self._speakers_lock:
             if self._busy_reason(folder, model=False) is None:
                 try:
-                    if speakers.normalize(folder):
+                    if speakers.normalize(folder, tracks=True):
                         search.forget(folder)
                 except OSError as e:
                     self.tray.log(f"метки спикеров не переписаны ({folder.name}): {e}")
@@ -1449,6 +1454,94 @@ class TrayControl:
         return self._speakers_change(recording_id, lambda folder, voices: speakers.relabel(
             folder, body.get("idx"), body.get("to"), voices,
             count=body.get("count"), labels=body.get("labels")))
+
+    # --- «Разделить спикера» и порог узнавания ----------------------------------
+
+    def _speakers_read(self, recording_id: str, read) -> dict:
+        """Чтение для панели (предпросмотр): под замком правок, отказ — 400."""
+        from meet import speakers
+
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        with self._speakers_lock:
+            try:
+                return read(folder)
+            except speakers.Stale as e:
+                raise _conflict(str(e))
+            except speakers.SpeakerError as e:
+                raise _bad_request(str(e))
+
+    def speakers_split_prepare(self, recording_id: str, body: dict | None) -> dict:
+        """«Разделить спикера», шаг 1: голоса его реплик посчитаны? Нет —
+        поставить задачу speaker_split (или вернуть уже идущую)."""
+        from meet import speaker_split, speakers
+
+        label = str((body or {}).get("label") or "")
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        with self._speakers_lock:
+            reason = self._busy_reason(folder, model=False)
+            if reason:
+                raise _conflict(reason[:1].upper() + reason[1:])
+            try:
+                if speakers.normalize(folder, tracks=True):
+                    from meet import search
+
+                    search.forget(folder)
+                state = speaker_split.status(folder, label)
+            except speakers.SpeakerError as e:
+                raise _bad_request(str(e))
+        if state["ready"]:
+            return state
+        with self._submit_lock:
+            job = self.queue.active_for(str(folder), (jobs.SPEAKER_SPLIT,))
+            if job is None or (job.options or {}).get("label") != label:
+                job = self.queue.submit(jobs.SPEAKER_SPLIT, str(folder), {"label": label})
+        return {**state, "job": job.to_raw()}
+
+    def speakers_split_preview(self, recording_id: str, body: dict | None) -> dict:
+        from meet import speaker_split, transcribe
+
+        body = body or {}
+        return self._speakers_read(recording_id, lambda folder: speaker_split.preview(
+            folder, str(body.get("label") or ""), self._voices(),
+            mode="people" if body.get("mode") == "people" else "auto",
+            k=body.get("k") if isinstance(body.get("k"), int) else 2,
+            people=body.get("people") if isinstance(body.get("people"), list) else None,
+            threshold=transcribe.voice_threshold(folder)))
+
+    def speakers_split_apply(self, recording_id: str, body: dict | None) -> dict:
+        from meet import speaker_split
+
+        body = body or {}
+        return self._speakers_change(recording_id, lambda folder, voices: speaker_split.apply(
+            folder, str(body.get("label") or ""), body.get("groups"), body.get("fingerprint"), voices,
+            mode="people" if body.get("mode") == "people" else "auto"))
+
+    @staticmethod
+    def _threshold_value(body: dict | None) -> float:
+        value = (body or {}).get("value")
+        low, high = settings.VOICE_THRESHOLD_RANGE
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+            raise _bad_request(f"Порог — число от {low} до {high}")
+        return round(float(value), 3)
+
+    def speakers_threshold(self, recording_id: str, body: dict | None) -> dict:
+        """Что сделает порог узнавания с именами спикеров встречи (без записи)."""
+        from meet import speakers
+
+        value = self._threshold_value(body)
+        return self._speakers_read(recording_id, lambda folder: {
+            "value": value, **speakers.threshold_plan(folder, value, self._voices())})
+
+    def speakers_threshold_apply(self, recording_id: str, body: dict | None) -> dict:
+        from meet import speakers
+
+        value = self._threshold_value(body)
+        return self._speakers_change(recording_id, lambda folder, voices: speakers.threshold_apply(
+            folder, value, voices))
 
     def speakers_undo(self, recording_id: str) -> dict:
         from meet import speakers

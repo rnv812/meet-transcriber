@@ -97,7 +97,26 @@ def _maybe_align(segments: list[Segment], wav: Path, enabled: bool) -> list[Segm
         return segments
 
 
-def _match_names(diar) -> dict[str, str]:
+def voice_threshold(folder: Path | None = None) -> float:
+    """Порог узнавания голоса: свой у встречи (панель «Спикеры», meta.json
+    `voice_threshold`), иначе общий из настроек."""
+    from meet import settings
+
+    try:
+        value = settings.load().asr.voice_threshold
+    except Exception:
+        value = settings.VOICE_THRESHOLD
+    if folder is not None and Path(folder).is_dir():
+        from meet import library
+
+        own = library.read_meta(Path(folder)).get("voice_threshold")
+        if isinstance(own, (int, float)) and not isinstance(own, bool):
+            low, high = settings.VOICE_THRESHOLD_RANGE
+            value = min(high, max(low, float(own)))
+    return value
+
+
+def _match_names(diar, threshold: float | None = None) -> dict[str, str]:
     """Уверенные имена из базы голосов voices/ для меток диаризации.
 
     Пустая/отсутствующая база и любые ошибки матчинга не роняют
@@ -111,7 +130,9 @@ def _match_names(diar) -> dict[str, str]:
         base = voices.load_voices()
         if not base:
             return {}
-        return voices.match_speakers(diar.embeddings, base)
+        if threshold is None:
+            return voices.match_speakers(diar.embeddings, base)
+        return voices.match_speakers(diar.embeddings, base, threshold=threshold)
     except Exception as e:
         print(f"голоса: матчинг пропущен (ошибка: {e})")
         return {}
@@ -293,7 +314,7 @@ def _transcribe_single(
                 seg.speaker = INTERLOCUTOR
             return segments, diar, {}
         bus.progress("voices")
-        name_map = _match_names(diar)
+        name_map = _match_names(diar, voice_threshold(src.parent if src.stem == "source" else None))
         segments = split_by_speaker(
             segments, _apply_names(diar.turns, name_map), diar.overlaps
         )
@@ -334,7 +355,7 @@ def _transcribe_two_track(
                 seg.speaker = INTERLOCUTOR
         else:
             bus.progress("voices")
-            name_map = _match_names(diar)
+            name_map = _match_names(diar, voice_threshold(folder))
             sys_segs = split_by_speaker(
                 sys_segs, _apply_names(diar.turns, name_map), diar.overlaps
             )

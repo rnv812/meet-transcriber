@@ -141,3 +141,23 @@ def test_merge_job_failure_is_text_for_people(tmp_path, monkeypatch, capsys):
     assert job_worker.main(["merge", str(tmp_path)]) == 3
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
     assert lines[-1] == {"kind": "error", "text": "Исходная запись пропала: 2026-09-30_10-30"}
+
+
+def test_speaker_split_job_computes_voices_of_the_speaker(tmp_path, monkeypatch, capsys):
+    import json
+
+    from meet import segvoices
+
+    library.write_transcript(tmp_path, {"segments": [
+        {"start": 0, "end": 3, "speaker": "Спикер 2", "text": "а"},
+        {"start": 3, "end": 5, "speaker": "Вы", "text": "б"},
+        {"start": 5, "end": 9, "speaker": "Спикер 2", "text": "в"}]})
+    calls = []
+    monkeypatch.setattr(segvoices, "compute", lambda folder, idx, bus=None: calls.append((folder, idx)))
+    assert job_worker.main(["speaker_split", str(tmp_path), "--label=Спикер 2"]) == 0
+    assert calls == [(tmp_path, [0, 2])]
+    lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert lines[-1] == {"kind": "job.result", "path": str(tmp_path / segvoices.CACHE_NAME)}
+    assert job_worker.main(["speaker_split", str(tmp_path), "--label=Нет такого"]) == 3
+    lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    assert lines[-1] == {"kind": "error", "text": "в записи нет спикера «Нет такого»"}

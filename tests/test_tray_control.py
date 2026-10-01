@@ -1639,6 +1639,80 @@ def test_speakers_relabel_turns_through_the_panel_lock(with_recordings, app):
         busy.speakers_relabel(rid, {"idx": [0], "to": "Анна"})
 
 
+class _SplitQueue(_Queue):
+    def __init__(self):
+        super().__init__()
+        self.options = []
+        self.active = None
+
+    def submit(self, kind, folder, options=None):
+        self.options.append(options)
+        self.active = jobs.Job(id=f"v{len(self.options)}", kind=kind, folder=folder, options=options or {})
+        return self.active
+
+    def active_for(self, folder, kinds):
+        return self.active if self.active and self.active.kind in kinds else None
+
+
+def test_split_prepare_queues_voices_once_then_preview_and_apply(with_recordings, app, tmp_path):
+    from meet import control, segvoices
+
+    rid = _speaker_meeting(with_recordings)
+    queue = _SplitQueue()
+    state = tray_control.TrayControl(app, queue=queue)
+    got = state.speakers_split_prepare(rid, {"label": "Спикер 1"})
+    assert got["ready"] is False and got["job"]["kind"] == jobs.SPEAKER_SPLIT
+    assert queue.options == [{"label": "Спикер 1"}]
+    state.speakers_split_prepare(rid, {"label": "Спикер 1"})       # уже идёт — вторую не ставим
+    assert len(queue.options) == 1
+    # Пока голоса считаются, запись не удалить, а правки спикеров — можно.
+    with pytest.raises(control.BadRequest, match="разбор голосов"):
+        state.delete_recording(rid)
+    with pytest.raises(control.BadRequest):
+        state.speakers_split_prepare(rid, {"label": "Нет такого"})
+
+    data = library.read_transcript(with_recordings)
+    data["segments"] = [{"start": float(i * 3), "end": float(i * 3 + 2.5), "speaker": "Спикер 1",
+                         "text": f"фраза {i}"} for i in range(6)]
+    library.write_transcript(with_recordings, data)
+    vecs = {0: [1, 0], 1: [0, 1], 2: [1, 0.1], 3: [0.1, 1], 4: [1, 0], 5: [0, 1]}
+    tracks = segvoices.tracks_of(with_recordings, data["segments"])
+    segvoices.write_cache(with_recordings, {
+        segvoices.key(tracks[i], data["segments"][i]): __import__("numpy").array(v, dtype=float)
+        for i, v in vecs.items()})
+    ready = state.speakers_split_prepare(rid, {"label": "Спикер 1"})
+    assert ready["ready"] is True and "job" not in ready
+    prev = state.speakers_split_preview(rid, {"label": "Спикер 1", "mode": "auto", "k": 2})
+    assert sorted(g["idx"] for g in prev["groups"]) == [[0, 2, 4], [1, 3, 5]]
+    got = state.speakers_split_apply(rid, {"label": "Спикер 1", "fingerprint": prev["fingerprint"],
+                                           "groups": [{"idx": g["idx"], "to": None} for g in prev["groups"]]})
+    assert got["step"]["ops"][0]["type"] == "split" and len(got["speakers"]) == 2
+    with pytest.raises(control.BadRequest, match="нет спикера"):   # его уже разделили
+        state.speakers_split_apply(rid, {"label": "Спикер 1", "fingerprint": prev["fingerprint"],
+                                         "groups": [{"idx": [0], "to": None}]})
+
+
+def test_threshold_preview_apply_and_bad_value(with_recordings, app, tmp_path):
+    from meet import control
+
+    rid = _speaker_meeting(with_recordings)
+    voices = tmp_path / "voices"
+    voices.mkdir(exist_ok=True)
+    (voices / "Анна.json").write_text(json.dumps({"samples": [
+        {"embedding": [0.3, 0.95], "source": "C:/old", "date": "2026-08-01"}]}, ensure_ascii=False),
+        encoding="utf-8")
+    state = tray_control.TrayControl(app, queue=_Queue())
+    assert state.speakers(rid)["voice_threshold_default"] == 0.75
+    plan = state.speakers_threshold(rid, {"value": 0.9})
+    assert plan["value"] == 0.9 and [c["label"] for c in plan["changes"]] == ["Спикер 2"]
+    got = state.speakers_threshold_apply(rid, {"value": 0.9})
+    assert [r["label"] for r in got["speakers"]] == ["Спикер 1", "Анна"]
+    assert got["voice_threshold"] == 0.9
+    for bad in (0.2, "0.8", True, None):
+        with pytest.raises(control.BadRequest):
+            state.speakers_threshold(rid, {"value": bad})
+
+
 def test_speakers_panel_works_while_a_summary_is_written(with_recordings, app):
     rid = _speaker_meeting(with_recordings)
 

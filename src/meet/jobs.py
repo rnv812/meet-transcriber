@@ -45,10 +45,17 @@ ASK = "ask"
 # Объединение встреч (meet.merge): склейка дорожек в новую папку записи; за
 # ней резидент ставит обычную расшифровку.
 MERGE = "merge"
-KINDS = (TRANSCRIBE, IMPORT, INSTALL_ENGINE, DOWNLOAD_MODEL, SUMMARY, ASK, MERGE)
+# Правка спикеров без перерасшифровки: голоса реплик спикера («Разделить
+# спикера», meet.segvoices). Транскрипт задача не пишет — только кэш голосов;
+# применяет результат резидент шагом истории.
+SPEAKER_SPLIT = "speaker_split"
+KINDS = (TRANSCRIBE, IMPORT, INSTALL_ENGINE, DOWNLOAD_MODEL, SUMMARY, ASK, MERGE, SPEAKER_SPLIT)
 # Задачи, которые пишут в папку записи звук или транскрипт: пока такая ждёт или
 # идёт, запись нельзя удалить, объединить или поставить вторую такую же.
 FOLDER_KINDS = (TRANSCRIBE, IMPORT, MERGE)
+# Задачи, которые читают звук и транскрипт записи (но не пишут их): пока такая
+# ждёт или идёт, запись нельзя удалить или объединить.
+SPEAKER_KINDS = (SPEAKER_SPLIT,)
 
 JOB_QUEUED = "job.queued"
 JOB_STARTED = "job.started"
@@ -112,6 +119,10 @@ def worker_argv(job: Job) -> list[str]:
         return argv  # путь задачи — это repo_id модели
     if job.kind in (SUMMARY, MERGE):
         return argv
+    if job.kind == SPEAKER_SPLIT:
+        # Одним аргументом через «=»: подпись с ведущим дефисом не станет флагом.
+        return argv + [f"--label={options.get('label') or ''}"]
+
     if job.kind == ASK:
         # Одним аргументом через «=»: вопрос с ведущим дефисом argparse иначе
         # принял бы за флаг.

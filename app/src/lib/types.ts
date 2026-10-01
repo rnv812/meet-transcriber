@@ -189,7 +189,11 @@ export type SpeakerRow = {
 export type SpeakerOp =
   | { type: "rename" | "merge" | "reset"; label: string; from: string; to: string; into?: string }
   /** Реплики другому спикеру: `from` — чьи были, `segments` — сколько сегментов, `turns` — реплик. */
-  | { type: "relabel"; from: string[]; to: string; segments: number; turns: number };
+  | { type: "relabel"; from: string[]; to: string; segments: number; turns: number }
+  /** Спикер разделён по голосу на группы `into`. */
+  | { type: "split"; label: string; mode: "auto" | "people"; into: string[] }
+  /** Имена пересчитаны с порогом узнавания `value`. */
+  | { type: "threshold"; value: number };
 export type SpeakerStep = {
   id: string;
   at: string;
@@ -197,6 +201,50 @@ export type SpeakerStep = {
   enrolled: { person: string; sample_id: string; label: string; created: boolean }[];
   created_people: string[];
 };
+/** «Разделить спикера», шаг 1: голоса реплик готовы или считаются задачей. */
+export type SplitStatus = {
+  label: string; segments: number; voiced: number; missing: number; ready: boolean; fingerprint: string;
+  job?: Job;
+};
+/** Группа реплик одного голоса в предпросмотре разделения. */
+export type SplitGroup = {
+  key: string;
+  idx: number[];
+  seconds: number;
+  share: number;
+  turns: number;
+  samples: SpeakerPhrase[];
+  /** Реплик с посчитанным голосом (остальные взяли группу соседей). */
+  voiced: number;
+  suggestions: SpeakerSuggestion[];
+  /** Предложенное имя (похожий человек базы выше порога или выбранный человек). */
+  name: string | null;
+  /** Режим «по образцам»: человек, к которому отнесены реплики. */
+  person?: string;
+};
+export type SplitPreview = {
+  label: string;
+  mode: "auto" | "people";
+  fingerprint: string;
+  segments: number;
+  voiced: number;
+  groups: SplitGroup[];
+  /** Режим «по образцам»: реплики без уверенного сходства — для ручной проверки. */
+  unsure: SplitGroup | null;
+  /** Наибольшее сходство голосов двух групп, 0..1: высокое — скорее всего, один человек. */
+  similar?: number | null;
+};
+export type SplitRequest =
+  | { label: string; mode: "auto"; k: number }
+  | { label: string; mode: "people"; people: string[] };
+export type SplitApply = {
+  label: string; mode: "auto" | "people"; fingerprint: string;
+  groups: { idx: number[]; to: string | null; remember: boolean }[];
+};
+/** Порог узнавания: что станет с именами спикеров встречи. */
+export type ThresholdRow = { label: string; auto: boolean; best: string | null; score: number | null; to: string | null };
+export type ThresholdPlan = { value: number; rows: ThresholdRow[]; changes: ThresholdRow[] };
+
 export type SpeakersView = {
   speakers: SpeakerRow[];
   /** Владелец микрофона (настройка «Как подписывать микрофон»). */
@@ -208,6 +256,10 @@ export type SpeakersView = {
   trimmed?: boolean;
   voices_error?: string | null;
   step?: SpeakerStep;
+  /** Порог узнавания голоса этой встречи; null — общий из настроек. */
+  voice_threshold?: number | null;
+  /** Общий порог (Настройки → Распознавание). */
+  voice_threshold_default?: number;
 };
 /** Реплики — другому спикеру (`POST …/speakers/relabel`). */
 export type RelabelRequest = { idx: number[]; labels: string[]; count: number; to: string | null };

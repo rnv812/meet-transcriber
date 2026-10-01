@@ -34,6 +34,11 @@ from meet.asr import CPU_MODEL_NAME as DEFAULT_CPU_WHISPER_MODEL
 from meet.asr import DEVICES as ASR_DEVICES
 from meet.asr import MODEL_NAME as DEFAULT_WHISPER_MODEL
 
+# Порог узнавания голоса по умолчанию — тот же, что meet.voices.THRESHOLD
+# (там калибровка); здесь копия, чтобы настройки не тянули numpy.
+VOICE_THRESHOLD = 0.75
+VOICE_THRESHOLD_RANGE = (0.5, 0.95)
+
 SCHEMA_VERSION = 2
 
 # Дефолты автозаписи продублированы здесь, а не взяты из meet.watch: watch.py
@@ -183,6 +188,20 @@ def as_int(value, default: int, minimum: int) -> int:
     except (TypeError, ValueError):
         return default
     return number if number >= minimum else default
+
+
+def as_ratio(value, default: float, low: float, high: float) -> float:
+    """Доля из конфига (порог 0..1): мусор — значение по умолчанию, выход за
+    пределы — ближайшая граница."""
+    if isinstance(value, bool):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number != number:  # NaN
+        return default
+    return round(min(high, max(low, number)), 3)
 
 
 def as_str_list(value, default: tuple[str, ...]) -> list[str]:
@@ -441,6 +460,10 @@ class Asr:
     overlap: bool = True
     device: str = "auto"
     cpu_model: str = DEFAULT_CPU_WHISPER_MODEL
+    # Порог узнавания голоса по базе (косинусная близость кластера к образцам
+    # человека): ниже — честный «Спикер N». Калибровка — meet.voices.THRESHOLD;
+    # у встречи может быть свой (панель «Спикеры»).
+    voice_threshold: float = VOICE_THRESHOLD
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Asr":
@@ -453,6 +476,7 @@ class Asr:
             overlap=as_flag(raw.get("overlap"), True),
             device=as_choice(raw.get("device"), ASR_DEVICES, "auto"),
             cpu_model=str(raw.get("cpu_model") or "").strip() or DEFAULT_CPU_WHISPER_MODEL,
+            voice_threshold=as_ratio(raw.get("voice_threshold"), VOICE_THRESHOLD, *VOICE_THRESHOLD_RANGE),
         )
 
     def to_raw(self) -> dict:
@@ -464,6 +488,7 @@ class Asr:
             "overlap": self.overlap,
             "device": self.device,
             "cpu_model": self.cpu_model,
+            "voice_threshold": self.voice_threshold,
         }
 
 

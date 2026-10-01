@@ -318,3 +318,10 @@ def test_merge_kind_runs_worker_with_folder(tmp_path):
     job = jobs.Job(id="m", kind=jobs.MERGE, folder=str(tmp_path))
     assert jobs.MERGE in jobs.KINDS
     assert jobs.worker_argv(job)[-2:] == ["merge", str(tmp_path)]
+
+
+def test_speaker_split_job_argv(tmp_path):
+    job = jobs.Job(id="v", kind=jobs.SPEAKER_SPLIT, folder=str(tmp_path), options={"label": "-Спикер 2"})
+    assert jobs.worker_argv(job)[-3:] == ["speaker_split", str(tmp_path), "--label=-Спикер 2"]
+    assert jobs.SPEAKER_SPLIT in jobs.KINDS and jobs.SPEAKER_SPLIT in jobs.SPEAKER_KINDS
+    assert jobs.SPEAKER_SPLIT not in jobs.FOLDER_KINDS

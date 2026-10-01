@@ -123,6 +123,26 @@ class FakeState:
             raise control.BadRequest("нечего применять")
         return {"pos": 1}
 
+    def speakers_split_prepare(self, rid, body):
+        self.calls.append(("speakers_split_prepare", rid, body))
+        return {"ready": True}
+
+    def speakers_split_preview(self, rid, body):
+        self.calls.append(("speakers_split_preview", rid, body))
+        return {"groups": []}
+
+    def speakers_split_apply(self, rid, body):
+        self.calls.append(("speakers_split_apply", rid, body))
+        return {"pos": 3}
+
+    def speakers_threshold(self, rid, body):
+        self.calls.append(("speakers_threshold", rid, body))
+        return {"changes": []}
+
+    def speakers_threshold_apply(self, rid, body):
+        self.calls.append(("speakers_threshold_apply", rid, body))
+        return {"pos": 4}
+
     def speakers_relabel(self, rid, body):
         self.calls.append(("speakers_relabel", rid, body))
         return {"pos": 2}
@@ -1113,3 +1133,16 @@ def test_speakers_panel_routes(server):
                      ("speakers_apply", rid, {"bad": True}), ("speakers_undo", rid),
                      ("speakers_redo", rid), ("speakers_revert", rid, {"to_step_id": "a1"}),
                      ("speakers_relabel", rid, turn)]
+
+
+def test_speaker_split_and_threshold_routes(server):
+    rid = "2026-09-30_16-04"
+    base = f"/recordings/{rid}/speakers"
+    assert _post(server, f"{base}/split/prepare", {"label": "Спикер 2"}) == {"ready": True}
+    assert _post(server, f"{base}/split/preview", {"label": "Спикер 2", "k": 2}) == {"groups": []}
+    assert _post(server, f"{base}/split/apply", {"label": "Спикер 2", "groups": []}) == {"pos": 3}
+    assert _post(server, f"{base}/threshold", {"value": 0.7}) == {"changes": []}
+    assert _post(server, f"{base}/threshold/apply", {"value": 0.7}) == {"pos": 4}
+    calls = [c[0] for c in server.state_obj.calls if isinstance(c, tuple) and c[0].startswith("speakers_")]
+    assert calls[-5:] == ["speakers_split_prepare", "speakers_split_preview", "speakers_split_apply",
+                          "speakers_threshold", "speakers_threshold_apply"]

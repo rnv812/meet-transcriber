@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="meet-job")
     parser.add_argument("kind",
                         choices=["transcribe", "import", "install-engine", "download-model",
-                                 "summary", "ask", "merge"])
+                                 "summary", "ask", "merge", "speaker_split"])
     parser.add_argument("path")
     parser.add_argument("--speakers", type=int)
     parser.add_argument("--hotwords")
@@ -52,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
                         default=None)
     parser.add_argument("--flavor", choices=["cuda", "cpu"])
     parser.add_argument("--question")
+    parser.add_argument("--label")
     args = parser.parse_args(argv)
 
     if args.kind in ("summary", "ask"):
@@ -59,6 +60,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.kind == "merge":
         return _merge(args.path)
+    if args.kind == "speaker_split":
+        return _speaker_split(args.path, args.label or "")
+
     if args.kind == "install-engine":
         return _install_engine(args.flavor)
     if args.kind == "download-model":
@@ -166,6 +170,51 @@ def _merge(folder_str: str) -> int:
         return 1
     _emit({"kind": "job.result", "path": str(out)})
     return 0
+
+
+def _speaker_voices(work, reason: str) -> int:
+    """Общая обвязка задач правки спикеров: токен HF, маркер GPU, ошибки —
+    понятным текстом."""
+    from meet import events
+
+    _apply_hf_token()
+    bus = events.EventBus()
+    bus.subscribe(lambda event: _emit(event.to_dict()))
+    try:
+        from meet.gpu_lock import hold_gpu_lock
+
+        with hold_gpu_lock(reason):
+            out = work(bus)
+    except ImportError as e:
+        _emit({"kind": "error", "text": f"{jobs_hint()}: {e}"})
+        return 2
+    except (SystemExit, RuntimeError, ValueError) as e:
+        _emit({"kind": "error", "text": str(e)})
+        return 3
+    except Exception as e:
+        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        return 1
+    _emit({"kind": "job.result", "path": str(out)})
+    return 0
+
+
+def _speaker_split(folder_str: str, label: str) -> int:
+    """Голоса реплик спикера для «Разделить спикера» (meet.segvoices)."""
+    from pathlib import Path
+
+    def work(bus):
+        from meet import library, segvoices
+
+        folder = Path(folder_str)
+        data = library.read_transcript(folder) or {}
+        segments = [s for s in data.get("segments") or [] if isinstance(s, dict)]
+        idx = [i for i, s in enumerate(segments) if s.get("speaker") == label and s.get("kind") != "break"]
+        if not idx:
+            raise ValueError(f"в записи нет спикера «{label}»")
+        segvoices.compute(folder, idx, bus=bus)
+        return folder / segvoices.CACHE_NAME
+
+    return _speaker_voices(work, "speaker_split")
 
 
 def _install_engine(flavor: str | None) -> int:

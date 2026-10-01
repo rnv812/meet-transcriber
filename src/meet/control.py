@@ -47,6 +47,11 @@ IMPORTANT: токен принимается и в query-параметре `?to
     speakers(id) -> dict                  панель «Спикеры»: доли, подсказки, история
     speakers_apply(id, body) -> dict      набор правок {"ops", "remember"} одним шагом
     speakers_relabel(id, body) -> dict    реплики {"idx", "labels", "count", "to"} — другому спикеру
+    speakers_split_prepare(id, body)      «Разделить спикера»: голоса реплик готовы? иначе задача
+    speakers_split_preview(id, body)      группы по голосу {"label", "mode", "k" | "people"}
+    speakers_split_apply(id, body)        развести реплики по группам одним шагом
+    speakers_threshold(id, body)          что сделает порог узнавания {"value"}
+    speakers_threshold_apply(id, body)    пересчитать имена с порогом одним шагом
     speakers_undo(id) / speakers_redo(id) отменить / повторить шаг (409 — уже нельзя)
     speakers_revert(id, body) -> dict     к состоянию после шага {"to_step_id"}
     transcribe(id, options) -> dict       поставить расшифровку в очередь
@@ -766,6 +771,16 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.speakers_apply(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers/relabel$"),
      lambda h, p, rid: _server_of(h).state.speakers_relabel(unquote(rid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/speakers/split/prepare$"),
+     lambda h, p, rid: _server_of(h).state.speakers_split_prepare(unquote(rid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/speakers/split/preview$"),
+     lambda h, p, rid: _server_of(h).state.speakers_split_preview(unquote(rid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/speakers/split/apply$"),
+     lambda h, p, rid: _server_of(h).state.speakers_split_apply(unquote(rid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/speakers/threshold$"),
+     lambda h, p, rid: _server_of(h).state.speakers_threshold(unquote(rid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/speakers/threshold/apply$"),
+     lambda h, p, rid: _server_of(h).state.speakers_threshold_apply(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers/undo$"),
      lambda h, p, rid: _server_of(h).state.speakers_undo(unquote(rid))),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers/redo$"),

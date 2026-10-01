@@ -324,7 +324,7 @@ export function RecordingCard({
       {status.kind === "ready" && turnEdit.menu}
       {panel.mounted && status.kind === "ready" && (
         <SpeakersPanel endpoint={endpoint} recordingId={id} people={people} avatarVersion={avatarVersion}
-          open={panel.open} focus={panel.focus} version={rec.transcript} playable={playable} cardRef={cardEl}
+          open={panel.open} focus={panel.focus} version={rec.transcript} playable={playable} cardRef={cardEl} jobs={jobs}
           onClose={closeSpeakers} onPlay={playPhrase} onShowTurns={showTurns} onChanged={speakersChanged} />
       )}
       {status.kind !== "recording" && (hasAudio ? (

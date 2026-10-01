@@ -27,7 +27,9 @@ import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSecti
 import { HotwordsEditor } from "./HotwordsEditor";
 import { ModelsPane } from "./ModelsPane";
 import { PathText, Radio, Row, Switch, type Raw, type SetFn } from "./Section";
-import { AsrModelTip, AutoRecordTip, GpuMarkerTip, GraceTip, HookCommandTip, RecurringWindowTip } from "./tips";
+import {
+  AsrModelTip, AutoRecordTip, GpuMarkerTip, GraceTip, HookCommandTip, RecurringWindowTip, VoiceThresholdTip,
+} from "./tips";
 import { SoundSection } from "./SoundSection";
 import "./settings.css";
 
@@ -191,6 +193,16 @@ function AsrSection({ draft, set, endpoint }: { draft: Raw; set: SetFn; endpoint
         value={Boolean(v("align"))} onChange={(x) => set("asr", "align", x)} />
       <Switch label="Отмечать одновременную речь" hint="Реплики, где говорят одновременно, помечаются «нахлёст»: спикер в них может быть определён неточно"
         value={Boolean(v("overlap"))} onChange={(x) => set("asr", "overlap", x)} />
+      <Row label="Порог узнавания голоса" htmlFor="asr-voice-threshold" help={<VoiceThresholdTip />}
+        hint="Насколько голос должен быть похож на образец из базы голосов, чтобы спикер получил имя">
+        <span className="with-unit">
+          <input id="asr-voice-threshold" type="range" min={50} max={95} step={1}
+            value={Math.round(Number(v("voice_threshold") ?? 0.75) * 100)}
+            aria-valuetext={`${Math.round(Number(v("voice_threshold") ?? 0.75) * 100)}%`}
+            onChange={(e) => set("asr", "voice_threshold", Number(e.target.value) / 100)} />
+          <span className="unit num">{Math.round(Number(v("voice_threshold") ?? 0.75) * 100)}%</span>
+        </span>
+      </Row>
       <HotwordsEditor endpoint={endpoint} />
     </>
   );
