@@ -6,7 +6,7 @@
  * так `job.done` показывает свежий текст без отдельной подписки.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, getSummary, makeSummary, toNotes, type Endpoint } from "../../lib/api";
 import { dayLabel, errorText } from "../../lib/format";
 import { Markdown } from "../../lib/markdown";
@@ -14,7 +14,7 @@ import { isActiveJob, modelJobsOf } from "../../lib/status";
 import type { AssistantInfo, Job, Summary } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
-import { ProviderHint, ThinkingStage, noProvider } from "./assistant";
+import { ProviderHint, ThinkingStage, noProvider, useLostJobs } from "./assistant";
 
 const COPIED_MS = 2000;
 
@@ -29,11 +29,18 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
 }) {
   /** undefined — грузится, null — итогов нет. */
   const [summary, setSummary] = useState<Summary | null | undefined>(undefined);
+  /** Ошибка чтения итогов — уходит с первым удачным чтением. */
+  const [loadError, setLoadError] = useState<string | null>(null);
+  /** Ошибка действия (сделать, в заметки, копировать). */
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState<Job | null>(null);
   const [busy, setBusy] = useState(false);
-  const [notesPath, setNotesPath] = useState<string | null>(null);
+  /** Путь заметки и для каких итогов (created_at) она сделана: переделанные итоги — другая заметка. */
+  const [notes, setNotes] = useState<{ path: string; of: number | null } | null>(null);
   const [copied, setCopied] = useState(false);
+  const seq = useRef(0);
+  const target = useRef({ endpoint, id });
+  target.current = { endpoint, id };
 
   const mine = modelJobsOf(folder, jobs, "summary");
   // Только что поставленная задача может ещё не дойти до списка — она и есть последняя.
@@ -42,16 +49,41 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
   const failed = latest?.state === "failed" ? latest : null;
   const sig = mine.map((j) => `${j.id}:${j.state}`).join(",");
 
+  // Применяется только последний ответ и только для той записи, что показана сейчас.
   const load = useCallback(async () => {
+    const mine = ++seq.current;
+    const fresh = () => mine === seq.current && target.current.endpoint === endpoint && target.current.id === id;
     try {
-      setSummary(await getSummary(endpoint, id));
+      const data = await getSummary(endpoint, id);
+      if (!fresh()) return;
+      setSummary(data);
+      setLoadError(null);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 404) setSummary(null);
-      else setError(errorText(e));
+      if (!fresh()) return;
+      if (e instanceof ApiError && e.status === 404) {
+        setSummary(null);
+        setLoadError(null);
+      } else {
+        setLoadError(errorText(e));
+      }
     }
   }, [endpoint, id]);
 
+  // Другая запись — всё своё сначала.
+  useEffect(() => {
+    setSummary(undefined);
+    setLoadError(null);
+    setError(null);
+    setSubmitted(null);
+    setNotes(null);
+  }, [endpoint, id]);
   useEffect(() => { void load(); }, [load, sig]);
+  useEffect(() => () => { seq.current++; }, []);
+  // Поставленная задача пропала из списка или так и не появилась — не ждём её.
+  useLostJobs(submitted ? [submitted.id] : [], jobs, () => {
+    setSubmitted(null);
+    void load();
+  });
 
   useEffect(() => {
     if (!copied) return;
@@ -65,7 +97,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
     try { await fn(); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   };
   const make = () => act(async () => { setSubmitted(await makeSummary(endpoint, id)); });
-  const save = () => act(async () => { setNotesPath((await toNotes(endpoint, id)).path); });
+  const save = (of: number | null) => act(async () => { setNotes({ path: (await toNotes(endpoint, id)).path, of }); });
   const copy = (markdown: string) => act(async () => {
     try {
       await navigator.clipboard.writeText(markdown);
@@ -85,15 +117,15 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
       <>
         <div className="assist__toolbar">
           <Button onClick={make} disabled={!canMake}>Переделать</Button>
-          {assistant?.notes_dir && <Button onClick={save} disabled={busy}>В заметки</Button>}
+          {assistant?.notes_dir && <Button onClick={() => save(summary.created_at)} disabled={busy}>В заметки</Button>}
           <Button onClick={() => copy(summary.markdown)} disabled={busy}>{copied ? "Скопировано" : "Копировать"}</Button>
           {typeof summary.created_at === "number" && (
             <span className="muted assist__when">{dayLabel(new Date(summary.created_at * 1000).toISOString())}</span>
           )}
         </div>
         {hint}
-        {notesPath && (
-          <div className="assist__saved">Сохранено в заметки: <code className="assist__path">{notesPath}</code></div>
+        {notes && notes.of === summary.created_at && (
+          <div className="assist__saved">Сохранено в заметки: <code className="assist__path">{notes.path}</code></div>
         )}
         <Markdown source={summary.markdown} className="assist__md" />
       </>
@@ -109,12 +141,13 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
         </>}
       />
     );
-  } else if (summary === undefined && !thinking && !error) {
+  } else if (summary === undefined && !thinking && !error && !loadError) {
     main = <EmptyState title="Загрузка…" />;
   }
 
   return (
     <div className="assist">
+      {loadError && <div className="assist__error" role="alert">{loadError}</div>}
       {error && <div className="assist__error" role="alert">{error}</div>}
       {thinking && <ThinkingStage />}
       {failed && (

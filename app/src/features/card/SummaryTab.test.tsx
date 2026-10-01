@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SummaryTab } from "./SummaryTab";
 import * as api from "../../lib/api";
@@ -142,4 +142,99 @@ test("упавшая задача: текст ошибки и «Повторит
   expect(api.makeSummary).toHaveBeenCalledWith(ep, "r1");
   expect(await screen.findByText("Модель думает…")).toBeInTheDocument();
   expect(screen.queryByText("claude: лимит исчерпан")).toBeNull();
+});
+
+const deferred = <T,>() => {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => { resolve = r; });
+  return { promise, resolve };
+};
+
+test("поставленная задача пропала из списка (перезапуск резидента) — ожидание снято, итоги перечитаны", async () => {
+  noSummary();
+  vi.mocked(api.makeSummary).mockResolvedValue(job({ id: "s2", state: "queued" }));
+  const { update } = show();
+  await userEvent.click(await screen.findByRole("button", { name: "Сделать итоги" }));
+  update({ jobs: [job({ id: "s2", state: "running" })] });
+  expect(await screen.findByText("Модель думает…")).toBeInTheDocument();
+  const loads = vi.mocked(api.getSummary).mock.calls.length;
+  update({ jobs: [] });
+  await waitFor(() => expect(screen.queryByText("Модель думает…")).toBeNull());
+  expect(vi.mocked(api.getSummary).mock.calls.length).toBeGreaterThan(loads);
+  expect(await screen.findByRole("button", { name: "Сделать итоги" })).toBeEnabled();
+});
+
+test("поставленная задача так и не появилась за два обновления списка — ожидание снято", async () => {
+  noSummary();
+  vi.mocked(api.makeSummary).mockResolvedValue(job({ id: "s2", state: "queued" }));
+  const { update } = show();
+  await userEvent.click(await screen.findByRole("button", { name: "Сделать итоги" }));
+  expect(await screen.findByText("Модель думает…")).toBeInTheDocument();
+  const loads = vi.mocked(api.getSummary).mock.calls.length;
+  update({ jobs: [job({ id: "other", folder: "C:/rec/r2" })] });
+  expect(screen.getByText("Модель думает…")).toBeInTheDocument();
+  update({ jobs: [job({ id: "other", folder: "C:/rec/r2", state: "done" })] });
+  await waitFor(() => expect(screen.queryByText("Модель думает…")).toBeNull());
+  expect(vi.mocked(api.getSummary).mock.calls.length).toBeGreaterThan(loads);
+});
+
+test("поставленная задача не появилась за 10 с — ожидание снято", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    noSummary();
+    vi.mocked(api.makeSummary).mockResolvedValue(job({ id: "s2", state: "queued" }));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    show();
+    await user.click(await screen.findByRole("button", { name: "Сделать итоги" }));
+    expect(await screen.findByText("Модель думает…")).toBeInTheDocument();
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    await waitFor(() => expect(screen.queryByText("Модель думает…")).toBeNull());
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("устаревший ответ getSummary не перекрывает свежий", async () => {
+  const first = deferred<{ markdown: string; created_at: number }>();
+  vi.mocked(api.getSummary).mockReturnValueOnce(first.promise)
+    .mockResolvedValue({ markdown: "# Свежие", created_at: 2000 });
+  const { update } = show();
+  update({ jobs: [job({ state: "done" })] });
+  expect(await screen.findByRole("heading", { name: "Свежие" })).toBeInTheDocument();
+  await act(async () => { first.resolve({ markdown: "# Старые", created_at: 1000 }); });
+  expect(screen.getByRole("heading", { name: "Свежие" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Старые" })).toBeNull();
+});
+
+test("ответ для прежней записи не попадает в новую", async () => {
+  const first = deferred<{ markdown: string; created_at: number }>();
+  vi.mocked(api.getSummary).mockImplementation((_ep, rid) =>
+    rid === "r1" ? first.promise : Promise.resolve({ markdown: "# Запись два", created_at: 1 }));
+  const { update } = show();
+  update({ id: "r2", folder: "C:/rec/r2" });
+  expect(await screen.findByRole("heading", { name: "Запись два" })).toBeInTheDocument();
+  await act(async () => { first.resolve({ markdown: "# Запись один", created_at: 1 }); });
+  expect(screen.queryByRole("heading", { name: "Запись один" })).toBeNull();
+});
+
+test("ошибка загрузки уходит после успешной перезагрузки", async () => {
+  vi.mocked(api.getSummary).mockRejectedValueOnce(new api.ApiError(500, "сломалось"));
+  const { update } = show();
+  expect(await screen.findByRole("alert")).toHaveTextContent("сломалось");
+  hasSummary();
+  update({ jobs: [job({ state: "done" })] });
+  expect(await screen.findByRole("heading", { name: "Решения" })).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("переделанные итоги — путь прежней заметки скрыт", async () => {
+  hasSummary();
+  vi.mocked(api.toNotes).mockResolvedValue({ path: "D:/Notes/old.md" });
+  const { update } = show();
+  await userEvent.click(await screen.findByRole("button", { name: "В заметки" }));
+  expect(await screen.findByText("D:/Notes/old.md")).toBeInTheDocument();
+  vi.mocked(api.getSummary).mockResolvedValue({ markdown: "# Новые", created_at: 2000 });
+  update({ jobs: [job({ state: "done" })] });
+  expect(await screen.findByRole("heading", { name: "Новые" })).toBeInTheDocument();
+  expect(screen.queryByText("D:/Notes/old.md")).toBeNull();
 });

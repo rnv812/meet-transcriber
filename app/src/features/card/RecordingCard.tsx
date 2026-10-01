@@ -22,6 +22,8 @@ import "./card.css";
 type Loaded = Recording & { transcript: Transcript | null };
 
 const NO_PEOPLE: PersonColor[] = [];
+/** Одна ссылка на «задач нет»: новая ссылка `jobs` для вкладок — это обновление списка. */
+const NO_JOBS: Job[] = [];
 /** `<data_dir>/logs` с разделителем, каким пишет путь сам резидент. */
 function logsDir(dataDir: string): string {
   const sep = dataDir.includes("\\") ? "\\" : "/";
@@ -30,7 +32,7 @@ function logsDir(dataDir: string): string {
 const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 
 export function RecordingCard({
-  id, endpoint, jobs = [], snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
+  id, endpoint, jobs = NO_JOBS, snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
   onOpenSettings,
 }: {
   id: string;
