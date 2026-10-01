@@ -288,3 +288,10 @@ def test_uv_steps_fixtures_are_current():
         path = Path(__file__).parent / "fixtures" / f"uv_steps_{profile}.json"
         expected = engine.uv_steps(profile=profile, **UV_INPUTS)
         assert json.loads(path.read_text(encoding="utf-8")) == expected
+
+
+def test_cuda_download_hint_matches_the_measured_wheels():
+    # Сухой прогон 01.10.2026: колёса CUDA-окружения — 4,4 ГБ; подсказка
+    # «~3 ГБ» обещала меньше, чем качается на самом деле.
+    assert engine.DOWNLOAD_HINT_GB["cuda"] >= 4.4
+    assert engine.DOWNLOAD_HINT_GB["cpu"] < engine.DOWNLOAD_HINT_GB["cuda"]

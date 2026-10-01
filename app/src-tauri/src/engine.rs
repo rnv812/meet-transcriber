@@ -54,9 +54,11 @@ const LAUNCHER: &str = "meet-tray.exe";
 const WHEEL_PREFIX: &str = "meet_transcriber-";
 const UV: &str = "uv.exe";
 const FFMPEG: &str = "ffmpeg.exe";
-/// Места на диске с данными, ГБ: окружение с CUDA-сборкой torch весит около
-/// 4,5 ГБ, CPU — около 2 ГБ; сверху запас на распаковку.
-const NEEDS_CUDA_GB: f64 = 5.0;
+/// Места на диске с данными, ГБ. Замер сухого прогона 01.10.2026 (uv 0.11.23,
+/// torch 2.11 cu128): CUDA-окружение — 6,8 ГБ (torch 4,1 ГБ + nvidia-cublas/
+/// cudnn 2 ГБ; кэш uv на том же диске — жёсткие ссылки, места не удваивает),
+/// CPU — 1,3 ГБ; сверху запас на распаковку.
+const NEEDS_CUDA_GB: f64 = 8.0;
 const NEEDS_CPU_GB: f64 = 3.0;
 const TAIL_LINES: usize = 30;
 /// Не чаще 10 строк в секунду в окно: uv сыплет сотнями строк, журнал
@@ -1009,7 +1011,7 @@ mod tests {
 
     #[test]
     fn cuda_needs_more_space_than_cpu() {
-        assert_eq!(needs_gb("cuda"), 5.0);
+        assert_eq!(needs_gb("cuda"), 8.0);
         assert_eq!(needs_gb("cpu"), 3.0);
     }
 
