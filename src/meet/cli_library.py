@@ -147,9 +147,13 @@ def _import(args, cfg) -> None:
         shutil.rmtree(folder, ignore_errors=True)
         raise CliError(errors[-1] if errors else "копирование не удалось")
     transcript = None if args.no_transcribe else _transcribe(folder, args, cfg)
+    # Пометка о пропущенной диаризации (`skipped_no_token`, `skipped_no_access`):
+    # скрипту видно, что спикеры не разделены, без чтения transcript.json.
+    data = library.read_transcript(folder) if transcript else None
     _result(args, {"folder": str(folder), "id": folder.name,
                    "transcribed": transcript is not None,
-                   "transcript": str(transcript) if transcript else None},
+                   "transcript": str(transcript) if transcript else None,
+                   "diarization": (data or {}).get("diarization")},
             f"{folder}\n")
 
 

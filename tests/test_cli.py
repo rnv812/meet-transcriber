@@ -624,3 +624,29 @@ def test_export_and_notes_share_title_and_date(env, capsys, monkeypatch):
     title, date = library.title_and_date(folder, library.read_transcript(folder))
     assert (title, date) == ("Планёрка", "2026-09-29")
     assert not hasattr(assistant, "_title_and_date")
+
+
+def test_import_json_reports_skipped_diarization(env, capsys, monkeypatch):
+    """Скрипту нужно знать, что спикеры не разделены (нет токена HF), не
+    открывая transcript.json: пометка — в JSON результата `meet import`."""
+    import meet.transcribe
+
+    def fake_transcribe(path, speakers=None, hotwords=None, align=True,
+                        overlap=True, bus=None):
+        library.transcript_path(Path(path)).write_text(
+            json.dumps({"version": 1, "segments": [], "diarization": "skipped_no_token"}),
+            encoding="utf-8")
+        return Path(path) / "2026-09-29_transcript.md"
+
+    monkeypatch.setattr(meet.transcribe, "transcribe", fake_transcribe)
+    assert _main(["import", str(_media(env)), "--json"]) == 0
+    assert _json_out(capsys)["diarization"] == "skipped_no_token"
+
+
+def test_import_json_has_no_diarization_mark_without_transcript(env, capsys, monkeypatch):
+    import meet.transcribe
+
+    monkeypatch.setattr(meet.transcribe, "transcribe", _refuse)
+    assert _main(["import", str(_media(env)), "--no-transcribe", "--json"]) == 0
+    got = _json_out(capsys)
+    assert got["transcribed"] is False and got["diarization"] is None
