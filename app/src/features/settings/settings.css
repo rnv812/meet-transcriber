@@ -71,6 +71,7 @@
 /* «О программе» → «Обновления»: итог проверки и ход загрузки под кнопкой. */
 .update { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .update:empty { display: none; }
+.authors { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
 .update__error { color: var(--err); font-size: 12px; }
 .update__progress { flex-basis: 100%; display: flex; flex-direction: column; gap: 4px; }
 .update__track { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }

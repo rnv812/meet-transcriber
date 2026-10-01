@@ -17,7 +17,12 @@ app/src-tauri/gen/
 # uv.exe, ffmpeg.exe и колесо для установщика (scripts/build_release.ps1),
 # её кэш загрузок и промежуточная сборка колеса
 app/src-tauri/resources/
-/build/
+build/
 
 # brainstorming companion
 .superpowers/
+
+# записи и личные настройки — никогда в репозиторий
+*.opus
+*.wav
+config.json

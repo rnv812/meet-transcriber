@@ -61,3 +61,41 @@ def test_wheel_contents_and_entry_points(wheel):
     assert "meet = meet.cli:main" in scripts
     assert "meet-tray = meet.tray:main" in gui
     assert "Provides-Extra: engine-cuda" in meta and "Provides-Extra: engine-cpu" in meta
+
+
+AUTHORS = ["Andrey Aleynikov", "Nikita Reznikov", "ndrsvh"]
+
+
+def test_license_and_authors_are_declared_everywhere():
+    """Лицензия и авторы одни и те же в пакете, оболочке и установщике."""
+    import json
+
+    project = _project()
+    assert project["license"] == "Apache-2.0"
+    assert [a["name"] for a in project["authors"]] == AUTHORS
+    cargo = tomllib.loads((ROOT / "app" / "src-tauri" / "Cargo.toml").read_text(encoding="utf-8"))
+    assert cargo["package"]["license"] == "Apache-2.0"
+    assert cargo["package"]["authors"] == AUTHORS
+    bundle = json.loads((ROOT / "app" / "src-tauri" / "tauri.conf.json")
+                        .read_text(encoding="utf-8"))["bundle"]
+    assert bundle["license"] == "Apache-2.0"
+    assert all(name in bundle["copyright"] for name in AUTHORS)
+    # Издатель — тот же, что Tauri выводил из идентификатора: от него зависит
+    # ключ реестра HKCU\Software\<издатель>\meet, где установщик ищет прежнюю
+    # папку установки при обновлении.
+    assert bundle["publisher"] == "meet"
+    license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
+    assert "Apache License" in license_text and "Version 2.0, January 2004" in license_text
+    assert "Copyright 2026 Andrey Aleynikov, Nikita Reznikov, ndrsvh" in license_text
+    notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
+    for name in AUTHORS + ["ffmpeg", "uv", "faster-whisper", "CTranslate2", "pyannote"]:
+        assert name in notice
+
+
+def test_wheel_carries_license(wheel):
+    with zipfile.ZipFile(wheel) as z:
+        names = z.namelist()
+        meta = z.read(next(n for n in names if n.endswith("/METADATA"))).decode()
+    assert "License-Expression: Apache-2.0" in meta
+    assert any(n.endswith("/LICENSE") for n in names)
+    assert any(n.endswith("/NOTICE") for n in names)

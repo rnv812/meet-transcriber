@@ -169,3 +169,14 @@ test("размер в мегабайтах", () => {
   expect(megabytes(52428800)).toBe("50 МБ");
   expect(megabytes(1572864)).toBe("1,5 МБ");
 });
+
+test("авторы с ролями и лицензия", async () => {
+  await renderAbout();
+  const authors = screen.getByRole("list", { name: "Авторы" });
+  expect(Array.from(authors.querySelectorAll("li")).map((li) => li.textContent)).toEqual([
+    "Андрей Алейников — автор проекта",
+    "ndrsvh — архитектура десктопного приложения",
+    "Никита Резников — десктопное приложение и интерфейс",
+  ]);
+  expect(screen.getByText("Лицензия Apache-2.0")).toBeInTheDocument();
+});

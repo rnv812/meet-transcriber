@@ -2,6 +2,13 @@
 name = "meet-transcriber"
 version = "0.1.0"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [
+    { name = "Andrey Aleynikov" },
+    { name = "Nikita Reznikov" },
+    { name = "ndrsvh" },
+]
 # Лёгкое ядро: запись, трей, панель, ассистент. Тяжёлый стек расшифровки живёт в
 # extras engine-cuda / engine-cpu (список зеркалит engine.PACKAGES, тест следит
 # за расхождением); torch ставится отдельным шагом с нужного индекса
@@ -38,7 +45,8 @@ meet = "meet.cli:main"
 meet-tray = "meet.tray:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+# 77 — первая версия с SPDX-лицензией и license-files (PEP 639).
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]

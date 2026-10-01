@@ -176,6 +176,13 @@ function InstallProgress({ progress }: { progress: UpdateProgress | null }) {
   );
 }
 
+/** Авторы и их роли — те же, что в NOTICE. */
+export const AUTHORS: { name: string; role: string }[] = [
+  { name: "Андрей Алейников", role: "автор проекта" },
+  { name: "ndrsvh", role: "архитектура десктопного приложения" },
+  { name: "Никита Резников", role: "десктопное приложение и интерфейс" },
+];
+
 export function About({ endpoint }: { endpoint: Endpoint }) {
   const [dataDir, setDataDir] = useState<string | null>(null);
   // Страница выпусков — от оболочки (репозиторий обновлений назван только там).
@@ -208,6 +215,11 @@ export function About({ endpoint }: { endpoint: Endpoint }) {
         {dataDir
           ? <span className="folder"><PathText path={dataDir} /><CopyButton text={dataDir} /></span>
           : <span className="muted">Неизвестно</span>}
+      </Row>
+      <Row label="Авторы" hint="Лицензия Apache-2.0" stack>
+        <ul className="authors" aria-label="Авторы">
+          {AUTHORS.map((a) => <li key={a.name}>{a.name} — {a.role}</li>)}
+        </ul>
       </Row>
     </>
   );

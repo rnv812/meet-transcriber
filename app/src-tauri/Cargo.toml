@@ -2,6 +2,8 @@
 name = "meet-desktop"
 version = "0.1.0"
 description = "Оболочка meet: трей, уведомления, окно приложения"
+authors = ["Andrey Aleynikov", "Nikita Reznikov", "ndrsvh"]
+license = "Apache-2.0"
 edition = "2021"
 rust-version = "1.77"
 
