@@ -169,8 +169,11 @@ def _add_library_parsers(sub) -> None:
         p.add_argument("--provider", default=None, choices=("auto",) + PROVIDERS,
                        help=provider_help)
 
+    p_kb = sub.add_parser("kb-export", parents=[as_json],
+                          help="выгрузить встречу в базу знаний (папка по шаблону)")
+    p_kb.add_argument("folder", help=folder_help)
     p_no = sub.add_parser("notes", parents=[as_json],
-                          help="заметка о встрече в папку заметок")
+                          help="то же, что kb-export (прежнее имя)")
     p_no.add_argument("folder", help=folder_help)
 
 

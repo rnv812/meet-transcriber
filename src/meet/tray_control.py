@@ -226,6 +226,57 @@ class TrayControl:
             self.bus, log=tray.log)
         tray.live_busy = self.live.busy
         self.bus.subscribe(self._on_live_event)
+        # Выгрузка в базу знаний: по одной за раз (кнопка поверх автоматики не
+        # должна писать в ту же папку одновременно). Последний сбой автоматики —
+        # в снимке, оболочка показывает по нему уведомление; о каждой встрече —
+        # не больше одного за жизнь резидента.
+        self._kb_lock = threading.Lock()
+        self._kb_failed: dict | None = None
+        self._kb_reported: set[str] = set()
+        self.bus.subscribe(self._on_job_event)
+
+    @staticmethod
+    def _background(fn) -> None:
+        """Фоновая работа вне потока очереди задач (тесты подменяют на вызов)."""
+        threading.Thread(target=fn, name="meet-kb-export", daemon=True).start()
+
+    def _on_job_event(self, event) -> None:
+        """Расшифровка или импорт готовы — выгрузить встречу в базу знаний, если
+        включена автоматика; итоги готовы — выгрузить заново (итоги ложатся
+        рядом), если включена автоматика или встречу уже выгружали вручную."""
+        if event.kind != jobs.JOB_DONE:
+            return
+        job = event.data.get("job") or {}
+        kind, folder = job.get("kind"), job.get("folder")
+        if kind not in (jobs.TRANSCRIBE, jobs.IMPORT, jobs.SUMMARY) or not folder:
+            return
+        cfg = settings.load().export
+        if not cfg.meetings_dir:
+            return
+        path = Path(folder)
+        if kind == jobs.SUMMARY:
+            from meet import kb_export
+
+            wanted = cfg.auto_export or kb_export.previously_exported(path)
+        else:
+            wanted = cfg.auto_export
+        if wanted and library.read_transcript(path) is not None:
+            self._background(lambda: self._auto_kb_export(path))
+
+    def _auto_kb_export(self, folder: Path) -> None:
+        from meet import kb_export
+
+        try:
+            with self._kb_lock:
+                result = kb_export.export_recording(folder, settings.load())
+        except Exception as e:
+            error = str(e) or type(e).__name__
+            self.tray.log(f"не удалось выгрузить встречу в базу знаний ({folder.name}): {error}")
+            if folder.name not in self._kb_reported:
+                self._kb_reported.add(folder.name)
+                self._kb_failed = {"folder": folder.name, "error": error, "at": time.time()}
+            return
+        self.tray.log(f"встреча выгружена в базу знаний: {result['path']}")
 
     def _on_live_event(self, event) -> None:
         """Ассистент остановлен — та же автоматическая расшифровка, что после
@@ -270,6 +321,8 @@ class TrayControl:
 
     def snapshot(self) -> dict:
         tray = self.tray
+        cfg = settings.load()
+        meetings = cfg.export.meetings_dir
         recording = bool(tray.recording)
         elapsed = time.monotonic() - tray.started if recording and tray.started else 0.0
         return {
@@ -281,7 +334,7 @@ class TrayControl:
             # Свободное место под записи: UI предупреждает при < 5 ГБ до старта
             # записи, а не когда ffmpeg упрётся в полный диск посреди встречи.
             # None — диск недоступен (отключён, шара не отвечает).
-            "disk_free_gb": engine._free_gb(settings.load().recording.recordings),
+            "disk_free_gb": engine._free_gb(cfg.recording.recordings),
             "auto_record": {
                 "enabled": bool(tray.cfg["enabled"]),
                 "processes": list(tray.cfg["processes"]),
@@ -292,7 +345,13 @@ class TrayControl:
                 "mic": tray._last_signals[0] if tray._last_signals else None,
                 "render": tray._last_signals[1] if tray._last_signals else None,
             },
-            "recordings_dir": str(settings.load().recording.recordings),
+            "recordings_dir": str(cfg.recording.recordings),
+            # Папка для встреч в базе знаний: оболочка открывает выгруженные
+            # папки только внутри неё (и папки записей).
+            "meetings_dir": str(meetings) if meetings else None,
+            # Последний сбой автоматической выгрузки {"folder", "error", "at"}:
+            # новое `at` — уведомление «Не удалось выгрузить встречу…».
+            "kb_export_failed": dict(self._kb_failed) if self._kb_failed else None,
             # Чем кончилась последняя запись ("saved" | "discarded" | "short"):
             # оболочка по нему не говорит «сохранена» об отменённой. Ключ есть
             # всегда — его наличие отличает этот резидент от старого.
@@ -428,7 +487,10 @@ class TrayControl:
         integrations = (updates or {}).get("integrations")
         if isinstance(integrations, dict) and str(integrations.get("hf_token") or "").strip():
             self._hf_check = None  # токен сменился — прежняя проверка не о нём
-        updated = settings.patch(updates or {})
+        try:
+            updated = settings.patch(updates or {})
+        except ValueError as e:  # шаблон папки, имя файла выгрузки
+            raise _bad_request(str(e))
         touched = [name for name in RESTART_REQUIRED_SECTIONS if name in (updates or {})]
         return {
             "settings": updated.to_raw(),
@@ -805,7 +867,7 @@ class TrayControl:
     def cancel_job(self, job_id: str) -> dict:
         return {"ok": self.queue.cancel(job_id) or self.llm_queue.cancel(job_id)}
 
-    # --- ассистент: итоги, вопросы, заметки -------------------------------
+    # --- ассистент: итоги и вопросы ---------------------------------------
 
     def _transcribed(self, recording_id: str) -> Path | dict:
         folder = self._folder(recording_id)
@@ -865,21 +927,36 @@ class TrayControl:
             return {"error": "записи нет"}
         return {"items": assistant.read_qa(folder)}
 
-    def to_notes(self, recording_id: str) -> dict:
-        from meet import assistant
+    # --- выгрузка в базу знаний --------------------------------------------
+
+    def kb_export(self, recording_id: str) -> dict:
+        """Кнопка «В базу знаний»: выгрузить сейчас, ответ — папка и файлы."""
+        from meet import kb_export
 
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
-        cfg = settings.load().assistant
+        cfg = settings.load()
+        if not cfg.export.meetings_dir:
+            raise _bad_request(kb_export.NOT_SET)
         try:
-            path = assistant.to_notes(folder, cfg.notes_dir, cfg.notes_subdir)
+            with self._kb_lock:
+                return kb_export.export_recording(folder, cfg)
         except ValueError as e:
             raise _bad_request(str(e))
         except OSError as e:
             # Не OSError наружу: control API принял бы его за обрыв клиента.
-            raise RuntimeError(f"не удалось записать заметку: {e}") from e
-        return {"path": str(path)}
+            raise RuntimeError(f"не удалось выгрузить встречу: {e}") from e
+
+    # «В заметки» прежнего окна — та же выгрузка.
+    to_notes = kb_export
+
+    def export_preview(self, params: dict | None = None) -> dict:
+        """Пример папки и файлов для окна настроек (несохранённые значения —
+        в `params`): на последней записи библиотеки, иначе на выдуманной."""
+        from meet import kb_export
+
+        return kb_export.preview(settings.load(), self._root(), dict(params or {}))
 
     def assistant(self) -> dict:
         """Кто ответит и что для этого есть. Не ждёт проверки входа в CLI:
@@ -888,14 +965,13 @@ class TrayControl:
 
         cfg = settings.load()
         provider, checking = self._providers.get(cfg)
-        knowledge, notes = cfg.assistant.knowledge_dir, cfg.assistant.notes_dir
+        knowledge = cfg.assistant.knowledge_dir
         return {
             "provider": provider,
             "checking": checking,
             "setting": cfg.llm.provider,
             "available": detect.available(cfg.llm.base_url),
             "knowledge_dir": str(knowledge) if knowledge else None,
-            "notes_dir": str(notes) if notes else None,
         }
 
     def check_provider(self, body: dict | None) -> dict:

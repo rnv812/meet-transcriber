@@ -69,6 +69,8 @@ pub const LIVE_FAILED: &str = "Ассистент упал";
 pub const LIVE_CANCELLED: &str = "Запуск ассистента отменён";
 pub const LIVE_START_FAILED: &str = "Не удалось запустить ассистента";
 pub const LIVE_STOP_FAILED: &str = "Не удалось остановить ассистента";
+/// Автоматическая выгрузка встречи в базу знаний не удалась (`/state.kb_export_failed`).
+pub const KB_EXPORT_FAILED: &str = "Не удалось выгрузить встречу в базу знаний";
 /// Раздел настроек, куда ведёт отказ `/live/start` без провайдера (409).
 pub const ASSISTANT_SECTION: &str = "assistant";
 /// Что проходит при `ui.notifications = "important"`: ошибки и автоматический
@@ -88,6 +90,7 @@ const IMPORTANT: &[&str] = &[
     LIVE_FAILED,
     LIVE_START_FAILED,
     LIVE_STOP_FAILED,
+    KB_EXPORT_FAILED,
 ];
 
 /// Сводка `/state` + `/jobs`, из которой рисуется трей.
@@ -114,6 +117,28 @@ pub struct View {
     /// Запись с ассистентом (`/state.live`). Обычная запись при этом не идёт:
     /// `recording` — только про неё.
     pub live: Live,
+    /// Последний сбой автоматической выгрузки в базу знаний. Резидент
+    /// сообщает о каждой встрече не больше одного раза; новое `at` — новое
+    /// уведомление.
+    pub kb_failed: Option<KbFailure>,
+}
+
+/// `/state.kb_export_failed`: какая встреча, почему и когда (epoch).
+#[derive(Debug, Clone, PartialEq)]
+pub struct KbFailure {
+    pub folder: String,
+    pub error: String,
+    pub at: f64,
+}
+
+impl KbFailure {
+    fn from_json(value: &Value) -> Option<KbFailure> {
+        Some(KbFailure {
+            folder: str_at(value, "folder")?.to_string(),
+            error: str_at(value, "error").unwrap_or_default().to_string(),
+            at: value.get("at").and_then(Value::as_f64).unwrap_or(0.0),
+        })
+    }
 }
 
 /// `/state.live` без `started_at`: секундомер — забота панели, а меню и
@@ -195,6 +220,7 @@ impl View {
             last_stop: state.get("last_stop").and_then(LastStop::from_json),
             reports_stops: state.get("last_stop").is_some(),
             live: state.get("live").map(Live::from_json).unwrap_or_default(),
+            kb_failed: state.get("kb_export_failed").and_then(KbFailure::from_json),
         };
         let items = jobs
             .get("items")
@@ -324,6 +350,17 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
             TRANSCRIPT_FAILED,
             shorten(error, ERROR_CHARS),
             Some(id.clone()),
+        ));
+    }
+    if let Some(failed) = next
+        .kb_failed
+        .as_ref()
+        .filter(|failed| prev.kb_failed.as_ref() != Some(*failed))
+    {
+        out.push(Notice::new(
+            KB_EXPORT_FAILED,
+            shorten(&failed.error, ERROR_CHARS),
+            recording_id(&failed.folder),
         ));
     }
     out
@@ -1183,6 +1220,7 @@ mod tests {
             last_stop: None,
             reports_stops: true,
             live: Live::default(),
+            kb_failed: None,
         }
     }
 
@@ -1651,6 +1689,7 @@ mod tests {
             "Запуск ассистента отменён",
             "Не удалось запустить ассистента",
             "Не удалось остановить ассистента",
+            "Не удалось выгрузить встречу в базу знаний",
         ]
         .into_iter()
         .map(notice)
@@ -1685,8 +1724,39 @@ mod tests {
                 "Ассистент упал",
                 "Не удалось запустить ассистента",
                 "Не удалось остановить ассистента",
+                "Не удалось выгрузить встречу в базу знаний",
             ]
         );
+    }
+
+    #[test]
+    fn kb_export_failure_is_reported_once_per_new_failure() {
+        let state = json!({"status": "idle", "last_stop": null,
+                           "kb_export_failed": {"folder": "2026-09-30_10-15",
+                                                "error": "диск недоступен", "at": 5.0}});
+        let failed = View::from_json(&state, &json!({"items": []}));
+        assert_eq!(
+            failed.kb_failed,
+            Some(KbFailure {
+                folder: "2026-09-30_10-15".into(),
+                error: "диск недоступен".into(),
+                at: 5.0,
+            })
+        );
+        let notices = transitions(Some(&idle()), &failed);
+        assert_eq!(
+            notices,
+            vec![Notice {
+                title: KB_EXPORT_FAILED.into(),
+                body: "диск недоступен".into(),
+                recording: Some("2026-09-30_10-15".into()),
+            }]
+        );
+        // Тот же сбой в следующем снимке — повторного уведомления нет.
+        assert!(transitions(Some(&failed), &failed.clone()).is_empty());
+        // Первый снимок — точка отсчёта: старый сбой не сообщается.
+        assert!(transitions(None, &failed).is_empty());
+        assert_eq!(filter(notices.clone(), Level::Important), notices);
     }
 
     #[test]

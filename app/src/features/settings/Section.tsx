@@ -1,4 +1,6 @@
 import { useId, type ReactNode } from "react";
+import { pickFolder } from "../../lib/shell";
+import { Button } from "../../ui/Button";
 
 export function Row({ label, hint, htmlFor, children }: {
   label: string; hint?: string; htmlFor?: string; children: ReactNode;
@@ -52,6 +54,25 @@ export function Radio<T extends string>({ label, hint, value, options, onChange 
         ))}
       </div>
     </Row>
+  );
+}
+
+/** Папка на диске: путь, «Выбрать папку…» (диалог оболочки) и «Очистить» (null). */
+export function FolderRow({ label, hint, value, onChange }: {
+  label: string; hint: string; value: string | null; onChange: (v: string | null) => void;
+}) {
+  const choose = async () => {
+    const path = await pickFolder(value).catch(() => null);
+    if (path) onChange(path);
+  };
+  return (
+    <div role="group" aria-label={label}>
+      <Row label={label} hint={hint}>
+        {value ? <code className="path">{value}</code> : <span className="muted">не задана</span>}
+        <Button onClick={() => void choose()}>Выбрать папку…</Button>
+        <Button onClick={() => onChange(null)} disabled={!value}>Очистить</Button>
+      </Row>
+    </div>
   );
 }
 

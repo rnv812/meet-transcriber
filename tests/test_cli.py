@@ -456,12 +456,26 @@ def test_ask_empty_question_is_exit_1(env, capsys, monkeypatch):
     assert "пустой вопрос" in capsys.readouterr().err
 
 
-def test_notes_writes_note_and_prints_path(env, capsys):
-    _meeting(env)
+def test_notes_is_the_kb_export_into_migrated_notes_folder(env, capsys):
+    """`meet notes` оставлен как синоним `meet kb-export`; прежняя папка
+    заметок (notes_dir/notes_subdir) стала папкой для встреч."""
+    folder = _meeting(env)
+    library.write_meta(folder, {"title": "Планирование спринта"})
     assert _main(["notes", RID, "--json"]) == 0
-    path = Path(_json_out(capsys)["path"])
-    assert path.parent == env["notes"] / "Встречи"
-    assert path.name == "2026-09-29 Планёрка.md"
+    got = _json_out(capsys)
+    assert Path(got["path"]) == env["notes"] / "Встречи" / "2026-09-29 - Планирование спринта"
+    assert got["files"] == ["Транскрипт.md"]
+
+
+def test_kb_export_prints_path(env, capsys):
+    folder = _meeting(env)
+    library.write_meta(folder, {"title": "Планирование спринта"})
+    (folder / "summary.md").write_text("# Итоги\n", encoding="utf-8")
+    assert _main(["kb-export", RID]) == 0
+    out = capsys.readouterr().out
+    target = env["notes"] / "Встречи" / "2026-09-29 - Планирование спринта"
+    assert out == f"{target}\n"
+    assert (target / "Итоги.md").exists()
 
 
 # --- import --------------------------------------------------------------------
@@ -604,15 +618,15 @@ def test_closed_pipe_exits_quietly(env, capsys, monkeypatch):
     assert capsys.readouterr().err == ""  # без трейсбека и без ругани
 
 
-def test_notes_without_notes_dir_says_which_setting(env, capsys, tmp_path):
+def test_kb_export_without_meetings_dir_says_which_setting(env, capsys, tmp_path):
     _meeting(env)
     cfg = tmp_path / "data" / "config.json"
     raw = json.loads(cfg.read_text(encoding="utf-8"))
     raw["assistant"] = {"notes_dir": None}
     cfg.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
-    assert _main(["notes", RID]) == 1
+    assert _main(["kb-export", RID]) == 1
     err = capsys.readouterr().err
-    assert "Папка заметок не задана" in err and "assistant.notes_dir" in err
+    assert "Папка для встреч не задана" in err and "export.meetings_dir" in err
     assert "Traceback" not in err
 
 

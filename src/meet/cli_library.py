@@ -23,7 +23,7 @@ from pathlib import Path
 
 from meet import library
 
-COMMANDS = ("import", "export", "voices", "summary", "ask", "notes")
+COMMANDS = ("import", "export", "voices", "summary", "ask", "notes", "kb-export")
 NO_PROVIDER_HINT = ("Подключите Claude Code или Codex: meet {command} … --provider codex "
                     "или настройка llm.provider")
 
@@ -351,23 +351,23 @@ def _ask(args, cfg) -> None:
     _result(args, item, item["a"] + "\n")
 
 
-def _notes(args, cfg) -> None:
-    from meet import assistant
+def _kb_export(args, cfg) -> None:
+    """`meet kb-export` (и прежнее `meet notes`): встреча — в базу знаний."""
+    from meet import kb_export
 
     folder = _recording(args.folder, cfg)
     _transcript(folder)
-    notes = cfg.assistant
     try:
-        path = assistant.to_notes(folder, notes.notes_dir, notes.notes_subdir)
+        result = kb_export.export_recording(folder, cfg)
     except ValueError as e:
-        hint = "" if notes.notes_dir else " (настройка assistant.notes_dir)"
+        hint = "" if cfg.export.meetings_dir else " (настройка export.meetings_dir)"
         raise CliError(f"{e}{hint}")
-    except OSError as e:
-        raise CliError(f"Не удалось записать заметку: {e}")
-    _result(args, {"path": str(path)}, f"{path}\n")
+    except (RuntimeError, OSError) as e:
+        raise CliError(f"Не удалось выгрузить встречу: {e}")
+    _result(args, result, f"{result['path']}\n")
 
 
 _HANDLERS = {"import": _import, "export": _export, "summary": _summary,
-             "ask": _ask, "notes": _notes}
+             "ask": _ask, "notes": _kb_export, "kb-export": _kb_export}
 _VOICES = {"list": _voices_list, "rename": _voices_rename, "merge": _voices_merge,
            "delete": _voices_delete, "avatar": _voices_avatar}

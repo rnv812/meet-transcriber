@@ -8,14 +8,13 @@ vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
   getSummary: vi.fn(),
   makeSummary: vi.fn(),
-  toNotes: vi.fn(),
 }));
 
 const ep = { base: "/api", token: null };
 const FOLDER = "C:\\rec\\r1";
 const assistant = (o: Partial<AssistantInfo> = {}): AssistantInfo => ({
   provider: "claude-code", setting: "auto", available: {}, knowledge_dir: null,
-  notes_dir: "D:/Notes", checking: false, ...o,
+  checking: false, ...o,
 });
 const job = (o: Partial<Job> = {}): Job => ({
   id: "s1", kind: "summary", folder: "C:/rec/r1", state: "running", stage: null, label: null,
@@ -74,32 +73,14 @@ test("409 от резидента показывается текстом", asyn
   expect(await screen.findByRole("alert")).toHaveTextContent("Дождитесь окончания расшифровки");
 });
 
-test("итоги есть: заголовки из Markdown, «В заметки» → путь", async () => {
+test("итоги есть: заголовки из Markdown; выгрузка — на уровне карточки, не здесь", async () => {
   hasSummary();
-  vi.mocked(api.toNotes).mockResolvedValue({ path: "D:/Notes/Встречи/2026-09-30 Встреча.md" });
   show();
   expect(await screen.findByRole("heading", { name: "Решения" })).toBeInTheDocument();
   expect(screen.getByRole("table")).toBeInTheDocument();
   expect(screen.getByText("в пятницу").tagName).toBe("STRONG");
-  await userEvent.click(screen.getByRole("button", { name: "В заметки" }));
-  expect(api.toNotes).toHaveBeenCalledWith(ep, "r1");
-  expect(await screen.findByText("D:/Notes/Встречи/2026-09-30 Встреча.md")).toBeInTheDocument();
-});
-
-test("«В заметки» скрыта, если папка заметок не задана", async () => {
-  hasSummary();
-  show({ assistant: assistant({ notes_dir: null }) });
-  await screen.findByRole("heading", { name: "Решения" });
-  expect(screen.queryByRole("button", { name: "В заметки" })).toBeNull();
   expect(screen.getByRole("button", { name: "Переделать" })).toBeInTheDocument();
-});
-
-test("ошибка «В заметки» — текстом", async () => {
-  hasSummary();
-  vi.mocked(api.toNotes).mockRejectedValue(new api.ApiError(400, "Папка заметок не задана"));
-  show();
-  await userEvent.click(await screen.findByRole("button", { name: "В заметки" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent("Папка заметок не задана");
+  expect(screen.queryByRole("button", { name: "В заметки" })).toBeNull();
 });
 
 test("«Копировать» кладёт сырой Markdown и пишет «Скопировано»", async () => {
@@ -227,14 +208,3 @@ test("ошибка загрузки уходит после успешной п�
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
-test("переделанные итоги — путь прежней заметки скрыт", async () => {
-  hasSummary();
-  vi.mocked(api.toNotes).mockResolvedValue({ path: "D:/Notes/old.md" });
-  const { update } = show();
-  await userEvent.click(await screen.findByRole("button", { name: "В заметки" }));
-  expect(await screen.findByText("D:/Notes/old.md")).toBeInTheDocument();
-  vi.mocked(api.getSummary).mockResolvedValue({ markdown: "# Новые", created_at: 2000 });
-  update({ jobs: [job({ state: "done" })] });
-  expect(await screen.findByRole("heading", { name: "Новые" })).toBeInTheDocument();
-  expect(screen.queryByText("D:/Notes/old.md")).toBeNull();
-});

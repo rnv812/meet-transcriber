@@ -1,0 +1,379 @@
+"""Выгрузка встречи в базу знаний (Obsidian и т. п.) по шаблону папки.
+
+Внутри `export.meetings_dir` на встречу заводится папка по шаблону
+(`{date} - {title}` → «2026-09-30 - Планирование спринта»; «/» в шаблоне —
+подпапки), и в неё кладутся выбранные файлы: транскрипт в Markdown, итоги
+(summary.md как есть), субтитры, запись.
+
+Правила, ради которых модуль устроен так, а не проще:
+
+* **Повторная выгрузка идёт туда же.** Путь первой выгрузки хранится в
+  meta.json записи (`kb_export.path`); пока папка существует, итоги, сделанные
+  позже, и переименование встречи не плодят вторую папку.
+* **Чужое не трогаем.** Перезаписываются только наши файлы (имена из
+  настроек); заметки человека рядом с ними и уже существующая папка с тем же
+  именем остаются как были. Папка, занятая другой встречей, получает суффикс
+  « (2)».
+* **Запись атомарная:** временный файл рядом и `os.replace` — база знаний
+  (синхронизация, индексатор Obsidian) не увидит половину файла.
+"""
+
+import os
+import re
+import shutil
+import subprocess
+import time
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+
+from meet import library
+
+TOKENS = ("date", "time", "year", "month", "day", "title")
+TOKEN_RE = re.compile(r"\{([^{}]*)\}")
+NOT_SET = "Папка для встреч не задана"
+NO_TRANSCRIPT = "Транскрипта нет — сначала расшифруйте запись"
+SRT_NAME = "Субтитры.srt"
+AUDIO_STEM = "Запись"
+# Две дорожки (собеседники и микрофон) сводятся в одну: так её можно слушать.
+MIXED_EXT = ".opus"
+FALLBACK_TITLE = "Встреча"
+# Пример для предпросмотра шаблона, когда в библиотеке ещё нет записей.
+SAMPLE_TITLE = "Планирование спринта"
+SAMPLE_START = datetime(2026, 9, 30, 10, 0)
+MIX_TIMEOUT_S = 1800
+
+
+# --- шаблоны ---------------------------------------------------------------------
+
+
+def _token_error(text: str) -> str | None:
+    for name in TOKEN_RE.findall(text):
+        if name not in TOKENS:
+            known = ", ".join("{" + t + "}" for t in TOKENS)
+            return f"Неизвестная подстановка {{{name}}}. Доступны: {known}"
+    return None
+
+
+def check_folder_template(template: str) -> str | None:
+    """Почему шаблон папки нельзя использовать, или None. Шаблон — путь
+    внутри папки для встреч: относительный, без «..» и пустых частей."""
+    text = (template or "").strip()
+    if not text:
+        return "Шаблон папки не может быть пустым"
+    if text[0] in "/\\":
+        return "Шаблон папки должен быть относительным — без «/» в начале"
+    if re.match(r"^[A-Za-z]:", text):
+        return "Шаблон папки не может содержать букву диска"
+    parts = re.split(r"[\\/]", text)
+    if any(not part.strip() for part in parts):
+        return "В шаблоне папки есть пустая часть пути — уберите лишнюю «/»"
+    if any(part.strip() in ("..", ".") for part in parts):
+        return "В шаблоне папки нельзя использовать «..» и «.»"
+    return _token_error(text)
+
+
+def check_file_name(name: str) -> str | None:
+    """Почему имя файла нельзя использовать, или None."""
+    text = (name or "").strip()
+    if not text:
+        return "Имя файла не может быть пустым"
+    if "/" in text or "\\" in text:
+        return "Имя файла не может содержать «/» или «\\»"
+    return _token_error(text)
+
+
+def _values(title: str, start: datetime) -> dict:
+    return {
+        "date": start.strftime("%Y-%m-%d"),
+        "time": start.strftime("%H-%M"),
+        "year": start.strftime("%Y"),
+        "month": start.strftime("%m"),
+        "day": start.strftime("%d"),
+        "title": title,
+    }
+
+
+def _fill(text: str, values: dict) -> str:
+    return TOKEN_RE.sub(lambda m: values.get(m.group(1), m.group(0)), text)
+
+
+def render_folder(template: str, title: str, start: datetime) -> list[str]:
+    """Части пути папки встречи. Подстановки — после разбиения на части:
+    «/» в названии встречи не создаёт подпапок, а каждая часть очищается
+    `export.safe_filename`."""
+    from meet.export import safe_filename
+
+    values = _values(title, start)
+    parts = [p.strip() for p in re.split(r"[\\/]", template.strip())]
+    return [safe_filename(_fill(part, values), FALLBACK_TITLE) for part in parts]
+
+
+def render_file(template: str, title: str, start: datetime, default: str = "Файл.md") -> str:
+    """Имя файла по шаблону: подстановки, очистка, «.md», если его нет."""
+    from meet.export import safe_filename
+
+    name = safe_filename(_fill(template.strip(), _values(title, start)), default)
+    return name if name.lower().endswith(".md") else f"{name}.md"
+
+
+# --- встреча -----------------------------------------------------------------------
+
+
+def meeting(folder: Path) -> tuple[str, datetime]:
+    """Название и начало встречи: название из карточки (meta.json), иначе
+    «Встреча ЧЧ:ММ»; начало — из имени папки записи, иначе время папки."""
+    folder = Path(folder)
+    card = library.describe(folder)
+    start = None
+    if card and card.started_at:
+        try:
+            start = datetime.fromisoformat(card.started_at)
+        except ValueError:
+            start = None
+    if start is None:
+        start = datetime.fromtimestamp(folder.stat().st_mtime)
+    title = str(library.read_meta(folder).get("title") or "").strip()
+    return title or f"{FALLBACK_TITLE} {start:%H:%M}", start
+
+
+def _audio_sources(folder: Path) -> list[Path]:
+    tracks = {stem: library.find_track(folder, stem) for stem in library.TRACK_STEMS}
+    if tracks["source"]:
+        return [tracks["source"]]
+    return [p for p in (tracks["sys"], tracks["mic"]) if p]
+
+
+def _audio_name(sources: list[Path]) -> str | None:
+    if not sources:
+        return None
+    ext = MIXED_EXT if len(sources) > 1 else sources[0].suffix.lower()
+    return f"{AUDIO_STEM}{ext}"
+
+
+def _plan(cfg, title: str, start: datetime, has_summary: bool,
+          audio: str | None) -> list[tuple[str, str]]:
+    """(что, имя файла) в порядке выгрузки."""
+    files = []
+    if cfg.include_transcript:
+        files.append(("transcript", render_file(cfg.transcript_name, title, start, "Транскрипт.md")))
+    if cfg.include_summary and has_summary:
+        files.append(("summary", render_file(cfg.summary_name, title, start, "Итоги.md")))
+    if cfg.include_srt:
+        files.append(("srt", SRT_NAME))
+    if cfg.include_audio and audio:
+        files.append(("audio", audio))
+    return files
+
+
+# --- запись файлов -----------------------------------------------------------------
+
+
+def _write_text(path: Path, text: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _fresh(target: Path, sources: list[Path]) -> bool:
+    """Аудио уже выгружено и новее дорожек — гигабайт заново не копируем."""
+    try:
+        made = target.stat()
+        return made.st_size > 0 and all(made.st_mtime >= s.stat().st_mtime for s in sources)
+    except OSError:
+        return False
+
+
+def mix_tracks(a: Path, b: Path, out: Path) -> None:
+    """Свести две дорожки в одну (Ogg/Opus) через ffmpeg."""
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg не найден — запись не выгружена")
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(a), "-i", str(b),
+         "-filter_complex", "amix=inputs=2:duration=longest", "-c:a", "libopus",
+         "-b:a", "48k", "-f", "ogg", str(out)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=MIX_TIMEOUT_S, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg не свёл дорожки: {(proc.stderr or '').strip()[-300:]}")
+
+
+def _write_audio(sources: list[Path], target: Path, mix) -> None:
+    if _fresh(target, sources):
+        return
+    tmp = target.with_name(target.name + ".tmp")
+    try:
+        if len(sources) > 1:
+            mix(sources[0], sources[1], tmp)
+        else:
+            shutil.copyfile(sources[0], tmp)
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _same(a: Path, b: Path) -> bool:
+    try:
+        return os.path.normcase(a.resolve()) == os.path.normcase(b.resolve())
+    except OSError:
+        return False
+
+
+def _claimed_by_other(candidate: Path, folder: Path) -> bool:
+    """Папку уже заняла другая встреча библиотеки (её kb_export.path)."""
+    try:
+        siblings = [p for p in folder.parent.iterdir() if p.is_dir() and p.name != folder.name]
+    except OSError:
+        return False
+    for other in siblings:
+        path = (library.read_meta(other).get("kb_export") or {}).get("path")
+        if isinstance(path, str) and path and _same(Path(path), candidate):
+            return True
+    return False
+
+
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        return path.resolve().is_relative_to(root.resolve())
+    except OSError:
+        return False
+
+
+def _target(root: Path, cfg, folder: Path, title: str, start: datetime) -> Path:
+    previous = (library.read_meta(folder).get("kb_export") or {}).get("path")
+    if isinstance(previous, str) and previous:
+        prev = Path(previous)
+        if prev.is_dir() and _inside(prev, root):
+            return prev
+    parts = render_folder(cfg.folder_template, title, start)
+    base = root.joinpath(*parts)
+    if not _inside(base, root):  # ссылка (junction) наружу
+        raise ValueError("Шаблон папки выводит за пределы папки для встреч")
+    candidate, n = base, 2
+    while _claimed_by_other(candidate, folder):
+        candidate = base.with_name(f"{base.name} ({n})")
+        n += 1
+    return candidate
+
+
+def _transcript_md(data: dict, title: str, start: datetime) -> str:
+    """Транскрипт в формате проекта (тот же, что у экспорта .md и бывшей
+    заметки): frontmatter для Obsidian, «# название», «## ВРЕМЯ — Спикер»."""
+    from meet import export, output
+
+    return output.to_markdown(title, export.md_segments(data), start.strftime("%Y-%m-%d"))
+
+
+def _export(folder: Path, cfg, mix) -> dict:
+    from meet import assistant, export
+
+    if not cfg.meetings_dir:
+        raise ValueError(NOT_SET)
+    root = Path(cfg.meetings_dir)
+    if not root.is_dir() and root.parent.is_dir() and root.parent != root:
+        # Последняя часть пути ещё не создана (перенесённая «подпапка
+        # заметок»); отключённый диск или шару не создаём — это ошибка.
+        root.mkdir(exist_ok=True)
+    if not root.is_dir():
+        raise ValueError(f"Папка для встреч не найдена: {root}")
+    data = library.with_display_names(library.read_transcript(folder))
+    if data is None:
+        raise ValueError(NO_TRANSCRIPT)
+    title, start = meeting(folder)
+    summary_path = folder / assistant.SUMMARY_MD
+    sources = _audio_sources(folder)
+    plan = _plan(cfg, title, start, summary_path.is_file(), _audio_name(sources))
+    target = _target(root, cfg, folder, title, start)
+    target.mkdir(parents=True, exist_ok=True)
+    written = []
+    for kind, name in plan:
+        path = target / name
+        if kind == "transcript":
+            _write_text(path, _transcript_md(data, title, start))
+        elif kind == "summary":
+            _write_text(path, summary_path.read_text(encoding="utf-8"))
+        elif kind == "srt":
+            _write_text(path, export.render(data, "srt"))
+        elif kind == "audio":
+            _write_audio(sources, path, mix)
+        written.append(name)
+    library.write_meta(folder, {"kb_export": {"path": str(target), "at": time.time(),
+                                              "files": written}})
+    return {"path": str(target), "files": written}
+
+
+def export_recording(folder, cfg, *, mix=None) -> dict:
+    """Выгрузить встречу: `{"path": папка, "files": [имена файлов]}`.
+
+    `cfg` — секция `export` настроек (или настройки целиком). Ошибка —
+    исключение; кроме «папка не задана», она запоминается в meta.json
+    (`kb_export.error`), чтобы карточка показала её, а удачная выгрузка её
+    стирает."""
+    cfg = getattr(cfg, "export", cfg)
+    folder = Path(folder)
+    try:
+        return _export(folder, cfg, mix or mix_tracks)
+    except Exception as e:
+        if str(e) != NOT_SET:
+            _remember_error(folder, e)
+        raise
+
+
+def _remember_error(folder: Path, error: Exception) -> None:
+    try:
+        previous = library.read_meta(folder).get("kb_export")
+        record = dict(previous) if isinstance(previous, dict) else {}
+        record["error"] = str(error) or type(error).__name__
+        record["error_at"] = time.time()
+        library.write_meta(folder, {"kb_export": record})
+    except OSError:
+        pass  # папку записи не записать — ошибку всё равно увидит вызывающий
+
+
+def previously_exported(folder: Path) -> bool:
+    record = library.read_meta(Path(folder)).get("kb_export")
+    return isinstance(record, dict) and bool(record.get("path"))
+
+
+# --- предпросмотр ------------------------------------------------------------------
+
+
+_FLAGS = ("include_transcript", "include_summary", "include_audio", "include_srt")
+_TEXTS = ("folder_template", "transcript_name", "summary_name")
+
+
+def _sample(root: Path) -> tuple[str, datetime, str | None]:
+    """Последняя запись библиотеки, иначе выдуманный пример."""
+    try:
+        card = library.latest(root) if root.is_dir() else None
+    except OSError:
+        card = None
+    if card is not None:
+        title, start = meeting(card.path)
+        return title, start, _audio_name(_audio_sources(card.path))
+    return SAMPLE_TITLE, SAMPLE_START, f"{AUDIO_STEM}{MIXED_EXT}"
+
+
+def preview(cfg, root: Path, overrides: dict) -> dict:
+    """Как будет называться папка и что в ней ляжет — для окна настроек.
+    `overrides` — несохранённые значения из окна (строки, как в query)."""
+    from meet.settings import as_flag
+
+    cfg = getattr(cfg, "export", cfg)
+    values = {key: getattr(cfg, key) for key in _TEXTS + _FLAGS}
+    for key in _TEXTS:
+        if isinstance(overrides.get(key), str):
+            values[key] = overrides[key]
+    for key in _FLAGS:
+        if key in overrides:
+            values[key] = as_flag(overrides[key], values[key])
+    error = check_folder_template(values["folder_template"])
+    for key in ("transcript_name", "summary_name"):
+        error = error or check_file_name(values[key])
+    if error:
+        return {"folder": None, "files": [], "error": error}
+    title, start, audio = _sample(Path(root))
+    files = [name for _, name in _plan(SimpleNamespace(**values), title, start, True, audio)]
+    folder = "/".join(render_folder(values["folder_template"], title, start))
+    return {"folder": folder, "files": files, "error": None}

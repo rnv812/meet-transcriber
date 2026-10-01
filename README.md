@@ -105,7 +105,7 @@ Windows (учётные данные Windows, адрес `meet`).
     meet voices avatar "Демьян" фото.jpg     # --clear — убрать фото
     meet summary <папка>                   # итоги → summary.md (--provider codex — на этот раз)
     meet ask <папка> "Кто взял задачу?"     # ответ дописывается в qa.jsonl
-    meet notes <папка>                     # заметка в assistant.notes_dir
+    meet kb-export <папка>                 # в базу знаний: export.meetings_dir/<шаблон папки>
 
 Модель для `summary`/`ask` — из настройки `llm.provider`; не подключена ни
 одна — код 1 и подсказка.

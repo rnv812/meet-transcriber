@@ -84,3 +84,20 @@
   text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
 }
 .provider__link:hover { color: var(--text); }
+
+/* «Экспорт встреч»: пример имени папки под полем шаблона и «?» с подстановками. */
+.export__preview { flex-basis: 100%; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 12px; text-align: right; }
+.help { position: relative; display: inline-flex; }
+.help__button {
+  width: 20px; height: 20px; padding: 0; border: 1px solid var(--line-2); border-radius: 50%;
+  background: var(--surface); color: var(--text-2); font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
+}
+.help__button:hover, .help__button:focus-visible { color: var(--text); border-color: var(--accent); }
+.help__tip {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 5; width: 300px;
+  display: flex; flex-direction: column; gap: 4px; padding: 10px 12px;
+  background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--r-md);
+  color: var(--text-2); font-size: 12px; text-align: left; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.help__title { color: var(--text); font-weight: 600; }
+.help__line code { color: var(--text); }

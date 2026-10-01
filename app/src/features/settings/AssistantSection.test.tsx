@@ -34,7 +34,6 @@ const info: AssistantInfo = {
   setting: "auto",
   checking: false,
   knowledge_dir: "D:\\kb",
-  notes_dir: null,
   available: {
     "claude-code": { found: true, path: "C:\\Users\\me\\.local\\bin\\claude.exe" },
     codex: { found: false, path: null },
@@ -183,50 +182,34 @@ test("пустое имя локальной модели уходит как nu
 });
 
 test("база знаний: «Выбрать папку…» берёт путь из диалога, «Очистить» — null", async () => {
-  vi.mocked(shell.pickFolder).mockResolvedValue("E:\\notes");
+  vi.mocked(shell.pickFolder).mockResolvedValue("E:\\materials");
   open();
-  const notes = await screen.findByRole("group", { name: "Папка заметок" });
-  await userEvent.click(within(notes).getByRole("button", { name: "Выбрать папку…" }));
-  expect(await within(notes).findByText("E:\\notes")).toBeInTheDocument();
-  const kb = screen.getByRole("group", { name: "База знаний" });
+  const kb = await screen.findByRole("group", { name: "База знаний для ассистента" });
   expect(within(kb).getByText("D:\\kb")).toBeInTheDocument();
   await userEvent.click(within(kb).getByRole("button", { name: "Очистить" }));
   expect(within(kb).getByText("не задана")).toBeInTheDocument();
+  await userEvent.click(within(kb).getByRole("button", { name: "Выбрать папку…" }));
+  expect(await within(kb).findByText("E:\\materials")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
-    assistant: { knowledge_dir: null, notes_dir: "E:\\notes" },
+    assistant: { knowledge_dir: "E:\\materials" },
   }));
+});
+
+test("папки заметок в «Ассистенте» больше нет — встречи выгружаются в «Экспорте встреч»", async () => {
+  open();
+  await screen.findByRole("group", { name: "База знаний для ассистента" });
+  expect(screen.queryByRole("group", { name: "Папка заметок" })).toBeNull();
+  expect(screen.queryByLabelText("Подпапка для встреч")).toBeNull();
 });
 
 test("отказ в диалоге выбора папки ничего не меняет", async () => {
   open();
-  const kb = await screen.findByRole("group", { name: "База знаний" });
+  const kb = await screen.findByRole("group", { name: "База знаний для ассистента" });
   await userEvent.click(within(kb).getByRole("button", { name: "Выбрать папку…" }));
   await waitFor(() => expect(shell.pickFolder).toHaveBeenCalledWith("D:\\kb"));
   expect(within(kb).getByText("D:\\kb")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
-});
-
-test.each(["..\\x", "a/../b", "C:\\Встречи", "/abs", "\\\\srv\\share"])(
-  "подпапка «%s» — подсказка и «Сохранить» недоступно", async (bad) => {
-    open();
-    const sub = await screen.findByLabelText("Подпапка для встреч");
-    await userEvent.clear(sub);
-    await userEvent.type(sub, bad);
-    expect(screen.getByText("Только имя подпапки, без .. и полного пути")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
-  });
-
-test("подпапка с вложенностью сохраняется", async () => {
-  open();
-  const sub = await screen.findByLabelText("Подпапка для встреч");
-  await userEvent.clear(sub);
-  await userEvent.type(sub, "Работа/Встречи");
-  expect(screen.queryByText("Только имя подпапки, без .. и полного пути")).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
-  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
-    assistant: { notes_subdir: "Работа/Встречи" },
-  }));
 });
 
 test("окно живой расшифровки уходит в assist.window_seconds; вне 5..120 — не сохранить", async () => {
@@ -247,11 +230,11 @@ test("окно живой расшифровки уходит в assist.window_s
 test("окно вне 5..120 из файла настроек не мешает сохранять другое", async () => {
   vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assist: { window_seconds: 3 } }));
   open();
-  const sub = await screen.findByLabelText("Подпапка для встреч");
-  await userEvent.type(sub, "2");
+  const kb = await screen.findByRole("group", { name: "База знаний для ассистента" });
+  await userEvent.click(within(kb).getByRole("button", { name: "Очистить" }));
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
-    assistant: { notes_subdir: "Встречи2" },
+    assistant: { knowledge_dir: null },
   }));
 });
 
@@ -263,24 +246,6 @@ test("повторный запрос раздела возвращает на �
   expect(screen.getByRole("button", { name: "Ассистент" })).not.toHaveAttribute("aria-current");
   rerender(<SettingsPane endpoint={ep} recordingsDir={null} initial="assistant" initialTick={2} />);
   expect(screen.getByRole("button", { name: "Ассистент" })).toHaveAttribute("aria-current", "page");
-});
-
-test("подпапка сохраняется без пробелов по краям", async () => {
-  open();
-  const sub = await screen.findByLabelText("Подпапка для встреч");
-  await userEvent.clear(sub);
-  await userEvent.type(sub, "  Мои встречи  ");
-  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
-  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
-    assistant: { notes_subdir: "Мои встречи" },
-  }));
-});
-
-test("подпапка, отличающаяся только пробелами, — не правка", async () => {
-  open();
-  const sub = await screen.findByLabelText("Подпапка для встреч");
-  await userEvent.type(sub, "  ");
-  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
 });
 
 test("«определяю…» переспрашивает резидента не бесконечно", async () => {

@@ -142,27 +142,6 @@ def test_get_summary_and_qa(state, tmp_path):
     assert state.qa(RID)["items"][0]["q"] == "а"
 
 
-def test_notes_without_notes_dir_is_400(state):
-    with pytest.raises(control.BadRequest, match="Папка заметок не задана"):
-        state.to_notes(RID)
-
-
-def test_notes_written_into_subdir(state, tmp_path):
-    vault = tmp_path / "vault"
-    vault.mkdir()
-    _set_config(tmp_path, notes_dir=str(vault), notes_subdir="Встречи")
-    got = state.to_notes(RID)
-    assert got["path"] == str(vault / "Встречи" / "2026-09-30 Планёрка.md")
-
-
-def test_notes_with_escaping_subdir_is_400(state, tmp_path):
-    vault = tmp_path / "vault"
-    vault.mkdir()
-    _set_config(tmp_path, notes_dir=str(vault), notes_subdir="../вне")
-    with pytest.raises(control.BadRequest):
-        state.to_notes(RID)
-
-
 # --- очереди -------------------------------------------------------------------
 
 
@@ -202,7 +181,7 @@ def test_assistant_resolves_in_background_and_caches(state, monkeypatch, tmp_pat
     assert first["provider"] is None and first["checking"] is True
     assert first["setting"] == "auto"
     assert first["available"]["codex"]["found"] is True
-    assert first["knowledge_dir"] is None and first["notes_dir"] is None
+    assert first["knowledge_dir"] is None and "notes_dir" not in first
     gate.set()
     _wait(lambda: state.assistant()["checking"] is False)
     assert state.assistant()["provider"] == "codex"

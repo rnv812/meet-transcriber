@@ -20,6 +20,7 @@ vi.mock("../../lib/api", async (orig) => ({
   getSummary: vi.fn(),
   getQa: vi.fn(),
   liveAsk: vi.fn(),
+  kbExport: vi.fn(),
 }));
 vi.mock("../../lib/shell", () => ({
   inTauri: () => true,
@@ -46,7 +47,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getSettings).mockResolvedValue({ recording: { speaker_name: "Демьян Петров" } });
   vi.mocked(api.getAssistant).mockResolvedValue({
-    provider: null, setting: "auto", available: {}, knowledge_dir: null, notes_dir: null, checking: false,
+    provider: null, setting: "auto", available: {}, knowledge_dir: null, checking: false,
   });
   vi.mocked(api.getSummary).mockRejectedValue(new api.ApiError(404, "итогов нет"));
   vi.mocked(api.getQa).mockResolvedValue({ items: [] });
@@ -412,4 +413,42 @@ test("со спикерами — подсказки про Hugging Face нет"
   render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={() => {}} />);
   expect(await screen.findByText("Привет всем")).toBeInTheDocument();
   expect(screen.queryByText(/настройте Hugging Face/)).toBeNull();
+});
+
+
+// --- база знаний ------------------------------------------------------------
+
+const withMeetingsDir = (dir: string | null) =>
+  vi.mocked(api.getSettings).mockResolvedValue({
+    recording: { speaker_name: "Демьян Петров" }, export: { meetings_dir: dir },
+  });
+
+test("«В базу знаний» скрыта, пока папка для встреч не задана", async () => {
+  load();
+  withMeetingsDir(null);
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  expect(screen.queryByRole("button", { name: "В базу знаний" })).toBeNull();
+});
+
+test("«В базу знаний» выгружает и показывает папку с кнопкой «Открыть папку»", async () => {
+  load();
+  withMeetingsDir("D:/kb/Встречи");
+  const target = "D:/kb/Встречи/2026-09-30 - Планирование спринта";
+  vi.mocked(api.kbExport).mockResolvedValue({ path: target, files: ["Транскрипт.md"] });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await userEvent.click(await screen.findByRole("button", { name: "В базу знаний" }));
+  expect(api.kbExport).toHaveBeenCalledWith(ep, "r1");
+  const done = await screen.findByRole("status", { name: "Выгрузка в базу знаний" });
+  expect(done).toHaveTextContent(`Выгружено: ${target}`);
+  await userEvent.click(within(done).getByRole("button", { name: "Открыть папку" }));
+  expect(shell.openFolder).toHaveBeenCalledWith(target);
+});
+
+test("ошибка прошлой выгрузки (kb_export.error) видна в карточке", async () => {
+  load({ kb_export: { path: null, at: null, error: "Папка для встреч не найдена: E:/kb" } });
+  withMeetingsDir("E:/kb");
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  expect(await screen.findByText(/Не удалось выгрузить в базу знаний: Папка для встреч не найдена/))
+    .toBeInTheDocument();
 });

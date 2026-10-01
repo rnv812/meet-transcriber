@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
-  patchRecording, transcribe, type Endpoint,
+  kbExport, patchRecording, transcribe, type Endpoint,
 } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { inTauri, openFolder, saveText } from "../../lib/shell";
@@ -56,6 +56,10 @@ export function RecordingCard({
   const player = useRef<AudioPlayerHandle>(null);
 
   const [owner, setOwner] = useState("Вы");
+  /** Папка для встреч в базе знаний (`export.meetings_dir`): нет — нет и кнопки «В базу знаний». */
+  const [meetingsDir, setMeetingsDir] = useState<string | null>(null);
+  /** Куда выгружено нажатием «В базу знаний» (для этой записи). */
+  const [kbDone, setKbDone] = useState<string | null>(null);
   const current = useRef({ endpoint, id });
   current.current = { endpoint, id };
   const tracksRef = useRef<Record<string, string>>({});
@@ -63,8 +67,11 @@ export function RecordingCard({
   useEffect(() => {
     let live = true;
     getSettings(endpoint).then((s) => {
+      if (!live) return;
       const name = (s.recording as { speaker_name?: unknown } | undefined)?.speaker_name;
-      if (live && typeof name === "string" && name) setOwner(name);
+      if (typeof name === "string" && name) setOwner(name);
+      const dir = (s.export as { meetings_dir?: unknown } | undefined)?.meetings_dir;
+      setMeetingsDir(typeof dir === "string" && dir ? dir : null);
     }).catch(() => {});
     return () => { live = false; };
   }, [endpoint]);
@@ -98,7 +105,7 @@ export function RecordingCard({
     [jobs, rec],
   );
 
-  useEffect(() => { setRec(null); setError(null); setMissing(false); void load(); }, [load]);
+  useEffect(() => { setRec(null); setError(null); setMissing(false); setKbDone(null); void load(); }, [load]);
   const lastSig = useRef(jobSig);
   useEffect(() => {
     if (jobSig !== lastSig.current) { lastSig.current = jobSig; void load(); }
@@ -160,6 +167,16 @@ export function RecordingCard({
     const { filename, content } = await exportRecording(endpoint, id, format);
     await saveText(filename, content);
   });
+  // Неудача остаётся и в meta.json записи (`kb_export.error`): перечитываем карточку в любом случае.
+  const doKbExport = () => act(async () => {
+    setKbDone(null);
+    try {
+      setKbDone((await kbExport(endpoint, id)).path);
+    } finally {
+      await load();
+    }
+  });
+  const kbError = rec.kb_export?.error;
 
   let body;
   switch (status.kind) {
@@ -216,11 +233,23 @@ export function RecordingCard({
         canRetranscribe={status.kind === "ready"}
         busy={busy}
         onExport={doExport}
+        onKbExport={meetingsDir && status.kind === "ready" ? doKbExport : undefined}
         onOpenFolder={() => void openFolder(rec.path)}
         onRetranscribe={doTranscribe}
         onDelete={doDelete}
       />
       {error && <div className="card__error" role="alert">{error}</div>}
+      {kbDone && (
+        <div className="card__banner card__banner--ok" role="status" aria-label="Выгрузка в базу знаний">
+          <span>Выгружено: <code className="card__path">{kbDone}</code></span>
+          {inTauri() && <Button onClick={() => act(() => openFolder(kbDone))}>Открыть папку</Button>}
+        </div>
+      )}
+      {!kbDone && !error && kbError && (
+        <div className="card__banner" role="status">
+          <span>Не удалось выгрузить в базу знаний: {kbError}</span>
+        </div>
+      )}
       {retranscribeFailed && (
         <div className="card__banner" role="status">
           <span>

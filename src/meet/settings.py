@@ -96,6 +96,11 @@ LLM_PROVIDERS = ("auto", "claude-code", "codex", "openai-compatible")
 LEGACY_LLM_PROVIDER = "claude-code"
 # Подпапка заметок по умолчанию (для нового пользователя).
 DEFAULT_NOTES_SUBDIR = "Встречи"
+# Выгрузка встреч в базу знаний: папка на встречу и имена файлов в ней.
+# Подстановки — {date} {time} {year} {month} {day} {title} (см. meet.kb_export).
+DEFAULT_FOLDER_TEMPLATE = "{date} - {title}"
+DEFAULT_TRANSCRIPT_NAME = "Транскрипт.md"
+DEFAULT_SUMMARY_NAME = "Итоги.md"
 # Локальная модель по умолчанию адресуется как OpenAI-совместимый эндпоинт:
 # так работают и LM Studio (1234), и Ollama (11434) — своего рантайма не нужно.
 DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:1234/v1"
@@ -445,6 +450,87 @@ class Assistant:
 
 
 @dataclass(frozen=True)
+class Export:
+    """Выгрузка встреч в базу знаний (Obsidian и т. п.): папка на встречу по
+    шаблону имени внутри `meetings_dir`, в ней — выбранные файлы.
+
+    Шаблоны и имена файлов проверяет `meet.kb_export`; негодное значение из
+    файла (правка руками) молча заменяется дефолтом, а из окна — отказ с
+    объяснением (`check`)."""
+
+    meetings_dir: Path | None = None
+    folder_template: str = DEFAULT_FOLDER_TEMPLATE
+    transcript_name: str = DEFAULT_TRANSCRIPT_NAME
+    summary_name: str = DEFAULT_SUMMARY_NAME
+    include_transcript: bool = True
+    include_summary: bool = True
+    include_audio: bool = False
+    include_srt: bool = False
+    # Действует, только когда задана meetings_dir.
+    auto_export: bool = True
+
+    @classmethod
+    def from_raw(cls, raw: dict, legacy_dir: Path | None = None) -> "Export":
+        """`legacy_dir` — прежняя папка заметок (assistant.notes_dir/notes_subdir):
+        ею заполняется meetings_dir, если ключа в секции нет вовсе. Явный null —
+        осознанное «не задано» и из старых ключей не воскрешается."""
+        from meet import kb_export
+
+        def text(key: str, default: str, check) -> str:
+            value = raw.get(key)
+            if not isinstance(value, str) or check(value) is not None:
+                return default
+            return value.strip()
+
+        return cls(
+            meetings_dir=as_path(raw["meetings_dir"]) if "meetings_dir" in raw else legacy_dir,
+            folder_template=text("folder_template", DEFAULT_FOLDER_TEMPLATE,
+                                 kb_export.check_folder_template),
+            transcript_name=text("transcript_name", DEFAULT_TRANSCRIPT_NAME,
+                                 kb_export.check_file_name),
+            summary_name=text("summary_name", DEFAULT_SUMMARY_NAME, kb_export.check_file_name),
+            include_transcript=as_flag(raw.get("include_transcript"), True),
+            include_summary=as_flag(raw.get("include_summary"), True),
+            include_audio=as_flag(raw.get("include_audio"), False),
+            include_srt=as_flag(raw.get("include_srt"), False),
+            auto_export=as_flag(raw.get("auto_export"), True),
+        )
+
+    @staticmethod
+    def check(update: dict) -> None:
+        """Правка из окна: ValueError с текстом для человека, если её нельзя
+        сохранить (шаблон выходит за папку, неизвестная подстановка…)."""
+        from meet import kb_export
+
+        if "folder_template" in update:
+            error = kb_export.check_folder_template(str(update["folder_template"] or ""))
+            if error:
+                raise ValueError(error)
+        for key, what in (("transcript_name", "транскрипта"), ("summary_name", "итогов")):
+            if key in update:
+                error = kb_export.check_file_name(str(update[key] or ""))
+                if error:
+                    raise ValueError(f"Имя файла {what}: {error[0].lower()}{error[1:]}")
+        if "meetings_dir" in update:
+            folder = as_path(update["meetings_dir"])
+            if folder is not None and not folder.is_absolute():
+                raise ValueError("Папка для встреч должна быть указана полным путём")
+
+    def to_raw(self) -> dict:
+        return {
+            "meetings_dir": str(self.meetings_dir) if self.meetings_dir else None,
+            "folder_template": self.folder_template,
+            "transcript_name": self.transcript_name,
+            "summary_name": self.summary_name,
+            "include_transcript": self.include_transcript,
+            "include_summary": self.include_summary,
+            "include_audio": self.include_audio,
+            "include_srt": self.include_srt,
+            "auto_export": self.auto_export,
+        }
+
+
+@dataclass(frozen=True)
 class Integrations:
     """Связи с чужими программами. Все выключаемые: приложение обязано быть
     полезным само по себе."""
@@ -513,6 +599,7 @@ class Settings:
     llm: Llm = field(default_factory=Llm)
     assist: Assist = field(default_factory=Assist)
     assistant: Assistant = field(default_factory=Assistant)
+    export: Export = field(default_factory=Export)
     integrations: Integrations = field(default_factory=Integrations)
     ui: Ui = field(default_factory=Ui)
 
@@ -534,6 +621,7 @@ class Settings:
         assist = Assist.from_raw(_section(raw, "assist"))
         hooks = Hooks.from_raw(_section(raw, "hooks"))
         recording = Recording.from_raw(_section(raw, "recording"))
+        assistant = Assistant.from_raw(_section(raw, "assistant"), vault=assist.vault)
         if "auto_transcribe" not in _section(raw, "recording") and hooks.post_record:
             # Хук Claude уже расшифровывает запись — вторая автоматическая
             # расшифровка была бы дублем. Поведение меняет только явный выбор.
@@ -549,7 +637,8 @@ class Settings:
                 default_provider="auto" if is_new else LEGACY_LLM_PROVIDER,
             ),
             assist=assist,
-            assistant=Assistant.from_raw(_section(raw, "assistant"), vault=assist.vault),
+            assistant=assistant,
+            export=Export.from_raw(_section(raw, "export"), legacy_dir=_legacy_notes(assistant)),
             integrations=Integrations.from_raw(_section(raw, "integrations")),
             ui=Ui.from_raw(_section(raw, "ui")),
         )
@@ -564,9 +653,19 @@ class Settings:
             "llm": self.llm.to_raw(),
             "assist": self.assist.to_raw(),
             "assistant": self.assistant.to_raw(),
+            "export": self.export.to_raw(),
             "integrations": self.integrations.to_raw(),
             "ui": self.ui.to_raw(),
         }
+
+
+def _legacy_notes(assistant: Assistant) -> Path | None:
+    """Прежняя «папка заметок» как папка для встреч: notes_dir/notes_subdir.
+    Старые ключи читаются только ради этого — окно их больше не показывает."""
+    if assistant.notes_dir is None:
+        return None
+    sub = (assistant.notes_subdir or "").strip()
+    return assistant.notes_dir / sub if sub else assistant.notes_dir
 
 
 def migrate(raw: dict) -> dict:
@@ -853,6 +952,8 @@ def patch(updates: dict, path: Path | None = None) -> Settings:
         section_update = updates.get(name)
         if not isinstance(section_update, dict):
             continue
+        if name == "export":
+            Export.check(section_update)
         merged = getattr(current, name).to_raw()
         merged.update(section_update)
         changed[name] = type(getattr(current, name)).from_raw(merged)

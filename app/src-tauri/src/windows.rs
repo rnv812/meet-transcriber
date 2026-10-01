@@ -324,14 +324,16 @@ pub fn folder_allowed(path: &Path, roots: &[PathBuf]) -> bool {
             .any(|root| target.starts_with(root))
 }
 
-/// Корни для `open_folder`: данные приложения всегда, папка записей — если
-/// резидент отвечает. Не отвечает — только данные приложения.
+/// Корни для `open_folder`: данные приложения всегда, папка записей и папка
+/// для встреч в базе знаний (куда выгружаются встречи) — если резидент
+/// отвечает. Не отвечает — только данные приложения.
 fn allowed_roots() -> Vec<PathBuf> {
     let mut roots = vec![resident::data_dir()];
     let state =
         resident::read_endpoint().and_then(|endpoint| Client::new(&endpoint).get_state().ok());
-    if let Some(dir) = state.as_ref().and_then(recordings_root) {
-        roots.push(dir);
+    if let Some(state) = state.as_ref() {
+        roots.extend(recordings_root(state));
+        roots.extend(meetings_root(state));
     }
     roots
 }
@@ -340,8 +342,18 @@ fn allowed_roots() -> Vec<PathBuf> {
 /// или умолчание, разрешённое самим резидентом (в dev — `recordings\`
 /// репозитория, которого оболочка сама не вычислит).
 pub fn recordings_root(state: &serde_json::Value) -> Option<PathBuf> {
+    dir_at(state, "recordings_dir")
+}
+
+/// Папка для встреч из `/state` (`export.meetings_dir`): выгруженную встречу
+/// карточка открывает кнопкой «Открыть папку». Не задана — `None`.
+pub fn meetings_root(state: &serde_json::Value) -> Option<PathBuf> {
+    dir_at(state, "meetings_dir")
+}
+
+fn dir_at(state: &serde_json::Value, key: &str) -> Option<PathBuf> {
     state
-        .get("recordings_dir")
+        .get(key)
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|dir| !dir.is_empty())
@@ -764,6 +776,18 @@ mod tests {
             &tree.0.join("root2"),
             &[tree.0.join("root")]
         ));
+    }
+
+    #[test]
+    fn meetings_root_comes_from_the_state_snapshot() {
+        let state =
+            serde_json::json!({"recordings_dir": r"D:\rec", "meetings_dir": r"E:\kb\Встречи"});
+        assert_eq!(meetings_root(&state), Some(PathBuf::from(r"E:\kb\Встречи")));
+        assert_eq!(
+            meetings_root(&serde_json::json!({"meetings_dir": null})),
+            None
+        );
+        assert_eq!(meetings_root(&serde_json::json!({})), None);
     }
 
     #[test]

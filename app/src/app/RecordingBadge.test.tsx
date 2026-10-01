@@ -80,7 +80,7 @@ const live = (o: Partial<LiveStatus> = {}): LiveStatus => ({
   active: false, starting: false, stopping: false, folder: null, error: null, started_at: null, ...o,
 });
 const assistant = (o: Partial<AssistantInfo> = {}): AssistantInfo => ({
-  provider: "claude", setting: "auto", available: {}, knowledge_dir: null, notes_dir: null, checking: false, ...o,
+  provider: "claude", setting: "auto", available: {}, knowledge_dir: null, checking: false, ...o,
 });
 const openMenu = async () => {
   await userEvent.click(screen.getByRole("button", { name: "Другие варианты записи" }));

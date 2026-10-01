@@ -10,7 +10,7 @@
 
 import { inTauri, invoke } from "./shell";
 import type {
-  AssistantInfo, BusEvent, CommandResult, Job, LiveLine, LiveState, LiveStatus, Person, PersonCard,
+  AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveLine, LiveState, LiveStatus, Person, PersonCard,
   ProviderCheck, QaItem, Recording, Sample, Snapshot, Summary, Transcript,
 } from "./types";
 
@@ -231,7 +231,7 @@ export const deleteHfToken = (ep: Endpoint) => json<HfStatus>(ep, "/hf/token", {
 /** Перепроверить сохранённый токен (условия модели могли принять с тех пор). */
 export const recheckHf = (ep: Endpoint) => hfCheck(ep, "/hf/check", {});
 
-// --- ассистент: итоги, вопросы, заметки -------------------------------------
+// --- ассистент: итоги и вопросы ----------------------------------------------
 
 /** Итоги задачей (kind "summary"); 409 — нет провайдера или идёт расшифровка. */
 export const makeSummary = (ep: Endpoint, id: string) =>
@@ -242,13 +242,23 @@ export const getSummary = (ep: Endpoint, id: string) => json<Summary>(ep, `/reco
 export const ask = (ep: Endpoint, id: string, question: string) =>
   json<Job>(ep, `/recordings/${enc(id)}/ask`, body("POST", { question }));
 export const getQa = (ep: Endpoint, id: string) => json<{ items: QaItem[] }>(ep, `/recordings/${enc(id)}/qa`);
-/** Заметка в папку заметок; 400 — папка не задана. */
-export const toNotes = (ep: Endpoint, id: string) =>
-  json<{ path: string }>(ep, `/recordings/${enc(id)}/notes`, { method: "POST" });
 export const getAssistant = (ep: Endpoint) => json<AssistantInfo>(ep, "/assistant");
 /** Короткий вызов модели — до полутора минут. */
 export const checkProvider = (ep: Endpoint, provider: string) =>
   json<ProviderCheck>(ep, "/assistant/check", body("POST", { provider }));
+
+// --- база знаний ----------------------------------------------------------------
+
+/** Выгрузить встречу в базу знаний; 400 — папка для встреч не задана или шаблон негоден. */
+export const kbExport = (ep: Endpoint, id: string) =>
+  json<KbExport>(ep, `/recordings/${enc(id)}/kb-export`, { method: "POST" });
+
+/** Пример папки и файлов по (несохранённым) значениям раздела «Экспорт встреч». */
+export function getExportPreview(ep: Endpoint, values: Record<string, string | boolean>) {
+  const q = new URLSearchParams();
+  for (const [key, value] of Object.entries(values)) q.set(key, String(value));
+  return json<ExportPreview>(ep, `/export/preview?${q}`);
+}
 
 // --- живой режим ---------------------------------------------------------------
 

@@ -47,6 +47,9 @@ class Recording:
     # Пометка транскрипта о диаризации: "skipped_no_token" — расшифровано без
     # разделения на спикеров (не было токена Hugging Face). None — как обычно.
     diarization: str | None = None
+    # Выгрузка в базу знаний (meta.json): {"path", "at", "files"} и, если
+    # последняя не удалась, "error". Не выгружалась — None.
+    kb_export: dict | None = None
 
     def to_raw(self) -> dict:
         return {
@@ -61,6 +64,7 @@ class Recording:
             "source": self.source,
             "transcript_at": self.transcript_at,
             "diarization": self.diarization,
+            "kb_export": self.kb_export,
         }
 
 
@@ -280,6 +284,7 @@ def describe(folder: Path) -> Recording | None:
         source=source,
         transcript_at=transcript_at,
         diarization=diarization,
+        kb_export=meta["kb_export"] if isinstance(meta.get("kb_export"), dict) else None,
     )
 
 

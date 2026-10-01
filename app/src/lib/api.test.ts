@@ -42,6 +42,18 @@ test("putHotwords: PUT {text}", async () => {
   expect(f.mock.calls[0]![1]).toMatchObject({ method: "PUT", body: JSON.stringify({ text: "Вася, Петя" }) });
 });
 
+test("предпросмотр выгрузки: значения черновика уходят в query", async () => {
+  const f = okFetch();
+  await api.getExportPreview(ep, {
+    folder_template: "{year}/{date} - {title}", transcript_name: "Транскрипт.md", include_srt: true,
+  });
+  const url = new URL(String(f.mock.calls[0]![0]));
+  expect(url.pathname).toBe("/export/preview");
+  expect(url.searchParams.get("folder_template")).toBe("{year}/{date} - {title}");
+  expect(url.searchParams.get("transcript_name")).toBe("Транскрипт.md");
+  expect(url.searchParams.get("include_srt")).toBe("true");
+});
+
 test("ask: POST {question} на запись", async () => {
   const f = okFetch();
   await api.ask(ep, "a b", "что решили?");
@@ -49,12 +61,12 @@ test("ask: POST {question} на запись", async () => {
   expect(f.mock.calls[0]![1]).toMatchObject({ method: "POST", body: JSON.stringify({ question: "что решили?" }) });
 });
 
-test("итоги, вопросы, заметки, ассистент: адреса и методы", async () => {
+test("итоги, вопросы, база знаний, ассистент: адреса и методы", async () => {
   const f = okFetch();
   await api.makeSummary(ep, "r1");
   await api.getSummary(ep, "r1");
   await api.getQa(ep, "r1");
-  await api.toNotes(ep, "r1");
+  await api.kbExport(ep, "r1");
   await api.getAssistant(ep);
   await api.checkProvider(ep, "codex");
   const calls = f.mock.calls.map(([url, init]) => [url, (init as RequestInit).method ?? "GET"]);
@@ -62,7 +74,7 @@ test("итоги, вопросы, заметки, ассистент: адрес
     ["http://h/recordings/r1/summary", "POST"],
     ["http://h/recordings/r1/summary", "GET"],
     ["http://h/recordings/r1/qa", "GET"],
-    ["http://h/recordings/r1/notes", "POST"],
+    ["http://h/recordings/r1/kb-export", "POST"],
     ["http://h/assistant", "GET"],
     ["http://h/assistant/check", "POST"],
   ]);

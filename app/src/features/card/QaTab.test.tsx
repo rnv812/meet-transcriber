@@ -13,7 +13,7 @@ vi.mock("../../lib/api", async (orig) => ({
 const ep = { base: "/api", token: null };
 const assistant = (o: Partial<AssistantInfo> = {}): AssistantInfo => ({
   provider: "claude-code", setting: "auto", available: {}, knowledge_dir: null,
-  notes_dir: null, checking: false, ...o,
+  checking: false, ...o,
 });
 const job = (o: Partial<Job> = {}): Job => ({
   id: "a1", kind: "ask", folder: "C:/rec/r1", state: "queued", stage: null, label: null,

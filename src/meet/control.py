@@ -54,7 +54,8 @@ IMPORTANT: токен принимается и в query-параметре `?to
     summary(id) -> dict                   готовые итоги {"markdown", "created_at"}
     ask(id, body) -> dict                 вопрос по записи задачей
     qa(id) -> dict                        прошлые вопросы и ответы
-    to_notes(id) -> dict                  положить заметку в папку заметок
+    kb_export(id) -> dict                 выгрузить встречу в базу знаний (400 без папки)
+    export_preview(params) -> dict        как назовётся папка встречи по шаблону
     assistant() -> dict                   кто отвечает, что установлено, папки
     check_provider(body) -> dict          проверить провайдера коротким вызовом
     live_start() -> dict                  живой режим (409 без провайдера, 400 при записи)
@@ -675,6 +676,9 @@ _ROUTES = {
     ("POST", "/live/stop"): lambda h, p: _server_of(h).state.live_stop(),
     ("POST", "/live/ask"): lambda h, p: _server_of(h).state.live_ask(h._body()),
     ("POST", "/live/task"): lambda h, p: _server_of(h).state.live_task(h._body()),
+    ("GET", "/export/preview"): lambda h, p: _server_of(h).state.export_preview(
+        {k: v[0] for k, v in p.items() if k != "token" and v}
+    ),
 }
 
 # Маршруты с параметром в пути. Регулярка, а не роутер: их считаные штуки, и
@@ -703,8 +707,11 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.ask(unquote(rid), h._body())),
     ("GET", re.compile(r"^/recordings/([^/]+)/qa$"),
      lambda h, p, rid: _server_of(h).state.qa(unquote(rid))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/kb-export$"),
+     lambda h, p, rid: _server_of(h).state.kb_export(unquote(rid))),
+    # «В заметки» прежнего окна — та же выгрузка в базу знаний.
     ("POST", re.compile(r"^/recordings/([^/]+)/notes$"),
-     lambda h, p, rid: _server_of(h).state.to_notes(unquote(rid))),
+     lambda h, p, rid: _server_of(h).state.kb_export(unquote(rid))),
     ("DELETE", re.compile(r"^/jobs/([^/]+)$"),
      lambda h, p, job_id: _server_of(h).state.cancel_job(job_id)),
     ("GET", re.compile(r"^/voices/([^/]+)/sample$"),

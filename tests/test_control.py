@@ -9,6 +9,7 @@ import socket
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -125,12 +126,23 @@ class FakeState:
     def qa(self, rid):
         return {"items": [{"q": "а", "a": "б"}]}
 
-    def to_notes(self, rid):
-        raise control.BadRequest("Папка заметок не задана")
+    meetings_dir = None
+
+    def kb_export(self, rid):
+        if not self.meetings_dir:
+            raise control.BadRequest("Папка для встреч не задана")
+        self.calls.append(("kb-export", rid))
+        return {"path": f"{self.meetings_dir}/2026-09-30 - Планирование спринта",
+                "files": ["Транскрипт.md"]}
+
+    def export_preview(self, params):
+        self.calls.append(("preview", params))
+        return {"folder": "2026-09-30 - Планирование спринта", "files": ["Транскрипт.md"],
+                "error": None}
 
     def assistant(self):
         return {"provider": None, "checking": True, "setting": "auto",
-                "available": {}, "knowledge_dir": None, "notes_dir": None}
+                "available": {}, "knowledge_dir": None}
 
     def check_provider(self, body):
         self.calls.append(("check", body))
@@ -834,7 +846,26 @@ def test_ask_qa_notes_routes(server):
     assert ("ask", "r1", {"question": "что решили?"}) in server.state_obj.calls
     assert _get(server, "/recordings/r1/qa")["items"][0]["q"] == "а"
     assert _post(server, "/recordings/r1/notes", expect=400) == {
-        "error": "Папка заметок не задана"}
+        "error": "Папка для встреч не задана"}
+
+
+def test_kb_export_routes(server):
+    assert _post(server, "/recordings/r1/kb-export", expect=400) == {
+        "error": "Папка для встреч не задана"}
+    server.state_obj.meetings_dir = "D:/kb"
+    got = _post(server, "/recordings/r1/kb-export")
+    assert got == {"path": "D:/kb/2026-09-30 - Планирование спринта", "files": ["Транскрипт.md"]}
+    # «В заметки» из прежнего окна — та же выгрузка.
+    assert _post(server, "/recordings/r2/notes")["files"] == ["Транскрипт.md"]
+    assert ("kb-export", "r2") in server.state_obj.calls
+
+
+def test_export_preview_route_passes_query(server):
+    template = urllib.parse.quote("{year}/{date} - {title}")
+    got = _get(server, f"/export/preview?folder_template={template}&include_srt=true")
+    assert got["error"] is None and got["folder"] == "2026-09-30 - Планирование спринта"
+    assert ("preview", {"folder_template": "{year}/{date} - {title}",
+                        "include_srt": "true"}) in server.state_obj.calls
 
 
 def test_assistant_routes(server):

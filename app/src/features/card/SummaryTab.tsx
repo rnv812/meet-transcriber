@@ -1,5 +1,6 @@
 /**
- * Вкладка «Итоги»: Markdown от модели, «Переделать», «В заметки», «Копировать».
+ * Вкладка «Итоги»: Markdown от модели, «Переделать», «Копировать». Выгрузка в
+ * базу знаний — кнопкой карточки «В базу знаний» (итоги уходят вместе с ней).
  *
  * Итоги делает задача резидента (kind "summary"); её состояние приходит
  * списком задач карточки. Любая смена состояния задачи перечитывает итоги —
@@ -7,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, getSummary, makeSummary, toNotes, type Endpoint } from "../../lib/api";
+import { ApiError, getSummary, makeSummary, type Endpoint } from "../../lib/api";
 import { dayLabel, errorText } from "../../lib/format";
 import { Markdown } from "../../lib/markdown";
 import { isActiveJob, modelJobsOf } from "../../lib/status";
@@ -31,12 +32,10 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
   const [summary, setSummary] = useState<Summary | null | undefined>(undefined);
   /** Ошибка чтения итогов — уходит с первым удачным чтением. */
   const [loadError, setLoadError] = useState<string | null>(null);
-  /** Ошибка действия (сделать, в заметки, копировать). */
+  /** Ошибка действия (сделать, копировать). */
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState<Job | null>(null);
   const [busy, setBusy] = useState(false);
-  /** Путь заметки и для каких итогов (created_at) она сделана: переделанные итоги — другая заметка. */
-  const [notes, setNotes] = useState<{ path: string; of: number | null } | null>(null);
   const [copied, setCopied] = useState(false);
   const seq = useRef(0);
   const target = useRef({ endpoint, id });
@@ -75,7 +74,6 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
     setLoadError(null);
     setError(null);
     setSubmitted(null);
-    setNotes(null);
   }, [endpoint, id]);
   useEffect(() => { void load(); }, [load, sig]);
   useEffect(() => () => { seq.current++; }, []);
@@ -97,7 +95,6 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
     try { await fn(); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   };
   const make = () => act(async () => { setSubmitted(await makeSummary(endpoint, id)); });
-  const save = (of: number | null) => act(async () => { setNotes({ path: (await toNotes(endpoint, id)).path, of }); });
   const copy = (markdown: string) => act(async () => {
     try {
       await navigator.clipboard.writeText(markdown);
@@ -117,16 +114,12 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
       <>
         <div className="assist__toolbar">
           <Button onClick={make} disabled={!canMake}>Переделать</Button>
-          {assistant?.notes_dir && <Button onClick={() => save(summary.created_at)} disabled={busy}>В заметки</Button>}
           <Button onClick={() => copy(summary.markdown)} disabled={busy}>{copied ? "Скопировано" : "Копировать"}</Button>
           {typeof summary.created_at === "number" && (
             <span className="muted assist__when">{dayLabel(new Date(summary.created_at * 1000).toISOString())}</span>
           )}
         </div>
         {hint}
-        {notes && notes.of === summary.created_at && (
-          <div className="assist__saved">Сохранено в заметки: <code className="assist__path">{notes.path}</code></div>
-        )}
         <Markdown source={summary.markdown} className="assist__md" />
       </>
     );

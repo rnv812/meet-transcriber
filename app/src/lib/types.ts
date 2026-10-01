@@ -28,6 +28,10 @@ export type Snapshot = {
   last_stop: { folder: string; reason: "saved" | "discarded" | "short"; at: number } | null;
   /** Запись с ассистентом; `status` выше при ней остаётся "idle". Нет у старых резидентов. */
   live?: LiveStatus;
+  /** Папка для встреч в базе знаний (`export.meetings_dir`); не задана — null. */
+  meetings_dir?: string | null;
+  /** Последний сбой автоматической выгрузки в базу знаний. */
+  kb_export_failed?: { folder: string; error: string; at: number } | null;
 };
 
 export type CommandResult = Snapshot & { ok: boolean; action: string };
@@ -64,7 +68,22 @@ export type Recording = {
   transcript_at?: number | null;
   /** Спикеры не разделены: "skipped_no_token" — нет токена HF, "skipped_no_access" — HF отказал. */
   diarization?: string | null;
+  /** Выгрузка в базу знаний: куда и когда; `error` — последняя не удалась. Не выгружалась — null. */
+  kb_export?: KbExportRecord | null;
 };
+
+export type KbExportRecord = {
+  path?: string | null;
+  at?: number | null;
+  files?: string[];
+  error?: string | null;
+};
+
+/** `POST /recordings/{id}/kb-export`: папка встречи и имена выгруженных файлов. */
+export type KbExport = { path: string; files: string[] };
+
+/** `GET /export/preview`: как назовётся папка (относительно папки для встреч) и что в ней будет. */
+export type ExportPreview = { folder: string | null; files: string[]; error: string | null };
 
 export type Segment = {
   start: number;
@@ -141,7 +160,6 @@ export type AssistantInfo = {
   setting: string;
   available: Record<string, ProviderAvailability>;
   knowledge_dir: string | null;
-  notes_dir: string | null;
   checking: boolean;
 };
 

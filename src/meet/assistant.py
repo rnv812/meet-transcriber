@@ -1,8 +1,8 @@
-"""Ассистент по готовой записи: итоги, вопросы по транскрипту, «В заметки».
+"""Ассистент по готовой записи: итоги и вопросы по транскрипту.
 
 Модель вызывается через runner из `meet.llm` (async, ошибки — в
 `AgentReply.error`); здесь только промпты, сборка контекста и запись файлов в
-папку записи. Вызов модели идёт в подпроцессе задачи (`meet.job_worker`), а не
+папку записи (выгрузка в базу знаний — `meet.kb_export`). Вызов модели идёт в подпроцессе задачи (`meet.job_worker`), а не
 в резиденте: SDK провайдера туда не тянется.
 
 Файлы папки записи:
@@ -233,70 +233,3 @@ def ask(folder: Path, question: str, runner, knowledge_dir, *,
     with (folder / QA_JSONL).open("a", encoding="utf-8") as f:
         f.write(json.dumps(item, ensure_ascii=False) + "\n")
     return item
-
-
-# --- «В заметки» ---------------------------------------------------------------
-
-
-def _notes_target(notes_dir, subdir: str) -> Path:
-    """Папка для заметки внутри notes_dir. Подпапка из настроек — только
-    относительная и без `..`: файл не должен уйти за пределы папки заметок."""
-    if not notes_dir:
-        raise ValueError("Папка заметок не задана")
-    root = Path(notes_dir)
-    if not root.is_dir():
-        raise ValueError(f"Папка заметок не найдена: {root}")
-    sub = Path((subdir or "").strip())
-    if sub.anchor or sub.is_absolute() or ".." in sub.parts:
-        raise ValueError("подпапка заметок должна быть внутри папки заметок "
-                         f"(без «..» и абсолютного пути): {subdir}")
-    target = root / sub
-    if not target.resolve().is_relative_to(root.resolve()):  # ссылка наружу
-        raise ValueError(f"подпапка заметок выходит за папку заметок: {subdir}")
-    return target
-
-
-def _note_body(folder: Path, data: dict, title: str, date: str) -> str:
-    from meet import export, output
-
-    # Шапка (frontmatter + «# название») и реплики собираются по отдельности
-    # теми же функциями, что и экспорт .md; реплики — на уровень ниже, над
-    # ними в заметке стоят разделы итогов.
-    parts = [output.to_markdown(title, [], date)]
-    turns = "\n".join(output.turn_lines(export.md_segments(data), level=3))
-    summary = read_summary(folder)
-    if summary:
-        body = summary["markdown"].strip()
-        if body.startswith("# "):  # свой заголовок итогов: в заметке он уже есть
-            body = body.split("\n", 1)[1].strip() if "\n" in body else ""
-        if body:
-            parts.append(body + "\n")
-    parts.append("## Транскрипт\n")
-    parts.append(turns.rstrip("\n") + "\n")
-    return "\n".join(parts)
-
-
-def to_notes(folder: Path, notes_dir, subdir: str) -> Path:
-    """Заметка о встрече: `<notes_dir>/<subdir>/<ГГГГ-ММ-ДД> <название>.md`.
-    Существующий файл не перезаписывается — суффикс « (2)», « (3)»…"""
-    from meet import export
-
-    folder = Path(folder)
-    data = library.with_display_names(library.read_transcript(folder))
-    target = _notes_target(notes_dir, subdir)
-    if data is None:
-        raise ValueError("транскрипта нет")
-    title, date = library.title_and_date(folder, data, today_if_unknown=True)
-    body = _note_body(folder, data, title, date)
-    stem = f"{date} {export.safe_filename(title, folder.name)}"
-    target.mkdir(parents=True, exist_ok=True)
-    n = 1
-    while True:
-        path = target / (f"{stem}.md" if n == 1 else f"{stem} ({n}).md")
-        try:
-            # "x": файл, появившийся между проверкой и записью, не затирается.
-            with path.open("x", encoding="utf-8") as f:
-                f.write(body)
-            return path
-        except FileExistsError:
-            n += 1

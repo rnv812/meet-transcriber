@@ -17,22 +17,25 @@ import { inTauri, openFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { About } from "./About";
-import { AssistantSection, assistantChangesInvalid, cleanSetting } from "./AssistantSection";
+import { AssistantSection, assistantChangesInvalid } from "./AssistantSection";
 import { AutostartRow } from "./AutostartRow";
 import { DiagnosticsPane } from "./DiagnosticsPane";
 import { EnginePane } from "./EnginePane";
+import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSection";
 import { HotwordsEditor } from "./HotwordsEditor";
 import { ModelsPane } from "./ModelsPane";
 import { Radio, Row, Switch, type Raw, type SetFn } from "./Section";
 import "./settings.css";
 
-type SectionId = "recording" | "auto" | "asr" | "engine" | "assistant" | "diagnostics" | "about" | "advanced";
+type SectionId =
+  "recording" | "auto" | "asr" | "engine" | "export" | "assistant" | "diagnostics" | "about" | "advanced";
 
 const MENU: { id: SectionId; title: string }[] = [
   { id: "recording", title: "Запись и устройства" },
   { id: "auto", title: "Автозапись" },
   { id: "asr", title: "Распознавание" },
   { id: "engine", title: "Движок и модели" },
+  { id: "export", title: "Экспорт встреч" },
   { id: "assistant", title: "Ассистент" },
   { id: "diagnostics", title: "Диагностика" },
   { id: "about", title: "О программе" },
@@ -276,7 +279,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
     }
   }
   const dirty = Object.keys(changes);
-  const invalid = assistantChangesInvalid(changes);
+  const invalid = assistantChangesInvalid(changes) || exportChangesInvalid(changes);
 
   const save = async () => {
     if (dirty.length === 0 || invalid) return;
@@ -358,6 +361,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
                 selectedModel={(draft.asr?.model as string | undefined) ?? null}
                 onSelect={(id) => { set("asr", "model", id); setNotice("Модель выбрана — не забудьте сохранить"); }} />
             </>
+          ) : section === "export" ? (
+            <ExportSection draft={draft} set={set} endpoint={endpoint} />
           ) : section === "assistant" ? (
             <AssistantSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint} />
           ) : section === "diagnostics" ? (

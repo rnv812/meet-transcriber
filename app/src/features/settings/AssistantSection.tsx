@@ -1,6 +1,6 @@
 /**
- * Настройки «Ассистент»: кто отвечает (провайдер модели), откуда знания и куда
- * заметки, окно живой расшифровки.
+ * Настройки «Ассистент»: кто отвечает (провайдер модели), откуда знания, окно
+ * живой расшифровки. Куда выгружаются встречи — раздел «Экспорт встреч».
  *
  * Сведения о провайдерах (`GET /assistant`) — не черновик: что найдено на
  * машине и кого выбрал бы «Авто». Резидент кэширует выбор по сохранённым
@@ -12,10 +12,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type Endpoint, checkProvider, getAssistant } from "../../lib/api";
 import { errorText } from "../../lib/format";
-import { openUrl, pickFolder } from "../../lib/shell";
+import { openUrl } from "../../lib/shell";
 import type { AssistantInfo } from "../../lib/types";
 import { Button } from "../../ui/Button";
-import { Row, type Raw, type SetFn } from "./Section";
+import { FolderRow, Row, type Raw, type SetFn } from "./Section";
 
 type Provider = { value: string; label: string; link?: string };
 
@@ -37,35 +37,20 @@ const LLM_KEYS = ["provider", "base_url", "local_model"];
 export const RECHECK_MS = 1500;
 export const RECHECK_TRIES = 20;
 
-export const SUBDIR_ERROR = "Только имя подпапки, без .. и полного пути";
 export const WINDOW_MIN = 5;
 export const WINDOW_MAX = 120;
-
-/** Подпапка заметок — относительная и без `..` (резидент проверяет то же). */
-export function subdirInvalid(value: string): boolean {
-  const text = value.trim();
-  if (!text) return false;
-  if (/^[\\/]/.test(text) || /^[A-Za-z]:/.test(text)) return true;
-  return text.split(/[\\/]+/).includes("..");
-}
 
 const windowInvalid = (value: unknown): boolean =>
   typeof value !== "number" || !Number.isFinite(value) || value < WINDOW_MIN || value > WINDOW_MAX;
 
 /**
- * Правки раздела нельзя сохранить: подпапка или окно вне правил. Смотрим только
- * изменённое (`changes` — то, что уйдёт в PATCH): значение, уже лежащее в файле,
- * не должно запирать «Сохранить» для остальных разделов.
+ * Правки раздела нельзя сохранить: окно вне правил. Смотрим только изменённое
+ * (`changes` — то, что уйдёт в PATCH): значение, уже лежащее в файле, не должно
+ * запирать «Сохранить» для остальных разделов.
  */
 export function assistantChangesInvalid(changes: Raw): boolean {
-  const subdir = changes.assistant?.notes_subdir;
   const win = changes.assist?.window_seconds;
-  return (typeof subdir === "string" && subdirInvalid(subdir)) || (win !== undefined && windowInvalid(win));
-}
-
-/** Значение настройки, каким оно уйдёт в PATCH: подпапка — без пробелов по краям. */
-export function cleanSetting(group: string, key: string, value: unknown): unknown {
-  return group === "assistant" && key === "notes_subdir" && typeof value === "string" ? value.trim() : value;
+  return win !== undefined && windowInvalid(win);
 }
 
 /** Подпись «Авто», пока выбран конкретный провайдер: порядок выбора (llm.resolve). */
@@ -88,24 +73,6 @@ function status(p: Provider, info: AssistantInfo | null): string | null {
   if (!found) return null;
   if (p.value === LOCAL) return `адрес: ${found.base_url ?? ""} — ${found.found ? "доступен" : "недоступен"}`;
   return found.found ? `найден: ${found.path ?? ""}` : null;
-}
-
-function FolderRow({ label, hint, value, onChange }: {
-  label: string; hint: string; value: string | null; onChange: (v: string | null) => void;
-}) {
-  const choose = async () => {
-    const path = await pickFolder(value).catch(() => null);
-    if (path) onChange(path);
-  };
-  return (
-    <div role="group" aria-label={label}>
-      <Row label={label} hint={hint}>
-        {value ? <code className="path">{value}</code> : <span className="muted">не задана</span>}
-        <Button onClick={() => void choose()}>Выбрать папку…</Button>
-        <Button onClick={() => onChange(null)} disabled={!value}>Очистить</Button>
-      </Row>
-    </div>
-  );
 }
 
 export function AssistantSection({ draft, saved, set, endpoint }: {
@@ -153,7 +120,6 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
   const llm = (k: string) => draft.llm?.[k];
   const chosen = String(llm("provider") ?? "auto");
   const llmDirty = LLM_KEYS.some((k) => JSON.stringify(draft.llm?.[k] ?? null) !== JSON.stringify(saved.llm?.[k] ?? null));
-  const subdir = String(draft.assistant?.notes_subdir ?? "");
   const win = draft.assist?.window_seconds as number | null | undefined;
 
   return (
@@ -207,18 +173,11 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
           </Row>
         </>
       )}
-      <h3 className="shead">Знания и заметки</h3>
-      <FolderRow label="База знаний" hint="папка с материалами: ассистент читает её, отвечая на вопросы"
+      <h3 className="shead">База знаний</h3>
+      <FolderRow label="База знаний для ассистента"
+        hint="папка с материалами: ассистент сверяет по ней термины и имена, отвечая на вопросы"
         value={(draft.assistant?.knowledge_dir as string | null | undefined) ?? null}
         onChange={(v) => set("assistant", "knowledge_dir", v)} />
-      <FolderRow label="Папка заметок" hint="сюда «В заметки» кладёт итоги встречи"
-        value={(draft.assistant?.notes_dir as string | null | undefined) ?? null}
-        onChange={(v) => set("assistant", "notes_dir", v)} />
-      <Row label="Подпапка для встреч" htmlFor="notes-subdir" hint="внутри папки заметок; пусто — прямо в ней">
-        <input id="notes-subdir" type="text" value={subdir}
-          onChange={(e) => set("assistant", "notes_subdir", e.target.value)} />
-        {subdirInvalid(subdir) && <span className="error">{SUBDIR_ERROR}</span>}
-      </Row>
       <h3 className="shead">Живой ассистент</h3>
       <Row label="Окно живой расшифровки, с" htmlFor="assist-window"
         hint="раз в столько секунд расшифровывается свежий звук: меньше — строки быстрее, больше — точнее. Применится со следующего запуска">
