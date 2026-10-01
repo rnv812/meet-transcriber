@@ -25,13 +25,15 @@ import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSecti
 import { HotwordsEditor } from "./HotwordsEditor";
 import { ModelsPane } from "./ModelsPane";
 import { Radio, Row, Switch, type Raw, type SetFn } from "./Section";
+import { SoundSection } from "./SoundSection";
 import "./settings.css";
 
 type SectionId =
-  "recording" | "auto" | "asr" | "engine" | "export" | "assistant" | "diagnostics" | "about" | "advanced";
+  "recording" | "sound" | "auto" | "asr" | "engine" | "export" | "assistant" | "diagnostics" | "about" | "advanced";
 
 const MENU: { id: SectionId; title: string }[] = [
-  { id: "recording", title: "Запись и устройства" },
+  { id: "recording", title: "Запись" },
+  { id: "sound", title: "Звук" },
   { id: "auto", title: "Автозапись" },
   { id: "asr", title: "Распознавание" },
   { id: "engine", title: "Движок и модели" },
@@ -70,8 +72,8 @@ function SecondsRow({ id, label, hint, value, onChange }: {
   );
 }
 
-function RecordingSection({ draft, set, devices, recordingsDir }: {
-  draft: Raw; set: SetFn; devices: Devices | null; recordingsDir: string | null;
+function RecordingSection({ draft, set, recordingsDir }: {
+  draft: Raw; set: SetFn; recordingsDir: string | null;
 }) {
   const v = (k: string) => draft.recording?.[k];
   return (
@@ -83,16 +85,6 @@ function RecordingSection({ draft, set, devices, recordingsDir }: {
             {inTauri() && <Button onClick={() => void openFolder(recordingsDir)}>Открыть</Button>}
           </>
         ) : <span className="muted">неизвестно</span>}
-      </Row>
-      <Row label="Устройства записи" hint="следим за системными по умолчанию: наушники ушли и вернулись — запись переживёт">
-        <span className="tags">
-          {devices?.available ? (
-            <>
-              <code className="path">звук: {devices.system?.name}</code>
-              <code className="path">микрофон: {devices.mic?.name}</code>
-            </>
-          ) : <span className="muted">{devices?.error ?? "неизвестно"}</span>}
-        </span>
       </Row>
       <TextRow id="speaker-name" label="Как подписывать вас" short
         hint="микрофонная дорожка — всегда владелец машины; в транскрипте она подписана так"
@@ -343,7 +335,9 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           {!settings && section !== "about" && section !== "diagnostics" ? (
             error ? <EmptyState title="Настройки недоступны" /> : <p className="muted">Загружаю…</p>
           ) : section === "recording" ? (
-            <RecordingSection draft={draft} set={set} devices={devices} recordingsDir={recordingsDir} />
+            <RecordingSection draft={draft} set={set} recordingsDir={recordingsDir} />
+          ) : section === "sound" ? (
+            <SoundSection draft={draft} set={set} devices={devices} endpoint={endpoint} />
           ) : section === "auto" ? (
             <AutoSection draft={draft} set={set} processes={processes} onToggle={(v) => void toggleAuto(v)} />
           ) : section === "asr" ? (

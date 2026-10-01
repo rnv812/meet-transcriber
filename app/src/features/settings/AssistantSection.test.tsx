@@ -242,7 +242,7 @@ test("повторный запрос раздела возвращает на �
   const { rerender } = render(
     <SettingsPane endpoint={ep} recordingsDir={null} initial="assistant" initialTick={1} />);
   await screen.findByText("сейчас: Claude Code");
-  await userEvent.click(screen.getByRole("button", { name: "Запись и устройства" }));
+  await userEvent.click(screen.getByRole("button", { name: "Запись" }));
   expect(screen.getByRole("button", { name: "Ассистент" })).not.toHaveAttribute("aria-current");
   rerender(<SettingsPane endpoint={ep} recordingsDir={null} initial="assistant" initialTick={2} />);
   expect(screen.getByRole("button", { name: "Ассистент" })).toHaveAttribute("aria-current", "page");

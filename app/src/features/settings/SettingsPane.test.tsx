@@ -208,3 +208,19 @@ test("движок: только сведения; переустановка �
   await userEvent.click(screen.getByRole("button", { name: "Переустановить движок" }));
   expect(onRunWizard).toHaveBeenCalledWith("engine");
 });
+
+test("«Звук»: выбранный микрофон сохраняется патчем recording.mic_device", async () => {
+  vi.mocked(api.getDevices).mockResolvedValue({
+    available: true, pinning: true,
+    inputs: [{ name: "Микрофон", default: true }, { name: "USB-микрофон", default: false }],
+    outputs: [{ name: "Динамики", default: true }],
+  });
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Звук" }));
+  const mic = await screen.findByRole("combobox", { name: "Микрофон" });
+  await waitFor(() => expect(mic).toHaveDisplayValue("Как в системе (сейчас: Микрофон)"));
+  await userEvent.selectOptions(mic, "USB-микрофон");
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
+  expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1]).toEqual({ recording: { mic_device: { name: "USB-микрофон" } } });
+});

@@ -193,13 +193,14 @@ def test_processes_lists_running_and_marks_selection(control_state):
     assert "Dion.exe" in got["known"]
 
 
-def test_devices_says_pinning_is_not_supported(control_state):
-    """Закрепить устройство нельзя осознанно: вотчдог следит за дефолтными
-    endpoint'ами и переживает их смену."""
+def test_devices_says_pinning_is_supported(control_state):
+    """Микрофон и вывод можно выбрать по имени (recording.mic_device /
+    output_device); null — системные, за которыми запись следит."""
     got = control_state.devices(probe=lambda: {"available": True,
                                                "system": {"name": "Колонки"},
-                                               "mic": {"name": "Микрофон"}})
-    assert got["pinning"] is False and got["system"]["name"] == "Колонки"
+                                               "mic": {"name": "Микрофон"},
+                                               "inputs": [], "outputs": []})
+    assert got["pinning"] is True and got["system"]["name"] == "Колонки"
 
 
 def test_devices_never_touch_portaudio_in_process(control_state, monkeypatch):
@@ -233,7 +234,7 @@ def test_devices_are_cached_between_calls(control_state):
 
 def test_broken_probe_is_reported_not_raised(control_state):
     got = control_state.devices(probe=lambda: {"available": False, "error": "нет"})
-    assert got["available"] is False and got["pinning"] is False
+    assert got["available"] is False
 
 
 # --- библиотека, задачи, голоса ------------------------------------------
@@ -1082,3 +1083,75 @@ def test_hf_check_cache_resets_when_token_changes_elsewhere(control_state, monke
                                          "check": None}
     control_state.clear_hf_token()
     assert control_state.hf_status()["check"] is None
+
+
+# --- проверка устройства и «выбранного нет» ---------------------------------
+
+
+def test_device_test_runs_probe_in_subprocess_helper(control_state):
+    calls = []
+
+    def probe(kind, name):
+        calls.append((kind, name))
+        return {"ok": True, "peak": 0.42, "device": name or "Микрофон", "fallback": False}
+
+    got = control_state.test_device({"kind": "mic", "name": "USB-микрофон"}, probe=probe)
+    assert got["peak"] == 0.42 and got["device"] == "USB-микрофон"
+    assert calls == [("mic", "USB-микрофон")]
+    got = control_state.test_device({"kind": "output", "name": None}, probe=probe)
+    assert calls[-1] == ("output", None)
+
+
+def test_device_test_refused_while_recording(control_state, app):
+    from meet.control import Conflict
+
+    app.recording = True
+    with pytest.raises(Conflict, match="Идёт запись"):
+        control_state.test_device({"kind": "mic", "name": None},
+                                  probe=lambda k, n: pytest.fail("не должен звать"))
+
+
+def test_device_test_refused_while_live(control_state, monkeypatch):
+    from meet.control import Conflict
+
+    monkeypatch.setattr(control_state.live, "busy", lambda: True)
+    with pytest.raises(Conflict):
+        control_state.test_device({"kind": "output", "name": None},
+                                  probe=lambda k, n: pytest.fail("не должен звать"))
+
+
+@pytest.mark.parametrize("body", [None, {}, {"kind": "камера"}, {"kind": "mic", "name": 5}])
+def test_device_test_rejects_bad_body(control_state, body):
+    from meet.control import BadRequest
+
+    with pytest.raises(BadRequest):
+        control_state.test_device(body, probe=lambda k, n: pytest.fail("не должен звать"))
+
+
+def test_device_test_failure_is_a_readable_error(control_state):
+    from meet.control import BadRequest
+
+    with pytest.raises(BadRequest, match="Не удалось проверить устройство: занято"):
+        control_state.test_device({"kind": "mic", "name": None},
+                                  probe=lambda k, n: {"ok": False, "error": "занято"})
+
+
+def test_device_test_never_touches_portaudio_in_process(control_state, monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "pyaudiowpatch", None)
+    got = control_state.test_device({"kind": "mic", "name": None},
+                                    probe=lambda k, n: {"ok": True, "peak": 0.0,
+                                                        "device": "Микрофон"})
+    assert got["device"] == "Микрофон"
+
+
+def test_snapshot_reports_device_fallback_while_recording(control_state, app):
+    assert control_state.snapshot()["devices_fallback"] == []
+    app.recording = True
+    control_state.bus.emit(events.RECORD_DEVICE_FALLBACK, track="mic.opus", role="mic",
+                           wanted="USB-микрофон", device="Микрофон")
+    assert control_state.snapshot()["devices_fallback"] == [
+        {"kind": "mic", "name": "USB-микрофон", "device": "Микрофон"}]
+    control_state.bus.emit(events.RECORD_STOPPED, folder="x", duration_s=1.0)
+    assert control_state.snapshot()["devices_fallback"] == []

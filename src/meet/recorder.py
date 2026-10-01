@@ -355,6 +355,13 @@ class _Track:
         self._lock = threading.Lock()  # callback против паддинга из вотчдога
         self._waiting = False
         self._stalled = False
+        self._fallback_noted = False  # «выбранного нет» — раз за запись
+
+    @property
+    def follows_default(self) -> bool:
+        """Следит ли дорожка за системным устройством своей роли. Закреплённая
+        (и найденная) — нет: смена системного её не касается."""
+        return not getattr(self.pick, "pinned", False)
 
     def first_open(self, p) -> None:
         """Первый запуск: устройство обязано существовать (иначе исключение)."""
@@ -364,6 +371,7 @@ class _Track:
         self.writer = OpusWriter(self.path, self.channels, self.rate)
         self.started = time.monotonic()
         self._open(p, dev)
+        self._note_fallback()
 
     def reopen(self, p) -> bool:
         """Открыть дорожку заново после перезапуска; неудача — ждать дальше."""
@@ -377,6 +385,7 @@ class _Track:
                 self.bus.emit(events.RECORD_WAITING, track=self.fname)
             return False
         self._waiting = False
+        self._note_fallback()
         self._log(
             f"запись возобновлена: {self.device_name} "
             f"({self.src_rate} Hz, {self.src_channels} ch)"
@@ -386,6 +395,18 @@ class _Track:
             rate=self.src_rate, channels=self.src_channels, resumed=True,
         )
         return True
+
+    def _note_fallback(self) -> None:
+        """Выбранного в настройках устройства нет — пишем с системного и
+        говорим об этом один раз за запись (журнал + событие для UI)."""
+        if not getattr(self.pick, "fallback", False) or self._fallback_noted:
+            return
+        self._fallback_noted = True
+        self.log(fallback_text(self.pick.kind, self.pick.wanted))
+        self.bus.emit(
+            events.RECORD_DEVICE_FALLBACK, track=self.fname, role=self.pick.kind,
+            wanted=self.pick.wanted, device=self.device_name,
+        )
 
     def alive(self) -> bool:
         if self.stream is None:
@@ -516,10 +537,130 @@ def _find_loopback(p: "pyaudio.PyAudio") -> dict:
     speakers = p.get_device_info_by_index(wasapi["defaultOutputDevice"])
     if speakers.get("isLoopbackDevice"):
         return speakers
-    for lb in p.get_loopback_device_info_generator():
-        if speakers["name"] in lb["name"]:
+    lb = _loopback_for(p, speakers["name"], loose=True)
+    if lb is None:
+        raise RuntimeError(f"Не найден loopback для устройства: {speakers['name']}")
+    return lb
+
+
+def _loopback_for(p: "pyaudio.PyAudio", name: str,
+                  loose: bool = False) -> "dict | None":
+    """Loopback устройства вывода `name`. У pyaudiowpatch он называется
+    «<имя> [Loopback]». `loose` — ещё и по вхождению имени (так всегда искали
+    loopback системного вывода); выбранное пользователем — только точно, иначе
+    «Наушники» нашлись бы в «Наушники 2»."""
+    loopbacks = list(p.get_loopback_device_info_generator())
+    for lb in loopbacks:
+        if lb["name"] == f"{name} [Loopback]":
             return lb
-    raise RuntimeError(f"Не найден loopback для устройства: {speakers['name']}")
+    if loose:
+        for lb in loopbacks:
+            if name in lb["name"]:
+                return lb
+    return None
+
+
+def _wasapi_devices(p: "pyaudio.PyAudio") -> tuple[dict, list[dict]]:
+    """(host API WASAPI, его устройства). Битый индекс пропускаем: список
+    меняется на ходу, а одно странное устройство не должно ломать остальные."""
+    wasapi = p.get_host_api_info_by_type(pyaudio.paWASAPI)
+    found = []
+    for i in range(p.get_device_count()):
+        try:
+            dev = p.get_device_info_by_index(i)
+        except Exception:
+            continue
+        if dev.get("hostApi") == wasapi.get("index"):
+            found.append(dev)
+    return wasapi, found
+
+
+def _find_mic(p: "pyaudio.PyAudio", name: str) -> "dict | None":
+    """Микрофон WASAPI с этим именем (loopback'и — не микрофоны)."""
+    _, devices = _wasapi_devices(p)
+    for dev in devices:
+        if (dev["name"] == name and int(dev.get("maxInputChannels", 0)) > 0
+                and not dev.get("isLoopbackDevice")):
+            return dev
+    return None
+
+
+def _default_name(p, wasapi: dict, key: str) -> "str | None":
+    try:
+        return p.get_device_info_by_index(wasapi[key])["name"]
+    except Exception:
+        return None  # устройства этой роли сейчас нет
+
+
+def list_devices(p: "pyaudio.PyAudio") -> dict:
+    """Микрофоны и устройства вывода WASAPI для выбора в настройках:
+    {"inputs": [{name, default}], "outputs": [{name, default}]}.
+
+    IMPORTANT: PortAudio — только в процессе записи или в подпроцессе
+    (`meet.devices_probe`), никогда в потоках HTTP-сервера резидента."""
+    wasapi, devices = _wasapi_devices(p)
+
+    def collect(channels_key: str, default_key: str) -> list[dict]:
+        default = _default_name(p, wasapi, default_key)
+        names: list[str] = []
+        for dev in devices:
+            if dev.get("isLoopbackDevice") or int(dev.get(channels_key, 0)) <= 0:
+                continue
+            if dev["name"] not in names:
+                names.append(dev["name"])
+        if default and default not in names:
+            names.insert(0, default)
+        return [{"name": n, "default": n == default} for n in names]
+
+    return {
+        "inputs": collect("maxInputChannels", "defaultInputDevice"),
+        "outputs": collect("maxOutputChannels", "defaultOutputDevice"),
+    }
+
+
+# Что искать по имени и что брать, если не нашлось. "output" — устройство
+# вывода, записываемое через его loopback (звук собеседников).
+_FIND = {"mic": lambda p, name: _find_mic(p, name),
+         "output": lambda p, name: _loopback_for(p, name)}
+_SYSTEM = {"mic": lambda p: _default_mic(p), "output": lambda p: _find_loopback(p)}
+
+
+def resolve_device(p: "pyaudio.PyAudio", kind: str, wanted: "str | None") -> tuple[dict, bool]:
+    """Устройство для дорожки: выбранное в настройках по имени (индексы
+    PortAudio меняются от запуска к запуску) или системное. Второй элемент —
+    True, если выбранное не нашлось и взято системное."""
+    if wanted:
+        dev = _FIND[kind](p, wanted)
+        if dev is not None:
+            return dev, False
+        return _SYSTEM[kind](p), True
+    return _SYSTEM[kind](p), False
+
+
+def fallback_text(kind: str, wanted: str) -> str:
+    if kind == "mic":
+        return f"Выбранный микрофон {wanted} не найден — запись идёт с системного"
+    return (f"Выбранное устройство вывода {wanted} не найдено — "
+            "запись идёт с системного")
+
+
+class _Picker:
+    """`pick` дорожки: разрешает устройство на каждое (пере)открытие.
+    None — системное (дорожка следует за дефолтом Windows и переживает его
+    смену); имя — выбранное, а если его нет — системное с пометкой fallback."""
+
+    def __init__(self, kind: str, wanted: "str | None") -> None:
+        self.kind = kind
+        self.wanted = wanted or None
+        self.fallback = False
+
+    @property
+    def pinned(self) -> bool:
+        return bool(self.wanted) and not self.fallback
+
+    def __call__(self, p) -> dict:
+        dev, self.fallback = resolve_device(p, self.kind, self.wanted)
+        return dev
 
 
 class _Session:
@@ -529,7 +670,8 @@ class _Session:
     считает ссылки), поэтому перезапуск всегда полный: закрыть оба стрима →
     terminate → свежий PyAudio → переоткрыть дорожки."""
 
-    def __init__(self, out_dir: Path, bus=None) -> None:
+    def __init__(self, out_dir: Path, bus=None, mic_device: "str | None" = None,
+                 output_device: "str | None" = None) -> None:
         self.p = None
         self.out_dir = out_dir
         self.bus = bus if bus is not None else events.EventBus()
@@ -539,8 +681,10 @@ class _Session:
         self.last_restart = 0.0
         self.retry_wait = RETRY_S  # растёт при безуспешных ретраях (backoff)
         self.tracks = (
-            _Track("sys.opus", _find_loopback, 0, out_dir, self.log, self.bus),
-            _Track("mic.opus", _default_mic, 1, out_dir, self.log, self.bus),
+            _Track("sys.opus", _Picker("output", output_device), 0, out_dir,
+                   self.log, self.bus),
+            _Track("mic.opus", _Picker("mic", mic_device), 1, out_dir,
+                   self.log, self.bus),
         )
 
     def start(self) -> None:
@@ -580,7 +724,16 @@ class _Session:
         if self.ids is None:
             self.ids = ids  # COM не ответил на старте — базлайн с первого такта
         now = time.monotonic()
-        changed = ids is not None and self.ids is not None and ids != self.ids
+        # Смена дефолта касается только дорожек, которые за ним следят:
+        # закреплённое (и найденное) устройство от неё не зависит, а перезапуск
+        # рвал бы обе дорожки.
+        changed = ids is not None and self.ids is not None and any(
+            ids[t.role] != self.ids[t.role] for t in self.tracks if t.follows_default
+        )
+        if ids is not None and self.ids is not None and not changed:
+            # Базлайн догоняет систему: сдвиг дефолта у закреплённой роли не
+            # должен позже (дорожка ушла на системное) прочитаться как смена.
+            self.ids = ids
         died = any(t.stream is not None and not t.alive() for t in self.tracks)
         waiting = [t for t in self.tracks if t.stream is None]
         # Ретрай ждущих дорожек — только когда для их роли снова есть дефолтное
@@ -664,15 +817,33 @@ class _Session:
                 self.log(f"PyAudio.terminate: {e!r}")
 
 
+# «Взять из настроек» — отличается от None («системное устройство»).
+_FROM_SETTINGS = object()
+
+
 def record(out_root: str, stop_event: "threading.Event | None" = None,
-           bus=None) -> Path:
+           bus=None, mic_device=_FROM_SETTINGS, output_device=_FROM_SETTINGS) -> Path:
     """Записать встречу двумя дорожками. `bus` — шина событий для UI: без неё
-    всё работает как раньше, только события уходят в никуда."""
+    всё работает как раньше, только события уходят в никуда.
+
+    `mic_device` / `output_device` — имена устройств; None — системные (запись
+    следит за дефолтами Windows), не переданы — из настроек на момент старта.
+    Выбранного нет — пишем с системного и сообщаем в журнал и событием
+    `record.device_fallback`."""
+    if _FROM_SETTINGS in (mic_device, output_device):
+        from meet import settings
+
+        recording = settings.load().recording
+        if mic_device is _FROM_SETTINGS:
+            mic_device = recording.mic_device
+        if output_device is _FROM_SETTINGS:
+            output_device = recording.output_device
     out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
     out_dir.mkdir(parents=True, exist_ok=True)
     lock = _acquire_lock(Path(out_root), out_dir)
 
-    session = _Session(out_dir, bus)
+    session = _Session(out_dir, bus, mic_device=mic_device,
+                       output_device=output_device)
     # Машинный двойник record.log рядом с дорожками: по нему экран диагностики
     # разбирает запись после того, как она кончилась. Уровни в файл не идут.
     sink = events.JsonlSink(out_dir / "events.jsonl")

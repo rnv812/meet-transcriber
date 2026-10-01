@@ -40,25 +40,41 @@ TAIL_DEFAULT = 200
 # чтобы открытая страница настроек не плодила их пачками.
 DEVICES_TTL_S = 15.0
 DEVICE_PROBE_TIMEOUT_S = 20.0
+# «Проверить» в настройках звука: столько секунд пишет подпроцесс.
+DEVICE_CHECK_S = 2.0
+
+
+def _run_probe(args: list[str], failed: str, timeout: float) -> dict:
+    """Спросить подпроцесс meet.devices_probe; ответ — его строка JSON, сбой —
+    `{failed: False, "error": ...}`."""
+    try:
+        out = subprocess.run(
+            [sys.executable, "-m", "meet.devices_probe", *args],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        return {failed: False, "error": f"{type(e).__name__}: {e}"}
+    line = (out.stdout or "").strip().splitlines()
+    try:
+        return json.loads(line[-1]) if line else {
+            failed: False, "error": (out.stderr or "нет ответа")[:300]}
+    except ValueError:
+        return {failed: False, "error": (out.stdout or "")[:300]}
 
 
 def _probe_devices() -> dict:
     """Спросить устройства у подпроцесса (см. meet.devices_probe)."""
-    try:
-        out = subprocess.run(
-            [sys.executable, "-m", "meet.devices_probe"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=DEVICE_PROBE_TIMEOUT_S,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except (OSError, subprocess.SubprocessError) as e:
-        return {"available": False, "error": f"{type(e).__name__}: {e}"}
-    line = (out.stdout or "").strip().splitlines()
-    try:
-        return json.loads(line[-1]) if line else {
-            "available": False, "error": (out.stderr or "нет ответа")[:300]}
-    except ValueError:
-        return {"available": False, "error": (out.stdout or "")[:300]}
+    return _run_probe([], "available", DEVICE_PROBE_TIMEOUT_S)
+
+
+def _check_device(kind: str, name: str | None) -> dict:
+    """Пару секунд записать с устройства подпроцессом — пиковый уровень."""
+    args = ["--check", kind, "--seconds", str(DEVICE_CHECK_S)]
+    if name:
+        args += ["--name", name]
+    return _run_probe(args, "ok", DEVICE_PROBE_TIMEOUT_S + DEVICE_CHECK_S)
 
 
 def _tail(path: Path, lines: int) -> list[str]:
@@ -217,6 +233,10 @@ class TrayControl:
         self._levels: dict = {}
         self._devices_cache: dict | None = None
         self._devices_at = 0.0
+        self._device_check = threading.Lock()  # одна проверка устройства за раз
+        # Выбранное в настройках устройство не нашлось у идущей записи:
+        # [{"kind": "mic"|"output", "name": выбранное, "device": взятое}].
+        self._fallbacks: list[dict] = []
         # Последняя проверка доступа к Hugging Face (без токена): окно рисует
         # её по GET /hf/status, не дёргая сеть на каждый показ.
         self._hf_check: dict | None = None
@@ -325,9 +345,16 @@ class TrayControl:
             self.tray.log(f"расшифровка уже в очереди: {path.name} ({job.id})")
 
     def _remember_levels(self, event) -> None:
-        """Последние уровни дорожек — чтобы снимок состояния не ждал события."""
+        """Последние уровни дорожек и подмены устройств — чтобы снимок
+        состояния не ждал события."""
         if event.kind == events.RECORD_LEVEL:
             self._levels = event.data.get("levels") or {}
+        elif event.kind == events.RECORD_DEVICE_FALLBACK:
+            self._fallbacks = [*self._fallbacks, {
+                "kind": event.data.get("role"), "name": event.data.get("wanted"),
+                "device": event.data.get("device")}]
+        elif event.kind == events.RECORD_STOPPED:
+            self._fallbacks = []
 
     # --- что показывать -------------------------------------------------
 
@@ -343,6 +370,9 @@ class TrayControl:
             "folder": tray._current_folder() if recording else None,
             "elapsed_s": round(elapsed, 1),
             "levels": dict(self._levels) if recording else {},
+            # Выбранный в настройках микрофон или вывод не найден — эта запись
+            # идёт с системного: [{"kind", "name", "device"}].
+            "devices_fallback": [dict(f) for f in self._fallbacks] if recording else [],
             # Свободное место под записи: UI предупреждает при < 5 ГБ до старта
             # записи, а не когда ffmpeg упрётся в полный диск посреди встречи.
             # None — диск недоступен (отключён, шара не отвечает).
@@ -539,7 +569,9 @@ class TrayControl:
         }
 
     def devices(self, probe=None) -> dict:
-        """Что увидит запись: устройство вывода (loopback) и микрофон.
+        """Устройства для настроек «Звук»: микрофоны и устройства вывода
+        (`inputs`/`outputs`, системные помечены `default`) и что запись видит
+        сейчас (`system` — loopback, `mic`).
 
         IMPORTANT: спрашиваем **подпроцессом**, а не здесь. PortAudio считает
         ссылки на инициализацию, в проекте живёт один PyAudio-инстанс, и второй,
@@ -547,19 +579,46 @@ class TrayControl:
         PortAudio — резидент падал целиком с segfault (поймано faulthandler'ом
         18.08.2026). Подпроцесс умирает вместе со своей инициализацией.
 
-        Только для показа. Закрепить конкретное устройство нельзя осознанно:
-        запись следит за *дефолтными* endpoint'ами и переживает их смену — если
-        прибить дорожку к устройству, этот механизм сломается (см. recorder)."""
+        Выбор хранится по имени (`recording.mic_device` / `output_device`):
+        null — системное, за сменой которого запись следит; выбранное запись
+        ищет по имени при каждом (пере)открытии дорожки, а не найдя — пишет с
+        системного (см. recorder)."""
         now = time.monotonic()
         if self._devices_cache and now - self._devices_at < DEVICES_TTL_S:
             return self._devices_cache
         data = (probe or _probe_devices)()
-        data["pinning"] = False
+        data["pinning"] = True
         # Кэшируем только успех: иначе мгновенный сбой подпроцесса залипал бы на
         # 15 с, и «Сбросить» не помогал бы, пока TTL не истёк.
         if data.get("available"):
             self._devices_cache, self._devices_at = data, now
         return data
+
+    def test_device(self, body: dict | None, probe=None) -> dict:
+        """«Проверить» в настройках звука: ~2 с с микрофона или с loopback
+        устройства вывода → `{"peak": 0..1, "device", "fallback"}`.
+
+        IMPORTANT: тоже подпроцессом (см. devices). Во время записи — отказ:
+        проверка открыла бы то же устройство вторым потребителем, а мерить
+        уровень идущей записи и так видно по её индикатору."""
+        body = body if isinstance(body, dict) else {}
+        kind, name = body.get("kind"), body.get("name")
+        if kind not in ("mic", "output"):
+            raise _bad_request("ожидается kind: mic или output")
+        if name is not None and not isinstance(name, str):
+            raise _bad_request("name — имя устройства или null")
+        if self.tray.recording or self.live.busy():
+            raise _conflict("Идёт запись — проверка устройства недоступна")
+        if not self._device_check.acquire(blocking=False):
+            raise _conflict("Проверка устройства уже идёт")
+        try:
+            result = (probe or _check_device)(kind, (name or "").strip() or None)
+        finally:
+            self._device_check.release()
+        if not result.get("ok"):
+            raise _bad_request(
+                f"Не удалось проверить устройство: {result.get('error') or 'нет ответа'}")
+        return result
 
     # --- библиотека и задачи --------------------------------------------
 

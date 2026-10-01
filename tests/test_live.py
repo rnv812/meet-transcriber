@@ -649,3 +649,50 @@ def test_engine_pads_silent_tracks_from_a_ticker(tmp_path, monkeypatch):
     finally:
         engine.stop()
     assert not any(t.name == "meet-live-pad" for t in threading.enumerate())
+
+
+# --- Живой режим пишет с выбранных в настройках устройств ---------------------
+
+
+def _spy_resolve(monkeypatch, missing=()):
+    """resolve_device под наблюдением: какие имена спросили и что вернули."""
+    asked = []
+
+    def resolve(p, kind, wanted):
+        asked.append((kind, wanted))
+        fell_back = bool(wanted) and wanted in missing
+        name = wanted if wanted and not fell_back else f"system-{kind}"
+        return ({"index": 0 if kind == "output" else 1, "name": name,
+                 "maxInputChannels": 1, "defaultSampleRate": 16000}, fell_back)
+
+    monkeypatch.setattr(recorder, "resolve_device", resolve)
+    return asked
+
+
+def test_live_capture_uses_pinned_devices(tmp_path, monkeypatch, capsys):
+    _fake_audio(monkeypatch)
+    asked = _spy_resolve(monkeypatch, missing={"Наушники"})
+    engine = LiveEngine(tmp_path / "2026-10-01_10-00", _LoadSpy(), window_seconds=3600,
+                        speaker_name="Вы", mic_device="USB-микрофон",
+                        output_device="Наушники")
+    engine.start()
+    engine.stop()
+    assert ("mic", "USB-микрофон") in asked and ("output", "Наушники") in asked
+    out = capsys.readouterr().out
+    assert "mic.wav: USB-микрофон" in out
+    assert ("Выбранное устройство вывода Наушники не найдено — запись идёт с системного"
+            in out)
+
+
+def test_live_capture_reads_devices_from_settings(tmp_path, monkeypatch):
+    from meet import settings
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    settings.patch({"recording": {"mic_device": {"name": "USB-микрофон"}}})
+    _fake_audio(monkeypatch)
+    asked = _spy_resolve(monkeypatch)
+    engine = LiveEngine(tmp_path / "rec" / "2026-10-01_10-00", _LoadSpy(),
+                        window_seconds=3600, speaker_name="Вы")
+    engine.start()
+    engine.stop()
+    assert ("mic", "USB-микрофон") in asked and ("output", None) in asked

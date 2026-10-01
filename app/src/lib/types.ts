@@ -30,6 +30,8 @@ export type Snapshot = {
   live?: LiveStatus;
   /** Папка для встреч в базе знаний (`export.meetings_dir`); не задана — null. */
   meetings_dir?: string | null;
+  /** Выбранный в настройках микрофон или вывод не найден — запись идёт с системного. */
+  devices_fallback?: { kind: "mic" | "output"; name: string; device: string | null }[];
   /** Последний сбой автоматической выгрузки в базу знаний. */
   kb_export_failed?: { folder: string; error: string; at: number } | null;
 };

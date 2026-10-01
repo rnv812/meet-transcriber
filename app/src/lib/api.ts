@@ -136,13 +136,20 @@ export type Processes = {
   known?: string[];
   error?: string;
 };
+export type DeviceItem = { name: string; default: boolean };
 export type Devices = {
   available: boolean;
   system?: { name: string; rate: number };
   mic?: { name: string; rate: number };
+  /** Микрофоны и устройства вывода WASAPI; нет у старых резидентов. */
+  inputs?: DeviceItem[];
+  outputs?: DeviceItem[];
+  /** Можно ли выбрать устройство (recording.mic_device / output_device). */
   pinning: boolean;
   error?: string;
 };
+export type DeviceKind = "mic" | "output";
+export type DeviceCheck = { ok: boolean; peak: number; device: string; fallback?: boolean };
 export type EngineState = {
   installed: boolean;
   missing: string[];
@@ -189,6 +196,9 @@ export const downloadModel = (ep: Endpoint, id: string) =>
 export const getDiagnostics = (ep: Endpoint, lines = 200) =>
   json<Record<string, unknown>>(ep, `/diagnostics?lines=${lines}`);
 export const getDevices = (ep: Endpoint) => json<Devices>(ep, "/devices");
+/** ~2 с записи с устройства (null — системное) → пиковый уровень; 409 во время записи. */
+export const testDevice = (ep: Endpoint, kind: DeviceKind, name: string | null) =>
+  json<DeviceCheck>(ep, "/devices/test", body("POST", { kind, name }));
 export const getProcesses = (ep: Endpoint) => json<Processes>(ep, "/processes");
 
 
@@ -293,7 +303,7 @@ export function avatarUrl(ep: Endpoint, name: string, version: number): string {
 
 const EVENT_KINDS = [
   "job.queued", "job.started", "job.progress", "job.done", "job.failed",
-  "record.started", "record.stopped", "record.discarded", "record.device",
+  "record.started", "record.stopped", "record.discarded", "record.device", "record.device_fallback",
   "record.waiting", "record.silence", "record.level", "progress", "log", "error",
   "live.starting", "live.started", "live.stopping", "live.stopped", "live.failed",
 ];

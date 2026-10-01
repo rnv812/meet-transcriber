@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import pytest
 
 import meet.recorder as recorder
+from meet import events
 from meet.recorder import (
     LOCK_NAME,
     WavWriter,
@@ -195,6 +196,9 @@ class _FakeAudioStream:
 
 class _FakePyAudio:
     devices: dict = {}  # {"render": {...}|None, "capture": {...}|None}
+    # Остальные устройства WASAPI по индексу (≥ 2): закрепляемые микрофоны и
+    # loopback'и. Ключ "isLoopbackDevice" — как у pyaudiowpatch.
+    extras: dict = {}
     live: list = []  # незатерминированные инстансы
     streams: list = []  # все открытые стримы по порядку
     fail_open: set = set()  # роли, у которых устройство есть, но open падает
@@ -202,30 +206,52 @@ class _FakePyAudio:
     def __init__(self):
         cls = type(self)
         self.snapshot = {k: dict(v) if v else None for k, v in cls.devices.items()}
+        self.extras_snapshot = {i: dict(v) for i, v in cls.extras.items()}
         self.terminated = False
         cls.live.append(self)
 
     def get_host_api_info_by_type(self, t):
-        return {"defaultOutputDevice": 0, "defaultInputDevice": 1}
+        return {"index": 0, "defaultOutputDevice": 0, "defaultInputDevice": 1}
+
+    def get_device_count(self):
+        return max([1, *self.extras_snapshot]) + 1
 
     def get_device_info_by_index(self, i):
+        if i >= 2:
+            dev = self.extras_snapshot.get(i)
+            if dev is None:
+                raise OSError("устройства нет в снимке")
+            return {"index": i, "hostApi": 0, "isLoopbackDevice": False, **dev}
         dev = self.snapshot["render" if i == 0 else "capture"]
         if dev is None:
             raise OSError("устройства нет в снимке")
-        return {"index": i, "isLoopbackDevice": True, **dev}
+        return {"index": i, "hostApi": 0, "isLoopbackDevice": True, **dev}
+
+    def get_loopback_device_info_generator(self):
+        for i in sorted(self.extras_snapshot):
+            info = self.get_device_info_by_index(i)
+            if info["isLoopbackDevice"]:
+                yield info
 
     def open(self, **kwargs):
-        role = "render" if kwargs["input_device_index"] == 0 else "capture"
-        current = type(self).devices[role]
-        # устройство из устаревшего снимка не откроется, как в WASAPI
-        if current is None or current["name"] != self.snapshot[role]["name"]:
-            raise OSError("устройство недоступно")
-        if role in type(self).fail_open:
-            raise OSError("устройство занято")
+        index = kwargs["input_device_index"]
+        if index >= 2:
+            current = type(self).extras.get(index)
+            if current is None or current["name"] != self.extras_snapshot[index]["name"]:
+                raise OSError("устройство недоступно")
+        else:
+            role = "render" if index == 0 else "capture"
+            current = type(self).devices[role]
+            # устройство из устаревшего снимка не откроется, как в WASAPI
+            if current is None or current["name"] != self.snapshot[role]["name"]:
+                raise OSError("устройство недоступно")
+            if role in type(self).fail_open:
+                raise OSError("устройство занято")
         stream = _FakeAudioStream(
             callback=kwargs.get("stream_callback"),
             autostart=kwargs.get("start", True),
         )
+        stream.device_index = index
         type(self).streams.append(stream)
         return stream
 
@@ -280,6 +306,7 @@ def _fake_audio(monkeypatch, render=_UNSET, capture=_UNSET):
         "render": _dev("Колонки") if render is _UNSET else render,
         "capture": _dev("Микрофон") if capture is _UNSET else capture,
     }
+    _FakePyAudio.extras = {}
     _FakePyAudio.live = []
     _FakePyAudio.streams = []
     _FakePyAudio.fail_open = set()
@@ -298,9 +325,12 @@ def _fake_audio(monkeypatch, render=_UNSET, capture=_UNSET):
     monkeypatch.setattr(recorder, "RETRY_S", 0.0)
 
 
-def _session(monkeypatch, tmp_path, **kw):
+def _session(monkeypatch, tmp_path, mic_device=None, output_device=None,
+             extras=None, bus=None, **kw):
     _fake_audio(monkeypatch, **kw)
-    s = recorder._Session(tmp_path)
+    _FakePyAudio.extras = dict(extras or {})
+    s = recorder._Session(tmp_path, bus, mic_device=mic_device,
+                          output_device=output_device)
     s.start()
     return s
 
@@ -721,3 +751,187 @@ def test_silence_padding_emits_event_once(tmp_path):
     t.tick_pad()  # повторный такт того же простоя не должен спамить событиями
     silence = [e for e in seen if e.kind == "record.silence"]
     assert len(silence) == 1 and silence[0].data["gap_s"] >= 4.0
+
+
+# --- закреплённые устройства: микрофон и вывод по имени ---
+
+_USB_MIC = {"name": "USB-микрофон", "defaultSampleRate": 48000, "maxInputChannels": 1}
+_HEADSET_LB = {"name": "Наушники [Loopback]", "defaultSampleRate": 48000,
+               "maxInputChannels": 2, "isLoopbackDevice": True}
+
+
+def _fallbacks(bus_events):
+    return [e for e in bus_events if e.kind == events.RECORD_DEVICE_FALLBACK]
+
+
+def _bus():
+    bus = events.EventBus()
+    seen: list = []
+    bus.subscribe(seen.append)
+    return bus, seen
+
+
+def test_pinned_mic_is_used_when_present(tmp_path, monkeypatch):
+    bus, seen = _bus()
+    s = _session(monkeypatch, tmp_path, mic_device="USB-микрофон",
+                 extras={2: _USB_MIC}, bus=bus)
+    assert s.tracks[1].device_name == "USB-микрофон"
+    assert s.tracks[0].device_name == "Колонки"  # вывод — системный
+    assert _fallbacks(seen) == []
+
+
+def test_unset_device_follows_system_even_if_others_exist(tmp_path, monkeypatch):
+    s = _session(monkeypatch, tmp_path, extras={2: _USB_MIC, 3: _HEADSET_LB})
+    assert s.tracks[1].device_name == "Микрофон"
+    assert s.tracks[0].device_name == "Колонки"
+
+
+def test_absent_pinned_mic_falls_back_to_system_and_says_so_once(tmp_path, monkeypatch):
+    bus, seen = _bus()
+    s = _session(monkeypatch, tmp_path, mic_device="USB-микрофон", bus=bus)
+    mic = s.tracks[1]
+    assert mic.device_name == "Микрофон"
+    texts = [e.data["text"] for e in seen if e.kind == events.LOG]
+    assert "Выбранный микрофон USB-микрофон не найден — запись идёт с системного" in texts
+    got = _fallbacks(seen)
+    assert len(got) == 1
+    assert got[0].data["role"] == "mic" and got[0].data["wanted"] == "USB-микрофон"
+    # перезапуск дорожек (стрим умер) — снова с системного, но без повтора
+    _FakePyAudio.streams[1].active = False
+    s.tick()
+    assert mic.stream is not None and mic.device_name == "Микрофон"
+    assert len(_fallbacks(seen)) == 1
+    log = (tmp_path / "record.log").read_text(encoding="utf-8")
+    assert log.count("не найден — запись идёт с системного") == 1
+
+
+def test_pinned_output_uses_its_loopback(tmp_path, monkeypatch):
+    s = _session(monkeypatch, tmp_path, output_device="Наушники",
+                 extras={3: _HEADSET_LB})
+    assert s.tracks[0].device_name == "Наушники [Loopback]"
+
+
+def test_absent_pinned_output_falls_back_with_its_own_text(tmp_path, monkeypatch):
+    bus, seen = _bus()
+    s = _session(monkeypatch, tmp_path, output_device="Наушники", bus=bus)
+    assert s.tracks[0].device_name == "Колонки"
+    texts = [e.data["text"] for e in seen if e.kind == events.LOG]
+    assert ("Выбранное устройство вывода Наушники не найдено — запись идёт с системного"
+            in texts)
+    assert _fallbacks(seen)[0].data["role"] == "output"
+
+
+def test_pinned_mic_ignores_default_change(tmp_path, monkeypatch):
+    """Закреплённый микрофон не дёргается от смены системного: перезапуск
+    рвал бы обе дорожки ради устройства, которое мы не используем."""
+    s = _session(monkeypatch, tmp_path, mic_device="USB-микрофон",
+                 extras={2: _USB_MIC})
+    opened = len(_FakePyAudio.streams)
+    _FakePyAudio.devices["capture"] = _dev("Наушники")
+    s.tick()
+    assert len(_FakePyAudio.streams) == opened
+    assert s.tracks[1].device_name == "USB-микрофон"
+    # а смена системного вывода по-прежнему переводит дорожку sys
+    _FakePyAudio.devices["render"] = _dev("Колонки-2")
+    s.tick()
+    assert s.tracks[0].device_name == "Колонки-2"
+    assert s.tracks[1].device_name == "USB-микрофон"  # закреплённый переоткрыт по имени
+
+
+def test_pinned_mic_unplugged_mid_recording_falls_back(tmp_path, monkeypatch):
+    bus, seen = _bus()
+    s = _session(monkeypatch, tmp_path, mic_device="USB-микрофон",
+                 extras={2: _USB_MIC}, bus=bus)
+    mic = s.tracks[1]
+    del _FakePyAudio.extras[2]  # выдернули
+    mic.stream.active = False
+    s.tick()
+    assert mic.stream is not None and mic.device_name == "Микрофон"
+    assert len(_fallbacks(seen)) == 1
+
+
+def test_fallback_track_follows_system_default(tmp_path, monkeypatch):
+    s = _session(monkeypatch, tmp_path, mic_device="USB-микрофон")
+    _FakePyAudio.devices["capture"] = _dev("Наушники")
+    s.tick()
+    assert s.tracks[1].device_name == "Наушники"
+
+
+def test_pinned_mic_returns_after_restart_when_plugged_back(tmp_path, monkeypatch):
+    s = _session(monkeypatch, tmp_path, mic_device="USB-микрофон")
+    assert s.tracks[1].device_name == "Микрофон"
+    _FakePyAudio.extras[2] = dict(_USB_MIC)  # подключили — Windows сменила дефолт
+    _FakePyAudio.devices["capture"] = _dev("USB-микрофон")
+    s.tick()
+    assert s.tracks[1].device_name == "USB-микрофон"
+    assert _FakePyAudio.streams[-1].device_index == 2  # по имени, а не дефолтом
+
+
+def test_record_passes_pinned_devices_to_session(tmp_path, monkeypatch):
+    _fake_audio(monkeypatch)
+    _FakePyAudio.extras = {2: dict(_USB_MIC)}
+    bus, seen = _bus()
+    ev = threading.Event()
+    ev.set()
+    record(str(tmp_path), stop_event=ev, bus=bus, mic_device="USB-микрофон")
+    started = next(e for e in seen if e.kind == events.RECORD_STARTED)
+    devices = {t["track"]: t["device"] for t in started.data["tracks"]}
+    assert devices["mic.opus"] == "USB-микрофон"
+
+
+def test_resolve_device_reports_fallback(monkeypatch):
+    _fake_audio(monkeypatch)
+    _FakePyAudio.extras = {2: dict(_USB_MIC), 3: dict(_HEADSET_LB)}
+    p = _FakePyAudio()
+    dev, fell_back = recorder.resolve_device(p, "mic", "USB-микрофон")
+    assert dev["name"] == "USB-микрофон" and fell_back is False
+    dev, fell_back = recorder.resolve_device(p, "mic", "Другой")
+    assert dev["name"] == "Микрофон" and fell_back is True
+    dev, fell_back = recorder.resolve_device(p, "mic", None)
+    assert dev["name"] == "Микрофон" and fell_back is False
+    dev, fell_back = recorder.resolve_device(p, "output", "Наушники")
+    assert dev["name"] == "Наушники [Loopback]" and fell_back is False
+    p.terminate()
+
+
+def test_wasapi_lists_inputs_and_outputs_with_defaults(monkeypatch):
+    """Для окна настроек: микрофоны без loopback'ов, выводы — устройства
+    воспроизведения; системные помечены."""
+    _fake_audio(monkeypatch)
+    _FakePyAudio.extras = {
+        2: dict(_USB_MIC),
+        3: dict(_HEADSET_LB),
+        4: {"name": "Наушники", "defaultSampleRate": 48000, "maxInputChannels": 0,
+            "maxOutputChannels": 2},
+    }
+    p = _FakePyAudio()
+    got = recorder.list_devices(p)
+    p.terminate()
+    assert {"name": "USB-микрофон", "default": False} in got["inputs"]
+    assert all("Loopback" not in d["name"] for d in got["inputs"])
+    assert {"name": "Наушники", "default": False} in got["outputs"]
+
+
+def test_record_reads_pinned_devices_from_settings(tmp_path, monkeypatch):
+    """Трей, CLI и TUI зовут record() без устройств — выбор берётся из
+    настроек на старте каждой записи («применится со следующей записи»)."""
+    from meet import settings
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "data"))
+    settings.patch({"recording": {"mic_device": {"name": "USB-микрофон"}}})
+    _fake_audio(monkeypatch)
+    _FakePyAudio.extras = {2: dict(_USB_MIC)}
+    bus, seen = _bus()
+    ev = threading.Event()
+    ev.set()
+    record(str(tmp_path / "rec"), stop_event=ev, bus=bus)
+    started = next(e for e in seen if e.kind == events.RECORD_STARTED)
+    devices = {t["track"]: t["device"] for t in started.data["tracks"]}
+    assert devices == {"sys.opus": "Колонки", "mic.opus": "USB-микрофон"}
+
+
+def test_pinned_output_matches_by_exact_name_only(tmp_path, monkeypatch):
+    """«Наушники» — не «Наушники 2»: по вхождению ищем только системное."""
+    other = {**_HEADSET_LB, "name": "Наушники 2 [Loopback]"}
+    s = _session(monkeypatch, tmp_path, output_device="Наушники", extras={3: other})
+    assert s.tracks[0].device_name == "Колонки"

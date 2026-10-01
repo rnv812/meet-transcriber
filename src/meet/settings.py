@@ -162,6 +162,17 @@ def as_path(value) -> Path | None:
     return Path(text) if text else None
 
 
+def as_device(value) -> str | None:
+    """Закреплённое аудио-устройство: `{"name": str}` (или просто строка —
+    правка руками). Индексы PortAudio меняются от запуска к запуску, поэтому
+    храним только имя. Пусто и мусор — None, то есть «как в системе»."""
+    if isinstance(value, dict):
+        value = value.get("name")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
 def _section(raw: dict, name: str) -> dict:
     section = raw.get(name)
     return section if isinstance(section, dict) else {}
@@ -278,6 +289,12 @@ class Recording:
     # Расшифровывать сразу после записи. Если ключа нет в сыром конфиге —
     # пользователь не решал, и дефолт вычисляет Settings.from_raw.
     auto_transcribe: bool = True
+    # Закреплённые устройства по имени: микрофон и устройство вывода (его звук
+    # пишется через WASAPI loopback — это голоса собеседников). None — «как в
+    # системе»: запись следует за дефолтными устройствами Windows и переживает
+    # их смену. Закреплённого нет — пишем с системного (см. recorder).
+    mic_device: str | None = None
+    output_device: str | None = None
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Recording":
@@ -287,6 +304,8 @@ class Recording:
             voices_dir=as_path(raw.get("voices_dir")),
             speaker_name=str(name).strip() if name and str(name).strip() else "Вы",
             auto_transcribe=as_flag(raw.get("auto_transcribe"), True),
+            mic_device=as_device(raw.get("mic_device")),
+            output_device=as_device(raw.get("output_device")),
         )
 
     def to_raw(self) -> dict:
@@ -295,6 +314,8 @@ class Recording:
             "voices_dir": str(self.voices_dir) if self.voices_dir else None,
             "speaker_name": self.speaker_name,
             "auto_transcribe": self.auto_transcribe,
+            "mic_device": {"name": self.mic_device} if self.mic_device else None,
+            "output_device": {"name": self.output_device} if self.output_device else None,
         }
 
     @property

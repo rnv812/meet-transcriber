@@ -32,7 +32,8 @@ IMPORTANT: токен принимается и в query-параметре `?to
     settings() -> dict                   текущие настройки как есть
     patch_settings(updates) -> dict      частичное обновление, возвращает новые
     processes() -> dict                  запущенные процессы для выбора клиента
-    devices() -> dict                    какие устройства увидит запись
+    devices() -> dict                    микрофоны и выводы для настроек «Звук»
+    test_device(body) -> dict            ~2 с с устройства → пик (409 при записи)
     recordings(limit, q) -> dict         библиотека записей (q — поиск)
     delete_recording(id) -> dict         удалить запись
     get_hotwords() / put_hotwords(body)  список слов распознавания
@@ -640,6 +641,7 @@ _ROUTES = {
     ("GET", "/settings"): lambda h, p: _server_of(h).state.settings(),
     ("GET", "/processes"): lambda h, p: _server_of(h).state.processes(),
     ("GET", "/devices"): lambda h, p: _server_of(h).state.devices(),
+    ("POST", "/devices/test"): lambda h, p: _server_of(h).state.test_device(h._body()),
     ("PATCH", "/settings"): lambda h, p: _server_of(h).state.patch_settings(h._body()),
     ("POST", "/recording/start"): lambda h, p: _server_of(h).state.start_recording(),
     ("POST", "/recording/stop"): lambda h, p: _server_of(h).state.stop_recording(),

@@ -505,3 +505,52 @@ def test_patch_llm_proxy_saved_and_validated(tmp_path):
     with pytest.raises(ValueError, match="порта"):
         settings.patch({"llm": {"proxy": "http://127.0.0.1"}}, f)
     assert settings.load(f).llm.proxy == "socks5://127.0.0.1:1080"
+
+
+# --- звук: закреплённые микрофон и устройство вывода ---
+
+
+def test_audio_devices_default_to_system(tmp_path):
+    cfg = settings.load(tmp_path / "нет.json")
+    assert cfg.recording.mic_device is None
+    assert cfg.recording.output_device is None
+    raw = cfg.recording.to_raw()
+    assert raw["mic_device"] is None and raw["output_device"] is None
+
+
+def test_audio_devices_are_stored_by_name(tmp_path):
+    f = tmp_path / "config.json"
+    _write(f, {"recording": {"mic_device": {"name": "USB-микрофон"},
+                             "output_device": {"name": "Наушники"}}})
+    cfg = settings.load(f)
+    assert cfg.recording.mic_device == "USB-микрофон"
+    assert cfg.recording.output_device == "Наушники"
+    assert cfg.recording.to_raw()["mic_device"] == {"name": "USB-микрофон"}
+
+
+@pytest.mark.parametrize("junk", [42, {"name": ""}, {"name": "  "}, {}, [], "", {"name": 5}])
+def test_audio_device_garbage_means_system(tmp_path, junk):
+    f = tmp_path / "config.json"
+    _write(f, {"recording": {"mic_device": junk}})
+    assert settings.load(f).recording.mic_device is None
+
+
+def test_audio_device_plain_string_is_accepted(tmp_path):
+    """Правка руками: имя строкой вместо {"name": ...} — тоже выбор устройства."""
+    f = tmp_path / "config.json"
+    _write(f, {"recording": {"mic_device": "USB-микрофон"}})
+    assert settings.load(f).recording.mic_device == "USB-микрофон"
+
+
+def test_patch_pins_and_unpins_audio_device(tmp_path):
+    f = tmp_path / "config.json"
+    _write(f, {"recording": {"speaker_name": "Пётр"}})
+    cfg = settings.patch({"recording": {"mic_device": {"name": "USB-микрофон"}}}, f)
+    assert cfg.recording.mic_device == "USB-микрофон"
+    assert cfg.recording.speaker_name == "Пётр"  # соседнее поле не потеряно
+    raw = json.loads(f.read_text(encoding="utf-8"))
+    assert raw["recording"]["mic_device"] == {"name": "USB-микрофон"}
+    cfg = settings.patch({"recording": {"mic_device": None}}, f)
+    assert cfg.recording.mic_device is None
+    assert settings.load(f).recording.mic_device is None
+

@@ -1,0 +1,141 @@
+"""Подпроцесс устройств: список для настроек и короткая проверка уровня.
+
+Настоящий звук не открывается — PyAudio подменён фейком; `sleep` проверки
+подменён впрыском буфера в callback, как это делает PortAudio."""
+
+import json
+import struct
+from types import SimpleNamespace
+
+import pytest
+
+import meet.recorder as recorder
+from meet import devices_probe
+
+
+class _Stream:
+    def __init__(self, callback):
+        self.callback = callback
+        self.stopped = self.closed = False
+
+    def stop_stream(self):
+        self.stopped = True
+
+    def close(self):
+        self.closed = True
+
+
+class _PA:
+    """WASAPI: 0 — колонки, 1 — микрофон (системные), 2 — USB-микрофон,
+    3 — loopback колонок, 4 — наушники, 5 — loopback наушников."""
+
+    DEVICES = {
+        0: {"name": "Колонки", "maxInputChannels": 0, "maxOutputChannels": 2},
+        1: {"name": "Микрофон", "maxInputChannels": 1, "maxOutputChannels": 0},
+        2: {"name": "USB-микрофон", "maxInputChannels": 1, "maxOutputChannels": 0},
+        3: {"name": "Колонки [Loopback]", "maxInputChannels": 2, "isLoopbackDevice": True},
+        4: {"name": "Наушники", "maxInputChannels": 0, "maxOutputChannels": 2},
+        5: {"name": "Наушники [Loopback]", "maxInputChannels": 2, "isLoopbackDevice": True},
+    }
+    instances: list = []
+
+    def __init__(self):
+        self.opened = []
+        self.terminated = False
+        type(self).instances.append(self)
+
+    def get_host_api_info_by_type(self, t):
+        return {"index": 0, "defaultOutputDevice": 0, "defaultInputDevice": 1}
+
+    def get_device_count(self):
+        return len(self.DEVICES)
+
+    def get_device_info_by_index(self, i):
+        return {"index": i, "hostApi": 0, "defaultSampleRate": 48000,
+                "isLoopbackDevice": False, **self.DEVICES[i]}
+
+    def get_loopback_device_info_generator(self):
+        for i in self.DEVICES:
+            info = self.get_device_info_by_index(i)
+            if info["isLoopbackDevice"]:
+                yield info
+
+    def open(self, **kw):
+        stream = _Stream(kw["stream_callback"])
+        self.opened.append((kw["input_device_index"], stream))
+        return stream
+
+    def terminate(self):
+        self.terminated = True
+
+
+@pytest.fixture
+def fake_pa(monkeypatch):
+    _PA.instances = []
+    monkeypatch.setattr(recorder, "pyaudio", SimpleNamespace(
+        PyAudio=_PA, paWASAPI=13, paInt16=8, paContinue=0, paAbort=2))
+    return _PA
+
+
+def test_probe_lists_inputs_and_outputs_with_defaults(fake_pa):
+    got = devices_probe.probe()
+    assert got["available"] is True
+    assert got["inputs"] == [{"name": "Микрофон", "default": True},
+                             {"name": "USB-микрофон", "default": False}]
+    assert got["outputs"] == [{"name": "Колонки", "default": True},
+                              {"name": "Наушники", "default": False}]
+    # прежние поля — для старого окна
+    assert got["system"]["name"] == "Колонки [Loopback]"
+    assert got["mic"]["name"] == "Микрофон"
+    assert fake_pa.instances[0].terminated
+
+
+def _loud(pa_holder):
+    """sleep проверки: пока «идёт запись», впрыскиваем буфер с пиком 0.5."""
+    def sleep(_seconds):
+        _, stream = pa_holder.instances[-1].opened[-1]
+        stream.callback(struct.pack("<4h", 0, 16384, -100, 200), 4, None, 0)
+    return sleep
+
+
+def test_check_level_of_pinned_mic(fake_pa):
+    got = devices_probe.check_level("mic", "USB-микрофон", seconds=2, sleep=_loud(fake_pa))
+    assert got == {"ok": True, "peak": 0.5, "device": "USB-микрофон", "fallback": False}
+    index, stream = fake_pa.instances[0].opened[0]
+    assert index == 2 and stream.closed
+    assert fake_pa.instances[0].terminated
+
+
+def test_check_level_of_output_records_its_loopback(fake_pa):
+    got = devices_probe.check_level("output", "Наушники", seconds=2, sleep=_loud(fake_pa))
+    assert fake_pa.instances[0].opened[0][0] == 5
+    assert got["device"] == "Наушники"  # без технического « [Loopback]»
+    assert got["fallback"] is False
+
+
+def test_check_level_of_system_device_and_missing_one(fake_pa):
+    got = devices_probe.check_level("mic", None, seconds=2, sleep=lambda s: None)
+    assert got == {"ok": True, "peak": 0.0, "device": "Микрофон", "fallback": False}
+    got = devices_probe.check_level("mic", "Чужой", seconds=2, sleep=lambda s: None)
+    assert got["device"] == "Микрофон" and got["fallback"] is True
+
+
+def test_main_prints_one_json_line(fake_pa, capsys, monkeypatch):
+    monkeypatch.setattr(devices_probe.time, "sleep", lambda s: None)
+    assert devices_probe.main(["--check", "mic", "--name", "USB-микрофон",
+                               "--seconds", "0.1"]) == 0
+    line = capsys.readouterr().out.strip().splitlines()
+    assert len(line) == 1 and json.loads(line[0])["device"] == "USB-микрофон"
+
+
+def test_main_reports_errors_as_json(monkeypatch, capsys):
+    def boom():
+        raise OSError("нет WASAPI")
+
+    monkeypatch.setattr(recorder, "pyaudio", SimpleNamespace(PyAudio=boom, paWASAPI=13))
+    assert devices_probe.main([]) == 0
+    got = json.loads(capsys.readouterr().out.strip())
+    assert got["available"] is False and "нет WASAPI" in got["error"]
+    assert devices_probe.main(["--check", "mic"]) == 0
+    got = json.loads(capsys.readouterr().out.strip())
+    assert got["ok"] is False and "нет WASAPI" in got["error"]

@@ -178,3 +178,12 @@ test("recheckHf: тот же предел 15 секунд, что и у сохр
     vi.useRealTimers();
   }
 });
+
+test("testDevice: POST /devices/test {kind, name}; null — системное", async () => {
+  const f = okFetch();
+  await api.testDevice(ep, "mic", "USB-микрофон");
+  expect(f.mock.calls[0]![0]).toBe("http://h/devices/test");
+  expect(f.mock.calls[0]![1]).toMatchObject({ method: "POST", body: JSON.stringify({ kind: "mic", name: "USB-микрофон" }) });
+  await api.testDevice(ep, "output", null);
+  expect(f.mock.calls[1]![1]).toMatchObject({ body: JSON.stringify({ kind: "output", name: null }) });
+});

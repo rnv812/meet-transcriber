@@ -150,6 +150,10 @@ class WallClockWriter:
         return True
 
 
+# «Взять из настроек» — отличается от None («системное устройство»).
+_FROM_SETTINGS = object()
+
+
 class LiveEngine:
     """Движок живого режима: callback пишет дорожки и копит аудио в буферы,
     рабочий поток окнами расшифровывает и дописывает live_transcript.md.
@@ -164,13 +168,23 @@ class LiveEngine:
     def __init__(self, out_dir, transcriber, window_seconds: float = 20.0,
                  hotwords: str | None = None, clock=None,
                  on_line=None, voice_matcher=None, speaker_name=None,
-                 on_entry=None, out_root=None) -> None:
+                 on_entry=None, out_root=None, mic_device=_FROM_SETTINGS,
+                 output_device=_FROM_SETTINGS) -> None:
         # Имя владельца микрофона — из настроек, как и в офлайн-проходе, чтобы
-        # живая лента и точный транскрипт называли человека одинаково.
-        if speaker_name is None:
+        # живая лента и точный транскрипт называли человека одинаково. Оттуда
+        # же — выбранные микрофон и устройство вывода (None — системные).
+        if speaker_name is None or _FROM_SETTINGS in (mic_device, output_device):
             from meet import settings
 
-            speaker_name = settings.load().recording.speaker_name
+            recording = settings.load().recording
+            if speaker_name is None:
+                speaker_name = recording.speaker_name
+            if mic_device is _FROM_SETTINGS:
+                mic_device = recording.mic_device
+            if output_device is _FROM_SETTINGS:
+                output_device = recording.output_device
+        self.mic_device = mic_device
+        self.output_device = output_device
         self.SPEAKERS = {**LiveEngine.SPEAKERS, "mic.wav": speaker_name}
         self.out_dir = Path(out_dir)
         self._transcriber = transcriber
@@ -325,7 +339,8 @@ class LiveEngine:
     def _start_capture(self) -> None:
         import pyaudiowpatch as pyaudio
 
-        from meet.recorder import OpusWriter, _find_loopback
+        from meet import recorder
+        from meet.recorder import OpusWriter
 
         self._transcriber.load()
         if self._matcher is not None:
@@ -334,10 +349,18 @@ class LiveEngine:
         # сбой на загрузке не оставляют пустую датированную папку.
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self._p = pyaudio.PyAudio()
-        wasapi = self._p.get_host_api_info_by_type(pyaudio.paWASAPI)
+        # Выбранное в настройках — по имени; нет его — системное, с одной
+        # строкой об этом (живой режим, в отличие от записи, устройство на
+        # ходу не меняет).
+        picked = []
+        for kind, wanted in (("output", self.output_device), ("mic", self.mic_device)):
+            dev, fell_back = recorder.resolve_device(self._p, kind, wanted)
+            if fell_back:
+                print(recorder.fallback_text(kind, wanted))
+            picked.append(dev)
         devices = (
-            (_find_loopback(self._p), "sys.wav", True, True),
-            (self._p.get_device_info_by_index(wasapi["defaultInputDevice"]), "mic.wav", False, False),
+            (picked[0], "sys.wav", True, True),
+            (picked[1], "mic.wav", False, False),
         )
         # Начало координат ленты — старт захвата: окно N покрывает
         # [tick_{N-1}, tick_N] от него, как и дорожки на диске.

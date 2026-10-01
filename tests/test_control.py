@@ -74,7 +74,15 @@ class FakeState:
 
     def devices(self) -> dict:
         return {"available": True, "system": {"name": "Колонки"},
-                "mic": {"name": "Микрофон"}, "pinning": False}
+                "mic": {"name": "Микрофон"}, "pinning": True,
+                "inputs": [{"name": "Микрофон", "default": True}],
+                "outputs": [{"name": "Колонки", "default": True}]}
+
+    def test_device(self, body):
+        if self.recording:
+            raise control.Conflict("Идёт запись — проверка устройства недоступна")
+        self.calls.append(("device-test", body))
+        return {"ok": True, "peak": 0.5, "device": body.get("name") or "Микрофон"}
 
     def update_recording(self, rid, body):
         self.calls.append(("update", rid, body))
@@ -657,9 +665,20 @@ def test_processes_endpoint(server):
 def test_devices_endpoint(server):
     got = _get(server, "/devices")
     assert got["system"]["name"] == "Колонки"
-    # закрепление устройства сознательно не поддерживается: запись следит за
-    # дефолтными endpoint'ами и переживает их смену
-    assert got["pinning"] is False
+    assert got["pinning"] is True
+    assert got["inputs"] == [{"name": "Микрофон", "default": True}]
+
+
+def test_device_test_endpoint(server):
+    got = _post(server, "/devices/test", {"kind": "mic", "name": "USB-микрофон"})
+    assert got["peak"] == 0.5 and got["device"] == "USB-микрофон"
+    assert ("device-test", {"kind": "mic", "name": "USB-микрофон"}) in server.state.calls
+
+
+def test_device_test_refused_while_recording(server):
+    server.state.recording = True
+    got = _post(server, "/devices/test", {"kind": "mic", "name": None}, expect=409)
+    assert "Идёт запись" in got["error"]
 
 
 def test_client_disconnect_is_not_an_error(server, monkeypatch):
