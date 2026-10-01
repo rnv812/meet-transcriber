@@ -6,15 +6,18 @@ import { RecordingsList } from "../features/recordings/RecordingsList";
 import { VoicesPane } from "../features/voices/VoicesPane";
 import { SettingsPane } from "../features/settings/SettingsPane";
 import { RecordingCard } from "../features/card/RecordingCard";
-import { initialRecording, onOpenRecording } from "../lib/shell";
+import { initialRecording, initialSection, onOpenRecording, onOpenSection } from "../lib/shell";
 import { EmptyState, OfflineState } from "../ui/EmptyState";
 import { Nav, type Section } from "./Nav";
 import { RecordingBadge } from "./RecordingBadge";
 
 export function App() {
-  const [section, setSection] = useState<Section>("recordings");
-  /** Раздел настроек, куда просили перейти (карточка: «Открыть настройки»). */
-  const [settingsPart, setSettingsPart] = useState<string | undefined>(undefined);
+  /** Раздел настроек, куда просили перейти: адрес `?section=`, событие оболочки, карточка. */
+  const [settingsPart, setSettingsPart] = useState<{ part: string; n: number } | undefined>(() => {
+    const part = initialSection();
+    return part ? { part, n: 0 } : undefined;
+  });
+  const [section, setSection] = useState<Section>(() => (settingsPart ? "settings" : "recordings"));
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<string | null>(() => initialRecording());
   const resident = useResident();
@@ -24,7 +27,11 @@ export function App() {
 
   const openRecording = (id: string) => { setSelected(id); setSection("recordings"); };
   const select = (s: Section) => { setSettingsPart(undefined); setSection(s); };
-  const openSettings = (part: string) => { setSettingsPart(part); setSection("settings"); };
+  // Номер растёт с каждой просьбой: повторная возвращает в раздел, даже если он уже запрошен.
+  const openSettings = (part: string) => {
+    setSettingsPart((cur) => ({ part, n: (cur?.n ?? 0) + 1 }));
+    setSection("settings");
+  };
 
   // В «Голоса» — со свежей базой: её меняют и расшифровки, и карточки записей.
   useEffect(() => {
@@ -38,6 +45,19 @@ export function App() {
     onOpenRecording((id) => { setSelected(id); setSection("recordings"); })
       .then((off) => { if (gone) off(); else unlisten = off; })
       .catch((cause) => console.warn("open-recording:", cause));
+    return () => { gone = true; unlisten?.(); };
+  }, []);
+
+  // Оболочка просит раздел настроек (окно уже открыто — иначе пришло бы `?section=`).
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let gone = false;
+    onOpenSection((part) => {
+      setSettingsPart((cur) => ({ part, n: (cur?.n ?? 0) + 1 }));
+      setSection("settings");
+    })
+      .then((off) => { if (gone) off(); else unlisten = off; })
+      .catch((cause) => console.warn("open-section:", cause));
     return () => { gone = true; unlisten?.(); };
   }, []);
 
@@ -77,7 +97,7 @@ export function App() {
               />
             ) : section === "settings" && resident.endpoint ? (
               <SettingsPane endpoint={resident.endpoint} recordingsDir={resident.snapshot?.recordings_dir ?? null}
-                initial={settingsPart} />
+                initial={settingsPart?.part} initialTick={settingsPart?.n} />
             ) : selected && resident.endpoint ? (
               <RecordingCard
                 key={selected}

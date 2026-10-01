@@ -18,13 +18,20 @@ vi.mock("../features/card/RecordingCard", () => ({
 }));
 vi.mock("../features/voices/VoicesPane", () => ({ VoicesPane: () => <div data-testid="voices" /> }));
 vi.mock("../features/settings/SettingsPane", () => ({
-  SettingsPane: ({ initial }: { initial?: string }) => <div data-testid="settings" data-initial={initial ?? ""} />,
+  SettingsPane: ({ initial, initialTick }: { initial?: string; initialTick?: number }) => (
+    <div data-testid="settings" data-initial={initial ?? ""} data-tick={initialTick ?? ""} />
+  ),
 }));
 const openCb = vi.hoisted(() => ({ current: null as ((id: string) => void) | null }));
+const sectionCb = vi.hoisted(() => ({ current: null as ((s: string) => void) | null }));
 vi.mock("../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../lib/shell")>()),
   onOpenRecording: vi.fn(async (cb: (id: string) => void) => {
     openCb.current = cb;
+    return () => {};
+  }),
+  onOpenSection: vi.fn(async (cb: (s: string) => void) => {
+    sectionCb.current = cb;
     return () => {};
   }),
 }));
@@ -35,6 +42,7 @@ const online = () => ({ status: "online", endpoint: ep, snapshot: null, lastEven
 beforeEach(() => {
   residentState.current = { status: "offline" };
   openCb.current = null;
+  sectionCb.current = null;
   window.history.replaceState({}, "", "/");
   useLibrarySpy.mockReset();
   useLibrarySpy.mockReturnValue({ items: [], jobs: [], loading: false, error: null, refresh: async () => {} });
@@ -118,4 +126,25 @@ test("карточка просит настройки «Ассистент» �
   await userEvent.click(screen.getByText("Записи"));
   await userEvent.click(screen.getByText("Настройки"));
   expect(screen.getByTestId("settings")).toHaveAttribute("data-initial", "");
+});
+
+test("?section=assistant в адресе — открыты настройки «Ассистент», запись из адреса не теряется", async () => {
+  residentState.current = online();
+  window.history.replaceState({}, "", "/?recording=abc&section=assistant");
+  render(<App />);
+  expect(screen.getByTestId("settings")).toHaveAttribute("data-initial", "assistant");
+  await userEvent.click(screen.getByText("Записи"));
+  expect(screen.getByTestId("card")).toHaveTextContent("abc");
+});
+
+test("событие open-section открывает настройки на нужной секции — и повторно тоже", async () => {
+  residentState.current = online();
+  render(<App />);
+  await vi.waitFor(() => expect(sectionCb.current).not.toBeNull());
+  act(() => sectionCb.current!("assistant"));
+  const pane = screen.getByTestId("settings");
+  expect(pane).toHaveAttribute("data-initial", "assistant");
+  const tick = pane.getAttribute("data-tick");
+  act(() => sectionCb.current!("assistant"));
+  expect(screen.getByTestId("settings").getAttribute("data-tick")).not.toBe(tick);
 });

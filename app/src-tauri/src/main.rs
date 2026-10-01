@@ -45,6 +45,7 @@ fn main() {
             windows::open_folder,
             windows::save_text,
             windows::pick_media,
+            windows::pick_folder,
             windows::resident_status,
             windows::live_resize
         ])

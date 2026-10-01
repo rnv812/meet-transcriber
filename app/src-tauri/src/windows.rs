@@ -356,6 +356,25 @@ pub async fn pick_media(app: AppHandle) -> Result<Option<String>, String> {
     .map_err(|error| error.to_string())?
 }
 
+/// Диалог выбора папки (настройки ассистента: база знаний, заметки). `start`
+/// — откуда начать, если такая папка есть. `None` — отказ.
+#[tauri::command]
+pub async fn pick_folder(app: AppHandle, start: Option<String>) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = app.dialog().file();
+        if let Some(dir) = start.filter(|dir| Path::new(dir).is_dir()) {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(chosen) = dialog.blocking_pick_folder() else {
+            return Ok(None);
+        };
+        let path = chosen.into_path().map_err(|error| error.to_string())?;
+        Ok(Some(path.to_string_lossy().into_owned()))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub fn resident_status(app: AppHandle) -> String {
     match app.state::<Supervisor>().status() {

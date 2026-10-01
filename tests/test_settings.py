@@ -391,3 +391,27 @@ def test_patch_assistant_section(tmp_path):
     updated = settings.patch({"assistant": {"notes_subdir": "Заметки"}}, f)
     assert updated.assistant.notes_subdir == "Заметки"
     assert settings.load(f).assistant.notes_subdir == "Заметки"
+
+
+def test_patch_takes_what_the_assistant_settings_window_sends(tmp_path):
+    """Раздел «Ассистент» шлёт только изменённые ключи llm/assist/assistant;
+    явный null очищает папку и имя локальной модели, соседние ключи целы."""
+    f = tmp_path / "config.json"
+    settings.patch({"llm": {"provider": "codex", "local_model": "qwen3"},
+                    "assistant": {"knowledge_dir": str(tmp_path)}}, f)
+    updated = settings.patch({
+        "llm": {"provider": "openai-compatible", "local_model": None,
+                "base_url": "http://127.0.0.1:11434/v1"},
+        "assist": {"window_seconds": 30},
+        "assistant": {"knowledge_dir": None, "notes_dir": str(tmp_path)},
+    }, f)
+    loaded = settings.load(f)
+    assert loaded == updated
+    assert loaded.llm.provider == "openai-compatible"
+    assert loaded.llm.local_model is None
+    assert loaded.llm.base_url == "http://127.0.0.1:11434/v1"
+    assert loaded.llm.model == "sonnet"
+    assert loaded.assist.window_seconds == 30.0
+    assert loaded.assistant.knowledge_dir is None
+    assert loaded.assistant.notes_dir == tmp_path
+    assert loaded.assistant.notes_subdir == "Встречи"

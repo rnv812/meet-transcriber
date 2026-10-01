@@ -17,6 +17,7 @@ import { inTauri, openFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { About } from "./About";
+import { AssistantSection, assistantChangesInvalid } from "./AssistantSection";
 import { DiagnosticsPane } from "./DiagnosticsPane";
 import { EnginePane } from "./EnginePane";
 import { HotwordsEditor } from "./HotwordsEditor";
@@ -24,13 +25,14 @@ import { ModelsPane } from "./ModelsPane";
 import { Radio, Row, Switch, type Raw, type SetFn } from "./Section";
 import "./settings.css";
 
-type SectionId = "recording" | "auto" | "asr" | "engine" | "diagnostics" | "about" | "advanced";
+type SectionId = "recording" | "auto" | "asr" | "engine" | "assistant" | "diagnostics" | "about" | "advanced";
 
 const MENU: { id: SectionId; title: string }[] = [
   { id: "recording", title: "Запись и устройства" },
   { id: "auto", title: "Автозапись" },
   { id: "asr", title: "Распознавание" },
   { id: "engine", title: "Движок и модели" },
+  { id: "assistant", title: "Ассистент" },
   { id: "diagnostics", title: "Диагностика" },
   { id: "about", title: "О программе" },
   { id: "advanced", title: "Дополнительно" },
@@ -210,11 +212,13 @@ function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
   );
 }
 
-export function SettingsPane({ endpoint, recordingsDir, initial }: {
+export function SettingsPane({ endpoint, recordingsDir, initial, initialTick }: {
   endpoint: Endpoint;
   recordingsDir: string | null;
   /** Открыть сразу этот раздел (id из MENU); неизвестный — с первого. */
   initial?: string;
+  /** Новый номер — снова перейти в `initial` (повторная просьба оболочки или карточки). */
+  initialTick?: number;
 }) {
   const [section, setSection] = useState<SectionId>(
     () => MENU.find((m) => m.id === initial)?.id ?? "recording");
@@ -243,6 +247,12 @@ export function SettingsPane({ endpoint, recordingsDir, initial }: {
 
   useEffect(() => { void reload(); }, [reload]);
 
+  // Повторная просьба открыть раздел (новый `initialTick`) — даже если он уже был запрошен.
+  useEffect(() => {
+    const asked = MENU.find((m) => m.id === initial)?.id;
+    if (asked) setSection(asked);
+  }, [initial, initialTick]);
+
   const set: SetFn = (group, key, value) => {
     setNotice(null);
     setDraft((cur) => ({ ...cur, [group]: { ...(cur[group] ?? {}), [key]: value } }));
@@ -260,9 +270,10 @@ export function SettingsPane({ endpoint, recordingsDir, initial }: {
     }
   }
   const dirty = Object.keys(changes);
+  const invalid = assistantChangesInvalid(changes);
 
   const save = async () => {
-    if (dirty.length === 0) return;
+    if (dirty.length === 0 || invalid) return;
     setPending(true);
     try {
       const result = await patchSettings(endpoint, changes);
@@ -312,7 +323,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial }: {
               {notice && <span className="notice">{notice}</span>}
               {dirty.length > 0 && <span className="muted">есть несохранённое</span>}
               <Button onClick={() => void reload()} disabled={pending}>Сбросить</Button>
-              <Button variant="primary" onClick={() => void save()} disabled={pending || dirty.length === 0}>
+              <Button variant="primary" onClick={() => void save()} disabled={pending || dirty.length === 0 || invalid}>
                 {pending ? "Сохраняю…" : "Сохранить"}
               </Button>
             </div>
@@ -338,6 +349,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial }: {
                 token={String(draft.integrations?.hf_token ?? "")}
                 onToken={(x) => set("integrations", "hf_token", x)} />
             </>
+          ) : section === "assistant" ? (
+            <AssistantSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint} />
           ) : section === "diagnostics" ? (
             <DiagnosticsPane endpoint={endpoint} />
           ) : section === "about" ? (

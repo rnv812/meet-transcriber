@@ -36,6 +36,15 @@ export async function pickMedia(): Promise<string | null> {
   return invoke<string | null>("pick_media");
 }
 
+/**
+ * Диалог выбора папки (`start` — откуда начать). null — отказ. В браузере (dev)
+ * диалога нет — путь вводится руками.
+ */
+export async function pickFolder(start?: string | null): Promise<string | null> {
+  if (!inTauri()) return window.prompt("Путь к папке", start ?? "")?.trim() || null;
+  return invoke<string | null>("pick_folder", { start: start ?? null });
+}
+
 /** Оболочка просит открыть запись (клик по уведомлению). */
 export async function onOpenRecording(cb: (id: string) => void): Promise<() => void> {
   if (!inTauri()) return () => {};
@@ -45,4 +54,16 @@ export async function onOpenRecording(cb: (id: string) => void): Promise<() => v
 
 export function initialRecording(): string | null {
   return new URLSearchParams(window.location.search).get("recording");
+}
+
+/** Оболочка просит открыть раздел настроек (`assistant` — «Ассистент»). */
+export async function onOpenSection(cb: (section: string) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<string>("open-section", (e) => cb(e.payload));
+}
+
+/** Раздел настроек из адреса окна (`?section=assistant`). */
+export function initialSection(): string | null {
+  return new URLSearchParams(window.location.search).get("section");
 }
