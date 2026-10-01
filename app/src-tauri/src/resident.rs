@@ -79,7 +79,7 @@ pub fn read_endpoint() -> Option<Endpoint> {
     Some(Endpoint { port, token })
 }
 
-fn answers(endpoint: &Endpoint) -> bool {
+pub(crate) fn answers(endpoint: &Endpoint) -> bool {
     let address = std::net::SocketAddr::from(([127, 0, 0, 1], endpoint.port));
     TcpStream::connect_timeout(&address, Duration::from_millis(400)).is_ok()
 }
@@ -696,6 +696,9 @@ impl Supervisor {
     fn watch_external(&self, generation: u64, app_version: &str) {
         let mut misses = 0;
         let mut waiting = false;
+        // Резидент своей версии (порт и токен его публикации) больше не
+        // проверяем: версия живого процесса не меняется.
+        let mut kept: Option<(u16, String)> = None;
         loop {
             thread::sleep(EXTERNAL_POLL);
             if !self.current(generation) {
@@ -710,6 +713,10 @@ impl Supervisor {
             let Some(endpoint) = endpoint else {
                 continue;
             };
+            let identity = (endpoint.port, endpoint.token.clone());
+            if kept.as_ref() == Some(&identity) {
+                continue;
+            }
             let client = api::Client::new(&endpoint);
             let Ok(state) = client.get_state() else {
                 continue;
@@ -720,7 +727,10 @@ impl Supervisor {
                 .unwrap_or("0.1.0 или раньше")
                 .to_string();
             match upgrade::external_version(&state, app_version) {
-                upgrade::ExternalVersion::Keep => waiting = false,
+                upgrade::ExternalVersion::Keep => {
+                    waiting = false;
+                    kept = Some(identity);
+                }
                 upgrade::ExternalVersion::WaitIdle => {
                     if !waiting {
                         shell_log!(

@@ -180,7 +180,7 @@ pub enum ExternalVersion {
 pub fn external_version(state: &Value, app_version: &str) -> ExternalVersion {
     match state.get("version") {
         Some(Value::Null) => return ExternalVersion::Keep,
-        Some(Value::String(version)) if version.trim() == app_version => {
+        Some(Value::String(version)) if crate::updater::same_version(version, app_version) => {
             return ExternalVersion::Keep
         }
         _ => {}
@@ -344,6 +344,13 @@ mod tests {
         // Резидент из исходников без пакета: версию не узнать — не трогаем.
         let source = json!({"version": null, "status": "idle"});
         assert_eq!(external_version(&source, "0.1.1"), ExternalVersion::Keep);
+        // Версия пакета Python (PEP 440) против версии приложения (semver).
+        let python = json!({"version": "0.2.0rc1", "status": "idle"});
+        assert_eq!(
+            external_version(&python, "0.2.0-rc1"),
+            ExternalVersion::Keep
+        );
+        assert_eq!(external_version(&python, "0.2.0"), ExternalVersion::Replace);
     }
 
     #[test]

@@ -22,7 +22,9 @@
 
   -Installer проверяет сгенерированный installer.nsi на то, на что опирается
   MeetGuiInit (hooks.nsh): переменная шаблона ReinstallPageCheck и выбор
-  второго варианта, когда она равна 2. Другой шаблон Tauri — сборка падает,
+  второго варианта, когда она равна 2; для обновления и для отката второй
+  вариант — «не удалять» (поставить поверх), откат разрешён
+  (ALLOWDOWNGRADES). Другой шаблон Tauri — сборка падает,
   а не выпускает установщик, который по умолчанию запускает деинсталлятор.
 
 .PARAMETER Path
@@ -76,6 +78,9 @@ function Find-MissingUpgradeHooks([string]$Text) {
         'выбор второго варианта при 2'           = '\$\{If\}\s+\$ReinstallPageCheck\s+<>\s+2'
         'обновление: второй вариант — dontUninstall' = '(?s)\$\{ElseIf\}\s+\$R0\s+=\s+1\s+StrCpy\s+\$R1\s+"\$\(olderOrUnknownVersionInstalled\)"\s+StrCpy\s+\$R2\s+"\$\(uninstallBeforeInstalling\)"\s+StrCpy\s+\$R3\s+"\$\(dontUninstall\)"'
         'обновление поверх без деинсталлятора'   = '(?s)\$\{ElseIf\}\s+\$R0\s+=\s+1\s+;[^\r\n]*\s+\$\{If\}\s+\$R1\s+=\s+1\s+;[^\r\n]*\s+Goto\s+reinst_uninstall\s+\$\{Else\}\s+Goto\s+reinst_done'
+        'откат: второй вариант — dontUninstall'  = '(?s)\$\{ElseIf\}\s+\$R0\s+=\s+-1\s+StrCpy\s+\$R1\s+"\$\(newerVersionInstalled\)"\s+StrCpy\s+\$R2\s+"\$\(uninstallBeforeInstalling\)"\s+!if\s+"\$\{ALLOWDOWNGRADES\}"\s+==\s+"true"\s+StrCpy\s+\$R3\s+"\$\(dontUninstall\)"'
+        'откат поверх без деинсталлятора'        = '(?s)\$\{ElseIf\}\s+\$R0\s+=\s+-1\s+;[^\r\n]*\s+\$\{If\}\s+\$R1\s+=\s+1\s+;[^\r\n]*\s+Goto\s+reinst_uninstall\s+\$\{Else\}\s+Goto\s+reinst_done'
+        'откат разрешён'                          = '(?m)^!define\s+ALLOWDOWNGRADES\s+"true"'
         'хуки meet подключены'                   = '(?m)^!include\s+"[^"]*hooks\.nsh"'
     }
     $missing = @()
@@ -145,12 +150,28 @@ Page custom PageReinstall PageLeaveReinstall
       Goto reinst_uninstall
     ${Else}
       Goto reinst_done         ; User chose NOT to uninstall
+  ${ElseIf} $R0 = -1
+    StrCpy $R1 "$(newerVersionInstalled)"
+    StrCpy $R2 "$(uninstallBeforeInstalling)"
+    !if "${ALLOWDOWNGRADES}" == "true"
+      StrCpy $R3 "$(dontUninstall)"
+  ${ElseIf} $R0 = -1 ; Downgrading
+    ${If} $R1 = 1              ; User chose to uninstall
+      Goto reinst_uninstall
+    ${Else}
+      Goto reinst_done         ; User chose NOT to uninstall
+!define ALLOWDOWNGRADES "true"
 !include "D:\x\windows\hooks.nsh"
 '@
     $missing = Find-MissingUpgradeHooks $page
     if ($missing.Count -ne 0) { $failures += "шаблон: не нашлось $($missing -join ', ')" }
     $changed = $page.Replace('<> 2', '= 1')
     if ((Find-MissingUpgradeHooks $changed).Count -ne 1) { $failures += 'шаблон: смена условия не замечена' }
+    $noDowngrade = $page.Replace('!define ALLOWDOWNGRADES "true"', '!define ALLOWDOWNGRADES "false"')
+    if ((Find-MissingUpgradeHooks $noDowngrade).Count -ne 1) { $failures += 'шаблон: запрет отката не замечен' }
+    $swapped = $page.Replace("  `${ElseIf} `$R0 = -1 ; Downgrading`r`n    `${If} `$R1 = 1              ; User chose to uninstall`r`n      Goto reinst_uninstall", "  `${ElseIf} `$R0 = -1 ; Downgrading`r`n    `${If} `$R1 = 1              ; User chose to uninstall`r`n      Goto reinst_done")
+    if ($swapped -eq $page) { $failures += 'шаблон: пример отката не подменился' }
+    elseif ((Find-MissingUpgradeHooks $swapped).Count -ne 1) { $failures += 'шаблон: смена ветки отката не замечена' }
 
     if ($failures.Count -gt 0) {
         $failures | ForEach-Object { Write-Host "FAIL $_" }

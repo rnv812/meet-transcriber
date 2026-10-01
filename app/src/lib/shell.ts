@@ -143,6 +143,15 @@ export async function installUpdate(): Promise<void> {
 
 export const onUpdateProgress = (cb: (p: UpdateProgress) => void) => listenShell("update-progress", cb);
 
+/**
+ * Страница выпусков («Скачать новую версию»). Имя репозитория знает только
+ * оболочка (`UPDATE_REPO`); вне приложения — null.
+ */
+export async function releasesPage(): Promise<string | null> {
+  if (!inTauri()) return null;
+  return invoke<string>("releases_page").catch(() => null);
+}
+
 /** Что оболочка знает о резиденте ("running", "engine-missing", …); вне приложения — null. */
 export async function residentStatus(): Promise<string | null> {
   if (!inTauri()) return null;

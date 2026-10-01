@@ -2,16 +2,13 @@ import { useEffect, useState } from "react";
 import pkg from "../../../package.json";
 import { type Endpoint, getDiagnostics } from "../../lib/api";
 import {
-  checkUpdate, installUpdate, onUpdateProgress, openUrl,
+  checkUpdate, installUpdate, onUpdateProgress, openUrl, releasesPage,
   type UpdateCheck, type UpdateProgress,
 } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { PathText, Row } from "./Section";
 import { VoiceBaseTip } from "./tips";
-
-/** Выпуски публичного репозитория обновлений (`UPDATE_REPO` оболочки). */
-export const RELEASES_URL = "https://github.com/rnv812/meet-transcriber/releases";
 
 function CopyButton({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -161,6 +158,11 @@ function InstallProgress({ progress }: { progress: UpdateProgress | null }) {
 
 export function About({ endpoint }: { endpoint: Endpoint }) {
   const [dataDir, setDataDir] = useState<string | null>(null);
+  // Страница выпусков — от оболочки (репозиторий обновлений назван только там).
+  const [releases, setReleases] = useState<string | null>(null);
+  useEffect(() => {
+    void releasesPage().then(setReleases);
+  }, []);
   useEffect(() => {
     getDiagnostics(endpoint, 1)
       .then((d) => setDataDir((d.paths as Record<string, string> | undefined)?.data_dir ?? null))
@@ -174,9 +176,13 @@ export function About({ endpoint }: { endpoint: Endpoint }) {
         label="Как обновиться"
         hint="Скачайте новый установщик и запустите его — данные сохранятся"
       >
-        <Button onClick={() => void openUrl(RELEASES_URL)}>Скачать новую версию</Button>
-        <code className="path">{RELEASES_URL}</code>
-        <CopyButton text={RELEASES_URL} />
+        {releases && (
+          <>
+            <Button onClick={() => void openUrl(releases)}>Скачать новую версию</Button>
+            <code className="path">{releases}</code>
+            <CopyButton text={releases} />
+          </>
+        )}
       </Row>
       <Row label="Папка данных" hint="Настройки, журналы и база голосов" help={<VoiceBaseTip />}>
         {dataDir

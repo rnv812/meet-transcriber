@@ -470,8 +470,14 @@ pub async fn open_url(url: String) -> Result<(), String> {
 /// ShellExecute может отдать работу расширениям оболочки — им нужен COM в
 /// однопоточном режиме, как велит документация; поток пула blocking-задач
 /// инициализирует его на время вызова и освобождает после.
+fn shell_open(url: &str) -> Result<(), String> {
+    shell_execute(url).map_err(|code| format!("браузер не открылся (код {code})"))
+}
+
+/// ShellExecuteW «open»: страница — в браузере, exe — запуск (установщик
+/// обновления, `updater`). `Err` — код ShellExecute (32 и меньше).
 #[cfg(windows)]
-pub(crate) fn shell_open(url: &str) -> Result<(), String> {
+pub(crate) fn shell_execute(target: &str) -> Result<(), isize> {
     use windows_sys::Win32::System::Com::{
         CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
     };
@@ -480,7 +486,7 @@ pub(crate) fn shell_open(url: &str) -> Result<(), String> {
 
     let wide = |text: &str| text.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
     let verb = wide("open");
-    let file = wide(url);
+    let file = wide(target);
     // SAFETY: CoInitializeEx без зарезервированного указателя. Успех (S_OK,
     // S_FALSE — уже инициализирован) парный CoUninitialize ниже; отказ
     // (RPC_E_CHANGED_MODE — поток уже в другом режиме) — не освобождаем.
@@ -510,13 +516,13 @@ pub(crate) fn shell_open(url: &str) -> Result<(), String> {
     if code > 32 {
         Ok(())
     } else {
-        Err(format!("браузер не открылся (код {code})"))
+        Err(code)
     }
 }
 
 #[cfg(not(windows))]
-pub(crate) fn shell_open(_url: &str) -> Result<(), String> {
-    Err("открыть страницу можно только в Windows".to_string())
+pub(crate) fn shell_execute(_target: &str) -> Result<(), isize> {
+    Err(0)
 }
 
 /// Отметка «мастер первого запуска пройден или пропущен» в папке данных.

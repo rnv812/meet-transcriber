@@ -48,5 +48,10 @@ LangString meetDowngradeChoice ${LANG_RUSSIAN} "Откатиться на ${VERS
 LangString meetUnknownVersion ${LANG_RUSSIAN} "(номер неизвестен)"
 LangString meetClosing ${LANG_RUSSIAN} "Закрываю ${PRODUCTNAME}: идущая запись сохраняется..."
 LangString meetClosed ${LANG_RUSSIAN} "${PRODUCTNAME} закрыт"
+LangString meetCloseApp ${LANG_RUSSIAN} "${PRODUCTNAME} всё ещё работает.$\nНажмите OK, чтобы закрыть его: идущая запись сохранится."
+LangString meetCloseCancelled ${LANG_RUSSIAN} "Установка отменена: ${PRODUCTNAME} не закрыт."
+LangString meetSavingRecording ${LANG_RUSSIAN} "Сохраняю запись..."
+LangString meetRecordingSaved ${LANG_RUSSIAN} "Служба записи завершилась"
+LangString meetStillBusy ${LANG_RUSSIAN} "Служба записи не завершилась за 90 секунд — продолжаю"
 
 !insertmacro MEET_UPGRADE_FUNCTIONS

@@ -13,6 +13,7 @@
 mod api;
 mod autostart;
 mod engine;
+mod install_wait;
 mod logs;
 mod netproxy;
 mod pty;
@@ -27,6 +28,12 @@ use tauri::{RunEvent, WindowEvent};
 use resident::Supervisor;
 
 fn main() {
+    // Помощник установщика (`windows/hooks.nsh`): ждёт процессы из папки
+    // установки и выходит, не поднимая ни Tauri, ни окон.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some((mode, root)) = install_wait::requested(&args) {
+        std::process::exit(install_wait::run(mode, &root));
+    }
     tauri::Builder::default()
         // Первым: второй экземпляр должен выйти до того, как другие плагины и
         // `setup` успеют что-то сделать (второй трей, второй резидент). Колбэк
@@ -83,6 +90,7 @@ fn main() {
             // «О программе»: обновление по кнопке с GitHub.
             updater::check_update,
             updater::install_update,
+            updater::releases_page,
             // Вкладка «Агент»: Claude Code / Codex во встроенном терминале.
             pty::agent_spawn,
             pty::agent_write,

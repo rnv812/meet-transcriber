@@ -13,21 +13,34 @@
 ;      прежнего деинсталлятора (и без его галочки «удалить данные
 ;      приложения»). Тексты — windows/lang/*.nsh, выбор по умолчанию —
 ;      MeetGuiInit ниже.
-;   2. Перед заменой файлов (NSIS_HOOK_PREINSTALL) запущенное приложение
-;      просят выйти штатно: `meet-desktop.exe --quit` — тот же «Выход», что в
-;      трее (резидент сохраняет идущую запись и гасится, и только потом
-;      выходит оболочка — поэтому достаточно ждать оболочку). Ждём до 90 с; не
-;      вышло — проверка Tauri предложит закрыть принудительно.
+;   2. Перед заменой файлов (NSIS_HOOK_PREINSTALL, до первого File в
+;      $INSTDIR) приложение закрывается так, чтобы запись не пострадала:
+;      a) `meet-desktop.exe --quit` — тот же «Выход», что в трее (резидент
+;         сохраняет идущую запись и гасится, затем выходит оболочка), ждём до
+;         90 с. Версия 0.1.0 флага не знает (её экземпляр открыл бы окно), её
+;         пропускаем;
+;      b) оболочка всё ещё работает — спрашиваем OK и закрываем её сами (в
+;         тихом и пассивном режиме — без вопроса). Резидент при этом не
+;         убивается: он видит, что оболочки нет, и штатно сохраняет запись;
+;      c) помощник — новая оболочка, распакованная во временную папку, с
+;         `--installer-wait` (src/install_wait.rs) — просит ещё отвечающий
+;         резидент выйти штатно и ждёт до 90 с, пока не выйдут все процессы
+;         из папки установки: резидент, его Python, ffmpeg.exe из resources
+;         (им резидент дописывает запись), uv. Иначе копирование resources
+;         упало бы с «Error opening file for writing».
+;      Проверка Tauri после хука уже никого не находит.
 ;   3. После установки колёса прежних версий из resources убираются.
 ;   4. Страница «Готово» запускает новую версию: галочка «Запустить meet»
 ;      стоит по умолчанию — и при обновлении, и при первой установке.
 
 !define MEET_QUIT_ARG "--quit"
 ; Версии новее этой понимают --quit. У 0.1.0 флага нет: её экземпляр открыл
-; бы окно вместо выхода, поэтому её закрывает проверка Tauri (оболочка
-; завершается, резидент это видит и сам штатно сохраняет запись).
+; бы окно вместо выхода.
 !define MEET_QUIT_SINCE_AFTER "0.1.0"
 !define MEET_QUIT_WAIT_SECONDS 90
+; Помощник: новая оболочка во временной папке установщика (только на время
+; установки; деинсталлятор использует $INSTDIR\meet-desktop.exe своей версии).
+!define MEET_HELPER "$PLUGINSDIR\meet-install-helper.exe"
 
 ; Установленная версия (DisplayVersion) и текст варианта «поставить поверх»:
 ; «Обновить до Y» или «Откатиться на Y». Их подставляют тексты страницы.
@@ -74,15 +87,18 @@ Var MeetKeepChoice
   !endif
 !macroend
 
-; Попросить запущенное приложение выйти штатно и дождаться (до 90 с).
-; `check` — сначала узнать, понимает ли установленная версия --quit
-; (установщик ставится поверх любой версии); деинсталлятор — всегда своей
-; версии (`nocheck`).
-!macro MEET_QUIT_RUNNING_APP check
+; Закрыть запущенное приложение, не повредив запись, и дождаться всех его
+; процессов (см. шаг 2 вверху). `check` — сначала узнать, понимает ли
+; установленная версия --quit (установщик ставится поверх любой версии);
+; деинсталлятор — всегда своей версии (`nocheck`). `helper` — exe с
+; --installer-busy/--installer-wait.
+!macro MEET_STOP_APP check helper
+  !define MEET_ID ${__LINE__}
   Push $R0
   Push $R1
   nsis_tauri_utils::FindProcessCurrentUser "${MAINBINARYNAME}.exe"
   Pop $R0
+  ; a) штатный выход
   ${If} $R0 = 0
   ${AndIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
     StrCpy $R1 1
@@ -109,12 +125,43 @@ Var MeetKeepChoice
       ${LoopUntil} $R1 >= ${MEET_QUIT_WAIT_SECONDS}
     ${EndIf}
   ${EndIf}
+  ; b) оболочка не вышла (0.1.0 или зависла) — закрыть её самим
+  ${If} $R0 = 0
+    IfSilent meet_kill_${MEET_ID} 0
+    ${If} $PassiveMode <> 1
+      MessageBox MB_OKCANCEL|MB_ICONINFORMATION "$(meetCloseApp)" IDOK meet_kill_${MEET_ID}
+      Abort "$(meetCloseCancelled)"
+    ${EndIf}
+    meet_kill_${MEET_ID}:
+    nsis_tauri_utils::KillProcessCurrentUser "${MAINBINARYNAME}.exe"
+    Pop $R0
+    Sleep 500
+  ${EndIf}
+  ; c) резидент и его ffmpeg ещё сохраняют запись — ждём
+  ${If} ${FileExists} "${helper}"
+    ExecWait '"${helper}" --installer-busy "$INSTDIR"' $R0
+    ${If} $R0 = 1
+      DetailPrint "$(meetSavingRecording)"
+      ExecWait '"${helper}" --installer-wait "$INSTDIR"' $R0
+      ${If} $R0 = 0
+        DetailPrint "$(meetRecordingSaved)"
+      ${Else}
+        DetailPrint "$(meetStillBusy)"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
   Pop $R1
   Pop $R0
+  !undef MEET_ID
 !macroend
 
 !macro NSIS_HOOK_PREINSTALL
-  !insertmacro MEET_QUIT_RUNNING_APP check
+  ; Новая оболочка как помощник: она знает --installer-wait, даже если
+  ; установлена 0.1.0. Одинаковые данные NSIS хранит в установщике один раз.
+  InitPluginsDir
+  File "/oname=${MEET_HELPER}" "${MAINBINARYSRCPATH}"
+  !insertmacro MEET_STOP_APP check "${MEET_HELPER}"
+  Delete "${MEET_HELPER}"
 !macroend
 
 ; Колёса прежних версий в resources: установка поверх кладёт новое рядом, а
@@ -140,7 +187,7 @@ Var MeetKeepChoice
 
 ; Удаление из «Параметры → Приложения» — тоже со штатным выходом.
 !macro NSIS_HOOK_PREUNINSTALL
-  !insertmacro MEET_QUIT_RUNNING_APP nocheck
+  !insertmacro MEET_STOP_APP nocheck "$INSTDIR\${MAINBINARYNAME}.exe"
 !macroend
 
 ; Значение автозапуска в HKCU\...\CurrentVersion\Run деинсталлятор Tauri снимает

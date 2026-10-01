@@ -34,5 +34,10 @@ LangString meetDowngradeChoice ${LANG_ENGLISH} "Roll back to ${VERSION}"
 LangString meetUnknownVersion ${LANG_ENGLISH} "(unknown)"
 LangString meetClosing ${LANG_ENGLISH} "Closing ${PRODUCTNAME}; a recording in progress is being saved..."
 LangString meetClosed ${LANG_ENGLISH} "${PRODUCTNAME} closed"
+LangString meetCloseApp ${LANG_ENGLISH} "${PRODUCTNAME} is still running.$\nClick OK to close it; a recording in progress will be saved."
+LangString meetCloseCancelled ${LANG_ENGLISH} "Installation cancelled: ${PRODUCTNAME} was not closed."
+LangString meetSavingRecording ${LANG_ENGLISH} "Saving the recording..."
+LangString meetRecordingSaved ${LANG_ENGLISH} "The recording service has exited"
+LangString meetStillBusy ${LANG_ENGLISH} "The recording service did not exit within 90 seconds; continuing"
 
 !insertmacro MEET_UPGRADE_FUNCTIONS

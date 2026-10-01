@@ -104,7 +104,8 @@ test("«О программе» показывает путь к данным", 
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   await userEvent.click(await screen.findByRole("button", { name: "О программе" }));
   expect(await screen.findByText("C:\data\meet")).toBeInTheDocument();
-  expect(screen.getAllByRole("button", { name: "Копировать" })).toHaveLength(2);
+  // Вне оболочки страницы выпусков нет — копируется только путь к данным.
+  expect(screen.getAllByRole("button", { name: "Копировать" })).toHaveLength(1);
 });
 
 test("«Открыть» папку записей — только в оболочке: в браузере открыть нечем", async () => {

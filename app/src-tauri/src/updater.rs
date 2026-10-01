@@ -56,6 +56,10 @@ pub const NO_INSTALLER: &str = "В выпуске нет установщика 
 pub const NO_SUMS: &str = "В выпуске нет контрольной суммы установщика (SHA256SUMS.txt)";
 pub const BUSY: &str = "Обновление уже скачивается";
 pub const NO_DOWNLOAD: &str = "Не удалось скачать обновление: нет связи с GitHub";
+pub const RECORDING_AFTER_DOWNLOAD: &str =
+    "Остановите запись, затем нажмите «Скачать и установить» ещё раз — установщик уже скачан";
+pub const FOREIGN_HOST: &str =
+    "Не удалось скачать обновление: GitHub перенаправил загрузку на чужой адрес";
 
 pub fn releases_url() -> String {
     format!("https://github.com/{UPDATE_REPO}/releases")
@@ -86,7 +90,13 @@ pub fn parse_version(text: &str) -> Option<Version> {
     let text = text.split_once('+').map_or(text, |(core, _build)| core);
     let (core, pre) = match text.split_once('-') {
         Some((core, pre)) => (core, Some(pre)),
-        None => (text, None),
+        // PEP 440 (версия пакета Python): «0.2.0rc1» = «0.2.0-rc1».
+        None => match text.char_indices().find(|&(i, c)| {
+            c.is_ascii_alphabetic() && i > 0 && text.as_bytes()[i - 1].is_ascii_digit()
+        }) {
+            Some((i, _)) => (&text[..i], Some(&text[i..])),
+            None => (text, None),
+        },
     };
     let mut parts = core.split('.');
     let mut numbers = [0u64; 3];
@@ -150,6 +160,15 @@ fn compare_pre(a: &[String], b: &[String]) -> Ordering {
         }
     }
     a.len().cmp(&b.len())
+}
+
+/// Одна и та же версия, в какой бы записи (semver или PEP 440, с `v` или
+/// без). Непонятные — равны, только если совпадают как строки.
+pub fn same_version(a: &str, b: &str) -> bool {
+    match (parse_version(a), parse_version(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => a.trim() == b.trim(),
+    }
 }
 
 /// `latest` новее `current`. Непонятная версия — не новее (не предлагаем
@@ -238,7 +257,39 @@ pub fn installer_name_ok(name: &str) -> bool {
 
 /// Ссылка на файл — из выпусков этого репозитория.
 fn asset_url_ok(asset: &Asset) -> bool {
-    asset.url.starts_with(&download_prefix()) && !asset.url.contains(['"', ' ', '\\'])
+    let lower = asset.url.to_ascii_lowercase();
+    asset.url.starts_with(&download_prefix())
+        && !asset.url.contains(['"', ' ', '\\'])
+        && !lower.contains("..")
+        && !lower.contains("%2e")
+}
+
+/// Куда GitHub может перенаправить загрузку файла выпуска: сам github.com и
+/// его хранилище (`objects.githubusercontent.com`, `*.githubusercontent.com`).
+/// Только https.
+pub fn download_host_ok(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or("");
+    let host = host.split(':').next().unwrap_or("").to_ascii_lowercase();
+    host == "github.com"
+        || host == "objects.githubusercontent.com"
+        || (host.ends_with(".githubusercontent.com") && host.len() > ".githubusercontent.com".len())
+}
+
+/// Прежние загрузки в папке обновления (`meet_*_x64-setup.exe` и их `.part`),
+/// кроме `keep` — уже скачанного и сверенного установщика этого выпуска.
+pub fn stale_downloads(names: &[String], keep: Option<&str>) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| {
+            let base = name.strip_suffix(".part").unwrap_or(name);
+            installer_name_ok(base) && Some(name.as_str()) != keep
+        })
+        .cloned()
+        .collect()
 }
 
 /// Установщик выпуска: сначала точное имя с версией выпуска, иначе любой
@@ -364,6 +415,7 @@ fn agent(app_version: &str) -> Result<ureq::Agent, String> {
         .user_agent(&format!("meet-desktop/{app_version}"))
         .timeout_connect(API_TIMEOUT)
         .timeout_read(DOWNLOAD_STALL)
+        .https_only(true)
         .try_proxy_from_env(false);
     let env = env_proxy();
     if let Some(url) = proxy_url(env.as_deref(), &netproxy::read_internet_settings()) {
@@ -405,6 +457,13 @@ fn fetch_latest(app_version: &str) -> Result<Option<Release>, String> {
 
 fn app_version(app: &AppHandle) -> String {
     app.package_info().version.to_string()
+}
+
+/// Страница выпусков для «Скачать новую версию» в окне: имя репозитория
+/// живёт только здесь (`UPDATE_REPO`).
+#[tauri::command]
+pub fn releases_page() -> String {
+    releases_url()
 }
 
 /// «Проверить обновления»: последний выпуск на GitHub против своей версии.
@@ -470,14 +529,22 @@ fn install_blocking(app: &AppHandle) -> Result<(), String> {
     let installer = pick_installer(&release).ok_or(NO_INSTALLER)?;
     let sums = pick_sums(&release).ok_or(NO_SUMS)?;
     let agent = agent(&current)?;
-    let sums_text = agent
+    let sums_reply = agent
         .get(&sums.url)
         .timeout(API_TIMEOUT)
         .call()
         .map_err(|error| {
             shell_log!("обновление: SHA256SUMS.txt не скачался: {error}");
             NO_DOWNLOAD.to_string()
-        })?
+        })?;
+    if !download_host_ok(sums_reply.get_url()) {
+        shell_log!(
+            "обновление: SHA256SUMS.txt пришёл с {}",
+            sums_reply.get_url()
+        );
+        return Err(FOREIGN_HOST.to_string());
+    }
+    let sums_text = sums_reply
         .into_string()
         .map_err(|_| CORRUPTED.to_string())?;
     let expected = parse_sums(&sums_text, &installer.name).ok_or(NO_SUMS)?;
@@ -487,26 +554,49 @@ fn install_blocking(app: &AppHandle) -> Result<(), String> {
         .map_err(|error| format!("Не удалось создать папку для обновления: {error}"))?;
     let target = dir.join(&installer.name);
     let partial = dir.join(format!("{}.part", installer.name));
-    shell_log!(
-        "обновление: скачиваю {} ({} байт)",
-        installer.name,
-        installer.size
-    );
-    let actual = match download(app, &agent, installer, &partial) {
-        Ok(hash) => hash,
-        Err(error) => {
-            let _ = std::fs::remove_file(&partial);
-            return Err(error);
-        }
-    };
-    if actual != expected {
-        shell_log!("обновление: SHA-256 не совпал (ждали {expected}, получили {actual})");
-        let _ = std::fs::remove_file(&partial);
-        return Err(CORRUPTED.to_string());
+    // Уже скачан и сверен (прошлый раз помешала запись) — не качаем заново.
+    let ready = crate::engine::file_sha256(&target).is_ok_and(|hash| hash == expected);
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    let keep = ready.then_some(installer.name.as_str());
+    for name in stale_downloads(&names, keep) {
+        let _ = std::fs::remove_file(dir.join(name));
     }
-    let _ = std::fs::remove_file(&target);
-    std::fs::rename(&partial, &target)
-        .map_err(|error| format!("Не удалось сохранить обновление: {error}"))?;
+    if ready {
+        shell_log!("обновление: {} уже скачан и сверен", installer.name);
+    } else {
+        shell_log!(
+            "обновление: скачиваю {} ({} байт)",
+            installer.name,
+            installer.size
+        );
+        let actual = match download(app, &agent, installer, &partial) {
+            Ok(hash) => hash,
+            Err(error) => {
+                let _ = std::fs::remove_file(&partial);
+                return Err(error);
+            }
+        };
+        if actual != expected {
+            shell_log!("обновление: SHA-256 не совпал (ждали {expected}, получили {actual})");
+            let _ = std::fs::remove_file(&partial);
+            return Err(CORRUPTED.to_string());
+        }
+        let _ = std::fs::remove_file(&target);
+        std::fs::rename(&partial, &target)
+            .map_err(|error| format!("Не удалось сохранить обновление: {error}"))?;
+    }
+    // Пока качали, могла начаться запись: файл оставляем, установщик не
+    // запускаем.
+    if install_refusal(resident_state().as_ref()).is_some() {
+        return Err(RECORDING_AFTER_DOWNLOAD.to_string());
+    }
     launch_and_quit(app, &target)
 }
 
@@ -521,6 +611,10 @@ fn download(
         shell_log!("обновление: установщик не скачался: {error}");
         NO_DOWNLOAD.to_string()
     })?;
+    if !download_host_ok(response.get_url()) {
+        shell_log!("обновление: установщик пришёл с {}", response.get_url());
+        return Err(FOREIGN_HOST.to_string());
+    }
     let total = response
         .header("Content-Length")
         .and_then(|value| value.parse::<u64>().ok())
@@ -565,8 +659,8 @@ fn download(
 /// приложение (`--quit` в `hooks.nsh`), но выход отсюда быстрее и тот же.
 fn launch_and_quit(app: &AppHandle, installer: &Path) -> Result<(), String> {
     shell_log!("обновление: запускаю {}", installer.display());
-    crate::windows::shell_open(&installer.to_string_lossy())
-        .map_err(|error| format!("Установщик не запустился: {error}"))?;
+    crate::windows::shell_execute(&installer.to_string_lossy())
+        .map_err(|code| format!("Не удалось запустить установщик (код {code})"))?;
     tray::quit(app);
     Ok(())
 }
@@ -626,6 +720,16 @@ mod tests {
         assert!(is_newer("0.2.0-alpha", "0.2.0-1"));
         // Метаданные сборки на порядок не влияют.
         assert!(!is_newer("0.2.0+build.5", "0.2.0"));
+    }
+
+    #[test]
+    fn python_prerelease_equals_semver_prerelease() {
+        assert!(same_version("0.2.0rc1", "0.2.0-rc1"));
+        assert!(same_version("v0.2.0", "0.2.0"));
+        assert!(!same_version("0.2.0rc1", "0.2.0"));
+        assert!(!same_version("0.2.0", "0.2.1"));
+        assert!(same_version("dev", " dev "));
+        assert!(!same_version("dev", "0.2.0"));
     }
 
     #[test]
@@ -724,7 +828,73 @@ mod tests {
         };
         assert!(pick_installer(&release).is_none());
         assert!(installer_name_ok("meet_0.2.0-rc1_x64-setup.exe"));
+        for bad in [
+            "https://github.com/rnv812/meet-transcriber/releases/download/../../x/meet_0.2.0_x64-setup.exe",
+            "https://github.com/rnv812/meet-transcriber/releases/download/%2E%2E/meet_0.2.0_x64-setup.exe",
+            "https://github.com/rnv812/meet-transcriber/releases/download/v0.2.0/%2e./meet_0.2.0_x64-setup.exe",
+        ] {
+            let mut sneaky = asset("meet_0.2.0_x64-setup.exe");
+            sneaky.url = bad.to_string();
+            let release = Release {
+                version: "0.2.0".into(),
+                notes_url: releases_url(),
+                assets: vec![sneaky],
+            };
+            assert!(pick_installer(&release).is_none(), "{bad}");
+        }
         assert!(!installer_name_ok("meet_0.2.0 _x64-setup.exe"));
+    }
+
+    #[test]
+    fn downloads_may_land_only_on_github_hosts() {
+        assert!(download_host_ok(
+            "https://github.com/rnv812/meet-transcriber/releases/download/v0.2.0/x.exe"
+        ));
+        assert!(download_host_ok(
+            "https://objects.githubusercontent.com/github-production-release-asset/1?x=y"
+        ));
+        assert!(download_host_ok(
+            "https://release-assets.githubusercontent.com/a"
+        ));
+        assert!(download_host_ok("https://GitHub.com:443/a"));
+        for bad in [
+            "http://objects.githubusercontent.com/a",
+            "https://evil.example/a",
+            "https://github.com.evil.example/a",
+            "https://evilgithubusercontent.com/a",
+            "https://.githubusercontent.com/a",
+            "https://github.com@evil.example/a",
+            "https://evil.example/github.com",
+            "",
+        ] {
+            assert!(!download_host_ok(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn old_downloads_are_cleared_but_a_verified_one_is_kept() {
+        let names: Vec<String> = [
+            "meet_0.1.9_x64-setup.exe",
+            "meet_0.2.0_x64-setup.exe",
+            "meet_0.2.0_x64-setup.exe.part",
+            "notes.txt",
+            "meet_0.2.0_x64-setup.exe.bak",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            stale_downloads(&names, Some("meet_0.2.0_x64-setup.exe")),
+            vec!["meet_0.1.9_x64-setup.exe", "meet_0.2.0_x64-setup.exe.part"]
+        );
+        assert_eq!(
+            stale_downloads(&names, None),
+            vec![
+                "meet_0.1.9_x64-setup.exe",
+                "meet_0.2.0_x64-setup.exe",
+                "meet_0.2.0_x64-setup.exe.part"
+            ]
+        );
     }
 
     #[test]

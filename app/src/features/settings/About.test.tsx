@@ -10,6 +10,7 @@ vi.mock("../../lib/api", async (orig) => ({
 let progressListener: ((p: { done: number; total: number }) => void) | null = null;
 vi.mock("../../lib/shell", () => ({
   openUrl: vi.fn(async () => {}),
+  releasesPage: vi.fn(async () => "https://github.com/example/updates/releases"),
   checkUpdate: vi.fn(),
   installUpdate: vi.fn(),
   onUpdateProgress: vi.fn(async (cb: (p: { done: number; total: number }) => void) => {
@@ -19,7 +20,7 @@ vi.mock("../../lib/shell", () => ({
 }));
 
 import * as shell from "../../lib/shell";
-import { About, RELEASES_URL, megabytes } from "./About";
+import { About, megabytes } from "./About";
 
 const endpoint = { base: "http://127.0.0.1:1", token: "t" };
 const check = vi.mocked(shell.checkUpdate);
@@ -29,7 +30,7 @@ const newer = {
   current: "0.1.1",
   latest: "0.2.0",
   newer: true,
-  notes_url: "https://github.com/rnv812/meet-transcriber/releases/tag/v0.2.0",
+  notes_url: "https://github.com/example/updates/releases/tag/v0.2.0",
   asset_name: "meet_0.2.0_x64-setup.exe",
   size: 52428800,
 };
@@ -47,11 +48,19 @@ async function renderAbout() {
 
 const checkButton = () => screen.getByRole("button", { name: "Проверить обновления" });
 
-test("«Скачать новую версию» открывает выпуски репозитория обновлений", async () => {
+test("«Скачать новую версию» открывает страницу выпусков, которую назвала оболочка", async () => {
   await renderAbout();
-  await userEvent.click(screen.getByRole("button", { name: "Скачать новую версию" }));
-  expect(shell.openUrl).toHaveBeenCalledWith("https://github.com/rnv812/meet-transcriber/releases");
-  expect(RELEASES_URL).toBe("https://github.com/rnv812/meet-transcriber/releases");
+  await userEvent.click(await screen.findByRole("button", { name: "Скачать новую версию" }));
+  expect(shell.openUrl).toHaveBeenCalledWith("https://github.com/example/updates/releases");
+});
+
+test("без оболочки ссылки на выпуски нет, но подсказка остаётся", async () => {
+  vi.mocked(shell.releasesPage).mockResolvedValueOnce(null);
+  await renderAbout();
+  expect(screen.queryByRole("button", { name: "Скачать новую версию" })).toBeNull();
+  expect(
+    screen.getByText("Скачайте новый установщик и запустите его — данные сохранятся"),
+  ).toBeInTheDocument();
 });
 
 test("рассказывает, как обновиться, и что данные сохранятся", async () => {

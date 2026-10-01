@@ -43,63 +43,167 @@ pub fn read_choice(data_dir: &Path) -> Option<bool> {
         .as_bool()
 }
 
-/// Вернуть ли автозапуск при старте оболочки: только в установленном
-/// приложении (dev-сборка прописала бы в Run свой exe из target), только
-/// если человек его включал и значения в Run нет совсем. Значение есть, но
-/// выключено в диспетчере задач (`StartupApproved`) — это тоже выбор
-/// человека, его не перебиваем; узнать не удалось — не трогаем.
-pub fn should_restore(
-    release: bool,
-    choice: Option<bool>,
-    run_value_present: Option<bool>,
-) -> bool {
-    release && choice == Some(true) && run_value_present == Some(false)
+/// Что сделать со значением автозапуска в Run при старте оболочки.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunFix {
+    Keep,
+    /// Значения нет (его снял деинсталлятор прежней версии) — вернуть.
+    Restore,
+    /// Значение ведёт на другой exe (программу поставили в другую папку) —
+    /// переписать на этот, не трогая отметку диспетчера задач.
+    Rewrite,
 }
 
-/// Есть ли в `HKCU\...\Run` значение `name`. `None` — реестр не ответил.
+/// Значение, которое пишет tauri-plugin-autostart: `<exe> --autostart`.
+pub fn run_command(exe: &Path) -> String {
+    format!("{} {AUTOSTART_ARG}", exe.display())
+}
+
+/// Решение по значению в Run: только в установленном приложении (dev-сборка
+/// прописала бы в Run свой exe из target) и только если человек автозапуск
+/// включал. `current` — `None`, если реестр не ответил (тогда не трогаем),
+/// `Some(None)` — значения нет. Значение есть, но выключено в диспетчере
+/// задач (`StartupApproved`) — это тоже выбор человека, его не перебиваем:
+/// переписывается только путь.
+pub fn run_fix(
+    release: bool,
+    choice: Option<bool>,
+    current: Option<Option<&str>>,
+    expected: &str,
+) -> RunFix {
+    if !release || choice != Some(true) {
+        return RunFix::Keep;
+    }
+    match current {
+        None => RunFix::Keep,
+        Some(None) => RunFix::Restore,
+        Some(Some(value)) if !value.trim().eq_ignore_ascii_case(expected.trim()) => RunFix::Rewrite,
+        Some(Some(_)) => RunFix::Keep,
+    }
+}
+
+/// Значение `name` в `HKCU\...\Run`: `Some(None)` — его нет, `None` — реестр
+/// не ответил.
 #[cfg(windows)]
-pub fn run_value_present(name: &str) -> Option<bool> {
+pub fn run_value(name: &str) -> Option<Option<String>> {
+    use std::ffi::c_void;
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
-    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_ANY};
+    use windows_sys::Win32::System::Registry::{
+        RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_EXPAND_SZ, RRF_RT_REG_SZ,
+    };
 
     let wide = |text: &str| text.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
     let (key, value) = (wide(RUN_KEY), wide(name));
-    // SAFETY: строки с нулём на конце живут до конца вызова; данные не
-    // запрашиваем (нулевые указатели) — только наличие значения.
+    let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ;
+    let mut size: u32 = 0;
+    // SAFETY: строки с нулём на конце живут до конца вызова; первый вызов
+    // только узнаёт размер (буфер — null).
     let status = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,
             key.as_ptr(),
             value.as_ptr(),
-            RRF_RT_ANY,
+            flags,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            &mut size,
         )
     };
     match status {
-        ERROR_SUCCESS => Some(true),
-        ERROR_FILE_NOT_FOUND => Some(false),
-        _ => None,
+        ERROR_SUCCESS => {}
+        ERROR_FILE_NOT_FOUND => return Some(None),
+        _ => return None,
+    }
+    let mut buffer = vec![0u16; (size as usize).div_ceil(2).max(1)];
+    // SAFETY: буфер на `size` байт; RegGetValueW дописывает нуль сам.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            flags,
+            std::ptr::null_mut(),
+            buffer.as_mut_ptr().cast::<c_void>(),
+            &mut size,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+    let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+    Some(Some(String::from_utf16_lossy(&buffer[..len])))
+}
+
+#[cfg(not(windows))]
+pub fn run_value(_name: &str) -> Option<Option<String>> {
+    None
+}
+
+/// Переписать значение `name` в Run (только его — без отметки диспетчера
+/// задач, которую `enable()` плагина сбросила бы во «включено»).
+#[cfg(windows)]
+fn write_run_value(name: &str, command: &str) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
+
+    let wide = |text: &str| text.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let (key, value, data) = (wide(RUN_KEY), wide(name), wide(command));
+    // SAFETY: строки с нулём на конце живут до конца вызова; размер данных —
+    // в байтах, вместе с нулём.
+    let status = unsafe {
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            REG_SZ,
+            data.as_ptr().cast(),
+            (data.len() * 2) as u32,
+        )
+    };
+    if status == ERROR_SUCCESS {
+        Ok(())
+    } else {
+        Err(format!("код {status}"))
     }
 }
 
 #[cfg(not(windows))]
-pub fn run_value_present(_name: &str) -> Option<bool> {
-    None
+fn write_run_value(_name: &str, _command: &str) -> Result<(), String> {
+    Err("только в Windows".to_string())
 }
 
 /// При старте оболочки: автозапуск был включён, а значения в Run нет (его
-/// снял деинсталлятор прежней версии) — вернуть.
+/// снял деинсталлятор прежней версии) — вернуть; значение ведёт на другой
+/// exe (установка в другую папку) — переписать на этот.
 pub fn restore_at_startup(app: &AppHandle) {
     let choice = read_choice(&resident::data_dir());
     let name = app.package_info().name.clone();
-    if !should_restore(!cfg!(debug_assertions), choice, run_value_present(&name)) {
+    let Ok(exe) = std::env::current_exe() else {
         return;
-    }
-    match app.autolaunch().enable() {
-        Ok(()) => shell_log!("автозапуск был включён, но пропал из реестра (обновление) — вернул"),
-        Err(error) => shell_log!("автозапуск не восстановился: {error}"),
+    };
+    let expected = run_command(&exe);
+    let current = run_value(&name);
+    let fix = run_fix(
+        !cfg!(debug_assertions),
+        choice,
+        current.as_ref().map(Option::as_deref),
+        &expected,
+    );
+    match fix {
+        RunFix::Keep => {}
+        RunFix::Restore => match app.autolaunch().enable() {
+            Ok(()) => {
+                shell_log!("автозапуск был включён, но пропал из реестра (обновление) — вернул")
+            }
+            Err(error) => shell_log!("автозапуск не восстановился: {error}"),
+        },
+        RunFix::Rewrite => match write_run_value(&name, &expected) {
+            Ok(()) => shell_log!(
+                "автозапуск вёл на другой exe — переписал на {}",
+                exe.display()
+            ),
+            Err(error) => shell_log!("автозапуск не переписался: {error}"),
+        },
     }
 }
 
@@ -195,19 +299,58 @@ mod tests {
         );
     }
 
+    const EXE: &str = r"C:\Users\someone\AppData\Local\meet\meet-desktop.exe";
+
+    fn expected() -> String {
+        run_command(Path::new(EXE))
+    }
+
+    #[test]
+    fn run_command_matches_the_plugin_format() {
+        assert_eq!(expected(), format!("{EXE} --autostart"));
+    }
+
     #[test]
     fn restored_only_when_chosen_and_missing_from_run_in_release() {
+        let exp = expected();
         // Обновление сняло значение из Run, человек автозапуск включал.
-        assert!(should_restore(true, Some(true), Some(false)));
-        // Значение на месте (в том числе выключенное в диспетчере задач).
-        assert!(!should_restore(true, Some(true), Some(true)));
+        assert_eq!(run_fix(true, Some(true), Some(None), &exp), RunFix::Restore);
+        // Значение на месте и ведёт сюда (в том числе выключенное в
+        // диспетчере задач — это отдельная отметка).
+        assert_eq!(
+            run_fix(true, Some(true), Some(Some(&exp)), &exp),
+            RunFix::Keep
+        );
+        // Регистр пути в Windows не важен.
+        let upper = exp.to_uppercase();
+        assert_eq!(
+            run_fix(true, Some(true), Some(Some(&upper)), &exp),
+            RunFix::Keep
+        );
         // Человек выключал или не выбирал вовсе.
-        assert!(!should_restore(true, Some(false), Some(false)));
-        assert!(!should_restore(true, None, Some(false)));
+        assert_eq!(run_fix(true, Some(false), Some(None), &exp), RunFix::Keep);
+        assert_eq!(run_fix(true, None, Some(None), &exp), RunFix::Keep);
         // Реестр не ответил — не трогаем.
-        assert!(!should_restore(true, Some(true), None));
+        assert_eq!(run_fix(true, Some(true), None, &exp), RunFix::Keep);
         // Dev-сборка не прописывает в Run свой exe.
-        assert!(!should_restore(false, Some(true), Some(false)));
+        assert_eq!(run_fix(false, Some(true), Some(None), &exp), RunFix::Keep);
+    }
+
+    #[test]
+    fn run_value_pointing_elsewhere_is_rewritten_to_this_exe() {
+        let exp = expected();
+        // Обновление поставили в другую папку — автозапуск вёл бы на старый exe.
+        let old = r"D:\Apps\meet\meet-desktop.exe --autostart";
+        assert_eq!(
+            run_fix(true, Some(true), Some(Some(old)), &exp),
+            RunFix::Rewrite
+        );
+        // Без выбора человека — не трогаем и чужое значение.
+        assert_eq!(run_fix(true, None, Some(Some(old)), &exp), RunFix::Keep);
+        assert_eq!(
+            run_fix(false, Some(true), Some(Some(old)), &exp),
+            RunFix::Keep
+        );
     }
 
     #[test]
@@ -244,9 +387,6 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn run_key_is_readable_and_unknown_value_is_absent() {
-        assert_eq!(
-            run_value_present("meet-autostart-test-no-such-value"),
-            Some(false)
-        );
+        assert_eq!(run_value("meet-autostart-test-no-such-value"), Some(None));
     }
 }
