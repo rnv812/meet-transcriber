@@ -132,9 +132,9 @@ def describe_part(folder: Path, probe=probe_duration, end=None) -> Part:
     дорожка; не измерить — длительность записи из `events.jsonl`).
 
     Автозапись, хвост которой не обрезали (meet.tail), берётся до конца
-    разговора: `end(folder)` — где он (по умолчанию `tail.effective_end`).
-    Иначе склейка тащила бы в середину встречи минуты тишины, а перерыв
-    считался бы от остановки записи, а не от конца разговора."""
+    звонка + 30 с: `end(folder)` — где он (по умолчанию `tail.effective_end`).
+    Иначе склейка тащила бы в середину встречи минуты ожидания, а перерыв
+    считался бы от остановки записи, а не от конца звонка."""
     card = library.describe(folder)
     if card is None or not card.tracks:
         raise MergeError(f"В записи нет звука: {folder.name}")
@@ -375,10 +375,10 @@ def unfinished_owner(folder: Path, ignore: Path | None = None) -> str | None:
     return None
 
 
-def _tail_end(folder: Path, run) -> float | None:
+def _tail_end(folder: Path) -> float | None:
     from meet import tail
 
-    return tail.effective_end(folder, run=run)
+    return tail.effective_end(folder)
 
 
 def state(folder: Path) -> str | None:
@@ -432,7 +432,7 @@ def run(folder: Path, run=subprocess.run, probe=probe_duration, bus=None,
         if not source.is_dir():
             raise MergeError(f"Исходная запись пропала: {name}")
         parts.append(describe_part(source, probe=probe,
-                                   end=end or (lambda f: _tail_end(f, run))))
+                                   end=end or _tail_end))
     parts.sort(key=lambda p: p.start)
     roles = output_roles(parts)
     for stale in [*folder.glob("*.opus"), *folder.glob("*.part")]:
