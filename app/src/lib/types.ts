@@ -13,6 +13,10 @@ export type AutoRecord = {
   state: WatcherState;
   mic: Signal;
   render: Signal;
+  /** Браузеры, где звонок — занятый микрофон. Нет у старых резидентов. */
+  browsers?: string[];
+  /** Звонок в браузере по последнему опросу детектора. */
+  browser?: { exe: string; site: string | null } | null;
 };
 
 export type Snapshot = {

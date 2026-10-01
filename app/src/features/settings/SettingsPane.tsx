@@ -19,6 +19,7 @@ import { EmptyState } from "../../ui/EmptyState";
 import { About } from "./About";
 import { AssistantSection, assistantChangesInvalid } from "./AssistantSection";
 import { AutostartRow } from "./AutostartRow";
+import { BrowserCalls } from "./BrowserCalls";
 import { CallPrograms } from "./CallPrograms";
 import { DiagnosticsPane } from "./DiagnosticsPane";
 import { EnginePane } from "./EnginePane";
@@ -119,6 +120,11 @@ function AutoSection({ draft, set, processes, loadProcesses, onToggle }: {
       <p className="muted sdesc">Параметры ниже применяются после перезапуска приложения.</p>
       <CallPrograms value={selected} processes={processes} loadProcesses={loadProcesses}
         onChange={(x) => set("auto_record", "processes", x)} />
+      <BrowserCalls browsers={(v("browsers") as string[] | undefined) ?? []}
+        requireSite={Boolean(v("browser_require_site"))} sites={(v("call_sites") as string[] | undefined) ?? []}
+        onBrowsers={(x) => set("auto_record", "browsers", x)}
+        onRequireSite={(x) => set("auto_record", "browser_require_site", x)}
+        onSites={(x) => set("auto_record", "call_sites", x)} />
       <SecondsRow id="grace" label="Продолжать запись после звонка"
         hint="Обрыв связи или повторное подключение не разделят запись на две части"
         value={Number(v("grace_seconds") ?? 0)} onChange={(x) => set("auto_record", "grace_seconds", x)} />

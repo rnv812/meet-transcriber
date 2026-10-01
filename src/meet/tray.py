@@ -303,7 +303,12 @@ class TrayApp:
         self.bus = events.EventBus()
         self.log = _BusLog(watch.WatchLog(watch.default_log_path()), self.bus)
         self.watcher = watch.Watcher(self.cfg["grace_seconds"])
-        self.signals = watch.Signals(self.cfg["processes"], log=self.log)
+        self.signals = watch.Signals(
+            self.cfg["processes"], log=self.log,
+            browsers=self.cfg.get("browsers") or (),
+            require_site=bool(self.cfg.get("browser_require_site")),
+            sites=self.cfg.get("call_sites") or (),
+        )
         self.icon = None
         self.start_now = start_now
         self.recording = False
@@ -326,7 +331,11 @@ class TrayApp:
         self._last_poll = 0.0
         self._last_beat = 0.0
         self._last_signals = None
+        self._last_browser_note = None
         self._title = None
+        # Начальное название идущей автозаписи (звонок в браузере: «Dion —
+        # Планёрка»); его кладёт в meta.json сохранение записи. None — нет.
+        self.recording_title: str | None = None
 
     # --- запись ---------------------------------------------------------
 
@@ -343,6 +352,7 @@ class TrayApp:
             self.source = source
             self.started = time.monotonic()
             self._call_end = None
+            self.recording_title = None
             self.recording = True
             # result и stop_event уходят в поток значениями, а не через self:
             # если join истечёт по таймауту, доживающий поток допишет их в свой
@@ -525,6 +535,8 @@ class TrayApp:
                 f"трей запущен, автозапись "
                 f"{'включена' if self.cfg['enabled'] else 'выключена'}, "
                 f"процессы {', '.join(self.cfg['processes'])}, "
+                f"браузеры {', '.join(self.cfg.get('browsers') or []) or 'нет'}"
+                f"{' (только сайты звонков)' if self.cfg.get('browser_require_site') else ''}, "
                 f"грейс {self.cfg['grace_seconds']:.0f} с"
             )
             if self.start_now:
@@ -599,6 +611,11 @@ class TrayApp:
                 f"сигналы: микрофон {watch.describe(mic)}, "
                 f"звук {watch.describe(render)}"
             )
+        note = getattr(self.signals, "browser_note", None)
+        if note != self._last_browser_note:
+            self._last_browser_note = note
+            if note:
+                self.log(note)
         if now - self._last_beat >= HEARTBEAT_S:
             self._last_beat = now
             self.log(
@@ -615,10 +632,26 @@ class TrayApp:
         # Выключатель автозаписи запрещает только новые старты. STOP детектор
         # выдаёт ровно один раз: проглоти его, пока идёт автозапись, начатая до
         # выключения, — и она писала бы до выхода трея.
+        if decision == watch.START:
+            self._log_call_cause(mic, render)
         if decision == watch.START and self.cfg["enabled"]:
             self._auto_start()
         elif decision == watch.STOP:
             self._auto_stop(now)
+
+    def _log_call_cause(self, mic, render) -> None:
+        """Что именно сочтено звонком: программа (по какому сигналу) или
+        браузер с сайтом. Заголовок окна — обрезанный, адресов здесь нет."""
+        browser = getattr(self.signals, "browser_call", None)
+        if browser:
+            site = browser.get("site") or "не определён"
+            line = f"звонок в браузере: {browser.get('exe')}, сайт {site}"
+            if browser.get("title"):
+                line += f", окно «{watch.short(browser['title'], watch.LOG_TITLE_MAX)}»"
+            self.log(line)
+        else:
+            self.log(f"звонок в программе: микрофон {watch.describe(mic)}, "
+                     f"звук {watch.describe(render)}")
 
     def _auto_start(self) -> None:
         if self.recording:
@@ -635,6 +668,8 @@ class TrayApp:
             return
         if not self.start_recording(AUTO):
             return
+        browser = getattr(self.signals, "browser_call", None)
+        self.recording_title = (browser or {}).get("title") or None
         self.log("звонок начался — запись запущена")
         self._notify("Пишу встречу. Отменить — в меню трея")
 

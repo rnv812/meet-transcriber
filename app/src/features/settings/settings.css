@@ -152,3 +152,4 @@
 .callapps__option { padding: 4px 8px; border-radius: var(--r-md); cursor: pointer; }
 .callapps__option:hover, .callapps__option--active { background: var(--surface-hover); }
 .callapps__note { margin: 0; font-size: 12px; }
+.callapps__strict { margin-top: 6px; }

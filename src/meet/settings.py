@@ -61,6 +61,25 @@ DEFAULT_PROCESSES = (
     "Webex.exe",
 )
 
+# Сайты звонков: подстрока заголовка окна браузера (без учёта регистра). По
+# ним берётся начальное название записи, а в строгом режиме
+# (`browser_require_site`) — решается, звонок ли это вообще. «Meet –» — так
+# Google Meet подписывает вкладку («Meet – abc-defg-hij»).
+DEFAULT_CALL_SITES = (
+    "Dion",
+    "Google Meet",
+    "Meet –",
+    "Телемост",
+    "Zoom",
+    "Microsoft Teams",
+    "Jitsi",
+    "VK Звонки",
+    "Контур.Толк",
+    "Webex",
+    "Discord",
+    "Яндекс Телемост",
+)
+
 # Текст, который пост-хук передаёт запускаемой команде. Плейсхолдеры: {folder},
 # {project}, {date}, {prompt} — см. Hooks.
 DEFAULT_HOOK_PROMPT = (
@@ -152,14 +171,32 @@ def as_process_list(value) -> list[str]:
     регистра — детектор сравнивает имена так же) убираются. Пустой список, как
     и мусор, — список по умолчанию: детектор без программ не видел бы звонков
     вовсе, а выключатель для этого есть отдельный (`enabled`)."""
+    return _unique(as_str_list(value, DEFAULT_PROCESSES)) or list(DEFAULT_PROCESSES)
+
+
+def _unique(values) -> list[str]:
+    """Строки без пробелов по краям, пустых и повторов (без учёта регистра)."""
     seen: set[str] = set()
     names: list[str] = []
-    for name in as_str_list(value, DEFAULT_PROCESSES):
-        name = name.strip()
+    for name in values:
+        name = str(name).strip()
         if name and name.lower() not in seen:
             seen.add(name.lower())
             names.append(name)
-    return names or list(DEFAULT_PROCESSES)
+    return names
+
+
+def as_browser_list(value) -> list[str]:
+    """Браузеры для звонков (имена exe). В отличие от программ звонков пустой
+    список — норма: по умолчанию браузеры не отслеживаются."""
+    if isinstance(value, str):
+        value = [value]
+    return _unique(value) if isinstance(value, list) else []
+
+
+def as_site_list(value) -> list[str]:
+    """Сайты звонков; пусто или мусор — список по умолчанию."""
+    return _unique(as_str_list(value, DEFAULT_CALL_SITES)) or list(DEFAULT_CALL_SITES)
 
 
 def as_choice(value, allowed: tuple[str, ...], default: str) -> str:
@@ -204,6 +241,11 @@ class AutoRecord:
     grace_seconds: float = DEFAULT_GRACE_S
     poll_seconds: float = DEFAULT_POLL_S
     min_call_seconds: float = DEFAULT_MIN_CALL_S
+    # Браузеры — отдельно от программ: у них звонок только по микрофону
+    # (см. meet.watch). Ключ новый, по умолчанию пусто — старые конфиги как были.
+    browsers: list[str] = field(default_factory=list)
+    browser_require_site: bool = False
+    call_sites: list[str] = field(default_factory=lambda: list(DEFAULT_CALL_SITES))
 
     @classmethod
     def from_raw(cls, raw: dict) -> "AutoRecord":
@@ -215,6 +257,9 @@ class AutoRecord:
             min_call_seconds=as_positive(
                 raw.get("min_call_seconds"), DEFAULT_MIN_CALL_S, 0.0
             ),
+            browsers=as_browser_list(raw.get("browsers")),
+            browser_require_site=as_flag(raw.get("browser_require_site"), False),
+            call_sites=as_site_list(raw.get("call_sites")),
         )
 
     def to_raw(self) -> dict:
@@ -224,6 +269,9 @@ class AutoRecord:
             "grace_seconds": self.grace_seconds,
             "poll_seconds": self.poll_seconds,
             "min_call_seconds": self.min_call_seconds,
+            "browsers": list(self.browsers),
+            "browser_require_site": self.browser_require_site,
+            "call_sites": list(self.call_sites),
         }
 
 

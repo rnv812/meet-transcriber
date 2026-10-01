@@ -236,3 +236,15 @@ test("«Автозапись»: пресет программы звонков �
   expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1])
     .toEqual({ auto_record: { processes: ["zoom.exe", "ms-teams.exe", "Teams.exe"] } });
 });
+
+test("«Автозапись»: браузер для звонков сохраняется отдельно от программ", async () => {
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Автозапись" }));
+  const group = await screen.findByRole("group", { name: "Звонки в браузере" });
+  await userEvent.click(within(group).getByRole("checkbox", { name: "Google Chrome" }));
+  await userEvent.click(within(group).getByRole("checkbox", { name: /Только если в заголовке окна сайт звонка/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
+  expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1])
+    .toEqual({ auto_record: { browsers: ["chrome.exe"], browser_require_site: true } });
+});

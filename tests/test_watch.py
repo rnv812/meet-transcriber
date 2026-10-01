@@ -341,3 +341,120 @@ def test_com_flag_is_not_set_on_failure(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", broken)
     assert watch._ensure_com() is False
     assert watch._com_ready is False
+
+
+# --- звонки в браузере ----------------------------------------------------
+
+
+def _browser_signals(monkeypatch, *, mic, render=True, pids=None, titles=(),
+                     require_site=False, sites=("Dion", "Meet –", "Телемост", "Яндекс Телемост")):
+    """Сигналы с одним настольным клиентом (молчит) и одним браузером.
+
+    `mic` — занят ли микрофон браузером; `render` — играет ли браузер (видео):
+    для браузера этот сигнал не должен значить ничего."""
+    monkeypatch.setattr(watch, "mic_busy", lambda name: mic if name == "chrome.exe" else False)
+    monkeypatch.setattr(watch, "render_active",
+                        lambda name, log=None: render if name == "chrome.exe" else False)
+    monkeypatch.setattr(watch, "process_running", lambda name, log=None: True)
+    monkeypatch.setattr(watch, "browser_pids", lambda name: {101} if pids is None else pids)
+    seen = []
+    monkeypatch.setattr(watch, "window_titles",
+                        lambda found: seen.append(set(found)) or list(titles))
+    signals = watch.Signals(["Dion.exe"], browsers=["chrome.exe"],
+                            require_site=require_site, sites=list(sites))
+    return signals, seen
+
+
+def test_browser_with_busy_microphone_is_a_call(monkeypatch):
+    signals, _ = _browser_signals(monkeypatch, mic=True, render=False)
+    call, mic, _render = signals.read(now=0)
+    assert call is True and mic is True
+    assert signals.browser_call["exe"] == "chrome.exe"
+
+
+def test_browser_playing_video_without_microphone_is_not_a_call(monkeypatch):
+    # видео и музыка в браузере — не звонок: render для браузеров не считается
+    signals, seen = _browser_signals(monkeypatch, mic=False, render=True)
+    assert signals.read(now=0)[0] is False
+    assert signals.browser_call is None
+    assert seen == []  # окна не перечисляются, пока микрофон свободен
+
+
+def test_browser_render_is_never_polled(monkeypatch):
+    polled = []
+    signals, _ = _browser_signals(monkeypatch, mic=False)
+    monkeypatch.setattr(watch, "render_active",
+                        lambda name, log=None: polled.append(name) or False)
+    signals.read(now=0)
+    assert polled == ["Dion.exe"]
+
+
+def test_browser_stale_microphone_mark_without_process_is_not_a_call(monkeypatch):
+    signals, _ = _browser_signals(monkeypatch, mic=True, pids=set())
+    assert signals.read(now=0)[0] is False
+
+
+def test_browser_title_gives_site_and_recording_title(monkeypatch):
+    signals, seen = _browser_signals(
+        monkeypatch, mic=True,
+        titles=["Почта - Google Chrome", "Dion — Планёрка отдела - Google Chrome"])
+    assert signals.read(now=0)[0] is True
+    assert seen == [{101}]  # только окна процессов этого браузера
+    assert signals.browser_call == {
+        "exe": "chrome.exe", "site": "Dion", "title": "Dion — Планёрка отдела"}
+
+
+def test_strict_mode_requires_a_call_site_in_window_titles(monkeypatch):
+    signals, _ = _browser_signals(monkeypatch, mic=True, require_site=True,
+                                  titles=["Диктофон онлайн - Google Chrome"])
+    assert signals.read(now=0)[0] is False
+    assert signals.browser_call is None
+    assert signals.browser_note == "chrome.exe: микрофон занят, сайта звонка в заголовках окон нет"
+
+
+def test_strict_mode_with_matching_title_is_a_call(monkeypatch):
+    signals, _ = _browser_signals(monkeypatch, mic=True, require_site=True,
+                                  titles=["Meet – abc-defg-hij - Google Chrome"])
+    assert signals.read(now=0)[0] is True
+    assert signals.browser_call["site"] == "Meet"
+
+
+def test_desktop_call_has_no_browser_details(monkeypatch):
+    monkeypatch.setattr(watch, "mic_busy", lambda name: name == "Dion.exe")
+    monkeypatch.setattr(watch, "render_active", lambda name, log=None: False)
+    monkeypatch.setattr(watch, "process_running", lambda name, log=None: True)
+    signals = watch.Signals(["Dion.exe"], browsers=["chrome.exe"])
+    assert signals.read(now=0)[0] is True
+    assert signals.browser_call is None
+
+
+# --- сайт и название записи из заголовка окна -------------------------------
+
+
+def test_match_site_is_case_insensitive_and_prefers_the_longest():
+    sites = ["Телемост", "Яндекс Телемост", "Dion"]
+    assert watch.match_site("яндекс телемост — встреча", sites) == "Яндекс Телемост"
+    assert watch.match_site("DION — встреча", sites) == "Dion"
+    assert watch.match_site("Новости", sites) is None
+    assert watch.match_site("что угодно", ["", "  "]) is None
+
+
+def test_call_title_strips_browser_name_and_site():
+    assert watch.call_title("Dion — Планёрка отдела - Google Chrome", "Dion") == "Dion — Планёрка отдела"
+    assert watch.call_title("Meet – abc-defg-hij — Mozilla Firefox", "Meet –") == "Meet — abc-defg-hij"
+    assert watch.call_title("Яндекс Телемост - Яндекс Браузер", "Яндекс Телемост") == "Яндекс Телемост"
+    assert watch.call_title("Обзор | Microsoft Teams - Профиль 1 - Microsoft\u200b Edge",
+                            "Microsoft Teams") == "Microsoft Teams — Обзор"
+
+
+def test_call_title_is_sanitized_and_short():
+    long = "Dion — " + "очень длинное название встречи " * 10 + "- Google Chrome"
+    title = watch.call_title(long, "Dion")
+    assert len(title) <= watch.CALL_TITLE_MAX
+    assert title.endswith("…")
+    assert watch.call_title("Dion\t—\x07  Встреча\n - Opera", "Dion") == "Dion — Встреча"
+
+
+def test_short_title_for_log_is_truncated():
+    assert watch.short("а" * 100, 10) == "ааааааааа…"
+    assert watch.short("коротко", 10) == "коротко"

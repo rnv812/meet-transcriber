@@ -358,6 +358,15 @@ class TrayControl:
         except Exception as e:
             # Пометка «откуда запись» — не повод не расшифровывать её.
             self.tray.log(f"meta.json не записан ({path.name}): {e}")
+        title = getattr(self.tray, "recording_title", None) if source == AUTO else None
+        if title:
+            # Название звонка из окна браузера — только начальное: если запись
+            # уже переименовали (пока она шла), не трогаем.
+            try:
+                library.update_meta(path, lambda meta: meta if meta.get("title")
+                                    else {**meta, "title": title})
+            except Exception as e:
+                self.tray.log(f"название записи не сохранено ({path.name}): {e}")
         if not full or not settings.load().recording.auto_transcribe:
             return
         job, created = self._submit_once(jobs.TRANSCRIBE, path)
@@ -414,6 +423,9 @@ class TrayControl:
                 # реестре нет, pycaw не встал) — это не то же самое, что «нет».
                 "mic": tray._last_signals[0] if tray._last_signals else None,
                 "render": tray._last_signals[1] if tray._last_signals else None,
+                "browsers": list(tray.cfg.get("browsers") or []),
+                # Звонок в браузере по последнему опросу: {"exe", "site"} или None.
+                "browser": self._browser_call(),
             },
             "recordings_dir": str(cfg.recording.recordings),
             # Папка для встреч в базе знаний: оболочка открывает выгруженные
@@ -434,6 +446,10 @@ class TrayControl:
             # при этом не идёт — status выше остаётся про неё.
             "live": self.live.status(),
         }
+
+    def _browser_call(self) -> dict | None:
+        call = getattr(getattr(self.tray, "signals", None), "browser_call", None)
+        return {"exe": call.get("exe"), "site": call.get("site")} if call else None
 
     def _devices_fallback(self, recording: bool) -> list[dict]:
         if recording:

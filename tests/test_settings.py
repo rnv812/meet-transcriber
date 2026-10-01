@@ -560,3 +560,37 @@ def test_process_list_is_trimmed_and_deduplicated(tmp_path):
     f = tmp_path / "config.json"
     _write(f, {"auto_record": {"processes": [" Zoom.exe ", "zoom.exe", "", "Telegram.exe"]}})
     assert settings.load(f).auto_record.processes == ["Zoom.exe", "Telegram.exe"]
+
+
+# --- звонки в браузере ------------------------------------------------------
+
+
+def test_browsers_default_to_none_and_sites_to_known_call_sites(tmp_path):
+    cfg = settings.load(tmp_path / "нет.json").auto_record
+    assert cfg.browsers == []  # новый ключ: старые конфиги не трогаем
+    assert cfg.browser_require_site is False
+    assert "Dion" in cfg.call_sites and "Meet –" in cfg.call_sites
+    assert cfg.call_sites == list(settings.DEFAULT_CALL_SITES)
+
+
+def test_browser_settings_round_trip_through_patch(tmp_path):
+    f = tmp_path / "config.json"
+    _write(f, {"auto_record": {"processes": ["Zoom.exe"]}})
+    settings.patch({"auto_record": {
+        "browsers": [" chrome.exe ", "Chrome.exe", "", "msedge.exe"],
+        "browser_require_site": "true",
+        "call_sites": ["Dion", " Моя платформа ", "dion"],
+    }}, f)
+    cfg = settings.load(f).auto_record
+    assert cfg.browsers == ["chrome.exe", "msedge.exe"]
+    assert cfg.browser_require_site is True
+    assert cfg.call_sites == ["Dion", "Моя платформа"]
+    assert cfg.processes == ["Zoom.exe"]  # браузеры хранятся отдельно
+
+
+def test_empty_browser_list_stays_empty_and_garbage_sites_fall_back(tmp_path):
+    f = tmp_path / "config.json"
+    _write(f, {"auto_record": {"browsers": [], "call_sites": 5}})
+    cfg = settings.load(f).auto_record
+    assert cfg.browsers == []
+    assert cfg.call_sites == list(settings.DEFAULT_CALL_SITES)

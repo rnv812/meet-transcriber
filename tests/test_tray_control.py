@@ -1347,3 +1347,35 @@ def test_snapshot_reports_live_mode_fallback(control_state, monkeypatch):
     fallback = [{"kind": "mic", "name": "USB-микрофон", "device": "Микрофон"}]
     monkeypatch.setattr(control_state.live, "devices_fallback", lambda: fallback)
     assert control_state.snapshot()["devices_fallback"] == fallback
+
+
+def test_browser_auto_recording_gets_the_call_title(app, tmp_path):
+    tray_control.TrayControl(app, queue=_Queue())
+    folder = _saved_folder(tmp_path)
+    app.recording_title = "Dion — Планёрка отдела"
+    app.on_saved(str(folder), tray_control.AUTO, True)
+    assert library.read_meta(folder)["title"] == "Dion — Планёрка отдела"
+
+
+def test_call_title_never_overwrites_a_rename(app, tmp_path):
+    tray_control.TrayControl(app, queue=_Queue())
+    folder = _saved_folder(tmp_path)
+    library.write_meta(folder, {"title": "Своё название"})
+    app.recording_title = "Dion — Планёрка отдела"
+    app.on_saved(str(folder), tray_control.AUTO, True)
+    assert library.read_meta(folder)["title"] == "Своё название"
+
+
+def test_manual_recording_ignores_call_title(app, tmp_path):
+    tray_control.TrayControl(app, queue=_Queue())
+    folder = _saved_folder(tmp_path)
+    app.recording_title = "Dion — Планёрка отдела"
+    app.on_saved(str(folder), tray_control.MANUAL, True)
+    assert "title" not in library.read_meta(folder)
+
+
+def test_snapshot_shows_browsers_and_browser_call(control_state, app):
+    app.signals.browser_call = {"exe": "chrome.exe", "site": "Dion", "title": "Dion — Встреча"}
+    snap = control_state.snapshot()["auto_record"]
+    assert snap["browsers"] == []
+    assert snap["browser"] == {"exe": "chrome.exe", "site": "Dion"}

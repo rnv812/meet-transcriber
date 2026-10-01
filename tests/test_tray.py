@@ -165,10 +165,11 @@ def test_auto_config_reads_file(monkeypatch, tmp_path):
         }
     })
     cfg = tray._auto_config()
-    assert cfg == {
+    assert {k: cfg[k] for k in ("enabled", "processes", "grace_seconds",
+                                 "poll_seconds", "min_call_seconds", "browsers")} == {
         "enabled": True, "processes": ["Foo.exe"],
         "grace_seconds": 30.0, "poll_seconds": 5.0,
-        "min_call_seconds": tray.MIN_CALL_S,
+        "min_call_seconds": tray.MIN_CALL_S, "browsers": [],
     }
 
 
@@ -815,3 +816,53 @@ def test_main_headless_when_resident_already_runs_exits_distinctly(monkeypatch, 
     assert exc.value.code == tray.EXIT_ALREADY_RUNNING == 3
     assert ran == []
     assert "уже" in capsys.readouterr().err
+
+
+# --- звонки в браузере --------------------------------------------------------
+
+
+def test_signals_get_browser_settings(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    _write_config(tmp_path, {"auto_record": {
+        "enabled": True, "browsers": ["chrome.exe"], "browser_require_site": True,
+        "call_sites": ["Dion"],
+    }})
+    app = tray.TrayApp()
+    assert app.signals.browsers == ["chrome.exe"]
+    assert app.signals.require_site is True
+    assert app.signals.sites == ["Dion"]
+
+
+def test_browser_call_start_is_logged_and_titles_the_recording(monkeypatch, tmp_path):
+    app = _app(monkeypatch, tmp_path)
+    _fixed_signals(app, monkeypatch, call=True)
+    app.signals.browser_call = {"exe": "chrome.exe", "site": "Dion",
+                                "title": "Dion — Планёрка отдела"}
+    monkeypatch.setattr(app, "start_recording", lambda source: True)
+    app._watch_tick()
+    assert app.recording_title == "Dion — Планёрка отдела"
+    log = (tmp_path / "meet" / "watch.log").read_text("utf-8")
+    assert "звонок в браузере: chrome.exe, сайт Dion" in log
+
+
+def test_desktop_call_keeps_recording_untitled(monkeypatch, tmp_path):
+    app = _app(monkeypatch, tmp_path)
+    app.recording_title = "от прошлого звонка"
+    _fixed_signals(app, monkeypatch, call=True, mic=True, render=False)
+    monkeypatch.setattr(app, "start_recording", lambda source: True)
+    app._watch_tick()
+    assert app.recording_title is None
+    log = (tmp_path / "meet" / "watch.log").read_text("utf-8")
+    assert "звонок в программе" in log
+
+
+def test_browser_note_is_logged_once_per_change(monkeypatch, tmp_path):
+    app = _app(monkeypatch, tmp_path, enabled=False)
+    _fixed_signals(app, monkeypatch, call=False, mic=False)
+    app.signals.browser_note = "chrome.exe: микрофон занят, сайта звонка в заголовках окон нет"
+    app._last_poll = -100
+    app._watch_tick()
+    app._last_poll = -100
+    app._watch_tick()
+    log = (tmp_path / "meet" / "watch.log").read_text("utf-8")
+    assert log.count("сайта звонка в заголовках окон нет") == 1

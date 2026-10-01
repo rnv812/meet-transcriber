@@ -14,10 +14,19 @@
 когда ответить нечем (ключа нет, pycaw не встал, COM отказал) — решение тогда
 принимается по оставшемуся сигналу, а не по домыслу.
 
+**Браузеры** (`browsers` в настройках) идут по своему правилу: звонок — только
+занятый микрофон. Воспроизведение у браузера не значит ничего — это любое видео
+или музыка. Строгий режим (`browser_require_site`) вдобавок требует, чтобы в
+заголовке одного из окон этого браузера был сайт звонка (`call_sites`). Окна
+перечисляются только пока браузер держит микрофон: в остальное время детектор
+стоит столько же, сколько без браузеров. Из заголовка окна берётся и начальное
+название записи («Dion — Планёрка»).
+
 Стейт-машина (`Watcher`) отделена от чтения реестра и COM и принимает время
 параметром — грейс проверяется юнитом без Диона и без ожидания.
 См. спеку docs/superpowers/specs/2026-08-07-dion-auto-record-design.md."""
 
+import re
 import winreg
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +49,10 @@ POLL_S = 2.0
 # почти всегда ловится микрофоном, а роль render'а — пережить мьют, где
 # несколько секунд задержки ничего не решают.
 RENDER_PERIOD_S = 6.0
+# Начальное название записи из заголовка окна браузера — не длиннее этого.
+CALL_TITLE_MAX = 80
+# Заголовок окна в журнале — не длиннее этого: там бывает лишнее.
+LOG_TITLE_MAX = 60
 LOG_MAX_BYTES = 1_000_000
 LOG_CHECK_EVERY = 200  # записей в журнал между проверками его размера
 
@@ -193,15 +206,26 @@ class Signals:
     """Опрос сигналов с разной частотой и проверкой живости процесса.
 
     Держит последнее значение render между опросами: перечисление сессий
-    дорогое и подтекающее (см. RENDER_PERIOD_S), а микрофон читается дёшево."""
+    дорогое и подтекающее (см. RENDER_PERIOD_S), а микрофон читается дёшево.
+
+    Браузеры (`browsers`) — отдельно и только по микрофону (см. docstring
+    модуля). Подробности браузерного звонка последнего опроса — в
+    `browser_call` ({"exe", "site", "title"} или None), а почему занятый
+    браузером микрофон звонком не счёлся — в `browser_note` (для журнала)."""
 
     def __init__(self, exe_names, render_period: float = RENDER_PERIOD_S,
-                 log=None) -> None:
+                 log=None, browsers=(), require_site: bool = False,
+                 sites=()) -> None:
         self.exe_names = list(exe_names)
+        self.browsers = list(browsers)
+        self.require_site = bool(require_site)
+        self.sites = list(sites)
         self.render_period = render_period
         self.log = log
         self._render = None
         self._render_at = None
+        self.browser_call: "dict | None" = None
+        self.browser_note: "str | None" = None
 
     def read(self, now: float) -> "tuple[bool, bool | None, bool | None]":
         mic = None
@@ -222,8 +246,35 @@ class Signals:
         if call and not self._any_running():
             # метки реестра переживают процесс: без этой проверки убитый
             # мид-звонком Дион означал бы «в звонке» до скончания века
-            return False, mic, render
+            call = False
+        self.browser_note = None
+        self.browser_call = self._browser() if self.browsers else None
+        if self.browser_call is not None:
+            return True, True, render
         return call, mic, render
+
+    def _browser(self) -> "dict | None":
+        """Звонок в браузере: микрофон занят, процесс жив и (в строгом режиме)
+        в заголовке его окна есть сайт звонка. Окна перечисляются только здесь,
+        то есть только пока какой-то браузер держит микрофон."""
+        for name in self.browsers:
+            if not mic_busy(name):
+                continue
+            pids = browser_pids(name)
+            if pids is not None and not pids:
+                continue  # метка в реестре от закрытого браузера
+            site = title = None
+            for window in window_titles(pids) if pids else []:
+                found = match_site(window, self.sites)
+                if found:
+                    site, title = site_label(found), call_title(window, found)
+                    break
+            if site is None and self.require_site:
+                self.browser_note = (
+                    f"{name}: микрофон занят, сайта звонка в заголовках окон нет")
+                continue
+            return {"exe": name, "site": site, "title": title}
+        return None
 
     def _any_running(self) -> bool:
         for name in self.exe_names:
@@ -233,6 +284,125 @@ class Signals:
             if running:
                 return True
         return False
+
+
+# --- браузеры: процессы, окна, сайт звонка ----------------------------------
+
+# Имя браузера в конце заголовка окна: «Вкладка - Google Chrome». У Edge перед
+# ним бывает профиль («- Профиль 1 - Microsoft Edge», с невидимым пробелом в
+# имени) — его убирает _PROFILE_TAIL следом.
+_BROWSER_TAIL = re.compile(
+    r"\s+[-–—]\s+(?:google chrome|chromium|mozilla firefox|firefox|"
+    r"microsoft\s*edge|яндекс[ .]?браузер|yandex(?: browser)?|"
+    r"opera(?: gx)?|brave|vivaldi)\s*$",
+    re.IGNORECASE,
+)
+_PROFILE_TAIL = re.compile(
+    r"\s+[-–—]\s+(?:(?:профиль|profile)\s*\d*|личный|рабочий|personal|work)\s*$",
+    re.IGNORECASE,
+)
+_SEPARATORS = " \t-–—|·:•"
+# Управляющие и невидимые символы (у Edge в имени — пробел нулевой ширины).
+_CONTROL = re.compile("[\x00-\x1f\x7f​-‏ -‮]")
+
+
+def browser_pids(exe_name: str) -> "set[int] | None":
+    """Процессы браузера с таким именем exe. None — psutil недоступен."""
+    try:
+        import psutil
+    except Exception:
+        return None
+    target = exe_name.lower()
+    found: set[int] = set()
+    try:
+        for proc in psutil.process_iter(["name"]):
+            name = proc.info.get("name")
+            if name and name.lower() == target:
+                found.add(proc.pid)
+    except Exception:
+        return None
+    return found
+
+
+def window_titles(pids) -> "list[str]":
+    """Заголовки видимых окон верхнего уровня, принадлежащих процессам `pids`.
+
+    EnumWindows через ctypes: без новых зависимостей и дёшево (~мс). Сбой —
+    пустой список: сайт тогда не определён (в строгом режиме это «не звонок»)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+    except Exception:
+        return []
+    wanted = set(pids)
+    titles: list[str] = []
+    proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def visit(hwnd, _param):
+        try:
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value not in wanted:
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            if buf.value:
+                titles.append(buf.value)
+        except Exception:
+            pass
+        return True
+
+    try:
+        user32.EnumWindows(proc_type(visit), 0)
+    except Exception:
+        return []
+    return titles
+
+
+def match_site(title: str, sites) -> "str | None":
+    """Сайт звонка, упомянутый в заголовке (без учёта регистра). Подходят
+    несколько — самый длинный: «Яндекс Телемост» точнее, чем «Телемост»."""
+    low = title.lower()
+    best = None
+    for site in sites:
+        site = str(site).strip()
+        if site and site.lower() in low and (best is None or len(site) > len(best)):
+            best = site
+    return best
+
+
+def site_label(site: str) -> str:
+    """Сайт для названия записи: «Meet –» (так Google Meet подписывает
+    вкладку) → «Meet»."""
+    return site.strip(_SEPARATORS) or site.strip()
+
+
+def short(text: str, limit: int) -> str:
+    """Не длиннее `limit` символов; обрезанное кончается многоточием."""
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def call_title(window: str, site: str) -> str:
+    """Начальное название записи из заголовка окна браузера:
+    «<сайт> — <остаток заголовка>», без имени браузера и профиля, без
+    управляющих символов, не длиннее CALL_TITLE_MAX."""
+    text = " ".join(_CONTROL.sub(" ", window).split())
+    text = _BROWSER_TAIL.sub("", text)
+    text = _PROFILE_TAIL.sub("", text)
+    needle = site.strip()
+    at = text.lower().find(needle.lower())
+    rest = f"{text[:at]} {text[at + len(needle):]}" if at >= 0 else text
+    rest = " ".join(rest.split()).strip(_SEPARATORS)
+    label = site_label(site)
+    title = f"{label} — {rest}" if rest and rest.lower() != label.lower() else label
+    return short(title, CALL_TITLE_MAX)
 
 
 class Watcher:
