@@ -61,18 +61,38 @@ function Write-Step([string]$Text) {
 
 # Файл в UTF-8 с BOM: Windows PowerShell 5.1 без BOM читает его в ANSI.
 # Внешняя команда: stderr — не ошибка (cargo и npm пишут туда ход работы),
-# ошибка — ненулевой код выхода.
+# ошибка — ненулевой код выхода. Ненайденная команда при 'Continue' была бы
+# лишь строкой в консоли с LASTEXITCODE = 0 — такую ошибку ловим отдельно.
 function Invoke-Native([string]$Title, [scriptblock]$Command) {
     $global:LASTEXITCODE = 0
     $saved = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
+    $errorsBefore = $Error.Count
     try {
         & $Command
+    } catch [System.Management.Automation.CommandNotFoundException] {
+        throw "$Title не запустился: $($_.Exception.Message)"
     } finally {
         $ErrorActionPreference = $saved
     }
+    $fresh = $Error.Count - $errorsBefore
+    if ($fresh -gt 0) {
+        $missing = @($Error | Select-Object -First $fresh | Where-Object {
+            $_.Exception -is [System.Management.Automation.CommandNotFoundException]
+        })
+        if ($missing.Count -gt 0) {
+            throw "$Title не запустился: $($missing[0].Exception.Message)"
+        }
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "$Title завершился с кодом $LASTEXITCODE"
+    }
+}
+
+# Инструменты сборки — до первого шага, а не на середине.
+foreach ($tool in @('uv', 'npm', 'npx', 'cargo')) {
+    if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+        throw "$tool не найден в PATH: для сборки нужны uv, Node.js (npm, npx) и Rust (cargo)"
     }
 }
 
@@ -102,7 +122,10 @@ $VersionFiles = @(
     @{ Path = 'pyproject.toml'; Pattern = '(?m)^(version\s*=\s*")[^"]*' },
     @{ Path = 'app\src-tauri\tauri.conf.json'; Pattern = '(?m)^(\s*"version"\s*:\s*")[^"]*' },
     @{ Path = 'app\src-tauri\Cargo.toml'; Pattern = '(?m)^(version\s*=\s*")[^"]*' },
-    @{ Path = 'app\package.json'; Pattern = '(?m)^(\s*"version"\s*:\s*")[^"]*' }
+    @{ Path = 'app\package.json'; Pattern = '(?m)^(\s*"version"\s*:\s*")[^"]*' },
+    # Cargo.lock держит версию пакета оболочки: разойдись она с Cargo.toml,
+    # tauri build переписал бы файл и дерево после сборки стало бы грязным.
+    @{ Path = 'app\src-tauri\Cargo.lock'; Pattern = '(?m)^(name = "meet-desktop"\r?\nversion = ")[^"]*' }
 )
 
 Write-Step "Версия $Version"
@@ -138,9 +161,6 @@ if ($SetVersion) {
 
 # --- 2. Колесо meet ---------------------------------------------------------
 Write-Step 'Колесо meet (uv build --wheel)'
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    throw 'uv не найден в PATH: https://docs.astral.sh/uv/getting-started/installation/'
-}
 # Остатки прошлой сборки setuptools (build\lib) попали бы в колесо — в том
 # числе удалённые с тех пор модули.
 foreach ($stale in @('build\lib', 'build\bdist.win-amd64', 'build\wheel')) {
@@ -236,6 +256,20 @@ try {
 } finally {
     Pop-Location
 }
+
+# Папка установки — та же %LOCALAPPDATA%\meet, что и данные (записи, голоса,
+# движок). Деинсталлятор Tauri удаляет только свои файлы и пустую папку;
+# рекурсивное удаление $INSTDIR в шаблоне (новая версия Tauri, свой шаблон)
+# стёрло бы данные человека — такой установщик не выпускаем.
+$nsi = Join-Path $TauriDir 'target\release\nsis\x64\installer.nsi'
+if (-not (Test-Path $nsi)) { throw "Нет сгенерированного $nsi — проверить деинсталлятор нечем" }
+# Флаг /r в любом месте среди флагов, но не /REBOOTOK (тоже начинается с /r).
+$recursive = [regex]::Matches((Read-Text $nsi), '(?i)RMDir(\s+/\w+)*\s+/r\s[^\r\n]*\$INSTDIR')
+if ($recursive.Count -gt 0) {
+    throw ("Деинсталлятор рекурсивно удаляет папку установки (= папку данных): " +
+        (($recursive | ForEach-Object { $_.Value.Trim() }) -join '; '))
+}
+Write-Host '  деинсталлятор не удаляет папку установки рекурсивно'
 
 # --- 6. Результат -----------------------------------------------------------
 $installerName = "meet_${Version}_x64-setup.exe"
