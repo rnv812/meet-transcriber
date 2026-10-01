@@ -114,7 +114,8 @@ export async function residentStatus(): Promise<string | null> {
 
 /**
  * Открыть страницу в браузере. Оболочка открывает только свои адреса
- * (huggingface.co, claude.ai, github.com/openai/codex) — см. `open_url`.
+ * (huggingface.co, claude.ai, github.com/openai/codex, Releases форка) — см.
+ * `open_url`.
  * Не открылась — только в журнал консоли: это ссылка, а не действие.
  */
 export async function openUrl(url: string): Promise<void> {

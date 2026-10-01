@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from meet.asr import Segment, Word
 from meet.diarize import MIN_OVERLAP, Diarization, _to_diarization, _word_uncertain, split_by_speaker
@@ -130,6 +131,8 @@ def test_to_diarization_exclusive_flag_keeps_old_behavior():
 
 
 def test_to_diarization_overlaps_filtered_by_min_overlap():
+    # pyannote — из extras движка; CI гоняет тесты на лёгком ядре без него.
+    pytest.importorskip("pyannote.core")
     from pyannote.core import Annotation
     from pyannote.core import Segment as PySegment
 

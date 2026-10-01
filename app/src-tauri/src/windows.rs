@@ -54,6 +54,15 @@ fn encode_component(text: &str) -> String {
     out
 }
 
+/// Флаг, с которым Windows запускает оболочку при входе в систему (значение
+/// автозапуска в `HKCU\…\Run`, `set_autostart`).
+pub const AUTOSTART_ARG: &str = "--autostart";
+
+/// Запуск при входе в систему: только трей, никаких окон — даже мастера.
+pub fn autostarted(args: &[String]) -> bool {
+    args.iter().skip(1).any(|arg| arg == AUTOSTART_ARG)
+}
+
 /// Запись из командной строки: `meet.exe --recording <id>` (или
 /// `--recording=<id>`). `args` — полный argv, `args[0]` — сам exe. Флаг без
 /// значения или со следующим флагом вместо id — `None`: окно откроется без
@@ -410,15 +419,20 @@ pub async fn pick_folder(app: AppHandle, start: Option<String>) -> Result<Option
     .map_err(|error| error.to_string())?
 }
 
-/// Страницы, которые окно открывает в браузере: мастер (Hugging Face) и
-/// подсказки «не найден — установите» в настройках ассистента. Префикс
-/// кончается на «/»: хост дальше не продолжить (`huggingface.co.evil`).
+/// Страницы, которые окно открывает в браузере: мастер (Hugging Face),
+/// подсказки «не найден — установите» в настройках ассистента и «Скачать
+/// новую версию» (Releases форка) в «О программе». Префикс кончается на
+/// «/»: хост дальше не продолжить (`huggingface.co.evil`).
 const URL_PREFIXES: &[&str] = &[
     "https://huggingface.co/",
     "https://claude.ai/",
     "https://github.com/openai/codex/",
+    "https://github.com/rnv812/ai_transcriber/releases/",
 ];
-const URL_EXACT: &[&str] = &["https://github.com/openai/codex"];
+const URL_EXACT: &[&str] = &[
+    "https://github.com/openai/codex",
+    "https://github.com/rnv812/ai_transcriber/releases",
+];
 
 /// Адрес из списка и без символов, которые что-то значат для оболочки
 /// Windows (`&`, `|`, `"`, `^`, пробелы, `\`, управляющие).
@@ -534,6 +548,38 @@ pub fn open_wizard_on_first_run(app: &AppHandle) {
     if wizard_at_startup(!cfg!(debug_assertions), installed, wizard_done(&data)) {
         shell_log!("движок {version} не установлен — открываю мастер первого запуска");
         open_main(app, None, None);
+    }
+}
+
+/// «Запускать вместе с Windows» (шаг «Готово» мастера). `enabled` —
+/// обязательный аргумент: окно проверяет наличие команды вызовом без
+/// аргументов и прячет переключатель только на «command not found».
+/// Выключить невключённое — не ошибка (плагин в этом случае отказывает:
+/// нечего удалять из реестра).
+#[tauri::command]
+pub async fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+
+    let manager = app.autolaunch();
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager
+            .disable()
+            .or_else(|error| match manager.is_enabled() {
+                Ok(false) => Ok(()),
+                _ => Err(error),
+            })
+    };
+    match result {
+        Ok(()) => {
+            shell_log!("автозапуск: {}", if enabled { "вкл" } else { "выкл" });
+            Ok(())
+        }
+        Err(error) => {
+            shell_log!("автозапуск не переключился: {error}");
+            Err(format!("Не удалось изменить автозапуск: {error}"))
+        }
     }
 }
 
@@ -758,6 +804,22 @@ mod tests {
     }
 
     #[test]
+    fn autostart_flag_is_recognised_only_after_the_exe() {
+        assert!(autostarted(&argv(&["meet.exe", "--autostart"])));
+        assert!(autostarted(&argv(&[
+            "meet.exe",
+            "--recording",
+            "x",
+            "--autostart"
+        ])));
+        assert!(!autostarted(&argv(&["meet.exe"])));
+        assert!(!autostarted(&argv(&["--autostart"])));
+        assert!(!autostarted(&argv(&["meet.exe", "--autostart=1"])));
+        // Обычный запуск с записью — не автозапуск.
+        assert_eq!(recording_arg(&argv(&["meet.exe", "--autostart"])), None);
+    }
+
+    #[test]
     fn url_allowed_only_for_known_pages() {
         for url in [
             "https://huggingface.co/pyannote/speaker-diarization-community-1",
@@ -765,6 +827,8 @@ mod tests {
             "https://claude.ai/code",
             "https://github.com/openai/codex",
             "https://github.com/openai/codex/releases",
+            "https://github.com/rnv812/ai_transcriber/releases",
+            "https://github.com/rnv812/ai_transcriber/releases/tag/v0.1.0",
         ] {
             assert!(url_allowed(url), "{url}");
         }
@@ -777,6 +841,12 @@ mod tests {
             "https://github.com/openai/codexx",
             "https://github.com/openai/other",
             "https://github.com/evil/codex",
+            // Только Releases форка: не сам репозиторий и не чужой форк.
+            "https://github.com/rnv812/ai_transcriber",
+            "https://github.com/rnv812/ai_transcriber/issues",
+            "https://github.com/rnv812/ai_transcriber/releasesx",
+            "https://github.com/rnv812/ai_transcriber_evil/releases",
+            "https://github.com/evil/ai_transcriber/releases",
             "file:///C:/Windows/System32/calc.exe",
             "C:\\Windows\\System32\\calc.exe",
             "",

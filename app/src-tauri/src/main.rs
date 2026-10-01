@@ -34,6 +34,13 @@ fn main() {
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        // Автозапуск при входе в Windows (переключатель мастера,
+        // `windows::set_autostart`): `--autostart` — признак такого запуска.
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg(windows::AUTOSTART_ARG)
+                .build(),
+        )
         .plugin(
             // Панель ассистента встаёт в угол по монитору при каждом старте:
             // сохранённая позиция и размер ей не нужны.
@@ -55,17 +62,21 @@ fn main() {
             engine::reinstall_engine,
             engine::gpu_info,
             windows::open_url,
-            windows::mark_wizard_done
+            windows::mark_wizard_done,
+            windows::set_autostart
         ])
         .setup(|app| {
             Supervisor::start(app.handle());
             tray::build(app)?;
             // Обычный запуск — только трей. `--recording <id>` (например, из
             // уведомления) — сразу окно на этой записи; первый запуск без
-            // движка — окно с мастером.
+            // движка — окно с мастером; автозапуск при входе в Windows —
+            // только трей, без окон.
             let args: Vec<String> = std::env::args().collect();
             if let Some(recording) = windows::recording_arg(&args) {
                 windows::open_main(app.handle(), Some(recording), None);
+            } else if windows::autostarted(&args) {
+                logs::shell_log!("автозапуск при входе в Windows: только трей");
             } else {
                 windows::open_wizard_on_first_run(app.handle());
             }

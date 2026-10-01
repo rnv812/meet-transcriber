@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import pkg from "../../../package.json";
 import { type Endpoint, getDiagnostics } from "../../lib/api";
+import { openUrl } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { Row } from "./Section";
 
@@ -31,6 +32,7 @@ export function About({ endpoint }: { endpoint: Endpoint }) {
     <>
       <Row label="Версия"><span>{pkg.version}</span></Row>
       <Row label="Новые версии" hint="Releases форка на GitHub">
+        <Button onClick={() => void openUrl(RELEASES_URL)}>Скачать новую версию</Button>
         <code className="path">{RELEASES_URL}</code>
         <CopyButton text={RELEASES_URL} />
       </Row>

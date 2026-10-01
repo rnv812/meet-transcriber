@@ -23,6 +23,10 @@ tauri-plugin-dialog = "~2.7"
 # Cargo.lock), чтобы `cargo update` не утащил несовместимую версию. Так же
 # закреплены notification и dialog: их минорные версии идут в ногу с tauri.
 tauri-plugin-single-instance = "~2.4"
+# «Запускать вместе с Windows» (шаг «Готово» мастера): значение в
+# HKCU\Software\Microsoft\Windows\CurrentVersion\Run. 2.6+ требует tauri 2.12 —
+# закреплено на 2.5.x под tauri 2.11, как плагины выше.
+tauri-plugin-autostart = "~2.5"
 # Синхронный HTTP-клиент к control API резидента: вызывается из рабочих
 # потоков надзора и опроса, async-рантайм там не нужен. Только http на
 # 127.0.0.1 — TLS и gzip (фичи по умолчанию) не нужны.

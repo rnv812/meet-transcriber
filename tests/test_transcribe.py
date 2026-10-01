@@ -446,6 +446,8 @@ def test_no_access_pipeline_none_skips_diarization(monkeypatch, tmp_path, capsys
 
 def test_no_access_hub_error_skips_diarization(monkeypatch, tmp_path, capsys):
     """Ошибка hub наружу (нет в кэше и не пускают) — тоже «нет доступа»."""
+    # huggingface_hub приходит с extras движка; без него тест не о чем гонять.
+    pytest.importorskip("huggingface_hub")
     from huggingface_hub.errors import LocalEntryNotFoundError
 
     from meet import credentials

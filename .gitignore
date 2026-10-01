@@ -14,8 +14,10 @@ node_modules/
 app/dist/
 app/src-tauri/target/
 app/src-tauri/gen/
-# uv.exe, ffmpeg.exe и колесо для установщика (scripts/build_release.ps1)
+# uv.exe, ffmpeg.exe и колесо для установщика (scripts/build_release.ps1),
+# её кэш загрузок и промежуточная сборка колеса
 app/src-tauri/resources/
+/build/
 
 # brainstorming companion
 .superpowers/
