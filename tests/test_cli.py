@@ -137,3 +137,417 @@ def test_cli_assist_child_mode_flags(monkeypatch):
     assert called["open_browser"] is False
     assert called["endpoint_file"] == "C:/run/a.json"
     assert called["provider"] == "codex"
+
+
+# --- паритет CLI: всё без окна ------------------------------------------------
+#
+# Новые команды зовутся как `cli.main([...])` и возвращают код выхода. Ни одна
+# не смеет спрашивать (input) или открывать браузер: обе подменены на падение.
+
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+import pytest  # noqa: E402
+
+from meet import library  # noqa: E402
+from meet.llm.base import AgentReply  # noqa: E402
+
+RID = "2026-09-29_15-30"
+
+
+def _refuse(*a, **k):
+    raise AssertionError("CLI не должен ничего спрашивать и открывать")
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    """Свой data dir с config.json: записи и голоса — во временной папке."""
+    data = tmp_path / "data"
+    data.mkdir()
+    rec, voices, notes = tmp_path / "rec", tmp_path / "voices", tmp_path / "notes"
+    rec.mkdir()
+    voices.mkdir()
+    notes.mkdir()
+    (data / "config.json").write_text(json.dumps({
+        "version": 4,
+        "recording": {"out_dir": str(rec), "voices_dir": str(voices)},
+        "llm": {"provider": "auto"},
+        "assistant": {"notes_dir": str(notes), "notes_subdir": "Встречи"},
+    }, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("MEET_DATA_DIR", str(data))
+    monkeypatch.setattr("builtins.input", _refuse)
+    monkeypatch.setattr("webbrowser.open", _refuse)
+    monkeypatch.setattr("webbrowser.open_new_tab", _refuse)
+    return {"rec": rec, "voices": voices, "notes": notes, "tmp": tmp_path}
+
+
+def _meeting(env, rid=RID, title="Планёрка"):
+    folder = env["rec"] / rid
+    folder.mkdir()
+    (folder / "sys.opus").write_bytes(b"x")
+    library.write_transcript(folder, {"version": 1, "title": title, "segments": [
+        {"start": 5.0, "end": 7.25, "speaker": "Демьян", "text": "Начнём."},
+        {"start": 65.0, "end": 66.0, "speaker": "SPEAKER_01", "text": "Согласен."},
+    ]})
+    return folder
+
+
+def _voice(env, name):
+    path = env["voices"] / f"{name}.json"
+    path.write_text(json.dumps({"samples": [{"embedding": [0.1]}]}), encoding="utf-8")
+    return path
+
+
+def _main(argv):
+    from meet import cli
+
+    return cli.main(argv)
+
+
+def _json_out(capsys):
+    out = capsys.readouterr().out
+    return json.loads(out)  # ровно один JSON-документ, иначе ValueError
+
+
+# --- export --------------------------------------------------------------------
+
+
+def test_export_srt_by_id_to_stdout(env, capsysbinary):
+    _meeting(env)
+    assert _main(["export", RID, "--format", "srt"]) == 0
+    text = capsysbinary.readouterr().out.decode("utf-8")
+    assert text.startswith("1\n00:00:05,000 --> 00:00:07,250\nДемьян: Начнём.")
+    assert "Спикер 1: Согласен." in text  # сырые метки — как в окне
+
+
+def test_export_md_by_path_to_file(env, capsys):
+    folder = _meeting(env)
+    out = env["tmp"] / "out.md"
+    assert _main(["export", str(folder), "--format", "md", "--out", str(out)]) == 0
+    assert "# Планёрка" in out.read_text(encoding="utf-8")
+    assert capsys.readouterr().out.strip() == str(out)
+
+
+def test_export_unknown_recording_is_exit_1_without_traceback(env, capsys):
+    assert _main(["export", "нет-такой", "--format", "txt"]) == 1
+    err = capsys.readouterr().err
+    assert "Нет такой записи" in err and "Traceback" not in err
+
+
+def test_export_without_transcript_is_exit_1(env, capsys):
+    folder = env["rec"] / RID
+    folder.mkdir()
+    (folder / "sys.opus").write_bytes(b"x")
+    assert _main(["export", RID, "--format", "txt"]) == 1
+    assert "Транскрипта нет" in capsys.readouterr().err
+
+
+def test_export_bad_format_is_argparse_error(env):
+    _meeting(env)
+    with pytest.raises(SystemExit) as e:
+        _main(["export", RID, "--format", "docx"])
+    assert e.value.code == 2
+
+
+# --- voices --------------------------------------------------------------------
+
+
+def test_voices_list_json_is_a_list(env, capsys):
+    _meeting(env)
+    _voice(env, "Демьян")
+    _voice(env, "Пётр")
+    assert _main(["voices", "list", "--json"]) == 0
+    items = _json_out(capsys)
+    assert isinstance(items, list)
+    by_name = {p["name"]: p for p in items}
+    assert by_name["Демьян"]["meetings"] == 1 and by_name["Демьян"]["seconds"] == 2
+    assert by_name["Пётр"]["meetings"] == 0
+
+
+def test_voices_list_table(env, capsys):
+    _meeting(env)
+    _voice(env, "Демьян")
+    (env["voices"] / "Демьян.png").write_bytes(b"png")
+    assert _main(["voices", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "имя" in out and "встреч" in out and "мин речи" in out and "фото" in out
+    row = next(line for line in out.splitlines() if line.startswith("Демьян"))
+    assert row.split() == ["Демьян", "1", "0.0", "да"]
+
+
+def test_voices_list_empty_base(env, capsys):
+    assert _main(["voices", "list"]) == 0
+    assert "пуста" in capsys.readouterr().out
+
+
+def test_voices_delete_without_yes_refuses_and_keeps_file(env, capsys):
+    path = _voice(env, "Демьян")
+    assert _main(["voices", "delete", "Демьян"]) == 1
+    assert "Удаление необратимо: добавьте --yes" in capsys.readouterr().err
+    assert path.exists()
+
+
+def test_voices_delete_with_yes(env, capsys):
+    path = _voice(env, "Демьян")
+    assert _main(["voices", "delete", "Демьян", "--yes"]) == 0
+    assert not path.exists()
+
+
+def test_voices_delete_unknown_is_exit_1(env, capsys):
+    assert _main(["voices", "delete", "Никто", "--yes"]) == 1
+    assert "Нет такого человека" in capsys.readouterr().err
+
+
+def test_voices_rename_rewrites_transcripts(env, capsys):
+    folder = _meeting(env)
+    _voice(env, "Демьян")
+    assert _main(["voices", "rename", "Демьян", "Демьян Петров"]) == 0
+    assert (env["voices"] / "Демьян Петров.json").exists()
+    speakers = [s["speaker"] for s in library.read_transcript(folder)["segments"]]
+    assert "Демьян Петров" in speakers
+
+
+def test_voices_rename_onto_existing_is_exit_1(env, capsys):
+    _voice(env, "Демьян")
+    _voice(env, "Пётр")
+    assert _main(["voices", "rename", "Демьян", "Пётр"]) == 1
+    assert "уже есть" in capsys.readouterr().err
+    assert (env["voices"] / "Демьян.json").exists()
+
+
+def test_voices_merge(env, capsys):
+    _voice(env, "Даня")
+    _voice(env, "Демьян")
+    assert _main(["voices", "merge", "Даня", "Демьян", "--json"]) == 0
+    assert _json_out(capsys) == {"ok": True, "name": "Демьян"}
+    assert not (env["voices"] / "Даня.json").exists()
+    samples = json.loads((env["voices"] / "Демьян.json").read_text(encoding="utf-8"))
+    assert len(samples["samples"]) == 2
+
+
+def test_voices_avatar_set_and_clear(env, capsys):
+    import io
+
+    from PIL import Image
+
+    _voice(env, "Демьян")
+    picture = env["tmp"] / "photo.png"
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 30), (200, 10, 10)).save(buf, "PNG")
+    picture.write_bytes(buf.getvalue())
+    assert _main(["voices", "avatar", "Демьян", str(picture)]) == 0
+    assert (env["voices"] / "Демьян.png").exists()
+    assert _main(["voices", "avatar", "Демьян", "--clear"]) == 0
+    assert not (env["voices"] / "Демьян.png").exists()
+
+
+def test_voices_avatar_not_an_image_is_exit_1(env, capsys):
+    _voice(env, "Демьян")
+    junk = env["tmp"] / "junk.png"
+    junk.write_bytes(b"not a picture")
+    assert _main(["voices", "avatar", "Демьян", str(junk)]) == 1
+    assert "не изображение" in capsys.readouterr().err
+
+
+def test_voices_avatar_needs_picture_or_clear(env, capsys):
+    _voice(env, "Демьян")
+    assert _main(["voices", "avatar", "Демьян"]) == 1
+    assert "--clear" in capsys.readouterr().err
+
+
+# --- summary / ask / notes -------------------------------------------------------
+
+
+def _fake_llm(monkeypatch, replies, seen=None):
+    """llm.resolve → фейковый runner; настоящая модель не вызывается."""
+    from meet import llm
+
+    def resolve(cfg):
+        if seen is not None:
+            seen.append(cfg.llm.provider)
+
+        async def runner(prompt, **kwargs):
+            return AgentReply(text=replies.pop(0))
+        return "fake", runner
+
+    monkeypatch.setattr(llm, "resolve", resolve)
+
+
+def test_summary_with_fake_runner_writes_summary_md(env, capsys, monkeypatch):
+    folder = _meeting(env)
+    _fake_llm(monkeypatch, ["## Итоги\n- решили X"])
+    assert _main(["summary", RID]) == 0
+    text = (folder / "summary.md").read_text(encoding="utf-8")
+    assert "решили X" in text and "fake" in text
+    assert "решили X" in capsys.readouterr().out
+
+
+def test_summary_json(env, capsys, monkeypatch):
+    folder = _meeting(env)
+    _fake_llm(monkeypatch, ["## Итоги\n- решили X"])
+    assert _main(["summary", str(folder), "--json"]) == 0
+    got = _json_out(capsys)
+    assert got["path"] == str(folder / "summary.md")
+    assert got["provider"] == "fake" and "решили X" in got["markdown"]
+
+
+def test_summary_provider_flag_overrides_settings(env, capsys, monkeypatch):
+    _meeting(env)
+    seen = []
+    _fake_llm(monkeypatch, ["ок"], seen)
+    assert _main(["summary", RID, "--provider", "codex"]) == 0
+    assert seen == ["codex"]
+
+
+def test_summary_without_provider_is_exit_1_with_hint(env, capsys, monkeypatch):
+    from meet import llm
+
+    folder = _meeting(env)
+    monkeypatch.setattr(llm, "resolve", lambda cfg: (None, None))
+    assert _main(["summary", RID]) == 1
+    err = capsys.readouterr().err
+    assert "Подключите Claude Code или Codex" in err
+    assert "--provider codex" in err and "llm.provider" in err
+    assert not (folder / "summary.md").exists()
+
+
+def test_summary_model_error_is_exit_1(env, capsys, monkeypatch):
+    from meet import llm
+
+    _meeting(env)
+
+    async def runner(prompt, **kwargs):
+        return AgentReply(text="", error="rate_limit")
+
+    monkeypatch.setattr(llm, "resolve", lambda cfg: ("fake", runner))
+    assert _main(["summary", RID]) == 1
+    assert "rate_limit" in capsys.readouterr().err
+
+
+def test_ask_with_fake_runner_appends_qa(env, capsys, monkeypatch):
+    folder = _meeting(env)
+    _fake_llm(monkeypatch, ["В пятницу."])
+    assert _main(["ask", RID, "Когда срок?"]) == 0
+    assert capsys.readouterr().out.strip() == "В пятницу."
+    line = json.loads((folder / "qa.jsonl").read_text(encoding="utf-8"))
+    assert line["q"] == "Когда срок?" and line["a"] == "В пятницу."
+
+
+def test_ask_empty_question_is_exit_1(env, capsys, monkeypatch):
+    _meeting(env)
+    _fake_llm(monkeypatch, ["не должно дойти"])
+    assert _main(["ask", RID, "   "]) == 1
+    assert "пустой вопрос" in capsys.readouterr().err
+
+
+def test_notes_writes_note_and_prints_path(env, capsys):
+    _meeting(env)
+    assert _main(["notes", RID, "--json"]) == 0
+    path = Path(_json_out(capsys)["path"])
+    assert path.parent == env["notes"] / "Встречи"
+    assert path.name == "2026-09-29 Планёрка.md"
+
+
+# --- import --------------------------------------------------------------------
+
+
+def _media(env, name="звонок.mp3"):
+    src = env["tmp"] / name
+    src.write_bytes(b"ID3 fake audio")
+    return src
+
+
+def test_import_no_transcribe_creates_folder_with_source(env, capsys, monkeypatch):
+    import meet.transcribe
+
+    monkeypatch.setattr(meet.transcribe, "transcribe", _refuse)
+    src = _media(env)
+    assert _main(["import", str(src), "--no-transcribe"]) == 0
+    folder = Path(capsys.readouterr().out.strip())
+    assert folder.parent == env["rec"]
+    assert (folder / "source.mp3").read_bytes() == b"ID3 fake audio"
+    assert library.read_meta(folder)["title"] == "звонок"
+    assert src.exists()  # оригинал не трогаем
+
+
+def test_import_transcribes_and_keeps_stdout_clean(env, capsys, monkeypatch):
+    import meet.transcribe
+
+    called = {}
+
+    def fake_transcribe(path, speakers=None, hotwords=None, align=True,
+                        overlap=True, bus=None):
+        called.update(path=path, speakers=speakers)
+        print("Готово: шум пайплайна")  # transcribe печатает в stdout
+        bus.progress("asr", done=1, total=1)
+        return Path(path) / "2026-09-29_transcript.md"
+
+    monkeypatch.setattr(meet.transcribe, "transcribe", fake_transcribe)
+    src = _media(env)
+    assert _main(["import", str(src), "--speakers", "3", "--json"]) == 0
+    captured = capsys.readouterr()
+    got = json.loads(captured.out)
+    assert called == {"path": got["folder"], "speakers": 3}
+    assert got["transcribed"] is True
+    assert "распознавание" in captured.err and "шум пайплайна" in captured.err
+
+
+def test_import_transcription_failure_is_exit_1(env, capsys, monkeypatch):
+    import meet.transcribe
+
+    def broken(path, **kw):
+        raise SystemExit("Нет дорожек")
+
+    monkeypatch.setattr(meet.transcribe, "transcribe", broken)
+    assert _main(["import", str(_media(env))]) == 1
+    err = capsys.readouterr().err
+    assert "Нет дорожек" in err and "meet transcribe" in err
+
+
+def test_import_missing_file_is_exit_1(env, capsys):
+    assert _main(["import", str(env["tmp"] / "нет.mp3")]) == 1
+    assert "Файла нет" in capsys.readouterr().err
+
+
+def test_import_unsupported_format_is_exit_1(env, capsys):
+    assert _main(["import", str(_media(env, "doc.txt")), "--no-transcribe"]) == 1
+    assert "не поддерживается" in capsys.readouterr().err
+    assert list(env["rec"].iterdir()) == []
+
+
+def test_summary_explicit_provider_unavailable_names_it(env, capsys, monkeypatch):
+    from meet import llm
+
+    _meeting(env)
+    monkeypatch.setattr(llm, "resolve", lambda cfg: (None, None))
+    assert _main(["summary", RID, "--provider", "openai-compatible"]) == 1
+    err = capsys.readouterr().err
+    assert "openai-compatible недоступен" in err and "Подключите" in err
+
+
+def test_module_run_writes_utf8_even_when_stdout_is_redirected(env):
+    """`python -m meet.cli` (так резидент зовёт assist) работает, а stdout,
+    перенаправленный в файл/трубу, — UTF-8 даже для символов вне cp1251."""
+    import os
+    import subprocess
+
+    _voice(env, "Łukasz")
+    child_env = {k: v for k, v in os.environ.items()
+                 if k not in ("PYTHONUTF8", "PYTHONIOENCODING")}
+    child_env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    done = subprocess.run([sys.executable, "-m", "meet.cli", "voices", "list", "--json"],
+                          capture_output=True, env=child_env, timeout=60)
+    assert done.returncode == 0, done.stderr
+    assert json.loads(done.stdout.decode("utf-8"))[0]["name"] == "Łukasz"
+
+
+def test_import_copy_failure_is_exit_1_and_leaves_no_empty_card(env, capsys, monkeypatch):
+    import shutil
+
+    def broken_copy(src, dst, *a, **k):
+        raise OSError("диск полон")
+
+    monkeypatch.setattr(shutil, "copy2", broken_copy)
+    assert _main(["import", str(_media(env)), "--no-transcribe"]) == 1
+    assert "диск полон" in capsys.readouterr().err
+    assert list(env["rec"].iterdir()) == []

@@ -77,7 +77,69 @@ def print_status() -> None:
         print("GPU занят: идёт транскрибация или живой режим")
 
 
-def main() -> None:
+def _add_library_parsers(sub) -> None:
+    """Подкоманды «без приложения» (обработчики — meet.cli_library)."""
+    from meet.export import FORMATS
+
+    as_json = argparse.ArgumentParser(add_help=False)
+    as_json.add_argument("--json", action="store_true",
+                         help="результат одним JSON-документом в stdout")
+    folder_help = "папка записи или её id (имя папки в папке записей)"
+    provider_help = "провайдер модели на этот запуск (по умолчанию — из настроек)"
+
+    p_im = sub.add_parser("import", parents=[as_json],
+                          help="импортировать аудио/видео в библиотеку и расшифровать")
+    p_im.add_argument("file", help="аудио- или видеофайл (mp3, mp4, m4a, wav, …)")
+    p_im.add_argument("--no-transcribe", action="store_true",
+                      help="только положить в библиотеку, без расшифровки")
+    p_im.add_argument("--speakers", type=int, help="число говорящих в записи")
+    p_im.add_argument("--hotwords", help="термины через запятую, подсказка распознаванию")
+
+    p_ex = sub.add_parser("export", parents=[as_json],
+                          help="транскрипт записи в md, txt или srt")
+    p_ex.add_argument("folder", help=folder_help)
+    p_ex.add_argument("--format", required=True, choices=FORMATS)
+    p_ex.add_argument("--out", dest="out_file", default=None,
+                      help="файл результата (без него — в stdout)")
+
+    p_vo = sub.add_parser("voices", help="база голосов: список, переименовать, "
+                                         "слить, удалить, фото")
+    vo = p_vo.add_subparsers(dest="voices_command", metavar="команда",
+                           required=True)
+    vo.add_parser("list", parents=[as_json],
+                  help="имя · встреч · минут речи · есть ли фото")
+    p_rn = vo.add_parser("rename", parents=[as_json],
+                         help="переименовать человека (и в транскриптах)")
+    p_rn.add_argument("old")
+    p_rn.add_argument("new")
+    p_mg = vo.add_parser("merge", parents=[as_json],
+                         help="слить два голоса одного человека")
+    p_mg.add_argument("src", help="кого сливаем (исчезнет)")
+    p_mg.add_argument("into", help="в кого")
+    p_dl = vo.add_parser("delete", parents=[as_json], help="удалить голос (нужен --yes)")
+    p_dl.add_argument("name")
+    p_dl.add_argument("--yes", action="store_true", help="да, удалить без возврата")
+    p_av = vo.add_parser("avatar", parents=[as_json], help="поставить или убрать фото")
+    p_av.add_argument("name")
+    p_av.add_argument("picture", nargs="?", help="картинка (png, jpg, …)")
+    p_av.add_argument("--clear", action="store_true", help="убрать фото")
+
+    p_su = sub.add_parser("summary", parents=[as_json],
+                          help="итоги встречи моделью → summary.md")
+    p_su.add_argument("folder", help=folder_help)
+    p_ask = sub.add_parser("ask", parents=[as_json], help="вопрос по записи")
+    p_ask.add_argument("folder", help=folder_help)
+    p_ask.add_argument("question", help="вопрос (в кавычках)")
+    for p in (p_su, p_ask):
+        p.add_argument("--provider", default=None, choices=("auto",) + PROVIDERS,
+                       help=provider_help)
+
+    p_no = sub.add_parser("notes", parents=[as_json],
+                          help="заметка о встрече в папку заметок")
+    p_no.add_argument("folder", help=folder_help)
+
+
+def main(argv: list[str] | None = None) -> int | None:
     _quiet_known_warnings()
     # Страховка от UnicodeEncodeError: cp866-консоль Windows не кодирует часть
     # Юникода, а падение print не должно ломать пайплайн — лучше '?' в логе.
@@ -191,11 +253,17 @@ def main() -> None:
     p_cmp.add_argument("a", help="транскрипт A (например, текущий пайплайн)")
     p_cmp.add_argument("b", help="транскрипт B (вариант для сравнения)")
 
-    args = parser.parse_args()
+    _add_library_parsers(sub)
+
+    args = parser.parse_args(argv)
     # Настройки — источник значений по умолчанию: флаг командной строки их
     # перекрывает, но не дублирует. Так одно и то же (папка записей, окно,
     # порт, лексика) настраивается в приложении и одинаково видно из CLI.
     cfg = settings.load()
+    from meet import cli_library
+
+    if args.command in cli_library.COMMANDS:
+        return cli_library.run(args, cfg)
     # Команды без --out (transcribe/enroll/compare) значение просто не используют.
     out_root = getattr(args, "out", None) or str(cfg.recording.recordings)
     if args.command == "record":
@@ -249,3 +317,7 @@ def main() -> None:
                 align=cfg.asr.align if args.align is None else args.align,
                 overlap=cfg.asr.overlap if args.overlap is None else args.overlap,
             )
+
+
+if __name__ == "__main__":
+    sys.exit(main())

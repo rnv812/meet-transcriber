@@ -109,22 +109,25 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _copy_import(folder_str: str) -> int:
+def _copy_import(folder_str: str, emit=None) -> int:
     """Скопировать исходник импорта в папку записи как source.<ext>.
 
-    Оригинал не трогаем: человек мог импортировать файл из общей папки."""
+    Оригинал не трогаем: человек мог импортировать файл из общей папки.
+    `emit` — куда отдавать события (по умолчанию JSON в stdout для очереди;
+    `meet import` печатает их человеку в stderr)."""
     import os
     import shutil
     from pathlib import Path
 
     from meet import events, library
 
+    emit = emit or _emit
     bus = events.EventBus()
-    bus.subscribe(lambda event: _emit(event.to_dict()))
+    bus.subscribe(lambda event: emit(event.to_dict()))
     folder = Path(folder_str)
     src = Path(library.read_meta(folder).get("original_path") or "")
     if not src.is_file():
-        _emit({"kind": "error", "text": f"исходный файл пропал: {src}"})
+        emit({"kind": "error", "text": f"исходный файл пропал: {src}"})
         return 3
     bus.progress("copy", label="копирование файла", done=0, total=1, note=src.name)
     # Во временный .part и переименование в конце: оборванная копия (отмена
@@ -136,7 +139,7 @@ def _copy_import(folder_str: str) -> int:
         os.replace(part, final)
     except Exception as e:
         part.unlink(missing_ok=True)
-        _emit({"kind": "error", "text": f"не удалось скопировать файл: {e}"})
+        emit({"kind": "error", "text": f"не удалось скопировать файл: {e}"})
         return 3
     bus.progress("copy", label="копирование файла", done=1, total=1, note=src.name)
     return 0
