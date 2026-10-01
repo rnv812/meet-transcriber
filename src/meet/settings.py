@@ -500,13 +500,17 @@ class Export:
                 return default
             return value.strip()
 
+        transcript_name = text("transcript_name", DEFAULT_TRANSCRIPT_NAME,
+                               kb_export.check_file_name)
+        summary_name = text("summary_name", DEFAULT_SUMMARY_NAME, kb_export.check_file_name)
+        if kb_export.check_names(transcript_name, summary_name):
+            transcript_name, summary_name = DEFAULT_TRANSCRIPT_NAME, DEFAULT_SUMMARY_NAME
         return cls(
             meetings_dir=as_path(raw["meetings_dir"]) if "meetings_dir" in raw else legacy_dir,
             folder_template=text("folder_template", DEFAULT_FOLDER_TEMPLATE,
                                  kb_export.check_folder_template),
-            transcript_name=text("transcript_name", DEFAULT_TRANSCRIPT_NAME,
-                                 kb_export.check_file_name),
-            summary_name=text("summary_name", DEFAULT_SUMMARY_NAME, kb_export.check_file_name),
+            transcript_name=transcript_name,
+            summary_name=summary_name,
             include_transcript=as_flag(raw.get("include_transcript"), True),
             include_summary=as_flag(raw.get("include_summary"), True),
             include_audio=as_flag(raw.get("include_audio"), False),
@@ -515,10 +519,14 @@ class Export:
         )
 
     @staticmethod
-    def check(update: dict) -> None:
+    def check(update: dict, current: "Export | None" = None) -> None:
         """Правка из окна: ValueError с текстом для человека, если её нельзя
-        сохранить (шаблон выходит за папку, неизвестная подстановка…)."""
+        сохранить (шаблон выходит за папку, неизвестная подстановка, имена
+        файлов совпадают). `current` — сохранённые значения: имя проверяется
+        в паре с тем, что уже лежит в настройках."""
         from meet import kb_export
+
+        current = current or Export()
 
         if "folder_template" in update:
             error = kb_export.check_folder_template(str(update["folder_template"] or ""))
@@ -529,6 +537,12 @@ class Export:
                 error = kb_export.check_file_name(str(update[key] or ""))
                 if error:
                     raise ValueError(f"Имя файла {what}: {error[0].lower()}{error[1:]}")
+        if "transcript_name" in update or "summary_name" in update:
+            error = kb_export.check_names(
+                str(update.get("transcript_name", current.transcript_name) or ""),
+                str(update.get("summary_name", current.summary_name) or ""))
+            if error:
+                raise ValueError(error)
         if "meetings_dir" in update:
             folder = as_path(update["meetings_dir"])
             if folder is not None and not folder.is_absolute():
@@ -971,7 +985,7 @@ def patch(updates: dict, path: Path | None = None) -> Settings:
         if not isinstance(section_update, dict):
             continue
         if name == "export":
-            Export.check(section_update)
+            Export.check(section_update, current.export)
         if name == "llm":
             Llm.check(section_update)
         merged = getattr(current, name).to_raw()

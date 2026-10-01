@@ -148,3 +148,17 @@ test("проверка шаблона в окне совпадает с рези
   expect(folderTemplateError("C:/{title}")).toBe("Шаблон папки не может содержать букву диска");
   expect(folderTemplateError("{year}//{title}")).toBe("В шаблоне папки есть пустая часть пути — уберите лишнюю «/»");
 });
+
+test("одинаковые имена файлов — объяснение и «Сохранить» недоступно", async () => {
+  open();
+  const name = await screen.findByLabelText("Имя файла итогов");
+  await userEvent.clear(name);
+  await userEvent.type(name, "Транскрипт");
+  expect(screen.getByText("Имена файлов транскрипта и итогов совпадают — задайте разные")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+});
+
+test("подсказка автоматики говорит, что ручные правки не перезаписываются", async () => {
+  open();
+  expect(await screen.findByText(/Файлы, которые вы изменили вручную, не перезаписываются/)).toBeInTheDocument();
+});

@@ -10,14 +10,19 @@
 * **Повторная выгрузка идёт туда же.** Путь первой выгрузки хранится в
   meta.json записи (`kb_export.path`); пока папка существует, итоги, сделанные
   позже, и переименование встречи не плодят вторую папку.
-* **Чужое не трогаем.** Перезаписываются только наши файлы (имена из
-  настроек); заметки человека рядом с ними и уже существующая папка с тем же
-  именем остаются как были. Папка, занятая другой встречей, получает суффикс
-  « (2)».
+* **Чужое и правленое не трогаем.** Перезаписываются только наши файлы, и
+  только пока их не меняли: в meta.json (`kb_export.files`) лежит SHA-256
+  каждого записанного файла. Файл правили в базе знаний (хеш другой) или он
+  лежал в папке до нас (хеша нет) — он остаётся как есть, а выгрузка сообщает
+  о нём (`kept`). Копий «(обновлено)» не плодим: правка человека важнее
+  свежей версии, а новую всегда можно получить, удалив файл. Заметки рядом и
+  уже существующая папка с тем же именем остаются как были. Папка, занятая
+  другой встречей, получает суффикс « (2)».
 * **Запись атомарная:** временный файл рядом и `os.replace` — база знаний
   (синхронизация, индексатор Obsidian) не увидит половину файла.
 """
 
+import hashlib
 import os
 import re
 import shutil
@@ -81,6 +86,27 @@ def check_file_name(name: str) -> str | None:
     if "/" in text or "\\" in text:
         return "Имя файла не может содержать «/» или «\\»"
     return _token_error(text)
+
+
+def _md_name(name: str) -> str:
+    text = name.strip()
+    return (text if text.lower().endswith(".md") else f"{text}.md").lower()
+
+
+def check_names(transcript_name: str, summary_name: str) -> str | None:
+    """Имена файлов транскрипта и итогов не должны совпадать друг с другом и
+    с файлами субтитров и записи — иначе один файл затёр бы другой."""
+    names = {"транскрипта": _md_name(transcript_name), "итогов": _md_name(summary_name)}
+    if names["транскрипта"] == names["итогов"]:
+        return "Имена файлов транскрипта и итогов совпадают — задайте разные"
+    srt_stem = SRT_NAME.rsplit(".", 1)[0].lower()
+    for which, name in names.items():
+        stem = name[:-3]
+        if stem == AUDIO_STEM.lower():
+            return f"Имя файла {which} совпадает с именем записи «{AUDIO_STEM}» — выберите другое"
+        if stem in (srt_stem, SRT_NAME.lower()):
+            return f"Имя файла {which} совпадает с именем субтитров «{SRT_NAME}» — выберите другое"
+    return None
 
 
 def _values(title: str, start: datetime) -> dict:
@@ -169,10 +195,47 @@ def _plan(cfg, title: str, start: datetime, has_summary: bool,
 # --- запись файлов -----------------------------------------------------------------
 
 
-def _write_text(path: Path, text: str) -> None:
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _file_sha(path: Path) -> str | None:
+    try:
+        return _sha(path.read_bytes())
+    except OSError:
+        return None
+
+
+def _write_bytes(path: Path, data: bytes) -> None:
+    """Байты как есть (переводы строк — LF): хеш в meta.json — от того, что на
+    диске, а текстовый режим Windows подменял бы их на CRLF."""
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _recorded(record: dict) -> dict:
+    """Наши файлы прошлой выгрузки: {имя: sha256 или None}. None — наш, но
+    без хеша (аудио; первая версия выгрузки писала только список имён)."""
+    files = record.get("files")
+    if isinstance(files, dict):
+        return {str(k): v if isinstance(v, str) and v else None for k, v in files.items()}
+    if isinstance(files, list):
+        return {str(name): None for name in files}
+    return {}
+
+
+def _ours(path: Path, name: str, recorded: dict) -> bool:
+    """Файл можно перезаписать: его нет, или он наш и с тех пор не менялся."""
+    if not path.exists():
+        return True
+    if name not in recorded:
+        return False  # лежал в папке до нас
+    sha = recorded[name]
+    return sha is None or _file_sha(path) == sha
 
 
 def _fresh(target: Path, sources: list[Path]) -> bool:
@@ -286,25 +349,36 @@ def _export(folder: Path, cfg, mix) -> dict:
     plan = _plan(cfg, title, start, summary_path.is_file(), _audio_name(sources))
     target = _target(root, cfg, folder, title, start)
     target.mkdir(parents=True, exist_ok=True)
-    written = []
+    previous = library.read_meta(folder).get("kb_export")
+    recorded = _recorded(previous if isinstance(previous, dict) else {})
+    written, kept = [], []
     for kind, name in plan:
         path = target / name
-        if kind == "transcript":
-            _write_text(path, _transcript_md(data, title, start))
-        elif kind == "summary":
-            _write_text(path, summary_path.read_text(encoding="utf-8"))
-        elif kind == "srt":
-            _write_text(path, export.render(data, "srt"))
-        elif kind == "audio":
+        if not _ours(path, name, recorded):
+            kept.append(name)
+            continue
+        if kind == "audio":
             _write_audio(sources, path, mix)
+            recorded[name] = None  # гигабайты не хешируем: аудио не правят
+        else:
+            if kind == "transcript":
+                text = _transcript_md(data, title, start)
+            elif kind == "summary":
+                text = summary_path.read_text(encoding="utf-8")
+            else:
+                text = export.render(data, "srt")
+            content = text.encode("utf-8")
+            _write_bytes(path, content)
+            recorded[name] = _sha(content)
         written.append(name)
     library.write_meta(folder, {"kb_export": {"path": str(target), "at": time.time(),
-                                              "files": written}})
-    return {"path": str(target), "files": written}
+                                              "files": recorded, "kept": kept}})
+    return {"path": str(target), "files": written, "kept": kept}
 
 
 def export_recording(folder, cfg, *, mix=None) -> dict:
-    """Выгрузить встречу: `{"path": папка, "files": [имена файлов]}`.
+    """Выгрузить встречу: `{"path": папка, "files": [записанные], "kept":
+    [не перезаписанные — изменены вручную или лежали в папке до нас]}`.
 
     `cfg` — секция `export` настроек (или настройки целиком). Ошибка —
     исключение; кроме «папка не задана», она запоминается в meta.json
@@ -321,13 +395,16 @@ def export_recording(folder, cfg, *, mix=None) -> dict:
 
 
 def _remember_error(folder: Path, error: Exception) -> None:
-    try:
-        previous = library.read_meta(folder).get("kb_export")
+    def change(meta: dict) -> dict:
+        previous = meta.get("kb_export")
         record = dict(previous) if isinstance(previous, dict) else {}
         record["error"] = str(error) or type(error).__name__
         record["error_at"] = time.time()
-        library.write_meta(folder, {"kb_export": record})
-    except OSError:
+        return {**meta, "kb_export": record}
+
+    try:
+        library.update_meta(folder, change)
+    except Exception:
         pass  # папку записи не записать — ошибку всё равно увидит вызывающий
 
 
@@ -371,6 +448,7 @@ def preview(cfg, root: Path, overrides: dict) -> dict:
     error = check_folder_template(values["folder_template"])
     for key in ("transcript_name", "summary_name"):
         error = error or check_file_name(values[key])
+    error = error or check_names(values["transcript_name"], values["summary_name"])
     if error:
         return {"folder": None, "files": [], "error": error}
     title, start, audio = _sample(Path(root))

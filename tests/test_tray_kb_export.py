@@ -184,3 +184,16 @@ def test_auto_export_failure_is_logged_remembered_and_notified_once(
     # Итоги той же встречи снова не выгрузились — второго уведомления нет.
     _done(app, jobs.SUMMARY, _folder(tmp_path))
     assert state.snapshot()["kb_export_failed"] == failed
+
+
+def test_broken_settings_in_job_subscriber_only_log(app, state, monkeypatch):
+    lines = []
+    monkeypatch.setattr(app, "log", lines.append)
+
+    def broken(*a, **k):
+        raise RuntimeError("config.json сломан")
+
+    monkeypatch.setattr(tray_control.settings, "load", broken)
+    _done(app, jobs.TRANSCRIBE, "C:/rec/" + RID)  # не бросает в очередь задач
+    assert any("config.json сломан" in line for line in lines)
+    assert app.bus.failures == 0

@@ -66,12 +66,39 @@ export function fileNameError(name: string): string | null {
   return tokenError(text);
 }
 
-/** Правки раздела нельзя сохранить: шаблон или имя файла вне правил (смотрим только изменённое). */
-export function exportChangesInvalid(changes: Raw): boolean {
+const mdName = (name: string) => {
+  const text = name.trim();
+  return (text.toLowerCase().endsWith(".md") ? text : `${text}.md`).toLowerCase();
+};
+
+/** Имена транскрипта и итогов совпадают друг с другом или с субтитрами/записью — текст, иначе null. */
+export function fileNamesClash(transcriptName: string, summaryName: string): string | null {
+  const transcript = mdName(transcriptName);
+  const summary = mdName(summaryName);
+  if (transcript === summary) return "Имена файлов транскрипта и итогов совпадают — задайте разные";
+  const names: [string, string][] = [["транскрипта", transcript], ["итогов", summary]];
+  for (const [which, name] of names) {
+    const stem = name.slice(0, -3);
+    if (stem === "запись") return `Имя файла ${which} совпадает с именем записи «Запись» — выберите другое`;
+    if (stem === "субтитры" || stem === "субтитры.srt") {
+      return `Имя файла ${which} совпадает с именем субтитров «Субтитры.srt» — выберите другое`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Правки раздела нельзя сохранить: шаблон или имя файла вне правил. Смотрим
+ * только изменённое; имена — в паре с сохранённым (`saved`).
+ */
+export function exportChangesInvalid(changes: Raw, saved: Raw = {}): boolean {
   const e = changes.export ?? {};
+  const names = "transcript_name" in e || "summary_name" in e;
+  const pair = (k: string) => String(e[k] ?? saved.export?.[k] ?? "");
   return (typeof e.folder_template === "string" && folderTemplateError(e.folder_template) !== null)
     || (typeof e.transcript_name === "string" && fileNameError(e.transcript_name) !== null)
-    || (typeof e.summary_name === "string" && fileNameError(e.summary_name) !== null);
+    || (typeof e.summary_name === "string" && fileNameError(e.summary_name) !== null)
+    || (names && fileNamesClash(pair("transcript_name"), pair("summary_name")) !== null);
 }
 
 /** Значение настройки, каким оно уйдёт в PATCH: шаблон и имена файлов — без пробелов по краям. */
@@ -97,7 +124,8 @@ export function ExportSection({ draft, set, endpoint }: { draft: Raw; set: SetFn
   const transcriptName = String(v("transcript_name") ?? "");
   const summaryName = String(v("summary_name") ?? "");
   const flags = Object.fromEntries(FLAGS.map((f) => [f.key, Boolean(v(f.key))]));
-  const local = folderTemplateError(template) ?? fileNameError(transcriptName) ?? fileNameError(summaryName);
+  const local = folderTemplateError(template) ?? fileNameError(transcriptName) ?? fileNameError(summaryName)
+    ?? fileNamesClash(transcriptName, summaryName);
   const [preview, setPreview] = useState<ExportPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
@@ -160,7 +188,7 @@ export function ExportSection({ draft, set, endpoint }: { draft: Raw; set: SetFn
         </div>
       </Row>
       <Switch label="Выгружать автоматически после расшифровки"
-        hint="и обновлять выгрузку, когда готовы итоги. Действует, если задана папка для встреч"
+        hint="и обновлять выгрузку, когда готовы итоги. Действует, если задана папка для встреч. Файлы, которые вы изменили вручную, не перезаписываются"
         value={Boolean(v("auto_export"))} onChange={(x) => set("export", "auto_export", x)} />
     </>
   );

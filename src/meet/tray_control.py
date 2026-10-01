@@ -254,17 +254,25 @@ class TrayControl:
         kind, folder = job.get("kind"), job.get("folder")
         if kind not in (jobs.TRANSCRIBE, jobs.IMPORT, jobs.SUMMARY) or not folder:
             return
-        cfg = settings.load().export
-        if not cfg.meetings_dir:
-            return
         path = Path(folder)
-        if kind == jobs.SUMMARY:
-            from meet import kb_export
+        try:
+            # Подписчик шины: исключение отсюда не должно доходить до очереди
+            # задач — битый конфиг или недоступная папка только в журнал.
+            cfg = settings.load().export
+            if not cfg.meetings_dir:
+                return
+            if kind == jobs.SUMMARY:
+                from meet import kb_export
 
-            wanted = cfg.auto_export or kb_export.previously_exported(path)
-        else:
-            wanted = cfg.auto_export
-        if wanted and library.read_transcript(path) is not None:
+                wanted = cfg.auto_export or kb_export.previously_exported(path)
+            else:
+                wanted = cfg.auto_export
+            ready = wanted and library.read_transcript(path) is not None
+        except Exception as e:
+            self.tray.log(f"выгрузка в базу знаний не проверена ({path.name}): "
+                          f"{type(e).__name__}: {e}")
+            return
+        if ready:
             self._background(lambda: self._auto_kb_export(path))
 
     def _auto_kb_export(self, folder: Path) -> None:

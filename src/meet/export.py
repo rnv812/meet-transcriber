@@ -24,22 +24,34 @@ def _who(seg: dict) -> str:
     return f"{who} (нахлёст)" if seg.get("uncertain") else who
 
 
-def safe_filename(title: str, fallback: str) -> str:
-    """Sanitize a filename: replace dangerous characters, strip whitespace.
+# Не длиннее этого — каждая часть пути: глубокое хранилище плюс длинное
+# название встречи иначе упирается в MAX_PATH (260) Windows.
+MAX_NAME_CHARS = 120
+# Имена устройств Windows: файл или папку с таким именем (и с любым
+# расширением — «CON.md») создать нельзя.
+_RESERVED = frozenset({"CON", "PRN", "AUX", "NUL"}
+                      | {f"COM{i}" for i in range(1, 10)}
+                      | {f"LPT{i}" for i in range(1, 10)})
+_DANGEROUS = frozenset('\\/:*?"<>|') | frozenset(chr(i) for i in range(0x00, 0x20))
 
-    Replaces Windows-unsafe characters (\\, /, :, *, ?, ", <, >, |) and control
-    chars (\\x00-\\x1f) with underscore. Strips surrounding whitespace and trailing
-    dots/spaces. Returns fallback if result is empty."""
+
+def safe_filename(title: str, fallback: str) -> str:
+    """Имя файла или папки, которое можно создать на Windows.
+
+    Опасные символы (\\ / : * ? " < > | и управляющие) — «_»; пробелы по краям
+    и точки/пробелы в конце убираются; не длиннее MAX_NAME_CHARS; имя
+    устройства (CON, NUL, COM1, LPT1… — и с расширением) получает «_» в конце
+    основы. Пусто после очистки — `fallback`."""
     if not title:
         return fallback
-    # Replace dangerous characters with underscore
-    dangerous = set('\\/:<>"|?') | set(chr(i) for i in range(0x00, 0x20))
-    safe = ''.join(c if c not in dangerous else '_' for c in title)
-    # Strip whitespace from both ends
-    safe = safe.strip()
-    # Remove trailing dots and spaces (Windows filename issue)
-    safe = safe.rstrip('. ')
-    return safe if safe else fallback
+    safe = "".join("_" if c in _DANGEROUS else c for c in title).strip()
+    safe = safe[:MAX_NAME_CHARS].rstrip(". ")
+    if not safe:
+        return fallback
+    stem, dot, rest = safe.partition(".")
+    if stem.rstrip(" ").upper() in _RESERVED:
+        safe = f"{stem.rstrip(' ')}_{dot}{rest}"
+    return safe
 
 
 def md_segments(data: dict) -> list[Segment]:

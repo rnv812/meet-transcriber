@@ -7,7 +7,7 @@ import { errorText } from "../../lib/format";
 import { inTauri, openFolder, saveText } from "../../lib/shell";
 import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
 import { activeJobOf, failedRetranscribe, isLiveRecording, statusOf } from "../../lib/status";
-import type { Job, Recording, Snapshot, Transcript } from "../../lib/types";
+import type { Job, KbExport, Recording, Snapshot, Transcript } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { Popover } from "../../ui/Popover";
 import { EmptyState } from "../../ui/EmptyState";
@@ -58,8 +58,8 @@ export function RecordingCard({
   const [owner, setOwner] = useState("Вы");
   /** Папка для встреч в базе знаний (`export.meetings_dir`): нет — нет и кнопки «В базу знаний». */
   const [meetingsDir, setMeetingsDir] = useState<string | null>(null);
-  /** Куда выгружено нажатием «В базу знаний» (для этой записи). */
-  const [kbDone, setKbDone] = useState<string | null>(null);
+  /** Куда выгружено нажатием «В базу знаний» (для этой записи) и что не перезаписано. */
+  const [kbDone, setKbDone] = useState<KbExport | null>(null);
   const current = useRef({ endpoint, id });
   current.current = { endpoint, id };
   const tracksRef = useRef<Record<string, string>>({});
@@ -171,7 +171,7 @@ export function RecordingCard({
   const doKbExport = () => act(async () => {
     setKbDone(null);
     try {
-      setKbDone((await kbExport(endpoint, id)).path);
+      setKbDone(await kbExport(endpoint, id));
     } finally {
       await load();
     }
@@ -241,8 +241,13 @@ export function RecordingCard({
       {error && <div className="card__error" role="alert">{error}</div>}
       {kbDone && (
         <div className="card__banner card__banner--ok" role="status" aria-label="Выгрузка в базу знаний">
-          <span>Выгружено: <code className="card__path">{kbDone}</code></span>
-          {inTauri() && <Button onClick={() => act(() => openFolder(kbDone))}>Открыть папку</Button>}
+          <span>
+            Выгружено: <code className="card__path">{kbDone.path}</code>
+            {(kbDone.kept ?? []).map((name) => (
+              <span key={name} className="card__kept">{name} изменён вручную — не перезаписан</span>
+            ))}
+          </span>
+          {inTauri() && <Button onClick={() => act(() => openFolder(kbDone.path))}>Открыть папку</Button>}
         </div>
       )}
       {!kbDone && !error && kbError && (

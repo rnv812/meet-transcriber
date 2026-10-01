@@ -64,3 +64,39 @@ def test_safe_filename_removes_control_chars():
     assert "\x00" not in result
     assert "\x1f" not in result
     assert result == "Test__Title"
+
+
+@pytest.mark.parametrize("title, expected", [
+    ("a*b", "a_b"),
+    ("План * итоги", "План _ итоги"),
+])
+def test_safe_filename_replaces_asterisk(title, expected):
+    assert export.safe_filename(title, "fallback") == expected
+
+
+@pytest.mark.parametrize("title, expected", [
+    ("CON", "CON_"),
+    ("nul", "nul_"),
+    ("Com1", "Com1_"),
+    ("LPT9.md", "LPT9_.md"),
+    ("aux.tar.gz", "aux_.tar.gz"),
+    ("CONSOLE", "CONSOLE"),
+    ("COM10", "COM10"),
+    ("Отчёт CON", "Отчёт CON"),
+])
+def test_safe_filename_avoids_windows_reserved_names(title, expected):
+    assert export.safe_filename(title, "fallback") == expected
+
+
+def test_safe_filename_strips_trailing_dots_and_spaces_and_caps_length():
+    assert export.safe_filename("Итоги. . ", "fallback") == "Итоги"
+    long = "Очень длинное название встречи " * 10
+    got = export.safe_filename(long, "fallback")
+    assert len(got) <= export.MAX_NAME_CHARS
+    assert not got.endswith((" ", "."))
+    assert got.startswith("Очень длинное название встречи")
+
+
+def test_safe_filename_result_can_be_created_on_disk(tmp_path):
+    for title in ("a*b", "CON", "x" * 300, "Итоги: план/факт?", "end. "):
+        (tmp_path / export.safe_filename(title, "f")).mkdir()

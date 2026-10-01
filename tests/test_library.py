@@ -226,3 +226,48 @@ def test_display_names_number_raw_labels_in_order():
     segs = [{"speaker": "SPEAKER_03"}, {"speaker": "Вы"}, {"speaker": "SPEAKER_01"},
             {"speaker": "SPEAKER_03"}]
     assert library.display_names(segs) == {"SPEAKER_03": "Спикер 1", "SPEAKER_01": "Спикер 2"}
+
+
+def test_write_meta_from_many_threads_keeps_every_key(tmp_path):
+    """Экспорт в фоне, переименование и итоги пишут meta.json одновременно:
+    ни одно обновление не теряется и временные файлы не сталкиваются."""
+    import threading
+
+    folder = tmp_path / "2026-09-30_10-15"
+    folder.mkdir()
+    errors = []
+
+    def work(n):
+        try:
+            for i in range(20):
+                library.write_meta(folder, {f"k{n}": i})
+        except Exception as e:  # pragma: no cover - сбой и есть провал теста
+            errors.append(e)
+
+    threads = [threading.Thread(target=work, args=(n,)) for n in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert library.read_meta(folder) == {f"k{n}": 19 for n in range(8)}
+    assert not list(folder.glob("*.tmp"))
+
+
+def test_update_meta_is_read_modify_write_under_the_lock(tmp_path):
+    import threading
+
+    folder = tmp_path / "2026-09-30_10-15"
+    folder.mkdir()
+    library.write_meta(folder, {"count": 0})
+
+    def bump():
+        for _ in range(25):
+            library.update_meta(folder, lambda d: {**d, "count": d["count"] + 1})
+
+    threads = [threading.Thread(target=bump) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert library.read_meta(folder)["count"] == 100

@@ -75,12 +75,15 @@ export type Recording = {
 export type KbExportRecord = {
   path?: string | null;
   at?: number | null;
-  files?: string[];
+  /** Наши файлы: имя → SHA-256 записанного (null — без хеша, например аудио). */
+  files?: Record<string, string | null> | string[];
+  /** Не перезаписаны: изменены вручную или лежали в папке до выгрузки. */
+  kept?: string[];
   error?: string | null;
 };
 
-/** `POST /recordings/{id}/kb-export`: папка встречи и имена выгруженных файлов. */
-export type KbExport = { path: string; files: string[] };
+/** `POST /recordings/{id}/kb-export`: папка встречи, записанные файлы и не перезаписанные (правленые вручную). */
+export type KbExport = { path: string; files: string[]; kept: string[] };
 
 /** `GET /export/preview`: как назовётся папка (относительно папки для встреч) и что в ней будет. */
 export type ExportPreview = { folder: string | null; files: string[]; error: string | null };

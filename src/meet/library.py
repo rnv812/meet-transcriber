@@ -10,7 +10,10 @@
 """
 
 import json
+import os
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -166,15 +169,54 @@ def read_meta(folder: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+# meta.json пишут несколько потоков резидента (выгрузка в базу знаний в фоне,
+# переименование из окна, пометка источника записи): чтение-правка-запись —
+# под замком папки, иначе одна правка теряет другую.
+_META_LOCKS: dict[str, threading.Lock] = {}
+_META_LOCKS_GUARD = threading.Lock()
+REPLACE_TRIES = 5
+
+
+def _meta_lock(folder: Path) -> threading.Lock:
+    try:
+        key = os.path.normcase(str(Path(folder).resolve()))
+    except OSError:
+        key = os.path.normcase(str(folder))
+    with _META_LOCKS_GUARD:
+        return _META_LOCKS.setdefault(key, threading.Lock())
+
+
+def _replace(tmp: Path, target: Path) -> None:
+    """os.replace с повтором: на Windows файл, который как раз читает другой
+    процесс (окно, задача), заменить нельзя — PermissionError на миг."""
+    for attempt in range(REPLACE_TRIES):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            if attempt == REPLACE_TRIES - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
+def update_meta(folder: Path, change) -> dict:
+    """Атомарно поправить meta.json: `change(текущее) -> новое` под замком папки.
+    Временный файл свой у каждой записи — параллельные записи не делят его."""
+    folder = Path(folder)
+    with _meta_lock(folder):
+        data = change(read_meta(folder))
+        tmp = folder / f"{META_JSON}.{os.getpid()}.{threading.get_ident()}.tmp"
+        try:
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+            _replace(tmp, folder / META_JSON)
+        finally:
+            tmp.unlink(missing_ok=True)
+        return data
+
+
 def write_meta(folder: Path, updates: dict) -> dict:
     """Дописать поля в meta.json атомарно (UI читает его в любой момент)."""
-    import os
-
-    data = {**read_meta(folder), **updates}
-    tmp = folder / (META_JSON + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, folder / META_JSON)
-    return data
+    return update_meta(folder, lambda data: {**data, **updates})
 
 
 def create_import(root: Path, src: Path) -> Path:

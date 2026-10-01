@@ -102,7 +102,7 @@ def test_export_writes_folder_with_transcript_and_summary(tmp_path, vault):
     folder = _recording(tmp_path, summary="# Итоги — Планирование спринта\n\n## Решения\n- Да\n")
     got = kb_export.export_recording(folder, _cfg(vault))
     target = vault / "2026-09-30 - Планирование спринта"
-    assert got == {"path": str(target), "files": ["Транскрипт.md", "Итоги.md"]}
+    assert got == {"path": str(target), "files": ["Транскрипт.md", "Итоги.md"], "kept": []}
     transcript = (target / "Транскрипт.md").read_text(encoding="utf-8")
     assert transcript.startswith("---\ndate: 2026-09-30\n")
     assert "# Планирование спринта\n" in transcript
@@ -112,6 +112,8 @@ def test_export_writes_folder_with_transcript_and_summary(tmp_path, vault):
         encoding="utf-8")
     meta = library.read_meta(folder)["kb_export"]
     assert meta["path"] == str(target) and isinstance(meta["at"], float)
+    assert set(meta["files"]) == {"Транскрипт.md", "Итоги.md"}
+    assert len(meta["files"]["Транскрипт.md"]) == 64  # sha256 записанного
     assert "error" not in meta
     assert not list(target.glob("*.tmp"))
 
@@ -329,3 +331,79 @@ def test_patch_export_validates_in_russian(tmp_path):
     assert settings.load(f).export.folder_template == "{year}/{date} - {title}"
     saved = json.loads(f.read_text(encoding="utf-8"))
     assert saved["export"]["include_audio"] is True
+
+
+# --- правки человека в базе знаний ----------------------------------------------------
+
+
+def test_reexport_keeps_files_edited_by_hand(tmp_path, vault):
+    folder = _recording(tmp_path, summary="# Итоги\n")
+    target = Path(kb_export.export_recording(folder, _cfg(vault))["path"])
+    (target / "Итоги.md").write_text("# Итоги\n\nМои пометки.\n", encoding="utf-8")
+    (folder / "summary.md").write_text("# Итоги v2\n", encoding="utf-8")
+    library.write_meta(folder, {"title": "Новое название"})
+    got = kb_export.export_recording(folder, _cfg(vault))
+    assert got["kept"] == ["Итоги.md"]
+    assert got["files"] == ["Транскрипт.md"]
+    assert "Мои пометки." in (target / "Итоги.md").read_text(encoding="utf-8")
+    assert "# Новое название" in (target / "Транскрипт.md").read_text(encoding="utf-8")
+    assert not list(target.glob("*обновлено*"))
+    # Правка остаётся защищённой и при следующей выгрузке.
+    again = kb_export.export_recording(folder, _cfg(vault))
+    assert again["kept"] == ["Итоги.md"]
+    assert library.read_meta(folder)["kb_export"]["kept"] == ["Итоги.md"]
+
+
+def test_unchanged_files_are_updated(tmp_path, vault):
+    folder = _recording(tmp_path, summary="# Итоги\n")
+    kb_export.export_recording(folder, _cfg(vault))
+    (folder / "summary.md").write_text("# Итоги v2\n", encoding="utf-8")
+    got = kb_export.export_recording(folder, _cfg(vault))
+    assert got["kept"] == []
+    assert (Path(got["path"]) / "Итоги.md").read_text(encoding="utf-8") == "# Итоги v2\n"
+
+
+def test_foreign_file_with_our_name_is_not_overwritten(tmp_path, vault):
+    folder = _recording(tmp_path)
+    target = vault / "2026-09-30 - Планирование спринта"
+    target.mkdir()
+    (target / "Транскрипт.md").write_text("чужой транскрипт", encoding="utf-8")
+    got = kb_export.export_recording(folder, _cfg(vault))
+    assert got["kept"] == ["Транскрипт.md"]
+    assert (target / "Транскрипт.md").read_text(encoding="utf-8") == "чужой транскрипт"
+
+
+def test_export_of_older_version_without_hashes_is_still_ours(tmp_path, vault):
+    """Первая версия выгрузки писала в meta список имён без хешей."""
+    folder = _recording(tmp_path)
+    target = Path(kb_export.export_recording(folder, _cfg(vault))["path"])
+    library.write_meta(folder, {"kb_export": {"path": str(target), "at": 1.0,
+                                              "files": ["Транскрипт.md"]}})
+    library.write_meta(folder, {"title": "Ретро"})
+    got = kb_export.export_recording(folder, _cfg(vault))
+    assert got["kept"] == []
+    assert "# Ретро" in (target / "Транскрипт.md").read_text(encoding="utf-8")
+
+
+def test_remember_error_survives_broken_meta(tmp_path, monkeypatch):
+    folder = _recording(tmp_path)
+
+    def boom(*a, **k):
+        raise ValueError("meta.json сломан")
+
+    monkeypatch.setattr(library, "update_meta", boom)
+    kb_export._remember_error(folder, RuntimeError("x"))  # не бросает
+
+
+@pytest.mark.parametrize("update, fragment", [
+    ({"transcript_name": "Итоги.md"}, "совпада"),
+    ({"summary_name": "транскрипт"}, "совпада"),
+    ({"transcript_name": "Запись.md"}, "Запись"),
+    ({"summary_name": "Субтитры"}, "Субтитры"),
+])
+def test_file_names_must_not_clash(tmp_path, update, fragment):
+    f = tmp_path / "config.json"
+    with pytest.raises(ValueError, match=fragment):
+        settings.patch({"export": update}, f)
+    got = kb_export.preview(_cfg(None), tmp_path, update)
+    assert fragment in got["error"]

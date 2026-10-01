@@ -435,7 +435,7 @@ test("«В базу знаний» выгружает и показывает п
   load();
   withMeetingsDir("D:/kb/Встречи");
   const target = "D:/kb/Встречи/2026-09-30 - Планирование спринта";
-  vi.mocked(api.kbExport).mockResolvedValue({ path: target, files: ["Транскрипт.md"] });
+  vi.mocked(api.kbExport).mockResolvedValue({ path: target, files: ["Транскрипт.md"], kept: [] });
   render(<RecordingCard id="r1" endpoint={ep} />);
   await userEvent.click(await screen.findByRole("button", { name: "В базу знаний" }));
   expect(api.kbExport).toHaveBeenCalledWith(ep, "r1");
@@ -451,4 +451,16 @@ test("ошибка прошлой выгрузки (kb_export.error) видна 
   render(<RecordingCard id="r1" endpoint={ep} />);
   expect(await screen.findByText(/Не удалось выгрузить в базу знаний: Папка для встреч не найдена/))
     .toBeInTheDocument();
+});
+
+test("файлы, изменённые вручную, перечислены после выгрузки", async () => {
+  load();
+  withMeetingsDir("D:/kb");
+  vi.mocked(api.kbExport).mockResolvedValue({
+    path: "D:/kb/2026-09-30 - Планирование спринта", files: ["Итоги.md"], kept: ["Транскрипт.md"],
+  });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await userEvent.click(await screen.findByRole("button", { name: "В базу знаний" }));
+  const done = await screen.findByRole("status", { name: "Выгрузка в базу знаний" });
+  expect(done).toHaveTextContent("Транскрипт.md изменён вручную — не перезаписан");
 });

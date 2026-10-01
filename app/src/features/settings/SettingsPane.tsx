@@ -279,7 +279,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
     }
   }
   const dirty = Object.keys(changes);
-  const invalid = assistantChangesInvalid(changes) || exportChangesInvalid(changes);
+  const invalid = assistantChangesInvalid(changes) || exportChangesInvalid(changes, settings ?? {});
 
   const save = async () => {
     if (dirty.length === 0 || invalid) return;
