@@ -4,7 +4,7 @@
  * перехватывать клавиатуру, пока человек сам не щёлкнул в поле.
  */
 
-import { useState, type KeyboardEvent } from "react";
+import { useState } from "react";
 
 import { Markdown } from "../lib/markdown";
 import { Button } from "../ui/Button";
@@ -28,19 +28,15 @@ export function LiveAsk({ reply, onAsk, disabled = false }: {
     setText("");
     void onAsk(question);
   };
-  const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-    e.preventDefault();
-    submit();
-  };
 
   return (
     <div className="live-ask">
       <form className="live-ask__row" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        {/* Однострочное поле: Enter отправляет форму сам (неявная отправка). */}
         <input
           className="live-ask__input" aria-label="Вопрос ассистенту" placeholder="Спросите о встрече"
           value={text} disabled={blocked}
-          onChange={(e) => setText(e.target.value)} onKeyDown={onKeyDown}
+          onChange={(e) => setText(e.target.value)}
         />
         <Button type="submit" variant="primary" disabled={blocked || !text.trim()}>Спросить</Button>
       </form>

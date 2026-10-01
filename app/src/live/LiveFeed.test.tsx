@@ -70,3 +70,11 @@ test("дайджест свёрнут изначально, если попро�
   rerender(<LiveDigest digest="" />);
   expect(screen.getByText(/Дайджест появится/)).toBeInTheDocument();
 });
+
+test("строки ключуются по номеру: обрезка начала ленты не пересоздаёт остальные", () => {
+  const withId = (i: number) => ({ ...line(i), id: i });
+  const { rerender } = render(<LiveFeed lines={[withId(0), withId(1), withId(2)]} />);
+  const kept = screen.getByText("реплика 2").closest("li");
+  rerender(<LiveFeed lines={[withId(1), withId(2), withId(3)]} />);
+  expect(screen.getByText("реплика 2").closest("li")).toBe(kept);
+});

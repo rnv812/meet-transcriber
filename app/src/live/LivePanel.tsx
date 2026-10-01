@@ -25,8 +25,11 @@ export const EXPANDED_PX = 520;
 const TICK_MS = 1000;
 const FIND_MS = 2000;
 
-/** Секунды с `started_at` (стенное время резидента), тикает раз в секунду. */
-function useElapsed(startedAt: number | null | undefined): number {
+/**
+ * Секунды с `started_at` (стенное время резидента, когда ассистент начал
+ * слушать), тикает раз в секунду; null — время начала неизвестно.
+ */
+function useElapsed(startedAt: number | null | undefined): number | null {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (startedAt == null) return;
@@ -34,7 +37,7 @@ function useElapsed(startedAt: number | null | undefined): number {
     const t = setInterval(() => setNow(Date.now()), TICK_MS);
     return () => clearInterval(t);
   }, [startedAt]);
-  return startedAt == null ? 0 : Math.max(0, now / 1000 - startedAt);
+  return startedAt == null ? null : Math.max(0, now / 1000 - startedAt);
 }
 
 export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
@@ -68,10 +71,12 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
       <header className="live-head">
         <span className="live-head__title">
           <span className="live-dot" aria-hidden="true" />
-          <span className="num">{clock(elapsed)}</span> · {stopping ? "Останавливаю…" : "Ассистент слушает"}
+          <span className="num">{elapsed === null ? "—" : clock(elapsed)}</span> · {stopping ? "Останавливаю…" : "Ассистент слушает"}
         </span>
         <span className="live-head__actions">
-          <Button onClick={() => setExpanded(!expanded)}>{expanded ? "Свернуть" : "Развернуть"}</Button>
+          <Button aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+            {expanded ? "Свернуть" : "Развернуть"}
+          </Button>
           <Button variant="danger" onClick={stop} disabled={stopping}>Стоп</Button>
         </span>
       </header>

@@ -166,3 +166,56 @@ test("ассистент дописывает запись: «Останавли
   expect(screen.getByText("Останавливаю…")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Стоп" })).toBeDisabled();
 });
+
+test("запуск не удался (ok:false) — ошибка видна", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
+  vi.spyOn(api, "liveStart").mockResolvedValue(
+    { ok: false, ...live({ error: "Не удалось запустить ассистента: нет python" }) });
+  render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
+  await userEvent.click(await openMenu());
+  expect(await screen.findByRole("alert")).toHaveTextContent("Не удалось запустить ассистента: нет python");
+});
+
+test("ошибка прошлого живого режима из снимка видна, пока режим не идёт", () => {
+  const { rerender } = render(<RecordingBadge endpoint={ep}
+    snapshot={snap({ live: live({ error: "Ассистент завершился (код 1)" }) })} />);
+  expect(screen.getByRole("alert")).toHaveTextContent("Ассистент завершился (код 1)");
+  rerender(<RecordingBadge endpoint={ep} snapshot={snap({ live: live({ starting: true, error: "старое" }) })} />);
+  expect(screen.queryByRole("alert")).toBeNull();
+  rerender(<RecordingBadge endpoint={ep} snapshot={snap({ live: live({ error: "  " }) })} />);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("меню закрывается, когда бейдж уходит из простоя", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
+  const { rerender } = render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
+  await openMenu();
+  rerender(<RecordingBadge endpoint={ep} snapshot={snap({ live: live({ starting: true }) })} />);
+  rerender(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(screen.getByRole("button", { name: "Другие варианты записи" })).toHaveAttribute("aria-expanded", "false");
+});
+
+test("доступность меню: фокус на первый пункт, Esc возвращает его на «▾»", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
+  render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
+  const item = await openMenu();
+  await waitFor(() => expect(item).toHaveFocus());
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(screen.getByRole("button", { name: "Другие варианты записи" })).toHaveFocus();
+});
+
+test("неактивный «С ассистентом» связан с подсказкой; фокус остаётся на «▾»", async () => {
+  vi.spyOn(api, "getAssistant").mockResolvedValue(assistant({ provider: null }));
+  render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
+  const item = await openMenu();
+  await waitFor(() => expect(item).toBeDisabled());
+  expect(item).toHaveAccessibleDescription("Подключите Claude Code или Codex в настройках");
+  expect(screen.getByRole("button", { name: "Другие варианты записи" })).toHaveFocus();
+});
+
+test("время начала живого режима неизвестно — без таймера", () => {
+  render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live({ active: true, folder: "C:/r/x" }) })} />);
+  expect(screen.getByText(/REC/)).toHaveTextContent(/^● REC · ассистент$/);
+});

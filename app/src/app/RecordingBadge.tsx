@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { noProvider } from "../features/card/assistant";
 import { type Endpoint, getAssistant, liveStart, liveStop, recordingCommand } from "../lib/api";
@@ -10,6 +10,7 @@ const LOW_DISK_GB = 5;
 const ERROR_MS = 6000;
 const TICK_MS = 1000;
 const NO_PROVIDER = "Подключите Claude Code или Codex в настройках";
+const START_FAILED = "Не удалось запустить ассистента";
 
 /** Общая часть ответов `/live/start` и `/live/stop` — новое `snapshot.live`. */
 const liveOf = (r: LiveStatus): LiveStatus => ({
@@ -26,7 +27,9 @@ const liveOf = (r: LiveStatus): LiveStatus => ({
  *
  * «▾» рядом с «Начать запись» — меню с записью «С ассистентом» (живой режим).
  * При нём `snapshot.status` остаётся "idle", а состояние — в `snapshot.live`;
- * часы живого режима идут от `started_at` (стенное время резидента).
+ * часы живого режима идут от `started_at` (стенное время резидента, когда
+ * ассистент начал слушать; неизвестно — без часов). Чем кончился прошлый
+ * живой режим (`live.error`), видно, пока не начат следующий.
  */
 export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, onSnapshot }: {
   endpoint: Endpoint | null;
@@ -48,6 +51,7 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   const recording = snapshot?.status === "recording";
   const live = snapshot?.live;
   const liveActive = !!live?.active;
+  const idle = !recording && !liveActive && !live?.starting && !live?.stopping;
   const elapsedS = snapshot?.elapsed_s;
   useEffect(() => {
     const t = Date.now();
@@ -65,6 +69,18 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   const [menu, setMenu] = useState(false);
   const [assistant, setAssistant] = useState<AssistantInfo | null>(null);
   const split = useRef<HTMLSpanElement>(null);
+  const more = useRef<HTMLButtonElement>(null);
+  const item = useRef<HTMLButtonElement>(null);
+  const hintId = useId();
+  const blocked = noProvider(assistant);
+  // Ушли из простоя (запись, ассистент) — меню больше не к месту.
+  useEffect(() => { if (!idle) setMenu(false); }, [idle]);
+  // Открытое меню — фокус на пункт; неактивен (нет провайдера) — остаётся на «▾».
+  useEffect(() => {
+    if (!menu) return;
+    if (blocked) more.current?.focus();
+    else item.current?.focus();
+  }, [menu, blocked]);
   useEffect(() => {
     if (!menu || !endpoint) return;
     let current = true;
@@ -76,7 +92,11 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
     const down = (e: MouseEvent) => {
       if (split.current && !split.current.contains(e.target as Node)) setMenu(false);
     };
-    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setMenu(false); };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMenu(false);
+      more.current?.focus();
+    };
     document.addEventListener("mousedown", down);
     document.addEventListener("keydown", key);
     return () => {
@@ -98,10 +118,15 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
     setMenu(false);
     setError(null);
     call(endpoint)
-      .then((result) => onSnapshot?.({ ...snapshot, live: liveOf(result) }))
+      .then((result) => {
+        // Не запустился сразу (например, нет интерпретатора): ответ 200 с ok:false.
+        if (call === liveStart && !result.ok) setError(result.error || START_FAILED);
+        onSnapshot?.({ ...snapshot, live: liveOf(result) });
+      })
       .catch((e) => setError(errorText(e)));
   };
-  const blocked = noProvider(assistant);
+  const lastLiveError = idle ? live?.error?.trim() || null : null;
+  const shownError = error ?? lastLiveError;
 
   let main;
   if (live?.stopping) {
@@ -119,10 +144,10 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
       </>
     );
   } else if (live?.active) {
-    const liveS = live.started_at == null ? 0 : now / 1000 - live.started_at;
+    const liveS = live.started_at == null ? null : now / 1000 - live.started_at;
     main = (
       <>
-        <span className="rec-badge__live num">● REC {clock(liveS)} · ассистент</span>
+        <span className="rec-badge__live num">● REC {liveS === null ? "" : `${clock(liveS)} `}· ассистент</span>
         <Button variant="danger" onClick={() => runLive(liveStop)}>Стоп</Button>
       </>
     );
@@ -138,16 +163,16 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
     main = (
       <span className="split" ref={split}>
         <Button variant="primary" className="split__main" onClick={() => run("start")}>Начать запись</Button>
-        <Button variant="primary" className="split__more" aria-label="Другие варианты записи"
+        <Button ref={more} variant="primary" className="split__more" aria-label="Другие варианты записи"
           aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>▾</Button>
         {menu && (
           <div className="rec-menu" role="menu" aria-label="Варианты записи">
-            <button type="button" role="menuitem" className="rec-menu__item" disabled={blocked}
-              onClick={() => runLive(liveStart)}>
+            <button ref={item} type="button" role="menuitem" className="rec-menu__item" disabled={blocked}
+              aria-describedby={blocked ? hintId : undefined} onClick={() => runLive(liveStart)}>
               С ассистентом
               <span className="rec-menu__note">дайджест и вопросы по ходу встречи</span>
             </button>
-            {blocked && <div className="rec-menu__hint">{NO_PROVIDER}</div>}
+            {blocked && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
           </div>
         )}
       </span>
@@ -156,7 +181,7 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
 
   return (
     <div className="rec-badge">
-      {error && <span className="import__error" role="alert">{error}</span>}
+      {shownError && <span className="import__error" role="alert">{shownError}</span>}
       {low && <span className="rec-badge__warn">Мало места: {snapshot.disk_free_gb} ГБ</span>}
       {main}
     </div>

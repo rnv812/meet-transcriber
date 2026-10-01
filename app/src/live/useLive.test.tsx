@@ -25,8 +25,9 @@ test("строки копятся из потока, хранятся после
   });
   expect(MAX_LINES).toBe(300);
   expect(result.current.lines).toHaveLength(300);
-  expect(result.current.lines[0]).toEqual(line(5));
-  expect(result.current.lines.at(-1)).toEqual(line(304));
+  // Номер строки (id: события) остаётся при ней: по нему лента ключует строки.
+  expect(result.current.lines[0]).toEqual({ ...line(5), id: 5 });
+  expect(result.current.lines.at(-1)).toEqual({ ...line(304), id: 304 });
 });
 
 test("state даёт дайджест и статус; строки state не дублируют ленту", () => {

@@ -22,12 +22,15 @@ const RETRY_MAX_MS = 10_000;
 const NO_LINK = "Нет связи с ассистентом — переподключаюсь…";
 
 /** Последний вопрос: ждём ответа, ответ или ошибка. */
+/** Строка ленты с её номером в потоке (`id:` события; null — без номера). */
+export type FeedLine = LiveLine & { id: number | null };
+
 export type LiveReply = { pending: boolean; question: string | null; answer: string | null; error: string | null };
 
 export type Live = {
   /** Статус дайджестера из `state` (что он сейчас делает), null — нет. */
   status: string | null;
-  lines: LiveLine[];
+  lines: FeedLine[];
   /** Дайджест встречи, Markdown. */
   digest: string;
   /** Связи с ассистентом нет (переподключаемся), иначе null. */
@@ -40,7 +43,7 @@ export type Live = {
 const IDLE: LiveReply = { pending: false, question: null, answer: null, error: null };
 
 export function useLive(ep: Endpoint | null, active = true): Live {
-  const [lines, setLines] = useState<LiveLine[]>([]);
+  const [lines, setLines] = useState<FeedLine[]>([]);
   const [digest, setDigest] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +75,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
             lastId.current = id;
           }
           setLines((cur) => {
-            const next = [...cur, line];
+            const next = [...cur, { ...line, id }];
             return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
           });
         },

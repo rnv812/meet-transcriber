@@ -88,8 +88,10 @@ test("Развернуть: окно 520, лента, дайджест, вопр
     liveStream().emit("line", { t: 1, speaker: "Демьян", text: "первая" }, 0);
     liveStream().emit("line", { t: 2, speaker: "Мария", text: "вторая" }, 1);
   });
+  expect(screen.getByRole("button", { name: "Развернуть" })).toHaveAttribute("aria-expanded", "false");
   await userEvent.click(screen.getByRole("button", { name: "Развернуть" }));
   expect(invoke).toHaveBeenLastCalledWith("live_resize", { height: 520 });
+  expect(screen.getByRole("button", { name: "Свернуть" })).toHaveAttribute("aria-expanded", "true");
   expect(screen.getByRole("log")).toHaveTextContent("первая");
   expect(screen.getByRole("log")).toHaveTextContent("вторая");
   expect(screen.getByRole("button", { name: /Дайджест/ })).toBeInTheDocument();
@@ -122,4 +124,27 @@ test("LiveWindow: ищет резидента, пока не найдёт, за�
   expect(screen.queryByRole("button", { name: "Стоп" })).toBeNull();
   await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
   expect(screen.getByRole("button", { name: "Стоп" })).toBeInTheDocument();
+});
+
+test("время начала неизвестно — вместо таймера прочерк", () => {
+  render(<LivePanel endpoint={ep} />);
+  act(() => bus().emit("state", snap(status({ started_at: null }))));
+  expect(screen.getByRole("banner")).toHaveTextContent("— · Ассистент слушает");
+  expect(screen.getByRole("banner")).not.toHaveTextContent("00:00");
+});
+
+test("снимок живого режима: применяется только ответ на последнее событие", async () => {
+  let first!: (s: Snapshot) => void;
+  vi.mocked(getState)
+    .mockReturnValueOnce(new Promise((r) => { first = r; }))
+    .mockResolvedValueOnce(snap(status({ active: false, stopping: true })));
+  render(<LivePanel endpoint={ep} />);
+  act(() => bus().emit("state", snap(status())));
+  await act(async () => {
+    bus().emit("live.started", { kind: "live.started", at: 1 });
+    bus().emit("live.stopping", { kind: "live.stopping", at: 2 });
+  });
+  expect(screen.getByRole("banner")).toHaveTextContent("· Останавливаю…");
+  await act(async () => { first(snap(status())); });
+  expect(screen.getByRole("banner")).toHaveTextContent("· Останавливаю…");
 });

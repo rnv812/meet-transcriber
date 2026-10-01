@@ -225,12 +225,16 @@ def _idle(live) -> bool:
 def test_start_spawns_assist_and_becomes_active(make_live, data_dir, tmp_path):
     live, stub, rec = make_live()
     out_root = tmp_path / "recordings"
+    before = time.time()
     reply = live.start(out_root)
     # Не ждёт загрузки модели: ответ сразу, статус дальше — событиями.
     assert reply["ok"] is True and reply["starting"] is True and reply["active"] is False
+    # Секундомер панели — с начала слушания, без прогрева модели.
+    assert reply["started_at"] is None
     _wait_for(lambda: _active(live))
     status = live.status()
     assert status["starting"] is False and status["error"] is None
+    assert before <= status["started_at"] <= time.time()
     assert status["folder"] == str(out_root / "2026-10-01_10-00")
     assert stub.argv[:4] == [sys.executable, "-m", "meet.cli", "assist"]
     for flag in ("--no-browser",):

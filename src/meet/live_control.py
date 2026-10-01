@@ -235,8 +235,9 @@ class LiveControl:
     def status(self) -> dict:
         """{"active", "starting", "stopping", "folder", "error", "started_at"}:
         error — почему упал (или остановился с ошибкой) последний запуск,
-        сбрасывается следующим стартом; started_at — стенное время старта для
-        секундомера панели."""
+        сбрасывается следующим стартом; started_at — стенное время, когда
+        ассистент начал слушать (`live.started`; пока грузится модель — None),
+        для секундомера панели."""
         with self._lock:
             return self._status_unlocked()
 
@@ -285,7 +286,7 @@ class LiveControl:
                     self._child_pid = None
                     self._folder = None
                     self._error = None
-                    self._started_at = time.time()
+                    self._started_at = None  # с live.started: прогрев модели не в счёт
                     self._stop_requested = False
                     self._stop_deadline = None
                     self._thread = threading.Thread(
@@ -467,6 +468,7 @@ class LiveControl:
                         if self._stop_requested:
                             return None  # остановлен до старта — его уже убивают
                         self._active = True
+                        self._started_at = time.time()
                         self._port = int(info["port"])
                         self._child_pid = info["pid"]
                         self._folder = str(info.get("folder") or "") or None

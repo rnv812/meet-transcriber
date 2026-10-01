@@ -24,12 +24,17 @@ export function useLiveStatus(ep: Endpoint | null): LiveStatus | null {
     let closed = false;
     let close: (() => void) | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // Ответы /state приходят в любом порядке: применяется только последний
+    // запрошенный, а снимок из потока отменяет все ещё не пришедшие.
+    let seq = 0;
     const apply = (s: Snapshot) => { if (!closed && s.live) setLive(s.live); };
     const connect = () => {
       close = openEvents(ep, {
-        onSnapshot: apply,
+        onSnapshot: (s) => { seq++; apply(s); },
         onEvent: (e) => {
-          if (e.kind.startsWith("live.")) getState(ep).then(apply).catch(() => {});
+          if (!e.kind.startsWith("live.")) return;
+          const mine = ++seq;
+          getState(ep).then((s) => { if (mine === seq) apply(s); }).catch(() => {});
         },
         onError: () => {
           close?.();

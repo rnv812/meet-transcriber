@@ -1,6 +1,7 @@
-import type { ButtonHTMLAttributes } from "react";
+import type { ComponentPropsWithRef } from "react";
 
-type Props = ButtonHTMLAttributes<HTMLButtonElement> & {
+/** `ref` в React 19 — обычный проп: доходит до <button> вместе с остальными. */
+type Props = ComponentPropsWithRef<"button"> & {
   variant?: "default" | "primary" | "danger";
 };
 

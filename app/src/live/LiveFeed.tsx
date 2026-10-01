@@ -10,11 +10,14 @@ import "./live.css";
 /** Насколько от низа ещё считается «внизу»: доли пикселей и последняя строка. */
 const BOTTOM_SLACK_PX = 24;
 
+/** Строка ленты; `id` — номер в потоке, по нему строка ключуется. */
+type Line = LiveLine & { id?: number | null };
+
 /**
  * Лента строк. Следит за низом, пока человек сам не прокрутил вверх
  * (перечитывает сказанное); вернулся вниз — следит снова.
  */
-export function LiveFeed({ lines, className = "" }: { lines: LiveLine[]; className?: string }) {
+export function LiveFeed({ lines, className = "" }: { lines: Line[]; className?: string }) {
   const box = useRef<HTMLOListElement>(null);
   const follow = useRef(true);
 
@@ -33,7 +36,8 @@ export function LiveFeed({ lines, className = "" }: { lines: LiveLine[]; classNa
       onScroll={onScroll}>
       {lines.length === 0 && <li className="live-feed__empty muted">Реплики появятся, как только их расшифрует ассистент</li>}
       {lines.map((l, k) => (
-        <li key={k} className="live-feed__line">
+        // Ключ — номер строки: при обрезке начала ленты остальные строки не пересоздаются.
+        <li key={l.id ?? `i${k}`} className="live-feed__line">
           <span className="live-feed__t num">{clock(l.t)}</span>
           <span className="live-feed__text">
             {l.speaker && <span className="live-feed__who">{l.speaker}</span>}
