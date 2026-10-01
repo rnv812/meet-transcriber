@@ -41,6 +41,57 @@ class TrackBuffer:
         return b"".join(out)
 
 
+class WallClockWriter:
+    """Обёртка писателя дорожки: файл держится у стенных часов.
+
+    WASAPI-loopback без системного звука не зовёт callback вовсе, микрофон
+    тоже может замолчать. Без доливки тишины sys.opus оставался пустым (офлайн-
+    расшифровка записи падала на ffmpeg), а после паузы реплики уезжали к
+    началу дорожки — interleave sys/mic по абсолютным таймкодам врал. Тот же
+    приём, что у `recorder._Track`, но без вотчдога: пауза доливается в
+    callback'е перед возобновившимися данными и при close() — хвостом.
+    """
+
+    PAD_GAP_S = 1.0  # пауза короче — латентность/джиттер callback'а, не тишина
+    TAIL_GAP_S = 0.05
+
+    def __init__(self, writer, channels: int, rate: int, clock=time.monotonic) -> None:
+        self._writer = writer
+        self._frame = 2 * max(1, int(channels))
+        self._rate = int(rate)
+        self._clock = clock
+        self._started = clock()
+        self._written = 0
+        self._lock = threading.Lock()
+
+    def write(self, data: bytes) -> None:
+        with self._lock:
+            self._pad(len(data) / (self._frame * self._rate), self.PAD_GAP_S)
+            self._writer.write(data)
+            self._written += len(data)
+
+    def close(self) -> None:
+        with self._lock:
+            try:
+                self._pad(0.0, self.TAIL_GAP_S)
+            finally:
+                self._writer.close()
+
+    def _pad(self, incoming_s: float, min_gap: float) -> None:
+        """Тишина до момента, с которого начинаются `incoming_s` секунд данных.
+        Кусками ≤1 с: пауза может быть долгой, а ffmpeg читает из пайпа."""
+        gap = (self._clock() - self._started) - incoming_s \
+            - self._written / (self._frame * self._rate)
+        if gap <= min_gap:
+            return
+        frames = int(round(gap * self._rate))
+        while frames > 0:
+            n = min(frames, self._rate)
+            self._writer.write(b"\x00" * (n * self._frame))
+            self._written += n * self._frame
+            frames -= n
+
+
 class LiveEngine:
     """Движок живого режима: callback пишет дорожки и копит аудио в буферы,
     рабочий поток окнами расшифровывает и дописывает live_transcript.md.
@@ -227,13 +278,15 @@ class LiveEngine:
             rate = int(dev["defaultSampleRate"])
             # fname — внутренний ключ дорожки (завязан на SPEAKERS); на диск для
             # офлайн-прохода пишем сжатый .opus.
-            writer = OpusWriter(self.out_dir / fname.replace(".wav", ".opus"),
-                                channels, rate)
+            writer = WallClockWriter(
+                OpusWriter(self.out_dir / fname.replace(".wav", ".opus"),
+                           channels, rate),
+                channels, rate)
             self.register_track(fname, rate, channels, normalize=normalize,
                                 identify=identify)
             buf = self._tracks[fname]["buffer"]
 
-            def make_cb(w: OpusWriter, b: TrackBuffer):
+            def make_cb(w: WallClockWriter, b: TrackBuffer):
                 def cb(in_data, frame_count, time_info, status):
                     w.write(in_data)
                     b.push(in_data)

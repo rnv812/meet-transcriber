@@ -428,3 +428,76 @@ def test_partial_start_failure_releases_lock(tmp_path, monkeypatch):
         engine.start()
     assert not (tmp_path / recorder.LOCK_NAME).exists()
     engine.stop()  # повторная уборка после сбоя безопасна
+
+
+# --- Дорожки живого режима держатся у стенных часов ---------------------------
+
+from meet.live import WallClockWriter  # noqa: E402
+
+
+class _Sink:
+    def __init__(self):
+        self.chunks: list[bytes] = []
+        self.closed = False
+
+    def write(self, data):
+        self.chunks.append(bytes(data))
+
+    def close(self):
+        self.closed = True
+
+    @property
+    def data(self) -> bytes:
+        return b"".join(self.chunks)
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self):
+        return self.now
+
+
+def test_silent_loopback_still_gives_full_length_track():
+    """Loopback без системного звука не зовёт callback вовсе: без доливки
+    sys.opus остаётся пустым и офлайн-расшифровка записи падает на ffmpeg."""
+    sink, clock = _Sink(), _Clock()
+    w = WallClockWriter(sink, channels=2, rate=1000, clock=clock)
+    clock.now += 3.0
+    w.close()
+    assert sink.closed
+    assert len(sink.data) == 3 * 1000 * 4
+    assert set(sink.data) == {0}
+
+
+def test_gap_in_stream_is_filled_before_resumed_audio():
+    """Пауза в звуке доливается тишиной ДО возобновившихся данных: иначе
+    реплики после паузы уезжают к началу и interleave с mic врёт."""
+    sink, clock = _Sink(), _Clock()
+    w = WallClockWriter(sink, channels=1, rate=1000, clock=clock)
+    first = b"\x01\x00" * 1000  # 1 с звука, пришла к t=1
+    clock.now += 1.0
+    w.write(first)
+    clock.now += 5.0  # 4 с тишины, затем ещё секунда звука к t=6
+    second = b"\x02\x00" * 1000
+    w.write(second)
+    data = sink.data
+    assert data[:2000] == first
+    assert data[-2000:] == second
+    assert len(data) == 6 * 1000 * 2
+    assert set(data[2000:-2000]) == {0}
+
+
+def test_callback_jitter_is_not_padded():
+    """Обычная задержка callback'а (доли секунды) — не пауза: лишней тишины
+    между буферами быть не должно."""
+    sink, clock = _Sink(), _Clock()
+    w = WallClockWriter(sink, channels=1, rate=1000, clock=clock)
+    chunk = b"\x01\x00" * 100  # 0.1 с
+    for _ in range(10):
+        clock.now += 0.1
+        w.write(chunk)
+    clock.now += 0.4  # запаздывание последнего буфера
+    w.write(chunk)
+    assert sink.data == chunk * 11
