@@ -17,7 +17,7 @@ export const Turns = memo(function Turns({
   colors: Map<string, string>;
   playable: boolean;
   onPlay: (turn: Turn) => void;
-  onNameSpeaker?: (label: string, anchor: HTMLElement) => void;
+  onNameSpeaker?: (label: string) => void;
   marks?: TurnMarks;
 }) {
   return (
@@ -51,7 +51,7 @@ export const Turns = memo(function Turns({
                 ) : (
                   <button type="button" className={`turn__speaker${unnamed ? " turn__speaker--unnamed" : ""}`}
                     style={!unnamed && color ? { color } : undefined}
-                    onClick={(e) => onNameSpeaker?.(t.speaker, e.currentTarget)}>{t.speaker}</button>
+                    onClick={() => onNameSpeaker?.(t.speaker)}>{t.speaker}</button>
                 )}
                 {t.uncertain && <span className="turn__flag">(нахлёст)</span>}
               </div>

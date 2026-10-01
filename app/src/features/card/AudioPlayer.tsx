@@ -26,7 +26,8 @@ import { audioUrl, type Endpoint } from "../../lib/api";
 import { clock } from "../../lib/format";
 
 export type AudioPlayerHandle = {
-  seek: (at: number, play?: boolean) => void;
+  /** Перемотать; `play` — и играть, `until` — остановиться на этой секунде (фраза спикера). */
+  seek: (at: number, play?: boolean, until?: number) => void;
   /** Остановить и отпустить файл (перед удалением записи). */
   release: () => void;
 };
@@ -78,6 +79,8 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   const [released, setReleased] = useState(false);
   const available = useRef(onAvailable);
   available.current = onAvailable;
+  /** Где остановиться (прослушивание фразы); любая другая перемотка это снимает. */
+  const stopAt = useRef<number | null>(null);
 
   const total = duration ?? (durationHint && durationHint > 0 ? durationHint : 0);
 
@@ -92,6 +95,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   const seek = useCallback((at: number) => {
     const a = el.current;
     if (!a) return;
+    stopAt.current = null;
     const end = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : total || Infinity;
     const t = Math.max(0, Math.min(at, end));
     a.currentTime = t;
@@ -99,9 +103,12 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   }, [total]);
 
   useImperativeHandle(ref, () => ({
-    seek(at, play = false) {
+    seek(at, play = false, until) {
       seek(at);
-      if (play) start();
+      if (play) {
+        stopAt.current = until ?? null;
+        start();
+      }
     },
     release() {
       const a = el.current;
@@ -114,6 +121,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   }), [seek, start]);
 
   const toggle = () => {
+    stopAt.current = null;
     if (playing) el.current?.pause();
     else start();
   };
@@ -170,7 +178,14 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
           const d = e.currentTarget.duration;
           if (Number.isFinite(d) && d > 0) setDuration(d);
         }}
-        onTimeUpdate={(e) => setCurrent(e.currentTarget.currentTime)}
+        onTimeUpdate={(e) => {
+          const a = e.currentTarget;
+          setCurrent(a.currentTime);
+          if (stopAt.current !== null && a.currentTime >= stopAt.current) {
+            stopAt.current = null;
+            a.pause();
+          }
+        }}
         onPlay={() => setPlaying(true)}
         onPause={() => { setPlaying(false); setLoading(false); }}
         onWaiting={() => setLoading(true)}

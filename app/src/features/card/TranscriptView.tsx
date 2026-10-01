@@ -41,7 +41,7 @@ export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker,
   colors: Map<string, string>;
   playable: boolean;
   onPlay: (turn: Turn) => void;
-  onNameSpeaker?: (label: string, anchor: HTMLElement) => void;
+  onNameSpeaker?: (label: string) => void;
   find?: FindRequest | null;
 }) {
   const [text, setText] = useState(find?.q ?? "");

@@ -304,6 +304,9 @@ class TrayControl:
         # ключ — путь без регистра, значение — путь для снимка.
         self._processing: dict[str, str] = {}
         self._processing_lock = threading.Lock()
+        # Правки спикеров (панель «Спикеры»): по одной за раз — шаги истории
+        # и образцы голосов не должны переплетаться.
+        self._speakers_lock = threading.Lock()
         self.bus.subscribe(self._on_job_event)
 
     @staticmethod
@@ -1017,10 +1020,12 @@ class TrayControl:
             raise _conflict(str(e))
         return {"ok": True}
 
-    def _busy_reason(self, folder: Path, merging: Path | None = None) -> str | None:
+    def _busy_reason(self, folder: Path, merging: Path | None = None,
+                     model: bool = True) -> str | None:
         """Почему запись сейчас нельзя удалить или объединить; None — можно.
         `merging` — объединённая запись, чьи исходные удаляем: её собственное
-        «эта запись — часть объединения» не считается."""
+        «эта запись — часть объединения» не считается. `model=False` — работа
+        модели (итоги, вопрос) не мешает: она лишь читает расшифровку."""
         folder = Path(folder).resolve()
         owner = self._merge_owner(folder, merging)
         if owner is not None:
@@ -1042,7 +1047,7 @@ class TrayControl:
         # Задача модели (и её CLI) работает с cwd в папке записи: на Windows
         # rmtree снёс бы файлы и упал на самой папке, а задача дописала бы
         # summary.md и meta.json в осиротевшую папку.
-        if self.llm_queue.active_for(str(folder), (jobs.SUMMARY, jobs.ASK)):
+        if model and self.llm_queue.active_for(str(folder), (jobs.SUMMARY, jobs.ASK)):
             return "Идёт работа модели — отмените или дождитесь"
         return None
 
@@ -1360,6 +1365,77 @@ class TrayControl:
         enrolled, error = self._enroll(folder, pairs)
         return {"ok": True, "renamed": renamed, "enrolled": enrolled,
                 "voices_error": error}
+
+    # --- панель «Спикеры»: правки одним шагом и их откат ---------------------
+
+    def _speakers_view(self, folder: Path) -> dict:
+        from meet import speakers
+
+        cfg = settings.load().recording
+        return speakers.overview(folder, cfg.voices, owner=cfg.speaker_name)
+
+    def speakers(self, recording_id: str) -> dict:
+        """Спикеры встречи для панели: доли, образцы фраз, подсказки из базы
+        голосов, история правок."""
+        from meet import speakers
+
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        try:
+            return self._speakers_view(folder)
+        except speakers.SpeakerError as e:
+            return {"error": str(e)}
+
+    def _speakers_change(self, recording_id: str, change) -> dict:
+        """Правка спикеров записи (`change(folder, voices)`), по одной за раз.
+        Пока запись расшифровывают, объединяют или обрезают, — отказ: задача
+        перепишет транскрипт, и правка (или её откат) потерялась бы."""
+        from meet import search, speakers
+
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        reason = self._busy_reason(folder, model=False)
+        if reason:
+            raise _conflict(reason[:1].upper() + reason[1:])
+        with self._speakers_lock:
+            try:
+                result = change(folder, self._voices())
+            except speakers.Stale as e:
+                raise _conflict(str(e))
+            except speakers.SpeakerError as e:
+                raise _bad_request(str(e))
+            except OSError as e:
+                raise RuntimeError(f"не удалось сохранить: {e}") from e
+        search.forget(folder)
+        self._updated(folder)
+        self._speakers_reexport(folder)
+        view = self._speakers_view(folder)
+        return {**view, "voices_error": result.get("voices_error"),
+                **({"step": result["step"]} if "step" in result else {})}
+
+    def _speakers_reexport(self, folder: Path) -> None:
+        """Имена — в выгрузке базы знаний: выгрузить заново, если выгрузка
+        автоматическая или встречу уже выгружали (итоги не пересчитываются)."""
+        from meet import kb_export
+
+        try:
+            cfg = settings.load().export
+            wanted = bool(cfg.meetings_dir) and (
+                cfg.auto_export or kb_export.previously_exported(folder))
+        except Exception as e:
+            self.tray.log(f"выгрузка в базу знаний не проверена ({folder.name}): {e}")
+            return
+        if wanted:
+            self._background(lambda: self._auto_kb_export(folder), "meet-kb-export")
+
+    def speakers_apply(self, recording_id: str, body: dict | None) -> dict:
+        from meet import speakers
+
+        body = body or {}
+        return self._speakers_change(recording_id, lambda folder, voices: speakers.apply(
+            folder, body.get("ops"), body.get("remember"), voices))
 
     def _enroll(self, folder: Path, pairs: dict) -> tuple[list, str | None]:
         """Записать голоса в базу. Сайдкара нет (расшифровка без эмбеддингов) —

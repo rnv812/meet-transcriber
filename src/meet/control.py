@@ -44,6 +44,8 @@ IMPORTANT: токен принимается и в query-параметре `?to
     transcript(id) -> dict               структурный транскрипт для редактора
     save_transcript(id, data) -> dict     правки редактора
     name_speakers(id, mapping) -> dict    имена спикеров + запись голосов в базу
+    speakers(id) -> dict                  панель «Спикеры»: доли, подсказки, история
+    speakers_apply(id, body) -> dict      набор правок {"ops", "remember"} одним шагом
     transcribe(id, options) -> dict       поставить расшифровку в очередь
     jobs() -> dict                        очередь задач
     submit_job(body) -> dict              новая задача
@@ -755,6 +757,10 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.update_recording(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers$"),
      lambda h, p, rid: _server_of(h).state.name_speakers(unquote(rid), h._body())),
+    ("GET", re.compile(r"^/recordings/([^/]+)/speakers$"),
+     lambda h, p, rid: _server_of(h).state.speakers(unquote(rid))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/speakers/apply$"),
+     lambda h, p, rid: _server_of(h).state.speakers_apply(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/transcribe$"),
      lambda h, p, rid: _server_of(h).state.transcribe(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/summary$"),

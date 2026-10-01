@@ -21,6 +21,8 @@ vi.mock("../../lib/api", async (orig) => ({
   getQa: vi.fn(),
   liveAsk: vi.fn(),
   kbExport: vi.fn(),
+  getSpeakers: vi.fn(),
+  applySpeakers: vi.fn(),
 }));
 vi.mock("../../lib/shell", () => ({
   inTauri: () => true,
@@ -54,6 +56,15 @@ beforeEach(() => {
   vi.mocked(api.getQa).mockResolvedValue({ items: [] });
   HTMLMediaElement.prototype.play = vi.fn(async () => {});
   HTMLMediaElement.prototype.load = vi.fn();
+  vi.mocked(api.getSpeakers).mockResolvedValue({
+    owner: "Демьян Петров", history: [], pos: 0,
+    speakers: [
+      { label: "Демьян Петров", name: "Демьян Петров", seconds: 5, share: 0.62, turns: 1, has_voice: false,
+        suggestions: [], samples: [{ start: 0, end: 5, text: "Привет всем" }] },
+      { label: "Спикер 2", name: null, seconds: 3, share: 0.38, turns: 1, has_voice: true,
+        suggestions: [], samples: [{ start: 6, end: 9, text: "Здравствуйте" }] },
+    ],
+  });
 });
 
 test("ready: реплики и участники", async () => {
@@ -66,15 +77,29 @@ test("ready: реплики и участники", async () => {
   expect(screen.getByRole("button", { name: /▶ 00:00/ })).toBeInTheDocument();
 });
 
-test("клик по безымянному спикеру открывает «Кто это?», Esc закрывает", async () => {
+test("клик по безымянному спикеру открывает панель «Спикеры» на его строке, Esc закрывает", async () => {
   load();
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
   await userEvent.click(screen.getAllByRole("button", { name: /Спикер 2/ })[0]!);
-  expect(await screen.findByRole("dialog", { name: "Кто это?" })).toBeInTheDocument();
-  expect(screen.getByRole("textbox", { name: "Кто это?" })).toHaveFocus();
+  const panel = await screen.findByRole("dialog", { name: "Спикеры встречи" });
+  await waitFor(() => expect(within(panel).getByRole("region", { name: /^Спикер 2/ })).toHaveFocus());
   await userEvent.keyboard("{Escape}");
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("«Спикеры (N)»: фраза играет в плеере карточки, «Показать все реплики» — поиск по спикеру", async () => {
+  load();
+  const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  await userEvent.click(screen.getByRole("button", { name: "Спикеры (2)" }));
+  const panel = await screen.findByRole("dialog", { name: "Спикеры встречи" });
+  const row = await within(panel).findByRole("region", { name: /^Спикер 2/ });
+  await userEvent.click(within(row).getByRole("button", { name: "Прослушать фразу с 00:06" }));
+  expect(container.querySelector("audio")!.currentTime).toBe(6);
+  expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
+  await userEvent.click(within(row).getByRole("button", { name: "Показать все реплики" }));
+  expect(screen.getByRole("searchbox", { name: "Найти в расшифровке" })).toHaveValue('спикер:"Спикер 2"');
 });
 
 test("удаление во время расшифровки: ошибка видна", async () => {
@@ -407,15 +432,15 @@ test("«Перерасшифровать» спрашивает подтверж
   await waitFor(() => expect(api.transcribe).toHaveBeenCalledWith(ep, "r1"));
 });
 
-test("названный спикер тоже кликабелен: «Кто это?» с текущим именем", async () => {
+test("названный спикер тоже кликабелен: панель на его строке", async () => {
   load();
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
   const named = screen.getAllByRole("button", { name: /Демьян Петров/ });
   expect(named.length).toBe(2); // участник в шапке и подпись реплики
   await userEvent.click(named[1]!);
-  expect(await screen.findByRole("dialog", { name: "Кто это?" })).toBeInTheDocument();
-  expect(screen.getByRole("textbox", { name: "Кто это?" })).toHaveValue("Демьян Петров");
+  const panel = await screen.findByRole("dialog", { name: "Спикеры встречи" });
+  await waitFor(() => expect(within(panel).getByRole("region", { name: /^Демьян Петров/ })).toHaveFocus());
 });
 
 test("импорт без duration_s: длительность по концу последней реплики", async () => {

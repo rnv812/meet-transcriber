@@ -11,7 +11,8 @@
 import { inTauri, invoke } from "./shell";
 import type {
   AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveLine, LiveState, LiveStatus, Person, PersonCard,
-  ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, Summary, Transcript,
+  ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, Summary,
+  Transcript,
 } from "./types";
 
 export type Endpoint = {
@@ -104,12 +105,14 @@ export const mergeRecordings = (ep: Endpoint, ids: string[], keepOriginals = fal
     body("POST", { ids, keep_originals: keepOriginals }));
 export const transcribe = (ep: Endpoint, id: string) =>
   json<Job>(ep, `/recordings/${enc(id)}/transcribe`, body("POST", {}));
-export const saveTranscript = (ep: Endpoint, id: string, transcript: Transcript) =>
-  json<{ ok: boolean; path?: string; error?: string }>(
-    ep, `/recordings/${enc(id)}/transcript`, body("PUT", transcript));
-export const nameSpeakers = (ep: Endpoint, id: string, mapping: Record<string, string>) =>
-  json<{ ok: boolean; renamed: number; enrolled: string[]; voices_error: string | null }>(
-    ep, `/recordings/${enc(id)}/speakers`, body("POST", mapping));
+
+// --- спикеры встречи (панель «Спикеры») --------------------------------------
+
+export const getSpeakers = (ep: Endpoint, id: string) =>
+  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers`);
+/** Набор правок одним шагом истории; `remember` — запомнить голос строки в базе. */
+export const applySpeakers = (ep: Endpoint, id: string, ops: SpeakerOpInput[], remember: Record<string, boolean>) =>
+  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/apply`, body("POST", { ops, remember }));
 export const exportRecording = (ep: Endpoint, id: string, format: string) =>
   json<{ filename: string; content: string }>(ep, `/recordings/${enc(id)}/export?format=${enc(format)}`);
 

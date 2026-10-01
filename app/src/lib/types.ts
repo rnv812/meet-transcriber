@@ -168,6 +168,45 @@ export type PersonCard = {
 
 export type Sample = { recording: string; start: number; end: number; track: string };
 
+/** Фраза спикера для прослушивания в панели «Спикеры». */
+export type SpeakerPhrase = { start: number; end: number; text: string };
+/** Похожий голос из базы: `score` — сходство 0..1. */
+export type SpeakerSuggestion = { name: string; score: number };
+/** Строка панели «Спикеры»: `label` — подпись в расшифровке, `name` — null у «Спикер N». */
+export type SpeakerRow = {
+  label: string;
+  name: string | null;
+  seconds: number;
+  /** Доля времени речи, 0..1. */
+  share: number;
+  turns: number;
+  samples: SpeakerPhrase[];
+  /** Есть голосовой отпечаток (его можно запомнить и по нему есть подсказки). */
+  has_voice: boolean;
+  suggestions: SpeakerSuggestion[];
+};
+/** Правка из набора: rename — имя, reset — «Неизвестный», merge — объединить с `into`. */
+export type SpeakerOp = { type: "rename" | "merge" | "reset"; label: string; from: string; to: string; into?: string };
+export type SpeakerStep = {
+  id: string;
+  at: string;
+  ops: SpeakerOp[];
+  enrolled: { person: string; sample_id: string; label: string; created: boolean }[];
+  created_people: string[];
+};
+export type SpeakersView = {
+  speakers: SpeakerRow[];
+  /** Владелец микрофона (настройка «Как подписывать микрофон»). */
+  owner: string;
+  history: SpeakerStep[];
+  /** Сколько шагов истории применено: дальше — отменённые (их можно повторить). */
+  pos: number;
+  voices_error?: string | null;
+  step?: SpeakerStep;
+};
+/** Правка, как её шлёт окно: `to` — имя (rename) или подпись другого спикера (merge). */
+export type SpeakerOpInput = { type: "rename" | "merge" | "reset"; label: string; to?: string };
+
 export type BusEvent = { kind: string; at: number; [key: string]: unknown };
 export type ProgressEvent = BusEvent & {
   stage: string;

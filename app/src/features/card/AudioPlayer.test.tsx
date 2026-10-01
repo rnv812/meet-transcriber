@@ -122,6 +122,24 @@ test("seek(at, true) из реплики: позиция и воспроизве
   expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
 });
 
+test("seek(at, true, until): фраза спикера играет до отметки и останавливается", () => {
+  const { ref, audio } = setup();
+  loaded(audio, 600);
+  act(() => ref.current!.seek(42, true, 48));
+  expect(audio.currentTime).toBe(42);
+  audio.currentTime = 45;
+  fireEvent.timeUpdate(audio);
+  expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled();
+  audio.currentTime = 48.1;
+  fireEvent.timeUpdate(audio);
+  expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(1);
+  // Дальше — обычное воспроизведение: отметка снята.
+  act(() => ref.current!.seek(10, true));
+  audio.currentTime = 60;
+  fireEvent.timeUpdate(audio);
+  expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(1);
+});
+
 test("дорожка не загрузилась — «Аудио недоступно» вместо плеера", () => {
   const onAvailable = vi.fn();
   const { audio } = setup({ onAvailable });

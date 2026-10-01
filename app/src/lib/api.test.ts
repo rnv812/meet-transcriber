@@ -1,4 +1,6 @@
-import { ApiError, deleteRecording, avatarUrl, saveTranscript, nameSpeakers, putHotwords } from "./api";
+import {
+  ApiError, applySpeakers, avatarUrl, deleteRecording, getSpeakers, putHotwords,
+} from "./api";
 import * as api from "./api";
 import { FakeEventSource } from "../test/setup";
 
@@ -12,15 +14,6 @@ test("аватар с токеном и версией", () => {
   expect(avatarUrl({ base: "http://127.0.0.1:9", token: "t k" }, "Демьян", 3))
     .toBe("http://127.0.0.1:9/voices/%D0%94%D0%B5%D0%BC%D1%8C%D1%8F%D0%BD/avatar?token=t%20k&v=3");
 });
-test("saveTranscript: PUT с телом-транскриптом", async () => {
-  const f = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
-  globalThis.fetch = f;
-  const t = { version: 1, title: null, segments: [] };
-  await saveTranscript({ base: "http://h", token: "t" }, "a b", t);
-  expect(f.mock.calls[0]![0]).toBe("http://h/recordings/a%20b/transcript");
-  expect(f.mock.calls[0]![1]).toMatchObject({ method: "PUT", body: JSON.stringify(t) });
-});
-
 const ep = { base: "http://h", token: "t" };
 const okFetch = () => {
   const f = vi.fn().mockImplementation(async () => new Response("{}", { status: 200 }));
@@ -28,11 +21,16 @@ const okFetch = () => {
   return f;
 };
 
-test("nameSpeakers: тело — сам словарь", async () => {
+test("панель «Спикеры»: обзор и набор правок", async () => {
   const f = okFetch();
-  await nameSpeakers(ep, "a b", { SPEAKER_00: "Демьян" });
-  expect(f.mock.calls[0]![0]).toBe("http://h/recordings/a%20b/speakers");
-  expect(f.mock.calls[0]![1]).toMatchObject({ method: "POST", body: JSON.stringify({ SPEAKER_00: "Демьян" }) });
+  await getSpeakers(ep, "a b");
+  await applySpeakers(ep, "a b", [{ type: "rename", label: "Спикер 2", to: "Анна" }], { "Спикер 2": true });
+  const calls = f.mock.calls.map(([url, init]) => [url, (init as RequestInit).method ?? "GET", (init as RequestInit).body]);
+  expect(calls).toEqual([
+    ["http://h/recordings/a%20b/speakers", "GET", undefined],
+    ["http://h/recordings/a%20b/speakers/apply", "POST",
+      JSON.stringify({ ops: [{ type: "rename", label: "Спикер 2", to: "Анна" }], remember: { "Спикер 2": true } })],
+  ]);
 });
 
 test("putHotwords: PUT {text}", async () => {

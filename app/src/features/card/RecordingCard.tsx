@@ -9,14 +9,13 @@ import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
 import { activeJobOf, failedRetranscribe, isLiveRecording, statusOf } from "../../lib/status";
 import type { Job, KbExport, Recording, Snapshot, Transcript } from "../../lib/types";
 import { Button } from "../../ui/Button";
-import { Popover } from "../../ui/Popover";
 import { EmptyState } from "../../ui/EmptyState";
 import { AudioPlayer, type AudioPlayerHandle } from "./AudioPlayer";
 import { CardActions } from "./CardActions";
 import { CardTabs } from "./CardTabs";
 import { CardHeader } from "./CardHeader";
 import { LiveCard } from "./LiveCard";
-import { SpeakerPopover } from "./SpeakerPopover";
+import { SpeakersPanel } from "./speakers/SpeakersPanel";
 import { TranscriptView, type FindRequest } from "./TranscriptView";
 import type { PersonColor } from "./Turns";
 import "./card.css";
@@ -57,8 +56,12 @@ export function RecordingCard({
   const [error, setError] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [naming, setNaming] = useState<{ label: string; anchor: HTMLElement } | null>(null);
   const player = useRef<AudioPlayerHandle>(null);
+  /** Панель «Спикеры»: открыта ли, к какой строке перейти; `mounted` — уже открывали (правки живут скрытыми). */
+  const [panel, setPanel] = useState<{ open: boolean; mounted: boolean; focus: { label: string; n: number } | null }>(
+    { open: false, mounted: false, focus: null });
+  /** «Показать все реплики» из панели: свой запрос к поиску по расшифровке. */
+  const [ownFind, setOwnFind] = useState<FindRequest | null>(null);
 
   /** Папка для встреч в базе знаний (`export.meetings_dir`): нет — нет и кнопки «В базу знаний». */
   const [meetingsDir, setMeetingsDir] = useState<string | null>(null);
@@ -107,8 +110,12 @@ export function RecordingCard({
   );
 
   useEffect(() => {
-    setRec(null); setError(null); setMissing(false); setKbDone(null); setAudioFailed(false); void load();
+    setRec(null); setError(null); setMissing(false); setKbDone(null); setAudioFailed(false);
+    setPanel({ open: false, mounted: false, focus: null }); setOwnFind(null);
+    void load();
   }, [load]);
+  // Просьба из поиска по записям важнее прежней своей.
+  useEffect(() => { setOwnFind(null); }, [find]);
   const lastRefresh = useRef(refreshKey);
   useEffect(() => {
     if (refreshKey !== lastRefresh.current) { lastRefresh.current = refreshKey; void load(); }
@@ -124,8 +131,19 @@ export function RecordingCard({
     () => (segments?.length ? segments.reduce((m, x) => Math.max(m, x.end), 0) : null), [segments]);
   const turns = useMemo(() => mergeTurns(segments ?? []), [segments]);
   const speakers = useMemo(() => speakersOf(segments ?? []), [segments]);
-  const nameSpeaker = useCallback((label: string, anchor: HTMLElement) => setNaming({ label, anchor }), []);
-  const closeNaming = useCallback(() => setNaming(null), []);
+  const openSpeakers = useCallback((label?: string) => setPanel((p) => ({
+    open: true, mounted: true, focus: label ? { label, n: (p.focus?.n ?? 0) + 1 } : p.focus,
+  })), []);
+  const nameSpeaker = useCallback((label: string) => openSpeakers(label), [openSpeakers]);
+  const closeSpeakers = useCallback(() => setPanel((p) => ({ ...p, open: false })), []);
+  const playPhrase = useCallback((start: number, until: number) => player.current?.seek(start, true, until), []);
+  const showTurns = useCallback((label: string) => setOwnFind((f) => ({
+    q: `спикер:"${label}"`, t: null, n: Math.max(f?.n ?? 0, find?.n ?? 0) + 1,
+  })), [find]);
+  const speakersChanged = useCallback(() => {
+    void load(); onChanged?.(); onPeopleChanged?.();
+  }, [load, onChanged, onPeopleChanged]);
+  const shownFind = ownFind ?? find;
   const colors = useMemo(() => new Map(people.map((p) => [p.name, p.color])), [people]);
 
   if (!rec) {
@@ -193,10 +211,10 @@ export function RecordingCard({
     case "ready":
       body = (
         <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
-          showTranscript={find?.n}
+          showTranscript={shownFind?.n}
           transcript={turns.length ? (
             <TranscriptView turns={turns} colors={colors} playable={playable} onPlay={play}
-              onNameSpeaker={nameSpeaker} find={find} />
+              onNameSpeaker={nameSpeaker} find={shownFind} />
           ) : <EmptyState title="В записи нет речи" />} />
       );
       break;
@@ -237,9 +255,10 @@ export function RecordingCard({
   }
 
   return (
-    <section className="card">
+    <section className={`card${panel.open && status.kind === "ready" ? " card--with-spk" : ""}`}>
       <CardHeader rec={rec} durationS={rec.duration_s ?? spokenUntil} speakers={speakers} people={people}
-        endpoint={endpoint} avatarVersion={avatarVersion} onRename={rename} onNameSpeaker={nameSpeaker} />
+        endpoint={endpoint} avatarVersion={avatarVersion} onRename={rename} onNameSpeaker={nameSpeaker}
+        onOpenSpeakers={status.kind === "ready" ? () => openSpeakers() : undefined} speakersOpen={panel.open} />
       <CardActions
         canExport={status.kind === "ready"}
         canRetranscribe={status.kind === "ready"}
@@ -290,15 +309,10 @@ export function RecordingCard({
         </div>
       )}
       <div className="card__body">{body}</div>
-      {naming && (
-        <Popover anchor={naming.anchor} onClose={closeNaming} label="Кто это?">
-          <SpeakerPopover
-            endpoint={endpoint} recordingId={id} label={naming.label}
-            people={people} avatarVersion={avatarVersion}
-            onApplied={() => { void load(); onChanged?.(); onPeopleChanged?.(); }}
-            onDone={closeNaming}
-          />
-        </Popover>
+      {panel.mounted && status.kind === "ready" && (
+        <SpeakersPanel endpoint={endpoint} recordingId={id} people={people} avatarVersion={avatarVersion}
+          open={panel.open} focus={panel.focus} version={rec.transcript} playable={playable}
+          onClose={closeSpeakers} onPlay={playPhrase} onShowTurns={showTurns} onChanged={speakersChanged} />
       )}
       {status.kind !== "recording" && (hasAudio ? (
         <AudioPlayer key={id} ref={player} endpoint={endpoint} id={id} durationHint={rec.duration_s ?? spokenUntil}

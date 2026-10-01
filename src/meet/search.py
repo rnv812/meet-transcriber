@@ -318,6 +318,16 @@ class _Cache:
                 self._size -= dropped
         return turns
 
+    def forget(self, folder: Path) -> None:
+        """Забыть одну запись: её транскрипт только что переписали. По имени
+        папки: путь в кэше мог быть записан иначе (без resolve, другой регистр)."""
+        name = Path(folder).name.lower()
+        with self._lock:
+            for key in [k for k in self._items if Path(k).name.lower() == name]:
+                self._size -= self._items.pop(key)[1]
+            for key in [k for k in self._cards if Path(k).name.lower() == name]:
+                del self._cards[key]
+
     def clear(self) -> None:
         with self._lock:
             self._items.clear()
@@ -330,6 +340,12 @@ _CACHE = _Cache()
 
 def clear_cache() -> None:
     _CACHE.clear()
+
+
+def forget(folder: Path) -> None:
+    """Перечитать запись при следующем поиске (правка спикеров из окна): не
+    полагаемся на время изменения файла — две записи подряд его не меняют."""
+    _CACHE.forget(folder)
 
 
 def _cards(root: Path):

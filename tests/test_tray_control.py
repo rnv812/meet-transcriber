@@ -1501,3 +1501,97 @@ def test_agent_context_needs_a_transcript(control_state, tmp_path, monkeypatch):
     assert control_state.agent_context(folder.name) == {"error": "транскрипта нет"}
     assert control_state.agent_context("..") == {"error": "записи нет"}
     assert not (folder / "transcript.md").exists()
+
+
+# --- панель «Спикеры»: применение, откат, отказ во время обработки ------------
+
+
+def _speaker_meeting(with_recordings):
+    library.write_transcript(with_recordings, {
+        "version": 1, "created_at": "2026-08-18T12:00:00", "segments": [
+            {"start": 0.0, "end": 3.0, "speaker": "Спикер 1", "text": "Начнём."},
+            {"start": 3.0, "end": 5.0, "speaker": "Спикер 2", "text": "Согласна."}]})
+    (with_recordings / "2026-08-18_11-00_speakers.json").write_text(json.dumps({
+        "source": str(with_recordings), "date": "2026-08-18", "speakers": [
+            {"label": "SPEAKER_00", "display": "Спикер 1", "embedding": [1.0, 0.0]},
+            {"label": "SPEAKER_01", "display": "Спикер 2", "embedding": [0.0, 1.0]}]},
+        ensure_ascii=False), encoding="utf-8")
+    return with_recordings.name
+
+
+def test_speakers_panel_apply_and_overview(with_recordings, app, tmp_path):
+    rid = _speaker_meeting(with_recordings)
+    state = tray_control.TrayControl(app, queue=_Queue())
+    seen = []
+    app.bus.subscribe(lambda e: seen.append(e))
+    got = state.speakers(rid)
+    assert [r["label"] for r in got["speakers"]] == ["Спикер 1", "Спикер 2"]
+    assert got["owner"] == "Вы"
+
+    got = state.speakers_apply(rid, {"ops": [{"type": "rename", "label": "Спикер 2", "to": "Анна"}],
+                                     "remember": {"Спикер 2": True}})
+    assert got["step"]["ops"][0]["to"] == "Анна" and got["pos"] == 1
+    assert [r["label"] for r in got["speakers"]] == ["Спикер 1", "Анна"]
+    assert (tmp_path / "voices" / "Анна.json").exists()
+    assert any(getattr(e, "kind", None) == tray_control.RECORDING_UPDATED for e in seen)
+
+
+def test_speakers_panel_errors_map_to_api_statuses(with_recordings, app):
+    from meet import control
+
+    rid = _speaker_meeting(with_recordings)
+    state = tray_control.TrayControl(app, queue=_Queue())
+    assert state.speakers("../чужое") == {"error": "записи нет"}
+    with pytest.raises(control.BadRequest):
+        state.speakers_apply(rid, {"ops": [{"type": "rename", "label": "Спикер 1", "to": "a/b"}]})
+
+
+def test_speakers_panel_refuses_while_the_recording_is_transcribed(with_recordings, app):
+    from meet import control
+
+    rid = _speaker_meeting(with_recordings)
+
+    class Busy(_Queue):
+        def active_for(self, folder, kinds):
+            return jobs.Job(id="j1", kind=jobs.TRANSCRIBE, folder=folder)
+
+    state = tray_control.TrayControl(app, queue=Busy())
+    before = library.read_transcript(with_recordings)
+    with pytest.raises(control.Conflict, match="расшифровка"):
+        state.speakers_apply(rid, {"ops": [{"type": "rename", "label": "Спикер 1", "to": "Борис"}]})
+    assert library.read_transcript(with_recordings) == before
+    assert state.speakers(rid)["speakers"]  # смотреть можно
+
+
+def test_speakers_panel_works_while_a_summary_is_written(with_recordings, app):
+    rid = _speaker_meeting(with_recordings)
+
+    class Llm(_Queue):
+        def active_for(self, folder, kinds):
+            return jobs.Job(id="s1", kind=jobs.SUMMARY, folder=folder)
+
+    state = tray_control.TrayControl(app, queue=_Queue(), llm_queue=Llm())
+    got = state.speakers_apply(rid, {"ops": [{"type": "rename", "label": "Спикер 1", "to": "Борис"}]})
+    assert got["pos"] == 1
+
+
+def test_speakers_panel_change_refreshes_search_and_reexports(with_recordings, app, tmp_path,
+                                                              monkeypatch):
+    from meet import kb_export, search
+
+    rid = _speaker_meeting(with_recordings)
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    _write_config(tmp_path, {
+        "recording": {"out_dir": str(tmp_path / "recordings"),
+                      "voices_dir": str(tmp_path / "voices")},
+        "export": {"meetings_dir": str(vault), "auto_export": True}})
+    exported = []
+    monkeypatch.setattr(kb_export, "export_recording",
+                        lambda folder, cfg, **kw: exported.append(folder.name) or {"path": "x"})
+    state = tray_control.TrayControl(app, queue=_Queue())
+    state._background = lambda fn, name=None: fn()
+    assert search.search_library(tmp_path / "recordings", "спикер:Анна") == []
+    state.speakers_apply(rid, {"ops": [{"type": "rename", "label": "Спикер 2", "to": "Анна"}]})
+    assert [i["id"] for i in search.search_library(tmp_path / "recordings", "спикер:Анна")] == [rid]
+    assert exported == [rid]

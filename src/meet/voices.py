@@ -3,6 +3,8 @@
 docs/superpowers/specs/2026-07-02-speaker-enrollment-design.md."""
 
 import json
+import os
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -47,14 +49,50 @@ def load_voices(folder: Path | None = None) -> dict[str, list[np.ndarray]]:
     return out
 
 
-def add_sample(
+def _read_samples(f: Path) -> list[dict]:
+    if not f.exists():
+        return []
+    data = json.loads(f.read_text(encoding="utf-8"))
+    return [s for s in data.get("samples", []) if isinstance(s, dict)]
+
+
+def _write_samples(f: Path, samples: list[dict]) -> None:
+    """Атомарно: оборванная запись не должна оставить человека без голоса."""
+    tmp = f.with_name(f".{f.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(json.dumps({"samples": samples}, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, f)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _same_cluster(sample: dict, source: str, label: str | None) -> bool:
+    """Образец того же кластера той же встречи. Старые образцы (и `meet enroll`)
+    метки не знают: для них встреча = кластер, как и было."""
+    if sample.get("source") != source:
+        return False
+    return label is None or sample.get("label") in (None, label)
+
+
+def enroll_sample(
     name: str,
     embedding: list[float],
     source: str,
     date: str,
     folder: Path | None = None,
-) -> Path:
-    """Дописать образец голоса; повтор из того же source заменяет старый образец.
+    *,
+    label: str | None = None,
+    recording: str | None = None,
+) -> dict:
+    """Дописать образец голоса с id и сказать, что при этом случилось:
+    {"person", "sample_id", "created": файла не было, "replaced": [{"person",
+    "sample"}] — образцы того же кластера, которые запись вытеснила}. По этому
+    откат из окна (панель «Спикеры») убирает ровно свой образец и возвращает
+    вытесненные.
+
+    Повтор из того же source заменяет прежний образец. С меткой кластера
+    (`label`) — только образец этого кластера, зато у любого человека: кластер
+    переназвали — голос переезжает, а не остаётся и у прежнего имени.
 
     Имя = имя файла: `..\\..\\x` писал бы мимо папки голосов, `Демьян: ПМ` —
     в альтернативный поток NTFS, а сверхдлинное потом не переименовать и не
@@ -65,13 +103,80 @@ def add_sample(
     folder = folder or voices_dir()
     folder.mkdir(parents=True, exist_ok=True)
     f = folder / f"{name}.json"
-    data = {"samples": []}
-    if f.exists():
-        data = json.loads(f.read_text(encoding="utf-8"))
-    samples = [s for s in data["samples"] if s.get("source") != source]
-    samples.append({"embedding": [float(x) for x in embedding], "source": source, "date": date})
-    f.write_text(json.dumps({"samples": samples}, ensure_ascii=False), encoding="utf-8")
-    return f
+    created = not f.exists()
+    replaced: list[dict] = []
+    if label is not None:
+        for other in sorted(folder.glob("*.json")):
+            if other.stem == name or (not created and os.path.samefile(other, f)):
+                continue  # сам человек (и «демьян» = «Демьян» на Windows)
+            try:
+                samples = _read_samples(other)
+            except (OSError, ValueError):
+                continue
+            moved = [s for s in samples if s.get("source") == source and s.get("label") == label]
+            if moved:
+                replaced += [{"person": other.stem, "sample": s} for s in moved]
+                _write_samples(other, [s for s in samples if s not in moved])
+    samples = _read_samples(f)
+    replaced += [{"person": name, "sample": s} for s in samples if _same_cluster(s, source, label)]
+    kept = [s for s in samples if not _same_cluster(s, source, label)]
+    sample = {"embedding": [float(x) for x in embedding], "source": source, "date": date,
+              "id": uuid.uuid4().hex}
+    if label is not None:
+        sample["label"] = label
+    if recording is not None:
+        sample["recording"] = recording
+    _write_samples(f, kept + [sample])
+    return {"person": name, "sample_id": sample["id"], "created": created, "replaced": replaced}
+
+
+def add_sample(
+    name: str,
+    embedding: list[float],
+    source: str,
+    date: str,
+    folder: Path | None = None,
+) -> Path:
+    """Дописать образец голоса; повтор из того же source заменяет старый образец.
+    Недопустимое имя — ValueError до записи чего-либо (см. enroll_sample)."""
+    folder = folder or voices_dir()
+    got = enroll_sample(name, embedding, source, date, folder)
+    return folder / f"{got['person']}.json"
+
+
+def remove_sample(sample_id: str, person: str, folder: Path | None = None,
+                  restore: list[dict] | None = None) -> dict[str, int]:
+    """Убрать образец по id и вернуть вытесненные им (`restore` — как в
+    ответе enroll_sample). Ищем у `person`, а если человека с тех пор
+    переименовали или слили — по всей базе. Ответ: {человек: сколько у него
+    осталось образцов} для файла, где образец нашёлся; не нашёлся — {}."""
+    folder = folder or voices_dir()
+    candidates = [folder / f"{person}.json"] + sorted(folder.glob("*.json"))
+    found: dict[str, int] = {}
+    for f in candidates:
+        try:
+            samples = _read_samples(f)
+        except (OSError, ValueError):
+            continue
+        left = [s for s in samples if s.get("id") != sample_id]
+        if len(left) != len(samples):
+            _write_samples(f, left)
+            found = {f.stem: len(left)}
+            break
+    from meet.people import valid_name
+
+    for item in restore or []:
+        try:
+            f = folder / f"{valid_name(str(item.get('person') or ''))}.json"
+            samples = _read_samples(f)
+        except (OSError, ValueError):
+            continue
+        sample = item.get("sample")
+        if isinstance(sample, dict) and sample not in samples:
+            _write_samples(f, samples + [sample])
+            if f.stem in found:
+                found[f.stem] += 1
+    return found
 
 
 def sidecar_path(out_md: Path) -> Path:

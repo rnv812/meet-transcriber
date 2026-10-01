@@ -173,6 +173,18 @@ def test_transcripts_are_cached_until_they_change(lib, monkeypatch):
     assert [f["id"] for f in found] == ["2026-09-28_10-00"]
 
 
+def test_forget_drops_one_recording_from_the_cache(lib, monkeypatch):
+    calls = []
+    real = search.turns_of
+    monkeypatch.setattr(search, "turns_of", lambda segs: calls.append(1) or real(segs))
+    search.search_library(lib, "бюджет")
+    assert len(calls) == 3
+    # Путь может прийти записанным иначе, чем в кэше (регистр, resolve).
+    search.forget(Path(str(lib / "2026-09-28_10-00").upper()))
+    search.search_library(lib, "бюджет")
+    assert len(calls) == 4
+
+
 def test_cache_is_bounded_by_text_size(tmp_path):
     cache = search._Cache(limit=500)  # одна короткая реплика — около 400 байт по оценке
     a = _rec(tmp_path, "a", [_seg(0, "Анна", "Двадцать символов тут.")])

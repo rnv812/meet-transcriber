@@ -26,6 +26,7 @@ function MergeNote({ info }: { info: MergeInfo }) {
 
 export function CardHeader({
   rec, durationS = rec.duration_s, speakers, people, endpoint, avatarVersion, onRename, onNameSpeaker,
+  onOpenSpeakers, speakersOpen = false,
 }: {
   rec: Recording;
   /** Длительность для подписи: у импорта без неё — конец последней реплики. */
@@ -36,7 +37,11 @@ export function CardHeader({
   avatarVersion?: Record<string, number>;
   /** Новое название; null — вернуть автоматическое. */
   onRename: (title: string | null) => void;
-  onNameSpeaker?: (label: string, anchor: HTMLElement) => void;
+  /** Клик по участнику: панель «Спикеры» на его строке. */
+  onNameSpeaker?: (label: string) => void;
+  /** Открыть панель «Спикеры» (нет — запись не готова, кнопки нет). */
+  onOpenSpeakers?: () => void;
+  speakersOpen?: boolean;
 }) {
   const when = rec.started_at ? dayLabel(rec.started_at) : "";
   const shown = rec.title ?? (when || rec.id);
@@ -88,9 +93,15 @@ export function CardHeader({
             // Узнанное автоматически имя тоже бывает ошибочным: исправить можно любое.
             return (
               <button key={name} type="button" className={isUnnamed(name) ? "chip chip--unnamed" : "chip"}
-                title="Кто это?" onClick={(e) => onNameSpeaker?.(name, e.currentTarget)}>{chip}</button>
+                title="Кто это?" onClick={() => onNameSpeaker?.(name)}>{chip}</button>
             );
           })}
+          {onOpenSpeakers && (
+            <button type="button" className="chip chip--action" aria-expanded={speakersOpen}
+              title="Имена, голоса и история изменений" onClick={onOpenSpeakers}>
+              {`Спикеры (${speakers.length})`}
+            </button>
+          )}
         </div>
       )}
     </header>

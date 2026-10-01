@@ -113,6 +113,17 @@ class FakeState:
         self.calls.append(("person", name))
         return {"name": name, "meetings": []}
 
+    def speakers(self, rid):
+        self.calls.append(("speakers", rid))
+        return {"speakers": [], "history": [], "pos": 0}
+
+    def speakers_apply(self, rid, body):
+        self.calls.append(("speakers_apply", rid, body))
+        if body.get("bad"):
+            raise control.BadRequest("нечего применять")
+        return {"pos": 1}
+
+
     def set_auto_record(self, body):
         self.calls.append(("auto", body))
         return {"status": "idle", "auto_record": {"enabled": body["enabled"]}}
@@ -1069,3 +1080,14 @@ def test_live_events_without_live_is_409(server):
 def test_device_test_probe_failure_is_503_with_text(server):
     got = _post(server, "/devices/test", {"kind": "mic", "name": "сломан"}, expect=503)
     assert got["error"] == "Не удалось проверить устройство: Устройство не ответило"
+
+
+def test_speakers_panel_routes(server):
+    rid = "2026-09-30_16-04"
+    assert _get(server, f"/recordings/{rid}/speakers")["pos"] == 0
+    body = {"ops": [{"type": "reset", "label": "Анна"}], "remember": {}}
+    assert _post(server, f"/recordings/{rid}/speakers/apply", body) == {"pos": 1}
+    _post(server, f"/recordings/{rid}/speakers/apply", {"bad": True}, expect=400)
+    calls = [c for c in server.state_obj.calls if isinstance(c, tuple) and c[0].startswith("speakers")]
+    assert calls == [("speakers", rid), ("speakers_apply", rid, body),
+                     ("speakers_apply", rid, {"bad": True})]

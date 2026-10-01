@@ -268,3 +268,89 @@ def test_enroll_without_transcript_creates_none(tmp_path):
     _make_sidecar(rec)
     enroll(str(rec), ["Спикер 1=Демьян"], folder=tmp_path / "voices")
     assert not (rec / "transcript.json").exists()
+
+
+# --- образцы с id: точный откат из окна (панель «Спикеры») -------------------
+
+def _file(folder, name):
+    return json.loads((folder / f"{name}.json").read_text(encoding="utf-8"))["samples"]
+
+
+def test_add_sample_gives_each_sample_an_id(tmp_path):
+    add_sample("Демьян", [1.0, 0.0], source="recordings/a", date="2026-06-26", folder=tmp_path)
+    add_sample("Демьян", [0.0, 1.0], source="recordings/b", date="2026-06-27", folder=tmp_path)
+    ids = [s["id"] for s in _file(tmp_path, "Демьян")]
+    assert len(set(ids)) == 2 and all(isinstance(i, str) and i for i in ids)
+
+
+def test_enroll_sample_reports_id_creation_and_what_it_replaced(tmp_path):
+    from meet.voices import enroll_sample
+
+    # Старый образец (до id) из той же встречи — без метки: он заменяется и
+    # возвращается вызывающему, чтобы откат мог его вернуть.
+    (tmp_path / "Демьян.json").write_text(json.dumps({"samples": [
+        {"embedding": [0.5, 0.5], "source": "rec/a", "date": "2026-06-01"}]}), encoding="utf-8")
+    got = enroll_sample("Демьян", [1.0, 0.0], source="rec/a", date="2026-06-26",
+                        label="SPEAKER_01", recording="a", folder=tmp_path)
+    assert got["created"] is False
+    assert [r["sample"]["embedding"] for r in got["replaced"]] == [[0.5, 0.5]]
+    samples = _file(tmp_path, "Демьян")
+    assert [s["id"] for s in samples] == [got["sample_id"]]
+    assert samples[0]["label"] == "SPEAKER_01" and samples[0]["recording"] == "a"
+
+    new = enroll_sample("Анна", [0.0, 1.0], source="rec/a", date="2026-06-26",
+                        label="SPEAKER_02", recording="a", folder=tmp_path)
+    assert new["created"] is True and new["replaced"] == []
+
+
+def test_enroll_sample_keeps_other_clusters_of_the_same_meeting(tmp_path):
+    from meet.voices import enroll_sample
+
+    # Диаризация разбила человека на два кластера: оба — его образцы.
+    enroll_sample("Демьян", [1.0, 0.0], source="rec/a", date="d", label="SPEAKER_01",
+                  recording="a", folder=tmp_path)
+    enroll_sample("Демьян", [0.9, 0.1], source="rec/a", date="d", label="SPEAKER_03",
+                  recording="a", folder=tmp_path)
+    assert len(_file(tmp_path, "Демьян")) == 2
+
+
+def test_enroll_sample_moves_the_cluster_from_another_person(tmp_path):
+    from meet.voices import enroll_sample
+
+    first = enroll_sample("Демьян", [1.0, 0.0], source="rec/a", date="d", label="SPEAKER_01",
+                          recording="a", folder=tmp_path)
+    moved = enroll_sample("Пётр", [1.0, 0.0], source="rec/a", date="d", label="SPEAKER_01",
+                          recording="a", folder=tmp_path)
+    assert _file(tmp_path, "Демьян") == []
+    assert moved["replaced"] == [{"person": "Демьян", "sample": {
+        "embedding": [1.0, 0.0], "source": "rec/a", "date": "d", "id": first["sample_id"],
+        "label": "SPEAKER_01", "recording": "a"}}]
+
+
+def test_remove_sample_by_id_and_restore_replaced(tmp_path):
+    from meet.voices import enroll_sample, remove_sample
+
+    (tmp_path / "Демьян.json").write_text(json.dumps({"samples": [
+        {"embedding": [0.5, 0.5], "source": "rec/a", "date": "2026-06-01"},
+        {"embedding": [0.1, 0.9], "source": "rec/b", "date": "2026-06-02"}]}), encoding="utf-8")
+    got = enroll_sample("Демьян", [1.0, 0.0], source="rec/a", date="2026-06-26",
+                        label="SPEAKER_01", recording="a", folder=tmp_path)
+    left = remove_sample(got["sample_id"], "Демьян", folder=tmp_path, restore=got["replaced"])
+    assert left == {"Демьян": 2}
+    assert sorted(s["source"] for s in _file(tmp_path, "Демьян")) == ["rec/a", "rec/b"]
+    assert all("id" not in s for s in _file(tmp_path, "Демьян"))  # старые — как были
+
+
+def test_remove_sample_finds_it_after_the_person_was_renamed(tmp_path):
+    from meet.voices import enroll_sample, remove_sample
+
+    got = enroll_sample("Демьян", [1.0, 0.0], source="rec/a", date="d", label="SPEAKER_01",
+                        recording="a", folder=tmp_path)
+    (tmp_path / "Демьян.json").rename(tmp_path / "Демьян Петров.json")
+    assert remove_sample(got["sample_id"], "Демьян", folder=tmp_path) == {"Демьян Петров": 0}
+
+
+def test_old_samples_without_id_still_load(tmp_path):
+    (tmp_path / "Демьян.json").write_text(json.dumps({"samples": [
+        {"embedding": [1.0, 0.0], "source": "rec/a", "date": "2026-06-01"}]}), encoding="utf-8")
+    assert np.allclose(load_voices(tmp_path)["Демьян"][0], [1.0, 0.0])
