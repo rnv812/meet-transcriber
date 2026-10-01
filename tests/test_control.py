@@ -749,6 +749,44 @@ def test_audio_range_served(server, tmp_path):
         assert len(r.read()) == 10
 
 
+def test_audio_token_in_query_like_the_app_player(server, tmp_path):
+    """<audio src> в WebView2 не ставит заголовков: токен — в query, Range — как обычно.
+    Плеер карточки просит `track=playback` (сведённые стороны звонка)."""
+    track = tmp_path / "playback.opus"
+    track.write_bytes(bytes(range(256)) * 8)
+    asked = []
+    server.state.track_path = lambda rid, t: asked.append((rid, t)) or track
+    query = urllib.parse.urlencode({"track": "playback", "token": server.token})
+    url = f"http://127.0.0.1:{server.port}/recordings/2026-09-30_10-00/audio?{query}"
+    req = urllib.request.Request(url, headers={"Range": "bytes=0-", "Origin": "http://tauri.localhost"})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        assert r.status == 206
+        assert r.headers["Content-Type"] == "audio/ogg"
+        assert r.headers["Content-Range"] == "bytes 0-2047/2048"
+        assert r.headers["Accept-Ranges"] == "bytes"
+        assert len(r.read()) == 2048
+    assert asked == [("2026-09-30_10-00", "playback")]
+
+
+def test_audio_without_token_is_refused(server, tmp_path):
+    server.state.track_path = lambda rid, t: tmp_path / "x.opus"
+    url = f"http://127.0.0.1:{server.port}/recordings/x/audio?track=playback"
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(url, timeout=5)
+    assert e.value.code == 401
+
+
+def test_audio_mix_failure_is_503(server):
+    def broken(rid, t):
+        raise control.Unavailable("ffmpeg не найден — дорожки записи не сведены для плеера")
+
+    server.state.track_path = broken
+    url = f"http://127.0.0.1:{server.port}/recordings/x/audio?track=playback&token={server.token}"
+    with pytest.raises(urllib.error.HTTPError) as e:
+        urllib.request.urlopen(url, timeout=5)
+    assert e.value.code == 503
+
+
 # --- стабильный адрес: фиксированный порт + постоянный токен -------------
 
 

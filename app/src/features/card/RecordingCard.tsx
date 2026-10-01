@@ -11,7 +11,7 @@ import type { Job, KbExport, Recording, Snapshot, Transcript } from "../../lib/t
 import { Button } from "../../ui/Button";
 import { Popover } from "../../ui/Popover";
 import { EmptyState } from "../../ui/EmptyState";
-import { AudioPlayer, type AudioPlayerHandle, type Track } from "./AudioPlayer";
+import { AudioPlayer, type AudioPlayerHandle } from "./AudioPlayer";
 import { CardActions } from "./CardActions";
 import { CardTabs } from "./CardTabs";
 import { CardHeader } from "./CardHeader";
@@ -55,21 +55,19 @@ export function RecordingCard({
   const [naming, setNaming] = useState<{ label: string; anchor: HTMLElement } | null>(null);
   const player = useRef<AudioPlayerHandle>(null);
 
-  const [owner, setOwner] = useState("Вы");
   /** Папка для встреч в базе знаний (`export.meetings_dir`): нет — нет и кнопки «В базу знаний». */
   const [meetingsDir, setMeetingsDir] = useState<string | null>(null);
   /** Куда выгружено нажатием «В базу знаний» (для этой записи) и что не перезаписано. */
   const [kbDone, setKbDone] = useState<KbExport | null>(null);
+  /** Дорожка плеера не загрузилась: реплики не перематывают, внизу — «Аудио недоступно». */
+  const [audioFailed, setAudioFailed] = useState(false);
   const current = useRef({ endpoint, id });
   current.current = { endpoint, id };
-  const tracksRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
     let live = true;
     getSettings(endpoint).then((s) => {
       if (!live) return;
-      const name = (s.recording as { speaker_name?: unknown } | undefined)?.speaker_name;
-      if (typeof name === "string" && name) setOwner(name);
       const dir = (s.export as { meetings_dir?: unknown } | undefined)?.meetings_dir;
       setMeetingsDir(typeof dir === "string" && dir ? dir : null);
     }).catch(() => {});
@@ -92,12 +90,10 @@ export function RecordingCard({
     }
   }, [endpoint, id]);
 
-  const play = useCallback((t: Turn) => {
-    const tr = tracksRef.current;
-    const track: Track = tr.mic && t.speaker === owner ? "mic"
-      : tr.source ? "source" : tr.sys ? "sys" : "mic";
-    player.current?.play(track, t.start);
-  }, [owner]);
+  // Реплика перематывает общий плеер: он играет обе стороны звонка сразу,
+  // поэтому дорожку по имени спикера выбирать не нужно.
+  const play = useCallback((t: Turn) => player.current?.seek(t.start, true), []);
+  const audioAvailable = useCallback((ok: boolean) => setAudioFailed(!ok), []);
 
   // Состояние задач этой записи: при смене (очередь, готово) карточку надо перечитать.
   const jobSig = useMemo(
@@ -105,7 +101,9 @@ export function RecordingCard({
     [jobs, rec],
   );
 
-  useEffect(() => { setRec(null); setError(null); setMissing(false); setKbDone(null); void load(); }, [load]);
+  useEffect(() => {
+    setRec(null); setError(null); setMissing(false); setKbDone(null); setAudioFailed(false); void load();
+  }, [load]);
   const lastSig = useRef(jobSig);
   useEffect(() => {
     if (jobSig !== lastSig.current) { lastSig.current = jobSig; void load(); }
@@ -121,8 +119,6 @@ export function RecordingCard({
   const closeNaming = useCallback(() => setNaming(null), []);
   const colors = useMemo(() => new Map(people.map((p) => [p.name, p.color])), [people]);
 
-  tracksRef.current = rec?.tracks ?? {};
-
   if (!rec) {
     if (missing) return <EmptyState title="Запись не найдена" hint="Возможно, её удалили. Выберите другую в списке." />;
     return error ? <div className="card__error" role="alert">{error}</div> : <EmptyState title="Загрузка…" />;
@@ -136,6 +132,7 @@ export function RecordingCard({
   };
 
   const hasAudio = Object.keys(rec.tracks).length > 0;
+  const playable = hasAudio && !audioFailed;
 
   const rename = (title: string) => act(async () => {
     const updated = await patchRecording(endpoint, id, { title });
@@ -184,7 +181,7 @@ export function RecordingCard({
       body = (
         <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
           transcript={turns.length ? (
-            <Turns turns={turns} colors={colors} playable={hasAudio} onPlay={play} onNameSpeaker={nameSpeaker} />
+            <Turns turns={turns} colors={colors} playable={playable} onPlay={play} onNameSpeaker={nameSpeaker} />
           ) : <EmptyState title="В записи нет речи" />} />
       );
       break;
@@ -285,7 +282,12 @@ export function RecordingCard({
           />
         </Popover>
       )}
-      {hasAudio && <AudioPlayer ref={player} endpoint={endpoint} id={id} />}
+      {status.kind !== "recording" && (hasAudio ? (
+        <AudioPlayer key={id} ref={player} endpoint={endpoint} id={id} durationHint={rec.duration_s ?? spokenUntil}
+          onAvailable={audioAvailable} />
+      ) : (
+        <div className="player player--off" role="status"><span className="muted">Аудио недоступно</span></div>
+      ))}
     </section>
   );
 }

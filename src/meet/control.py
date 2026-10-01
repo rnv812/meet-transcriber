@@ -46,7 +46,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     jobs() -> dict                        очередь задач
     submit_job(body) -> dict              новая задача
     cancel_job(id) -> dict                снять задачу
-    track_path(id, track) -> Path | None  файл дорожки для плеера
+    track_path(id, track) -> Path | None  файл для плеера (playback — sys+mic вместе)
     engine() -> dict                      что установлено для расшифровки
     install_engine(options) -> dict       поставить движок задачей
     models() -> dict                      каталог моделей и что уже скачано

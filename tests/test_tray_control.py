@@ -298,6 +298,36 @@ def test_track_path_serves_only_known_tracks(with_recordings, app):
     assert state.track_path("2026-08-18_11-00", "нечто") is None
 
 
+def test_track_path_playback_is_the_mix_of_both_sides(with_recordings, app, monkeypatch):
+    """Плеер карточки играет `playback` — сведённые sys+mic, а не дорожку по имени спикера."""
+    from meet import playback
+
+    made = []
+
+    def fake_playback(folder):
+        made.append(folder)
+        return folder / playback.PLAYBACK_NAME
+
+    monkeypatch.setattr(playback, "playback_path", fake_playback)
+    state = tray_control.TrayControl(app)
+    got = state.track_path("2026-08-18_11-00", "playback")
+    assert got == with_recordings.resolve() / playback.PLAYBACK_NAME
+    assert made == [with_recordings.resolve()]
+    assert state.track_path("../../windows", "playback") is None
+
+
+def test_track_path_playback_failure_is_unavailable(with_recordings, app, monkeypatch):
+    from meet import playback
+    from meet.control import Unavailable
+
+    def broken(folder):
+        raise RuntimeError("ffmpeg не найден")
+
+    monkeypatch.setattr(playback, "playback_path", broken)
+    with pytest.raises(Unavailable, match="ffmpeg"):
+        tray_control.TrayControl(app).track_path("2026-08-18_11-00", "playback")
+
+
 def test_transcribe_puts_a_job_in_the_queue(with_recordings, app):
     submitted = []
 

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingCard } from "./RecordingCard";
 import * as api from "../../lib/api";
@@ -207,31 +207,49 @@ test("пустое название не сохраняется", async () => {
   expect(api.patchRecording).not.toHaveBeenCalled();
 });
 
-test("первый клик по реплике: src, currentTime и play сразу", async () => {
+test("плеер карточки играет сведённую дорожку playback — обе стороны звонка", async () => {
   load({ tracks: { sys: "s.wav", mic: "m.wav" } });
   const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
-  await userEvent.click(screen.getAllByRole("button", { name: /▶/ })[1]!);
-  const a = container.querySelector("audio")!;
-  expect(a.getAttribute("src")).toBe(api.audioUrl(ep, "r1", "sys"));
-  expect(a.currentTime).toBe(6);
-  expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+  const audios = container.querySelectorAll("audio");
+  expect(audios).toHaveLength(1);
+  expect(audios[0]!.getAttribute("src")).toBe(api.audioUrl(ep, "r1", "playback"));
+  expect(screen.getByRole("group", { name: "Проигрыватель записи" })).toBeInTheDocument();
+  expect(screen.getByText("30:00")).toBeInTheDocument(); // длительность из карточки до метаданных
 });
 
-test("реплика владельца микрофона играет дорожку mic", async () => {
-  load({ tracks: { sys: "s.wav", mic: "m.wav" } });
-  const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
-  await screen.findByText("Привет всем");
-  await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
-  await new Promise((r) => setTimeout(r, 0));
-  await userEvent.click(screen.getAllByRole("button", { name: /▶/ })[0]!);
-  expect(container.querySelector("audio")!.getAttribute("src")).toBe(api.audioUrl(ep, "r1", "mic"));
-});
+test("клик по реплике перематывает общий плеер и запускает его — и для собеседника, и для владельца микрофона",
+  async () => {
+    load({ tracks: { sys: "s.wav", mic: "m.wav" } });
+    const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
+    await screen.findByText("Привет всем");
+    const audio = container.querySelector("audio")!;
+    await userEvent.click(screen.getAllByRole("button", { name: /▶/ })[1]!);
+    expect(audio.currentTime).toBe(6);
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+    // Реплика владельца микрофона (переименованного) — тот же источник, без смены дорожки.
+    await userEvent.click(screen.getAllByRole("button", { name: /▶/ })[0]!);
+    expect(audio.currentTime).toBe(0);
+    expect(audio.getAttribute("src")).toBe(api.audioUrl(ep, "r1", "playback"));
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(2);
+  });
 
-test("без дорожек кнопок воспроизведения нет", async () => {
+test("без дорожек: кнопок воспроизведения нет, внизу — «Аудио недоступно»", async () => {
   load({ tracks: {} });
-  render(<RecordingCard id="r1" endpoint={ep} />);
+  const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
+  expect(screen.queryByRole("button", { name: /▶/ })).toBeNull();
+  expect(container.querySelector("audio")).toBeNull();
+  expect(screen.getByText("Аудио недоступно")).toBeInTheDocument();
+});
+
+test("дорожка не загрузилась — «Аудио недоступно», реплики не перематывают", async () => {
+  load({ tracks: { sys: "s.wav", mic: "m.wav" } });
+  const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Привет всем");
+  expect(screen.getAllByRole("button", { name: /▶/ }).length).toBeGreaterThan(0);
+  fireEvent.error(container.querySelector("audio")!);
+  expect(screen.getByText("Аудио недоступно")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /▶/ })).toBeNull();
 });
 

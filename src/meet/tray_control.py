@@ -1103,8 +1103,22 @@ class TrayControl:
         return {"recording": folder.name, "job": job.to_raw()}
 
     def track_path(self, recording_id: str, track: str) -> Path | None:
+        """Файл для плеера. `playback` — то, что играет карточка: обе стороны
+        звонка, сведённые в одну дорожку (или импортированный файл как есть);
+        `sys`/`mic`/`source` — отдельные дорожки, для диагностики."""
         folder = self._folder(recording_id)
-        if folder is None or track not in library.TRACK_STEMS:
+        if folder is None:
+            return None
+        if track == "playback":
+            from meet import playback
+
+            try:
+                return playback.playback_path(folder)
+            except RuntimeError as e:
+                from meet.control import Unavailable
+
+                raise Unavailable(str(e)) from e
+        if track not in library.TRACK_STEMS:
             return None
         return library.find_track(folder, track)
 

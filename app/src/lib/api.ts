@@ -285,7 +285,12 @@ export const liveTask = (ep: Endpoint, task: string) =>
 
 // --- URL для <audio>/<img> ---------------------------------------------------
 
-export function audioUrl(ep: Endpoint, id: string, track: "sys" | "mic" | "source"): string {
+/**
+ * Адрес дорожки для <audio>. `playback` — то, что играет карточка: обе стороны
+ * звонка, сведённые резидентом (импорт — как есть); `sys`/`mic`/`source` —
+ * отдельные дорожки (образцы голосов, диагностика).
+ */
+export function audioUrl(ep: Endpoint, id: string, track: "playback" | "sys" | "mic" | "source"): string {
   const q = new URLSearchParams({ track });
   if (ep.token) q.set("token", ep.token);
   return `${ep.base}/recordings/${enc(id)}/audio?${q}`;
