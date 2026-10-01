@@ -283,7 +283,9 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     # во время загрузки пустой датированной папки не оставляют.
     provider_name, runner = _pick_runner(provider, cfg)
     if provider_name == "claude-code":
-        auth_error = asyncio.run(check_auth())
+        # Тот же прокси, что у вызовов модели (llm.proxy), иначе проверка
+        # пошла бы «как в системе» при выбранном «Без прокси».
+        auth_error = asyncio.run(check_auth(proxy=cfg.llm.proxy))
         if auth_error:
             raise SystemExit(f"Авторизация Claude не прошла: {auth_error}")
 

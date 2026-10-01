@@ -219,9 +219,14 @@ def uv_steps(uv: str, env_dir: str, wheel: str, profile: str,
 
 
 def _run(argv: list[str], on_line) -> int:
+    from meet import netproxy
+
     try:
         process = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            # Прокси из настроек (llm.proxy / прокси Windows): uv и pip сами
+            # системный прокси Windows не читают.
+            env=netproxy.settings_env(),
             text=True, encoding="utf-8", errors="replace", bufsize=1,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )

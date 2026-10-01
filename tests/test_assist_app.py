@@ -58,7 +58,7 @@ def _run_assist_capturing_matcher(tmp_path, monkeypatch, **kwargs):
         def process_window(self):
             pass
 
-    async def fake_check_auth():
+    async def fake_check_auth(proxy=None):
         return None
 
     async def fake_main(state, port, **kw):
@@ -100,6 +100,7 @@ class _Heavy:
                  digester_run=None, start_error=None):
         self.engine = None
         self.auth_calls = 0
+        self.auth_proxy = "MISSING"
         self.resolve_calls = 0
         self.runner_for_calls = []
         self.digester_kwargs = None
@@ -155,8 +156,9 @@ class _Heavy:
             heavy.qa_kwargs = kw
             return real_qa(*a, **kw)
 
-        async def fake_check_auth():
+        async def fake_check_auth(proxy=None):
             heavy.auth_calls += 1
+            heavy.auth_proxy = proxy
             return None
 
         def fake_resolve(cfg):
@@ -190,7 +192,8 @@ def _run(tmp_path, **kw):
     from meet.assist.app import run_assist
 
     kw.setdefault("no_voices", True)
-    run_assist(out_root=str(tmp_path / "rec"), cfg=Settings.from_raw({}), **kw)
+    kw.setdefault("cfg", Settings.from_raw({}))
+    run_assist(out_root=str(tmp_path / "rec"), **kw)
 
 
 def test_child_mode_endpoint_file_and_stop_route(tmp_path, monkeypatch):
@@ -314,6 +317,18 @@ def test_default_cli_path_opens_browser_on_8765(tmp_path, monkeypatch):
     assert heavy.opened == ["http://127.0.0.1:8765/"]
     assert heavy.auth_calls == 1  # проверка авторизации Claude — как раньше
     assert heavy.engine.started and heavy.engine.stopped
+
+
+def test_claude_auth_check_uses_proxy_setting(tmp_path, monkeypatch):
+    """Проверка входа перед стартом идёт тем же прокси, что и вызовы модели."""
+    async def done(stop):
+        return None
+
+    heavy = _Heavy(monkeypatch, digester_run=done)
+    _run(tmp_path, open_browser=False, port=0,
+         cfg=Settings.from_raw({"llm": {"provider": "claude-code", "proxy": "none"}}))
+    assert heavy.auth_calls == 1
+    assert heavy.auth_proxy == "none"
 
 
 def test_no_provider_exits_with_clear_error(tmp_path, monkeypatch):

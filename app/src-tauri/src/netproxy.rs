@@ -73,10 +73,25 @@ pub fn pick_server(raw: &str) -> Option<String> {
     valid_url(&url).then_some(url)
 }
 
-/// ProxyOverride → NO_PROXY: локальные адреса всегда (`<local>` сводится к
-/// ним), `*.domain` → `.domain`, прочие маски (`10.*`) опускаются.
-pub fn no_proxy(overrides: Option<&str>) -> String {
-    let mut items: Vec<String> = LOOPBACK.iter().map(|s| s.to_string()).collect();
+/// NO_PROXY для uv: унаследованный NO_PROXY (не затираем), локальные адреса
+/// всегда и ProxyOverride (`<local>` сводится к локальным, `*.domain` →
+/// `.domain`, прочие маски вроде `10.*` опускаются). Без повторов, регистр
+/// не важен.
+pub fn no_proxy(inherited: Option<&str>, overrides: Option<&str>) -> String {
+    let mut items: Vec<String> = Vec::new();
+    let push = |items: &mut Vec<String>, entry: &str| {
+        if !items.iter().any(|i| i.eq_ignore_ascii_case(entry)) {
+            items.push(entry.to_string());
+        }
+    };
+    for entry in inherited.unwrap_or("").split(',').map(str::trim) {
+        if !entry.is_empty() {
+            push(&mut items, entry);
+        }
+    }
+    for entry in LOOPBACK {
+        push(&mut items, entry);
+    }
     for part in overrides.unwrap_or("").split([';', ',']) {
         let entry = part.trim();
         if entry.is_empty() || entry.eq_ignore_ascii_case("<local>") {
@@ -86,10 +101,9 @@ pub fn no_proxy(overrides: Option<&str>) -> String {
             .strip_prefix('*')
             .filter(|e| e.starts_with('.'))
             .unwrap_or(entry);
-        if entry.contains('*') || items.iter().any(|i| i == entry) {
-            continue;
+        if !entry.contains('*') {
+            push(&mut items, entry);
         }
-        items.push(entry.to_string());
     }
     items.join(",")
 }
@@ -98,6 +112,7 @@ pub fn no_proxy(overrides: Option<&str>) -> String {
 /// или в Windows не включён.
 pub fn proxy_env_from(
     env_has_proxy: bool,
+    inherited_no_proxy: Option<&str>,
     settings: &InternetSettings,
 ) -> Vec<(&'static str, OsString)> {
     if env_has_proxy || settings.enabled != Some(1) {
@@ -109,7 +124,10 @@ pub fn proxy_env_from(
     vec![
         ("HTTPS_PROXY", url.clone().into()),
         ("HTTP_PROXY", url.into()),
-        ("NO_PROXY", no_proxy(settings.overrides.as_deref()).into()),
+        (
+            "NO_PROXY",
+            no_proxy(inherited_no_proxy, settings.overrides.as_deref()).into(),
+        ),
     ]
 }
 
@@ -204,7 +222,10 @@ pub fn system_proxy_env() -> Vec<(&'static str, OsString)> {
     if env_has_proxy() {
         return Vec::new();
     }
-    proxy_env_from(false, &read_internet_settings())
+    let inherited = std::env::var("NO_PROXY")
+        .or_else(|_| std::env::var("no_proxy"))
+        .ok();
+    proxy_env_from(false, inherited.as_deref(), &read_internet_settings())
 }
 
 #[cfg(test)]
@@ -231,7 +252,11 @@ mod tests {
 
     #[test]
     fn host_port_becomes_http_url() {
-        let env = proxy_env_from(false, &settings(Some(1), Some("127.0.0.1:3067"), None));
+        let env = proxy_env_from(
+            false,
+            None,
+            &settings(Some(1), Some("127.0.0.1:3067"), None),
+        );
         assert_eq!(
             get(&env, "HTTPS_PROXY").as_deref(),
             Some("http://127.0.0.1:3067")
@@ -278,23 +303,49 @@ mod tests {
 
     #[test]
     fn disabled_or_missing_gives_nothing() {
-        assert!(proxy_env_from(false, &settings(Some(0), Some("127.0.0.1:3067"), None)).is_empty());
-        assert!(proxy_env_from(false, &settings(None, Some("127.0.0.1:3067"), None)).is_empty());
-        assert!(proxy_env_from(false, &settings(Some(1), None, None)).is_empty());
-        assert!(proxy_env_from(false, &InternetSettings::default()).is_empty());
+        assert!(proxy_env_from(
+            false,
+            None,
+            &settings(Some(0), Some("127.0.0.1:3067"), None)
+        )
+        .is_empty());
+        assert!(
+            proxy_env_from(false, None, &settings(None, Some("127.0.0.1:3067"), None)).is_empty()
+        );
+        assert!(proxy_env_from(false, None, &settings(Some(1), None, None)).is_empty());
+        assert!(proxy_env_from(false, None, &InternetSettings::default()).is_empty());
     }
 
     #[test]
     fn existing_env_proxy_wins() {
-        assert!(proxy_env_from(true, &settings(Some(1), Some("127.0.0.1:3067"), None)).is_empty());
+        assert!(
+            proxy_env_from(true, None, &settings(Some(1), Some("127.0.0.1:3067"), None)).is_empty()
+        );
     }
 
     #[test]
     fn proxy_override_becomes_no_proxy() {
         assert_eq!(
-            no_proxy(Some("*.corp.example;intranet;10.*;<local>;localhost")),
+            no_proxy(None, Some("*.corp.example;intranet;10.*;<local>;localhost")),
             "localhost,127.0.0.1,::1,.corp.example,intranet"
         );
-        assert_eq!(no_proxy(None), "localhost,127.0.0.1,::1");
+        assert_eq!(no_proxy(None, None), "localhost,127.0.0.1,::1");
+    }
+
+    #[test]
+    fn inherited_no_proxy_is_merged_not_overwritten() {
+        assert_eq!(
+            no_proxy(Some("intranet, LOCALHOST"), Some("corp;intranet")),
+            "intranet,LOCALHOST,127.0.0.1,::1,corp"
+        );
+        let env = proxy_env_from(
+            false,
+            Some("intranet"),
+            &settings(Some(1), Some("127.0.0.1:3067"), None),
+        );
+        assert_eq!(
+            get(&env, "NO_PROXY").as_deref(),
+            Some("intranet,localhost,127.0.0.1,::1")
+        );
     }
 }

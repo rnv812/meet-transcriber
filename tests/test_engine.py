@@ -336,3 +336,27 @@ def test_cuda_download_hint_matches_the_measured_wheels():
     # «~3 ГБ» обещала меньше, чем качается на самом деле.
     assert engine.DOWNLOAD_HINT_GB["cuda"] >= 4.4
     assert engine.DOWNLOAD_HINT_GB["cpu"] < engine.DOWNLOAD_HINT_GB["cuda"]
+
+
+def test_python_side_install_gets_proxy_env(monkeypatch):
+    """pip/uv из окна настроек и CLI качают через тот же прокси, что и модели."""
+    from meet import engine, netproxy
+
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(netproxy, "read_registry",
+                        lambda: {"ProxyEnable": 1, "ProxyServer": "127.0.0.1:3067"})
+    seen = {}
+
+    class FakePopen:
+        def __init__(self, argv, **kwargs):
+            seen.update(kwargs)
+            self.stdout = iter(["ok\n"])
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(engine.subprocess, "Popen", FakePopen)
+    assert engine._run(["pip", "install", "x"], None) == 0
+    env = {k.upper(): v for k, v in seen["env"].items()}
+    assert env["HTTPS_PROXY"] == "http://127.0.0.1:3067"

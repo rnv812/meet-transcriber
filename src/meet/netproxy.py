@@ -200,12 +200,30 @@ def _env_proxy(environ: Mapping) -> str | None:
     return None
 
 
-def _vars(url: str, no_proxy: str) -> dict[str, str]:
+def _both_cases(names, value: str) -> dict[str, str]:
     env = {}
-    for name in ("HTTPS_PROXY", "HTTP_PROXY"):
-        env[name] = env[name.lower()] = url
-    env[NO_PROXY_VAR] = env[NO_PROXY_VAR.lower()] = no_proxy
+    for name in names:
+        env[name] = env[name.lower()] = value
     return env
+
+
+def _has_any_proxy(environ: Mapping) -> bool:
+    return any(_is_proxy_var(k) and v for k, v in environ.items())
+
+
+def _merge_no_proxy(environ: Mapping, extra: str) -> str:
+    """NO_PROXY ребёнка: унаследованный (любой регистр) плюс `extra`, без
+    повторов (регистр не важен) — чужие исключения не затираются."""
+    items: list[str] = []
+    seen: set[str] = set()
+    inherited = [str(v) for k, v in environ.items() if str(k).upper() == NO_PROXY_VAR and v]
+    for raw in [*inherited, extra]:
+        for part in raw.split(","):
+            entry = part.strip()
+            if entry and entry.lower() not in seen:
+                seen.add(entry.lower())
+                items.append(entry)
+    return ",".join(items)
 
 
 def proxy_env(cfg, environ: Mapping | None = None,
@@ -213,20 +231,29 @@ def proxy_env(cfg, environ: Mapping | None = None,
     """Переменные, которые надо ДОБАВИТЬ окружению ребёнка.
 
     `none` — пусто (унаследованные переменные убирает вызывающий, см.
-    `child_env`/`prepare`); адрес — он; `system` — пусто, если прокси уже
-    задан переменными, иначе прокси из WinINET."""
+    `child_env`/`prepare`); адрес — он (и поверх унаследованного ALL_PROXY);
+    `system` — прокси из WinINET, если переменными он ещё не задан. Если у
+    ребёнка в итоге есть хоть какой-то прокси, локальные адреса дописываются в
+    NO_PROXY: локальная модель и резидент через прокси не ходят никогда."""
     environ = os.environ if environ is None else environ
     mode = _mode(cfg)
     if mode == NONE:
         return {}
+    added: dict[str, str] = {}
+    bypass = ",".join(LOOPBACK)
     if mode == SYSTEM:
-        if _env_proxy(environ):
-            return {}
-        found = from_registry((registry or read_registry)())
-        if not found:
-            return {}
-        return _vars(*found)
-    return _vars(mode, ",".join(LOOPBACK))
+        found = None if _env_proxy(environ) else from_registry((registry or read_registry)())
+        if found:
+            url, bypass = found
+            added = _both_cases(("HTTPS_PROXY", "HTTP_PROXY"), url)
+    else:
+        added = _both_cases(("HTTPS_PROXY", "HTTP_PROXY"), mode)
+        if any(str(k).upper() == "ALL_PROXY" for k in environ):
+            added.update(_both_cases(("ALL_PROXY",), mode))
+    if not added and not _has_any_proxy(environ):
+        return {}
+    added.update(_both_cases((NO_PROXY_VAR,), _merge_no_proxy(environ, bypass)))
+    return added
 
 
 def _is_proxy_var(name: str) -> bool:

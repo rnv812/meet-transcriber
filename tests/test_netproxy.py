@@ -127,10 +127,58 @@ def test_manual_proxy_wins_over_pac():
 
 @pytest.mark.parametrize("name", ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"])
 def test_system_respects_existing_env(name):
+    """Прокси уже задан переменными — его не трогаем, только добавляем
+    локальные адреса в NO_PROXY."""
     called = []
     env = netproxy.proxy_env("system", environ={name: "http://10.1.1.1:3128"},
                              registry=lambda: called.append(1) or {})
-    assert env == {} and called == []
+    assert called == []
+    assert not any(k.upper() in ("HTTPS_PROXY", "HTTP_PROXY") for k in env)
+    assert env["NO_PROXY"] == env["no_proxy"] == LOOPBACK
+
+
+def test_no_proxy_is_merged_not_overwritten():
+    environ = {"HTTPS_PROXY": "http://10.1.1.1:3128", "no_proxy": "intranet,LOCALHOST"}
+    env = netproxy.proxy_env("system", environ=environ, registry=NO_REG)
+    assert env["NO_PROXY"] == "intranet,LOCALHOST,127.0.0.1,::1"
+    env = netproxy.proxy_env("http://10.2.2.2:8080", environ={"NO_PROXY": "intranet"},
+                             registry=NO_REG)
+    assert env["NO_PROXY"] == "intranet," + LOOPBACK
+    registry = reg(ProxyEnable=1, ProxyServer="127.0.0.1:3067", ProxyOverride="corp")
+    env = netproxy.proxy_env("system", environ={"NO_PROXY": "intranet"}, registry=registry)
+    assert env["NO_PROXY"] == "intranet," + LOOPBACK + ",corp"
+
+
+def test_inherited_all_proxy_alone_gets_loopback_bypass():
+    env = netproxy.proxy_env("system", environ={"ALL_PROXY": "socks5://10.1.1.1:1080"},
+                             registry=NO_REG)
+    assert env == {"NO_PROXY": LOOPBACK, "no_proxy": LOOPBACK}
+
+
+def test_nothing_inherited_nothing_added():
+    assert netproxy.proxy_env("system", environ={"NO_PROXY": "x"}, registry=NO_REG) == {}
+
+
+def test_explicit_url_overrides_inherited_all_proxy():
+    env = netproxy.proxy_env("http://10.1.1.1:3128",
+                             environ={"all_proxy": "socks5://10.9.9.9:1080"}, registry=NO_REG)
+    assert env["ALL_PROXY"] == env["all_proxy"] == "http://10.1.1.1:3128"
+    child = netproxy.child_env("http://10.1.1.1:3128",
+                               base={"ALL_PROXY": "socks5://10.9.9.9:1080"}, registry=NO_REG)
+    assert {k.upper(): v for k, v in child.items()}["ALL_PROXY"] == "http://10.1.1.1:3128"
+
+
+def test_explicit_url_without_inherited_all_proxy_does_not_add_it():
+    env = netproxy.proxy_env("http://10.1.1.1:3128", environ={}, registry=NO_REG)
+    assert not any(k.upper() == "ALL_PROXY" for k in env)
+
+
+def test_child_env_merges_no_proxy_case_insensitively(monkeypatch):
+    monkeypatch.setattr(netproxy, "_WINDOWS", True)
+    base = {"HTTPS_PROXY": "http://10.1.1.1:3128", "no_proxy": "intranet"}
+    env = netproxy.child_env("system", base=base, registry=NO_REG)
+    assert [k for k in env if k.upper() == "NO_PROXY"] == ["NO_PROXY"]
+    assert env["NO_PROXY"] == "intranet," + LOOPBACK
 
 
 # --- режимы «без прокси» и «свой адрес» --------------------------------------
