@@ -1043,7 +1043,7 @@ fn open_log(app: &AppHandle) {
 
 /// Что открывает «Открыть журнал»: папку журнала резидента (`logs`), а если
 /// её нет (резидент не дожил до первой строки) — `data_dir`.
-fn log_folder(log: &Path, data_dir: &Path) -> PathBuf {
+pub(crate) fn log_folder(log: &Path, data_dir: &Path) -> PathBuf {
     log.parent()
         .filter(|dir| dir.is_dir())
         .map(Path::to_path_buf)

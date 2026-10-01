@@ -1,10 +1,12 @@
 /**
  * Шаг 6 «Готово»: где живёт приложение и автозапуск с Windows. Переключатель
- * показывается, только если оболочка умеет автозапуск (`set_autostart`).
+ * показывается, только если оболочка умеет автозапуск (`set_autostart`), и
+ * начинает с сохранённого выбора (повторный проход мастера его не сбивает);
+ * выбора не было — «вкл».
  */
 
 import { useEffect, useState } from "react";
-import { autostartAvailable, setAutostart } from "../../lib/shell";
+import { autostartAvailable, getAutostart, setAutostart } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { Switch } from "../settings/Section";
 
@@ -15,7 +17,14 @@ export function StepDone({ onFinish }: { onFinish: () => void }) {
 
   useEffect(() => {
     let live = true;
-    autostartAvailable().then((ok) => { if (live) setAvailable(ok); }).catch(() => {});
+    autostartAvailable()
+      .then(async (ok) => {
+        if (!live) return;
+        setAvailable(ok);
+        const saved = ok ? await getAutostart() : null;
+        if (live && saved !== null) setAutostartValue(saved);
+      })
+      .catch(() => {});
     return () => { live = false; };
   }, []);
 

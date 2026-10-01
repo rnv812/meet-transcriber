@@ -18,6 +18,8 @@ export type WizardStep = "hardware" | "engine" | "hf" | "models" | "devices" | "
 
 /** Как часто перечитывать `resident_status`, пока мастер открыт или движка нет. */
 export const SHELL_POLL_MS = 2000;
+/** Сколько раз спросить оболочку, пока она «starting» (5 минут: фоновое обновление движка). */
+export const SHELL_STARTING_POLLS = 150;
 
 export type WizardGate = {
   /** undefined — ещё спрашиваем; null — оболочки нет (браузер) или она не ответила. */
@@ -77,11 +79,27 @@ export function useWizardGate(status: ResidentStatus, endpoint: Endpoint | null)
   }, [engine, shell, residentMissing, done, wizard]);
 
   // Пока мастер открыт или движка нет — следим за оболочкой: резидент мог
-  // подняться сам (MEET_RESIDENT, внешний резидент).
-  const watch = (wizard !== null || engineMissing) && shell != null;
+  // подняться сам (MEET_RESIDENT, внешний резидент). И пока оболочка ещё
+  // решает («starting», «engine-updating»), а резидента нет: окно, открытое в
+  // первые секунды, иначе так и не узнало бы, что движка нет. Этот опрос
+  // ограничен SHELL_STARTING_POLLS — оболочка, зависшая в «starting», не
+  // заставит окно спрашивать вечно.
+  const following = (wizard !== null || engineMissing) && shell != null;
+  const settling = status === "offline" && (shell === "starting" || shell === "engine-updating");
+  const watch = following || settling;
+  const bounded = useRef(true);
+  bounded.current = !following;
   useEffect(() => {
     if (!watch) return;
-    const timer = setInterval(readShell, SHELL_POLL_MS);
+    let ticks = 0;
+    const timer = setInterval(() => {
+      ticks = bounded.current ? ticks + 1 : 0;
+      if (ticks > SHELL_STARTING_POLLS) {
+        clearInterval(timer);
+        return;
+      }
+      readShell();
+    }, SHELL_POLL_MS);
     return () => clearInterval(timer);
   }, [watch, readShell]);
 

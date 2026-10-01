@@ -33,6 +33,9 @@ vi.mock("../../lib/shell", async (orig) => ({
   openUrl: vi.fn(async () => {}),
   autostartAvailable: vi.fn(async () => true),
   setAutostart: vi.fn(async () => {}),
+  getAutostart: vi.fn(async () => null),
+  residentStatus: vi.fn(async () => "starting"),
+  openLogs: vi.fn(async () => {}),
 }));
 
 const ep = { base: "http://127.0.0.1:5000", token: "t" };
@@ -56,6 +59,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   events.progress = null;
   events.failed = null;
+  vi.mocked(shell.residentStatus).mockResolvedValue("starting");
+  vi.mocked(shell.getAutostart).mockResolvedValue(null);
+  vi.mocked(shell.autostartAvailable).mockResolvedValue(true);
   vi.mocked(api.getHfStatus).mockResolvedValue({ configured: false, source: null, check: null });
   vi.mocked(api.getModels).mockResolvedValue({
     items: [
@@ -278,6 +284,16 @@ test("«Готово»: про трей; автозапуск по умолча�
   expect(shell.setAutostart).toHaveBeenCalledWith(true);
 });
 
+test("«Готово»: переключатель автозапуска начинает с сохранённого выбора", async () => {
+  vi.mocked(shell.getAutostart).mockResolvedValue(false);
+  const { onClose } = show({ start: "done", endpoint: ep });
+  const toggle = await screen.findByRole("switch", { name: "Запускать вместе с Windows" });
+  await waitFor(() => expect(toggle).not.toBeChecked());
+  await userEvent.click(screen.getByRole("button", { name: "Готово" }));
+  await waitFor(() => expect(onClose).toHaveBeenCalled());
+  expect(shell.setAutostart).toHaveBeenCalledWith(false);
+});
+
 test("«Готово»: оболочка без автозапуска — переключателя нет", async () => {
   vi.mocked(shell.autostartAvailable).mockResolvedValue(false);
   const { onClose } = show({ start: "done", endpoint: ep });
@@ -318,6 +334,51 @@ test("сервис не поднялся за 90 попыток раз в сек
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Подождать ещё" })); });
     expect(screen.getByRole("heading", { name: "Hugging Face" })).toBeInTheDocument();
     expect(api.getHfStatus).toHaveBeenCalledWith(ep);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("после установки сервис упал — «Сервис не запустился» и «Открыть журнал»", async () => {
+  vi.mocked(api.resolveEndpoint).mockRejectedValue(new api.NoResidentError("нет"));
+  vi.mocked(shell.residentStatus).mockResolvedValue("failed");
+  show({ start: "hf" });
+  expect(await screen.findByText("Сервис не запустился")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Открыть журнал" }));
+  expect(shell.openLogs).toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Подождать ещё" })).toBeInTheDocument();
+});
+
+test("установка уже идёт (окно закрывали) — шаг показывает её ход, а не «Установить»", async () => {
+  const { onRefreshEngine, rerender, onClose } = show({ start: "engine", engine: engine({ installing: true }) });
+  await waitFor(() => expect(events.progress).not.toBeNull());
+  expect(screen.queryByRole("button", { name: "Установить" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Пропустить мастер" })).toBeDisabled();
+  act(() => { events.progress!({ step: 3, of: 4, line: "Установка PyTorch" }); });
+  expect(screen.getByText("Шаг 3 из 4")).toBeInTheDocument();
+  rerender(<Wizard start="engine" engine={engine({ installing: false, installed: true, profile: "cuda" })}
+    endpoint={null} recording={false} onClose={onClose} onRefreshEngine={onRefreshEngine} />);
+  expect(await screen.findByText("Движок установлен")).toBeInTheDocument();
+  expect(shell.installEngine).not.toHaveBeenCalled();
+});
+
+test("чужая установка закончилась неудачей — «Повторить»", async () => {
+  const { onRefreshEngine, rerender, onClose } = show({ start: "engine", engine: engine({ installing: true }) });
+  await waitFor(() => expect(events.failed).not.toBeNull());
+  act(() => { events.failed!({ step: 4, tail: "error: No space left on device" }); });
+  rerender(<Wizard start="engine" engine={engine({ installing: false })}
+    endpoint={null} recording={false} onClose={onClose} onRefreshEngine={onRefreshEngine} />);
+  expect(await screen.findByText(/No space left on device/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Повторить" })).toBeInTheDocument();
+});
+
+test("пока идёт чужая установка, состояние перечитывается раз в 2 с", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    const { onRefreshEngine } = show({ start: "engine", engine: engine({ installing: true }) });
+    onRefreshEngine.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(onRefreshEngine).toHaveBeenCalledTimes(1);
   } finally {
     vi.useRealTimers();
   }

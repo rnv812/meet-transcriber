@@ -22,6 +22,8 @@ import { driveOf, freeSpaceShortfall, gb } from "./gate";
 
 /** Строк лога в памяти: uv многословен, хвоста хватает. */
 const MAX_LINES = 400;
+/** Как часто перечитывать состояние, пока идёт установка, начатая не этим шагом. */
+export const ATTACHED_POLL_MS = 2000;
 /** Место под CPU-версию, если оболочка его не прислала (`needs_cpu_gb`), — как `NEEDS_CPU_GB` в engine.rs. */
 export const NEEDS_CPU_GB = 3;
 
@@ -79,12 +81,41 @@ export function StepEngine({ engine, profile, recording, onRefresh, onPhase, onN
   const refresh = useRef(onRefresh);
   refresh.current = onRefresh;
   const phaseRef = useRef(phase);
+  /** Следим за установкой, начатой не здесь (окно закрывали, фоновое обновление). */
+  const [attached, setAttached] = useState(false);
+  const elsewhere = engine?.installing === true;
 
   const setPhase = (next: InstallPhase) => {
     phaseRef.current = next;
     setPhaseState(next);
     onPhase(next);
   };
+
+  // Установка уже идёт — показываем её ход (события те же), а не «Установить».
+  useEffect(() => {
+    if (elsewhere && phaseRef.current === "idle") {
+      setAttached(true);
+      setPhase("running");
+    }
+    // setPhase — замыкание над onPhase; перезапуск эффекта по нему не нужен.
+  }, [elsewhere]);
+
+  // Конец чужой установки виден только по состоянию оболочки — опрашиваем.
+  useEffect(() => {
+    if (!attached) return;
+    if (!elsewhere) {
+      setAttached(false);
+      if (engine?.installed) {
+        setPhase("done");
+      } else {
+        setError("Установка не завершилась — подробности в журнале установки");
+        setPhase("failed");
+      }
+      return;
+    }
+    const timer = setInterval(() => void refresh.current(), ATTACHED_POLL_MS);
+    return () => clearInterval(timer);
+  }, [attached, elsewhere, engine?.installed]);
 
   useEffect(() => {
     let offs: Array<() => void> = [];

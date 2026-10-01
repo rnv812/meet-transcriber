@@ -16,8 +16,9 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::api::Client;
 use crate::engine;
-use crate::logs::shell_log;
+use crate::logs::{self, shell_log};
 use crate::resident::{self, Endpoint, ResidentStatus, Supervisor};
+use crate::tray;
 
 /// Расширения, которые резидент принимает при импорте (`IMPORT_EXTS`).
 pub const MEDIA_EXTS: &[&str] = &[
@@ -552,6 +553,23 @@ pub fn open_wizard_on_first_run(app: &AppHandle, engine_upkeep: bool) {
         shell_log!("движок {version} не установлен — открываю мастер первого запуска");
         open_main(app, None, None);
     }
+}
+
+/// «Открыть журнал» из окна (мастер ждал сервис, а тот не запустился): та
+/// же папка, что у пункта трея, — журналы, а без них папка данных.
+#[tauri::command]
+pub async fn open_logs() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let data = resident::data_dir();
+        let target = tray::log_folder(&logs::resident_log(&data), &data);
+        Command::new("explorer")
+            .arg(&target)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("не удалось открыть журнал: {error}"))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

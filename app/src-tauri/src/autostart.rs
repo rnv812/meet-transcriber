@@ -103,6 +103,22 @@ pub fn restore_at_startup(app: &AppHandle) {
     }
 }
 
+/// Что показать переключателю: выбор человека (`autostart.json`), а если его
+/// не было — включён ли автозапуск в реестре. `None` — не выбирали и не
+/// включено: мастер тогда предлагает «вкл» по умолчанию, настройки — «выкл».
+pub fn shown_state(choice: Option<bool>, enabled: Option<bool>) -> Option<bool> {
+    choice.or(enabled.filter(|on| *on))
+}
+
+/// Состояние автозапуска для переключателей мастера и настроек.
+#[tauri::command]
+pub async fn get_autostart(app: AppHandle) -> Option<bool> {
+    shown_state(
+        read_choice(&resident::data_dir()),
+        app.autolaunch().is_enabled().ok(),
+    )
+}
+
 /// «Запускать вместе с Windows» (шаг «Готово» мастера). `enabled` —
 /// обязательный аргумент: окно проверяет наличие команды вызовом без
 /// аргументов и прячет переключатель только на «command not found».
@@ -192,6 +208,16 @@ mod tests {
         assert!(!should_restore(true, Some(true), None));
         // Dev-сборка не прописывает в Run свой exe.
         assert!(!should_restore(false, Some(true), Some(false)));
+    }
+
+    #[test]
+    fn shown_state_prefers_the_saved_choice_then_the_registry() {
+        assert_eq!(shown_state(Some(false), Some(true)), Some(false));
+        assert_eq!(shown_state(Some(true), Some(false)), Some(true));
+        // Выбора не было: включён в реестре — «вкл»; иначе — не выбирали.
+        assert_eq!(shown_state(None, Some(true)), Some(true));
+        assert_eq!(shown_state(None, Some(false)), None);
+        assert_eq!(shown_state(None, None), None);
     }
 
     #[test]

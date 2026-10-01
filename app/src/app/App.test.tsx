@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
-import { SHELL_POLL_MS } from "../features/wizard/useWizardGate";
+import { SHELL_POLL_MS, SHELL_STARTING_POLLS } from "../features/wizard/useWizardGate";
 import * as api from "../lib/api";
 import * as shell from "../lib/shell";
 
@@ -257,6 +257,40 @@ test("в приложении мастер — только при «engine-miss
   await act(async () => {});
   expect(screen.queryByTestId("wizard")).toBeNull();
   expect(container.querySelector('[data-pane="detail"]')).toHaveTextContent(OFFLINE);
+});
+
+test("оболочка ещё «starting» — окно спрашивает снова и показывает мастер при «engine-missing»", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    engineState.current = missingEngine();
+    vi.mocked(shell.residentStatus).mockResolvedValue("starting");
+    render(<App />);
+    await waitFor(() => expect(shell.residentStatus).toHaveBeenCalled());
+    await act(async () => {});
+    expect(screen.queryByTestId("wizard")).toBeNull();
+    vi.mocked(shell.residentStatus).mockResolvedValue("engine-missing");
+    await act(async () => { await vi.advanceTimersByTimeAsync(SHELL_POLL_MS); });
+    expect(screen.getByTestId("wizard")).toBeInTheDocument();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("опрос «starting» ограничен: оболочка так и не ответила иначе — окно перестаёт спрашивать", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    engineState.current = missingEngine();
+    vi.mocked(shell.residentStatus).mockResolvedValue("starting");
+    render(<App />);
+    await waitFor(() => expect(shell.residentStatus).toHaveBeenCalled());
+    await act(async () => { await vi.advanceTimersByTimeAsync(SHELL_POLL_MS * (SHELL_STARTING_POLLS + 5)); });
+    const calls = vi.mocked(shell.residentStatus).mock.calls.length;
+    expect(calls).toBeLessThanOrEqual(SHELL_STARTING_POLLS + 1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(SHELL_POLL_MS * 10); });
+    expect(vi.mocked(shell.residentStatus).mock.calls.length).toBe(calls);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("резидент ожил, пока мастер сам открыт и не тронут, — мастер убирается, флаг не пишется", async () => {

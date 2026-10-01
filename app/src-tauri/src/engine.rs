@@ -171,6 +171,9 @@ pub fn uv_env(data_dir: &Path) -> Vec<(&'static str, OsString)> {
         ("UV_VENV_CLEAR", "1".into()),
         // Чужой uv.toml (в профиле пользователя) не должен подменить индекс.
         ("UV_NO_CONFIG", "1".into()),
+        // .pyc — при установке, а не при первом запуске: иначе первый
+        // импорт torch и pyannote у резидента шёл ~50 с.
+        ("UV_COMPILE_BYTECODE", "1".into()),
         ("UV_NO_PROGRESS", "1".into()),
         ("NO_COLOR", "1".into()),
     ]
@@ -1260,6 +1263,15 @@ pub struct EngineStatus {
     pub needs_gb: f64,
     /// То же для CPU-версии (запасной путь мастера для владельцев NVIDIA).
     pub needs_cpu_gb: f64,
+    /// Установка идёт прямо сейчас (из мастера в закрытом с тех пор окне или
+    /// фоновое обновление): окно подключается к её ходу, а не предлагает
+    /// «Установить» второй раз.
+    pub installing: bool,
+}
+
+/// Идёт ли установка в этой оболочке.
+pub fn installing() -> bool {
+    INSTALLING.load(Ordering::SeqCst)
 }
 
 pub fn status(app: &AppHandle) -> EngineStatus {
@@ -1282,6 +1294,7 @@ pub fn status(app: &AppHandle) -> EngineStatus {
         needs_cpu_gb: space_needed(&data, "cpu", cache.as_deref()),
         gpu,
         free_gb: free_gb(&data).map(|gb| (gb * 10.0).floor() / 10.0),
+        installing: installing(),
     }
 }
 
@@ -1893,8 +1906,10 @@ mod tests {
     #[test]
     fn second_install_is_refused_while_the_first_runs() {
         let first = begin_install().unwrap();
+        assert!(installing(), "окно видит идущую установку");
         assert_eq!(begin_install().err().as_deref(), Some("Установка уже идёт"));
         drop(first);
+        assert!(!installing());
         assert!(begin_install().is_ok(), "после окончания — снова можно");
     }
 
@@ -1909,6 +1924,7 @@ mod tests {
         );
         assert_eq!(get("UV_PYTHON_INSTALL_BIN"), Some("0".into()));
         assert_eq!(get("UV_PYTHON_INSTALL_REGISTRY"), Some("0".into()));
+        assert_eq!(get("UV_COMPILE_BYTECODE"), Some("1".into()));
         // Кэш uv — по умолчанию: на нём держится докачка после сбоя.
         assert_eq!(get("UV_CACHE_DIR"), None);
     }

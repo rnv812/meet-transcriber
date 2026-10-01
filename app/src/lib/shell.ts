@@ -83,6 +83,8 @@ export type EngineStatus = {
   needs_gb: number;
   /** То же для CPU-версии; старая оболочка не присылает. */
   needs_cpu_gb?: number;
+  /** Установка идёт прямо сейчас (начата в закрытом окне или фоновое обновление). */
+  installing?: boolean;
 };
 /** Событие `engine-progress`: первая строка шага — его название. */
 export type EngineProgress = { step: number; of: number; line: string };
@@ -166,4 +168,19 @@ export async function autostartAvailable(): Promise<boolean> {
 /** Запускать ли приложение вместе с Windows. */
 export async function setAutostart(enabled: boolean): Promise<void> {
   await invoke<void>("set_autostart", { enabled });
+}
+
+/**
+ * Состояние автозапуска: сохранённый выбор, а без него — включён ли он в
+ * реестре. null — не выбирали (или старая оболочка, или вне приложения).
+ */
+export async function getAutostart(): Promise<boolean | null> {
+  if (!inTauri()) return null;
+  return invoke<boolean | null>("get_autostart").catch(() => null);
+}
+
+/** Открыть папку журналов (сервис не запустился). */
+export async function openLogs(): Promise<void> {
+  if (!inTauri()) return;
+  await invoke<void>("open_logs");
 }

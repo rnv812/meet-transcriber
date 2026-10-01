@@ -140,7 +140,13 @@ test("запись с ассистентом: в карточке живая л�
   render(<RecordingCard id="r1" endpoint={ep} snapshot={snapshot} />);
   expect(await screen.findByText("Идёт запись с ассистентом")).toBeInTheDocument();
   expect(screen.queryByText("Идёт запись…")).toBeNull();
-  const stream = FakeEventSource.instances.find((s) => s.url.startsWith("/api/live/events"))!;
+  // Поток открывается эффектом после первой отрисовки ленты — под нагрузкой
+  // не обязательно к этой строке.
+  const stream = await vi.waitFor(() => {
+    const found = FakeEventSource.instances.find((s) => s.url.startsWith("/api/live/events"));
+    if (!found) throw new Error("поток ассистента ещё не открыт");
+    return found;
+  });
   act(() => {
     stream.emit("state", { digest: "- релиз в пятницу", transcript: [], status: null });
     stream.emit("line", { t: 65, speaker: "Демьян", text: "давайте начнём" }, 0);

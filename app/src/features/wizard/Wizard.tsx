@@ -10,7 +10,7 @@
 import { useEffect, useId, useState } from "react";
 import { type Endpoint, getState, resolveEndpoint } from "../../lib/api";
 import type { Profile } from "../../lib/estimate";
-import type { EngineStatus } from "../../lib/shell";
+import { type EngineStatus, openLogs, residentStatus } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { StepDevices } from "./StepDevices";
 import { StepDone } from "./StepDone";
@@ -39,11 +39,12 @@ export const SERVICE_TRIES = 90;
 /**
  * Адрес резидента для шагов 3–5. Окно (`fallback` — из useResident) находит
  * его само, но реже; здесь — чаще и с проверкой, что он отвечает: daemon.json
- * мог остаться от прошлого запуска.
+ * мог остаться от прошлого запуска. Оболочка говорит, что надзор сдался
+ * (`resident_status` "failed"), — ждать дальше нечего: «crashed».
  */
 function useService(fallback: Endpoint | null, active: boolean) {
   const [found, setFound] = useState<Endpoint | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<false | "timeout" | "crashed">(false);
   const [round, setRound] = useState(0);
   const endpoint = fallback ?? found;
 
@@ -63,8 +64,10 @@ function useService(fallback: Endpoint | null, active: boolean) {
       } catch {
         /* ещё не поднялся */
       }
+      const shell = await residentStatus().catch(() => null);
       if (!live) return;
-      if (tries >= SERVICE_TRIES) setFailed(true);
+      if (shell === "failed") setFailed("crashed");
+      else if (tries >= SERVICE_TRIES) setFailed("timeout");
       else timer = setTimeout(() => void attempt(), SERVICE_POLL_MS);
     };
     void attempt();
@@ -108,7 +111,20 @@ export function Wizard({
 
   let body;
   if (NEEDS_RESIDENT.includes(step) && !service.endpoint) {
-    body = service.failed ? (
+    body = service.failed === "crashed" ? (
+      <>
+        <p className="error">Сервис не запустился</p>
+        <p className="muted">
+          Причина — в журнале. Перезапустить сервис можно из меню значка в трее.
+        </p>
+        <div className="wizard__bar">
+          <Button variant="primary" onClick={() => void openLogs().catch((cause) => console.warn("open_logs:", cause))}>
+            Открыть журнал
+          </Button>
+          <Button onClick={service.retry}>Подождать ещё</Button>
+        </div>
+      </>
+    ) : service.failed ? (
       <>
         <p className="error">Сервис записи не запустился за 90 секунд.</p>
         <div className="wizard__bar">

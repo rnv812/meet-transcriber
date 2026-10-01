@@ -18,6 +18,7 @@ import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { About } from "./About";
 import { AssistantSection, assistantChangesInvalid, cleanSetting } from "./AssistantSection";
+import { AutostartRow } from "./AutostartRow";
 import { DiagnosticsPane } from "./DiagnosticsPane";
 import { EnginePane } from "./EnginePane";
 import { HotwordsEditor } from "./HotwordsEditor";
@@ -95,6 +96,7 @@ function RecordingSection({ draft, set, devices, recordingsDir }: {
         value={String(v("speaker_name") ?? "Вы")} onChange={(x) => set("recording", "speaker_name", x)} />
       <Switch label="Расшифровывать сразу после записи" value={Boolean(v("auto_transcribe"))}
         onChange={(x) => set("recording", "auto_transcribe", x)} />
+      <AutostartRow />
       <Radio label="Уведомления" value={(draft.ui?.notifications as "all" | "important" | "off") ?? "all"}
         options={[
           { value: "all", label: "Все" },

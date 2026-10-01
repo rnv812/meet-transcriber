@@ -64,7 +64,9 @@ fn main() {
             engine::gpu_info,
             windows::open_url,
             windows::mark_wizard_done,
-            autostart::set_autostart
+            windows::open_logs,
+            autostart::set_autostart,
+            autostart::get_autostart
         ])
         .setup(|app| {
             // Движок, собранный из другого колеса той же версии, и движок
