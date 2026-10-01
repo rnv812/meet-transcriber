@@ -41,12 +41,14 @@ class AssistState:
     """
 
     def __init__(self, *, bus: TranscriptBus, digest: Digest, glossary: str,
-                 vault: Path | None, cwd: Path) -> None:
+                 vault: Path | None, cwd: Path,
+                 knowledge: Path | None = None) -> None:
         self.bus = bus
         self.digest = digest
         self._glossary = glossary
         self._vault = vault
         self._cwd = cwd
+        self._knowledge = _knowledge_path(knowledge, vault)
         self._task_context = ""
         self.qa = None       # проставляет run_assist после создания QAService
         self.digester = None  # аналогично
@@ -55,13 +57,22 @@ class AssistState:
 
     @property
     def qa_allowed_dirs(self) -> tuple[Path, ...]:
-        return (self._cwd, self._vault) if self._vault else (self._cwd,)
+        """Папка записи, база знаний, хранилище задач. Codex берёт рабочей
+        папкой первую существующую из `[1:]` — базу знаний, если она есть."""
+        return (self._cwd,) + tuple(
+            d for d in (self._knowledge, self._vault) if d is not None)
+
+    @property
+    def digest_allowed_dirs(self) -> tuple[Path, ...]:
+        """Дайджестеру — только база знаний (без неё — без инструментов, как
+        раньше); хранилище задач ему не нужно: контекст задачи и так в промпте."""
+        return (self._cwd, self._knowledge) if self._knowledge else ()
 
     def _rebuild(self) -> None:
         self.digester_system = build_digester_system(
-            self._glossary, self._task_context)
+            self._glossary, self._task_context, self._knowledge)
         self.qa_system = build_qa_system(
-            self._glossary, self._task_context, self._vault)
+            self._glossary, self._task_context, self._vault, self._knowledge)
         if self.digester is not None:
             self.digester.set_system_prompt(self.digester_system)
         if self.qa is not None:
@@ -80,6 +91,25 @@ class AssistState:
         """`POST /stop`: штатная остановка (дорожки дописывает run_assist)."""
         if self.stop_event is not None:
             self.stop_event.set()
+
+
+def _knowledge_path(knowledge, vault: Path | None) -> Path | None:
+    """База знаний живого режима: существующая папка, отличная от vault.
+
+    Совпала с vault (так мигрирует настройка автора) — её уже покрывают
+    правила хранилища в Q&A; путь `meet assist` у него остаётся прежним."""
+    if not knowledge:
+        return None
+    path = Path(knowledge)
+    if not path.is_dir():
+        return None
+    if vault is not None:
+        try:
+            if path.resolve() == Path(vault).resolve():
+                return None
+        except OSError:
+            pass
+    return path
 
 
 def write_endpoint(path: Path, *, port: int, folder: Path) -> None:
@@ -167,21 +197,23 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
                vault: str | None = None, port: int = 8765,
                no_voices: bool = False, *, open_browser: bool = True,
                endpoint_file: str | None = None, provider: str | None = None,
-               cfg=None) -> None:
+               cfg=None, knowledge_dir: str | None = None) -> None:
     """`port=0` — эфемерный порт; `endpoint_file` получает
     `{"port", "pid", "folder"}` после старта сервера и удаляется при любом
-    выходе; `provider` — имя провайдера вместо `llm.resolve(cfg)`."""
+    выходе; `provider` — имя провайдера вместо `llm.resolve(cfg)`;
+    `knowledge_dir` — база знаний на чтение для вопросов и дайджеста."""
     endpoint = Path(endpoint_file) if endpoint_file else None
     try:
         _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                     no_voices, open_browser=open_browser, endpoint=endpoint,
-                    provider=provider, cfg=cfg)
+                    provider=provider, cfg=cfg, knowledge_dir=knowledge_dir)
     finally:
         remove_endpoint(endpoint)
 
 
 def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
-                no_voices, *, open_browser, endpoint, provider, cfg) -> None:
+                no_voices, *, open_browser, endpoint, provider, cfg,
+                knowledge_dir=None) -> None:
     from meet import settings
     from meet.asr import Transcriber
     from meet.live import LiveEngine
@@ -209,6 +241,7 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         # приложения cwd произвольная.
         glossary=load_glossary(paths.lexicon_dir()),
         vault=vault_path, cwd=out_dir,
+        knowledge=Path(knowledge_dir) if knowledge_dir else None,
     )
     engine = LiveEngine(out_dir, Transcriber(), window_seconds=window_seconds,
                         hotwords=_load_hotwords(hotwords),
@@ -219,8 +252,11 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     def _write_digest() -> None:
         digest_file.write_text(digest.render(), encoding="utf-8")
 
+    digest_dirs = state.digest_allowed_dirs
     state.digester = Digester(bus, digest, system_prompt=state.digester_system,
-                              runner=runner, on_update=_write_digest)
+                              runner=runner, on_update=_write_digest,
+                              allowed_dirs=digest_dirs,
+                              cwd=out_dir if digest_dirs else None)
     state.qa = QAService(
         bus, digest, system_prompt=state.qa_system,
         allowed_dirs=state.qa_allowed_dirs, cwd=out_dir,

@@ -127,6 +127,20 @@ def test_cli_assist_without_new_flags_is_old_path(monkeypatch):
     assert called["open_browser"] is True
     assert called["endpoint_file"] is None
     assert called["provider"] is None
+    assert called["knowledge_dir"] is None
+
+
+def test_cli_assist_knowledge_dir_from_settings(monkeypatch, tmp_path):
+    from meet import cli, settings
+
+    called = {}
+    monkeypatch.setattr("meet.assist.app.run_assist",
+                        lambda out_root, **kw: called.update(kw))
+    monkeypatch.setattr(settings, "load", lambda *a, **k: settings.Settings.from_raw(
+        {"assistant": {"knowledge_dir": str(tmp_path)}}))
+    monkeypatch.setattr("sys.argv", ["meet", "assist", "--no-browser"])
+    cli.main()
+    assert called["knowledge_dir"] == str(tmp_path)
 
 
 def test_cli_assist_child_mode_flags(monkeypatch):

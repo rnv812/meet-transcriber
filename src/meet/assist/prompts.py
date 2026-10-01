@@ -14,11 +14,11 @@ _DIGESTER = """Ты ведёшь живой дайджест рабочей вс
 - EDIT — когда обсуждение уточнило или изменило существующий пункт.
 - Приветствия, болтовня, обрывки без смысла → {no_news}.
 - Распознавание неидеально: явные артефакты ASR игнорируй, термины сверяй с глоссарием.
-{task_context}{glossary}"""
+{knowledge}{task_context}{glossary}"""
 
 _QA = """Ты — личный ассистент участника рабочей встречи. Отвечай по-русски, кратко и по делу: пользователь читает ответ прямо во время встречи.
 Тебе дают текущий дайджест встречи и свежие реплики; вопросы касаются происходящего на встрече и контекста задачи.
-{vault_rules}{task_context}{glossary}"""
+{vault_rules}{knowledge}{task_context}{glossary}"""
 
 _VAULT_RULES = """
 Тебе доступны ДЛЯ ЧТЕНИЯ заметки задач (Obsidian): {vault}
@@ -26,6 +26,17 @@ _VAULT_RULES = """
 - Навигация: сначала хаб задачи `_<slug>.md` (секции «Сейчас», «Главный документ»), потом сами документы; найденное поиском не выдавай за актуальное, пока не сверился с хабом.
 - Заметки со `status: superseded` во frontmatter — история, не актуальное состояние; используй только если спросили про историю, с пометкой.
 - Ничего не записывай и не изменяй — доступ только на чтение.
+"""
+
+
+_KNOWLEDGE_DIGEST = """
+Тебе доступна ДЛЯ ЧТЕНИЯ база знаний (материалы команды): {path}
+Сверяй по ней термины, названия проектов и имена людей. Ничего не изменяй. Ответ — по-прежнему только операции протокола.
+"""
+
+_KNOWLEDGE_QA = """
+Тебе доступна ДЛЯ ЧТЕНИЯ база знаний (материалы команды): {path}
+Сверяй по ней термины, названия проектов и имена людей и пользуйся ею для контекста, явно отделяя это от сказанного на встрече. Ничего не изменяй.
 """
 
 
@@ -40,19 +51,25 @@ def _block(title: str, body: str) -> str:
     return f"\n\n# {title}\n{body.strip()}\n" if body.strip() else ""
 
 
-def build_digester_system(glossary: str, task_context: str) -> str:
-    """Системный промпт дайджестера: протокол ADD/EDIT/НЕТ_НОВЫХ + контекст."""
+def build_digester_system(glossary: str, task_context: str,
+                          knowledge: Path | None = None) -> str:
+    """Системный промпт дайджестера: протокол ADD/EDIT/НЕТ_НОВЫХ + контекст;
+    `knowledge` — база знаний на чтение (None — без неё, промпт прежний)."""
     return _DIGESTER.format(
         no_news=NO_NEWS,
+        knowledge=_KNOWLEDGE_DIGEST.format(path=knowledge) if knowledge else "",
         task_context=_block("Контекст задачи", task_context),
         glossary=_block("Глоссарий (термины команды)", glossary),
     )
 
 
-def build_qa_system(glossary: str, task_context: str, vault: Path | None) -> str:
-    """Системный промпт Q&A-линии; правила хранилища — только если vault задан."""
+def build_qa_system(glossary: str, task_context: str, vault: Path | None,
+                    knowledge: Path | None = None) -> str:
+    """Системный промпт Q&A-линии; правила хранилища — только если vault задан,
+    база знаний — только если задана `knowledge`."""
     return _QA.format(
         vault_rules=_VAULT_RULES.format(vault=vault) if vault else "",
+        knowledge=_KNOWLEDGE_QA.format(path=knowledge) if knowledge else "",
         task_context=_block("Контекст задачи", task_context),
         glossary=_block("Глоссарий (термины команды)", glossary),
     )

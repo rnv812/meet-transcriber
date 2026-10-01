@@ -14,12 +14,17 @@ class Digester:
     def __init__(self, bus, digest, *, system_prompt: str, runner,
                  min_interval_s: float = 60.0, max_interval_s: float = 90.0,
                  burst_chars: int = 1500, model: str = "sonnet",
-                 clock=time.monotonic, on_update=None) -> None:
+                 clock=time.monotonic, on_update=None,
+                 allowed_dirs: tuple = (), cwd=None) -> None:
         self._bus = bus
         self._digest = digest
         self._system = system_prompt
         self._runner = runner
         self._on_update = on_update  # зовётся после успешного тика (запись файла)
+        # База знаний на чтение (папка записи, база). Пусто — вызов как раньше:
+        # без инструментов, раннер не получает лишних аргументов.
+        self._tool_kwargs = ({"allowed_dirs": tuple(allowed_dirs), "cwd": cwd}
+                             if allowed_dirs else {})
         self.min_interval_s = min_interval_s
         self.max_interval_s = max_interval_s
         self.burst_chars = burst_chars
@@ -48,6 +53,7 @@ class Digester:
             reply = await self._runner(
                 build_tick_prompt(self._digest.render(), lines),
                 system_prompt=self._system, model=self._model,
+                **self._tool_kwargs,
             )
         except Exception as e:  # ошибка тика не валит процесс (см. докстринг)
             self._last_tick = self._clock()

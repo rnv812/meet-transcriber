@@ -69,3 +69,21 @@ def test_runner_exception_sets_status_and_keeps_lines_for_retry():
     d._runner = ok  # ретрай с рабочим runner'ом: курсор не сдвинулся
     assert asyncio.run(d.tick_once()) is True
     assert digest.version == 1 and "Решили X" in digest.render()
+
+
+def test_tick_passes_knowledge_dirs_to_runner_only_when_set():
+    seen = []
+
+    async def runner(prompt, **kw):
+        seen.append(kw)
+        return AgentReply(text="НЕТ_НОВЫХ")
+
+    for dirs in ((), ("C:/rec", "C:/kb")):
+        bus, digest = TranscriptBus(), Digest()
+        d = Digester(bus, digest, system_prompt="s", runner=runner,
+                     allowed_dirs=dirs, cwd="C:/rec" if dirs else None)
+        bus.publish("[00:00:01] Вы: привет")
+        asyncio.run(d.tick_once())
+    assert "allowed_dirs" not in seen[0] and "cwd" not in seen[0]
+    assert seen[1]["allowed_dirs"] == ("C:/rec", "C:/kb")
+    assert seen[1]["cwd"] == "C:/rec"

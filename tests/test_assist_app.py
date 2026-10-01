@@ -373,3 +373,53 @@ def test_slow_model_call_does_not_delay_finalization(tmp_path, monkeypatch):
     assert heavy.engine.stopped
     assert stopped_at["t"] - started < 5
     assert returned - started < 5
+
+
+# --- база знаний в живом режиме ---------------------------------------------
+
+
+def test_state_knowledge_dir_reaches_qa_and_digest(tmp_path):
+    """Спека: база знаний читается «при итогах, вопросах и дайджесте» — и в
+    живом режиме тоже. Codex берёт рабочей папкой первую из allowed_dirs[1:]."""
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    state = AssistState(bus=TranscriptBus(), digest=Digest(), glossary="",
+                        vault=None, cwd=tmp_path, knowledge=kb)
+    assert state.qa_allowed_dirs == (tmp_path, kb)
+    assert state.digest_allowed_dirs == (tmp_path, kb)
+    assert str(kb) in state.qa_system and str(kb) in state.digester_system
+    assert "superseded" not in state.qa_system  # конвенция хаба — только у vault
+
+
+def test_state_knowledge_same_as_vault_keeps_old_setup(tmp_path):
+    """У автора knowledge_dir мигрировал из vault: доступ и промпты — прежние."""
+    vault = tmp_path / "Claude"
+    vault.mkdir()
+    plain = AssistState(bus=TranscriptBus(), digest=Digest(), glossary="",
+                        vault=vault, cwd=tmp_path)
+    same = AssistState(bus=TranscriptBus(), digest=Digest(), glossary="",
+                       vault=vault, cwd=tmp_path, knowledge=vault)
+    assert same.qa_allowed_dirs == plain.qa_allowed_dirs == (tmp_path, vault)
+    assert same.digest_allowed_dirs == ()
+    assert same.qa_system == plain.qa_system
+    assert same.digester_system == plain.digester_system
+
+
+def test_state_missing_knowledge_dir_is_ignored(tmp_path):
+    state = AssistState(bus=TranscriptBus(), digest=Digest(), glossary="",
+                        vault=None, cwd=tmp_path, knowledge=tmp_path / "нет")
+    assert state.qa_allowed_dirs == (tmp_path,)
+    assert state.digest_allowed_dirs == ()
+
+
+def test_run_assist_passes_knowledge_dir_to_qa_and_digester(tmp_path, monkeypatch):
+    async def done(stop):
+        return None
+
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    heavy = _Heavy(monkeypatch, digester_run=done)
+    _run(tmp_path, open_browser=False, port=0, knowledge_dir=str(kb))
+    assert kb in heavy.qa_kwargs["allowed_dirs"]
+    assert kb in heavy.digester_kwargs["allowed_dirs"]
+    assert heavy.digester_kwargs["cwd"] == heavy.engine.out_dir

@@ -23,3 +23,11 @@ def test_qa_system_vault_rules_only_with_vault():
     without = build_qa_system("", "", None)
     assert "superseded" in with_vault and "хаб" in with_vault
     assert "superseded" not in without
+
+
+def test_knowledge_block_only_when_given():
+    kb = Path("C:/kb/Docs")
+    assert str(kb) in build_qa_system("", "", None, knowledge=kb)
+    assert str(kb) in build_digester_system("", "", knowledge=kb)
+    assert build_qa_system("", "", None) == build_qa_system("", "", None, knowledge=None)
+    assert "База знаний" not in build_digester_system("", "")

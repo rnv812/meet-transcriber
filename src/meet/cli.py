@@ -284,6 +284,7 @@ def main(argv: list[str] | None = None) -> int | None:
         from meet.gpu_lock import hold_gpu_lock
 
         vault = args.vault or (str(cfg.assist.vault) if cfg.assist.vault else None)
+        knowledge = cfg.assistant.knowledge_dir
         with hold_gpu_lock("assist"):
             run_assist(out_root,
                        window_seconds=args.window or cfg.assist.window_seconds,
@@ -294,7 +295,8 @@ def main(argv: list[str] | None = None) -> int | None:
                        no_voices=args.no_voices or not cfg.assist.voices,
                        open_browser=not args.no_browser,
                        endpoint_file=args.endpoint_file,
-                       provider=args.provider, cfg=cfg)
+                       provider=args.provider, cfg=cfg,
+                       knowledge_dir=str(knowledge) if knowledge else None)
     elif args.command == "status":
         print_status()
     elif args.command == "enroll":
