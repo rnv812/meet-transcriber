@@ -7,6 +7,7 @@ import { VoicesPane } from "../features/voices/VoicesPane";
 import { SettingsPane } from "../features/settings/SettingsPane";
 import { RecordingCard } from "../features/card/RecordingCard";
 import type { FindRequest } from "../features/card/TranscriptView";
+import { searchable } from "../lib/search";
 import { initialRecording, initialSection, onOpenRecording, onOpenSection } from "../lib/shell";
 import { EmptyState, OfflineState } from "../ui/EmptyState";
 import { Button } from "../ui/Button";
@@ -30,7 +31,7 @@ export function App() {
   /** Запись изменили в списке (название, выгрузка): открытая карточка перечитывается. */
   const [cardTick, setCardTick] = useState(0);
   const resident = useResident();
-  const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick);
+  const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick, resident.contentTick);
   const { people, refresh: refreshPeople, avatarVersion, bumpAvatar } = usePeople(resident.endpoint ?? null, resident.doneTick);
   const offline = resident.status === "offline";
   const gate = useWizardGate(resident.status, resident.endpoint ?? null);
@@ -39,7 +40,7 @@ export function App() {
   const openRecording = (id: string) => { setSelected(id); setFind(null); setSection("recordings"); };
   const selectFromList = (id: string) => {
     setSelected(id);
-    setFind(q.trim() ? { q, t: null, n: ++findN.current } : null);
+    setFind(searchable(q) ? { q, t: null, n: ++findN.current } : null);
   };
   const openHit = (id: string, t: number) => {
     setSelected(id);

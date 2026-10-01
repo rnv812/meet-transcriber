@@ -3,12 +3,15 @@ import { join } from "node:path";
 import {
   findHits, matchPrepared, parseQuery, prepare, splitByRanges, stem, tokenize, type Range,
 } from "./search";
+import { mergeTurns } from "./speakers";
+import type { Segment } from "./types";
 
 // Общие случаи с резидентом (tests/test_search.py): правила не должны расходиться.
 type Cases = {
   stems: [string, string][];
   queries: { query: string; phrases: string[][]; keywords: string[]; speakers: string[][] }[];
   cases: { name: string; query: string; text: string; speaker?: string; marked: string | null }[];
+  turns: { segments: Segment[]; turns: [number, string, string][] }[];
 };
 // vitest запускается из app/: общие случаи — в tests/ корня репозитория.
 const shared = JSON.parse(
@@ -27,8 +30,14 @@ test.each(shared.queries)("разбор запроса $query", ({ query, phrase
 });
 
 test.each(shared.cases)("$name", ({ query, text, speaker, marked: expected }) => {
-  const found = matchPrepared(prepare(text, speaker ?? ""), parseQuery(query));
-  expect(found === null ? null : marked(text, found)).toBe(expected);
+  const p = prepare(text, speaker ?? "");
+  const found = matchPrepared(p, parseQuery(query));
+  expect(found === null ? null : marked(p.text, found)).toBe(expected);
+});
+
+test.each(shared.turns)("реплики склеиваются как у резидента", ({ segments, turns }) => {
+  const merged = mergeTurns(segments.map((s) => ({ ...s, uncertain: false })));
+  expect(merged.map((t) => [t.start, t.speaker, t.texts.join(" ")])).toEqual(turns);
 });
 
 test("подсветка — места в исходном тексте, с его регистром и знаками", () => {

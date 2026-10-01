@@ -4,6 +4,8 @@
 общие случаи — `tests/fixtures/search_cases.json`, их проверяют оба набора
 тестов:
 
+* текст и запрос сначала приводятся к NFC, подсветка — по приведённому
+  тексту (его и отдаёт фрагмент);
 * сравнение по словам (цепочки букв и цифр), без учёта регистра, «ё» = «е»;
   знаки препинания только разделяют слова, подсветка — по исходному тексту;
 * "фраза в кавычках" (и «…», “…”) — слова подряд, точно;
@@ -15,15 +17,18 @@
 Реплики — как в карточке: подряд идущие сегменты одного спикера с паузой
 меньше 2 с склеиваются (`mergeTurns` в окне), сырые SPEAKER_XX — «Спикер N».
 
-Индекса нет: транскрипты читаются при поиске, разобранные — в памяти, пока
-не изменился файл (mtime и размер). Кэш ограничен по объёму текста; фоновой
-индексации нет.
+Индекса нет: транскрипты читаются при поиске, разобранные (реплики и их
+слова) — в памяти, пока не изменился файл (mtime и размер); карточки записей
+— пока не изменились папка, meta.json, транскрипт и events.jsonl. Кэш
+ограничен по объёму; фоновой индексации нет. Запрос короче MIN_QUERY символов
+ничего не ищет.
 """
 
 import re
 import threading
+import unicodedata
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from meet import library
@@ -42,13 +47,20 @@ NO_SPEAKER = "Неизвестный"
 MAX_HITS = 3  # фрагментов на запись в списке
 SNIPPET_LEN = 180
 SNIPPET_BEFORE = 30  # список показывает две строки фрагмента: совпадение — в первой
-# Сколько текста держать разобранным: ~40 часовых встреч. Больше — вытесняются
-# давно не нужные, и поиск по ним просто прочтёт файл заново.
-CACHE_CHARS = 8_000_000
+# Сколько держать разобранным (оценка в байтах: текст и слова реплик) —
+# порядка двух десятков часовых встреч. Больше — вытесняются давно не нужные,
+# и поиск по ним просто прочтёт файл заново.
+CACHE_BYTES = 64 * 1024 * 1024
+WORD_BYTES = 120  # кортеж (слово, начало, конец) с самим словом
+MIN_QUERY = 2  # короче — не ищем: одна буква находит почти всё
 
 _WORD_RE = re.compile(r"[^\W_]+")
 _QUERY_RE = re.compile(
     r'(спикер:)?(?:"([^"]*)"?|«([^»]*)»?|“([^”]*)”?)|спикер:(\S*)|(\S+)', re.IGNORECASE)
+
+
+def nfc(text: str) -> str:
+    return unicodedata.normalize("NFC", text)
 
 
 def norm_word(word: str) -> str:
@@ -93,7 +105,7 @@ def parse_query(q: str) -> Query:
     phrases: list[list[str]] = []
     keywords: list[str] = []
     speakers: list[list[str]] = []
-    for m in _QUERY_RE.finditer(q or ""):
+    for m in _QUERY_RE.finditer(nfc(q or "")):
         quoted = next((g for g in m.group(2, 3, 4) if g is not None), None)
         if quoted is not None:
             words = _words(quoted)
@@ -151,8 +163,10 @@ def match_tokens(tokens, q: Query, norm: str | None = None) -> list[list[int]] |
 
 
 def match_text(text: str, q: Query, speaker: str = "") -> list[list[int]] | None:
-    """Совпадение в реплике с учётом спикера; пустой запрос не находит ничего."""
-    if q.empty or not speaker_matches(speaker, q):
+    """Совпадение в реплике с учётом спикера; пустой запрос не находит ничего.
+    Подсветка — по тексту после NFC (`nfc(text)`)."""
+    text = nfc(text)
+    if q.empty or not speaker_matches(nfc(speaker), q):
         return None
     norm = norm_word(text)
     if any(s not in norm for s in q.stems) or any(p[0] not in norm for p in q.phrases):
@@ -168,7 +182,9 @@ class Turn:
     start: float
     speaker: str
     text: str
-    norm: str
+    norm: str = ""
+    # Слова реплики (tokenize): разбираются один раз и живут в кэше с репликой.
+    tokens: list = field(default_factory=list)
 
 
 def turns_of(segments) -> list[Turn]:
@@ -179,9 +195,9 @@ def turns_of(segments) -> list[Turn]:
     for seg in segments or []:
         if not isinstance(seg, dict):
             continue
-        speaker = seg.get("speaker") or NO_SPEAKER
+        speaker = nfc(str(seg.get("speaker") or "")) or NO_SPEAKER  # пустой — как null, как в окне
         start = float(seg.get("start") or 0.0)
-        text = str(seg.get("text") or "")
+        text = nfc(str(seg.get("text") or ""))
         if out and out[-1].speaker == speaker and start - end < GAP_S:
             parts.append(text)
             end = max(end, float(seg.get("end") or start))
@@ -189,9 +205,10 @@ def turns_of(segments) -> list[Turn]:
         else:
             parts = [text]
             end = float(seg.get("end") or start)
-            out.append(Turn(start, str(speaker), text, ""))
+            out.append(Turn(start, str(speaker), text))
     for turn in out:
         turn.norm = norm_word(turn.text)
+        turn.tokens = tokenize(turn.text)
     return out
 
 
@@ -228,21 +245,53 @@ def snippet(text: str, ranges) -> tuple[str, list[list[int]]]:
 # --- библиотека ----------------------------------------------------------------------
 
 
-class _Cache:
-    """Разобранные транскрипты по папке, пока файл тот же; объём ограничен."""
+def _stamp(path: Path) -> tuple | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size
 
-    def __init__(self, limit: int = CACHE_CHARS) -> None:
+
+class _Cache:
+    """Разобранные транскрипты и карточки записей по папке, пока файлы те же.
+    Реплики ограничены по объёму (`limit`, байты по оценке), карточки малы."""
+
+    def __init__(self, limit: int = CACHE_BYTES) -> None:
         self.limit = limit
         self._items: OrderedDict[str, tuple[tuple, int, list[Turn]]] = OrderedDict()
-        self._chars = 0
+        self._size = 0
+        self._cards: dict[str, tuple[tuple, dict | None]] = {}
         self._lock = threading.Lock()
 
+    def card(self, folder: Path) -> dict | None:
+        """Карточка записи (`library.describe`), None — не запись. Перечитывается,
+        когда меняется сама папка (файлы добавлены, удалены), meta.json,
+        транскрипт или events.jsonl."""
+        stamp = (_stamp(folder), _stamp(folder / library.META_JSON),
+                 _stamp(library.transcript_path(folder)), _stamp(folder / "events.jsonl"))
+        key = str(folder)
+        with self._lock:
+            got = self._cards.get(key)
+            if got and got[0] == stamp:
+                return got[1]
+        card = library.describe(folder)
+        raw = card.to_raw() if card is not None else None
+        with self._lock:
+            self._cards[key] = (stamp, raw)
+        return raw
+
+    def forget_except(self, keep: set[str]) -> None:
+        """Убрать карточки папок, которых больше нет."""
+        with self._lock:
+            for key in [k for k in self._cards if k not in keep]:
+                del self._cards[key]
+
     def turns(self, folder: Path) -> list[Turn]:
-        try:
-            st = library.transcript_path(folder).stat()
-        except OSError:
+        stamp = _stamp(library.transcript_path(folder))
+        if stamp is None:
             return []
-        key, stamp = str(folder), (st.st_mtime_ns, st.st_size)
+        key = str(folder)
         with self._lock:
             got = self._items.get(key)
             if got and got[0] == stamp:
@@ -250,22 +299,23 @@ class _Cache:
                 return got[2]
         data = library.with_display_names(library.read_transcript(folder)) or {}
         turns = turns_of(data.get("segments") if isinstance(data.get("segments"), list) else [])
-        size = sum(len(t.text) for t in turns)
+        size = sum(2 * len(t.text) + WORD_BYTES * len(t.tokens) for t in turns)
         with self._lock:
             old = self._items.pop(key, None)
             if old:
-                self._chars -= old[1]
+                self._size -= old[1]
             self._items[key] = (stamp, size, turns)
-            self._chars += size
-            while self._chars > self.limit and len(self._items) > 1:
+            self._size += size
+            while self._size > self.limit and len(self._items) > 1:
                 _, (_, dropped, _) = self._items.popitem(last=False)
-                self._chars -= dropped
+                self._size -= dropped
         return turns
 
     def clear(self) -> None:
         with self._lock:
             self._items.clear()
-            self._chars = 0
+            self._cards.clear()
+            self._size = 0
 
 
 _CACHE = _Cache()
@@ -275,16 +325,32 @@ def clear_cache() -> None:
     _CACHE.clear()
 
 
+def _cards(root: Path):
+    """Карточки записей библиотеки от свежих к старым (как `library.listing`)."""
+    try:
+        folders = sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p: p.name, reverse=True)
+    except OSError:
+        return
+    _CACHE.forget_except({str(f) for f in folders})
+    for folder in folders:
+        card = _CACHE.card(folder)
+        if card is not None:
+            yield card
+
+
 def search_library(root: Path, q: str, limit: int = 200) -> list[dict]:
     """Записи, где запрос нашёлся в репликах или в названии, от свежих к
     старым: карточка записи и `date`, `hits` (до MAX_HITS: время реплики,
     спикер, фрагмент, подсветка), `total` — сколько реплик подошло,
-    `title_match` — нашлось в названии. Пустой запрос — пустой ответ."""
+    `title_match` — нашлось в названии. Пустой запрос или короче MIN_QUERY
+    символов — пустой ответ."""
+    if len(nfc(q or "").strip()) < MIN_QUERY:
+        return []
     query = parse_query(q)
     if query.empty:
         return []
     found = []
-    for card in library.listing(Path(root), limit=10**9):
+    for card in _cards(Path(root)):
         hits, total = [], 0
         if card.get("has_transcript"):
             for turn in _CACHE.turns(Path(card["path"])):
@@ -293,7 +359,7 @@ def search_library(root: Path, q: str, limit: int = 200) -> list[dict]:
                 if any(s not in turn.norm for s in query.stems) or any(
                         p[0] not in turn.norm for p in query.phrases):
                     continue
-                ranges = match_tokens(tokenize(turn.text), query)
+                ranges = match_tokens(turn.tokens, query)
                 if ranges is None:
                     continue
                 total += 1
@@ -301,7 +367,7 @@ def search_library(root: Path, q: str, limit: int = 200) -> list[dict]:
                     text, marks = snippet(turn.text, ranges)
                     hits.append({"t": turn.start, "speaker": turn.speaker,
                                  "snippet": text, "ranges": marks})
-        title = card.get("title") or ""
+        title = nfc(card.get("title") or "")
         title_match = bool(title) and query.has_text and not query.speakers and (
             match_tokens(tokenize(title), query) is not None)
         if total or title_match:

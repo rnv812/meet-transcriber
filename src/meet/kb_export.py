@@ -441,31 +441,64 @@ def follow_title(folder, cfg, old_title: str) -> Path | None:
     if (_same(new, old) or new.exists() or not _inside(new, root)
             or _claimed_by_other(new, folder)):
         return None
+    # Родительские папки, которых ещё нет (шаблон с подпапками): при отказе — убрать.
+    created, parent = [], new.parent
+    while not parent.exists() and parent != parent.parent:
+        created.append(parent)
+        parent = parent.parent
+
+    def drop_created() -> None:
+        for path in created:  # от глубокой к верхней
+            try:
+                path.rmdir()
+            except OSError:
+                break
+
     try:
         new.parent.mkdir(parents=True, exist_ok=True)
         os.rename(old, new)
     except OSError:
+        drop_created()
         return None
     # Файлы с {title} в имени: та же раскладка по старому и новому названию.
     audio = _audio_name(_audio_sources(folder))
     before = dict(_plan(cfg, old_title, start, True, audio))
+    files = dict(recorded)
+    moved: list[tuple[str, str]] = []
     for kind, name in _plan(cfg, title, start, True, audio):
         was = before.get(kind)
-        if not was or was == name or was not in recorded or (new / name).exists():
+        if not was or was == name or was not in files or (new / name).exists():
             continue
         try:
             os.rename(new / was, new / name)
         except OSError:
             continue
-        recorded[name] = recorded.pop(was)
+        files[name] = files.pop(was)
+        moved.append((was, name))
 
     def change(meta: dict) -> dict:
         current = meta.get("kb_export")
         current = dict(current) if isinstance(current, dict) else {}
-        current.update(path=str(new), files=recorded)
+        current.update(path=str(new), files=files)
         return {**meta, "kb_export": current}
 
-    library.update_meta(folder, change)
+    try:
+        library.update_meta(folder, change)
+    except Exception:
+        # meta.json не записался — он по-прежнему указывает на старую папку:
+        # вернуть всё как было, иначе следующая выгрузка завела бы вторую папку.
+        for was, name in reversed(moved):
+            try:
+                os.rename(new / name, new / was)
+            except OSError:
+                pass
+        try:
+            os.rename(new, old)
+        except OSError:
+            pass
+        else:
+            drop_created()
+        raise
     return new
 
 

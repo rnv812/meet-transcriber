@@ -82,8 +82,8 @@ export function getRecordings(ep: Endpoint, q?: string) {
   return json<{ root: string; items: Recording[] }>(ep, `/recordings${qs}`);
 }
 /** Поиск по тексту встреч и названиям (правила — lib/search.ts): записи с фрагментами. */
-export const searchLibrary = (ep: Endpoint, q: string) =>
-  json<{ items: SearchItem[] }>(ep, `/search?q=${enc(q)}`);
+export const searchLibrary = (ep: Endpoint, q: string, signal?: AbortSignal) =>
+  json<{ items: SearchItem[] }>(ep, `/search?q=${enc(q)}`, { signal });
 export const getRecording = (ep: Endpoint, id: string) =>
   json<Recording & { transcript: Transcript | null }>(ep, `/recordings/${enc(id)}`);
 /** Название записи не длиннее (резидент обрезает так же). */

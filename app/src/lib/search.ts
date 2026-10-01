@@ -5,6 +5,8 @@
  * общие случаи лежат в `tests/fixtures/search_cases.json`, и их проверяют оба
  * набора тестов, чтобы правила не разошлись.
  *
+ * * Текст и запрос сначала приводятся к NFC («й» из «и» + знак — одна буква);
+ *   подсветка — по приведённому тексту (`Prepared.text`), его и показываем.
  * * Сравнение — по словам: слово — непрерывная цепочка букв и цифр, остальное
  *   (знаки препинания, дефис, пробелы) только разделяет. Регистр не важен,
  *   «ё» равна «е». Подсветка — по исходному тексту, с его регистром и знаками.
@@ -42,6 +44,10 @@ export const ENDINGS = [
   "ов", "ев", "ия", "ие", "ию", "ии", "ть", "ет", "ут", "ют", "ит", "ат", "ят",
   "а", "я", "ы", "и", "у", "ю", "е", "о",
 ];
+/** Поиск по записям — от двух символов: одна буква находит почти всё (MIN_QUERY в meet/search.py). */
+export const MIN_QUERY = 2;
+export const searchable = (q: string): boolean => nfc(q).trim().length >= MIN_QUERY;
+
 const MIN_STEMMED = 5;
 const MIN_STEM = 4;
 
@@ -50,6 +56,8 @@ const WORD_RE = /[\p{L}\p{N}]+/gu;
 const QUERY_RE = /(спикер:)?(?:"([^"]*)"?|«([^»]*)»?|“([^”]*)”?)|спикер:(\S*)|(\S+)/giu;
 
 export const normWord = (w: string): string => w.toLowerCase().replace(/ё/g, "е");
+/** Текст к NFC: составные буквы — одной, как у резидента (`unicodedata.normalize`). */
+export const nfc = (text: string): string => text.normalize("NFC");
 
 /** Слова текста с их местом в исходной строке. */
 export function tokenize(text: string): Token[] {
@@ -74,7 +82,7 @@ export function parseQuery(q: string): Query {
   const phrases: string[][] = [];
   const keywords: string[] = [];
   const speakers: string[][] = [];
-  for (const m of q.matchAll(QUERY_RE)) {
+  for (const m of nfc(q).matchAll(QUERY_RE)) {
     const quoted = m[2] ?? m[3] ?? m[4];
     if (quoted !== undefined) {
       const ws = words(quoted);
@@ -144,8 +152,10 @@ export function matchTokens(tokens: Token[], q: Query, norm?: string): Range[] |
 /** Текст, разобранный один раз: поиск по нему при каждом нажатии клавиши не разбирает его заново. */
 export type Prepared = { text: string; norm: string; tokens: Token[]; speaker: Token[] };
 
-export function prepare(text: string, speaker = ""): Prepared {
-  return { text, norm: normWord(text), tokens: tokenize(text), speaker: tokenize(speaker) };
+/** `text` в результате — после NFC: подсветка (`Range`) — по нему. */
+export function prepare(raw: string, speaker = ""): Prepared {
+  const text = nfc(raw);
+  return { text, norm: normWord(text), tokens: tokenize(text), speaker: tokenize(nfc(speaker)) };
 }
 
 /** Совпадение в реплике с учётом спикера; пустой запрос не находит ничего. */

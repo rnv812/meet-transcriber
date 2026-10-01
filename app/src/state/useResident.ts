@@ -22,6 +22,9 @@ const stateChanging = (e: BusEvent) =>
   || e.kind.startsWith("live.");
 
 const refreshWorthy = (e: BusEvent) => e.kind.startsWith("job.") || stateChanging(e);
+/** После них меняется само содержимое библиотеки, а не только прогресс задачи. */
+const CONTENT_JOB_EVENTS = new Set(["job.queued", "job.done", "job.failed"]); // отмена приходит как job.failed
+const contentChanging = (e: BusEvent) => CONTENT_JOB_EVENTS.has(e.kind) || stateChanging(e);
 
 export type ResidentStatus = "connecting" | "online" | "offline";
 
@@ -38,6 +41,9 @@ export type Resident = {
   /** Растёт на каждое событие, после которого библиотеку надо перечитать.
    *  Счётчик, а не слот: пачка событий не затирает друг друга. */
   libraryTick: number;
+  /** Как libraryTick, но без прогресса задач: только когда меняется содержимое
+   *  библиотеки (поиск по тексту повторяется по нему). */
+  contentTick: number;
   /** Растёт на каждое `job.done`: после расшифровки меняется база людей.
    *  Отдельно от libraryTick — тот растёт и на каждый прогресс задачи. */
   doneTick: number;
@@ -50,6 +56,7 @@ export function useResident(): Resident {
   const [lastEvent, setLastEvent] = useState<BusEvent | null>(null);
   const [libraryTick, setLibraryTick] = useState(0);
   const [doneTick, setDoneTick] = useState(0);
+  const [contentTick, setContentTick] = useState(0);
   const [status, setStatus] = useState<ResidentStatus>("connecting");
   const levels = useRef<Record<string, number>>({});
   const lastEventAt = useRef(0);
@@ -108,6 +115,7 @@ export function useResident(): Resident {
           }
           setLastEvent(event);
           if (refreshWorthy(event)) setLibraryTick((t) => t + 1);
+          if (contentChanging(event)) setContentTick((t) => t + 1);
           if (event.kind === "job.done") setDoneTick((t) => t + 1);
           if (stateChanging(event)) {
             getState(endpoint).then((s) => { if (!closed) apply(s); }).catch(() => {});
@@ -155,5 +163,5 @@ export function useResident(): Resident {
     };
   }, [endpoint, apply]);
 
-  return { status, endpoint, snapshot, snapshotAt, applySnapshot: apply, lastEvent, libraryTick, doneTick };
+  return { status, endpoint, snapshot, snapshotAt, applySnapshot: apply, lastEvent, libraryTick, contentTick, doneTick };
 }

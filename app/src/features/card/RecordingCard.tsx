@@ -191,6 +191,7 @@ export function RecordingCard({
     case "ready":
       body = (
         <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
+          showTranscript={find?.n}
           transcript={turns.length ? (
             <TranscriptView turns={turns} colors={colors} playable={playable} onPlay={play}
               onNameSpeaker={nameSpeaker} find={find} />

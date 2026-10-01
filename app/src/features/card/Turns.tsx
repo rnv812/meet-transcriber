@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { clock } from "../../lib/format";
-import type { Range } from "../../lib/search";
+import { nfc, type Range } from "../../lib/search";
 import { NO_SPEAKER, isUnnamed, type Turn } from "../../lib/speakers";
 import { Highlight } from "../../ui/Highlight";
 
@@ -25,7 +25,8 @@ export const Turns = memo(function Turns({
       {turns.map((t, i) => {
         const unnamed = isUnnamed(t.speaker);
         const color = colors.get(t.speaker);
-        const text = t.texts.join(" ");
+        // Как в поиске (lib/search.ts, prepare): подсветка — по тексту в NFC.
+        const text = nfc(t.texts.join(" "));
         const mark = marks?.get(i);
         return (
           <div className={mark ? "turn turn--found" : "turn"} key={i}>

@@ -6,19 +6,21 @@
  * `onClose`). Клик снаружи закрывает. Положение — fixed, в пределах окна.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 
 export type MenuItem = { label: string; onSelect: () => void; danger?: boolean };
 
 const MARGIN = 8;
 
-export function ItemMenu({ at, label, items, note, onClose }: {
+export function ItemMenu({ at, label, items, note, anchor, onClose }: {
   /** Точка, откуда раскрыть: под «⋯» или под указателем. */
   at: { x: number; y: number };
   label: string;
   items: MenuItem[];
   /** Пояснение над пунктами (подтверждение удаления). */
   note?: string;
+  /** Кнопка, открывшая меню: нажатие на неё закрывает меню само (повторным кликом), а не как «снаружи». */
+  anchor?: RefObject<HTMLElement | null>;
   onClose: () => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -40,10 +42,14 @@ export function ItemMenu({ at, label, items, note, onClose }: {
   }, [note]);
 
   useEffect(() => {
-    const down = (e: MouseEvent) => { if (!box.current?.contains(e.target as Node)) onClose(); };
+    const down = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (box.current?.contains(target) || anchor?.current?.contains(target)) return;
+      onClose();
+    };
     document.addEventListener("mousedown", down);
     return () => document.removeEventListener("mousedown", down);
-  }, [onClose]);
+  }, [onClose, anchor]);
 
   const onKeyDown = (e: KeyboardEvent) => {
     const all = [...(box.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]") ?? [])];

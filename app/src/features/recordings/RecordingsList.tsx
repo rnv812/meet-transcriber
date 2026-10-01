@@ -37,6 +37,8 @@ export function RecordingsList({
   const endpoint = resident.endpoint ?? null;
   const meetingsDir = snapshot?.meetings_dir ?? null;
   const [notice, setNotice] = useState<Notice | null>(null);
+  /** Новые названия, пока резидент не ответил и список не перечитан: видны сразу, при ошибке — откат. */
+  const [pending, setPending] = useState<Record<string, string | null>>({});
 
   const actions = useMemo<ItemActions | undefined>(() => {
     if (!endpoint) return undefined;
@@ -51,9 +53,17 @@ export function RecordingsList({
     };
     return {
       onRename: (id, title) => run(async () => {
-        await patchRecording(endpoint, id, { title });
-        onChanged?.(id);
-        await library.refresh();
+        setPending((cur) => ({ ...cur, [id]: title }));
+        try {
+          await patchRecording(endpoint, id, { title });
+          onChanged?.(id);
+          await library.refresh();
+        } finally {
+          setPending((cur) => {
+            const { [id]: _, ...rest } = cur;
+            return rest;
+          });
+        }
         return null;
       }),
       onOpenFolder: inTauri() ? (rec) => void run(async () => { await openFolder(rec.path); return null; }) : undefined,
@@ -88,7 +98,7 @@ export function RecordingsList({
         {library.items.map((rec) => (
           <RecordingItem
             key={rec.id}
-            rec={rec}
+            rec={rec.id in pending ? { ...rec, title: pending[rec.id] ?? null } : rec}
             status={statusOf(rec, library.jobs, snapshot)}
             selected={rec.id === selected}
             onSelect={onSelect}

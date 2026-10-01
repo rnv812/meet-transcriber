@@ -108,3 +108,59 @@ test("Ctrl+F с другой вкладки открывает «Расшифр�
   expect(screen.getByRole("tab", { name: "Расшифровка" })).toHaveAttribute("aria-selected", "true");
   expect(field()).toHaveFocus();
 });
+
+test("вторая просьба из списка с тем же запросом переходит к другой реплике", async () => {
+  const props = { turns: TURNS, colors: new Map<string, string>(), playable: true, onPlay: () => {} };
+  const { container, rerender } = render(<TranscriptView {...props} find={{ q: "бюджет", t: 0, n: 1 }} />);
+  await vi.waitFor(() => expect(counter()).toHaveTextContent("1 из 3"));
+  rerender(<TranscriptView {...props} find={{ q: "бюджет", t: 30, n: 2 }} />);
+  await vi.waitFor(() => expect(counter()).toHaveTextContent("2 из 3"));
+  expect(current(container)).toHaveTextContent("Бюджет");
+  // Та же реплика ещё раз (пользователь ушёл стрелками) — снова к ней.
+  await userEvent.click(screen.getByRole("button", { name: "Следующее совпадение" }));
+  expect(counter()).toHaveTextContent("3 из 3");
+  rerender(<TranscriptView {...props} find={{ q: "бюджет", t: 30, n: 3 }} />);
+  await vi.waitFor(() => expect(counter()).toHaveTextContent("2 из 3"));
+});
+
+const tabs = (show?: number) => (
+  <CardTabs endpoint={{ base: "/api", token: null }} id="r" folder="C:/r" jobs={[]} showTranscript={show}
+    transcript={<TranscriptView turns={TURNS} colors={new Map()} playable onPlay={() => {}} />} />
+);
+
+test("просьба из списка, пока открыты «Итоги», возвращает на «Расшифровку»", async () => {
+  const { rerender } = render(tabs(1));
+  await userEvent.click(screen.getByRole("tab", { name: "Итоги" }));
+  rerender(tabs(1));
+  expect(screen.getByRole("tab", { name: "Итоги" })).toHaveAttribute("aria-selected", "true");
+  rerender(tabs(2));
+  expect(screen.getByRole("tab", { name: "Расшифровка" })).toHaveAttribute("aria-selected", "true");
+});
+
+test("Ctrl+F в диалоге, всплывающем окне или поле переименования не уводит к поиску", async () => {
+  render(<>
+    {tabs()}
+    <div role="dialog"><input aria-label="в диалоге" /></div>
+    <input className="rec-item__input" aria-label="название в списке" />
+  </>);
+  await userEvent.click(screen.getByRole("tab", { name: "Итоги" }));
+  for (const name of ["в диалоге", "название в списке"]) {
+    const el = screen.getByRole("textbox", { name });
+    el.focus();
+    fireEvent.keyDown(el, { key: "f", code: "KeyF", ctrlKey: true });
+    expect(screen.getByRole("tab", { name: "Итоги" })).toHaveAttribute("aria-selected", "true");
+    expect(el).toHaveFocus();
+  }
+});
+
+test("Esc после фокуса без источника не возвращает фокус на старое место", async () => {
+  setup();
+  const before = screen.getAllByRole("button", { name: /▶/ })[0]!;
+  before.focus();
+  await userEvent.type(field(), "бюджет"); // фокус пришёл с «▶»
+  field().blur();
+  fireEvent.focus(field(), { relatedTarget: null }); // а теперь — ниоткуда
+  field().focus();
+  await userEvent.keyboard("{Escape}");
+  expect(before).not.toHaveFocus();
+});

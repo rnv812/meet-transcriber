@@ -39,7 +39,13 @@ def test_shared_query_parsing(case):
 def test_shared_cases(case):
     found = search.match_text(case["text"], search.parse_query(case["query"]),
                               case.get("speaker") or "")
-    assert (None if found is None else _marked(case["text"], found)) == case["marked"]
+    text = search.nfc(case["text"])  # подсветка — по тексту в NFC
+    assert (None if found is None else _marked(text, found)) == case["marked"]
+
+
+@pytest.mark.parametrize("case", CASES["turns"])
+def test_shared_turns(case):
+    assert [[t.start, t.speaker, t.text] for t in search.turns_of(case["segments"])] == case["turns"]
 
 
 # --- реплики как в карточке ---------------------------------------------------------
@@ -168,9 +174,38 @@ def test_transcripts_are_cached_until_they_change(lib, monkeypatch):
 
 
 def test_cache_is_bounded_by_text_size(tmp_path):
-    cache = search._Cache(limit=30)
+    cache = search._Cache(limit=500)  # одна короткая реплика — около 400 байт по оценке
     a = _rec(tmp_path, "a", [_seg(0, "Анна", "Двадцать символов тут.")])
     b = _rec(tmp_path, "b", [_seg(0, "Анна", "И ещё двадцать букв.")])
     cache.turns(a)
     cache.turns(b)
     assert list(cache._items) == [str(b)]
+
+
+def test_cards_are_cached_until_folder_or_meta_changes(lib, monkeypatch):
+    calls = []
+    real = library.describe
+    monkeypatch.setattr(library, "describe", lambda f: calls.append(f.name) or real(f))
+    search.search_library(lib, "бюджет")
+    first = len(calls)
+    assert first == 4  # все папки библиотеки
+    search.search_library(lib, "задачи")
+    assert len(calls) == first
+    library.write_meta(lib / "2026-09-28_10-00", {"title": "Бюджетная планёрка"})
+    found = search.search_library(lib, "бюджетная")
+    assert calls[first:] == ["2026-09-28_10-00"]
+    assert found[0]["title"] == "Бюджетная планёрка" and found[0]["title_match"] is True
+
+
+def test_tokens_are_parsed_once_per_turn(lib, monkeypatch):
+    search.search_library(lib, "бюджет")
+    seen = []
+    real = search.tokenize
+    monkeypatch.setattr(search, "tokenize", lambda text: seen.append(text) or real(text))
+    assert search.search_library(lib, "задачи спринта")[0]["total"] == 1
+    assert "Обсудили задачи спринта." not in seen  # реплики — из кэша, разбираются только названия
+
+
+def test_one_letter_query_finds_nothing(lib):
+    assert search.search_library(lib, " б ") == []
+    assert search.search_library(lib, "бю") != []

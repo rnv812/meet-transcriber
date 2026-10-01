@@ -11,7 +11,8 @@ export function mergeTurns(segments: Segment[]): Turn[] {
   const out: Turn[] = [];
   let cur: Turn | null = null;
   for (const s of segments) {
-    const speaker = s.speaker ?? NO_SPEAKER;
+    // Пустой спикер — как null (так же склеивает и поиск резидента, meet/search.py).
+    const speaker = s.speaker || NO_SPEAKER;
     if (cur && cur.speaker === speaker && s.start - cur.end < GAP_S) {
       cur.texts.push(s.text);
       cur.end = Math.max(cur.end, s.end);

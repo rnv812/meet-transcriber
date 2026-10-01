@@ -16,19 +16,24 @@ import "./assistant.css";
 
 type Tab = "transcript" | "summary" | "qa";
 
+/** Где Ctrl+F не уводит к поиску по расшифровке. */
+const FIND_IGNORED = ".rec-item__input, [role=dialog], [aria-modal=true], .popover, .item-menu";
+
 const TABS: { id: Tab; label: string }[] = [
   { id: "transcript", label: "Расшифровка" },
   { id: "summary", label: "Итоги" },
   { id: "qa", label: "Вопросы" },
 ];
 
-export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSettings }: {
+export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSettings, showTranscript }: {
   endpoint: Endpoint;
   id: string;
   folder: string;
   jobs: Job[];
   transcript: ReactNode;
   onOpenSettings?: (section: string) => void;
+  /** Растёт, когда снаружи просят показать расшифровку (переход из поиска по записям). */
+  showTranscript?: number;
 }) {
   const [tab, setTab] = useState<Tab>("transcript");
   const [opened, setOpened] = useState<Set<Tab>>(() => new Set(["transcript"]));
@@ -41,12 +46,22 @@ export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSetting
     setOpened((cur) => (cur.has(next) ? cur : new Set(cur).add(next)));
   };
 
+  // Просьба из списка (фрагмент поиска) — на «Расшифровку», с какой бы вкладки ни были.
+  const lastShow = useRef(showTranscript);
+  useEffect(() => {
+    if (showTranscript === lastShow.current) return;
+    lastShow.current = showTranscript;
+    setTab("transcript");
+  }, [showTranscript]);
+
   // Ctrl+F — поиск по расшифровке с любой вкладки (по коду клавиши: и в русской раскладке).
+  // Не из поля переименования в списке, диалога или всплывающего окна: там у Ctrl+F своё место.
   const transcriptPanel = useRef<HTMLDivElement>(null);
   const [findTick, setFindTick] = useState(0);
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.code !== "KeyF") return;
+      if (e.target instanceof Element && e.target.closest(FIND_IGNORED)) return;
       e.preventDefault();
       setTab("transcript");
       setFindTick((n) => n + 1);

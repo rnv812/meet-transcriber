@@ -174,3 +174,27 @@ test("без папки для встреч и у нерасшифрованно
   await userEvent.type(titleInput(), "Х{Enter}");
   expect(await screen.findByRole("alert")).toHaveTextContent("записи нет");
 });
+
+test("новое название видно сразу, ошибка возвращает прежнее", async () => {
+  let fail!: (e: Error) => void;
+  vi.mocked(api.patchRecording).mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
+  setup();
+  mains()[0]!.focus();
+  await userEvent.keyboard("{F2}");
+  await userEvent.clear(titleInput());
+  await userEvent.type(titleInput(), "Новое{Enter}");
+  expect(mains()[0]!).toHaveTextContent("Новое");
+  fail(new Error("записи нет"));
+  expect(await screen.findByRole("alert")).toHaveTextContent("записи нет");
+  expect(mains()[0]!).toHaveTextContent("Планёрка");
+});
+
+test("повторное нажатие «⋯» закрывает меню", async () => {
+  setup();
+  const more = within(item("Планёрка")).getByRole("button", { name: /Действия/ });
+  await userEvent.click(more);
+  expect(screen.getByRole("menu")).toBeInTheDocument();
+  await userEvent.click(more);
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(more).toHaveAttribute("aria-expanded", "false");
+});

@@ -518,3 +518,34 @@ def test_not_exported_or_gone_folder_is_nothing_to_follow(tmp_path, vault):
     shutil.rmtree(old)
     assert kb_export.follow_title(exported, _cfg(vault), _rename(exported, "Ретро")) is None
     assert kb_export.follow_title(exported, _cfg(None), "x") is None
+
+
+def test_meta_failure_after_rename_puts_everything_back(tmp_path, vault, monkeypatch):
+    cfg = {"summary_name": "Итоги {title}"}
+    folder, old = _exported(tmp_path, vault, **cfg)
+    before = sorted(p.name for p in old.iterdir())
+    record = library.read_meta(folder)["kb_export"]
+    old_title = _rename(folder, "Ретро")
+
+    def broken(*a, **k):
+        raise PermissionError("meta.json занят")
+
+    monkeypatch.setattr(library, "update_meta", broken)
+    with pytest.raises(PermissionError):
+        kb_export.follow_title(folder, _cfg(vault, **cfg), old_title)
+    assert old.is_dir() and sorted(p.name for p in old.iterdir()) == before
+    assert not (vault / "2026-09-30 - Ретро").exists()
+    assert library.read_meta(folder)["kb_export"] == record
+
+
+def test_failed_rename_removes_parents_it_created(tmp_path, vault, monkeypatch):
+    cfg = {"folder_template": "{title}/{date}"}
+    folder, old = _exported(tmp_path, vault, **cfg)
+    old_title = _rename(folder, "Ретро")
+
+    def busy(src, dst):
+        raise PermissionError("папка открыта в проводнике")
+
+    monkeypatch.setattr(kb_export.os, "rename", busy)
+    assert kb_export.follow_title(folder, _cfg(vault, **cfg), old_title) is None
+    assert old.is_dir() and not (vault / "Ретро").exists()

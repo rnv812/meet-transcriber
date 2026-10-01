@@ -45,7 +45,10 @@ export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker,
   const [text, setText] = useState(find?.q ?? "");
   const [query, setQuery] = useState(find?.q ?? "");
   const [current, setCurrent] = useState(0);
-  const jump = useRef<number | null>(find?.t ?? null);
+  /** Куда перейти по просьбе из списка; `n` — номер просьбы: повтор с тем же запросом — тоже переход. */
+  const [jump, setJump] = useState<{ t: number | null; n: number } | null>(
+    find ? { t: find.t, n: find.n } : null);
+  const usedJump = useRef<number | null>(null);
   const box = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const returnTo = useRef<HTMLElement | null>(null);
@@ -57,7 +60,7 @@ export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker,
     lastFind.current = find.n;
     setText(find.q);
     setQuery(find.q);
-    jump.current = find.t;
+    setJump({ t: find.t, n: find.n });
   }, [find]);
 
   useEffect(() => {
@@ -81,13 +84,15 @@ export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker,
   // Layout-эффекты: счётчик и выделение текущего меняются в одном кадре, без мигания.
   const lastQuery = useRef(query);
   useLayoutEffect(() => {
-    const t = jump.current;
-    jump.current = null;
     const same = lastQuery.current === query;
     lastQuery.current = query;
-    if (t !== null && hits.length) setCurrent(hitAt(turns, hits, t));
-    else setCurrent((c) => (same && c < hits.length ? c : 0));
-  }, [hits, turns, query]);
+    if (jump && usedJump.current !== jump.n) {
+      usedJump.current = jump.n;
+      setCurrent(jump.t !== null && hits.length ? hitAt(turns, hits, jump.t) : 0);
+    } else {
+      setCurrent((c) => (same && c < hits.length ? c : 0));
+    }
+  }, [hits, turns, query, jump]);
 
   // Текущее совпадение: выделить сильнее и прокрутить к нему (по центру).
   useLayoutEffect(() => {
@@ -99,7 +104,7 @@ export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker,
     if (!el) return;
     el.classList.add("hit--current");
     el.scrollIntoView?.({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
-  }, [current, hits]);
+  }, [current, hits, jump]);
 
   const step = (by: number) => {
     if (!hits.length) return;
@@ -139,7 +144,7 @@ export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker,
           aria-keyshortcuts="Control+F"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          onFocus={(e) => { if (e.relatedTarget instanceof HTMLElement) returnTo.current = e.relatedTarget; }}
+          onFocus={(e) => { returnTo.current = e.relatedTarget instanceof HTMLElement ? e.relatedTarget : null; }}
           onKeyDown={onKeyDown}
         />
         <span className={`find__count num${active && !hits.length ? " find__count--none" : ""}`}

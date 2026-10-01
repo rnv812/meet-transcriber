@@ -63,7 +63,7 @@ vi.mock("../lib/shell", async (orig) => ({
 }));
 
 const OFFLINE = /Служба записи не запущена/;
-const online = () => ({ status: "online", endpoint: ep, snapshot: null, lastEvent: null, libraryTick: 0 });
+const online = () => ({ status: "online", endpoint: ep, snapshot: null, lastEvent: null, libraryTick: 0, contentTick: 0 });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -90,7 +90,7 @@ test("строка поиска из списка уходит в useLibrary", a
   residentState.current = online();
   render(<App />);
   await userEvent.type(screen.getByRole("searchbox"), "план");
-  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "план", 0);
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "план", 0, 0);
 });
 
 test("?recording=abc в адресе — выбрана запись abc", () => {

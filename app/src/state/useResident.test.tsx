@@ -97,3 +97,17 @@ test("live.*: библиотека и снимок перечитываются 
   });
   expect(result.current.libraryTick).toBe(before + 5);
 });
+
+test("contentTick — без прогресса задач: поставлена, готова, упала, запись", async () => {
+  vi.mocked(resolveEndpoint).mockResolvedValue({ base: "http://127.0.0.1:1", token: "t" });
+  const { result } = renderHook(() => useResident());
+  await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+  const es = FakeEventSource.instances.at(-1)!;
+  act(() => {
+    for (const kind of ["job.queued", "job.started", "job.progress", "job.progress", "job.done", "job.failed", "record.stopped"]) {
+      es.emit(kind, { kind, at: 1 });
+    }
+  });
+  expect(result.current.libraryTick).toBe(7);
+  expect(result.current.contentTick).toBe(4);
+});

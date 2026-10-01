@@ -157,7 +157,7 @@ export function RecordingItem({
       {menu && (
         <ItemMenu at={menu} label={`Действия с записью «${title}»`} items={menuItems}
           note={confirmDelete ? "Удалить запись и расшифровку? Это действие нельзя отменить." : undefined}
-          onClose={() => closeMenu()} />
+          anchor={more_} onClose={() => closeMenu()} />
       )}
       {hits.length > 0 && (
         <ul className="rec-hits" aria-label={`Найдено в записи «${title}»`}>

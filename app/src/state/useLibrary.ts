@@ -2,15 +2,19 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, type Endpoint, getJobs, getRecordings, searchLibrary } from "../lib/api";
 import { errorText } from "../lib/format";
+import { searchable } from "../lib/search";
 import type { Job, LibraryItem } from "../lib/types";
 
 const SEARCH_DELAY_MS = 250;
 
-/** С запросом — поиск по тексту встреч (с фрагментами); резидент без него — прежний поиск по названию и тексту. */
-async function find(ep: Endpoint, q: string): Promise<LibraryItem[]> {
-  if (!q.trim()) return (await getRecordings(ep)).items;
+/**
+ * С запросом (от двух символов) — поиск по тексту встреч с фрагментами;
+ * резидент без него — прежний поиск по названию и тексту. Короче — весь список.
+ */
+async function find(ep: Endpoint, q: string, signal: AbortSignal): Promise<LibraryItem[]> {
+  if (!searchable(q)) return (await getRecordings(ep)).items;
   try {
-    return (await searchLibrary(ep, q)).items;
+    return (await searchLibrary(ep, q, signal)).items;
   } catch (cause) {
     if (cause instanceof ApiError && cause.status === 404) return (await getRecordings(ep, q)).items;
     throw cause;
@@ -25,7 +29,14 @@ export type Library = {
   refresh: () => Promise<void>;
 };
 
-export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0): Library {
+/**
+ * `libraryTick` растёт на каждое событие задачи, включая прогресс; `contentTick`
+ * — только когда меняется само содержимое библиотеки (задача поставлена,
+ * готова, упала; запись началась или кончилась). Пока идёт поиск по тексту,
+ * прогресс обновляет лишь задачи (бейджи), а сам поиск повторяется по
+ * `contentTick`: полный проход по транскриптам на каждый процент не нужен.
+ */
+export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, contentTick = libraryTick): Library {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(false);
@@ -33,13 +44,18 @@ export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0): Lib
   const seq = useRef(0);
   const qRef = useRef(q);
   qRef.current = q;
+  const pending = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
     if (!ep) return;
     const mine = ++seq.current;
+    // Прежний запрос больше не нужен: резидент не дочитывает ответ, который никто не ждёт.
+    pending.current?.abort();
+    const controller = new AbortController();
+    pending.current = controller;
     setLoading(true);
     try {
-      const [recs, jobList] = await Promise.all([find(ep, qRef.current), getJobs(ep)]);
+      const [recs, jobList] = await Promise.all([find(ep, qRef.current, controller.signal), getJobs(ep)]);
       if (mine !== seq.current) return; // пришёл более новый запрос
       setItems(recs);
       setJobs(jobList.items);
@@ -61,10 +77,26 @@ export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0): Lib
     return () => clearTimeout(timer);
   }, [ep, q, refresh]);
 
+  const refreshJobs = useCallback(async () => {
+    if (!ep) return;
+    try {
+      setJobs((await getJobs(ep)).items);
+    } catch {
+      /* прогресс задач — не повод показывать ошибку списка */
+    }
+  }, [ep]);
+
   // Обновление по событиям: первый тик (0) — начальная загрузка, её делает эффект выше.
   useEffect(() => {
-    if (libraryTick > 0) void refresh();
-  }, [libraryTick, refresh]);
+    if (libraryTick <= 0) return;
+    if (searchable(qRef.current)) void refreshJobs();
+    else void refresh();
+  }, [libraryTick, refresh, refreshJobs]);
+  useEffect(() => {
+    if (contentTick > 0 && searchable(qRef.current)) void refresh();
+  }, [contentTick, refresh]);
+
+  useEffect(() => () => pending.current?.abort(), []);
 
   return { items, jobs, loading, error, refresh };
 }
