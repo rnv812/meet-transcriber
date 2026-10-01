@@ -1214,3 +1214,27 @@ def test_split_turn_and_rediarize_routes(server):
     calls = [c[0] for c in server.state_obj.calls if isinstance(c, tuple) and c[0].startswith("speakers_")]
     assert calls[-5:] == ["speakers_split_turn", "speakers_rediarize", "speakers_rediarized",
                           "speakers_rediarize_apply", "speakers_rediarize_discard"]
+
+
+@pytest.mark.parametrize("token", [None, "wrong"])
+def test_declared_but_missing_body_does_not_hold_the_handler(server, token, monkeypatch):
+    """Клиент объявил тело и не прислал его: дочитывание ждёт не дольше
+    DRAIN_TIMEOUT_S и закрывает соединение, а не держит поток обработчика
+    вечно (и для отказа 401 тоже)."""
+    monkeypatch.setattr(control, "DRAIN_TIMEOUT_S", 0.5)
+    server.state.live_stop = lambda: {"ok": False, "action": "not-live"}
+    head = (f"POST /live/stop HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n"
+            f"Authorization: Bearer {token or server.token}\r\n"
+            f"Content-Type: application/json\r\nContent-Length: 1000\r\n\r\n")
+    with socket.create_connection(("127.0.0.1", server.port), timeout=3) as sock:
+        sock.sendall(head.encode("utf-8"))
+        started = time.monotonic()
+        chunks = []
+        while True:
+            chunk = sock.recv(65536)   # без таймаута сервера — socket.timeout через 3 с
+            if not chunk:
+                break
+            chunks.append(chunk)
+    reply = b"".join(chunks)
+    assert reply.startswith(b"HTTP/1.1 200" if token is None else b"HTTP/1.1 401")
+    assert time.monotonic() - started < 2.5

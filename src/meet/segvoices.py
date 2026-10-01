@@ -68,18 +68,29 @@ def default_track(folder: Path) -> str:
 
 TRACKS_NAME = "segment_tracks.json"
 TRACK_SOURCES = ("audio", "inferred")
-# Тест громкости: кадры по 50 мс, громкость каждой дорожки — над её же фоном
-# (10-й процентиль кадров: тишина комнаты у микрофона, цифровая тишина у
-# системного звука). «Звучит» — кадр хотя бы одной дорожки громче своего фона
-# на ACTIVE_DB; решение — медиана разницы (микрофон минус собеседники) по
-# звучащим кадрам, по модулю не меньше DECIDE_DB. Эхо собеседников в
+# Версия правила решения по звуку. Решения (segment_tracks.json) и пометки
+# «по звуку» другой версии не доверяются: дорожка решается заново.
+TRACK_RULE = 2
+# Тест громкости: кадры по 50 мс, громкость каждой дорожки — над её же фоном:
+# 10-й процентиль кадров, но не ниже FLOOR_MIN_DB (цифровые нули в системном
+# звуке иначе тянули бы фон к −100 дБ, и тихий фон звонка казался бы речью).
+# «Звучит» — кадр хотя бы одной дорожки громче своего фона на ACTIVE_DB;
+# разница — медиана (микрофон минус собеседники) по звучащим кадрам.
+# - Решение, совпадающее с подписью, — от DECIDE_DB.
+# - Против подписи — от OVERRIDE_DB, и только если «чужая» по подписи дорожка
+#   почти молчит: подпись владельца уходит в sys, лишь когда микрофон звучит
+#   меньше чем на QUIET_SHARE кадров реплики (и наоборот).
+# Неясно — решения нет, дорожка остаётся по подписи. Эхо собеседников в
 # микрофоне (колонки вместо наушников) над фоном ниже, чем они же в системном
-# звуке, — и реплика остаётся собеседникам.
+# звуке, — и реплика собеседника остаётся собеседнику.
 ENERGY_RATE = 8000
 FRAME_S = 0.05
 ACTIVE_DB = 15.0
 DECIDE_DB = 6.0
+OVERRIDE_DB = 10.0
+QUIET_SHARE = 0.2
 FLOOR_DB = -100.0
+FLOOR_MIN_DB = -70.0
 FLOOR_PERCENTILE = 10
 
 
@@ -124,23 +135,32 @@ def read_decisions(folder: Path) -> dict[str, str]:
     except (OSError, ValueError):
         return {}
     items = raw.get("items") if isinstance(raw, dict) else None
-    if not isinstance(items, dict):
-        return {}
+    if not isinstance(items, dict) or raw.get("rule") != TRACK_RULE:
+        return {}  # решения прежнего правила — заново
     return {k: v for k, v in items.items() if v in ("mic", "sys")}
+
+
+def _write_items(path: Path, items: dict[str, str]) -> None:
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(json.dumps({"version": 1, "rule": TRACK_RULE, "items": items}), encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def write_decisions(folder: Path, fresh: dict[str, str]) -> None:
     if not fresh:
         return
-    path = folder / TRACKS_NAME
     items = read_decisions(folder)
     items.update(fresh)
-    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        tmp.write_text(json.dumps({"version": 1, "items": items}), encoding="utf-8")
-        tmp.replace(path)
-    finally:
-        tmp.unlink(missing_ok=True)
+    _write_items(folder / TRACKS_NAME, items)
+
+
+def _audio_mark(s: dict) -> bool:
+    """Пометка «по звуку» нынешнего правила (прежние — решаются заново)."""
+    return (s.get("track_source") == "audio" and s.get("track") in ("mic", "sys")
+            and s.get("track_rule") == TRACK_RULE)
 
 
 def mark_tracks(folder: Path, data: dict, owner_labels: set[str] | None = None) -> bool:
@@ -162,7 +182,7 @@ def mark_tracks(folder: Path, data: dict, owner_labels: set[str] | None = None) 
         if s.get("kind") == "break":
             continue
         source, track = s.get("track_source"), s.get("track")
-        if source == "audio" and track in ("mic", "sys"):
+        if _audio_mark(s):
             continue
         try:
             by_audio = decided.get(span(s))
@@ -173,9 +193,15 @@ def mark_tracks(folder: Path, data: dict, owner_labels: set[str] | None = None) 
         elif source == "inferred" and track in ("mic", "sys"):
             continue
         else:
+            # Нет решения нынешнего правила (и пометка «по звуку» прежнего
+            # правила ему не замена) — по подписи.
             new = ("mic" if s.get("speaker") in labels else "sys", "inferred")
-        if (track, source) != new:
+        if (track, source) != new or (new[1] == "audio") != ("track_rule" in s):
             s["track"], s["track_source"] = new
+            if new[1] == "audio":
+                s["track_rule"] = TRACK_RULE
+            else:
+                s.pop("track_rule", None)
             changed = True
     if data.get("track_marks") != "segments":
         data["track_marks"] = "segments"
@@ -191,7 +217,7 @@ def needs_audio(folder: Path, data: dict, idx: list[int]) -> bool:
     decided = read_decisions(folder)
     for i in idx:
         s = segments[i]
-        if s.get("kind") == "break" or s.get("track_source") == "audio":
+        if s.get("kind") == "break" or _audio_mark(s):
             continue
         try:
             if span(s) not in decided:
@@ -215,15 +241,22 @@ def _frame_db(audio: np.ndarray, rate: int) -> np.ndarray:
     return np.maximum(out, FLOOR_DB)
 
 
-def _floor(db: np.ndarray) -> float:
+def _raw_floor(db: np.ndarray) -> float:
     return float(np.percentile(db, FLOOR_PERCENTILE)) if db.size else FLOOR_DB
 
 
-def audio_tracks(folder: Path, segments: list[dict], idx: list[int], load=None) -> dict[str, str]:
+def _floor(db: np.ndarray) -> float:
+    return max(_raw_floor(db), FLOOR_MIN_DB)
+
+
+def audio_tracks(folder: Path, segments: list[dict], idx: list[int], load=None,
+                 owner_labels: set[str] | None = None) -> dict[str, str]:
     """Тест громкости: чья дорожка звучит на отрезке сегмента. → время
-    сегмента → "mic" | "sys"; неясные (тишина, оба поровну) не решены.
-    `load(src) -> int16 при ENERGY_RATE` подменяется в тестах."""
+    сегмента → "mic" | "sys"; неясные (тишина, оба поровну, спор с подписью
+    без явного перевеса) не решены. `load(src) -> int16 при ENERGY_RATE`
+    подменяется в тестах."""
     load = load or (lambda src: decode(src, ENERGY_RATE))
+    labels = owners() if owner_labels is None else owner_labels
     levels = {}
     for stem in ("mic", "sys"):
         src = library.find_track(folder, stem)
@@ -253,21 +286,29 @@ def audio_tracks(folder: Path, segments: list[dict], idx: list[int], load=None) 
         if not active.any():
             continue
         diff = float(np.median(rel["mic"][active] - rel["sys"][active]))
-        if diff >= DECIDE_DB:
-            out[at] = "mic"
-        elif diff <= -DECIDE_DB:
-            out[at] = "sys"
+        by_label = "mic" if s.get("speaker") in labels else "sys"
+        if abs(diff) < DECIDE_DB:
+            continue
+        heard = "mic" if diff > 0 else "sys"
+        if heard != by_label:
+            # Против подписи — только с явным перевесом и когда дорожка,
+            # которой реплика принадлежит по подписи, почти молчит.
+            quiet = float(np.mean(rel[by_label] > ACTIVE_DB)) < QUIET_SHARE
+            if abs(diff) < OVERRIDE_DB or not quiet:
+                continue
+        out[at] = heard
     return out
 
 
-def decide_tracks(folder: Path, data: dict, idx: list[int], bus=None, load=None) -> int:
+def decide_tracks(folder: Path, data: dict, idx: list[int], bus=None, load=None,
+                  owner_labels: set[str] | None = None) -> int:
     """Задача (подпроцесс): решить дорожки сегментов `idx` по звуку и
     сохранить решения для резидента. Не вышло (нет ffmpeg, битая дорожка) —
     не беда: дорожки возьмутся по подписям. → сколько решено."""
     if not needs_audio(folder, data, idx):
         return 0
     try:
-        got = audio_tracks(folder, _segments(data), idx, load=load)
+        got = audio_tracks(folder, _segments(data), idx, load=load, owner_labels=owner_labels)
     except (OSError, RuntimeError, ValueError) as e:
         if bus is not None:
             bus.emit("log", text=f"дорожки реплик по звуку не определены: {e}")
@@ -365,14 +406,7 @@ def prune(folder: Path, data: dict) -> int:
             except (KeyError, TypeError, ValueError):
                 continue
         if any(k not in spans for k in decided):
-            path = folder / TRACKS_NAME
-            tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-            try:
-                tmp.write_text(json.dumps({"version": 1, "items": {k: v for k, v in decided.items()
-                                                                   if k in spans}}), encoding="utf-8")
-                tmp.replace(path)
-            finally:
-                tmp.unlink(missing_ok=True)
+            _write_items(folder / TRACKS_NAME, {k: v for k, v in decided.items() if k in spans})
     items = _items(folder)
     if not items:
         return 0

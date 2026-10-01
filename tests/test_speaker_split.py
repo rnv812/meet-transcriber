@@ -357,22 +357,25 @@ def test_audio_test_tells_owner_speech_from_remote_speech(meeting):
     segs = library.read_transcript(meeting)["segments"]
     tracks = _call_audio(owner_spans=[(48.0, 50.0), (3.0, 8.0)],
                          remote_spans=[(0.0, 3.0), (8.5, 12.0), (14.0, 20.0)])
-    got = segvoices.audio_tracks(meeting, segs, [0, 1, 2, 3, 10], load=lambda src: tracks[src.name])
+    got = segvoices.audio_tracks(meeting, segs, [0, 1, 2, 3, 10], load=lambda src: tracks[src.name],
+                                 owner_labels={"Вы"})
     assert got == {"0.00-3.00": "sys", "3.00-8.00": "mic", "8.50-12.00": "sys",
                    "14.00-20.00": "sys", "48.00-50.00": "mic"}
     silent = {"mic.opus": np.zeros(RATE * 60, dtype=np.int16), "sys.opus": np.zeros(RATE * 60, dtype=np.int16)}
-    assert segvoices.audio_tracks(meeting, segs, [0, 10], load=lambda src: silent[src.name]) == {}
+    assert segvoices.audio_tracks(meeting, segs, [0, 10], load=lambda src: silent[src.name],
+                                  owner_labels={"Вы"}) == {}
 
 
 def test_split_job_decides_tracks_by_audio_and_the_edit_keeps_them(meeting, base):
     """Задача «Разделить» решает дорожки по звуку; резидент видит решение до
-    правки и пишет его вместе с правкой (`track_source: "audio"`). Решение по
-    звуку сильнее подписи: «Вы» на отрезке, где звучат собеседники, — sys."""
+    правки и пишет его вместе с правкой (`track_source: "audio"` и версия
+    правила). Решение по звуку сильнее подписи, когда оно бесспорно: «Вы» на
+    отрезке, где звучат только собеседники, а микрофон молчит (наушники), — sys."""
     _old_call(meeting)
     data = library.read_transcript(meeting)
     data["segments"][9]["speaker"] = "Вы"         # подпись владельца, а звучит собеседник
     library.write_transcript(meeting, data)
-    tracks = _call_audio(owner_spans=[(48.0, 50.0)], remote_spans=[(3.0, 47.0)])
+    tracks = _call_audio(owner_spans=[(48.0, 50.0)], remote_spans=[(3.0, 47.0)], echo=0)
     got = segvoices.compute(meeting, [9, 10], embed=lambda a: A.astype(np.float32),
                             load=lambda src: np.zeros(16000 * 60, dtype=np.int16),
                             energy=lambda src: tracks[src.name])
@@ -383,6 +386,44 @@ def test_split_job_decides_tracks_by_audio_and_the_edit_keeps_them(meeting, base
     speakers.relabel(meeting, [0], "Спикер 2", base)
     assert _tracks(meeting)[9] == ("sys", "audio") and _tracks(meeting)[10] == ("mic", "audio")
     assert _tracks(meeting)[0] == ("sys", "inferred")
+    segs = library.read_transcript(meeting)["segments"]
+    assert segs[9]["track_rule"] == segvoices.TRACK_RULE and "track_rule" not in segs[0]
+
+
+def test_owner_label_is_not_overridden_while_the_mic_sounds(meeting):
+    """С колонками эхо собеседников звучит и в микрофоне: спорить с подписью
+    владельца по звуку тогда нельзя — дорожка остаётся по подписи (mic)."""
+    _old_call(meeting)
+    data = library.read_transcript(meeting)
+    data["segments"][9]["speaker"] = "Вы"
+    tracks = _call_audio(owner_spans=[(48.0, 50.0)], remote_spans=[(3.0, 47.0)])
+    got = segvoices.audio_tracks(meeting, data["segments"], [8, 9, 10],
+                                 load=lambda src: tracks[src.name], owner_labels={"Вы"})
+    assert got == {"37.00-41.00": "sys", "48.00-50.00": "mic"}   # 43–47 не решено
+    segvoices.write_decisions(meeting, got)
+    segvoices.mark_tracks(meeting, data, {"Вы"})
+    assert data["segments"][9]["track"] == "mic"
+
+
+def test_marks_and_decisions_of_an_older_rule_are_decided_again(meeting, base):
+    """Пометки «по звуку» и segment_tracks.json прежнего правила (могли ошибочно
+    увести реплику владельца в sys) не доверяются: дорожка — по подписи до
+    нового решения, задача решает такие сегменты заново."""
+    _old_call(meeting)
+    data = library.read_transcript(meeting)
+    data["track_marks"] = "segments"
+    data["segments"][10].update(track="sys", track_source="audio")          # без версии правила
+    data["segments"][1].update(track="sys", track_source="audio", track_rule=segvoices.TRACK_RULE)
+    library.write_transcript(meeting, data)
+    (meeting / segvoices.TRACKS_NAME).write_text(
+        '{"version": 1, "items": {"48.00-50.00": "sys"}}', encoding="utf-8")
+    assert segvoices.read_decisions(meeting) == {}
+    data = library.read_transcript(meeting)
+    assert segvoices.needs_audio(meeting, data, [10]) is True
+    assert segvoices.needs_audio(meeting, data, [1]) is False
+    speakers.relabel(meeting, [0], "Спикер 2", base)   # первая правка переписывает пометку
+    assert _tracks(meeting)[10] == ("mic", "inferred") and _tracks(meeting)[1] == ("sys", "audio")
+    assert "track_rule" not in library.read_transcript(meeting)["segments"][10]
 
 
 def test_job_without_readable_audio_falls_back_to_labels(meeting):
@@ -432,3 +473,31 @@ def test_undo_of_a_cut_survives_later_track_refinement(meeting, base):
     speakers.undo(meeting, base)                              # разрез
     segs = library.read_transcript(meeting)["segments"]
     assert len(segs) == 11 and segs[3]["text"] == SEGMENTS[3]["text"]
+
+
+def _level(seconds, dbfs, seed):
+    """Шум заданной громкости (дБ полной шкалы) — фон комнаты или звонка."""
+    rng = np.random.default_rng(seed)
+    return rng.normal(0, 32768 * 10 ** (dbfs / 20), int(seconds * RATE))
+
+
+@pytest.mark.parametrize("background", [(-80, -80), (-70, -65), (-60, -55)])
+def test_owner_turn_stays_mic_when_loopback_has_digital_silence(meeting, background):
+    """Ревью: у системного звука 17% кадров — цифровые нули, остальное — ровный
+    фон звонка. Нули тянули «фон» дорожки к −100 дБ, и фон собеседников
+    казался громче речи владельца: реплика «Вы» уходила в sys «по звуку»,
+    а это сильнее подписи. Теперь фон не ниже −70 дБ, а переписать подпись
+    владельца в sys можно, только если микрофон почти молчит."""
+    _old_call(meeting)
+    mic = _level(60, -55, 1)                                    # комната
+    mic[int(48 * RATE):int(50 * RATE)] += _level(2, -25, 2)     # «Спасибо, понятно.»
+    low, high = background
+    sys_ = np.concatenate([_level(1, low if n % 2 else high, 10 + n) for n in range(60)])
+    sys_[:int(0.17 * len(sys_))] = 0                            # 17% цифровой тишины
+    tracks = {"mic.opus": np.clip(mic, -32768, 32767).astype(np.int16),
+              "sys.opus": np.clip(sys_, -32768, 32767).astype(np.int16)}
+    data = library.read_transcript(meeting)
+    segvoices.decide_tracks(meeting, data, [10], load=lambda src: tracks[src.name])
+    assert segvoices.read_decisions(meeting).get("48.00-50.00") in (None, "mic")
+    segvoices.mark_tracks(meeting, data, {"Вы"})
+    assert data["segments"][10]["track"] == "mic"

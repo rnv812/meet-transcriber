@@ -893,7 +893,7 @@ def _check(segments: list[dict], step: dict, side: str) -> None:
 
 # Пометки дорожки старой записи уточняются и после шага (решение задачи по
 # звуку сильнее вывода по подписи) — сверке реплик они не мешают.
-_TRACK_KEYS = ("track", "track_source")
+_TRACK_KEYS = ("track", "track_source", "track_rule")
 
 
 def _same(a: dict, b: dict) -> bool:

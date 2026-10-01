@@ -313,6 +313,8 @@ class ControlServer:
 # Сколько непрочитанного маршрутом тела запроса дочитывать перед закрытием
 # соединения (см. Handler._drain); больше — соединение просто закрывается.
 DRAIN_LIMIT = 16 * 1024 * 1024
+# Сколько ждать непрочитанное тело, прежде чем закрыть соединение.
+DRAIN_TIMEOUT_S = 5.0
 
 # Сентинел: маршрут сам записал ответ потоком (SSE, Range-аудио, файл).
 _STREAMED = object()
@@ -385,7 +387,9 @@ def _make_handler(server: ControlServer):
             запрос отклонён до разбора). Закрытый с непрочитанными байтами сокет
             Windows обрывает RST вместо FIN — и клиент теряет уже отправленный
             ответ (WinError 10053/10054). Слишком большое тело не читаем:
-            соединение и так закрывается."""
+            соединение и так закрывается. Ждём тело не дольше DRAIN_TIMEOUT_S:
+            клиент, объявивший тело и не приславший его, не держит поток
+            обработчика вечно."""
             if getattr(self, "_consumed", False):
                 return
             self._consumed = True
@@ -395,10 +399,20 @@ def _make_handler(server: ControlServer):
             if length > DRAIN_LIMIT:
                 self.close_connection = True
                 return
+            sock = self.connection
+            before = sock.gettimeout()
             try:
-                self.rfile.read(length)
-            except OSError:
+                sock.settimeout(DRAIN_TIMEOUT_S)
+                got = self.rfile.read(length)
+                if len(got or b"") < length:
+                    self.close_connection = True
+            except OSError:  # и TimeoutError
                 self.close_connection = True
+            finally:
+                try:
+                    sock.settimeout(before)
+                except OSError:
+                    pass
 
         def _body(self) -> dict:
             length = self._length()
