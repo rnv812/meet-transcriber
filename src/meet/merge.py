@@ -127,9 +127,14 @@ def probe_duration(path: Path, run=subprocess.run) -> float | None:
     return None
 
 
-def describe_part(folder: Path, probe=probe_duration) -> Part:
+def describe_part(folder: Path, probe=probe_duration, end=None) -> Part:
     """Исходная запись как часть: дорожки, начало и длительность (самая длинная
-    дорожка; не измерить — длительность записи из `events.jsonl`)."""
+    дорожка; не измерить — длительность записи из `events.jsonl`).
+
+    Автозапись, хвост которой не обрезали (meet.tail), берётся до конца
+    разговора: `end(folder)` — где он (по умолчанию `tail.effective_end`).
+    Иначе склейка тащила бы в середину встречи минуты тишины, а перерыв
+    считался бы от остановки записи, а не от конца разговора."""
     card = library.describe(folder)
     if card is None or not card.tracks:
         raise MergeError(f"В записи нет звука: {folder.name}")
@@ -140,6 +145,16 @@ def describe_part(folder: Path, probe=probe_duration) -> Part:
     duration = max(lengths) if lengths else _events_duration(folder)
     if not duration or duration <= 0:
         raise MergeError(f"Не удалось узнать длительность записи: {folder.name}")
+    if end is None:
+        from meet import tail
+
+        end = tail.effective_end
+    try:
+        cut = end(folder)
+    except Exception:
+        cut = None  # не измерили — берём запись целиком
+    if cut and 0 < cut < duration:
+        duration = cut
     return Part(id=folder.name, folder=folder, start=start, duration_s=float(duration),
                 tracks={k: Path(v) for k, v in card.tracks.items()}, title=card.title)
 
@@ -336,6 +351,46 @@ def originals(folder: Path) -> list[Path]:
         if isinstance(names, list) else []
 
 
+def unfinished_owner(folder: Path, ignore: Path | None = None) -> str | None:
+    """Название незавершённого объединения (кроме `ignore`), в которое входит
+    запись. Пока оно не дошло до конца, исходные читаются и нужны целыми: ни
+    удалять их, ни отдавать во второе объединение нельзя."""
+    folder = Path(folder)
+    try:
+        siblings = [p for p in folder.parent.iterdir()
+                    if p.is_dir() and f"_{FOLDER_SUFFIX}" in p.name]
+    except OSError:
+        return None
+    skip = os.path.normcase(str(Path(ignore).resolve())) if ignore is not None else None
+    for other in siblings:
+        if skip is not None and os.path.normcase(str(other.resolve())) == skip:
+            continue
+        meta = library.read_meta(other)
+        info = meta.get("merge")
+        names = meta.get("merged_from")
+        if (meta.get("source") == SOURCE and isinstance(info, dict)
+                and info.get("state") != "done" and isinstance(names, list)
+                and folder.name in names):
+            return str(meta.get("title") or other.name)
+    return None
+
+
+def _tail_end(folder: Path, run) -> float | None:
+    from meet import tail
+
+    return tail.effective_end(folder, run=run)
+
+
+def state(folder: Path) -> str | None:
+    """Шаг объединения: "pending" (звук не собран), "merged" (собран),
+    "done" (исходные обработаны); не объединённая запись — None."""
+    meta = library.read_meta(folder)
+    info = meta.get("merge")
+    if meta.get("source") != SOURCE or not isinstance(info, dict):
+        return None
+    return str(info.get("state") or "pending")
+
+
 def mark_done(folder: Path, deleted: list[str], kept_reason: str | None = None) -> None:
     """Объединение завершено: что из исходных удалено (и почему не всё)."""
     library.update_meta(folder, lambda meta: {**meta, "merge": {
@@ -354,12 +409,16 @@ def _write_events(folder: Path, start: datetime, duration: float) -> None:
         "\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n", encoding="utf-8")
 
 
-def run(folder: Path, run=subprocess.run, probe=probe_duration, bus=None) -> Path:
+def run(folder: Path, run=subprocess.run, probe=probe_duration, bus=None,
+        end=None) -> Path:
     """Собрать звук объединённой записи из исходных (см. docstring модуля).
 
-    Дорожка пишется во временный `.part` и переименовывается целиком:
-    оборванная сборка (отмена убивает процесс) не оставит полдорожки,
-    которую библиотека приняла бы за запись."""
+    Все дорожки пишутся во временные `.part` и подменяются только когда
+    готова каждая: сорванная сборка (сбой, отмена, таймаут) не оставит
+    `sys.opus` без `mic.opus`. Любое исключение — `.part` удаляются. Если
+    процесс убит, `.part` останутся, но дорожками не считаются, а состояние
+    `merge.state` остаётся "pending" до самого конца — по нему резидент
+    повторит сборку, а не расшифрует половину и не удалит исходные."""
     folder = Path(folder)
     if shutil.which("ffmpeg") is None:
         raise MergeError("ffmpeg не найден — записи не объединить")
@@ -372,32 +431,36 @@ def run(folder: Path, run=subprocess.run, probe=probe_duration, bus=None) -> Pat
         source = folder.parent / str(name)
         if not source.is_dir():
             raise MergeError(f"Исходная запись пропала: {name}")
-        parts.append(describe_part(source, probe=probe))
+        parts.append(describe_part(source, probe=probe,
+                                   end=end or (lambda f: _tail_end(f, run))))
     parts.sort(key=lambda p: p.start)
     roles = output_roles(parts)
     for stale in [*folder.glob("*.opus"), *folder.glob("*.part")]:
         stale.unlink(missing_ok=True)  # повтор после сбоя — начисто
-    for done, role in enumerate(roles):
-        if bus is not None:
-            bus.progress("merge", label="объединение", done=done, total=len(roles), note=role)
-        part_file = folder / f"{role}.opus.part"
-        try:
-            proc = run(concat_command(pieces(parts, role), part_file),
-                       capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       timeout=FFMPEG_TIMEOUT_S,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except subprocess.TimeoutExpired as e:
+    part_files = {role: folder / f"{role}.opus.part" for role in roles}
+    try:
+        for done, role in enumerate(roles):
+            if bus is not None:
+                bus.progress("merge", label="объединение", done=done, total=len(roles), note=role)
+            try:
+                proc = run(concat_command(pieces(parts, role), part_files[role]),
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=FFMPEG_TIMEOUT_S,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            except subprocess.TimeoutExpired as e:
+                raise MergeError("ffmpeg не успел объединить записи") from e
+            except OSError as e:
+                raise MergeError(f"ffmpeg не запустился: {e}") from e
+            if proc.returncode != 0:
+                raise MergeError(f"ffmpeg не объединил записи: {(proc.stderr or '').strip()[-300:]}")
+        for role in roles:  # все готовы — подменяем разом
+            os.replace(part_files[role], folder / f"{role}.opus")
+    except BaseException:
+        for part_file in part_files.values():
             part_file.unlink(missing_ok=True)
-            raise MergeError("ffmpeg не успел объединить записи") from e
-        except OSError as e:
-            part_file.unlink(missing_ok=True)
-            raise MergeError(f"ffmpeg не запустился: {e}") from e
-        if proc.returncode != 0:
-            part_file.unlink(missing_ok=True)
-            for made in folder.glob("*.opus"):
-                made.unlink(missing_ok=True)
-            raise MergeError(f"ffmpeg не объединил записи: {(proc.stderr or '').strip()[-300:]}")
-        os.replace(part_file, folder / f"{role}.opus")
+        for role in roles:  # подмену сорвало посередине — пусть не будет ни одной
+            (folder / f"{role}.opus").unlink(missing_ok=True)
+        raise
     total = sum(p.duration_s for p in parts)
     _write_events(folder, parts[0].start, total)
     library.update_meta(folder, lambda m: {

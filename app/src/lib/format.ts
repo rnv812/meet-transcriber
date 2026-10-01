@@ -26,7 +26,6 @@ export function dayLabel(iso: string, now: Date = new Date()): string {
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${time}`;
 }
 
-/** Текст ошибки для человека: у Error — сообщение без «Error: », иначе — как есть. */
 /** «2 записи», «5 записей», «21 запись»: форма слова по числу. */
 export function plural(n: number, one: string, few: string, many: string): string {
   const d = Math.abs(n) % 100;
@@ -37,6 +36,7 @@ export function plural(n: number, one: string, few: string, many: string): strin
   return many;
 }
 
+/** Текст ошибки для человека: у Error — сообщение без «Error: », иначе — как есть. */
 export function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }

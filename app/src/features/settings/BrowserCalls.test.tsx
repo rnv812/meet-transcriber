@@ -74,3 +74,11 @@ test("подсказка объясняет правило: микрофон, а
   expect(tip).toHaveAccessibleDescription(
     /Запись начнётся, когда браузер использует микрофон\. Музыка и видео без микрофона запись не запускают\./);
 });
+
+test("подсказка честно говорит про мьют в веб-клиенте и короткое использование микрофона", async () => {
+  render(<Harness initial={{}} />);
+  const tip = screen.getByRole("button", { name: "Как распознаются звонки в браузере" });
+  await userEvent.click(tip);
+  expect(tip).toHaveAccessibleDescription(/дольше 15 секунд/);
+  expect(tip).toHaveAccessibleDescription(/выключенным микрофоном может его освободить/);
+});

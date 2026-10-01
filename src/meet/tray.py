@@ -336,6 +336,10 @@ class TrayApp:
         # Начальное название идущей автозаписи (звонок в браузере: «Dion —
         # Планёрка»); его кладёт в meta.json сохранение записи. None — нет.
         self.recording_title: str | None = None
+        # Когда пропал сигнал звонка (секунды эпохи) у автозаписи, остановленной
+        # после ожидания повторного подключения; по нему резидент обрезает
+        # хвост без разговора (meet.tail). None — не такая остановка.
+        self.call_end_at: float | None = None
 
     # --- запись ---------------------------------------------------------
 
@@ -353,6 +357,7 @@ class TrayApp:
             self.started = time.monotonic()
             self._call_end = None
             self.recording_title = None
+            self.call_end_at = None
             self.recording = True
             # result и stop_event уходят в поток значениями, а не через self:
             # если join истечёт по таймауту, доживающий поток допишет их в свой
@@ -681,6 +686,8 @@ class TrayApp:
             return
         call_seconds = (self._call_end or now) - self.started
         self.log(f"звонок кончился ({call_seconds:.0f} с) — останавливаю запись")
+        # время по стенным часам: events.jsonl записи — в них
+        self.call_end_at = time.time() - (now - (self._call_end or now))
         self.stop_recording(hook=call_seconds >= self.cfg["min_call_seconds"])
 
     # --- UI -------------------------------------------------------------

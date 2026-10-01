@@ -1380,3 +1380,52 @@ def test_snapshot_shows_browsers_and_browser_call(control_state, app):
     snap = control_state.snapshot()["auto_record"]
     assert snap["browsers"] == []
     assert snap["browser"] == {"exe": "chrome.exe", "site": "Dion"}
+
+
+def test_auto_recording_after_the_wait_is_trimmed_before_transcription(app, tmp_path, monkeypatch):
+    import json as _json
+
+    from meet import tail
+
+    queue = _Queue()
+    state = tray_control.TrayControl(app, queue=queue)
+    state._background = lambda fn: fn()
+    folder = _saved_folder(tmp_path)
+    (folder / "events.jsonl").write_text(_json.dumps({"kind": "record.started", "at": 1000.0}) + "\n",
+                                         encoding="utf-8")
+    order = []
+    monkeypatch.setattr(tail, "trim", lambda path: order.append(("trim", queue.submitted[:])) or 330.0)
+    app.call_end_at = 1300.0
+    app.on_saved(str(folder), tray_control.AUTO, True)
+    assert order == [("trim", [])]  # обрезка — до постановки расшифровки
+    assert queue.submitted == [(jobs.TRANSCRIBE, str(folder))]
+    events = [_json.loads(x) for x in (folder / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert events[-1] == {"kind": "record.call_end", "at": 1300.0, "wait_s": 600.0}
+
+
+def test_failed_trim_still_transcribes(app, tmp_path, monkeypatch):
+    from meet import tail
+
+    queue = _Queue()
+    state = tray_control.TrayControl(app, queue=queue)
+    state._background = lambda fn: fn()
+    folder = _saved_folder(tmp_path)
+
+    def broken(path):
+        raise RuntimeError("ffmpeg не обрезал sys.opus")
+
+    monkeypatch.setattr(tail, "trim", broken)
+    app.call_end_at = 1300.0
+    app.on_saved(str(folder), tray_control.AUTO, True)
+    assert queue.submitted == [(jobs.TRANSCRIBE, str(folder))]
+
+
+def test_manual_recording_is_not_trimmed(app, tmp_path, monkeypatch):
+    from meet import tail
+
+    queue = _Queue()
+    tray_control.TrayControl(app, queue=queue)
+    monkeypatch.setattr(tail, "trim", lambda path: 1 / 0)
+    app.call_end_at = 1300.0
+    app.on_saved(str(_saved_folder(tmp_path)), tray_control.MANUAL, True)
+    assert len(queue.submitted) == 1

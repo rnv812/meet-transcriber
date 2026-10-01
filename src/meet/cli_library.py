@@ -193,6 +193,42 @@ def _recording_now(root: Path) -> Path | None:
     return Path(folder) if folder and _pid_alive(pid) else None
 
 
+_FOLDER_JOBS = ("transcribe", "import", "merge", "summary", "ask")
+
+
+def _resident_jobs() -> list[dict]:
+    """Ждущие и идущие задачи резидента; резидента нет — пусто."""
+    from meet import control
+
+    try:
+        items = control.request("/jobs").get("items") or []
+    except Exception:
+        return []
+    return [j for j in items if isinstance(j, dict) and j.get("state") in ("queued", "running")]
+
+
+def _merge_busy(folder: Path, root: Path, merging: Path | None = None) -> str | None:
+    """Почему запись нельзя объединить или удалить: её пишут, над ней работает
+    резидент или она — часть другого незавершённого объединения."""
+    from meet import merge
+
+    key = os.path.normcase(str(folder.resolve()))
+    recording = _recording_now(root)
+    if recording is not None and os.path.normcase(str(recording.resolve())) == key:
+        return "запись ещё идёт"
+    for job in _resident_jobs():
+        try:
+            same = os.path.normcase(str(Path(str(job.get("folder"))).resolve())) == key
+        except OSError:
+            same = False
+        if same and job.get("kind") in _FOLDER_JOBS:
+            return "над записью сейчас работает приложение — дождитесь"
+    owner = merge.unfinished_owner(folder, merging)
+    if owner:
+        return f"запись входит в объединение «{owner}», которое ещё не завершено"
+    return None
+
+
 def _merge(args, cfg) -> None:
     """`meet merge`: то же, что «Объединить» в окне, но в этом процессе:
     собрать звук, расшифровать, выгрузить в базу знаний (если части уже там
@@ -207,11 +243,10 @@ def _merge(args, cfg) -> None:
     if len(parents) > 1:
         raise CliError("Объединять можно только записи из одной папки записей")
     root = folders[0].resolve().parent
-    busy = _recording_now(root)
     for folder in folders:
-        if busy is not None and os.path.normcase(str(busy.resolve())) == \
-                os.path.normcase(str(folder.resolve())):
-            raise CliError(f"{folder.name}: запись ещё идёт")
+        reason = _merge_busy(folder, root)
+        if reason:
+            raise CliError(f"{folder.name}: {reason}")
     try:
         target = merge.create(root, folders, keep_originals=args.keep)
     except merge.MergeError as e:
@@ -239,17 +274,38 @@ def _merge(args, cfg) -> None:
         except Exception as e:
             _say(f"В базу знаний не выгружено: {e}")
     deleted: list[str] = []
-    if not args.keep:
-        for source in merge.originals(target):
-            shutil.rmtree(source)
-            deleted.append(source.name)
-    merge.mark_done(target, deleted)
+    failed: list[str] = []
+    if not args.keep and merge.state(target) == "merged":
+        sources = merge.originals(target)
+        # Пока мы расшифровывали, резидент мог взяться за исходные (или их
+        # начали писать) — тогда не удаляем ни одной: все на месте лучше,
+        # чем половина.
+        busy = [(s.name, r) for s in sources if (r := _merge_busy(s, root, merging=target))]
+        if busy:
+            failed = [f"{name}: {reason}" for name, reason in busy]
+        else:
+            for source in sources:
+                try:
+                    shutil.rmtree(source)
+                    deleted.append(source.name)
+                except OSError as e:
+                    failed.append(f"{source.name}: {e}")
+    if failed:
+        # Не все исходные удалены — объединение не «завершено»: резидент
+        # доделает его после следующей расшифровки, а части пока заняты.
+        library.update_meta(target, lambda meta: {**meta, "merge": {
+            **(meta.get("merge") or {}), "deleted": deleted}})
+    else:
+        merge.mark_done(target, deleted)
     if kb_left:
         _say("Прежние папки частей в базе знаний не тронуты: " + ", ".join(kb_left))
     _result(args, {"folder": str(target), "id": target.name,
                    "merged_from": library.read_meta(target).get("merged_from"),
-                   "transcript": str(transcript), "deleted": deleted, "kb_left": kb_left},
+                   "transcript": str(transcript), "deleted": deleted, "kb_left": kb_left,
+                   "not_deleted": failed},
             f"{target}\n")
+    if failed:
+        raise CliError("Записи объединены, но не все исходные удалены: " + "; ".join(failed))
 
 
 def _export(args, cfg) -> None:

@@ -102,7 +102,11 @@ def test_merge_creates_the_folder_and_queues_the_sound_job(state, queue, root):
     meta = library.read_meta(folder)
     assert meta["merged_from"] == [A, B] and meta["title"] == "Планёрка"
     assert meta["merge"]["keep_originals"] is False
-    assert state.merge_recordings({"ids": [A, C], "keep_originals": True})["recording"] == f"{A}_merged-2"
+    # пока объединение не завершено, его части не отдаются во второе и не удаляются
+    with pytest.raises(control.BadRequest, match="входит в объединение «Планёрка»"):
+        state.merge_recordings({"ids": [A, C], "keep_originals": True})
+    with pytest.raises(control.BadRequest, match="входит в объединение"):
+        state.delete_recording(B)
 
 
 @pytest.mark.parametrize("body, error", [
@@ -153,6 +157,7 @@ def _merged(state, root, **body):
     (folder / "mic.opus").write_bytes(b"x")
     library.write_transcript(folder, {"version": 1, "segments": [
         {"start": 0.0, "end": 1.0, "speaker": "Вы", "text": "Начнём."}]})
+    library.update_meta(folder, lambda m: {**m, "merge": {**m["merge"], "state": "merged"}})
     return folder
 
 
@@ -215,3 +220,28 @@ def test_originals_exported_to_the_knowledge_base_bring_the_merged_one_there(
 
 def test_merge_route_is_wired(state):
     assert ("POST", "/recordings/merge") in control._ROUTES
+
+
+def test_originals_survive_unless_the_sound_was_merged(state, app, root):
+    """Звук не собран до конца (сборку сорвало, остались случайные дорожки) —
+    расшифровка такой папки не повод удалять исходные."""
+    folder = root / state.merge_recordings({"ids": [A, B]})["recording"]
+    (folder / "sys.opus").write_bytes(b"x")  # полдорожки от сорванной сборки
+    library.write_transcript(folder, {"version": 1, "segments": []})
+    _done(app, jobs.TRANSCRIBE, folder)
+    assert (root / A).exists() and (root / B).exists()
+    assert library.read_meta(folder)["merge"]["state"] == "pending"
+
+
+def test_pending_merge_with_stray_tracks_rebuilds_the_sound(state, queue, root):
+    folder = root / state.merge_recordings({"ids": [A, B]})["recording"]
+    (folder / "sys.opus").write_bytes(b"x")
+    (folder / "mic.opus").write_bytes(b"x")
+    state.transcribe(folder.name)
+    assert queue.submitted[-1].kind == jobs.MERGE
+
+
+def test_after_the_merge_is_done_its_parts_are_free_again(state, app, root):
+    folder = _merged(state, root, keep_originals=True)
+    _done(app, jobs.TRANSCRIBE, folder)
+    assert state.delete_recording(A) == {"ok": True}

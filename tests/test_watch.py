@@ -347,7 +347,8 @@ def test_com_flag_is_not_set_on_failure(monkeypatch):
 
 
 def _browser_signals(monkeypatch, *, mic, render=True, pids=None, titles=(),
-                     require_site=False, sites=("Dion", "Meet –", "Телемост", "Яндекс Телемост")):
+                     require_site=False, sites=("Dion", "Meet –", "Телемост", "Яндекс Телемост"),
+                     min_mic_s=0.0):
     """Сигналы с одним настольным клиентом (молчит) и одним браузером.
 
     `mic` — занят ли микрофон браузером; `render` — играет ли браузер (видео):
@@ -361,7 +362,7 @@ def _browser_signals(monkeypatch, *, mic, render=True, pids=None, titles=(),
     monkeypatch.setattr(watch, "window_titles",
                         lambda found: seen.append(set(found)) or list(titles))
     signals = watch.Signals(["Dion.exe"], browsers=["chrome.exe"],
-                            require_site=require_site, sites=list(sites))
+                            require_site=require_site, sites=list(sites), min_mic_s=min_mic_s)
     return signals, seen
 
 
@@ -458,3 +459,117 @@ def test_call_title_is_sanitized_and_short():
 def test_short_title_for_log_is_truncated():
     assert watch.short("а" * 100, 10) == "ааааааааа…"
     assert watch.short("коротко", 10) == "коротко"
+
+
+# --- звонок в браузере: дребезг и «липкость» ------------------------------------
+
+
+def _switch(monkeypatch, *, mic=None, render=None, titles=None):
+    """Поменять сигналы браузера посреди теста."""
+    if mic is not None:
+        monkeypatch.setattr(watch, "mic_busy", lambda name: mic if name == "chrome.exe" else False)
+    if render is not None:
+        monkeypatch.setattr(watch, "render_active",
+                            lambda name, log=None: render if name == "chrome.exe" else False)
+    if titles is not None:
+        monkeypatch.setattr(watch, "window_titles", lambda found: list(titles))
+
+
+def test_short_microphone_use_in_the_browser_is_not_a_call(monkeypatch):
+    # голосовой поиск, короткое голосовое сообщение
+    signals, _ = _browser_signals(monkeypatch, mic=True, min_mic_s=15.0)
+    assert signals.read(now=0)[0] is False
+    assert signals.read(now=14)[0] is False
+    assert "15" in signals.browser_note
+    _switch(monkeypatch, mic=False)
+    assert signals.read(now=16)[0] is False  # отпустил раньше — счёт заново
+    _switch(monkeypatch, mic=True)
+    assert signals.read(now=20)[0] is False
+    assert signals.read(now=35)[0] is True
+
+
+def test_strict_call_survives_a_title_change(monkeypatch):
+    # начался по сайту в заголовке — человек переключил вкладку, звонок идёт
+    signals, _ = _browser_signals(monkeypatch, mic=True, require_site=True,
+                                  titles=["Dion — Планёрка - Google Chrome"])
+    assert signals.read(now=0)[0] is True
+    _switch(monkeypatch, titles=["Почта - Google Chrome"])
+    assert signals.read(now=2)[0] is True
+    assert signals.browser_call["site"] == "Dion"
+
+
+def test_established_call_continues_on_playback_when_the_mic_is_released(monkeypatch):
+    # веб-клиент на мьюте отпустил микрофон, собеседников слышно
+    signals, _ = _browser_signals(monkeypatch, mic=True, render=False)
+    assert signals.read(now=0)[0] is True
+    _switch(monkeypatch, mic=False, render=True)
+    assert signals.read(now=2)[0] is True
+    _switch(monkeypatch, render=False)
+    assert signals.read(now=10)[0] is False  # ни микрофона, ни звука — звонок кончился
+    _switch(monkeypatch, render=True)
+    assert signals.read(now=20)[0] is False  # звук без микрофона звонок не начинает
+
+
+def test_browser_playback_alone_never_starts_a_call(monkeypatch):
+    signals, _ = _browser_signals(monkeypatch, mic=False, render=True)
+    for now in (0, 10, 20, 30):
+        assert signals.read(now=now)[0] is False
+
+
+def test_call_title_drops_invisible_characters():
+    title = watch.call_title("﻿Dion⁠ — Встреча⁤ - Google Chrome", "Dion")
+    assert title == "Dion — Встреча"
+
+
+class _FakeUser32:
+    """Окна: (hwnd, pid, видно ли, заголовок) в Z-порядке; передний план — `front`."""
+
+    def __init__(self, windows, front):
+        self.windows = windows
+        self.front = front
+
+    def EnumWindows(self, callback, _param):
+        for hwnd, *_ in self.windows:
+            if not callback(hwnd, 0):
+                break
+        return True
+
+    def _window(self, hwnd):
+        return next(w for w in self.windows if w[0] == hwnd)
+
+    def IsWindowVisible(self, hwnd):
+        return self._window(hwnd)[2]
+
+    def GetWindowThreadProcessId(self, hwnd, ref):
+        ref._obj.value = self._window(hwnd)[1]
+        return 1
+
+    def GetWindowTextLengthW(self, hwnd):
+        return len(self._window(hwnd)[3])
+
+    def GetWindowTextW(self, hwnd, buf, size):
+        buf.value = self._window(hwnd)[3][:size - 1]
+        return len(buf.value)
+
+    def GetForegroundWindow(self):
+        return self.front
+
+
+def test_window_titles_put_the_foreground_window_first(monkeypatch):
+    windows = [(1, 101, True, "Почта - Google Chrome"),
+               (2, 999, True, "Чужое окно"),
+               (3, 101, False, "Скрытое"),
+               (4, 102, True, "Dion — Планёрка - Google Chrome")]
+    monkeypatch.setattr(watch, "_USER32", (_FakeUser32(windows, front=4), lambda fn: fn))
+    assert watch.window_titles({101, 102}) == ["Dion — Планёрка - Google Chrome", "Почта - Google Chrome"]
+
+
+def test_non_strict_title_comes_only_from_a_window_with_a_call_site(monkeypatch):
+    # на переднем плане окно без сайта — название записи берётся из окна со звонком
+    signals, _ = _browser_signals(monkeypatch, mic=True,
+                                  titles=["Почта - Google Chrome", "Телемост — Обзор - Google Chrome"])
+    signals.read(now=0)
+    assert signals.browser_call["title"] == "Телемост — Обзор"
+    signals2, _ = _browser_signals(monkeypatch, mic=True, titles=["Почта - Google Chrome"])
+    signals2.read(now=0)
+    assert signals2.browser_call == {"exe": "chrome.exe", "site": None, "title": None}

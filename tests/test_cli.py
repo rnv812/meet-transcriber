@@ -686,6 +686,7 @@ def _fake_merge_pipeline(monkeypatch, fail_transcribe=False):
     def fake_run(folder, bus=None, **kw):
         (folder / "sys.opus").write_bytes(b"m")
         (folder / "mic.opus").write_bytes(b"m")
+        library.update_meta(folder, lambda m: {**m, "merge": {**m["merge"], "state": "merged"}})
         return folder
 
     def fake_transcribe(path, speakers=None, hotwords=None, align=True, overlap=True, bus=None):
@@ -747,4 +748,63 @@ def test_merge_refuses_a_recording_in_progress(env, capsys, monkeypatch):
     (env["rec"] / LOCK_NAME).write_text(json.dumps({"pid": __import__("os").getpid(), "folder": str(b)}), encoding="utf-8")
     assert _main(["merge", a.name, b.name]) == 1
     assert "запись ещё идёт" in capsys.readouterr().err
+    assert not list(env["rec"].glob("*_merged*"))
+
+
+def test_merge_reports_originals_that_could_not_be_deleted(env, capsys, monkeypatch):
+    import shutil as _shutil
+
+    from meet import cli_library
+
+    _fake_merge_pipeline(monkeypatch)
+    a = _part(env, "2026-09-29_15-30")
+    b = _part(env, "2026-09-29_16-10")
+    real = _shutil.rmtree
+
+    def locked(path, *args, **kw):
+        if Path(path).name == b.name:
+            raise PermissionError(13, "файл занят другим процессом")
+        return real(path, *args, **kw)
+
+    monkeypatch.setattr(cli_library.shutil, "rmtree", locked)
+    assert _main(["merge", a.name, b.name, "--json"]) == 1
+    captured = capsys.readouterr()
+    got = json.loads(captured.out)
+    assert got["deleted"] == [a.name] and got["not_deleted"][0].startswith(b.name)
+    assert "не все исходные удалены" in captured.err
+    assert library.read_meta(Path(got["folder"]))["merge"]["state"] == "merged"  # не «завершено»
+
+
+def test_merge_keeps_originals_the_resident_is_working_on(env, capsys, monkeypatch):
+    from meet import control
+
+    _fake_merge_pipeline(monkeypatch)
+    a = _part(env, "2026-09-29_15-30")
+    b = _part(env, "2026-09-29_16-10")
+    jobs_now = []
+    monkeypatch.setattr(control, "request", lambda path, **kw: {"items": list(jobs_now)})
+    # при старте свободны; к удалению резидент взялся за итоги второй записи
+    import meet.transcribe
+
+    real = meet.transcribe.transcribe
+
+    def transcribe_and_busy(path, **kw):
+        jobs_now.append({"kind": "summary", "folder": str(b), "state": "running"})
+        return real(path, **kw)
+
+    monkeypatch.setattr(meet.transcribe, "transcribe", transcribe_and_busy)
+    assert _main(["merge", a.name, b.name]) == 1
+    assert a.exists() and b.exists()
+    assert "работает приложение" in capsys.readouterr().err
+
+
+def test_merge_refuses_what_the_resident_is_transcribing(env, capsys, monkeypatch):
+    from meet import control
+
+    a = _part(env, "2026-09-29_15-30")
+    b = _part(env, "2026-09-29_16-10")
+    monkeypatch.setattr(control, "request", lambda path, **kw: {"items": [
+        {"kind": "transcribe", "folder": str(a), "state": "queued"}]})
+    assert _main(["merge", a.name, b.name]) == 1
+    assert "работает приложение" in capsys.readouterr().err
     assert not list(env["rec"].glob("*_merged*"))

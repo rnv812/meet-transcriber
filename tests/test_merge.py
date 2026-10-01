@@ -323,3 +323,43 @@ def test_real_ffmpeg_concatenates_and_pads(tmp_path):
     merge.run(folder)
     for role in ("sys", "mic"):
         assert merge.probe_duration(folder / f"{role}.opus") == pytest.approx(3.0, abs=0.15)
+
+
+def test_failure_on_the_second_track_leaves_no_tracks_at_all(tmp_path, monkeypatch):
+    """sys.opus без mic.opus выглядел бы как запись, её бы расшифровали — и
+    удалили исходные. Поэтому подмена — только когда готовы все дорожки."""
+    monkeypatch.setattr(merge.shutil, "which", lambda name: name)
+    a = _recording(tmp_path, "2026-09-30_10-00")
+    b = _recording(tmp_path, "2026-09-30_10-30")
+    folder = merge.create(tmp_path, [a, b], keep_originals=False)
+    calls = []
+
+    def second_fails(cmd, **kw):
+        calls.append(cmd)
+        Path(cmd[-1]).write_bytes(b"part")
+        if len(calls) == 2:
+            raise KeyboardInterrupt  # отмена задачи посреди второй дорожки
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    with pytest.raises(KeyboardInterrupt):
+        merge.run(folder, run=second_fails, probe=lambda p: 10.0)
+    assert not list(folder.glob("*.opus")) and not list(folder.glob("*.part"))
+    assert merge.state(folder) == "pending"
+    assert library.describe(folder).tracks == {}
+
+
+def test_unfinished_tail_of_an_auto_recording_is_left_out(tmp_path, monkeypatch):
+    """Часть-автозапись с необрезанным хвостом: склеивается до конца разговора,
+    перерыв — от него же."""
+    monkeypatch.setattr(merge.shutil, "which", lambda name: name)
+    a = _recording(tmp_path, "2026-09-30_10-00", started=_at("2026-09-30T10:00:00"))
+    b = _recording(tmp_path, "2026-09-30_10-30", started=_at("2026-09-30T10:30:00"))
+    folder = merge.create(tmp_path, [a, b], keep_originals=False)
+    ends = {a.name: 900.0, b.name: None}  # у первой разговор кончился на 15-й минуте
+    run = FakeRun()
+    merge.run(folder, run=run, probe=lambda p: 1500.0, end=lambda f: ends[f.name])
+    parts = library.read_meta(folder)["parts"]
+    assert [p["duration_s"] for p in parts] == [900.0, 1500.0]
+    assert parts[1]["start_offset_s"] == 900.0
+    assert parts[1]["gap_s"] == 900.0  # 10:15 → 10:30, а не 10:25 → 10:30
+    assert "atrim=end=900.000" in run.calls[0][run.calls[0].index("-filter_complex") + 1]

@@ -14,12 +14,18 @@
 когда ответить нечем (ключа нет, pycaw не встал, COM отказал) — решение тогда
 принимается по оставшемуся сигналу, а не по домыслу.
 
-**Браузеры** (`browsers` в настройках) идут по своему правилу: звонок — только
-занятый микрофон. Воспроизведение у браузера не значит ничего — это любое видео
-или музыка. Строгий режим (`browser_require_site`) вдобавок требует, чтобы в
-заголовке одного из окон этого браузера был сайт звонка (`call_sites`). Окна
-перечисляются только пока браузер держит микрофон: в остальное время детектор
-стоит столько же, сколько без браузеров. Из заголовка окна берётся и начальное
+**Браузеры** (`browsers` в настройках) идут по своему правилу. Начинает звонок
+только микрофон, занятый браузером дольше BROWSER_MIN_MIC_S подряд (голосовой
+поиск и короткое голосовое сообщение запись не поднимают); воспроизведение
+звонка не начинает никогда — это любое видео или музыка. Строгий режим
+(`browser_require_site`) вдобавок требует, чтобы в заголовке одного из окон
+этого браузера был сайт звонка (`call_sites`). Начавшийся звонок «липкий»: он
+идёт, пока этот браузер держит микрофон **или** что-то воспроизводит, и сайт в
+заголовке для этого уже не нужен (человек переключил вкладку — звонок
+продолжается). Цена: веб-клиент на выключенном микрофоне может микрофон
+отпустить, и тогда запись держится только на звуке браузера — в том числе на
+видео другой вкладки после звонка. Окна перечисляются только пока браузер
+держит микрофон и звонок ещё не начался. Из заголовка окна берётся начальное
 название записи («Dion — Планёрка»).
 
 Стейт-машина (`Watcher`) отделена от чтения реестра и COM и принимает время
@@ -51,6 +57,9 @@ POLL_S = 2.0
 # почти всегда ловится микрофоном, а роль render'а — пережить мьют, где
 # несколько секунд задержки ничего не решают.
 RENDER_PERIOD_S = 6.0
+# Столько секунд подряд браузер должен держать микрофон, чтобы это сочлось
+# звонком: голосовой поиск и короткое голосовое сообщение — короче.
+BROWSER_MIN_MIC_S = 15.0
 # Начальное название записи из заголовка окна браузера — не длиннее этого.
 CALL_TITLE_MAX = 80
 # Заголовок окна в журнале — не длиннее этого: там бывает лишнее.
@@ -210,18 +219,25 @@ class Signals:
     Держит последнее значение render между опросами: перечисление сессий
     дорогое и подтекающее (см. RENDER_PERIOD_S), а микрофон читается дёшево.
 
-    Браузеры (`browsers`) — отдельно и только по микрофону (см. docstring
-    модуля). Подробности браузерного звонка последнего опроса — в
-    `browser_call` ({"exe", "site", "title"} или None), а почему занятый
-    браузером микрофон звонком не счёлся — в `browser_note` (для журнала)."""
+    Браузеры (`browsers`) — по своему правилу (см. docstring модуля).
+    Подробности браузерного звонка — в `browser_call` ({"exe", "site",
+    "title"} или None), а почему занятый браузером микрофон звонком (пока) не
+    счёлся — в `browser_note` (для журнала)."""
 
     def __init__(self, exe_names, render_period: float = RENDER_PERIOD_S,
                  log=None, browsers=(), require_site: bool = False,
-                 sites=()) -> None:
+                 sites=(), min_mic_s: float = BROWSER_MIN_MIC_S) -> None:
         self.exe_names = list(exe_names)
         self.browsers = list(browsers)
         self.require_site = bool(require_site)
         self.sites = list(sites)
+        self.min_mic_s = float(min_mic_s)
+        # Начавшийся звонок в браузере: держится, пока этот браузер слушает
+        # микрофон или что-то играет (см. _browser_continues).
+        self._browser_live: "dict | None" = None
+        self._mic_since: dict[str, float] = {}
+        self._browser_render = None
+        self._browser_render_at = None
         self.render_period = render_period
         self.log = log
         self._render = None
@@ -250,21 +266,36 @@ class Signals:
             # мид-звонком Дион означал бы «в звонке» до скончания века
             call = False
         self.browser_note = None
-        self.browser_call = self._browser() if self.browsers else None
+        self.browser_call = self._browser(now) if self.browsers else None
         if self.browser_call is not None:
             return True, True, render
         return call, mic, render
 
-    def _browser(self) -> "dict | None":
-        """Звонок в браузере: микрофон занят, процесс жив и (в строгом режиме)
-        в заголовке его окна есть сайт звонка. Окна перечисляются только здесь,
-        то есть только пока какой-то браузер держит микрофон."""
+    def _browser(self, now: float) -> "dict | None":
+        """Звонок в браузере. Начавшийся — продолжается по `_browser_continues`.
+        Новый: микрофон занят не меньше `min_mic_s` подряд, процесс жив и (в
+        строгом режиме) в заголовке его окна есть сайт звонка. Окна
+        перечисляются только здесь — пока браузер держит микрофон, а звонка
+        ещё нет."""
+        live = self._browser_live
+        if live is not None:
+            if self._browser_continues(live["exe"], now):
+                return live
+            self._browser_live = None
+            self._mic_since.pop(live["exe"], None)
         for name in self.browsers:
             if not mic_busy(name):
+                self._mic_since.pop(name, None)
                 continue
             pids = browser_pids(name)
             if pids is not None and not pids:
+                self._mic_since.pop(name, None)
                 continue  # метка в реестре от закрытого браузера
+            since = self._mic_since.setdefault(name, now)
+            if now - since < self.min_mic_s:
+                self.browser_note = (f"{name}: микрофон занят — звонок, если продержится "
+                                     f"{self.min_mic_s:g} с")
+                continue
             site = title = None
             for window in window_titles(pids) if pids else []:
                 found = match_site(window, self.sites)
@@ -275,8 +306,26 @@ class Signals:
                 self.browser_note = (
                     f"{name}: микрофон занят, сайта звонка в заголовках окон нет")
                 continue
-            return {"exe": name, "site": site, "title": title}
+            self._browser_live = {"exe": name, "site": site, "title": title}
+            self._browser_render = None
+            self._browser_render_at = None
+            return self._browser_live
         return None
+
+    def _browser_continues(self, name: str, now: float) -> bool:
+        """Идёт ли начавшийся звонок в браузере: процесс жив, и браузер держит
+        микрофон или что-то воспроизводит (веб-клиент на мьюте может
+        микрофон отпустить). Сайт в заголовке уже не нужен. Воспроизведение —
+        с той же редкой частотой, что у программ (RENDER_PERIOD_S)."""
+        pids = browser_pids(name)
+        if pids is not None and not pids:
+            return False
+        if mic_busy(name):
+            return True
+        if self._browser_render_at is None or now - self._browser_render_at >= self.render_period:
+            self._browser_render_at = now
+            self._browser_render = render_active(name, log=self.log)
+        return bool(self._browser_render)
 
     def _any_running(self) -> bool:
         for name in self.exe_names:
@@ -305,7 +354,8 @@ _PROFILE_TAIL = re.compile(
 )
 _SEPARATORS = " \t-–—|·:•"
 # Управляющие и невидимые символы (у Edge в имени — пробел нулевой ширины).
-_CONTROL = re.compile("[\x00-\x1f\x7f​-‏ -‮]")
+_CONTROL = re.compile(
+    "[\x00-\x1f\x7f\u200b-\u200f\u2028-\u202e\u2060-\u2064\ufeff]")
 
 
 def browser_pids(exe_name: str) -> "set[int] | None":
@@ -326,21 +376,58 @@ def browser_pids(exe_name: str) -> "set[int] | None":
     return found
 
 
+_USER32 = None
+
+
+def _user32():
+    """user32 со своими argtypes/restype: отдельный WinDLL, а не общий
+    `ctypes.windll.user32` — объявления не должны менять поведение чужого кода
+    (comtypes, pycaw) в том же процессе. Нет — None."""
+    global _USER32
+    if _USER32 is None:
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            u = ctypes.WinDLL("user32", use_last_error=True)
+            proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            u.EnumWindows.argtypes = [proc_type, wintypes.LPARAM]
+            u.EnumWindows.restype = wintypes.BOOL
+            u.IsWindowVisible.argtypes = [wintypes.HWND]
+            u.IsWindowVisible.restype = wintypes.BOOL
+            u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+            u.GetWindowThreadProcessId.restype = wintypes.DWORD
+            u.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+            u.GetWindowTextLengthW.restype = ctypes.c_int
+            u.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+            u.GetWindowTextW.restype = ctypes.c_int
+            u.GetForegroundWindow.argtypes = []
+            u.GetForegroundWindow.restype = wintypes.HWND
+            _USER32 = (u, proc_type)
+        except Exception:
+            _USER32 = False
+    return _USER32 or None
+
+
 def window_titles(pids) -> "list[str]":
-    """Заголовки видимых окон верхнего уровня, принадлежащих процессам `pids`.
+    """Заголовки видимых окон верхнего уровня, принадлежащих процессам `pids`,
+    от самого свежего к старым: сначала окно на переднем плане, затем в
+    Z-порядке (его EnumWindows и отдаёт). Чьё окно — того процесса, что
+    держит микрофон, узнать нельзя: у Chromium микрофон слушает служебный
+    процесс без окон. Поэтому берётся окно, с которым человек работал
+    последним, — звонок обычно там.
 
     EnumWindows через ctypes: без новых зависимостей и дёшево (~мс). Сбой —
-    пустой список: сайт тогда не определён (в строгом режиме это «не звонок»)."""
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        user32 = ctypes.windll.user32
-    except Exception:
+    пустой список: сайт тогда не определён."""
+    loaded = _user32()
+    if loaded is None:
         return []
+    import ctypes
+    from ctypes import wintypes
+
+    user32, proc_type = loaded
     wanted = set(pids)
-    titles: list[str] = []
-    proc_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    found: list[tuple[int, str]] = []
 
     def visit(hwnd, _param):
         try:
@@ -356,16 +443,18 @@ def window_titles(pids) -> "list[str]":
             buf = ctypes.create_unicode_buffer(length + 1)
             user32.GetWindowTextW(hwnd, buf, length + 1)
             if buf.value:
-                titles.append(buf.value)
+                found.append((hwnd or 0, buf.value))
         except Exception:
             pass
         return True
 
     try:
         user32.EnumWindows(proc_type(visit), 0)
+        front = user32.GetForegroundWindow() or 0
     except Exception:
         return []
-    return titles
+    found.sort(key=lambda item: item[0] != front)  # стабильно: остальное — в Z-порядке
+    return [title for _, title in found]
 
 
 def match_site(title: str, sites) -> "str | None":

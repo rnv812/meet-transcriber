@@ -872,3 +872,15 @@ def test_browser_note_is_logged_once_per_change(monkeypatch, tmp_path):
     app._watch_tick()
     log = (tmp_path / "meet" / "watch.log").read_text("utf-8")
     assert log.count("сайта звонка в заголовках окон нет") == 1
+
+
+def test_auto_stop_remembers_when_the_call_signal_ended(monkeypatch, tmp_path):
+    app = _app(monkeypatch, tmp_path)
+    app.recording = True
+    app.source = tray.AUTO
+    app.started = 100.0
+    app._call_end = 400.0  # монотонные часы: сигнал пропал за 600 с до остановки
+    monkeypatch.setattr(app, "stop_recording", lambda hook=True: None)
+    monkeypatch.setattr(tray.time, "time", lambda: 50_000.0)
+    app._auto_stop(now=1000.0)
+    assert app.call_end_at == 49_400.0

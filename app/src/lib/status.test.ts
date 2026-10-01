@@ -96,3 +96,9 @@ test("объединение: сборка звука — ступень «Об�
     .toEqual({ kind: "failed", error: "Исходная запись пропала", retry: "transcribe" });
   expect(statusOf(r, [], null)).toEqual({ kind: "failed", error: "Объединение прервано", retry: "transcribe" });
 });
+
+test("объединение, сорванное посередине: дорожки лежат, но шаг «pending» — повторить сборку", () => {
+  const r = rec({ id: "m", path: "C:/r/m", source: "merge", tracks: { sys: "s" },
+                  merge: { parts: 2, state: "pending", deleted: false, kb_left: [] } });
+  expect(statusOf(r, [], null)).toEqual({ kind: "failed", error: "Объединение прервано", retry: "transcribe" });
+});

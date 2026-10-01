@@ -391,13 +391,44 @@ class TrayControl:
                                     else {**meta, "title": title})
             except Exception as e:
                 self.tray.log(f"название записи не сохранено ({path.name}): {e}")
-        if not full or not settings.load().recording.auto_transcribe:
-            return
+        transcribe = full and settings.load().recording.auto_transcribe
+        call_end = getattr(self.tray, "call_end_at", None) if source == AUTO else None
+        if call_end:
+            # Автозапись дождалась конца ожидания: в хвосте — минуты фона.
+            # Обрезаем в фоне (ffmpeg) и только потом ставим расшифровку.
+            try:
+                from meet import tail
+
+                tail.write_call_end(path, call_end, self.tray.cfg["grace_minutes"] * 60.0)
+            except Exception as e:
+                self.tray.log(f"конец звонка не записан ({path.name}): {e}")
+            else:
+                self._background(lambda: self._trim_then_queue(path, transcribe))
+                return
+        if transcribe:
+            self._queue_transcription(path)
+
+    def _queue_transcription(self, path: Path) -> None:
         job, created = self._submit_once(jobs.TRANSCRIBE, path)
         if created:
             self.tray.log(f"расшифровка поставлена в очередь: {path.name} ({job.id})")
         else:
             self.tray.log(f"расшифровка уже в очереди: {path.name} ({job.id})")
+
+    def _trim_then_queue(self, path: Path, transcribe: bool) -> None:
+        """Обрезать хвост автозаписи (meet.tail), затем — расшифровка. Сбой
+        обрезки — запись остаётся целой и всё равно расшифровывается."""
+        from meet import tail
+
+        try:
+            cut = tail.trim(path)
+        except Exception as e:
+            self.tray.log(f"хвост записи не обрезан ({path.name}): {e}")
+        else:
+            if cut is not None:
+                self.tray.log(f"хвост записи без разговора обрезан: {path.name}, осталось {cut:.0f} с")
+        if transcribe:
+            self._queue_transcription(path)
 
     def _remember_levels(self, event) -> None:
         """Последние уровни дорожек и подмены устройств — чтобы снимок
@@ -742,9 +773,14 @@ class TrayControl:
         self._remove(folder)
         return {"ok": True}
 
-    def _busy_reason(self, folder: Path) -> str | None:
-        """Почему запись сейчас нельзя удалить или объединить; None — можно."""
+    def _busy_reason(self, folder: Path, merging: Path | None = None) -> str | None:
+        """Почему запись сейчас нельзя удалить или объединить; None — можно.
+        `merging` — объединённая запись, чьи исходные удаляем: её собственное
+        «эта запись — часть объединения» не считается."""
         folder = Path(folder).resolve()
+        owner = self._merge_owner(folder, merging)
+        if owner is not None:
+            return f"запись входит в объединение «{owner}», которое ещё не завершено"
         if (self.tray.recording
                 and Path(self.tray._current_folder()).resolve() == folder):
             return "запись ещё идёт"
@@ -762,6 +798,12 @@ class TrayControl:
         if self.llm_queue.active_for(str(folder), (jobs.SUMMARY, jobs.ASK)):
             return "Идёт работа модели — отмените или дождитесь"
         return None
+
+    @staticmethod
+    def _merge_owner(folder: Path, ignore: Path | None) -> str | None:
+        from meet import merge
+
+        return merge.unfinished_owner(folder, ignore)
 
     def _remove(self, folder: Path) -> None:
         """Удалить папку записи. Плеер карточки мог только что запросить
@@ -834,13 +876,17 @@ class TrayControl:
         from meet import merge
 
         info = self._merge_info(folder)
-        if info is None or info.get("state") == "done":
+        if info is None or info.get("state") != "merged":
+            # "done" — уже обработано; "pending" — звук не собран до конца:
+            # исходные — единственная полная копия, их не трогаем.
+            if info is not None and info.get("state") == "pending":
+                self.tray.log(f"объединение не завершено — исходные записи не удаляю: {folder.name}")
             return
         deleted: list[str] = []
         kept_reason = None
         if not info.get("keep_originals"):
             sources = merge.originals(folder)
-            busy = [(f.name, r) for f in sources if (r := self._busy_reason(f))]
+            busy = [(f.name, r) for f in sources if (r := self._busy_reason(f, merging=folder))]
             if busy:
                 kept_reason = f"{busy[0][0]}: {busy[0][1]}"
                 self.tray.log(f"исходные записи не удалены ({folder.name}): {kept_reason}")
@@ -1138,8 +1184,11 @@ class TrayControl:
         kind = jobs.TRANSCRIBE
         if card and not card.tracks and card.source == "import":
             kind = jobs.IMPORT
-        elif card and not card.tracks and card.source == "merge":
-            kind = jobs.MERGE  # сборка звука не удалась или прервана — повторить её
+        elif card and card.source == "merge" and (
+                not card.tracks or (card.merge or {}).get("state") == "pending"):
+            # Звук не собран или сборка сорвана посередине (дорожки могут
+            # лежать, но неполные) — повторить сборку, а не расшифровывать.
+            kind = jobs.MERGE
         job, _ = self._submit_once(kind, folder, options)
         return job.to_raw()
 

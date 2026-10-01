@@ -108,7 +108,8 @@ def _duration_from_events(folder: Path) -> float | None:
             event = json.loads(line)
         except ValueError:
             continue
-        if event.get("kind") == "record.stopped":
+        # обрезанный хвост (meet.tail) пишется позже остановки — он и главный
+        if event.get("kind") in ("record.stopped", "record.trimmed"):
             value = event.get("duration_s")
             return float(value) if isinstance(value, (int, float)) else None
     return None

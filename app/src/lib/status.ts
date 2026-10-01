@@ -67,8 +67,9 @@ export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null)
   const mine = jobsOf(rec, jobs);
   const noTracks = Object.keys(rec.tracks ?? {}).length === 0;
   const isImport = rec.source === "import" && noTracks;
-  // Объединённая встреча, звук которой ещё не собран (или сборка не удалась).
-  const isMerging = rec.source === "merge" && noTracks;
+  // Объединённая встреча, звук которой ещё не собран (или сборка не удалась —
+  // тогда дорожки могут и лежать, но неполные: шаг остаётся «pending»).
+  const isMerging = rec.source === "merge" && (noTracks || rec.merge?.state === "pending");
 
   if (snapshot?.status === "recording" && snapshot.folder && norm(snapshot.folder) === norm(rec.path))
     return { kind: "recording" };

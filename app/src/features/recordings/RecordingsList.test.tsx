@@ -287,3 +287,14 @@ test("ошибка объединения — текстом резидента"
   await user.click(screen.getByRole("button", { name: "Объединить (2)" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("2026-09-30_10-00: запись ещё идёт");
 });
+
+test("подсказка объединения предупреждает про имена спикеров, заданные вручную", async () => {
+  setup({ library: pickLib, selected: "d" });
+  const user = userEvent.setup();
+  await user.keyboard("{Control>}");
+  await user.click(mainOf("Вторая часть"));
+  await user.keyboard("{/Control}");
+  const tip = screen.getByRole("button", { name: "Как объединяются встречи" });
+  await user.click(tip);
+  expect(tip).toHaveAccessibleDescription(/заново определяются по базе голосов/);
+});
