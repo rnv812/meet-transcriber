@@ -10,10 +10,11 @@
  * следующее / предыдущее, Esc — очистить и вернуть фокус, где он был.
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { findHits, parseQuery, prepare } from "../../lib/search";
 import type { Turn } from "../../lib/speakers";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { TranscriptShown } from "./transcriptShown";
 import { Turns, type PersonColor, type TurnMarks } from "./Turns";
 
 export const FIND_DELAY_MS = 150;
@@ -33,6 +34,7 @@ function hitAt(turns: Turn[], hits: { turn: number }[], t: number): number {
 }
 
 const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
 
 export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker, find }: {
   turns: Turn[];
@@ -97,6 +99,7 @@ export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker,
   }, [hits, turns, query, jump]);
 
   // Текущее совпадение: выделить сильнее и прокрутить к нему (по центру).
+  const unscrolled = useRef(false);
   useLayoutEffect(() => {
     const root = box.current;
     if (!root) return;
@@ -105,8 +108,21 @@ export function TranscriptView({ turns, colors, playable, onPlay, onNameSpeaker,
     const el = root.querySelector(`[data-hit="${current}"]`);
     if (!el) return;
     el.classList.add("hit--current");
-    el.scrollIntoView?.({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
+    // Панель скрыта (открыты «Итоги» или «Вопросы») — прокрутим, когда её покажут.
+    unscrolled.current = el.closest("[hidden]") !== null;
+    if (!unscrolled.current) scrollTo(el);
   }, [current, hits, jump]);
+
+  // «Расшифровку» показали: досказать отложенную прокрутку (только её — ручное
+  // переключение вкладок прокрутку не трогает).
+  const shown = useContext(TranscriptShown);
+  useLayoutEffect(() => {
+    if (!unscrolled.current) return;
+    const el = box.current?.querySelector(".hit--current");
+    if (!el || el.closest("[hidden]")) return;
+    unscrolled.current = false;
+    scrollTo(el);
+  }, [shown]);
 
   const step = (by: number) => {
     if (!hits.length) return;

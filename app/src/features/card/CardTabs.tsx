@@ -6,12 +6,13 @@
  * запрашиваются у тех, кто их не открывал.
  */
 
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { Endpoint } from "../../lib/api";
 import type { Job } from "../../lib/types";
 import { useAssistant } from "./assistant";
 import { QaTab } from "./QaTab";
 import { SummaryTab } from "./SummaryTab";
+import { TranscriptShown } from "./transcriptShown";
 import "./assistant.css";
 
 type Tab = "transcript" | "summary" | "qa";
@@ -45,6 +46,13 @@ export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSetting
     setTab(next);
     setOpened((cur) => (cur.has(next) ? cur : new Set(cur).add(next)));
   };
+
+  // Показы «Расшифровки»: отложенная (пока панель была скрыта) прокрутка к
+  // совпадению идёт на следующем показе — layout-эффект, до отрисовки кадра.
+  const [shown, setShown] = useState(0);
+  useLayoutEffect(() => {
+    if (tab === "transcript") setShown((n) => n + 1);
+  }, [tab]);
 
   // Просьба из списка (фрагмент поиска) — на «Расшифровку», с какой бы вкладки ни были.
   const lastShow = useRef(showTranscript);
@@ -88,7 +96,7 @@ export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSetting
 
   const shared = { endpoint, id, folder, jobs, assistant, onOpenSettings };
   const panels: Record<Tab, () => ReactNode> = {
-    transcript: () => transcript,
+    transcript: () => <TranscriptShown.Provider value={shown}>{transcript}</TranscriptShown.Provider>,
     summary: () => <SummaryTab {...shared} />,
     qa: () => <QaTab {...shared} />,
   };

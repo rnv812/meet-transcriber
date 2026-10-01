@@ -175,3 +175,33 @@ test("перерыв объединённой встречи — раздели�
   await vi.waitFor(() => expect(counter()).toHaveTextContent(/0|Не найдено|нет/i));
   expect(container.querySelectorAll("mark.hit")).toHaveLength(0);
 });
+
+test("переход из списка на «Итогах»: прокрутка к совпадению — когда «Расшифровка» уже видна", async () => {
+  // Просьба может дойти до расшифровки раньше, чем вкладки переключатся (`show` — отдельно).
+  const Card = ({ find, show }: { find: { q: string; t: number | null; n: number }; show: number }) => (
+    <CardTabs endpoint={{ base: "/api", token: null }} id="r" folder="C:/r" jobs={[]} showTranscript={show}
+      transcript={<TranscriptView turns={TURNS} colors={new Map()} playable onPlay={() => {}} find={find} />} />
+  );
+  const calls: { text: string | null; hidden: boolean }[] = [];
+  const original = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+    calls.push({ text: this.textContent, hidden: this.closest("[hidden]") !== null });
+  });
+  try {
+    const { rerender } = render(<Card find={{ q: "бюджет", t: 0, n: 1 }} show={1} />);
+    await userEvent.click(screen.getByRole("tab", { name: "Итоги" }));
+    calls.length = 0;
+    rerender(<Card find={{ q: "бюджет", t: 30, n: 2 }} show={1} />);
+    await vi.waitFor(() => expect(counter()).toHaveTextContent("2 из 3"));
+    expect(calls).toEqual([]); // панель скрыта — прокручивать нечего
+    rerender(<Card find={{ q: "бюджет", t: 30, n: 2 }} show={2} />);
+    expect(screen.getByRole("tab", { name: "Расшифровка" })).toHaveAttribute("aria-selected", "true");
+    await vi.waitFor(() => expect(calls).toEqual([{ text: "Бюджет", hidden: false }]));
+    // Дальше вкладку переключают руками — прокрутка не прыгает к совпадению.
+    await userEvent.click(screen.getByRole("tab", { name: "Итоги" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Расшифровка" }));
+    expect(calls).toHaveLength(1);
+  } finally {
+    Element.prototype.scrollIntoView = original;
+  }
+});
