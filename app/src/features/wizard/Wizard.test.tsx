@@ -379,6 +379,11 @@ test("CPU-версия тоже не влезает — неактивна", () 
   expect(screen.getByRole("button", { name: "Установить CPU-версию (3 ГБ)" })).toBeDisabled();
 });
 
+test("пакеты уже в кэше — место под CPU-версию берётся у оболочки", () => {
+  show({ start: "engine", engine: engine({ free_gb: 1.5, needs_gb: 5, needs_cpu_gb: 1 }) });
+  expect(screen.getByRole("button", { name: "Установить CPU-версию (1 ГБ)" })).toBeEnabled();
+});
+
 test("идёт установка — «Пропустить мастер» неактивна с подсказкой", async () => {
   vi.mocked(shell.installEngine).mockImplementation(() => new Promise<void>(() => {}));
   show({ start: "engine" });

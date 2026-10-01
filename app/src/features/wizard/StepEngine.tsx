@@ -22,7 +22,7 @@ import { driveOf, freeSpaceShortfall, gb } from "./gate";
 
 /** Строк лога в памяти: uv многословен, хвоста хватает. */
 const MAX_LINES = 400;
-/** Место под CPU-версию — как `NEEDS_CPU_GB` в engine.rs (оболочка отдаёт только для профиля по видеокарте). */
+/** Место под CPU-версию, если оболочка его не прислала (`needs_cpu_gb`), — как `NEEDS_CPU_GB` в engine.rs. */
 export const NEEDS_CPU_GB = 3;
 
 type Progress = { step: number; of: number; titles: Record<number, string>; lines: string[] };
@@ -145,7 +145,8 @@ export function StepEngine({ engine, profile, recording, onRefresh, onPhase, onN
   };
 
   const shortfall = freeSpaceShortfall(engine.needs_gb, engine.free_gb);
-  const cpuShortfall = freeSpaceShortfall(NEEDS_CPU_GB, engine.free_gb);
+  const cpuNeeds = engine.needs_cpu_gb ?? NEEDS_CPU_GB;
+  const cpuShortfall = freeSpaceShortfall(cpuNeeds, engine.free_gb);
   const drive = driveOf(engine.env_dir);
   const installed = phase === "done" || (phase === "idle" && engine.installed);
   // «Повторить» — тем же профилем, что и упавшая попытка.
@@ -224,7 +225,7 @@ export function StepEngine({ engine, profile, recording, onRefresh, onPhase, onN
           <button type="button" className="wizard__link" onClick={() => void run(false, "cpu")}
             disabled={recording || cpuShortfall !== null}
             title="Расшифровка на процессоре — медленнее, зато движок меньше">
-            Установить CPU-версию ({NEEDS_CPU_GB} ГБ)
+            Установить CPU-версию ({gb(cpuNeeds)} ГБ)
           </button>
         )}
       </div>

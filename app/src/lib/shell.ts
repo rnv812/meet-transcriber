@@ -79,7 +79,10 @@ export type EngineStatus = {
   gpu: string | null;
   /** Свободно на диске с данными, ГБ; null — узнать нельзя (не блокируем). */
   free_gb: number | null;
+  /** Место под профиль по видеокарте; меньше, когда пакеты уже в кэше uv. */
   needs_gb: number;
+  /** То же для CPU-версии; старая оболочка не присылает. */
+  needs_cpu_gb?: number;
 };
 /** Событие `engine-progress`: первая строка шага — его название. */
 export type EngineProgress = { step: number; of: number; line: string };

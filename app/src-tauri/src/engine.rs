@@ -203,6 +203,109 @@ pub fn needs_gb(profile: &str) -> f64 {
     }
 }
 
+/// Места, когда тяжёлое уже лежит в кэше uv на том же диске: окружение
+/// собирается жёсткими ссылками на кэш, новое на диске — мелочь. Без этого
+/// повтор после сбоя, переустановка и обновление на тесном диске упирались
+/// бы в те же 8 ГБ, хотя гигабайты уже скачаны и заняты кэшем.
+const WARM_NEEDS_GB: f64 = 1.0;
+
+pub fn needs_for(profile: &str, warm: bool) -> f64 {
+    if warm {
+        WARM_NEEDS_GB
+    } else {
+        needs_gb(profile)
+    }
+}
+
+/// Кэш uv, которым пользуется установка: `UV_CACHE_DIR`, иначе умолчание uv
+/// на Windows — `%LOCALAPPDATA%\uv\cache` (uv.toml установка не читает:
+/// `UV_NO_CONFIG`).
+pub fn uv_cache_dir(
+    env_override: Option<&OsStr>,
+    local_app_data: Option<&OsStr>,
+) -> Option<PathBuf> {
+    match env_override.filter(|dir| !dir.is_empty()) {
+        Some(dir) => Some(PathBuf::from(dir)),
+        None => local_app_data
+            .filter(|dir| !dir.is_empty())
+            .map(|dir| Path::new(dir).join("uv").join("cache")),
+    }
+}
+
+/// В кэше uv — распакованный torch сборки профиля (`+cu…` или `+cpu`):
+/// `wheels-v*\index\*\torch\2.11.0+cu128-cp312-…`. Этот файл-указатель uv
+/// пишет после распаковки колеса; `.http`, `.msgpack`, `.lock` рядом —
+/// метаданные и замки, они бывают и у недокачанного.
+pub fn cache_has_torch(cache: &Path, profile: &str) -> bool {
+    let tag = if profile == "cuda" { "+cu" } else { "+cpu" };
+    let dirs = |dir: &Path| -> Vec<PathBuf> {
+        fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    dirs(cache)
+        .into_iter()
+        .filter(|dir| {
+            dir.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("wheels-v"))
+        })
+        .flat_map(|wheels| dirs(&wheels.join("index")))
+        .flat_map(|index| dirs(&index.join("torch")))
+        .any(|entry| {
+            let name = entry
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            entry.is_file()
+                && name.contains(tag)
+                && ![".http", ".msgpack", ".lock"]
+                    .iter()
+                    .any(|suffix| name.ends_with(suffix))
+        })
+}
+
+/// Один ли том у двух путей (жёсткие ссылки — только в пределах тома):
+/// сравниваются буквы дисков или корни UNC.
+pub fn same_volume(a: &Path, b: &Path) -> bool {
+    use std::path::Component;
+    match (a.components().next(), b.components().next()) {
+        (Some(Component::Prefix(x)), Some(Component::Prefix(y))) => {
+            x.as_os_str().eq_ignore_ascii_case(y.as_os_str())
+        }
+        _ => false,
+    }
+}
+
+/// Законченный движок профиля (любой версии) в `engine`: его файлы —
+/// жёсткие ссылки на кэш uv, новый движок того же профиля встанет почти
+/// без нового места.
+fn profile_env_present(engine_root: &Path, profile: &str) -> bool {
+    stale_envs(engine_root, "")
+        .iter()
+        .filter(|env| launcher(env).is_file())
+        .any(|env| read_marker(env).is_some_and(|marker| marker.profile == profile))
+}
+
+/// Сколько места нужно под движок профиля с учётом уже скачанного.
+pub fn space_needed(data_dir: &Path, profile: &str, cache: Option<&Path>) -> f64 {
+    let warm = profile_env_present(&engine_root(data_dir), profile)
+        || cache
+            .is_some_and(|cache| same_volume(cache, data_dir) && cache_has_torch(cache, profile));
+    needs_for(profile, warm)
+}
+
+fn current_uv_cache() -> Option<PathBuf> {
+    uv_cache_dir(
+        std::env::var_os("UV_CACHE_DIR").as_deref(),
+        std::env::var_os("LOCALAPPDATA").as_deref(),
+    )
+}
+
 /// Профиль по видеокарте: NVIDIA видна — cuda, иначе cpu.
 pub fn profile_for(gpu: Option<&str>) -> &'static str {
     if gpu.is_some() {
@@ -905,9 +1008,12 @@ pub fn install_with(app: &AppHandle, profile: &str, mode: InstallMode) -> Result
     result
 }
 
-/// Хватит ли места на диске с данными под профиль; не узнать — не мешаем.
+/// Хватит ли места на диске с данными под профиль (с учётом кэша uv); не
+/// узнать — не мешаем. Ошибся в меньшую сторону — uv упадёт с «нет места»,
+/// и это будет в хвосте лога.
 fn check_space(data_dir: &Path, profile: &str) -> Result<(), String> {
-    match free_gb(data_dir).and_then(|free| space_error(needs_gb(profile), free)) {
+    let needs = space_needed(data_dir, profile, current_uv_cache().as_deref());
+    match free_gb(data_dir).and_then(|free| space_error(needs, free)) {
         Some(error) => Err(error),
         None => Ok(()),
     }
@@ -1149,8 +1255,11 @@ pub struct EngineStatus {
     /// Свободно на диске с данными, ГБ (вниз до десятой); `None` — узнать
     /// не удалось (тогда установку не блокируем).
     pub free_gb: Option<f64>,
-    /// Нужно места под профиль, который подсказывает видеокарта.
+    /// Нужно места под профиль, который подсказывает видеокарта (меньше,
+    /// если пакеты уже в кэше uv — `space_needed`).
     pub needs_gb: f64,
+    /// То же для CPU-версии (запасной путь мастера для владельцев NVIDIA).
+    pub needs_cpu_gb: f64,
 }
 
 pub fn status(app: &AppHandle) -> EngineStatus {
@@ -1163,12 +1272,14 @@ pub fn status(app: &AppHandle) -> EngineStatus {
         .flatten()
         .map(|marker| marker.profile);
     let gpu = detect_gpu();
+    let cache = current_uv_cache();
     EngineStatus {
         installed,
         version,
         env_dir: env.to_string_lossy().into_owned(),
         profile,
-        needs_gb: needs_gb(profile_for(gpu.as_deref())),
+        needs_gb: space_needed(&data, profile_for(gpu.as_deref()), cache.as_deref()),
+        needs_cpu_gb: space_needed(&data, "cpu", cache.as_deref()),
         gpu,
         free_gb: free_gb(&data).map(|gb| (gb * 10.0).floor() / 10.0),
     }
@@ -1483,6 +1594,92 @@ mod tests {
             &marker("0.0.9", "cpu", "2026-10-09"),
         );
         assert_eq!(previous_profile(&tree.0, "0.2.0"), None);
+    }
+
+    #[test]
+    fn uv_cache_is_the_override_or_the_local_app_data_default() {
+        let local = Some(OsStr::new(r"C:\Users\u\AppData\Local"));
+        assert_eq!(
+            uv_cache_dir(None, local),
+            Some(PathBuf::from(r"C:\Users\u\AppData\Local\uv\cache"))
+        );
+        assert_eq!(
+            uv_cache_dir(Some(OsStr::new(r"D:\uvc")), local),
+            Some(PathBuf::from(r"D:\uvc"))
+        );
+        assert_eq!(
+            uv_cache_dir(Some(OsStr::new("")), local),
+            uv_cache_dir(None, local)
+        );
+        assert_eq!(uv_cache_dir(None, None), None);
+    }
+
+    #[test]
+    fn cached_torch_is_recognised_by_its_unpacked_pointer_of_the_profile_build() {
+        let cache = TempDir::new("uvcache");
+        let torch = r"wheels-v6\index\d2bd0b84f216183d\torch";
+        assert!(!cache_has_torch(&cache.0, "cuda"), "пустой кэш");
+        // Скачивание начато, но не закончено: только замок и метаданные.
+        cache.file(
+            &format!(r"{torch}\torch-2.11.0+cu128-cp312-cp312-win_amd64.lock"),
+            "",
+        );
+        cache.file(
+            &format!(r"{torch}\2.11.0+cu128-cp312-cp312-win_amd64.msgpack"),
+            "",
+        );
+        assert!(!cache_has_torch(&cache.0, "cuda"));
+        cache.file(&format!(r"{torch}\2.11.0+cu128-cp312-cp312-win_amd64"), "x");
+        assert!(cache_has_torch(&cache.0, "cuda"));
+        assert!(!cache_has_torch(&cache.0, "cpu"), "CUDA-сборка — не CPU");
+        cache.file(
+            r"wheels-v5\index\09e0bc338403d139\torch\2.11.0+cpu-cp312-cp312-win_amd64",
+            "x",
+        );
+        assert!(cache_has_torch(&cache.0, "cpu"));
+        assert!(!cache_has_torch(&cache.0.join("missing"), "cuda"));
+    }
+
+    #[test]
+    fn hard_links_need_the_same_volume() {
+        assert!(same_volume(
+            Path::new(r"C:\Users\u\AppData\Local\uv\cache"),
+            Path::new(r"c:\Users\u\AppData\Local\meet")
+        ));
+        assert!(!same_volume(Path::new(r"D:\uvc"), Path::new(r"C:\meet")));
+        assert!(!same_volume(Path::new("relative"), Path::new(r"C:\meet")));
+    }
+
+    #[test]
+    fn space_need_drops_when_the_heavy_part_is_already_on_disk() {
+        let data = TempDir::new("space-data");
+        let root = data.0.join("engine");
+        let cache = data.0.join("uvcache");
+        // Ничего не скачано — полный объём.
+        assert_eq!(space_needed(&data.0, "cuda", Some(&cache)), 8.0);
+        assert_eq!(space_needed(&data.0, "cpu", None), 3.0);
+        // torch профиля в кэше на том же диске (повтор после сбоя,
+        // переустановка) — немного.
+        data.file(
+            r"uvcache\wheels-v6\index\x\torch\2.11.0+cu128-cp312-cp312-win_amd64",
+            "x",
+        );
+        assert_eq!(space_needed(&data.0, "cuda", Some(&cache)), 1.0);
+        assert_eq!(space_needed(&data.0, "cpu", Some(&cache)), 3.0);
+        // Кэш на другом диске — ссылками не обойтись.
+        assert_eq!(
+            space_needed(&data.0, "cuda", Some(Path::new(r"Q:\uvcache"))),
+            8.0
+        );
+        // Законченный движок того же профиля (прежняя версия) — немного.
+        data.file(r"engine\0.1.0\Scripts\meet-tray.exe", "");
+        data.file(
+            r"engine\0.1.0\installed.json",
+            &marker_json("0.1.0", "cpu", "t", None),
+        );
+        assert_eq!(space_needed(&data.0, "cpu", None), 1.0);
+        assert_eq!(space_needed(&data.0, "cuda", None), 8.0);
+        assert!(root.is_dir());
     }
 
     #[test]
