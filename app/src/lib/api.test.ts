@@ -151,3 +151,18 @@ test("hf: статус, удаление и перепроверка — сво�
     ["http://h/hf/status", "GET"], ["http://h/hf/token", "DELETE"], ["http://h/hf/check", "POST"],
   ]);
 });
+
+test("recheckHf: тот же предел 15 секунд, что и у сохранения", async () => {
+  vi.useFakeTimers();
+  try {
+    globalThis.fetch = vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_, reject) => {
+      init.signal!.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    })) as unknown as typeof fetch;
+    const pending = api.recheckHf(ep);
+    const check = expect(pending).rejects.toThrow("Проверка не ответила за 15 секунд — попробуйте ещё раз");
+    await vi.advanceTimersByTimeAsync(api.HF_TIMEOUT_MS);
+    await check;
+  } finally {
+    vi.useRealTimers();
+  }
+});

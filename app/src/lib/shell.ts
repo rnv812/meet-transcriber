@@ -145,6 +145,15 @@ export async function probeCommand(call: () => Promise<unknown>): Promise<boolea
   }
 }
 
+/**
+ * Умеет ли оболочка автозапуск. IMPORTANT — контракт с оболочкой:
+ * * `set_autostart` обязан принимать `enabled: bool` как ОБЯЗАТЕЛЬНЫЙ аргумент:
+ *   проба зовёт команду без аргументов, и с необязательным `enabled` она бы
+ *   выполнилась (переключила автозапуск) вместо отказа;
+ * * проба опирается на то, что у команд приложения нет манифеста прав (ACL в
+ *   build.rs): с ним неразрешённая команда отвечала бы «… not allowed», и
+ *   проба сочла бы её существующей.
+ */
 export async function autostartAvailable(): Promise<boolean> {
   if (!inTauri()) return false;
   return probeCommand(() => invoke("set_autostart"));

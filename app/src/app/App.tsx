@@ -69,7 +69,7 @@ export function App() {
   if (gate.wizard) {
     return (
       <Wizard start={gate.wizard} engine={gate.engine} endpoint={resident.endpoint ?? null} recording={recording}
-        onEngineChanged={() => void gate.refreshEngine()} onClose={gate.close} />
+        onRefreshEngine={gate.refreshEngine} onInstallStarted={gate.installStarted} onClose={gate.close} />
     );
   }
 
@@ -117,7 +117,7 @@ export function App() {
             ) : section === "settings" && resident.endpoint ? (
               <SettingsPane endpoint={resident.endpoint} recordingsDir={resident.snapshot?.recordings_dir ?? null}
                 initial={settingsPart?.part} initialTick={settingsPart?.n}
-                onRunWizard={() => gate.open("hardware")} />
+                onRunWizard={(step) => gate.open(step ?? "hardware")} />
             ) : selected && resident.endpoint ? (
               <RecordingCard
                 key={selected}

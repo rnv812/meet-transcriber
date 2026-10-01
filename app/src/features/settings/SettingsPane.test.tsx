@@ -181,7 +181,7 @@ test("«Движок и модели»: кнопка «Запустить мас
   const onRunWizard = vi.fn();
   await openEngine({ onRunWizard });
   await userEvent.click(await screen.findByRole("button", { name: "Запустить мастер" }));
-  expect(onRunWizard).toHaveBeenCalled();
+  expect(onRunWizard).toHaveBeenCalledWith("hardware");
 });
 
 test("движок не загрузился — сообщение без «Error:»", async () => {
@@ -189,4 +189,22 @@ test("движок не загрузился — сообщение без «Err
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   await userEvent.click(await screen.findByRole("button", { name: "Движок и модели" }));
   expect(await screen.findByText("Движок не загрузился: нет python")).toBeInTheDocument();
+});
+
+const engineState: api.EngineState = {
+  installed: true, missing: [], flavor: "cuda", download_gb: 3, python: "3.12", target: "C:\meet\engine\0.1.0",
+  ffmpeg: true, gpu: { available: true, name: "RTX 5070 Ti" },
+  components: [{ module: "torch", title: "PyTorch", installed: true }],
+};
+
+test("движок: только сведения; переустановка — через мастер на шаге движка, без установки резидентом", async () => {
+  vi.mocked(api.getEngine).mockResolvedValue(structuredClone(engineState));
+  const onRunWizard = vi.fn();
+  await openEngine({ onRunWizard });
+  expect(await screen.findByText("установлен")).toBeInTheDocument();
+  expect(screen.getByText("PyTorch")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Установить движок" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Переустановить" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Переустановить движок" }));
+  expect(onRunWizard).toHaveBeenCalledWith("engine");
 });

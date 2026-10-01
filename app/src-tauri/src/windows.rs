@@ -446,14 +446,29 @@ pub async fn open_url(url: String) -> Result<(), String> {
 }
 
 /// ShellExecuteW, а не `cmd /C start`: адрес не проходит через разбор cmd.
+/// ShellExecute может отдать работу расширениям оболочки — им нужен COM в
+/// однопоточном режиме, как велит документация; поток пула blocking-задач
+/// инициализирует его на время вызова и освобождает после.
 #[cfg(windows)]
 fn shell_open(url: &str) -> Result<(), String> {
+    use windows_sys::Win32::System::Com::{
+        CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+    };
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
     let wide = |text: &str| text.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
     let verb = wide("open");
     let file = wide(url);
+    // SAFETY: CoInitializeEx без зарезервированного указателя. Успех (S_OK,
+    // S_FALSE — уже инициализирован) парный CoUninitialize ниже; отказ
+    // (RPC_E_CHANGED_MODE — поток уже в другом режиме) — не освобождаем.
+    let com = unsafe {
+        CoInitializeEx(
+            std::ptr::null(),
+            (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
+        )
+    };
     // SAFETY: обе строки заканчиваются нулём и живут до конца вызова;
     // окно-владелец и параметры не нужны (null).
     let code = unsafe {
@@ -466,6 +481,10 @@ fn shell_open(url: &str) -> Result<(), String> {
             SW_SHOWNORMAL,
         )
     } as isize;
+    if com >= 0 {
+        // SAFETY: парный успешному CoInitializeEx на этом же потоке.
+        unsafe { CoUninitialize() };
+    }
     // Больше 32 — успех (так устроен ответ ShellExecute).
     if code > 32 {
         Ok(())

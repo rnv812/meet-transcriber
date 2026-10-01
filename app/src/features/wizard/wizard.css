@@ -79,3 +79,10 @@
 .wizard__devices { display: flex; flex-wrap: wrap; gap: 8px; }
 .wizard__apps { display: flex; flex-direction: column; gap: 4px; padding: 4px 0; }
 .wizard__checks { justify-content: flex-start; padding-top: 6px; }
+.wizard__space { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.wizard__link {
+  margin-left: auto; padding: 0; border: 0; background: none; font: inherit; font-size: 12px;
+  color: var(--text-2); text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.wizard__link:hover { color: var(--text); }
+.wizard__link:disabled { opacity: 0.5; cursor: default; text-decoration: none; }

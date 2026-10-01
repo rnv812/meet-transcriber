@@ -1,6 +1,7 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "./App";
+import { SHELL_POLL_MS } from "../features/wizard/useWizardGate";
 import * as api from "../lib/api";
 import * as shell from "../lib/shell";
 
@@ -24,13 +25,18 @@ vi.mock("../features/settings/SettingsPane", () => ({
     initial?: string; initialTick?: number; onRunWizard?: () => void;
   }) => (
     <div data-testid="settings" data-initial={initial ?? ""} data-tick={initialTick ?? ""}>
-      <button onClick={onRunWizard}>Запустить мастер</button>
+      <button onClick={() => onRunWizard?.()}>Запустить мастер</button>
     </div>
   ),
 }));
 vi.mock("../features/wizard/Wizard", () => ({
-  Wizard: ({ start, onClose }: { start?: string; onClose: () => void }) => (
-    <div data-testid="wizard" data-start={start ?? ""}><button onClick={onClose}>закрыть мастер</button></div>
+  Wizard: ({ start, onClose, onInstallStarted }: {
+    start?: string; onClose: () => void; onInstallStarted?: () => void;
+  }) => (
+    <div data-testid="wizard" data-start={start ?? ""}>
+      <button onClick={onClose}>закрыть мастер</button>
+      <button onClick={() => onInstallStarted?.()}>начать установку</button>
+    </div>
   ),
 }));
 vi.mock("../lib/api", async (orig) => ({
@@ -63,6 +69,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   residentState.current = { status: "offline" };
   engineState.current = null;
+  vi.mocked(shell.residentStatus).mockResolvedValue("engine-missing");
   localStorage.removeItem("meet.wizard_done");
   openCb.current = null;
   sectionCb.current = null;
@@ -240,4 +247,45 @@ test("настройки: «Запустить мастер» открывает
   expect(screen.getByTestId("wizard")).toHaveAttribute("data-start", "hardware");
   await userEvent.click(screen.getByRole("button", { name: "закрыть мастер" }));
   expect(screen.getByTestId("settings")).toBeInTheDocument();
+});
+
+test("в приложении мастер — только при «engine-missing» от оболочки: «starting» его не вызывает", async () => {
+  engineState.current = missingEngine();
+  vi.mocked(shell.residentStatus).mockResolvedValue("starting");
+  const { container } = render(<App />);
+  await waitFor(() => expect(shell.residentStatus).toHaveBeenCalled());
+  await act(async () => {});
+  expect(screen.queryByTestId("wizard")).toBeNull();
+  expect(container.querySelector('[data-pane="detail"]')).toHaveTextContent(OFFLINE);
+});
+
+test("резидент ожил, пока мастер сам открыт и не тронут, — мастер убирается, флаг не пишется", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    engineState.current = missingEngine();
+    vi.mocked(shell.residentStatus).mockResolvedValue("engine-missing");
+    render(<App />);
+    expect(await screen.findByTestId("wizard")).toBeInTheDocument();
+    vi.mocked(shell.residentStatus).mockResolvedValue("running");
+    await act(async () => { await vi.advanceTimersByTimeAsync(SHELL_POLL_MS); });
+    expect(screen.queryByTestId("wizard")).toBeNull();
+    expect(localStorage.getItem("meet.wizard_done")).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("после начала установки мастер не убирается, когда резидент поднимается", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    engineState.current = missingEngine();
+    vi.mocked(shell.residentStatus).mockResolvedValue("engine-missing");
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "начать установку" }));
+    vi.mocked(shell.residentStatus).mockResolvedValue("running");
+    await act(async () => { await vi.advanceTimersByTimeAsync(SHELL_POLL_MS); });
+    expect(screen.getByTestId("wizard")).toBeInTheDocument();
+  } finally {
+    vi.useRealTimers();
+  }
 });

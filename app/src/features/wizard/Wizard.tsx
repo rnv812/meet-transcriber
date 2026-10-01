@@ -14,7 +14,7 @@ import type { EngineStatus } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { StepDevices } from "./StepDevices";
 import { StepDone } from "./StepDone";
-import { StepEngine } from "./StepEngine";
+import { type InstallPhase, StepEngine } from "./StepEngine";
 import { StepHardware } from "./StepHardware";
 import { StepHf } from "./StepHf";
 import { StepModels } from "./StepModels";
@@ -77,15 +77,19 @@ function useService(fallback: Endpoint | null, active: boolean) {
   return { endpoint, failed, retry: () => setRound((n) => n + 1) };
 }
 
-export function Wizard({ start = "hardware", engine, endpoint, recording, onEngineChanged, onClose }: {
+export function Wizard({
+  start = "hardware", engine, endpoint, recording, onRefreshEngine, onInstallStarted, onClose,
+}: {
   start?: WizardStep;
   /** undefined — оболочка ещё отвечает; null — оболочки нет. */
   engine: EngineStatus | null | undefined;
   endpoint: Endpoint | null;
   /** Идёт запись — движок не переустанавливаем. */
   recording: boolean;
-  /** Движок поставлен — перечитать его состояние. */
-  onEngineChanged: () => void;
+  /** Перечитать состояние движка у оболочки (место, «установлен»). */
+  onRefreshEngine: () => Promise<void>;
+  /** Установка началась: мастер уже не «ничей», убирать его нельзя. */
+  onInstallStarted?: () => void;
   /** «Пропустить мастер» или «Готово». */
   onClose: () => void;
 }) {
@@ -96,6 +100,11 @@ export function Wizard({ start = "hardware", engine, endpoint, recording, onEngi
   const next = () => go(STEPS[Math.min(index + 1, STEPS.length - 1)]!.id);
   const profile: Profile = engine?.gpu ? "cuda" : "cpu";
   const service = useService(endpoint, NEEDS_RESIDENT.includes(step));
+  const [installing, setInstalling] = useState(false);
+  const installPhase = (phase: InstallPhase) => {
+    setInstalling(phase === "running");
+    if (phase === "running") onInstallStarted?.();
+  };
 
   let body;
   if (NEEDS_RESIDENT.includes(step) && !service.endpoint) {
@@ -115,7 +124,7 @@ export function Wizard({ start = "hardware", engine, endpoint, recording, onEngi
         break;
       case "engine":
         body = <StepEngine engine={engine} profile={profile} recording={recording}
-          onInstalled={onEngineChanged} onNext={next} />;
+          onRefresh={onRefreshEngine} onPhase={installPhase} onNext={next} />;
         break;
       case "hf":
         body = <StepHf endpoint={ep} onNext={next} onSkip={next} />;
@@ -138,8 +147,9 @@ export function Wizard({ start = "hardware", engine, endpoint, recording, onEngi
         <header className="wizard__head">
           <span className="eyebrow">Первый запуск</span>
           {step !== "done" && (
-            <Button aria-label="Пропустить мастер" onClick={onClose}
-              title="Мастер можно запустить снова: Настройки → Движок и модели">
+            <Button aria-label="Пропустить мастер" onClick={onClose} disabled={installing}
+              title={installing ? "Дождитесь окончания установки"
+                : "Мастер можно запустить снова: Настройки → Движок и модели"}>
               Пропустить
             </Button>
           )}

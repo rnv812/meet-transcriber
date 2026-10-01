@@ -1,9 +1,14 @@
 /**
  * Показ мастера первого запуска (см. gate.ts): состояние движка от оболочки,
  * флаг «пройден», открытие вручную («Установить», «Запустить мастер»).
+ *
+ * В приложении «резидента нет из-за движка» — это ровно `resident_status`
+ * "engine-missing": в релизе оно однозначно, в dev не бывает никогда. В
+ * браузере (dev) оболочки нет — там решает только то, что окно резидента не
+ * нашло (и `engine_status` там null, так что сам мастер не откроется).
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type Endpoint, getSettings, patchSettings } from "../../lib/api";
 import { type EngineStatus, engineStatus, markWizardDone, residentStatus } from "../../lib/shell";
 import type { ResidentStatus } from "../../state/useResident";
@@ -11,8 +16,8 @@ import { readLocalDone, shouldAutoShow, writeLocalDone } from "./gate";
 
 export type WizardStep = "hardware" | "engine" | "hf" | "models" | "devices" | "done";
 
-/** Оболочка считает резидента живым (в dev — резидент из .venv репозитория). */
-const SHELL_ALIVE = ["running", "external"];
+/** Как часто перечитывать `resident_status`, пока мастер открыт или движка нет. */
+export const SHELL_POLL_MS = 2000;
 
 export type WizardGate = {
   /** undefined — ещё спрашиваем; null — оболочки нет (браузер) или она не ответила. */
@@ -24,6 +29,8 @@ export type WizardGate = {
   open: (start: WizardStep) => void;
   /** «Пропустить» или «Готово»: сам мастер больше не откроется. */
   close: () => void;
+  /** Установка из мастера началась: резидент поднимется — мастер не убирать. */
+  installStarted: () => void;
   refreshEngine: () => Promise<void>;
 };
 
@@ -32,30 +39,59 @@ export function useWizardGate(status: ResidentStatus, endpoint: Endpoint | null)
   const [shell, setShell] = useState<string | null | undefined>(undefined);
   const [done, setDone] = useState(readLocalDone);
   const [wizard, setWizard] = useState<WizardStep | null>(null);
+  /** Мастер открылся сам и в нём ничего не начинали — его можно убрать. */
+  const [auto, setAuto] = useState(false);
+  const inFlight = useRef<Promise<void> | null>(null);
 
-  const refreshEngine = useCallback(async () => {
-    try {
-      setEngine(await engineStatus());
-    } catch (cause) {
-      console.warn("engine_status:", cause);
-      setEngine(null);
-    }
+  // Один запрос за раз: вход на шаг и фокус окна приходят почти одновременно,
+  // а engine_status идёт до 5 с (nvidia-smi).
+  const refreshEngine = useCallback(() => {
+    inFlight.current ??= engineStatus()
+      .then(setEngine)
+      .catch((cause) => {
+        console.warn("engine_status:", cause);
+        setEngine((cur) => (cur === undefined ? null : cur));
+      })
+      .finally(() => { inFlight.current = null; });
+    return inFlight.current;
+  }, []);
+
+  const readShell = useCallback(() => {
+    residentStatus().then(setShell).catch(() => setShell(null));
   }, []);
 
   useEffect(() => {
     void refreshEngine();
-    residentStatus().then(setShell).catch(() => setShell(null));
-  }, [refreshEngine]);
+    readShell();
+  }, [refreshEngine, readShell]);
 
-  // «connecting» — ещё не знаем: решаем, только когда окно резидента не нашло.
-  const reachable = status !== "offline" || (shell != null && SHELL_ALIVE.includes(shell));
+  const residentMissing = status === "offline" && (shell === null || shell === "engine-missing");
+  const engineMissing = engine?.installed === false && residentMissing;
 
   useEffect(() => {
-    if (!engine || shell === undefined) return;
-    if (shouldAutoShow({ installed: engine.installed, reachable, wizardDone: done })) {
-      setWizard((cur) => cur ?? "hardware");
+    if (!engine || shell === undefined || wizard !== null) return;
+    if (shouldAutoShow({ installed: engine.installed, reachable: !residentMissing, wizardDone: done })) {
+      setWizard("hardware");
+      setAuto(true);
     }
-  }, [engine, shell, reachable, done]);
+  }, [engine, shell, residentMissing, done, wizard]);
+
+  // Пока мастер открыт или движка нет — следим за оболочкой: резидент мог
+  // подняться сам (MEET_RESIDENT, внешний резидент).
+  const watch = (wizard !== null || engineMissing) && shell != null;
+  useEffect(() => {
+    if (!watch) return;
+    const timer = setInterval(readShell, SHELL_POLL_MS);
+    return () => clearInterval(timer);
+  }, [watch, readShell]);
+
+  // Сам открывшийся и нетронутый мастер убирается, если резидент ожил.
+  useEffect(() => {
+    if (auto && wizard !== null && !residentMissing) {
+      setWizard(null);
+      setAuto(false);
+    }
+  }, [auto, wizard, residentMissing]);
 
   // Пропуск без резидента — дописать в его настройки, когда он появится.
   useEffect(() => {
@@ -74,15 +110,16 @@ export function useWizardGate(status: ResidentStatus, endpoint: Endpoint | null)
     writeLocalDone();
     setDone(true);
     setWizard(null);
+    setAuto(false);
     markWizardDone().catch((cause) => console.warn("mark_wizard_done:", cause));
   }, []);
 
-  return {
-    engine,
-    wizard,
-    engineMissing: engine?.installed === false && !reachable,
-    open: setWizard,
-    close,
-    refreshEngine,
-  };
+  const open = useCallback((start: WizardStep) => {
+    setAuto(false);
+    setWizard(start);
+  }, []);
+
+  const installStarted = useCallback(() => setAuto(false), []);
+
+  return { engine, wizard, engineMissing, open, close, installStarted, refreshEngine };
 }

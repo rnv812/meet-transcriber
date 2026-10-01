@@ -219,8 +219,9 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   initial?: string;
   /** Новый номер — снова перейти в `initial` (повторная просьба оболочки или карточки). */
   initialTick?: number;
-  /** «Запустить мастер» в «Движок и модели»: сам мастер после «Пропустить» не открывается. */
-  onRunWizard?: () => void;
+  /** «Запустить мастер» в «Движок и модели» (сам мастер после «Пропустить» не открывается);
+   *  "engine" — сразу на шаг движка (переустановка). */
+  onRunWizard?: (step?: "hardware" | "engine") => void;
 }) {
   const [section, setSection] = useState<SectionId>(
     () => MENU.find((m) => m.id === initial)?.id ?? "recording");
@@ -346,10 +347,10 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
             <>
               {onRunWizard && (
                 <Row label="Мастер первого запуска" hint="движок, токен Hugging Face, модели и запись — по шагам">
-                  <Button onClick={onRunWizard}>Запустить мастер</Button>
+                  <Button onClick={() => onRunWizard("hardware")}>Запустить мастер</Button>
                 </Row>
               )}
-              <EnginePane endpoint={endpoint} />
+              <EnginePane endpoint={endpoint} onReinstall={onRunWizard && (() => onRunWizard("engine"))} />
               <h3 className="shead">Модели</h3>
               <ModelsPane endpoint={endpoint}
                 selectedModel={(draft.asr?.model as string | undefined) ?? null}

@@ -46,10 +46,10 @@ const engine = (extra: Partial<EngineStatus> = {}): EngineStatus => ({
 type Props = Partial<Parameters<typeof Wizard>[0]>;
 const show = (props: Props = {}) => {
   const onClose = vi.fn();
-  const onEngineChanged = vi.fn();
+  const onRefreshEngine = vi.fn(async () => {});
   const view = render(<Wizard engine={engine()} endpoint={null} recording={false}
-    onClose={onClose} onEngineChanged={onEngineChanged} {...props} />);
-  return { onClose, onEngineChanged, ...view };
+    onClose={onClose} onRefreshEngine={onRefreshEngine} {...props} />);
+  return { onClose, onRefreshEngine, ...view };
 };
 
 beforeEach(() => {
@@ -112,7 +112,7 @@ test("идёт запись — установка недоступна с по�
 test("установка: прогресс по шагам, строки лога; профиль — по видеокарте", async () => {
   let finish: () => void = () => {};
   vi.mocked(shell.installEngine).mockImplementation(() => new Promise<void>((r) => { finish = r; }));
-  const { onEngineChanged } = show({ start: "engine" });
+  const { onRefreshEngine } = show({ start: "engine" });
   await waitFor(() => expect(events.progress).not.toBeNull());
   await userEvent.click(screen.getByRole("button", { name: "Установить" }));
   expect(shell.installEngine).toHaveBeenCalledWith("cuda", false);
@@ -126,9 +126,10 @@ test("установка: прогресс по шагам, строки лог�
   expect(within(steps).getByText("Окружение Python")).toBeInTheDocument();
   expect(within(steps).getByText("PyTorch для видеокарты")).toBeInTheDocument();
   expect(screen.getByText(/Using CPython 3.12/)).toBeInTheDocument();
+  const before = onRefreshEngine.mock.calls.length;
   await act(async () => finish());
   expect(await screen.findByText("Движок установлен")).toBeInTheDocument();
-  expect(onEngineChanged).toHaveBeenCalled();
+  expect(onRefreshEngine.mock.calls.length).toBeGreaterThan(before);
 });
 
 test("engine-failed: хвост лога и «Повторить», «Переустановить с нуля»", async () => {
@@ -144,6 +145,8 @@ test("engine-failed: хвост лога и «Повторить», «Переу
   await act(async () => fail("Шаг 3 не удался: Библиотеки распознавания"));
   expect(await screen.findByText(/Failed to download torch/)).toBeInTheDocument();
   expect(screen.getByText(/Connection reset/)).toBeInTheDocument();
+  // Сообщение оболочки не повторяется рядом с хвостом лога.
+  expect(screen.getAllByText(/Шаг 3 не удался/)).toHaveLength(1);
   vi.mocked(shell.installEngine).mockResolvedValue(undefined);
   await userEvent.click(screen.getByRole("button", { name: "Повторить" }));
   expect(shell.installEngine).toHaveBeenLastCalledWith("cuda", false);
@@ -318,4 +321,70 @@ test("сервис не поднялся за 90 попыток раз в сек
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("шаг движка при входе перечитывает состояние: место могли освободить", () => {
+  const { onRefreshEngine } = show({ start: "engine" });
+  expect(onRefreshEngine).toHaveBeenCalledTimes(1);
+});
+
+test("«Проверить снова» у нехватки места; место освободили — «Установить» активна", async () => {
+  const { onRefreshEngine, rerender, onClose } = show({ start: "engine", engine: engine({ free_gb: 2.3, needs_gb: 5 }) });
+  onRefreshEngine.mockClear();
+  await userEvent.click(screen.getByRole("button", { name: "Проверить снова" }));
+  expect(onRefreshEngine).toHaveBeenCalledTimes(1);
+  rerender(<Wizard start="engine" engine={engine({ free_gb: 40, needs_gb: 5 })} endpoint={null} recording={false}
+    onClose={onClose} onRefreshEngine={onRefreshEngine} />);
+  expect(screen.getByRole("button", { name: "Установить" })).toBeEnabled();
+  expect(screen.queryByText(/Освободите/)).toBeNull();
+});
+
+test("окно снова в фокусе на шаге движка — состояние перечитывается", () => {
+  const { onRefreshEngine } = show({ start: "engine" });
+  onRefreshEngine.mockClear();
+  act(() => { window.dispatchEvent(new Event("focus")); });
+  expect(onRefreshEngine).toHaveBeenCalledTimes(1);
+});
+
+test("неудачная установка — состояние перечитывается (место, маркер)", async () => {
+  vi.mocked(shell.installEngine).mockRejectedValue("Недостаточно места: нужно 5 ГБ, свободно 2,3 ГБ");
+  const { onRefreshEngine } = show({ start: "engine" });
+  await waitFor(() => expect(events.failed).not.toBeNull());
+  onRefreshEngine.mockClear();
+  await userEvent.click(screen.getByRole("button", { name: "Установить" }));
+  expect(await screen.findByText("Недостаточно места: нужно 5 ГБ, свободно 2,3 ГБ")).toBeInTheDocument();
+  expect(onRefreshEngine).toHaveBeenCalled();
+});
+
+test("видеокарта есть, места на CUDA мало — «Установить CPU-версию (3 ГБ)»", async () => {
+  vi.mocked(shell.installEngine).mockResolvedValue(undefined);
+  show({ start: "engine", engine: engine({ free_gb: 4, needs_gb: 5 }) });
+  await waitFor(() => expect(events.progress).not.toBeNull());
+  expect(screen.getByRole("button", { name: "Установить" })).toBeDisabled();
+  await userEvent.click(screen.getByRole("button", { name: "Установить CPU-версию (3 ГБ)" }));
+  expect(shell.installEngine).toHaveBeenCalledWith("cpu", false);
+  expect(await screen.findByText("Движок установлен")).toBeInTheDocument();
+});
+
+test("CPU-версия — запасной вариант и при достатке места; без видеокарты её нет", () => {
+  const { unmount } = show({ start: "engine" });
+  expect(screen.getByRole("button", { name: "Установить CPU-версию (3 ГБ)" })).toBeEnabled();
+  unmount();
+  show({ start: "engine", engine: engine({ gpu: null, needs_gb: 3 }) });
+  expect(screen.queryByRole("button", { name: "Установить CPU-версию (3 ГБ)" })).toBeNull();
+});
+
+test("CPU-версия тоже не влезает — неактивна", () => {
+  show({ start: "engine", engine: engine({ free_gb: 1.5, needs_gb: 5 }) });
+  expect(screen.getByRole("button", { name: "Установить CPU-версию (3 ГБ)" })).toBeDisabled();
+});
+
+test("идёт установка — «Пропустить мастер» неактивна с подсказкой", async () => {
+  vi.mocked(shell.installEngine).mockImplementation(() => new Promise<void>(() => {}));
+  show({ start: "engine" });
+  await waitFor(() => expect(events.progress).not.toBeNull());
+  await userEvent.click(screen.getByRole("button", { name: "Установить" }));
+  const skip = screen.getByRole("button", { name: "Пропустить мастер" });
+  expect(skip).toBeDisabled();
+  expect(skip).toHaveAttribute("title", "Дождитесь окончания установки");
 });

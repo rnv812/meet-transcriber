@@ -183,8 +183,6 @@ export const getHotwords = (ep: Endpoint) => json<Hotwords>(ep, "/hotwords");
 export const putHotwords = (ep: Endpoint, text: string) =>
   json<Hotwords>(ep, "/hotwords", body("PUT", { text }));
 export const getEngine = (ep: Endpoint) => json<EngineState>(ep, "/engine");
-export const installEngine = (ep: Endpoint, flavor?: "cuda" | "cpu") =>
-  json<Job>(ep, "/engine/install", body("POST", flavor ? { flavor } : {}));
 export const getModels = (ep: Endpoint) => json<ModelsState>(ep, "/models");
 export const downloadModel = (ep: Endpoint, id: string) =>
   json<Job>(ep, "/models/download", body("POST", { id }));
@@ -213,12 +211,12 @@ export const HF_TIMEOUT_MS = 15_000;
 
 export const getHfStatus = (ep: Endpoint) => json<HfStatus>(ep, "/hf/status");
 
-/** Проверить токен и сохранить, только если доступ есть. */
-export async function setHfToken(ep: Endpoint, token: string): Promise<HfCheck> {
+/** Запрос с проверкой на huggingface.co: не дольше HF_TIMEOUT_MS. */
+async function hfCheck(ep: Endpoint, path: string, data: unknown): Promise<HfCheck> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), HF_TIMEOUT_MS);
   try {
-    return await json<HfCheck>(ep, "/hf/token", { ...body("POST", { token }), signal: controller.signal });
+    return await json<HfCheck>(ep, path, { ...body("POST", data), signal: controller.signal });
   } catch (cause) {
     if (controller.signal.aborted) throw new Error("Проверка не ответила за 15 секунд — попробуйте ещё раз");
     throw cause;
@@ -226,9 +224,12 @@ export async function setHfToken(ep: Endpoint, token: string): Promise<HfCheck> 
     clearTimeout(timer);
   }
 }
+
+/** Проверить токен и сохранить, только если доступ есть. */
+export const setHfToken = (ep: Endpoint, token: string) => hfCheck(ep, "/hf/token", { token });
 export const deleteHfToken = (ep: Endpoint) => json<HfStatus>(ep, "/hf/token", { method: "DELETE" });
 /** Перепроверить сохранённый токен (условия модели могли принять с тех пор). */
-export const recheckHf = (ep: Endpoint) => json<HfCheck>(ep, "/hf/check", body("POST", {}));
+export const recheckHf = (ep: Endpoint) => hfCheck(ep, "/hf/check", {});
 
 // --- ассистент: итоги, вопросы, заметки -------------------------------------
 
