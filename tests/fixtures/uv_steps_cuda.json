@@ -1,0 +1,34 @@
+[
+  [
+    "uv.exe",
+    "python",
+    "install",
+    "3.12"
+  ],
+  [
+    "uv.exe",
+    "venv",
+    "--python",
+    "3.12",
+    "C:\\env"
+  ],
+  [
+    "uv.exe",
+    "pip",
+    "install",
+    "--python",
+    "C:\\env\\Scripts\\python.exe",
+    "torch",
+    "torchaudio",
+    "--index-url",
+    "https://download.pytorch.org/whl/cu128"
+  ],
+  [
+    "uv.exe",
+    "pip",
+    "install",
+    "--python",
+    "C:\\env\\Scripts\\python.exe",
+    "C:\\w\\meet_transcriber-0.1.0-py3-none-any.whl[engine-cuda]"
+  ]
+]

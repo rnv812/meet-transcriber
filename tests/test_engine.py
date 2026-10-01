@@ -235,3 +235,56 @@ def test_state_carries_unknown_free_space(monkeypatch):
     monkeypatch.setattr(engine, "_device", lambda available: "cpu")
     monkeypatch.setattr(engine.shutil, "disk_usage", _unavailable_disk)
     assert engine.state()["disk_free_gb"] is None
+
+
+# --- установка колеса в приватный venv (инсталлятор) ---
+
+UV_INPUTS = dict(
+    uv="uv.exe",
+    env_dir="C:\\env",
+    wheel="C:\\w\\meet_transcriber-0.1.0-py3-none-any.whl",
+)
+
+
+def test_profile_for_follows_gpu_shape():
+    assert engine.profile_for({"available": True, "name": "RTX"}) == "cuda"
+    assert engine.profile_for({"available": False, "name": None}) == "cpu"
+    assert engine.profile_for({}) == "cpu"
+
+
+def test_uv_steps_cuda_shape():
+    py = "C:\\env\\Scripts\\python.exe"
+    assert engine.uv_steps(profile="cuda", **UV_INPUTS) == [
+        ["uv.exe", "python", "install", "3.12"],
+        ["uv.exe", "venv", "--python", "3.12", "C:\\env"],
+        ["uv.exe", "pip", "install", "--python", py, "torch", "torchaudio",
+         "--index-url", engine.TORCH_CUDA_INDEX],
+        ["uv.exe", "pip", "install", "--python", py,
+         UV_INPUTS["wheel"] + "[engine-cuda]"],
+    ]
+
+
+def test_uv_steps_cpu_uses_cpu_index_and_extra():
+    steps = engine.uv_steps(profile="cpu", **UV_INPUTS)
+    assert steps[2][-1] == engine.TORCH_CPU_INDEX
+    assert steps[3][-1].endswith("[engine-cpu]")
+
+
+def test_estimate_text_cpu():
+    text = engine.estimate_text(2264, "cpu")
+    assert "38 мин" in text and "48 мин" in text
+
+
+def test_estimate_text_cuda_and_minimum():
+    assert "8 мин обработки" in engine.estimate_text(2264, "cuda")
+    assert "1 мин обработки" in engine.estimate_text(10, "cuda")
+
+
+def test_uv_steps_fixtures_are_current():
+    import json
+    from pathlib import Path
+
+    for profile in ("cuda", "cpu"):
+        path = Path(__file__).parent / "fixtures" / f"uv_steps_{profile}.json"
+        expected = engine.uv_steps(profile=profile, **UV_INPUTS)
+        assert json.loads(path.read_text(encoding="utf-8")) == expected

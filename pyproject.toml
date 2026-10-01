@@ -2,13 +2,34 @@
 name = "meet-transcriber"
 version = "0.1.0"
 requires-python = ">=3.12"
-# Остальные зависимости (faster-whisper, pyannote, pyaudiowpatch...) исторически
-# ставятся в venv вручную; здесь объявлены только нужные трею.
-# pycaw — второй сигнал детектора звонка (WASAPI-сессии); без него трей
-# работает, но видит только микрофон. psutil объявлен явно, хотя приходит и с
-# pycaw: на нём держатся проверка живости Диона и отпечаток процесса в
-# tray.lock, а сценарий «pycaw не встал» — ровно тот, где psutil тоже пропал бы.
-dependencies = ["pystray", "pillow", "pycaw", "psutil"]
+# Лёгкое ядро: запись, трей, панель, ассистент. Тяжёлый стек расшифровки живёт в
+# extras engine-cuda / engine-cpu (список зеркалит engine.PACKAGES, тест следит
+# за расхождением); torch ставится отдельным шагом с нужного индекса
+# (engine.uv_steps), поэтому в extras его нет.
+# pycaw — второй сигнал детектора звонка (WASAPI-сессии); psutil объявлен явно:
+# на нём держатся проверка живости Диона и отпечаток процесса в tray.lock.
+dependencies = [
+    "pystray", "pillow", "pycaw", "psutil",
+    "pyaudiowpatch", "numpy", "scipy", "aiohttp", "claude-agent-sdk", "keyring",
+]
+
+[project.optional-dependencies]
+engine-cpu = [
+    "faster-whisper>=1.2",
+    "av>=11,<19",
+    "pyannote.audio>=4.0",
+    "transformers>=4.40",
+    "scipy>=1.11",
+]
+engine-cuda = [
+    "faster-whisper>=1.2",
+    "av>=11,<19",
+    "pyannote.audio>=4.0",
+    "transformers>=4.40",
+    "scipy>=1.11",
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12",
+]
 
 [project.scripts]
 meet = "meet.cli:main"
@@ -22,3 +43,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# Данных вне .py в src/meet сейчас нет; шаблон страхует будущие ресурсы.
+meet = ["*.json", "*.txt", "*.html", "*.ico", "*.png"]

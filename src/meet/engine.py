@@ -34,11 +34,12 @@ TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 
 PACKAGES = (
-    "faster-whisper>=1.1",
+    "faster-whisper>=1.2",
     # faster-whisper 1.2 передаёт av.open(metadata_errors=...), которого нет в
     # av 19: без пина чистая установка падает на первом же файле.
     "av>=11,<19",
-    "pyannote.audio>=3.3",
+    # community-1 (пайплайн диаризации) требует pyannote 4.x.
+    "pyannote.audio>=4.0",
     "transformers>=4.40",
     "scipy>=1.11",
 )
@@ -169,6 +170,40 @@ def install(flavor: str | None = None, on_line=None, runner=None) -> int:
         if code != 0:
             return code
     return 0
+
+
+def profile_for(gpu: dict) -> str:
+    """Профиль зависимостей по снимку `gpu()`: карта видна — cuda, иначе cpu."""
+    return "cuda" if gpu.get("available") else "cpu"
+
+
+def estimate_text(duration_s: float, profile: str) -> str:
+    """«38 мин встречи ≈ 48 мин обработки» — для экрана выбора профиля."""
+    def minutes(seconds: float) -> int:
+        return max(1, round(seconds / 60))
+
+    return (
+        f"{minutes(duration_s)} мин встречи ≈ "
+        f"{minutes(estimate_seconds(duration_s, profile))} мин обработки"
+    )
+
+
+def uv_steps(uv: str, env_dir: str, wheel: str, profile: str) -> list[list[str]]:
+    """Команды установки колеса в приватный venv через uv.
+
+    Путь к python собирается склейкой строк, а не через os.path: шаги
+    воспроизводит и инсталлятор на Rust, и фикстуры в tests/fixtures должны
+    совпадать на любой ОС. Установка только под Windows, разделитель — «\».
+    """
+    python = env_dir + chr(92) + "Scripts" + chr(92) + "python.exe"
+    index = TORCH_CUDA_INDEX if profile == "cuda" else TORCH_CPU_INDEX
+    pip = [uv, "pip", "install", "--python", python]
+    return [
+        [uv, "python", "install", "3.12"],
+        [uv, "venv", "--python", "3.12", env_dir],
+        pip + ["torch", "torchaudio", "--index-url", index],
+        pip + [f"{wheel}[engine-{profile}]"],
+    ]
 
 
 def _run(argv: list[str], on_line) -> int:
