@@ -4,20 +4,18 @@ import { useLayoutEffect, useRef, useState } from "react";
 
 import { clock } from "../lib/format";
 import { Markdown } from "../lib/markdown";
-import type { LiveLine } from "../lib/types";
 import "./live.css";
+import type { FeedLine } from "./useLive";
 
 /** Насколько от низа ещё считается «внизу»: доли пикселей и последняя строка. */
 const BOTTOM_SLACK_PX = 24;
 
-/** Строка ленты; `id` — номер в потоке, по нему строка ключуется. */
-type Line = LiveLine & { id?: number | null };
-
 /**
- * Лента строк. Следит за низом, пока человек сам не прокрутил вверх
- * (перечитывает сказанное); вернулся вниз — следит снова.
+ * Лента строк (`id` — номер в потоке, по нему строка ключуется). Следит за
+ * низом, пока человек сам не прокрутил вверх (перечитывает сказанное);
+ * вернулся вниз — следит снова.
  */
-export function LiveFeed({ lines, className = "" }: { lines: Line[]; className?: string }) {
+export function LiveFeed({ lines, className = "" }: { lines: FeedLine[]; className?: string }) {
   const box = useRef<HTMLOListElement>(null);
   const follow = useRef(true);
 

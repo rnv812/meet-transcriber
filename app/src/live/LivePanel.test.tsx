@@ -148,3 +148,14 @@ test("снимок живого режима: применяется тольк�
   await act(async () => { first(snap(status())); });
   expect(screen.getByRole("banner")).toHaveTextContent("· Останавливаю…");
 });
+
+test("остановка: поток ассистента закрыт, пока он дописывает запись (active и stopping)", async () => {
+  render(<LivePanel endpoint={ep} />);
+  act(() => bus().emit("state", snap(status())));
+  const stream = liveStream();
+  vi.mocked(getState).mockResolvedValueOnce(snap(status({ active: true, stopping: true })));
+  await act(async () => { bus().emit("live.stopping", { kind: "live.stopping", at: 1 }); });
+  expect(stream.closed).toBe(true);
+  expect(liveStream()).toBe(stream); // нового потока не открывали
+  expect(screen.queryByText(/Нет связи с ассистентом/)).toBeNull();
+});

@@ -11,8 +11,10 @@ import { LiveDigest, LiveFeed } from "../../live/LiveFeed";
 import { useLive } from "../../live/useLive";
 
 export function LiveCard({ endpoint, live }: { endpoint: Endpoint; live: LiveStatus }) {
-  const state = useLive(endpoint, live.active);
   const stopping = live.stopping || !live.active;
+  // При остановке резидент поток уже закрыл: без `!stopping` хук
+  // переподключался бы и писал «Нет связи с ассистентом».
+  const state = useLive(endpoint, !stopping);
   return (
     <div className="live-card">
       <div className="live-card__head">

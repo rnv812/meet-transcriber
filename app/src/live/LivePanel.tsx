@@ -42,13 +42,15 @@ function useElapsed(startedAt: number | null | undefined): number | null {
 
 export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const status = useLiveStatus(endpoint);
+  const [stopRequested, setStopRequested] = useState(false);
+  const stopping = stopRequested || !!status?.stopping;
   // До первого снимка считаем режим идущим: окно существует только при нём.
-  const live = useLive(endpoint, status ? status.active : true);
+  // Дописывает запись — поток резидент уже закрыл, переподключаться незачем
+  // (иначе «Нет связи с ассистентом» на всё время остановки).
+  const live = useLive(endpoint, (status ? status.active : true) && !stopping);
   const elapsed = useElapsed(status?.started_at);
   const [expanded, setExpanded] = useState(false);
-  const [stopRequested, setStopRequested] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
-  const stopping = stopRequested || !!status?.stopping;
 
   useEffect(() => {
     if (!inTauri()) return;

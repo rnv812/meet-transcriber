@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
-import { AUTO_ORDER } from "./AssistantSection";
+import { AUTO_ORDER, RECHECK_MS, RECHECK_TRIES } from "./AssistantSection";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import type { AssistantInfo, ProviderCheck } from "../../lib/types";
@@ -262,4 +262,35 @@ test("повторный запрос раздела возвращает на �
   expect(screen.getByRole("button", { name: "Ассистент" })).not.toHaveAttribute("aria-current");
   rerender(<SettingsPane endpoint={ep} recordingsDir={null} initial="assistant" initialTick={2} />);
   expect(screen.getByRole("button", { name: "Ассистент" })).toHaveAttribute("aria-current", "page");
+});
+
+test("подпапка сохраняется без пробелов по краям", async () => {
+  open();
+  const sub = await screen.findByLabelText("Подпапка для встреч");
+  await userEvent.clear(sub);
+  await userEvent.type(sub, "  Мои встречи  ");
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
+    assistant: { notes_subdir: "Мои встречи" },
+  }));
+});
+
+test("подпапка, отличающаяся только пробелами, — не правка", async () => {
+  open();
+  const sub = await screen.findByLabelText("Подпапка для встреч");
+  await userEvent.type(sub, "  ");
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+});
+
+test("«определяю…» переспрашивает резидента не бесконечно", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    vi.mocked(api.getAssistant).mockResolvedValue({ ...structuredClone(info), provider: null, checking: true });
+    open();
+    await screen.findByRole("group", { name: "Авто" });
+    for (let i = 0; i < 40; i++) await vi.advanceTimersByTimeAsync(RECHECK_MS);
+    expect(vi.mocked(api.getAssistant).mock.calls.length).toBeLessThanOrEqual(RECHECK_TRIES + 1);
+  } finally {
+    vi.useRealTimers();
+  }
 });

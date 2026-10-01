@@ -21,10 +21,10 @@ const RETRY_MIN_MS = 1000;
 const RETRY_MAX_MS = 10_000;
 const NO_LINK = "Нет связи с ассистентом — переподключаюсь…";
 
-/** Последний вопрос: ждём ответа, ответ или ошибка. */
 /** Строка ленты с её номером в потоке (`id:` события; null — без номера). */
 export type FeedLine = LiveLine & { id: number | null };
 
+/** Последний вопрос: ждём ответа, ответ или ошибка. */
 export type LiveReply = { pending: boolean; question: string | null; answer: string | null; error: string | null };
 
 export type Live = {

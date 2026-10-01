@@ -29,8 +29,13 @@ const LOCAL = "openai-compatible";
 /** Ключи `llm`, по которым идёт проверка и выбор «Авто». */
 const LLM_KEYS = ["provider", "base_url", "local_model"];
 
-/** Пока резидент проверяет вход в CLI (`checking`), спрашиваем снова через паузу. */
-const RECHECK_MS = 1500;
+/**
+ * Пока резидент проверяет вход в CLI (`checking`), спрашиваем снова через
+ * паузу — но не бесконечно: зависшая проверка не должна опрашивать резидент,
+ * пока открыты настройки (дальше — по сохранению или «Проверить»).
+ */
+export const RECHECK_MS = 1500;
+export const RECHECK_TRIES = 20;
 
 export const SUBDIR_ERROR = "Только имя подпапки, без .. и полного пути";
 export const WINDOW_MIN = 5;
@@ -56,6 +61,11 @@ export function assistantChangesInvalid(changes: Raw): boolean {
   const subdir = changes.assistant?.notes_subdir;
   const win = changes.assist?.window_seconds;
   return (typeof subdir === "string" && subdirInvalid(subdir)) || (win !== undefined && windowInvalid(win));
+}
+
+/** Значение настройки, каким оно уйдёт в PATCH: подпапка — без пробелов по краям. */
+export function cleanSetting(group: string, key: string, value: unknown): unknown {
+  return group === "assistant" && key === "notes_subdir" && typeof value === "string" ? value.trim() : value;
 }
 
 /** Подпись «Авто», пока выбран конкретный провайдер: порядок выбора (llm.resolve). */
@@ -113,12 +123,13 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
   useEffect(() => {
     let live = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let tries = 0;
     const load = () => {
       getAssistant(endpoint).then((data) => {
         if (!live) return;
         setInfo(data);
         setInfoError(null);
-        if (data.checking) timer = setTimeout(load, RECHECK_MS);
+        if (data.checking && tries++ < RECHECK_TRIES) timer = setTimeout(load, RECHECK_MS);
       }).catch((e) => { if (live) setInfoError(errorText(e)); });
     };
     load();

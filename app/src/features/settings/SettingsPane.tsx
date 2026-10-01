@@ -17,7 +17,7 @@ import { inTauri, openFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { About } from "./About";
-import { AssistantSection, assistantChangesInvalid } from "./AssistantSection";
+import { AssistantSection, assistantChangesInvalid, cleanSetting } from "./AssistantSection";
 import { DiagnosticsPane } from "./DiagnosticsPane";
 import { EnginePane } from "./EnginePane";
 import { HotwordsEditor } from "./HotwordsEditor";
@@ -263,8 +263,9 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick }: 
   const changes: Record<string, Record<string, unknown>> = {};
   if (settings) {
     for (const g of Object.keys(draft)) {
-      for (const [k, val] of Object.entries(draft[g] ?? {})) {
+      for (const [k, raw] of Object.entries(draft[g] ?? {})) {
         if (g === "auto_record" && k === "enabled") continue;
+        const val = cleanSetting(g, k, raw);
         if (JSON.stringify(val) !== JSON.stringify(settings[g]?.[k])) (changes[g] ??= {})[k] = val;
       }
     }

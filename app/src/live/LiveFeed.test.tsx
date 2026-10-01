@@ -1,9 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { LiveLine } from "../lib/types";
+import type { FeedLine } from "./useLive";
 import { LiveDigest, LiveFeed } from "./LiveFeed";
 
-const line = (i: number, speaker: string | null = "Демьян"): LiveLine => ({ t: 60 + i, speaker, text: `реплика ${i}` });
+const line = (i: number, speaker: string | null = "Демьян"): FeedLine => ({ t: 60 + i, speaker, text: `реплика ${i}`, id: null });
 
 /** jsdom не раскладывает: высоты ленты задаём сами, scrollTop — обычное поле. */
 function fakeScroll(el: HTMLElement, { scrollHeight, clientHeight }: { scrollHeight: number; clientHeight: number }) {

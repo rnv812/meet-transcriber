@@ -25,3 +25,12 @@ test("ассистент дописывает запись: лента оста�
   expect(streams()[0]!.closed).toBe(true);
   expect(screen.getByRole("button", { name: "Что я пропустил?" })).toBeDisabled();
 });
+
+test("резидент дописывает запись (active и stopping) — поток закрыт, «нет связи» не пишем", () => {
+  const { rerender } = render(<LiveCard endpoint={ep} live={live()} />);
+  rerender(<LiveCard endpoint={ep} live={live({ active: true, stopping: true })} />);
+  expect(streams()[0]!.closed).toBe(true);
+  expect(streams()).toHaveLength(1); // и не переподключаемся
+  expect(screen.queryByText(/Нет связи с ассистентом/)).toBeNull();
+  expect(screen.getByText("Останавливаю…")).toBeInTheDocument();
+});
