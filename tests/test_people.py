@@ -344,3 +344,101 @@ def test_person_lists_meetings_newest_first(tmp_path):
     assert card["name"] == "Демьян" and card["has_avatar"] is False
     with pytest.raises(KeyError):
         people.person("Никто", voices, rec)
+
+
+def _sidecar(folder, entries):
+    (folder / f"{folder.name[:10]}_speakers.json").write_text(
+        json.dumps({"source": str(folder), "speakers": entries}, ensure_ascii=False), encoding="utf-8")
+
+
+def _displays(folder):
+    side = json.loads((folder / f"{folder.name[:10]}_speakers.json").read_text(encoding="utf-8"))
+    return [e["display"] for e in side["speakers"]]
+
+
+def test_rename_rewrites_sidecar_displays_and_names_keys(tmp_path):
+    """Кластер, узнанный по базе, подписан в сайдкаре именем человека: после
+    переименования в «Голосах» панель «Спикеры» должна по-прежнему находить его
+    голос (и старая запись — понимать, что это собеседник)."""
+    rec, voices = tmp_path / "rec", tmp_path / "voices"
+    m = _meeting(rec, "2026-09-01_10-00", [
+        {"start": 0, "end": 30, "speaker": "Аркаша", "text": "а"},
+        {"start": 30, "end": 35, "speaker": "Вера", "text": "б"}])
+    data = library.read_transcript(m)
+    data["names"] = {"Аркадий": "Вера", "Спикер 2": "Аркаша"}  # чужой ключ — не трогаем
+    library.write_transcript(m, data)
+    _sidecar(m, [{"label": "SPEAKER_00", "display": "Аркаша", "embedding": [1, 0]},
+                 {"label": "SPEAKER_01", "display": "Спикер 2", "embedding": [0, 1]}])
+    _voice(voices, "Аркаша", [m])
+    people.rename("Аркаша", "Аркадий Козлов", voices, rec)
+    assert _displays(m) == ["Аркадий Козлов", "Спикер 2"]
+    assert library.read_transcript(m)["names"] == {"Аркадий": "Вера", "Спикер 2": "Аркадий Козлов"}
+
+
+def test_rename_carries_a_names_chain_from_the_old_display(tmp_path):
+    rec, voices = tmp_path / "rec", tmp_path / "voices"
+    m = _meeting(rec, "2026-09-01_10-00", [{"start": 0, "end": 30, "speaker": "Вера", "text": "а"}])
+    data = library.read_transcript(m)
+    data["names"] = {"Аркаша": "Вера"}   # кластер «Аркаша» переименовали в панели в «Веру»
+    library.write_transcript(m, data)
+    _sidecar(m, [{"label": "SPEAKER_00", "display": "Аркаша", "embedding": [1, 0]}])
+    _voice(voices, "Аркаша", [])
+    people.rename("Аркаша", "Аркадий", voices, rec)
+    assert _displays(m) == ["Аркадий"]
+    assert library.read_transcript(m)["names"] == {"Аркадий": "Вера"}
+
+
+def test_merge_rewrites_sidecar_displays_unless_the_names_chain_conflicts(tmp_path):
+    rec, voices = tmp_path / "rec", tmp_path / "voices"
+    m1 = _meeting(rec, "2026-09-01_10-00", [{"start": 0, "end": 30, "speaker": "Аркаша", "text": "а"}])
+    _sidecar(m1, [{"label": "SPEAKER_00", "display": "Аркаша", "embedding": [1, 0]}])
+    m2 = _meeting(rec, "2026-09-02_10-00", [{"start": 0, "end": 30, "speaker": "Олег", "text": "а"},
+                                            {"start": 30, "end": 40, "speaker": "Вера", "text": "б"}])
+    data = library.read_transcript(m2)
+    data["names"] = {"Аркаша": "Олег", "Аркадий": "Вера"}
+    library.write_transcript(m2, data)
+    _sidecar(m2, [{"label": "SPEAKER_00", "display": "Аркаша", "embedding": [1, 0]},
+                  {"label": "SPEAKER_01", "display": "Аркадий", "embedding": [0, 1]}])
+    _voice(voices, "Аркаша", [])
+    _voice(voices, "Аркадий", [])
+    people.merge("Аркаша", "Аркадий", voices, rec)
+    assert _displays(m1) == ["Аркадий"]
+    # Цепочки names спорят: подпись «Аркаша» остаётся, иначе «Олег» потерял бы голос.
+    assert _displays(m2) == ["Аркаша", "Аркадий"]
+    assert library.read_transcript(m2)["names"] == {"Аркаша": "Олег", "Аркадий": "Вера"}
+
+
+def test_rename_updates_names_of_a_pending_rediarize_result(tmp_path):
+    rec, voices = tmp_path / "rec", tmp_path / "voices"
+    m = _meeting(rec, "2026-09-01_10-00", [{"start": 0, "end": 30, "speaker": "Аркаша", "text": "а"}])
+    (m / library.REDIARIZE_PREVIEW).write_text(json.dumps(
+        {"parts": [], "names": {"SPEAKER_00": "Аркаша"}}, ensure_ascii=False), encoding="utf-8")
+    _voice(voices, "Аркаша", [])
+    people.rename("Аркаша", "Аркадий", voices, rec)
+    got = json.loads((m / library.REDIARIZE_PREVIEW).read_text(encoding="utf-8"))
+    assert got["names"] == {"SPEAKER_00": "Аркадий"}
+
+
+def test_listing_reparses_only_changed_transcripts(tmp_path, monkeypatch):
+    """Статистика людей кэшируется по (время изменения, размер) транскрипта,
+    как карточки библиотеки: открыть «Голоса» второй раз — без разбора всех
+    транскриптов; исчезнувшие записи из кэша уходят."""
+    rec, voices = tmp_path / "rec", tmp_path / "voices"
+    folders = [_meeting(rec, f"2026-09-2{i}_10-00", [{"start": 0, "end": 5, "speaker": "Демьян", "text": "а"}])
+               for i in range(3)]
+    _voice(voices, "Демьян", [])
+    reads = []
+    real = library.read_transcript
+    monkeypatch.setattr(library, "read_transcript",
+                        lambda folder: reads.append(folder.name) or real(folder))
+    assert people.listing(voices, rec)[0]["meetings"] == 3
+    reads.clear()
+    assert people.listing(voices, rec)[0]["meetings"] == 3
+    assert reads == []
+    library.write_transcript(folders[1], {"segments": [{"start": 0, "end": 9, "speaker": "Демьян", "text": "бб"}]})
+    import shutil
+    shutil.rmtree(folders[2])
+    got = people.listing(voices, rec)[0]
+    assert reads == ["2026-09-21_10-00"] and (got["meetings"], got["seconds"]) == (2, 14)
+    assert str(library.transcript_path(folders[2])) not in people._speech_cache
+    assert str(library.transcript_path(folders[0])) in people._speech_cache

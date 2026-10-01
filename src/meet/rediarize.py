@@ -216,13 +216,20 @@ def finish(folder: Path, data: dict, got: dict) -> dict:
             inherited[raws[r]] = old[c][0]
     label_of: dict[str, str] = {}
     kept: list[str] = []
+    # Сначала унаследованные имена (они один к одному), потом имена из базы —
+    # только не занятые: два разных голоса под одним именем слились бы снова.
     for raw in order:
         prior = inherited.get(raw)
         if prior is not None and not speakers.unnamed(prior):
             label_of[raw] = prior
             kept.append(prior)
-        elif base_names.get(raw):
-            label_of[raw] = base_names[raw]
+    for raw in order:
+        if raw in label_of:
+            continue
+        prior = inherited.get(raw)
+        name = base_names.get(raw)
+        if name and name not in label_of.values():
+            label_of[raw] = name
         elif prior is not None:
             label_of[raw] = prior
     used = {s.get("speaker") for s, group in zip(segments, raw_parts) if group is None and s.get("speaker")}
@@ -252,16 +259,21 @@ def finish(folder: Path, data: dict, got: dict) -> dict:
 
 def run(folder: Path, *, num_speakers: int | None = None, min_speakers: int | None = None,
         max_speakers: int | None = None, sensitivity: float | None = None, bus=None,
-        diarize=None, to_wav=None) -> Path:
+        diarize=None, to_wav=None, energy=None) -> Path:
     """Посчитать новое разделение и положить предпросмотр рядом с записью.
-    `diarize`/`to_wav` подменяются в тестах."""
+    `diarize`/`to_wav`/`energy` (звук для теста громкости) подменяются в тестах."""
     from meet import events, settings, transcribe
 
     bus = bus if bus is not None else events.EventBus()
     data = library.read_transcript_full(folder)
     if not data or not isinstance(data.get("segments"), list):
         raise ValueError("у записи нет расшифровки")
-    segments = [s for s in data["segments"] if isinstance(s, dict)]
+    data = {**data, "segments": [s for s in data["segments"] if isinstance(s, dict)]}
+    segments = data["segments"]
+    # Старая запись звонка: чьи реплики с микрофона (их не переразделяем) —
+    # по звуку обеих дорожек; решения остаются резиденту для применения.
+    segvoices.decide_tracks(folder, data, list(range(len(segments))), bus=bus, load=energy)
+    segvoices.mark_tracks(folder, data, speakers._owners())
     stem = "sys" if library.find_track(folder, "sys") else "source"
     src = library.find_track(folder, stem)
     if src is None:

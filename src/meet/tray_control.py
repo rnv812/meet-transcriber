@@ -1418,7 +1418,7 @@ class TrayControl:
         with self._speakers_lock:
             if self._busy_reason(folder, model=False) is None:
                 try:
-                    if speakers.normalize(folder, tracks=True):
+                    if speakers.normalize(folder):
                         search.forget(folder)
                 except OSError as e:
                     self.tray.log(f"метки спикеров не переписаны ({folder.name}): {e}")
@@ -1532,7 +1532,7 @@ class TrayControl:
             if reason:
                 raise _conflict(reason[:1].upper() + reason[1:])
             try:
-                if speakers.normalize(folder, tracks=True):
+                if speakers.normalize(folder):
                     from meet import search
 
                     search.forget(folder)
@@ -1604,7 +1604,7 @@ class TrayControl:
 
             # Сырые SPEAKER_XX — в «Спикер N» до расчёта: иначе применение,
             # переписав их, сочло бы результат устаревшим.
-            if speakers.normalize(folder, tracks=True):
+            if speakers.normalize(folder):
                 from meet import search
 
                 search.forget(folder)

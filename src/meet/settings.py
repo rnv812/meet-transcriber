@@ -402,6 +402,9 @@ class Recording:
     # Как подписывать микрофонную дорожку в транскрипте: это всегда владелец
     # машины. «Вы» — обращение к читателю транскрипта, но кому-то удобнее имя.
     speaker_name: str = "Вы"
+    # Прежние значения speaker_name: ими подписаны микрофонные реплики старых
+    # записей — по ним старые расшифровки узнают владельца (meet.segvoices).
+    former_speaker_names: tuple[str, ...] = ()
     # Расшифровывать сразу после записи. Если ключа нет в сыром конфиге —
     # пользователь не решал, и дефолт вычисляет Settings.from_raw.
     auto_transcribe: bool = True
@@ -415,10 +418,14 @@ class Recording:
     @classmethod
     def from_raw(cls, raw: dict) -> "Recording":
         name = raw.get("speaker_name")
+        speaker_name = str(name).strip() if name and str(name).strip() else "Вы"
+        former = raw.get("former_speaker_names")
+        former = [str(x).strip() for x in former if isinstance(x, str) and x.strip()]             if isinstance(former, list) else []
         return cls(
             out_dir=as_path(raw.get("out_dir")),
             voices_dir=as_path(raw.get("voices_dir")),
-            speaker_name=str(name).strip() if name and str(name).strip() else "Вы",
+            speaker_name=speaker_name,
+            former_speaker_names=tuple(dict.fromkeys(x for x in former if x != speaker_name)),
             auto_transcribe=as_flag(raw.get("auto_transcribe"), True),
             mic_device=as_device(raw.get("mic_device")),
             output_device=as_device(raw.get("output_device")),
@@ -429,6 +436,7 @@ class Recording:
             "out_dir": str(self.out_dir) if self.out_dir else None,
             "voices_dir": str(self.voices_dir) if self.voices_dir else None,
             "speaker_name": self.speaker_name,
+            "former_speaker_names": list(self.former_speaker_names),
             "auto_transcribe": self.auto_transcribe,
             "mic_device": {"name": self.mic_device} if self.mic_device else None,
             "output_device": {"name": self.output_device} if self.output_device else None,
@@ -1137,10 +1145,27 @@ def patch(updates: dict, path: Path | None = None) -> Settings:
             Llm.check(section_update)
         merged = getattr(current, name).to_raw()
         merged.update(section_update)
+        if name == "recording":
+            merged["former_speaker_names"] = _former_names(current.recording, merged)
         changed[name] = type(getattr(current, name)).from_raw(merged)
     updated = replace(current, **changed) if changed else current
     save(updated, path)
     return updated
+
+
+# Сколько прежних имён владельца помнить.
+FORMER_NAMES_MAX = 10
+
+
+def _former_names(current: "Recording", merged: dict) -> list[str]:
+    """Сменилось имя владельца — прежнее в список прежних (окно его не шлёт и
+    стереть не может): реплики старых записей подписаны им."""
+    former = list(current.former_speaker_names)
+    new = str(merged.get("speaker_name") or "").strip() or "Вы"
+    if new != current.speaker_name and current.speaker_name != "Вы":
+        former.append(current.speaker_name)
+    out = [x for x in dict.fromkeys(former) if x != new]
+    return out[-FORMER_NAMES_MAX:]
 
 
 def _route_hf_token(updates: dict, path: Path | None) -> dict:

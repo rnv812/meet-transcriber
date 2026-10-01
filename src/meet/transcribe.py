@@ -259,7 +259,7 @@ def _write_structured(path: Path, segments, title: str, name_map: dict,
         # подписям, как у старых расшифровок (meet.segvoices), не нужно.
         raw["track_marks"] = "pipeline"
     try:
-        library.write_transcript(path, raw)
+        library.write_transcript(path, raw, words="replace")
     except OSError as e:  # транскрипт уже написан — это не повод падать
         print(f"structured: не записал transcript.json ({e})")
 

@@ -122,19 +122,24 @@ def test_compute_embeds_only_missing_long_segments_from_their_track(meeting):
     assert again["computed"] == 0 and len(loaded) == 2
 
 
-def test_old_call_transcript_gets_mic_tracks_from_labels_without_clusters(meeting):
+def test_old_call_tracks_come_from_owner_labels_in_memory_only(meeting):
+    """Старая запись звонка без пометок: микрофон — только подписи владельца
+    («Вы», имя из настроек); переименованный собеседник («Анна», к которой
+    не ведёт ни один кластер) — собеседник. Открытие панели ничего не пишет."""
     data = library.read_transcript(meeting)
     data.pop("track_marks")
     for s in data["segments"]:
         s.pop("track", None)
-    data["names"] = {"Спикер 1": "Анна"}
-    data["segments"][0]["speaker"] = "Анна"
+    data["segments"][0]["speaker"] = "Анна"  # переименована без names (окно 0.1.x)
     library.write_transcript(meeting, data)
-    assert speakers.normalize(meeting, tracks=True) is True
-    data = library.read_transcript(meeting)
-    assert [s.get("track") for s in data["segments"]] == [None] * 10 + ["mic"]
-    assert data["track_marks"] == "inferred"
-    assert speakers.normalize(meeting, tracks=True) is False  # один раз
+    before = (meeting / "transcript.json").read_bytes()
+    assert speakers.normalize(meeting) is False
+    assert (meeting / "transcript.json").read_bytes() == before
+    got = library.read_transcript(meeting)
+    assert segvoices.mark_tracks(meeting, got, {"Вы"}) is True
+    assert [s["track"] for s in got["segments"]] == ["sys"] * 10 + ["mic"]
+    assert {s["track_source"] for s in got["segments"]} == {"inferred"}
+    assert segvoices.mark_tracks(meeting, got, {"Вы"}) is False  # уже вычислено
 
 
 # --- кластеризация и разбор по базе --------------------------------------------
@@ -273,13 +278,28 @@ def _old_call(meeting):
     library.write_transcript(meeting, data)
 
 
+def _tracks(folder):
+    return [(s.get("track"), s.get("track_source")) for s in library.read_transcript(folder)["segments"]]
+
+
 def test_hand_named_remote_turn_stays_on_the_remote_track(meeting, base):
     _old_call(meeting)
     speakers.relabel(meeting, [2], "Ольга Петрова", base)   # имени нет ни у одного кластера
-    speakers.normalize(meeting, tracks=True)                 # потом открыли панель
+    speakers.normalize(meeting)                              # потом открыли панель
     segs = library.read_transcript(meeting)["segments"]
-    assert segs[2]["speaker"] == "Ольга Петрова" and segs[2].get("track") is None
-    assert segs[10]["track"] == "mic"
+    assert segs[2]["speaker"] == "Ольга Петрова"
+    assert _tracks(meeting)[2] == ("sys", "inferred") and _tracks(meeting)[10] == ("mic", "inferred")
+
+
+def test_owner_turn_given_to_someone_else_keeps_the_mic_track(meeting, base):
+    """Пометка «по подписи» ставится до правки и уходит в файл вместе с ней:
+    реплика владельца, отданная другому, остаётся микрофонной."""
+    _old_call(meeting)
+    speakers.relabel(meeting, [10], "Ольга Петрова", base)
+    assert _tracks(meeting)[10] == ("mic", "inferred")
+    status = speaker_split.status(meeting, "Ольга Петрова")
+    assert status["voiced"] == 1
+    assert segvoices.needed(meeting, speakers.editable(meeting)["segments"], [10])[0][1] == "mic"
 
 
 def test_refused_edit_writes_no_track_marks(meeting, base):
@@ -290,21 +310,97 @@ def test_refused_edit_writes_no_track_marks(meeting, base):
     assert (meeting / "transcript.json").read_bytes() == before
 
 
-def test_track_inference_follows_history_from_diarized_labels(meeting, base):
-    """Правка, сделанная до пометок (ранняя сборка): подпись «Ольга» ни к
-    одному кластеру не ведёт, но история знает, что её реплики — от «Спикер 2»."""
+def test_wrong_marks_of_earlier_builds_are_not_trusted(meeting, base):
+    """Сборки до этого правила писали пометки сами при открытии панели — и
+    переименованного собеседника записывали в микрофон. Таким пометкам (без
+    источника) веры нет: дорожка вычисляется заново, правка их переписывает."""
     _old_call(meeting)
     data = library.read_transcript(meeting)
+    data["track_marks"] = "inferred"
     data["segments"][2]["speaker"] = "Ольга Петрова"
+    data["segments"][2]["track"] = "mic"
+    data["segments"][10]["track"] = "mic"
     library.write_transcript(meeting, data)
-    library.write_meta(meeting, {
-        speakers.HISTORY: [{"id": "a1", "at": "2026-09-30T18:00:00", "count": 11, "segments": [],
-                            "ops": [{"type": "relabel", "from": ["Спикер 2"], "to": "Ольга Петрова",
-                                     "segments": 1, "turns": 1}]}],
-        speakers.POS: 1, speakers.BASE: "2026-09-30T17:00:00"})
-    speakers.normalize(meeting, tracks=True)
+    got = library.read_transcript(meeting)
+    segvoices.mark_tracks(meeting, got, {"Вы"})
+    assert got["segments"][2]["track"] == "sys" and got["segments"][10]["track"] == "mic"
+    speakers.relabel(meeting, [0], "Спикер 2", base)
+    assert _tracks(meeting)[2] == ("sys", "inferred")
+    assert library.read_transcript(meeting)["track_marks"] == "segments"
+
+
+# --- дорожка по звуку (тест громкости) -------------------------------------------
+
+RATE = segvoices.ENERGY_RATE
+
+
+def _tone(seconds, spans, level, seed=7):
+    """Дорожка: тихий шум, на отрезках `spans` — «речь» громкостью `level`."""
+    rng = np.random.default_rng(seed)
+    audio = rng.normal(0, 3, int(seconds * RATE))
+    for a, b in spans:
+        n = int((b - a) * RATE)
+        audio[int(a * RATE):int(a * RATE) + n] += rng.normal(0, level, n)
+    return audio
+
+
+def _call_audio(owner_spans, remote_spans, echo=0.08):
+    """Микрофон: владелец громко, собеседники — тихим эхом из колонок;
+    системный звук: только собеседники."""
+    mic = _tone(60, owner_spans, 8000) + _tone(60, remote_spans, 8000 * echo, seed=8)
+    sys_ = _tone(60, remote_spans, 6000, seed=9)
+    return {"mic.opus": np.clip(mic, -32768, 32767).astype(np.int16),
+            "sys.opus": np.clip(sys_, -32768, 32767).astype(np.int16)}
+
+
+def test_audio_test_tells_owner_speech_from_remote_speech(meeting):
     segs = library.read_transcript(meeting)["segments"]
-    assert segs[2].get("track") is None and segs[10]["track"] == "mic"
+    tracks = _call_audio(owner_spans=[(48.0, 50.0), (3.0, 8.0)],
+                         remote_spans=[(0.0, 3.0), (8.5, 12.0), (14.0, 20.0)])
+    got = segvoices.audio_tracks(meeting, segs, [0, 1, 2, 3, 10], load=lambda src: tracks[src.name])
+    assert got == {"0.00-3.00": "sys", "3.00-8.00": "mic", "8.50-12.00": "sys",
+                   "14.00-20.00": "sys", "48.00-50.00": "mic"}
+    silent = {"mic.opus": np.zeros(RATE * 60, dtype=np.int16), "sys.opus": np.zeros(RATE * 60, dtype=np.int16)}
+    assert segvoices.audio_tracks(meeting, segs, [0, 10], load=lambda src: silent[src.name]) == {}
+
+
+def test_split_job_decides_tracks_by_audio_and_the_edit_keeps_them(meeting, base):
+    """Задача «Разделить» решает дорожки по звуку; резидент видит решение до
+    правки и пишет его вместе с правкой (`track_source: "audio"`). Решение по
+    звуку сильнее подписи: «Вы» на отрезке, где звучат собеседники, — sys."""
+    _old_call(meeting)
+    data = library.read_transcript(meeting)
+    data["segments"][9]["speaker"] = "Вы"         # подпись владельца, а звучит собеседник
+    library.write_transcript(meeting, data)
+    tracks = _call_audio(owner_spans=[(48.0, 50.0)], remote_spans=[(3.0, 47.0)])
+    got = segvoices.compute(meeting, [9, 10], embed=lambda a: A.astype(np.float32),
+                            load=lambda src: np.zeros(16000 * 60, dtype=np.int16),
+                            energy=lambda src: tracks[src.name])
+    assert got["computed"] == 2
+    assert segvoices.read_decisions(meeting) == {"43.00-47.00": "sys", "48.00-50.00": "mic"}
+    assert "sys:43.00-47.00" in segvoices.read_cache(meeting)
+    assert _tracks(meeting)[9] == (None, None)    # задача транскрипт не пишет
+    speakers.relabel(meeting, [0], "Спикер 2", base)
+    assert _tracks(meeting)[9] == ("sys", "audio") and _tracks(meeting)[10] == ("mic", "audio")
+    assert _tracks(meeting)[0] == ("sys", "inferred")
+
+
+def test_job_without_readable_audio_falls_back_to_labels(meeting):
+    _old_call(meeting)
+
+    def broken(src):
+        raise RuntimeError("ffmpeg не смог прочитать")
+
+    got = segvoices.compute(meeting, [10], embed=lambda a: A.astype(np.float32),
+                            load=lambda src: np.zeros(16000 * 60, dtype=np.int16), energy=broken)
+    assert got["computed"] == 1 and segvoices.read_decisions(meeting) == {}
+    assert "mic:48.00-50.00" in segvoices.read_cache(meeting)
+
+
+def test_pipeline_marked_transcript_needs_no_audio_test(meeting):
+    data = library.read_transcript(meeting)
+    assert segvoices.needs_audio(meeting, data, list(range(11))) is False
+    assert segvoices.mark_tracks(meeting, data, {"Вы"}) is False
 
 
 def test_voices_of_segments_that_no_longer_exist_are_pruned_on_commit(meeting, base):
@@ -315,3 +411,24 @@ def test_voices_of_segments_that_no_longer_exist_are_pruned_on_commit(meeting, b
     cache = segvoices.read_cache(meeting)
     assert "sys:999.00-1000.00" not in cache
     assert segvoices.key("sys", segs[1]) in cache
+
+
+def test_undo_of_a_cut_survives_later_track_refinement(meeting, base):
+    """Разрез реплики записан с пометкой «по подписи»; позже задача решила
+    дорожки по звуку, и следующая правка уточнила пометки. Отмена разреза
+    сверяет реплики без пометок дорожки — и проходит."""
+    _old_call(meeting)
+    data = library.read_transcript_full(meeting)
+    data["segments"][3]["words"] = [[14.0, 15.0, " Отгрузка"], [15.0, 15.5, " в"], [15.5, 17.0, " четверг,"],
+                                    [17.0, 17.5, " как"], [17.5, 20.0, " договаривались."]]
+    library.write_transcript(meeting, data)
+    speakers.split_turn(meeting, [3], 3, 10, None, base)      # «Отгрузка в| четверг…»
+    segs = library.read_transcript(meeting)["segments"]
+    assert len(segs) == 12 and segs[3]["track_source"] == "inferred"
+    segvoices.write_decisions(meeting, {segvoices.span(s): "sys" for s in segs})
+    speakers.relabel(meeting, [0], "Спикер 2", base)
+    assert library.read_transcript(meeting)["segments"][3]["track_source"] == "audio"
+    speakers.undo(meeting, base)                              # правка
+    speakers.undo(meeting, base)                              # разрез
+    segs = library.read_transcript(meeting)["segments"]
+    assert len(segs) == 11 and segs[3]["text"] == SEGMENTS[3]["text"]

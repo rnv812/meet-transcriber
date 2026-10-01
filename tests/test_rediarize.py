@@ -276,3 +276,60 @@ def test_label_falls_back_to_voice_when_time_does_not_decide(meeting, base, monk
     done = rediarize.finish(meeting, data, _got(parts, {"R0": [1.0, -1.0, 0.0], "R1": [0.0, 0.05, 1.0]}))
     assert [v["display"] for v in done["voices"]] == ["Спикер 1", "Спикер 2"]
     assert done["kept"] == []
+
+
+def test_two_new_clusters_never_share_a_name(meeting, base):
+    """Оба новых кластера база узнала как одного человека (или один наследует
+    имя, а другого база зовёт так же): имя получает один, второй — свободный
+    «Спикер N», а не два разных голоса под одним именем."""
+    data = speakers._transcript(meeting)
+    seg = data["segments"]
+    parts = [[{**seg[0], "speaker": "R0"}], None, [{**seg[2], "speaker": "R1"}], None,
+             [{**seg[4], "speaker": "R1"}]]
+    voices = {"R0": [1.0, -1.0, 0.0], "R1": [-1.0, 1.0, 0.0]}
+    done = rediarize.finish(meeting, data, _got(parts, voices, {"R0": "Анна Смирнова", "R1": "Анна Смирнова"}))
+    labels = [v["display"] for v in done["voices"]]
+    assert labels[0] == "Анна Смирнова" and labels[1] != "Анна Смирнова"
+    assert len(set(labels)) == 2
+    # Наследник по времени («Спикер 1» → имя из базы у другого кластера).
+    speakers.apply(meeting, [{"type": "rename", "label": "Спикер 1", "to": "Глеб"}], {}, base)
+    data = speakers._transcript(meeting)
+    seg = data["segments"]
+    parts = [[{**seg[0], "speaker": "R0"}], None, [{**seg[2], "speaker": "R0"}], None,
+             [{**seg[4], "speaker": "R1"}]]
+    done = rediarize.finish(meeting, data, _got(parts, voices, {"R1": "Глеб"}))
+    labels = [v["display"] for v in done["voices"]]
+    assert labels[0] == "Глеб" and labels[1] not in ("Глеб", "Вы") and len(set(labels)) == 2
+
+
+def test_old_call_recording_keeps_owner_turns_decided_by_audio(meeting, base, monkeypatch):
+    """Старая запись звонка без пометок: задача решает по звуку, какие реплики
+    с микрофона (их не переразделяют), и применение пишет дорожки
+    с `track_source: "audio"`."""
+    from meet import segvoices
+
+    data = library.read_transcript_full(meeting)
+    data.pop("track_marks")
+    for s in data["segments"]:
+        s.pop("track", None)
+    data["segments"][1]["speaker"] = "Олег"     # владелец, переименованный без настроек
+    library.write_transcript(meeting, data)
+    rate = segvoices.ENERGY_RATE
+    rng = np.random.default_rng(3)
+    mic = rng.normal(0, 3, rate * 14)
+    sys_ = rng.normal(0, 3, rate * 14)
+    mic[int(4.2 * rate):int(5.0 * rate)] += rng.normal(0, 8000, int(0.8 * rate))
+    for a, b in ((0.0, 4.0), (6.0, 9.0), (10.0, 12.0)):
+        sys_[int(a * rate):int(b * rate)] += rng.normal(0, 6000, int((b - a) * rate))
+    tracks = {"mic.opus": mic.astype(np.int16), "sys.opus": sys_.astype(np.int16)}
+    _run(meeting, base, monkeypatch, energy=lambda src: tracks[src.name])
+    assert segvoices.read_decisions(meeting) == {"0.00-4.00": "sys", "4.20-5.00": "mic",
+                                                 "6.00-9.00": "sys", "10.00-12.00": "sys"}
+    got = json.loads((meeting / rediarize.PREVIEW_NAME).read_text(encoding="utf-8"))
+    assert got["parts"][1] is None                  # реплика владельца не переразделяется
+    rediarize.apply(meeting, base)
+    segs = library.read_transcript(meeting)["segments"]
+    owner = next(s for s in segs if s["text"] == "Отлично.")
+    assert owner["speaker"] == "Олег" and (owner["track"], owner["track_source"]) == ("mic", "audio")
+    assert {(s["track"], s["track_source"]) for s in segs if s.get("kind") != "break" and s is not owner} \
+        == {("sys", "audio")}

@@ -84,35 +84,27 @@ def _transcript(folder: Path) -> dict:
 
 
 def _owners() -> set[str]:
-    try:
-        from meet import settings
-
-        return {"Вы", settings.load().recording.speaker_name}
-    except Exception:
-        return {"Вы"}
-
-
-def normalize(folder: Path, tracks: bool = False) -> bool:
-    """Старые транскрипты хранят сырые SPEAKER_XX: один раз переписать их в
-    «Спикер N» (как их и показывает окно) — без шага истории, это не правка
-    человека. Иначе первая же правка «меняла» бы все реплики. С `tracks` —
-    заодно пометить микрофонные сегменты старой записи звонка (`track`, см.
-    segvoices): по ним разделение спикера берёт голос с нужной дорожки.
-    True — переписан."""
     from meet import segvoices
 
+    return segvoices.owners()
+
+
+def normalize(folder: Path) -> bool:
+    """Старые транскрипты хранят сырые SPEAKER_XX: один раз переписать их в
+    «Спикер N» (как их и показывает окно) — без шага истории, это не правка
+    человека. Иначе первая же правка «меняла» бы все реплики. Дорожки
+    сегментов здесь не пишутся: они вычисляются в памяти (segvoices.mark_tracks)
+    и уходят в файл только вместе с правкой. True — переписан."""
     data = library.read_transcript_full(folder)
     segments = (data or {}).get("segments")
     if not isinstance(segments, list) or not all(isinstance(s, dict) for s in segments):
         return False
     raw = library.display_names(segments)
+    if not raw:
+        return False
     for s in segments:
         if s.get("speaker") in raw:
             s["speaker"] = raw[s["speaker"]]
-    stamped = tracks and segvoices.stamp_tracks(folder, data, _sidecar(folder), _owners(),
-                                                _applied(folder, data))
-    if not raw and not stamped:
-        return False
     library.write_transcript(folder, data)
     return True
 
@@ -124,15 +116,16 @@ def _applied(folder: Path, data: dict) -> list[dict]:
 
 def editable(folder: Path) -> dict:
     """Транскрипт для правки: сырые метки уже «Спикер N» (normalize), а у
-    старой записи звонка микрофонные сегменты помечены — в памяти, до любой
-    правки: иначе реплика собеседника, отданная человеку вручную, потом
-    выглядела бы микрофоном (её подпись не ведёт ни к одному кластеру).
-    Пометки уходят в файл вместе с правкой; отказ ничего не пишет."""
+    старой записи звонка дорожка каждого сегмента вычислена — в памяти, до
+    любой правки (segvoices.mark_tracks): по звуку, если задача его уже
+    проверила, иначе по подписи до правки. Иначе реплика владельца, отданная
+    другому человеку, потом выглядела бы собеседником, и наоборот. Пометки
+    уходят в файл вместе с правкой; отказ ничего не пишет."""
     from meet import segvoices
 
     normalize(folder)
     data = _transcript(folder)
-    segvoices.stamp_tracks(folder, data, _sidecar(folder), _owners(), _applied(folder, data))
+    segvoices.mark_tracks(folder, data, _owners())
     return data
 
 
@@ -546,7 +539,8 @@ def _commit(folder: Path, data: dict, meta_change, voices_dir: Path, voice_ops,
             blob.unlink(missing_ok=True)
 
     try:
-        library.write_transcript(folder, data)
+        # Данные правки — из read_transcript_full: в них все живые слова.
+        library.write_transcript(folder, data, words="replace")
         if sidecar is not None:
             _write_json(sidecar[0], sidecar[1])
         meta = library.update_meta(folder, meta_change)
@@ -568,7 +562,7 @@ def _commit(folder: Path, data: dict, meta_change, voices_dir: Path, voice_ops,
     try:
         from meet import segvoices
 
-        segvoices.prune(folder, [x for x in data["segments"] if isinstance(x, dict)])
+        segvoices.prune(folder, data)
     except (OSError, ValueError):
         pass  # кэш — только ускорение
     return meta, result
@@ -897,6 +891,18 @@ def _check(segments: list[dict], step: dict, side: str) -> None:
                 raise Stale(STALE)
 
 
+# Пометки дорожки старой записи уточняются и после шага (решение задачи по
+# звуку сильнее вывода по подписи) — сверке реплик они не мешают.
+_TRACK_KEYS = ("track", "track_source")
+
+
+def _same(a: dict, b: dict) -> bool:
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return a == b
+    return ({k: v for k, v in a.items() if k not in _TRACK_KEYS}
+            == {k: v for k, v in b.items() if k not in _TRACK_KEYS})
+
+
 def _replace(segments: list[dict], items: list | None, forward: bool) -> list[dict]:
     """Разрезанные шагом реплики: вперёд — сегмент `before` на месте `at`
     (номер до шага) становится частями `after`; назад — части снова один
@@ -909,7 +915,7 @@ def _replace(segments: list[dict], items: list | None, forward: bool) -> list[di
         pos = 0
         for item in items:
             at = item["at"]
-            if not pos <= at < len(segments) or segments[at] != item["before"]:
+            if not pos <= at < len(segments) or not _same(segments[at], item["before"]):
                 raise Stale(STALE)
             out += segments[pos:at] + [dict(x) for x in item["after"]]
             pos = at + 1
@@ -918,7 +924,8 @@ def _replace(segments: list[dict], items: list | None, forward: bool) -> list[di
     for item in items:
         at = item["at"] + shift
         after = item["after"]
-        if not pos <= at or segments[at:at + len(after)] != after:
+        here = segments[at:at + len(after)]
+        if not pos <= at or len(here) != len(after) or not all(map(_same, here, after)):
             raise Stale(STALE)
         out += segments[pos:at] + [dict(item["before"])]
         pos = at + len(after)

@@ -1557,6 +1557,101 @@ def _speaker_meeting(with_recordings):
     return with_recordings.name
 
 
+def _old_call_meeting(folder, tmp_path):
+    """Запись звонка версии 0.1.0: без пометок дорожек; «Борис» узнан по базе
+    при расшифровке (display сайдкара — «Борис»), «Спикер 2» — нет, «Вы» —
+    микрофон владельца."""
+    library.write_transcript(folder, {
+        "version": 1, "created_at": "2026-08-18T12:00:00", "speakers": {"SPEAKER_00": "Борис"},
+        "segments": [
+            {"start": 0.0, "end": 3.0, "speaker": "Борис", "text": "Начнём с плана."},
+            {"start": 3.5, "end": 6.0, "speaker": "Вы", "text": "Да, давайте."},
+            {"start": 6.5, "end": 9.0, "speaker": "Спикер 2", "text": "Я по срокам."},
+            {"start": 9.5, "end": 12.0, "speaker": "Борис", "text": "Хорошо."}]})
+    (folder / "2026-08-18_11-00_speakers.json").write_text(json.dumps({
+        "source": str(folder), "date": "2026-08-18", "speakers": [
+            {"label": "SPEAKER_00", "display": "Борис", "embedding": [1.0, 0.0]},
+            {"label": "SPEAKER_01", "display": "Спикер 2", "embedding": [0.0, 1.0]}]},
+        ensure_ascii=False), encoding="utf-8")
+    voices = tmp_path / "voices"
+    voices.mkdir(exist_ok=True)
+    (voices / "Борис.json").write_text(json.dumps({"samples": [
+        {"embedding": [1.0, 0.0], "source": "C:/rec/old", "date": "2026-08-01"}]}), encoding="utf-8")
+    return folder.name
+
+
+def _tracks(folder):
+    return [(s.get("speaker"), s.get("track"), s.get("track_source"))
+            for s in library.read_transcript(folder)["segments"]]
+
+
+def test_old_recording_voices_pane_rename_keeps_the_remote_speaker_remote(with_recordings, app, tmp_path):
+    """0.1.0, путь (a): человека, узнанного по базе, переименовали в панели
+    «Голоса». Его реплики остаются собеседником, голос строки не теряется, а
+    открытие панели «Спикеры» ничего не пишет."""
+    from meet import segvoices, speaker_split, speakers
+
+    rid = _old_call_meeting(with_recordings, tmp_path)
+    state = tray_control.TrayControl(app, queue=_SplitQueue())
+    assert state.person_action("Борис", "rename", {"to": "Борис Козлов"}) == {"ok": True}
+    side = json.loads((with_recordings / "2026-08-18_11-00_speakers.json").read_text(encoding="utf-8"))
+    assert [e["display"] for e in side["speakers"]] == ["Борис Козлов", "Спикер 2"]
+    before = (with_recordings / "transcript.json").read_bytes()
+    view = state.speakers(rid)
+    assert (with_recordings / "transcript.json").read_bytes() == before   # GET не пишет
+    row = next(r for r in view["speakers"] if r["label"] == "Борис Козлов")
+    assert row["has_voice"] is True
+    state.speakers_split_prepare(rid, {"label": "Борис Козлов"})
+    assert (with_recordings / "transcript.json").read_bytes() == before
+    data, segments, own = speaker_split._load(with_recordings, "Борис Козлов")
+    assert {t for _, t, _ in segvoices.needed(with_recordings, segments, own)} == {"sys"}
+    # Первая правка пишет дорожки вместе с собой — Борис Козлов остаётся sys.
+    state.speakers_relabel(rid, {"idx": [2], "to": "Анна", "count": 4, "labels": ["Спикер 2"]})
+    assert _tracks(with_recordings) == [
+        ("Борис Козлов", "sys", "inferred"), ("Вы", "mic", "inferred"),
+        ("Анна", "sys", "inferred"), ("Борис Козлов", "sys", "inferred")]
+    assert speakers.editable(with_recordings)["segments"][0]["track"] == "sys"
+
+
+def test_old_recording_popover_rename_without_remember_stays_remote(with_recordings, app, tmp_path):
+    """0.1.0, путь (b): «Кто это?» без «Запомнить голос» переписывал реплики
+    через сохранение транскрипта, не трогая names, — к «Ольге» не ведёт ни
+    один кластер. Она всё равно собеседник: микрофон — только владелец."""
+    from meet import speakers
+
+    rid = _old_call_meeting(with_recordings, tmp_path)
+    data = library.read_transcript(with_recordings)
+    for s in data["segments"]:
+        if s["speaker"] == "Спикер 2":
+            s["speaker"] = "Ольга"
+    state = tray_control.TrayControl(app, queue=_SplitQueue())
+    state.save_transcript(rid, data)
+    before = (with_recordings / "transcript.json").read_bytes()
+    state.speakers(rid)
+    assert (with_recordings / "transcript.json").read_bytes() == before
+    got = state.speakers_apply(rid, {"ops": [{"type": "rename", "label": "Ольга", "to": "Ольга Петрова"}],
+                                     "remember": {}})
+    assert got["pos"] == 1
+    assert _tracks(with_recordings)[2] == ("Ольга Петрова", "sys", "inferred")
+    assert _tracks(with_recordings)[1] == ("Вы", "mic", "inferred")
+    assert speakers.editable(with_recordings)["segments"][2]["track"] == "sys"
+
+
+def test_owner_renamed_in_settings_keeps_old_mic_turns(with_recordings, app, tmp_path):
+    """Реплики старых записей подписаны прежним именем владельца: оно
+    запоминается при смене имени в настройках и по-прежнему значит микрофон."""
+    from meet import segvoices, settings
+
+    _old_call_meeting(with_recordings, tmp_path)
+    settings.patch({"recording": {"speaker_name": "Кузьма"}})
+    settings.patch({"recording": {"speaker_name": "Кузьма Р."}})
+    assert settings.load().recording.former_speaker_names == ("Кузьма",)
+    data = library.read_transcript(with_recordings)
+    data["segments"][1]["speaker"] = "Кузьма"
+    segvoices.mark_tracks(with_recordings, data)
+    assert data["segments"][1]["track"] == "mic" and data["segments"][0]["track"] == "sys"
+
+
 def test_speakers_panel_apply_undo_redo_and_overview(with_recordings, app, tmp_path):
     rid = _speaker_meeting(with_recordings)
     state = tray_control.TrayControl(app, queue=_Queue())

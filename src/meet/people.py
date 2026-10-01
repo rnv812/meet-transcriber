@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import threading
 import uuid
 from pathlib import Path
 
@@ -79,16 +80,52 @@ def _turns(data: dict | None, name: str) -> list[dict]:
             if s.get("speaker") == name and _duration(s) is not None]
 
 
+# Речь по именам в одной записи: путь транскрипта → ((mtime_ns, размер),
+# {имя: секунд}). Как заголовки карточек библиотеки (library._transcript_head):
+# открыть «Голоса» ещё раз — без разбора всех транскриптов заново.
+_speech_cache: dict[str, tuple[tuple[int, int], dict[str, float]]] = {}
+_speech_lock = threading.Lock()
+
+
+def _speech_of(folder: Path) -> dict[str, float]:
+    path = library.transcript_path(folder)
+    try:
+        st = path.stat()
+    except OSError:
+        return {}
+    key = (st.st_mtime_ns, st.st_size)
+    with _speech_lock:
+        hit = _speech_cache.get(str(path))
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    per_name: dict[str, float] = {}
+    for s in _segments(library.read_transcript(folder)):
+        speaker, duration = s.get("speaker"), _duration(s)
+        if isinstance(speaker, str) and duration is not None:
+            per_name[speaker] = per_name.get(speaker, 0.0) + duration
+    with _speech_lock:
+        _speech_cache[str(path)] = (key, per_name)
+    return per_name
+
+
+def _forget_vanished(recordings: Path, alive: list[Path]) -> None:
+    """Записи, которых в библиотеке больше нет (удалены, объединены), — из кэша."""
+    keep = {str(library.transcript_path(f)) for f in alive}
+    root = str(recordings)
+    with _speech_lock:
+        for path in [p for p in _speech_cache if str(Path(p).parent.parent) == root and p not in keep]:
+            del _speech_cache[path]
+
+
 def _speech_index(recordings: Path) -> dict[str, tuple[int, float]]:
     """Имя → (встреч, секунд речи) по всей библиотеке за один проход: каждый
-    transcript.json разбирается один раз, сколько бы людей ни было в базе."""
+    transcript.json разбирается один раз, сколько бы людей ни было в базе, и
+    заново — только когда он изменился."""
     index: dict[str, tuple[int, float]] = {}
-    for folder in library.recording_folders(recordings):
-        per_name: dict[str, float] = {}
-        for s in _segments(library.read_transcript(folder)):
-            speaker, duration = s.get("speaker"), _duration(s)
-            if isinstance(speaker, str) and duration is not None:
-                per_name[speaker] = per_name.get(speaker, 0.0) + duration
+    folders = library.recording_folders(recordings)
+    _forget_vanished(recordings, folders)
+    for folder in folders:
+        per_name = _speech_of(folder)
         for speaker, seconds in per_name.items():
             meetings, total = index.get(speaker, (0, 0.0))
             index[speaker] = (meetings + 1, total + seconds)
@@ -159,30 +196,92 @@ def sample(name: str, voices: Path, recordings: Path) -> dict | None:
 
 
 def _rewrite_speaker(recordings: Path, old: str, new: str) -> int:
-    """Переписать имя спикера во всех транскриптах библиотеки (атомарно,
-    файл за файлом). Возвращает число изменённых записей."""
+    """Переписать имя спикера во всех записях библиотеки (атомарно, файл за
+    файлом): реплики, `names` и `speakers` транскрипта, `display` кластеров в
+    сайдкаре голосов (по нему панель «Спикеры» находит голос строки, а
+    старые записи — дорожку реплик) и имена из базы в несохранённом
+    результате «Переразделить». Возвращает число изменённых записей."""
     changed = 0
     for folder in library.recording_folders(recordings):
         data = library.read_transcript(folder)
-        if not data:
-            continue
         hit = False
-        for segment in _segments(data):
-            if segment.get("speaker") == old:
-                segment["speaker"] = new
-                hit = True
-        # «names» (названо из окна) и «speakers» (узнано по базе): метка → имя.
-        for key in ("names", "speakers"):
-            mapping = data.get(key)
-            if isinstance(mapping, dict):
-                for label, value in mapping.items():
-                    if value == old:
-                        mapping[label] = new
-                        hit = True
+        names = data.get("names") if isinstance(data, dict) and isinstance(data.get("names"), dict) else {}
+        # Ключ `names` — `display` кластера: он переименовывается вместе с
+        # ним, если не спорит с уже имеющимся ключом нового имени.
+        rename_display = not (old in names and new in names and names[old] != names[new])
+        if data:
+            for segment in _segments(data):
+                if segment.get("speaker") == old:
+                    segment["speaker"] = new
+                    hit = True
+            # «names» (названо из окна) и «speakers» (узнано по базе): метка → имя.
+            for key in ("names", "speakers"):
+                mapping = data.get(key)
+                if isinstance(mapping, dict):
+                    for label, value in mapping.items():
+                        if value == old:
+                            mapping[label] = new
+                            hit = True
+            if isinstance(data.get("names"), dict):
+                names = data["names"]
+                if rename_display and old in names:
+                    value = names.pop(old)
+                    names.setdefault(new, value)
+                    hit = True
+                for label in [k for k, v in names.items() if k == v]:
+                    names.pop(label)
+                if not names:
+                    data.pop("names")
+        if rename_display:
+            hit = _rewrite_sidecar(folder, old, new) or hit
+        _rewrite_rediarized(folder, old, new)
         if hit:
-            library.write_transcript(folder, data)
+            if data:
+                library.write_transcript(folder, data)
             changed += 1
     return changed
+
+
+def _write_json(path: Path, data: dict) -> None:
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _rewrite_sidecar(folder: Path, old: str, new: str) -> bool:
+    hit = False
+    for path in folder.glob("*_speakers.json"):
+        try:
+            side = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        entries = side.get("speakers") if isinstance(side, dict) else None
+        if not isinstance(entries, list):
+            continue
+        touched = False
+        for entry in entries:
+            if isinstance(entry, dict) and entry.get("display") == old:
+                entry["display"] = new
+                touched = True
+        if touched:
+            _write_json(path, side)
+            hit = True
+    return hit
+
+
+def _rewrite_rediarized(folder: Path, old: str, new: str) -> None:
+    path = folder / library.REDIARIZE_PREVIEW
+    try:
+        got = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    names = got.get("names") if isinstance(got, dict) else None
+    if isinstance(names, dict) and old in names.values():
+        got["names"] = {k: (new if v == old else v) for k, v in names.items()}
+        _write_json(path, got)
 
 
 def _same_file(a: Path, b: Path) -> bool:

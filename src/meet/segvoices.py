@@ -11,9 +11,23 @@
 расшифровки: его пишет подпроцесс, а сайдкар в это же время может менять
 панель «Спикеры» в резиденте — общий файл терял бы чужую запись.
 
-Дорожка сегмента: у новых расшифровок микрофонные сегменты помечены
-`track: "mic"`; у старых — вывод по подписи (`stamp_tracks`): подпись, к которой
-не ведёт ни один кластер диаризации, — владелец микрофона."""
+Дорожка сегмента (`track`: микрофон владельца или собеседники) нужна, чтобы
+голос реплики брать с той дорожки, где она звучит. У новых расшифровок её
+ставит пайплайн (`track_marks: "pipeline"`). У старых записей звонка (0.1.x) её
+нет — она вычисляется (`mark_tracks`) в памяти и в файл уходит только вместе
+с применённой правкой спикеров, с пометкой источника `track_source`:
+
+- `"audio"` — решено по звуку: задачи «Разделить спикера» и «Переразделить»
+  всё равно декодируют дорожки и сравнивают громкость mic.opus и sys.opus на
+  отрезке реплики (речь владельца громче в микрофоне, собеседника — в
+  системном звуке). Решения задача кладёт в `segment_tracks.json`;
+- `"inferred"` — по подписи: микрофон — только подписи владельца («Вы»,
+  нынешнее и прежние имена из настроек), всё остальное — собеседники.
+  Такая пометка выводима заново и уступает решению по звуку.
+
+Пометкам без источника на старой записи (их писали сборки до этого правила,
+иногда ошибочно: переименованный собеседник становился «микрофоном») веры
+нет: дорожка вычисляется заново, а первая же правка их переписывает."""
 
 from __future__ import annotations
 
@@ -52,60 +66,214 @@ def default_track(folder: Path) -> str:
     return "mic" if _has(folder, "mic") else "sys"
 
 
-def _diarized_labels(data: dict, sidecar: dict | None, steps: list[dict] | None = None,
-                     owners: set[str] = frozenset()) -> set[str]:
-    """Подписи, к которым ведёт кластер диаризации (через цепочку `names`), и
-    те, куда правки истории перенесли реплики таких подписей (кроме
-    владельца микрофона)."""
-    from meet.speakers import _resolve
+TRACKS_NAME = "segment_tracks.json"
+TRACK_SOURCES = ("audio", "inferred")
+# Тест громкости: кадры по 50 мс, громкость каждой дорожки — над её же фоном
+# (10-й процентиль кадров: тишина комнаты у микрофона, цифровая тишина у
+# системного звука). «Звучит» — кадр хотя бы одной дорожки громче своего фона
+# на ACTIVE_DB; решение — медиана разницы (микрофон минус собеседники) по
+# звучащим кадрам, по модулю не меньше DECIDE_DB. Эхо собеседников в
+# микрофоне (колонки вместо наушников) над фоном ниже, чем они же в системном
+# звуке, — и реплика остаётся собеседникам.
+ENERGY_RATE = 8000
+FRAME_S = 0.05
+ACTIVE_DB = 15.0
+DECIDE_DB = 6.0
+FLOOR_DB = -100.0
+FLOOR_PERCENTILE = 10
 
-    names = data.get("names") if isinstance(data.get("names"), dict) else {}
-    out = set()
-    for entry in (sidecar or {}).get("speakers") or []:
-        if isinstance(entry, dict) and isinstance(entry.get("display"), str):
-            out.add(entry["display"])
-            out.add(_resolve(names, entry["display"]))
-    for step in steps or []:
-        for op in step.get("ops") or []:
-            if not isinstance(op, dict):
-                continue
-            src = op.get("from")
-            sources = src if isinstance(src, list) else [src, op.get("label")]
-            if not any(isinstance(x, str) and x in out for x in sources):
-                continue
-            targets = [op.get("to")] + (op.get("into") if isinstance(op.get("into"), list) else [op.get("into")])
-            out.update(t for t in targets if isinstance(t, str) and t not in owners)
+
+def is_call(folder: Path) -> bool:
+    """Запись звонка: две дорожки — микрофон владельца и собеседники."""
+    return _has(folder, "sys") and _has(folder, "mic")
+
+
+def owners() -> set[str]:
+    """Подписи владельца микрофона: «Вы», нынешнее и прежние имена из настроек."""
+    try:
+        from meet import settings
+
+        rec = settings.load().recording
+        return {"Вы", rec.speaker_name, *rec.former_speaker_names}
+    except Exception:
+        return {"Вы"}
+
+
+def span(seg: dict) -> str:
+    return f"{float(seg['start']):.2f}-{float(seg['end']):.2f}"
+
+
+def _segments(data: dict) -> list[dict]:
+    return [s for s in data.get("segments") or [] if isinstance(s, dict)]
+
+
+def pipeline_marked(data: dict) -> bool:
+    """Дорожки сегментов поставил пайплайн — им можно верить как есть."""
+    marks = data.get("track_marks")
+    if marks:
+        return marks == "pipeline"
+    segments = _segments(data)
+    # Расшифровки ранних сборок: пометки есть, а track_marks ещё не было.
+    return any(s.get("track") for s in segments) and not any(s.get("track_source") for s in segments)
+
+
+def read_decisions(folder: Path) -> dict[str, str]:
+    """Решения задач по звуку: время сегмента → "mic" | "sys"."""
+    try:
+        raw = json.loads((folder / TRACKS_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    items = raw.get("items") if isinstance(raw, dict) else None
+    if not isinstance(items, dict):
+        return {}
+    return {k: v for k, v in items.items() if v in ("mic", "sys")}
+
+
+def write_decisions(folder: Path, fresh: dict[str, str]) -> None:
+    if not fresh:
+        return
+    path = folder / TRACKS_NAME
+    items = read_decisions(folder)
+    items.update(fresh)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(json.dumps({"version": 1, "items": items}), encoding="utf-8")
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def mark_tracks(folder: Path, data: dict, owner_labels: set[str] | None = None) -> bool:
+    """Дорожка каждого сегмента старой записи звонка — в памяти (`data`
+    меняется). По старшинству: пометка «по звуку» в транскрипте, решение
+    задачи по звуку (segment_tracks.json), пометка «по подписи», иначе — по
+    подписи заново. Расшифровку пайплайна не трогает. True — что-то поменялось."""
+    if not is_call(folder):
+        return False
+    if pipeline_marked(data):
+        if data.get("track_marks") != "pipeline":
+            data["track_marks"] = "pipeline"
+            return True
+        return False
+    labels = owners() if owner_labels is None else owner_labels
+    decided = read_decisions(folder)
+    changed = False
+    for s in _segments(data):
+        if s.get("kind") == "break":
+            continue
+        source, track = s.get("track_source"), s.get("track")
+        if source == "audio" and track in ("mic", "sys"):
+            continue
+        try:
+            by_audio = decided.get(span(s))
+        except (KeyError, TypeError, ValueError):
+            by_audio = None
+        if by_audio:
+            new = (by_audio, "audio")
+        elif source == "inferred" and track in ("mic", "sys"):
+            continue
+        else:
+            new = ("mic" if s.get("speaker") in labels else "sys", "inferred")
+        if (track, source) != new:
+            s["track"], s["track_source"] = new
+            changed = True
+    if data.get("track_marks") != "segments":
+        data["track_marks"] = "segments"
+        changed = True
+    return changed
+
+
+def needs_audio(folder: Path, data: dict, idx: list[int]) -> bool:
+    """Нужен ли тест громкости сегментам `idx` (номера в списке сегментов)."""
+    if not is_call(folder) or pipeline_marked(data):
+        return False
+    segments = _segments(data)
+    decided = read_decisions(folder)
+    for i in idx:
+        s = segments[i]
+        if s.get("kind") == "break" or s.get("track_source") == "audio":
+            continue
+        try:
+            if span(s) not in decided:
+                return True
+        except (KeyError, TypeError, ValueError):
+            continue
+    return False
+
+
+def _frame_db(audio: np.ndarray, rate: int) -> np.ndarray:
+    """Громкость кадров (дБ полной шкалы), по кускам — без float-копии всей дорожки."""
+    size = max(1, int(rate * FRAME_S))
+    n = len(audio) // size
+    out = np.empty(n, dtype=np.float32)
+    step = 20000
+    for a in range(0, n, step):
+        b = min(n, a + step)
+        block = audio[a * size:b * size].reshape(b - a, size).astype(np.float32) / 32768.0
+        power = (block * block).mean(axis=1)
+        out[a:b] = 10.0 * np.log10(np.maximum(power, 1e-10))
+    return np.maximum(out, FLOOR_DB)
+
+
+def _floor(db: np.ndarray) -> float:
+    return float(np.percentile(db, FLOOR_PERCENTILE)) if db.size else FLOOR_DB
+
+
+def audio_tracks(folder: Path, segments: list[dict], idx: list[int], load=None) -> dict[str, str]:
+    """Тест громкости: чья дорожка звучит на отрезке сегмента. → время
+    сегмента → "mic" | "sys"; неясные (тишина, оба поровну) не решены.
+    `load(src) -> int16 при ENERGY_RATE` подменяется в тестах."""
+    load = load or (lambda src: decode(src, ENERGY_RATE))
+    levels = {}
+    for stem in ("mic", "sys"):
+        src = library.find_track(folder, stem)
+        if src is None:
+            return {}
+        db = _frame_db(load(src), ENERGY_RATE)
+        levels[stem] = (db, _floor(db))
+    out: dict[str, str] = {}
+    for i in idx:
+        s = segments[i]
+        if s.get("kind") == "break":
+            continue
+        try:
+            a, b = int(float(s["start"]) / FRAME_S), int(np.ceil(float(s["end"]) / FRAME_S))
+            at = span(s)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if b <= a:
+            continue
+        rel = {}
+        for stem, (db, floor) in levels.items():
+            part = db[a:b]
+            if len(part) < b - a:  # дорожка короче — дальше тишина
+                part = np.concatenate([part, np.full(b - a - len(part), floor, dtype=np.float32)])
+            rel[stem] = np.maximum(part - floor, 0.0)
+        active = (rel["mic"] > ACTIVE_DB) | (rel["sys"] > ACTIVE_DB)
+        if not active.any():
+            continue
+        diff = float(np.median(rel["mic"][active] - rel["sys"][active]))
+        if diff >= DECIDE_DB:
+            out[at] = "mic"
+        elif diff <= -DECIDE_DB:
+            out[at] = "sys"
     return out
 
 
-def stamp_tracks(folder: Path, data: dict, sidecar: dict | None, owners: set[str],
-                 steps: list[dict] | None = None) -> bool:
-    """Старой расшифровке звонка (без пометок `track`) — пометить микрофонные
-    сегменты. Владелец микрофона — подпись без кластера диаризации (а без
-    сайдкара — подпись владельца из настроек или «Вы»); «Собеседник» —
-    дорожка собеседников. Меняет `data`; True — было что помечать."""
-    if data.get("track_marks") or not (_has(folder, "sys") and _has(folder, "mic")):
-        return False
-    segments = data.get("segments") or []
-    if any(isinstance(s, dict) and s.get("track") for s in segments):
-        data["track_marks"] = "pipeline"
-        return True
-    diarized = _diarized_labels(data, sidecar, steps, owners)
-    mic: set[str] = set()
-    labels = {s.get("speaker") for s in segments if isinstance(s, dict) and s.get("kind") != "break"}
-    for label in labels:
-        if not isinstance(label, str) or label == "Собеседник":
-            continue
-        if sidecar is not None and diarized:
-            if label not in diarized and not label.startswith("SPEAKER_"):
-                mic.add(label)
-        elif label in owners:
-            mic.add(label)
-    for s in segments:
-        if isinstance(s, dict) and s.get("speaker") in mic and s.get("kind") != "break":
-            s["track"] = "mic"
-    data["track_marks"] = "inferred"
-    return True
+def decide_tracks(folder: Path, data: dict, idx: list[int], bus=None, load=None) -> int:
+    """Задача (подпроцесс): решить дорожки сегментов `idx` по звуку и
+    сохранить решения для резидента. Не вышло (нет ffmpeg, битая дорожка) —
+    не беда: дорожки возьмутся по подписям. → сколько решено."""
+    if not needs_audio(folder, data, idx):
+        return 0
+    try:
+        got = audio_tracks(folder, _segments(data), idx, load=load)
+    except (OSError, RuntimeError, ValueError) as e:
+        if bus is not None:
+            bus.emit("log", text=f"дорожки реплик по звуку не определены: {e}")
+        return 0
+    write_decisions(folder, got)
+    return len(got)
 
 
 def tracks_of(folder: Path, segments: list[dict]) -> list[str | None]:
@@ -181,9 +349,30 @@ def write_cache(folder: Path, fresh: dict[str, np.ndarray], failed: list[str] = 
     return path
 
 
-def prune(folder: Path, segments: list[dict]) -> int:
-    """Убрать из кэша голоса сегментов, которых в транскрипте больше нет
-    (разрезаны, переразделены, перерасшифрованы). → сколько убрано."""
+def prune(folder: Path, data: dict) -> int:
+    """Убрать из кэша голоса (и из решений по звуку — дорожки) сегментов,
+    которых в транскрипте больше нет (разрезаны, переразделены,
+    перерасшифрованы). → сколько голосов убрано."""
+    data = {**data, "segments": [dict(s) for s in _segments(data)]}
+    mark_tracks(folder, data)  # дорожки — как их видят разделение и кэш
+    segments = data["segments"]
+    decided = read_decisions(folder)
+    if decided:
+        spans = set()
+        for s in segments:
+            try:
+                spans.add(span(s))
+            except (KeyError, TypeError, ValueError):
+                continue
+        if any(k not in spans for k in decided):
+            path = folder / TRACKS_NAME
+            tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+            try:
+                tmp.write_text(json.dumps({"version": 1, "items": {k: v for k, v in decided.items()
+                                                                   if k in spans}}), encoding="utf-8")
+                tmp.replace(path)
+            finally:
+                tmp.unlink(missing_ok=True)
     items = _items(folder)
     if not items:
         return 0
@@ -233,8 +422,8 @@ def missing(folder: Path, segments: list[dict], idx: list[int]) -> list[tuple[in
 # --- счёт (подпроцесс задачи) ---------------------------------------------------
 
 
-def decode(src: Path) -> np.ndarray:
-    """Дорожка → mono 16 кГц int16 в памяти (ffmpeg в канал, без временного
+def decode(src: Path, rate: int = SAMPLE_RATE) -> np.ndarray:
+    """Дорожка → mono int16 (16 кГц по умолчанию) в памяти (ffmpeg в канал, без временного
     файла). Громкость не выравниваем: признаки модели (fbank с вычитанием
     среднего) от неё не зависят."""
     import subprocess
@@ -243,7 +432,7 @@ def decode(src: Path) -> np.ndarray:
 
     ensure_ffmpeg()
     cmd = ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(src), "-vn", "-ac", "1",
-           "-ar", str(SAMPLE_RATE), "-f", "s16le", "-"]
+           "-ar", str(rate), "-f", "s16le", "-"]
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     proc = subprocess.run(cmd, capture_output=True, creationflags=flags)
     if proc.returncode != 0:
@@ -286,14 +475,19 @@ def _clip(audio: np.ndarray, seg: dict) -> np.ndarray:
     return audio[a:b].astype(np.float32) / 32768.0
 
 
-def compute(folder: Path, idx: list[int], bus=None, embed=None, load=decode) -> dict:
+def compute(folder: Path, idx: list[int], bus=None, embed=None, load=decode, energy=None) -> dict:
     """Посчитать недостающие голоса сегментов `idx` и дописать их в кэш.
-    `embed`/`load` подменяются в тестах. → {"computed", "skipped", "cached"}."""
+    `embed`/`load`/`energy` (звук для теста громкости) подменяются в тестах.
+    → {"computed", "skipped", "cached"}."""
     from meet import events
 
     bus = bus if bus is not None else events.EventBus()
     data = library.read_transcript(folder) or {}
-    segments = [s for s in data.get("segments") or [] if isinstance(s, dict)]
+    data = {**data, "segments": _segments(data)}
+    # Старая запись звонка: с какой дорожки брать голос реплики — по звуку.
+    decide_tracks(folder, data, idx, bus=bus, load=energy)
+    mark_tracks(folder, data)
+    segments = data["segments"]
     todo = missing(folder, segments, idx)
     total = len(needed(folder, segments, idx))
     if not todo:

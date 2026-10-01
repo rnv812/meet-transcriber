@@ -65,7 +65,10 @@ def _unit(x: np.ndarray) -> np.ndarray:
 
 
 def _load(folder: Path, label: str, data: dict | None = None) -> tuple[dict, list[dict], list[int]]:
-    data = data if data is not None else speakers._transcript(folder)
+    if data is None:
+        data = speakers._transcript(folder)
+        # Дорожки старой записи звонка — в памяти, как их видела задача голосов.
+        segvoices.mark_tracks(folder, data, speakers._owners())
     segments = data["segments"]
     own = _own(segments, label)
     if not own:

@@ -161,10 +161,27 @@ def read_transcript_full(folder: Path) -> dict | None:
         items = None
     if not isinstance(items, list):
         return data
+    # Запасной поиск — по времени: редактор вставил или удалил сегмент, и
+    # номера остальных сдвинулись (words.json он не переписывает).
+    by_time: dict[tuple, list] = {}
+    for entry in items:
+        if isinstance(entry, list) and len(entry) == 3:
+            try:
+                by_time.setdefault((float(entry[0]), float(entry[1])), []).append(entry)
+            except (TypeError, ValueError):
+                continue
     out = []
     for i, s in enumerate(segments):
-        if isinstance(s, dict) and "words" not in s and i < len(items) and _words_ok(s, items[i]):
-            s = {**s, "words": items[i][2]}
+        if isinstance(s, dict) and "words" not in s:
+            entry = items[i] if i < len(items) and _words_ok(s, items[i]) else None
+            if entry is None:
+                try:
+                    near = by_time.get((float(s.get("start")), float(s.get("end"))), [])
+                except (TypeError, ValueError):
+                    near = []
+                entry = next((e for e in near if _words_ok(s, e)), None)
+            if entry is not None:
+                s = {**s, "words": entry[2]}
         out.append(s)
     return {**data, "segments": out}
 
@@ -209,16 +226,21 @@ def _atomic_text(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def write_transcript(folder: Path, data: dict) -> Path:
+def write_transcript(folder: Path, data: dict, words: str = "keep") -> Path:
     """Атомарная запись: редактор читает файл в любой момент.
 
     Слова сегментов (`words`, если они есть в данных) уходят в words.json —
     целиком, по номерам сегментов; transcript.json остаётся без них. Данные
     без слов (окно, переименования) words.json не трогают: запись, которая
-    уже не сходится с сегментом, при чтении просто не подставляется."""
+    уже не сходится с сегментом, при чтении просто не подставляется.
+    `words="replace"` — данные несут все слова расшифровки (пайплайн, правка
+    спикеров по read_transcript_full): нет ни одного — words.json удаляется,
+    чтобы от прежней расшифровки не осталось чужих слов."""
     path = transcript_path(folder)
     segments = data.get("segments")
     has_words = isinstance(segments, list) and any(isinstance(s, dict) and "words" in s for s in segments)
+    if not has_words and words == "replace":
+        words_path(folder).unlink(missing_ok=True)
     if has_words:
         items = [[s.get("start"), s.get("end"), s["words"]]
                  if isinstance(s, dict) and isinstance(s.get("words"), list) and s["words"] else None
@@ -260,6 +282,16 @@ def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None]:
     with _heads_lock:
         _heads[str(path)] = (key, head)
     return head
+
+
+def _forget_heads(root: Path, names: set[str]) -> None:
+    """Заголовки записей этой библиотеки, папок которых больше нет (удалены,
+    объединены, переименованы), — из кэша: он не должен расти без конца."""
+    base = str(root)
+    with _heads_lock:
+        for key in [k for k in _heads if str(Path(k).parent.parent) == base
+                    and Path(k).parent.name not in names]:
+            del _heads[key]
 
 
 def read_meta(folder: Path) -> dict:
@@ -681,7 +713,9 @@ def listing(root: Path, limit: int = 200) -> list[dict]:
     if not root.is_dir():
         return []
     found = []
-    for folder in sorted(root.iterdir(), key=lambda p: p.name, reverse=True):
+    children = sorted(root.iterdir(), key=lambda p: p.name, reverse=True)
+    _forget_heads(root, {f.name for f in children})
+    for folder in children:
         card = describe(folder)
         if card is not None:
             found.append(card.to_raw())

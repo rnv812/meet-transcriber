@@ -131,3 +131,69 @@ def test_window_gets_no_words_but_knows_where_they_are(app, tmp_path, monkeypatc
     edited[0]["text"] = "Добрый вечер."
     state.save_transcript(folder.name, {"segments": edited})
     assert "words" not in library.read_transcript_full(folder)["segments"][0]
+
+
+def test_listing_forgets_heads_of_vanished_recordings(tmp_path):
+    import shutil
+
+    root = tmp_path / "recordings"
+    folders = []
+    for name in ("2026-09-29_10-00", "2026-09-30_16-04"):
+        folder = root / name
+        folder.mkdir(parents=True)
+        (folder / "sys.opus").write_bytes(b"x")
+        library.write_transcript(folder, {"title": name, "segments": []})
+        folders.append(folder)
+    assert len(library.listing(root)) == 2
+    assert {str(library.transcript_path(f)) for f in folders} <= set(library._heads)
+    shutil.rmtree(folders[0])
+    assert len(library.listing(root)) == 1
+    assert str(library.transcript_path(folders[0])) not in library._heads
+    assert str(library.transcript_path(folders[1])) in library._heads
+
+
+WORDY = [
+    {"start": 0.0, "end": 1.0, "speaker": "А", "text": "раз два", "words": [[0.0, 0.5, " раз"], [0.5, 1.0, " два"]]},
+    {"start": 1.0, "end": 2.0, "speaker": "Б", "text": "три", "words": [[1.0, 2.0, " три"]]},
+    {"start": 2.0, "end": 3.0, "speaker": "А", "text": "четыре", "words": [[2.0, 3.0, " четыре"]]},
+]
+
+
+def _lean(segments):
+    return [{k: v for k, v in s.items() if k != "words"} for s in segments]
+
+
+def test_editor_insert_or_remove_keeps_words_of_untouched_segments(tmp_path):
+    """Редактор вставил сегмент (номера сдвинулись) или удалил его: слова
+    остальных находятся по времени и тексту, а не теряются со сдвигом."""
+    library.write_transcript(tmp_path, {"segments": [dict(s) for s in WORDY]})
+    inserted = _lean(WORDY)
+    inserted.insert(1, {"start": 0.9, "end": 1.0, "speaker": "В", "text": "да"})
+    library.write_transcript(tmp_path, {"segments": inserted})
+    got = library.read_transcript_full(tmp_path)["segments"]
+    assert [bool(s.get("words")) for s in got] == [True, False, True, True]
+    assert got[2]["words"] == [[1.0, 2.0, " три"]]
+    removed = _lean(WORDY)[1:]
+    library.write_transcript(tmp_path, {"segments": removed})
+    got = library.read_transcript_full(tmp_path)["segments"]
+    assert [s["words"] for s in got] == [[[1.0, 2.0, " три"]], [[2.0, 3.0, " четыре"]]]
+
+
+def test_retranscription_without_words_drops_stale_words_json(tmp_path):
+    """Перерасшифровка без слов (выравнивание недоступно) не оставляет от
+    прежней расшифровки words.json — пайплайн пишет транскрипт целиком."""
+    library.write_transcript(tmp_path, {"segments": [dict(s) for s in WORDY]})
+    assert (tmp_path / "words.json").exists()
+    library.write_transcript(tmp_path, {"segments": _lean(WORDY)})   # окно: words.json не трогает
+    assert (tmp_path / "words.json").exists()
+    library.write_transcript(tmp_path, {"segments": _lean(WORDY)}, words="replace")
+    assert not (tmp_path / "words.json").exists()
+
+
+def test_pipeline_writes_transcript_with_replace(tmp_path):
+    from meet.transcribe import _write_structured
+
+    library.write_transcript(tmp_path, {"segments": [dict(s) for s in WORDY]})
+    (tmp_path / "sys.opus").write_bytes(b"x")
+    _write_structured(tmp_path, [Segment(0.0, 1.0, "раз два", "SPEAKER_00")], "t", {})
+    assert not (tmp_path / "words.json").exists()
