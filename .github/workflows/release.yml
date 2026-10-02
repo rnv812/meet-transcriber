@@ -1,0 +1,104 @@
+# Релиз по тегу: тесты, сборка установщика (scripts/build_release.ps1) и
+# публикация в Releases. Тег v0.1.0 — релиз 0.1.0; v0.1.0-rc1 — пререлиз той
+# же версии приложения (суффикс в версию сборки не идёт). Описание релиза —
+# docs/release-notes/<тег>.md, без него сборка не публикуется.
+#
+# Сторонние actions закреплены на SHA коммита (тег — в комментарии): у job
+# есть contents: write, и перевешенный чужой тег не должен получить его.
+# Обновление — новый SHA того же тега: gh api repos/<owner>/<repo>/commits/<тег>.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Значения из контекста — через env, а не подстановкой ${{ }} в текст
+      # скрипта: имя тега не должно становиться кодом PowerShell.
+      # $PSNativeCommandUseErrorActionPreference в каждом многострочном run:
+      # иначе pwsh роняет шаг только по коду выхода последней команды.
+      - name: Version from tag
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $tag = $env:TAG
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+)(-[0-9A-Za-z.]+)?$') { throw "Тег '$tag' не вида vX.Y.Z[-суффикс]" }
+          "version=$($Matches[1])" >> $env:GITHUB_OUTPUT
+          $notes = "docs/release-notes/$tag.md"
+          if (-not (Test-Path $notes)) { throw "Нет описания релиза $notes" }
+          "notes=$notes" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      # Закреплён на коммите ветки stable — имя тулчейна тогда не выводится
+      # из ссылки, его надо передать явно.
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-10-01
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: app/src-tauri
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.11.23"
+
+      # Лёгкое ядро без движка: тесты, которым нужны torch/pyannote, пропускаются сами.
+      - name: Python tests
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          uv venv --python 3.12 .venv-ci
+          uv pip install --python .venv-ci -e . pytest
+          $env:PYTHONPATH = "src"
+          ./.venv-ci/Scripts/python -m pytest -q -p no:cacheprovider
+
+      - name: Window tests
+        working-directory: app
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          npm ci --no-audit --no-fund
+          npm run check
+          npm test
+          npm run build
+
+      # После npm run build: generate_context! встраивает app/dist.
+      - name: Shell tests
+        working-directory: app/src-tauri
+        run: cargo test
+
+      - name: Build installer
+        id: build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/build_release.ps1 -Version $env:VERSION
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          name: meet ${{ github.ref_name }}
+          body_path: ${{ steps.version.outputs.notes }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            ${{ steps.build.outputs.installer }}
+            ${{ steps.build.outputs.sums }}
