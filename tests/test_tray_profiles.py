@@ -561,3 +561,12 @@ def test_get_reports_a_kept_previous_profile(state, tmp_path):
                          "review": {"checked": True, "blocked": 0}, "sections": {}})
     profiles.update_state(pid, lambda s: {**s, "unchecked": {"error": "таймаут", "at": time.time()}})
     assert state.profile("Вера")["kept_previous"] == "таймаут"
+
+
+def test_startup_sweeps_the_index_when_profiles_are_off(state, tmp_path):
+    store = profiles.profiles_dir() / profile_index.DIR_NAME
+    assert any(store.glob("*.json"))
+    _write_config(tmp_path, profiles={"enabled": False})  # выключили в файле, пока резидент не работал
+    state.warm_profiles_index()
+    assert not store.exists()
+    assert state._profile_index().cancelled  # и до включения не воскресает
