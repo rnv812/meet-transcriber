@@ -4,6 +4,7 @@ import {
   removeModel,
 } from "../../lib/api";
 import { errorText } from "../../lib/format";
+import { inTauri, retryGigaamInstall } from "../../lib/shell";
 import { jobActive, useTrackedJob } from "../../state/useTrackedJob";
 import { Button } from "../../ui/Button";
 import { HfTokenRow } from "./HfTokenRow";
@@ -68,6 +69,7 @@ export function ModelsPane({ endpoint, selectedModel, selectedGigaam = null, onS
   // Удаление выбранной модели — после подтверждения: она скачается снова при
   // следующей расшифровке (сотни мегабайт без предупреждения).
   const [confirmRemove, setConfirmRemove] = useState<Model | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   const load = useCallback(async () => {
     try { setModels(await getModels(endpoint)); setError(null); }
@@ -92,6 +94,14 @@ export function ModelsPane({ endpoint, selectedModel, selectedGigaam = null, onS
     finally { setRemoving(false); }
   };
 
+  /** «Повторить» необязательную установку GigaAM: её делает оболочка (uv). */
+  const retryGigaam = async () => {
+    setRetrying(true);
+    try { await retryGigaamInstall(); setError(null); }
+    catch (e) { setError(`GigaAM не установилась: ${errorText(e)}`); }
+    finally { setRetrying(false); await load(); }
+  };
+
   // Токен — до каталога: он нужен и тогда, когда каталог не загрузился.
   const token = <HfTokenRow endpoint={endpoint} onChanged={() => void load()} />;
   if (!models) {
@@ -111,6 +121,16 @@ export function ModelsPane({ endpoint, selectedModel, selectedGigaam = null, onS
     <>
       {token}
       {error && <p className="error">{error}</p>}
+      {models.gigaam_install_error && (
+        <p className="notice" role="status">
+          {models.gigaam_install_error}{" "}
+          {inTauri() && (
+            <Button onClick={() => void retryGigaam()} disabled={retrying}>
+              {retrying ? "Устанавливаю…" : "Повторить"}
+            </Button>
+          )}
+        </p>
+      )}
       {!models.can_download && (
         <p className="notice">
           Загрузчик моделей устанавливается вместе с движком. После установки движка модели можно скачать

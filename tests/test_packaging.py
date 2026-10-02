@@ -27,6 +27,7 @@ def test_extras_mirror_engine_constants():
     base = [_norm(r) for r in engine.PACKAGES]
     assert [_norm(r) for r in extras["engine-cpu"]] == base
     assert [_norm(r) for r in extras["engine-cuda"]] == base + list(engine.CUDA_RUNTIME)
+    assert [_norm(r) for r in extras["gigaam"]] == [_norm(r) for r in engine.OPTIONAL_PACKAGES]
 
 
 def test_core_dependencies_cover_resident_imports():

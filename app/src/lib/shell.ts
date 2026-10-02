@@ -105,6 +105,11 @@ export async function engineStatus(): Promise<EngineStatus | null> {
 }
 
 /** Поставить движок (`fresh` — удалить окружение и поставить заново). Минуты. */
+/** Повторить необязательную установку GigaAM в установленный движок (только в приложении). */
+export async function retryGigaamInstall(): Promise<void> {
+  await invoke<void>("retry_gigaam_install");
+}
+
 export async function installEngine(profile: "cuda" | "cpu", fresh: boolean): Promise<void> {
   await invoke<void>(fresh ? "reinstall_engine" : "install_engine", { profile });
 }

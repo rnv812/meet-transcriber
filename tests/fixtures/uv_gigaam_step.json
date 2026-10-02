@@ -1,0 +1,10 @@
+[
+  [
+    "uv.exe",
+    "pip",
+    "install",
+    "--python",
+    "C:\\env\\Scripts\\python.exe",
+    "C:\\w\\meet_transcriber-0.1.0-py3-none-any.whl[gigaam]"
+  ]
+]

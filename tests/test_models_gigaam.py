@@ -97,6 +97,7 @@ def test_state_marks_downloaded_selected_and_removable(data):
     assert whisper["selected"] and not whisper["removable"]  # общий кэш HF не трогаем
     assert state["gigaam_cache"] == str(data / "models" / "gigaam")
     assert "can_download_gigaam" in state
+    assert state["gigaam_install_error"] is None
 
 
 def test_broken_download_is_removable_but_not_downloaded(data):

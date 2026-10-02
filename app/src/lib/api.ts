@@ -281,6 +281,8 @@ export type ModelsState = {
   can_download_gigaam?: boolean;
   /** Папка моделей GigaAM (внутри папки данных приложения). */
   gigaam_cache?: string;
+  /** Необязательная установка GigaAM не прошла: «GigaAM не установилась: … — используется Whisper». */
+  gigaam_install_error?: string | null;
 };
 
 /** Префикс id моделей GigaAM в каталоге: «gigaam/v3_e2e_rnnt». */
