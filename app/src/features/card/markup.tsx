@@ -3,16 +3,18 @@
  * типам, блок «Наблюдения» под поиском. Сама разметка — lib/analysisView.ts.
  */
 
-import { useState, type ReactNode } from "react";
+import { useContext, useState } from "react";
 import {
   ChevronDown, ChevronRight, CircleAlert, CircleArrowRight, CircleQuestionMark, Eye, Gavel, Hand, Lightbulb, ListTodo,
   Split, ThumbsUp, TriangleAlert, type LucideIcon,
 } from "lucide-react";
 import { INSIGHT_LABEL, TYPE_FILTERS, TYPE_LABEL, type InsightView } from "../../lib/analysisView";
 import { clock } from "../../lib/format";
+import { JiraLinks } from "../../lib/jira";
 import type { Turn } from "../../lib/speakers";
 import type { InsightKind, PhraseType } from "../../lib/types";
 import { AskAgentButton } from "../../ui/AskAgent";
+import { LinkedText } from "../../ui/LinkedText";
 import "./markup.css";
 
 const TYPE_ICON: Record<PhraseType, LucideIcon | null> = {
@@ -91,15 +93,14 @@ function writeCollapsed(v: boolean) {
 }
 
 /** Блок «Наблюдения» под поиском: вид, текст, «почему», ссылки на реплики, ✦. */
-export function InsightsBlock({ insights, turns, onJump, onAsk, renderText }: {
+export function InsightsBlock({ insights, turns, onJump, onAsk }: {
   insights: InsightView[];
   turns: Turn[];
   /** Перейти к реплике (номер реплики карточки). */
   onJump: (turn: number) => void;
   onAsk?: (insight: InsightView) => void;
-  /** Текст со ссылками (Jira); нет — как есть. */
-  renderText?: (text: string) => ReactNode;
 }) {
+  const jira = useContext(JiraLinks);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [why, setWhy] = useState<ReadonlySet<string>>(() => new Set());
   if (!insights.length) return null;
@@ -123,8 +124,8 @@ export function InsightsBlock({ insights, turns, onJump, onAsk, renderText }: {
                   <Icon size={14} strokeWidth={1.9} aria-hidden="true" />
                 </span>
                 <div className="insight__body">
-                  <p className="insight__text">{renderText ? renderText(x.text) : x.text}</p>
-                  {open && x.why && <p className="insight__why muted">{renderText ? renderText(x.why) : x.why}</p>}
+                  <p className="insight__text"><LinkedText text={x.text} linker={jira} /></p>
+                  {open && x.why && <p className="insight__why muted"><LinkedText text={x.why} linker={jira} /></p>}
                   <div className="insight__row">
                     {x.why && (
                       <button type="button" className="link-btn insight__why-btn" aria-expanded={open}

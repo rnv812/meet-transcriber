@@ -26,7 +26,7 @@ import { DiagnosticsPane } from "./DiagnosticsPane";
 import { EnginePane } from "./EnginePane";
 import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSection";
 import { HotwordsEditor } from "./HotwordsEditor";
-import { MarkupSection } from "./MarkupSection";
+import { MarkupSection, markupChangesInvalid } from "./MarkupSection";
 import { ReplacementsEditor } from "./ReplacementsEditor";
 import { ModelsPane } from "./ModelsPane";
 import { PathText, Radio, Row, Switch, type Raw, type SetFn } from "./Section";
@@ -324,7 +324,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
     }
   }
   const dirty = Object.keys(changes);
-  const invalid = assistantChangesInvalid(changes) || exportChangesInvalid(changes, settings ?? {});
+  const invalid = assistantChangesInvalid(changes) || exportChangesInvalid(changes, settings ?? {})
+    || markupChangesInvalid(changes);
 
   const save = async () => {
     if (dirty.length === 0 || invalid) return;

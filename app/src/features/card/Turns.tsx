@@ -1,11 +1,13 @@
-import { memo, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { memo, useContext, useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { ChapterView, TurnRow } from "../../lib/analysisView";
 import { clock, plural } from "../../lib/format";
+import { JiraLinks } from "../../lib/jira";
 import { nfc, type Range } from "../../lib/search";
 import { NO_SPEAKER, isUnnamed, type Turn } from "../../lib/speakers";
 import type { PhraseType } from "../../lib/types";
 import { AskAgentButton } from "../../ui/AskAgent";
 import { Highlight } from "../../ui/Highlight";
+import { LinkedText } from "../../ui/LinkedText";
 import { TypeIcon } from "./markup";
 
 export type PersonColor = { name: string; color: string; has_avatar: boolean };
@@ -85,6 +87,8 @@ export const Turns = memo(function Turns({
   };
   const first = turns.findIndex((t) => t.kind !== "break");
   const roving = turns[focusAt] && turns[focusAt]!.kind !== "break" ? focusAt : first;
+  // Ключи задач Jira в тексте — ссылки (настройка «Ссылки на задачи Jira»).
+  const jira = useContext(JiraLinks);
   const types = annotations?.types;
   const key = annotations?.key;
   const renderTurn = (i: number) => {
@@ -148,7 +152,8 @@ export const Turns = memo(function Turns({
               {/* Реплика, найденная только по спикеру, — совпадение целиком. */}
               <p className="turn__text" data-hit={mark && !mark.ranges.length ? mark.first : undefined}
                 onContextMenu={onSplitAt ? (e) => onSplitAt(i, e) : undefined}>
-                {mark?.ranges.length ? <Highlight text={text} ranges={mark.ranges} firstHit={mark.first} /> : text}
+                {jira ? <LinkedText text={text} ranges={mark?.ranges} firstHit={mark?.first} linker={jira} />
+                  : mark?.ranges.length ? <Highlight text={text} ranges={mark.ranges} firstHit={mark.first} /> : text}
               </p>
             </div>
           </div>

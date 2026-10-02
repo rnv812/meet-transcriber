@@ -273,20 +273,68 @@ const URL_EXACT: &[&str] = &[
 /// Адрес из списка и без символов, которые что-то значат для оболочки
 /// Windows (`&`, `|`, `"`, `^`, пробелы, `\`, управляющие).
 pub fn url_allowed(url: &str) -> bool {
-    let plain = url
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || "-._~/:?=#%+".contains(c));
-    plain
+    plain_url(url)
         && (URL_EXACT.contains(&url)
             || URL_PREFIXES
                 .iter()
                 .any(|prefix| url.len() > prefix.len() && url.starts_with(prefix)))
 }
 
-/// Открыть страницу в браузере по умолчанию. Только адреса из списка.
+fn plain_url(url: &str) -> bool {
+    url.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "-._~/:?=#%+".contains(c))
+}
+
+/// Ссылки на задачи Jira (M3): из адреса Jira в настройках
+/// (`integrations.jira_base_url`) — префикс «https://хост[:порт]/». Только
+/// https, хост из букв, цифр, точек и дефисов (не с точки или дефиса и без
+/// «..»), порт — цифры; логин и пароль («@»), «?», «#», «\» — нет. Путь
+/// адреса не важен: пускаем ровно этот хост. Негодный адрес — None.
+pub fn jira_prefix(base: &str) -> Option<String> {
+    let rest = base.trim().strip_prefix("https://")?;
+    let authority = rest.split('/').next()?;
+    let (host, port) = match authority.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    };
+    let host_ok = !host.is_empty()
+        && host.len() <= 253
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-'])
+        && !host.contains("..");
+    let port_ok = port.map_or(true, |p| {
+        !p.is_empty() && p.len() <= 5 && p.chars().all(|c| c.is_ascii_digit())
+    });
+    (host_ok && port_ok).then(|| format!("https://{}/", authority.to_ascii_lowercase()))
+}
+
+/// Адрес на хосте Jira из настроек (`prefix` — из `jira_prefix`): хост — без
+/// учёта регистра, после префикса — что-то есть, символы — как у `url_allowed`.
+pub fn jira_url_allowed(url: &str, prefix: &str) -> bool {
+    plain_url(url)
+        && url.len() > prefix.len()
+        && url
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+}
+
+/// Префикс Jira из `config.json` резидента; адреса нет или он негодный — None.
+fn configured_jira_prefix() -> Option<String> {
+    let raw = std::fs::read_to_string(resident::data_dir().join("config.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    jira_prefix(value.get("integrations")?.get("jira_base_url")?.as_str()?)
+}
+
+/// Открыть страницу в браузере по умолчанию. Только адреса из списка и
+/// задачи на хосте Jira из настроек (адрес читается из `config.json` при
+/// каждом вызове — окно не может подсунуть свой).
 #[tauri::command]
 pub async fn open_url(url: String) -> Result<(), String> {
-    if !url_allowed(&url) {
+    let jira = || configured_jira_prefix().is_some_and(|prefix| jira_url_allowed(&url, &prefix));
+    if !url_allowed(&url) && !jira() {
         shell_log!("open_url: отказ, адрес не из списка: {url}");
         return Err("эту ссылку приложение не открывает".to_string());
     }
@@ -640,6 +688,72 @@ mod tests {
         ] {
             assert!(!url_allowed(url), "{url:?}");
         }
+    }
+
+    #[test]
+    fn jira_prefix_takes_only_a_plain_https_host() {
+        assert_eq!(
+            jira_prefix("https://jira.example.com").as_deref(),
+            Some("https://jira.example.com/")
+        );
+        assert_eq!(
+            jira_prefix(" https://Jira.Example.com/path/ ").as_deref(),
+            Some("https://jira.example.com/")
+        );
+        assert_eq!(
+            jira_prefix("https://jira.example.com:8443").as_deref(),
+            Some("https://jira.example.com:8443/")
+        );
+        for base in [
+            "",
+            "http://jira.example.com",
+            "jira.example.com",
+            "https://",
+            "https://user:pass@jira.example.com",
+            "https://user@jira.example.com",
+            "https://.example.com",
+            "https://jira.example.com.",
+            "https://jira..example.com",
+            "https://jira.example.com:",
+            "https://jira.example.com:80a",
+            "https://jira.example.com:123456",
+            "https://jira.example.com\\@evil.com",
+            "https://jira.example.com?x=1",
+            "https://jira.example.com#x",
+            "https://jira example.com",
+            "javascript:alert(1)",
+        ] {
+            assert_eq!(jira_prefix(base), None, "{base:?}");
+        }
+    }
+
+    #[test]
+    fn jira_links_only_on_the_configured_host() {
+        let prefix = jira_prefix("https://jira.example.com").unwrap();
+        for url in [
+            "https://jira.example.com/browse/SPR-131",
+            "https://JIRA.example.com/browse/SPR-1",
+            "https://jira.example.com/jira/browse/OPS-7",
+        ] {
+            assert!(jira_url_allowed(url, &prefix), "{url}");
+        }
+        for url in [
+            "https://jira.example.com",
+            "https://jira.example.com/",
+            "http://jira.example.com/browse/SPR-1",
+            "https://jira.example.com.evil.com/browse/SPR-1",
+            "https://jira.example.com@evil.com/browse/SPR-1",
+            "https://evil.com/jira.example.com/browse/SPR-1",
+            "https://jira.example.co/browse/SPR-1",
+            "https://jira.example.com:8443/browse/SPR-1",
+            "https://jira.example.com/browse/SPR-1&calc",
+            "https://jira.example.com/browse/SPR-1 calc",
+            "https://jira.example.com/browse/..\\..\\calc",
+        ] {
+            assert!(!jira_url_allowed(url, &prefix), "{url:?}");
+        }
+        // Обычный список это не расширяет: без настроек Jira не открывается.
+        assert!(!url_allowed("https://jira.example.com/browse/SPR-131"));
     }
 
     #[test]

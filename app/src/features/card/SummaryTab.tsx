@@ -14,10 +14,11 @@
  * (`onAskAgent`): ссылка на пункт уходит в поле ввода вкладки «Агент».
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentRequest } from "../../lib/agentRef";
 import { ApiError, getLiveDraft, getSummary, makeSummary, type Endpoint } from "../../lib/api";
 import { dayLabel, errorText } from "../../lib/format";
+import { JiraLinks } from "../../lib/jira";
 import { Markdown, type ItemAction } from "../../lib/markdown";
 import { isActiveJob, modelJobsOf } from "../../lib/status";
 import type { AssistantInfo, Job, LiveDraft, Summary } from "../../lib/types";
@@ -39,6 +40,8 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
   /** ✦ у пунктов: спросить агента. Нет — кнопок нет. */
   onAskAgent?: (request: AgentRequest) => void;
 }) {
+  // Ключи задач Jira в итогах — ссылки (настройки карточки).
+  const jira = useContext(JiraLinks);
   const askItem = useMemo<ItemAction | undefined>(() => onAskAgent && ((text, section) => (
     <AskAgentButton label={`Спросить агента об этом пункте: ${text.length > 80 ? `${text.slice(0, 79)}…` : text}`}
       title="Спросить агента об этом пункте"
@@ -147,7 +150,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
           )}
         </div>
         {hint}
-        <Markdown source={summary.markdown} className="assist__md" itemAction={askItem} />
+        <Markdown source={summary.markdown} className="assist__md" itemAction={askItem} jira={jira} />
       </>
     );
   } else if (summary === null && draft) {
@@ -164,7 +167,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
           <p className="muted assist__draft-note">
             Сводка, которую ассистент вёл во время встречи. Итоги модель сверит с полной расшифровкой.
           </p>
-          <Markdown source={draft.markdown} className="assist__md" itemAction={askItem} />
+          <Markdown source={draft.markdown} className="assist__md" itemAction={askItem} jira={jira} />
         </section>
       </>
     );

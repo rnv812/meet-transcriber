@@ -7,6 +7,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from meet import analysis, export, kb_export, library, settings
 from meet.llm.base import AgentReply
 
@@ -122,3 +124,47 @@ def test_transcript_view_settings_defaults_and_round_trip(tmp_path):
     assert settings.load(path).transcript_view.importance is True
     # Негодное значение из файла — по умолчанию.
     assert settings.TranscriptView.from_raw({"curve": "сбоку", "jira": "да"}).curve == "hover"
+
+
+# --- ссылки на Jira ---------------------------------------------------------------------
+
+
+def test_jira_settings_defaults_and_cleaning():
+    integrations = settings.Settings().integrations
+    assert integrations.to_raw()["jira_base_url"] == ""
+    assert integrations.to_raw()["jira_keys"] == r"[A-Z][A-Z0-9]+-\d+"
+    got = settings.Integrations.from_raw({"jira_base_url": " https://Jira.Example.com/ ", "jira_keys": "SPR, OPS"})
+    assert got.jira_base_url == "https://jira.example.com"
+    assert got.jira_keys == "SPR, OPS"
+    with_path = settings.Integrations.from_raw({"jira_base_url": "https://example.com/Jira/"})
+    assert with_path.jira_base_url == "https://example.com/Jira"
+    # Негодное из файла (правка руками) — по умолчанию, без ошибки.
+    bad = settings.Integrations.from_raw({"jira_base_url": "http://jira.example.com", "jira_keys": "(?P<k>x)"})
+    assert bad.jira_base_url == "" and bad.jira_keys == r"[A-Z][A-Z0-9]+-\d+"
+
+
+@pytest.mark.parametrize("base", [
+    "http://jira.example.com", "https://user:pass@jira.example.com", "https://jira.example.com?x=1",
+    "https://jira.example.com/#a", "https://.example.com", "https://jira..example.com", "javascript:alert(1)",
+    "https://jira.example.com\@evil.com", "https:// jira.example.com",
+])
+def test_jira_base_url_rejected_from_window(tmp_path, base):
+    with pytest.raises(ValueError):
+        settings.patch({"integrations": {"jira_base_url": base}}, tmp_path / "config.json")
+
+
+@pytest.mark.parametrize("keys", ["(", "(?i)abc-\d+", "(?P<k>[A-Z]+)-\d+", "x*", "A" * 201])
+def test_jira_keys_rejected_from_window(tmp_path, keys):
+    with pytest.raises(ValueError):
+        settings.patch({"integrations": {"jira_keys": keys}}, tmp_path / "config.json")
+
+
+def test_jira_settings_saved_from_window(tmp_path):
+    path = tmp_path / "config.json"
+    updated = settings.patch({"integrations": {"jira_base_url": "https://jira.example.com:8443/", "jira_keys": "SPR"}},
+                             path)
+    assert updated.integrations.jira_base_url == "https://jira.example.com:8443"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["integrations"]["jira_base_url"] == "https://jira.example.com:8443"
+    # Пустой адрес — ссылки выключены.
+    assert settings.patch({"integrations": {"jira_base_url": ""}}, path).integrations.jira_base_url == ""
