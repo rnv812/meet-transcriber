@@ -338,7 +338,8 @@ export function RecordingCard({
       first = turns.length ? (
         <TranscriptView turns={turns} colors={colors} playable={playable} onPlay={play}
           onNameSpeaker={nameSpeaker} onSpeaker={turnEdit.onSpeaker} selected={turnEdit.selected}
-          onSelect={turnEdit.onSelect} onSplitAt={onTextMenu} onAskAgent={askTurns}
+          onSelect={turnEdit.onSelect} onRestrictSelection={turnEdit.restrict} onSplitAt={onTextMenu}
+          onAskAgent={askTurns}
           toolbar={turnEdit.bar || textFix.bar ? <div className="tbars">{turnEdit.bar}{textFix.bar}</div> : null}
           find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} reveal={reveal} />
       ) : <EmptyState title="В записи нет речи" />;

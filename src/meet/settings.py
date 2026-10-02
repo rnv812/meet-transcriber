@@ -165,7 +165,7 @@ JIRA_TEXT_MAX = 200
 # https://хост[:порт][/путь] — без логина и пароля, «?» и «#». Тот же разбор у
 # окна (app/src/lib/jira.ts) и у оболочки (windows.rs, jira_prefix): open_url
 # пускает ссылки только на этот хост.
-_JIRA_BASE = re.compile(r"https://(?![.-])[A-Za-z0-9.-]+(?<![.-])(?::\d{1,5})?(?:/[A-Za-z0-9._~%/-]*)?")
+_JIRA_BASE = re.compile(r"https://(?![.-])[A-Za-z0-9.-]+(?<![.-])(?::[0-9]{1,5})?(?:/[A-Za-z0-9._~%/-]*)?")
 _JIRA_PROJECTS = re.compile(r"[A-Z][A-Z0-9]+(?:\s*,\s*[A-Z][A-Z0-9]+)*")
 # Синтаксис, которого нет в JavaScript или который понимается иначе: флаги, (?P…), комментарии.
 _JIRA_NOT_PORTABLE = re.compile(r"\(\?[aiLmsux#P]")

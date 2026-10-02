@@ -33,6 +33,8 @@ export type FindRequest = { q: string; t: number | null; n: number };
 export type RevealRequest = { turn: number; n: number };
 
 const NO_FILTER: ReadonlySet<PhraseType> = new Set();
+/** Сколько длится подсветка реплики, к которой перешли. */
+const FLASH_MS = 1700;
 
 export type { PersonColor };
 
@@ -50,7 +52,7 @@ const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavio
 
 export function TranscriptView({
   turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
-  view = null, onAskChapter, onAskInsight, reveal = null,
+  view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
@@ -60,7 +62,10 @@ export function TranscriptView({
   /** Правка спикера у реплики (TurnEdit): меню, выбор нескольких. */
   onSpeaker?: (turn: number, anchor: HTMLElement) => void;
   selected?: ReadonlySet<number>;
-  onSelect?: (turn: number, how: "toggle" | "range") => void;
+  /** Выбор реплик; `visible` — видимые при фильтре по типам (диапазон — только по ним). */
+  onSelect?: (turn: number, how: "toggle" | "range", visible?: (turn: number) => boolean) => void;
+  /** Фильтр спрятал выбранные реплики — оставить в выборе только видимые. */
+  onRestrictSelection?: (visible: (turn: number) => boolean) => void;
   onSplitAt?: (turn: number, event: MouseEvent<HTMLElement>) => void;
   /** Полоса над репликами (выбранные, итог назначения). */
   toolbar?: ReactNode;
@@ -120,7 +125,10 @@ export function TranscriptView({
   /** Реплики, которые показаны несмотря на фильтр (развёрнуты, открыты по ссылке). */
   const [opened, setOpened] = useState<ReadonlySet<number>>(() => new Set());
   const types = view?.types ?? null;
-  useEffect(() => { setOpened(new Set()); }, [filter, turns]);
+  // Сбрасываются со сменой фильтра или числа реплик; правка слова или спикера
+  // (перечитанная запись, новые `turns`) развёрнутое не сворачивает.
+  const turnCount = turns.length;
+  useEffect(() => { setOpened(new Set()); }, [filter, turnCount]);
   // Типов в анализе больше нет (выключили, анализ устарел) — фильтр снимается.
   useEffect(() => { if (!types) setFilter(NO_FILTER); }, [types]);
   const counts = useMemo(() => typeCounts(types), [types]);
@@ -141,6 +149,20 @@ export function TranscriptView({
       return next;
     });
   }, [rows]);
+  // С фильтром выбор (и действия над выбранным) — только среди видимых реплик.
+  const visible = useMemo(
+    () => (filter.size && rows ? new Set(rows.flatMap((r) => (r.kind === "turn" ? [r.i] : []))) : null),
+    [filter, rows]);
+  const select = useCallback((t: number, how: "toggle" | "range") => {
+    if (visible) onSelect?.(t, how, (i) => visible.has(i));
+    else onSelect?.(t, how);
+  }, [onSelect, visible]);
+  useEffect(() => {
+    if (!visible || !selected || !onRestrictSelection) return;
+    for (const i of selected) {
+      if (!visible.has(i)) { onRestrictSelection((k) => visible.has(k)); return; }
+    }
+  }, [visible, selected, onRestrictSelection]);
   const annotations = useMemo(
     () => (view ? { types: view.types, key: view.key, chapters: view.chapters } : null), [view]);
 
@@ -162,8 +184,9 @@ export function TranscriptView({
     if (!goto || doneGoto.current === goto.n) return;
     const el = box.current?.querySelector<HTMLElement>(`[data-turn="${goto.turn}"]`);
     if (!el) return; // ещё свёрнута — после следующей отрисовки
-    doneGoto.current = goto.n;
+    // «Расшифровка» скрыта (глава выбрана на «Итогах») — дойдём, когда её покажут.
     if (el.closest("[hidden]")) return;
+    doneGoto.current = goto.n;
     // Начало главы — к её заголовку: он над первой репликой.
     const prev = el.previousElementSibling;
     scrollTo(prev?.matches(".chapter-head") ? prev : el);
@@ -171,6 +194,8 @@ export function TranscriptView({
     el.classList.remove("turn--flash");
     void el.offsetWidth; // перезапуск анимации
     el.classList.add("turn--flash");
+    // Класс ставится мимо React: снять самим (иначе без анимации подсветка осталась бы навсегда).
+    setTimeout(() => el.classList.remove("turn--flash"), FLASH_MS);
   });
 
   // Новый результат: к нужной реплике (просьба из списка), новый запрос — к
@@ -275,7 +300,7 @@ export function TranscriptView({
       {types && <TypeFilters counts={counts} value={filter} onChange={setFilter} />}
       {toolbar}
       <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onNameSpeaker={onNameSpeaker}
-        onSpeaker={onSpeaker} selected={selected} onSelect={onSelect} onSplitAt={onSplitAt}
+        onSpeaker={onSpeaker} selected={selected} onSelect={onSelect ? select : undefined} onSplitAt={onSplitAt}
         marks={active ? marks : undefined} onAskAgent={onAskAgent} rows={rows} annotations={annotations}
         onAskChapter={onAskChapter} onExpand={expand} />
     </div>

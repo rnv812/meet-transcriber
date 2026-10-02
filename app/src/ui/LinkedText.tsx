@@ -40,10 +40,13 @@ export function JiraLink({ linker, keyText, children }: { linker: JiraLinker; ke
     if (e.ctrlKey || e.metaKey || e.shiftKey) return;
     e.preventDefault();
     e.stopPropagation();
+    // Двойной щелчок — выделение слова (правка L3), а не второе окно браузера.
+    if (e.detail > 1) return;
     void openUrl(url);
   };
   return (
-    <a className="jira-link" href={url} title={`Открыть ${keyText} в Jira`} onClick={open} rel="noreferrer noopener">
+    <a className="jira-link" href={url} title={`Открыть ${keyText} в Jira`} onClick={open} rel="noreferrer noopener"
+      draggable={false}>
       {children}
     </a>
   );

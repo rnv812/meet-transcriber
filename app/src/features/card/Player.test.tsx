@@ -308,3 +308,50 @@ test("начало реплики в пузыре — не длиннее 60 с�
   expect(Array.from(bubbleText(long))).toHaveLength(BUBBLE_TEXT_MAX);
   expect(bubbleText(long).endsWith("…")).toBe(true);
 });
+
+test("«Только важное» доиграло последний фрагмент: ▶, Пробел и K начинают снова с первого фрагмента", async () => {
+  const { audio } = setup();
+  await userEvent.click(screen.getByRole("button", { name: "Только важное" }));
+  playing(audio);
+  audio.currentTime = 450; // после последнего — пауза
+  fireEvent.timeUpdate(audio);
+  expect(HTMLMediaElement.prototype.pause).toHaveBeenCalledTimes(1);
+  Object.defineProperty(audio, "paused", { configurable: true, value: true });
+  fireEvent.pause(audio);
+  await userEvent.click(screen.getByRole("button", { name: "Воспроизвести" }));
+  expect(audio.currentTime).toBe(119);
+  expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
+  // Начало фрагмента — внутри: тут же снова не перематываем.
+  playing(audio);
+  fireEvent.timeUpdate(audio);
+  expect(audio.currentTime).toBe(119);
+  // Клавишами — то же.
+  for (const init of [{ key: "k", code: "KeyK" }, { key: " ", code: "Space" }]) {
+    audio.currentTime = 450;
+    Object.defineProperty(audio, "paused", { configurable: true, value: true });
+    fireEvent.pause(audio);
+    fireEvent.keyDown(document.body, init);
+    expect(audio.currentTime).toBe(119);
+  }
+});
+
+test("«Только важное»: время чуть раньше начала фрагмента (точность перемотки) — уже внутри, без повторной перемотки", async () => {
+  const { audio } = setup();
+  await userEvent.click(screen.getByRole("button", { name: "Только важное" }));
+  playing(audio);
+  audio.currentTime = 118.99999;
+  fireEvent.timeUpdate(audio);
+  expect(audio.currentTime).toBe(118.99999);
+});
+
+test("перетаскивание полосы в «Только важном» не перехватывается пропуском", async () => {
+  const { audio } = setup();
+  await userEvent.click(screen.getByRole("button", { name: "Только важное" }));
+  playing(audio);
+  fireEvent.pointerDown(bar(), { clientX: 45, button: 0, pointerId: 1 }); // 30 с — неважное
+  audio.currentTime = 30;
+  fireEvent.timeUpdate(audio);
+  expect(audio.currentTime).toBe(30);
+  fireEvent.pointerUp(bar(), { clientX: 45, pointerId: 1 });
+  expect(audio.currentTime).toBe(30); // отпустили в неважном — доиграет до важного
+});

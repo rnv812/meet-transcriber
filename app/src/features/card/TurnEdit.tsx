@@ -82,7 +82,10 @@ export function locate(texts: string[], offset: number): { k: number; char: numb
 
 export type TurnEdit = {
   selected: ReadonlySet<number>;
-  onSelect: (turn: number, how: "toggle" | "range") => void;
+  /** Выбор реплики; `visible` — какие реплики видны (фильтр по типам): диапазон берёт только их. */
+  onSelect: (turn: number, how: "toggle" | "range", visible?: (turn: number) => boolean) => void;
+  /** Оставить в выборе только видимые реплики (включили фильтр по типам). */
+  restrict: (visible: (turn: number) => boolean) => void;
   onSpeaker: (turn: number, anchor: HTMLElement) => void;
   onSplitAt: (turn: number, event: MouseEvent<HTMLElement>) => void;
   /** Полоса над репликами: сколько выбрано, итог назначения с «Отменить». */
@@ -141,20 +144,27 @@ export function useTurnEdit({
     return !!turn && turn.kind !== "break";
   };
 
-  const onSelect = useCallback((t: number, how: "toggle" | "range") => {
+  const onSelect = useCallback((t: number, how: "toggle" | "range", visible?: (turn: number) => boolean) => {
     if (!selectable(t)) return;
     setDone(null);
     setSelected((cur) => {
       const next = new Set(cur);
       if (how === "range" && anchorTurn !== null) {
         const [a, b] = anchorTurn < t ? [anchorTurn, t] : [t, anchorTurn];
-        for (let i = a; i <= b; i++) if (selectable(i)) next.add(i);
+        // Свёрнутые фильтром реплики в диапазон не попадают: действия — только над тем, что видно.
+        for (let i = a; i <= b; i++) if (selectable(i) && (!visible || visible(i))) next.add(i);
       } else if (next.has(t)) next.delete(t);
       else next.add(t);
       return next;
     });
     setAnchorTurn(t);
   }, [anchorTurn, turns]); // selectable читает turns
+  const restrict = useCallback((visible: (turn: number) => boolean) => {
+    setSelected((cur) => {
+      const kept = [...cur].filter(visible);
+      return kept.length === cur.size ? cur : new Set(kept);
+    });
+  }, []);
 
   const onSpeaker = useCallback((t: number, anchor: HTMLElement) => {
     setError(null);
@@ -403,5 +413,5 @@ export function useTurnEdit({
     </div>
   ) : null;
 
-  return { selected, onSelect, onSpeaker, onSplitAt, bar, menu: menuNode };
+  return { selected, onSelect, restrict, onSpeaker, onSplitAt, bar, menu: menuNode };
 }
