@@ -2109,7 +2109,7 @@ dependencies = [
 
 [[package]]
 name = "meet-desktop"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "native-tls",
  "portable-pty",
