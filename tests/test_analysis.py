@@ -346,3 +346,35 @@ def test_state_none_ready_stale_failed(tmp_path):
     analysis.analyze(folder, FakeRunner(GOOD), _cfg())
     assert analysis.state(folder)["state"] == "ready"
     assert "analysis_error" not in library.read_meta(folder)
+
+
+def test_one_bad_index_does_not_drop_the_section():
+    assert analysis._types({"²": "question", "#1": "task", "x": "risk"}, {1, 2}) == {"1": "task"}
+    got = analysis._chapters([{"start_i": 1.0, "end_i": "#2", "title": "А"},
+                              {"start_i": "²", "title": "Б"}], {1, 2})
+    assert got == [{"start_i": 1, "end_i": 2, "title": "А", "short": "А"}]
+
+
+def test_chapter_count_is_capped():
+    chapters = [{"start_i": i, "end_i": i, "title": f"Глава {i}", "short": str(i)} for i in range(200)]
+    got = analysis.repair_chapters(chapters, list(range(200)))
+    assert len(got) == analysis.CHAPTERS_MAX
+    assert got[0]["start_i"] == 0 and got[-1]["end_i"] == 199
+    assert all(a["end_i"] + 1 == b["start_i"] for a, b in zip(got, got[1:]))
+
+
+def test_write_retries_while_the_file_is_held(tmp_path, monkeypatch):
+    import os
+
+    calls = []
+    real = os.replace
+
+    def flaky(src, dst):
+        calls.append(dst)
+        if len(calls) == 1:
+            raise PermissionError("файл занят")
+        return real(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    path = analysis.write(tmp_path, {"version": 1})
+    assert json.loads(path.read_text(encoding="utf-8")) == {"version": 1} and len(calls) == 2

@@ -15,7 +15,9 @@ import { KIND_LABEL } from "../../live/liveModel";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import type { AgentInsert } from "./AgentTab";
-import { AnalysisStatus, reanalyzeBlocked, TitleSuggestPopover, useAnalysis, useTitleSuggest } from "./analysis";
+import {
+  AnalysisStatus, reanalyzeBlocked, reanalyzeLabel, TitleSuggestPopover, useAnalysis, useTitleSuggest,
+} from "./analysis";
 import { noProvider, useAssistant } from "./assistant";
 import { AudioPlayer, type AudioPlayerHandle } from "./AudioPlayer";
 import { CardActions } from "./CardActions";
@@ -24,7 +26,7 @@ import { CardHeader } from "./CardHeader";
 import { LiveCard } from "./LiveCard";
 import { RediarizeDialog, rediarizeJobOf } from "./RediarizeDialog";
 import { SpeakersPanel } from "./speakers/SpeakersPanel";
-import { TranscriptView, type FindRequest } from "./TranscriptView";
+import { TranscriptView, type FindRequest, type RevealRequest } from "./TranscriptView";
 import { useTextFix } from "./TextFix";
 import { useTurnEdit } from "./TurnEdit";
 import type { PersonColor } from "./Turns";
@@ -91,6 +93,8 @@ export function RecordingCard({
   const [audioFailed, setAudioFailed] = useState(false);
   /** «Спросить агента»: последняя ссылка для поля ввода вкладки «Агент». */
   const [agentAsk, setAgentAsk] = useState<AgentInsert | null>(null);
+  /** Глава из списка глав плеера: показать её в расшифровке. */
+  const [reveal, setReveal] = useState<RevealRequest | null>(null);
   const current = useRef({ endpoint, id });
   current.current = { endpoint, id };
 
@@ -245,6 +249,10 @@ export function RecordingCard({
       refs: x.refs.flatMap((r) => turnRefs(r, r)),
     });
   }, [turnRefs, askAgent]);
+  const showChapter = useCallback((c: number) => {
+    const ch = view?.chapters[c];
+    if (ch) setReveal((r) => ({ turn: ch.turn, n: (r?.n ?? 0) + 1 }));
+  }, [view]);
   const titleApplied = useCallback((updated: Recording) => {
     setRec((cur) => (cur ? { ...cur, ...updated, transcript: cur.transcript } : cur));
     onChanged?.();
@@ -328,7 +336,7 @@ export function RecordingCard({
           onNameSpeaker={nameSpeaker} onSpeaker={turnEdit.onSpeaker} selected={turnEdit.selected}
           onSelect={turnEdit.onSelect} onSplitAt={onTextMenu} onAskAgent={askTurns}
           toolbar={turnEdit.bar || textFix.bar ? <div className="tbars">{turnEdit.bar}{textFix.bar}</div> : null}
-          find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} />
+          find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} reveal={reveal} />
       ) : <EmptyState title="В записи нет речи" />;
       break;
     case "untranscribed":
@@ -388,6 +396,7 @@ export function RecordingCard({
         onRediarize={status.kind === "ready" && hasAudio ? () => setRediarizeOpen(true) : undefined}
         onReanalyze={status.kind === "ready" ? doReanalyze : undefined}
         reanalyzeBlocked={reanalyzeBlocked(analysis.state, noModel)}
+        reanalyzeLabel={reanalyzeLabel(analysis.state)}
         onSuggestTitle={status.kind === "ready" ? titleSuggest.open : undefined}
         onDelete={doDelete}
       />
@@ -458,7 +467,9 @@ export function RecordingCard({
       )}
       {status.kind !== "recording" && (hasAudio ? (
         <AudioPlayer key={id} ref={player} endpoint={endpoint} id={id} durationHint={rec.duration_s ?? spokenUntil}
-          onAvailable={audioAvailable} />
+          onAvailable={audioAvailable} turns={turns} chapters={view?.chapters} importance={view?.importance}
+          curveMode={prefs.curve} barLabels={prefs.barLabels} people={people} avatarVersion={avatarVersion}
+          onChapter={showChapter} />
       ) : (
         <div className="player player--off" role="status"><span className="muted">Аудио недоступно</span></div>
       ))}

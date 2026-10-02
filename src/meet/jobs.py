@@ -313,6 +313,18 @@ class JobQueue:
         self._wake.set()
         return job
 
+    def promote(self, job_id: str) -> bool:
+        """Ждущую фоновую задачу — в обычные: встаёт перед остальными фоновыми
+        (человек попросил именно её). → поднята ли."""
+        with self._lock:
+            if job_id not in self._low or job_id not in self._pending:
+                return False
+            self._low.discard(job_id)
+            self._pending.remove(job_id)
+            at = next((n for n, i in enumerate(self._pending) if i in self._low), len(self._pending))
+            self._pending.insert(at, job_id)
+            return True
+
     @property
     def stopping(self) -> bool:
         """Очередь гасится вместе с резидентом: задача, упавшая сейчас, убита

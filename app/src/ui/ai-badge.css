@@ -6,3 +6,6 @@
   border-radius: var(--r-sm); cursor: pointer; user-select: none;
 }
 .ai-badge:hover { background: rgba(94, 106, 210, 0.22); color: var(--text); }
+.ai-badge__sr {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}

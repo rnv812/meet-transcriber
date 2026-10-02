@@ -687,6 +687,14 @@ def title_source(meta: dict) -> str:
         return "auto"
     if meta.get("source") == "merge" and title.startswith("Объединённая встреча"):
         return "auto"
+    if meta.get("source") == "auto":
+        # Автозапись до 0.3.0 писала заголовок окна звонка без пометки: общий
+        # («Google Meet», код встречи) — тоже из окна, а не от человека.
+        from meet.settings import DEFAULT_CALL_SITES
+        from meet.titles import is_generic_site_title
+
+        if is_generic_site_title(title, DEFAULT_CALL_SITES):
+            return "site"
     return "user"
 
 
