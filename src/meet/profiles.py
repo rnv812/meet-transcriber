@@ -96,7 +96,10 @@ PROFILE_TIMEOUT_S = 600.0
 AUTO_EVERY_S = 86_400.0
 # Ссылка на реплику: та же реплика — в пределах этого сдвига начала (с).
 REF_SHIFT_S = 5.0
-REF_SIMILAR = 0.6
+# Другая реплика того же человека принимается за ссылку, только если исходной
+# на этом месте (±REF_GONE_S) больше нет и текст почти тот же.
+REF_SIMILAR = 0.85
+REF_GONE_S = 1.0
 WORDS_MIN = profile_index.WORDS_MIN
 # Скрытых утверждений помним не больше.
 HIDDEN_MAX = 500
@@ -278,7 +281,7 @@ def mark_failed(pid: str, error: str, root: Path | None = None) -> None:
 
 
 def clear_error(pid: str, root: Path | None = None) -> None:
-    update_state(pid, lambda s: {k: v for k, v in s.items() if k != "error"}, root)
+    update_state(pid, lambda s: {k: v for k, v in s.items() if k not in ("error", "unchecked")}, root)
 
 
 def mark_pending(pid: str, on: bool, *, manual: bool = False, root: Path | None = None) -> None:
@@ -327,11 +330,24 @@ def delete(pid: str, root: Path | None = None) -> bool:
 
 
 def delete_all(root: Path | None = None) -> int:
-    """Все профили и заметки этого компьютера. → сколько людей затронуто."""
+    """Все профили и заметки этого компьютера и индекс реплик (кто сколько
+    говорил во встречах — он есть только ради профилей). → сколько людей
+    затронуто."""
     n = 0
     for pid in all_ids(root):
         n += delete(pid, root)
+    forget_index(root)
     return n
+
+
+def forget_index(root: Path | None = None) -> None:
+    """Индекс реплик — с диска и из памяти процесса. Профили снова включат —
+    он построится заново (в фоне)."""
+    import shutil
+
+    store = _root(root) / profile_index.DIR_NAME
+    profile_index.forget(store)
+    shutil.rmtree(store, ignore_errors=True)
 
 
 def remove_for_voice(voice_file: Path, root: Path | None = None) -> None:
@@ -784,6 +800,8 @@ def build(pid: str, name: str, recordings: Path, runner, cfg, *, provider: str |
     if not any(sections.values()):
         raise ProfileError(GROUNDED_FAIL)
     summary = got.get("summary") or ""
+    if not got.get("summary_refs"):
+        summary = ""  # «Коротко» — только со своей опорой на реплики
     found_pcm = got.get("pcm") if want_pcm else None
     used = {ref["m"] for items in sections.values() for item in items for ref in item["refs"]}
     used |= {ref["m"] for ref in got.get("summary_refs") or []}
@@ -828,6 +846,14 @@ def refresh(pid: str, voices: Path, recordings: Path, runner, cfg, *, provider: 
     doc = build(pid, name, recordings, runner, cfg, provider=provider, bus=bus, store=store)
     if name_of(pid, voices) is None:
         raise ProfileError("человека удалили из базы голосов, пока составлялся профиль")
+    old = read(pid, root)
+    if (not (doc.get("review") or {}).get("checked") and old is not None
+            and (old.get("review") or {}).get("checked") is True):
+        # Проверка агентом не завершилась — проверенный прежний профиль
+        # остаётся; окно скажет «Проверка не завершена — показан прежний».
+        error = str((doc.get("review") or {}).get("error") or "проверка не завершилась")[:300]
+        update_state(pid, lambda st: {**st, "unchecked": {"error": error, "at": time.time()}}, root)
+        return profile_path(pid, root)
     path = write(pid, doc, root)
     clear_error(pid, root)
     return path
@@ -1019,15 +1045,23 @@ def review(runner, got: dict) -> tuple[dict, dict]:
 def _similar(a: str, b: str) -> bool:
     from difflib import SequenceMatcher
 
-    a, b = profile_index.norm_text(a)[:profile_index.HASH_CHARS], profile_index.norm_text(b)[:profile_index.HASH_CHARS]
+    a = profile_index.norm_text(a)[:QUOTE_MAX]
+    b = profile_index.norm_text(b)[:len(a)]
     return bool(a and b) and SequenceMatcher(None, a, b).ratio() >= REF_SIMILAR
 
 
-def resolve_ref(ref: dict, rows: list, texts=None) -> dict:
+def resolve_ref(ref: dict, rows: list, texts=None, name: str | None = None) -> dict:
     """Найти реплику ссылки в нынешней расшифровке. `rows` — реплики человека
-    во встрече из индекса ([i, start, chars, words, h, b]); `texts()` — тексты
-    реплик встречи {i: текст} (зовётся только если по номеру и отпечатку не
-    нашлось). → ссылка с нынешним номером и началом или с "stale": true."""
+    во встрече из индекса ([i, start, chars, words, h, b]); `texts()` — все
+    реплики встречи (`profile_index.turns_of`, с текстом и спикером; зовётся,
+    только если по номеру и отпечатку не нашлось).
+
+    По порядку: та же реплика (номер, начало ±1 с, отпечаток); та же по
+    отпечатку в пределах ±REF_SHIFT_S; иначе — реплика этого человека с почти
+    тем же текстом (≥ REF_SIMILAR по цитате), единственная такая и только если
+    исходной реплики на прежнем месте больше нет (её не отдали другому
+    спикеру). Иначе — "stale": ссылка никуда не ведёт. → ссылка с нынешним
+    номером и началом или с "stale": true."""
     t = float(ref.get("t") or 0.0)
     h = ref.get("h")
     ref = {k: v for k, v in ref.items() if k != "stale"}
@@ -1044,10 +1078,18 @@ def resolve_ref(ref: dict, rows: list, texts=None) -> dict:
     if same:
         return {**ref, "i": same[0][0], "t": same[0][1]}
     if near and ref.get("q") and texts is not None:
-        known = texts()
-        for r in near:
-            if _similar(ref["q"], known.get(r[0]) or ""):
-                return {**ref, "i": r[0], "t": r[1]}
+        turns = texts()
+        # Исходная реплика на месте, но уже не этого человека (её отдали
+        # другому спикеру, может быть, слив с соседней) — не подменяем.
+        quote = profile_index.norm_text(ref["q"])[:40]
+        if any((abs(x["start"] - t) <= REF_GONE_S and profile_index.text_hash(x["text"]) == h)
+               or (name is not None and x["speaker"] != name and quote and quote in profile_index.norm_text(x["text"]))
+               for x in turns):
+            return {**ref, "stale": True}
+        by_i = {x["i"]: x["text"] for x in turns}
+        hits = [r for r in near if _similar(ref["q"], by_i.get(r[0]) or "")]
+        if len(hits) == 1:
+            return {**ref, "i": hits[0][0], "t": hits[0][1]}
     return {**ref, "stale": True}
 
 
@@ -1055,7 +1097,7 @@ def resolve_refs(doc: dict, name: str, entries: dict, ix: profile_index.Index | 
     """Ссылки профиля — к нынешним расшифровкам: встреча удалена — ссылка
     (и утверждение без других ссылок, и цитаты) убирается; реплика найдена —
     нынешний номер; не найдена — "stale". `entries` — индекс библиотеки."""
-    cache: dict[str, dict] = {}
+    cache: dict[str, list] = {}
 
     def fix(refs) -> list[dict]:
         out = []
@@ -1065,13 +1107,12 @@ def resolve_refs(doc: dict, name: str, entries: dict, ix: profile_index.Index | 
                 continue  # встречу удалили
             rid = ref["m"]
 
-            def texts(rid=rid) -> dict:
+            def texts(rid=rid) -> list:
                 if rid not in cache:
-                    cache[rid] = {t["i"]: t["text"] for t in (ix.turns(rid) if ix is not None else [])
-                                  if t["speaker"] == name}
+                    cache[rid] = ix.turns(rid) if ix is not None else []
                 return cache[rid]
 
-            out.append(resolve_ref(ref, (entry.get("people") or {}).get(name) or [], texts))
+            out.append(resolve_ref(ref, (entry.get("people") or {}).get(name) or [], texts, name))
         return out
 
     out = dict(doc)
@@ -1083,8 +1124,9 @@ def resolve_refs(doc: dict, name: str, entries: dict, ix: profile_index.Index | 
             if refs:
                 kept.append({**item, "refs": refs})
         out["sections"][key] = kept
-    if doc.get("summary_refs"):
-        out["summary_refs"] = fix(doc["summary_refs"])
+    out["summary_refs"] = fix(doc.get("summary_refs"))
+    if not any(not r.get("stale") for r in out["summary_refs"]):
+        out["summary"], out["summary_refs"] = "", []  # «Коротко» без своей опоры не показываем
     p = doc.get("pcm")
     if isinstance(p, dict):
         p = dict(p)
@@ -1093,7 +1135,14 @@ def resolve_refs(doc: dict, name: str, entries: dict, ix: profile_index.Index | 
                 p[key] = {**p[key], "refs": fix(p[key].get("refs"))}
         if p.get("stress_signs"):
             p["stress_signs"] = [{**s, "refs": r} for s in p["stress_signs"] if (r := fix(s.get("refs")))]
-        out["pcm"] = p
+        live = lambda claim: any(not r.get("stale") for r in (claim or {}).get("refs") or [])  # noqa: E731
+        if not live(p.get("base")):
+            out.pop("pcm", None)  # у гипотезы не осталось опоры — не показываем
+        else:
+            for key in ("phase", "perception"):
+                if isinstance(p.get(key), dict) and not live(p[key]):
+                    del p[key]
+            out["pcm"] = p
     out["sources"] = {m: v for m, v in (doc.get("sources") or {}).items() if m in entries}
     return out
 
@@ -1108,6 +1157,9 @@ def text_view(doc: dict | None, name: str, notes: str = "") -> str:
     lines = [f"{name} — по {doc.get('meetings')} встречам, {doc.get('turns')} репликам · обновлено {when}"]
     if doc.get("reduced"):
         lines.append("Сокращённый профиль: реплик пока немного")
+    if (doc.get("review") or {}).get("checked") is False:
+        lines.append("Проверка утверждений агентом не завершена: показано то, что прошло фильтр "
+                     "(meet profile … --refresh — повторить)")
     if doc.get("summary"):
         lines += ["", f"Коротко: {doc['summary']}"]
     sources = doc.get("sources") or {}

@@ -132,6 +132,7 @@ class Index:
         self._mem: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._texts: dict[str, tuple[list, list[dict]]] = {}
+        self._texts_lock = threading.Lock()
         self.warm = False
         self.building = False
 
@@ -192,6 +193,12 @@ class Index:
                 except Exception:
                     entry = None
                 if entry is None:
+                    # Расшифровка есть, но не читается (её как раз пишут) —
+                    # прежняя строка остаётся (с прежним ключом: разберём
+                    # в следующий раз), а не «встречу удалили».
+                    prev = cur or disk
+                    if prev is not None:
+                        fresh[item.name] = prev
                     continue
                 self._save(entry)
                 fresh[item.name] = entry
@@ -204,8 +211,9 @@ class Index:
             elif self.store is not None:
                 for gone in set(self._mem) - set(fresh):
                     self._path(gone).unlink(missing_ok=True)
-            for gone in [rid for rid in self._texts if rid not in fresh]:
-                del self._texts[gone]
+            with self._texts_lock:
+                for gone in [rid for rid in list(self._texts) if rid not in fresh]:
+                    del self._texts[gone]
             self._mem = fresh
             self.warm = True
             return dict(fresh)
@@ -217,11 +225,13 @@ class Index:
         key = _key(folder)
         if key is None:
             return []
-        hit = self._texts.get(rid)
+        with self._texts_lock:
+            hit = self._texts.get(rid)
         if hit is not None and hit[0] == key:
             return hit[1]
         got = turns_of(library.read_transcript(folder))
-        self._texts[rid] = (key, got)
+        with self._texts_lock:
+            self._texts[rid] = (key, got)
         return got
 
 
@@ -241,6 +251,21 @@ def get(recordings: Path, store: Path | None = None) -> Index:
         if ix is None:
             ix = _registry[k] = Index(recordings, store)
         return ix
+
+
+def forget(store: Path) -> None:
+    """Забыть индексы с этим хранилищем (профили удалили или выключили):
+    из реестра процесса — и запретить им писать на диск (идущий первый
+    проход не воскресит удалённые файлы)."""
+    key = os.path.normcase(str(Path(store)))
+    with _registry_lock:
+        for k in [k for k in _registry if k[1] == key]:
+            ix = _registry.pop(k)
+            ix.store = None
+            ix._mem = {}
+            with ix._texts_lock:
+                ix._texts = {}
+            ix.warm = False
 
 
 def warm_in_background(ix: Index, on_done=None) -> bool:

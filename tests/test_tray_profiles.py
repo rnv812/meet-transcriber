@@ -323,7 +323,7 @@ def test_worker_argv_and_job_worker(monkeypatch, tmp_path, app):
     job = jobs.Job(id="x", kind=jobs.PROFILE, folder=str(tmp_path / "p" / "0123456789abcdef.json"))
     assert jobs.worker_argv(job)[-2:] == ["profile", job.folder]
     pid = _pid(tmp_path)
-    reply = json.dumps({"summary": "По делу.", "sections": {
+    reply = json.dumps({"summary": "По делу.", "summary_refs": ["m1#1"], "sections": {
         "style": [{"text": "Начинает со сроков.", "refs": ["m1#1"]}], "values": [], "how_to_talk": [],
         "avoid": [], "topics": []}}, ensure_ascii=False)
 
@@ -412,7 +412,7 @@ def cli_env(tmp_path, monkeypatch):
 def test_cli_profile_refresh_inline_then_show(cli_env, capsys, monkeypatch):
     from meet.llm.base import AgentReply
 
-    reply = json.dumps({"summary": "По делу.", "sections": {
+    reply = json.dumps({"summary": "По делу.", "summary_refs": ["m1#1"], "sections": {
         "style": [{"text": "Начинает со сроков.", "refs": ["m1#1"]}], "values": [], "how_to_talk": [],
         "avoid": [], "topics": []}}, ensure_ascii=False)
 
@@ -467,7 +467,8 @@ def test_settings_profiles_default_off(tmp_path):
 def test_pcm_flag_hides_the_section_and_explains_missing_data(state, tmp_path):
     pid = _pid(tmp_path)
     profiles.write(pid, {"version": 1, "person_id": pid, "updated_at": time.time(), "signature": "x",
-                         "sections": {}, "pcm": {"base": {"type": "thinker", "confidence": 0.6, "refs": []}}})
+                         "sections": {}, "pcm": {"base": {"type": "thinker", "confidence": 0.6,
+                                                          "refs": [{"m": "2026-09-12_10-00", "i": 1, "t": 6.0}]}}})
     got = state.profile("Вера")
     assert got["pcm_enabled"] is True and got["profile"]["pcm"]["base"]["type"] == "thinker"
     assert "pcm_note" not in got  # 18 реплик в 3 встречах — достаточно
@@ -534,3 +535,29 @@ def test_broken_voice_file_is_a_clear_409(state, tmp_path):
     (tmp_path / "voices" / "Тимур.json").write_text("{битый", encoding="utf-8")
     with pytest.raises(control.Conflict, match="не читается"):
         state.profile_notes("Тимур", {"text": "x"})
+
+
+# --- fix round 2 -------------------------------------------------------------------------
+
+
+def test_disabling_profiles_removes_the_index_and_reenabling_rebuilds_it(state, tmp_path, monkeypatch):
+    store = profiles.profiles_dir() / profile_index.DIR_NAME
+    assert any(store.glob("*.json"))  # индекс посчитан фикстурой
+    state.patch_settings({"profiles": {"enabled": False}})
+    assert not store.exists() and profile_index._registry == {}
+    started = []
+    monkeypatch.setattr(profile_index, "warm_in_background", lambda ix, on_done=None: started.append(ix) or True)
+    state.patch_settings({"profiles": {"enabled": True}})
+    assert state.profile("Вера")["indexing"] is True and started  # заново и в фоне
+    started[0].refresh()
+    assert any(store.glob("*.json"))
+    assert state.delete_profiles() == {"deleted": 0}
+    assert not store.exists()
+
+
+def test_get_reports_a_kept_previous_profile(state, tmp_path):
+    pid = _pid(tmp_path)
+    profiles.write(pid, {"version": 1, "person_id": pid, "updated_at": time.time() - 60, "signature": "x",
+                         "review": {"checked": True, "blocked": 0}, "sections": {}})
+    profiles.update_state(pid, lambda s: {**s, "unchecked": {"error": "таймаут", "at": time.time()}})
+    assert state.profile("Вера")["kept_previous"] == "таймаут"

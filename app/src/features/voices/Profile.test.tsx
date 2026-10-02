@@ -24,6 +24,7 @@ const people: Person[] = [
 export const PROFILE: Profile = {
   version: 1, person_id: "0123456789abcdef", name: "Вера", updated_at: Date.parse("2026-09-30T14:05:00") / 1000,
   meetings: 3, turns: 42, summary: "Предпочитает конкретику: цифры, сроки и владельцев задач.",
+  summary_refs: [{ m: "2026-09-29_10-00", i: 12, t: 331 }],
   sections: {
     style: [{ text: "Формулирует коротко и начинает с вывода.", refs: [
       { m: "2026-09-29_10-00", i: 12, t: 331, q: "Итог такой: релиз в пятницу." },
@@ -347,4 +348,43 @@ test("вкладки человека связаны с панелью", async (
   const tab = await screen.findByRole("tab", { name: "Профиль" });
   expect(tab).toHaveAttribute("aria-controls", "ptab-panel");
   expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", "ptab-voice");
+});
+
+// --- fix round 2 ---------------------------------------------------------------------------
+
+test("«Коротко» без своей опоры не показывается", async () => {
+  open({ ...ready, profile: { ...PROFILE, summary_refs: [] } });
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  expect(screen.queryByText("Коротко:")).toBeNull();
+});
+
+test("непроверенное обновление — показан прежний профиль и «Повторить»", async () => {
+  open({ ...ready, kept_previous: "таймаут проверки" });
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  expect(screen.getByText("Проверка не завершена — показан прежний профиль")).toHaveAttribute("title", "таймаут проверки");
+  expect(screen.getByRole("button", { name: "Повторить" })).toBeInTheDocument();
+});
+
+test("после «Удалить профиль» поле заметок пустое и старое не досохраняется", async () => {
+  vi.mocked(api.deleteProfile).mockResolvedValue({ ok: true });
+  open({ ...ready, notes: "Старые заметки" });
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  expect(screen.getByRole("textbox", { name: "Мои заметки" })).toHaveValue("Старые заметки");
+  vi.mocked(api.getProfile).mockResolvedValue({ ...ready, profile: null, state: "none", notes: "" });
+  fireEvent.click(screen.getByRole("button", { name: "Ещё действия с профилем" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: /Удалить профиль/ }));
+  fireEvent.click(within(screen.getByRole("alertdialog", { name: "Удалить профиль" }))
+    .getByRole("button", { name: "Удалить" }));
+  await waitFor(() => expect(screen.getByRole("textbox", { name: "Мои заметки" })).toHaveValue(""));
+  expect(api.saveProfileNotes).not.toHaveBeenCalled();
+});
+
+test("гипотеза PCM без живой опоры не показывается", async () => {
+  const pcm = { ...PCM_PROFILE.pcm!, base: { ...PCM_PROFILE.pcm!.base, refs: [
+    { m: "2026-09-29_10-00", i: 12, t: 331, stale: true }] } };
+  open({ ...ready, profile: { ...PCM_PROFILE, pcm }, pcm_enabled: true });
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  const section = screen.getByRole("region", { name: "Модель PCM" });
+  expect(within(section).queryByRole("img")).toBeNull();
+  expect(section).toHaveTextContent("Гипотеза появится после обновления профиля.");
 });

@@ -114,9 +114,10 @@ export function ProfilesSection({ draft, set, endpoint }: { draft: Raw; set: Set
           value={draft.profiles?.pcm !== false} onChange={(x) => set("profiles", "pcm", x)} />
       )}
       <Row label="Удалить все профили"
-        hint={count === null ? "Профили и ваши заметки о людях на этом компьютере"
+        hint={count === null ? "Профили, ваши заметки о людях и индекс реплик на этом компьютере"
           : count === 0 ? "Сохранённых профилей нет"
-            : `Сохранено: ${count} ${plural(count, "профиль", "профиля", "профилей")} — вместе с вашими заметками`}>
+            : `Сохранено: ${count} ${plural(count, "профиль", "профиля", "профилей")} — удалятся вместе с вашими `
+              + "заметками и индексом реплик"}>
         {confirmDelete ? (
           <span className="confirm" role="alertdialog" aria-label="Удалить все профили">
             <span>Удалить без возврата?</span>
