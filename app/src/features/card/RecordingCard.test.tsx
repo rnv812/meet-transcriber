@@ -32,6 +32,13 @@ vi.mock("../../lib/shell", () => ({
   agentKillRecording: vi.fn(async () => {}),
 }));
 
+/** «Ещё действия» (⋯) карточки → пункт меню. */
+async function more(item: string) {
+  if (!screen.queryByRole("menu", { name: "Ещё действия с записью" })) {
+    await userEvent.click(screen.getByRole("button", { name: "Ещё действия" }));
+  }
+  await userEvent.click(screen.getByRole("menuitem", { name: item }));
+}
 const ep = { base: "/api", token: null };
 const transcript: Transcript = {
   version: 1, title: null,
@@ -122,9 +129,9 @@ test("удаление во время расшифровки: ошибка ви
   const onDeleted = vi.fn();
   render(<RecordingCard id="r1" endpoint={ep} onDeleted={onDeleted} />);
   await screen.findByText("Привет всем");
-  await userEvent.click(screen.getByRole("button", { name: "Удалить" }));
+  await more("Удалить…");
   expect(screen.getByText("Удалить запись и расшифровку? Это действие нельзя отменить.")).toBeInTheDocument();
-  await userEvent.click(screen.getAllByRole("button", { name: "Удалить" })[0]!);
+  await more("Удалить");
   expect(await screen.findByRole("alert")).toHaveTextContent("идёт расшифровка, подождите");
   expect(onDeleted).not.toHaveBeenCalled();
 });
@@ -135,8 +142,8 @@ test("удаление: onDeleted после успеха", async () => {
   const onDeleted = vi.fn();
   render(<RecordingCard id="r1" endpoint={ep} onDeleted={onDeleted} />);
   await screen.findByText("Привет всем");
-  await userEvent.click(screen.getByRole("button", { name: "Удалить" }));
-  await userEvent.click(screen.getAllByRole("button", { name: "Удалить" })[0]!);
+  await more("Удалить…");
+  await more("Удалить");
   await waitFor(() => expect(onDeleted).toHaveBeenCalled());
 });
 
@@ -151,7 +158,8 @@ test("failed import: «Повторить» зовёт transcribe", async () => 
   expect(await screen.findByText("ffmpeg упал")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Повторить" }));
   expect(api.transcribe).toHaveBeenCalledWith(ep, "r1");
-  expect(screen.getByRole("button", { name: "Удалить" })).toBeInTheDocument();
+  await more("Удалить…");
+  expect(screen.getByRole("menuitem", { name: "Удалить" })).toBeInTheDocument();
 });
 
 test("untranscribed: пустое состояние и «Расшифровать»", async () => {
@@ -301,9 +309,8 @@ test("удаление: плеер отпускает файл до запрос
     srcAtDelete = audio.getAttribute("src");
     return { ok: true };
   });
-  await userEvent.click(screen.getByRole("button", { name: "Удалить" }));
-  await userEvent.click(within(screen.getByText(/Удалить запись и расшифровку/).parentElement!)
-    .getByRole("button", { name: "Удалить" }));
+  await more("Удалить…");
+  await more("Удалить");
   expect(api.deleteRecording).toHaveBeenCalled();
   expect(srcAtDelete).toBeNull();
 });
@@ -315,9 +322,8 @@ test("удаление: агент во вкладке «Агент» гасит
   vi.mocked(api.deleteRecording).mockImplementation(async () => { order.push("delete"); return { ok: true }; });
   render(<RecordingCard id="r1" endpoint={ep} onDeleted={() => {}} />);
   await screen.findByText("Привет всем");
-  await userEvent.click(screen.getByRole("button", { name: "Удалить" }));
-  await userEvent.click(within(screen.getByText(/Удалить запись и расшифровку/).parentElement!)
-    .getByRole("button", { name: "Удалить" }));
+  await more("Удалить…");
+  await more("Удалить");
   await waitFor(() => expect(order).toEqual(["kill r1", "delete"]));
 });
 
@@ -441,14 +447,14 @@ test("«Перерасшифровать» спрашивает подтверж
   vi.mocked(api.transcribe).mockResolvedValue({} as Job);
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
-  await userEvent.click(screen.getByRole("button", { name: "Перерасшифровать" }));
+  await more("Перерасшифровать…");
   expect(api.transcribe).not.toHaveBeenCalled();
   expect(screen.getByText(
     "Расшифровка будет создана заново: ручные правки и имена, не сохранённые в базе голосов, будут потеряны. Продолжить?")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Отмена" }));
+  await more("Отмена");
   expect(api.transcribe).not.toHaveBeenCalled();
-  await userEvent.click(screen.getByRole("button", { name: "Перерасшифровать" }));
-  await userEvent.click(screen.getByRole("button", { name: "Перерасшифровать" }));
+  await more("Перерасшифровать…");
+  await more("Перерасшифровать");
   await waitFor(() => expect(api.transcribe).toHaveBeenCalledWith(ep, "r1"));
 });
 
@@ -607,7 +613,7 @@ test("«Переразделить на спикеров…» открывает
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
   expect(screen.getByText(/Новое разделение на спикеров готово/)).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Переразделить на спикеров…" }));
+  await more("Переразделить на спикеров…");
   const dialog = await screen.findByRole("dialog", { name: "Переразделить на спикеров" });
   expect(screen.queryByText(/Новое разделение на спикеров готово/)).toBeNull();
   await userEvent.click(within(dialog).getByRole("button", { name: "Закрыть" }));

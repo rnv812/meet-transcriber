@@ -6,9 +6,23 @@
  * `onClose`). Клик снаружи закрывает. Положение — fixed, в пределах окна.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type RefObject } from "react";
+import {
+  Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject,
+} from "react";
 
-export type MenuItem = { label: string; onSelect: () => void; danger?: boolean };
+export type MenuItem = {
+  label: string;
+  onSelect: () => void;
+  danger?: boolean;
+  /** Значок слева от подписи (16 px, lucide-react). */
+  icon?: ReactNode;
+  /** Черта перед пунктом: отделяет опасное от обычного. */
+  separator?: boolean;
+  /** Подсказка при наведении: что именно сделает пункт. */
+  hint?: string;
+  /** Пункт виден, но сейчас недоступен (идёт другое действие); стрелки его пропускают. */
+  disabled?: boolean;
+};
 
 const MARGIN = 8;
 
@@ -38,7 +52,7 @@ export function ItemMenu({ at, label, items, note, anchor, onClose }: {
 
   // Пункты сменились (подтверждение удаления) — фокус снова на первом.
   useEffect(() => {
-    box.current?.querySelector<HTMLButtonElement>("[role=menuitem]")?.focus();
+    box.current?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)")?.focus();
   }, [note]);
 
   useEffect(() => {
@@ -52,7 +66,7 @@ export function ItemMenu({ at, label, items, note, anchor, onClose }: {
   }, [onClose, anchor]);
 
   const onKeyDown = (e: KeyboardEvent) => {
-    const all = [...(box.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]") ?? [])];
+    const all = [...(box.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]:not(:disabled)") ?? [])];
     const at = all.indexOf(document.activeElement as HTMLButtonElement);
     let next = -1;
     if (e.key === "ArrowDown") next = (at + 1) % all.length;
@@ -76,9 +90,15 @@ export function ItemMenu({ at, label, items, note, anchor, onClose }: {
       style={{ left: pos.x, top: pos.y }}>
       {note && <div className="item-menu__note">{note}</div>}
       {items.map((item) => (
-        <button key={item.label} type="button" role="menuitem" tabIndex={-1}
-          className={`item-menu__item${item.danger ? " item-menu__item--danger" : ""}`}
-          onClick={item.onSelect}>{item.label}</button>
+        <Fragment key={item.label}>
+          {item.separator && <div className="item-menu__sep" role="separator" />}
+          <button type="button" role="menuitem" tabIndex={-1} title={item.hint} disabled={item.disabled}
+            className={`item-menu__item${item.danger ? " item-menu__item--danger" : ""}`}
+            onClick={item.onSelect}>
+            {item.icon && <span className="item-menu__icon" aria-hidden="true">{item.icon}</span>}
+            {item.label}
+          </button>
+        </Fragment>
       ))}
     </div>
   );

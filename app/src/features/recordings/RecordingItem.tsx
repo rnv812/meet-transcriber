@@ -4,7 +4,10 @@ import { clock, dayLabel, duration } from "../../lib/format";
 import type { RecStatus } from "../../lib/status";
 import type { LibraryItem } from "../../lib/types";
 import { Highlight } from "../../ui/Highlight";
+import { BookOpen, FolderOpen, Pencil, Trash2 } from "lucide-react";
 import { ItemMenu, type MenuItem } from "./ItemMenu";
+
+const ICON = { size: 16, strokeWidth: 1.75, "aria-hidden": true } as const;
 
 /** Текст и вид бейджа; у готовой записи бейджа нет. */
 export function badgeOf(st: RecStatus): { text: string; tone: "run" | "err" | "" } | null {
@@ -108,14 +111,21 @@ export function RecordingItem({
   };
 
   const menuItems: MenuItem[] = confirmDelete ? [
-    { label: "Удалить", danger: true, onSelect: () => { closeMenu(false); actions?.onDelete?.(rec.id); } },
+    { label: "Удалить", danger: true, icon: <Trash2 {...ICON} />,
+      onSelect: () => { closeMenu(false); actions?.onDelete?.(rec.id); } },
     { label: "Отмена", onSelect: () => setConfirmDelete(false) },
   ] : [
-    { label: "Переименовать", onSelect: () => { closeMenu(false); begin(); } },
-    ...(actions?.onOpenFolder ? [{ label: "Открыть папку", onSelect: () => { closeMenu(); actions.onOpenFolder?.(rec); } }] : []),
-    ...(actions?.onKbExport && rec.has_transcript
-      ? [{ label: "Экспорт в базу знаний", onSelect: () => { closeMenu(); actions.onKbExport?.(rec.id); } }] : []),
-    ...(actions?.onDelete ? [{ label: "Удалить…", danger: true, onSelect: () => setConfirmDelete(true) }] : []),
+    { label: "Переименовать", icon: <Pencil {...ICON} />, onSelect: () => { closeMenu(false); begin(); } },
+    ...(actions?.onOpenFolder ? [{
+      label: "Открыть папку", icon: <FolderOpen {...ICON} />, onSelect: () => { closeMenu(); actions.onOpenFolder?.(rec); },
+    }] : []),
+    ...(actions?.onKbExport && rec.has_transcript ? [{
+      label: "Экспорт в базу знаний", icon: <BookOpen {...ICON} />,
+      onSelect: () => { closeMenu(); actions.onKbExport?.(rec.id); },
+    }] : []),
+    ...(actions?.onDelete ? [{
+      label: "Удалить…", danger: true, separator: true, icon: <Trash2 {...ICON} />, onSelect: () => setConfirmDelete(true),
+    }] : []),
   ];
 
   return (
