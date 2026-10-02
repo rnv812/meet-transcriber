@@ -90,7 +90,18 @@ test("строка поиска из списка уходит в useLibrary", a
   residentState.current = online();
   render(<App />);
   await userEvent.type(screen.getByRole("searchbox"), "план");
-  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "план", 0, 0);
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "план", 0, 0, []);
+});
+
+test("запомненный фильтр по категориям уходит в useLibrary (фильтрует резидент)", () => {
+  window.localStorage.setItem("meet.categoryFilter", JSON.stringify(["retro", "_none"]));
+  try {
+    residentState.current = online();
+    render(<App />);
+    expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, ["retro", "_none"]);
+  } finally {
+    window.localStorage.removeItem("meet.categoryFilter");
+  }
 });
 
 test("?recording=abc в адресе — выбрана запись abc", () => {

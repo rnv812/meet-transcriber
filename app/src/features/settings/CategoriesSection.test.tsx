@@ -18,7 +18,7 @@ const ep = { base: "/api", token: null };
 const defaults: Category[] = [
   { id: "daily", name: "Дейлик", color: "#4c8bf5", description: "Короткая встреча команды" },
   { id: "planning", name: "Планирование", color: "#2fa36b", description: "Планирование работ" },
-  { id: "retro", name: "Ретроспектива", color: "#7a8b99", description: "Что изменить" },
+  { id: "retro", name: "Ретроспектива", color: "#a0703c", description: "Что изменить" },
 ];
 const saved: Category[] = [defaults[0]!, defaults[2]!];
 const settings = { analysis: { category: true }, categories: saved };
@@ -87,8 +87,14 @@ test("добавить: фокус в название, id появляется 
   await userEvent.click(screen.getByRole("button", { name: "Добавить категорию" }));
   const fresh = screen.getAllByRole("textbox", { name: "Название категории" })[2]!;
   expect(fresh).toHaveFocus();
-  expect(screen.getByText("У каждой категории должно быть название")).toBeInTheDocument();
+  // Ошибка — не сразу после «Добавить», а когда из пустого поля ушли.
+  expect(screen.queryByText("У каждой категории должно быть название")).toBeNull();
   expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  await userEvent.tab();
+  expect(screen.getByText("У каждой категории должно быть название")).toBeInTheDocument();
+  await userEvent.type(fresh, "Без категории");
+  expect(screen.getByText(/Название «Без категории» занято/)).toBeInTheDocument();
+  await userEvent.clear(fresh);
   await userEvent.type(fresh, "Дейлик");
   expect(screen.getByText("Названия категорий не должны повторяться")).toBeInTheDocument();
   await userEvent.clear(fresh);
@@ -136,4 +142,32 @@ test("новые id не повторяются и годятся резиден
   expect(got[0]).toEqual({ id: "q-a-sessiya-0000", name: "Q&A сессия", color: "#4c8bf5", description: "о продукте" });
   expect(got[1]!.id).toMatch(/^q-a-sessiya-2-[0-9a-z]{4}$/);
   for (const c of got) expect(c.id).toMatch(/^[a-z0-9][a-z0-9_-]{0,31}$/);
+});
+
+test("палитра: одна остановка Tab, стрелки ходят по цветам; повторный щелчок по кружку закрывает", async () => {
+  await open();
+  const swatch = screen.getByRole("button", { name: "Цвет категории «Дейлик»: Синий" });
+  await userEvent.click(swatch);
+  const palette = screen.getByRole("radiogroup", { name: "Цвет категории" });
+  const radios = within(palette).getAllByRole("radio");
+  expect(radios.filter((r) => r.tabIndex === 0)).toHaveLength(1);
+  expect(within(palette).getByRole("radio", { name: "Синий" })).toHaveFocus();
+  await userEvent.keyboard("{ArrowRight}");
+  expect(within(palette).getByRole("radio", { name: "Бирюзовый" })).toHaveFocus();
+  await userEvent.keyboard("{ArrowLeft}{ArrowLeft}");
+  expect(within(palette).getByRole("radio", { name: "Серый" })).toHaveFocus();
+  await userEvent.keyboard("{Enter}");
+  expect(screen.getByRole("button", { name: "Цвет категории «Дейлик»: Серый" })).toHaveFocus();
+  const again = screen.getByRole("button", { name: "Цвет категории «Дейлик»: Серый" });
+  await userEvent.click(again);
+  expect(screen.getByRole("radiogroup")).toBeInTheDocument();
+  await userEvent.click(again);
+  expect(screen.queryByRole("radiogroup")).toBeNull();
+});
+
+test("счётчики не пришли — подтверждение удаления без числа", async () => {
+  vi.mocked(api.getCategoriesInfo).mockRejectedValue(new Error("нет связи"));
+  await open();
+  await userEvent.click(screen.getByRole("button", { name: "Удалить «Дейлик»" }));
+  expect(screen.getByRole("alert")).toHaveTextContent("Встречи с этой категорией будут показаны «Без категории».");
 });

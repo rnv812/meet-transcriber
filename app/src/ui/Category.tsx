@@ -20,13 +20,29 @@ export function CategoryDot({ color }: { color?: string | null }) {
   );
 }
 
-/** Метка категории (span): в списке записей она внутри кнопки записи. */
-export function CategoryChip({ category, small = false }: { category: Category | null; small?: boolean }) {
+/** Подсказка к метке: имя, а за ним — описание, если оно есть. */
+const hintOf = (category: Category) => category.name + (category.description ? ` — ${category.description}` : "");
+
+/** Метка категории (имя с точкой цвета) — в карточке. */
+export function CategoryChip({ category }: { category: Category | null }) {
   return (
-    <span className={`cat-chip${small ? " cat-chip--small" : ""}${category ? "" : " cat-chip--none"}`}
-      title={category?.description || undefined}>
+    <span className={`cat-chip${category ? "" : " cat-chip--none"}`}>
       <CategoryDot color={category?.color} />
       <span className="cat-chip__name">{category?.name ?? NO_CATEGORY_NAME}</span>
+    </span>
+  );
+}
+
+/**
+ * Категория в узком списке записей — одна точка цвета: имя целиком в подсказке
+ * и для экранного диктора (span внутри кнопки записи: aria-label ему не
+ * читается, поэтому текст скрыт визуально).
+ */
+export function CategoryMark({ category }: { category: Category }) {
+  return (
+    <span className="cat-mark" title={hintOf(category)}>
+      <CategoryDot color={category.color} />
+      <span className="cat-sr">{`Категория: ${category.name}`}</span>
     </span>
   );
 }

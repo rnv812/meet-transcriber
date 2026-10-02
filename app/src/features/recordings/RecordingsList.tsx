@@ -1,9 +1,8 @@
 import "./recordings.css";
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useCallback, useMemo, useState, type KeyboardEvent } from "react";
 import type { Resident } from "../../state/useResident";
 import type { Library } from "../../state/useLibrary";
 import { deleteRecording, kbExport, mergeRecordings, patchRecording, setRecordingCategory } from "../../lib/api";
-import { categoryKey, loadCategoryFilter, NO_CATEGORY, saveCategoryFilter } from "../../lib/categories";
 import { errorText } from "../../lib/format";
 import { agentKillRecording, inTauri, openFolder } from "../../lib/shell";
 import { statusOf, type RecStatus } from "../../lib/status";
@@ -11,7 +10,7 @@ import type { Category } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
-import { CategoryFilter, CategoryFilterChip } from "./CategoryFilter";
+import { CategoryFilter, CategoryFilterChips } from "./CategoryFilter";
 import { ImportZone } from "./ImportZone";
 import { RecordingItem, type ItemActions, type PickHow } from "./RecordingItem";
 import { SearchBox } from "./SearchBox";
@@ -32,11 +31,18 @@ type Props = {
   onDeleting?: (id: string) => void;
   /** Категории встреч из настроек: метки у записей, фильтр, пункт «Категория» в меню. */
   categories?: Category[];
+  /**
+   * Фильтр по категориям (id и NO_CATEGORY): его применяет резидент, `library.items` уже
+   * отфильтрованы. Живёт в App вместе с поиском.
+   */
+  categoryFilter?: string[];
+  onCategoryFilter?: (keys: string[]) => void;
   /** Перейти в раздел настроек («Настроить категории…»). */
   onOpenSettings?: (section: string) => void;
 };
 
 const NO_CATEGORIES: Category[] = [];
+const NO_FILTER: string[] = [];
 
 /** Итог действия из меню: строка над списком, закрывается «×». */
 type Notice = { text: string; error: boolean };
@@ -46,7 +52,7 @@ const busy = (st: RecStatus) => st.kind === "recording" || st.kind === "queued" 
 
 export function RecordingsList({
   selected, onSelect, library, resident, q, onQ, onOpenHit, onChanged, onDeleting, categories = NO_CATEGORIES,
-  onOpenSettings,
+  categoryFilter = NO_FILTER, onCategoryFilter, onOpenSettings,
 }: Props) {
   const snapshot = resident.snapshot ?? null;
   const endpoint = resident.endpoint ?? null;
@@ -59,9 +65,6 @@ export function RecordingsList({
   const [anchor, setAnchor] = useState<string | null>(null);
   const [keepOriginals, setKeepOriginals] = useState(false);
   const [merging, setMerging] = useState(false);
-  /** Фильтр по категориям (запоминается в этом окне); пусто — все записи. */
-  const [catFilter, setCatFilter] = useState<string[]>(loadCategoryFilter);
-  useEffect(() => saveCategoryFilter(catFilter), [catFilter]);
   /** Новые категории, пока резидент не ответил: видны сразу, при ошибке — откат. */
   const [pendingCat, setPendingCat] = useState<Record<string, string | null>>({});
 
@@ -128,21 +131,10 @@ export function RecordingsList({
 
   // --- фильтр по категориям -------------------------------------------------------
 
-  const shownItems = useMemo(() => library.items.map((rec) => (rec.id in pendingCat
+  const visible = useMemo(() => library.items.map((rec) => (rec.id in pendingCat
     ? { ...rec, category: { id: pendingCat[rec.id] ?? null, source: "user" as const } } : rec)),
   [library.items, pendingCat]);
-  /** Выбранное в фильтре, кроме удалённых из настроек категорий. */
-  const activeFilter = catFilter.filter((k) => k === NO_CATEGORY || categories.some((c) => c.id === k));
-  const catCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const rec of shownItems) {
-      const key = categoryKey(rec, categories);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    return counts;
-  }, [shownItems, categories]);
-  const visible = activeFilter.length
-    ? shownItems.filter((rec) => activeFilter.includes(categoryKey(rec, categories))) : shownItems;
+  const setFilter = (keys: string[]) => onCategoryFilter?.(keys);
 
   // --- выбор нескольких записей ---------------------------------------------------
 
@@ -206,14 +198,12 @@ export function RecordingsList({
       <ImportZone endpoint={endpoint} onImported={() => void library.refresh?.()} />
       <div className="rec-list__search">
         <SearchBox value={q} onChange={onQ} />
-        {(categories.length > 0 || activeFilter.length > 0) && (
-          <CategoryFilter list={categories} counts={catCounts} selected={activeFilter} onChange={setCatFilter} />
+        {onCategoryFilter && (categories.length > 0 || categoryFilter.length > 0) && (
+          <CategoryFilter list={categories} endpoint={endpoint} q={q} selected={categoryFilter} onChange={setFilter} />
         )}
       </div>
-      {activeFilter.length > 0 && (
-        <div className="rec-list__filters">
-          <CategoryFilterChip list={categories} selected={activeFilter} onClear={() => setCatFilter([])} />
-        </div>
+      {categoryFilter.length > 0 && (
+        <CategoryFilterChips list={categories} selected={categoryFilter} onChange={setFilter} />
       )}
       {library.error && <div className="import__error">{library.error}</div>}
       {notice && (
@@ -271,11 +261,11 @@ export function RecordingsList({
           />
         ))}
       </ul>
-      {library.items.length > 0 && visible.length === 0 && (
-        <EmptyState title="Нет записей в выбранных категориях"
-          action={<Button onClick={() => setCatFilter([])}>Показать все</Button>} />
+      {library.items.length === 0 && !library.loading && resident.endpoint && categoryFilter.length > 0 && (
+        <EmptyState title={q ? "Ничего не найдено в выбранных категориях" : "Нет записей в выбранных категориях"}
+          action={<Button onClick={() => setFilter([])}>Показать все категории</Button>} />
       )}
-      {library.items.length === 0 && !library.loading && resident.endpoint && (
+      {library.items.length === 0 && !library.loading && resident.endpoint && categoryFilter.length === 0 && (
         q ? <EmptyState title="Ничего не найдено" />
           : <EmptyState title="Записей пока нет" hint="Нажмите «Начать запись» или перетащите файл" />
       )}

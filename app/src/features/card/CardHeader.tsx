@@ -52,7 +52,7 @@ function CategoryButton({ rec, list, onPick, onSettings }: {
         <CategoryChip category={category} />
       </button>
       {open && button.current && (
-        <Popover anchor={button.current} label="Категория встречи" width={240} onClose={close}>
+        <Popover anchor={button.current} label="Категория встречи" width={240} onClose={close} anchorToggles>
           <CategoryMenu list={list} current={category?.id ?? null}
             onPick={(id) => { close(); if (id !== (category?.id ?? null) || rec.category?.source !== "user") onPick(id); }}
             onSettings={onSettings ? () => { setOpen(false); onSettings(); } : undefined} />

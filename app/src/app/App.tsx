@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useCategories } from "../state/useCategories";
 import { useLibrary } from "../state/useLibrary";
 import { usePeople } from "../state/usePeople";
@@ -8,6 +8,7 @@ import { VoicesPane } from "../features/voices/VoicesPane";
 import { SettingsPane } from "../features/settings/SettingsPane";
 import { RecordingCard } from "../features/card/RecordingCard";
 import type { FindRequest } from "../features/card/TranscriptView";
+import { loadCategoryFilter, NO_CATEGORY, saveCategoryFilter } from "../lib/categories";
 import { searchable } from "../lib/search";
 import { initialRecording, initialSection, onOpenRecording, onOpenSection } from "../lib/shell";
 import { EmptyState, OfflineState } from "../ui/EmptyState";
@@ -32,10 +33,17 @@ export function App() {
   /** Запись изменили в списке (название, выгрузка): открытая карточка перечитывается. */
   const [cardTick, setCardTick] = useState(0);
   const resident = useResident();
-  const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick, resident.contentTick);
-  const { people, refresh: refreshPeople, avatarVersion, bumpAvatar } = usePeople(resident.endpoint ?? null, resident.doneTick);
   // Категории правят в настройках: из них вернулись — список перечитывается.
   const categories = useCategories(resident.endpoint ?? null, section === "settings");
+  /** Фильтр списка по категориям (запоминается в этом окне); пусто — все записи. */
+  const [catFilter, setCatFilter] = useState<string[]>(loadCategoryFilter);
+  useEffect(() => saveCategoryFilter(catFilter), [catFilter]);
+  // Удалённые из настроек категории в фильтре не участвуют — но только когда список уже пришёл.
+  const activeFilter = useMemo(() => (categories.loaded
+    ? catFilter.filter((k) => k === NO_CATEGORY || categories.list.some((c) => c.id === k)) : catFilter),
+  [catFilter, categories.loaded, categories.list]);
+  const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick, resident.contentTick, activeFilter);
+  const { people, refresh: refreshPeople, avatarVersion, bumpAvatar } = usePeople(resident.endpoint ?? null, resident.doneTick);
   const offline = resident.status === "offline";
   const gate = useWizardGate(resident.status, resident.endpoint ?? null);
   const recording = resident.snapshot?.status === "recording" || resident.snapshot?.live?.active === true;
@@ -127,6 +135,8 @@ export function App() {
                 q={q}
                 onQ={setQ}
                 categories={categories.list}
+                categoryFilter={activeFilter}
+                onCategoryFilter={setCatFilter}
                 onOpenSettings={openSettings}
               />}
             </div>
@@ -159,7 +169,7 @@ export function App() {
                 onPeopleChanged={() => void refreshPeople()}
                 onOpenSettings={openSettings}
                 find={find}
-                categories={categories.list}
+                categories={categories.loaded ? categories.list : undefined}
                 refreshKey={cardTick}
                 onChanged={() => void library.refresh()}
                 onDeleted={() => { setSelected(null); void library.refresh(); }}

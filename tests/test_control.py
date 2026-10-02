@@ -90,12 +90,14 @@ class FakeState:
         self.calls.append(("update", rid, body))
         return {"id": rid, "title": body.get("title")}
 
-    def recordings(self, limit=200, q=None):
+    def recordings(self, limit=200, q=None, categories=None):
         self.calls.append(("recordings", limit, q))
+        self.category_filter = categories
         return {"items": []}
 
-    def search(self, q, limit=200):
+    def search(self, q, limit=200, categories=None):
         self.calls.append(("search", q, limit))
+        self.category_filter = categories
         return {"items": [{"id": "r1", "hits": [], "total": 0}]}
 
     def delete_recording(self, rid):
@@ -490,6 +492,13 @@ def test_hotwords_routes(server):
 def test_recordings_search_passes_query(server):
     _get(server, "/recordings?q=cmdb")
     assert ("recordings", 200, "cmdb") in server.state_obj.calls
+
+
+def test_category_filter_reaches_list_and_search(server):
+    _get(server, "/recordings?categories=daily,_none")
+    assert server.state_obj.category_filter == "daily,_none"
+    _get(server, "/search?q=cmdb&categories=retro")
+    assert server.state_obj.category_filter == "retro"
 
 
 def test_full_text_search_route(server):

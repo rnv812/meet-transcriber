@@ -765,8 +765,9 @@ def _merge_summary(meta: dict) -> dict | None:
     }
 
 
-def listing(root: Path, limit: int = 200) -> list[dict]:
-    """Записи от свежих к старым. Имена папок сортируются как даты."""
+def listing(root: Path, limit: int = 200, keep=None) -> list[dict]:
+    """Записи от свежих к старым. Имена папок сортируются как даты. `keep(card)`
+    — фильтр (категории) до `limit`."""
     if not root.is_dir():
         return []
     found = []
@@ -775,22 +776,24 @@ def listing(root: Path, limit: int = 200) -> list[dict]:
     for folder in children:
         card = describe(folder)
         if card is not None:
-            found.append(card.to_raw())
+            raw = card.to_raw()
+            if keep is None or keep(raw):
+                found.append(raw)
         if len(found) >= limit:
             break
     return found
 
 
-def search(root: Path, q: str, limit: int = 200) -> list[dict]:
+def search(root: Path, q: str, limit: int = 200, keep=None) -> list[dict]:
     """Записи, где запрос (без учёта регистра) есть в названии или в тексте
     любой реплики. Пустой запрос — вся библиотека, как у `listing`. Полный
     обход с чтением transcript.json: библиотека — сотни папок, индекс был бы
     вторым источником истины."""
     q = (q or "").strip().lower()
     if not q:
-        return listing(root, limit)
+        return listing(root, limit, keep)
     found = []
-    for card in listing(root, limit=10**9):
+    for card in listing(root, limit=10**9, keep=keep):
         transcript = read_transcript(Path(card["path"])) or {}
         haystack = [card.get("title") or "", str(transcript.get("title") or "")]
         segments = transcript.get("segments")

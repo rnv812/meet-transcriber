@@ -8,9 +8,12 @@
 
 * `ai` — из анализа встречи (`analysis.json` → `category`): ставится, только
   если включено «Определять категорию автоматически» (`analysis.category`),
-  id есть в списке и уверенность не ниже CONFIDENCE_MIN. Новый анализ
-  уточняет прежнюю категорию от модели (или снимает её, если теперь уверенности
-  нет).
+  id есть в списке и уверенность не ниже CONFIDENCE_MIN (уверенность, которую
+  модель не назвала, анализ записывает как 0.5 — такая категория ставится).
+  Новый анализ уточняет прежнюю категорию от модели или снимает её, если
+  предложил негодную (уверенность ниже порога; id, которого уже нет в списке). `category:
+  null` — модель не ответила (например, не удался итоговый вызов длинной
+  встречи): прежняя категория остаётся, как и название в таком случае.
 * `user` — выбрал человек (карточка, список, `meet category`). Модель её не
   меняет никогда, в том числе выбранное вручную «Без категории». Проверка идёт
   под замком meta.json (`library.update_meta`), как у названия
@@ -29,6 +32,9 @@ from meet import library
 CONFIDENCE_MIN = 0.5
 SOURCES = ("ai", "user")
 NONE_NAME = "Без категории"
+# «Без категории» в фильтре списка (`?categories=daily,_none`): id категорий
+# начинаются с буквы или цифры, так что с ними он не совпадёт.
+NONE_KEY = "_none"
 
 
 def of(meta: dict) -> dict | None:
@@ -115,8 +121,8 @@ def apply_ai(folder: Path, doc: dict | None, cfg) -> bool:
     категории (её не просили) ничего не меняет. → поменялось ли что-нибудь."""
     if not getattr(getattr(cfg, "analysis", None), "category", False):
         return False
-    if not isinstance(doc, dict) or "category" not in doc:
-        return False
+    if not isinstance(doc, dict) or not isinstance(doc.get("category"), dict):
+        return False  # не просили или модель не ответила — оставляем как есть
     want = from_analysis(doc, cfg)
     changed = False
 
@@ -139,15 +145,44 @@ def apply_ai(folder: Path, doc: dict | None, cfg) -> bool:
     return changed
 
 
-def counts(root: Path) -> dict:
-    """Сколько встреч библиотеки в каждой категории: {"counts": {id: n},
-    "none": n} (для подтверждения удаления категории в настройках)."""
+def key_of(card: dict, known_ids) -> str:
+    """Ключ записи для фильтра: id известной категории или NONE_KEY (нет
+    категории, «Без категории» вручную, категорию удалили из настроек)."""
+    cid = (card.get("category") or {}).get("id")
+    return cid if cid in known_ids else NONE_KEY
+
+
+def parse_keys(value) -> list[str] | None:
+    """Фильтр из адреса: "daily,_none" → ["daily", "_none"]; пусто — None (без фильтра)."""
+    keys = [k.strip() for k in str(value or "").split(",") if k.strip()]
+    return keys or None
+
+
+def matcher(keys, cfg):
+    """Фильтр списка по категориям: card → подходит ли. Несколько ключей —
+    любой из них. Ключ удалённой категории не находит ничего."""
+    known = set(ids(cfg))
+    want = set(keys)
+    return lambda card: key_of(card, known) in want
+
+
+def counts(root: Path, cfg=None, q: str | None = None) -> dict:
+    """Сколько встреч в каждой категории: {"counts": {id: n}, "none": n,
+    "scope": "library"|"search"}. С запросом поиска (`q`) — среди найденных,
+    иначе — по всей библиотеке. Неизвестный id (категорию удалили) считается
+    «Без категории», как в окне. Карточки — из кеша поиска (meet.search)."""
+    from meet import search, settings
+
+    cfg = settings.load() if cfg is None else cfg
+    known = set(ids(cfg))
+    scoped = bool(q) and search.searchable(q)
+    cards = search.search_library(Path(root), q, limit=10**9) if scoped else search.cards(Path(root))
     out: dict[str, int] = {}
     none = 0
-    for card in library.listing(Path(root), limit=10**9):
-        cid = (card.get("category") or {}).get("id")
-        if cid:
-            out[cid] = out.get(cid, 0) + 1
-        else:
+    for card in cards:
+        key = key_of(card, known)
+        if key == NONE_KEY:
             none += 1
-    return {"counts": out, "none": none}
+        else:
+            out[key] = out.get(key, 0) + 1
+    return {"counts": out, "none": none, "scope": "search" if scoped else "library"}

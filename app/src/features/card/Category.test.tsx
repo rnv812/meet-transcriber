@@ -6,7 +6,7 @@ import type { Category, Recording } from "../../lib/types";
 const ep = { base: "/api", token: null };
 const categories: Category[] = [
   { id: "daily", name: "Дейлик", color: "#4c8bf5", description: "Короткая встреча команды" },
-  { id: "retro", name: "Ретроспектива", color: "#7a8b99", description: "" },
+  { id: "retro", name: "Ретроспектива", color: "#a0703c", description: "" },
 ];
 const rec = (category: Recording["category"] = null): Recording => ({
   id: "r1", path: "C:/rec/r1", started_at: "2026-09-30T10:00:00", duration_s: 1800, tracks: { sys: "s.wav" },
@@ -81,4 +81,14 @@ test("«Настроить категории…» ведёт в настрой�
 test("без обработчика выбора метки нет", () => {
   render(<CardHeader rec={rec({ id: "daily", source: "user" })} speakers={[]} people={[]} endpoint={ep} onRename={vi.fn()} />);
   expect(screen.queryByRole("button", { name: /^Категория:/ })).toBeNull();
+});
+
+test("повторный щелчок по метке закрывает меню", async () => {
+  setup({ id: "daily", source: "user" });
+  const chip = screen.getByRole("button", { name: /^Категория:/ });
+  await userEvent.click(chip);
+  expect(screen.getByRole("menu")).toBeInTheDocument();
+  await userEvent.click(chip);
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(chip).toHaveAttribute("aria-expanded", "false");
 });

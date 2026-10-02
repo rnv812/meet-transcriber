@@ -48,7 +48,7 @@ def test_ai_category_is_set_from_a_confident_known_id(folder):
 
 
 @pytest.mark.parametrize("doc", [
-    _doc(confidence=0.49), _doc(cid="unknown"), {"category": None}, {"category": {"id": "daily"}},
+    _doc(confidence=0.49), _doc(cid="unknown"), {"category": None},
     {"category": {"id": "daily", "confidence": "много"}},
 ])
 def test_low_confidence_or_unknown_id_is_no_category(folder, doc):
@@ -67,6 +67,27 @@ def test_new_analysis_refines_or_clears_the_ai_category(folder):
     assert library.read_meta(folder)["category"]["id"] == "planning"
     assert categories.apply_ai(folder, _doc("planning", 0.2), _cfg()) is True
     assert "category" not in library.read_meta(folder)
+
+
+def test_analysis_without_an_answer_keeps_the_ai_category(folder):
+    """`category: null` — модель не ответила (сбой итогового вызова): прежняя
+    категория остаётся, как название."""
+    categories.apply_ai(folder, _doc(), _cfg())
+    assert categories.apply_ai(folder, {"category": None}, _cfg()) is False
+    assert library.read_meta(folder)["category"]["id"] == "daily"
+
+
+def test_missing_confidence_is_stored_as_half_and_assigned(folder):
+    """Уверенность, которую модель не назвала, анализ пишет как 0.5 (порог
+    включительный) — категория ставится."""
+    found = analysis._category({"id": "daily"}, {"daily"})
+    assert found == {"id": "daily", "confidence": 0.5}
+    assert categories.apply_ai(folder, {"category": found}, _cfg()) is True
+
+
+def test_reserved_name_is_not_a_category():
+    got = settings.as_categories([{"id": "x", "name": "Без  категории"}, {"id": "y", "name": "Летучка"}])
+    assert [c.id for c in got] == ["y"]
 
 
 def test_analysis_without_category_changes_nothing(folder):
@@ -149,7 +170,7 @@ def test_counts(tmp_path):
             categories.set_user(path, cid)
     (tmp_path / "2026-10-09_10-00").mkdir()
     (tmp_path / "2026-10-09_10-00" / "sys.opus").write_bytes(b"x")
-    assert categories.counts(tmp_path) == {"counts": {"daily": 2, "retro": 1}, "none": 2}
+    assert categories.counts(tmp_path, _cfg()) == {"counts": {"daily": 2, "retro": 1}, "none": 2, "scope": "library"}
 
 
 def test_merged_meeting_keeps_a_user_category(tmp_path, monkeypatch):
@@ -198,6 +219,10 @@ def test_frontmatter_quotes_yaml_special_names():
     assert output.yaml_text("Встреча с клиентом") == "Встреча с клиентом"
     assert output.yaml_text("Q&A: вопросы") == '"Q&A: вопросы"'
     assert output.yaml_text("- список") == '"- список"'
+    for reserved in ("null", "Null", "~", "true", "yes", "No", "on", "123", "2024", "1.5", "-7",
+                     "2024-01-01", ".inf", "0x1F"):
+        assert output.yaml_text(reserved) == json.dumps(reserved), reserved
+    assert output.yaml_text("Sales Q3") == "Sales Q3"
 
 
 def test_kb_export_note_has_the_category(folder, tmp_path):
@@ -337,6 +362,47 @@ def test_category_routes_exist():
     paths = [(m, p.pattern) for m, p, _ in control._PATTERNS]
     assert ("PUT", r"^/recordings/([^/]+)/category$") in paths
     assert ("GET", "/categories") in control._ROUTES
+
+
+def _many(tmp_path, n):
+    """n записей по дням от 2025-01-01; самая старая — «Ретроспектива» вручную."""
+    from datetime import date, timedelta
+
+    root = tmp_path / "recordings"
+    folders = []
+    for i in range(n):
+        path = root / f"{date(2025, 1, 1) + timedelta(days=i):%Y-%m-%d}_10-00"
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "sys.opus").write_bytes(b"x")
+        folders.append(path)
+    categories.set_user(folders[0], "retro")
+    return folders
+
+
+def test_filter_finds_an_old_meeting_beyond_the_list_limit(state, tmp_path):
+    folders = _many(tmp_path, 250)
+    assert len(state.recordings()["items"]) == 200
+    got = state.recordings(categories="retro")["items"]
+    assert [r["id"] for r in got] == [folders[0].name]
+    nothing = state.recordings(categories="_none")["items"]
+    assert len(nothing) == 200 and folders[0].name not in {r["id"] for r in nothing}
+    assert state.recordings(categories="gone")["items"] == []
+    info = state.categories()
+    assert info["counts"] == {"retro": 1} and info["none"] == 250 and info["scope"] == "library"
+
+
+def test_filter_and_counts_with_a_search(state, tmp_path):
+    folders = _many(tmp_path, 3)
+    _transcript(folders[0])
+    _transcript(folders[2])
+    categories.set_user(folders[2], "daily")
+    got = state.search("бету", categories="retro")["items"]
+    assert [r["id"] for r in got] == [folders[0].name]
+    assert [r["id"] for r in state.recordings(q="бету", categories="daily")["items"]] == [folders[2].name]
+    info = state.categories("бету")
+    assert info["scope"] == "search" and info["counts"] == {"retro": 1, "daily": 1}
+    # Свой RID из фикстуры тоже с текстом про бету — «без категории».
+    assert info["none"] == 1
 
 
 # --- CLI: meet category ------------------------------------------------------------------
