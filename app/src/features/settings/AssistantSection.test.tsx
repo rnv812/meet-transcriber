@@ -381,3 +381,17 @@ test("«Только сводка» — число подсказок не вы�
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
   }
 });
+
+test("модель Claude Code: правка уходит в llm.model; у Codex и локальной поля нет", async () => {
+  open();
+  const model = await screen.findByRole("textbox", { name: "Модель Claude Code" });
+  expect(model).toHaveValue("sonnet");
+  await userEvent.clear(model);
+  await userEvent.type(model, "opus");
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { llm: { model: "opus" } }));
+  await userEvent.click(screen.getByRole("radio", { name: "Codex" }));
+  expect(screen.queryByRole("textbox", { name: "Модель Claude Code" })).toBeNull();
+  await userEvent.click(screen.getByRole("radio", { name: "Локальная (LM Studio / Ollama)" }));
+  expect(screen.queryByRole("textbox", { name: "Модель Claude Code" })).toBeNull();
+});

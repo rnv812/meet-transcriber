@@ -606,3 +606,27 @@ def test_run_assist_applies_activity_tier_and_prefs(tmp_path, monkeypatch):
     state = seen["state"]
     assert state.view()["prefs"] == {"quiet_default": True, "activity": "summary"}
     assert "Подсказки не нужны" in state.digester_system
+
+
+def test_model_comes_from_settings(tmp_path, monkeypatch):
+    """`llm.model` доходит до живого ассистента: тики «Как у агента» и
+    вопросы во время встречи идут на модели из настроек, а не на модели по
+    умолчанию."""
+    async def done(stop):
+        return None
+
+    heavy = _Heavy(monkeypatch, resolved=("claude-code", _never_called_runner), digester_run=done)
+    _run(tmp_path, open_browser=False, port=0, cfg=Settings.from_raw({"llm": {"model": "opus"}}))
+    assert heavy.digester_kwargs["call_kwargs"] == {"model": "opus"}
+    assert heavy.qa_kwargs["model"] == "opus"
+
+
+def test_fast_ticks_keep_their_model_but_questions_use_the_configured_one(tmp_path, monkeypatch):
+    async def done(stop):
+        return None
+
+    heavy = _Heavy(monkeypatch, resolved=("claude-code", _never_called_runner), digester_run=done)
+    cfg = Settings.from_raw({"llm": {"model": "opus"}, "assist": {"hints_model": "fast"}})
+    _run(tmp_path, open_browser=False, port=0, cfg=cfg)
+    assert heavy.digester_kwargs["call_kwargs"] == {"model": "haiku"}
+    assert heavy.qa_kwargs["model"] == "opus"

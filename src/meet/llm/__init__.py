@@ -15,33 +15,48 @@ if TYPE_CHECKING:
 # Порядок выбора для "auto": подписки CLI раньше локальной модели.
 PROVIDERS = ("claude-code", "codex", "openai-compatible")
 
-__all__ = ["PROVIDERS", "AgentReply", "Runner", "provider_ready", "resolve", "runner_for",
-           "tier_kwargs"]
+__all__ = ["PROVIDERS", "AgentReply", "Runner", "agent_model", "provider_ready", "resolve",
+           "runner_for", "tier_kwargs"]
 
 # «Быстрее» для живых подсказок: та же подписка, модель полегче.
 FAST_CLAUDE_MODEL = "haiku"
 FAST_CODEX_EFFORT = "low"
 
 
-def tier_kwargs(provider: str | None, tier: str) -> dict:
+def tier_kwargs(provider: str | None, tier: str, model: str | None = None) -> dict:
     """Что добавить к вызову модели для уровня `tier` (`agent` — как у
-    агента, `fast` — быстрее). Claude — модель haiku, Codex — низкое усилие
-    рассуждения; локальная модель одна, ей добавлять нечего."""
-    if tier != "fast":
+    агента, `fast` — быстрее). «Быстрее»: Claude — модель haiku, Codex —
+    низкое усилие рассуждения. «Как у агента»: Claude — модель из настроек
+    (`model` — `llm.model`); Codex берёт модель из своего конфига, локальная
+    модель одна — им добавлять нечего."""
+    if tier == "fast":
+        if provider == "claude-code":
+            return {"model": FAST_CLAUDE_MODEL}
+        if provider == "codex":
+            return {"effort": FAST_CODEX_EFFORT}
         return {}
-    if provider == "claude-code":
-        return {"model": FAST_CLAUDE_MODEL}
-    if provider == "codex":
-        return {"effort": FAST_CODEX_EFFORT}
+    if provider == "claude-code" and model:
+        return {"model": model}
     return {}
 
 
+def agent_model(provider: str | None, cfg: "Settings") -> str | None:
+    """Модель агента для явной передачи в вызов: `llm.model` у Claude Code,
+    None у остальных (Codex — модель из своего конфига, локальная —
+    `llm.local_model` в самом runner)."""
+    return tier_kwargs(provider, "agent", cfg.llm.model).get("model")
+
+
 def runner_for(name: str, cfg: "Settings") -> Runner:
-    """Функция вызова модели для провайдера (без проверки доступности)."""
+    """Функция вызова модели для провайдера (без проверки доступности).
+
+    Claude Code получает модель из настроек (`llm.model`) — её берут все
+    вызовы: итоги, вопросы, анализ, названия, улучшение, профили, живой
+    ассистент. Явный `model=` в вызове её перекрывает («Быстрее» — haiku)."""
     # Ссылка на модуль, а не на функцию: тесты подменяют `claude.run`.
     if name == "claude-code":
         from meet.llm import claude
-        return partial(_call, claude, proxy=cfg.llm.proxy)
+        return partial(_call, claude, proxy=cfg.llm.proxy, model=cfg.llm.model)
     if name == "codex":
         from meet.llm import codex
         return partial(_call, codex, proxy=cfg.llm.proxy)

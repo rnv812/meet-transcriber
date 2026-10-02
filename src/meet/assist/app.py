@@ -395,7 +395,8 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         print(f"база знаний: {len(kb)} терминов в указателе", flush=True)
     from meet import llm
 
-    tick_kwargs = llm.tier_kwargs(provider_name, cfg.assist.hints_model)
+    # «Как у агента» — модель из настроек (llm.model), «Быстрее» — своя.
+    tick_kwargs = llm.tier_kwargs(provider_name, cfg.assist.hints_model, cfg.llm.model)
     print(f"живые подсказки: {cfg.assist.activity}, модель тиков: "
           f"{cfg.assist.hints_model} {tick_kwargs or ''}".rstrip(), flush=True)
     state.digester = Digester(bus, live, system_prompt=state.digester_system,
@@ -406,7 +407,7 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     state.qa = QAService(
         bus, live, system_prompt=state.qa_system,
         allowed_dirs=state.qa_allowed_dirs, cwd=out_dir,
-        runner=runner,
+        runner=runner, model=llm.agent_model(provider_name, cfg),
         on_fresh_audio=engine.process_window,
         owner=cfg.recording.speaker_name,
     )

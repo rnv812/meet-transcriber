@@ -1,0 +1,178 @@
+"""Модель из настроек (`llm.model`) доходит до КАЖДОГО вызова модели.
+
+Правило: везде работает настроенный агент. Каждый вызывающий — итоги,
+вопросы, анализ, улучшение, название, профиль с проверкой утверждений, тики и
+вопросы живого ассистента — берёт runner у настоящего `llm.resolve`; в тесте
+подменены только поиск CLI (`detect`) и сам вызов Claude (`claude.run`).
+Модель и сеть не трогаются. Люди и реплики выдуманы.
+"""
+
+import asyncio
+import json
+
+import pytest
+
+from meet import job_worker, library, profile_safety, profiles, titles
+from meet.llm import claude, detect
+from meet.llm.base import AgentReply
+
+MODEL = "opus"
+
+PROFILE_REPLY = json.dumps({"summary": "Предпочитает конкретику.", "sections": {
+    "style": [{"text": "Формулирует коротко, начинает с вывода.", "refs": ["m1#1"]}],
+    "values": [{"text": "Ясные сроки и ответственные.", "refs": ["m1#1"]}],
+    "how_to_talk": [{"text": "Приходить с цифрами и вариантами.", "refs": ["m1#1"]}],
+    "avoid": [{"text": "Обсуждать без повестки.", "refs": ["m1#1"]}],
+    "topics": [{"text": "Сроки и риски релиза.", "refs": ["m1#1"]}]}, "pcm": None},
+    ensure_ascii=False)
+
+
+@pytest.fixture
+def world(tmp_path, monkeypatch):
+    """Настройки с `llm.model = opus`, найденный и авторизованный Claude Code,
+    подменённый вызов модели (запоминает модель и system prompt)."""
+    data = tmp_path / "data"
+    rec, voices = tmp_path / "rec", tmp_path / "voices"
+    data.mkdir()
+    rec.mkdir()
+    (data / "config.json").write_text(json.dumps({
+        "llm": {"provider": "claude-code", "model": MODEL},
+        "recording": {"out_dir": str(rec), "voices_dir": str(voices)},
+        "profiles": {"enabled": True, "pcm": False},
+    }), encoding="utf-8")
+    monkeypatch.setenv("MEET_DATA_DIR", str(data))
+    monkeypatch.setattr(detect, "find_claude", lambda: "C:/bin/claude.exe")
+    monkeypatch.setattr(detect, "logged_in", lambda name, path: (True, None))
+    calls: list[dict] = []
+    replies: dict[str, str] = {}
+
+    async def fake_run(prompt, **kw):
+        calls.append({"model": kw.get("model"), "system": kw.get("system_prompt")})
+        if kw.get("system_prompt") == profile_safety.CHECK_SYSTEM:
+            return AgentReply(text=profile_safety.check_reply(prompt))
+        return AgentReply(text=replies.get("text", "ответ модели"))
+
+    monkeypatch.setattr(claude, "run", fake_run)
+    folder = rec / "2026-09-30_16-04"
+    folder.mkdir()
+    library.write_transcript(folder, {"version": 1, "segments": [
+        {"start": 0.0, "end": 1.0, "speaker": "Демьян", "text": "Начнём со сроков."}]})
+    return {"calls": calls, "replies": replies, "folder": folder, "rec": rec, "voices": voices}
+
+
+def _summary(w):
+    job_worker.main(["summary", str(w["folder"])])
+
+
+def _ask(w):
+    job_worker.main(["ask", str(w["folder"]), "--question=что решили?"])
+
+
+def _analyze(w):
+    job_worker.main(["analyze", str(w["folder"])])
+
+
+def _improve(w):
+    w["replies"]["text"] = '{"replacements": []}'
+    job_worker.main(["improve", str(w["folder"])])
+
+
+def _title(w):
+    titles.main([str(w["folder"])])
+
+
+def _profile(w):
+    """Профиль человека и второй слой — проверка утверждений моделью."""
+    w["voices"].mkdir()
+    (w["voices"] / "Вера.json").write_text(json.dumps(
+        {"samples": [{"embedding": [0.1, 0.2], "source": "x", "id": "s1"}]}), encoding="utf-8")
+    for d in range(3):
+        segments = []
+        for k in range(6):
+            segments.append({"start": k * 20.0, "end": k * 20 + 5.0, "speaker": "Тимур",
+                             "text": f"Предлагаю обсудить пункт {k}."})
+            segments.append({"start": k * 20 + 6.0, "end": k * 20 + 15.0, "speaker": "Вера",
+                             "text": f"Давайте сначала сверим сроки по задаче номер {k}."})
+        meeting = w["rec"] / f"2026-09-{10 + d:02d}_10-00"
+        meeting.mkdir()
+        library.write_transcript(meeting, {"version": 1, "segments": segments})
+    w["replies"]["text"] = PROFILE_REPLY
+    pid = profiles.person_id("Вера", w["voices"], create=True)
+    job_worker.main(["profile", str(w["voices"].parent / "data" / "profiles" / f"{pid}.json")])
+
+
+def _live(w, monkeypatch, *, act):
+    """Живой ассистент целиком (`run_assist`) с настоящими Digester и
+    QAService; звук и распознавание подменены. `act` — что сделать с
+    готовыми сервисами: тик или вопрос."""
+    from meet import settings
+    from meet.assist import app as app_mod
+
+    made = {}
+    real_digester, real_qa = app_mod.Digester, app_mod.QAService
+
+    def digester(*a, **kw):
+        made["digester"] = real_digester(*a, **kw)
+        return made["digester"]
+
+    def qa(*a, **kw):
+        made["qa"] = real_qa(*a, **kw)
+        return made["qa"]
+
+    class FakeEngine:
+        def __init__(self, out_dir, transcriber, **kw):
+            pass
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def process_window(self):
+            pass
+
+    async def fake_check_auth(proxy=None):
+        return None
+
+    async def fake_main(state, port, **kw):
+        state.bus.publish("[00:00:05] Демьян: Давайте зафиксируем сроки релиза и ответственных за него.")
+
+    monkeypatch.setattr(app_mod, "Digester", digester)
+    monkeypatch.setattr(app_mod, "QAService", qa)
+    monkeypatch.setattr(app_mod, "check_auth", fake_check_auth)
+    monkeypatch.setattr(app_mod, "_main", fake_main)
+    monkeypatch.setattr("meet.asr.Transcriber", lambda: object())
+    monkeypatch.setattr("meet.live.LiveEngine", FakeEngine)
+    app_mod.run_assist(out_root=str(w["rec"] / "live"), no_voices=True, open_browser=False,
+                       port=0, cfg=settings.load())
+    w["replies"]["text"] = '{"ops": []}'
+    if act == "tick":
+        asyncio.run(made["digester"].tick_once())
+    else:
+        asyncio.run(made["qa"].ask("какой срок?"))
+
+
+CALLERS = [
+    ("summary", "итоги", _summary, 1),
+    ("ask", "вопрос по записи", _ask, 1),
+    ("analyze", "анализ встречи", _analyze, 1),
+    ("improve", "улучшение расшифровки", _improve, 1),
+    ("title", "название записи", _title, 1),
+    ("profile", "профиль и проверка утверждений", _profile, 2),
+    ("live-tick", "тик живого ассистента", "tick", 1),
+    ("live-qa", "вопрос во время встречи", "qa", 1),
+]
+
+
+@pytest.mark.parametrize("name,call,min_calls", [c[1:] for c in CALLERS], ids=[c[0] for c in CALLERS])
+def test_configured_model_reaches_every_caller(world, monkeypatch, name, call, min_calls):
+    if isinstance(call, str):
+        _live(world, monkeypatch, act=call)
+    else:
+        call(world)
+    calls = world["calls"]
+    assert len(calls) >= min_calls, f"{name}: модель не вызывалась"
+    assert {c["model"] for c in calls} == {MODEL}, f"{name}: {calls}"
+    if name.startswith("профиль"):
+        assert any(c["system"] == profile_safety.CHECK_SYSTEM for c in calls)
