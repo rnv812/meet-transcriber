@@ -52,13 +52,13 @@ test("узкая: четыре вкладки, по умолчанию лент�
   expect(screen.queryByRole("log")).toBeNull();
 });
 
-test("широкая: две колонки — лента слева, сводка и подсказки справа, «Спросить» внизу; вкладок нет", () => {
+test("широкая: две колонки — лента слева, справа подсказки (первыми), сводка и «Спросить» внизу; вкладок нет", () => {
   render(<Host live={makeLive()} wide />);
   expect(screen.queryByRole("tablist")).toBeNull();
   expect(screen.getByRole("log")).toBeInTheDocument();
   const side = screen.getByRole("region", { name: "Сводка" }).parentElement!;
   const panes = within(side).getAllByRole("region").filter((r) => r.parentElement === side);
-  expect(panes.map((r) => r.getAttribute("aria-label"))).toEqual(["Сводка", "Подсказки", "Спросить"]);
+  expect(panes.map((r) => r.getAttribute("aria-label"))).toEqual(["Подсказки", "Сводка", "Спросить"]);
   expect(within(panes[2]!).getByRole("textbox", { name: "Вопрос ассистенту" })).toBeInTheDocument();
 });
 
@@ -124,32 +124,65 @@ test("действия подсказки: закрепить, скрыть, к�
   expect(await within(first!).findByText("Скопировано")).toBeInTheDocument();
 });
 
-test("«Скрыть» можно отменить несколько секунд; потом (или при уходе) — к ассистенту", async () => {
-  const live = makeLive({ hints: [hint(), hint({ id: "h2", text: "Вторая" })] });
-  const { unmount } = render(<Host live={live} wide />);
-  const list = () => screen.getByRole("list", { name: "Подсказки" });
-  await userEvent.click(within(within(list()).getAllByRole("listitem")[0]!).getByRole("button", { name: "Скрыть" }));
-  expect(within(list()).queryByText("У миграции нет ответственного")).toBeNull();
-  expect(screen.getByText("Подсказка скрыта")).toBeInTheDocument();
-  expect(live.hint).not.toHaveBeenCalled();
-  await userEvent.click(screen.getByRole("button", { name: "Вернуть" }));
-  expect(within(list()).getByText("У миграции нет ответственного")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Вернуть" })).toBeNull();
-  // Скрыли снова и ушли — скрытие отправлено, не потерялось.
-  await userEvent.click(within(within(list()).getAllByRole("listitem")[0]!).getByRole("button", { name: "Скрыть" }));
-  unmount();
+test("«Скрыть» уходит ассистенту сразу; «Вернуть» — с фокусом — возвращает её (restore)", async () => {
+  const live = makeLive({ hint: vi.fn(async () => true) });
+  render(<Host live={live} wide />);
+  const list = screen.getByRole("list", { name: "Подсказки" });
+  await userEvent.click(within(list).getByRole("button", { name: "Скрыть" }));
+  // Сразу — ассистент запоминает текст («не предлагать снова») в тот же момент.
   expect(live.hint).toHaveBeenCalledWith("h1", "dismiss");
+  expect(screen.getByText("Подсказка скрыта")).toBeInTheDocument();
+  const back = await screen.findByRole("button", { name: "Вернуть" });
+  expect(back).toHaveFocus(); // кнопка «Скрыть» ушла с карточкой — фокус не потерян
+  await userEvent.click(back);
+  expect(live.hint).toHaveBeenLastCalledWith("h1", "restore");
+  expect(screen.queryByRole("button", { name: "Вернуть" })).toBeNull();
 });
 
-test("«Скрыть» уходит к ассистенту сам через несколько секунд", () => {
+test("подсказку уже убрал ассистент — «Вернуть» не предлагается", async () => {
+  const live = makeLive({ hint: vi.fn(async () => false) });
+  render(<Host live={live} wide />);
+  await userEvent.click(within(screen.getByRole("list", { name: "Подсказки" })).getByRole("button", { name: "Скрыть" }));
+  await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Вернуть" })).toBeNull());
+});
+
+test("«Вернуть» — только несколько секунд", () => {
   vi.useFakeTimers();
   const live = makeLive();
   render(<Host live={live} wide />);
   act(() => { within(screen.getByRole("list", { name: "Подсказки" })).getByRole("button", { name: "Скрыть" }).click(); });
-  expect(live.hint).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Вернуть" })).toBeInTheDocument();
   act(() => { vi.advanceTimersByTime(UNDO_MS); });
-  expect(live.hint).toHaveBeenCalledWith("h1", "dismiss");
   expect(screen.queryByRole("button", { name: "Вернуть" })).toBeNull();
+  expect(live.hint).toHaveBeenCalledTimes(1);
+});
+
+test("широкая: новый «Вам вопрос» прокручивается в поле зрения", () => {
+  const scroll = vi.fn();
+  const original = HTMLElement.prototype.scrollIntoView;
+  HTMLElement.prototype.scrollIntoView = scroll;
+  try {
+    const live = makeLive();
+    const { rerender } = render(<Host live={live} wide />);
+    expect(scroll).not.toHaveBeenCalled();
+    const urgent = hint({ id: "h9", kind: "ask_you", text: "Вас спросили про сроки", reply: "К пятнице" });
+    rerender(<Host live={{ ...live, hints: [hint(), urgent] }} wide />);
+    expect(scroll).toHaveBeenCalledTimes(1);
+    const first = within(screen.getByRole("list", { name: "Подсказки" })).getAllByRole("listitem")[0]!;
+    expect(first).toHaveTextContent("Вас спросили про сроки");
+    expect(scroll.mock.contexts[0]).toBe(first);
+  } finally {
+    HTMLElement.prototype.scrollIntoView = original;
+  }
+});
+
+test("широкая: «Спросить» в одну строку, пока им не пользуются; фокус — разворачивает", async () => {
+  const live = makeLive({ qa: [{ id: 1, q: "Что я пропустил?", a: "Ничего важного", pending: false, at: 1, quick: null, error: null }] });
+  render(<Host live={live} wide />);
+  const ask = screen.getByRole("region", { name: "Спросить" });
+  expect(ask).toHaveClass("live-ws__ask--compact");
+  await userEvent.click(within(ask).getByRole("textbox", { name: "Вопрос ассистенту" }));
+  expect(ask).not.toHaveClass("live-ws__ask--compact");
 });
 
 test("«Спросить об этом» подставляет вопрос и открывает «Спросить», не отправляя", async () => {

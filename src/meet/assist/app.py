@@ -173,13 +173,16 @@ class AssistState:
         return self.qa.partials() if self.qa is not None else []
 
     def hint_action(self, hint_id: str, action: str) -> bool:
-        """Закрепить, открепить или скрыть подсказку. False — такой нет."""
+        """Закрепить, открепить, скрыть подсказку или вернуть только что
+        скрытую. False — такой нет."""
         if action == "pin":
             changed = self.live.pin(hint_id, True)
         elif action == "unpin":
             changed = self.live.pin(hint_id, False)
         elif action == "dismiss":
             changed = self.live.dismiss(hint_id)
+        elif action == "restore":
+            changed = self.live.restore(hint_id)
         else:
             raise ValueError(f"неизвестное действие: {action}")
         if changed:

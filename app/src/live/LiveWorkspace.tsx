@@ -11,7 +11,7 @@
  * развернуться по щелчку.
  */
 
-import { type KeyboardEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import type { LiveHint, LiveQuick } from "../lib/types";
 import { Button } from "../ui/Button";
@@ -78,37 +78,68 @@ function count(n: number, quiet: boolean) {
 export const UNDO_MS = 5000;
 
 /**
- * «Скрыть» с возможностью передумать: подсказка сразу пропадает с экрана, а
- * ассистенту уходит через UNDO_MS — до этого «Вернуть» её возвращает.
- * Следующее «Скрыть» и уход со страницы отправляют отложенное сразу.
+ * «Скрыть» с возможностью передумать: скрытие уходит ассистенту сразу (он
+ * запоминает текст — «не предлагать снова» — в тот же момент), а UNDO_MS
+ * панель предлагает «Вернуть» — это отдельное действие `restore`. Подсказку
+ * успели убрать на стороне ассистента (ответ «ничего не изменилось») —
+ * «Вернуть» не предлагается: возвращать нечего.
  */
-function useUndoDismiss(send: (id: string) => void) {
-  const [hidden, setHidden] = useState<{ id: string; text: string } | null>(null);
+function useUndoDismiss(live: Live) {
+  const [hidden, setHidden] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pending = useRef<string | null>(null);
-  const sendRef = useRef(send);
-  sendRef.current = send;
-  const flush = useCallback(() => {
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  const clear = useCallback(() => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
-    const id = pending.current;
-    pending.current = null;
-    if (id) sendRef.current(id);
-  }, []);
-  const hide = useCallback((hint: LiveHint) => {
-    flush();
-    pending.current = hint.id;
-    setHidden({ id: hint.id, text: hint.text });
-    timer.current = setTimeout(() => { flush(); setHidden(null); }, UNDO_MS);
-  }, [flush]);
-  const undo = useCallback(() => {
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = null;
-    pending.current = null;
     setHidden(null);
   }, []);
-  useEffect(() => () => flush(), [flush]);
+  const hide = useCallback((hint: LiveHint) => {
+    if (timer.current) clearTimeout(timer.current);
+    setHidden(hint.id);
+    timer.current = setTimeout(clear, UNDO_MS);
+    void Promise.resolve(liveRef.current.hint(hint.id, "dismiss")).then((changed) => {
+      if (changed === false) setHidden((cur) => (cur === hint.id ? null : cur));
+    });
+  }, [clear]);
+  const undo = useCallback(() => {
+    if (hidden) void liveRef.current.hint(hidden, "restore");
+    clear();
+  }, [hidden, clear]);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
   return { hidden, hide, undo };
+}
+
+/** Сколько «Спросить» остаётся развёрнутым после ответа, если им не пользуются. */
+export const ASK_STAY_MS = 60_000;
+
+/**
+ * «Спросить» в широкой панели: пока им не пользуются — одна строка (поле),
+ * развёрнут — история и быстрые вопросы (не выше ~30 % колонки). Развёрнут,
+ * когда фокус внутри, пока ждём ответ и ASK_STAY_MS после него — чтобы ответ
+ * не свернулся, едва дописавшись.
+ */
+function AskSection({ waiting, answers, children }: { waiting: boolean; answers: number; children: ReactNode }) {
+  const [focused, setFocused] = useState(false);
+  const [recent, setRecent] = useState(false);
+  const was = useRef({ waiting, answers });
+  useEffect(() => {
+    const before = was.current;
+    was.current = { waiting, answers };
+    if ((before.waiting && !waiting) || answers > before.answers) {
+      setRecent(true);
+      const t = setTimeout(() => setRecent(false), ASK_STAY_MS);
+      return () => clearTimeout(t);
+    }
+  }, [waiting, answers]);
+  const open = focused || waiting || recent;
+  return (
+    <section className={`live-ws__ask${open ? "" : " live-ws__ask--compact"}`} aria-label="Спросить"
+      onFocus={() => setFocused(true)}
+      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false); }}>
+      {children}
+    </section>
+  );
 }
 
 /** Вопрос агенту по «Вам вопрос»: что ответить. */
@@ -127,25 +158,27 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }
 }) {
   const { tab, setTab, focus, jump, draft, setDraft, askAbout, openAsk, unseen, fresh, quiet, wide } = view;
   const uid = useId();
-  const dismissal = useUndoDismiss((id) => { void live.hint(id, "dismiss"); });
+  const dismissal = useUndoDismiss(live);
+  const undoBtn = useRef<HTMLButtonElement>(null);
   const hintAction = (id: string, action: "pin" | "unpin" | "dismiss") => {
     const target = live.hints.find((h) => h.id === id);
     if (action === "dismiss" && target) dismissal.hide(target);
     else void live.hint(id, action);
   };
-  const visibleHints = dismissal.hidden ? live.hints.filter((h) => h.id !== dismissal.hidden!.id) : live.hints;
+  // Кнопка «Скрыть» ушла вместе с карточкой — фокус на «Вернуть», а не на <body>.
+  useEffect(() => { if (dismissal.hidden) undoBtn.current?.focus(); }, [dismissal.hidden]);
   // «Подсказка скрыта · Вернуть» — плашкой поверх низа области: ничего не сдвигает.
   const undoBar = dismissal.hidden && (
     <div className="live-undo" role="status">
       <span className="live-undo__text">Подсказка скрыта</span>
-      <Button size="sm" variant="link" onClick={dismissal.undo}>Вернуть</Button>
+      <Button ref={undoBtn} size="sm" variant="link" onClick={dismissal.undo}>Вернуть</Button>
     </div>
   );
 
   const feed = <LiveFeed lines={live.lines} className="live-ws__feed" focus={focus} />;
   const summary = <LiveSummary summary={live.summary} fresh={fresh} />;
   const hints = (
-    <LiveHints hints={visibleHints} fresh={fresh} enabled={live.hintsEnabled} error={live.hintError}
+    <LiveHints hints={live.hints} fresh={fresh} enabled={live.hintsEnabled} error={live.hintError} quiet={quiet}
       onAction={hintAction} onAsk={onAskHint ?? askAbout} onTime={jump}
       onAskUrgent={onAskHint ?? ((h) => { void onAsk(urgentQuestion(h)); openAsk(); })}
       askTitle={onAskHint ? "Спросить агента об этой подсказке: откроется вкладка «Агент»" : undefined} />
@@ -159,18 +192,22 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }
     return (
       <div className="live-ws live-ws--wide">
         {feed}
-        {/* Сводка и подсказки — одна прокрутка (раньше у каждой своя, и карточки
-            резались посередине), «Спросить» — внизу колонки. */}
+        {/* Сначала подсказки («Вам вопрос» — первым), у них гарантированная
+            область (не меньше ~40 % колонки) со своей прокруткой; ниже — сводка
+            со своей; «Спросить» — внизу, не выше ~30 % и в одну строку, пока
+            им не пользуются. */}
         <div className="live-ws__side">
-          <section className="live-ws__pane" aria-label="Сводка">
+          <section className="live-ws__pane live-ws__pane--hints" aria-label="Подсказки">
+            <h3 className="live-ws__title">
+              Подсказки{live.hints.length > 0 && <span className="live-ws__n num"> · {live.hints.length}</span>}
+            </h3>
+            <div className="live-ws__scroll">{hints}</div>
+          </section>
+          <section className="live-ws__pane live-ws__pane--summary" aria-label="Сводка">
             <h3 className="live-ws__title">Сводка</h3>
-            {summary}
+            <div className="live-ws__scroll">{summary}</div>
           </section>
-          <section className="live-ws__pane" aria-label="Подсказки">
-            <h3 className="live-ws__title">Подсказки</h3>
-            {hints}
-          </section>
-          <section className="live-ws__ask" aria-label="Спросить">{ask}</section>
+          <AskSection waiting={live.asking || live.qa.some((q) => q.pending)} answers={live.qa.length}>{ask}</AskSection>
         </div>
         {undoBar}
       </div>

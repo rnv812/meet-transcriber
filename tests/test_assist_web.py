@@ -263,13 +263,15 @@ def test_hint_route_validates_and_forwards():
             assert r.status == 200 and await r.json() == {"ok": True, "changed": True}
             r = await client.post("/hint", json={"id": "h9", "action": "dismiss"})
             assert (await r.json())["changed"] is False
+            r = await client.post("/hint", json={"id": "h1", "action": "restore"})
+            assert r.status == 200
             for bad in ({"id": "h1", "action": "delete"}, {"action": "pin"}, [1]):
                 r = await client.post("/hint", json=bad)
                 assert r.status == 400
             r = await client.post("/hint", json={"id": "h1", "action": "pin"},
                                   headers={"Origin": "http://evil.example"})
             assert r.status == 403
-        assert state.hint_calls == [("h1", "pin"), ("h9", "dismiss")]
+        assert state.hint_calls == [("h1", "pin"), ("h9", "dismiss"), ("h1", "restore")]
 
     _run(scenario())
 

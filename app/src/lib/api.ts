@@ -468,7 +468,7 @@ export const liveStop = (ep: Endpoint) =>
 export const liveAsk = (ep: Endpoint, question: string, opts: { quick?: LiveQuick; since_t?: number } = {}) =>
   json<{ answer: string }>(ep, "/live/ask", body("POST", { question, ...opts }));
 /** Закрепить, открепить или скрыть подсказку ассистента. */
-export const liveHint = (ep: Endpoint, id: string, action: "pin" | "unpin" | "dismiss") =>
+export const liveHint = (ep: Endpoint, id: string, action: "pin" | "unpin" | "dismiss" | "restore") =>
   json<{ ok: boolean; changed?: boolean }>(ep, "/live/hint", body("POST", { id, action }));
 export const liveTask = (ep: Endpoint, task: string) =>
   json<{ ok: boolean }>(ep, "/live/task", body("POST", { task }));

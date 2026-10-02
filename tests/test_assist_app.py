@@ -46,6 +46,9 @@ def test_state_view_and_hint_actions(tmp_path):
     assert state.signature() != sig
     assert not state.hint_action("h9", "dismiss") and saved == [1]
     assert state.hint_action("h1", "dismiss") and state.view()["hints"] == []
+    # «Вернуть» сразу после «Скрыть».
+    assert state.hint_action("h1", "restore") and [h["id"] for h in state.view()["hints"]] == ["h1"]
+    assert state.hint_action("h1", "dismiss")
     with pytest.raises(ValueError):
         state.hint_action("h1", "взорвать")
 

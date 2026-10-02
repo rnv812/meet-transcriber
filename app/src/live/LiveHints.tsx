@@ -10,7 +10,7 @@
  * режима «Не отвлекать» (тогда без анимации, но всё равно наверху).
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Copy, Pin, Sparkles, X } from "lucide-react";
 
 import { clock } from "../lib/format";
@@ -19,20 +19,23 @@ import { Icon } from "../ui/Icon";
 import { IconButton } from "../ui/IconButton";
 import { Truncate } from "../ui/Truncate";
 import { KIND_LABEL, hintKey, isUrgent, orderHints } from "./liveModel";
-import type { HintAction } from "./useLive";
 import "./live.css";
 
 const COPIED_MS = 1500;
 
-export function LiveHints({ hints, fresh, enabled = true, error = null, onAction, onAsk, onAskUrgent, onTime, askTitle }: {
+export function LiveHints({
+  hints, fresh, enabled = true, error = null, onAction, onAsk, onAskUrgent, onTime, askTitle, quiet = false,
+}: {
   hints: LiveHint[];
+  /** «Не отвлекать»: новый «Вам вопрос» всё равно показывается, но без плавной прокрутки. */
+  quiet?: boolean;
   /** Ключи `hintKey` недавно появившихся или изменённых. */
   fresh: Set<string>;
   /** false — режим «Только сводка». */
   enabled?: boolean;
   /** Действие с подсказкой не дошло — текст у неё. */
   error?: { id: string; text: string } | null;
-  onAction: (id: string, action: HintAction) => void;
+  onAction: (id: string, action: "pin" | "unpin" | "dismiss") => void;
   onAsk: (hint: LiveHint) => void;
   /** «Спросить агента» у «Вам вопрос»; нет — как «Спросить об этом». */
   onAskUrgent?: (hint: LiveHint) => void;
@@ -41,6 +44,15 @@ export function LiveHints({ hints, fresh, enabled = true, error = null, onAction
   askTitle?: string;
 }) {
   const [copied, setCopied] = useState<string | null>(null);
+  // Новый «Вам вопрос» — в поле зрения (он первый в списке): ответа ждут сейчас.
+  const urgentEl = useRef<HTMLLIElement>(null);
+  const urgentId = orderHints(hints).find(isUrgent)?.id ?? null;
+  const seenUrgent = useRef<string | null>(urgentId);
+  useEffect(() => {
+    if (!urgentId || urgentId === seenUrgent.current) return;
+    seenUrgent.current = urgentId;
+    urgentEl.current?.scrollIntoView?.({ block: "nearest", behavior: quiet ? "auto" : "smooth" });
+  }, [urgentId, quiet]);
   if (!enabled) {
     return (
       <p className="live-empty muted">
@@ -61,7 +73,7 @@ export function LiveHints({ hints, fresh, enabled = true, error = null, onAction
   return (
     <ul className="live-hints" aria-label="Подсказки">
       {orderHints(hints).map((h) => (
-        <li key={h.id} className={`live-hint live-hint--${h.kind}${fresh.has(hintKey(h)) ? (isUrgent(h) ? " is-fresh is-urgent-new" : " is-fresh") : ""}${h.pinned ? " is-pinned" : ""}`}>
+        <li key={h.id} ref={h.id === urgentId ? urgentEl : undefined} className={`live-hint live-hint--${h.kind}${fresh.has(hintKey(h)) ? (isUrgent(h) ? " is-fresh is-urgent-new" : " is-fresh") : ""}${h.pinned ? " is-pinned" : ""}`}>
           <div className="live-hint__head">
             <span className="live-hint__kind">{KIND_LABEL[h.kind] ?? h.kind}</span>
             <button type="button" className="live-hint__time num" title="Перейти к реплике в ленте"
