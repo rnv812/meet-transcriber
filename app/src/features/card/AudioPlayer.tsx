@@ -43,6 +43,7 @@ import type { Turn } from "../../lib/speakers";
 import { Avatar } from "../../ui/Avatar";
 import { Popover } from "../../ui/Popover";
 import type { PersonColor } from "./Turns";
+import { PlayerKeysTip } from "./PlayerKeysTip";
 import "./player.css";
 
 export type AudioPlayerHandle = {
@@ -270,9 +271,11 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   }, []);
 
   /** «Только важное»: из неважного места — к следующему фрагменту (после последнего — пауза). */
+  /** Полосу тянут мышью: «Только важное» не перехватывает перемотку, пока не отпустят. */
+  const dragging = useRef(false);
   const skip = useCallback((a: HTMLAudioElement) => {
     const list = only.current;
-    if (!list || a.paused) return;
+    if (!list || a.paused || dragging.current) return;
     const target = skipTarget(list, a.currentTime);
     if (target === null) { free.current = false; return; }
     if (free.current) return;
@@ -316,9 +319,16 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   playingRef.current = playing;
   const toggle = useCallback(() => {
     stopAt.current = null;
-    if (playingRef.current) el.current?.pause();
-    else start();
-  }, [start]);
+    if (playingRef.current) {
+      el.current?.pause();
+      return;
+    }
+    // «Только важное» доиграло последний фрагмент: пуск — снова с первого (как повтор на YouTube).
+    const list = only.current;
+    const a = el.current;
+    if (list?.length && a && skipTarget(list, a.currentTime) === Infinity) seek(list[0]!.start);
+    start();
+  }, [start, seek]);
 
   const nextSpeed = () => {
     const next = SPEEDS[(SPEEDS.indexOf(rate) + 1) % SPEEDS.length] ?? 1;
@@ -381,7 +391,6 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
 
   // --- указатель на полосе: наведение и перетаскивание без состояния React -------------------------
   const rect = useRef<DOMRect | null>(null);
-  const dragging = useRef(false);
   const fracAt = (clientX: number) => {
     const r = rect.current ?? bar.current?.getBoundingClientRect();
     if (!r || r.width <= 0) return 0;
@@ -568,6 +577,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
           ref={bar}
           className="pbar"
           role="slider" tabIndex={0} aria-label="Позиция"
+          aria-keyshortcuts="Space K J L ArrowLeft ArrowRight Shift+ArrowLeft Shift+ArrowRight M"
           aria-valuemin={0} aria-valuemax={Math.round(total)} aria-valuenow={Math.round(Math.min(current, total || current))}
           aria-valuetext={`${clock(current)} из ${clock(total)}${here ? `, глава «${here.title}»` : ""}`}
           onKeyDown={onBarKey}
@@ -683,6 +693,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
             <span className="player__btn-text">Только важное</span>
           </button>
         )}
+        <span className="player__keys"><PlayerKeysTip /></span>
         <button type="button" className="player__btn player__btn--icon" onClick={toggleCompact}
           aria-label={compact ? "Развернуть плеер" : "Компактный плеер"} title={compact ? "Развернуть плеер" : "Компактный плеер"}>
           {compact ? <Maximize2 size={14} strokeWidth={1.9} aria-hidden="true" />

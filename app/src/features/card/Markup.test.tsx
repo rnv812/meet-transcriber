@@ -4,7 +4,7 @@
  * настройки, которые всё это прячут. Данные выдуманные.
  */
 
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as api from "../../lib/api";
 import { buildView } from "../../lib/analysisView";
@@ -259,4 +259,83 @@ test("карточка: адрес Jira в настройках — ключи �
   await card();
   await screen.findByRole("region", { name: "Наблюдения анализа встречи" });
   expect(screen.queryByRole("link", { name: "SPR-42" })).toBeNull();
+});
+
+test("карточка: с фильтром Shift-диапазон выбирает только видимые реплики; включённый фильтр убирает скрытые из выбора", async () => {
+  mocks();
+  const { container } = await card();
+  await waitFor(() => expect(container.querySelector(".tfilters")).not.toBeNull());
+  await userEvent.click(screen.getByRole("button", { name: /Вопросы/ }));
+  await userEvent.click(screen.getByRole("button", { name: /Риски/ }));
+  // Видны реплики 1 (вопрос) и 4 (риск), между ними свёрнуты 2 и 3.
+  const rows = () => [...container.querySelectorAll<HTMLElement>(".turn")];
+  expect(rows().map((r) => r.dataset.turn)).toEqual(["1", "4"]);
+  const text = (i: number) => rows().find((r) => r.dataset.turn === String(i))!.querySelector(".turn__text")!;
+  fireEvent.click(text(1), { ctrlKey: true });
+  fireEvent.click(text(4), { shiftKey: true });
+  expect(screen.getByText("Выбрано: 2 реплики")).toBeInTheDocument();
+  // Сняли фильтр — выбор тот же; добавили видимую реплику 2.
+  await userEvent.click(screen.getByRole("button", { name: "Показать все" }));
+  expect(screen.getByText("Выбрано: 2 реплики")).toBeInTheDocument();
+  fireEvent.click(text(2), { ctrlKey: true });
+  expect(screen.getByText("Выбрано: 3 реплики")).toBeInTheDocument();
+  // Включили фильтр — выбранная, но спрятанная реплика 2 из выбора уходит.
+  await userEvent.click(screen.getByRole("button", { name: /Риски/ }));
+  expect(screen.getByText("Выбрано: 1 реплика")).toBeInTheDocument();
+  expect(rows().filter((r) => r.dataset.selected).map((r) => r.dataset.turn)).toEqual(["4"]);
+});
+
+test("карточка: Shift+Пробел на реплике при фильтре — диапазон без свёрнутых; плеер пробел не забирает", async () => {
+  HTMLMediaElement.prototype.play = vi.fn(async () => {});
+  mocks();
+  const { container } = await card();
+  await waitFor(() => expect(container.querySelector(".tfilters")).not.toBeNull());
+  await userEvent.click(screen.getByRole("button", { name: /Решения/ }));
+  await userEvent.click(screen.getByRole("button", { name: /Идеи/ }));
+  const row = (i: number) => container.querySelector<HTMLElement>(`.turn[data-turn="${i}"]`)!;
+  row(2).focus();
+  await userEvent.keyboard(" ");
+  row(6).focus();
+  await userEvent.keyboard("{Shift>} {/Shift}");
+  expect(screen.getByText("Выбрано: 2 реплики")).toBeInTheDocument();
+  expect(HTMLMediaElement.prototype.play).not.toHaveBeenCalled();
+});
+
+test("развёрнутые фильтром реплики не сворачиваются, когда запись перечитали (правка слова)", async () => {
+  const { container, rerender } = view();
+  await userEvent.click(screen.getByRole("button", { name: /Риски/ }));
+  await userEvent.click(container.querySelectorAll<HTMLElement>(".turns-more")[0]!);
+  expect(turnRows(container).map((r) => r.dataset.turn)).toEqual(["0", "1", "2", "3", "4"]);
+  const reloaded = mergeTurns(SEGMENTS.map((s) => ({ ...s })));
+  rerender(<TranscriptView turns={reloaded} colors={new Map()} playable onPlay={() => {}} view={VIEW} />);
+  expect(turnRows(container).map((r) => r.dataset.turn)).toEqual(["0", "1", "2", "3", "4"]);
+});
+
+test("с фильтром точка Tab — на показанной реплике", async () => {
+  const { container } = render(<TranscriptView turns={TURNS} colors={new Map()} playable onPlay={() => {}} view={VIEW}
+    onSelect={() => {}} />);
+  await userEvent.click(screen.getByRole("button", { name: /Риски/ }));
+  const tabbable = turnRows(container).filter((r) => r.tabIndex === 0);
+  expect(tabbable.map((r) => r.dataset.turn)).toEqual(["4"]);
+});
+
+test("переход к главе, пока «Расшифровка» скрыта, — прокрутка, когда её покажут", () => {
+  const scrolled: string[] = [];
+  const original = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = vi.fn(function (this: Element) { scrolled.push(this.className); });
+  try {
+    const at = (hidden: boolean, n: number) => (
+      <div hidden={hidden}>
+        <TranscriptView turns={TURNS} colors={new Map()} playable onPlay={() => {}} view={VIEW} reveal={{ turn: 5, n }} />
+      </div>
+    );
+    const { rerender, container } = render(at(true, 0));
+    rerender(at(true, 1)); // глава выбрана, пока открыты «Итоги»
+    expect(scrolled).toEqual([]);
+    rerender(at(false, 1));
+    expect(scrolled).toEqual(["chapter-head"]);
+    expect(container.querySelector('[data-turn="5"]')).toHaveClass("turn--flash");
+  } finally {
+    Element.prototype.scrollIntoView = original;
+  }
 });

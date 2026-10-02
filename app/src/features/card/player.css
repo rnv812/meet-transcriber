@@ -60,6 +60,12 @@
   opacity: 0; transition: opacity 160ms;
 }
 .pbar.is-hover .pbar__curve { opacity: 1; }
+/* Под кривой — мягкая подложка цвета плеера: строка расшифровки под ней не сливается с кривой. */
+.pbar::before {
+  content: ""; position: absolute; left: -14px; right: -14px; bottom: 9px; height: 40px; pointer-events: none;
+  background: linear-gradient(to top, var(--surface) 35%, transparent); opacity: 0; transition: opacity 160ms;
+}
+.player--curve-hover .pbar.is-hover::before { opacity: 1; }
 /* «Всегда»: место под кривую отведено, раскладка не прыгает. */
 .player--curve-always .player__bar { padding-top: 22px; }
 .player--curve-always .pbar__curve { opacity: 0.5; }
@@ -154,7 +160,7 @@
   .player__only-text { display: none; }
 }
 @container (max-width: 440px) {
-  .player__chapter { display: none; }
+  .player__chapter, .player__keys { display: none; }
   .pvol__slider { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {

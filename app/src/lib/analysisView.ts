@@ -54,6 +54,11 @@ export const ONLY_IMPORTANT_SHARE = 0.3;
 /** «Только важное»: соседние фрагменты ближе этого склеиваются, каждый — с запасом по краям. */
 export const MERGE_GAP_S = 4;
 export const PAD_S = 1;
+/**
+ * Допуск у начала фрагмента: после перемотки на `start` браузер может отдать
+ * время на микросекунды раньше — без допуска плеер перематывал бы снова и снова.
+ */
+const SPAN_EPS_S = 0.05;
 
 /** Что показывать (настройки «Расшифровка: подсветка и разметка» и «Анализ встречи»). */
 export type ViewParts = { types: boolean; importance: boolean; chapters: boolean; insights: boolean };
@@ -308,7 +313,7 @@ export function skipTarget(spans: Span[], t: number): number | null {
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
     const s = spans[mid]!;
-    if (t < s.start) hi = mid - 1;
+    if (t < s.start - SPAN_EPS_S) hi = mid - 1;
     else if (t >= s.end) lo = mid + 1;
     else return null;
   }

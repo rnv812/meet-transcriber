@@ -168,3 +168,10 @@ def test_jira_settings_saved_from_window(tmp_path):
     assert raw["integrations"]["jira_base_url"] == "https://jira.example.com:8443"
     # Пустой адрес — ссылки выключены.
     assert settings.patch({"integrations": {"jira_base_url": ""}}, path).integrations.jira_base_url == ""
+
+
+def test_jira_port_only_ascii_digits(tmp_path):
+    # «٤٤٣» (арабско-индийские цифры): Python \d принял бы, оболочка — нет.
+    with pytest.raises(ValueError):
+        settings.patch({"integrations": {"jira_base_url": "https://jira.example.com:٤٤٣"}},
+                       tmp_path / "config.json")

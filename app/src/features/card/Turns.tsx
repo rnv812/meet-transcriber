@@ -85,8 +85,11 @@ export const Turns = memo(function Turns({
       onSelect(i, e.shiftKey ? "range" : "toggle");
     }
   };
-  const first = turns.findIndex((t) => t.kind !== "break");
-  const roving = turns[focusAt] && turns[focusAt]!.kind !== "break" ? focusAt : first;
+  // Точка Tab — среди показанных реплик: свёрнутая фильтром не должна её забрать.
+  const shown = (i: number) => turns[i] !== undefined && turns[i]!.kind !== "break";
+  const rendered = rows ? new Set(rows.flatMap((r) => (r.kind === "turn" && shown(r.i) ? [r.i] : []))) : null;
+  const first = rendered ? (rendered.values().next().value ?? -1) : turns.findIndex((t) => t.kind !== "break");
+  const roving = shown(focusAt) && (!rendered || rendered.has(focusAt)) ? focusAt : first;
   // Ключи задач Jira в тексте — ссылки (настройка «Ссылки на задачи Jira»).
   const jira = useContext(JiraLinks);
   const types = annotations?.types;

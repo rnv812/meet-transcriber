@@ -99,3 +99,12 @@ test("итоги: ключи — ссылки, но не внутри `кода`
   expect(screen.queryByRole("link", { name: "OPS-7" })).toBeNull();
   expect(screen.getByText("OPS-7").tagName).toBe("CODE");
 });
+
+test("двойной щелчок по ключу (выделение слова) не открывает задачу второй раз; ссылку не тащат", () => {
+  transcript();
+  const link = screen.getByRole("link", { name: "SPR-131" });
+  fireEvent.click(link, { detail: 1 });
+  fireEvent.click(link, { detail: 2 });
+  expect(shell.openUrl).toHaveBeenCalledTimes(1);
+  expect(link).toHaveAttribute("draggable", "false");
+});
