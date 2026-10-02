@@ -343,11 +343,7 @@ def delete_all(root: Path | None = None) -> int:
 def forget_index(root: Path | None = None) -> None:
     """Индекс реплик — с диска и из памяти процесса. Профили снова включат —
     он построится заново (в фоне)."""
-    import shutil
-
-    store = _root(root) / profile_index.DIR_NAME
-    profile_index.forget(store)
-    shutil.rmtree(store, ignore_errors=True)
+    profile_index.forget(_root(root) / profile_index.DIR_NAME)
 
 
 def remove_for_voice(voice_file: Path, root: Path | None = None) -> None:
@@ -1074,22 +1070,26 @@ def resolve_ref(ref: dict, rows: list, texts=None, name: str | None = None) -> d
         if near:
             return {**ref, "i": near[0][0], "t": near[0][1]}
         return {**ref, "stale": True}
-    same = [r for r in near if r[4] == h]
-    if same:
-        return {**ref, "i": same[0][0], "t": same[0][1]}
-    if near and ref.get("q") and texts is not None:
-        turns = texts()
-        # Исходная реплика на месте, но уже не этого человека (её отдали
-        # другому спикеру, может быть, слив с соседней) — не подменяем.
-        quote = profile_index.norm_text(ref["q"])[:40]
-        if any((abs(x["start"] - t) <= REF_GONE_S and profile_index.text_hash(x["text"]) == h)
-               or (name is not None and x["speaker"] != name and quote and quote in profile_index.norm_text(x["text"]))
-               for x in turns):
-            return {**ref, "stale": True}
-        by_i = {x["i"]: x["text"] for x in turns}
-        hits = [r for r in near if _similar(ref["q"], by_i.get(r[0]) or "")]
-        if len(hits) == 1:
-            return {**ref, "i": hits[0][0], "t": hits[0][1]}
+    # Та же реплика этого человека на том же месте (±1 с), только номер
+    # сдвинулся (перед ней вставили сегмент), — она и есть.
+    here = [r for r in near if abs(r[1] - t) <= REF_GONE_S and r[4] == h]
+    if len(here) == 1:
+        return {**ref, "i": here[0][0], "t": here[0][1]}
+    # Дальше — другая реплика; только если исходной на месте нет (её не
+    # отдали другому спикеру, в том числе слив с соседней), текст почти тот
+    # же по всей цитате и такая кандидатура одна. Иначе — «изменилась».
+    if not near or not ref.get("q") or texts is None:
+        return {**ref, "stale": True}
+    turns = texts()
+    quote = profile_index.norm_text(ref["q"])[:40]
+    if any(x["speaker"] != name and ((abs(x["start"] - t) <= REF_GONE_S and profile_index.text_hash(x["text"]) == h)
+                                     or (quote and quote in profile_index.norm_text(x["text"])))
+           for x in turns):
+        return {**ref, "stale": True}
+    by_i = {x["i"]: x["text"] for x in turns}
+    hits = [r for r in near if _similar(ref["q"], by_i.get(r[0]) or "")]
+    if len(hits) == 1:
+        return {**ref, "i": hits[0][0], "t": hits[0][1]}
     return {**ref, "stale": True}
 
 

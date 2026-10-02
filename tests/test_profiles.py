@@ -894,3 +894,177 @@ def test_delete_all_forgets_the_index_on_disk_and_in_memory(lib, monkeypatch):
     assert profile_index._registry == {} and ix.warm is False and ix.store is None
     ix.refresh()  # «старый» индекс, если кто-то его ещё держит, на диск больше не пишет
     assert not (root / profile_index.DIR_NAME).exists()
+
+
+# --- fix round 3 -------------------------------------------------------------------------------
+
+PROBE3_ALLOWED = [
+    "Просит детализацию затрат по каждому этапу",
+    "Предлагает перейти на старшую версию библиотеки",
+    "Религиозно соблюдает код-ревью перед каждым мержем",
+    "Говорит: болеем за релиз всей командой",
+    "Рассказывает про женскую сборную по хакатону",
+    "Хвалит молодую команду поддержки за скорость",
+    "Обсуждает возраст кодовой базы и технический долг",
+    "Ведёт пенсионный модуль в продукте",
+    "Отмечает здоровую конкуренцию между командами",
+    "Часто упоминает национальную сборную по программированию",
+]
+PROBE3_BLOCKED = [
+    "Плохо слышит, часто переспрашивает",
+    "Из-за детей уходит со встреч раньше",
+    "Немолодой, привык к старым процессам",
+    "Недавно стала мамой",
+    "Говорит с южным говором",
+    "Придерживается консервативных ценностей",
+]
+
+
+@pytest.mark.parametrize("text", PROBE3_ALLOWED)
+def test_safety_filter_round3_work_phrases(text):
+    assert profile_safety.reason(text) is None
+
+
+@pytest.mark.parametrize("text", PROBE3_BLOCKED + PROBE_BLOCKED + PROBE2_BLOCKED)
+def test_safety_filter_round3_keeps_blocking(text):
+    assert profile_safety.reason(text) is not None
+
+
+Q3 = "Давайте сначала сверим сроки по задаче номер два и потом решим про бюджет."
+
+
+def _probe_meeting(rec, extra):
+    def seg(s, who, text):
+        return {"start": s, "end": s + 2, "speaker": who, "text": text}
+
+    segs = [seg(0, "Тимур", "Начнём встречу с обзора задач сегодня."), seg(10, "Вера", Q3),
+            seg(20, "Тимур", "Хорошо, согласен с этим планом по задачам."),
+            seg(30, "Вера", "Ещё уточню требования к отчёту для клиента.")]
+    folder = _meeting(rec, "2026-09-01_10-00", segs)
+    ref = _ref_for(rec, "2026-09-01_10-00", 1)
+    data = library.read_transcript(folder)
+    extra(data["segments"], seg)
+    data["segments"].sort(key=lambda s: s["start"])
+    library.write_transcript(folder, data)
+    return ref
+
+
+def test_same_prefix_turn_of_the_person_is_not_taken_after_a_relabel(lib):
+    def relabel(segs, seg):
+        segs[1]["speaker"] = "Тимур"
+        segs.append(seg(13, "Вера", "Давайте сначала сверим сроки по задаче номер два и потом решим вопрос "
+                                    "с наймом, бюджет позже."))
+
+    ref = _probe_meeting(lib["rec"], relabel)
+    assert _resolve(lib["rec"], "Вера", ref)[0]["refs"][0]["stale"] is True
+
+
+def test_same_hash_elsewhere_needs_a_unique_candidate(lib):
+    def two(segs, seg):
+        del segs[1]
+        segs.append(seg(12, "Вера", Q3))
+        segs.append(seg(13, "Олег", "Да."))
+        segs.append(seg(14.5, "Вера", Q3))
+
+    ref = _probe_meeting(lib["rec"], two)
+    assert _resolve(lib["rec"], "Вера", ref)[0]["refs"][0]["stale"] is True
+
+
+def test_reindexed_turn_in_place_is_still_found(lib):
+    def insert_before(segs, seg):
+        segs.insert(0, seg(-5, "Олег", "Короткая вводная реплика перед встречей."))
+
+    ref = _probe_meeting(lib["rec"], insert_before)
+    got = _resolve(lib["rec"], "Вера", ref)[0]["refs"][0]
+    assert "stale" not in got and got["i"] == 2
+
+
+def test_forget_waits_for_an_inflight_save_and_nothing_comes_back(lib, monkeypatch):
+    """Гонка: проход индекса уже посчитал встречу и пишет файл (внутри записи
+    — пауза), в это время удаляют все профили. Удаление ждёт записи, потом
+    убирает папку; проход отменён и больше ничего не пишет."""
+    import threading
+
+    from meet import profile_index
+
+    monkeypatch.setattr(profile_index, "_registry", {})
+    rec, root = lib["rec"], lib["root"]
+    for d in range(3):
+        _meeting(rec, f"2026-09-1{d}_10-00", _turns("Вера", 3))
+    store = root / profile_index.DIR_NAME
+    ix = profile_index.get(rec, store)
+    writing, release = threading.Event(), threading.Event()
+    real_replace = profile_index.os.replace
+
+    def slow_replace(src, dst):
+        writing.set()
+        release.wait(5)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(profile_index.os, "replace", slow_replace)
+    build = threading.Thread(target=ix.refresh)
+    build.start()
+    assert writing.wait(5)  # первая встреча посчитана, файл пишется
+    forgetting = threading.Thread(target=profiles.forget_index, args=(root,))
+    forgetting.start()
+    forgetting.join(0.3)
+    assert forgetting.is_alive()  # удаление ждёт конца записи (замок хранилища)
+    release.set()
+    build.join(5)
+    forgetting.join(5)
+    assert not store.exists()
+    assert ix.cancelled and ix.refresh() == {}
+    assert not store.exists()
+
+
+def test_forget_cancels_a_build_between_compute_and_write(lib, monkeypatch):
+    import threading
+
+    from meet import profile_index
+
+    monkeypatch.setattr(profile_index, "_registry", {})
+    rec, root = lib["rec"], lib["root"]
+    for d in range(3):
+        _meeting(rec, f"2026-09-1{d}_10-00", _turns("Вера", 3))
+    store = root / profile_index.DIR_NAME
+    ix = profile_index.get(rec, store)
+    computed, release = threading.Event(), threading.Event()
+    real = profile_index.extract
+    calls = []
+
+    def paused(folder, key=None):
+        got = real(folder, key)
+        calls.append(Path(folder).name)
+        if len(calls) == 2:
+            computed.set()
+            release.wait(5)  # посчитали, ещё не записали
+        return got
+
+    monkeypatch.setattr(profile_index, "extract", paused)
+    build = threading.Thread(target=ix.refresh)
+    build.start()
+    assert computed.wait(5)
+    profiles.forget_index(root)
+    release.set()
+    build.join(5)
+    assert not store.exists() and len(calls) == 2  # третья встреча уже не разбиралась
+
+
+def test_deleted_store_is_not_recreated_until_profiles_are_enabled(lib, monkeypatch):
+    from meet import profile_index
+
+    monkeypatch.setattr(profile_index, "_registry", {})
+    rec, root = lib["rec"], lib["root"]
+    _meeting(rec, "2026-09-10_10-00", _turns("Вера", 3))
+    store = root / profile_index.DIR_NAME
+    enabled = [False]
+    monkeypatch.setattr(profile_index, "_profiles_enabled", lambda: enabled[0])
+    profile_index.get(rec, store).refresh()
+    profiles.forget_index(root)
+    # кто-то прочитал «включено» до выключения и просит индекс — пустой и отменённый
+    late = profile_index.get(rec, store)
+    assert late.cancelled and late.refresh() == {} and not store.exists()
+    assert not profile_index.warm_in_background(late)
+    enabled[0] = True
+    again = profile_index.get(rec, store)
+    assert not again.cancelled and again.refresh() and store.exists()

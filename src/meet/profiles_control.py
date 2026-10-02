@@ -224,10 +224,14 @@ class ProfilesMixin:
         return {"deleted": deleted}
 
     def warm_profiles_index(self) -> None:
-        """После старта резидента: первый проход индекса реплик — в фоне
-        (только если профили включены)."""
+        """После старта резидента: первый проход индекса реплик — в фоне,
+        если профили включены; выключены (в том числе в файле настроек, пока
+        резидент не работал, или сбой посреди удаления) — индекс с диска
+        убирается."""
         try:
-            if settings.load().profiles.enabled:
+            if not settings.load().profiles.enabled:
+                profiles.forget_index()
+            else:
                 profile_index.warm_in_background(self._profile_index())
         except Exception as e:
             self.tray.log(f"индекс реплик для профилей не построен: {type(e).__name__}: {e}")

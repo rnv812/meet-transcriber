@@ -9,6 +9,12 @@
 (время изменения и размер); в резиденте он ещё и в памяти. Первый проход по
 большой библиотеке резидент делает в фоне.
 
+Удаление (`forget`): профили выключили или удалили все — индекс с диска и из
+памяти убирается так, чтобы его не воскресили: запись файла и удаление папки
+идут под одним замком хранилища, идущий первый проход отменяется и больше не
+пишет, а хранилище помечается удалённым — новый индекс для него не
+создаётся, пока профили снова не включат (`get` перепроверяет настройку).
+
 Реплика здесь — подряд идущие сегменты одного спикера (как в окне): номер
 реплики `i` — номер её первого сегмента в transcript.json, `start` — его
 начало. Отпечаток `h` — хеш первых HASH_CHARS символов нормализованного
@@ -135,6 +141,8 @@ class Index:
         self._texts_lock = threading.Lock()
         self.warm = False
         self.building = False
+        # Индекс забыт (forget): проход останавливается, на диск больше не пишет.
+        self.cancelled = False
 
     def _path(self, rid: str) -> Path:
         assert self.store is not None
@@ -150,18 +158,24 @@ class Index:
         return got if isinstance(got, dict) and got.get("v") == VERSION else None
 
     def _save(self, entry: dict) -> None:
-        if self.store is None:
+        store = self.store
+        if store is None:
             return
-        path = self._path(entry["id"])
-        tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-        try:
-            self.store.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, path)
-        except OSError:
-            pass  # индекс — кэш: не записался — пересчитаем в следующий раз
-        finally:
-            tmp.unlink(missing_ok=True)
+        # Под замком хранилища и с перепроверкой: удаление (forget) не может
+        # пройти посреди записи, а после него запись не воскресит папку.
+        with store_lock(store):
+            if self.cancelled or self.store is None or _deleted(store):
+                return
+            path = self._path(entry["id"])
+            tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+            try:
+                store.mkdir(parents=True, exist_ok=True)
+                tmp.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
+                os.replace(tmp, path)
+            except OSError:
+                pass  # индекс — кэш: не записался — пересчитаем в следующий раз
+            finally:
+                tmp.unlink(missing_ok=True)
 
     def refresh(self, *, yield_s: float = 0.0) -> dict[str, dict]:
         """Актуальный индекс: заново разбираются только изменившиеся встречи.
@@ -174,6 +188,8 @@ class Index:
             except OSError:
                 items = []
             for item in items:
+                if self.cancelled:
+                    return {}  # индекс забыли посреди прохода — бросаем его
                 if item.name.startswith(".") or not item.is_dir():
                     continue
                 folder = Path(item.path)
@@ -204,6 +220,8 @@ class Index:
                 fresh[item.name] = entry
                 if yield_s:
                     time.sleep(yield_s)
+            if self.cancelled:
+                return {}
             if self.store is not None and not self.warm and self.store.is_dir():
                 for path in self.store.glob("*.json"):
                     if path.stem not in fresh:
@@ -237,40 +255,84 @@ class Index:
 
 _registry: dict[tuple[str, str], Index] = {}
 _registry_lock = threading.Lock()
+# Замки хранилищ (запись файла индекса и удаление папки) и хранилища,
+# помеченные удалёнными (до того, как профили снова включат).
+_store_locks: dict[str, threading.Lock] = {}
+_deleted_stores: set[str] = set()
+
+
+def _norm(store) -> str:
+    return os.path.normcase(str(Path(store)))
+
+
+def store_lock(store) -> threading.Lock:
+    with _registry_lock:
+        return _store_locks.setdefault(_norm(store), threading.Lock())
+
+
+def _deleted(store) -> bool:
+    return _norm(store) in _deleted_stores
+
+
+def _profiles_enabled() -> bool:
+    try:
+        from meet import settings
+
+        return settings.load().profiles.enabled
+    except Exception:
+        return False
 
 
 def get(recordings: Path, store: Path | None = None) -> Index:
-    """Индекс процесса для этой библиотеки (резидент держит его в памяти)."""
+    """Индекс процесса для этой библиотеки (резидент держит его в памяти).
+    Хранилище удалено (forget), а профили всё ещё выключены (кто-то прочитал
+    настройку до выключения), — отменённый пустой индекс: ничего не
+    считает и не пишет. Профили включили снова — пометка снимается."""
     if store is None:
         from meet import profiles
 
         store = profiles.profiles_dir() / DIR_NAME
-    k = (os.path.normcase(str(Path(recordings))), os.path.normcase(str(store)))
-    with _registry_lock:
-        ix = _registry.get(k)
-        if ix is None:
-            ix = _registry[k] = Index(recordings, store)
-        return ix
+    k = (_norm(recordings), _norm(store))
+    with store_lock(store):
+        if _deleted(store):
+            if not _profiles_enabled():
+                dead = Index(recordings, None)
+                dead.cancelled = True
+                return dead
+            _deleted_stores.discard(_norm(store))
+        with _registry_lock:
+            ix = _registry.get(k)
+            if ix is None:
+                ix = _registry[k] = Index(recordings, store)
+            return ix
 
 
-def forget(store: Path) -> None:
-    """Забыть индексы с этим хранилищем (профили удалили или выключили):
-    из реестра процесса — и запретить им писать на диск (идущий первый
-    проход не воскресит удалённые файлы)."""
-    key = os.path.normcase(str(Path(store)))
-    with _registry_lock:
-        for k in [k for k in _registry if k[1] == key]:
-            ix = _registry.pop(k)
+def forget(store: Path, *, delete: bool = True) -> None:
+    """Забыть индексы с этим хранилищем (профили удалили или выключили): из
+    реестра процесса, идущий проход — отменить (он больше не пишет), папку —
+    удалить (`delete`), хранилище — пометить удалённым. Всё под замком
+    хранилища: запись файла не проскочит ни до, ни после."""
+    import shutil
+
+    key = _norm(store)
+    with store_lock(store):
+        _deleted_stores.add(key)
+        with _registry_lock:
+            gone = [_registry.pop(k) for k in [k for k in _registry if k[1] == key]]
+        for ix in gone:
+            ix.cancelled = True
             ix.store = None
             ix._mem = {}
             with ix._texts_lock:
                 ix._texts = {}
             ix.warm = False
+        if delete:
+            shutil.rmtree(store, ignore_errors=True)
 
 
 def warm_in_background(ix: Index, on_done=None) -> bool:
     """Первый проход — в фоне. → запущен ли (уже тёплый или уже идёт — нет)."""
-    if ix.warm or ix.building:
+    if ix.warm or ix.building or ix.cancelled:
         return False
     ix.building = True
 
