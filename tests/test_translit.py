@@ -68,3 +68,23 @@ def test_apply_without_terms_is_noop():
     segs = [_seg("Просто текст.")]
     assert translit.apply(segs, []) == 0
     assert translit.apply(segs, ["Кириллица"]) == 0
+
+
+def test_inflected_and_common_forms_are_not_produced():
+    """«мира» (род. падеж «мир»), «макс» (имя), «скала», «редис», «консул»,
+    «нда» — обычная речь: термины Mira, MAX, Scala, Redis, Consul, NDA её не
+    переписывают."""
+    assert translit.variants("Mira") == []
+    for term in ("Scala", "Redis", "Consul"):
+        assert translit.variants(term) == []
+    for term, spelled in (("MAX", "эм эй икс"), ("DOC", "ди оу си"), ("NDA", "эн ди эй"),
+                          ("LAN", "эл эй эн"), ("SAP", "эс эй пи")):
+        assert translit.variants(term) == [spelled]
+    segs = [_seg("Для мира и макс нда скала.")]
+    assert translit.apply(segs, ["Mira", "MAX", "NDA", "Scala"]) == 0
+
+
+def test_real_terms_still_come_back():
+    assert translit.variants("API")[0] == "апи"
+    assert translit.variants("Kafka") == ["кафка"]
+    assert "графана" in translit.variants("Grafana")

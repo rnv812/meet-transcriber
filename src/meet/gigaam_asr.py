@@ -1,8 +1,9 @@
 """Распознавание GigaAM (salute-developers/GigaAM, MIT) — русский движок для CPU.
 
 Почему он: на 6-минутном фрагменте встречи (i9-13900H, 14 потоков) GigaAM
-`v3_e2e_rnnt` распознаёт за ~20 с против ~7,5 мин у faster-whisper medium, с
-пунктуацией, заглавными и пословными таймкодами, и ближе к эталону CUDA.
+`v3_e2e_rnnt` распознаёт за ~27 с против ~4,7 мин распознавания у
+faster-whisper medium, с пунктуацией, заглавными и пословными таймкодами, и
+ближе к эталону CUDA.
 Ограничения: только русский, латиница транслитерируется («api» → «апи»), нет
 подсказок (hotwords), и на вход — не длиннее ~25 с звука за вызов.
 
@@ -16,10 +17,19 @@
 word_timestamps=True)` на каждый кусок. Пакетный режим (в 7 раз быстрее на
 GPU) — внутренности библиотеки, и обновление их сломает; на CPU выигрыша нет.
 
+Веса качаем сами (а не загрузчиком GigaAM): во временный файл, с проверкой
+контрольной суммы и атомарным переименованием — оборванная загрузка не
+оставляет «скачанную» битую модель. Токенизатор sentencepiece читается из
+байтов (`model_proto`), а не по пути: sentencepiece на Windows не открывает
+путь с кириллицей (папка данных у пользователя «Кузьма»).
+
 Модуль лёгкий на импорт (без numpy и torch на верхнем уровне): его константы
 читают настройки и каталог моделей в резиденте.
 """
 
+import hashlib
+import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,7 +43,7 @@ MAX_CHUNK_S = 22.0
 # и беднее контекстом.
 MIN_CHUNK_S = 8.0
 # Жёсткий разрез: следующий кусок начинается на столько раньше, слова из
-# нахлёста делятся по середине нахлёста.
+# нахлёста делятся по середине нахлёста (по началу слова).
 HARD_OVERLAP_S = 0.5
 # Кадр оценки громкости при поиске паузы.
 FRAME_S = 0.03
@@ -50,8 +60,11 @@ _SENTENCE_END = (".", "?", "!", "…")
 class Chunk:
     """Кусок звука для одного вызова: [start, end) в секундах записи.
 
-    `keep_from`/`keep_to` — какие слова куска остаются (по середине слова):
-    у чистых разрезов — все, у жёстких — до середины нахлёста."""
+    `keep_from`/`keep_to` — какие слова куска остаются (по началу слова): у
+    чистых разрезов — все, у жёстких — до середины нахлёста. По началу, а не
+    по середине: слово на разрезе каждый кусок слышит по-своему (первый —
+    обрезанным, второй — хвостом), а начало у обоих общее, если слово целиком
+    в нахлёсте, и раньше границы у первого, если оно её пересекает."""
 
     start: float
     end: float
@@ -61,6 +74,33 @@ class Chunk:
     @property
     def length(self) -> float:
         return self.end - self.start
+
+
+# Откуда GigaAM (зафиксированный коммит) берёт веса.
+URL = "https://cdn.chatwm.opensmodel.sberdevices.ru/GigaAM"
+# Файлы моделей: имя, размер, алгоритм и контрольная сумма. Веса — MD5 из
+# самого GigaAM (`_MODEL_HASHES`, он сверяет их и при загрузке модели);
+# токенизаторы GigaAM не проверяет — их SHA-256 записаны здесь по загрузке
+# 02.10.2026.
+FILES = {
+    "v3_e2e_rnnt": (
+        ("v3_e2e_rnnt.ckpt", 448929252, "md5", "2730de7545ac43ad256485a462b0a27a"),
+        ("v3_e2e_rnnt_tokenizer.model", 255336, "sha256",
+         "828c12c991019eef952a960661f25a92d6ad279591e2ea466b4aeddf1d20a18a"),
+    ),
+    "v3_e2e_ctc": (
+        ("v3_e2e_ctc.ckpt", 442404646, "md5", "367074d6498f426d960b25f49531cf68"),
+        ("v3_e2e_ctc_tokenizer.model", 240941, "sha256",
+         "0b9a1960898fbfdf5424ab852ea17445eb3da960fba23e977ff100eb0054fbc8"),
+    ),
+}
+_PART = ".part"
+_VERIFIED = ".verified.json"
+
+
+class Unavailable(RuntimeError):
+    """GigaAM не скачать или не загрузить (нет сети, сервер недоступен, файл
+    битый). Текст — для человека; расшифровка в этом случае идёт Whisper."""
 
 
 def cache_dir() -> Path:
@@ -75,19 +115,54 @@ def cache_dir() -> Path:
 def model_files(name: str) -> list[Path]:
     """Файлы модели в кэше: веса и токенизатор (у e2e-моделей он свой)."""
     root = cache_dir()
+    if name in FILES:
+        return [root / f for f, _, _, _ in FILES[name]]
     files = [root / f"{name}.ckpt"]
     if "e2e" in name:
         files.append(root / f"{name}_tokenizer.model")
     return files
 
 
+def _all_files(name: str) -> list[Path]:
+    """Файлы модели с недокачанными (.part) и отметкой проверки."""
+    out = []
+    for p in model_files(name):
+        out += [p, p.with_name(p.name + _PART)]
+    out.append(cache_dir() / f"{name}{_VERIFIED}")
+    return out
+
+
+def _expected_size(path: Path) -> int | None:
+    for files in FILES.values():
+        for fname, size, _, _ in files:
+            if fname == path.name:
+                return size
+    return None
+
+
 def downloaded(name: str) -> bool:
-    return all(p.is_file() for p in model_files(name))
+    """Модель скачана целиком: все файлы на месте и нужного размера (дёшево;
+    контрольные суммы сверяются перед загрузкой модели, см. ensure)."""
+    for p in model_files(name):
+        try:
+            size = p.stat().st_size
+        except OSError:
+            return False
+        expected = _expected_size(p)
+        if expected is not None and size != expected:
+            return False
+    return True
+
+
+def present(name: str) -> bool:
+    """Есть хоть какой-то файл модели — в том числе недокачанный или битый:
+    такую модель должно быть можно удалить из окна."""
+    return any(p.exists() for p in _all_files(name))
 
 
 def size_on_disk(name: str) -> int:
     total = 0
-    for p in model_files(name):
+    for p in _all_files(name):
         try:
             total += p.stat().st_size
         except OSError:
@@ -96,15 +171,101 @@ def size_on_disk(name: str) -> int:
 
 
 def remove(name: str) -> int:
-    """Удалить файлы модели. → сколько файлов удалено."""
+    """Удалить файлы модели (и недокачанные). → сколько файлов удалено."""
     removed = 0
-    for p in model_files(name):
+    for p in _all_files(name):
         try:
             p.unlink()
-            removed += 1
+            if not p.name.endswith(_VERIFIED):
+                removed += 1
         except FileNotFoundError:
             continue
     return removed
+
+
+def _digest(path: Path, algo: str) -> str:
+    h = hashlib.new(algo)
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _stamp(path: Path) -> list:
+    st = path.stat()
+    return [st.st_size, st.st_mtime_ns]
+
+
+def _verified(name: str) -> dict:
+    try:
+        return json.loads((cache_dir() / f"{name}{_VERIFIED}").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _file_ok(path: Path, size: int, algo: str, digest: str, seen: dict) -> bool:
+    """Файл цел: размер и контрольная сумма. Однажды проверенный и с тех пор
+    не менявшийся (размер, время изменения) повторно не хешируется."""
+    try:
+        if path.stat().st_size != size:
+            return False
+        if seen.get(path.name) == _stamp(path):
+            return True
+        return _digest(path, algo) == digest
+    except OSError:
+        return False
+
+
+def _fetch(url: str, target: Path, size: int, algo: str, digest: str, on_line=None,
+           opener=None) -> None:
+    """Скачать во временный файл, сверить и только тогда переименовать.
+    Прокси — из переменных среды (urllib), их задаёт задача (meet.netproxy)."""
+    import urllib.request
+
+    part = target.with_name(target.name + _PART)
+    part.unlink(missing_ok=True)
+    open_url = opener or urllib.request.urlopen
+    h = hashlib.new(algo)
+    done, step = 0, max(size // 10, 1)
+    try:
+        with open_url(url) as src, open(part, "wb") as out:
+            while block := src.read(1 << 20):
+                out.write(block)
+                h.update(block)
+                if on_line and (done + len(block)) // step > done // step:
+                    on_line(f"{target.name}: {min(100, (done + len(block)) * 100 // size)}%")
+                done += len(block)
+    except Exception as e:
+        part.unlink(missing_ok=True)
+        raise Unavailable(f"GigaAM: не удалось скачать {target.name} ({type(e).__name__}: {e})") from e
+    if done != size or h.hexdigest() != digest:
+        part.unlink(missing_ok=True)
+        raise Unavailable(f"GigaAM: {target.name} скачался повреждённым (контрольная сумма не совпала)")
+    os.replace(part, target)
+
+
+def ensure(name: str, on_line=None, opener=None) -> None:
+    """Модель целиком на диске: недостающие и битые файлы удаляются и
+    скачиваются заново (один раз). Не вышло — Unavailable с понятным текстом."""
+    if name not in FILES:
+        raise Unavailable(f"GigaAM: неизвестная модель {name}")
+    root = cache_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    seen = _verified(name)
+    stamps = {}
+    for fname, size, algo, digest in FILES[name]:
+        path = root / fname
+        if not _file_ok(path, size, algo, digest, seen):
+            if path.exists():
+                if on_line:
+                    on_line(f"{fname}: файл повреждён или недокачан — скачиваю заново")
+                path.unlink()
+            _fetch(f"{URL}/{fname}", path, size, algo, digest, on_line, opener)
+        stamps[fname] = _stamp(path)
+    try:
+        (root / f"{name}{_VERIFIED}").write_text(json.dumps(stamps), encoding="utf-8")
+    except OSError:
+        pass  # отметка — только ускорение
 
 
 def installed() -> bool:
@@ -244,8 +405,7 @@ def words_of_chunk(chunk: Chunk, words) -> list:
             continue
         start = chunk.start + float(w.start)
         end = max(start, chunk.start + float(w.end))
-        middle = (start + end) / 2
-        if not (chunk.keep_from <= middle < chunk.keep_to):
+        if not (chunk.keep_from <= start < chunk.keep_to):
             continue
         out.append(Word(round(start, 3), round(end, 3), " " + text))
     return out
@@ -296,13 +456,44 @@ def _write_wav(path: Path, samples, sr: int) -> None:
         wf.writeframes(samples.tobytes())
 
 
-def load(name: str = MODEL_NAME, device: str = "cpu"):
-    """Модель GigaAM; веса скачиваются при первом вызове в cache_dir()."""
-    import gigaam
+def _proto_tokenizer() -> None:
+    """Токенизатор GigaAM — из байтов файла, а не по пути.
 
-    root = cache_dir()
-    root.mkdir(parents=True, exist_ok=True)
-    return gigaam.load_model(name, device=device, download_root=str(root))
+    sentencepiece на Windows не открывает путь с не-ASCII символами («Кузьма»
+    в папке пользователя), а GigaAM отдаёт ему путь из `download_root`. Самая
+    узкая точка — класс SentencePieceProcessor в модуле декодирования GigaAM:
+    подменяем его наследником, у которого `Load(model_file)` читает файл
+    сам и передаёт `model_proto`. Повторный вызов ничего не меняет."""
+    import gigaam.decoding as decoding
+
+    base = getattr(decoding, "SentencePieceProcessor", None)
+    if base is None or getattr(base, "_meet_from_bytes", False):
+        return
+
+    class FromBytes(base):
+        _meet_from_bytes = True
+
+        def Load(self, model_file=None, model_proto=None):  # noqa: N802 — имя из sentencepiece
+            if model_file is not None and model_proto is None:
+                model_proto, model_file = Path(model_file).read_bytes(), None
+            return super().Load(model_proto=model_proto)
+
+        load = Load
+
+    decoding.SentencePieceProcessor = FromBytes
+
+
+def load(name: str = MODEL_NAME, device: str = "cpu", on_line=None):
+    """Модель GigaAM; веса при необходимости скачиваются (ensure) в cache_dir().
+    Любой сбой — Unavailable: тогда распознаёт Whisper."""
+    ensure(name, on_line)
+    try:
+        import gigaam
+
+        _proto_tokenizer()
+        return gigaam.load_model(name, device=device, download_root=str(cache_dir()))
+    except Exception as e:
+        raise Unavailable(f"GigaAM не загрузилась ({type(e).__name__}: {e})") from e
 
 
 def transcribe(path: Path, *, model_name: str = MODEL_NAME, device: str = "cpu",
@@ -321,7 +512,8 @@ def transcribe(path: Path, *, model_name: str = MODEL_NAME, device: str = "cpu",
     chunks = plan_chunks(regions, audio, sr)
     own = model is None
     if own:
-        model = load(model_name, device)
+        # Строки загрузки и «файл повреждён — скачиваю заново» — в журнал задачи.
+        model = load(model_name, device, on_line=print)
         print(f"Распознавание GigaAM ({model_name}, {device}), кусков: {len(chunks)}...")
     words: list = []
     try:

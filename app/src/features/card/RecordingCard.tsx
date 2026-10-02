@@ -33,6 +33,7 @@ import { TranscriptView, type FindRequest, type RevealRequest } from "./Transcri
 import { useTextFix } from "./TextFix";
 import { useTurnEdit } from "./TurnEdit";
 import type { PersonColor } from "./Turns";
+import { asrNoteText } from "./asrNote";
 import "./card.css";
 
 type Loaded = Recording & { transcript: Transcript | null };
@@ -476,9 +477,8 @@ export function RecordingCard({
           {onOpenSettings && <Button onClick={() => onOpenSettings("engine")}>Настроить</Button>}
         </div>
       )}
-      {status.kind === "ready" && rec.asr_note === "not_russian" && (
-        // GigaAM распознаёт только русский: такую запись расшифровал Whisper.
-        <p className="muted card__note" role="note">Запись не на русском — использован Whisper</p>
+      {status.kind === "ready" && asrNoteText(rec.asr_note) && (
+        <p className="muted card__note" role="note">{asrNoteText(rec.asr_note)}</p>
       )}
       <div className="card__body"><JiraLinks.Provider value={jira}>{body}</JiraLinks.Provider></div>
       {status.kind === "ready" && turnEdit.menu}

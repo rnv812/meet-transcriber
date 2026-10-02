@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 # пайплайна: язык и модель выбираются в настройках.
 MODEL_NAME = "bzikst/faster-whisper-large-v3-russian"
 DEFAULT_LANGUAGE = "ru"
+# Язык распознавания «определить по записи» (`asr.language`).
+AUTO_LANGUAGE = "auto"
 
 # Модель для машин без NVIDIA: большой русский fine-tune на CPU идёт часами.
 # Выбрана medium: замер 30.09 (docs/2026-09-30-cpu-profile-bench.md) — turbo
@@ -66,6 +68,13 @@ def _asr_settings() -> tuple[str, str]:
         return cfg.model or MODEL_NAME, cfg.language or DEFAULT_LANGUAGE
     except Exception:  # настройки не должны мешать расшифровке
         return MODEL_NAME, DEFAULT_LANGUAGE
+
+
+def whisper_language(language: str | None) -> str | None:
+    """Язык для Whisper: `auto` (и пусто) — None, Whisper определит сам;
+    faster-whisper строку «auto» не принимает."""
+    language = (language or "").strip()
+    return None if not language or language.lower() == AUTO_LANGUAGE else language
 
 
 def _model_for(device: str, model_name: str | None) -> str:
@@ -241,12 +250,17 @@ def drop_hallucinations(
 
 
 # Почему встреча распознана не тем движком, что выбран (пометка транскрипта
-# `asr_note`): запись не на русском, а GigaAM — только русский.
+# `asr_note`): запись не на русском, а GigaAM — только русский; или GigaAM не
+# скачалась / не загрузилась (нет сети, файл битый).
 NOT_RUSSIAN = "not_russian"
-# Язык распознавания «определить по записи» (`asr.language`).
-AUTO_LANGUAGE = "auto"
-# Сколько секунд от начала записи слушать, чтобы определить язык.
+GIGAAM_FAILED = "gigaam_failed"
+# Сколько секунд речи (суммарно, из нескольких мест записи) слушать, чтобы
+# определить язык, и сколько кусков для этого брать.
 DETECT_LANGUAGE_S = 60
+DETECT_PIECES = 4
+# Не русский — только если детектор в этом уверен: на тишине, гудках и музыке
+# в начале звонка Whisper охотно отвечает «en» с низкой уверенностью.
+DETECT_MIN_PROBABILITY = 0.8
 
 
 @dataclass(frozen=True)
@@ -260,40 +274,104 @@ class Choice:
     note: str | None = None
 
 
-def detect_language(path: Path, seconds: float = DETECT_LANGUAGE_S) -> str | None:
-    """Язык первой минуты записи — детектором Whisper той модели, что
-    распознаёт на этом устройстве. Нужен только при `asr.language = auto`.
-    Ошибка — None («не знаю»)."""
+def local_whisper_model(device: str) -> str | None:
+    """Модель Whisper, которая уже лежит на диске: выбранная для устройства,
+    иначе любая скачанная из каталога (сначала поставляемая для CPU). Нет
+    ни одной — None. Для запасного пути и определения языка: качать
+    гигабайты ради них не нужно."""
+    from meet import models
+
+    chosen = _model_for(device, None)
+    candidates = [chosen, CPU_MODEL_NAME, MODEL_NAME] + [
+        m["id"] for m in models.CATALOGUE
+        if m.get("kind") == models.ASR and m.get("backend") == "faster-whisper"]
+    for name in dict.fromkeys(candidates):
+        if Path(name).is_dir() or models.downloaded(name):
+            return name
+    return None
+
+
+def speech_sample(audio, sr: int = 16000, seconds: float = DETECT_LANGUAGE_S,
+                  pieces: int = DETECT_PIECES, regions=None):
+    """Образец речи для определения языка: до `seconds` секунд из `pieces`
+    мест записи, только из участков речи (VAD). Тишина, гудки и ожидание в
+    начале звонка в образец не попадают. Речи нет — None."""
+    import numpy as np
+
+    if regions is None:
+        from meet import gigaam_asr
+
+        regions = gigaam_asr.speech_regions(audio, sr)
+    regions = [(s, e) for s, e in regions if e > s]
+    total = sum(e - s for s, e in regions)
+    if total <= 0:
+        return None
+    piece = min(seconds / pieces, total / pieces)
+    parts = []
+    for k in range(pieces):
+        # k-я точка на «склеенной» речи — равномерно по всей записи
+        at = total * (k + 0.5) / pieces - piece / 2
+        for s, e in regions:
+            if at < e - s:
+                start = s + max(at, 0.0)
+                end = min(e, start + piece)
+                parts.append(audio[int(start * sr): int(end * sr)])
+                break
+            at -= e - s
+    parts = [p for p in parts if len(p)]
+    return np.concatenate(parts) if parts else None
+
+
+def detect_language(path: Path, *, model_factory=None, regions=None) -> tuple[str, float] | None:
+    """Язык записи по образцу речи (speech_sample) — детектором Whisper, если
+    модель Whisper уже скачана. → (язык, уверенность) или None («не знаю»:
+    модели нет, речи нет, ошибка). Нужен только при `asr.language = auto`."""
     try:
         import wave
 
         import numpy as np
 
-        _add_nvidia_dll_dirs()
-        _apply_hf_token()
-        from faster_whisper import WhisperModel
-
-        with wave.open(str(path), "rb") as wf:
-            frames = wf.readframes(min(wf.getnframes(), int(seconds * wf.getframerate())))
-        audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
         device = resolve_device()
-        model = WhisperModel(_model_for(device, None), device=device,
-                             compute_type=COMPUTE_TYPES[device][-1], **_whisper_kwargs(device))
-        language, probability, _ = model.detect_language(audio)
+        name = local_whisper_model(device)
+        if name is None:
+            print("язык записи не определяется: модель Whisper не скачана "
+                  "(качать её ради этого не стал) — считаю запись русской")
+            return None
+        with wave.open(str(path), "rb") as wf:
+            sr = wf.getframerate()
+            audio = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+        audio = audio.astype(np.float32) / 32768.0
+        sample = speech_sample(audio, sr, regions=regions)
+        if sample is None:
+            print("язык записи не определён: речи не найдено — считаю запись русской")
+            return None
+        if model_factory is None:
+            _add_nvidia_dll_dirs()
+            from faster_whisper import WhisperModel
+
+            def model_factory(model_name, device):
+                return WhisperModel(model_name, device=device, local_files_only=True,
+                                    compute_type=COMPUTE_TYPES[device][-1], **_whisper_kwargs(device))
+
+        model = model_factory(name, device)
+        segments = max(1, int(np.ceil(len(sample) / (30 * sr))))
+        language, probability, _ = model.detect_language(
+            sample, language_detection_segments=segments)
         del model
         print(f"язык записи: {language} ({probability:.2f})")
-        return language
+        return language, float(probability)
     except Exception as e:
-        print(f"язык записи не определён ({type(e).__name__}: {e})")
+        print(f"язык записи не определён ({type(e).__name__}: {e}) — считаю запись русской")
         return None
 
 
 def choose(path: Path | None = None, *, detect=None) -> Choice:
     """Движок для встречи — один на обе дорожки.
 
-    GigaAM только русский: язык встречи не русский (или `auto` определил
-    другой по первой минуте) — распознаёт Whisper, с пометкой NOT_RUSSIAN.
-    Пакета GigaAM нет в движке (старая установка) — тоже Whisper."""
+    GigaAM только русский: язык встречи не русский (или `auto` уверенно —
+    не меньше DETECT_MIN_PROBABILITY — определил другой по образцу речи) —
+    распознаёт Whisper, с пометкой NOT_RUSSIAN. Неуверенный ответ детектора —
+    русский. Пакета GigaAM нет в движке (старая установка) — тоже Whisper."""
     from meet import gigaam_asr, settings
 
     device = resolve_device()
@@ -306,7 +384,12 @@ def choose(path: Path | None = None, *, detect=None) -> Choice:
     language = (cfg.language or DEFAULT_LANGUAGE).strip().lower()
     if language == AUTO_LANGUAGE:
         found = (detect or detect_language)(path) if path is not None else None
-        language = (found or DEFAULT_LANGUAGE).lower()
+        language = DEFAULT_LANGUAGE
+        if found and found[0].lower() != "ru":
+            if found[1] >= DETECT_MIN_PROBABILITY:
+                language = found[0].lower()
+            else:
+                print(f"детектор не уверен ({found[0]}, {found[1]:.2f}) — распознаёт GigaAM")
     if language != "ru":
         print(f"GigaAM распознаёт только русский, а язык записи — {language}: "
               "распознаёт Whisper")
@@ -350,9 +433,7 @@ def transcribe_wav(
 
     device = choice.device if choice is not None else resolve_device()
     model_name = _model_for(device, model_name)
-    language = language or _asr_settings()[1]
-    if language.strip().lower() == AUTO_LANGUAGE:
-        language = None  # Whisper определит сам
+    language = whisper_language(language or _asr_settings()[1])
     last_error: Exception | None = None
     for compute_type in COMPUTE_TYPES[device]:
         try:
@@ -392,7 +473,9 @@ class Transcriber:
         default_model, default_language = _asr_settings()
         self.device = resolve_device()
         self.model_name = _model_for(self.device, model_name)
-        self.language = language or default_language
+        # `auto` — None: Whisper определяет язык окна сам (строку «auto» он
+        # не принимает, и живой режим падал бы на каждом окне).
+        self.language = whisper_language(language or default_language)
 
     def load(self) -> None:
         _add_nvidia_dll_dirs()

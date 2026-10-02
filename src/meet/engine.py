@@ -28,6 +28,10 @@ COMPONENTS = (
     ("transformers", "выравнивание по словам (wav2vec2)"),
     ("scipy", "обработка сигнала"),
 )
+# Без этих компонентов движок работает (распознаёт Whisper): в окне они видны
+# с пометкой, но «движок не установлен» из-за них не показывается. GigaAM
+# приезжает с обновлением движка (новая версия ставит окружение заново).
+OPTIONAL_COMPONENTS = {"gigaam": "не установлена — будет установлена при обновлении движка"}
 
 # Индексы колёс torch: CUDA-сборка тяжелее, но без неё расшифровка идёт на CPU
 # и на часовой встрече это часы вместо минут.
@@ -42,10 +46,15 @@ TORCH_SPECS = ("torch==2.11.*", "torchaudio==2.11.*")
 # PyPI его нет; ставим архивом зафиксированного коммита, а не git+https: у
 # пользователя может не быть git, а uv тянет git-зависимости через него.
 # Смена коммита — осознанно, после проверки на замерах (docs/release-notes).
+# SHA-256 архива сверяют и pip, и uv (фрагмент #sha256= в адресе): подменённый
+# или перепакованный архив не установится. GitHub обещает стабильность
+# архивов коммитов; если он их всё же перепакует, установка упадёт с
+# несовпадением хеша — тогда хеш обновляют здесь и в pyproject.toml.
 GIGAAM_COMMIT = "7447938d791c4f3e643386ee22c33777004293a5"
+GIGAAM_SHA256 = "17c9a57a8c76659feb112b4a6299391757d137fc50e5375d5613c46c379f3653"
 GIGAAM = (
     "gigaam @ https://github.com/salute-developers/GigaAM/archive/"
-    f"{GIGAAM_COMMIT}.zip"
+    f"{GIGAAM_COMMIT}.zip#sha256={GIGAAM_SHA256}"
 )
 
 PACKAGES = (
@@ -167,11 +176,16 @@ def gpu() -> dict:
 
 def state() -> dict:
     """Состояние движка для настроек: чего не хватает и куда встанет."""
-    components = [
-        {"module": module, "title": title, "installed": installed(module)}
-        for module, title in COMPONENTS
-    ]
-    missing = [c["module"] for c in components if not c["installed"]]
+    components = []
+    for module, title in COMPONENTS:
+        item = {"module": module, "title": title, "installed": installed(module)}
+        if module in OPTIONAL_COMPONENTS:
+            item["optional"] = True
+            if not item["installed"]:
+                item["note"] = OPTIONAL_COMPONENTS[module]
+        components.append(item)
+    missing = [c["module"] for c in components
+               if not c["installed"] and not c.get("optional")]
     card = gpu()
     device = _device(card["available"])
     return {

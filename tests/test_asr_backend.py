@@ -132,11 +132,125 @@ def test_auto_language_detects_on_the_recording(tmp_path, monkeypatch, gigaam_pr
     _config(tmp_path, monkeypatch, {"language": "auto"})
     _device(monkeypatch, "cpu")
     wav = tmp_path / "a.wav"
-    assert asr.choose(wav, detect=lambda p: "ru").backend == "gigaam"
-    choice = asr.choose(wav, detect=lambda p: "en")
+    assert asr.choose(wav, detect=lambda p: ("ru", 0.99)).backend == "gigaam"
+    choice = asr.choose(wav, detect=lambda p: ("en", 0.93))
     assert (choice.backend, choice.note) == ("faster-whisper", asr.NOT_RUSSIAN)
     # детектор не смог — считаем русским (язык по умолчанию)
     assert asr.choose(wav, detect=lambda p: None).backend == "gigaam"
+
+
+def test_unsure_detection_keeps_gigaam(tmp_path, monkeypatch, gigaam_present, capsys):
+    """Тишина и гудки в начале звонка дают «en» с низкой уверенностью — это
+    не повод уходить с GigaAM."""
+    _config(tmp_path, monkeypatch, {"language": "auto"})
+    _device(monkeypatch, "cpu")
+    choice = asr.choose(tmp_path / "a.wav", detect=lambda p: ("en", 0.55))
+    assert (choice.backend, choice.note) == ("gigaam", None)
+    assert "не уверен" in capsys.readouterr().out
+
+
+def _wav(path, seconds=1.0):
+    import wave
+
+    import numpy as np
+
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(np.zeros(int(seconds * 16000), dtype=np.int16).tobytes())
+    return path
+
+
+def test_detection_never_downloads_whisper(tmp_path, monkeypatch, capsys):
+    """Модели Whisper на диске нет — язык не определяется (None), фабрика
+    модели не вызывается, в журнале — почему."""
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
+    monkeypatch.setattr(asr, "local_whisper_model", lambda device: None)
+
+    def factory(*a, **kw):
+        raise AssertionError("качать модель ради определения языка нельзя")
+
+    assert asr.detect_language(_wav(tmp_path / "a.wav"), model_factory=factory) is None
+    assert "не скачана" in capsys.readouterr().out
+
+
+def test_detection_uses_speech_sample_from_several_places(tmp_path, monkeypatch):
+    import numpy as np
+
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
+    monkeypatch.setattr(asr, "local_whisper_model", lambda device: "Systran/faster-whisper-medium")
+    seen = {}
+
+    class Model:
+        def detect_language(self, audio, language_detection_segments=1):
+            seen.update(n=len(audio), segments=language_detection_segments)
+            return "en", 0.91, []
+
+    def factory(name, device):
+        seen.update(name=name, device=device)
+        return Model()
+
+    wav = _wav(tmp_path / "a.wav", seconds=300.0)
+    regions = [(40.0, 100.0), (150.0, 290.0)]  # тишина в начале не берётся
+    found = asr.detect_language(wav, model_factory=factory, regions=regions)
+    assert found == ("en", 0.91)
+    assert seen["name"] == "Systran/faster-whisper-medium" and seen["device"] == "cpu"
+    assert seen["n"] == 60 * 16000 and seen["segments"] == 2
+
+
+def test_speech_sample_takes_pieces_only_from_speech():
+    import numpy as np
+
+    sr = 100
+    audio = np.zeros(1000 * sr, dtype=np.float32)
+    audio[200 * sr:300 * sr] = 1.0  # речь 200–300 с
+    audio[600 * sr:700 * sr] = 2.0  # речь 600–700 с
+    sample = asr.speech_sample(audio, sr, seconds=60, pieces=4,
+                               regions=[(200.0, 300.0), (600.0, 700.0)])
+    assert len(sample) == 60 * sr
+    assert set(np.unique(sample)) == {1.0, 2.0}  # из обоих мест, без тишины
+    assert asr.speech_sample(audio, sr, regions=[]) is None
+
+
+def test_local_whisper_model_prefers_the_chosen_one(monkeypatch):
+    from meet import models
+
+    have = {"Systran/faster-whisper-medium"}
+    monkeypatch.setattr(models, "downloaded", lambda repo: repo in have)
+    monkeypatch.setattr(asr, "_model_for", lambda device, name: "Systran/faster-whisper-small")
+    assert asr.local_whisper_model("cpu") == "Systran/faster-whisper-medium"
+    have.add("Systran/faster-whisper-small")
+    assert asr.local_whisper_model("cpu") == "Systran/faster-whisper-small"
+    have.clear()
+    assert asr.local_whisper_model("cpu") is None
+
+
+def test_live_transcriber_maps_auto_to_detection(tmp_path, monkeypatch):
+    """Живой режим с языком `auto`: Whisper получает None (определит сам),
+    а не строку «auto», которую faster-whisper отвергает."""
+    calls = {}
+
+    class FakeModel:
+        def __init__(self, *a, **kw):
+            pass
+
+        def transcribe(self, *a, **kw):
+            calls.update(kw)
+            return iter(()), None
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=FakeModel))
+    monkeypatch.setattr(asr, "_add_nvidia_dll_dirs", lambda: None)
+    monkeypatch.setattr(asr, "_apply_hf_token", lambda: None)
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
+    _config(tmp_path, monkeypatch, {"language": "auto"})
+    t = asr.Transcriber()
+    assert t.language is None
+    t.load()
+    t.transcribe_window([0.0])
+    assert calls["language"] is None
+    assert asr.Transcriber(language="ru").language == "ru"
+    assert asr.whisper_language("Auto") is None and asr.whisper_language("") is None
 
 
 def test_missing_gigaam_package_falls_back_quietly(tmp_path, monkeypatch, capsys):

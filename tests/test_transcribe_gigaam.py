@@ -26,9 +26,14 @@ def pipeline(monkeypatch, tmp_path):
     monkeypatch.setenv("MEET_DATA_DIR", str(state))
     monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
 
-    def fake_asr(path, hotwords=None, *, choice=None, **kw):
+    def fake_asr(path, hotwords=None, *, choice=None, model_name=None, **kw):
         calls["asr"].append((path.name, choice))
+        calls.setdefault("models", []).append(model_name)
         if choice is not None and choice.backend == "gigaam":
+            if calls.get("gigaam_fails"):
+                from meet.gigaam_asr import Unavailable
+
+                raise Unavailable("GigaAM: не удалось скачать v3_e2e_rnnt.ckpt (нет связи)")
             return _gigaam_segments()
         return [Segment(0.0, 1.0, "whisper")]
 
@@ -156,3 +161,53 @@ def test_translit_failure_does_not_stop_transcription(pipeline, monkeypatch, tmp
     tr.transcribe(str(folder), align=False)
     assert "термины латиницей пропущены" in capsys.readouterr().out
     assert library.read_transcript(folder)["segments"][0]["text"] == "Открой апи."
+
+
+def test_gigaam_failure_falls_back_to_installed_whisper(pipeline, monkeypatch, tmp_path, capsys):
+    """GigaAM не скачалась (нет сети, файл битый) — встреча не падает: её
+    распознаёт уже скачанная модель Whisper, в карточке — пометка, в журнале —
+    причина; обе дорожки — Whisper."""
+    tr, calls, _ = pipeline
+    calls["gigaam_fails"] = True
+    _choose(monkeypatch, asr.Choice("gigaam", "cpu", "v3_e2e_rnnt"))
+    monkeypatch.setattr(asr, "local_whisper_model", lambda device: "Systran/faster-whisper-medium")
+    folder = tmp_path / "2026-10-01_10-00"
+    folder.mkdir()
+    (folder / "sys.opus").write_bytes(b"x")
+    (folder / "mic.opus").write_bytes(b"x")
+    tr.transcribe(str(folder), align=True)
+    out = capsys.readouterr().out
+    assert "GigaAM недоступна" in out and "не удалось скачать" in out
+    data = library.read_transcript(folder)
+    assert data["asr_note"] == "gigaam_failed"
+    assert data["asr"]["backend"] == "faster-whisper"
+    assert library.describe(folder).to_raw()["asr_note"] == "gigaam_failed"
+    # sys: GigaAM упала → Whisper; mic — сразу Whisper; модель — уже скачанная
+    assert [c.backend if c else None for _, c in calls["asr"]] == ["gigaam", None, None]
+    assert calls["models"][1:] == ["Systran/faster-whisper-medium"] * 2
+    assert calls["align"] == [True]  # для Whisper выравнивание как обычно
+
+
+def test_gigaam_failure_without_local_whisper_uses_the_configured_model(pipeline, monkeypatch, tmp_path):
+    tr, calls, _ = pipeline
+    calls["gigaam_fails"] = True
+    _choose(monkeypatch, asr.Choice("gigaam", "cpu", "v3_e2e_rnnt"))
+    monkeypatch.setattr(asr, "local_whisper_model", lambda device: None)
+    folder = _import_folder(tmp_path)
+    tr.transcribe(str(folder), align=False)
+    assert calls["models"][1:] == [None]
+    assert library.read_transcript(folder)["segments"][0]["text"] == "whisper"
+
+
+def test_user_rules_win_over_latin_restoring(pipeline, monkeypatch, tmp_path):
+    """Правило человека «апи» → «API-шлюз» срабатывает, хотя «API» есть в
+    терминах: правила замены применяются раньше возврата латиницы."""
+    tr, _, state = pipeline
+    (state / "config.json").write_text(json.dumps(
+        {"asr": {"replacements": [{"from": "апи", "to": "API-шлюз"}]}}), encoding="utf-8")
+    (state / "hotwords.txt").write_text("API\n", encoding="utf-8")
+    monkeypatch.setattr(tr.paths, "hotwords_path", lambda: state / "hotwords.txt")
+    _choose(monkeypatch, asr.Choice("gigaam", "cpu", "v3_e2e_rnnt"))
+    folder = _import_folder(tmp_path)
+    tr.transcribe(str(folder), align=False)
+    assert library.read_transcript(folder)["segments"][0]["text"] == "Открой API-шлюз."

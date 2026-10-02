@@ -221,7 +221,7 @@ def test_gigaam_is_pinned_to_a_commit_archive_in_both_profiles():
     пользователя может не стоять) в обоих профилях движка."""
     assert len(engine.GIGAAM_COMMIT) == 40
     assert engine.GIGAAM == ("gigaam @ https://github.com/salute-developers/GigaAM/archive/"
-                             f"{engine.GIGAAM_COMMIT}.zip")
+                             f"{engine.GIGAAM_COMMIT}.zip#sha256={engine.GIGAAM_SHA256}")
     for flavor in ("cpu", "cuda"):
         assert engine.GIGAAM in engine.install_steps(flavor)[1]
     assert "gigaam" in {module for module, _ in engine.COMPONENTS}
@@ -410,3 +410,29 @@ def test_python_side_install_gets_proxy_env(monkeypatch):
     assert engine._run(["pip", "install", "x"], None) == 0
     env = {k.upper(): v for k, v in seen["env"].items()}
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:3067"
+
+
+def test_gigaam_archive_is_hash_pinned_everywhere():
+    """SHA-256 архива GigaAM — во фрагменте адреса: его сверяют и pip, и uv."""
+    import tomllib
+
+    assert engine.GIGAAM.endswith(f"#sha256={engine.GIGAAM_SHA256}")
+    assert len(engine.GIGAAM_SHA256) == 64
+    root = Path(__file__).resolve().parents[1]
+    extras = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"]["optional-dependencies"]
+    for profile in ("engine-cpu", "engine-cuda"):
+        assert engine.GIGAAM in extras[profile]
+
+
+def test_engine_without_gigaam_is_still_installed(monkeypatch):
+    """GigaAM — необязательный компонент: без него распознаёт Whisper, и
+    движок не объявляется «не установленным»."""
+    monkeypatch.setattr(engine, "installed", lambda module: module != "gigaam")
+    state = engine.state()
+    assert state["installed"] is True and state["missing"] == []
+    gigaam = next(c for c in state["components"] if c["module"] == "gigaam")
+    assert gigaam["optional"] and not gigaam["installed"]
+    assert gigaam["note"] == "не установлена — будет установлена при обновлении движка"
+    monkeypatch.setattr(engine, "installed", lambda module: module != "torch")
+    assert engine.state()["missing"] == ["torch"]

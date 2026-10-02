@@ -535,6 +535,12 @@ test("запись не на русском — тихая пометка «ис
   expect(within(note).queryByRole("button")).toBeNull();
 });
 
+test("GigaAM не загрузилась — тихая пометка «GigaAM недоступна — использован Whisper»", async () => {
+  load({ asr_note: "gigaam_failed" });
+  render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={() => {}} />);
+  expect(await screen.findByRole("note")).toHaveTextContent("GigaAM недоступна — использован Whisper");
+});
+
 test("обычная расшифровка — пометки о движке нет", async () => {
   load({ asr_note: null });
   render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={() => {}} />);
