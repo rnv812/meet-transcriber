@@ -82,14 +82,33 @@ no not never none nothing nobody nowhere cannot
 _ORD = r"(?:ой|ый|ий|ая|ое|ого|ому|ым|ом|ую|ые|ых|ыми|ь|и|ья|ье|ьего|ьему|ьим|ьем|ью|ьи|ьих)"
 _NUMERAL = re.compile("^(?:" + "|".join([
     r"н[оу]л(?:ь|я|ю|ем|е|и|ей|ев)?", r"один|одн(?:а|о|ого|ому|им|ой|у|их|ими|ом|и)",
-    r"дв(?:а|е|ух|ум|умя)", r"тр(?:и|ех|ем|емя)", r"четыр\w*",
+    r"дв(?:а|е|ух|ум|умя)", r"дву[хм]\w*", r"тр(?:и|ех|ем|емя)", r"тр[её][хм]\w*", r"четыр\w*",
+    # Собирательные и «оба»: двое, троих, четверо, пятерым…
+    r"дво(?:е|их|им|ими)", r"тро(?:е|их|им|ими)",
+    r"(?:четвер|пятер|шестер|семер|восьмер|девятер|десятер)(?:о|ых|ым|ыми)",
+    r"об(?:а|е|оих|еих|оим|еим|оими|еими)",
     r"(?:пят|шест|сем|восем|девят|десят)(?:ь|и|ью)", r"\w*дцат\w*", r"\w*десят\w*",
     r"сорок\w*", r"девяност\w*", r"ст[оа]", r"сот(?:ня|ни|ен|ню|нями|нях)",
-    r"(?:двест|трист|четырест)\w*", r"(?:пят|шест|сем|восем|девят)(?:ьсот|исот|истам|ьюстами|истах)",
+    r"(?:двест|трист|четырест)\w*", r"(?:пят|шест|сем|восем|девят)(?:ь|и|ью)с(?:от|там|тами|тах)",
     r"тысяч\w*", r"миллион\w*", r"миллиард\w*", r"полтор\w*", r"половин\w*",
     r"перв\w*", r"втор" + _ORD, r"трет" + _ORD, r"четверт" + _ORD, r"(?:пят|шест|седьм|восьм|девят|десят|сот)" + _ORD,
-    r"one|two|three|four|five|six|seven|eight|nine|ten|hundred|thousand|million|first|second|third",
+    r"zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen"
+    r"|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand"
+    r"|million|billion|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|both|twice|once",
 ]) + ")$")
+# Слова-антонимы, похожие по буквам («больше» ~ «меньше»): исправление между ними
+# — не ослышка, а другой смысл. Основы; короче четырёх букв — только целое слово.
+ANTONYMS = (
+    ("больш", "меньш"), ("более", "менее"), ("включ", "выключ"), ("откр", "закр"),
+    ("можно", "нельзя"), ("плюс", "минус"), ("вверх", "вниз"), ("раньш", "позж"), ("рано", "поздно"),
+    ("да", "нет"), ("выше", "ниже"), ("лучш", "хуж"), ("принят", "отклон"), ("принял", "отклонил"),
+    ("добав", "удал"), ("начал", "конч"), ("начин", "заканч"), ("прав", "лев"), ("вход", "выход"),
+    ("всегда", "иногда"), ("мног", "мало"), ("быстр", "медлен"), ("увелич", "уменьш"),
+    ("повыс", "пониз"), ("прибав", "убав"), ("вперед", "назад"), ("утром", "вечером"), ("днем", "ночью"),
+    ("yes", "no"), ("true", "false"), ("on", "off"), ("enable", "disable"), ("allow", "deny"),
+)
+# Приставки, которые меняют смысл на обратный: «включить» ↔ «выключить».
+ANTONYM_PREFIXES = (("в", "вы"), ("за", "от"), ("при", "у"), ("на", "с"))
 # Края `find`/`replace`, которые снимаются: пробелы, кавычки, знаки препинания.
 _EDGES = re.compile(r"^[\s.,;:!?…\"'«»„“”‚‘’`()\[\]{}—–-]+|[\s.,;:!?…\"'«»„“”‚‘’`()\[\]{}—–-]+$")
 # Что может отличаться внутри: буквы, цифры, пробелы, дефисы, апострофы.
@@ -221,24 +240,68 @@ def similarity(a: str, b: str) -> float:
     return 1.0 - prev[-1] / max(len(a), len(b))
 
 
+def _word_spellings(word: str) -> list[str]:
+    """Кириллические записи одного слова термина. Только буквенные слова идут
+    в meet.translit: «EC2», «K8S», «CI-CD» там не прочитать (по буквам —
+    только буквы) — для них сравнивается само слово."""
+    from meet import translit
+
+    if word.isalpha():
+        try:
+            return translit.word_variants(word) or [word.lower()]
+        except Exception:
+            pass
+    return [word.lower()]
+
+
 def _spellings(replace: str) -> set[str]:
     """Как термин мог быть записан кириллицей (meet.translit) и он сам."""
     from meet import translit
 
-    out = {replace, *translit.variants(replace)}
+    out = {replace}
+    try:
+        out.update(translit.variants(replace))
+    except Exception:
+        pass  # запись — лишь подсказка сходства; без неё сравнивается сам термин
     words = replace.split()
     if words:
-        combos = itertools.product(*(translit.word_variants(w) for w in words))
+        combos = itertools.product(*(_word_spellings(w) for w in words))
         out |= {" ".join(c) for c in itertools.islice(combos, 8)}
     return out
 
 
 def sound_alike(find: str, replace: str, kind: str) -> bool:
     """Похоже ли это на ослышку: исправление — по буквам, термин — по его
-    кириллическим записям («апи» ~ API, «обзор бити» ~ observability)."""
+    кириллическим записям («апи» ~ API, «обзор бити» ~ observability).
+    Те же буквы в другом регистре («ec2» → «EC2») — похоже всегда."""
+    if _fold(find) == _fold(replace):
+        return True
     if kind == "fix":
         return similarity(find, replace) >= MIN_SIMILARITY
     return max(similarity(find, v) for v in _spellings(replace)) >= MIN_SIMILARITY
+
+
+def _stem_hit(word: str, stem: str) -> bool:
+    return word == stem if len(stem) < 4 else word.startswith(stem)
+
+
+def antonyms(a: list[str], b: list[str]) -> bool:
+    """Исправление меняет слово на противоположное: пара из ANTONYMS или та же
+    основа с приставкой-антонимом («включить» ↔ «выключить», «закрыть» ↔
+    «открыть»). Сравниваются слова, которых нет на другой стороне."""
+    only_a = [w for w in a if w not in b]
+    only_b = [w for w in b if w not in a]
+    for x in only_a:
+        for y in only_b:
+            for s1, s2 in ANTONYMS:
+                if (_stem_hit(x, s1) and _stem_hit(y, s2)) or (_stem_hit(x, s2) and _stem_hit(y, s1)):
+                    return True
+            for p1, p2 in ANTONYM_PREFIXES:
+                for u, v in ((x, y), (y, x)):
+                    if u.startswith(p1) and v.startswith(p2) and len(u) - len(p1) >= 3 \
+                            and u[len(p1):] == v[len(p2):]:
+                        return True
+    return False
 
 
 def _clean(value) -> str:
@@ -296,6 +359,8 @@ def check_pair(item, texts: dict[int, str]) -> tuple[dict | None, str | None]:
         return None, f"«{find}»: неизвестный вид «{kind}»"
     if not sound_alike(find, replace, kind):
         return None, f"«{find}» → «{replace}»: не похоже на ослышку"
+    if kind == "fix" and antonyms(a, b):
+        return None, f"«{find}» → «{replace}»: меняет смысл на противоположный"
     confidence = _confidence(item.get("confidence"))
     if confidence is None or confidence < MIN_CONFIDENCE:
         return None, f"«{find}»: низкая уверенность"
@@ -322,7 +387,10 @@ def parse(text: str, texts: dict[int, str]) -> tuple[list[dict], list[str]]:
         raise ValueError("нет списка replacements")
     good, dropped = [], []
     for item in raw:
-        pair, why = check_pair(item, texts)
+        try:
+            pair, why = check_pair(item, texts)
+        except Exception as e:  # одна странная пара не должна ронять всё улучшение
+            pair, why = None, f"пара не проверена ({type(e).__name__}: {e})"[:300]
         if pair is None:
             dropped.append(why)
         else:

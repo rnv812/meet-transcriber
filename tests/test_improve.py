@@ -403,3 +403,61 @@ def test_no_hint_for_whisper_or_plain_russian(tmp_path):
     library.write_transcript(f, {"version": 1, "asr": {"backend": "gigaam"},
                                  "segments": [{"start": 0, "end": 1, "text": "Деплой и релиз в пятницу, спринт."}]})
     assert not improve.hint_wanted(f)
+
+
+# --- раунд 2: устойчивость проверки пар ------------------------------------------------------
+
+
+@pytest.mark.parametrize("find, replace", [("ec2", "EC2"), ("s3", "S3"), ("k8s", "K8S"), ("ci-cd", "CI-CD"),
+                                           ("s3 бакет", "S3 бакет"), ("http2", "HTTP2")])
+def test_terms_with_digits_or_hyphens_are_checked_not_crashed(find, replace):
+    got, why = improve.check_pair({"find": find, "replace": replace, "kind": "term", "segments": [0]},
+                                  {0: f"Подняли {find} вчера."})
+    assert got is not None, why
+
+
+def test_one_odd_pair_never_fails_the_job(folder, cfg, monkeypatch):
+    """ec2 → EC2 рядом с годной парой: обе обработаны; а пара, на которой проверка
+    падает, — отброшена с причиной, остальные приняты."""
+    reply = {"replacements": [GOOD["replacements"][0],
+                              {"find": "ec2", "replace": "EC2", "kind": "term", "segments": [0]}]}
+    doc, _ = _run(folder, cfg, reply)
+    assert [g["find"] for g in doc["groups"]] == ["апи"]  # «ec2» во встрече нет — отброшена как пара
+    real = improve.check_pair
+
+    def flaky(item, texts):
+        if item.get("find") == "кафка":
+            raise KeyError("2")
+        return real(item, texts)
+
+    monkeypatch.setattr(improve, "check_pair", flaky)
+    doc, _ = _run(folder, cfg, GOOD)
+    assert [g["find"] for g in doc["groups"]] == ["апи", "обзор бити", "в торник"]
+    assert any("KeyError" in w for w in doc["warnings"])
+
+
+@pytest.mark.parametrize("find, replace", [
+    ("двухсот", "трехсот"), ("двумстам", "тремстам"), ("двое", "трое"), ("четверо", "пятеро"),
+    ("оба", "обе"), ("обоих", "троих"), ("twenty", "thirty"), ("fifteen", "fifty"), ("fourth", "fifth"),
+    ("пятистах", "шестистах"),
+])
+def test_more_numeral_forms_are_guarded(find, replace):
+    got, why = improve.check_pair({"find": find, "replace": replace, "kind": "fix", "segments": [0]},
+                                  {0: f"Было {find} заявок."})
+    assert got is None and "числа" in why
+
+
+@pytest.mark.parametrize("find, replace", [
+    ("больше", "меньше"), ("включить", "выключить"), ("закрыть", "открыть"), ("плюс", "минус"),
+    ("раньше", "позже"), ("да", "нет"), ("заказ", "отказ"), ("выше", "ниже"), ("приехал", "уехал"),
+])
+def test_look_alike_antonyms_are_not_fixes(find, replace):
+    got, why = improve.check_pair({"find": find, "replace": replace, "kind": "fix", "segments": [0]},
+                                  {0: f"Решили {find} сегодня."})
+    assert got is None and ("противоположный" in why or "отрицание" in why or "ослышку" in why), why
+
+
+def test_antonym_rules_leave_real_mishearings_alone():
+    for find, replace in [("в торник", "во вторник"), ("согласен", "согласна"), ("приду", "пришлю")]:
+        assert not improve.antonyms(improve.words_of(find), improve.words_of(replace))
+    assert improve.antonyms(["включить"], ["выключить"]) and improve.antonyms(["больше"], ["меньше"])

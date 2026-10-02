@@ -399,6 +399,7 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
           {termGroups.map((g) => {
             const more = g.more ?? [];
             const n = willReplace(g);
+            const unmarked = more.length - (extra[g.id]?.length ?? 0);
             return (
               <li key={g.id} className="improve__group">
                 <div className="improve__row">
@@ -409,6 +410,12 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
                       <span className="improve__from">{g.find}</span> → <strong>{g.replace}</strong>
                     </span>
                     <span className="muted num" title={`Будет заменено: ${n} ${placesWord(n)}`}>· {n}</span>
+                    {unmarked > 0 && (
+                      // Другие места термина видны и в свёрнутой строке: их стоит проверить.
+                      <span className="muted improve__unmarked" title="ИИ их не отмечал — раскройте, чтобы проверить">
+                        · ещё {unmarked} {placesWord(unmarked)}
+                      </span>
+                    )}
                   </label>
                 </div>
                 {expanded.has(g.id) && (
