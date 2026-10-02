@@ -138,4 +138,34 @@ def test_tier_kwargs_fast_per_provider():
     assert tier_kwargs("codex", "fast") == {"effort": "low"}
     assert tier_kwargs("openai-compatible", "fast") == {}
     for provider in ("claude-code", "codex", "openai-compatible", None):
-        assert tier_kwargs(provider, "agent") == {}  # «Как у агента» — без добавок
+        assert tier_kwargs(provider, "agent") == {}  # модель не задана — без добавок
+
+
+def test_tier_kwargs_agent_takes_the_configured_model():
+    from meet.llm import tier_kwargs
+
+    assert tier_kwargs("claude-code", "agent", "opus") == {"model": "opus"}
+    assert tier_kwargs("claude-code", "fast", "opus") == {"model": "haiku"}
+    # Codex — модель из своего конфига, локальная — llm.local_model.
+    assert tier_kwargs("codex", "agent", "opus") == {}
+    assert tier_kwargs("openai-compatible", "agent", "opus") == {}
+
+
+def test_runner_for_claude_passes_the_configured_model(monkeypatch):
+    import asyncio
+
+    from meet.llm import claude
+
+    seen = []
+
+    async def fake(prompt, **kw):
+        seen.append(kw.get("model"))
+
+    monkeypatch.setattr(claude, "run", fake)
+    cfg = Settings.from_raw({"llm": {"model": "opus"}})
+    runner = llm.runner_for("claude-code", cfg)
+    asyncio.run(runner("q", system_prompt="s"))
+    asyncio.run(runner("q", system_prompt="s", model="haiku"))  # «Быстрее» перекрывает
+    assert seen == ["opus", "haiku"]
+    assert llm.agent_model("claude-code", cfg) == "opus"
+    assert llm.agent_model("codex", cfg) is None

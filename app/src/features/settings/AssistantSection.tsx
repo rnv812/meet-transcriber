@@ -32,6 +32,24 @@ const LOCAL = "openai-compatible";
 /** Ключи `llm`, по которым идёт проверка и выбор «Авто». */
 const LLM_KEYS = ["provider", "base_url", "local_model", "proxy"];
 
+/** Подпись `llm.model`: на неё ссылаются подсказки других разделов. */
+export const MODEL_LABEL = "Модель Claude Code";
+
+function ModelTip() {
+  return (
+    <HelpTip label="Какая модель отвечает" title={MODEL_LABEL}>
+      <TipLine>
+        Модель, на которой Claude Code готовит итоги, анализ, названия и профили, отвечает на вопросы и ведёт
+        живого ассистента: например sonnet или opus. Пусто — sonnet.
+      </TipLine>
+      <TipLine>
+        Живые подсказки в режиме «Быстрее» идут на Haiku. Codex берёт модель из своего конфига, локальная
+        модель задаётся отдельно.
+      </TipLine>
+    </HelpTip>
+  );
+}
+
 const PROXY_LABEL = "Прокси для подключения к моделям";
 const PROXY_HELP = "Claude Code и Codex сами не используют системный прокси Windows — приложение передаёт его им. "
   + "Прокси нужен, если доступ к сервисам идёт через VPN или прокси-сервер.";
@@ -209,6 +227,14 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
           {llmDirty && <span className="muted">Проверяются сохранённые настройки — сначала сохраните изменения</span>}
         </div>
       </Row>
+      {chosen !== LOCAL && chosen !== "codex" && (
+        <Row label={MODEL_LABEL} htmlFor="llm-model" help={<ModelTip />}
+          hint="Готовит итоги, анализ, профили, отвечает на вопросы и ведёт живого ассистента">
+          <input id="llm-model" type="text" placeholder="sonnet"
+            value={String(llm("model") ?? "")}
+            onChange={(e) => set("llm", "model", e.target.value)} />
+        </Row>
+      )}
       {chosen === LOCAL && (
         <>
           <p className="muted sdesc">Локальная модель не использует базу знаний.</p>
