@@ -164,7 +164,7 @@ export const Turns = memo(function Turns({
         <div className="chapter-head" key={`c${row.c}`} data-chapter={row.c}>
           <h3 className="chapter-head__title">
             <span className="chapter-head__n">Глава {c.n}</span>
-            <span className="chapter-head__sep" aria-hidden="true"> · </span>
+            <span className="chapter-head__sep"> · </span>
             {c.title}
           </h3>
           <span className="chapter-head__time num">{clock(c.start)}–{clock(c.end)}</span>
