@@ -163,6 +163,15 @@ def _apply_hf_token() -> None:
         pass
 
 
+def _tracked(raw_segments, duration: float | None, on_progress=None):
+    """Сегменты Whisper приходят лениво, по мере распознавания: конец
+    очередного от длительности записи — доля сделанного."""
+    for s in raw_segments:
+        if on_progress and duration:
+            on_progress(min(1.0, max(0.0, s.end / duration)))
+        yield s
+
+
 def _segments_from_whisper(raw_segments, offset_s: float = 0.0) -> list[Segment]:
     """Сегменты faster-whisper → list[Segment]; offset_s переводит таймкоды окна
     (всегда от нуля) в абсолютное время встречи. no_speech_prob/avg_logprob
@@ -459,6 +468,7 @@ def transcribe_wav(
     model_name: str | None = None,
     language: str | None = None,
     choice: Choice | None = None,
+    on_progress=None,
 ) -> list[Segment]:
     """Распознать речь; при нехватке видеопамяти — квантованная модель.
 
@@ -471,13 +481,17 @@ def transcribe_wav(
     деградируют, а зацикливаний и так не было благодаря vad_filter.
 
     `choice` (asr.choose) с движком GigaAM — распознаёт GigaAM (подсказок
-    у него нет: `hotwords` не нужны, термины чинит пайплайн после)."""
+    у него нет: `hotwords` не нужны, термины чинит пайплайн после).
+
+    `on_progress(доля)` — ход распознавания 0…1: у Whisper — по концу
+    последнего сегмента от длительности записи, у GigaAM — по кускам."""
     if choice is not None and choice.backend == "gigaam":
         from meet import gigaam_asr
 
         _add_nvidia_dll_dirs()
+        extra = {"on_chunk": lambda done, total: on_progress(done / total if total else 1.0)} if on_progress else {}
         return gigaam_asr.transcribe(
-            path, model_name=choice.gigaam_model or gigaam_asr.MODEL_NAME, device=choice.device)
+            path, model_name=choice.gigaam_model or gigaam_asr.MODEL_NAME, device=choice.device, **extra)
     _add_nvidia_dll_dirs()
     _apply_hf_token()
     from faster_whisper import WhisperModel
@@ -491,14 +505,14 @@ def transcribe_wav(
             model = WhisperModel(model_name, device=device, compute_type=compute_type,
                                  **_whisper_kwargs(device))
             print(f"Распознавание ({device}, {compute_type})...")
-            segments, _ = model.transcribe(
+            segments, info = model.transcribe(
                 str(path),
                 language=language,
                 vad_filter=True,
                 word_timestamps=True,
                 hotwords=hotwords,
             )
-            result = _segments_from_whisper(segments)
+            result = _segments_from_whisper(_tracked(segments, getattr(info, "duration", 0), on_progress))
             del model
             return result
         except RuntimeError as e:
@@ -513,9 +527,24 @@ def transcribe_wav(
     raise SystemExit(f"Модель не загрузилась даже в int8: {last_error}")
 
 
+# Живой режим: не больше стольких токенов на секунду окна (русская речь —
+# 6–8), чтобы зациклившийся декодер не держал окно 20–30 с.
+LIVE_TOKENS_PER_S = 12
+LIVE_TOKENS_MIN = 24
+
+
 class Transcriber:
     """Резидентная модель Whisper для живого режима: грузится один раз,
-    расшифровывает окна аудио без перезагрузки на каждый вызов."""
+    расшифровывает окна аудио без перезагрузки на каждый вызов.
+
+    Живому режиму нужна скорость, а не точность (точный транскрипт делает
+    офлайн-проход): без пословных таймкодов, без повторных проходов с
+    другой температурой и с потолком токенов на окно — зациклившийся
+    декодер не держит окно десятки секунд."""
+
+    name = "Whisper"
+    # Возврат латинских терминов (meet.translit) — только после GigaAM.
+    latin_pass = False
 
     def __init__(self, model_name: str | None = None,
                  language: str | None = None) -> None:
@@ -564,15 +593,18 @@ class Transcriber:
     ) -> list[Segment]:
         if self._model is None:
             raise RuntimeError("Transcriber.load() не был вызван")
-        segments, _ = self._model.transcribe(
-            audio,
-            language=self.language,
-            vad_filter=True,
-            word_timestamps=True,
-            hotwords=hotwords,
-            initial_prompt=initial_prompt,
-        )
-        return _segments_from_whisper(segments, offset_s)
+        seconds = len(audio) / 16000
+        cap = max(LIVE_TOKENS_MIN, int(seconds * LIVE_TOKENS_PER_S))
+        options = dict(language=self.language, vad_filter=True, word_timestamps=False,
+                       hotwords=hotwords, initial_prompt=initial_prompt, temperature=0.0)
+        try:
+            segments, _ = self._model.transcribe(audio, max_new_tokens=cap, **options)
+            return _segments_from_whisper(segments, offset_s)
+        except ValueError:
+            # Длинная подсказка (initial_prompt + hotwords) с потолком не
+            # влезает в контекст модели — это окно без потолка.
+            segments, _ = self._model.transcribe(audio, **options)
+            return _segments_from_whisper(segments, offset_s)
 
     def unload(self) -> None:
         self._model = None

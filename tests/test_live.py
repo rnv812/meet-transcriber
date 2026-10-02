@@ -67,32 +67,30 @@ def test_process_window_writes_and_advances_offset(tmp_path):
         "[00:00:00] Собеседник: привет",
         "[00:00:01] Собеседник: как дела",
     ]
-    # Wall-clock offsets, lagged one tick: tick 1 → 0.0 (t0), tick 2 → 101-100 = 1.0.
+    # Таймкод окна — его место в звуке дорожки: второе окно начинается через 1 с.
     assert fake.offsets == [0.0, 1.0]
 
 
-def test_process_window_aligns_tracks_in_same_tick(tmp_path):
-    """Both tracks processed in one tick must get the SAME offset_s, even when
-    one track's pushed audio is much shorter than the other's."""
+def test_each_track_keeps_its_own_position(tmp_path):
+    """Таймкод окна — позиция в звуке своей дорожки (тот же поток, что и
+    файл, с доливкой пауз), а не часы распознавания: дорожка, где звука было
+    меньше, не «уезжает» вслед за другой."""
     fake = FakeTranscriber([])
-    # Tick 1 reads t0=50, now=60; tick 2 reads now=80.
-    clock = FakeClock([50.0, 60.0, 80.0])
-    engine = LiveEngine(tmp_path, fake, window_seconds=20.0, clock=clock)
+    engine = LiveEngine(tmp_path, fake, window_seconds=20.0)
     engine.register_track("sys.wav", rate=48000, channels=2, normalize=False)
     engine.register_track("mic.wav", rate=48000, channels=2, normalize=False)
 
-    # First tick drains nothing → t0/tick_origin established, no offsets recorded.
-    engine.process_window()
+    engine.process_window()  # звука нет — и окон нет
     assert fake.offsets == []
 
-    # Second tick: push very different amounts of audio to each track.
-    engine._tracks["sys.wav"]["buffer"].push((np.zeros(48000 * 2 * 5, dtype=np.int16) + 1000).tobytes())
-    engine._tracks["mic.wav"]["buffer"].push((np.zeros(48000 * 2, dtype=np.int16) + 1000).tobytes())
+    tone = lambda s: (np.zeros(48000 * 2 * s, dtype=np.int16) + 1000).tobytes()  # noqa: E731
+    engine._tracks["sys.wav"]["buffer"].push(tone(5))
+    engine._tracks["mic.wav"]["buffer"].push(tone(1))
     engine.process_window()
-
-    # Both transcribe_window calls in this tick share the origin → same offset.
-    assert len(fake.offsets) == 2
-    assert fake.offsets[0] == fake.offsets[1] == 10.0  # previous tick: 60 - 50
+    engine._tracks["sys.wav"]["buffer"].push(tone(1))
+    engine._tracks["mic.wav"]["buffer"].push(tone(1))
+    engine.process_window()
+    assert fake.offsets == [0.0, 0.0, 5.0, 1.0]
 
 
 def test_process_window_drops_hallucinations(tmp_path):
@@ -318,7 +316,7 @@ def test_on_entry_gets_structure_next_to_line(tmp_path):
     engine.process_window()
     line, entry = got[0]
     assert line == format_live_line(0.0, "Вы", "привет")
-    assert entry == {"t": 0.0, "speaker": "Вы", "text": "привет"}
+    assert entry == {"t": 0.0, "end": 0.5, "speaker": "Вы", "text": "привет"}
 
 
 # --- общий lock записи ------------------------------------------------------
@@ -606,28 +604,21 @@ def test_gain_is_calibrated_on_audio_not_on_padding(tmp_path):
     assert abs(engine._tracks["sys.wav"]["gain"] - expected) < 1e-3
 
 
-def test_window_offsets_start_at_capture_start(tmp_path, monkeypatch):
-    """Окно N покрывает [tick_{N-1}, tick_N] от начала захвата: второе окно —
-    со сдвигом в окно, а не снова с нуля (раньше t0 ставился первым тиком)."""
-    _fake_audio(monkeypatch)
-    now = {"t": 10.0}  # как настоящие часы: чтения внутри тика совпадают
+def test_window_offsets_count_padded_pauses(tmp_path):
+    """Пауза (доливка тишины) — часть звука дорожки: окно после неё
+    начинается там, где оно в файле дорожки, а окно из одной доливки не
+    распознаётся."""
     fake = FakeTranscriber([[], []])
-    engine = LiveEngine(tmp_path / "2026-10-01_10-00", fake, window_seconds=3600,
-                        speaker_name="Вы", clock=lambda: now["t"])
-    fake.load = fake.unload = lambda: None
-    engine.start()  # захват пошёл в t=10
-    try:
-        for fname in ("sys.wav", "mic.wav"):
-            engine._tracks[fname]["buffer"].drain()
-        now["t"] = 30.0
-        engine._tracks["mic.wav"]["buffer"].push(b"\x01\x00" * 16000)
-        engine.process_window()  # окно [10, 30] → offset 0
-        now["t"] = 50.0
-        engine._tracks["mic.wav"]["buffer"].push(b"\x01\x00" * 16000)
-        engine.process_window()  # окно [30, 50] → offset 20
-    finally:
-        engine.stop()
-    assert fake.offsets == [0.0, 20.0]
+    engine = LiveEngine(tmp_path, fake, speaker_name="Вы")
+    engine.register_track("mic.wav", rate=16000, channels=1)
+    buf = engine._tracks["mic.wav"]["buffer"]
+    buf.push(b"\x01\x00" * 16000)            # 1 с речи
+    engine.process_window()                     # окно [0, 1]
+    buf.push_silence(b"\x00" * 2 * 16000 * 20)  # пауза 20 с
+    engine.process_window()                     # одна доливка — без распознавания
+    buf.push(b"\x01\x00" * 16000)
+    engine.process_window()                     # окно [21, 22]
+    assert fake.offsets == [0.0, 21.0]
 
 
 def test_engine_pads_silent_tracks_from_a_ticker(tmp_path, monkeypatch):

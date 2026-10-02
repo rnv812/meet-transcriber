@@ -336,8 +336,7 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
 def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                 no_voices, *, open_browser, endpoint, provider, cfg,
                 knowledge_dir=None, parent_pid=None) -> None:
-    from meet import settings
-    from meet.asr import Transcriber
+    from meet import live_asr, settings
     from meet.live import LiveEngine
     from meet.transcribe import _load_hotwords
     from meet.voice_id import VoiceMatcher
@@ -372,10 +371,15 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         vault_index=cfg.assist.vault_index, hub_prefix=cfg.assist.hub_prefix,
         prefs={"quiet_default": cfg.assist.quiet_default, "activity": cfg.assist.activity},
     )
-    engine = LiveEngine(out_dir, Transcriber(), window_seconds=window_seconds,
+    # Распознавание: GigaAM короткими окнами для русского (если скачана),
+    # иначе Whisper; правила замены и латиница — к каждой реплике.
+    engine = LiveEngine(out_dir, live_asr.pick(cfg, log=lambda line: print(line, flush=True)),
+                        window_seconds=window_seconds,
                         hotwords=_load_hotwords(hotwords),
                         on_entry=bus.publish,
-                        voice_matcher=None if no_voices else VoiceMatcher())
+                        voice_matcher=None if no_voices else VoiceMatcher(),
+                        text_fixes=live_asr.TextFixes.from_settings(hotwords, latin=True),
+                        log=lambda line: print(line, flush=True))
     state_file = out_dir / LIVE_STATE_JSON
 
     def _save_state() -> None:
@@ -408,7 +412,7 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         bus, live, system_prompt=state.qa_system,
         allowed_dirs=state.qa_allowed_dirs, cwd=out_dir,
         runner=runner, model=llm.agent_model(provider_name, cfg),
-        on_fresh_audio=engine.process_window,
+        on_fresh_audio=getattr(engine, "flush_tail", engine.process_window),
         owner=cfg.recording.speaker_name,
     )
     if task:
