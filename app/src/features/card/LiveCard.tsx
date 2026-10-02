@@ -14,7 +14,8 @@ import { useRef } from "react";
 import type { Endpoint } from "../../lib/api";
 import type { LiveHint, LiveStatus } from "../../lib/types";
 import { LiveWorkspace, useLiveView } from "../../live/LiveWorkspace";
-import { QuietIcon } from "../../live/icons";
+import { Bell, BellOff } from "lucide-react";
+import { IconButton } from "../../ui/IconButton";
 import { useQuiet } from "../../live/useAttention";
 import { useLiveAsk } from "../../live/useLastLook";
 import { useLive } from "../../live/useLive";
@@ -42,10 +43,8 @@ export function LiveCard({ endpoint, live, onAskAgent }: {
         <span className="live-card__title">{stopping ? "Останавливаю…" : "Идёт запись с ассистентом"}</span>
         {state.status && !stopping && <span className="muted" role="status">{state.status}</span>}
         {state.error && <span className="muted">{state.error}</span>}
-        <button type="button" className="icon-btn live-card__quiet" aria-pressed={quiet} aria-label="Не отвлекать"
-          title="Не отвлекать: без подсветки и счётчиков" onClick={() => setQuiet(!quiet)}>
-          <QuietIcon on={quiet} />
-        </button>
+        <IconButton icon={quiet ? BellOff : Bell} label="Не отвлекать" pressed={quiet} className="live-card__quiet"
+          tooltip="Не отвлекать: без подсветки и счётчиков" onClick={() => setQuiet(!quiet)} />
       </div>
       <div className="live-card__body">
         <LiveWorkspace live={state} view={view} onAsk={ask} disabled={stopping} onAskHint={onAskAgent} />

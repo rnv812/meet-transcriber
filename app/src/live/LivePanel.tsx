@@ -24,9 +24,10 @@ import { type Endpoint, NoResidentError, liveStop, resolveEndpoint } from "../li
 import { clock, errorText } from "../lib/format";
 import { inTauri, invoke } from "../lib/shell";
 import type { LiveHint } from "../lib/types";
-import { Button } from "../ui/Button";
+import { Bell, BellOff, ChevronDown, ChevronUp, Maximize2, Minimize2, Pin, Square } from "lucide-react";
+import { IconButton } from "../ui/IconButton";
+import { Truncate } from "../ui/Truncate";
 import { LiveWorkspace, useLiveView } from "./LiveWorkspace";
-import { ExpandIcon, MaximizeIcon, PinIcon, QuietIcon, StopIcon } from "./icons";
 import { KIND_LABEL, isUrgent, topHint } from "./liveModel";
 import { useQuiet } from "./useAttention";
 import { useLiveAsk } from "./useLastLook";
@@ -130,17 +131,23 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
     setExpanded(true);
   };
 
-  const state = stopping ? "Останавливаю…" : "Ассистент слушает";
+  // Коротко: шапка узкой панели (от 300 px) вмещает таймер, состояние и пять кнопок.
+  const state = stopping ? "Останавливаю…" : "Слушает";
   const sizeLabel = view.maximized ? "Обычный размер" : "На весь экран";
   const last = live.lines.at(-1);
   const newHints = quiet ? 0 : ws.unseen.hints;
   const mods = `${open ? " live-panel--open" : ""}${view.maximized ? " live-panel--maximized" : ""}`;
+  // Свёрнутую панель можно тащить за любое свободное место, а не только за шапку.
+  const dragAnywhere = (e: MouseEvent) => {
+    if (!open && !(e.target as Element).closest(".live-head")) headPress(e, startDrag);
+  };
   return (
-    <div ref={root} className={`live-panel${mods}`}>
+    <div ref={root} className={`live-panel${mods}${quiet ? " live-panel--quiet" : ""}`} onMouseDown={dragAnywhere}>
       <header className="live-head" onMouseDown={(e) => headPress(e, startDrag, () => setMaximized(!view.maximized))}>
-        <span className="live-head__title" title={state}>
+        <span className="live-head__title" title={stopping ? state : "Ассистент слушает встречу"}>
           <span className="live-dot" aria-hidden="true" />
           <span className="num">{elapsed === null ? "—" : clock(elapsed)}</span> · {state}
+          {quiet && <span className="live-head__quiet-tag">тихо</span>}
           {live.status && !stopping && (
             <span className="live-status" role="status" title={live.status}>
               <span className="live-status__dot" aria-hidden="true" />
@@ -148,42 +155,29 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
             </span>
           )}
         </span>
+        {/* Все кнопки шапки — значки 28 px одного вида при любой ширине; подпись — в подсказке. */}
         <span className="live-head__actions">
-          <button
-            type="button" className="icon-btn live-head__quiet" aria-pressed={quiet} aria-label="Не отвлекать"
-            title={quiet ? "«Не отвлекать» включено: без подсветки и счётчиков" : "Не отвлекать: без подсветки и счётчиков"}
-            onClick={() => setQuiet(!quiet)}
-          >
-            <QuietIcon on={quiet} />
-          </button>
-          <button
-            type="button" className="icon-btn live-head__pin" aria-pressed={view.pinned}
-            aria-label="Поверх всех окон"
-            title={view.pinned ? "Панель поверх всех окон — открепить" : "Закрепить поверх всех окон"}
-            onClick={() => setPinned(!view.pinned)}
-          >
-            <PinIcon />
-          </button>
-          <button
-            type="button" className="icon-btn" aria-label={sizeLabel} title={`${sizeLabel} (двойной щелчок по шапке)`}
-            onClick={() => setMaximized(!view.maximized)}
-          >
-            <MaximizeIcon maximized={view.maximized} />
-          </button>
-          {/* В узком окне (до 420) подписи прячутся — остаются значки с подсказками. */}
-          <Button aria-expanded={open} aria-label={open ? "Свернуть" : "Развернуть"}
-            title={open ? "Свернуть" : "Развернуть"} onClick={() => setExpanded(!open)}>
-            <span className="live-head__label">{open ? "Свернуть" : "Развернуть"}</span>
-            <span className="live-head__icon"><ExpandIcon open={open} /></span>
-          </Button>
-          <Button variant="danger" aria-label="Стоп" title="Остановить и сохранить" onClick={stop} disabled={stopping}>
-            <span className="live-head__label">Стоп</span>
-            <span className="live-head__icon"><StopIcon /></span>
-          </Button>
+          <IconButton icon={quiet ? BellOff : Bell} label="Не отвлекать" pressed={quiet} className="live-head__quiet"
+            tooltip={quiet ? "«Не отвлекать» включено: без подсветки и счётчиков" : "Не отвлекать: без подсветки и счётчиков"}
+            onClick={() => setQuiet(!quiet)} />
+          <IconButton icon={Pin} label="Поверх всех окон" pressed={view.pinned} className="live-head__pin"
+            tooltip={view.pinned ? "Панель поверх всех окон — открепить" : "Закрепить поверх всех окон"}
+            onClick={() => setPinned(!view.pinned)} />
+          <IconButton icon={view.maximized ? Minimize2 : Maximize2} label={sizeLabel}
+            tooltip={`${sizeLabel} (двойной щелчок по шапке)`} onClick={() => setMaximized(!view.maximized)} />
+          <IconButton icon={open ? ChevronUp : ChevronDown} label={open ? "Свернуть" : "Развернуть"}
+            aria-expanded={open} onClick={() => setExpanded(!open)} />
+          <IconButton icon={Square} label="Стоп" variant="danger" className="live-head__stop"
+            tooltip="Остановить и сохранить запись" onClick={stop} disabled={stopping} />
         </span>
       </header>
-      {stopError && <div className="live-panel__error" role="alert">{stopError}</div>}
-      {live.error && <div className="live-panel__note muted">{live.error}</div>}
+      {/* Ошибки — поверх низа панели, а не строкой над содержимым: оно не сдвигается. */}
+      {(stopError || live.error) && (
+        <div className="live-panel__notices">
+          {stopError && <div className="live-panel__error" role="alert">{stopError}</div>}
+          {live.error && <div className="live-panel__note muted" role="status">{live.error}</div>}
+        </div>
+      )}
       {open ? (
         <div className="live-panel__body">
           <LiveWorkspace live={live} view={ws} onAsk={ask} disabled={stopping} />
@@ -194,13 +188,13 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
           {shown ? (
             <>
               <span className={`live-last__kind live-hint--${shown.kind}`}>{KIND_LABEL[shown.kind]}</span>
-              <span className="live-last__text">{shown.text}</span>
+              <Truncate className="live-last__text">{shown.text}</Truncate>
             </>
           ) : last ? (
-            <span className="live-last__text muted">
+            <Truncate className="live-last__text muted" text={`${last.speaker ? `${last.speaker}: ` : ""}${last.text}`}>
               {last.speaker && <span className="live-feed__who">{last.speaker}</span>}
               <span>{last.text}</span>
-            </span>
+            </Truncate>
           ) : <span className="live-last__text muted">Реплики появятся, как только их расшифрует ассистент</span>}
           {newHints > 0 && <span className="live-last__count" aria-label={`новых подсказок: ${newHints}`}>{newHints}</span>}
         </button>

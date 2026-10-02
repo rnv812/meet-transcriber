@@ -53,14 +53,14 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-test("свёрнутая: таймер от начала, «Ассистент слушает», последняя реплика", () => {
+test("свёрнутая: таймер от начала, «Слушает», последняя реплика", () => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(NOW_S * 1000);
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap(status())));
-  expect(screen.getByRole("banner")).toHaveTextContent("12:34 · Ассистент слушает");
+  expect(screen.getByRole("banner")).toHaveTextContent("12:34 · Слушает");
   act(() => { vi.advanceTimersByTime(1000); });
-  expect(screen.getByRole("banner")).toHaveTextContent("12:35 · Ассистент слушает");
+  expect(screen.getByRole("banner")).toHaveTextContent("12:35 · Слушает");
   act(() => {
     liveStream().emit("line", { t: 1, speaker: "Демьян", text: "первая" }, 0);
     liveStream().emit("line", { t: 2, speaker: "Мария", text: "вторая" }, 1);
@@ -187,7 +187,7 @@ test("Esc в поле вопроса не возвращает обычный р
 test("шапка: нажатие тащит окно, двойной щелчок — на весь экран и обратно", async () => {
   render(<LivePanel endpoint={ep} />);
   await act(async () => {});
-  const title = screen.getByText(/Ассистент слушает/);
+  const title = screen.getByTitle("Ассистент слушает встречу");
   fireEvent.mouseDown(title, { button: 0, detail: 1 });
   expect(invoke).toHaveBeenLastCalledWith("live_start_drag");
   await act(async () => { fireEvent.mouseDown(title, { button: 0, detail: 2 }); });
@@ -202,6 +202,29 @@ test("шапка: нажатие тащит окно, двойной щелчо�
   fireEvent.mouseDown(screen.getByRole("button", { name: "Развернуть" }), { button: 0, detail: 2 });
   expect(calls("live_start_drag")).toEqual([]);
   expect(calls("live_set_maximized")).toEqual([]);
+});
+
+test("свёрнутую панель тащат и за свободное место под шапкой; строка подсказки — кнопка, не тащит", async () => {
+  const { container } = render(<LivePanel endpoint={ep} />);
+  await act(async () => {});
+  vi.mocked(invoke).mockClear();
+  fireEvent.mouseDown(container.querySelector(".live-panel")!, { button: 0, detail: 1 });
+  expect(calls("live_start_drag")).toHaveLength(1);
+  fireEvent.mouseDown(screen.getByRole("button", { name: "Развернуть панель" }), { button: 0, detail: 1 });
+  expect(calls("live_start_drag")).toHaveLength(1);
+});
+
+test("кнопки шапки — одинаковые значки с подписью в подсказке при любой ширине", async () => {
+  render(<LivePanel endpoint={ep} />);
+  await act(async () => {});
+  const buttons = within(screen.getByRole("banner")).getAllByRole("button");
+  expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(
+    ["Не отвлекать", "Поверх всех окон", "На весь экран", "Развернуть", "Стоп"]);
+  for (const b of buttons) {
+    expect(b).toHaveClass("icon-btn");
+    expect(b.textContent).toBe(""); // только значок, подпись — title
+    expect(b.getAttribute("title")).toBeTruthy();
+  }
 });
 
 test("«Поверх всех окон» включено по умолчанию и переключается", async () => {
@@ -272,7 +295,7 @@ test("LiveWindow: ищет резидента, пока не найдёт, за�
 test("время начала неизвестно — вместо таймера прочерк", () => {
   render(<LivePanel endpoint={ep} />);
   act(() => bus().emit("state", snap(status({ started_at: null }))));
-  expect(screen.getByRole("banner")).toHaveTextContent("— · Ассистент слушает");
+  expect(screen.getByRole("banner")).toHaveTextContent("— · Слушает");
   expect(screen.getByRole("banner")).not.toHaveTextContent("00:00");
 });
 
