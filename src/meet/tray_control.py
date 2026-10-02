@@ -742,10 +742,19 @@ class TrayControl:
         # после перезапуска только мешали бы записи.
         for folder, wanted in trims:
             self._trim_then_queue(folder, wanted)
-        # Анализ, который ждал, шёл или был отложен при выходе (`pending_analysis`).
-        for folder in folders:
+        # Анализ, который ждал, шёл или был отложен при выходе (`pending_analysis`):
+        # по всей библиотеке — его могли попросить и для старой записи (возраст
+        # проверяется по самой отметке).
+        for folder in library.recording_folders(root):
             mark = library.read_meta(folder).get("pending_analysis")
-            if isinstance(mark, dict) and self._resume_analysis(folder, mark, cutoff):
+            if not isinstance(mark, dict):
+                continue
+            if self.queue.active_for(str(folder), jobs.FOLDER_KINDS):
+                # Запись расшифровывается заново: анализ старого текста сразу
+                # устарел бы — его поставит конец расшифровки.
+                self._mark_analysis(folder, False)
+                continue
+            if self._resume_analysis(folder, mark, cutoff):
                 done.setdefault("analysis", []).append(folder.name)
         return done
 
@@ -1241,21 +1250,30 @@ class TrayControl:
             if reason:
                 raise _bad_request(f"{folder.name}: {reason}")
             folders.append(folder)
-        # Анализ частей не нужен: объединённая встреча получит свой после расшифровки.
-        for folder in folders:
-            self._drop_analysis(folder)
         keep = settings.as_flag(body.get("keep_originals"), False)
+        # Анализ частей не нужен: объединённая встреча получит свой после
+        # расшифровки. Снимаем его, только когда объединение состоится; без
+        # «оставить исходные» — до проверки «можно ли удалить»: идущий анализ
+        # работает в папке записи и держит её.
         if not keep:
-            # Исходные удалятся после расшифровки: занятую папку (агент в ней)
-            # лучше назвать сейчас, чем молча оставить исходные потом.
+            for folder in folders:
+                self._drop_analysis(folder)
             try:
+                # Исходные удалятся после расшифровки: занятую папку (агент в ней)
+                # лучше назвать сейчас, чем молча оставить исходные потом.
                 library.wait_removable(folders)
             except library.FolderBusy as e:
+                self._restore_analysis(folders)
                 raise _conflict(str(e))
         try:
             target = merge.create(self._root(), folders, keep_originals=keep)
         except merge.MergeError as e:
+            if not keep:
+                self._restore_analysis(folders)
             raise _bad_request(str(e))
+        if keep:
+            for folder in folders:
+                self._drop_analysis(folder)
         job, _ = self._submit_once(jobs.MERGE, target)
         self.tray.log(f"объединение записей: {', '.join(f.name for f in folders)} → "
                       f"{target.name} ({job.id})")
@@ -2116,10 +2134,20 @@ class TrayControl:
     def cancel_job(self, job_id: str) -> dict:
         get = getattr(self.queue, "get", None)
         job = get(job_id) if get else None
+        if job is None:
+            get = getattr(self.llm_queue, "get", None)
+            job = get(job_id) if get else None
         ok = self.queue.cancel(job_id) or self.llm_queue.cancel(job_id)
         if ok and job is not None and job.kind in jobs.FOLDER_KINDS:
             # Отменённую человеком задачу после перезапуска не повторяем.
             self._mark_pending(Path(job.folder), False)
+        if ok and job is not None and job.kind == jobs.ANALYZE:
+            # Ждущая задача снимается без события (_analysis_finished не придёт):
+            # отметку снимаем здесь, иначе анализ вернётся при следующем запуске.
+            folder = Path(job.folder)
+            with self._analysis_lock:
+                self._analysis_rerun.pop(self._key(folder), None)
+            self._mark_analysis(folder, False)
         return {"ok": ok}
 
     # --- ассистент: итоги и вопросы ---------------------------------------
@@ -2319,6 +2347,8 @@ class TrayControl:
             if stale_only and doc is None:
                 return
             if doc is not None and analysis.is_fresh(folder, doc, data):
+                if self.llm_queue.active_for(str(folder), (jobs.ANALYZE,)) is None:
+                    self._mark_analysis(folder, False)  # например, отложенный — уже не нужен
                 return
             spoken = max((float(s.get("end") or 0.0) for s in data.get("segments") or []
                           if isinstance(s, dict)), default=0.0)
@@ -2404,8 +2434,11 @@ class TrayControl:
             self._analysis_rerun.pop(key, None)
         job = self.llm_queue.active_for(str(folder), (jobs.ANALYZE,))
         if job is None:
+            self._mark_analysis(folder, False)  # был только отложен
             return
         self.llm_queue.cancel(job.id)
+        # Ждущая снимается без события — _analysis_finished не придёт.
+        self._mark_analysis(folder, False)
         deadline = time.monotonic() + DROP_ANALYSIS_WAIT_S
         while time.monotonic() < deadline:
             current = self.llm_queue.active()
@@ -2413,6 +2446,12 @@ class TrayControl:
                 break
             time.sleep(0.05)
         self.tray.log(f"анализ встречи снят: {Path(folder).name} ({job.id})")
+
+    def _restore_analysis(self, folders) -> None:
+        """Объединение не состоялось после того, как анализ частей сняли, —
+        поставить его снова по обычным правилам (если включён)."""
+        for folder in folders:
+            self._background(lambda f=folder: self._auto_analyze(f), "meet-analysis")
 
     def _reanalyze_if_stale(self, recording_id: str) -> None:
         folder = self._folder(recording_id)

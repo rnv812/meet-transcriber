@@ -651,3 +651,104 @@ def test_accepted_suggestion_is_not_replaced_automatically(state, tmp_path):
     assert state.recording(RID)["title_source"] == "ai"  # бейдж остаётся
     state.update_recording(RID, {"title": "Моё"})
     assert "title_accepted" not in _meta(tmp_path)
+
+
+# --- отмена ждущего анализа снимает отметку (fix round 2) -------------------------------
+
+
+def _queued_behind_summary(state, tmp_path):
+    """Анализ ждёт за чужой задачей (ждущая задача снимается без события)."""
+    state.llm_queue.submit(jobs.SUMMARY, str(tmp_path / "занято"))
+    job = state.make_analysis(RID)
+    assert state.llm_queue.get(job["id"]).state == jobs.QUEUED
+    assert _pending(tmp_path) is not None
+    return job
+
+
+def test_cancelling_a_queued_analysis_clears_the_mark(app, state, tmp_path, monkeypatch):
+    job = _queued_behind_summary(state, tmp_path)
+    assert state.cancel_job(job["id"]) == {"ok": True}
+    assert _pending(tmp_path) is None
+    assert "analysis" not in _restart(app).recover()
+
+
+def test_drop_of_a_queued_or_deferred_analysis_clears_the_mark(app, state, tmp_path, monkeypatch):
+    _queued_behind_summary(state, tmp_path)
+    state._drop_analysis(_folder(tmp_path))
+    assert _pending(tmp_path) is None
+    monkeypatch.setattr(state, "_busy_now", lambda: {"x"})
+    _done(app, jobs.TRANSCRIBE, _folder(tmp_path))  # отложен
+    assert _pending(tmp_path) is not None
+    state._drop_analysis(_folder(tmp_path))
+    assert _pending(tmp_path) is None and not state._analysis_deferred
+
+
+def test_merge_keeping_originals_does_not_bring_parts_analysis_back(app, state, tmp_path, monkeypatch):
+    from meet import merge
+
+    second = tmp_path / "recordings" / "2026-10-01_10-30"
+    second.mkdir()
+    (second / "sys.opus").write_bytes(b"x")
+    _transcript(second)
+    state.llm_queue.submit(jobs.SUMMARY, str(tmp_path / "занято"))
+    state.make_analysis(RID)
+    state.make_analysis(second.name)
+    target = tmp_path / "recordings" / "2026-10-01_09-30_merged"
+    target.mkdir()
+    monkeypatch.setattr(merge, "create", lambda root, folders, keep_originals: target)
+    state.merge_recordings({"ids": [RID, second.name], "keep_originals": True})
+    assert _pending(tmp_path) is None and "pending_analysis" not in library.read_meta(second)
+    assert "analysis" not in _restart(app).recover()
+
+
+def test_refused_merge_leaves_the_parts_analysis_alone(state, tmp_path, monkeypatch):
+    from meet import merge
+
+    second = tmp_path / "recordings" / "2026-10-01_10-30"
+    second.mkdir()
+    (second / "sys.opus").write_bytes(b"x")
+    _transcript(second)
+    job = state.make_analysis(RID)
+
+    def refuse(root, folders, keep_originals):
+        raise merge.MergeError("Неизвестно время начала записи")
+
+    monkeypatch.setattr(merge, "create", refuse)
+    with pytest.raises(control.BadRequest):
+        state.merge_recordings({"ids": [RID, second.name], "keep_originals": True})
+    assert state.llm_queue.get(job["id"]).state in (jobs.QUEUED, jobs.RUNNING)
+    assert _pending(tmp_path) is not None
+
+
+def test_recover_leaves_analysis_to_a_pending_retranscription(app, tmp_path, monkeypatch):
+    import time as _time
+
+    _installed(monkeypatch, claude_code=True)
+    folder = _folder(tmp_path)
+    library.write_meta(folder, {"pending_transcribe": _time.time() + 60,
+                                "pending_analysis": {"at": _time.time(), "manual": False}})
+    st = _restart(app)
+    st.queue._ensure_worker = lambda: None
+    done = st.recover()
+    assert done["queued"] == [RID] and "analysis" not in done
+    assert st.llm_queue.listing() == [] and _pending(tmp_path) is None
+
+
+def test_fresh_analysis_clears_a_leftover_mark(state, tmp_path):
+    _write_analysis(_folder(tmp_path))
+    state._mark_analysis(_folder(tmp_path), True)
+    state._auto_analyze(_folder(tmp_path))
+    assert _pending(tmp_path) is None
+
+
+def test_recover_handles_marks_on_old_recordings(app, tmp_path, monkeypatch):
+    import time as _time
+
+    _installed(monkeypatch, claude_code=True)
+    old = tmp_path / "recordings" / "2020-01-01_10-00"
+    old.mkdir()
+    (old / "sys.opus").write_bytes(b"x")
+    _transcript(old)
+    library.write_meta(old, {"pending_analysis": {"at": _time.time(), "manual": True}})
+    st = _restart(app)
+    assert st.recover()["analysis"] == [old.name]
