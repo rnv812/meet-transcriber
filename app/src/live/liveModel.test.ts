@@ -24,3 +24,15 @@ test("пункты сводки ключами; задача — со всеми
   });
   expect(entries).toEqual([["topic", "Релиз"], ["t1", "|Акт|пт"]]);
 });
+
+test("«Вам вопрос» важнее закреплённой и стоит наверху списка, свежий первым", async () => {
+  const { orderHints } = await import("./liveModel");
+  const pinned = hint({ id: "h1", kind: "risk", pinned: true });
+  const plain = hint({ id: "h2", kind: "question" });
+  const urgentOld = hint({ id: "h3", kind: "ask_you", created_at: 5 });
+  const urgentNew = hint({ id: "h4", kind: "ask_you", created_at: 9 });
+  expect(topHint([pinned, plain, urgentOld])).toBe(urgentOld);
+  expect(orderHints([pinned, plain, urgentOld, urgentNew]).map((h) => h.id)).toEqual(["h4", "h3", "h1", "h2"]);
+  const same = [pinned, plain];
+  expect(orderHints(same)).toBe(same); // без «Вам вопрос» порядок не трогаем
+});

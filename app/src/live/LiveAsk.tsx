@@ -2,7 +2,9 @@
  * «Спросить»: история вопросов по идущей встрече, быстрые действия и поле.
  *
  * История — у ассистента (`qa`): вопрос в ней сразу, ответ приходит позже,
- * пока ждём — «Модель думает…». Ответы — Markdown; таймкоды в них — кнопки
+ * пока ждём — «Модель думает…»; ответ, который пишется (`partial`), виден по
+ * мере генерации простым текстом, готовый — Markdown'ом на том же месте.
+ * Ответы — Markdown; таймкоды в них — кнопки
  * перехода к реплике в ленте (`onTime`). Поле фокус не берёт: панель поверх
  * звонка не должна перехватывать клавиатуру, пока человек сам не щёлкнул.
  * Текст поля можно задать снаружи (`draft`) — «Спросить об этом» у подсказки.
@@ -56,7 +58,7 @@ export function LiveAsk({ qa, asking = false, error = null, onAsk, disabled = fa
 
   // Новый вопрос или ответ — к низу истории, если человек не листает её вверх.
   const last = qa.at(-1);
-  const sig = `${qa.length}:${last?.pending ? "p" : "d"}:${asking}`;
+  const sig = `${qa.length}:${last?.pending ? "p" : "d"}:${last?.partial?.length ?? 0}:${asking}`;
   useLayoutEffect(() => {
     const el = box.current;
     if (el && follow.current) el.scrollTop = el.scrollHeight;
@@ -73,9 +75,14 @@ export function LiveAsk({ qa, asking = false, error = null, onAsk, disabled = fa
           {qa.map((it) => (
             <li key={it.id} className="live-ask__item">
               <div className="live-ask__q">{it.q}</div>
-              {it.pending && (
+              {it.pending && !it.partial && (
                 <div className="live-ask__stage" role="status">
                   <span className="live-dot" aria-hidden="true" />Модель думает…
+                </div>
+              )}
+              {it.pending && it.partial && (
+                <div className="live-ask__a live-ask__a--streaming" aria-live="polite" aria-busy="true">
+                  {it.partial}
                 </div>
               )}
               {it.a !== null && <Markdown source={it.a} className="live-ask__a" onTime={onTime} />}

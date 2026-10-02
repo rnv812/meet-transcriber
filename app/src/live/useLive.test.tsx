@@ -184,3 +184,24 @@ test("пометка держится, пока ассистент не подт
   act(() => es.emit("state", { digest: "", transcript: [], status: null, hints: [{ ...hintOf("h1"), pinned: true }] }));
   expect(result.current.hints[0]!.pinned).toBe(true);
 });
+
+test("ответ, который пишется: куски qa_partial видны у вопроса, не чаще 10 раз в секунду", async () => {
+  vi.useFakeTimers();
+  const { result } = renderHook(() => useLive(ep));
+  const es = liveSources().at(-1)!;
+  const pending = [{ id: 7, q: "что ответить?", a: null, error: null, pending: true, at: 1, quick: null }];
+  act(() => es.emit("qa", { qa: pending }));
+  act(() => es.emit("qa_partial", { id: 7, a: "Пред" }));
+  expect(result.current.qa[0]!.partial).toBe("Пред");            // первый кусок — сразу
+  act(() => {
+    es.emit("qa_partial", { id: 7, a: "Предлагаю" });
+    es.emit("qa_partial", { id: 7, a: "Предлагаю перенести" });
+  });
+  expect(result.current.qa[0]!.partial).toBe("Пред");            // дальше — не чаще 100 мс
+  await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+  expect(result.current.qa[0]!.partial).toBe("Предлагаю перенести");
+  const done = [{ ...pending[0]!, a: "Предлагаю перенести релиз.", pending: false }];
+  act(() => es.emit("qa", { qa: done }));
+  expect(result.current.qa[0]!.partial).toBeUndefined();          // готовый ответ — в истории
+  expect(result.current.qa[0]!.a).toBe("Предлагаю перенести релиз.");
+});

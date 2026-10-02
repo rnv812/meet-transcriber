@@ -197,3 +197,45 @@ test("действие с подсказкой не дошло — ошибка 
   expect(within(items[1]!).getByRole("alert")).toHaveTextContent("Ассистент не запущен");
   expect(within(items[0]!).queryByRole("alert")).toBeNull();
 });
+
+const urgent = (o: Partial<LiveHint> = {}) => hint({
+  id: "h9", kind: "ask_you", text: "Ольга спрашивает, готов ли отчёт к четвергу", why: "ждут ответа",
+  reply: "Отчёт будет к четвергу, черновик пришлю завтра.", source_t: 300, created_at: 5, updated_at: 5, ...o,
+});
+
+test("«Вам вопрос» — наверху «Подсказок», с черновиком ответа; «Спросить агента» задаёт вопрос", async () => {
+  const live = makeLive({ hints: [hint(), urgent()] });
+  render(<Host live={live} />);
+  await userEvent.click(screen.getByRole("tab", { name: "Подсказки" }));
+  const items = screen.getAllByRole("listitem");
+  expect(items[0]).toHaveClass("live-hint--ask_you");
+  expect(within(items[0]!).getByText("Вам вопрос")).toBeInTheDocument();
+  expect(within(items[0]!).getByText("Что ответить:")).toBeInTheDocument();
+  expect(within(items[0]!).getByText("Отчёт будет к четвергу, черновик пришлю завтра.")).toBeInTheDocument();
+  await userEvent.click(within(items[0]!).getByRole("button", { name: "Спросить агента" }));
+  expect(live.ask).toHaveBeenCalledWith(expect.stringContaining("Ольга спрашивает, готов ли отчёт"));
+  expect(screen.getByRole("tab", { name: "Спросить" })).toHaveAttribute("aria-selected", "true");
+});
+
+test("«Вам вопрос» появляется со всплеском, а в «Не отвлекать» — без анимации, но всё равно наверху", () => {
+  const live = makeLive();
+  const { rerender, unmount } = render(<Host live={live} wide />);
+  rerender(<Host live={{ ...live, hints: [hint(), urgent()] }} wide />);
+  const first = () => screen.getAllByRole("listitem").find((li) => li.classList.contains("live-hint"))!;
+  expect(first()).toHaveClass("live-hint--ask_you", "is-urgent-new");
+  unmount();
+  const quietRender = render(<Host live={live} wide quiet />);
+  quietRender.rerender(<Host live={{ ...live, hints: [hint(), urgent()] }} wide quiet />);
+  expect(first()).toHaveClass("live-hint--ask_you");
+  expect(first()).not.toHaveClass("is-urgent-new");
+});
+
+test("в карточке «Спросить агента» у «Вам вопрос» уходит агенту (onAskHint)", async () => {
+  const live = makeLive({ hints: [urgent()] });
+  const onAskHint = vi.fn();
+  render(<Host live={live} onAskHint={onAskHint} />);
+  await userEvent.click(screen.getByRole("tab", { name: "Подсказки" }));
+  await userEvent.click(screen.getByRole("button", { name: "Спросить агента" }));
+  expect(onAskHint).toHaveBeenCalledWith(expect.objectContaining({ id: "h9" }));
+  expect(live.ask).not.toHaveBeenCalled();
+});

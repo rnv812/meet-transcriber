@@ -363,7 +363,7 @@ test("живые подсказки: по умолчанию «Сдержанн�
   await userEvent.click(within(activity).getByRole("radio", { name: "Активно" }));
   await userEvent.click(within(tier).getByRole("radio", { name: "Быстрее" }));
   // «Быстрее» поясняется для того, кто отвечает сейчас (Claude Code).
-  expect(screen.getByText("«Быстрее» — Claude Code: модель Haiku")).toBeInTheDocument();
+  expect(screen.getByText("«Быстрее» — Claude Code: модель Haiku без размышлений")).toBeInTheDocument();
   await userEvent.selectOptions(screen.getByLabelText("Сколько подсказок держать"), "3");
   await userEvent.click(screen.getByRole("switch", { name: "Не отвлекать по умолчанию" }));
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));

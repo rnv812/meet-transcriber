@@ -85,3 +85,16 @@ test("текст поля можно задать снаружи (Спросит
   expect(onAsk).toHaveBeenCalledWith("Расскажите подробнее: «нет владельца»");
   expect(input).toHaveValue("");
 });
+
+test("ответ, который пишется, виден по мере генерации; готовый — Markdown'ом на том же месте", () => {
+  const { rerender } = render(<LiveAsk onAsk={vi.fn()} qa={[
+    item({ pending: true, partial: "Предлагаю **перенести" }),
+  ]} />);
+  expect(screen.queryByText("Модель думает…")).toBeNull();
+  const streaming = screen.getByText("Предлагаю **перенести");
+  expect(streaming).toHaveClass("live-ask__a--streaming");
+  expect(streaming).toHaveAttribute("aria-busy", "true");
+  rerender(<LiveAsk onAsk={vi.fn()} qa={[item({ a: "Предлагаю **перенести** релиз." })]} />);
+  expect(screen.getByText("перенести").tagName).toBe("STRONG");
+  expect(document.querySelector(".live-ask__a--streaming")).toBeNull();
+});

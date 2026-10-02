@@ -400,3 +400,18 @@ test("«Не отвлекать по умолчанию» из настроек 
   act(() => liveStream().emit("state", state([], { prefs: { quiet_default: true, activity: "calm" } })));
   expect(quiet).toHaveAttribute("aria-pressed", "false");
 });
+
+test("«Вам вопрос» встаёт в строку свёрнутой панели — и в «Не отвлекать» тоже", async () => {
+  render(<LivePanel endpoint={ep} />);
+  await act(async () => {});
+  act(() => liveStream().emit("state", state([hint("h1", "risk", "Риск по срокам", { pinned: true })])));
+  await userEvent.click(screen.getByRole("button", { name: "Не отвлекать" }));
+  act(() => liveStream().emit("state", state([
+    hint("h1", "risk", "Риск по срокам", { pinned: true }),
+    hint("h2", "ask_you", "Ольга спрашивает про отчёт", { reply: "Отчёт будет в четверг." }),
+  ])));
+  const line = screen.getByRole("button", { name: /Открыть подсказки/ });
+  expect(line).toHaveTextContent("Вам вопрос");
+  expect(line).toHaveTextContent("Ольга спрашивает про отчёт");
+  expect(line).toHaveClass("live-last--urgent");
+});

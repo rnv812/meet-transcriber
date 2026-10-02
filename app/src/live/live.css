@@ -36,6 +36,8 @@
 .live-ask__item { display: flex; flex-direction: column; gap: 4px; }
 .live-ask__q { color: var(--text-2); font-size: 12px; font-weight: 500; white-space: pre-wrap; }
 .live-ask__a { font-size: 12.5px; }
+/* Ответ, который ещё пишется: тот же шрифт и место, что у готового. */
+.live-ask__a--streaming { color: var(--text); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 /* Быстрые вопросы — одной строкой; не влезли — прокрутка вбок (колесом и
    тачпадом), а не три ряда, съедающие место у истории. */
 .live-ask__quick { display: flex; flex-wrap: nowrap; gap: 4px; overflow-x: auto; scrollbar-width: none; flex: none; }
@@ -128,6 +130,13 @@
 .live-hint--unanswered { --kind: #e7787c; }
 .live-hint--term { --kind: var(--text-2); }
 .live-hint--followup { --kind: var(--ok); }
+/* «Вам вопрос»: наверху, с акцентной полосой и черновиком ответа. */
+.live-hint--ask_you { --kind: var(--accent-hover); border-color: rgba(94, 106, 210, 0.55); box-shadow: inset 3px 0 0 var(--accent); }
+.live-hint__reply { color: var(--text); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.live-hint__reply-label { color: var(--text-3); margin-right: 4px; }
+.live-hint--ask_you.is-urgent-new { animation: live-urgent 1.2s ease-out 2; }
+@keyframes live-urgent { 50% { background: rgba(94, 106, 210, 0.16); } }
+@media (prefers-reduced-motion: reduce) { .live-hint--ask_you.is-urgent-new { animation: none; } }
 .live-hint__head { display: flex; align-items: center; gap: 6px; min-height: 22px; }
 .live-hint__kind { color: var(--kind); font-size: 11px; font-weight: 500; white-space: nowrap; }
 .live-hint__time {

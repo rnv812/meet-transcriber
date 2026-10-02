@@ -3,6 +3,11 @@
  * следующие шаги. У каждой — момент встречи (щелчок — к реплике в ленте) и
  * действия: закрепить, скрыть (больше не вернётся), спросить об этом,
  * скопировать. Порядок — как у ассистента: новые в конце, ничего не прыгает.
+ *
+ * «Вам вопрос» (к владельцу обратились и ждут ответа) — наверху, с акцентной
+ * полосой и черновиком «Что ответить: …»; «Спросить агента» сразу задаёт
+ * вопрос о том, что ответить. Появление отмечено коротким всплеском — кроме
+ * режима «Не отвлекать» (тогда без анимации, но всё равно наверху).
  */
 
 import { useState } from "react";
@@ -11,13 +16,13 @@ import { Sparkles } from "lucide-react";
 import { clock } from "../lib/format";
 import type { LiveHint } from "../lib/types";
 import { CloseIcon, CopyIcon, PinIcon } from "./icons";
-import { KIND_LABEL, hintKey } from "./liveModel";
+import { KIND_LABEL, hintKey, isUrgent, orderHints } from "./liveModel";
 import type { HintAction } from "./useLive";
 import "./live.css";
 
 const COPIED_MS = 1500;
 
-export function LiveHints({ hints, fresh, enabled = true, error = null, onAction, onAsk, onTime, askTitle }: {
+export function LiveHints({ hints, fresh, enabled = true, error = null, onAction, onAsk, onAskUrgent, onTime, askTitle }: {
   hints: LiveHint[];
   /** Ключи `hintKey` недавно появившихся или изменённых. */
   fresh: Set<string>;
@@ -27,6 +32,8 @@ export function LiveHints({ hints, fresh, enabled = true, error = null, onAction
   error?: { id: string; text: string } | null;
   onAction: (id: string, action: HintAction) => void;
   onAsk: (hint: LiveHint) => void;
+  /** «Спросить агента» у «Вам вопрос»; нет — как «Спросить об этом». */
+  onAskUrgent?: (hint: LiveHint) => void;
   onTime: (seconds: number) => void;
   /** Подсказка у «Спросить об этом» (в карточке вопрос уходит агенту). */
   askTitle?: string;
@@ -44,15 +51,15 @@ export function LiveHints({ hints, fresh, enabled = true, error = null, onAction
   }
   const copy = (h: LiveHint) => {
     if (!navigator.clipboard) return;
-    navigator.clipboard.writeText(h.text).then(() => {
+    navigator.clipboard.writeText(isUrgent(h) && h.reply ? h.reply : h.text).then(() => {
       setCopied(h.id);
       setTimeout(() => setCopied((cur) => (cur === h.id ? null : cur)), COPIED_MS);
     }).catch(() => {});
   };
   return (
     <ul className="live-hints" aria-label="Подсказки">
-      {hints.map((h) => (
-        <li key={h.id} className={`live-hint live-hint--${h.kind}${fresh.has(hintKey(h)) ? " is-fresh" : ""}${h.pinned ? " is-pinned" : ""}`}>
+      {orderHints(hints).map((h) => (
+        <li key={h.id} className={`live-hint live-hint--${h.kind}${fresh.has(hintKey(h)) ? (isUrgent(h) ? " is-fresh is-urgent-new" : " is-fresh") : ""}${h.pinned ? " is-pinned" : ""}`}>
           <div className="live-hint__head">
             <span className="live-hint__kind">{KIND_LABEL[h.kind] ?? h.kind}</span>
             <button type="button" className="live-hint__time num" title="Перейти к реплике в ленте"
@@ -67,7 +74,8 @@ export function LiveHints({ hints, fresh, enabled = true, error = null, onAction
                 <PinIcon />
               </button>
               <button type="button" className="icon-btn" aria-label="Копировать"
-                title={copied === h.id ? "Скопировано" : "Копировать текст"} onClick={() => copy(h)}>
+                title={copied === h.id ? "Скопировано" : isUrgent(h) && h.reply ? "Копировать черновик ответа" : "Копировать текст"}
+                onClick={() => copy(h)}>
                 <CopyIcon />
               </button>
               <button type="button" className="icon-btn" aria-label="Скрыть"
@@ -77,12 +85,22 @@ export function LiveHints({ hints, fresh, enabled = true, error = null, onAction
             </span>
           </div>
           <div className="live-hint__text">{h.text}</div>
+          {isUrgent(h) && h.reply && (
+            <div className="live-hint__reply"><span className="live-hint__reply-label">Что ответить:</span>{h.reply}</div>
+          )}
           {h.why && <div className="live-hint__why muted">{h.why}</div>}
           <div className="live-hint__foot">
             {h.ref && <span className="live-hint__ref muted" title={h.ref}>База знаний: {h.ref}</span>}
-            <button type="button" className="live-chip" title={askTitle} onClick={() => onAsk(h)}>
-              {askTitle && <Sparkles size={12} strokeWidth={1.75} aria-hidden="true" />}Спросить об этом
-            </button>
+            {isUrgent(h) ? (
+              <button type="button" className="live-chip" title="Спросить агента, что ответить"
+                onClick={() => (onAskUrgent ?? onAsk)(h)}>
+                <Sparkles size={12} strokeWidth={1.75} aria-hidden="true" />Спросить агента
+              </button>
+            ) : (
+              <button type="button" className="live-chip" title={askTitle} onClick={() => onAsk(h)}>
+                {askTitle && <Sparkles size={12} strokeWidth={1.75} aria-hidden="true" />}Спросить об этом
+              </button>
+            )}
             {copied === h.id && <span className="muted live-hint__copied" role="status">Скопировано</span>}
           </div>
           {error?.id === h.id && <div className="live-hint__error" role="alert">{error.text}</div>}
