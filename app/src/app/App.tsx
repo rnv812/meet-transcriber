@@ -51,9 +51,9 @@ export function App() {
   const openRecording = (id: string) => { setSelected(id); setFind(null); setSection("recordings"); };
   /** Просьба к карточке из профиля человека: показать реплику или вставить текст агенту. */
   const [cardRequest, setCardRequest] = useState<CardRequest | null>(null);
-  const openAt = (id: string, segment: number) => {
+  const openAt = (id: string, segment: number, t?: number, speaker?: string) => {
     openRecording(id);
-    setCardRequest((r) => ({ n: (r?.n ?? 0) + 1, id, segment }));
+    setCardRequest((r) => ({ n: (r?.n ?? 0) + 1, id, segment, t, speaker }));
   };
   // Нет общей встречи — последняя в библиотеке: агент всё равно получит текст.
   const askAgentIn = (id: string | null, text: string) => {

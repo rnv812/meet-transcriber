@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { VoicesPane } from "./VoicesPane";
-import { NOTES_SAVE_MS, ProfileNotes } from "./ProfileTab";
+import { NOTES_SAVE_MS, ProfileNotes, ProfileTab } from "./ProfileTab";
 import * as api from "../../lib/api";
 import type { Person, Profile, ProfileView } from "../../lib/types";
 
@@ -12,6 +12,7 @@ vi.mock("../../lib/api", async (orig) => ({
   makeProfile: vi.fn(),
   deleteProfile: vi.fn(),
   saveProfileNotes: vi.fn(),
+  hideProfileStatement: vi.fn(),
 }));
 
 const ep = { base: "/api", token: null };
@@ -93,7 +94,7 @@ test("ссылка открывает встречу на реплике", async
   open(ready, { onOpenAt });
   fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
   fireEvent.click(screen.getByRole("button", { name: "Открыть реплику: Ретро спринта · 02:00" }));
-  expect(onOpenAt).toHaveBeenCalledWith("2026-09-20_15-30", 7);
+  expect(onOpenAt).toHaveBeenCalledWith("2026-09-20_15-30", 7, 120, "Вера");
 });
 
 test("«Подготовиться к разговору» и «Обсудить с агентом» — текст во «Агент» общей встречи", async () => {
@@ -160,6 +161,7 @@ test("«Мои заметки» сохраняются сами после па�
     expect(screen.getByText("Сохранено")).toBeInTheDocument();
     fireEvent.change(box, { target: { value: "Ещё мысль" } });
     unmount();
+    await act(async () => {});
     expect(api.saveProfileNotes).toHaveBeenLastCalledWith(ep, "Вера", "Ещё мысль");
   } finally {
     vi.useRealTimers();
@@ -242,4 +244,107 @@ test("заготовка разговора с PCM: база, фаза, кана
   expect(text).toContain("Гипотеза по модели PCM (не оценка): база — Логик (Thinker), фаза — Деятель (Promoter), "
     + "канал общения — запрашивающий. Как давать признание: Отмечать точность расчётов.");
   expect(text.endsWith("Тема разговора:")).toBe(true);
+});
+
+// --- fix round 1 ---------------------------------------------------------------------------
+
+test("ссылка на изменившуюся реплику неактивна и никуда не ведёт", async () => {
+  const onOpenAt = vi.fn();
+  const stale: Profile = { ...PROFILE, sections: { style: [{ text: "Формулирует коротко.", refs: [
+    { m: "2026-09-29_10-00", i: 12, t: 331, q: "Итог такой.", stale: true }] }] } };
+  open({ ...ready, profile: stale }, { onOpenAt });
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  const chip = screen.getByRole("button", { name: /^Реплика изменилась/ });
+  expect(chip).toHaveAttribute("aria-disabled", "true");
+  expect(chip.textContent).toContain("реплика изменилась");
+  fireEvent.click(chip);
+  expect(onOpenAt).not.toHaveBeenCalled();
+});
+
+test("«Скрыть» утверждение и «Показать снова»", async () => {
+  vi.mocked(api.hideProfileStatement).mockResolvedValue({ hidden: 1 });
+  open(ready);
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  const style = screen.getByRole("region", { name: "Стиль общения" });
+  vi.mocked(api.getProfile).mockResolvedValue({ ...ready, hidden: 1 });
+  fireEvent.click(within(style).getByRole("button", { name: "Скрыть утверждение" }));
+  await waitFor(() => expect(api.hideProfileStatement).toHaveBeenCalledWith(
+    ep, "Вера", "Формулирует коротко и начинает с вывода.", true));
+  fireEvent.click(await screen.findByRole("button", { name: "Показать снова" }));
+  await waitFor(() => expect(api.hideProfileStatement).toHaveBeenLastCalledWith(ep, "Вера", null, false));
+});
+
+test("проверка утверждений не завершена — пометка и «Повторить»", async () => {
+  open({ ...ready, profile: { ...PROFILE, review: { checked: false, blocked: 0, error: "таймаут" } } });
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  expect(screen.getByText(/Проверка утверждений не завершена/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Повторить" })).toBeInTheDocument();
+});
+
+test("профиль без опоры не составился — честная строка", async () => {
+  open({ ...ready, profile: null, state: "failed",
+    error: "Не удалось составить профиль с опорой на реплики — попробуйте позже или после новых встреч" });
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  expect(screen.getByText(/с опорой на реплики — попробуйте позже/)).toBeInTheDocument();
+});
+
+test("пока считаются реплики — «Подсчитываю реплики…», затем обычный вид", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    open({ ...ready, profile: null, state: "none", indexing: true, stats: null, level: null });
+    fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+    expect(screen.getByText("Подсчитываю реплики…")).toBeInTheDocument();
+    vi.mocked(api.getProfile).mockResolvedValue({ ...ready, profile: null, state: "none", level: "full" });
+    await act(async () => { vi.advanceTimersByTime(2100); });
+    expect(await screen.findByRole("button", { name: /Составить профиль/ })).toBeInTheDocument();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("«Мои заметки» не пересоздаются, когда появляется профиль", async () => {
+  const props = { endpoint: ep, name: "Вера", reload: async () => {}, onOpenAt: () => {}, onAskAgent: () => {} };
+  const { rerender } = render(
+    <ProfileTab {...props} view={{ ...ready, profile: null, state: "running", level: "full" }} />);
+  const box = screen.getByRole("textbox", { name: "Мои заметки" });
+  fireEvent.change(box, { target: { value: "Набираю мысль" } });
+  rerender(<ProfileTab {...props} view={ready} />);
+  expect(screen.getByRole("textbox", { name: "Мои заметки" })).toBe(box);
+  expect(box).toHaveValue("Набираю мысль");
+});
+
+test("удаление профиля в паузе перед сохранением заметок — заметки не досохраняются", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    vi.mocked(api.deleteProfile).mockResolvedValue({ ok: true });
+    open(ready);
+    fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Мои заметки" }), { target: { value: "Черновик" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ещё действия с профилем" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Удалить профиль/ }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "Удалить профиль" }))
+      .getByRole("button", { name: "Удалить" }));
+    await act(async () => { vi.advanceTimersByTime(NOTES_SAVE_MS * 2); });
+    await waitFor(() => expect(api.deleteProfile).toHaveBeenCalled());
+    expect(api.saveProfileNotes).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("кнопка подготовки — с именем; без общей встречи — в последнюю встречу", async () => {
+  const onAskAgent = vi.fn();
+  open({ ...ready, latest_meeting: null, latest_any: "2026-10-01_09-00" }, { onAskAgent });
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  fireEvent.click(screen.getByRole("button", { name: "Подготовиться к разговору: Вера" }));
+  const [meeting, text] = onAskAgent.mock.calls[0]!;
+  expect(meeting).toBe("2026-10-01_09-00");
+  expect(text).not.toContain("материалы этой встречи");
+});
+
+test("вкладки человека связаны с панелью", async () => {
+  open(ready);
+  const tab = await screen.findByRole("tab", { name: "Профиль" });
+  expect(tab).toHaveAttribute("aria-controls", "ptab-panel");
+  expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", "ptab-voice");
 });

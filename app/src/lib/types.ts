@@ -192,8 +192,13 @@ export type PersonCard = {
 
 export type Sample = { recording: string; start: number; end: number; track: string };
 
-/** Ссылка утверждения профиля на реплику: встреча (id записи), номер сегмента, начало и цитата. */
-export type ProfileRef = { m: string; i: number; t?: number; q?: string };
+/**
+ * Ссылка утверждения профиля на реплику: встреча (id записи), номер первого
+ * сегмента реплики, начало, отпечаток текста и цитата. `stale` — реплику с тех
+ * пор изменили (разделили, перерасшифровали, отдали другому спикеру): ссылка
+ * никуда не ведёт.
+ */
+export type ProfileRef = { m: string; i: number; t?: number; h?: string; q?: string; stale?: boolean };
 export type ProfileStatement = { text: string; refs: ProfileRef[] };
 export type ProfileSectionKey = "style" | "values" | "how_to_talk" | "avoid" | "topics";
 /** Профиль человека (meet.profiles): стиль общения по репликам во встречах. */
@@ -209,7 +214,13 @@ export type Profile = {
   /** Реплик пока немного: профиль сокращённый. */
   reduced?: boolean;
   summary: string;
+  /** Опора «Коротко» на реплики. */
+  summary_refs?: ProfileRef[];
   sections: Partial<Record<ProfileSectionKey, ProfileStatement[]>>;
+  /** Проверка утверждений агентом (второй слой): не завершена — `checked: false`. */
+  review?: { checked: boolean; blocked: number; error?: string };
+  /** Сколько утверждений скрыто человеком («Скрыть»). */
+  hidden_count?: number;
   /** Встречи, на которые ссылаются утверждения: название и дата. */
   sources: Record<string, { title: string; date: string }>;
   filtered?: number;
@@ -237,12 +248,14 @@ export type ProfileStateName = "none" | "queued" | "running" | "ready" | "failed
 /** GET /voices/{name}/profile. Профили выключены — только `{enabled: false}`. */
 export type ProfileView = {
   enabled: boolean;
+  /** Постоянный id человека (по нему — задача профиля); нет — профиля и заметок ещё не было. */
+  id?: string | null;
   name?: string;
   /** Это владелец микрофона («Вы»): профиль обновляется только вручную. */
   self?: boolean;
-  stats?: { turns: number; meetings: number };
+  stats?: { turns: number; meetings: number } | null;
   /** Сколько данных: none — профиля не будет, reduced — сокращённый, full — полный. */
-  level?: "none" | "reduced" | "full";
+  level?: "none" | "reduced" | "full" | null;
   /** «Недостаточно данных: …» при level none. */
   note?: string;
   state?: ProfileStateName;
@@ -252,6 +265,12 @@ export type ProfileView = {
   job?: Job;
   /** Последняя встреча, где человек говорил: туда — «Подготовиться к разговору». */
   latest_meeting?: string | null;
+  /** Последняя встреча библиотеки (общей встречи нет). */
+  latest_any?: string | null;
+  /** Сколько утверждений человек скрыл. */
+  hidden?: number;
+  /** Резидент впервые считает реплики библиотеки: счётчиков ещё нет. */
+  indexing?: boolean;
   /** После профиля появились новые реплики. */
   has_new?: boolean;
   /** Показывать ли раздел «Модель PCM» (настройка `profiles.pcm`). */

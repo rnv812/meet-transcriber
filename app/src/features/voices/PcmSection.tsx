@@ -8,10 +8,8 @@
 
 import type { Pcm, Profile } from "../../lib/types";
 import { floorsText, PCM_FLOOR_MAX, PCM_HYPOTHESIS, PCM_LABELS, pcmFloors, pcmLabel, percent } from "../../lib/pcm";
-import { RefChips } from "./RefChips";
+import { HideButton, RefChips, type OpenAt as Open } from "./RefChips";
 import "./pcm.css";
-
-type Open = (id: string, segment: number) => void;
 
 /** «Этажи»: шесть строк, база — нижняя, полоса 0–5, отмечены база и фаза. */
 export function PcmFloors({ pcm }: { pcm: Pcm }) {
@@ -54,7 +52,9 @@ function Claim({ title, claim, profile, onOpenAt }: {
   );
 }
 
-export function PcmSection({ profile, note, onOpenAt }: { profile: Profile; note?: string; onOpenAt: Open }) {
+export function PcmSection({ profile, note, onOpenAt, onHide }: {
+  profile: Profile; note?: string; onOpenAt: Open; onHide?: (text: string) => void;
+}) {
   const pcm = profile.pcm;
   const head = (
     <div className="pcm__head">
@@ -91,7 +91,7 @@ export function PcmSection({ profile, note, onOpenAt }: { profile: Profile; note
               <span className="pcm-fact__v">{pcm.channel.value}</span>
               {pcm.channel.examples.length > 0 && (
                 <ul className="pcm__phrases" aria-label="Как можно сказать">
-                  {pcm.channel.examples.map((e) => <li key={e}>«{e}»</li>)}
+                  {pcm.channel.examples.map((e, n) => <li key={n}>«{e}»</li>)}
                 </ul>
               )}
             </div>
@@ -110,9 +110,12 @@ export function PcmSection({ profile, note, onOpenAt }: { profile: Profile; note
           <section className="profile__card profile__card--avoid" aria-label="Признаки напряжения">
             <h4 className="profile__h">Признаки напряжения во встречах</h4>
             <ul className="profile__list">
-              {(pcm.stress_signs ?? []).map((s) => (
-                <li key={s.text} className="profile__item">
-                  <p className="profile__text">{s.text}</p>
+              {(pcm.stress_signs ?? []).map((s, n) => (
+                <li key={n} className="profile__item">
+                  <div className="profile__line">
+                    <p className="profile__text">{s.text}</p>
+                    {onHide && <HideButton onHide={() => onHide(s.text)} />}
+                  </div>
                   <RefChips profile={profile} refs={s.refs} onOpenAt={onOpenAt} />
                 </li>
               ))}
@@ -121,7 +124,7 @@ export function PcmSection({ profile, note, onOpenAt }: { profile: Profile; note
               <>
                 <h4 className="profile__h pcm__sub">Как вернуть в конструктив</h4>
                 <ul className="pcm__advice">
-                  {pcm.back_to_constructive!.map((a) => <li key={a}>{a}</li>)}
+                  {pcm.back_to_constructive!.map((a, n) => <li key={n}>{a}</li>)}
                 </ul>
               </>
             )}
@@ -131,7 +134,7 @@ export function PcmSection({ profile, note, onOpenAt }: { profile: Profile; note
           <section className="profile__card profile__card--how_to_talk" aria-label="Как строить разговор">
             <h4 className="profile__h">Как строить разговор</h4>
             <ul className="pcm__advice">
-              {pcm.conversation!.map((a) => <li key={a}>{a}</li>)}
+              {pcm.conversation!.map((a, n) => <li key={n}>{a}</li>)}
             </ul>
           </section>
         )}

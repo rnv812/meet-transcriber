@@ -81,3 +81,29 @@ test("текст из профиля — во вкладку «Агент», о�
     "Помоги подготовиться к разговору с человеком «Вера». Тема разговора:");
   expect(taken).toHaveBeenCalledTimes(1);
 });
+
+test("реплика из профиля уже не та (другой спикер или время) — никуда не переходим, тихая строка", async () => {
+  const taken = vi.fn();
+  const { container } = render(<RecordingCard id="r1" endpoint={ep}
+    request={{ n: 1, id: "r1", segment: 2, t: 130, speaker: "Вера" }} onRequestTaken={taken} />);
+  await screen.findByText("Начинаем.");
+  expect(await screen.findByText(/Реплика из профиля изменилась/)).toBeInTheDocument();
+  expect(container.querySelector(".turn--flash")).toBeNull();
+  expect(taken).toHaveBeenCalledTimes(1);
+});
+
+test("номер за концом расшифровки — не последняя реплика", async () => {
+  const { container } = render(<RecordingCard id="r1" endpoint={ep}
+    request={{ n: 1, id: "r1", segment: 40, t: 3000 }} onRequestTaken={() => {}} />);
+  await screen.findByText("Начинаем.");
+  expect(await screen.findByText(/Реплика из профиля изменилась/)).toBeInTheDocument();
+  expect(container.querySelector(".turn--flash")).toBeNull();
+});
+
+test("расшифровка не готова — просьба отбрасывается, а не срабатывает потом", async () => {
+  const taken = vi.fn();
+  vi.mocked(api.getRecording).mockResolvedValue({ ...rec, has_transcript: false, transcript: null });
+  render(<RecordingCard id="r1" endpoint={ep} request={{ n: 1, id: "r1", segment: 1, t: 65, speaker: "Вера" }}
+    onRequestTaken={taken} />);
+  await waitFor(() => expect(taken).toHaveBeenCalledTimes(1));
+});

@@ -6,6 +6,7 @@ import { Avatar } from "../../ui/Avatar";
 import { EmptyState } from "../../ui/EmptyState";
 import { VoiceBaseTip } from "../settings/tips";
 import { PersonCard } from "./PersonCard";
+import type { OpenAt } from "./RefChips";
 import { plural } from "./plural";
 import "./voices.css";
 
@@ -19,7 +20,7 @@ type Props = {
   /** Задачи резидента (профиль перечитывается, когда его задача кончилась). */
   jobs?: Job[];
   /** Открыть встречу на реплике (ссылка в профиле). */
-  onOpenAt?: (recording: string, segment: number) => void;
+  onOpenAt?: OpenAt;
   /** Текст профиля во вкладку «Агент» встречи (null — последней в библиотеке). */
   onAskAgent?: (recording: string | null, text: string) => void;
 };
