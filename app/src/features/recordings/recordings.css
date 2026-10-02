@@ -40,7 +40,12 @@
   background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
 }
 .rec-item__title { display: block; color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rec-item__meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; font-size: 12px; }
+.rec-item__meta {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; margin-top: 2px;
+  font-size: 12px;
+}
+/* Узкий список: бейдж целиком переносится на свою строку, а не ломается на две. */
+.rec-item__meta .badge { white-space: nowrap; }
 /* Дата, длительность и метка категории: метка не выше строки — список не прыгает. */
 .rec-item__when { display: flex; align-items: center; gap: 6px; min-width: 0; height: 17px; }
 .rec-item__when > .muted { flex: none; }

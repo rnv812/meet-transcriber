@@ -229,12 +229,13 @@ export function App() {
 function LeaveSettings({ guard, onStay, onLeave }: {
   guard: SettingsGuard | null; onStay: () => void; onLeave: () => void;
 }) {
-  const where = (guard?.dirty ?? []).map((t) => `«${t}»`).join(", ");
+  const list = guard?.dirty ?? [];
+  const where = `${list.length === 1 ? "разделе" : "разделах"} ${list.map((t) => `«${t}»`).join(", ")}`;
   const canSave = guard?.canSave ?? false;
   return (
     <ConfirmDialog title="Сохранить изменения в настройках?" cancelLabel="Остаться" danger={false}
-      message={canSave ? `Есть несохранённые изменения в разделах ${where}.`
-        : `В разделах ${where} есть ошибки — сохранить не получится. Исправьте их или уйдите без сохранения.`}
+      message={canSave ? `Есть несохранённые изменения в ${where}.`
+        : `В ${where} есть ошибки — сохранить не получится. Исправьте их или уйдите без сохранения.`}
       alt={{ label: "Не сохранять", danger: true, onClick: onLeave }}
       confirmLabel={canSave ? "Сохранить" : "Исправить"}
       onCancel={onStay}

@@ -11,7 +11,7 @@
 }
 .spk__title { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); }
 .spk__title:focus { outline: none; }
-.spk__title:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: var(--r-sm); }
+.spk__title:focus-visible { outline: none; } /* фокус ставится программно при открытии панели */
 .spk__tools { display: flex; align-items: center; gap: 4px; }
 .spk__tool, .spk__close {
   height: 26px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: var(--r-md);

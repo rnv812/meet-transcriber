@@ -463,7 +463,7 @@ test("«Сбросить…» спрашивает и только потом о
   await userEvent.click(screen.getByRole("button", { name: "Сбросить…" }));
   const ask = screen.getByRole("alertdialog", { name: "Отменить несохранённые изменения?" });
   expect(ask).toHaveTextContent("«Запись»");
-  expect(within(ask).getByRole("button", { name: "Отмена" })).toHaveFocus();
+  expect(within(ask).getByRole("button", { name: "Оставить правки" })).toHaveFocus();
   await userEvent.keyboard("{Escape}");
   expect(name).toHaveValue("Выа");
   await userEvent.click(screen.getByRole("button", { name: "Сбросить…" }));
