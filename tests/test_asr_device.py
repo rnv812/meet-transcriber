@@ -18,6 +18,7 @@ from meet import asr
 ])
 def test_resolve_device(monkeypatch, setting, cuda, expected):
     monkeypatch.setattr(asr, "cuda_available", lambda: cuda)
+    monkeypatch.setattr(asr, "cuda_runtime_ok", lambda **kw: True)
     assert asr.resolve_device(setting) == expected
 
 

@@ -1,5 +1,7 @@
+import json
 import logging
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -35,9 +37,150 @@ def cuda_available() -> bool:
         return False
 
 
+# Маркер установщика в корне venv движка (engine.rs MARKER): {"profile": …}.
+ENGINE_MARKER = "installed.json"
+# Профили движка без CUDA-библиотек: torch и пакеты — процессорные.
+CPU_PROFILES = ("cpu", "mac")
+# Без этих библиотек Whisper (ctranslate2) на видеокарте не работает: cuBLAS
+# он грузит лениво, на первом же куске звука, cuDNN нужен свёртке энкодера. В
+# профиле CUDA их ставят пакеты nvidia-cublas-cu12 / nvidia-cudnn-cu12; в
+# профиле CPU их нет, а ctranslate2 карту всё равно видит — и расшифровка
+# падала с «cublas64_12.dll is not found» (живая проверка 0.3.0).
+CUDA_LIBRARIES = ("cublas64_*.dll", "cudnn64_*.dll")
+# Ошибка «нет библиотеки CUDA»: имя библиотеки и слова о загрузке в тексте.
+_CUDA_LIBRARY_NAMES = ("cublas", "cudnn", "cudart")
+_LOAD_FAILURE_WORDS = ("not found", "cannot be loaded", "cannot load", "could not load",
+                       "could not locate", "unable to load", "failed to load", "error loading")
+# Пометка транскрипта (`asr_note`): видеокарта не заработала (нет библиотек
+# CUDA), встречу распознал процессор.
+CUDA_FAILED = "cuda_failed"
+
+# Итог проверки библиотек CUDA на процесс: {load: годится ли}. Сбой CUDA при
+# распознавании (`cuda_failed`) — дальше в этом процессе только процессор.
+_cuda_runtime: dict[bool, bool] = {}
+_cuda_failure: str | None = None
+_WINDOWS = os.name == "nt"
+
+
+def engine_profile(prefix: str | Path | None = None) -> str | None:
+    """Профиль установленного движка ("cuda", "cpu", "mac") по маркеру
+    установщика в корне его venv; None — маркера нет (dev-окружение) или он
+    нечитаем."""
+    try:
+        raw = json.loads((Path(prefix or sys.prefix) / ENGINE_MARKER).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    profile = raw.get("profile") if isinstance(raw, dict) else None
+    return profile if isinstance(profile, str) and profile else None
+
+
+def _nvidia_bin_dirs() -> list[Path]:
+    """Папки DLL pip-пакетов nvidia-* (cuBLAS, cuDNN) в site-packages."""
+    import site
+
+    dirs: list[Path] = []
+    for sp in site.getsitepackages():
+        dirs += sorted((Path(sp) / "nvidia").glob("*/bin"))
+    return dirs
+
+
+def _library_dirs() -> list[Path]:
+    """Где ctranslate2 найдёт DLL: пакеты nvidia-*, CUDA Toolkit, PATH."""
+    dirs = _nvidia_bin_dirs()
+    toolkit = os.environ.get("CUDA_PATH")
+    if toolkit:
+        dirs.append(Path(toolkit) / "bin")
+    dirs += [Path(p) for p in os.environ.get("PATH", "").split(os.pathsep) if p.strip()]
+    return dirs
+
+
+def find_cuda_libraries(dirs: list[Path] | None = None) -> list[Path] | None:
+    """Пути к библиотекам CUDA_LIBRARIES (первое найденное по порядку папок);
+    хоть одной нет — None."""
+    found: list[Path] = []
+    for pattern in CUDA_LIBRARIES:
+        for folder in _library_dirs() if dirs is None else dirs:
+            try:
+                hits = sorted(folder.glob(pattern))
+            except OSError:
+                hits = []
+            if hits:
+                found.append(hits[-1])
+                break
+        else:
+            return None
+    return found
+
+
+def _libraries_load(libraries: list[Path]) -> bool:
+    """Грузятся ли найденные DLL (битая, не той разрядности, без зависимостей
+    — «нет»)."""
+    import ctypes
+
+    for library in libraries:
+        try:
+            ctypes.WinDLL(str(library))
+        except OSError as e:
+            print(f"библиотека CUDA не загружается ({library.name}: {e}) — распознаёт процессор")
+            return False
+    return True
+
+
+def cuda_runtime_ok(*, load: bool = True) -> bool:
+    """Заработает ли распознавание на видеокарте — не «видна ли карта», а есть
+    ли чем на ней считать. Движок профиля CPU — нет, без проверок (карту
+    ctranslate2 видит и там). Иначе (профиль CUDA или dev-окружение) на Windows
+    — найдены ли cuBLAS и cuDNN, а с `load` — ещё и грузятся ли они.
+    `load=False` — для состояния движка в резиденте: загруженная DLL мешает
+    pip обновить её. Ответ кэшируется на процесс."""
+    if _cuda_failure is not None:
+        return False
+    if load in _cuda_runtime:
+        return _cuda_runtime[load]
+    if engine_profile() in CPU_PROFILES:
+        ok = False
+    elif not _WINDOWS:
+        ok = True  # не Windows: библиотеки ищет сам ctranslate2, страхует откат
+    else:
+        libraries = find_cuda_libraries()
+        ok = libraries is not None and (not load or _libraries_load(libraries))
+    _cuda_runtime[load] = ok
+    return ok
+
+
+def missing_cuda_library(error: BaseException) -> bool:
+    """Ошибка — «не найдена / не грузится библиотека CUDA» (cuBLAS, cuDNN,
+    cudart), а не нехватка памяти или сбой модели."""
+    text = str(error).lower()
+    return any(n in text for n in _CUDA_LIBRARY_NAMES) and any(w in text for w in _LOAD_FAILURE_WORDS)
+
+
+def cuda_failed(error: BaseException) -> None:
+    """Распознавание на видеокарте упало без библиотек CUDA: дальше в этом
+    процессе — только процессор (`resolve_device` → cpu при любой настройке)."""
+    global _cuda_failure
+    _cuda_failure = f"{type(error).__name__}: {error}"
+    logger.warning("CUDA недоступна: %s — распознаёт процессор", _cuda_failure)
+    print(f"видеокарта недоступна: нет библиотек CUDA ({_cuda_failure}) — распознаёт процессор")
+
+
+def _reset_cuda_state() -> None:
+    """Забыть проверку библиотек и сбой CUDA (для тестов)."""
+    global _cuda_failure
+    _cuda_runtime.clear()
+    _cuda_failure = None
+
+
 def resolve_device(setting: str | None = None) -> str:
     """Устройство распознавания: явный выбор из настроек или автоопределение.
-    None — прочитать настройку `asr.device`; опечатка — как «auto»."""
+    None — прочитать настройку `asr.device`; опечатка — как «auto».
+
+    «auto» — видеокарта, только если на ней правда есть чем считать
+    (`cuda_runtime_ok`): движок профиля CPU на машине с NVIDIA распознаёт
+    процессором (GigaAM), а не падает в Whisper на CUDA. CUDA уже упала в
+    этом процессе без библиотек — процессор и при явном выборе."""
+    if _cuda_failure is not None:
+        return "cpu"
     if setting is None:
         try:
             from meet import settings
@@ -47,7 +190,7 @@ def resolve_device(setting: str | None = None) -> str:
             setting = "auto"
     if setting in ("cuda", "cpu"):
         return setting
-    return "cuda" if cuda_available() else "cpu"
+    return "cuda" if cuda_runtime_ok() and cuda_available() else "cpu"
 
 
 def _cpu_model_setting() -> str:
@@ -554,12 +697,31 @@ class Transcriber:
         self.compute_type: str | None = None
         default_model, default_language = _asr_settings()
         self.device = resolve_device()
+        self._explicit_model = model_name
         self.model_name = _model_for(self.device, model_name)
         # `auto` — None: Whisper определяет язык окна сам (строку «auto» он
         # не принимает, и живой режим падал бы на каждом окне).
         self.language = whisper_language(language or default_language)
 
     def load(self) -> None:
+        try:
+            self._load()
+        except Exception as e:
+            if self.device != "cuda" or not missing_cuda_library(e):
+                raise
+            self._to_cpu(e)
+
+    def _to_cpu(self, error: BaseException) -> None:
+        """Видеокарта без библиотек CUDA — та же модель для процессора."""
+        cuda_failed(error)
+        self._model = None
+        self.device = "cpu"
+        self.model_name = _model_for("cpu", self._explicit_model)
+        print("живой режим: видеокарта недоступна (нет библиотек CUDA) — "
+              "распознаёт Whisper на процессоре")
+        self._load()
+
+    def _load(self) -> None:
         _add_nvidia_dll_dirs()
         _apply_hf_token()
         from faster_whisper import WhisperModel
@@ -595,6 +757,17 @@ class Transcriber:
     ) -> list[Segment]:
         if self._model is None:
             raise RuntimeError("Transcriber.load() не был вызван")
+        try:
+            return self._transcribe_window(audio, offset_s, hotwords, initial_prompt)
+        except Exception as e:
+            # cuBLAS ctranslate2 грузит лениво: без библиотек CUDA модель
+            # загружается, а падает первое же окно.
+            if self.device != "cuda" or not missing_cuda_library(e):
+                raise
+            self._to_cpu(e)
+            return self._transcribe_window(audio, offset_s, hotwords, initial_prompt)
+
+    def _transcribe_window(self, audio, offset_s, hotwords, initial_prompt) -> list[Segment]:
         seconds = len(audio) / 16000
         cap = max(LIVE_TOKENS_MIN, int(seconds * LIVE_TOKENS_PER_S))
         options = dict(language=self.language, vad_filter=True, word_timestamps=False,

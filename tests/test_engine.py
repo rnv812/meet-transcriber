@@ -240,6 +240,9 @@ def _with_setting(monkeypatch, value, gpu_available):
 
 
 def test_auto_device_follows_nvidia_smi(monkeypatch):
+    from meet import asr
+
+    monkeypatch.setattr(asr, "cuda_runtime_ok", lambda **kw: True)
     _with_setting(monkeypatch, "auto", False)
     assert engine.state()["device"] == "cpu"
     _with_setting(monkeypatch, "auto", True)

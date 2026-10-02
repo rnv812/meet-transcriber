@@ -141,14 +141,43 @@ def _recognize(wav: Path, hotwords: str | None, run: "_Run") -> list[Segment]:
     GigaAM не скачалась или не загрузилась (нет сети, сервер недоступен,
     файл битый) — встреча не падает: её распознаёт Whisper, уже скачанной
     моделью, если такая есть, с пометкой GIGAAM_FAILED («GigaAM недоступна —
-    использован Whisper») и причиной в журнале."""
+    использован Whisper») и причиной в журнале.
+
+    Видеокарта без библиотек CUDA (cuBLAS/cuDNN не найдены) — встреча тоже не
+    падает: движок выбирается заново для процессора (`_cuda_fallback`)."""
+    try:
+        return _recognize_on_device(wav, hotwords, run)
+    except Exception as e:
+        if run.choice is None or run.choice.device != "cuda" or not asr.missing_cuda_library(e):
+            raise
+        return _cuda_fallback(wav, hotwords, run, e)
+
+
+def _recognize_on_device(wav: Path, hotwords: str | None, run: "_Run") -> list[Segment]:
     choice = run.choose(wav)
     if choice.backend != "gigaam":
         return _whisper(wav, hotwords, run)
     try:
         return run.timed("asr", lambda: transcribe_wav(wav, hotwords, choice=choice, on_progress=run.part))
     except Exception as e:
+        if choice.device == "cuda" and asr.missing_cuda_library(e):
+            raise  # Whisper на той же карте упадёт так же — _cuda_fallback
         return _fallback_to_whisper(wav, hotwords, run, choice.device, e)
+
+
+def _cuda_fallback(wav: Path, hotwords: str | None, run: "_Run", error: Exception) -> list[Segment]:
+    """Распознавание на видеокарте упало без библиотек CUDA: дальше в этой
+    задаче — процессор (asr.cuda_failed). Движок выбирается заново по правилам
+    процессора (обычно GigaAM, иначе Whisper для CPU); в карточке — тихая
+    пометка CUDA_FAILED, если своей пометки у выбора нет."""
+    import dataclasses
+
+    asr.cuda_failed(error)
+    run.choice = None
+    run.whisper_model = None
+    choice = run.choose(wav)
+    run.choice = dataclasses.replace(choice, note=choice.note or asr.CUDA_FAILED)
+    return _recognize_on_device(wav, hotwords, run)
 
 
 def _reason(error: Exception) -> str:
@@ -189,6 +218,8 @@ def _fallback_to_whisper(wav: Path, hotwords: str | None, run: "_Run", device: s
     try:
         return _whisper(wav, hotwords, run)
     except Exception as w:
+        if device == "cuda" and asr.missing_cuda_library(w):
+            raise  # не загрузка, а видеокарта без библиотек — _cuda_fallback
         raise SystemExit(f"GigaAM недоступна ({gigaam_reason}), и модель Whisper не скачалась "
                          f"({type(w).__name__}: {w}). {advice}") from w
 

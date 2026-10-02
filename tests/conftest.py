@@ -250,3 +250,17 @@ def _no_agent_spawn(monkeypatch):
     yield attempts  # проверка самой защиты очищает список после своей попытки
     if attempts:
         pytest.fail(f"тест пытался запустить агента: {attempts}")
+
+
+@pytest.fixture(autouse=True)
+def _no_machine_cuda(monkeypatch):
+    """Библиотеки CUDA машины разработчика (пакеты nvidia-*, CUDA Toolkit в
+    PATH) в тесты не попадают: по умолчанию их «нет», а итог проверки и сбой
+    CUDA (`asr.cuda_failed`) не переходят из теста в тест. Кому библиотеки
+    нужны, подменяет `asr._library_dirs` / `asr.find_cuda_libraries` сам."""
+    from meet import asr
+
+    asr._reset_cuda_state()
+    monkeypatch.setattr(asr, "_library_dirs", lambda: [])
+    yield
+    asr._reset_cuda_state()
