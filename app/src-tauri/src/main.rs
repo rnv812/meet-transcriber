@@ -158,12 +158,16 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("оболочка meet не запустилась")
-        .run(|_app, event| match event {
+        .run(|app, event| match event {
             // Закрытие последнего окна не завершает приложение: оно живёт в
             // трее. Выход — только «Выход» (app.exit(0), у него code = Some).
             RunEvent::ExitRequested { api, code, .. } if code.is_none() => api.prevent_exit(),
             // Job object агентов и так закроет Windows; гасим явно и раньше.
-            RunEvent::Exit => pty::kill_all(),
+            // Геометрию панели ассистента, ждущую отложенной записи, — в файл.
+            RunEvent::Exit => {
+                live_panel::flush(app);
+                pty::kill_all();
+            }
             _ => {}
         });
 }
