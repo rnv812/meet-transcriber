@@ -1,7 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { FeedLine } from "./useLive";
-import { LiveDigest, LiveFeed } from "./LiveFeed";
+import { LiveDigest, LiveFeed, TARGET_MS, lineAt } from "./LiveFeed";
 
 const line = (i: number, speaker: string | null = "Демьян"): FeedLine => ({ t: 60 + i, speaker, text: `реплика ${i}`, id: null });
 
@@ -77,4 +77,29 @@ test("строки ключуются по номеру: обрезка нача
   const kept = screen.getByText("реплика 2").closest("li");
   rerender(<LiveFeed lines={[withId(1), withId(2), withId(3)]} />);
   expect(screen.getByText("реплика 2").closest("li")).toBe(kept);
+});
+
+test("lineAt: последняя реплика, начавшаяся не позже момента", () => {
+  const lines = [line(0), line(10), line(20)];
+  expect(lineAt(lines, 75)).toBe(lines[1]);
+  expect(lineAt(lines, 80)).toBe(lines[2]);
+  expect(lineAt(lines, 5)).toBe(lines[0]);
+  expect(lineAt([], 5)).toBeUndefined();
+});
+
+test("переход к моменту: реплика подсвечена, слежение за низом выключено, подсветка гаснет", () => {
+  vi.useFakeTimers();
+  const lines = [line(0), line(10), line(20)];
+  const { rerender } = render(<LiveFeed lines={lines} />);
+  const feed = screen.getByRole("log");
+  const box = fakeScroll(feed, { scrollHeight: 500, clientHeight: 200 });
+  rerender(<LiveFeed lines={lines} focus={{ t: 71, seq: 1 }} />);
+  expect(screen.getByText("реплика 10").closest("li")).toHaveClass("is-target");
+  const top = feed.scrollTop;
+  box.grow(20);
+  rerender(<LiveFeed lines={[...lines, line(30)]} focus={{ t: 71, seq: 1 }} />);
+  expect(feed.scrollTop).toBe(top); // человек читает старое — не утаскиваем вниз
+  act(() => { vi.advanceTimersByTime(TARGET_MS); });
+  expect(screen.getByText("реплика 10").closest("li")).not.toHaveClass("is-target");
+  vi.useRealTimers();
 });

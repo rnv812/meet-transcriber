@@ -10,7 +10,7 @@
 
 import { inTauri, invoke } from "./shell";
 import type {
-  AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveLine, LiveState, LiveStatus, Person, PersonCard,
+  AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveLine, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
   ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   Transcript,
@@ -333,9 +333,12 @@ export const liveStart = (ep: Endpoint) => json<{ ok: boolean } & LiveStatus>(ep
 /** Ответ сразу; конец — событием `live.stopped`. */
 export const liveStop = (ep: Endpoint) =>
   json<{ ok: boolean; action: string } & LiveStatus>(ep, "/live/stop", { method: "POST" });
-/** Ответ модели может идти минуты. */
-export const liveAsk = (ep: Endpoint, question: string) =>
-  json<{ answer: string }>(ep, "/live/ask", body("POST", { question }));
+/**
+ * Вопрос или быстрое действие (`quick`, тогда вопрос не нужен); `since_t` —
+ * с какой секунды записи «Что я пропустил?». Ответ модели может идти минуты.
+ */
+export const liveAsk = (ep: Endpoint, question: string, opts: { quick?: LiveQuick; since_t?: number } = {}) =>
+  json<{ answer: string }>(ep, "/live/ask", body("POST", { question, ...opts }));
 export const liveTask = (ep: Endpoint, task: string) =>
   json<{ ok: boolean }>(ep, "/live/task", body("POST", { task }));
 

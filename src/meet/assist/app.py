@@ -136,13 +136,16 @@ class AssistState:
 
     def signature(self) -> tuple:
         """Меняется — пора слать клиентам новое `state`."""
-        return (self.live.version, self.bus.size(), self.status())
+        qa = self.qa.version if self.qa is not None else 0
+        return (self.live.version, qa, self.bus.size(), self.status())
 
     def view(self) -> dict:
-        """Тело `event: state`: сводка, подсказки, статус. `digest` —
-        сводка Markdown'ом (страница `meet assist` в браузере)."""
+        """Тело `event: state`: сводка, подсказки, история вопросов, статус.
+        `digest` — сводка Markdown'ом (страница `meet assist` в браузере)."""
         data = self.live.to_dict()
-        return {**data, "digest": self.live.render_markdown(), "status": self.status()}
+        qa = self.qa.history() if self.qa is not None else []
+        return {**data, "digest": self.live.render_markdown(), "qa": qa,
+                "status": self.status()}
 
     def hint_action(self, hint_id: str, action: str) -> bool:
         """Закрепить, открепить или скрыть подсказку. False — такой нет."""
@@ -374,6 +377,7 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         allowed_dirs=state.qa_allowed_dirs, cwd=out_dir,
         runner=runner,
         on_fresh_audio=engine.process_window,
+        owner=cfg.recording.speaker_name,
     )
     if task:
         asyncio.run(state.set_task(task))

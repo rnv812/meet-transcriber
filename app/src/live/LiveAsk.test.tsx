@@ -1,21 +1,29 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { LiveAsk, MISSED_QUESTION } from "./LiveAsk";
-import type { LiveReply } from "./useLive";
+import { useState } from "react";
 
-const idle: LiveReply = { pending: false, question: null, answer: null, error: null };
+import type { LiveQa } from "../lib/types";
+import { LiveAsk, QUICK_ACTIONS } from "./LiveAsk";
 
-test("«Что я пропустил?» задаёт фиксированный вопрос", async () => {
+const item = (o: Partial<LiveQa> = {}): LiveQa => ({
+  id: 1, q: "кто за релиз?", a: null, error: null, pending: false, at: 1, quick: null, ...o,
+});
+
+test("быстрые действия: четыре кнопки, каждая уходит со своим id", async () => {
   const onAsk = vi.fn(async () => {});
-  render(<LiveAsk reply={idle} onAsk={onAsk} />);
-  await userEvent.click(screen.getByRole("button", { name: "Что я пропустил?" }));
-  expect(MISSED_QUESTION).toBe("Что я пропустил за последние минуты?");
-  expect(onAsk).toHaveBeenCalledWith("Что я пропустил за последние минуты?");
+  render(<LiveAsk qa={[]} onAsk={onAsk} />);
+  const group = screen.getByRole("group", { name: "Быстрые вопросы" });
+  expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(
+    ["Что я пропустил?", "Какие решения уже приняты?", "Что мне ответить?", "Кратко за 1 минуту"]);
+  for (const q of QUICK_ACTIONS) {
+    await userEvent.click(within(group).getByRole("button", { name: q.label }));
+    expect(onAsk).toHaveBeenLastCalledWith(q.label, q.id);
+  }
 });
 
 test("свой вопрос: Enter отправляет, поле очищается", async () => {
   const onAsk = vi.fn(async () => {});
-  render(<LiveAsk reply={idle} onAsk={onAsk} />);
+  render(<LiveAsk qa={[]} onAsk={onAsk} />);
   const input = screen.getByRole("textbox", { name: "Вопрос ассистенту" });
   await userEvent.type(input, "  кто за релиз?  {Enter}");
   expect(onAsk).toHaveBeenCalledWith("кто за релиз?");
@@ -23,7 +31,7 @@ test("свой вопрос: Enter отправляет, поле очищает
 });
 
 test("поле не берёт фокус само — только по клику", async () => {
-  render(<LiveAsk reply={idle} onAsk={vi.fn()} />);
+  render(<LiveAsk qa={[]} onAsk={vi.fn()} />);
   const input = screen.getByRole("textbox", { name: "Вопрос ассистенту" });
   expect(input).not.toHaveFocus();
   expect(document.activeElement).toBe(document.body);
@@ -31,21 +39,49 @@ test("поле не берёт фокус само — только по кли�
   expect(input).toHaveFocus();
 });
 
-test("пока модель думает — кнопки неактивны, видно ожидание", () => {
-  render(<LiveAsk reply={{ pending: true, question: "кто?", answer: null, error: null }} onAsk={vi.fn()} />);
-  expect(screen.getByRole("button", { name: "Что я пропустил?" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Спросить" })).toBeDisabled();
+test("история целиком: вопросы, ответы Markdown'ом, ошибки; ждём — «Модель думает…»", () => {
+  render(<LiveAsk onAsk={vi.fn()} qa={[
+    item({ id: 1, q: "кто за релиз?", a: "**Демьян**" }),
+    item({ id: 2, q: "Какие решения уже приняты?", error: "модель не ответила", quick: "decisions" }),
+    item({ id: 3, q: "а сроки?", pending: true }),
+  ]} />);
+  const history = screen.getByRole("list", { name: "Вопросы и ответы" });
+  expect(within(history).getAllByRole("listitem")).toHaveLength(3);
+  expect(screen.getByText("Демьян").tagName).toBe("STRONG");
+  expect(screen.getByText("модель не ответила")).toBeInTheDocument();
   expect(screen.getByText("Модель думает…")).toBeInTheDocument();
-  expect(screen.getByText("кто?")).toBeInTheDocument();
+  // Пока ждём ответа, новые вопросы не уходят.
+  expect(screen.getByRole("button", { name: "Спросить" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Что я пропустил?" })).toBeDisabled();
 });
 
-test("ответ и ошибка — под полем", () => {
-  const { rerender } = render(
-    <LiveAsk reply={{ pending: false, question: "кто?", answer: "**Демьян**", error: null }} onAsk={vi.fn()} />);
-  const answer = screen.getByText("Демьян");
-  expect(answer.tagName).toBe("STRONG");
+test("запрос ушёл, история его ещё не показала — ожидание видно сразу", () => {
+  render(<LiveAsk qa={[]} asking onAsk={vi.fn()} />);
+  expect(screen.getByText("Модель думает…")).toBeInTheDocument();
+});
+
+test("вопрос не дошёл — ошибка под историей", () => {
+  render(<LiveAsk qa={[]} error="Ассистент не запущен" onAsk={vi.fn()} />);
+  expect(screen.getByRole("alert")).toHaveTextContent("Ассистент не запущен");
+});
+
+test("таймкоды в ответе кликабельны", async () => {
+  const onTime = vi.fn();
+  render(<LiveAsk qa={[item({ a: "Решили в [00:12:34]." })]} onAsk={vi.fn()} onTime={onTime} />);
+  await userEvent.click(screen.getByRole("button", { name: "00:12:34" }));
+  expect(onTime).toHaveBeenCalledWith(754);
+});
+
+test("текст поля можно задать снаружи (Спросить об этом)", async () => {
+  const onAsk = vi.fn();
+  function Host() {
+    const [draft, setDraft] = useState("Расскажите подробнее: «нет владельца»");
+    return <LiveAsk qa={[]} onAsk={onAsk} draft={draft} onDraft={setDraft} />;
+  }
+  render(<Host />);
   const input = screen.getByRole("textbox", { name: "Вопрос ассистенту" });
-  expect(input.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  rerender(<LiveAsk reply={{ pending: false, question: "кто?", answer: null, error: "модель не ответила" }} onAsk={vi.fn()} />);
-  expect(screen.getByRole("alert")).toHaveTextContent("модель не ответила");
+  expect(input).toHaveValue("Расскажите подробнее: «нет владельца»");
+  await userEvent.type(input, "{Enter}");
+  expect(onAsk).toHaveBeenCalledWith("Расскажите подробнее: «нет владельца»");
+  expect(input).toHaveValue("");
 });

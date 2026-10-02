@@ -42,9 +42,12 @@ class FakeState:
         return hint_id == "h1"
 
     class _QA:
-        @staticmethod
-        async def ask(q):
-            return f"ответ на: {q}"
+        calls: list = []
+
+        @classmethod
+        async def ask(cls, q, quick=None, since_t=None):
+            cls.calls.append((q, quick, since_t))
+            return f"ответ на: {q or quick}"
 
     qa = _QA()
 
@@ -256,5 +259,21 @@ def test_hint_route_validates_and_forwards():
                                   headers={"Origin": "http://evil.example"})
             assert r.status == 403
         assert state.hint_calls == [("h1", "pin"), ("h9", "dismiss")]
+
+    _run(scenario())
+
+
+def test_ask_quick_action_and_validation():
+    async def scenario():
+        state = FakeState()
+        FakeState._QA.calls = []
+        async with TestClient(TestServer(build_app(state))) as client:
+            r = await client.post("/ask", json={"quick": "missed", "since_t": 120})
+            assert r.status == 200 and (await r.json())["answer"] == "ответ на: missed"
+            for bad in ({"quick": "dance"}, {"question": ""}, {"quick": "brief", "since_t": -5},
+                        {"question": 7}, ["вопрос"]):
+                r = await client.post("/ask", json=bad)
+                assert r.status == 400, bad
+        assert FakeState._QA.calls == [(None, "missed", 120)]
 
     _run(scenario())

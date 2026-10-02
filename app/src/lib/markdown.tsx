@@ -7,6 +7,9 @@
  * GFM-таблицы, цитаты, блоки кода, черта; внутри строки — жирный, курсив,
  * зачёркнутый, код и ссылки. Ссылка — текст с адресом в подсказке: открывать
  * произвольные адреса оболочка не умеет, и окну это не нужно.
+ *
+ * С `onTime` таймкоды в квадратных скобках — «[12:34]», «[01:02:03]» —
+ * становятся кнопками: щелчок передаёт секунды (переход к реплике в ленте).
  */
 
 import { Fragment, useMemo, type ReactNode } from "react";
@@ -178,10 +181,14 @@ const STRONG_UNDER = /^__(?=\S)(.*?\S)__/;
 const EM_STAR = /^\*(?=[^\s*])([^*]*?[^\s*])\*(?!\*)/;
 const EM_UNDER = /^_(?=[^\s_])([^_]*?[^\s_])_/;
 const DEL = /^~~(?=\S)(.*?\S)~~/;
+const TIME = /^\[(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\]/;
+
+/** Чем отрисовка дополняет текст: щелчок по таймкоду (секунды). */
+type Ctx = { onTime?: (seconds: number) => void };
 const WORD = /[\p{L}\p{N}_]/u;
 const isWord = (c: string | undefined) => c !== undefined && WORD.test(c);
 
-function inline(text: string): ReactNode[] {
+function inline(text: string, ctx: Ctx = {}): ReactNode[] {
   const out: ReactNode[] = [];
   let buf = "";
   const push = (node: ReactNode) => {
@@ -197,17 +204,26 @@ function inline(text: string): ReactNode[] {
       buf += m[1];
     } else if (c === "`" && (m = CODE.exec(rest))) {
       push(<code key={out.length}>{m[2]!.trim()}</code>);
+    } else if (c === "[" && ctx.onTime && (m = TIME.exec(rest))) {
+      const seconds = Number(m[1] ?? 0) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+      const onTime = ctx.onTime;
+      push(
+        <button key={out.length} type="button" className="md-time" title="Перейти к реплике в ленте"
+          onClick={() => onTime(seconds)}>
+          {m[0].slice(1, -1)}
+        </button>,
+      );
     } else if (c === "[" && (m = LINK.exec(rest))) {
-      push(<span key={out.length} className="md-link" title={m[2]}>{inline(m[1]!)}</span>);
+      push(<span key={out.length} className="md-link" title={m[2]}>{inline(m[1]!, ctx)}</span>);
     } else if (c === "*" && (m = STRONG_STAR.exec(rest) ?? EM_STAR.exec(rest))) {
       const Tag = m[0].startsWith("**") ? "strong" : "em";
-      push(<Tag key={out.length}>{inline(m[1]!)}</Tag>);
+      push(<Tag key={out.length}>{inline(m[1]!, ctx)}</Tag>);
     } else if (c === "_" && !isWord(text[i - 1]) && (m = STRONG_UNDER.exec(rest) ?? EM_UNDER.exec(rest))
       && !isWord(text[i + m[0].length])) {
       const Tag = m[0].startsWith("__") ? "strong" : "em";
-      push(<Tag key={out.length}>{inline(m[1]!)}</Tag>);
+      push(<Tag key={out.length}>{inline(m[1]!, ctx)}</Tag>);
     } else if (c === "~" && (m = DEL.exec(rest))) {
-      push(<del key={out.length}>{inline(m[1]!)}</del>);
+      push(<del key={out.length}>{inline(m[1]!, ctx)}</del>);
     } else {
       m = null;
     }
@@ -221,22 +237,22 @@ function inline(text: string): ReactNode[] {
 
 // --- отрисовка ----------------------------------------------------------------------
 
-function render(blocks: Block[]): ReactNode[] {
+function render(blocks: Block[], ctx: Ctx = {}): ReactNode[] {
   return blocks.map((b, k) => {
     switch (b.kind) {
       case "heading": {
         // Уровни сдвинуты: над итогами уже есть заголовок карточки.
         const Tag = `h${Math.min(6, b.level + 2)}` as "h3";
-        return <Tag key={k} className={`md-h md-h${b.level}`}>{inline(b.text)}</Tag>;
+        return <Tag key={k} className={`md-h md-h${b.level}`}>{inline(b.text, ctx)}</Tag>;
       }
       case "para":
         return (
           <p key={k}>
-            {b.lines.map((line, j) => <Fragment key={j}>{j > 0 && <br />}{inline(line)}</Fragment>)}
+            {b.lines.map((line, j) => <Fragment key={j}>{j > 0 && <br />}{inline(line, ctx)}</Fragment>)}
           </p>
         );
       case "list": {
-        const items = b.items.map((it, j) => <li key={j}>{inline(it.text)}{render(it.children)}</li>);
+        const items = b.items.map((it, j) => <li key={j}>{inline(it.text, ctx)}{render(it.children, ctx)}</li>);
         return b.ordered
           ? <ol key={k} start={b.start !== 1 ? b.start : undefined}>{items}</ol>
           : <ul key={k}>{items}</ul>;
@@ -246,11 +262,11 @@ function render(blocks: Block[]): ReactNode[] {
           <div key={k} className="md-table">
             <table>
               <thead>
-                <tr>{b.head.map((c, j) => <th key={j} style={{ textAlign: b.align[j] }}>{inline(c)}</th>)}</tr>
+                <tr>{b.head.map((c, j) => <th key={j} style={{ textAlign: b.align[j] }}>{inline(c, ctx)}</th>)}</tr>
               </thead>
               <tbody>
                 {b.rows.map((row, r) => (
-                  <tr key={r}>{row.map((c, j) => <td key={j} style={{ textAlign: b.align[j] }}>{inline(c)}</td>)}</tr>
+                  <tr key={r}>{row.map((c, j) => <td key={j} style={{ textAlign: b.align[j] }}>{inline(c, ctx)}</td>)}</tr>
                 ))}
               </tbody>
             </table>
@@ -259,14 +275,22 @@ function render(blocks: Block[]): ReactNode[] {
       case "code":
         return <pre key={k}><code>{b.text}</code></pre>;
       case "quote":
-        return <blockquote key={k}>{render(b.blocks)}</blockquote>;
+        return <blockquote key={k}>{render(b.blocks, ctx)}</blockquote>;
       case "hr":
         return <hr key={k} />;
     }
   });
 }
 
-export function Markdown({ source, className }: { source: string; className?: string }) {
-  const nodes = useMemo(() => render(parseBlocks(source.replace(/\r\n?/g, "\n").split("\n"))), [source]);
+export function Markdown({ source, className, onTime }: {
+  source: string;
+  className?: string;
+  /** Таймкоды «[мм:сс]» — кнопки; щелчок передаёт секунды. */
+  onTime?: (seconds: number) => void;
+}) {
+  const nodes = useMemo(
+    () => render(parseBlocks(source.replace(/\r\n?/g, "\n").split("\n")), { onTime }),
+    [source, onTime],
+  );
   return <div className={className ? `md ${className}` : "md"}>{nodes}</div>;
 }

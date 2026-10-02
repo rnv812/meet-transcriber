@@ -30,12 +30,18 @@ test("строки копятся из потока, хранятся после
   expect(result.current.lines.at(-1)).toEqual({ ...line(304), id: 304 });
 });
 
-test("state даёт дайджест и статус; строки state не дублируют ленту", () => {
+test("state даёт сводку, статус и историю вопросов; строки state не дублируют ленту", () => {
   const { result } = renderHook(() => useLive(ep));
   const es = liveSources().at(-1)!;
-  act(() => es.emit("state", { digest: "## Решения", transcript: ["[00:01] Демьян: привет"], status: "дайджест обновлён" }));
-  expect(result.current.digest).toBe("## Решения");
-  expect(result.current.status).toBe("дайджест обновлён");
+  expect(result.current.loaded).toBe(false);
+  const qa = [{ id: 1, q: "срок?", a: "пятница", error: null, pending: false, at: 1, quick: null }];
+  act(() => es.emit("state", {
+    digest: "### Решения", transcript: ["[00:01] Демьян: привет"], status: "Подсказки временно недоступны", qa,
+  }));
+  expect(result.current.digest).toBe("### Решения");
+  expect(result.current.status).toBe("Подсказки временно недоступны");
+  expect(result.current.qa).toEqual(qa);
+  expect(result.current.loaded).toBe(true);
   expect(result.current.lines).toEqual([]);
 });
 
@@ -104,20 +110,22 @@ test("размонтирование закрывает поток и отмен
   expect(es.closed).toBe(true);
 });
 
-test("ask: ожидание, затем ответ; ошибка видна", async () => {
+test("ask: запрос в пути — asking; ответ придёт историей; отказ виден", async () => {
   let resolve!: (v: { answer: string }) => void;
   vi.mocked(liveAsk).mockReturnValueOnce(new Promise((r) => { resolve = r; }));
   const { result } = renderHook(() => useLive(ep));
   let done!: Promise<void>;
   act(() => { done = result.current.ask("кто за что?"); });
-  expect(liveAsk).toHaveBeenCalledWith(ep, "кто за что?");
-  expect(result.current.reply).toEqual({ pending: true, question: "кто за что?", answer: null, error: null });
+  expect(liveAsk).toHaveBeenCalledWith(ep, "кто за что?", {});
+  expect(result.current.asking).toBe(true);
   await act(async () => { resolve({ answer: "Демьян — за релиз" }); await done; });
-  expect(result.current.reply).toEqual({ pending: false, question: "кто за что?", answer: "Демьян — за релиз", error: null });
+  expect(result.current.asking).toBe(false);
+  expect(result.current.askError).toBeNull();
 
   vi.mocked(liveAsk).mockRejectedValueOnce(new ApiError(409, "живой режим не идёт"));
-  await act(async () => { await result.current.ask("ещё"); });
-  expect(result.current.reply).toEqual({ pending: false, question: "ещё", answer: null, error: "живой режим не идёт" });
+  await act(async () => { await result.current.ask("", { quick: "missed", since_t: 300 }); });
+  expect(liveAsk).toHaveBeenLastCalledWith(ep, "", { quick: "missed", since_t: 300 });
+  expect(result.current.askError).toBe("живой режим не идёт");
 });
 
 test("setTask уходит в liveTask", async () => {

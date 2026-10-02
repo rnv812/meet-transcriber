@@ -119,3 +119,23 @@ test("Windows-переводы строк и пустой текст", () => {
   rerender(<Markdown source="" />);
   expect(container.querySelector(".md")?.childElementCount).toBe(0);
 });
+
+test("таймкоды в скобках — кнопки, если есть onTime; без него — текст", async () => {
+  const onTime = vi.fn();
+  const { rerender } = render(<Markdown source={"Решили в [12:34], подтвердили в [01:02:03].\n\n- пункт [00:05]"} onTime={onTime} />);
+  const buttons = screen.getAllByRole("button");
+  expect(buttons.map((b) => b.textContent)).toEqual(["12:34", "01:02:03", "00:05"]);
+  buttons[0]!.click();
+  buttons[1]!.click();
+  buttons[2]!.click();
+  expect(onTime.mock.calls).toEqual([[754], [3723], [5]]);
+  rerender(<Markdown source="Решили в [12:34]." />);
+  expect(screen.queryByRole("button")).toBeNull();
+  expect(screen.getByText("Решили в [12:34].")).toBeInTheDocument();
+});
+
+test("ссылка рядом с таймкодом остаётся ссылкой", () => {
+  render(<Markdown source="[док](http://x) и [3:07]" onTime={vi.fn()} />);
+  expect(screen.getByText("док")).toHaveClass("md-link");
+  expect(screen.getByRole("button", { name: "3:07" })).toBeInTheDocument();
+});

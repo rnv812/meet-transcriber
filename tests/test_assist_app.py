@@ -39,7 +39,7 @@ def test_state_view_and_hint_actions(tmp_path):
     sig = state.signature()
     view = state.view()
     assert view["hints"][0]["id"] == "h1" and view["summary"]["topic"] == "Запуск"
-    assert "Запуск" in view["digest"] and view["status"] is None
+    assert "Запуск" in view["digest"] and view["status"] is None and view["qa"] == []
     assert state.hint_action("h1", "pin") and saved == [1]
     assert state.signature() != sig
     assert not state.hint_action("h9", "dismiss") and saved == [1]

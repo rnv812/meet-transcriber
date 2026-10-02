@@ -47,7 +47,7 @@ html, body { background: transparent; }
 .live-panel__side .live-digest { order: -1; flex: none; }
 .live-panel__side .live-ask { flex: none; }
 .live-panel__body .live-digest .md { max-height: 25vh; overflow-y: auto; }
-.live-panel__body .live-ask__reply { max-height: 35vh; }
+.live-panel__body .live-ask__history { max-height: 35vh; }
 
 /* Широкая (от 720): лента слева во всю высоту, справа дайджест и вопросы;
    ответ занимает остаток правой колонки. */
@@ -65,5 +65,5 @@ html, body { background: transparent; }
   .live-panel__side .live-digest { order: 0; }
   .live-panel__body .live-digest .md { max-height: 40vh; }
   .live-panel__side .live-ask { flex: 1; min-height: 0; }
-  .live-panel__body .live-ask__reply { flex: 1; min-height: 0; max-height: none; }
+  .live-panel__body .live-ask__history { flex: 1; min-height: 0; max-height: none; }
 }

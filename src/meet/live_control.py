@@ -81,6 +81,9 @@ ASK_TIMEOUT_S = 240.0  # вопрос — вызов модели (у ребён
 RELAY_THREAD = "meet-live-relay"
 RELAYED_EVENTS = ("state", "line")
 ERROR_MAX_CHARS = 300
+# Быстрые действия вопросов (`meet.assist.qa.QUICK`): «Что я пропустил?»,
+# «Какие решения уже приняты?», «Что мне ответить?», «Кратко за 1 минуту».
+QUICK_ACTIONS = ("missed", "decisions", "reply", "brief")
 
 
 class LiveError(Exception):
@@ -620,9 +623,16 @@ class LiveControl:
             raise RuntimeError(f"ассистент не отвечает: {e}") from None
         return json.loads(raw) if raw.strip() else {}
 
-    def ask(self, question: str) -> dict:
-        return self._request(self._active_port(), "/ask", {"question": question},
-                             ASK_TIMEOUT_S)
+    def ask(self, question: str, quick: str | None = None,
+            since_t: float | None = None) -> dict:
+        """Вопрос ассистенту; `quick` — быстрое действие, `since_t` — с какой
+        секунды записи считать «пропущенное»."""
+        payload: dict = {"question": question}
+        if quick is not None:
+            payload["quick"] = quick
+        if since_t is not None:
+            payload["since_t"] = since_t
+        return self._request(self._active_port(), "/ask", payload, ASK_TIMEOUT_S)
 
     def task(self, text: str) -> dict:
         self._request(self._active_port(), "/task", {"task": text}, REQUEST_TIMEOUT_S)
