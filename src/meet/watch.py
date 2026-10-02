@@ -120,16 +120,28 @@ def mac_names(exe_name: str) -> "tuple[str, ...]":
     return (stem,) if stem else ()
 
 
+def _hits(proc: str, names) -> list[str]:
+    """Имена, под которые подходит процесс: совпадает или начинается с имени
+    и пробела."""
+    return [n for n in names if proc == n.lower() or proc.startswith(n.lower() + " ")]
+
+
 def mac_match(process_name: str, exe_name: str) -> bool:
-    """Процесс macOS — это программа из настроек?"""
+    """Процесс macOS — это программа из настроек? Если процесс точнее (более
+    длинным именем) подходит другой программе из MAC_NAMES, он её, а не
+    этой: «Yandex Telemost» — Телемост, а не Яндекс Браузер («Yandex …»)."""
     proc = (process_name or "").strip().lower()
     if not proc:
         return False
-    for name in mac_names(exe_name):
-        name = name.lower()
-        if proc == name or proc.startswith(name + " "):
-            return True
-    return False
+    mine = _hits(proc, mac_names(exe_name))
+    if not mine:
+        return False
+    best = max(len(n) for n in mine)
+    key = exe_name.strip().lower()
+    for other, names in MAC_NAMES.items():
+        if other != key and any(len(n) > best for n in _hits(proc, names)):
+            return False
+    return True
 
 
 def _mac_users(now: "float | None" = None) -> "list | None":

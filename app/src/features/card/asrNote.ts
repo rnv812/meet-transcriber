@@ -11,3 +11,12 @@ export const ASR_NOTES: Record<string, string> = {
 
 export const asrNoteText = (note: string | null | undefined): string | null =>
   (note && ASR_NOTES[note]) || null;
+
+/** macOS: почему в записи нет голосов собеседников (`system_audio` в meta.json). */
+export const SYSTEM_AUDIO_NOTES: Record<string, string> = {
+  missing: "Звук собеседников не записан: у Meet не было разрешения «Запись экрана» — записан только микрофон",
+  partial: "Звук собеседников записан не с начала: разрешение «Запись экрана» дали во время встречи",
+};
+
+export const systemAudioText = (state: string | null | undefined): string | null =>
+  (state && SYSTEM_AUDIO_NOTES[state]) || null;

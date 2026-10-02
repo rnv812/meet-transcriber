@@ -2,8 +2,8 @@
 клиенте конференций и сам её останавливает, когда звонок кончился.
 
 Дежурит с серой иконкой, на записи — синяя с секундомером и пунктами
-«Остановить запись» / «Отменить (удалить)». Ярлык на рабочем столе запускает
-`meet-tray` без аргументов — это по-прежнему означает «начать запись», и такую
+«Остановить и сохранить» / «Отменить запись…» (внизу, с вопросом). Ярлык на
+рабочем столе запускает `meet-tray` без аргументов — это по-прежнему означает «начать запись», и такую
 запись детектор не останавливает никогда: писать можно не только конференцию.
 Дежурный режим — флаг `--watch`, с ним трей стоит в автозагрузке.
 
@@ -282,6 +282,25 @@ class _NoIcon:
     visible = False
 
 
+CANCEL_TITLE = "Отменить запись"
+CANCEL_QUESTION = "Удалить текущую запись? Записанное не сохранится."
+
+
+def _confirm_cancel() -> bool:
+    """Вопрос перед отменой записи в трее без оболочки (MessageBoxW): кнопка
+    по умолчанию — «Нет», то есть продолжить запись. Своих подписей у этого
+    окна нет, поэтому значение «Да»/«Нет» сказано в тексте. Не Windows —
+    спросить нечем (этот трей — только Windows), отменяем сразу."""
+    if sys.platform != "win32":
+        return True
+    import ctypes
+
+    # MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND; 6 — IDYES.
+    flags = 0x4 | 0x30 | 0x100 | 0x10000
+    text = f"{CANCEL_QUESTION}\n\nДа — удалить, Нет — продолжить запись."
+    return ctypes.windll.user32.MessageBoxW(None, text, CANCEL_TITLE, flags) == 6
+
+
 class TrayApp:
     """Состояние трея: дежурю или пишу, и кто эту запись начал.
 
@@ -516,6 +535,15 @@ class TrayApp:
         if was_auto:
             self.watcher.suppress()
 
+    def _on_cancel_asked(self, icon=None, item=None) -> None:
+        """«Отменить запись…» из меню: сначала вопрос (в своём потоке —
+        цикл иконки не ждёт ответа), отмена — только по «Да»."""
+        def ask() -> None:
+            if self.recording and _confirm_cancel():
+                self._on_cancel()
+
+        threading.Thread(target=ask, name="meet-cancel-ask", daemon=True).start()
+
     def _on_exit(self, icon=None, item=None) -> None:
         if self.recording:
             self.stop_recording()
@@ -733,10 +761,12 @@ class TrayApp:
                 "Начать запись", self._on_start, visible=lambda i: not self.recording
             ),
             pystray.MenuItem(
-                "Остановить запись", self._on_stop, visible=lambda i: self.recording
+                "Остановить и сохранить", self._on_stop, visible=lambda i: self.recording
             ),
+            # Отмена — внизу, отдельно от остановки: рядом их легко перепутать.
+            pystray.Menu.SEPARATOR,
             pystray.MenuItem(
-                "Отменить (удалить)", self._on_cancel, visible=lambda i: self.recording
+                "Отменить запись…", self._on_cancel_asked, visible=lambda i: self.recording
             ),
             pystray.MenuItem("Выход", self._on_exit),
         )

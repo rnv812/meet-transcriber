@@ -1,5 +1,5 @@
 """Платформенный слой (`meet.plat`): папка данных, «жив ли процесс», открыть
-папку — на Windows как раньше, на macOS — свои пути и команды. Ветка macOS
+без окна — на Windows как раньше, на macOS — свои пути и команды. Ветка macOS
 проверяется на Windows подменой `sys.platform`."""
 
 import os
@@ -42,33 +42,6 @@ def test_mac_data_dir_is_application_support(mac, monkeypatch):
     assert paths.data_dir() == mac / "portable"
 
 
-def test_open_command_is_open_on_mac_and_explorer_on_windows(monkeypatch):
-    monkeypatch.setattr(sys, "platform", "darwin")
-    assert plat.open_command("/Users/u/meet/recordings") == ["open", "/Users/u/meet/recordings"]
-    monkeypatch.setattr(sys, "platform", "win32")
-    assert plat.open_command(r"C:\meet") == ["explorer", r"C:\meet"]
-
-
-def test_open_target_runs_without_a_shell(monkeypatch):
-    seen = {}
-
-    def fake_popen(argv, **kwargs):
-        seen["argv"], seen["kwargs"] = argv, kwargs
-
-    monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setattr(plat.subprocess, "Popen", fake_popen)
-    assert plat.open_target("https://example.test/a b") is True
-    assert seen["argv"] == ["open", "https://example.test/a b"]
-    assert "shell" not in seen["kwargs"]
-    assert seen["kwargs"]["creationflags"] == 0
-
-    def broken(argv, **kwargs):
-        raise OSError("нет такой программы")
-
-    monkeypatch.setattr(plat.subprocess, "Popen", broken)
-    assert plat.open_target("/x") is False
-
-
 def test_no_window_flag_only_on_windows(monkeypatch):
     monkeypatch.setattr(sys, "platform", "darwin")
     assert plat.no_window() == 0
@@ -102,12 +75,3 @@ def test_pid_alive_on_windows_never_signals(monkeypatch):
 
     monkeypatch.setattr(plat.os, "kill", forbidden)
     assert plat.pid_alive(os.getpid()) is True
-
-
-def test_names_and_venv_layout(monkeypatch, tmp_path):
-    monkeypatch.setattr(sys, "platform", "darwin")
-    assert plat.exe_name("ffmpeg") == "ffmpeg"
-    assert plat.venv_bin(tmp_path) == tmp_path / "bin"
-    monkeypatch.setattr(sys, "platform", "win32")
-    assert plat.exe_name("ffmpeg") == "ffmpeg.exe"
-    assert plat.venv_bin(tmp_path) == tmp_path / "Scripts"

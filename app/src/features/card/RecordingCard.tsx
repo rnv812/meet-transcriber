@@ -35,7 +35,7 @@ import { TranscriptView, type FindRequest, type RevealRequest } from "./Transcri
 import { useTextFix } from "./TextFix";
 import { useTurnEdit } from "./TurnEdit";
 import type { PersonColor } from "./Turns";
-import { asrNoteText } from "./asrNote";
+import { asrNoteText, systemAudioText } from "./asrNote";
 import "./card.css";
 
 type Loaded = Recording & { transcript: Transcript | null };
@@ -546,6 +546,9 @@ export function RecordingCard({
       )}
       {status.kind === "ready" && asrNoteText(rec.asr_note) && (
         <p className="muted card__note" role="note">{asrNoteText(rec.asr_note)}</p>
+      )}
+      {systemAudioText(rec.system_audio) && (
+        <p className="muted card__note" role="note">{systemAudioText(rec.system_audio)}</p>
       )}
       <div className="card__body"><JiraLinks.Provider value={jira}>{body}</JiraLinks.Provider></div>
       {status.kind === "ready" && turnEdit.menu}

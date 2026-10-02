@@ -6,6 +6,11 @@
   лежат в en.lproj/ и ru.lproj/InfoPlist.strings.
   Микрофон и системный звук пишет резидент — дочерний процесс приложения,
   поэтому macOS спрашивает разрешения от имени Meet.
+  Текст запроса macOS берёт только из NSMicrophoneUsageDescription. Запрос
+  «Запись экрана» (ScreenCaptureKit) своего текста не показывает:
+  NSScreenCaptureUsageDescription и NSAudioCaptureUsageDescription (API
+  Core Audio taps, macOS 14.4+, помощник им не пользуется) — справочные,
+  на случай будущих версий macOS и для тех, кто читает Info.plist.
 -->
 <plist version="1.0">
 <dict>

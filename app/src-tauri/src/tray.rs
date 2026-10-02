@@ -939,16 +939,24 @@ impl LivePhase {
     }
 }
 
-/// Пункты записи в меню: (id, текст, доступен ли). Пока идёт любая запись —
-/// обычная или с ассистентом — пунктов «Начать…» нет. У ассистента своя
-/// остановка (`/live/stop`) и нет отмены: резидент её не умеет.
+/// Остановка записи (обычной и с ассистентом): записанное сохраняется.
+pub const STOP_LABEL: &str = "Остановить и сохранить";
+/// Отмена записи: многоточие — перед удалением спрашиваем подтверждение.
+pub const CANCEL_LABEL: &str = "Отменить запись…";
+pub const CANCEL_TITLE: &str = "Отменить запись";
+pub const CANCEL_QUESTION: &str = "Удалить текущую запись? Записанное не сохранится.";
+pub const CANCEL_CONFIRM: &str = "Удалить";
+pub const CANCEL_KEEP: &str = "Продолжить запись";
+
+/// Пункты записи в верхней части меню: (id, текст, доступен ли). Пока идёт
+/// любая запись — обычная или с ассистентом — пунктов «Начать…» нет. У
+/// ассистента своя остановка (`/live/stop`) и нет отмены: резидент её не
+/// умеет. Отмены обычной записи здесь тоже нет: она внизу меню, отдельно от
+/// остановки (`menu_model`), — рядом их легко перепутать.
 pub fn record_items(state: &MenuState) -> Vec<(&'static str, &'static str, bool)> {
     let online = state.online;
     if state.recording {
-        return vec![
-            ("stop", "Остановить запись", online),
-            ("cancel", "Отменить запись", online),
-        ];
+        return vec![("stop", STOP_LABEL, online)];
     }
     match state.live {
         LivePhase::Off => vec![
@@ -957,12 +965,73 @@ pub fn record_items(state: &MenuState) -> Vec<(&'static str, &'static str, bool)
         ],
         LivePhase::Starting => vec![
             ("live-starting", "Ассистент запускается…", false),
-            ("live-stop", "Остановить запись", online),
+            ("live-stop", STOP_LABEL, online),
         ],
-        LivePhase::Active => vec![("live-stop", "Остановить запись", online)],
+        LivePhase::Active => vec![("live-stop", STOP_LABEL, online)],
         // Остановка уже идёт — второй раз нажимать нечего.
-        LivePhase::Stopping => vec![("live-stop", "Остановить запись", false)],
+        LivePhase::Stopping => vec![("live-stop", STOP_LABEL, false)],
     }
+}
+
+/// Пункт меню трея (на macOS — меню значка в строке меню, то же самое).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Entry {
+    Item {
+        id: &'static str,
+        text: &'static str,
+        enabled: bool,
+    },
+    Check {
+        id: &'static str,
+        text: &'static str,
+        enabled: bool,
+        checked: bool,
+    },
+    Separator,
+}
+
+/// Меню целиком, по порядку: «Открыть», запись (начать / остановить и
+/// сохранить), импорт, «Автозапись», разделитель, служебные пункты, «Отменить
+/// запись…» (только пока идёт запись — внизу, подальше от остановки) и
+/// «Выход». Пока идёт «Выход», недоступно всё.
+pub fn menu_model(state: &MenuState) -> Vec<Entry> {
+    let usable = !state.quitting;
+    let item = |id, text, enabled: bool| Entry::Item {
+        id,
+        text,
+        enabled: enabled && usable,
+    };
+    let mut model = vec![item("open", "Открыть", true)];
+    for (id, text, enabled) in record_items(state) {
+        model.push(item(id, text, enabled));
+    }
+    model.push(item("import", "Импортировать файл…", state.online));
+    // id несёт действие: клик по включённой галочке выключает, и наоборот —
+    // обработчику не нужно гадать о текущем состоянии.
+    model.push(Entry::Check {
+        id: if state.auto { "auto-off" } else { "auto-on" },
+        text: "Автозапись",
+        enabled: state.online && usable,
+        checked: state.auto,
+    });
+    model.push(Entry::Separator);
+    if state.log.is_some() {
+        model.push(item("log", "Открыть журнал", true));
+    }
+    if state.restart {
+        model.push(item("restart", "Перезапустить службу записи", true));
+    }
+    if state.recording {
+        model.push(item("cancel", CANCEL_LABEL, state.online));
+    }
+    model.push(item("quit", "Выход", true));
+    model
+}
+
+/// Ответ на вопрос «Удалить текущую запись?»: удаляем только по явной кнопке
+/// «Удалить». Esc, закрытие окна и «Продолжить запись» запись не трогают.
+pub fn cancel_confirmed_by(answer: &rfd::MessageDialogResult) -> bool {
+    matches!(answer, rfd::MessageDialogResult::Custom(label) if label == CANCEL_CONFIRM)
 }
 
 pub fn menu_state(view: Option<&View>, status: &ResidentStatus) -> MenuState {
@@ -1133,36 +1202,60 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
 
 fn build_menu(app: &AppHandle, state: &MenuState) -> tauri::Result<Menu<Wry>> {
     let menu = Menu::new(app)?;
-    // «Выход» уже идёт: ни окно, ни команды, ни второй «Выход» — только ждать.
-    let usable = !state.quitting;
-    let item = |id: &str, text: &str, enabled: bool| {
-        MenuItem::with_id(app, id, text, enabled && usable, None::<&str>)
-    };
-    menu.append(&item("open", "Открыть", true)?)?;
-    for (id, text, enabled) in record_items(state) {
-        menu.append(&item(id, text, enabled)?)?;
+    for entry in menu_model(state) {
+        match entry {
+            Entry::Item { id, text, enabled } => {
+                menu.append(&MenuItem::with_id(app, id, text, enabled, None::<&str>)?)?
+            }
+            Entry::Check {
+                id,
+                text,
+                enabled,
+                checked,
+            } => menu.append(&CheckMenuItem::with_id(
+                app,
+                id,
+                text,
+                enabled,
+                checked,
+                None::<&str>,
+            )?)?,
+            Entry::Separator => menu.append(&PredefinedMenuItem::separator(app)?)?,
+        }
     }
-    menu.append(&item("import", "Импортировать файл…", state.online)?)?;
-    // id несёт действие: клик по включённой галочке выключает, и наоборот —
-    // обработчику не нужно гадать о текущем состоянии.
-    let auto_id = if state.auto { "auto-off" } else { "auto-on" };
-    menu.append(&CheckMenuItem::with_id(
-        app,
-        auto_id,
-        "Автозапись",
-        state.online,
-        state.auto,
-        None::<&str>,
-    )?)?;
-    menu.append(&PredefinedMenuItem::separator(app)?)?;
-    if state.log.is_some() {
-        menu.append(&item("log", "Открыть журнал", true)?)?;
-    }
-    if state.restart {
-        menu.append(&item("restart", "Перезапустить службу записи", true)?)?;
-    }
-    menu.append(&item("quit", "Выход", true)?)?;
     Ok(menu)
+}
+
+/// «Отменить запись…»: системный вопрос, кнопка по умолчанию — «Продолжить
+/// запись» (Enter запись не удаляет). Отмена уходит резиденту, только если
+/// нажато «Удалить» (`cancel_confirmed_by`).
+///
+/// rfd напрямую, а не плагин диалогов: плагин выдаёт Esc и закрытие окна за
+/// нажатие второй кнопки, а вторая здесь — «Удалить». Кнопка по умолчанию — первая
+/// (и на Windows, и на macOS), поэтому «Продолжить запись» идёт первой.
+/// Вызывается из обработчика меню — главного потока, как требует macOS.
+fn confirm_cancel(app: &AppHandle) {
+    let dialog = rfd::AsyncMessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title(CANCEL_TITLE)
+        .set_description(CANCEL_QUESTION)
+        .set_buttons(rfd::MessageButtons::OkCancelCustom(
+            CANCEL_KEEP.to_string(),
+            CANCEL_CONFIRM.to_string(),
+        ))
+        .show();
+    let app = app.clone();
+    thread::spawn(move || {
+        let answer = tauri::async_runtime::block_on(dialog);
+        if !cancel_confirmed_by(&answer) {
+            return;
+        }
+        if let Some(state) = app.try_state::<TrayState>() {
+            let mut mark = lock(&state.cancel);
+            *mark = mark.requested();
+        }
+        command(&app, Action::Cancel);
+    });
 }
 
 fn on_menu(app: &AppHandle, id: &str) {
@@ -1172,13 +1265,7 @@ fn on_menu(app: &AppHandle, id: &str) {
         "stop" => command(app, Action::Stop),
         "live-start" => command(app, Action::LiveStart),
         "live-stop" => command(app, Action::LiveStop),
-        "cancel" => {
-            if let Some(state) = app.try_state::<TrayState>() {
-                let mut mark = lock(&state.cancel);
-                *mark = mark.requested();
-            }
-            command(app, Action::Cancel);
-        }
+        "cancel" => confirm_cancel(app),
         "auto-on" | "auto-off" => {
             if let Some(state) = app.try_state::<TrayState>() {
                 state.menu_dirty.store(true, Ordering::SeqCst);
@@ -2491,10 +2578,7 @@ mod tests {
         );
         assert_eq!(
             items(true, LivePhase::Off),
-            vec![
-                ("stop", "Остановить запись", true),
-                ("cancel", "Отменить запись", true),
-            ]
+            vec![("stop", "Остановить и сохранить", true)]
         );
     }
 
@@ -2504,16 +2588,142 @@ mod tests {
             items(false, LivePhase::Starting),
             vec![
                 ("live-starting", "Ассистент запускается…", false),
-                ("live-stop", "Остановить запись", true),
+                ("live-stop", "Остановить и сохранить", true),
             ]
         );
         assert_eq!(
             items(false, LivePhase::Active),
-            vec![("live-stop", "Остановить запись", true)]
+            vec![("live-stop", "Остановить и сохранить", true)]
         );
         assert_eq!(
             items(false, LivePhase::Stopping),
-            vec![("live-stop", "Остановить запись", false)]
+            vec![("live-stop", "Остановить и сохранить", false)]
+        );
+    }
+
+    /// Меню строками: «—» — разделитель, «[x]»/«[ ]» — галочка, «(-)» —
+    /// недоступный пункт.
+    fn layout(state: &MenuState) -> Vec<String> {
+        menu_model(state)
+            .into_iter()
+            .map(|entry| match entry {
+                Entry::Item { text, enabled, .. } => {
+                    format!("{text}{}", if enabled { "" } else { " (-)" })
+                }
+                Entry::Check { text, checked, .. } => {
+                    format!("[{}] {text}", if checked { "x" } else { " " })
+                }
+                Entry::Separator => "—".to_string(),
+            })
+            .collect()
+    }
+
+    fn menu_of(recording: bool) -> MenuState {
+        MenuState {
+            online: true,
+            recording,
+            live: LivePhase::Off,
+            auto: true,
+            log: None,
+            restart: false,
+            quitting: false,
+        }
+    }
+
+    #[test]
+    fn cancel_is_separated_from_stop_and_sits_above_quit() {
+        assert_eq!(
+            layout(&menu_of(true)),
+            [
+                "Открыть",
+                "Остановить и сохранить",
+                "Импортировать файл…",
+                "[x] Автозапись",
+                "—",
+                "Отменить запись…",
+                "Выход",
+            ]
+        );
+        let ids: Vec<&str> = menu_model(&menu_of(true))
+            .iter()
+            .filter_map(|entry| match entry {
+                Entry::Item { id, .. } | Entry::Check { id, .. } => Some(*id),
+                Entry::Separator => None,
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            ["open", "stop", "import", "auto-off", "cancel", "quit"]
+        );
+    }
+
+    #[test]
+    fn idle_and_live_menus_have_no_cancel() {
+        assert_eq!(
+            layout(&menu_of(false)),
+            [
+                "Открыть",
+                "Начать запись",
+                "Начать запись с ассистентом",
+                "Импортировать файл…",
+                "[x] Автозапись",
+                "—",
+                "Выход",
+            ]
+        );
+        let mut live = menu_of(false);
+        live.live = LivePhase::Active;
+        assert!(!layout(&live)
+            .iter()
+            .any(|line| line.starts_with("Отменить")));
+    }
+
+    #[test]
+    fn service_items_stay_between_separator_and_quit() {
+        let mut failed = menu_of(false);
+        failed.online = false;
+        failed.auto = false;
+        failed.log = Some(PathBuf::from(r"C:\data\watch.log"));
+        failed.restart = true;
+        assert_eq!(
+            layout(&failed),
+            [
+                "Открыть",
+                "Начать запись (-)",
+                "Начать запись с ассистентом (-)",
+                "Импортировать файл… (-)",
+                "[ ] Автозапись",
+                "—",
+                "Открыть журнал",
+                "Перезапустить службу записи",
+                "Выход",
+            ]
+        );
+        let mut quitting = menu_of(true);
+        quitting.quitting = true;
+        assert!(menu_model(&quitting).iter().all(|entry| match entry {
+            Entry::Item { enabled, .. } | Entry::Check { enabled, .. } => !enabled,
+            Entry::Separator => true,
+        }));
+    }
+
+    #[test]
+    fn only_the_delete_button_cancels_the_recording() {
+        use rfd::MessageDialogResult as Answer;
+        assert!(cancel_confirmed_by(&Answer::Custom("Удалить".into())));
+        assert!(!cancel_confirmed_by(&Answer::Custom(
+            "Продолжить запись".into()
+        )));
+        assert!(!cancel_confirmed_by(&Answer::Cancel)); // Esc, крестик
+        assert!(!cancel_confirmed_by(&Answer::Ok));
+        assert_eq!(
+            CANCEL_QUESTION,
+            "Удалить текущую запись? Записанное не сохранится."
+        );
+        // Кнопка по умолчанию — первая: «Продолжить запись».
+        assert_eq!(
+            (CANCEL_KEEP, CANCEL_CONFIRM),
+            ("Продолжить запись", "Удалить")
         );
     }
 

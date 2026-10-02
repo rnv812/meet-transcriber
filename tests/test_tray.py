@@ -453,7 +453,7 @@ def test_manual_stop_during_a_call_does_not_restart_recording(monkeypatch, tmp_p
 
 
 def test_cancel_during_a_call_does_not_restart_recording(monkeypatch, tmp_path):
-    # иначе «Отменить (удалить)» удаляет папку, и через две секунды пишется заново
+    # иначе «Отменить запись…» удаляет папку, и через две секунды пишется заново
     app = _app(monkeypatch, tmp_path)
     app.recording = True
     app.source = tray.AUTO
@@ -723,6 +723,7 @@ def test_stale_command_dropped_on_every_startup(monkeypatch, tmp_path):
     fake = types.ModuleType("pystray")
     fake.Icon = _FakeIcon
     fake.Menu = lambda *items: None
+    fake.Menu.SEPARATOR = None
     fake.MenuItem = lambda *a, **k: None
     monkeypatch.setitem(sys.modules, "pystray", fake)
     tray.TrayApp(start_now=True).run()
@@ -884,3 +885,32 @@ def test_auto_stop_remembers_when_the_call_signal_ended(monkeypatch, tmp_path):
     monkeypatch.setattr(tray.time, "time", lambda: 50_000.0)
     app._auto_stop(now=1000.0)
     assert app.call_end_at == 49_400.0
+
+
+def test_cancel_from_the_menu_asks_first(monkeypatch, tmp_path):
+    """«Отменить запись…» спрашивает; «Нет» (по умолчанию) — запись идёт дальше."""
+    import types
+
+    app = _app(monkeypatch, tmp_path)
+    app.recording = True
+    app.source = tray.MANUAL
+    stopped = []
+    monkeypatch.setattr(app, "stop_recording", lambda **k: stopped.append(k))
+    answers = iter([False, True])
+    monkeypatch.setattr(tray, "_confirm_cancel", lambda: next(answers))
+    started = []
+    real_thread = threading.Thread
+
+    def run_now(target=None, **kw):
+        started.append(kw.get("name"))
+        thread = real_thread(target=target, **kw)
+        thread.start()
+        thread.join(5)
+        return types.SimpleNamespace(start=lambda: None)
+
+    monkeypatch.setattr(tray.threading, "Thread", run_now)
+    app._on_cancel_asked()
+    assert stopped == []
+    app._on_cancel_asked()
+    assert stopped == [{"discard": True}]
+    assert tray.CANCEL_QUESTION == "Удалить текущую запись? Записанное не сохранится."

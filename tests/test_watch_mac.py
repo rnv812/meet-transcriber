@@ -40,6 +40,11 @@ def test_windows_exe_names_map_to_mac_processes():
     assert watch.mac_match("Google Chrome", "chrome.exe")
     assert not watch.mac_match("Google Chromecast", "chrome.exe")
     assert not watch.mac_match("", "chrome.exe")
+    # Приложение Телемоста — не Яндекс Браузер, хотя оба начинаются с «Yandex».
+    assert watch.mac_match("Yandex", "browser.exe")
+    assert watch.mac_match("Yandex Helper (Renderer)", "browser.exe")
+    assert not watch.mac_match("Yandex Telemost", "browser.exe")
+    assert watch.mac_match("Yandex Telemost", "YandexTelemost.exe")
 
 
 def test_mic_and_playback_come_from_the_helper(mac):

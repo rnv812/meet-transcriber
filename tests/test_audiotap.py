@@ -309,15 +309,220 @@ def test_mac_session_records_both_tracks(mac_recorder, monkeypatch, tmp_path):
     assert "COM" not in log  # на macOS про COM не пишем
 
 
-def test_mac_session_without_screen_recording_permission_refuses_with_notice(
+def test_mac_session_without_screen_recording_permission_records_the_mic_only(
         mac_recorder, monkeypatch, tmp_path):
-    popen, _ = _popen_factory(b"", code=audiotap.EXIT_PERMISSION)
+    """Нет разрешения «Запись экрана»: запись не отменяется — микрофон пишется,
+    дорожка собеседников — тишина, в окне плашка, в meta.json — пометка."""
+    popen, calls = _popen_factory(b"", code=audiotap.EXIT_PERMISSION)
     monkeypatch.setattr(mac_audio, "_popen", popen)
-    s = recorder._Session(tmp_path, None, mic_device=None, output_device=None)
-    with pytest.raises(audiotap.TapError) as err:
-        s.start()
-    assert err.value.notice == audiotap.PERMISSION_NOTICE
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    s = recorder._Session(tmp_path, bus, mic_device=None, output_device=None)
+    s.start()
+    sys_track, mic_track = s.tracks
+    assert sys_track.missing and sys_track.stream is None
+    assert (sys_track.rate, sys_track.channels) == (48000, 1)
+    assert mic_track.stream is not None
+    missing = [e for e in seen if e.kind == events.RECORD_SYSTEM_AUDIO]
+    assert [e.data["state"] for e in missing] == ["missing"]
+    assert missing[0].data["permission"] is True
+    assert missing[0].data["notice"] == audiotap.SYSTEM_AUDIO_MISSING
+    assert json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))["system_audio"] == "missing"
+    from meet import library
+
+    assert library.read_meta(tmp_path)["system_audio"] == "missing"
+    # Ретрая помощника на каждом такте нет: он рвал бы и микрофон.
+    spawned = len(calls)
+    s.last_restart -= 100
+    s.tick()
+    assert len(calls) == spawned
+    FakeRawInputStream.instances[0].feed(_pcm(1024))
+    assert len(mic_track.writer.data) >= 2048
     s.close()
+    assert sys_track.writer.closed
+    log = (tmp_path / "record.log").read_text(encoding="utf-8")
+    assert "пишу только микрофон" in log
+
+
+def test_permission_granted_mid_meeting_restores_the_track(mac_recorder, monkeypatch, tmp_path):
+    denied, _ = _popen_factory(b"", code=audiotap.EXIT_PERMISSION)
+    monkeypatch.setattr(mac_audio, "_popen", denied)
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    s = recorder._Session(tmp_path, bus, mic_device=None, output_device=None)
+    s.start()
+    granted, _ = _popen_factory(HANDSHAKE + _pcm(100))
+    monkeypatch.setattr(mac_audio, "_popen", granted)
+    assert s.tracks[0].reopen(s.p) is True
+    assert not s.tracks[0].missing
+    states = [e.data["state"] for e in seen if e.kind == events.RECORD_SYSTEM_AUDIO]
+    assert states == ["missing", "restored"]
+    assert json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))["system_audio"] == "partial"
+    s.close()
+
+
+def test_missing_helper_also_records_the_mic_only(mac_recorder, monkeypatch, tmp_path):
+    monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(tmp_path / "нет"))
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    s = recorder._Session(tmp_path, bus, mic_device=None, output_device=None)
+    s.start()
+    event = next(e for e in seen if e.kind == events.RECORD_SYSTEM_AUDIO)
+    assert event.data["permission"] is False
+    assert event.data["notice"] == audiotap.MISSING_NOTICE
+    assert s.tracks[0].missing and s.tracks[1].stream is not None
+    s.close()
+
+
+def test_windows_track_failure_still_refuses(monkeypatch, tmp_path):
+    """Вне macOS отказ устройства — как раньше: исключение, записи нет."""
+    monkeypatch.setattr(recorder, "_MAC", False)
+    track = recorder._Track("sys.opus", lambda p: (_ for _ in ()).throw(RuntimeError("нет loopback")),
+                            0, tmp_path, lambda m: None)
+    with pytest.raises(RuntimeError):
+        track.first_open(object())
+    assert not track.missing
+
+
+def test_snapshot_shows_the_missing_system_audio_while_recording(monkeypatch, tmp_path):
+    from meet import tray, tray_control
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    control = tray_control.TrayControl(tray.TrayApp())
+    control.tray.recording = True
+    assert control.snapshot()["system_audio_missing"] is None
+    control.bus.emit(events.RECORD_SYSTEM_AUDIO, track="sys.opus", state="missing",
+                     notice=audiotap.SYSTEM_AUDIO_MISSING, permission=True)
+    assert control.snapshot()["system_audio_missing"] == {
+        "notice": audiotap.SYSTEM_AUDIO_MISSING, "permission": True}
+    control.bus.emit(events.RECORD_SYSTEM_AUDIO, track="sys.opus", state="restored")
+    assert control.snapshot()["system_audio_missing"] is None
+    control.bus.emit(events.RECORD_SYSTEM_AUDIO, track="sys.opus", state="missing",
+                     notice="x", permission=False)
+    control.bus.emit(events.RECORD_STOPPED, folder="x", duration_s=1.0)
+    assert control.snapshot()["system_audio_missing"] is None
+
+
+def test_library_describes_the_missing_system_audio(tmp_path):
+    from meet import library
+
+    folder = tmp_path / "2026-10-02_10-00"
+    folder.mkdir()
+    (folder / "mic.opus").write_bytes(b"")
+    (folder / "sys.opus").write_bytes(b"")
+    library.write_meta(folder, {"system_audio": "missing"})
+    assert library.describe(folder).to_raw()["system_audio"] == "missing"
+    library.write_meta(folder, {"system_audio": "что-то"})
+    assert library.describe(folder).to_raw()["system_audio"] is None
+
+
+# --- stderr помощника и зависание -------------------------------------------------
+
+FLOOD_HELPER = r"""
+import sys
+NL = chr(10)
+sys.stderr.write(("буфер звука не прочитан: ошибка формата" + NL) * 8000)  # ~400 КБ
+sys.stderr.flush()
+sys.stdout.buffer.write(b'{"meet_audiotap": 1, "rate": 48000, "channels": 1, "format": "s16le"}' + NL.encode())
+sys.stdout.buffer.write(bytes([16, 0]) * 4096)
+sys.stdout.buffer.flush()
+for _ in range(2000):
+    sys.stderr.write("буфер звука не прочитан: снова" + NL)
+sys.stderr.flush()
+sys.stdout.buffer.write(bytes([16, 0]) * 4096)
+sys.stdout.buffer.flush()
+sys.stdin.read()
+"""
+
+
+def test_helper_flooding_stderr_does_not_stall_the_audio():
+    """Настоящий процесс пишет в stderr больше, чем вмещает канал (64 КБ):
+    без чтения stderr он встал бы до рукопожатия и до звука."""
+    import subprocess
+
+    def popen(argv, **kwargs):
+        return subprocess.Popen([sys.executable, "-c", FLOOD_HELPER], **kwargs)
+
+    got = bytearray()
+    done = threading.Event()
+    lines = []
+
+    def callback(data, frames, _time, _status):
+        got.extend(data)
+        if len(got) >= 2 * 8192:
+            done.set()
+        return (None, mac_audio.paContinue)
+
+    stream = mac_audio.TapStream(48000, 1, callback, 1024, popen=popen,
+                                 helper="meet-audiotap", log=lines.append)
+    stream.start_stream()
+    try:
+        assert done.wait(20.0), "звук не дошёл: помощник встал на stderr"
+    finally:
+        stream.close()
+    deadline = time.monotonic() + 5.0
+    while stream.stderr_lines < 10000 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert stream.stderr_lines == 10000
+    assert len(stream.stderr_tail) == mac_audio.STDERR_TAIL
+    # В журнал записи — не на каждую строку: раз в STDERR_LOG_EVERY_S.
+    assert 1 <= len(lines) <= 3
+    assert lines[0].startswith("meet-audiotap: буфер звука не прочитан")
+
+
+class _BlockingOut:
+    """stdout живого, но зависшего помощника: рукопожатие, немного звука и
+    дальше ничего, пока поток не закроют."""
+
+    def __init__(self, first: bytes) -> None:
+        self._line = HANDSHAKE
+        self._first = first
+        self.closed = threading.Event()
+
+    def readline(self):
+        line, self._line = self._line, b""
+        return line
+
+    def read(self, size):
+        if self._first:
+            data, self._first = self._first[:size], self._first[size:]
+            return data
+        self.closed.wait(5.0)
+        return b""
+
+
+class _HungHelper(FakeHelper):
+    def __init__(self) -> None:
+        super().__init__(b"")
+        self.stdout = _BlockingOut(_pcm(1024))
+
+    def poll(self):
+        return 0 if self.killed or self.stdin.closed else None
+
+    def kill(self):
+        self.killed = True
+        self.stdout.closed.set()
+
+
+def test_hung_helper_is_reported_and_restarted(monkeypatch):
+    monkeypatch.setattr(mac_audio, "STALL_S", 0.2)
+    lines = []
+    helper = _HungHelper()
+    stream = mac_audio.TapStream(48000, 1, lambda *a: (None, mac_audio.paContinue), 1024,
+                                 popen=lambda argv, **kw: helper, helper="meet-audiotap",
+                                 log=lines.append)
+    stream.start_stream()
+    assert stream.is_active()
+    time.sleep(0.35)
+    assert stream.is_active() is False  # вотчдог записи перезапустит дорожку
+    assert stream.is_active() is False
+    assert stream.notice == audiotap.STALL_NOTICE
+    assert lines.count(audiotap.STALL_NOTICE) == 1
+    helper.stdout.closed.set()
+    stream.close()
 
 
 def test_mac_session_with_blackhole_needs_no_helper(mac_recorder, monkeypatch, tmp_path):

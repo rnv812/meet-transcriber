@@ -2114,6 +2114,7 @@ dependencies = [
  "libc",
  "native-tls",
  "portable-pty",
+ "rfd",
  "serde",
  "serde_json",
  "sha2",
