@@ -369,12 +369,17 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
     выходе; `provider` — имя провайдера вместо `llm.resolve(cfg)`;
     `knowledge_dir` — база знаний на чтение для вопросов и дайджеста;
     `parent_pid` — резидент: умер он — штатная остановка, как по /stop."""
+    from meet import tempdirs
+
     endpoint = Path(endpoint_file) if endpoint_file else None
     try:
-        _run_assist(out_root, window_seconds, hotwords, task, vault, port,
-                    no_voices, open_browser=open_browser, endpoint=endpoint,
-                    provider=provider, cfg=cfg, knowledge_dir=knowledge_dir,
-                    parent_pid=parent_pid)
+        # Свой корень временных файлов (окна GigaAM, ответы Codex): удаляется
+        # при выходе, а убитого ассистента дочищает резидент (по pid).
+        with tempdirs.own_root():
+            _run_assist(out_root, window_seconds, hotwords, task, vault, port,
+                        no_voices, open_browser=open_browser, endpoint=endpoint,
+                        provider=provider, cfg=cfg, knowledge_dir=knowledge_dir,
+                        parent_pid=parent_pid)
     finally:
         remove_endpoint(endpoint)
 

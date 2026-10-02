@@ -226,6 +226,27 @@ def test_transcribe_feeds_chunks_and_returns_segments(tmp_path):
     assert [s.text for s in segs][:2] == ["Кусок 1.", "Кусок 2."]
 
 
+def test_each_chunk_is_deleted_right_after_recognition(tmp_path):
+    """Звук встречи не копится во временной папке: на диске — только кусок,
+    который распознаётся сейчас; папка — с pid в имени (её найдёт уборка)."""
+    from meet import tempdirs
+
+    wav = _write_wav(tmp_path / "a.wav", _speech(50.0, pauses=(18.0, 36.0)))
+    seen = []
+
+    class Watching(FakeModel):
+        def transcribe(self, wav_file, word_timestamps=False):
+            here = Path(wav_file).parent
+            seen.append((here, sorted(p.name for p in here.iterdir())))
+            return super().transcribe(wav_file, word_timestamps)
+
+    g.transcribe(wav, regions=[(2.0, 50.0)], model=Watching())
+    assert len(seen) >= 2
+    assert all(len(files) == 1 for _name, files in seen)
+    assert seen[0][0].name.startswith(tempdirs.prefix("gigaam-"))
+    assert not seen[0][0].exists()
+
+
 def test_transcribe_loads_model_into_app_models_dir(tmp_path, monkeypatch):
     data = tmp_path / "data"
     monkeypatch.setenv("MEET_DATA_DIR", str(data))

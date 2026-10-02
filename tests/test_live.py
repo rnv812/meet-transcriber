@@ -435,6 +435,19 @@ def test_partial_start_failure_releases_lock(tmp_path, monkeypatch):
     engine.stop()  # повторная уборка после сбоя безопасна
 
 
+def test_partial_start_failure_unloads_the_model(tmp_path, monkeypatch):
+    """Модель загрузилась, а устройство не открылось: модель выгружается
+    (и временная папка окон GigaAM удаляется), а не висит до конца процесса."""
+    _fake_audio(monkeypatch)
+    spy = _LoadSpy()
+    monkeypatch.setattr(recorder, "_find_loopback", lambda p: (_ for _ in ()).throw(OSError("нет устройства")))
+    engine = LiveEngine(tmp_path / "2026-10-01_10-00", spy, speaker_name="Вы")
+    with pytest.raises(BaseException):
+        engine.start()
+    assert spy.loaded and spy.unloaded
+    assert not (tmp_path / recorder.LOCK_NAME).exists()
+
+
 def test_meeting_folder_appears_only_after_models_load(tmp_path, monkeypatch):
     """Остановка во время загрузки модели (резидент убивает ребёнка, пока
     порта ещё нет) не должна оставлять пустую датированную папку."""

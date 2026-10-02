@@ -364,14 +364,16 @@ META_FILE_LOCK_WAIT_S = 5.0
 
 def _meta_lock_path(folder: Path) -> Path:
     import hashlib
-    import tempfile
+
+    from meet import tempdirs
 
     try:
         key = os.path.normcase(str(Path(folder).resolve()))
     except OSError:
         key = os.path.normcase(str(folder))
     digest = hashlib.sha1(key.encode("utf-8", "surrogatepass")).hexdigest()[:20]
-    return Path(tempfile.gettempdir()) / "meet-meta-locks" / f"{digest}.lock"
+    # Общая временная папка, а не своя у задачи: замок делят процессы (meet.tempdirs).
+    return tempdirs.system_temp() / "meet-meta-locks" / f"{digest}.lock"
 
 
 @contextmanager

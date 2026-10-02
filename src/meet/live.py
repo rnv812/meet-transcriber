@@ -480,8 +480,14 @@ class LiveEngine:
         try:
             self._start_capture()
         except BaseException:
-            # Частичный старт: закрыть то, что успело открыться, и отдать lock.
+            # Частичный старт: закрыть то, что успело открыться, и отдать lock;
+            # модель распознавания — выгрузить (и её временную папку удалить).
             self._close_capture()
+            if self._transcriber is not None:
+                try:
+                    self._transcriber.unload()
+                except Exception:
+                    pass
             self._release_lock()
             raise
 

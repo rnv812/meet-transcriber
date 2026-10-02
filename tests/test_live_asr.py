@@ -8,7 +8,7 @@ import wave
 import numpy as np
 import pytest
 
-from meet import asr, gigaam_asr, live_asr, settings
+from meet import asr, gigaam_asr, live_asr, settings, tempdirs
 from meet.live_asr import GIGAAM_POLICY, GigaamLive, pick
 
 SR = 16000
@@ -164,12 +164,24 @@ def test_load_failure_falls_back_to_whisper(monkeypatch):
 def test_three_failed_windows_switch_to_whisper():
     g = _live(model=FakeModel(fail=3))
     g.load()
+    tmp = g._tmp
     audio = np.full(SR, 0.1, dtype=np.float32)
     for _ in range(3):
         with pytest.raises(RuntimeError):
             g.transcribe_window(audio)
     assert g.name == "Whisper" and g.made and g.made[0].loaded
+    assert not tmp.exists()  # папка окон GigaAM больше не нужна
     assert g.transcribe_window(audio, offset_s=7.0)[0].text == "whisper"
+    g.unload()
+
+
+def test_live_temp_folder_carries_the_pid_for_the_sweep():
+    g = _live(model=FakeModel())
+    g.load()
+    try:
+        assert g._tmp.name.startswith(tempdirs.prefix("live-gigaam-"))
+    finally:
+        g.unload()
 
 
 def test_one_failure_does_not_switch():

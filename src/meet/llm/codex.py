@@ -14,7 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from meet import netproxy
+from meet import netproxy, tempdirs
 from meet.llm.base import EMPTY_ERROR, TIMEOUT_ERROR, AgentReply, drop_session_markers
 from meet.llm.detect import find_codex
 
@@ -46,13 +46,15 @@ def _workdir(allowed_dirs, cwd) -> str:
         return str(cwd)
     if allowed_dirs and allowed_dirs[0] and Path(allowed_dirs[0]).is_dir():
         return str(allowed_dirs[0])
-    return tempfile.gettempdir()
+    return str(tempdirs.system_temp())
 
 
 def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
           env: dict | None = None, effort: str | None = None) -> AgentReply:
     # ignore_cleanup_errors: убитый по таймауту Codex может ещё держать файл.
-    with tempfile.TemporaryDirectory(prefix="meet-codex-",
+    # Папка с pid в имени (meet.tempdirs): процесс убили посреди ответа — файл
+    # с ответом модели о встрече удалит резидент.
+    with tempfile.TemporaryDirectory(prefix=tempdirs.prefix("codex-"),
                                      ignore_cleanup_errors=True) as tmp:
         out_file = Path(tmp) / "last-message.txt"
         cmd = [
