@@ -13,14 +13,17 @@ html, body { background: transparent; }
   overflow: hidden;
 }
 
+/* Шапка — место, за которое окно таскают (`headPress`); двойной щелчок по
+   ней — на весь экран. */
 .live-head { display: flex; align-items: center; gap: 8px; min-height: 28px; user-select: none; }
 .live-head__title {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
   color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.live-head__actions { display: flex; gap: 6px; flex: none; }
-/* Ширина окна 360: заголовок и две кнопки должны влезть в одну строку. */
+.live-head__actions { display: flex; align-items: center; gap: 4px; flex: none; }
+/* Ширина окна от 300: заголовок сжимается, кнопки остаются в одну строку. */
 .live-head .btn { padding: 0 8px; }
+.live-head__pin[aria-pressed="true"] { color: var(--accent-hover); }
 
 .live-panel__error { color: var(--err); font-size: 12px; }
 .live-panel__note { font-size: 12px; }
@@ -31,7 +34,36 @@ html, body { background: transparent; }
   color: var(--text); line-height: 1.45;
 }
 
-/* Развёрнутая: дайджест и поле — по содержимому, лента — всё остальное. */
+/* На весь экран: рабочая область целиком, скругления ни к чему. */
+.live-panel--maximized { border-radius: 0; }
+
+/* Развёрнутая, узкая: дайджест сверху, лента — всё свободное место, вопросы
+   снизу. Дайджест и ответ берут долю высоты окна (vh — это окно панели) и
+   прокручиваются сами, поэтому в высоком окне видно больше, а лента не
+   сжимается в щель. */
 .live-panel__body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
-.live-panel__body .live-digest .md { max-height: 140px; overflow-y: auto; }
-.live-panel__feed { flex: 1; min-height: 0; }
+.live-panel__feed { flex: 1; min-height: 64px; }
+.live-panel__side { display: contents; }
+.live-panel__side .live-digest { order: -1; flex: none; }
+.live-panel__side .live-ask { flex: none; }
+.live-panel__body .live-digest .md { max-height: 25vh; overflow-y: auto; }
+.live-panel__body .live-ask__reply { max-height: 35vh; }
+
+/* Широкая (от 720): лента слева во всю высоту, справа дайджест и вопросы;
+   ответ занимает остаток правой колонки. */
+@media (min-width: 720px) {
+  .live-panel__body {
+    display: grid; gap: 12px;
+    grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .live-panel__feed { min-height: 0; }
+  .live-panel__side {
+    display: flex; flex-direction: column; gap: 8px; min-height: 0;
+    padding-left: 12px; border-left: 1px solid var(--line);
+  }
+  .live-panel__side .live-digest { order: 0; }
+  .live-panel__body .live-digest .md { max-height: 40vh; }
+  .live-panel__side .live-ask { flex: 1; min-height: 0; }
+  .live-panel__body .live-ask__reply { flex: 1; min-height: 0; max-height: none; }
+}

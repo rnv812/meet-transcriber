@@ -26,6 +26,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 
 use crate::api::{self, Client};
+use crate::live_panel;
 use crate::logs::shell_log;
 use crate::resident::{self, lock, ResidentStatus, Supervisor};
 use crate::upgrade;
@@ -1249,11 +1250,11 @@ fn poll_loop(app: &AppHandle, initial_menu: MenuState) {
             match live_window_change(live_shown, view.live.active) {
                 Some(true) => {
                     let handle = app.clone();
-                    let _ = app.run_on_main_thread(move || windows::open_live(&handle));
+                    let _ = app.run_on_main_thread(move || live_panel::open_live(&handle));
                 }
                 Some(false) => {
                     let handle = app.clone();
-                    let _ = app.run_on_main_thread(move || windows::close_live(&handle));
+                    let _ = app.run_on_main_thread(move || live_panel::close_live(&handle));
                 }
                 None => {}
             }

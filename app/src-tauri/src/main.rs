@@ -14,6 +14,7 @@ mod api;
 mod autostart;
 mod engine;
 mod install_wait;
+mod live_panel;
 mod logs;
 mod netproxy;
 mod pty;
@@ -63,12 +64,15 @@ fn main() {
                 .build(),
         )
         .plugin(
-            // Панель ассистента встаёт в угол по монитору при каждом старте:
-            // сохранённая позиция и размер ей не нужны.
+            // Геометрию панели ассистента оболочка ведёт сама
+            // (`live_panel.rs`, `live_window.json`): ей нужна ещё высота
+            // развёрнутой панели и «поверх всех окон», а позиция с
+            // отключённого монитора — в угол.
             tauri_plugin_window_state::Builder::default()
-                .with_denylist(&[windows::LIVE_LABEL])
+                .with_denylist(&[live_panel::LIVE_LABEL])
                 .build(),
         )
+        .manage(live_panel::LivePanel::default())
         .invoke_handler(tauri::generate_handler![
             windows::endpoint,
             windows::open_folder,
@@ -76,7 +80,12 @@ fn main() {
             windows::pick_media,
             windows::pick_folder,
             windows::resident_status,
-            windows::live_resize,
+            // Плавающая панель ассистента: вид, размер, перетаскивание.
+            live_panel::live_window_state,
+            live_panel::live_set_expanded,
+            live_panel::live_set_maximized,
+            live_panel::live_set_pinned,
+            live_panel::live_start_drag,
             // Мастер первого запуска: движок расшифровки, страницы HF.
             engine::engine_status,
             engine::install_engine,
@@ -104,6 +113,8 @@ fn main() {
             if window.label() == "main" && matches!(event, WindowEvent::Destroyed) {
                 pty::kill_all();
             }
+            // Панель ассистента запоминает, где и какого размера её оставили.
+            live_panel::on_window_event(window, event);
         })
         .on_page_load(|webview, payload| {
             if webview.label() == "main"
