@@ -12,7 +12,7 @@ from conftest import _agent_program
 @pytest.mark.parametrize("args,hit", [
     (["C:/Users/u/.local/bin/claude.exe", "-p"], True),
     (["claude", "--version"], True),
-    ('"C:\Program Files\codex\codex.exe" exec -', True),
+    (r'"C:\Program Files\codex\codex.exe" exec -', True),
     (["node", "C:/npm/node_modules/@anthropic-ai/claude-code/cli.js"], True),
     ([sys.executable, "tests/fake_claude_stream.py"], False),
     (["ffmpeg", "-i", "x"], False),

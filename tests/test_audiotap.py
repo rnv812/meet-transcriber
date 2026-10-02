@@ -654,6 +654,10 @@ def test_transient_start_failure_is_retried_with_backoff(mac_recorder, monkeypat
     помощник пробуется снова через 2, 4 … с; карточка не винит разрешение."""
     monkeypatch.setattr(mac_audio, "HANDSHAKE_TIMEOUT_S", 0.2)
     monkeypatch.setattr(audiotap, "preflight", lambda: pytest.fail("preflight не нужен"))
+    # Время следующей попытки считается от разных точек (до или после рукопожатия)
+    # — проверяем, что оно между «до вызова + пауза» и «после вызова + пауза»:
+    # под нагрузкой рукопожатие и убийство помощника идут дольше.
+    t0 = time.monotonic()
     s, seen = _start(mac_recorder, monkeypatch, tmp_path, _failed_start(kind))
     tap, mic = s.tracks
     assert tap.missing and tap.missing_reason == audiotap.KIND_FAILED
@@ -662,12 +666,14 @@ def test_transient_start_failure_is_retried_with_backoff(mac_recorder, monkeypat
     assert event["notice"] == audiotap.FAILED_NOTICE
     assert _meta(tmp_path)["system_audio"] == "missing"
     assert _meta(tmp_path)["system_audio_reason"] == "failed"
-    assert s.tap_next - time.monotonic() == pytest.approx(recorder.TAP_RETRY_MIN_S, abs=0.5)
+    pause = recorder.TAP_RETRY_MIN_S
+    assert t0 + pause - 0.1 <= s.tap_next <= time.monotonic() + pause + 0.1
     # Рано — помощник не трогаем; потом — снова неудача, пауза удваивается.
     s.tick()
     s.tap_next = 0.0
+    t1 = time.monotonic()
     s.tick()
-    assert s.tap_next - time.monotonic() == pytest.approx(2 * recorder.TAP_RETRY_MIN_S, abs=0.5)
+    assert t1 + 2 * pause - 0.1 <= s.tap_next <= time.monotonic() + 2 * pause + 0.1
     assert len(_missing(seen)) == 1  # та же причина — без новой плашки
     # Помощник ожил: звук собеседников вернулся, микрофон не перезапускался.
     good, _ = _alive_popen()

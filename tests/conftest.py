@@ -12,6 +12,10 @@
   из него токен. Тесты, которым нужна своя папка, переопределяют одно из двух.
   На macOS папка данных — от `HOME` (`~/Library/Application Support/meet`),
   поэтому там во временную папку указывает и `HOME`.
+
+Временная папка системы (`tempfile`, TMP/TEMP) на всю сессию — своя папка
+внутри basetemp pytest: замки meta.json, папки задач и живого режима не
+копятся в настоящем %TEMP% разработчика.
 """
 
 import sys
@@ -42,6 +46,23 @@ def _memory_backend():
             del self.store[(service, username)]
 
     return Memory()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolated_temp(tmp_path_factory):
+    import tempfile
+
+    root = tmp_path_factory.mktemp("tmproot")  # basetemp уже выбран от настоящего %TEMP%
+    saved = tempfile.tempdir
+    with pytest.MonkeyPatch.context() as mp:
+        for name in ("TMP", "TEMP", "TMPDIR"):
+            mp.setenv(name, str(root))
+        mp.delenv("MEET_SYSTEM_TEMP", raising=False)
+        tempfile.tempdir = str(root)
+        try:
+            yield root
+        finally:
+            tempfile.tempdir = saved
 
 
 @pytest.fixture(autouse=True)
