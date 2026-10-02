@@ -12,10 +12,18 @@
 import argparse
 import json
 import sys
+import threading
+
+# Строки пишут и основной поток, и опрос размера файлов (ByteWatch): одна
+# строка JSON — одна запись под замком, иначе строки перемешаются.
+_EMIT_LOCK = threading.Lock()
 
 
 def _emit(payload: dict) -> None:
-    print(json.dumps(payload, ensure_ascii=False), flush=True)
+    line = json.dumps(payload, ensure_ascii=False) + "\n"
+    with _EMIT_LOCK:
+        sys.stdout.write(line)
+        sys.stdout.flush()
 
 
 def _apply_hf_token() -> None:
@@ -277,12 +285,18 @@ def _install_engine(flavor: str | None) -> int:
 class ByteWatch:
     """Ход загрузки в байтах: загрузчики (huggingface_hub, GigaAM) своего хода
     не отдают, зато файлы растут на диске — их размер и опрашиваем. Событие —
-    не чаще раза в `interval` секунд и только если размер изменился."""
+    не чаще раза в `interval` секунд и только если размер изменился.
 
-    def __init__(self, measure, total: int | None, report, interval: float = 0.5) -> None:
+    `cap` — выше этого опрос не показывает: полная шкала значит «готово», а
+    это известно, только когда загрузчик вернул управление (размер мог быть
+    оценкой из каталога)."""
+
+    def __init__(self, measure, total: int | None, report, interval: float = 0.5,
+                 cap: int | None = None) -> None:
         import threading
 
         self.measure, self.total, self.report, self.interval = measure, total, report, interval
+        self.cap = cap if cap is not None else total
         self._stop = threading.Event()
         self._last: int | None = None
         self._thread = threading.Thread(target=self._loop, name="meet-bytes", daemon=True)
@@ -292,8 +306,8 @@ class ByteWatch:
             done = int(self.measure())
         except Exception:
             return
-        if self.total:
-            done = min(done, self.total)
+        if self.cap:
+            done = min(done, self.cap)
         if done != self._last:
             self._last = done
             self.report(done, self.total)
@@ -331,11 +345,20 @@ def _download_model(repo_id: str) -> int:
                      total=total, step=1, steps=1,
                      fraction=round(done / total, 4) if total else None)
 
-    with ByteWatch(lambda: models.size_on_disk(repo_id), models.download_total(repo_id), report):
+    # Шкала — прирост от того, что уже лежит на диске: «Обновить» скачанную
+    # модель не показывает полную полоску с первой секунды. Докачивать нечего
+    # (или размер — заниженная оценка) — «неизвестно», бегущий блик.
+    start = models.size_on_disk(repo_id)
+    full = models.download_total(repo_id)
+    need = full - start if full and full > start else None
+    with ByteWatch(lambda: max(0, models.size_on_disk(repo_id) - start), need, report,
+                   cap=int(need * 0.99) if need else None):
         code = models.download(repo_id, on_line=say)
     if code != 0:
         _emit({"kind": "error", "text": lines[-1] if lines else "не скачалось"})
         return code
+    if need:
+        report(need, need)  # загрузчик вернул управление — теперь полная шкала честна
     _emit({"kind": "job.result", "path": repo_id})
     return 0
 

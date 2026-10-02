@@ -131,23 +131,24 @@ def test_hook_is_passed_only_to_pipelines_that_take_it():
     assert _takes_hook(New()) and not _takes_hook(Old())
 
 
-def test_byte_watch_reports_growth_and_caps_at_total():
+def test_byte_watch_reports_growth_and_caps_below_full():
     from meet.job_worker import ByteWatch
 
     sizes = iter([0, 0, 500, 1500])
     got = []
-    watch = ByteWatch(lambda: next(sizes), 1000, lambda done, total: got.append((done, total)), interval=60)
+    watch = ByteWatch(lambda: next(sizes), 1000, lambda done, total: got.append((done, total)), interval=60,
+                      cap=990)
     watch.tick()
     watch.tick()  # не изменилось — не событие
     watch.tick()
     watch.tick()
-    assert got == [(0, 1000), (500, 1000), (1000, 1000)]
+    assert got == [(0, 1000), (500, 1000), (990, 1000)]  # полная — только после загрузчика
 
 
 def test_download_model_job_emits_byte_progress(monkeypatch, capsys):
     from meet import job_worker, models
 
-    sizes = iter([0, 400, 1000, 1000, 1000, 1000])
+    sizes = iter([0, 0, 400, 1000, 1000, 1000, 1000])
     monkeypatch.setattr(models, "size_on_disk", lambda repo: next(sizes, 1000))
     monkeypatch.setattr(models, "download_total", lambda repo: 1000)
 
@@ -157,7 +158,7 @@ def test_download_model_job_emits_byte_progress(monkeypatch, capsys):
 
     monkeypatch.setattr(models, "download", fake_download)
     monkeypatch.setattr(job_worker.ByteWatch, "__init__",
-                        lambda self, m, t, r, interval=0.5, _orig=job_worker.ByteWatch.__init__: _orig(self, m, t, r, 0.01))
+                        lambda self, m, t, r, interval=0.5, cap=None, _orig=job_worker.ByteWatch.__init__: _orig(self, m, t, r, 0.01, cap))
     assert job_worker._download_model("Systran/faster-whisper-small") == 0
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
     progress = [x for x in lines if x["kind"] == "progress"]
@@ -165,7 +166,41 @@ def test_download_model_job_emits_byte_progress(monkeypatch, capsys):
     measured = [x for x in progress if x.get("total") == 1000]
     assert measured[0]["done"] == 0 and measured[-1]["done"] == 1000
     assert measured[-1]["fraction"] == 1.0
+    assert all(x["done"] <= 990 for x in measured[:-1])  # 100 % — только когда загрузка завершилась
     assert [x["done"] for x in measured] == sorted(x["done"] for x in measured)
+
+
+def test_update_of_a_downloaded_model_counts_growth_not_what_is_on_disk(monkeypatch, capsys):
+    """«Обновить» скачанную модель: на диске уже всё — шкала не стоит полной,
+    а показывает «неизвестно» (докачивать по оценке нечего)."""
+    from meet import job_worker, models
+
+    monkeypatch.setattr(models, "size_on_disk", lambda repo: 1000)
+    monkeypatch.setattr(models, "download_total", lambda repo: 1000)
+    monkeypatch.setattr(models, "download", lambda repo, on_line=None: 0)
+    assert job_worker._download_model("Systran/faster-whisper-small") == 0
+    lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    progress = [x for x in lines if x["kind"] == "progress"]
+    assert all(x.get("total") is None and x.get("fraction") is None for x in progress)
+
+
+def test_emit_writes_whole_lines_from_several_threads(capsys):
+    import threading
+
+    from meet import job_worker
+
+    def burst(k):
+        for i in range(200):
+            job_worker._emit({"kind": "log", "text": f"{k}-{i}-" + "ж" * 50})
+
+    threads = [threading.Thread(target=burst, args=(k,)) for k in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    out = capsys.readouterr().out.splitlines()
+    assert len(out) == 800
+    assert all(json.loads(x)["kind"] == "log" for x in out)
 
 
 def test_download_total_gigaam_and_catalogue_fallback(monkeypatch):
@@ -199,3 +234,18 @@ def test_queue_keeps_step_fields_of_the_job(tmp_path):
         queue.stop()
     raw = queue.get(job.id).to_raw()
     assert (raw["step"], raw["steps"], raw["fraction"], raw["estimate_s"]) == (4, 6, 0.62, 300.0)
+
+
+def test_cli_prints_step_starts_and_the_final_line_only(capsys):
+    from meet.cli_library import _progress_printer
+
+    emit = _progress_printer([])
+    bus, _ = _bus()
+    bus.subscribe(lambda e: emit(e.to_dict()))
+    st = Stages(bus, [Step("asr", "asr", 1, measured=True), Step("render", "render", 1)], clock=lambda: 0.0)
+    st.begin("asr")
+    st.update(0.5)
+    st.begin("render")
+    st.finish(note="C:/rec/x_transcript.md")
+    err = capsys.readouterr().err.splitlines()
+    assert err == ["распознавание", "сборка транскрипта", "сборка транскрипта · C:/rec/x_transcript.md"]

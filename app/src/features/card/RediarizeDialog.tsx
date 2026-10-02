@@ -276,19 +276,20 @@ export function RediarizeDialog({
             <p className="muted redia__hint">
               Имена переходят к новым спикерам по сходству голоса; правки отдельных реплик сохраняются, если голос их спикера узнан. Изменение можно отменить в панели «Спикеры».
             </p>
-            {askDiscard ? (
+            {askDiscard && (
               <ConfirmDialog inline title={askDiscard === "again" ? "Посчитать с другими параметрами?" : "Отказаться от результата?"}
                 message="Посчитанное разделение будет удалено — чтобы получить его снова, расчёт придётся повторить."
                 confirmLabel={askDiscard === "again" ? "Удалить и задать параметры" : "Отказаться"}
                 onCancel={() => setAskDiscard(null)}
                 onConfirm={() => { const again = askDiscard === "again"; setAskDiscard(null); void discard(again); }} />
-            ) : (
-              <div className="redia__actions">
-                <Button onClick={() => setAskDiscard("again")} disabled={busy}>Другие параметры…</Button>
-                <Button onClick={() => setAskDiscard("close")} disabled={busy}>Отказаться…</Button>
-                <Button variant="primary" onClick={() => void apply()} disabled={busy || phase.preview.stale}>Применить</Button>
-              </div>
             )}
+            {/* Кнопки остаются на месте: после «Отмена» фокус вернётся на них. */}
+            <div className="redia__actions">
+              <Button onClick={() => setAskDiscard("again")} disabled={busy}>Другие параметры…</Button>
+              <Button onClick={() => setAskDiscard("close")} disabled={busy}>Отказаться…</Button>
+              <Button variant="primary" onClick={() => void apply()}
+                disabled={busy || phase.preview.stale}>Применить</Button>
+            </div>
           </div>
         )}
       </div>

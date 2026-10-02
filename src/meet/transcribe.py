@@ -223,6 +223,40 @@ def _diarize(wav: Path, speakers, overlap: bool, run: "_Run"):
                                                     on_progress=run.part))
 
 
+def _align_planned(align: bool) -> bool:
+    """Будет ли шаг выравнивания — решается до первого события хода, по
+    настройкам и без звука, тем же правилом, что asr.choose + _align_enabled:
+    после GigaAM выравнивание не нужно (если не включено align_after_gigaam).
+    Язык «auto» (движок выберет детектор по звуку) или сбой чтения настроек —
+    шаг остаётся в плане; оказался не нужен — пропускается (`Stages.skip`)."""
+    if not align:
+        return False
+    try:
+        from meet import gigaam_asr, settings
+
+        cfg = settings.load().asr
+        if (cfg.language or asr.DEFAULT_LANGUAGE).strip().lower() == asr.AUTO_LANGUAGE:
+            return True
+        if cfg.backend_for(asr.resolve_device()) != "gigaam" or not gigaam_asr.installed():
+            return True
+        return bool(cfg.align_after_gigaam)
+    except Exception:
+        return True
+
+
+def _settle_align(align: bool, run: "_Run", stages: Stages) -> bool:
+    """После распознавания: нужно ли выравнивание на самом деле (движок мог
+    смениться — GigaAM не загрузилась, язык не русский). Шаг в плане — начать
+    или пропустить; шага нет, а выравнивание всё же нужно — оно идёт внутри
+    текущего этапа, без нового номера."""
+    align = _align_enabled(align, run)
+    if align and stages.has("align"):
+        stages.begin("align")
+    elif stages.has("align"):
+        stages.skip("align")
+    return align
+
+
 def _single_plan(align: bool) -> list[Step]:
     """Шаги расшифровки одной дорожки (импорт, файл)."""
     steps = [
@@ -568,7 +602,7 @@ def _transcribe_single(
 ):
     bus = bus if bus is not None else events.EventBus()
     run = run if run is not None else _Run(bus=bus)
-    stages = run.stages = Stages(bus, _single_plan(align))
+    stages = run.stages = Stages(bus, _single_plan(_align_planned(align)))
     with temp_dir() as td:
         stages.begin("convert")
         wav = to_wav16k(src, Path(td) / "audio16.wav")
@@ -576,16 +610,12 @@ def _transcribe_single(
         stages.begin("asr")
         segments = _recognize(wav, hotwords, run)
         stages.update(1)
-        align = _align_enabled(align, run)
-        if align:
-            stages.begin("align")
-        else:
-            stages.drop("align")
+        align = _settle_align(align, run, stages)
         segments = _fix_terms(run.timed("align", lambda: _maybe_align(segments, wav, align)), run)
         stages.begin("diarize")
         diar = _diarize(wav, speakers, overlap, run)
         if diar.skipped:
-            stages.drop("voices")
+            stages.skip("voices")
             stages.note(_SKIPPED_NOTES.get(diar.skipped))
             for seg in segments:
                 seg.speaker = INTERLOCUTOR
@@ -612,7 +642,7 @@ def _transcribe_two_track(
     sys_src, mic_src = _find_track(folder, "sys"), _find_track(folder, "mic")
     if not (sys_src and mic_src):
         raise SystemExit(f"В {folder} нет дорожек sys/mic")
-    stages = run.stages = Stages(bus, _two_track_plan(align))
+    stages = run.stages = Stages(bus, _two_track_plan(_align_planned(align)))
     with temp_dir() as td:
         stages.begin("convert")
         sys_wav = to_wav16k(sys_src, Path(td) / "sys16.wav", normalize=True)
@@ -623,16 +653,12 @@ def _transcribe_two_track(
         sys_segs = _recognize(sys_wav, hotwords, run)
         stages.update(1)
         # forced alignment только для sys: mic — один спикер («Вы»), стыки не важны
-        align = _align_enabled(align, run)
-        if align:
-            stages.begin("align")
-        else:
-            stages.drop("align")
+        align = _settle_align(align, run, stages)
         sys_segs = _fix_terms(run.timed("align", lambda: _maybe_align(sys_segs, sys_wav, align)), run)
         stages.begin("diarize")
         diar = _diarize(sys_wav, speakers, overlap, run)
         if diar.skipped:
-            stages.drop("voices")
+            stages.skip("voices")
             stages.note(_SKIPPED_NOTES.get(diar.skipped))
             name_map = {}
             for seg in sys_segs:

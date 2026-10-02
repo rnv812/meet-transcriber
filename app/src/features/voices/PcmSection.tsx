@@ -9,6 +9,7 @@
 import type { Pcm, Profile } from "../../lib/types";
 import { floorsText, PCM_FLOOR_MAX, PCM_HYPOTHESIS, PCM_LABELS, pcmFloors, pcmLabel, percent } from "../../lib/pcm";
 import { HideButton, RefChips, type OpenAt as Open } from "./RefChips";
+import { Truncate } from "../../ui/Truncate";
 import "./pcm.css";
 
 /** «Этажи»: шесть строк, база — нижняя, полоса 0–5, отмечены база и фаза. */
@@ -20,9 +21,9 @@ export function PcmFloors({ pcm }: { pcm: Pcm }) {
       {[...floors].reverse().map((f) => (
         <div key={f.type} aria-hidden="true" data-type={f.type}
           className={`pcm-floor${f.base ? " pcm-floor--base" : ""}${f.phase ? " pcm-floor--phase" : ""}`}>
-          <span className="pcm-floor__name">
+          <Truncate className="pcm-floor__name" text={`${PCM_LABELS[f.type].ru} (${PCM_LABELS[f.type].en})`}>
             {PCM_LABELS[f.type].ru} <span className="pcm-floor__en">({PCM_LABELS[f.type].en})</span>
-          </span>
+          </Truncate>
           <span className="pcm-floor__bar">
             {Array.from({ length: PCM_FLOOR_MAX }, (_, k) => (
               <span key={k} className={`pcm-floor__cell${k < f.value ? " pcm-floor__cell--on" : ""}`} />

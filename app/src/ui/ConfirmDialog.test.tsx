@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ConfirmDialog, useConfirm } from "./ConfirmDialog";
 
 const base = { title: "Удалить запись?", message: "Звук и расшифровка будут удалены.", confirmLabel: "Удалить" };
@@ -87,6 +87,62 @@ test("inline variant: no backdrop, Esc inside cancels, safe button focused", () 
   expect(screen.getByRole("button", { name: "Отмена" })).toHaveFocus();
   fireEvent.keyDown(dialog, { key: "Escape" });
   expect(onCancel).toHaveBeenCalledTimes(1);
+});
+
+test("modal: the rest of the page is inert while it is open, focus can rest on the box itself", () => {
+  const outside = document.createElement("div");
+  outside.innerHTML = "<button>за окном</button>";
+  document.body.appendChild(outside);
+  const already = document.createElement("div");
+  already.setAttribute("inert", "");
+  document.body.appendChild(already);
+  try {
+    const { unmount } = render(<ConfirmDialog {...base} onConfirm={() => {}} onCancel={() => {}} />);
+    expect(outside).toHaveAttribute("inert");
+    expect(document.querySelector(".confirm-backdrop")).not.toHaveAttribute("inert");
+    expect(screen.getByRole("alertdialog")).toHaveAttribute("tabindex", "-1");
+    unmount();
+    expect(outside).not.toHaveAttribute("inert");
+    expect(already).toHaveAttribute("inert"); // чужой inert не трогаем
+  } finally {
+    outside.remove();
+    already.remove();
+  }
+});
+
+test("focus returns after an inline confirm and to returnFocus when the opener is gone", async () => {
+  function Host() {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>Удалить модель…</button>
+        {open && <ConfirmDialog {...base} inline onConfirm={() => setOpen(false)} onCancel={() => setOpen(false)} />}
+      </>
+    );
+  }
+  render(<Host />);
+  const opener = screen.getByRole("button", { name: "Удалить модель…" });
+  await userEvent.click(opener);
+  await userEvent.keyboard("{Escape}");
+  expect(opener).toHaveFocus();
+
+  function Menu() {
+    const more = useRef<HTMLButtonElement>(null);
+    const [menu, setMenu] = useState(false);
+    const [ask, setAsk] = useState(false);
+    return (
+      <>
+        <button type="button" ref={more} onClick={() => setMenu(true)}>Ещё</button>
+        {menu && <button type="button" onClick={() => { setMenu(false); setAsk(true); }}>Перерасшифровать…</button>}
+        {ask && <ConfirmDialog {...base} returnFocus={more} onConfirm={() => setAsk(false)} onCancel={() => setAsk(false)} />}
+      </>
+    );
+  }
+  render(<Menu />);
+  await userEvent.click(screen.getByRole("button", { name: "Ещё" }));
+  await userEvent.click(screen.getByRole("button", { name: "Перерасшифровать…" }));
+  await userEvent.click(screen.getByRole("button", { name: "Удалить" }));
+  expect(screen.getByRole("button", { name: "Ещё" })).toHaveFocus();
 });
 
 test("non-destructive confirm uses the primary style", () => {

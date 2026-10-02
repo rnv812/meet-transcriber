@@ -191,8 +191,8 @@ export function CardActions({
           anchor={menu.kind === "export" ? exportBtn : moreBtn} onClose={() => close()} />
       )}
       {confirm && (
-        <ConfirmDialog {...CONFIRMS[confirm]} onConfirm={confirmed}
-          onCancel={() => { setConfirm(null); moreBtn.current?.focus(); }} />
+        <ConfirmDialog {...CONFIRMS[confirm]} onConfirm={confirmed} returnFocus={moreBtn}
+          onCancel={() => setConfirm(null)} />
       )}
     </div>
   );

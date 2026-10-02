@@ -10,7 +10,9 @@ import { RecordingCard, type CardRequest } from "../features/card/RecordingCard"
 import type { FindRequest } from "../features/card/TranscriptView";
 import { loadCategoryFilter, NO_CATEGORY, saveCategoryFilter } from "../lib/categories";
 import { searchable } from "../lib/search";
-import { initialRecording, initialSection, onOpenRecording, onOpenSection } from "../lib/shell";
+import {
+  destroyMainWindow, initialRecording, initialSection, onCloseRequested, onOpenRecording, onOpenSection, setSettingsDirty,
+} from "../lib/shell";
 import { EmptyState, OfflineState } from "../ui/EmptyState";
 import { Button } from "../ui/Button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
@@ -107,6 +109,21 @@ export function App() {
   // Клик по уведомлению: оболочка присылает id записи (подписка одна — вопрос о настройках через ref).
   const leaveRef = useRef(leaveSettings);
   leaveRef.current = leaveSettings;
+
+  // Крестик главного окна с несохранёнными настройками — тот же вопрос; окно
+  // закрывается только после «Сохранить» или «Не сохранять».
+  useEffect(() => {
+    let off: (() => void) | null = null;
+    let gone = false;
+    onCloseRequested(() => {
+      if (sectionRef.current !== "settings" || !settingsGuard.current?.dirty.length) return false;
+      setLeaving({ go: () => void destroyMainWindow() });
+      return true;
+    })
+      .then((stop) => { if (gone) stop(); else off = stop; })
+      .catch((cause) => console.warn("close-requested:", cause));
+    return () => { gone = true; off?.(); };
+  }, []);
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let gone = false;
@@ -191,7 +208,9 @@ export function App() {
             ) : section === "settings" && resident.endpoint ? (
               <SettingsPane endpoint={resident.endpoint} recordingsDir={resident.snapshot?.recordings_dir ?? null}
                 initial={settingsPart?.part} initialTick={settingsPart?.n} guardRef={settingsGuard}
-                onRunWizard={(step) => gate.open(step ?? "hardware")} />
+                onDirtyChange={(dirty) => void setSettingsDirty(dirty)}
+                // Мастер заменяет окно целиком: несохранённое — через тот же вопрос.
+                onRunWizard={(step) => leaveSettings(() => gate.open(step ?? "hardware"))} />
             ) : selected && resident.endpoint ? (
               <RecordingCard
                 key={selected}
@@ -232,6 +251,9 @@ function LeaveSettings({ guard, onStay, onLeave }: {
   const list = guard?.dirty ?? [];
   const where = `${list.length === 1 ? "разделе" : "разделах"} ${list.map((t) => `«${t}»`).join(", ")}`;
   const canSave = guard?.canSave ?? false;
+  // «Остаться», пока идёт сохранение, — и после сохранения никуда не уходим.
+  const open = useRef(true);
+  useEffect(() => () => { open.current = false; }, []);
   return (
     <ConfirmDialog title="Сохранить изменения в настройках?" cancelLabel="Остаться" danger={false}
       message={canSave ? `Есть несохранённые изменения в ${where}.`
@@ -241,7 +263,9 @@ function LeaveSettings({ guard, onStay, onLeave }: {
       onCancel={onStay}
       onConfirm={async () => {
         if (!canSave || !guard) { onStay(); return; }
-        if (await guard.save()) onLeave();
+        const saved = await guard.save();
+        if (!open.current) return;
+        if (saved) onLeave();
         else onStay();
       }} />
   );

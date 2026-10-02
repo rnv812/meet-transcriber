@@ -147,7 +147,6 @@ button.turn__speaker:hover { text-decoration: underline; }
 /* Правка спикера в расшифровке: выбранные реплики, полоса выбора, меню «Кому отдать». */
 .turn--selected { margin: 0 -8px; padding: 8px; border-radius: var(--r-md); background: rgba(94, 106, 210, 0.14);
   box-shadow: inset 3px 0 0 var(--accent); }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .tsel {
   position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
   margin: 4px 0; padding: 6px 10px; border: 1px solid var(--line-2); border-radius: var(--r-md);

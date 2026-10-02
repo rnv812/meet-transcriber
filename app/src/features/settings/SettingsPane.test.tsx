@@ -446,8 +446,10 @@ test("правка — точка у своего раздела в меню и 
   await userEvent.type(name, "а");
   expect(menuItem("Запись").querySelector("[data-dirty]")).not.toBeNull();
   expect(menuItem("Запись")).toHaveAttribute("title", "Есть несохранённые изменения");
+  // Экранному диктору — описанием кнопки, имя раздела то же.
+  expect(menuItem("Запись")).toHaveAccessibleDescription("Есть несохранённые изменения");
   expect(menuItem("Распознавание").querySelector("[data-dirty]")).toBeNull();
-  expect(screen.getByText("Есть несохранённые изменения")).toBeInTheDocument();
+  expect(document.querySelector(".settings__state")).toHaveTextContent("Есть несохранённые изменения");
   await userEvent.click(menuItem("Распознавание"));
   expect(screen.getByText("Не сохранено: Запись")).toBeInTheDocument();
   // Модель Whisper видна в двух разделах — и точка в обоих.

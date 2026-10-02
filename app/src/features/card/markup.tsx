@@ -147,7 +147,7 @@ export function InsightsBlock({ insights, turns, onJump, onAsk }: {
                       if (!t) return null;
                       return (
                         <button key={r} type="button" className="insight__ref num" onClick={() => onJump(r)}
-                          title="Перейти к реплике">
+                          title={`${clock(t.start)} · ${t.speaker} — перейти к реплике`}>
                           {clock(t.start)} · {t.speaker}
                         </button>
                       );

@@ -26,6 +26,8 @@ export function badgeOf(st: RecStatus): { text: string; tone: "run" | "err" | ""
       // Общая доля задачи (новые резиденты) или доля этапа; неизвестно — многоточие, а не «100%».
       const f = st.job ? jobFraction(st.job) : st.total ? (st.done ?? 0) / st.total : null;
       const label = st.job ? stageLabel(st.job) : st.label;
+      // Общая доля — впереди («62% · Разделение на спикеров»): это ход всей расшифровки, а не этапа.
+      if (f !== null && typeof st.job?.fraction === "number") return { text: `${Math.floor(f * 100)}% · ${label}`, tone: "run" };
       return { text: `${label}${f !== null ? ` ${Math.floor(f * 100)}%` : "…"}`, tone: "run" };
     }
     case "failed":

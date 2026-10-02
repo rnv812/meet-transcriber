@@ -98,7 +98,7 @@ def _progress_printer(errors: list[str]):
             done, total = payload.get("done"), payload.get("total")
             # Ход внутри шага (meet.progress) — для шкалы окна; человеку в
             # консоли хватает строки на начало шага.
-            if payload.get("step") and total and done not in (None, 0):
+            if payload.get("step") and total and done not in (None, 0) and not payload.get("final"):
                 return
             line = str(payload.get("label") or payload.get("stage") or "")
             if total and not payload.get("step"):

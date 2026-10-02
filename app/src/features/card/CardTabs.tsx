@@ -32,7 +32,7 @@ type Tab = "transcript" | "summary" | "agent";
 export type CardStage = "ready" | "live" | "recording" | "pending";
 
 /** Где Ctrl+F не уводит к поиску по расшифровке (в терминале агента клавиши — агенту). */
-const FIND_IGNORED = ".rec-item__input, [role=dialog], [aria-modal=true], .popover, .item-menu, [data-agent-terminal]";
+const FIND_IGNORED = ".rec-item__input, [role=dialog], [role=alertdialog], [aria-modal=true], .popover, .item-menu, [data-agent-terminal]";
 
 const TABS: Record<CardStage, { id: Tab; label: string }[]> = {
   ready: [

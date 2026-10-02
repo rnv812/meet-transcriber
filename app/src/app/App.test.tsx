@@ -52,6 +52,7 @@ vi.mock("../lib/api", async (orig) => ({
 const engineState = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
 const openCb = vi.hoisted(() => ({ current: null as ((id: string) => void) | null }));
 const sectionCb = vi.hoisted(() => ({ current: null as ((s: string) => void) | null }));
+const closeCb = vi.hoisted(() => ({ current: null as (() => boolean) | null }));
 vi.mock("../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../lib/shell")>()),
   onOpenRecording: vi.fn(async (cb: (id: string) => void) => {
@@ -62,6 +63,12 @@ vi.mock("../lib/shell", async (orig) => ({
     sectionCb.current = cb;
     return () => {};
   }),
+  onCloseRequested: vi.fn(async (hold: () => boolean) => {
+    closeCb.current = hold;
+    return () => {};
+  }),
+  destroyMainWindow: vi.fn(async () => {}),
+  setSettingsDirty: vi.fn(async () => {}),
   engineStatus: vi.fn(async () => engineState.current),
   residentStatus: vi.fn(async () => "engine-missing"),
   markWizardDone: vi.fn(async () => {}),
@@ -113,6 +120,52 @@ test("уход из настроек с несохранённым: «Остат
   await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Не сохранять" }));
   expect(screen.queryByTestId("settings")).toBeNull();
   expect(settingsSave).toHaveBeenCalledTimes(1);
+});
+
+test("«Запустить мастер» из настроек с правками — сначала вопрос, мастер — после «Не сохранять»", async () => {
+  residentState.current = online();
+  vi.mocked(shell.residentStatus).mockResolvedValue("running");
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
+  await userEvent.click(screen.getByRole("button", { name: "правка" }));
+  await userEvent.click(screen.getByRole("button", { name: "Запустить мастер" }));
+  expect(screen.getByRole("alertdialog", { name: "Сохранить изменения в настройках?" })).toBeInTheDocument();
+  expect(screen.queryByTestId("wizard")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Не сохранять" }));
+  expect(await screen.findByTestId("wizard")).toBeInTheDocument();
+});
+
+test("крестик окна с несохранёнными настройками — вопрос; закрытие только после ответа", async () => {
+  residentState.current = online();
+  render(<App />);
+  await waitFor(() => expect(closeCb.current).not.toBeNull());
+  // Правок нет — окно закрывается сразу.
+  expect(closeCb.current!()).toBe(false);
+  await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
+  await userEvent.click(screen.getByRole("button", { name: "правка" }));
+  let held = false;
+  act(() => { held = closeCb.current!(); });
+  expect(held).toBe(true);
+  const ask = screen.getByRole("alertdialog", { name: "Сохранить изменения в настройках?" });
+  expect(within(ask).getByRole("button", { name: "Остаться" })).toHaveFocus();
+  await userEvent.click(within(ask).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(shell.destroyMainWindow).toHaveBeenCalledTimes(1));
+  expect(settingsSave).toHaveBeenCalled();
+});
+
+test("«Остаться», пока идёт сохранение, — после сохранения никуда не уходим", async () => {
+  residentState.current = online();
+  let finish: (ok: boolean) => void = () => {};
+  settingsSave.mockImplementationOnce(() => new Promise<boolean>((r) => { finish = r; }));
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
+  await userEvent.click(screen.getByRole("button", { name: "правка" }));
+  await userEvent.click(screen.getByRole("button", { name: "Голоса" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Сохранить" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Остаться" }));
+  await act(async () => finish(true));
+  expect(screen.getByTestId("settings")).toBeInTheDocument();
+  expect(screen.queryByTestId("voices")).toBeNull();
 });
 
 test("сохранить при уходе не вышло — остаёмся в настройках", async () => {

@@ -253,11 +253,12 @@ test("клавиши не забираются у полей ввода, тер�
   const { audio } = setup();
   const host = document.createElement("div");
   host.innerHTML = `<input id="f" /><textarea id="t"></textarea><div data-agent-terminal><textarea id="x"></textarea></div>
-    <div role="dialog"><button id="d">ok</button></div><button id="b">b</button><div role="tablist"><button id="tab">t</button></div>`;
+    <div role="dialog"><button id="d">ok</button></div><button id="b">b</button><div role="tablist"><button id="tab">t</button></div>
+    <div role="alertdialog"><button id="c">Отмена</button></div>`;
   document.body.appendChild(host);
   try {
     audio.currentTime = 100;
-    for (const id of ["f", "t", "x", "d"]) {
+    for (const id of ["f", "t", "x", "d", "c"]) {
       const el = document.getElementById(id)!;
       fireEvent.keyDown(el, { key: "l", code: "KeyL" });
       fireEvent.keyDown(el, { key: "ArrowRight" });

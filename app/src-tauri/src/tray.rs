@@ -943,23 +943,98 @@ impl LivePhase {
 pub const OPEN_LABEL: &str = "Открыть Meet";
 /// «Выход», пока идёт работа: вопрос с безопасной кнопкой первой (по умолчанию).
 pub const QUIT_TITLE: &str = "Выход из Meet";
-pub const QUIT_RECORDING: &str = "Идёт запись. При выходе она остановится и сохранится. Выйти?";
-pub const QUIT_WORK: &str =
-    "Идёт расшифровка. При выходе она прервётся и начнётся заново при следующем запуске Meet. Выйти?";
+pub const QUIT_RECORDING: &str = "Идёт запись — при выходе она остановится и сохранится.";
+pub const QUIT_TRANSCRIBE: &str =
+    "Идёт расшифровка — при выходе она прервётся и начнётся заново при следующем запуске Meet.";
+pub const QUIT_UNSAVED: &str =
+    "В настройках есть несохранённые изменения — при выходе они пропадут.";
+pub const QUIT_ASK: &str = "Выйти?";
 pub const QUIT_CONFIRM: &str = "Выйти";
 pub const QUIT_KEEP: &str = "Не выходить";
 
-/// О чём спросить перед «Выход»: идёт запись или работа (расшифровка, задачи
-/// в очереди) — вопрос; ничего не идёт или резидент молчит — None, выходим сразу.
-pub fn quit_question(state: Option<&Value>, jobs: Option<&Value>) -> Option<&'static str> {
-    let state = state?;
-    if crate::upgrade::resident_busy(state) {
-        return Some(QUIT_RECORDING);
+/// Окно сообщает, что в настройках есть несохранённое (`set_settings_dirty`):
+/// «Выход» из трея тогда тоже спрашивает.
+static SETTINGS_DIRTY: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+pub fn set_settings_dirty(dirty: bool) {
+    SETTINGS_DIRTY.store(dirty, Ordering::SeqCst);
+}
+
+/// Чем занята задача резидента — словами для вопроса о выходе.
+fn job_kind_text(kind: &str) -> &'static str {
+    match kind {
+        "download-model" => "загрузка модели",
+        "install-engine" => "установка движка",
+        "summary" | "ask" => "итоги и вопросы",
+        "analyze" => "анализ встречи",
+        "improve" => "улучшение расшифровки",
+        "profile" => "профиль человека",
+        "speaker_split" | "rediarize" => "разделение на спикеров",
+        _ => "фоновая задача",
     }
-    if crate::upgrade::resident_working(state, jobs) {
-        return Some(QUIT_WORK);
+}
+
+/// О чём спросить перед «Выход»: идёт запись, расшифровка или другая работа
+/// резидента, есть несохранённые настройки — вопрос с перечнем того, что
+/// пропадёт или прервётся; ничего такого нет — None, выходим сразу.
+pub fn quit_question(
+    state: Option<&Value>,
+    jobs: Option<&Value>,
+    settings_dirty: bool,
+) -> Option<String> {
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(state) = state {
+        if crate::upgrade::resident_busy(state) {
+            lines.push(QUIT_RECORDING.to_string());
+        }
+        if crate::upgrade::resident_working(state, jobs) {
+            let active: Vec<&str> = jobs
+                .and_then(|jobs| jobs.get("items"))
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter(|job| {
+                            matches!(
+                                job.get("state").and_then(Value::as_str),
+                                Some("queued" | "running")
+                            )
+                        })
+                        .filter_map(|job| job.get("kind").and_then(Value::as_str))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if active
+                .iter()
+                .any(|kind| matches!(*kind, "transcribe" | "import" | "merge"))
+            {
+                lines.push(QUIT_TRANSCRIBE.to_string());
+            }
+            let mut other: Vec<&str> = active
+                .iter()
+                .filter(|kind| !matches!(**kind, "transcribe" | "import" | "merge"))
+                .map(|kind| job_kind_text(kind))
+                .collect();
+            other.dedup();
+            if !other.is_empty() {
+                lines.push(format!(
+                    "Идёт фоновая работа ({}) — при выходе она прервётся.",
+                    other.join(", ")
+                ));
+            } else if active.is_empty() {
+                lines.push("Идёт фоновая работа — при выходе она прервётся.".to_string());
+            }
+        }
     }
-    None
+    if settings_dirty {
+        lines.push(QUIT_UNSAVED.to_string());
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    lines.push(QUIT_ASK.to_string());
+    Some(lines.join("\n"))
 }
 
 /// Ответ на вопрос о выходе: выходим только по явной кнопке «Выйти».
@@ -1458,7 +1533,8 @@ fn confirm_quit(app: &AppHandle) {
             }
             None => (None, None),
         };
-        let Some(question) = quit_question(state.as_ref(), jobs.as_ref()) else {
+        let dirty = SETTINGS_DIRTY.load(Ordering::SeqCst);
+        let Some(question) = quit_question(state.as_ref(), jobs.as_ref(), dirty) else {
             QUIT_ASKING.store(false, Ordering::SeqCst);
             quit(&app);
             return;
@@ -2843,12 +2919,27 @@ mod tests {
         use serde_json::json;
         let idle = json!({ "status": "idle" });
         let recording = json!({ "status": "recording" });
-        let jobs = json!({ "items": [{ "state": "running" }] });
-        let none = json!({ "items": [{ "state": "done" }] });
-        assert_eq!(quit_question(None, None), None); // резидент молчит — выходим
-        assert_eq!(quit_question(Some(&idle), Some(&none)), None);
-        assert_eq!(quit_question(Some(&recording), None), Some(QUIT_RECORDING));
-        assert_eq!(quit_question(Some(&idle), Some(&jobs)), Some(QUIT_WORK));
+        let transcribing = json!({ "items": [{ "state": "running", "kind": "transcribe" }] });
+        let download = json!({ "items": [{ "state": "running", "kind": "download-model" },
+                                         { "state": "queued", "kind": "analyze" }] });
+        let none = json!({ "items": [{ "state": "done", "kind": "transcribe" }] });
+        assert_eq!(quit_question(None, None, false), None); // резидент молчит — выходим
+        assert_eq!(quit_question(Some(&idle), Some(&none), false), None);
+        assert_eq!(
+            quit_question(Some(&recording), None, false).as_deref(),
+            Some("Идёт запись — при выходе она остановится и сохранится.\nВыйти?")
+        );
+        let text = quit_question(Some(&idle), Some(&transcribing), false).unwrap();
+        assert!(text.starts_with(QUIT_TRANSCRIBE));
+        // Не расшифровка — так и сказано, что именно прервётся.
+        let text = quit_question(Some(&idle), Some(&download), false).unwrap();
+        assert!(text.contains("загрузка модели, анализ встречи"), "{text}");
+        assert!(!text.contains("расшифровка —"));
+        // Несохранённые настройки — тоже вопрос, даже если резидент молчит.
+        assert_eq!(
+            quit_question(None, None, true).as_deref(),
+            Some("В настройках есть несохранённые изменения — при выходе они пропадут.\nВыйти?")
+        );
         assert!(quit_confirmed_by(&Answer::Custom("Выйти".into())));
         assert!(!quit_confirmed_by(&Answer::Custom("Не выходить".into())));
         assert!(!quit_confirmed_by(&Answer::Cancel)); // Esc, крестик
