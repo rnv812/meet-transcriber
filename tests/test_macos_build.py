@@ -93,12 +93,16 @@ def test_helper_speaks_the_python_protocol():
 def test_workflow_dry_run_skips_windows_and_publishing():
     assert "workflow_dispatch:" in WORKFLOW
     assert re.search(r"macos_only:\n\s+description: .+\n\s+type: boolean\n\s+default: true", WORKFLOW)
-    assert "if: github.event_name == 'push' || !inputs.macos_only" in WORKFLOW
+    windows = WORKFLOW[WORKFLOW.index("  release:"):WORKFLOW.index("    runs-on: windows-latest")]
+    assert ("if: (github.event_name == 'push' && github.ref_type == 'tag') || "
+            "(github.event_name == 'workflow_dispatch' && !inputs.macos_only)") in windows
+    # Пуш в ветку пробного прогона собирает только macOS.
+    assert 'branches: ["ci/macos-dry-run"]' in WORKFLOW
     assert "runs-on: macos-14" in WORKFLOW
     assert 'bash scripts/build_release_macos.sh "$VERSION"' in WORKFLOW
     publish = WORKFLOW[WORKFLOW.index("  publish-macos:"):]
     assert "needs: [release, macos]" in publish
-    assert "if: github.event_name == 'push'" in publish
+    assert "if: github.event_name == 'push' && github.ref_type == 'tag'" in publish
     assert "SHA256SUMS.txt" in publish and "--clobber" in publish
 
 
