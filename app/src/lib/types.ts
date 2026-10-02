@@ -214,6 +214,24 @@ export type Profile = {
   sources: Record<string, { title: string; date: string }>;
   filtered?: number;
   warnings?: string[];
+  /** Гипотеза по модели PCM (только при достаточных данных и если включена). */
+  pcm?: Pcm;
+};
+/** Типы PCM (ключи — как у модели), их подписи — lib/pcm.ts. */
+export type PcmType = "thinker" | "persister" | "harmonizer" | "imaginer" | "rebel" | "promoter";
+export type PcmClaim = { type: PcmType; confidence: number; refs: ProfileRef[] };
+/** Раздел «Модель PCM»: гипотеза по репликам во встречах, не сертифицированная оценка. */
+export type Pcm = {
+  base: PcmClaim;
+  phase?: PcmClaim;
+  /** Выраженность каждого типа 0–5 («этажи»). */
+  floors: Record<PcmType, number>;
+  perception?: { value: string; refs: ProfileRef[] };
+  channel?: { value: string; examples: string[] };
+  needs?: { value: string; how_to_recognize: string };
+  stress_signs?: ProfileStatement[];
+  back_to_constructive?: string[];
+  conversation?: string[];
 };
 export type ProfileStateName = "none" | "queued" | "running" | "ready" | "failed";
 /** GET /voices/{name}/profile. Профили выключены — только `{enabled: false}`. */
@@ -236,6 +254,10 @@ export type ProfileView = {
   latest_meeting?: string | null;
   /** После профиля появились новые реплики. */
   has_new?: boolean;
+  /** Показывать ли раздел «Модель PCM» (настройка `profiles.pcm`). */
+  pcm_enabled?: boolean;
+  /** Данных для гипотезы PCM мало: «Недостаточно данных: … — нужно от 15 реплик в 3 встречах». */
+  pcm_note?: string;
 };
 
 /** Фраза спикера для прослушивания в панели «Спикеры». */

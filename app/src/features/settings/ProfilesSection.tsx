@@ -33,6 +33,22 @@ export function ProfilesTip() {
   );
 }
 
+export function PcmTip() {
+  return (
+    <HelpTip label="Что такое раздел «Модель PCM»" title="Модель PCM">
+      <TipLine>
+        Process Communication Model (модель Тайби Кейлера) описывает шесть стилей общения: Логик, Упорный, Гармонизатор,
+        Мечтатель, Бунтарь и Деятель. В профиле — гипотеза по репликам во встречах: какой стиль ведущий («база»),
+        какой сейчас («фаза»), каким каналом с человеком лучше говорить и как давать признание.
+      </TipLine>
+      <TipLine>
+        Это не сертифицированная оценка и не тест: раздел появляется, когда у человека не меньше 15 реплик в 3
+        встречах. PCM — товарный знак Kahler Communications; модель упоминается только для описания.
+      </TipLine>
+    </HelpTip>
+  );
+}
+
 export function ProfilesSection({ draft, set, endpoint }: { draft: Raw; set: SetFn; endpoint: Endpoint }) {
   const on = draft.profiles?.enabled === true;
   const [asking, setAsking] = useState(false);
@@ -84,6 +100,11 @@ export function ProfilesSection({ draft, set, endpoint }: { draft: Raw; set: Set
             <Button onClick={() => setAsking(false)}>Отмена</Button>
           </div>
         </div>
+      )}
+      {on && (
+        <Switch label="Раздел «Модель PCM»" help={<PcmTip />}
+          hint="Гипотеза по Process Communication Model: «этажи», канал общения, как давать признание. Не сертифицированная оценка; нужна от 15 реплик в 3 встречах"
+          value={draft.profiles?.pcm !== false} onChange={(x) => set("profiles", "pcm", x)} />
       )}
       <Row label="Удалить все профили"
         hint={count === null ? "Профили и ваши заметки о людях на этом компьютере"

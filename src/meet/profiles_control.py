@@ -77,11 +77,15 @@ class ProfilesMixin:
             "level": depth,
             "notes": profiles.read_notes(pid) if pid else "",
             "latest_meeting": profiles.latest_shared(meetings),
-            "profile": profiles.public(doc),
+            "profile": profiles.public(doc, with_pcm=cfg.profiles.pcm),
+            # Раздел «Модель PCM»: показывать ли; данных мало — почему его нет.
+            "pcm_enabled": cfg.profiles.pcm,
             "has_new": bool(doc) and doc.get("signature") != profiles.signature(meetings),
         }
         if depth == "none":
             out["note"] = profiles.data_note(st)
+        if depth != "full":
+            out["pcm_note"] = profiles.data_note(st, turns=profiles.FULL_TURNS, meetings=profiles.FULL_MEETINGS)
         job = self._profile_job(pid) if pid else None
         failure = state.get("error") if isinstance(state.get("error"), dict) else None
         if job is not None:

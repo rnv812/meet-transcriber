@@ -845,16 +845,21 @@ class Profiles:
     """Профили людей (meet.profiles): как человек общается во встречах — по
     его репликам, моделью. По умолчанию выключены: включает человек сам,
     прочитав, что это и где хранится. Выключены — задач профилей нет, вкладка
-    «Профиль» скрыта, сохранённые профили остаются (удалить — в настройках)."""
+    «Профиль» скрыта, сохранённые профили остаются (удалить — в настройках).
+
+    `pcm` — раздел «Модель PCM» (гипотеза по Process Communication Model,
+    meet.pcm): просить ли его у модели и показывать ли. Действует, только
+    когда профили включены."""
 
     enabled: bool = False
+    pcm: bool = True
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Profiles":
-        return cls(enabled=as_flag(raw.get("enabled"), False))
+        return cls(enabled=as_flag(raw.get("enabled"), False), pcm=as_flag(raw.get("pcm"), True))
 
     def to_raw(self) -> dict:
-        return {"enabled": self.enabled}
+        return {"enabled": self.enabled, "pcm": self.pcm}
 
 
 @dataclass(frozen=True)

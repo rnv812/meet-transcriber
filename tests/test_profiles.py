@@ -313,7 +313,7 @@ GOOD = json.dumps({"summary": "Предпочитает конкретику: ц
     "values": [{"text": "Ясные сроки и ответственные.", "refs": ["m1#1"]}],
     "how_to_talk": [{"text": "Приходить с цифрами и вариантами.", "refs": ["m3#1"]}],
     "avoid": [{"text": "Обсуждать без повестки.", "refs": ["m2#1"]}],
-    "topics": [{"text": "Сроки и риски релиза.", "refs": ["m1#3"]}]}}, ensure_ascii=False)
+    "topics": [{"text": "Сроки и риски релиза.", "refs": ["m1#3"]}]}, "pcm": None}, ensure_ascii=False)
 
 
 def _library(lib, meetings=3, per=6):
@@ -365,7 +365,7 @@ def test_build_repairs_once_and_keeps_good_parts(lib):
     assert doc["sections"]["topics"][0]["text"] == "Сроки и риски релиза."
     with pytest.raises(profiles.ProfileError):
         profiles.build("0123456789abcdef", "Вера", lib["rec"], _runner(["не JSON", "опять не JSON"]), _cfg())
-    empty = json.dumps({"summary": "", "sections": {k: [] for k in profiles.SECTIONS}})
+    empty = json.dumps({"summary": "", "sections": {k: [] for k in profiles.SECTIONS}, "pcm": None})
     with pytest.raises(profiles.ProfileError, match="ни одного утверждения"):
         profiles.build("0123456789abcdef", "Вера", lib["rec"], _runner([empty]), _cfg())
 
@@ -398,3 +398,88 @@ def test_text_view_lists_sections_with_refs():
     text = profiles.text_view(doc, "Вера", "заметка")
     assert "Коротко: По делу." in text and "Стиль общения" in text
     assert "• Коротко. (Планирование 01:05)" in text and "Мои заметки" in text
+
+
+# --- раздел «Модель PCM» ------------------------------------------------------------------
+
+PCM = {"base": {"type": "Thinker", "confidence": 0.62, "refs": ["m1#1", "m2#3"]},
+       "phase": {"type": "promoter", "confidence": "0,4", "refs": ["m3#5"]},
+       "floors": {"thinker": 4, "persister": 3.4, "harmonizer": 1, "imaginer": -2, "rebel": 9, "promoter": True,
+                  "кто-то": 3},
+       "perception": {"value": "Мысли", "refs": ["m1#3"]},
+       "channel": {"value": "запрашивающий", "examples": ["Какие у нас данные по срокам?", "Он нарцисс, говорите жёстко"]},
+       "needs": {"value": "признание за работу и время", "how_to_recognize": "Отмечать точность расчётов."},
+       "stress_signs": [{"text": "Перечисляет детали всё подробнее.", "refs": ["m2#1"]},
+                        {"text": "Без опоры", "refs": []}],
+       "back_to_constructive": ["Предложить план с цифрами.", "Предложить план с цифрами."],
+       "conversation": ["Начинать с цели и фактов.", "Просить решение с вариантами и сроком."]}
+
+
+def _pcm_reply(pcm_part):
+    return json.dumps({**json.loads(GOOD), "pcm": pcm_part}, ensure_ascii=False)
+
+
+def test_pcm_is_asked_only_with_enough_data_and_when_enabled(lib):
+    _library(lib)  # 18 реплик в 3 встречах — достаточно
+    seen = []
+    doc = profiles.build("0123456789abcdef", "Вера", lib["rec"], _runner([_pcm_reply(PCM)], seen), _cfg())
+    assert '"pcm"' in seen[0]["system_prompt"] and "Process Communication Model" in seen[0]["system_prompt"]
+    got = doc["pcm"]
+    assert got["base"] == {"type": "thinker", "confidence": 0.62, "refs": got["base"]["refs"]}
+    assert [(r["m"], r["i"]) for r in got["base"]["refs"]] == [("2026-09-12_10-00", 1), ("2026-09-11_10-00", 3)]
+    assert got["phase"]["type"] == "promoter" and got["phase"]["confidence"] == 0.4
+    # этажи 0..5, база — не ниже прочих, неизвестные и булевы — мимо
+    assert got["floors"] == {"thinker": 5, "persister": 3, "harmonizer": 1, "imaginer": 0, "rebel": 5,
+                             "promoter": 0}
+    assert got["perception"]["value"] == "мысли"
+    assert got["channel"] == {"value": "запрашивающий", "examples": ["Какие у нас данные по срокам?"]}
+    assert got["needs"]["how_to_recognize"] == "Отмечать точность расчётов."
+    assert [s["text"] for s in got["stress_signs"]] == ["Перечисляет детали всё подробнее."]
+    assert got["back_to_constructive"] == ["Предложить план с цифрами."]
+    assert doc["filtered"] == 1  # «нарцисс» в примере фразы
+    # выключено в настройках — не просим и не храним
+    off = settings.Settings(profiles=settings.Profiles(enabled=True, pcm=False))
+    seen = []
+    doc = profiles.build("0123456789abcdef", "Вера", lib["rec"], _runner([_pcm_reply(PCM)], seen), off)
+    assert '"pcm"' not in seen[0]["system_prompt"] and "pcm" not in doc
+
+
+def test_pcm_not_asked_below_the_threshold(lib):
+    for d in range(2):  # 2 встречи — мало для гипотезы
+        _meeting(lib["rec"], f"2026-09-{10 + d:02d}_10-00", _turns("Вера", 10))
+    seen = []
+    reply = json.dumps({"summary": "По делу.", "sections": {
+        "style": [{"text": "Коротко.", "refs": ["m1#1"]}], "values": [], "how_to_talk": [], "avoid": [],
+        "topics": []}, "pcm": PCM}, ensure_ascii=False)
+    doc = profiles.build("0123456789abcdef", "Вера", lib["rec"], _runner([reply], seen), _cfg())
+    assert '"pcm"' not in seen[0]["system_prompt"] and "pcm" not in doc and doc["reduced"] is True
+
+
+def test_pcm_without_a_referenced_base_is_dropped_and_repaired_once(lib):
+    _library(lib)
+    no_base = {**PCM, "base": {"type": "thinker", "confidence": 0.9, "refs": ["m7#1"]}}
+    seen = []
+    doc = profiles.build("0123456789abcdef", "Вера", lib["rec"],
+                         _runner([_pcm_reply(no_base), _pcm_reply({**PCM, "base": {"type": "кто-то", "refs": ["m1#1"]}})],
+                                 seen), _cfg())
+    assert len(seen) == 2 and "pcm: нет базового типа" in seen[1]["prompt"]
+    assert "pcm" not in doc and "warnings" in doc
+    # "pcm": null — модель сочла данных мало: не ошибка, без исправления
+    seen = []
+    doc = profiles.build("0123456789abcdef", "Вера", lib["rec"], _runner([_pcm_reply(None)], seen), _cfg())
+    assert len(seen) == 1 and "pcm" not in doc
+
+
+def test_pcm_text_and_public_view(lib):
+    from meet import pcm
+
+    assert pcm.label("harmonizer") == "Гармонизатор (Harmonizer)"
+    assert [pcm.LABELS[t] for t in pcm.TYPES] == ["Логик", "Упорный", "Гармонизатор", "Мечтатель", "Бунтарь",
+                                                  "Деятель"]
+    _library(lib)
+    doc = profiles.build("0123456789abcdef", "Вера", lib["rec"], _runner([_pcm_reply(PCM)]), _cfg())
+    text = profiles.text_view(doc, "Вера")
+    assert "Модель PCM — гипотеза по репликам во встречах, не сертифицированная оценка" in text
+    assert "База: Логик (Thinker), уверенность 62 %" in text
+    assert "Этажи (снизу вверх): Логик 5, Бунтарь 5, Упорный 3, Гармонизатор 1" in text
+    assert "pcm" not in profiles.public(doc, with_pcm=False) and "pcm" in profiles.public(doc)

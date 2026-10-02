@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   audioUrl, deleteAvatar, deletePerson, getPerson, getSample, mergePerson, putAvatar, renamePerson,
   type Endpoint,
 } from "../../lib/api";
 import { dayLabel, duration, errorText } from "../../lib/format";
-import type { Job, Person, PersonCard as PersonData, Profile } from "../../lib/types";
+import type { Job, Person, PersonCard as PersonData } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { AvatarEditor, pastedImage } from "./AvatarEditor";
 import { ProfileTab, useProfile } from "./ProfileTab";
@@ -26,8 +26,6 @@ type Props = {
   onAskAgent?: (recording: string | null, text: string) => void;
   /** Открыта вкладка «Профиль»: панель человека шире. */
   onWide?: (wide: boolean) => void;
-  /** Разделы профиля после карточек (модель PCM). */
-  profileExtra?: (profile: Profile) => ReactNode;
 };
 
 const NO_JOBS: Job[] = [];
@@ -37,7 +35,7 @@ const MAX_AVATAR = 10 * 1024 * 1024;
 
 export function PersonCard({
   endpoint, person, others, version, onAvatar, onRenamed, onRemoved, onOpenRecording, jobs = NO_JOBS, onOpenAt,
-  onAskAgent, onWide, profileExtra,
+  onAskAgent, onWide,
 }: Props) {
   const name = person.name;
   const [data, setData] = useState<PersonData | null>(null);
@@ -162,7 +160,7 @@ export function PersonCard({
       )}
       {shown === "profile" && profile.view ? (
         <ProfileTab endpoint={endpoint} name={name} view={profile.view} reload={profile.reload}
-          onOpenAt={(m, i) => onOpenAt?.(m, i)} onAskAgent={(m, text) => onAskAgent?.(m, text)} extra={profileExtra} />
+          onOpenAt={(m, i) => onOpenAt?.(m, i)} onAskAgent={(m, text) => onAskAgent?.(m, text)} />
       ) : (<>
       <div className="pcard__row">
         <Button onClick={() => void play()}>▶ Прослушать образец</Button>
