@@ -166,6 +166,8 @@ export function RecordingCard({
     const text = agentPrompt(request);
     if (text) setAgentAsk({ text });
   }, []);
+  // Вкладка «Агент» забрала просьбу: сброс — заново открытая вкладка её не повторит.
+  const agentTaken = useCallback(() => setAgentAsk(null), []);
   const askTurns = useCallback((which: number[], intent?: string) => {
     const refs = which.flatMap((i) => {
       const t = turns[i];
@@ -254,11 +256,11 @@ export function RecordingCard({
   });
   const kbError = rec.kb_export?.error;
 
-  // Вкладки — у всех этапов, кроме записи без ассистента: агент (вкладка «Агент»)
-  // переживает переход «живой режим → расшифровка → готово».
+  // Вкладки — на всех этапах: агент (вкладка «Агент») переживает переход «живой
+  // режим → расшифровка → готово», и даже остановку ассистента посреди записи
+  // (запись идёт дальше — «Расшифровка · Агент», агент получает ленту, что успела).
   const live = status.kind === "recording" && !!snapshot?.live && isLiveRecording(rec, snapshot);
-  const stage: CardStage | null = status.kind === "ready" ? "ready" : live ? "live"
-    : status.kind === "recording" ? null : "pending";
+  const stage: CardStage = status.kind === "ready" ? "ready" : live ? "live" : "pending";
   let first;
   switch (status.kind) {
     case "ready":
@@ -305,11 +307,11 @@ export function RecordingCard({
         : <EmptyState title="Идёт запись…" />;
       break;
   }
-  const body = stage ? (
+  const body = (
     <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
       showTranscript={shownFind?.n} stage={stage} transcript={first} agentRequest={agentAsk}
-      onAskAgent={askAgent} />
-  ) : first;
+      onAskAgent={askAgent} onAgentTaken={agentTaken} />
+  );
 
   return (
     <section className={`card${panel.open && status.kind === "ready" ? " card--with-spk" : ""}`} ref={cardEl}>

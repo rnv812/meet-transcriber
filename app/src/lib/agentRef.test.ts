@@ -1,4 +1,6 @@
-import { AGENT_INTENTS, REF_CAP, REF_TEXT_MAX, agentPrompt, cleanRefText, flatPrompt, plainMarkdown } from "./agentRef";
+import {
+  AGENT_INTENTS, REF_CAP, REF_TEXT_MAX, agentPrompt, cleanRefText, flatPrompt, pasteLine, plainMarkdown,
+} from "./agentRef";
 
 test("ссылка на одну реплику: время, спикер, текст в кавычках; в конце — новая строка для вопроса", () => {
   expect(agentPrompt({ refs: [{ t: 65, speaker: "Анна", text: "Сдаём отчёт в пятницу." }] }))
@@ -60,6 +62,29 @@ test("flatPrompt — одной строкой (когда вставка не �
   const text = agentPrompt({ refs: [{ t: 1, speaker: "Анна", text: "да" }, { t: 2, speaker: "Олег", text: "нет" }] });
   expect(flatPrompt(text)).toBe("Про реплики: [00:01] Анна: «да» · [00:02] Олег: «нет» ");
   expect(flatPrompt("Объясни.\nПро реплику:\n[00:01] Анна: «да»")).toBe("Объясни. Про реплику: [00:01] Анна: «да»");
+});
+
+test("эмодзи на границе обрезки не разрезается пополам (одинокий суррогат сломал бы agent_write)", () => {
+  const text = "а".repeat(REF_TEXT_MAX - 2) + "🙂🙂🙂";
+  const line = agentPrompt({ refs: [{ text }] }).split("\n")[1]!;
+  const quoted = line.slice(1, line.lastIndexOf("»"));
+  expect(Array.from(quoted)).toHaveLength(REF_TEXT_MAX);
+  expect(quoted.endsWith("🙂…")).toBe(true);
+  expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(quoted)).toBe(false);
+});
+
+test("pasteLine: одна строка без \\r, \\n и ESC — и с намерением, и для чужого текста", () => {
+  const withIntent = agentPrompt({ refs: [{ t: 1, speaker: "Анна", text: "да" }, { t: 2, speaker: "Олег", text: "нет" }],
+    intent: "Объясни" });
+  const line = pasteLine(withIntent);
+  expect(line).toBe("Объясни. Про реплики: [00:01] Анна: «да» · [00:02] Олег: «нет»");
+  // eslint-disable-next-line no-control-regex
+  const controls = /[\x00-\x1f\x7f-\x9f]/;
+  expect(controls.test(line)).toBe(false);
+  // Текст не через agentPrompt (будущие вызовы) — всё равно без Enter и escape-последовательностей.
+  const raw = pasteLine("строка\r\nвторая\x1b[201~\rтретья\x07");
+  expect(controls.test(raw)).toBe(false);
+  expect(raw).toBe("строка  вторая третья");
 });
 
 test("plainMarkdown: текст пункта без разметки", () => {

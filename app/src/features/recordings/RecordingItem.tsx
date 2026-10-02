@@ -113,7 +113,7 @@ export function RecordingItem({
   const menuItems: MenuItem[] = confirmDelete ? [
     { label: "Удалить", danger: true, icon: <Trash2 {...ICON} />,
       onSelect: () => { closeMenu(false); actions?.onDelete?.(rec.id); } },
-    { label: "Отмена", onSelect: () => setConfirmDelete(false) },
+    { label: "Отмена", autoFocus: true, onSelect: () => setConfirmDelete(false) },
   ] : [
     { label: "Переименовать", icon: <Pencil {...ICON} />, onSelect: () => { closeMenu(false); begin(); } },
     ...(actions?.onOpenFolder ? [{

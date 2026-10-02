@@ -116,46 +116,66 @@ export function useTurnEdit({
   const [anchorTurn, setAnchorTurn] = useState<number | null>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [splitAt, setSplitAt] = useState<SplitAt | null>(null);
+  /** Меню правого щелчка у реплики без спикера: только «Спросить агента». */
+  const [askOnly, setAskOnly] = useState<{ anchor: HTMLElement; turn: number } | null>(null);
   const [scope, setScope] = useState<"one" | "run">("one");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<Done | null>(null);
 
   // Расшифровку перечитали — номера реплик могли сдвинуться.
-  useEffect(() => { setSelected(new Set()); setAnchorTurn(null); setMenu(null); setSplitAt(null); }, [segments]);
+  useEffect(() => {
+    setSelected(new Set()); setAnchorTurn(null); setMenu(null); setSplitAt(null); setAskOnly(null);
+  }, [segments]);
   useEffect(() => { setDone(null); }, [id]);
 
   const meeting = useMemo(() => speakersOf(segments), [segments]);
+  /** Спикера реплики можно поменять (у «Неизвестного» менять нечего). */
   const editable = (t: number) => {
     const turn = turns[t];
     return !!turn && turn.kind !== "break" && turn.speaker !== NO_SPEAKER;
   };
+  /** Реплику можно выбрать — любую, кроме отметки перерыва: спросить агента можно и о «Неизвестном». */
+  const selectable = (t: number) => {
+    const turn = turns[t];
+    return !!turn && turn.kind !== "break";
+  };
 
   const onSelect = useCallback((t: number, how: "toggle" | "range") => {
-    if (!editable(t)) return;
+    if (!selectable(t)) return;
     setDone(null);
     setSelected((cur) => {
       const next = new Set(cur);
       if (how === "range" && anchorTurn !== null) {
         const [a, b] = anchorTurn < t ? [anchorTurn, t] : [t, anchorTurn];
-        for (let i = a; i <= b; i++) if (editable(i)) next.add(i);
+        for (let i = a; i <= b; i++) if (selectable(i)) next.add(i);
       } else if (next.has(t)) next.delete(t);
       else next.add(t);
       return next;
     });
     setAnchorTurn(t);
-  }, [anchorTurn, turns]); // editable читает turns
+  }, [anchorTurn, turns]); // selectable читает turns
 
   const onSpeaker = useCallback((t: number, anchor: HTMLElement) => {
     setError(null);
     setScope("one");
     setMenu({ anchor, turn: t });
   }, []);
-  const closeMenu = useCallback(() => { setMenu(null); setSplitAt(null); setError(null); }, []);
+  const closeMenu = useCallback(() => { setMenu(null); setSplitAt(null); setAskOnly(null); setError(null); }, []);
 
   const onSplitAt = useCallback((t: number, e: MouseEvent<HTMLElement>) => {
     const turn = turns[t];
-    if (!turn || turn.kind === "break" || turn.speaker === NO_SPEAKER || !turn.idx?.length) return;
+    if (!turn || turn.kind === "break") return;
+    // Реплика без спикера: делить и отдавать нечего — меню только «Спросить агента».
+    if (turn.speaker === NO_SPEAKER || !turn.idx?.length) {
+      if (!onAskAgent) return;
+      e.preventDefault();
+      setError(null);
+      setMenu(null);
+      setSplitAt(null);
+      setAskOnly({ anchor: e.currentTarget, turn: t });
+      return;
+    }
     const root = e.currentTarget;
     const offset = caretOffset(root, e.clientX, e.clientY);
     if (offset === null) return; // обычное меню браузера
@@ -169,7 +189,7 @@ export function useTurnEdit({
       before: text.slice(Math.max(0, offset - QUOTE), offset).trimStart(),
       after: text.slice(offset, offset + QUOTE).trimEnd(),
     });
-  }, [turns]);
+  }, [turns, onAskAgent]);
   const clear = useCallback(() => { setSelected(new Set()); setAnchorTurn(null); }, []);
 
   // Esc снимает выделение (если не открыто меню — его закрывает сам Popover).
@@ -238,12 +258,27 @@ export function useTurnEdit({
     }
   };
 
+  /** «Спросить агента…» и готовые вопросы — в меню правого щелчка. */
+  const askGroup = (turn: number) => onAskAgent && (
+    <div className="tmenu__ask" role="group" aria-label="Спросить агента об этой реплике">
+      <button type="button" className="tmenu__ask-main" onClick={() => { closeMenu(); onAskAgent([turn]); }}>
+        <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />Спросить агента
+      </button>
+      {AGENT_INTENTS.map((intent) => (
+        <button key={intent} type="button" className="tmenu__intent"
+          onClick={() => { closeMenu(); onAskAgent([turn], intent); }}>{intent}</button>
+      ))}
+    </div>
+  );
+  /** Выбранные реплики, у которых можно поменять спикера (назначение). */
+  const assignable = [...selected].filter(editable).sort((a, b) => a - b);
+
   let menuNode: ReactNode = null;
   if (menu) {
     const one = menu.turn;
     const turn = one !== null ? turns[one] : undefined;
     const run = one !== null ? runFrom(turns, one) : [];
-    const chosen = one === null ? [...selected].sort((a, b) => a - b) : scope === "run" ? run : [one];
+    const chosen = one === null ? assignable : scope === "run" ? run : [one];
     const current = turn?.speaker ?? null;
     const title = turn ? `Реплика ${clock(turn.start)} · ${turn.speaker}` : `Выбрано: ${chosen.length} ${turnsWord(chosen.length)}`;
     menuNode = (
@@ -310,18 +345,7 @@ export function useTurnEdit({
             people={people} owner={owner} endpoint={endpoint} avatarVersion={avatarVersion}
             placeholder="Спикер встречи, имя или поиск" onPick={(to) => void split(splitAt, to)} />
           {error && <div className="card__error tmenu__error" role="alert">{error}</div>}
-          {onAskAgent && (
-            <div className="tmenu__ask" role="group" aria-label="Спросить агента об этой реплике">
-              <button type="button" className="tmenu__ask-main"
-                onClick={() => { const at = splitAt.turn; closeMenu(); onAskAgent([at]); }}>
-                <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />Спросить агента…
-              </button>
-              {AGENT_INTENTS.map((intent) => (
-                <button key={intent} type="button" className="tmenu__intent"
-                  onClick={() => { const at = splitAt.turn; closeMenu(); onAskAgent([at], intent); }}>{intent}</button>
-              ))}
-            </div>
-          )}
+          {askGroup(splitAt.turn)}
           {word && onFixWord && (
             <div className="tmenu__links">
               <button type="button" className="spk-link" title="Исправить распознанное (выделите слова и нажмите Ctrl+E)"
@@ -335,15 +359,29 @@ export function useTurnEdit({
     );
   }
 
+  if (askOnly) {
+    const turn = turns[askOnly.turn];
+    menuNode = (
+      <Popover anchor={askOnly.anchor} onClose={closeMenu} label="Спросить агента об этой реплике">
+        <div className="tmenu">
+          {turn && <div className="tmenu__title">{`Реплика ${clock(turn.start)} · ${turn.speaker}`}</div>}
+          {askGroup(askOnly.turn)}
+        </div>
+      </Popover>
+    );
+  }
+
   const bar = selected.size || done ? (
     <div className="tsel" role="status" aria-live="polite">
       {selected.size > 0 ? (
         <>
           <span>Выбрано: {selected.size} {turnsWord(selected.size)}</span>
-          <button type="button" className="spk-btn" disabled={busy}
-            onClick={(e) => { setError(null); setMenu({ anchor: e.currentTarget, turn: null }); }}>
-            Назначить выбранные…
-          </button>
+          {assignable.length > 0 && (
+            <button type="button" className="spk-btn" disabled={busy}
+              onClick={(e) => { setError(null); setMenu({ anchor: e.currentTarget, turn: null }); }}>
+              Назначить выбранные…
+            </button>
+          )}
           {onAskAgent && (
             <button type="button" className="spk-btn tsel__ask"
               onClick={() => onAskAgent([...selected].sort((a, b) => a - b))}>

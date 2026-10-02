@@ -48,7 +48,7 @@ const TABS: Record<CardStage, { id: Tab; label: string }[]> = {
 
 export function CardTabs({
   endpoint, id, folder, jobs, transcript, onOpenSettings, showTranscript, stage = "ready", agentRequest = null,
-  onAskAgent,
+  onAskAgent, onAgentTaken,
 }: {
   endpoint: Endpoint;
   id: string;
@@ -64,6 +64,8 @@ export function CardTabs({
   agentRequest?: AgentInsert | null;
   /** ✦ у пунктов итогов. */
   onAskAgent?: (request: AgentRequest) => void;
+  /** Вкладка «Агент» приняла просьбу `agentRequest` — владелец её сбрасывает. */
+  onAgentTaken?: () => void;
 }) {
   const tabs = TABS[stage];
   const [chosen, setTab] = useState<Tab>("transcript");
@@ -141,7 +143,8 @@ export function CardTabs({
     transcript: () => <TranscriptShown.Provider value={shown}>{transcript}</TranscriptShown.Provider>,
     summary: () => <SummaryTab {...shared} onAskAgent={onAskAgent} />,
     agent: () => (
-      <AgentTab id={id} assistant={assistant} onOpenSettings={onOpenSettings} endpoint={endpoint} insert={agentRequest} />
+      <AgentTab id={id} assistant={assistant} onOpenSettings={onOpenSettings} endpoint={endpoint} insert={agentRequest}
+        onTaken={onAgentTaken} />
     ),
   };
 

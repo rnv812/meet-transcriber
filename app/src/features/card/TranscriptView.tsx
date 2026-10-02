@@ -123,7 +123,7 @@ export function TranscriptView({
     const el = root.querySelector(`[data-hit="${current}"]`);
     if (!el) return;
     el.classList.add("hit--current");
-    // Панель скрыта (открыты «Итоги» или «Вопросы») — прокрутим, когда её покажут.
+    // Панель скрыта (открыты «Итоги» или «Агент») — прокрутим, когда её покажут.
     unscrolled.current = el.closest("[hidden]") !== null;
     if (!unscrolled.current) scrollTo(el);
   }, [current, hits, jump]);

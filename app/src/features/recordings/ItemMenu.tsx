@@ -7,7 +7,7 @@
  */
 
 import {
-  Fragment, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject,
+  Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject,
 } from "react";
 
 export type MenuItem = {
@@ -22,6 +22,8 @@ export type MenuItem = {
   hint?: string;
   /** Пункт виден, но сейчас недоступен (идёт другое действие); стрелки его пропускают. */
   disabled?: boolean;
+  /** Фокус при открытии — на этом пункте, а не на первом (в подтверждении — «Отмена»). */
+  autoFocus?: boolean;
 };
 
 const MARGIN = 8;
@@ -39,6 +41,7 @@ export function ItemMenu({ at, label, items, note, anchor, onClose }: {
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState(at);
+  const noteId = useId();
 
   useLayoutEffect(() => {
     const r = box.current?.getBoundingClientRect();
@@ -50,9 +53,12 @@ export function ItemMenu({ at, label, items, note, anchor, onClose }: {
     });
   }, [at, items.length, note]);
 
-  // Пункты сменились (подтверждение удаления) — фокус снова на первом.
+  // Пункты сменились (подтверждение удаления) — фокус снова на первом (или на
+  // отмеченном `autoFocus`: в подтверждении это «Отмена», два Enter не удаляют).
   useEffect(() => {
-    box.current?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)")?.focus();
+    const el = box.current;
+    (el?.querySelector<HTMLButtonElement>("[data-autofocus]:not(:disabled)")
+      ?? el?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)"))?.focus();
   }, [note]);
 
   useEffect(() => {
@@ -87,12 +93,13 @@ export function ItemMenu({ at, label, items, note, anchor, onClose }: {
 
   return (
     <div ref={box} className="item-menu" role="menu" aria-label={label} onKeyDown={onKeyDown}
-      style={{ left: pos.x, top: pos.y }}>
-      {note && <div className="item-menu__note">{note}</div>}
+      aria-describedby={note ? noteId : undefined} style={{ left: pos.x, top: pos.y }}>
+      {note && <div className="item-menu__note" id={noteId}>{note}</div>}
       {items.map((item) => (
         <Fragment key={item.label}>
           {item.separator && <div className="item-menu__sep" role="separator" />}
           <button type="button" role="menuitem" tabIndex={-1} title={item.hint} disabled={item.disabled}
+            data-autofocus={item.autoFocus || undefined}
             className={`item-menu__item${item.danger ? " item-menu__item--danger" : ""}`}
             onClick={item.onSelect}>
             {item.icon && <span className="item-menu__icon" aria-hidden="true">{item.icon}</span>}

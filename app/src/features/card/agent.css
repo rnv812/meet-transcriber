@@ -43,3 +43,11 @@
 .agent__past-title:hover { color: var(--text); }
 .agent__past[open] .agent__past-title { margin-bottom: 6px; }
 .agent__past-note { margin: 0 0 10px; font-size: 12px; }
+/* Ссылка ждёт вставки: чего ждём, «Вставить реплику», если признаков готовности нет. */
+.agent__pending {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 10px; font-size: 12px;
+  color: var(--text-2); background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
+}
+.agent__pending > span { flex: 1; min-width: 200px; }
+/* Фокус на саму вкладку — после «Спросить агента», пока терминал не готов: без рамки. */
+.agent:focus { outline: none; }

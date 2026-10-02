@@ -116,7 +116,7 @@ export const Turns = memo(function Turns({
                     }}>{t.speaker}</button>
                 )}
                 {t.uncertain && <span className="turn__flag">(нахлёст)</span>}
-                {onAskAgent && t.speaker !== NO_SPEAKER && (
+                {onAskAgent && (
                   <AskAgentButton className="turn__ask" label="Спросить агента об этой реплике"
                     title="Спросить агента об этой реплике (A)" aria-keyshortcuts="A"
                     onClick={(e) => { if (!(onSelect && (e.ctrlKey || e.metaKey || e.shiftKey))) onAskAgent([i]); }} />
@@ -124,7 +124,7 @@ export const Turns = memo(function Turns({
               </div>
               {/* Реплика, найденная только по спикеру, — совпадение целиком. */}
               <p className="turn__text" data-hit={mark && !mark.ranges.length ? mark.first : undefined}
-                onContextMenu={onSplitAt && t.speaker !== NO_SPEAKER ? (e) => onSplitAt(i, e) : undefined}>
+                onContextMenu={onSplitAt ? (e) => onSplitAt(i, e) : undefined}>
                 {mark?.ranges.length ? <Highlight text={text} ranges={mark.ranges} firstHit={mark.first} /> : text}
               </p>
             </div>
