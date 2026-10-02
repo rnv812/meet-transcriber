@@ -1040,3 +1040,78 @@ def test_summary_applies_the_title_line_when_enabled(env, capsys, monkeypatch):
     assert _main(["summary", RID]) == 0
     assert "Название:" not in (folder / "summary.md").read_text(encoding="utf-8")
     assert library.read_meta(folder)["title"] == "Утренний старт"
+
+
+# --- «Улучшить расшифровку» -------------------------------------------------------
+
+IMPROVE_REPLY = json.dumps({"replacements": [
+    {"find": "апи", "replace": "API", "kind": "term", "segments": [0], "confidence": 0.9},
+    {"find": "согласен", "replace": "согласна", "kind": "fix", "segments": [1], "confidence": 0.7},
+]}, ensure_ascii=False)
+
+
+def _improve_meeting(env):
+    folder = env["rec"] / RID
+    folder.mkdir()
+    (folder / "sys.opus").write_bytes(b"x")
+    library.write_transcript(folder, {"version": 1, "segments": [
+        {"start": 0.0, "end": 3.0, "speaker": "Демьян", "text": "Апи готов, апи шлюза тоже."},
+        {"start": 3.0, "end": 5.0, "speaker": "SPEAKER_01", "text": "Согласен."},
+    ]})
+    return folder
+
+
+def test_improve_lists_groups_and_applies_only_terms_without_all(env, capsys, monkeypatch):
+    folder = _improve_meeting(env)
+    _fake_llm(monkeypatch, [IMPROVE_REPLY])
+    assert _main(["improve", RID]) == 0
+    assert capsys.readouterr().out == "апи → API · 2\n"
+    assert library.read_transcript(folder)["segments"][0]["text"].startswith("Апи")
+    _fake_llm(monkeypatch, [IMPROVE_REPLY])
+    assert _main(["improve", RID, "--apply", "--json"]) == 0
+    got = _json_out(capsys)
+    assert got["applied"]["changed"] == 2 and [g["find"] for g in got["groups"]] == ["апи"]
+    texts = [s["text"] for s in library.read_transcript(folder)["segments"]]
+    assert texts == ["API готов, API шлюза тоже.", "Согласен."]
+
+
+def test_improve_all_includes_recognition_fixes(env, capsys, monkeypatch):
+    folder = _improve_meeting(env)
+    _fake_llm(monkeypatch, [IMPROVE_REPLY])
+    assert _main(["improve", RID, "--all", "--apply"]) == 0
+    out = capsys.readouterr().out
+    assert "согласен → согласна · 1 (исправление)" in out and "Применено: 3 замен" in out
+    assert library.read_transcript(folder)["segments"][1]["text"] == "Согласна."
+
+
+def test_improve_model_failure_is_exit_1(env, capsys, monkeypatch):
+    folder = _improve_meeting(env)
+    _fake_llm(monkeypatch, ["не JSON", "опять не JSON"])
+    assert _main(["improve", RID]) == 1
+    assert "Улучшение не получилось" in capsys.readouterr().err
+    assert "improve_error" in library.read_meta(folder)
+
+
+def test_improve_goes_through_the_running_app(env, capsys, monkeypatch):
+    from meet import control
+
+    _improve_meeting(env)
+    calls = []
+    states = [{"state": "running"}, {"state": "ready", "proposal": {"groups": [
+        {"id": "g1", "find": "апи", "replace": "API", "kind": "term", "count": 2},
+        {"id": "g2", "find": "согласен", "replace": "согласна", "kind": "fix", "count": 1}]}}]
+
+    def fake_request(path, method="GET", payload=None, timeout=5.0):
+        calls.append((method, path, payload))
+        if path.endswith("/improve/apply"):
+            return {"changed": 2, "step": {"id": "s1"}}
+        return {"id": "i1", "kind": "improve"} if method == "POST" else states.pop(0)
+
+    monkeypatch.setattr(control, "alive", lambda *a, **k: True)
+    monkeypatch.setattr(control, "request", fake_request)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    assert _main(["improve", RID, "--apply", "--json"]) == 0
+    got = _json_out(capsys)
+    assert got["via_app"] is True and got["applied"] == {"changed": 2, "step": "s1"}
+    assert calls[0][:2] == ("POST", f"/recordings/{RID}/improve")
+    assert calls[-1] == ("POST", f"/recordings/{RID}/improve/apply", {"groups": ["g1"]})

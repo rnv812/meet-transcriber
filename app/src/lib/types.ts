@@ -212,7 +212,10 @@ export type SpeakerOp =
   /** Заново разделено на спикеров: `speakers` — сколько их стало. */
   | { type: "rediarize"; speakers: number; params: Record<string, number> }
   /** «Исправить…»: распознанное `from` заменено на `to` — `count` раз (одно или во всей встрече). */
-  | { type: "text"; from: string; to: string; count: number; scope: "one" | "all" };
+  | { type: "text"; from: string; to: string; count: number; scope: "one" | "all" }
+  /** «Улучшить расшифровку»: замены ИИ одним шагом — `count` мест, `terms` групп терминов. */
+  | { type: "text"; scope: "ai"; from: string; to: string; count: number; terms: number;
+    groups?: ImproveApplied[] };
 export type SpeakerStep = {
   id: string;
   at: string;
@@ -519,3 +522,47 @@ export type AnalysisState = {
 
 /** `POST /recordings/{id}/title/suggest`: название и откуда оно (свежий анализ или вызов модели). */
 export type TitleSuggestion = { title: string; from: "analysis" | "model" };
+
+// --- «Улучшить расшифровку» ------------------------------------------------------
+
+/** Вид замены: термин (во всей встрече) или явная ошибка распознавания (в названных фразах). */
+export type ImproveKind = "term" | "fix";
+/** Место замены с окружением (как образцы «Исправить…»). */
+export type ImproveSample = TextSample;
+/** Группа замен «как распознано → как правильно» с числом мест. */
+export type ImproveGroup = {
+  id: string;
+  find: string;
+  replace: string;
+  kind: ImproveKind;
+  confidence: number;
+  count: number;
+  samples: ImproveSample[];
+};
+export type ImproveProposal = {
+  version: number;
+  model: string;
+  created_at: number;
+  fingerprint: string;
+  segments: number;
+  groups: ImproveGroup[];
+  warnings?: string[];
+};
+export type ImproveStateName = "none" | "queued" | "running" | "ready" | "failed";
+/** `GET /recordings/{id}/improve`; `hint` — предложить улучшение после GigaAM. */
+export type ImproveState = {
+  state: ImproveStateName;
+  proposal?: ImproveProposal;
+  error?: string;
+  job?: Job;
+  hint?: boolean;
+};
+/** Применённая группа (в ответе и в шаге истории). */
+export type ImproveApplied = { from: string; to: string; kind: ImproveKind; count: number };
+export type ImproveApplyRequest = { groups: string[]; add_rules?: boolean; add_terms?: boolean };
+export type ImproveApplyResult = SpeakersView & {
+  changed: number;
+  groups: ImproveApplied[];
+  rules?: { added: ReplacementRule[]; error?: string };
+  terms?: { added: string[]; error?: string };
+};

@@ -60,3 +60,13 @@ test("старый резидент без секции analysis: всё вкл�
   expect(await toggle("Главы")).toHaveAttribute("aria-checked", "true");
   expect(await toggle("Придумывать название встречи")).toHaveAttribute("aria-checked", "false");
 });
+
+test("«Улучшать расшифровку автоматически» выключено по умолчанию и уходит в analysis.improve_auto", async () => {
+  open();
+  const sw = await toggle("Улучшать расшифровку автоматически после распознавания");
+  expect(sw).toHaveAttribute("aria-checked", "false");
+  expect(screen.getByRole("button", { name: "Что такое улучшение расшифровки" })).toBeInTheDocument();
+  await userEvent.click(sw);
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { analysis: { improve_auto: true } }));
+});

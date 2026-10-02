@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { Sparkles } from "lucide-react";
 import { agentPrompt, type AgentRequest } from "../../lib/agentRef";
 import { buildView, INSIGHT_LABEL, usableAnalysis, type InsightView } from "../../lib/analysisView";
 import {
@@ -20,6 +21,7 @@ import {
   AnalysisStatus, reanalyzeBlocked, reanalyzeLabel, TitleSuggestPopover, useAnalysis, useTitleSuggest,
 } from "./analysis";
 import { noProvider, useAssistant } from "./assistant";
+import { useImprove } from "./improve";
 import { AudioPlayer, type AudioPlayerHandle } from "./AudioPlayer";
 import { CardActions } from "./CardActions";
 import { CardTabs, type CardStage } from "./CardTabs";
@@ -214,6 +216,12 @@ export function RecordingCard({
   // Анализ встречи: состояние, «Переанализировать», «Предложить название».
   const assistantInfo = useAssistant(endpoint);
   const analysis = useAnalysis(endpoint, id, rec?.path ?? null, jobs, rec);
+  // ✦ «Улучшить расшифровку»: задача, окно со списком замен, итог с «Отменить».
+  const improve = useImprove({
+    endpoint, id, folder: rec?.path ?? null, jobs, version: rec, head: rec?.edit_head,
+    noModel: noProvider(assistantInfo), playable: !!rec && Object.keys(rec.tracks).length > 0 && !audioFailed,
+    onPlay: playPhrase, onChanged: speakersChanged,
+  });
   // Разметка по репликам — один раз на анализ (и на смену расшифровки или настроек).
   const segmentCount = segments?.length ?? 0;
   const analysisDoc = usableAnalysis(analysis.state, segmentCount);
@@ -340,7 +348,15 @@ export function RecordingCard({
           onNameSpeaker={nameSpeaker} onSpeaker={turnEdit.onSpeaker} selected={turnEdit.selected}
           onSelect={turnEdit.onSelect} onRestrictSelection={turnEdit.restrict} onSplitAt={onTextMenu}
           onAskAgent={askTurns}
-          toolbar={turnEdit.bar || textFix.bar ? <div className="tbars">{turnEdit.bar}{textFix.bar}</div> : null}
+          toolbar={turnEdit.bar || textFix.bar || improve.bar
+            ? <div className="tbars">{turnEdit.bar}{textFix.bar}{improve.bar && <div className="tfix-bar">{improve.bar}</div>}</div>
+            : null}
+          tools={
+            <button type="button" className="find__tool" aria-label="Улучшить расшифровку" onClick={() => void improve.start()} disabled={!!improve.blocked}
+              title={improve.blocked ?? "Улучшить расшифровку: ИИ найдёт неверно распознанные термины и покажет список замен"}>
+              <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />Улучшить
+            </button>
+          }
           find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} reveal={reveal} />
       ) : <EmptyState title="В записи нет речи" />;
       break;
@@ -403,12 +419,15 @@ export function RecordingCard({
         reanalyzeBlocked={reanalyzeBlocked(analysis.state, noModel)}
         reanalyzeLabel={reanalyzeLabel(analysis.state)}
         onSuggestTitle={status.kind === "ready" ? titleSuggest.open : undefined}
+        onImprove={status.kind === "ready" && turns.length ? () => void improve.start() : undefined}
+        improveBlocked={improve.blocked}
         onDelete={doDelete}
       />
       {error && <div className="card__error" role="alert">{error}</div>}
       {status.kind === "ready" && (
         <AnalysisStatus state={analysis.state} busy={busy} onRun={noModel ? undefined : doReanalyze} />
       )}
+      {status.kind === "ready" && improve.status}
       {titleSuggest.suggest && cardEl.current && (
         <TitleSuggestPopover anchor={cardEl.current.querySelector<HTMLElement>(".card__title") ?? cardEl.current}
           suggest={titleSuggest.suggest} onApply={(t) => void titleSuggest.apply(t)} onClose={titleSuggest.close} />
@@ -464,6 +483,7 @@ export function RecordingCard({
       <div className="card__body"><JiraLinks.Provider value={jira}>{body}</JiraLinks.Provider></div>
       {status.kind === "ready" && turnEdit.menu}
       {status.kind === "ready" && textFix.node}
+      {status.kind === "ready" && improve.dialog}
       {status.kind === "ready" && rediarizeOpen && (
         <RediarizeDialog endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} ready={!!rec.rediarize_ready}
           twoTrack={"sys" in rec.tracks && "mic" in rec.tracks} playable={playable} onPlay={playPhrase}

@@ -207,7 +207,19 @@ def _add_library_parsers(sub) -> None:
                     "модели по началу встречи. С --apply — поставить его вместо нынешнего.")
     p_ti.add_argument("folder", help=folder_help)
     p_ti.add_argument("--apply", action="store_true", help="поставить предложенное название")
-    for p in (p_an, p_ti):
+    p_im = sub.add_parser(
+        "improve", parents=[as_json],
+        help="улучшить расшифровку: ИИ находит неверно распознанные термины",
+        description="Модель находит неверно распознанные термины («апи» → «API») и печатает "
+                    "список замен с числом мест. С --apply — применить их одним шагом истории "
+                    "встречи (отменяется в карточке встречи). Без --all — только термины; с --all — "
+                    "ещё и явные ошибки распознавания обычных слов. Если приложение запущено, "
+                    "улучшение идёт задачей через него.")
+    p_im.add_argument("folder", help=folder_help)
+    p_im.add_argument("--apply", action="store_true", help="применить предложенные замены")
+    p_im.add_argument("--all", action="store_true",
+                      help="не только термины, но и явные ошибки распознавания обычных слов")
+    for p in (p_an, p_ti, p_im):
         p.add_argument("--provider", default=None, choices=("auto",) + PROVIDERS,
                        help=provider_help + " (без приложения)")
 

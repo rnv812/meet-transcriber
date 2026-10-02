@@ -214,7 +214,18 @@ def apply(folder: Path, find: str, replace: str, scope: str, voices_dir: Path, *
             by_segment.setdefault(i, []).append((a, b, repl))
     if not by_segment:
         raise Unchanged("нечего менять — текст уже такой")
+    changed = sum(len(x) for x in by_segment.values())
+    op = {"type": "text", "from": find, "to": replace, "count": changed, "scope": scope}
+    return commit_spans(folder, data, by_segment, op, voices_dir, now=now)
 
+
+def commit_spans(folder: Path, data: dict, by_segment: dict[int, list[tuple[int, int, str]]], op: dict,
+                 voices_dir: Path, *, now: datetime | None = None) -> dict:
+    """Замены `by_segment` ({сегмент: [(начало, конец, замена)]}, без
+    перекрытий) — одним шагом истории встречи с операцией `op`; слова
+    выровнены. `data` — транскрипт из speakers.editable. Общая часть
+    «Исправить…» и «Улучшить расшифровку» (meet.improve)."""
+    segments = data["segments"]
     items = []
     for i, spans in sorted(by_segment.items()):
         before = segments[i]
@@ -222,7 +233,6 @@ def apply(folder: Path, find: str, replace: str, scope: str, voices_dir: Path, *
         items.append({"at": i, "before": before, "after": [after]})
         segments[i] = after
     changed = sum(len(x) for x in by_segment.values())
-    op = {"type": "text", "from": find, "to": replace, "count": changed, "scope": scope}
     step = {
         "id": uuid.uuid4().hex[:12],
         "at": (now or datetime.now()).isoformat(timespec="seconds"),
