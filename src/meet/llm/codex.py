@@ -1,6 +1,6 @@
 """Провайдер Codex CLI: `codex exec` в песочнице только-чтение.
 
-Сессий нет: `resume` игнорируется, память диалога вызывающий кладёт в prompt.
+Сессий нет: `resume` и `session_id` игнорируются, память диалога вызывающий кладёт в prompt.
 Рабочая папка — база знаний (первая существующая из `allowed_dirs[1:]`),
 иначе `cwd`. Флаги сверены с `codex exec --help` (codex-cli 0.159.0).
 `model` и `max_turns` — понятия Claude; Codex берёт модель из своего конфига.
@@ -103,6 +103,7 @@ async def run(
     system_prompt: str,
     model: str | None = None,
     resume: str | None = None,
+    session_id: str | None = None,
     allowed_dirs: tuple = (),
     cwd: str | Path | None = None,
     timeout_s: float = 180.0,

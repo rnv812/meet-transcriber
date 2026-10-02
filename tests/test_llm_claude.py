@@ -191,3 +191,38 @@ def test_background_calls_do_not_persist_sessions(monkeypatch):
     assert "--no-session-persistence" in seen["cmd"]
     assert seen["cmd"][seen["cmd"].index("--model") + 1] == "opus"
     assert reply.text == "ответ" and reply.session_id is None
+
+
+def _command_and_reply(monkeypatch, **kw):
+    from claude_agent_sdk import ResultMessage
+    from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
+
+    seen = {}
+
+    def fake_query(*, prompt, options):
+        seen["cmd"] = SubprocessCLITransport(prompt=prompt, options=options)._build_command()
+
+        async def gen():
+            yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
+                                num_turns=1, session_id=kw.get("resume") or kw.get("session_id") or "x",
+                                result="ответ")
+        return gen()
+
+    monkeypatch.setattr(claude_agent_sdk, "query", fake_query)
+    monkeypatch.setattr(claude, "find_cli", lambda: "C:/claude.exe")
+    reply = asyncio.run(claude.run("привет", system_prompt="s", **kw))
+    return seen["cmd"], reply
+
+
+def test_live_qa_session_is_saved_under_our_id_and_resumed(monkeypatch):
+    """Вопросы живого ассистента — единственный сохраняемый фоновый сеанс:
+    новый — `--session-id=<наш UUID>`, дальше — `--resume=<тот же>`."""
+    sid = "0b6f8a52-3c1d-4e2f-9a7b-1c2d3e4f5a6b"
+    cmd, reply = _command_and_reply(monkeypatch, session_id=sid)
+    assert f"--session-id={sid}" in cmd and "--no-session-persistence" not in cmd
+    assert reply.session_id == sid
+    cmd, reply = _command_and_reply(monkeypatch, resume=sid)
+    assert f"--resume={sid}" in cmd and not any(a.startswith("--session-id") for a in cmd)
+    assert "--no-session-persistence" not in cmd and reply.session_id == sid
+    cmd, reply = _command_and_reply(monkeypatch)
+    assert "--no-session-persistence" in cmd and reply.session_id is None

@@ -1,7 +1,7 @@
 """Провайдер локальной модели через OpenAI-совместимый API (LM Studio, Ollama).
 
 Только stdlib (urllib). Инструментов нет: базу знаний такая модель не читает,
-`allowed_dirs`/`cwd`/`resume`/`max_turns` игнорируются. Имя модели —
+`allowed_dirs`/`cwd`/`resume`/`session_id`/`max_turns` игнорируются. Имя модели —
 `llm.local_model` из настроек (его подставляет `meet.llm.resolve`).
 """
 
@@ -55,6 +55,7 @@ async def run(
     system_prompt: str,
     model: str | None = None,
     resume: str | None = None,
+    session_id: str | None = None,
     allowed_dirs: tuple = (),
     cwd: str | Path | None = None,
     timeout_s: float = 180.0,

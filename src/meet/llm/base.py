@@ -3,8 +3,11 @@
 Каждый провайдер — async-функция с одной сигнатурой (её уже потребляют
 Digester и QAService):
 
-    runner(prompt, *, system_prompt, model, resume, allowed_dirs, cwd,
-           timeout_s, max_turns) -> AgentReply
+    runner(prompt, *, system_prompt, model, resume, session_id, allowed_dirs,
+           cwd, timeout_s, max_turns) -> AgentReply
+
+`session_id`/`resume` — свой сохраняемый сеанс (только Claude Code; у
+остальных сессий нет, они параметры принимают и не используют).
 
 Ошибки не бросаются, а возвращаются в `AgentReply.error`.
 """

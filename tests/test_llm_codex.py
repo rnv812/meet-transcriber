@@ -206,3 +206,12 @@ def test_every_background_codex_call_is_ephemeral(monkeypatch):
     assert len(FakePopen.calls) == 2
     for call in FakePopen.calls:
         assert call.cmd[1] == "exec" and "--ephemeral" in call.cmd
+
+
+def test_session_kwargs_are_accepted_and_ignored(monkeypatch):
+    """Вопросы живого ассистента шлют `session_id`; у Codex сессий нет — id
+    не возвращается, и вопросы идут с памятью диалога в промпте."""
+    _setup(monkeypatch)
+    reply = _run(session_id="0b6f8a52-3c1d-4e2f-9a7b-1c2d3e4f5a6b", resume=None)
+    assert reply.text == "ответ" and reply.session_id is None
+    assert not any("session" in a for a in FakePopen.calls[0].cmd)
