@@ -1,0 +1,4 @@
+/* macOS permission strings for Meet (English). */
+"NSMicrophoneUsageDescription" = "Meet records your voice during a meeting and transcribes the recording on this computer.";
+"NSAudioCaptureUsageDescription" = "Meet records the other participants during a meeting and transcribes the recording on this computer.";
+"NSScreenCaptureUsageDescription" = "Meet captures system audio only (the other participants); the screen image is never saved.";

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Дополнение к Info.plist, который собирает Tauri (tauri.macos.conf.json →
+  bundle.macOS.infoPlist). Строки — по-русски; английские и русские переводы
+  лежат в en.lproj/ и ru.lproj/InfoPlist.strings.
+  Микрофон и системный звук пишет резидент — дочерний процесс приложения,
+  поэтому macOS спрашивает разрешения от имени Meet.
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>ru</string>
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>ru</string>
+    <string>en</string>
+  </array>
+  <key>LSUIElement</key>
+  <false/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Meet записывает ваш голос во время встречи и расшифровывает запись на этом компьютере.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Meet записывает звук собеседников во время встречи и расшифровывает запись на этом компьютере.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Meet записывает только системный звук (голоса собеседников); изображение экрана не сохраняется.</string>
+</dict>
+</plist>

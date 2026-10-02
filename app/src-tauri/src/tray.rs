@@ -11,7 +11,6 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
@@ -745,6 +744,7 @@ impl TrayIconKind {
     ];
 
     /// PNG размера `size` из `TRAY_SIZES` (другой — самый крупный).
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     fn png(self, size: u32) -> &'static [u8] {
         let set: [&'static [u8]; 4] = match self {
             TrayIconKind::Idle => tray_pngs!("idle"),
@@ -760,7 +760,32 @@ impl TrayIconKind {
         set[at]
     }
 
+    /// Шаблон строки меню macOS (@2x, 36 px): одноцветный, macOS красит его
+    /// сама; tray-icon приводит картинку к 18 pt.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn template_png(self) -> &'static [u8] {
+        match self {
+            TrayIconKind::Idle => include_bytes!("../icons/tray-template-idle@2x.png").as_slice(),
+            TrayIconKind::Recording => {
+                include_bytes!("../icons/tray-template-recording@2x.png").as_slice()
+            }
+            TrayIconKind::Live => include_bytes!("../icons/tray-template-live@2x.png").as_slice(),
+            TrayIconKind::Busy => include_bytes!("../icons/tray-template-busy@2x.png").as_slice(),
+            TrayIconKind::Offline => {
+                include_bytes!("../icons/tray-template-offline@2x.png").as_slice()
+            }
+        }
+    }
+
+    /// Значок состояния: на Windows — цветной PNG размера `size`, в строке
+    /// меню macOS — шаблон (`template_png`).
     fn image(self, size: u32) -> tauri::Result<Image<'static>> {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = size;
+            Image::from_bytes(self.template_png())
+        }
+        #[cfg(not(target_os = "macos"))]
         Image::from_bytes(self.png(size))
     }
 }
@@ -1081,6 +1106,8 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
     let icon_size = tray_size();
     TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon_for(None, &ResidentStatus::Starting).image(icon_size)?)
+        // Строка меню macOS: шаблонная картинка, цвет подставляет система.
+        .icon_as_template(cfg!(target_os = "macos"))
         .tooltip(tooltip(None, &ResidentStatus::Starting))
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -1240,7 +1267,7 @@ fn open_log(app: &AppHandle) {
     // бывает в любом из них.
     let target = log_folder(&log, &resident::data_dir());
     // explorer возвращает ненулевой код и при успехе — ждём только запуска.
-    if let Err(error) = Command::new("explorer").arg(&target).spawn() {
+    if let Err(error) = crate::platform::open_folder(&target) {
         shell_log!("журнал не открылся: {error}");
     }
 }
@@ -1343,7 +1370,13 @@ fn poll_loop(app: &AppHandle, initial_menu: MenuState, icon_size: u32) {
                 match kind
                     .image(icon_size)
                     .and_then(|image| tray.set_icon(Some(image)))
-                {
+                    .and_then(|()| {
+                        if cfg!(target_os = "macos") {
+                            tray.set_icon_as_template(true)
+                        } else {
+                            Ok(())
+                        }
+                    }) {
                     Ok(()) => shown_icon = Some(kind),
                     Err(error) => shell_log!("иконка трея не сменилась: {error}"),
                 }
@@ -1731,6 +1764,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn tray_icons_are_png_of_every_size() {
         for kind in TrayIconKind::ALL {
@@ -1748,6 +1782,19 @@ mod tests {
             seen.dedup();
             assert_eq!(seen.len(), TrayIconKind::ALL.len(), "{size}");
         }
+    }
+
+    #[test]
+    fn menu_bar_templates_are_36px_png_and_distinct() {
+        let mut seen: Vec<&[u8]> = Vec::new();
+        for kind in TrayIconKind::ALL {
+            let image = Image::from_bytes(kind.template_png()).expect("шаблон не читается");
+            assert_eq!((image.width(), image.height()), (36, 36), "{kind:?}");
+            seen.push(kind.template_png());
+        }
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), TrayIconKind::ALL.len());
     }
 
     #[test]

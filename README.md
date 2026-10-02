@@ -178,6 +178,41 @@ CPU); пакеты почти все берутся из кэша, обычно 
 `%LOCALAPPDATA%\uv\cache` (они общие с другими программами) и запись `meet` в
 диспетчере учётных данных Windows.
 
+### macOS (экспериментально)
+
+> Сборка для macOS 13 и новее на Apple Silicon (M1 и новее) **не проверена на
+> реальном Mac**: она собирается и проходит тесты в CI, но запись, расшифровку
+> и разрешения на живой машине ещё никто не пробовал. Если что-то не так —
+> пришлите журнал (`~/Library/Application Support/meet/logs`).
+
+1. Скачайте `Meet_<версия>_aarch64.dmg` со страницы
+   [Releases](https://github.com/rnv812/meet-transcriber/releases); сумма —
+   в том же `SHA256SUMS.txt` (`shasum -a 256 Meet_<версия>_aarch64.dmg`).
+2. Откройте образ и перетащите Meet в «Программы».
+3. Приложение не подписано сертификатом Apple, поэтому при первом запуске
+   macOS его остановит. Откройте «Системные настройки → Конфиденциальность и
+   безопасность» и нажмите **«Всё равно открыть»** рядом с сообщением о Meet.
+   Или в Терминале: `xattr -dr com.apple.quarantine /Applications/Meet.app`.
+4. Разрешения, которые macOS спросит от имени Meet:
+   - **Микрофон** — ваш голос;
+   - **Запись экрана** (в macOS 15 — «Запись экрана и системного звука») —
+     голоса собеседников: системный звук пишется через ScreenCaptureKit,
+     изображение экрана не сохраняется. Без разрешения запись не начнётся и
+     приложение скажет, где его включить.
+5. Запасной путь для звука собеседников — виртуальное устройство
+   [BlackHole](https://github.com/ExistentialAudio/BlackHole): направьте в него
+   звук звонка («Настройка Audio-MIDI» → «Устройство с несколькими выходами») и
+   выберите BlackHole в «Настройки → Звук → Звук собеседников».
+
+Отличия от Windows: данные — в `~/Library/Application Support/meet`, токен
+Hugging Face — в связке ключей macOS, значок — в строке меню. Движок —
+профиль «Apple Silicon» (около 0,6 ГБ загрузки и 3 ГБ на диске): распознавание
+на процессоре (GigaAM, Whisper int8), разделение на спикеров — на графике
+(MPS), если оно её поддерживает. Автозапись видит звонок по микрофону и звуку
+программы (macOS 14 и новее); сайт звонка в браузере не определяется. Панель
+ассистента — без прозрачных углов. Обновление по кнопке скачивает образ диска
+и открывает его — Meet в «Программах» заменяется перетаскиванием.
+
 ## Как пользоваться
 
 ### Трей и запись
@@ -354,8 +389,8 @@ TXT, SRT).
 
 ## Платформы
 
-Сейчас — Windows 10 и 11 (x64). Linux и macOS в планах; сборка для macOS
-поначалу выйдет непроверенной.
+Windows 10 и 11 (x64). macOS 13 и новее на Apple Silicon — экспериментально,
+на реальном Mac не проверено (см. «Установка → macOS»). Linux — в планах.
 
 ## Разработка
 
@@ -434,4 +469,6 @@ local OpenAI-compatible server); nothing leaves your machine unless you call a
 model. Meetings can be searched, merged and exported to a knowledge base such
 as Obsidian. Download the installer from
 [Releases](https://github.com/rnv812/meet-transcriber/releases); the
-interface is in Russian. Licensed under Apache-2.0.
+interface is in Russian. An experimental, unsigned build for macOS 13+ on Apple
+Silicon (`Meet_<version>_aarch64.dmg`) is published alongside; it is built and
+tested in CI but has not yet been tried on a real Mac. Licensed under Apache-2.0.

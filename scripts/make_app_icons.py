@@ -21,6 +21,12 @@ Windows не растягивает картинку, и края остаютс
 * busy — кольцо с разрывом (дуга): расшифровываем, запускаемся, обновляемся;
 * offline — кольцо приглушённое и янтарная точка: нет движка или службы записи.
 
+Строка меню macOS (экспериментально) — те же пять состояний шаблонными
+картинками (template image): одноцветные, macOS сама красит их под светлую и
+тёмную строку меню. Цвета там нет, поэтому состояния различаются формой: точка
+записи — сплошная, «нет связи» — бледное кольцо с точкой, ассистент — точка в
+центре, «занят» — дуга. Размеры 18 и 36 px (@1x/@2x: строка меню — 18 pt).
+
 Запуск: .venv/Scripts/python scripts/make_app_icons.py
 """
 
@@ -67,6 +73,8 @@ ICO_SIZES = (16, 20, 24, 32, 40, 48, 64, 128, 256)
 ICNS_SIZES = (16, 32, 64, 128, 256, 512, 1024)
 TRAY_STATES = ("idle", "recording", "live", "busy", "offline")
 TRAY_SIZES = (16, 20, 24, 32)
+# Строка меню macOS: шаблонные картинки @1x и @2x.
+TEMPLATE_SIZES = {18: "", 36: "@2x"}
 
 # Значок приложения, доли стороны S. Тёмный скруглённый квадрат, под кольцом —
 # мягкое пятно акцента, вокруг кольца — свечение (как у логотипа в баннере).
@@ -106,6 +114,13 @@ TRAY = {
     24: {"R": 10.5, "r": 4.85, "dot": 4.3, "knock": 6.1, "center": 2.6, "halo": 0.85},
     32: {"R": 14.0, "r": 6.5, "dot": 5.7, "knock": 8.1, "center": 3.4, "halo": 1.1},
 }
+# Шаблоны строки меню macOS: та же геометрия, что у трея 16/32, в масштабе 18/36.
+TEMPLATE = {
+    18: {"R": 7.9, "r": 4.0, "dot": 3.1, "knock": 4.5, "center": 1.9},
+    36: {"R": 15.8, "r": 8.0, "dot": 6.2, "knock": 9.0, "center": 3.8},
+}
+# Кольцо «нет связи» в шаблоне — бледнее остальных (цвета в шаблоне нет).
+TEMPLATE_MUTED_ALPHA = 0.45
 # Свечение — тонкая каёмка: на светлой панели задач шире оно читается как размытие.
 HALO_ALPHA = 0.4
 # Разрыв дуги «занят»: центр и половина угла, градусы (0 — вправо, против часовой).
@@ -257,6 +272,40 @@ def draw_tray(state: str, size: int) -> Image.Image:
     return c.image()
 
 
+def _ring_shape(c: "Canvas", state: str, center: float, outer: float, inner: float) -> np.ndarray:
+    """Кольцо состояния: у «занят» — дуга с разрывом и скруглёнными концами."""
+    ring = c.ring(center, center, outer, inner)
+    if state == "busy":
+        gap = np.abs((c.angle(center, center) - BUSY_GAP_AT + 180.0) % 360.0 - 180.0) < BUSY_GAP_HALF
+        ring = ring & ~gap
+        mid, half = (outer + inner) / 2, (outer - inner) / 2
+        for edge in (BUSY_GAP_AT - BUSY_GAP_HALF, BUSY_GAP_AT + BUSY_GAP_HALF):
+            ax = center + mid * math.cos(math.radians(edge))
+            ay = center - mid * math.sin(math.radians(edge))
+            ring = ring | c.disc(ax, ay, half)
+    return ring
+
+
+def draw_tray_template(state: str, size: int) -> Image.Image:
+    """Шаблон строки меню macOS: чёрный с прозрачностью, состояния — формой."""
+    if state not in TRAY_STATES:
+        raise ValueError(f"неизвестное состояние трея: {state}")
+    if size not in TEMPLATE:
+        raise ValueError(f"нет размера шаблона {size}: есть {sorted(TEMPLATE)}")
+    g = TEMPLATE[size]
+    c = Canvas(size)
+    center = size / 2
+    ring = _ring_shape(c, state, center, g["R"], g["r"])
+    c.over(ring, "#000000", TEMPLATE_MUTED_ALPHA if state == "offline" else 1.0)
+    if state == "live":
+        c.over(c.disc(center, center, g["center"]), "#000000")
+    if state in ("recording", "offline"):
+        dot_at = size - g["dot"] - size / 32
+        c.erase(c.disc(dot_at, dot_at, g["knock"]))
+        c.over(c.disc(dot_at, dot_at, g["dot"]), "#000000")
+    return c.image()
+
+
 # --- вектор ---------------------------------------------------------------
 
 
@@ -348,6 +397,10 @@ def render_all(icons: Path = ICONS, public: Path = PUBLIC) -> list[Path]:
         for size in TRAY_SIZES:
             path = icons / f"tray-{state}-{size}.png"
             draw_tray(state, size).save(path, optimize=True)
+            written.append(path)
+        for size, suffix in TEMPLATE_SIZES.items():
+            path = icons / f"tray-template-{state}{suffix}.png"
+            draw_tray_template(state, size).save(path, optimize=True)
             written.append(path)
     text = svg()
     for path in (icons / "source" / "meet.svg", public / "favicon.svg"):
