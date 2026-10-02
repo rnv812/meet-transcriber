@@ -11,7 +11,7 @@ import pytest
 from meet.assist.agent import AgentReply
 from meet.assist.app import AssistState
 from meet.assist.bus import TranscriptBus
-from meet.assist.digest import Digest
+from meet.assist.live_state import LIVE_STATE_JSON, LiveState
 from meet.settings import Settings
 
 
@@ -22,15 +22,34 @@ def test_state_set_task_rebuilds_prompts(tmp_path, monkeypatch):
         "---\ntype: hub\n---\n# Demo\n\n## Сейчас\n\n- **Состояние:** пилот\n",
         encoding="utf-8",
     )
-    state = AssistState(bus=TranscriptBus(), digest=Digest(),
+    state = AssistState(bus=TranscriptBus(), live=LiveState(),
                         glossary="джоба", vault=vault, cwd=tmp_path)
     assert "джоба" in state.digester_system
     asyncio.run(state.set_task("demo"))
     assert "пилот" in state.digester_system and "пилот" in state.qa_system
 
 
+def test_state_view_and_hint_actions(tmp_path):
+    live = LiveState()
+    state = AssistState(bus=TranscriptBus(), live=live, glossary="", vault=None, cwd=tmp_path)
+    saved = []
+    state.on_change = lambda: saved.append(1)
+    live.apply({"topic": "Запуск", "ops": [{"op": "add", "section": "hints", "kind": "risk",
+                                           "text": "Нет владельца", "why": "", "t": "00:00:05"}]})
+    sig = state.signature()
+    view = state.view()
+    assert view["hints"][0]["id"] == "h1" and view["summary"]["topic"] == "Запуск"
+    assert "Запуск" in view["digest"] and view["status"] is None
+    assert state.hint_action("h1", "pin") and saved == [1]
+    assert state.signature() != sig
+    assert not state.hint_action("h9", "dismiss") and saved == [1]
+    assert state.hint_action("h1", "dismiss") and state.view()["hints"] == []
+    with pytest.raises(ValueError):
+        state.hint_action("h1", "взорвать")
+
+
 def test_state_without_vault_has_no_vault_rules(tmp_path):
-    state = AssistState(bus=TranscriptBus(), digest=Digest(),
+    state = AssistState(bus=TranscriptBus(), live=LiveState(),
                         glossary="", vault=None, cwd=tmp_path)
     assert "superseded" not in state.qa_system
     assert state.qa_allowed_dirs == (tmp_path,)
@@ -107,6 +126,8 @@ class _Heavy:
         self.qa_kwargs = None
         self.opened = []
         self.on_stop = None   # зовётся из FakeEngine.stop (проверки момента)
+        self.on_engine = None  # подправить движок сразу после создания
+        self.live = None
         self.stop_event = None
         self.loop = None
         heavy = self
@@ -117,6 +138,8 @@ class _Heavy:
                 self.kw = kw
                 self.started = self.stopped = False
                 heavy.engine = self
+                if heavy.on_engine is not None:
+                    heavy.on_engine(self)
 
             def start(self):
                 if start_error is not None:
@@ -134,8 +157,9 @@ class _Heavy:
         class FakeDigester:
             status = None
 
-            def __init__(self, bus, digest, **kw):
+            def __init__(self, bus, live, **kw):
                 heavy.digester_kwargs = kw
+                heavy.live = live
 
             def set_system_prompt(self, text):
                 pass
@@ -414,16 +438,16 @@ def test_child_stops_itself_when_parent_resident_dies(tmp_path, monkeypatch):
 # --- база знаний в живом режиме ---------------------------------------------
 
 
-def test_state_knowledge_dir_reaches_qa_and_digest(tmp_path):
-    """Спека: база знаний читается «при итогах, вопросах и дайджесте» — и в
-    живом режиме тоже. Codex берёт рабочей папкой первую из allowed_dirs[1:]."""
+def test_state_knowledge_dir_reaches_qa_and_term_index(tmp_path):
+    """База знаний: вопросам — на чтение (Codex берёт рабочей папкой первую из
+    allowed_dirs[1:]); тикам — только указатель терминов, без инструментов."""
     kb = tmp_path / "kb"
     kb.mkdir()
-    state = AssistState(bus=TranscriptBus(), digest=Digest(), glossary="",
+    state = AssistState(bus=TranscriptBus(), live=LiveState(), glossary="",
                         vault=None, cwd=tmp_path, knowledge=kb)
     assert state.qa_allowed_dirs == (tmp_path, kb)
-    assert state.digest_allowed_dirs == (tmp_path, kb)
-    assert str(kb) in state.qa_system and str(kb) in state.digester_system
+    assert state.knowledge == kb
+    assert str(kb) in state.qa_system and str(kb) not in state.digester_system
     assert "superseded" not in state.qa_system  # конвенция хаба — только у vault
 
 
@@ -431,34 +455,65 @@ def test_state_knowledge_same_as_vault_keeps_the_old_setup(tmp_path):
     """knowledge_dir мигрировал из vault: доступ и промпты — прежние."""
     vault = tmp_path / "Claude"
     vault.mkdir()
-    plain = AssistState(bus=TranscriptBus(), digest=Digest(), glossary="",
+    plain = AssistState(bus=TranscriptBus(), live=LiveState(), glossary="",
                         vault=vault, cwd=tmp_path)
-    same = AssistState(bus=TranscriptBus(), digest=Digest(), glossary="",
+    same = AssistState(bus=TranscriptBus(), live=LiveState(), glossary="",
                        vault=vault, cwd=tmp_path, knowledge=vault)
     assert same.qa_allowed_dirs == plain.qa_allowed_dirs == (tmp_path, vault)
-    assert same.digest_allowed_dirs == ()
+    assert same.knowledge is None
     assert same.qa_system == plain.qa_system
     assert same.digester_system == plain.digester_system
 
 
 def test_state_missing_knowledge_dir_is_ignored(tmp_path):
-    state = AssistState(bus=TranscriptBus(), digest=Digest(), glossary="",
+    state = AssistState(bus=TranscriptBus(), live=LiveState(), glossary="",
                         vault=None, cwd=tmp_path, knowledge=tmp_path / "нет")
     assert state.qa_allowed_dirs == (tmp_path,)
-    assert state.digest_allowed_dirs == ()
+    assert state.knowledge is None
 
 
-def test_run_assist_passes_knowledge_dir_to_qa_and_digester(tmp_path, monkeypatch):
+def test_run_assist_passes_knowledge_dir_to_qa_and_term_index(tmp_path, monkeypatch):
     async def done(stop):
         return None
 
     kb = tmp_path / "kb"
     kb.mkdir()
+    (kb / "Шлюз.md").write_text("# Платёжный шлюз\n\nСервис приёма платежей.\n",
+                               encoding="utf-8")
     heavy = _Heavy(monkeypatch, digester_run=done)
     _run(tmp_path, open_browser=False, port=0, knowledge_dir=str(kb))
     assert kb in heavy.qa_kwargs["allowed_dirs"]
-    assert kb in heavy.digester_kwargs["allowed_dirs"]
-    assert heavy.digester_kwargs["cwd"] == heavy.engine.out_dir
+    assert "allowed_dirs" not in heavy.digester_kwargs  # тики без инструментов
+    assert len(heavy.digester_kwargs["kb"]) >= 1
+
+
+def test_final_live_state_saved_to_recording(tmp_path, monkeypatch):
+    async def done(stop):
+        heavy.live.apply({"topic": "Запуск", "ops": [
+            {"op": "add", "section": "decisions", "text": "Запуск в среду"}]})
+
+    heavy = _Heavy(monkeypatch, digester_run=done)
+
+    def fake_start():
+        heavy.engine.out_dir.mkdir(parents=True)
+        heavy.engine.started = True
+
+    heavy.on_engine = lambda engine: setattr(engine, "start", fake_start)
+    _run(tmp_path, open_browser=False, port=0)
+    saved = json.loads((heavy.engine.out_dir / LIVE_STATE_JSON).read_text(encoding="utf-8"))
+    assert saved["summary"]["topic"] == "Запуск"
+    assert saved["summary"]["decisions"][0]["text"] == "Запуск в среду"
+
+
+def test_empty_live_state_not_written(tmp_path, monkeypatch):
+    async def done(stop):
+        return None
+
+    heavy = _Heavy(monkeypatch, digester_run=done)
+    heavy.on_engine = lambda engine: setattr(
+        engine, "start", lambda: engine.out_dir.mkdir(parents=True))
+    _run(tmp_path, open_browser=False, port=0)
+    assert not (heavy.engine.out_dir / LIVE_STATE_JSON).exists()
 
 
 def test_remove_endpoint_retries_while_resident_reads_it(tmp_path, monkeypatch):

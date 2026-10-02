@@ -2,13 +2,13 @@ import asyncio
 
 from meet.assist.agent import AgentReply
 from meet.assist.bus import TranscriptBus
-from meet.assist.digest import Digest
+from meet.assist.live_state import LiveState
 from meet.assist.qa import QAService
 
 
 def _service(replies, calls, **kw):
-    bus, digest = TranscriptBus(), Digest()
-    digest.apply_delta("ADD Тема :: Решили X")
+    bus, digest = TranscriptBus(), LiveState()
+    digest.apply({"ops": [{"op": "add", "section": "decisions", "text": "Решили X"}]})
 
     async def runner(prompt, **kwargs):
         calls.append((prompt, kwargs))

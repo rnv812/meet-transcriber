@@ -10,7 +10,7 @@ HISTORY_PAIRS = 6
 
 
 class QAService:
-    """Вопросы по встрече: дайджест + свежие реплики + память диалога.
+    """Вопросы по встрече: живая сводка + свежие реплики + память диалога.
 
     Память диалога — сессия провайдера (resume), если раннер вернул
     session_id (Claude Code). Провайдеры без сессий (Codex, локальная модель)
@@ -21,11 +21,11 @@ class QAService:
     чтобы ответ учитывал последние секунды речи.
     """
 
-    def __init__(self, bus, digest, *, system_prompt: str,
+    def __init__(self, bus, live, *, system_prompt: str,
                  allowed_dirs: tuple[Path, ...], cwd, runner,
                  on_fresh_audio=None, model: str = "sonnet") -> None:
         self._bus = bus
-        self._digest = digest
+        self._live = live
         self._system = system_prompt
         self._allowed = allowed_dirs
         self._cwd = cwd
@@ -61,7 +61,7 @@ class QAService:
             return reply.text
 
     def _build_prompt(self, question: str, new_lines: list[str]) -> str:
-        parts = ["Текущий дайджест встречи:", self._digest.render()]
+        parts = ["Текущая сводка встречи:", self._live.render_markdown()]
         if self._session_id is None and self._history:
             parts += ["", "Предыдущие вопросы и ответы (память диалога):"]
             for q, a in self._history:
