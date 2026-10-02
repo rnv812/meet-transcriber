@@ -42,6 +42,8 @@ def test_every_size_is_generated(made):
     names = {f.name for f in files}
     expected = set(gen.APP_PNG) | {"icon.ico", "icon.icns", "meet.svg", "favicon.svg"}
     expected |= {f"tray-{s}-{n}.png" for s in gen.TRAY_STATES for n in gen.TRAY_SIZES}
+    expected |= {f"tray-template-{s}{x}.png" for s in gen.TRAY_STATES
+                 for x in gen.TEMPLATE_SIZES.values()}
     assert names == expected
     assert {"32x32.png", "128x128.png", "128x128@2x.png", "256x256.png", "512x512.png",
             "1024x1024.png"} <= names
@@ -127,3 +129,20 @@ def test_tray_states_read_at_16px():
     for state, a in px.items():
         border = np.concatenate([a[0, :, 3], a[-1, :, 3], a[:, 0, 3], a[:, -1, 3]])
         assert border.max() < 200 or state in ("recording", "offline"), state
+
+
+def test_menu_bar_templates_are_monochrome_and_distinct(made):
+    """Строка меню macOS: шаблонные картинки — только чёрный с прозрачностью
+    (цвет macOS подставит сама), @1x — 18 px, @2x — 36 px, и все пять
+    состояний различимы формой."""
+    gen, out, _ = made
+    assert gen.TEMPLATE_SIZES == {18: "", 36: "@2x"}
+    for size, suffix in gen.TEMPLATE_SIZES.items():
+        seen = []
+        for state in gen.TRAY_STATES:
+            px = _pixels(out / "icons" / f"tray-template-{state}{suffix}.png")
+            assert px.shape == (size, size, 4)
+            assert px[..., :3].max() == 0, f"{state}{suffix}: не чёрный"
+            assert px[..., 3].max() > 200, f"{state}{suffix}: пусто"
+            seen.append(px[..., 3].tobytes())
+        assert len(set(seen)) == len(gen.TRAY_STATES), size

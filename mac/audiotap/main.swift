@@ -185,13 +185,13 @@ func micUsers() -> Never {
     if #available(macOS 14.0, *) {
         guard let processes = audioProcesses() else {
             printJSON(["meet_audiotap": protocolVersion, "supported": false,
-                       "note": "CoreAudio не ответил", "processes": []])
+                       "note": "CoreAudio не ответил", "processes": [Any]()])
             exit(exitOK)
         }
         printJSON(["meet_audiotap": protocolVersion, "supported": true, "processes": processes])
     } else {
         printJSON(["meet_audiotap": protocolVersion, "supported": false,
-                   "note": "нужна macOS 14 или новее", "processes": []])
+                   "note": "нужна macOS 14 или новее", "processes": [Any]()])
     }
     exit(exitOK)
 }

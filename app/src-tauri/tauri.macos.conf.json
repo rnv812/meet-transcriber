@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Meet",
+  "bundle": {
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "signingIdentity": "-",
+      "hardenedRuntime": false,
+      "infoPlist": "macos/Info.plist",
+      "files": {
+        "Resources/ru.lproj/InfoPlist.strings": "macos/ru.lproj/InfoPlist.strings",
+        "Resources/en.lproj/InfoPlist.strings": "macos/en.lproj/InfoPlist.strings"
+      }
+    }
+  }
+}

@@ -6,6 +6,12 @@
 // установщик сверяется с суммой, запускается, и приложение штатно выходит
 // («Выход» из трея) — дальше работает установщик (`windows/hooks.nsh`).
 //
+// macOS (экспериментально): файл выпуска — образ диска
+// `Meet_<версия>_aarch64.dmg` (заглавная M: шаблон Windows `meet_…_x64-setup.exe`
+// его не примет, и наоборот). Скачанный и сверенный образ открывается в
+// Finder, приложение выходит — заменить Meet в «Программах» человек
+// перетаскиванием (сами не подменяем: приложение не подписано).
+//
 // Всё, что проверяется без сети, — чистые функции с тестами: сравнение
 // версий, разбор выпуска, выбор файла, разбор сумм, отказ во время записи.
 
@@ -24,6 +30,7 @@ use tauri::{AppHandle, Emitter};
 use crate::api;
 use crate::logs::shell_log;
 use crate::netproxy::{self, InternetSettings};
+use crate::platform::{self, Os};
 use crate::resident;
 use crate::tray;
 use crate::upgrade;
@@ -35,6 +42,9 @@ pub const PROGRESS_EVENT: &str = "update-progress";
 const SUMS: &str = "SHA256SUMS.txt";
 const INSTALLER_PREFIX: &str = "meet_";
 const INSTALLER_SUFFIX: &str = "_x64-setup.exe";
+/// Образ диска для macOS (Apple Silicon).
+const MAC_PREFIX: &str = "Meet_";
+const MAC_SUFFIX: &str = "_aarch64.dmg";
 /// Запрос к API GitHub — не дольше (и соединение при загрузке).
 const API_TIMEOUT: Duration = Duration::from_secs(10);
 /// Загрузка установщика ограничена не временем целиком, а паузой в данных:
@@ -57,6 +67,7 @@ pub const WORK_IN_PROGRESS: &str =
 pub const CORRUPTED: &str = "Файл обновления повреждён";
 pub const NOTHING_NEWER: &str = "Новой версии нет";
 pub const NO_INSTALLER: &str = "В выпуске нет установщика для Windows";
+pub const NO_MAC_IMAGE: &str = "В выпуске нет образа диска для macOS";
 pub const NO_SUMS: &str = "В выпуске нет контрольной суммы установщика (SHA256SUMS.txt)";
 pub const BUSY: &str = "Обновление уже скачивается";
 pub const NO_DOWNLOAD: &str = "Не удалось скачать обновление: нет связи с GitHub";
@@ -246,11 +257,29 @@ pub fn parse_release(value: &Value) -> Option<Release> {
     })
 }
 
-/// Имя установщика: `meet_<версия>_x64-setup.exe`, версия — из цифр, букв,
-/// точек и дефисов (имя станет именем файла в %TEMP%).
-pub fn installer_name_ok(name: &str) -> bool {
-    name.strip_prefix(INSTALLER_PREFIX)
-        .and_then(|rest| rest.strip_suffix(INSTALLER_SUFFIX))
+/// Префикс и суффикс файла выпуска для ОС. Регистр важен: `meet_` — Windows,
+/// `Meet_` — macOS.
+pub fn installer_affixes(os: Os) -> (&'static str, &'static str) {
+    match os {
+        Os::Windows => (INSTALLER_PREFIX, INSTALLER_SUFFIX),
+        Os::MacOs => (MAC_PREFIX, MAC_SUFFIX),
+    }
+}
+
+fn no_installer(os: Os) -> &'static str {
+    match os {
+        Os::Windows => NO_INSTALLER,
+        Os::MacOs => NO_MAC_IMAGE,
+    }
+}
+
+/// Имя установщика ОС: `meet_<версия>_x64-setup.exe` (Windows) или
+/// `Meet_<версия>_aarch64.dmg` (macOS), версия — из цифр, букв, точек и
+/// дефисов (имя станет именем файла во временной папке).
+pub fn installer_name_ok_for(os: Os, name: &str) -> bool {
+    let (prefix, suffix) = installer_affixes(os);
+    name.strip_prefix(prefix)
+        .and_then(|rest| rest.strip_suffix(suffix))
         .is_some_and(|version| {
             !version.is_empty()
                 && version
@@ -286,11 +315,15 @@ pub fn download_host_ok(url: &str) -> bool {
 /// Прежние загрузки в папке обновления (`meet_*_x64-setup.exe` и их `.part`),
 /// кроме `keep` — уже скачанного и сверенного установщика этого выпуска.
 pub fn stale_downloads(names: &[String], keep: Option<&str>) -> Vec<String> {
+    stale_downloads_for(platform::current(), names, keep)
+}
+
+pub fn stale_downloads_for(os: Os, names: &[String], keep: Option<&str>) -> Vec<String> {
     names
         .iter()
         .filter(|name| {
             let base = name.strip_suffix(".part").unwrap_or(name);
-            installer_name_ok(base) && Some(name.as_str()) != keep
+            installer_name_ok_for(os, base) && Some(name.as_str()) != keep
         })
         .cloned()
         .collect()
@@ -299,8 +332,13 @@ pub fn stale_downloads(names: &[String], keep: Option<&str>) -> Vec<String> {
 /// Установщик выпуска: сначала точное имя с версией выпуска, иначе любой
 /// подходящий по шаблону.
 pub fn pick_installer(release: &Release) -> Option<&Asset> {
-    let exact = format!("{INSTALLER_PREFIX}{}{INSTALLER_SUFFIX}", release.version);
-    let usable = |asset: &&Asset| installer_name_ok(&asset.name) && asset_url_ok(asset);
+    pick_installer_for(platform::current(), release)
+}
+
+pub fn pick_installer_for(os: Os, release: &Release) -> Option<&Asset> {
+    let (prefix, suffix) = installer_affixes(os);
+    let exact = format!("{prefix}{}{suffix}", release.version);
+    let usable = |asset: &&Asset| installer_name_ok_for(os, &asset.name) && asset_url_ok(asset);
     release
         .assets
         .iter()
@@ -556,7 +594,7 @@ fn install_blocking(app: &AppHandle, confirmed: bool) -> Result<(), String> {
     if !is_newer(&release.version, &current) {
         return Err(NOTHING_NEWER.to_string());
     }
-    let installer = pick_installer(&release).ok_or(NO_INSTALLER)?;
+    let installer = pick_installer(&release).ok_or(no_installer(platform::current()))?;
     let sums = pick_sums(&release).ok_or(NO_SUMS)?;
     let agent = agent(&current)?;
     let sums_reply = agent
@@ -689,6 +727,8 @@ fn download(
 
 /// Запустить установщик и выйти штатно. Установщик и сам закроет
 /// приложение (`--quit` в `hooks.nsh`), но выход отсюда быстрее и тот же.
+/// macOS: `open` показывает образ диска в Finder; приложение выходит, чтобы
+/// его можно было заменить перетаскиванием в «Программы».
 fn launch_and_quit(app: &AppHandle, installer: &Path) -> Result<(), String> {
     shell_log!("обновление: запускаю {}", installer.display());
     crate::windows::shell_execute(&installer.to_string_lossy())
@@ -817,6 +857,7 @@ mod tests {
         assert!(crate::windows::url_allowed(&releases_url()));
     }
 
+    #[cfg(windows)]
     #[test]
     fn installer_asset_is_picked_by_pattern() {
         let release = release();
@@ -827,6 +868,7 @@ mod tests {
         assert_eq!(pick_sums(&release).unwrap().name, "SHA256SUMS.txt");
     }
 
+    #[cfg(windows)]
     #[test]
     fn exact_version_wins_over_other_installers() {
         let release = Release {
@@ -843,6 +885,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn unsuitable_assets_are_ignored() {
         let mut foreign = asset("meet_0.2.0_x64-setup.exe");
@@ -859,7 +902,10 @@ mod tests {
             ],
         };
         assert!(pick_installer(&release).is_none());
-        assert!(installer_name_ok("meet_0.2.0-rc1_x64-setup.exe"));
+        assert!(installer_name_ok_for(
+            Os::Windows,
+            "meet_0.2.0-rc1_x64-setup.exe"
+        ));
         for bad in [
             "https://github.com/rnv812/meet-transcriber/releases/download/../../x/meet_0.2.0_x64-setup.exe",
             "https://github.com/rnv812/meet-transcriber/releases/download/%2E%2E/meet_0.2.0_x64-setup.exe",
@@ -874,7 +920,71 @@ mod tests {
             };
             assert!(pick_installer(&release).is_none(), "{bad}");
         }
-        assert!(!installer_name_ok("meet_0.2.0 _x64-setup.exe"));
+        assert!(!installer_name_ok_for(
+            Os::Windows,
+            "meet_0.2.0 _x64-setup.exe"
+        ));
+    }
+
+    /// Образ для macOS и установщик Windows не путаются: шаблоны различаются
+    /// регистром префикса и суффиксом.
+    #[test]
+    fn mac_image_and_windows_installer_do_not_match_each_other() {
+        let release = Release {
+            version: "0.3.0".into(),
+            notes_url: releases_url(),
+            assets: vec![
+                asset("Meet_0.3.0_aarch64.dmg"),
+                asset("meet_0.3.0_x64-setup.exe"),
+                asset(SUMS),
+            ],
+        };
+        assert_eq!(
+            pick_installer_for(Os::Windows, &release).unwrap().name,
+            "meet_0.3.0_x64-setup.exe"
+        );
+        assert_eq!(
+            pick_installer_for(Os::MacOs, &release).unwrap().name,
+            "Meet_0.3.0_aarch64.dmg"
+        );
+        assert!(!installer_name_ok_for(
+            Os::Windows,
+            "Meet_0.3.0_aarch64.dmg"
+        ));
+        assert!(!installer_name_ok_for(
+            Os::Windows,
+            "meet_0.3.0_aarch64.dmg"
+        ));
+        assert!(!installer_name_ok_for(
+            Os::MacOs,
+            "meet_0.3.0_x64-setup.exe"
+        ));
+        assert!(!installer_name_ok_for(Os::MacOs, "meet_0.3.0_aarch64.dmg"));
+        assert!(!installer_name_ok_for(Os::MacOs, "Meet_.._aarch64.dmg/x"));
+        let windows_only = Release {
+            assets: vec![asset("meet_0.3.0_x64-setup.exe")],
+            ..release.clone()
+        };
+        assert!(pick_installer_for(Os::MacOs, &windows_only).is_none());
+        assert_eq!(no_installer(Os::MacOs), NO_MAC_IMAGE);
+        let names: Vec<String> = [
+            "Meet_0.2.0_aarch64.dmg",
+            "Meet_0.3.0_aarch64.dmg.part",
+            "meet_0.2.0_x64-setup.exe",
+        ]
+        .iter()
+        .map(|n| n.to_string())
+        .collect();
+        assert_eq!(
+            stale_downloads_for(Os::MacOs, &names, None),
+            vec!["Meet_0.2.0_aarch64.dmg", "Meet_0.3.0_aarch64.dmg.part"]
+        );
+        // Суммы одного выпуска — один файл на обе платформы.
+        let hash = "a".repeat(64);
+        let other = "b".repeat(64);
+        let text = format!("{hash}  meet_0.3.0_x64-setup.exe\n{other}  Meet_0.3.0_aarch64.dmg\n");
+        assert_eq!(parse_sums(&text, "Meet_0.3.0_aarch64.dmg"), Some(other));
+        assert_eq!(parse_sums(&text, "meet_0.3.0_x64-setup.exe"), Some(hash));
     }
 
     #[test]
@@ -903,6 +1013,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn old_downloads_are_cleared_but_a_verified_one_is_kept() {
         let names: Vec<String> = [
@@ -953,6 +1064,7 @@ mod tests {
         assert_eq!(parse_sums("", "x"), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn check_result_reports_newer_version_with_its_installer() {
         let result = check_result(Some(&release()), "0.1.0");
