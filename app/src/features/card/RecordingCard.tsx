@@ -4,7 +4,7 @@ import { agentPrompt, type AgentRequest } from "../../lib/agentRef";
 import { buildView, INSIGHT_LABEL, usableAnalysis, type InsightView } from "../../lib/analysisView";
 import {
   ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
-  kbExport, patchRecording, runAnalysis, transcribe, type Endpoint,
+  kbExport, patchRecording, runAnalysis, setRecordingCategory, transcribe, type Endpoint,
 } from "../../lib/api";
 import { clock, errorText } from "../../lib/format";
 import { JiraLinks, jiraLinker, type JiraLinker } from "../../lib/jira";
@@ -12,7 +12,7 @@ import { DEFAULT_PREFS, markupPrefs, type MarkupPrefs } from "../../lib/markupPr
 import { agentKillRecording, inTauri, openFolder, saveText } from "../../lib/shell";
 import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
 import { activeJobOf, failedRetranscribe, isLiveRecording, statusOf } from "../../lib/status";
-import type { Job, KbExport, LiveHint, Recording, Segment, Snapshot, Transcript } from "../../lib/types";
+import type { Category, Job, KbExport, LiveHint, Recording, Segment, Snapshot, Transcript } from "../../lib/types";
 import { KIND_LABEL } from "../../live/liveModel";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
@@ -53,7 +53,7 @@ const CHAPTER_REFS = 6;
 
 export function RecordingCard({
   id, endpoint, jobs = NO_JOBS, snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
-  onOpenSettings, find, refreshKey = 0,
+  onOpenSettings, find, refreshKey = 0, categories,
 }: {
   id: string;
   endpoint: Endpoint;
@@ -70,6 +70,8 @@ export function RecordingCard({
   find?: FindRequest | null;
   /** Растёт, когда запись изменили снаружи (переименовали в списке): перечитать. */
   refreshKey?: number;
+  /** Категории встреч из настроек: метка под названием и меню выбора. */
+  categories?: Category[];
 }) {
   const [rec, setRec] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -293,6 +295,11 @@ export function RecordingCard({
     setRec((cur) => (cur ? { ...cur, ...updated, transcript: cur.transcript } : cur));
     onChanged?.();
   });
+  const chooseCategory = (category: string | null) => act(async () => {
+    const updated = await setRecordingCategory(endpoint, id, category);
+    setRec((cur) => (cur ? { ...cur, ...updated, transcript: cur.transcript } : cur));
+    onChanged?.();
+  });
   const doTranscribe = () => act(async () => { await transcribe(endpoint, id); onChanged?.(); await load(); });
   const noModel = noProvider(assistantInfo);
   const doReanalyze = () => act(async () => { await runAnalysis(endpoint, id); await analysis.reload(); });
@@ -406,7 +413,9 @@ export function RecordingCard({
     <section className={`card${panel.open && status.kind === "ready" ? " card--with-spk" : ""}`} ref={cardEl}>
       <CardHeader rec={rec} durationS={rec.duration_s ?? spokenUntil} speakers={speakers} people={people}
         endpoint={endpoint} avatarVersion={avatarVersion} onRename={rename} onNameSpeaker={nameSpeaker}
-        onOpenSpeakers={status.kind === "ready" ? () => openSpeakers() : undefined} speakersOpen={panel.open} />
+        onOpenSpeakers={status.kind === "ready" ? () => openSpeakers() : undefined} speakersOpen={panel.open}
+        categories={categories} onCategory={categories ? chooseCategory : undefined}
+        onOpenCategories={onOpenSettings ? () => onOpenSettings("categories") : undefined} />
       <CardActions
         canExport={status.kind === "ready"}
         canRetranscribe={status.kind === "ready"}

@@ -106,12 +106,15 @@ def chapters_of(folder, data: dict | None) -> list[tuple[float, str]]:
     return contents(data, analysis.read(folder)) if folder else []
 
 
-def render(data: dict, fmt: str, date: str = "", chapters: list[tuple[float, str]] | None = None) -> str:
-    """Транскрипт в формате `fmt`. `chapters` — «Содержание» (только для md)."""
+def render(data: dict, fmt: str, date: str = "", chapters: list[tuple[float, str]] | None = None,
+           category: str | None = None) -> str:
+    """Транскрипт в формате `fmt`. `chapters` — «Содержание», `category` — имя
+    категории встречи во frontmatter (только для md: у txt и srt блока
+    метаданных нет)."""
     segments = [s for s in data.get("segments", []) if str(s.get("text", "")).strip()]
     title = data.get("title") or "Встреча"
     if fmt == "md":
-        return to_markdown(title, md_segments(data), date, contents=chapters)
+        return to_markdown(title, md_segments(data), date, contents=chapters, category=category)
     if fmt == "txt":
         lines = [title, ""]
         lines += [s["text"].strip() if is_break(s)

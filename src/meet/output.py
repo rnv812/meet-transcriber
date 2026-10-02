@@ -45,12 +45,13 @@ def speaker_names(segments: list[Segment]) -> dict[str, str]:
 
 
 def to_markdown(title: str, segments: list[Segment], date: str = "",
-                contents: list[tuple[float, str]] | None = None) -> str:
+                contents: list[tuple[float, str]] | None = None, category: str | None = None) -> str:
     """Транскрипт в Markdown для базы заметок: «## ВРЕМЯ — Спикер».
 
     Если задан date (ISO YYYY-MM-DD), сверху добавляется frontmatter для Obsidian
-    с пустым task (заполняется вручную при переносе в хранилище). `contents` —
-    главы анализа встречи (начало, название): раздел «Содержание» под заголовком.
+    с пустым task (заполняется вручную при переносе в хранилище) и категорией
+    встречи (`category` — её имя), если она есть. `contents` — главы анализа
+    встречи (начало, название): раздел «Содержание» под заголовком.
     """
     lines: list[str] = []
     if date:
@@ -59,6 +60,7 @@ def to_markdown(title: str, segments: list[Segment], date: str = "",
             f"date: {date}",
             "task:",
             "type: transcript",
+            *([f"category: {yaml_text(category)}"] if category else []),
             "tags: [claude-generated, transcript]",
             "---",
             "",
@@ -70,6 +72,19 @@ def to_markdown(title: str, segments: list[Segment], date: str = "",
         lines += [""]
     lines += turn_lines(segments)
     return "\n".join(lines)
+
+
+_YAML_SPECIAL = frozenset(":#[]{},&*!|>'\"%@`")
+
+
+def yaml_text(text: str) -> str:
+    """Строка для frontmatter: простая — как есть, со спецсимволами YAML — в
+    кавычках (JSON-строка — правильная YAML-строка)."""
+    import json
+
+    text = " ".join(str(text).split())
+    plain = text and not any(c in _YAML_SPECIAL for c in text) and text[0] not in "-?"
+    return text if plain else json.dumps(text, ensure_ascii=False)
 
 
 def turn_lines(segments: list[Segment], level: int = 2) -> list[str]:

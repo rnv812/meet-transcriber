@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { TITLE_MAX } from "../../lib/api";
 import { clock, dayLabel, duration } from "../../lib/format";
+import { categoryOf, NO_CATEGORY_NAME } from "../../lib/categories";
 import type { RecStatus } from "../../lib/status";
-import type { LibraryItem } from "../../lib/types";
+import type { Category, LibraryItem } from "../../lib/types";
 import { AiBadge } from "../../ui/AiBadge";
+import { CategoryChip, CategoryDot } from "../../ui/Category";
 import { Highlight } from "../../ui/Highlight";
-import { BookOpen, FolderOpen, Pencil, Trash2 } from "lucide-react";
+import { BookOpen, ChevronLeft, ChevronRight, FolderOpen, Pencil, Settings2, Tag, Trash2 } from "lucide-react";
 import { ItemMenu, type MenuItem } from "./ItemMenu";
 
 const ICON = { size: 16, strokeWidth: 1.75, "aria-hidden": true } as const;
@@ -34,10 +36,16 @@ export function badgeOf(st: RecStatus): { text: string; tone: "run" | "err" | ""
 export type ItemActions = {
   /** Новое название; null — вернуть автоматическое. */
   onRename: (id: string, title: string | null) => Promise<void>;
+  /** Категория, выбранная человеком; null — «Без категории». */
+  onCategory?: (id: string, category: string | null) => Promise<void>;
+  /** «Настроить категории…» — раздел настроек. */
+  onOpenCategories?: () => void;
   onOpenFolder?: (rec: LibraryItem) => void;
   onKbExport?: (id: string) => void;
   onDelete?: (id: string) => void;
 };
+
+const NO_CATEGORIES: Category[] = [];
 
 /** Как отметить запись для групповых действий: Ctrl+щелчок — переключить, Shift+щелчок — диапазон. */
 export type PickHow = "toggle" | "range";
@@ -52,8 +60,11 @@ export function RecordingItem({
   picking = false,
   picked = false,
   onPick,
+  categories = NO_CATEGORIES,
 }: {
   rec: LibraryItem;
+  /** Категории встреч из настроек: метка записи и пункт «Категория» в меню. */
+  categories?: Category[];
   status: RecStatus;
   selected: boolean;
   onSelect: (id: string) => void;
@@ -71,11 +82,14 @@ export function RecordingItem({
   const title = rec.title ?? (when || rec.id);
   const hits = rec.hits ?? [];
   const more = (rec.total ?? 0) - hits.length;
+  const category = categoryOf(rec, categories);
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  /** В меню открыт список категорий («Категория ▸»). */
+  const [pickCategory, setPickCategory] = useState(false);
   const main = useRef<HTMLButtonElement>(null);
   const more_ = useRef<HTMLButtonElement>(null);
   const done = useRef(false);
@@ -103,20 +117,41 @@ export function RecordingItem({
   const closeMenu = (focusBack = true) => {
     setMenu(null);
     setConfirmDelete(false);
+    setPickCategory(false);
     if (focusBack) more_.current?.focus();
   };
-  const openMenuAt = (x: number, y: number) => { setConfirmDelete(false); setMenu({ x, y }); };
+  const openMenuAt = (x: number, y: number) => { setConfirmDelete(false); setPickCategory(false); setMenu({ x, y }); };
+  const chooseCategory = (id: string | null) => { closeMenu(); void actions?.onCategory?.(rec.id, id); };
   const openFromButton = () => {
     const r = more_.current?.getBoundingClientRect();
     openMenuAt(r ? r.right - 200 : 0, r ? r.bottom + 4 : 0);
   };
 
-  const menuItems: MenuItem[] = confirmDelete ? [
+  const categoryItems: MenuItem[] = [
+    { label: NO_CATEGORY_NAME, icon: <CategoryDot />, checked: category === null, autoFocus: category === null,
+      onSelect: () => chooseCategory(null) },
+    ...categories.map((c) => ({
+      label: c.name, icon: <CategoryDot color={c.color} />, checked: category?.id === c.id,
+      autoFocus: category?.id === c.id, hint: c.description || undefined, onSelect: () => chooseCategory(c.id),
+    })),
+    ...(actions?.onOpenCategories ? [{
+      label: "Настроить категории…", separator: true, icon: <Settings2 {...ICON} />,
+      onSelect: () => { closeMenu(false); actions.onOpenCategories?.(); },
+    }] : []),
+    { label: "Назад", separator: !actions?.onOpenCategories, icon: <ChevronLeft {...ICON} />,
+      onSelect: () => setPickCategory(false) },
+  ];
+
+  const menuItems: MenuItem[] = pickCategory ? categoryItems : confirmDelete ? [
     { label: "Удалить", danger: true, icon: <Trash2 {...ICON} />,
       onSelect: () => { closeMenu(false); actions?.onDelete?.(rec.id); } },
     { label: "Отмена", autoFocus: true, onSelect: () => setConfirmDelete(false) },
   ] : [
     { label: "Переименовать", icon: <Pencil {...ICON} />, onSelect: () => { closeMenu(false); begin(); } },
+    ...(actions?.onCategory ? [{
+      label: "Категория", icon: <Tag {...ICON} />, hint: `Сейчас: ${category?.name ?? NO_CATEGORY_NAME}`,
+      trailing: <ChevronRight {...ICON} />, onSelect: () => setPickCategory(true),
+    }] : []),
     ...(actions?.onOpenFolder ? [{
       label: "Открыть папку", icon: <FolderOpen {...ICON} />, onSelect: () => { closeMenu(); actions.onOpenFolder?.(rec); },
     }] : []),
@@ -175,7 +210,10 @@ export function RecordingItem({
             {title}{rec.title_source === "ai" && rec.title && <AiBadge onClick={actions ? begin : undefined} />}
           </span>
           <span className="rec-item__meta">
-            <span className="muted num">{meta}</span>
+            <span className="rec-item__when">
+              <span className="muted num">{meta}</span>
+              {category && <CategoryChip category={category} small />}
+            </span>
             {badge && <span className={`badge${badge.tone ? ` badge--${badge.tone}` : ""}`}>{badge.text}</span>}
           </span>
         </button>
@@ -186,8 +224,10 @@ export function RecordingItem({
           onClick={() => (menu ? closeMenu() : openFromButton())}>⋯</button>
       )}
       {menu && (
-        <ItemMenu at={menu} label={`Действия с записью «${title}»`} items={menuItems}
-          note={confirmDelete ? "Удалить запись и расшифровку? Это действие нельзя отменить." : undefined}
+        <ItemMenu at={menu} label={pickCategory ? `Категория записи «${title}»` : `Действия с записью «${title}»`}
+          items={menuItems}
+          note={pickCategory ? "Категория встречи"
+            : confirmDelete ? "Удалить запись и расшифровку? Это действие нельзя отменить." : undefined}
           anchor={more_} onClose={() => closeMenu()} />
       )}
       {hits.length > 0 && (

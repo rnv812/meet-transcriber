@@ -1,14 +1,17 @@
 import "./recordings.css";
-import { useCallback, useMemo, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import type { Resident } from "../../state/useResident";
 import type { Library } from "../../state/useLibrary";
-import { deleteRecording, kbExport, mergeRecordings, patchRecording } from "../../lib/api";
+import { deleteRecording, kbExport, mergeRecordings, patchRecording, setRecordingCategory } from "../../lib/api";
+import { categoryKey, loadCategoryFilter, NO_CATEGORY, saveCategoryFilter } from "../../lib/categories";
 import { errorText } from "../../lib/format";
 import { agentKillRecording, inTauri, openFolder } from "../../lib/shell";
 import { statusOf, type RecStatus } from "../../lib/status";
+import type { Category } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { CategoryFilter, CategoryFilterChip } from "./CategoryFilter";
 import { ImportZone } from "./ImportZone";
 import { RecordingItem, type ItemActions, type PickHow } from "./RecordingItem";
 import { SearchBox } from "./SearchBox";
@@ -27,7 +30,13 @@ type Props = {
   onChanged?: (id: string) => void;
   /** Перед удалением: открытую карточку закрыть — её плеер держит файл записи. */
   onDeleting?: (id: string) => void;
+  /** Категории встреч из настроек: метки у записей, фильтр, пункт «Категория» в меню. */
+  categories?: Category[];
+  /** Перейти в раздел настроек («Настроить категории…»). */
+  onOpenSettings?: (section: string) => void;
 };
+
+const NO_CATEGORIES: Category[] = [];
 
 /** Итог действия из меню: строка над списком, закрывается «×». */
 type Notice = { text: string; error: boolean };
@@ -36,7 +45,8 @@ type Notice = { text: string; error: boolean };
 const busy = (st: RecStatus) => st.kind === "recording" || st.kind === "queued" || st.kind === "running";
 
 export function RecordingsList({
-  selected, onSelect, library, resident, q, onQ, onOpenHit, onChanged, onDeleting,
+  selected, onSelect, library, resident, q, onQ, onOpenHit, onChanged, onDeleting, categories = NO_CATEGORIES,
+  onOpenSettings,
 }: Props) {
   const snapshot = resident.snapshot ?? null;
   const endpoint = resident.endpoint ?? null;
@@ -49,6 +59,11 @@ export function RecordingsList({
   const [anchor, setAnchor] = useState<string | null>(null);
   const [keepOriginals, setKeepOriginals] = useState(false);
   const [merging, setMerging] = useState(false);
+  /** Фильтр по категориям (запоминается в этом окне); пусто — все записи. */
+  const [catFilter, setCatFilter] = useState<string[]>(loadCategoryFilter);
+  useEffect(() => saveCategoryFilter(catFilter), [catFilter]);
+  /** Новые категории, пока резидент не ответил: видны сразу, при ошибке — откат. */
+  const [pendingCat, setPendingCat] = useState<Record<string, string | null>>({});
 
   const run = useCallback(async (fn: () => Promise<string | null>) => {
     setNotice(null);
@@ -77,6 +92,21 @@ export function RecordingsList({
         }
         return null;
       }),
+      onCategory: (id, category) => run(async () => {
+        setPendingCat((cur) => ({ ...cur, [id]: category }));
+        try {
+          await setRecordingCategory(endpoint, id, category);
+          onChanged?.(id);
+          await library.refresh();
+        } finally {
+          setPendingCat((cur) => {
+            const { [id]: _, ...rest } = cur;
+            return rest;
+          });
+        }
+        return null;
+      }),
+      onOpenCategories: onOpenSettings ? () => onOpenSettings("categories") : undefined,
       onOpenFolder: inTauri() ? (rec) => void run(async () => { await openFolder(rec.path); return null; }) : undefined,
       onKbExport: meetingsDir ? (id) => void run(async () => {
         const done = await kbExport(endpoint, id);
@@ -94,11 +124,29 @@ export function RecordingsList({
         return null;
       }),
     };
-  }, [endpoint, meetingsDir, library, onChanged, onDeleting, run]);
+  }, [endpoint, meetingsDir, library, onChanged, onDeleting, onOpenSettings, run]);
+
+  // --- фильтр по категориям -------------------------------------------------------
+
+  const shownItems = useMemo(() => library.items.map((rec) => (rec.id in pendingCat
+    ? { ...rec, category: { id: pendingCat[rec.id] ?? null, source: "user" as const } } : rec)),
+  [library.items, pendingCat]);
+  /** Выбранное в фильтре, кроме удалённых из настроек категорий. */
+  const activeFilter = catFilter.filter((k) => k === NO_CATEGORY || categories.some((c) => c.id === k));
+  const catCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const rec of shownItems) {
+      const key = categoryKey(rec, categories);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [shownItems, categories]);
+  const visible = activeFilter.length
+    ? shownItems.filter((rec) => activeFilter.includes(categoryKey(rec, categories))) : shownItems;
 
   // --- выбор нескольких записей ---------------------------------------------------
 
-  const ids = library.items.map((r) => r.id);
+  const ids = visible.map((r) => r.id);
   // Пропавшие из списка (удалены, отфильтрованы поиском) отмеченными не считаются.
   const chosen = ids.filter((id) => picked.includes(id));
   const picking = chosen.length > 0;
@@ -156,7 +204,17 @@ export function RecordingsList({
   return (
     <div className="rec-list">
       <ImportZone endpoint={endpoint} onImported={() => void library.refresh?.()} />
-      <SearchBox value={q} onChange={onQ} />
+      <div className="rec-list__search">
+        <SearchBox value={q} onChange={onQ} />
+        {(categories.length > 0 || activeFilter.length > 0) && (
+          <CategoryFilter list={categories} counts={catCounts} selected={activeFilter} onChange={setCatFilter} />
+        )}
+      </div>
+      {activeFilter.length > 0 && (
+        <div className="rec-list__filters">
+          <CategoryFilterChip list={categories} selected={activeFilter} onClear={() => setCatFilter([])} />
+        </div>
+      )}
       {library.error && <div className="import__error">{library.error}</div>}
       {notice && (
         <div className={`rec-notice${notice.error ? " rec-notice--error" : ""}`} role={notice.error ? "alert" : "status"}>
@@ -197,10 +255,11 @@ export function RecordingsList({
         </div>
       )}
       <ul aria-label="Записи" aria-multiselectable={picking || undefined} className="rec-list__items" onKeyDown={onListKey}>
-        {library.items.map((rec) => (
+        {visible.map((rec) => (
           <RecordingItem
             key={rec.id}
             rec={rec.id in pending ? { ...rec, title: pending[rec.id] ?? null } : rec}
+            categories={categories}
             status={statuses.get(rec.id) ?? statusOf(rec, library.jobs, snapshot)}
             selected={rec.id === selected}
             onSelect={select}
@@ -212,6 +271,10 @@ export function RecordingsList({
           />
         ))}
       </ul>
+      {library.items.length > 0 && visible.length === 0 && (
+        <EmptyState title="Нет записей в выбранных категориях"
+          action={<Button onClick={() => setCatFilter([])}>Показать все</Button>} />
+      )}
       {library.items.length === 0 && !library.loading && resident.endpoint && (
         q ? <EmptyState title="Ничего не найдено" />
           : <EmptyState title="Записей пока нет" hint="Нажмите «Начать запись» или перетащите файл" />

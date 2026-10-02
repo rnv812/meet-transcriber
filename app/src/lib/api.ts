@@ -11,7 +11,7 @@
 import { inTauri, invoke } from "./shell";
 import type {
   AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
-  ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
+  Category, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript,
 } from "./types";
@@ -19,7 +19,7 @@ import type {
 export type {
   Analysis, AnalysisChapter, AnalysisFeature, AnalysisInsight, AnalysisState, AnalysisStateName, InsightKind,
   ImproveApplied, ImproveGroup, ImproveKind, ImproveProposal, ImproveState, ImproveStateName, PhraseType, TitleSource,
-  TitleSuggestion,
+  TitleSuggestion, Category, RecordingCategory,
 } from "./types";
 
 export type Endpoint = {
@@ -103,6 +103,24 @@ export const TITLE_MAX = 200;
 export const patchRecording = (ep: Endpoint, id: string,
   patch: { title: string | null; title_source?: Extract<TitleSource, "ai"> }) =>
   json<Recording>(ep, `/recordings/${enc(id)}`, body("PATCH", patch));
+/** Категория, выбранная человеком: id из настроек или null — «Без категории» (модель её больше не ставит). */
+export const setRecordingCategory = (ep: Endpoint, id: string, category: string | null) =>
+  json<Recording>(ep, `/recordings/${enc(id)}/category`, body("PUT", { id: category }));
+/** Редактор категорий: нынешний и стандартный списки, сколько встреч в каждой категории и без категории. */
+export type CategoriesInfo = { categories: Category[]; defaults: Category[]; counts: Record<string, number>; none: number };
+export const getCategoriesInfo = (ep: Endpoint) => json<CategoriesInfo>(ep, "/categories");
+/** Категории из ответа `GET /settings`: битые записи отбрасываются. */
+export function categoriesOf(settings: Record<string, unknown> | null | undefined): Category[] {
+  const raw = settings?.categories;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((c) => {
+    const item = c as Partial<Category> | null;
+    return item && typeof item.id === "string" && typeof item.name === "string"
+      ? [{ id: item.id, name: item.name, color: typeof item.color === "string" ? item.color : "#9aa0a6",
+        description: typeof item.description === "string" ? item.description : "" }]
+      : [];
+  });
+}
 export const deleteRecording = (ep: Endpoint, id: string) =>
   json<{ ok: boolean }>(ep, `/recordings/${enc(id)}`, { method: "DELETE" });
 export const importFile = (ep: Endpoint, path: string) =>

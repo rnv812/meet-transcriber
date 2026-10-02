@@ -318,14 +318,16 @@ def _target(root: Path, cfg, folder: Path, title: str, start: datetime) -> Path:
     return candidate
 
 
-def _transcript_md(data: dict, title: str, start: datetime, folder: Path | None = None) -> str:
+def _transcript_md(data: dict, title: str, start: datetime, folder: Path | None = None,
+                   category: str | None = None) -> str:
     """Транскрипт в формате проекта (тот же, что у экспорта .md и бывшей
     заметки): frontmatter для Obsidian, «# название», «Содержание» (главы
-    анализа встречи, если он есть), «## ВРЕМЯ — Спикер»."""
+    анализа встречи, если он есть), «## ВРЕМЯ — Спикер». `category` — имя
+    категории встречи для frontmatter."""
     from meet import export, output
 
     return output.to_markdown(title, export.md_segments(data), start.strftime("%Y-%m-%d"),
-                              contents=export.chapters_of(folder, data))
+                              contents=export.chapters_of(folder, data), category=category)
 
 
 OLD_NOTE = "Старая заметка оставлена: {}"
@@ -344,7 +346,18 @@ def _old_note(root: Path, folder: Path, data: dict, title: str, start: datetime)
     return None
 
 
-def _export(folder: Path, cfg, mix) -> dict:
+def _category_name(folder: Path, full) -> str | None:
+    """Имя категории встречи (нет или удалена из настроек — None). Даны только
+    настройки выгрузки — список категорий берём из файла настроек."""
+    from meet import categories, settings
+
+    try:
+        return categories.display_name(folder, full if hasattr(full, "categories") else settings.load())
+    except Exception:
+        return None  # категория — украшение заметки, не повод срывать выгрузку
+
+
+def _export(folder: Path, cfg, mix, category: str | None = None) -> dict:
     from meet import assistant, export
 
     if not cfg.meetings_dir:
@@ -385,7 +398,7 @@ def _export(folder: Path, cfg, mix) -> dict:
             recorded[name] = None  # гигабайты не хешируем: аудио не правят
         else:
             if kind == "transcript":
-                text = _transcript_md(data, title, start, folder)
+                text = _transcript_md(data, title, start, folder, category)
             elif kind == "summary":
                 text = summary_path.read_text(encoding="utf-8")
             else:
@@ -408,10 +421,10 @@ def export_recording(folder, cfg, *, mix=None) -> dict:
     исключение; кроме «папка не задана», она запоминается в meta.json
     (`kb_export.error`), чтобы карточка показала её, а удачная выгрузка её
     стирает."""
-    cfg = getattr(cfg, "export", cfg)
+    full, cfg = cfg, getattr(cfg, "export", cfg)
     folder = Path(folder)
     try:
-        return _export(folder, cfg, mix)
+        return _export(folder, cfg, mix, _category_name(folder, full))
     except Exception as e:
         if str(e) != NOT_SET:
             _remember_error(folder, e)

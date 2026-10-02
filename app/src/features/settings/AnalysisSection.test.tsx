@@ -34,7 +34,7 @@ test("раздел «Анализ встречи» есть в меню и от�
   open();
   expect(screen.getByRole("button", { name: "Анализ встречи" })).toHaveAttribute("aria-current", "page");
   expect(await toggle("Анализировать встречу после расшифровки")).toHaveAttribute("aria-checked", "true");
-  for (const name of ["Типы реплик", "Важность реплик", "Главы", "Наблюдения", "Категория встречи", "Название встречи"]) {
+  for (const name of ["Типы реплик", "Важность реплик", "Главы", "Наблюдения", "Определять категорию автоматически", "Название встречи"]) {
     expect(await toggle(name)).toHaveAttribute("aria-checked", "true");
   }
   expect(await toggle("Придумывать название встречи")).toHaveAttribute("aria-checked", "false");

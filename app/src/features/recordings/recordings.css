@@ -25,6 +25,10 @@
 }
 .search::placeholder { color: var(--text-3); }
 .search:focus { outline: none; border-color: var(--accent); }
+/* Поиск и фильтр по категориям — одной строкой; включённый фильтр — меткой под ними. */
+.rec-list__search { display: flex; align-items: center; gap: 6px; }
+.rec-list__search .search { flex: 1; min-width: 0; }
+.rec-list__filters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: -2px; }
 .rec-list__items { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .rec-item { position: relative; border-radius: var(--r-md); transition: background var(--t); }
 .rec-item:hover { background: var(--surface-hover); }
@@ -35,6 +39,9 @@
 }
 .rec-item__title { display: block; color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rec-item__meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 2px; font-size: 12px; }
+/* Дата, длительность и метка категории: метка не выше строки — список не прыгает. */
+.rec-item__when { display: flex; align-items: center; gap: 6px; min-width: 0; height: 17px; }
+.rec-item__when > .muted { flex: none; }
 /* Фрагменты из поиска по тексту: под записью, до трёх. */
 .rec-hits { margin: -2px 0 0; padding: 0 6px 6px; list-style: none; display: flex; flex-direction: column; gap: 2px; }
 .rec-hit {
@@ -123,6 +130,7 @@
 .item-menu__icon { display: inline-flex; flex: none; color: var(--text-2); }
 .item-menu__item--danger .item-menu__icon { color: inherit; }
 .item-menu__sep { height: 1px; margin: 3px 4px; background: var(--line-2); }
+.item-menu__end { margin-left: auto; padding-left: 8px; color: var(--accent-hi); }
 .item-menu__item:hover, .item-menu__item:focus-visible { background: var(--surface-hover); outline: none; }
 .item-menu__item--danger { color: var(--red); }
 .item-menu__item:disabled { opacity: 0.45; cursor: default; background: none; }

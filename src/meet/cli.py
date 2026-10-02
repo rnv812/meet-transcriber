@@ -207,6 +207,15 @@ def _add_library_parsers(sub) -> None:
                     "модели по началу встречи. С --apply — поставить его вместо нынешнего.")
     p_ti.add_argument("folder", help=folder_help)
     p_ti.add_argument("--apply", action="store_true", help="поставить предложенное название")
+    p_ca = sub.add_parser(
+        "category", parents=[as_json], help="категория встречи: показать или поставить",
+        description="Без категории в аргументах — напечатать категорию встречи и список категорий. "
+                    "С именем (или id) — поставить её как выбранную вручную: автоматический анализ "
+                    "её больше не меняет. --clear — «Без категории» (тоже выбор вручную). Если "
+                    "приложение запущено, категория ставится через него.")
+    p_ca.add_argument("folder", help=folder_help)
+    p_ca.add_argument("name", nargs="?", default=None, help="имя категории (в кавычках) или её id")
+    p_ca.add_argument("--clear", action="store_true", help="убрать категорию («Без категории»)")
     p_im = sub.add_parser(
         "improve", parents=[as_json],
         help="улучшить расшифровку: ИИ находит неверно распознанные термины",

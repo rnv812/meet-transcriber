@@ -335,11 +335,16 @@ def create(root: Path, folders: list[Path], keep_originals: bool) -> Path:
         record = library.read_meta(folder).get("kb_export")
         if isinstance(record, dict) and record.get("path"):
             exported.append(str(record["path"]))
+    # Категорию, выбранную человеком у одной из частей (первую по времени),
+    # объединённая встреча наследует; категорию от модели даст её новый анализ.
+    category = next((card.category for _, _, card in found
+                     if card.category and card.category["source"] == "user" and card.category["id"]), None)
     target = _new_folder(Path(root), first_start)
     library.write_meta(target, {
         "source": SOURCE,
         "title": title,
         "title_source": title_source,
+        **({"category": category} if category else {}),
         "merged_from": [folder.name for _, folder, _ in found],
         "merge": {"keep_originals": bool(keep_originals), "state": "pending",
                   "kb_exported": exported},
