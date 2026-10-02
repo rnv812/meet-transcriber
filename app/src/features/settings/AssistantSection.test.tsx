@@ -353,3 +353,31 @@ test.each([
   if (fragment === null) expect(error).toBeNull();
   else expect(error).toContain(fragment);
 });
+
+test("живые подсказки: по умолчанию «Сдержанно» и «Как у агента»; выбор уходит в assist", async () => {
+  open();
+  const activity = await screen.findByRole("radiogroup", { name: "Активность подсказок" });
+  expect(within(activity).getByRole("radio", { name: "Сдержанно" })).toBeChecked();
+  const tier = screen.getByRole("radiogroup", { name: "Модель для живых подсказок" });
+  expect(within(tier).getByRole("radio", { name: "Как у агента" })).toBeChecked();
+  await userEvent.click(within(activity).getByRole("radio", { name: "Активно" }));
+  await userEvent.click(within(tier).getByRole("radio", { name: "Быстрее" }));
+  // «Быстрее» поясняется для того, кто отвечает сейчас (Claude Code).
+  expect(screen.getByText("«Быстрее» — Claude Code: модель Haiku")).toBeInTheDocument();
+  await userEvent.selectOptions(screen.getByLabelText("Сколько подсказок держать"), "3");
+  await userEvent.click(screen.getByRole("switch", { name: "Не отвлекать по умолчанию" }));
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
+    assist: { activity: "active", hints_model: "fast", max_hints: 3, quiet_default: true },
+  }));
+});
+
+test("«Только сводка» — число подсказок не выбирается; у каждой настройки есть «?»", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, { assist: { activity: "summary", max_hints: 0 } }));
+  open();
+  expect(await screen.findByLabelText("Сколько подсказок держать")).toBeDisabled();
+  expect(screen.getByRole("option", { name: "По активности (5 или 8)" })).toBeInTheDocument();
+  for (const label of ["Что такое активность подсказок", "Какая модель ведёт подсказки", "Что значит «Не отвлекать»"]) {
+    expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+  }
+});

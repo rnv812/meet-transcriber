@@ -25,7 +25,7 @@ from meet import paths
 from meet.assist.agent import check_auth
 from meet.assist.bus import TranscriptBus
 from meet.assist.context import collect_task_context
-from meet.assist.digester import CALM, Digester
+from meet.assist.digester import Cadence, Digester, cadence_for
 from meet.assist.kb_index import TermIndex
 from meet.assist.live_state import LIVE_STATE_JSON, LiveState
 from meet.assist.prompts import (
@@ -85,9 +85,13 @@ class AssistState:
     def __init__(self, *, bus: TranscriptBus, live: LiveState, glossary: str,
                  vault: Path | None, cwd: Path,
                  knowledge: Path | None = None,
-                 vault_index: str = "Claude Docs.md", hub_prefix: str = "_") -> None:
+                 vault_index: str = "Claude Docs.md", hub_prefix: str = "_",
+                 prefs: dict | None = None) -> None:
         self.bus = bus
         self.live = live
+        # Настройки окна из `assist` (не отвлекать, активность): окна берут их
+        # из `state`, а не читают config.json сами.
+        self.prefs = dict(prefs or {})
         self.on_change = None  # после действия человека (запись live_state.json)
         self._glossary = glossary
         self._vault = vault
@@ -145,7 +149,8 @@ class AssistState:
         data = self.live.to_dict()
         qa = self.qa.history() if self.qa is not None else []
         return {**data, "digest": self.live.render_markdown(), "qa": qa,
-                "status": self.status(), "hints_enabled": self.live.hints_enabled}
+                "status": self.status(), "hints_enabled": self.live.hints_enabled,
+                "prefs": self.prefs}
 
     def hint_action(self, hint_id: str, action: str) -> bool:
         """Закрепить, открепить или скрыть подсказку. False — такой нет."""
@@ -272,6 +277,16 @@ async def _main(state: AssistState, port: int, *, open_browser: bool = True,
         workers.shutdown(wait=False, cancel_futures=True)
 
 
+def cadence_of(assist) -> Cadence:
+    """Каденс тиков по настройкам `assist`: активность, затем свои пределы."""
+    cadence = cadence_for(assist.activity)
+    if assist.max_hints:
+        cadence = cadence.with_max_hints(assist.max_hints)
+    if assist.min_words:
+        cadence = cadence.with_min_words(assist.min_words)
+    return cadence
+
+
 def _pick_runner(provider: str | None, cfg):
     """Кто отвечает: явный `--provider`, иначе `llm.resolve(настройки)`."""
     from meet import llm
@@ -334,7 +349,7 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
 
     out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
     bus = TranscriptBus()
-    cadence = CALM
+    cadence = cadence_of(cfg.assist)
     live = LiveState(max_hints=cadence.max_hints, hints_enabled=cadence.hints)
     vault_path = Path(vault) if vault else None
     state = AssistState(
@@ -346,6 +361,7 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         vault=vault_path, cwd=out_dir,
         knowledge=Path(knowledge_dir) if knowledge_dir else None,
         vault_index=cfg.assist.vault_index, hub_prefix=cfg.assist.hub_prefix,
+        prefs={"quiet_default": cfg.assist.quiet_default, "activity": cfg.assist.activity},
     )
     engine = LiveEngine(out_dir, Transcriber(), window_seconds=window_seconds,
                         hotwords=_load_hotwords(hotwords),
@@ -368,8 +384,14 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     kb = TermIndex.build(state.knowledge) if state.knowledge else None
     if kb is not None:
         print(f"база знаний: {len(kb)} терминов в указателе", flush=True)
+    from meet import llm
+
+    tick_kwargs = llm.tier_kwargs(provider_name, cfg.assist.hints_model)
+    print(f"живые подсказки: {cfg.assist.activity}, модель тиков: "
+          f"{cfg.assist.hints_model} {tick_kwargs or ''}".rstrip(), flush=True)
     state.digester = Digester(bus, live, system_prompt=state.digester_system,
                               runner=runner, cadence=cadence, kb=kb,
+                              call_kwargs=tick_kwargs,
                               on_update=_save_state,
                               log=lambda line: print(line, flush=True))
     state.qa = QAService(

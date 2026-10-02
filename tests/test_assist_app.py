@@ -564,3 +564,44 @@ def test_endpoint_file_carries_device_fallback(tmp_path):
     assert data["devices_fallback"] == fallback
     app.write_endpoint(path, port=5, folder=tmp_path)
     assert "devices_fallback" not in json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_cadence_follows_assist_settings():
+    from meet.assist.app import cadence_of
+    from meet.assist.digester import ACTIVE, CALM, SUMMARY_ONLY
+
+    def assist(**raw):
+        return Settings.from_raw({"assist": raw}).assist
+
+    assert cadence_of(assist()) == CALM
+    assert cadence_of(assist(activity="active")) == ACTIVE
+    assert cadence_of(assist(activity="summary")).hints is False
+    assert cadence_of(assist(activity="summary")) == SUMMARY_ONLY
+    tuned = cadence_of(assist(max_hints=3, min_words=100))
+    assert (tuned.max_hints, tuned.min_words, tuned.min_s) == (3, 100, CALM.min_s)
+
+
+def test_run_assist_applies_activity_tier_and_prefs(tmp_path, monkeypatch):
+    async def done(stop):
+        return None
+
+    heavy = _Heavy(monkeypatch, resolved=("claude-code", _never_called_runner), digester_run=done)
+    cfg = Settings.from_raw({"assist": {"activity": "summary", "hints_model": "fast",
+                                        "quiet_default": True}})
+    from meet.assist import app as app_mod
+
+    seen = {}
+    real_state = app_mod.AssistState
+
+    def capture(**kw):
+        seen["state"] = real_state(**kw)
+        return seen["state"]
+
+    monkeypatch.setattr(app_mod, "AssistState", capture)
+    _run(tmp_path, open_browser=False, port=0, cfg=cfg)
+    assert heavy.digester_kwargs["call_kwargs"] == {"model": "haiku"}
+    assert heavy.digester_kwargs["cadence"].hints is False
+    assert heavy.live.hints_enabled is False
+    state = seen["state"]
+    assert state.view()["prefs"] == {"quiet_default": True, "activity": "summary"}
+    assert "Подсказки не нужны" in state.digester_system

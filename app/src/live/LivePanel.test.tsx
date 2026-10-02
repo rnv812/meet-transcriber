@@ -389,3 +389,14 @@ test("широкое окно (от 720) — две колонки; сузили
     vi.unstubAllGlobals();
   }
 });
+
+test("«Не отвлекать по умолчанию» из настроек включает режим при открытии; дальше решает человек", async () => {
+  render(<LivePanel endpoint={ep} />);
+  await act(async () => {});
+  const quiet = screen.getByRole("button", { name: "Не отвлекать" });
+  act(() => liveStream().emit("state", state([], { prefs: { quiet_default: true, activity: "calm" } })));
+  expect(quiet).toHaveAttribute("aria-pressed", "true");
+  await userEvent.click(quiet);
+  act(() => liveStream().emit("state", state([], { prefs: { quiet_default: true, activity: "calm" } })));
+  expect(quiet).toHaveAttribute("aria-pressed", "false");
+});

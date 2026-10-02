@@ -162,3 +162,13 @@ def test_connection_error_gets_proxy_hint(monkeypatch, tmp_path):
            stderr=b"stream error: error sending request for url (https://api.example.com/v1)")
     reply = _run(cwd=tmp_path)
     assert reply.error.endswith(netproxy.HINT)
+
+
+def test_effort_goes_as_config_override_only_when_set(monkeypatch, tmp_path):
+    _setup(monkeypatch)
+    _run(cwd=tmp_path, effort="low")
+    cmd = FakePopen.calls[0].cmd
+    assert cmd[cmd.index("-c") + 1] == 'model_reasoning_effort="low"'
+    assert cmd[-1] == "-"
+    _run(cwd=tmp_path)
+    assert "-c" not in FakePopen.calls[1].cmd

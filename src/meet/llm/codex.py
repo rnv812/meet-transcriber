@@ -4,6 +4,8 @@
 Рабочая папка — база знаний (первая существующая из `allowed_dirs[1:]`),
 иначе `cwd`. Флаги сверены с `codex exec --help` (codex-cli 0.159.0).
 `model` и `max_turns` — понятия Claude; Codex берёт модель из своего конфига.
+`effort` — усилие рассуждения на один вызов (`-c model_reasoning_effort=…`),
+для «Быстрее» в живых подсказках; None — как в конфиге Codex.
 """
 
 import asyncio
@@ -48,7 +50,7 @@ def _workdir(allowed_dirs, cwd) -> str:
 
 
 def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
-          env: dict | None = None) -> AgentReply:
+          env: dict | None = None, effort: str | None = None) -> AgentReply:
     # ignore_cleanup_errors: убитый по таймауту Codex может ещё держать файл.
     with tempfile.TemporaryDirectory(prefix="meet-codex-",
                                      ignore_cleanup_errors=True) as tmp:
@@ -61,6 +63,7 @@ def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
             "--ephemeral",
             "-C", workdir,
             "--output-last-message", str(out_file),
+            *(["-c", f'model_reasoning_effort="{effort}"'] if effort else []),
             "-",
         ]
         try:
@@ -105,6 +108,7 @@ async def run(
     timeout_s: float = 180.0,
     max_turns: int = 8,
     proxy: str | None = None,
+    effort: str | None = None,
 ) -> AgentReply:
     """Один вызов `codex exec`; ошибки — в AgentReply.error. `proxy` —
     `llm.proxy`: Codex системный прокси Windows сам не видит."""
@@ -114,7 +118,7 @@ async def run(
     stdin_text = f"{system_prompt}\n\n{prompt}"
     reply = await asyncio.to_thread(
         _exec, exe, _workdir(allowed_dirs, cwd), stdin_text, timeout_s,
-        netproxy.child_env(proxy),
+        netproxy.child_env(proxy), effort,
     )
     reply.error = netproxy.with_hint(reply.error)
     return reply

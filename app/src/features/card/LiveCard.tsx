@@ -5,12 +5,13 @@
  * дописывает дорожки (`stopping`), лента остаётся, а поток и вопросы — нет.
  */
 
-import { useRef, useState } from "react";
+import { useRef } from "react";
 
 import type { Endpoint } from "../../lib/api";
 import type { LiveStatus } from "../../lib/types";
 import { LiveWorkspace, useLiveView } from "../../live/LiveWorkspace";
 import { QuietIcon } from "../../live/icons";
+import { useQuiet } from "../../live/useAttention";
 import { useLiveAsk } from "../../live/useLastLook";
 import { useLive } from "../../live/useLive";
 import { useWide } from "../../live/useWide";
@@ -21,7 +22,7 @@ export function LiveCard({ endpoint, live }: { endpoint: Endpoint; live: LiveSta
   // переподключался бы и писал «Нет связи с ассистентом».
   const state = useLive(endpoint, !stopping);
   const ask = useLiveAsk(state, true);
-  const [quiet, setQuiet] = useState(false);
+  const [quiet, setQuiet] = useQuiet(state.quietDefault);
   const root = useRef<HTMLDivElement>(null);
   const wide = useWide(root);
   const view = useLiveView(state, { open: true, wide, quiet });
