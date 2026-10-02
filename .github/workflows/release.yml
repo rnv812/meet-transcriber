@@ -3,20 +3,51 @@
 # же версии приложения (суффикс в версию сборки не идёт). Описание релиза —
 # docs/release-notes/<тег>.md, без него сборка не публикуется.
 #
-# Сторонние actions закреплены на SHA коммита (тег — в комментарии): у job
-# есть contents: write, и перевешенный чужой тег не должен получить его.
+# Сторонние actions закреплены на SHA коммита (тег — в комментарии): у
+# публикующих job есть contents: write, и перевешенный чужой тег не должен
+# получить его.
 # Обновление — новый SHA того же тега: gh api repos/<owner>/<repo>/commits/<тег>.
+#
+# macOS (Apple Silicon, экспериментально): job `macos` собирает образ диска
+# Meet_<версия>_aarch64.dmg (scripts/build_release_macos.sh) и складывает его
+# в артефакт; по тегу `publish-macos` добавляет его в тот же выпуск и
+# дописывает его строку в SHA256SUMS.txt. Сбой macOS не мешает выпуску для
+# Windows. Пробный прогон без выпуска — вручную (Actions → release → Run
+# workflow) на любой ветке: с `macos_only` (по умолчанию) Windows-сборка не
+# запускается и ничего не публикуется — образ остаётся артефактом прогона, а
+# `publish-macos-dry-run` проверяет на нём слияние сумм, ничего не загружая.
+# Кнопка Run workflow появляется, только когда release.yml с
+# workflow_dispatch есть в ветке по умолчанию; до того пробный прогон —
+# пушем любого коммита в ветку `ci/macos-dry-run` (тоже только macOS).
 name: release
 
 on:
   push:
     tags: ["v*"]
+    branches: ["ci/macos-dry-run"]
+  workflow_dispatch:
+    inputs:
+      macos_only:
+        description: "Только сборка macOS (без Windows и без публикации)"
+        type: boolean
+        default: true
 
+# Наименьшие права: по умолчанию токен только читает. Право писать в
+# Releases — только у job, которые публикуют (`release`, `publish-macos`), и
+# только на теге. Сборки (`macos`, пробная публикация) пишущего токена не
+# получают вовсе: в них работает много чужого кода (npm, crates, PyPI,
+# configure/make ffmpeg). checkout нигде не оставляет токен в .git/config.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
+    # По тегу — всегда, как раньше; вручную — только на теге и без
+    # macos_only (ветка с именем вида v1.2.3 выпуск не создаст); пуш в ветку
+    # пробного прогона — никогда.
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.macos_only))
+    permissions:
+      contents: write
     runs-on: windows-latest
     timeout-minutes: 60
     defaults:
@@ -26,6 +57,8 @@ jobs:
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       # Значения из контекста — через env, а не подстановкой ${{ }} в текст
       # скрипта: имя тега не должно становиться кодом PowerShell.
@@ -102,3 +135,214 @@ jobs:
           files: |
             ${{ steps.build.outputs.installer }}
             ${{ steps.build.outputs.sums }}
+
+  # macOS 13+, Apple Silicon. Экспериментально: подписи Apple нет (ad-hoc),
+  # на реальном Mac не проверено. Тесты — подмножество без движка и без
+  # Windows-модулей; сборка — scripts/build_release_macos.sh.
+  macos:
+    # Без права записи: ни на теге, ни в пробном прогоне.
+    permissions:
+      contents: read
+    runs-on: macos-14
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # По тегу — версия из тега (файлы версий обязаны с ней совпадать), при
+      # ручном прогоне на ветке — из tauri.conf.json.
+      - name: Version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            if [[ ! "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)(-[0-9A-Za-z.]+)?$ ]]; then
+              echo "Тег '$TAG' не вида vX.Y.Z[-суффикс]" >&2
+              exit 1
+            fi
+            version="${BASH_REMATCH[1]}"
+          else
+            version="$(python3 -c 'import json; print(json.load(open("app/src-tauri/tauri.conf.json"))["version"])')"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-10-01
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: app/src-tauri
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.11.23"
+
+      # Лёгкое ядро без движка. Обязательные — тесты слоя macOS (платформа,
+      # прокси scutil, помощник и запись через него, детектор звонка, движок
+      # Apple Silicon, значки строки меню) и сетевой сторож.
+      - name: Python tests (macOS layer)
+        run: |
+          uv venv --python 3.12 .venv-ci
+          uv pip install --python .venv-ci -e . pytest
+          PYTHONPATH=src .venv-ci/bin/python -m pytest -q -p no:cacheprovider \
+            tests/test_plat.py tests/test_netproxy_mac.py tests/test_audiotap.py \
+            tests/test_watch_mac.py tests/test_engine_mac.py tests/test_app_icons.py \
+            tests/test_macos_build.py tests/test_no_network.py
+
+      # Остальное ядро на macOS ещё не прогонялось: сведения для пробного
+      # прогона, сборку не останавливают.
+      - name: Python tests (platform-neutral core, informational)
+        continue-on-error: true
+        run: |
+          PYTHONPATH=src .venv-ci/bin/python -m pytest -q -p no:cacheprovider \
+            tests/test_align.py tests/test_analysis.py tests/test_asr_backend.py \
+            tests/test_asr_segments.py tests/test_events.py tests/test_export.py \
+            tests/test_hotwords.py tests/test_interleave.py tests/test_library.py \
+            tests/test_netproxy.py tests/test_output.py tests/test_search.py \
+            tests/test_textfix.py tests/test_translit.py tests/test_voices.py \
+            tests/test_credentials.py tests/test_release_notes.py
+
+      - name: Window tests
+        working-directory: app
+        run: |
+          npm ci --no-audit --no-fund
+          npm run check
+          npm test
+          npm run build
+
+      # После npm run build: generate_context! встраивает app/dist.
+      - name: Shell tests
+        working-directory: app/src-tauri
+        run: cargo test
+
+      # Образ раннера (ImageOS, ImageVersion — переменные машины, в контексте
+      # `env` их нет) — в ключ кэша ffmpeg.
+      - name: Runner image
+        id: image
+        run: echo "key=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      # ffmpeg собирается из исходников (минуты) — между прогонами кэш.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/cache/ffmpeg-mac-*
+          # Образ раннера — в ключе: набор системных библиотек влияет на сборку.
+          key: ffmpeg-mac-${{ steps.image.outputs.key }}-${{ hashFiles('scripts/macos.sha256', 'scripts/build_release_macos.sh') }}
+
+      - name: Build .dmg
+        id: build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/build_release_macos.sh "$VERSION"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: meet-macos-aarch64
+          path: |
+            ${{ steps.build.outputs.dmg }}
+            ${{ steps.build.outputs.sums }}
+            ${{ steps.build.outputs.sources }}
+          if-no-files-found: error
+          retention-days: 14
+
+  # По тегу: образ macOS — в тот же выпуск, его строка — в общий
+  # SHA256SUMS.txt (обновление Windows ищет в нём только свой установщик);
+  # рядом — исходники FFmpeg и Opus (LGPL: исходники там же, где программа).
+  # Ручной прогон на теге без macos_only публикует так же, как пуш тега:
+  # иначе Windows-job перезаписал бы суммы без строки образа.
+  # IMPORTANT (порядок перезапуска): перезапустили только job `release` —
+  # перезапустите после него и `publish-macos`: `release` заново выкладывает
+  # SHA256SUMS.txt только со строкой Windows, образ остаётся без суммы.
+  publish-macos:
+    needs: [release, macos]
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || !inputs.macos_only)
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: meet-macos-aarch64
+          path: dist
+
+      # Сначала образ и исходники, потом суммы: пока суммы перезаливаются,
+      # образ уже на месте, а строка Windows в них не пропадает.
+      - name: Add the image to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          cd dist
+          shopt -s nullglob
+          images=(Meet_*_aarch64.dmg)
+          if [[ ${#images[@]} -ne 1 ]]; then
+            echo "Ожидался один образ Meet_*_aarch64.dmg, найдено ${#images[@]}" >&2
+            exit 1
+          fi
+          dmg="${images[0]}"
+          mkdir published
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir published
+          mkdir merged
+          python3 "$GITHUB_WORKSPACE/scripts/merge_sums.py" published/SHA256SUMS.txt SHA256SUMS.txt merged/SHA256SUMS.txt
+          # Строка установщика Windows обязана пережить слияние: без неё
+          # обновление Windows перестало бы находить сумму.
+          if ! grep -Eq '^[0-9a-f]{64}  meet_[0-9A-Za-z.-]+_x64-setup\.exe$' merged/SHA256SUMS.txt; then
+            echo "В слитых суммах нет строки установщика Windows — не загружаю" >&2
+            exit 1
+          fi
+          gh release upload "$TAG" "$dmg" sources/* --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" merged/SHA256SUMS.txt --clobber --repo "$GITHUB_REPOSITORY"
+
+  # Пробная публикация (не тег): та же сборка сумм против выдуманного
+  # SHA256SUMS.txt Windows, без загрузки куда-либо. Проверяет артефакт
+  # (download-artifact читает то, что положил upload-artifact) и слияние сумм.
+  publish-macos-dry-run:
+    needs: macos
+    if: github.ref_type != 'tag'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: meet-macos-aarch64
+          path: dist
+
+      - name: Merge checksums (dry run, nothing is uploaded)
+        run: |
+          set -euo pipefail
+          cd dist
+          shopt -s nullglob
+          images=(Meet_*_aarch64.dmg)
+          [[ ${#images[@]} -eq 1 ]] || { echo "образов: ${#images[@]}" >&2; exit 1; }
+          ls -l . sources
+          work="$(mktemp -d)"
+          printf '%s  meet_0.0.0_x64-setup.exe\r\n' "$(printf 'a%.0s' $(seq 64))" > "$work/SHA256SUMS.txt"
+          python3 "$GITHUB_WORKSPACE/scripts/merge_sums.py" "$work/SHA256SUMS.txt" SHA256SUMS.txt "$work/merged.txt"
+          grep -q '  meet_0.0.0_x64-setup.exe$' "$work/merged.txt"
+          grep "  ${images[0]}\$" "$work/merged.txt" | sha256sum -c -
