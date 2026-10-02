@@ -73,7 +73,8 @@ test("AnalysisStatus: идёт, устарел, не удался", async () => 
   expect(screen.getByRole("status")).toHaveTextContent("Анализ устарел");
   await userEvent.click(screen.getByRole("button", { name: "Переанализировать" }));
   rerender(<AnalysisStatus state={{ state: "failed", error: "таймаут вызова модели" }} busy={false} onRun={onRun} />);
-  expect(screen.getByRole("status")).toHaveTextContent("Анализ не удался: таймаут вызова модели");
+  expect(screen.getByRole("status")).toHaveTextContent("Анализ не удался");
+  expect(screen.getByText("Анализ не удался")).toHaveAttribute("title", "таймаут вызова модели");
   await userEvent.click(screen.getByRole("button", { name: "Повторить" }));
   expect(onRun).toHaveBeenCalledTimes(2);
   rerender(<AnalysisStatus state={{ state: "ready" }} busy={false} onRun={onRun} />);
@@ -86,6 +87,7 @@ test("AnalysisStatus: идёт, устарел, не удался", async () => 
 test("reanalyzeBlocked и задача анализа записи", () => {
   const running: AnalysisState = { state: "running" };
   expect(reanalyzeBlocked(running, false)).toBe("Анализ уже идёт");
+  expect(reanalyzeBlocked({ state: "queued" }, false)).toBe("Анализ уже в очереди");
   expect(reanalyzeBlocked({ state: "ready" }, true)).toMatch(/Подключите/);
   expect(reanalyzeBlocked({ state: "stale" }, false)).toBeNull();
   expect(analysisJobOf("C:/rec/r1", [job("running")])?.id).toBe("a1");
@@ -112,7 +114,8 @@ test("карточка: без модели «Переанализировать
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Начнём с беты");
   const menu = await openMore();
-  await waitFor(() => expect(within(menu).getByRole("menuitem", { name: "Переанализировать" })).toBeDisabled());
+  // анализа ещё не было — «Анализировать»
+  await waitFor(() => expect(within(menu).getByRole("menuitem", { name: "Анализировать" })).toBeDisabled());
 });
 
 test("карточка: устаревший анализ — «Переанализировать» ставит задачу", async () => {
@@ -130,7 +133,7 @@ test("карточка: анализ не удался — тихая строк
   vi.mocked(api.runAnalysis).mockResolvedValue(job("queued"));
   load();
   render(<RecordingCard id="r1" endpoint={ep} />);
-  expect(await screen.findByText("Анализ не удался: rate_limit")).toBeInTheDocument();
+  expect(await screen.findByTitle("rate_limit")).toHaveTextContent("Анализ не удался");
   await userEvent.click(within(await openMore()).getByRole("menuitem", { name: "Переанализировать" }));
   expect(api.runAnalysis).toHaveBeenCalledTimes(1);
 });
@@ -150,7 +153,7 @@ test("«Предложить название»: окно «Применить /
   expect(api.patchRecording).toHaveBeenCalledWith(ep, "r1", { title: "Запуск беты", title_source: "ai" });
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "Предложенное название" })).toBeNull());
   expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Запуск беты");
-  expect(screen.getByLabelText(/Название предложено ИИ/)).toBeInTheDocument();
+  expect(screen.getByTitle(/Название предложено ИИ/)).toBeInTheDocument();
   expect(onChanged).toHaveBeenCalled();
 });
 
@@ -176,10 +179,10 @@ test("бейдж «ИИ» у названия от модели; нажатие 
   load({ title: "Запуск беты", title_source: "ai" });
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Начнём с беты");
-  await userEvent.click(screen.getByLabelText(/Название предложено ИИ/));
+  await userEvent.click(screen.getByTitle(/Название предложено ИИ/));
   const input = screen.getByRole("textbox", { name: "Название записи" });
   await userEvent.clear(input);
   await userEvent.type(input, "Моё{Enter}");
   expect(api.patchRecording).toHaveBeenCalledWith(ep, "r1", { title: "Моё" });
-  await waitFor(() => expect(screen.queryByLabelText(/Название предложено ИИ/)).toBeNull());
+  await waitFor(() => expect(screen.queryByTitle(/Название предложено ИИ/)).toBeNull());
 });

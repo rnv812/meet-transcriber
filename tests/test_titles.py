@@ -55,6 +55,9 @@ class Runner:
     ({"source": "import", "original_name": "zapis-1.mp3", "title": "zapis-1"}, "auto"),
     ({"source": "import", "original_name": "zapis-1.mp3", "title": "Созвон с подрядчиком"}, "user"),
     ({"source": "merge", "title": "Объединённая встреча 01.10.2026"}, "auto"),
+    # автозапись до 0.3.0: общий заголовок окна звонка — «site», а не «user»
+    ({"source": "auto", "title": "Google Meet"}, "site"),
+    ({"source": "auto", "title": "Планёрка отдела продаж — Телемост"}, "user"),
 ])
 def test_title_source_and_migration(meta, expected):
     assert library.title_source(meta) == expected
@@ -103,6 +106,7 @@ def test_generic_site_titles(title, generic):
     ({"title": "Планёрка отдела продаж — Телемост", "title_source": "site"}, False),
     ({"title": "Моё название", "title_source": "user"}, False),
     ({"title": "Моё название"}, False),
+    ({"title": "Принятое", "title_source": "ai", "title_accepted": True}, False),
 ])
 def test_may_replace(meta, allowed):
     assert titles.may_replace(meta, settings.Settings().auto_record.call_sites) is allowed
@@ -216,3 +220,11 @@ def test_titles_main_prints_ascii_json(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(llm, "resolve", lambda cfg: (None, None))
     assert titles.main([str(folder)]) == 1
     assert "Подключите" in json.loads(capsys.readouterr().out)["error"]
+
+
+def test_control_and_bidi_characters_are_stripped_from_titles(tmp_path):
+    folder = _folder(tmp_path)
+    assert titles.apply_ai(folder, "\x00\x07Запуск\u202e беты\x1b", _cfg()) == "Запуск беты"
+    assert library.read_meta(folder)["title"] == "Запуск беты"
+    title, _ = titles.split_summary_title("Название: Бета\u2066 версия\n## Итоги")
+    assert title == "Бета версия"

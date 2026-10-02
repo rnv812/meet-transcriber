@@ -42,6 +42,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 from pathlib import Path
 
 from meet import library
@@ -63,6 +64,9 @@ MAX_WINDOWS = 6
 TITLE_MAX = 60
 CHAPTER_TITLE_MAX = 60
 CHAPTER_SHORT_MAX = 24
+# Больше глав не храним (сломанный или навязанный репликой ответ — сотни глав
+# на полосе плеера): лишние сливаются с соседними, самые короткие — первыми.
+CHAPTERS_MAX = 24
 INSIGHT_TEXT_MAX = 300
 INSIGHT_WHY_MAX = 200
 INSIGHTS_MAX = 12
@@ -301,21 +305,35 @@ def meeting_header(folder: Path, data: dict) -> str:
 
 
 def _flat(value, limit: int) -> str:
-    text = " ".join(str(value).split())
+    """Одна строка без управляющих и невидимых символов форматирования
+    (NUL, ESC, смена направления текста): текст модели попадает в название
+    записи, окно и журнал. Не длиннее limit (с «…»)."""
+    text = "".join(" " if unicodedata.category(c) == "Cc" else c for c in str(value)
+                   if unicodedata.category(c) != "Cf")
+    text = " ".join(text.split())
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
-def _index(key, valid: set[int]) -> int | None:
-    if isinstance(key, bool):
+def _int(value) -> int | None:
+    """Номер реплики из ответа: число, целое с плавающей точкой или «#12»."""
+    if isinstance(value, bool):
         return None
-    if isinstance(key, str):
-        key = key.strip().lstrip("#")
-        if not key.isdigit():
+    if isinstance(value, str):
+        value = value.strip().lstrip("#")
+        if not value.isdecimal() or not value.isascii():
             return None
-        key = int(key)
-    if isinstance(key, float) and key.is_integer():
-        key = int(key)
-    return key if isinstance(key, int) and key in valid else None
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value if isinstance(value, int) else None
+
+
+def _index(key, valid: set[int]) -> int | None:
+    key = _int(key)
+    return key if key is not None and key in valid else None
 
 
 def _number(value) -> float | None:
@@ -369,14 +387,10 @@ def _chapters(raw, valid) -> list[dict]:
         title = _flat(item.get("title") or "", CHAPTER_TITLE_MAX)
         if not title:
             continue
-        start, end = item.get("start_i"), item.get("end_i")
-        if isinstance(start, str) and start.strip().lstrip("#").isdigit():
-            start = int(start.strip().lstrip("#"))
-        if isinstance(end, str) and end.strip().lstrip("#").isdigit():
-            end = int(end.strip().lstrip("#"))
-        if isinstance(start, bool) or not isinstance(start, int):
+        start, end = _int(item.get("start_i")), _int(item.get("end_i"))
+        if start is None:
             continue
-        if isinstance(end, bool) or not isinstance(end, int):
+        if end is None:
             end = start
         short = _flat(item.get("short") or "", CHAPTER_SHORT_MAX) or _short_of(title)
         out.append({"start_i": start, "end_i": max(start, end), "title": title, "short": short})
@@ -407,12 +421,26 @@ def repair_chapters(chapters: list[dict], order: list[int]) -> list[dict]:
             continue  # то же начало — первая из них остаётся
         kept.append(c)
     kept[0]["_p"] = 0
-    out = []
+    spans = []
     for n, c in enumerate(kept):
         end = kept[n + 1]["_p"] - 1 if n + 1 < len(kept) else len(order) - 1
-        out.append({"start_i": order[c["_p"]], "end_i": order[end], "title": c["title"],
-                    "short": c["short"]})
-    return out
+        spans.append([c["_p"], end, c["title"], c["short"]])
+    while len(spans) > CHAPTERS_MAX:
+        # Самая короткая глава сливается с более короткой соседней; название —
+        # у более длинной из двух.
+        n = min(range(len(spans)), key=lambda k: spans[k][1] - spans[k][0])
+        if n == 0:
+            m = 1
+        elif n == len(spans) - 1:
+            m = n - 1
+        else:
+            before, after = spans[n - 1], spans[n + 1]
+            m = n - 1 if before[1] - before[0] <= after[1] - after[0] else n + 1
+        a, b = sorted((n, m))
+        keep = spans[a] if spans[a][1] - spans[a][0] >= spans[b][1] - spans[b][0] else spans[b]
+        spans[a:b + 1] = [[spans[a][0], spans[b][1], keep[2], keep[3]]]
+    return [{"start_i": order[start], "end_i": order[end], "title": title, "short": short}
+            for start, end, title, short in spans]
 
 
 def _insights(raw, valid) -> list[dict]:
@@ -740,7 +768,8 @@ def write(folder: Path, doc: dict) -> Path:
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
         tmp.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
-        os.replace(tmp, path)
+        # С повтором: файл может держать открытым агент во вкладке «Агент».
+        library._replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
     return path

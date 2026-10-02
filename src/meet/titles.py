@@ -94,16 +94,21 @@ def is_generic_site_title(title: str, sites=()) -> bool:
 
 
 def may_replace(meta: dict, sites=()) -> bool:
-    """Можно ли модели поставить своё название вместо нынешнего."""
+    """Можно ли модели поставить своё название вместо нынешнего. Предложение,
+    которое человек принял сам («Применить», `meet title --apply`), — его выбор:
+    бейдж «ИИ» у него остаётся, но автоматически оно больше не меняется."""
     source = library.title_source(meta)
-    if source in ("auto", "ai"):
+    if source == "ai":
+        return not meta.get("title_accepted")
+    if source == "auto":
         return True
     if source == "site":
         return is_generic_site_title(str(meta.get("title") or ""), sites)
     return False
 
 
-def write_title(folder: Path, title: str, source: str, *, only_if=None) -> bool:
+def write_title(folder: Path, title: str, source: str, *, only_if=None,
+                accepted: bool = False) -> bool:
     """Название и его происхождение — в meta.json под замком папки. `only_if(meta)`
     проверяется там же (человек переименовал запись в эту секунду — не
     затираем). → поменялось ли что-нибудь."""
@@ -113,10 +118,13 @@ def write_title(folder: Path, title: str, source: str, *, only_if=None) -> bool:
         nonlocal changed
         if only_if is not None and not only_if(meta):
             return meta
-        if meta.get("title") == title and library.title_source(meta) == source:
+        if (meta.get("title") == title and library.title_source(meta) == source
+                and bool(meta.get("title_accepted")) == accepted):
             return meta
         changed = True
-        return {**meta, "title": title, "title_source": source}
+        rest = {k: v for k, v in meta.items() if k != "title_accepted"}
+        return {**rest, "title": title, "title_source": source,
+                **({"title_accepted": True} if accepted else {})}
 
     library.update_meta(Path(folder), change)
     return changed

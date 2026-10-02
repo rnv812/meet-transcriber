@@ -86,7 +86,8 @@ export function AnalysisStatus({ state, busy, onRun }: {
     case "failed":
       return (
         <div className="analysis-status" role="status">
-          <span className="muted">Анализ не удался{state.error ? `: ${state.error}` : ""}</span>
+          {/* Подробности (часто длинные и технические) — в подсказке, в строке — коротко. */}
+          <span className="muted" title={state.error || undefined}>Анализ не удался</span>
           {onRun && <button type="button" className="link-btn" onClick={onRun} disabled={busy}>Повторить</button>}
         </div>
       );
@@ -95,9 +96,14 @@ export function AnalysisStatus({ state, busy, onRun }: {
   }
 }
 
+/** Пункт меню: встречу ещё не анализировали — «Анализировать», иначе «Переанализировать». */
+export const reanalyzeLabel = (state: AnalysisState | null): string =>
+  state?.state === "none" ? "Анализировать" : "Переанализировать";
+
 /** Почему «Переанализировать» сейчас недоступно; null — доступно. */
 export function reanalyzeBlocked(state: AnalysisState | null, noModel: boolean): string | null {
-  if (state?.state === "queued" || state?.state === "running") return "Анализ уже идёт";
+  if (state?.state === "queued") return "Анализ уже в очереди";
+  if (state?.state === "running") return "Анализ уже идёт";
   if (noModel) return "Подключите Claude Code или Codex в настройках";
   return null;
 }

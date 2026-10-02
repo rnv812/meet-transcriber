@@ -47,7 +47,7 @@ function below(el: HTMLElement | null, alignRight: boolean): { x: number; y: num
 
 export function CardActions({
   canExport, canRetranscribe, busy, onExport, onKbExport, onOpenFolder, onRetranscribe, onRediarize, onReanalyze,
-  reanalyzeBlocked = null, onSuggestTitle, onDelete,
+  reanalyzeBlocked = null, reanalyzeLabel = "Переанализировать", onSuggestTitle, onDelete,
 }: {
   canExport: boolean;
   canRetranscribe: boolean;
@@ -63,6 +63,8 @@ export function CardActions({
   onReanalyze?: () => void;
   /** Почему «Переанализировать» сейчас недоступно (анализ уже идёт, нет модели) — подсказкой; null — доступно. */
   reanalyzeBlocked?: string | null;
+  /** Подпись пункта: «Анализировать», если анализа ещё не было. */
+  reanalyzeLabel?: string;
   /** «Предложить название»; нет — пункта нет. */
   onSuggestTitle?: () => void;
   onDelete: () => void;
@@ -117,7 +119,7 @@ export function CardActions({
         hint: "Распознать запись заново", onSelect: () => setConfirm("retranscribe"),
       }),
       ...opt(!!onReanalyze, {
-        label: "Переанализировать", icon: <ScanSearch {...ICON} />, disabled: busy || !!reanalyzeBlocked,
+        label: reanalyzeLabel, icon: <ScanSearch {...ICON} />, disabled: busy || !!reanalyzeBlocked,
         hint: reanalyzeBlocked ?? "Заново разметить встречу агентом", onSelect: run(() => onReanalyze?.()),
       }),
       ...opt(!!onSuggestTitle, {

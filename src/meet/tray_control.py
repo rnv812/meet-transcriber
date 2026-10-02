@@ -297,6 +297,9 @@ RECORDING_UPDATED = "recording.updated"  # {"id"}: запись изменила
 ANALYSIS_UPDATED = "analysis.updated"
 # «Предложить название» без свежего анализа — короткий вызов модели подпроцессом.
 TITLE_TIMEOUT_S = 150
+# Удаление и объединение снимают идущий анализ записи: столько ждём, пока его
+# процесс (он работает в папке записи) завершится.
+DROP_ANALYSIS_WAIT_S = 5.0
 PROCESSING = "Запись ещё обрабатывается (обрезка ожидания после звонка) — подождите минуту"
 # Восстановление после перезапуска берёт записи не старше этого.
 RECOVER_DAYS = 7
@@ -386,8 +389,14 @@ class TrayControl:
         # живой режим), и записи, где его надо повторить после идущего
         # (расшифровку поменяли, пока он шёл). Ключ — путь без регистра.
         self._analysis_deferred: dict[str, Path] = {}
-        self._analysis_rerun: set[str] = set()
+        # Повторить после идущего: ключ — запись, значение — просили ли вручную
+        # (тогда повтор не зависит от `analysis.auto`).
+        self._analysis_rerun: dict[str, bool] = {}
         self._analysis_lock = threading.Lock()
+        # «Предложить название», которое уже считается: второй запрос по той же
+        # записи ждёт его, а не платит за второй вызов модели.
+        self._suggesting: dict[str, dict] = {}
+        self._suggest_lock = threading.Lock()
         self.bus.subscribe(self._on_job_event)
 
     @staticmethod
@@ -455,7 +464,9 @@ class TrayControl:
             # нечего. Задачи, убитые остановкой резидента, отметку сохраняют.
             self._mark_pending(Path(folder), False)
         if kind == jobs.ANALYZE and folder:
-            self._background(lambda: self._analysis_finished(Path(folder), job.get("state")),
+            stopping = bool(getattr(self.llm_queue, "stopping", False))
+            self._background(lambda: self._analysis_finished(Path(folder), job.get("state"),
+                                                             job=job, stopping=stopping),
                              "meet-analysis")
         if self._analysis_deferred:
             self._background(self._flush_deferred_analysis, "meet-analysis")
@@ -731,6 +742,11 @@ class TrayControl:
         # после перезапуска только мешали бы записи.
         for folder, wanted in trims:
             self._trim_then_queue(folder, wanted)
+        # Анализ, который ждал, шёл или был отложен при выходе (`pending_analysis`).
+        for folder in folders:
+            mark = library.read_meta(folder).get("pending_analysis")
+            if isinstance(mark, dict) and self._resume_analysis(folder, mark, cutoff):
+                done.setdefault("analysis", []).append(folder.name)
         return done
 
     def _queue_transcription(self, path: Path) -> None:
@@ -1139,6 +1155,8 @@ class TrayControl:
         reason = self._busy_reason(folder)
         if reason:
             raise _bad_request(reason)
+        # Анализ встречи — производное: его снимаем, а не отказываем в удалении.
+        self._drop_analysis(folder)
         try:
             self._remove(folder)
         except library.FolderBusy as e:
@@ -1172,7 +1190,9 @@ class TrayControl:
         # Задача модели (и её CLI) работает с cwd в папке записи: на Windows
         # rmtree снёс бы файлы и упал на самой папке, а задача дописала бы
         # summary.md и meta.json в осиротевшую папку.
-        if model and self.llm_queue.active_for(str(folder), jobs.MODEL_KINDS):
+        # Анализ встречи (фоновая задача) сюда не входит: удаление и объединение
+        # снимают его сами (_drop_analysis) — его можно сделать заново.
+        if model and self.llm_queue.active_for(str(folder), (jobs.SUMMARY, jobs.ASK)):
             return "Идёт работа модели — отмените или дождитесь"
         # Голоса реплик и повторная диаризация читают звук записи: удалять или
         # объединять её посреди счёта нельзя (правкам спикеров они не мешают).
@@ -1221,6 +1241,9 @@ class TrayControl:
             if reason:
                 raise _bad_request(f"{folder.name}: {reason}")
             folders.append(folder)
+        # Анализ частей не нужен: объединённая встреча получит свой после расшифровки.
+        for folder in folders:
+            self._drop_analysis(folder)
         keep = settings.as_flag(body.get("keep_originals"), False)
         if not keep:
             # Исходные удалятся после расшифровки: занятую папку (агент в ней)
@@ -1280,6 +1303,9 @@ class TrayControl:
         if not info.get("keep_originals"):
             sources = merge.originals(folder)
             busy = [(f.name, r) for f in sources if (r := self._busy_reason(f, merging=folder))]
+            if not busy:
+                for source in sources:
+                    self._drop_analysis(source)
             if busy:
                 kept_reason = f"{busy[0][0]}: {busy[0][1]}"
                 self.tray.log(f"исходные записи не удалены ({folder.name}): {kept_reason}")
@@ -1371,10 +1397,14 @@ class TrayControl:
         exported = kb_export.previously_exported(folder)
         old_title = kb_export.meeting(folder)[0] if exported else None
         if title:
-            library.write_meta(folder, {"title": title, "title_source": source})
+            # Принятое предложение модели — выбор человека: автоматически его
+            # больше не меняют (title_accepted), бейдж «ИИ» остаётся.
+            library.update_meta(folder, lambda meta: {
+                **{k: v for k, v in meta.items() if k != "title_accepted"}, "title": title,
+                "title_source": source, **({"title_accepted": True} if source == "ai" else {})})
         else:
             library.update_meta(folder, lambda meta: {
-                k: v for k, v in meta.items() if k not in ("title", "title_source")})
+                k: v for k, v in meta.items() if k not in ("title", "title_source", "title_accepted")})
         if exported:
             self._background(lambda: self._follow_title(folder, old_title))
         return library.describe(folder).to_raw()
@@ -1888,8 +1918,11 @@ class TrayControl:
 
         reply = self._speakers_change(recording_id, rediarize.apply)
         # Переразделение режет реплики по смене спикера: границы и номера
-        # сегментов другие — анализ устарел, и его ставят заново (если включено).
-        self._reanalyze_if_stale(recording_id)
+        # сегментов другие — анализ ставится заново (если включён); записи без
+        # анализа — тоже: человек сейчас работает именно с ней.
+        folder = self._folder(recording_id)
+        if folder is not None:
+            self._background(lambda: self._auto_analyze(folder), "meet-analysis")
         return reply
 
     def speakers_rediarize_discard(self, recording_id: str) -> dict:
@@ -2178,21 +2211,23 @@ class TrayControl:
 
     def make_analysis(self, recording_id: str) -> dict:
         """«Переанализировать» (и `meet analyze` через приложение): задача
-        анализа в очередь модели. Уже ждёт или идёт — та же задача. 409 — идёт
-        расшифровка, не подключена модель или запись ещё пишется."""
+        анализа в очередь модели. Уже ждёт — та же задача, но вперёд фоновых;
+        уже идёт — та же, с повтором после неё. 409 — идёт расшифровка, не
+        подключена модель или запись ещё пишется."""
         folder = self._transcribed(recording_id)
         if isinstance(folder, dict):
             return folder
         self._ready_for_model(folder)
         if self._key(folder) in self._busy_now():
             raise _conflict("Запись ещё идёт — анализ будет доступен после её окончания")
-        job, _created = self._queue_analysis(folder, low=False)
+        job, _created = self._queue_analysis(folder, low=False, manual=True)
         return job.to_raw()
 
     def suggest_title(self, recording_id: str) -> dict:
         """«Предложить название»: из свежего анализа сразу, иначе — коротким
         вызовом модели подпроцессом (до TITLE_TIMEOUT_S). Ничего не меняет:
-        применяет окно (PATCH с title_source "ai"). → {"title", "from"}."""
+        применяет окно (PATCH с title_source "ai"). Повторный запрос по той же
+        записи, пока первый считается, ждёт его ответа. → {"title", "from"}."""
         from meet import analysis
 
         folder = self._transcribed(recording_id)
@@ -2202,31 +2237,75 @@ class TrayControl:
         if title:
             return {"title": title, "from": "analysis"}
         self._ready_for_model(folder)
-        got = _suggest_title(folder)
+        key = self._key(folder)
+        with self._suggest_lock:
+            entry = self._suggesting.get(key)
+            owner = entry is None
+            if owner:
+                entry = {"done": threading.Event(), "result": None}
+                self._suggesting[key] = entry
+        if owner:
+            try:
+                entry["result"] = _suggest_title(folder)
+            except Exception as e:
+                entry["result"] = {"error": str(e) or type(e).__name__}
+            finally:
+                with self._suggest_lock:
+                    self._suggesting.pop(key, None)
+                entry["done"].set()
+        else:
+            entry["done"].wait(TITLE_TIMEOUT_S + 10)
+        got = entry["result"] or {"error": "модель не ответила"}
         if got.get("error"):
             raise RuntimeError(f"название не предложено: {got['error']}")
         return got
 
-    def _queue_analysis(self, folder: Path, *, low: bool):
-        """Одна задача анализа на запись: ждущая или идущая — та же (идущей
-        помечаем «повторить после», если расшифровку тем временем поменяли).
-        → (задача, поставлена ли новая)."""
+    def _mark_analysis(self, folder: Path, on: bool, *, manual: bool = False) -> None:
+        """`pending_analysis` в meta.json: анализ поставлен или отложен, но не
+        закончился. Резидент, закрытый посреди него, при следующем запуске
+        поставит его снова (см. recover, _resume_analysis) — как расшифровку."""
+        try:
+            if on:
+                library.write_meta(folder, {"pending_analysis": {"at": time.time(), "manual": manual}})
+            elif "pending_analysis" in library.read_meta(folder):
+                library.update_meta(folder, lambda meta: {
+                    k: v for k, v in meta.items() if k != "pending_analysis"})
+        except Exception as e:
+            self.tray.log(f"отметка об анализе не записана ({Path(folder).name}): {e}")
+
+    def _queue_analysis(self, folder: Path, *, low: bool, manual: bool = False):
+        """Одна задача анализа на запись. Ждущая — та же (просьба человека
+        поднимает фоновую вперёд); идущая — та же, с пометкой «повторить после»
+        (расшифровку тем временем поменяли). → (задача, поставлена ли новая)."""
         with self._submit_lock:
             job = self.llm_queue.active_for(str(folder), (jobs.ANALYZE,))
             if job is not None:
                 if job.state == jobs.RUNNING:
                     with self._analysis_lock:
-                        self._analysis_rerun.add(self._key(folder))
+                        key = self._key(folder)
+                        self._analysis_rerun[key] = self._analysis_rerun.get(key, False) or manual
+                elif not low and hasattr(self.llm_queue, "promote"):
+                    self.llm_queue.promote(job.id)
                 return job, False
-            return self.llm_queue.submit(jobs.ANALYZE, str(folder), {}, low=low), True
+            job = self.llm_queue.submit(jobs.ANALYZE, str(folder), {}, low=low)
+        self._mark_analysis(folder, True, manual=manual)
+        return job, True
+
+    def _defer_analysis(self, folder: Path, manual: bool) -> None:
+        with self._analysis_lock:
+            key = self._key(folder)
+            _, was_manual = self._analysis_deferred.get(key, (folder, False))
+            self._analysis_deferred[key] = (folder, was_manual or manual)
+        self._mark_analysis(folder, True, manual=manual)
+        self.tray.log(f"анализ встречи отложен до конца записи: {folder.name}")
 
     def _auto_analyze(self, folder: Path, *, stale_only: bool = False) -> None:
         """Автоматический анализ (настройка `analysis.auto`) — после расшифровки,
-        импорта, объединения; после правки спикеров — только если прежний
-        анализ устарел (`stale_only`). Не ставится: запись короче
-        `auto_record.min_call_seconds`, модель не подключена, анализ уже
-        свежий. Идёт запись или живой режим — откладывается до их конца.
-        Фоновый поток: любой сбой — строкой в журнал."""
+        импорта, объединения, переразделения на спикеров; после правки
+        спикеров — только если прежний анализ устарел (`stale_only`). Не
+        ставится: запись короче `auto_record.min_call_seconds`, модель не
+        подключена, анализ уже свежий. Идёт запись или живой режим —
+        откладывается до их конца. Фоновый поток: любой сбой — в журнал."""
         from meet import analysis
 
         try:
@@ -2251,15 +2330,24 @@ class TrayControl:
                 return
             if self._busy_now():
                 # Во время встречи модель не дёргаем: анализ — после неё.
-                with self._analysis_lock:
-                    self._analysis_deferred[self._key(folder)] = folder
-                self.tray.log(f"анализ встречи отложен до конца записи: {folder.name}")
+                self._defer_analysis(folder, manual=False)
                 return
             if not _provider_installed(cfg):
                 return
             job, created = self._queue_analysis(folder, low=True)
             if created:
                 self.tray.log(f"анализ встречи поставлен в очередь: {folder.name} ({job.id})")
+        except Exception as e:
+            self.tray.log(f"анализ встречи не поставлен ({Path(folder).name}): "
+                          f"{type(e).__name__}: {e}")
+
+    def _manual_again(self, folder: Path) -> None:
+        """Анализ, о котором просил человек (повтор после идущего, восстановление
+        после перезапуска): без `analysis.auto` и порога длительности."""
+        try:
+            if not _provider_installed(settings.load()):
+                return
+            self._queue_analysis(folder, low=False, manual=True)
         except Exception as e:
             self.tray.log(f"анализ встречи не поставлен ({Path(folder).name}): "
                           f"{type(e).__name__}: {e}")
@@ -2271,9 +2359,60 @@ class TrayControl:
         with self._analysis_lock:
             waiting = list(self._analysis_deferred.values())
             self._analysis_deferred.clear()
-        for folder in waiting:
-            if folder.is_dir():
+        for folder, manual in waiting:
+            if not folder.is_dir():
+                continue
+            if manual:
+                self._manual_again(folder)
+            else:
                 self._auto_analyze(folder)
+
+    def _resume_analysis(self, folder: Path, mark: dict, cutoff: float) -> bool:
+        """Анализ, прерванный выходом резидента (`pending_analysis`), — снова в
+        очередь, если он ещё нужен: модель подключена, запись не идёт (иначе —
+        отложить), анализ не свежий. Автоматический — только при включённом
+        `analysis.auto`. → поставлен ли (или отложен)."""
+        from meet import analysis
+
+        at = mark.get("at")
+        manual = bool(mark.get("manual"))
+        if (not isinstance(at, (int, float)) or isinstance(at, bool) or at < cutoff
+                or library.read_transcript(folder) is None or analysis.is_fresh(folder)):
+            self._mark_analysis(folder, False)
+            return False
+        cfg = settings.load()
+        if not manual and (not cfg.analysis.auto or not cfg.analysis.features()):
+            self._mark_analysis(folder, False)
+            return False
+        if self._busy_now():
+            self._defer_analysis(folder, manual)
+            return True
+        if not _provider_installed(cfg):
+            return False  # отметка остаётся: модель подключат — поставим при следующем запуске
+        self._queue_analysis(folder, low=not manual, manual=manual)
+        self.tray.log(f"анализ встречи восстановлен после перезапуска: {folder.name}")
+        return True
+
+    def _drop_analysis(self, folder: Path) -> None:
+        """Снять анализ записи (удаление, объединение): задачу — из очереди или
+        остановив, отложенный и повтор — забыть. Анализ — производное, его
+        можно сделать заново; ждать его ради удаления незачем. Идущую задачу
+        ждём недолго: её процесс работает в папке записи."""
+        key = self._key(folder)
+        with self._analysis_lock:
+            self._analysis_deferred.pop(key, None)
+            self._analysis_rerun.pop(key, None)
+        job = self.llm_queue.active_for(str(folder), (jobs.ANALYZE,))
+        if job is None:
+            return
+        self.llm_queue.cancel(job.id)
+        deadline = time.monotonic() + DROP_ANALYSIS_WAIT_S
+        while time.monotonic() < deadline:
+            current = self.llm_queue.active()
+            if current is None or current.id != job.id:
+                break
+            time.sleep(0.05)
+        self.tray.log(f"анализ встречи снят: {Path(folder).name} ({job.id})")
 
     def _reanalyze_if_stale(self, recording_id: str) -> None:
         folder = self._folder(recording_id)
@@ -2293,13 +2432,31 @@ class TrayControl:
         except Exception:
             pass  # событие — подсказка окну, не повод ронять правку
 
-    def _analysis_finished(self, folder: Path, job_state) -> None:
-        """Задача анализа кончилась: название (если включено), событие окну,
-        повтор, если расшифровку поменяли, пока она шла."""
+    def _analysis_finished(self, folder: Path, job_state, *, job: dict | None = None,
+                           stopping: bool = False) -> None:
+        """Задача анализа кончилась: снять отметку `pending_analysis`, записать
+        ошибку упавшего процесса (если он не успел сам), название (если
+        включено), событие окну, повтор, если расшифровку поменяли, пока она
+        шла. Убитая остановкой резидента — отметку сохраняет: её поставит
+        следующий запуск."""
         from meet import analysis
 
+        if stopping:
+            return
+        with self._analysis_lock:
+            rerun = self._analysis_rerun.pop(self._key(folder), None)
+        if not folder.is_dir():
+            return  # запись удалили — сообщать не о чем
+        self._mark_analysis(folder, False)
         try:
-            got = analysis.state(folder) if folder.is_dir() else {"state": "none"}
+            if job_state == jobs.FAILED:
+                failure = library.read_meta(folder).get("analysis_error")
+                at = failure.get("at") if isinstance(failure, dict) else None
+                started = (job or {}).get("started_at") or 0.0
+                if not isinstance(at, (int, float)) or at < started:
+                    # Процесс умер до записи ошибки: окно всё равно покажет «Повторить».
+                    analysis.mark_failed(folder, (job or {}).get("error") or "задача анализа прервалась")
+            got = analysis.state(folder)
             if job_state == jobs.DONE:
                 doc = got.get("analysis") or {}
                 if doc.get("title") and got.get("state") == "ready":
@@ -2308,11 +2465,11 @@ class TrayControl:
             self._updated(folder)
         except Exception as e:
             self.tray.log(f"анализ встречи не обработан ({folder.name}): {type(e).__name__}: {e}")
-        with self._analysis_lock:
-            rerun = self._key(folder) in self._analysis_rerun
-            self._analysis_rerun.discard(self._key(folder))
-        if rerun and job_state != jobs.CANCELLED and folder.is_dir():
-            self._auto_analyze(folder)
+        if rerun is not None and job_state != jobs.CANCELLED:
+            if rerun:
+                self._manual_again(folder)
+            else:
+                self._auto_analyze(folder)
 
     # --- выгрузка в базу знаний --------------------------------------------
 

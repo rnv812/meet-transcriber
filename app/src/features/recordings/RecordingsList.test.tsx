@@ -321,7 +321,9 @@ test("бейдж «ИИ» у названия от модели: нажатие 
   const onSelect = vi.fn();
   render(<RecordingsList selected="a" onSelect={onSelect} library={{ ...library, items: withAi, jobs: [] }}
     resident={resident} q="" onQ={vi.fn()} />);
-  const badges = screen.getAllByLabelText("Название предложено ИИ — нажмите, чтобы изменить");
+  const badges = screen.getAllByTitle("Название предложено ИИ — нажмите, чтобы изменить");
+  // для экранного диктора — текстом, а не aria-label у span
+  expect(within(badges[0]!).getByText("Название предложено ИИ — нажмите, чтобы изменить")).toBeInTheDocument();
   expect(badges).toHaveLength(1);
   expect(mains()[0]!).toContainElement(badges[0]!);
   await userEvent.click(badges[0]!);

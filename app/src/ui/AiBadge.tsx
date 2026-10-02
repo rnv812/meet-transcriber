@@ -17,7 +17,11 @@ export function AiBadge({ onClick }: { onClick?: () => void }) {
     e.stopPropagation();
     onClick();
   };
+  // aria-label у span без роли экранные дикторы не читают — текст для них скрыт визуально.
   return (
-    <span className="ai-badge" title={AI_BADGE_HINT} aria-label={AI_BADGE_HINT} onClick={click}>ИИ</span>
+    <span className="ai-badge" title={AI_BADGE_HINT} onClick={click}>
+      <span aria-hidden="true">ИИ</span>
+      <span className="ai-badge__sr">{AI_BADGE_HINT}</span>
+    </span>
   );
 }

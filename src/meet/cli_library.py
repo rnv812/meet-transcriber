@@ -755,7 +755,7 @@ def _title(args, cfg) -> None:
         if via_app:
             _resident_call(folder.name, "", "PATCH", {"title": title, "title_source": "ai"})
         else:
-            titles.write_title(folder, title, "ai")
+            titles.write_title(folder, title, "ai", accepted=True)
         applied = True
     doc = {"folder": str(folder), "title": title, "from": got.get("from"), "applied": applied,
            "via_app": via_app}

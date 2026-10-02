@@ -146,10 +146,78 @@ def test_manual_analysis_waits_for_transcription(state, tmp_path):
         state.make_analysis(RID)
 
 
-def test_delete_refused_while_analysis_runs(state):
-    state.make_analysis(RID)
+def _cancellable(app):
+    """Очередь, чья задача идёт, пока её не отменят (как убитый подпроцесс)."""
+    import time as _time
+
+    def spawn(job, on_line):
+        deadline = _time.monotonic() + 5
+        while job.state != jobs.CANCELLED and _time.monotonic() < deadline:
+            _time.sleep(0.01)
+        return 1
+
+    return jobs.JobQueue(app.bus, spawn=spawn)
+
+
+def _wait(cond, timeout=5.0):
+    import time as _time
+
+    deadline = _time.monotonic() + timeout
+    while not cond():
+        assert _time.monotonic() < deadline, "не дождались"
+        _time.sleep(0.01)
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_delete_cancels_the_analysis_instead_of_refusing(app, tmp_path, monkeypatch, running):
+    _installed(monkeypatch, claude_code=True)
+    llm_queue = _cancellable(app)
+    st = tray_control.TrayControl(app, queue=jobs.JobQueue(app.bus, spawn=lambda j, f: 0),
+                                  llm_queue=llm_queue)
+    st._background = lambda fn, name=None: fn()
+    try:
+        busy = None
+        if not running:  # первая задача занимает слот, анализ ждёт за ней
+            busy = llm_queue.submit(jobs.SUMMARY, str(tmp_path / "другая"))
+        job = st.make_analysis(RID)
+        if running:
+            _wait(lambda: llm_queue.get(job["id"]).state == jobs.RUNNING)
+        assert st.delete_recording(RID) == {"ok": True}
+        assert llm_queue.get(job["id"]).state == jobs.CANCELLED
+        assert not _folder(tmp_path).exists()
+    finally:
+        if busy is not None:
+            llm_queue.cancel(busy.id)
+        llm_queue.stop()
+
+
+def test_summary_still_blocks_delete(state):
+    state.llm_queue.submit(jobs.SUMMARY, str(state._folder(RID)))
     with pytest.raises(control.BadRequest, match="модели"):
         state.delete_recording(RID)
+
+
+def test_merge_cancels_the_parts_analysis(app, tmp_path, monkeypatch):
+    from meet import merge
+
+    _installed(monkeypatch, claude_code=True)
+    llm_queue = _cancellable(app)
+    state = tray_control.TrayControl(app, queue=jobs.JobQueue(app.bus, spawn=lambda j, f: 0),
+                                     llm_queue=llm_queue)
+    state._background = lambda fn, name=None: fn()
+    second = tmp_path / "recordings" / "2026-10-01_10-30"
+    second.mkdir()
+    (second / "sys.opus").write_bytes(b"x")
+    _transcript(second)
+    job = state.make_analysis(RID)
+    other = state.make_analysis(second.name)
+    target = tmp_path / "recordings" / "2026-10-01_09-30_merged"
+    target.mkdir()
+    monkeypatch.setattr(merge, "create", lambda root, folders, keep_originals: target)
+    state.merge_recordings({"ids": [RID, second.name], "keep_originals": True})
+    assert state.llm_queue.get(job["id"]).state == jobs.CANCELLED
+    assert state.llm_queue.get(other["id"]).state == jobs.CANCELLED
+    llm_queue.stop()
 
 
 def test_routes_exist():
@@ -243,17 +311,187 @@ def test_automatic_analysis_waits_behind_manual_model_work(state, app, tmp_path)
     assert pending.index(summary.id) < pending.index(_analyze_jobs(state)[0]["id"])
 
 
-def test_rediarize_requeues_only_a_stale_analysis(state, tmp_path, monkeypatch):
+def test_rediarize_queues_unless_the_analysis_is_fresh(state, tmp_path, monkeypatch):
     folder = _folder(tmp_path)
     monkeypatch.setattr(state, "_speakers_change", lambda rid, change: {"ok": True})
-    state.speakers_rediarize_apply(RID)
-    assert _analyze_jobs(state) == []  # анализа не было — переразделение его не заводит
     _write_analysis(folder)
     state.speakers_rediarize_apply(RID)
     assert _analyze_jobs(state) == []  # свежий
     _write_analysis(folder, fresh=False)
     state.speakers_rediarize_apply(RID)
     assert len(_analyze_jobs(state)) == 1
+
+
+def test_rediarize_analyses_a_recording_without_analysis_when_auto(state, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "_speakers_change", lambda rid, change: {"ok": True})
+    _write_config(tmp_path, analysis={"auto": False})
+    state.speakers_rediarize_apply(RID)
+    assert _analyze_jobs(state) == []
+    _write_config(tmp_path)
+    state.speakers_rediarize_apply(RID)
+    assert len(_analyze_jobs(state)) == 1
+
+
+def test_speaker_split_requeues_only_a_stale_analysis(state, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "_speakers_change", lambda rid, change: {"ok": True})
+    state.speakers_split_apply(RID, {})
+    assert _analyze_jobs(state) == []  # анализа не было: разделение спикера текст не меняет
+
+
+# --- перезапуск резидента (pending_analysis) --------------------------------------------
+
+
+def _pending(tmp_path):
+    return library.read_meta(_folder(tmp_path)).get("pending_analysis")
+
+
+def test_queued_analysis_is_marked_and_the_mark_is_cleared_when_done(state, app, tmp_path):
+    _done(app, jobs.TRANSCRIBE, _folder(tmp_path))
+    assert _pending(tmp_path)["manual"] is False
+    _write_analysis(_folder(tmp_path))
+    state._analysis_finished(_folder(tmp_path), jobs.DONE)
+    assert _pending(tmp_path) is None
+
+
+def test_mark_survives_a_job_killed_by_shutdown(state, tmp_path):
+    state.make_analysis(RID)
+    assert _pending(tmp_path)["manual"] is True
+    state._analysis_finished(_folder(tmp_path), jobs.FAILED, stopping=True)
+    assert _pending(tmp_path) is not None
+
+
+def test_cancel_and_failure_clear_the_mark(state, tmp_path):
+    state.make_analysis(RID)
+    state._analysis_finished(_folder(tmp_path), jobs.CANCELLED)
+    assert _pending(tmp_path) is None
+    state._mark_analysis(_folder(tmp_path), True)
+    state._analysis_finished(_folder(tmp_path), jobs.FAILED, job={"error": "Killed", "started_at": 5.0})
+    assert _pending(tmp_path) is None
+    # процесс умер, не записав ошибку, — её записывает резидент: окну есть что показать
+    assert library.read_meta(_folder(tmp_path))["analysis_error"]["error"] == "Killed"
+
+
+def test_deferred_analysis_is_marked(state, app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "_busy_now", lambda: {"x"})
+    _done(app, jobs.TRANSCRIBE, _folder(tmp_path))
+    assert _pending(tmp_path) is not None
+
+
+def _restart(app):
+    """Новый резидент: задачи ставятся, но не запускаются — смотрим, что поставлено."""
+    llm_queue = jobs.JobQueue(app.bus, spawn=lambda job, on_line: 0)
+    llm_queue._ensure_worker = lambda: None
+    st = tray_control.TrayControl(app, queue=jobs.JobQueue(app.bus, spawn=lambda j, f: 0),
+                                  llm_queue=llm_queue)
+    st._background = lambda fn, name=None: fn()
+    return st
+
+
+def _mark(tmp_path, manual):
+    import time as _time
+
+    library.write_meta(_folder(tmp_path), {"pending_analysis": {"at": _time.time(), "manual": manual}})
+
+
+def test_recover_requeues_a_marked_analysis(app, tmp_path, monkeypatch):
+    _installed(monkeypatch, claude_code=True)
+    _mark(tmp_path, False)
+    st = _restart(app)
+    done = st.recover()
+    assert done["analysis"] == [RID]
+    assert [j["kind"] for j in st.llm_queue.listing()] == [jobs.ANALYZE]
+
+
+def test_recover_skips_fresh_and_keeps_the_mark_without_a_provider(app, tmp_path, monkeypatch):
+    _mark(tmp_path, False)
+    _installed(monkeypatch)
+    st = _restart(app)
+    st.recover()
+    assert st.llm_queue.listing() == [] and _pending(tmp_path) is not None
+    _installed(monkeypatch, claude_code=True)
+    _write_analysis(_folder(tmp_path))
+    st.recover()
+    assert st.llm_queue.listing() == [] and _pending(tmp_path) is None
+
+
+def test_recover_manual_mark_ignores_auto_off_and_defers_while_recording(app, tmp_path, monkeypatch):
+    _installed(monkeypatch, claude_code=True)
+    _write_config(tmp_path, analysis={"auto": False})
+    _mark(tmp_path, True)
+    st = _restart(app)
+    busy = {"on": True}
+    monkeypatch.setattr(st, "_busy_now", lambda: {"x"} if busy["on"] else set())
+    st.recover()
+    assert st.llm_queue.listing() == [] and _pending(tmp_path) is not None
+    busy["on"] = False
+    st._flush_deferred_analysis()
+    assert [j["kind"] for j in st.llm_queue.listing()] == [jobs.ANALYZE]
+
+
+def test_recover_drops_an_auto_mark_when_auto_is_off(app, tmp_path, monkeypatch):
+    _installed(monkeypatch, claude_code=True)
+    _write_config(tmp_path, analysis={"auto": False})
+    _mark(tmp_path, False)
+    st = _restart(app)
+    st.recover()
+    assert st.llm_queue.listing() == [] and _pending(tmp_path) is None
+
+
+# --- очередь: просьба человека, повтор, гонка с правкой ---------------------------------
+
+
+def test_manual_request_promotes_a_queued_background_analysis(state, app, tmp_path):
+    state.llm_queue.submit(jobs.SUMMARY, str(tmp_path / "занято"))
+    other = tmp_path / "recordings" / "2026-10-01_08-00"
+    other.mkdir()
+    (other / "sys.opus").write_bytes(b"x")
+    _transcript(other)
+    _done(app, jobs.TRANSCRIBE, other)
+    _done(app, jobs.TRANSCRIBE, _folder(tmp_path))
+    mine = state.make_analysis(RID)
+    pending = state.llm_queue._pending
+    first_other = next(j["id"] for j in _analyze_jobs(state) if Path(j["folder"]) == other)
+    assert pending.index(mine["id"]) < pending.index(first_other)
+
+
+def test_manual_rerun_ignores_auto_off(state, tmp_path):
+    _write_config(tmp_path, analysis={"auto": False})
+    job = state.make_analysis(RID)
+    state.llm_queue.get(job["id"]).state = jobs.RUNNING
+    state.make_analysis(RID)  # пока идёт — «повторить после»
+    state.llm_queue.get(job["id"]).state = jobs.DONE
+    _write_analysis(_folder(tmp_path), fresh=False)
+    state._analysis_finished(_folder(tmp_path), jobs.DONE)
+    queued = [j for j in _analyze_jobs(state) if j["state"] == "queued"]
+    assert len(queued) == 1
+
+
+def test_run_finishing_after_an_edit_is_stale_and_sets_no_title(state, app, tmp_path):
+    from meet import settings as settings_mod
+    from meet.llm.base import AgentReply
+
+    _write_config(tmp_path, assistant={"auto_title": True})
+    folder = _folder(tmp_path)
+    seen = _events(app, tray_control.ANALYSIS_UPDATED)
+
+    async def runner(prompt, **kwargs):
+        # Пока модель думает, человек правит текст.
+        _transcript(folder, text="Решили выпустить бету позже.")
+        return AgentReply(text=json.dumps({"chapters": [], "title": "Бета в пятницу"}, ensure_ascii=False))
+
+    doc = analysis.run(folder, runner, settings_mod.load(), features=("chapters", "title"))
+    analysis.write(folder, doc)
+    state._analysis_finished(folder, jobs.DONE)
+    assert state.analysis(RID)["state"] == "stale"
+    assert seen[-1] == {"id": RID, "state": "stale"}
+    assert "title" not in _meta(tmp_path)
+
+
+def test_flush_while_still_busy_keeps_the_deferral(state, app, tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "_busy_now", lambda: {"x"})
+    _done(app, jobs.TRANSCRIBE, _folder(tmp_path))
+    state._flush_deferred_analysis()
+    assert _analyze_jobs(state) == [] and len(state._analysis_deferred) == 1
 
 
 def test_text_edit_marks_the_analysis_stale(state, app, tmp_path):
@@ -376,3 +614,40 @@ def test_suggest_title_calls_the_model_subprocess(state, tmp_path, monkeypatch):
     _installed(monkeypatch)
     with pytest.raises(control.Conflict):
         state.suggest_title(RID)
+
+
+def test_suggest_title_runs_one_model_call_per_recording(state, tmp_path, monkeypatch):
+    import threading as _threading
+
+    started, release, calls = _threading.Event(), _threading.Event(), []
+
+    def slow(folder):
+        calls.append(folder)
+        started.set()
+        release.wait(5)
+        return {"title": "Запуск беты", "from": "model"}
+
+    monkeypatch.setattr(tray_control, "_suggest_title", slow)
+    results = []
+    first = _threading.Thread(target=lambda: results.append(state.suggest_title(RID)))
+    first.start()
+    started.wait(5)
+    second = _threading.Thread(target=lambda: results.append(state.suggest_title(RID)))
+    second.start()
+    __import__("time").sleep(0.3)  # второй запрос успевает встать в ожидание первого
+    release.set()
+    first.join(5)
+    second.join(5)
+    assert len(calls) == 1 and results == [{"title": "Запуск беты", "from": "model"}] * 2
+
+
+def test_accepted_suggestion_is_not_replaced_automatically(state, tmp_path):
+    _write_config(tmp_path, assistant={"auto_title": True})
+    state.update_recording(RID, {"title": "Принятое", "title_source": "ai"})
+    assert _meta(tmp_path)["title_accepted"] is True
+    _write_analysis(_folder(tmp_path))
+    state._analysis_finished(_folder(tmp_path), jobs.DONE)
+    assert _meta(tmp_path)["title"] == "Принятое"
+    assert state.recording(RID)["title_source"] == "ai"  # бейдж остаётся
+    state.update_recording(RID, {"title": "Моё"})
+    assert "title_accepted" not in _meta(tmp_path)
