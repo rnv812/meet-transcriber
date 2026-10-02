@@ -10,6 +10,7 @@
 «Вебхуки». Всё ограничено: число файлов, размер файла, число терминов.
 """
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -148,16 +149,21 @@ class TermIndex:
             return cls([])
         terms: list[Term] = []
         files = 0
-        for path in sorted(root.rglob("*")):
-            if files >= MAX_FILES or len(terms) >= MAX_TERMS:
-                break
-            rel = path.relative_to(root)
-            if any(part in SKIP_DIRS or part.startswith(".") for part in rel.parts):
-                continue
-            if path.suffix.lower() not in SUFFIXES or not path.is_file():
-                continue
-            files += 1
-            terms.extend(_terms_of(path, rel.as_posix()))
+        # os.walk с отсечением на месте: в служебные и скрытые папки (.git,
+        # .obsidian, node_modules) не заходим вовсе — большая база не
+        # перебирается целиком ради пропуска.
+        for here, dirs, names in os.walk(root):
+            dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
+            for name in sorted(names):
+                if files >= MAX_FILES or len(terms) >= MAX_TERMS:
+                    return cls(terms[:MAX_TERMS])
+                if name.startswith(".") or Path(name).suffix.lower() not in SUFFIXES:
+                    continue
+                path = Path(here) / name
+                if not path.is_file():
+                    continue
+                files += 1
+                terms.extend(_terms_of(path, path.relative_to(root).as_posix()))
         return cls(terms[:MAX_TERMS])
 
     def find(self, text: str) -> list[Term]:

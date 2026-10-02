@@ -28,7 +28,14 @@ class FakeState:
         return None
 
     def signature(self):
-        return (1, self.bus.size(), self.status())
+        return (1, self.status())
+
+    def qa_version(self):
+        return self.qa_v
+
+    def qa_items(self):
+        return [{"id": 1, "q": "срок?", "a": "пятница", "error": None, "pending": False,
+                 "at": 1.0, "quick": None}] if self.qa_v else []
 
     def view(self):
         return {"version": 1, "digest": "### Решения\n- Тезис",
@@ -56,6 +63,7 @@ class FakeState:
 
     def __init__(self):
         self.hint_calls = []
+        self.qa_v = 0
 
 
 def _run(coro):
@@ -110,7 +118,7 @@ def test_sse_first_event_has_digest():
                 assert "Тезис" in payload["digest"]
                 assert payload["summary"]["topic"] == "Запуск"
                 assert payload["hints"][0]["id"] == "h1"
-                assert payload["transcript"] == ["[00:00:01] Вы: привет"]
+                assert "transcript" not in payload  # панели хвост ленты строками не нужен
 
     _run(scenario())
 
@@ -163,15 +171,17 @@ def test_sse_sends_structured_line_for_each_new_line():
                           {"t": 3.0, "speaker": "Вы", "text": "привет"})
         async with TestClient(TestServer(build_app(state))) as client:
             async with client.get("/events") as resp:
-                events = await _read_events(resp, 2)
+                events = await _read_events(resp, 3)
                 kinds = {e[0] for e in events}
-                assert kinds == {"state", "line"}
+                assert kinds == {"state", "qa", "line"}
                 line = next(e for e in events if e[0] == "line")
                 assert line[1] == "0"
                 assert line[2] == {"t": 3.0, "speaker": "Вы", "text": "привет"}
                 state.bus.publish("[00:00:09] Собеседник: да",
                                   {"t": 9.5, "speaker": "Собеседник", "text": "да"})
-                new = [e for e in await _read_events(resp, 2) if e[0] == "line"]
+                # Новая строка — только `line`: `state` от неё не меняется.
+                new = await _read_events(resp, 1)
+                assert new[0][0] == "line"
                 assert new[0][1] == "1"
                 assert new[0][2]["speaker"] == "Собеседник"
                 assert new[0][2]["text"] == "да"
@@ -188,7 +198,7 @@ def test_sse_resumes_after_last_event_id():
         async with TestClient(TestServer(build_app(state))) as client:
             async with client.get("/events",
                                   headers={"Last-Event-ID": "1"}) as resp:
-                events = await _read_events(resp, 2)
+                events = await _read_events(resp, 3)
                 lines = [e for e in events if e[0] == "line"]
                 assert [e[2]["text"] for e in lines] == ["l2"]
 
@@ -277,3 +287,52 @@ def test_ask_quick_action_and_validation():
         assert FakeState._QA.calls == [(None, "missed", 120)]
 
     _run(scenario())
+
+
+def test_qa_event_only_when_history_changes_and_transcript_only_for_the_page():
+    async def scenario():
+        state = BusState()
+        state.bus.publish("[00:00:03] Вы: привет", {"t": 3.0, "speaker": "Вы", "text": "привет"})
+        async with TestClient(TestServer(build_app(state))) as client:
+            async with client.get("/events") as resp:
+                first = await _read_events(resp, 3)
+                qa = next(e for e in first if e[0] == "qa")
+                assert qa[2] == {"qa": []}
+                state.qa_v = 1
+                again = await _read_events(resp, 1)
+                assert again[0][0] == "qa" and again[0][2]["qa"][0]["a"] == "пятница"
+            async with client.get("/events?transcript=1") as resp:
+                events = await _read_events(resp, 3)
+                st = next(e for e in events if e[0] == "state")
+                assert st[2]["transcript"] == ["[00:00:03] Вы: привет"]
+
+    _run(scenario())
+
+
+def _page_script() -> str:
+    from meet.assist.web import PAGE
+
+    return PAGE.split("<script>", 1)[1].split("</script>", 1)[0]
+
+
+def test_page_script_string_literals_have_no_raw_newlines():
+    import re
+
+    script = _page_script()
+    for m in re.finditer(r"'[^']*'|\"[^\"]*\"", script):
+        assert "\n" not in m.group(0), m.group(0)
+
+
+def test_page_script_parses_with_node(tmp_path):
+    import shutil
+    import subprocess
+
+    import pytest
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node не найден")
+    path = tmp_path / "page.js"
+    path.write_text(_page_script(), encoding="utf-8")
+    run = subprocess.run([node, "--check", str(path)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr

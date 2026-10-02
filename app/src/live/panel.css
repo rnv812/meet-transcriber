@@ -45,6 +45,14 @@ html, body { background: transparent; }
 }
 .live-head__quiet[aria-pressed="true"] { color: var(--accent-hover); }
 
+/* Подписи кнопок шапки; в узком окне — только значки (title подсказывает). */
+.live-head__icon { display: none; }
+@media (max-width: 420px) {
+  .live-head__label { display: none; }
+  .live-head__icon { display: inline-flex; }
+  .live-head .btn { padding: 0 6px; }
+}
+
 /* На весь экран: рабочая область целиком, скругления ни к чему. */
 .live-panel--maximized { border-radius: 0; }
 

@@ -20,7 +20,7 @@
   дописывает запись и выходит. Если сирота всё же остался (ребёнок старой
   версии), новый резидент при старте находит его по файлу эндпоинта и шлёт
   `/stop` (`adopt_orphan`), а не удаляет файл;
-* `GET /events` — SSE `state`/`line` с `id:`, понимает Last-Event-ID;
+* `GET /events` — SSE `state`/`qa`/`line` (у `line` — `id:`), понимает Last-Event-ID;
 * POST'ы с чужим Origin ребёнок отвергает, а без Origin пускает — urllib
   Origin не ставит, и это нам и нужно.
 
@@ -79,7 +79,7 @@ POLL_S = 0.1
 REQUEST_TIMEOUT_S = 5.0
 ASK_TIMEOUT_S = 240.0  # вопрос — вызов модели (у ребёнка до 180 с) плюс дослив окна
 RELAY_THREAD = "meet-live-relay"
-RELAYED_EVENTS = ("state", "line")
+RELAYED_EVENTS = ("state", "line", "qa")
 ERROR_MAX_CHARS = 300
 # Быстрые действия вопросов (`meet.assist.qa.QUICK`): «Что я пропустил?»,
 # «Какие решения уже приняты?», «Что мне ответить?», «Кратко за 1 минуту».

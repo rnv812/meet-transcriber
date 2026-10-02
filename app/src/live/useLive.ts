@@ -9,7 +9,7 @@
  * показанного отбрасываем. Номера сквозные в пределах одного живого режима, а
  * хук живёт в окне одной записи — новый режим придёт в новый экземпляр.
  *
- * История вопросов живёт у ассистента (`qa` в `state`): её видят и панель, и
+ * История вопросов живёт у ассистента (событие `qa`): её видят и панель, и
  * карточка, и вопрос в ней появляется сразу — с «Модель думает…».
  *
  * Действие с подсказкой (закрепить, скрыть) видно сразу, до ответа
@@ -58,6 +58,8 @@ export type Live = {
   asking: boolean;
   /** Вопрос не дошёл до ассистента (в историю он не попал). */
   askError: string | null;
+  /** Действие с подсказкой не дошло: у какой подсказки и почему. */
+  hintError: { id: string; text: string } | null;
   ask: (question: string, opts?: AskOptions) => Promise<void>;
   hint: (id: string, action: HintAction) => Promise<void>;
   setTask: (task: string) => Promise<void>;
@@ -93,6 +95,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
   const [error, setError] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
+  const [hintError, setHintError] = useState<{ id: string; text: string } | null>(null);
   const lastId = useRef(-1);
   const askSeq = useRef(0);
 
@@ -117,8 +120,12 @@ export function useLive(ep: Endpoint | null, active = true): Live {
           setQuietDefault(s.prefs?.quiet_default === true);
           setPending(unconfirmed); // принятые ассистентом действия уже в его состоянии
           setStatus(s.status ?? null);
-          setQa(Array.isArray(s.qa) ? s.qa : []);
+          if (Array.isArray(s.qa)) setQa(s.qa);
           setLoaded(true);
+        },
+        onQa: (items) => {
+          alive();
+          setQa(items);
         },
         onLine: (line, id) => {
           alive();
@@ -168,6 +175,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
 
   const hint = useCallback(async (id: string, action: HintAction) => {
     if (!ep) return;
+    setHintError(null);
     setPending((cur) => ({ ...cur, [id]: { action, done: false } }));
     try {
       await liveHint(ep, id, action);
@@ -177,7 +185,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
         const { [id]: _drop, ...rest } = cur;
         return rest;
       });
-      setAskError(errorText(e));
+      setHintError({ id, text: errorText(e) });
     }
   }, [ep]);
 
@@ -188,6 +196,6 @@ export function useLive(ep: Endpoint | null, active = true): Live {
 
   return {
     status, lines, digest, summary, hints: withPending(hints, pending), hintsEnabled, quietDefault, qa, loaded, error,
-    asking, askError, ask, hint, setTask,
+    asking, askError, hintError, ask, hint, setTask,
   };
 }

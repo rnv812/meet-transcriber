@@ -68,3 +68,23 @@ def test_file_count_is_capped(tmp_path):
         (kb / f"Заметка номер {i:04d}.md").write_text("текст", encoding="utf-8")
     index = TermIndex.build(kb)
     assert len({t.ref for t in index.terms}) <= MAX_FILES
+
+
+def test_skipped_folders_are_not_entered(tmp_path, monkeypatch):
+    import os
+
+    kb = _kb(tmp_path)
+    (kb / "node_modules" / "pkg").mkdir(parents=True)
+    (kb / "node_modules" / "pkg" / "README.md").write_text("# Пакет\n\nчужое\n", encoding="utf-8")
+    seen = []
+    real_walk = os.walk
+
+    def walk(top, *a, **kw):
+        for here, dirs, names in real_walk(top, *a, **kw):
+            seen.append(os.path.basename(here))
+            yield here, dirs, names
+
+    monkeypatch.setattr("meet.assist.kb_index.os.walk", walk)
+    labels = {t.label for t in TermIndex.build(kb).terms}
+    assert "Пакет" not in labels
+    assert "node_modules" not in seen and ".obsidian" not in seen and "pkg" not in seen

@@ -24,7 +24,7 @@ import { inTauri, invoke } from "../lib/shell";
 import type { LiveHint } from "../lib/types";
 import { Button } from "../ui/Button";
 import { LiveWorkspace, useLiveView } from "./LiveWorkspace";
-import { MaximizeIcon, PinIcon, QuietIcon } from "./icons";
+import { ExpandIcon, MaximizeIcon, PinIcon, QuietIcon, StopIcon } from "./icons";
 import { KIND_LABEL, topHint } from "./liveModel";
 import { useQuiet } from "./useAttention";
 import { useLiveAsk } from "./useLastLook";
@@ -167,10 +167,16 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
           >
             <MaximizeIcon maximized={view.maximized} />
           </button>
-          <Button aria-expanded={open} onClick={() => setExpanded(!open)}>
-            {open ? "Свернуть" : "Развернуть"}
+          {/* В узком окне (до 420) подписи прячутся — остаются значки с подсказками. */}
+          <Button aria-expanded={open} aria-label={open ? "Свернуть" : "Развернуть"}
+            title={open ? "Свернуть" : "Развернуть"} onClick={() => setExpanded(!open)}>
+            <span className="live-head__label">{open ? "Свернуть" : "Развернуть"}</span>
+            <span className="live-head__icon"><ExpandIcon open={open} /></span>
           </Button>
-          <Button variant="danger" onClick={stop} disabled={stopping}>Стоп</Button>
+          <Button variant="danger" aria-label="Стоп" title="Остановить запись" onClick={stop} disabled={stopping}>
+            <span className="live-head__label">Стоп</span>
+            <span className="live-head__icon"><StopIcon /></span>
+          </Button>
         </span>
       </header>
       {stopError && <div className="live-panel__error" role="alert">{stopError}</div>}

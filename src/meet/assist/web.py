@@ -5,9 +5,11 @@
 закрепить, открепить, скрыть), смену задачи-контекста (`POST /task`) и
 штатную остановку (`POST /stop` — так резидент гасит дочерний `meet assist`).
 
-SSE шлёт `event: state` (`state.view()`: сводка, подсказки, история вопросов,
-статус, хвост ленты) при каждом изменении
-и `event: line` с `{"t", "speaker", "text"}` на каждую новую строку ленты;
+SSE шлёт `event: state` (`state.view()`: сводка, подсказки, статус) при
+каждом их изменении, `event: qa` (`{"qa": [...]}` — история вопросов) — только
+когда меняется она, и `event: line` с `{"t", "speaker", "text"}` на каждую
+новую строку ленты. Хвост ленты строками (`transcript` в `state`) — только по
+`/events?transcript=1`, для страницы в браузере: панели он не нужен;
 `id:` строки — её номер в шине, поэтому переподключившийся EventSource
 (заголовок Last-Event-ID) получает только пропущенные строки.
 Потребляет утиный объект состояния (в тестах — FakeState, в бою — AssistState).
@@ -46,33 +48,29 @@ h1{grid-column:1/3;margin:8px 16px;font-size:18px}
 </div>
 <div id="transcript"></div>
 <script>
-const es = new EventSource('/events');
+const es = new EventSource('/events?transcript=1');
 es.addEventListener('state', e => {
   const s = JSON.parse(e.data);
-  const hints = (s.hints || []).map(h => '• ' + h.text).join('
-');
+  const hints = (s.hints || []).map(h => '• ' + h.text).join('\\n');
   document.getElementById('digest').textContent =
-    s.digest + (hints ? '
-
-Подсказки:
-' + hints : '');
-  document.getElementById('transcript').textContent = s.transcript.join('\\n');
+    s.digest + (hints ? '\\n\\nПодсказки:\\n' + hints : '');
+  document.getElementById('transcript').textContent = (s.transcript || []).join('\\n');
   document.getElementById('status').textContent = s.status || '';
 });
-async function send(question){
+async function send(question, quick){
   const chat = document.getElementById('chat');
   chat.insertAdjacentHTML('beforeend', `<div class="q"></div>`);
   chat.lastChild.textContent = question;
   const r = await fetch('/ask', {method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({question})});
+    body: JSON.stringify(quick ? {quick} : {question})});
   const a = document.createElement('div'); a.className = 'a';
   a.textContent = (await r.json()).answer;
   chat.appendChild(a); chat.scrollTop = chat.scrollHeight;
 }
 function ask(){const q=document.getElementById('q');
   if(q.value.trim()){send(q.value.trim()); q.value='';}}
-function recap(){send('Что я пропустил?');}
+function recap(){send('Что я пропустил?', 'missed');}
 async function setTask(){const t=document.getElementById('task');
   if(t.value.trim()) await fetch('/task', {method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -126,21 +124,32 @@ def build_app(state) -> web.Application:
         })
         await resp.prepare(request)
         sent: tuple | None = None
+        sent_qa = None
+        with_transcript = request.query.get("transcript") == "1"
         cursor = _first_line_index(request, state.bus.size())
         # Клиент закрыл вкладку → ConnectionResetError (в т.ч. наследник
         # aiohttp.ClientConnectionResetError). Тихо завершаем хендлер без
         # traceback'а. CancelledError не глотаем — это штатная отмена задачи.
         try:
             while not _stop_requested(state):
-                lines, _ = state.bus.since(
-                    max(0, state.bus.size() - TRANSCRIPT_TAIL))
                 snapshot = state.signature()
+                if with_transcript:
+                    snapshot = (*snapshot, state.bus.size())
                 if snapshot != sent:
-                    payload = json.dumps({**state.view(), "transcript": lines},
-                                         ensure_ascii=False)
+                    view = state.view()
+                    if with_transcript:
+                        lines, _ = state.bus.since(
+                            max(0, state.bus.size() - TRANSCRIPT_TAIL))
+                        view = {**view, "transcript": lines}
+                    payload = json.dumps(view, ensure_ascii=False)
                     await resp.write(
                         f"event: state\ndata: {payload}\n\n".encode())
                     sent = snapshot
+                qa_version = state.qa_version()
+                if qa_version != sent_qa:
+                    payload = json.dumps({"qa": state.qa_items()}, ensure_ascii=False)
+                    await resp.write(f"event: qa\ndata: {payload}\n\n".encode())
+                    sent_qa = qa_version
                 entries, size = state.bus.entries_since(cursor)
                 for i, entry in enumerate(entries, start=cursor):
                     data = json.dumps(entry, ensure_ascii=False)

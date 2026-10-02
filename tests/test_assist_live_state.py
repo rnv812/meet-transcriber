@@ -336,3 +336,68 @@ def test_load_saved_tolerates_missing_and_garbage(tmp_path):
     assert load_saved(tmp_path) is None
     (tmp_path / LIVE_STATE_JSON).write_text("[1]", encoding="utf-8")
     assert load_saved(tmp_path) is None
+
+
+# --- защита от «команд» в речи и правки закреплённого ---------------------------
+
+
+def _full_summary():
+    s = _state()
+    s.apply({"topic": "Запуск", "ops": [
+        *[{"op": "add", "section": "points", "text": t} for t in POINTS[:5]],
+        {"op": "add", "section": "decisions", "text": "Запуск в среду"},
+        {"op": "add", "section": "decisions", "text": "Бюджет утверждён"},
+        {"op": "add", "section": "open_questions", "text": "Кто подписывает акт?"},
+    ]})
+    return s
+
+
+def test_mass_removal_from_summary_is_rejected():
+    s = _full_summary()
+    before = s.to_dict()
+    with pytest.raises(PatchError):
+        s.apply({"ops": [{"op": "remove", "id": f"p{i}"} for i in range(1, 5)]})
+    with pytest.raises(PatchError):  # раздел из двух пунктов — целиком
+        s.apply({"ops": [{"op": "remove", "id": "d1"}, {"op": "remove", "id": "d2"}]})
+    assert s.to_dict() == before
+    # Обычная правка проходит: один снятый вопрос (раздел из одного пункта), пара тезисов.
+    assert s.apply({"ops": [{"op": "remove", "id": "q1"}, {"op": "remove", "id": "p1"},
+                            {"op": "remove", "id": "d1"}]})
+
+
+def test_pinned_hint_text_is_immutable():
+    s = _state()
+    s.apply({"ops": [_hint("Спросить про бюджет второго этапа")]})
+    s.pin("h1", True)
+    assert s.apply({"ops": [{"op": "update", "id": "h1", "text": "Совсем другое"}]}) is False
+    assert s.to_dict()["hints"][0]["text"] == "Спросить про бюджет второго этапа"
+
+
+def test_update_cannot_bring_back_dismissed_text():
+    s = _state()
+    s.apply({"ops": [_hint("Спросить про сроки тестов"), _hint("Уточнить бюджет на рекламу")]})
+    s.dismiss("h1")
+    s.apply({"ops": [{"op": "update", "id": "h2", "text": "Спросить про сроки тестов!"}]})
+    assert s.to_dict()["hints"][0]["text"] == "Уточнить бюджет на рекламу"
+
+
+def test_unpin_applies_cap_only_on_next_patch():
+    s = _state(max_hints=2)
+    s.apply({"ops": [_hint("Первый вопрос про релиз", kind="risk"),
+                     _hint("Второй вопрос про бюджет", kind="unanswered")]})
+    s.pin("h1", True)
+    s.pin("h2", True)
+    s.max_hints = 1  # лимит меньше — держатся закреплённые
+    s.apply({"ops": []})
+    assert len(s.to_dict()["hints"]) == 2
+    s.pin("h1", False)
+    assert len(s.to_dict()["hints"]) == 2  # не исчезает из-под руки
+    s.apply({"ops": []})
+    assert [h["id"] for h in s.to_dict()["hints"]] == ["h2"]
+
+
+def test_long_term_ref_matches_before_any_trimming():
+    ref = "Проекты/" + "очень длинное имя папки/" * 12 + "Шлюз.md"
+    s = _state()
+    s.apply({"ops": [_hint("Шлюз — сервис платежей", kind="term", ref=ref)]}, allowed_refs={ref})
+    assert s.to_dict()["hints"][0]["ref"] == ref

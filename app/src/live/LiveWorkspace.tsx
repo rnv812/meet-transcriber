@@ -11,7 +11,7 @@
  * развернуться по щелчку.
  */
 
-import { useCallback, useId, useMemo, useState } from "react";
+import { type KeyboardEvent, useCallback, useId, useMemo, useState } from "react";
 
 import type { LiveHint, LiveQuick } from "../lib/types";
 import { LiveAsk } from "./LiveAsk";
@@ -86,7 +86,7 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false }: {
   const feed = <LiveFeed lines={live.lines} className="live-ws__feed" focus={focus} />;
   const summary = <LiveSummary summary={live.summary} fresh={fresh} />;
   const hints = (
-    <LiveHints hints={live.hints} fresh={fresh} enabled={live.hintsEnabled}
+    <LiveHints hints={live.hints} fresh={fresh} enabled={live.hintsEnabled} error={live.hintError}
       onAction={hintAction} onAsk={askAbout} onTime={jump} />
   );
   const ask = (
@@ -114,11 +114,24 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false }: {
   }
 
   const counts: Record<LiveTab, number> = { feed: 0, summary: unseen.summary, hints: unseen.hints, ask: unseen.ask };
+  // Клавиатура как у вкладок: стрелки — соседняя (по кругу), Home/End — края;
+  // в порядке Tab — только выбранная вкладка (роуминг tabIndex).
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const at = TABS.findIndex((t) => t.id === tab);
+    const next = e.key === "ArrowRight" ? (at + 1) % TABS.length
+      : e.key === "ArrowLeft" ? (at - 1 + TABS.length) % TABS.length
+        : e.key === "Home" ? 0 : e.key === "End" ? TABS.length - 1 : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    setTab(TABS[next]!.id);
+    document.getElementById(`${uid}-tab-${TABS[next]!.id}`)?.focus();
+  };
   return (
     <div className="live-ws">
-      <div className="live-tabs" role="tablist" aria-label="Ассистент">
+      <div className="live-tabs" role="tablist" aria-label="Ассистент" onKeyDown={onKey}>
         {TABS.map((t) => (
           <button key={t.id} type="button" role="tab" id={`${uid}-tab-${t.id}`} aria-selected={tab === t.id}
+            tabIndex={tab === t.id ? 0 : -1}
             aria-controls={`${uid}-panel`} className="live-tabs__tab" onClick={() => setTab(t.id)}>
             {t.label}{count(counts[t.id], quiet)}
           </button>

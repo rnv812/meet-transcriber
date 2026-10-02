@@ -27,6 +27,17 @@ export function QuietIcon({ on }: { on: boolean }) {
   );
 }
 
+/** «Развернуть» (стрелка вниз) / «Свернуть» (стрелка вверх). */
+export function ExpandIcon({ open }: { open: boolean }) {
+  return open
+    ? <svg {...base}><path d="M4 10l4-4 4 4" /></svg>
+    : <svg {...base}><path d="M4 6l4 4 4-4" /></svg>;
+}
+
+export function StopIcon() {
+  return <svg {...base}><rect x="4" y="4" width="8" height="8" rx="1.5" /></svg>;
+}
+
 export function MaximizeIcon({ maximized }: { maximized: boolean }) {
   return maximized
     ? <svg {...base}><path d="M2.5 9.5h4v4M13.5 6.5h-4v-4M6.5 9.5l-4.5 4.5M9.5 6.5L14 2" /></svg>

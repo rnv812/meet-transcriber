@@ -20,6 +20,9 @@ from pathlib import Path
 HISTORY_PAIRS = 6
 HISTORY_KEEP = 50          # сколько вопросов помнить для окна
 LINES_MAX_CHARS = 8_000    # реплик в промпт вопроса — не больше (свежие важнее)
+# «Какие решения уже приняты?» — про всю встречу, а не про последние минуты:
+# сводка (в ней решения уже собраны) идёт первой, реплик — вдвое больше.
+DECISIONS_LINES_MAX_CHARS = 16_000
 MISSED_DEFAULT_S = 300.0
 
 QUICK = {
@@ -174,7 +177,8 @@ class QAService:
         else:
             picked, title = lines[self._cursor:], "Свежие реплики (с прошлого вопроса):"
             ask = label
-        picked, cut = _keep_latest(picked, LINES_MAX_CHARS)
+        budget = DECISIONS_LINES_MAX_CHARS if quick == "decisions" else LINES_MAX_CHARS
+        picked, cut = _keep_latest(picked, budget)
         if picked:
             if cut:
                 title += " (начало опущено)"
