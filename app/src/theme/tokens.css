@@ -1,4 +1,5 @@
-/* Тёмный стиль Linear (макет A). Только тёмная тема, без стекла и градиентов. */
+/* Тёмный стиль Linear (макет A). Только тёмная тема, без стекла и градиентов;
+   акценты бренда (кольцо Meet, баннер) — лёгкое свечение у записи и знака. */
 @import "@fontsource-variable/onest";
 
 :root {
@@ -13,6 +14,12 @@
   --text-3: #6f717b;
   --accent: #5e6ad2;
   --accent-hover: #6e79f7;
+  /* Бренд — те же цвета, что у значка (scripts/make_app_icons.py) и баннера:
+     светлый акцент — свечение, фиолетовый — тень кольца. */
+  --accent-hi: #7c86f0;
+  --accent-glow: rgba(124, 134, 240, 0.35);
+  --violet: #3f4bb8;
+  --red-glow: rgba(229, 72, 77, 0.45);
   --red: #e5484d;
   --ok: #4cc38a;
   --run: #5e6ad2;
@@ -88,6 +95,18 @@ body {
   width: var(--nav-w); flex: none; padding: 12px 8px;
   background: var(--surface); border-right: 1px solid var(--line);
   display: flex; flex-direction: column; gap: 2px;
+}
+/* Знак и имя приложения над разделами: кольцо — как значок в трее. */
+.nav__brand {
+  display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 10px; margin-bottom: 6px;
+  color: var(--text); font-size: 14px; font-weight: 600; letter-spacing: -0.01em; user-select: none;
+}
+.nav__mark {
+  width: 14px; height: 14px; flex: none; border-radius: 50%;
+  background:
+    radial-gradient(closest-side, var(--surface) 42%, transparent 45%),
+    linear-gradient(135deg, #a3abff, var(--accent) 50%, var(--violet));
+  box-shadow: 0 0 10px var(--accent-glow);
 }
 .nav__item {
   display: flex; align-items: center; height: 30px; padding: 0 10px;

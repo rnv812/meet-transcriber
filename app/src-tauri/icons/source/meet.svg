@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+<title>Meet</title>
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1a1b21"/><stop offset="1" stop-color="#0f1012"/></linearGradient>
+<radialGradient id="spot" cx="0.5" cy="0.5" r="0.42"><stop offset="0" stop-color="#5e6ad2" stop-opacity="0.32"/><stop offset="1" stop-color="#5e6ad2" stop-opacity="0"/></radialGradient>
+<linearGradient id="ring" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a3abff"/><stop offset="0.5" stop-color="#5e6ad2"/><stop offset="1" stop-color="#3f4bb8"/></linearGradient>
+<filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="14.08"/></filter>
+<clipPath id="plate"><rect x="17.92" y="17.92" width="220.16" height="220.16" rx="45.13"/></clipPath>
+</defs>
+<rect x="17.92" y="17.92" width="220.16" height="220.16" rx="45.13" fill="url(#bg)"/>
+<g clip-path="url(#plate)">
+<rect x="17.92" y="17.92" width="220.16" height="220.16" fill="url(#spot)"/>
+<path d="M62.72 128a65.28 65.28 0 1 0 130.56 0a65.28 65.28 0 1 0 -130.56 0zM99.28 128a28.72 28.72 0 1 1 57.45 0a28.72 28.72 0 1 1 -57.45 0z" fill="#7c86f0" fill-rule="evenodd" opacity="0.75" filter="url(#glow)"/>
+</g>
+<path d="M62.72 128a65.28 65.28 0 1 0 130.56 0a65.28 65.28 0 1 0 -130.56 0zM99.28 128a28.72 28.72 0 1 1 57.45 0a28.72 28.72 0 1 1 -57.45 0z" fill="url(#ring)" fill-rule="evenodd"/>
+</svg>

@@ -9,6 +9,7 @@ const ITEMS: { id: Section; label: string }[] = [
 export function Nav({ section, onSelect }: { section: Section; onSelect: (s: Section) => void }) {
   return (
     <nav className="nav" role="navigation">
+      <div className="nav__brand"><span className="nav__mark" aria-hidden="true" />Meet</div>
       {ITEMS.map((it) => (
         <button
           key={it.id}

@@ -706,32 +706,107 @@ pub fn needs_provider(action: Action, reply: Option<&api::Result<Value>>) -> boo
     action == Action::LiveStart && matches!(reply, Some(Err(api::Error::Status { code: 409, .. })))
 }
 
+/// Значок трея — кольцо Meet (`scripts/make_app_icons.py`): приглушённое —
+/// ждём; яркое с красной точкой — запись; яркое с точкой в центре — слушает
+/// ассистент; с разрывом — занят; приглушённое с янтарной точкой — нет связи
+/// со службой записи или движка.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayIconKind {
     Idle,
     Recording,
+    Live,
     Busy,
     Offline,
 }
 
+/// Нарисованные размеры значка трея: масштаб 100, 125, 150 и 200 %.
+pub const TRAY_SIZES: [u32; 4] = [16, 20, 24, 32];
+
+/// PNG состояния во всех размерах `TRAY_SIZES` (вшиты в exe).
+macro_rules! tray_pngs {
+    ($state:literal) => {
+        [
+            include_bytes!(concat!("../icons/tray-", $state, "-16.png")).as_slice(),
+            include_bytes!(concat!("../icons/tray-", $state, "-20.png")).as_slice(),
+            include_bytes!(concat!("../icons/tray-", $state, "-24.png")).as_slice(),
+            include_bytes!(concat!("../icons/tray-", $state, "-32.png")).as_slice(),
+        ]
+    };
+}
+
 impl TrayIconKind {
-    fn image(self) -> tauri::Result<Image<'static>> {
-        Image::from_bytes(match self {
-            TrayIconKind::Idle => include_bytes!("../icons/tray-idle.png"),
-            TrayIconKind::Recording => include_bytes!("../icons/tray-recording.png"),
-            TrayIconKind::Busy => include_bytes!("../icons/tray-busy.png"),
-            TrayIconKind::Offline => include_bytes!("../icons/tray-offline.png"),
-        })
+    #[cfg(test)]
+    pub const ALL: [TrayIconKind; 5] = [
+        TrayIconKind::Idle,
+        TrayIconKind::Recording,
+        TrayIconKind::Live,
+        TrayIconKind::Busy,
+        TrayIconKind::Offline,
+    ];
+
+    /// PNG размера `size` из `TRAY_SIZES` (другой — самый крупный).
+    fn png(self, size: u32) -> &'static [u8] {
+        let set: [&'static [u8]; 4] = match self {
+            TrayIconKind::Idle => tray_pngs!("idle"),
+            TrayIconKind::Recording => tray_pngs!("recording"),
+            TrayIconKind::Live => tray_pngs!("live"),
+            TrayIconKind::Busy => tray_pngs!("busy"),
+            TrayIconKind::Offline => tray_pngs!("offline"),
+        };
+        let at = TRAY_SIZES
+            .iter()
+            .position(|&s| s == size)
+            .unwrap_or(TRAY_SIZES.len() - 1);
+        set[at]
+    }
+
+    fn image(self, size: u32) -> tauri::Result<Image<'static>> {
+        Image::from_bytes(self.png(size))
     }
 }
 
+/// Размер значка трея по метрике Windows (SM_CXSMICON: 16 при 100 %, 20 при
+/// 125 %…): наименьший нарисованный не меньше её — Windows не растягивает
+/// картинку, края остаются резкими. Крупнее 32 — растянет 32; метрики нет
+/// (0) — тоже 32, как раньше.
+pub fn pick_tray_size(metric: i32) -> u32 {
+    let largest = TRAY_SIZES[TRAY_SIZES.len() - 1];
+    if metric <= 0 {
+        return largest;
+    }
+    TRAY_SIZES
+        .iter()
+        .copied()
+        .find(|&size| i64::from(size) >= i64::from(metric))
+        .unwrap_or(largest)
+}
+
+#[cfg(windows)]
+fn tray_size() -> u32 {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSMICON};
+    // SAFETY: GetSystemMetrics не принимает указателей; ошибка — 0.
+    pick_tray_size(unsafe { GetSystemMetrics(SM_CXSMICON) })
+}
+
+#[cfg(not(windows))]
+fn tray_size() -> u32 {
+    pick_tray_size(0)
+}
+
 /// Запись важнее расшифровки: идёт встреча — это главное, что нужно видеть.
-/// Ассистент слушает или дописывает — тоже запись; грузит модель — «занят».
-pub fn icon_for(view: Option<&View>) -> TrayIconKind {
+/// Ассистент слушает или дописывает — свой значок; грузит модель — «занят».
+/// Без связи с резидентом: запуск, обновление движка и выход — «занят» (это
+/// ненадолго и не сбой), остальное — «нет связи».
+pub fn icon_for(view: Option<&View>, status: &ResidentStatus) -> TrayIconKind {
     match view {
-        None => TrayIconKind::Offline,
+        None => match status {
+            ResidentStatus::Starting
+            | ResidentStatus::EngineUpdating { .. }
+            | ResidentStatus::Quitting => TrayIconKind::Busy,
+            _ => TrayIconKind::Offline,
+        },
         Some(view) if view.recording => TrayIconKind::Recording,
-        Some(view) if view.live.active || view.live.stopping => TrayIconKind::Recording,
+        Some(view) if view.live.active || view.live.stopping => TrayIconKind::Live,
         Some(view) if view.live.starting || view.busy => TrayIconKind::Busy,
         Some(_) => TrayIconKind::Idle,
     }
@@ -1003,8 +1078,9 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
     let handle = app.handle().clone();
     let initial = menu_state(None, &ResidentStatus::Starting);
     let menu = build_menu(&handle, &initial)?;
+    let icon_size = tray_size();
     TrayIconBuilder::with_id(TRAY_ID)
-        .icon(TrayIconKind::Offline.image()?)
+        .icon(icon_for(None, &ResidentStatus::Starting).image(icon_size)?)
         .tooltip(tooltip(None, &ResidentStatus::Starting))
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -1024,7 +1100,7 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
         .build(app)?;
     thread::Builder::new()
         .name("meet-tray-poll".into())
-        .spawn(move || poll_loop(&handle, initial))?;
+        .spawn(move || poll_loop(&handle, initial, icon_size))?;
     Ok(())
 }
 
@@ -1207,9 +1283,9 @@ fn fetch_level(client: &Client) -> Option<Level> {
 }
 
 /// Поток опроса. Сеттеры трея сами переходят на главный поток.
-fn poll_loop(app: &AppHandle, initial_menu: MenuState) {
+fn poll_loop(app: &AppHandle, initial_menu: MenuState, icon_size: u32) {
     let mut tracker = Tracker::default();
-    let mut shown_icon = Some(TrayIconKind::Offline);
+    let mut shown_icon = Some(icon_for(None, &ResidentStatus::Starting));
     let mut shown_tip: Option<String> = None;
     let mut shown_menu = Some(initial_menu);
     let mut level_read: Option<Instant> = None;
@@ -1262,9 +1338,12 @@ fn poll_loop(app: &AppHandle, initial_menu: MenuState) {
         }
 
         if let Some(tray) = app.tray_by_id(TRAY_ID) {
-            let kind = icon_for(view.as_ref());
+            let kind = icon_for(view.as_ref(), &status);
             if shown_icon != Some(kind) {
-                match kind.image().and_then(|image| tray.set_icon(Some(image))) {
+                match kind
+                    .image(icon_size)
+                    .and_then(|image| tray.set_icon(Some(image)))
+                {
                     Ok(()) => shown_icon = Some(kind),
                     Err(error) => shell_log!("иконка трея не сменилась: {error}"),
                 }
@@ -1608,30 +1687,79 @@ mod tests {
 
     #[test]
     fn offline_has_its_own_icon() {
-        assert_eq!(icon_for(None), TrayIconKind::Offline);
+        let running = ResidentStatus::Running;
+        assert_eq!(icon_for(None, &running), TrayIconKind::Offline);
         let mut rec = idle();
         rec.recording = true;
-        assert_eq!(icon_for(Some(&rec)), TrayIconKind::Recording);
+        assert_eq!(icon_for(Some(&rec), &running), TrayIconKind::Recording);
         let mut busy = idle();
         busy.busy = true;
-        assert_eq!(icon_for(Some(&busy)), TrayIconKind::Busy);
-        assert_eq!(icon_for(Some(&idle())), TrayIconKind::Idle);
+        assert_eq!(icon_for(Some(&busy), &running), TrayIconKind::Busy);
+        assert_eq!(icon_for(Some(&idle()), &running), TrayIconKind::Idle);
         let mut both = rec.clone();
         both.busy = true;
-        assert_eq!(icon_for(Some(&both)), TrayIconKind::Recording);
+        assert_eq!(icon_for(Some(&both), &running), TrayIconKind::Recording);
     }
 
     #[test]
-    fn tray_icons_are_32px_png() {
-        for kind in [
-            TrayIconKind::Idle,
-            TrayIconKind::Recording,
-            TrayIconKind::Busy,
-            TrayIconKind::Offline,
+    fn no_resident_icon_depends_on_why() {
+        // Ненадолго и не сбой — «занят» (дуга), а не янтарная точка.
+        for status in [
+            ResidentStatus::Starting,
+            ResidentStatus::EngineUpdating { step: 2, of: 4 },
+            ResidentStatus::Quitting,
         ] {
-            let image = kind.image().expect("иконка трея не читается");
-            assert_eq!((image.width(), image.height()), (32, 32), "{kind:?}");
+            assert_eq!(icon_for(None, &status), TrayIconKind::Busy, "{status:?}");
         }
+        for status in [
+            ResidentStatus::EngineMissing,
+            ResidentStatus::Failed {
+                log: PathBuf::from("shell.log"),
+            },
+            ResidentStatus::ExternalNoApi,
+            ResidentStatus::Running,
+            ResidentStatus::External,
+        ] {
+            assert_eq!(icon_for(None, &status), TrayIconKind::Offline, "{status:?}");
+        }
+        // Снимок есть — решает он, а не статус надзора.
+        let mut rec = idle();
+        rec.recording = true;
+        assert_eq!(
+            icon_for(Some(&rec), &ResidentStatus::Quitting),
+            TrayIconKind::Recording
+        );
+    }
+
+    #[test]
+    fn tray_icons_are_png_of_every_size() {
+        for kind in TrayIconKind::ALL {
+            for size in TRAY_SIZES {
+                let image = kind.image(size).expect("иконка трея не читается");
+                assert_eq!((image.width(), image.height()), (size, size), "{kind:?}");
+            }
+            // Незнакомый размер — самый крупный.
+            assert_eq!(kind.image(48).expect("иконка трея").width(), 32);
+        }
+        // Состояния различимы: у каждого своя картинка.
+        for size in TRAY_SIZES {
+            let mut seen: Vec<&[u8]> = TrayIconKind::ALL.iter().map(|k| k.png(size)).collect();
+            seen.sort();
+            seen.dedup();
+            assert_eq!(seen.len(), TrayIconKind::ALL.len(), "{size}");
+        }
+    }
+
+    #[test]
+    fn tray_size_follows_the_windows_icon_metric() {
+        assert_eq!(pick_tray_size(16), 16); // 100 %
+        assert_eq!(pick_tray_size(20), 20); // 125 %
+        assert_eq!(pick_tray_size(24), 24); // 150 %
+        assert_eq!(pick_tray_size(28), 32); // 175 %
+        assert_eq!(pick_tray_size(32), 32); // 200 %
+        assert_eq!(pick_tray_size(40), 32); // 250 % — крупнее нет, растянет 32
+        assert_eq!(pick_tray_size(12), 16);
+        assert_eq!(pick_tray_size(0), 32); // метрики нет
     }
 
     #[test]
@@ -2258,19 +2386,19 @@ mod tests {
     fn live_icon_and_tooltip() {
         let running = ResidentStatus::Running;
         let active = with_live(true, false, false);
-        assert_eq!(icon_for(Some(&active)), TrayIconKind::Recording);
+        assert_eq!(icon_for(Some(&active), &running), TrayIconKind::Live);
         assert_eq!(
             tooltip(Some(&active), &running),
             "meet — ассистент слушает встречу"
         );
         let stopping = with_live(true, false, true);
-        assert_eq!(icon_for(Some(&stopping)), TrayIconKind::Recording);
+        assert_eq!(icon_for(Some(&stopping), &running), TrayIconKind::Live);
         assert_eq!(
             tooltip(Some(&stopping), &running),
             "meet — ассистент завершает запись"
         );
         let starting = with_live(false, true, false);
-        assert_eq!(icon_for(Some(&starting)), TrayIconKind::Busy);
+        assert_eq!(icon_for(Some(&starting), &running), TrayIconKind::Busy);
         assert_eq!(
             tooltip(Some(&starting), &running),
             "meet — ассистент запускается"

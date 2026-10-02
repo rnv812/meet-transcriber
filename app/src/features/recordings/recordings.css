@@ -58,11 +58,15 @@
   padding: 0 12px; background: var(--surface); border-bottom: 1px solid var(--line);
 }
 .rec-badge { display: flex; align-items: center; gap: 10px; }
-.rec-badge__live { color: var(--red); font-weight: 500; }
+.rec-badge__live { color: var(--red); font-weight: 500; text-shadow: 0 0 12px var(--red-glow); }
 .rec-badge__warn { color: var(--amber); font-size: 12px; }
 
 /* «Начать запись ▾»: основная кнопка и меню вариантов. */
-.split { position: relative; display: inline-flex; }
+/* Свечение — как у кольца в трее: главная кнопка окна заметна, но не кричит. */
+.split {
+  position: relative; display: inline-flex; border-radius: var(--r-md);
+  box-shadow: 0 0 0 1px rgba(124, 134, 240, 0.14), 0 4px 18px -6px var(--accent-glow);
+}
 .split__main { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .split__more {
   padding: 0 7px; border-top-left-radius: 0; border-bottom-left-radius: 0;
