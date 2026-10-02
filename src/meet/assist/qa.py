@@ -14,6 +14,7 @@
 
 import asyncio
 import time
+import uuid
 from pathlib import Path
 
 # Сколько последних пар «вопрос-ответ» класть в промпт провайдеру без сессий.
@@ -70,11 +71,16 @@ def _keep_latest(lines: list[str], limit: int) -> tuple[list[str], bool]:
 class QAService:
     """Вопросы по встрече: живая сводка + реплики + память диалога.
 
-    Память диалога — сессия провайдера (resume), если раннер вернул
-    session_id. Сейчас его не возвращает никто: Codex и локальная модель
-    сессий не держат, а Claude Code фоновые сеансы не сохраняет (они не должны
-    засорять историю человека) — последние HISTORY_PAIRS пар вопрос-ответ
-    кладутся прямо в промпт.
+    Память диалога — свой сеанс провайдера: первый вопрос открывает его с
+    нашим id (`session_id`, новый UUID), следующие продолжают (`resume`) — в
+    нём остаются и прежние вопросы, и реплики, что к ним прилагались. Держит
+    сеанс только Claude Code (у него это единственный сохраняемый фоновый
+    сеанс; id живёт здесь, в памяти ассистента, а не в метке вкладки «Агент»).
+
+    Сеанса нет (Codex, локальная модель, первый вопрос после сбоя
+    продолжения) — в промпт кладутся последние HISTORY_PAIRS пар вопрос-ответ
+    и последние реплики встречи в пределах LINES_MAX_CHARS, как у быстрых
+    действий, а не только реплики с прошлого вопроса.
 
     Перед вопросом дёргает внеочередную дотранскрибацию (on_fresh_audio),
     чтобы ответ учитывал последние секунды речи. `model` — модель агента из
@@ -139,13 +145,21 @@ class QAService:
                     await asyncio.to_thread(self._on_fresh_audio)
                 prompt, cursor = self._build(label, quick, since_t)
                 kwargs = {"model": self._model} if self._model else {}
+                resume = self._session_id
+                if resume is None:
+                    # Новый свой сеанс; провайдер без сессий id просто не вернёт.
+                    kwargs["session_id"] = str(uuid.uuid4())
                 reply = await self._runner(
-                    prompt, system_prompt=self._system, resume=self._session_id,
+                    prompt, system_prompt=self._system, resume=resume,
                     allowed_dirs=self._allowed, cwd=self._cwd, **kwargs)
         except Exception as e:
             self._finish(item, error=f"внутренняя ошибка: {e}")
             raise
         if reply.error:
+            if resume is not None:
+                # Продолжить не вышло — следующий вопрос начнёт сеанс заново,
+                # с памятью диалога и последними репликами в промпте.
+                self._session_id = None
             self._finish(item, error=reply.error)
             return f"⚠ {reply.error}"
         self._cursor = cursor
@@ -176,8 +190,12 @@ class QAService:
         elif quick is not None:
             picked, title = lines, "Реплики встречи (последние):"
             ask = QUICK[quick]["prompt"].format(owner=self._owner)
-        else:
+        elif self._session_id is not None:
+            # Прежние реплики уже в сеансе — добавляем только новые.
             picked, title = lines[self._cursor:], "Свежие реплики (с прошлого вопроса):"
+            ask = label
+        else:
+            picked, title = lines, "Реплики встречи (последние):"
             ask = label
         budget = DECISIONS_LINES_MAX_CHARS if quick == "decisions" else LINES_MAX_CHARS
         picked, cut = _keep_latest(picked, budget)

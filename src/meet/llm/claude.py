@@ -85,6 +85,7 @@ async def run(
     system_prompt: str,
     model: str = "sonnet",
     resume: str | None = None,
+    session_id: str | None = None,
     allowed_dirs: tuple[Path, ...] = (),
     cwd: str | Path | None = None,
     timeout_s: float = 180.0,
@@ -94,11 +95,16 @@ async def run(
     """Один вызов Claude через Agent SDK: свежая сессия (или resume), строгий
     системный промпт, без настроек проекта; ошибки — в AgentReply.error.
 
-    Сеанс на диск не сохраняется (`--no-session-persistence`, NO_PERSISTENCE):
-    фоновые вызовы — итоги, анализ, названия, профили, тики и вопросы живого
-    ассистента — не засоряют историю Claude Code человека и не попадают под
-    `--continue` вкладки «Агент». Поэтому `session_id` не возвращается (такой
-    сеанс не продолжить): память диалога вызывающий кладёт в prompt.
+    По умолчанию сеанс на диск не сохраняется (`--no-session-persistence`,
+    NO_PERSISTENCE): фоновые вызовы — итоги, анализ, названия, профили, тики
+    живого ассистента — не засоряют историю Claude Code человека, и
+    `session_id` не возвращается (такой сеанс не продолжить).
+
+    Свой сохраняемый сеанс — только по явной просьбе: `session_id` (новый
+    сеанс с этим UUID, `--session-id`) или `resume` (продолжить его). Так
+    живёт память вопросов живого ассистента (QAService); в ответе — id
+    сеанса. Вкладку «Агент» он не задевает: она продолжает свой сеанс по
+    своему id.
 
     `proxy` — `llm.proxy` (по умолчанию «как в системе»): Claude Code сам
     системный прокси Windows не видит, его передаём переменными."""
@@ -110,6 +116,7 @@ async def run(
     drop_api_key()
     # Как и ключ — из окружения своего процесса (SDK переменные только добавляет).
     drop_session_markers(os.environ)
+    persist = bool(resume or session_id)
     options = ClaudeAgentOptions(
         env=netproxy.prepare(proxy),
         system_prompt=system_prompt,
@@ -123,7 +130,8 @@ async def run(
         ),
         can_use_tool=make_permission_callback(allowed_dirs),
         max_turns=max_turns,
-        extra_args=dict(NO_PERSISTENCE),
+        session_id=None if resume else session_id,
+        extra_args={} if persist else dict(NO_PERSISTENCE),
     )
 
     # can_use_tool в этой версии SDK требует streaming-режима ввода: строка-prompt
@@ -134,10 +142,11 @@ async def run(
 
     text_parts: list[str] = []
     result_text: str | None = None
+    reported: str | None = None
     error: str | None = None
 
     async def _consume() -> None:
-        nonlocal result_text, error
+        nonlocal result_text, reported, error
         async for msg in claude_agent_sdk.query(prompt=_single_message(), options=options):
             if isinstance(msg, AssistantMessage):
                 if getattr(msg, "error", None):
@@ -146,6 +155,7 @@ async def run(
                     if isinstance(block, TextBlock):
                         text_parts.append(block.text)
             elif isinstance(msg, ResultMessage):
+                reported = msg.session_id
                 if getattr(msg, "result", None):
                     result_text = msg.result
                 if msg.is_error and not error:
@@ -159,6 +169,7 @@ async def run(
         error = f"{type(e).__name__}: {e}"
     return AgentReply(
         text=(result_text or "".join(text_parts)).strip(),
+        session_id=(reported or resume or session_id) if persist else None,
         error=netproxy.with_hint(error),
     )
 

@@ -55,8 +55,10 @@ def test_chat_completion(server):
 
 
 def test_default_model_name(server):
-    _run(server["base_url"])
+    # `session_id` от вопросов живого ассистента принимается и не используется.
+    reply = _run(server["base_url"], session_id="0b6f8a52-3c1d-4e2f-9a7b-1c2d3e4f5a6b")
     assert server["requests"][0][1]["model"] == "local-model"
+    assert reply.session_id is None
 
 
 def test_trailing_slash_base_url(server):
