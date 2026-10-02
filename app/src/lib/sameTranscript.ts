@@ -16,7 +16,7 @@ export function sameSegments(a: Segment[], b: Segment[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    const x = a[i], y = b[i];
+    const x = a[i]!, y = b[i]!;
     for (const k of SEGMENT_KEYS) if (x[k] !== y[k]) return false;
   }
   return true;
