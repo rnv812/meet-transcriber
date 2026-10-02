@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { type Endpoint, type HfStatus, getHfStatus } from "../../lib/api";
+import { OS_TEXT } from "../../lib/platform";
 import { openUrl } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { CheckFailure, HfTokenForm } from "../hf/HfTokenForm";
@@ -53,7 +54,7 @@ export function StepHf({ endpoint, onNext, onSkip }: {
           <Button onClick={() => void openUrl(HF_TOKENS_URL)}>Открыть настройки токенов</Button>
         </li>
         <li>
-          <span>Вставьте токен и проверьте доступ. Токен хранится в диспетчере учётных данных Windows.</span>
+          <span>Вставьте токен и проверьте доступ. Токен хранится в {OS_TEXT.keyring}.</span>
           <HfTokenForm endpoint={endpoint} label="Токен" submitLabel="Проверить" onSaved={() => setSaved(true)} />
         </li>
       </ol>

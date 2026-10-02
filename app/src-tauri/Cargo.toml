@@ -68,6 +68,12 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[target.'cfg(unix)'.dependencies]
+# macOS (экспериментально, `platform.rs`): жив ли процесс (kill 0), группа
+# процессов вместо job object (killpg), свободное место (statvfs). Уже есть
+# в дереве через tauri.
+libc = "0.2"
+
 [features]
 # Дефолт Tauri: в релизе окно без консоли.
 default = []

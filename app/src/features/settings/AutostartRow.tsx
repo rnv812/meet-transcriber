@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { errorText } from "../../lib/format";
+import { OS_TEXT } from "../../lib/platform";
 import { autostartAvailable, getAutostart, setAutostart } from "../../lib/shell";
 import { Switch } from "./Section";
 
@@ -40,7 +41,7 @@ export function AutostartRow() {
 
   return (
     <>
-      <Switch label="Запускать вместе с Windows" hint="Приложение запускается в области уведомлений и отслеживает звонки"
+      <Switch label={OS_TEXT.autostart} hint={`Приложение запускается в ${OS_TEXT.trayArea} и отслеживает звонки`}
         value={value} onChange={(next) => void change(next)} />
       {error && <p className="error">{error}</p>}
     </>

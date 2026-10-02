@@ -6,6 +6,7 @@
 // роняло приложение на Windows.
 
 use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
 use std::process::Command;
 
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -14,6 +15,7 @@ use tauri_plugin_dialog::DialogExt;
 use crate::api::Client;
 use crate::engine;
 use crate::logs::{self, shell_log};
+use crate::platform;
 use crate::resident::{self, Endpoint, ResidentStatus, Supervisor};
 use crate::tray;
 
@@ -127,13 +129,9 @@ pub async fn open_folder(path: String) -> Result<(), String> {
             shell_log!("open_folder: отказ, папка вне данных и записей: {path}");
             return Err(format!("эту папку приложение не открывает: {path}"));
         }
-        Command::new("explorer")
-            .arg(&target)
-            .spawn()
-            .map(|_| ())
-            // explorer возвращает ненулевой код даже при успехе, поэтому ждать
-            // завершения нельзя — нас интересует только сам запуск.
-            .map_err(|error| format!("не удалось открыть папку: {error}"))
+        // explorer (macOS — open) возвращает ненулевой код даже при успехе,
+        // поэтому ждать завершения нельзя — нас интересует только сам запуск.
+        platform::open_folder(&target).map_err(|error| format!("не удалось открыть папку: {error}"))
     })
     .await
     .map_err(|error| error.to_string())?
@@ -403,9 +401,15 @@ pub(crate) fn shell_execute(target: &str) -> Result<(), isize> {
     }
 }
 
+/// macOS: `open` без шелла — адрес не разбирается интерпретатором команд;
+/// страница — в браузере, образ диска обновления — в Finder.
 #[cfg(not(windows))]
-pub(crate) fn shell_execute(_target: &str) -> Result<(), isize> {
-    Err(0)
+pub(crate) fn shell_execute(target: &str) -> Result<(), isize> {
+    match Command::new("open").arg(target).status() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(status.code().map_or(-1, |code| code as isize)),
+        Err(_) => Err(0),
+    }
 }
 
 /// Отметка «мастер первого запуска пройден или пропущен» в папке данных.
@@ -466,10 +470,7 @@ pub async fn open_logs() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(|| {
         let data = resident::data_dir();
         let target = tray::log_folder(&logs::resident_log(&data), &data);
-        Command::new("explorer")
-            .arg(&target)
-            .spawn()
-            .map(|_| ())
+        platform::open_folder(&target)
             .map_err(|error| format!("не удалось открыть журнал: {error}"))
     })
     .await

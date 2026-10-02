@@ -20,6 +20,8 @@ import {
 import { Button } from "../../ui/Button";
 import { driveOf, freeSpaceShortfall, gb } from "./gate";
 
+const ENGINE_PROFILE = { cuda: "для видеокарты", cpu: "для процессора", mac: "для Apple Silicon" } as const;
+
 /** Строк лога в памяти: uv многословен, хвоста хватает. */
 const MAX_LINES = 400;
 /** Как часто перечитывать состояние, пока идёт установка, начатая не этим шагом. */
@@ -191,7 +193,7 @@ export function StepEngine({ engine, profile, recording, onRefresh, onPhase, onN
       <>
         <p className="notice wizard__lead">Движок установлен</p>
         <p className="muted">
-          Версия {engine.version}{engine.profile ? ` · ${engine.profile === "cuda" ? "для видеокарты" : "для процессора"}` : ""}
+          Версия {engine.version}{engine.profile ? ` · ${ENGINE_PROFILE[engine.profile]}` : ""}
         </p>
         {recordingHint}
         <div className="wizard__bar">

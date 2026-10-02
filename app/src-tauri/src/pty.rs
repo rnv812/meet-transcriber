@@ -396,6 +396,10 @@ struct Session {
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     #[cfg(windows)]
     job: Mutex<Option<crate::engine::Job>>,
+    /// macOS: portable-pty запускает агента лидером новой сессии (setsid) —
+    /// его группа процессов и есть «агент со всем, что он запустил».
+    #[cfg(unix)]
+    group: Option<u32>,
     exited: Exited,
 }
 
@@ -407,6 +411,10 @@ impl Session {
         #[cfg(windows)]
         if let Ok(mut job) = self.job.lock() {
             job.take();
+        }
+        #[cfg(unix)]
+        if let Some(group) = self.group {
+            crate::platform::kill_group(group, false);
         }
     }
 }
@@ -491,6 +499,8 @@ impl Sessions {
             killer: Mutex::new(child.clone_killer()),
             #[cfg(windows)]
             job: Mutex::new(job),
+            #[cfg(unix)]
+            group: child.process_id(),
             exited: Exited::default(),
         });
 
@@ -637,7 +647,7 @@ impl Sessions {
         all.iter().for_each(|s| s.kill());
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     fn len(&self) -> usize {
         self.lock().len()
     }
@@ -862,6 +872,7 @@ pub async fn agent_kill_recording(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
     use std::sync::mpsc;
 
     fn env_of(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {

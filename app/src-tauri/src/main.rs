@@ -17,6 +17,7 @@ mod install_wait;
 mod live_panel;
 mod logs;
 mod netproxy;
+mod platform;
 mod pty;
 mod resident;
 mod tray;
@@ -72,11 +73,15 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         // Автозапуск при входе в Windows (переключатель мастера,
         // `autostart::set_autostart`): `--autostart` — признак такого запуска.
-        .plugin(
-            tauri_plugin_autostart::Builder::new()
-                .arg(autostart::AUTOSTART_ARG)
-                .build(),
-        )
+        // macOS — LaunchAgent в ~/Library/LaunchAgents (умолчание плагина,
+        // задано явно).
+        .plugin({
+            let builder = tauri_plugin_autostart::Builder::new().arg(autostart::AUTOSTART_ARG);
+            #[cfg(target_os = "macos")]
+            let builder =
+                builder.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
+            builder.build()
+        })
         .plugin(
             // Геометрию панели ассистента оболочка ведёт сама
             // (`live_panel.rs`, `live_window.json`): ей нужна ещё высота
@@ -182,6 +187,8 @@ fn main() {
             RunEvent::Exit => {
                 live_panel::flush(app);
                 pty::kill_all();
+                // macOS: job object нет — установку движка гасим сами.
+                engine::kill_installs();
             }
             _ => {}
         });

@@ -1,0 +1,36 @@
+[
+  [
+    "/r/uv",
+    "python",
+    "install",
+    "3.12"
+  ],
+  [
+    "/r/uv",
+    "venv",
+    "--python",
+    "3.12",
+    "/env"
+  ],
+  [
+    "/r/uv",
+    "pip",
+    "install",
+    "--python",
+    "/env/bin/python",
+    "torch==2.11.*",
+    "torchaudio==2.11.*",
+    "--constraint",
+    "/r/constraints-mac.txt"
+  ],
+  [
+    "/r/uv",
+    "pip",
+    "install",
+    "--python",
+    "/env/bin/python",
+    "/w/meet_transcriber-0.1.0-py3-none-any.whl[engine-mac]",
+    "--constraint",
+    "/r/constraints-mac.txt"
+  ]
+]

@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::logs::{self, shell_log};
+use crate::platform;
 use crate::resident::{self, Supervisor};
 use crate::tray;
 
@@ -58,10 +59,22 @@ const PYTHON: &str = "python";
 const MARKER: &str = "installed.json";
 /// Межпроцессный замок установки в `engine` (pid держателя).
 const INSTALL_LOCK: &str = "install.lock";
+#[cfg(windows)]
 const LAUNCHER: &str = "meet-tray.exe";
+#[cfg(not(windows))]
+const LAUNCHER: &str = "meet-tray";
 const WHEEL_PREFIX: &str = "meet_transcriber-";
+#[cfg(windows)]
 const UV: &str = "uv.exe";
+#[cfg(not(windows))]
+const UV: &str = "uv";
+#[cfg(windows)]
 const FFMPEG: &str = "ffmpeg.exe";
+#[cfg(not(windows))]
+const FFMPEG: &str = "ffmpeg";
+/// Профиль «Apple Silicon» (macOS, экспериментально): torch с PyPI (колёса
+/// arm64 с MPS), пакеты — extra `engine-mac`. Как `MAC_PROFILE` в Python.
+pub const MAC_PROFILE: &str = "mac";
 /// Места на диске с данными, ГБ. Замер сухого прогона 01.10.2026 (uv 0.11.23,
 /// torch 2.11 cu128): CUDA-окружение — 6,8 ГБ (torch 4,1 ГБ + nvidia-cublas/
 /// cudnn 2 ГБ; кэш uv на том же диске — жёсткие ссылки, места не удваивает),
@@ -97,9 +110,29 @@ pub fn python_dir(data_dir: &Path) -> PathBuf {
     engine_root(data_dir).join(PYTHON)
 }
 
-/// gui-script резидента в окружении движка.
+/// gui-script резидента в окружении движка (`Scripts\` на Windows, `bin/`
+/// на macOS).
 pub fn launcher(env_dir: &Path) -> PathBuf {
-    env_dir.join("Scripts").join(LAUNCHER)
+    env_dir.join(platform::venv_bin()).join(LAUNCHER)
+}
+
+/// Интерпретатор venv движка — порт `meet.engine.python_path`: склейка
+/// строк, чтобы шаги совпадали с Python байт в байт на любой ОС.
+pub fn python_path(env_dir: &str, profile: &str) -> String {
+    if profile == MAC_PROFILE {
+        format!("{env_dir}/bin/python")
+    } else {
+        format!(r"{env_dir}\Scripts\python.exe")
+    }
+}
+
+/// Индекс колёс torch профиля; `None` — PyPI (Apple Silicon).
+pub fn torch_index(profile: &str) -> Option<&'static str> {
+    match profile {
+        "cuda" => Some(TORCH_CUDA_INDEX),
+        MAC_PROFILE => None,
+        _ => Some(TORCH_CPU_INDEX),
+    }
 }
 
 /// Команды установки колеса в приватное окружение — порт
@@ -114,12 +147,10 @@ pub fn uv_steps(
     profile: &str,
     constraints: Option<&str>,
 ) -> Vec<Vec<String>> {
-    let python = format!(r"{env_dir}\Scripts\python.exe");
-    let index = if profile == "cuda" {
-        TORCH_CUDA_INDEX
-    } else {
-        TORCH_CPU_INDEX
-    };
+    let python = python_path(env_dir, profile);
+    let index = torch_index(profile)
+        .map(|index| vec!["--index-url".to_string(), index.to_string()])
+        .unwrap_or_default();
     let owned = |items: &[&str]| {
         items
             .iter()
@@ -133,13 +164,7 @@ pub fn uv_steps(
     vec![
         owned(&[uv, "python", "install", "3.12"]),
         owned(&[uv, "venv", "--python", "3.12", env_dir]),
-        [
-            pip.clone(),
-            owned(&TORCH_SPECS),
-            owned(&["--index-url", index]),
-            pinned.clone(),
-        ]
-        .concat(),
+        [pip.clone(), owned(&TORCH_SPECS), index, pinned.clone()].concat(),
         [pip, vec![format!("{wheel}[engine-{profile}]")], pinned].concat(),
     ]
 }
@@ -153,9 +178,10 @@ pub fn uv_gigaam_step(
     uv: &str,
     env_dir: &str,
     wheel: &str,
+    profile: &str,
     constraints: Option<&str>,
 ) -> Vec<String> {
-    let python = format!(r"{env_dir}\Scripts\python.exe");
+    let python = python_path(env_dir, profile);
     let mut argv: Vec<String> = [uv, "pip", "install", "--python", &python]
         .iter()
         .map(|item| item.to_string())
@@ -254,6 +280,7 @@ pub fn needs_gb(profile: &str) -> f64 {
     if profile == "cuda" {
         NEEDS_CUDA_GB
     } else {
+        // CPU и Apple Silicon: torch без CUDA, порядок величин один.
         NEEDS_CPU_GB
     }
 }
@@ -275,6 +302,7 @@ pub fn needs_for(profile: &str, warm: bool) -> f64 {
 /// Кэш uv, которым пользуется установка: `UV_CACHE_DIR`, иначе умолчание uv
 /// на Windows — `%LOCALAPPDATA%\uv\cache` (uv.toml установка не читает:
 /// `UV_NO_CONFIG`).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn uv_cache_dir(
     env_override: Option<&OsStr>,
     local_app_data: Option<&OsStr>,
@@ -354,6 +382,7 @@ pub fn space_needed(data_dir: &Path, profile: &str, cache: Option<&Path>) -> f64
     needs_for(profile, warm)
 }
 
+#[cfg(windows)]
 fn current_uv_cache() -> Option<PathBuf> {
     uv_cache_dir(
         std::env::var_os("UV_CACHE_DIR").as_deref(),
@@ -361,13 +390,22 @@ fn current_uv_cache() -> Option<PathBuf> {
     )
 }
 
-/// Профиль по видеокарте: NVIDIA видна — cuda, иначе cpu.
+/// macOS: `UV_CACHE_DIR`, иначе умолчание uv — `$XDG_CACHE_HOME/uv` или
+/// `~/.cache/uv`.
+#[cfg(not(windows))]
+fn current_uv_cache() -> Option<PathBuf> {
+    let var = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+    var("UV_CACHE_DIR").map(PathBuf::from).or_else(|| {
+        var("XDG_CACHE_HOME")
+            .map(|dir| PathBuf::from(dir).join("uv"))
+            .or_else(|| var("HOME").map(|home| PathBuf::from(home).join(".cache").join("uv")))
+    })
+}
+
+/// Профиль по видеокарте: NVIDIA видна — cuda, иначе cpu; на macOS —
+/// всегда «Apple Silicon» (`mac`).
 pub fn profile_for(gpu: Option<&str>) -> &'static str {
-    if gpu.is_some() {
-        "cuda"
-    } else {
-        "cpu"
-    }
+    platform::engine_profile_for(platform::current(), gpu.is_some())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -423,7 +461,7 @@ pub fn is_installed(env_dir: &Path, version: &str) -> bool {
 }
 
 fn known_profile(profile: &str) -> bool {
-    matches!(profile, "cuda" | "cpu")
+    matches!(profile, "cuda" | "cpu" | MAC_PROFILE)
 }
 
 /// Обслуживание движка при старте оболочки — без мастера и без окна.
@@ -798,14 +836,40 @@ fn install_job() -> Option<&'static Job> {
 }
 
 /// Привязать процесс установки к job оболочки. Не вышло — установка идёт
-/// дальше: без job хуже только уборка после аварийного выхода.
+/// дальше: без job хуже только уборка после аварийного выхода. macOS: job
+/// нет — процесс лидер своей группы (`platform::own_group` до запуска), её
+/// гасит `kill_installs` при выходе оболочки.
 fn bind_to_shell(child: &std::process::Child) {
     #[cfg(windows)]
     if !install_job().is_some_and(|job| job.assign(child)) {
         shell_log!("процесс установки (pid {}) не привязан к job", child.id());
     }
-    #[cfg(not(windows))]
-    let _ = child;
+    #[cfg(unix)]
+    if let Ok(mut pids) = INSTALL_GROUPS.lock() {
+        pids.push(child.id());
+    }
+}
+
+/// macOS: группы процессов идущей установки (uv и его дети).
+#[cfg(unix)]
+static INSTALL_GROUPS: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(unix)]
+fn unbind_from_shell(pid: u32) {
+    if let Ok(mut pids) = INSTALL_GROUPS.lock() {
+        pids.retain(|known| *known != pid);
+    }
+}
+
+/// Выход оболочки: погасить установку, которая ещё идёт (на Windows это
+/// делает job object при закрытии хэндла).
+pub fn kill_installs() {
+    #[cfg(unix)]
+    if let Ok(pids) = INSTALL_GROUPS.lock() {
+        for pid in pids.iter() {
+            platform::kill_group(*pid, true);
+        }
+    }
 }
 
 static INSTALLING: AtomicBool = AtomicBool::new(false);
@@ -849,9 +913,9 @@ pub fn free_gb(path: &Path) -> Option<f64> {
     (ok != 0).then(|| free as f64 / f64::from(1u32 << 30))
 }
 
-#[cfg(not(windows))]
-pub fn free_gb(_path: &Path) -> Option<f64> {
-    None
+#[cfg(unix)]
+pub fn free_gb(path: &Path) -> Option<f64> {
+    platform::free_gb(path)
 }
 
 /// Видеокарта NVIDIA по `nvidia-smi` (без окна, не дольше 5 с); нет
@@ -905,6 +969,7 @@ pub fn run_streamed(
         command.env(key, value);
     }
     resident::hide_console(&mut command);
+    platform::own_group(&mut command);
     let mut child = command.spawn()?;
     // Сразу после запуска: дочерние процессы uv, созданные после привязки,
     // попадают в тот же job сами.
@@ -935,7 +1000,10 @@ pub fn run_streamed(
     for reader in readers {
         let _ = reader.join();
     }
-    Ok(child.wait()?.code())
+    let status = child.wait();
+    #[cfg(unix)]
+    unbind_from_shell(child.id());
+    Ok(status?.code())
 }
 
 /// Строки потока — в канал. `\r` внутри строки — перерисовка прогресса:
@@ -1200,6 +1268,7 @@ fn run_steps(
         &uv.to_string_lossy(),
         &env.to_string_lossy(),
         &wheel.to_string_lossy(),
+        profile,
         constraints.as_deref(),
     );
     let _ = run_gigaam(app, &gigaam, &envs, &cwd, env, &mut log, (of, of));
@@ -1280,6 +1349,7 @@ pub fn retry_gigaam(app: &AppHandle) -> Result<(), String> {
         &resources.join(UV).to_string_lossy(),
         &env.to_string_lossy(),
         &wheel.to_string_lossy(),
+        &marker.profile,
         constraints.as_deref(),
     );
     let mut envs = uv_env(&data);
@@ -1582,7 +1652,7 @@ mod tests {
     #[test]
     fn gigaam_step_matches_python() {
         assert_eq!(
-            vec![uv_gigaam_step("uv.exe", r"C:\env", WHEEL, None)],
+            vec![uv_gigaam_step("uv.exe", r"C:\env", WHEEL, "cpu", None)],
             fixture("uv_gigaam_step.json")
         );
         assert_eq!(
@@ -1590,6 +1660,7 @@ mod tests {
                 "uv.exe",
                 r"C:\env",
                 WHEEL,
+                "cpu",
                 Some(r"C:\r\constraints-cpu.txt")
             )],
             fixture("uv_gigaam_step_constrained.json")
@@ -1638,6 +1709,7 @@ mod tests {
         assert_eq!(needs_gb("cpu"), 3.0);
     }
 
+    #[cfg(windows)]
     #[test]
     fn installed_means_launcher_and_marker_of_this_version() {
         let tree = TempDir::new("installed");
@@ -1669,6 +1741,7 @@ mod tests {
         assert_eq!(value["wheel_sha256"], "ab12");
     }
 
+    #[cfg(windows)]
     #[test]
     fn marker_without_wheel_hash_still_reads_as_installed() {
         // Маркер rc1 — без хэша колеса: движок установлен, хэш неизвестен.
@@ -1768,6 +1841,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn previous_profile_comes_from_a_finished_install_of_another_version() {
         let tree = TempDir::new("previous");
@@ -1803,6 +1877,7 @@ mod tests {
         assert_eq!(previous_profile(&tree.0, "0.2.0"), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn uv_cache_is_the_override_or_the_local_app_data_default() {
         let local = Some(OsStr::new(r"C:\Users\u\AppData\Local"));
@@ -1821,6 +1896,7 @@ mod tests {
         assert_eq!(uv_cache_dir(None, None), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn cached_torch_is_recognised_by_its_unpacked_pointer_of_the_profile_build() {
         let cache = TempDir::new("uvcache");
@@ -1847,6 +1923,7 @@ mod tests {
         assert!(!cache_has_torch(&cache.0.join("missing"), "cuda"));
     }
 
+    #[cfg(windows)]
     #[test]
     fn hard_links_need_the_same_volume() {
         assert!(same_volume(
@@ -1857,6 +1934,7 @@ mod tests {
         assert!(!same_volume(Path::new("relative"), Path::new(r"C:\meet")));
     }
 
+    #[cfg(windows)]
     #[test]
     fn space_need_drops_when_the_heavy_part_is_already_on_disk() {
         let data = TempDir::new("space-data");
@@ -1959,6 +2037,7 @@ mod tests {
         assert_eq!(find_wheel(&tree.0, "0.2.0"), Some(newer));
     }
 
+    #[cfg(windows)]
     #[test]
     fn ffmpeg_dir_goes_first_in_path() {
         let joined = path_with(
@@ -2046,6 +2125,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn install_lock_file_is_created_refused_taken_over_and_removed() {
         let root = TempDir::new("install-lock");
@@ -2076,6 +2156,7 @@ mod tests {
         drop(lock);
     }
 
+    #[cfg(windows)]
     #[test]
     fn closing_the_job_kills_its_processes() {
         let job = Job::kill_on_close().unwrap();
@@ -2123,6 +2204,7 @@ mod tests {
         assert_eq!(get("UV_CACHE_DIR"), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn resources_are_found_in_resources_subfolder_or_flat() {
         let tree = TempDir::new("resources");
@@ -2146,6 +2228,7 @@ mod tests {
         assert!(free > 0.0);
     }
 
+    #[cfg(windows)]
     #[test]
     fn streamed_run_gives_stdout_and_stderr_lines_and_exit_code() {
         let argv: Vec<String> = ["cmd", "/C", "echo one& echo two 1>&2& exit /b 3"]
@@ -2165,5 +2248,57 @@ mod tests {
         assert_eq!(code, Some(3));
         let missing = vec!["meet-no-such-program.exe".to_string()];
         assert!(run_streamed(&missing, &[], &std::env::temp_dir(), |_| {}).is_err());
+    }
+    /// macOS: тот же построчный вывод через `sh`, процесс — лидер своей
+    /// группы и снимается с учёта установки по окончании.
+    #[cfg(unix)]
+    #[test]
+    fn streamed_run_on_unix_gives_lines_and_exit_code() {
+        let argv: Vec<String> = ["sh", "-c", "echo one; echo two 1>&2; exit 3"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let mut lines = Vec::new();
+        let code =
+            run_streamed(&argv, &[], &std::env::temp_dir(), |line| lines.push(line)).unwrap();
+        lines.sort();
+        assert_eq!(lines, vec!["one", "two"]);
+        assert_eq!(code, Some(3));
+        assert!(INSTALL_GROUPS.lock().unwrap().is_empty(), "снят с учёта");
+    }
+
+    #[test]
+    fn mac_profile_installs_torch_from_pypi_into_a_unix_venv() {
+        let steps = uv_steps(
+            "/r/uv",
+            "/env",
+            "/w/meet_transcriber-0.1.0-py3-none-any.whl",
+            MAC_PROFILE,
+            None,
+        );
+        assert_eq!(steps, fixture("uv_steps_mac.json"));
+        assert!(!steps[2].iter().any(|arg| arg == "--index-url"));
+        assert_eq!(
+            uv_steps(
+                "/r/uv",
+                "/env",
+                "/w/meet_transcriber-0.1.0-py3-none-any.whl",
+                MAC_PROFILE,
+                Some("/r/constraints-mac.txt"),
+            ),
+            fixture("uv_steps_mac_constrained.json")
+        );
+        assert_eq!(
+            vec![uv_gigaam_step(
+                "/r/uv",
+                "/env",
+                "/w/meet_transcriber-0.1.0-py3-none-any.whl",
+                MAC_PROFILE,
+                None
+            )],
+            fixture("uv_gigaam_step_mac.json")
+        );
+        assert!(known_profile(MAC_PROFILE));
+        assert_eq!(needs_gb(MAC_PROFILE), needs_gb("cpu"));
     }
 }

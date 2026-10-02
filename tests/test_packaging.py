@@ -26,15 +26,38 @@ def test_extras_mirror_engine_constants():
     extras = _project()["optional-dependencies"]
     base = [_norm(r) for r in engine.PACKAGES]
     assert [_norm(r) for r in extras["engine-cpu"]] == base
+    # Apple Silicon: те же пакеты, что у CPU (torch — отдельным шагом с PyPI).
+    assert [_norm(r) for r in extras["engine-mac"]] == base
     assert [_norm(r) for r in extras["engine-cuda"]] == base + list(engine.CUDA_RUNTIME)
     assert [_norm(r) for r in extras["gigaam"]] == [_norm(r) for r in engine.OPTIONAL_PACKAGES]
 
 
+def _requirements() -> dict[str, str]:
+    """Имя зависимости ядра → маркер платформы ('' — для всех)."""
+    found = {}
+    for dep in _project()["dependencies"]:
+        spec, _, marker = dep.partition(";")
+        name = re.split(r"[<>=\[ ]", spec.strip())[0].lower()
+        found[name] = " ".join(marker.split())
+    return found
+
+
 def test_core_dependencies_cover_resident_imports():
-    names = {re.split(r"[<>=\[ ]", d)[0].lower() for d in _project()["dependencies"]}
+    names = _requirements()
     for needed in ("pystray", "pillow", "pycaw", "psutil", "pyaudiowpatch", "numpy",
-                   "scipy", "aiohttp", "claude-agent-sdk", "keyring"):
+                   "scipy", "aiohttp", "claude-agent-sdk", "keyring", "sounddevice"):
         assert needed in names
+
+
+def test_windows_only_and_mac_only_dependencies_carry_markers():
+    """Модули Windows (WASAPI, pystray) на macOS не ставятся; запись там —
+    через sounddevice. Остальное — для обеих ОС."""
+    names = _requirements()
+    for windows_only in ("pystray", "pycaw", "pyaudiowpatch"):
+        assert names[windows_only] == "sys_platform == 'win32'", windows_only
+    assert names["sounddevice"] == "sys_platform == 'darwin'"
+    for shared in ("pillow", "psutil", "numpy", "scipy", "aiohttp", "claude-agent-sdk", "keyring"):
+        assert names[shared] == "", shared
 
 
 @pytest.fixture(scope="module")

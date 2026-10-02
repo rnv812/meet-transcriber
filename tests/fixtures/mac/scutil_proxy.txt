@@ -1,0 +1,16 @@
+<dictionary> {
+  ExceptionsList : <array> {
+    0 : *.local
+    1 : 169.254/16
+    2 : intranet.example
+  }
+  FTPPassive : 1
+  HTTPEnable : 1
+  HTTPPort : 3128
+  HTTPProxy : proxy.example.test
+  HTTPSEnable : 1
+  HTTPSPort : 3129
+  HTTPSProxy : proxy.example.test
+  ProxyAutoConfigEnable : 0
+  SOCKSEnable : 0
+}

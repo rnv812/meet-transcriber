@@ -10,6 +10,7 @@
 import { useEffect, useId, useState } from "react";
 import { type Endpoint, getState, resolveEndpoint } from "../../lib/api";
 import type { Profile } from "../../lib/estimate";
+import { IS_MAC } from "../../lib/platform";
 import { type EngineStatus, openLogs, residentStatus } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { StepDevices } from "./StepDevices";
@@ -101,7 +102,8 @@ export function Wizard({
   const index = STEPS.findIndex((s) => s.id === step);
   const go = (id: WizardStep) => setStep(id);
   const next = () => go(STEPS[Math.min(index + 1, STEPS.length - 1)]!.id);
-  const profile: Profile = engine?.gpu ? "cuda" : "cpu";
+  // macOS — всегда «Apple Silicon»: видеокарты NVIDIA там не бывает.
+  const profile: Profile = IS_MAC ? "mac" : engine?.gpu ? "cuda" : "cpu";
   const service = useService(endpoint, NEEDS_RESIDENT.includes(step));
   const [installing, setInstalling] = useState(false);
   const installPhase = (phase: InstallPhase) => {

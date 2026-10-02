@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from meet import plat
+
 # Что должно быть, чтобы расшифровка прошла целиком. Порядок — как в пайплайне:
 # сначала распознавание, потом выравнивание, потом диаризация.
 COMPONENTS = (
@@ -40,10 +42,35 @@ GIGAAM_ERROR_FILE = "gigaam-install-error.txt"
 # и на часовой встрече это часы вместо минут.
 TORCH_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
 TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
+# Профиль «Apple Silicon» (macOS, экспериментально): torch — с PyPI (колёса
+# macOS arm64 там с поддержкой MPS), пакеты — как у CPU (extra engine-mac):
+# faster-whisper на процессоре (int8), GigaAM на процессоре, pyannote — на MPS,
+# если он есть. Индекса PyTorch у него нет.
+MAC_PROFILE = "mac"
+PROFILES = ("cuda", "cpu", MAC_PROFILE)
 # torch для движка установщика — одна минорная версия на оба профиля: без пина
 # CPU-индекс отдавал 2.14, CUDA-индекс — 2.11. Смена пина — вместе со
 # scripts/build_release.ps1 ($TorchSpecs, тест следит).
 TORCH_SPECS = ("torch==2.11.*", "torchaudio==2.11.*")
+
+
+def torch_index(profile: str) -> str | None:
+    """Индекс колёс torch профиля; None — PyPI (Apple Silicon)."""
+    if profile == "cuda":
+        return TORCH_CUDA_INDEX
+    if profile == MAC_PROFILE:
+        return None
+    return TORCH_CPU_INDEX
+
+
+def python_path(env_dir: str, profile: str) -> str:
+    """Интерпретатор venv движка. Склейкой строк, а не через os.path: шаги
+    воспроизводит инсталлятор на Rust, а фикстуры в tests/fixtures должны
+    совпадать на любой ОС. Windows — `Scripts\\python.exe`, macOS —
+    `bin/python`."""
+    if profile == MAC_PROFILE:
+        return env_dir + "/bin/python"
+    return env_dir + chr(92) + "Scripts" + chr(92) + "python.exe"
 
 # GigaAM (MIT, salute-developers/GigaAM) — русское распознавание для CPU. На
 # PyPI его нет; ставим архивом зафиксированного коммита, а не git+https: у
@@ -81,7 +108,7 @@ CUDA_RUNTIME = ("nvidia-cublas-cu12", "nvidia-cudnn-cu12")
 # человек должен узнать об этом до нажатия, а не по счётчику трафика. CUDA —
 # замер 01.10.2026: колёса окружения весят 4,4 ГБ (torch cu128 2,75 ГБ,
 # nvidia-cudnn 0,74, nvidia-cublas 0,55).
-DOWNLOAD_HINT_GB = {"cuda": 4.5, "cpu": 0.6}
+DOWNLOAD_HINT_GB = {"cuda": 4.5, "cpu": 0.6, MAC_PROFILE: 0.6}
 
 # Время расшифровки / длительность записи — по устройству и движку. Whisper —
 # замер 30.09.2026 на 6-минутном фрагменте встречи
@@ -181,6 +208,15 @@ def gpu() -> dict:
     return {"available": bool(name), "name": name[0] if name else None}
 
 
+def flavor_for(gpu_available: bool) -> str:
+    """Сборка движка для этой машины: macOS — «Apple Silicon», иначе по карте."""
+    from meet import plat
+
+    if plat.is_macos():
+        return MAC_PROFILE
+    return "cuda" if gpu_available else "cpu"
+
+
 def state() -> dict:
     """Состояние движка для настроек: чего не хватает и куда встанет."""
     components = []
@@ -200,8 +236,8 @@ def state() -> dict:
         "missing": missing,
         "components": components,
         "gpu": card,
-        "flavor": "cuda" if card["available"] else "cpu",
-        "download_gb": DOWNLOAD_HINT_GB["cuda" if card["available"] else "cpu"],
+        "flavor": flavor_for(card["available"]),
+        "download_gb": DOWNLOAD_HINT_GB[flavor_for(card["available"])],
         "python": sys.executable,
         "target": str(Path(sys.prefix)),
         "ffmpeg": bool(shutil.which("ffmpeg")),
@@ -218,10 +254,10 @@ def install_steps(flavor: str | None = None) -> list[list[str]]:
     Два шага, а не один: torch живёт на своём индексе, и смешивать его с
     остальными пакетами в одной команде — верный способ утянуть не ту сборку.
     """
-    flavor = flavor or ("cuda" if gpu()["available"] else "cpu")
+    flavor = flavor or flavor_for(gpu()["available"])
     pip = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check"]
-    index = TORCH_CUDA_INDEX if flavor == "cuda" else TORCH_CPU_INDEX
-    steps = [pip + ["torch", "--index-url", index]]
+    index = torch_index(flavor)
+    steps = [pip + ["torch"] + (["--index-url", index] if index else [])]
     extras = list(PACKAGES) + (list(CUDA_RUNTIME) if flavor == "cuda" else [])
     steps.append(pip + extras)
     steps.append(pip + list(OPTIONAL_PACKAGES))
@@ -259,8 +295,9 @@ def install(flavor: str | None = None, on_line=None, runner=None) -> int:
 
 
 def profile_for(gpu: dict) -> str:
-    """Профиль зависимостей по снимку `gpu()`: карта видна — cuda, иначе cpu."""
-    return "cuda" if gpu.get("available") else "cpu"
+    """Профиль зависимостей по снимку `gpu()`: карта видна — cuda, иначе cpu;
+    на macOS — всегда «Apple Silicon» (`mac`)."""
+    return flavor_for(bool(gpu.get("available")))
 
 
 def estimate_text(duration_s: float, profile: str) -> str:
@@ -278,31 +315,31 @@ def uv_steps(uv: str, env_dir: str, wheel: str, profile: str,
              constraints: str | None = None) -> list[list[str]]:
     """Команды установки колеса в приватный venv через uv.
 
-    Путь к python собирается склейкой строк, а не через os.path: шаги
-    воспроизводит и инсталлятор на Rust, и фикстуры в tests/fixtures должны
-    совпадать на любой ОС. Установка только под Windows, разделитель — «\».
+    Путь к python — `python_path` (склейкой строк: шаги воспроизводит
+    инсталлятор на Rust, фикстуры в tests/fixtures совпадают на любой ОС).
+    Профиль `mac` (Apple Silicon) ставит torch с PyPI, без `--index-url`.
 
     `constraints` — файл точных версий всего дерева (`uv pip compile` при
     сборке установщика, ресурс `constraints-<профиль>.txt`): без него каждый
     пользователь получал бы те версии, что вышли к дню установки.
     """
-    python = env_dir + chr(92) + "Scripts" + chr(92) + "python.exe"
-    index = TORCH_CUDA_INDEX if profile == "cuda" else TORCH_CPU_INDEX
-    pip = [uv, "pip", "install", "--python", python]
+    index = torch_index(profile)
+    pip = [uv, "pip", "install", "--python", python_path(env_dir, profile)]
     pinned = ["--constraint", constraints] if constraints else []
     return [
         [uv, "python", "install", "3.12"],
         [uv, "venv", "--python", "3.12", env_dir],
-        pip + list(TORCH_SPECS) + ["--index-url", index] + pinned,
+        pip + list(TORCH_SPECS) + (["--index-url", index] if index else []) + pinned,
         pip + [f"{wheel}[engine-{profile}]"] + pinned,
     ]
 
 
 def uv_gigaam_step(uv: str, env_dir: str, wheel: str,
-                   constraints: str | None = None) -> list[str]:
+                   constraints: str | None = None, profile: str = "cpu") -> list[str]:
     """Необязательный шаг установщика после uv_steps: extra `gigaam` того же
-    колеса. Зеркало engine.rs `uv_gigaam_step` (фикстуры uv_gigaam_step*.json)."""
-    python = env_dir + chr(92) + "Scripts" + chr(92) + "python.exe"
+    колеса. Зеркало engine.rs `uv_gigaam_step` (фикстуры uv_gigaam_step*.json).
+    Профиль нужен только раскладке venv (`python_path`)."""
+    python = python_path(env_dir, profile)
     pinned = ["--constraint", constraints] if constraints else []
     return [uv, "pip", "install", "--python", python, f"{wheel}[gigaam]"] + pinned
 
@@ -317,7 +354,7 @@ def _run(argv: list[str], on_line) -> int:
             # системный прокси Windows не читают.
             env=netproxy.settings_env(),
             text=True, encoding="utf-8", errors="replace", bufsize=1,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            creationflags=plat.no_window(),
         )
     except OSError as e:
         if on_line:

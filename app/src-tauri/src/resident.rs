@@ -25,10 +25,14 @@ use tauri::{AppHandle, Manager};
 use crate::api;
 use crate::engine;
 use crate::logs::{self, shell_log};
+use crate::platform;
 use crate::tray::{self, Notice};
 use crate::upgrade;
 
+#[cfg(windows)]
 const EXE: &str = "meet-tray.exe";
+#[cfg(not(windows))]
+const EXE: &str = "meet-tray";
 /// Явный путь к резиденту — первым кандидатом. Для разработки из рабочей
 /// копии без своего `.venv` (venv живёт в основном клоне) и для отладки.
 const OVERRIDE_ENV: &str = "MEET_RESIDENT";
@@ -60,7 +64,8 @@ pub struct Endpoint {
 }
 
 /// Та же папка, что `paths.data_dir()` в Python: `MEET_DATA_DIR` (портативный
-/// режим, тесты) или `%LOCALAPPDATA%\meet`.
+/// режим, тесты) или `%LOCALAPPDATA%\meet` (macOS — `~/Library/Application
+/// Support/meet`, `platform::data_root`).
 pub fn data_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("MEET_DATA_DIR") {
         let dir = dir.to_string_lossy();
@@ -68,8 +73,7 @@ pub fn data_dir() -> PathBuf {
             return PathBuf::from(dir.trim());
         }
     }
-    let base = std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into());
-    PathBuf::from(base).join("meet")
+    platform::data_root().join("meet")
 }
 
 pub fn read_endpoint() -> Option<Endpoint> {
@@ -133,7 +137,7 @@ pub fn candidates(
     }
     // target\debug → target → src-tauri → app → корень репозитория
     if let Some(repo) = exe_dir.ancestors().nth(4).filter(|_| dev) {
-        list.push(repo.join(".venv").join("Scripts").join(EXE));
+        list.push(repo.join(".venv").join(platform::venv_bin()).join(EXE));
     }
     list.push(PathBuf::from(EXE));
     list
@@ -165,7 +169,7 @@ pub fn launch(candidate: &Path, parent_pid: u32) -> (PathBuf, Vec<String>) {
                 .parent()
                 .is_some_and(|venv| venv.join("pyvenv.cfg").is_file())
         })
-        .map(|scripts| scripts.join("python.exe"))
+        .map(|scripts| scripts.join(platform::exe("python")))
         .filter(|python| python.is_file());
     match venv_python {
         Some(python) => {
@@ -315,9 +319,9 @@ pub fn pid_alive(pid: u32) -> bool {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
 pub fn pid_alive(pid: u32) -> bool {
-    pid != 0 && Path::new(&format!("/proc/{pid}")).exists()
+    platform::pid_alive(pid)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -792,6 +796,8 @@ impl Supervisor {
             }
             redirect_output(&mut command, &program);
             hide_console(&mut command);
+            // macOS: своя группа процессов — `kill_tree` гасит её целиком.
+            platform::own_group(&mut command);
             match command.spawn() {
                 Ok(mut child) => {
                     let pid = child.id();
@@ -1003,6 +1009,13 @@ pub(crate) fn hide_console(command: &mut Command) {
 }
 
 /// Убить процесс с потомками: лаунчер venv держит под собой сам Python.
+/// macOS: резидент — лидер своей группы (`platform::own_group`).
+#[cfg(unix)]
+fn kill_tree(pid: u32) {
+    platform::kill_group(pid, true);
+}
+
+#[cfg(windows)]
 fn kill_tree(pid: u32) {
     let mut command = Command::new("taskkill");
     command
@@ -1019,13 +1032,17 @@ fn kill_tree(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
     use std::ffi::OsStr;
     use std::path::Path;
 
+    #[cfg(windows)]
     const DEV_EXE_DIR: &str = r"C:\repo\app\src-tauri\target\debug";
+    #[cfg(windows)]
     const DEV_VENV: &str = r"C:\repo\.venv\Scripts\meet-tray.exe";
 
     /// Папка данных с окружением движка `0.2.0`, маркер — версии `marker`.
+    #[cfg(windows)]
     fn data_with_engine(name: &str, marker: Option<&str>) -> TempTree {
         let tree = TempTree::new(name, &[r"engine\0.2.0\Scripts\meet-tray.exe"]);
         if let Some(version) = marker {
@@ -1038,6 +1055,7 @@ mod tests {
         tree
     }
 
+    #[cfg(windows)]
     #[test]
     fn without_engine_dev_venv_then_path() {
         // Dev-режим как раньше: движок не установлен — резидент из .venv.
@@ -1049,6 +1067,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn installed_engine_goes_before_dev_venv() {
         let data = data_with_engine("cand-engine", Some("0.2.0"));
@@ -1066,6 +1085,7 @@ mod tests {
         assert_eq!(list, vec![engine, PathBuf::from("meet-tray.exe")]);
     }
 
+    #[cfg(windows)]
     #[test]
     fn engine_of_another_version_is_not_a_candidate() {
         // Маркер 0.1.0 в папке 0.2.0 — окружение не этой версии.
@@ -1082,6 +1102,7 @@ mod tests {
         assert_eq!(list, vec![PathBuf::from("meet-tray.exe")]);
     }
 
+    #[cfg(windows)]
     #[test]
     fn meet_resident_env_goes_before_everything() {
         let data = data_with_engine("cand-env", Some("0.2.0"));
@@ -1098,6 +1119,7 @@ mod tests {
         assert_eq!(list.last().unwrap(), Path::new("meet-tray.exe"));
     }
 
+    #[cfg(windows)]
     #[test]
     fn blank_meet_resident_env_is_ignored() {
         let data = TempTree::new("cand-blank", &[]);
@@ -1111,6 +1133,7 @@ mod tests {
         assert_eq!(list[0], Path::new(DEV_VENV));
     }
 
+    #[cfg(windows)]
     #[test]
     fn release_build_never_looks_into_a_dev_venv() {
         // Установленное приложение не должно подхватить .venv из папки,
@@ -1172,6 +1195,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn venv_launcher_runs_through_console_python() {
         let tree = TempTree::new(
@@ -1198,6 +1222,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn non_venv_resident_is_run_as_is() {
         // MEET_RESIDENT на exe вне venv (без pyvenv.cfg рядом).
@@ -1209,6 +1234,37 @@ mod tests {
         // Голое имя (поиск по PATH) — тоже как есть.
         let (program, _) = launch(Path::new("meet-tray.exe"), 7);
         assert_eq!(program, Path::new("meet-tray.exe"));
+    }
+
+    /// macOS: venv движка — `bin/`, программы без `.exe`.
+    #[cfg(unix)]
+    #[test]
+    fn mac_engine_candidate_and_launch_use_the_unix_venv() {
+        let data = TempTree::new("cand-mac", &["engine/0.3.0/bin/meet-tray"]);
+        std::fs::write(
+            data.0.join("engine/0.3.0/installed.json"),
+            engine::marker_json("0.3.0", "mac", "2026-10-02 03:00:00Z", None),
+        )
+        .unwrap();
+        let exe_dir = Path::new("/Applications/Meet.app/Contents/MacOS");
+        let list = candidates(exe_dir, None, &data.0, "0.3.0", false);
+        let engine = data.0.join("engine/0.3.0/bin/meet-tray");
+        assert_eq!(list, vec![engine.clone(), PathBuf::from("meet-tray")]);
+        std::fs::write(data.0.join("engine/0.3.0/pyvenv.cfg"), b"").unwrap();
+        std::fs::write(data.0.join("engine/0.3.0/bin/python"), b"").unwrap();
+        let (program, arguments) = launch(&engine, 11);
+        assert_eq!(program, data.0.join("engine/0.3.0/bin/python"));
+        assert_eq!(&arguments[2..], args(11).as_slice());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pid_alive_on_unix_sees_a_finished_child_as_dead() {
+        assert!(pid_alive(std::process::id()));
+        let mut child = Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        assert!(!pid_alive(pid));
     }
 
     #[test]
@@ -1313,6 +1369,7 @@ mod tests {
         assert_eq!(lock_holder("мусор"), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn pid_alive_tells_a_living_process_from_a_finished_one() {
         assert!(pid_alive(std::process::id()));

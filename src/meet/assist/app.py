@@ -44,7 +44,11 @@ def _pid_alive(pid: int) -> bool:
     """Жив ли процесс — по коду выхода, а не по OpenProcess: оболочка держит
     хэндл резидента, и открыть уже умерший процесс по нему удаётся
     (`recorder._pid_alive` сказал бы «жив»). os.kill(pid, 0) на Windows —
-    это TerminateProcess, его нельзя."""
+    это TerminateProcess, его нельзя. На macOS — `plat.pid_alive` (сигнал 0)."""
+    from meet import plat
+
+    if not plat.is_windows():
+        return plat.pid_alive(pid)
     import ctypes
     from ctypes import wintypes
 

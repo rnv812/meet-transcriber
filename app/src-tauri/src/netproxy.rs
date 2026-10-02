@@ -213,7 +213,75 @@ pub fn read_internet_settings() -> InternetSettings {
     }
 }
 
-#[cfg(not(windows))]
+/// Системный прокси macOS из вывода `scutil --proxy` — в форме WinINET
+/// (как `meet.netproxy.scutil_values` в Python): `server` вида
+/// `https=h:p;http=h:p`, исключения (`ExceptionsList`) — через «;». PAC не
+/// поддерживается, как и на Windows.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn from_scutil(text: &str) -> InternetSettings {
+    let mut values: Vec<(String, String)> = Vec::new();
+    let mut exceptions: Vec<String> = Vec::new();
+    let mut in_exceptions = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line == "}" {
+            in_exceptions = false;
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let (key, value) = (key.trim(), value.trim());
+        if in_exceptions {
+            if !value.is_empty() {
+                exceptions.push(value.to_string());
+            }
+        } else if value.starts_with("<array>") {
+            in_exceptions = key == "ExceptionsList";
+        } else {
+            values.push((key.to_string(), value.to_string()));
+        }
+    }
+    let get = |name: &str| {
+        values
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    };
+    let mut servers = Vec::new();
+    for (proto, prefix) in [("https", "HTTPS"), ("http", "HTTP")] {
+        let enabled = get(&format!("{prefix}Enable")) == Some("1");
+        let host = get(&format!("{prefix}Proxy")).unwrap_or("").trim();
+        if enabled && !host.is_empty() {
+            match get(&format!("{prefix}Port")).filter(|port| !port.is_empty()) {
+                Some(port) => servers.push(format!("{proto}={host}:{port}")),
+                None => servers.push(format!("{proto}={host}")),
+            }
+        }
+    }
+    InternetSettings {
+        enabled: Some(u32::from(!servers.is_empty())),
+        server: (!servers.is_empty()).then(|| servers.join(";")),
+        overrides: (!exceptions.is_empty()).then(|| exceptions.join(";")),
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn read_internet_settings() -> InternetSettings {
+    let output = std::process::Command::new("scutil")
+        .arg("--proxy")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output();
+    match output {
+        Ok(output) if output.status.success() => {
+            from_scutil(&String::from_utf8_lossy(&output.stdout))
+        }
+        _ => InternetSettings::default(),
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn read_internet_settings() -> InternetSettings {
     InternetSettings::default()
 }
@@ -348,5 +416,47 @@ mod tests {
             get(&env, "NO_PROXY").as_deref(),
             Some("intranet,localhost,127.0.0.1,::1")
         );
+    }
+    fn mac_fixture(name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/mac")
+            .join(name);
+        std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+    }
+
+    #[test]
+    fn scutil_proxy_becomes_wininet_values() {
+        let settings = from_scutil(&mac_fixture("scutil_proxy.txt"));
+        assert_eq!(settings.enabled, Some(1));
+        assert_eq!(
+            settings.server.as_deref(),
+            Some("https=proxy.example.test:3129;http=proxy.example.test:3128")
+        );
+        assert_eq!(
+            settings.overrides.as_deref(),
+            Some("*.local;169.254/16;intranet.example")
+        );
+        let env = proxy_env_from(false, None, &settings);
+        let get = |name: &str| {
+            env.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string_lossy().into_owned())
+        };
+        assert_eq!(
+            get("HTTPS_PROXY").as_deref(),
+            Some("http://proxy.example.test:3129")
+        );
+        assert_eq!(
+            get("NO_PROXY").as_deref(),
+            Some("localhost,127.0.0.1,::1,.local,169.254/16,intranet.example")
+        );
+    }
+
+    #[test]
+    fn scutil_pac_only_is_not_a_proxy() {
+        let settings = from_scutil(&mac_fixture("scutil_pac.txt"));
+        assert_eq!(settings.enabled, Some(0));
+        assert_eq!(settings.server, None);
+        assert!(proxy_env_from(false, None, &settings).is_empty());
     }
 }

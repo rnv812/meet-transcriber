@@ -25,7 +25,9 @@ IMPORTANT: ни одна функция не кэширует результат
 import os
 from pathlib import Path
 
-APP_DIR_NAME = "meet"
+from meet import plat
+
+APP_DIR_NAME = plat.APP_DIR_NAME
 
 
 def _env_path(name: str) -> Path | None:
@@ -51,7 +53,8 @@ def is_dev() -> bool:
 
 
 def data_dir() -> Path:
-    """Машинно-локальное состояние: `%LOCALAPPDATA%/meet`.
+    """Машинно-локальное состояние: `%LOCALAPPDATA%/meet` (на macOS —
+    `~/Library/Application Support/meet`, см. `plat.data_root`).
 
     `MEET_DATA_DIR` — override для тестов и портативного режима. Фоллбэк на "."
     сохранён от `tray._state_dir()`: под pythonw в автозагрузке переменной среды
@@ -60,7 +63,7 @@ def data_dir() -> Path:
     override = _env_path("MEET_DATA_DIR")
     if override is not None:
         return override
-    return Path(os.environ.get("LOCALAPPDATA", ".")) / APP_DIR_NAME
+    return plat.data_root() / APP_DIR_NAME
 
 
 def config_path() -> Path:

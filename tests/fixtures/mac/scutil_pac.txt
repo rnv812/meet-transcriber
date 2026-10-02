@@ -1,0 +1,8 @@
+<dictionary> {
+  FTPPassive : 1
+  HTTPEnable : 0
+  HTTPSEnable : 0
+  ProxyAutoConfigEnable : 1
+  ProxyAutoConfigURLString : http://wpad.example.test/proxy.pac
+  SOCKSEnable : 0
+}

@@ -137,19 +137,49 @@ def diarize_wav(
     # На машине без NVIDIA (или с CPU-сборкой torch) pyannote идёт на CPU —
     # медленнее, но работает; раньше здесь был жёсткий cuda и падение.
     use_cuda = resolve_device() == "cuda" and torch.cuda.is_available()
-    pipe.to(torch.device("cuda" if use_cuda else "cpu"))
+    device = pick_device(torch, use_cuda)
+    pipe.to(device)
     if clustering_threshold is not None:
         params = pipe.parameters(instantiated=True)
         params.setdefault("clustering", {})["threshold"] = float(clustering_threshold)
         pipe.instantiate(params)
     waveform, rate = _load_wav(path)
-    result = pipe(
-        {"waveform": waveform, "sample_rate": rate},
-        num_speakers=num_speakers,
-        min_speakers=min_speakers,
-        max_speakers=max_speakers,
-    )
+
+    def run():
+        return pipe(
+            {"waveform": waveform, "sample_rate": rate},
+            num_speakers=num_speakers,
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
+
+    try:
+        result = run()
+    except Exception as e:
+        if device.type != "mps":
+            raise
+        # MPS (Apple Silicon) поддерживает не все операции: тогда — процессор.
+        print(f"Диаризация на MPS не прошла ({type(e).__name__}) — повторяю на процессоре")
+        pipe.to(torch.device("cpu"))
+        result = run()
     return _to_diarization(result, exclusive=exclusive)
+
+
+def pick_device(torch, use_cuda: bool):
+    """Устройство pyannote: CUDA, если выбрана и есть; на macOS — MPS (Apple
+    Silicon), если torch его видит; иначе процессор. Недостающие на MPS
+    операции torch выполняет на процессоре (PYTORCH_ENABLE_MPS_FALLBACK)."""
+    if use_cuda:
+        return torch.device("cuda")
+    from meet import plat
+
+    mps = getattr(getattr(torch, "backends", None), "mps", None)
+    if plat.is_macos() and mps is not None and mps.is_available():
+        import os
+
+        os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
 def _to_diarization(result, exclusive: bool = False) -> Diarization:
