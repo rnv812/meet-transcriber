@@ -91,10 +91,14 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   // На весь экран — всё содержимое, как у развёрнутой.
   const open = view.expanded || view.maximized;
 
-  // Esc возвращает обычный размер (клавиатура у панели, только если по ней щёлкнули).
+  // Esc возвращает обычный размер (клавиатура у панели, только если по ней
+  // щёлкнули). В поле вопроса Esc — дело поля, окно не трогаем.
   useEffect(() => {
     if (!view.maximized) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMaximized(false); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || (e.target as Element | null)?.closest?.("input, textarea")) return;
+      setMaximized(false);
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [view.maximized, setMaximized]);

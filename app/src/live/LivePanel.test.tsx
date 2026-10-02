@@ -173,6 +173,15 @@ test("Esc на весь экран возвращает обычный разм�
   expect(screen.getByRole("button", { name: "На весь экран" })).toBeInTheDocument();
 });
 
+test("Esc в поле вопроса не возвращает обычный размер", async () => {
+  render(<LivePanel endpoint={ep} />);
+  await userEvent.click(screen.getByRole("button", { name: "На весь экран" }));
+  await userEvent.click(screen.getByRole("textbox", { name: "Вопрос ассистенту" }));
+  await userEvent.keyboard("{Escape}");
+  expect(calls("live_set_maximized")).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Обычный размер" })).toBeInTheDocument();
+});
+
 test("шапка: нажатие тащит окно, двойной щелчок — на весь экран и обратно", async () => {
   render(<LivePanel endpoint={ep} />);
   await act(async () => {});

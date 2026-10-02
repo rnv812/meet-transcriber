@@ -5,7 +5,7 @@
 // него в denylist): кроме позиции и размера нужно помнить высоту развёрнутой
 // панели отдельно от свёрнутой и «поверх всех окон». Всё это лежит в
 // `<data_dir>/live_window.json` и пишется с задержкой, когда окно перестало
-// двигаться.
+// двигаться, а при закрытии панели и выходе из приложения — сразу.
 //
 // Растягивание за края — штатное у Tauri 2.11 на Windows: окну без рамки с
 // `resizable(true)` tauri-runtime-wry (`undecorated_resizing.rs`) ставит
@@ -45,9 +45,17 @@ const MIN_WIDTH: f64 = 300.0;
 /// Свёрнутая: шапка и последняя реплика. Это же минимальная высота окна.
 const COLLAPSED_HEIGHT: f64 = 120.0;
 const DEFAULT_EXPANDED_HEIGHT: f64 = 520.0;
-/// С этой высоты панель развёрнута: человек вытянул свёрнутую — она
-/// развернулась, сжал развёрнутую ниже — свернулась.
-const EXPANDED_FROM: f64 = 200.0;
+/// Вид по высоте, с гистерезисом: свёрнутую вытянули выше `EXPAND_ABOVE` —
+/// развернулась, развёрнутую сжали ниже `COLLAPSE_BELOW` — свернулась; между
+/// ними вид прежний (у порога содержимое не мигает). Высота развёрнутой
+/// запоминается только от `EXPAND_ABOVE`: «Развернуть» никогда не открывает
+/// огрызок.
+const COLLAPSE_BELOW: f64 = 170.0;
+const EXPAND_ABOVE: f64 = 230.0;
+/// Сколько после своей смены размера оболочка не верит событиям окна:
+/// промежуточные Moved/Resized (верх уже сдвинут, высота ещё старая) — не
+/// выбор человека. Снимается раньше — последним Resized с целевой высотой.
+const OWN_RESIZE_QUIET: Duration = Duration::from_millis(500);
 /// Отступ от краёв рабочей области при размещении в углу.
 const MARGIN: f64 = 16.0;
 /// Шапка панели: за неё окно двигают, её должно быть видно на экране.
@@ -157,7 +165,7 @@ impl LiveGeometry {
         if !(self.width.is_finite() && self.width >= MIN_WIDTH) {
             self.width = DEFAULT_WIDTH;
         }
-        if !(self.expanded_height.is_finite() && self.expanded_height >= EXPANDED_FROM) {
+        if !(self.expanded_height.is_finite() && self.expanded_height >= EXPAND_ABOVE) {
             self.expanded_height = DEFAULT_EXPANDED_HEIGHT;
         }
         self
@@ -183,12 +191,27 @@ pub struct Sample {
     pub width: f64,
     pub height: f64,
     pub maximized: bool,
+    /// Событие Resized (а не Moved): только оно меняет размер и вид.
+    pub resized: bool,
 }
 
-/// Новая геометрия после движения окна. На весь экран — только отметка:
-/// обычные позиция и размер остаются прежними, к ним окно и вернётся.
-/// Высота решает вид: вытянули свёрнутую — развёрнута (и это её новая
-/// высота), сжали развёрнутую до свёрнутой — свёрнута.
+/// Вид после того, как человек изменил высоту: гистерезис между
+/// `COLLAPSE_BELOW` и `EXPAND_ABOVE`.
+pub fn next_expanded(expanded: bool, height: f64) -> bool {
+    if !height.is_finite() {
+        return expanded;
+    }
+    if expanded {
+        height >= COLLAPSE_BELOW
+    } else {
+        height > EXPAND_ABOVE
+    }
+}
+
+/// Новая геометрия после движения окна человеком. На весь экран — только
+/// отметка: обычные позиция и размер остаются прежними, к ним окно и вернётся.
+/// Moved меняет только место; Resized — ширину и вид. Высота развёрнутой
+/// здесь не трогается: её фиксирует `commit`, когда окно перестало меняться.
 pub fn record(geometry: &LiveGeometry, sample: Sample) -> LiveGeometry {
     let mut next = geometry.clone();
     next.maximized = sample.maximized;
@@ -197,14 +220,26 @@ pub fn record(geometry: &LiveGeometry, sample: Sample) -> LiveGeometry {
     }
     next.x = Some(sample.x);
     next.y = Some(sample.y);
+    if !sample.resized {
+        return next;
+    }
     if sample.width.is_finite() && sample.width > 0.0 {
         next.width = sample.width;
     }
     if sample.height.is_finite() && sample.height > 0.0 {
-        next.expanded = sample.height >= EXPANDED_FROM;
-        if next.expanded {
-            next.expanded_height = sample.height;
-        }
+        next.expanded = next_expanded(geometry.expanded, sample.height);
+    }
+    next
+}
+
+/// Что записать в файл: последняя высота окна (`height`, логическая)
+/// становится высотой развёрнутой, только если панель в итоге развёрнута,
+/// не на весь экран, высоту выбрал человек (а не ужал монитор — `capped`) и
+/// она не меньше `EXPAND_ABOVE`. Иначе остаётся прежняя.
+pub fn commit(geometry: &LiveGeometry, height: f64, capped: bool) -> LiveGeometry {
+    let mut next = geometry.clone();
+    if next.expanded && !next.maximized && !capped && height.is_finite() && height >= EXPAND_ABOVE {
+        next.expanded_height = height;
     }
     next
 }
@@ -353,20 +388,80 @@ pub fn write_geometry(data_dir: &Path, geometry: &LiveGeometry) -> std::io::Resu
     std::fs::rename(&staged, data_dir.join(STATE_FILE))
 }
 
+/// Своя смена размера идёт: до `until` события окна — её эхо, а не выбор
+/// человека. `height` — целевая внутренняя высота (физическая): Resized с ней
+/// — последнее эхо, после него снова слушаем человека.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Quiet {
+    pub until: Instant,
+    pub height: Option<u32>,
+}
+
+/// Чьё событие окна.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Echo {
+    /// Человек (или система) — запомнить.
+    User,
+    /// Промежуточное эхо своей смены размера — пропустить.
+    Own,
+    /// Последнее эхо (Resized с целевой высотой) — пропустить и снова слушать.
+    OwnLast,
+}
+
+pub fn classify(quiet: Option<Quiet>, now: Instant, resized: bool, height: u32) -> Echo {
+    match quiet {
+        Some(quiet) if now < quiet.until => {
+            if resized && quiet.height == Some(height) {
+                Echo::OwnLast
+            } else {
+                Echo::Own
+            }
+        }
+        _ => Echo::User,
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     /// Читается из файла при первом открытии панели за запуск оболочки.
     geometry: Option<LiveGeometry>,
+    /// Последняя высота окна (логическая) — кандидат в высоту развёрнутой,
+    /// фиксируется `commit` при записи.
+    height: Option<f64>,
+    /// Высоту окна ужал монитор (запомненная не влезла) — её не фиксируем.
+    capped: bool,
+    quiet: Option<Quiet>,
     /// Когда геометрия менялась последний раз (для отложенной записи).
     touched: Option<Instant>,
+    /// Есть незаписанные изменения.
+    dirty: bool,
     /// Поток отложенной записи уже ждёт.
     saving: bool,
+}
+
+impl Inner {
+    fn geometry(&mut self) -> &mut LiveGeometry {
+        self.geometry
+            .get_or_insert_with(|| read_geometry(&resident::data_dir()))
+    }
+
+    /// Зафиксировать высоту развёрнутой (см. `commit`).
+    fn settle(&mut self) -> LiveGeometry {
+        let (height, capped) = (self.height, self.capped);
+        let geometry = self.geometry();
+        if let Some(height) = height {
+            *geometry = commit(geometry, height, capped);
+        }
+        geometry.clone()
+    }
 }
 
 /// Геометрия панели в памяти оболочки (`app.manage`).
 #[derive(Default, Clone)]
 pub struct LivePanel {
     inner: Arc<Mutex<Inner>>,
+    /// Файл пишут поток отложенной записи, закрытие окна и выход — по одному.
+    writing: Arc<Mutex<()>>,
 }
 
 impl LivePanel {
@@ -377,24 +472,22 @@ impl LivePanel {
     }
 
     fn current(&self) -> LiveGeometry {
-        let mut inner = self.lock();
-        inner
-            .geometry
-            .get_or_insert_with(|| read_geometry(&resident::data_dir()))
-            .clone()
+        self.lock().geometry().clone()
     }
 
-    /// Поменять геометрию; вернуть (было, стало).
-    fn update(&self, change: impl FnOnce(&mut LiveGeometry)) -> (LiveGeometry, LiveGeometry) {
+    /// Поменять геометрию (и остальное состояние); вернуть (было, стало).
+    fn update(
+        &self,
+        change: impl FnOnce(&mut LiveGeometry, &mut Inner),
+    ) -> (LiveGeometry, LiveGeometry) {
         let mut inner = self.lock();
-        let geometry = inner
-            .geometry
-            .get_or_insert_with(|| read_geometry(&resident::data_dir()));
+        let mut geometry = inner.geometry().clone();
         let before = geometry.clone();
-        change(geometry);
-        let after = geometry.clone();
+        change(&mut geometry, &mut inner);
+        inner.geometry = Some(geometry.clone());
         inner.touched = Some(Instant::now());
-        (before, after)
+        inner.dirty = true;
+        (before, geometry)
     }
 
     /// Записать файл, когда окно перестанет меняться на `SAVE_DELAY`. Пока
@@ -409,24 +502,47 @@ impl LivePanel {
         }
         let panel = self.clone();
         std::thread::spawn(move || {
-            let geometry = loop {
+            loop {
                 let since = {
                     let mut inner = panel.lock();
                     let since = inner.touched.map_or(SAVE_DELAY, |at| at.elapsed());
                     if since >= SAVE_DELAY {
                         inner.saving = false;
-                        break inner.geometry.clone();
+                        break;
                     }
                     since
                 };
                 std::thread::sleep(SAVE_DELAY - since);
-            };
-            if let Some(geometry) = geometry {
-                if let Err(error) = write_geometry(&resident::data_dir(), &geometry) {
-                    shell_log!("панель ассистента: {STATE_FILE} не записался: {error}");
-                }
             }
+            panel.flush();
         });
+    }
+
+    /// Записать незаписанное сейчас (и из потока отложенной записи):
+    /// окно закрывается, приложение выходит.
+    pub fn flush(&self) {
+        let _writing = self
+            .writing
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let geometry = {
+            let mut inner = self.lock();
+            if !inner.dirty {
+                return;
+            }
+            inner.dirty = false;
+            inner.settle()
+        };
+        if let Err(error) = write_geometry(&resident::data_dir(), &geometry) {
+            shell_log!("панель ассистента: {STATE_FILE} не записался: {error}");
+        }
+    }
+}
+
+/// Записать отложенную геометрию панели (выход из приложения).
+pub fn flush(app: &AppHandle) {
+    if let Some(panel) = app.try_state::<LivePanel>() {
+        panel.flush();
     }
 }
 
@@ -440,7 +556,7 @@ pub fn open_live(app: &AppHandle) {
     }
     let panel = app.state::<LivePanel>();
     // На весь экран при открытии не возвращаем (см. `LiveGeometry::maximized`).
-    let (_, geometry) = panel.update(|geometry| geometry.maximized = false);
+    let (_, geometry) = panel.update(|geometry, _| geometry.maximized = false);
     let mut builder =
         WebviewWindowBuilder::new(app, LIVE_LABEL, WebviewUrl::App("live.html".into()))
             .title("meet — ассистент")
@@ -464,12 +580,24 @@ pub fn open_live(app: &AppHandle) {
         .map(|monitors| monitors.iter().map(Screen::of).collect())
         .unwrap_or_default();
     let primary = app.primary_monitor().ok().flatten().map(|m| Screen::of(&m));
-    match restore_rect(&geometry, &screens, primary) {
+    let rect = restore_rect(&geometry, &screens, primary);
+    match rect {
         Some((x, y, width, height)) => {
             builder = builder.position(x, y).inner_size(width, height);
         }
         None => shell_log!("панель ассистента: монитор не найден, позиция по умолчанию"),
     }
+    // События создания окна — не выбор человека; ужатая под монитор высота —
+    // тоже: запомненный размер остаётся прежним.
+    let opened_height = rect.map_or(geometry.height(), |(_, _, _, height)| height);
+    panel.update(|_, inner| {
+        inner.height = Some(opened_height);
+        inner.capped = opened_height < geometry.height();
+        inner.quiet = Some(Quiet {
+            until: Instant::now() + OWN_RESIZE_QUIET,
+            height: None,
+        });
+    });
     if let Err(error) = builder.build() {
         shell_log!("панель ассистента не открылась: {error}");
     }
@@ -478,6 +606,7 @@ pub fn open_live(app: &AppHandle) {
 /// Закрыть панель ассистента (ассистент остановился). Закрыта человеком —
 /// ничего не делаем.
 pub fn close_live(app: &AppHandle) {
+    app.state::<LivePanel>().flush();
     if let Some(window) = app.get_webview_window(LIVE_LABEL) {
         if let Err(error) = window.destroy() {
             shell_log!("панель ассистента не закрылась: {error}");
@@ -488,11 +617,18 @@ pub fn close_live(app: &AppHandle) {
 /// Окно панели сдвинули или изменили его размер (руками, кнопкой, системой):
 /// запомнить и, если сменился вид, сказать странице.
 pub fn on_window_event(window: &Window, event: &WindowEvent) {
-    if window.label() != LIVE_LABEL
-        || !matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_))
-    {
+    if window.label() != LIVE_LABEL {
         return;
     }
+    let resized = match event {
+        WindowEvent::Resized(_) => true,
+        WindowEvent::Moved(_) => false,
+        WindowEvent::Destroyed => {
+            window.state::<LivePanel>().flush();
+            return;
+        }
+        _ => return,
+    };
     // Свёрнутое системой окно (Win+D) — размер нулевой, запоминать нечего.
     if window.is_minimized().unwrap_or(false) {
         return;
@@ -507,18 +643,33 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
     if size.width == 0 || size.height == 0 {
         return;
     }
+    let panel = window.state::<LivePanel>();
+    {
+        let mut inner = panel.lock();
+        match classify(inner.quiet, Instant::now(), resized, size.height) {
+            Echo::Own => return,
+            Echo::OwnLast => {
+                inner.quiet = None;
+                return;
+            }
+            Echo::User => inner.quiet = None,
+        }
+    }
     let sample = Sample {
         x: position.x,
         y: position.y,
         width: f64::from(size.width) / scale,
         height: f64::from(size.height) / scale,
         maximized: window.is_maximized().unwrap_or(false),
+        resized,
     };
-    let panel = window.state::<LivePanel>();
-    let (before, after) = panel.update(|geometry| *geometry = record(geometry, sample));
-    if before == after {
-        return;
-    }
+    let (before, after) = panel.update(|geometry, inner| {
+        *geometry = record(geometry, sample);
+        if resized && !sample.maximized {
+            inner.height = Some(sample.height);
+            inner.capped = false;
+        }
+    });
     if before.view() != after.view() {
         let _ = window.emit_to(LIVE_LABEL, VIEW_EVENT, after.view());
     }
@@ -545,14 +696,20 @@ pub fn live_window_state(app: AppHandle) -> LiveView {
 #[tauri::command]
 pub fn live_set_expanded(app: AppHandle, expanded: bool) -> Result<LiveView, String> {
     let window = live_window(&app)?;
+    let panel = app.state::<LivePanel>();
+    // Всё, что окно делает до конца команды, — эхо. Высоту, до которой
+    // человек дотянул развёрнутую, — зафиксировать до сворачивания.
+    let geometry = {
+        let mut inner = panel.lock();
+        inner.quiet = Some(Quiet {
+            until: Instant::now() + OWN_RESIZE_QUIET,
+            height: None,
+        });
+        inner.settle()
+    };
     if window.is_maximized().map_err(text)? {
         window.unmaximize().map_err(text)?;
     }
-    let panel = app.state::<LivePanel>();
-    let (_, geometry) = panel.update(|geometry| {
-        geometry.expanded = expanded;
-        geometry.maximized = false;
-    });
     let scale = window.scale_factor().map_err(text)?;
     let position = window.outer_position().map_err(text)?;
     // Без рамки и тени внешний размер совпадает с внутренним; для якоря
@@ -570,6 +727,11 @@ pub fn live_set_expanded(app: AppHandle, expanded: bool) -> Result<LiveView, Str
         COLLAPSED_HEIGHT
     };
     let new_height = (wanted * scale).round();
+    // Последнее эхо — Resized с этой высотой; после него снова слушаем человека.
+    panel.lock().quiet = Some(Quiet {
+        until: Instant::now() + OWN_RESIZE_QUIET,
+        height: Some(new_height as u32),
+    });
     let frame = f64::from(outer.height) - f64::from(inner.height);
     let top = resized_top(
         f64::from(position.y),
@@ -600,6 +762,15 @@ pub fn live_set_expanded(app: AppHandle, expanded: bool) -> Result<LiveView, Str
             place()?;
         }
     }
+    let (_, geometry) = panel.update(|geometry, inner| {
+        geometry.expanded = expanded;
+        geometry.maximized = false;
+        geometry.x = Some(position.x);
+        geometry.y = Some(top.round() as i32);
+        inner.height = Some(wanted);
+        // Ужатая монитором высота — не выбор человека: запомненная остаётся.
+        inner.capped = expanded && wanted < geometry.expanded_height;
+    });
     panel.save_later();
     Ok(geometry.view())
 }
@@ -615,7 +786,7 @@ pub fn live_set_maximized(app: AppHandle, maximized: bool) -> Result<LiveView, S
         window.unmaximize().map_err(text)?;
     }
     let panel = app.state::<LivePanel>();
-    let (_, geometry) = panel.update(|geometry| geometry.maximized = maximized);
+    let (_, geometry) = panel.update(|geometry, _| geometry.maximized = maximized);
     panel.save_later();
     Ok(geometry.view())
 }
@@ -628,7 +799,7 @@ pub fn live_set_pinned(app: AppHandle, pinned: bool) -> Result<LiveView, String>
     window.set_always_on_top(pinned).map_err(text)?;
     window.set_skip_taskbar(pinned).map_err(text)?;
     let panel = app.state::<LivePanel>();
-    let (_, geometry) = panel.update(|geometry| geometry.pinned = pinned);
+    let (_, geometry) = panel.update(|geometry, _| geometry.pinned = pinned);
     panel.save_later();
     Ok(geometry.view())
 }
@@ -822,7 +993,7 @@ mod tests {
         assert_eq!(broken.width, 360.0);
         assert_eq!(broken.expanded_height, 520.0);
         let small = LiveGeometry {
-            expanded_height: 150.0,
+            expanded_height: 200.0,
             ..geometry()
         }
         .sanitized();
@@ -836,43 +1007,146 @@ mod tests {
             width,
             height,
             maximized: false,
+            resized: true,
+        }
+    }
+
+    fn moved(x: i32, y: i32) -> Sample {
+        Sample {
+            x,
+            y,
+            width: 360.0,
+            height: 120.0,
+            maximized: false,
+            resized: false,
+        }
+    }
+
+    fn expanded() -> LiveGeometry {
+        LiveGeometry {
+            expanded: true,
+            expanded_height: 640.0,
+            ..geometry()
         }
     }
 
     #[test]
-    fn manual_resize_of_the_expanded_panel_becomes_its_size() {
-        let expanded = LiveGeometry {
-            expanded: true,
-            ..geometry()
-        };
-        let next = record(&expanded, sample(800.0, 640.0));
+    fn manual_resize_of_the_expanded_panel_becomes_its_size_when_saved() {
+        let next = record(&expanded(), sample(800.0, 700.0));
         assert_eq!((next.x, next.y), (Some(10), Some(20)));
-        assert_eq!((next.width, next.expanded_height), (800.0, 640.0));
+        assert_eq!(next.width, 800.0);
         assert!(next.expanded);
+        // Высота развёрнутой фиксируется при записи, не на каждом событии.
+        assert_eq!(next.expanded_height, 640.0);
+        assert_eq!(commit(&next, 700.0, false).expanded_height, 700.0);
     }
 
     #[test]
     fn collapsed_panel_keeps_its_expanded_height() {
-        let expanded = LiveGeometry {
-            expanded: true,
-            expanded_height: 640.0,
-            ..geometry()
-        };
         // Свернули кнопкой: высота 120, ширина та же.
-        let collapsed = record(&expanded, sample(800.0, 120.0));
+        let collapsed = record(&expanded(), sample(800.0, 120.0));
         assert!(!collapsed.expanded);
-        assert_eq!((collapsed.width, collapsed.expanded_height), (800.0, 640.0));
+        assert_eq!(commit(&collapsed, 120.0, false).expanded_height, 640.0);
         // Свёрнутую растянули вширь — развёрнутая высота не меняется.
         let wider = record(&collapsed, sample(900.0, 130.0));
         assert!(!wider.expanded);
-        assert_eq!((wider.width, wider.expanded_height), (900.0, 640.0));
+        assert_eq!(wider.width, 900.0);
+        assert_eq!(commit(&wider, 130.0, false).expanded_height, 640.0);
     }
 
     #[test]
     fn stretching_the_collapsed_panel_down_expands_it() {
         let next = record(&geometry(), sample(360.0, 420.0));
         assert!(next.expanded);
-        assert_eq!(next.expanded_height, 420.0);
+        assert_eq!(commit(&next, 420.0, false).expanded_height, 420.0);
+    }
+
+    #[test]
+    fn mode_has_hysteresis_around_the_threshold() {
+        // Свёрнутая разворачивается только выше 230.
+        assert!(!next_expanded(false, 200.0));
+        assert!(!next_expanded(false, 230.0));
+        assert!(next_expanded(false, 231.0));
+        // Развёрнутая сворачивается только ниже 170.
+        assert!(next_expanded(true, 200.0));
+        assert!(next_expanded(true, 170.0));
+        assert!(!next_expanded(true, 169.0));
+        assert!(next_expanded(true, f64::NAN));
+    }
+
+    #[test]
+    fn dragging_through_the_threshold_does_not_flip_or_leave_a_stub() {
+        // Регрессия: тянули развёрнутую вниз через 200 — вид мигал, а высота
+        // развёрнутой становилась огрызком.
+        let mut g = expanded();
+        for height in [400.0, 250.0, 205.0, 195.0, 205.0, 180.0] {
+            g = record(&g, sample(360.0, height));
+            assert!(g.expanded, "{height}");
+        }
+        // Остановились на 180: развёрнута, но такую высоту не запоминаем.
+        assert_eq!(commit(&g, 180.0, false).expanded_height, 640.0);
+        // Дотянули до 150 — свернулась; запомненная прежняя.
+        g = record(&g, sample(360.0, 150.0));
+        assert!(!g.expanded);
+        assert_eq!(commit(&g, 150.0, false).expanded_height, 640.0);
+        // Обратно до 210 — всё ещё свёрнута.
+        g = record(&g, sample(360.0, 210.0));
+        assert!(!g.expanded);
+    }
+
+    #[test]
+    fn moved_events_never_change_the_mode_or_size() {
+        // Регрессия: Moved от своей смены размера (верх сдвинут, высота ещё
+        // 120) сворачивал только что развёрнутую панель.
+        let g = record(&expanded(), moved(40, 50));
+        assert!(g.expanded);
+        assert_eq!((g.x, g.y, g.width), (Some(40), Some(50), 360.0));
+        let collapsed = record(
+            &geometry(),
+            Sample {
+                height: 900.0,
+                ..moved(1, 2)
+            },
+        );
+        assert!(!collapsed.expanded);
+    }
+
+    #[test]
+    fn height_capped_by_the_monitor_is_not_remembered() {
+        let g = expanded();
+        assert_eq!(commit(&g, 500.0, true).expanded_height, 640.0);
+        assert_eq!(commit(&g, 500.0, false).expanded_height, 500.0);
+        // На весь экран — тоже не запоминаем.
+        let full = LiveGeometry {
+            maximized: true,
+            ..g
+        };
+        assert_eq!(commit(&full, 1040.0, false).expanded_height, 640.0);
+    }
+
+    #[test]
+    fn own_resize_echo_is_skipped_until_the_target_height_arrives() {
+        let now = Instant::now();
+        let quiet = Some(Quiet {
+            until: now + Duration::from_millis(500),
+            height: Some(780),
+        });
+        // Moved и промежуточный Resized — эхо.
+        assert_eq!(classify(quiet, now, false, 180), Echo::Own);
+        assert_eq!(classify(quiet, now, true, 180), Echo::Own);
+        assert_eq!(classify(quiet, now, false, 780), Echo::Own);
+        // Resized с целевой высотой — последнее эхо.
+        assert_eq!(classify(quiet, now, true, 780), Echo::OwnLast);
+        // Время вышло — снова человек.
+        let later = now + Duration::from_millis(600);
+        assert_eq!(classify(quiet, later, true, 180), Echo::User);
+        assert_eq!(classify(None, now, true, 180), Echo::User);
+        // Без целевой высоты (открытие окна) — эхо до конца срока.
+        let opening = Some(Quiet {
+            until: now + Duration::from_millis(500),
+            height: None,
+        });
+        assert_eq!(classify(opening, now, true, 780), Echo::Own);
     }
 
     #[test]
@@ -893,6 +1167,7 @@ mod tests {
                 width: 1920.0,
                 height: 1040.0,
                 maximized: true,
+                resized: true,
             },
         );
         assert!(full.maximized);
