@@ -40,6 +40,13 @@ fn main() {
         // `setup` успеют что-то сделать (второй трей, второй резидент). Колбэк
         // приходит в первый экземпляр внутри WM_COPYDATA, пока второй ждёт
         // ответа, — окно строим позже, отдельной задачей главного потока.
+        // IMPORTANT: `run_on_main_thread`, вызванный с главного потока,
+        // выполняет задачу на месте, то есть внутри WM_COPYDATA: WebView2 там
+        // не создаётся, и виснут оба экземпляра. Поэтому зовём его из другого
+        // потока — задача уходит в очередь цикла событий.
+        //
+        // Второй запуск с `--autostart` (две записи автозапуска) окна не
+        // открывает: при входе в Windows — только трей.
         //
         // `--quit` (установщик новой версии перед заменой файлов) — тот же
         // «Выход», что в трее: резидент сохраняет запись и гасится, затем
@@ -51,8 +58,15 @@ fn main() {
                 return;
             }
             let recording = windows::recording_arg(&args);
+            if recording.is_none() && autostart::autostarted(&args) {
+                return;
+            }
             let handle = app.clone();
-            let _ = app.run_on_main_thread(move || windows::open_main(&handle, recording, None));
+            std::thread::spawn(move || {
+                let main = handle.clone();
+                let _ =
+                    handle.run_on_main_thread(move || windows::open_main(&main, recording, None));
+            });
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
