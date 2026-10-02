@@ -5,14 +5,18 @@
  * Итоги делает задача резидента (kind "summary"); её состояние приходит
  * списком задач карточки. Любая смена состояния задачи перечитывает итоги —
  * так `job.done` показывает свежий текст без отдельной подписки.
+ *
+ * Пока итогов нет, а запись шла с ассистентом, — «Черновик из живого
+ * режима»: сводка, которую ассистент вёл во время встречи. Задача итогов
+ * получает её же и сверяет с полной расшифровкой.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, getSummary, makeSummary, type Endpoint } from "../../lib/api";
+import { ApiError, getLiveDraft, getSummary, makeSummary, type Endpoint } from "../../lib/api";
 import { dayLabel, errorText } from "../../lib/format";
 import { Markdown } from "../../lib/markdown";
 import { isActiveJob, modelJobsOf } from "../../lib/status";
-import type { AssistantInfo, Job, Summary } from "../../lib/types";
+import type { AssistantInfo, Job, LiveDraft, Summary } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { ProviderHint, ThinkingStage, noProvider, useLostJobs } from "./assistant";
@@ -37,6 +41,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
   const [submitted, setSubmitted] = useState<Job | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [draft, setDraft] = useState<LiveDraft | null>(null);
   const seq = useRef(0);
   const target = useRef({ endpoint, id });
   target.current = { endpoint, id };
@@ -68,8 +73,18 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
     }
   }, [endpoint, id]);
 
+  // Итогов нет — черновик из живого режима, если запись шла с ассистентом.
+  const noSummary = summary === null;
+  useEffect(() => {
+    if (!noSummary) return;
+    let live = true;
+    getLiveDraft(endpoint, id).then((d) => { if (live) setDraft(d); }).catch(() => { if (live) setDraft(null); });
+    return () => { live = false; };
+  }, [endpoint, id, noSummary]);
+
   // Другая запись — всё своё сначала.
   useEffect(() => {
+    setDraft(null);
     setSummary(undefined);
     setLoadError(null);
     setError(null);
@@ -121,6 +136,24 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
         </div>
         {hint}
         <Markdown source={summary.markdown} className="assist__md" />
+      </>
+    );
+  } else if (summary === null && draft) {
+    main = (
+      <>
+        {!thinking && (
+          <div className="assist__toolbar">
+            <Button variant="primary" onClick={make} disabled={!canMake}>Сделать итоги</Button>
+            {hint}
+          </div>
+        )}
+        <section className="assist__draft" aria-label="Черновик из живого режима">
+          <h3 className="assist__draft-title">Черновик из живого режима</h3>
+          <p className="muted assist__draft-note">
+            Сводка, которую ассистент вёл во время встречи. Итоги модель сверит с полной расшифровкой.
+          </p>
+          <Markdown source={draft.markdown} className="assist__md" />
+        </section>
       </>
     );
   } else if (summary === null && !thinking && !failed) {

@@ -7,6 +7,7 @@ import type { AssistantInfo, Job } from "../../lib/types";
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
   getSummary: vi.fn(),
+  getLiveDraft: vi.fn(),
   makeSummary: vi.fn(),
 }));
 
@@ -34,6 +35,7 @@ function show(props: Partial<Parameters<typeof SummaryTab>[0]> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.getLiveDraft).mockResolvedValue(null);
 });
 
 test("итогов нет: пустое состояние и «Сделать итоги» → makeSummary, затем «Модель думает…»", async () => {
@@ -208,3 +210,27 @@ test("ошибка загрузки уходит после успешной п�
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
+
+test("итогов нет, запись шла с ассистентом — «Черновик из живого режима» и «Сделать итоги»", async () => {
+  noSummary();
+  vi.mocked(api.getLiveDraft).mockResolvedValue({
+    summary: { topic: "Планёрка", points: [], decisions: [{ id: "d1", text: "выпуск в пятницу" }], tasks: [], open_questions: [] },
+    hints: [], markdown: "**Тема:** Планёрка\n\n### Решения\n- выпуск в пятницу",
+  });
+  vi.mocked(api.makeSummary).mockResolvedValue(job({ state: "queued" }));
+  show();
+  const draft = await screen.findByRole("region", { name: "Черновик из живого режима" });
+  expect(draft).toHaveTextContent("выпуск в пятницу");
+  expect(draft).toHaveTextContent("Итоги модель сверит с полной расшифровкой");
+  expect(api.getLiveDraft).toHaveBeenCalledWith(ep, "r1");
+  await userEvent.click(screen.getByRole("button", { name: "Сделать итоги" }));
+  expect(api.makeSummary).toHaveBeenCalledWith(ep, "r1");
+});
+
+test("итоги есть — черновик не спрашиваем и не показываем", async () => {
+  hasSummary();
+  show();
+  expect(await screen.findByText("в пятницу")).toBeInTheDocument();
+  expect(api.getLiveDraft).not.toHaveBeenCalled();
+  expect(screen.queryByText("Черновик из живого режима")).toBeNull();
+});

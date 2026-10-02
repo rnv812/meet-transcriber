@@ -361,6 +361,9 @@ export type LiveStatus = {
   started_at: number | null;
 };
 
+/** Сводка живого режима записи (`live_state.json`) — черновик итогов. */
+export type LiveDraft = { summary: LiveSummary; hints: LiveHint[]; markdown: string; saved_at?: number };
+
 /** Быстрые действия вопросов ассистенту (`meet.assist.qa.QUICK`). */
 export type LiveQuick = "missed" | "decisions" | "reply" | "brief";
 

@@ -1880,6 +1880,15 @@ class TrayControl:
         found = assistant.read_summary(folder) if folder else None
         return found or {"error": "итогов нет"}
 
+    def live_draft(self, recording_id: str) -> dict:
+        """Сводка живого режима записи (`live_state.json`) — черновик итогов,
+        пока настоящих нет: {"summary", "hints", "markdown", "saved_at"}."""
+        from meet.assist.live_state import load_saved
+
+        folder = self._folder(recording_id)
+        found = load_saved(folder) if folder else None
+        return found or {"error": "черновика нет"}
+
     def ask(self, recording_id: str, body: dict | None) -> dict:
         question = (body or {}).get("question")
         if not isinstance(question, str) or not question.strip():
