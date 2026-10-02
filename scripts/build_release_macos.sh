@@ -59,7 +59,9 @@ STARTED=$(date +%s)
 step() { printf '\n==> %s\n' "$*"; }
 fail() { echo "ошибка: $*" >&2; exit 1; }
 
-for tool in uv npm npx cargo swiftc shasum curl tar make clang python3; do
+# pkg-config нужен configure ffmpeg (libopus). Он есть в образе macos-14;
+# ставить его на лету (brew — незакреплённая загрузка) не будем.
+for tool in uv npm npx cargo swiftc shasum curl tar make clang python3 pkg-config; do
     command -v "$tool" >/dev/null || fail "$tool не найден в PATH"
 done
 [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || fail "сборка — только на macOS arm64"
@@ -152,10 +154,11 @@ UV_TAR="$(fetch "$UV_URL" "$UV_ASSET" "uv-$UV_VERSION")"
 # --- 3b. ffmpeg (LGPL) из исходников --------------------------------------------
 FFMPEG_PREFIX="$CACHE/ffmpeg-mac-$FFMPEG_VERSION-opus-$OPUS_VERSION"
 step "ffmpeg $FFMPEG_VERSION (LGPL, Opus $OPUS_VERSION) → $FFMPEG_PREFIX"
+# Исходники качаются всегда (не только при сборке): они идут в выпуск рядом
+# с образом — LGPL требует давать исходники там же, где программу.
+FFMPEG_TAR="$(fetch "$FFMPEG_URL" "$FFMPEG_ASSET" "ffmpeg-src-$FFMPEG_VERSION")"
+OPUS_TAR="$(fetch "$OPUS_URL" "$OPUS_ASSET" "opus-src-$OPUS_VERSION")"
 if [[ ! -x "$FFMPEG_PREFIX/bin/ffmpeg" ]]; then
-    command -v pkg-config >/dev/null || brew install pkgconf
-    FFMPEG_TAR="$(fetch "$FFMPEG_URL" "$FFMPEG_ASSET" "ffmpeg-src-$FFMPEG_VERSION")"
-    OPUS_TAR="$(fetch "$OPUS_URL" "$OPUS_ASSET" "opus-src-$OPUS_VERSION")"
     WORK="$ROOT/build/ffmpeg-work"
     rm -rf "$WORK" "$FFMPEG_PREFIX"
     mkdir -p "$WORK" "$FFMPEG_PREFIX"
@@ -171,15 +174,15 @@ if [[ ! -x "$FFMPEG_PREFIX/bin/ffmpeg" ]]; then
     tar -xJf "$FFMPEG_TAR" -C "$WORK"
     (
         cd "$WORK/ffmpeg-$FFMPEG_VERSION"
-        # LGPL: без --enable-gpl/--enable-nonfree. Сеть, SDL, X11 и lzma
-        # выключены: иначе ffmpeg подхватил бы библиотеки Homebrew раннера,
-        # которых нет на машине человека.
+        # LGPL: без --enable-gpl/--enable-nonfree. --disable-autodetect: набор
+        # возможностей не зависит от того, что стоит в образе раннера (иначе
+        # подхватились бы библиотеки Homebrew, которых нет у человека); нужное
+        # включено явно — zlib и bzlib системные (/usr/lib), Opus — свой.
         PKG_CONFIG_PATH="$FFMPEG_PREFIX/lib/pkgconfig" ./configure \
             --prefix="$FFMPEG_PREFIX" --arch=arm64 --target-os=darwin --cc=clang \
-            --enable-static --disable-shared \
+            --enable-static --disable-shared --disable-autodetect \
             --disable-doc --disable-ffplay --disable-debug --disable-network \
-            --disable-sdl2 --disable-xlib --disable-libxcb --disable-lzma \
-            --disable-securetransport \
+            --enable-zlib --enable-bzlib \
             --enable-libopus --pkg-config-flags=--static \
             --extra-cflags="-I$FFMPEG_PREFIX/include -mmacosx-version-min=13.0" \
             --extra-ldflags="-L$FFMPEG_PREFIX/lib -mmacosx-version-min=13.0"
@@ -262,6 +265,9 @@ for file in uv ffmpeg meet-audiotap ffmpeg-LICENSE.txt "$WHEEL_NAME" constraints
     [[ -f "$APP_BUNDLE/Contents/Resources/resources/$file" ]] || fail "в Meet.app нет resources/$file"
 done
 SUMS="$BUNDLE_DIR/dmg/SHA256SUMS.txt"
+SOURCES="$BUNDLE_DIR/dmg/sources"
+mkdir -p "$SOURCES"
+cp "$FFMPEG_TAR" "$OPUS_TAR" "$SOURCES/"
 HASH="$(sha256 "$DMG")"
 printf '%s  %s\n' "$HASH" "$DMG_NAME" > "$SUMS"
 SIZE_MB=$(( $(stat -f %z "$DMG") / 1048576 ))
@@ -271,11 +277,13 @@ echo "  образ:   $DMG"
 echo "  размер:  ${SIZE_MB} МБ"
 echo "  SHA-256: $HASH"
 echo "  суммы:   $SUMS"
+echo "  исходники FFmpeg и Opus: $SOURCES"
 echo "  время:   $(( $(date +%s) - STARTED )) с"
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     {
         echo "dmg=$DMG"
         echo "sums=$SUMS"
+        echo "sources=$SOURCES"
         echo "dmg_name=$DMG_NAME"
     } >> "$GITHUB_OUTPUT"
 fi

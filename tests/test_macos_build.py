@@ -56,8 +56,15 @@ def test_ffmpeg_is_built_lgpl_with_licenses_shipped():
     configure = configure[: configure.index("make -j")]
     assert "--enable-gpl" not in configure and "--enable-nonfree" not in configure
     assert "--enable-libopus" in configure
-    for off in ("--disable-network", "--disable-lzma", "--disable-sdl2"):
-        assert off in configure
+    # Набор возможностей не зависит от образа раннера: автоопределение
+    # выключено, нужное включено явно.
+    for flag in ("--disable-autodetect", "--disable-network", "--enable-zlib", "--enable-bzlib"):
+        assert flag in configure
+    # Никаких установок на лету (brew — незакреплённая загрузка).
+    assert "brew install" not in SCRIPT
+    # Исходники FFmpeg и Opus идут в выпуск рядом с образом (LGPL).
+    assert 'cp "$FFMPEG_TAR" "$OPUS_TAR" "$SOURCES/"' in SCRIPT
+    assert 'echo "sources=$SOURCES"' in SCRIPT
     # Сборку проверяют: без GPL, под LGPL, без библиотек Homebrew.
     assert "--enable-(gpl|nonfree)" in SCRIPT
     assert "Lesser General Public License" in SCRIPT
@@ -88,6 +95,12 @@ def test_helper_speaks_the_python_protocol():
     for mode in ('"--stream"', '"--mic-users"', '"--self-test"'):
         assert mode in swift
     assert '"format": "s16le"' in swift
+    # Помощник дописывает тишину раньше резидента: иначе дописали бы оба.
+    from meet import recorder
+
+    gap = float(re.search(r"private let silenceAfter = ([0-9.]+)", swift).group(1))
+    assert gap < recorder.TICK_PAD_S
+    assert "private let errorEvery = 5.0" in swift
 
 
 def test_workflow_dry_run_skips_windows_and_publishing():
@@ -102,8 +115,54 @@ def test_workflow_dry_run_skips_windows_and_publishing():
     assert 'bash scripts/build_release_macos.sh "$VERSION"' in WORKFLOW
     publish = WORKFLOW[WORKFLOW.index("  publish-macos:"):]
     assert "needs: [release, macos]" in publish
-    assert "if: github.event_name == 'push' && github.ref_type == 'tag'" in publish
     assert "SHA256SUMS.txt" in publish and "--clobber" in publish
+
+
+def _job(name: str) -> str:
+    start = WORKFLOW.index(f"\n  {name}:\n")
+    rest = WORKFLOW[start + 1:]
+    nxt = [rest.find(f"\n  {j}:\n") for j in ("release", "macos", "publish-macos",
+                                                "publish-macos-dry-run")]
+    ends = [i for i in nxt if i > 0]
+    return rest[: min(ends)] if ends else rest
+
+
+def test_token_is_read_only_except_for_publishing_jobs():
+    """Пробный прогон (пуш в ci/macos-dry-run публичного репозитория) не
+    получает пишущего токена: право писать — только у публикующих job."""
+    top = "\n".join(line for line in WORKFLOW[: WORKFLOW.index("\njobs:")].splitlines()
+                    if not line.startswith("#"))
+    assert "permissions:\n  contents: read" in top
+    assert "contents: write" not in top
+    for job in ("release", "publish-macos"):
+        assert "permissions:\n      contents: write" in _job(job), job
+    for job in ("macos", "publish-macos-dry-run"):
+        assert "permissions:\n      contents: read" in _job(job), job
+        assert "contents: write" not in _job(job), job
+    # Публикация — только на теге.
+    assert "if: github.ref_type == 'tag' && (github.event_name == 'push' || !inputs.macos_only)" \
+        in _job("publish-macos")
+    assert "if: github.ref_type != 'tag'" in _job("publish-macos-dry-run")
+
+
+def test_no_checkout_keeps_the_token_on_disk():
+    lines = WORKFLOW.splitlines()
+    checkouts = [i for i, line in enumerate(lines) if "uses: actions/checkout@" in line]
+    assert len(checkouts) == 4
+    for i in checkouts:
+        assert lines[i + 1].strip() == "with:" and lines[i + 2].strip() == "persist-credentials: false"
+
+
+def test_publish_merges_checksums_and_uploads_the_image_first():
+    publish = _job("publish-macos")
+    assert "timeout-minutes:" in publish
+    assert "scripts/merge_sums.py" in publish
+    image = publish.index('gh release upload "$TAG" "$dmg" sources/*')
+    sums = publish.index("gh release upload \"$TAG\" merged/SHA256SUMS.txt")
+    assert image < sums
+    dry = _job("publish-macos-dry-run")
+    assert "scripts/merge_sums.py" in dry and "gh release" not in dry
+    assert "sha256sum -c" in dry
 
 
 def test_every_action_is_pinned_to_a_commit():
@@ -141,3 +200,44 @@ def test_mac_bundle_config_and_permission_strings():
             assert f'"{key}" = "Meet ' in text, (source, key)
     for icon in ("icons/icon.icns",):
         assert (TAURI / icon).is_file()
+
+
+# --- слияние сумм выпуска (scripts/merge_sums.py) ----------------------------------
+
+def _merge_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("merge_sums", ROOT / "scripts" / "merge_sums.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+A, B, C = "a" * 64, "b" * 64, "c" * 64
+
+
+def test_merge_keeps_windows_lines_and_replaces_the_image_line():
+    merge = _merge_module().merge
+    published = f"\ufeff{A}  meet_0.3.0_x64-setup.exe\r\n{C}  Meet_0.3.0_aarch64.dmg"
+    new = f"{B}  Meet_0.3.0_aarch64.dmg\n"
+    assert merge(published, new) == (f"{A}  meet_0.3.0_x64-setup.exe\n"
+                                     f"{B}  Meet_0.3.0_aarch64.dmg\n")
+    # Без перевода строки в конце и в двоичном режиме (`*имя`) — то же.
+    assert merge(f"{A} *meet_0.3.0_x64-setup.exe", new).splitlines() == [
+        f"{A}  meet_0.3.0_x64-setup.exe", f"{B}  Meet_0.3.0_aarch64.dmg"]
+    assert merge("", new) == new
+
+
+def test_merge_refuses_broken_new_sums(tmp_path):
+    module = _merge_module()
+    import pytest
+
+    with pytest.raises(ValueError):
+        module.merge("", "")
+    with pytest.raises(ValueError):
+        module.merge("", "not-a-hash  Meet_0.3.0_aarch64.dmg\n")
+    published, new, out = tmp_path / "p.txt", tmp_path / "n.txt", tmp_path / "o.txt"
+    published.write_bytes(f"{A}  meet_0.3.0_x64-setup.exe\r\n".encode())
+    new.write_text(f"{B}  Meet_0.3.0_aarch64.dmg\n", encoding="utf-8")
+    assert module.main([str(published), str(new), str(out)]) == 0
+    assert out.read_bytes() == (f"{A}  meet_0.3.0_x64-setup.exe\n{B}  Meet_0.3.0_aarch64.dmg\n").encode()
