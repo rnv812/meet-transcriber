@@ -13,7 +13,7 @@ import type {
   AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
   ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
-  Transcript,
+  TextFixRequest, TextFixResult, TextPreview, Transcript,
 } from "./types";
 
 export type Endpoint = {
@@ -124,6 +124,12 @@ export const relabelTurns = (ep: Endpoint, id: string, req: RelabelRequest) =>
 /** «Разделить реплику здесь»: вторая часть (и остаток реплики) — другому спикеру. */
 export const splitTurn = (ep: Endpoint, id: string, req: SplitTurnRequest) =>
   json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/split-turn`, body("POST", req));
+/** «Исправить…»: сколько раз слово или фраза встречается во встрече и когда звучит выбранное место. */
+export const previewTextFix = (ep: Endpoint, id: string, req: { find: string; segment?: number; offset?: number }) =>
+  json<TextPreview>(ep, `/recordings/${enc(id)}/text/preview`, body("POST", { ...req, whole_word: true }));
+/** Заменить одним шагом истории встречи (его отменяет «Отменить» спикеров) и, если просили, — в термины. */
+export const applyTextFix = (ep: Endpoint, id: string, req: TextFixRequest) =>
+  json<TextFixResult>(ep, `/recordings/${enc(id)}/text/apply`, body("POST", { ...req, whole_word: true }));
 /** «Переразделить на спикеров»: задача только диаризации (без распознавания). */
 export const rediarize = (ep: Endpoint, id: string, params: RediarizeParams) =>
   json<{ job: Job }>(ep, `/recordings/${enc(id)}/speakers/rediarize`, body("POST", params));

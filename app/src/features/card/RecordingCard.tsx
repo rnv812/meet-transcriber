@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
   kbExport, patchRecording, transcribe, type Endpoint,
@@ -18,6 +18,7 @@ import { LiveCard } from "./LiveCard";
 import { RediarizeDialog, rediarizeJobOf } from "./RediarizeDialog";
 import { SpeakersPanel } from "./speakers/SpeakersPanel";
 import { TranscriptView, type FindRequest } from "./TranscriptView";
+import { useTextFix } from "./TextFix";
 import { useTurnEdit } from "./TurnEdit";
 import type { PersonColor } from "./Turns";
 import "./card.css";
@@ -155,10 +156,20 @@ export function RecordingCard({
   }, [load, onChanged, onPeopleChanged]);
   const shownFind = ownFind ?? find;
   const colors = useMemo(() => new Map(people.map((p) => [p.name, p.color])), [people]);
+  const textFix = useTextFix({
+    endpoint, id, turns, segments: segments ?? NO_SEGMENTS, playable: !!rec && Object.keys(rec.tracks).length > 0
+      && !audioFailed, onPlay: playPhrase, onChanged: speakersChanged,
+  });
   const turnEdit = useTurnEdit({
     endpoint, id, turns, segments: segments ?? NO_SEGMENTS, people, owner, avatarVersion,
-    onOpenPanel: nameSpeaker, onChanged: speakersChanged,
+    onOpenPanel: nameSpeaker, onChanged: speakersChanged, onFixWord: textFix.openWord,
   });
+  // Правый щелчок по тексту: выделены слова — «Исправить…», иначе «Разделить реплику здесь».
+  const { onContextMenu: fixMenu } = textFix;
+  const { onSplitAt: splitMenu } = turnEdit;
+  const onTextMenu = useCallback((t: number, e: MouseEvent<HTMLElement>) => {
+    if (!fixMenu(t, e)) splitMenu(t, e);
+  }, [fixMenu, splitMenu]);
 
   if (!rec) {
     if (missing) return <EmptyState title="Запись не найдена" hint="Возможно, её удалили. Выберите другую в списке." />;
@@ -230,7 +241,9 @@ export function RecordingCard({
           transcript={turns.length ? (
             <TranscriptView turns={turns} colors={colors} playable={playable} onPlay={play}
               onNameSpeaker={nameSpeaker} onSpeaker={turnEdit.onSpeaker} selected={turnEdit.selected}
-              onSelect={turnEdit.onSelect} onSplitAt={turnEdit.onSplitAt} toolbar={turnEdit.bar} find={shownFind} />
+              onSelect={turnEdit.onSelect} onSplitAt={onTextMenu}
+              toolbar={turnEdit.bar || textFix.bar ? <div className="tbars">{turnEdit.bar}{textFix.bar}</div> : null}
+              find={shownFind} />
           ) : <EmptyState title="В записи нет речи" />} />
       );
       break;
@@ -333,6 +346,7 @@ export function RecordingCard({
       )}
       <div className="card__body">{body}</div>
       {status.kind === "ready" && turnEdit.menu}
+      {status.kind === "ready" && textFix.node}
       {status.kind === "ready" && rediarizeOpen && (
         <RediarizeDialog endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} ready={!!rec.rediarize_ready}
           twoTrack={"sys" in rec.tracks && "mic" in rec.tracks} playable={playable} onPlay={playPhrase}

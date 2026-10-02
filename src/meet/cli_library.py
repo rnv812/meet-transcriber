@@ -23,7 +23,7 @@ from pathlib import Path
 
 from meet import library
 
-COMMANDS = ("import", "export", "voices", "summary", "ask", "notes", "kb-export", "merge")
+COMMANDS = ("import", "export", "voices", "summary", "ask", "notes", "kb-export", "merge", "fix")
 NO_PROVIDER_HINT = ("Подключите Claude Code или Codex: meet {command} … --provider codex "
                     "или настройка llm.provider")
 
@@ -492,7 +492,47 @@ def _kb_export(args, cfg) -> None:
     _result(args, result, f"{result['path']}\n")
 
 
+def _fix(args, cfg) -> None:
+    """`meet fix`: исправить распознанное слово или фразу во встрече — первое
+    совпадение (или все с --all) одним шагом истории встречи, как «Исправить…»
+    в окне (отменяется там же); --hotword — исправление в термины распознавания."""
+    from meet import hotwords, paths, speakers, textfix
+
+    folder = _recording(args.folder, cfg)
+    _transcript(folder)
+    try:
+        found = textfix.preview(folder, args.wrong, limit=1)
+        if not found["count"]:
+            raise CliError(f"Во встрече нет «{textfix.clean_text(args.wrong)}»")
+        first = found["samples"][0]
+        changed, step = 0, None
+        try:
+            got = textfix.apply(folder, args.wrong, args.right, "all" if args.all else "one",
+                                cfg.recording.voices, segment=first["segment"], offset=first["offset"])
+            changed, step = got["changed"], got["step"]["id"]
+        except textfix.Unchanged:
+            if not args.hotword:
+                raise
+    except speakers.SpeakerError as e:
+        raise CliError(str(e)[:1].upper() + str(e)[1:])
+    except OSError as e:
+        raise CliError(f"Не удалось сохранить расшифровку: {e}")
+    right = textfix.clean_text(args.right)
+    term = hotwords.add_to_file(paths.hotwords_path(), right) if args.hotword else None
+    doc = {"folder": str(folder), "found": found["count"], "changed": changed, "step": step,
+           "hotword": term}
+    lines = [f"Исправлено: {changed} из {found['count']} ({textfix.clean_text(args.wrong)} → {right})"]
+    if not args.all and found["count"] > 1:
+        lines.append("Остальные совпадения — с флагом --all")
+    if changed:
+        lines.append("Отменить — в карточке встречи: «Спикеры» → «История изменений»")
+    if term:
+        lines.append(term.get("error") or (f"Добавлено в термины распознавания: {right}" if term["added"]
+                                           else f"Уже в терминах распознавания: {right}"))
+    _result(args, doc, "\n".join(lines) + "\n")
+
+
 _HANDLERS = {"import": _import, "export": _export, "summary": _summary,
-             "ask": _ask, "notes": _kb_export, "kb-export": _kb_export, "merge": _merge}
+             "ask": _ask, "notes": _kb_export, "kb-export": _kb_export, "merge": _merge, "fix": _fix}
 _VOICES = {"list": _voices_list, "rename": _voices_rename, "merge": _voices_merge,
            "delete": _voices_delete, "avatar": _voices_avatar}

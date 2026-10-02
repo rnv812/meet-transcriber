@@ -1894,3 +1894,83 @@ def test_saving_transcript_waits_for_a_speaker_change(with_recordings, app):
         assert not done.wait(0.2)
     assert done.wait(5)
     t.join()
+
+
+# --- «Исправить…»: слово во всей встрече, термины распознавания ---------------------
+
+
+def _fix_meeting(folder):
+    library.write_transcript(folder, {
+        "version": 1, "created_at": "2026-08-18T12:00:00", "segments": [
+            {"start": 0.0, "end": 3.0, "speaker": "Спикер 1", "text": "Поднимем кубер нетис."},
+            {"start": 3.0, "end": 5.0, "speaker": "Спикер 2", "text": "Кубер нетис готов."}]})
+    return folder.name
+
+
+def test_text_preview_and_apply_one_then_undo(with_recordings, app, tmp_path, monkeypatch):
+    from meet import paths, search
+
+    monkeypatch.setattr(paths, "hotwords_path", lambda: tmp_path / "hotwords.txt")
+    rid = _fix_meeting(with_recordings)
+    state = tray_control.TrayControl(app, queue=_Queue())
+    got = state.text_preview(rid, {"find": "кубер нетис", "segment": 1, "offset": 0})
+    assert got["count"] == 2 and got["here"] == {"start": 3.0, "end": 5.0}
+    assert [s["match"] for s in got["samples"]] == ["кубер нетис", "Кубер нетис"]
+
+    search.search_library(tmp_path / "recordings", "kubernetes")  # кэш поиска прогрет
+    got = state.text_apply(rid, {"find": "кубер нетис", "replace": "Kubernetes", "scope": "one",
+                                 "segment": 1, "offset": 0, "count": 2, "add_hotword": True})
+    assert got["changed"] == 1 and got["step"]["ops"][0]["type"] == "text" and got["pos"] == 1
+    assert got["hotword"] == {"term": "Kubernetes", "added": True, "over_budget": False}
+    assert (tmp_path / "hotwords.txt").read_text(encoding="utf-8") == "Kubernetes\n"
+    assert [s["text"] for s in library.read_transcript(with_recordings)["segments"]] == [
+        "Поднимем кубер нетис.", "Kubernetes готов."]
+    assert [i["id"] for i in search.search_library(tmp_path / "recordings", "kubernetes")] == [rid]
+
+    # Тот же термин ещё раз — не дублируется.
+    got = state.text_apply(rid, {"find": "кубер нетис", "replace": "Kubernetes", "scope": "all",
+                                 "add_hotword": True})
+    assert got["hotword"]["added"] is False and got["changed"] == 1
+    assert (tmp_path / "hotwords.txt").read_text(encoding="utf-8") == "Kubernetes\n"
+    state.speakers_undo(rid)
+    state.speakers_undo(rid)
+    assert [s["text"] for s in library.read_transcript(with_recordings)["segments"]] == [
+        "Поднимем кубер нетис.", "Кубер нетис готов."]
+
+
+def test_text_apply_errors_and_busy_refusal(with_recordings, app):
+    from meet import control
+
+    rid = _fix_meeting(with_recordings)
+    state = tray_control.TrayControl(app, queue=_Queue())
+    with pytest.raises(control.BadRequest):
+        state.text_apply(rid, {"find": "Docker", "replace": "Докер", "scope": "all"})
+    with pytest.raises(control.BadRequest):
+        state.text_preview(rid, {"find": ""})
+    with pytest.raises(control.Conflict, match="обновите"):
+        state.text_apply(rid, {"find": "кубер нетис", "replace": "K8s", "scope": "one",
+                               "segment": 0, "offset": 2})
+    assert state.text_preview("../чужое", {"find": "x"}) == {"error": "записи нет"}
+
+    class Busy(_Queue):
+        def active_for(self, folder, kinds):
+            return jobs.Job(id="j1", kind=jobs.TRANSCRIBE, folder=folder)
+
+    before = library.read_transcript(with_recordings)
+    with pytest.raises(control.Conflict, match="расшифровка"):
+        tray_control.TrayControl(app, queue=Busy()).text_apply(
+            rid, {"find": "кубер нетис", "replace": "K8s", "scope": "all"})
+    assert library.read_transcript(with_recordings) == before
+
+
+def test_hotword_only_when_the_text_is_already_right(with_recordings, app, tmp_path, monkeypatch):
+    from meet import control, paths
+
+    monkeypatch.setattr(paths, "hotwords_path", lambda: tmp_path / "hotwords.txt")
+    rid = _fix_meeting(with_recordings)
+    state = tray_control.TrayControl(app, queue=_Queue())
+    got = state.text_apply(rid, {"find": "кубер нетис", "replace": "кубер нетис", "scope": "all",
+                                 "add_hotword": True})
+    assert got["changed"] == 0 and got["hotword"]["added"] is True and "step" not in got
+    with pytest.raises(control.BadRequest):
+        state.text_apply(rid, {"find": "кубер нетис", "replace": "кубер нетис", "scope": "all"})

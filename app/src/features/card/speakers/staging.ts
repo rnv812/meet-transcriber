@@ -76,6 +76,7 @@ function opText(op: SpeakerOp): string {
   if (op.type === "split_turn") return `Реплика ${op.label} разделена (${clock(op.at)}), вторая часть → ${op.to}`;
   if (op.type === "rediarize") return `Заново разделено на спикеров: ${op.speakers}`;
   if (op.type === "threshold") return `Порог узнавания ${Math.round(op.value * 100)}%`;
+  if (op.type === "text") return `Исправлено: ${op.from} → ${op.to} (${op.count})`;
   if (op.type === "relabel") {
     const n = op.turns;
     return `${n} ${plural(n, "реплика", "реплики", "реплик")} (${op.from.join(", ")}) → ${op.to}`;
