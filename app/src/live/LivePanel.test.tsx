@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../lib/api", async (orig) => ({
@@ -116,7 +116,8 @@ test("Развернуть и Свернуть просят оболочку с�
   expect(screen.getByRole("button", { name: "Свернуть" })).toHaveAttribute("aria-expanded", "true");
   expect(screen.getByRole("log")).toHaveTextContent("первая");
   expect(screen.getByRole("log")).toHaveTextContent("вторая");
-  expect(screen.getByRole("button", { name: /Дайджест/ })).toBeInTheDocument();
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Лента", "Сводка", "Подсказки", "Спросить"]);
+  await userEvent.click(screen.getByRole("tab", { name: "Спросить" }));
   expect(screen.getByRole("textbox", { name: "Вопрос ассистенту" })).not.toHaveFocus();
   await userEvent.click(screen.getByRole("button", { name: "Свернуть" }));
   expect(invoke).toHaveBeenLastCalledWith("live_set_expanded", { expanded: false });
@@ -176,6 +177,7 @@ test("Esc на весь экран возвращает обычный разм�
 test("Esc в поле вопроса не возвращает обычный размер", async () => {
   render(<LivePanel endpoint={ep} />);
   await userEvent.click(screen.getByRole("button", { name: "На весь экран" }));
+  await userEvent.click(screen.getByRole("tab", { name: "Спросить" }));
   await userEvent.click(screen.getByRole("textbox", { name: "Вопрос ассистенту" }));
   await userEvent.keyboard("{Escape}");
   expect(calls("live_set_maximized")).toHaveLength(1);
@@ -230,6 +232,7 @@ test("«Что я пропустил?» — с момента, когда пан
   vi.mocked(liveAsk).mockResolvedValue({ answer: "Решили релиз в пятницу" });
   render(<LivePanel endpoint={ep} />);
   await userEvent.click(screen.getByRole("button", { name: "Развернуть" }));
+  await userEvent.click(screen.getByRole("tab", { name: "Спросить" }));
   // Ещё не сворачивали — ассистент возьмёт последние минуты сам.
   await userEvent.click(screen.getByRole("button", { name: "Что я пропустил?" }));
   expect(liveAsk).toHaveBeenLastCalledWith(ep, "", { quick: "missed" });
@@ -244,8 +247,9 @@ test("«Что я пропустил?» — с момента, когда пан
     { id: 1, q: "Что я пропустил?", a: "Решили релиз в пятницу [00:05:00]", error: null, pending: false, at: 1, quick: "missed" },
   ] }));
   expect(screen.getByText(/Решили релиз в пятницу/)).toBeInTheDocument();
-  // Таймкод ответа ведёт к реплике в ленте.
+  // Таймкод ответа ведёт к реплике в ленте (узкая панель — на вкладку «Лента»).
   await userEvent.click(screen.getByRole("button", { name: "00:05:00" }));
+  expect(screen.getByRole("tab", { name: "Лента" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByText("без меня").closest("li")).toHaveClass("is-target");
 });
 
@@ -297,4 +301,91 @@ test("остановка: поток ассистента закрыт, пока
   expect(stream.closed).toBe(true);
   expect(liveStream()).toBe(stream); // нового потока не открывали
   expect(screen.queryByText(/Нет связи с ассистентом/)).toBeNull();
+});
+
+// --- L2: строка свёрнутой панели, «Не отвлекать», статус, широкая раскладка ----------
+
+const hint = (id: string, kind: string, text: string, o: Record<string, unknown> = {}) => ({
+  id, kind, text, why: "", source_t: 60, ref: null, pinned: false, dismissed: false, created_at: 1, updated_at: 1, ...o,
+});
+const state = (hints: unknown[], o: Record<string, unknown> = {}) => ({ digest: "", transcript: [], status: null, hints, ...o });
+
+test("свёрнутая: самая важная подсказка и счётчик новых; щелчок — развернуть на «Подсказках»", async () => {
+  render(<LivePanel endpoint={ep} />);
+  await act(async () => {});
+  act(() => liveStream().emit("state", state([])));
+  act(() => liveStream().emit("state", state([
+    hint("h1", "followup", "Зафиксировать созвон"), hint("h2", "unanswered", "Вопрос про цену без ответа"),
+  ])));
+  const line = screen.getByRole("button", { name: /Открыть подсказки/ });
+  expect(line).toHaveTextContent("Без ответа");
+  expect(line).toHaveTextContent("Вопрос про цену без ответа");
+  expect(within(line).getByLabelText("новых подсказок: 2")).toBeInTheDocument();
+  await userEvent.click(line);
+  expect(invoke).toHaveBeenLastCalledWith("live_set_expanded", { expanded: true });
+  expect(screen.getByRole("tab", { name: "Подсказки" })).toHaveAttribute("aria-selected", "true");
+  await userEvent.click(screen.getByRole("button", { name: "Свернуть" }));
+  expect(screen.queryByLabelText(/новых подсказок/)).toBeNull(); // увидел — не новые
+});
+
+test("строка меняется, только когда сменилась самая важная подсказка", async () => {
+  render(<LivePanel endpoint={ep} />);
+  await act(async () => {});
+  act(() => liveStream().emit("state", state([hint("h1", "risk", "Риск по срокам")])));
+  act(() => liveStream().emit("state", state([hint("h1", "risk", "Риск по срокам"), hint("h2", "term", "Термин дня")])));
+  expect(screen.getByRole("button", { name: /Открыть подсказки/ })).toHaveTextContent("Риск по срокам");
+  act(() => liveStream().emit("state", state([hint("h2", "term", "Термин дня"), hint("h3", "unanswered", "Без ответа: цена")])));
+  expect(screen.getByRole("button", { name: /Открыть подсказки/ })).toHaveTextContent("Без ответа: цена");
+});
+
+test("«Не отвлекать»: строка не меняется, пока её подсказка жива; счётчика нет", async () => {
+  render(<LivePanel endpoint={ep} />);
+  await act(async () => {});
+  act(() => liveStream().emit("state", state([hint("h1", "followup", "Следующий шаг: созвон")])));
+  const quiet = screen.getByRole("button", { name: "Не отвлекать" });
+  expect(quiet).toHaveAttribute("aria-pressed", "false");
+  await userEvent.click(quiet);
+  expect(quiet).toHaveAttribute("aria-pressed", "true");
+  act(() => liveStream().emit("state", state([
+    hint("h1", "followup", "Следующий шаг: созвон"), hint("h2", "unanswered", "Цена без ответа"),
+  ])));
+  const line = screen.getByRole("button", { name: /Открыть подсказки/ });
+  expect(line).toHaveTextContent("Следующий шаг: созвон");
+  expect(screen.queryByLabelText(/новых подсказок/)).toBeNull();
+  act(() => liveStream().emit("state", state([hint("h2", "unanswered", "Цена без ответа")])));
+  expect(screen.getByRole("button", { name: /Открыть подсказки/ })).toHaveTextContent("Цена без ответа");
+});
+
+test("модель недоступна — тихий статус в шапке, без всплывающих ошибок", async () => {
+  render(<LivePanel endpoint={ep} />);
+  await act(async () => {});
+  act(() => liveStream().emit("state", state([], { status: "Подсказки временно недоступны" })));
+  expect(within(head()).getByRole("status")).toHaveAttribute("title", "Подсказки временно недоступны");
+  expect(screen.queryByRole("alert")).toBeNull();
+  act(() => liveStream().emit("state", state([])));
+  expect(within(head()).queryByRole("status")).toBeNull();
+});
+
+test("широкое окно (от 720) — две колонки; сузили — вкладки", async () => {
+  const observers: (() => void)[] = [];
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(cb: () => void) { observers.push(cb); }
+    observe() {}
+    disconnect() {}
+  });
+  let width = 900;
+  const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(() => ({ width, height: 600, top: 0, left: 0, right: width, bottom: 600, x: 0, y: 0 }) as DOMRect);
+  try {
+    shellWith({ expanded: true });
+    render(<LivePanel endpoint={ep} />);
+    expect(await screen.findByRole("region", { name: "Подсказки" })).toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    width = 500;
+    act(() => observers.forEach((cb) => cb()));
+    expect(screen.getByRole("tablist")).toBeInTheDocument();
+  } finally {
+    rect.mockRestore();
+    vi.unstubAllGlobals();
+  }
 });

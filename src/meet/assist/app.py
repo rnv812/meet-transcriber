@@ -145,7 +145,7 @@ class AssistState:
         data = self.live.to_dict()
         qa = self.qa.history() if self.qa is not None else []
         return {**data, "digest": self.live.render_markdown(), "qa": qa,
-                "status": self.status()}
+                "status": self.status(), "hints_enabled": self.live.hints_enabled}
 
     def hint_action(self, hint_id: str, action: str) -> bool:
         """Закрепить, открепить или скрыть подсказку. False — такой нет."""

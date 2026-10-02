@@ -1,7 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import type { FeedLine } from "./useLive";
-import { LiveDigest, LiveFeed, TARGET_MS, lineAt } from "./LiveFeed";
+import { LiveFeed, TARGET_MS, lineAt } from "./LiveFeed";
 
 const line = (i: number, speaker: string | null = "Демьян"): FeedLine => ({ t: 60 + i, speaker, text: `реплика ${i}`, id: null });
 
@@ -52,23 +51,6 @@ test("автопрокрутка к новой строке, пока польз
   box.grow(20);
   rerender(<LiveFeed lines={[line(0), line(1), line(2), line(3)]} />);
   expect(feed.scrollTop).toBe(560);
-});
-
-test("дайджест сворачивается", async () => {
-  render(<LiveDigest digest={"## Решения\n\n- релиз в пятницу"} />);
-  expect(screen.getByText("релиз в пятницу")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: /Дайджест/ }));
-  expect(screen.queryByText("релиз в пятницу")).toBeNull();
-  expect(screen.getByRole("button", { name: /Дайджест/ })).toHaveAttribute("aria-expanded", "false");
-});
-
-test("дайджест свёрнут изначально, если попросили; пустой — подсказка", async () => {
-  const { rerender } = render(<LiveDigest digest="- пункт" defaultOpen={false} />);
-  expect(screen.queryByText("пункт")).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: /Дайджест/ }));
-  expect(screen.getByText("пункт")).toBeInTheDocument();
-  rerender(<LiveDigest digest="" />);
-  expect(screen.getByText(/Дайджест появится/)).toBeInTheDocument();
 });
 
 test("строки ключуются по номеру: обрезка начала ленты не пересоздаёт остальные", () => {

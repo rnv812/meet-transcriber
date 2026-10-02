@@ -2,7 +2,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "../theme/tokens.css";
-// Стили Markdown модели (дайджест, ответы) — общие с вкладками карточки.
+// Стили Markdown модели (ответы ассистента) — общие с вкладками карточки.
 import "../features/card/assistant.css";
 import "./panel.css";
 import { LiveWindow } from "./LivePanel";

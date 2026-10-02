@@ -84,6 +84,7 @@ ERROR_MAX_CHARS = 300
 # Быстрые действия вопросов (`meet.assist.qa.QUICK`): «Что я пропустил?»,
 # «Какие решения уже приняты?», «Что мне ответить?», «Кратко за 1 минуту».
 QUICK_ACTIONS = ("missed", "decisions", "reply", "brief")
+HINT_ACTIONS = ("pin", "unpin", "dismiss")
 
 
 class LiveError(Exception):
@@ -633,6 +634,11 @@ class LiveControl:
         if since_t is not None:
             payload["since_t"] = since_t
         return self._request(self._active_port(), "/ask", payload, ASK_TIMEOUT_S)
+
+    def hint(self, hint_id: str, action: str) -> dict:
+        """Закрепить, открепить или скрыть подсказку ассистента."""
+        return self._request(self._active_port(), "/hint",
+                             {"id": hint_id, "action": action}, REQUEST_TIMEOUT_S)
 
     def task(self, text: str) -> dict:
         self._request(self._active_port(), "/task", {"task": text}, REQUEST_TIMEOUT_S)

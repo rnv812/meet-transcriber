@@ -28,42 +28,26 @@ html, body { background: transparent; }
 .live-panel__error { color: var(--err); font-size: 12px; }
 .live-panel__note { font-size: 12px; }
 
-/* Свёрнутая: последняя реплика, не больше двух строк. */
+/* Свёрнутая: одна строка — вид и текст самой важной подсказки (или последняя
+   реплика) и счётчик новых; щелчок разворачивает панель на «Подсказках». */
 .live-last {
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-  color: var(--text); line-height: 1.45;
+  display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 0 2px;
+  border: 0; border-radius: var(--r-md); background: none; text-align: left;
+  color: var(--text); font: inherit; line-height: 1.45; cursor: pointer;
 }
+.live-last:hover { background: var(--surface-hover); }
+.live-last__kind { flex: none; color: var(--kind); font-size: 11px; font-weight: 500; }
+.live-last__text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.live-last__count {
+  flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: rgba(94, 106, 210, 0.22); color: var(--accent-hover);
+  font-size: 11px; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.live-head__quiet[aria-pressed="true"] { color: var(--accent-hover); }
 
 /* На весь экран: рабочая область целиком, скругления ни к чему. */
 .live-panel--maximized { border-radius: 0; }
 
-/* Развёрнутая, узкая: дайджест сверху, лента — всё свободное место, вопросы
-   снизу. Дайджест и ответ берут долю высоты окна (vh — это окно панели) и
-   прокручиваются сами, поэтому в высоком окне видно больше, а лента не
-   сжимается в щель. */
-.live-panel__body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
-.live-panel__feed { flex: 1; min-height: 64px; }
-.live-panel__side { display: contents; }
-.live-panel__side .live-digest { order: -1; flex: none; }
-.live-panel__side .live-ask { flex: none; }
-.live-panel__body .live-digest .md { max-height: 25vh; overflow-y: auto; }
-.live-panel__body .live-ask__history { max-height: 35vh; }
-
-/* Широкая (от 720): лента слева во всю высоту, справа дайджест и вопросы;
-   ответ занимает остаток правой колонки. */
-@media (min-width: 720px) {
-  .live-panel__body {
-    display: grid; gap: 12px;
-    grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr);
-    grid-template-rows: minmax(0, 1fr);
-  }
-  .live-panel__feed { min-height: 0; }
-  .live-panel__side {
-    display: flex; flex-direction: column; gap: 8px; min-height: 0;
-    padding-left: 12px; border-left: 1px solid var(--line);
-  }
-  .live-panel__side .live-digest { order: 0; }
-  .live-panel__body .live-digest .md { max-height: 40vh; }
-  .live-panel__side .live-ask { flex: 1; min-height: 0; }
-  .live-panel__body .live-ask__history { flex: 1; min-height: 0; max-height: none; }
-}
+/* Развёрнутая: рабочая область (live.css) — вкладки или, в широком окне
+   (от 720, решает LiveWorkspace по ширине панели), две колонки. */
+.live-panel__body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
