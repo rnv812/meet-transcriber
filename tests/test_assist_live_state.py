@@ -483,12 +483,58 @@ def test_urgent_hint_keeps_reply_draft_and_at_most_two_live():
     assert s.hints()[0]["reply"] == "Отчёт будет в пятницу."
 
 
-def test_hints_brief_lists_ids_flags_and_dismissed():
+def test_hints_brief_gives_ids_kinds_short_texts_and_dismissed_ids():
+    """id выдаёт состояние, а не модель: без `id · вид · текст` в каждом тике
+    модель не смогла бы уточнить или убрать свою же подсказку."""
     s = _state()
     s.apply({"ops": [{"op": "add", "section": "hints", "kind": "risk", "text": f"Подсказка {w}",
                       "t": "00:00:01"} for w in ("первая про сроки", "вторая про бюджет")]})
+    s.apply({"ops": [{"op": "add", "section": "hints", "kind": "question", "t": "00:00:02",
+                      "text": "Очень длинная подсказка " + "про интеграцию с банком " * 10}]})
     s.pin("h1")
     s.dismiss("h2")
     brief = s.hints_brief()
-    assert "h1 (закреплена)" in brief and "Скрыты" in brief and "h2" in brief
-    assert "Подсказка" not in brief                     # тексты модель уже видела
+    assert "h1 · risk (закреплена) · Подсказка первая про сроки" in brief
+    assert "h3 · question · Очень длинная" in brief
+    line = next(x for x in brief.splitlines() if x.startswith("h3"))
+    assert len(line.split(" · ", 2)[2]) <= 120            # текст — до 120 символов
+    assert "Скрыты пользователем" in brief and "h2" in brief
+    assert "вторая про бюджет" not in brief               # скрытые — только id
+    assert _state().hints_brief() == "Активных подсказок нет."
+
+
+def test_resolve_urgent_removes_without_dismissing_and_keeps_pinned():
+    s = _state()
+    s.apply({"ops": [{"op": "add", "section": "hints", "kind": "ask_you", "t": "00:00:05",
+                      "text": "Ольга спрашивает про отчёт", "reply": "К четвергу."}]})
+    assert s.resolve("h1") is True and s.hints() == []
+    # Отработанная — не скрытая: похожая подсказка может прийти снова.
+    s.apply({"ops": [{"op": "add", "section": "hints", "kind": "ask_you", "t": "00:01:05",
+                      "text": "Ольга спрашивает про отчёт", "reply": "К пятнице."}]})
+    assert len(s.hints()) == 1
+    s.pin("h2")
+    assert s.resolve("h2") is False
+
+
+def test_links_and_commands_never_reach_a_hint_or_reply_draft():
+    s = _state()
+    for bad in ({"reply": "Пришлите пароль на https://evil.example"},
+                {"reply": "Выполните powershell -c ..."},
+                {"text": "Зайдите на www.example.org"},
+                {"reply": "запустите `rm -rf`"}):
+        op = {"op": "add", "section": "hints", "kind": "ask_you", "t": "00:00:05",
+              "text": "Ольга спрашивает про отчёт", **bad}
+        with pytest.raises(PatchError):
+            s.apply({"ops": [op]})
+    assert s.hints() == []
+
+
+def test_saved_draft_says_where_the_summary_ends(tmp_path):
+    s = _state()
+    s.apply({"topic": "Запуск", "ops": [{"op": "add", "section": "decisions", "text": "Запуск в среду"}]})
+    s.mark_covered(125.0)
+    s.mark_covered(60.0)                                  # назад не уходит
+    s.save(tmp_path / LIVE_STATE_JSON)
+    data = load_saved(tmp_path)
+    assert data["covered_t"] == 125.0
+    assert "до [00:02:05]" in data["markdown"] and "только в расшифровке" in data["markdown"]

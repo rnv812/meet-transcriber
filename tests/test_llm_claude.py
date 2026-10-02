@@ -264,3 +264,26 @@ def test_fast_tier_turns_thinking_off_and_default_keeps_it(monkeypatch):
     assert cmd[cmd.index("--thinking") + 1] == "disabled"
     cmd, _ = _command_and_reply(monkeypatch, model="sonnet")
     assert "--thinking" not in cmd and "--include-partial-messages" not in cmd
+
+
+def test_new_assistant_message_restarts_streamed_text(monkeypatch):
+    from claude_agent_sdk import ResultMessage, StreamEvent
+
+    def ev(event):
+        return StreamEvent(uuid="u", session_id="s", event=event)
+
+    def fake_query(*, prompt, options):
+        async def gen():
+            yield ev({"type": "message_start"})
+            yield ev({"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Посмотрю"}})
+            yield ev({"type": "message_start"})              # после инструмента — новое сообщение
+            yield ev({"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Ответ."}})
+            yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
+                                num_turns=2, session_id="x", result="Ответ.")
+        return gen()
+
+    monkeypatch.setattr(claude_agent_sdk, "query", fake_query)
+    monkeypatch.setattr(claude, "find_cli", lambda: "C:/claude.exe")
+    pieces = []
+    asyncio.run(claude.run("вопрос", system_prompt="s", on_text=pieces.append))
+    assert pieces == ["Посмотрю", None, "Ответ."]

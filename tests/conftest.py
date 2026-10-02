@@ -152,3 +152,80 @@ def _no_model_process(monkeypatch):
     except ImportError:
         return
     monkeypatch.setattr(claude_stream, "default_cli", lambda: None)
+
+
+_AGENT_STEMS = ("claude", "codex")
+
+
+def _agent_program(args) -> str | None:
+    """Запуск Claude Code или Codex в аргументах процесса: имя программы
+    claude*/codex* (не *.py — поддельные CLI тестов идут через python) или
+    cli.js пакета Claude Code где-либо в командной строке."""
+    import os
+    import shlex
+
+    if isinstance(args, (str, bytes, os.PathLike)):
+        text = os.fsdecode(args)
+        try:
+            argv = shlex.split(text, posix=False)
+        except ValueError:
+            argv = [text]
+    else:
+        argv = [os.fsdecode(a) if isinstance(a, (bytes, os.PathLike)) else str(a) for a in args]
+    if not argv:
+        return None
+    name = os.path.basename(argv[0].strip('"')).lower()
+    if not name.endswith(".py") and name.split(".")[0] in _AGENT_STEMS:
+        return argv[0]
+    for arg in argv:
+        low = arg.replace("\\", "/").lower()
+        if low.endswith("cli.js") and ("claude" in low or "anthropic" in low):
+            return arg
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _no_agent_spawn(monkeypatch):
+    """Ни один тест не запускает Claude Code и Codex: настоящий CLI на машине
+    разработчика сделал бы настоящий вызов модели по подписке. Перехвачены
+    `subprocess.Popen` (через него идут и asyncio/anyio-подпроцессы),
+    `asyncio.create_subprocess_exec` и запуск процесса транспортом Claude
+    Agent SDK. Попытка — ошибка запуска в тесте и провал теста в конце, даже
+    если код ошибку проглотил. Тестам с агентом — подделки."""
+    import asyncio
+    import subprocess
+
+    attempts: list[str] = []
+    real_init = subprocess.Popen.__init__
+
+    def guarded_init(self, args, *a, **kw):
+        program = _agent_program(args)
+        if program is not None:
+            attempts.append(program)
+            raise OSError(f"тест запустил агента: {program}")
+        return real_init(self, args, *a, **kw)
+
+    monkeypatch.setattr(subprocess.Popen, "__init__", guarded_init)
+    real_exec = asyncio.create_subprocess_exec
+
+    async def guarded_exec(program, *args, **kw):
+        found = _agent_program([program, *args])
+        if found is not None:
+            attempts.append(found)
+            raise OSError(f"тест запустил агента: {found}")
+        return await real_exec(program, *args, **kw)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", guarded_exec)
+    try:
+        from claude_agent_sdk._internal.transport import subprocess_cli
+    except ImportError:
+        subprocess_cli = None
+    if subprocess_cli is not None:
+        async def guarded_connect(self):
+            attempts.append("claude_agent_sdk: SubprocessCLITransport.connect")
+            raise OSError("тест запустил Claude Code через Agent SDK")
+
+        monkeypatch.setattr(subprocess_cli.SubprocessCLITransport, "connect", guarded_connect)
+    yield attempts  # проверка самой защиты очищает список после своей попытки
+    if attempts:
+        pytest.fail(f"тест пытался запустить агента: {attempts}")

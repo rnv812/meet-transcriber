@@ -1,64 +1,90 @@
 """Поводы внеочередной подсказки: вопрос на встрече и обращение к владельцу.
-Реплики выдуманы."""
+Реплики выдуманы; владелец — «Марина»."""
 
 import pytest
 
 from meet.assist.triggers import ADDRESSED, QUESTION, owner_names, trigger_of
 
 
-def _t(text, speaker="Ольга", owner="Кузьма"):
-    return trigger_of({"speaker": speaker, "text": text}, owner_speaker=owner)
+def _t(text, speaker="Ольга", owner="Марина", names=None):
+    return trigger_of({"speaker": speaker, "text": text}, owner_speaker=owner, names=names)
+
+
+# Обычные фразы делового разговора: не повод (деловое «вы», союзы «что/как/
+# когда», имя в косвенном падеже, рассказ о человеке).
+ORDINARY = [
+    "Я думаю, что вы правы по срокам.",
+    "Как вы знаете, релиз переносится на понедельник.",
+    "Спасибо вам, что пришли.",
+    "Я скажу вам, когда будет готово.",
+    "Вы молодцы, всё сделали вовремя.",
+    "Когда вы уйдёте в отпуск, задачу возьмёт Олег.",
+    "Как и договаривались, переносим запуск.",
+    "Мы договорились перенести релиз.",
+    "Это вопрос к Марине, она ведёт партнёров.",
+    "Скажу Марине после встречи.",
+    "Марина сможет взять задачу на следующей неделе",
+    "Маринин отчёт уже у меня.",
+    "Что касается бюджета, его утвердили вчера.",
+    "Вам пришлют доступы до конца дня.",
+    "Ваша команда закрыла все баги по оплате.",
+    "Если вы не против, начнём с маркетинга.",
+    "Ли Вэй подключится позже.",
+    "Посмотрите в чат, там ссылка на документ.",
+    "Когда стенд освободится, запустим нагрузочное.",
+    "Я не знаю, как вы это успели, но спасибо.",
+]
+
+# Вопросы, обращённые к владельцу.
+ADDRESSED_QUESTIONS = [
+    "Марина, посмотрите, пожалуйста, отчёт.",
+    "Марина, отчёт к четвергу будет?",
+    "Как думаете, Марина?",
+    "Вы успеете к пятнице?",
+    "А вы когда сможете прислать оценку?",
+    "Сможете взять интеграцию с банком?",
+    "Ты готов показать демо?",
+    "Как вам такой вариант?",
+    "Марина! Вы с нами?",
+    "Подскажете, где лежит договор?",
+]
+
+
+@pytest.mark.parametrize("text", ORDINARY)
+def test_ordinary_statements_never_trigger(text):
+    assert _t(text) is None
+
+
+@pytest.mark.parametrize("text", ADDRESSED_QUESTIONS)
+def test_addressed_questions_trigger(text):
+    assert _t(text) == ADDRESSED
 
 
 @pytest.mark.parametrize("text", [
     "Кто возьмёт интеграцию с банком?",
     "А релиз точно в пятницу?",
-    "Так и сделаем, да?»",
+    "Так и сделаем?»",
+    # длинное рассуждение с «вы» и «?» — вопрос к залу, а не владельцу
+    "Если вы посмотрите на график, то увидите, что нагрузка растёт каждую неделю "
+    "и к концу квартала мы упрёмся в лимит, разве не так?",
 ])
-def test_question_mark_from_someone_else(text):
+def test_other_questions_are_plain_questions(text):
     assert _t(text) == QUESTION
 
 
-@pytest.mark.parametrize("text", [
-    "Кузьма, посмотри, пожалуйста, отчёт",
-    "Это вопрос к Кузьме",
-    "Скажу Кузьме после встречи",
-    "никита сможет взять задачу",
-])
-def test_owner_called_by_name_in_any_case(text):
-    assert _t(text) == ADDRESSED
-
-
-@pytest.mark.parametrize("text", [
-    "Вы сможете прислать оценку к среде",
-    "А ты когда будешь готов",
-    "Как вам такой вариант",
-])
-def test_second_person_with_a_question_word(text):
-    assert _t(text) == ADDRESSED
-
-
-@pytest.mark.parametrize("text", [
-    "Мы договорились перенести релиз.",
-    "Вы молодцы, всё сделали.",              # «вы» без вопроса
-    "Как и договаривались, переносим.",     # вопросительное слово без «вы»
-    "Никитин отчёт уже у меня",            # фамилия-прилагательное: всё равно обращение — ок
-])
-def test_plain_statements(text):
-    expected = ADDRESSED if text.startswith("Никитин") else None
-    assert _t(text) == expected
-
-
 def test_owner_lines_never_trigger():
-    assert _t("Кто возьмёт интеграцию?", speaker="Кузьма") is None
+    assert _t("Кто возьмёт интеграцию?", speaker="Марина") is None
+    assert _t("Вы успеете?", speaker="Марина") is None
+
+
+def test_voice_base_names_count_too():
+    names = owner_names("Марина", "Мария Петрова", "Вы")
+    assert names == ["марина", "мария"]
+    assert _t("Мария, вы на связи", names=names) == ADDRESSED
+    assert _t("Мария сегодня отдыхает", names=names) is None
 
 
 def test_default_label_you_is_not_a_name():
     assert owner_names("Вы") == []
     assert _t("Вывод: всё по плану.", owner="Вы") is None
     assert _t("Вы сможете?", owner="Вы") == ADDRESSED
-
-
-def test_short_names_match_only_whole_words():
-    assert _t("Ян, ты готов?", owner="Ян") == ADDRESSED
-    assert _t("Январь был тяжёлым.", owner="Ян") is None

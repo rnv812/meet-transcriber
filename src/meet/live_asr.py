@@ -115,6 +115,7 @@ class GigaamLive:
             path = self._tmp / "warm.wav"
             gigaam_asr._write_wav(path, (noise * 32767).astype(np.int16), SAMPLE_RATE)
             self._model.transcribe(str(path), word_timestamps=True)
+            path.unlink(missing_ok=True)
         except Exception:
             pass  # прогрев — только ускорение
 
@@ -161,8 +162,13 @@ class GigaamLive:
         path = tmp / f"w{os.getpid()}.wav"
         pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
         gigaam_asr._write_wav(path, pcm, SAMPLE_RATE)
-        result = self._model.transcribe(str(path), word_timestamps=True)
-        chunk = gigaam_asr.Chunk(offset_s, offset_s + len(audio) / SAMPLE_RATE)
+        try:
+            result = self._model.transcribe(str(path), word_timestamps=True)
+        finally:
+            # Звук встречи во временной папке не лежит, даже если ассистента
+            # потом убьют и unload() не случится.
+            path.unlink(missing_ok=True)
+        chunk =gigaam_asr.Chunk(offset_s, offset_s + len(audio) / SAMPLE_RATE)
         words = gigaam_asr.words_of_chunk(chunk, getattr(result, "words", None))
         return gigaam_asr.to_segments(words)
 

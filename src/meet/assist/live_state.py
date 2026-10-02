@@ -57,6 +57,10 @@ ITEM_MAX = 300
 HINT_MAX = 200
 WHY_MAX = 160
 REPLY_MAX = 240
+BRIEF_TEXT_MAX = 120
+# В тексте подсказки и черновике ответа (его копируют) — ни ссылок, ни команд:
+# такое могло прийти только из речи (попытка подсунуть «ответ»).
+_UNSAFE = re.compile(r"://|\bwww\.|powershell|\bcmd(\.exe)?\s*/c|\bbash\b|\bsudo\b|`", re.I)
 FIELD_MAX = 80        # кто / срок задачи
 COMPACT_MAX = 2500       # сжатое состояние в промпте тика, символов
 COMPACT_ITEM_LIMITS = (160, 90, 50)
@@ -153,6 +157,13 @@ def _text(op: dict, key: str, limit: int, *, required: bool) -> str | None:
     return text
 
 
+def _safe(text: str | None) -> str | None:
+    """Текст подсказки без ссылок и команд — иначе PatchError."""
+    if text and _UNSAFE.search(text):
+        raise PatchError("в подсказке ссылка или команда")
+    return text
+
+
 def _opt_field(op: dict, key: str) -> str | None:
     """Кто / срок задачи: строка или null; пустая строка — null."""
     value = op.get(key)
@@ -185,6 +196,9 @@ class LiveState:
         self._retired: set[str] = set()        # ушли (удалены, вытеснены, скрыты)
         self._next = {p: 1 for p in PREFIX.values()}
         self.version = 0
+        # До какого момента записи (секунды) сводка учла реплики: черновик для
+        # итогов честно говорит, где кончается (остановка не ждёт тика сводки).
+        self.covered_t: float | None = None
 
     # --- патч ---
 
@@ -276,9 +290,9 @@ class LiveState:
             raise PatchError(f"таймкод подсказки не разобран: {op.get('t')!r}")
         ref = op.get("ref")
         return {"op": "add", "section": "hints", "kind": kind,
-                "text": _text(op, "text", HINT_MAX, required=True),
-                "why": _text(op, "why", WHY_MAX, required=False) or "",
-                "reply": _text(op, "reply", REPLY_MAX, required=False) or None,
+                "text": _safe(_text(op, "text", HINT_MAX, required=True)),
+                "why": _safe(_text(op, "why", WHY_MAX, required=False) or ""),
+                "reply": _safe(_text(op, "reply", REPLY_MAX, required=False)) or None,
                 # ref сверяется с присланными фрагментами как есть, без обрезки.
                 "source_t": t, "ref": ref.strip() if isinstance(ref, str) and ref.strip() else None}
 
@@ -293,11 +307,11 @@ class LiveState:
                     fields[key] = _opt_field(op, key)
         elif section == "hints":
             if op.get("text") is not None:
-                fields["text"] = _text(op, "text", HINT_MAX, required=True)
+                fields["text"] = _safe(_text(op, "text", HINT_MAX, required=True))
             if op.get("why") is not None:
-                fields["why"] = _text(op, "why", WHY_MAX, required=False) or ""
+                fields["why"] = _safe(_text(op, "why", WHY_MAX, required=False) or "")
             if op.get("reply") is not None:
-                fields["reply"] = _text(op, "reply", REPLY_MAX, required=False) or None
+                fields["reply"] = _safe(_text(op, "reply", REPLY_MAX, required=False)) or None
             if op.get("t") is not None:
                 t = parse_clock(op.get("t"))
                 if t is None:
@@ -476,14 +490,48 @@ class LiveState:
         return text[:COMPACT_MAX]
 
     def hints_brief(self) -> str:
-        """Подсказки одной строкой — id и пометки, без текста: в постоянном
-        диалоге тексты модель уже видела (свои же ответы)."""
-        active = [f"{h['id']}{' (закреплена)' if h['pinned'] else ''}" for h in self._hints.values()]
+        """Активные подсказки для каждого тика диалога: `id · вид · текст`
+        (текст до BRIEF_TEXT_MAX). id выдаёт состояние, а не модель, — без
+        этого списка модель не знала бы, какой id у её же подсказки, и не
+        могла бы её уточнить или убрать. Плюс id скрытых человеком."""
+        lines = ["Активные подсказки (id · вид · текст):"]
+        for h in self._hints.values():
+            pin = " (закреплена)" if h["pinned"] else ""
+            lines.append(f"{h['id']} · {h['kind']}{pin} · {_flat(h['text'], BRIEF_TEXT_MAX)}")
+        if len(lines) == 1:
+            lines = ["Активных подсказок нет."]
         dismissed = sorted(self._dismissed, key=lambda i: int(i[1:]))[-DISMISSED_IN_PROMPT:]
-        out = "Активные подсказки: " + (", ".join(active) if active else "нет")
         if dismissed:
-            out += ". Скрыты пользователем (не предлагать снова): " + ", ".join(dismissed)
-        return out
+            lines.append("Скрыты пользователем (не предлагать снова): " + ", ".join(dismissed))
+        return "\n".join(lines)
+
+    def resolve(self, hint_id: str) -> bool:
+        """Убрать подсказку как отработанную («Вам вопрос», на который уже
+        ответили или который устарел): не скрыта человеком, просто ушла.
+        Закреплённую не трогаем."""
+        hint = self._hints.get(hint_id)
+        if hint is None or hint["pinned"]:
+            return False
+        del self._hints[hint_id]
+        self._retired.add(hint_id)
+        self.version += 1
+        return True
+
+    def age(self, hint: dict) -> float:
+        """Сколько секунд подсказка на экране (по часам состояния)."""
+        return max(0.0, self._clock() - float(hint.get("created_at") or 0.0))
+
+    def urgent_expiry_in(self, max_age_s: float) -> float | None:
+        """Через сколько секунд устареет ближайший незакреплённый «Вам вопрос»;
+        None — таких нет."""
+        left = [max_age_s - self.age(h) for h in self._hints.values()
+                if h["kind"] == URGENT and not h["pinned"]]
+        return min(left) if left else None
+
+    def mark_covered(self, t: float) -> None:
+        """Сводка учла реплики до момента `t` (секунды записи)."""
+        if t is not None and (self.covered_t is None or t > self.covered_t):
+            self.covered_t = float(t)
 
     def _compact(self, item_max: int, *, summary: bool = True, hints: bool = True) -> str:
         out: list[str] = []
@@ -510,12 +558,13 @@ class LiveState:
         return "\n".join(out) if out else "(пока пусто)"
 
     def render_markdown(self) -> str:
-        return render_markdown(self.summary())
+        return render_markdown(self.summary(), covered_t=self.covered_t)
 
     def save(self, path: Path) -> None:
         """Атомарно: tmp + replace (резидент может читать файл в любой момент)."""
         path = Path(path)
-        data = {**self.to_dict(), "saved_at": time.time(), "markdown": self.render_markdown()}
+        data = {**self.to_dict(), "saved_at": time.time(), "covered_t": self.covered_t,
+                "markdown": self.render_markdown()}
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         try:
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -671,7 +720,17 @@ def _item_text(section: str, item: dict) -> str:
     return str(item.get("text") or "")
 
 
-def render_markdown(summary: dict) -> str:
+def covered_note(covered_t) -> str:
+    """Где кончается черновик: сводка живого режима не успевает за последними
+    репликами (её тик — раз в ~минуту речи, при остановке не ждём)."""
+    if not isinstance(covered_t, (int, float)) or isinstance(covered_t, bool):
+        return ""
+    s = int(covered_t)
+    return (f"_Сводка учитывает реплики до [{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}]; "
+            "более поздние — только в расшифровке._")
+
+
+def render_markdown(summary: dict, covered_t=None) -> str:
     """Сводка в Markdown: для страницы `meet assist`, черновика итогов и промпта."""
     out: list[str] = []
     topic = str(summary.get("topic") or "").strip()
@@ -691,7 +750,11 @@ def render_markdown(summary: dict) -> str:
             else:
                 out.append(f"- {it.get('text') or ''}")
         out.append("")
-    return "\n".join(out).strip() or "_Пока пусто — сводка появится по ходу разговора._"
+    text = "\n".join(out).strip()
+    if not text:
+        return "_Пока пусто — сводка появится по ходу разговора._"
+    note = covered_note(covered_t)
+    return f"{text}\n\n{note}" if note else text
 
 
 def load_saved(folder: Path) -> dict | None:
@@ -704,5 +767,5 @@ def load_saved(folder: Path) -> dict | None:
         return None
     hints = data.get("hints")
     data["hints"] = [h for h in hints if isinstance(h, dict)] if isinstance(hints, list) else []
-    data["markdown"] = render_markdown(data["summary"])
+    data["markdown"] = render_markdown(data["summary"], covered_t=data.get("covered_t"))
     return data

@@ -130,7 +130,7 @@ class AssistState:
         self.hints_system = build_hints_system(
             self._glossary, self._task_context, max_hints=self.live.max_hints, owner=self._owner)
         self.qa_system = build_qa_system(
-            self._glossary, self._task_context, self._vault, self._knowledge)
+            self._glossary, self._task_context, self._vault, self._knowledge, folder=self._cwd)
         if self.digester is not None:
             self.digester.set_system_prompt(self.digester_system, self.hints_system)
         if self.qa is not None:
@@ -456,6 +456,9 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                               runner=runner, cadence=cadence, kb=kb,
                               call_kwargs=tick_kwargs,
                               owner_speaker=cfg.recording.speaker_name,
+                              # Имя из настроек и прежние имена владельца в базе голосов.
+                              owner_names=[cfg.recording.speaker_name,
+                                           *cfg.recording.former_speaker_names],
                               on_update=_save_state, log=log)
     state.qa = QAService(
         bus, live, system_prompt=state.qa_system,

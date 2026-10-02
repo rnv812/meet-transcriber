@@ -5,11 +5,14 @@
 
 * **подсказки** — по ритму речи: набралось `hint_gap_s` секунд сказанного
   (в тишине не считается) — «Сдержанно» 20 с, «Активно» 10 с; и сразу, когда
-  на встрече задали вопрос или обратились к владельцу (`triggers`). Реплики,
-  пришедшие во время тика, уходят следующим. Не больше `HOURLY_CAP` тиков в
+  на встрече задали вопрос или обратились к владельцу (`triggers`) — но не
+  чаще EVENT_MIN_GAP_S после прошлого тика и не больше EVENT_CAP таких в
+  час (свой бюджет: ложные поводы не съедают ритм). Реплики, пришедшие во
+  время тика, уходят следующим. Не больше `HOURLY_CAP` тиков по ритму в
   час. Модель видит весь разговор: у Claude Code это постоянный диалог
-  (`llm.claude_stream.Conversation`) — тик шлёт только новые реплики и id
-  подсказок; диалог вырос сверх бюджета (CONTEXT_BUDGET_TOKENS или
+  (`llm.claude_stream.Conversation`) — тик шлёт только новые реплики и
+  активные подсказки `id · вид · текст` (id выдаёт состояние, без них модель
+  не смогла бы править свои подсказки); диалог вырос сверх бюджета (CONTEXT_BUDGET_TOKENS или
   MAX_DIALOGUE_TURNS ходов) или процесс упал — начинается новый, с затравки:
   сводка, подсказки, сжатый ранний разговор и последние минуты дословно.
   У Codex и локальной модели постоянного диалога нет (`PerCallSession`):
@@ -19,7 +22,17 @@
   со сжатой сводкой и новыми репликами.
 
 Тикер не опрашивает шину по таймеру: он ждёт сигнала (`bus.changed`) — новая
-реплика будит его сразу.
+реплика будит его сразу; таймаут ожидания — до ближайшего настоящего срока
+(повтор после сбоя, пауза для сводки, промежуток повода, старение «Вам
+вопрос»), а сроков нет — только сигнал.
+
+«Вам вопрос» уходит сам: владелец проговорил после вопроса не меньше
+URGENT_ANSWER_S (ответил) или прошло URGENT_MAX_AGE_S; модели в дельте
+тоже говорится, что владелец заговорил, — пусть уберёт сама.
+
+Строки сводки применяются в конце ответа: ответ, оборванный остановкой, не
+оставляет половину правки. Докуда сводка учла реплики — `covered_t`
+состояния (черновик итогов честно говорит, где кончается).
 
 Ответ — JSON-операции по одной на строке (`live_state.PatchSession`):
 каждая готовая строка применяется сразу, пока модель пишет следующую (у
@@ -47,7 +60,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, replace
 
-from meet.assist.live_state import LineSplitter, PatchError, parse_line, parse_reply
+from meet.assist.live_state import URGENT, LineSplitter, PatchError, parse_line, parse_reply
 from meet.assist.prompts import (
     build_hints_delta,
     build_hints_seed,
@@ -56,6 +69,7 @@ from meet.assist.prompts import (
     build_repair_once,
     build_summary_prompt,
 )
+from meet.assist.triggers import owner_names as owner_names_of
 from meet.assist.triggers import trigger_of
 
 UNAVAILABLE = "Подсказки временно недоступны"
@@ -67,9 +81,19 @@ TAIL_LINES = 4
 TAIL_MAX_CHARS = 600
 TICK_TIMEOUT_S = 90.0
 BACKOFF_S = (30.0, 60.0, 120.0, 240.0)
-# Не больше тиков подсказок в час (ритм 10 с речи — до 360; с паузами меньше).
+# Не больше тиков подсказок по ритму в час (ритм 10 с речи — до 360; с
+# паузами меньше).
 HOURLY_CAP = 240
 HOUR_S = 3600.0
+# Внеочередные тики (вопрос, обращение): не чаще раза в EVENT_MIN_GAP_S после
+# начала прошлого тика подсказок и не больше EVENT_CAP в час — свой бюджет:
+# ложные поводы не съедают тики по ритму.
+EVENT_MIN_GAP_S = 8.0
+EVENT_CAP = 90
+# «Вам вопрос» уходит сам: владелец говорил после вопроса хотя бы столько
+# секунд (ответил) — или вопросу больше URGENT_MAX_AGE_S.
+URGENT_ANSWER_S = 5.0
+URGENT_MAX_AGE_S = 180.0
 # Тик — только если сказано хоть что-то: «ага, угу» — не повод звать модель.
 MIN_TICK_WORDS = 4
 # Речь без таймкодов конца — по словам (темп деловой речи).
@@ -78,8 +102,6 @@ REPLICA_MAX_S = 30.0
 # Сводка подтягивает остаток после паузы в разговоре.
 SUMMARY_IDLE_S = 20.0
 SUMMARY_IDLE_MIN_S = 5.0
-# Будильник цикла, когда сигналов нет (повтор после паузы, пауза в разговоре).
-IDLE_WAKE_S = 5.0
 # Постоянный диалог подсказок начинается заново, когда вырос.
 CONTEXT_BUDGET_TOKENS = 60_000
 MAX_DIALOGUE_TURNS = 120
@@ -176,26 +198,37 @@ class _Lane:
         self.failures = 0
         self.retry_at = 0.0
         self.task: asyncio.Future | None = None
-        self.starts: deque = deque()
+        self.starts: deque = deque()        # начала тиков по ритму (лимит в час)
+        self.event_starts: deque = deque()  # начала внеочередных тиков (свой лимит)
+        self.last_start: float | None = None
         self.last_latency: float | None = None
 
 
 class _Applier:
     """Строки ответа → операции живого состояния, по мере прихода текста."""
 
-    def __init__(self, patch, on_change) -> None:
+    def __init__(self, patch, on_change, *, deferred: bool = False) -> None:
         self.patch = patch
         self._on_change = on_change
         self._split = LineSplitter()
         self._streamed = False
+        # Отложенно (сводка): строки применяются только в finish() — ответ,
+        # оборванный остановкой, не оставляет в сводке половину правки.
+        self._deferred = deferred
+        self._held: list[str] = []
         self.bad: list[tuple[str, str]] = []
         self.ok = 0
         self.changed = False
 
-    def feed(self, text: str) -> None:
+    def feed(self, text: str | None) -> None:
+        if text is None:  # новое сообщение модели (после инструмента): строк не рвём
+            return
         self._streamed = True
         for line in self._split.feed(text):
-            self._line(line)
+            if self._deferred:
+                self._held.append(line)
+            else:
+                self._line(line)
 
     def finish(self, full_text: str) -> None:
         """Конец ответа: дописанный хвост (или весь текст, если поток не шёл)."""
@@ -203,8 +236,9 @@ class _Applier:
             for line in (full_text or "").split("\n"):
                 self._line(line)
         else:
-            for line in self._split.finish():
+            for line in self._held + self._split.finish():
                 self._line(line)
+            self._held = []
         if self.ok == 0:
             # Ни одной годной строки: может, это прежний формат — один
             # JSON-объект на несколько строк; иначе — ответ без JSON.
@@ -250,8 +284,9 @@ class Digester:
     `call_kwargs` — что добавить к вызову модели (уровень «Быстрее»:
     `{"model": "haiku", "thinking": "disabled"}`, `{"effort": "low"}`);
     `kb` — указатель терминов базы знаний (`TermIndex`) или None;
-    `owner_speaker`/`owner_name` — подпись владельца в ленте и его имя (поводы
-    внеочередной подсказки); `on_update` — после изменения состояния (запись
+    `owner_speaker` — подпись владельца в ленте; `owner_names` (или
+    `owner_name`) — его имена для поиска обращений: из настроек и прежние из
+    базы голосов (поводы внеочередной подсказки); `on_update` — после изменения состояния (запись
     live_state.json); `log` — строка в журнал."""
 
     def __init__(self, bus, state, *, system_prompt: str, runner,
@@ -259,7 +294,8 @@ class Digester:
                  hints_system: str | None = None, hints_session=None,
                  kb=None, clock=time.monotonic, on_update=None, log=print,
                  owner_speaker: str = "Вы", owner_name: str | None = None,
-                 hourly_cap: int = HOURLY_CAP,
+                 owner_names: list[str] | None = None,
+                 hourly_cap: int = HOURLY_CAP, event_cap: int = EVENT_CAP,
                  context_budget: int = CONTEXT_BUDGET_TOKENS,
                  max_dialogue_turns: int = MAX_DIALOGUE_TURNS) -> None:
         self._bus = bus
@@ -279,8 +315,9 @@ class Digester:
         self._on_update = on_update
         self._log = log
         self._owner_speaker = owner_speaker
-        self._owner_name = owner_name
+        self._names = owner_names_of(*(owner_names or [owner_name or owner_speaker]))
         self._hourly_cap = hourly_cap
+        self._event_cap = event_cap
         self._budget = context_budget
         self._max_turns = max_dialogue_turns
         self.hints = _Lane("hints")
@@ -338,14 +375,28 @@ class Digester:
         if not self.cadence.hints:
             return
         for entry in entries:
-            kind = trigger_of(entry, owner_speaker=self._owner_speaker, owner_name=self._owner_name)
+            kind = trigger_of(entry, owner_speaker=self._owner_speaker, names=self._names)
             if kind:
                 self._trigger = (kind, _clock_text(entry.get("t")))
 
+    @staticmethod
+    def _within_hour(starts: deque, now: float) -> int:
+        while starts and now - starts[0] >= HOUR_S:
+            starts.popleft()
+        return len(starts)
+
     def _capped(self, lane: _Lane, now: float) -> bool:
-        while lane.starts and now - lane.starts[0] >= HOUR_S:
-            lane.starts.popleft()
-        return len(lane.starts) >= self._hourly_cap
+        return self._within_hour(lane.starts, now) >= self._hourly_cap
+
+    def _rhythm_due(self, entries: list[dict], now: float) -> bool:
+        return (not self._capped(self.hints, now)
+                and speech_seconds(entries) >= self.cadence.hint_gap_s
+                and _words(entries) >= MIN_TICK_WORDS)
+
+    def _event_wait(self, now: float) -> float:
+        """Сколько ещё ждать внеочередному тику (0 — можно сейчас)."""
+        last = self.hints.last_start
+        return 0.0 if last is None else max(0.0, last + EVENT_MIN_GAP_S - now)
 
     def hints_due(self, now: float | None = None) -> bool:
         now = self._clock() if now is None else now
@@ -359,12 +410,12 @@ class Digester:
             return False
         if lane.failures:
             return True  # пауза после сбоя выдержана — повторяем
-        if self._capped(lane, now):
-            return False
         if self._trigger is not None:
-            return True
-        return (speech_seconds(entries) >= self.cadence.hint_gap_s
-                and _words(entries) >= MIN_TICK_WORDS)
+            if self._within_hour(lane.event_starts, now) >= self._event_cap:
+                self._trigger = None  # бюджет поводов исчерпан — дальше по ритму
+            elif self._event_wait(now) == 0.0:
+                return True
+        return self._rhythm_due(entries, now)
 
     def summary_due(self, now: float | None = None) -> bool:
         now = self._clock() if now is None else now
@@ -383,14 +434,67 @@ class Digester:
             return True
         return speech >= SUMMARY_IDLE_MIN_S and now - self._last_line_at >= SUMMARY_IDLE_S
 
-    def _wake_in(self, now: float) -> float:
-        wake = [IDLE_WAKE_S]
+    def _wake_in(self, now: float) -> float | None:
+        """Через сколько секунд наступит ближайший настоящий срок (повтор после
+        сбоя, пауза в разговоре для сводки, промежуток повода, старение «Вам
+        вопрос», лимит в час); None — сроков нет, ждём только сигнала."""
+        wake: list[float] = []
         for lane in self._lanes():
-            if lane.failures:
+            pending, _ = self._bus.entries_since(lane.cursor)
+            if lane.failures and lane.task is None and pending and lane.retry_at > now:
                 wake.append(lane.retry_at - now)
-        if self.summary.task is None:
-            wake.append(self._last_line_at + SUMMARY_IDLE_S - now)
-        return max(0.05, min(wake))
+        summary, _ = self._bus.entries_since(self.summary.cursor)
+        if (self.summary.task is None and not self.summary.failures and summary
+                and _words(summary) >= (self.cadence.min_words or MIN_TICK_WORDS)
+                and speech_seconds(summary) >= SUMMARY_IDLE_MIN_S):
+            idle = self._last_line_at + SUMMARY_IDLE_S - now
+            if idle > 0:
+                wake.append(idle)
+        if self.cadence.hints and self.hints.task is None:
+            hints, _ = self._bus.entries_since(self.hints.cursor)
+            if self._trigger is not None and hints and self._event_wait(now) > 0:
+                wake.append(self._event_wait(now))
+            if (hints and self._capped(self.hints, now)
+                    and speech_seconds(hints) >= self.cadence.hint_gap_s):
+                wake.append(self.hints.starts[0] + HOUR_S - now)
+        expiry = self._state.urgent_expiry_in(URGENT_MAX_AGE_S)
+        if expiry is not None:
+            wake.append(expiry)
+        wake = [w for w in wake if w > 0]
+        return min(wake) if wake else None
+
+    def resolve_urgent(self) -> bool:
+        """«Вам вопрос» уходит сам: владелец ответил (говорил после вопроса
+        не меньше URGENT_ANSWER_S) или вопрос устарел (URGENT_MAX_AGE_S).
+        Закреплённые человек оставил — их не трогаем. True — что-то ушло."""
+        urgent = [h for h in self._state.hints() if h["kind"] == URGENT and not h["pinned"]]
+        if not urgent:
+            return False
+        entries, _ = self._bus.entries_since(0)
+        changed = False
+        for h in urgent:
+            answered = speech_seconds([e for e in entries
+                                       if e.get("speaker") == self._owner_speaker
+                                       and isinstance(e.get("t"), (int, float))
+                                       and e["t"] > h["source_t"]])
+            if answered >= URGENT_ANSWER_S:
+                changed |= self._state.resolve(h["id"])
+            elif self._state.age(h) >= URGENT_MAX_AGE_S:
+                changed |= self._state.resolve(h["id"])
+        if changed:
+            self._changed()
+        return changed
+
+    def _answered_note(self, entries: list[dict]) -> str:
+        """Для дельты: владелец заговорил после «Вам вопрос» — пусть модель
+        отметит вопрос отвеченным (remove), если ответ дан."""
+        ids = [h["id"] for h in self._state.hints() if h["kind"] == URGENT and any(
+            e.get("speaker") == self._owner_speaker and isinstance(e.get("t"), (int, float))
+            and e["t"] > h["source_t"] for e in entries)]
+        if not ids:
+            return ""
+        return (f"Владелец заговорил после вопроса {', '.join(ids)}: если ответ дан — "
+                "удали эту подсказку (remove).")
 
     # --- реплики ---
 
@@ -475,10 +579,11 @@ class Digester:
         lane.retry_at = self._clock() + pause
         self._log(f"{_LANE_LOG[lane.name]}: модель недоступна ({reason}); повтор через {pause:.0f} с")
 
-    def _session_now(self):
+    async def _session_now(self):
         if self._reset_session and self._session is not None:
-            self._session.close()
-            self._session = None
+            old, self._session = self._session, None
+            # Закрытие ждёт выхода процесса (до пары секунд) — не в цикле событий.
+            await asyncio.to_thread(old.close)
         self._reset_session = False
         if self._session is None:
             self._session = self._session_factory(self._hints_system)
@@ -493,9 +598,16 @@ class Digester:
         if not lines:
             return False
         trigger, self._trigger = self._trigger, None
+        now = self._clock()
+        entries, _ = self._bus.entries_since(lane.cursor)
+        if trigger is not None and not self._rhythm_due(entries, now):
+            lane.event_starts.append(now)  # внеочередной тик — из своего бюджета
+        else:
+            lane.starts.append(now)
+        lane.last_start = now
         excerpts = self._kb.excerpts(lines) if self._kb is not None else []
         refs = {e["ref"] for e in excerpts}
-        session = self._session_now()
+        session = await self._session_now()
         fresh = not session.stateful or not session.alive or session.turns == 0
         if fresh:
             earlier, recent = self._history(lane.cursor)
@@ -505,7 +617,8 @@ class Digester:
                 earlier=earlier, recent=recent, new_lines=lines, excerpts=excerpts,
                 trigger=trigger)
         else:
-            message = build_hints_delta(lines, self._state.hints_brief(), excerpts, trigger)
+            message = build_hints_delta(lines, self._state.hints_brief(), excerpts, trigger,
+                                        note=self._answered_note(entries[:len(lines)]))
         applier = _Applier(self._state.session(lane="hints", allowed_refs=refs), self._changed)
 
         async def send(text: str, on_text):
@@ -544,12 +657,14 @@ class Digester:
     async def summary_once(self) -> bool:
         """Тик сводки; True — состояние изменилось."""
         lane = self.summary
-        _, lines, end = self._chunk(lane.cursor)
+        chunk, lines, end = self._chunk(lane.cursor)
         if not lines:
             return False
+        lane.starts.append(self._clock())
+        lane.last_start = self._clock()
         prompt = build_summary_prompt(self._state.render_compact(hints=False), lines,
                                       self._tail(lane.cursor))
-        applier = _Applier(self._state.session(lane="summary"), self._changed)
+        applier = _Applier(self._state.session(lane="summary"), self._changed, deferred=True)
 
         async def send(text: str, on_text):
             return await self._runner(text, system_prompt=self._summary_system, max_turns=1,
@@ -559,6 +674,9 @@ class Digester:
         latency = await self._tick(lane, send, prompt, applier,
                                    lambda bad: build_repair_once(prompt, bad), end)
         if latency is not None:
+            times = [e["t"] for e in chunk if isinstance(e.get("t"), (int, float))]
+            if times:
+                self._state.mark_covered(max(times))
             size = len(prompt) + len(self._summary_system)
             self._log(f"сводка: {latency:.1f} с, вход {size} симв., версия {self._state.version}")
         return applier.changed
@@ -568,7 +686,6 @@ class Digester:
         """Вызов, построчное применение, одна попытка исправления. → время
         тика в секундах или None (сбой провайдера: курсор на месте)."""
         started = time.monotonic()
-        lane.starts.append(self._clock())
         try:
             reply = await send(message, applier.feed)
         except Exception as e:  # сбой раннера не валит процесс
@@ -631,6 +748,7 @@ class Digester:
             while not stop.is_set():
                 now = self._clock()
                 self._scan()
+                self.resolve_urgent()
                 self._start_due(now)
                 waiter = asyncio.ensure_future(signal.wait(seen, self._wake_in(now)))
                 await asyncio.wait({waiter, stopped}, return_when=asyncio.FIRST_COMPLETED)
@@ -644,7 +762,7 @@ class Digester:
             for task in running:
                 task.cancel()
             await asyncio.gather(*running, return_exceptions=True)
-            self.close()
+            await asyncio.to_thread(self.close)
 
     def close(self) -> None:
         """Закрыть диалог подсказок (процесс модели)."""

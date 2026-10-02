@@ -350,3 +350,44 @@ async def _timed(coro):
     t = time.monotonic()
     await coro
     return time.monotonic() - t
+
+
+def test_new_model_message_restarts_the_partial_answer():
+    """Пояснение к инструменту («посмотрю заметки») не остаётся в ответе:
+    новое сообщение модели (on_text(None)) начинает текст заново."""
+    async def scenario():
+        bus, digest = TranscriptBus(), LiveState()
+
+        async def runner(prompt, *, on_text=None, **kw):
+            on_text("Посмотрю заметки…")
+            on_text(None)
+            on_text("Решили перенести.")
+            return AgentReply(text="Решили перенести.")
+
+        qa = QAService(bus, digest, system_prompt="s", allowed_dirs=(), cwd=".", runner=runner)
+        seen = []
+        real = qa._partial
+
+        def spy(item):
+            inner = real(item)
+
+            def on_text(chunk):
+                inner(chunk)
+                seen.append(qa.partials()[0]["a"] if qa.partials() else None)
+            return on_text
+
+        qa._partial = spy
+        await qa.ask("что решили?")
+        return seen
+
+    assert asyncio.run(scenario()) == ["Посмотрю заметки…", "", "Решили перенести."]
+
+
+def test_failed_tail_recognition_does_not_fail_the_question():
+    calls = []
+
+    def broken():
+        raise RuntimeError("GigaAM упала")
+
+    _, qa = _service([AgentReply(text="ок")], calls, on_fresh_audio=broken)
+    assert asyncio.run(qa.ask("вопрос")) == "ок" and calls
