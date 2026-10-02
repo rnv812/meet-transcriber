@@ -15,6 +15,7 @@
   width: auto; padding: 10px 12px; gap: 6px; box-shadow: none; background: var(--surface-2);
   border-radius: var(--r-md);
 }
+.confirm:focus { outline: none; } /* фокус на самом окне — после щелчка по тексту */
 .confirm__title { font-weight: 600; }
 .confirm--inline .confirm__title { font-weight: 500; }
 .confirm__text { color: var(--text-2); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }

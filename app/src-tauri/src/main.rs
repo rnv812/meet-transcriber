@@ -121,6 +121,7 @@ fn main() {
             updater::check_update,
             updater::install_update,
             updater::cancel_update,
+            tray::set_settings_dirty,
             updater::releases_page,
             // Вкладка «Агент»: Claude Code / Codex во встроенном терминале.
             pty::agent_spawn,

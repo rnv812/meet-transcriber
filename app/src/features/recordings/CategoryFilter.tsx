@@ -18,6 +18,7 @@ import type { Category } from "../../lib/types";
 import { CategoryDot } from "../../ui/Category";
 import { Popover } from "../../ui/Popover";
 import { Icon } from "../../ui/Icon";
+import { Truncate } from "../../ui/Truncate";
 
 export function CategoryFilter({ list, endpoint, q, selected, onChange }: {
   list: Category[];
@@ -71,7 +72,7 @@ export function CategoryFilter({ list, endpoint, q, selected, onChange }: {
                 <input type="checkbox" checked={selected.includes(o.key)} autoFocus={i === 0}
                   onChange={() => toggle(o.key)} />
                 <CategoryDot color={o.color} />
-                <span className="cat-filter__name">{o.name}</span>
+                <Truncate className="cat-filter__name">{o.name}</Truncate>
                 <span className="cat-filter__count" aria-hidden="true" title={scopeNote}>{count(o.key) ?? ""}</span>
               </label>
             ))}

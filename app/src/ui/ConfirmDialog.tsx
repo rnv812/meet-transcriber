@@ -7,11 +7,14 @@
  * если действие необратимо. `alt` — третий вариант («Не сохранять»).
  *
  * `inline` — блок в потоке страницы (у строки списка, в меню); без него —
- * модальное окно поверх затемнения: Tab не уходит из окна, щелчок по
- * затемнению — отмена, после закрытия фокус возвращается туда, где был.
+ * модальное окно поверх затемнения: Tab не уходит из окна (остальная страница
+ * на это время `inert`), щелчок по затемнению — отмена. После закрытия фокус
+ * возвращается в `returnFocus` (кнопка, открывшая меню) или туда, где был.
  */
 
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 import { Button } from "./Button";
 import "./primitives.css";
@@ -33,14 +36,17 @@ type Props = ConfirmOptions & {
   busy?: boolean;
   inline?: boolean;
   className?: string;
+  /** Куда вернуть фокус после закрытия (подтверждение открыто из меню, которое уже закрыто). */
+  returnFocus?: RefObject<HTMLElement | null>;
 };
 
 const FOCUSABLE = "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
 export function ConfirmDialog({
   title, message, confirmLabel, cancelLabel = "Отмена", danger = true, alt, onConfirm, onCancel, busy = false,
-  inline = false, className = "",
+  inline = false, className = "", returnFocus,
 }: Props) {
+  const backdrop = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const safe = useRef<HTMLButtonElement>(null);
   const titleId = useId();
@@ -48,13 +54,26 @@ export function ConfirmDialog({
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
 
+  const returnRef = useRef(returnFocus);
+  returnRef.current = returnFocus;
+
   // Фокус — на безопасной кнопке; после закрытия — обратно, откуда пришли.
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
     safe.current?.focus();
     return () => {
-      if (!inline && before && document.contains(before)) before.focus();
+      const target = returnRef.current?.current ?? before;
+      if (target && target !== document.body && document.contains(target)) target.focus();
     };
+  }, []);
+
+  // Модальное окно: остальная страница недоступна — ни Tab, ни щелчок, ни чтение.
+  useEffect(() => {
+    if (inline) return;
+    const own = backdrop.current;
+    const marked = [...document.body.children].filter((el) => el !== own && !el.hasAttribute("inert"));
+    marked.forEach((el) => el.setAttribute("inert", ""));
+    return () => marked.forEach((el) => el.removeAttribute("inert"));
   }, [inline]);
 
   // Модальное окно ловит Esc, где бы ни был фокус.
@@ -85,6 +104,7 @@ export function ConfirmDialog({
 
   const dialog = (
     <div ref={box} role="alertdialog" aria-modal={inline ? undefined : true} aria-labelledby={titleId}
+      tabIndex={-1}
       aria-describedby={message ? textId : undefined} onKeyDown={onKey}
       className={`confirm${inline ? " confirm--inline" : ""} ${className}`.trim()}>
       <div className="confirm__title" id={titleId}>{title}</div>
@@ -102,7 +122,7 @@ export function ConfirmDialog({
   );
   if (inline) return dialog;
   return createPortal(
-    <div className="confirm-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+    <div ref={backdrop} className="confirm-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
       {dialog}
     </div>,
     document.body,

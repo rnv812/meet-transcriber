@@ -84,3 +84,16 @@ test("Jira: переключатель, адрес и ключи уходят в
     integrations: { jira_base_url: "https://jira.example.com", jira_keys: "SPR, OPS" },
   }));
 });
+
+test("Jira выключили с негодным адресом — «Сохранить» доступно, адрес не уходит", async () => {
+  open();
+  const base = await screen.findByRole("textbox", { name: "Адрес Jira" });
+  await userEvent.type(base, "http://jira.example.com");
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  await userEvent.click(await toggle("Ссылки на задачи Jira"));
+  expect(screen.getByRole("textbox", { name: "Адрес Jira" })).toBeDisabled();
+  const save = screen.getByRole("button", { name: "Сохранить" });
+  expect(save).toBeEnabled();
+  await userEvent.click(save);
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { transcript_view: { jira: false } }));
+});

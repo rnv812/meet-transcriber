@@ -20,6 +20,19 @@ export function markupChangesInvalid(changes: Raw): boolean {
     || (typeof i.jira_keys === "string" && jiraKeysError(i.jira_keys) !== null);
 }
 
+/**
+ * Ссылки на Jira выключены: адрес и ключи недоступны для правки, и негодное
+ * значение в них не должно запирать «Сохранить» — оно просто не уходит
+ * резиденту (останется прежнее). Правит `changes` на месте.
+ */
+export function dropHiddenJira(changes: Raw, draft: Raw): void {
+  const i = changes.integrations;
+  if (!i || draft.transcript_view?.jira !== false) return;
+  if (typeof i.jira_base_url === "string" && jiraBaseError(i.jira_base_url) !== null) delete i.jira_base_url;
+  if (typeof i.jira_keys === "string" && jiraKeysError(i.jira_keys) !== null) delete i.jira_keys;
+  if (Object.keys(i).length === 0) delete changes.integrations;
+}
+
 export function JiraTip() {
   return (
     <HelpTip label="Как работают ссылки на Jira" title="Ссылки на задачи Jira">

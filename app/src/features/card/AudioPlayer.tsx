@@ -91,7 +91,7 @@ function VolumeIcon({ muted, level }: { muted: boolean; level: number }) {
 /** Где клавиши плеера не работают: поля ввода, терминал агента, окна и меню, список вкладок. */
 const KEYS_IGNORED = [
   "input", "textarea", "select", "[contenteditable='']", "[contenteditable='true']", "[data-agent-terminal]", ".xterm",
-  "[role=dialog]", "[aria-modal=true]", ".popover", ".menu", ".item-menu", "[role=menu]", "[role=listbox]",
+  "[role=dialog]", "[role=alertdialog]", "[aria-modal=true]", ".popover", ".menu", ".item-menu", "[role=menu]", "[role=listbox]",
   "[role=tablist]",
 ].join(", ");
 /** На них пробел нажимает их самих. */

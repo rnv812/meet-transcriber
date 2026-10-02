@@ -12,7 +12,7 @@
  * App); «Сбросить…» тоже спрашивает.
  */
 
-import { useCallback, useEffect, useState, type MutableRefObject, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import {
   type Devices, type Endpoint, type Processes,
   NoResidentError, getDevices, getProcesses, getSettings, patchSettings, setAutoRecord,
@@ -37,7 +37,7 @@ import { DiagnosticsPane } from "./DiagnosticsPane";
 import { EnginePane } from "./EnginePane";
 import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSection";
 import { HotwordsEditor } from "./HotwordsEditor";
-import { MarkupSection, markupChangesInvalid } from "./MarkupSection";
+import { MarkupSection, dropHiddenJira, markupChangesInvalid } from "./MarkupSection";
 import { ReplacementsEditor } from "./ReplacementsEditor";
 import { ModelsPane } from "./ModelsPane";
 import { ProfilesSection } from "./ProfilesSection";
@@ -355,8 +355,10 @@ function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
   );
 }
 
-export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, onRunWizard, guardRef }: {
+export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, onRunWizard, guardRef, onDirtyChange }: {
   endpoint: Endpoint;
+  /** Появились или пропали несохранённые правки (оболочке: «Выход» из трея спрашивает). */
+  onDirtyChange?: (dirty: boolean) => void;
   /** Сюда настройки кладут, есть ли несохранённое и как его сохранить (вопрос при уходе — в App). */
   guardRef?: MutableRefObject<SettingsGuard | null>;
   recordingsDir: string | null;
@@ -427,6 +429,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
       }
     }
   }
+  dropHiddenJira(changes, draft);
   const categoriesDirty = settings !== null && categoriesChanged(draft.categories, settings.categories);
   const dirty = [...Object.keys(changes), ...(categoriesDirty ? ["categories"] : [])];
   const invalid = assistantChangesInvalid(changes) || exportChangesInvalid(changes, settings ?? {})
@@ -466,6 +469,11 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
     guardRef.current = { dirty: dirtyTitles, canSave: !invalid, save };
   });
   useEffect(() => () => { if (guardRef) guardRef.current = null; }, [guardRef]);
+  const anyDirty = dirtyTitles.length > 0;
+  const dirtyCb = useRef(onDirtyChange);
+  dirtyCb.current = onDirtyChange;
+  useEffect(() => { dirtyCb.current?.(anyDirty); }, [anyDirty]);
+  useEffect(() => () => dirtyCb.current?.(false), []);
 
   /** Переключатель живёт вне черновика: применяется и сохраняется сразу. */
   const toggleAuto = async (enabled: boolean) => {
@@ -481,14 +489,17 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   };
 
   const showBar = !NO_DRAFT.includes(section);
+  const dirtyNoteId = "settings-dirty-note";
   const isDirty = dirty.length > 0;
 
   return (
     <div className="settings">
       <nav className="settings__menu" aria-label="Разделы настроек">
+        <span id={dirtyNoteId} className="sr-only">Есть несохранённые изменения</span>
         {MENU.map((m) => (
           <button key={m.id} type="button" className="settings__item"
             title={dirtySections.has(m.id) ? "Есть несохранённые изменения" : undefined}
+            aria-describedby={dirtySections.has(m.id) ? dirtyNoteId : undefined}
             aria-current={m.id === section ? "page" : undefined} onClick={() => setSection(m.id)}>
             <span className="settings__item-title">{m.title}</span>
             {dirtySections.has(m.id) && <span className="settings__dirty" data-dirty aria-hidden="true" />}

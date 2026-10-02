@@ -50,7 +50,7 @@ body {
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Фокус, поставленный программно (заголовок открытой панели, найденная реплика), — без рамки:
    туда не переходили с клавиатуры, рамка только сбивает. */
-[tabindex="-1"]:focus-visible { outline: none; }
+:is(h1, h2, h3, h4, section, [role="alertdialog"])[tabindex="-1"]:focus-visible { outline: none; }
 
 /* Кнопки (ui/Button): secondary — по умолчанию, primary, ghost, danger, link;
    размеры md 28 px и sm 24 px. Нажатие видно сразу (:active), занятость —
@@ -110,6 +110,8 @@ body {
   text-transform: uppercase; color: var(--text-3);
 }
 .num { font-variant-numeric: tabular-nums; }
+/* Только для экранного диктора. */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .muted { color: var(--text-2); }
 
 .badge {

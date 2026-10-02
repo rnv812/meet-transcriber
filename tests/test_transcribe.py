@@ -252,8 +252,9 @@ def test_progress_without_align_has_one_step_less(monkeypatch, tmp_path):
     assert "align" not in {e["stage"] for e in events_}
 
 
-def test_progress_drops_voices_when_diarization_is_skipped(monkeypatch, tmp_path):
-    """Без токена голоса не сопоставляются: шаг убирается, а доля не откатывается."""
+def test_progress_skips_voices_when_diarization_is_skipped(monkeypatch, tmp_path):
+    """Без токена голоса не сопоставляются: шаг пропускается, число этапов
+    не меняется, доля не откатывается."""
     import meet.transcribe as tr
     from meet import events
 
@@ -269,10 +270,92 @@ def test_progress_drops_voices_when_diarization_is_skipped(monkeypatch, tmp_path
     tr.transcribe(str(src), align=False, bus=bus)
     events_ = _progress(seen)
     assert "voices" not in {e["stage"] for e in events_}
-    assert events_[0]["steps"] == 5 and events_[-1]["steps"] == 4
+    assert {e["steps"] for e in events_} == {5}
+    assert [e["step"] for e in events_ if e["stage"] == "render"][0] == 5  # голоса (4) пропущены
     fractions = [e["fraction"] for e in events_]
     assert fractions == sorted(fractions) and fractions[-1] == 1.0
     assert any(e["note"] == "пропущено: нет токена Hugging Face" for e in events_)
+
+
+# --- план этапов решается до первого события и не меняется -------------------
+
+
+def _engine_run(monkeypatch, tmp_path, *, device, backend, layout, align=True, diar_skipped=None):
+    """Прогнать пайплайн с заглушками при заданном движке; → события progress."""
+    import meet.transcribe as tr
+    from meet import asr, events, gigaam_asr
+
+    state = tmp_path / "state"
+    state.mkdir(exist_ok=True)
+    monkeypatch.setenv("MEET_DATA_DIR", str(state))
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: device)
+    monkeypatch.setattr(gigaam_asr, "installed", lambda: True)
+    choice = asr.Choice(backend, device, "v3_e2e_rnnt" if backend == "gigaam" else None)
+    monkeypatch.setattr(asr, "choose", lambda path=None, **kw: choice)
+    monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
+    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h, **kw: [Segment(0.0, 1.0, "а")])
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
+    monkeypatch.setattr(tr, "diarize_wav", lambda p, num_speakers=None, exclusive=False, **kw:
+                        Diarization(turns=[], skipped=diar_skipped))
+    monkeypatch.setattr(tr, "split_by_speaker", lambda s, t, o=None: s)
+    monkeypatch.setattr(tr, "_restore_latin", lambda segments, run: None)
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    folder = tmp_path / "2026-10-02_10-00"
+    folder.mkdir()
+    if layout == "two":
+        (folder / "sys.opus").write_bytes(b"x")
+        (folder / "mic.opus").write_bytes(b"x")
+    else:
+        (folder / "source.mp4").write_bytes(b"x")
+    tr.transcribe(str(folder), align=align, bus=bus)
+    return _progress(seen)
+
+
+def _assert_steady(events_, steps):
+    assert {e["steps"] for e in events_} == {steps}  # с первого события и до конца
+    numbers = [e["step"] for e in events_]
+    assert numbers == sorted(numbers) and numbers[-1] == steps
+    fractions = [e["fraction"] for e in events_]
+    assert fractions == sorted(fractions) and fractions[-1] == 1.0
+
+
+def test_plan_gigaam_cpu_two_tracks_has_no_alignment_from_the_start(monkeypatch, tmp_path):
+    """Путь по умолчанию на процессоре: GigaAM, выравнивание после неё не нужно —
+    «Этап N из 6» с первого события, без «из 7» в начале."""
+    events_ = _engine_run(monkeypatch, tmp_path, device="cpu", backend="gigaam", layout="two")
+    _assert_steady(events_, 6)
+    assert "align" not in {e["stage"] for e in events_}
+
+
+def test_plan_whisper_cuda_keeps_alignment(monkeypatch, tmp_path):
+    events_ = _engine_run(monkeypatch, tmp_path, device="cuda", backend="faster-whisper", layout="two")
+    _assert_steady(events_, 7)
+    assert [e["step"] for e in events_ if e["stage"] == "align"][0] == 3
+
+
+def test_plan_without_diarization_keeps_its_count(monkeypatch, tmp_path):
+    events_ = _engine_run(monkeypatch, tmp_path, device="cpu", backend="gigaam", layout="two",
+                          diar_skipped="skipped_no_token")
+    _assert_steady(events_, 6)
+    assert "voices" not in {e["stage"] for e in events_}
+
+
+def test_plan_import_single_track_gigaam(monkeypatch, tmp_path):
+    events_ = _engine_run(monkeypatch, tmp_path, device="cpu", backend="gigaam", layout="import")
+    _assert_steady(events_, 5)
+
+
+def test_plan_engine_changed_after_start_skips_alignment_without_recount(monkeypatch, tmp_path):
+    """Настройки обещали Whisper (шаг выравнивания в плане), а распознала GigaAM:
+    шаг пропускается, число этапов прежнее."""
+    import meet.transcribe as tr
+
+    monkeypatch.setattr(tr, "_align_planned", lambda align: True)
+    events_ = _engine_run(monkeypatch, tmp_path, device="cpu", backend="gigaam", layout="two")
+    _assert_steady(events_, 7)
+    assert "align" not in {e["stage"] for e in events_}
 
 
 def test_asr_and_diarization_report_progress_inside_their_steps(monkeypatch, tmp_path):

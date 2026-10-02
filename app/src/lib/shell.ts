@@ -45,6 +45,28 @@ export async function pickFolder(start?: string | null): Promise<string | null> 
   return invoke<string | null>("pick_folder", { start: start ?? null });
 }
 
+/**
+ * Крестик главного окна. `hold()` — true: закрытие придержать (вопрос о
+ * несохранённом), закрыть потом destroyMainWindow(); false — окно закрывается.
+ */
+export async function onCloseRequested(hold: () => boolean): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  return getCurrentWindow().onCloseRequested((event) => { if (hold()) event.preventDefault(); });
+}
+
+export async function destroyMainWindow(): Promise<void> {
+  if (!inTauri()) return;
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  await getCurrentWindow().destroy();
+}
+
+/** Есть ли несохранённое в настройках: «Выход» из трея тогда спрашивает. */
+export async function setSettingsDirty(dirty: boolean): Promise<void> {
+  if (!inTauri()) return;
+  await invoke<void>("set_settings_dirty", { dirty }).catch(() => {});
+}
+
 /** Оболочка просит открыть запись (клик по уведомлению). */
 export async function onOpenRecording(cb: (id: string) => void): Promise<() => void> {
   if (!inTauri()) return () => {};

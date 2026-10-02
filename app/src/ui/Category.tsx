@@ -13,6 +13,7 @@ import { NO_CATEGORY_NAME } from "../lib/categories";
 import type { Category } from "../lib/types";
 import "./category.css";
 import { Icon } from "./Icon";
+import { Truncate } from "./Truncate";
 
 /** Цветная точка категории; без цвета — пустой кружок «Без категории». */
 export function CategoryDot({ color }: { color?: string | null }) {
@@ -30,7 +31,7 @@ export function CategoryChip({ category }: { category: Category | null }) {
   return (
     <span className={`cat-chip${category ? "" : " cat-chip--none"}`}>
       <CategoryDot color={category?.color} />
-      <span className="cat-chip__name">{category?.name ?? NO_CATEGORY_NAME}</span>
+      <Truncate className="cat-chip__name">{category?.name ?? NO_CATEGORY_NAME}</Truncate>
     </span>
   );
 }

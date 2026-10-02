@@ -15,9 +15,11 @@
 `done/total` внутри шага остаются (0…1 или None — у шага нет своей шкалы), так
 что старое окно продолжает понимать события.
 
-Шаг, который не понадобился (выравнивание после GigaAM, голоса без
-диаризации), убирается из плана до начала: `steps` уменьшается, а `fraction`
-только растёт — его вес просто перестаёт ждать.
+План решается до первого события: выравнивание после GigaAM в него не входит
+(`transcribe._align_planned`). Шаг, ненужность которого выяснилась уже по ходу
+(голоса без диаризации, выравнивание при языке «auto»), пропускается
+(`skip`): число этапов во время работы не меняется никогда, а `fraction`
+только растёт.
 """
 
 import time
@@ -69,6 +71,14 @@ class Stages:
 
     def has(self, key: str) -> bool:
         return any(s.key == key for s in self.steps)
+
+    def skip(self, key: str) -> None:
+        """Шаг оказался не нужен, когда план уже показан: он считается
+        пройденным, число этапов не меняется (следующий этап просто идёт под
+        своим номером). События нет — его отметит следующий `begin`."""
+        if key in self._done or (self.current and self.current.key == key) or not self.has(key):
+            return
+        self._done.add(key)
 
     def estimate(self, seconds: float | None) -> None:
         """Ожидаемая длительность всей работы (для «осталось ~N мин»)."""
@@ -133,6 +143,8 @@ class Stages:
         data = {"step": index + 1, "steps": len(self.steps), "fraction": round(self.fraction(), 4)}
         if self.estimate_s:
             data["estimate_s"] = round(self.estimate_s, 1)
+        if final:
+            data["final"] = True  # конец работы: консоль печатает эту строку (путь результата)
         self.bus.progress(
             step.stage,
             label=step.label or events.STAGE_LABELS.get(step.stage, step.stage),

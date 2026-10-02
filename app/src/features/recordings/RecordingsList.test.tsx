@@ -364,3 +364,12 @@ test("название в строке: подсказка — полное на
   fireEvent.mouseEnter(title);
   expect(title.getAttribute("title")).toBe("Планёрка\nДвойной щелчок или F2 — переименовать");
 });
+
+test("бейдж идущей расшифровки: общая доля впереди этапа — это ход всей работы", async () => {
+  const { badgeOf } = await import("./RecordingItem");
+  const job = { id: "j", kind: "transcribe", folder: "C:/rec/b", state: "running" as const, stage: "diarize",
+    label: "диаризация", done: null, total: null, note: "sys", result: null, error: null, step: 4, steps: 6, fraction: 0.62 };
+  expect(badgeOf({ kind: "running", stage: "diarize", label: "Разделение на спикеров", job })?.text)
+    .toBe("62% · Разделение на спикеров");
+  expect(badgeOf({ kind: "running", stage: "align", label: "Выравнивание" })?.text).toBe("Выравнивание…");
+});
