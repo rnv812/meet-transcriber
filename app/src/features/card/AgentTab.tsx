@@ -690,7 +690,7 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
           </TipLine>
           <TipLine>
             Если агент уже работал с этой встречей, «Продолжить прошлую» возвращает к последнему разговору в её папке
-            (Claude Code — <code>--continue</code>, Codex — <code>resume --last</code>); «Новая сессия» начинает
+            (Claude Code — <code>--resume</code> того же сеанса, Codex — <code>resume --last</code>); «Новая сессия» начинает
             разговор заново.
           </TipLine>
           <TipLine>Копировать — Ctrl+Shift+C, вставить — Ctrl+Shift+V или правой кнопкой мыши.</TipLine>

@@ -56,14 +56,16 @@ test("поля обоих агентов, строка «Команда запу
   expect(screen.getByText("Запуск агента (вкладка «Агент»)")).toBeInTheDocument();
   expect(within(group("Запуск Codex")).getByRole("textbox", { name: "Дополнительные параметры" })).toHaveValue("-m gpt-5");
   expect(within(group("Запуск Codex")).getByRole("textbox", { name: "Переменные окружения" })).toHaveValue("CODEX_HOME=D:\\codex");
-  expect(within(claude).getByText(/^claude --add-dir D:\\kb --append-system-prompt/)).toBeInTheDocument();
+  expect(within(claude).getByText(/^claude --session-id "<id сеанса>" --add-dir D:\\kb --append-system-prompt/))
+    .toBeInTheDocument();
   // Вставкой, а не набором по букве: длинные строки под нагрузкой набираются долго.
   await userEvent.click(within(claude).getByRole("textbox", { name: "Дополнительные параметры" }));
   await userEvent.paste("--model opus");
   await userEvent.click(within(claude).getByRole("textbox", { name: "Переменные окружения" }));
   await userEvent.paste("CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1");
   expect(within(claude).getByText(
-    "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 claude --add-dir D:\\kb --append-system-prompt \"<подсказка о встрече>\" --model opus",
+    "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 claude --session-id \"<id сеанса>\" --add-dir D:\\kb "
+    + "--append-system-prompt \"<подсказка о встрече>\" --model opus",
   )).toBeInTheDocument();
   await userEvent.click(save());
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { agent: { launch: {
@@ -89,6 +91,37 @@ test("незакрытая кавычка и негодная переменна
   expect(within(claude).getByText(/^Строка 1: недопустимое имя «1BAD»/)).toBeInTheDocument();
   expect(env).toHaveValue("1BAD=x"); // набранное не теряется
   expect(save()).toBeDisabled();
+});
+
+test("переменные набираются построчно: Enter — новая строка, две переменные", async () => {
+  open();
+  const claude = await screen.findByRole("group", { name: "Запуск Claude Code" });
+  const env = within(claude).getByRole("textbox", { name: "Переменные окружения" });
+  await userEvent.type(env, "A=1{Enter}B=2");
+  expect(env).toHaveValue("A=1\nB=2");
+  await userEvent.type(env, "{Enter}  C=3");
+  expect(env).toHaveValue("A=1\nB=2\n  C=3"); // пробелы в начале строки не съедаются
+  await userEvent.click(save());
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { agent: { launch: {
+    "claude-code": { args: "", env: [{ key: "A", value: "1" }, { key: "B", value: "2" }, { key: "C", value: "3" }] },
+    codex: settings.agent.launch.codex,
+  } } }));
+});
+
+test("вставка нескольких строк; ошибка — у каждой плохой строки, со своим номером", async () => {
+  open();
+  const claude = await screen.findByRole("group", { name: "Запуск Claude Code" });
+  const env = within(claude).getByRole("textbox", { name: "Переменные окружения" });
+  await userEvent.click(env);
+  await userEvent.paste("A=1\nбез знака\nB=2\n1C=3");
+  expect(env).toHaveValue("A=1\nбез знака\nB=2\n1C=3");
+  expect(within(claude).getByText("Строка 2: нужен вид ИМЯ=значение")).toBeInTheDocument();
+  expect(within(claude).getByText(/^Строка 4: недопустимое имя «1C»/)).toBeInTheDocument();
+  expect(save()).toBeDisabled();
+  await userEvent.clear(env);
+  await userEvent.paste("A=1\nB=2");
+  expect(within(claude).queryByText(/^Строка/)).toBeNull();
+  expect(save()).toBeEnabled();
 });
 
 test("«Сбросить» очищает параметры одного агента", async () => {

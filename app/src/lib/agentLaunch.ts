@@ -72,38 +72,47 @@ export function parseArgs(text: string): { args: string[]; error: null } | { arg
 
 const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** Поле «Переменные окружения» (строки ИМЯ=значение) → список или ошибка. */
-export function parseEnv(text: string): { env: EnvEntry[]; error: null } | { env: null; error: string } {
+/** Ошибка одной строки поля «Переменные окружения» или null. */
+function envLineError(line: string, n: number, seen: Set<string>): string | null {
+  const at = line.indexOf("=");
+  if (at < 0) return `Строка ${n}: нужен вид ИМЯ=значение`;
+  const key = line.slice(0, at).trim();
+  if (!NAME.test(key)) return `Строка ${n}: недопустимое имя «${key}» (латинские буквы, цифры и _, не с цифры)`;
+  if ([...line.slice(at + 1)].some(isControl)) return `Строка ${n}: управляющие символы в значении недопустимы`;
+  if (seen.has(key.toUpperCase())) return `Строка ${n}: переменная ${key} уже задана`;
+  seen.add(key.toUpperCase());
+  return null;
+}
+
+/**
+ * Поле «Переменные окружения» (строки ИМЯ=значение) → список; пустые строки
+ * пропускаются. Ошибки — все, по строкам (`errors`); `error` — первая.
+ */
+export function parseEnv(text: string):
+  { env: EnvEntry[]; error: null; errors: [] } | { env: null; error: string; errors: string[] } {
   const env: EnvEntry[] = [];
+  const errors: string[] = [];
   const seen = new Set<string>();
-  const lines = text.split(/\r?\n/);
-  for (let n = 0; n < lines.length; n++) {
-    const line = lines[n] ?? "";
-    if (!line.trim()) continue;
-    const at = line.indexOf("=");
-    if (at < 0) return { env: null, error: `Строка ${n + 1}: нужен вид ИМЯ=значение` };
-    const key = line.slice(0, at).trim();
-    const value = line.slice(at + 1);
-    if (!NAME.test(key)) {
-      return { env: null, error: `Строка ${n + 1}: недопустимое имя «${key}» (латинские буквы, цифры и _, не с цифры)` };
-    }
-    if ([...value].some(isControl)) return { env: null, error: `Строка ${n + 1}: управляющие символы в значении недопустимы` };
-    if (seen.has(key.toUpperCase())) return { env: null, error: `Строка ${n + 1}: переменная ${key} уже задана` };
-    seen.add(key.toUpperCase());
-    env.push({ key, value });
-  }
-  return { env, error: null };
+  text.split(/\r?\n/).forEach((line, i) => {
+    if (!line.trim()) return;
+    const error = envLineError(line, i + 1, seen);
+    if (error) errors.push(error);
+    else env.push({ key: line.slice(0, line.indexOf("=")).trim(), value: line.slice(line.indexOf("=") + 1) });
+  });
+  const [first] = errors;
+  return first === undefined ? { env, error: null, errors: [] } : { env: null, error: first, errors };
 }
 
 export const envText = (env: EnvEntry[] | string): string =>
   typeof env === "string" ? env : env.map((e) => `${e.key}=${e.value}`).join("\n");
 
-/** Ошибка черновика одного агента (для подписи у поля и запрета «Сохранить»). */
-export function launchError(launch: LaunchDraft | undefined): { args: string | null; env: string | null } {
-  if (!launch) return { args: null, env: null };
+/** Ошибки черновика одного агента (подписи у полей и запрет «Сохранить»). */
+export function launchError(launch: LaunchDraft | undefined): { args: string | null; env: string[] } {
+  if (!launch) return { args: null, env: [] };
   const args = parseArgs(String(launch.args ?? "")).error;
-  const env = typeof launch.env === "string" ? parseEnv(launch.env).error ?? "Исправьте переменные окружения" : null;
-  return { args, env };
+  if (typeof launch.env !== "string") return { args, env: [] };
+  const { errors } = parseEnv(launch.env);
+  return { args, env: errors.length ? errors : ["Исправьте переменные окружения"] };
 }
 
 /** Секрет в значении переменной — не показываем в строке «Команда запуска». */
@@ -113,10 +122,13 @@ export const maskValue = (key: string, value: string) => (SECRET.test(key) && va
 /** Наши аргументы (как `agent_args` оболочки) — в строке «Команда запуска». */
 export const MEETING_PROMPT = "<подсказка о встрече>";
 export const MEETING_FOLDER = "<папка встречи>";
+/** Id сеанса Claude: новый задаёт оболочка (`--session-id`), «Продолжить» — `--resume` его же. */
+export const SESSION_ID = "<id сеанса>";
 export function ourArgs(agent: AgentId, knowledge: string | null, resume = false): string[] {
   const kb = knowledge?.trim() || null;
   if (agent === "claude-code") {
-    return [...(resume ? ["--continue"] : []), ...(kb ? ["--add-dir", kb] : []), "--append-system-prompt", MEETING_PROMPT];
+    return [resume ? "--resume" : "--session-id", SESSION_ID, ...(kb ? ["--add-dir", kb] : []),
+      "--append-system-prompt", MEETING_PROMPT];
   }
   return [...(resume ? ["resume", "--last"] : []), "--cd", MEETING_FOLDER, "-c", `developer_instructions=${MEETING_PROMPT}`];
 }
@@ -124,17 +136,27 @@ export function ourArgs(agent: AgentId, knowledge: string | null, resume = false
 const has = (user: string[], names: string[]) =>
   user.some((a) => names.some((n) => a === n || (n.startsWith("--") && a.startsWith(`${n}=`))));
 
+/** Свои параметры, которые сами выбирают сеанс Claude (как CLAUDE_SESSION_FLAGS оболочки). */
+export const CLAUDE_SESSION_FLAGS = ["--continue", "-c", "--resume", "-r", "--session-id"];
+
+/** Убрать флаг `name` (и его значение, если `valued`). */
+function dropFlag(args: string[], name: string, valued: boolean) {
+  const at = args.indexOf(name);
+  if (at >= 0) args.splice(at, valued ? 2 : 1);
+}
+
 /** Наши + свои (свои последними — у повторённого параметра действует свой). Как `with_user_args`. */
 export function withUserArgs(agent: AgentId, ours: string[], user: string[]): string[] {
-  let args = [...ours];
+  const args = [...ours];
   if (agent === "claude-code") {
-    if (has(user, ["--continue", "-c", "--resume", "-r"])) args = args.filter((a) => a !== "--continue");
-  } else {
-    if (has(user, ["--last"])) args = args.filter((a) => a !== "--last");
-    if (has(user, ["--cd", "-C"])) {
-      const at = args.indexOf("--cd");
-      if (at >= 0) args.splice(at, 2);
+    if (has(user, CLAUDE_SESSION_FLAGS)) {
+      dropFlag(args, "--continue", false);
+      dropFlag(args, "--resume", true);
+      dropFlag(args, "--session-id", true);
     }
+  } else {
+    if (has(user, ["--last"])) dropFlag(args, "--last", false);
+    if (has(user, ["--cd", "-C"])) dropFlag(args, "--cd", true);
   }
   return [...args, ...user];
 }

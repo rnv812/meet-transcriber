@@ -4,11 +4,14 @@
  * окружения (`agent.launch.<агент>`). Только для вкладки «Агент»: фоновые
  * задачи их не получают.
  *
- * Черновик `env` — список; пока в поле ошибка, в черновике лежит сам текст
- * (строка): «Сохранить» недоступно (`agentLaunchChangesInvalid`), текст не
- * теряется.
+ * Поле переменных держит свой текст как набран (перевод строки, пробелы):
+ * черновику уходит разобранный список, а пока в тексте ошибка — сам текст
+ * (строка), и «Сохранить» недоступно (`agentLaunchChangesInvalid`). Обратно в
+ * поле черновик попадает, только когда его поменяли извне («Сбросить»,
+ * перечитанные настройки).
  */
 
+import { useEffect, useState } from "react";
 import {
   AGENTS, type AgentId, type LaunchDraft, envText, launchError, parseEnv, previewCommand,
 } from "../../lib/agentLaunch";
@@ -27,21 +30,34 @@ export function agentLaunchChangesInvalid(changes: Raw): boolean {
   if (!launch || typeof launch !== "object") return false;
   return AGENTS.some(({ id }) => {
     const e = launchError(launch[id]);
-    return e.args !== null || e.env !== null;
+    return e.args !== null || e.env.length > 0;
   });
 }
+
+const QUOTES_LINE = (
+  <TipLine>
+    Текст с пробелами — в кавычках. Обратная косая черта — обычный символ (пути Windows); путь с апострофом,
+    например <code>"D:\Docs\O'Neil"</code>, берите в двойные кавычки — одиночная тоже объединяет текст.
+  </TipLine>
+);
 
 function LaunchTip({ agent }: { agent: AgentId }) {
   return agent === "claude-code" ? (
     <HelpTip label="Какие параметры можно задать для Claude Code" title="Параметры запуска Claude Code">
       <TipLine>
-        Аргументы командной строки claude, через пробел; текст с пробелами — в кавычках. Например:{" "}
-        <code>--model opus</code>, <code>--permission-mode acceptEdits</code>, <code>--add-dir D:\Docs</code>.
+        Аргументы командной строки claude, через пробел. Например: <code>--model opus</code>,{" "}
+        <code>--permission-mode acceptEdits</code>, <code>--add-dir D:\Docs</code>.
+      </TipLine>
+      {QUOTES_LINE}
+      <TipLine>
+        Приложение само передаёт папку встречи как рабочую, <code>--session-id</code> нового сеанса (или{" "}
+        <code>--resume</code> для «Продолжить прошлую»), <code>--add-dir</code> с базой знаний и{" "}
+        <code>--append-system-prompt</code> с подсказкой о встрече. Ваши параметры идут после них.
       </TipLine>
       <TipLine>
-        Приложение само передаёт папку встречи как рабочую, <code>--append-system-prompt</code> с подсказкой о
-        встрече, <code>--add-dir</code> с базой знаний и <code>--continue</code> для «Продолжить прошлую». Ваши
-        параметры идут после них: если задать тот же параметр, действует ваш.
+        Параметр с одним значением действует ваш: свой <code>--append-system-prompt</code> заменит подсказку о
+        встрече. <code>--add-dir</code> добавляет папки к нашей. Свои <code>--continue</code>, <code>--resume</code>{" "}
+        или <code>--session-id</code> выбирают сеанс вместо приложения.
       </TipLine>
       <TipLine>Переменные окружения — по одной в строке: ИМЯ=значение. Они применяются последними.</TipLine>
       <TipLine>Действует только во вкладке «Агент». Для фоновых задач используется модель из настройки «{MODEL_LABEL}».</TipLine>
@@ -49,17 +65,51 @@ function LaunchTip({ agent }: { agent: AgentId }) {
   ) : (
     <HelpTip label="Какие параметры можно задать для Codex" title="Параметры запуска Codex">
       <TipLine>
-        Аргументы командной строки codex, через пробел; текст с пробелами — в кавычках. Например:{" "}
-        <code>-m gpt-5 -c model_reasoning_effort=high</code>.
+        Аргументы командной строки codex, через пробел. Например: <code>-m gpt-5 -c model_reasoning_effort=high</code>.
       </TipLine>
+      {QUOTES_LINE}
       <TipLine>
         Приложение само передаёт <code>--cd</code> с папкой встречи, <code>-c developer_instructions=…</code> с
-        подсказкой о встрече и <code>resume --last</code> для «Продолжить прошлую». Ваши параметры идут после них:
-        если задать тот же параметр, действует ваш.
+        подсказкой о встрече и <code>resume --last</code> для «Продолжить прошлую». Ваши параметры идут после них.
+      </TipLine>
+      <TipLine>
+        Параметр с одним значением действует ваш: свой <code>--cd</code> заменит папку встречи, свой{" "}
+        <code>developer_instructions</code> — подсказку о встрече. <code>--last</code> Codex принимает только
+        вместе с «Продолжить прошлую».
       </TipLine>
       <TipLine>Переменные окружения — по одной в строке: ИМЯ=значение. Они применяются последними.</TipLine>
       <TipLine>Действует только во вкладке «Агент». Фоновые задачи Codex идут с его собственными настройками.</TipLine>
     </HelpTip>
+  );
+}
+
+/** Поле переменных: свой текст, черновику — разобранный список или текст с ошибкой. */
+function EnvField({ id, agent, env, onChange }: {
+  id: string; agent: AgentId; env: LaunchDraft["env"]; onChange: (env: LaunchDraft["env"]) => void;
+}) {
+  const [text, setText] = useState(() => envText(env));
+  // Черновик сменился не из поля («Сбросить», перечитанные настройки) — показать его.
+  const fromDraft = typeof env === "string" ? null : JSON.stringify(env);
+  useEffect(() => {
+    if (fromDraft === null) return;
+    setText((cur) => {
+      const parsed = parseEnv(cur);
+      return parsed.error === null && JSON.stringify(parsed.env) === fromDraft ? cur : envText(JSON.parse(fromDraft));
+    });
+  }, [fromDraft]);
+  const errors = typeof env === "string" ? parseEnv(env).errors : [];
+  return (
+    <>
+      <textarea id={id} rows={3} spellCheck={false} value={text}
+        placeholder={agent === "claude-code" ? "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1" : "CODEX_HOME=D:\\codex"}
+        onChange={(e) => {
+          const value = e.target.value;
+          setText(value);
+          const parsed = parseEnv(value);
+          onChange(parsed.error === null ? parsed.env : value);
+        }} />
+      {errors.map((error) => <span key={error} className="error">{error}</span>)}
+    </>
   );
 }
 
@@ -88,13 +138,7 @@ function AgentLaunchRows({ agent, label, launch, knowledge, onChange }: {
         {errors.args && <span className="error">{errors.args}</span>}
       </Row>
       <Row label="Переменные окружения" htmlFor={envId} hint="По одной в строке: ИМЯ=значение" stack>
-        <textarea id={envId} rows={3} spellCheck={false} value={envText(launch.env)}
-          placeholder={agent === "claude-code" ? "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1" : "CODEX_HOME=D:\\codex"}
-          onChange={(e) => {
-            const parsed = parseEnv(e.target.value);
-            onChange({ ...launch, env: parsed.error === null ? parsed.env : e.target.value });
-          }} />
-        {errors.env && <span className="error">{errors.env}</span>}
+        <EnvField id={envId} agent={agent} env={launch.env} onChange={(env) => onChange({ ...launch, env })} />
       </Row>
       {preview !== null && (
         <p className="muted agent-launch__preview">

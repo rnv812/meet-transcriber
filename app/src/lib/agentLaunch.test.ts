@@ -1,6 +1,6 @@
 import {
-  ARGS_CONTROL, ARGS_QUOTE, MEETING_PROMPT, envText, maskValue, ourArgs, parseArgs, parseEnv, previewCommand,
-  withUserArgs,
+  ARGS_CONTROL, ARGS_QUOTE, MEETING_PROMPT, SESSION_ID, envText, maskValue, ourArgs, parseArgs, parseEnv,
+  previewCommand, withUserArgs,
 } from "./agentLaunch";
 
 // Те же примеры, что у оболочки (pty.rs) и резидента (tests/test_agent_launch.py).
@@ -41,8 +41,15 @@ test("переменные: строки ИМЯ=значение, пустые �
       { key: "X", value: "a=b c" },
     ],
     error: null,
+    errors: [],
   });
   expect(parseEnv("A=1\nбез знака").error).toBe("Строка 2: нужен вид ИМЯ=значение");
+  // Все ошибки — по строкам, каждая со своим номером.
+  expect(parseEnv("A=1\nбез знака\n  B=2\n1C=3").errors).toEqual([
+    "Строка 2: нужен вид ИМЯ=значение",
+    "Строка 4: недопустимое имя «1C» (латинские буквы, цифры и _, не с цифры)",
+  ]);
+  expect(parseEnv("  B=2  ").env).toEqual([{ key: "B", value: "2  " }]);
   expect(parseEnv("1A=x").error).toMatch(/^Строка 1: недопустимое имя «1A»/);
   expect(parseEnv("A=x\u0007").error).toBe("Строка 1: управляющие символы в значении недопустимы");
   expect(parseEnv("Path=1\nPATH=2").error).toBe("Строка 2: переменная PATH уже задана");
@@ -52,10 +59,14 @@ test("переменные: строки ИМЯ=значение, пустые �
 
 test("свои параметры — после наших; наш дубликат убирается, где повтор — ошибка или лишний", () => {
   const claude = ourArgs("claude-code", String.raw`D:\kb`, true);
-  expect(claude).toEqual(["--continue", "--add-dir", String.raw`D:\kb`, "--append-system-prompt", MEETING_PROMPT]);
+  expect(claude).toEqual(["--resume", SESSION_ID, "--add-dir", String.raw`D:\kb`, "--append-system-prompt", MEETING_PROMPT]);
+  expect(ourArgs("claude-code", null).slice(0, 2)).toEqual(["--session-id", SESSION_ID]);
   expect(withUserArgs("claude-code", claude, ["--model", "opus"])).toEqual([...claude, "--model", "opus"]);
-  expect(withUserArgs("claude-code", claude, ["--resume", "abc"])).not.toContain("--continue");
-  expect(withUserArgs("claude-code", claude, ["-c"])).toEqual([...claude.slice(1), "-c"]);
+  for (const user of [["--resume", "abc"], ["-c"], ["--session-id", "abc"], ["--continue"]]) {
+    const args = withUserArgs("claude-code", claude, user);
+    expect(args).toEqual([...claude.slice(2), ...user]);
+  }
+  expect(withUserArgs("claude-code", ourArgs("claude-code", null), ["-r"])).not.toContain(SESSION_ID);
   const codex = ourArgs("codex", null, true);
   const merged = withUserArgs("codex", codex, ["--last", "-C", String.raw`D:\other`]);
   expect(merged[0]).toBe("resume");
@@ -69,7 +80,7 @@ test("строка «Команда запуска»: переменные, пр
     args: "--model opus --add-dir \"D:\\Мои документы\"",
     env: [{ key: "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE", value: "1" }, { key: "MY_API_TOKEN", value: "abc" }],
   }, String.raw`D:\kb`)).toBe(
-    "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 MY_API_TOKEN=*** claude --add-dir D:\\kb "
+    "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 MY_API_TOKEN=*** claude --session-id \"<id сеанса>\" --add-dir D:\\kb "
     + "--append-system-prompt \"<подсказка о встрече>\" --model opus --add-dir \"D:\\Мои документы\"",
   );
   expect(previewCommand("codex", { args: "-m gpt-5", env: [] }, null)).toBe(

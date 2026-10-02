@@ -947,6 +947,9 @@ pub const CANCEL_TITLE: &str = "Отменить запись";
 pub const CANCEL_QUESTION: &str = "Удалить текущую запись? Записанное не сохранится.";
 pub const CANCEL_CONFIRM: &str = "Удалить";
 pub const CANCEL_KEEP: &str = "Продолжить запись";
+/// Пока был открыт вопрос, запись закончилась или началась другая.
+pub const CANCEL_STALE: &str =
+    "Пока был открыт вопрос, запись закончилась или началась новая — ничего не удалено";
 
 /// Пункты записи в верхней части меню: (id, текст, доступен ли). Пока идёт
 /// любая запись — обычная или с ассистентом — пунктов «Начать…» нет. У
@@ -1026,6 +1029,14 @@ pub fn menu_model(state: &MenuState) -> Vec<Entry> {
     }
     model.push(item("quit", "Выход", true));
     model
+}
+
+/// Отмена всё ещё про ту запись, о которой спрашивали: папка идущей записи
+/// та же, что при открытии вопроса (`/recording/cancel` своего id не знает —
+/// без проверки «Удалить» стёрло бы запись, начатую автозаписью, пока окно
+/// вопроса висело за другими окнами).
+pub fn cancel_still_meant(asked: Option<&str>, now: Option<&str>) -> bool {
+    matches!((asked, now), (Some(asked), Some(now)) if asked == now)
 }
 
 /// Ответ на вопрос «Удалить текущую запись?»: удаляем только по явной кнопке
@@ -1113,6 +1124,8 @@ pub struct TrayState {
     /// галочку «Автозапись» Windows переключает сам по клику, и при неудачном
     /// запросе она врала бы до следующей смены состояния.
     menu_dirty: AtomicBool,
+    /// Вопрос «Удалить текущую запись?» уже на экране — второй не открываем.
+    cancel_asking: AtomicBool,
 }
 
 /// Показать уведомления с учётом `ui.notifications` (последнего прочитанного).
@@ -1235,6 +1248,15 @@ fn build_menu(app: &AppHandle, state: &MenuState) -> tauri::Result<Menu<Wry>> {
 /// (и на Windows, и на macOS), поэтому «Продолжить запись» идёт первой.
 /// Вызывается из обработчика меню — главного потока, как требует macOS.
 fn confirm_cancel(app: &AppHandle) {
+    let Some(state) = app.try_state::<TrayState>() else {
+        return;
+    };
+    if state.cancel_asking.swap(true, Ordering::SeqCst) {
+        return; // вопрос уже открыт
+    }
+    // Какая запись идёт сейчас — параллельно с показом вопроса (запрос к
+    // резиденту локальный и быстрый, а показ должен быть в главном потоке).
+    let asked = thread::spawn(recording_folder_now);
     let dialog = rfd::AsyncMessageDialog::new()
         .set_level(rfd::MessageLevel::Warning)
         .set_title(CANCEL_TITLE)
@@ -1247,7 +1269,16 @@ fn confirm_cancel(app: &AppHandle) {
     let app = app.clone();
     thread::spawn(move || {
         let answer = tauri::async_runtime::block_on(dialog);
+        let asked = asked.join().ok().flatten();
+        if let Some(state) = app.try_state::<TrayState>() {
+            state.cancel_asking.store(false, Ordering::SeqCst);
+        }
         if !cancel_confirmed_by(&answer) {
+            return;
+        }
+        if !cancel_still_meant(asked.as_deref(), recording_folder_now().as_deref()) {
+            shell_log!("отмена записи не отправлена: запись сменилась, пока был открыт вопрос");
+            notify(&app, vec![Notice::new(CANCEL_FAILED, CANCEL_STALE, None)]);
             return;
         }
         if let Some(state) = app.try_state::<TrayState>() {
@@ -1256,6 +1287,17 @@ fn confirm_cancel(app: &AppHandle) {
         }
         command(&app, Action::Cancel);
     });
+}
+
+/// Папка идущей обычной записи по словам резидента (`/state.folder`); нет
+/// записи или ответа — None.
+fn recording_folder_now() -> Option<String> {
+    let endpoint = resident::read_endpoint()?;
+    let state = Client::new(&endpoint).get_state().ok()?;
+    if str_at(&state, "status") != Some("recording") {
+        return None;
+    }
+    str_at(&state, "folder").map(str::to_string)
 }
 
 fn on_menu(app: &AppHandle, id: &str) {
@@ -2705,6 +2747,16 @@ mod tests {
             Entry::Item { enabled, .. } | Entry::Check { enabled, .. } => !enabled,
             Entry::Separator => true,
         }));
+    }
+
+    #[test]
+    fn cancel_goes_only_to_the_recording_it_asked_about() {
+        let a = Some(r"D:\rec\2026-10-02_10-00");
+        let b = Some(r"D:\rec\2026-10-02_10-40");
+        assert!(cancel_still_meant(a, a));
+        assert!(!cancel_still_meant(a, b)); // автозапись начала новую
+        assert!(!cancel_still_meant(a, None)); // запись уже закончилась
+        assert!(!cancel_still_meant(None, a)); // резидент не ответил при открытии
     }
 
     #[test]

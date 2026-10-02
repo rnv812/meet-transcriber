@@ -173,7 +173,7 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
             <span className="live-head__label">{open ? "Свернуть" : "Развернуть"}</span>
             <span className="live-head__icon"><ExpandIcon open={open} /></span>
           </Button>
-          <Button variant="danger" aria-label="Стоп" title="Остановить запись" onClick={stop} disabled={stopping}>
+          <Button variant="danger" aria-label="Стоп" title="Остановить и сохранить" onClick={stop} disabled={stopping}>
             <span className="live-head__label">Стоп</span>
             <span className="live-head__icon"><StopIcon /></span>
           </Button>

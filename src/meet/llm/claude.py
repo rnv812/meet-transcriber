@@ -27,6 +27,11 @@ ALL_TOOLS_DENIED = [
 ]
 READ_TOOLS = ("Read", "Grep", "Glob")
 
+# Флаг CLI «не сохранять сеанс» (claude --help 2.1.287: «only works with
+# --print»; CLI считает режим --print и тогда, когда stdout не терминал, — так
+# его и запускает SDK). ClaudeAgentOptions.extra_args: None — флаг без значения.
+NO_PERSISTENCE = {"no-session-persistence": None}
+
 
 def find_cli() -> str | None:
     """Путь к Claude Code CLI (см. `meet.llm.detect.find_claude`)."""
@@ -89,6 +94,12 @@ async def run(
     """Один вызов Claude через Agent SDK: свежая сессия (или resume), строгий
     системный промпт, без настроек проекта; ошибки — в AgentReply.error.
 
+    Сеанс на диск не сохраняется (`--no-session-persistence`, NO_PERSISTENCE):
+    фоновые вызовы — итоги, анализ, названия, профили, тики и вопросы живого
+    ассистента — не засоряют историю Claude Code человека и не попадают под
+    `--continue` вкладки «Агент». Поэтому `session_id` не возвращается (такой
+    сеанс не продолжить): память диалога вызывающий кладёт в prompt.
+
     `proxy` — `llm.proxy` (по умолчанию «как в системе»): Claude Code сам
     системный прокси Windows не видит, его передаём переменными."""
     import claude_agent_sdk
@@ -112,6 +123,7 @@ async def run(
         ),
         can_use_tool=make_permission_callback(allowed_dirs),
         max_turns=max_turns,
+        extra_args=dict(NO_PERSISTENCE),
     )
 
     # can_use_tool в этой версии SDK требует streaming-режима ввода: строка-prompt
@@ -122,11 +134,10 @@ async def run(
 
     text_parts: list[str] = []
     result_text: str | None = None
-    session_id: str | None = None
     error: str | None = None
 
     async def _consume() -> None:
-        nonlocal result_text, session_id, error
+        nonlocal result_text, error
         async for msg in claude_agent_sdk.query(prompt=_single_message(), options=options):
             if isinstance(msg, AssistantMessage):
                 if getattr(msg, "error", None):
@@ -135,7 +146,6 @@ async def run(
                     if isinstance(block, TextBlock):
                         text_parts.append(block.text)
             elif isinstance(msg, ResultMessage):
-                session_id = msg.session_id
                 if getattr(msg, "result", None):
                     result_text = msg.result
                 if msg.is_error and not error:
@@ -149,13 +159,14 @@ async def run(
         error = f"{type(e).__name__}: {e}"
     return AgentReply(
         text=(result_text or "".join(text_parts)).strip(),
-        session_id=session_id,
         error=netproxy.with_hint(error),
     )
 
 
-async def check_auth(proxy: str | None = None) -> str | None:
+async def check_auth(proxy: str | None = None, model: str = "haiku") -> str | None:
     """Проверка авторизации коротким вызовом. None = ок, иначе текст проблемы.
+    `model` — чем проверять: кнопка «Проверить» передаёт `llm.model`, чтобы
+    опечатка в имени модели была видна сразу, а не в фоновых задачах.
 
     ANTHROPIC_API_KEY не ошибка: он убирается из окружения (подписка важнее)."""
     drop_api_key()
@@ -165,6 +176,6 @@ async def check_auth(proxy: str | None = None) -> str | None:
     reply = await run(
         "Ответь одним словом: ок",
         system_prompt="Отвечай одним словом.",
-        model="haiku", max_turns=1, timeout_s=60.0, proxy=proxy,
+        model=model, max_turns=1, timeout_s=60.0, proxy=proxy,
     )
     return reply.error

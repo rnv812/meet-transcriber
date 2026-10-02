@@ -279,9 +279,10 @@ AGENT_TRANSCRIPT_MD = "transcript.md"
 # встречи (задача анализа): агент получает их, если они есть.
 LIVE_TRANSCRIPT_MD = "live_transcript.md"
 AGENT_ANALYSIS_JSON = "analysis.json"
-# Метка в meta.json: в папке записи уже работал агент — {провайдер: когда}. По
-# ней вкладка «Агент» предлагает «Продолжить прошлую»; хранилище самих CLI
-# (их сеансы) не читаем.
+# Метка в meta.json: в папке записи уже работал агент — {провайдер: {"at":
+# когда, "id": id сеанса}}. По ней вкладка «Агент» предлагает «Продолжить
+# прошлую»: Claude Code — `--resume <id>` (id задаёт оболочка при запуске,
+# `--session-id`), Codex — `resume --last`. Хранилище самих CLI не читаем.
 AGENT_SESSIONS_META = "agent_sessions"
 AGENT_PROVIDERS = ("claude-code", "codex")
 # Шапка transcript.md, пока точной расшифровки нет, а лента живого режима есть.
@@ -343,6 +344,18 @@ def _agent_sessions(meta: dict) -> list[str]:
     if not isinstance(marks, dict):
         return []
     return [name for name in AGENT_PROVIDERS if marks.get(name)]
+
+
+def _agent_session_id(meta: dict, provider: str) -> str | None:
+    """Id прошлого сеанса агента в папке (метка ранних сборок — просто время, без id)."""
+    marks = meta.get(AGENT_SESSIONS_META)
+    mark = marks.get(provider) if isinstance(marks, dict) else None
+    sid = mark.get("id") if isinstance(mark, dict) else None
+    return sid if isinstance(sid, str) and _SESSION_ID.fullmatch(sid) else None
+
+
+# Id сеанса Claude Code — UUID (claude --help: «--session-id <uuid>»).
+_SESSION_ID = re.compile(r"[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 
 
 def _without_marks(data: dict) -> dict:
@@ -1679,22 +1692,35 @@ class TrayControl(ProfilesMixin):
             out["sessions"] = sessions
         return out
 
-    def _mark_agent_session(self, folder: Path, provider) -> None:
-        """Запомнить в meta.json, что в папке запускается агент `provider`.
+    def _mark_agent_session(self, folder: Path, body: dict) -> str | None:
+        """Запомнить в meta.json, что в папке запускается агент
+        `body.provider`: новый сеанс — с его id (`body.session`, если оболочка
+        его задала), «Продолжить прошлую» (`body.resume`) — прежний id
+        остаётся. → id сеанса, который продолжить (только при resume).
         Неизвестный провайдер или сбой записи — без метки, запуск не мешаем."""
+        provider = body.get("provider")
         if provider not in AGENT_PROVIDERS:
-            return
+            return None
+        resume = body.get("resume") is True
+        new_id = body.get("session")
+        new_id = new_id if isinstance(new_id, str) and _SESSION_ID.fullmatch(new_id) else None
+        found: list[str | None] = [None]
 
         def change(meta: dict) -> dict:
             marks = meta.get(AGENT_SESSIONS_META)
             marks = dict(marks) if isinstance(marks, dict) else {}
-            marks[provider] = time.time()
+            sid = _agent_session_id(meta, provider) if resume else new_id
+            found[0] = sid
+            marks[provider] = {"at": time.time(), "id": sid}
             return {**meta, AGENT_SESSIONS_META: marks}
 
         try:
             library.update_meta(folder, change)
         except OSError as e:
             self.tray.log(f"метка сеанса агента не записана ({folder.name}): {e}")
+            if resume:
+                return _agent_session_id(library.read_meta(folder), provider)
+        return found[0] if resume else None
 
     def agent_context(self, recording_id: str, body: dict | None = None) -> dict:
         """Файлы для вкладки «Агент» (Claude Code / Codex в папке встречи):
@@ -1704,8 +1730,9 @@ class TrayControl(ProfilesMixin):
         если они есть. Пока точной расшифровки нет (идёт запись с ассистентом
         или расшифровка), transcript.md — лента живого режима с пометкой
         «черновая». Папку оболочка проверяет сама: она должна лежать в папке
-        записей. `body.provider` — какой агент запускается: его метка ложится
-        в meta.json (`agent_sessions`, см. `agent_files`)."""
+        записей. `body` — {provider, session?, resume?}: метка агента ложится в
+        meta.json (`agent_sessions`, см. `agent_files`); при resume в ответе
+        `session` — id прошлого сеанса, если он известен."""
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
@@ -1739,8 +1766,11 @@ class TrayControl(ProfilesMixin):
         files = [AGENT_TRANSCRIPT_MD]
         if not live:
             files += self._agent_extras(folder)
-        self._mark_agent_session(folder, (body or {}).get("provider"))
-        return {"folder": str(folder), "files": files}
+        out = {"folder": str(folder), "files": files}
+        session = self._mark_agent_session(folder, body or {})
+        if session:
+            out["session"] = session
+        return out
 
     def save_transcript(self, recording_id: str, data: dict) -> dict:
         """Сохранить правки редактора. Пишем как есть: редактор — владелец

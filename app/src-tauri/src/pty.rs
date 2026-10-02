@@ -169,14 +169,34 @@ pub fn check_executable(provider: Provider, path: &str, windows: bool) -> Result
     }
 }
 
+/// Какой сеанс агента запустить.
+///
+/// Claude Code: новый сеанс — с нашим id (`--session-id <uuid>`), его
+/// резидент кладёт в метку meta.json; «Продолжить прошлую» — `--resume
+/// <uuid>` именно этого сеанса. `--continue` («последний разговор в папке»)
+/// — только когда id неизвестен (метка ранней сборки): последним мог быть
+/// чужой сеанс. Codex своего id при запуске не принимает, а выданный пишет
+/// только в своё хранилище (его не читаем) — у него «Продолжить» — `codex
+/// resume --last`: отбор по рабочей папке и только интерактивные сеансы;
+/// фоновые вызовы Codex — `exec --ephemeral` и в этот отбор не попадают.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentSession {
+    /// Новый сеанс без нашего id (Codex; свой `--session-id` в параметрах).
+    Fresh,
+    /// Новый сеанс Claude с этим id.
+    New(String),
+    /// Продолжить сеанс Claude с этим id.
+    Resume(String),
+    /// Продолжить последний: Claude `--continue`, Codex `resume --last`.
+    ResumeLast,
+}
+
 /// Аргументы агента. Claude: база знаний через `--add-dir` и промпт. Codex:
 /// `--cd` и промпт в `developer_instructions`; `--add-dir` у Codex делает
 /// папку доступной на запись, поэтому базу знаний ему только называем
 /// (читать файлы вне рабочей папки песочница Codex и так разрешает).
 ///
-/// `resume` — «Продолжить прошлую»: Claude — `--continue` (последний разговор
-/// в текущей папке), Codex — `codex resume --last` (последний сеанс; отбор по
-/// рабочей папке — его поведение по умолчанию). Сверено с `claude --help` и
+/// `session` — какой сеанс (см. `AgentSession`). Сверено с `claude --help` и
 /// `codex resume --help` (2.1.287, 0.159.0).
 ///
 /// `--add-dir` у Claude принимает несколько папок подряд, поэтому он идёт
@@ -186,14 +206,18 @@ pub fn agent_args(
     provider: Provider,
     folder: &str,
     knowledge: Option<&str>,
-    resume: bool,
+    session: &AgentSession,
 ) -> Vec<String> {
     let knowledge = knowledge.map(str::trim).filter(|k| !k.is_empty());
+    let resume = matches!(session, AgentSession::Resume(_) | AgentSession::ResumeLast);
     match provider {
         Provider::Claude => {
             let mut args = Vec::new();
-            if resume {
-                args.push("--continue".to_string());
+            match session {
+                AgentSession::Fresh => {}
+                AgentSession::New(id) => args.extend(["--session-id".to_string(), id.clone()]),
+                AgentSession::Resume(id) => args.extend(["--resume".to_string(), id.clone()]),
+                AgentSession::ResumeLast => args.push("--continue".to_string()),
             }
             if let Some(dir) = knowledge {
                 args.extend(["--add-dir".to_string(), dir.to_string()]);
@@ -345,18 +369,65 @@ fn user_has(user: &[String], names: &[&str]) -> bool {
     })
 }
 
+/// Сеанс до ответа резидента: новый сеанс Claude — с новым id (`new_id`),
+/// «Продолжить» — пока «последний» (id даст резидент, см. `resolved_session`).
+/// Свой выбор сеанса в параметрах Claude (`CLAUDE_SESSION_FLAGS`) — наш не нужен.
+pub fn planned_session(
+    provider: Provider,
+    resume: bool,
+    user: &[String],
+    new_id: impl FnOnce() -> String,
+) -> AgentSession {
+    match (provider, resume) {
+        (Provider::Claude, _) if user_has(user, &CLAUDE_SESSION_FLAGS) => AgentSession::Fresh,
+        (Provider::Claude, false) => AgentSession::New(new_id()),
+        (_, true) => AgentSession::ResumeLast,
+        (Provider::Codex, false) => AgentSession::Fresh,
+    }
+}
+
+/// После ответа резидента: «Продолжить» Claude — сеанс с известным id; id нет
+/// (метка ранней сборки) — `--continue`.
+pub fn resolved_session(
+    planned: AgentSession,
+    provider: Provider,
+    known: Option<&str>,
+) -> AgentSession {
+    match (planned, provider, known) {
+        (AgentSession::ResumeLast, Provider::Claude, Some(id)) => {
+            AgentSession::Resume(id.to_string())
+        }
+        (planned, _, _) => planned,
+    }
+}
+
+/// Свои параметры, которые сами выбирают сеанс Claude: с ними наш выбор
+/// (`--session-id`, `--resume`, `--continue`) не передаётся.
+pub const CLAUDE_SESSION_FLAGS: [&str; 5] = ["--continue", "-c", "--resume", "-r", "--session-id"];
+
+/// Убрать из `args` флаг `name` вместе с его значением (если `valued`).
+fn drop_flag(args: &mut Vec<String>, name: &str, valued: bool) {
+    if let Some(at) = args.iter().position(|a| a == name) {
+        let end = if valued { at + 2 } else { at + 1 };
+        args.drain(at..end.min(args.len()));
+    }
+}
+
 /// Наши аргументы + свои из настроек. Свои идут после наших — у параметра,
 /// заданного дважды, действует последнее значение, то есть своё. Наш
 /// дубликат убирается, если повтор был бы ошибкой или лишним: Claude —
-/// `--continue`, когда человек сам задал `--continue`/`-c`/`--resume`/`-r`;
-/// Codex — `--last` (при «Продолжить») и `--cd`, когда они есть у человека.
-/// Папка запуска, подсказка о встрече и `resume` остаются.
+/// наш выбор сеанса, когда человек сам задал `--continue`/`-c`/`--resume`/
+/// `-r`/`--session-id`; Codex — `--last` (при «Продолжить») и `--cd`, когда
+/// они есть у человека. Папка запуска, подсказка о встрече и `resume` Codex
+/// остаются.
 pub fn with_user_args(provider: Provider, ours: Vec<String>, user: &[String]) -> Vec<String> {
     let mut args = ours;
     match provider {
         Provider::Claude => {
-            if user_has(user, &["--continue", "-c", "--resume", "-r"]) {
-                args.retain(|a| a != "--continue");
+            if user_has(user, &CLAUDE_SESSION_FLAGS) {
+                drop_flag(&mut args, "--continue", false);
+                drop_flag(&mut args, "--resume", true);
+                drop_flag(&mut args, "--session-id", true);
             }
         }
         Provider::Codex => {
@@ -364,9 +435,7 @@ pub fn with_user_args(provider: Provider, ours: Vec<String>, user: &[String]) ->
                 args.retain(|a| a != "--last");
             }
             if user_has(user, &["--cd", "-C"]) {
-                if let Some(at) = args.iter().position(|a| a == "--cd") {
-                    args.drain(at..(at + 2).min(args.len()));
-                }
+                drop_flag(&mut args, "--cd", true);
             }
         }
     }
@@ -982,15 +1051,23 @@ fn prepare(
     let state = client.get_state().map_err(fail)?;
     let root = windows::recordings_root(&state)
         .ok_or_else(|| "Служба записи не назвала папку записей".to_string())?;
+    let planned = planned_session(provider, resume, &launch.args, || {
+        uuid::Uuid::new_v4().to_string()
+    });
+    let new_id = match &planned {
+        AgentSession::New(id) => Some(id.clone()),
+        _ => None,
+    };
     let context = client
         .post(
             &format!(
                 "/recordings/{}/agent-context",
                 windows::encode_component(recording)
             ),
-            serde_json::json!({ "provider": provider.key() }),
+            serde_json::json!({ "provider": provider.key(), "session": new_id, "resume": resume }),
         )
         .map_err(fail)?;
+    let session = resolved_session(planned, provider, text_at(&context, &["session"]));
     let folder = text_at(&context, &["folder"]).ok_or("Служба записи не назвала папку записи")?;
     let folder = recording_folder(Path::new(folder), &root).ok_or_else(|| {
         shell_log!("агент: отказ, папка вне папки записей: {folder}");
@@ -1005,7 +1082,7 @@ fn prepare(
     );
     // Свои переменные — последними: они перекрывают и очистку меток, и наши.
     env.set.extend(launch.env);
-    let ours = agent_args(provider, &folder_text, knowledge.as_deref(), resume);
+    let ours = agent_args(provider, &folder_text, knowledge.as_deref(), &session);
     Ok(SpawnSpec {
         recording: recording.to_string(),
         args: with_user_args(provider, ours, &launch.args),
@@ -1153,7 +1230,12 @@ mod tests {
     #[test]
     fn claude_gets_the_prompt_and_the_knowledge_dir() {
         assert_eq!(
-            agent_args(Provider::Claude, r"D:\rec\r1", Some(r"D:\kb"), false),
+            agent_args(
+                Provider::Claude,
+                r"D:\rec\r1",
+                Some(r"D:\kb"),
+                &AgentSession::Fresh
+            ),
             vec![
                 "--add-dir",
                 r"D:\kb",
@@ -1162,7 +1244,12 @@ mod tests {
             ]
         );
         assert_eq!(
-            agent_args(Provider::Claude, r"D:\rec\r1", Some("  "), false),
+            agent_args(
+                Provider::Claude,
+                r"D:\rec\r1",
+                Some("  "),
+                &AgentSession::Fresh
+            ),
             vec!["--append-system-prompt", AGENT_PROMPT]
         );
         assert!(
@@ -1174,39 +1261,95 @@ mod tests {
 
     #[test]
     fn codex_works_in_the_folder_and_never_gets_write_access_to_the_knowledge_dir() {
-        let args = agent_args(Provider::Codex, r"D:\rec\r1", Some(r"D:\kb"), false);
+        let args = agent_args(
+            Provider::Codex,
+            r"D:\rec\r1",
+            Some(r"D:\kb"),
+            &AgentSession::Fresh,
+        );
         assert_eq!(args[..3], ["--cd", r"D:\rec\r1", "-c"]);
         assert!(!args.iter().any(|a| a == "--add-dir"));
         let value = args[3].strip_prefix("developer_instructions=").unwrap();
         let prompt: String = serde_json::from_str(value).unwrap();
         assert!(prompt.starts_with(AGENT_PROMPT));
         assert!(prompt.ends_with(r"Папка базы знаний: D:\kb"));
-        assert_eq!(agent_args(Provider::Codex, "D:/r", None, false).len(), 4);
+        assert_eq!(
+            agent_args(Provider::Codex, "D:/r", None, &AgentSession::Fresh).len(),
+            4
+        );
     }
 
     /// «Продолжить прошлую»: Claude — `--continue` первым, Codex — подкоманда
     /// `resume --last` (подкоманда — первой), остальное как у нового сеанса.
     #[test]
     fn resume_continues_the_last_session_in_the_folder() {
-        let claude = agent_args(Provider::Claude, r"D:\rec\r1", Some(r"D:\kb"), true);
+        let claude = agent_args(
+            Provider::Claude,
+            r"D:\rec\r1",
+            Some(r"D:\kb"),
+            &AgentSession::ResumeLast,
+        );
         assert_eq!(claude[0], "--continue");
         assert_eq!(
             claude[1..],
-            agent_args(Provider::Claude, r"D:\rec\r1", Some(r"D:\kb"), false)[..]
+            agent_args(
+                Provider::Claude,
+                r"D:\rec\r1",
+                Some(r"D:\kb"),
+                &AgentSession::Fresh
+            )[..]
         );
-        let codex = agent_args(Provider::Codex, r"D:\rec\r1", None, true);
+        let codex = agent_args(
+            Provider::Codex,
+            r"D:\rec\r1",
+            None,
+            &AgentSession::ResumeLast,
+        );
         assert_eq!(codex[..4], ["resume", "--last", "--cd", r"D:\rec\r1"]);
         assert_eq!(
             codex[2..],
-            agent_args(Provider::Codex, r"D:\rec\r1", None, false)[..]
+            agent_args(Provider::Codex, r"D:\rec\r1", None, &AgentSession::Fresh)[..]
         );
+    }
+
+    /// Переменные процесса тестов общие: тесты, что их меняют, идут по одному
+    /// и по окончании возвращают прежние значения (и при падении — в Drop).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        saved: Vec<(String, Option<std::ffi::OsString>)>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn set(pairs: &[(&str, &str)]) -> EnvGuard {
+            let lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+            let saved = pairs
+                .iter()
+                .map(|(key, _)| (key.to_string(), std::env::var_os(key)))
+                .collect();
+            for (key, value) in pairs {
+                std::env::set_var(key, value);
+            }
+            EnvGuard { saved, _lock: lock }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.saved {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
     }
 
     /// Оболочку запустили из сеанса Claude Code: его метки агенту не
     /// достаются (иначе Claude не сохранит сеанс), вход и настройки — да.
     #[test]
     fn inherited_session_markers_are_scrubbed_but_auth_and_config_stay() {
-        // Уникальные значения: переменные процесса тестов общие.
         let parent = [
             ("CLAUDE_CODE_CHILD_SESSION", "1"),
             ("CLAUDECODE", "1"),
@@ -1222,9 +1365,7 @@ mod tests {
             ("CLAUDE_CONFIG_DIR", r"D:\m9-test\claude"),
             ("CODEX_HOME", r"D:\m9-test\codex"),
         ];
-        for (key, value) in parent {
-            std::env::set_var(key, value);
-        }
+        let _env = EnvGuard::set(&parent);
         for provider in [Provider::Claude, Provider::Codex] {
             let plan = agent_env(provider, &ProxyMode::None, &|_| None, &wininet(None));
             let spec = SpawnSpec {
@@ -1713,7 +1854,12 @@ mod tests {
     /// наш дубликат убирается там, где повтор — ошибка или лишний.
     #[test]
     fn user_args_go_last_and_win_where_safe() {
-        let ours = agent_args(Provider::Claude, r"D:\rec\r1", Some(r"D:\kb"), true);
+        let ours = agent_args(
+            Provider::Claude,
+            r"D:\rec\r1",
+            Some(r"D:\kb"),
+            &AgentSession::ResumeLast,
+        );
         let args = with_user_args(
             Provider::Claude,
             ours.clone(),
@@ -1721,13 +1867,33 @@ mod tests {
         );
         assert_eq!(args[..ours.len()], ours[..]);
         assert_eq!(args[ours.len()..], ["--model", "opus"]);
-        // Свой --resume/-c — нашего --continue нет; подсказка о встрече остаётся.
-        for user in [&["--resume", "abc"][..], &["-c"][..], &["--resume=abc"][..]] {
-            let args = with_user_args(Provider::Claude, ours.clone(), &strings(user));
-            assert!(!args.iter().any(|a| a == "--continue"), "{user:?}");
-            assert!(args.iter().any(|a| a == "--append-system-prompt"));
+        // Свой --resume/-c/--session-id — нашего выбора сеанса нет; подсказка о
+        // встрече остаётся.
+        let with_id = agent_args(
+            Provider::Claude,
+            r"D:\rec\r1",
+            None,
+            &AgentSession::New(SID.into()),
+        );
+        for user in [
+            &["--resume", "abc"][..],
+            &["-c"][..],
+            &["--resume=abc"][..],
+            &["--session-id", "abc"][..],
+        ] {
+            for ours in [ours.clone(), with_id.clone()] {
+                let args = with_user_args(Provider::Claude, ours, &strings(user));
+                assert!(!args.iter().any(|a| a == "--continue"), "{user:?}");
+                assert!(!args.iter().any(|a| a == SID), "{user:?}");
+                assert!(args.iter().any(|a| a == "--append-system-prompt"));
+            }
         }
-        let codex = agent_args(Provider::Codex, r"D:\rec\r1", None, true);
+        let codex = agent_args(
+            Provider::Codex,
+            r"D:\rec\r1",
+            None,
+            &AgentSession::ResumeLast,
+        );
         let args = with_user_args(
             Provider::Codex,
             codex,
@@ -1745,11 +1911,65 @@ mod tests {
         );
     }
 
+    const SID: &str = "0b6f8a52-3c1d-4e2f-9a7b-1c2d3e4f5a6b";
+
+    /// Claude: новый сеанс — со своим id, «Продолжить» — `--resume` этого id
+    /// (а не «последний разговор в папке», который мог оставить кто-то
+    /// другой); id неизвестен — `--continue`. Codex — `resume --last`.
+    #[test]
+    fn claude_sessions_are_started_and_resumed_by_id() {
+        let none: Vec<String> = Vec::new();
+        let new = planned_session(Provider::Claude, false, &none, || SID.to_string());
+        assert_eq!(new, AgentSession::New(SID.into()));
+        let args = agent_args(Provider::Claude, "D:/r", None, &new);
+        assert_eq!(args[..2], ["--session-id", SID]);
+        let planned = planned_session(Provider::Claude, true, &none, || unreachable!());
+        let resumed = resolved_session(planned.clone(), Provider::Claude, Some(SID));
+        assert_eq!(resumed, AgentSession::Resume(SID.into()));
+        assert_eq!(
+            agent_args(Provider::Claude, "D:/r", None, &resumed)[..2],
+            ["--resume", SID]
+        );
+        assert_eq!(
+            resolved_session(planned, Provider::Claude, None),
+            AgentSession::ResumeLast
+        );
+        // Свой выбор сеанса в параметрах — нашего id нет.
+        assert_eq!(
+            planned_session(
+                Provider::Claude,
+                false,
+                &strings(&["-r", "x"]),
+                || unreachable!()
+            ),
+            AgentSession::Fresh
+        );
+        // Codex: id не задаём, «Продолжить» — resume --last.
+        assert_eq!(
+            planned_session(Provider::Codex, false, &none, || unreachable!()),
+            AgentSession::Fresh
+        );
+        let codex = resolved_session(
+            planned_session(Provider::Codex, true, &none, || unreachable!()),
+            Provider::Codex,
+            Some(SID),
+        );
+        assert_eq!(codex, AgentSession::ResumeLast);
+        assert_eq!(
+            agent_args(Provider::Codex, "D:/r", None, &codex)[..2],
+            ["resume", "--last"]
+        );
+        // Новый id каждый раз — настоящий UUID v4.
+        let a = uuid::Uuid::new_v4().to_string();
+        assert_eq!(a.len(), 36);
+        assert_ne!(a, uuid::Uuid::new_v4().to_string());
+    }
+
     /// Свои переменные — после очистки меток и наших: человек может нарочно
     /// задать и CLAUDE_CODE_FORCE_SESSION_PERSISTENCE, и переменную из списка меток.
     #[test]
     fn user_env_is_applied_after_the_scrub() {
-        std::env::set_var("CLAUDE_EFFORT", "m9-parent");
+        let _env = EnvGuard::set(&[("CLAUDE_EFFORT", "m9-parent")]);
         let mut plan = agent_env(
             Provider::Claude,
             &ProxyMode::System,
