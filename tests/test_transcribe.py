@@ -133,10 +133,10 @@ def _run_single_capturing(monkeypatch, tmp_path, **kwargs):
     calls = {}
     monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
     monkeypatch.setattr(
-        tr, "transcribe_wav", lambda p, h: [Segment(0.0, 1.0, "привет")]
+        tr, "transcribe_wav", lambda p, h, **kw: [Segment(0.0, 1.0, "привет")]
     )
 
-    def fake_diarize(path, num_speakers=None, exclusive=False):
+    def fake_diarize(path, num_speakers=None, exclusive=False, **kw):
         calls["exclusive"] = exclusive
         return Diarization(
             turns=[(0.0, 1.0, "SPEAKER_00")],
@@ -176,10 +176,10 @@ def _progress_stages(monkeypatch, tmp_path, folder=False, align=False):
     from meet import events
 
     monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
-    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h: [Segment(0.0, 1.0, "а")])
+    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h, **kw: [Segment(0.0, 1.0, "а")])
     monkeypatch.setattr(
         tr, "diarize_wav",
-        lambda p, num_speakers=None, exclusive=False: Diarization(turns=[]),
+        lambda p, num_speakers=None, exclusive=False, **kw: Diarization(turns=[]),
     )
     monkeypatch.setattr(tr, "split_by_speaker", lambda s, t, o=None: s)
     monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
@@ -217,10 +217,94 @@ def test_progress_reports_align_when_enabled(monkeypatch, tmp_path):
 
 
 def test_progress_counts_both_tracks(monkeypatch, tmp_path):
+    """Две дорожки — два шага распознавания: собеседники и микрофон."""
     _, seen = _progress_stages(monkeypatch, tmp_path, folder=True)
+    asr_labels = [e.data["label"] for e in seen if e.kind == "progress" and e.data["stage"] == "asr"]
+    assert "распознавание собеседников" in asr_labels and "распознавание микрофона" in asr_labels
     convert = [e for e in seen if e.data.get("stage") == "convert"]
-    assert convert[0].data["total"] == 2  # sys и mic
-    assert convert[-1].data["done"] == 2
+    assert convert[0].data["step"] == 1 and convert[-1].data["done"] == 1
+
+
+def _progress(seen):
+    return [e.data for e in seen if e.kind == "progress"]
+
+
+def test_progress_is_one_monotonic_scale_with_step_numbers(monkeypatch, tmp_path):
+    """Общая доля не убывает от первого события до последнего и кончается
+    единицей; номер шага растёт, а их число не меняется, если ничего не
+    пропущено (выравнивание включено, диаризация есть)."""
+    _, seen = _progress_stages(monkeypatch, tmp_path, folder=True, align=True)
+    events_ = _progress(seen)
+    fractions = [e["fraction"] for e in events_]
+    assert fractions == sorted(fractions)
+    assert fractions[-1] == 1.0
+    assert {e["steps"] for e in events_} == {7}
+    steps = [e["step"] for e in events_]
+    assert steps == sorted(steps) and steps[0] == 1 and steps[-1] == 7
+    order = list(dict.fromkeys((e["stage"], e["label"]) for e in events_))
+    assert [s for s, _ in order] == ["convert", "asr", "align", "diarize", "voices", "asr", "render"]
+
+
+def test_progress_without_align_has_one_step_less(monkeypatch, tmp_path):
+    _, seen = _progress_stages(monkeypatch, tmp_path, folder=False, align=False)
+    events_ = _progress(seen)
+    assert {e["steps"] for e in events_} == {5}
+    assert "align" not in {e["stage"] for e in events_}
+
+
+def test_progress_drops_voices_when_diarization_is_skipped(monkeypatch, tmp_path):
+    """Без токена голоса не сопоставляются: шаг убирается, а доля не откатывается."""
+    import meet.transcribe as tr
+    from meet import events
+
+    monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
+    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h, **kw: [Segment(0.0, 1.0, "а")])
+    monkeypatch.setattr(tr, "diarize_wav", lambda p, num_speakers=None, exclusive=False, **kw:
+                        Diarization(turns=[], skipped=tr.SKIPPED_NO_TOKEN))
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    src = tmp_path / "a.wav"
+    src.write_bytes(b"x")
+    tr.transcribe(str(src), align=False, bus=bus)
+    events_ = _progress(seen)
+    assert "voices" not in {e["stage"] for e in events_}
+    assert events_[0]["steps"] == 5 and events_[-1]["steps"] == 4
+    fractions = [e["fraction"] for e in events_]
+    assert fractions == sorted(fractions) and fractions[-1] == 1.0
+    assert any(e["note"] == "пропущено: нет токена Hugging Face" for e in events_)
+
+
+def test_asr_and_diarization_report_progress_inside_their_steps(monkeypatch, tmp_path):
+    """Распознавание и диаризация двигают шкалу внутри своего шага."""
+    import meet.transcribe as tr
+    from meet import events
+    from meet.progress import Stages
+
+    monkeypatch.setattr(Stages, "MIN_GAP_S", 0.0)
+    monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
+
+    def fake_asr(p, h, on_progress=None, **kw):
+        for part in (0.25, 0.5, 0.75):
+            on_progress(part)
+        return [Segment(0.0, 1.0, "а")]
+
+    def fake_diarize(p, num_speakers=None, exclusive=False, on_progress=None, **kw):
+        on_progress(0.5)
+        return Diarization(turns=[])
+
+    monkeypatch.setattr(tr, "transcribe_wav", fake_asr)
+    monkeypatch.setattr(tr, "diarize_wav", fake_diarize)
+    monkeypatch.setattr(tr, "split_by_speaker", lambda s, t, o=None: s)
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    src = tmp_path / "a.wav"
+    src.write_bytes(b"x")
+    tr.transcribe(str(src), align=False, bus=bus)
+    asr_done = [e["done"] for e in _progress(seen) if e["stage"] == "asr"]
+    assert asr_done[:4] == [0.0, 0.25, 0.5, 0.75]
+    assert [e["done"] for e in _progress(seen) if e["stage"] == "diarize"][:2] == [0.0, 0.5]
 
 
 def test_progress_final_event_names_result(monkeypatch, tmp_path):
@@ -231,8 +315,7 @@ def test_progress_final_event_names_result(monkeypatch, tmp_path):
 
 def test_single_file_progress_has_one_track(monkeypatch, tmp_path):
     _, seen = _progress_stages(monkeypatch, tmp_path, folder=False)
-    convert = [e for e in seen if e.data.get("stage") == "convert"]
-    assert convert[0].data["total"] == 1
+    assert [e["label"] for e in _progress(seen) if e["stage"] == "asr"][0] == "распознавание"
 
 
 def test_transcribe_works_without_bus(monkeypatch, tmp_path):
@@ -262,10 +345,10 @@ def test_mic_track_uses_speaker_name_from_settings(monkeypatch, tmp_path):
         json.dumps({"recording": {"speaker_name": "Алексей"}}), encoding="utf-8"
     )
     monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
-    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h: [Seg(0.0, 1.0, "а")])
+    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h, **kw: [Seg(0.0, 1.0, "а")])
     monkeypatch.setattr(
         tr, "diarize_wav",
-        lambda p, num_speakers=None, exclusive=False: Diarization(turns=[]),
+        lambda p, num_speakers=None, exclusive=False, **kw: Diarization(turns=[]),
     )
     monkeypatch.setattr(tr, "split_by_speaker", lambda s, t, o=None: s)
     monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
@@ -343,7 +426,7 @@ def _no_token_pipeline(monkeypatch):
 
     monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
     monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
-    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h: (
+    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h, **kw: (
         [Segment(0.0, 1.0, "привет")] if "sys" in str(p) or "audio" in str(p)
         else [Segment(2.0, 3.0, "здравствуйте")]))
     return tr
@@ -523,7 +606,7 @@ def test_replacement_rules_fix_both_tracks_before_speaker_split(monkeypatch, tmp
     (tmp_path / "state" / "config.json").write_text(json.dumps({"asr": {"replacements": [
         {"from": "кубер нетис", "to": "kubernetes"}]}}), encoding="utf-8")
     monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
-    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h: [Seg(
+    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h, **kw: [Seg(
         0.0, 1.0, "Кубер нетис готов.",
         words=[Word(0.0, 0.3, " Кубер"), Word(0.3, 0.6, " нетис"), Word(0.6, 1.0, " готов.")])])
     seen = {}
@@ -533,7 +616,7 @@ def test_replacement_rules_fix_both_tracks_before_speaker_split(monkeypatch, tmp
         seen["words"] = [w.text for w in segments[0].words]
         return segments
 
-    monkeypatch.setattr(tr, "diarize_wav", lambda p, num_speakers=None, exclusive=False: Diarization(turns=[]))
+    monkeypatch.setattr(tr, "diarize_wav", lambda p, num_speakers=None, exclusive=False, **kw: Diarization(turns=[]))
     monkeypatch.setattr(tr, "split_by_speaker", fake_split)
     monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
     (tmp_path / "sys.opus").write_bytes(b"x")

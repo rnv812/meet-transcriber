@@ -395,8 +395,8 @@ const job = (o: Partial<Job> = {}): Job => ({
 
 test.each([
   ["queued", "В очереди на расшифровку"],
-  ["running", "Распознавание 25%"],
-] as const)("%s: «Отменить» снимает задачу и перечитывает", async (state, title) => {
+  ["running", "Распознавание"],
+] as const)("%s: отмена с подтверждением снимает задачу и перечитывает", async (state, title) => {
   load({ has_transcript: false }, null);
   vi.mocked(api.cancelJob).mockResolvedValue({ ok: true });
   const onChanged = vi.fn();
@@ -404,7 +404,16 @@ test.each([
   expect(await screen.findByText(title)).toBeInTheDocument();
   await new Promise((r) => setTimeout(r, 0));
   const loads = vi.mocked(api.getRecording).mock.calls.length;
-  await userEvent.click(screen.getByRole("button", { name: "Отменить" }));
+  const opener = state === "queued" ? "Убрать из очереди…" : "Отменить расшифровку…";
+  await userEvent.click(screen.getByRole("button", { name: opener }));
+  // Безопасный выбор — по умолчанию: Esc ничего не отменяет.
+  const ask = screen.getByRole("alertdialog");
+  expect(within(ask).getByRole("button", { name: state === "queued" ? "Оставить" : "Продолжить расшифровку" }))
+    .toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  expect(api.cancelJob).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: opener }));
+  await answer(state === "queued" ? "Убрать из очереди" : "Отменить расшифровку");
   await waitFor(() => expect(api.cancelJob).toHaveBeenCalledWith(ep, "j1"));
   expect(onChanged).toHaveBeenCalled();
   await waitFor(() => expect(vi.mocked(api.getRecording).mock.calls.length).toBe(loads + 1));

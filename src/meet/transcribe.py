@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from meet import asr, events, hotwords, paths
+from meet.progress import WEIGHTS, Stages, Step
 from meet.asr import Segment, transcribe_wav
 from meet.audio import to_wav16k
 from meet.diarize import SKIPPED_NO_ACCESS, SKIPPED_NO_TOKEN, diarize_wav, split_by_speaker
@@ -78,11 +79,32 @@ class _Run:
         self.extra_hotwords = extra_hotwords
         self.seconds = {"asr": 0.0, "align": 0.0, "diarize": 0.0}
         self.started = time.monotonic()
+        # Ход одной шкалой (meet.progress): план задают _transcribe_single/_two_track.
+        self.stages: Stages | None = None
 
     def choose(self, wav: Path) -> asr.Choice:
         if self.choice is None:
             self.choice = asr.choose(wav)
+            self._estimate(wav)
         return self.choice
+
+    def _estimate(self, wav: Path) -> None:
+        """Ожидаемая длительность всей расшифровки — по SPEED_FACTOR выбранного
+        движка и длительности дорожки (WAV 16 кГц моно: 32 000 байт в секунду)."""
+        if self.stages is None or self.choice is None:
+            return
+        try:
+            seconds = max(0, wav.stat().st_size - 44) / 32000
+            from meet import engine
+
+            self.stages.estimate(seconds * engine.speed_factor(self.choice.device, self.choice.backend))
+        except (OSError, ValueError, TypeError):
+            pass
+
+    def part(self, value: float) -> None:
+        """Доля текущего шага (распознавание, диаризация) — в шкалу хода."""
+        if self.stages is not None:
+            self.stages.update(value)
 
     @property
     def gigaam(self) -> bool:
@@ -107,8 +129,9 @@ class _Run:
 
 def _whisper(wav: Path, hotwords: str | None, run: "_Run") -> list[Segment]:
     if run.whisper_model:
-        return run.timed("asr", lambda: transcribe_wav(wav, hotwords, model_name=run.whisper_model))
-    return run.timed("asr", lambda: transcribe_wav(wav, hotwords))
+        return run.timed("asr", lambda: transcribe_wav(wav, hotwords, model_name=run.whisper_model,
+                                                       on_progress=run.part))
+    return run.timed("asr", lambda: transcribe_wav(wav, hotwords, on_progress=run.part))
 
 
 def _recognize(wav: Path, hotwords: str | None, run: "_Run") -> list[Segment]:
@@ -123,7 +146,7 @@ def _recognize(wav: Path, hotwords: str | None, run: "_Run") -> list[Segment]:
     if choice.backend != "gigaam":
         return _whisper(wav, hotwords, run)
     try:
-        return run.timed("asr", lambda: transcribe_wav(wav, hotwords, choice=choice))
+        return run.timed("asr", lambda: transcribe_wav(wav, hotwords, choice=choice, on_progress=run.part))
     except Exception as e:
         return _fallback_to_whisper(wav, hotwords, run, choice.device, e)
 
@@ -154,7 +177,10 @@ def _fallback_to_whisper(wav: Path, hotwords: str | None, run: "_Run", device: s
     size = asr.model_size_text(name)
     note = f"GigaAM недоступна — скачивается модель Whisper{f' ({size})' if size else ''}"
     print(note)
-    run.bus.progress("asr", note=note)
+    if run.stages is not None:
+        run.stages.note(note)
+    else:
+        run.bus.progress("asr", note=note)
     advice = "Проверьте подключение или прокси в настройках"
     if not asr.hub_reachable():
         raise SystemExit(f"GigaAM недоступна ({gigaam_reason}), и модель Whisper не скачать: "
@@ -193,7 +219,38 @@ def _align_enabled(align: bool, run: "_Run") -> bool:
 
 
 def _diarize(wav: Path, speakers, overlap: bool, run: "_Run"):
-    return run.timed("diarize", lambda: diarize_wav(wav, num_speakers=speakers, exclusive=not overlap))
+    return run.timed("diarize", lambda: diarize_wav(wav, num_speakers=speakers, exclusive=not overlap,
+                                                    on_progress=run.part))
+
+
+def _single_plan(align: bool) -> list[Step]:
+    """Шаги расшифровки одной дорожки (импорт, файл)."""
+    steps = [
+        Step("convert", "convert", WEIGHTS["convert"]),
+        Step("asr", "asr", WEIGHTS["asr"], measured=True),
+        Step("align", "align", WEIGHTS["align"]),
+        Step("diarize", "diarize", WEIGHTS["diarize"], measured=True),
+        Step("voices", "voices", WEIGHTS["voices"]),
+        Step("render", "render", WEIGHTS["render"]),
+    ]
+    return steps if align else [s for s in steps if s.key != "align"]
+
+
+def _two_track_plan(align: bool) -> list[Step]:
+    """Шаги встречи из двух дорожек: собеседники распознаются и делятся на
+    спикеров, микрофон только распознаётся (на нём один человек); речи в нём
+    обычно меньше — и вес меньше."""
+    asr_w = WEIGHTS["asr"]
+    steps = [
+        Step("convert", "convert", WEIGHTS["convert"]),
+        Step("asr-sys", "asr", asr_w * 0.6, label="распознавание собеседников", note="sys", measured=True),
+        Step("align", "align", WEIGHTS["align"], note="sys"),
+        Step("diarize", "diarize", WEIGHTS["diarize"], note="sys", measured=True),
+        Step("voices", "voices", WEIGHTS["voices"]),
+        Step("asr-mic", "asr", asr_w * 0.4, label="распознавание микрофона", note="mic", measured=True),
+        Step("render", "render", WEIGHTS["render"]),
+    ]
+    return steps if align else [s for s in steps if s.key != "align"]
 
 
 def _load_hotwords(extra: str | None, path: Path | None = None) -> str | None:
@@ -406,7 +463,8 @@ def transcribe(
         from meet import library, merge
 
         segments = merge.with_breaks(segments, library.read_meta(path).get("parts"))
-    bus.progress("render")
+    stages = run.stages or Stages(bus, _single_plan(False))
+    stages.begin("render")
     out_md.write_text(to_markdown(title, segments, iso), encoding="utf-8")
     _write_sidecar(out_md, path, iso, segments, diar, name_map)
     _write_structured(path, segments, title, name_map,
@@ -416,7 +474,7 @@ def transcribe(
     print(timing)
     bus.emit(events.LOG, text=timing, source="timing")
     print(f"Готово: {out_md}")
-    bus.progress("render", done=1, total=1, note=str(out_md))
+    stages.finish(note=str(out_md))
     return out_md
 
 
@@ -510,25 +568,29 @@ def _transcribe_single(
 ):
     bus = bus if bus is not None else events.EventBus()
     run = run if run is not None else _Run(bus=bus)
+    stages = run.stages = Stages(bus, _single_plan(align))
     with temp_dir() as td:
-        bus.progress("convert", done=0, total=1)
+        stages.begin("convert")
         wav = to_wav16k(src, Path(td) / "audio16.wav")
-        bus.progress("convert", done=1, total=1)
-        bus.progress("asr", done=0, total=1)
+        stages.update(1)
+        stages.begin("asr")
         segments = _recognize(wav, hotwords, run)
-        bus.progress("asr", done=1, total=1)
+        stages.update(1)
         align = _align_enabled(align, run)
         if align:
-            bus.progress("align")
+            stages.begin("align")
+        else:
+            stages.drop("align")
         segments = _fix_terms(run.timed("align", lambda: _maybe_align(segments, wav, align)), run)
-        bus.progress("diarize")
+        stages.begin("diarize")
         diar = _diarize(wav, speakers, overlap, run)
         if diar.skipped:
-            bus.progress("diarize", note=_SKIPPED_NOTES.get(diar.skipped))
+            stages.drop("voices")
+            stages.note(_SKIPPED_NOTES.get(diar.skipped))
             for seg in segments:
                 seg.speaker = INTERLOCUTOR
             return segments, diar, {}
-        bus.progress("voices")
+        stages.begin("voices")
         name_map = _match_names(diar, voice_threshold(src.parent if src.stem == "source" else None))
         segments = split_by_speaker(
             segments, _apply_names(diar.turns, name_map), diar.overlaps
@@ -550,36 +612,40 @@ def _transcribe_two_track(
     sys_src, mic_src = _find_track(folder, "sys"), _find_track(folder, "mic")
     if not (sys_src and mic_src):
         raise SystemExit(f"В {folder} нет дорожек sys/mic")
+    stages = run.stages = Stages(bus, _two_track_plan(align))
     with temp_dir() as td:
-        bus.progress("convert", done=0, total=2)
+        stages.begin("convert")
         sys_wav = to_wav16k(sys_src, Path(td) / "sys16.wav", normalize=True)
-        bus.progress("convert", done=1, total=2, note="sys")
+        stages.update(0.5)
         mic_wav = to_wav16k(mic_src, Path(td) / "mic16.wav")
-        bus.progress("convert", done=2, total=2, note="mic")
-        bus.progress("asr", done=0, total=2, note="sys")
+        stages.update(1)
+        stages.begin("asr-sys")
         sys_segs = _recognize(sys_wav, hotwords, run)
-        bus.progress("asr", done=1, total=2, note="sys")
+        stages.update(1)
         # forced alignment только для sys: mic — один спикер («Вы»), стыки не важны
         align = _align_enabled(align, run)
         if align:
-            bus.progress("align", note="sys")
+            stages.begin("align")
+        else:
+            stages.drop("align")
         sys_segs = _fix_terms(run.timed("align", lambda: _maybe_align(sys_segs, sys_wav, align)), run)
-        bus.progress("diarize", note="sys")
+        stages.begin("diarize")
         diar = _diarize(sys_wav, speakers, overlap, run)
         if diar.skipped:
-            bus.progress("diarize", note=_SKIPPED_NOTES.get(diar.skipped))
+            stages.drop("voices")
+            stages.note(_SKIPPED_NOTES.get(diar.skipped))
             name_map = {}
             for seg in sys_segs:
                 seg.speaker = INTERLOCUTOR
         else:
-            bus.progress("voices")
+            stages.begin("voices")
             name_map = _match_names(diar, voice_threshold(folder))
             sys_segs = split_by_speaker(
                 sys_segs, _apply_names(diar.turns, name_map), diar.overlaps
             )
-        bus.progress("asr", done=1, total=2, note="mic")
+        stages.begin("asr-mic")
         mic_segs = _fix_terms(_recognize(mic_wav, hotwords, run), run)
-        bus.progress("asr", done=2, total=2, note="mic")
+        stages.update(1)
         # Микрофонная дорожка — всегда владелец машины; как его подписывать,
         # решает настройка (по умолчанию «Вы»).
         from meet import settings

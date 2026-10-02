@@ -57,9 +57,11 @@ test("параметры: точное число собеседников и ч
   expect(within(dialog).getByLabelText("Что такое чувствительность разделения")).toBeInTheDocument();
   await userEvent.click(within(dialog).getByRole("button", { name: "Запустить" }));
   expect(api.rediarize).toHaveBeenCalledWith(ep, "r1", { num_speakers: 5, sensitivity: 0.7 });
-  expect(await within(dialog).findByText("В очереди…")).toBeInTheDocument();
+  expect(await within(dialog).findByText("В очереди")).toBeInTheDocument();
   rerender({ jobs: [job("running", "diarize")] });
-  expect(await within(dialog).findByText("Разделение на спикеров…")).toBeInTheDocument();
+  expect(await within(dialog).findByText("Разделение на спикеров")).toBeInTheDocument();
+  // Этап без своего хода — бегущий блик, а не полная полоска.
+  expect(within(dialog).getByRole("progressbar")).not.toHaveAttribute("aria-valuenow", "100");
   rerender({ jobs: [job("done", "render")] });
   expect(await within(dialog).findByText(/Было спикеров: 2, станет: 3\. Сменят спикера 14 из 120 фраз, разделятся по словам: 3/))
     .toBeInTheDocument();

@@ -72,8 +72,6 @@
 }
 .wizard__model-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
 .wizard__model-text .tag { margin-left: 8px; }
-.wizard__meter { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; max-width: 320px; }
-.wizard__meter-fill { height: 100%; background: var(--accent); transition: width var(--t); }
 
 /* Запись */
 .wizard__devices { display: flex; flex-wrap: wrap; gap: 8px; }

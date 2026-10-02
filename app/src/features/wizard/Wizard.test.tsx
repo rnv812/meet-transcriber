@@ -127,8 +127,12 @@ test("установка: прогресс по шагам, строки лог�
     events.progress!({ step: 1, of: 4, line: "Using CPython 3.12" });
     events.progress!({ step: 2, of: 4, line: "PyTorch для видеокарты" });
   });
-  expect(screen.getByText("Шаг 2 из 4")).toBeInTheDocument();
+  expect(screen.getByText("Этап 2 из 4 · PyTorch для видеокарты")).toBeInTheDocument();
+  expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
   const steps = screen.getByRole("list", { name: "Шаги установки" });
+  // Шаги, до которых ещё не дошли, названы заранее.
+  expect(within(steps).getByText("Установка движка Meet")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Подробности" }));
   expect(within(steps).getByText("Окружение Python")).toBeInTheDocument();
   expect(within(steps).getByText("PyTorch для видеокарты")).toBeInTheDocument();
   expect(screen.getByText(/Using CPython 3.12/)).toBeInTheDocument();
@@ -258,7 +262,8 @@ test("модели: размеры и «Скачать» — задача с п�
   const row = screen.getByRole("group", { name: "Whisper large-v3" });
   await userEvent.click(within(row).getByRole("button", { name: "Скачать" }));
   expect(api.downloadModel).toHaveBeenCalledWith(ep, "large-v3");
-  expect(await within(row).findByText(/25%/)).toBeInTheDocument();
+  expect(await within(row).findByText("25 %")).toBeInTheDocument();
+  expect(within(row).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
   // Модель спикеров за токеном — без него не качается.
   const gated = screen.getByRole("group", { name: "Спикеры" });
   expect(within(gated).getByRole("button", { name: "Скачать" })).toBeDisabled();
@@ -355,7 +360,7 @@ test("установка уже идёт (окно закрывали) — ша�
   expect(screen.queryByRole("button", { name: "Установить" })).toBeNull();
   expect(screen.getByRole("button", { name: "Пропустить мастер" })).toBeDisabled();
   act(() => { events.progress!({ step: 3, of: 4, line: "Установка PyTorch" }); });
-  expect(screen.getByText("Шаг 3 из 4")).toBeInTheDocument();
+  expect(screen.getByText("Этап 3 из 4 · Установка PyTorch")).toBeInTheDocument();
   rerender(<Wizard start="engine" engine={engine({ installing: false, installed: true, profile: "cuda" })}
     endpoint={null} recording={false} onClose={onClose} onRefreshEngine={onRefreshEngine} />);
   expect(await screen.findByText("Движок установлен")).toBeInTheDocument();
@@ -453,4 +458,13 @@ test("идёт установка — «Пропустить мастер» не
   const skip = screen.getByRole("button", { name: "Пропустить мастер" });
   expect(skip).toBeDisabled();
   expect(skip).toHaveAttribute("title", "Дождитесь окончания установки");
+});
+
+test("названия шагов установки совпадают с оболочкой (engine.rs)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { ENGINE_STEP_TITLES } = await import("./StepEngine");
+  const rust = readFileSync(join(process.cwd(), "src-tauri", "src", "engine.rs"), "utf8");
+  const block = /const STEP_TITLES: \[&str; \d+\] = \[([\s\S]*?)\];/.exec(rust)?.[1] ?? "";
+  expect([...block.matchAll(/"([^"]+)"/g)].map((m) => m[1])).toEqual(ENGINE_STEP_TITLES);
 });

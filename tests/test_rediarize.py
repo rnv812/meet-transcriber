@@ -98,6 +98,7 @@ def test_sensitivity_maps_to_pipeline_clustering_threshold():
 def test_run_reassigns_text_without_asr_and_previews(meeting, base, monkeypatch):
     out, calls = _run(meeting, base, monkeypatch, num_speakers=3, sensitivity=1.0)
     assert out.name == rediarize.PREVIEW_NAME
+    assert callable(calls[0].pop("on_progress"))  # ход диаризации — в шкалу задачи
     assert calls == [{"num_speakers": 3, "min_speakers": None, "max_speakers": None,
                       "exclusive": False, "clustering_threshold": 0.4}]
     assert _segs(meeting) == SEGMENTS  # транскрипт не тронут до применения

@@ -71,6 +71,8 @@ pub const NO_MAC_IMAGE: &str = "В выпуске нет образа диска
 pub const NO_SUMS: &str = "В выпуске нет контрольной суммы установщика (SHA256SUMS.txt)";
 pub const BUSY: &str = "Обновление уже скачивается";
 pub const NO_DOWNLOAD: &str = "Не удалось скачать обновление: нет связи с GitHub";
+/// «Отменить» во время загрузки установщика (`cancel_update`).
+pub const CANCELLED: &str = "Загрузка обновления отменена";
 pub const RECORDING_AFTER_DOWNLOAD: &str =
     "Остановите запись, затем нажмите «Скачать и установить» ещё раз — установщик уже скачан";
 pub const FOREIGN_HOST: &str =
@@ -538,6 +540,21 @@ pub async fn check_update(app: AppHandle) -> Result<UpdateCheck, String> {
 }
 
 static INSTALLING: AtomicBool = AtomicBool::new(false);
+/// Просьба прервать идущую загрузку: цикл загрузки проверяет её на каждом блоке.
+static CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// «Отменить» загрузку обновления: недокачанный файл удаляется, установщик не
+/// запускается. Загрузки нет — ничего не делает.
+#[tauri::command]
+pub fn cancel_update() {
+    if INSTALLING.load(AtomicOrdering::SeqCst) {
+        CANCEL.store(true, AtomicOrdering::SeqCst);
+    }
+}
+
+fn cancel_requested() -> bool {
+    CANCEL.load(AtomicOrdering::SeqCst)
+}
 
 struct Busy;
 
@@ -586,6 +603,7 @@ pub async fn install_update(app: AppHandle, confirmed: Option<bool>) -> Result<(
 
 fn install_blocking(app: &AppHandle, confirmed: bool) -> Result<(), String> {
     let _busy = Busy::begin()?;
+    CANCEL.store(false, AtomicOrdering::SeqCst);
     if let Some(refusal) = refusal_now(confirmed) {
         return Err(refusal.to_string());
     }
@@ -651,6 +669,10 @@ fn install_blocking(app: &AppHandle, confirmed: bool) -> Result<(), String> {
                 return Err(error);
             }
         };
+        if cancel_requested() {
+            let _ = std::fs::remove_file(&partial);
+            return Err(CANCELLED.to_string());
+        }
         if actual != expected {
             shell_log!("обновление: SHA-256 не совпал (ждали {expected}, получили {actual})");
             let _ = std::fs::remove_file(&partial);
@@ -704,6 +726,10 @@ fn download(
         if read == 0 {
             break;
         }
+        if cancel_requested() {
+            shell_log!("обновление: загрузка отменена");
+            return Err(CANCELLED.to_string());
+        }
         hasher.update(&buffer[..read]);
         file.write_all(&buffer[..read])
             .map_err(|error| format!("Не удалось сохранить обновление: {error}"))?;
@@ -740,6 +766,20 @@ fn launch_and_quit(app: &AppHandle, installer: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancel_only_counts_while_a_download_runs() {
+        // Загрузки нет — «Отменить» ничего не помечает (следующая не отменится сама).
+        cancel_update();
+        assert!(!cancel_requested());
+        let busy = Busy::begin().expect("свободно");
+        CANCEL.store(false, AtomicOrdering::SeqCst);
+        cancel_update();
+        assert!(cancel_requested());
+        drop(busy);
+        CANCEL.store(false, AtomicOrdering::SeqCst);
+        assert_eq!(CANCELLED, "Загрузка обновления отменена");
+    }
 
     const RELEASE: &str = r#"{
         "tag_name": "v0.2.0",

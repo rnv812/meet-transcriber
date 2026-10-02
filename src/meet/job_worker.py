@@ -274,20 +274,65 @@ def _install_engine(flavor: str | None) -> int:
     return 0
 
 
+class ByteWatch:
+    """Ход загрузки в байтах: загрузчики (huggingface_hub, GigaAM) своего хода
+    не отдают, зато файлы растут на диске — их размер и опрашиваем. Событие —
+    не чаще раза в `interval` секунд и только если размер изменился."""
+
+    def __init__(self, measure, total: int | None, report, interval: float = 0.5) -> None:
+        import threading
+
+        self.measure, self.total, self.report, self.interval = measure, total, report, interval
+        self._stop = threading.Event()
+        self._last: int | None = None
+        self._thread = threading.Thread(target=self._loop, name="meet-bytes", daemon=True)
+
+    def tick(self) -> None:
+        try:
+            done = int(self.measure())
+        except Exception:
+            return
+        if self.total:
+            done = min(done, self.total)
+        if done != self._last:
+            self._last = done
+            self.report(done, self.total)
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.interval):
+            self.tick()
+
+    def __enter__(self):
+        self.tick()
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        self._thread.join(timeout=2)
+
+
 def _download_model(repo_id: str) -> int:
-    """Скачать модель в общий кэш Hugging Face, отдавая ход построчно."""
+    """Скачать модель, отдавая ход: байты скачанного из размера файлов на
+    диске (шкала в окне), строки загрузчика — в журнал задачи."""
     from meet import events, models
 
     bus = events.EventBus()
     bus.subscribe(lambda event: _emit(event.to_dict()))
-    bus.progress("model", label="загрузка модели", note=repo_id)
+    bus.progress("model", label="загрузка модели", note=repo_id, step=1, steps=1)
     lines: list[str] = []
 
     def say(line: str) -> None:
         lines.append(line)
         _emit({"kind": "log", "text": line})
 
-    code = models.download(repo_id, on_line=say)
+    def report(done: int, total: int | None) -> None:
+        bus.progress("model", label="загрузка модели", note=repo_id, done=done if total else None,
+                     total=total, step=1, steps=1,
+                     fraction=round(done / total, 4) if total else None)
+
+    with ByteWatch(lambda: models.size_on_disk(repo_id), models.download_total(repo_id), report):
+        code = models.download(repo_id, on_line=say)
     if code != 0:
         _emit({"kind": "error", "text": lines[-1] if lines else "не скачалось"})
         return code

@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import pkg from "../../../package.json";
 import { type Endpoint, getDiagnostics } from "../../lib/api";
 import {
-  checkUpdate, installUpdate, onUpdateProgress, openUrl, releasesPage,
+  UPDATE_CANCELLED, cancelUpdate, checkUpdate, installUpdate, onUpdateProgress, openUrl, releasesPage,
   type UpdateCheck, type UpdateProgress,
 } from "../../lib/shell";
 import { Button } from "../../ui/Button";
+import { ProgressBar } from "../../ui/ProgressBar";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { PathText, Row } from "./Section";
 import { VoiceBaseTip } from "./tips";
@@ -61,6 +62,7 @@ type State =
   | { kind: "checked"; result: UpdateCheck }
   | { kind: "failed"; error: string }
   | { kind: "installing"; result: UpdateCheck; progress: UpdateProgress | null }
+  | { kind: "cancelled"; result: UpdateCheck }
   | { kind: "launched" }
   | { kind: "confirm"; result: UpdateCheck }
   | { kind: "install-failed"; result: UpdateCheck; error: string };
@@ -99,23 +101,26 @@ function UpdateRow() {
       setState({ kind: "launched" });
     } catch (cause) {
       const error = errorText(cause);
-      setState(error === UPDATE_CONFIRM_WORK
-        ? { kind: "confirm", result }
-        : { kind: "install-failed", result, error });
+      setState(error === UPDATE_CONFIRM_WORK ? { kind: "confirm", result }
+        : error === UPDATE_CANCELLED ? { kind: "cancelled", result }
+          : { kind: "install-failed", result, error });
     }
   };
 
-  const busy = state.kind === "checking" || state.kind === "installing" || state.kind === "launched";
-  const result = state.kind === "checked" || state.kind === "install-failed" ? state.result : null;
+  const result = state.kind === "checked" || state.kind === "install-failed" || state.kind === "cancelled"
+    ? state.result : null;
   const asking = state.kind === "confirm" ? state.result : null;
   const notes = result?.notes_url ?? null;
 
   return (
     <Row label="Обновления" hint="Проверка на GitHub — только по кнопке" help={<UpdateTip />}>
-      <Button onClick={() => void check()} disabled={busy}>
-        {state.kind === "checking" ? "Проверяю…" : "Проверить обновления"}
+      <Button onClick={() => void check()} busy={state.kind === "checking"}
+        disabled={state.kind === "installing" || state.kind === "launched"}>
+        Проверить обновления
       </Button>
+      {/* Итог проверки и ход загрузки — в строке постоянной высоты: страница ниже не прыгает. */}
       <div className="update" role="status">
+        {state.kind === "cancelled" && <span className="muted">Загрузка отменена</span>}
         {state.kind === "failed" && <span className="update__error">{state.error}</span>}
         {result && result.latest === null && (
           <span className="muted">Обновления пока не опубликованы</span>
@@ -149,7 +154,12 @@ function UpdateRow() {
             <Button onClick={() => setState({ kind: "checked", result: asking })}>Отмена</Button>
           </>
         )}
-        {state.kind === "installing" && <InstallProgress progress={state.progress} />}
+        {state.kind === "installing" && (
+          <>
+            <InstallProgress progress={state.progress} />
+            <Button size="sm" onClick={() => void cancelUpdate()}>Отменить загрузку</Button>
+          </>
+        )}
         {state.kind === "launched" && <span>Установщик запущен, приложение закрывается…</span>}
       </div>
     </Row>
@@ -159,20 +169,16 @@ function UpdateRow() {
 function InstallProgress({ progress }: { progress: UpdateProgress | null }) {
   const total = progress?.total ?? 0;
   const done = progress?.done ?? 0;
-  const pct = total > 0 ? Math.min(100, (done / total) * 100) : 0;
+  // Размер неизвестен (оболочка прислала 0) — бегущий блик, а не пустая или полная полоска.
+  const value = total > 0 ? Math.min(1, done / total) : null;
   return (
-    <div className="update__progress">
-      <span className="muted">
-        {progress === null
-          ? "Начинаю загрузку…"
-          : total > 0
-            ? `Скачиваю: ${megabytes(done)} из ${megabytes(total)}`
-            : `Скачиваю: ${megabytes(done)}`}
-      </span>
-      <div className="update__track" aria-hidden="true">
-        <div className="update__fill" style={{ width: `${pct}%` }} />
-      </div>
-    </div>
+    <ProgressBar className="update__progress" value={value} ariaLabel="Загрузка обновления"
+      label={progress === null
+        ? "Начинаю загрузку…"
+        : total > 0
+          ? `Скачиваю: ${megabytes(done)} из ${megabytes(total)}`
+          : `Скачиваю: ${megabytes(done)}`}
+      detail={value !== null ? `${Math.floor(value * 100)} %` : null} />
   );
 }
 
@@ -200,15 +206,11 @@ export function About({ endpoint }: { endpoint: Endpoint }) {
       <Row label="Версия"><span>{pkg.version}</span></Row>
       <UpdateRow />
       <Row
-        label="Как обновиться"
+        label="Обновить вручную"
         hint="Скачайте новый установщик и запустите его — данные сохранятся"
       >
         {releases && (
-          <>
-            <Button onClick={() => void openUrl(releases)}>Скачать новую версию</Button>
-            <code className="path">{releases}</code>
-            <CopyButton text={releases} />
-          </>
+          <Button variant="link" title={releases} onClick={() => void openUrl(releases)}>Скачать новую версию</Button>
         )}
       </Row>
       <Row label="Папка данных" hint="Настройки, журналы и база голосов" help={<VoiceBaseTip />}>

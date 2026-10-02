@@ -17,7 +17,11 @@ import {
   type EngineFailed, type EngineProgress, type EngineStatus,
   installEngine, onEngineFailed, onEngineProgress,
 } from "../../lib/shell";
+import { elapsedText, stageText } from "../../lib/progress";
 import { Button } from "../../ui/Button";
+import { Disclosure } from "../../ui/Disclosure";
+import { ETA_TICK_MS } from "../../ui/JobProgress";
+import { ProgressBar } from "../../ui/ProgressBar";
 import { driveOf, freeSpaceShortfall, gb } from "./gate";
 
 const ENGINE_PROFILE = { cuda: "для видеокарты", cpu: "для процессора", mac: "для Apple Silicon" } as const;
@@ -29,33 +33,51 @@ export const ATTACHED_POLL_MS = 2000;
 /** Место под CPU-версию, если оболочка его не прислала (`needs_cpu_gb`), — как `NEEDS_CPU_GB` в engine.rs. */
 export const NEEDS_CPU_GB = 3;
 
-type Progress = { step: number; of: number; titles: Record<number, string>; lines: string[] };
-const NO_PROGRESS: Progress = { step: 0, of: 4, titles: {}, lines: [] };
+type Progress = { step: number; of: number; titles: Record<number, string>; lines: string[]; startedAt: number };
+const NO_PROGRESS: Progress = { step: 0, of: 4, titles: {}, lines: [], startedAt: 0 };
+
+/** Названия шагов установки — как `STEP_TITLES` в engine.rs (тест сверяет): видны заранее, а не «Шаг 4». */
+export const ENGINE_STEP_TITLES = [
+  "Загрузка Python 3.12",
+  "Создание окружения движка",
+  "Установка PyTorch",
+  "Установка движка Meet",
+];
 
 function advance(cur: Progress, p: EngineProgress): Progress {
   const titles = cur.titles[p.step] === undefined ? { ...cur.titles, [p.step]: p.line } : cur.titles;
-  return { step: p.step, of: p.of, titles, lines: [...cur.lines, p.line].slice(-MAX_LINES) };
+  return { ...cur, step: p.step, of: p.of, titles, lines: [...cur.lines, p.line].slice(-MAX_LINES),
+    startedAt: cur.startedAt || Date.now() };
 }
 
 export type InstallPhase = "idle" | "running" | "done" | "failed";
 
 function InstallProgress({ progress }: { progress: Progress }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), ETA_TICK_MS);
+    return () => window.clearInterval(t);
+  }, []);
   const steps = Array.from({ length: progress.of }, (_, i) => i + 1);
+  const title = (n: number) => progress.titles[n] ?? ENGINE_STEP_TITLES[n - 1] ?? `Шаг ${n}`;
+  // pip/uv объёма заранее не сообщают: шкала — пройденные шаги, блик — текущий идёт.
+  const value = progress.step > 0 ? (progress.step - 1) / progress.of : null;
   return (
     <div className="wizard__install">
-      <p className="muted">{progress.step > 0 ? `Шаг ${progress.step} из ${progress.of}` : "Начинаю…"}</p>
+      <ProgressBar value={value} stageKey="engine" working
+        label={progress.step > 0 ? stageText(title(progress.step), progress.step, progress.of) : "Подготовка к установке"}
+        detail={progress.startedAt ? elapsedText((now - progress.startedAt) / 1000) : null} />
       <ol className="wizard__progress" aria-label="Шаги установки">
         {steps.map((n) => (
           <li key={n} className={n < progress.step ? "is-done" : n === progress.step ? "is-current" : undefined}>
-            {progress.titles[n] ?? `Шаг ${n}`}
+            {title(n)}
           </li>
         ))}
       </ol>
       {progress.lines.length > 0 && (
-        <details className="wizard__log">
-          <summary>Подробности</summary>
+        <Disclosure title="Подробности" className="wizard__log">
           <pre className="log">{progress.lines.join("\n")}</pre>
-        </details>
+        </Disclosure>
       )}
     </div>
   );

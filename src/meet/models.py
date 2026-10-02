@@ -132,6 +132,30 @@ def downloaded(repo_id: str) -> bool:
                if snapshot.is_dir())
 
 
+def download_total(repo_id: str) -> int | None:
+    """Сколько байт весит модель целиком — для шкалы загрузки. GigaAM — по
+    своему списку файлов; Hugging Face — по метаданным репозитория, а без
+    связи с ними — по размеру из каталога (оценка). Неизвестно — None."""
+    if (name := gigaam_name(repo_id)) is not None:
+        from meet import gigaam_asr
+
+        files = gigaam_asr.FILES.get(name)
+        return sum(size for _, size, _, _ in files) if files else None
+    try:
+        from huggingface_hub import HfApi
+
+        info = HfApi().model_info(repo_id, files_metadata=True, token=token(), timeout=10)
+        total = sum(int(getattr(f, "size", 0) or 0) for f in (info.siblings or []))
+        if total > 0:
+            return total
+    except Exception:
+        pass
+    for model in CATALOGUE:
+        if model["id"] == repo_id and model.get("size_gb"):
+            return int(float(model["size_gb"]) * 1e9)
+    return None
+
+
 def size_on_disk(repo_id: str) -> int:
     """Сколько занято на диске, байт. Нет — ноль."""
     if (name := gigaam_name(repo_id)) is not None:

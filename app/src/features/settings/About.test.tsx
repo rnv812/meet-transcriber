@@ -13,6 +13,8 @@ vi.mock("../../lib/shell", () => ({
   releasesPage: vi.fn(async () => "https://github.com/example/updates/releases"),
   checkUpdate: vi.fn(),
   installUpdate: vi.fn(),
+  cancelUpdate: vi.fn(async () => {}),
+  UPDATE_CANCELLED: "Загрузка обновления отменена",
   onUpdateProgress: vi.fn(async (cb: (p: { done: number; total: number }) => void) => {
     progressListener = cb;
     return () => { progressListener = null; };
@@ -114,9 +116,34 @@ test("новая версия: «Что нового» и «Скачать и у
   expect(checkButton()).toBeDisabled();
   act(() => progressListener?.({ done: 10485760, total: 52428800 }));
   expect(screen.getByText("Скачиваю: 10 МБ из 50 МБ")).toBeInTheDocument();
+  expect(screen.getByRole("progressbar", { name: "Загрузка обновления" })).toHaveAttribute("aria-valuenow", "20");
 
   await act(async () => finish());
   expect(await screen.findByText("Установщик запущен, приложение закрывается…")).toBeInTheDocument();
+});
+
+test("размер неизвестен — бегущая полоска; «Отменить загрузку» прерывает её", async () => {
+  check.mockResolvedValue(newer);
+  let fail: (e: unknown) => void = () => {};
+  install.mockImplementation(() => new Promise<void>((_, reject) => { fail = reject; }));
+  vi.mocked(shell.cancelUpdate).mockImplementation(async () => fail("Загрузка обновления отменена"));
+  await renderAbout();
+  await userEvent.click(checkButton());
+  await userEvent.click(await screen.findByRole("button", { name: "Скачать и установить" }));
+  act(() => progressListener?.({ done: 1048576, total: 0 }));
+  expect(screen.getByRole("progressbar", { name: "Загрузка обновления" }))
+    .toHaveClass("progressbar__track--indeterminate");
+  await userEvent.click(screen.getByRole("button", { name: "Отменить загрузку" }));
+  expect(shell.cancelUpdate).toHaveBeenCalled();
+  expect(await screen.findByText("Загрузка отменена")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Скачать и установить" })).toBeEnabled();
+});
+
+test("строка итога есть всегда: проверка не сдвигает страницу", async () => {
+  await renderAbout();
+  const slot = document.querySelector(".update");
+  expect(slot).not.toBeNull();
+  expect(slot).toBeEmptyDOMElement();
 });
 
 test("отказ во время записи виден рядом с кнопкой", async () => {
