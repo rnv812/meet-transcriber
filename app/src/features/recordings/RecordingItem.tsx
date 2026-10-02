@@ -5,7 +5,7 @@ import { categoryOf, NO_CATEGORY_NAME } from "../../lib/categories";
 import type { RecStatus } from "../../lib/status";
 import type { Category, LibraryItem } from "../../lib/types";
 import { AiBadge } from "../../ui/AiBadge";
-import { CategoryChip, CategoryDot } from "../../ui/Category";
+import { CategoryDot, CategoryMark } from "../../ui/Category";
 import { Highlight } from "../../ui/Highlight";
 import { BookOpen, ChevronLeft, ChevronRight, FolderOpen, Pencil, Settings2, Tag, Trash2 } from "lucide-react";
 import { ItemMenu, type MenuItem } from "./ItemMenu";
@@ -90,6 +90,8 @@ export function RecordingItem({
   const [confirmDelete, setConfirmDelete] = useState(false);
   /** В меню открыт список категорий («Категория ▸»). */
   const [pickCategory, setPickCategory] = useState(false);
+  /** Вернулись из списка категорий «Назад» — фокус на пункт «Категория». */
+  const [backFromCategory, setBackFromCategory] = useState(false);
   const main = useRef<HTMLButtonElement>(null);
   const more_ = useRef<HTMLButtonElement>(null);
   const done = useRef(false);
@@ -120,7 +122,9 @@ export function RecordingItem({
     setPickCategory(false);
     if (focusBack) more_.current?.focus();
   };
-  const openMenuAt = (x: number, y: number) => { setConfirmDelete(false); setPickCategory(false); setMenu({ x, y }); };
+  const openMenuAt = (x: number, y: number) => {
+    setConfirmDelete(false); setPickCategory(false); setBackFromCategory(false); setMenu({ x, y });
+  };
   const chooseCategory = (id: string | null) => { closeMenu(); void actions?.onCategory?.(rec.id, id); };
   const openFromButton = () => {
     const r = more_.current?.getBoundingClientRect();
@@ -139,7 +143,7 @@ export function RecordingItem({
       onSelect: () => { closeMenu(false); actions.onOpenCategories?.(); },
     }] : []),
     { label: "Назад", separator: !actions?.onOpenCategories, icon: <ChevronLeft {...ICON} />,
-      onSelect: () => setPickCategory(false) },
+      onSelect: () => { setBackFromCategory(true); setPickCategory(false); } },
   ];
 
   const menuItems: MenuItem[] = pickCategory ? categoryItems : confirmDelete ? [
@@ -150,6 +154,7 @@ export function RecordingItem({
     { label: "Переименовать", icon: <Pencil {...ICON} />, onSelect: () => { closeMenu(false); begin(); } },
     ...(actions?.onCategory ? [{
       label: "Категория", icon: <Tag {...ICON} />, hint: `Сейчас: ${category?.name ?? NO_CATEGORY_NAME}`,
+      autoFocus: backFromCategory,
       trailing: <ChevronRight {...ICON} />, onSelect: () => setPickCategory(true),
     }] : []),
     ...(actions?.onOpenFolder ? [{
@@ -212,7 +217,7 @@ export function RecordingItem({
           <span className="rec-item__meta">
             <span className="rec-item__when">
               <span className="muted num">{meta}</span>
-              {category && <CategoryChip category={category} small />}
+              {category && <CategoryMark category={category} />}
             </span>
             {badge && <span className={`badge${badge.tone ? ` badge--${badge.tone}` : ""}`}>{badge.text}</span>}
           </span>

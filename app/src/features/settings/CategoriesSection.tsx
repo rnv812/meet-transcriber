@@ -10,10 +10,10 @@
  * «Сбросить к стандартным» вернёт стандартные категории встречам.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowDown, ArrowUp, Trash2 } from "lucide-react";
 import { getCategoriesInfo, type CategoriesInfo, type Endpoint } from "../../lib/api";
-import { CATEGORY_PALETTE, newCategoryId } from "../../lib/categories";
+import { CATEGORY_PALETTE, NO_CATEGORY_NAME, newCategoryId } from "../../lib/categories";
 import type { Category } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
@@ -40,6 +40,9 @@ const norm = (s: string) => clean(s).toLowerCase().replace(/ё/g, "е");
 /** Что не так со списком (пустое или повторённое название); всё хорошо — null. */
 export function categoriesError(list: DraftCategory[]): string | null {
   if (list.some((c) => !clean(c.name))) return "У каждой категории должно быть название";
+  if (list.some((c) => norm(c.name) === norm(NO_CATEGORY_NAME))) {
+    return `Название «${NO_CATEGORY_NAME}» занято: так обозначаются встречи без категории`;
+  }
   const names = list.map((c) => norm(c.name));
   if (names.some((n, i) => names.indexOf(n) !== i)) return "Названия категорий не должны повторяться";
   return null;
@@ -90,6 +93,21 @@ function ColorPicker({ value, name, onChange }: { value: string; name: string; o
   const [open, setOpen] = useState(false);
   const close = () => { setOpen(false); button.current?.focus(); };
   const current = CATEGORY_PALETTE.find((p) => p.color.toLowerCase() === value.toLowerCase());
+  const focused = current ?? CATEGORY_PALETTE[0]!;
+  // Палитра — одна остановка Tab: стрелки ходят по цветам, Enter или пробел выбирает.
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const all = [...e.currentTarget.querySelectorAll<HTMLButtonElement>("[role=radio]")];
+    const at = all.indexOf(document.activeElement as HTMLButtonElement);
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    let next = -1;
+    if (step) next = (at + step + all.length) % all.length;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = all.length - 1;
+    if (next < 0) return;
+    e.preventDefault();
+    all.forEach((b, i) => { b.tabIndex = i === next ? 0 : -1; });
+    all[next]?.focus();
+  };
   return (
     <>
       <button ref={button} type="button" className="catedit__swatch" style={{ background: value }}
@@ -97,12 +115,12 @@ function ColorPicker({ value, name, onChange }: { value: string; name: string; o
         aria-label={`Цвет категории «${name || "без названия"}»: ${current?.name ?? value}`}
         onClick={() => setOpen((v) => !v)} />
       {open && button.current && (
-        <Popover anchor={button.current} label="Цвет категории" width={212} onClose={close}>
-          <div role="radiogroup" aria-label="Цвет категории" className="catedit__palette">
+        <Popover anchor={button.current} label="Цвет категории" width={212} onClose={close} anchorToggles>
+          <div role="radiogroup" aria-label="Цвет категории" className="catedit__palette" onKeyDown={onKeyDown}>
             {CATEGORY_PALETTE.map((p) => (
               <button key={p.color} type="button" role="radio" aria-checked={p === current} aria-label={p.name}
                 title={p.name} className="catedit__color" style={{ background: p.color }}
-                autoFocus={p === current || (!current && p === CATEGORY_PALETTE[0])}
+                tabIndex={p === focused ? 0 : -1} autoFocus={p === focused}
                 onClick={() => { onChange(p.color); close(); }} />
             ))}
           </div>
@@ -121,6 +139,8 @@ export function CategoriesSection({ value, onChange, endpoint }: {
   const [info, setInfo] = useState<CategoriesInfo | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
   const [focusKey, setFocusKey] = useState<string | null>(null);
+  /** Ошибку в названиях показываем, когда из поля названия ушли, а не сразу после «Добавить». */
+  const [touched, setTouched] = useState(false);
   const keyCounter = useRef(0);
   const rows = useRef<HTMLUListElement>(null);
 
@@ -175,7 +195,8 @@ export function CategoriesSection({ value, onChange, endpoint }: {
         <ul ref={rows} className="catedit" aria-label="Категории встреч">
           {list.map((c, i) => {
             const k = keyOf(c);
-            const used = c.id ? info?.counts[c.id] ?? 0 : 0;
+            // Счётчики не пришли (ещё грузятся или резидент не ответил) — без числа.
+            const used = !c.id ? 0 : info ? info.counts[c.id] ?? 0 : null;
             const shown = clean(c.name) || "без названия";
             return (
               <li key={k} data-key={k} className="catedit__item">
@@ -192,7 +213,8 @@ export function CategoriesSection({ value, onChange, endpoint }: {
                   </span>
                   <ColorPicker value={c.color} name={clean(c.name)} onChange={(color) => update(i, { color })} />
                   <input type="text" className="catedit__name" aria-label="Название категории" maxLength={NAME_MAX}
-                    placeholder="Название" value={c.name} onChange={(e) => update(i, { name: e.target.value })} />
+                    placeholder="Название" value={c.name} onChange={(e) => update(i, { name: e.target.value })}
+                    onBlur={() => setTouched(true)} />
                   <input type="text" className="catedit__desc" aria-label={`Описание категории «${shown}» для ИИ`}
                     maxLength={DESCRIPTION_MAX} placeholder="Описание для ИИ: какие встречи сюда относятся"
                     value={c.description} onChange={(e) => update(i, { description: e.target.value })} />
@@ -204,7 +226,8 @@ export function CategoriesSection({ value, onChange, endpoint }: {
                 {confirm === k && (
                   <div className="catedit__confirm" role="alert">
                     <span>
-                      {used > 0 ? `У ${meetings(used)} эта категория будет снята.` : "Встреч с этой категорией нет."}
+                      {used === null ? "Встречи с этой категорией будут показаны «Без категории»."
+                        : used > 0 ? `У ${meetings(used)} эта категория будет снята.` : "Встреч с этой категорией нет."}
                       {" "}Удалить категорию «{shown}»?
                     </span>
                     <Button variant="danger" onClick={() => remove(c)}>Удалить</Button>
@@ -218,7 +241,7 @@ export function CategoriesSection({ value, onChange, endpoint }: {
       ) : (
         <p className="muted">Категорий нет: ИИ не будет определять категорию, а фильтр в списке записей скрыт.</p>
       )}
-      {error && <p className="error">{error}</p>}
+      {error && (touched || !list.some((x) => !x.id && !clean(x.name))) && <p className="error">{error}</p>}
       <div className="catedit__actions">
         <Button onClick={add}>Добавить категорию</Button>
         <Button disabled={!info?.defaults.length} onClick={() => { setConfirm(null); onChange(info?.defaults ?? []); }}>

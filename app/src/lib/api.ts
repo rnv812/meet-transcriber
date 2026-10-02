@@ -85,13 +85,16 @@ export const getState = (ep: Endpoint) => json<Snapshot>(ep, "/state");
 
 // --- записи ----------------------------------------------------------------
 
-export function getRecordings(ep: Endpoint, q?: string) {
-  const qs = q ? `?q=${enc(q)}` : "";
-  return json<{ root: string; items: Recording[] }>(ep, `/recordings${qs}`);
+/** `categories` — фильтр по категориям (id и "_none" — «Без категории»); резидент применяет его до лимита списка. */
+export function getRecordings(ep: Endpoint, q?: string, categories?: string[]) {
+  const params = [q ? `q=${enc(q)}` : "", categories?.length ? `categories=${enc(categories.join(","))}` : ""]
+    .filter(Boolean).join("&");
+  return json<{ root: string; items: Recording[] }>(ep, `/recordings${params ? `?${params}` : ""}`);
 }
 /** Поиск по тексту встреч и названиям (правила — lib/search.ts): записи с фрагментами. */
-export const searchLibrary = (ep: Endpoint, q: string, signal?: AbortSignal) =>
-  json<{ items: SearchItem[] }>(ep, `/search?q=${enc(q)}`, { signal });
+export const searchLibrary = (ep: Endpoint, q: string, signal?: AbortSignal, categories?: string[]) =>
+  json<{ items: SearchItem[] }>(ep, `/search?q=${enc(q)}${categories?.length
+    ? `&categories=${enc(categories.join(","))}` : ""}`, { signal });
 export const getRecording = (ep: Endpoint, id: string) =>
   json<Recording & { transcript: Transcript | null }>(ep, `/recordings/${enc(id)}`);
 /** Название записи не длиннее (резидент обрезает так же). */
@@ -106,9 +109,16 @@ export const patchRecording = (ep: Endpoint, id: string,
 /** Категория, выбранная человеком: id из настроек или null — «Без категории» (модель её больше не ставит). */
 export const setRecordingCategory = (ep: Endpoint, id: string, category: string | null) =>
   json<Recording>(ep, `/recordings/${enc(id)}/category`, body("PUT", { id: category }));
-/** Редактор категорий: нынешний и стандартный списки, сколько встреч в каждой категории и без категории. */
-export type CategoriesInfo = { categories: Category[]; defaults: Category[]; counts: Record<string, number>; none: number };
-export const getCategoriesInfo = (ep: Endpoint) => json<CategoriesInfo>(ep, "/categories");
+/**
+ * Категории: нынешний и стандартный списки, сколько встреч в каждой категории и без категории —
+ * по всей библиотеке или, с запросом поиска `q`, среди найденных (`scope`).
+ */
+export type CategoriesInfo = {
+  categories: Category[]; defaults: Category[]; counts: Record<string, number>; none: number;
+  scope?: "library" | "search";
+};
+export const getCategoriesInfo = (ep: Endpoint, q?: string) =>
+  json<CategoriesInfo>(ep, `/categories${q ? `?q=${enc(q)}` : ""}`);
 /** Категории из ответа `GET /settings`: битые записи отбрасываются. */
 export function categoriesOf(settings: Record<string, unknown> | null | undefined): Category[] {
   const raw = settings?.categories;

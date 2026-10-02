@@ -771,7 +771,7 @@ _ROUTES = {
     ("POST", "/devices/test"): lambda h, p: _server_of(h).state.test_device(h._body()),
     ("PATCH", "/settings"): lambda h, p: _server_of(h).state.patch_settings(h._body()),
     # Редактор категорий: список, стандартный список и сколько встреч в каждой.
-    ("GET", "/categories"): lambda h, p: _server_of(h).state.categories(),
+    ("GET", "/categories"): lambda h, p: _server_of(h).state.categories((p.get("q") or [""])[0]),
     ("POST", "/recording/start"): lambda h, p: _server_of(h).state.start_recording(),
     ("POST", "/recording/stop"): lambda h, p: _server_of(h).state.stop_recording(),
     ("POST", "/recording/cancel"): lambda h, p: _server_of(h).state.stop_recording(
@@ -780,10 +780,12 @@ _ROUTES = {
     ("POST", "/recording/adopt"): lambda h, p: _server_of(h).state.adopt_recording(),
     ("POST", "/auto-record"): lambda h, p: _server_of(h).state.set_auto_record(h._body()),
     ("GET", "/recordings"): lambda h, p: _server_of(h).state.recordings(
-        limit=_int_param(p, "limit", 200), q=(p.get("q") or [""])[0]
+        limit=_int_param(p, "limit", 200), q=(p.get("q") or [""])[0],
+        categories=(p.get("categories") or [""])[0],
     ),
     ("GET", "/search"): lambda h, p: _server_of(h).state.search(
-        (p.get("q") or [""])[0], limit=_int_param(p, "limit", 200)
+        (p.get("q") or [""])[0], limit=_int_param(p, "limit", 200),
+        categories=(p.get("categories") or [""])[0],
     ),
     ("GET", "/hotwords"): lambda h, p: _server_of(h).state.get_hotwords(),
     ("PUT", "/hotwords"): lambda h, p: _server_of(h).state.put_hotwords(h._body()),

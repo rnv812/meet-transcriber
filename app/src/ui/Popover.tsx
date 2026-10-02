@@ -22,14 +22,22 @@ export function placePopover(anchor: Rect, box: Size, view: Size): { left: numbe
   return { left, top };
 }
 
-/** Всплывающее окно у элемента-якоря; закрывается по Esc и клику снаружи. */
-export function Popover({ anchor, onClose, children, label, width = W }: {
+/**
+ * Всплывающее окно у элемента-якоря; закрывается по Esc и клику снаружи.
+ *
+ * `anchorToggles` — якорь — кнопка, которая сама открывает и закрывает окно:
+ * нажатие на неё окно «снаружи» не закрывает (иначе mousedown закрыл бы его, а
+ * следующий click открыл снова). Без флага якорь — обычное «снаружи»: у
+ * некоторых окон якорь — вся расшифровка, и щелчок по ней должен закрывать.
+ */
+export function Popover({ anchor, onClose, children, label, width = W, anchorToggles = false }: {
   anchor: HTMLElement;
   onClose: () => void;
   children: ReactNode;
   label: string;
   /** Ширина окна, px. */
   width?: number;
+  anchorToggles?: boolean;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: 0, top: 0 });
@@ -51,7 +59,9 @@ export function Popover({ anchor, onClose, children, label, width = W }: {
 
   useEffect(() => {
     const down = (e: MouseEvent) => {
-      if (box.current && !box.current.contains(e.target as Node)) onClose();
+      const target = e.target as Node;
+      if (anchorToggles && anchor.contains(target)) return;
+      if (box.current && !box.current.contains(target)) onClose();
     };
     const key = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("mousedown", down);
@@ -60,7 +70,7 @@ export function Popover({ anchor, onClose, children, label, width = W }: {
       document.removeEventListener("mousedown", down);
       document.removeEventListener("keydown", key);
     };
-  }, [onClose]);
+  }, [onClose, anchor, anchorToggles]);
 
   return (
     <div ref={box} className="popover" role="dialog" aria-label={label}

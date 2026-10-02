@@ -76,3 +76,15 @@ test("одна буква — ещё не поиск: весь список", as
   await vi.waitFor(() => expect(getRecordings).toHaveBeenCalledWith(ep));
   expect(searchLibrary).not.toHaveBeenCalled();
 });
+
+test("фильтр по категориям уходит резиденту (до лимита списка) и при смене перечитывает", async () => {
+  vi.mocked(getRecordings).mockClear();
+  vi.mocked(searchLibrary).mockClear();
+  const { rerender } = renderHook(({ cats, q }) => useLibrary(ep, q, 0, 0, cats),
+    { initialProps: { cats: ["retro"], q: "" } });
+  await vi.waitFor(() => expect(getRecordings).toHaveBeenCalledWith(ep, undefined, ["retro"]));
+  rerender({ cats: ["retro", "_none"], q: "" });
+  await vi.waitFor(() => expect(getRecordings).toHaveBeenCalledWith(ep, undefined, ["retro", "_none"]));
+  rerender({ cats: ["retro", "_none"], q: "бюджет" });
+  await vi.waitFor(() => expect(searchLibrary).toHaveBeenCalledWith(ep, "бюджет", expect.any(AbortSignal), ["retro", "_none"]));
+});

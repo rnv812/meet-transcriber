@@ -1159,19 +1159,30 @@ class TrayControl:
             return None
         return candidate
 
-    def recordings(self, limit: int = 200, q: str | None = None) -> dict:
+    @staticmethod
+    def _category_filter(keys):
+        """`?categories=a,b,_none` → фильтр карточек (до лимита списка); нет — None."""
+        from meet import categories
+
+        keys = categories.parse_keys(keys)
+        return categories.matcher(keys, settings.load()) if keys else None
+
+    def recordings(self, limit: int = 200, q: str | None = None, categories: str | None = None) -> dict:
         root = self._root()
+        keep = self._category_filter(categories)
         if (q or "").strip():
-            items = library.search(root, q, limit=limit)
+            items = library.search(root, q, limit=limit, keep=keep)
         else:
-            items = library.listing(root, limit=limit)
+            items = library.listing(root, limit=limit, keep=keep)
         return {"root": str(root), "items": items}
 
-    def search(self, q: str, limit: int = 200) -> dict:
-        """Поиск по тексту встреч (и названиям): записи с фрагментами реплик."""
+    def search(self, q: str, limit: int = 200, categories: str | None = None) -> dict:
+        """Поиск по тексту встреч (и названиям): записи с фрагментами реплик.
+        `categories` — фильтр по категориям (как у списка)."""
         from meet import search
 
-        return {"items": search.search_library(self._root(), q or "", limit=limit)}
+        return {"items": search.search_library(self._root(), q or "", limit=limit,
+                                               keep=self._category_filter(categories))}
 
     def delete_recording(self, recording_id: str) -> dict:
         """Удалить папку записи целиком. Отказ, пока в неё пишут или над ней
@@ -1516,15 +1527,16 @@ class TrayControl:
                 self._background(lambda: self._auto_kb_export(folder))
         return library.describe(folder).to_raw()
 
-    def categories(self) -> dict:
-        """Для редактора категорий в настройках: нынешний список, стандартный
-        («Сбросить к стандартным») и сколько встреч в каждой категории
-        (подтверждение удаления)."""
+    def categories(self, q: str | None = None) -> dict:
+        """Категории: нынешний список, стандартный («Сбросить к стандартным»)
+        и сколько встреч в каждой (подтверждение удаления, счётчики фильтра в
+        списке). С запросом поиска `q` — счётчики среди найденных."""
         from meet import categories
 
-        return {"categories": [c.to_raw() for c in settings.load().categories],
+        cfg = settings.load()
+        return {"categories": [c.to_raw() for c in cfg.categories],
                 "defaults": [c.to_raw() for c in settings.default_categories()],
-                **categories.counts(self._root())}
+                **categories.counts(self._root(), cfg, q)}
 
     def _summary_title(self, folder: Path) -> None:
         """Итоги готовы: название из их первой строки (если его просили)."""

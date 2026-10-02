@@ -24,7 +24,7 @@ export const CATEGORY_PALETTE: { color: string; name: string }[] = [
   { color: "#e5484d", name: "Красный" },
   { color: "#d6457a", name: "Розовый" },
   { color: "#8e6cd8", name: "Фиолетовый" },
-  { color: "#7a8b99", name: "Серо-синий" },
+  { color: "#a0703c", name: "Коричневый" },
   { color: "#9aa0a6", name: "Серый" },
 ];
 

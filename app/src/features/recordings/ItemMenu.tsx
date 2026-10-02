@@ -99,8 +99,8 @@ export function ItemMenu({ at, label, items, note, anchor, onClose }: {
     <div ref={box} className="item-menu" role="menu" aria-label={label} onKeyDown={onKeyDown}
       aria-describedby={note ? noteId : undefined} style={{ left: pos.x, top: pos.y }}>
       {note && <div className="item-menu__note" id={noteId}>{note}</div>}
-      {items.map((item) => (
-        <Fragment key={item.label}>
+      {items.map((item, i) => (
+        <Fragment key={`${i}:${item.label}`}>
           {item.separator && <div className="item-menu__sep" role="separator" />}
           <button type="button" role={item.checked === undefined ? "menuitem" : "menuitemradio"}
             aria-checked={item.checked} tabIndex={-1} title={item.hint} disabled={item.disabled}

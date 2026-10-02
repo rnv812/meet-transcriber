@@ -233,10 +233,12 @@ DEFAULT_CATEGORIES = (
      "Демонстрация или доклад: один рассказывает, остальные слушают и спрашивают"),
     ("sales", "Продажа", "#c9a227", "Продажа продукта или услуги: потребности клиента, предложение, условия"),
     ("interview", "Собеседование", "#3aa7b8", "Собеседование кандидата: вопросы об опыте и навыках"),
-    ("retro", "Ретроспектива", "#7a8b99", "Ретроспектива: что прошло хорошо, что плохо, что изменить"),
+    ("retro", "Ретроспектива", "#a0703c", "Ретроспектива: что прошло хорошо, что плохо, что изменить"),
     ("training", "Обучение", "#5a9e3a", "Обучение, разбор материала, передача знаний"),
     ("other", "Другое", "#9aa0a6", "Всё, что не подходит под другие категории"),
 )
+# Так окно называет отсутствие категории: категорию с таким именем не принимаем.
+NO_CATEGORY_NAME = "без категории"
 CATEGORY_ID_MAX = 32
 CATEGORY_NAME_MAX = 40
 CATEGORY_DESCRIPTION_MAX = 200
@@ -912,7 +914,7 @@ def as_categories(value) -> tuple[Category, ...]:
         cid = str(item.get("id") or "").strip().lower()
         name = " ".join(str(item.get("name") or "").split())[:CATEGORY_NAME_MAX]
         if (not cid or len(cid) > CATEGORY_ID_MAX or not _CATEGORY_ID.match(cid) or not name
-                or cid in seen):
+                or cid in seen or name.casefold().replace("ё", "е") == NO_CATEGORY_NAME):
             continue
         color = str(item.get("color") or "").strip()
         description = " ".join(str(item.get("description") or "").split())

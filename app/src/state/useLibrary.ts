@@ -11,15 +11,19 @@ const SEARCH_DELAY_MS = 250;
  * С запросом (от двух символов) — поиск по тексту встреч с фрагментами;
  * резидент без него — прежний поиск по названию и тексту. Короче — весь список.
  */
-async function find(ep: Endpoint, q: string, signal: AbortSignal): Promise<LibraryItem[]> {
-  if (!searchable(q)) return (await getRecordings(ep)).items;
+async function find(ep: Endpoint, q: string, signal: AbortSignal, categories: string[]): Promise<LibraryItem[]> {
+  // Без фильтра — прежние вызовы, как у резидента до категорий.
+  const cats = categories.length ? [categories] as const : [] as const;
+  if (!searchable(q)) return (await (cats.length ? getRecordings(ep, undefined, ...cats) : getRecordings(ep))).items;
   try {
-    return (await searchLibrary(ep, q, signal)).items;
+    return (await searchLibrary(ep, q, signal, ...cats)).items;
   } catch (cause) {
-    if (cause instanceof ApiError && cause.status === 404) return (await getRecordings(ep, q)).items;
+    if (cause instanceof ApiError && cause.status === 404) return (await getRecordings(ep, q, ...cats)).items;
     throw cause;
   }
 }
+
+const NO_FILTER: string[] = [];
 
 export type Library = {
   items: LibraryItem[];
@@ -36,7 +40,8 @@ export type Library = {
  * прогресс обновляет лишь задачи (бейджи), а сам поиск повторяется по
  * `contentTick`: полный проход по транскриптам на каждый процент не нужен.
  */
-export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, contentTick = libraryTick): Library {
+export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, contentTick = libraryTick,
+  categories: string[] = NO_FILTER): Library {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(false);
@@ -44,6 +49,10 @@ export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, cont
   const seq = useRef(0);
   const qRef = useRef(q);
   qRef.current = q;
+  // Фильтр по категориям — у резидента, до лимита списка: старые записи нужной категории не теряются.
+  const catKey = categories.join(",");
+  const catRef = useRef(categories);
+  catRef.current = categories;
   const pending = useRef<AbortController | null>(null);
 
   const refresh = useCallback(async () => {
@@ -55,7 +64,8 @@ export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, cont
     pending.current = controller;
     setLoading(true);
     try {
-      const [recs, jobList] = await Promise.all([find(ep, qRef.current, controller.signal), getJobs(ep)]);
+      const [recs, jobList] = await Promise.all([
+        find(ep, qRef.current, controller.signal, catRef.current), getJobs(ep)]);
       if (mine !== seq.current) return; // пришёл более новый запрос
       setItems(recs);
       setJobs(jobList.items);
@@ -75,7 +85,7 @@ export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, cont
     first.current = false;
     const timer = setTimeout(() => void refresh(), delay);
     return () => clearTimeout(timer);
-  }, [ep, q, refresh]);
+  }, [ep, q, catKey, refresh]);
 
   const refreshJobs = useCallback(async () => {
     if (!ep) return;

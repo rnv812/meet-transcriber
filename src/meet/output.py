@@ -1,3 +1,5 @@
+import re
+
 from meet.asr import Segment
 
 
@@ -75,6 +77,12 @@ def to_markdown(title: str, segments: list[Segment], date: str = "",
 
 
 _YAML_SPECIAL = frozenset(":#[]{},&*!|>'\"%@`")
+# Простые значения, которые YAML прочтёт не строкой: null, логические (YAML 1.1
+# и 1.2), числа (в т. ч. 0x1F, .inf, 1_000), даты.
+_YAML_RESERVED = re.compile(
+    r"(?i)(?:null|~|true|false|yes|no|on|off|y|n"
+    r"|[-+]?(?:\.?\d[\d_]*(?:\.[\d_]*)?(?:e[-+]?\d+)?|0x[\da-f_]+|0o[0-7_]+|\.inf|\.nan)"
+    r"|\d{4}-\d\d?-\d\d?(?:[tT ].*)?)")
 
 
 def yaml_text(text: str) -> str:
@@ -83,7 +91,8 @@ def yaml_text(text: str) -> str:
     import json
 
     text = " ".join(str(text).split())
-    plain = text and not any(c in _YAML_SPECIAL for c in text) and text[0] not in "-?"
+    plain = (text and not any(c in _YAML_SPECIAL for c in text) and text[0] not in "-?"
+             and not _YAML_RESERVED.fullmatch(text))
     return text if plain else json.dumps(text, ensure_ascii=False)
 
 

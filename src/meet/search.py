@@ -361,19 +361,31 @@ def _cards(root: Path):
             yield card
 
 
-def search_library(root: Path, q: str, limit: int = 200) -> list[dict]:
+def cards(root: Path) -> list[dict]:
+    """Все карточки библиотеки от свежих к старым — из кеша (meta.json и
+    транскрипт перечитываются, только когда меняются)."""
+    return list(_cards(Path(root)))
+
+
+def searchable(q: str | None) -> bool:
+    """Ищет ли поиск по такому запросу (не короче MIN_QUERY, есть что искать)."""
+    return len(nfc(q or "").strip()) >= MIN_QUERY and not parse_query(q).empty
+
+
+def search_library(root: Path, q: str, limit: int = 200, keep=None) -> list[dict]:
     """Записи, где запрос нашёлся в репликах или в названии, от свежих к
     старым: карточка записи и `date`, `hits` (до MAX_HITS: время реплики,
     спикер, фрагмент, подсветка), `total` — сколько реплик подошло,
     `title_match` — нашлось в названии. Пустой запрос или короче MIN_QUERY
-    символов — пустой ответ."""
-    if len(nfc(q or "").strip()) < MIN_QUERY:
+    символов — пустой ответ. `keep(card)` — фильтр (категории) до поиска и до
+    `limit`: старые записи нужной категории не теряются за свежими."""
+    if not searchable(q):
         return []
     query = parse_query(q)
-    if query.empty:
-        return []
     found = []
     for card in _cards(Path(root)):
+        if keep is not None and not keep(card):
+            continue
         hits, total = [], 0
         if card.get("has_transcript"):
             for turn in _CACHE.turns(Path(card["path"])):
