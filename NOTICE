@@ -35,6 +35,8 @@ The application window bundles the Onest typeface (variable font, Cyrillic
 and Latin), Copyright 2021 The Onest Project Authors
 (https://github.com/simpals/onest), licensed under the SIL Open Font License,
 Version 1.1; it is taken from the @fontsource-variable/onest package.
+Interface icons come from Lucide (lucide-react), Copyright Lucide Icons and
+Contributors, licensed under the ISC License (https://lucide.dev).
 
 JavaScript and Rust libraries compiled into the application window and shell
 (React, Tauri, xterm.js and others) keep their own licenses, listed in
