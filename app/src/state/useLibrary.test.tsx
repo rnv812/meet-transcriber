@@ -15,6 +15,7 @@ import { getJobs, getRecordings, searchLibrary } from "../lib/api";
 import { useLibrary } from "./useLibrary";
 
 const ep = { base: "http://h", token: "t" };
+const NO_CATS: string[] = [];
 
 test("рост libraryTick перечитывает библиотеку, в том числе скачком через несколько", async () => {
   const { rerender } = renderHook(({ tick }) => useLibrary(ep, "", tick), { initialProps: { tick: 0 } });
@@ -87,4 +88,28 @@ test("фильтр по категориям уходит резиденту (д
   await vi.waitFor(() => expect(getRecordings).toHaveBeenCalledWith(ep, undefined, ["retro", "_none"]));
   rerender({ cats: ["retro", "_none"], q: "бюджет" });
   await vi.waitFor(() => expect(searchLibrary).toHaveBeenCalledWith(ep, "бюджет", expect.any(AbortSignal), ["retro", "_none"]));
+});
+
+test("прогресс задач (без смены содержимого) не перечитывает список — ни с фильтром, ни без", async () => {
+  for (const cats of [["retro"], NO_CATS]) {
+    const { rerender, unmount } = renderHook(({ tick, content }) => useLibrary(ep, "", tick, content, cats),
+      { initialProps: { tick: 0, content: 0 } });
+    await vi.waitFor(() => expect(getRecordings).toHaveBeenCalled());
+    vi.mocked(getRecordings).mockClear();
+    vi.mocked(getJobs).mockClear();
+    // Десять событий job.progress подряд.
+    for (let t = 1; t <= 10; t++) {
+      rerender({ tick: t, content: 0 });
+      await act(async () => {});
+    }
+    expect(getRecordings).not.toHaveBeenCalled();
+    expect(vi.mocked(getJobs).mock.calls.length).toBe(10);
+    // job.done: и задачи, и список — один раз.
+    vi.mocked(getJobs).mockClear();
+    rerender({ tick: 11, content: 1 });
+    await vi.waitFor(() => expect(getRecordings).toHaveBeenCalledTimes(1));
+    expect(getJobs).toHaveBeenCalledTimes(1);
+    unmount();
+    vi.mocked(getRecordings).mockClear();
+  }
 });

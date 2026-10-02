@@ -36,9 +36,9 @@ export type Library = {
 /**
  * `libraryTick` растёт на каждое событие задачи, включая прогресс; `contentTick`
  * — только когда меняется само содержимое библиотеки (задача поставлена,
- * готова, упала; запись началась или кончилась). Пока идёт поиск по тексту,
- * прогресс обновляет лишь задачи (бейджи), а сам поиск повторяется по
- * `contentTick`: полный проход по транскриптам на каждый процент не нужен.
+ * готова, упала; запись началась, кончилась, изменилась). Прогресс обновляет
+ * лишь задачи (бейджи), а список и поиск перечитываются по `contentTick`:
+ * полный проход по библиотеке на каждый процент не нужен.
  */
 export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, contentTick = libraryTick,
   categories: string[] = NO_FILTER): Library {
@@ -54,6 +54,8 @@ export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, cont
   const catRef = useRef(categories);
   catRef.current = categories;
   const pending = useRef<AbortController | null>(null);
+  const contentTickRef = useRef(contentTick);
+  contentTickRef.current = contentTick;
 
   const refresh = useCallback(async () => {
     if (!ep) return;
@@ -97,13 +99,20 @@ export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, cont
   }, [ep]);
 
   // Обновление по событиям: первый тик (0) — начальная загрузка, её делает эффект выше.
+  // Прогресс задачи (до двух событий в секунду на задачу) обновляет только задачи —
+  // бейджи и проценты; список (с фильтром по категориям резидент обходит для него
+  // всю библиотеку) — только когда изменилось содержимое.
+  const lastContent = useRef(contentTick);
   useEffect(() => {
     if (libraryTick <= 0) return;
-    if (searchable(qRef.current)) void refreshJobs();
-    else void refresh();
-  }, [libraryTick, refresh, refreshJobs]);
+    // В том же событии изменилось и содержимое: список перечитает эффект ниже, задачи — вместе с ним.
+    if (contentTickRef.current !== lastContent.current) return;
+    void refreshJobs();
+  }, [libraryTick, refreshJobs]);
   useEffect(() => {
-    if (contentTick > 0 && searchable(qRef.current)) void refresh();
+    if (contentTick === lastContent.current) return;
+    lastContent.current = contentTick;
+    if (contentTick > 0) void refresh();
   }, [contentTick, refresh]);
 
   useEffect(() => () => pending.current?.abort(), []);
