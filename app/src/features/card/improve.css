@@ -48,3 +48,7 @@
 .find__tool:hover:not(:disabled) { background: var(--surface-hover); }
 .find__tool:disabled { opacity: 0.45; cursor: default; }
 .find__tool svg { color: var(--accent-hi); }
+.improve__more { margin: 6px 0 2px 26px; padding-top: 6px; border-top: 1px dashed var(--line); }
+.improve__more-head { font-size: 12px; margin-bottom: 4px; }
+.improve__more .improve__places { margin-left: 0; }
+.improve__more .improve__places input { align-self: center; margin: 0; accent-color: var(--accent); }

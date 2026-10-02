@@ -529,7 +529,11 @@ export type TitleSuggestion = { title: string; from: "analysis" | "model" };
 export type ImproveKind = "term" | "fix";
 /** Место замены с окружением (как образцы «Исправить…»). */
 export type ImproveSample = TextSample;
-/** Группа замен «как распознано → как правильно» с числом мест. */
+/**
+ * Группа замен «как распознано → как правильно»: `count` мест в фразах, которые
+ * назвала модель (применяются по умолчанию), и `more` — другие места того же
+ * термина во встрече, каждое на отдельную проверку (по умолчанию не применяются).
+ */
 export type ImproveGroup = {
   id: string;
   find: string;
@@ -538,6 +542,7 @@ export type ImproveGroup = {
   confidence: number;
   count: number;
   samples: ImproveSample[];
+  more?: ImproveSample[];
 };
 export type ImproveProposal = {
   version: number;
@@ -559,7 +564,14 @@ export type ImproveState = {
 };
 /** Применённая группа (в ответе и в шаге истории). */
 export type ImproveApplied = { from: string; to: string; kind: ImproveKind; count: number };
-export type ImproveApplyRequest = { groups: string[]; add_rules?: boolean; add_terms?: boolean };
+/** `extra` — {группа: номера отмеченных мест из `more`}; `created_at` — какой список видел человек. */
+export type ImproveApplyRequest = {
+  groups: string[];
+  extra?: Record<string, number[]>;
+  created_at?: number;
+  add_rules?: boolean;
+  add_terms?: boolean;
+};
 export type ImproveApplyResult = SpeakersView & {
   changed: number;
   groups: ImproveApplied[];

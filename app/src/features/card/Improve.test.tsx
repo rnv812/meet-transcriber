@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingCard } from "./RecordingCard";
-import { ImproveDialog, ImproveStatus, chosenGroups, improveJobOf } from "./improve";
+import { ImproveDialog, ImproveStatus, chosenExtra, chosenGroups, improveJobOf } from "./improve";
 import * as api from "../../lib/api";
 import type { ImproveGroup, ImproveState, Job, Recording, Transcript } from "../../lib/types";
 
@@ -100,13 +100,15 @@ test("окно: группы терминов «апи → API · 12», отме
 
   await userEvent.click(screen.getByRole("radio", { name: "Термины и явные ошибки распознавания" }));
   const fixes = screen.getByText("Прочие исправления").closest("label")!;
-  expect(fixes).toHaveTextContent("Прочие исправления· 3");
+  // Счётчик — сколько будет заменено: пока ничего не отмечено, ноль.
+  expect(fixes).toHaveTextContent("Прочие исправления· 0");
   expect(within(fixes).getByRole("checkbox")).not.toBeChecked();
   await userEvent.click(within(fixes).getByRole("checkbox"));
+  expect(fixes).toHaveTextContent("Прочие исправления· 3");
   expect(screen.getByText("Будет заменено: 23 места")).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
-  expect(props.onApply).toHaveBeenCalledWith(["g1", "g2", "g3", "g4", "g5"], false, false);
+  expect(props.onApply).toHaveBeenCalledWith(["g1", "g2", "g3", "g4", "g5"], {}, false, false);
 });
 
 test("окно: снятый флажок, правила и термины уходят в «Применить выбранное»", async () => {
@@ -116,7 +118,7 @@ test("окно: снятый флажок, правила и термины ух
   await userEvent.click(screen.getByRole("checkbox", { name: /Запомнить как правила/ }));
   await userEvent.click(screen.getByRole("checkbox", { name: /Добавить в термины/ }));
   await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
-  expect(props.onApply).toHaveBeenCalledWith(["g1", "g2"], true, true);
+  expect(props.onApply).toHaveBeenCalledWith(["g1", "g2"], {}, true, true);
 });
 
 test("окно: ничего не выбрано — применить нельзя; «Отмена» закрывает", async () => {
@@ -178,9 +180,12 @@ test("ImproveStatus: очередь, готово, ошибка, подсказ�
 });
 
 test("выбор групп и задача улучшения записи", () => {
-  expect(chosenGroups(GROUPS, "terms", new Set(["g2"]), true).map((g) => g.id)).toEqual(["g1", "g3"]);
-  expect(chosenGroups(GROUPS, "all", new Set(), false).map((g) => g.id)).toEqual(["g1", "g2", "g3"]);
-  expect(chosenGroups(GROUPS, "all", new Set(), true)).toHaveLength(5);
+  expect(chosenGroups(GROUPS, "terms", new Set(["g2"]), new Set(["g4"])).map((g) => g.id)).toEqual(["g1", "g3"]);
+  expect(chosenGroups(GROUPS, "all", new Set(), new Set()).map((g) => g.id)).toEqual(["g1", "g2", "g3"]);
+  expect(chosenGroups(GROUPS, "all", new Set(), new Set(["g5"])).map((g) => g.id)).toEqual(["g1", "g2", "g3", "g5"]);
+  const more = [{ ...GROUPS[2]!, more: [GROUPS[2]!.samples[0]!, GROUPS[2]!.samples[1]!] }];
+  expect(chosenExtra(more, new Set(["g3:1"]))).toEqual({ g3: [1] });
+  expect(chosenExtra(more, new Set())).toEqual({});
   expect(improveJobOf("C:/rec/r1", [job("running")])?.id).toBe("i1");
   expect(improveJobOf("C:/rec/r1", [job("done")])).toBeNull();
 });
@@ -230,11 +235,68 @@ test("карточка: готовое предложение — примени
   const box = await screen.findByRole("dialog", { name: "Улучшить расшифровку" });
   expect(api.runImprove).not.toHaveBeenCalled(); // предложение уже есть
   await userEvent.click(within(box).getByRole("button", { name: "Применить выбранное" }));
-  expect(api.applyImprove).toHaveBeenCalledWith(ep, "r1", { groups: ["g1", "g2", "g3"], add_rules: false, add_terms: false });
+  expect(api.applyImprove).toHaveBeenCalledWith(ep, "r1", {
+    groups: ["g1", "g2", "g3"], extra: {}, created_at: 1, add_rules: false, add_terms: false,
+  });
   await screen.findByText(/Улучшено ИИ: 20 замен \(3 термина\)/);
   expect(screen.queryByRole("dialog", { name: "Улучшить расшифровку" })).toBeNull();
   vi.mocked(api.undoSpeakers).mockResolvedValue({} as Awaited<ReturnType<typeof api.undoSpeakers>>);
   await userEvent.click(await screen.findByRole("button", { name: "Отменить" }));
   expect(api.undoSpeakers).toHaveBeenCalledWith(ep, "r1", "s1");
   await screen.findByText("Улучшение отменено");
+});
+
+// --- исправления раунда 1 -----------------------------------------------------------------
+
+test("окно: другие места термина — на проверку, по одному флажку, не отмечены; счётчик — что заменится", async () => {
+  const kafka: ImproveGroup = {
+    ...group("g1", "кафка", "Kafka", "term", 1),
+    more: [sample(7, 70, "Франц ", "Кафка", " писал романы"), sample(8, 80, "в ", "кафка", " лежат события")],
+  };
+  const props = dialog({ ...ready, proposal: { ...ready.proposal!, groups: [kafka] } });
+  const label = screen.getByText("кафка").closest("label")!;
+  expect(label).toHaveTextContent("· 1");
+  await userEvent.click(screen.getByRole("button", { name: "Показать места: кафка" }));
+  expect(screen.getByText("Ещё 2 места — проверьте: ИИ их не отмечал")).toBeInTheDocument();
+  const extra = within(screen.getByRole("list", { name: "Ещё места: кафка" })).getAllByRole("checkbox");
+  expect(extra.every((b) => !(b as HTMLInputElement).checked)).toBe(true);
+  expect(screen.getByText(/Франц/).closest("li")).toHaveTextContent("Франц Кафка писал романы");
+  await userEvent.click(extra[1]!);
+  expect(label).toHaveTextContent("· 2");
+  expect(screen.getByText("Будет заменено: 2 места")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
+  expect(props.onApply).toHaveBeenCalledWith(["g1"], { g1: [1] }, false, false);
+});
+
+test("окно: каждое исправление обычного слова — своим флажком", async () => {
+  const props = dialog();
+  await userEvent.click(screen.getByRole("radio", { name: "Термины и явные ошибки распознавания" }));
+  await userEvent.click(screen.getByRole("button", { name: "Показать места: Прочие исправления" }));
+  await userEvent.click(within(screen.getByText("приду", { selector: ".improve__from" }).closest("label")!).getByRole("checkbox"));
+  const all = within(screen.getByText("Прочие исправления").closest("label")!).getByRole("checkbox") as HTMLInputElement;
+  expect(all.checked).toBe(false);
+  expect(all.indeterminate).toBe(true);
+  await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
+  expect(props.onApply).toHaveBeenCalledWith(["g1", "g2", "g3", "g5"], {}, false, false);
+});
+
+test("окно: ничего не идёт и списка нет — не изображает проверку", async () => {
+  const props = dialog({ state: "none" });
+  expect(screen.queryByText("ИИ проверяет расшифровку…")).toBeNull();
+  expect(screen.getByText(/Списка замен нет/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Проверить заново" }));
+  expect(props.onRerun).toHaveBeenCalled();
+});
+
+test("окно: повтор не удался — прежний список доступен вместе с ошибкой", async () => {
+  const props = dialog({ ...ready, state: "failed", error: "таймаут" });
+  expect(screen.getByRole("alert")).toHaveTextContent("Улучшение расшифровки не удалось: таймаут");
+  await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
+  expect(props.onApply).toHaveBeenCalledWith(["g1", "g2", "g3"], {}, false, false);
+});
+
+test("ImproveStatus: только исправления — тоже строка в карточке", () => {
+  render(<ImproveStatus state={{ ...ready, proposal: { ...ready.proposal!, groups: [GROUPS[3]!, GROUPS[4]!] } }}
+    busy={false} onOpen={vi.fn()} onRetry={vi.fn()} onDismiss={vi.fn()} />);
+  expect(screen.getByRole("status")).toHaveTextContent("ИИ предлагает 2 исправления распознавания");
 });

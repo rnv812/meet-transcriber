@@ -38,7 +38,7 @@ def _write_config(tmp_path, **sections) -> None:
 
 SEGMENTS = [
     {"start": 0.0, "end": 4.0, "speaker": "Спикер 1", "text": "Апи сервиса отвечает медленно."},
-    {"start": 4.0, "end": 9.0, "speaker": "Спикер 2", "text": "Значит, смотрим кафка и апи шлюза."},
+    {"start": 4.0, "end": 900.0, "speaker": "Спикер 2", "text": "Значит, смотрим кафка и апи шлюза."},
 ]
 
 
@@ -173,11 +173,42 @@ def test_apply_one_step_rules_and_terms_only_on_request(state, tmp_path, monkeyp
     assert library.read_transcript(folder)["segments"][0]["text"] == "Апи сервиса отвечает медленно."
 
     doc = _proposal(folder)
-    reply = state.improve_apply(RID, {"groups": [doc["groups"][0]["id"]], "add_rules": True, "add_terms": True})
+    fix = next(g["id"] for g in doc["groups"] if g["kind"] == "fix")
+    reply = state.improve_apply(RID, {"groups": [doc["groups"][0]["id"], fix], "add_rules": True,
+                                      "add_terms": True, "created_at": doc["created_at"]})
+    # Исправления обычных слов не становятся ни правилами, ни терминами.
     assert reply["rules"] == {"added": [{"from": "апи", "to": "API"}]}
     assert reply["terms"] == {"added": ["API"]}
     assert settings.load().asr.replacements == ({"from": "апи", "to": "API"},)
     assert "API" in (tmp_path / "hotwords.txt").read_text(encoding="utf-8")
+
+
+def test_apply_marks_the_analysis_stale_and_takes_extra_places(state, app, tmp_path):
+    from meet import analysis
+
+    folder = _folder(tmp_path)
+    data = library.read_transcript(folder)
+    analysis.write(folder, {"version": 1, "model": "fake", "created_at": 1.0,
+                            "fingerprint": analysis.fingerprint(data), "features": ["title"], "title": "x"})
+    seen = _events(app, tray_control.ANALYSIS_UPDATED)
+    library.write_transcript(folder, {"version": 1, "created_at": "2026-10-02T15:00:00", "segments": [
+        {"start": 0.0, "end": 4.0, "speaker": "Спикер 1", "text": "Пишем в кафка."},
+        {"start": 4.0, "end": 900.0, "speaker": "Спикер 2", "text": "Франц Кафка — писатель."}]})
+    data = library.read_transcript_full(folder)
+    analysis.write(folder, {"version": 1, "model": "fake", "created_at": 1.0,
+                            "fingerprint": analysis.fingerprint(data), "features": ["title"], "title": "x"})
+    doc = {"version": 1, "model": "fake", "created_at": 2.0, "fingerprint": improve.fingerprint(data), "segments": 2,
+           "groups": improve.build_groups(data, [{"find": "кафка", "replace": "Kafka", "kind": "term",
+                                                  "confidence": 0.9, "segments": [0]}])}
+    improve.write(folder, doc)
+    gid = doc["groups"][0]["id"]
+    with pytest.raises(control.Conflict, match="обновился"):
+        state.improve_apply(RID, {"groups": [gid], "created_at": 1.0})
+    reply = state.improve_apply(RID, {"groups": [gid], "extra": {gid: [0]}, "created_at": 2.0})
+    assert reply["changed"] == 2
+    texts = [x["text"] for x in library.read_transcript(folder)["segments"]]
+    assert texts == ["Пишем в Kafka.", "Франц Kafka — писатель."]
+    assert {"id": RID, "state": "stale"} in seen
 
 
 def test_apply_refused_while_the_recording_is_transcribed(state, tmp_path):
@@ -205,6 +236,26 @@ def test_auto_improve_only_when_enabled(state, app, tmp_path):
     app.bus.emit(jobs.JOB_DONE, job={"id": "t2", "kind": jobs.TRANSCRIBE, "folder": str(folder), "state": "done"})
     assert len(_improve_jobs(state)) == 1
     assert library.read_meta(folder)["pending_improve"]["manual"] is False
+
+
+def test_auto_improve_skips_short_meetings_and_clears_an_old_error(state, app, tmp_path):
+    folder = _folder(tmp_path)
+    settings.patch({"analysis": {"improve_auto": True}})
+    improve.mark_failed(folder, "прошлая расшифровка")
+    library.write_transcript(folder, {"version": 1, "segments": [{"start": 0, "end": 30, "text": "Коротко."}]})
+    app.bus.emit(jobs.JOB_DONE, job={"id": "t1", "kind": jobs.TRANSCRIBE, "folder": str(folder), "state": "done"})
+    assert _improve_jobs(state) == []  # короче auto_record.min_call_seconds — модель не зовём
+    assert "improve_error" not in library.read_meta(folder)  # ошибка была о старом тексте
+    assert "pending_improve" not in library.read_meta(folder)
+
+
+def test_no_mark_without_a_model_even_during_a_recording(state, app, tmp_path, monkeypatch):
+    folder = _folder(tmp_path)
+    settings.patch({"analysis": {"improve_auto": True}})
+    _installed(monkeypatch)
+    monkeypatch.setattr(state, "_busy_now", lambda: {"x"})
+    state._auto_improve(folder)
+    assert "pending_improve" not in library.read_meta(folder)
 
 
 def test_retranscription_discards_the_old_proposal(state, app, tmp_path):

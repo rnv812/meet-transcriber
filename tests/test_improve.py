@@ -108,10 +108,14 @@ def test_transcript_cannot_close_the_data_block(tmp_path, cfg):
 def test_good_pairs_become_groups_with_counts(folder, cfg):
     doc, _ = _run(folder, cfg, GOOD)
     api = _group(doc, "апи")
-    # Термин — во всей встрече, целыми словами: не «Апиарий», не отметка перерыва.
+    # Целыми словами: не «Апиарий», не отметка перерыва.
     assert api["count"] == 2 and api["kind"] == "term"
     assert [o[0] for o in api["occ"]] == [0, 1]
-    assert _group(doc, "кафка")["count"] == 2  # модель назвала одну фразу, нашлись обе
+    assert api["extra"] == []  # «апи» — три буквы: по всей встрече не ищется
+    kafka = _group(doc, "кафка")
+    # Модель назвала одну фразу: она и применяется; второе место — на проверку.
+    assert kafka["count"] == 1 and [o[0] for o in kafka["extra"]] == [4]
+    assert kafka["more"][0]["segment"] == 4 and kafka["more"][0]["match"] == "кафка"
     assert _group(doc, "обзор бити")["count"] == 1
     fix = _group(doc, "в торник")
     assert fix["kind"] == "fix" and fix["count"] == 1
@@ -132,11 +136,57 @@ def test_good_pairs_become_groups_with_counts(folder, cfg):
     ({"find": "кафка", "replace": "Kafka", "kind": "style", "segments": [3]}, "вид"),
     ({"find": "кафка", "replace": "кафка", "kind": "term", "segments": [3]}, "не меняет"),
     ({"find": "апи", "replace": "API", "kind": "term", "segments": [4]}, "нет в названных"),
+    # Смысл и числа (I2): падежи, порядковые, отрицания по словам и приставкой.
+    ({"find": "пятнадцати", "replace": "пятидесяти", "kind": "fix", "segments": [6]}, "числа"),
+    ({"find": "первого", "replace": "второго", "kind": "fix", "segments": [6]}, "числа"),
+    ({"find": "можно", "replace": "нельзя", "kind": "fix", "segments": [6]}, "отрицание"),
+    ({"find": "двум", "replace": "трём", "kind": "fix", "segments": [6]}, "числа"),
+    ({"find": "четвёртый", "replace": "пятый", "kind": "fix", "segments": [6]}, "числа"),
+    ({"find": "никогда", "replace": "всегда", "kind": "fix", "segments": [6]}, "отрицание"),
+    ({"find": "правильно", "replace": "неправильно", "kind": "fix", "segments": [6]}, "отрицание"),
+    ({"find": "сказал", "replace": "Kubernetes", "kind": "term", "segments": [6]}, "ослышку"),
+    ({"find": "решили", "replace": "забыли", "kind": "fix", "segments": [6]}, "ослышку"),
+    # Модель не дописывает своего (m1) и не меняет знаки внутри (I1).
+    ({"find": "апи", "replace": "API бюджет утверждён", "kind": "term", "segments": [0]}, "добавляет слова"),
+    ({"find": "ноуд джиэс", "replace": "Node.js", "kind": "term", "segments": [6]}, "знаки"),
 ])
 def test_bad_pairs_are_dropped(pair, why):
     texts = {i: s["text"] for i, s in enumerate(SEGMENTS)}
+    texts[6] = ("С пятнадцати до первого можно двум, четвёртый никогда не правильно, "
+                "сказал решили ноуд джиэс.")
     got, reason = improve.check_pair(pair, texts)
     assert got is None and why in reason
+
+
+@pytest.mark.parametrize("find, replace, kind", [
+    ("апи", "API", "term"), ("кафка", "Kafka", "term"), ("обзор бити", "observability", "term"),
+    ("кубер нетис", "Kubernetes", "term"), ("эй пи ай", "API", "term"), ("в торник", "во вторник", "fix"),
+    ("согласен", "согласна", "fix"), ("пятнадцать", "пятнадцать.", "fix"),
+])
+def test_sound_alike_pairs_pass(find, replace, kind):
+    texts = {0: f"Сегодня {find} обсуждали."}
+    got, why = improve.check_pair({"find": find, "replace": replace, "kind": kind, "segments": [0]}, texts)
+    if replace.rstrip(".") == find:
+        assert got is None and "не меняет" in why  # точка снимается — менять нечего
+    else:
+        assert got is not None, why
+
+
+def test_edge_punctuation_and_quotes_are_never_duplicated(tmp_path, cfg):
+    """Зонд ревьюера: «апи,» → «API,» и ««кафка»» → ««Kafka»» — знаки у места
+    в тексте свои, замена касается только слов."""
+    f = tmp_path / RID
+    f.mkdir()
+    library.write_transcript(f, {"version": 1, "segments": [
+        {"start": 0, "end": 4, "speaker": "Спикер 1", "text": "Смотрим апи, потом «кафка» и ещё апи."}]})
+    reply = {"replacements": [
+        {"find": "апи,", "replace": "API,", "kind": "term", "segments": [0], "confidence": 0.9},
+        {"find": "«кафка»", "replace": "«Kafka»", "kind": "term", "segments": [0], "confidence": 0.9}]}
+    doc, _ = _run(f, cfg, reply)
+    assert [(g["find"], g["replace"]) for g in doc["groups"]] == [("апи", "API"), ("кафка", "Kafka")]
+    improve.write(f, doc)
+    improve.apply(f, [g["id"] for g in doc["groups"]], tmp_path / "voices")
+    assert library.read_transcript(f)["segments"][0]["text"] == "Смотрим API, потом «Kafka» и ещё API."
 
 
 def test_listed_segments_without_the_phrase_are_dropped():
@@ -184,10 +234,55 @@ def test_conflicting_pairs_keep_the_more_confident_one():
 def test_one_place_belongs_to_one_group_longer_phrase_first():
     data = {"segments": [{"start": 0, "end": 1, "text": "апи шлюз и апи"}]}
     pairs = [{"find": "апи", "replace": "API", "kind": "term", "confidence": 0.9, "segments": [0]},
-             {"find": "апи шлюз", "replace": "API Gateway", "kind": "term", "confidence": 0.8, "segments": [0]}]
+             {"find": "апи шлюз", "replace": "API шлюз", "kind": "term", "confidence": 0.8, "segments": [0]}]
     groups = improve.build_groups(data, pairs)
     assert [(g["find"], g["count"]) for g in groups] == [("апи", 1), ("апи шлюз", 1)]
     assert _group({"groups": groups}, "апи")["occ"] == [[0, 11, 14]]
+
+
+def test_terms_take_their_places_before_longer_fixes():
+    """Скрытое в «Только термины» исправление не отнимает места у термина (m8)."""
+    data = {"segments": [{"start": 0, "end": 1, "text": "Смотрим апи сервиса"}]}
+    pairs = [{"find": "апи сервиса", "replace": "апи сервера", "kind": "fix", "confidence": 0.9, "segments": [0]},
+             {"find": "апи", "replace": "API", "kind": "term", "confidence": 0.9, "segments": [0]}]
+    groups = improve.build_groups(data, pairs)
+    assert [(g["find"], g["count"]) for g in groups] == [("апи", 1)]
+
+
+def test_other_places_of_a_term_are_only_offered_never_applied_by_default(tmp_path, cfg):
+    """«Франц Кафка писал романы» не становится «Kafka», пока его не отметили (I3)."""
+    f = tmp_path / RID
+    f.mkdir()
+    library.write_transcript(f, {"version": 1, "segments": [
+        {"start": 0, "end": 3, "speaker": "Спикер 1", "text": "Сообщения пишем в кафка."},
+        {"start": 3, "end": 6, "speaker": "Спикер 2", "text": "Франц Кафка писал романы."},
+        {"start": 6, "end": 8, "speaker": "Спикер 1", "text": "Го в зум, го."}]})
+    reply = {"replacements": [
+        {"find": "кафка", "replace": "Kafka", "kind": "term", "segments": [0], "confidence": 0.9},
+        {"find": "го", "replace": "Go", "kind": "term", "segments": [2], "confidence": 0.9}]}
+    doc, _ = _run(f, cfg, reply)
+    kafka, go = _group(doc, "кафка"), _group(doc, "го")
+    assert kafka["count"] == 1 and len(kafka["more"]) == 1 and kafka["more"][0]["segment"] == 1
+    assert go["count"] == 2 and go["extra"] == []  # короткое — только в названной фразе
+    improve.write(f, doc)
+    improve.apply(f, [kafka["id"]], tmp_path / "voices")
+    texts = [x["text"] for x in library.read_transcript(f)["segments"]]
+    assert texts[:2] == ["Сообщения пишем в Kafka.", "Франц Кафка писал романы."]
+    # Отмеченное явно — применяется.
+    speakers.undo(f, tmp_path / "voices")
+    improve.write(f, doc)
+    got = improve.apply(f, [], tmp_path / "voices", extra={kafka["id"]: [0]})
+    assert got["changed"] == 1
+    assert library.read_transcript(f)["segments"][1]["text"] == "Франц Kafka писал романы."
+
+
+def test_apply_refuses_a_replaced_proposal(folder, cfg, tmp_path):
+    """Список заменили новым, пока окно было открыто (m4)."""
+    doc, _ = _run(folder, cfg, GOOD)
+    _write(folder, doc)
+    with pytest.raises(speakers.Stale, match="обновился"):
+        improve.apply(folder, ["g1"], tmp_path / "voices", created_at=doc["created_at"] + 1)
+    assert improve.apply(folder, ["g1"], tmp_path / "voices", created_at=doc["created_at"])["changed"] == 2
 
 
 # --- применение ------------------------------------------------------------------------
@@ -202,20 +297,40 @@ def test_apply_is_one_history_step_with_words_aligned_and_undo(folder, cfg, tmp_
     _write(folder, doc)
     ids = [g["id"] for g in doc["groups"] if g["kind"] == "term"]
     got = improve.apply(folder, ids, tmp_path / "voices")
-    assert got["changed"] == 5
+    assert got["changed"] == 4
     op = got["step"]["ops"][0]
-    assert op["type"] == "text" and op["scope"] == "ai" and op["count"] == 5 and op["terms"] == 3
+    assert op["type"] == "text" and op["scope"] == "ai" and op["count"] == 4 and op["terms"] == 3
     assert len(got["history"]) == 1
     segs = library.read_transcript_full(folder)["segments"]
     assert segs[0]["text"] == "API сервиса отдаёт ошибку."
     assert segs[0]["words"][0] == [0.0, 0.5, " API"]
     assert segs[1]["text"] == "Проверим observability и API шлюза."
     assert segs[3]["text"] == "Очередь в Kafka не растёт, в торник проверим."  # исправление не выбрано
-    assert segs[4]["text"] == "Апиарий тут ни при чём, а Kafka — да."
+    assert segs[4]["text"] == "Апиарий тут ни при чём, а кафка — да."  # не отмечено — не тронуто
     assert segs[2]["text"] == "Перерыв: апи"
     assert improve.read(folder) is None  # применённое предложение выброшено
     speakers.undo(folder, tmp_path / "voices")
     assert library.read_transcript_full(folder)["segments"][0]["text"] == "Апи сервиса отдаёт ошибку."
+    # Повтор и «Вернуть к этому состоянию» — как у любого шага истории (m11).
+    speakers.redo(folder, tmp_path / "voices")
+    assert library.read_transcript_full(folder)["segments"][1]["text"] == "Проверим observability и API шлюза."
+    speakers.revert(folder, None, tmp_path / "voices")
+    assert library.read_transcript_full(folder)["segments"][1]["text"] == "Проверим обзор бити и апи шлюза."
+
+
+def test_several_words_into_one_keep_their_time(tmp_path, cfg):
+    """«обзор бити» → «observability»: слова сливаются в одно на том же отрезке (m11)."""
+    f = tmp_path / RID
+    f.mkdir()
+    library.write_transcript(f, {"version": 1, "segments": [
+        {"start": 0, "end": 3, "speaker": "Спикер 1", "text": "Настроим обзор бити, потом.",
+         "words": _w((0.0, 0.6, " Настроим"), (0.7, 1.1, " обзор"), (1.1, 1.6, " бити,"), (1.8, 2.4, " потом."))}]})
+    doc, _ = _run(f, cfg, {"replacements": [GOOD["replacements"][1] | {"segments": [0]}]})
+    improve.write(f, doc)
+    improve.apply(f, [doc["groups"][0]["id"]], tmp_path / "voices")
+    seg = library.read_transcript_full(f)["segments"][0]
+    assert seg["text"] == "Настроим observability, потом."
+    assert seg["words"] == [[0.0, 0.6, " Настроим"], [0.7, 1.6, " observability,"], [1.8, 2.4, " потом."]]
 
 
 def test_apply_nothing_chosen_or_no_proposal_refuses(folder, cfg, tmp_path):
@@ -246,21 +361,34 @@ def test_state_failed_and_public_proposal_without_places(folder, cfg):
     got = improve.state(folder)
     assert got["state"] == "ready" and "occ" not in got["proposal"]["groups"][0]
     improve.mark_failed(folder, "таймаут")
+    got = improve.state(folder)
+    # Повтор не удался — прежний свежий список остаётся доступен (m6).
+    assert got["state"] == "failed" and got["error"] == "таймаут" and got["proposal"]["groups"]
+    improve.discard(folder)
     assert improve.state(folder) == {"state": "failed", "error": "таймаут"}
 
 
 def test_improve_writes_the_file_and_clears_the_error(folder, cfg):
     improve.mark_failed(folder, "раньше не вышло")
+    assert improve.hint_wanted(folder)
     improve.improve(folder, FakeRunner(GOOD), cfg, provider="codex")
     assert improve.read(folder)["groups"]
     assert "improve_error" not in library.read_meta(folder)
+    # Улучшение (и фоновое, и из командной строки) снимает подсказку после GigaAM (m2).
+    assert not improve.hint_wanted(folder)
+
+
+def test_rules_are_made_only_from_terms():
+    used = [{"from": "апи", "to": "API", "kind": "term"}, {"from": "в торник", "to": "во вторник", "kind": "fix"}]
+    assert improve.rule_pairs(used) == [{"from": "апи", "to": "API"}]
 
 
 # --- подсказка после GigaAM --------------------------------------------------------------
 
 
 def test_hint_for_gigaam_transcripts_with_transliterations(folder):
-    assert improve.likely_transliterations(library.read_transcript(folder)) == ["API", "Kafka"]
+    # «кафка» бывает и писателем — подсказку не вызывает (m12).
+    assert improve.likely_transliterations(library.read_transcript(folder)) == ["API"]
     assert improve.hint_wanted(folder)
     improve.hint_done(folder)
     assert not improve.hint_wanted(folder)
