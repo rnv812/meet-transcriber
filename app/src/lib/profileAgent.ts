@@ -10,6 +10,7 @@
 
 import { cleanRefText } from "./agentRef";
 import { clock } from "./format";
+import { pcmLabel } from "./pcm";
 import type { Profile, ProfileRef, ProfileSectionKey } from "./types";
 
 /** Длина вставки целиком (символов). */
@@ -63,11 +64,22 @@ function finish(head: string, body: string[], tail = ""): string {
   return [h, b, t].filter(Boolean).join(" ");
 }
 
+/** Гипотеза PCM одной фразой: база, фаза, канал, как давать признание. */
+function pcmPart(profile: Profile): string {
+  const pcm = profile.pcm;
+  if (!pcm) return "";
+  const bits = [`база — ${pcmLabel(pcm.base.type)}`];
+  if (pcm.phase && pcm.phase.type !== pcm.base.type) bits.push(`фаза — ${pcmLabel(pcm.phase.type)}`);
+  if (pcm.channel) bits.push(`канал общения — ${pcm.channel.value}`);
+  const recognize = pcm.needs?.how_to_recognize || pcm.needs?.value;
+  return `Гипотеза по модели PCM (не оценка): ${bits.join(", ")}.${recognize ? ` Как давать признание: ${sentence(recognize)}` : ""}`;
+}
+
 /**
  * ✦ «Подготовиться к разговору»: профиль коротко, главные советы и заготовка
  * просьбы; кончается «Тема разговора:» — человек дописывает тему сам.
  */
-export function prepareText(name: string, profile: Profile): string {
+export function prepareText(name: string, profile: Profile, withPcm = true): string {
   const who = clip(cleanRefText(name), 60);
   return finish(
     `Помоги подготовиться к разговору с человеком «${who}». Его профиль общения (гипотеза по репликам во встречах, `
@@ -77,6 +89,7 @@ export function prepareText(name: string, profile: Profile): string {
       part("Как лучше строить разговор", items(profile, "how_to_talk")),
       part("Что для человека важно", items(profile, "values")),
       part("Чего избегать", items(profile, "avoid")),
+      withPcm ? pcmPart(profile) : "",
     ],
     "Предложи план разговора: как начать, как аргументировать, как попросить о решении и как дать обратную связь;"
       + " учитывай материалы этой встречи. Тема разговора:",
@@ -84,7 +97,7 @@ export function prepareText(name: string, profile: Profile): string {
 }
 
 /** ✦ «Обсудить с агентом»: профиль целиком со ссылками на реплики. */
-export function discussText(name: string, profile: Profile): string {
+export function discussText(name: string, profile: Profile, withPcm = true): string {
   const who = clip(cleanRefText(name), 60);
   const sections = SECTION_ORDER.flatMap((key) => {
     const list = (profile.sections[key] ?? []).map((s) => {
@@ -95,6 +108,6 @@ export function discussText(name: string, profile: Profile): string {
   });
   return finish(
     `Про профиль общения человека «${who}» (по ${profile.meetings} встречам; гипотеза по репликам, не оценка личности):`,
-    [profile.summary ? `Коротко: ${sentence(profile.summary)}` : "", ...sections],
+    [profile.summary ? `Коротко: ${sentence(profile.summary)}` : "", ...sections, withPcm ? pcmPart(profile) : ""],
   );
 }

@@ -118,7 +118,7 @@ test("недостаточно данных — понятное состоян�
     note: "Недостаточно данных: 3 реплики в 1 встрече — нужно от 5 реплик" });
   fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
   expect(screen.getByText("Недостаточно данных")).toBeInTheDocument();
-  expect(screen.getByText("Недостаточно данных: 3 реплики в 1 встрече — нужно от 5 реплик")).toBeInTheDocument();
+  expect(screen.getByText("3 реплики в 1 встрече — нужно от 5 реплик")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: /Составить профиль/ })).toBeNull();
 });
 
@@ -172,4 +172,74 @@ test("«Вы» — пометка, что профиль обновляется 
   await user.click(await screen.findByRole("tab", { name: "Профиль" }));
   expect(screen.getByText("Это вы: ваш профиль обновляется только вручную.")).toBeInTheDocument();
   expect(screen.getByText("Есть новые реплики — профиль можно обновить.")).toBeInTheDocument();
+});
+
+// --- «Модель PCM» -------------------------------------------------------------------------
+
+const PCM_PROFILE: Profile = {
+  ...PROFILE,
+  pcm: {
+    base: { type: "thinker", confidence: 0.62, refs: [{ m: "2026-09-29_10-00", i: 12, t: 331 }] },
+    phase: { type: "promoter", confidence: 0.4, refs: [{ m: "2026-09-20_15-30", i: 4, t: 65 }] },
+    floors: { thinker: 5, persister: 2, harmonizer: 1, imaginer: 0, rebel: 2, promoter: 4 },
+    perception: { value: "мысли", refs: [{ m: "2026-09-29_10-00", i: 30, t: 900 }] },
+    channel: { value: "запрашивающий", examples: ["Какие данные у нас есть по срокам?"] },
+    needs: { value: "признание за работу и время", how_to_recognize: "Отмечать точность расчётов." },
+    stress_signs: [{ text: "Уходит в детали, когда сроки не ясны.", refs: [{ m: "2026-09-10_11-00", i: 2, t: 20 }] }],
+    back_to_constructive: ["Предложить план с цифрами."],
+    conversation: ["Начинать с цели и фактов.", "Просить решение с вариантами и сроком."],
+  },
+};
+
+test("PCM: «этажи» — шесть строк, база внизу, фаза отмечена, текстовая замена", async () => {
+  open({ ...ready, profile: PCM_PROFILE, pcm_enabled: true });
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  const section = screen.getByRole("region", { name: "Модель PCM" });
+  expect(within(section).getByText("Гипотеза по репликам во встречах, не сертифицированная оценка")).toBeInTheDocument();
+  const chart = within(section).getByRole("img");
+  const rows = [...chart.querySelectorAll<HTMLElement>(".pcm-floor")];
+  // сверху вниз: слабые выше, база — последняя (нижняя)
+  expect(rows.map((r) => r.dataset.type)).toEqual(["imaginer", "harmonizer", "rebel", "persister", "promoter", "thinker"]);
+  expect(rows.at(-1)).toHaveClass("pcm-floor--base");
+  expect(rows[4]).toHaveClass("pcm-floor--phase");
+  expect(rows.at(-1)!.querySelectorAll(".pcm-floor__cell--on")).toHaveLength(5);
+  expect(rows.at(-1)!.textContent).toContain("Логик (Thinker)");
+  expect(chart).toHaveAttribute("aria-label", "Этажи модели PCM снизу вверх. 1: Логик (Thinker) — 5 из 5 (база); "
+    + "2: Деятель (Promoter) — 4 из 5 (фаза); 3: Упорный (Persister) — 2 из 5; 4: Бунтарь (Rebel) — 2 из 5; "
+    + "5: Гармонизатор (Harmonizer) — 1 из 5; 6: Мечтатель (Imaginer) — 0 из 5.");
+  expect(within(section).getByText("уверенность 62 %")).toBeInTheDocument();
+  expect(within(section).getByText("«Какие данные у нас есть по срокам?»")).toBeInTheDocument();
+  expect(within(section).getByRole("region", { name: "Как давать признание" })).toHaveTextContent("Отмечать точность");
+  expect(within(section).getByRole("region", { name: "Признаки напряжения" })).toHaveTextContent("Как вернуть в конструктив");
+  expect(within(section).getByRole("region", { name: "Как строить разговор" })).toHaveTextContent("Начинать с цели");
+  expect(within(section).getByText(/товарный знак Kahler Communications/)).toBeInTheDocument();
+});
+
+test("PCM: мало данных — понятная строка вместо «этажей»", async () => {
+  open({ ...ready, profile: { ...PROFILE, reduced: true }, pcm_enabled: true, level: "reduced",
+    pcm_note: "Недостаточно данных: 11 реплик в 2 встречах — нужно от 15 реплик в 3 встречах" });
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  const section = screen.getByRole("region", { name: "Модель PCM" });
+  expect(section).toHaveTextContent("Недостаточно данных: 11 реплик в 2 встречах — нужно от 15 реплик в 3 встречах");
+  expect(within(section).queryByRole("img")).toBeNull();
+});
+
+test("PCM выключен в настройках — раздела нет и в заготовке его нет", async () => {
+  const onAskAgent = vi.fn();
+  open({ ...ready, profile: PCM_PROFILE, pcm_enabled: false }, { onAskAgent });
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  expect(screen.queryByRole("region", { name: "Модель PCM" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Подготовиться к разговору/ }));
+  expect(onAskAgent.mock.calls[0]![1]).not.toContain("PCM");
+});
+
+test("заготовка разговора с PCM: база, фаза, канал и как давать признание", async () => {
+  const onAskAgent = vi.fn();
+  open({ ...ready, profile: PCM_PROFILE, pcm_enabled: true }, { onAskAgent });
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  fireEvent.click(screen.getByRole("button", { name: /Подготовиться к разговору/ }));
+  const text = onAskAgent.mock.calls[0]![1] as string;
+  expect(text).toContain("Гипотеза по модели PCM (не оценка): база — Логик (Thinker), фаза — Деятель (Promoter), "
+    + "канал общения — запрашивающий. Как давать признание: Отмечать точность расчётов.");
+  expect(text.endsWith("Тема разговора:")).toBe(true);
 });

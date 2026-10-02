@@ -456,5 +456,23 @@ def test_cli_profile_disabled_and_via_the_app(cli_env, capsys, monkeypatch):
 def test_settings_profiles_default_off(tmp_path):
     cfg = settings.load(tmp_path / "config.json")
     assert cfg.profiles.enabled is False
-    assert cfg.to_raw()["profiles"] == {"enabled": False}
+    assert cfg.to_raw()["profiles"] == {"enabled": False, "pcm": True}
     assert settings.patch({"profiles": {"enabled": True}}, tmp_path / "config.json").profiles.enabled is True
+    got = settings.patch({"profiles": {"pcm": False}}, tmp_path / "config.json").profiles
+    assert got.enabled is True and got.pcm is False
+
+
+def test_pcm_flag_hides_the_section_and_explains_missing_data(state, tmp_path):
+    pid = _pid(tmp_path)
+    profiles.write(pid, {"version": 1, "person_id": pid, "updated_at": time.time(), "signature": "x",
+                         "sections": {}, "pcm": {"base": {"type": "thinker", "confidence": 0.6, "refs": []}}})
+    got = state.profile("Вера")
+    assert got["pcm_enabled"] is True and got["profile"]["pcm"]["base"]["type"] == "thinker"
+    assert "pcm_note" not in got  # 18 реплик в 3 встречах — достаточно
+    _write_config(tmp_path, profiles={"enabled": True, "pcm": False})
+    got = state.profile("Вера")
+    assert got["pcm_enabled"] is False and "pcm" not in got["profile"]
+    _voice(tmp_path, "Олег")
+    _meeting(tmp_path, "2026-09-13_10-00", name="Олег", n=8)
+    assert state.profile("Олег")["pcm_note"] == \
+        "Недостаточно данных: 8 реплик в 1 встрече — нужно от 15 реплик в 3 встречах"

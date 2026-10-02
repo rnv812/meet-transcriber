@@ -9,13 +9,15 @@
  * агентом» вставляют профиль во вкладку «Агент» последней общей встречи.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MoreHorizontal, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { deleteProfile, getProfile, makeProfile, saveProfileNotes, type Endpoint } from "../../lib/api";
 import { dayLabel, errorText, plural } from "../../lib/format";
-import { discussText, prepareText, refLabel, SECTION_ORDER, SECTION_TITLES } from "../../lib/profileAgent";
-import type { Job, Profile, ProfileRef, ProfileView } from "../../lib/types";
+import { discussText, prepareText, SECTION_ORDER, SECTION_TITLES } from "../../lib/profileAgent";
+import type { Job, Profile, ProfileView } from "../../lib/types";
 import { Button } from "../../ui/Button";
+import { PcmSection } from "./PcmSection";
+import { RefChips } from "./RefChips";
 import "./profile.css";
 
 /** Пауза после последней правки заметок до сохранения. */
@@ -141,28 +143,8 @@ function Statements({ profile, keyName, onOpenAt }: {
   );
 }
 
-/** Ссылки на реплики: «Встреча · мм:сс»; цитата — в подсказке. */
-export function RefChips({ profile, refs, onOpenAt }: {
-  profile: Profile; refs: ProfileRef[]; onOpenAt: (id: string, segment: number) => void;
-}) {
-  if (!refs?.length) return null;
-  return (
-    <div className="profile__refs">
-      {refs.slice(0, 3).map((r) => {
-        const label = refLabel(profile, r);
-        return (
-          <button key={`${r.m}#${r.i}`} type="button" className="pref" title={r.q ? `«${r.q}»` : undefined}
-            aria-label={`Открыть реплику: ${label}`} onClick={() => onOpenAt(r.m, r.i)}>
-            {label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 export function ProfileTab({
-  endpoint, name, view, reload, onOpenAt, onAskAgent, extra,
+  endpoint, name, view, reload, onOpenAt, onAskAgent,
 }: {
   endpoint: Endpoint;
   name: string;
@@ -172,8 +154,6 @@ export function ProfileTab({
   onOpenAt: (recording: string, segment: number) => void;
   /** Вставить текст во вкладку «Агент» встречи (null — последней в библиотеке). */
   onAskAgent: (recording: string | null, text: string) => void;
-  /** Дополнительные разделы после карточек (модель PCM). */
-  extra?: (profile: Profile) => ReactNode;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -212,7 +192,7 @@ export function ProfileTab({
         {view.level === "none" ? (
           <div className="profile__empty">
             <h4 className="profile__empty-title">Недостаточно данных</h4>
-            <p>{view.note}</p>
+            <p>{(view.note ?? "").replace(/^Недостаточно данных:\s*/, "")}</p>
             <p className="muted">Профиль можно будет составить, когда у человека станет больше реплик во встречах.</p>
           </div>
         ) : (
@@ -283,11 +263,11 @@ export function ProfileTab({
         <p className="profile__summary"><span className="profile__label">Коротко:</span> {profile.summary}</p>
       )}
       <div className="profile__agent">
-        <Button onClick={() => onAskAgent(meeting, prepareText(name, profile))}
+        <Button onClick={() => onAskAgent(meeting, prepareText(name, profile, view.pcm_enabled !== false))}
           title={`Подготовиться к разговору: ${name}. Профиль и заготовка просьбы — во вкладку «Агент» последней общей встречи`}>
           <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />Подготовиться к разговору
         </Button>
-        <Button onClick={() => onAskAgent(meeting, discussText(name, profile))}
+        <Button onClick={() => onAskAgent(meeting, discussText(name, profile, view.pcm_enabled !== false))}
           title="Профиль со ссылками на реплики — во вкладку «Агент» последней общей встречи">
           <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />Обсудить с агентом
         </Button>
@@ -297,7 +277,9 @@ export function ProfileTab({
         {sections.map((k) => <Statements key={k} profile={profile} keyName={k} onOpenAt={onOpenAt} />)}
         {!sections.length && <p className="muted">Модель не нашла наблюдений со ссылками на реплики.</p>}
       </div>
-      {extra?.(profile)}
+      {view.pcm_enabled !== false && (
+        <PcmSection profile={profile} note={view.pcm_note} onOpenAt={onOpenAt} />
+      )}
       <ProfileNotes key={name} endpoint={endpoint} name={name} initial={view.notes ?? ""} />
       <p className="profile__foot">
         Профиль хранится только на этом компьютере. Это описание стиля общения по репликам, а не оценка личности.

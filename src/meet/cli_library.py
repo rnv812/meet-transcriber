@@ -1000,7 +1000,7 @@ def _profile(args, cfg) -> None:
                 raise CliError(f"Профиль не получился: {e}")
             except OSError as e:
                 raise CliError(f"Не удалось сохранить профиль: {e}")
-        doc = profiles.public(profiles.read(pid)) if pid else None
+        doc = profiles.public(profiles.read(pid), with_pcm=cfg.profiles.pcm) if pid else None
         notes = profiles.read_notes(pid) if pid else ""
         via_app = False
         if not doc:

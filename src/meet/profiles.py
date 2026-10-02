@@ -41,7 +41,7 @@ import time
 import uuid
 from pathlib import Path
 
-from meet import library, paths, profile_safety
+from meet import library, paths, pcm, profile_safety
 from meet.analysis import _call, _flat, _int, _safe, build_repair
 from meet.output import fmt_ts
 
@@ -487,11 +487,16 @@ _SYSTEM = """Ты составляешь профиль общения учас�
  }
 }
 Разделы: style — стиль общения (как говорит и формулирует, темп, конкретика); values — что для человека важно в работе (по тому, что он подчёркивает); how_to_talk — как лучше строить с ним разговор (практические советы); avoid — чего лучше избегать в разговоре с ним (как совет, не как упрёк); topics — типичные темы, о которых он говорит.
-В каждом разделе — до {limit} утверждений, каждое — одно предложение до 240 символов. Нечего сказать — пустой список. Других полей не добавляй."""
+В каждом разделе — до {limit} утверждений, каждое — одно предложение до 240 символов. Нечего сказать — пустой список.{pcm}
+Других полей не добавляй."""
+
+_PCM_FIELD = "\n\nЕщё одно поле ответа, рядом с \"summary\" и \"sections\":" + pcm.FIELD
 
 
-def build_system(*, limit: int = STATEMENTS_MAX) -> str:
-    return _SYSTEM.replace("{limit}", str(limit))
+def build_system(*, limit: int = STATEMENTS_MAX, want_pcm: bool = False) -> str:
+    """Системный промпт; раздел PCM — только если он нужен (включён и данных
+    достаточно): иначе промпт короче и модель его не придумывает."""
+    return _SYSTEM.replace("{limit}", str(limit)).replace("{pcm}", _PCM_FIELD if want_pcm else "")
 
 
 def build_prompt(name: str, picked: list[tuple[dict, list[dict]]], st: dict) -> str:
@@ -589,9 +594,11 @@ def clean_summary(raw, dropped: list) -> str:
     return text
 
 
-def parse(text: str, index: dict, *, limit: int = STATEMENTS_MAX):
+def parse(text: str, index: dict, *, limit: int = STATEMENTS_MAX, want_pcm: bool = False):
     """Ответ модели → (части, ошибки, выброшенные фильтром). Разделы
-    разбираются по отдельности; нет JSON вовсе — ValueError."""
+    разбираются по отдельности; нет JSON вовсе — ValueError. `want_pcm` —
+    ещё и раздел «Модель PCM» (meet.pcm); "pcm": null — модель сочла данных
+    мало, это не ошибка."""
     from meet.assist.live_state import PatchError, parse_reply
 
     try:
@@ -617,6 +624,16 @@ def parse(text: str, index: dict, *, limit: int = STATEMENTS_MAX):
             result["sections"][key] = statements(sections[key], index, limit, dropped)
         except ValueError as e:
             errors.append(f"{key}: {e}")
+    if want_pcm:
+        if "pcm" not in data:
+            errors.append("нет поля pcm")
+        else:
+            got = pcm.parse(data["pcm"], lambda raw: _refs(raw, index),
+                            lambda raw: statements(raw, index, 4, dropped), dropped)
+            if got is not None:
+                result["pcm"] = got
+            elif data["pcm"] is not None:
+                errors.append("pcm: нет базового типа со ссылками на реплики")
     return result, errors, dropped
 
 
@@ -630,10 +647,10 @@ def _merge(first: dict | None, second: dict | None) -> dict:
     return out
 
 
-def ask_model(runner, prompt: str, system: str, index: dict, *, limit: int,
+def ask_model(runner, prompt: str, system: str, index: dict, *, limit: int, want_pcm: bool = False,
               timeout_s: float = PROFILE_TIMEOUT_S, parse_fn=None):
     """Вызов с одной попыткой исправления. → (части, ошибки, выброшенные)."""
-    parse_fn = parse_fn or (lambda text: parse(text, index, limit=limit))
+    parse_fn = parse_fn or (lambda text: parse(text, index, limit=limit, want_pcm=want_pcm))
 
     def attempt(text: str):
         try:
@@ -678,17 +695,22 @@ def build(pid: str, name: str, recordings: Path, runner, cfg, *, provider: str |
     picked = sample(meetings)
     index = ref_index(picked)
     limit = STATEMENTS_REDUCED if depth == "reduced" else STATEMENTS_MAX
-    system = build_system(limit=limit)
+    # Гипотеза PCM — только при достаточных данных и если она включена.
+    want_pcm = depth == "full" and bool(getattr(getattr(cfg, "profiles", None), "pcm", True))
+    system = build_system(limit=limit, want_pcm=want_pcm)
     prompt = build_prompt(name, picked, st)
     try:
-        got, errors, dropped = ask_model(runner, prompt, system, index, limit=limit)
+        got, errors, dropped = ask_model(runner, prompt, system, index, limit=limit, want_pcm=want_pcm)
     except ValueError as e:
         raise ProfileError(f"модель не дала профиль: {e}") from None
     sections = {key: got["sections"].get(key, []) for key in SECTIONS}
     summary = got.get("summary") or ""
     if not summary and not any(sections.values()):
         raise ProfileError("в ответе модели нет ни одного утверждения со ссылками на реплики")
+    found_pcm = got.get("pcm") if want_pcm else None
     used = {ref["m"] for items in sections.values() for item in items for ref in item["refs"]}
+    if found_pcm:
+        used |= {ref["m"] for ref in _pcm_refs(found_pcm)}
     doc = {
         "version": VERSION,
         "person_id": pid,
@@ -705,6 +727,8 @@ def build(pid: str, name: str, recordings: Path, runner, cfg, *, provider: str |
         "sources": {m["id"]: {"title": _flat(m["title"], 120), "date": m["date"]}
                     for m, _t in picked if m["id"] in used},
     }
+    if found_pcm:
+        doc["pcm"] = found_pcm
     if dropped:
         doc["filtered"] = len(dropped)
     if errors:
@@ -727,14 +751,25 @@ def refresh(pid: str, voices: Path, recordings: Path, runner, cfg, *, provider: 
     return path
 
 
+def _pcm_refs(section: dict) -> list[dict]:
+    refs = []
+    for key in ("base", "phase", "perception"):
+        refs += (section.get(key) or {}).get("refs") or []
+    for item in section.get("stress_signs") or []:
+        refs += item.get("refs") or []
+    return refs
+
+
 # --- для окна ------------------------------------------------------------------------
 
 
-def public(doc: dict | None) -> dict | None:
-    """Профиль для окна и CLI: как в файле, без служебного."""
+def public(doc: dict | None, *, with_pcm: bool = True) -> dict | None:
+    """Профиль для окна и CLI: как в файле, без служебного; раздел PCM
+    выключен в настройках — без него."""
     if not doc:
         return None
-    return {k: v for k, v in doc.items() if k not in ("signature",)}
+    hidden = ("signature",) if with_pcm else ("signature", "pcm")
+    return {k: v for k, v in doc.items() if k not in hidden}
 
 
 def latest_shared(meetings: list[dict]) -> str | None:
@@ -764,6 +799,7 @@ def text_view(doc: dict | None, name: str, notes: str = "") -> str:
             refs = ", ".join(f"{(sources.get(r['m']) or {}).get('title') or r['m']} {fmt_ts(r.get('t') or 0)}"
                              for r in item.get("refs") or [])
             lines.append(f"  • {item['text']}" + (f" ({refs})" if refs else ""))
+    lines += pcm.text_lines(doc.get("pcm"))
     if notes.strip():
         lines += ["", "Мои заметки", notes.strip()]
     return "\n".join(lines) + "\n"

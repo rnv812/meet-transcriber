@@ -70,3 +70,16 @@ test("«Удалить все профили» — с подтверждение
   expect(screen.getByRole("button", { name: "Удалить все профили" })).toBeDisabled();
   expect(api.patchSettings).not.toHaveBeenCalled();
 });
+
+test("переключатель раздела «Модель PCM» — только при включённых профилях", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue({ profiles: { enabled: true, pcm: true } });
+  open();
+  const pcm = await screen.findByRole("switch", { name: "Раздел «Модель PCM»" });
+  expect(pcm).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByRole("button", { name: "Что такое раздел «Модель PCM»" })).toBeInTheDocument();
+  await userEvent.click(pcm);
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { profiles: { pcm: false } }));
+  await userEvent.click(screen.getByRole("switch", { name: "Составлять профили людей" }));
+  expect(screen.queryByRole("switch", { name: "Раздел «Модель PCM»" })).toBeNull();
+});
