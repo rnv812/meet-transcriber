@@ -93,6 +93,8 @@ class AssistState:
                  prefs: dict | None = None) -> None:
         self.bus = bus
         self.live = live
+        # Общий сигнал изменений: новая реплика, сводка, подсказки, ответы.
+        self.changes = bus.changed
         # Настройки окна из `assist` (не отвлекать, активность): окна берут их
         # из `state`, а не читают config.json сами.
         self.prefs = dict(prefs or {})
@@ -171,14 +173,17 @@ class AssistState:
             changed = self.live.dismiss(hint_id)
         else:
             raise ValueError(f"неизвестное действие: {action}")
-        if changed and self.on_change is not None:
-            self.on_change()
+        if changed:
+            if self.on_change is not None:
+                self.on_change()
+            self.changes.notify()
         return changed
 
     def request_stop(self) -> None:
         """`POST /stop`: штатная остановка (дорожки дописывает run_assist)."""
         if self.stop_event is not None:
             self.stop_event.set()
+        self.changes.notify()  # открытые SSE-потоки замечают остановку сразу
 
 
 def _knowledge_path(knowledge, vault: Path | None) -> Path | None:
@@ -275,6 +280,7 @@ async def _main(state: AssistState, port: int, *, open_browser: bool = True,
             digester.result()
     finally:
         stop.set()
+        state.changes.notify()  # SSE-потоки выходят сразу, а не к keepalive
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

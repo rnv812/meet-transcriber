@@ -26,3 +26,36 @@ def test_entries_carry_structure_next_to_lines():
     assert entries[1] == {"t": None, "speaker": "", "text": "строка без структуры"}
     assert bus.since(0) == (["[00:00:05] Вы: привет", "строка без структуры"], 2)
     assert bus.entries_since(1) == ([entries[1]], 2)
+
+
+def test_publish_from_another_thread_wakes_a_waiter_quickly():
+    """Сигнал изменений: реплика из потока распознавания будит ждущих (тикер,
+    SSE) сразу, а не на следующем опросе."""
+    import asyncio
+    import threading
+
+    async def scenario():
+        bus = TranscriptBus()
+        loop = asyncio.get_running_loop()
+        bus.changed.bind(loop)
+        seen = bus.changed.seq
+        started = loop.time()
+        threading.Timer(0.05, lambda: bus.publish("[00:00:01] Ольга: привет")).start()
+        got = await bus.changed.wait(seen, timeout=5)
+        return got, loop.time() - started
+
+    got, took = asyncio.run(scenario())
+    assert got == 1 and took < 0.5
+
+
+def test_wait_returns_at_once_when_something_changed_since_seen():
+    import asyncio
+
+    from meet.assist.notify import Notifier
+
+    async def scenario():
+        n = Notifier()
+        n.notify()  # до ожидания (и до привязки к циклу)
+        return await n.wait(0, timeout=5), await n.wait(1, timeout=0.05)
+
+    assert asyncio.run(scenario()) == (1, 1)

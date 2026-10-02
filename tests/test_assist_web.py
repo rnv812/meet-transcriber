@@ -137,6 +137,7 @@ class BusState(FakeState):
     def request_stop(self):
         self.stop_requests += 1
         self.stop_event.set()
+        self.bus.changed.notify()  # как AssistState: поток замечает сразу
 
 
 async def _read_events(resp, count):
@@ -299,6 +300,7 @@ def test_qa_event_only_when_history_changes_and_transcript_only_for_the_page():
                 qa = next(e for e in first if e[0] == "qa")
                 assert qa[2] == {"qa": []}
                 state.qa_v = 1
+                state.bus.changed.notify()  # QAService сигналит о новой истории
                 again = await _read_events(resp, 1)
                 assert again[0][0] == "qa" and again[0][2]["qa"][0]["a"] == "пятница"
             async with client.get("/events?transcript=1") as resp:
@@ -336,3 +338,75 @@ def test_page_script_parses_with_node(tmp_path):
     path.write_text(_page_script(), encoding="utf-8")
     run = subprocess.run([node, "--check", str(path)], capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
+
+
+def test_sse_pushes_a_new_line_within_100_ms():
+    """Поток не опрашивает состояние раз в секунду: новая реплика (из потока
+    распознавания) уходит клиенту сразу по сигналу изменений."""
+    import threading
+    import time
+
+    async def scenario():
+        state = BusState()
+        async with TestClient(TestServer(build_app(state))) as client:
+            async with client.get("/events") as resp:
+                await _read_events(resp, 2)          # state + qa
+                await asyncio.sleep(0.05)            # поток ждёт сигнала
+                sent = {}
+
+                def publish():
+                    sent["t"] = time.monotonic()
+                    state.bus.publish("[00:00:02] Ольга: новость",
+                                      {"t": 2.0, "speaker": "Ольга", "text": "новость"})
+
+                threading.Thread(target=publish).start()
+                event = (await _read_events(resp, 1))[0]
+                took = time.monotonic() - sent["t"]
+                return event, took
+
+    event, took = _run(scenario())
+    assert event[0] == "line" and event[2]["text"] == "новость"
+    assert took < 0.1
+
+
+def test_sse_sends_keepalive_when_nothing_happens(monkeypatch):
+    from meet.assist import web as web_mod
+
+    monkeypatch.setattr(web_mod, "KEEPALIVE_S", 0.05)
+
+    async def scenario():
+        state = BusState()
+        async with TestClient(TestServer(build_app(state))) as client:
+            async with client.get("/events") as resp:
+                await _read_events(resp, 2)
+                raw = await asyncio.wait_for(resp.content.readuntil(b"\n\n"), 5)
+                return raw
+
+    assert _run(scenario()) == b": keepalive\n\n"
+
+
+def test_sse_streams_partial_answers():
+    class Partial(BusState):
+        def __init__(self):
+            super().__init__()
+            self.partial_v = 0
+            self.parts = []
+
+        def qa_partial_version(self):
+            return self.partial_v
+
+        def qa_partials(self):
+            return self.parts
+
+    async def scenario():
+        state = Partial()
+        async with TestClient(TestServer(build_app(state))) as client:
+            async with client.get("/events") as resp:
+                await _read_events(resp, 2)
+                state.parts = [{"id": 3, "a": "Предлагаю пере"}]
+                state.partial_v = 1
+                state.bus.changed.notify()
+                return (await _read_events(resp, 1))[0]
+
+    event = _run(scenario())
+    assert event[0] == "qa_partial" and event[2] == {"id": 3, "a": "Предлагаю пере"}
