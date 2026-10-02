@@ -190,6 +190,17 @@ test("широкая: новый «Вам вопрос» прокручивае�
   }
 });
 
+test("новый «Вам вопрос» объявляется экранному диктору, прежний — нет", () => {
+  const urgent = hint({ id: "h9", kind: "ask_you", text: "Вас спросили про сроки", reply: "К пятнице" });
+  const live = makeLive({ hints: [hint(), urgent] });
+  const { rerender } = render(<Host live={live} wide />);
+  // Уже был при открытии (восстановлен) — не объявляется.
+  expect(screen.getByRole("alert")).toHaveTextContent("");
+  const next = hint({ id: "h10", kind: "ask_you", text: "Вас спросили про бюджет", reply: "Уточню" });
+  rerender(<Host live={{ ...live, hints: [hint(), next] }} wide />);
+  expect(screen.getByRole("alert")).toHaveTextContent("Вам вопрос: Вас спросили про бюджет");
+});
+
 test("широкая: «Спросить» в одну строку, пока им не пользуются; фокус — разворачивает", async () => {
   const live = makeLive({ qa: [{ id: 1, q: "Что я пропустил?", a: "Ничего важного", pending: false, at: 1, quick: null, error: null }] });
   render(<Host live={live} wide />);

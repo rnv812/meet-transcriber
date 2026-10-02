@@ -106,7 +106,7 @@ fn destroy_main(app: &AppHandle) {
 /// её черновик настроек пропал вместе с ней.
 fn forget() {
     guard().reset();
-    tray::set_settings_dirty(false);
+    tray::reset_settings_dirty();
 }
 
 pub fn on_window_event(window: &Window, event: &WindowEvent) {
@@ -125,7 +125,7 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
             thread::spawn(move || {
                 thread::sleep(ACK_TIMEOUT);
                 if guard().timed_out(round) {
-                    tray::set_settings_dirty(false);
+                    tray::reset_settings_dirty();
                     destroy_main(&app);
                 }
             });
@@ -140,21 +140,34 @@ pub fn on_page_started() {
     forget();
 }
 
+/// Команда пришла из главного окна: вопрос о закрытии — его, панель живого
+/// режима (тоже наша страница) им не управляет.
+pub fn from_main(window: &Window) -> bool {
+    window.label() == "main"
+}
+
 /// Страница показала вопрос — сторож больше не закрывает окно сам.
 #[tauri::command]
-pub fn settings_close_ack() {
-    guard().ack();
+pub fn settings_close_ack(window: Window) {
+    if from_main(&window) {
+        guard().ack();
+    }
 }
 
 /// «Остаться»: окно остаётся, следующий крестик снова спросит.
 #[tauri::command]
-pub fn settings_close_stay() {
-    guard().reset();
+pub fn settings_close_stay(window: Window) {
+    if from_main(&window) {
+        guard().reset();
+    }
 }
 
 /// «Не сохранять» или «Сохранить» (сохранилось): закрыть окно.
 #[tauri::command]
-pub fn settings_close_go(app: AppHandle) {
+pub fn settings_close_go(app: AppHandle, window: Window) {
+    if !from_main(&window) {
+        return;
+    }
     forget();
     destroy_main(&app);
 }

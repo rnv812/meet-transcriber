@@ -957,8 +957,16 @@ pub const QUIT_KEEP: &str = "Не выходить";
 static SETTINGS_DIRTY: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
-pub fn set_settings_dirty(dirty: bool) {
-    SETTINGS_DIRTY.store(dirty, Ordering::SeqCst);
+pub fn set_settings_dirty(window: tauri::Window, dirty: bool) {
+    // Настройки — только в главном окне; панель живого режима флаг не трогает.
+    if crate::close_guard::from_main(&window) {
+        SETTINGS_DIRTY.store(dirty, Ordering::SeqCst);
+    }
+}
+
+/// Страница настроек ушла (перезагрузка, закрытие): несохранённого больше нет.
+pub fn reset_settings_dirty() {
+    SETTINGS_DIRTY.store(false, Ordering::SeqCst);
 }
 
 pub fn settings_dirty() -> bool {
