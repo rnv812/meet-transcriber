@@ -80,7 +80,7 @@ SPEED_FACTOR = {
 }
 # Движок по умолчанию для профиля — им же считается оценка в мастере, пока
 # настроек ещё нет.
-DEFAULT_BACKEND = {"cuda": "faster-whisper", "cpu": "faster-whisper"}
+DEFAULT_BACKEND = {"cuda": "faster-whisper", "cpu": "gigaam"}
 
 
 def speed_factor(device: str, backend: str | None = None) -> float:
@@ -227,7 +227,7 @@ def profile_for(gpu: dict) -> str:
 
 
 def estimate_text(duration_s: float, profile: str) -> str:
-    """«38 мин встречи ≈ 48 мин обработки» — для экрана выбора профиля."""
+    """«38 мин встречи ≈ 18 мин обработки» — для экрана выбора профиля."""
     def minutes(seconds: float) -> int:
         return max(1, round(seconds / 60))
 

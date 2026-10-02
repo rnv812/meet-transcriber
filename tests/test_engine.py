@@ -182,16 +182,16 @@ def test_state_reports_device_speed_and_disk(monkeypatch):
     monkeypatch.setattr(engine, "_device", lambda available: "cpu")
     state = engine.state()
     assert state["device"] == "cpu"
-    assert state["backend"] == "faster-whisper"
-    assert state["speed_factor"] == engine.SPEED_FACTOR["cpu"]["faster-whisper"]
+    assert state["backend"] == "gigaam"  # движок процессора по умолчанию
+    assert state["speed_factor"] == engine.SPEED_FACTOR["cpu"]["gigaam"]
     assert state["disk_free_gb"] > 0
 
 
 def test_estimate_seconds_scales_with_duration():
     assert engine.estimate_seconds(600, "cuda") == 600 * engine.SPEED_FACTOR["cuda"]["faster-whisper"]
-    assert engine.estimate_seconds(600, "cpu", "gigaam") == 600 * engine.SPEED_FACTOR["cpu"]["gigaam"]
-    assert engine.estimate_seconds(600, "cpu") > engine.estimate_seconds(600, "cuda")
-    assert engine.estimate_seconds(600, "непонятно") == 600 * engine.SPEED_FACTOR["cpu"]["faster-whisper"]
+    assert engine.estimate_seconds(600, "cpu") == 600 * engine.SPEED_FACTOR["cpu"]["gigaam"]
+    assert engine.estimate_seconds(600, "cpu", "faster-whisper") > engine.estimate_seconds(600, "cuda")
+    assert engine.estimate_seconds(600, "непонятно") == 600 * engine.SPEED_FACTOR["cpu"]["gigaam"]
 
 
 def test_speed_factor_per_backend():
@@ -202,7 +202,7 @@ def test_speed_factor_per_backend():
     assert engine.speed_factor("cpu", "gigaam") < engine.speed_factor("cpu", "faster-whisper") / 2
     assert engine.speed_factor("cpu", "whisper.cpp") == engine.speed_factor("cpu", "faster-whisper")
     assert engine.speed_factor("cuda") == engine.speed_factor("cuda", "faster-whisper")
-    assert engine.speed_factor("cpu") == engine.speed_factor("cpu", "faster-whisper")
+    assert engine.speed_factor("cpu") == engine.speed_factor("cpu", "gigaam")
 
 
 def test_state_uses_the_backend_chosen_for_the_device(monkeypatch, tmp_path):
@@ -210,10 +210,10 @@ def test_state_uses_the_backend_chosen_for_the_device(monkeypatch, tmp_path):
 
     monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
     (tmp_path / "config.json").write_text(json.dumps(
-        {"asr": {"device": "cpu", "cpu_backend": "gigaam"}}), encoding="utf-8")
+        {"asr": {"device": "cpu", "cpu_backend": "faster-whisper"}}), encoding="utf-8")
     state = engine.state()
-    assert (state["device"], state["backend"]) == ("cpu", "gigaam")
-    assert state["speed_factor"] == engine.SPEED_FACTOR["cpu"]["gigaam"]
+    assert (state["device"], state["backend"]) == ("cpu", "faster-whisper")
+    assert state["speed_factor"] == 1.26
 
 
 def test_gigaam_is_pinned_to_a_commit_archive_in_both_profiles():
@@ -357,8 +357,8 @@ def test_installer_resources_carry_the_licenses():
 
 
 def test_estimate_text_cpu():
-    text = engine.estimate_text(2264, "cpu")
-    assert "38 мин" in text and "48 мин" in text
+    text = engine.estimate_text(2264, "cpu")  # GigaAM — движок процессора по умолчанию
+    assert "38 мин" in text and "18 мин" in text
 
 
 def test_estimate_text_cuda_and_minimum():

@@ -21,3 +21,12 @@ def test_first_public_release_has_notes_for_new_and_test_users():
                  "Все изменения с 0.1.0"):
         assert part in text
     assert not (NOTES / "unreleased.md").exists()  # слито в v0.2.0.md
+
+
+def test_v030_notes_announce_gigaam_on_cpu():
+    text = " ".join((NOTES / "v0.3.0.md").read_text(encoding="utf-8").split())
+    for part in ("На процессоре теперь по умолчанию GigaAM — в 15–20 раз быстрее; вернуть "
+                 "Whisper можно в настройках.",
+                 "Запись не на русском — использован Whisper",
+                 "только если для процессора стояла модель по умолчанию"):
+        assert part in text

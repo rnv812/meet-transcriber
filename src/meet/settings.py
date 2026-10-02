@@ -547,10 +547,10 @@ class Recording:
 class Asr:
     """Распознавание: движок и модель — свои для видеокарты и для процессора.
 
-    Движок (`faster-whisper` или `gigaam`): `backend` — на видеокарте
-    (Whisper: русский fine-tune large-v3 лучше на латинских терминах и берёт
-    подсказки), `cpu_backend` — на процессоре (GigaAM в разы быстрее Whisper
-    medium и точнее на русском, но только русский). Модели: `model`/`cpu_model` —
+    Движок (`whisper` или `gigaam`): `backend` — на видеокарте (по умолчанию
+    Whisper: русский fine-tune large-v3 лучше на латинских терминах и берёт
+    подсказки), `cpu_backend` — на процессоре (по умолчанию GigaAM: в 15–20 раз
+    быстрее Whisper medium и точнее на русском). Модели: `model`/`cpu_model` —
     Whisper, `gigaam_model` — GigaAM. `align_after_gigaam` — уточнять время слов
     wav2vec2 и после GigaAM (свои пословные таймкоды у него есть).
     """
@@ -562,7 +562,7 @@ class Asr:
     overlap: bool = True
     device: str = "auto"
     cpu_model: str = DEFAULT_CPU_WHISPER_MODEL
-    cpu_backend: str = WHISPER
+    cpu_backend: str = GIGAAM
     gigaam_model: str = DEFAULT_GIGAAM_MODEL
     align_after_gigaam: bool = False
     # Порог узнавания голоса по базе (косинусная близость кластера к образцам
@@ -587,7 +587,7 @@ class Asr:
             overlap=as_flag(raw.get("overlap"), True),
             device=as_choice(raw.get("device"), ASR_DEVICES, "auto"),
             cpu_model=cpu_model,
-            cpu_backend=_asr_backend(raw.get("cpu_backend"), WHISPER),
+            cpu_backend=_asr_backend(raw.get("cpu_backend"), _legacy_cpu_backend(cpu_model)),
             gigaam_model=as_choice(raw.get("gigaam_model"), GIGAAM_MODELS, DEFAULT_GIGAAM_MODEL),
             align_after_gigaam=as_flag(raw.get("align_after_gigaam"), False),
             voice_threshold=as_ratio(raw.get("voice_threshold"), VOICE_THRESHOLD, *VOICE_THRESHOLD_RANGE),
@@ -621,6 +621,15 @@ def _asr_backend(value, default: str) -> str:
     if isinstance(value, str) and value.strip() in ASR_BACKEND_ALIASES:
         return ASR_BACKEND_ALIASES[value.strip()]
     return as_choice(value, ASR_BACKENDS, default)
+
+
+def _legacy_cpu_backend(cpu_model: str) -> str:
+    """Движок на процессоре для конфига без `cpu_backend` (до 0.3.0).
+
+    GigaAM получает тот, у кого модель для процессора — поставляемая по
+    умолчанию (Whisper medium): он её не выбирал. Кто выбрал свою модель
+    Whisper, тот на ней и остаётся — его выбор молча не меняем."""
+    return GIGAAM if cpu_model == DEFAULT_CPU_WHISPER_MODEL else WHISPER
 
 
 @dataclass(frozen=True)

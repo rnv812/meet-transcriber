@@ -8,24 +8,61 @@ import types
 import pytest
 
 from meet import asr, gigaam_asr, settings
+from meet.asr import CPU_MODEL_NAME
 
 
 def _config(tmp_path, monkeypatch, asr_section=None, extra=None):
     """Конфиг приложения в своей папке данных."""
     monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
     raw = {"version": settings.SCHEMA_VERSION, **(extra or {})}
-    raw["asr"] = {"cpu_backend": "gigaam", **(asr_section or {})}
+    if asr_section is not None:
+        raw["asr"] = asr_section
     (tmp_path / "config.json").write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
 
 
 # --- настройки и миграция ---------------------------------------------------
 
 
-def test_defaults_whisper_on_both_and_gigaam_settings(tmp_path):
+def test_defaults_gigaam_on_cpu_whisper_on_gpu(tmp_path):
     cfg = settings.load(tmp_path / "нет.json").asr
-    assert cfg.backend == "faster-whisper" and cfg.cpu_backend == "faster-whisper"
+    assert cfg.backend == "faster-whisper"
+    assert cfg.cpu_backend == "gigaam"
     assert cfg.gigaam_model == "v3_e2e_rnnt"
     assert cfg.align_after_gigaam is False
+    assert cfg.backend_for("cpu") == "gigaam" and cfg.backend_for("cuda") == "faster-whisper"
+
+
+@pytest.mark.parametrize("cpu_model,expected", [
+    (None, "gigaam"),                       # модель не выбирали — дефолт
+    (CPU_MODEL_NAME, "gigaam"),             # записан поставляемый дефолт
+    ("Systran/faster-whisper-small", "faster-whisper"),  # свой выбор не трогаем
+    ("deepdml/faster-whisper-large-v3-turbo-ct2", "faster-whisper"),
+])
+def test_existing_config_switches_only_from_the_shipped_default(tmp_path, cpu_model, expected):
+    section = {"backend": "faster-whisper", "model": "bzikst/faster-whisper-large-v3-russian"}
+    if cpu_model is not None:
+        section["cpu_model"] = cpu_model
+    f = tmp_path / "config.json"
+    f.write_text(json.dumps({"version": settings.SCHEMA_VERSION, "asr": section}), encoding="utf-8")
+    assert settings.load(f).asr.cpu_backend == expected
+
+
+def test_explicit_cpu_backend_wins_over_migration(tmp_path):
+    f = tmp_path / "config.json"
+    f.write_text(json.dumps({"asr": {"cpu_model": CPU_MODEL_NAME, "cpu_backend": "faster-whisper"}}),
+                 encoding="utf-8")
+    assert settings.load(f).asr.cpu_backend == "faster-whisper"
+
+
+def test_migration_result_is_persisted_by_the_next_save(tmp_path):
+    f = tmp_path / "config.json"
+    f.write_text(json.dumps({"asr": {"cpu_model": "Systran/faster-whisper-small"}}), encoding="utf-8")
+    settings.patch({"asr": {"language": "ru"}}, f)
+    raw = json.loads(f.read_text(encoding="utf-8"))["asr"]
+    assert raw["cpu_backend"] == "faster-whisper"
+    # и при следующей смене модели выбор движка уже не пересчитывается
+    settings.patch({"asr": {"cpu_model": CPU_MODEL_NAME}}, f)
+    assert settings.load(f).asr.cpu_backend == "faster-whisper"
 
 
 @pytest.mark.parametrize("value,expected", [

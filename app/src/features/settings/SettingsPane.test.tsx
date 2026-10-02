@@ -309,15 +309,15 @@ const modelRow = (title: string) => {
 test("«Движок и модели»: выбор движка для процессора и видеокарты сохраняется в asr", async () => {
   await openEngine();
   const cpu = await screen.findByRole("radiogroup", { name: "Распознавание на процессоре" });
-  expect(within(cpu).getByRole("radio", { name: "Whisper (многоязычный)" })).toBeChecked();
+  expect(within(cpu).getByRole("radio", { name: "GigaAM (русский, быстро)" })).toBeChecked();
   const gpu = screen.getByRole("radiogroup", { name: "Распознавание на видеокарте" });
   expect(within(gpu).getByRole("radio", { name: "Whisper" })).toBeChecked();
-  await userEvent.click(within(cpu).getByRole("radio", { name: "GigaAM (русский, быстро)" }));
+  await userEvent.click(within(cpu).getByRole("radio", { name: "Whisper (многоязычный)" }));
   await userEvent.click(within(gpu).getByRole("radio", { name: "GigaAM (быстрее, только русский)" }));
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
   expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1])
-    .toEqual({ asr: { cpu_backend: "gigaam", backend: "gigaam" } });
+    .toEqual({ asr: { cpu_backend: "faster-whisper", backend: "gigaam" } });
 });
 
 test("«Движок и модели»: сохранённый движок «whisper.cpp» показывается как Whisper", async () => {

@@ -8,8 +8,12 @@
 
 export type Profile = "cuda" | "cpu";
 
-/** Время расшифровки / длительность записи (замер 30.09.2026). */
-export const SPEED_FACTOR: Record<Profile, number> = { cuda: 0.22, cpu: 1.26 };
+/**
+ * Время расшифровки / длительность записи для движка профиля по умолчанию
+ * (`engine.DEFAULT_BACKEND`): видеокарта — Whisper (замер 30.09.2026),
+ * процессор — GigaAM (замер 02.10.2026).
+ */
+export const SPEED_FACTOR: Record<Profile, number> = { cuda: 0.22, cpu: 0.48 };
 
 /** `round()` Python: ровно половина — к чётному. */
 export function pyRound(x: number): number {
