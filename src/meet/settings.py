@@ -157,6 +157,8 @@ MAX_HINTS_RANGE = (3, 12)
 # Анализ встречи (meet.analysis): что размечать. Выключенное не запрашивается у
 # модели (промпт короче) и не показывается в окне.
 ANALYSIS_FEATURES = ("types", "importance", "chapters", "insights", "category", "title")
+# Кривая важности над плеером: всегда, при наведении на полосу, не показывать.
+CURVE_MODES = ("always", "hover", "off")
 
 # Категории встреч по умолчанию: id — стабильная латиница (её хранят analysis.json
 # и meta.json), имя, цвет и описание — для человека и для модели. Список правит
@@ -737,6 +739,43 @@ class Analysis:
 
 
 @dataclass(frozen=True)
+class TranscriptView:
+    """«Расшифровка: подсветка и разметка» — что из анализа встречи окно
+    показывает в карточке: значки типов реплик (и фильтры по ним), полосу у
+    важных реплик, заголовки глав, блок «Наблюдения», кривую важности над
+    плеером (`curve`: всегда, при наведении, нет), подписи глав на полосе
+    плеера и ссылки на задачи Jira. Только отображение: что размечать, решает
+    секция `analysis`."""
+
+    types: bool = True
+    importance: bool = True
+    chapters: bool = True
+    insights: bool = True
+    curve: str = CURVE_MODES[1]
+    bar_labels: bool = True
+    jira: bool = True
+
+    @classmethod
+    def from_raw(cls, raw: dict) -> "TranscriptView":
+        return cls(
+            **{name: as_flag(raw.get(name), True)
+               for name in ("types", "importance", "chapters", "insights", "bar_labels", "jira")},
+            curve=as_choice(raw.get("curve"), CURVE_MODES, CURVE_MODES[1]),
+        )
+
+    def to_raw(self) -> dict:
+        return {
+            "types": self.types,
+            "importance": self.importance,
+            "chapters": self.chapters,
+            "insights": self.insights,
+            "curve": self.curve,
+            "bar_labels": self.bar_labels,
+            "jira": self.jira,
+        }
+
+
+@dataclass(frozen=True)
 class Category:
     """Категория встреч: `id` — латиница (хранится в analysis.json и meta.json),
     `name` и `color` — для окна, `description` — подсказка модели."""
@@ -951,6 +990,7 @@ class Settings:
     integrations: Integrations = field(default_factory=Integrations)
     ui: Ui = field(default_factory=Ui)
     analysis: Analysis = field(default_factory=Analysis)
+    transcript_view: TranscriptView = field(default_factory=TranscriptView)
     # Не секция, а список (см. as_categories): patch() заменяет его целиком.
     categories: tuple[Category, ...] = field(default_factory=default_categories)
 
@@ -993,6 +1033,7 @@ class Settings:
             integrations=Integrations.from_raw(_section(raw, "integrations")),
             ui=Ui.from_raw(_section(raw, "ui")),
             analysis=Analysis.from_raw(_section(raw, "analysis")),
+            transcript_view=TranscriptView.from_raw(_section(raw, "transcript_view")),
             categories=as_categories(raw.get("categories")),
         )
 
@@ -1010,6 +1051,7 @@ class Settings:
             "integrations": self.integrations.to_raw(),
             "ui": self.ui.to_raw(),
             "analysis": self.analysis.to_raw(),
+            "transcript_view": self.transcript_view.to_raw(),
             "categories": [c.to_raw() for c in self.categories],
         }
 

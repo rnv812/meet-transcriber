@@ -1,18 +1,31 @@
 import { memo, useState, type KeyboardEvent, type MouseEvent } from "react";
-import { clock } from "../../lib/format";
+import type { ChapterView, TurnRow } from "../../lib/analysisView";
+import { clock, plural } from "../../lib/format";
 import { nfc, type Range } from "../../lib/search";
 import { NO_SPEAKER, isUnnamed, type Turn } from "../../lib/speakers";
+import type { PhraseType } from "../../lib/types";
 import { AskAgentButton } from "../../ui/AskAgent";
 import { Highlight } from "../../ui/Highlight";
+import { TypeIcon } from "./markup";
 
 export type PersonColor = { name: string; color: string; has_avatar: boolean };
 
 /** Подсветка поиска: что выделить в реплике и номер её первого совпадения. */
 export type TurnMarks = Map<number, { ranges: Range[]; first: number }>;
 
+export type { TurnRow };
+
+/** Разметка анализа у реплик: тип (значок), важная ли (полоса слева), главы. */
+export type TurnAnnotations = {
+  types?: (PhraseType | null)[] | null;
+  key?: boolean[] | null;
+  chapters?: ChapterView[];
+};
+
 /** Плоский список без компонента на реплику: 2 часа записи — около тысячи блоков. */
 export const Turns = memo(function Turns({
   turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, marks, onAskAgent,
+  rows, annotations, onAskChapter, onExpand,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
@@ -29,6 +42,13 @@ export const Turns = memo(function Turns({
   marks?: TurnMarks;
   /** ✦ «Спросить агента» (кнопка при наведении и фокусе, клавиша A): номера реплик. */
   onAskAgent?: (turns: number[]) => void;
+  /** Что показывать и в каком порядке (фильтры, главы); нет — все реплики подряд. */
+  rows?: TurnRow[];
+  annotations?: TurnAnnotations | null;
+  /** ✦ «Обсудить главу с агентом»: номер главы. */
+  onAskChapter?: (chapter: number) => void;
+  /** Развернуть свёрнутые реплики «… N реплик» (по первой из них). */
+  onExpand?: (from: number) => void;
 }) {
   // Ctrl/Shift+щелчок по реплике — выбор; простой щелчок по тексту остаётся выделением текста.
   const pick = (e: MouseEvent, i: number) => {
@@ -65,12 +85,13 @@ export const Turns = memo(function Turns({
   };
   const first = turns.findIndex((t) => t.kind !== "break");
   const roving = turns[focusAt] && turns[focusAt]!.kind !== "break" ? focusAt : first;
-  return (
-    <div className="turns">
-      {turns.map((t, i) => {
+  const types = annotations?.types;
+  const key = annotations?.key;
+  const renderTurn = (i: number) => {
+        const t = turns[i]!;
         if (t.kind === "break") {
           return (
-            <div className="turn-break" role="separator" aria-label={t.texts.join(" ")} key={i}>
+            <div className="turn-break" role="separator" aria-label={t.texts.join(" ")} key={`t${i}`}>
               <span className="turn-break__text">{t.texts.join(" ")}</span>
             </div>
           );
@@ -82,7 +103,8 @@ export const Turns = memo(function Turns({
         const mark = marks?.get(i);
         const on = selected?.has(i) ?? false;
         return (
-          <div className={`turn${mark ? " turn--found" : ""}${on ? " turn--selected" : ""}`} key={i}
+          <div className={`turn${mark ? " turn--found" : ""}${on ? " turn--selected" : ""}${key?.[i] ? " turn--key" : ""}`}
+            key={`t${i}`}
             data-selected={on || undefined} data-turn={i}
             tabIndex={onSelect ? (i === roving ? 0 : -1) : undefined}
             role={onSelect ? "group" : undefined}
@@ -103,6 +125,7 @@ export const Turns = memo(function Turns({
             )}
             <div className="turn__body">
               <div className="turn__head">
+                {types?.[i] && <TypeIcon type={types[i]!} />}
                 {t.speaker === NO_SPEAKER ? (
                   <span className="turn__speaker turn__speaker--unnamed">{t.speaker}</span>
                 ) : (
@@ -130,7 +153,38 @@ export const Turns = memo(function Turns({
             </div>
           </div>
         );
-      })}
+  };
+  const chapters = annotations?.chapters;
+  const renderRow = (row: TurnRow) => {
+    if (row.kind === "turn") return renderTurn(row.i);
+    if (row.kind === "chapter") {
+      const c = chapters?.[row.c];
+      if (!c) return null;
+      return (
+        <div className="chapter-head" key={`c${row.c}`} data-chapter={row.c}>
+          <h3 className="chapter-head__title">
+            <span className="chapter-head__n">Глава {c.n}</span>
+            <span className="chapter-head__sep" aria-hidden="true"> · </span>
+            {c.title}
+          </h3>
+          <span className="chapter-head__time num">{clock(c.start)}–{clock(c.end)}</span>
+          {onAskChapter && (
+            <AskAgentButton className="chapter-head__ask" label={`Обсудить главу «${c.title}» с агентом`}
+              title="Обсудить главу с агентом" onClick={() => onAskChapter(row.c)} />
+          )}
+        </div>
+      );
+    }
+    return (
+      <button type="button" className="turns-more" key={`m${row.from}`} data-more={row.from}
+        onClick={() => onExpand?.(row.from)} title="Показать скрытые фильтром реплики">
+        … {row.count} {plural(row.count, "реплика", "реплики", "реплик")}
+      </button>
+    );
+  };
+  return (
+    <div className="turns">
+      {rows ? rows.map(renderRow) : turns.map((_, i) => renderTurn(i))}
     </div>
   );
 });

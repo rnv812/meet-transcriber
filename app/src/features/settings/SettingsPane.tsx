@@ -26,6 +26,7 @@ import { DiagnosticsPane } from "./DiagnosticsPane";
 import { EnginePane } from "./EnginePane";
 import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSection";
 import { HotwordsEditor } from "./HotwordsEditor";
+import { MarkupSection } from "./MarkupSection";
 import { ReplacementsEditor } from "./ReplacementsEditor";
 import { ModelsPane } from "./ModelsPane";
 import { PathText, Radio, Row, Switch, type Raw, type SetFn } from "./Section";
@@ -36,8 +37,8 @@ import { SoundSection } from "./SoundSection";
 import "./settings.css";
 
 type SectionId =
-  | "recording" | "sound" | "auto" | "asr" | "engine" | "export" | "assistant" | "analysis" | "diagnostics" | "about"
-  | "advanced";
+  | "recording" | "sound" | "auto" | "asr" | "engine" | "export" | "assistant" | "analysis" | "markup" | "diagnostics"
+  | "about" | "advanced";
 
 const MENU: { id: SectionId; title: string }[] = [
   { id: "recording", title: "Запись" },
@@ -48,6 +49,7 @@ const MENU: { id: SectionId; title: string }[] = [
   { id: "export", title: "Экспорт встреч" },
   { id: "assistant", title: "Ассистент" },
   { id: "analysis", title: "Анализ встречи" },
+  { id: "markup", title: "Расшифровка: подсветка и разметка" },
   { id: "diagnostics", title: "Диагностика" },
   { id: "about", title: "О программе" },
   { id: "advanced", title: "Дополнительно" },
@@ -413,6 +415,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
             <AssistantSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint} />
           ) : section === "analysis" ? (
             <AnalysisSection draft={draft} set={set} />
+          ) : section === "markup" ? (
+            <MarkupSection draft={draft} set={set} />
           ) : section === "diagnostics" ? (
             <DiagnosticsPane endpoint={endpoint} />
           ) : section === "about" ? (

@@ -699,8 +699,12 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
             errors += [f"итог: {e}" for e in errs]
         except (ValueError, RuntimeError) as e:
             errors.append(f"итог: {e}")
-    return to_file(merged, features, fingerprint(data), model=model_label(provider, cfg),
-                   now=now, errors=errors)
+    doc = to_file(merged, features, fingerprint(data), model=model_label(provider, cfg),
+                  now=now, errors=errors)
+    # Число сегментов: устаревший анализ (правили текст) окно показывает, пока
+    # номера реплик те же — то есть пока сегментов столько же (M3).
+    doc["segments"] = len(data.get("segments") or [])
+    return doc
 
 
 def to_file(parts: dict, features, fp: str, *, model: str, now: float | None = None,

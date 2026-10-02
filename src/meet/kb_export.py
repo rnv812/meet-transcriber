@@ -318,12 +318,14 @@ def _target(root: Path, cfg, folder: Path, title: str, start: datetime) -> Path:
     return candidate
 
 
-def _transcript_md(data: dict, title: str, start: datetime) -> str:
+def _transcript_md(data: dict, title: str, start: datetime, folder: Path | None = None) -> str:
     """Транскрипт в формате проекта (тот же, что у экспорта .md и бывшей
-    заметки): frontmatter для Obsidian, «# название», «## ВРЕМЯ — Спикер»."""
+    заметки): frontmatter для Obsidian, «# название», «Содержание» (главы
+    анализа встречи, если он есть), «## ВРЕМЯ — Спикер»."""
     from meet import export, output
 
-    return output.to_markdown(title, export.md_segments(data), start.strftime("%Y-%m-%d"))
+    return output.to_markdown(title, export.md_segments(data), start.strftime("%Y-%m-%d"),
+                              contents=export.chapters_of(folder, data))
 
 
 OLD_NOTE = "Старая заметка оставлена: {}"
@@ -383,7 +385,7 @@ def _export(folder: Path, cfg, mix) -> dict:
             recorded[name] = None  # гигабайты не хешируем: аудио не правят
         else:
             if kind == "transcript":
-                text = _transcript_md(data, title, start)
+                text = _transcript_md(data, title, start, folder)
             elif kind == "summary":
                 text = summary_path.read_text(encoding="utf-8")
             else:
