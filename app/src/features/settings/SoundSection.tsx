@@ -75,9 +75,9 @@ function DeviceRow({ id, kind, label, hint, help, items, value, onChange, endpoi
             {names.map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </span>
-        <Button onClick={() => void run()} disabled={checking}>{checking ? "Проверяю…" : "Проверить"}</Button>
-        {(check || error) && (
-          <span className="sound__result" aria-live="polite">
+        <Button onClick={() => void run()} busy={checking}>Проверить</Button>
+        {/* Итог проверки — в строке постоянной высоты: появление не сдвигает разделы ниже. */}
+        <span className="sound__result" aria-live="polite">
             {check && (
               <span role="meter" aria-label={`Уровень: ${label}`} aria-valuemin={0} aria-valuemax={100}
                 aria-valuenow={percent} className="sound__level">
@@ -86,8 +86,7 @@ function DeviceRow({ id, kind, label, hint, help, items, value, onChange, endpoi
             )}
             {check && <span className={check.peak < SILENCE || check.fallback ? "muted" : "notice"}>{resultText(kind, check)}</span>}
             {error && <span className="error">{error}</span>}
-          </span>
-        )}
+        </span>
       </Row>
     </div>
   );

@@ -63,11 +63,11 @@ test("переключатель автозаписи сразу вызывае�
   expect(api.patchSettings).not.toHaveBeenCalled();
 });
 
-test("«Ждать повторного подключения, мин» сохраняется патчем секции и предупреждает о перезапуске", async () => {
+test("«Ждать повторного подключения» сохраняется патчем секции и предупреждает о перезапуске", async () => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   await userEvent.click(await screen.findByRole("button", { name: "Автозапись" }));
   expect(screen.getByText("Параметры ниже применяются после перезапуска приложения.")).toBeInTheDocument();
-  const wait = await screen.findByLabelText("Ждать повторного подключения, мин");
+  const wait = await screen.findByLabelText("Ждать повторного подключения");
   expect(wait).toHaveValue(10);
   expect(wait).toHaveAttribute("min", "1");
   expect(wait).toHaveAttribute("max", "60");
@@ -81,7 +81,7 @@ test("«Ждать повторного подключения, мин» сох�
 test("ожидание повторного подключения: вне 1–60 не сохраняется, на выходе из поля — к краю", async () => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   await userEvent.click(await screen.findByRole("button", { name: "Автозапись" }));
-  const wait = await screen.findByLabelText("Ждать повторного подключения, мин");
+  const wait = await screen.findByLabelText("Ждать повторного подключения");
   await userEvent.clear(wait);
   await userEvent.type(wait, "90");
   await userEvent.tab();
@@ -181,7 +181,11 @@ test("неверный токен — «Неверный токен», поле 
 test("«Удалить токен» — DELETE /hf/token, статус «не задан»", async () => {
   await openEngine();
   const row = await screen.findByRole("group", { name: "Токен Hugging Face" });
-  await userEvent.click(await within(row).findByRole("button", { name: "Удалить токен" }));
+  await userEvent.click(await within(row).findByRole("button", { name: "Удалить токен…" }));
+  const ask = screen.getByRole("alertdialog", { name: "Удалить токен Hugging Face?" });
+  expect(ask).toHaveTextContent("без разделения на спикеров");
+  expect(api.deleteHfToken).not.toHaveBeenCalled();
+  await userEvent.click(within(ask).getByRole("button", { name: "Удалить" }));
   expect(api.deleteHfToken).toHaveBeenCalledWith(ep);
   expect(await within(row).findByText(/Не задан/)).toBeInTheDocument();
 });
@@ -191,7 +195,7 @@ test("токен из переменной среды — удалить из п
   await openEngine();
   const row = await screen.findByRole("group", { name: "Токен Hugging Face" });
   expect(await within(row).findByText(/из переменной среды HF_TOKEN/)).toBeInTheDocument();
-  expect(within(row).queryByRole("button", { name: "Удалить токен" })).toBeNull();
+  expect(within(row).queryByRole("button", { name: "Удалить токен…" })).toBeNull();
 });
 
 test("«Движок и модели»: кнопка «Запустить мастер»", async () => {
@@ -417,4 +421,89 @@ test("«Движок и модели»: движок без GigaAM — уста�
   expect(await screen.findByText("установлен")).toBeInTheDocument();
   expect(screen.getByText("распознавание речи (GigaAM) — не установлена — будет установлена при обновлении движка"))
     .toBeInTheDocument();
+});
+
+// --- раскладка, несохранённое, ширины полей -----------------------------------
+
+test("колонка по центру: шапка с «Сохранить» — внутри той же колонки, и в «О программе» тоже", async () => {
+  const { container } = render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await screen.findByLabelText("Ваше имя в расшифровке");
+  const column = container.querySelector(".settings__column")!;
+  expect(column.querySelector(".settings__head")).toContainElement(screen.getByRole("button", { name: "Сохранить" }));
+  expect(column.querySelector(".settings__content")).not.toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "О программе" }));
+  // Без черновика кнопок нет, но место под них то же: заголовок не сдвигается.
+  expect(container.querySelector(".settings__head .settings__actions")).not.toBeNull();
+  expect(screen.queryByRole("button", { name: "Сохранить" })).toBeNull();
+});
+
+test("правка — точка у своего раздела в меню и строка «Есть несохранённые изменения»; в другом разделе — где именно", async () => {
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  const name = await screen.findByLabelText("Ваше имя в расшифровке");
+  const menuItem = (title: string) => screen.getByRole("button", { name: title });
+  expect(menuItem("Запись").querySelector("[data-dirty]")).toBeNull();
+  expect(screen.getByRole("button", { name: "Сбросить…" })).toBeDisabled();
+  await userEvent.type(name, "а");
+  expect(menuItem("Запись").querySelector("[data-dirty]")).not.toBeNull();
+  expect(menuItem("Запись")).toHaveAttribute("title", "Есть несохранённые изменения");
+  expect(menuItem("Распознавание").querySelector("[data-dirty]")).toBeNull();
+  expect(screen.getByText("Есть несохранённые изменения")).toBeInTheDocument();
+  await userEvent.click(menuItem("Распознавание"));
+  expect(screen.getByText("Не сохранено: Запись")).toBeInTheDocument();
+  // Модель Whisper видна в двух разделах — и точка в обоих.
+  await userEvent.type(screen.getByLabelText("Модель Whisper для видеокарты (CUDA)"), "x");
+  expect(menuItem("Движок и модели").querySelector("[data-dirty]")).not.toBeNull();
+});
+
+test("«Сбросить…» спрашивает и только потом отменяет правки всех разделов", async () => {
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  const name = await screen.findByLabelText("Ваше имя в расшифровке");
+  await userEvent.type(name, "а");
+  const loads = vi.mocked(api.getSettings).mock.calls.length;
+  await userEvent.click(screen.getByRole("button", { name: "Сбросить…" }));
+  const ask = screen.getByRole("alertdialog", { name: "Отменить несохранённые изменения?" });
+  expect(ask).toHaveTextContent("«Запись»");
+  expect(within(ask).getByRole("button", { name: "Отмена" })).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  expect(name).toHaveValue("Выа");
+  await userEvent.click(screen.getByRole("button", { name: "Сбросить…" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Сбросить" }));
+  await waitFor(() => expect(vi.mocked(api.getSettings).mock.calls.length).toBe(loads + 1));
+  await waitFor(() => expect(screen.getByLabelText("Ваше имя в расшифровке")).toHaveValue("Вы"));
+});
+
+test("после сохранения — «Сохранено.» в той же строке, точки в меню нет", async () => {
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await userEvent.type(await screen.findByLabelText("Ваше имя в расшифровке"), "а");
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  expect(await screen.findByText("Сохранено.")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Запись" }).querySelector("[data-dirty]")).toBeNull();
+});
+
+test("guardRef: список разделов с правками и save для вопроса при уходе", async () => {
+  const guard = { current: null } as { current: import("./SettingsPane").SettingsGuard | null };
+  render(<SettingsPane endpoint={ep} recordingsDir={null} guardRef={guard} />);
+  await userEvent.type(await screen.findByLabelText("Ваше имя в расшифровке"), "а");
+  expect(guard.current?.dirty).toEqual(["Запись"]);
+  expect(guard.current?.canSave).toBe(true);
+  expect(await guard.current!.save()).toBe(true);
+  expect(api.patchSettings).toHaveBeenCalledWith(ep, { recording: { speaker_name: "Выа" } });
+  await waitFor(() => expect(guard.current?.dirty).toEqual([]));
+});
+
+test("пути, команды и id моделей — во всю ширину; зависимые поля недоступны при выключенном переключателе", async () => {
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Распознавание" }));
+  const model = screen.getByLabelText("Модель Whisper для видеокарты (CUDA)");
+  expect(model).toHaveClass("input--wide");
+  expect(model.closest(".srow")).toHaveClass("srow--stack");
+  expect(screen.getByLabelText("Язык речи")).toHaveClass("input--short");
+  await userEvent.click(screen.getByRole("button", { name: "Дополнительно" }));
+  await userEvent.click(screen.getByRole("button", { name: "Команда после записи" }));
+  const command = screen.getByLabelText("Команда");
+  expect(command).toBeDisabled();
+  expect(command).toHaveClass("input--wide");
+  expect(screen.getByText("Включите «Запускать команду после записи», чтобы задать команду")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("switch", { name: "Запускать команду после записи" }));
+  expect(screen.getByLabelText("Команда")).toBeEnabled();
 });

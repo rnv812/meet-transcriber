@@ -127,10 +127,10 @@ test("вставка нескольких строк; ошибка — у каж
 test("«Сбросить» очищает параметры одного агента", async () => {
   open();
   const codex = await screen.findByRole("group", { name: "Запуск Codex" });
-  await userEvent.click(within(codex).getByRole("button", { name: "Сбросить параметры Codex" }));
+  await userEvent.click(within(codex).getByRole("button", { name: "Параметры Codex по умолчанию" }));
   expect(within(codex).getByRole("textbox", { name: "Дополнительные параметры" })).toHaveValue("");
   expect(within(codex).getByRole("textbox", { name: "Переменные окружения" })).toHaveValue("");
-  expect(within(codex).getByRole("button", { name: "Сбросить параметры Codex" })).toBeDisabled();
+  expect(within(codex).getByRole("button", { name: "Параметры Codex по умолчанию" })).toBeDisabled();
   await userEvent.click(save());
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { agent: { launch: {
     "claude-code": { args: "", env: [] }, codex: { args: "", env: [] },

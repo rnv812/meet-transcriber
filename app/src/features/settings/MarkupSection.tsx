@@ -102,14 +102,16 @@ export function MarkupSection({ draft, set }: { draft: Raw; set: SetFn }) {
       <Switch label="Ссылки на задачи Jira" help={<JiraTip />}
         hint="Ключи задач в расшифровке, итогах и наблюдениях открываются в Jira"
         value={on("jira")} onChange={(x) => set("transcript_view", "jira", x)} />
-      <Row label="Адрес Jira" htmlFor="jira-base" hint={baseError
-        ? <span className="error">{baseError}</span> : "Пусто — ссылок нет. Например, https://jira.example.com"}>
+      <Row label="Адрес Jira" htmlFor="jira-base" stack disabled={!on("jira")} hint={baseError
+        ? <span className="error">{baseError}</span> : on("jira") ? "Пусто — ссылок нет. Например, https://jira.example.com"
+          : "Включите «Ссылки на задачи Jira», чтобы задать адрес"}>
         <input id="jira-base" type="text" inputMode="url" placeholder="https://jira.example.com" value={base} spellCheck={false}
+          disabled={!on("jira")}
           aria-invalid={baseError ? true : undefined} onChange={(e) => set("integrations", "jira_base_url", e.target.value)} />
       </Row>
-      <Row label="Ключи задач" htmlFor="jira-keys" hint={keysError
+      <Row label="Ключи задач" htmlFor="jira-keys" disabled={!on("jira")} hint={keysError
         ? <span className="error">{keysError}</span> : "Проекты через запятую (SPR, OPS) или регулярное выражение; пусто — любой ключ"}>
-        <input id="jira-keys" type="text" placeholder={DEFAULT_JIRA_KEYS} value={keys} spellCheck={false}
+        <input id="jira-keys" type="text" placeholder={DEFAULT_JIRA_KEYS} value={keys} spellCheck={false} disabled={!on("jira")}
           aria-invalid={keysError ? true : undefined} onChange={(e) => set("integrations", "jira_keys", e.target.value)} />
       </Row>
     </>

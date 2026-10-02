@@ -5,7 +5,7 @@ import { usePeople } from "../state/usePeople";
 import { useResident } from "../state/useResident";
 import { RecordingsList } from "../features/recordings/RecordingsList";
 import { VoicesPane } from "../features/voices/VoicesPane";
-import { SettingsPane } from "../features/settings/SettingsPane";
+import { SettingsPane, type SettingsGuard } from "../features/settings/SettingsPane";
 import { RecordingCard, type CardRequest } from "../features/card/RecordingCard";
 import type { FindRequest } from "../features/card/TranscriptView";
 import { loadCategoryFilter, NO_CATEGORY, saveCategoryFilter } from "../lib/categories";
@@ -13,6 +13,7 @@ import { searchable } from "../lib/search";
 import { initialRecording, initialSection, onOpenRecording, onOpenSection } from "../lib/shell";
 import { EmptyState, OfflineState } from "../ui/EmptyState";
 import { Button } from "../ui/Button";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Wizard } from "../features/wizard/Wizard";
 import { useWizardGate } from "../features/wizard/useWizardGate";
 import { Nav, type Section } from "./Nav";
@@ -48,7 +49,19 @@ export function App() {
   const gate = useWizardGate(resident.status, resident.endpoint ?? null);
   const recording = resident.snapshot?.status === "recording" || resident.snapshot?.live?.active === true;
 
-  const openRecording = (id: string) => { setSelected(id); setFind(null); setSection("recordings"); };
+  /** Несохранённое в настройках: SettingsPane кладёт сюда список разделов и save. */
+  const settingsGuard = useRef<SettingsGuard | null>(null);
+  /** Уход из настроек ждёт ответа «Сохранить / Не сохранять / Остаться». */
+  const [leaving, setLeaving] = useState<{ go: () => void } | null>(null);
+  const sectionRef = useRef(section);
+  sectionRef.current = section;
+  /** Переход из настроек куда-то ещё — через вопрос, если там несохранённое. */
+  const leaveSettings = (go: () => void) => {
+    if (sectionRef.current === "settings" && settingsGuard.current?.dirty.length) setLeaving({ go });
+    else go();
+  };
+
+  const openRecording = (id: string) => leaveSettings(() => { setSelected(id); setFind(null); setSection("recordings"); });
   /** Просьба к карточке из профиля человека: показать реплику или вставить текст агенту. */
   const [cardRequest, setCardRequest] = useState<CardRequest | null>(null);
   const openAt = (id: string, segment: number, t?: number, speaker?: string) => {
@@ -70,7 +83,10 @@ export function App() {
     setSelected(id);
     setFind({ q, t, n: ++findN.current });
   };
-  const select = (s: Section) => { setSettingsPart(undefined); setSection(s); };
+  const select = (s: Section) => {
+    if (s === "settings") { setSettingsPart(undefined); setSection(s); return; }
+    leaveSettings(() => { setSettingsPart(undefined); setSection(s); });
+  };
   // Номер растёт с каждой просьбой: повторная возвращает в раздел, даже если он уже запрошен.
   const openSettings = (part: string) => {
     setSettingsPart((cur) => ({ part, n: (cur?.n ?? 0) + 1 }));
@@ -88,11 +104,13 @@ export function App() {
     if (section === "voices") void refreshPeople();
   }, [section, refreshPeople]);
 
-  // Клик по уведомлению: оболочка присылает id записи.
+  // Клик по уведомлению: оболочка присылает id записи (подписка одна — вопрос о настройках через ref).
+  const leaveRef = useRef(leaveSettings);
+  leaveRef.current = leaveSettings;
   useEffect(() => {
     let unlisten: (() => void) | null = null;
     let gone = false;
-    onOpenRecording((id) => { setSelected(id); setFind(null); setSection("recordings"); })
+    onOpenRecording((id) => leaveRef.current(() => { setSelected(id); setFind(null); setSection("recordings"); }))
       .then((off) => { if (gone) off(); else unlisten = off; })
       .catch((cause) => console.warn("open-recording:", cause));
     return () => { gone = true; unlisten?.(); };
@@ -129,7 +147,8 @@ export function App() {
     <div className="app">
       <Nav section={section} onSelect={select} />
       <div className="content">
-        <header className="topbar">
+        {/* Полоса под системным заголовком тоже перетаскивает окно; кнопки в ней — нет (атрибут только у самой полосы). */}
+        <header className="topbar" data-tauri-drag-region>
           <RecordingBadge endpoint={resident.endpoint ?? null} snapshot={resident.snapshot ?? null}
             snapshotAt={resident.snapshotAt} online={resident.status === "online"}
             onSnapshot={resident.applySnapshot} />
@@ -171,7 +190,7 @@ export function App() {
               />
             ) : section === "settings" && resident.endpoint ? (
               <SettingsPane endpoint={resident.endpoint} recordingsDir={resident.snapshot?.recordings_dir ?? null}
-                initial={settingsPart?.part} initialTick={settingsPart?.n}
+                initial={settingsPart?.part} initialTick={settingsPart?.n} guardRef={settingsGuard}
                 onRunWizard={(step) => gate.open(step ?? "hardware")} />
             ) : selected && resident.endpoint ? (
               <RecordingCard
@@ -198,6 +217,31 @@ export function App() {
           </main>
         </div>
       </div>
+      {leaving && (
+        <LeaveSettings guard={settingsGuard.current} onStay={() => setLeaving(null)}
+          onLeave={() => { const { go } = leaving; setLeaving(null); go(); }} />
+      )}
     </div>
+  );
+}
+
+/** «Сохранить / Не сохранять / Остаться» при уходе из настроек с несохранённым. */
+function LeaveSettings({ guard, onStay, onLeave }: {
+  guard: SettingsGuard | null; onStay: () => void; onLeave: () => void;
+}) {
+  const where = (guard?.dirty ?? []).map((t) => `«${t}»`).join(", ");
+  const canSave = guard?.canSave ?? false;
+  return (
+    <ConfirmDialog title="Сохранить изменения в настройках?" cancelLabel="Остаться" danger={false}
+      message={canSave ? `Есть несохранённые изменения в разделах ${where}.`
+        : `В разделах ${where} есть ошибки — сохранить не получится. Исправьте их или уйдите без сохранения.`}
+      alt={{ label: "Не сохранять", danger: true, onClick: onLeave }}
+      confirmLabel={canSave ? "Сохранить" : "Исправить"}
+      onCancel={onStay}
+      onConfirm={async () => {
+        if (!canSave || !guard) { onStay(); return; }
+        if (await guard.save()) onLeave();
+        else onStay();
+      }} />
   );
 }

@@ -11,6 +11,7 @@ import {
 import { errorText } from "../../lib/format";
 import { OS_TEXT } from "../../lib/platform";
 import { Button } from "../../ui/Button";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { CheckFailure, HfTokenForm } from "../hf/HfTokenForm";
 import { DiarizationTip, HfTokenTip } from "./tips";
 
@@ -67,6 +68,7 @@ export function HfTokenRow({ endpoint, onChanged }: {
     }
   };
 
+  const [askRemove, setAskRemove] = useState(false);
   const remove = () => act(async () => {
     setStatus(await deleteHfToken(endpoint));
     setEditing(false);
@@ -95,10 +97,15 @@ export function HfTokenRow({ endpoint, onChanged }: {
           </Button>
           {configured && <Button onClick={() => void recheck()} disabled={busy}>Проверить снова</Button>}
           {configured && status?.source !== "env" && (
-            <Button variant="danger" onClick={() => void remove()} disabled={busy}>Удалить токен</Button>
+            <Button variant="danger" onClick={() => setAskRemove(true)} disabled={busy}>Удалить токен…</Button>
           )}
         </div>
       </div>
+      {askRemove && (
+        <ConfirmDialog title="Удалить токен Hugging Face?" confirmLabel="Удалить"
+          message="Без токена новые встречи будут расшифровываться без разделения на спикеров. Токен можно будет задать снова."
+          onCancel={() => setAskRemove(false)} onConfirm={() => { setAskRemove(false); void remove(); }} />
+      )}
       {failed && !editing && <CheckFailure check={failed} />}
       {error && <p className="error">{error}</p>}
       {editing && (

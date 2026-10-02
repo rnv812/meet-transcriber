@@ -154,7 +154,7 @@ export function ExportSection({ draft, set, endpoint }: { draft: Raw; set: SetFn
         value={(v("meetings_dir") as string | null | undefined) ?? null}
         onChange={(x) => set("export", "meetings_dir", x)} />
       <Row label="Шаблон имени папки" htmlFor="export-template" hint="Имя папки встречи; «/» создаёт вложенные папки"
-        help={<TokenHelp />}>
+        help={<TokenHelp />} stack>
         <input id="export-template" type="text" value={template}
           onChange={(e) => set("export", "folder_template", e.target.value)} />
         <span className="export__preview" aria-live="polite">

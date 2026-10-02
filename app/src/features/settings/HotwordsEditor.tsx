@@ -46,7 +46,10 @@ export function HotwordsEditor({ endpoint }: { endpoint: Endpoint }) {
   return (
     <div className="hotwords">
       <div className="srow__head"><span className="srow__label">Термины распознавания</span><HotwordsTip /></div>
-      <div className="srow__hint">Термины и имена, по одному на строку; строки, начинающиеся с #, не учитываются</div>
+      <div className="srow__hint">
+        Термины и имена, по одному на строку; строки, начинающиеся с #, не учитываются. Сохраняются отдельно —
+        кнопкой «Сохранить термины» под списком
+      </div>
       <textarea
         aria-label="Термины распознавания" className="hotwords__text" rows={8} value={text}
         onChange={(e) => setText(e.target.value)}

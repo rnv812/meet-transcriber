@@ -20,12 +20,17 @@ vi.mock("../features/card/RecordingCard", () => ({
   ),
 }));
 vi.mock("../features/voices/VoicesPane", () => ({ VoicesPane: () => <div data-testid="voices" /> }));
+const settingsSave = vi.hoisted(() => vi.fn(async () => true));
 vi.mock("../features/settings/SettingsPane", () => ({
-  SettingsPane: ({ initial, initialTick, onRunWizard }: {
+  SettingsPane: ({ initial, initialTick, onRunWizard, guardRef }: {
     initial?: string; initialTick?: number; onRunWizard?: () => void;
+    guardRef?: { current: unknown };
   }) => (
     <div data-testid="settings" data-initial={initial ?? ""} data-tick={initialTick ?? ""}>
       <button onClick={() => onRunWizard?.()}>Запустить мастер</button>
+      <button onClick={() => { if (guardRef) guardRef.current = { dirty: ["Запись"], canSave: true, save: settingsSave }; }}>
+        правка
+      </button>
     </div>
   ),
 }));
@@ -76,6 +81,62 @@ beforeEach(() => {
   window.history.replaceState({}, "", "/");
   useLibrarySpy.mockReset();
   useLibrarySpy.mockReturnValue({ items: [], jobs: [], loading: false, error: null, refresh: async () => {} });
+});
+
+test("уход из настроек с несохранённым: «Остаться», «Не сохранять», «Сохранить»", async () => {
+  residentState.current = online();
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
+  // Правок нет — уходим молча.
+  await userEvent.click(screen.getByRole("button", { name: "Голоса" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(screen.getByTestId("voices")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
+  await userEvent.click(screen.getByRole("button", { name: "правка" }));
+  await userEvent.click(screen.getByRole("button", { name: "Голоса" }));
+  const ask = screen.getByRole("alertdialog", { name: "Сохранить изменения в настройках?" });
+  expect(ask).toHaveTextContent("«Запись»");
+  // По умолчанию — безопасное «Остаться»; Esc — тоже остаться.
+  expect(within(ask).getByRole("button", { name: "Остаться" })).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  expect(screen.getByTestId("settings")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Голоса" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.getByTestId("voices")).toBeInTheDocument());
+  expect(settingsSave).toHaveBeenCalledTimes(1);
+
+  await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
+  await userEvent.click(screen.getByRole("button", { name: "правка" }));
+  await userEvent.click(screen.getByRole("button", { name: "Записи" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Не сохранять" }));
+  expect(screen.queryByTestId("settings")).toBeNull();
+  expect(settingsSave).toHaveBeenCalledTimes(1);
+});
+
+test("сохранить при уходе не вышло — остаёмся в настройках", async () => {
+  residentState.current = online();
+  settingsSave.mockResolvedValueOnce(false);
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
+  await userEvent.click(screen.getByRole("button", { name: "правка" }));
+  await userEvent.click(screen.getByRole("button", { name: "Голоса" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(screen.getByTestId("settings")).toBeInTheDocument();
+});
+
+test("клик по уведомлению из настроек с правками — тоже через вопрос", async () => {
+  residentState.current = online();
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
+  await userEvent.click(screen.getByRole("button", { name: "правка" }));
+  await waitFor(() => expect(openCb.current).not.toBeNull());
+  act(() => openCb.current!("rec-1"));
+  expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Не сохранять" }));
+  expect(await screen.findByTestId("card")).toHaveTextContent("rec-1");
 });
 
 test("три раздела; у записей есть список, у голосов — нет", async () => {
