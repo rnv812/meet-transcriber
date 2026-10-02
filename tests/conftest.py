@@ -10,7 +10,11 @@
 * `LOCALAPPDATA` указывает во временную папку (а `MEET_DATA_DIR` снят):
   `settings.load()` без пути читает не настоящий config.json и не мигрирует
   из него токен. Тесты, которым нужна своя папка, переопределяют одно из двух.
+  На macOS папка данных — от `HOME` (`~/Library/Application Support/meet`),
+  поэтому там во временную папку указывает и `HOME`.
 """
+
+import sys
 
 import pytest
 
@@ -52,6 +56,8 @@ def _isolated_secrets(monkeypatch, tmp_path_factory):
     monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
     monkeypatch.delenv("MEET_DATA_DIR", raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path_factory.mktemp("localappdata")))
+    if sys.platform == "darwin":
+        monkeypatch.setenv("HOME", str(tmp_path_factory.mktemp("home")))
     try:
         from meet import settings
 

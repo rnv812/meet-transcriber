@@ -13,6 +13,7 @@
 import { useState, type ReactNode } from "react";
 import { type DeviceCheck, type DeviceItem, type DeviceKind, type Devices, type Endpoint, testDevice } from "../../lib/api";
 import { errorText } from "../../lib/format";
+import { IS_MAC, OS_TEXT } from "../../lib/platform";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Row, type Raw, type SetFn } from "./Section";
@@ -106,11 +107,25 @@ export function SoundSection({ draft, set, devices, endpoint }: {
         <p className="muted sdesc">Список устройств недоступен: {devices.error ?? "причина неизвестна"}</p>
       )}
       <DeviceRow id="sound-mic" kind="mic" label="Микрофон" endpoint={endpoint}
-        hint="Ваш голос. «Как в системе» — микрофон Windows по умолчанию"
+        hint={`Ваш голос. «Как в системе» — микрофон ${OS_TEXT.systemName} по умолчанию`}
         items={devices?.inputs ?? []} value={v("mic_device")} onChange={choose("mic_device")} />
       <DeviceRow id="sound-output" kind="output" label="Звук собеседников (вывод)" endpoint={endpoint}
-        hint="Устройство, через которое вы слышите собеседников: наушники или колонки"
-        help={(
+        hint={IS_MAC
+          ? "Системный звук (ScreenCaptureKit) или виртуальное устройство, например BlackHole"
+          : "Устройство, через которое вы слышите собеседников: наушники или колонки"}
+        help={IS_MAC ? (
+          <HelpTip label="Как записывается звук собеседников" title="Запись звука собеседников">
+            <TipLine>
+              «Системный звук» записывается через ScreenCaptureKit: нужно разрешение «Запись экрана» —
+              Системные настройки → Конфиденциальность и безопасность → Запись экрана (в macOS 15 — «Запись
+              экрана и системного звука»), включите Meet. Изображение экрана не сохраняется.
+            </TipLine>
+            <TipLine>
+              Без этого разрешения выберите виртуальное устройство ввода, например BlackHole, и направьте в него
+              звук звонка (через «Устройство с несколькими выходами» в «Настройке Audio-MIDI»).
+            </TipLine>
+          </HelpTip>
+        ) : (
           <HelpTip label="Как записывается звук собеседников" title="Запись звука собеседников">
             <TipLine>
               Голоса собеседников записываются с выбранного устройства вывода через WASAPI loopback: программа

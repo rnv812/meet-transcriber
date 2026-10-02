@@ -23,7 +23,7 @@ import threading
 import time
 from pathlib import Path
 
-from meet import events, paths, settings, watch
+from meet import events, paths, plat, settings, watch
 from meet.output import fmt_ts
 from meet.recorder import LOCK_NAME, _pid_alive, record
 from meet.tray_control import AUTO, MANUAL, TrayControl
@@ -897,5 +897,12 @@ def main() -> None:
     if _resident_alive():
         if start_now:
             _send_command("start")
+        return
+    if plat.is_macos():
+        # pystray на macOS не ставится (значок в строке меню — у приложения
+        # Meet): дежурим без значка, как под оболочкой.
+        print("meet-tray: на macOS значок показывает приложение Meet — дежурю без значка",
+              file=sys.stderr)
+        TrayApp(start_now=False).run_headless(parent_pid=None)
         return
     TrayApp(start_now=start_now).run()

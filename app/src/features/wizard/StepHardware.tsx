@@ -2,6 +2,12 @@ import { estimateText, type Profile } from "../../lib/estimate";
 import type { EngineStatus } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 
+const PROFILE_TEXT: Record<Profile, string> = {
+  cuda: "для видеокарты (CUDA)",
+  cpu: "для процессора",
+  mac: "для Apple Silicon (экспериментально)",
+};
+
 /** Шаг 1 «Ваш компьютер»: видеокарта, профиль движка, сколько ждать расшифровку. */
 export function StepHardware({ engine, profile, onNext }: {
   engine: EngineStatus | null | undefined;
@@ -12,14 +18,15 @@ export function StepHardware({ engine, profile, onNext }: {
   return (
     <>
       <dl className="wizard__facts">
-        <dt>Видеокарта</dt>
+        <dt>{profile === "mac" ? "Компьютер" : "Видеокарта"}</dt>
         <dd>
-          {engine === null ? <span className="muted">сведения доступны только в приложении</span>
+          {profile === "mac" ? <span>Apple Silicon — распознавание на процессоре, разделение на спикеров — на графике (MPS)</span>
+            : engine === null ? <span className="muted">сведения доступны только в приложении</span>
             : engine.gpu ? <span>{engine.gpu}</span>
             : <span className="muted">Видеокарта NVIDIA не найдена — расшифровка пойдёт на процессоре</span>}
         </dd>
         <dt>Движок</dt>
-        <dd>{profile === "cuda" ? "для видеокарты (CUDA)" : "для процессора"}</dd>
+        <dd>{PROFILE_TEXT[profile]}</dd>
         <dt>Расшифровка</dt>
         <dd>
           <span>{estimateText(3600, profile)}</span>

@@ -10,15 +10,18 @@ HTTPS_PROXY/HTTP_PROXY. В терминале они часто заданы, а
 
 * `system` (по умолчанию) — переменные среды, если уже заданы, иначе прокси
   из WinINET (ProxyEnable/ProxyServer/ProxyOverride). Сценарий автонастройки
-  (PAC, AutoConfigURL) не поддерживается.
+  (PAC, AutoConfigURL) не поддерживается. На macOS системный прокси читается
+  из `scutil --proxy` и приводится к тем же значениям (`scutil_values`).
 * `none` — без прокси: унаследованные переменные убираются.
 * адрес (`http://host:port`, `https://…`, `socks5://…`) — он.
 
-Только stdlib (winreg — на Windows): модуль читает резидент.
+Только stdlib (winreg — на Windows, scutil — на macOS): модуль читает резидент.
 """
 
 import logging
 import os
+import re
+import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from urllib.parse import urlsplit
@@ -102,7 +105,9 @@ def _mode(cfg) -> str:
 
 def read_registry() -> dict | None:
     """Значения прокси из HKCU\\…\\Internet Settings; None — не Windows или
-    ключ не читается."""
+    ключ не читается. На macOS — те же значения из `scutil --proxy`."""
+    if sys.platform == "darwin":
+        return read_scutil()
     if not _WINDOWS:
         return None
     try:
@@ -119,6 +124,68 @@ def read_registry() -> dict | None:
             except OSError:
                 pass
     return values
+
+
+SCUTIL_TIMEOUT_S = 5.0
+_SCUTIL_LINE = re.compile(r"^\s*([^:{}]+?)\s*:\s*(.*?)\s*$")
+
+
+def parse_scutil(text: str) -> dict:
+    """Вывод `scutil --proxy` → {ключ: значение}; массивы (`<array> {…}`) —
+    списками строк. Вложенных словарей у прокси нет."""
+    values: dict = {}
+    array_key = None
+    for line in (text or "").splitlines():
+        if line.strip() == "}":
+            array_key = None
+            continue
+        match = _SCUTIL_LINE.match(line)
+        if not match:
+            continue
+        key, value = match.group(1), match.group(2)
+        if array_key is not None:
+            values[array_key].append(value)
+        elif value.startswith("<array>"):
+            array_key = key
+            values[key] = []
+        elif not value.startswith("<dictionary>"):
+            values[key] = value
+    return values
+
+
+def scutil_values(text: str) -> dict:
+    """Прокси macOS → значения в форме WinINET (`ProxyEnable`, `ProxyServer`
+    вида `https=h:p;http=h:p`, `ProxyOverride`, `AutoConfigURL`): дальше они
+    идут тем же путём, что и на Windows (`from_registry`)."""
+    raw = parse_scutil(text)
+    servers = []
+    for proto, prefix in (("https", "HTTPS"), ("http", "HTTP")):
+        host = str(raw.get(f"{prefix}Proxy") or "").strip()
+        port = str(raw.get(f"{prefix}Port") or "").strip()
+        if _enabled(raw.get(f"{prefix}Enable")) and host:
+            servers.append(f"{proto}={host}:{port}" if port else f"{proto}={host}")
+    values: dict = {"ProxyEnable": 1 if servers else 0}
+    if servers:
+        values["ProxyServer"] = ";".join(servers)
+    exceptions = raw.get("ExceptionsList")
+    if isinstance(exceptions, list) and exceptions:
+        values["ProxyOverride"] = ";".join(str(e) for e in exceptions)
+    if _enabled(raw.get("ProxyAutoConfigEnable")) and raw.get("ProxyAutoConfigURLString"):
+        values["AutoConfigURL"] = raw["ProxyAutoConfigURLString"]
+    return values
+
+
+def read_scutil(run=None) -> dict | None:
+    """Системный прокси macOS (`scutil --proxy`); не ответил — None."""
+    run = run or subprocess.run
+    try:
+        out = run(["scutil", "--proxy"], capture_output=True, text=True,
+                  encoding="utf-8", errors="replace", timeout=SCUTIL_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return scutil_values(out.stdout)
 
 
 def _enabled(value) -> bool:

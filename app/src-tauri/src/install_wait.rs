@@ -274,6 +274,7 @@ mod tests {
         assert_eq!(requested(&argv(&["meet-desktop.exe"])), None);
     }
 
+    #[cfg(windows)]
     #[test]
     fn processes_from_the_install_folder_block_the_copy() {
         let root = Path::new(ROOT);
@@ -329,6 +330,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn long_path_expands_short_names_and_keeps_unknown_paths() {
         let dir =
@@ -357,6 +359,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(windows)]
     #[test]
     fn the_folder_itself_is_not_inside_itself() {
         assert!(!inside(Path::new(ROOT), Path::new(ROOT)));

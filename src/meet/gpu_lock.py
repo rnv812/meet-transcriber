@@ -43,15 +43,11 @@ def marker_enabled() -> bool:
 
 
 def _pid_alive(pid: int) -> bool:
-    """Жив ли процесс с этим pid (Windows). Копия из recorder, но без импорта
-    recorder — тот тянет PyAudio, а gpu_lock грузится рано."""
-    import ctypes
+    """Жив ли процесс с этим pid. Через `plat`, а не recorder: тот тянет
+    PyAudio, а gpu_lock грузится рано."""
+    from meet import plat
 
-    handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
-    if not handle:
-        return False
-    ctypes.windll.kernel32.CloseHandle(handle)
-    return True
+    return plat.pid_alive(pid)
 
 
 def held_by_live_process() -> bool:

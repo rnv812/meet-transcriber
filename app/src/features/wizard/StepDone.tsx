@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { OS_TEXT } from "../../lib/platform";
 import { autostartAvailable, getAutostart, setAutostart } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { Switch } from "../settings/Section";
@@ -40,13 +41,13 @@ export function StepDone({ onFinish }: { onFinish: () => void }) {
   return (
     <>
       <p className="wizard__lead">
-        Приложение работает в области уведомлений: щелчок по значку открывает окно, правый щелчок — меню записи.
+        Приложение работает в {OS_TEXT.trayArea}: щелчок по значку открывает окно, правый щелчок — меню записи.
       </p>
       <p className="muted">
         Мастер можно запустить снова: Настройки → Движок и модели → «Запустить мастер».
       </p>
       {available && (
-        <Switch label="Запускать вместе с Windows" hint="Приложение запускается в области уведомлений и отслеживает звонки"
+        <Switch label={OS_TEXT.autostart} hint={`Приложение запускается в ${OS_TEXT.trayArea} и отслеживает звонки`}
           value={autostart} onChange={setAutostartValue} />
       )}
       <div className="wizard__bar">

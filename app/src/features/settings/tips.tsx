@@ -3,6 +3,7 @@
  * тексты в настройках, мастере и на экране голосов.
  */
 
+import { OS_TEXT } from "../../lib/platform";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 
 export function DiarizationTip() {
@@ -82,7 +83,7 @@ export function HfTokenTip() {
         Войдите на huggingface.co, откройте страницу модели, нажмите «Agree and access repository» и
         создайте токен с правом чтения (Read).
       </TipLine>
-      <TipLine>Токен хранится в диспетчере учётных данных Windows и используется только для загрузки моделей.</TipLine>
+      <TipLine>Токен хранится в {OS_TEXT.keyring} и используется только для загрузки моделей.</TipLine>
     </HelpTip>
   );
 }

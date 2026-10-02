@@ -2111,6 +2111,7 @@ dependencies = [
 name = "meet-desktop"
 version = "0.2.1"
 dependencies = [
+ "libc",
  "native-tls",
  "portable-pty",
  "serde",

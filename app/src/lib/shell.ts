@@ -82,7 +82,7 @@ export type EngineStatus = {
   installed: boolean;
   version: string;
   env_dir: string;
-  profile: "cuda" | "cpu" | null;
+  profile: "cuda" | "cpu" | "mac" | null;
   gpu: string | null;
   /** Свободно на диске с данными, ГБ; null — узнать нельзя (не блокируем). */
   free_gb: number | null;
@@ -110,7 +110,7 @@ export async function retryGigaamInstall(): Promise<void> {
   await invoke<void>("retry_gigaam_install");
 }
 
-export async function installEngine(profile: "cuda" | "cpu", fresh: boolean): Promise<void> {
+export async function installEngine(profile: "cuda" | "cpu" | "mac", fresh: boolean): Promise<void> {
   await invoke<void>(fresh ? "reinstall_engine" : "install_engine", { profile });
 }
 

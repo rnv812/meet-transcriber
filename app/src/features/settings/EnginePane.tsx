@@ -45,7 +45,8 @@ export function EnginePane({ endpoint, onReinstall }: {
       <Row label="ffmpeg" hint="Нужен для записи и преобразования аудио">
         <span className={engine.ffmpeg ? "tag tag--live" : "tag"}>{engine.ffmpeg ? "есть" : "нет"}</span>
       </Row>
-      <Row label="Компоненты" hint={engine.flavor === "cuda" ? "Сборка для видеокарты (CUDA)" : "Сборка для процессора (CPU)"}>
+      <Row label="Компоненты" hint={engine.flavor === "cuda" ? "Сборка для видеокарты (CUDA)"
+        : engine.flavor === "mac" ? "Сборка для Apple Silicon (экспериментально)" : "Сборка для процессора (CPU)"}>
         <span className="tags">
           {engine.components.map((c) => (
             <span key={c.module} className={c.installed ? "tag tag--live" : "tag"}>

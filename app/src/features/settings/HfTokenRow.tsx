@@ -9,12 +9,13 @@ import {
   type Endpoint, type HfStatus, deleteHfToken, getHfStatus, recheckHf,
 } from "../../lib/api";
 import { errorText } from "../../lib/format";
+import { OS_TEXT } from "../../lib/platform";
 import { Button } from "../../ui/Button";
 import { CheckFailure, HfTokenForm } from "../hf/HfTokenForm";
 import { DiarizationTip, HfTokenTip } from "./tips";
 
 const SOURCE: Record<string, string> = {
-  keyring: "сохранён в диспетчере учётных данных Windows",
+  keyring: `сохранён в ${OS_TEXT.keyring}`,
   config: "сохранён в файле настроек",
   env: "из переменной среды HF_TOKEN",
 };

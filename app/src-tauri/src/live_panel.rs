@@ -565,7 +565,6 @@ pub fn open_live(app: &AppHandle) {
             .resizable(true)
             .maximizable(true)
             .decorations(false)
-            .transparent(true)
             // Тень Windows у окна без рамки — светлая каёмка вокруг
             // скруглённой панели; без тени и рамка для растягивания — по
             // всем четырём краям.
@@ -575,6 +574,12 @@ pub fn open_live(app: &AppHandle) {
             // находят на панели задач.
             .skip_taskbar(geometry.pinned)
             .focused(false);
+    // Прозрачное окно на macOS требует частного API (фича macos-private-api):
+    // там панель непрозрачная — углы квадратные, остальное то же.
+    #[cfg(not(target_os = "macos"))]
+    {
+        builder = builder.transparent(true);
+    }
     let screens: Vec<Screen> = app
         .available_monitors()
         .map(|monitors| monitors.iter().map(Screen::of).collect())

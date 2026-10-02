@@ -17,13 +17,28 @@ authors = [
 # для разработки: pip install -e .[engine-cuda,gigaam].
 # pycaw — второй сигнал детектора звонка (WASAPI-сессии); psutil объявлен явно:
 # на нём держатся проверка живости клиента конференций и отпечаток процесса в tray.lock.
+# macOS (экспериментально): вместо pyaudiowpatch и pycaw — sounddevice (колесо
+# несёт PortAudio), системный звук и сигналы детектора — помощник meet-audiotap;
+# pystray там не нужен (меню — у оболочки).
 dependencies = [
-    "pystray", "pillow", "pycaw", "psutil",
-    "pyaudiowpatch", "numpy", "scipy", "aiohttp", "claude-agent-sdk", "keyring",
+    "pystray; sys_platform == 'win32'", "pillow",
+    "pycaw; sys_platform == 'win32'", "psutil",
+    "pyaudiowpatch; sys_platform == 'win32'",
+    "sounddevice>=0.4.6; sys_platform == 'darwin'",
+    "numpy", "scipy", "aiohttp", "claude-agent-sdk", "keyring",
 ]
 
 [project.optional-dependencies]
 engine-cpu = [
+    "faster-whisper>=1.2,<2",
+    "av>=11,<19",
+    "pyannote.audio>=4.0,<5",
+    "transformers>=4.40,<6",
+    "scipy>=1.11",
+]
+# Apple Silicon (macOS, экспериментально): те же пакеты, что у CPU; torch — с
+# PyPI отдельным шагом (engine.uv_steps, профиль mac).
+engine-mac = [
     "faster-whisper>=1.2,<2",
     "av>=11,<19",
     "pyannote.audio>=4.0,<5",

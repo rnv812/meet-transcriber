@@ -6,14 +6,15 @@
  * банковский `round()`); тест сверяет строки с выводом Python.
  */
 
-export type Profile = "cuda" | "cpu";
+/** «mac» — Apple Silicon (экспериментально): движок процессора, как «cpu». */
+export type Profile = "cuda" | "cpu" | "mac";
 
 /**
  * Время расшифровки / длительность записи для движка профиля по умолчанию
  * (`engine.DEFAULT_BACKEND`): видеокарта — Whisper (замер 30.09.2026),
  * процессор — GigaAM (замер 02.10.2026).
  */
-export const SPEED_FACTOR: Record<Profile, number> = { cuda: 0.22, cpu: 0.48 };
+export const SPEED_FACTOR: Record<Profile, number> = { cuda: 0.22, cpu: 0.48, mac: 0.48 };
 
 /** `round()` Python: ровно половина — к чётному. */
 export function pyRound(x: number): number {

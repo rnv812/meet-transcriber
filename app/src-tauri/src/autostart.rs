@@ -19,6 +19,7 @@ use crate::resident;
 pub const AUTOSTART_ARG: &str = "--autostart";
 /// Выбор человека: `{"enabled": bool}` в папке данных.
 pub const CHOICE_FILE: &str = "autostart.json";
+#[cfg(windows)]
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
 /// Запуск при входе в систему: только трей, никаких окон — даже мастера.
