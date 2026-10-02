@@ -88,15 +88,15 @@ Meet — приложение для Windows, которое записывае�
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/library.png" alt="Библиотека записей и расшифровка с плеером"></td>
-    <td width="50%"><img src="docs/images/search.png" alt="Поиск по встречам и подсветка совпадений"></td>
+    <td width="50%"><img src="docs/images/library.png" alt="Карточка встречи: расшифровка с главами и типами реплик, плеер с главами и кривой важности"></td>
+    <td width="50%"><img src="docs/images/insights.png" alt="Наблюдения по встрече и фильтр реплик по типам"></td>
   </tr>
   <tr>
-    <td align="center">Библиотека, расшифровка и плеер</td>
-    <td align="center">Поиск по всем встречам</td>
+    <td align="center">Расшифровка с главами и плеер с кривой важности</td>
+    <td align="center">Наблюдения и фильтр по типам реплик</td>
   </tr>
   <tr>
-    <td><img src="docs/images/summary.png" alt="Итоги встречи с таблицей задач"></td>
+    <td><img src="docs/images/summary.png" alt="Итоги встречи: решения и таблица задач"></td>
     <td><img src="docs/images/agent.png" alt="Агент Claude Code в папке встречи"></td>
   </tr>
   <tr>
@@ -104,25 +104,32 @@ Meet — приложение для Windows, которое записывае�
     <td align="center">Агент в папке встречи</td>
   </tr>
   <tr>
-    <td><img src="docs/images/speakers.png" alt="Панель «Спикеры» с подсказками по голосу"></td>
-    <td><img src="docs/images/split.png" alt="Разделение спикера по голосу"></td>
+    <td><img src="docs/images/improve.png" alt="Окно «Улучшить расшифровку»: термины вместо записанных кириллицей"></td>
+    <td><img src="docs/images/categories.png" alt="Категории встреч и фильтр списка по категориям"></td>
   </tr>
   <tr>
-    <td align="center">Спикеры: подсказки по голосу</td>
-    <td align="center">Разделить спикера по голосу</td>
+    <td align="center">Улучшить расшифровку: «апи» → «API»</td>
+    <td align="center">Категории встреч и фильтр списка</td>
   </tr>
   <tr>
-    <td><img src="docs/images/voices.png" alt="База голосов"></td>
-    <td><img src="docs/images/settings-auto.png" alt="Программы звонков для автозаписи"></td>
+    <td><img src="docs/images/live-panel.png" alt="Живой ассистент: «Вам вопрос», подсказки, сводка и ответ по мере генерации"><br><br><img src="docs/images/live-collapsed.png" alt="Свёрнутая панель ассистента в одну строку" width="60%"></td>
+    <td><img src="docs/images/person-profile.png" alt="Профиль человека с моделью PCM, помеченной как гипотеза"></td>
   </tr>
   <tr>
-    <td align="center">База голосов</td>
-    <td align="center">Автозапись: программы и браузеры</td>
+    <td align="center">Живой ассистент: «Вам вопрос», подсказки, ответ по ходу; свёрнутая панель</td>
+    <td align="center">Профиль человека и модель PCM (гипотеза)</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/settings-analysis.png" alt="Настройки: анализ встречи"></td>
+    <td><img src="docs/images/analysis-offer.png" alt="Предложение включить автоматический анализ встречи после обновления"></td>
+  </tr>
+  <tr>
+    <td align="center">Настройки анализа встречи</td>
+    <td align="center">После обновления с 0.2.x: включить анализ?</td>
   </tr>
 </table>
 
-<sub>На скриншотах — выдуманные встречи и люди. Снимки сделаны в версии 0.2:
-в 0.3 у карточки встречи другие вкладки, кнопки и плеер.</sub>
+<sub>На скриншотах — выдуманные встречи и люди.</sub>
 
 ## Установка
 
@@ -137,7 +144,7 @@ Meet — приложение для Windows, которое записывае�
 3. Программа ставится в `%LOCALAPPDATA%\meet`, ярлык появляется в меню «Пуск»
    и на рабочем столе.
 
-<img src="docs/images/wizard.png" alt="Мастер первого запуска: установка движка" width="420" align="right">
+<img src="docs/images/wizard.png" alt="Мастер первого запуска: установка движка по этапам" width="420" align="right">
 
 **Мастер первого запуска** проведёт через несколько шагов:
 
