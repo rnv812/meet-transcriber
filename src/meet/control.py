@@ -94,7 +94,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     live_start() -> dict                  живой режим (409 без провайдера, 400 при записи)
     live_stop() -> dict                   остановить живой режим (ответ сразу)
     live_ask(body) / live_task(body)      прокси к /ask и /task ассистента
-    live_hint(body) -> dict               закрепить, открепить, скрыть подсказку
+    live_hint(body) -> dict               закрепить, открепить, скрыть, вернуть подсказку
     live_events(last_event_id) -> stream  поток ассистента: get(timeout), close()
 """
 

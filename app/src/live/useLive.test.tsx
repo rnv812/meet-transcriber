@@ -165,7 +165,7 @@ test("действие с подсказкой видно сразу; не до�
   await act(async () => { await result.current.hint("h2", "pin"); });
   expect(result.current.hints[0]!.pinned).toBe(false);
   // Ошибка — у подсказки, а не во вкладке «Спросить».
-  expect(result.current.hintError).toEqual({ id: "h2", text: "Ассистент не запущен" });
+  expect(result.current.hintError).toEqual({ id: "h2", text: "Ассистент не запущен", action: "pin" });
   expect(result.current.askError).toBeNull();
 });
 

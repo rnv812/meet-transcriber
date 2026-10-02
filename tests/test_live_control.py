@@ -922,6 +922,61 @@ def test_live_hint_validates(resident, monkeypatch):
     assert calls == [("h12", "unpin")]
 
 
+def test_live_hint_forwards_restore(resident, monkeypatch):
+    """«Вернуть» в панели: резидент пропускает restore к ассистенту."""
+    calls = []
+    monkeypatch.setattr(resident.live, "hint", lambda *a: calls.append(a) or {"ok": True, "changed": True})
+    assert resident.live_hint({"id": "h3", "action": "restore"}) == {"ok": True, "changed": True}
+    assert calls == [("h3", "restore")]
+
+
+def test_restore_reaches_the_assistant_through_the_window_route(resident, monkeypatch, tmp_path):
+    """Весь путь окна: резидент (`/live/hint`) → ребёнок (`/hint`, assist.web) →
+    LiveState: скрыть и вернуть подсказку."""
+    import asyncio
+    import threading
+
+    from aiohttp import web
+
+    from meet.assist.app import AssistState
+    from meet.assist.bus import TranscriptBus
+    from meet.assist.live_state import LiveState
+    from meet.assist.web import build_app
+
+    state_live = LiveState()
+    state_live.apply({"ops": [{"op": "add", "section": "hints", "kind": "risk", "text": "Нет владельца",
+                               "why": "", "t": "00:00:05"}]})
+    state = AssistState(bus=TranscriptBus(), live=state_live, glossary="", vault=None, cwd=tmp_path)
+    loop = asyncio.new_event_loop()
+    ready = threading.Event()
+    box = {}
+
+    def serve():
+        asyncio.set_event_loop(loop)
+        runner = web.AppRunner(build_app(state))
+        loop.run_until_complete(runner.setup())
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        loop.run_until_complete(site.start())
+        box["port"] = runner.addresses[0][1]
+        box["runner"] = runner
+        ready.set()
+        loop.run_forever()
+        loop.run_until_complete(runner.cleanup())
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    assert ready.wait(10)
+    try:
+        monkeypatch.setattr(resident.live, "_active_port", lambda: box["port"])
+        assert resident.live_hint({"id": "h1", "action": "dismiss"}) == {"ok": True, "changed": True}
+        assert state_live.to_dict()["hints"] == []
+        assert resident.live_hint({"id": "h1", "action": "restore"}) == {"ok": True, "changed": True}
+        assert [h["id"] for h in state_live.to_dict()["hints"]] == ["h1"]
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(10)
+
+
 def test_live_ask_forwards_quick_and_since(resident, monkeypatch):
     calls = []
     monkeypatch.setattr(resident.live, "ask", lambda *a: calls.append(a) or {"answer": "ок"})

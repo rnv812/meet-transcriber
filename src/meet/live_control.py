@@ -84,7 +84,8 @@ ERROR_MAX_CHARS = 300
 # Быстрые действия вопросов (`meet.assist.qa.QUICK`): «Что я пропустил?»,
 # «Какие решения уже приняты?», «Что мне ответить?», «Кратко за 1 минуту».
 QUICK_ACTIONS = ("missed", "decisions", "reply", "brief")
-HINT_ACTIONS = ("pin", "unpin", "dismiss")
+# `restore` — «Вернуть» в панели сразу после «Скрыть» (assist.live_state.restore).
+HINT_ACTIONS = ("pin", "unpin", "dismiss", "restore")
 
 
 class LiveError(Exception):

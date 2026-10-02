@@ -98,8 +98,10 @@ function useUndoDismiss(live: Live) {
     if (timer.current) clearTimeout(timer.current);
     setHidden(hint.id);
     timer.current = setTimeout(clear, UNDO_MS);
+    // «Вернуть» — только если скрытие дошло и что-то изменило: подсказку уже
+    // убрал ассистент (false) или запрос не дошёл (без ответа) — возвращать нечего.
     void Promise.resolve(liveRef.current.hint(hint.id, "dismiss")).then((changed) => {
-      if (changed === false) setHidden((cur) => (cur === hint.id ? null : cur));
+      if (changed !== true) setHidden((cur) => (cur === hint.id ? null : cur));
     });
   }, [clear]);
   const undo = useCallback(() => {
@@ -119,7 +121,9 @@ export const ASK_STAY_MS = 60_000;
  * когда фокус внутри, пока ждём ответ и ASK_STAY_MS после него — чтобы ответ
  * не свернулся, едва дописавшись.
  */
-function AskSection({ waiting, answers, children }: { waiting: boolean; answers: number; children: ReactNode }) {
+function AskSection({ waiting, answers, failed, children }: {
+  waiting: boolean; answers: number; failed: boolean; children: ReactNode;
+}) {
   const [focused, setFocused] = useState(false);
   const [recent, setRecent] = useState(false);
   const was = useRef({ waiting, answers });
@@ -132,7 +136,8 @@ function AskSection({ waiting, answers, children }: { waiting: boolean; answers:
       return () => clearTimeout(t);
     }
   }, [waiting, answers]);
-  const open = focused || waiting || recent;
+  // Вопрос не дошёл — развернуть: ошибку видно, и вопрос можно повторить.
+  const open = focused || waiting || recent || failed;
   return (
     <section className={`live-ws__ask${open ? "" : " live-ws__ask--compact"}`} aria-label="Спросить"
       onFocus={() => setFocused(true)}
@@ -207,7 +212,8 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }
             <h3 className="live-ws__title">Сводка</h3>
             <div className="live-ws__scroll">{summary}</div>
           </section>
-          <AskSection waiting={live.asking || live.qa.some((q) => q.pending)} answers={live.qa.length}>{ask}</AskSection>
+          <AskSection waiting={live.asking || live.qa.some((q) => q.pending)} answers={live.qa.length}
+            failed={!!live.askError || live.qa.some((q) => !!q.error && !q.pending)}>{ask}</AskSection>
         </div>
         {undoBar}
       </div>

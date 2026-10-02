@@ -230,6 +230,33 @@ def test_restore_right_after_dismiss_brings_the_hint_back():
     assert s.restore("h404") is False
 
 
+def test_restored_hint_is_not_dropped_automatically_for_a_while():
+    from meet.assist.live_state import RESTORED_HOLD_S
+
+    clock = Clock()
+    s = _state(clock=clock, max_hints=1)
+    s.apply({"ops": [_hint("Вас спросили про сроки", kind="ask_you")]})
+    s.dismiss("h1")
+    s.restore("h1")
+    # Лимит одна подсказка: новая не вытесняет только что возвращённую,
+    # и «устаревший» «Вам вопрос» сам не уходит.
+    s.apply({"ops": [_hint("Срок без ответственного у миграции", kind="risk")]})
+    assert "h1" in [h["id"] for h in s.to_dict()["hints"]]
+    assert s.resolve("h1") is False
+    clock.t += RESTORED_HOLD_S + 1
+    assert s.resolve("h1") is True
+
+
+def test_manual_action_ends_the_restored_hold():
+    s = _state()
+    s.apply({"ops": [_hint("Вас спросили про сроки", kind="ask_you")]})
+    s.dismiss("h1")
+    s.restore("h1")
+    s.pin("h1", True)
+    s.pin("h1", False)
+    assert s.resolve("h1") is True  # человек уже распорядился сам — защита снята
+
+
 def test_restore_is_only_possible_shortly_after_dismiss():
     from meet.assist.live_state import RESTORE_S
 

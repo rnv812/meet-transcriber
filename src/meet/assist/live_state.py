@@ -71,6 +71,9 @@ DEFAULT_MAX_HINTS = 5
 # Сколько секунд после «Скрыть» подсказку можно вернуть («Вернуть» в панели —
 # пять секунд; запас на задержку сети и окна).
 RESTORE_S = 30.0
+# Возвращённую подсказку столько секунд не убирают сами (лимит, «Вам вопрос»
+# устарел): человек только что попросил её обратно. Раньше — его же действие.
+RESTORED_HOLD_S = 60.0
 
 # Похожесть текстов: посимвольно или по набору слов.
 SIMILAR_RATIO = 0.9
@@ -198,6 +201,8 @@ class LiveState:
         self._dismissed: dict[str, str] = {}   # id -> текст (не предлагать снова)
         # Скрытые недавно — целиком, для «Вернуть» в панели (RESTORE_S секунд).
         self._recent_dismissed: dict[str, tuple[float, dict]] = {}
+        # Возвращённые «Вернуть»: id -> до какого времени их не убирать сами.
+        self._held_until: dict[str, float] = {}
         self._retired: set[str] = set()        # ушли (удалены, вытеснены, скрыты)
         self._next = {p: 1 for p in PREFIX.values()}
         self.version = 0
@@ -417,7 +422,7 @@ class LiveState:
             # «Вам вопрос» — не больше MAX_URGENT: свежий вопрос вытесняет
             # самый старый незакреплённый.
             urgent = [h for h in self._hints.values() if h["kind"] == URGENT]
-            loose = sorted((h for h in urgent if not h["pinned"]),
+            loose = sorted((h for h in urgent if not self._held(h)),
                            key=lambda h: (h["created_at"], int(h["id"][1:])))
             while loose and len(urgent) >= MAX_URGENT:
                 oldest = loose.pop(0)
@@ -433,11 +438,15 @@ class LiveState:
         }
         return True
 
+    def _held(self, hint: dict) -> bool:
+        """Подсказку не убирают сами: закреплена или только что возвращена."""
+        return hint["pinned"] or self._held_until.get(hint["id"], 0.0) > self._clock()
+
     def _enforce_cap(self) -> bool:
         """Сверх лимита — убрать наименее ценные незакреплённые (вид, потом давность)."""
         changed = False
         while len(self._hints) > self.max_hints:
-            loose = [h for h in self._hints.values() if not h["pinned"]]
+            loose = [h for h in self._hints.values() if not self._held(h)]
             if not loose:
                 break
             worst = min(loose, key=lambda h: (KIND_VALUE[h["kind"]], h["updated_at"], h["id"]))
@@ -449,6 +458,7 @@ class LiveState:
     # --- действия человека ---
 
     def pin(self, hint_id: str, pinned: bool = True) -> bool:
+        self._held_until.pop(hint_id, None)  # дальше решает само закрепление
         hint = self._hints.get(hint_id)
         if hint is None or hint["pinned"] == bool(pinned):
             return False
@@ -459,6 +469,7 @@ class LiveState:
         return True
 
     def dismiss(self, hint_id: str) -> bool:
+        self._held_until.pop(hint_id, None)
         hint = self._hints.pop(hint_id, None)
         if hint is None:
             return False
@@ -479,6 +490,7 @@ class LiveState:
         self._dismissed.pop(hint_id, None)
         self._retired.discard(hint_id)
         self._hints[hint_id] = entry[1]
+        self._held_until[hint_id] = self._clock() + RESTORED_HOLD_S
         self.version += 1
         return True
 
@@ -530,7 +542,7 @@ class LiveState:
         ответили или который устарел): не скрыта человеком, просто ушла.
         Закреплённую не трогаем."""
         hint = self._hints.get(hint_id)
-        if hint is None or hint["pinned"]:
+        if hint is None or self._held(hint):
             return False
         del self._hints[hint_id]
         self._retired.add(hint_id)
