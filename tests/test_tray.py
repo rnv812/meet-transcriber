@@ -909,8 +909,28 @@ def test_cancel_from_the_menu_asks_first(monkeypatch, tmp_path):
         return types.SimpleNamespace(start=lambda: None)
 
     monkeypatch.setattr(tray.threading, "Thread", run_now)
+    folder = ["D:/rec/a"]
+    monkeypatch.setattr(app, "_current_folder", lambda: folder[0])
     app._on_cancel_asked()
     assert stopped == []
     app._on_cancel_asked()
     assert stopped == [{"discard": True}]
     assert tray.CANCEL_QUESTION == "Удалить текущую запись? Записанное не сохранится."
+    # Пока вопрос висел, началась другая запись — «Да» ничего не удаляет.
+    def switch_then_yes():
+        folder[0] = "D:/rec/b"
+        return True
+
+    monkeypatch.setattr(tray, "_confirm_cancel", switch_then_yes)
+    app._on_cancel_asked()
+    assert stopped == [{"discard": True}]
+
+
+def test_second_cancel_question_is_not_opened(monkeypatch, tmp_path):
+    app = _app(monkeypatch, tmp_path)
+    app.recording = True
+    app._cancel_asking.set()
+    asked = []
+    monkeypatch.setattr(tray, "_confirm_cancel", lambda: asked.append(1) or True)
+    app._on_cancel_asked()
+    assert asked == []

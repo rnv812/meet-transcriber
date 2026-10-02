@@ -1593,6 +1593,33 @@ def test_agent_session_mark_is_written_and_listed(control_state, tmp_path, monke
     assert control_state.agent_files(folder.name)["sessions"] == ["claude-code", "codex"]
 
 
+SID = "0b6f8a52-3c1d-4e2f-9a7b-1c2d3e4f5a6b"
+
+
+def test_claude_session_id_is_kept_and_returned_for_resume(control_state, tmp_path, monkeypatch):
+    """Новый сеанс Claude Code — с id от оболочки (`--session-id`); «Продолжить
+    прошлую» получает в ответе тот же id (`--resume <id>`), а не «последний
+    разговор в папке», который мог оставить кто-то другой."""
+    from meet import library
+
+    folder = _agent_folder(tmp_path, control_state, monkeypatch)
+    got = control_state.agent_context(folder.name, {"provider": "claude-code", "session": SID})
+    assert "session" not in got  # новый сеанс — отвечать нечем
+    assert library.read_meta(folder)["agent_sessions"]["claude-code"]["id"] == SID
+    got = control_state.agent_context(folder.name, {"provider": "claude-code", "resume": True})
+    assert got["session"] == SID
+    assert library.read_meta(folder)["agent_sessions"]["claude-code"]["id"] == SID
+    # Негодный id не пишется; Codex — без id (resume --last).
+    control_state.agent_context(folder.name, {"provider": "claude-code", "session": "x; rm"})
+    assert library.read_meta(folder)["agent_sessions"]["claude-code"]["id"] is None
+    assert "session" not in control_state.agent_context(
+        folder.name, {"provider": "claude-code", "resume": True})
+    # Метка ранней сборки (просто время) — сеанс есть, id нет.
+    library.write_meta(folder, {"agent_sessions": {"codex": 1.0}})
+    assert control_state.agent_files(folder.name)["sessions"] == ["codex"]
+    assert "session" not in control_state.agent_context(folder.name, {"provider": "codex", "resume": True})
+
+
 def test_agent_files_without_transcript_is_empty(control_state, tmp_path, monkeypatch):
     folder = _saved_folder(tmp_path)
     monkeypatch.setattr(control_state, "_root", lambda: folder.parent)

@@ -67,7 +67,7 @@ def test_claude_ok_via_check_auth(monkeypatch):
     monkeypatch.setattr(detect, "find_claude", lambda: "C:/claude.exe")
     monkeypatch.setattr(detect, "logged_in", lambda name, p: (True, None))
 
-    async def fake_check_auth(proxy=None):
+    async def fake_check_auth(proxy=None, model=None):
         return None
 
     monkeypatch.setattr(claude, "check_auth", fake_check_auth)
@@ -105,7 +105,7 @@ def test_claude_check_uses_proxy_setting(monkeypatch):
     from meet.llm import claude
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    settings.patch({"llm": {"proxy": "http://10.1.1.1:3128"}})
+    settings.patch({"llm": {"proxy": "http://10.1.1.1:3128", "model": "opus"}})
     monkeypatch.setattr(detect, "find_claude", lambda: "C:/claude.exe")
     monkeypatch.setattr(detect, "logged_in", lambda name, p: (True, None))
     seen = {}
@@ -115,4 +115,4 @@ def test_claude_check_uses_proxy_setting(monkeypatch):
 
     monkeypatch.setattr(claude, "check_auth", fake_check_auth)
     assert asyncio.run(check.check("claude-code"))["ok"] is True
-    assert seen == {"proxy": "http://10.1.1.1:3128"}
+    assert seen == {"proxy": "http://10.1.1.1:3128", "model": "opus"}  # «Проверить» — моделью из настроек

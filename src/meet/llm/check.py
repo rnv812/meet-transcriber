@@ -23,6 +23,13 @@ def _proxy() -> str:
     return settings.load().llm.proxy
 
 
+def _model() -> str:
+    """`llm.model` из настроек: «Проверить» Claude Code — той же моделью, что работа."""
+    from meet import settings
+
+    return settings.load().llm.model
+
+
 def _result(provider: str, error: str | None) -> dict:
     return {"ok": error is None, "error": error, "provider": provider}
 
@@ -37,7 +44,7 @@ async def _check_claude() -> str | None:
     ok, why = detect.logged_in("claude-code", path)
     if not ok:
         return f"не авторизован: {why}"
-    return await claude.check_auth(proxy=_proxy())
+    return await claude.check_auth(proxy=_proxy(), model=_model())
 
 
 async def _check_codex() -> str | None:

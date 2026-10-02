@@ -322,6 +322,8 @@ class TrayApp:
         # пустой цикл, так что на работу без UI она не влияет.
         self.bus = events.EventBus()
         self.log = _BusLog(watch.WatchLog(watch.default_log_path()), self.bus)
+        # Вопрос «Удалить текущую запись?» на экране (см. _on_cancel_asked).
+        self._cancel_asking = threading.Event()
         self.watcher = watch.Watcher(self.cfg["grace_minutes"] * 60.0)
         self.signals = watch.Signals(
             self.cfg["processes"], log=self.log,
@@ -537,10 +539,21 @@ class TrayApp:
 
     def _on_cancel_asked(self, icon=None, item=None) -> None:
         """«Отменить запись…» из меню: сначала вопрос (в своём потоке —
-        цикл иконки не ждёт ответа), отмена — только по «Да»."""
+        цикл иконки не ждёт ответа), отмена — только по «Да» и только той
+        записи, о которой спрашивали (пока вопрос висел, автозапись могла
+        закончить её и начать новую). Второй вопрос поверх первого не
+        открывается."""
+        if not self.recording or self._cancel_asking.is_set():
+            return
+        self._cancel_asking.set()
+        asked = self._current_folder()
+
         def ask() -> None:
-            if self.recording and _confirm_cancel():
-                self._on_cancel()
+            try:
+                if _confirm_cancel() and self.recording and self._current_folder() == asked:
+                    self._on_cancel()
+            finally:
+                self._cancel_asking.clear()
 
         threading.Thread(target=ask, name="meet-cancel-ask", daemon=True).start()
 

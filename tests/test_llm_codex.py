@@ -189,3 +189,20 @@ def test_codex_child_env_has_no_session_markers(monkeypatch):
     assert os.environ["CODEX_SANDBOX_NETWORK_DISABLED"] == "1"
     # Codex exec — без сохранения сеанса, как и раньше (--ephemeral).
     assert "--ephemeral" in FakePopen.calls[0].cmd
+
+
+def test_every_background_codex_call_is_ephemeral(monkeypatch):
+    """Вкладка «Агент» продолжает Codex через `codex resume --last`: это
+    безопасно, только пока фоновые вызовы Codex не сохраняют сеансов. Все они
+    (итоги, анализ, названия, профили, живой ассистент, «Проверить») идут
+    через codex.run → `codex exec --ephemeral`."""
+    from meet.llm import check
+
+    _setup(monkeypatch)
+    monkeypatch.setattr(check.detect, "find_codex", lambda: "C:/codex.exe")
+    monkeypatch.setattr(check.detect, "logged_in", lambda name, path: (True, None))
+    _run()
+    asyncio.run(check._check_codex())
+    assert len(FakePopen.calls) == 2
+    for call in FakePopen.calls:
+        assert call.cmd[1] == "exec" and "--ephemeral" in call.cmd

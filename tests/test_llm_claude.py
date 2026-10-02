@@ -136,8 +136,7 @@ def test_check_auth_passes_proxy(monkeypatch):
 
 def test_run_drops_inherited_session_markers_but_keeps_auth(monkeypatch):
     """Резидент запустили из сеанса Claude Code: вызов модели — свой сеанс,
-    не «вложенный» (с CLAUDE_CODE_CHILD_SESSION Claude не сохраняет сеанс, и
-    `resume` живого ассистента не нашёл бы его). Вход и настройки остаются."""
+    не «вложенный» в чужой. Вход и настройки остаются."""
     for name, value in (("CLAUDE_CODE_CHILD_SESSION", "1"), ("CLAUDECODE", "1"),
                         ("CLAUDE_CODE_SSE_PORT", "45123"), ("CLAUDE_CODE_ENTRYPOINT", "cli"),
                         ("CLAUDE_CODE_MESSAGING_TOKEN", "m9-test-token"),
@@ -163,5 +162,32 @@ def test_run_drops_inherited_session_markers_but_keeps_auth(monkeypatch):
         assert marker not in upper, marker
     assert seen["environ"]["ANTHROPIC_BASE_URL"] == "https://gateway.example.invalid"
     assert seen["environ"]["CLAUDE_CONFIG_DIR"] == "D:/m9-test/claude"
-    # Сохранение сеанса ничем не выключено.
+    # Сохранение выключает флаг CLI (см. ниже), а не переменные окружения.
     assert not any("PERSIST" in k or "SKIP_PROMPT_HISTORY" in k for k in upper)
+
+
+def test_background_calls_do_not_persist_sessions(monkeypatch):
+    """Фоновые вызовы (итоги, анализ, названия, профили, тики и вопросы
+    живого ассистента — все идут через claude.run) не сохраняют сеанс: в
+    командной строке CLI, которую собирает SDK, есть --no-session-persistence,
+    а session_id не возвращается (такой сеанс не продолжить)."""
+    from claude_agent_sdk import ResultMessage
+    from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
+
+    seen = {}
+    result = ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
+                           num_turns=1, session_id="sid-1", result="ответ")
+
+    def fake_query(*, prompt, options):
+        seen["cmd"] = SubprocessCLITransport(prompt=prompt, options=options)._build_command()
+
+        async def gen():
+            yield result
+        return gen()
+
+    monkeypatch.setattr(claude_agent_sdk, "query", fake_query)
+    monkeypatch.setattr(claude, "find_cli", lambda: "C:/claude.exe")
+    reply = asyncio.run(claude.run("привет", system_prompt="s", model="opus"))
+    assert "--no-session-persistence" in seen["cmd"]
+    assert seen["cmd"][seen["cmd"].index("--model") + 1] == "opus"
+    assert reply.text == "ответ" and reply.session_id is None
