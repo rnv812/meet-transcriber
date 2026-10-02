@@ -12,18 +12,20 @@
  * приходит пропом `insert`: вкладка запускает агента, если он не запущен, и
  * вставляет ссылку в поле ввода так же, как вставку из буфера (`term.paste`),
  * всегда одной строкой (`pasteLine`: ни \r, ни \n, ни ESC — Enter вставка не
- * нажмёт). Вставка ждёт, пока агент готов: включил режим bracketed paste,
- * вывод затих, на экране не вопрос первого запуска («доверять ли папке» —
- * тогда подсказка «Подтвердите запуск агента…»). Признаков готовности нет —
- * кнопка «Вставить реплику». Агента нет, не запустился или закрылся до
- * вставки — ссылку показывает уведомление, её можно скопировать.
+ * нажмёт). Работающему агенту — сразу. Агента запускает сама просьба — ждём,
+ * пока он впервые готов: включил режим bracketed paste, вывод затих, внизу
+ * экрана не диалог первого запуска («доверять ли папке» — тогда подсказка
+ * «Подтвердите запуск агента…» с «Вставить сейчас»). Срок от щелчка не
+ * сдвигается: после него — «Вставить ссылку». «Отменить», неудачный запуск,
+ * выход агента, отсутствие агента — ссылку показывает уведомление, её можно
+ * скопировать.
  */
 
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import type { ITerminalOptions, Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { pasteLine } from "../../lib/agentRef";
+import { joinPrompts, pasteLine } from "../../lib/agentRef";
 import { getAgentContext, type Endpoint } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import {
@@ -39,48 +41,59 @@ import "./agent.css";
 /** Ссылка для поля ввода агента (lib/agentRef). Новый объект — новая просьба. */
 export type AgentInsert = { text: string };
 
-/** Сколько ждать признаков готовности агента; дальше — кнопка «Вставить реплику». */
+/**
+ * Срок от щелчка ✦ (не сдвигается): дальше в полосе — «Вставить ссылку» и
+ * «Копировать», что бы ни было на экране. Готовность после срока всё равно
+ * вставляет ссылку сама.
+ */
 export const PASTE_WAIT_MS = 15_000;
 /** Вывод агента затих на столько — экран дорисован, можно вставлять. */
 export const QUIET_MS = 800;
 const POLL_MS = 100;
+/** Сколько нижних строк экрана смотреть: там поле ввода и диалог первого запуска. */
+export const CONFIRM_ROWS = 12;
 
 /**
- * Экран, куда вставлять нельзя: вопрос первого запуска или подтверждение.
- * Тексты — из самих программ (строки в claude.exe и codex.exe, 2026-10):
+ * Диалог первого запуска агента в папке, куда вставлять нельзя. Проверяется
+ * только при запуске, который начала сама просьба, и только пока сеанс ещё ни
+ * разу не был готов; только нижние CONFIRM_ROWS строк экрана. Фразы — точные,
+ * из самих программ (строки в claude.exe и codex.exe, 2026-10), без общих слов
+ * вроде «login to» или «(y/n)», что бывают и в разговоре:
  * Claude Code — «Accessing workspace: … Quick safety check: Is this a project
- * you created or one you trust?», «Yes, I trust this folder», «No, exit»,
- * выбор темы и входа; прежние версии — «Do you trust the files in this
- * folder?», «Yes, proceed». Codex — «Trust this folder? … Continue only if you
- * trust these files», «Press Enter to continue», «Yes, continue anyway»,
- * «Allow Codex to work in this folder…». Общие — «(y/n)».
+ * you created or one you trust?», «Yes, I trust this folder», выбор темы и
+ * способа входа; прежние версии — «Do you trust the files in this folder?».
+ * Codex — «Trust this folder? Codex can read, edit, and run files here…»,
+ * «Continue only if you trust these files», «Allow Codex to work in this folder».
  */
 export const CONFIRM_SCREEN = new RegExp([
-  "quick safety check", "accessing workspace", "one you trust", "if you trust", "yes, (i trust|continue)",
-  "do you trust", "trust (the|this|these) (files|folder|directory|workspace)", "yes,? proceed", "no,? exit",
-  "allow codex", "require approval", "approval (of|for|policy)", "press enter to (continue|confirm)",
-  "enter to confirm", "select login method", "choose the text style", "sign in with", "log ?in to",
-  "\\((y/n|yes/no)\\)", "\\[(y/n|yes/no)\\]",
+  "quick safety check", "is this a project you created or one you trust", "yes, i trust this folder",
+  "do you trust the files in this folder", "trust this folder[?] codex", "continue only if you trust these files",
+  "allow codex to work in this folder", "choose the text style that looks best", "select login method",
 ].join("|"), "i");
 
-/** Видимая часть экрана терминала — текстом (для CONFIRM_SCREEN). */
-function screenText(t: Terminal): string {
+/** Нижние строки экрана терминала — текстом (для CONFIRM_SCREEN). */
+function bottomText(t: Terminal): string {
   try {
     const buf = t.buffer.active;
     const lines: string[] = [];
-    for (let i = buf.viewportY; i < buf.viewportY + t.rows; i++) {
+    const end = buf.viewportY + t.rows;
+    for (let i = Math.max(buf.viewportY, end - CONFIRM_ROWS); i < end; i++) {
       lines.push(buf.getLine(i)?.translateToString(true) ?? "");
     }
-    return lines.join("\n");
+    return lines.join(" ");
   } catch {
     return "";
   }
 }
 
-/** Ссылка, ждущая вставки, для какой записи и номер просьбы. */
-type Pending = { text: string; id: string; seq: number };
+/**
+ * Ссылка, ждущая вставки: для какой записи, номер просьбы, когда был первый
+ * щелчок (срок не сдвигается) и запустила ли агента сама просьба (тогда —
+ * проверка диалога первого запуска).
+ */
+type Pending = { text: string; id: string; seq: number; at: number; cold: boolean };
 type PendView = "waiting" | "confirm" | "manual";
-type UnsentReason = "browser" | "none" | "nothing" | "failed" | "exited";
+type UnsentReason = "browser" | "none" | "nothing" | "failed" | "exited" | "cancelled";
 type Unsent = { text: string; id: string; reason: UnsentReason };
 
 const UNSENT_TEXT: Record<UnsentReason, string> = {
@@ -89,6 +102,7 @@ const UNSENT_TEXT: Record<UnsentReason, string> = {
   nothing: "Расшифровки пока нет, агенту нечего дать — ссылка не вставлена. Её можно скопировать.",
   failed: "Агент не запустился — ссылка не вставлена. Её можно скопировать и вставить после запуска.",
   exited: "Агент завершил работу раньше, чем ссылка была вставлена. Её можно скопировать.",
+  cancelled: "Вставка отменена. Ссылку можно скопировать.",
 };
 
 export type AgentProvider = { id: string; label: string };
@@ -197,6 +211,38 @@ function contextText(ctx: Context): string {
   return `Контекст: ${ctx.files.join(" · ")}${ctx.live ? " — черновая лента живого режима" : ""}`;
 }
 
+const PENDING_TEXT: Record<PendView, string> = {
+  waiting: "Ссылка будет вставлена в поле ввода, когда агент будет готов.",
+  confirm: "Подтвердите запуск агента — ссылка будет вставлена после.",
+  manual: "Агент пока не сообщил, что готов принять текст. Вставьте ссылку, когда поле ввода будет видно, или скопируйте её.",
+};
+
+/** Полоса над терминалом: ссылка ждёт вставки. */
+function PendingStrip({ text, view, canInsert, onInsert, onCancel }: {
+  text: string;
+  view: PendView;
+  canInsert: boolean;
+  onInsert: () => void;
+  onCancel: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(text.trimEnd()).then(() => setCopied(true)).catch(() => {});
+  };
+  return (
+    <div className="agent__pending" role="status" aria-label="Ссылка ждёт вставки">
+      <span>{PENDING_TEXT[view]}</span>
+      {view !== "waiting" && (
+        <Button variant={view === "manual" ? "primary" : "default"} onClick={onInsert} disabled={!canInsert}>
+          {view === "confirm" ? "Вставить сейчас" : "Вставить ссылку"}
+        </Button>
+      )}
+      <Button onClick={copy}>{copied ? "Скопировано" : "Копировать"}</Button>
+      <button type="button" className="link-btn" onClick={onCancel}>Отменить</button>
+    </div>
+  );
+}
+
 /** Ссылка не вставлена (агента нет, не запустился, закрылся): её можно скопировать. */
 function UnsentNote({ text, reason, onOpenSettings, onClose }: {
   text: string;
@@ -287,6 +333,12 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
   const setPending = useCallback((p: Pending | null) => { pending.current = p; setPend(p); }, []);
   /** Что видно в полосе ожидания: ждём агента, ждём подтверждения, вставить вручную. */
   const [pendView, setPendView] = useState<PendView>("waiting");
+  /** Срок от первого щелчка вышел: кнопки «Вставить ссылку», «Копировать». */
+  const [overdue, setOverdue] = useState(false);
+  /** Сеанс хоть раз был готов принять текст: диалог первого запуска больше не проверяется. */
+  const sessionReady = useRef(false);
+  /** Этап сейчас — для просьбы: застала она работающего агента или нет. */
+  const phaseNow = useRef<Phase>("idle");
   const seq = useRef(0);
   const handled = useRef<AgentInsert | null>(null);
   /** Для какой просьбы агент уже запускался сам: упавший запуск не повторяется по кругу. */
@@ -326,6 +378,7 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
       return;
     }
     session.current = null;
+    sessionReady.current = false;
     term.current?.write(EXIT_LINE);
     setCode(e.code);
     setPhase("exited");
@@ -436,6 +489,7 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
         return;
       }
       session.current = sid;
+      sessionReady.current = false;
       // Запуск обновил файлы встречи — строка «Контекст» тоже.
       loadContext();
       lastOutput.current = Date.now();
@@ -453,15 +507,22 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
     }
   };
 
+  phaseNow.current = phase;
   // Просьба «Спросить агента»: ссылка ждёт вставки; одна и та же просьба — один раз.
   // Несколько просьб, пока агент не готов, — все ссылки подряд, ни одна не теряется.
   useEffect(() => {
     if (!insert || insert === handled.current) return;
     handled.current = insert;
     if (!insert.text) return;
-    const before = pending.current?.id === id ? pending.current.text.trimEnd() : "";
-    setPending({ text: before ? `${before}\n${insert.text}` : insert.text, id, seq: ++seq.current });
-    setPendView("waiting");
+    const prev = pending.current?.id === id ? pending.current : null;
+    // Агент ещё не работает — эту просьбу запустит (или дождётся) запуск: проверка
+    // диалога первого запуска. Работающему сеансу ссылка вставляется сразу.
+    const cold = phaseNow.current !== "running";
+    setPending({
+      text: prev ? joinPrompts([prev.text, insert.text]) : insert.text, id, seq: ++seq.current,
+      at: prev?.at ?? Date.now(), cold: (prev?.cold ?? false) || cold,
+    });
+    if (!prev) { setPendView("waiting"); setOverdue(false); }
     setUnsent(null);
     loadContext();
     onTaken?.();
@@ -499,32 +560,31 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
     t.focus();
   }, [id, setPending]);
 
-  // Сеанс работает — вставка, когда агент готов принять текст: включил режим
-  // вставки, вывод затих на QUIET_MS, и на экране не вопрос первого запуска
-  // («доверять ли папке», вход, выбор темы). Такой вопрос виден — ждём, пока
-  // человек ответит. Признаков готовности нет за PASTE_WAIT_MS — кнопка
-  // «Вставить реплику»: вслепую не вставляем.
+  // Сеанс работает — вставка. Сеанс уже был готов или работал к моменту щелчка —
+  // сразу. Запуск начала сама просьба (cold) и сеанс ещё ни разу не был готов —
+  // ждём готовности: агент включил режим вставки, вывод затих на QUIET_MS, и в
+  // нижних строках экрана не диалог первого запуска (тогда — «Подтвердите
+  // запуск агента…»). Однажды готовый сеанс диалог больше не проверяет.
   const pendSeq = pend?.id === id ? pend.seq : 0;
   useEffect(() => {
     if (phase !== "running" || !pendSeq) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    let began = Date.now();
     const tick = () => {
       const t = term.current;
-      if (!t || !pending.current || !session.current) return;
-      const now = Date.now();
-      if (CONFIRM_SCREEN.test(screenText(t))) {
+      const p = pending.current;
+      if (!t || !p || !session.current) return;
+      if (!p.cold || sessionReady.current) {
+        deliver();
+        return;
+      }
+      if (CONFIRM_SCREEN.test(bottomText(t))) {
         setPendView("confirm");
-        began = now;
       } else {
         setPendView("waiting");
         const bracketed = t.modes?.bracketedPasteMode === true;
-        if (bracketed && now - lastOutput.current >= QUIET_MS) {
+        if (bracketed && Date.now() - lastOutput.current >= QUIET_MS) {
+          sessionReady.current = true;
           deliver();
-          return;
-        }
-        if (now - began >= PASTE_WAIT_MS) {
-          setPendView("manual");
           return;
         }
       }
@@ -533,6 +593,15 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
     tick();
     return () => clearTimeout(timer);
   }, [phase, pendSeq, deliver]);
+
+  // Один срок от первого щелчка, не сдвигается: дальше — «Вставить ссылку» и
+  // «Копировать», что бы ни было на экране (вставка одной строкой Enter не нажмёт).
+  const pendAt = pend?.id === id ? pend.at : 0;
+  useEffect(() => {
+    if (!pendAt) return;
+    const timer = setTimeout(() => setOverdue(true), Math.max(0, pendAt + PASTE_WAIT_MS - Date.now()));
+    return () => clearTimeout(timer);
+  }, [pendAt]);
 
   const stop = () => {
     const sid = session.current;
@@ -558,19 +627,12 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
     <UnsentNote text={unsent.text} reason={unsent.reason} onOpenSettings={onOpenSettings}
       onClose={() => setUnsent(null)} />
   );
-  // Ссылка ждёт вставки: видно, чего ждём; вручную — только когда признаков готовности нет.
+  // Ссылка ждёт вставки: видно, чего ждём. «Копировать» и «Отменить» — всегда
+  // («Отменить» не выбрасывает ссылку: она уходит в уведомление); «Вставить» —
+  // при диалоге первого запуска («сейчас») и после срока.
   const waiting = pend?.id === id && !unavailable && !nothing && (
-    <div className="agent__pending" role="status" aria-label="Ссылка ждёт вставки">
-      <span>
-        {pendView === "confirm" ? "Подтвердите запуск агента — реплика будет вставлена после."
-          : pendView === "manual" ? "Агент не сообщил, что готов принять текст. Вставьте реплику, когда поле ввода будет видно."
-            : "Реплика будет вставлена в поле ввода, когда агент будет готов."}
-      </span>
-      {pendView === "manual" && (
-        <Button variant="primary" onClick={deliver} disabled={phase !== "running"}>Вставить реплику</Button>
-      )}
-      <button type="button" className="link-btn" onClick={() => setPending(null)}>Отменить</button>
-    </div>
+    <PendingStrip text={pend.text} view={overdue ? "manual" : pendView} canInsert={phase === "running"}
+      onInsert={deliver} onCancel={() => giveUp("cancelled")} />
   );
   const past = endpoint ? <PastQuestions endpoint={endpoint} id={id} /> : null;
 

@@ -1,5 +1,5 @@
 import {
-  AGENT_INTENTS, REF_CAP, REF_TEXT_MAX, agentPrompt, cleanRefText, flatPrompt, pasteLine, plainMarkdown,
+  AGENT_INTENTS, REF_CAP, REF_TEXT_MAX, agentPrompt, cleanRefText, flatPrompt, joinPrompts, pasteLine, plainMarkdown,
 } from "./agentRef";
 
 test("ссылка на одну реплику: время, спикер, текст в кавычках; в конце — новая строка для вопроса", () => {
@@ -84,7 +84,19 @@ test("pasteLine: одна строка без \\r, \\n и ESC — и с наме
   // Текст не через agentPrompt (будущие вызовы) — всё равно без Enter и escape-последовательностей.
   const raw = pasteLine("строка\r\nвторая\x1b[201~\rтретья\x07");
   expect(controls.test(raw)).toBe(false);
-  expect(raw).toBe("строка  вторая третья");
+  expect(raw).toBe("строка вторая третья");
+});
+
+test("joinPrompts: несколько просьб — не больше REF_CAP ссылок в сумме, последние целиком", () => {
+  const block = (n: number, who: string) =>
+    agentPrompt({ refs: Array.from({ length: n }, (_, i) => ({ t: i, speaker: who, text: `т${i}` })) });
+  expect(joinPrompts([block(1, "А"), block(1, "Б")])).toBe(`${block(1, "А")}${block(1, "Б")}`);
+  const joined = joinPrompts([block(6, "А"), block(3, "Б"), block(5, "В")]);
+  const lines = joined.trimEnd().split("\n");
+  expect(lines[0]).toBe("…и ещё 6 раньше");
+  expect(lines.filter((l) => l.startsWith("[")).length).toBe(8);
+  expect(joined).not.toContain("А: ");
+  expect(pasteLine(joined)).not.toMatch(/\s{2,}/);
 });
 
 test("plainMarkdown: текст пункта без разметки", () => {
