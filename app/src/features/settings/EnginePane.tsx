@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { type Endpoint, type EngineState, getEngine } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { Button } from "../../ui/Button";
+import { Loading } from "../../ui/Loading";
 import { PathText, Row } from "./Section";
 
 export function EnginePane({ endpoint, onReinstall }: {
@@ -29,7 +30,8 @@ export function EnginePane({ endpoint, onReinstall }: {
   useEffect(() => { void load(); }, [load]);
 
   if (!engine) {
-    return <>{error && <p className="error">{error}</p>}<p className="muted">{tried ? "Нет данных." : "Загружаю…"}</p></>;
+    return <>{error && <p className="error">{error}</p>}
+      {tried ? <p className="muted">Нет данных.</p> : <Loading label="Проверяю движок…" />}</>;
   }
   return (
     <>

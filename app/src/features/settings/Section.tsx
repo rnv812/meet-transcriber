@@ -6,13 +6,17 @@ import { Button } from "../../ui/Button";
  * Строка настроек: слева подпись с пояснением (переносится, сжимается),
  * справа элемент управления (не шире 420 px). Тесно — элемент уходит под
  * подпись, а не наезжает на неё. `stack` — элемент всегда под подписью, во
- * всю ширину (списки вариантов, длинные поля). `help` — «?» после подписи.
+ * всю ширину (списки вариантов, длинные поля: пути, адреса, команды, id
+ * моделей). `help` — «?» после подписи.
  */
-export function Row({ label, hint, help, htmlFor, stack, children }: {
-  label: string; hint?: ReactNode; help?: ReactNode; htmlFor?: string; stack?: boolean; children: ReactNode;
+export function Row({ label, hint, help, htmlFor, stack, disabled, children }: {
+  label: string; hint?: ReactNode; help?: ReactNode; htmlFor?: string; stack?: boolean;
+  /** Строка зависит от выключенного переключателя: приглушена, пояснение — в `hint`. */
+  disabled?: boolean;
+  children: ReactNode;
 }) {
   return (
-    <div className={stack ? "srow srow--stack" : "srow"}>
+    <div className={`srow${stack ? " srow--stack" : ""}${disabled ? " srow--disabled" : ""}`}>
       <div className="srow__text">
         <span className="srow__head">
           <label className="srow__label" htmlFor={htmlFor}>{label}</label>

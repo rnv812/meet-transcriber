@@ -127,8 +127,9 @@ function AgentLaunchRows({ agent, label, launch, knowledge, onChange }: {
       <h4 className="agent-launch__title">
         {label}
         <LaunchTip agent={agent} />
-        <Button onClick={() => onChange(EMPTY)} disabled={!dirty} aria-label={`Сбросить параметры ${label}`}>
-          Сбросить
+        <Button size="sm" onClick={() => onChange(EMPTY)} disabled={!dirty} aria-label={`Параметры ${label} по умолчанию`}
+          title="Вернуть параметры по умолчанию (вступит в силу после «Сохранить»)">
+          По умолчанию
         </Button>
       </h4>
       <Row label="Дополнительные параметры" htmlFor={argsId} hint="Аргументы командной строки, через пробел" stack>

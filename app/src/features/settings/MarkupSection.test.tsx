@@ -34,7 +34,7 @@ const toggle = (name: string) => screen.findByRole("switch", { name });
 
 test("раздел «Расшифровка: подсветка и разметка»: всё включено, кривая — при наведении, подсказки", async () => {
   open();
-  expect(screen.getByRole("button", { name: "Расшифровка: подсветка и разметка" })).toHaveAttribute("aria-current", "page");
+  expect(screen.getByRole("button", { name: "Подсветка расшифровки" })).toHaveAttribute("aria-current", "page");
   for (const name of ["Значки типов реплик", "Полоса у важных реплик", "Заголовки глав", "Блок «Наблюдения»",
     "Подписи глав на полосе плеера"]) {
     expect(await toggle(name)).toHaveAttribute("aria-checked", "true");

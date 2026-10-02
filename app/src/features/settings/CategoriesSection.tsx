@@ -220,6 +220,7 @@ export function CategoriesSection({ value, onChange, endpoint }: {
                     onBlur={() => setTouched(true)} />
                   <input type="text" className="catedit__desc" aria-label={`Описание категории «${shown}» для ИИ`}
                     maxLength={DESCRIPTION_MAX} placeholder="Описание для ИИ: какие встречи сюда относятся"
+                    title={c.description || undefined}
                     value={c.description} onChange={(e) => update(i, { description: e.target.value })} />
                   <IconButton icon={Trash2} label={`Удалить «${shown}»`} tooltip="Удалить" variant="danger"
                     className="catedit__remove" aria-expanded={confirm === k}

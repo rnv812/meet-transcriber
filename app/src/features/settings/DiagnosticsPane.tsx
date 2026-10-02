@@ -1,5 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { Check, Copy, FolderOpen, RefreshCw } from "lucide-react";
 import { type Endpoint, getDiagnostics } from "../../lib/api";
+import { inTauri, openFolder } from "../../lib/shell";
+import { Button } from "../../ui/Button";
+import { IconButton } from "../../ui/IconButton";
+import { Loading } from "../../ui/Loading";
 import { PathText } from "./Section";
 
 export type Diagnostics = {
@@ -18,28 +23,64 @@ const PATH_LABELS: Record<string, string> = {
   watch_log: "Журнал автозаписи",
 };
 
+/** Папки можно открыть в проводнике (в приложении); файлы — только скопировать путь. */
+const FOLDERS = new Set(["data_dir", "recordings"]);
+
+function CopyPath({ path, label }: { path: string; label: string }) {
+  const [done, setDone] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(path);
+      setDone(true);
+      window.setTimeout(() => setDone(false), 1500);
+    } catch {
+      /* буфер недоступен — путь виден текстом */
+    }
+  };
+  return <IconButton icon={done ? Check : Copy} label={done ? "Скопировано" : `Копировать путь: ${label}`}
+    tooltip={done ? "Скопировано" : "Копировать путь"} size="sm" onClick={() => void copy()} />;
+}
+
 export function DiagnosticsPane({ endpoint }: { endpoint: Endpoint }) {
   const [data, setData] = useState<Diagnostics | null>(null);
   const [tried, setTried] = useState(false);
-  useEffect(() => {
-    getDiagnostics(endpoint, 200).then((d) => setData(d as Diagnostics)).catch(() => setData(null)).finally(() => setTried(true));
-  }, [endpoint]);
-  if (!data) return <p className="muted">{tried ? "Нет данных." : "Загружаю…"}</p>;
+  const load = useCallback(
+    () => getDiagnostics(endpoint, 200).then((d) => setData(d as Diagnostics)).catch(() => setData(null))
+      .finally(() => setTried(true)),
+    [endpoint],
+  );
+  useEffect(() => { void load(); }, [load]);
+  if (!data) return tried ? <p className="muted">Нет данных.</p> : <Loading label="Загружаю сведения…" />;
   return (
     <>
-      {Object.entries(data.paths ?? {}).map(([name, path]) => (
-        <div className="srow" key={name}>
-          <div className="srow__text"><span className="srow__label">{PATH_LABELS[name] ?? name}</span></div>
-          <div className="srow__control"><span className="folder"><PathText path={path} /></span></div>
-        </div>
-      ))}
+      {Object.entries(data.paths ?? {}).map(([name, path]) => {
+        const label = PATH_LABELS[name] ?? name;
+        return (
+          <div className="srow" key={name}>
+            <div className="srow__text"><span className="srow__label">{label}</span></div>
+            <div className="srow__control">
+              <span className="folder">
+                <PathText path={path} />
+                <CopyPath path={path} label={label} />
+                {inTauri() && FOLDERS.has(name) && (
+                  <IconButton icon={FolderOpen} label={`Открыть: ${label}`} tooltip="Открыть в проводнике" size="sm"
+                    onClick={() => openFolder(path)} />
+                )}
+              </span>
+            </div>
+          </div>
+        );
+      })}
       <div className="srow">
         <div className="srow__text"><span className="srow__label">Режим</span></div>
         <div className="srow__control">
           <span className="tag">{data.dev_mode ? "Запуск из репозитория" : "Установленное приложение"}</span>
         </div>
       </div>
-      <h3 className="shead">Журнал автозаписи</h3>
+      <div className="diag__logs-head">
+        <h3 className="shead">Журнал автозаписи</h3>
+        <Button size="sm" variant="ghost" icon={RefreshCw} onClick={load}>Обновить журналы</Button>
+      </div>
       <pre className="log">{(data.watch_log ?? []).slice(-120).join("\n") || "Журнал пуст"}</pre>
       <h3 className="shead">Журнал записи{data.folder ? ` — ${data.folder}` : ""}</h3>
       <pre className="log">{(data.record_log ?? []).join("\n") || "Журнал пуст"}</pre>

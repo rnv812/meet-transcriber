@@ -1,13 +1,18 @@
 /**
- * Настройки: слева разделы, справа строки «подпись — значение».
+ * Настройки: слева разделы, справа — колонка строк «подпись — значение»
+ * (по центру, не шире 760 px; шапка с «Сохранить» — над той же колонкой).
  *
  * Черновик по группам (`auto_record`, `asr`, …) + «Сохранить/Сбросить»; PATCH
  * принимает секции целиком. Исключение — переключатель автозаписи: резидент
  * применяет его на лету (`POST /auto-record`). Всё остальное в `auto_record`
  * читается при старте — честно говорим, что нужен перезапуск.
+ *
+ * Черновик общий на все разделы, но видно, где именно правки: точка у раздела
+ * в меню. Уйти из настроек с несохранённым — вопрос (`guardRef`, его задаёт
+ * App); «Сбросить…» тоже спрашивает.
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type MutableRefObject, type ReactNode } from "react";
 import {
   type Devices, type Endpoint, type Processes,
   NoResidentError, getDevices, getProcesses, getSettings, patchSettings, setAutoRecord,
@@ -15,7 +20,10 @@ import {
 import { errorText } from "../../lib/format";
 import { inTauri, openFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
+import { Disclosure } from "../../ui/Disclosure";
 import { EmptyState } from "../../ui/EmptyState";
+import { Loading, StatusSlot } from "../../ui/Loading";
 import { About } from "./About";
 import { AnalysisSection } from "./AnalysisSection";
 import { AssistantSection, assistantChangesInvalid } from "./AssistantSection";
@@ -55,7 +63,7 @@ const MENU: { id: SectionId; title: string }[] = [
   { id: "assistant", title: "Ассистент" },
   { id: "analysis", title: "Анализ встречи" },
   { id: "categories", title: "Категории встреч" },
-  { id: "markup", title: "Расшифровка: подсветка и разметка" },
+  { id: "markup", title: "Подсветка расшифровки" },
   { id: "profiles", title: "Профили людей" },
   { id: "diagnostics", title: "Диагностика" },
   { id: "about", title: "О программе" },
@@ -64,14 +72,56 @@ const MENU: { id: SectionId; title: string }[] = [
 
 const NO_DRAFT: SectionId[] = ["diagnostics", "about"];
 
-function TextRow({ id, label, hint, help, value, placeholder, short, onChange }: {
+/**
+ * Разделы, в которых видна правка ключа `group.key`: точка у раздела в меню.
+ * Модель Whisper выбирается и в «Распознавании», и в «Движке и моделях».
+ */
+export function sectionsOf(group: string, key: string): SectionId[] {
+  switch (group) {
+    case "recording":
+      return key === "mic_device" || key === "output_device" ? ["sound"] : ["recording"];
+    case "ui": return ["recording"];
+    case "auto_record": return ["auto"];
+    case "asr":
+      if (key === "model") return ["asr", "engine"];
+      return key === "backend" || key === "cpu_backend" || key === "gigaam_model" ? ["engine"] : ["asr"];
+    case "export": return ["export"];
+    case "llm": case "assist": case "agent": return ["assistant"];
+    case "assistant": return key === "auto_title" ? ["analysis"] : ["assistant"];
+    case "analysis": return ["analysis"];
+    case "categories": return ["categories"];
+    case "transcript_view": return ["markup"];
+    case "integrations": return key.startsWith("jira") ? ["markup"] : ["advanced"];
+    case "profiles": return ["profiles"];
+    case "hooks": return ["advanced"];
+    default: return [];
+  }
+}
+
+/** Что App спрашивает у настроек, прежде чем уйти в другой раздел окна. */
+export type SettingsGuard = {
+  /** Названия разделов с несохранёнными правками; пусто — уходить можно молча. */
+  dirty: string[];
+  /** Можно ли сохранить прямо сейчас (нет ошибок в полях). */
+  canSave: boolean;
+  /** Сохранить; true — получилось. */
+  save: () => Promise<boolean>;
+};
+
+/**
+ * Ширина поля: `s` — короткое значение (имя, код языка), `m` — по умолчанию,
+ * `l` — пути, адреса, команды, id моделей: под подписью во всю ширину колонки,
+ * моноширинным шрифтом.
+ */
+function TextRow({ id, label, hint, help, value, placeholder, short, wide, disabled, onChange }: {
   id: string; label: string; hint?: string; help?: ReactNode; value: string; placeholder?: string; short?: boolean;
-  onChange: (v: string) => void;
+  wide?: boolean; disabled?: boolean; onChange: (v: string) => void;
 }) {
   return (
-    <Row label={label} hint={hint} help={help} htmlFor={id}>
-      <input id={id} type="text" className={short ? "input--short" : undefined} placeholder={placeholder}
-        value={value} onChange={(e) => onChange(e.target.value)} />
+    <Row label={label} hint={hint} help={help} htmlFor={id} stack={wide} disabled={disabled}>
+      <input id={id} type="text" className={short ? "input--short" : wide ? "input--wide" : undefined}
+        placeholder={placeholder} value={value} disabled={disabled} spellCheck={wide ? false : undefined}
+        onChange={(e) => onChange(e.target.value)} />
     </Row>
   );
 }
@@ -84,7 +134,7 @@ function SecondsRow({ id, label, hint, value, onChange }: {
       <span className="with-unit">
         <input id={id} type="number" min={0} className="num" value={value}
           onChange={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) onChange(Math.max(0, n)); }} />
-        <span className="unit">секунд</span>
+        <span className="unit unit--slot">секунд</span>
       </span>
     </Row>
   );
@@ -117,7 +167,7 @@ function MinutesRow({ id, label, hint, help, value, min, max, onChange }: {
             setText(String(next));
             if (next !== value) onChange(next);
           }} />
-        <span className="unit">минут</span>
+        <span className="unit unit--slot">минут</span>
       </span>
     </Row>
   );
@@ -141,9 +191,11 @@ function RecordingSection({ draft, set, recordingsDir }: {
         hint="Так подписываются реплики, записанные с вашего микрофона"
         value={String(v("speaker_name") ?? "Вы")} onChange={(x) => set("recording", "speaker_name", x)} />
       <Switch label="Расшифровывать сразу после записи" value={Boolean(v("auto_transcribe"))}
+        hint="Включено — расшифровка встаёт в очередь, как только запись остановлена; выключено — по кнопке «Расшифровать» в карточке"
         onChange={(x) => set("recording", "auto_transcribe", x)} />
       <AutostartRow />
       <Radio label="Уведомления" value={(draft.ui?.notifications as "all" | "important" | "off") ?? "all"}
+        hint="«Только важные» — начало и конец записи, готовая расшифровка и ошибки, без промежуточных шагов"
         options={[
           { value: "all", label: "Все" },
           { value: "important", label: "Только важные" },
@@ -163,7 +215,8 @@ function AutoSection({ draft, set, processes, loadProcesses, onToggle }: {
   return (
     <>
       <Switch label="Записывать звонки автоматически"
-        hint="Запись начинается со звонком и останавливается после его окончания" help={<AutoRecordTip />}
+        hint="Запись начинается со звонком и останавливается после его окончания. Применяется сразу, без «Сохранить»"
+        help={<AutoRecordTip />}
         value={Boolean(v("enabled"))} onChange={onToggle} />
       <p className="muted sdesc">Параметры ниже применяются после перезапуска приложения.</p>
       <CallPrograms value={selected} processes={processes} loadProcesses={loadProcesses}
@@ -173,7 +226,7 @@ function AutoSection({ draft, set, processes, loadProcesses, onToggle }: {
         onBrowsers={(x) => set("auto_record", "browsers", x)}
         onRequireSite={(x) => set("auto_record", "browser_require_site", x)}
         onSites={(x) => set("auto_record", "call_sites", x)} />
-      <MinutesRow id="grace" label="Ждать повторного подключения, мин" min={1} max={60}
+      <MinutesRow id="grace" label="Ждать повторного подключения" min={1} max={60}
         hint="Запись остановится, если за это время вы не вернётесь в звонок" help={<GraceTip />}
         value={Number(v("grace_minutes") ?? 10)} onChange={(x) => set("auto_record", "grace_minutes", x)} />
       <SecondsRow id="min-call" label="Минимальная длительность звонка"
@@ -195,10 +248,10 @@ function AsrSection({ draft, set, endpoint }: { draft: Raw; set: SetFn; endpoint
           <option value="cpu">Процессор</option>
         </select>
       </Row>
-      <TextRow id="asr-model" label="Модель Whisper для видеокарты (CUDA)" value={String(v("model") ?? "")}
+      <TextRow id="asr-model" label="Модель Whisper для видеокарты (CUDA)" wide value={String(v("model") ?? "")}
         hint="Скачать и выбрать модель можно в разделе «Движок и модели»"
         onChange={(x) => set("asr", "model", x)} />
-      <TextRow id="asr-cpu-model" label="Модель Whisper для процессора (CPU)" value={String(v("cpu_model") ?? "")}
+      <TextRow id="asr-cpu-model" label="Модель Whisper для процессора (CPU)" wide value={String(v("cpu_model") ?? "")}
         hint="Если на процессоре выбран Whisper; движок выбирается в разделе «Движок и модели»"
         onChange={(x) => set("asr", "cpu_model", x)} />
       <TextRow id="asr-language" label="Язык речи" short hint="Код языка, например ru или en; auto — определить по записи" value={String(v("language") ?? "ru")}
@@ -262,45 +315,50 @@ function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
     pair[i] = t;
     set("hooks", "recurring_window", pair[0] && pair[1] ? pair : null);
   };
+  const hookOn = Boolean(hooks("post_record"));
+  const markerOn = Boolean(draft.integrations?.gpu_marker);
   return (
     <>
-      <details className="sdetails">
-        <summary>Команда после записи</summary>
+      <Disclosure title="Команда после записи" className="sdetails">
         <Switch label="Запускать команду после записи" hint="Когда запись остановлена и сохранена"
-          value={Boolean(hooks("post_record"))} onChange={(x) => set("hooks", "post_record", x)} />
-        <TextRow id="hook-command" label="Команда" placeholder="Не задана" help={<HookCommandTip />}
-          hint="Программа и аргументы через пробел; подстановки — в подсказке «?»"
+          value={hookOn} onChange={(x) => set("hooks", "post_record", x)} />
+        <TextRow id="hook-command" label="Команда" placeholder="Не задана" help={<HookCommandTip />} wide
+          disabled={!hookOn}
+          hint={hookOn ? "Программа и аргументы через пробел; подстановки — в подсказке «?»"
+            : "Включите «Запускать команду после записи», чтобы задать команду"}
           value={((hooks("command") as string[] | undefined) ?? []).join(" ")}
           onChange={(x) => set("hooks", "command", x.split(" ").filter(Boolean))} />
-        <TextRow id="hook-prompt" label="Текст для {prompt}" hint="Подставляется в команду вместо {prompt}"
-          value={String(hooks("prompt") ?? "")} onChange={(x) => set("hooks", "prompt", x)} />
-        <Row label="Окно регулярной встречи" help={<RecurringWindowTip />}
+        <TextRow id="hook-prompt" label="Текст для {prompt}" hint="Подставляется в команду вместо {prompt}" wide
+          disabled={!hookOn} value={String(hooks("prompt") ?? "")} onChange={(x) => set("hooks", "prompt", x)} />
+        <Row label="Окно регулярной встречи" help={<RecurringWindowTip />} disabled={!hookOn}
           hint="Запись, начатая в этот промежуток, считается регулярной встречей">
           <span className="with-unit">
-            <input type="text" aria-label="Начало окна" className="input--time" placeholder="11:00"
+            <input type="text" aria-label="Начало окна" className="input--time" placeholder="11:00" disabled={!hookOn}
               value={win?.[0] ?? ""} onChange={(e) => setWin(0, e.target.value)} />
             <span className="unit">—</span>
-            <input type="text" aria-label="Конец окна" className="input--time" placeholder="12:00"
+            <input type="text" aria-label="Конец окна" className="input--time" placeholder="12:00" disabled={!hookOn}
               value={win?.[1] ?? ""} onChange={(e) => setWin(1, e.target.value)} />
           </span>
         </Row>
-      </details>
-      <details className="sdetails">
-        <summary>Интеграции</summary>
+      </Disclosure>
+      <Disclosure title="Интеграции" className="sdetails">
         <Switch label="Сообщать другим программам о занятости видеокарты" help={<GpuMarkerTip />}
           hint="На время расшифровки создаётся файл-маркер"
-          value={Boolean(draft.integrations?.gpu_marker)} onChange={(x) => set("integrations", "gpu_marker", x)} />
-        <TextRow id="gpu-marker-path" label="Путь к файлу-маркеру" placeholder="По умолчанию"
-          hint="Если не задан — gpu.lock в папке данных приложения"
+          value={markerOn} onChange={(x) => set("integrations", "gpu_marker", x)} />
+        <TextRow id="gpu-marker-path" label="Путь к файлу-маркеру" placeholder="По умолчанию" wide disabled={!markerOn}
+          hint={markerOn ? "Если не задан — gpu.lock в папке данных приложения"
+            : "Включите сообщение о занятости видеокарты, чтобы задать путь"}
           value={String(draft.integrations?.gpu_marker_path ?? "")}
           onChange={(x) => set("integrations", "gpu_marker_path", x || null)} />
-      </details>
+      </Disclosure>
     </>
   );
 }
 
-export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, onRunWizard }: {
+export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, onRunWizard, guardRef }: {
   endpoint: Endpoint;
+  /** Сюда настройки кладут, есть ли несохранённое и как его сохранить (вопрос при уходе — в App). */
+  guardRef?: MutableRefObject<SettingsGuard | null>;
   recordingsDir: string | null;
   /** Открыть сразу этот раздел (id из MENU); неизвестный — с первого. */
   initial?: string;
@@ -319,6 +377,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [askReset, setAskReset] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -372,9 +431,16 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   const dirty = [...Object.keys(changes), ...(categoriesDirty ? ["categories"] : [])];
   const invalid = assistantChangesInvalid(changes) || exportChangesInvalid(changes, settings ?? {})
     || markupChangesInvalid(changes) || (categoriesDirty && categoriesError(draftCategories(draft.categories)) !== null);
+  // Разделы с правками — точки в меню и список в вопросе при уходе.
+  const dirtySections = new Set<SectionId>(categoriesDirty ? ["categories"] : []);
+  for (const [g, keys] of Object.entries(changes)) {
+    for (const k of Object.keys(keys)) for (const s of sectionsOf(g, k)) dirtySections.add(s);
+  }
+  const dirtyTitles = MENU.filter((m) => dirtySections.has(m.id)).map((m) => m.title);
 
-  const save = async () => {
-    if (dirty.length === 0 || invalid) return;
+  const save = async (): Promise<boolean> => {
+    if (dirty.length === 0) return true;
+    if (invalid) return false;
     setPending(true);
     try {
       const result = await patchSettings(endpoint, categoriesDirty
@@ -385,12 +451,21 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
       setNotice(result.restart_required.length > 0
         ? "Сохранено. Часть параметров применится после перезапуска приложения."
         : "Сохранено.");
+      return true;
     } catch (e) {
       setError(errorText(e));
+      return false;
     } finally {
       setPending(false);
     }
   };
+
+  // Вопрос при уходе из настроек задаёт App — ему нужны свежие правки и save.
+  useEffect(() => {
+    if (!guardRef) return;
+    guardRef.current = { dirty: dirtyTitles, canSave: !invalid, save };
+  });
+  useEffect(() => () => { if (guardRef) guardRef.current = null; }, [guardRef]);
 
   /** Переключатель живёт вне черновика: применяется и сохраняется сразу. */
   const toggleAuto = async (enabled: boolean) => {
@@ -406,35 +481,49 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   };
 
   const showBar = !NO_DRAFT.includes(section);
+  const isDirty = dirty.length > 0;
 
   return (
     <div className="settings">
       <nav className="settings__menu" aria-label="Разделы настроек">
         {MENU.map((m) => (
           <button key={m.id} type="button" className="settings__item"
+            title={dirtySections.has(m.id) ? "Есть несохранённые изменения" : undefined}
             aria-current={m.id === section ? "page" : undefined} onClick={() => setSection(m.id)}>
-            {m.title}
+            <span className="settings__item-title">{m.title}</span>
+            {dirtySections.has(m.id) && <span className="settings__dirty" data-dirty aria-hidden="true" />}
           </button>
         ))}
       </nav>
       <div className="settings__body">
-        <header className="settings__head">
-          <h2>{MENU.find((m) => m.id === section)?.title}</h2>
-          {showBar && (
+        <div className="settings__column">
+          {/* Шапка постоянной высоты и над той же колонкой, что и строки. */}
+          <header className="settings__head">
+            <h2>{MENU.find((m) => m.id === section)?.title}</h2>
             <div className="settings__actions">
-              {notice && <span className="notice">{notice}</span>}
-              {dirty.length > 0 && <span className="muted">Есть несохранённые изменения</span>}
-              <Button onClick={() => void reload()} disabled={pending}>Сбросить</Button>
-              <Button variant="primary" onClick={() => void save()} disabled={pending || dirty.length === 0 || invalid}>
-                {pending ? "Сохраняю…" : "Сохранить"}
-              </Button>
+              {showBar && (
+                <>
+                  <StatusSlot className="settings__state" tone={isDirty ? "muted" : notice ? "ok" : undefined}>
+                    {isDirty ? (dirtySections.has(section) ? "Есть несохранённые изменения" : `Не сохранено: ${dirtyTitles.join(", ")}`)
+                      : notice}
+                  </StatusSlot>
+                  <Button onClick={() => setAskReset(true)} disabled={pending || !isDirty}>Сбросить…</Button>
+                  <Button variant="primary" onClick={save} busy={pending} disabled={!isDirty || invalid}>
+                    Сохранить
+                  </Button>
+                </>
+              )}
             </div>
+          </header>
+          {askReset && (
+            <ConfirmDialog title="Отменить несохранённые изменения?" confirmLabel="Сбросить"
+              message={`Правки в разделах ${dirtyTitles.map((t) => `«${t}»`).join(", ")} будут отменены.`}
+              onCancel={() => setAskReset(false)} onConfirm={() => { setAskReset(false); void reload(); }} />
           )}
-        </header>
-        {error && <p className="error">{error}</p>}
-        <div className="settings__content">
+          {error && <p className="error" role="alert">{error}</p>}
+          <div className="settings__content">
           {!settings && section !== "about" && section !== "diagnostics" ? (
-            error ? <EmptyState title="Настройки недоступны" /> : <p className="muted">Загружаю…</p>
+            error ? <EmptyState title="Настройки недоступны" /> : <Loading label="Загружаю настройки…" />
           ) : section === "recording" ? (
             <RecordingSection draft={draft} set={set} recordingsDir={recordingsDir} />
           ) : section === "sound" ? (
@@ -480,6 +569,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           ) : (
             <AdvancedSection draft={draft} set={set} />
           )}
+          </div>
         </div>
       </div>
     </div>
