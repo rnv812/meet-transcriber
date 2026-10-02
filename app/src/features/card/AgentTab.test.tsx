@@ -544,8 +544,20 @@ test("диалог первого запуска: точные фразы Claude
     "Do you trust the files in this folder?",
     "Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.",
     "Continue only if you trust these files. Your trust decision will be saved.",
-    "Allow Codex to work in this folder without asking for approval?",
+    "Allow Codex to work in this folder without asking for approval?", // прежние версии Codex
   ]) expect(CONFIRM_SCREEN.test(text)).toBe(true);
+});
+
+test("экран входа Codex — тоже диалог первого запуска: вставлять нельзя", () => {
+  for (const text of [
+    "> 1. Sign in with ChatGPT",
+    "  2. Provide your own API key",
+    "SIGN IN WITH CHATGPT", // регистр не важен
+  ]) expect(CONFIRM_SCREEN.test(text)).toBe(true);
+  for (const text of [
+    "sign in with your ChatGPT account later",
+    "provide an API key in the settings",
+  ]) expect(CONFIRM_SCREEN.test(text)).toBe(false);
 });
 
 test("обычный разговор — не диалог первого запуска", () => {
