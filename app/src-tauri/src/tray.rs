@@ -374,7 +374,7 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
         } else {
             out.push(Notice::new(
                 RECORDING_STARTED,
-                "Остановить — в меню значка meet",
+                "Остановить — в меню значка Meet",
                 None,
             ));
         }
@@ -400,7 +400,7 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
     if !prev.live.active && next.live.active {
         out.push(Notice::new(
             LIVE_LISTENING,
-            "Остановить — в меню значка meet",
+            "Остановить — в меню значка Meet",
             None,
         ));
     }
@@ -410,7 +410,7 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
     for id in added(&prev.jobs_done, &next.jobs_done) {
         out.push(Notice::new(
             TRANSCRIPT_READY,
-            format!("{id} — откройте окно meet из области уведомлений"),
+            format!("{id} — откройте окно Meet из области уведомлений"),
             Some(id.clone()),
         ));
     }
@@ -814,25 +814,25 @@ pub fn icon_for(view: Option<&View>, status: &ResidentStatus) -> TrayIconKind {
 
 pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
     if *status == ResidentStatus::Quitting {
-        return "meet — сохранение записи и выход".to_string();
+        return "Meet · сохранение записи и выход".to_string();
     }
     if *status == ResidentStatus::ExternalNoApi {
-        return "meet — запущена старая версия службы записи (меню недоступно)".to_string();
+        return "Meet · запущена старая версия службы записи (меню недоступно)".to_string();
     }
     if *status == ResidentStatus::EngineMissing {
-        return "meet — движок не установлен, откройте окно".to_string();
+        return "Meet · движок не установлен, откройте окно".to_string();
     }
     if let ResidentStatus::EngineUpdating { step, of } = *status {
         return if step > 0 {
-            format!("meet — обновление движка: шаг {step} из {of}")
+            format!("Meet · обновление движка: шаг {step} из {of}")
         } else {
-            "meet — обновление движка".to_string()
+            "Meet · обновление движка".to_string()
         };
     }
     let text = match view {
         None => "служба записи не запущена".to_string(),
         Some(view) if view.recording => {
-            let mut text = format!("запись {}", clock(view.elapsed_s));
+            let mut text = format!("идёт запись {}", clock(view.elapsed_s));
             if view.source.as_deref() == Some("auto") {
                 text.push_str(" (авто)");
             }
@@ -847,7 +847,7 @@ pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
         }
         Some(_) => "ожидание звонка".to_string(),
     };
-    let mut tip = format!("meet — {text}");
+    let mut tip = format!("Meet · {text}");
     // Подмена устройства — про идущую запись (свою или ассистента).
     if let Some(view) = view.filter(|view| view.recording || view.live.active) {
         for fallback in &view.devices_fallback {
@@ -1765,25 +1765,28 @@ mod tests {
     #[test]
     fn tooltip_texts() {
         let running = ResidentStatus::Running;
-        assert_eq!(tooltip(Some(&idle()), &running), "meet — ожидание звонка");
+        assert_eq!(tooltip(Some(&idle()), &running), "Meet · ожидание звонка");
         let mut rec = idle();
         rec.recording = true;
         rec.source = Some("auto".into());
         rec.elapsed_s = 754.9;
-        assert_eq!(tooltip(Some(&rec), &running), "meet — запись 12:34 (авто)");
+        assert_eq!(
+            tooltip(Some(&rec), &running),
+            "Meet · идёт запись 12:34 (авто)"
+        );
         rec.source = Some("manual".into());
         rec.elapsed_s = 3723.0;
-        assert_eq!(tooltip(Some(&rec), &running), "meet — запись 1:02:03");
+        assert_eq!(tooltip(Some(&rec), &running), "Meet · идёт запись 1:02:03");
         let mut busy = idle();
         busy.busy = true;
-        assert_eq!(tooltip(Some(&busy), &running), "meet — идёт расшифровка");
+        assert_eq!(tooltip(Some(&busy), &running), "Meet · идёт расшифровка");
         assert_eq!(
             tooltip(Some(&idle()), &ResidentStatus::External),
-            "meet — служба записи запущена вне приложения"
+            "Meet · служба записи запущена вне приложения"
         );
         assert_eq!(
             tooltip(None, &ResidentStatus::Starting),
-            "meet — служба записи не запущена"
+            "Meet · служба записи не запущена"
         );
     }
 
@@ -1792,7 +1795,7 @@ mod tests {
         let status = ResidentStatus::ExternalNoApi;
         assert_eq!(
             tooltip(None, &status),
-            "meet — запущена старая версия службы записи (меню недоступно)"
+            "Meet · запущена старая версия службы записи (меню недоступно)"
         );
         let m = menu_state(None, &status);
         assert!(!m.online, "действиям с записью нужен API");
@@ -1839,7 +1842,7 @@ mod tests {
         let missing = ResidentStatus::EngineMissing;
         assert_eq!(
             tooltip(None, &missing),
-            "meet — движок не установлен, откройте окно"
+            "Meet · движок не установлен, откройте окно"
         );
         let m = menu_state(None, &missing);
         assert!(!m.online);
@@ -1850,9 +1853,9 @@ mod tests {
     #[test]
     fn engine_update_shows_its_step_and_failure_is_important() {
         let waiting = ResidentStatus::EngineUpdating { step: 0, of: 0 };
-        assert_eq!(tooltip(None, &waiting), "meet — обновление движка");
+        assert_eq!(tooltip(None, &waiting), "Meet · обновление движка");
         let step = ResidentStatus::EngineUpdating { step: 3, of: 4 };
-        assert_eq!(tooltip(None, &step), "meet — обновление движка: шаг 3 из 4");
+        assert_eq!(tooltip(None, &step), "Meet · обновление движка: шаг 3 из 4");
         let m = menu_state(None, &step);
         assert!(!m.online);
         assert_eq!(m.log, None);
@@ -1873,9 +1876,9 @@ mod tests {
         assert!(!m.restart);
         assert_eq!(
             tooltip(Some(&rec), &quitting),
-            "meet — сохранение записи и выход"
+            "Meet · сохранение записи и выход"
         );
-        assert_eq!(tooltip(None, &quitting), "meet — сохранение записи и выход");
+        assert_eq!(tooltip(None, &quitting), "Meet · сохранение записи и выход");
     }
 
     #[test]
@@ -2339,7 +2342,7 @@ mod tests {
         }];
         assert_eq!(
             tooltip(Some(&rec), &running),
-            "meet — запись 12:34\nМикрофон «USB-микрофон» не найден — запись с системного"
+            "Meet · идёт запись 12:34\nМикрофон «USB-микрофон» не найден — запись с системного"
         );
         let mut live = with_live(true, false, false);
         live.devices_fallback = vec![DeviceFallback {
@@ -2348,14 +2351,14 @@ mod tests {
         }];
         assert_eq!(
             tooltip(Some(&live), &running),
-            "meet — ассистент слушает встречу\nУстройство вывода «Наушники» не найдено — запись с системного"
+            "Meet · ассистент слушает встречу\nУстройство вывода «Наушники» не найдено — запись с системного"
         );
         // вне записи подмена не показывается
         let mut idle_view = idle();
         idle_view.devices_fallback = rec.devices_fallback.clone();
         assert_eq!(
             tooltip(Some(&idle_view), &running),
-            "meet — ожидание звонка"
+            "Meet · ожидание звонка"
         );
     }
 
@@ -2389,19 +2392,19 @@ mod tests {
         assert_eq!(icon_for(Some(&active), &running), TrayIconKind::Live);
         assert_eq!(
             tooltip(Some(&active), &running),
-            "meet — ассистент слушает встречу"
+            "Meet · ассистент слушает встречу"
         );
         let stopping = with_live(true, false, true);
         assert_eq!(icon_for(Some(&stopping), &running), TrayIconKind::Live);
         assert_eq!(
             tooltip(Some(&stopping), &running),
-            "meet — ассистент завершает запись"
+            "Meet · ассистент завершает запись"
         );
         let starting = with_live(false, true, false);
         assert_eq!(icon_for(Some(&starting), &running), TrayIconKind::Busy);
         assert_eq!(
             tooltip(Some(&starting), &running),
-            "meet — ассистент запускается"
+            "Meet · ассистент запускается"
         );
     }
 

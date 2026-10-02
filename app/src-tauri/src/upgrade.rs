@@ -4,7 +4,7 @@
 // запущенное приложение выйти штатно: `meet-desktop.exe --quit`. Второй
 // экземпляр с этим флагом через плагин single-instance передаёт его первому,
 // и тот делает обычный «Выход» из трея (резидент сохраняет идущую запись и
-// гасится). После обновления оболочка один раз говорит «meet обновлён до Y»
+// гасится). После обновления оболочка один раз говорит «Meet обновлён до Y»
 // и не оставляет работать резидент прежней версии, запущенный ещё старой
 // оболочкой.
 //
@@ -26,8 +26,8 @@ pub const QUIT_ARG: &str = "--quit";
 pub const LAST_VERSION: &str = "last_version";
 /// Начало заголовка уведомления об обновлении — по нему фильтр уровня
 /// «важные» его пропускает (заголовок несёт номер версии).
-pub const UPDATED_PREFIX: &str = "meet обновлён до ";
-pub const DOWNGRADED_PREFIX: &str = "meet: установлена версия ";
+pub const UPDATED_PREFIX: &str = "Meet обновлён до ";
+pub const DOWNGRADED_PREFIX: &str = "Meet: установлена версия ";
 
 /// Запущены ли с `--quit` (аргументы целиком, первый — путь к exe).
 pub fn quit_requested(args: &[String]) -> bool {
@@ -40,7 +40,7 @@ pub enum VersionNote {
     /// молча.
     FirstRun,
     Same,
-    /// Версия выросла: уведомить «meet обновлён до Y».
+    /// Версия выросла: уведомить «Meet обновлён до Y».
     Updated,
     /// Поставили более раннюю версию поверх новой.
     Downgraded,
@@ -299,7 +299,7 @@ mod tests {
             VersionNote::Updated
         );
         let notice = version_notice(VersionNote::Updated, "0.1.1").unwrap();
-        assert_eq!(notice.title, "meet обновлён до 0.1.1");
+        assert_eq!(notice.title, "Meet обновлён до 0.1.1");
         assert!(notice.recording.is_none());
     }
 
@@ -314,7 +314,7 @@ mod tests {
             VersionNote::Downgraded
         );
         let notice = version_notice(VersionNote::Downgraded, "0.1.1").unwrap();
-        assert_eq!(notice.title, "meet: установлена версия 0.1.1");
+        assert_eq!(notice.title, "Meet: установлена версия 0.1.1");
     }
 
     #[test]

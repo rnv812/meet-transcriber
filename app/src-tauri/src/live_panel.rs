@@ -559,7 +559,7 @@ pub fn open_live(app: &AppHandle) {
     let (_, geometry) = panel.update(|geometry, _| geometry.maximized = false);
     let mut builder =
         WebviewWindowBuilder::new(app, LIVE_LABEL, WebviewUrl::App("live.html".into()))
-            .title("meet — ассистент")
+            .title("Meet — ассистент")
             .inner_size(geometry.width, geometry.height())
             .min_inner_size(MIN_WIDTH, COLLAPSED_HEIGHT)
             .resizable(true)

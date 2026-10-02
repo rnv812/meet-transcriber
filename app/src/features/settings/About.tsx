@@ -179,7 +179,7 @@ function InstallProgress({ progress }: { progress: UpdateProgress | null }) {
 /** Авторы и их роли — те же, что в NOTICE. */
 export const AUTHORS: { name: string; role: string }[] = [
   { name: "Андрей Алейников", role: "автор проекта" },
-  { name: "ndrsvh", role: "архитектура десктопного приложения" },
+  { name: "Андрей Сивуха (@ndrsvh)", role: "архитектура десктопного приложения" },
   { name: "Никита Резников", role: "десктопное приложение и интерфейс" },
 ];
 

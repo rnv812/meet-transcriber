@@ -302,7 +302,7 @@ export function AgentTab({ id, assistant, onOpenSettings }: {
     return (
       <div className="agent agent--empty">
         <EmptyState title="Доступно в приложении"
-          hint="Терминал с Claude Code или Codex работает только в окне приложения meet, в браузере его нет." />
+          hint="Терминал с Claude Code или Codex работает только в окне приложения Meet, в браузере его нет." />
       </div>
     );
   }

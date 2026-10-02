@@ -1,8 +1,8 @@
 [package]
 name = "meet-desktop"
 version = "0.2.1"
-description = "Оболочка meet: трей, уведомления, окно приложения"
-authors = ["Andrey Aleynikov", "Nikita Reznikov", "ndrsvh"]
+description = "Оболочка Meet: трей, уведомления, окно приложения"
+authors = ["Andrey Aleynikov", "Nikita Reznikov", "Andrey Sivukha (ndrsvh)"]
 license = "Apache-2.0"
 edition = "2021"
 rust-version = "1.77"
