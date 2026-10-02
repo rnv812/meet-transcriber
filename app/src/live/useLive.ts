@@ -1,5 +1,5 @@
 /**
- * Живой ассистент глазами окна: лента строк, сводка и вопросы.
+ * Живой ассистент глазами окна: лента строк, сводка, подсказки и вопросы.
  *
  * Поток `/live/events`. Обычный обрыв браузер чинит сам и переподключается с
  * Last-Event-ID — сервер досылает только пропущенные строки. Отказ (409:
@@ -11,13 +11,18 @@
  *
  * История вопросов живёт у ассистента (`qa` в `state`): её видят и панель, и
  * карточка, и вопрос в ней появляется сразу — с «Модель думает…».
+ *
+ * Действие с подсказкой (закрепить, скрыть) видно сразу, до ответа
+ * ассистента: оно лежит поверх его состояния, пока следующее `state` не
+ * пришло; не дошло — откатывается.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { type Endpoint, liveAsk, liveTask, openLiveEvents } from "../lib/api";
+import { type Endpoint, liveAsk, liveHint, liveTask, openLiveEvents } from "../lib/api";
 import { errorText } from "../lib/format";
-import type { LiveLine, LiveQa, LiveQuick } from "../lib/types";
+import type { LiveHint, LiveLine, LiveQa, LiveQuick, LiveSummary } from "../lib/types";
+import { EMPTY_SUMMARY } from "./liveModel";
 
 export const MAX_LINES = 300;
 const RETRY_MIN_MS = 1000;
@@ -28,6 +33,7 @@ const NO_LINK = "Нет связи с ассистентом — перепод�
 export type FeedLine = LiveLine & { id: number | null };
 
 export type AskOptions = { quick?: LiveQuick; since_t?: number };
+export type HintAction = "pin" | "unpin" | "dismiss";
 
 export type Live = {
   /** Тихий статус ассистента («Подсказки временно недоступны»), null — всё в порядке. */
@@ -35,6 +41,11 @@ export type Live = {
   lines: FeedLine[];
   /** Сводка встречи, Markdown. */
   digest: string;
+  summary: LiveSummary;
+  /** Активные подсказки (скрытые сюда не попадают). */
+  hints: LiveHint[];
+  /** false — режим «Только сводка». */
+  hintsEnabled: boolean;
   /** История вопросов (у ассистента). */
   qa: LiveQa[];
   /** Хоть одно `state` пришло: дальше новое — действительно новое. */
@@ -46,12 +57,33 @@ export type Live = {
   /** Вопрос не дошёл до ассистента (в историю он не попал). */
   askError: string | null;
   ask: (question: string, opts?: AskOptions) => Promise<void>;
+  hint: (id: string, action: HintAction) => Promise<void>;
   setTask: (task: string) => Promise<void>;
 };
+
+/** Действие с подсказкой, которое ассистент ещё не подтвердил своим `state`. */
+type Pending = Record<string, { action: HintAction; done: boolean }>;
+
+function withPending(hints: LiveHint[], pending: Pending): LiveHint[] {
+  return hints
+    .filter((h) => pending[h.id]?.action !== "dismiss")
+    .map((h) => {
+      const action = pending[h.id]?.action;
+      return action === "pin" ? { ...h, pinned: true } : action === "unpin" ? { ...h, pinned: false } : h;
+    });
+}
+
+/** Ассистент принял действие — следующее `state` уже его отражает. */
+const unconfirmed = (cur: Pending): Pending =>
+  Object.fromEntries(Object.entries(cur).filter(([, p]) => !p.done));
 
 export function useLive(ep: Endpoint | null, active = true): Live {
   const [lines, setLines] = useState<FeedLine[]>([]);
   const [digest, setDigest] = useState("");
+  const [summary, setSummary] = useState<LiveSummary>(EMPTY_SUMMARY);
+  const [hints, setHints] = useState<LiveHint[]>([]);
+  const [hintsEnabled, setHintsEnabled] = useState(true);
+  const [pending, setPending] = useState<Pending>({});
   const [qa, setQa] = useState<LiveQa[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -76,6 +108,10 @@ export function useLive(ep: Endpoint | null, active = true): Live {
         onState: (s) => {
           alive();
           setDigest(s.digest ?? "");
+          setSummary(s.summary ?? EMPTY_SUMMARY);
+          setHints(Array.isArray(s.hints) ? s.hints : []);
+          setHintsEnabled(s.hints_enabled !== false);
+          setPending(unconfirmed); // принятые ассистентом действия уже в его состоянии
           setStatus(s.status ?? null);
           setQa(Array.isArray(s.qa) ? s.qa : []);
           setLoaded(true);
@@ -126,10 +162,28 @@ export function useLive(ep: Endpoint | null, active = true): Live {
     }
   }, [ep]);
 
+  const hint = useCallback(async (id: string, action: HintAction) => {
+    if (!ep) return;
+    setPending((cur) => ({ ...cur, [id]: { action, done: false } }));
+    try {
+      await liveHint(ep, id, action);
+      setPending((cur) => (cur[id] ? { ...cur, [id]: { action, done: true } } : cur));
+    } catch (e) {
+      setPending((cur) => {
+        const { [id]: _drop, ...rest } = cur;
+        return rest;
+      });
+      setAskError(errorText(e));
+    }
+  }, [ep]);
+
   const setTask = useCallback(async (task: string) => {
     if (!ep) return;
     await liveTask(ep, task);
   }, [ep]);
 
-  return { status, lines, digest, qa, loaded, error, asking, askError, ask, setTask };
+  return {
+    status, lines, digest, summary, hints: withPending(hints, pending), hintsEnabled, qa, loaded, error,
+    asking, askError, ask, hint, setTask,
+  };
 }

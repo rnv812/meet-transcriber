@@ -94,6 +94,9 @@ class H(BaseHTTPRequestHandler):
             note("ask", body.get("question", ""))
             note("ask_body", json.dumps(body, ensure_ascii=False, sort_keys=True))
             self._json(200, {"answer": "ответ: " + body.get("question", "")})
+        elif self.path == "/hint":
+            note("hint", json.dumps(body, ensure_ascii=False, sort_keys=True))
+            self._json(200, {"ok": True, "changed": True})
         elif self.path == "/task":
             note("task", body.get("task", ""))
             self.send_response(204)
@@ -615,6 +618,8 @@ def test_ask_and_task_are_proxied(make_live, tmp_path):
     assert live.task("Ревью архитектуры") == {"ok": True}
     assert stub.note("ask") == ["что решили?"]
     assert stub.note("task") == ["Ревью архитектуры"]
+    assert live.hint("h2", "dismiss") == {"ok": True, "changed": True}
+    assert json.loads(stub.note("hint")[0]) == {"action": "dismiss", "id": "h2"}
     live.ask("", "missed", 300.0)
     assert json.loads(stub.note("ask_body")[-1]) == {
         "question": "", "quick": "missed", "since_t": 300.0}
@@ -897,6 +902,19 @@ def test_live_ask_validates_quick_actions(resident):
             resident.live_ask(bad)
     with pytest.raises(control.Conflict):  # проверка прошла — дальше «не запущен»
         resident.live_ask({"quick": "missed", "since_t": 120})
+
+
+def test_live_hint_validates(resident, monkeypatch):
+    for bad in ({"id": "h1", "action": "delete"}, {"id": "p1", "action": "pin"},
+                {"id": 3, "action": "pin"}, {"action": "pin"}, {"id": "h1"}):
+        with pytest.raises(control.BadRequest):
+            resident.live_hint(bad)
+    with pytest.raises(control.Conflict):
+        resident.live_hint({"id": "h1", "action": "pin"})
+    calls = []
+    monkeypatch.setattr(resident.live, "hint", lambda *a: calls.append(a) or {"ok": True})
+    assert resident.live_hint({"id": "h12", "action": "unpin"}) == {"ok": True}
+    assert calls == [("h12", "unpin")]
 
 
 def test_live_ask_forwards_quick_and_since(resident, monkeypatch):

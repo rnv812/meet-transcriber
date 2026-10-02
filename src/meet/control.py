@@ -78,6 +78,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     live_start() -> dict                  живой режим (409 без провайдера, 400 при записи)
     live_stop() -> dict                   остановить живой режим (ответ сразу)
     live_ask(body) / live_task(body)      прокси к /ask и /task ассистента
+    live_hint(body) -> dict               закрепить, открепить, скрыть подсказку
     live_events(last_event_id) -> stream  поток ассистента: get(timeout), close()
 """
 
@@ -798,6 +799,7 @@ _ROUTES = {
     ("POST", "/live/stop"): lambda h, p: _server_of(h).state.live_stop(),
     ("POST", "/live/ask"): lambda h, p: _server_of(h).state.live_ask(h._body()),
     ("POST", "/live/task"): lambda h, p: _server_of(h).state.live_task(h._body()),
+    ("POST", "/live/hint"): lambda h, p: _server_of(h).state.live_hint(h._body()),
     ("GET", "/export/preview"): lambda h, p: _server_of(h).state.export_preview(
         {k: v[0] for k, v in p.items() if k != "token" and v}
     ),

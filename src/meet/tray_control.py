@@ -13,6 +13,7 @@ import functools
 import importlib.metadata
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -881,6 +882,16 @@ class TrayControl:
         if len(question) > QUESTION_MAX_CHARS:
             raise _bad_request(f"вопрос длиннее {QUESTION_MAX_CHARS} символов")
         return self._live_call(self.live.ask, question.strip(), quick, since)
+
+    def live_hint(self, body: dict | None) -> dict:
+        """Действие с подсказкой: `{"id": "h3", "action": "pin|unpin|dismiss"}`."""
+        body = body or {}
+        hint_id, action = body.get("id"), body.get("action")
+        if not isinstance(hint_id, str) or not re.fullmatch(r"h\d{1,6}", hint_id):
+            raise _bad_request("неизвестная подсказка")
+        if action not in live_control.HINT_ACTIONS:
+            raise _bad_request("действие с подсказкой: pin, unpin или dismiss")
+        return self._live_call(self.live.hint, hint_id, action)
 
     def live_task(self, body: dict | None) -> dict:
         task = (body or {}).get("task")

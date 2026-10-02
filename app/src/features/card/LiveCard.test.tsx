@@ -1,4 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { LiveStatus } from "../../lib/types";
 import { FakeEventSource } from "../../test/setup";
 import { LiveCard } from "./LiveCard";
@@ -9,20 +10,23 @@ const live = (o: Partial<LiveStatus> = {}): LiveStatus => ({
 });
 const streams = () => FakeEventSource.instances.filter((s) => s.url.startsWith("http://h/live/events"));
 
-test("идёт: поток ассистента открыт, вопросы доступны", () => {
+test("идёт: поток ассистента открыт, те же вкладки, вопросы доступны", async () => {
   render(<LiveCard endpoint={ep} live={live()} />);
   expect(screen.getByText("Идёт запись с ассистентом")).toBeInTheDocument();
   expect(streams()).toHaveLength(1);
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Лента", "Сводка", "Подсказки", "Спросить"]);
+  await userEvent.click(screen.getByRole("tab", { name: "Спросить" }));
   expect(screen.getByRole("button", { name: "Что я пропустил?" })).toBeEnabled();
 });
 
-test("ассистент дописывает запись: лента остаётся, поток закрыт, вопросы неактивны", () => {
+test("ассистент дописывает запись: лента остаётся, поток закрыт, вопросы неактивны", async () => {
   const { rerender } = render(<LiveCard endpoint={ep} live={live()} />);
   act(() => streams()[0]!.emit("line", { t: 1, speaker: "Демьян", text: "итог" }, 0));
   rerender(<LiveCard endpoint={ep} live={live({ active: false, stopping: true })} />);
   expect(screen.getByText("Останавливаю…")).toBeInTheDocument();
   expect(screen.getByRole("log")).toHaveTextContent("итог");
   expect(streams()[0]!.closed).toBe(true);
+  await userEvent.click(screen.getByRole("tab", { name: "Спросить" }));
   expect(screen.getByRole("button", { name: "Что я пропустил?" })).toBeDisabled();
 });
 

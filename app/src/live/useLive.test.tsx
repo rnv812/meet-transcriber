@@ -3,15 +3,20 @@ import { act, renderHook } from "@testing-library/react";
 vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
   liveAsk: vi.fn(),
+  liveHint: vi.fn(),
   liveTask: vi.fn(),
 }));
-import { ApiError, liveAsk, liveTask } from "../lib/api";
+import { ApiError, liveAsk, liveHint, liveTask } from "../lib/api";
 import { FakeEventSource } from "../test/setup";
 import { MAX_LINES, useLive } from "./useLive";
 
 const ep = { base: "http://h", token: "t" };
 const liveSources = () => FakeEventSource.instances.filter((s) => s.url.startsWith("http://h/live/events"));
 const line = (i: number) => ({ t: i, speaker: "Демьян", text: `реплика ${i}` });
+const hintOf = (id: string) => ({
+  id, kind: "risk" as const, text: `подсказка ${id}`, why: "", source_t: 1, ref: null, pinned: false,
+  dismissed: false, created_at: 1, updated_at: 1,
+});
 
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => vi.useRealTimers());
@@ -133,4 +138,46 @@ test("setTask уходит в liveTask", async () => {
   const { result } = renderHook(() => useLive(ep));
   await act(async () => { await result.current.setTask("релиз 2.0"); });
   expect(liveTask).toHaveBeenCalledWith(ep, "релиз 2.0");
+});
+
+test("state даёт структурную сводку и подсказки; «Только сводка» — hintsEnabled false", () => {
+  const { result } = renderHook(() => useLive(ep));
+  const es = liveSources().at(-1)!;
+  const summary = { topic: "Релиз", points: [], decisions: [{ id: "d1", text: "в пятницу" }], tasks: [], open_questions: [] };
+  act(() => es.emit("state", { digest: "", transcript: [], status: null, summary, hints: [hintOf("h1")], hints_enabled: false }));
+  expect(result.current.summary).toEqual(summary);
+  expect(result.current.hints.map((h) => h.id)).toEqual(["h1"]);
+  expect(result.current.hintsEnabled).toBe(false);
+});
+
+test("действие с подсказкой видно сразу; не дошло — откат и ошибка", async () => {
+  vi.mocked(liveHint).mockResolvedValueOnce({ ok: true }).mockRejectedValueOnce(new ApiError(409, "Ассистент не запущен"));
+  const { result } = renderHook(() => useLive(ep));
+  const es = liveSources().at(-1)!;
+  act(() => es.emit("state", { digest: "", transcript: [], status: null, hints: [hintOf("h1"), hintOf("h2")] }));
+  await act(async () => { await result.current.hint("h1", "dismiss"); });
+  expect(liveHint).toHaveBeenCalledWith(ep, "h1", "dismiss");
+  expect(result.current.hints.map((h) => h.id)).toEqual(["h2"]);
+  // Ассистент прислал своё состояние — пометка больше не нужна.
+  act(() => es.emit("state", { digest: "", transcript: [], status: null, hints: [hintOf("h2")] }));
+  expect(result.current.hints.map((h) => h.id)).toEqual(["h2"]);
+  await act(async () => { await result.current.hint("h2", "pin"); });
+  expect(result.current.hints[0]!.pinned).toBe(false);
+  expect(result.current.askError).toBe("Ассистент не запущен");
+});
+
+test("пометка держится, пока ассистент не подтвердил действие", async () => {
+  let done!: (v: { ok: boolean }) => void;
+  vi.mocked(liveHint).mockReturnValueOnce(new Promise((r) => { done = r; }));
+  const { result } = renderHook(() => useLive(ep));
+  const es = liveSources().at(-1)!;
+  act(() => es.emit("state", { digest: "", transcript: [], status: null, hints: [hintOf("h1")] }));
+  let call!: Promise<void>;
+  act(() => { call = result.current.hint("h1", "pin"); });
+  // Старое состояние, пришедшее до ответа, пометку не стирает.
+  act(() => es.emit("state", { digest: "", transcript: [], status: null, hints: [hintOf("h1")] }));
+  expect(result.current.hints[0]!.pinned).toBe(true);
+  await act(async () => { done({ ok: true }); await call; });
+  act(() => es.emit("state", { digest: "", transcript: [], status: null, hints: [{ ...hintOf("h1"), pinned: true }] }));
+  expect(result.current.hints[0]!.pinned).toBe(true);
 });

@@ -261,6 +261,10 @@ class FakeState:
         self.calls.append(("live.task", body))
         return {"ok": True}
 
+    def live_hint(self, body):
+        self.calls.append(("live.hint", body))
+        return {"ok": True, "changed": True}
+
     def live_events(self, last_event_id=None):
         if not self.live_active:
             raise control.Conflict("Ассистент не запущен")
@@ -1135,9 +1139,11 @@ def test_live_routes_reach_state(server):
     assert _post(server, "/live/stop")["action"] == "stopping"
     assert _post(server, "/live/ask", {"question": "что решили?"}) == {"answer": "ответ"}
     assert _post(server, "/live/task", {"task": "Ревью"}) == {"ok": True}
+    assert _post(server, "/live/hint", {"id": "h1", "action": "pin"}) == {"ok": True, "changed": True}
     calls = server.state_obj.calls
     assert calls == ["live.start", "live.stop", ("live.ask", {"question": "что решили?"}),
-                     ("live.task", {"task": "Ревью"})]
+                     ("live.task", {"task": "Ревью"}),
+                     ("live.hint", {"id": "h1", "action": "pin"})]
 
 
 def test_live_start_without_provider_is_409(server):

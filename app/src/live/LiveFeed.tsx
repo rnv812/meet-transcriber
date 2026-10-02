@@ -1,9 +1,8 @@
-/** Лента живой записи и сводка: общие для плавающей панели и карточки записи. */
+/** Лента живой записи: общая для плавающей панели и карточки записи. */
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { clock } from "../lib/format";
-import { Markdown } from "../lib/markdown";
 import "./live.css";
 import type { FeedLine } from "./useLive";
 
@@ -86,20 +85,5 @@ export function LiveFeed({ lines, className = "", focus = null }: {
         </li>
       ))}
     </ol>
-  );
-}
-
-/** Сводка встречи (Markdown); сворачивается по заголовку. */
-export function LiveDigest({ digest, defaultOpen = true }: { digest: string; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <section className="live-digest">
-      <button type="button" className="live-digest__toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span aria-hidden="true">{open ? "▾" : "▸"}</span> Дайджест
-      </button>
-      {open && (digest.trim()
-        ? <Markdown source={digest} className="live-digest__body" />
-        : <div className="live-digest__body muted">Дайджест появится через пару минут разговора</div>)}
-    </section>
   );
 }

@@ -375,15 +375,53 @@ export type LiveQa = {
   quick: LiveQuick | null;
 };
 
+/** Пункт живой сводки со стабильным id (`p3`, `d1`, `q2`). */
+export type LiveItem = { id: string; text: string };
+export type LiveTask = { id: string; who: string | null; what: string; due: string | null };
+
+/** Живая сводка встречи (`meet.assist.live_state`). */
+export type LiveSummary = {
+  topic: string;
+  points: LiveItem[];
+  decisions: LiveItem[];
+  tasks: LiveTask[];
+  open_questions: LiveItem[];
+};
+
+/** Вид подсказки: стоит спросить, риск, без ответа, термин, следующий шаг. */
+export type LiveHintKind = "question" | "risk" | "unanswered" | "term" | "followup";
+
+export type LiveHint = {
+  id: string;
+  kind: LiveHintKind;
+  text: string;
+  /** Почему важно сейчас — одна строка. */
+  why: string;
+  /** Секунды записи реплики, к которой относится подсказка. */
+  source_t: number;
+  /** Файл базы знаний (у «Термина»). */
+  ref: string | null;
+  pinned: boolean;
+  dismissed: boolean;
+  created_at: number;
+  updated_at: number;
+};
+
 /**
- * `event: state` потока `/live/events`: сводка Markdown'ом (`digest`), хвост
- * ленты, история вопросов, тихий статус («Подсказки временно недоступны»).
+ * `event: state` потока `/live/events`: сводка (структурой и Markdown'ом —
+ * `digest`), подсказки, история вопросов, хвост ленты, тихий статус
+ * («Подсказки временно недоступны»). `hints_enabled: false` — режим
+ * «Только сводка».
  */
 export type LiveState = {
   digest: string;
   transcript: string[];
   status: string | null;
   qa?: LiveQa[];
+  version?: number;
+  summary?: LiveSummary;
+  hints?: LiveHint[];
+  hints_enabled?: boolean;
 };
 
 /** `event: line`: новая строка ленты; `t` — секунды от начала записи. */

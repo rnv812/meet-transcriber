@@ -188,15 +188,18 @@ test("запись с ассистентом: в карточке живая л�
     if (!found) throw new Error("поток ассистента ещё не открыт");
     return found;
   });
+  const summary = { topic: "Релиз", points: [], decisions: [{ id: "d1", text: "релиз в пятницу" }], tasks: [], open_questions: [] };
   act(() => {
-    stream.emit("state", { digest: "- релиз в пятницу", transcript: [], status: null });
+    stream.emit("state", { digest: "", transcript: [], status: null, summary, hints: [] });
     stream.emit("line", { t: 65, speaker: "Демьян", text: "давайте начнём" }, 0);
   });
   expect(screen.getByRole("log")).toHaveTextContent("давайте начнём");
+  await userEvent.click(screen.getByRole("tab", { name: "Сводка" }));
   expect(screen.getByText("релиз в пятницу")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("tab", { name: "Спросить" }));
   await userEvent.click(screen.getByRole("button", { name: "Что я пропустил?" }));
   expect(api.liveAsk).toHaveBeenCalledWith(ep, "", { quick: "missed" });
-  act(() => stream.emit("state", { digest: "- релиз в пятницу", transcript: [], status: null, qa: [
+  act(() => stream.emit("state", { digest: "", transcript: [], status: null, summary, qa: [
     { id: 1, q: "Что я пропустил?", a: "Обсуждали релиз", error: null, pending: false, at: 1, quick: "missed" },
   ] }));
   expect(await screen.findByText("Обсуждали релиз")).toBeInTheDocument();

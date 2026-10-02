@@ -3,25 +3,34 @@
  *
  * Окно создаёт и закрывает оболочка по `snapshot.live.active`. Панель
  * двигают за шапку (двойной щелчок по ней — на весь экран и обратно), её
- * растягивают за края; свёрнутая показывает последнюю реплику, развёрнутая и
- * на весь экран — ленту, дайджест и вопросы. Размер и место помнит оболочка
- * (`useLiveWindow`). Фокус панель не берёт: окно создаётся без фокуса, и ни
- * один элемент не фокусируется сам — клавиатура остаётся у звонка, пока
- * человек не щёлкнет в панель.
+ * растягивают за края. Свёрнутая — одна строка: самая важная подсказка (она
+ * сменяется, только когда сменилась сама) и счётчик новых; щелчок
+ * разворачивает панель на «Подсказках». Развёрнутая и на весь экран —
+ * рабочая область (`LiveWorkspace`): вкладки, а в широком окне — две колонки.
+ *
+ * «Не отвлекать»: ни подсветки, ни счётчиков, строка свёрнутой панели не
+ * меняется, пока её подсказка жива; содержимое при этом обновляется.
+ *
+ * Размер и место помнит оболочка (`useLiveWindow`). Фокус панель не берёт:
+ * окно создаётся без фокуса, и ни один элемент не фокусируется сам —
+ * клавиатура остаётся у звонка, пока человек не щёлкнет в панель.
  */
 
-import { type MouseEvent, useCallback, useEffect, useState } from "react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
 
 import { type Endpoint, NoResidentError, liveStop, resolveEndpoint } from "../lib/api";
 import { clock, errorText } from "../lib/format";
 import { inTauri, invoke } from "../lib/shell";
+import type { LiveHint } from "../lib/types";
 import { Button } from "../ui/Button";
-import { LiveAsk } from "./LiveAsk";
-import { type FeedFocus, LiveDigest, LiveFeed } from "./LiveFeed";
+import { LiveWorkspace, useLiveView } from "./LiveWorkspace";
+import { MaximizeIcon, PinIcon, QuietIcon } from "./icons";
+import { KIND_LABEL, topHint } from "./liveModel";
 import { useLiveAsk } from "./useLastLook";
 import { useLive } from "./useLive";
 import { useLiveStatus } from "./useLiveStatus";
 import { useLiveWindow } from "./useLiveWindow";
+import { useWide } from "./useWide";
 import "./live.css";
 
 const TICK_MS = 1000;
@@ -58,24 +67,17 @@ export function headPress(e: MouseEvent, drag: () => void, toggle?: () => void) 
   else if (e.detail === 1) drag();
 }
 
-function MaximizeIcon({ maximized }: { maximized: boolean }) {
-  return maximized ? (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4">
-      <path d="M2.5 9.5h4v4M13.5 6.5h-4v-4M6.5 9.5l-4.5 4.5M9.5 6.5L14 2" />
-    </svg>
-  ) : (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4">
-      <path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5L9 7M2.5 13.5L7 9" />
-    </svg>
-  );
-}
-
-function PinIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round">
-      <path d="M6 2.5h4M7 2.5v4L4.5 9h7L9 6.5v-4M8 9v4.5" />
-    </svg>
-  );
+/**
+ * Подсказка строки свёрнутой панели: самая важная; сменяется, только когда
+ * сменилась самая важная. «Не отвлекать» — держим показанную, пока она жива.
+ */
+function useShownHint(hints: LiveHint[], quiet: boolean): LiveHint | null {
+  const shownId = useRef<string | null>(null);
+  const best = topHint(hints);
+  const kept = quiet && shownId.current ? hints.find((h) => h.id === shownId.current) : undefined;
+  const shown = kept ?? best;
+  shownId.current = shown?.id ?? null;
+  return shown;
 }
 
 export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
@@ -89,11 +91,14 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const elapsed = useElapsed(status?.started_at);
   const { view, setExpanded, setMaximized, setPinned, startDrag } = useLiveWindow();
   const [stopError, setStopError] = useState<string | null>(null);
+  const [quiet, setQuiet] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const wide = useWide(root);
   // На весь экран — всё содержимое, как у развёрнутой.
   const open = view.expanded || view.maximized;
   const ask = useLiveAsk(live, open);
-  const [focus, setFocus] = useState<FeedFocus | null>(null);
-  const jump = useCallback((t: number) => setFocus((f) => ({ t, seq: (f?.seq ?? 0) + 1 })), []);
+  const ws = useLiveView(live, { open, wide, quiet });
+  const shown = useShownHint(live.hints, quiet);
 
   // Esc возвращает обычный размер (клавиатура у панели, только если по ней
   // щёлкнули). В поле вопроса Esc — дело поля, окно не трогаем.
@@ -116,18 +121,37 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
     });
   };
 
+  const openHints = () => {
+    ws.setTab(shown ? "hints" : "feed");
+    setExpanded(true);
+  };
+
   const state = stopping ? "Останавливаю…" : "Ассистент слушает";
   const sizeLabel = view.maximized ? "Обычный размер" : "На весь экран";
   const last = live.lines.at(-1);
+  const newHints = quiet ? 0 : ws.unseen.hints;
   const mods = `${open ? " live-panel--open" : ""}${view.maximized ? " live-panel--maximized" : ""}`;
   return (
-    <div className={`live-panel${mods}`}>
+    <div ref={root} className={`live-panel${mods}`}>
       <header className="live-head" onMouseDown={(e) => headPress(e, startDrag, () => setMaximized(!view.maximized))}>
         <span className="live-head__title" title={state}>
           <span className="live-dot" aria-hidden="true" />
           <span className="num">{elapsed === null ? "—" : clock(elapsed)}</span> · {state}
+          {live.status && !stopping && (
+            <span className="live-status" role="status" title={live.status}>
+              <span className="live-status__dot" aria-hidden="true" />
+              <span className="live-status__text">{live.status}</span>
+            </span>
+          )}
         </span>
         <span className="live-head__actions">
+          <button
+            type="button" className="icon-btn live-head__quiet" aria-pressed={quiet} aria-label="Не отвлекать"
+            title={quiet ? "«Не отвлекать» включено: без подсветки и счётчиков" : "Не отвлекать: без подсветки и счётчиков"}
+            onClick={() => setQuiet(!quiet)}
+          >
+            <QuietIcon on={quiet} />
+          </button>
           <button
             type="button" className="icon-btn live-head__pin" aria-pressed={view.pinned}
             aria-label="Поверх всех окон"
@@ -152,22 +176,24 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
       {live.error && <div className="live-panel__note muted">{live.error}</div>}
       {open ? (
         <div className="live-panel__body">
-          <LiveFeed lines={live.lines} className="live-panel__feed" focus={focus} />
-          <div className="live-panel__side">
-            <LiveDigest digest={live.digest} defaultOpen={false} />
-            <LiveAsk qa={live.qa} asking={live.asking} error={live.askError} onAsk={ask}
-              disabled={stopping} onTime={jump} />
-          </div>
+          <LiveWorkspace live={live} view={ws} onAsk={ask} disabled={stopping} />
         </div>
       ) : (
-        <div className="live-last" aria-live="polite">
-          {last ? (
+        <button type="button" className="live-last" onClick={openHints}
+          aria-label={shown ? `Подсказка: ${shown.text}. Открыть подсказки` : "Развернуть панель"}>
+          {shown ? (
             <>
+              <span className={`live-last__kind live-hint--${shown.kind}`}>{KIND_LABEL[shown.kind]}</span>
+              <span className="live-last__text">{shown.text}</span>
+            </>
+          ) : last ? (
+            <span className="live-last__text muted">
               {last.speaker && <span className="live-feed__who">{last.speaker}</span>}
               <span>{last.text}</span>
-            </>
-          ) : <span className="muted">Реплики появятся, как только их расшифрует ассистент</span>}
-        </div>
+            </span>
+          ) : <span className="live-last__text muted">Реплики появятся, как только их расшифрует ассистент</span>}
+          {newHints > 0 && <span className="live-last__count" aria-label={`новых подсказок: ${newHints}`}>{newHints}</span>}
+        </button>
       )}
     </div>
   );
