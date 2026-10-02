@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Права только главного окна: перетаскивание окна за полосу под заголовком (data-tauri-drag-region). Панель ассистента двигает себя командой оболочки, а закрытие главного окна с несохранёнными настройками решает оболочка (close_guard.rs) — уничтожать окна из страницы не нужно никому.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:window:allow-start-dragging"
+  ]
+}

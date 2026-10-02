@@ -11,7 +11,8 @@ import type { FindRequest } from "../features/card/TranscriptView";
 import { loadCategoryFilter, NO_CATEGORY, saveCategoryFilter } from "../lib/categories";
 import { searchable } from "../lib/search";
 import {
-  destroyMainWindow, initialRecording, initialSection, onCloseRequested, onOpenRecording, onOpenSection, setSettingsDirty,
+  initialRecording, initialSection, onOpenRecording, onOpenSection, onSettingsCloseGuard, setSettingsDirty,
+  settingsCloseAck, settingsCloseGo, settingsCloseStay,
 } from "../lib/shell";
 import { EmptyState, OfflineState } from "../ui/EmptyState";
 import { Button } from "../ui/Button";
@@ -54,7 +55,7 @@ export function App() {
   /** Несохранённое в настройках: SettingsPane кладёт сюда список разделов и save. */
   const settingsGuard = useRef<SettingsGuard | null>(null);
   /** Уход из настроек ждёт ответа «Сохранить / Не сохранять / Остаться». */
-  const [leaving, setLeaving] = useState<{ go: () => void } | null>(null);
+  const [leaving, setLeaving] = useState<{ go: () => void; stay?: () => void } | null>(null);
   const sectionRef = useRef(section);
   sectionRef.current = section;
   /** Переход из настроек куда-то ещё — через вопрос, если там несохранённое. */
@@ -110,18 +111,22 @@ export function App() {
   const leaveRef = useRef(leaveSettings);
   leaveRef.current = leaveSettings;
 
-  // Крестик главного окна с несохранёнными настройками — тот же вопрос; окно
-  // закрывается только после «Сохранить» или «Не сохранять».
+  // Крестик главного окна при несохранённых настройках: оболочка придержала
+  // закрытие и спрашивает — тот же вопрос; ответ уходит обратно в оболочку.
+  // Страница молчит (зависла) — оболочка закроет окно сама через 2 с.
   useEffect(() => {
     let off: (() => void) | null = null;
     let gone = false;
-    onCloseRequested(() => {
-      if (sectionRef.current !== "settings" || !settingsGuard.current?.dirty.length) return false;
-      setLeaving({ go: () => void destroyMainWindow() });
-      return true;
+    onSettingsCloseGuard(() => {
+      if (sectionRef.current !== "settings" || !settingsGuard.current?.dirty.length) {
+        void settingsCloseGo();
+        return;
+      }
+      void settingsCloseAck();
+      setLeaving({ go: () => void settingsCloseGo(), stay: () => void settingsCloseStay() });
     })
       .then((stop) => { if (gone) stop(); else off = stop; })
-      .catch((cause) => console.warn("close-requested:", cause));
+      .catch((cause) => console.warn("settings-close-guard:", cause));
     return () => { gone = true; off?.(); };
   }, []);
   useEffect(() => {
@@ -237,7 +242,7 @@ export function App() {
         </div>
       </div>
       {leaving && (
-        <LeaveSettings guard={settingsGuard.current} onStay={() => setLeaving(null)}
+        <LeaveSettings guard={settingsGuard.current} onStay={() => { leaving.stay?.(); setLeaving(null); }}
           onLeave={() => { const { go } = leaving; setLeaving(null); go(); }} />
       )}
     </div>

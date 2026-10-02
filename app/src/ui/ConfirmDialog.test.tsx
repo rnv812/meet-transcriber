@@ -145,6 +145,38 @@ test("focus returns after an inline confirm and to returnFocus when the opener i
   expect(screen.getByRole("button", { name: "Ещё" })).toHaveFocus();
 });
 
+test("modal: inert is lifted before focus goes back (Chromium ignores focus inside inert)", async () => {
+  // Как в Chromium: focus() внутри [inert] не срабатывает.
+  const original = HTMLElement.prototype.focus;
+  const spy = vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement, opts) {
+    if (this.closest("[inert]")) return;
+    original.call(this, opts);
+  });
+  try {
+    function Host() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>Удалить запись…</button>
+          {open && <ConfirmDialog {...base} onConfirm={() => setOpen(false)} onCancel={() => setOpen(false)} />}
+        </>
+      );
+    }
+    render(<Host />);
+    const opener = screen.getByRole("button", { name: "Удалить запись…" });
+    await userEvent.click(opener);
+    expect(opener.closest("[inert]")).not.toBeNull(); // страница за окном недоступна
+    await userEvent.keyboard("{Escape}");
+    expect(opener.closest("[inert]")).toBeNull();
+    expect(opener).toHaveFocus();
+    await userEvent.click(opener);
+    await userEvent.click(screen.getByRole("button", { name: "Удалить" }));
+    expect(opener).toHaveFocus();
+  } finally {
+    spy.mockRestore();
+  }
+});
+
 test("non-destructive confirm uses the primary style", () => {
   render(<ConfirmDialog {...base} danger={false} onConfirm={() => {}} onCancel={() => {}} />);
   expect(screen.getByRole("button", { name: "Удалить" })).toHaveClass("btn--primary");

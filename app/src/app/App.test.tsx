@@ -52,7 +52,7 @@ vi.mock("../lib/api", async (orig) => ({
 const engineState = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
 const openCb = vi.hoisted(() => ({ current: null as ((id: string) => void) | null }));
 const sectionCb = vi.hoisted(() => ({ current: null as ((s: string) => void) | null }));
-const closeCb = vi.hoisted(() => ({ current: null as (() => boolean) | null }));
+const closeCb = vi.hoisted(() => ({ current: null as (() => void) | null }));
 vi.mock("../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../lib/shell")>()),
   onOpenRecording: vi.fn(async (cb: (id: string) => void) => {
@@ -63,11 +63,13 @@ vi.mock("../lib/shell", async (orig) => ({
     sectionCb.current = cb;
     return () => {};
   }),
-  onCloseRequested: vi.fn(async (hold: () => boolean) => {
-    closeCb.current = hold;
+  onSettingsCloseGuard: vi.fn(async (cb: () => void) => {
+    closeCb.current = cb;
     return () => {};
   }),
-  destroyMainWindow: vi.fn(async () => {}),
+  settingsCloseAck: vi.fn(async () => {}),
+  settingsCloseGo: vi.fn(async () => {}),
+  settingsCloseStay: vi.fn(async () => {}),
   setSettingsDirty: vi.fn(async () => {}),
   engineStatus: vi.fn(async () => engineState.current),
   residentStatus: vi.fn(async () => "engine-missing"),
@@ -135,21 +137,29 @@ test("«Запустить мастер» из настроек с правка�
   expect(await screen.findByTestId("wizard")).toBeInTheDocument();
 });
 
-test("крестик окна с несохранёнными настройками — вопрос; закрытие только после ответа", async () => {
+test("крестик окна: оболочка спросила — вопрос показан (ack), ответ уходит в оболочку", async () => {
   residentState.current = online();
   render(<App />);
   await waitFor(() => expect(closeCb.current).not.toBeNull());
-  // Правок нет — окно закрывается сразу.
-  expect(closeCb.current!()).toBe(false);
+  // Оболочка спросила, а несохранённого уже нет (успели сохранить) — сразу «закрыть».
+  act(() => closeCb.current!());
+  expect(shell.settingsCloseGo).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+
   await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
   await userEvent.click(screen.getByRole("button", { name: "правка" }));
-  let held = false;
-  act(() => { held = closeCb.current!(); });
-  expect(held).toBe(true);
-  const ask = screen.getByRole("alertdialog", { name: "Сохранить изменения в настройках?" });
+  act(() => closeCb.current!());
+  expect(shell.settingsCloseAck).toHaveBeenCalledTimes(1);
+  let ask = screen.getByRole("alertdialog", { name: "Сохранить изменения в настройках?" });
   expect(within(ask).getByRole("button", { name: "Остаться" })).toHaveFocus();
+  await userEvent.click(within(ask).getByRole("button", { name: "Остаться" }));
+  expect(shell.settingsCloseStay).toHaveBeenCalledTimes(1);
+  expect(shell.settingsCloseGo).toHaveBeenCalledTimes(1);
+
+  act(() => closeCb.current!());
+  ask = screen.getByRole("alertdialog", { name: "Сохранить изменения в настройках?" });
   await userEvent.click(within(ask).getByRole("button", { name: "Сохранить" }));
-  await waitFor(() => expect(shell.destroyMainWindow).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(shell.settingsCloseGo).toHaveBeenCalledTimes(2));
   expect(settingsSave).toHaveBeenCalled();
 });
 

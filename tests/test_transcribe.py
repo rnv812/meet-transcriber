@@ -347,6 +347,19 @@ def test_plan_import_single_track_gigaam(monkeypatch, tmp_path):
     _assert_steady(events_, 5)
 
 
+def test_plan_with_gigaam_backend_but_english_keeps_alignment(monkeypatch, tmp_path):
+    """GigaAM в настройках, но язык записи — английский: распознаёт Whisper,
+    выравнивание в плане с первого события."""
+    import json
+
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "config.json").write_text(json.dumps({"asr": {"language": "en"}}), encoding="utf-8")
+    events_ = _engine_run(monkeypatch, tmp_path, device="cpu", backend="faster-whisper", layout="two")
+    _assert_steady(events_, 7)
+    assert [e["step"] for e in events_ if e["stage"] == "align"][0] == 3
+
+
 def test_plan_engine_changed_after_start_skips_alignment_without_recount(monkeypatch, tmp_path):
     """Настройки обещали Whisper (шаг выравнивания в плане), а распознала GigaAM:
     шаг пропускается, число этапов прежнее."""
