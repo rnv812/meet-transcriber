@@ -864,3 +864,57 @@ def test_fix_rule_for_future_transcriptions(env, capsys):
     assert "Правило для будущих расшифровок: кубер нетис → Kubernetes" in capsys.readouterr().out
     assert list(settings.load().asr.replacements) == [{"from": "кубер нетис", "to": "Kubernetes"}]
     assert _texts(folder) == ["Поднимем Kubernetes.", "Kubernetes готов."]
+
+
+def test_fix_refuses_a_recording_in_progress_without_the_app(env, capsys, monkeypatch):
+    from meet import cli_library
+
+    folder = _fix_meeting(env)
+    monkeypatch.setattr(cli_library, "_recording_now", lambda root: folder)
+    assert _main(["fix", RID, "кубер нетис", "Kubernetes"]) == 1
+    assert "запись ещё идёт" in capsys.readouterr().err
+    assert _texts(folder) == ["Поднимем кубер нетис.", "Кубер нетис готов."]
+
+
+def test_fix_goes_through_the_running_app(env, capsys, monkeypatch):
+    from meet import control
+
+    folder = _fix_meeting(env)
+    calls = []
+
+    def fake_request(path, method="GET", payload=None, timeout=5.0):
+        calls.append((path, payload))
+        if path.endswith("/text/preview"):
+            return {"count": 2, "samples": [{"segment": 0, "offset": 9}], "here": None}
+        return {"changed": 1, "step": {"id": "s1"}, "hotword": {"term": "Kubernetes", "added": True},
+                "rule": None}
+
+    monkeypatch.setattr(control, "alive", lambda *a, **k: True)
+    monkeypatch.setattr(control, "request", fake_request)
+    assert _main(["fix", RID, "кубер нетис", "Kubernetes", "--hotword", "--json"]) == 0
+    got = _json_out(capsys)
+    assert got["changed"] == 1 and got["step"] == "s1" and got["via_app"] is True
+    assert [c[0] for c in calls] == [f"/recordings/{RID}/text/preview", f"/recordings/{RID}/text/apply"]
+    assert calls[1][1]["scope"] == "one" and calls[1][1]["add_hotword"] is True
+    assert (calls[1][1]["segment"], calls[1][1]["offset"]) == (0, 9)
+    assert _texts(folder) == ["Поднимем кубер нетис.", "Кубер нетис готов."]  # сам файл не трогали
+
+
+def test_fix_reports_the_apps_refusal(env, capsys, monkeypatch):
+    from meet import control
+
+    _fix_meeting(env)
+
+    def busy(path, method="GET", payload=None, timeout=5.0):
+        raise RuntimeError("резидент ответил 409: Идёт расшифровка — отмените её или дождитесь")
+
+    monkeypatch.setattr(control, "alive", lambda *a, **k: True)
+    monkeypatch.setattr(control, "request", busy)
+    assert _main(["fix", RID, "кубер нетис", "Kubernetes"]) == 1
+    assert "Идёт расшифровка — отмените её или дождитесь" in capsys.readouterr().err
+
+
+def test_fix_help_mentions_the_knowledge_base(capsys):
+    with pytest.raises(SystemExit):
+        _main(["fix", "--help"])
+    assert "базу знаний" in capsys.readouterr().out

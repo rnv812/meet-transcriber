@@ -1240,6 +1240,20 @@ class TrayControl:
     def get_hotwords(self) -> dict:
         return self._hotwords_reply(hotwords.read(paths.hotwords_path()))
 
+    def remove_hotword(self, body: dict | None) -> dict:
+        """Убрать один термин (отмена «Добавлено в термины»): только его строку,
+        остальной список — как есть, даже если его правили между делом."""
+        term = (body or {}).get("term")
+        if not isinstance(term, str) or not term.strip():
+            raise _bad_request("term должен быть непустой строкой")
+        path = paths.hotwords_path()
+        try:
+            text = hotwords.remove_term(hotwords.read(path), term)
+            hotwords.write(path, text)
+        except OSError as e:
+            raise RuntimeError(f"не удалось сохранить список слов: {e}") from e
+        return self._hotwords_reply(text)
+
     def put_hotwords(self, body: dict) -> dict:
         text = (body or {}).get("text")
         if not isinstance(text, str):
@@ -1257,7 +1271,17 @@ class TrayControl:
             return {"error": "записи нет"}
         raw = card.to_raw()
         raw["transcript"] = _window_transcript(library.read_transcript_full(folder))
+        raw["edit_head"] = self._edit_head(folder)
         return raw
+
+    def _edit_head(self, folder: Path) -> str | None:
+        """Последний применённый шаг истории встречи (для «Отменить» у итогов)."""
+        from meet import speakers
+
+        try:
+            return speakers.head(folder)
+        except (OSError, ValueError):
+            return None
 
     def update_recording(self, recording_id: str, body: dict) -> dict:
         """Переименовать запись. Название живёт в meta.json, а не в транскрипте:
@@ -1562,15 +1586,18 @@ class TrayControl:
             return reply
         reply["changed"] = result.get("changed", 0)
         if term:
-            reply["hotword"] = hotwords.add_to_file(paths.hotwords_path(),
-                                                    textfix.clean_text(body.get("replace")))
+            from meet import replacements
+
+            reply["hotword"] = hotwords.add_to_file(
+                paths.hotwords_path(), replacements.hotword_for(body.get("find"), body.get("replace")))
         if rule:
             reply["rule"] = self._add_rule(body.get("find"), body.get("replace"))
         return reply
 
     def _add_rule(self, find, replace) -> dict | None:
         """Правило замены для будущих расшифровок (`asr.replacements`); то же
-        «from» — заменяется. None — правило ничего бы не меняло."""
+        «from» — заменяется (прежнее — в `replaced`). None — правило ничего бы
+        не меняло."""
         from meet import replacements
 
         src, dst = replacements.clean_text(find), replacements.clean_text(replace)
@@ -1578,10 +1605,13 @@ class TrayControl:
             return None
         try:
             current = settings.load().asr.replacements
+            key = replacements.words_of(src)
+            replaced = next((dict(r) for r in current if replacements.words_of(r["from"]) == key), None)
             settings.patch({"asr": {"replacements": replacements.with_rule(current, src, dst)}})
         except OSError as e:  # исправление уже применено — о правиле только сообщаем
             return {"from": src, "to": dst, "error": f"не удалось сохранить правило: {e}"}
-        return {"from": src, "to": dst}
+        # `replaced` — правило с тем же «from», которое это вытеснило: отмена его вернёт.
+        return {"from": src, "to": dst, "replaced": replaced}
 
     # --- «Разделить спикера» и порог узнавания ----------------------------------
 
@@ -1744,10 +1774,15 @@ class TrayControl:
         return self._speakers_change(recording_id, lambda folder, voices: speakers.threshold_apply(
             folder, value, voices))
 
-    def speakers_undo(self, recording_id: str) -> dict:
+    def speakers_undo(self, recording_id: str, body: dict | None = None) -> dict:
+        """Отменить последний шаг; {"expect_step": id} — только если последний
+        именно он (итог правки в расшифровке), иначе 409."""
         from meet import speakers
 
-        return self._speakers_change(recording_id, speakers.undo)
+        expect = (body or {}).get("expect_step")
+        expect = expect if isinstance(expect, str) and expect else None
+        return self._speakers_change(recording_id, lambda folder, voices: speakers.undo(
+            folder, voices, expect_step=expect))
 
     def speakers_redo(self, recording_id: str) -> dict:
         from meet import speakers

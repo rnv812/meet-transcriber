@@ -47,7 +47,7 @@ const view: SpeakersView = { owner: "Вы", history: [], pos: 1, speakers: [],
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(api.getRecording).mockResolvedValue({ ...rec, transcript });
+  vi.mocked(api.getRecording).mockResolvedValue({ ...rec, transcript, edit_head: "s" });
   vi.mocked(api.getSettings).mockResolvedValue({ recording: { speaker_name: "Вы" } });
   vi.mocked(api.getAssistant).mockResolvedValue({
     provider: null, setting: "auto", available: {}, knowledge_dir: null, checking: false,
@@ -80,7 +80,7 @@ test("меню реплики: только эта реплика — челов
     idx: [0, 1], labels: ["Спикер 1", "Спикер 1"], count: 5, to: "Анна Смирнова" });
   expect(await screen.findByText("1 реплика → Анна Смирнова")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Отменить" }));
-  await waitFor(() => expect(api.undoSpeakers).toHaveBeenCalledWith(ep, "r1"));
+  await waitFor(() => expect(api.undoSpeakers).toHaveBeenCalledWith(ep, "r1", "s"));
 });
 
 test("меню реплики: эта и следующие подряд того же спикера, новый безымянный", async () => {
@@ -191,4 +191,18 @@ test("клавиатура: стрелки по репликам, Пробел �
   await userEvent.keyboard("{Shift>} {/Shift}");
   expect(rows().filter((r) => r.dataset.selected)).toHaveLength(3);
   expect(rows()[2]).toHaveAccessibleName(/Реплика 00:12, Спикер 2, выбрана/);
+});
+
+test("итог назначения: «Отменить» пропадает, когда последним шагом стала другая правка", async () => {
+  const { rerender } = render(<RecordingCard id="r1" endpoint={ep} people={people} />);
+  await screen.findByText(/Начинаем планёрку/);
+  await userEvent.click(speakerButtons()[0]!);
+  const menu = await screen.findByRole("dialog", { name: "Кому отдать реплики" });
+  await userEvent.click(within(menu).getByRole("option", { name: /Анна Смирнова/ }));
+  await screen.findByText("1 реплика → Анна Смирнова");
+  expect(screen.getByRole("button", { name: "Отменить" })).toBeInTheDocument();
+  vi.mocked(api.getRecording).mockResolvedValue({ ...rec, transcript, edit_head: "чужой" });
+  rerender(<RecordingCard id="r1" endpoint={ep} people={people} refreshKey={1} />);
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Отменить" })).toBeNull());
+  expect(screen.getByText("1 реплика → Анна Смирнова")).toBeInTheDocument();
 });

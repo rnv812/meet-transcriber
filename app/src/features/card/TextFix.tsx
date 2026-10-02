@@ -9,22 +9,23 @@
 
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import {
-  applyTextFix, getHotwords, getSettings, patchSettings, previewTextFix, putHotwords, undoSpeakers, type Endpoint,
+  applyTextFix, getSettings, patchSettings, previewTextFix, removeHotword, undoSpeakers, type Endpoint,
 } from "../../lib/api";
 import { clock, errorText, plural } from "../../lib/format";
 import { nfc } from "../../lib/search";
 import type { Turn } from "../../lib/speakers";
-import { expandToWords, removeTerm, segmentSpan, wordAt } from "../../lib/textfix";
+import { expandToWords, newTerms, segmentSpan, wordAt } from "../../lib/textfix";
 import type { Segment, TextPreview } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Popover } from "../../ui/Popover";
-import { rulesOf } from "../settings/ReplacementsEditor";
+import { rulesOf, withRule } from "../settings/ReplacementsEditor";
 
 type Box = { left: number; top: number; bottom: number };
 /** Что исправляем: реплика, сегмент и начало в его тексте; `split` — выделение через границу фраз. */
 type Target = { turn: number; seg: number; offset: number; find: string; box: Box; split: boolean };
-type Notice = { key: string; text: string; undo: (() => Promise<string>) | null };
+/** Итог над репликами; `step` — шаг истории: «Отменить» — только пока он последний. */
+type Notice = { key: string; text: string; undo: (() => Promise<string>) | null; step?: string };
 
 const POPOVER_W = 340;
 const matchesWord = (n: number) => plural(n, "совпадение", "совпадения", "совпадений");
@@ -82,7 +83,7 @@ export type TextFix = {
   bar: ReactNode;
 };
 
-export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, onChanged }: {
+export function useTextFix({ endpoint, id, turns, segments, playable, head, onPlay, onChanged }: {
   endpoint: Endpoint;
   id: string;
   turns: Turn[];
@@ -90,6 +91,8 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
   playable: boolean;
   /** Прослушать место: с `start` до `until` секунд. */
   onPlay: (start: number, until: number) => void;
+  /** Последний применённый шаг истории встречи (`edit_head` записи). */
+  head?: string | null;
   /** Исправлено или отменено: перечитать запись. */
   onChanged: () => void;
 }): TextFix {
@@ -97,7 +100,8 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
   const [replace, setReplace] = useState("");
-  const [hotword, setHotword] = useState(true);
+  /** «Добавить в термины»: null — по умолчанию (включено, если исправление добавляет значимые слова). */
+  const [hotwordSet, setHotword] = useState<boolean | null>(null);
   const [all, setAll] = useState(false);
   const [rule, setRule] = useState(false);
   const [preview, setPreview] = useState<TextPreview | null>(null);
@@ -113,7 +117,7 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
     opened.current = true;
     setTarget(t);
     setReplace(t.find);
-    setHotword(true);
+    setHotword(null);
     setAll(false);
     setRule(false);
     setPreview(null);
@@ -184,9 +188,11 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
   }, [turns, show]);
 
   const notify = (n: Notice[]) => setNotices(n);
+  const right = replace.trim().split(/\s+/).join(" ");
+  const terms = target ? newTerms(target.find, right) : "";
+  const hotword = hotwordSet ?? !!terms;
   const apply = async () => {
     if (!target || busy) return;
-    const right = replace.trim().split(/\s+/).join(" ");
     setBusy(true);
     setError(null);
     try {
@@ -195,10 +201,16 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
         offset: target.offset, count: segments.length, add_hotword: hotword, add_rule: rule && right !== target.find,
       });
       const next: Notice[] = [];
+      const step = res.step?.id;
       if (res.changed > 0) {
         next.push({
           key: "text", text: `Исправлено: ${target.find} → ${right} (${res.changed}). Итоги не пересчитываются автоматически.`,
-          undo: async () => { await undoSpeakers(endpoint, id); onChanged(); return "Исправление отменено"; },
+          step,
+          undo: step ? async () => {
+            await undoSpeakers(endpoint, id, step);
+            onChanged();
+            return "Исправление отменено";
+          } : null,
         });
       }
       const term = res.hotword;
@@ -208,8 +220,7 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
         next.push({
           key: "term", text: `Добавлено в термины: ${term.term}.${over}`,
           undo: async () => {
-            const h = await getHotwords(endpoint);
-            await putHotwords(endpoint, removeTerm(h.text, term.term));
+            await removeHotword(endpoint, term.term);
             return `Убрано из терминов: ${term.term}`;
           },
         });
@@ -220,10 +231,14 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
         next.push({
           key: "rule", text: `Исправлять в будущих встречах: ${added.from} → ${added.to}`,
           undo: async () => {
+            // Убрать это правило и вернуть то, которое оно заменило (то же «как распознаётся»).
             const asr = ((await getSettings(endpoint)).asr ?? {}) as { replacements?: unknown };
             const left = rulesOf(asr.replacements).filter((r) => !(r.from === added.from && r.to === added.to));
-            await patchSettings(endpoint, { asr: { replacements: left } });
-            return `Правило убрано: ${added.from} → ${added.to}`;
+            const back = added.replaced ? withRule(left, added.replaced) : left;
+            await patchSettings(endpoint, { asr: { replacements: back } });
+            return added.replaced
+              ? `Правило возвращено: ${added.replaced.from} → ${added.replaced.to}`
+              : `Правило убрано: ${added.from} → ${added.to}`;
           },
         });
       }
@@ -253,7 +268,6 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
 
   let node: ReactNode = null;
   if (target) {
-    const right = replace.trim().split(/\s+/).join(" ");
     const same = right === target.find;
     const count = preview?.count ?? null;
     const seg = segments[target.seg];
@@ -292,7 +306,8 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
                       onFocus={(e) => e.currentTarget.select()} onChange={(e) => setReplace(e.target.value)} />
                   </label>
                   <label className="tfix__check">
-                    <input type="checkbox" checked={hotword} onChange={(e) => setHotword(e.target.checked)} />
+                    <input type="checkbox" checked={hotword} disabled={!right}
+                      onChange={(e) => setHotword(e.target.checked)} />
                     <span>Добавить в термины распознавания</span>
                     <HelpTip label="Что такое термины распознавания" title="Термины распознавания">
                       <TipLine>Слова и имена, которые подсказываются распознаванию в каждой новой расшифровке: так их
@@ -300,6 +315,9 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
                       <TipLine>Список — в разделе «Настройки → Распознавание». Готовые расшифровки он не меняет.</TipLine>
                     </HelpTip>
                   </label>
+                  {hotword && right && (
+                    <div className="muted tmenu__hint tfix__term">Будет добавлено: {terms || right}</div>
+                  )}
                   <label className="tfix__check">
                     <input type="checkbox" checked={all} disabled={count === null || count < 2}
                       onChange={(e) => setAll(e.target.checked)} />
@@ -351,7 +369,9 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
       {notices.map((n) => (
         <div className="tsel" role="status" aria-live="polite" key={n.key}>
           <span>{n.text}</span>
-          {n.undo && <button type="button" className="spk-link" disabled={busy} onClick={() => void undo(n)}>Отменить</button>}
+          {n.undo && (!n.step || n.step === head) && (
+            <button type="button" className="spk-link" disabled={busy} onClick={() => void undo(n)}>Отменить</button>
+          )}
           <button type="button" className="spk-link tsel__close" aria-label="Скрыть"
             onClick={() => setNotices((cur) => cur.filter((x) => x.key !== n.key))}>×</button>
         </div>

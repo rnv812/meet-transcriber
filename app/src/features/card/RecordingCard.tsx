@@ -158,11 +158,11 @@ export function RecordingCard({
   const colors = useMemo(() => new Map(people.map((p) => [p.name, p.color])), [people]);
   const textFix = useTextFix({
     endpoint, id, turns, segments: segments ?? NO_SEGMENTS, playable: !!rec && Object.keys(rec.tracks).length > 0
-      && !audioFailed, onPlay: playPhrase, onChanged: speakersChanged,
+      && !audioFailed, head: rec?.edit_head, onPlay: playPhrase, onChanged: speakersChanged,
   });
   const turnEdit = useTurnEdit({
     endpoint, id, turns, segments: segments ?? NO_SEGMENTS, people, owner, avatarVersion,
-    onOpenPanel: nameSpeaker, onChanged: speakersChanged, onFixWord: textFix.openWord,
+    onOpenPanel: nameSpeaker, onChanged: speakersChanged, onFixWord: textFix.openWord, head: rec?.edit_head,
   });
   // Правый щелчок по тексту: выделены слова — «Исправить…», иначе «Разделить реплику здесь».
   const { onContextMenu: fixMenu } = textFix;

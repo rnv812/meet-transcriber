@@ -497,10 +497,81 @@ def _fix(args, cfg) -> None:
     совпадение (или все с --all) одним шагом истории встречи, как «Исправить…»
     в окне (отменяется там же); --hotword — исправление в термины распознавания,
     --rule — правило замены для будущих расшифровок (asr.replacements)."""
-    from meet import hotwords, paths, replacements, settings, speakers, textfix
+    from meet import replacements
 
     folder = _recording(args.folder, cfg)
     _transcript(folder)
+    root = cfg.recording.recordings
+    if _resident_root(folder, root):
+        # Приложение запущено: правка — через него (его замок правок, отказ,
+        # пока запись обрабатывают, обновление поиска и выгрузки в базу знаний).
+        got = _fix_via_resident(folder.name, args)
+    else:
+        reason = _merge_busy(folder, root)
+        if reason:
+            raise CliError(f"{folder.name}: {reason}")
+        got = _fix_here(folder, args, cfg)
+    wrong, right = replacements.clean_text(args.wrong), replacements.clean_text(args.right)
+    term, rule = got["hotword"], got["rule"]
+    doc = {"folder": str(folder), **got}
+    lines = [f"Исправлено: {got['changed']} из {got['found']} ({wrong} → {right})"]
+    if not args.all and got["found"] > 1:
+        lines.append("Остальные совпадения — с флагом --all")
+    if got["changed"]:
+        lines.append("Отменить — в карточке встречи: «Спикеры» → «История изменений»")
+        if not got["via_app"]:
+            lines.append("Выгрузку в базу знаний обновит `meet kb-export` (или приложение при следующей правке)")
+    if term:
+        lines.append(term.get("error") or (f"Добавлено в термины распознавания: {term['term']}" if term["added"]
+                                           else f"Уже в терминах распознавания: {term['term']}"))
+    if rule:
+        lines.append(rule.get("error") or f"Правило для будущих расшифровок: {rule['from']} → {rule['to']}")
+    _result(args, doc, "\n".join(lines) + "\n")
+
+
+def _resident_root(folder: Path, root: Path) -> bool:
+    """Запущено ли приложение, и запись — в его папке записей (там её id)."""
+    from meet import control
+
+    try:
+        same = os.path.normcase(str(folder.resolve().parent)) == os.path.normcase(str(root.resolve()))
+    except OSError:
+        return False
+    return same and control.alive()
+
+
+def _fix_via_resident(rid: str, args) -> dict:
+    from urllib.parse import quote
+
+    from meet import control
+
+    def call(path: str, payload: dict) -> dict:
+        try:
+            reply = control.request(f"/recordings/{quote(rid)}{path}", method="POST", payload=payload, timeout=30)
+        except RuntimeError as e:
+            text = str(e).split(": ", 1)[-1] if "ответил" in str(e) else str(e)
+            raise CliError(text[:1].upper() + text[1:])
+        if isinstance(reply.get("error"), str):
+            raise CliError(reply["error"][:1].upper() + reply["error"][1:])
+        return reply
+
+    found = call("/text/preview", {"find": args.wrong, "whole_word": True, "limit": 1})
+    if not found.get("count"):
+        raise CliError(f"Во встрече нет «{args.wrong.strip()}»")
+    first = found["samples"][0]
+    reply = call("/text/apply", {
+        "find": args.wrong, "replace": args.right, "scope": "all" if args.all else "one",
+        "segment": first["segment"], "offset": first["offset"], "whole_word": True,
+        "add_hotword": bool(args.hotword), "add_rule": bool(args.rule)})
+    return {"found": found["count"], "changed": reply.get("changed", 0),
+            "step": (reply.get("step") or {}).get("id"), "hotword": reply.get("hotword"),
+            "rule": reply.get("rule"), "via_app": True}
+
+
+def _fix_here(folder: Path, args, cfg) -> dict:
+    """Приложение не запущено: правка в этом процессе (тот же шаг истории)."""
+    from meet import hotwords, paths, replacements, settings, speakers, textfix
+
     try:
         found = textfix.preview(folder, args.wrong, limit=1)
         if not found["count"]:
@@ -518,27 +589,18 @@ def _fix(args, cfg) -> None:
         raise CliError(str(e)[:1].upper() + str(e)[1:])
     except OSError as e:
         raise CliError(f"Не удалось сохранить расшифровку: {e}")
-    right = textfix.clean_text(args.right)
-    term = hotwords.add_to_file(paths.hotwords_path(), right) if args.hotword else None
-    wrong = textfix.clean_text(args.wrong)
+    wrong, right = textfix.clean_text(args.wrong), textfix.clean_text(args.right)
+    term = (hotwords.add_to_file(paths.hotwords_path(), replacements.hotword_for(wrong, right))
+            if args.hotword else None)
     rule = None
     if args.rule and wrong != right:
-        settings.patch({"asr": {"replacements": replacements.with_rule(
-            settings.load().asr.replacements, wrong, right)}})
-        rule = {"from": wrong, "to": right}
-    doc = {"folder": str(folder), "found": found["count"], "changed": changed, "step": step,
-           "hotword": term, "rule": rule}
-    lines = [f"Исправлено: {changed} из {found['count']} ({textfix.clean_text(args.wrong)} → {right})"]
-    if not args.all and found["count"] > 1:
-        lines.append("Остальные совпадения — с флагом --all")
-    if changed:
-        lines.append("Отменить — в карточке встречи: «Спикеры» → «История изменений»")
-    if term:
-        lines.append(term.get("error") or (f"Добавлено в термины распознавания: {right}" if term["added"]
-                                           else f"Уже в терминах распознавания: {right}"))
-    if rule:
-        lines.append(f"Правило для будущих расшифровок: {wrong} → {right}")
-    _result(args, doc, "\n".join(lines) + "\n")
+        current = settings.load().asr.replacements
+        key = replacements.words_of(wrong)
+        replaced = next((dict(r) for r in current if replacements.words_of(r["from"]) == key), None)
+        settings.patch({"asr": {"replacements": replacements.with_rule(current, wrong, right)}})
+        rule = {"from": wrong, "to": right, "replaced": replaced}
+    return {"found": found["count"], "changed": changed, "step": step, "hotword": term, "rule": rule,
+            "via_app": False}
 
 
 _HANDLERS = {"import": _import, "export": _export, "summary": _summary,

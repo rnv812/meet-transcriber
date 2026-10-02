@@ -1,4 +1,4 @@
-import { expandToWords, hasTerm, removeTerm, segmentSpan, wordAt } from "./textfix";
+import { expandToWords, hasTerm, newTerms, removeTerm, segmentSpan, wordAt } from "./textfix";
 
 test("выделение дополняется до целых слов, края без знаков препинания", () => {
   const text = "Поднимем кубер нетис, на стенде.";
@@ -33,4 +33,13 @@ test("термины: убрать только добавленную стро�
   expect(hasTerm(text, "kubernetes")).toBe(true);
   expect(hasTerm("Ёлка", "елка")).toBe(true);
   expect(hasTerm(text, "Docker")).toBe(false);
+});
+
+test("термины из исправления — только новые или изменённые значимые слова (как у резидента)", () => {
+  expect(newTerms("кубер нетис", "Kubernetes")).toBe("Kubernetes");
+  expect(newTerms("ломается", "ломается подпись")).toBe("подпись");
+  expect(newTerms("Демьян Петров", "Демьян Петрова")).toBe("Петрова");
+  expect(newTerms("кубер", "Кубер")).toBe("");
+  expect(newTerms("ломается", "не ломается")).toBe("");
+  expect(newTerms("релиз", "релиз v2,")).toBe("v2");
 });

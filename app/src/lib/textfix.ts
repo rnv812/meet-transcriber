@@ -44,6 +44,20 @@ export function segmentSpan(texts: string[], start: number, end: number): { k: n
   return null;
 }
 
+const words = (text: string) => (text.normalize("NFC").toLowerCase().replace(/ё/g, "е").match(/[\p{L}\p{N}]+/gu) ?? []);
+const meaningful = (w: string) => [...w].length >= 4 || /[\p{Lu}\p{N}A-Za-z]/u.test(w);
+
+/**
+ * Что из исправления стоит добавить в термины (как meet/replacements.py,
+ * new_terms): слова `replace`, которых нет в `find`, без коротких служебных.
+ * Пусто — ничего значимого не изменилось.
+ */
+export function newTerms(find: string, replace: string): string {
+  const have = new Set(words(find));
+  return replace.trim().split(/\s+/).map((w) => w.replace(/^[^\p{L}\p{N}_]+|[^\p{L}\p{N}_]+$/gu, ""))
+    .filter((w) => w && !words(w).every((x) => have.has(x)) && meaningful(w)).join(" ");
+}
+
 const key = (term: string) => term.toLowerCase().replace(/ё/g, "е").split(/\s+/).filter(Boolean).join(" ");
 
 /** Убрать строку с термином (последнюю такую — её добавило «Исправить…»), остальное как есть. */

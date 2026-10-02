@@ -26,8 +26,9 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from meet import library, speakers
-from meet.replacements import TEXT_MAX, case_like, clean_rules, clean_text, matches, nfc
+from meet import library, search, speakers
+from meet.replacements import (TEXT_MAX, case_like, clean_rules, clean_text, match_tokens, matches, nfc,
+                               words_of)
 
 SCOPES = ("one", "all")
 SAMPLES = 5
@@ -238,42 +239,57 @@ def apply(folder: Path, find: str, replace: str, scope: str, voices_dir: Path, *
 # --- правила для новых расшифровок ------------------------------------------------
 
 
-def apply_rules(segments: list, rules) -> int:
+def apply_rules(segments: list, rules, skipped: list | None = None) -> int:
     """Правила замены — к сегментам распознавания (`asr.Segment`, на месте):
     целые слова, регистр — как у исправляемого, слова выровнены. → сколько
-    замен сделано."""
+    замен сделано. Слова сегмента, которые выровнять не удалось, снимаются
+    (иначе разбиение по спикерам собрало бы текст из старых слов и потеряло
+    исправление) — такие сегменты (время начала) копятся в `skipped`."""
     from meet.asr import Word
 
-    rules = clean_rules(rules)
-    if not rules:
+    # «from» каждого правила разбирается один раз, текст сегмента — один раз
+    # на проход (и заново, только если правило его изменило).
+    compiled = [(words_of(r["from"]), r["to"]) for r in clean_rules(rules)]
+    compiled = [(want, to) for want, to in compiled if want]
+    if not compiled:
         return 0
     total = 0
     for seg in segments:
         if getattr(seg, "kind", None) == "break":
             continue
-        for rule in rules:
-            text = nfc(seg.text or "")
-            spans = _rule_spans(text, rule)
-            if seg.words:
-                # Разбиение по спикерам собирает текст заново из слов: слова
-                # исправляются по своему тексту, даже если он чуть разошёлся с
-                # текстом сегмента.
-                words = [[w.start, w.end, w.text] for w in seg.words]
-                wtext = nfc("".join(str(w[2]) for w in words)).strip()
-                wspans = _rule_spans(wtext, rule)
-                if wspans:
-                    got = rewrite({"text": wtext, "words": words}, wspans)
-                    if "words" in got:
-                        seg.words = [Word(float(w[0]), float(w[1]), str(w[2])) for w in got["words"]]
-                spans = spans or []
-                total += len(spans) or len(wspans)
-            else:
-                total += len(spans)
+        text = nfc(seg.text or "")
+        tokens = search.tokenize(text)
+        words = [[w.start, w.end, w.text] for w in seg.words or []]
+        wtext = nfc("".join(str(w[2]) for w in words)).strip() if words else ""
+        wtokens = search.tokenize(wtext) if words else []
+        for want, to in compiled:
+            spans = _spans(text, match_tokens(text, tokens, want), to)
+            wspans = _spans(wtext, match_tokens(wtext, wtokens, want), to) if words else []
+            if not spans and not wspans:
+                continue
             if spans:
-                seg.text = rewrite({"text": text}, spans)["text"]
+                text = rewrite({"text": text}, spans)["text"]
+                tokens = search.tokenize(text)
+            if words:
+                # Разбиение по спикерам собирает текст заново из слов: слова
+                # исправляются по своему тексту (он мог чуть разойтись с текстом
+                # сегмента); не вышло — слова снимаются, а не остаются старыми.
+                got = rewrite({"text": wtext, "words": words}, wspans) if wspans else {}
+                if wspans and "words" in got:
+                    words = got["words"]
+                    wtext = nfc("".join(str(w[2]) for w in words)).strip()
+                    wtokens = search.tokenize(wtext)
+                else:
+                    words, wtext, wtokens = [], "", []
+                    if skipped is not None:
+                        skipped.append(float(seg.start))
+            total += len(spans) or len(wspans)
+        seg.text = text
+        if seg.words:
+            seg.words = [Word(float(w[0]), float(w[1]), str(w[2])) for w in words]
     return total
 
 
-def _rule_spans(text: str, rule: dict) -> list[tuple[int, int, str]]:
-    spans = [(a, b, case_like(text[a:b], rule["to"])) for a, b in matches(text, rule["from"])]
+def _spans(text: str, found: list[tuple[int, int]], to: str) -> list[tuple[int, int, str]]:
+    spans = [(a, b, case_like(text[a:b], to)) for a, b in found]
     return [x for x in spans if text[x[0]:x[1]] != x[2]]
