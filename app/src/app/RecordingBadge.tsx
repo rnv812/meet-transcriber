@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { noProvider } from "../features/card/assistant";
 import { type Endpoint, getAssistant, liveStart, liveStop, recordingCommand } from "../lib/api";
 import { clock, errorText } from "../lib/format";
+import { openScreenRecordingSettings } from "../lib/shell";
 import type { AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
 import { Button } from "../ui/Button";
 
@@ -227,6 +228,18 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
         </span>
       )}
       {low && <span className="rec-badge__warn">Мало места: {snapshot.disk_free_gb} ГБ</span>}
+      {recording && snapshot.system_audio_missing && (
+        // macOS: запись идёт только с микрофона, пока не дано разрешение.
+        <span className="rec-badge__warn" role="status">
+          {snapshot.system_audio_missing.notice}
+          {snapshot.system_audio_missing.permission && (
+            <Button onClick={() => void openScreenRecordingSettings()
+              .catch((cause) => setError(errorText(cause)))}>
+              Открыть настройки
+            </Button>
+          )}
+        </span>
+      )}
       {fallbacks.map((f) => (
         <span key={f.kind} className="rec-badge__warn" title={f.device ? `Запись идёт с «${f.device}»` : undefined}>
           {fallbackText(f)}

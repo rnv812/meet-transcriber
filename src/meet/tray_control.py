@@ -362,6 +362,9 @@ class TrayControl(ProfilesMixin):
         # роли: {"mic"|"output": {"kind", "name": выбранное, "device": взятое}}.
         # Вернулось — запись убирается; запись кончилась — всё.
         self._fallbacks: dict[str, dict] = {}
+        # macOS: звук собеседников идущей записи не пишется —
+        # {"notice", "permission"}; None — пишется (или не macOS).
+        self._system_audio: dict | None = None
         # Последняя проверка доступа к Hugging Face (без токена): окно рисует
         # её по GET /hf/status, не дёргая сеть на каждый показ.
         self._hf_check: dict | None = None
@@ -847,8 +850,15 @@ class TrayControl(ProfilesMixin):
         elif event.kind == events.RECORD_DEVICE_PINNED:
             role = event.data.get("role")
             self._fallbacks = {k: v for k, v in self._fallbacks.items() if k != role}
+        elif event.kind == events.RECORD_SYSTEM_AUDIO:
+            if event.data.get("state") == "missing":
+                self._system_audio = {"notice": event.data.get("notice"),
+                                      "permission": bool(event.data.get("permission"))}
+            else:
+                self._system_audio = None
         elif event.kind == events.RECORD_STOPPED:
             self._fallbacks = {}
+            self._system_audio = None
 
     # --- что показывать -------------------------------------------------
 
@@ -870,6 +880,10 @@ class TrayControl(ProfilesMixin):
             # (или запись ассистента) идёт с системного: [{"kind", "name",
             # "device"}]. Окно показывает это у кнопки записи, трей — в подсказке.
             "devices_fallback": self._devices_fallback(recording),
+            # macOS: звук собеседников не пишется (нет разрешения «Запись
+            # экрана») — окно держит плашку с кнопкой настроек, пока идёт запись.
+            "system_audio_missing": dict(self._system_audio)
+            if recording and self._system_audio else None,
             # Свободное место под записи: UI предупреждает при < 5 ГБ до старта
             # записи, а не когда ffmpeg упрётся в полный диск посреди встречи.
             # None — диск недоступен (отключён, шара не отвечает).

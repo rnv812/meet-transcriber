@@ -463,6 +463,25 @@ pub fn open_wizard_on_first_run(app: &AppHandle, engine_upkeep: bool) {
     }
 }
 
+/// Раздел «Запись экрана» в настройках конфиденциальности macOS — адрес
+/// зашит: окно открывает только его, не произвольную ссылку.
+pub const SCREEN_RECORDING_PANE: &str =
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+
+/// «Открыть настройки» у плашки «Звук собеседников не записывается» (macOS).
+#[tauri::command]
+pub async fn open_screen_recording_settings() -> Result<(), String> {
+    if !cfg!(target_os = "macos") {
+        return Err("Только для macOS".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        shell_execute(SCREEN_RECORDING_PANE)
+            .map_err(|code| format!("Системные настройки не открылись (код {code})"))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// «Открыть журнал» из окна (мастер ждал сервис, а тот не запустился): та
 /// же папка, что у пункта трея, — журналы, а без них папка данных.
 #[tauri::command]

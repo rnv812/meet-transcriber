@@ -242,6 +242,12 @@ export async function openLogs(): Promise<void> {
   await invoke<void>("open_logs");
 }
 
+/** macOS: «Системные настройки → Конфиденциальность и безопасность → Запись экрана». */
+export async function openScreenRecordingSettings(): Promise<void> {
+  if (!inTauri()) return;
+  await invoke<void>("open_screen_recording_settings");
+}
+
 // --- вкладка «Агент»: Claude Code / Codex во встроенном терминале -------------
 
 /** Событие `agent-data`: кусок вывода терминала сессии `id` (UTF-8, целые символы). */

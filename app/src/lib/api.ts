@@ -498,7 +498,7 @@ export function avatarUrl(ep: Endpoint, name: string, version: number): string {
 const EVENT_KINDS = [
   "job.queued", "job.started", "job.progress", "job.done", "job.failed",
   "record.started", "record.stopped", "record.discarded", "record.device", "record.device_fallback", "record.device_pinned",
-  "record.waiting", "record.silence", "record.level", "progress", "log", "error",
+  "record.waiting", "record.silence", "record.level", "record.system_audio", "progress", "log", "error",
   "live.starting", "live.started", "live.stopping", "live.stopped", "live.failed",
   // Запись изменилась вне задач: обрезка ожидания после звонка, выгрузка в базу знаний.
   "recording.processing", "recording.updated",

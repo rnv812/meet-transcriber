@@ -9,7 +9,11 @@
 //       ScreenCaptureKit (macOS 13+), только звук. Первая строка stdout —
 //       рукопожатие JSON {"meet_audiotap": 1, "rate", "channels", "format":
 //       "s16le"}, дальше — сырой PCM s16le, пока не закрыт stdin или не
-//       пришёл SIGTERM/SIGINT. Нужно разрешение «Запись экрана».
+//       пришёл SIGTERM/SIGINT. Нужно разрешение «Запись экрана». Поток не
+//       пустеет: если ScreenCaptureKit молчит дольше 0,5 с, помощник сам
+//       дописывает тишину по часам — резидент считает помощника зависшим,
+//       только когда байтов нет совсем. Ошибки буферов — в stderr не чаще
+//       раза в 5 с (со счётчиком пропущенных).
 //   meet-audiotap --mic-users
 //       Одна строка JSON: процессы, которые сейчас слушают микрофон или
 //       играют звук (CoreAudio, macOS 14+; раньше — "supported": false).
@@ -208,6 +212,17 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
     /// PCM не обгонит первую строку.
     private let audioQueue = DispatchQueue(label: "meet-audiotap.audio")
     private var ready = false
+    /// Когда в stdout ушли последние кадры (звук или долитая тишина).
+    private var lastWrite = DispatchTime.now()
+    private var heartbeat: DispatchSourceTimer?
+    /// Ошибки буферов: в stderr не чаще раза в errorEvery секунд.
+    private var errorsSkipped = 0
+    private var lastErrorAt: DispatchTime?
+    private let errorEvery = 5.0
+    /// Тишина дописывается, когда звука нет дольше этого (секунды). Меньше
+    /// порога резидента (recorder.TICK_PAD_S = 1 с): иначе тишину дописали бы
+    /// оба, и дорожка ушла бы вперёд стенных часов.
+    private let silenceAfter = 0.5
 
     init(rate: Int, channels: Int) {
         self.rate = rate
@@ -252,7 +267,41 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
             printJSON(["meet_audiotap": protocolVersion, "rate": rate, "channels": channels,
                        "format": "s16le"])
             ready = true
+            lastWrite = DispatchTime.now()
         }
+        let timer = DispatchSource.makeTimerSource(queue: audioQueue)
+        timer.schedule(deadline: .now() + 0.25, repeating: 0.25)
+        timer.setEventHandler { [weak self] in self?.fillSilence() }
+        timer.resume()
+        heartbeat = timer
+    }
+
+    /// ScreenCaptureKit молчит дольше silenceAfter — дописать тишину за
+    /// прошедшее время: поток живой, и резидент отличит тишину от зависания.
+    private func fillSilence() {
+        guard ready else { return }
+        let now = DispatchTime.now()
+        let gap = Double(now.uptimeNanoseconds - lastWrite.uptimeNanoseconds) / 1e9
+        guard gap > silenceAfter else { return }
+        // Не больше 10 с за раз (сон машины): дальше тишину по часам дольёт резидент.
+        let frames = Int(min(gap, 10.0) * Double(rate))
+        let zeros = [Int16](repeating: 0, count: frames * channels)
+        zeros.withUnsafeBytes { writeAll($0) }
+        lastWrite = now
+    }
+
+    /// Ошибка буфера — в stderr не чаще раза в errorEvery секунд.
+    private func reportBufferError(_ error: Error) {
+        let now = DispatchTime.now()
+        if let last = lastErrorAt,
+           Double(now.uptimeNanoseconds - last.uptimeNanoseconds) / 1e9 < errorEvery {
+            errorsSkipped += 1
+            return
+        }
+        let skipped = errorsSkipped
+        errorsSkipped = 0
+        lastErrorAt = now
+        printError("буфер звука не прочитан: \(error)" + (skipped > 0 ? " (и ещё \(skipped))" : ""))
     }
 
     static func fail(_ error: Error) -> Never {
@@ -272,7 +321,7 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
                 self.convert(list)
             }
         } catch {
-            printError("буфер звука не прочитан: \(error)")
+            reportBufferError(error)
         }
     }
 
@@ -311,6 +360,7 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
             }
         }
         samples.withUnsafeBytes { writeAll($0) }
+        lastWrite = DispatchTime.now()
     }
 
     static func int16(_ value: Float32) -> Int16 {

@@ -114,6 +114,7 @@ fn main() {
             windows::open_url,
             windows::mark_wizard_done,
             windows::open_logs,
+            windows::open_screen_recording_settings,
             autostart::set_autostart,
             autostart::get_autostart,
             // «О программе»: обновление по кнопке с GitHub.

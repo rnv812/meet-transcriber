@@ -39,6 +39,9 @@ RECORD_DEVICE_FALLBACK = "record.device_fallback"
 # выбранное устройство снова доступно — дорожка вернулась на него
 RECORD_DEVICE_PINNED = "record.device_pinned"
 RECORD_SILENCE = "record.silence"  # долив тишины по стенным часам
+# macOS: звук собеседников не пишется (state "missing": нет разрешения «Запись
+# экрана» или помощника; запись идёт с микрофона) или снова пишется ("restored")
+RECORD_SYSTEM_AUDIO = "record.system_audio"
 RECORD_LEVEL = "record.level"  # уровни дорожек, только для живого UI
 LOG = "log"  # строка журнала записи (дубль record.log)
 PROGRESS = "progress"  # ступень расшифровки

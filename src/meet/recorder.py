@@ -380,6 +380,10 @@ class _Track:
         self._lock = threading.Lock()  # callback против паддинга из вотчдога
         self._waiting = False
         self._stalled = False
+        # macOS: звук собеседников не пишется (нет разрешения «Запись экрана»,
+        # нет помощника) — запись идёт только с микрофона, дорожка — тишина.
+        # Сама не переоткрывается: вернётся при перезапуске дорожек.
+        self.missing = False
         # Дорожка сейчас пишет с системного вместо выбранного: сообщаем при
         # каждом переходе туда и обратно, а не на каждом переоткрытии.
         self._in_fallback = False
@@ -391,14 +395,71 @@ class _Track:
         return not getattr(self.pick, "pinned", False)
 
     def first_open(self, p) -> None:
-        """Первый запуск: устройство обязано существовать (иначе исключение)."""
-        dev = self.pick(p)
+        """Первый запуск: устройство обязано существовать (иначе исключение).
+
+        macOS: системный звук не открылся (помощник ScreenCaptureKit отказал —
+        нет разрешения «Запись экрана», нет помощника) — запись не
+        отменяется: дорожка собеседников пишет тишину, микрофон — как обычно,
+        в окне — постоянная плашка (`record.system_audio`), в meta.json —
+        `system_audio: "missing"`."""
+        try:
+            dev = self.pick(p)
+        except Exception as e:
+            if not self._tap_failure(e):
+                raise
+            from meet import mac_audio
+
+            dev = mac_audio.tap_device()
+            self._start_writer(dev)
+            self._mark_missing(e)
+            return
+        self._start_writer(dev)
+        try:
+            self._open(p, dev)
+        except Exception as e:
+            if not self._tap_failure(e):
+                raise
+            self._mark_missing(e)
+            return
+        self._note_fallback()
+
+    def _start_writer(self, dev) -> None:
         self.rate = int(dev["defaultSampleRate"])
         self.channels = min(2, max(1, int(dev["maxInputChannels"])))
         self.writer = OpusWriter(self.path, self.channels, self.rate)
         self.started = time.monotonic()
-        self._open(p, dev)
-        self._note_fallback()
+
+    def _tap_failure(self, error) -> bool:
+        """Отказ помощника системного звука на macOS (а не сбой устройства)."""
+        if not _MAC or self.role != 0:
+            return False
+        from meet import audiotap
+
+        return isinstance(error, audiotap.TapError)
+
+    def _mark_missing(self, error) -> None:
+        from meet import audiotap
+
+        self.missing = True
+        self._waiting = True
+        self.device_name = None
+        permission = getattr(error, "code", None) == audiotap.EXIT_PERMISSION
+        notice = audiotap.SYSTEM_AUDIO_MISSING if permission else (
+            getattr(error, "notice", None) or str(error))
+        self._log(f"звук собеседников не записывается — пишу только микрофон: {notice}")
+        self.bus.emit(events.RECORD_SYSTEM_AUDIO, track=self.fname, state="missing",
+                      notice=notice, permission=permission)
+        self._write_meta("missing")
+
+    def _write_meta(self, state: str) -> None:
+        """Пометка в meta.json записи: карточка объясняет, почему нет звука
+        собеседников. Сбой — только строка в журнал: запись важнее."""
+        try:
+            from meet import library
+
+            library.write_meta(self.path.parent, {"system_audio": state})
+        except Exception as e:
+            self._log(f"meta.json не обновлён: {e!r}")
 
     def reopen(self, p) -> bool:
         """Открыть дорожку заново после перезапуска; неудача — ждать дальше."""
@@ -417,6 +478,11 @@ class _Track:
                 self.bus.emit(events.RECORD_WAITING, track=self.fname)
             return False
         self._waiting = False
+        if self.missing:
+            # Разрешение дали посреди встречи: дальше звук собеседников есть.
+            self.missing = False
+            self.bus.emit(events.RECORD_SYSTEM_AUDIO, track=self.fname, state="restored")
+            self._write_meta("partial")
         self._note_fallback()
         self._log(
             f"запись возобновлена: {self.device_name} "
@@ -775,9 +841,17 @@ class _Session:
                    self.log, self.bus),
         )
 
+    def _new_audio(self):
+        """Свежий PyAudio; на macOS — с журналом записи для помощника
+        системного звука (его stderr и «завис — перезапускаю»)."""
+        p = pyaudio.PyAudio()
+        if _MAC:
+            p.log = self.log
+        return p
+
     def start(self) -> None:
         self.log(f"запись начата {datetime.now():%Y-%m-%d}, pid {os.getpid()}")
-        self.p = pyaudio.PyAudio()
+        self.p = self._new_audio()
         self.ids = self.endpoints.ids()
         if self.ids is None and not _MAC:
             self.log("COM недоступен — смену дефолтного устройства не отслеживаю")
@@ -823,7 +897,9 @@ class _Session:
             # должен позже (дорожка ушла на системное) прочитаться как смена.
             self.ids = ids
         died = any(t.stream is not None and not t.alive() for t in self.tracks)
-        waiting = [t for t in self.tracks if t.stream is None]
+        # Звук собеседников без разрешения не ретраим: каждый перезапуск рвёт
+        # и микрофон, а разрешение посреди встречи дают редко.
+        waiting = [t for t in self.tracks if t.stream is None and not t.missing]
         # Ретрай ждущих дорожек — только когда для их роли снова есть дефолтное
         # устройство (или COM сломан и проверить нечем), и с backoff'ом: каждый
         # перезапуск рвёт и здоровую дорожку (~0.5 с уходит в тишину), поэтому
@@ -874,7 +950,7 @@ class _Session:
             t.close_stream()
         self._terminate()
         try:
-            self.p = pyaudio.PyAudio()  # холодный старт: свежий список устройств
+            self.p = self._new_audio()  # холодный старт: свежий список устройств
         except Exception as e:
             self.log(f"PyAudio не инициализировался: {e!r}")
         if self.p is not None:

@@ -74,6 +74,10 @@ class Recording:
     # Категория встречи (meet.categories): {"id", "source": "ai"|"user"};
     # id None — человек выбрал «Без категории». Не задана — None.
     category: dict | None = None
+    # macOS: звук собеседников не записан (`system_audio` в meta.json):
+    # "missing" — всю запись не было разрешения «Запись экрана», "partial" —
+    # его дали посреди встречи. None — записан как обычно.
+    system_audio: str | None = None
 
     def to_raw(self) -> dict:
         return {
@@ -94,6 +98,7 @@ class Recording:
             "merge": self.merge,
             "rediarize_ready": self.rediarize_ready,
             "category": self.category,
+            "system_audio": self.system_audio,
         }
 
 
@@ -742,6 +747,8 @@ def describe(folder: Path) -> Recording | None:
         merge=_merge_summary(meta),
         rediarize_ready=(folder / REDIARIZE_PREVIEW).is_file(),
         category=_category(meta),
+        system_audio=meta["system_audio"] if meta.get("system_audio") in ("missing", "partial")
+        else None,
     )
 
 
