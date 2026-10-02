@@ -9,9 +9,27 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import pyaudiowpatch as pyaudio
+from meet import events, plat
 
-from meet import events
+
+def audio_backend():
+    """Модуль с поверхностью PyAudio для этой ОС: pyaudiowpatch (WASAPI и
+    loopback) на Windows, `meet.mac_audio` (sounddevice и помощник
+    ScreenCaptureKit) на macOS. Импорт при вызове: подмены в sys.modules
+    (тесты) видны."""
+    if plat.is_macos():
+        from meet import mac_audio
+
+        return mac_audio
+    import pyaudiowpatch
+
+    return pyaudiowpatch
+
+
+# Имя `pyaudio` — точка, которую подменяют тесты и читает devices_probe.
+pyaudio = audio_backend()
+# Платформа записи — на время жизни процесса (как и модуль звука выше).
+_MAC = plat.is_macos()
 
 # Битрейт Opus на дорожку: для речи 16 кГц моно 24 кбит/с на слух прозрачно,
 # а место — ~40x меньше несжатого стерео 48 кГц wav.
@@ -33,15 +51,8 @@ TICK_PAD_S = 1.0  # живой стрим без данных дольше эт�
 
 def _pid_alive(pid: int) -> bool:
     """Жив ли процесс. IMPORTANT: os.kill(pid, 0) на Windows НЕ проверка —
-    это безусловный TerminateProcess (убьёт запись); поэтому ctypes."""
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    handle = ctypes.windll.kernel32.OpenProcess(
-        PROCESS_QUERY_LIMITED_INFORMATION, False, pid
-    )
-    if not handle:
-        return False
-    ctypes.windll.kernel32.CloseHandle(handle)
-    return True
+    это безусловный TerminateProcess (убьёт запись); см. `plat.pid_alive`."""
+    return plat.pid_alive(pid)
 
 
 def _acquire_lock(out_root: Path, out_dir: Path) -> Path:
@@ -120,7 +131,7 @@ class OpusWriter:
         # унаследованные хэндлы stderr продолжают работать как раньше.
         self._proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                                       stdout=subprocess.DEVNULL,
-                                      creationflags=subprocess.CREATE_NO_WINDOW)
+                                      creationflags=plat.no_window())
 
     def write(self, data: bytes) -> None:
         try:
@@ -324,6 +335,19 @@ class _DefaultEndpoints:
         self._enum = None
 
 
+class _MacEndpoints:
+    """macOS: смену устройства по умолчанию не отслеживаем (CoreAudio об этом
+    сообщает, но PortAudio всё равно увидит её только после переоткрытия).
+    Дорожка переоткрывается, если её поток умер, — как при сломанном COM на
+    Windows."""
+
+    def ids(self) -> None:
+        return None
+
+    def close(self) -> None:
+        pass
+
+
 class _Track:
     """Дорожка записи, переживающая смену аудио-устройства (BT-наушники ушли
     к телефону при звонке и вернулись — типичный сценарий обрыва).
@@ -381,10 +405,15 @@ class _Track:
         try:
             dev = self.pick(p)
             self._open(p, dev)
-        except Exception:
+        except Exception as e:
             if not self._waiting:
                 self._waiting = True
                 self._log("устройство недоступно — жду (пауза уйдёт в тишину)")
+                # macOS: помощник системного звука объясняет, почему (нет
+                # разрешения «Запись экрана», старая macOS).
+                notice = getattr(e, "notice", None)
+                if notice:
+                    self._log(notice)
                 self.bus.emit(events.RECORD_WAITING, track=self.fname)
             return False
         self._waiting = False
@@ -536,12 +565,21 @@ class _Track:
 
 
 def _default_mic(p: "pyaudio.PyAudio") -> dict:
+    if _MAC:
+        from meet import mac_audio
+
+        return mac_audio.default_mic(p)
     wasapi = p.get_host_api_info_by_type(pyaudio.paWASAPI)
     return p.get_device_info_by_index(wasapi["defaultInputDevice"])
 
 
 def _find_loopback(p: "pyaudio.PyAudio") -> dict:
-    """Loopback-устройство для текущего устройства вывода (то, что слышно в наушниках)."""
+    """Loopback-устройство для текущего устройства вывода (то, что слышно в
+    наушниках). На macOS — системный звук через помощник ScreenCaptureKit."""
+    if _MAC:
+        from meet import mac_audio
+
+        return mac_audio.system_audio(p)
     wasapi = p.get_host_api_info_by_type(pyaudio.paWASAPI)
     speakers = p.get_device_info_by_index(wasapi["defaultOutputDevice"])
     if speakers.get("isLoopbackDevice"):
@@ -557,7 +595,12 @@ def _loopback_for(p: "pyaudio.PyAudio", name: str,
     """Loopback устройства вывода `name`. У pyaudiowpatch он называется
     «<имя> [Loopback]». `loose` — ещё и по вхождению имени (так всегда искали
     loopback системного вывода); выбранное пользователем — только точно, иначе
-    «Наушники» нашлись бы в «Наушники 2»."""
+    «Наушники» нашлись бы в «Наушники 2». На macOS выбранное «устройство
+    вывода» — устройство ввода вроде BlackHole (или системный звук)."""
+    if _MAC:
+        from meet import mac_audio
+
+        return mac_audio.find_input(p, name)
     loopbacks = list(p.get_loopback_device_info_generator())
     suffix = " [Loopback]"
     found = _match(loopbacks, name, key=lambda lb: lb["name"].removesuffix(suffix))
@@ -609,6 +652,11 @@ def _match(candidates: list[dict], name: str, key=lambda d: d["name"]) -> "dict 
 
 def _find_mic(p: "pyaudio.PyAudio", name: str) -> "dict | None":
     """Микрофон WASAPI с этим именем (loopback'и — не микрофоны)."""
+    if _MAC:
+        from meet import mac_audio
+
+        found = mac_audio.find_input(p, name)
+        return None if found is None or found.get("isLoopbackDevice") else found
     _, devices = _wasapi_devices(p)
     mics = [dev for dev in devices
             if int(dev.get("maxInputChannels", 0)) > 0 and not dev.get("isLoopbackDevice")]
@@ -628,6 +676,10 @@ def list_devices(p: "pyaudio.PyAudio") -> dict:
 
     IMPORTANT: PortAudio — только в процессе записи или в подпроцессе
     (`meet.devices_probe`), никогда в потоках HTTP-сервера резидента."""
+    if _MAC:
+        from meet import mac_audio
+
+        return mac_audio.list_devices(p)
     wasapi, devices = _wasapi_devices(p)
 
     def collect(channels_key: str, default_key: str) -> list[dict]:
@@ -712,7 +764,7 @@ class _Session:
         self.out_dir = out_dir
         self.bus = bus if bus is not None else events.EventBus()
         self.log = _RecordLog(out_dir, self.bus)
-        self.endpoints = _DefaultEndpoints()
+        self.endpoints = _MacEndpoints() if _MAC else _DefaultEndpoints()
         self.ids = None  # ID дефолтных endpoint'ов на момент последнего запуска
         self.last_restart = 0.0
         self.retry_wait = RETRY_S  # растёт при безуспешных ретраях (backoff)
@@ -727,7 +779,7 @@ class _Session:
         self.log(f"запись начата {datetime.now():%Y-%m-%d}, pid {os.getpid()}")
         self.p = pyaudio.PyAudio()
         self.ids = self.endpoints.ids()
-        if self.ids is None:
+        if self.ids is None and not _MAC:
             self.log("COM недоступен — смену дефолтного устройства не отслеживаю")
         for t in self.tracks:
             t.first_open(self.p)

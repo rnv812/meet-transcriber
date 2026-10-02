@@ -31,13 +31,20 @@ def probe() -> dict:
 
     audio = recorder.pyaudio.PyAudio()
     try:
-        loopback = recorder._find_loopback(audio)
+        try:
+            loopback = recorder._find_loopback(audio)
+        except Exception:
+            # macOS без помощника системного звука: список микрофонов и
+            # устройств ввода (BlackHole) всё равно нужен настройкам.
+            if not recorder._MAC:
+                raise
+            loopback = None
         mic = recorder._default_mic(audio)
         return {
             "available": True,
             **recorder.list_devices(audio),
             "system": {"name": loopback["name"],
-                       "rate": int(loopback["defaultSampleRate"])},
+                       "rate": int(loopback["defaultSampleRate"])} if loopback else None,
             "mic": {"name": mic["name"], "rate": int(mic["defaultSampleRate"])},
         }
     finally:
