@@ -15,7 +15,25 @@ if TYPE_CHECKING:
 # Порядок выбора для "auto": подписки CLI раньше локальной модели.
 PROVIDERS = ("claude-code", "codex", "openai-compatible")
 
-__all__ = ["PROVIDERS", "AgentReply", "Runner", "provider_ready", "resolve", "runner_for"]
+__all__ = ["PROVIDERS", "AgentReply", "Runner", "provider_ready", "resolve", "runner_for",
+           "tier_kwargs"]
+
+# «Быстрее» для живых подсказок: та же подписка, модель полегче.
+FAST_CLAUDE_MODEL = "haiku"
+FAST_CODEX_EFFORT = "low"
+
+
+def tier_kwargs(provider: str | None, tier: str) -> dict:
+    """Что добавить к вызову модели для уровня `tier` (`agent` — как у
+    агента, `fast` — быстрее). Claude — модель haiku, Codex — низкое усилие
+    рассуждения; локальная модель одна, ей добавлять нечего."""
+    if tier != "fast":
+        return {}
+    if provider == "claude-code":
+        return {"model": FAST_CLAUDE_MODEL}
+    if provider == "codex":
+        return {"effort": FAST_CODEX_EFFORT}
+    return {}
 
 
 def runner_for(name: str, cfg: "Settings") -> Runner:

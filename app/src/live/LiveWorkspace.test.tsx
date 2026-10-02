@@ -22,7 +22,7 @@ const lines = [
 
 function makeLive(o: Partial<Live> = {}): Live {
   return {
-    status: null, lines, digest: "", summary: summary(), hints: [hint()], hintsEnabled: true, qa: [],
+    status: null, lines, digest: "", summary: summary(), hints: [hint()], hintsEnabled: true, quietDefault: false, qa: [],
     loaded: true, error: null, asking: false, askError: null,
     ask: vi.fn(async () => {}), hint: vi.fn(async () => {}), setTask: vi.fn(async () => {}), ...o,
   };

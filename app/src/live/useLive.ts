@@ -46,6 +46,8 @@ export type Live = {
   hints: LiveHint[];
   /** false — режим «Только сводка». */
   hintsEnabled: boolean;
+  /** «Не отвлекать по умолчанию» из настроек; null — состояние ещё не пришло. */
+  quietDefault: boolean | null;
   /** История вопросов (у ассистента). */
   qa: LiveQa[];
   /** Хоть одно `state` пришло: дальше новое — действительно новое. */
@@ -83,6 +85,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
   const [summary, setSummary] = useState<LiveSummary>(EMPTY_SUMMARY);
   const [hints, setHints] = useState<LiveHint[]>([]);
   const [hintsEnabled, setHintsEnabled] = useState(true);
+  const [quietDefault, setQuietDefault] = useState<boolean | null>(null);
   const [pending, setPending] = useState<Pending>({});
   const [qa, setQa] = useState<LiveQa[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -111,6 +114,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
           setSummary(s.summary ?? EMPTY_SUMMARY);
           setHints(Array.isArray(s.hints) ? s.hints : []);
           setHintsEnabled(s.hints_enabled !== false);
+          setQuietDefault(s.prefs?.quiet_default === true);
           setPending(unconfirmed); // принятые ассистентом действия уже в его состоянии
           setStatus(s.status ?? null);
           setQa(Array.isArray(s.qa) ? s.qa : []);
@@ -183,7 +187,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
   }, [ep]);
 
   return {
-    status, lines, digest, summary, hints: withPending(hints, pending), hintsEnabled, qa, loaded, error,
+    status, lines, digest, summary, hints: withPending(hints, pending), hintsEnabled, quietDefault, qa, loaded, error,
     asking, askError, ask, hint, setTask,
   };
 }

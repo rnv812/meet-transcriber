@@ -148,6 +148,10 @@ DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:1234/v1"
 # Уровни уведомлений оболочки: всё; только важное (автозапись началась, ошибка
 # расшифровки, сервис записи не запускается); ничего.
 NOTIFICATION_LEVELS = ("all", "important", "off")
+# Живые подсказки (`assist`): активность и уровень модели для тиков.
+ASSIST_ACTIVITIES = ("calm", "active", "summary")
+HINTS_MODELS = ("agent", "fast")
+MAX_HINTS_RANGE = (3, 12)
 
 
 def as_flag(value, default: bool) -> bool:
@@ -556,7 +560,15 @@ class Llm:
 @dataclass(frozen=True)
 class Assist:
     """Живой ассистент. `vault` наследуется из переменной среды MEET_VAULT,
-    если в файле его нет: так продолжают работать нынешние запуски."""
+    если в файле его нет: так продолжают работать нынешние запуски.
+
+    Живые подсказки: `activity` — «Сдержанно» (`calm`), «Активно» (`active`)
+    или «Только сводка» (`summary`); `hints_model` — модель для тиков: «Как у
+    агента» (`agent`) или «Быстрее» (`fast`: Claude — haiku, Codex — низкое
+    усилие рассуждения, локальная — без изменений); `max_hints` — сколько
+    подсказок держать (0 — по активности: 5 или 8); `min_words` — сколько
+    новых слов нужно для тика (0 — по активности); `quiet_default` —
+    «Не отвлекать» включено при открытии панели."""
 
     vault: Path | None = None
     window_seconds: float = 20.0
@@ -566,6 +578,11 @@ class Assist:
     # индекс в корне и приставка имени заметки-хаба задачи.
     vault_index: str = "Claude Docs.md"
     hub_prefix: str = "_"
+    activity: str = "calm"
+    hints_model: str = "agent"
+    max_hints: int = 0
+    min_words: int = 0
+    quiet_default: bool = False
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Assist":
@@ -581,6 +598,11 @@ class Assist:
             voices=as_flag(raw.get("voices"), True),
             vault_index=index.strip() if isinstance(index, str) else "Claude Docs.md",
             hub_prefix=prefix if isinstance(prefix, str) else "_",
+            activity=as_choice(raw.get("activity"), ASSIST_ACTIVITIES, "calm"),
+            hints_model=as_choice(raw.get("hints_model"), HINTS_MODELS, "agent"),
+            max_hints=_max_hints(raw.get("max_hints")),
+            min_words=as_int(raw.get("min_words"), 0, 0),
+            quiet_default=as_flag(raw.get("quiet_default"), False),
         )
 
     def to_raw(self) -> dict:
@@ -591,7 +613,23 @@ class Assist:
             "voices": self.voices,
             "vault_index": self.vault_index,
             "hub_prefix": self.hub_prefix,
+            "activity": self.activity,
+            "hints_model": self.hints_model,
+            "max_hints": self.max_hints,
+            "min_words": self.min_words,
+            "quiet_default": self.quiet_default,
         }
+
+
+def _max_hints(value) -> int:
+    """0 — по активности; иначе в пределах MAX_HINTS_RANGE."""
+    if isinstance(value, bool):
+        return 0
+    number = as_int(value, 0, 0)
+    if number == 0:
+        return 0
+    low, high = MAX_HINTS_RANGE
+    return min(high, max(low, number))
 
 
 @dataclass(frozen=True)

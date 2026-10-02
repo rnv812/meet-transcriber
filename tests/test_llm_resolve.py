@@ -129,3 +129,13 @@ def test_runner_for_passes_proxy_setting(monkeypatch):
     asyncio.run(llm.runner_for("claude-code", cfg)("q", system_prompt="s"))
     asyncio.run(llm.runner_for("codex", cfg)("q", system_prompt="s"))
     assert seen == ["http://10.1.1.1:3128", "http://10.1.1.1:3128"]
+
+
+def test_tier_kwargs_fast_per_provider():
+    from meet.llm import tier_kwargs
+
+    assert tier_kwargs("claude-code", "fast") == {"model": "haiku"}
+    assert tier_kwargs("codex", "fast") == {"effort": "low"}
+    assert tier_kwargs("openai-compatible", "fast") == {}
+    for provider in ("claude-code", "codex", "openai-compatible", None):
+        assert tier_kwargs(provider, "agent") == {}  # «Как у агента» — без добавок

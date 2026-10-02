@@ -422,6 +422,8 @@ export type LiveState = {
   summary?: LiveSummary;
   hints?: LiveHint[];
   hints_enabled?: boolean;
+  /** Настройки `assist`, с которыми запущен ассистент. */
+  prefs?: { quiet_default?: boolean; activity?: string };
 };
 
 /** `event: line`: новая строка ленты; `t` — секунды от начала записи. */

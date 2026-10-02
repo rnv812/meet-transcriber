@@ -12,6 +12,26 @@
 
 import { useEffect, useRef, useState } from "react";
 
+/**
+ * «Не отвлекать»: свой переключатель окна. Начальное значение — настройка
+ * «Не отвлекать по умолчанию», как только ассистент её прислал; дальше
+ * решает человек.
+ */
+export function useQuiet(byDefault: boolean | null): [boolean, (v: boolean) => void] {
+  const [quiet, setQuiet] = useState(false);
+  const decided = useRef(false);
+  useEffect(() => {
+    if (decided.current || byDefault === null) return;
+    decided.current = true;
+    if (byDefault) setQuiet(true);
+  }, [byDefault]);
+  const set = (v: boolean) => {
+    decided.current = true;
+    setQuiet(v);
+  };
+  return [quiet, set];
+}
+
 export const FRESH_MS = 6000;
 
 /** `entries` — [ключ, подпись содержимого]; `ready` — первое состояние пришло. */

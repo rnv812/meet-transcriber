@@ -688,3 +688,25 @@ def test_reconnect_wait_round_trips_through_patch(tmp_path):
     f = tmp_path / "config.json"
     settings.patch({"auto_record": {"grace_minutes": 20}}, f)
     assert settings.load(f).auto_record.grace_minutes == 20
+
+
+def test_assist_live_hints_defaults_and_roundtrip(tmp_path):
+    cfg = settings.Settings.from_raw({})
+    a = cfg.assist
+    assert (a.activity, a.hints_model, a.max_hints, a.min_words, a.quiet_default) == ("calm", "agent", 0, 0, False)
+    f = tmp_path / "config.json"
+    settings.patch({"assist": {"activity": "active", "hints_model": "fast", "max_hints": 8,
+                               "quiet_default": True}}, f)
+    a = settings.load(f).assist
+    assert (a.activity, a.hints_model, a.max_hints, a.quiet_default) == ("active", "fast", 8, True)
+    assert a.window_seconds == 20.0  # остальное в секции не тронуто
+
+
+def test_assist_live_hints_garbage_falls_back():
+    a = settings.Settings.from_raw({"assist": {
+        "activity": "шумно", "hints_model": "turbo", "max_hints": "много", "min_words": -5,
+        "quiet_default": "false"}}).assist
+    assert (a.activity, a.hints_model, a.max_hints, a.min_words, a.quiet_default) == ("calm", "agent", 0, 0, False)
+    assert settings.Settings.from_raw({"assist": {"max_hints": 99}}).assist.max_hints == 12
+    assert settings.Settings.from_raw({"assist": {"max_hints": 1}}).assist.max_hints == 3
+    assert settings.Settings.from_raw({"assist": {"max_hints": True}}).assist.max_hints == 0

@@ -26,6 +26,7 @@ import { Button } from "../ui/Button";
 import { LiveWorkspace, useLiveView } from "./LiveWorkspace";
 import { MaximizeIcon, PinIcon, QuietIcon } from "./icons";
 import { KIND_LABEL, topHint } from "./liveModel";
+import { useQuiet } from "./useAttention";
 import { useLiveAsk } from "./useLastLook";
 import { useLive } from "./useLive";
 import { useLiveStatus } from "./useLiveStatus";
@@ -91,7 +92,7 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const elapsed = useElapsed(status?.started_at);
   const { view, setExpanded, setMaximized, setPinned, startDrag } = useLiveWindow();
   const [stopError, setStopError] = useState<string | null>(null);
-  const [quiet, setQuiet] = useState(false);
+  const [quiet, setQuiet] = useQuiet(live.quietDefault);
   const root = useRef<HTMLDivElement>(null);
   const wide = useWide(root);
   // На весь экран — всё содержимое, как у развёрнутой.
