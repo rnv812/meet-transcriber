@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.png" alt="meet — локальная расшифровка встреч с разделением на спикеров" width="100%">
+  <img src="docs/images/banner.png" alt="Meet — локальная расшифровка встреч с разделением на спикеров" width="100%">
 </p>
 
 <p align="center">
@@ -26,7 +26,7 @@
 
 ## Что это
 
-meet — приложение для Windows, которое записывает созвоны и расшифровывает их
+Meet — приложение для Windows, которое записывает созвоны и расшифровывает их
 локально: распознаёт речь, разделяет её по спикерам и узнаёт знакомые голоса.
 Оно живёт в трее, само начинает запись, когда начинается звонок, и работает на
 видеокарте NVIDIA или на процессоре. Итоги, ответы на вопросы и агент по
@@ -122,8 +122,8 @@ meet — приложение для Windows, которое записывае�
    `certutil -hashfile meet_<версия>_x64-setup.exe SHA256`.
 2. Установщик не подписан, поэтому SmartScreen его остановит: «Система Windows
    защитила ваш компьютер» → **Подробнее** → **Выполнить в любом случае**.
-3. Программа ставится в `%LOCALAPPDATA%\meet`, ярлык «meet» появляется в меню
-   «Пуск» и на рабочем столе.
+3. Программа ставится в `%LOCALAPPDATA%\meet`, ярлык появляется в меню «Пуск»
+   и на рабочем столе.
 
 <img src="docs/images/wizard.png" alt="Мастер первого запуска: установка движка" width="420" align="right">
 
@@ -171,7 +171,7 @@ CPU); пакеты почти все берутся из кэша, обычно 
 
 ### Удаление
 
-«Параметры → Приложения → meet → Удалить» убирает программу, ярлыки и
+«Параметры → Приложения → Meet → Удалить» убирает программу, ярлыки и
 автозапуск. Данные остаются в `%LOCALAPPDATA%\meet` — записи, база голосов,
 настройки, журналы и движок, — и повторная установка подхватит их. Чтобы убрать
 всё, удалите эту папку, при желании — кэши `%USERPROFILE%\.cache\huggingface` и
@@ -424,7 +424,7 @@ cd app\src-tauri; cargo test; cargo clippy --all-targets -- -D warnings     # о
 
 ## English summary
 
-**meet** is a Windows 10/11 desktop app that records meetings and transcribes
+**Meet** is a Windows 10/11 desktop app that records meetings and transcribes
 them locally, with speaker separation and a voice base that recognises people
 by voice. It sits in the system tray, starts recording automatically when a
 call begins (desktop clients and browser calls), and runs on an NVIDIA GPU or

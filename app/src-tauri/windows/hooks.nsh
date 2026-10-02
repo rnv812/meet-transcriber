@@ -30,7 +30,7 @@
 ;         упало бы с «Error opening file for writing».
 ;      Проверка Tauri после хука уже никого не находит.
 ;   3. После установки колёса прежних версий из resources убираются.
-;   4. Страница «Готово» запускает новую версию: галочка «Запустить meet»
+;   4. Страница «Готово» запускает новую версию: галочка «Запустить Meet»
 ;      стоит по умолчанию — и при обновлении, и при первой установке.
 
 !define MEET_QUIT_ARG "--quit"
@@ -169,6 +169,11 @@ Var MeetKeepChoice
 ; точному имени и только если новое на месте (имя колеса несёт версию
 ; приложения — их держит одинаковыми build_release.ps1).
 !macro NSIS_HOOK_POSTINSTALL
+  ; Имя в «Параметры → Приложения» — «Meet». Шаблон пишет DisplayName из
+  ; productName, а тот остаётся «meet» (папка установки, ключ удаления,
+  ; автозапуск, имя установщика для прежних версий — см. windows/lang/*.nsh).
+  ; Ключ тот же, меняется только подпись; деинсталлятор удаляет ключ целиком.
+  WriteRegStr SHCTX "${UNINSTKEY}" "DisplayName" "Meet"
   Push $0
   Push $1
   ${If} ${FileExists} "$INSTDIR\resources\meet_transcriber-${VERSION}-py3-none-any.whl"

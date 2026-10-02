@@ -7,7 +7,7 @@ license-files = ["LICENSE", "NOTICE"]
 authors = [
     { name = "Andrey Aleynikov" },
     { name = "Nikita Reznikov" },
-    { name = "ndrsvh" },
+    { name = "Andrey Sivukha (ndrsvh)" },
 ]
 # Лёгкое ядро: запись, трей, панель, ассистент. Тяжёлый стек расшифровки живёт в
 # extras engine-cuda / engine-cpu (список зеркалит engine.PACKAGES, тест следит

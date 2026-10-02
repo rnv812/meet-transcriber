@@ -95,7 +95,7 @@ pub fn open_main(app: &AppHandle, recording: Option<String>, section: Option<&st
         "main",
         WebviewUrl::App(main_url(recording.as_deref(), section).into()),
     )
-    .title("meet")
+    .title("Meet")
     .inner_size(1180.0, 760.0)
     .min_inner_size(820.0, 520.0)
     .center()
