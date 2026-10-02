@@ -38,6 +38,11 @@ export type Snapshot = {
   meetings_dir?: string | null;
   /** Выбранный в настройках микрофон или вывод не найден — запись идёт с системного. */
   devices_fallback?: { kind: "mic" | "output"; name: string; device: string | null }[];
+  /**
+   * macOS: звук собеседников идущей записи не пишется (нет разрешения «Запись экрана»
+   * или помощника) — запись идёт только с микрофона. `permission` — дело в разрешении.
+   */
+  system_audio_missing?: { notice: string; permission: boolean } | null;
   /** Последний сбой автоматической выгрузки в базу знаний. */
   kb_export_failed?: { folder: string; error: string; at: number } | null;
   /** Папки записей, которые сейчас обрабатываются в фоне (обрезка ожидания после звонка). */
@@ -85,6 +90,8 @@ export type Recording = {
   diarization?: string | null;
   /** Распознано не выбранным движком: "not_russian" — запись не на русском, вместо GigaAM работал Whisper. */
   asr_note?: string | null;
+  /** macOS: звук собеседников не записан ("missing") или записан не с начала ("partial"). */
+  system_audio?: "missing" | "partial" | null;
   /** Выгрузка в базу знаний: куда и когда; `error` — последняя не удалась. Не выгружалась — null. */
   kb_export?: KbExportRecord | null;
   /** Объединённая встреча (`source: "merge"`); у остальных — null. */
