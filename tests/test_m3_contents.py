@@ -146,14 +146,14 @@ def test_jira_settings_defaults_and_cleaning():
 @pytest.mark.parametrize("base", [
     "http://jira.example.com", "https://user:pass@jira.example.com", "https://jira.example.com?x=1",
     "https://jira.example.com/#a", "https://.example.com", "https://jira..example.com", "javascript:alert(1)",
-    "https://jira.example.com\@evil.com", "https:// jira.example.com",
+    r"https://jira.example.com\@evil.com", "https:// jira.example.com",
 ])
 def test_jira_base_url_rejected_from_window(tmp_path, base):
     with pytest.raises(ValueError):
         settings.patch({"integrations": {"jira_base_url": base}}, tmp_path / "config.json")
 
 
-@pytest.mark.parametrize("keys", ["(", "(?i)abc-\d+", "(?P<k>[A-Z]+)-\d+", "x*", "A" * 201])
+@pytest.mark.parametrize("keys", ["(", r"(?i)abc-\d+", r"(?P<k>[A-Z]+)-\d+", "x*", "A" * 201])
 def test_jira_keys_rejected_from_window(tmp_path, keys):
     with pytest.raises(ValueError):
         settings.patch({"integrations": {"jira_keys": keys}}, tmp_path / "config.json")
