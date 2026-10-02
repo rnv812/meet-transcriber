@@ -547,8 +547,10 @@ export function RecordingCard({
       {status.kind === "ready" && asrNoteText(rec.asr_note) && (
         <p className="muted card__note" role="note">{asrNoteText(rec.asr_note)}</p>
       )}
-      {systemAudioText(rec.system_audio) && (
-        <p className="muted card__note" role="note">{systemAudioText(rec.system_audio)}</p>
+      {systemAudioText(rec.system_audio, rec.system_audio_reason) && (
+        <p className="muted card__note" role="note">
+          {systemAudioText(rec.system_audio, rec.system_audio_reason)}
+        </p>
       )}
       <div className="card__body"><JiraLinks.Provider value={jira}>{body}</JiraLinks.Provider></div>
       {status.kind === "ready" && turnEdit.menu}

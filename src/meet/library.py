@@ -78,6 +78,10 @@ class Recording:
     # "missing" — всю запись не было разрешения «Запись экрана», "partial" —
     # его дали посреди встречи. None — записан как обычно.
     system_audio: str | None = None
+    # Почему (`system_audio_reason`): "permission" — не было разрешения,
+    # "helper" — нет помощника, "unsupported" — macOS старше 13, "failed" —
+    # помощник не запустился. Старая пометка без причины — None.
+    system_audio_reason: str | None = None
 
     def to_raw(self) -> dict:
         return {
@@ -99,6 +103,7 @@ class Recording:
             "rediarize_ready": self.rediarize_ready,
             "category": self.category,
             "system_audio": self.system_audio,
+            "system_audio_reason": self.system_audio_reason,
         }
 
 
@@ -749,7 +754,12 @@ def describe(folder: Path) -> Recording | None:
         category=_category(meta),
         system_audio=meta["system_audio"] if meta.get("system_audio") in ("missing", "partial")
         else None,
+        system_audio_reason=meta["system_audio_reason"]
+        if meta.get("system_audio_reason") in SYSTEM_AUDIO_REASONS else None,
     )
+
+
+SYSTEM_AUDIO_REASONS = ("permission", "helper", "unsupported", "failed")
 
 
 def _category(meta: dict) -> dict | None:

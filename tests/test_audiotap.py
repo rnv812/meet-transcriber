@@ -494,10 +494,23 @@ class _BlockingOut:
         return b""
 
 
+class _ClosingIn:
+    """stdin помощника: закрыли — помощник выходит (его stdout кончается)."""
+
+    def __init__(self, done: threading.Event) -> None:
+        self.closed = False
+        self._done = done
+
+    def close(self):
+        self.closed = True
+        self._done.set()
+
+
 class _HungHelper(FakeHelper):
     def __init__(self) -> None:
         super().__init__(b"")
         self.stdout = _BlockingOut(_pcm(1024))
+        self.stdin = _ClosingIn(self.stdout.closed)
 
     def poll(self):
         return 0 if self.killed or self.stdin.closed else None
@@ -561,3 +574,221 @@ def test_devices_probe_lists_mac_devices_without_helper(mac_recorder, monkeypatc
     assert result["mic"]["name"] == "Микрофон MacBook Pro"
     assert all(o["name"] != mac_audio.SYSTEM_AUDIO_NAME for o in result["outputs"])
     json.dumps(result)
+
+
+# --- системный звук на macOS: классы отказов, backoff, preflight ---------------------
+
+
+class _NoHandshakeOut:
+    """stdout помощника, который не отвечает: readline висит, пока его не убьют."""
+
+    def __init__(self) -> None:
+        self.closed = threading.Event()
+
+    def readline(self):
+        self.closed.wait(5.0)
+        return b""
+
+    def read(self, size):
+        self.closed.wait(5.0)
+        return b""
+
+
+class _SilentHelper(FakeHelper):
+    def __init__(self) -> None:
+        super().__init__(b"")
+        self.stdout = _NoHandshakeOut()
+
+    def poll(self):
+        return 0 if self.killed else None
+
+    def kill(self):
+        self.killed = True
+        self.stdout.closed.set()
+
+
+def _alive_popen():
+    """Живой помощник: рукопожатие, немного звука, дальше — ждёт (не падает)."""
+    calls = []
+
+    def popen(argv, **kwargs):
+        calls.append(argv)
+        helper = _HungHelper()
+        FakeHelper.instances.append(helper)
+        return helper
+
+    return popen, calls
+
+
+def _start(mac_recorder, monkeypatch, tmp_path, popen):
+    monkeypatch.setattr(mac_audio, "_popen", popen)
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(seen.append)
+    s = recorder._Session(tmp_path, bus, mic_device=None, output_device=None)
+    s.start()
+    return s, seen
+
+
+def _meta(tmp_path):
+    return json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+
+
+def _missing(seen):
+    return [e.data for e in seen if e.kind == events.RECORD_SYSTEM_AUDIO]
+
+
+def _failed_start(kind):
+    if kind == "exit70":
+        return _popen_factory(b"", code=audiotap.EXIT_FAILED, stderr=b"SCStream: no display")[0]
+    if kind == "protocol":
+        return _popen_factory(b"not a handshake\n")[0]
+    if kind == "format":
+        return _popen_factory(b'{"meet_audiotap": 1, "rate": 16000, "channels": 1}\n')[0]
+    return lambda argv, **kw: _SilentHelper()  # «timeout»
+
+
+@pytest.mark.parametrize("kind", ["exit70", "protocol", "format", "timeout"])
+def test_transient_start_failure_is_retried_with_backoff(mac_recorder, monkeypatch, tmp_path, kind):
+    """Помощник не стартовал не из-за разрешения — запись идёт с микрофона, а
+    помощник пробуется снова через 2, 4 … с; карточка не винит разрешение."""
+    monkeypatch.setattr(mac_audio, "HANDSHAKE_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(audiotap, "preflight", lambda: pytest.fail("preflight не нужен"))
+    s, seen = _start(mac_recorder, monkeypatch, tmp_path, _failed_start(kind))
+    tap, mic = s.tracks
+    assert tap.missing and tap.missing_reason == audiotap.KIND_FAILED
+    event = _missing(seen)[0]
+    assert (event["reason"], event["permission"]) == ("failed", False)
+    assert event["notice"] == audiotap.FAILED_NOTICE
+    assert _meta(tmp_path)["system_audio"] == "missing"
+    assert _meta(tmp_path)["system_audio_reason"] == "failed"
+    assert s.tap_next - time.monotonic() == pytest.approx(recorder.TAP_RETRY_MIN_S, abs=0.5)
+    # Рано — помощник не трогаем; потом — снова неудача, пауза удваивается.
+    s.tick()
+    s.tap_next = 0.0
+    s.tick()
+    assert s.tap_next - time.monotonic() == pytest.approx(2 * recorder.TAP_RETRY_MIN_S, abs=0.5)
+    assert len(_missing(seen)) == 1  # та же причина — без новой плашки
+    # Помощник ожил: звук собеседников вернулся, микрофон не перезапускался.
+    good, _ = _alive_popen()
+    monkeypatch.setattr(mac_audio, "_popen", good)
+    s.tap_next = 0.0
+    s.tick()
+    assert tap.stream is not None and not tap.missing
+    assert [e["state"] for e in _missing(seen)] == ["missing", "restored"]
+    assert _meta(tmp_path)["system_audio"] == "partial"
+    assert len(FakeRawInputStream.instances) == 1 and mic.stream.is_active()
+    s.close()
+
+
+def test_permission_denied_waits_for_preflight_without_touching_the_helper(
+        mac_recorder, monkeypatch, tmp_path):
+    denied, calls = _popen_factory(b"", code=audiotap.EXIT_PERMISSION)
+    s, seen = _start(mac_recorder, monkeypatch, tmp_path, denied)
+    tap = s.tracks[0]
+    assert tap.missing_reason == audiotap.KIND_PERMISSION
+    assert _missing(seen)[0]["permission"] is True
+    assert _meta(tmp_path)["system_audio_reason"] == "permission"
+    asked = []
+    monkeypatch.setattr(audiotap, "preflight", lambda: asked.append(1) or False)
+    spawned = len(calls)
+    s.tick()  # раньше PREFLIGHT_S — не спрашиваем
+    assert asked == []
+    s.preflight_next = 0.0
+    s.tick()
+    s.tick()  # следующий вопрос — через PREFLIGHT_S
+    assert asked == [1]
+    assert len(calls) == spawned  # помощник без разрешения не запускается
+    assert s.preflight_next - time.monotonic() == pytest.approx(recorder.PREFLIGHT_S, abs=0.5)
+    # Разрешение дали: помощник запускается, звук собеседников есть.
+    monkeypatch.setattr(audiotap, "preflight", lambda: True)
+    good, _ = _alive_popen()
+    monkeypatch.setattr(mac_audio, "_popen", good)
+    s.preflight_next = 0.0
+    s.tick()
+    assert tap.stream is not None and not tap.missing
+    assert _meta(tmp_path)["system_audio"] == "partial"
+    assert _meta(tmp_path)["system_audio_reason"] == "permission"
+    assert len(FakeRawInputStream.instances) == 1
+    s.close()
+
+
+@pytest.mark.parametrize("kind", ["helper", "unsupported"])
+def test_missing_helper_or_old_macos_is_not_retried(mac_recorder, monkeypatch, tmp_path, kind):
+    if kind == "helper":
+        monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(tmp_path / "нет"))
+        popen = _popen_factory(b"")[0]
+    else:
+        popen, _ = _popen_factory(b"", code=audiotap.EXIT_UNSUPPORTED)
+    s, seen = _start(mac_recorder, monkeypatch, tmp_path, popen)
+    tap = s.tracks[0]
+    assert tap.missing_reason == kind
+    assert _missing(seen)[0]["permission"] is False
+    assert _meta(tmp_path)["system_audio_reason"] == kind
+    monkeypatch.setattr(audiotap, "preflight", lambda: pytest.fail("preflight не нужен"))
+    monkeypatch.setattr(mac_audio, "_popen", lambda *a, **k: pytest.fail("помощник не нужен"))
+    s.tap_next = s.preflight_next = 0.0
+    s.tick()
+    s.close()
+
+
+def _wait_dead(track, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while track.stream is not None and track.stream._reader.is_alive() \
+            and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+
+def test_crashing_helper_backs_off_and_never_restarts_the_mic(mac_recorder, monkeypatch, tmp_path):
+    """Помощник падает сразу после рукопожатия: перезапуски через 2, 4, 8 с,
+    микрофон и PortAudio не трогаются."""
+    crash, calls = _popen_factory(HANDSHAKE + _pcm(100))
+    s, _ = _start(mac_recorder, monkeypatch, tmp_path, crash)
+    tap, mic = s.tracks
+    p_before = s.p
+    delays = []
+    for _ in range(3):
+        _wait_dead(tap)
+        s.tick()  # помощник умер — закрыть только его, запланировать повтор
+        assert tap.stream is None
+        delays.append(round(s.tap_next - time.monotonic()))
+        s.tap_next = 0.0
+        s.tick()  # повтор: снова стартует (и снова упадёт)
+        assert tap.stream is not None
+    assert delays == [2, 4, 8]
+    assert len(calls) == 4
+    assert s.p is p_before
+    assert len(FakeRawInputStream.instances) == 1 and mic.stream.is_active()
+    log = (tmp_path / "record.log").read_text(encoding="utf-8")
+    assert "микрофон не трогаю" in log
+    s.close()
+
+
+def test_mic_restart_leaves_the_helper_running(mac_recorder, monkeypatch, tmp_path):
+    good, calls = _alive_popen()
+    s, _ = _start(mac_recorder, monkeypatch, tmp_path, good)
+    tap, mic = s.tracks
+    helper_stream = tap.stream
+    FakeRawInputStream.instances[0].active = False  # умер микрофон
+    s.tick()
+    assert tap.stream is helper_stream and helper_stream.is_active()
+    assert len(calls) == 1 and not FakeHelper.instances[0].killed
+    assert len(FakeRawInputStream.instances) == 2 and mic.stream.is_active()
+    s.close()
+
+
+def test_preflight_asks_the_helper(monkeypatch, tmp_path):
+    helper = tmp_path / "meet-audiotap"
+    helper.write_bytes(b"")
+    monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(helper))
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(argv)
+        return SimpleNamespace(returncode=audiotap.EXIT_PERMISSION)
+
+    assert audiotap.preflight(run=run) is False
+    assert seen == [[str(helper), "--preflight"]]
+    assert audiotap.preflight(run=lambda *a, **k: SimpleNamespace(returncode=0)) is True
+    monkeypatch.setenv(audiotap.ENV_OVERRIDE, str(tmp_path / "нет"))
+    assert audiotap.preflight(run=run) is False

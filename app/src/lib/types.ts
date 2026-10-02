@@ -92,6 +92,8 @@ export type Recording = {
   asr_note?: string | null;
   /** macOS: звук собеседников не записан ("missing") или записан не с начала ("partial"). */
   system_audio?: "missing" | "partial" | null;
+  /** Почему: нет разрешения «Запись экрана», нет помощника, старая macOS, помощник не запустился. */
+  system_audio_reason?: "permission" | "helper" | "unsupported" | "failed" | null;
   /** Выгрузка в базу знаний: куда и когда; `error` — последняя не удалась. Не выгружалась — null. */
   kb_export?: KbExportRecord | null;
   /** Объединённая встреча (`source: "merge"`); у остальных — null. */
