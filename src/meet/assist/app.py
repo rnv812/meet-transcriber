@@ -325,12 +325,13 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     digest_dirs = state.digest_allowed_dirs
     state.digester = Digester(bus, digest, system_prompt=state.digester_system,
                               runner=runner, on_update=_write_digest,
+                              model=cfg.llm.model,
                               allowed_dirs=digest_dirs,
                               cwd=out_dir if digest_dirs else None)
     state.qa = QAService(
         bus, digest, system_prompt=state.qa_system,
         allowed_dirs=state.qa_allowed_dirs, cwd=out_dir,
-        runner=runner,
+        runner=runner, model=cfg.llm.model,
         on_fresh_audio=engine.process_window,
     )
     if task:

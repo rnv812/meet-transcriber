@@ -354,6 +354,18 @@ def test_runner_comes_from_llm_resolve(tmp_path, monkeypatch):
     assert heavy.auth_calls == 0  # проверка Claude — только для claude-code
 
 
+def test_model_comes_from_settings(tmp_path, monkeypatch):
+    """`llm.model` доходит и до дайджеста, и до ответов на вопросы."""
+    async def done(stop):
+        return None
+
+    heavy = _Heavy(monkeypatch, digester_run=done)
+    _run(tmp_path, open_browser=False, port=0,
+         cfg=Settings.from_raw({"llm": {"model": "opus"}}))
+    assert heavy.digester_kwargs["model"] == "opus"
+    assert heavy.qa_kwargs["model"] == "opus"
+
+
 def test_explicit_provider_skips_resolve(tmp_path, monkeypatch):
     async def done(stop):
         return None
