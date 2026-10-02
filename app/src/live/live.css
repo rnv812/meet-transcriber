@@ -82,8 +82,10 @@
 .live-ws__panel { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 .live-ws__panel--feed, .live-ws__panel--ask { overflow: hidden; }
 .live-ws__panel--feed .live-ws__feed { flex: 1; min-height: 0; }
-.live-ws__panel--ask .live-ask, .live-ws__ask .live-ask { flex: 1; min-height: 0; }
-.live-ws__panel--ask .live-ask__history, .live-ws__ask .live-ask__history { flex: 1; min-height: 0; max-height: none; }
+.live-ws__panel--ask .live-ask { flex: 1; min-height: 0; }
+.live-ws__panel--ask .live-ask__history { flex: 1; min-height: 0; max-height: none; }
+.live-ws__ask .live-ask { flex: 0 1 auto; min-height: 0; }
+.live-ws__ask .live-ask__history { flex: 0 1 auto; min-height: 0; max-height: none; }
 
 .live-ws--wide {
   display: grid; gap: 12px;
@@ -94,7 +96,9 @@
 .live-ws__pane { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
 .live-ws__title { margin: 0; color: var(--text-3); font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
 .live-ws__scroll { min-height: 0; overflow-y: auto; }
-.live-ws__ask { flex: 1.2 1 0; min-height: 0; display: flex; flex-direction: column; padding-top: 8px; border-top: 1px solid var(--line); }
+/* «Спросить» внизу правой колонки: по содержимому, но не больше ~40 % высоты —
+   история прокручивается внутри, сводке и подсказкам остаётся место. */
+.live-ws__ask { flex: 0 1 auto; max-height: 42%; min-height: 0; display: flex; flex-direction: column; padding-top: 8px; border-top: 1px solid var(--line); }
 
 .live-empty { margin: 4px 0; font-size: 12px; }
 

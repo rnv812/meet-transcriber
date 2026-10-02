@@ -38,7 +38,8 @@ export function LiveHints({ hints, fresh, enabled = true, onAction, onAsk, onTim
     return <p className="live-empty muted">Подсказки появятся, когда в разговоре будет за что зацепиться.</p>;
   }
   const copy = (h: LiveHint) => {
-    navigator.clipboard?.writeText(h.text).then(() => {
+    if (!navigator.clipboard) return;
+    navigator.clipboard.writeText(h.text).then(() => {
       setCopied(h.id);
       setTimeout(() => setCopied((cur) => (cur === h.id ? null : cur)), COPIED_MS);
     }).catch(() => {});
