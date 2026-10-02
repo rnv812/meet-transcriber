@@ -549,8 +549,9 @@ class Asr:
 
     Движок (`whisper` или `gigaam`): `backend` — на видеокарте (по умолчанию
     Whisper: русский fine-tune large-v3 лучше на латинских терминах и берёт
-    подсказки), `cpu_backend` — на процессоре (по умолчанию GigaAM: в 15–20 раз
-    быстрее Whisper medium и точнее на русском). Модели: `model`/`cpu_model` —
+    подсказки), `cpu_backend` — на процессоре (по умолчанию GigaAM: распознаёт
+    примерно в 10 раз быстрее Whisper medium (весь пайплайн — примерно втрое)
+    и точнее на русском). Модели: `model`/`cpu_model` —
     Whisper, `gigaam_model` — GigaAM. `align_after_gigaam` — уточнять время слов
     wav2vec2 и после GigaAM (свои пословные таймкоды у него есть).
     """

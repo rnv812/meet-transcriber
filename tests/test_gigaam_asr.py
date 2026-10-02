@@ -14,6 +14,87 @@ from meet.asr import Segment, Word
 
 SR = 16000
 
+# Маленькие «модели» вместо 450 МБ: содержимое, размер и контрольные суммы.
+BLOBS = {
+    "v3_e2e_rnnt.ckpt": b"w" * 10, "v3_e2e_rnnt_tokenizer.model": b"t" * 5,
+    "v3_e2e_ctc.ckpt": b"c" * 8, "v3_e2e_ctc_tokenizer.model": b"k" * 4,
+}
+
+
+def small_files():
+    import hashlib
+
+    def entry(name, algo):
+        return (name, len(BLOBS[name]), algo, hashlib.new(algo, BLOBS[name]).hexdigest())
+
+    return {m: (entry(f"{m}.ckpt", "md5"), entry(f"{m}_tokenizer.model", "sha256"))
+            for m in ("v3_e2e_rnnt", "v3_e2e_ctc")}
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """Сети в тестах нет: загрузка — только через поддельный opener."""
+    import urllib.request
+
+    def refuse(*a, **kw):
+        raise AssertionError("тест полез в сеть")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(g, "FILES", small_files())
+
+
+class _Response:
+    def __init__(self, data: bytes):
+        self._data, self._pos = data, 0
+
+    def read(self, n=-1):
+        chunk = self._data[self._pos:self._pos + n] if n >= 0 else self._data[self._pos:]
+        self._pos += len(chunk)
+        return chunk
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def opener(blobs=None, calls=None):
+    blobs = BLOBS if blobs is None else blobs
+
+    def open_url(url):
+        name = url.rsplit("/", 1)[-1]
+        if calls is not None:
+            calls.append(name)
+        if name not in blobs:
+            raise OSError("нет связи")
+        return _Response(blobs[name])
+
+    return open_url
+
+
+def fake_gigaam(monkeypatch, load_model):
+    """Модуль gigaam с decoding.SentencePieceProcessor, как у настоящего."""
+    class Processor:
+        def Load(self, model_file=None, model_proto=None):  # noqa: N802
+            self.args = (model_file, model_proto)
+            return True
+
+        load = Load
+
+    decoding = types.SimpleNamespace(SentencePieceProcessor=Processor)
+    module = types.SimpleNamespace(load_model=load_model, decoding=decoding)
+    monkeypatch.setitem(sys.modules, "gigaam", module)
+    monkeypatch.setitem(sys.modules, "gigaam.decoding", decoding)
+    return decoding
+
+
+def put(name: str, data: bytes | None = None) -> Path:
+    root = g.cache_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    (root / name).write_bytes(BLOBS[name] if data is None else data)
+    return root / name
+
 
 def _speech(seconds: float, pauses: tuple[float, ...] = (), level: float = 0.3) -> np.ndarray:
     """«Речь» — громкий шум; паузы (0.2 с тишины) — в заданных секундах."""
@@ -154,7 +235,9 @@ def test_transcribe_loads_model_into_app_models_dir(tmp_path, monkeypatch):
         seen.update(name=name, device=device, root=download_root)
         return FakeModel()
 
-    monkeypatch.setitem(sys.modules, "gigaam", types.SimpleNamespace(load_model=load_model))
+    fake_gigaam(monkeypatch, load_model)
+    put("v3_e2e_ctc.ckpt")
+    put("v3_e2e_ctc_tokenizer.model")
     wav = _write_wav(tmp_path / "a.wav", _speech(5.0))
     segs = g.transcribe(wav, model_name="v3_e2e_ctc", device="cpu", regions=[(0.0, 5.0)])
     assert seen == {"name": "v3_e2e_ctc", "device": "cpu", "root": str(data / "models" / "gigaam")}
@@ -164,14 +247,16 @@ def test_transcribe_loads_model_into_app_models_dir(tmp_path, monkeypatch):
 def test_model_files_downloaded_size_and_remove(tmp_path, monkeypatch):
     monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
     assert not g.downloaded("v3_e2e_rnnt")
-    root = g.cache_dir()
-    root.mkdir(parents=True)
-    (root / "v3_e2e_rnnt.ckpt").write_bytes(b"x" * 10)
+    put("v3_e2e_rnnt.ckpt")
     assert not g.downloaded("v3_e2e_rnnt")  # без токенизатора — не скачана
-    (root / "v3_e2e_rnnt_tokenizer.model").write_bytes(b"y" * 5)
+    assert g.present("v3_e2e_rnnt")  # но удалить её можно
+    put("v3_e2e_rnnt_tokenizer.model", b"y" * 3)
+    assert not g.downloaded("v3_e2e_rnnt")  # токенизатор не того размера
+    put("v3_e2e_rnnt_tokenizer.model")
     assert g.downloaded("v3_e2e_rnnt") and g.size_on_disk("v3_e2e_rnnt") == 15
-    assert g.remove("v3_e2e_rnnt") == 2
-    assert not g.downloaded("v3_e2e_rnnt") and g.size_on_disk("v3_e2e_rnnt") == 0
+    (g.cache_dir() / "v3_e2e_rnnt.ckpt.part").write_bytes(b"p")
+    assert g.remove("v3_e2e_rnnt") == 3  # и недокачанный .part
+    assert not g.present("v3_e2e_rnnt") and g.size_on_disk("v3_e2e_rnnt") == 0
 
 
 def test_module_import_stays_light():
@@ -183,3 +268,133 @@ def test_module_import_stays_light():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                          env={**__import__("os").environ, "PYTHONPATH": str(Path(g.__file__).parents[1])})
     assert out.stdout.strip() == "False False"
+
+
+# --- нахлёст жёсткого разреза: слово на границе ---------------------------------
+
+
+def test_straddling_word_is_kept_once_from_the_first_chunk():
+    """«интеграция» звучит 21.40–22.10 и разрезана на 22.0: первый кусок
+    слышит её до разреза, второй (с 21.5) — хвост «грация». Остаётся одно
+    слово, из первого куска (не «интеграция грация»)."""
+    first = g.Chunk(0.0, 22.0, keep_to=21.75)
+    second = g.Chunk(21.5, 30.0, keep_from=21.75)
+    a = g.words_of_chunk(first, [_w("интеграция", 21.40, 22.00)])
+    b = g.words_of_chunk(second, [_w("грация", 0.0, 0.60), _w("дальше", 0.7, 1.0)])
+    assert [w.text for w in a + b] == [" интеграция", " дальше"]
+
+
+def test_word_starting_after_the_border_comes_from_the_second_chunk():
+    first = g.Chunk(0.0, 22.0, keep_to=21.75)
+    second = g.Chunk(21.5, 30.0, keep_from=21.75)
+    a = g.words_of_chunk(first, [_w("было", 21.0, 21.6), _w("инте", 21.85, 22.0)])
+    b = g.words_of_chunk(second, [_w("было", 0.0, 0.1), _w("интеграция", 0.35, 0.95)])
+    assert [w.text for w in a + b] == [" было", " интеграция"]
+
+
+# --- загрузка весов --------------------------------------------------------------
+
+
+def test_ensure_downloads_through_a_part_file_and_verifies(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+    calls, lines = [], []
+    g.ensure("v3_e2e_rnnt", lines.append, opener=opener(calls=calls))
+    assert calls == ["v3_e2e_rnnt.ckpt", "v3_e2e_rnnt_tokenizer.model"]
+    assert g.downloaded("v3_e2e_rnnt")
+    assert not list(g.cache_dir().glob("*.part"))
+    # второй раз — ничего не качает и не хеширует заново (отметка проверки)
+    calls.clear()
+    monkeypatch.setattr(g, "_digest", lambda *a: pytest.fail("повторное хеширование"))
+    g.ensure("v3_e2e_rnnt", opener=opener(calls=calls))
+    assert calls == []
+
+
+def test_corrupt_or_partial_file_is_replaced_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+    put("v3_e2e_rnnt.ckpt", b"x" * 10)  # тот же размер, другое содержимое
+    put("v3_e2e_rnnt_tokenizer.model", b"t")  # недокачан
+    calls, lines = [], []
+    g.ensure("v3_e2e_rnnt", lines.append, opener=opener(calls=calls))
+    assert calls == ["v3_e2e_rnnt.ckpt", "v3_e2e_rnnt_tokenizer.model"]
+    assert (g.cache_dir() / "v3_e2e_rnnt.ckpt").read_bytes() == BLOBS["v3_e2e_rnnt.ckpt"]
+    assert any("повреждён" in line for line in lines)
+
+
+def test_bad_download_leaves_nothing_and_says_why(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+    broken = {**BLOBS, "v3_e2e_rnnt.ckpt": b"q" * 10}
+    with pytest.raises(g.Unavailable, match="повреждённым"):
+        g.ensure("v3_e2e_rnnt", opener=opener(broken))
+    assert not (g.cache_dir() / "v3_e2e_rnnt.ckpt").exists()
+    assert not list(g.cache_dir().glob("*.part"))
+    with pytest.raises(g.Unavailable, match="не удалось скачать"):
+        g.ensure("v3_e2e_rnnt", opener=opener({}))  # нет сети
+
+
+def test_interrupted_download_is_not_a_model(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+
+    class Dies(_Response):
+        def read(self, n=-1):
+            raise ConnectionResetError("обрыв")
+
+    with pytest.raises(g.Unavailable):
+        g.ensure("v3_e2e_rnnt", opener=lambda url: Dies(b""))
+    assert not g.downloaded("v3_e2e_rnnt") and not list(g.cache_dir().glob("*.part"))
+
+
+def test_load_reads_tokenizer_from_bytes_for_any_path(tmp_path, monkeypatch):
+    """sentencepiece не открывает путь с кириллицей: GigaAM получает класс,
+    который читает файл сам и передаёт model_proto."""
+    data = tmp_path / "Кузьма тест"
+    monkeypatch.setenv("MEET_DATA_DIR", str(data))
+    seen = {}
+
+    def load_model(name, device=None, download_root=None, **kw):
+        processor = decoding.SentencePieceProcessor()
+        processor.load(str(Path(download_root) / f"{name}_tokenizer.model"))
+        seen.update(args=processor.args, root=download_root)
+        return FakeModel()
+
+    decoding = fake_gigaam(monkeypatch, load_model)
+    g.ensure("v3_e2e_rnnt", opener=opener())
+    g.load("v3_e2e_rnnt")
+    assert seen["args"] == (None, BLOBS["v3_e2e_rnnt_tokenizer.model"])
+    assert "Кузьма тест" in seen["root"]
+    patched = decoding.SentencePieceProcessor
+    g.load("v3_e2e_rnnt")  # повторная подмена не наслаивается
+    assert decoding.SentencePieceProcessor is patched
+
+
+def test_load_failure_is_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+
+    def load_model(*a, **kw):
+        raise AssertionError("Model checksum failed")
+
+    fake_gigaam(monkeypatch, load_model)
+    g.ensure("v3_e2e_rnnt", opener=opener())
+    with pytest.raises(g.Unavailable, match="не загрузилась"):
+        g.load("v3_e2e_rnnt")
+
+
+def test_real_sentencepiece_loads_from_cyrillic_folder(tmp_path, monkeypatch):
+    """С настоящим sentencepiece (если он есть в окружении): модель в папке
+    «Кузьма тест» грузится через подмену GigaAM."""
+    spm = pytest.importorskip("sentencepiece")
+    corpus = tmp_path / "corpus.txt"
+    corpus.write_text("\n".join(["привет мир", "встреча началась", "обсудим задачи"] * 50),
+                      encoding="utf-8")
+    spm.SentencePieceTrainer.train(input=str(corpus), model_prefix=str(tmp_path / "tok"),
+                                   vocab_size=24, character_coverage=1.0, hard_vocab_limit=False)
+    folder = tmp_path / "Кузьма тест"
+    folder.mkdir()
+    target = folder / "tok.model"
+    target.write_bytes((tmp_path / "tok.model").read_bytes())
+    decoding = types.SimpleNamespace(SentencePieceProcessor=spm.SentencePieceProcessor)
+    monkeypatch.setitem(sys.modules, "gigaam", types.SimpleNamespace(decoding=decoding))
+    monkeypatch.setitem(sys.modules, "gigaam.decoding", decoding)
+    g._proto_tokenizer()
+    processor = decoding.SentencePieceProcessor()
+    processor.load(str(target))
+    assert len(processor) > 0 and processor.encode("привет мир")

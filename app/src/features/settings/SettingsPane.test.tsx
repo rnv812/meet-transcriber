@@ -367,3 +367,50 @@ test("«Движок и модели»: без пакета GigaAM его мод
   expect(within(modelRow("Whisper large-v3 — русский fine-tune")).getByRole("button", { name: "Обновить" }))
     .toBeEnabled();
 });
+
+test("«Движок и модели»: скачанная GigaAM — «Скачана», без «Обновить»; недокачанную можно удалить", async () => {
+  const state = catalogue();
+  state.items[2] = { ...state.items[2]!, downloaded: false, removable: true, size_on_disk: 1000 };
+  vi.mocked(api.getModels).mockResolvedValue(state);
+  await openEngine();
+  await screen.findByText("GigaAM v3 — русский");
+  const rnnt = modelRow("GigaAM v3 — русский");
+  expect(within(rnnt).getByRole("button", { name: "Скачана" })).toBeDisabled();
+  expect(within(rnnt).queryByRole("button", { name: "Обновить" })).toBeNull();
+  const ctc = modelRow("GigaAM v3 CTC — русский");
+  expect(ctc).toHaveTextContent("загрузка не завершена");
+  expect(within(ctc).getByRole("button", { name: "Скачать" })).toBeEnabled();
+  expect(within(ctc).getByRole("button", { name: "Удалить модель GigaAM v3 CTC — русский" })).toBeEnabled();
+});
+
+test("«Движок и модели»: удаление выбранной GigaAM — только после подтверждения", async () => {
+  vi.mocked(api.getModels).mockResolvedValue(catalogue());
+  vi.mocked(api.removeModel).mockResolvedValue({ ok: true });
+  await openEngine();
+  await screen.findByText("GigaAM v3 — русский");
+  const rnnt = modelRow("GigaAM v3 — русский");
+  await userEvent.click(within(rnnt).getByRole("button", { name: "Удалить модель GigaAM v3 — русский" }));
+  const ask = screen.getByRole("alertdialog", { name: "Удалить выбранную модель" });
+  expect(ask).toHaveTextContent("используется по умолчанию — она скачается снова при следующей расшифровке");
+  expect(api.removeModel).not.toHaveBeenCalled();
+  await userEvent.click(within(ask).getByRole("button", { name: "Отмена" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  await userEvent.click(within(rnnt).getByRole("button", { name: "Удалить модель GigaAM v3 — русский" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Удалить" }));
+  expect(api.removeModel).toHaveBeenCalledWith(ep, "gigaam/v3_e2e_rnnt");
+});
+
+test("«Движок и модели»: движок без GigaAM — установлен, у GigaAM пометка", async () => {
+  vi.mocked(api.getEngine).mockResolvedValue({
+    ...structuredClone(engineState),
+    components: [
+      { module: "torch", title: "PyTorch", installed: true },
+      { module: "gigaam", title: "распознавание речи (GigaAM)", installed: false, optional: true,
+        note: "не установлена — будет установлена при обновлении движка" },
+    ],
+  });
+  await openEngine();
+  expect(await screen.findByText("установлен")).toBeInTheDocument();
+  expect(screen.getByText("распознавание речи (GigaAM) — не установлена — будет установлена при обновлении движка"))
+    .toBeInTheDocument();
+});

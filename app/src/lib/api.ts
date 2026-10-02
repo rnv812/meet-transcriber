@@ -227,7 +227,8 @@ export type DeviceCheck = { ok: boolean; peak: number; device: string; fallback?
 export type EngineState = {
   installed: boolean;
   missing: string[];
-  components: { module: string; title: string; installed: boolean }[];
+  /** `optional` — без него движок работает (GigaAM: тогда распознаёт Whisper); `note` — почему его нет. */
+  components: { module: string; title: string; installed: boolean; optional?: boolean; note?: string }[];
   gpu: { available: boolean; name: string | null };
   flavor: "cuda" | "cpu";
   download_gb: number;

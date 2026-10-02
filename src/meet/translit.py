@@ -8,8 +8,9 @@ GigaAM подсказок не принимает и латиницу пишет
 исправляемого, слова выровнены).
 
 Осторожно, а не «как можно больше»: только термины, которые человек сам
-добавил; запись короче трёх букв и обычные русские слова («кот» из «Kot»,
-«порт» из «Port») не заменяются — ложная замена в чужой речи хуже пропуска.
+добавил; запись короче трёх букв и распространённые русские слова с их
+падежными формами («кот» из «Kot», «порт» из «Port», «мира» из «Mira») не
+заменяются — ложная замена в чужой речи хуже пропуска.
 Умная доработка поверх (модель по контексту) — отдельная задача.
 """
 
@@ -70,6 +71,32 @@ COMMON_RU = frozenset("""
 счет такси танк темп термин тигр толк трек трон тур туризм урок фильм фирма флаг
 фокус фонд фронт фрукт хит чек шанс шеф шина шкала шоу экран элемент эра юг ясно
 """.split())
+
+
+# Слова и формы, которые выдают реальные термины (MAX → «макс», Redis →
+# «редис», DOC → «док»), сверх базового списка: имена, междометия, частые
+# формы. Косвенные падежи слов из COMMON_RU ловит _common по окончаниям.
+COMMON_EXTRA = frozenset("""
+макс мира док нда лан сап скала редис консул ага угу эх ох ах ой ну-ка
+вася петя саша маша даша миша лена катя оля аня таня коля толя дима
+""".split())
+_ENDINGS = ("ами", "ями", "ом", "ем", "ой", "ей", "ов", "ев", "ам", "ям", "ах", "ях",
+            "а", "я", "у", "ю", "е", "ы", "и", "ь")
+_BASE_ENDINGS = ("", "а", "я", "ь", "о", "й")
+
+
+def _common(token: str) -> bool:
+    """Обычное русское слово (или его падежная форма) — такую запись не
+    заменяем: «мира» — это «мир», а не термин Mira."""
+    t = token.lower().replace("ё", "е")
+    if t in COMMON_RU or t in COMMON_EXTRA:
+        return True
+    for end in _ENDINGS:
+        if t.endswith(end) and len(t) - len(end) >= 2:
+            stem = t[: -len(end)]
+            if any(stem + b in COMMON_RU or stem + b in COMMON_EXTRA for b in _BASE_ENDINGS):
+                return True
+    return False
 
 
 def has_latin(text: str) -> bool:
@@ -136,9 +163,9 @@ def variants(term: str) -> list[str]:
         letters = sum(len(t) for t in tokens)
         if letters < 3:
             continue
-        if len(tokens) == 1 and tokens[0].replace("ё", "е") in COMMON_RU:
+        if len(tokens) == 1 and _common(tokens[0]):
             continue
-        if all(t in COMMON_RU for t in tokens):
+        if all(_common(t) for t in tokens):
             continue
         out.append(phrase)
     return list(dict.fromkeys(out))

@@ -303,7 +303,8 @@ def state(selected: str | None = None, selected_gigaam: str | None = None) -> di
             # Гейтед-модель без токена скачать нельзя — это видно до нажатия,
             # а не по ошибке 401 в середине.
             "blocked": bool(model.get("gated")) and not have_token,
-            "removable": is_gigaam and is_downloaded,
+            # Удалить можно и недокачанную или битую модель GigaAM.
+            "removable": is_gigaam and _gigaam_present(model["id"]),
         })
     return {
         "items": items,
@@ -317,6 +318,12 @@ def state(selected: str | None = None, selected_gigaam: str | None = None) -> di
         "can_download_gigaam": _gigaam_available(),
         "gigaam_cache": str(_gigaam_cache()),
     }
+
+
+def _gigaam_present(model_id: str) -> bool:
+    from meet import gigaam_asr
+
+    return gigaam_asr.present(gigaam_name(model_id) or "")
 
 
 def _gigaam_available() -> bool:
@@ -390,9 +397,10 @@ def download(repo_id: str, on_line=None) -> int:
 
 
 def _download_gigaam(name: str, on_line=None) -> int:
-    """Скачать модель GigaAM: публичный `gigaam.load_model` сам качает веса
-    (с проверкой контрольной суммы) в папку моделей приложения; загруженная
-    модель тут же отпускается. Прокси — из переменных среды задачи (urllib)."""
+    """Скачать модель GigaAM в папку моделей приложения (gigaam_asr.ensure:
+    временный файл, контрольная сумма, атомарное переименование; битое
+    скачивается заново) и проверить, что она загружается. Прокси — из
+    переменных среды задачи (urllib)."""
     from meet import gigaam_asr
 
     if not gigaam_asr.installed():
@@ -400,8 +408,12 @@ def _download_gigaam(name: str, on_line=None) -> int:
             on_line("сначала установите движок расшифровки — он приносит и GigaAM")
         return 3
     try:
-        model = gigaam_asr.load(name, "cpu")
+        model = gigaam_asr.load(name, "cpu", on_line=on_line)
         del model
+    except gigaam_asr.Unavailable as e:
+        if on_line:
+            on_line(str(e)[:400])
+        return 1
     except Exception as e:
         if on_line:
             on_line(f"GigaAM {name}: не скачалось ({type(e).__name__}: {str(e)[:300]})")

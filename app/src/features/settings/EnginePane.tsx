@@ -48,7 +48,9 @@ export function EnginePane({ endpoint, onReinstall }: {
       <Row label="Компоненты" hint={engine.flavor === "cuda" ? "Сборка для видеокарты (CUDA)" : "Сборка для процессора (CPU)"}>
         <span className="tags">
           {engine.components.map((c) => (
-            <span key={c.module} className={c.installed ? "tag tag--live" : "tag"}>{c.title}</span>
+            <span key={c.module} className={c.installed ? "tag tag--live" : "tag"}>
+              {c.title}{!c.installed && c.note ? ` — ${c.note}` : ""}
+            </span>
           ))}
         </span>
       </Row>

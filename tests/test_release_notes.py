@@ -25,8 +25,11 @@ def test_first_public_release_has_notes_for_new_and_test_users():
 
 def test_v030_notes_announce_gigaam_on_cpu():
     text = " ".join((NOTES / "v0.3.0.md").read_text(encoding="utf-8").split())
-    for part in ("На процессоре теперь по умолчанию GigaAM — в 15–20 раз быстрее; вернуть "
-                 "Whisper можно в настройках.",
+    for part in ("На процессоре теперь по умолчанию GigaAM: сама расшифровка речи примерно в 10 раз "
+                 "быстрее, а вся обработка записи вместе с разделением на спикеров — примерно в "
+                 "2,5–3 раза; вернуть Whisper можно в настройках.",
+                 "меньше 30 секунд вместо почти 5 минут",
                  "Запись не на русском — использован Whisper",
+                 "GigaAM недоступна — использован Whisper",
                  "только если для процессора стояла модель по умолчанию"):
         assert part in text

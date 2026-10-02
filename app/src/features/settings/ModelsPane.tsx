@@ -26,6 +26,7 @@ function ModelRow({ model, busy, canDownload, selected, onDownload, onSelect, on
         <span className="srow__hint">
           {KIND[model.kind] ?? model.kind} · {model.size_gb} ГБ · {model.id}
           {model.downloaded ? " · скачана" : ""}{model.blocked ? " · нужен токен Hugging Face" : ""}
+          {!model.downloaded && model.removable ? " · загрузка не завершена" : ""}
         </span>
       </div>
       <div className="srow__control">
@@ -34,9 +35,14 @@ function ModelRow({ model, busy, canDownload, selected, onDownload, onSelect, on
             {selected ? "Выбрана" : "Выбрать"}
           </Button>
         )}
-        <Button onClick={onDownload} disabled={busy || model.blocked || !canDownload}>
-          {model.downloaded ? "Обновить" : "Скачать"}
-        </Button>
+        {isGigaam(model) && model.downloaded ? (
+          // GigaAM не обновляется: веса закреплены контрольной суммой.
+          <Button disabled>Скачана</Button>
+        ) : (
+          <Button onClick={onDownload} disabled={busy || model.blocked || !canDownload}>
+            {model.downloaded ? "Обновить" : "Скачать"}
+          </Button>
+        )}
         {model.removable && (
           <Button onClick={onRemove} disabled={busy} aria-label={`Удалить модель ${model.title}`}>Удалить</Button>
         )}
@@ -59,6 +65,9 @@ export function ModelsPane({ endpoint, selectedModel, selectedGigaam = null, onS
   const [tried, setTried] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
+  // Удаление выбранной модели — после подтверждения: она скачается снова при
+  // следующей расшифровке (сотни мегабайт без предупреждения).
+  const [confirmRemove, setConfirmRemove] = useState<Model | null>(null);
 
   const load = useCallback(async () => {
     try { setModels(await getModels(endpoint)); setError(null); }
@@ -73,6 +82,7 @@ export function ModelsPane({ endpoint, selectedModel, selectedGigaam = null, onS
     try { setJob(await downloadModel(endpoint, id)); } catch (e) { setError(errorText(e)); }
   };
   const remove = async (id: string) => {
+    setConfirmRemove(null);
     setRemoving(true);
     try {
       const result = await removeModel(endpoint, id);
@@ -111,9 +121,20 @@ export function ModelsPane({ endpoint, selectedModel, selectedGigaam = null, onS
         <ModelRow
           key={m.id} model={m} busy={busy} canDownload={canDownloadModel(models, m)}
           selected={isSelected(m)}
-          onDownload={() => void download(m.id)} onSelect={() => select(m)} onRemove={() => void remove(m.id)}
+          onDownload={() => void download(m.id)} onSelect={() => select(m)}
+          onRemove={() => (isSelected(m) ? setConfirmRemove(m) : void remove(m.id))}
         />
       ))}
+      {confirmRemove && (
+        <div className="notice" role="alertdialog" aria-label="Удалить выбранную модель">
+          <span>
+            Модель «{confirmRemove.title}» используется по умолчанию — она скачается снова при следующей
+            расшифровке. Удалить?
+          </span>{" "}
+          <Button variant="danger" onClick={() => void remove(confirmRemove.id)}>Удалить</Button>{" "}
+          <Button autoFocus onClick={() => setConfirmRemove(null)}>Отмена</Button>
+        </div>
+      )}
       <Row label="Папка моделей" hint="Общая с библиотеками движка: скачанные модели не загружаются повторно">
         <span className="folder"><PathText path={models.cache} /></span>
       </Row>

@@ -11,6 +11,48 @@ import pytest
 from meet import gigaam_asr, models
 
 
+BLOBS = {"ckpt": b"x" * 100, "tok": b"t"}
+
+
+@pytest.fixture(autouse=True)
+def _small_models_no_network(monkeypatch):
+    """Модели по 101 байту и никакой сети: загрузка — только из BLOBS."""
+    import hashlib
+
+    files = {}
+    for name in gigaam_asr.MODELS:
+        files[name] = (
+            (f"{name}.ckpt", 100, "md5", hashlib.md5(BLOBS["ckpt"]).hexdigest()),
+            (f"{name}_tokenizer.model", 1, "sha256", hashlib.sha256(BLOBS["tok"]).hexdigest()),
+        )
+    monkeypatch.setattr(gigaam_asr, "FILES", files)
+
+    class Response:
+        def __init__(self, data):
+            self.data = data
+
+        def read(self, n=-1):
+            data, self.data = self.data, b""
+            return data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    real = urllib.request.urlopen
+
+    def urlopen(url, *a, **kw):
+        if not isinstance(url, str):  # запросы к своему control API — как есть
+            return real(url, *a, **kw)
+        if "offline" in str(gigaam_asr.URL):
+            raise OSError("нет связи")
+        return Response(BLOBS["ckpt"] if url.endswith(".ckpt") else BLOBS["tok"])
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+
 @pytest.fixture
 def data(tmp_path, monkeypatch):
     monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
@@ -20,8 +62,15 @@ def data(tmp_path, monkeypatch):
 def _fake_files(name: str) -> None:
     root = gigaam_asr.cache_dir()
     root.mkdir(parents=True, exist_ok=True)
-    (root / f"{name}.ckpt").write_bytes(b"x" * 100)
-    (root / f"{name}_tokenizer.model").write_bytes(b"t")
+    (root / f"{name}.ckpt").write_bytes(BLOBS["ckpt"])
+    (root / f"{name}_tokenizer.model").write_bytes(BLOBS["tok"])
+
+
+def _fake_gigaam(monkeypatch, load_model):
+    decoding = types.SimpleNamespace(SentencePieceProcessor=type("P", (), {}))
+    monkeypatch.setitem(sys.modules, "gigaam", types.SimpleNamespace(load_model=load_model,
+                                                                     decoding=decoding))
+    monkeypatch.setitem(sys.modules, "gigaam.decoding", decoding)
 
 
 def _item(state, model_id):
@@ -50,6 +99,16 @@ def test_state_marks_downloaded_selected_and_removable(data):
     assert "can_download_gigaam" in state
 
 
+def test_broken_download_is_removable_but_not_downloaded(data):
+    root = gigaam_asr.cache_dir()
+    root.mkdir(parents=True)
+    (root / "v3_e2e_rnnt.ckpt.part").write_bytes(b"x" * 40)  # оборванная загрузка
+    rnnt = _item(models.state(selected_gigaam="v3_e2e_rnnt"), "gigaam/v3_e2e_rnnt")
+    assert not rnnt["downloaded"] and rnnt["removable"] and rnnt["size_on_disk"] == 40
+    assert models.remove("gigaam/v3_e2e_rnnt")["ok"]
+    assert not gigaam_asr.present("v3_e2e_rnnt")
+
+
 def test_remove_deletes_only_gigaam_files(data):
     _fake_files("v3_e2e_rnnt")
     assert models.remove("gigaam/v3_e2e_rnnt") == {"ok": True, "id": "gigaam/v3_e2e_rnnt", "removed": 2}
@@ -65,10 +124,11 @@ def test_download_uses_public_load_model_into_app_folder(data, monkeypatch):
         seen.update(name=name, device=device, root=download_root)
         return object()
 
-    monkeypatch.setitem(sys.modules, "gigaam", types.SimpleNamespace(load_model=load_model))
+    _fake_gigaam(monkeypatch, load_model)
     monkeypatch.setattr(gigaam_asr, "installed", lambda: True)
     lines = []
     assert models.download("gigaam/v3_e2e_rnnt", on_line=lines.append) == 0
+    assert models.downloaded("gigaam/v3_e2e_rnnt")
     assert seen == {"name": "v3_e2e_rnnt", "device": "cpu", "root": str(data / "models" / "gigaam")}
     assert lines[-1].startswith("скачано:")
 
@@ -84,11 +144,16 @@ def test_download_error_is_explained(data, monkeypatch):
     def load_model(*a, **kw):
         raise OSError("connection reset")
 
-    monkeypatch.setitem(sys.modules, "gigaam", types.SimpleNamespace(load_model=load_model))
+    _fake_gigaam(monkeypatch, load_model)
     monkeypatch.setattr(gigaam_asr, "installed", lambda: True)
     lines = []
     assert models.download("gigaam/v3_e2e_rnnt", on_line=lines.append) == 1
-    assert "не скачалось" in lines[0]
+    assert "не загрузилась" in lines[-1]
+    monkeypatch.setattr(gigaam_asr, "URL", "https://offline.invalid/GigaAM")
+    gigaam_asr.remove("v3_e2e_rnnt")
+    lines.clear()
+    assert models.download("gigaam/v3_e2e_rnnt", on_line=lines.append) == 1
+    assert "не удалось скачать" in lines[-1]
 
 
 def test_remove_route_over_http(monkeypatch, tmp_path):

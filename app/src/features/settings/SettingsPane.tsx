@@ -230,7 +230,7 @@ function AsrEngineRows({ draft, set }: { draft: Raw; set: SetFn }) {
   return (
     <>
       <Radio label="Распознавание на процессоре" value={backend("cpu_backend", "gigaam")}
-        hint="GigaAM расшифровывает в 15–20 раз быстрее Whisper; запись не на русском всё равно распознаёт Whisper"
+        hint="GigaAM распознаёт речь примерно в 10 раз быстрее Whisper (вся обработка — примерно втрое быстрее); запись не на русском всё равно распознаёт Whisper"
         options={[
           { value: "gigaam", label: "GigaAM (русский, быстро)" },
           { value: "faster-whisper", label: "Whisper (многоязычный)" },

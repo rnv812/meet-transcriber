@@ -71,6 +71,9 @@ class _Run:
 
     def __init__(self, extra_hotwords: str | None = None) -> None:
         self.choice: asr.Choice | None = None
+        # Модель Whisper вместо выбранной, когда GigaAM не загрузилась: уже
+        # скачанная (asr.local_whisper_model), чтобы не качать гигабайты.
+        self.whisper_model: str | None = None
         self.extra_hotwords = extra_hotwords
         self.seconds = {"asr": 0.0, "align": 0.0, "diarize": 0.0}
         self.started = time.monotonic()
@@ -101,14 +104,37 @@ class _Run:
                 f"всего {total:.1f} с")
 
 
+def _whisper(wav: Path, hotwords: str | None, run: "_Run") -> list[Segment]:
+    if run.whisper_model:
+        return run.timed("asr", lambda: transcribe_wav(wav, hotwords, model_name=run.whisper_model))
+    return run.timed("asr", lambda: transcribe_wav(wav, hotwords))
+
+
 def _recognize(wav: Path, hotwords: str | None, run: "_Run") -> list[Segment]:
     """Распознать дорожку выбранным движком, засекая время. Whisper зовётся
-    прежним образом (с подсказками), GigaAM — со своей нарезкой; после
-    GigaAM латинские термины возвращаются из кириллицы (meet.translit)."""
+    прежним образом (с подсказками), GigaAM — со своей нарезкой.
+
+    GigaAM не скачалась или не загрузилась (нет сети, сервер недоступен,
+    файл битый) — встреча не падает: её распознаёт Whisper, уже скачанной
+    моделью, если такая есть, с пометкой GIGAAM_FAILED («GigaAM недоступна —
+    использован Whisper») и причиной в журнале."""
     choice = run.choose(wav)
     if choice.backend != "gigaam":
-        return run.timed("asr", lambda: transcribe_wav(wav, hotwords))
-    segments = run.timed("asr", lambda: transcribe_wav(wav, hotwords, choice=choice))
+        return _whisper(wav, hotwords, run)
+    try:
+        return run.timed("asr", lambda: transcribe_wav(wav, hotwords, choice=choice))
+    except Exception as e:
+        print(f"GigaAM недоступна ({type(e).__name__}: {e}) — распознаёт Whisper")
+        run.choice = asr.Choice("faster-whisper", choice.device, note=asr.GIGAAM_FAILED)
+        try:
+            run.whisper_model = asr.local_whisper_model(choice.device)
+        except Exception:
+            run.whisper_model = None
+        return _whisper(wav, hotwords, run)
+
+
+def _restore_latin(segments: list[Segment], run: "_Run") -> None:
+    """После GigaAM — латинские термины из кириллицы (meet.translit)."""
     try:
         from meet import translit
 
@@ -117,7 +143,6 @@ def _recognize(wav: Path, hotwords: str | None, run: "_Run") -> list[Segment]:
             print(f"термины латиницей: возвращено {n}")
     except Exception as e:  # термины не должны ронять расшифровку
         print(f"термины латиницей пропущены (ошибка: {e})")
-    return segments
 
 
 def _align_enabled(align: bool, run: "_Run") -> bool:
@@ -197,11 +222,20 @@ def _replacement_rules() -> list[dict]:
         return []
 
 
-def _fix_terms(segments: list[Segment]) -> list[Segment]:
+def _fix_terms(segments: list[Segment], run: "_Run | None" = None) -> list[Segment]:
     """Правила замены из настроек (`asr.replacements`, «Исправлять так же в
     будущих встречах») — сразу после распознавания и выравнивания: слова
     исправляются вместе с текстом, раздача реплик спикерам их уже видит.
+    После GigaAM за ними — возврат латинских терминов (meet.translit): правило
+    человека («апи» → «API-шлюз») важнее автоматической замены («апи» → «API»).
     Сбой правил не роняет расшифровку."""
+    _apply_rules(segments)
+    if run is not None and run.gigaam:
+        _restore_latin(segments, run)
+    return segments
+
+
+def _apply_rules(segments: list[Segment]) -> list[Segment]:
     rules = _replacement_rules()
     if not rules:
         return segments
@@ -452,7 +486,7 @@ def _transcribe_single(
         align = _align_enabled(align, run)
         if align:
             bus.progress("align")
-        segments = _fix_terms(run.timed("align", lambda: _maybe_align(segments, wav, align)))
+        segments = _fix_terms(run.timed("align", lambda: _maybe_align(segments, wav, align)), run)
         bus.progress("diarize")
         diar = _diarize(wav, speakers, overlap, run)
         if diar.skipped:
@@ -495,7 +529,7 @@ def _transcribe_two_track(
         align = _align_enabled(align, run)
         if align:
             bus.progress("align", note="sys")
-        sys_segs = _fix_terms(run.timed("align", lambda: _maybe_align(sys_segs, sys_wav, align)))
+        sys_segs = _fix_terms(run.timed("align", lambda: _maybe_align(sys_segs, sys_wav, align)), run)
         bus.progress("diarize", note="sys")
         diar = _diarize(sys_wav, speakers, overlap, run)
         if diar.skipped:
@@ -510,7 +544,7 @@ def _transcribe_two_track(
                 sys_segs, _apply_names(diar.turns, name_map), diar.overlaps
             )
         bus.progress("asr", done=1, total=2, note="mic")
-        mic_segs = _fix_terms(_recognize(mic_wav, hotwords, run))
+        mic_segs = _fix_terms(_recognize(mic_wav, hotwords, run), run)
         bus.progress("asr", done=2, total=2, note="mic")
         # Микрофонная дорожка — всегда владелец машины; как его подписывать,
         # решает настройка (по умолчанию «Вы»).
