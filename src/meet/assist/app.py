@@ -402,7 +402,9 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     if provider_name == "claude-code":
         # Тот же прокси, что у вызовов модели (llm.proxy), иначе проверка
         # пошла бы «как в системе» при выбранном «Без прокси».
-        auth_error = asyncio.run(check_auth(proxy=cfg.llm.proxy))
+        # Той же моделью, что работает ассистент (`llm.model`): модели «haiku»
+        # может не быть в разрешённых у организации или прокси.
+        auth_error = asyncio.run(check_auth(proxy=cfg.llm.proxy, model=cfg.llm.model))
         if auth_error:
             raise SystemExit(f"Авторизация Claude не прошла: {auth_error}")
 

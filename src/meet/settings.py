@@ -1615,6 +1615,14 @@ def patch(updates: dict, path: Path | None = None) -> Settings:
     остальные поля секции. Неизвестные секции игнорируются — валидацию имён
     делает вызывающий (API), а не файл.
     """
+    with _FILE_LOCK:
+        # Чтение-правка-запись целиком под замком: правило замены из
+        # «Исправить…», правка настроек из окна и флаг автозаписи из трея
+        # приходят из разных потоков и иначе теряли бы друг друга.
+        return _patch(updates, path)
+
+
+def _patch(updates: dict, path: Path | None) -> Settings:
     updates = _route_hf_token(updates, path)
     current = load(path)
     changed = {}

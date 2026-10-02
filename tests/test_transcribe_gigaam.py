@@ -260,3 +260,28 @@ def test_user_rules_win_over_latin_restoring(pipeline, monkeypatch, tmp_path):
     folder = _import_folder(tmp_path)
     tr.transcribe(str(folder), align=False)
     assert library.read_transcript(folder)["segments"][0]["text"] == "Открой API-шлюз."
+
+
+def test_hub_check_follows_the_hugging_face_mirror(monkeypatch):
+    """С зеркалом (HF_ENDPOINT) проверяется зеркало: туда и пойдёт загрузка."""
+    import urllib.request
+
+    seen = []
+
+    class Reply:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def urlopen(request, timeout=None):
+        seen.append(request.full_url)
+        return Reply()
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setenv("HF_ENDPOINT", "https://hf-mirror.example.com")
+    assert asr.hub_reachable() is True
+    monkeypatch.delenv("HF_ENDPOINT")
+    assert asr.hub_reachable() is True
+    assert seen == ["https://hf-mirror.example.com", asr.HUB_URL]

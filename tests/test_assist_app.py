@@ -82,7 +82,7 @@ def _run_assist_capturing_matcher(tmp_path, monkeypatch, **kwargs):
         def process_window(self):
             pass
 
-    async def fake_check_auth(proxy=None):
+    async def fake_check_auth(proxy=None, model=None):
         return None
 
     async def fake_main(state, port, **kw):
@@ -125,6 +125,7 @@ class _Heavy:
         self.engine = None
         self.auth_calls = 0
         self.auth_proxy = "MISSING"
+        self.auth_model = "MISSING"
         self.resolve_calls = 0
         self.runner_for_calls = []
         self.digester_kwargs = None
@@ -185,9 +186,10 @@ class _Heavy:
             heavy.qa_kwargs = kw
             return real_qa(*a, **kw)
 
-        async def fake_check_auth(proxy=None):
+        async def fake_check_auth(proxy=None, model=None):
             heavy.auth_calls += 1
             heavy.auth_proxy = proxy
+            heavy.auth_model = model
             return None
 
         def fake_resolve(cfg):
@@ -358,6 +360,18 @@ def test_claude_auth_check_uses_proxy_setting(tmp_path, monkeypatch):
          cfg=Settings.from_raw({"llm": {"provider": "claude-code", "proxy": "none"}}))
     assert heavy.auth_calls == 1
     assert heavy.auth_proxy == "none"
+
+
+def test_claude_auth_check_uses_the_configured_model(tmp_path, monkeypatch):
+    """Проверка входа — моделью из настроек, а не «haiku»: её может не быть
+    среди разрешённых у организации или прокси."""
+    async def done(stop):
+        return None
+
+    heavy = _Heavy(monkeypatch, digester_run=done)
+    _run(tmp_path, open_browser=False, port=0,
+         cfg=Settings.from_raw({"llm": {"provider": "claude-code", "model": "opus"}}))
+    assert heavy.auth_model == "opus"
 
 
 def test_no_provider_exits_with_clear_error(tmp_path, monkeypatch):
