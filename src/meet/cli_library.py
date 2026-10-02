@@ -24,7 +24,7 @@ from pathlib import Path
 from meet import library
 
 COMMANDS = ("import", "export", "voices", "summary", "ask", "notes", "kb-export", "merge", "fix",
-            "analyze", "title", "improve", "category")
+            "analyze", "title", "improve", "category", "profile")
 NO_PROVIDER_HINT = ("Подключите Claude Code или Codex: meet {command} … --provider codex "
                     "или настройка llm.provider")
 
@@ -917,8 +917,104 @@ def _improve_via_resident(rid: str, *, sleep=None, clock=None) -> dict:
     return got.get("proposal") or {"groups": []}
 
 
+# --- профили людей ------------------------------------------------------------
+
+PROFILE_WAIT_S = 1800.0
+
+
+def _profile_person(name: str, cfg) -> str:
+    from meet import people
+
+    try:
+        name = people.valid_name(name)
+    except ValueError as e:
+        raise CliError(f"Недопустимое имя «{name}»: {e}")
+    if not (cfg.recording.voices / f"{name}.json").exists():
+        known = ", ".join(p["name"] for p in people.listing(cfg.recording.voices, cfg.recording.recordings))
+        raise CliError(f"В базе голосов нет «{name}»" + (f". Есть: {known}" if known else ""))
+    return name
+
+
+def _profile_via_resident(name: str, refresh: bool, *, sleep=None, clock=None) -> dict:
+    import time
+    from urllib.parse import quote
+
+    from meet import control
+
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+
+    def call(method: str = "GET") -> dict:
+        try:
+            reply = control.request(f"/voices/{quote(name)}/profile", method=method,
+                                    payload={} if method == "POST" else None, timeout=60)
+        except RuntimeError as e:
+            text = str(e).split(": ", 1)[-1] if "ответил" in str(e) else str(e)
+            raise CliError(text[:1].upper() + text[1:])
+        if set(reply) == {"error"}:
+            raise CliError(str(reply["error"])[:1].upper() + str(reply["error"])[1:])
+        return reply
+
+    if refresh:
+        job = call("POST")
+        _say(f"Профиль поставлен в очередь приложения ({job.get('id')})")
+        deadline = clock() + PROFILE_WAIT_S
+        while True:
+            got = call()
+            if got.get("state") not in ("queued", "running"):
+                break
+            if clock() > deadline:
+                raise CliError("Профиль составляется дольше получаса — результат появится в приложении")
+            sleep(ANALYZE_POLL_S)
+        if got.get("state") == "failed":
+            raise CliError(f"Профиль не получился: {got.get('error') or 'без подробностей'}")
+        return got
+    return call()
+
+
+def _profile(args, cfg) -> None:
+    """`meet profile <человек> [--refresh]`: профиль человека (стиль общения
+    по репликам). Профили выключены — отказ. Приложение запущено — через него
+    (одна очередь модели); иначе — в этом процессе."""
+    from meet import control, profiles
+
+    if not cfg.profiles.enabled:
+        raise CliError("Профили людей выключены. Включите их в приложении: Настройки → Профили людей")
+    name = _profile_person(args.person, cfg)
+    if control.alive():
+        got = _profile_via_resident(name, args.refresh)
+        doc, notes, via_app = got.get("profile"), got.get("notes") or "", True
+        if not doc and got.get("note"):
+            _say(got["note"])
+    else:
+        voices, root = cfg.recording.voices, cfg.recording.recordings
+        pid = profiles.person_id(name, voices, create=args.refresh)
+        if args.refresh:
+            provider, runner = _model(args, cfg)
+            try:
+                profiles.refresh(pid, voices, root, runner, cfg, provider=provider, bus=_cli_bus())
+            except profiles.NotEnoughData as e:
+                raise CliError(str(e))
+            except (profiles.ProfileError, RuntimeError) as e:
+                profiles.mark_failed(pid, str(e))
+                raise CliError(f"Профиль не получился: {e}")
+            except OSError as e:
+                raise CliError(f"Не удалось сохранить профиль: {e}")
+        doc = profiles.public(profiles.read(pid)) if pid else None
+        notes = profiles.read_notes(pid) if pid else ""
+        via_app = False
+        if not doc:
+            st = profiles.stats(profiles.collect(name, root, cfg))
+            if profiles.level(st) == "none":
+                _say(profiles.data_note(st))
+    _result(args, {"person": name, "via_app": via_app, "profile": doc, "notes": notes},
+            profiles.text_view(doc, name, notes) if doc else
+            f"Профиля «{name}» пока нет — составьте его: meet profile \"{name}\" --refresh\n")
+
+
 _HANDLERS = {"import": _import, "export": _export, "summary": _summary,
              "ask": _ask, "notes": _kb_export, "kb-export": _kb_export, "merge": _merge, "fix": _fix,
-             "analyze": _analyze, "title": _title, "improve": _improve, "category": _category}
+             "analyze": _analyze, "title": _title, "improve": _improve, "category": _category,
+             "profile": _profile}
 _VOICES = {"list": _voices_list, "rename": _voices_rename, "merge": _voices_merge,
            "delete": _voices_delete, "avatar": _voices_avatar}

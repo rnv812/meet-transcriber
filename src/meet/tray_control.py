@@ -23,6 +23,7 @@ from pathlib import Path
 
 from meet import (engine, events, gpu_lock, hotwords, jobs, library, live_control, paths,
                   settings, watch)
+from meet.profiles_control import ProfilesMixin
 
 # Источник записи. Константы живут здесь, а не в tray.py: адаптер не должен
 # зависеть от модуля, который тянет pystray, — наоборот, tray импортирует их
@@ -338,8 +339,9 @@ def _without_marks(data: dict) -> dict:
                                  for s in data["segments"]]}
 
 
-class TrayControl:
-    """Состояние для `meet.control.ControlServer` поверх объекта трея."""
+class TrayControl(ProfilesMixin):
+    """Состояние для `meet.control.ControlServer` поверх объекта трея.
+    Профили людей — примесь `meet.profiles_control`."""
 
     def __init__(self, tray, queue=None, llm_queue=None, live=None) -> None:
         self.tray = tray
@@ -479,6 +481,14 @@ class TrayControl:
             self._background(lambda: self._improve_finished(Path(folder), job.get("state"),
                                                             job=job, stopping=stopping),
                              "meet-improve")
+        if kind == jobs.PROFILE and folder:
+            stopping = bool(getattr(self.llm_queue, "stopping", False))
+            self._background(lambda: self._profile_finished(folder, job.get("state"),
+                                                            job=job, stopping=stopping),
+                             "meet-profile")
+        if kind == jobs.ANALYZE and folder and event.kind == jobs.JOB_DONE:
+            # Анализ готов — профили участников встречи (если включены и пора).
+            self._background(lambda: self._auto_profiles(Path(folder)), "meet-profile")
         if self._analysis_deferred or self._improve_deferred:
             self._background(self._flush_deferred_analysis, "meet-analysis")
         if event.kind != jobs.JOB_DONE:
@@ -774,6 +784,14 @@ class TrayControl:
             mark = library.read_meta(folder).get("pending_improve")
             if isinstance(mark, dict) and self._resume_improve(folder, mark, cutoff):
                 done.setdefault("improve", []).append(folder.name)
+        # Профили людей, прерванные выходом (`pending` в profiles/<id>.state.json).
+        try:
+            resumed = self._resume_profiles(cutoff)
+        except Exception as e:
+            resumed = []
+            self.tray.log(f"профили не восстановлены: {type(e).__name__}: {e}")
+        if resumed:
+            done["profiles"] = resumed
         return done
 
     def _queue_transcription(self, path: Path) -> None:
@@ -1054,6 +1072,9 @@ class TrayControl:
         except ValueError as e:  # шаблон папки, имя файла выгрузки
             raise _bad_request(str(e))
         touched = [name for name in RESTART_REQUIRED_SECTIONS if name in (updates or {})]
+        if not updated.profiles.enabled:
+            # Профили выключили — их задач больше нет (сами профили остаются).
+            self._drop_all_profiles()
         return {
             "settings": updated.to_raw(),
             # Не «применено», а «применится»: врать про живую перезагрузку хуже,
@@ -2238,6 +2259,8 @@ class TrayControl:
             self._mark_pending(Path(job.folder), False)
         if ok and job is not None and job.kind == jobs.IMPROVE:
             self._mark_improve(Path(job.folder), False)
+        if ok and job is not None and job.kind == jobs.PROFILE:
+            self._profile_cancelled(job.folder)
         if ok and job is not None and job.kind == jobs.ANALYZE:
             # Ждущая задача снимается без события (_analysis_finished не придёт):
             # отметку снимаем здесь, иначе анализ вернётся при следующем запуске.
@@ -3036,6 +3059,18 @@ class TrayControl:
             raise RuntimeError(f"не удалось сохранить аватар: {e}") from e
         return {"ok": True}
 
+    def _drop_person_profile(self, name: str) -> None:
+        """Человека удаляют (или сливают в другого) — его задачу профиля снять:
+        файлы профиля удалит people.delete."""
+        from meet import profiles
+
+        try:
+            pid = profiles.person_id(name, self._voices())
+        except (KeyError, ValueError):
+            return
+        if pid:
+            self._drop_profile(pid)
+
     def person_action(self, name: str, action: str, body: dict | None = None) -> dict:
         """rename / merge / delete / clear-avatar — одним входом, ошибки текстом."""
         from meet import people
@@ -3051,9 +3086,11 @@ class TrayControl:
                     people.rename(name, target, voices, self._root())
             elif action == "merge":
                 target = people.valid_name(str((body or {}).get("into") or ""))
+                self._drop_person_profile(name)  # исчезает вместе с профилем
                 with self._speakers_lock:
                     people.merge(name, target, voices, self._root())
             elif action == "delete":
+                self._drop_person_profile(name)
                 people.delete(name, voices)
             elif action == "clear-avatar":
                 people.clear_avatar(name, voices)

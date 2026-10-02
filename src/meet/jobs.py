@@ -60,8 +60,12 @@ ANALYZE = "analyze"
 # «Улучшить расшифровку» (meet.improve): модель предлагает замены неверно
 # распознанных терминов → improve.json; применяет их человек. Очередь модели.
 IMPROVE = "improve"
+# Профиль человека (meet.profiles): модель описывает стиль общения по его
+# репликам → profiles/<id>.json. Очередь модели; «папка» задачи — путь этого
+# файла (одна задача на человека). Автоматическое обновление — фоновое.
+PROFILE = "profile"
 KINDS = (TRANSCRIBE, IMPORT, INSTALL_ENGINE, DOWNLOAD_MODEL, SUMMARY, ASK, MERGE, SPEAKER_SPLIT, REDIARIZE,
-         ANALYZE, IMPROVE)
+         ANALYZE, IMPROVE, PROFILE)
 # Задачи модели над папкой записи: пишут в неё итоги, ответы и разметку.
 MODEL_KINDS = (SUMMARY, ASK, ANALYZE, IMPROVE)
 # Задачи, которые пишут в папку записи звук или транскрипт: пока такая ждёт или
@@ -181,7 +185,7 @@ def worker_argv(job: Job) -> list[str]:
         return argv
     if job.kind == DOWNLOAD_MODEL:
         return argv  # путь задачи — это repo_id модели
-    if job.kind in (SUMMARY, MERGE, ANALYZE, IMPROVE):
+    if job.kind in (SUMMARY, MERGE, ANALYZE, IMPROVE, PROFILE):
         return argv
     if job.kind == SPEAKER_SPLIT:
         # Одним аргументом через «=»: подпись с ведущим дефисом не станет флагом.

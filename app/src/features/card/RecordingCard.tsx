@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { Sparkles } from "lucide-react";
 import { agentPrompt, type AgentRequest } from "../../lib/agentRef";
-import { buildView, INSIGHT_LABEL, usableAnalysis, type InsightView } from "../../lib/analysisView";
+import {
+  buildView, INSIGHT_LABEL, segmentTurns, turnOfSegment, usableAnalysis, type InsightView,
+} from "../../lib/analysisView";
 import {
   ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
   kbExport, patchRecording, runAnalysis, setRecordingCategory, transcribe, type Endpoint,
@@ -51,9 +53,16 @@ const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 /** Сколько первых реплик главы уходит агенту со ссылкой на главу. */
 const CHAPTER_REFS = 6;
 
+/**
+ * Просьба к карточке снаружи (профиль человека): показать реплику — номер
+ * сегмента транскрипта — или вставить текст во вкладку «Агент». `n` растёт с
+ * каждой просьбой; принятую карточка отдаёт обратно (`onRequestTaken`).
+ */
+export type CardRequest = { n: number; id: string; segment?: number; agent?: string };
+
 export function RecordingCard({
   id, endpoint, jobs = NO_JOBS, snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
-  onOpenSettings, find, refreshKey = 0, categories,
+  onOpenSettings, find, refreshKey = 0, categories, request = null, onRequestTaken,
 }: {
   id: string;
   endpoint: Endpoint;
@@ -72,6 +81,10 @@ export function RecordingCard({
   refreshKey?: number;
   /** Категории встреч из настроек: метка под названием и меню выбора. */
   categories?: Category[];
+  /** Просьба из профиля человека: реплика или текст для агента. */
+  request?: CardRequest | null;
+  /** Просьбу `request` выполнили — владелец её сбрасывает (повторно открытая карточка её не повторит). */
+  onRequestTaken?: () => void;
 }) {
   const [rec, setRec] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -103,6 +116,8 @@ export function RecordingCard({
   const [agentAsk, setAgentAsk] = useState<AgentInsert | null>(null);
   /** Глава из списка глав плеера: показать её в расшифровке. */
   const [reveal, setReveal] = useState<RevealRequest | null>(null);
+  /** Растёт, когда реплику просят показать снаружи: вкладка — «Расшифровка». */
+  const [showTick, setShowTick] = useState(0);
   const current = useRef({ endpoint, id });
   current.current = { endpoint, id };
 
@@ -274,6 +289,28 @@ export function RecordingCard({
   }, [onChanged]);
   const titleSuggest = useTitleSuggest(endpoint, id, titleApplied);
 
+  // Просьба из профиля человека: текст — во «Агент» сразу; реплика — когда
+  // расшифровка загружена (номер сегмента → реплика карточки).
+  const handledRequest = useRef<number | null>(null);
+  const transcriptReady = !!rec && !!segments && statusOf(rec, jobs, snapshot).kind === "ready";
+  useEffect(() => {
+    if (!request || handledRequest.current === request.n) return;
+    if (request.agent) {
+      handledRequest.current = request.n;
+      setAgentAsk({ text: request.agent });
+      onRequestTaken?.();
+      return;
+    }
+    if (typeof request.segment !== "number" || !transcriptReady) return;
+    handledRequest.current = request.n;
+    const turn = turnOfSegment(segmentTurns(turns, segmentCount), request.segment);
+    if (turn >= 0) {
+      setReveal((r) => ({ turn, n: (r?.n ?? 0) + 1 }));
+      setShowTick((n) => n + 1);
+    }
+    onRequestTaken?.();
+  }, [request, transcriptReady, turns, segmentCount, onRequestTaken]);
+
   if (!rec) {
     if (missing) return <EmptyState title="Запись не найдена" hint="Возможно, её удалили. Выберите другую в списке." />;
     return error ? <div className="card__error" role="alert">{error}</div> : <EmptyState title="Загрузка…" />;
@@ -405,7 +442,7 @@ export function RecordingCard({
   }
   const body = (
     <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
-      showTranscript={shownFind?.n} stage={stage} transcript={first} agentRequest={agentAsk}
+      showTranscript={`${shownFind?.n ?? 0}:${showTick}`} stage={stage} transcript={first} agentRequest={agentAsk}
       onAskAgent={askAgent} onAgentTaken={agentTaken} />
   );
 
