@@ -25,10 +25,20 @@ button.chip:hover { background: var(--surface-hover); }
 .chip--unnamed { color: var(--text-2); }
 .chip--action { padding: 0 10px; color: var(--accent-hover); border-style: dashed; }
 .chip--action[aria-expanded="true"] { border-style: solid; border-color: var(--accent); }
+/* Действия карточки (CardActions): главное слева, значки справа; узкая — только значки. */
 .card__actions {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 20px;
-  border-bottom: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px;
+  padding: 8px 20px; border-bottom: 1px solid var(--line);
 }
+.act-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.act-group--end { gap: 2px; margin-left: auto; }
+.act { gap: 6px; padding: 0 10px 0 8px; }
+.act svg { flex: none; color: var(--text-2); transition: color var(--t); }
+.act:hover svg { color: var(--text); }
+.act__chevron { margin: 0 -3px 0 -2px; opacity: 0.7; }
+.act--icon { width: 30px; padding: 0; justify-content: center; background: transparent; border-color: transparent; }
+.act--icon:hover, .act--icon[aria-expanded="true"] { background: var(--surface-hover); border-color: var(--line-2); }
+.card__actions--compact .act:not(.act--icon) { padding: 0 6px; gap: 2px; }
 .menu-wrap { position: relative; }
 .menu {
   position: absolute; top: 32px; left: 0; z-index: 5; min-width: 100px; padding: 4px;
@@ -164,7 +174,7 @@ button.turn__speaker:hover { text-decoration: underline; }
 .find__count { flex: none; min-width: 64px; color: var(--text-2); font-size: 12px; text-align: right; white-space: nowrap; }
 .find__count--none { color: var(--amber); }
 .find__nav {
-  flex: none; width: 28px; height: 28px; border: 1px solid var(--line-2); border-radius: var(--r-md);
+  flex: none; display: inline-flex; align-items: center; justify-content: center; padding: 0; width: 28px; height: 28px; border: 1px solid var(--line-2); border-radius: var(--r-md);
   background: var(--surface-2); color: var(--text); font: inherit; cursor: pointer;
   transition: background var(--t);
 }

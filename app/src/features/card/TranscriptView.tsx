@@ -14,6 +14,7 @@ import {
   useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent,
   type ReactNode,
 } from "react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { findHits, parseQuery, prepare } from "../../lib/search";
 import type { Turn } from "../../lib/speakers";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
@@ -180,9 +181,9 @@ export function TranscriptView({
         <span className={`find__count num${active && !hits.length ? " find__count--none" : ""}`}
           aria-live="polite" aria-atomic="true">{counter}</span>
         <button type="button" className="find__nav" aria-label="Предыдущее совпадение" title="Предыдущее (Shift+Enter)"
-          disabled={hits.length < 2} onClick={() => step(-1)}>↑</button>
+          disabled={hits.length < 2} onClick={() => step(-1)}><ChevronUp size={16} strokeWidth={1.75} aria-hidden="true" /></button>
         <button type="button" className="find__nav" aria-label="Следующее совпадение" title="Следующее (Enter)"
-          disabled={hits.length < 2} onClick={() => step(1)}>↓</button>
+          disabled={hits.length < 2} onClick={() => step(1)}><ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" /></button>
         <HelpTip label="Как искать в расшифровке" title="Поиск по расшифровке">
           <TipLine>Слова без кавычек находят реплики, где есть все эти слова в любой форме: «задача» найдёт и «задачи».</TipLine>
           <TipLine>Фраза в кавычках, например <code>"план работ"</code>, ищется точно, слово в слово.</TipLine>

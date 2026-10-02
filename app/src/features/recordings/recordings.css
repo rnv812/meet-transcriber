@@ -117,11 +117,15 @@
 }
 .item-menu__note { padding: 6px 8px; color: var(--text-2); font-size: 12px; }
 .item-menu__item {
-  display: block; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--r-md);
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--r-md);
   background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer;
 }
+.item-menu__icon { display: inline-flex; flex: none; color: var(--text-2); }
+.item-menu__item--danger .item-menu__icon { color: inherit; }
+.item-menu__sep { height: 1px; margin: 3px 4px; background: var(--line-2); }
 .item-menu__item:hover, .item-menu__item:focus-visible { background: var(--surface-hover); outline: none; }
 .item-menu__item--danger { color: var(--red); }
+.item-menu__item:disabled { opacity: 0.45; cursor: default; background: none; }
 /* Итог действия из меню. */
 .rec-notice {
   display: flex; align-items: flex-start; gap: 6px; padding: 6px 8px; font-size: 12px; color: var(--text-2);
