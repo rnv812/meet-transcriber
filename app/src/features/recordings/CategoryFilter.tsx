@@ -73,7 +73,7 @@ export function CategoryFilter({ list, endpoint, q, selected, onChange }: {
                   onChange={() => toggle(o.key)} />
                 <CategoryDot color={o.color} />
                 <Truncate className="cat-filter__name">{o.name}</Truncate>
-                <span className="cat-filter__count" aria-hidden="true" title={scopeNote}>{count(o.key) ?? ""}</span>
+                <span className="cat-filter__option-count" aria-hidden="true" title={scopeNote}>{count(o.key) ?? ""}</span>
               </label>
             ))}
           </fieldset>

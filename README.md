@@ -194,8 +194,9 @@ CPU); пакеты почти все берутся из кэша, обычно 
   переходит на GigaAM; другая выбранная вами модель Whisper остаётся. Модель
   GigaAM (около 0,45 ГБ) скачивается при первой расшифровке.
 - Автоматический анализ встречи у обновившихся пользователей сначала
-  выключен. Meet один раз предложит включить его в карточке встречи и
-  предупредит, что текст встречи отправляется выбранной модели. Ответ
+  выключен. Когда модель подключена, Meet один раз предложит включить его в
+  карточке встречи и предупредит, что текст встречи отправляется выбранной
+  модели. «Включить» сразу проанализирует и открытую встречу. Ответ
   запоминается; изменить его можно в «Настройки → Анализ встречи».
 - Названия встреч от ИИ, автоматическое улучшение расшифровки и профили людей
   выключены, пока вы их не включите.
@@ -510,8 +511,8 @@ C:\Obsidian\Работа\
 ## Приватность
 
 - **Всегда на компьютере:** запись, распознавание речи (GigaAM и Whisper
-  работают локально), разделение на спикеров, база голосов, профили людей,
-  поиск, экспорт. Данные лежат в `%LOCALAPPDATA%\meet` (папку записей можно
+  работают локально), разделение на спикеров, база голосов, хранение профилей
+  людей (составляет их модель — см. ниже), поиск, экспорт. Данные лежат в `%LOCALAPPDATA%\meet` (папку записей можно
   перенести). Служба записи принимает запросы только с этого компьютера: API
   слушает `127.0.0.1` и требует токен.
 - **Что получает модель.** Текст встречи (реплики с именами) уходит выбранному
@@ -634,11 +635,13 @@ categories, summaries, AI fixes for misrecognised terms, opt-in people
 profiles, a live assistant with a running summary, timely hints and streamed
 answers, and an "Agent" terminal in the meeting folder.
 
-Audio, transcripts, the voice base and profiles stay on your machine. Meeting
-text is sent to the chosen model provider (Anthropic for Claude Code, OpenAI
-for Codex) when you request a summary, title, fix or profile, while a live
-assistant recording runs, and automatically after each transcription for
-meeting analysis. Automatic analysis is on by default for new installs; users
+Audio, transcripts and the voice base stay on your machine; profiles are
+stored locally but written by the model. Meeting text is sent to the chosen
+model provider (Anthropic for Claude Code, OpenAI for Codex) when you request
+a summary, title or AI transcript improvement, when people profiles are
+enabled (including their automatic daily refresh), while a live assistant
+recording runs, when you work in the Agent tab, and automatically after each
+transcription for meeting analysis. Automatic analysis is on by default for new installs; users
 upgrading from 0.2.x are asked once before it is enabled, and it can be turned
 off in Settings. Models are downloaded from Hugging Face and, for GigaAM, from
 its authors' server; the app collects no telemetry.

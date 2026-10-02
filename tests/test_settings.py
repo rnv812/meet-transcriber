@@ -854,6 +854,17 @@ def test_switch_in_settings_while_pending_is_the_answer(tmp_path):
     assert got.analysis.consent == "granted" and got.analysis.auto is False
 
 
+def test_wizard_first_write_is_not_an_upgrade(tmp_path):
+    """Первая запись новой установки — правка из мастера первого запуска:
+    файл получает раздел analysis, и следующий запуск не примет её за 0.2.x."""
+    f = tmp_path / "config.json"
+    settings.patch({"asr": {"device": "cpu"}, "llm": {"provider": "claude-code"}}, f)
+    stored = json.loads(f.read_text(encoding="utf-8"))
+    assert "analysis" in stored and "version" in stored
+    cfg = settings.load(f)
+    assert cfg.analysis.auto is True and cfg.analysis.consent == ""
+
+
 def test_new_install_switch_does_not_invent_an_answer(tmp_path):
     f = tmp_path / "config.json"
     got = settings.patch({"analysis": {"auto": False}}, f)

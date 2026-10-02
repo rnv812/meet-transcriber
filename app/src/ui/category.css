@@ -61,7 +61,7 @@
 .cat-filter__option:hover { background: var(--surface-hover); }
 .cat-filter__option input { margin: 0; accent-color: var(--accent); }
 .cat-filter__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cat-filter__count { color: var(--text-3); font-variant-numeric: tabular-nums; }
+.cat-filter__option-count { color: var(--text-3); font-variant-numeric: tabular-nums; }
 .cat-filter__foot {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 6px 4px 0; margin-top: 4px; border-top: 1px solid var(--line-2);
