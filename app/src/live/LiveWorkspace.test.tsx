@@ -23,7 +23,7 @@ const lines = [
 function makeLive(o: Partial<Live> = {}): Live {
   return {
     status: null, lines, digest: "", summary: summary(), hints: [hint()], hintsEnabled: true, quietDefault: false, qa: [],
-    loaded: true, error: null, asking: false, askError: null,
+    loaded: true, error: null, asking: false, askError: null, hintError: null,
     ask: vi.fn(async () => {}), hint: vi.fn(async () => {}), setTask: vi.fn(async () => {}), ...o,
   };
 }
@@ -155,4 +155,30 @@ test("пустые сводка и подсказки — спокойные п�
   render(<Host live={makeLive({ hints: [], summary: { topic: "", points: [], decisions: [], tasks: [], open_questions: [] } })} wide />);
   expect(screen.getByText(/Сводка появится/)).toBeInTheDocument();
   expect(screen.getByText(/Подсказки появятся/)).toBeInTheDocument();
+});
+
+test("вкладки с клавиатуры: стрелки по кругу, Home/End; в порядке Tab — только выбранная", async () => {
+  render(<Host live={makeLive()} />);
+  const tab = (name: string) => screen.getByRole("tab", { name });
+  expect(tab("Лента")).toHaveAttribute("tabindex", "0");
+  expect(tab("Сводка")).toHaveAttribute("tabindex", "-1");
+  await userEvent.click(tab("Лента"));
+  await userEvent.keyboard("{ArrowRight}");
+  expect(tab("Сводка")).toHaveAttribute("aria-selected", "true");
+  expect(tab("Сводка")).toHaveFocus();
+  await userEvent.keyboard("{End}");
+  expect(tab("Спросить")).toHaveAttribute("aria-selected", "true");
+  await userEvent.keyboard("{ArrowRight}");
+  expect(tab("Лента")).toHaveAttribute("aria-selected", "true");
+  await userEvent.keyboard("{ArrowLeft}");
+  expect(tab("Спросить")).toHaveFocus();
+  await userEvent.keyboard("{Home}");
+  expect(tab("Лента")).toHaveAttribute("aria-selected", "true");
+});
+
+test("действие с подсказкой не дошло — ошибка у этой подсказки", () => {
+  render(<Host live={makeLive({ hints: [hint(), hint({ id: "h2", text: "Другая" })], hintError: { id: "h2", text: "Ассистент не запущен" } })} wide />);
+  const items = within(screen.getByRole("list", { name: "Подсказки" })).getAllByRole("listitem");
+  expect(within(items[1]!).getByRole("alert")).toHaveTextContent("Ассистент не запущен");
+  expect(within(items[0]!).queryByRole("alert")).toBeNull();
 });

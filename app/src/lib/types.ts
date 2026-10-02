@@ -412,14 +412,16 @@ export type LiveHint = {
 
 /**
  * `event: state` потока `/live/events`: сводка (структурой и Markdown'ом —
- * `digest`), подсказки, история вопросов, хвост ленты, тихий статус
- * («Подсказки временно недоступны»). `hints_enabled: false` — режим
- * «Только сводка».
+ * `digest`), подсказки, тихий статус («Подсказки временно недоступны»).
+ * `hints_enabled: false` — режим «Только сводка». История вопросов приходит
+ * своим событием `qa`; хвост ленты строками (`transcript`) — только странице
+ * `meet assist` в браузере.
  */
 export type LiveState = {
   digest: string;
-  transcript: string[];
+  transcript?: string[];
   status: string | null;
+  /** Прежний ассистент присылал историю вопросов здесь. */
   qa?: LiveQa[];
   version?: number;
   summary?: LiveSummary;

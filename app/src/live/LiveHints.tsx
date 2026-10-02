@@ -16,12 +16,14 @@ import "./live.css";
 
 const COPIED_MS = 1500;
 
-export function LiveHints({ hints, fresh, enabled = true, onAction, onAsk, onTime }: {
+export function LiveHints({ hints, fresh, enabled = true, error = null, onAction, onAsk, onTime }: {
   hints: LiveHint[];
   /** Ключи `hintKey` недавно появившихся или изменённых. */
   fresh: Set<string>;
   /** false — режим «Только сводка». */
   enabled?: boolean;
+  /** Действие с подсказкой не дошло — текст у неё. */
+  error?: { id: string; text: string } | null;
   onAction: (id: string, action: HintAction) => void;
   onAsk: (hint: LiveHint) => void;
   onTime: (seconds: number) => void;
@@ -78,6 +80,7 @@ export function LiveHints({ hints, fresh, enabled = true, onAction, onAsk, onTim
             <button type="button" className="live-chip" onClick={() => onAsk(h)}>Спросить об этом</button>
             {copied === h.id && <span className="muted live-hint__copied" role="status">Скопировано</span>}
           </div>
+          {error?.id === h.id && <div className="live-hint__error" role="alert">{error.text}</div>}
         </li>
       ))}
     </ul>

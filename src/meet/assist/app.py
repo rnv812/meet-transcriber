@@ -140,17 +140,22 @@ class AssistState:
 
     def signature(self) -> tuple:
         """Меняется — пора слать клиентам новое `state`."""
-        qa = self.qa.version if self.qa is not None else 0
-        return (self.live.version, qa, self.bus.size(), self.status())
+        return (self.live.version, self.status())
 
     def view(self) -> dict:
-        """Тело `event: state`: сводка, подсказки, история вопросов, статус.
-        `digest` — сводка Markdown'ом (страница `meet assist` в браузере)."""
+        """Тело `event: state`: сводка, подсказки, статус. `digest` — сводка
+        Markdown'ом (страница `meet assist` в браузере). История вопросов —
+        отдельным событием `qa` (`qa_items`), когда меняется она."""
         data = self.live.to_dict()
-        qa = self.qa.history() if self.qa is not None else []
-        return {**data, "digest": self.live.render_markdown(), "qa": qa,
+        return {**data, "digest": self.live.render_markdown(),
                 "status": self.status(), "hints_enabled": self.live.hints_enabled,
                 "prefs": self.prefs}
+
+    def qa_version(self) -> int:
+        return self.qa.version if self.qa is not None else 0
+
+    def qa_items(self) -> list[dict]:
+        return self.qa.history() if self.qa is not None else []
 
     def hint_action(self, hint_id: str, action: str) -> bool:
         """Закрепить, открепить или скрыть подсказку. False — такой нет."""

@@ -199,7 +199,7 @@ test("запись с ассистентом: в карточке живая л�
   await userEvent.click(screen.getByRole("tab", { name: "Спросить" }));
   await userEvent.click(screen.getByRole("button", { name: "Что я пропустил?" }));
   expect(api.liveAsk).toHaveBeenCalledWith(ep, "", { quick: "missed" });
-  act(() => stream.emit("state", { digest: "", transcript: [], status: null, summary, qa: [
+  act(() => stream.emit("qa", { qa: [
     { id: 1, q: "Что я пропустил?", a: "Обсуждали релиз", error: null, pending: false, at: 1, quick: "missed" },
   ] }));
   expect(await screen.findByText("Обсуждали релиз")).toBeInTheDocument();

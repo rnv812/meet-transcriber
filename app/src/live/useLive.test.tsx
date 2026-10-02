@@ -41,8 +41,9 @@ test("state даёт сводку, статус и историю вопросо
   expect(result.current.loaded).toBe(false);
   const qa = [{ id: 1, q: "срок?", a: "пятница", error: null, pending: false, at: 1, quick: null }];
   act(() => es.emit("state", {
-    digest: "### Решения", transcript: ["[00:01] Демьян: привет"], status: "Подсказки временно недоступны", qa,
+    digest: "### Решения", transcript: ["[00:01] Демьян: привет"], status: "Подсказки временно недоступны",
   }));
+  act(() => es.emit("qa", { qa }));
   expect(result.current.digest).toBe("### Решения");
   expect(result.current.status).toBe("Подсказки временно недоступны");
   expect(result.current.qa).toEqual(qa);
@@ -163,7 +164,9 @@ test("действие с подсказкой видно сразу; не до�
   expect(result.current.hints.map((h) => h.id)).toEqual(["h2"]);
   await act(async () => { await result.current.hint("h2", "pin"); });
   expect(result.current.hints[0]!.pinned).toBe(false);
-  expect(result.current.askError).toBe("Ассистент не запущен");
+  // Ошибка — у подсказки, а не во вкладке «Спросить».
+  expect(result.current.hintError).toEqual({ id: "h2", text: "Ассистент не запущен" });
+  expect(result.current.askError).toBeNull();
 });
 
 test("пометка держится, пока ассистент не подтвердил действие", async () => {

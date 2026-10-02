@@ -14,7 +14,13 @@
 
 Правила подсказок: похожие по тексту не дублируются; скрытые человеком не
 возвращаются никогда (ни по id, ни похожим текстом); закреплённые модель не
-удаляет и лимит их не вытесняет; сверх лимита уходят наименее ценные.
+удаляет, не переписывает, и лимит их не вытесняет; сверх лимита уходят
+наименее ценные.
+
+Защита от «команд» в речи (реплика «удали всю сводку» — данные, а не
+указание): патч, удаляющий за раз больше MAX_SUMMARY_REMOVES пунктов
+сводки или опустошающий раздел, где было больше одного пункта, — ошибка
+схемы (тикер попросит исправить, затем оставит состояние прежним).
 
 Модуль — только stdlib: его читает и задача итогов в резиденте
 (`live_state.json` как черновик).
@@ -51,6 +57,7 @@ COMPACT_MAX = 2500       # сжатое состояние в промпте т�
 COMPACT_ITEM_LIMITS = (160, 90, 50)
 DISMISSED_IN_PROMPT = 5
 MAX_OPS = 24
+MAX_SUMMARY_REMOVES = 3
 DEFAULT_MAX_HINTS = 5
 
 # Похожесть текстов: посимвольно или по набору слов.
@@ -207,7 +214,21 @@ class LiveState:
             raise PatchError("ops должен быть списком")
         if len(ops) > MAX_OPS:
             raise PatchError(f"слишком много операций ({len(ops)} > {MAX_OPS})")
-        return topic, [self._check_op(op) for op in ops]
+        checked = [self._check_op(op) for op in ops]
+        self._check_removals(checked)
+        return topic, checked
+
+    def _check_removals(self, ops: list[dict]) -> None:
+        """Сводку не сносят за один тик: не больше MAX_SUMMARY_REMOVES
+        удалений и ни одного раздела (из двух и больше пунктов) целиком."""
+        removed = [op["id"] for op in ops
+                   if op["op"] == "remove" and SECTION_OF[op["id"][0]] != "hints"]
+        if len(removed) > MAX_SUMMARY_REMOVES:
+            raise PatchError(f"слишком много удалений из сводки за раз ({len(removed)})")
+        for section in SECTIONS:
+            live = set(self._items[section])
+            if len(live) > 1 and live <= set(removed):
+                raise PatchError(f"удаление всего раздела {section} за раз")
 
     def _check_op(self, op) -> dict:
         if not isinstance(op, dict):
@@ -248,7 +269,8 @@ class LiveState:
         return {"op": "add", "section": "hints", "kind": kind,
                 "text": _text(op, "text", HINT_MAX, required=True),
                 "why": _text(op, "why", WHY_MAX, required=False) or "",
-                "source_t": t, "ref": _flat(ref, 200) if isinstance(ref, str) and ref.strip() else None}
+                # ref сверяется с присланными фрагментами как есть, без обрезки.
+                "source_t": t, "ref": ref.strip() if isinstance(ref, str) and ref.strip() else None}
 
     def _check_update(self, item_id: str, op: dict) -> dict:
         section = SECTION_OF[item_id[0]]
@@ -300,13 +322,17 @@ class LiveState:
                 return False
             if not self.hints_enabled:
                 return False
+            if hint["pinned"]:
+                return False  # закреплённую человек оставил как есть
             if op["op"] == "remove":
-                if hint["pinned"]:
-                    return False
                 del self._hints[item_id]
                 self._retired.add(item_id)
                 return True
-            return self._update(hint, op["fields"], stamp=True)
+            fields = op["fields"]
+            text = fields.get("text")
+            if text is not None and any(similar(text, gone) for gone in self._dismissed.values()):
+                fields = {k: v for k, v in fields.items() if k != "text"}  # скрытое не возвращается
+            return self._update(hint, fields, stamp=True) if fields else False
         items = self._items[section]
         item = items.get(item_id)
         if item is None:
@@ -383,9 +409,9 @@ class LiveState:
         hint = self._hints.get(hint_id)
         if hint is None or hint["pinned"] == bool(pinned):
             return False
+        # Откреплённая снова подчиняется лимиту — со следующего тика, не сразу:
+        # подсказка не должна исчезать из-под руки.
         hint["pinned"] = bool(pinned)
-        if not pinned:
-            self._enforce_cap()  # откреплённая снова подчиняется лимиту
         self.version += 1
         return True
 

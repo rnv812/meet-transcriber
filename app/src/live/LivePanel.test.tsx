@@ -242,8 +242,8 @@ test("«Что я пропустил?» — с момента, когда пан
   await userEvent.click(screen.getByRole("button", { name: "Развернуть" }));
   await userEvent.click(screen.getByRole("button", { name: "Что я пропустил?" }));
   expect(liveAsk).toHaveBeenLastCalledWith(ep, "", { quick: "missed", since_t: 125 });
-  // История — у ассистента: ответ приходит в state.
-  act(() => liveStream().emit("state", { digest: "", transcript: [], status: null, qa: [
+  // История — у ассистента: ответ приходит событием qa.
+  act(() => liveStream().emit("qa", { qa: [
     { id: 1, q: "Что я пропустил?", a: "Решили релиз в пятницу [00:05:00]", error: null, pending: false, at: 1, quick: "missed" },
   ] }));
   expect(screen.getByText(/Решили релиз в пятницу/)).toBeInTheDocument();

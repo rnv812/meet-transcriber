@@ -10,7 +10,7 @@
 
 import { inTauri, invoke } from "./shell";
 import type {
-  AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
+  AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
   ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   Transcript,
@@ -425,8 +425,9 @@ export function openEvents(
 }
 
 /**
- * Поток живого ассистента: `state` (дайджест, хвост ленты, статус) при каждом
- * изменении и `line` на каждую новую строку.
+ * Поток живого ассистента: `state` (сводка, подсказки, статус) при каждом их
+ * изменении, `qa` (история вопросов) — когда меняется она, и `line` на каждую
+ * новую строку.
  *
  * `onLine` получает и номер строки (`id:` события, null — без него): поток,
  * открытый заново, начинает с хвоста ленты, и по номеру повторы отбрасываются.
@@ -438,6 +439,7 @@ export function openLiveEvents(
   ep: Endpoint,
   handlers: {
     onState?: (s: LiveState) => void;
+    onQa?: (qa: LiveQa[]) => void;
     onLine?: (l: LiveLine, id: number | null) => void;
     onError?: (closed: boolean) => void;
   },
@@ -447,6 +449,10 @@ export function openLiveEvents(
   source.addEventListener("state", (m) => {
     const data = parseEvent((m as MessageEvent<string>).data);
     if (data) handlers.onState?.(data as LiveState);
+  });
+  source.addEventListener("qa", (m) => {
+    const data = parseEvent((m as MessageEvent<string>).data) as { qa?: unknown } | null;
+    if (data && Array.isArray(data.qa)) handlers.onQa?.(data.qa as LiveQa[]);
   });
   source.addEventListener("line", (m) => {
     const event = m as MessageEvent<string>;
