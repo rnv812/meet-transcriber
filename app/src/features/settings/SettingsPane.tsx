@@ -229,7 +229,7 @@ function AsrEngineRows({ draft, set }: { draft: Raw; set: SetFn }) {
     draft.asr?.[key] === "gigaam" ? "gigaam" : draft.asr?.[key] ? "faster-whisper" : fallback;
   return (
     <>
-      <Radio label="Распознавание на процессоре" value={backend("cpu_backend", "faster-whisper")}
+      <Radio label="Распознавание на процессоре" value={backend("cpu_backend", "gigaam")}
         hint="GigaAM расшифровывает в 15–20 раз быстрее Whisper; запись не на русском всё равно распознаёт Whisper"
         options={[
           { value: "gigaam", label: "GigaAM (русский, быстро)" },

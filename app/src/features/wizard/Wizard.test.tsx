@@ -95,7 +95,7 @@ test("шаг «Ваш компьютер»: видеокарта, профиль
 test("без видеокарты — профиль процессора и его оценка", () => {
   show({ engine: engine({ gpu: null }) });
   expect(screen.getByText(/Видеокарта NVIDIA не найдена/)).toBeInTheDocument();
-  expect(screen.getByText("60 мин встречи ≈ 76 мин обработки")).toBeInTheDocument();
+  expect(screen.getByText("60 мин встречи ≈ 29 мин обработки")).toBeInTheDocument();
 });
 
 test("мало места — «Установить» неактивна, текст «Освободите N ГБ на диске C:»", () => {
