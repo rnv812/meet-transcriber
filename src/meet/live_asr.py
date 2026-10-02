@@ -3,11 +3,14 @@
 Живой режим распознаёт речь окнами по ходу встречи (`meet.live.LiveEngine`).
 От окна зависит, как скоро реплика появится в ленте и дойдёт до подсказок:
 
-* **GigaAM** (русский) — окна ~5 с: резка в самой тихой точке между 4 и 7 с
-  (`gigaam_asr.quiet_cut`, пауза между словами), окно распознаётся за доли
-  секунды и на CPU (замер: 0,35 с на 5 с звука). Распознавание отстало —
-  окна до 20 с (меньше вызовов). Только публичный API GigaAM: окно пишется
-  во временный wav и уходит в `model.transcribe(path, word_timestamps=True)`.
+* **GigaAM** (русский) — окна ~5 с: окно уходит по первой паузе между
+  словами после 5,5 с (не позже 7 с — тогда в самой тихой точке между 4 и
+  7 с, `gigaam_asr.find_pause`/`quiet_cut`); окно распознаётся за доли
+  секунды и на CPU (замер M10: ~0,47 с на окно ~5 с, 8 потоков).
+  Распознавание отстало — окна до 20 с (меньше вызовов). Публичный API
+  GigaAM: окно пишется во временный wav и уходит в
+  `model.transcribe(path, word_timestamps=True)`; свой wav GigaAM читает в
+  процессе, без запуска ffmpeg на каждое окно (`gigaam_asr.in_process_wav`).
   Окно без речи (Silero VAD) модель не видит вовсе. Подсказок (hotwords) у
   GigaAM нет: термины чинят правила замены и возврат латиницы (`TextFixes`);
 * **Whisper** — язык встречи не русский, GigaAM не установлена или не
@@ -88,12 +91,32 @@ class GigaamLive:
             try:
                 self._model = gigaam_asr.load(self.model_name, device)
                 self.device = device
+                gigaam_asr.in_process_wav()  # окна — без процесса ffmpeg на каждое
+                if device == "cpu":
+                    _limit_cpu_threads()
             except gigaam_asr.Unavailable as e:
                 self._log(f"живой режим: {e} — распознаёт Whisper")
                 self._switch()
                 return
         self._tmp = Path(tempfile.mkdtemp(prefix="meet-live-gigaam-"))
+        self._warm_up()
         self._log(f"живой режим: распознаёт GigaAM ({self.model_name}, {self.device}), окна ~5 с")
+
+    def _warm_up(self) -> None:
+        """Первый вызов модели и VAD дорогой (загрузка ONNX, ffmpeg, кэши):
+        платим его при старте, а не на первой реплике встречи."""
+        try:
+            import numpy as np
+
+            from meet import gigaam_asr
+
+            noise = (np.random.default_rng(0).normal(0, 0.05, SAMPLE_RATE)).astype(np.float32)
+            (self._vad or gigaam_asr.speech_regions)(noise, SAMPLE_RATE)
+            path = self._tmp / "warm.wav"
+            gigaam_asr._write_wav(path, (noise * 32767).astype(np.int16), SAMPLE_RATE)
+            self._model.transcribe(str(path), word_timestamps=True)
+        except Exception:
+            pass  # прогрев — только ускорение
 
     def _switch(self) -> None:
         if self._fallback_factory is None:
@@ -164,6 +187,21 @@ class GigaamLive:
             import shutil
 
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+# Потоков torch для GigaAM на CPU в живом режиме. Замер M10 (i9-13900H): 8
+# потоков — 0,47 с на окно ~5 с, 14 — 0,45–0,55 с, но с редкими провалами,
+# когда процессор занят и другим (звонок, задачи расшифровки).
+CPU_THREADS = 8
+
+
+def _limit_cpu_threads() -> None:
+    try:
+        import torch
+
+        torch.set_num_threads(max(1, min(CPU_THREADS, torch.get_num_threads())))
+    except Exception:
+        pass
 
 
 def _torch_cuda() -> bool:
