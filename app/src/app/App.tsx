@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useCategories } from "../state/useCategories";
 import { useLibrary } from "../state/useLibrary";
 import { usePeople } from "../state/usePeople";
 import { useResident } from "../state/useResident";
@@ -33,6 +34,8 @@ export function App() {
   const resident = useResident();
   const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick, resident.contentTick);
   const { people, refresh: refreshPeople, avatarVersion, bumpAvatar } = usePeople(resident.endpoint ?? null, resident.doneTick);
+  // Категории правят в настройках: из них вернулись — список перечитывается.
+  const categories = useCategories(resident.endpoint ?? null, section === "settings");
   const offline = resident.status === "offline";
   const gate = useWizardGate(resident.status, resident.endpoint ?? null);
   const recording = resident.snapshot?.status === "recording" || resident.snapshot?.live?.active === true;
@@ -123,6 +126,8 @@ export function App() {
                 resident={resident}
                 q={q}
                 onQ={setQ}
+                categories={categories.list}
+                onOpenSettings={openSettings}
               />}
             </div>
           )}
@@ -154,6 +159,7 @@ export function App() {
                 onPeopleChanged={() => void refreshPeople()}
                 onOpenSettings={openSettings}
                 find={find}
+                categories={categories.list}
                 refreshKey={cardTick}
                 onChanged={() => void library.refresh()}
                 onDeleted={() => { setSelected(null); void library.refresh(); }}

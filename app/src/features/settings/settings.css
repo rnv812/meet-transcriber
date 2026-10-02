@@ -179,3 +179,38 @@
   flex: 1 1 160px; min-width: 0; padding: 5px 8px; font: inherit;
   background: var(--surface); color: var(--text); border: 1px solid var(--line-2); border-radius: var(--r-md);
 }
+
+/* «Категории встреч»: строка — порядок, цвет, название, описание для ИИ, удалить. */
+.catedit { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
+.catedit__item { display: flex; flex-direction: column; gap: 6px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.catedit__row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.catedit__move { display: inline-flex; flex: none; }
+.catedit__move .icon-btn:disabled { opacity: 0.3; cursor: default; background: none; }
+.catedit__swatch {
+  flex: none; width: 22px; height: 22px; padding: 0; border: 2px solid var(--surface-2); border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--line-2); cursor: pointer;
+}
+.catedit__swatch[aria-expanded="true"] { box-shadow: 0 0 0 2px var(--accent); }
+.catedit__name, .catedit__desc {
+  min-width: 0; padding: 5px 8px; font: inherit;
+  background: var(--surface); color: var(--text); border: 1px solid var(--line-2); border-radius: var(--r-md);
+}
+.catedit__name { flex: 0 1 180px; }
+.catedit__desc { flex: 1 1 220px; }
+.catedit__name:focus, .catedit__desc:focus { outline: none; border-color: var(--accent); }
+.catedit__name::placeholder, .catedit__desc::placeholder { color: var(--text-3); }
+.catedit__remove { flex: none; }
+.catedit__remove:hover { color: var(--red); }
+.catedit__confirm {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px; margin-left: 56px;
+  font-size: 12px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
+}
+.catedit__confirm > span { flex: 1 1 200px; }
+.catedit__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 0; }
+.catedit__help { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 12px; }
+.catedit__palette { display: grid; grid-template-columns: repeat(6, 24px); gap: 8px; padding: 2px; }
+.catedit__color {
+  width: 24px; height: 24px; padding: 0; border: 2px solid transparent; border-radius: 50%; cursor: pointer;
+}
+.catedit__color[aria-checked="true"] { border-color: var(--text); }
+.catedit__color:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

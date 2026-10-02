@@ -24,7 +24,7 @@ from pathlib import Path
 from meet import library
 
 COMMANDS = ("import", "export", "voices", "summary", "ask", "notes", "kb-export", "merge", "fix",
-            "analyze", "title", "improve")
+            "analyze", "title", "improve", "category")
 NO_PROVIDER_HINT = ("Подключите Claude Code или Codex: meet {command} … --provider codex "
                     "или настройка llm.provider")
 
@@ -308,14 +308,15 @@ def _merge(args, cfg) -> None:
 
 
 def _export(args, cfg) -> None:
-    from meet import export
+    from meet import categories, export
 
     folder = _recording(args.folder, cfg)
     # Как в окне: сырые SPEAKER_XX старых транскриптов — «Спикер N».
     data = library.with_display_names(_transcript(folder))
     title, date = library.title_and_date(folder, data)
     content = export.render({**data, "title": title}, args.format, date=date,
-                            chapters=export.chapters_of(folder, data))
+                            chapters=export.chapters_of(folder, data),
+                            category=categories.display_name(folder, cfg))
     if args.out_file is None:
         _result(args, {"format": args.format, "content": content}, content)
         return
@@ -677,9 +678,73 @@ def _analyze(args, cfg) -> None:
             raise CliError(f"Не удалось сохранить анализ: {e}")
         doc = analysis.read(folder)
         _apply_ai_title(folder, (doc or {}).get("title"), cfg)
+        _apply_ai_category(folder, doc, cfg)
         via_app = False
     _result(args, {"folder": str(folder), "path": str(folder / analysis.ANALYSIS_JSON),
                    "via_app": via_app, "analysis": doc}, _analysis_text(doc))
+
+
+def _apply_ai_category(folder: Path, doc: dict | None, cfg) -> None:
+    """Категория от модели без приложения — по правилам meet.categories
+    (не вместо выбранной человеком)."""
+    from meet import categories
+
+    try:
+        if categories.apply_ai(folder, doc, cfg):
+            got = categories.of(library.read_meta(folder))
+            _say(f"Категория встречи: {categories.name_of(cfg, got['id']) if got else categories.NONE_NAME}")
+    except OSError:
+        pass
+
+
+def _category_doc(folder: Path, cfg) -> dict | None:
+    """Категория записи для вывода: {"id", "name", "source"}; нет — None.
+    Удалённая из настроек категория — как «Без категории»."""
+    from meet import categories
+
+    got = categories.of(library.read_meta(folder))
+    if not got:
+        return None
+    name = categories.name_of(cfg, got["id"]) if got["id"] else None
+    return {"id": got["id"] if name else None, "name": name, "source": got["source"]}
+
+
+def _category(args, cfg) -> None:
+    """`meet category <запись> [имя|id] [--clear]`: без имени — напечатать
+    категорию, с именем — поставить её как выбранную человеком (модель её
+    больше не меняет), --clear — «Без категории» (тоже выбор человека).
+    Приложение запущено — через него (окно сразу покажет категорию)."""
+    from meet import categories
+
+    folder = _recording(args.folder, cfg)
+    if args.name and args.clear:
+        raise CliError("Укажите категорию или --clear, а не то и другое")
+    if args.name is None and not args.clear:
+        doc = _category_doc(folder, cfg)
+        names = ", ".join(c.name for c in cfg.categories) or "список пуст"
+        text = (f"{doc['name']} ({'выбрана вручную' if doc['source'] == 'user' else 'от ИИ'})"
+                if doc and doc["name"] else categories.NONE_NAME)
+        _result(args, {"folder": str(folder), "category": doc,
+                       "categories": [c.to_raw() for c in cfg.categories]},
+                f"{text}\nКатегории: {names}\n")
+        return
+    cid = None
+    if args.name is not None:
+        cid = categories.resolve(cfg, args.name)
+        if cid is None:
+            names = ", ".join(c.name for c in cfg.categories) or "список пуст — настройте его в приложении"
+            raise CliError(f"Нет категории «{args.name.strip()}». Есть: {names}")
+    via_app = _resident_root(folder, cfg.recording.recordings)
+    if via_app:
+        _resident_call(folder.name, "/category", "PUT", {"id": cid})
+    else:
+        try:
+            categories.set_user(folder, cid)
+        except OSError as e:
+            raise CliError(f"Не удалось сохранить категорию: {e}")
+    doc = _category_doc(folder, cfg)
+    text = f"Категория: {doc['name'] if doc and doc['name'] else categories.NONE_NAME}\n"
+    _result(args, {"folder": str(folder), "category": doc, "via_app": via_app}, text)
 
 
 def _cli_bus():
@@ -854,6 +919,6 @@ def _improve_via_resident(rid: str, *, sleep=None, clock=None) -> dict:
 
 _HANDLERS = {"import": _import, "export": _export, "summary": _summary,
              "ask": _ask, "notes": _kb_export, "kb-export": _kb_export, "merge": _merge, "fix": _fix,
-             "analyze": _analyze, "title": _title, "improve": _improve}
+             "analyze": _analyze, "title": _title, "improve": _improve, "category": _category}
 _VOICES = {"list": _voices_list, "rename": _voices_rename, "merge": _voices_merge,
            "delete": _voices_delete, "avatar": _voices_avatar}

@@ -71,6 +71,9 @@ class Recording:
     merge: dict | None = None
     # «Переразделить на спикеров» посчитано и ждёт решения (rediarize.json).
     rediarize_ready: bool = False
+    # Категория встречи (meet.categories): {"id", "source": "ai"|"user"};
+    # id None — человек выбрал «Без категории». Не задана — None.
+    category: dict | None = None
 
     def to_raw(self) -> dict:
         return {
@@ -90,6 +93,7 @@ class Recording:
             "kb_export": self.kb_export,
             "merge": self.merge,
             "rediarize_ready": self.rediarize_ready,
+            "category": self.category,
         }
 
 
@@ -737,7 +741,14 @@ def describe(folder: Path) -> Recording | None:
         kb_export=meta["kb_export"] if isinstance(meta.get("kb_export"), dict) else None,
         merge=_merge_summary(meta),
         rediarize_ready=(folder / REDIARIZE_PREVIEW).is_file(),
+        category=_category(meta),
     )
+
+
+def _category(meta: dict) -> dict | None:
+    from meet.categories import of
+
+    return of(meta)
 
 
 def _merge_summary(meta: dict) -> dict | None:

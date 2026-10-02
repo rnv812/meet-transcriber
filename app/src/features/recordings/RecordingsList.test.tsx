@@ -143,7 +143,7 @@ test("меню «⋯»: пункты, переименование и удале
   await userEvent.click(more);
   const menu = screen.getByRole("menu", { name: "Действия с записью «Планёрка»" });
   expect(within(menu).getAllByRole("menuitem").map((m) => m.textContent)).toEqual(
-    ["Переименовать", "Экспорт в базу знаний", "Удалить…"]);
+    ["Переименовать", "Категория", "Экспорт в базу знаний", "Удалить…"]);
   expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus();
   await userEvent.keyboard("{ArrowUp}");
   expect(within(menu).getByRole("menuitem", { name: "Удалить…" })).toHaveFocus();

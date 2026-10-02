@@ -1,10 +1,13 @@
 import { useRef, useState } from "react";
+import { categoryOf } from "../../lib/categories";
 import { TITLE_MAX, type Endpoint } from "../../lib/api";
 import { dayLabel, duration, plural } from "../../lib/format";
 import { isUnnamed } from "../../lib/speakers";
-import type { MergeInfo, Recording } from "../../lib/types";
+import type { Category, MergeInfo, Recording } from "../../lib/types";
 import { AiBadge } from "../../ui/AiBadge";
 import { Avatar } from "../../ui/Avatar";
+import { CategoryChip, CategoryMenu } from "../../ui/Category";
+import { Popover } from "../../ui/Popover";
 import type { PersonColor } from "./Turns";
 
 /** Подпись объединённой встречи: из скольких записей и что стало с исходными. */
@@ -25,9 +28,43 @@ function MergeNote({ info }: { info: MergeInfo }) {
   );
 }
 
+/**
+ * Категория встречи под названием: метка-кнопка, по ней — меню выбора. Выбор
+ * человека модель больше не меняет; «Без категории» — тоже выбор.
+ */
+function CategoryButton({ rec, list, onPick, onSettings }: {
+  rec: Recording;
+  list: Category[];
+  onPick: (id: string | null) => void;
+  onSettings?: () => void;
+}) {
+  const button = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const category = categoryOf(rec, list);
+  const close = () => { setOpen(false); button.current?.focus(); };
+  const hint = rec.category?.source === "ai" && category
+    ? "Категорию определил ИИ — нажмите, чтобы выбрать другую" : "Категория встречи — нажмите, чтобы выбрать";
+  return (
+    <>
+      <button ref={button} type="button" className="cat-button" aria-haspopup="menu" aria-expanded={open}
+        aria-label={`Категория: ${category?.name ?? "Без категории"}. Изменить`} title={hint}
+        onClick={() => setOpen((v) => !v)}>
+        <CategoryChip category={category} />
+      </button>
+      {open && button.current && (
+        <Popover anchor={button.current} label="Категория встречи" width={240} onClose={close}>
+          <CategoryMenu list={list} current={category?.id ?? null}
+            onPick={(id) => { close(); if (id !== (category?.id ?? null) || rec.category?.source !== "user") onPick(id); }}
+            onSettings={onSettings ? () => { setOpen(false); onSettings(); } : undefined} />
+        </Popover>
+      )}
+    </>
+  );
+}
+
 export function CardHeader({
   rec, durationS = rec.duration_s, speakers, people, endpoint, avatarVersion, onRename, onNameSpeaker,
-  onOpenSpeakers, speakersOpen = false,
+  onOpenSpeakers, speakersOpen = false, categories, onCategory, onOpenCategories,
 }: {
   rec: Recording;
   /** Длительность для подписи: у импорта без неё — конец последней реплики. */
@@ -43,6 +80,11 @@ export function CardHeader({
   /** Открыть панель «Спикеры» (нет — запись не готова, кнопки нет). */
   onOpenSpeakers?: () => void;
   speakersOpen?: boolean;
+  /** Категории встреч из настроек; нет обработчика выбора — нет и метки. */
+  categories?: Category[];
+  onCategory?: (id: string | null) => void;
+  /** «Настроить категории…» — раздел настроек. */
+  onOpenCategories?: () => void;
 }) {
   const when = rec.started_at ? dayLabel(rec.started_at) : "";
   const shown = rec.title ?? (when || rec.id);
@@ -81,7 +123,12 @@ export function CardHeader({
           {shown}{rec.title_source === "ai" && rec.title && <AiBadge onClick={begin} />}
         </h2>
       )}
-      <div className="card__meta muted num">{meta}</div>
+      <div className="card__meta-row">
+        {meta && <div className="card__meta muted num">{meta}</div>}
+        {onCategory && categories && (
+          <CategoryButton rec={rec} list={categories} onPick={onCategory} onSettings={onOpenCategories} />
+        )}
+      </div>
       {rec.merge && <MergeNote info={rec.merge} />}
       {speakers.length > 0 && (
         <div className="card__people">

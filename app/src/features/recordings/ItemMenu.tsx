@@ -24,6 +24,10 @@ export type MenuItem = {
   disabled?: boolean;
   /** Фокус при открытии — на этом пункте, а не на первом (в подтверждении — «Отмена»). */
   autoFocus?: boolean;
+  /** Пункт выбора одного из нескольких (категория): отмечен ли он. Нет — обычный пункт. */
+  checked?: boolean;
+  /** Значок справа (стрелка у пункта, открывающего список). */
+  trailing?: ReactNode;
 };
 
 const MARGIN = 8;
@@ -58,7 +62,7 @@ export function ItemMenu({ at, label, items, note, anchor, onClose }: {
   useEffect(() => {
     const el = box.current;
     (el?.querySelector<HTMLButtonElement>("[data-autofocus]:not(:disabled)")
-      ?? el?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)"))?.focus();
+      ?? el?.querySelector<HTMLButtonElement>("[role^=menuitem]:not(:disabled)"))?.focus();
   }, [note]);
 
   useEffect(() => {
@@ -72,7 +76,7 @@ export function ItemMenu({ at, label, items, note, anchor, onClose }: {
   }, [onClose, anchor]);
 
   const onKeyDown = (e: KeyboardEvent) => {
-    const all = [...(box.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]:not(:disabled)") ?? [])];
+    const all = [...(box.current?.querySelectorAll<HTMLButtonElement>("[role^=menuitem]:not(:disabled)") ?? [])];
     const at = all.indexOf(document.activeElement as HTMLButtonElement);
     let next = -1;
     if (e.key === "ArrowDown") next = (at + 1) % all.length;
@@ -98,12 +102,15 @@ export function ItemMenu({ at, label, items, note, anchor, onClose }: {
       {items.map((item) => (
         <Fragment key={item.label}>
           {item.separator && <div className="item-menu__sep" role="separator" />}
-          <button type="button" role="menuitem" tabIndex={-1} title={item.hint} disabled={item.disabled}
+          <button type="button" role={item.checked === undefined ? "menuitem" : "menuitemradio"}
+            aria-checked={item.checked} tabIndex={-1} title={item.hint} disabled={item.disabled}
             data-autofocus={item.autoFocus || undefined}
             className={`item-menu__item${item.danger ? " item-menu__item--danger" : ""}`}
             onClick={item.onSelect}>
             {item.icon && <span className="item-menu__icon" aria-hidden="true">{item.icon}</span>}
             {item.label}
+            {item.checked && <span className="item-menu__end" aria-hidden="true">✓</span>}
+            {item.trailing && <span className="item-menu__end item-menu__icon" aria-hidden="true">{item.trailing}</span>}
           </button>
         </Fragment>
       ))}

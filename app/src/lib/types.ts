@@ -93,7 +93,18 @@ export type Recording = {
   rediarize_ready?: boolean;
   /** Последний применённый шаг истории правок встречи (нет правок — null): «Отменить» у итога правки — только пока он последний. */
   edit_head?: string | null;
+  /**
+   * Категория встречи: `source` "ai" — из анализа, "user" — выбрал человек (модель её не меняет);
+   * `id: null` — человек выбрал «Без категории». Не задана — null. Id, которого нет в настройках
+   * (категорию удалили), показывается как «Без категории».
+   */
+  category?: RecordingCategory | null;
 };
+
+export type RecordingCategory = { id: string | null; source: "ai" | "user" };
+
+/** Категория встреч из настроек (`categories`): id стабилен, имя и цвет — для окна, описание — для модели. */
+export type Category = { id: string; name: string; color: string; description: string };
 
 /**
  * Объединённая встреча: из скольких записей, на каком шаге («pending» — собирается

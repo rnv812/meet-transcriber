@@ -20,6 +20,9 @@ import { About } from "./About";
 import { AnalysisSection } from "./AnalysisSection";
 import { AssistantSection, assistantChangesInvalid } from "./AssistantSection";
 import { AutostartRow } from "./AutostartRow";
+import {
+  CategoriesSection, categoriesChanged, categoriesError, categoriesToSave, draftCategories, type DraftCategory,
+} from "./CategoriesSection";
 import { BrowserCalls } from "./BrowserCalls";
 import { CallPrograms } from "./CallPrograms";
 import { DiagnosticsPane } from "./DiagnosticsPane";
@@ -37,8 +40,8 @@ import { SoundSection } from "./SoundSection";
 import "./settings.css";
 
 type SectionId =
-  | "recording" | "sound" | "auto" | "asr" | "engine" | "export" | "assistant" | "analysis" | "markup" | "diagnostics"
-  | "about" | "advanced";
+  | "recording" | "sound" | "auto" | "asr" | "engine" | "export" | "assistant" | "analysis" | "categories" | "markup"
+  | "diagnostics" | "about" | "advanced";
 
 const MENU: { id: SectionId; title: string }[] = [
   { id: "recording", title: "Запись" },
@@ -49,6 +52,7 @@ const MENU: { id: SectionId; title: string }[] = [
   { id: "export", title: "Экспорт встреч" },
   { id: "assistant", title: "Ассистент" },
   { id: "analysis", title: "Анализ встречи" },
+  { id: "categories", title: "Категории встреч" },
   { id: "markup", title: "Расшифровка: подсветка и разметка" },
   { id: "diagnostics", title: "Диагностика" },
   { id: "about", title: "О программе" },
@@ -342,12 +346,18 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
     setNotice(null);
     setDraft((cur) => ({ ...cur, [group]: { ...(cur[group] ?? {}), [key]: value } }));
   };
+  /** Категории — не секция, а список целиком (`categories`). */
+  const setCategories = (list: DraftCategory[]) => {
+    setNotice(null);
+    setDraft((cur) => ({ ...cur, categories: list as unknown as Raw[string] }));
+  };
 
   // Only changed keys are sent, so edits made elsewhere (e.g. the tray) are not clobbered.
   // auto_record.enabled lives outside the draft: it goes through /auto-record.
   const changes: Record<string, Record<string, unknown>> = {};
   if (settings) {
     for (const g of Object.keys(draft)) {
+      if (g === "categories") continue; // список, а не секция: ниже
       for (const [k, raw] of Object.entries(draft[g] ?? {})) {
         if (g === "auto_record" && k === "enabled") continue;
         const val = cleanSetting(g, k, raw);
@@ -355,15 +365,17 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
       }
     }
   }
-  const dirty = Object.keys(changes);
+  const categoriesDirty = settings !== null && categoriesChanged(draft.categories, settings.categories);
+  const dirty = [...Object.keys(changes), ...(categoriesDirty ? ["categories"] : [])];
   const invalid = assistantChangesInvalid(changes) || exportChangesInvalid(changes, settings ?? {})
-    || markupChangesInvalid(changes);
+    || markupChangesInvalid(changes) || (categoriesDirty && categoriesError(draftCategories(draft.categories)) !== null);
 
   const save = async () => {
     if (dirty.length === 0 || invalid) return;
     setPending(true);
     try {
-      const result = await patchSettings(endpoint, changes);
+      const result = await patchSettings(endpoint, categoriesDirty
+        ? { ...changes, categories: categoriesToSave(draftCategories(draft.categories)) } : changes);
       setSettings(result.settings as Raw);
       setDraft(result.settings as Raw);
       setError(null);
@@ -452,6 +464,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
             <AssistantSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint} />
           ) : section === "analysis" ? (
             <AnalysisSection draft={draft} set={set} />
+          ) : section === "categories" ? (
+            <CategoriesSection value={draft.categories} onChange={setCategories} endpoint={endpoint} />
           ) : section === "markup" ? (
             <MarkupSection draft={draft} set={set} />
           ) : section === "diagnostics" ? (

@@ -1472,6 +1472,60 @@ class TrayControl:
             self._follow_title(folder, old_title)
         return applied
 
+    def _recategorize_ai(self, folder: Path, doc: dict) -> None:
+        """Категория от модели из готового анализа — по правилам
+        meet.categories: только при включённом «Определять категорию
+        автоматически» и никогда вместо выбранной человеком. Выгруженную в базу
+        знаний встречу выгружаем заново: категория — в её заметке."""
+        from meet import categories, kb_export
+
+        try:
+            changed = categories.apply_ai(folder, doc, settings.load())
+        except Exception as e:
+            self.tray.log(f"категория от модели не поставлена ({Path(folder).name}): "
+                          f"{type(e).__name__}: {e}")
+            return
+        if not changed:
+            return
+        got = categories.of(library.read_meta(folder))
+        self.tray.log(f"категория встречи от модели: {Path(folder).name} → "
+                      f"{got['id'] if got else 'без категории'}")
+        self._updated(folder)
+        if kb_export.previously_exported(folder):
+            self._background(lambda: self._auto_kb_export(folder))
+
+    def set_category(self, recording_id: str, body: dict | None) -> dict:
+        """Категорию выбрал человек: {"id": "<id из настроек>"} или {"id": null}
+        («Без категории»). Модель её больше не меняет. Выгруженную в базу знаний
+        встречу выгружаем заново (в фоне)."""
+        from meet import categories, kb_export
+
+        folder = self._folder(recording_id)
+        if folder is None or library.describe(folder) is None:
+            return {"error": "записи нет"}
+        body = body or {}
+        if "id" not in body:
+            raise _bad_request("нужен id категории или null")
+        cid = body.get("id")
+        if cid is not None:
+            if not isinstance(cid, str) or not categories.known(settings.load(), cid):
+                raise _bad_request("такой категории нет — обновите список в настройках")
+        if categories.set_user(folder, cid):
+            self._updated(folder)
+            if kb_export.previously_exported(folder):
+                self._background(lambda: self._auto_kb_export(folder))
+        return library.describe(folder).to_raw()
+
+    def categories(self) -> dict:
+        """Для редактора категорий в настройках: нынешний список, стандартный
+        («Сбросить к стандартным») и сколько встреч в каждой категории
+        (подтверждение удаления)."""
+        from meet import categories
+
+        return {"categories": [c.to_raw() for c in settings.load().categories],
+                "defaults": [c.to_raw() for c in settings.default_categories()],
+                **categories.counts(self._root())}
+
     def _summary_title(self, folder: Path) -> None:
         """Итоги готовы: название из их первой строки (если его просили)."""
         found = library.read_meta(folder).get("summary_title")
@@ -1518,7 +1572,7 @@ class TrayControl:
         return data or {"error": "транскрипта нет"}
 
     def export(self, recording_id: str, fmt: str) -> dict:
-        from meet import export
+        from meet import categories, export
 
         folder = self._folder(recording_id)
         # Как в редакторе: сырые SPEAKER_XX старых транскриптов — «Спикер N».
@@ -1528,7 +1582,8 @@ class TrayControl:
         title, date = library.title_and_date(folder, data)
         try:
             content = export.render({**data, "title": title}, fmt, date=date,
-                                    chapters=export.chapters_of(folder, data))
+                                    chapters=export.chapters_of(folder, data),
+                                    category=categories.display_name(folder, settings.load()))
         except ValueError as e:
             raise _bad_request(str(e))
         safe_name = export.safe_filename(title, recording_id)
@@ -2534,10 +2589,11 @@ class TrayControl:
                     # Процесс умер до записи ошибки: окно всё равно покажет «Повторить».
                     analysis.mark_failed(folder, (job or {}).get("error") or "задача анализа прервалась")
             got = analysis.state(folder)
-            if job_state == jobs.DONE:
+            if job_state == jobs.DONE and got.get("state") == "ready":
                 doc = got.get("analysis") or {}
-                if doc.get("title") and got.get("state") == "ready":
+                if doc.get("title"):
                     self._retitle_ai(folder, doc["title"], "анализ встречи")
+                self._recategorize_ai(folder, doc)
             self.bus.emit(ANALYSIS_UPDATED, id=folder.name, state=got.get("state"))
             self._updated(folder)
         except Exception as e:

@@ -770,6 +770,8 @@ _ROUTES = {
     ("GET", "/devices"): lambda h, p: _server_of(h).state.devices(),
     ("POST", "/devices/test"): lambda h, p: _server_of(h).state.test_device(h._body()),
     ("PATCH", "/settings"): lambda h, p: _server_of(h).state.patch_settings(h._body()),
+    # Редактор категорий: список, стандартный список и сколько встреч в каждой.
+    ("GET", "/categories"): lambda h, p: _server_of(h).state.categories(),
     ("POST", "/recording/start"): lambda h, p: _server_of(h).state.start_recording(),
     ("POST", "/recording/stop"): lambda h, p: _server_of(h).state.stop_recording(),
     ("POST", "/recording/cancel"): lambda h, p: _server_of(h).state.stop_recording(
@@ -898,6 +900,9 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.improve_apply(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/improve/dismiss$"),
      lambda h, p, rid: _server_of(h).state.improve_dismiss(unquote(rid))),
+    # Категория встречи, выбранная человеком: {"id": "<id>"} или {"id": null}.
+    ("PUT", re.compile(r"^/recordings/([^/]+)/category$"),
+     lambda h, p, rid: _server_of(h).state.set_category(unquote(rid), h._body())),
     # «Предложить название»: только предложение, применяет окно (PATCH записи).
     ("POST", re.compile(r"^/recordings/([^/]+)/title/suggest$"),
      lambda h, p, rid: _server_of(h).state.suggest_title(unquote(rid))),
