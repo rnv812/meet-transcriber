@@ -85,7 +85,7 @@ export function useSmoothProgress(value: number | null, stageKey?: string | numb
   return shown;
 }
 
-export function ProgressBar({ value, stageKey, label, detail, size = "md", ariaLabel, className = "" }: {
+export function ProgressBar({ value, stageKey, label, detail, size = "md", ariaLabel, className = "", working = false }: {
   /** 0…1; null — неизвестно (бегущий блик). */
   value: number | null;
   /** Смена ключа — новый этап: отсчёт заново. */
@@ -97,6 +97,8 @@ export function ProgressBar({ value, stageKey, label, detail, size = "md", ariaL
   size?: "sm" | "md";
   ariaLabel?: string;
   className?: string;
+  /** Шкала известна, но текущий этап своего хода не сообщает: блик поверх — работа идёт. */
+  working?: boolean;
 }) {
   const shown = useSmoothProgress(value, stageKey);
   const known = shown !== null;
@@ -110,7 +112,7 @@ export function ProgressBar({ value, stageKey, label, detail, size = "md", ariaL
           {detail && <span className="progressbar__detail num">{detail}</span>}
         </div>
       )}
-      <div className={`progressbar__track${known ? "" : " progressbar__track--indeterminate"}`}
+      <div className={`progressbar__track${known ? (working ? " progressbar__track--working" : "") : " progressbar__track--indeterminate"}`}
         role="progressbar" aria-label={ariaLabel ?? label ?? "Ход работы"}
         aria-valuemin={0} aria-valuemax={100}
         aria-valuenow={value === null ? undefined : Math.round(clamp01(value) * 100)}

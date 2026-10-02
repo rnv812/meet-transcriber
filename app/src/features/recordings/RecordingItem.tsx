@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { TITLE_MAX } from "../../lib/api";
 import { clock, dayLabel, duration } from "../../lib/format";
 import { categoryOf, NO_CATEGORY_NAME } from "../../lib/categories";
-import type { RecStatus } from "../../lib/status";
+import { jobFraction } from "../../lib/progress";
+import { stageLabel, type RecStatus } from "../../lib/status";
 import type { Category, LibraryItem } from "../../lib/types";
 import { AiBadge } from "../../ui/AiBadge";
 import { CategoryDot, CategoryMark } from "../../ui/Category";
@@ -21,8 +22,10 @@ export function badgeOf(st: RecStatus): { text: string; tone: "run" | "err" | ""
     case "queued":
       return { text: "В очереди", tone: "" };
     case "running": {
-      const pct = st.total ? ` ${Math.round(((st.done ?? 0) / st.total) * 100)}%` : "…";
-      return { text: `${st.label}${pct}`, tone: "run" };
+      // Общая доля задачи (новые резиденты) или доля этапа; неизвестно — многоточие, а не «100%».
+      const f = st.job ? jobFraction(st.job) : st.total ? (st.done ?? 0) / st.total : null;
+      const label = st.job ? stageLabel(st.job) : st.label;
+      return { text: `${label}${f !== null ? ` ${Math.floor(f * 100)}%` : "…"}`, tone: "run" };
     }
     case "failed":
       return { text: "Ошибка", tone: "err" };

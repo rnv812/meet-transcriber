@@ -19,6 +19,8 @@ import { isUnnamed } from "../../../lib/speakers";
 import type { Job, SpeakersView, SplitGroup, SplitPreview } from "../../../lib/types";
 import { Avatar } from "../../../ui/Avatar";
 import { Button } from "../../../ui/Button";
+import { JobProgress } from "../../../ui/JobProgress";
+import { ProgressBar } from "../../../ui/ProgressBar";
 import { HelpTip, TipLine } from "../../../ui/HelpTip";
 import type { PersonColor } from "../Turns";
 import { TargetPicker, type Target } from "./TargetPicker";
@@ -208,10 +210,10 @@ export function SplitView({
 
       {phase.kind === "working" && (
         <div className="spk-split__work" role="status" aria-live="polite">
-          <div>Считаются голоса реплик{job?.total ? `: ${job.done ?? 0} из ${job.total}` : "…"}</div>
-          <div className="progress">
-            <div className="progress__bar" style={{ width: job?.total ? `${Math.round(((job.done ?? 0) / job.total) * 100)}%` : "100%" }} />
-          </div>
+          {job && job.state === "running" ? (
+            <JobProgress job={job} label="Считаются голоса реплик"
+              detail={job.total ? `${job.done ?? 0} из ${job.total}` : null} />
+          ) : <ProgressBar value={null} label={job?.state === "queued" ? "В очереди" : "Считаются голоса реплик"} />}
           <div className="muted spk-split__hint">
             {job?.state === "queued" ? "Задача в очереди. " : ""}
             Это делается один раз: следующие разделения этой встречи будут мгновенными.

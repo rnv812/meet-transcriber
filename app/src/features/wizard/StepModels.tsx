@@ -9,20 +9,19 @@ import { type Endpoint, type Model, type ModelsState, canDownloadModel, download
 import { errorText } from "../../lib/format";
 import { jobActive, useTrackedJob } from "../../state/useTrackedJob";
 import type { Job } from "../../lib/types";
+import { downloadDetail } from "../../lib/progress";
 import { Button } from "../../ui/Button";
+import { JobProgress } from "../../ui/JobProgress";
+import { Loading } from "../../ui/Loading";
 import { gb } from "./gate";
 
 const KIND: Record<string, string> = { asr: "распознавание", diarization: "спикеры", align: "выравнивание" };
 
-function percent(job: Job): number | null {
-  return job.total ? Math.round(((job.done ?? 0) / job.total) * 100) : null;
-}
 
 function ModelItem({ model, job, busy, canDownload, onDownload }: {
   model: Model; job: Job | null; busy: boolean; canDownload: boolean; onDownload: () => void;
 }) {
   const mine = job && job.folder === model.id ? job : null;
-  const pct = mine ? percent(mine) : null;
   return (
     <div role="group" aria-label={model.title} className="wizard__model">
       <div className="wizard__model-text">
@@ -35,13 +34,12 @@ function ModelItem({ model, job, busy, canDownload, onDownload }: {
           {model.downloaded ? " · скачана" : ""}{model.blocked ? " · нужен токен Hugging Face" : ""}
         </span>
         {mine && jobActive(mine) && (
-          <div className="wizard__meter"><div className="wizard__meter-fill" style={{ width: `${pct ?? 100}%` }} /></div>
+          <JobProgress job={mine} size="sm" label={mine.state === "queued" ? "В очереди" : "Скачивается"}
+            detail={downloadDetail(mine)} ariaLabel={`Загрузка модели ${model.title}`} />
         )}
         {mine?.state === "failed" && <span className="error">{mine.error}</span>}
       </div>
-      {mine && jobActive(mine) ? (
-        <span className="muted num">Качаю…{pct !== null ? ` ${pct}%` : ""}</span>
-      ) : (
+      {mine && jobActive(mine) ? null : (
         <Button onClick={onDownload} disabled={busy || model.blocked || !canDownload || model.downloaded}>
           {model.downloaded ? "Скачана" : "Скачать"}
         </Button>
@@ -82,7 +80,7 @@ export function StepModels({ endpoint, onNext }: { endpoint: Endpoint; onNext: (
         закрыть — скачивание продолжится.
       </p>
       {error && <p className="error">{error}</p>}
-      {!models && !error && <p className="muted">Загружаю…</p>}
+      {!models && !error && <Loading label="Загружаю каталог моделей…" />}
       {models && !models.can_download && (
         <p className="muted">Загрузчик моделей ещё не готов — модели скачаются при первой расшифровке.</p>
       )}

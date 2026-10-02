@@ -17,7 +17,10 @@ import { activeJobOf, failedRetranscribe, isLiveRecording, statusOf } from "../.
 import type { Category, Job, KbExport, LiveHint, Recording, Segment, Snapshot, Transcript } from "../../lib/types";
 import { KIND_LABEL } from "../../live/liveModel";
 import { Button } from "../../ui/Button";
+import { useConfirm } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
+import { JobProgress } from "../../ui/JobProgress";
+import { ProgressBar } from "../../ui/ProgressBar";
 import type { AgentInsert } from "./AgentTab";
 import {
   AnalysisStatus, reanalyzeBlocked, reanalyzeLabel, TitleSuggestPopover, useAnalysis, useTitleSuggest,
@@ -92,6 +95,7 @@ export function RecordingCard({
   const [error, setError] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [confirmNode, confirm] = useConfirm();
   const player = useRef<AudioPlayerHandle>(null);
   const cardEl = useRef<HTMLElement>(null);
   /** Панель «Спикеры»: открыта ли, к какой строке перейти; `mounted` — уже открывали (правки живут скрытыми). */
@@ -356,12 +360,25 @@ export function RecordingCard({
   const noModel = noProvider(assistantInfo);
   const doReanalyze = () => act(async () => { await runAnalysis(endpoint, id); await analysis.reload(); });
   const active = activeJobOf(rec, jobs);
-  const doCancel = () => act(async () => {
+  // Отмена теряет сделанное — сначала спросить (фокус на «Продолжить»).
+  const doCancel = async () => {
     if (!active) return;
-    await cancelJob(endpoint, active.id);
-    onChanged?.();
-    await load();
-  });
+    const queued = active.state === "queued";
+    const ok = await confirm({
+      title: queued ? "Убрать из очереди?" : "Отменить расшифровку?",
+      message: queued
+        ? "Запись не будет расшифрована, пока вы не запустите расшифровку снова."
+        : "Сделанная часть работы будет потеряна. Расшифровку можно будет запустить заново.",
+      confirmLabel: queued ? "Убрать из очереди" : "Отменить расшифровку",
+      cancelLabel: queued ? "Оставить" : "Продолжить расшифровку",
+    });
+    if (!ok) return;
+    await act(async () => {
+      await cancelJob(endpoint, active.id);
+      onChanged?.();
+      await load();
+    });
+  };
   const openLogs = () => act(async () => {
     const diag = await getDiagnostics(endpoint, 1);
     const dir = (diag.paths as { data_dir?: unknown } | undefined)?.data_dir;
@@ -369,7 +386,11 @@ export function RecordingCard({
     await openFolder(logsDir(dir));
   });
   const logsButton = inTauri() ? <Button onClick={openLogs} disabled={busy}>Открыть журнал</Button> : null;
-  const cancelButton = active ? <Button onClick={doCancel} disabled={busy}>Отменить</Button> : null;
+  const cancelButton = active ? (
+    <Button onClick={() => void doCancel()} disabled={busy}>
+      {active.state === "queued" ? "Убрать из очереди…" : "Отменить расшифровку…"}
+    </Button>
+  ) : null;
   const retranscribeFailed = status.kind === "ready" ? failedRetranscribe(rec, jobs) : null;
   const doDelete = () => act(async () => {
     // Плеер отпускает файл до запроса: резидент не удалит открытый playback.opus.
@@ -427,17 +448,15 @@ export function RecordingCard({
     case "queued":
       first = <EmptyState title="В очереди на расшифровку" action={cancelButton} />;
       break;
-    case "running": {
-      const pct = status.total ? Math.round(((status.done ?? 0) / status.total) * 100) : null;
+    case "running":
       first = (
         <div className="card__progress">
-          <div>{status.label}{pct !== null ? ` ${pct}%` : "…"}</div>
-          <div className="progress"><div className="progress__bar" style={{ width: `${pct ?? 100}%` }} /></div>
+          {status.job ? <JobProgress job={status.job} />
+            : <ProgressBar value={null} label={status.label} />}
           {cancelButton && <div>{cancelButton}</div>}
         </div>
       );
       break;
-    }
     case "failed":
       first = (
         <div className="card__failed">
@@ -556,6 +575,7 @@ export function RecordingCard({
       {status.kind === "ready" && turnEdit.menu}
       {status.kind === "ready" && textFix.node}
       {status.kind === "ready" && improve.dialog}
+      {confirmNode}
       {status.kind === "ready" && rediarizeOpen && (
         <RediarizeDialog endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} ready={!!rec.rediarize_ready}
           twoTrack={"sys" in rec.tracks && "mic" in rec.tracks} playable={playable} onPlay={playPhrase}

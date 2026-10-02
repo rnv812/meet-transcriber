@@ -131,7 +131,9 @@ test("голоса не посчитаны: задача с прогрессом
   await userEvent.click(within(wizard).getByRole("button", { name: "Разделить по голосу" }));
   expect(await within(wizard).findByText(/Задача в очереди/)).toBeInTheDocument();
   rerender([job("running", { done: 6 })]);
-  expect(await within(wizard).findByText("Считаются голоса реплик: 6 из 12")).toBeInTheDocument();
+  expect(await within(wizard).findByText("Считаются голоса реплик")).toBeInTheDocument();
+  expect(within(wizard).getByText("6 из 12")).toBeInTheDocument();
+  expect(within(wizard).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "50");
   rerender([job("done", { done: 12 })]);
   expect(await within(wizard).findByRole("region", { name: "Не уверен" })).toBeInTheDocument();
   expect(api.previewSplit).toHaveBeenCalledWith(ep, "r1",

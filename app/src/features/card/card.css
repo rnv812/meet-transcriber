@@ -67,8 +67,6 @@ button.chip:hover { background: var(--surface-hover); }
 .card__path { color: var(--text); word-break: break-all; }
 .card__kept { display: block; color: var(--amber); }
 .card__progress { display: flex; flex-direction: column; gap: 8px; color: var(--text-2); }
-.progress { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
-.progress__bar { height: 100%; background: var(--accent); transition: width var(--t); }
 /* Плеер записи (AudioPlayer): одна строка внизу карточки. */
 .player {
   flex: none; display: flex; align-items: center; gap: 10px; padding: 6px 16px;

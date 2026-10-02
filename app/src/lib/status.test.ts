@@ -1,4 +1,4 @@
-import { activeJobOf, failedRetranscribe, isLiveRecording, statusOf } from "./status";
+import { activeJobOf, failedRetranscribe, isLiveRecording, stageLabel, statusOf } from "./status";
 
 const rec = (o = {}) => ({ id: "2026-09-30_16-04", path: "C:/r/2026-09-30_16-04",
   started_at: null, duration_s: 60, tracks: { sys: "x" }, has_transcript: false,
@@ -9,7 +9,13 @@ const job = (o = {}) => ({ id: "j", kind: "transcribe", folder: "C:/r/2026-09-30
 
 test("идущая расшифровка показывает ступень", () => {
   expect(statusOf(rec(), [job()], null)).toEqual(
-    { kind: "running", stage: "asr", label: "Распознавание", done: 1, total: 2 });
+    { kind: "running", stage: "asr", label: "Распознавание", done: 1, total: 2, job: job() });
+});
+test("название этапа: дорожки распознавания, известные этапы, иначе ярлык резидента", () => {
+  expect(stageLabel({ stage: "asr", label: "распознавание собеседников", note: "sys" })).toBe("Распознавание собеседников");
+  expect(stageLabel({ stage: "asr", label: null, note: "mic" })).toBe("Распознавание микрофона");
+  expect(stageLabel({ stage: "diarize", label: "диаризация", note: "sys" })).toBe("Разделение на спикеров");
+  expect(stageLabel({ stage: "llm", label: "модель думает", note: null })).toBe("Модель думает");
 });
 test("упавший импорт без дорожки предлагает повторить импорт", () => {
   const r = rec({ id: "x_import", path: "C:/r/x_import", source: "import", tracks: {} });
@@ -91,7 +97,7 @@ test("запись с ассистентом: папка живого режим
 test("объединение: сборка звука — ступень «Объединение», неудача — повторить", () => {
   const r = rec({ id: "m", path: "C:/r/m", source: "merge", tracks: {} });
   expect(statusOf(r, [job({ kind: "merge", folder: "C:/r/m", stage: "merge", done: 0, total: 2 })], null))
-    .toEqual({ kind: "running", stage: "merge", label: "Объединение", done: 0, total: 2 });
+    .toMatchObject({ kind: "running", stage: "merge", label: "Объединение", done: 0, total: 2 });
   expect(statusOf(r, [job({ kind: "merge", folder: "C:/r/m", state: "failed", error: "Исходная запись пропала" })], null))
     .toEqual({ kind: "failed", error: "Исходная запись пропала", retry: "transcribe" });
   expect(statusOf(r, [], null)).toEqual({ kind: "failed", error: "Объединение прервано", retry: "transcribe" });

@@ -104,6 +104,7 @@ def diarize_wav(
     max_speakers: int | None = None,
     exclusive: bool = False,
     clustering_threshold: float | None = None,
+    on_progress=None,
 ) -> Diarization:
     """Diarization (интервалы + эмбеддинги + регионы нахлёста) по записи.
 
@@ -118,7 +119,10 @@ def diarize_wav(
 
     clustering_threshold — порог кластеризации голосов пайплайна (у
     community-1 по умолчанию 0.6): ниже — людей различается больше, выше —
-    меньше («Переразделить на спикеров», чувствительность)."""
+    меньше («Переразделить на спикеров», чувствительность).
+
+    `on_progress(доля)` — ход 0…1 по шагам пайплайна pyannote (сегментация,
+    голоса), если пайплайн умеет сообщать его (`hook`)."""
     from meet import credentials
 
     token = credentials.get_hf_token()
@@ -145,12 +149,15 @@ def diarize_wav(
         pipe.instantiate(params)
     waveform, rate = _load_wav(path)
 
+    extra = {"hook": progress_hook(on_progress)} if on_progress and _takes_hook(pipe) else {}
+
     def run():
         return pipe(
             {"waveform": waveform, "sample_rate": rate},
             num_speakers=num_speakers,
             min_speakers=min_speakers,
             max_speakers=max_speakers,
+            **extra,
         )
 
     try:
@@ -163,6 +170,37 @@ def diarize_wav(
         pipe.to(torch.device("cpu"))
         result = run()
     return _to_diarization(result, exclusive=exclusive)
+
+
+# Доли шагов pyannote в общем ходе диаризации: сегментация и голоса (эмбеддинги)
+# — почти всё время; остальное — короткие шаги между ними.
+_HOOK_SPANS = {"segmentation": (0.0, 0.3), "embeddings": (0.3, 0.95)}
+_HOOK_AFTER = {"speaker_counting": 0.3, "discrete_diarization": 0.97}
+
+
+def progress_hook(on_progress):
+    """`hook` пайплайна pyannote → доля 0…1. Шаг с `total/completed` идёт
+    внутри своего промежутка, шаг без них — отметка его начала."""
+    def hook(step_name, step_artifact=None, file=None, total=None, completed=None):
+        try:
+            if step_name in _HOOK_SPANS and total and completed is not None:
+                lo, hi = _HOOK_SPANS[step_name]
+                on_progress(lo + (hi - lo) * min(1.0, completed / total))
+            elif step_name in _HOOK_AFTER:
+                on_progress(_HOOK_AFTER[step_name])
+        except Exception:
+            pass  # ход — подсказка, а не повод уронить диаризацию
+    return hook
+
+
+def _takes_hook(pipe) -> bool:
+    """Принимает ли пайплайн `hook` (pyannote 3.1+)."""
+    import inspect
+
+    try:
+        return "hook" in inspect.signature(pipe.apply).parameters
+    except (AttributeError, TypeError, ValueError):
+        return False
 
 
 def pick_device(torch, use_cuda: bool):

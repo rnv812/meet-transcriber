@@ -95,9 +95,13 @@ def _progress_printer(errors: list[str]):
     def emit(payload: dict) -> None:
         kind = payload.get("kind")
         if kind == "progress":
-            line = str(payload.get("label") or payload.get("stage") or "")
             done, total = payload.get("done"), payload.get("total")
-            if total:
+            # Ход внутри шага (meet.progress) — для шкалы окна; человеку в
+            # консоли хватает строки на начало шага.
+            if payload.get("step") and total and done not in (None, 0):
+                return
+            line = str(payload.get("label") or payload.get("stage") or "")
+            if total and not payload.get("step"):
                 line += f" {done or 0:g}/{total:g}"
             if payload.get("note"):
                 line += f" · {payload['note']}"

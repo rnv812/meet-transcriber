@@ -15,12 +15,11 @@ import {
 import { clock, errorText, plural } from "../../lib/format";
 import type { Job, RediarizeParams, RediarizePreview } from "../../lib/types";
 import { Button } from "../../ui/Button";
+import { JobProgress } from "../../ui/JobProgress";
+import { ProgressBar } from "../../ui/ProgressBar";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 
 const PHRASE_S = 6;
-const STAGES: Record<string, string> = {
-  convert: "Подготовка звука", diarize: "Разделение на спикеров", voices: "Узнавание голосов", render: "Сохранение",
-};
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 
@@ -223,10 +222,8 @@ export function RediarizeDialog({
 
         {phase.kind === "working" && (
           <div className="redia__work" role="status" aria-live="polite">
-            <div>
-              {job?.state === "queued" || !job ? "В очереди…" : `${STAGES[job.stage ?? ""] ?? "Обработка"}…`}
-            </div>
-            <div className="progress"><div className="progress__bar" style={{ width: "100%" }} /></div>
+            {job && job.state === "running" ? <JobProgress job={job} />
+              : <ProgressBar value={null} label="В очереди" />}
             <div className="redia__actions">
               <Button onClick={onClose}>Скрыть</Button>
               <Button onClick={() => void cancel()}>Отменить</Button>

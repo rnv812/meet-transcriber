@@ -3,21 +3,33 @@ import type { Job, Recording, Snapshot } from "./types";
 export type RecStatus =
   | { kind: "recording" }
   | { kind: "queued" }
-  | { kind: "running"; stage: string; label: string; done?: number; total?: number }
+  | { kind: "running"; stage: string; label: string; done?: number; total?: number; job?: Job }
   | { kind: "failed"; error: string; retry: "transcribe" | "import" }
   | { kind: "ready" }
   | { kind: "untranscribed" };
 
 const STAGES: Record<string, string> = {
-  convert: "Конвертация",
+  convert: "Подготовка звука",
   asr: "Распознавание",
   align: "Выравнивание",
-  diarize: "Спикеры",
-  voices: "Голоса",
+  diarize: "Разделение на спикеров",
+  voices: "Узнавание голосов",
   render: "Сохранение",
   copy: "Копирование",
   merge: "Объединение",
+  model: "Загрузка модели",
 };
+
+/** Название этапа задачи для людей; у встречи из двух дорожек распознавание — у каждой своё. */
+export function stageLabel(job: Pick<Job, "stage" | "label" | "note">): string {
+  const stage = job.stage ?? "";
+  if (stage === "asr" && job.note === "sys") return "Распознавание собеседников";
+  if (stage === "asr" && job.note === "mic") return "Распознавание микрофона";
+  const known = STAGES[stage];
+  if (known) return known;
+  const raw = job.label ?? stage;
+  return raw ? raw[0]!.toUpperCase() + raw.slice(1) : "";
+}
 
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 
@@ -85,6 +97,7 @@ export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null)
       kind: "running",
       stage,
       label: STAGES[stage] ?? running.label ?? stage,
+      job: running,
     };
     if (running.done !== null) out.done = running.done;
     if (running.total !== null) out.total = running.total;

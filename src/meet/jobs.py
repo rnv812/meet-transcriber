@@ -112,6 +112,12 @@ class Job:
     done: float | None = None
     total: float | None = None
     note: str | None = None
+    # Ход одной шкалой (meet.progress): номер шага, их число, общая доля,
+    # ожидаемая длительность работы. У задач без плана шагов — None.
+    step: int | None = None
+    steps: int | None = None
+    fraction: float | None = None
+    estimate_s: float | None = None
     result: str | None = None
     error: str | None = None
     created_at: float = field(default_factory=_created_at)
@@ -129,6 +135,10 @@ class Job:
             "done": self.done,
             "total": self.total,
             "note": self.note,
+            "step": self.step,
+            "steps": self.steps,
+            "fraction": self.fraction,
+            "estimate_s": self.estimate_s,
             "result": self.result,
             "error": self.error,
             "created_at": self.created_at,
@@ -489,6 +499,10 @@ class JobQueue:
             job.done = payload.get("done")
             job.total = payload.get("total")
             job.note = payload.get("note")
+            job.step = payload.get("step")
+            job.steps = payload.get("steps")
+            job.fraction = payload.get("fraction")
+            job.estimate_s = payload.get("estimate_s")
             self._emit(JOB_PROGRESS, job)
         elif kind == "job.result":
             job.result = payload.get("path")

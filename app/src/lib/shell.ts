@@ -159,6 +159,15 @@ export async function installUpdate(confirmed = false): Promise<void> {
 
 export const onUpdateProgress = (cb: (p: UpdateProgress) => void) => listenShell("update-progress", cb);
 
+/** Ответ `install_update`, когда загрузку прервали «Отменить» (`updater::CANCELLED`). */
+export const UPDATE_CANCELLED = "Загрузка обновления отменена";
+
+/** Прервать идущую загрузку обновления: `install_update` вернёт UPDATE_CANCELLED. */
+export async function cancelUpdate(): Promise<void> {
+  if (!inTauri()) return;
+  await invoke<void>("cancel_update");
+}
+
 /**
  * Страница выпусков («Скачать новую версию»). Имя репозитория знает только
  * оболочка (`UPDATE_REPO`); вне приложения — null.

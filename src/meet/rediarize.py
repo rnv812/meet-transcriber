@@ -285,18 +285,23 @@ def run(folder: Path, *, num_speakers: int | None = None, min_speakers: int | No
     threshold = clustering_threshold(sensitivity)
     from meet.jobs import temp_dir
 
+    from meet.progress import Stages, Step
+
+    # Ход одной шкалой (meet.progress): диаризация — почти всё время работы.
+    stages = Stages(bus, [Step("convert", "convert", 10), Step("diarize", "diarize", 80, measured=True),
+                          Step("voices", "voices", 5), Step("render", "render", 5)])
     with temp_dir() as td:
-        bus.progress("convert", done=0, total=1)
+        stages.begin("convert")
         # Как у расшифровки: дорожку собеседников выравниваем по громкости.
         wav = to_wav(src, Path(td) / "audio16.wav", normalize=stem == "sys")
-        bus.progress("convert", done=1, total=1)
-        bus.progress("diarize")
+        stages.update(1)
+        stages.begin("diarize")
         diar = diarize(wav, num_speakers=num_speakers, min_speakers=min_speakers,
                        max_speakers=max_speakers, exclusive=not settings.load().asr.overlap,
-                       clustering_threshold=threshold)
+                       clustering_threshold=threshold, on_progress=stages.update)
     if diar.skipped:
         raise RuntimeError("Нет доступа к модели разделения на спикеров — настройте Hugging Face")
-    bus.progress("voices")
+    stages.begin("voices")
     name_map = transcribe._match_names(diar, transcribe.voice_threshold(folder))
     parts = reassign(folder, segments, diar.turns, diar.overlaps)
     voices = {raw: [float(x) for x in emb] for raw, emb in (diar.embeddings or {}).items()}
@@ -316,7 +321,8 @@ def run(folder: Path, *, num_speakers: int | None = None, min_speakers: int | No
         tmp.replace(out)
     finally:
         tmp.unlink(missing_ok=True)
-    bus.progress("render", done=1, total=1)
+    stages.begin("render")
+    stages.finish()
     return out
 
 

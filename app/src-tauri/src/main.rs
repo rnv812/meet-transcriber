@@ -120,6 +120,7 @@ fn main() {
             // «О программе»: обновление по кнопке с GitHub.
             updater::check_update,
             updater::install_update,
+            updater::cancel_update,
             updater::releases_page,
             // Вкладка «Агент»: Claude Code / Codex во встроенном терминале.
             pty::agent_spawn,

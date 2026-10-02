@@ -61,6 +61,15 @@ export type Job = {
   done: number | null;
   total: number | null;
   note: string | null;
+  /**
+   * Ход одной шкалой (meet.progress): номер этапа с 1, их число, общая доля
+   * 0…1 и ожидаемая длительность всей работы, секунд. Старые резиденты и
+   * задачи без плана этапов их не присылают.
+   */
+  step?: number | null;
+  steps?: number | null;
+  fraction?: number | null;
+  estimate_s?: number | null;
   result: string | null;
   error: string | null;
   /** Секунды эпохи; старые резиденты их не присылали. */
