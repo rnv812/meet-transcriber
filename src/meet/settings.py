@@ -476,9 +476,14 @@ class Asr:
     # человека): ниже — честный «Спикер N». Калибровка — meet.voices.THRESHOLD;
     # у встречи может быть свой (панель «Спикеры»).
     voice_threshold: float = VOICE_THRESHOLD
+    # Правила замены распознанного для новых расшифровок: ({"from", "to"}, …),
+    # «Исправлять так же в будущих встречах» в «Исправить…» (meet.replacements).
+    replacements: tuple[dict, ...] = ()
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Asr":
+        from meet.replacements import clean_rules
+
         model = raw.get("model")
         return cls(
             backend=as_choice(raw.get("backend"), ASR_BACKENDS, ASR_BACKENDS[0]),
@@ -489,6 +494,7 @@ class Asr:
             device=as_choice(raw.get("device"), ASR_DEVICES, "auto"),
             cpu_model=str(raw.get("cpu_model") or "").strip() or DEFAULT_CPU_WHISPER_MODEL,
             voice_threshold=as_ratio(raw.get("voice_threshold"), VOICE_THRESHOLD, *VOICE_THRESHOLD_RANGE),
+            replacements=tuple(clean_rules(raw.get("replacements"))),
         )
 
     def to_raw(self) -> dict:
@@ -501,6 +507,7 @@ class Asr:
             "device": self.device,
             "cpu_model": self.cpu_model,
             "voice_threshold": self.voice_threshold,
+            "replacements": [dict(r) for r in self.replacements],
         }
 
 

@@ -25,6 +25,7 @@ import { DiagnosticsPane } from "./DiagnosticsPane";
 import { EnginePane } from "./EnginePane";
 import { ExportSection, cleanSetting, exportChangesInvalid } from "./ExportSection";
 import { HotwordsEditor } from "./HotwordsEditor";
+import { ReplacementsEditor } from "./ReplacementsEditor";
 import { ModelsPane } from "./ModelsPane";
 import { PathText, Radio, Row, Switch, type Raw, type SetFn } from "./Section";
 import {
@@ -204,6 +205,7 @@ function AsrSection({ draft, set, endpoint }: { draft: Raw; set: SetFn; endpoint
         </span>
       </Row>
       <HotwordsEditor endpoint={endpoint} />
+      <ReplacementsEditor value={v("replacements")} onChange={(x) => set("asr", "replacements", x)} />
     </>
   );
 }

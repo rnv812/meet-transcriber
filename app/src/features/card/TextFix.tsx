@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import {
-  applyTextFix, getHotwords, previewTextFix, putHotwords, undoSpeakers, type Endpoint,
+  applyTextFix, getHotwords, getSettings, patchSettings, previewTextFix, putHotwords, undoSpeakers, type Endpoint,
 } from "../../lib/api";
 import { clock, errorText, plural } from "../../lib/format";
 import { nfc } from "../../lib/search";
@@ -19,6 +19,7 @@ import type { Segment, TextPreview } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Popover } from "../../ui/Popover";
+import { rulesOf } from "../settings/ReplacementsEditor";
 
 type Box = { left: number; top: number; bottom: number };
 /** Что исправляем: реплика, сегмент и начало в его тексте; `split` — выделение через границу фраз. */
@@ -98,6 +99,7 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
   const [replace, setReplace] = useState("");
   const [hotword, setHotword] = useState(true);
   const [all, setAll] = useState(false);
+  const [rule, setRule] = useState(false);
   const [preview, setPreview] = useState<TextPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,6 +115,7 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
     setReplace(t.find);
     setHotword(true);
     setAll(false);
+    setRule(false);
     setPreview(null);
     setError(null);
     setOpen(true);
@@ -189,7 +192,7 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
     try {
       const res = await applyTextFix(endpoint, id, {
         find: target.find, replace: right, scope: all ? "all" : "one", segment: target.seg,
-        offset: target.offset, count: segments.length, add_hotword: hotword,
+        offset: target.offset, count: segments.length, add_hotword: hotword, add_rule: rule && right !== target.find,
       });
       const next: Notice[] = [];
       if (res.changed > 0) {
@@ -211,6 +214,19 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
           },
         });
       } else if (term) next.push({ key: "term", text: `Уже в терминах: ${term.term}`, undo: null });
+      const added = res.rule;
+      if (added?.error) next.push({ key: "rule", text: added.error, undo: null });
+      else if (added) {
+        next.push({
+          key: "rule", text: `Исправлять в будущих встречах: ${added.from} → ${added.to}`,
+          undo: async () => {
+            const asr = ((await getSettings(endpoint)).asr ?? {}) as { replacements?: unknown };
+            const left = rulesOf(asr.replacements).filter((r) => !(r.from === added.from && r.to === added.to));
+            await patchSettings(endpoint, { asr: { replacements: left } });
+            return `Правило убрано: ${added.from} → ${added.to}`;
+          },
+        });
+      }
       notify(next);
       window.getSelection?.()?.removeAllRanges();
       close();
@@ -306,6 +322,16 @@ export function useTextFix({ endpoint, id, turns, segments, playable, onPlay, on
                     </ul>
                   )}
                   {!all && <div className="muted tmenu__hint">Будет исправлено только это место.</div>}
+                  <label className="tfix__check">
+                    <input type="checkbox" checked={rule} disabled={same} onChange={(e) => setRule(e.target.checked)} />
+                    <span>Исправлять так же в будущих встречах</span>
+                    <HelpTip label="Как работает исправление в будущих встречах" title="Исправлять в будущих встречах">
+                      <TipLine>Каждая новая расшифровка сразу после распознавания заменит «{target.find}» на
+                        «{right || "…"}»: целые слова, без учёта регистра, «ё» и «е» не различаются.</TipLine>
+                      <TipLine>Готовые встречи правило не меняет. Список правил — «Настройки → Распознавание»,
+                        там их можно удалить.</TipLine>
+                    </HelpTip>
+                  </label>
                 </>
               )}
               {error && <div className="card__error tmenu__error" role="alert">{error}</div>}

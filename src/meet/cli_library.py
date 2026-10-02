@@ -495,8 +495,9 @@ def _kb_export(args, cfg) -> None:
 def _fix(args, cfg) -> None:
     """`meet fix`: исправить распознанное слово или фразу во встрече — первое
     совпадение (или все с --all) одним шагом истории встречи, как «Исправить…»
-    в окне (отменяется там же); --hotword — исправление в термины распознавания."""
-    from meet import hotwords, paths, speakers, textfix
+    в окне (отменяется там же); --hotword — исправление в термины распознавания,
+    --rule — правило замены для будущих расшифровок (asr.replacements)."""
+    from meet import hotwords, paths, replacements, settings, speakers, textfix
 
     folder = _recording(args.folder, cfg)
     _transcript(folder)
@@ -511,7 +512,7 @@ def _fix(args, cfg) -> None:
                                 cfg.recording.voices, segment=first["segment"], offset=first["offset"])
             changed, step = got["changed"], got["step"]["id"]
         except textfix.Unchanged:
-            if not args.hotword:
+            if not (args.hotword or args.rule):
                 raise
     except speakers.SpeakerError as e:
         raise CliError(str(e)[:1].upper() + str(e)[1:])
@@ -519,8 +520,14 @@ def _fix(args, cfg) -> None:
         raise CliError(f"Не удалось сохранить расшифровку: {e}")
     right = textfix.clean_text(args.right)
     term = hotwords.add_to_file(paths.hotwords_path(), right) if args.hotword else None
+    wrong = textfix.clean_text(args.wrong)
+    rule = None
+    if args.rule and wrong != right:
+        settings.patch({"asr": {"replacements": replacements.with_rule(
+            settings.load().asr.replacements, wrong, right)}})
+        rule = {"from": wrong, "to": right}
     doc = {"folder": str(folder), "found": found["count"], "changed": changed, "step": step,
-           "hotword": term}
+           "hotword": term, "rule": rule}
     lines = [f"Исправлено: {changed} из {found['count']} ({textfix.clean_text(args.wrong)} → {right})"]
     if not args.all and found["count"] > 1:
         lines.append("Остальные совпадения — с флагом --all")
@@ -529,6 +536,8 @@ def _fix(args, cfg) -> None:
     if term:
         lines.append(term.get("error") or (f"Добавлено в термины распознавания: {right}" if term["added"]
                                            else f"Уже в терминах распознавания: {right}"))
+    if rule:
+        lines.append(f"Правило для будущих расшифровок: {wrong} → {right}")
     _result(args, doc, "\n".join(lines) + "\n")
 
 

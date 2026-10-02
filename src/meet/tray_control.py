@@ -1533,13 +1533,15 @@ class TrayControl:
 
     def text_apply(self, recording_id: str, body: dict | None) -> dict:
         """Исправить распознанное: {"find", "replace", "scope": "one" | "all",
-        "segment", "offset", "count", "add_hotword"} — замена одним шагом
-        истории встречи (её отменяют, как правки спикеров), исправление — в
-        термины распознавания. Текст уже такой, а термин просили — только термин."""
+        "segment", "offset", "count", "add_hotword", "add_rule"} — замена одним
+        шагом истории встречи (её отменяют, как правки спикеров), исправление —
+        в термины распознавания и в правила замены для будущих расшифровок.
+        Текст уже такой, а термин или правило просили — только они."""
         from meet import textfix
 
         body = body or {}
         term = body.get("add_hotword") is True
+        rule = body.get("add_rule") is True
         result: dict = {}
 
         def change(folder: Path, voices: Path) -> dict | None:
@@ -1549,7 +1551,7 @@ class TrayControl:
                     segment=_int_or_none(body.get("segment")), offset=_int_or_none(body.get("offset")),
                     whole_word=body.get("whole_word") is not False, count=_int_or_none(body.get("count")))
             except textfix.Unchanged:
-                if not term:
+                if not (term or rule):
                     raise
                 return None
             result.update(got)
@@ -1562,7 +1564,24 @@ class TrayControl:
         if term:
             reply["hotword"] = hotwords.add_to_file(paths.hotwords_path(),
                                                     textfix.clean_text(body.get("replace")))
+        if rule:
+            reply["rule"] = self._add_rule(body.get("find"), body.get("replace"))
         return reply
+
+    def _add_rule(self, find, replace) -> dict | None:
+        """Правило замены для будущих расшифровок (`asr.replacements`); то же
+        «from» — заменяется. None — правило ничего бы не меняло."""
+        from meet import replacements
+
+        src, dst = replacements.clean_text(find), replacements.clean_text(replace)
+        if not src or not dst or src == dst:
+            return None
+        try:
+            current = settings.load().asr.replacements
+            settings.patch({"asr": {"replacements": replacements.with_rule(current, src, dst)}})
+        except OSError as e:  # исправление уже применено — о правиле только сообщаем
+            return {"from": src, "to": dst, "error": f"не удалось сохранить правило: {e}"}
+        return {"from": src, "to": dst}
 
     # --- «Разделить спикера» и порог узнавания ----------------------------------
 

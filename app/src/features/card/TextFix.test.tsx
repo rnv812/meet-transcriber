@@ -16,6 +16,7 @@ vi.mock("../../lib/api", async (orig) => ({
   undoSpeakers: vi.fn(),
   getHotwords: vi.fn(),
   putHotwords: vi.fn(),
+  patchSettings: vi.fn(),
 }));
 vi.mock("../../lib/shell", () => ({
   inTauri: () => false,
@@ -99,7 +100,8 @@ test("выделение → «Исправить…»: слово целико�
   await userEvent.type(input, "Kubernetes");
   await userEvent.click(within(box).getByRole("button", { name: "Применить" }));
   expect(api.applyTextFix).toHaveBeenCalledWith(ep, "r1", {
-    find: "кубер нетис", replace: "Kubernetes", scope: "one", segment: 0, offset: 9, count: 3, add_hotword: true });
+    find: "кубер нетис", replace: "Kubernetes", scope: "one", segment: 0, offset: 9, count: 3, add_hotword: true,
+    add_rule: false });
   expect(await screen.findByText(/Исправлено: кубер нетис → Kubernetes \(1\)/)).toBeInTheDocument();
   expect(screen.queryByRole("dialog", { name: "Исправить распознанное" })).toBeNull();
 
@@ -181,4 +183,29 @@ test("выделение через границу двух фраз — под�
   const box = await screen.findByRole("dialog", { name: "Исправить распознанное" });
   expect(within(box).getByText(/захватывает две фразы/)).toBeInTheDocument();
   expect(within(box).getByRole("button", { name: "Применить" })).toBeDisabled();
+});
+
+test("«Исправлять так же в будущих встречах» — правило; «Отменить» убирает его из настроек", async () => {
+  vi.mocked(api.applyTextFix).mockResolvedValue({ ...result, hotword: undefined, rule: { from: "кубер нетис", to: "Kubernetes" } });
+  vi.mocked(api.getSettings).mockResolvedValue({ recording: { speaker_name: "Вы" }, asr: { replacements: [
+    { from: "дев опс", to: "DevOps" }, { from: "кубер нетис", to: "Kubernetes" }] } });
+  vi.mocked(api.patchSettings).mockResolvedValue({ settings: {}, restart_required: [] });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  const p = await turnText(/Поднимем кубер нетис/);
+  select(p, 9, 20);
+  fireEvent.keyDown(document.body, { key: "e", code: "KeyE", ctrlKey: true });
+  const box = await screen.findByRole("dialog", { name: "Исправить распознанное" });
+  const future = within(box).getByRole("checkbox", { name: /Исправлять так же в будущих встречах/ });
+  expect(future).not.toBeChecked();
+  expect(future).toBeDisabled(); // исправление ещё не вписано
+  const input = within(box).getByRole("textbox", { name: "Как правильно" });
+  await userEvent.clear(input);
+  await userEvent.type(input, "Kubernetes");
+  await userEvent.click(future);
+  await userEvent.click(within(box).getByRole("button", { name: "Применить" }));
+  expect(api.applyTextFix).toHaveBeenCalledWith(ep, "r1", expect.objectContaining({ add_rule: true }));
+  const row = (await screen.findByText("Исправлять в будущих встречах: кубер нетис → Kubernetes")).closest(".tsel") as HTMLElement;
+  await userEvent.click(within(row).getByRole("button", { name: "Отменить" }));
+  expect(api.patchSettings).toHaveBeenCalledWith(ep, { asr: { replacements: [{ from: "дев опс", to: "DevOps" }] } });
+  expect(await screen.findByText("Правило убрано: кубер нетис → Kubernetes")).toBeInTheDocument();
 });

@@ -15,74 +15,28 @@
 заменяются словами исправления на их же отрезке времени — одно в одно с
 прежним временем, иначе время делится по длине слов (несколько слов в одно —
 их отрезки сливаются).
+
+Правила замены (`asr.replacements` в настройках, meet.replacements) — то же
+исправление для новых расшифровок: пайплайн применяет их сразу после
+распознавания и выравнивания слов (apply_rules), до раздачи реплик спикерам.
 """
 
 import re
-import unicodedata
 import uuid
 from datetime import datetime
 from pathlib import Path
 
-from meet import library, search, speakers
+from meet import library, speakers
+from meet.replacements import TEXT_MAX, case_like, clean_rules, clean_text, matches, nfc
 
 SCOPES = ("one", "all")
 SAMPLES = 5
 CONTEXT = 40
-TEXT_MAX = 200
 _PIECE = re.compile(r"\s*\S+")
 
 
 class Unchanged(speakers.SpeakerError):
     """Текст уже такой — менять нечего (400; термин при этом добавить можно)."""
-
-
-def nfc(text: str) -> str:
-    return unicodedata.normalize("NFC", text)
-
-
-def _fold(text: str) -> str:
-    """Регистр и «ё» без смены длины: позиции в сложенном тексте — те же."""
-    return "".join(c.lower() if len(c.lower()) == 1 else c for c in text).replace("ё", "е")
-
-
-def matches(text: str, find: str, whole_word: bool = True) -> list[tuple[int, int]]:
-    """Совпадения `find` в `text` (уже NFC) — [начало, конец) без перекрытий."""
-    if whole_word:
-        want = [w for w, _, _ in search.tokenize(nfc(find))]
-        if not want:
-            return []
-        tokens = search.tokenize(text)
-        out, i, n = [], 0, len(want)
-        while i + n <= len(tokens):
-            if [t[0] for t in tokens[i:i + n]] == want:
-                out.append((tokens[i][1], tokens[i + n - 1][2]))
-                i += n
-            else:
-                i += 1
-        return out
-    needle = _fold(nfc(find).strip())
-    if not needle or not search.tokenize(needle):
-        return []
-    hay, out, pos = _fold(text), [], 0
-    while (at := hay.find(needle, pos)) >= 0:
-        out.append((at, at + len(needle)))
-        pos = at + len(needle)
-    return out
-
-
-def case_like(original: str, replacement: str) -> str:
-    """Исправление в регистре исправляемого: в начале предложения — с
-    заглавной, капсом — капсом. Заглавные в самом исправлении — как написано."""
-    if any(c.isupper() for c in replacement):
-        return replacement
-    letters = [c for c in original if c.isalpha()]
-    if len(letters) > 1 and all(c.isupper() for c in letters):
-        return replacement.upper()
-    if letters and letters[0].isupper():
-        i = next((k for k, c in enumerate(replacement) if c.isalpha()), None)
-        if i is not None:
-            return replacement[:i] + replacement[i].upper() + replacement[i + 1:]
-    return replacement
 
 
 # --- слова сегмента -------------------------------------------------------------
@@ -158,11 +112,6 @@ def rewrite(segment: dict, spans: list[tuple[int, int, str]]) -> dict:
 
 
 # --- встреча --------------------------------------------------------------------
-
-
-def clean_text(value) -> str:
-    """Слово или фраза из поля ввода: NFC, пробелы схлопнуты."""
-    return " ".join(nfc(str(value or "")).split())
 
 
 def _clean(value, what: str) -> str:
@@ -284,3 +233,47 @@ def apply(folder: Path, find: str, replace: str, scope: str, voices_dir: Path, *
     steps, pos = speakers._history_of(meta, data)
     return {"step": speakers._public([step])[0], "history": speakers._public(steps), "pos": pos,
             "trimmed": speakers._trimmed(meta, data), "voices_error": None, "changed": changed}
+
+
+# --- правила для новых расшифровок ------------------------------------------------
+
+
+def apply_rules(segments: list, rules) -> int:
+    """Правила замены — к сегментам распознавания (`asr.Segment`, на месте):
+    целые слова, регистр — как у исправляемого, слова выровнены. → сколько
+    замен сделано."""
+    from meet.asr import Word
+
+    rules = clean_rules(rules)
+    if not rules:
+        return 0
+    total = 0
+    for seg in segments:
+        if getattr(seg, "kind", None) == "break":
+            continue
+        for rule in rules:
+            text = nfc(seg.text or "")
+            spans = _rule_spans(text, rule)
+            if seg.words:
+                # Разбиение по спикерам собирает текст заново из слов: слова
+                # исправляются по своему тексту, даже если он чуть разошёлся с
+                # текстом сегмента.
+                words = [[w.start, w.end, w.text] for w in seg.words]
+                wtext = nfc("".join(str(w[2]) for w in words)).strip()
+                wspans = _rule_spans(wtext, rule)
+                if wspans:
+                    got = rewrite({"text": wtext, "words": words}, wspans)
+                    if "words" in got:
+                        seg.words = [Word(float(w[0]), float(w[1]), str(w[2])) for w in got["words"]]
+                spans = spans or []
+                total += len(spans) or len(wspans)
+            else:
+                total += len(spans)
+            if spans:
+                seg.text = rewrite({"text": text}, spans)["text"]
+    return total
+
+
+def _rule_spans(text: str, rule: dict) -> list[tuple[int, int, str]]:
+    spans = [(a, b, case_like(text[a:b], rule["to"])) for a, b in matches(text, rule["from"])]
+    return [x for x in spans if text[x[0]:x[1]] != x[2]]

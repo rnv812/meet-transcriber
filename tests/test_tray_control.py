@@ -1974,3 +1974,19 @@ def test_hotword_only_when_the_text_is_already_right(with_recordings, app, tmp_p
     assert got["changed"] == 0 and got["hotword"]["added"] is True and "step" not in got
     with pytest.raises(control.BadRequest):
         state.text_apply(rid, {"find": "кубер нетис", "replace": "кубер нетис", "scope": "all"})
+
+
+def test_text_apply_adds_a_rule_for_future_transcriptions(with_recordings, app, tmp_path):
+    rid = _fix_meeting(with_recordings)
+    state = tray_control.TrayControl(app, queue=_Queue())
+    got = state.text_apply(rid, {"find": "кубер нетис", "replace": "Kubernetes", "scope": "all",
+                                 "add_rule": True})
+    assert got["changed"] == 2 and got["rule"] == {"from": "кубер нетис", "to": "Kubernetes"}
+    assert list(settings.load().asr.replacements) == [{"from": "кубер нетис", "to": "Kubernetes"}]
+    # Текст уже исправлен, а правило просили — только правило.
+    got = state.text_apply(rid, {"find": "Kubernetes", "replace": "K8s", "scope": "one", "segment": 0,
+                                 "offset": 9, "add_rule": True})
+    assert got["changed"] == 1
+    assert [r["to"] for r in settings.load().asr.replacements] == ["Kubernetes", "K8s"]
+    got = state.text_apply(rid, {"find": "K8s", "replace": "K8s", "scope": "all", "add_rule": True})
+    assert got["changed"] == 0 and got["rule"] is None  # правило «то же на то же» не нужно

@@ -202,3 +202,30 @@ def test_sample_context_is_cut_at_word_boundaries(meeting):
     assert sample["before"].startswith("…") and sample["before"].endswith("потом ")
     assert sample["after"].endswith("…") and sample["after"].startswith(" и ещё")
     assert " " not in sample["before"][1:2]  # без обрывка слова
+
+
+# --- правила для новых расшифровок ---------------------------------------------
+
+
+def test_rules_fix_pipeline_segments_and_their_words():
+    from meet.asr import Segment, Word
+
+    segs = [Segment(0.0, 2.0, "Кубер нетис упал, кубер нетис встал.",
+                    words=[Word(0.0, 0.4, " Кубер"), Word(0.4, 0.8, " нетис"), Word(0.8, 1.0, " упал,"),
+                           Word(1.0, 1.3, " кубер"), Word(1.3, 1.6, " нетис"), Word(1.6, 2.0, " встал.")]),
+            Segment(2.0, 3.0, "Без слов: кубернетис.")]
+    rules = [{"from": "кубер нетис", "to": "kubernetes"}, {"from": "кубернетис", "to": "Kubernetes"}]
+    assert textfix.apply_rules(segs, rules) == 3
+    assert segs[0].text == "Kubernetes упал, kubernetes встал."
+    assert [(w.start, w.end, w.text) for w in segs[0].words[:2]] == [(0.0, 0.8, " Kubernetes"), (0.8, 1.0, " упал,")]
+    assert "".join(w.text for w in segs[0].words).strip() == segs[0].text
+    assert segs[1].text == "Без слов: Kubernetes."
+    assert textfix.apply_rules(segs, []) == 0
+
+
+def test_clean_rules_drops_junk_and_repeats():
+    got = textfix.clean_rules([{"from": " кубер нетис ", "to": "Kubernetes"}, {"from": "", "to": "x"},
+                               {"from": "Кубер  Нетис", "to": "K8s"}, "мусор", {"from": "a", "to": ""},
+                               {"from": "...", "to": "x"}, {"from": "ёлка", "to": "Ёлка"}])
+    assert got == [{"from": "Кубер Нетис", "to": "K8s"}, {"from": "ёлка", "to": "Ёлка"}]
+    assert textfix.clean_rules(None) == []
