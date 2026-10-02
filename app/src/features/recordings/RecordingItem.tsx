@@ -8,9 +8,10 @@ import type { Category, LibraryItem } from "../../lib/types";
 import { AiBadge } from "../../ui/AiBadge";
 import { CategoryDot, CategoryMark } from "../../ui/Category";
 import { Highlight } from "../../ui/Highlight";
-import { BookOpen, ChevronLeft, ChevronRight, FolderOpen, Pencil, Settings2, Tag, Trash2 } from "lucide-react";
+import { BookOpen, ChevronLeft, ChevronRight, Ellipsis, FolderOpen, Pencil, Settings2, Tag, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { ItemMenu, type MenuItem } from "./ItemMenu";
+import { Icon } from "../../ui/Icon";
 
 const ICON = { size: 16, strokeWidth: 1.75, "aria-hidden": true } as const;
 
@@ -50,6 +51,7 @@ export type ItemActions = {
 };
 
 const NO_CATEGORIES: Category[] = [];
+const RENAME_HINT = "Двойной щелчок или F2 — переименовать";
 
 /** Как отметить запись для групповых действий: Ctrl+щелчок — переключить, Shift+щелчок — диапазон. */
 export type PickHow = "toggle" | "range";
@@ -210,7 +212,14 @@ export function RecordingItem({
             else onSelect(rec.id);
           }}
           onKeyDown={(e) => { if (e.key === "F2" && actions) { e.preventDefault(); begin(); } }}>
-          <span className="rec-item__title" title={actions ? "Двойной щелчок или F2 — переименовать" : undefined}
+          <span className="rec-item__title"
+            // Подсказка: полное название, если оно обрезано, и как переименовать.
+            onMouseEnter={(e) => {
+              const el = e.currentTarget;
+              const clipped = el.scrollWidth > el.clientWidth + 1;
+              const tip = [clipped ? title : null, actions ? RENAME_HINT : null].filter(Boolean).join("\n");
+              if (tip) el.title = tip; else el.removeAttribute("title");
+            }}
             onDoubleClick={actions ? (e) => { e.preventDefault(); begin(); } : undefined}>
             {title}{rec.title_source === "ai" && rec.title && <AiBadge onClick={actions ? begin : undefined} />}
           </span>
@@ -226,7 +235,7 @@ export function RecordingItem({
       {actions && !editing && (
         <button ref={more_} type="button" className="rec-item__more" aria-label={`Действия с записью «${title}»`}
           aria-haspopup="menu" aria-expanded={menu !== null}
-          onClick={() => (menu ? closeMenu() : openFromButton())}>⋯</button>
+          onClick={() => (menu ? closeMenu() : openFromButton())}><Icon as={Ellipsis} /></button>
       )}
       {menu && (
         <ItemMenu at={menu} label={pickCategory ? `Категория записи «${title}»` : `Действия с записью «${title}»`}

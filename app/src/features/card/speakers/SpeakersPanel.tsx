@@ -14,6 +14,7 @@ import {
 import {
   applySpeakers, getSpeakers, redoSpeakers, revertSpeakers, undoSpeakers, type Endpoint,
 } from "../../../lib/api";
+import { Play, X } from "lucide-react";
 import { clock, errorText, plural } from "../../../lib/format";
 import { isUnnamed } from "../../../lib/speakers";
 import type { Job, SpeakerRow, SpeakersView } from "../../../lib/types";
@@ -28,6 +29,7 @@ import {
   changeText, finalOf, preview, prune, rememberDefault, toOps, type Change, type Staged,
 } from "./staging";
 import "./speakers.css";
+import { Icon } from "../../../ui/Icon";
 
 /** Сколько секунд играет фраза по ▶. */
 export const PHRASE_S = 6;
@@ -235,7 +237,7 @@ export function SpeakersPanel({
         <div className="spk__tools">
           <HistoryTools canUndo={canUndo} canRedo={canRedo} onUndo={undo} onRedo={redo} />
           <button type="button" className="spk__close" onClick={onClose} aria-label="Закрыть панель спикеров"
-            title="Закрыть (Esc)">×</button>
+            title="Закрыть (Esc)"><Icon as={X} size="sm" /></button>
         </div>
       </div>
       {error && <div className="card__error spk__msg" role="alert">{error}</div>}
@@ -335,7 +337,7 @@ function SpeakerRowView({
             <li key={s.start} className="spk-phrase">
               <button type="button" className="spk-phrase__play" disabled={!playable}
                 aria-label={`Прослушать фразу с ${clock(s.start)}`}
-                onClick={() => onPlay(s.start, Math.min(s.end, s.start + PHRASE_S))}>▶</button>
+                onClick={() => onPlay(s.start, Math.min(s.end, s.start + PHRASE_S))}><Icon as={Play} size="sm" /></button>
               <span className="spk-phrase__time num muted">{clock(s.start)}</span>
               <span className="spk-phrase__text">{s.text}</span>
             </li>

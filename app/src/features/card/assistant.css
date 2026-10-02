@@ -82,6 +82,6 @@
 .qa__meta { font-size: 11px; color: var(--text-3); }
 /* ✦ у пунктов итогов (Markdown itemAction): видна при наведении на пункт и с клавиатуры. */
 .md-act { display: inline-flex; margin-left: 4px; vertical-align: middle; }
-.md-act .ask-agent, .md-act-col .ask-agent { opacity: 0.35; }
+.md-act .ask-agent, .md-act-col .ask-agent { opacity: 0; }
 .md li:hover > .md-act .ask-agent, .md tr:hover .md-act-col .ask-agent, .md .ask-agent:focus-visible { opacity: 1; }
 .md th.md-act-col, .md td.md-act-col { width: 30px; padding: 2px 4px; text-align: center; }

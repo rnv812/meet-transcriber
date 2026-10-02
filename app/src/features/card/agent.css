@@ -39,7 +39,13 @@
 .agent__unsent-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 /* «Прошлые вопросы» (qa.jsonl): свёрнутый список под терминалом, только чтение. */
 .agent__past { flex: none; max-height: 45%; overflow-y: auto; border-top: 1px solid var(--line); padding-top: 6px; }
-.agent__past-title { cursor: pointer; color: var(--text-2); font-size: 12px; padding: 2px 0; }
+.agent__past-title {
+  display: flex; align-items: center; gap: 4px; list-style: none;
+  cursor: pointer; color: var(--text-2); font-size: 12px; padding: 2px 0;
+}
+.agent__past-title::-webkit-details-marker { display: none; }
+.agent__past-chevron { transition: transform var(--t); }
+.agent__past[open] .agent__past-chevron { transform: rotate(90deg); }
 .agent__past-title:hover { color: var(--text); }
 .agent__past[open] .agent__past-title { margin-bottom: 6px; }
 .agent__past-note { margin: 0 0 10px; font-size: 12px; }

@@ -98,6 +98,8 @@ pub fn open_main(app: &AppHandle, recording: Option<String>, section: Option<&st
         WebviewUrl::App(main_url(recording.as_deref(), section).into()),
     )
     .title("Meet")
+    // Окно тёмное: и системная рамка тёмная, без белой полосы при светлой теме Windows.
+    .theme(Some(tauri::Theme::Dark))
     .inner_size(1180.0, 760.0)
     .min_inner_size(820.0, 520.0)
     .center()

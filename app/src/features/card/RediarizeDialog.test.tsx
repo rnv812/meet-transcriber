@@ -85,7 +85,12 @@ test("готовый результат открывается сразу; «О�
   expect(buttons.at(-1)).toHaveFocus();
   await userEvent.keyboard("{Escape}");
   expect(onClose).toHaveBeenCalledTimes(1);
-  await userEvent.click(screen.getByRole("button", { name: "Отказаться" }));
+  await userEvent.click(screen.getByRole("button", { name: "Отказаться…" }));
+  // Посчитанное не выбрасывается без вопроса; фокус — на «Отмена».
+  const ask = screen.getByRole("alertdialog", { name: "Отказаться от результата?" });
+  expect(within(ask).getByRole("button", { name: "Отмена" })).toHaveFocus();
+  expect(api.discardRediarized).not.toHaveBeenCalled();
+  await userEvent.click(within(ask).getByRole("button", { name: "Отказаться" }));
   expect(api.discardRediarized).toHaveBeenCalledWith(ep, "r1");
   expect(onClose).toHaveBeenCalled();
 });
@@ -95,8 +100,9 @@ test("устаревший результат применить нельзя; �
   const { rerender } = setup({ ready: true, twoTrack: false });
   expect(await screen.findByText(/Расшифровку изменили после расчёта/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Применить" })).toBeDisabled();
-  await userEvent.click(screen.getByRole("button", { name: "Другие параметры" }));
-  expect(screen.getByText("Сколько человек говорило")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Другие параметры…" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Удалить и задать параметры" }));
+  expect(await screen.findByText("Сколько человек говорило")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("radio", { name: /^От/ }));
   fireEvent.change(screen.getByRole("spinbutton", { name: "Наименьшее число участников" }), { target: { value: "7" } });
   expect(screen.getByText("Наименьшее число больше наибольшего")).toBeInTheDocument();

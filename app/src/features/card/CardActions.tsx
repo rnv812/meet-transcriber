@@ -63,7 +63,7 @@ function below(el: HTMLElement | null, alignRight: boolean): { x: number; y: num
 export function CardActions({
   canExport, canRetranscribe, busy, onExport, onKbExport, onOpenFolder, onRetranscribe, onRediarize, onReanalyze,
   reanalyzeBlocked = null, reanalyzeLabel = "Переанализировать", onSuggestTitle, onImprove, improveBlocked = null,
-  onDelete,
+  onDelete, kbPending = false,
 }: {
   canExport: boolean;
   canRetranscribe: boolean;
@@ -71,6 +71,8 @@ export function CardActions({
   onExport: (format: string) => void;
   /** «В базу знаний»; нет — кнопки нет (папка для встреч не задана или нечего выгружать). */
   onKbExport?: () => void;
+  /** Ещё неизвестно, будет ли «В базу знаний» (настройки читаются): кнопка на месте, неактивная. */
+  kbPending?: boolean;
   onOpenFolder: () => void;
   onRetranscribe: () => void;
   /** «Переразделить на спикеров…» (только разделение, без распознавания); нет — пункта нет. */
@@ -169,9 +171,9 @@ export function CardActions({
             <Download {...ICON} />{label("Экспорт")}<ChevronDown {...ICON} size={14} className="act__chevron" />
           </Button>
         )}
-        {onKbExport && (
+        {(onKbExport || kbPending) && (
           <Button className="act" title="Выгрузить расшифровку и итоги в папку встреч базы знаний"
-            onClick={onKbExport} disabled={busy}>
+            onClick={onKbExport} disabled={busy || !onKbExport}>
             <BookOpen {...ICON} />{label("В базу знаний")}
           </Button>
         )}

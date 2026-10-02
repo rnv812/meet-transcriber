@@ -8,6 +8,7 @@
  * шаг истории встречи: его отменяет «Отменить» в панели «Спикеры».
  */
 
+import { Play, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   applyRediarized, cancelJob, discardRediarized, getRediarized, rediarize, type Endpoint,
@@ -15,9 +16,11 @@ import {
 import { clock, errorText, plural } from "../../lib/format";
 import type { Job, RediarizeParams, RediarizePreview } from "../../lib/types";
 import { Button } from "../../ui/Button";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { JobProgress } from "../../ui/JobProgress";
 import { ProgressBar } from "../../ui/ProgressBar";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { Icon } from "../../ui/Icon";
 
 const PHRASE_S = 6;
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -50,6 +53,8 @@ export function RediarizeDialog({
 }) {
   const running = rediarizeJobOf(folder, jobs);
   const [phase, setPhase] = useState<Phase>(running ? { kind: "working", jobId: running.id } : { kind: "form" });
+  /** «Отказаться» / «Другие параметры» выбрасывают посчитанное (это минуты работы) — сначала вопрос. */
+  const [askDiscard, setAskDiscard] = useState<"again" | "close" | null>(null);
   const [count, setCount] = useState<Count>("auto");
   const [exact, setExact] = useState(3);
   const [low, setLow] = useState(2);
@@ -164,7 +169,7 @@ export function RediarizeDialog({
       <div className="modal__box redia" role="dialog" aria-modal="true" aria-labelledby="redia-title" ref={box}>
         <div className="redia__head">
           <h3 id="redia-title" tabIndex={-1}>Переразделить на спикеров</h3>
-          <button type="button" className="spk__close" aria-label="Закрыть" onClick={onClose}>×</button>
+          <button type="button" className="spk__close" aria-label="Закрыть" onClick={onClose}><Icon as={X} size="sm" /></button>
         </div>
         <p className="muted redia__lead">
           Заново определяется, кто говорит, — по звуку записи. Текст расшифровки не меняется и повторно не распознаётся.
@@ -259,7 +264,7 @@ export function RediarizeDialog({
                       <li key={p.start} className="spk-phrase">
                         <button type="button" className="spk-phrase__play" disabled={!playable}
                           aria-label={`Прослушать фразу с ${clock(p.start)}`}
-                          onClick={() => onPlay(p.start, Math.min(p.end, p.start + PHRASE_S))}>▶</button>
+                          onClick={() => onPlay(p.start, Math.min(p.end, p.start + PHRASE_S))}><Icon as={Play} size="sm" /></button>
                         <span className="spk-phrase__time num muted">{clock(p.start)}</span>
                         <span className="spk-phrase__text">{p.text}</span>
                       </li>
@@ -271,11 +276,19 @@ export function RediarizeDialog({
             <p className="muted redia__hint">
               Имена переходят к новым спикерам по сходству голоса; правки отдельных реплик сохраняются, если голос их спикера узнан. Изменение можно отменить в панели «Спикеры».
             </p>
-            <div className="redia__actions">
-              <Button onClick={() => void discard(true)} disabled={busy}>Другие параметры</Button>
-              <Button onClick={() => void discard(false)} disabled={busy}>Отказаться</Button>
-              <Button variant="primary" onClick={() => void apply()} disabled={busy || phase.preview.stale}>Применить</Button>
-            </div>
+            {askDiscard ? (
+              <ConfirmDialog inline title={askDiscard === "again" ? "Посчитать с другими параметрами?" : "Отказаться от результата?"}
+                message="Посчитанное разделение будет удалено — чтобы получить его снова, расчёт придётся повторить."
+                confirmLabel={askDiscard === "again" ? "Удалить и задать параметры" : "Отказаться"}
+                onCancel={() => setAskDiscard(null)}
+                onConfirm={() => { const again = askDiscard === "again"; setAskDiscard(null); void discard(again); }} />
+            ) : (
+              <div className="redia__actions">
+                <Button onClick={() => setAskDiscard("again")} disabled={busy}>Другие параметры…</Button>
+                <Button onClick={() => setAskDiscard("close")} disabled={busy}>Отказаться…</Button>
+                <Button variant="primary" onClick={() => void apply()} disabled={busy || phase.preview.stale}>Применить</Button>
+              </div>
+            )}
           </div>
         )}
       </div>

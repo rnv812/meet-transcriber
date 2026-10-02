@@ -1,3 +1,4 @@
+import { Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   audioUrl, deleteAvatar, deletePerson, getPerson, getSample, mergePerson, putAvatar, renamePerson,
@@ -174,7 +175,7 @@ export function PersonCard({
           onOpenAt={(m, i, t) => onOpenAt?.(m, i, t, name)} onAskAgent={(m, text) => onAskAgent?.(m, text)} />
       ) : (<>
       <div className="pcard__row">
-        <Button onClick={() => void play()}>▶ Прослушать образец</Button>
+        <Button icon={Play} onClick={() => void play()}>Прослушать образец</Button>
       </div>
       <audio
         ref={audio}

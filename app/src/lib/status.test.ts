@@ -1,4 +1,10 @@
-import { activeJobOf, failedRetranscribe, isLiveRecording, stageLabel, statusOf } from "./status";
+import { activeJobOf, failedRetranscribe, failureAdvice, isLiveRecording, stageLabel, statusOf } from "./status";
+
+test("совет к известной ошибке расшифровки; неизвестной — нет", () => {
+  expect(failureAdvice("RuntimeError: CUDA failed with error out of memory")).toMatch(/устройство «Процессор»/);
+  expect(failureAdvice("OSError: [Errno 28] No space left on device")).toMatch(/не хватает места/);
+  expect(failureAdvice("что-то совсем другое")).toBeNull();
+});
 
 const rec = (o = {}) => ({ id: "2026-09-30_16-04", path: "C:/r/2026-09-30_16-04",
   started_at: null, duration_s: 60, tracks: { sys: "x" }, has_transcript: false,

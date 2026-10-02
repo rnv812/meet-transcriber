@@ -5,9 +5,12 @@
  * его отмена убирает и голоса, которые он запомнил в базе.
  */
 
+import { ChevronDown, ChevronRight, Redo2, Undo2 } from "lucide-react";
 import { useEffect, useState, type RefObject } from "react";
 import type { SpeakerStep } from "../../../lib/types";
 import { describeStep, stepTime } from "./staging";
+import { Icon } from "../../../ui/Icon";
+import { ConfirmDialog } from "../../../ui/ConfirmDialog";
 
 /** Сколько шагов хранит резидент (meet/speakers.py, HISTORY_MAX). */
 export const HISTORY_MAX = 50;
@@ -40,9 +43,9 @@ export function HistoryTools({ canUndo, canRedo, onUndo, onRedo }: {
   return (
     <>
       <button type="button" className="spk__tool" onClick={onUndo} disabled={!canUndo}
-        aria-keyshortcuts="Control+Z" title="Отменить (Ctrl+Z)">↶ Отменить</button>
+        aria-keyshortcuts="Control+Z" title="Отменить (Ctrl+Z)"><Icon as={Undo2} size="sm" />Отменить</button>
       <button type="button" className="spk__tool" onClick={onRedo} disabled={!canRedo}
-        aria-keyshortcuts="Control+Shift+Z" title="Повторить (Ctrl+Shift+Z)">↷ Повторить</button>
+        aria-keyshortcuts="Control+Shift+Z" title="Повторить (Ctrl+Shift+Z)"><Icon as={Redo2} size="sm" />Повторить</button>
     </>
   );
 }
@@ -58,10 +61,19 @@ export function HistoryList({ history, pos, busy, trimmed = false, onRevert }: {
   onRevert: (stepId: string | null) => void;
 }) {
   const [shown, setShown] = useState(false);
+  /** Куда просили вернуться (0 — исходное состояние, i — после шага i): ждёт подтверждения. */
+  const [asking, setAsking] = useState<number | null>(null);
+  const ask = (target: number) => setAsking(target);
+  const confirmText = (target: number) => {
+    const n = Math.abs(pos - target);
+    return target < pos
+      ? `Последние изменения спикеров этой встречи (${n}) будут отменены. Их можно будет вернуть отсюда же.`
+      : `Отменённые раньше изменения (${n}) будут применены снова.`;
+  };
   return (
     <section className="spk-hist" aria-label="История изменений">
       <button type="button" className="spk-hist__toggle" aria-expanded={shown} onClick={() => setShown((v) => !v)}>
-        {shown ? "▾" : "▸"} История изменений{history.length ? ` (${history.length})` : ""}
+        <Icon as={shown ? ChevronDown : ChevronRight} size="sm" />История изменений{history.length ? ` (${history.length})` : ""}
       </button>
       {shown && (
         <ol className="spk-hist__list">
@@ -72,12 +84,22 @@ export function HistoryList({ history, pos, busy, trimmed = false, onRevert }: {
           )}
           <HistoryItem time="" text={trimmed ? "Состояние до этих изменений" : "Исходное состояние"}
             current={pos === 0} undone={false}
-            busy={busy} onRevert={() => onRevert(null)} />
+            busy={busy} onRevert={() => ask(0)} />
           {history.map((step, i) => (
             <HistoryItem key={step.id} time={stepTime(step.at)} text={describeStep(step)}
-              current={pos === i + 1} undone={i >= pos} busy={busy} onRevert={() => onRevert(step.id)} />
+              current={pos === i + 1} undone={i >= pos} busy={busy} onRevert={() => ask(i + 1)} />
           ))}
         </ol>
+      )}
+      {asking !== null && (
+        <ConfirmDialog title="Вернуться к этому состоянию?" message={confirmText(asking)}
+          confirmLabel="Вернуть" danger={asking < pos}
+          onCancel={() => setAsking(null)}
+          onConfirm={() => {
+            const target = asking;
+            setAsking(null);
+            onRevert(target === 0 ? null : history[target - 1]!.id);
+          }} />
       )}
     </section>
   );
@@ -95,7 +117,7 @@ function HistoryItem({ time, text, current, undone, busy, onRevert }: {
         {undone && <span className="muted"> (отменено)</span>}
       </div>
       {!current && (
-        <button type="button" className="spk-link" disabled={busy} onClick={onRevert}>Вернуть к этому состоянию</button>
+        <button type="button" className="spk-link" disabled={busy} onClick={onRevert}>Вернуть к этому состоянию…</button>
       )}
     </li>
   );

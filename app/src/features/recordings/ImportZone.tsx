@@ -1,8 +1,10 @@
+import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type Endpoint, importFile } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { inTauri, pickMedia } from "../../lib/shell";
+import { Icon } from "../../ui/Icon";
 
 const BROWSER_HINT = "Импорт — из приложения или перетаскиванием в окно приложения";
 
@@ -92,7 +94,7 @@ export function ImportZone({ endpoint, onImported }: { endpoint: Endpoint | null
             ))}
           </div>
           <button type="button" className="import__close" aria-label="Скрыть ошибки импорта"
-            onClick={() => setErrors([])}>×</button>
+            onClick={() => setErrors([])}><Icon as={X} size="sm" /></button>
         </div>
       )}
     </div>

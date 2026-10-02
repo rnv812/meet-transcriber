@@ -8,6 +8,7 @@ import { AiBadge } from "../../ui/AiBadge";
 import { Avatar } from "../../ui/Avatar";
 import { CategoryChip, CategoryMenu } from "../../ui/Category";
 import { Popover } from "../../ui/Popover";
+import { Skeleton } from "../../ui/Loading";
 import type { PersonColor } from "./Turns";
 
 /** Подпись объединённой встречи: из скольких записей и что стало с исходными. */
@@ -125,9 +126,12 @@ export function CardHeader({
       )}
       <div className="card__meta-row">
         {meta && <div className="card__meta muted num">{meta}</div>}
-        {onCategory && categories && (
+        {onCategory && (categories ? (
           <CategoryButton rec={rec} list={categories} onPick={onCategory} onSettings={onOpenCategories} />
-        )}
+        ) : (
+          // Категории ещё читаются: заготовка размером с метку — строка не дёргается, когда она появится.
+          <Skeleton width={104} height={22} className="card__cat-skel" />
+        ))}
       </div>
       {rec.merge && <MergeNote info={rec.merge} />}
       {speakers.length > 0 && (

@@ -657,7 +657,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
           <button type="button" className="player__chapter" aria-haspopup="dialog"
             aria-expanded={chaptersAnchor?.classList.contains("player__chapter") ?? false}
             aria-label={`Глава ${here.n}: ${here.title}. Список глав`} title="Главы встречи" onMouseDown={keepChapters} onClick={openChapters}>
-            <span className="player__chapter-title">{here.title}</span>
+            <span className="player__chapter-title" title={here.title}>{here.title}</span>
             <ChevronRight size={14} strokeWidth={2} aria-hidden="true" />
           </button>
         )}

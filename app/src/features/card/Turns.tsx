@@ -123,9 +123,9 @@ export const Turns = memo(function Turns({
             onClick={onSelect ? (e) => { if (pick(e, i)) e.preventDefault(); } : undefined}>
             {on && <span className="sr-only">Выбрано.</span>}
             {playable ? (
-              <button type="button" className="turn__time num"
+              <button type="button" className="turn__time num" aria-label={`Слушать с ${clock(t.start)}`}
                 onClick={(e) => { if (!(onSelect && (e.ctrlKey || e.metaKey || e.shiftKey))) onPlay(t); }}>
-                {`▶ ${clock(t.start)}`}
+                {clock(t.start)}
               </button>
             ) : (
               <span className="turn__time num">{clock(t.start)}</span>

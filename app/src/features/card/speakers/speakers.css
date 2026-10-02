@@ -65,7 +65,7 @@
 }
 
 .spk-link {
-  align-self: flex-start; padding: 0; border: 0; background: none; color: var(--accent-hover);
+  align-self: flex-start; padding: 0; border: 0; background: none; color: var(--accent-hi);
   font: inherit; font-size: 12px; cursor: pointer;
 }
 .spk-link:hover:not(:disabled) { text-decoration: underline; }

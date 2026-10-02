@@ -115,6 +115,24 @@ export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null)
   return { kind: "untranscribed" };
 }
 
+/**
+ * Что делать, если расшифровка упала с известной ошибкой: короткий совет к
+ * тексту ошибки. Неизвестная ошибка — null (остаются «Повторить» и журнал).
+ */
+export function failureAdvice(error: string): string | null {
+  const e = error.toLowerCase();
+  if (/out of memory|cuda.*memory|cublas|cudnn/.test(e))
+    return "Не хватило памяти видеокарты. Закройте программы, которые её используют, или выберите в "
+      + "«Настройки → Распознавание» устройство «Процессор» и повторите.";
+  if (/движок расшифровки не установлен|no module named/.test(e))
+    return "Движок расшифровки не установлен или повреждён: установите его заново в «Настройки → Движок и модели».";
+  if (/no space left|недостаточно места|errno 28/.test(e))
+    return "На диске не хватает места: освободите несколько гигабайт и повторите.";
+  if (/huggingface|hf_token|401|403/.test(e))
+    return "Нет доступа к модели Hugging Face: проверьте токен в «Настройки → Движок и модели».";
+  return null;
+}
+
 /** Задачи модели (итоги, вопросы) над папкой записи — в порядке постановки. */
 export function modelJobsOf(folder: string, jobs: Job[], kind: "summary" | "ask"): Job[] {
   return jobs.filter((j) => j.kind === kind && norm(j.folder) === norm(folder));

@@ -137,7 +137,7 @@ test("окно: места группы — до пяти, с окружение
   expect(items).toHaveLength(6); // пять мест и «и ещё 7»
   expect(items[0]).toHaveTextContent("до апи после");
   expect(items[5]).toHaveTextContent("и ещё 7");
-  await userEvent.click(within(items[1]!).getByRole("button", { name: /▶/ }));
+  await userEvent.click(within(items[1]!).getByRole("button", { name: /^(Слушать|Прослушать) с / }));
   expect(props.onPlay).toHaveBeenCalledWith(10.7, 12);
   await userEvent.click(screen.getByRole("button", { name: "Скрыть места: апи" }));
   expect(screen.queryByRole("list", { name: "Места: апи" })).toBeNull();

@@ -7,10 +7,12 @@
  * без учёта регистра, поэтому и здесь сравнение такое же.
  */
 
+import { X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import type { Processes } from "../../lib/api";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { Icon } from "../../ui/Icon";
 
 export type CallProgram = { id: string; title: string; exes: string[]; messenger?: boolean };
 
@@ -217,7 +219,7 @@ export function CallPrograms({ value, processes, loadProcesses, onChange }: {
           {custom.map((name) => (
             <li key={name} className="callchip">
               <span>{name}</span>
-              <button type="button" className="callchip__remove" aria-label={`Убрать ${name}`} onClick={() => remove(name)}>×</button>
+              <button type="button" className="callchip__remove" aria-label={`Убрать ${name}`} onClick={() => remove(name)}><Icon as={X} size="sm" /></button>
             </li>
           ))}
         </ul>

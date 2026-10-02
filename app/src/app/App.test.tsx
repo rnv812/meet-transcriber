@@ -194,7 +194,7 @@ test("офлайн: в списке и в карточке — «Служба з
   expect(list).toHaveTextContent(OFFLINE);
   expect(list).not.toHaveTextContent("Старая");
   expect(detail).toHaveTextContent(OFFLINE);
-  expect(detail).toHaveTextContent("Приложение перезапускает его — подождите несколько секунд.");
+  expect(detail).toHaveTextContent("Приложение перезапускает её — подождите несколько секунд.");
 });
 
 test.each(["Голоса", "Настройки"])("офлайн: в разделе «%s» — то же сообщение", async (name) => {

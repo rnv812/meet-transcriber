@@ -31,3 +31,9 @@ test("a CSS block class is declared in one file only", () => {
   const clashes = [...owners].filter(([, files]) => files.size > 1).map(([name, files]) => `${name}: ${[...files].join(", ")}`);
   expect(clashes).toEqual([]);
 });
+
+test("карточка человека в «Голосах» — поверх сетки: сетка не перестраивается при открытии", () => {
+  const css = readFileSync(join(process.cwd(), "src", "features", "voices", "voices.css"), "utf8");
+  const card = /\.voices__card \{([^}]*)\}/.exec(css)?.[1] ?? "";
+  expect(card).toMatch(/position: absolute/);
+});

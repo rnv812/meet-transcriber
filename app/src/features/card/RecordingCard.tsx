@@ -13,13 +13,14 @@ import { JiraLinks, jiraLinker, type JiraLinker } from "../../lib/jira";
 import { DEFAULT_PREFS, markupPrefs, type MarkupPrefs } from "../../lib/markupPrefs";
 import { agentKillRecording, inTauri, openFolder, saveText } from "../../lib/shell";
 import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
-import { activeJobOf, failedRetranscribe, isLiveRecording, statusOf } from "../../lib/status";
+import { activeJobOf, failedRetranscribe, failureAdvice, isLiveRecording, statusOf } from "../../lib/status";
 import type { Category, Job, KbExport, LiveHint, Recording, Segment, Snapshot, Transcript } from "../../lib/types";
 import { KIND_LABEL } from "../../live/liveModel";
 import { Button } from "../../ui/Button";
 import { useConfirm } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
 import { JobProgress } from "../../ui/JobProgress";
+import { Loading } from "../../ui/Loading";
 import { ProgressBar } from "../../ui/ProgressBar";
 import type { AgentInsert } from "./AgentTab";
 import {
@@ -108,6 +109,8 @@ export function RecordingCard({
 
   /** Папка для встреч в базе знаний (`export.meetings_dir`): нет — нет и кнопки «В базу знаний». */
   const [meetingsDir, setMeetingsDir] = useState<string | null>(null);
+  /** Настройки прочитаны: до этого «В базу знаний» — неактивная заготовка на своём месте. */
+  const [settingsRead, setSettingsRead] = useState(false);
   /** Как подписан владелец микрофона (настройка) — «Это я» в меню реплики. */
   const [owner, setOwner] = useState("Вы");
   /** Что из разметки встречи показывать («Расшифровка: подсветка и разметка», «Анализ встречи»). */
@@ -139,7 +142,7 @@ export function RecordingCard({
       if (typeof name === "string" && name.trim()) setOwner(name.trim());
       setPrefs(markupPrefs(s));
       setJira(jiraLinker(s));
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => { if (live) setSettingsRead(true); });
     return () => { live = false; };
   }, [endpoint]);
 
@@ -332,7 +335,7 @@ export function RecordingCard({
 
   if (!rec) {
     if (missing) return <EmptyState title="Запись не найдена" hint="Возможно, её удалили. Выберите другую в списке." />;
-    return error ? <div className="card__error" role="alert">{error}</div> : <EmptyState title="Загрузка…" />;
+    return error ? <div className="card__error" role="alert">{error}</div> : <Loading label="Загружаю запись…" />;
   }
 
   const status = statusOf(rec, jobs, snapshot);
@@ -461,6 +464,7 @@ export function RecordingCard({
       first = (
         <div className="card__failed">
           <div className="card__error">{status.error || "Расшифровка не удалась"}</div>
+          {failureAdvice(status.error) && <p className="card__advice">{failureAdvice(status.error)}</p>}
           <div className="card__row">
             <Button variant="primary" onClick={doTranscribe} disabled={busy}>Повторить</Button>
             {logsButton}
@@ -485,7 +489,7 @@ export function RecordingCard({
       <CardHeader rec={rec} durationS={rec.duration_s ?? spokenUntil} speakers={speakers} people={people}
         endpoint={endpoint} avatarVersion={avatarVersion} onRename={rename} onNameSpeaker={nameSpeaker}
         onOpenSpeakers={status.kind === "ready" ? () => openSpeakers() : undefined} speakersOpen={panel.open}
-        categories={categories} onCategory={categories ? chooseCategory : undefined}
+        categories={categories} onCategory={chooseCategory}
         onOpenCategories={onOpenSettings ? () => onOpenSettings("categories") : undefined} />
       <CardActions
         canExport={status.kind === "ready"}
@@ -493,6 +497,7 @@ export function RecordingCard({
         busy={busy}
         onExport={doExport}
         onKbExport={meetingsDir && status.kind === "ready" ? doKbExport : undefined}
+        kbPending={!settingsRead && status.kind === "ready"}
         onOpenFolder={() => void openFolder(rec.path)}
         onRetranscribe={doTranscribe}
         onRediarize={status.kind === "ready" && hasAudio ? () => setRediarizeOpen(true) : undefined}
