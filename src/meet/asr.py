@@ -1,4 +1,5 @@
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -343,7 +344,8 @@ def hub_reachable(timeout: float = HUB_TIMEOUT_S) -> bool:
     import urllib.request
 
     try:
-        request = urllib.request.Request(HUB_URL, method="HEAD")
+        # Зеркало Hugging Face (HF_ENDPOINT) — его и проверяем: туда и пойдёт загрузка.
+        request = urllib.request.Request(os.environ.get("HF_ENDPOINT") or HUB_URL, method="HEAD")
         with urllib.request.urlopen(request, timeout=timeout):
             return True
     except Exception as e:

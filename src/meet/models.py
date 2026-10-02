@@ -354,9 +354,11 @@ def _gigaam_present(model_id: str) -> bool:
 
 
 def _gigaam_install_error() -> str | None:
+    """Ошибка необязательного шага установки GigaAM — только пока GigaAM нет:
+    установили потом (движок из Python, вручную) — старая строка не нужна."""
     from meet import engine
 
-    return engine.gigaam_install_error()
+    return None if _gigaam_available() else engine.gigaam_install_error()
 
 
 def _gigaam_available() -> bool:

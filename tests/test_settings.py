@@ -858,3 +858,30 @@ def test_new_install_switch_does_not_invent_an_answer(tmp_path):
     f = tmp_path / "config.json"
     got = settings.patch({"analysis": {"auto": False}}, f)
     assert got.analysis.auto is False and got.analysis.consent == ""
+
+
+def test_concurrent_patches_do_not_lose_each_other(tmp_path, monkeypatch):
+    """Чтение-правка-запись patch() — под одним замком: правило замены из
+    «Исправить…» и правка из окна настроек, пришедшие одновременно, обе
+    остаются."""
+    import threading
+    import time
+
+    f = tmp_path / "config.json"
+    settings.save(settings.Settings(), f)
+    real = settings.load
+
+    def slow(path=None):
+        cfg = real(path)
+        time.sleep(0.05)  # окно гонки: оба прочитали, потом оба пишут
+        return cfg
+
+    monkeypatch.setattr(settings, "load", slow)
+    threads = [threading.Thread(target=settings.patch, args=(update, f)) for update in (
+        {"hooks": {"post_record": True}}, {"analysis": {"types": False}})]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    got = real(f)
+    assert got.hooks.post_record is True and got.analysis.types is False

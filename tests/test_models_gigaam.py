@@ -100,6 +100,16 @@ def test_state_marks_downloaded_selected_and_removable(data):
     assert state["gigaam_install_error"] is None
 
 
+def test_stale_install_error_is_hidden_once_gigaam_is_installed(data, monkeypatch):
+    from meet import engine
+
+    monkeypatch.setattr(engine, "gigaam_install_error", lambda: "GigaAM не установилась: сбой — используется Whisper")
+    monkeypatch.setattr(gigaam_asr, "installed", lambda: False)
+    assert models.state()["gigaam_install_error"].startswith("GigaAM не установилась")
+    monkeypatch.setattr(gigaam_asr, "installed", lambda: True)
+    assert models.state()["gigaam_install_error"] is None
+
+
 def test_broken_download_is_removable_but_not_downloaded(data):
     root = gigaam_asr.cache_dir()
     root.mkdir(parents=True)
