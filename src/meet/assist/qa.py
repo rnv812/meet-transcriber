@@ -25,6 +25,8 @@ import time
 import uuid
 from pathlib import Path
 
+from meet.assist import prompts
+
 # Сколько последних пар «вопрос-ответ» класть в промпт провайдеру без сессий.
 HISTORY_PAIRS = 6
 HISTORY_KEEP = 50          # сколько вопросов помнить для окна
@@ -236,13 +238,14 @@ class QAService:
         return reply.text
 
     def _build(self, label: str, quick: str | None, since_t: float | None) -> tuple[str, int]:
-        parts = ["Текущая сводка встречи:", self._live.render_markdown()]
+        parts = ["Текущая сводка встречи:", prompts.unfence(self._live.render_markdown())]
         if self._session_id is None:
             done = [it for it in self._items if not it["pending"] and it["a"]]
             if done:
                 parts += ["", "Предыдущие вопросы и ответы (память диалога):"]
                 for it in done[-HISTORY_PAIRS:]:
-                    parts += [f"Ранее спросили: {it['q']}", f"Ты ответил: {it['a']}"]
+                    parts += [f"Ранее спросили: {prompts.safe_line(it['q'])}",
+                              f"Ты ответил: {prompts.unfence(it['a'])}"]
         entries, size = self._bus.entries_since(0)
         lines, _ = self._bus.since(0)
         lines = lines[:size]
@@ -269,6 +272,7 @@ class QAService:
         if picked:
             if cut:
                 title += " (начало опущено)"
-            parts += ["", title, "\n".join(picked)]
+            # Реплики — в той же ограде, что у подсказок: речь не «задаёт вопрос» за пользователя.
+            parts += ["", *prompts._fenced(title, picked), prompts.FENCE_NOTE]
         parts += ["", f"Вопрос: {ask}"]
         return "\n".join(parts), size
