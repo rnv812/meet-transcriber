@@ -7,8 +7,11 @@
 
 SSE шлёт `event: state` (`state.view()`: сводка, подсказки, статус) при
 каждом их изменении, `event: qa` (`{"qa": [...]}` — история вопросов) — только
-когда меняется она, и `event: line` с `{"t", "speaker", "text"}` на каждую
-новую строку ленты. Хвост ленты строками (`transcript` в `state`) — только по
+когда меняется она, `event: qa_partial` (`{"id", "a"}` — ответ, который ещё
+пишется) и `event: line` с `{"t", "speaker", "text"}` на каждую новую строку
+ленты. Поток не опрашивает состояние по таймеру: он ждёт сигнала
+`state.changes` (`Notifier`) и шлёт изменения сразу; в тишине — комментарий
+`: keepalive` раз в KEEPALIVE_S. Хвост ленты строками (`transcript` в `state`) — только по
 `/events?transcript=1`, для страницы в браузере: панели он не нужен;
 `id:` строки — её номер в шине, поэтому переподключившийся EventSource
 (заголовок Last-Event-ID) получает только пропущенные строки.
@@ -81,6 +84,23 @@ document.getElementById('q').addEventListener('keydown',
 
 TRANSCRIPT_TAIL = 50
 HINT_ACTIONS = ("pin", "unpin", "dismiss")
+KEEPALIVE_S = 15.0
+# Состояние без сигнала изменений (старый утиный объект) — опрос раз в секунду.
+POLL_S = 1.0
+
+
+def _signal(state):
+    """Сигнал изменений состояния: `state.changes`, иначе `state.bus.changed`."""
+    return getattr(state, "changes", None) or getattr(state.bus, "changed", None)
+
+
+KEEPALIVE = b": keepalive\n\n"
+
+
+def _event(name: str, data, event_id: int | None = None) -> bytes:
+    """Одно событие SSE: имя, необязательный id, данные JSON одной строкой."""
+    head = f"event: {name}\n" + (f"id: {event_id}\n" if event_id is not None else "")
+    return f"{head}data: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
 
 
 def _stop_requested(state) -> bool:
@@ -125,13 +145,17 @@ def build_app(state) -> web.Application:
         await resp.prepare(request)
         sent: tuple | None = None
         sent_qa = None
+        sent_partial = None
         with_transcript = request.query.get("transcript") == "1"
         cursor = _first_line_index(request, state.bus.size())
+        signal = _signal(state)
         # Клиент закрыл вкладку → ConnectionResetError (в т.ч. наследник
         # aiohttp.ClientConnectionResetError). Тихо завершаем хендлер без
         # traceback'а. CancelledError не глотаем — это штатная отмена задачи.
         try:
             while not _stop_requested(state):
+                seen = signal.seq if signal is not None else 0
+                wrote = False
                 snapshot = state.signature()
                 if with_transcript:
                     snapshot = (*snapshot, state.bus.size())
@@ -141,22 +165,31 @@ def build_app(state) -> web.Application:
                         lines, _ = state.bus.since(
                             max(0, state.bus.size() - TRANSCRIPT_TAIL))
                         view = {**view, "transcript": lines}
-                    payload = json.dumps(view, ensure_ascii=False)
-                    await resp.write(
-                        f"event: state\ndata: {payload}\n\n".encode())
+                    await resp.write(_event("state", view))
                     sent = snapshot
+                    wrote = True
                 qa_version = state.qa_version()
                 if qa_version != sent_qa:
-                    payload = json.dumps({"qa": state.qa_items()}, ensure_ascii=False)
-                    await resp.write(f"event: qa\ndata: {payload}\n\n".encode())
+                    await resp.write(_event("qa", {"qa": state.qa_items()}))
                     sent_qa = qa_version
+                    wrote = True
+                partial_version = getattr(state, "qa_partial_version", lambda: 0)()
+                if partial_version != sent_partial:
+                    if sent_partial is not None:
+                        for part in state.qa_partials():
+                            await resp.write(_event("qa_partial", part))
+                            wrote = True
+                    sent_partial = partial_version
                 entries, size = state.bus.entries_since(cursor)
                 for i, entry in enumerate(entries, start=cursor):
-                    data = json.dumps(entry, ensure_ascii=False)
-                    await resp.write(
-                        f"event: line\nid: {i}\ndata: {data}\n\n".encode())
+                    await resp.write(_event("line", entry, event_id=i))
+                    wrote = True
                 cursor = size
-                await asyncio.sleep(1.0)
+                if signal is None:
+                    await asyncio.sleep(POLL_S)
+                    continue
+                if await signal.wait(seen, KEEPALIVE_S) == seen and not wrote:
+                    await resp.write(KEEPALIVE)
         except ConnectionResetError:
             pass
         return resp
