@@ -57,10 +57,13 @@ test("кнопка воспроизведения: play, затем «Пауза
   expect(screen.getByRole("button", { name: "Воспроизвести" })).toBeInTheDocument();
 });
 
-test("полоса перемотки ставит позицию", () => {
+test("полоса перемотки ставит позицию (щелчок по полосе)", () => {
   const { audio } = setup();
   loaded(audio, 300);
-  fireEvent.change(screen.getByRole("slider", { name: "Позиция" }), { target: { value: "120" } });
+  const slider = screen.getByRole("slider", { name: "Позиция" });
+  slider.getBoundingClientRect = () => ({ left: 0, right: 600, width: 600, top: 0, bottom: 20, height: 20 }) as DOMRect;
+  fireEvent.pointerDown(slider, { clientX: 240, button: 0, pointerId: 1 });
+  fireEvent.pointerUp(slider, { clientX: 240, pointerId: 1 });
   expect(audio.currentTime).toBe(120);
 });
 
