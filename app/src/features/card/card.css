@@ -239,6 +239,7 @@ mark.hit--current, .turn__text.hit--current mark.hit { background: var(--accent)
   list-style: none; border-radius: var(--r-sm); background: var(--surface); line-height: 1.45; overflow-wrap: anywhere;
 }
 .tfix__actions { display: flex; justify-content: flex-end; gap: 6px; padding-top: 2px; }
-/* Полосы итогов над репликами (правка спикеров, «Исправить…») прилипают к верху вместе. */
-.tbars { position: sticky; top: 0; z-index: 5; }
+/* Полосы итогов над репликами (правка спикеров, «Исправить…») прилипают вместе под
+   полем поиска (оно прилипает с top: -8px и высотой 8 + 28 + 8 px). */
+.tbars { position: sticky; top: 36px; z-index: 3; }
 .tbars .tsel { position: static; }

@@ -507,3 +507,51 @@ def test_merged_folder_gets_break_marks_in_markdown_and_json(monkeypatch, tmp_pa
     md = out.read_text(encoding="utf-8")
     assert "*— перерыв 15 мин —*" in md
     assert "Спикер ?" not in md
+
+
+def test_replacement_rules_fix_both_tracks_before_speaker_split(monkeypatch, tmp_path):
+    """Правила замены из настроек (asr.replacements) — сразу после
+    распознавания: и дорожка собеседников (до раздачи спикерам), и микрофон."""
+    import json
+
+    import meet.transcribe as tr
+    from meet.asr import Segment as Seg
+    from meet.asr import Word
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "state"))
+    (tmp_path / "state").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "state" / "config.json").write_text(json.dumps({"asr": {"replacements": [
+        {"from": "кубер нетис", "to": "kubernetes"}]}}), encoding="utf-8")
+    monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
+    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h: [Seg(
+        0.0, 1.0, "Кубер нетис готов.",
+        words=[Word(0.0, 0.3, " Кубер"), Word(0.3, 0.6, " нетис"), Word(0.6, 1.0, " готов.")])])
+    seen = {}
+
+    def fake_split(segments, turns, overlaps=None):
+        seen["text"] = [s.text for s in segments]
+        seen["words"] = [w.text for w in segments[0].words]
+        return segments
+
+    monkeypatch.setattr(tr, "diarize_wav", lambda p, num_speakers=None, exclusive=False: Diarization(turns=[]))
+    monkeypatch.setattr(tr, "split_by_speaker", fake_split)
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
+    (tmp_path / "sys.opus").write_bytes(b"x")
+    (tmp_path / "mic.opus").write_bytes(b"x")
+    segments, _, _ = tr._transcribe_two_track(tmp_path, None, None, align=False)
+    assert seen == {"text": ["Kubernetes готов."], "words": [" Kubernetes", " готов."]}
+    assert [s.text for s in segments] == ["Kubernetes готов.", "Kubernetes готов."]
+
+
+def test_replacement_rules_failure_does_not_stop_transcription(monkeypatch, capsys):
+    import meet.transcribe as tr
+    from meet import textfix
+
+    def boom(segments, rules):
+        raise ValueError("сломалось")
+
+    monkeypatch.setattr(textfix, "apply_rules", boom)
+    monkeypatch.setattr(tr, "_replacement_rules", lambda: [{"from": "а", "to": "б"}])
+    segs = [Segment(0.0, 1.0, "а")]
+    assert tr._fix_terms(segs) is segs
+    assert "правила замены" in capsys.readouterr().out

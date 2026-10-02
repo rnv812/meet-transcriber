@@ -305,10 +305,14 @@ export type TextPreview = { count: number; samples: TextSample[]; here: { start:
 export type TextFixRequest = {
   find: string; replace: string; scope: "one" | "all"; segment: number; offset: number; count: number;
   add_hotword: boolean;
+  /** Исправлять так же в будущих расшифровках: правило в `asr.replacements`. */
+  add_rule: boolean;
 };
 /** Термин распознавания после «Исправить…»: добавлен ли (или уже был), не длиннее ли список лимита. */
 export type HotwordAdded = { term: string; added: boolean; over_budget?: boolean; error?: string };
-export type TextFixResult = SpeakersView & { changed: number; hotword?: HotwordAdded };
+/** Правило замены для будущих расшифровок (`asr.replacements`). */
+export type ReplacementRule = { from: string; to: string; error?: string };
+export type TextFixResult = SpeakersView & { changed: number; hotword?: HotwordAdded; rule?: ReplacementRule | null };
 /** Реплики — другому спикеру (`POST …/speakers/relabel`). */
 export type RelabelRequest = { idx: number[]; labels: string[]; count: number; to: string | null };
 /** Правка, как её шлёт окно: `to` — имя (rename) или подпись другого спикера (merge). */

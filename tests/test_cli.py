@@ -854,3 +854,13 @@ def test_fix_not_found_is_exit_1(env, capsys):
     assert _main(["fix", RID, "Docker", "Докер"]) == 1
     assert "нет «Docker»" in capsys.readouterr().err
     assert _texts(folder) == ["Поднимем кубер нетис.", "Кубер нетис готов."]
+
+
+def test_fix_rule_for_future_transcriptions(env, capsys):
+    from meet import settings
+
+    folder = _fix_meeting(env)
+    assert _main(["fix", RID, "кубер нетис", "Kubernetes", "--all", "--rule"]) == 0
+    assert "Правило для будущих расшифровок: кубер нетис → Kubernetes" in capsys.readouterr().out
+    assert list(settings.load().asr.replacements) == [{"from": "кубер нетис", "to": "Kubernetes"}]
+    assert _texts(folder) == ["Поднимем Kubernetes.", "Kubernetes готов."]

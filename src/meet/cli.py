@@ -185,6 +185,8 @@ def _add_library_parsers(sub) -> None:
                       help="заменить во всей встрече (без флага — только первое совпадение)")
     p_fx.add_argument("--hotword", action="store_true",
                       help="добавить исправление в термины распознавания")
+    p_fx.add_argument("--rule", action="store_true",
+                      help="исправлять так же в будущих расшифровках (правило замены)")
 
     p_mr = sub.add_parser("merge", parents=[as_json],
                           help="объединить записи одной встречи в одну и расшифровать")

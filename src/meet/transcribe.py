@@ -97,6 +97,35 @@ def _maybe_align(segments: list[Segment], wav: Path, enabled: bool) -> list[Segm
         return segments
 
 
+def _replacement_rules() -> list[dict]:
+    from meet import settings
+
+    try:
+        return list(settings.load().asr.replacements)
+    except Exception:
+        return []
+
+
+def _fix_terms(segments: list[Segment]) -> list[Segment]:
+    """Правила замены из настроек (`asr.replacements`, «Исправлять так же в
+    будущих встречах») — сразу после распознавания и выравнивания: слова
+    исправляются вместе с текстом, раздача реплик спикерам их уже видит.
+    Сбой правил не роняет расшифровку."""
+    rules = _replacement_rules()
+    if not rules:
+        return segments
+    try:
+        from meet import textfix
+
+        n = textfix.apply_rules(segments, rules)
+    except Exception as e:
+        print(f"правила замены пропущены (ошибка: {e})")
+        return segments
+    if n:
+        print(f"правила замены: исправлено {n}")
+    return segments
+
+
 def voice_threshold(folder: Path | None = None) -> float:
     """Порог узнавания голоса: свой у встречи (панель «Спикеры», meta.json
     `voice_threshold`), иначе общий из настроек."""
@@ -311,7 +340,7 @@ def _transcribe_single(
         bus.progress("asr", done=1, total=1)
         if align:
             bus.progress("align")
-        segments = _maybe_align(segments, wav, align)
+        segments = _fix_terms(_maybe_align(segments, wav, align))
         bus.progress("diarize")
         diar = diarize_wav(wav, num_speakers=speakers, exclusive=not overlap)
         if diar.skipped:
@@ -351,7 +380,7 @@ def _transcribe_two_track(
         # forced alignment только для sys: mic — один спикер («Вы»), стыки не важны
         if align:
             bus.progress("align", note="sys")
-        sys_segs = _maybe_align(sys_segs, sys_wav, align)
+        sys_segs = _fix_terms(_maybe_align(sys_segs, sys_wav, align))
         bus.progress("diarize", note="sys")
         diar = diarize_wav(sys_wav, num_speakers=speakers, exclusive=not overlap)
         if diar.skipped:
@@ -366,7 +395,7 @@ def _transcribe_two_track(
                 sys_segs, _apply_names(diar.turns, name_map), diar.overlaps
             )
         bus.progress("asr", done=1, total=2, note="mic")
-        mic_segs = transcribe_wav(mic_wav, hotwords)
+        mic_segs = _fix_terms(transcribe_wav(mic_wav, hotwords))
         bus.progress("asr", done=2, total=2, note="mic")
         # Микрофонная дорожка — всегда владелец машины; как его подписывать,
         # решает настройка (по умолчанию «Вы»).

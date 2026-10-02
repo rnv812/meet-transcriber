@@ -161,3 +161,21 @@
 .callapps__option:hover, .callapps__option--active { background: var(--surface-hover); }
 .callapps__note { margin: 0; font-size: 12px; }
 .callapps__strict { margin-top: 6px; }
+
+/* Исправления для будущих расшифровок (ReplacementsEditor). */
+.repl { padding: 12px 0; display: flex; flex-direction: column; gap: 6px; }
+.repl__list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.repl__item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 8px;
+  border-radius: var(--r-sm); background: var(--surface-2);
+}
+.repl__rule { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.repl__rule b { font-weight: 600; color: var(--text); }
+.repl__remove { flex: none; border: 0; background: none; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
+.repl__remove:hover { color: var(--red); text-decoration: underline; }
+.repl__empty { font-size: 12px; line-height: 1.45; }
+.repl__add { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.repl__add input[type="text"] {
+  flex: 1 1 160px; min-width: 0; padding: 5px 8px; font: inherit;
+  background: var(--surface); color: var(--text); border: 1px solid var(--line-2); border-radius: var(--r-md);
+}

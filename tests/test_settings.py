@@ -710,3 +710,17 @@ def test_assist_live_hints_garbage_falls_back():
     assert settings.Settings.from_raw({"assist": {"max_hints": 99}}).assist.max_hints == 12
     assert settings.Settings.from_raw({"assist": {"max_hints": 1}}).assist.max_hints == 3
     assert settings.Settings.from_raw({"assist": {"max_hints": True}}).assist.max_hints == 0
+
+
+def test_asr_replacements_rules_are_cleaned_and_patched(tmp_path):
+    cfg = settings.Settings.from_raw({"version": settings.SCHEMA_VERSION})
+    assert cfg.asr.replacements == () and cfg.to_raw()["asr"]["replacements"] == []
+    got = settings.Settings.from_raw({"asr": {"replacements": [
+        {"from": " кубер  нетис ", "to": "Kubernetes"}, {"from": "", "to": "x"}, "мусор",
+        {"from": "Кубер нетис", "to": "K8s"}]}}).asr.replacements
+    assert got == ({"from": "Кубер нетис", "to": "K8s"},)
+    assert settings.Settings.from_raw({"asr": {"replacements": "мусор"}}).asr.replacements == ()
+    f = tmp_path / "config.json"
+    rules = [{"from": "дев опс", "to": "DevOps"}]
+    assert list(settings.patch({"asr": {"replacements": rules}}, f).asr.replacements) == rules
+    assert settings.load(f).to_raw()["asr"]["replacements"] == rules
