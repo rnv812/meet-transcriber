@@ -42,6 +42,10 @@ test("по умолчанию выключено; включение — тол�
   await userEvent.click(sw);
   const dialog = screen.getByRole("alertdialog", { name: "Включить профили людей" });
   expect(within(dialog).getByText(PRIVACY_NOTE)).toBeInTheDocument();
+  // честно: гарантий нет, есть инструкция, фильтр и «Скрыть»
+  expect(dialog).toHaveTextContent("ИИ получает инструкцию не делать таких выводов, а результат дополнительно "
+    + "фильтруется; если что-то лишнее всё же появилось — скройте это утверждение");
+  expect(dialog).not.toHaveTextContent(/нет диагнозов|не может появиться/);
   // «Отмена» — ничего не меняется
   await userEvent.click(within(dialog).getByRole("button", { name: "Отмена" }));
   expect(screen.queryByRole("alertdialog", { name: "Включить профили людей" })).toBeNull();

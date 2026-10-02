@@ -76,23 +76,37 @@ function pcmPart(profile: Profile): string {
 }
 
 /**
+ * Есть ли у «Коротко» опора: свои ссылки на реплики или хоть одно утверждение
+ * со ссылками. Без опоры «Коротко» не показывается и агенту не уходит.
+ */
+export function grounded(profile: Profile): boolean {
+  if ((profile.summary_refs ?? []).length) return true;
+  return SECTION_ORDER.some((k) => (profile.sections[k] ?? []).some((s) => s.refs.length > 0));
+}
+
+const summaryPart = (profile: Profile) =>
+  (profile.summary && grounded(profile) ? `Коротко: ${sentence(profile.summary)}` : "");
+
+/**
  * ✦ «Подготовиться к разговору»: профиль коротко, главные советы и заготовка
  * просьбы; кончается «Тема разговора:» — человек дописывает тему сам.
+ * `shared` — текст уходит в общую с человеком встречу (иначе — в последнюю,
+ * и просьба не ссылается на «материалы этой встречи»).
  */
-export function prepareText(name: string, profile: Profile, withPcm = true): string {
+export function prepareText(name: string, profile: Profile, withPcm = true, shared = true): string {
   const who = clip(cleanRefText(name), 60);
   return finish(
     `Помоги подготовиться к разговору с человеком «${who}». Его профиль общения (гипотеза по репликам во встречах, `
       + "не оценка личности):",
     [
-      profile.summary ? `Коротко: ${sentence(profile.summary)}` : "",
+      summaryPart(profile),
       part("Как лучше строить разговор", items(profile, "how_to_talk")),
       part("Что для человека важно", items(profile, "values")),
       part("Чего избегать", items(profile, "avoid")),
       withPcm ? pcmPart(profile) : "",
     ],
-    "Предложи план разговора: как начать, как аргументировать, как попросить о решении и как дать обратную связь;"
-      + " учитывай материалы этой встречи. Тема разговора:",
+    "Предложи план разговора: как начать, как аргументировать, как попросить о решении и как дать обратную связь"
+      + (shared ? "; учитывай материалы этой встречи." : ".") + " Тема разговора:",
   );
 }
 
@@ -101,13 +115,13 @@ export function discussText(name: string, profile: Profile, withPcm = true): str
   const who = clip(cleanRefText(name), 60);
   const sections = SECTION_ORDER.flatMap((key) => {
     const list = (profile.sections[key] ?? []).map((s) => {
-      const refs = s.refs.slice(0, 2).map((r) => refLabel(profile, r, 24)).join("; ");
+      const refs = s.refs.filter((r) => !r.stale).slice(0, 2).map((r) => refLabel(profile, r, 24)).join("; ");
       return `${sentence(s.text)}${refs ? ` [${refs}]` : ""}`;
     });
     return list.length ? [`${SECTION_TITLES[key]}: ${list.join(" ")}`] : [];
   });
   return finish(
     `Про профиль общения человека «${who}» (по ${profile.meetings} встречам; гипотеза по репликам, не оценка личности):`,
-    [profile.summary ? `Коротко: ${sentence(profile.summary)}` : "", ...sections, withPcm ? pcmPart(profile) : ""],
+    [summaryPart(profile), ...sections, withPcm ? pcmPart(profile) : ""],
   );
 }

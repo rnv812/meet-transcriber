@@ -28,7 +28,8 @@ test("управляющие символы и переводы строк вы�
   const noisy: Profile = {
     ...base,
     summary: "Строка\r\nвторая \u001b[201~ конец‮",
-    sections: { how_to_talk: Array.from({ length: 50 }, (_, k) => ({ text: `Совет ${k} `.repeat(20), refs: [] })) },
+    sections: { how_to_talk: Array.from({ length: 50 }, (_, k) => ({
+      text: `Совет ${k} `.repeat(20), refs: [{ m: "a", i: k, t: k }] })) },
   };
   const text = prepareText("Ве\nра\u0007", noisy);
   expect(text).not.toMatch(/[\u0000-\u001f\u007f-\u009f‪-‮]/);
@@ -37,4 +38,19 @@ test("управляющие символы и переводы строк вы�
   expect(Array.from(text).length).toBeLessThanOrEqual(PROFILE_TEXT_MAX);
   expect(text.endsWith("Тема разговора:")).toBe(true);
   expect(Array.from(discussText("Вера", noisy)).length).toBeLessThanOrEqual(PROFILE_TEXT_MAX);
+});
+
+test("«Коротко» без опоры на реплики агенту не уходит; без общей встречи — без «материалов этой встречи»", () => {
+  const ungrounded: Profile = { ...base, sections: { how_to_talk: [{ text: "Совет", refs: [] }] } };
+  expect(prepareText("Вера", ungrounded)).not.toContain("Коротко");
+  expect(discussText("Вера", ungrounded)).not.toContain("Коротко");
+  const text = prepareText("Вера", base, true, false);
+  expect(text).not.toContain("материалы этой встречи");
+  expect(text.endsWith("обратную связь. Тема разговора:")).toBe(true);
+});
+
+test("ссылки «реплика изменилась» в текст для агента не попадают", () => {
+  const p: Profile = { ...base, sections: { style: [{ text: "Коротко", refs: [
+    { m: "a", i: 1, t: 61, stale: true }, { m: "a", i: 2, t: 70 }] }] } };
+  expect(discussText("Вера", p)).toContain("Стиль общения: Коротко. [Очень длинное название… · 01:10]");
 });

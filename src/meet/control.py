@@ -85,6 +85,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     improve_dismiss(id)                   подсказку после GigaAM больше не показывать
     profile(name) / make_profile(name)    профиль человека и задача «Обновить профиль»
     delete_profile(name), profile_notes   удалить профиль; «Мои заметки»
+    hide_statement(name, body)            «Скрыть» утверждение профиля (и вернуть)
     profiles_info() / delete_profiles()   сколько профилей; «Удалить все профили»
     kb_export(id) -> dict                 выгрузить встречу в базу знаний (400 без папки)
     export_preview(params) -> dict        как назовётся папка встречи по шаблону
@@ -945,6 +946,8 @@ _PATTERNS = (
      lambda h, p, n: _server_of(h).state.make_profile(unquote(n))),
     ("DELETE", re.compile(r"^/voices/([^/]+)/profile$"),
      lambda h, p, n: _server_of(h).state.delete_profile(unquote(n))),
+    ("POST", re.compile(r"^/voices/([^/]+)/profile/hide$"),
+     lambda h, p, n: _server_of(h).state.hide_statement(unquote(n), h._body())),
     ("PUT", re.compile(r"^/voices/([^/]+)/profile/notes$"),
      lambda h, p, n: _server_of(h).state.profile_notes(unquote(n), h._body())),
     ("DELETE", re.compile(r"^/recordings/([^/]+)$"),

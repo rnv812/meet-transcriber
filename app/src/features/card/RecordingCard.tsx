@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { Sparkles } from "lucide-react";
 import { agentPrompt, type AgentRequest } from "../../lib/agentRef";
 import {
-  buildView, INSIGHT_LABEL, segmentTurns, turnOfSegment, usableAnalysis, type InsightView,
+  buildView, INSIGHT_LABEL, segmentTurns, usableAnalysis, type InsightView,
 } from "../../lib/analysisView";
 import {
   ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
@@ -58,7 +58,9 @@ const CHAPTER_REFS = 6;
  * сегмента транскрипта — или вставить текст во вкладку «Агент». `n` растёт с
  * каждой просьбой; принятую карточка отдаёт обратно (`onRequestTaken`).
  */
-export type CardRequest = { n: number; id: string; segment?: number; agent?: string };
+export type CardRequest = { n: number; id: string; segment?: number; t?: number; speaker?: string; agent?: string };
+/** Реплика из профиля «та же», если её начало сдвинулось не больше чем на столько (с). */
+const REF_SHIFT_S = 5;
 
 export function RecordingCard({
   id, endpoint, jobs = NO_JOBS, snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
@@ -118,6 +120,8 @@ export function RecordingCard({
   const [reveal, setReveal] = useState<RevealRequest | null>(null);
   /** Растёт, когда реплику просят показать снаружи: вкладка — «Расшифровка». */
   const [showTick, setShowTick] = useState(0);
+  /** Реплика из профиля не нашлась (расшифровку правили) — тихая строка. */
+  const [refNote, setRefNote] = useState<string | null>(null);
   const current = useRef({ endpoint, id });
   current.current = { endpoint, id };
 
@@ -301,15 +305,26 @@ export function RecordingCard({
       onRequestTaken?.();
       return;
     }
-    if (typeof request.segment !== "number" || !transcriptReady) return;
+    if (typeof request.segment !== "number" || !rec) return;
+    // Одна попытка: расшифровка не готова — просьба отбрасывается, а не
+    // срабатывает потом, когда о ней уже забыли.
     handledRequest.current = request.n;
-    const turn = turnOfSegment(segmentTurns(turns, segmentCount), request.segment);
+    onRequestTaken?.();
+    if (!transcriptReady) return;
+    // Только та самая реплика: номер есть, начало и спикер совпадают. Иначе —
+    // никуда (не «ближайшая» и не последняя), с пояснением.
+    const seg = segments?.[request.segment];
+    const same = !!seg && (request.t === undefined || Math.abs(seg.start - request.t) <= REF_SHIFT_S)
+      && (request.speaker === undefined || seg.speaker === request.speaker);
+    const turn = same ? segmentTurns(turns, segmentCount)[request.segment] ?? -1 : -1;
     if (turn >= 0) {
+      setRefNote(null);
       setReveal((r) => ({ turn, n: (r?.n ?? 0) + 1 }));
       setShowTick((n) => n + 1);
+    } else {
+      setRefNote("Реплика из профиля изменилась после правки расшифровки — встреча открыта целиком");
     }
-    onRequestTaken?.();
-  }, [request, transcriptReady, turns, segmentCount, onRequestTaken]);
+  }, [request, rec, transcriptReady, segments, turns, segmentCount, onRequestTaken]);
 
   if (!rec) {
     if (missing) return <EmptyState title="Запись не найдена" hint="Возможно, её удалили. Выберите другую в списке." />;
@@ -478,6 +493,12 @@ export function RecordingCard({
       {titleSuggest.suggest && cardEl.current && (
         <TitleSuggestPopover anchor={cardEl.current.querySelector<HTMLElement>(".card__title") ?? cardEl.current}
           suggest={titleSuggest.suggest} onApply={(t) => void titleSuggest.apply(t)} onClose={titleSuggest.close} />
+      )}
+      {refNote && (
+        <div className="card__banner" role="status">
+          <span>{refNote}</span>
+          <Button onClick={() => setRefNote(null)}>Понятно</Button>
+        </div>
       )}
       {kbDone && (
         <div className="card__banner card__banner--ok" role="status" aria-label="Выгрузка в базу знаний">

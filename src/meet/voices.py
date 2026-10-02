@@ -60,19 +60,22 @@ def _write_samples(f: Path, samples: list[dict]) -> None:
     """Атомарно: оборванная запись не должна оставить человека без голоса.
     Остальные ключи файла (постоянный "id" человека — по нему живёт его
     профиль, meet.profiles) сохраняются."""
-    extra: dict = {}
-    try:
-        data = json.loads(f.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            extra = {k: v for k, v in data.items() if k != "samples"}
-    except (OSError, ValueError):
-        pass
-    tmp = f.with_name(f".{f.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        tmp.write_text(json.dumps({**extra, "samples": samples}, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, f)
-    finally:
-        tmp.unlink(missing_ok=True)
+    from meet.people import VOICE_FILE_LOCK
+
+    with VOICE_FILE_LOCK:
+        extra: dict = {}
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                extra = {k: v for k, v in data.items() if k != "samples"}
+        except (OSError, ValueError):
+            pass
+        tmp = f.with_name(f".{f.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp.write_text(json.dumps({**extra, "samples": samples}, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, f)
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 def _same_cluster(sample: dict, source: str, label: str | None) -> bool:

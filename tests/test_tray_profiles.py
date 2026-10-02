@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 import meet.llm as llm
-from meet import control, jobs, library, profiles, profiles_control, settings, tray, tray_control
+from meet import control, jobs, library, profile_index, profiles, profiles_control, settings, tray, tray_control
 from meet.llm import detect
 
 DAY = profiles.AUTO_EVERY_S
@@ -47,7 +47,7 @@ def _meeting(tmp_path, rid, name="Вера", n=6, other="Тимур"):
     (folder / "sys.opus").write_bytes(b"x")
     segments = []
     for k in range(n):
-        segments.append({"start": k * 20.0, "end": k * 20 + 5.0, "speaker": other, "text": f"Вопрос {k}?"})
+        segments.append({"start": k * 20.0, "end": k * 20 + 5.0, "speaker": other, "text": f"Какой у нас вопрос {k}?"})
         segments.append({"start": k * 20 + 6.0, "end": k * 20 + 15.0, "speaker": name,
                          "text": f"Сначала сверим сроки, потом решим {k}."})
     library.write_transcript(folder, {"version": 1, "segments": segments})
@@ -86,6 +86,8 @@ def state(app, monkeypatch):
     st._background = lambda fn, name=None: fn()
     _installed(monkeypatch, claude_code=True)
     monkeypatch.setattr(profiles_control, "DROP_PROFILE_WAIT_S", 0.2)
+    monkeypatch.setattr(profile_index, "_registry", {})
+    st._profile_index().refresh()  # индекс реплик уже посчитан (первый проход — отдельный тест)
     try:
         yield st
     finally:
@@ -476,3 +478,59 @@ def test_pcm_flag_hides_the_section_and_explains_missing_data(state, tmp_path):
     _meeting(tmp_path, "2026-09-13_10-00", name="Олег", n=8)
     assert state.profile("Олег")["pcm_note"] == \
         "Недостаточно данных: 8 реплик в 1 встрече — нужно от 15 реплик в 3 встречах"
+
+
+# --- fix round 1 -------------------------------------------------------------------------
+
+
+def test_cold_index_is_built_in_the_background(state, tmp_path, monkeypatch):
+    monkeypatch.setattr(profile_index, "_registry", {})
+    started = []
+    monkeypatch.setattr(profile_index, "warm_in_background", lambda ix, on_done=None: started.append(ix) or True)
+    got = state.profile("Вера")
+    assert got["indexing"] is True and got["stats"] is None and started
+    # задачу можно поставить и до подсчёта: мало ли реплик — проверит сама задача
+    assert state.make_profile("Вера")["kind"] == jobs.PROFILE
+    started[0].refresh()
+    assert state.profile("Вера")["stats"] == {"turns": 18, "meetings": 3}
+
+
+def test_get_resolves_refs_and_flags_changed_turns(state, tmp_path):
+    from meet import profile_index as pix
+
+    pid = _pid(tmp_path)
+    rid = "2026-09-12_10-00"
+    seg = library.read_transcript(tmp_path / "recordings" / rid)["segments"][1]
+    good = {"m": rid, "i": 1, "t": seg["start"], "h": pix.text_hash(seg["text"]), "q": seg["text"]}
+    stale = {**good, "i": 3, "t": 300.0, "h": "0000000000"}
+    gone = {**good, "m": "2026-01-01_10-00"}
+    profiles.write(pid, {"version": 1, "person_id": pid, "updated_at": time.time(), "signature": "x",
+                         "summary": "По делу.", "sections": {
+                             "style": [{"text": "Коротко.", "refs": [good, stale]}],
+                             "values": [{"text": "Из удалённой встречи.", "refs": [gone]}]},
+                         "sources": {rid: {"title": "a"}, "2026-01-01_10-00": {"title": "b"}}})
+    got = state.profile("Вера")["profile"]
+    refs = got["sections"]["style"][0]["refs"]
+    assert "stale" not in refs[0] and refs[1]["stale"] is True
+    assert got["sections"]["values"] == [] and list(got["sources"]) == [rid]
+
+
+def test_hide_endpoint(state, tmp_path):
+    pid = _pid(tmp_path)
+    profiles.write(pid, {"version": 1, "person_id": pid, "updated_at": time.time(), "signature": "x",
+                         "summary": "По делу.", "sections": {"style": [{"text": "Коротко.", "refs": []}]}})
+    assert state.hide_statement("Вера", {"text": "По делу.", "hidden": True}) == {"hidden": 1}
+    got = state.profile("Вера")
+    assert got["profile"]["summary"] == "" and got["hidden"] == 1
+    assert state.hide_statement("Вера", {"all": True, "hidden": False}) == {"hidden": 0}
+    with pytest.raises(control.BadRequest):
+        state.hide_statement("Вера", {"hidden": True})
+    _write_config(tmp_path, profiles={"enabled": False})
+    with pytest.raises(control.Conflict):
+        state.hide_statement("Вера", {"text": "x"})
+
+
+def test_broken_voice_file_is_a_clear_409(state, tmp_path):
+    (tmp_path / "voices" / "Тимур.json").write_text("{битый", encoding="utf-8")
+    with pytest.raises(control.Conflict, match="не читается"):
+        state.profile_notes("Тимур", {"text": "x"})

@@ -24,6 +24,10 @@ AVATAR_SIZE = 256
 MAX_NAME = 80
 # Недопустимое в имени файла Windows плюс управляющие символы.
 _BAD_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# Чтение-правка-запись файла голоса (<voices>/<имя>.json): образцы
+# (meet.voices), слияние и постоянный id человека (meet.profiles) — под одним
+# замком, иначе одновременная правка потеряла бы чужие ключи.
+VOICE_FILE_LOCK = threading.RLock()
 # Палитра аватаров-инициалов: достаточно контрастная на тёмном фоне окна.
 _PALETTE = ("#4b6bd6", "#c0793a", "#3a9a6a", "#a04bb0", "#c94f63", "#2f93a8",
             "#8a7a2e", "#6a5acd", "#b3563a", "#3d7fbf")
@@ -373,18 +377,19 @@ def merge(src_name: str, into: str, voices: Path, recordings: Path) -> None:
         raise KeyError(src_name)
     if not dst.exists():
         raise KeyError(into)
-    merged = _samples(dst) + _samples(src)
-    # Прочие ключи into (постоянный "id" — по нему живёт профиль человека)
-    # остаются; профиль src удаляется вместе с ним (delete ниже).
-    try:
-        kept = json.loads(dst.read_text(encoding="utf-8"))
-        kept = {k: v for k, v in kept.items() if k != "samples"} if isinstance(kept, dict) else {}
-    except (OSError, ValueError):
-        kept = {}
-    # Атомарно: оборванная запись не должна оставить into без голоса.
-    tmp = dst.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps({**kept, "samples": merged}, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, dst)
+    with VOICE_FILE_LOCK:
+        merged = _samples(dst) + _samples(src)
+        # Прочие ключи into (постоянный "id" — по нему живёт профиль человека)
+        # остаются; профиль src удаляется вместе с ним (delete ниже).
+        try:
+            kept = json.loads(dst.read_text(encoding="utf-8"))
+            kept = {k: v for k, v in kept.items() if k != "samples"} if isinstance(kept, dict) else {}
+        except (OSError, ValueError):
+            kept = {}
+        # Атомарно: оборванная запись не должна оставить into без голоса.
+        tmp = dst.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({**kept, "samples": merged}, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, dst)
     delete(src_name, voices)
     _rewrite_speaker(recordings, src_name, into)
 

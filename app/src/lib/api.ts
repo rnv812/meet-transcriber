@@ -238,6 +238,10 @@ export const deleteProfile = (ep: Endpoint, name: string) =>
   json<{ ok: boolean }>(ep, `/voices/${enc(name)}/profile`, { method: "DELETE" });
 export const saveProfileNotes = (ep: Endpoint, name: string, text: string) =>
   json<{ notes: string }>(ep, `/voices/${enc(name)}/profile/notes`, body("PUT", { text }));
+/** «Скрыть» утверждение (не показывать и после обновления); text null и hidden false — вернуть все. */
+export const hideProfileStatement = (ep: Endpoint, name: string, text: string | null, hidden: boolean) =>
+  json<{ hidden: number }>(ep, `/voices/${enc(name)}/profile/hide`,
+    body("POST", text === null ? { all: true, hidden } : { text, hidden }));
 export const getProfilesInfo = (ep: Endpoint) => json<{ enabled: boolean; count: number }>(ep, "/profiles");
 export const deleteAllProfiles = (ep: Endpoint) => json<{ deleted: number }>(ep, "/profiles", { method: "DELETE" });
 

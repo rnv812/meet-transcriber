@@ -21,11 +21,12 @@
 import time
 from pathlib import Path
 
-from meet import jobs, library, profiles, settings
+from meet import jobs, profile_index, profiles, settings
 
 # Сколько ждать, пока снятая задача профиля завершит свой процесс.
 DROP_PROFILE_WAIT_S = 5.0
 DISABLED = "Профили людей выключены в настройках"
+BROKEN_VOICE = "Файл голоса «{}» не читается — профиль не сохранить. Проверьте базу голосов"
 
 
 class ProfilesMixin:
@@ -44,19 +45,39 @@ class ProfilesMixin:
         return segvoices.owners()
 
     def _person_pid(self, name: str, *, create: bool = False) -> str | None:
-        """id человека; нет человека — KeyError, плохое имя — 400."""
-        from meet.tray_control import _bad_request
+        """id человека; нет человека — KeyError, плохое имя — 400, файл голоса
+        не читается (а id нужен) — 409 с понятным текстом."""
+        from meet.tray_control import _bad_request, _conflict
 
         try:
-            return profiles.person_id(name, self._voices(), create=create)
+            pid = profiles.person_id(name, self._voices(), create=create)
         except ValueError as e:
             raise _bad_request(str(e))
+        if create and pid is None:
+            raise _conflict(BROKEN_VOICE.format(name))
+        return pid
+
+    def _profile_index(self) -> profile_index.Index:
+        return profiles.index_of(self._root())
+
+    def _entries(self, *, wait: bool) -> dict | None:
+        """Индекс реплик библиотеки. Первый проход ещё не сделан: `wait` —
+        сделать сейчас (фоновые потоки), иначе — запустить в фоне и вернуть
+        None (окно покажет «Подсчитываю реплики…» и спросит снова)."""
+        ix = self._profile_index()
+        if ix.warm or wait:
+            return ix.refresh()
+        profile_index.warm_in_background(ix)
+        return None
 
     def profile(self, name: str) -> dict:
-        """Профиль для вкладки «Профиль»: {"enabled", "name", "self", "stats",
-        "level", "note"?, "state": none|queued|running|ready|failed,
-        "profile"?, "notes", "error"?, "job"?, "latest_meeting", "has_new"}.
-        Профили выключены — только {"enabled": false}."""
+        """Профиль для вкладки «Профиль»: {"enabled", "id", "name", "self",
+        "stats", "level", "note"?, "state": none|queued|running|ready|failed,
+        "profile"?, "notes", "error"?, "job"?, "latest_meeting", "latest_any",
+        "has_new", "hidden", "indexing"?}. Ссылки профиля — к нынешним
+        расшифровкам (`profiles.resolve_refs`). Пока индекс реплик строится
+        первый раз — "indexing": true, без счётчиков. Профили выключены —
+        только {"enabled": false}."""
         cfg = settings.load()
         if not cfg.profiles.enabled:
             return {"enabled": False}
@@ -64,28 +85,40 @@ class ProfilesMixin:
             pid = self._person_pid(name)
         except KeyError:
             return {"error": "человека нет"}
-        meetings = profiles.collect(name, self._root(), cfg)
-        st = profiles.stats(meetings)
-        depth = profiles.level(st)
         doc = profiles.read(pid) if pid else None
         state = profiles.read_state(pid) if pid else {}
+        hidden = profiles.hidden_of(pid) if pid else []
+        entries = self._entries(wait=False)
         out: dict = {
             "enabled": True,
+            "id": pid,
             "name": name,
             "self": name in self._owner_names(),
-            "stats": st,
-            "level": depth,
             "notes": profiles.read_notes(pid) if pid else "",
-            "latest_meeting": profiles.latest_shared(meetings),
-            "profile": profiles.public(doc, with_pcm=cfg.profiles.pcm),
             # Раздел «Модель PCM»: показывать ли; данных мало — почему его нет.
             "pcm_enabled": cfg.profiles.pcm,
-            "has_new": bool(doc) and doc.get("signature") != profiles.signature(meetings),
+            "hidden": len(hidden),
         }
-        if depth == "none":
-            out["note"] = profiles.data_note(st)
-        if depth != "full":
-            out["pcm_note"] = profiles.data_note(st, turns=profiles.FULL_TURNS, meetings=profiles.FULL_MEETINGS)
+        if entries is None:
+            out.update(indexing=True, stats=None, level=None, latest_meeting=None, latest_any=None,
+                       has_new=False, profile=profiles.public(doc, with_pcm=cfg.profiles.pcm, hidden=hidden))
+        else:
+            meetings = profiles.meetings_of(name, entries)
+            st = profiles.stats(meetings)
+            depth = profiles.level(st)
+            if doc:
+                doc = profiles.resolve_refs(doc, name, entries, self._profile_index())
+            out.update(
+                stats=st, level=depth,
+                latest_meeting=profiles.latest_shared(meetings),
+                latest_any=max(entries) if entries else None,
+                has_new=bool(doc) and doc.get("signature") != profiles.signature(meetings),
+                profile=profiles.public(doc, with_pcm=cfg.profiles.pcm, hidden=hidden))
+            if depth == "none":
+                out["note"] = profiles.data_note(st)
+            if depth != "full":
+                out["pcm_note"] = profiles.data_note(st, turns=profiles.FULL_TURNS,
+                                                     meetings=profiles.FULL_MEETINGS)
         job = self._profile_job(pid) if pid else None
         failure = state.get("error") if isinstance(state.get("error"), dict) else None
         if job is not None:
@@ -99,7 +132,8 @@ class ProfilesMixin:
     def make_profile(self, name: str) -> dict:
         """«Составить профиль» / «Обновить профиль»: задача в очередь модели.
         Ждёт или идёт — та же (просьба поднимает фоновую вперёд). 409 —
-        профили выключены, реплик мало или модель не подключена."""
+        профили выключены, реплик мало (если индекс уже посчитан; иначе это
+        проверит сама задача) или модель не подключена."""
         from meet import assistant
         from meet.tray_control import _conflict, _provider_installed
 
@@ -110,14 +144,37 @@ class ProfilesMixin:
             self._person_pid(name)
         except KeyError:
             return {"error": "человека нет"}
-        st = profiles.stats(profiles.collect(name, self._root(), cfg))
-        if profiles.level(st) == "none":
-            raise _conflict(profiles.data_note(st))
+        entries = self._entries(wait=False)
+        if entries is not None:
+            st = profiles.stats(profiles.meetings_of(name, entries))
+            if profiles.level(st) == "none":
+                raise _conflict(profiles.data_note(st))
         if not _provider_installed(cfg):
             raise _conflict(assistant.NO_PROVIDER)
         pid = self._person_pid(name, create=True)
         job, _created = self._queue_profile(pid, low=False, manual=True)
         return job.to_raw()
+
+    def hide_statement(self, name: str, body: dict | None) -> dict:
+        """«Скрыть» утверждение профиля (и «Вернуть скрытые»): {"text",
+        "hidden": true} — скрыть; {"all": true, "hidden": false} — вернуть все.
+        Скрытое не показывается и после обновления профиля."""
+        from meet.tray_control import _bad_request, _conflict
+
+        if not settings.load().profiles.enabled:
+            raise _conflict(DISABLED)
+        body = body or {}
+        hidden = body.get("hidden") is not False
+        text = body.get("text")
+        if body.get("all") is True and not hidden:
+            text = None
+        elif not isinstance(text, str) or not text.strip():
+            raise _bad_request("нужен текст утверждения")
+        try:
+            pid = self._person_pid(name, create=True)
+        except KeyError:
+            return {"error": "человека нет"}
+        return {"hidden": len(profiles.set_hidden(pid, text, hidden))}
 
     def delete_profile(self, name: str) -> dict:
         """«Удалить профиль»: профиль и заметки человека (задача — снимается)."""
@@ -161,6 +218,15 @@ class ProfilesMixin:
             raise RuntimeError(f"не удалось удалить профили: {e}") from e
         self.tray.log(f"профили людей удалены: {deleted}")
         return {"deleted": deleted}
+
+    def warm_profiles_index(self) -> None:
+        """После старта резидента: первый проход индекса реплик — в фоне
+        (только если профили включены)."""
+        try:
+            if settings.load().profiles.enabled:
+                profile_index.warm_in_background(self._profile_index())
+        except Exception as e:
+            self.tray.log(f"индекс реплик для профилей не построен: {type(e).__name__}: {e}")
 
     # --- очередь ------------------------------------------------------------
 
@@ -257,11 +323,11 @@ class ProfilesMixin:
             if not cfg.profiles.enabled or not _provider_installed(cfg):
                 return queued
             now = time.time() if now is None else now
-            data = library.read_transcript(Path(folder)) or {}
-            names = {s.get("speaker") for s in data.get("segments") or []
-                     if isinstance(s, dict) and isinstance(s.get("speaker"), str)}
+            entries = self._entries(wait=True)
+            entry = entries.get(Path(folder).name) or {}
+            names = set(entry.get("people") or {})
             owners = self._owner_names()
-            voices, root = self._voices(), self._root()
+            voices = self._voices()
             for name in sorted(n for n in names if n not in owners):
                 try:
                     pid = profiles.person_id(name, voices)
@@ -274,7 +340,7 @@ class ProfilesMixin:
                     continue
                 if self._profile_job(pid) is not None:
                     continue
-                meetings = profiles.collect(name, root, cfg)
+                meetings = profiles.meetings_of(name, entries)
                 if profiles.signature(meetings) == doc.get("signature"):
                     continue  # новых реплик нет
                 if profiles.level(profiles.stats(meetings)) == "none":

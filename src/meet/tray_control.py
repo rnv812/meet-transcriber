@@ -639,6 +639,8 @@ class TrayControl(ProfilesMixin):
         """Доделать прерванное прошлым выходом — в фоне: резидент сразу пишет
         и отвечает окну (см. recover)."""
         def work() -> None:
+            # Индекс реплик для профилей людей — тоже в фоне, сам по себе.
+            self.warm_profiles_index()
             try:
                 swept = jobs.sweep_temp()
                 if swept:
