@@ -2456,6 +2456,24 @@ class TrayControl(ProfilesMixin):
         job, _created = self._queue_analysis(folder, low=False, manual=True)
         return job.to_raw()
 
+    def analysis_consent(self, recording_id: str, body: dict) -> dict:
+        """Ответ на разовое предложение включить автоматический анализ (тому, кто
+        обновился с 0.2.x, см. settings.Analysis.consent): {"answer": "granted" |
+        "declined"}. Ответ сохраняется в настройках, больше не спрашиваем.
+        «Включить» из карточки ставит и её анализ — по тем же правилам, что
+        автоматический (модель подключена, встреча не короче порога, анализ не
+        свежий). → {"analysis": секция настроек}."""
+        answer = (body or {}).get("answer")
+        if answer not in (settings.CONSENT_GRANTED, settings.CONSENT_DECLINED):
+            raise _bad_request("ответ — granted или declined")
+        updated = settings.patch({"analysis": {"consent": answer}})
+        self.tray.log("анализ встречи: автоматический " + (
+            "включён" if answer == settings.CONSENT_GRANTED else "не включён") + " по ответу на предложение")
+        folder = self._folder(recording_id)
+        if answer == settings.CONSENT_GRANTED and folder is not None:
+            self._background(lambda: self._auto_analyze(folder), "meet-analysis")
+        return {"analysis": updated.analysis.to_raw()}
+
     def suggest_title(self, recording_id: str) -> dict:
         """«Предложить название»: из свежего анализа сразу, иначе — коротким
         вызовом модели подпроцессом (до TITLE_TIMEOUT_S). Ничего не меняет:

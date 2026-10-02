@@ -78,6 +78,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     qa(id) -> dict                        прошлые вопросы и ответы
     analysis(id) -> dict                  анализ встречи {"state", "analysis"?, "error"?}
     make_analysis(id) -> dict             «Переанализировать»: задача анализа (409 без модели)
+    analysis_consent(id, body) -> dict    ответ на предложение включить авто-анализ {"answer"}
     suggest_title(id) -> dict             «Предложить название» {"title", "from"}
     improve(id) -> dict                   «Улучшить расшифровку» {"state", "proposal"?, "hint"}
     make_improve(id) -> dict              поставить задачу улучшения (409 без модели)
@@ -899,6 +900,9 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.analysis(unquote(rid))),
     ("POST", re.compile(r"^/recordings/([^/]+)/analysis$"),
      lambda h, p, rid: _server_of(h).state.make_analysis(unquote(rid))),
+    # Разовое предложение включить авто-анализ (обновившимся с 0.2.x): ответ.
+    ("POST", re.compile(r"^/recordings/([^/]+)/analysis/consent$"),
+     lambda h, p, rid: _server_of(h).state.analysis_consent(unquote(rid), h._body())),
     # «Улучшить расшифровку» (improve.json): состояние и предложение; POST —
     # поставить задачу; apply — выбранные замены одним шагом истории.
     ("GET", re.compile(r"^/recordings/([^/]+)/improve$"),

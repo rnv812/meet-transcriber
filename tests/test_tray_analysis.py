@@ -29,6 +29,9 @@ def _write_config(tmp_path, **sections) -> None:
         "llm": {"provider": "auto"},
         "assistant": {"knowledge_dir": None, "notes_dir": None},
         "export": {"meetings_dir": None},
+        # Конфиг 0.3.0 (секция анализа есть): без неё это обновившийся с 0.2.x,
+        # у которого авто-анализ ждёт ответа на предложение (тесты consent ниже).
+        "analysis": {},
     }
     for name, value in sections.items():
         data[name] = {**data.get(name, {}), **value}
@@ -225,6 +228,7 @@ def test_routes_exist():
     assert ("GET", r"^/recordings/([^/]+)/analysis$") in paths
     assert ("POST", r"^/recordings/([^/]+)/analysis$") in paths
     assert ("POST", r"^/recordings/([^/]+)/title/suggest$") in paths
+    assert ("POST", r"^/recordings/([^/]+)/analysis/consent$") in paths
 
 
 # --- автоматическая постановка ----------------------------------------------------------
@@ -752,3 +756,58 @@ def test_recover_handles_marks_on_old_recordings(app, tmp_path, monkeypatch):
     library.write_meta(old, {"pending_analysis": {"at": _time.time(), "manual": True}})
     st = _restart(app)
     assert st.recover()["analysis"] == [old.name]
+
+
+# --- обновившийся с 0.2.x: разовое предложение (analysis.consent) ---------------------
+
+
+def _upgraded_config(tmp_path):
+    """Конфиг 0.2.x: секции analysis нет — авто-анализ ждёт ответа."""
+    path = tmp_path / "meet" / "config.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.pop("analysis")
+    data["version"] = 2
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def test_upgraded_user_is_not_analysed_until_the_answer(state, app, tmp_path):
+    _upgraded_config(tmp_path)
+    _done(app, jobs.TRANSCRIBE, _folder(tmp_path))
+    assert _analyze_jobs(state) == []
+    assert state.settings()["analysis"]["consent"] == "pending"
+
+
+def test_granted_turns_auto_on_and_analyses_this_meeting(state, app, tmp_path):
+    _upgraded_config(tmp_path)
+    got = state.analysis_consent(RID, {"answer": "granted"})
+    assert got["analysis"]["consent"] == "granted" and got["analysis"]["auto"] is True
+    assert len(_analyze_jobs(state)) == 1
+    # Дальше — как у всех: после расшифровки ставится сам, не спрашивая.
+    from meet import settings as settings_mod
+    assert settings_mod.load().analysis.consent == "granted"
+
+
+def test_declined_keeps_auto_off_and_queues_nothing(state, app, tmp_path):
+    _upgraded_config(tmp_path)
+    got = state.analysis_consent(RID, {"answer": "declined"})
+    assert got["analysis"] == {**got["analysis"], "consent": "declined", "auto": False}
+    assert _analyze_jobs(state) == []
+    _done(app, jobs.TRANSCRIBE, _folder(tmp_path))
+    assert _analyze_jobs(state) == []
+    assert state.settings()["analysis"]["consent"] == "declined"
+
+
+def test_consent_answer_is_validated(state, tmp_path):
+    _upgraded_config(tmp_path)
+    with pytest.raises(control.BadRequest):
+        state.analysis_consent(RID, {"answer": "pending"})
+    with pytest.raises(control.BadRequest):
+        state.analysis_consent(RID, {})
+    assert state.settings()["analysis"]["consent"] == "pending"
+
+
+def test_granted_for_a_short_meeting_does_not_force_its_analysis(state, app, tmp_path):
+    _upgraded_config(tmp_path)
+    _transcript(_folder(tmp_path), end=30.0)
+    state.analysis_consent(RID, {"answer": "granted"})
+    assert _analyze_jobs(state) == []
