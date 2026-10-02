@@ -160,6 +160,9 @@ NOTIFICATION_LEVELS = ("all", "important", "off")
 # Живые подсказки (`assist`): активность и уровень модели для тиков.
 ASSIST_ACTIVITIES = ("calm", "active", "summary")
 HINTS_MODELS = ("agent", "fast")
+# Распознавание живого режима: `auto` — GigaAM короткими окнами, если язык
+# русский и модель GigaAM скачана (иначе Whisper); `whisper` — всегда Whisper.
+LIVE_ASR = ("auto", "whisper")
 MAX_HINTS_RANGE = (3, 12)
 
 # Анализ встречи (meet.analysis): что размечать. Выключенное не запрашивается у
@@ -698,8 +701,10 @@ class Assist:
     агента» (`agent`) или «Быстрее» (`fast`: Claude — haiku, Codex — низкое
     усилие рассуждения, локальная — без изменений); `max_hints` — сколько
     подсказок держать (0 — по активности: 5 или 8); `min_words` — сколько
-    новых слов нужно для тика (0 — по активности); `quiet_default` —
-    «Не отвлекать» включено при открытии панели."""
+    новых слов нужно для тика сводки (0 — по умолчанию); `quiet_default` —
+    «Не отвлекать» включено при открытии панели; `live_asr` — распознавание
+    живого режима (`auto` — GigaAM для русского, если скачана; `whisper`),
+    только в config.json."""
 
     vault: Path | None = None
     window_seconds: float = 20.0
@@ -714,6 +719,7 @@ class Assist:
     max_hints: int = 0
     min_words: int = 0
     quiet_default: bool = False
+    live_asr: str = "auto"
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Assist":
@@ -734,6 +740,7 @@ class Assist:
             max_hints=_max_hints(raw.get("max_hints")),
             min_words=as_int(raw.get("min_words"), 0, 0),
             quiet_default=as_flag(raw.get("quiet_default"), False),
+            live_asr=as_choice(raw.get("live_asr"), LIVE_ASR, "auto"),
         )
 
     def to_raw(self) -> dict:
@@ -749,6 +756,7 @@ class Assist:
             "max_hints": self.max_hints,
             "min_words": self.min_words,
             "quiet_default": self.quiet_default,
+            "live_asr": self.live_asr,
         }
 
 
