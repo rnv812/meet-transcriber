@@ -75,6 +75,8 @@ IMPORTANT: токен принимается и в query-параметре `?to
     live_draft(id) -> dict                черновик итогов из живого режима
     ask(id, body) -> dict                 вопрос по записи задачей
     qa(id) -> dict                        прошлые вопросы и ответы
+    analysis(id) -> dict                  анализ встречи {"state", "analysis"?, "error"?}
+    make_analysis(id) -> dict             «Переанализировать»: задача анализа (409 без модели)
     kb_export(id) -> dict                 выгрузить встречу в базу знаний (400 без папки)
     export_preview(params) -> dict        как назовётся папка встречи по шаблону
     assistant() -> dict                   кто отвечает, что установлено, папки
@@ -874,6 +876,11 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.ask(unquote(rid), h._body())),
     ("GET", re.compile(r"^/recordings/([^/]+)/qa$"),
      lambda h, p, rid: _server_of(h).state.qa(unquote(rid))),
+    # Анализ встречи (analysis.json): состояние и разметка; POST — поставить заново.
+    ("GET", re.compile(r"^/recordings/([^/]+)/analysis$"),
+     lambda h, p, rid: _server_of(h).state.analysis(unquote(rid))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/analysis$"),
+     lambda h, p, rid: _server_of(h).state.make_analysis(unquote(rid))),
     # Вкладка «Агент»: transcript.md в папке записи перед запуском Claude Code / Codex.
     ("POST", re.compile(r"^/recordings/([^/]+)/agent-context$"),
      lambda h, p, rid: _server_of(h).state.agent_context(unquote(rid))),

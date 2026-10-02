@@ -43,7 +43,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="meet-job")
     parser.add_argument("kind",
                         choices=["transcribe", "import", "install-engine", "download-model",
-                                 "summary", "ask", "merge", "speaker_split", "rediarize"])
+                                 "summary", "ask", "merge", "speaker_split", "rediarize",
+                                 "analyze"])
     parser.add_argument("path")
     parser.add_argument("--speakers", type=int)
     parser.add_argument("--hotwords")
@@ -61,6 +62,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.kind in ("summary", "ask"):
         return _assistant(args.kind, args.path, args.question)
+    if args.kind == "analyze":
+        return _analyze(args.path)
 
     if args.kind == "merge":
         return _merge(args.path)
@@ -326,6 +329,41 @@ def _assistant(kind: str, folder_str: str, question: str | None) -> int:
     except Exception as e:
         _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
         return 1
+    _emit({"kind": "job.result", "path": str(out)})
+    return 0
+
+
+def _analyze(folder_str: str) -> int:
+    """«Анализ встречи» (meet.analysis) — тем же провайдером, что итоги
+    (`llm.resolve`, прокси из настроек, без инструментов). Ошибка остаётся в
+    meta.json записи (`analysis_error`): окно покажет «Повторить»."""
+    from pathlib import Path
+
+    from meet import analysis, assistant, events, llm, settings
+
+    folder = Path(folder_str)
+    bus = events.EventBus()
+    bus.subscribe(lambda event: _emit(event.to_dict()))
+    bus.progress("analyze", label="анализ встречи")
+    cfg = settings.load()
+
+    def fail(text: str, code: int) -> int:
+        analysis.mark_failed(folder, text)
+        _emit({"kind": "error", "text": text})
+        return code
+
+    try:
+        provider, runner = llm.resolve(cfg)
+    except Exception as e:
+        return fail(f"{type(e).__name__}: {e}", 2)
+    if runner is None:
+        return fail(assistant.NO_PROVIDER, 2)
+    try:
+        out = analysis.analyze(folder, runner, cfg, provider=provider, bus=bus)
+    except (analysis.AnalysisError, RuntimeError) as e:
+        return fail(str(e), 1)
+    except Exception as e:
+        return fail(f"{type(e).__name__}: {e}", 1)
     _emit({"kind": "job.result", "path": str(out)})
     return 0
 

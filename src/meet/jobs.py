@@ -54,7 +54,13 @@ MERGE = "merge"
 # предпросмотр рядом; применяет результат резидент шагом истории.
 SPEAKER_SPLIT = "speaker_split"
 REDIARIZE = "rediarize"
-KINDS = (TRANSCRIBE, IMPORT, INSTALL_ENGINE, DOWNLOAD_MODEL, SUMMARY, ASK, MERGE, SPEAKER_SPLIT, REDIARIZE)
+# «Анализ встречи» (meet.analysis): разметка расшифровки моделью → analysis.json.
+# Очередь модели, как итоги; автоматический — с низким приоритетом.
+ANALYZE = "analyze"
+KINDS = (TRANSCRIBE, IMPORT, INSTALL_ENGINE, DOWNLOAD_MODEL, SUMMARY, ASK, MERGE, SPEAKER_SPLIT, REDIARIZE,
+         ANALYZE)
+# Задачи модели над папкой записи: пишут в неё итоги, ответы и разметку.
+MODEL_KINDS = (SUMMARY, ASK, ANALYZE)
 # Задачи, которые пишут в папку записи звук или транскрипт: пока такая ждёт или
 # идёт, запись нельзя удалить, объединить или поставить вторую такую же.
 FOLDER_KINDS = (TRANSCRIBE, IMPORT, MERGE)
@@ -172,7 +178,7 @@ def worker_argv(job: Job) -> list[str]:
         return argv
     if job.kind == DOWNLOAD_MODEL:
         return argv  # путь задачи — это repo_id модели
-    if job.kind in (SUMMARY, MERGE):
+    if job.kind in (SUMMARY, MERGE, ANALYZE):
         return argv
     if job.kind == SPEAKER_SPLIT:
         # Одним аргументом через «=»: подпись с ведущим дефисом не станет флагом.
@@ -274,6 +280,9 @@ class JobQueue:
         self._jobs: dict[str, Job] = {}
         self._order: list[str] = []
         self._pending: list[str] = []
+        # Задачи «в фоне» (автоматический анализ): ждут, пока впереди есть
+        # задачи, о которых человек попросил сам.
+        self._low: set[str] = set()
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._current: Job | None = None
@@ -283,13 +292,22 @@ class JobQueue:
 
     # --- публичное ------------------------------------------------------
 
-    def submit(self, kind: str, folder: str, options: dict | None = None) -> Job:
+    def submit(self, kind: str, folder: str, options: dict | None = None, *,
+               low: bool = False) -> Job:
+        """Поставить задачу. `low` — фоновая: обычные задачи, поставленные
+        позже, встают перед ждущими фоновыми (идущую никто не прерывает)."""
         job = Job(id=uuid.uuid4().hex[:12], kind=kind, folder=str(folder),
                   options=dict(options or {}))
         with self._lock:
             self._jobs[job.id] = job
             self._order.append(job.id)
-            self._pending.append(job.id)
+            if low:
+                self._low.add(job.id)
+                self._pending.append(job.id)
+            else:
+                at = next((n for n, i in enumerate(self._pending) if i in self._low),
+                          len(self._pending))
+                self._pending.insert(at, job.id)
             self._ensure_worker()
         self._emit(JOB_QUEUED, job)
         self._wake.set()

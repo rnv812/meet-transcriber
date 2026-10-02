@@ -23,7 +23,8 @@ from pathlib import Path
 
 from meet import library
 
-COMMANDS = ("import", "export", "voices", "summary", "ask", "notes", "kb-export", "merge", "fix")
+COMMANDS = ("import", "export", "voices", "summary", "ask", "notes", "kb-export", "merge", "fix",
+            "analyze")
 NO_PROVIDER_HINT = ("Подключите Claude Code или Codex: meet {command} … --provider codex "
                     "или настройка llm.provider")
 
@@ -603,7 +604,111 @@ def _fix_here(folder: Path, args, cfg) -> dict:
             "via_app": False}
 
 
+# --- анализ встречи и название ------------------------------------------------
+
+ANALYZE_POLL_S = 2.0
+ANALYZE_WAIT_S = 1800.0
+
+
+def _analysis_text(doc: dict | None) -> str:
+    """Коротко о разметке для человека."""
+    if not doc:
+        return "Анализа нет\n"
+    lines = []
+    if doc.get("title"):
+        lines.append(f"Название: {doc['title']}")
+    category = doc.get("category")
+    if isinstance(category, dict):
+        lines.append(f"Категория: {category.get('id')} ({category.get('confidence')})")
+    if "chapters" in doc:
+        lines.append(f"Главы: {len(doc['chapters'])}")
+        lines += [f"  #{c['start_i']}–#{c['end_i']} {c['title']}" for c in doc["chapters"]]
+    if "insights" in doc:
+        lines.append(f"Наблюдения: {len(doc['insights'])}")
+        lines += [f"  [{i['kind']}] {i['text']}" for i in doc["insights"]]
+    if "phrase_types" in doc:
+        lines.append(f"Размечено реплик по типу: {len(doc['phrase_types'])}")
+    if "importance" in doc:
+        lines.append(f"Оценено реплик по важности: {len(doc['importance'])}")
+    return "\n".join(lines) + "\n"
+
+
+def _analyze(args, cfg) -> None:
+    """`meet analyze`: разметить встречу (analysis.json). Приложение запущено —
+    задачей через него (одна очередь модели, отказ во время записи, название
+    и событие окну); иначе — в этом процессе."""
+    from meet import analysis
+
+    folder = _recording(args.folder, cfg)
+    _transcript(folder)
+    if _resident_root(folder, cfg.recording.recordings):
+        doc = _analyze_via_resident(folder.name)
+        via_app = True
+    else:
+        provider, runner = _model(args, cfg)
+        try:
+            analysis.analyze(folder, runner, cfg, provider=provider,
+                             bus=_cli_bus())
+        except (analysis.AnalysisError, RuntimeError) as e:
+            analysis.mark_failed(folder, str(e))
+            raise CliError(f"Анализ не получился: {e}")
+        except OSError as e:
+            raise CliError(f"Не удалось сохранить анализ: {e}")
+        doc = analysis.read(folder)
+        via_app = False
+    _result(args, {"folder": str(folder), "path": str(folder / analysis.ANALYSIS_JSON),
+                   "via_app": via_app, "analysis": doc}, _analysis_text(doc))
+
+
+def _cli_bus():
+    from meet import events
+
+    bus = events.EventBus()
+    printer = _progress_printer([])
+    bus.subscribe(lambda event: printer(event.to_dict()))
+    return bus
+
+
+def _resident_call(rid: str, path: str, method: str = "GET", payload: dict | None = None,
+                   timeout: float = 30) -> dict:
+    from urllib.parse import quote
+
+    from meet import control
+
+    try:
+        reply = control.request(f"/recordings/{quote(rid)}{path}", method=method, payload=payload,
+                                timeout=timeout)
+    except RuntimeError as e:
+        text = str(e).split(": ", 1)[-1] if "ответил" in str(e) else str(e)
+        raise CliError(text[:1].upper() + text[1:])
+    if set(reply) == {"error"} and isinstance(reply.get("error"), str):
+        raise CliError(reply["error"][:1].upper() + reply["error"][1:])
+    return reply
+
+
+def _analyze_via_resident(rid: str, *, sleep=None, clock=None) -> dict | None:
+    import time
+
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    job = _resident_call(rid, "/analysis", "POST", {})
+    _say(f"Анализ встречи поставлен в очередь приложения ({job.get('id')})")
+    deadline = clock() + ANALYZE_WAIT_S
+    while True:
+        got = _resident_call(rid, "/analysis")
+        state = got.get("state")
+        if state not in ("queued", "running"):
+            break
+        if clock() > deadline:
+            raise CliError("Анализ идёт дольше получаса — результат появится в приложении")
+        sleep(ANALYZE_POLL_S)
+    if state == "failed":
+        raise CliError(f"Анализ не получился: {got.get('error') or 'без подробностей'}")
+    return got.get("analysis")
+
+
 _HANDLERS = {"import": _import, "export": _export, "summary": _summary,
-             "ask": _ask, "notes": _kb_export, "kb-export": _kb_export, "merge": _merge, "fix": _fix}
+             "ask": _ask, "notes": _kb_export, "kb-export": _kb_export, "merge": _merge, "fix": _fix,
+             "analyze": _analyze}
 _VOICES = {"list": _voices_list, "rename": _voices_rename, "merge": _voices_merge,
            "delete": _voices_delete, "avatar": _voices_avatar}

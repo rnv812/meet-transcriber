@@ -194,6 +194,16 @@ def _add_library_parsers(sub) -> None:
     p_fx.add_argument("--rule", action="store_true",
                       help="исправлять так же в будущих расшифровках (правило замены)")
 
+    p_an = sub.add_parser(
+        "analyze", parents=[as_json],
+        help="анализ встречи моделью → analysis.json (главы, важное, наблюдения)",
+        description="Разметить встречу моделью: типы и важность реплик, главы, наблюдения, "
+                    "категория и название (что именно — настройки «Анализ встречи»). Если "
+                    "приложение запущено, анализ идёт задачей через него.")
+    p_an.add_argument("folder", help=folder_help)
+    p_an.add_argument("--provider", default=None, choices=("auto",) + PROVIDERS,
+                      help=provider_help + " (без приложения)")
+
     p_mr = sub.add_parser("merge", parents=[as_json],
                           help="объединить записи одной встречи в одну и расшифровать")
     p_mr.add_argument("folders", nargs="+", metavar="запись",

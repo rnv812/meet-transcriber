@@ -10,10 +10,15 @@
 
 import { inTauri, invoke } from "./shell";
 import type {
-  AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
+  AnalysisState, AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
   ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   TextFixRequest, TextFixResult, TextPreview, Transcript,
+} from "./types";
+
+export type {
+  Analysis, AnalysisChapter, AnalysisFeature, AnalysisInsight, AnalysisState, AnalysisStateName, InsightKind,
+  PhraseType,
 } from "./types";
 
 export type Endpoint = {
@@ -338,6 +343,15 @@ export const getAssistant = (ep: Endpoint) => json<AssistantInfo>(ep, "/assistan
 export const checkProvider = (ep: Endpoint, provider: string) =>
   json<ProviderCheck>(ep, "/assistant/check", body("POST", { provider }));
 
+// --- анализ встречи ----------------------------------------------------------------
+
+/** Состояние анализа и сама разметка (для M3/M4 — `analysis`). */
+export const getAnalysis = (ep: Endpoint, id: string) =>
+  json<AnalysisState>(ep, `/recordings/${enc(id)}/analysis`);
+/** «Переанализировать»: задача (kind "analyze"); уже ждёт или идёт — та же. 409 — нет модели или идёт расшифровка. */
+export const runAnalysis = (ep: Endpoint, id: string) =>
+  json<Job>(ep, `/recordings/${enc(id)}/analysis`, { method: "POST" });
+
 // --- база знаний ----------------------------------------------------------------
 
 /** Выгрузить встречу в базу знаний; 400 — папка для встреч не задана или шаблон негоден. */
@@ -400,6 +414,8 @@ const EVENT_KINDS = [
   "live.starting", "live.started", "live.stopping", "live.stopped", "live.failed",
   // Запись изменилась вне задач: обрезка ожидания после звонка, выгрузка в базу знаний.
   "recording.processing", "recording.updated",
+  // Анализ встречи готов, не удался или устарел: {"id", "state"}.
+  "analysis.updated",
 ];
 
 function parseEvent(raw: string): unknown {

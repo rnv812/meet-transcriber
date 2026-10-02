@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { agentPrompt, type AgentRequest } from "../../lib/agentRef";
 import {
   ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
-  kbExport, patchRecording, transcribe, type Endpoint,
+  kbExport, patchRecording, runAnalysis, transcribe, type Endpoint,
 } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { agentKillRecording, inTauri, openFolder, saveText } from "../../lib/shell";
@@ -13,6 +13,8 @@ import { KIND_LABEL } from "../../live/liveModel";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import type { AgentInsert } from "./AgentTab";
+import { AnalysisStatus, reanalyzeBlocked, useAnalysis } from "./analysis";
+import { noProvider, useAssistant } from "./assistant";
 import { AudioPlayer, type AudioPlayerHandle } from "./AudioPlayer";
 import { CardActions } from "./CardActions";
 import { CardTabs, type CardStage } from "./CardTabs";
@@ -194,6 +196,9 @@ export function RecordingCard({
   const onTextMenu = useCallback((t: number, e: MouseEvent<HTMLElement>) => {
     if (!fixMenu(t, e)) splitMenu(t, e);
   }, [fixMenu, splitMenu]);
+  // Анализ встречи: состояние и «Переанализировать».
+  const assistantInfo = useAssistant(endpoint);
+  const analysis = useAnalysis(endpoint, id, rec?.path ?? null, jobs, rec);
 
   if (!rec) {
     if (missing) return <EmptyState title="Запись не найдена" hint="Возможно, её удалили. Выберите другую в списке." />;
@@ -217,6 +222,8 @@ export function RecordingCard({
     onChanged?.();
   });
   const doTranscribe = () => act(async () => { await transcribe(endpoint, id); onChanged?.(); await load(); });
+  const noModel = noProvider(assistantInfo);
+  const doReanalyze = () => act(async () => { await runAnalysis(endpoint, id); await analysis.reload(); });
   const active = activeJobOf(rec, jobs);
   const doCancel = () => act(async () => {
     if (!active) return;
@@ -328,9 +335,15 @@ export function RecordingCard({
         onOpenFolder={() => void openFolder(rec.path)}
         onRetranscribe={doTranscribe}
         onRediarize={status.kind === "ready" && hasAudio ? () => setRediarizeOpen(true) : undefined}
+        onReanalyze={status.kind === "ready" ? doReanalyze : undefined}
+        reanalyzeBlocked={reanalyzeBlocked(analysis.state, noModel)}
         onDelete={doDelete}
       />
       {error && <div className="card__error" role="alert">{error}</div>}
+      {status.kind === "ready" && (
+        <AnalysisStatus state={analysis.state} busy={busy} onRun={noModel ? undefined : doReanalyze} />
+      )}
+
       {kbDone && (
         <div className="card__banner card__banner--ok" role="status" aria-label="Выгрузка в базу знаний">
           <span>
