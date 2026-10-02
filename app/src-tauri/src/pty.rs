@@ -227,6 +227,153 @@ fn toml_string(text: &str) -> String {
     serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into())
 }
 
+// --- свои параметры запуска (Настройки → Ассистент → «Запуск агента») -----------
+
+pub const ARGS_CONTROL: &str = "Недопустимый управляющий символ в параметрах запуска";
+pub const ARGS_QUOTE: &str = "Незакрытая кавычка в параметрах запуска (обратная косая черта перед \
+кавычкой \\\" считается частью текста — уберите её в конце пути)";
+
+/// Строка «Дополнительные параметры» → отдельные аргументы, без командной
+/// оболочки. Правила — как у резидента (`meet.agent_launch`) и окна
+/// (`lib/agentLaunch.ts`): разделители — пробел и табуляция; «"…"» и «'…'»
+/// объединяют текст и примыкают к соседнему; обратная косая черта — обычный
+/// символ (пути Windows), только внутри двойных кавычек `\"` — сама кавычка;
+/// управляющие символы недопустимы.
+pub fn parse_launch_args(text: &str) -> Result<Vec<String>, String> {
+    let control = |c: char| (c as u32) < 0x20 || c as u32 == 0x7f;
+    let mut args = Vec::new();
+    let mut cur: Option<String> = None;
+    let mut quote: Option<char> = None;
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if control(ch) && !(ch == '\t' && quote.is_none()) {
+            return Err(ARGS_CONTROL.into());
+        }
+        match quote {
+            None => match ch {
+                ' ' | '\t' => {
+                    if let Some(arg) = cur.take() {
+                        args.push(arg);
+                    }
+                }
+                '"' | '\'' => {
+                    quote = Some(ch);
+                    cur.get_or_insert_with(String::new);
+                }
+                _ => cur.get_or_insert_with(String::new).push(ch),
+            },
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                } else {
+                    cur.get_or_insert_with(String::new).push(ch);
+                }
+            }
+            Some(_) => {
+                if ch == '\\' && chars.peek() == Some(&'"') {
+                    chars.next();
+                    cur.get_or_insert_with(String::new).push('"');
+                } else if ch == '"' {
+                    quote = None;
+                } else {
+                    cur.get_or_insert_with(String::new).push(ch);
+                }
+            }
+        }
+    }
+    if quote.is_some() {
+        return Err(ARGS_QUOTE.into());
+    }
+    args.extend(cur);
+    Ok(args)
+}
+
+/// Годное имя переменной окружения: латинские буквы, цифры и `_`, не с цифры.
+pub fn env_name_valid(key: &str) -> bool {
+    let mut chars = key.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Свои параметры запуска агента из настроек (`agent.launch.<провайдер>`).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Launch {
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
+/// `agent.launch.<провайдер>` из ответа GET /settings. Резидент хранит только
+/// проверенное; здесь — проверка ещё раз: негодные параметры — ошибка запуска
+/// с объяснением, негодные переменные пропускаются.
+pub fn launch_from_settings(settings: &Value, provider: Provider) -> Result<Launch, String> {
+    let item = settings
+        .get("agent")
+        .and_then(|a| a.get("launch"))
+        .and_then(|l| l.get(provider.key()));
+    let Some(item) = item else {
+        return Ok(Launch::default());
+    };
+    let args = item.get("args").and_then(Value::as_str).unwrap_or("");
+    let args = parse_launch_args(args)
+        .map_err(|e| format!("Параметры запуска {}: {e}", provider.title()))?;
+    let env = item
+        .get("env")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|e| {
+                    let key = e.get("key")?.as_str()?;
+                    let value = e.get("value").and_then(Value::as_str).unwrap_or("");
+                    let clean = !value.chars().any(|c| (c as u32) < 0x20 || c as u32 == 0x7f);
+                    (env_name_valid(key) && clean).then(|| (key.to_string(), value.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Launch { args, env })
+}
+
+/// Флаги, которые есть у нас и у человека: его вариант остаётся, наш — убираем
+/// (повтор флага Codex считает ошибкой, а у Claude он лишний).
+fn user_has(user: &[String], names: &[&str]) -> bool {
+    user.iter().any(|arg| {
+        names.iter().any(|name| {
+            arg == name || (name.starts_with("--") && arg.starts_with(&format!("{name}=")))
+        })
+    })
+}
+
+/// Наши аргументы + свои из настроек. Свои идут после наших — у параметра,
+/// заданного дважды, действует последнее значение, то есть своё. Наш
+/// дубликат убирается, если повтор был бы ошибкой или лишним: Claude —
+/// `--continue`, когда человек сам задал `--continue`/`-c`/`--resume`/`-r`;
+/// Codex — `--last` (при «Продолжить») и `--cd`, когда они есть у человека.
+/// Папка запуска, подсказка о встрече и `resume` остаются.
+pub fn with_user_args(provider: Provider, ours: Vec<String>, user: &[String]) -> Vec<String> {
+    let mut args = ours;
+    match provider {
+        Provider::Claude => {
+            if user_has(user, &["--continue", "-c", "--resume", "-r"]) {
+                args.retain(|a| a != "--continue");
+            }
+        }
+        Provider::Codex => {
+            if user_has(user, &["--last"]) {
+                args.retain(|a| a != "--last");
+            }
+            if user_has(user, &["--cd", "-C"]) {
+                if let Some(at) = args.iter().position(|a| a == "--cd") {
+                    args.drain(at..(at + 2).min(args.len()));
+                }
+            }
+        }
+    }
+    args.extend(user.iter().cloned());
+    args
+}
+
 /// Режим настройки `llm.proxy` (как `meet.netproxy` резидента).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProxyMode {
@@ -830,6 +977,8 @@ fn prepare(
     let knowledge = text_at(&assistant, &["knowledge_dir"]).map(str::to_string);
     let settings = client.get("/settings").map_err(fail)?;
     let mode = proxy_mode(text_at(&settings, &["llm", "proxy"]));
+    // Свои параметры — до записи файлов и метки: негодные не запускают агента.
+    let launch = launch_from_settings(&settings, provider)?;
     let state = client.get_state().map_err(fail)?;
     let root = windows::recordings_root(&state)
         .ok_or_else(|| "Служба записи не назвала папку записей".to_string())?;
@@ -848,15 +997,18 @@ fn prepare(
         "Папка записи вне папки записей — агент не запущен".to_string()
     })?;
     let folder_text = folder.to_string_lossy().into_owned();
-    let env = agent_env(
+    let mut env = agent_env(
         provider,
         &mode,
         &|name| std::env::var(name).ok(),
         &netproxy::read_internet_settings(),
     );
+    // Свои переменные — последними: они перекрывают и очистку меток, и наши.
+    env.set.extend(launch.env);
+    let ours = agent_args(provider, &folder_text, knowledge.as_deref(), resume);
     Ok(SpawnSpec {
         recording: recording.to_string(),
-        args: agent_args(provider, &folder_text, knowledge.as_deref(), resume),
+        args: with_user_args(provider, ours, &launch.args),
         program,
         cwd: folder,
         env,
@@ -1467,5 +1619,167 @@ mod tests {
     #[test]
     fn resident_errors_say_sluzhba() {
         assert!(NO_RESIDENT.starts_with("Служба записи"));
+    }
+
+    /// Те же примеры, что у резидента (tests/test_agent_launch.py) и окна
+    /// (lib/agentLaunch.test.ts): правила разбора совпадают.
+    #[test]
+    fn launch_args_parse_like_the_resident_and_the_window() {
+        let cases: &[(&str, &[&str])] = &[
+            ("", &[]),
+            ("   ", &[]),
+            ("--model opus", &["--model", "opus"]),
+            (
+                "--permission-mode  acceptEdits\t--verbose",
+                &["--permission-mode", "acceptEdits", "--verbose"],
+            ),
+            (r"--add-dir D:\Docs", &["--add-dir", r"D:\Docs"]),
+            (
+                r#"--add-dir "D:\Мои документы\База""#,
+                &["--add-dir", r"D:\Мои документы\База"],
+            ),
+            (
+                r"--add-dir \\server\share\kb",
+                &["--add-dir", r"\\server\share\kb"],
+            ),
+            (r#""\\server\share\kb""#, &[r"\\server\share\kb"]),
+            (r#"--x="a b" c"#, &["--x=a b", "c"]),
+            (r#"'single quoted' """#, &["single quoted", ""]),
+            (r#""say \"hi\"""#, &[r#"say "hi""#]),
+            (
+                "-m gpt-5 -c model_reasoning_effort=high",
+                &["-m", "gpt-5", "-c", "model_reasoning_effort=high"],
+            ),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(
+                parse_launch_args(text).unwrap(),
+                expected.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                "{text:?}"
+            );
+        }
+        for (text, error) in [
+            (r#"--add-dir "D:\Docs"#, ARGS_QUOTE),
+            (r#""D:\Docs\""#, ARGS_QUOTE),
+            ("'abc", ARGS_QUOTE),
+            ("--model opus\n--verbose", ARGS_CONTROL),
+            ("a\u{0}b", ARGS_CONTROL),
+            ("'a\tb'", ARGS_CONTROL),
+        ] {
+            assert_eq!(parse_launch_args(text).unwrap_err(), error, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn launch_comes_from_settings_and_bad_values_are_explained() {
+        let settings = serde_json::json!({ "agent": { "launch": {
+            "claude-code": { "args": "--model opus", "env": [
+                { "key": "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE", "value": "1" },
+                { "key": "1BAD", "value": "x" },
+                { "key": "MULTI", "value": "a\nb" },
+                { "key": "EMPTY", "value": "" }
+            ] },
+            "codex": { "args": "\"unclosed", "env": [] }
+        } } });
+        let claude = launch_from_settings(&settings, Provider::Claude).unwrap();
+        assert_eq!(claude.args, ["--model", "opus"]);
+        assert_eq!(
+            claude.env,
+            [
+                (
+                    "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE".to_string(),
+                    "1".to_string()
+                ),
+                ("EMPTY".to_string(), String::new()),
+            ]
+        );
+        let codex = launch_from_settings(&settings, Provider::Codex).unwrap_err();
+        assert!(
+            codex.starts_with("Параметры запуска Codex: Незакрытая кавычка"),
+            "{codex}"
+        );
+        // Прежний резидент без секции agent — ничего своего.
+        assert_eq!(
+            launch_from_settings(&serde_json::json!({}), Provider::Claude).unwrap(),
+            Launch::default()
+        );
+    }
+
+    fn strings(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Свои параметры — после наших (у повторённого параметра действует свой);
+    /// наш дубликат убирается там, где повтор — ошибка или лишний.
+    #[test]
+    fn user_args_go_last_and_win_where_safe() {
+        let ours = agent_args(Provider::Claude, r"D:\rec\r1", Some(r"D:\kb"), true);
+        let args = with_user_args(
+            Provider::Claude,
+            ours.clone(),
+            &strings(&["--model", "opus"]),
+        );
+        assert_eq!(args[..ours.len()], ours[..]);
+        assert_eq!(args[ours.len()..], ["--model", "opus"]);
+        // Свой --resume/-c — нашего --continue нет; подсказка о встрече остаётся.
+        for user in [&["--resume", "abc"][..], &["-c"][..], &["--resume=abc"][..]] {
+            let args = with_user_args(Provider::Claude, ours.clone(), &strings(user));
+            assert!(!args.iter().any(|a| a == "--continue"), "{user:?}");
+            assert!(args.iter().any(|a| a == "--append-system-prompt"));
+        }
+        let codex = agent_args(Provider::Codex, r"D:\rec\r1", None, true);
+        let args = with_user_args(
+            Provider::Codex,
+            codex,
+            &strings(&["--last", "-C", r"D:\other", "-m", "gpt-5"]),
+        );
+        assert_eq!(args[0], "resume");
+        assert_eq!(args.iter().filter(|a| *a == "--last").count(), 1);
+        assert!(!args.iter().any(|a| a == "--cd"));
+        assert!(args
+            .iter()
+            .any(|a| a.starts_with("developer_instructions=")));
+        assert_eq!(
+            args[args.len() - 5..],
+            ["--last", "-C", r"D:\other", "-m", "gpt-5"]
+        );
+    }
+
+    /// Свои переменные — после очистки меток и наших: человек может нарочно
+    /// задать и CLAUDE_CODE_FORCE_SESSION_PERSISTENCE, и переменную из списка меток.
+    #[test]
+    fn user_env_is_applied_after_the_scrub() {
+        std::env::set_var("CLAUDE_EFFORT", "m9-parent");
+        let mut plan = agent_env(
+            Provider::Claude,
+            &ProxyMode::System,
+            &|_| None,
+            &wininet(None),
+        );
+        plan.set.extend([
+            (
+                "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE".to_string(),
+                "1".to_string(),
+            ),
+            ("CLAUDE_EFFORT".to_string(), "high".to_string()),
+            ("TERM".to_string(), "xterm".to_string()),
+        ]);
+        let spec = SpawnSpec {
+            recording: "r1".into(),
+            program: PathBuf::from("claude.exe"),
+            args: Vec::new(),
+            cwd: std::env::temp_dir(),
+            env: plan,
+            cols: 80,
+            rows: 24,
+        };
+        let command = command_for(&spec);
+        let get = |k: &str| command.get_env(k).map(|v| v.to_string_lossy().into_owned());
+        assert_eq!(
+            get("CLAUDE_CODE_FORCE_SESSION_PERSISTENCE").as_deref(),
+            Some("1")
+        );
+        assert_eq!(get("CLAUDE_EFFORT").as_deref(), Some("high"));
+        assert_eq!(get("TERM").as_deref(), Some("xterm"));
     }
 }

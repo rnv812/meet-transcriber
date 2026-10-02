@@ -1,0 +1,82 @@
+import {
+  ARGS_CONTROL, ARGS_QUOTE, MEETING_PROMPT, envText, maskValue, ourArgs, parseArgs, parseEnv, previewCommand,
+  withUserArgs,
+} from "./agentLaunch";
+
+// Те же примеры, что у оболочки (pty.rs) и резидента (tests/test_agent_launch.py).
+const CASES: [string, string[]][] = [
+  ["", []],
+  ["   ", []],
+  ["--model opus", ["--model", "opus"]],
+  ["--permission-mode  acceptEdits\t--verbose", ["--permission-mode", "acceptEdits", "--verbose"]],
+  [String.raw`--add-dir D:\Docs`, ["--add-dir", String.raw`D:\Docs`]],
+  [String.raw`--add-dir "D:\Мои документы\База"`, ["--add-dir", String.raw`D:\Мои документы\База`]],
+  [String.raw`--add-dir \\server\share\kb`, ["--add-dir", String.raw`\\server\share\kb`]],
+  [String.raw`"\\server\share\kb"`, [String.raw`\\server\share\kb`]],
+  ['--x="a b" c', ["--x=a b", "c"]],
+  ["'single quoted' \"\"", ["single quoted", ""]],
+  [String.raw`"say \"hi\""`, ['say "hi"']],
+  ["-m gpt-5 -c model_reasoning_effort=high", ["-m", "gpt-5", "-c", "model_reasoning_effort=high"]],
+];
+
+test.each(CASES)("разбор параметров: %j", (text, expected) => {
+  expect(parseArgs(text)).toEqual({ args: expected, error: null });
+});
+
+test.each([
+  [String.raw`--add-dir "D:\Docs`, ARGS_QUOTE],
+  [String.raw`"D:\Docs\"`, ARGS_QUOTE],
+  ["'abc", ARGS_QUOTE],
+  ["--model opus\n--verbose", ARGS_CONTROL],
+  ["a\u0000b", ARGS_CONTROL],
+  ["'a\tb'", ARGS_CONTROL],
+])("ошибка разбора: %j", (text, error) => {
+  expect(parseArgs(text)).toEqual({ args: null, error });
+});
+
+test("переменные: строки ИМЯ=значение, пустые строки пропускаются, ошибки — с номером строки", () => {
+  expect(parseEnv("CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1\n\nEMPTY=\nX=a=b c")).toEqual({
+    env: [
+      { key: "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE", value: "1" }, { key: "EMPTY", value: "" },
+      { key: "X", value: "a=b c" },
+    ],
+    error: null,
+  });
+  expect(parseEnv("A=1\nбез знака").error).toBe("Строка 2: нужен вид ИМЯ=значение");
+  expect(parseEnv("1A=x").error).toMatch(/^Строка 1: недопустимое имя «1A»/);
+  expect(parseEnv("A=x\u0007").error).toBe("Строка 1: управляющие символы в значении недопустимы");
+  expect(parseEnv("Path=1\nPATH=2").error).toBe("Строка 2: переменная PATH уже задана");
+  expect(envText([{ key: "A", value: "1" }, { key: "B", value: "" }])).toBe("A=1\nB=");
+  expect(envText("как набрано")).toBe("как набрано");
+});
+
+test("свои параметры — после наших; наш дубликат убирается, где повтор — ошибка или лишний", () => {
+  const claude = ourArgs("claude-code", String.raw`D:\kb`, true);
+  expect(claude).toEqual(["--continue", "--add-dir", String.raw`D:\kb`, "--append-system-prompt", MEETING_PROMPT]);
+  expect(withUserArgs("claude-code", claude, ["--model", "opus"])).toEqual([...claude, "--model", "opus"]);
+  expect(withUserArgs("claude-code", claude, ["--resume", "abc"])).not.toContain("--continue");
+  expect(withUserArgs("claude-code", claude, ["-c"])).toEqual([...claude.slice(1), "-c"]);
+  const codex = ourArgs("codex", null, true);
+  const merged = withUserArgs("codex", codex, ["--last", "-C", String.raw`D:\other`]);
+  expect(merged[0]).toBe("resume");
+  expect(merged.filter((a) => a === "--last")).toHaveLength(1);
+  expect(merged).not.toContain("--cd");
+  expect(merged.slice(-3)).toEqual(["--last", "-C", String.raw`D:\other`]);
+});
+
+test("строка «Команда запуска»: переменные, программа, наши и свои параметры; секреты скрыты", () => {
+  expect(previewCommand("claude-code", {
+    args: "--model opus --add-dir \"D:\\Мои документы\"",
+    env: [{ key: "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE", value: "1" }, { key: "MY_API_TOKEN", value: "abc" }],
+  }, String.raw`D:\kb`)).toBe(
+    "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1 MY_API_TOKEN=*** claude --add-dir D:\\kb "
+    + "--append-system-prompt \"<подсказка о встрече>\" --model opus --add-dir \"D:\\Мои документы\"",
+  );
+  expect(previewCommand("codex", { args: "-m gpt-5", env: [] }, null)).toBe(
+    "codex --cd \"<папка встречи>\" -c \"developer_instructions=<подсказка о встрече>\" -m gpt-5",
+  );
+  expect(previewCommand("codex", { args: "\"open", env: [] }, null)).toBeNull();
+  expect(previewCommand("codex", { args: "", env: "A" }, null)).toBeNull();
+  expect(maskValue("PASSWORD", "x")).toBe("***");
+  expect(maskValue("CODEX_HOME", "D:\\c")).toBe("D:\\c");
+});

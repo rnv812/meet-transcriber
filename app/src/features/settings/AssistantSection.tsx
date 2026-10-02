@@ -18,6 +18,7 @@ import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { FolderRow, Row, type Raw, type SetFn } from "./Section";
 import { LiveHintsRows } from "./LiveHintsRows";
+import { AgentLaunchSection, agentLaunchChangesInvalid } from "./AgentLaunchSection";
 import { KnowledgeTip, LiveWindowTip, ProviderTip } from "./tips";
 
 type Provider = { value: string; label: string; link?: string };
@@ -109,7 +110,8 @@ export function assistantChangesInvalid(changes: Raw): boolean {
   const win = changes.assist?.window_seconds;
   const proxy = changes.llm?.proxy;
   return (win !== undefined && windowInvalid(win))
-    || (typeof proxy === "string" && proxyError(proxy) !== null);
+    || (typeof proxy === "string" && proxyError(proxy) !== null)
+    || agentLaunchChangesInvalid(changes);
 }
 
 /** Подпись «Авто», пока выбран конкретный провайдер: порядок выбора (llm.resolve). */
@@ -292,6 +294,7 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
         {win !== undefined && windowInvalid(win) && <span className="error">От {WINDOW_MIN} до {WINDOW_MAX} секунд</span>}
       </Row>
       <LiveHintsRows draft={draft} set={set} provider={info?.provider ?? (chosen === "auto" ? null : chosen)} />
+      <AgentLaunchSection draft={draft} set={set} />
     </>
   );
 }

@@ -863,6 +863,63 @@ class Profiles:
 
 
 @dataclass(frozen=True)
+class AgentLaunch:
+    """Свои параметры запуска агента во вкладке «Агент» (один провайдер):
+    `args` — строка дополнительных параметров (разбирает оболочка, правила —
+    meet.agent_launch), `env` — переменные окружения (ИМЯ, значение) поверх
+    окружения агента. Фоновых задач (итоги, анализ, живой ассистент) это не
+    касается: им — модель из `llm.model`."""
+
+    args: str = ""
+    env: tuple[tuple[str, str], ...] = ()
+
+    @classmethod
+    def from_raw(cls, raw) -> "AgentLaunch":
+        from meet import agent_launch
+
+        raw = raw if isinstance(raw, dict) else {}
+        args = raw.get("args") if isinstance(raw.get("args"), str) else ""
+        try:
+            agent_launch.parse_args(args)
+        except ValueError:
+            args = ""  # испорченное руками в файле — как по умолчанию
+        env = raw.get("env")
+        if agent_launch.env_error(env) is not None:
+            env = []
+        return cls(args=args, env=tuple((e["key"], e.get("value", "")) for e in env))
+
+    def to_raw(self) -> dict:
+        return {"args": self.args, "env": [{"key": k, "value": v} for k, v in self.env]}
+
+
+@dataclass(frozen=True)
+class Agent:
+    """Вкладка «Агент»: параметры запуска по провайдерам (`launch`)."""
+
+    claude: AgentLaunch = field(default_factory=AgentLaunch)
+    codex: AgentLaunch = field(default_factory=AgentLaunch)
+
+    @classmethod
+    def from_raw(cls, raw: dict) -> "Agent":
+        launch = raw.get("launch") if isinstance(raw.get("launch"), dict) else {}
+        return cls(claude=AgentLaunch.from_raw(launch.get("claude-code")),
+                   codex=AgentLaunch.from_raw(launch.get("codex")))
+
+    @staticmethod
+    def check(update: dict) -> None:
+        """Правка из окна: ValueError с текстом для человека."""
+        from meet import agent_launch
+
+        if "launch" in update:
+            error = agent_launch.launch_error(update["launch"])
+            if error:
+                raise ValueError(error)
+
+    def to_raw(self) -> dict:
+        return {"launch": {"claude-code": self.claude.to_raw(), "codex": self.codex.to_raw()}}
+
+
+@dataclass(frozen=True)
 class TranscriptView:
     """«Расшифровка: подсветка и разметка» — что из анализа встречи окно
     показывает в карточке: значки типов реплик (и фильтры по ним), полосу у
@@ -1136,6 +1193,7 @@ class Settings:
     analysis: Analysis = field(default_factory=Analysis)
     transcript_view: TranscriptView = field(default_factory=TranscriptView)
     profiles: Profiles = field(default_factory=Profiles)
+    agent: Agent = field(default_factory=Agent)
     # Не секция, а список (см. as_categories): patch() заменяет его целиком.
     categories: tuple[Category, ...] = field(default_factory=default_categories)
 
@@ -1180,6 +1238,7 @@ class Settings:
             analysis=Analysis.from_raw(_section(raw, "analysis")),
             transcript_view=TranscriptView.from_raw(_section(raw, "transcript_view")),
             profiles=Profiles.from_raw(_section(raw, "profiles")),
+            agent=Agent.from_raw(_section(raw, "agent")),
             categories=as_categories(raw.get("categories")),
         )
 
@@ -1199,6 +1258,7 @@ class Settings:
             "analysis": self.analysis.to_raw(),
             "transcript_view": self.transcript_view.to_raw(),
             "profiles": self.profiles.to_raw(),
+            "agent": self.agent.to_raw(),
             "categories": [c.to_raw() for c in self.categories],
         }
 
@@ -1513,6 +1573,8 @@ def patch(updates: dict, path: Path | None = None) -> Settings:
             Llm.check(section_update)
         if name == "integrations":
             Integrations.check(section_update)
+        if name == "agent":
+            Agent.check(section_update)
         merged = getattr(current, name).to_raw()
         merged.update(section_update)
         if name == "recording":
