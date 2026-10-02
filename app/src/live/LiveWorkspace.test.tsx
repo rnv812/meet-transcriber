@@ -28,9 +28,11 @@ function makeLive(o: Partial<Live> = {}): Live {
   };
 }
 
-function Host({ live, wide = false, quiet = false, open = true }: { live: Live; wide?: boolean; quiet?: boolean; open?: boolean }) {
+function Host({ live, wide = false, quiet = false, open = true, onAskHint }: {
+  live: Live; wide?: boolean; quiet?: boolean; open?: boolean; onAskHint?: (h: LiveHint) => void;
+}) {
   const view = useLiveView(live, { open, wide, quiet });
-  return <LiveWorkspace live={live} view={view} onAsk={(q) => live.ask(q)} />;
+  return <LiveWorkspace live={live} view={view} onAsk={(q) => live.ask(q)} onAskHint={onAskHint} />;
 }
 
 afterEach(() => vi.useRealTimers());
@@ -132,6 +134,19 @@ test("«Спросить об этом» подставляет вопрос и 
   expect(screen.getByRole("tab", { name: "Спросить" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByRole("textbox", { name: "Вопрос ассистенту" }))
     .toHaveValue("Расскажите подробнее: «У миграции нет ответственного»");
+  expect(live.ask).not.toHaveBeenCalled();
+});
+
+test("в карточке «Спросить об этом» уходит агенту (onAskHint), поле вопроса не трогается", async () => {
+  const live = makeLive();
+  const onAskHint = vi.fn();
+  render(<Host live={live} onAskHint={onAskHint} />);
+  await userEvent.click(screen.getByRole("tab", { name: "Подсказки" }));
+  const ask = screen.getByRole("button", { name: "Спросить об этом" });
+  expect(ask).toHaveAttribute("title", expect.stringContaining("агента"));
+  await userEvent.click(ask);
+  expect(onAskHint).toHaveBeenCalledWith(expect.objectContaining({ id: "h1", text: "У миграции нет ответственного" }));
+  expect(screen.getByRole("tab", { name: "Подсказки" })).toHaveAttribute("aria-selected", "true");
   expect(live.ask).not.toHaveBeenCalled();
 });
 

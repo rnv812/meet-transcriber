@@ -9,21 +9,26 @@
  * Пока итогов нет, а запись шла с ассистентом, — «Черновик из живого
  * режима»: сводка, которую ассистент вёл во время встречи. Задача итогов
  * получает её же и сверяет с полной расшифровкой.
+ *
+ * У каждого пункта и строки таблицы — ✦ «Спросить агента об этом пункте»
+ * (`onAskAgent`): ссылка на пункт уходит в поле ввода вкладки «Агент».
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AgentRequest } from "../../lib/agentRef";
 import { ApiError, getLiveDraft, getSummary, makeSummary, type Endpoint } from "../../lib/api";
 import { dayLabel, errorText } from "../../lib/format";
-import { Markdown } from "../../lib/markdown";
+import { Markdown, type ItemAction } from "../../lib/markdown";
 import { isActiveJob, modelJobsOf } from "../../lib/status";
 import type { AssistantInfo, Job, LiveDraft, Summary } from "../../lib/types";
+import { AskAgentButton } from "../../ui/AskAgent";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { ProviderHint, ThinkingStage, noProvider, useLostJobs } from "./assistant";
 
 const COPIED_MS = 2000;
 
-export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettings }: {
+export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettings, onAskAgent }: {
   endpoint: Endpoint;
   id: string;
   /** Папка записи: по ней задачи модели относятся к этой записи. */
@@ -31,7 +36,14 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
   jobs: Job[];
   assistant: AssistantInfo | null;
   onOpenSettings?: (section: string) => void;
+  /** ✦ у пунктов: спросить агента. Нет — кнопок нет. */
+  onAskAgent?: (request: AgentRequest) => void;
 }) {
+  const askItem = useMemo<ItemAction | undefined>(() => onAskAgent && ((text, section) => (
+    <AskAgentButton label={`Спросить агента об этом пункте: ${text.length > 80 ? `${text.slice(0, 79)}…` : text}`}
+      title="Спросить агента об этом пункте"
+      onClick={() => onAskAgent({ kind: "summary", refs: [{ text, section }] })} />
+  )), [onAskAgent]);
   /** undefined — грузится, null — итогов нет. */
   const [summary, setSummary] = useState<Summary | null | undefined>(undefined);
   /** Ошибка чтения итогов — уходит с первым удачным чтением. */
@@ -135,7 +147,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
           )}
         </div>
         {hint}
-        <Markdown source={summary.markdown} className="assist__md" />
+        <Markdown source={summary.markdown} className="assist__md" itemAction={askItem} />
       </>
     );
   } else if (summary === null && draft) {
@@ -152,7 +164,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
           <p className="muted assist__draft-note">
             Сводка, которую ассистент вёл во время встречи. Итоги модель сверит с полной расшифровкой.
           </p>
-          <Markdown source={draft.markdown} className="assist__md" />
+          <Markdown source={draft.markdown} className="assist__md" itemAction={askItem} />
         </section>
       </>
     );

@@ -231,6 +231,12 @@ class FakeState:
         self.calls.append(("agent-context", rid))
         return {"folder": f"D:/rec/{rid}", "files": ["transcript.md"]}
 
+    def agent_files(self, rid):
+        if rid == "нет":
+            return {"error": "записи нет"}
+        self.calls.append(("agent-files", rid))
+        return {"files": ["transcript.md", "summary.md"], "live": False}
+
     def assistant(self, probe_local=True):
         self.calls.append(("assistant", probe_local))
         return {"provider": None, "checking": True, "setting": "auto",
@@ -1117,6 +1123,14 @@ def test_agent_context_route(server):
     assert got == {"folder": "D:/rec/r1", "files": ["transcript.md"]}
     assert ("agent-context", "r1") in server.state_obj.calls
     assert _post(server, "/recordings/%D0%BD%D0%B5%D1%82/agent-context", expect=404) == {
+        "error": "записи нет"}
+
+
+def test_agent_files_route(server):
+    got = _get(server, "/recordings/r1/agent-context")
+    assert got == {"files": ["transcript.md", "summary.md"], "live": False}
+    assert ("agent-files", "r1") in server.state_obj.calls
+    assert _get(server, "/recordings/%D0%BD%D0%B5%D1%82/agent-context", expect=404) == {
         "error": "записи нет"}
 
 

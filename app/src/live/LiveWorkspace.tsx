@@ -72,10 +72,12 @@ function count(n: number, quiet: boolean) {
   return <span className="live-tabs__count" aria-label={`новых: ${n}`}>{n}</span>;
 }
 
-export function LiveWorkspace({ live, view, onAsk, disabled = false }: {
+export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }: {
   live: Live;
   view: LiveView;
   onAsk: (question: string, quick?: LiveQuick) => void | Promise<void>;
+  /** «Спросить об этом» у подсказки — не в «Спросить», а сюда (карточка: агенту). */
+  onAskHint?: (hint: LiveHint) => void;
   /** Режим кончается — спрашивать уже некого. */
   disabled?: boolean;
 }) {
@@ -87,7 +89,8 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false }: {
   const summary = <LiveSummary summary={live.summary} fresh={fresh} />;
   const hints = (
     <LiveHints hints={live.hints} fresh={fresh} enabled={live.hintsEnabled} error={live.hintError}
-      onAction={hintAction} onAsk={askAbout} onTime={jump} />
+      onAction={hintAction} onAsk={onAskHint ?? askAbout} onTime={jump}
+      askTitle={onAskHint ? "Спросить агента об этой подсказке: откроется вкладка «Агент»" : undefined} />
   );
   const ask = (
     <LiveAsk qa={live.qa} asking={live.asking} error={live.askError} onAsk={onAsk} disabled={disabled}

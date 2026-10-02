@@ -24,3 +24,22 @@
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   padding: 16px; color: var(--text-3); font-size: 13px; text-align: center; pointer-events: none;
 }
+/* «Контекст: transcript.md · summary.md» — какие файлы встречи получит агент. */
+.agent__context { font-size: 12px; color: var(--text-2); font-family: "Cascadia Mono", Consolas, monospace; }
+/* Агента нет: ссылка, которую не удалось вставить, — её можно скопировать. */
+.agent__unsent {
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; font-size: 12px; color: var(--text-2);
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
+}
+.agent__ref {
+  margin: 0; padding: 8px 10px; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm);
+  font: 12px/1.45 "Cascadia Mono", Consolas, monospace;
+}
+.agent__unsent-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* «Прошлые вопросы» (qa.jsonl): свёрнутый список под терминалом, только чтение. */
+.agent__past { flex: none; max-height: 45%; overflow-y: auto; border-top: 1px solid var(--line); padding-top: 6px; }
+.agent__past-title { cursor: pointer; color: var(--text-2); font-size: 12px; padding: 2px 0; }
+.agent__past-title:hover { color: var(--text); }
+.agent__past[open] .agent__past-title { margin-bottom: 6px; }
+.agent__past-note { margin: 0 0 10px; font-size: 12px; }

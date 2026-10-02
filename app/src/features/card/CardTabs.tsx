@@ -1,46 +1,74 @@
 /**
- * Вкладки готовой записи: «Расшифровка · Итоги · Вопросы · Агент».
+ * Вкладки записи: у готовой — «Расшифровка · Итоги · Агент»; пока идёт запись
+ * с ассистентом — «Живой режим · Агент»; пока запись ждёт расшифровки или
+ * расшифровывается — «Расшифровка · Агент» (на первой — ход работы).
  *
- * Вкладка монтируется при первом открытии и дальше живёт скрытой: ожидающий
- * вопрос и прокрутка не теряются при переключении, а итоги и вопросы не
- * запрашиваются у тех, кто их не открывал. Агент (терминал с Claude Code или
- * Codex) так же переживает переключение вкладок и останавливается вместе с
- * карточкой.
+ * Вкладка монтируется при первом открытии и дальше живёт скрытой: прокрутка
+ * не теряется при переключении, а итоги не запрашиваются у тех, кто их не
+ * открывал. Агент (терминал с Claude Code или Codex) так же переживает
+ * переключение вкладок — и смену этапа записи: живой режим → расшифровка →
+ * готово (панели ключуются по вкладке); останавливается вместе с карточкой.
+ *
+ * `agentRequest` — «Спросить агента» (✦): новая просьба открывает «Агент» и
+ * уходит туда ссылкой для поля ввода.
  */
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import type { AgentRequest } from "../../lib/agentRef";
 import type { Endpoint } from "../../lib/api";
 import type { Job } from "../../lib/types";
-import { AgentTab } from "./AgentTab";
+import { AgentTab, type AgentInsert } from "./AgentTab";
 import { useAssistant } from "./assistant";
-import { QaTab } from "./QaTab";
 import { SummaryTab } from "./SummaryTab";
 import { TranscriptShown } from "./transcriptShown";
 import "./assistant.css";
 
-type Tab = "transcript" | "summary" | "qa" | "agent";
+type Tab = "transcript" | "summary" | "agent";
+/** Этап записи: готова, идёт запись с ассистентом, ждёт расшифровки или расшифровывается. */
+export type CardStage = "ready" | "live" | "pending";
 
 /** Где Ctrl+F не уводит к поиску по расшифровке (в терминале агента клавиши — агенту). */
 const FIND_IGNORED = ".rec-item__input, [role=dialog], [aria-modal=true], .popover, .item-menu, [data-agent-terminal]";
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "transcript", label: "Расшифровка" },
-  { id: "summary", label: "Итоги" },
-  { id: "qa", label: "Вопросы" },
-  { id: "agent", label: "Агент" },
-];
+const TABS: Record<CardStage, { id: Tab; label: string }[]> = {
+  ready: [
+    { id: "transcript", label: "Расшифровка" },
+    { id: "summary", label: "Итоги" },
+    { id: "agent", label: "Агент" },
+  ],
+  live: [
+    { id: "transcript", label: "Живой режим" },
+    { id: "agent", label: "Агент" },
+  ],
+  pending: [
+    { id: "transcript", label: "Расшифровка" },
+    { id: "agent", label: "Агент" },
+  ],
+};
 
-export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSettings, showTranscript }: {
+export function CardTabs({
+  endpoint, id, folder, jobs, transcript, onOpenSettings, showTranscript, stage = "ready", agentRequest = null,
+  onAskAgent,
+}: {
   endpoint: Endpoint;
   id: string;
   folder: string;
   jobs: Job[];
+  /** Первая вкладка: расшифровка, живой режим или ход расшифровки. */
   transcript: ReactNode;
   onOpenSettings?: (section: string) => void;
   /** Растёт, когда снаружи просят показать расшифровку (переход из поиска по записям). */
   showTranscript?: number;
+  stage?: CardStage;
+  /** «Спросить агента»: ссылка для поля ввода агента; новый объект — новая просьба. */
+  agentRequest?: AgentInsert | null;
+  /** ✦ у пунктов итогов. */
+  onAskAgent?: (request: AgentRequest) => void;
 }) {
-  const [tab, setTab] = useState<Tab>("transcript");
+  const tabs = TABS[stage];
+  const [chosen, setTab] = useState<Tab>("transcript");
+  // Вкладки этапа нет (итоги во время перерасшифровки) — первая.
+  const tab = tabs.some((t) => t.id === chosen) ? chosen : "transcript";
   const [opened, setOpened] = useState<Set<Tab>>(() => new Set(["transcript"]));
   const assistant = useAssistant(endpoint);
   const base = useId();
@@ -58,6 +86,14 @@ export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSetting
     if (tab === "transcript") setShown((n) => n + 1);
   }, [tab]);
 
+  // «Спросить агента» — на «Агент», с какой бы вкладки ни были.
+  const lastAgent = useRef<AgentInsert | null>(null);
+  useEffect(() => {
+    if (!agentRequest || agentRequest === lastAgent.current) return;
+    lastAgent.current = agentRequest;
+    open("agent");
+  }, [agentRequest]);
+
   // Просьба из списка (фрагмент поиска) — на «Расшифровку», с какой бы вкладки ни были.
   const lastShow = useRef(showTranscript);
   useEffect(() => {
@@ -72,6 +108,8 @@ export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSetting
   const [findTick, setFindTick] = useState(0);
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
+      // Поиска по расшифровке ещё нет (живой режим, расшифровка идёт) — Ctrl+F браузера.
+      if (stage !== "ready") return;
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.code !== "KeyF") return;
       if (e.target instanceof Element && e.target.closest(FIND_IGNORED)) return;
       e.preventDefault();
@@ -80,7 +118,7 @@ export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSetting
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [stage]);
   useEffect(() => {
     if (!findTick) return;
     const field = transcriptPanel.current?.querySelector<HTMLInputElement>("[data-transcript-search]");
@@ -92,8 +130,8 @@ export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSetting
     const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
     if (!step) return;
     e.preventDefault();
-    const at = TABS.findIndex((t) => t.id === tab);
-    const next = TABS[(at + step + TABS.length) % TABS.length]!.id;
+    const at = tabs.findIndex((t) => t.id === tab);
+    const next = tabs[(at + step + tabs.length) % tabs.length]!.id;
     open(next);
     buttons.current[next]?.focus();
   };
@@ -101,15 +139,16 @@ export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSetting
   const shared = { endpoint, id, folder, jobs, assistant, onOpenSettings };
   const panels: Record<Tab, () => ReactNode> = {
     transcript: () => <TranscriptShown.Provider value={shown}>{transcript}</TranscriptShown.Provider>,
-    summary: () => <SummaryTab {...shared} />,
-    qa: () => <QaTab {...shared} />,
-    agent: () => <AgentTab id={id} assistant={assistant} onOpenSettings={onOpenSettings} />,
+    summary: () => <SummaryTab {...shared} onAskAgent={onAskAgent} />,
+    agent: () => (
+      <AgentTab id={id} assistant={assistant} onOpenSettings={onOpenSettings} endpoint={endpoint} insert={agentRequest} />
+    ),
   };
 
   return (
     <div className="tabs">
       <div className="tabs__list" role="tablist" aria-label="Содержимое записи" onKeyDown={onKeyDown}>
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.id} type="button" role="tab" className="tabs__tab"
             id={`${base}-${t.id}`} aria-controls={`${base}-${t.id}-panel`}
@@ -121,7 +160,7 @@ export function CardTabs({ endpoint, id, folder, jobs, transcript, onOpenSetting
           </button>
         ))}
       </div>
-      {TABS.map((t) => (
+      {tabs.map((t) => (
         <div key={t.id} className="tabs__panel" role="tabpanel"
           ref={t.id === "transcript" ? transcriptPanel : undefined}
           id={`${base}-${t.id}-panel`} aria-labelledby={`${base}-${t.id}`} hidden={tab !== t.id}>
