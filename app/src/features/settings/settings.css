@@ -214,3 +214,14 @@
 }
 .catedit__color[aria-checked="true"] { border-color: var(--text); }
 .catedit__color:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* «Запуск агента (вкладка «Агент»)»: свои параметры Claude Code и Codex. */
+.agent-launch { margin-top: 8px; }
+.agent-launch__title { display: flex; align-items: center; gap: 8px; margin: 16px 0 0; font-size: 13px; font-weight: 600; color: var(--text); }
+.agent-launch__title .btn { margin-left: auto; }
+.agent-launch .srow__control { flex-direction: column; align-items: stretch; gap: 4px; }
+.agent-launch input[type="text"], .agent-launch textarea { width: 100%; font: 12px/1.5 ui-monospace, Consolas, monospace; }
+.agent-launch textarea {
+  background: var(--surface); color: var(--text); border: 1px solid var(--line-2);
+  border-radius: var(--r-md); padding: 5px 8px; resize: vertical;
+}
+.agent-launch__preview { margin: 6px 0 0; font-size: 12px; overflow-wrap: anywhere; }
