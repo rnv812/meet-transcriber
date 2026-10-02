@@ -32,6 +32,7 @@ import { HotwordsEditor } from "./HotwordsEditor";
 import { MarkupSection, markupChangesInvalid } from "./MarkupSection";
 import { ReplacementsEditor } from "./ReplacementsEditor";
 import { ModelsPane } from "./ModelsPane";
+import { ProfilesSection } from "./ProfilesSection";
 import { PathText, Radio, Row, Switch, type Raw, type SetFn } from "./Section";
 import {
   AsrModelTip, AutoRecordTip, GpuMarkerTip, GraceTip, HookCommandTip, RecurringWindowTip, VoiceThresholdTip,
@@ -41,6 +42,7 @@ import "./settings.css";
 
 type SectionId =
   | "recording" | "sound" | "auto" | "asr" | "engine" | "export" | "assistant" | "analysis" | "categories" | "markup"
+  | "profiles"
   | "diagnostics" | "about" | "advanced";
 
 const MENU: { id: SectionId; title: string }[] = [
@@ -54,6 +56,7 @@ const MENU: { id: SectionId; title: string }[] = [
   { id: "analysis", title: "Анализ встречи" },
   { id: "categories", title: "Категории встреч" },
   { id: "markup", title: "Расшифровка: подсветка и разметка" },
+  { id: "profiles", title: "Профили людей" },
   { id: "diagnostics", title: "Диагностика" },
   { id: "about", title: "О программе" },
   { id: "advanced", title: "Дополнительно" },
@@ -468,6 +471,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
             <CategoriesSection value={draft.categories} onChange={setCategories} endpoint={endpoint} />
           ) : section === "markup" ? (
             <MarkupSection draft={draft} set={set} />
+          ) : section === "profiles" ? (
+            <ProfilesSection draft={draft} set={set} endpoint={endpoint} />
           ) : section === "diagnostics" ? (
             <DiagnosticsPane endpoint={endpoint} />
           ) : section === "about" ? (

@@ -374,14 +374,30 @@ def merge(src_name: str, into: str, voices: Path, recordings: Path) -> None:
     if not dst.exists():
         raise KeyError(into)
     merged = _samples(dst) + _samples(src)
+    # Прочие ключи into (постоянный "id" — по нему живёт профиль человека)
+    # остаются; профиль src удаляется вместе с ним (delete ниже).
+    try:
+        kept = json.loads(dst.read_text(encoding="utf-8"))
+        kept = {k: v for k, v in kept.items() if k != "samples"} if isinstance(kept, dict) else {}
+    except (OSError, ValueError):
+        kept = {}
     # Атомарно: оборванная запись не должна оставить into без голоса.
     tmp = dst.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps({"samples": merged}, ensure_ascii=False), encoding="utf-8")
+    tmp.write_text(json.dumps({**kept, "samples": merged}, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, dst)
     delete(src_name, voices)
     _rewrite_speaker(recordings, src_name, into)
 
 
-def delete(name: str, voices: Path) -> None:
-    _voice_file(name, voices).unlink(missing_ok=True)
+def delete(name: str, voices: Path, profiles_root: Path | None = None) -> None:
+    """Удалить человека: голос, аватар и его профиль (meet.profiles; id
+    профиля лежит в файле голоса — профиль удаляется первым)."""
+    voice = _voice_file(name, voices)
+    from meet import profiles
+
+    try:
+        profiles.remove_for_voice(voice, profiles_root)
+    except OSError:
+        pass  # профиль удалится вместе со всеми в настройках; голос — важнее
+    voice.unlink(missing_ok=True)
     clear_avatar(name, voices)

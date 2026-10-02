@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   audioUrl, deleteAvatar, deletePerson, getPerson, getSample, mergePerson, putAvatar, renamePerson,
   type Endpoint,
 } from "../../lib/api";
 import { dayLabel, duration, errorText } from "../../lib/format";
-import type { Person, PersonCard as PersonData } from "../../lib/types";
+import type { Job, Person, PersonCard as PersonData, Profile } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { AvatarEditor, pastedImage } from "./AvatarEditor";
+import { ProfileTab, useProfile } from "./ProfileTab";
 
 type Props = {
   endpoint: Endpoint;
@@ -17,12 +18,26 @@ type Props = {
   onRenamed: (to: string) => void;
   onRemoved: (next: string | null) => void;
   onOpenRecording: (id: string) => void;
+  /** Задачи резидента: профиль перечитывается, когда его задача кончилась. */
+  jobs?: Job[];
+  /** Открыть встречу на реплике (ссылка утверждения профиля). */
+  onOpenAt?: (recording: string, segment: number) => void;
+  /** Текст во вкладку «Агент» встречи (null — последней в библиотеке). */
+  onAskAgent?: (recording: string | null, text: string) => void;
+  /** Открыта вкладка «Профиль»: панель человека шире. */
+  onWide?: (wide: boolean) => void;
+  /** Разделы профиля после карточек (модель PCM). */
+  profileExtra?: (profile: Profile) => ReactNode;
 };
+
+const NO_JOBS: Job[] = [];
+type PersonTab = "voice" | "profile";
 
 const MAX_AVATAR = 10 * 1024 * 1024;
 
 export function PersonCard({
-  endpoint, person, others, version, onAvatar, onRenamed, onRemoved, onOpenRecording,
+  endpoint, person, others, version, onAvatar, onRenamed, onRemoved, onOpenRecording, jobs = NO_JOBS, onOpenAt,
+  onAskAgent, onWide, profileExtra,
 }: Props) {
   const name = person.name;
   const [data, setData] = useState<PersonData | null>(null);
@@ -33,6 +48,11 @@ export function PersonCard({
   const stopAt = useRef<number | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const cancelled = useRef(false);
+  const profile = useProfile(endpoint, name, jobs);
+  const profilesOn = profile.view?.enabled === true;
+  const [tab, setTab] = useState<PersonTab>("voice");
+  const shown: PersonTab = profilesOn ? tab : "voice";
+  useEffect(() => { onWide?.(shown === "profile"); }, [shown, onWide]);
 
   useEffect(() => root.current?.focus(), []);
 
@@ -127,6 +147,23 @@ export function PersonCard({
       </div>
       {error && <div className="card__error" role="alert">{error}</div>}
 
+      {profilesOn && (
+        <div className="ptabs" role="tablist" aria-label="О человеке">
+          {(["voice", "profile"] as const).map((t) => (
+            <button key={t} type="button" role="tab" className="ptabs__tab" aria-selected={shown === t}
+              tabIndex={shown === t ? 0 : -1} onClick={() => setTab(t)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowRight" || e.key === "ArrowLeft") { e.preventDefault(); setTab(t === "voice" ? "profile" : "voice"); }
+              }}>
+              {t === "voice" ? "Голос" : "Профиль"}
+            </button>
+          ))}
+        </div>
+      )}
+      {shown === "profile" && profile.view ? (
+        <ProfileTab endpoint={endpoint} name={name} view={profile.view} reload={profile.reload}
+          onOpenAt={(m, i) => onOpenAt?.(m, i)} onAskAgent={(m, text) => onAskAgent?.(m, text)} extra={profileExtra} />
+      ) : (<>
       <div className="pcard__row">
         <Button onClick={() => void play()}>▶ Прослушать образец</Button>
       </div>
@@ -174,13 +211,14 @@ export function PersonCard({
         <div className="confirm" role="alertdialog">
           <span>
             {confirm === "delete"
-              ? `Удалить голос «${name}»?`
-              : `Объединить «${name}» с «${confirm.merge}»? «${name}» исчезнет.`}
+              ? `Удалить голос «${name}»?${profile.view?.profile ? " Профиль человека тоже удалится." : ""}`
+              : `Объединить «${name}» с «${confirm.merge}»? «${name}» исчезнет${profile.view?.profile ? " вместе со своим профилем" : ""}.`}
           </span>
           <Button variant="danger" onClick={doConfirmed}>Да</Button>
           <Button onClick={() => setConfirm(null)}>Отмена</Button>
         </div>
       )}
+      </>)}
     </div>
   );
 }

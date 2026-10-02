@@ -841,6 +841,23 @@ class Analysis:
 
 
 @dataclass(frozen=True)
+class Profiles:
+    """Профили людей (meet.profiles): как человек общается во встречах — по
+    его репликам, моделью. По умолчанию выключены: включает человек сам,
+    прочитав, что это и где хранится. Выключены — задач профилей нет, вкладка
+    «Профиль» скрыта, сохранённые профили остаются (удалить — в настройках)."""
+
+    enabled: bool = False
+
+    @classmethod
+    def from_raw(cls, raw: dict) -> "Profiles":
+        return cls(enabled=as_flag(raw.get("enabled"), False))
+
+    def to_raw(self) -> dict:
+        return {"enabled": self.enabled}
+
+
+@dataclass(frozen=True)
 class TranscriptView:
     """«Расшифровка: подсветка и разметка» — что из анализа встречи окно
     показывает в карточке: значки типов реплик (и фильтры по ним), полосу у
@@ -1113,6 +1130,7 @@ class Settings:
     ui: Ui = field(default_factory=Ui)
     analysis: Analysis = field(default_factory=Analysis)
     transcript_view: TranscriptView = field(default_factory=TranscriptView)
+    profiles: Profiles = field(default_factory=Profiles)
     # Не секция, а список (см. as_categories): patch() заменяет его целиком.
     categories: tuple[Category, ...] = field(default_factory=default_categories)
 
@@ -1156,6 +1174,7 @@ class Settings:
             ui=Ui.from_raw(_section(raw, "ui")),
             analysis=Analysis.from_raw(_section(raw, "analysis")),
             transcript_view=TranscriptView.from_raw(_section(raw, "transcript_view")),
+            profiles=Profiles.from_raw(_section(raw, "profiles")),
             categories=as_categories(raw.get("categories")),
         )
 
@@ -1174,6 +1193,7 @@ class Settings:
             "ui": self.ui.to_raw(),
             "analysis": self.analysis.to_raw(),
             "transcript_view": self.transcript_view.to_raw(),
+            "profiles": self.profiles.to_raw(),
             "categories": [c.to_raw() for c in self.categories],
         }
 

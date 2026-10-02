@@ -232,6 +232,18 @@ def _add_library_parsers(sub) -> None:
     for p in (p_an, p_ti, p_im):
         p.add_argument("--provider", default=None, choices=("auto",) + PROVIDERS,
                        help=provider_help + " (без приложения)")
+    p_pr = sub.add_parser(
+        "profile", parents=[as_json],
+        help="профиль человека: как он общается во встречах (если профили включены)",
+        description="Показать профиль человека из базы голосов: стиль общения, что для него важно, "
+                    "как лучше строить разговор — по его репликам во встречах, со ссылками на реплики. "
+                    "С --refresh — составить или обновить его моделью. Профили включаются в настройках "
+                    "приложения и хранятся только на этом компьютере. Если приложение запущено, "
+                    "профиль составляется задачей через него.")
+    p_pr.add_argument("person", help="имя человека в базе голосов")
+    p_pr.add_argument("--refresh", action="store_true", help="составить или обновить профиль")
+    p_pr.add_argument("--provider", default=None, choices=("auto",) + PROVIDERS,
+                      help=provider_help + " (без приложения)")
 
     p_mr = sub.add_parser("merge", parents=[as_json],
                           help="объединить записи одной встречи в одну и расшифровать")

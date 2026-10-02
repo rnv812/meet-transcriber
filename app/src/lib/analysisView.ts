@@ -123,7 +123,7 @@ export function segmentTurns(turns: Turn[], segmentCount: number): Int32Array {
 }
 
 /** Реплика сегмента; сегмент без реплики — ближайшая следующая, иначе предыдущая. */
-function turnOfSegment(map: Int32Array, seg: number): number {
+export function turnOfSegment(map: Int32Array, seg: number): number {
   if (!Number.isInteger(seg) || map.length === 0) return -1;
   const at = Math.max(0, Math.min(map.length - 1, seg));
   for (let s = at; s < map.length; s++) if (map[s]! >= 0) return map[s]!;

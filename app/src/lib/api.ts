@@ -10,7 +10,7 @@
 
 import { inTauri, invoke } from "./shell";
 import type {
-  AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
+  AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQuick, LiveState, LiveStatus, Person, PersonCard, ProfileView,
   Category, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript,
@@ -228,6 +228,18 @@ export const mergePerson = (ep: Endpoint, name: string, into: string) =>
   json<unknown>(ep, `/voices/${enc(name)}/merge`, body("POST", { into }));
 export const deletePerson = (ep: Endpoint, name: string) =>
   json<unknown>(ep, `/voices/${enc(name)}`, { method: "DELETE" });
+
+// Профили людей (включаются в настройках): профиль, «Обновить профиль», заметки, удаление.
+export const getProfile = (ep: Endpoint, name: string) => json<ProfileView>(ep, `/voices/${enc(name)}/profile`);
+/** Поставить задачу (kind "profile"); уже ждёт или идёт — та же. 409 — выключены, мало реплик, нет модели. */
+export const makeProfile = (ep: Endpoint, name: string) =>
+  json<Job>(ep, `/voices/${enc(name)}/profile`, { method: "POST" });
+export const deleteProfile = (ep: Endpoint, name: string) =>
+  json<{ ok: boolean }>(ep, `/voices/${enc(name)}/profile`, { method: "DELETE" });
+export const saveProfileNotes = (ep: Endpoint, name: string, text: string) =>
+  json<{ notes: string }>(ep, `/voices/${enc(name)}/profile/notes`, body("PUT", { text }));
+export const getProfilesInfo = (ep: Endpoint) => json<{ enabled: boolean; count: number }>(ep, "/profiles");
+export const deleteAllProfiles = (ep: Endpoint) => json<{ deleted: number }>(ep, "/profiles", { method: "DELETE" });
 
 // --- настройки и сервис -----------------------------------------------------
 

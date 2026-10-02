@@ -192,6 +192,52 @@ export type PersonCard = {
 
 export type Sample = { recording: string; start: number; end: number; track: string };
 
+/** Ссылка утверждения профиля на реплику: встреча (id записи), номер сегмента, начало и цитата. */
+export type ProfileRef = { m: string; i: number; t?: number; q?: string };
+export type ProfileStatement = { text: string; refs: ProfileRef[] };
+export type ProfileSectionKey = "style" | "values" | "how_to_talk" | "avoid" | "topics";
+/** Профиль человека (meet.profiles): стиль общения по репликам во встречах. */
+export type Profile = {
+  version: number;
+  person_id: string;
+  name: string;
+  updated_at: number;
+  model?: string;
+  meetings: number;
+  turns: number;
+  sampled?: number;
+  /** Реплик пока немного: профиль сокращённый. */
+  reduced?: boolean;
+  summary: string;
+  sections: Partial<Record<ProfileSectionKey, ProfileStatement[]>>;
+  /** Встречи, на которые ссылаются утверждения: название и дата. */
+  sources: Record<string, { title: string; date: string }>;
+  filtered?: number;
+  warnings?: string[];
+};
+export type ProfileStateName = "none" | "queued" | "running" | "ready" | "failed";
+/** GET /voices/{name}/profile. Профили выключены — только `{enabled: false}`. */
+export type ProfileView = {
+  enabled: boolean;
+  name?: string;
+  /** Это владелец микрофона («Вы»): профиль обновляется только вручную. */
+  self?: boolean;
+  stats?: { turns: number; meetings: number };
+  /** Сколько данных: none — профиля не будет, reduced — сокращённый, full — полный. */
+  level?: "none" | "reduced" | "full";
+  /** «Недостаточно данных: …» при level none. */
+  note?: string;
+  state?: ProfileStateName;
+  profile?: Profile | null;
+  notes?: string;
+  error?: string;
+  job?: Job;
+  /** Последняя встреча, где человек говорил: туда — «Подготовиться к разговору». */
+  latest_meeting?: string | null;
+  /** После профиля появились новые реплики. */
+  has_new?: boolean;
+};
+
 /** Фраза спикера для прослушивания в панели «Спикеры». */
 export type SpeakerPhrase = { start: number; end: number; text: string };
 /** Похожий голос из базы: `score` — сходство 0..1. */

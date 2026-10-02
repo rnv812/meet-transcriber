@@ -65,8 +65,8 @@ export function CardTabs({
   /** Первая вкладка: расшифровка, живой режим или ход расшифровки. */
   transcript: ReactNode;
   onOpenSettings?: (section: string) => void;
-  /** Растёт, когда снаружи просят показать расшифровку (переход из поиска по записям). */
-  showTranscript?: number;
+  /** Меняется, когда снаружи просят показать расшифровку (переход из поиска по записям, реплика из профиля). */
+  showTranscript?: number | string;
   stage?: CardStage;
   /** «Спросить агента»: ссылка для поля ввода агента; новый объект — новая просьба. */
   agentRequest?: AgentInsert | null;
