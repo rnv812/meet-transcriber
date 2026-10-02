@@ -10,6 +10,14 @@
 на панель, — его присылает панель как `since_t`; не прислала — последние
 5 минут), «Какие решения уже приняты?», «Что мне ответить?» (на последний
 вопрос, обращённый к владельцу), «Кратко за 1 минуту».
+
+Ответ идёт в окно по мере генерации (у Claude Code): куски текста копятся в
+`partials()`, сигнал окну — не чаще PARTIAL_EVERY_S (≤ 10 раз в секунду);
+готовый ответ приходит в историю целиком.
+
+Перед вопросом ассистент дорасшифровывает только ещё не распознанный хвост
+речи (`on_fresh_audio`) и не ждёт окна, которое распознаётся прямо сейчас:
+ответ берёт уже готовые реплики.
 """
 
 import asyncio
@@ -25,6 +33,8 @@ LINES_MAX_CHARS = 8_000    # реплик в промпт вопроса — н�
 # сводка (в ней решения уже собраны) идёт первой, реплик — вдвое больше.
 DECISIONS_LINES_MAX_CHARS = 16_000
 MISSED_DEFAULT_S = 300.0
+# Частичный ответ — окну не чаще 10 раз в секунду.
+PARTIAL_EVERY_S = 0.1
 
 QUICK = {
     "missed": {
@@ -91,7 +101,7 @@ class QAService:
     def __init__(self, bus, live, *, system_prompt: str,
                  allowed_dirs: tuple[Path, ...], cwd, runner,
                  on_fresh_audio=None, model: str | None = None,
-                 owner: str = "Вы", clock=time.time) -> None:
+                 owner: str = "Вы", clock=time.time, changed=None) -> None:
         self._bus = bus
         self._live = live
         self._system = system_prompt
@@ -108,10 +118,50 @@ class QAService:
         self._next_id = 1
         self.version = 0
         self._lock = asyncio.Lock()
+        # Сигнал окнам (`Notifier`): новая история или кусок ответа.
+        self._changed = changed
+        self._partials: dict[int, str] = {}
+        self.partial_version = 0
+        self._partial_at = 0.0
+        self._partial_timer = None
 
     def set_system_prompt(self, text: str) -> None:
         """Сменить системный промпт на лету (при смене задачи-контекста)."""
         self._system = text
+
+    def _notify(self) -> None:
+        if self._changed is not None:
+            self._changed.notify()
+
+    def partials(self) -> list[dict]:
+        """Ответы, которые ещё пишутся: [{"id", "a"}] (текст на сейчас)."""
+        return [{"id": i, "a": text} for i, text in self._partials.items()]
+
+    def _partial(self, item: dict):
+        """on_text для вызова модели: копит текст ответа и будит окна не
+        чаще PARTIAL_EVERY_S (последний кусок — по таймеру)."""
+        item_id = item["id"]
+
+        def emit() -> None:
+            self._partial_timer = None
+            self._partial_at = time.monotonic()
+            self.partial_version += 1
+            self._notify()
+
+        def on_text(chunk: str) -> None:
+            if not chunk or item_id not in self._partials:
+                return
+            self._partials[item_id] += chunk
+            wait = self._partial_at + PARTIAL_EVERY_S - time.monotonic()
+            if wait <= 0:
+                emit()
+            elif self._partial_timer is None:
+                try:
+                    self._partial_timer = asyncio.get_running_loop().call_later(wait, emit)
+                except RuntimeError:
+                    emit()
+
+        return on_text
 
     def history(self) -> list[dict]:
         """Вопросы для окна: {"id", "q", "a", "error", "pending", "at", "quick"}."""
@@ -124,11 +174,15 @@ class QAService:
         self._items.append(item)
         del self._items[:-HISTORY_KEEP]
         self.version += 1
+        self._partials[item["id"]] = ""
+        self._notify()
         return item
 
     def _finish(self, item: dict, *, answer: str | None = None, error: str | None = None) -> None:
         item.update(a=answer, error=error, pending=False)
+        self._partials.pop(item["id"], None)
         self.version += 1
+        self._notify()
 
     async def ask(self, question: str | None = None, *, quick: str | None = None,
                   since_t: float | None = None) -> str:
@@ -151,7 +205,8 @@ class QAService:
                     kwargs["session_id"] = str(uuid.uuid4())
                 reply = await self._runner(
                     prompt, system_prompt=self._system, resume=resume,
-                    allowed_dirs=self._allowed, cwd=self._cwd, **kwargs)
+                    allowed_dirs=self._allowed, cwd=self._cwd,
+                    on_text=self._partial(item), **kwargs)
         except Exception as e:
             self._finish(item, error=f"внутренняя ошибка: {e}")
             raise

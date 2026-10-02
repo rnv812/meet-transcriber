@@ -33,6 +33,17 @@ READ_TOOLS = ("Read", "Grep", "Glob")
 NO_PERSISTENCE = {"no-session-persistence": None}
 
 
+def text_delta(event) -> str:
+    """Кусок текста ответа из события потока Anthropic API (`content_block_delta`
+    с `text_delta`); размышления и прочие события — пустая строка."""
+    if not isinstance(event, dict) or event.get("type") != "content_block_delta":
+        return ""
+    delta = event.get("delta") or {}
+    if delta.get("type") != "text_delta":
+        return ""
+    return str(delta.get("text") or "")
+
+
 def find_cli() -> str | None:
     """Путь к Claude Code CLI (см. `meet.llm.detect.find_claude`)."""
     return find_claude()
@@ -91,6 +102,8 @@ async def run(
     timeout_s: float = 180.0,
     max_turns: int = 8,
     proxy: str | None = None,
+    on_text=None,
+    thinking: str | None = None,
 ) -> AgentReply:
     """Один вызов Claude через Agent SDK: свежая сессия (или resume), строгий
     системный промпт, без настроек проекта; ошибки — в AgentReply.error.
@@ -107,10 +120,15 @@ async def run(
     своему id.
 
     `proxy` — `llm.proxy` (по умолчанию «как в системе»): Claude Code сам
-    системный прокси Windows не видит, его передаём переменными."""
+    системный прокси Windows не видит, его передаём переменными.
+
+    `on_text(кусок)` — текст ответа по мере генерации (частичные сообщения
+    CLI): окно показывает ответ, не дожидаясь конца. `thinking="disabled"` —
+    без размышлений (только «Быстрее»: haiku иначе думает по умолчанию и
+    отвечает минутами); None — как у модели по умолчанию."""
     import claude_agent_sdk
     from claude_agent_sdk import (
-        AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock,
+        AssistantMessage, ClaudeAgentOptions, ResultMessage, StreamEvent, TextBlock,
     )
 
     drop_api_key()
@@ -132,6 +150,8 @@ async def run(
         max_turns=max_turns,
         session_id=None if resume else session_id,
         extra_args={} if persist else dict(NO_PERSISTENCE),
+        include_partial_messages=on_text is not None,
+        thinking={"type": thinking} if thinking else None,
     )
 
     # can_use_tool в этой версии SDK требует streaming-режима ввода: строка-prompt
@@ -148,6 +168,14 @@ async def run(
     async def _consume() -> None:
         nonlocal result_text, reported, error
         async for msg in claude_agent_sdk.query(prompt=_single_message(), options=options):
+            if on_text is not None and isinstance(msg, StreamEvent):
+                delta = text_delta(msg.event)
+                if delta:
+                    try:
+                        on_text(delta)
+                    except Exception:  # сбой показа не обрывает ответ
+                        log.exception("on_text")
+                continue
             if isinstance(msg, AssistantMessage):
                 if getattr(msg, "error", None):
                     error = str(msg.error)

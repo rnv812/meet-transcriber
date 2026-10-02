@@ -135,6 +135,22 @@ def _live(w, monkeypatch, *, act):
     async def fake_check_auth(proxy=None):
         return None
 
+    class FakeConversation:
+        """Постоянный диалог подсказок (claude_stream): модель — его параметр."""
+
+        stateful = alive = True
+
+        def __init__(self, *, system_prompt, model=None, **kw):
+            self.model, self.turns, self.context_tokens = model, 0, 0
+
+        async def send(self, text, *, on_text=None, timeout_s=90.0):
+            self.turns += 1
+            w["calls"].append({"model": self.model, "system": "диалог подсказок"})
+            return AgentReply(text='{"op":"none"}')
+
+        def close(self):
+            pass
+
     async def fake_main(state, port, **kw):
         state.bus.publish("[00:00:05] Демьян: Давайте зафиксируем сроки релиза и ответственных за него.")
 
@@ -142,6 +158,7 @@ def _live(w, monkeypatch, *, act):
     monkeypatch.setattr(app_mod, "QAService", qa)
     monkeypatch.setattr(app_mod, "check_auth", fake_check_auth)
     monkeypatch.setattr(app_mod, "_main", fake_main)
+    monkeypatch.setattr("meet.llm.claude_stream.Conversation", FakeConversation)
     monkeypatch.setattr("meet.asr.Transcriber", lambda: object())
     monkeypatch.setattr("meet.live.LiveEngine", FakeEngine)
     app_mod.run_assist(out_root=str(w["rec"] / "live"), no_voices=True, open_browser=False,
@@ -149,6 +166,7 @@ def _live(w, monkeypatch, *, act):
     w["replies"]["text"] = '{"ops": []}'
     if act == "tick":
         asyncio.run(made["digester"].tick_once())
+        assert any(c["system"] == "диалог подсказок" for c in w["calls"])
     else:
         asyncio.run(made["qa"].ask("какой срок?"))
 
@@ -160,7 +178,7 @@ CALLERS = [
     ("improve", "улучшение расшифровки", _improve, 1),
     ("title", "название записи", _title, 1),
     ("profile", "профиль и проверка утверждений", _profile, 2),
-    ("live-tick", "тик живого ассистента", "tick", 1),
+    ("live-tick", "тики живого ассистента: подсказки и сводка", "tick", 2),
     ("live-qa", "вопрос во время встречи", "qa", 1),
 ]
 

@@ -226,3 +226,41 @@ def test_live_qa_session_is_saved_under_our_id_and_resumed(monkeypatch):
     assert "--no-session-persistence" not in cmd and reply.session_id == sid
     cmd, reply = _command_and_reply(monkeypatch)
     assert "--no-session-persistence" in cmd and reply.session_id is None
+
+
+def test_on_text_streams_answer_pieces_and_asks_for_partial_messages(monkeypatch):
+    """Ответ вопроса виден по мере генерации: куски текста (text_delta) —
+    в on_text; размышления и прочие события — нет."""
+    from claude_agent_sdk import ResultMessage, StreamEvent
+    from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
+
+    seen = {}
+
+    def delta(kind, **kw):
+        return StreamEvent(uuid="u", session_id="s", event={
+            "type": "content_block_delta", "delta": {"type": kind, **kw}})
+
+    def fake_query(*, prompt, options):
+        seen["cmd"] = SubprocessCLITransport(prompt=prompt, options=options)._build_command()
+
+        async def gen():
+            yield delta("thinking_delta", thinking="думаю")
+            yield delta("text_delta", text="Пере")
+            yield delta("text_delta", text="нести.")
+            yield ResultMessage(subtype="success", duration_ms=1, duration_api_ms=1, is_error=False,
+                                num_turns=1, session_id="x", result="Перенести.")
+        return gen()
+
+    monkeypatch.setattr(claude_agent_sdk, "query", fake_query)
+    monkeypatch.setattr(claude, "find_cli", lambda: "C:/claude.exe")
+    pieces = []
+    reply = asyncio.run(claude.run("вопрос", system_prompt="s", on_text=pieces.append))
+    assert pieces == ["Пере", "нести."] and reply.text == "Перенести."
+    assert "--include-partial-messages" in seen["cmd"]
+
+
+def test_fast_tier_turns_thinking_off_and_default_keeps_it(monkeypatch):
+    cmd, _ = _command_and_reply(monkeypatch, model="haiku", thinking="disabled")
+    assert cmd[cmd.index("--thinking") + 1] == "disabled"
+    cmd, _ = _command_and_reply(monkeypatch, model="sonnet")
+    assert "--thinking" not in cmd and "--include-partial-messages" not in cmd

@@ -29,8 +29,9 @@ from meet.assist.digester import Cadence, Digester, cadence_for
 from meet.assist.kb_index import TermIndex
 from meet.assist.live_state import LIVE_STATE_JSON, LiveState
 from meet.assist.prompts import (
-    build_digester_system,
+    build_hints_system,
     build_qa_system,
+    build_summary_system,
     load_glossary,
 )
 from meet.assist.qa import QAService
@@ -90,11 +91,12 @@ class AssistState:
                  vault: Path | None, cwd: Path,
                  knowledge: Path | None = None,
                  vault_index: str = "Claude Docs.md", hub_prefix: str = "_",
-                 prefs: dict | None = None) -> None:
+                 prefs: dict | None = None, owner: str = "Вы") -> None:
         self.bus = bus
         self.live = live
         # Общий сигнал изменений: новая реплика, сводка, подсказки, ответы.
         self.changes = bus.changed
+        self._owner = owner or "Вы"
         # Настройки окна из `assist` (не отвлекать, активность): окна берут их
         # из `state`, а не читают config.json сами.
         self.prefs = dict(prefs or {})
@@ -124,13 +126,13 @@ class AssistState:
         return self._knowledge
 
     def _rebuild(self) -> None:
-        self.digester_system = build_digester_system(
-            self._glossary, self._task_context,
-            hints=self.live.hints_enabled, max_hints=self.live.max_hints)
+        self.digester_system = build_summary_system(self._glossary, self._task_context)
+        self.hints_system = build_hints_system(
+            self._glossary, self._task_context, max_hints=self.live.max_hints, owner=self._owner)
         self.qa_system = build_qa_system(
             self._glossary, self._task_context, self._vault, self._knowledge)
         if self.digester is not None:
-            self.digester.set_system_prompt(self.digester_system)
+            self.digester.set_system_prompt(self.digester_system, self.hints_system)
         if self.qa is not None:
             self.qa.set_system_prompt(self.qa_system)
 
@@ -162,6 +164,13 @@ class AssistState:
 
     def qa_items(self) -> list[dict]:
         return self.qa.history() if self.qa is not None else []
+
+    def qa_partial_version(self) -> int:
+        return self.qa.partial_version if self.qa is not None else 0
+
+    def qa_partials(self) -> list[dict]:
+        """Ответы, которые ещё пишутся: [{"id", "a"}]."""
+        return self.qa.partials() if self.qa is not None else []
 
     def hint_action(self, hint_id: str, action: str) -> bool:
         """Закрепить, открепить или скрыть подсказку. False — такой нет."""
@@ -302,6 +311,34 @@ def cadence_of(assist) -> Cadence:
     return cadence
 
 
+def hints_session_for(provider: str | None, cfg, tick_kwargs: dict, log=print):
+    """Фабрика диалога подсказок: у Claude Code — постоянный процесс на
+    встречу (`llm.claude_stream.Conversation`) с моделью уровня «Как у
+    агента»/«Быстрее»; у остальных — None (тикер зовёт runner на каждый тик)."""
+    if provider != "claude-code":
+        return None
+    from meet.llm.claude_stream import Conversation
+
+    def make(system_prompt: str):
+        return Conversation(system_prompt=system_prompt, model=tick_kwargs.get("model"),
+                            thinking=tick_kwargs.get("thinking"), proxy=cfg.llm.proxy, log=log)
+
+    return make
+
+
+def qa_workdir(provider: str | None, out_dir: Path) -> Path:
+    """Рабочая папка вопросов. У Claude Code — служебная, не папка встречи:
+    сохранённый сеанс вопросов лежит в истории Claude Code под своей папкой,
+    и `--continue` вкладки «Агент» (она работает в папке встречи) его не
+    подхватит. Файлы встречи и базы знаний вопросы читают по абсолютным
+    путям (разрешённые папки). Остальным провайдерам — папка встречи."""
+    if provider != "claude-code":
+        return out_dir
+    from meet.llm.claude_stream import workdir
+
+    return workdir("meet-live-qa")
+
+
 def _pick_runner(provider: str | None, cfg):
     """Кто отвечает: явный `--provider`, иначе `llm.resolve(настройки)`."""
     from meet import llm
@@ -376,6 +413,7 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         knowledge=Path(knowledge_dir) if knowledge_dir else None,
         vault_index=cfg.assist.vault_index, hub_prefix=cfg.assist.hub_prefix,
         prefs={"quiet_default": cfg.assist.quiet_default, "activity": cfg.assist.activity},
+        owner=cfg.recording.speaker_name,
     )
     # Распознавание: GigaAM короткими окнами для русского (если скачана),
     # иначе Whisper; правила замены и латиница — к каждой реплике.
@@ -409,17 +447,22 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     tick_kwargs = llm.tier_kwargs(provider_name, cfg.assist.hints_model, cfg.llm.model)
     print(f"живые подсказки: {cfg.assist.activity}, модель тиков: "
           f"{cfg.assist.hints_model} {tick_kwargs or ''}".rstrip(), flush=True)
+    def log(line: str) -> None:
+        print(line, flush=True)
+
     state.digester = Digester(bus, live, system_prompt=state.digester_system,
+                              hints_system=state.hints_system,
+                              hints_session=hints_session_for(provider_name, cfg, tick_kwargs, log),
                               runner=runner, cadence=cadence, kb=kb,
                               call_kwargs=tick_kwargs,
-                              on_update=_save_state,
-                              log=lambda line: print(line, flush=True))
+                              owner_speaker=cfg.recording.speaker_name,
+                              on_update=_save_state, log=log)
     state.qa = QAService(
         bus, live, system_prompt=state.qa_system,
-        allowed_dirs=state.qa_allowed_dirs, cwd=out_dir,
+        allowed_dirs=state.qa_allowed_dirs, cwd=qa_workdir(provider_name, out_dir),
         runner=runner, model=llm.agent_model(provider_name, cfg),
         on_fresh_audio=getattr(engine, "flush_tail", engine.process_window),
-        owner=cfg.recording.speaker_name,
+        owner=cfg.recording.speaker_name, changed=bus.changed,
     )
     if task:
         asyncio.run(state.set_task(task))
@@ -436,6 +479,9 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     except KeyboardInterrupt:
         pass
     finally:
+        close = getattr(state.digester, "close", None)
+        if close is not None:
+            close()  # процесс диалога подсказок — не сирота, даже при сбое
         engine.stop()
         if started and not live.is_empty():
             _save_state()  # итог живого режима — черновик для задачи итогов

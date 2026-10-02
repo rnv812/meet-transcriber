@@ -401,3 +401,94 @@ def test_long_term_ref_matches_before_any_trimming():
     s = _state()
     s.apply({"ops": [_hint("Шлюз — сервис платежей", kind="term", ref=ref)]}, allowed_refs={ref})
     assert s.to_dict()["hints"][0]["ref"] == ref
+
+
+# --- построчное применение (две линии, поток) ------------------------------------
+
+from meet.assist.live_state import MAX_URGENT, LineSplitter, parse_line  # noqa: E402
+
+
+def test_line_splitter_joins_pieces_into_whole_lines():
+    split = LineSplitter()
+    assert split.feed('{"op":"no') == []
+    assert split.feed('ne"}\n{"op":') == ['{"op":"none"}']
+    assert split.feed('"none"}') == []
+    assert split.finish() == ['{"op":"none"}']
+    assert split.finish() == []
+
+
+def test_parse_line_skips_prose_fences_and_brackets_but_flags_broken_json():
+    for noise in ("", "```json", "```", "Вот изменения:", "{", "},", "]"):
+        assert parse_line(noise) is None
+    assert parse_line('- {"op":"none"}') == {"op": "none"}
+    with pytest.raises(PatchError):
+        parse_line('{"op":"add","text": оборвано}')
+    with pytest.raises(PatchError):
+        parse_line('{"op":"add"')
+
+
+def test_session_none_and_topic_ops():
+    s = _state()
+    patch = s.session(lane="summary")
+    assert patch.apply({"op": "none"}) is False and s.version == 0
+    assert patch.apply({"op": "topic", "text": "Запуск"}) is True and s.topic == "Запуск"
+    assert patch.apply({"op": "topic", "text": "Запуск"}) is False
+    assert s.version == 1
+
+
+def test_lanes_touch_only_their_part():
+    s = _state()
+    hints = s.session(lane="hints")
+    with pytest.raises(PatchError):
+        hints.apply({"op": "add", "section": "points", "text": "чужое"})
+    with pytest.raises(PatchError):
+        hints.apply({"op": "topic", "text": "Запуск"})
+    # У линии подсказок секция одна — её можно не называть.
+    assert hints.apply({"op": "add", "kind": "risk", "text": "Нет владельца запуска", "t": "00:00:05"})
+    summary = s.session(lane="summary")
+    with pytest.raises(PatchError):
+        summary.apply({"op": "remove", "id": "h1"})
+    assert summary.apply({"op": "add", "section": "points", "text": "Запуск в среду"})
+    assert [h["id"] for h in s.hints()] == ["h1"] and s.summary()["points"][0]["id"] == "p1"
+
+
+def test_removal_guard_counts_across_lines_of_one_reply():
+    s = _state()
+    s.apply({"ops": [{"op": "add", "section": "points", "text": f"Тезис номер {w}"}
+                     for w in ("один", "два", "три", "четыре", "пять")]})
+    patch = s.session(lane="summary")
+    for i in (1, 2, 3):
+        assert patch.apply({"op": "remove", "id": f"p{i}"})
+    with pytest.raises(PatchError):
+        patch.apply({"op": "remove", "id": "p4"})       # четвёртое удаление за ответ
+    assert [p["id"] for p in s.summary()["points"]] == ["p4", "p5"]
+    # Следующий ответ — свой счёт; но раздел целиком (из ≥2 пунктов) не сносится.
+    patch = s.session(lane="summary")
+    assert patch.apply({"op": "remove", "id": "p4"})
+    with pytest.raises(PatchError):
+        patch.apply({"op": "remove", "id": "p5"})
+    assert [p["id"] for p in s.summary()["points"]] == ["p5"]
+
+
+def test_urgent_hint_keeps_reply_draft_and_at_most_two_live():
+    s = _state()
+    patch = s.session(lane="hints")
+    for i, who in enumerate(("Ольга", "Пётр", "Ирина")):
+        patch.apply({"op": "add", "kind": "ask_you", "text": f"{who} спрашивает про сроки отчёта номер {i}",
+                     "reply": f"Отчёт будет к четвергу ({i}).", "t": f"00:0{i}:00"})
+    urgent = [h for h in s.hints() if h["kind"] == "ask_you"]
+    assert len(urgent) == MAX_URGENT == 2
+    assert [h["reply"] for h in urgent] == ["Отчёт будет к четвергу (1).", "Отчёт будет к четвергу (2)."]
+    patch.apply({"op": "update", "id": urgent[0]["id"], "reply": "Отчёт будет в пятницу."})
+    assert s.hints()[0]["reply"] == "Отчёт будет в пятницу."
+
+
+def test_hints_brief_lists_ids_flags_and_dismissed():
+    s = _state()
+    s.apply({"ops": [{"op": "add", "section": "hints", "kind": "risk", "text": f"Подсказка {w}",
+                      "t": "00:00:01"} for w in ("первая про сроки", "вторая про бюджет")]})
+    s.pin("h1")
+    s.dismiss("h2")
+    brief = s.hints_brief()
+    assert "h1 (закреплена)" in brief and "Скрыты" in brief and "h2" in brief
+    assert "Подсказка" not in brief                     # тексты модель уже видела
