@@ -516,8 +516,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
             </div>
           </header>
           {askReset && (
-            <ConfirmDialog title="Отменить несохранённые изменения?" confirmLabel="Сбросить"
-              message={`Правки в разделах ${dirtyTitles.map((t) => `«${t}»`).join(", ")} будут отменены.`}
+            <ConfirmDialog title="Отменить несохранённые изменения?" confirmLabel="Сбросить" cancelLabel="Оставить правки"
+              message={`Правки в ${dirtyTitles.length === 1 ? "разделе" : "разделах"} ${dirtyTitles.map((t) => `«${t}»`).join(", ")} будут отменены.`}
               onCancel={() => setAskReset(false)} onConfirm={() => { setAskReset(false); void reload(); }} />
           )}
           {error && <p className="error" role="alert">{error}</p>}
