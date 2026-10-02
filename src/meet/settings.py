@@ -168,6 +168,12 @@ MAX_HINTS_RANGE = (3, 12)
 # Анализ встречи (meet.analysis): что размечать. Выключенное не запрашивается у
 # модели (промпт короче) и не показывается в окне.
 ANALYSIS_FEATURES = ("types", "importance", "chapters", "insights", "category", "title")
+# Разовое предложение включить авто-анализ тому, кто обновился с 0.2.x
+# (Analysis.consent): ждёт ответа, включил, отказался.
+CONSENT_PENDING = "pending"
+CONSENT_GRANTED = "granted"
+CONSENT_DECLINED = "declined"
+ANALYSIS_CONSENTS = (CONSENT_PENDING, CONSENT_GRANTED, CONSENT_DECLINED)
 # Кривая важности над плеером: всегда, при наведении на полосу, не показывать.
 CURVE_MODES = ("always", "hover", "off")
 # Ссылки на задачи Jira в карточке (M3): ключ по умолчанию — «ПРОЕКТ-123».
@@ -823,7 +829,14 @@ class Analysis:
 
     `improve_auto` — «Улучшать расшифровку автоматически после распознавания»
     (meet.improve): после расшифровки модель сама готовит список исправлений
-    терминов; применяет их человек. По умолчанию выключено."""
+    терминов; применяет их человек. По умолчанию выключено.
+
+    `consent` — ответ на разовое предложение включить автоматический анализ.
+    Новой установке анализ включён сразу и спрашивать не о чем (""). У того, кто
+    обновился с 0.2.x (в конфиге нет секции `analysis`), текст встреч раньше без
+    его просьбы никуда не уходил — поэтому авто-анализ у него выключен, пока он
+    не ответит: "pending" — карточка один раз предлагает включить, "granted" /
+    "declined" — ответ (больше не спрашиваем). Пока "pending", `auto` — False."""
 
     auto: bool = True
     types: bool = True
@@ -833,19 +846,50 @@ class Analysis:
     category: bool = True
     title: bool = True
     improve_auto: bool = False
+    consent: str = ""
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Analysis":
-        return cls(auto=as_flag(raw.get("auto"), True), improve_auto=as_flag(raw.get("improve_auto"), False),
+        consent = as_choice(raw.get("consent"), ANALYSIS_CONSENTS, "")
+        auto = as_flag(raw.get("auto"), True) and consent != CONSENT_PENDING
+        return cls(auto=auto, improve_auto=as_flag(raw.get("improve_auto"), False), consent=consent,
                    **{name: as_flag(raw.get(name), True) for name in ANALYSIS_FEATURES})
+
+    @classmethod
+    def upgraded(cls) -> "Analysis":
+        """Конфиг 0.2.x без секции `analysis`: авто-анализ выключен до ответа
+        на разовое предложение в карточке (см. `consent`)."""
+        return cls(auto=False, consent=CONSENT_PENDING)
+
+    def patched(self, update: dict) -> "Analysis":
+        """Частичное обновление из окна (patch). Ответ на предложение
+        (`consent`: granted/declined) включает или выключает авто-анализ;
+        переключатель «Анализировать встречу после расшифровки», тронутый, пока
+        вопрос висит, — тоже ответ. Вернуть вопрос ("pending") нельзя."""
+        merged = self.to_raw()
+        merged.update(update)
+        answer = update.get("consent")
+        if answer in (CONSENT_GRANTED, CONSENT_DECLINED):
+            if "auto" not in update:
+                merged["auto"] = answer == CONSENT_GRANTED
+        else:
+            merged["consent"] = self.consent
+            if self.consent == CONSENT_PENDING and "auto" in update:
+                auto = as_flag(update["auto"], self.auto)
+                if auto != self.auto:
+                    merged["consent"] = CONSENT_GRANTED if auto else CONSENT_DECLINED
+        return type(self).from_raw(merged)
 
     def features(self) -> tuple[str, ...]:
         """Включённые части разметки — в порядке ANALYSIS_FEATURES."""
         return tuple(name for name in ANALYSIS_FEATURES if getattr(self, name))
 
     def to_raw(self) -> dict:
-        return {"auto": self.auto, **{name: getattr(self, name) for name in ANALYSIS_FEATURES},
-                "improve_auto": self.improve_auto}
+        out = {"auto": self.auto, **{name: getattr(self, name) for name in ANALYSIS_FEATURES},
+               "improve_auto": self.improve_auto}
+        if self.consent:
+            out["consent"] = self.consent
+        return out
 
 
 @dataclass(frozen=True)
@@ -1243,7 +1287,10 @@ class Settings:
             export=Export.from_raw(_section(raw, "export"), legacy_dir=_legacy_notes(assistant)),
             integrations=Integrations.from_raw(_section(raw, "integrations")),
             ui=Ui.from_raw(_section(raw, "ui")),
-            analysis=Analysis.from_raw(_section(raw, "analysis")),
+            # До 0.3.0 текст встреч без просьбы никуда не уходил: у обновившегося
+            # авто-анализ выключен, пока он не ответит на предложение в карточке.
+            analysis=(Analysis.from_raw(_section(raw, "analysis")) if is_new or "analysis" in raw
+                      else Analysis.upgraded()),
             transcript_view=TranscriptView.from_raw(_section(raw, "transcript_view")),
             profiles=Profiles.from_raw(_section(raw, "profiles")),
             agent=Agent.from_raw(_section(raw, "agent")),
@@ -1583,6 +1630,9 @@ def patch(updates: dict, path: Path | None = None) -> Settings:
             Integrations.check(section_update)
         if name == "agent":
             Agent.check(section_update)
+        if name == "analysis":
+            changed[name] = current.analysis.patched(section_update)
+            continue
         merged = getattr(current, name).to_raw()
         merged.update(section_update)
         if name == "recording":

@@ -781,3 +781,80 @@ def test_categories_are_patched_as_a_whole_and_junk_is_dropped(tmp_path):
     assert settings.load(f).categories == cfg.categories
     assert settings.patch({"categories": []}, f).categories == ()
     assert settings.load(f).categories == ()
+
+
+# --- разовое предложение авто-анализа обновившимся с 0.2.x (analysis.consent) ---------
+
+# Конфиг, каким его пишет 0.2.x: версия и секции есть, секции `analysis` нет.
+CONFIG_021 = {"version": 2, "auto_record": {"enabled": True, "processes": ["Zoom.exe"]},
+              "hooks": {"post_record": False}, "llm": {"provider": "claude-code", "model": "sonnet"},
+              "asr": {"device": "cpu"}}
+
+
+def test_new_install_analyses_automatically_without_asking(tmp_path):
+    cfg = settings.load(tmp_path / "нет.json")
+    assert cfg.analysis.auto is True and cfg.analysis.consent == ""
+    f = tmp_path / "config.json"
+    settings.save(cfg, f)
+    again = settings.load(f)
+    assert again.analysis.auto is True and again.analysis.consent == ""
+    assert "consent" not in json.loads(f.read_text(encoding="utf-8"))["analysis"]
+
+
+def test_config_of_02x_waits_for_the_answer_with_auto_off(tmp_path):
+    f = tmp_path / "config.json"
+    _write(f, CONFIG_021)
+    cfg = settings.load(f)
+    assert cfg.analysis.auto is False and cfg.analysis.consent == settings.CONSENT_PENDING
+    # Остальные части разметки — как у новой установки.
+    assert cfg.analysis.features() == settings.ANALYSIS_FEATURES
+    settings.save(cfg, f)  # любое сохранение — вопрос остаётся
+    stored = json.loads(f.read_text(encoding="utf-8"))["analysis"]
+    assert stored["consent"] == "pending" and stored["auto"] is False
+    assert settings.load(f).analysis.consent == settings.CONSENT_PENDING
+
+
+def test_config_of_030_is_not_asked(tmp_path):
+    f = tmp_path / "config.json"
+    _write(f, {**CONFIG_021, "analysis": {"auto": True, "types": False}})
+    cfg = settings.load(f)
+    assert cfg.analysis.auto is True and cfg.analysis.consent == "" and cfg.analysis.types is False
+
+
+def test_pending_forces_auto_off_even_if_the_file_says_on(tmp_path):
+    f = tmp_path / "config.json"
+    _write(f, {**CONFIG_021, "analysis": {"auto": True, "consent": "pending"}})
+    assert settings.load(f).analysis.auto is False
+
+
+@pytest.mark.parametrize("answer, auto", [("granted", True), ("declined", False)])
+def test_answer_is_stored_and_sets_auto(tmp_path, answer, auto):
+    f = tmp_path / "config.json"
+    _write(f, CONFIG_021)
+    got = settings.patch({"analysis": {"consent": answer}}, f)
+    assert got.analysis.consent == answer and got.analysis.auto is auto
+    assert settings.load(f).analysis.consent == answer
+    # Вернуть вопрос нельзя: прежний черновик окна с "pending" ничего не меняет.
+    again = settings.patch({"analysis": {"consent": "pending"}}, f)
+    assert again.analysis.consent == answer and again.analysis.auto is auto
+
+
+def test_switch_in_settings_while_pending_is_the_answer(tmp_path):
+    f = tmp_path / "config.json"
+    _write(f, CONFIG_021)
+    # Другие флаги раздела — ещё не ответ.
+    got = settings.patch({"analysis": {"types": False}}, f)
+    assert got.analysis.consent == "pending" and got.analysis.auto is False
+    # «Выключено» ещё раз — тоже не ответ (значение не изменилось).
+    assert settings.patch({"analysis": {"auto": False}}, f).analysis.consent == "pending"
+    got = settings.patch({"analysis": {"auto": True}}, f)
+    assert got.analysis.consent == "granted" and got.analysis.auto is True
+    # После ответа переключатель — просто переключатель.
+    got = settings.patch({"analysis": {"auto": False}}, f)
+    assert got.analysis.consent == "granted" and got.analysis.auto is False
+
+
+def test_new_install_switch_does_not_invent_an_answer(tmp_path):
+    f = tmp_path / "config.json"
+    got = settings.patch({"analysis": {"auto": False}}, f)
+    assert got.analysis.auto is False and got.analysis.consent == ""

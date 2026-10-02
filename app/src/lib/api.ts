@@ -422,6 +422,13 @@ export const getAnalysis = (ep: Endpoint, id: string) =>
 /** «Переанализировать»: задача (kind "analyze"); уже ждёт или идёт — та же. 409 — нет модели или идёт расшифровка. */
 export const runAnalysis = (ep: Endpoint, id: string) =>
   json<Job>(ep, `/recordings/${enc(id)}/analysis`, { method: "POST" });
+/**
+ * Ответ на разовое предложение включить авто-анализ (обновившимся с 0.2.x,
+ * `analysis.consent`). «Включить» ставит и анализ этой записи — по правилам
+ * автоматического. → секция `analysis` настроек.
+ */
+export const answerAnalysisOffer = (ep: Endpoint, id: string, answer: "granted" | "declined") =>
+  json<{ analysis: Record<string, unknown> }>(ep, `/recordings/${enc(id)}/analysis/consent`, body("POST", { answer }));
 /** «Предложить название»: только предложение (до пары минут, если нужен вызов модели). */
 export const suggestTitle = (ep: Endpoint, id: string) =>
   json<TitleSuggestion>(ep, `/recordings/${enc(id)}/title/suggest`, { method: "POST" });

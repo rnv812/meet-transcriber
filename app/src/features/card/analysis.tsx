@@ -93,6 +93,39 @@ export function AnalysisStatus({ state, busy, onRun }: {
   }
 }
 
+/** Текст разового предложения включить авто-анализ (обновившимся с 0.2.x). */
+export const ANALYSIS_OFFER = "Анализ встречи: типы фраз, главы, важное и выводы. Текст встречи отправляется "
+  + "выбранной модели (Claude Code / Codex). Включить автоматически после расшифровки?";
+
+/**
+ * Разовое предложение включить автоматический анализ — тому, кто обновился с
+ * 0.2.x (там текст встреч без просьбы никуда не уходил). Ответ хранится в
+ * настройках (`analysis.consent`), больше не спрашиваем.
+ */
+export function AnalysisOffer({ busy, onAnswer, onOpenSettings }: {
+  busy: boolean;
+  onAnswer: (answer: "granted" | "declined") => void;
+  onOpenSettings?: () => void;
+}) {
+  return (
+    <div className="card__banner card__banner--ok analysis-offer" role="region" aria-label="Предложение: анализ встречи">
+      <span>
+        {ANALYSIS_OFFER}
+        <span className="muted analysis-offer__note">
+          {" "}Можно изменить в{" "}
+          {onOpenSettings
+            ? <button type="button" className="link-btn" onClick={onOpenSettings}>настройках</button>
+            : "настройках"}
+        </span>
+      </span>
+      <span className="card__row">
+        <Button variant="primary" onClick={() => onAnswer("granted")} disabled={busy}>Включить</Button>
+        <Button onClick={() => onAnswer("declined")} disabled={busy}>Не сейчас</Button>
+      </span>
+    </div>
+  );
+}
+
 /** «Анализ устарел» и «Переанализировать…» — с подтверждением: прежняя разметка будет заменена. */
 function StaleAnalysis({ busy, onRun }: { busy: boolean; onRun?: () => void }) {
   const [asking, setAsking] = useState(false);

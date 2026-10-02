@@ -5,7 +5,7 @@ import {
   buildView, INSIGHT_LABEL, segmentTurns, usableAnalysis, type InsightView,
 } from "../../lib/analysisView";
 import {
-  ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
+  answerAnalysisOffer, ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
   kbExport, patchRecording, runAnalysis, setRecordingCategory, transcribe, type Endpoint,
 } from "../../lib/api";
 import { clock, errorText } from "../../lib/format";
@@ -24,7 +24,7 @@ import { Loading } from "../../ui/Loading";
 import { ProgressBar } from "../../ui/ProgressBar";
 import type { AgentInsert } from "./AgentTab";
 import {
-  AnalysisStatus, reanalyzeBlocked, reanalyzeLabel, TitleSuggestPopover, useAnalysis, useTitleSuggest,
+  AnalysisOffer, AnalysisStatus, reanalyzeBlocked, reanalyzeLabel, TitleSuggestPopover, useAnalysis, useTitleSuggest,
 } from "./analysis";
 import { noProvider, useAssistant } from "./assistant";
 import { useImprove } from "./improve";
@@ -117,6 +117,8 @@ export function RecordingCard({
   const [prefs, setPrefs] = useState<MarkupPrefs>(DEFAULT_PREFS);
   /** Ссылки на задачи Jira (адрес и шаблон ключей из настроек); null — выключены. */
   const [jira, setJira] = useState<JiraLinker | null>(null);
+  /** Ответ на предложение включить авто-анализ (`analysis.consent`): "pending" — ещё не спрашивали. */
+  const [consent, setConsent] = useState<string>("");
   /** Куда выгружено нажатием «В базу знаний» (для этой записи) и что не перезаписано. */
   const [kbDone, setKbDone] = useState<KbExport | null>(null);
   /** Дорожка плеера не загрузилась: реплики не перематывают, внизу — «Аудио недоступно». */
@@ -142,6 +144,8 @@ export function RecordingCard({
       if (typeof name === "string" && name.trim()) setOwner(name.trim());
       setPrefs(markupPrefs(s));
       setJira(jiraLinker(s));
+      const answer = (s.analysis as { consent?: unknown } | undefined)?.consent;
+      setConsent(typeof answer === "string" ? answer : "");
     }).catch(() => {}).finally(() => { if (live) setSettingsRead(true); });
     return () => { live = false; };
   }, [endpoint]);
@@ -362,6 +366,13 @@ export function RecordingCard({
   const doTranscribe = () => act(async () => { await transcribe(endpoint, id); onChanged?.(); await load(); });
   const noModel = noProvider(assistantInfo);
   const doReanalyze = () => act(async () => { await runAnalysis(endpoint, id); await analysis.reload(); });
+  // Предложение — одно на всё приложение: ответили (здесь или в настройках) — больше не видно.
+  const offerAnalysis = consent === "pending" && status.kind === "ready" && turns.length > 0
+    && !!assistantInfo?.provider;
+  const answerOffer = (answer: "granted" | "declined") => act(async () => {
+    await answerAnalysisOffer(endpoint, id, answer);
+    setConsent(answer);
+  });
   const active = activeJobOf(rec, jobs);
   // Отмена теряет сделанное — сначала спросить (фокус на «Продолжить»).
   const doCancel = async () => {
@@ -512,6 +523,10 @@ export function RecordingCard({
       {error && <div className="card__error" role="alert">{error}</div>}
       {status.kind === "ready" && (
         <AnalysisStatus state={analysis.state} busy={busy} onRun={noModel ? undefined : doReanalyze} />
+      )}
+      {offerAnalysis && (
+        <AnalysisOffer busy={busy} onAnswer={answerOffer}
+          onOpenSettings={onOpenSettings ? () => onOpenSettings("analysis") : undefined} />
       )}
       {status.kind === "ready" && improve.status}
       {titleSuggest.suggest && cardEl.current && (
