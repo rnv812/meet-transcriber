@@ -31,12 +31,26 @@
 
 Стейт-машина (`Watcher`) отделена от чтения реестра и COM и принимает время
 параметром — грейс проверяется юнитом без клиента конференций и без ожидания.
-См. спеку docs/superpowers/specs/2026-08-07-dion-auto-record-design.md."""
+См. спеку docs/superpowers/specs/2026-08-07-dion-auto-record-design.md.
+
+**macOS** (экспериментально): реестра и WASAPI нет. Оба сигнала — от
+помощника `meet-audiotap --mic-users` (CoreAudio, macOS 14+): какие процессы
+сейчас слушают микрофон и какие играют звук. Списки программ в настройках —
+имена exe Windows; на macOS они переводятся в имена процессов (`MAC_NAMES`):
+«Zoom.exe» → «zoom.us», «chrome.exe» → «Google Chrome» (и его «… Helper»).
+Заголовки окон браузера на macOS не читаются — сайт звонка не определяется."""
 
 import re
-import winreg
+import time
 from datetime import datetime
 from pathlib import Path
+
+from meet import plat
+
+try:
+    import winreg
+except ImportError:  # macOS: реестра нет, сигналы — от помощника (см. выше)
+    winreg = None
 
 CONSENT_MIC = (
     r"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager"
@@ -69,6 +83,76 @@ LOG_MAX_BYTES = 1_000_000
 LOG_CHECK_EVERY = 200  # записей в журнал между проверками его размера
 
 _AUDIO_SESSION_ACTIVE = 1  # AudioSessionState.Active
+
+# macOS: имена процессов по имени exe из настроек (без учёта регистра). Процесс
+# подходит, если его имя совпадает с одним из них или начинается с него и
+# пробела: звук браузера идёт из служебного «Google Chrome Helper».
+MAC_NAMES = {
+    "zoom.exe": ("zoom.us",),
+    "ms-teams.exe": ("MSTeams", "Microsoft Teams"),
+    "teams.exe": ("Microsoft Teams", "MSTeams", "Microsoft Teams classic"),
+    "yandextelemost.exe": ("Yandex Telemost", "Telemost", "Яндекс Телемост"),
+    "telemost.exe": ("Telemost", "Yandex Telemost", "Яндекс Телемост"),
+    "dion.exe": ("Dion",),
+    "webex.exe": ("Webex", "Cisco Webex Meetings"),
+    "chrome.exe": ("Google Chrome",),
+    "msedge.exe": ("Microsoft Edge",),
+    "firefox.exe": ("firefox", "Firefox"),
+    "browser.exe": ("Yandex",),
+    "opera.exe": ("Opera",),
+    "brave.exe": ("Brave Browser",),
+    "vivaldi.exe": ("Vivaldi",),
+}
+# Ответ помощника живёт столько: за один опрос детектор спрашивает микрофон
+# у каждой программы из списка, а помощник — подпроцесс.
+MAC_USERS_TTL_S = 1.0
+_mac_users_cache: "tuple[float, list | None] | None" = None
+
+
+def mac_names(exe_name: str) -> "tuple[str, ...]":
+    """Имена процессов macOS для имени exe из настроек; незнакомое — без `.exe`."""
+    key = exe_name.strip().lower()
+    if key in MAC_NAMES:
+        return MAC_NAMES[key]
+    stem = exe_name.strip()
+    if stem.lower().endswith(".exe"):
+        stem = stem[:-4]
+    return (stem,) if stem else ()
+
+
+def mac_match(process_name: str, exe_name: str) -> bool:
+    """Процесс macOS — это программа из настроек?"""
+    proc = (process_name or "").strip().lower()
+    if not proc:
+        return False
+    for name in mac_names(exe_name):
+        name = name.lower()
+        if proc == name or proc.startswith(name + " "):
+            return True
+    return False
+
+
+def _mac_users(now: "float | None" = None) -> "list | None":
+    """Процессы со звуком от помощника, не чаще раза в MAC_USERS_TTL_S."""
+    global _mac_users_cache
+    now = time.monotonic() if now is None else now
+    cached = _mac_users_cache
+    if cached is not None and now - cached[0] < MAC_USERS_TTL_S:
+        return cached[1]
+    from meet import audiotap
+
+    users = audiotap.mic_users()
+    _mac_users_cache = (now, users)
+    return users
+
+
+def mac_audio_busy(exe_name: str, users: "list | None", key: str) -> "bool | None":
+    """Слушает микрофон (`key="input"`) или играет звук (`"output"`) процесс
+    программы. None — помощник не ответил (macOS старше 14, его нет)."""
+    if users is None:
+        return None
+    return any(item.get(key) and mac_match(item.get("name", ""), exe_name)
+               for item in users)
 _com_ready = False
 _pycaw_warned = False
 _psutil_warned = False
@@ -100,7 +184,11 @@ def mic_busy(exe_name: str) -> "bool | None":
     Ключи ConsentStore названы полным путём к exe с `\\`, заменённым на `#`,
     поэтому ищем по суффиксу имени: место установки программы на разных машинах
     отличается, а имя — нет. Ни одного подходящего ключа (программа ни разу
-    не брала микрофон) → None."""
+    не брала микрофон) → None. На macOS — по ответу помощника (CoreAudio)."""
+    if plat.is_macos():
+        return mac_audio_busy(exe_name, _mac_users(), "input")
+    if winreg is None:
+        return None
     suffix = "#" + exe_name.lower()
     verdict = None
     try:
@@ -148,10 +236,11 @@ def process_running(exe_name: str, log=None) -> "bool | None":
                 f"незакрытая метка в реестре может означать «в звонке» бессрочно")
         return None
     target = exe_name.lower()
+    mac = plat.is_macos()
     try:
         for proc in psutil.process_iter(["name"]):
             name = proc.info.get("name")
-            if name and name.lower() == target:
+            if name and (mac_match(name, exe_name) if mac else name.lower() == target):
                 return True
     except Exception:
         return None
@@ -183,8 +272,11 @@ def render_active(exe_name: str, log=None) -> "bool | None":
     """Воспроизводит ли что-нибудь процесс с таким именем exe.
 
     None — если ответить нечем: pycaw не установлен или COM отказал. False —
-    сессий нет или все неактивны (в том числе когда процесс не запущен)."""
+    сессий нет или все неактивны (в том числе когда процесс не запущен).
+    На macOS — по ответу помощника (CoreAudio: процесс играет звук)."""
     global _pycaw_warned
+    if plat.is_macos():
+        return mac_audio_busy(exe_name, _mac_users(), "output")
     try:
         from pycaw.pycaw import AudioUtilities
     except Exception as e:
@@ -366,11 +458,12 @@ def browser_pids(exe_name: str) -> "set[int] | None":
     except Exception:
         return None
     target = exe_name.lower()
+    mac = plat.is_macos()
     found: set[int] = set()
     try:
         for proc in psutil.process_iter(["name"]):
             name = proc.info.get("name")
-            if name and name.lower() == target:
+            if name and (mac_match(name, exe_name) if mac else name.lower() == target):
                 found.add(proc.pid)
     except Exception:
         return None

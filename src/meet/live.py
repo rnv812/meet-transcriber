@@ -340,10 +340,11 @@ class LiveEngine:
             raise
 
     def _start_capture(self) -> None:
-        import pyaudiowpatch as pyaudio
-
         from meet import recorder
         from meet.recorder import OpusWriter
+
+        # pyaudiowpatch на Windows, sounddevice и помощник ScreenCaptureKit на macOS.
+        pyaudio = recorder.audio_backend()
 
         self._transcriber.load()
         if self._matcher is not None:

@@ -1,0 +1,1 @@
+{"meet_audiotap": 1, "supported": true, "processes": [{"pid": 501, "name": "zoom.us", "bundle": "us.zoom.xos", "input": true, "output": true}, {"pid": 777, "name": "Google Chrome Helper", "bundle": "com.google.Chrome.helper", "input": false, "output": true}, {"pid": 812, "name": "coreaudiod", "bundle": "", "input": false, "output": false}]}
