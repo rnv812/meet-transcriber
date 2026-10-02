@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { agentPrompt, type AgentRequest } from "../../lib/agentRef";
+import { buildView, INSIGHT_LABEL, usableAnalysis, type InsightView } from "../../lib/analysisView";
 import {
   ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
   kbExport, patchRecording, runAnalysis, transcribe, type Endpoint,
 } from "../../lib/api";
-import { errorText } from "../../lib/format";
+import { clock, errorText } from "../../lib/format";
+import { DEFAULT_PREFS, markupPrefs, type MarkupPrefs } from "../../lib/markupPrefs";
 import { agentKillRecording, inTauri, openFolder, saveText } from "../../lib/shell";
 import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
 import { activeJobOf, failedRetranscribe, isLiveRecording, statusOf } from "../../lib/status";
@@ -40,6 +42,8 @@ function logsDir(dataDir: string): string {
   return `${dataDir.replace(/[\\/]+$/, "")}${sep}logs`;
 }
 const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
+/** Сколько первых реплик главы уходит агенту со ссылкой на главу. */
+const CHAPTER_REFS = 6;
 
 export function RecordingCard({
   id, endpoint, jobs = NO_JOBS, snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
@@ -79,6 +83,8 @@ export function RecordingCard({
   const [meetingsDir, setMeetingsDir] = useState<string | null>(null);
   /** Как подписан владелец микрофона (настройка) — «Это я» в меню реплики. */
   const [owner, setOwner] = useState("Вы");
+  /** Что из разметки встречи показывать («Расшифровка: подсветка и разметка», «Анализ встречи»). */
+  const [prefs, setPrefs] = useState<MarkupPrefs>(DEFAULT_PREFS);
   /** Куда выгружено нажатием «В базу знаний» (для этой записи) и что не перезаписано. */
   const [kbDone, setKbDone] = useState<KbExport | null>(null);
   /** Дорожка плеера не загрузилась: реплики не перематывают, внизу — «Аудио недоступно». */
@@ -96,6 +102,7 @@ export function RecordingCard({
       setMeetingsDir(typeof dir === "string" && dir ? dir : null);
       const name = (s.recording as { speaker_name?: unknown } | undefined)?.speaker_name;
       if (typeof name === "string" && name.trim()) setOwner(name.trim());
+      setPrefs(markupPrefs(s));
     }).catch(() => {});
     return () => { live = false; };
   }, [endpoint]);
@@ -199,6 +206,45 @@ export function RecordingCard({
   // Анализ встречи: состояние, «Переанализировать», «Предложить название».
   const assistantInfo = useAssistant(endpoint);
   const analysis = useAnalysis(endpoint, id, rec?.path ?? null, jobs, rec);
+  // Разметка по репликам — один раз на анализ (и на смену расшифровки или настроек).
+  const segmentCount = segments?.length ?? 0;
+  const analysisDoc = usableAnalysis(analysis.state, segmentCount);
+  const view = useMemo(
+    () => buildView(turns, analysisDoc, segmentCount, prefs.parts), [turns, analysisDoc, segmentCount, prefs.parts]);
+  // В «Расшифровке» — только то, что включено в «Подсветке и разметке».
+  const transcriptView = useMemo(() => view && {
+    ...view,
+    types: prefs.typeIcons ? view.types : null,
+    key: prefs.keyBorder ? view.key : null,
+    chapters: prefs.chapterHeads ? view.chapters : [],
+    insights: prefs.insights ? view.insights : [],
+  }, [view, prefs]);
+  const turnRefs = useCallback((from: number, to: number) => {
+    const refs = [];
+    for (let i = from; i <= to; i++) {
+      const t = turns[i];
+      if (t && t.kind !== "break") refs.push({ t: t.start, speaker: t.speaker, text: t.texts.join(" ") });
+    }
+    return refs;
+  }, [turns]);
+  // ✦ у главы: название, время и первые реплики главы.
+  const askChapter = useCallback((c: number) => {
+    const ch = view?.chapters[c];
+    if (!ch) return;
+    askAgent({
+      kind: "chapter", cap: CHAPTER_REFS,
+      about: `Глава ${ch.n} «${ch.title}», ${clock(ch.start)}–${clock(ch.end)}`,
+      refs: turnRefs(ch.turn, ch.lastTurn),
+    });
+  }, [view, turnRefs, askAgent]);
+  // ✦ у наблюдения: вид, текст, «почему» и реплики, на которые оно ссылается.
+  const askInsight = useCallback((x: InsightView) => {
+    askAgent({
+      kind: "insight",
+      about: `${INSIGHT_LABEL[x.kind] ?? "Наблюдение"}: ${x.text}${x.why ? ` Почему: ${x.why}` : ""}`,
+      refs: x.refs.flatMap((r) => turnRefs(r, r)),
+    });
+  }, [turnRefs, askAgent]);
   const titleApplied = useCallback((updated: Recording) => {
     setRec((cur) => (cur ? { ...cur, ...updated, transcript: cur.transcript } : cur));
     onChanged?.();
@@ -282,7 +328,7 @@ export function RecordingCard({
           onNameSpeaker={nameSpeaker} onSpeaker={turnEdit.onSpeaker} selected={turnEdit.selected}
           onSelect={turnEdit.onSelect} onSplitAt={onTextMenu} onAskAgent={askTurns}
           toolbar={turnEdit.bar || textFix.bar ? <div className="tbars">{turnEdit.bar}{textFix.bar}</div> : null}
-          find={shownFind} />
+          find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} />
       ) : <EmptyState title="В записи нет речи" />;
       break;
     case "untranscribed":

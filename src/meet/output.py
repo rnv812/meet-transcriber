@@ -44,11 +44,13 @@ def speaker_names(segments: list[Segment]) -> dict[str, str]:
     return names
 
 
-def to_markdown(title: str, segments: list[Segment], date: str = "") -> str:
+def to_markdown(title: str, segments: list[Segment], date: str = "",
+                contents: list[tuple[float, str]] | None = None) -> str:
     """Транскрипт в Markdown для базы заметок: «## ВРЕМЯ — Спикер».
 
     Если задан date (ISO YYYY-MM-DD), сверху добавляется frontmatter для Obsidian
-    с пустым task (заполняется вручную при переносе в хранилище).
+    с пустым task (заполняется вручную при переносе в хранилище). `contents` —
+    главы анализа встречи (начало, название): раздел «Содержание» под заголовком.
     """
     lines: list[str] = []
     if date:
@@ -62,6 +64,10 @@ def to_markdown(title: str, segments: list[Segment], date: str = "") -> str:
             "",
         ]
     lines += [f"# {title}", ""]
+    if contents:
+        lines += ["## Содержание", ""]
+        lines += [f"- {fmt_ts(start)} — {name}" for start, name in contents]
+        lines += [""]
     lines += turn_lines(segments)
     return "\n".join(lines)
 

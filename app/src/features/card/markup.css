@@ -1,0 +1,73 @@
+/* Разметка встречи в «Расшифровке» (M3): значки типов, важные реплики, главы, фильтры, наблюдения. */
+
+/* Значок типа реплики — приглушённый, в начале строки с именем. */
+.turn__type {
+  display: inline-flex; align-items: center; align-self: center; flex: none;
+  color: var(--text-3); margin-right: -2px;
+}
+.turn__type--decision, .turn__type--task { color: #8f97e8; }
+.turn__type--risk { color: #c9914a; }
+
+/* Важная реплика (верхние ~15 %): тонкая полоса слева. */
+.turn--key { margin-left: -10px; padding-left: 10px; box-shadow: inset 2px 0 0 rgba(124, 134, 240, 0.55); }
+.turn--key.turn--selected { margin: 0 -8px; padding: 8px; box-shadow: inset 3px 0 0 var(--accent); }
+.turn--flash { animation: turn-flash 1.6s ease-out; border-radius: var(--r-md); }
+@keyframes turn-flash { from { background: rgba(124, 134, 240, 0.22); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .turn--flash { animation: none; background: rgba(124, 134, 240, 0.12); } }
+
+/* Заголовок главы в ленте. */
+.chapter-head {
+  display: flex; align-items: center; gap: 8px; margin: 18px 0 4px; padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+.chapter-head:first-child { margin-top: 4px; }
+.chapter-head__title { margin: 0; min-width: 0; font-size: 13px; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.chapter-head__n { color: var(--accent-hi); }
+.chapter-head__sep { color: var(--text-3); }
+.chapter-head__time { flex: none; margin-left: auto; color: var(--text-3); font-size: 11px; }
+.chapter-head__ask { opacity: 0.6; }
+.chapter-head:hover .chapter-head__ask, .chapter-head__ask:focus-visible { opacity: 1; }
+
+/* Свёрнутые фильтром реплики. */
+.turns-more {
+  display: block; width: 100%; margin: 2px 0; padding: 4px 0 4px 84px; text-align: left;
+  border: 0; border-radius: var(--r-sm); background: none; color: var(--text-3); font: inherit; font-size: 12px; cursor: pointer;
+}
+.turns-more:hover { background: var(--surface); color: var(--text-2); }
+
+/* Чипы фильтра по типам. */
+.tfilters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -2px 0 10px; }
+.tfilter {
+  display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px;
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--line-2); border-radius: 12px;
+  font: inherit; font-size: 12px; cursor: pointer; transition: background var(--t), color var(--t), border-color var(--t);
+}
+.tfilter:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+.tfilter[aria-pressed="true"] { color: var(--text); border-color: var(--accent); background: rgba(94, 106, 210, 0.16); }
+.tfilter:disabled { opacity: 0.45; cursor: default; }
+.tfilter__n { color: var(--text-3); font-size: 11px; }
+.tfilters__reset { font-size: 12px; }
+
+/* «Наблюдения» под поиском. */
+.insights { margin: 0 0 12px; border: 1px solid var(--line-2); border-radius: var(--r-lg); background: var(--surface); }
+.insights__head {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 7px 10px;
+  border: 0; background: none; color: var(--text); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; text-align: left;
+}
+.insights__head svg { color: var(--text-3); }
+.insights__n { color: var(--text-3); font-weight: 400; }
+.insights__list { list-style: none; margin: 0; padding: 0 10px 8px; display: flex; flex-direction: column; gap: 8px; }
+.insight { display: flex; gap: 8px; }
+.insight__icon { flex: none; display: inline-flex; padding-top: 2px; color: var(--accent-hi); }
+.insight--contradiction .insight__icon, .insight--attention .insight__icon { color: var(--amber); }
+.insight__body { min-width: 0; flex: 1; }
+.insight__text { margin: 0; line-height: 1.5; color: var(--text); }
+.insight__why { margin: 2px 0 0; font-size: 12px; line-height: 1.45; }
+.insight__row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 3px; }
+.insight__why-btn { font-size: 12px; }
+.insight__ref {
+  height: 20px; padding: 0 7px; border: 1px solid var(--line-2); border-radius: 10px;
+  background: var(--surface-2); color: var(--text-2); font: inherit; font-size: 11px; cursor: pointer;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.insight__ref:hover { color: var(--text); border-color: var(--accent); }

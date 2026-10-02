@@ -1461,7 +1461,8 @@ class TrayControl:
             return {"error": "транскрипта нет"}
         title, date = library.title_and_date(folder, data)
         try:
-            content = export.render({**data, "title": title}, fmt, date=date)
+            content = export.render({**data, "title": title}, fmt, date=date,
+                                    chapters=export.chapters_of(folder, data))
         except ValueError as e:
             raise _bad_request(str(e))
         safe_name = export.safe_filename(title, recording_id)

@@ -11,13 +11,16 @@
  */
 
 import {
-  useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent,
+  useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent,
   type ReactNode,
 } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
+import { layoutRows, typeCounts, type AnalysisView, type InsightView } from "../../lib/analysisView";
 import { findHits, parseQuery, prepare } from "../../lib/search";
 import type { Turn } from "../../lib/speakers";
+import type { PhraseType } from "../../lib/types";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { InsightsBlock, TypeFilters } from "./markup";
 import { TranscriptShown } from "./transcriptShown";
 import { Turns, type PersonColor, type TurnMarks } from "./Turns";
 
@@ -25,6 +28,11 @@ export const FIND_DELAY_MS = 150;
 
 /** Открыть карточку с запросом (из поиска по записям); `t` — начало нужной реплики, `n` — номер просьбы. */
 export type FindRequest = { q: string; t: number | null; n: number };
+
+/** Показать реплику (номер в `turns`): развернуть, если свёрнута фильтром, прокрутить и подсветить; `n` — номер просьбы. */
+export type RevealRequest = { turn: number; n: number };
+
+const NO_FILTER: ReadonlySet<PhraseType> = new Set();
 
 export type { PersonColor };
 
@@ -42,6 +50,7 @@ const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavio
 
 export function TranscriptView({
   turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
+  view = null, onAskChapter, onAskInsight, reveal = null,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
@@ -58,6 +67,14 @@ export function TranscriptView({
   find?: FindRequest | null;
   /** ✦ «Спросить агента» у реплик (номера реплик). */
   onAskAgent?: (turns: number[]) => void;
+  /** Разметка анализа встречи по репликам (что показывать — уже учтено). */
+  view?: AnalysisView | null;
+  /** ✦ «Обсудить главу с агентом» (номер главы в `view.chapters`). */
+  onAskChapter?: (chapter: number) => void;
+  /** ✦ «Обсудить с агентом» у наблюдения. */
+  onAskInsight?: (insight: InsightView) => void;
+  /** Показать реплику (глава из плеера). */
+  reveal?: RevealRequest | null;
 }) {
   const [text, setText] = useState(find?.q ?? "");
   const [query, setQuery] = useState(find?.q ?? "");
@@ -98,6 +115,64 @@ export function TranscriptView({
     return { hits: found.hits, marks };
   }, [prepared, query]);
 
+  // Фильтр по типам реплик: остальные сворачиваются в «… N реплик».
+  const [filter, setFilter] = useState<ReadonlySet<PhraseType>>(NO_FILTER);
+  /** Реплики, которые показаны несмотря на фильтр (развёрнуты, открыты по ссылке). */
+  const [opened, setOpened] = useState<ReadonlySet<number>>(() => new Set());
+  const types = view?.types ?? null;
+  useEffect(() => { setOpened(new Set()); }, [filter, turns]);
+  // Типов в анализе больше нет (выключили, анализ устарел) — фильтр снимается.
+  useEffect(() => { if (!types) setFilter(NO_FILTER); }, [types]);
+  const counts = useMemo(() => typeCounts(types), [types]);
+  const active = query.trim() !== "";
+  const rows = useMemo(() => {
+    if (!view) return undefined;
+    return layoutRows(turns, {
+      types, filter, chapterStart: view.chapters.length ? view.chapterStart : null,
+      shown: (i) => opened.has(i) || (active && marks.has(i)),
+    });
+  }, [view, turns, types, filter, opened, active, marks]);
+  const expand = useCallback((from: number) => {
+    const row = rows?.find((r) => r.kind === "more" && r.from === from);
+    if (!row || row.kind !== "more") return;
+    setOpened((cur) => {
+      const next = new Set(cur);
+      for (let i = row.from; i <= row.to; i++) next.add(i);
+      return next;
+    });
+  }, [rows]);
+  const annotations = useMemo(
+    () => (view ? { types: view.types, key: view.key, chapters: view.chapters } : null), [view]);
+
+  // Переход к реплике (ссылка наблюдения, глава из плеера): показать, прокрутить, подсветить.
+  const [goto, setGoto] = useState<RevealRequest | null>(null);
+  const lastReveal = useRef(reveal?.n);
+  useEffect(() => {
+    if (!reveal || reveal.n === lastReveal.current) return;
+    lastReveal.current = reveal.n;
+    setGoto(reveal);
+  }, [reveal]);
+  const jumpTo = useCallback((turn: number) => setGoto((g) => ({ turn, n: (g?.n ?? 0) + 1 })), []);
+  useEffect(() => {
+    if (!goto) return;
+    setOpened((cur) => (cur.has(goto.turn) ? cur : new Set(cur).add(goto.turn)));
+  }, [goto]);
+  const doneGoto = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (!goto || doneGoto.current === goto.n) return;
+    const el = box.current?.querySelector<HTMLElement>(`[data-turn="${goto.turn}"]`);
+    if (!el) return; // ещё свёрнута — после следующей отрисовки
+    doneGoto.current = goto.n;
+    if (el.closest("[hidden]")) return;
+    // Начало главы — к её заголовку: он над первой репликой.
+    const prev = el.previousElementSibling;
+    scrollTo(prev?.matches(".chapter-head") ? prev : el);
+    el.focus?.({ preventScroll: true });
+    el.classList.remove("turn--flash");
+    void el.offsetWidth; // перезапуск анимации
+    el.classList.add("turn--flash");
+  });
+
   // Новый результат: к нужной реплике (просьба из списка), новый запрос — к
   // первому совпадению; тот же запрос по перечитанной записи — остаёмся на месте.
   // Layout-эффекты: счётчик и выделение текущего меняются в одном кадре, без мигания.
@@ -120,9 +195,11 @@ export function TranscriptView({
     if (!root) return;
     for (const el of root.querySelectorAll(".hit--current")) el.classList.remove("hit--current");
     if (!hits.length) return;
-    const el = root.querySelector(`[data-hit="${current}"]`);
+    const all = root.querySelectorAll(`[data-hit="${current}"]`);
+    const el = all[0];
     if (!el) return;
-    el.classList.add("hit--current");
+    // Совпадение, разрезанное ссылкой (Jira), — несколько кусков с одним номером.
+    for (const piece of all) piece.classList.add("hit--current");
     // Панель скрыта (открыты «Итоги» или «Агент») — прокрутим, когда её покажут.
     unscrolled.current = el.closest("[hidden]") !== null;
     if (!unscrolled.current) scrollTo(el);
@@ -161,7 +238,6 @@ export function TranscriptView({
     }
   };
 
-  const active = query.trim() !== "";
   const counter = !active ? "" : hits.length ? `${current + 1} из ${hits.length}` : "Ничего не найдено";
 
   return (
@@ -193,10 +269,15 @@ export function TranscriptView({
           <TipLine>Ctrl+F — к поиску, Enter и Shift+Enter — следующее и предыдущее совпадение, Esc — очистить.</TipLine>
         </HelpTip>
       </div>
+      {view && view.insights.length > 0 && (
+        <InsightsBlock insights={view.insights} turns={turns} onJump={jumpTo} onAsk={onAskInsight} />
+      )}
+      {types && <TypeFilters counts={counts} value={filter} onChange={setFilter} />}
       {toolbar}
       <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onNameSpeaker={onNameSpeaker}
         onSpeaker={onSpeaker} selected={selected} onSelect={onSelect} onSplitAt={onSplitAt}
-        marks={active ? marks : undefined} onAskAgent={onAskAgent} />
+        marks={active ? marks : undefined} onAskAgent={onAskAgent} rows={rows} annotations={annotations}
+        onAskChapter={onAskChapter} onExpand={expand} />
     </div>
   );
 }

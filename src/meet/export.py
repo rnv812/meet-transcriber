@@ -67,11 +67,51 @@ def is_break(seg: dict) -> bool:
     return isinstance(seg, dict) and seg.get("kind") == "break"
 
 
-def render(data: dict, fmt: str, date: str = "") -> str:
+def contents(data: dict | None, doc: dict | None) -> list[tuple[float, str]]:
+    """Главы анализа встречи (analysis.json) для «Содержания»: (начало, название).
+
+    Анализ годится, если он сделан по этой расшифровке (отпечаток совпадает)
+    или устарел, но сегментов столько же: правили текст, номера реплик те же
+    (так же решает окно). Глава начинается с первой непустой реплики от её
+    `start_i`; главы с одним началом и без названия пропускаются."""
+    if not data or not isinstance(doc, dict) or not isinstance(doc.get("chapters"), list):
+        return []
+    from meet import analysis
+
+    segments = data.get("segments") or []
+    same = doc.get("fingerprint") == analysis.fingerprint(data)
+    if not same and doc.get("segments") != len(segments):
+        return []
+    out: list[tuple[float, str]] = []
+    for chapter in doc["chapters"]:
+        if not isinstance(chapter, dict):
+            continue
+        title = " ".join(str(chapter.get("title") or "").split())
+        start_i = chapter.get("start_i")
+        if not title or not isinstance(start_i, int) or isinstance(start_i, bool) or start_i < 0:
+            continue
+        start = next((float(seg.get("start") or 0.0) for seg in segments[start_i:]
+                      if isinstance(seg, dict) and not is_break(seg) and str(seg.get("text") or "").strip()),
+                     None)
+        if start is None or any(abs(start - t) < 1e-6 for t, _ in out):
+            continue
+        out.append((start, title))
+    return sorted(out)
+
+
+def chapters_of(folder, data: dict | None) -> list[tuple[float, str]]:
+    """«Содержание» записи: главы её анализа встречи, если он подходит (см. contents)."""
+    from meet import analysis
+
+    return contents(data, analysis.read(folder)) if folder else []
+
+
+def render(data: dict, fmt: str, date: str = "", chapters: list[tuple[float, str]] | None = None) -> str:
+    """Транскрипт в формате `fmt`. `chapters` — «Содержание» (только для md)."""
     segments = [s for s in data.get("segments", []) if str(s.get("text", "")).strip()]
     title = data.get("title") or "Встреча"
     if fmt == "md":
-        return to_markdown(title, md_segments(data), date)
+        return to_markdown(title, md_segments(data), date, contents=chapters)
     if fmt == "txt":
         lines = [title, ""]
         lines += [s["text"].strip() if is_break(s)

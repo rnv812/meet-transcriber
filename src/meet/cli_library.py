@@ -314,7 +314,8 @@ def _export(args, cfg) -> None:
     # Как в окне: сырые SPEAKER_XX старых транскриптов — «Спикер N».
     data = library.with_display_names(_transcript(folder))
     title, date = library.title_and_date(folder, data)
-    content = export.render({**data, "title": title}, args.format, date=date)
+    content = export.render({**data, "title": title}, args.format, date=date,
+                            chapters=export.chapters_of(folder, data))
     if args.out_file is None:
         _result(args, {"format": args.format, "content": content}, content)
         return

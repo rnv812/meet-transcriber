@@ -491,6 +491,8 @@ export type Analysis = {
   model: string;
   created_at: number;
   fingerprint: string;
+  /** Сколько сегментов было в расшифровке (M3): устаревший анализ с тем же числом ещё можно показать. */
+  segments?: number;
   features: AnalysisFeature[];
   phrase_types?: Record<string, PhraseType>;
   importance?: Record<string, number>;

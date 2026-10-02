@@ -21,13 +21,17 @@ export type AgentRef = {
   section?: string | null;
 };
 
-export type AgentRefKind = "turns" | "summary" | "hint";
+export type AgentRefKind = "turns" | "summary" | "hint" | "chapter" | "insight";
 
 export type AgentRequest = {
   refs: AgentRef[];
   kind?: AgentRefKind;
   /** Готовый вопрос перед ссылками («Объясни», «Сформулируй задачу»…). */
   intent?: string;
+  /** Строка под заголовком: о чём речь (глава с временем, текст наблюдения). */
+  about?: string;
+  /** Сколько ссылок вставить (не больше REF_CAP); остальные — «…и ещё N». */
+  cap?: number;
 };
 
 /** Быстрые вопросы к ссылке. */
@@ -43,7 +47,11 @@ const HEADINGS: Record<AgentRefKind, [string, string]> = {
   turns: ["Про реплику:", "Про реплики:"],
   summary: ["Про пункт итогов:", "Про пункты итогов:"],
   hint: ["Про подсказку ассистента:", "Про подсказки ассистента:"],
+  chapter: ["Про главу встречи:", "Про главу встречи:"],
+  insight: ["Про наблюдение анализа встречи:", "Про наблюдение анализа встречи:"],
 };
+/** Длина строки «о чём» (глава, наблюдение). */
+const ABOUT_MAX = 400;
 
 /* eslint-disable no-control-regex */
 /** CSI (ESC [ … финальный байт), OSC (ESC ] … BEL или ESC \), прочие ESC-последовательности. */
@@ -79,13 +87,14 @@ function refLine(ref: AgentRef): string | null {
  * Текст для поля ввода агента. Без намерения кончается переводом строки —
  * человек сразу пишет вопрос; с намерением — готовый вопрос, остаётся Enter.
  */
-export function agentPrompt({ refs, kind = "turns", intent }: AgentRequest): string {
+export function agentPrompt({ refs, kind = "turns", intent, about, cap }: AgentRequest): string {
   const lines = refs.map(refLine).filter((l): l is string => l !== null);
-  if (!lines.length) return "";
-  const shown = lines.slice(0, REF_CAP);
+  const head = clip(cleanRefText(about ?? ""), ABOUT_MAX);
+  if (!lines.length && !head) return "";
+  const shown = lines.slice(0, Math.max(0, Math.min(cap ?? REF_CAP, REF_CAP)));
   const more = lines.length - shown.length;
   const [one, many] = HEADINGS[kind];
-  const out = [lines.length === 1 ? one : many, ...shown];
+  const out = [lines.length === 1 ? one : many, ...(head ? [head] : []), ...shown];
   if (more > 0) out.push(`…и ещё ${more}`);
   const ask = cleanRefText(intent ?? "");
   if (ask) return [/[.?!…]$/.test(ask) ? ask : `${ask}.`, ...out].join("\n");
