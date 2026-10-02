@@ -152,8 +152,10 @@ export const thresholdPlan = (ep: Endpoint, id: string, value: number) =>
   json<ThresholdPlan>(ep, `/recordings/${enc(id)}/speakers/threshold`, body("POST", { value }));
 export const applyThreshold = (ep: Endpoint, id: string, value: number) =>
   json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/threshold/apply`, body("POST", { value }));
-export const undoSpeakers = (ep: Endpoint, id: string) =>
-  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/undo`, body("POST", {}));
+/** Отменить последний шаг; `expectStep` — только если последний именно он (иначе 409, «уже не последнее»). */
+export const undoSpeakers = (ep: Endpoint, id: string, expectStep?: string) =>
+  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/undo`,
+    body("POST", expectStep ? { expect_step: expectStep } : {}));
 export const redoSpeakers = (ep: Endpoint, id: string) =>
   json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/redo`, body("POST", {}));
 /** К состоянию сразу после шага; null — до всех правок. */
@@ -251,6 +253,9 @@ export type Hotwords = { text: string; budget: number; used: number };
 export const getHotwords = (ep: Endpoint) => json<Hotwords>(ep, "/hotwords");
 export const putHotwords = (ep: Endpoint, text: string) =>
   json<Hotwords>(ep, "/hotwords", body("PUT", { text }));
+/** Убрать один термин (отмена «Добавлено в термины»): остальной список резидент не трогает. */
+export const removeHotword = (ep: Endpoint, term: string) =>
+  json<Hotwords>(ep, "/hotwords/remove", body("POST", { term }));
 export const getEngine = (ep: Endpoint) => json<EngineState>(ep, "/engine");
 export const getModels = (ep: Endpoint) => json<ModelsState>(ep, "/models");
 export const downloadModel = (ep: Endpoint, id: string) =>

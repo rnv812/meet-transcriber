@@ -176,8 +176,14 @@ def _add_library_parsers(sub) -> None:
                           help="то же, что kb-export (прежнее имя)")
     p_no.add_argument("folder", help=folder_help)
 
-    p_fx = sub.add_parser("fix", parents=[as_json],
-                          help="исправить распознанное слово или фразу во встрече")
+    p_fx = sub.add_parser(
+        "fix", parents=[as_json],
+        help="исправить распознанное слово или фразу во встрече",
+        description="Исправить распознанное слово или фразу во встрече одним шагом истории "
+                    "(отменяется в карточке встречи). Если приложение запущено, правка идёт через "
+                    "него: отказ, пока запись обрабатывают, и обновление выгрузки в базу знаний "
+                    "(если она автоматическая или встречу уже выгружали). Без приложения выгрузку "
+                    "обновит `meet kb-export`.")
     p_fx.add_argument("folder", help=folder_help)
     p_fx.add_argument("wrong", help="как распознано (в кавычках, если несколько слов)")
     p_fx.add_argument("right", help="как правильно")

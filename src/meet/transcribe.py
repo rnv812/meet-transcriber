@@ -117,12 +117,16 @@ def _fix_terms(segments: list[Segment]) -> list[Segment]:
     try:
         from meet import textfix
 
-        n = textfix.apply_rules(segments, rules)
+        skipped: list[float] = []
+        n = textfix.apply_rules(segments, rules, skipped)
     except Exception as e:
         print(f"правила замены пропущены (ошибка: {e})")
         return segments
     if n:
         print(f"правила замены: исправлено {n}")
+    if skipped:
+        print(f"правила замены: у {len(skipped)} сегм. время слов не выровнено — сняты, "
+              "реплика делится по сегменту целиком")
     return segments
 
 

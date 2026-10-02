@@ -1010,15 +1010,32 @@ def _reenroll(folder: Path, step: dict, voices_dir: Path) -> list[str]:
     return list(dict.fromkeys(notes))
 
 
-def _shift(folder: Path, voices_dir: Path, forward: bool) -> dict:
+NOT_LAST = "Это изменение уже не последнее — откройте историю"
+
+
+def head(folder: Path) -> str | None:
+    """id последнего применённого шага истории (None — правок нет): по нему
+    окно понимает, что «Отменить» у итога правки ещё отменит именно её."""
+    data = library.read_transcript(folder)
+    if not data:
+        return None
+    steps, pos = _history_of(library.read_meta(folder), data)
+    return steps[pos - 1].get("id") if pos else None
+
+
+def _shift(folder: Path, voices_dir: Path, forward: bool, expect_step: str | None = None) -> dict:
     data = _transcript(folder)
     meta = library.read_meta(folder)
     steps, pos = _history_of(meta, data)
     if forward and pos >= len(steps):
         raise SpeakerError("повторять нечего")
     if not forward and pos == 0:
+        if expect_step:
+            raise Stale(NOT_LAST)
         raise SpeakerError("отменять нечего")
     step = steps[pos] if forward else steps[pos - 1]
+    if expect_step and step.get("id") != expect_step:
+        raise Stale(NOT_LAST)
     sidecar = _move(folder, data, step, forward)
     new_pos = pos + 1 if forward else pos - 1
 
@@ -1047,8 +1064,10 @@ def _shift(folder: Path, voices_dir: Path, forward: bool) -> dict:
             "voices_error": "; ".join(notes) or None}
 
 
-def undo(folder: Path, voices_dir: Path) -> dict:
-    return _shift(folder, voices_dir, forward=False)
+def undo(folder: Path, voices_dir: Path, expect_step: str | None = None) -> dict:
+    """Отменить последний шаг; `expect_step` — какой шаг окно считает последним
+    (итог правки с «Отменить»): другой — Stale, а не отмена чужой правки."""
+    return _shift(folder, voices_dir, forward=False, expect_step=expect_step)
 
 
 def redo(folder: Path, voices_dir: Path) -> dict:

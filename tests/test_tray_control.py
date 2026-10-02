@@ -1981,7 +1981,8 @@ def test_text_apply_adds_a_rule_for_future_transcriptions(with_recordings, app, 
     state = tray_control.TrayControl(app, queue=_Queue())
     got = state.text_apply(rid, {"find": "кубер нетис", "replace": "Kubernetes", "scope": "all",
                                  "add_rule": True})
-    assert got["changed"] == 2 and got["rule"] == {"from": "кубер нетис", "to": "Kubernetes"}
+    assert got["changed"] == 2
+    assert got["rule"] == {"from": "кубер нетис", "to": "Kubernetes", "replaced": None}
     assert list(settings.load().asr.replacements) == [{"from": "кубер нетис", "to": "Kubernetes"}]
     # Текст уже исправлен, а правило просили — только правило.
     got = state.text_apply(rid, {"find": "Kubernetes", "replace": "K8s", "scope": "one", "segment": 0,
@@ -1990,3 +1991,47 @@ def test_text_apply_adds_a_rule_for_future_transcriptions(with_recordings, app, 
     assert [r["to"] for r in settings.load().asr.replacements] == ["Kubernetes", "K8s"]
     got = state.text_apply(rid, {"find": "K8s", "replace": "K8s", "scope": "all", "add_rule": True})
     assert got["changed"] == 0 and got["rule"] is None  # правило «то же на то же» не нужно
+
+
+def test_undo_expected_step_and_edit_head_in_the_card(with_recordings, app):
+    from meet import control
+
+    rid = _fix_meeting(with_recordings)
+    state = tray_control.TrayControl(app, queue=_Queue())
+    assert state.recording(rid)["edit_head"] is None
+    step = state.text_apply(rid, {"find": "кубер нетис", "replace": "K8s", "scope": "all"})["step"]["id"]
+    assert state.recording(rid)["edit_head"] == step
+    other = state.speakers_relabel(rid, {"idx": [1], "to": "Спикер 1"})["step"]["id"]
+    with pytest.raises(control.Conflict, match="не последнее"):
+        state.speakers_undo(rid, {"expect_step": step})
+    assert state.speakers_undo(rid, {"expect_step": other})["pos"] == 1
+    assert state.recording(rid)["edit_head"] == step
+
+
+def test_rule_with_the_same_from_reports_the_replaced_rule(with_recordings, app):
+    rid = _fix_meeting(with_recordings)
+    state = tray_control.TrayControl(app, queue=_Queue())
+    settings.patch({"asr": {"replacements": [{"from": "Кубер  нетис", "to": "K8s"}]}})
+    got = state.text_apply(rid, {"find": "кубер нетис", "replace": "Kubernetes", "scope": "all",
+                                 "add_rule": True})
+    assert got["rule"]["replaced"] == {"from": "Кубер нетис", "to": "K8s"}
+    assert list(settings.load().asr.replacements) == [{"from": "кубер нетис", "to": "Kubernetes"}]
+
+
+def test_hotword_is_only_the_new_words_and_removal_is_server_side(with_recordings, app, tmp_path,
+                                                                  monkeypatch):
+    from meet import control, paths
+
+    target = tmp_path / "hotwords.txt"
+    monkeypatch.setattr(paths, "hotwords_path", lambda: target)
+    target.write_text("SIEM\n# комментарий\n", encoding="utf-8")
+    rid = _fix_meeting(with_recordings)
+    state = tray_control.TrayControl(app, queue=_Queue())
+    got = state.text_apply(rid, {"find": "кубер нетис", "replace": "кубер нетис подпись", "scope": "one",
+                                 "segment": 0, "offset": 9, "add_hotword": True})
+    assert got["hotword"]["term"] == "подпись"
+    target.write_text(target.read_text(encoding="utf-8") + "SOC\n", encoding="utf-8")  # правка между делом
+    reply = state.remove_hotword({"term": "подпись"})
+    assert target.read_text(encoding="utf-8") == "SIEM\n# комментарий\nSOC\n" == reply["text"]
+    with pytest.raises(control.BadRequest):
+        state.remove_hotword({"term": " "})

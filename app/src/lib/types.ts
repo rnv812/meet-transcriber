@@ -84,6 +84,8 @@ export type Recording = {
   merge?: MergeInfo | null;
   /** «Переразделить на спикеров» посчитано и ждёт решения. */
   rediarize_ready?: boolean;
+  /** Последний применённый шаг истории правок встречи (нет правок — null): «Отменить» у итога правки — только пока он последний. */
+  edit_head?: string | null;
 };
 
 /**
@@ -311,7 +313,11 @@ export type TextFixRequest = {
 /** Термин распознавания после «Исправить…»: добавлен ли (или уже был), не длиннее ли список лимита. */
 export type HotwordAdded = { term: string; added: boolean; over_budget?: boolean; error?: string };
 /** Правило замены для будущих расшифровок (`asr.replacements`). */
-export type ReplacementRule = { from: string; to: string; error?: string };
+export type ReplacementRule = {
+  from: string; to: string; error?: string;
+  /** Правило с тем же «как распознаётся», которое это заменило: отмена его вернёт. */
+  replaced?: { from: string; to: string } | null;
+};
 export type TextFixResult = SpeakersView & { changed: number; hotword?: HotwordAdded; rule?: ReplacementRule | null };
 /** Реплики — другому спикеру (`POST …/speakers/relabel`). */
 export type RelabelRequest = { idx: number[]; labels: string[]; count: number; to: string | null };

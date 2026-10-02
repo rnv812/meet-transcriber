@@ -39,6 +39,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     delete_recording(id) -> dict         удалить запись
     merge_recordings(body) -> dict       объединить записи {"ids", "keep_originals"}
     get_hotwords() / put_hotwords(body)  список слов распознавания
+    remove_hotword({"term"})             убрать один термин (отмена «Добавлено в термины»)
     person(name) -> dict                 карточка человека
     recording(id) -> dict                одна запись
     transcript(id) -> dict               структурный транскрипт для редактора
@@ -776,6 +777,7 @@ _ROUTES = {
     ),
     ("GET", "/hotwords"): lambda h, p: _server_of(h).state.get_hotwords(),
     ("PUT", "/hotwords"): lambda h, p: _server_of(h).state.put_hotwords(h._body()),
+    ("POST", "/hotwords/remove"): lambda h, p: _server_of(h).state.remove_hotword(h._body()),
     ("GET", "/voices"): lambda h, p: _server_of(h).state.people(),
     ("GET", "/jobs"): lambda h, p: _server_of(h).state.jobs(),
     ("GET", "/engine"): lambda h, p: _server_of(h).state.engine(),
@@ -855,7 +857,7 @@ _PATTERNS = (
     ("POST", re.compile(r"^/recordings/([^/]+)/text/apply$"),
      lambda h, p, rid: _server_of(h).state.text_apply(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers/undo$"),
-     lambda h, p, rid: _server_of(h).state.speakers_undo(unquote(rid))),
+     lambda h, p, rid: _server_of(h).state.speakers_undo(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers/redo$"),
      lambda h, p, rid: _server_of(h).state.speakers_redo(unquote(rid))),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers/revert$"),

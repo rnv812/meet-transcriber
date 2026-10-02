@@ -24,7 +24,8 @@ type SplitAt = {
   /** Место в тексте реплики целиком (для «Исправить слово…»). */
   offset: number;
 };
-type Done = { text: string; undo: boolean };
+/** Итог назначения; `step` — его шаг истории: «Отменить» — только пока он последний. */
+type Done = { text: string; undo: boolean; step?: string };
 
 const turnsWord = (n: number) => plural(n, "реплика", "реплики", "реплик");
 const QUOTE = 28;
@@ -86,7 +87,7 @@ export type TurnEdit = {
 };
 
 export function useTurnEdit({
-  endpoint, id, turns, segments, people, owner, avatarVersion, onOpenPanel, onChanged, onFixWord,
+  endpoint, id, turns, segments, people, owner, avatarVersion, onOpenPanel, onChanged, onFixWord, head,
 }: {
   endpoint: Endpoint;
   id: string;
@@ -101,6 +102,8 @@ export function useTurnEdit({
   onChanged: () => void;
   /** «Исправить слово…» в меню правого щелчка: слово в месте `at` текста реплики. */
   onFixWord?: (turn: number, at: number, anchor: HTMLElement) => void;
+  /** Последний применённый шаг истории встречи (`edit_head` записи). */
+  head?: string | null;
 }): TurnEdit {
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
   const [anchorTurn, setAnchorTurn] = useState<number | null>(null);
@@ -183,7 +186,7 @@ export function useTurnEdit({
       const labels = idx.map((i) => segments[i]!.speaker as string);
       const view = await relabelTurns(endpoint, id, { idx, labels, count: segments.length, to });
       const name = view.step?.ops[0] && "to" in view.step.ops[0] ? view.step.ops[0].to : to ?? "новому спикеру";
-      setDone({ text: `${chosen.length} ${turnsWord(chosen.length)} → ${name}`, undo: true });
+      setDone({ text: `${chosen.length} ${turnsWord(chosen.length)} → ${name}`, undo: true, step: view.step?.id });
       setMenu(null);
       clear();
       onChanged();
@@ -205,7 +208,7 @@ export function useTurnEdit({
       const view = await splitTurn(endpoint, id, { turn: idx, at: at.seg, char: at.char, to, labels, count: segments.length });
       const op = view.step?.ops[0];
       const name = op && "to" in op ? op.to : to ?? "новому спикеру";
-      setDone({ text: `Реплика разделена: вторая часть → ${name}`, undo: true });
+      setDone({ text: `Реплика разделена: вторая часть → ${name}`, undo: true, step: view.step?.id });
       setSplitAt(null);
       onChanged();
     } catch (e) {
@@ -218,7 +221,7 @@ export function useTurnEdit({
   const undo = async () => {
     setBusy(true);
     try {
-      await undoSpeakers(endpoint, id);
+      await undoSpeakers(endpoint, id, done?.step);
       setDone({ text: "Изменение отменено", undo: false });
       onChanged();
     } catch (e) {
@@ -323,7 +326,9 @@ export function useTurnEdit({
       ) : done && (
         <>
           <span>{done.text}</span>
-          {done.undo && <button type="button" className="spk-link" disabled={busy} onClick={() => void undo()}>Отменить</button>}
+          {done.undo && (!done.step || done.step === head) && (
+            <button type="button" className="spk-link" disabled={busy} onClick={() => void undo()}>Отменить</button>
+          )}
           <button type="button" className="spk-link tsel__close" aria-label="Скрыть" onClick={() => setDone(null)}>×</button>
         </>
       )}

@@ -14,8 +14,7 @@ vi.mock("../../lib/api", async (orig) => ({
   previewTextFix: vi.fn(),
   applyTextFix: vi.fn(),
   undoSpeakers: vi.fn(),
-  getHotwords: vi.fn(),
-  putHotwords: vi.fn(),
+  removeHotword: vi.fn(),
   patchSettings: vi.fn(),
 }));
 vi.mock("../../lib/shell", () => ({
@@ -50,12 +49,15 @@ const preview: TextPreview = {
 };
 const result: TextFixResult = {
   owner: "Вы", history: [], pos: 1, speakers: [], changed: 1,
+  step: { id: "t1", at: "2026-09-30T10:00:00", enrolled: [], created_people: [],
+    ops: [{ type: "text", from: "кубер нетис", to: "Kubernetes", count: 1, scope: "one" }] },
   hotword: { term: "Kubernetes", added: true, over_budget: false },
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(api.getRecording).mockResolvedValue({ ...rec, transcript });
+  // Последний шаг истории — исправление «t1» (после применения резидент так и ответит).
+  vi.mocked(api.getRecording).mockResolvedValue({ ...rec, transcript, edit_head: "t1" });
   vi.mocked(api.getSettings).mockResolvedValue({ recording: { speaker_name: "Вы" } });
   vi.mocked(api.getAssistant).mockResolvedValue({
     provider: null, setting: "auto", available: {}, knowledge_dir: null, checking: false,
@@ -65,8 +67,7 @@ beforeEach(() => {
   vi.mocked(api.previewTextFix).mockResolvedValue(preview);
   vi.mocked(api.applyTextFix).mockResolvedValue(result);
   vi.mocked(api.undoSpeakers).mockResolvedValue({ owner: "Вы", history: [], pos: 0, speakers: [] });
-  vi.mocked(api.getHotwords).mockResolvedValue({ text: "SIEM\nKubernetes\n", budget: 400, used: 16 });
-  vi.mocked(api.putHotwords).mockResolvedValue({ text: "SIEM\n", budget: 400, used: 4 });
+  vi.mocked(api.removeHotword).mockResolvedValue({ text: "SIEM\n", budget: 400, used: 4 });
 });
 
 /** Выделить символы [start, end) текста реплики, как мышью. */
@@ -94,10 +95,14 @@ test("выделение → «Исправить…»: слово целико�
   expect(within(box).getByText("кубер нетис")).toBeInTheDocument();
   expect(api.previewTextFix).toHaveBeenCalledWith(ep, "r1", { find: "кубер нетис", segment: 0, offset: 9 });
   expect(await within(box).findByText(/Заменить во всей встрече \(2 совпадения\)/)).toBeInTheDocument();
-  expect(within(box).getByRole("checkbox", { name: /Добавить в термины распознавания/ })).toBeChecked();
+  // Исправление ещё не вписано (в поле — распознанное): добавлять в термины нечего.
+  const term = within(box).getByRole("checkbox", { name: /Добавить в термины распознавания/ });
+  expect(term).not.toBeChecked();
   const input = within(box).getByRole("textbox", { name: "Как правильно" });
   await userEvent.clear(input);
   await userEvent.type(input, "Kubernetes");
+  expect(term).toBeChecked();
+  expect(within(box).getByText("Будет добавлено: Kubernetes")).toBeInTheDocument();
   await userEvent.click(within(box).getByRole("button", { name: "Применить" }));
   expect(api.applyTextFix).toHaveBeenCalledWith(ep, "r1", {
     find: "кубер нетис", replace: "Kubernetes", scope: "one", segment: 0, offset: 9, count: 3, add_hotword: true,
@@ -106,14 +111,14 @@ test("выделение → «Исправить…»: слово целико�
   expect(screen.queryByRole("dialog", { name: "Исправить распознанное" })).toBeNull();
 
   // «Отменить» у термина убирает его из списка, остальное — как было.
-  const term = screen.getByText("Добавлено в термины: Kubernetes.").closest(".tsel") as HTMLElement;
-  await userEvent.click(within(term).getByRole("button", { name: "Отменить" }));
-  expect(api.putHotwords).toHaveBeenCalledWith(ep, "SIEM\n");
+  const termRow = screen.getByText("Добавлено в термины: Kubernetes.").closest(".tsel") as HTMLElement;
+  await userEvent.click(within(termRow).getByRole("button", { name: "Отменить" }));
+  expect(api.removeHotword).toHaveBeenCalledWith(ep, "Kubernetes");
   expect(await screen.findByText("Убрано из терминов: Kubernetes")).toBeInTheDocument();
   // «Отменить» у исправления — шаг истории встречи.
   const fix = screen.getByText(/Исправлено: кубер нетис/).closest(".tsel") as HTMLElement;
   await userEvent.click(within(fix).getByRole("button", { name: "Отменить" }));
-  expect(api.undoSpeakers).toHaveBeenCalledWith(ep, "r1");
+  expect(api.undoSpeakers).toHaveBeenCalledWith(ep, "r1", "t1");
   expect(await screen.findByText("Исправление отменено")).toBeInTheDocument();
 });
 
@@ -131,10 +136,11 @@ test("«Заменить во всей встрече» — показывает
   await userEvent.click(all);
   const list = within(box).getByRole("list", { name: "Совпадения во встрече" });
   expect(within(list).getAllByRole("listitem")).toHaveLength(2);
-  await userEvent.click(within(box).getByRole("checkbox", { name: /Добавить в термины/ }));
   const input = within(box).getByRole("textbox", { name: "Как правильно" });
   await userEvent.clear(input);
-  await userEvent.type(input, "Kubernetes{Enter}");
+  await userEvent.type(input, "Kubernetes");
+  await userEvent.click(within(box).getByRole("checkbox", { name: /Добавить в термины/ }));
+  await userEvent.type(input, "{Enter}");
   expect(api.applyTextFix).toHaveBeenCalledWith(ep, "r1", expect.objectContaining({
     scope: "all", replace: "Kubernetes", add_hotword: false }));
   expect(await screen.findByText(/\(2\)\. Итоги не пересчитываются автоматически/)).toBeInTheDocument();
@@ -186,7 +192,8 @@ test("выделение через границу двух фраз — под�
 });
 
 test("«Исправлять так же в будущих встречах» — правило; «Отменить» убирает его из настроек", async () => {
-  vi.mocked(api.applyTextFix).mockResolvedValue({ ...result, hotword: undefined, rule: { from: "кубер нетис", to: "Kubernetes" } });
+  vi.mocked(api.applyTextFix).mockResolvedValue({ ...result, hotword: undefined, rule: {
+    from: "кубер нетис", to: "Kubernetes", replaced: { from: "Кубер нетис", to: "K8s" } } });
   vi.mocked(api.getSettings).mockResolvedValue({ recording: { speaker_name: "Вы" }, asr: { replacements: [
     { from: "дев опс", to: "DevOps" }, { from: "кубер нетис", to: "Kubernetes" }] } });
   vi.mocked(api.patchSettings).mockResolvedValue({ settings: {}, restart_required: [] });
@@ -206,6 +213,44 @@ test("«Исправлять так же в будущих встречах» �
   expect(api.applyTextFix).toHaveBeenCalledWith(ep, "r1", expect.objectContaining({ add_rule: true }));
   const row = (await screen.findByText("Исправлять в будущих встречах: кубер нетис → Kubernetes")).closest(".tsel") as HTMLElement;
   await userEvent.click(within(row).getByRole("button", { name: "Отменить" }));
-  expect(api.patchSettings).toHaveBeenCalledWith(ep, { asr: { replacements: [{ from: "дев опс", to: "DevOps" }] } });
-  expect(await screen.findByText("Правило убрано: кубер нетис → Kubernetes")).toBeInTheDocument();
+  // Правило убрано, а вытесненное им (то же «как распознаётся») — возвращено.
+  expect(api.patchSettings).toHaveBeenCalledWith(ep, { asr: { replacements: [
+    { from: "дев опс", to: "DevOps" }, { from: "Кубер нетис", to: "K8s" }] } });
+  expect(await screen.findByText("Правило возвращено: Кубер нетис → K8s")).toBeInTheDocument();
+});
+
+test("«Отменить» у исправления пропадает, когда последним шагом стала другая правка", async () => {
+  vi.mocked(api.applyTextFix).mockResolvedValue({ ...result, hotword: undefined });
+  const { rerender } = render(<RecordingCard id="r1" endpoint={ep} />);
+  const p = await turnText(/Поднимем кубер нетис/);
+  select(p, 9, 20);
+  fireEvent.keyDown(document.body, { key: "e", code: "KeyE", ctrlKey: true });
+  const box = await screen.findByRole("dialog", { name: "Исправить распознанное" });
+  const input = within(box).getByRole("textbox", { name: "Как правильно" });
+  await userEvent.clear(input);
+  await userEvent.type(input, "Kubernetes{Enter}");
+  const row = (await screen.findByText(/Исправлено: кубер нетис/)).closest(".tsel") as HTMLElement;
+  await within(row).findByRole("button", { name: "Отменить" });
+  // Между делом — другая правка (панель «Спикеры», CLI): запись перечитана, последний шаг — не наш.
+  vi.mocked(api.getRecording).mockResolvedValue({ ...rec, transcript, edit_head: "other" });
+  rerender(<RecordingCard id="r1" endpoint={ep} refreshKey={1} />);
+  await vi.waitFor(() => expect(within(row).queryByRole("button", { name: "Отменить" })).toBeNull());
+  expect(within(row).getByText(/Исправлено: кубер нетис/)).toBeInTheDocument();
+});
+
+test("термин — только новые слова; без значимых новых слов флажок выключен", async () => {
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  const p = await turnText(/Кубер нетис готов/);
+  select(p, 12, 17);
+  fireEvent.keyDown(document.body, { key: "e", code: "KeyE", ctrlKey: true });
+  const box = await screen.findByRole("dialog", { name: "Исправить распознанное" });
+  const term = within(box).getByRole("checkbox", { name: /Добавить в термины распознавания/ });
+  const input = within(box).getByRole("textbox", { name: "Как правильно" });
+  await userEvent.clear(input);
+  await userEvent.type(input, "не готов");
+  expect(term).not.toBeChecked(); // «не» — служебное слово
+  await userEvent.clear(input);
+  await userEvent.type(input, "готов подпись");
+  expect(term).toBeChecked();
+  expect(within(box).getByText("Будет добавлено: подпись")).toBeInTheDocument();
 });

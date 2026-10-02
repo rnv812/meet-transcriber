@@ -58,8 +58,15 @@ def test_matches_are_case_insensitive_yo_insensitive_and_whole_word():
     # Без «целого слова» — подстрока (тоже без регистра и с ё=е).
     assert textfix.matches("Кубернетис", "кубер", whole_word=False) == [(0, 5)]
     assert textfix.matches("всё", "все") == [(0, 3)]
-    # Знаки препинания в искомом не мешают; без букв искать нечего.
-    assert textfix.matches("кубер, нетис", "кубер нетис") == [(0, 12)]
+    # Между словами фразы — только пробелы и дефис: знаки препинания (конец
+    # предложения, запятая) фразу разрывают — замена их не проглотит.
+    assert textfix.matches("кубер, нетис", "кубер нетис") == []
+    assert textfix.matches("Это кубер. Нетис тут.", "кубер нетис") == []
+    for mark in ".!?…;:":
+        assert textfix.matches(f"кубер{mark} нетис", "кубер нетис") == []
+    assert textfix.matches("кубер  -  нетис", "кубер нетис") == [(0, 15)]
+    # Знаки препинания в самом искомом не мешают; без букв искать нечего.
+    assert textfix.matches("кубер нетис", "кубер, нетис!") == [(0, 11)]
     assert textfix.matches("текст", " ,. ") == []
 
 
@@ -229,3 +236,57 @@ def test_clean_rules_drops_junk_and_repeats():
                                {"from": "...", "to": "x"}, {"from": "ёлка", "to": "Ёлка"}])
     assert got == [{"from": "Кубер Нетис", "to": "K8s"}, {"from": "ёлка", "to": "Ёлка"}]
     assert textfix.clean_rules(None) == []
+
+
+def test_replace_all_and_rules_keep_sentence_punctuation(meeting, base):
+    data = library.read_transcript(meeting)
+    data["segments"][2]["text"] = "Это кубер. Нетис тут, а кубер нетис там."
+    library.write_transcript(meeting, data)
+    got = textfix.apply(meeting, "кубер нетис", "Kubernetes", "all", base)
+    assert _segs(meeting)[2]["text"] == "Это кубер. Нетис тут, а Kubernetes там."
+    assert got["changed"] == 3
+
+    from meet.asr import Segment
+
+    segs = [Segment(0.0, 1.0, "Это кубер. Нетис тут.")]
+    assert textfix.apply_rules(segs, [{"from": "кубер нетис", "to": "Kubernetes"}]) == 0
+    assert segs[0].text == "Это кубер. Нетис тут."
+
+
+def test_rules_drop_words_that_cannot_be_aligned():
+    from meet.asr import Segment, Word
+
+    # Слова описывают другой текст (без совпадения) — текст исправлен, слова
+    # сняты: иначе разбиение по спикерам собрало бы текст из старых слов.
+    seg = Segment(0.0, 2.0, "Кубер нетис готов.",
+                  words=[Word(0.0, 1.0, " Куб"), Word(1.0, 2.0, " готов.")])
+    skipped: list = []
+    assert textfix.apply_rules([seg], [{"from": "кубер нетис", "to": "Kubernetes"}], skipped) == 1
+    assert seg.text == "Kubernetes готов." and seg.words == [] and skipped == [0.0]
+
+
+def test_new_terms_are_only_the_new_or_changed_words():
+    from meet import replacements
+
+    assert replacements.new_terms("кубер нетис", "Kubernetes") == "Kubernetes"
+    assert replacements.new_terms("ломается", "ломается подпись") == "подпись"
+    assert replacements.new_terms("Демьян Петров", "Демьян Петрова") == "Петрова"
+    assert replacements.new_terms("кубер", "Кубер") == ""          # только регистр
+    assert replacements.new_terms("ломается", "не ломается") == ""  # служебное слово
+    assert replacements.new_terms("релиз", "релиз v2,") == "v2"
+
+
+def test_undo_with_expected_step_refuses_to_undo_another_edit(meeting, base):
+    first = textfix.apply(meeting, "кубер нетис", "Kubernetes", "one", base, segment=0, offset=9)["step"]["id"]
+    assert speakers.head(meeting) == first
+    second = speakers.relabel(meeting, [1], "Спикер 1", base)["step"]["id"]
+    assert speakers.head(meeting) == second
+    before = (meeting / "transcript.json").read_bytes()
+    with pytest.raises(speakers.Stale, match="не последнее"):
+        speakers.undo(meeting, base, expect_step=first)
+    assert (meeting / "transcript.json").read_bytes() == before
+    speakers.undo(meeting, base, expect_step=second)
+    speakers.undo(meeting, base, expect_step=first)
+    assert speakers.head(meeting) is None
+    with pytest.raises(speakers.Stale, match="не последнее"):
+        speakers.undo(meeting, base, expect_step=first)
