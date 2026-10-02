@@ -401,7 +401,7 @@ cd app\src-tauri; cargo test; cargo clippy --all-targets -- -D warnings     # о
 ## Авторы
 
 - **Андрей Алейников** — автор проекта ([@dezlorator1](https://github.com/dezlorator1))
-- **ndrsvh** — архитектура десктопного приложения ([@ndrsvh](https://github.com/ndrsvh))
+- **Андрей Сивуха** — архитектура десктопного приложения ([@ndrsvh](https://github.com/ndrsvh))
 - **Никита Резников** — десктопное приложение и интерфейс ([@rnv812](https://github.com/rnv812))
 
 Сделано с помощью [Claude Code](https://claude.ai/code).
