@@ -316,7 +316,8 @@ def _assistant(kind: str, folder_str: str, question: str | None) -> int:
     knowledge = cfg.assistant.knowledge_dir
     try:
         if kind == "summary":
-            out = assistant.summarize(folder, runner, knowledge, provider=provider)
+            out = assistant.summarize(folder, runner, knowledge, provider=provider,
+                                      want_title=cfg.assistant.auto_title)
         else:
             if not (question or "").strip():
                 _emit({"kind": "error", "text": "пустой вопрос"})

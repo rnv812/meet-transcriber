@@ -1,15 +1,18 @@
 /**
  * Анализ встречи в карточке (M2): состояние (`GET /recordings/{id}/analysis`),
  * тихие строки «Анализ…», «Анализ устарел — Переанализировать», «Анализ не
- * удался — Повторить».
+ * удался — Повторить», и «Предложить название» с подтверждением.
  *
  * Сама разметка (типы реплик, главы, наблюдения) рисуется в «Расшифровке» и
  * плеере — это M3; здесь только состояние и действия.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, getAnalysis, type Endpoint } from "../../lib/api";
-import type { AnalysisState, Job } from "../../lib/types";
+import { ApiError, getAnalysis, patchRecording, suggestTitle, type Endpoint } from "../../lib/api";
+import { errorText } from "../../lib/format";
+import type { AnalysisState, Job, Recording, TitleSuggestion } from "../../lib/types";
+import { Button } from "../../ui/Button";
+import { Popover } from "../../ui/Popover";
 import "./analysis.css";
 
 const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
@@ -97,4 +100,72 @@ export function reanalyzeBlocked(state: AnalysisState | null, noModel: boolean):
   if (state?.state === "queued" || state?.state === "running") return "Анализ уже идёт";
   if (noModel) return "Подключите Claude Code или Codex в настройках";
   return null;
+}
+
+type Suggest = { busy: true } | { busy: false; got: TitleSuggestion } | { busy: false; error: string };
+
+/**
+ * «Предложить название»: запрос предложения (из свежего анализа сразу, иначе —
+ * короткий вызов модели) и окно «Применить / Отмена» у названия карточки.
+ * Применённое отмечается как название от ИИ (бейдж «ИИ»).
+ */
+export function useTitleSuggest(endpoint: Endpoint, id: string, onApplied: (rec: Recording) => void) {
+  const [suggest, setSuggest] = useState<Suggest | null>(null);
+  const ask = useRef(0);
+
+  useEffect(() => { setSuggest(null); ask.current += 1; }, [endpoint, id]);
+
+  const open = useCallback(() => {
+    const n = ++ask.current;
+    setSuggest({ busy: true });
+    suggestTitle(endpoint, id).then(
+      (got) => { if (ask.current === n) setSuggest({ busy: false, got }); },
+      (e) => { if (ask.current === n) setSuggest({ busy: false, error: errorText(e) }); },
+    );
+  }, [endpoint, id]);
+  const close = useCallback(() => { ask.current += 1; setSuggest(null); }, []);
+  const apply = useCallback(async (title: string) => {
+    try {
+      const rec = await patchRecording(endpoint, id, { title, title_source: "ai" });
+      setSuggest(null);
+      onApplied(rec);
+    } catch (e) {
+      setSuggest({ busy: false, error: errorText(e) });
+    }
+  }, [endpoint, id, onApplied]);
+  return { suggest, open, close, apply };
+}
+
+export function TitleSuggestPopover({ anchor, suggest, onApply, onClose }: {
+  anchor: HTMLElement;
+  suggest: Suggest;
+  onApply: (title: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <Popover anchor={anchor} onClose={onClose} label="Предложенное название" width={320}>
+      <div className="title-suggest">
+        {suggest.busy ? (
+          <div className="title-suggest__busy" role="status">
+            <span className="analysis-chip__pulse" aria-hidden="true" />Подбираю название…
+          </div>
+        ) : "got" in suggest ? (
+          <>
+            <div className="muted title-suggest__label">
+              {suggest.got.from === "analysis" ? "Название из анализа встречи" : "Название по началу встречи"}
+            </div>
+            <div className="title-suggest__title">{suggest.got.title}</div>
+          </>
+        ) : (
+          <div className="error" role="alert">Не удалось предложить название: {suggest.error}</div>
+        )}
+        <div className="title-suggest__row">
+          {!suggest.busy && "got" in suggest && (
+            <Button variant="primary" onClick={() => onApply(suggest.got.title)}>Применить</Button>
+          )}
+          <Button onClick={onClose}>{!suggest.busy && "error" in suggest ? "Закрыть" : "Отмена"}</Button>
+        </div>
+      </div>
+    </Popover>
+  );
 }

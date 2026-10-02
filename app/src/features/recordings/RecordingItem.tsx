@@ -3,6 +3,7 @@ import { TITLE_MAX } from "../../lib/api";
 import { clock, dayLabel, duration } from "../../lib/format";
 import type { RecStatus } from "../../lib/status";
 import type { LibraryItem } from "../../lib/types";
+import { AiBadge } from "../../ui/AiBadge";
 import { Highlight } from "../../ui/Highlight";
 import { BookOpen, FolderOpen, Pencil, Trash2 } from "lucide-react";
 import { ItemMenu, type MenuItem } from "./ItemMenu";
@@ -170,7 +171,9 @@ export function RecordingItem({
           }}
           onKeyDown={(e) => { if (e.key === "F2" && actions) { e.preventDefault(); begin(); } }}>
           <span className="rec-item__title" title={actions ? "Двойной щелчок или F2 — переименовать" : undefined}
-            onDoubleClick={actions ? (e) => { e.preventDefault(); begin(); } : undefined}>{title}</span>
+            onDoubleClick={actions ? (e) => { e.preventDefault(); begin(); } : undefined}>
+            {title}{rec.title_source === "ai" && rec.title && <AiBadge onClick={actions ? begin : undefined} />}
+          </span>
           <span className="rec-item__meta">
             <span className="muted num">{meta}</span>
             {badge && <span className={`badge${badge.tone ? ` badge--${badge.tone}` : ""}`}>{badge.text}</span>}

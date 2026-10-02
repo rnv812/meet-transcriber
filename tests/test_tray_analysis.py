@@ -156,6 +156,7 @@ def test_routes_exist():
     paths = [(m, p.pattern) for m, p, _ in control._PATTERNS]
     assert ("GET", r"^/recordings/([^/]+)/analysis$") in paths
     assert ("POST", r"^/recordings/([^/]+)/analysis$") in paths
+    assert ("POST", r"^/recordings/([^/]+)/title/suggest$") in paths
 
 
 # --- автоматическая постановка ----------------------------------------------------------
@@ -271,3 +272,107 @@ def test_finished_analysis_emits_event(state, app, tmp_path):
     _write_analysis(_folder(tmp_path))
     state._analysis_finished(_folder(tmp_path), jobs.DONE)
     assert seen == [{"id": RID, "state": "ready"}]
+
+
+# --- название от модели -----------------------------------------------------------------
+
+
+def _meta(tmp_path):
+    return library.read_meta(_folder(tmp_path))
+
+
+def test_analysis_title_applied_only_when_enabled(state, tmp_path):
+    folder = _folder(tmp_path)
+    _write_analysis(folder)
+    state._analysis_finished(folder, jobs.DONE)
+    assert "title" not in _meta(tmp_path)
+    _write_config(tmp_path, assistant={"auto_title": True})
+    state._analysis_finished(folder, jobs.DONE)
+    assert _meta(tmp_path)["title"] == "Бета в пятницу"
+    assert state.recording(RID)["title_source"] == "ai"
+
+
+def test_user_title_is_never_overwritten(state, tmp_path):
+    _write_config(tmp_path, assistant={"auto_title": True})
+    state.update_recording(RID, {"title": "Моё название"})
+    assert _meta(tmp_path)["title_source"] == "user"
+    _write_analysis(_folder(tmp_path))
+    state._analysis_finished(_folder(tmp_path), jobs.DONE)
+    assert _meta(tmp_path)["title"] == "Моё название"
+
+
+def test_clearing_the_title_returns_to_auto(state, tmp_path):
+    state.update_recording(RID, {"title": "Моё название"})
+    state.update_recording(RID, {"title": ""})
+    assert state.recording(RID)["title_source"] == "auto"
+    assert "title_source" not in _meta(tmp_path)
+
+
+def test_accepting_a_suggestion_marks_it_ai(state, tmp_path):
+    got = state.update_recording(RID, {"title": "Бета в пятницу", "title_source": "ai"})
+    assert got["title_source"] == "ai"
+
+
+def test_summary_title_line_is_applied(state, app, tmp_path):
+    _write_config(tmp_path, assistant={"auto_title": True})
+    library.write_meta(_folder(tmp_path), {"summary_title": {"title": "Итоги беты", "at": 1.0}})
+    _done(app, jobs.SUMMARY, _folder(tmp_path))
+    assert _meta(tmp_path)["title"] == "Итоги беты"
+
+
+def test_live_topic_title_at_live_stop(state, app, tmp_path, monkeypatch):
+    from meet import live_control
+
+    _write_config(tmp_path, assistant={"auto_title": True})
+    folder = _folder(tmp_path)
+    (folder / "live_state.json").write_text(json.dumps(
+        {"summary": {"topic": "Запуск беты"}, "hints": []}, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(state, "_on_saved", lambda *a: None)
+    app.bus.emit(live_control.LIVE_STOPPED, folder=str(folder), complete=True)
+    assert _meta(tmp_path)["title"] == "Запуск беты"
+    assert _meta(tmp_path)["title_source"] == "ai"
+
+
+def test_browser_call_title_is_site(state, app, tmp_path, monkeypatch):
+    folder = _folder(tmp_path)
+    app.recording_title = "Google Meet"
+    state._on_saved(str(folder), tray_control.AUTO, False)
+    assert _meta(tmp_path)["title_source"] == "site"
+    # общий заголовок окна модель может заменить
+    _write_config(tmp_path, assistant={"auto_title": True})
+    _write_analysis(folder)
+    state._analysis_finished(folder, jobs.DONE)
+    assert _meta(tmp_path)["title"] == "Бета в пятницу"
+
+
+def test_ai_title_follows_into_the_knowledge_base(state, tmp_path):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    _write_config(tmp_path, assistant={"auto_title": True},
+                  export={"meetings_dir": str(vault), "auto_export": False})
+    old = Path(state.kb_export(RID)["path"])
+    _write_analysis(_folder(tmp_path), title="Бета в пятницу")
+    state._analysis_finished(_folder(tmp_path), jobs.DONE)
+    new = vault / "2026-10-01 - Бета в пятницу"
+    assert not old.exists() and new.is_dir()
+
+
+def test_suggest_title_from_fresh_analysis_needs_no_model(state, tmp_path, monkeypatch):
+    monkeypatch.setattr(tray_control, "_suggest_title", lambda folder: pytest.fail("без вызова модели"))
+    _write_analysis(_folder(tmp_path))
+    assert state.suggest_title(RID) == {"title": "Бета в пятницу", "from": "analysis"}
+    assert "title" not in _meta(tmp_path)  # только предложение
+
+
+def test_suggest_title_calls_the_model_subprocess(state, tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(tray_control, "_suggest_title",
+                        lambda folder: seen.append(folder) or {"title": "Запуск беты", "from": "model"})
+    assert state.suggest_title(RID) == {"title": "Запуск беты", "from": "model"}
+    assert seen == [_folder(tmp_path)]
+    monkeypatch.setattr(tray_control, "_suggest_title", lambda folder: {"error": "rate_limit"})
+    with pytest.raises(RuntimeError, match="rate_limit"):
+        state.suggest_title(RID)
+    _installed(monkeypatch)
+    with pytest.raises(control.Conflict):
+        state.suggest_title(RID)

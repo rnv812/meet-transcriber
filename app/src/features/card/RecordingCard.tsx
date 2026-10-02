@@ -13,7 +13,7 @@ import { KIND_LABEL } from "../../live/liveModel";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import type { AgentInsert } from "./AgentTab";
-import { AnalysisStatus, reanalyzeBlocked, useAnalysis } from "./analysis";
+import { AnalysisStatus, reanalyzeBlocked, TitleSuggestPopover, useAnalysis, useTitleSuggest } from "./analysis";
 import { noProvider, useAssistant } from "./assistant";
 import { AudioPlayer, type AudioPlayerHandle } from "./AudioPlayer";
 import { CardActions } from "./CardActions";
@@ -196,9 +196,14 @@ export function RecordingCard({
   const onTextMenu = useCallback((t: number, e: MouseEvent<HTMLElement>) => {
     if (!fixMenu(t, e)) splitMenu(t, e);
   }, [fixMenu, splitMenu]);
-  // Анализ встречи: состояние и «Переанализировать».
+  // Анализ встречи: состояние, «Переанализировать», «Предложить название».
   const assistantInfo = useAssistant(endpoint);
   const analysis = useAnalysis(endpoint, id, rec?.path ?? null, jobs, rec);
+  const titleApplied = useCallback((updated: Recording) => {
+    setRec((cur) => (cur ? { ...cur, ...updated, transcript: cur.transcript } : cur));
+    onChanged?.();
+  }, [onChanged]);
+  const titleSuggest = useTitleSuggest(endpoint, id, titleApplied);
 
   if (!rec) {
     if (missing) return <EmptyState title="Запись не найдена" hint="Возможно, её удалили. Выберите другую в списке." />;
@@ -337,13 +342,17 @@ export function RecordingCard({
         onRediarize={status.kind === "ready" && hasAudio ? () => setRediarizeOpen(true) : undefined}
         onReanalyze={status.kind === "ready" ? doReanalyze : undefined}
         reanalyzeBlocked={reanalyzeBlocked(analysis.state, noModel)}
+        onSuggestTitle={status.kind === "ready" ? titleSuggest.open : undefined}
         onDelete={doDelete}
       />
       {error && <div className="card__error" role="alert">{error}</div>}
       {status.kind === "ready" && (
         <AnalysisStatus state={analysis.state} busy={busy} onRun={noModel ? undefined : doReanalyze} />
       )}
-
+      {titleSuggest.suggest && cardEl.current && (
+        <TitleSuggestPopover anchor={cardEl.current.querySelector<HTMLElement>(".card__title") ?? cardEl.current}
+          suggest={titleSuggest.suggest} onApply={(t) => void titleSuggest.apply(t)} onClose={titleSuggest.close} />
+      )}
       {kbDone && (
         <div className="card__banner card__banner--ok" role="status" aria-label="Выгрузка в базу знаний">
           <span>

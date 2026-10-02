@@ -1,4 +1,4 @@
-/* Анализ встречи в карточке: тихая строка состояния. */
+/* Анализ встречи в карточке: тихая строка состояния и окно «Предложить название». */
 .analysis-status {
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 6px 20px 0; font-size: 12px;
 }
@@ -12,3 +12,9 @@
 }
 @keyframes analysis-pulse { 50% { opacity: 0.3; } }
 @media (prefers-reduced-motion: reduce) { .analysis-chip__pulse { animation: none; } }
+
+.title-suggest { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.title-suggest__label { font-size: 11px; }
+.title-suggest__title { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.title-suggest__busy { display: flex; align-items: center; gap: 8px; color: var(--text-2); }
+.title-suggest__row { display: flex; justify-content: flex-end; gap: 8px; }

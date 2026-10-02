@@ -676,6 +676,10 @@ class Assistant:
     knowledge_dir: Path | None = None
     notes_dir: Path | None = None
     notes_subdir: str = DEFAULT_NOTES_SUBDIR
+    # «Придумывать название встречи» (meet.titles): название от модели — из
+    # анализа, итогов или темы живого режима. Названия, которые человек задал
+    # сам, не меняются никогда.
+    auto_title: bool = False
 
     @classmethod
     def from_raw(cls, raw: dict, vault: Path | None = None) -> "Assistant":
@@ -689,13 +693,15 @@ class Assistant:
         else:
             # Раскладка внутри прежнего vault остаётся такой, какой была.
             subdir = "" if "notes_dir" not in raw and vault else DEFAULT_NOTES_SUBDIR
-        return cls(knowledge_dir=knowledge, notes_dir=notes, notes_subdir=subdir)
+        return cls(knowledge_dir=knowledge, notes_dir=notes, notes_subdir=subdir,
+                   auto_title=as_flag(raw.get("auto_title"), False))
 
     def to_raw(self) -> dict:
         return {
             "knowledge_dir": str(self.knowledge_dir) if self.knowledge_dir else None,
             "notes_dir": str(self.notes_dir) if self.notes_dir else None,
             "notes_subdir": self.notes_subdir,
+            "auto_title": self.auto_title,
         }
 
 

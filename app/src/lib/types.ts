@@ -73,6 +73,11 @@ export type Recording = {
   has_transcript: boolean;
   has_voices: boolean;
   title: string | null;
+  /**
+   * Откуда название: "auto" — по дате или из транскрипта, "user" — задал человек,
+   * "ai" — предложила модель (бейдж «ИИ»), "site" — заголовок окна звонка. Нет у старых резидентов.
+   */
+  title_source?: TitleSource;
   source: string;
   /** Когда записан транскрипт (секунды эпохи), нет — null. */
   transcript_at?: number | null;
@@ -463,6 +468,8 @@ export type LiveLine = { t: number; speaker: string | null; text: string };
 
 // --- анализ встречи (analysis.json, M2) ------------------------------------------
 
+export type TitleSource = "auto" | "user" | "ai" | "site";
+
 /** Части разметки; выключенные в настройках не запрашиваются и в файле отсутствуют. */
 export type AnalysisFeature = "types" | "importance" | "chapters" | "insights" | "category" | "title";
 export type PhraseType =
@@ -505,3 +512,6 @@ export type AnalysisState = {
   error?: string;
   job?: Job;
 };
+
+/** `POST /recordings/{id}/title/suggest`: название и откуда оно (свежий анализ или вызов модели). */
+export type TitleSuggestion = { title: string; from: "analysis" | "model" };

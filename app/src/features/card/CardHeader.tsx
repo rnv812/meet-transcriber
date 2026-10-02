@@ -3,6 +3,7 @@ import { TITLE_MAX, type Endpoint } from "../../lib/api";
 import { dayLabel, duration, plural } from "../../lib/format";
 import { isUnnamed } from "../../lib/speakers";
 import type { MergeInfo, Recording } from "../../lib/types";
+import { AiBadge } from "../../ui/AiBadge";
 import { Avatar } from "../../ui/Avatar";
 import type { PersonColor } from "./Turns";
 
@@ -76,7 +77,9 @@ export function CardHeader({
           }}
         />
       ) : (
-        <h2 className="card__title" title="Нажмите, чтобы переименовать" onClick={begin}>{shown}</h2>
+        <h2 className="card__title" title="Нажмите, чтобы переименовать" onClick={begin}>
+          {shown}{rec.title_source === "ai" && rec.title && <AiBadge onClick={begin} />}
+        </h2>
       )}
       <div className="card__meta muted num">{meta}</div>
       {rec.merge && <MergeNote info={rec.merge} />}

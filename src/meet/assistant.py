@@ -168,22 +168,37 @@ def _write_atomic(path: Path, text: str) -> None:
 # --- итоги ---------------------------------------------------------------------
 
 
-def summarize(folder: Path, runner, knowledge_dir, *, provider: str | None = None) -> Path:
+def summarize(folder: Path, runner, knowledge_dir, *, provider: str | None = None,
+              want_title: bool = False) -> Path:
     """Итоги встречи → `summary.md`. Ошибка модели — RuntimeError, прежний
-    summary.md при этом не трогается."""
+    summary.md при этом не трогается.
+
+    `want_title` — включено «Придумывать название встречи»: модель первой
+    строкой пишет «Название: …»; строка в итоги не попадает, а название ложится
+    в meta.json (`summary_title`) — применяет его резидент или CLI по правилам
+    `meet.titles`."""
+    from meet import titles
+
     folder = Path(folder)
     data = _read_transcript(folder)
     title, date = library.title_and_date(folder, data, today_if_unknown=True)
     dirs = _allowed_dirs(folder, knowledge_dir)
     prompt = (f"Встреча: {title} ({date})\n\nТранскрипт:\n{transcript_text(data)}"
               f"{_live_draft(folder)}{_knowledge_hint(dirs)}")
-    text = _call(runner, prompt, system_prompt=SUMMARY_SYSTEM, allowed_dirs=dirs,
+    system = SUMMARY_SYSTEM + (titles.SUMMARY_TITLE_RULE if want_title else "")
+    text = _call(runner, prompt, system_prompt=system, allowed_dirs=dirs,
                  cwd=folder, timeout_s=SUMMARY_TIMEOUT_S)
+    suggested, text = titles.split_summary_title(text) if want_title else (None, text)
+    if not text.strip():
+        raise RuntimeError(EMPTY_REPLY)
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     path = folder / SUMMARY_MD
     _write_atomic(path, f"# Итоги — {title}\n\n{text}\n\n"
                         f"_Модель: {provider or 'модель'} · {stamp}_\n")
-    library.write_meta(folder, {"summary_at": time.time()})
+    now = time.time()
+    library.update_meta(folder, lambda meta: {
+        **{k: v for k, v in meta.items() if k != "summary_title"}, "summary_at": now,
+        **({"summary_title": {"title": suggested, "at": now}} if suggested and want_title else {})})
     return path
 
 
