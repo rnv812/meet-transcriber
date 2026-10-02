@@ -316,6 +316,9 @@ def state(selected: str | None = None, selected_gigaam: str | None = None) -> di
         "can_download": _hub_available(),
         # Модели GigaAM качает сам пакет GigaAM (он тоже приходит с движком).
         "can_download_gigaam": _gigaam_available(),
+        # Необязательный шаг установки GigaAM не прошёл: «GigaAM не
+        # установилась: … — используется Whisper» (окно предлагает «Повторить»).
+        "gigaam_install_error": _gigaam_install_error(),
         "gigaam_cache": str(_gigaam_cache()),
     }
 
@@ -324,6 +327,12 @@ def _gigaam_present(model_id: str) -> bool:
     from meet import gigaam_asr
 
     return gigaam_asr.present(gigaam_name(model_id) or "")
+
+
+def _gigaam_install_error() -> str | None:
+    from meet import engine
+
+    return engine.gigaam_install_error()
 
 
 def _gigaam_available() -> bool:

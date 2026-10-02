@@ -104,6 +104,7 @@ fn main() {
             engine::engine_status,
             engine::install_engine,
             engine::reinstall_engine,
+            engine::retry_gigaam_install,
             engine::gpu_info,
             windows::open_url,
             windows::mark_wizard_done,

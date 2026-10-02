@@ -96,11 +96,36 @@ FILES = {
 }
 _PART = ".part"
 _VERIFIED = ".verified.json"
+# Сеть: подключение — не дольше CONNECT_TIMEOUT_S, ни байта за
+# READ_TIMEOUT_S — обрыв; меньше мегабайта за STALL_S — тоже (сервер или
+# прокси «капает» по байту): очередь задач последовательная, и зависшая
+# загрузка держала бы все следующие встречи.
+CONNECT_TIMEOUT_S = 20
+READ_TIMEOUT_S = 60
+STALL_S = 120
+_PROGRESS_BYTES = 1 << 20
 
 
 class Unavailable(RuntimeError):
     """GigaAM не скачать или не загрузить (нет сети, сервер недоступен, файл
-    битый). Текст — для человека; расшифровка в этом случае идёт Whisper."""
+    битый). Текст — для человека; расшифровка в этом случае идёт Whisper.
+    `network` — причина в сети (а не в файле или пакете)."""
+
+    def __init__(self, message: str, network: bool = False) -> None:
+        super().__init__(message)
+        self.network = network
+
+
+def _open(url: str):
+    """urlopen с таймаутом подключения; после подключения — таймаут чтения."""
+    import urllib.request
+
+    response = urllib.request.urlopen(url, timeout=CONNECT_TIMEOUT_S)
+    try:
+        response.fp.raw._sock.settimeout(READ_TIMEOUT_S)
+    except AttributeError:
+        pass  # другой транспорт — остаётся таймаут подключения
+    return response
 
 
 def cache_dir() -> Path:
@@ -219,25 +244,34 @@ def _file_ok(path: Path, size: int, algo: str, digest: str, seen: dict) -> bool:
 def _fetch(url: str, target: Path, size: int, algo: str, digest: str, on_line=None,
            opener=None) -> None:
     """Скачать во временный файл, сверить и только тогда переименовать.
-    Прокси — из переменных среды (urllib), их задаёт задача (meet.netproxy)."""
-    import urllib.request
+    Прокси — из переменных среды (urllib), их задаёт задача (meet.netproxy).
+    Таймауты — CONNECT_TIMEOUT_S / READ_TIMEOUT_S / STALL_S."""
+    import time
 
     part = target.with_name(target.name + _PART)
     part.unlink(missing_ok=True)
-    open_url = opener or urllib.request.urlopen
+    open_url = opener or _open
     h = hashlib.new(algo)
     done, step = 0, max(size // 10, 1)
     try:
         with open_url(url) as src, open(part, "wb") as out:
-            while block := src.read(1 << 20):
+            read = getattr(src, "read1", None) or src.read
+            mark, mark_at = 0, time.monotonic()
+            while block := read(1 << 20):
                 out.write(block)
                 h.update(block)
                 if on_line and (done + len(block)) // step > done // step:
                     on_line(f"{target.name}: {min(100, (done + len(block)) * 100 // size)}%")
                 done += len(block)
+                now = time.monotonic()
+                if done - mark >= _PROGRESS_BYTES:
+                    mark, mark_at = done, now
+                elif now - mark_at > STALL_S:
+                    raise TimeoutError(f"загрузка почти остановилась ({done} байт)")
     except Exception as e:
         part.unlink(missing_ok=True)
-        raise Unavailable(f"GigaAM: не удалось скачать {target.name} ({type(e).__name__}: {e})") from e
+        raise Unavailable(f"GigaAM: не удалось скачать {target.name} ({type(e).__name__}: {e})",
+                          network=isinstance(e, OSError)) from e
     if done != size or h.hexdigest() != digest:
         part.unlink(missing_ok=True)
         raise Unavailable(f"GigaAM: {target.name} скачался повреждённым (контрольная сумма не совпала)")
@@ -485,14 +519,22 @@ def _proto_tokenizer() -> None:
 
 def load(name: str = MODEL_NAME, device: str = "cpu", on_line=None):
     """Модель GigaAM; веса при необходимости скачиваются (ensure) в cache_dir().
-    Любой сбой — Unavailable: тогда распознаёт Whisper."""
-    ensure(name, on_line)
+    Любой сбой — Unavailable: тогда распознаёт Whisper. Модель не загрузилась
+    — отметка проверки файлов снимается: в следующий раз они сверятся
+    заново и битый скачается снова, а не будет «проверенным» навсегда."""
+    try:
+        ensure(name, on_line)
+    except Unavailable:
+        raise
+    except Exception as e:
+        raise Unavailable(f"GigaAM: модель не подготовлена ({type(e).__name__}: {e})") from e
     try:
         import gigaam
 
         _proto_tokenizer()
         return gigaam.load_model(name, device=device, download_root=str(cache_dir()))
     except Exception as e:
+        (cache_dir() / f"{name}{_VERIFIED}").unlink(missing_ok=True)
         raise Unavailable(f"GigaAM не загрузилась ({type(e).__name__}: {e})") from e
 
 

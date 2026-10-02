@@ -69,7 +69,8 @@ class _Run:
     распознавание, выравнивание, диаризация. Время уходит в журнал строкой
     «время ступеней: …» (и событием `log` в шину — его пишет резидент)."""
 
-    def __init__(self, extra_hotwords: str | None = None) -> None:
+    def __init__(self, extra_hotwords: str | None = None, bus=None) -> None:
+        self.bus = bus if bus is not None else events.EventBus()
         self.choice: asr.Choice | None = None
         # Модель Whisper вместо выбранной, когда GigaAM не загрузилась: уже
         # скачанная (asr.local_whisper_model), чтобы не качать гигабайты.
@@ -124,13 +125,46 @@ def _recognize(wav: Path, hotwords: str | None, run: "_Run") -> list[Segment]:
     try:
         return run.timed("asr", lambda: transcribe_wav(wav, hotwords, choice=choice))
     except Exception as e:
-        print(f"GigaAM недоступна ({type(e).__name__}: {e}) — распознаёт Whisper")
-        run.choice = asr.Choice("faster-whisper", choice.device, note=asr.GIGAAM_FAILED)
-        try:
-            run.whisper_model = asr.local_whisper_model(choice.device)
-        except Exception:
-            run.whisper_model = None
+        return _fallback_to_whisper(wav, hotwords, run, choice.device, e)
+
+
+def _reason(error: Exception) -> str:
+    from meet import gigaam_asr
+
+    return str(error) if isinstance(error, gigaam_asr.Unavailable) else f"{type(error).__name__}: {error}"
+
+
+def _fallback_to_whisper(wav: Path, hotwords: str | None, run: "_Run", device: str,
+                         error: Exception) -> list[Segment]:
+    """GigaAM не вышла — Whisper. Уже скачанная модель (на CPU — самая
+    лёгкая) — сразу. Нет ни одной — качаем выбранную, предупредив в ходе
+    задачи («скачивается модель Whisper (около 1,5 ГБ)»); Hugging Face не
+    отвечает — сразу одна понятная ошибка с обеими причинами, без попытки
+    гигабайтной загрузки. Не скачалась — тоже одна ошибка с обеими причинами."""
+    gigaam_reason = _reason(error)
+    print(f"GigaAM недоступна ({gigaam_reason}) — распознаёт Whisper")
+    run.choice = asr.Choice("faster-whisper", device, note=asr.GIGAAM_FAILED)
+    try:
+        run.whisper_model = asr.local_whisper_model(device)
+    except Exception:
+        run.whisper_model = None
+    if run.whisper_model:
         return _whisper(wav, hotwords, run)
+    name = asr.fallback_whisper_model(device)
+    size = asr.model_size_text(name)
+    note = f"GigaAM недоступна — скачивается модель Whisper{f' ({size})' if size else ''}"
+    print(note)
+    run.bus.progress("asr", note=note)
+    advice = "Проверьте подключение или прокси в настройках"
+    if not asr.hub_reachable():
+        raise SystemExit(f"GigaAM недоступна ({gigaam_reason}), и модель Whisper не скачать: "
+                         f"нет связи с Hugging Face. {advice}")
+    run.whisper_model = name
+    try:
+        return _whisper(wav, hotwords, run)
+    except Exception as w:
+        raise SystemExit(f"GigaAM недоступна ({gigaam_reason}), и модель Whisper не скачалась "
+                         f"({type(w).__name__}: {w}). {advice}") from w
 
 
 def _restore_latin(segments: list[Segment], run: "_Run") -> None:
@@ -340,7 +374,7 @@ def transcribe(
         raise SystemExit(f"Не найдено: {path}")
 
     bus = bus if bus is not None else events.EventBus()
-    run = _Run(hotwords)
+    run = _Run(hotwords, bus)
     hotwords = _load_hotwords(hotwords)
 
     if path.is_dir() and _find_track(path, "source") and not _find_track(path, "sys"):
@@ -475,7 +509,7 @@ def _transcribe_single(
     run: "_Run | None" = None,
 ):
     bus = bus if bus is not None else events.EventBus()
-    run = run if run is not None else _Run()
+    run = run if run is not None else _Run(bus=bus)
     with temp_dir() as td:
         bus.progress("convert", done=0, total=1)
         wav = to_wav16k(src, Path(td) / "audio16.wav")
@@ -512,7 +546,7 @@ def _transcribe_two_track(
     run: "_Run | None" = None,
 ):
     bus = bus if bus is not None else events.EventBus()
-    run = run if run is not None else _Run()
+    run = run if run is not None else _Run(bus=bus)
     sys_src, mic_src = _find_track(folder, "sys"), _find_track(folder, "mic")
     if not (sys_src and mic_src):
         raise SystemExit(f"В {folder} нет дорожек sys/mic")

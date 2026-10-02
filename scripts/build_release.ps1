@@ -214,7 +214,12 @@ foreach ($flavor in @('cuda', 'cpu')) {
     Write-Text $torchDeps ((@(Get-Content -Encoding UTF8 $torchLock | Where-Object { $_ -notmatch $torchLine }) -join "`n") + "`n")
     $treeLock = Join-Path $ConstraintsOut "tree-$flavor.txt"
     Invoke-Native "uv pip compile (движок, $flavor)" {
-        uv pip compile (Join-Path $Root 'pyproject.toml') $torchIn --extra "engine-$flavor" @compileArgs --constraint $torchDeps -o $treeLock
+        uv pip compile (Join-Path $Root 'pyproject.toml') $torchIn --extra "engine-$flavor" --extra gigaam @compileArgs --constraint $torchDeps -o $treeLock
+    }
+    # GigaAM ставится необязательным шагом с проверкой sha256 архива: без
+    # фрагмента #sha256 в ограничениях хеш бы не сверялся.
+    if (-not (Select-String -Path $treeLock -Pattern '^gigaam @ .+#sha256=[0-9a-f]{64}$' -Quiet)) {
+        throw "constraints-${flavor}: нет строки gigaam с #sha256"
     }
     $lines = foreach ($line in Get-Content -Encoding UTF8 $treeLock) {
         if ($line -match $torchLine) {

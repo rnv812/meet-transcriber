@@ -398,3 +398,82 @@ def test_real_sentencepiece_loads_from_cyrillic_folder(tmp_path, monkeypatch):
     processor = decoding.SentencePieceProcessor()
     processor.load(str(target))
     assert len(processor) > 0 and processor.encode("привет мир")
+
+
+# --- таймауты, отметка проверки, ошибки подготовки -------------------------------
+
+
+def test_default_download_uses_connect_timeout(tmp_path, monkeypatch):
+    import urllib.request
+
+    seen = {}
+
+    def urlopen(url, timeout=None):
+        seen["timeout"] = timeout
+        return _Response(BLOBS[url.rsplit("/", 1)[-1]])
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+    g.ensure("v3_e2e_ctc")
+    assert seen["timeout"] == g.CONNECT_TIMEOUT_S == 20
+    assert g.READ_TIMEOUT_S == 60
+
+
+def test_read_timeout_becomes_unavailable(tmp_path, monkeypatch):
+    import socket
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+
+    class Stalls(_Response):
+        def read(self, n=-1):
+            raise socket.timeout("timed out")
+
+    with pytest.raises(g.Unavailable) as error:
+        g.ensure("v3_e2e_rnnt", opener=lambda url: Stalls(b""))
+    assert error.value.network and "не удалось скачать" in str(error.value)
+    assert not list(g.cache_dir().glob("*.part"))
+
+
+def test_trickling_download_is_cut(tmp_path, monkeypatch):
+    """Сервер «капает» по байту (каждое чтение укладывается в таймаут) —
+    загрузка всё равно обрывается по STALL_S, а не держит очередь вечно."""
+    import time
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+    clock = iter(range(0, 10_000, 50))
+    monkeypatch.setattr(time, "monotonic", lambda: next(clock))
+
+    class Trickle(_Response):
+        def read1(self, n=-1):
+            return b"w"
+
+    with pytest.raises(g.Unavailable, match="почти остановилась"):
+        g.ensure("v3_e2e_rnnt", opener=lambda url: Trickle(b""))
+
+
+def test_failed_load_drops_the_verification_stamp(tmp_path, monkeypatch):
+    """Модель не загрузилась — отметка снимается: в следующий раз файлы
+    сверятся заново, а не будут «проверенными» навсегда."""
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+
+    def load_model(*a, **kw):
+        raise RuntimeError("tokenizer parse error")
+
+    fake_gigaam(monkeypatch, load_model)
+    g.ensure("v3_e2e_rnnt", opener=opener())
+    stamp = g.cache_dir() / "v3_e2e_rnnt.verified.json"
+    assert stamp.exists()
+    with pytest.raises(g.Unavailable):
+        g.load("v3_e2e_rnnt")
+    assert not stamp.exists()
+
+
+def test_any_preparation_error_is_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+
+    def boom(*a, **kw):
+        raise PermissionError("файл занят другой программой")
+
+    monkeypatch.setattr(g, "ensure", boom)
+    with pytest.raises(g.Unavailable, match="модель не подготовлена"):
+        g.load("v3_e2e_rnnt")

@@ -32,6 +32,9 @@ COMPONENTS = (
 # с пометкой, но «движок не установлен» из-за них не показывается. GigaAM
 # приезжает с обновлением движка (новая версия ставит окружение заново).
 OPTIONAL_COMPONENTS = {"gigaam": "не установлена — будет установлена при обновлении движка"}
+# Причина, по которой необязательный шаг установки GigaAM не прошёл (пишет
+# оболочка, engine.rs GIGAAM_ERROR_FILE) — в окружении движка.
+GIGAAM_ERROR_FILE = "gigaam-install-error.txt"
 
 # Индексы колёс torch: CUDA-сборка тяжелее, но без неё расшифровка идёт на CPU
 # и на часовой встрече это часы вместо минут.
@@ -66,8 +69,12 @@ PACKAGES = (
     "pyannote.audio>=4.0,<5",
     "transformers>=4.40,<6",
     "scipy>=1.11",
-    GIGAAM,
 )
+# Необязательные пакеты — отдельным extra `gigaam` и отдельным шагом
+# установки (uv_gigaam_step): архив с GitHub может не скачаться или
+# оказаться перепакованным (хеш не сойдётся) — движок ставится и без него,
+# расшифровка тогда идёт Whisper.
+OPTIONAL_PACKAGES = (GIGAAM,)
 CUDA_RUNTIME = ("nvidia-cublas-cu12", "nvidia-cudnn-cu12")
 
 # Порядок величин для честного предупреждения: скачивание идёт гигабайтами, и
@@ -182,7 +189,7 @@ def state() -> dict:
         if module in OPTIONAL_COMPONENTS:
             item["optional"] = True
             if not item["installed"]:
-                item["note"] = OPTIONAL_COMPONENTS[module]
+                item["note"] = gigaam_install_error() or OPTIONAL_COMPONENTS[module]
         components.append(item)
     missing = [c["module"] for c in components
                if not c["installed"] and not c.get("optional")]
@@ -217,7 +224,19 @@ def install_steps(flavor: str | None = None) -> list[list[str]]:
     steps = [pip + ["torch", "--index-url", index]]
     extras = list(PACKAGES) + (list(CUDA_RUNTIME) if flavor == "cuda" else [])
     steps.append(pip + extras)
+    steps.append(pip + list(OPTIONAL_PACKAGES))
     return steps
+
+
+def gigaam_install_error(prefix: Path | None = None) -> str | None:
+    """Почему GigaAM не установилась («GigaAM не установилась: … —
+    используется Whisper») или None. Причину пишет установщик в окружение."""
+    path = Path(prefix or sys.prefix) / GIGAAM_ERROR_FILE
+    try:
+        reason = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return f"GigaAM не установилась: {reason} — используется Whisper" if reason else None
 
 
 def install(flavor: str | None = None, on_line=None, runner=None) -> int:
@@ -225,13 +244,17 @@ def install(flavor: str | None = None, on_line=None, runner=None) -> int:
 
     Прогресса в процентах здесь нет и не будет: pip не сообщает общий объём
     заранее. Показываем, что именно сейчас качается, — это честнее выдуманной
-    шкалы (тот же принцип, что у ступеней расшифровки).
+    шкалы (тот же принцип, что у ступеней расшифровки). Последний шаг
+    (GigaAM) необязателен: его сбой не валит установку.
     """
     run = runner or _run
-    for step in install_steps(flavor):
+    steps = install_steps(flavor)
+    for step in steps[:-1]:
         code = run(step, on_line)
         if code != 0:
             return code
+    if run(steps[-1], on_line) != 0 and on_line:
+        on_line("GigaAM не установилась — расшифровка пойдёт Whisper")
     return 0
 
 
@@ -273,6 +296,15 @@ def uv_steps(uv: str, env_dir: str, wheel: str, profile: str,
         pip + list(TORCH_SPECS) + ["--index-url", index] + pinned,
         pip + [f"{wheel}[engine-{profile}]"] + pinned,
     ]
+
+
+def uv_gigaam_step(uv: str, env_dir: str, wheel: str,
+                   constraints: str | None = None) -> list[str]:
+    """Необязательный шаг установщика после uv_steps: extra `gigaam` того же
+    колеса. Зеркало engine.rs `uv_gigaam_step` (фикстуры uv_gigaam_step*.json)."""
+    python = env_dir + chr(92) + "Scripts" + chr(92) + "python.exe"
+    pinned = ["--constraint", constraints] if constraints else []
+    return [uv, "pip", "install", "--python", python, f"{wheel}[gigaam]"] + pinned
 
 
 def _run(argv: list[str], on_line) -> int:

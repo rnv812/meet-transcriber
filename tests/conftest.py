@@ -89,3 +89,48 @@ def _no_background_playback_mix(monkeypatch):
     calls: list = []
     monkeypatch.setattr(playback, "schedule", calls.append)
     return calls
+
+
+# Адреса, на которые тестам можно подключаться: резидент, control API, живые
+# серверы тестов — только локальные.
+_LOCAL_HOSTS = {"localhost", "::1", "0.0.0.0", ""}
+
+
+def _local(host) -> bool:
+    host = str(host or "").strip("[]").lower()
+    return host in _LOCAL_HOSTS or host.startswith("127.")
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """Сети в тестах нет: подключение сокета и urlopen к не-локальному адресу
+    — ошибка теста (а не загрузка гигабайт моделей с CDN или Hugging Face,
+    если в окружении стоит настоящий движок). Локальные адреса работают."""
+    import socket
+    import urllib.parse
+    import urllib.request
+
+    def guard(address) -> None:
+        if isinstance(address, tuple) and address and not _local(address[0]):
+            raise AssertionError(f"тест полез в сеть: {address!r}")
+
+    real_connect, real_connect_ex = socket.socket.connect, socket.socket.connect_ex
+
+    def connect(self, address):
+        guard(address)
+        return real_connect(self, address)
+
+    def connect_ex(self, address):
+        guard(address)
+        return real_connect_ex(self, address)
+
+    real_urlopen = urllib.request.urlopen
+
+    def urlopen(url, *args, **kwargs):
+        full = url if isinstance(url, str) else getattr(url, "full_url", "")
+        guard((urllib.parse.urlparse(full).hostname, 0))
+        return real_urlopen(url, *args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)

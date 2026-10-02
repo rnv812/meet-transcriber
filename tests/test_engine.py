@@ -45,9 +45,10 @@ def test_torch_is_installed_separately():
     """Смешивать torch с остальными пакетами в одной команде нельзя: он живёт
     на своём индексе, и так утягивается не та сборка."""
     steps = engine.install_steps("cuda")
-    assert len(steps) == 2
+    assert len(steps) == 3  # torch, движок, необязательный GigaAM
     assert "faster-whisper>=1.1" not in steps[0]
     assert "--index-url" not in steps[1]
+    assert steps[2][-1] == engine.GIGAAM
 
 
 def test_install_stops_after_a_failed_step():
@@ -223,7 +224,8 @@ def test_gigaam_is_pinned_to_a_commit_archive_in_both_profiles():
     assert engine.GIGAAM == ("gigaam @ https://github.com/salute-developers/GigaAM/archive/"
                              f"{engine.GIGAAM_COMMIT}.zip#sha256={engine.GIGAAM_SHA256}")
     for flavor in ("cpu", "cuda"):
-        assert engine.GIGAAM in engine.install_steps(flavor)[1]
+        steps = engine.install_steps(flavor)
+        assert engine.GIGAAM not in steps[1] and steps[2][-1] == engine.GIGAAM
     assert "gigaam" in {module for module, _ in engine.COMPONENTS}
 
 
@@ -421,8 +423,9 @@ def test_gigaam_archive_is_hash_pinned_everywhere():
     root = Path(__file__).resolve().parents[1]
     extras = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))[
         "project"]["optional-dependencies"]
+    assert extras["gigaam"] == [engine.GIGAAM]
     for profile in ("engine-cpu", "engine-cuda"):
-        assert engine.GIGAAM in extras[profile]
+        assert engine.GIGAAM not in extras[profile]  # необязательный шаг, не основной
 
 
 def test_engine_without_gigaam_is_still_installed(monkeypatch):
@@ -436,3 +439,52 @@ def test_engine_without_gigaam_is_still_installed(monkeypatch):
     assert gigaam["note"] == "не установлена — будет установлена при обновлении движка"
     monkeypatch.setattr(engine, "installed", lambda module: module != "torch")
     assert engine.state()["missing"] == ["torch"]
+
+
+def test_gigaam_is_a_separate_optional_install_step():
+    """Сбой GigaAM (сеть, перепакованный архив) не валит установку движка:
+    он ставится отдельным шагом — extra `gigaam` того же колеса."""
+    import json
+
+    for name, constraints in (("uv_gigaam_step.json", None),
+                              ("uv_gigaam_step_constrained.json", UV_CONSTRAINTS["cpu"])):
+        fixture = json.loads((Path(__file__).parent / "fixtures" / name).read_text(encoding="utf-8"))
+        assert fixture == [engine.uv_gigaam_step(constraints=constraints, **UV_INPUTS)]
+    step = engine.uv_gigaam_step(**UV_INPUTS)
+    assert step[-1].endswith("[gigaam]")
+    for profile in ("cpu", "cuda"):
+        assert not any("gigaam" in arg for s in engine.uv_steps(profile=profile, **UV_INPUTS) for arg in s)
+
+
+def test_cli_install_survives_a_failed_gigaam_step():
+    calls, lines = [], []
+
+    def runner(argv, on_line):
+        calls.append(argv)
+        return 1 if argv[-1] == engine.GIGAAM else 0
+
+    assert engine.install("cpu", on_line=lines.append, runner=runner) == 0
+    assert len(calls) == 3 and "GigaAM не установилась" in lines[-1]
+
+
+def test_build_script_pins_gigaam_hash_in_constraints():
+    """Ограничения собираются с extra gigaam, и сборка падает, если в них
+    нет строки gigaam с #sha256 (иначе хеш архива не сверялся бы)."""
+    script = (Path(__file__).resolve().parents[1] / "scripts" / "build_release.ps1").read_text(
+        encoding="utf-8-sig")
+    assert '--extra "engine-$flavor" --extra gigaam' in script
+    assert "'^gigaam @ .+#sha256=[0-9a-f]{64}$'" in script
+
+
+def test_gigaam_install_error_is_reported(monkeypatch, tmp_path):
+    (tmp_path / engine.GIGAAM_ERROR_FILE).write_text(
+        "архив компонента GigaAM на GitHub изменился — нужна новая версия приложения", encoding="utf-8")
+    assert engine.gigaam_install_error(tmp_path) == (
+        "GigaAM не установилась: архив компонента GigaAM на GitHub изменился — нужна новая "
+        "версия приложения — используется Whisper")
+    monkeypatch.setattr(engine.sys, "prefix", str(tmp_path))
+    monkeypatch.setattr(engine, "installed", lambda module: module != "gigaam")
+    gigaam = next(c for c in engine.state()["components"] if c["module"] == "gigaam")
+    assert gigaam["note"].startswith("GigaAM не установилась: архив")
+    (tmp_path / engine.GIGAAM_ERROR_FILE).unlink()
+    assert engine.gigaam_install_error(tmp_path) is None

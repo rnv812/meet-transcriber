@@ -274,21 +274,72 @@ class Choice:
     note: str | None = None
 
 
+# Запасной Whisper на процессоре — от лёгкого к тяжёлому; large-v3 (кроме
+# turbo) на CPU не берём никогда: часовая встреча шла бы часами.
+CPU_SMALL_MODEL = "Systran/faster-whisper-small"
+CPU_TURBO_MODELS = ("deepdml/faster-whisper-large-v3-turbo-ct2", "Systran/faster-whisper-large-v3-turbo")
+HUB_URL = "https://huggingface.co"
+HUB_TIMEOUT_S = 10
+
+
+def cpu_friendly(name: str) -> bool:
+    """Модель годится для процессора: не large (turbo — можно)."""
+    low = name.lower()
+    return "large" not in low or "turbo" in low
+
+
 def local_whisper_model(device: str) -> str | None:
-    """Модель Whisper, которая уже лежит на диске: выбранная для устройства,
-    иначе любая скачанная из каталога (сначала поставляемая для CPU). Нет
-    ни одной — None. Для запасного пути и определения языка: качать
-    гигабайты ради них не нужно."""
+    """Модель Whisper, которая уже лежит на диске. Нет ни одной — None. Для
+    запасного пути и определения языка: качать гигабайты ради них не нужно.
+
+    На процессоре — от лёгкой к тяжёлой: small → medium → turbo, затем
+    выбранная (если она не large); large-v3 на CPU — никогда. На видеокарте
+    — выбранная, затем русский large-v3 и остальные из каталога."""
     from meet import models
 
     chosen = _model_for(device, None)
-    candidates = [chosen, CPU_MODEL_NAME, MODEL_NAME] + [
-        m["id"] for m in models.CATALOGUE
-        if m.get("kind") == models.ASR and m.get("backend") == "faster-whisper"]
+    if device == "cpu":
+        candidates = [CPU_SMALL_MODEL, CPU_MODEL_NAME, *CPU_TURBO_MODELS]
+        candidates += [chosen] if cpu_friendly(chosen) else []
+    else:
+        candidates = [chosen, MODEL_NAME] + [
+            m["id"] for m in models.CATALOGUE
+            if m.get("kind") == models.ASR and m.get("backend") == "faster-whisper"]
     for name in dict.fromkeys(candidates):
         if Path(name).is_dir() or models.downloaded(name):
             return name
     return None
+
+
+def fallback_whisper_model(device: str) -> str:
+    """Какую модель Whisper качать для запасного пути, если на диске нет
+    ни одной: выбранную для устройства; на процессоре — только не large."""
+    chosen = _model_for(device, None)
+    if device == "cpu" and not cpu_friendly(chosen):
+        return CPU_MODEL_NAME
+    return chosen
+
+
+def model_size_text(name: str) -> str:
+    """«около 1,5 ГБ» по каталогу; неизвестна — пусто."""
+    from meet import models
+
+    size = next((m.get("size_gb") for m in models.CATALOGUE if m["id"] == name), None)
+    return f"около {size:g} ГБ".replace(".", ",") if size else ""
+
+
+def hub_reachable(timeout: float = HUB_TIMEOUT_S) -> bool:
+    """Отвечает ли Hugging Face (откуда качается Whisper) — быстрая проверка
+    перед гигабайтной загрузкой. Прокси — из переменных среды задачи."""
+    import urllib.request
+
+    try:
+        request = urllib.request.Request(HUB_URL, method="HEAD")
+        with urllib.request.urlopen(request, timeout=timeout):
+            return True
+    except Exception as e:
+        # 4xx/5xx — сервер ответил: связь есть.
+        return getattr(e, "code", None) is not None
 
 
 def speech_sample(audio, sr: int = 16000, seconds: float = DETECT_LANGUAGE_S,

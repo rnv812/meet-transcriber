@@ -213,17 +213,28 @@ def test_speech_sample_takes_pieces_only_from_speech():
     assert asr.speech_sample(audio, sr, regions=[]) is None
 
 
-def test_local_whisper_model_prefers_the_chosen_one(monkeypatch):
+def test_local_whisper_model_on_cpu_goes_light_to_heavy_and_never_large(monkeypatch):
     from meet import models
 
-    have = {"Systran/faster-whisper-medium"}
+    have = {"bzikst/faster-whisper-large-v3-russian", "Systran/faster-whisper-large-v3"}
     monkeypatch.setattr(models, "downloaded", lambda repo: repo in have)
-    monkeypatch.setattr(asr, "_model_for", lambda device, name: "Systran/faster-whisper-small")
+    monkeypatch.setattr(asr, "_model_for", lambda device, name: "bzikst/faster-whisper-large-v3-russian")
+    assert asr.local_whisper_model("cpu") is None  # large-v3 на процессоре — никогда
+    assert asr.local_whisper_model("cuda") == "bzikst/faster-whisper-large-v3-russian"
+    have.add("deepdml/faster-whisper-large-v3-turbo-ct2")
+    assert asr.local_whisper_model("cpu") == "deepdml/faster-whisper-large-v3-turbo-ct2"
+    have.add("Systran/faster-whisper-medium")
     assert asr.local_whisper_model("cpu") == "Systran/faster-whisper-medium"
     have.add("Systran/faster-whisper-small")
     assert asr.local_whisper_model("cpu") == "Systran/faster-whisper-small"
-    have.clear()
-    assert asr.local_whisper_model("cpu") is None
+
+
+def test_fallback_download_model_is_never_large_on_cpu(monkeypatch):
+    monkeypatch.setattr(asr, "_model_for", lambda device, name: "bzikst/faster-whisper-large-v3-russian")
+    assert asr.fallback_whisper_model("cpu") == "Systran/faster-whisper-medium"
+    assert asr.fallback_whisper_model("cuda") == "bzikst/faster-whisper-large-v3-russian"
+    assert asr.model_size_text("Systran/faster-whisper-medium") == "около 1,5 ГБ"
+    assert asr.model_size_text("неизвестная") == ""
 
 
 def test_live_transcriber_maps_auto_to_detection(tmp_path, monkeypatch):

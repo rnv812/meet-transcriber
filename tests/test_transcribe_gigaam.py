@@ -188,15 +188,64 @@ def test_gigaam_failure_falls_back_to_installed_whisper(pipeline, monkeypatch, t
     assert calls["align"] == [True]  # для Whisper выравнивание как обычно
 
 
-def test_gigaam_failure_without_local_whisper_uses_the_configured_model(pipeline, monkeypatch, tmp_path):
+def _no_local_whisper(monkeypatch, reachable=True):
+    monkeypatch.setattr(asr, "local_whisper_model", lambda device: None)
+    monkeypatch.setattr(asr, "fallback_whisper_model", lambda device: "Systran/faster-whisper-medium")
+    monkeypatch.setattr(asr, "hub_reachable", lambda timeout=10: reachable)
+
+
+def test_gigaam_failure_without_local_whisper_says_it_downloads(pipeline, monkeypatch, tmp_path, capsys):
+    """Ни одной модели Whisper на диске: качается выбранная — и это видно в
+    ходе задачи («скачивается модель Whisper (около 1,5 ГБ)») и в журнале."""
+    from meet import events
+
     tr, calls, _ = pipeline
     calls["gigaam_fails"] = True
     _choose(monkeypatch, asr.Choice("gigaam", "cpu", "v3_e2e_rnnt"))
-    monkeypatch.setattr(asr, "local_whisper_model", lambda device: None)
+    _no_local_whisper(monkeypatch)
+    bus = events.EventBus()
+    notes = []
+    bus.subscribe(lambda e: notes.append(e.to_dict().get("note")) if e.kind == events.PROGRESS else None)
     folder = _import_folder(tmp_path)
-    tr.transcribe(str(folder), align=False)
-    assert calls["models"][1:] == [None]
+    tr.transcribe(str(folder), align=False, bus=bus)
+    note = "GigaAM недоступна — скачивается модель Whisper (около 1,5 ГБ)"
+    assert note in notes and note in capsys.readouterr().out
+    assert calls["models"][1:] == ["Systran/faster-whisper-medium"]
     assert library.read_transcript(folder)["segments"][0]["text"] == "whisper"
+
+
+def test_no_hub_means_one_clear_error_without_a_download(pipeline, monkeypatch, tmp_path):
+    tr, calls, _ = pipeline
+    calls["gigaam_fails"] = True
+    _choose(monkeypatch, asr.Choice("gigaam", "cpu", "v3_e2e_rnnt"))
+    _no_local_whisper(monkeypatch, reachable=False)
+    with pytest.raises(SystemExit) as error:
+        tr.transcribe(str(_import_folder(tmp_path)), align=False)
+    text = str(error.value)
+    assert text.startswith("GigaAM недоступна (GigaAM: не удалось скачать")
+    assert "нет связи с Hugging Face" in text and "Проверьте подключение или прокси" in text
+    assert calls["models"][1:] == []  # Whisper даже не пытались грузить
+
+
+def test_failed_whisper_download_names_both_causes(pipeline, monkeypatch, tmp_path):
+    tr, calls, _ = pipeline
+    calls["gigaam_fails"] = True
+    _choose(monkeypatch, asr.Choice("gigaam", "cpu", "v3_e2e_rnnt"))
+    _no_local_whisper(monkeypatch)
+    real = tr.transcribe_wav
+
+    def whisper_fails(path, hotwords=None, *, choice=None, model_name=None, **kw):
+        if choice is None:
+            raise OSError("Connection reset by peer")
+        return real(path, hotwords, choice=choice, model_name=model_name, **kw)
+
+    monkeypatch.setattr(tr, "transcribe_wav", whisper_fails)
+    with pytest.raises(SystemExit) as error:
+        tr.transcribe(str(_import_folder(tmp_path)), align=False)
+    text = str(error.value)
+    assert "GigaAM недоступна (GigaAM: не удалось скачать" in text
+    assert "модель Whisper не скачалась (OSError: Connection reset by peer)" in text
+    assert text.endswith("Проверьте подключение или прокси в настройках")
 
 
 def test_user_rules_win_over_latin_restoring(pipeline, monkeypatch, tmp_path):

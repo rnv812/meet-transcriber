@@ -144,6 +144,58 @@ pub fn uv_steps(
     ]
 }
 
+/// Необязательный шаг после основных: GigaAM (extra `gigaam` колеса meet) —
+/// порт `meet.engine.uv_gigaam_step`. Отдельно от `[engine-<профиль>]`:
+/// архив GigaAM качается с GitHub с проверкой sha256, и его сбой (сеть,
+/// перепакованный архив) не должен валить установку движка — без GigaAM
+/// расшифровка идёт Whisper.
+pub fn uv_gigaam_step(
+    uv: &str,
+    env_dir: &str,
+    wheel: &str,
+    constraints: Option<&str>,
+) -> Vec<String> {
+    let python = format!(r"{env_dir}\Scripts\python.exe");
+    let mut argv: Vec<String> = [uv, "pip", "install", "--python", &python]
+        .iter()
+        .map(|item| item.to_string())
+        .collect();
+    argv.push(format!("{wheel}[gigaam]"));
+    if let Some(file) = constraints {
+        argv.extend(["--constraint".to_string(), file.to_string()]);
+    }
+    argv
+}
+
+/// Причина сбоя необязательного шага GigaAM — в окружении движка: её
+/// показывает окно («GigaAM не установилась: … — используется Whisper»).
+pub const GIGAAM_ERROR_FILE: &str = "gigaam-install-error.txt";
+
+/// Короткая причина сбоя установки GigaAM по хвосту вывода uv — по-русски.
+pub fn gigaam_failure_text(tail: &str) -> String {
+    let low = tail.to_lowercase();
+    if low.contains("hash mismatch") || low.contains("hashes do not match") {
+        "архив компонента GigaAM на GitHub изменился — нужна новая версия приложения".into()
+    } else if [
+        "dns",
+        "connect",
+        "timed out",
+        "timeout",
+        "network",
+        "error sending request",
+        "failed to fetch",
+        "could not resolve",
+        "proxy",
+    ]
+    .iter()
+    .any(|needle| low.contains(needle))
+    {
+        "нет связи с GitHub — проверьте подключение или прокси в настройках".into()
+    } else {
+        "ошибка установки, подробности — в журнале logs\\engine-install.log".into()
+    }
+}
+
 /// Файл точных версий профиля в ресурсах; нет (dev, старая сборка) — `None`.
 pub fn constraints_file(resources: &Path, profile: &str) -> Option<PathBuf> {
     Some(resources.join(format!("constraints-{profile}.txt"))).filter(|file| file.is_file())
@@ -1142,6 +1194,15 @@ fn run_steps(
             return Err(format!("Установка движка прервалась: {message}"));
         }
     }
+    // Необязательный GigaAM — после основных шагов; его сбой не прерывает
+    // установку (причина — в окружении, окно её покажет).
+    let gigaam = uv_gigaam_step(
+        &uv.to_string_lossy(),
+        &env.to_string_lossy(),
+        &wheel.to_string_lossy(),
+        constraints.as_deref(),
+    );
+    let _ = run_gigaam(app, &gigaam, &envs, &cwd, env, &mut log, (of, of));
     let marker = marker_json(version, profile, &logs::utc_now(), wheel_sha256);
     let staged = env.join(format!("{MARKER}.tmp"));
     fs::write(&staged, marker)
@@ -1149,6 +1210,94 @@ fn run_steps(
         .map_err(|error| format!("Не удалось записать отметку установки: {error}"))?;
     log.write("движок установлен");
     Ok(())
+}
+
+/// Шаг GigaAM: успех — причина прежнего сбоя стирается, сбой — записывается
+/// в `GIGAAM_ERROR_FILE` окружения. → Ok или русская причина.
+fn run_gigaam(
+    app: &AppHandle,
+    argv: &[String],
+    envs: &[(&str, OsString)],
+    cwd: &Path,
+    env: &Path,
+    log: &mut InstallLog,
+    (step, of): (usize, usize),
+) -> Result<(), String> {
+    let title = "Установка GigaAM (необязательно)";
+    log.write(&format!("необязательный шаг: {}", argv.join(" ")));
+    let _ = app.emit(
+        PROGRESS_EVENT,
+        Progress {
+            step,
+            of,
+            line: title.to_string(),
+        },
+    );
+    let mut tail = VecDeque::new();
+    let outcome = run_streamed(argv, envs, cwd, |line| {
+        log.write(&line);
+        push_tail(&mut tail, line);
+    });
+    let error_file = env.join(GIGAAM_ERROR_FILE);
+    let result = match outcome {
+        Ok(Some(0)) => Ok(()),
+        Ok(_) => Err(gigaam_failure_text(&Vec::from(tail).join("\n"))),
+        Err(error) => Err(format!("шаг не запустился: {error}")),
+    };
+    match &result {
+        Ok(()) => {
+            let _ = fs::remove_file(&error_file);
+            log.write("GigaAM установлена");
+        }
+        Err(reason) => {
+            log.write(&format!(
+                "GigaAM не установилась: {reason} — расшифровка пойдёт Whisper"
+            ));
+            shell_log!("GigaAM не установилась: {reason}");
+            let _ = fs::write(&error_file, reason);
+        }
+    }
+    result
+}
+
+/// «Повторить» установку GigaAM из окна: только необязательный шаг, в
+/// установленное окружение текущей версии. Резидент не останавливается —
+/// пакет новый, его файлы никто не держит.
+pub fn retry_gigaam(app: &AppHandle) -> Result<(), String> {
+    let _busy = begin_install()?;
+    let data = resident::data_dir();
+    let version = app_version(app);
+    let env = env_dir(&data, &version);
+    let marker = read_marker(&env)
+        .filter(|marker| marker.version == version)
+        .ok_or("Движок не установлен")?;
+    let resources = resource_dir_with(app, UV).ok_or(NO_UV)?;
+    let wheel = find_wheel(&resources, &version).ok_or(NO_WHEEL)?;
+    let _lock = InstallLock::acquire(&engine_root(&data))?;
+    let constraints = constraints_file(&resources, &marker.profile)
+        .map(|file| file.to_string_lossy().into_owned());
+    let argv = uv_gigaam_step(
+        &resources.join(UV).to_string_lossy(),
+        &env.to_string_lossy(),
+        &wheel.to_string_lossy(),
+        constraints.as_deref(),
+    );
+    let mut envs = uv_env(&data);
+    envs.extend(crate::netproxy::system_proxy_env());
+    let mut log = InstallLog::open(&data);
+    log.write(&format!(
+        "--- повторная установка GigaAM в {}",
+        env.display()
+    ));
+    run_gigaam(
+        app,
+        &argv,
+        &envs,
+        &engine_root(&data),
+        &env,
+        &mut log,
+        (1, 1),
+    )
 }
 
 /// Обслуживание движка для этого запуска — из `setup`, до надзора: от него
@@ -1337,6 +1486,14 @@ pub async fn reinstall_engine(app: AppHandle, profile: String) -> Result<(), Str
         .map_err(|error| error.to_string())?
 }
 
+/// «Повторить» установку GigaAM (раздел «Движок и модели»).
+#[tauri::command]
+pub async fn retry_gigaam_install(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || retry_gigaam(&app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1420,6 +1577,35 @@ mod tests {
             ),
             fixture("uv_steps_cpu_constrained.json")
         );
+    }
+
+    #[test]
+    fn gigaam_step_matches_python() {
+        assert_eq!(
+            vec![uv_gigaam_step("uv.exe", r"C:\env", WHEEL, None)],
+            fixture("uv_gigaam_step.json")
+        );
+        assert_eq!(
+            vec![uv_gigaam_step(
+                "uv.exe",
+                r"C:\env",
+                WHEEL,
+                Some(r"C:\r\constraints-cpu.txt")
+            )],
+            fixture("uv_gigaam_step_constrained.json")
+        );
+    }
+
+    #[test]
+    fn gigaam_failure_is_explained_in_russian() {
+        let mismatch = "error: Hash mismatch for `gigaam @ https://github.com/...zip`\n\nExpected:\n  sha256:17c9\n\nComputed:\n  sha256:0000";
+        assert_eq!(
+            gigaam_failure_text(mismatch),
+            "архив компонента GigaAM на GitHub изменился — нужна новая версия приложения"
+        );
+        assert!(gigaam_failure_text("error: Request failed after 3 retries\n  Caused by: error sending request for url (https://github.com/...)")
+            .starts_with("нет связи с GitHub"));
+        assert!(gigaam_failure_text("что-то иное").contains("engine-install.log"));
     }
 
     #[test]
