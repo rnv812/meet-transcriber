@@ -84,6 +84,9 @@ test("«Удалить…» спрашивает подтверждение в �
   await userEvent.click(screen.getByRole("button", { name: "Ещё действия" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Удалить…" }));
   expect(screen.getByRole("menu")).toHaveTextContent("Удалить запись и расшифровку? Это действие нельзя отменить.");
+  // Подтверждение: фокус на «Отмена» (два Enter не удаляют), предупреждение связано с меню.
+  expect(screen.getByRole("menuitem", { name: "Отмена" })).toHaveFocus();
+  expect(screen.getByRole("menu")).toHaveAccessibleDescription("Удалить запись и расшифровку? Это действие нельзя отменить.");
   expect(p.onDelete).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("menuitem", { name: "Отмена" }));
   expect(screen.getByRole("menuitem", { name: "Удалить…" })).toBeInTheDocument();

@@ -95,13 +95,13 @@ export function CardActions({
     note = DELETE_NOTE;
     items = [
       { label: "Удалить", danger: true, icon: <Trash2 {...ICON} />, onSelect: run(onDelete) },
-      { label: "Отмена", onSelect: () => setConfirm(null) },
+      { label: "Отмена", autoFocus: true, onSelect: () => setConfirm(null) },
     ];
   } else if (confirm === "retranscribe") {
     note = RETRANSCRIBE_NOTE;
     items = [
       { label: "Перерасшифровать", icon: <RotateCcw {...ICON} />, disabled: busy, onSelect: run(onRetranscribe) },
-      { label: "Отмена", onSelect: () => setConfirm(null) },
+      { label: "Отмена", autoFocus: true, onSelect: () => setConfirm(null) },
     ];
   } else if (menu) {
     const opt = (on: boolean | undefined, item: MenuItem): MenuItem[] => (on ? [item] : []);

@@ -59,9 +59,11 @@ export function cleanRefText(text: string): string {
   return text.replace(ESCAPES, "").replace(BREAKS, " ").replace(CONTROLS, "").replace(/\s+/g, " ").trim();
 }
 
+/** Обрезка по символам (кодовым точкам): эмодзи на границе не разрезается пополам. */
 function clip(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return `${text.slice(0, max - 1).trimEnd()}…`;
+  const chars = Array.from(text);
+  if (chars.length <= max) return text;
+  return `${chars.slice(0, max - 1).join("").trimEnd()}…`;
 }
 
 function refLine(ref: AgentRef): string | null {
@@ -100,6 +102,16 @@ export function flatPrompt(text: string): string {
     out += (isRefLine(lines[i - 1]!) && isRefLine(lines[i]!) ? " · " : " ") + lines[i];
   }
   return out;
+}
+
+/**
+ * Последний рубеж перед псевдоконсолью: одна строка, без единого управляющего
+ * символа — ни \r, ни \n (Enter), ни ESC (конец вставки, команды терминала).
+ * Что бы ни передали во вкладку «Агент», вставка не нажмёт Enter и не выйдет
+ * из поля ввода.
+ */
+export function pasteLine(text: string): string {
+  return flatPrompt(text).replace(ESCAPES, "").replace(BREAKS, " ").replace(CONTROLS, "");
 }
 
 /** Текст пункта Markdown без разметки: жирный, курсив, код, ссылки, экранирование. */

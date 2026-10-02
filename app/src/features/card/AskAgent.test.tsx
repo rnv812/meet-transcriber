@@ -136,7 +136,7 @@ test("меню правого щелчка: «Спросить агента» и
     const menu = await screen.findByRole("dialog", { name: "Разделить реплику здесь" });
     const group = within(menu).getByRole("group", { name: "Спросить агента об этой реплике" });
     expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      "Спросить агента…", "Объясни", "Что из этого следует?", "Сформулируй задачу", "Проверь по базе знаний",
+      "Спросить агента", "Объясни", "Что из этого следует?", "Сформулируй задачу", "Проверь по базе знаний",
     ]);
     await userEvent.click(within(group).getByRole("button", { name: "Сформулируй задачу" }));
     expect(screen.queryByRole("dialog", { name: "Разделить реплику здесь" })).toBeNull();
@@ -195,4 +195,48 @@ test("запись с ассистентом: «Живой режим · Аге�
   expect(agentTab()).toHaveAttribute("aria-selected", "true");
   expect((await unsent()).querySelector("pre")!.textContent)
     .toBe("Про подсказку ассистента:\n[02:05] Риск или неясность: «У миграции нет ответственного»");
+});
+
+// --- реплики без спикера («Неизвестный», запись без разделения на спикеров) ---------
+
+const noSpeakers: Transcript = {
+  version: 1, title: null,
+  segments: [
+    { start: 5, end: 9, speaker: null, text: "Бюджет согласуем к пятнице.", uncertain: false },
+    { start: 70, end: 74, speaker: null, text: "Нужен ответственный за релиз.", uncertain: false },
+  ] as never,
+};
+
+test("реплика без спикера: ✦ есть, ссылка с «Неизвестный»", async () => {
+  vi.mocked(api.getRecording).mockResolvedValue({ ...rec, transcript: noSpeakers });
+  const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Бюджет согласуем к пятнице.");
+  await userEvent.click(within(rows(container)[0]!).getByRole("button", { name: "Спросить агента об этой реплике" }));
+  expect((await unsent()).querySelector("pre")!.textContent)
+    .toBe("Про реплику:\n[00:05] Неизвестный: «Бюджет согласуем к пятнице.»");
+});
+
+test("реплика без спикера: правый щелчок — меню «Спросить агента» с готовыми вопросами", async () => {
+  vi.mocked(api.getRecording).mockResolvedValue({ ...rec, transcript: noSpeakers });
+  const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Бюджет согласуем к пятнице.");
+  fireEvent.contextMenu(rows(container)[1]!.querySelector(".turn__text")!, { clientX: 5, clientY: 5 });
+  const menu = await screen.findByRole("dialog", { name: "Спросить агента об этой реплике" });
+  expect(menu).toHaveTextContent("Реплика 01:10 · Неизвестный");
+  await userEvent.click(within(menu).getByRole("button", { name: "Объясни" }));
+  expect((await unsent()).querySelector("pre")!.textContent)
+    .toBe("Объясни.\nПро реплику:\n[01:10] Неизвестный: «Нужен ответственный за релиз.»");
+});
+
+test("реплики без спикера можно выбрать и спросить о выбранных; назначать спикера нечего", async () => {
+  vi.mocked(api.getRecording).mockResolvedValue({ ...rec, transcript: noSpeakers });
+  const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Бюджет согласуем к пятнице.");
+  fireEvent.click(rows(container)[0]!, { ctrlKey: true });
+  fireEvent.click(rows(container)[1]!, { ctrlKey: true });
+  expect(screen.getByText("Выбрано: 2 реплики")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Назначить выбранные…" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Спросить агента о выбранных" }));
+  expect((await unsent()).querySelector("pre")!.textContent).toBe(
+    "Про реплики:\n[00:05] Неизвестный: «Бюджет согласуем к пятнице.»\n[01:10] Неизвестный: «Нужен ответственный за релиз.»");
 });
