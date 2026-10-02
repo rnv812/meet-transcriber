@@ -92,14 +92,17 @@ def test_helper_speaks_the_python_protocol():
                        ("exitPermission", audiotap.EXIT_PERMISSION)):
         assert f"let {name}: Int32 = {code}" in swift, name
     assert f"let protocolVersion = {audiotap.PROTOCOL}" in swift
-    for mode in ('"--stream"', '"--mic-users"', '"--self-test"'):
+    for mode in ('"--stream"', '"--mic-users"', '"--self-test"', '"--preflight"'):
         assert mode in swift
     assert '"format": "s16le"' in swift
     # Помощник дописывает тишину раньше резидента: иначе дописали бы оба.
     from meet import recorder
 
     gap = float(re.search(r"private let silenceAfter = ([0-9.]+)", swift).group(1))
-    assert gap < recorder.TICK_PAD_S
+    limit = float(re.search(r"private let fillLimit = ([0-9.]+)", swift).group(1))
+    assert gap < limit < recorder.TICK_PAD_S
+    # --preflight: только проверка разрешения, коды 0 / 77.
+    assert "exit(CGPreflightScreenCaptureAccess() ? exitOK : exitPermission)" in swift
     assert "private let errorEvery = 5.0" in swift
 
 
@@ -107,8 +110,10 @@ def test_workflow_dry_run_skips_windows_and_publishing():
     assert "workflow_dispatch:" in WORKFLOW
     assert re.search(r"macos_only:\n\s+description: .+\n\s+type: boolean\n\s+default: true", WORKFLOW)
     windows = WORKFLOW[WORKFLOW.index("  release:"):WORKFLOW.index("    runs-on: windows-latest")]
-    assert ("if: (github.event_name == 'push' && github.ref_type == 'tag') || "
-            "(github.event_name == 'workflow_dispatch' && !inputs.macos_only)") in windows
+    # Только на теге: и пуш, и ручной запуск без macos_only (ветка с именем
+    # вида v1.2.3 выпуск не создаст).
+    assert ("if: github.ref_type == 'tag' && (github.event_name == 'push' || "
+            "(github.event_name == 'workflow_dispatch' && !inputs.macos_only))") in windows
     # Пуш в ветку пробного прогона собирает только macOS.
     assert 'branches: ["ci/macos-dry-run"]' in WORKFLOW
     assert "runs-on: macos-14" in WORKFLOW
@@ -163,6 +168,17 @@ def test_publish_merges_checksums_and_uploads_the_image_first():
     dry = _job("publish-macos-dry-run")
     assert "scripts/merge_sums.py" in dry and "gh release" not in dry
     assert "sha256sum -c" in dry
+    # Настоящая публикация не загрузит суммы без строки установщика Windows.
+    check = publish.index("_x64-setup\\.exe$' merged/SHA256SUMS.txt")
+    assert check < sums
+
+
+def test_ffmpeg_cache_key_uses_the_runner_image():
+    """ImageOS/ImageVersion — переменные машины: в контексте `env` их нет."""
+    macos = _job("macos")
+    assert 'echo "key=${ImageOS:-unknown}-${ImageVersion:-unknown}"' in macos
+    assert "key: ffmpeg-mac-${{ steps.image.outputs.key }}-" in macos
+    assert "env.ImageOS" not in WORKFLOW
 
 
 def test_every_action_is_pinned_to_a_commit():

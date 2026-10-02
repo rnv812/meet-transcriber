@@ -19,6 +19,10 @@
 //       играют звук (CoreAudio, macOS 14+; раньше — "supported": false).
 //   meet-audiotap --self-test
 //       Версия и возможности одной строкой JSON; разрешений не требует (CI).
+//   meet-audiotap --preflight
+//       Дано ли разрешение «Запись экрана»: код 0 — да, 77 — нет. Без захвата
+//       и без системного запроса — резидент спрашивает раз в 15 с, пока
+//       запись идёт без звука собеседников.
 //
 // Коды выхода: 0 — штатно, 64 — неверные аргументы, 69 — macOS старше 13,
 // 70 — сбой захвата, 77 — нет разрешения «Запись экрана».
@@ -75,6 +79,12 @@ func writeAll(_ bytes: UnsafeRawBufferPointer) {
         left -= written
         pointer = pointer.advanced(by: written)
     }
+}
+
+// MARK: - --preflight
+
+func preflight() -> Never {
+    exit(CGPreflightScreenCaptureAccess() ? exitOK : exitPermission)
 }
 
 // MARK: - --self-test
@@ -223,6 +233,8 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
     /// порога резидента (recorder.TICK_PAD_S = 1 с): иначе тишину дописали бы
     /// оба, и дорожка ушла бы вперёд стенных часов.
     private let silenceAfter = 0.5
+    /// Пауза длиннее этого (секунды) тишиной не заполняется — см. fillSilence.
+    private let fillLimit = 0.75
 
     init(rate: Int, channels: Int) {
         self.rate = rate
@@ -283,11 +295,13 @@ final class AudioTap: NSObject, SCStreamOutput, SCStreamDelegate {
         let now = DispatchTime.now()
         let gap = Double(now.uptimeNanoseconds - lastWrite.uptimeNanoseconds) / 1e9
         guard gap > silenceAfter else { return }
-        // Не больше 10 с за раз (сон машины): дальше тишину по часам дольёт резидент.
-        let frames = Int(min(gap, 10.0) * Double(rate))
+        lastWrite = now
+        // Длинная пауза (сон машины, задержка таймера) — не наша: её по стенным
+        // часам дольёт резидент, а дописав её и здесь, дорожка ушла бы вперёд.
+        guard gap <= fillLimit else { return }
+        let frames = Int(gap * Double(rate))
         let zeros = [Int16](repeating: 0, count: frames * channels)
         zeros.withUnsafeBytes { writeAll($0) }
-        lastWrite = now
     }
 
     /// Ошибка буфера — в stderr не чаще раза в errorEvery секунд.
@@ -436,11 +450,13 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 switch arguments.first {
 case "--self-test"?:
     selfTest()
+case "--preflight"?:
+    preflight()
 case "--mic-users"?:
     micUsers()
 case "--stream"?:
     runStream(arguments)
 default:
-    printError("использование: meet-audiotap --stream [--rate 48000] [--channels 1] | --mic-users | --self-test")
+    printError("использование: meet-audiotap --stream [--rate 48000] [--channels 1] | --mic-users | --preflight | --self-test")
     exit(exitUsage)
 }

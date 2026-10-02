@@ -148,8 +148,11 @@ class PyAudio:
         return stream
 
     def terminate(self) -> None:
+        # Системный звук (помощник) от PortAudio не зависит: холодный старт
+        # PortAudio ради микрофона его не рвёт. Помощника закрывает дорожка.
         for stream in list(self._streams):
-            stream.close()
+            if not isinstance(stream, TapStream):
+                stream.close()
         self._streams.clear()
         try:
             self._sd._terminate()
@@ -227,7 +230,7 @@ class TapStream:
     def start_stream(self) -> None:
         helper = self._helper or audiotap.helper_path()
         if not helper:
-            raise audiotap.TapError(audiotap.MISSING_NOTICE)
+            raise audiotap.TapError(audiotap.MISSING_NOTICE, kind=audiotap.KIND_HELPER)
         self._stopping.clear()
         self.stalled = False
         self._proc = self._popen(
@@ -400,7 +403,7 @@ def system_audio(p: PyAudio) -> dict:
     """Звук собеседников по умолчанию — помощник ScreenCaptureKit. Его нет —
     исключение с подсказкой про виртуальное устройство."""
     if not audiotap.helper_path():
-        raise audiotap.TapError(audiotap.MISSING_NOTICE)
+        raise audiotap.TapError(audiotap.MISSING_NOTICE, kind=audiotap.KIND_HELPER)
     return tap_device()
 
 

@@ -12,11 +12,28 @@ export const ASR_NOTES: Record<string, string> = {
 export const asrNoteText = (note: string | null | undefined): string | null =>
   (note && ASR_NOTES[note]) || null;
 
-/** macOS: почему в записи нет голосов собеседников (`system_audio` в meta.json). */
-export const SYSTEM_AUDIO_NOTES: Record<string, string> = {
-  missing: "Звук собеседников не записан: у Meet не было разрешения «Запись экрана» — записан только микрофон",
-  partial: "Звук собеседников записан не с начала: разрешение «Запись экрана» дали во время встречи",
+/** macOS: почему в записи нет голосов собеседников (`system_audio_reason` в meta.json). */
+export const SYSTEM_AUDIO_REASONS: Record<string, string> = {
+  permission: "у Meet не было разрешения «Запись экрана»",
+  helper: "не найден помощник записи системного звука — переустановите приложение",
+  unsupported: "запись системного звука требует macOS 13 или новее",
+  failed: "помощник записи системного звука не запустился",
 };
 
-export const systemAudioText = (state: string | null | undefined): string | null =>
-  (state && SYSTEM_AUDIO_NOTES[state]) || null;
+/**
+ * Пометка карточки про звук собеседников (`system_audio`): «missing» — не
+ * записан вовсе, «partial» — не всю встречу. Причину называем, только если она
+ * известна: о разрешении — лишь когда дело правда было в нём.
+ */
+export function systemAudioText(
+  state: string | null | undefined, reason?: string | null,
+): string | null {
+  const why = reason ? SYSTEM_AUDIO_REASONS[reason] : undefined;
+  if (state === "missing") {
+    return `Звук собеседников не записан${why ? `: ${why}` : ""} — записан только микрофон`;
+  }
+  if (state === "partial") {
+    return `Звук собеседников записан не всю встречу${why ? `: ${why}` : ""}`;
+  }
+  return null;
+}

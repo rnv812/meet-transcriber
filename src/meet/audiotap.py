@@ -12,7 +12,10 @@
 * `meet-audiotap --mic-users` — одна строка JSON: процессы, которые сейчас
   слушают микрофон (и играют звук), по CoreAudio (macOS 14+; раньше —
   `supported: false`);
-* `meet-audiotap --self-test` — версия и возможности, без разрешений (CI).
+* `meet-audiotap --self-test` — версия и возможности, без разрешений (CI);
+* `meet-audiotap --preflight` — дано ли разрешение «Запись экрана» (код 0 или
+  77), без захвата и без системного запроса: его дёшево спрашивать посреди
+  записи, ничего не трогая.
 
 Коды выхода — `EXIT_*` ниже; отказ в разрешении узнаётся по коду, а не по
 тексту: текст системной ошибки зависит от языка macOS.
@@ -35,6 +38,16 @@ EXIT_FAILED = 70  # EX_SOFTWARE
 EXIT_PERMISSION = 77  # EX_NOPERM: нет разрешения «Запись экрана»
 
 MIC_USERS_TIMEOUT_S = 3.0
+PREFLIGHT_TIMEOUT_S = 5.0
+
+# Почему помощник не дал звук (`TapError.kind`). От этого зависит, что делает
+# запись дальше: «permission» — ждать разрешения (`preflight`), «helper» и
+# «unsupported» — не повторять (без переустановки или новой macOS не
+# заработает), «failed» — повторять с нарастающей паузой.
+KIND_PERMISSION = "permission"
+KIND_UNSUPPORTED = "unsupported"
+KIND_HELPER = "helper"
+KIND_FAILED = "failed"
 
 PERMISSION_NOTICE = (
     "Нет разрешения на запись системного звука. Откройте «Системные настройки → "
@@ -54,6 +67,10 @@ SYSTEM_AUDIO_MISSING = (
     "Звук собеседников не записывается — разрешите «Запись экрана» для Meet в "
     "Системных настройках"
 )
+FAILED_NOTICE = (
+    "Звук собеседников пока не записывается: помощник записи системного звука "
+    "не запустился — пробую снова"
+)
 STALL_NOTICE = (
     "Системный звук перестал поступать от помощника — перезапускаю его "
     "(пауза уйдёт в тишину)"
@@ -66,12 +83,23 @@ MISSING_NOTICE = (
 
 
 class TapError(RuntimeError):
-    """Помощник не запустил захват. `notice` — текст для человека."""
+    """Помощник не запустил захват. `notice` — текст для человека, `kind` —
+    причина (KIND_*): по коду выхода, иначе «failed»."""
 
-    def __init__(self, notice: str, code: "int | None" = None) -> None:
+    def __init__(self, notice: str, code: "int | None" = None,
+                 kind: "str | None" = None) -> None:
         super().__init__(notice)
         self.notice = notice
         self.code = code
+        self.kind = kind or kind_for_exit(code)
+
+
+def kind_for_exit(code: "int | None") -> str:
+    if code == EXIT_PERMISSION:
+        return KIND_PERMISSION
+    if code == EXIT_UNSUPPORTED:
+        return KIND_UNSUPPORTED
+    return KIND_FAILED
 
 
 def notice_for_exit(code: "int | None", stderr: str = "") -> str:
@@ -92,6 +120,20 @@ def helper_path() -> "str | None":
     if override:
         return override if Path(override).is_file() else None
     return shutil.which(HELPER)
+
+
+def preflight(run=None, timeout: float = PREFLIGHT_TIMEOUT_S) -> bool:
+    """Дано ли разрешение «Запись экрана» (`--preflight`). Помощника нет или
+    он не ответил — False: ждать дальше."""
+    helper = helper_path()
+    if not helper:
+        return False
+    run = run or subprocess.run
+    try:
+        out = run([helper, "--preflight"], capture_output=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == EXIT_OK
 
 
 def parse_handshake(line: bytes) -> dict:
