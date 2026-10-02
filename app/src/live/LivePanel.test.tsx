@@ -7,6 +7,7 @@ vi.mock("../lib/api", async (orig) => ({
   getState: vi.fn(),
   liveStop: vi.fn(),
   liveAsk: vi.fn(),
+  liveHint: vi.fn(),
 }));
 vi.mock("../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../lib/shell")>()),
@@ -14,7 +15,7 @@ vi.mock("../lib/shell", async (orig) => ({
   invoke: vi.fn(async () => undefined),
   onLiveWindow: vi.fn(async () => () => {}),
 }));
-import { NoResidentError, getState, liveAsk, liveStop, resolveEndpoint } from "../lib/api";
+import { NoResidentError, getState, liveAsk, liveHint, liveStop, resolveEndpoint } from "../lib/api";
 import { invoke, onLiveWindow } from "../lib/shell";
 import type { LiveStatus, Snapshot } from "../lib/types";
 import { FakeEventSource } from "../test/setup";
@@ -212,6 +213,19 @@ test("свёрнутую панель тащат и за свободное ме
   expect(calls("live_start_drag")).toHaveLength(1);
   fireEvent.mouseDown(screen.getByRole("button", { name: "Развернуть панель" }), { button: 0, detail: 1 });
   expect(calls("live_start_drag")).toHaveLength(1);
+});
+
+test("скрыть или вернуть подсказку не вышло — заметка в строке состояния шапки", async () => {
+  vi.mocked(liveHint).mockRejectedValueOnce(new Error("Ассистент не запущен"));
+  render(<LivePanel endpoint={ep} />);
+  act(() => bus().emit("state", snap(status())));
+  act(() => liveStream().emit("state", state([hint("h1", "risk", "Нет владельца")])));
+  await userEvent.click(screen.getByRole("button", { name: "Развернуть" }));
+  await userEvent.click(screen.getByRole("tab", { name: /Подсказки/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Скрыть" }));
+  expect(await within(screen.getByRole("banner")).findByRole("alert"))
+    .toHaveTextContent("Подсказку не удалось скрыть: Ассистент не запущен");
+  expect(screen.queryByRole("button", { name: "Вернуть" })).toBeNull();
 });
 
 test("кнопки шапки — одинаковые значки с подписью в подсказке при любой ширине", async () => {

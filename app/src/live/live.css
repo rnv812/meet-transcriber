@@ -122,8 +122,8 @@
   flex: none; max-height: 30%; min-height: 0;
   display: flex; flex-direction: column; padding-top: 8px; border-top: 1px solid var(--line);
 }
-.live-ws__ask--compact .live-ask__history, .live-ws__ask--compact .live-ask__quick,
-.live-ws__ask--compact .live-ask__error { display: none; }
+/* Ошибка вопроса видна и в одной строке. */
+.live-ws__ask--compact .live-ask__history, .live-ws__ask--compact .live-ask__quick { display: none; }
 
 .live-empty { margin: 4px 0; font-size: 12px; }
 

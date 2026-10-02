@@ -38,6 +38,27 @@ import { useWide } from "./useWide";
 import "./live.css";
 
 const TICK_MS = 1000;
+/** Сколько держать в шапке заметку о несработавшем действии с подсказкой. */
+export const HINT_NOTE_MS = 8000;
+
+const HINT_FAILED: Record<string, string> = {
+  dismiss: "Подсказку не удалось скрыть",
+  restore: "Подсказку не удалось вернуть",
+  pin: "Подсказку не удалось закрепить",
+  unpin: "Подсказку не удалось открепить",
+};
+
+/** Несработавшее действие с подсказкой — заметкой на HINT_NOTE_MS (карточки скрытой подсказки уже нет на экране). */
+function useHintNote(error: { id: string; text: string; action?: string } | null): string | null {
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (!error) return;
+    setNote(`${HINT_FAILED[error.action ?? ""] ?? "Действие с подсказкой не удалось"}: ${error.text}`);
+    const t = setTimeout(() => setNote(null), HINT_NOTE_MS);
+    return () => clearTimeout(t);
+  }, [error]);
+  return note;
+}
 const FIND_MS = 2000;
 
 /**
@@ -104,6 +125,7 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const ask = useLiveAsk(live, open);
   const ws = useLiveView(live, { open, wide, quiet });
   const shown = useShownHint(live.hints, quiet);
+  const hintNote = useHintNote(live.hintError);
 
   // Esc возвращает обычный размер (клавиатура у панели, только если по ней
   // щёлкнули). В поле вопроса Esc — дело поля, окно не трогаем.
@@ -154,6 +176,11 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
             <span className="live-status live-status--error" role="alert" title={stopError}>
               <span className="live-status__dot" aria-hidden="true" />
               <span className="live-status__text">{stopError}</span>
+            </span>
+          ) : hintNote ? (
+            <span className="live-status live-status--error" role="alert" title={hintNote}>
+              <span className="live-status__dot" aria-hidden="true" />
+              <span className="live-status__text">{hintNote}</span>
             </span>
           ) : live.error ? (
             <span className="live-status" role="status" title={live.error}>

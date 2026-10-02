@@ -146,9 +146,23 @@ test("подсказку уже убрал ассистент — «Вернут
   await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Вернуть" })).toBeNull());
 });
 
+test("скрытие не дошло — «Вернуть» не предлагается", async () => {
+  const live = makeLive({ hint: vi.fn(async () => undefined) });
+  render(<Host live={live} wide />);
+  await userEvent.click(within(screen.getByRole("list", { name: "Подсказки" })).getByRole("button", { name: "Скрыть" }));
+  await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Вернуть" })).toBeNull());
+});
+
+test("широкая: вопрос не дошёл — «Спросить» развёрнут, ошибку видно", () => {
+  render(<Host live={makeLive({ askError: "Ассистент не отвечает" })} wide />);
+  const ask = screen.getByRole("region", { name: "Спросить" });
+  expect(ask).not.toHaveClass("live-ws__ask--compact");
+  expect(within(ask).getByRole("alert")).toHaveTextContent("Ассистент не отвечает");
+});
+
 test("«Вернуть» — только несколько секунд", () => {
   vi.useFakeTimers();
-  const live = makeLive();
+  const live = makeLive({ hint: vi.fn(async () => true) });
   render(<Host live={live} wide />);
   act(() => { within(screen.getByRole("list", { name: "Подсказки" })).getByRole("button", { name: "Скрыть" }).click(); });
   expect(screen.getByRole("button", { name: "Вернуть" })).toBeInTheDocument();

@@ -64,7 +64,7 @@ export type Live = {
   /** Вопрос не дошёл до ассистента (в историю он не попал). */
   askError: string | null;
   /** Действие с подсказкой не дошло: у какой подсказки и почему. */
-  hintError: { id: string; text: string } | null;
+  hintError: { id: string; text: string; action?: HintAction } | null;
   ask: (question: string, opts?: AskOptions) => Promise<void>;
   /** → false: ассистент ничего не изменил (подсказки уже нет); void — не дошло или без связи. */
   hint: (id: string, action: HintAction) => Promise<boolean | void>;
@@ -102,7 +102,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
   const [error, setError] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
-  const [hintError, setHintError] = useState<{ id: string; text: string } | null>(null);
+  const [hintError, setHintError] = useState<{ id: string; text: string; action?: HintAction } | null>(null);
   const lastId = useRef(-1);
   const askSeq = useRef(0);
 
@@ -216,7 +216,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
         const { [id]: _drop, ...rest } = cur;
         return rest;
       });
-      setHintError({ id, text: errorText(e) });
+      setHintError({ id, text: errorText(e), action });
     }
   }, [ep]);
 
