@@ -10,8 +10,6 @@
     "core:default",
     "core:window:allow-set-focus",
     "core:window:allow-close",
-    "core:window:allow-start-dragging",
-    "core:window:allow-destroy",
     "core:event:default",
     "notification:default",
     "dialog:default"

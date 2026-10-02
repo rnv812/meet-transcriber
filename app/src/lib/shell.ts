@@ -46,19 +46,28 @@ export async function pickFolder(start?: string | null): Promise<string | null> 
 }
 
 /**
- * Крестик главного окна. `hold()` — true: закрытие придержать (вопрос о
- * несохранённом), закрыть потом destroyMainWindow(); false — окно закрывается.
+ * Крестик главного окна при несохранённых настройках: решает оболочка
+ * (close_guard.rs) — без несохранённого окно закрывается само, со страницей
+ * не советуясь. Иначе приходит это событие: страница подтверждает вопрос
+ * (`settingsCloseAck`, иначе через 2 с окно закроется само) и потом отвечает
+ * `settingsCloseGo` (закрыть) или `settingsCloseStay` (остаться).
  */
-export async function onCloseRequested(hold: () => boolean): Promise<() => void> {
+export async function onSettingsCloseGuard(cb: () => void): Promise<() => void> {
   if (!inTauri()) return () => {};
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  return getCurrentWindow().onCloseRequested((event) => { if (hold()) event.preventDefault(); });
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen("settings-close-guard", () => cb());
 }
 
-export async function destroyMainWindow(): Promise<void> {
-  if (!inTauri()) return;
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  await getCurrentWindow().destroy();
+export async function settingsCloseAck(): Promise<void> {
+  if (inTauri()) await invoke<void>("settings_close_ack").catch(() => {});
+}
+
+export async function settingsCloseStay(): Promise<void> {
+  if (inTauri()) await invoke<void>("settings_close_stay").catch(() => {});
+}
+
+export async function settingsCloseGo(): Promise<void> {
+  if (inTauri()) await invoke<void>("settings_close_go").catch(() => {});
 }
 
 /** Есть ли несохранённое в настройках: «Выход» из трея тогда спрашивает. */

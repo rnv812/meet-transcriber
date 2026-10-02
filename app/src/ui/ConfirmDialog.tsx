@@ -57,23 +57,22 @@ export function ConfirmDialog({
   const returnRef = useRef(returnFocus);
   returnRef.current = returnFocus;
 
-  // Фокус — на безопасной кнопке; после закрытия — обратно, откуда пришли.
+  // Фокус — на безопасной кнопке; у модального окна остальная страница на это
+  // время `inert` (ни Tab, ни щелчок, ни чтение). После закрытия — сначала снять
+  // `inert`, потом вернуть фокус: браузер не ставит фокус внутрь inert, и
+  // обратный порядок оставил бы фокус на <body>. Поэтому — одним эффектом.
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
     safe.current?.focus();
+    const own = backdrop.current;
+    const marked = inline ? []
+      : [...document.body.children].filter((el) => el !== own && !el.hasAttribute("inert"));
+    marked.forEach((el) => el.setAttribute("inert", ""));
     return () => {
+      marked.forEach((el) => el.removeAttribute("inert"));
       const target = returnRef.current?.current ?? before;
       if (target && target !== document.body && document.contains(target)) target.focus();
     };
-  }, []);
-
-  // Модальное окно: остальная страница недоступна — ни Tab, ни щелчок, ни чтение.
-  useEffect(() => {
-    if (inline) return;
-    const own = backdrop.current;
-    const marked = [...document.body.children].filter((el) => el !== own && !el.hasAttribute("inert"));
-    marked.forEach((el) => el.setAttribute("inert", ""));
-    return () => marked.forEach((el) => el.removeAttribute("inert"));
   }, [inline]);
 
   // Модальное окно ловит Esc, где бы ни был фокус.

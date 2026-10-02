@@ -961,6 +961,10 @@ pub fn set_settings_dirty(dirty: bool) {
     SETTINGS_DIRTY.store(dirty, Ordering::SeqCst);
 }
 
+pub fn settings_dirty() -> bool {
+    SETTINGS_DIRTY.load(Ordering::SeqCst)
+}
+
 /// Чем занята задача резидента — словами для вопроса о выходе.
 fn job_kind_text(kind: &str) -> &'static str {
     match kind {
@@ -1011,12 +1015,17 @@ pub fn quit_question(
             {
                 lines.push(QUIT_TRANSCRIBE.to_string());
             }
-            let mut other: Vec<&str> = active
+            // Каждое занятие — один раз, в порядке очереди.
+            let mut other: Vec<&str> = Vec::new();
+            for kind in active
                 .iter()
                 .filter(|kind| !matches!(**kind, "transcribe" | "import" | "merge"))
-                .map(|kind| job_kind_text(kind))
-                .collect();
-            other.dedup();
+            {
+                let text = job_kind_text(kind);
+                if !other.contains(&text) {
+                    other.push(text);
+                }
+            }
             if !other.is_empty() {
                 lines.push(format!(
                     "Идёт фоновая работа ({}) — при выходе она прервётся.",
@@ -2920,7 +2929,8 @@ mod tests {
         let idle = json!({ "status": "idle" });
         let recording = json!({ "status": "recording" });
         let transcribing = json!({ "items": [{ "state": "running", "kind": "transcribe" }] });
-        let download = json!({ "items": [{ "state": "running", "kind": "download-model" },
+        let download = json!({ "items": [{ "state": "queued", "kind": "analyze" },
+                                         { "state": "running", "kind": "download-model" },
                                          { "state": "queued", "kind": "analyze" }] });
         let none = json!({ "items": [{ "state": "done", "kind": "transcribe" }] });
         assert_eq!(quit_question(None, None, false), None); // резидент молчит — выходим
@@ -2933,7 +2943,8 @@ mod tests {
         assert!(text.starts_with(QUIT_TRANSCRIBE));
         // Не расшифровка — так и сказано, что именно прервётся.
         let text = quit_question(Some(&idle), Some(&download), false).unwrap();
-        assert!(text.contains("загрузка модели, анализ встречи"), "{text}");
+        // Каждое занятие — один раз, даже если в очереди не подряд.
+        assert!(text.contains("(анализ встречи, загрузка модели)"), "{text}");
         assert!(!text.contains("расшифровка —"));
         // Несохранённые настройки — тоже вопрос, даже если резидент молчит.
         assert_eq!(

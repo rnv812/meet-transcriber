@@ -12,6 +12,7 @@
 
 mod api;
 mod autostart;
+mod close_guard;
 mod engine;
 mod install_wait;
 mod live_panel;
@@ -122,6 +123,9 @@ fn main() {
             updater::install_update,
             updater::cancel_update,
             tray::set_settings_dirty,
+            close_guard::settings_close_ack,
+            close_guard::settings_close_stay,
+            close_guard::settings_close_go,
             updater::releases_page,
             // Вкладка «Агент»: Claude Code / Codex во встроенном терминале.
             pty::agent_spawn,
@@ -136,6 +140,8 @@ fn main() {
             if window.label() == "main" && matches!(event, WindowEvent::Destroyed) {
                 pty::kill_all();
             }
+            // Крестик главного окна при несохранённых настройках (решает оболочка).
+            close_guard::on_window_event(window, event);
             // Панель ассистента запоминает, где и какого размера её оставили.
             live_panel::on_window_event(window, event);
         })
@@ -144,6 +150,7 @@ fn main() {
                 && payload.event() == tauri::webview::PageLoadEvent::Started
             {
                 pty::kill_all();
+                close_guard::on_page_started();
             }
         })
         .setup(|app| {

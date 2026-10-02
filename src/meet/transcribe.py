@@ -235,7 +235,10 @@ def _align_planned(align: bool) -> bool:
         from meet import gigaam_asr, settings
 
         cfg = settings.load().asr
-        if (cfg.language or asr.DEFAULT_LANGUAGE).strip().lower() == asr.AUTO_LANGUAGE:
+        language = (cfg.language or asr.DEFAULT_LANGUAGE).strip().lower()
+        # «auto» — движок решит детектор по звуку; не русский — GigaAM не возьмётся,
+        # распознаёт Whisper, а после него выравнивание нужно.
+        if language != "ru":
             return True
         if cfg.backend_for(asr.resolve_device()) != "gigaam" or not gigaam_asr.installed():
             return True
