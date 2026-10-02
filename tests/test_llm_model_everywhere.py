@@ -132,7 +132,9 @@ def _live(w, monkeypatch, *, act):
         def process_window(self):
             pass
 
-    async def fake_check_auth(proxy=None):
+    async def fake_check_auth(proxy=None, model=None):
+        # Проверка входа перед стартом — тоже вызов модели, и тоже настроенной.
+        w["calls"].append({"model": model, "system": "проверка входа"})
         return None
 
     class FakeConversation:
