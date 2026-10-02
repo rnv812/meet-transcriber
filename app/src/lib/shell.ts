@@ -52,6 +52,13 @@ export async function onOpenRecording(cb: (id: string) => void): Promise<() => v
   return listen<string>("open-recording", (e) => cb(e.payload));
 }
 
+/** Оболочка сообщает новый вид панели ассистента (`live-window`, `LiveView`). */
+export async function onLiveWindow(cb: (view: unknown) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<unknown>("live-window", (e) => cb(e.payload));
+}
+
 export function initialRecording(): string | null {
   return new URLSearchParams(window.location.search).get("recording");
 }
