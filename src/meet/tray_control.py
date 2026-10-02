@@ -265,6 +265,9 @@ DELETE_WAIT_S = 3.0
 # События шины о записи вне задач очереди: окно перечитывает список и снимок.
 RECORDING_PROCESSING = "recording.processing"  # {"id"}: началась обработка в фоне
 RECORDING_UPDATED = "recording.updated"  # {"id"}: запись изменилась (обрезка, выгрузка)
+# Анализ встречи готов, не удался или устарел (правка текста): {"id", "state"}.
+# Очередь и ход самой задачи — обычные job.* (вид "analyze").
+ANALYSIS_UPDATED = "analysis.updated"
 PROCESSING = "Запись ещё обрабатывается (обрезка ожидания после звонка) — подождите минуту"
 # Восстановление после перезапуска берёт записи не старше этого.
 RECOVER_DAYS = 7
@@ -350,6 +353,12 @@ class TrayControl:
         # («Исправить…»): по одной за раз — шаги общей истории встречи и
         # образцы голосов не должны переплетаться.
         self._speakers_lock = threading.Lock()
+        # Автоматический анализ встречи: записи, где он отложен (идёт запись или
+        # живой режим), и записи, где его надо повторить после идущего
+        # (расшифровку поменяли, пока он шёл). Ключ — путь без регистра.
+        self._analysis_deferred: dict[str, Path] = {}
+        self._analysis_rerun: set[str] = set()
+        self._analysis_lock = threading.Lock()
         self.bus.subscribe(self._on_job_event)
 
     @staticmethod
@@ -416,6 +425,11 @@ class TrayControl:
             # Задача кончилась (или её отменили) — повторять после перезапуска
             # нечего. Задачи, убитые остановкой резидента, отметку сохраняют.
             self._mark_pending(Path(folder), False)
+        if kind == jobs.ANALYZE and folder:
+            self._background(lambda: self._analysis_finished(Path(folder), job.get("state")),
+                             "meet-analysis")
+        if self._analysis_deferred:
+            self._background(self._flush_deferred_analysis, "meet-analysis")
         if event.kind != jobs.JOB_DONE:
             return
         if kind == jobs.MERGE and folder:
@@ -429,6 +443,9 @@ class TrayControl:
             from meet import playback
 
             playback.schedule(path)
+            # Анализ встречи — следом, если включён (объединённая встреча
+            # приходит сюда же: после объединения идёт обычная расшифровка).
+            self._background(lambda: self._auto_analyze(path), "meet-analysis")
         merged_exported = finish_merge = False
         if kind == jobs.TRANSCRIBE:
             info = self._merge_info(path)
@@ -496,6 +513,9 @@ class TrayControl:
         Убитый до финализации только помечается (`source: live`), без
         расшифровки: она шла бы по неполным дорожкам. Упавший (`live.failed`)
         сюда не попадает: его папка в библиотеке, расшифровать можно вручную."""
+        if event.kind in (live_control.LIVE_STOPPED, live_control.LIVE_FAILED) \
+                and self._analysis_deferred:
+            self._background(self._flush_deferred_analysis, "meet-analysis")
         if event.kind != live_control.LIVE_STOPPED or not event.data.get("folder"):
             return
         folder = Path(event.data["folder"])
@@ -542,6 +562,8 @@ class TrayControl:
                 return
         if transcribe:
             self._queue_transcription(path)
+        if self._analysis_deferred:
+            self._background(self._flush_deferred_analysis, "meet-analysis")
 
     # --- восстановление после перезапуска ---------------------------------
 
@@ -1116,7 +1138,7 @@ class TrayControl:
         # Задача модели (и её CLI) работает с cwd в папке записи: на Windows
         # rmtree снёс бы файлы и упал на самой папке, а задача дописала бы
         # summary.md и meta.json в осиротевшую папку.
-        if model and self.llm_queue.active_for(str(folder), (jobs.SUMMARY, jobs.ASK)):
+        if model and self.llm_queue.active_for(str(folder), jobs.MODEL_KINDS):
             return "Идёт работа модели — отмените или дождитесь"
         # Голоса реплик и повторная диаризация читают звук записи: удалять или
         # объединять её посреди счёта нельзя (правкам спикеров они не мешают).
@@ -1439,6 +1461,7 @@ class TrayControl:
             return {"error": "ожидается транскрипт с полем segments"}
         with self._speakers_lock:  # не посреди правки спикеров
             library.write_transcript(folder, _without_marks(data))
+        self._analysis_check(folder)
         return {"ok": True, "path": str(library.transcript_path(folder))}
 
     def name_speakers(self, recording_id: str, mapping: dict) -> dict:
@@ -1534,6 +1557,7 @@ class TrayControl:
             search.forget(folder)
             self._updated(folder)
             self._speakers_reexport(folder)
+            self._analysis_check(folder)
         result = result or {}
         view = self._speakers_view(folder)
         return {**view, "voices_error": result.get("voices_error"),
@@ -1714,9 +1738,11 @@ class TrayControl:
         from meet import speaker_split
 
         body = body or {}
-        return self._speakers_change(recording_id, lambda folder, voices: speaker_split.apply(
+        reply = self._speakers_change(recording_id, lambda folder, voices: speaker_split.apply(
             folder, str(body.get("label") or ""), body.get("groups"), body.get("fingerprint"), voices,
             mode="people" if body.get("mode") == "people" else "auto"))
+        self._reanalyze_if_stale(recording_id)
+        return reply
 
     # --- «Переразделить на спикеров» -----------------------------------------------
 
@@ -1778,7 +1804,11 @@ class TrayControl:
     def speakers_rediarize_apply(self, recording_id: str) -> dict:
         from meet import rediarize
 
-        return self._speakers_change(recording_id, rediarize.apply)
+        reply = self._speakers_change(recording_id, rediarize.apply)
+        # Переразделение режет реплики по смене спикера: границы и номера
+        # сегментов другие — анализ устарел, и его ставят заново (если включено).
+        self._reanalyze_if_stale(recording_id)
+        return reply
 
     def speakers_rediarize_discard(self, recording_id: str) -> dict:
         from meet import rediarize
@@ -2045,6 +2075,140 @@ class TrayControl:
         if folder is None:
             return {"error": "записи нет"}
         return {"items": assistant.read_qa(folder)}
+
+    # --- анализ встречи и название -----------------------------------------
+
+    def analysis(self, recording_id: str) -> dict:
+        """Состояние анализа для окна: {"state": none|queued|running|ready|
+        stale|failed, "analysis"?, "error"?, "job"?}. queued/running — по
+        очереди задач модели; остальное — по analysis.json и meta.json."""
+        from meet import analysis
+
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        out = analysis.state(folder)
+        job = self.llm_queue.active_for(str(folder), (jobs.ANALYZE,))
+        if job is not None:
+            out = {**{k: v for k, v in out.items() if k != "error"}, "state": job.state,
+                   "job": job.to_raw()}
+        return out
+
+    def make_analysis(self, recording_id: str) -> dict:
+        """«Переанализировать» (и `meet analyze` через приложение): задача
+        анализа в очередь модели. Уже ждёт или идёт — та же задача. 409 — идёт
+        расшифровка, не подключена модель или запись ещё пишется."""
+        folder = self._transcribed(recording_id)
+        if isinstance(folder, dict):
+            return folder
+        self._ready_for_model(folder)
+        if self._key(folder) in self._busy_now():
+            raise _conflict("Запись ещё идёт — анализ будет доступен после её окончания")
+        job, _created = self._queue_analysis(folder, low=False)
+        return job.to_raw()
+
+    def _queue_analysis(self, folder: Path, *, low: bool):
+        """Одна задача анализа на запись: ждущая или идущая — та же (идущей
+        помечаем «повторить после», если расшифровку тем временем поменяли).
+        → (задача, поставлена ли новая)."""
+        with self._submit_lock:
+            job = self.llm_queue.active_for(str(folder), (jobs.ANALYZE,))
+            if job is not None:
+                if job.state == jobs.RUNNING:
+                    with self._analysis_lock:
+                        self._analysis_rerun.add(self._key(folder))
+                return job, False
+            return self.llm_queue.submit(jobs.ANALYZE, str(folder), {}, low=low), True
+
+    def _auto_analyze(self, folder: Path, *, stale_only: bool = False) -> None:
+        """Автоматический анализ (настройка `analysis.auto`) — после расшифровки,
+        импорта, объединения; после правки спикеров — только если прежний
+        анализ устарел (`stale_only`). Не ставится: запись короче
+        `auto_record.min_call_seconds`, модель не подключена, анализ уже
+        свежий. Идёт запись или живой режим — откладывается до их конца.
+        Фоновый поток: любой сбой — строкой в журнал."""
+        from meet import analysis
+
+        try:
+            cfg = settings.load()
+            if not cfg.analysis.auto or not cfg.analysis.features():
+                return
+            data = library.read_transcript(folder)
+            if data is None:
+                return
+            doc = analysis.read(folder)
+            if stale_only and doc is None:
+                return
+            if doc is not None and analysis.is_fresh(folder, doc, data):
+                return
+            spoken = max((float(s.get("end") or 0.0) for s in data.get("segments") or []
+                          if isinstance(s, dict)), default=0.0)
+            card = library.describe(folder)
+            duration = max(spoken, float((card.duration_s if card else None) or 0.0))
+            if duration < cfg.auto_record.min_call_seconds:
+                self.tray.log(f"анализ встречи не ставлю — запись короче "
+                              f"{cfg.auto_record.min_call_seconds:.0f} с: {folder.name}")
+                return
+            if self._busy_now():
+                # Во время встречи модель не дёргаем: анализ — после неё.
+                with self._analysis_lock:
+                    self._analysis_deferred[self._key(folder)] = folder
+                self.tray.log(f"анализ встречи отложен до конца записи: {folder.name}")
+                return
+            if not _provider_installed(cfg):
+                return
+            job, created = self._queue_analysis(folder, low=True)
+            if created:
+                self.tray.log(f"анализ встречи поставлен в очередь: {folder.name} ({job.id})")
+        except Exception as e:
+            self.tray.log(f"анализ встречи не поставлен ({Path(folder).name}): "
+                          f"{type(e).__name__}: {e}")
+
+    def _flush_deferred_analysis(self) -> None:
+        """Запись или живой режим кончились — отложенные анализы в очередь."""
+        if self._busy_now():
+            return
+        with self._analysis_lock:
+            waiting = list(self._analysis_deferred.values())
+            self._analysis_deferred.clear()
+        for folder in waiting:
+            if folder.is_dir():
+                self._auto_analyze(folder)
+
+    def _reanalyze_if_stale(self, recording_id: str) -> None:
+        folder = self._folder(recording_id)
+        if folder is not None:
+            self._background(lambda: self._auto_analyze(folder, stale_only=True), "meet-analysis")
+
+    def _analysis_check(self, folder: Path) -> None:
+        """Текст или границы реплик поменялись: анализ, если он есть, устарел —
+        окну событие (анализ сам не перезапускается: правок бывает много
+        подряд; «Переанализировать» — в карточке)."""
+        from meet import analysis
+
+        try:
+            doc = analysis.read(folder)
+            if doc is not None and not analysis.is_fresh(folder, doc):
+                self.bus.emit(ANALYSIS_UPDATED, id=Path(folder).name, state="stale")
+        except Exception:
+            pass  # событие — подсказка окну, не повод ронять правку
+
+    def _analysis_finished(self, folder: Path, job_state) -> None:
+        """Задача анализа кончилась: событие окну, повтор, если расшифровку
+        поменяли, пока она шла."""
+        from meet import analysis
+
+        try:
+            got = analysis.state(folder) if folder.is_dir() else {"state": "none"}
+            self.bus.emit(ANALYSIS_UPDATED, id=folder.name, state=got.get("state"))
+            self._updated(folder)
+        except Exception as e:
+            self.tray.log(f"анализ встречи не обработан ({folder.name}): {type(e).__name__}: {e}")
+        with self._analysis_lock:
+            rerun = self._key(folder) in self._analysis_rerun
+            self._analysis_rerun.discard(self._key(folder))
+        if rerun and job_state != jobs.CANCELLED and folder.is_dir():
+            self._auto_analyze(folder)
 
     # --- выгрузка в базу знаний --------------------------------------------
 

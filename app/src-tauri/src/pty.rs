@@ -41,7 +41,10 @@ const MAIN: &str = "main";
 /// Добавка к системному промпту (Claude — `--append-system-prompt`, Codex —
 /// `developer_instructions`).
 pub const AGENT_PROMPT: &str = "Ты помогаешь разобрать встречу. В текущей папке \
-transcript.md — расшифровка с именами и таймкодами, summary.md — итоги (если есть). \
+transcript.md — расшифровка с именами и таймкодами, summary.md — итоги (если есть), \
+analysis.json — разметка встречи (если есть): типы и важность реплик, главы, наблюдения, \
+категория и название; номера реплик в ней (ключи phrase_types и importance, start_i и end_i \
+глав, refs наблюдений) — номера сегментов в transcript.json по порядку, с нуля. \
 База знаний (если подключена) — только для чтения; не изменяй её файлы.";
 
 /// Переменные прокси, которые понимают Claude Code и Codex (регистр любой).
@@ -917,6 +920,8 @@ mod tests {
         assert!(
             AGENT_PROMPT.contains("transcript.md") && AGENT_PROMPT.contains("только для чтения")
         );
+        // Разметка анализа встречи: агент знает, что номера реплик — порядок в расшифровке.
+        assert!(AGENT_PROMPT.contains("analysis.json") && AGENT_PROMPT.contains("номера реплик"));
     }
 
     #[test]

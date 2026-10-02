@@ -334,3 +334,30 @@ def test_speaker_split_job_argv(tmp_path):
     assert jobs.worker_argv(job)[-3:] == ["speaker_split", str(tmp_path), "--label=-Спикер 2"]
     assert jobs.SPEAKER_SPLIT in jobs.KINDS and jobs.SPEAKER_SPLIT in jobs.SPEAKER_KINDS
     assert jobs.SPEAKER_SPLIT not in jobs.FOLDER_KINDS
+
+
+def test_low_priority_jobs_wait_behind_later_normal_ones():
+    import threading
+
+    from meet import jobs
+
+    release = threading.Event()
+    started = []
+
+    def spawn(job, on_line):
+        started.append(job.kind)
+        release.wait(timeout=5)
+        job.result = "ok"
+        return 0
+
+    q = jobs.JobQueue(spawn=spawn)
+    try:
+        first = q.submit(jobs.SUMMARY, "a")
+        low = q.submit(jobs.ANALYZE, "b", low=True)
+        normal = q.submit(jobs.ASK, "c")
+        # Первая уже могла уйти в работу; из ждущих фоновая — последней.
+        waiting = [i for i in q._pending if i != first.id]
+        assert waiting == [normal.id, low.id]
+    finally:
+        release.set()
+        q.stop()

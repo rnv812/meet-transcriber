@@ -161,3 +161,48 @@ def test_speaker_split_job_computes_voices_of_the_speaker(tmp_path, monkeypatch,
     assert job_worker.main(["speaker_split", str(tmp_path), "--label=Нет такого"]) == 3
     lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
     assert lines[-1] == {"kind": "error", "text": "в записи нет спикера «Нет такого»"}
+
+
+# --- анализ встречи (M2) -------------------------------------------------------
+
+
+def test_analyze_job_writes_analysis_and_reports_progress(tmp_path, monkeypatch, capsys):
+    import json
+
+    import meet.llm as llm
+    from meet.llm.base import AgentReply
+
+    reply = {"phrase_types": {"0": "statement"}, "importance": {"0": 0.4},
+             "chapters": [{"start_i": 0, "end_i": 0, "title": "Старт", "short": "Старт"}],
+             "insights": [], "category": None, "title": "Начало работы"}
+
+    async def runner(prompt, **kwargs):
+        return AgentReply(text=json.dumps(reply, ensure_ascii=False))
+
+    monkeypatch.setattr(llm, "resolve", lambda cfg: ("codex", runner))
+    folder = _transcribed(tmp_path, monkeypatch)
+    library.write_meta(folder, {"analysis_error": {"error": "прошлый сбой", "at": 1.0}})
+    assert job_worker.main(["analyze", str(folder)]) == 0
+    lines = _lines(capsys)
+    assert {"kind": "job.result", "path": str(folder / "analysis.json")} in lines
+    assert any(x.get("kind") == "progress" and x.get("stage") == "analyze" for x in lines)
+    assert json.loads((folder / "analysis.json").read_text(encoding="utf-8"))["model"] == "codex"
+    assert "analysis_error" not in library.read_meta(folder)
+
+
+def test_analyze_job_failure_is_remembered_for_the_window(tmp_path, monkeypatch, capsys):
+    import meet.llm as llm
+
+    monkeypatch.setattr(llm, "resolve", lambda cfg: (None, None))
+    folder = _transcribed(tmp_path, monkeypatch)
+    assert job_worker.main(["analyze", str(folder)]) == 2
+    assert library.read_meta(folder)["analysis_error"]["error"] == "Подключите Claude Code или Codex в настройках"
+    assert not (folder / "analysis.json").exists()
+
+
+def test_analyze_job_argv_and_kind(tmp_path):
+    from meet import jobs
+
+    job = jobs.Job(id="a", kind=jobs.ANALYZE, folder=str(tmp_path))
+    assert jobs.worker_argv(job)[-2:] == ["analyze", str(tmp_path)]
+    assert jobs.ANALYZE in jobs.KINDS and jobs.ANALYZE in jobs.MODEL_KINDS

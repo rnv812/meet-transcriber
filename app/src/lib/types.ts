@@ -460,3 +460,48 @@ export type LiveState = {
 
 /** `event: line`: новая строка ленты; `t` — секунды от начала записи. */
 export type LiveLine = { t: number; speaker: string | null; text: string };
+
+// --- анализ встречи (analysis.json, M2) ------------------------------------------
+
+/** Части разметки; выключенные в настройках не запрашиваются и в файле отсутствуют. */
+export type AnalysisFeature = "types" | "importance" | "chapters" | "insights" | "category" | "title";
+export type PhraseType =
+  "statement" | "question" | "idea" | "decision" | "task" | "risk" | "agreement" | "objection";
+export type InsightKind = "insight" | "contradiction" | "attention" | "followup";
+
+/** Глава: отрезок номеров реплик (сегментов транскрипта) с названием и подписью для полосы плеера. */
+export type AnalysisChapter = { start_i: number; end_i: number; title: string; short: string };
+/** Наблюдение; `refs` — номера реплик (сегментов транскрипта). */
+export type AnalysisInsight = { id: string; kind: InsightKind; text: string; refs: number[]; why: string };
+
+/**
+ * `analysis.json` записи. Ключи `phrase_types` и `importance` — номера сегментов
+ * транскрипта строкой (`#i` в промпте); реплики без типа — утверждения, без
+ * важности — неважные. Номера действительны, пока анализ не устарел (`stale`).
+ */
+export type Analysis = {
+  version: 1;
+  model: string;
+  created_at: number;
+  fingerprint: string;
+  features: AnalysisFeature[];
+  phrase_types?: Record<string, PhraseType>;
+  importance?: Record<string, number>;
+  chapters?: AnalysisChapter[];
+  insights?: AnalysisInsight[];
+  /** id — из `categories` настроек; ничего не подошло — null. */
+  category?: { id: string; confidence: number } | null;
+  title?: string | null;
+  /** Что не разобралось (части, отброшенные проверкой). */
+  warnings?: string[];
+};
+
+export type AnalysisStateName = "none" | "queued" | "running" | "ready" | "stale" | "failed";
+
+/** `GET /recordings/{id}/analysis`: прежний анализ отдаётся и пока идёт новый, и после сбоя. */
+export type AnalysisState = {
+  state: AnalysisStateName;
+  analysis?: Analysis;
+  error?: string;
+  job?: Job;
+};

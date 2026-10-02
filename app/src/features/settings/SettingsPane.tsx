@@ -17,6 +17,7 @@ import { inTauri, openFolder } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { About } from "./About";
+import { AnalysisSection } from "./AnalysisSection";
 import { AssistantSection, assistantChangesInvalid } from "./AssistantSection";
 import { AutostartRow } from "./AutostartRow";
 import { BrowserCalls } from "./BrowserCalls";
@@ -35,7 +36,8 @@ import { SoundSection } from "./SoundSection";
 import "./settings.css";
 
 type SectionId =
-  "recording" | "sound" | "auto" | "asr" | "engine" | "export" | "assistant" | "diagnostics" | "about" | "advanced";
+  | "recording" | "sound" | "auto" | "asr" | "engine" | "export" | "assistant" | "analysis" | "diagnostics" | "about"
+  | "advanced";
 
 const MENU: { id: SectionId; title: string }[] = [
   { id: "recording", title: "Запись" },
@@ -45,6 +47,7 @@ const MENU: { id: SectionId; title: string }[] = [
   { id: "engine", title: "Движок и модели" },
   { id: "export", title: "Экспорт встреч" },
   { id: "assistant", title: "Ассистент" },
+  { id: "analysis", title: "Анализ встречи" },
   { id: "diagnostics", title: "Диагностика" },
   { id: "about", title: "О программе" },
   { id: "advanced", title: "Дополнительно" },
@@ -408,6 +411,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
             <ExportSection draft={draft} set={set} endpoint={endpoint} />
           ) : section === "assistant" ? (
             <AssistantSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint} />
+          ) : section === "analysis" ? (
+            <AnalysisSection draft={draft} set={set} />
           ) : section === "diagnostics" ? (
             <DiagnosticsPane endpoint={endpoint} />
           ) : section === "about" ? (

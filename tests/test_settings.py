@@ -268,7 +268,8 @@ def test_patch_covers_every_section_of_the_schema():
     иначе новая секция молча не сохраняется (так было с integrations/hf_token)."""
     from dataclasses import fields
 
-    schema = {f.name for f in fields(settings.Settings)} - {"version"}
+    # categories — не секция, а список: patch() заменяет его целиком (ниже).
+    schema = {f.name for f in fields(settings.Settings)} - {"version", "categories"}
     assert set(settings.PATCHABLE_SECTIONS) == schema
 
 
@@ -724,3 +725,47 @@ def test_asr_replacements_rules_are_cleaned_and_patched(tmp_path):
     rules = [{"from": "дев опс", "to": "DevOps"}]
     assert list(settings.patch({"asr": {"replacements": rules}}, f).asr.replacements) == rules
     assert settings.load(f).to_raw()["asr"]["replacements"] == rules
+
+
+# --- анализ встречи, категории, название от ИИ (M2) -----------------------------
+
+
+def test_analysis_defaults_on(tmp_path):
+    cfg = settings.load(tmp_path / "config.json")
+    assert cfg.analysis.auto is True
+    assert cfg.analysis.features() == settings.ANALYSIS_FEATURES
+    raw = cfg.to_raw()
+    assert raw["analysis"] == {"auto": True, "types": True, "importance": True, "chapters": True,
+                               "insights": True, "category": True, "title": True}
+
+
+def test_analysis_features_follow_flags(tmp_path):
+    f = tmp_path / "config.json"
+    cfg = settings.patch({"analysis": {"types": False, "insights": "false"}}, f)
+    assert cfg.analysis.features() == ("importance", "chapters", "category", "title")
+    loaded = settings.load(f)
+    assert loaded.analysis == cfg.analysis
+
+
+def test_default_categories_have_stable_ascii_ids(tmp_path):
+    cats = settings.load(tmp_path / "config.json").categories
+    assert [c.id for c in cats] == ["daily", "planning", "discussion", "client", "presentation",
+                                    "sales", "interview", "retro", "training", "other"]
+    assert [c.name for c in cats][:2] == ["Дейлик", "Планирование"]
+    assert all(c.color.startswith("#") and c.description for c in cats)
+
+
+def test_categories_are_patched_as_a_whole_and_junk_is_dropped(tmp_path):
+    f = tmp_path / "config.json"
+    cfg = settings.patch({"categories": [
+        {"id": "Sync", "name": "  Синк  команды ", "color": "red", "description": "Короткий синк"},
+        {"id": "sync", "name": "Повтор"},
+        {"id": "плохо", "name": "Кириллица в id"},
+        {"id": "x", "name": ""},
+        "мусор",
+    ]}, f)
+    assert [c.to_raw() for c in cfg.categories] == [
+        {"id": "sync", "name": "Синк команды", "color": "#9aa0a6", "description": "Короткий синк"}]
+    assert settings.load(f).categories == cfg.categories
+    assert settings.patch({"categories": []}, f).categories == ()
+    assert settings.load(f).categories == ()

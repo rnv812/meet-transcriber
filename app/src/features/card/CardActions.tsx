@@ -47,7 +47,7 @@ function below(el: HTMLElement | null, alignRight: boolean): { x: number; y: num
 
 export function CardActions({
   canExport, canRetranscribe, busy, onExport, onKbExport, onOpenFolder, onRetranscribe, onRediarize, onReanalyze,
-  onSuggestTitle, onDelete,
+  reanalyzeBlocked = null, onSuggestTitle, onDelete,
 }: {
   canExport: boolean;
   canRetranscribe: boolean;
@@ -61,6 +61,8 @@ export function CardActions({
   onRediarize?: () => void;
   /** «Переанализировать» (анализ встречи агентом); нет — пункта нет. */
   onReanalyze?: () => void;
+  /** Почему «Переанализировать» сейчас недоступно (анализ уже идёт, нет модели) — подсказкой; null — доступно. */
+  reanalyzeBlocked?: string | null;
   /** «Предложить название»; нет — пункта нет. */
   onSuggestTitle?: () => void;
   onDelete: () => void;
@@ -115,8 +117,8 @@ export function CardActions({
         hint: "Распознать запись заново", onSelect: () => setConfirm("retranscribe"),
       }),
       ...opt(!!onReanalyze, {
-        label: "Переанализировать", icon: <ScanSearch {...ICON} />, disabled: busy,
-        hint: "Заново разметить встречу агентом", onSelect: run(() => onReanalyze?.()),
+        label: "Переанализировать", icon: <ScanSearch {...ICON} />, disabled: busy || !!reanalyzeBlocked,
+        hint: reanalyzeBlocked ?? "Заново разметить встречу агентом", onSelect: run(() => onReanalyze?.()),
       }),
       ...opt(!!onSuggestTitle, {
         label: "Предложить название", icon: <WandSparkles {...ICON} />, disabled: busy,

@@ -161,6 +161,7 @@ def test_cli_assist_child_mode_flags(monkeypatch):
 # не смеет спрашивать (input) или открывать браузер: обе подменены на падение.
 
 import json  # noqa: E402
+import os  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 import pytest  # noqa: E402
@@ -918,3 +919,65 @@ def test_fix_help_mentions_the_knowledge_base(capsys):
     with pytest.raises(SystemExit):
         _main(["fix", "--help"])
     assert "базу знаний" in capsys.readouterr().out
+
+
+# --- анализ встречи и название (M2) --------------------------------------------
+
+ANALYSIS_REPLY = json.dumps({
+    "phrase_types": {"0": "question"}, "importance": {"0": 0.9},
+    "chapters": [{"start_i": 0, "end_i": 1, "title": "Старт", "short": "Старт"}],
+    "insights": [], "category": {"id": "daily", "confidence": 0.9}, "title": "Утренний старт"},
+    ensure_ascii=False)
+
+
+def test_analyze_without_the_app_writes_analysis_json(env, capsys, monkeypatch):
+    folder = _meeting(env)
+    _fake_llm(monkeypatch, [ANALYSIS_REPLY])
+    assert _main(["analyze", RID, "--json"]) == 0
+    got = _json_out(capsys)
+    assert got["via_app"] is False and got["analysis"]["title"] == "Утренний старт"
+    assert json.loads((folder / "analysis.json").read_text(encoding="utf-8"))["chapters"][0]["title"] == "Старт"
+    assert "title" not in library.read_meta(folder)
+
+
+def test_analyze_model_failure_is_exit_1(env, capsys, monkeypatch):
+    folder = _meeting(env)
+    _fake_llm(monkeypatch, ["не JSON", "опять не JSON"])
+    assert _main(["analyze", RID]) == 1
+    assert "Анализ не получился" in capsys.readouterr().err
+    assert "analysis_error" in library.read_meta(folder)
+
+
+def test_analyze_goes_through_the_running_app(env, capsys, monkeypatch):
+    from meet import control
+
+    _meeting(env)
+    calls, states = [], [{"state": "queued"}, {"state": "running"},
+                         {"state": "ready", "analysis": {"title": "Утренний старт", "chapters": []}}]
+
+    def fake_request(path, method="GET", payload=None, timeout=5.0):
+        calls.append((method, path))
+        return {"id": "a1", "kind": "analyze"} if method == "POST" else states.pop(0)
+
+    monkeypatch.setattr(control, "alive", lambda *a, **k: True)
+    monkeypatch.setattr(control, "request", fake_request)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    assert _main(["analyze", RID, "--json"]) == 0
+    got = _json_out(capsys)
+    assert got["via_app"] is True and got["analysis"]["title"] == "Утренний старт"
+    assert calls[0] == ("POST", f"/recordings/{RID}/analysis")
+    assert calls[-1] == ("GET", f"/recordings/{RID}/analysis")
+
+
+def test_analyze_reports_the_apps_failure(env, capsys, monkeypatch):
+    from meet import control
+
+    _meeting(env)
+
+    def fake_request(path, method="GET", payload=None, timeout=5.0):
+        return {"id": "a1"} if method == "POST" else {"state": "failed", "error": "таймаут вызова модели"}
+
+    monkeypatch.setattr(control, "alive", lambda *a, **k: True)
+    monkeypatch.setattr(control, "request", fake_request)
+    assert _main(["analyze", RID]) == 1
+    assert "таймаут вызова модели" in capsys.readouterr().err

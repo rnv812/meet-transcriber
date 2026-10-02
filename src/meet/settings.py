@@ -24,6 +24,7 @@
 
 import json
 import os
+import re
 import sys
 import threading
 from dataclasses import dataclass, field, replace
@@ -152,6 +153,31 @@ NOTIFICATION_LEVELS = ("all", "important", "off")
 ASSIST_ACTIVITIES = ("calm", "active", "summary")
 HINTS_MODELS = ("agent", "fast")
 MAX_HINTS_RANGE = (3, 12)
+
+# Анализ встречи (meet.analysis): что размечать. Выключенное не запрашивается у
+# модели (промпт короче) и не показывается в окне.
+ANALYSIS_FEATURES = ("types", "importance", "chapters", "insights", "category", "title")
+
+# Категории встреч по умолчанию: id — стабильная латиница (её хранят analysis.json
+# и meta.json), имя, цвет и описание — для человека и для модели. Список правит
+# человек (окно настроек — M4); анализ берёт отсюда, что предложить.
+DEFAULT_CATEGORIES = (
+    ("daily", "Дейлик", "#4c8bf5", "Короткая регулярная встреча команды: кто что сделал, что мешает"),
+    ("planning", "Планирование", "#2fa36b", "Планирование работ, спринта, сроков и приоритетов"),
+    ("discussion", "Обсуждение", "#8e6cd8", "Рабочее обсуждение задачи, решения или проблемы"),
+    ("client", "Встреча с клиентом", "#e08a2e",
+     "Встреча с заказчиком или партнёром: требования, статус, договорённости"),
+    ("presentation", "Презентация", "#d6457a",
+     "Демонстрация или доклад: один рассказывает, остальные слушают и спрашивают"),
+    ("sales", "Продажа", "#c9a227", "Продажа продукта или услуги: потребности клиента, предложение, условия"),
+    ("interview", "Собеседование", "#3aa7b8", "Собеседование кандидата: вопросы об опыте и навыках"),
+    ("retro", "Ретроспектива", "#7a8b99", "Ретроспектива: что прошло хорошо, что плохо, что изменить"),
+    ("training", "Обучение", "#5a9e3a", "Обучение, разбор материала, передача знаний"),
+    ("other", "Другое", "#9aa0a6", "Всё, что не подходит под другие категории"),
+)
+CATEGORY_ID_MAX = 32
+CATEGORY_NAME_MAX = 40
+CATEGORY_DESCRIPTION_MAX = 200
 
 
 def as_flag(value, default: bool) -> bool:
@@ -674,6 +700,84 @@ class Assistant:
 
 
 @dataclass(frozen=True)
+class Analysis:
+    """«Анализ встречи» (meet.analysis): разметка готовой расшифровки моделью.
+
+    `auto` — ставить анализ сам после расшифровки, импорта, объединения и
+    переразделения на спикеров (если подключена модель и встреча не короче
+    `auto_record.min_call_seconds`). Остальные флаги — что размечать: типы
+    реплик, важность, главы, наблюдения, категория, название. Выключенное не
+    запрашивается и не показывается."""
+
+    auto: bool = True
+    types: bool = True
+    importance: bool = True
+    chapters: bool = True
+    insights: bool = True
+    category: bool = True
+    title: bool = True
+
+    @classmethod
+    def from_raw(cls, raw: dict) -> "Analysis":
+        return cls(auto=as_flag(raw.get("auto"), True),
+                   **{name: as_flag(raw.get(name), True) for name in ANALYSIS_FEATURES})
+
+    def features(self) -> tuple[str, ...]:
+        """Включённые части разметки — в порядке ANALYSIS_FEATURES."""
+        return tuple(name for name in ANALYSIS_FEATURES if getattr(self, name))
+
+    def to_raw(self) -> dict:
+        return {"auto": self.auto, **{name: getattr(self, name) for name in ANALYSIS_FEATURES}}
+
+
+@dataclass(frozen=True)
+class Category:
+    """Категория встреч: `id` — латиница (хранится в analysis.json и meta.json),
+    `name` и `color` — для окна, `description` — подсказка модели."""
+
+    id: str
+    name: str
+    color: str = "#9aa0a6"
+    description: str = ""
+
+    def to_raw(self) -> dict:
+        return {"id": self.id, "name": self.name, "color": self.color,
+                "description": self.description}
+
+
+_CATEGORY_ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def default_categories() -> tuple[Category, ...]:
+    return tuple(Category(*item) for item in DEFAULT_CATEGORIES)
+
+
+def as_categories(value) -> tuple[Category, ...]:
+    """Список категорий из конфига. Нет ключа или не список — умолчания; пустой
+    список — осознанное «без категорий». Битые записи и повторы id
+    отбрасываются."""
+    if not isinstance(value, list):
+        return default_categories()
+    out: list[Category] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        cid = str(item.get("id") or "").strip().lower()
+        name = " ".join(str(item.get("name") or "").split())[:CATEGORY_NAME_MAX]
+        if (not cid or len(cid) > CATEGORY_ID_MAX or not _CATEGORY_ID.match(cid) or not name
+                or cid in seen):
+            continue
+        color = str(item.get("color") or "").strip()
+        description = " ".join(str(item.get("description") or "").split())
+        seen.add(cid)
+        out.append(Category(id=cid, name=name, color=color if _COLOR.match(color) else "#9aa0a6",
+                            description=description[:CATEGORY_DESCRIPTION_MAX]))
+    return tuple(out)
+
+
+@dataclass(frozen=True)
 class Export:
     """Выгрузка встреч в базу знаний (Obsidian и т. п.): папка на встречу по
     шаблону имени внутри `meetings_dir`, в ней — выбранные файлы.
@@ -840,6 +944,9 @@ class Settings:
     export: Export = field(default_factory=Export)
     integrations: Integrations = field(default_factory=Integrations)
     ui: Ui = field(default_factory=Ui)
+    analysis: Analysis = field(default_factory=Analysis)
+    # Не секция, а список (см. as_categories): patch() заменяет его целиком.
+    categories: tuple[Category, ...] = field(default_factory=default_categories)
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Settings":
@@ -879,6 +986,8 @@ class Settings:
             export=Export.from_raw(_section(raw, "export"), legacy_dir=_legacy_notes(assistant)),
             integrations=Integrations.from_raw(_section(raw, "integrations")),
             ui=Ui.from_raw(_section(raw, "ui")),
+            analysis=Analysis.from_raw(_section(raw, "analysis")),
+            categories=as_categories(raw.get("categories")),
         )
 
     def to_raw(self) -> dict:
@@ -894,6 +1003,8 @@ class Settings:
             "export": self.export.to_raw(),
             "integrations": self.integrations.to_raw(),
             "ui": self.ui.to_raw(),
+            "analysis": self.analysis.to_raw(),
+            "categories": [c.to_raw() for c in self.categories],
         }
 
 
@@ -1183,7 +1294,7 @@ def write_hf_token(token: str, path: Path | None = None) -> None:
 # перечислены руками: раньше список отставал (integrations добавили в схему, а
 # сюда забыли — и токен HF молча не сохранялся). `version` — не секция.
 PATCHABLE_SECTIONS = tuple(
-    name for name in Settings.__dataclass_fields__ if name != "version"
+    name for name in Settings.__dataclass_fields__ if name not in ("version", "categories")
 )
 
 
@@ -1210,6 +1321,9 @@ def patch(updates: dict, path: Path | None = None) -> Settings:
         if name == "recording":
             merged["former_speaker_names"] = _former_names(current.recording, merged)
         changed[name] = type(getattr(current, name)).from_raw(merged)
+    if isinstance(updates.get("categories"), list):
+        # Список целиком: порядок — порядок в окне, удалённое просто не пришло.
+        changed["categories"] = as_categories(updates["categories"])
     updated = replace(current, **changed) if changed else current
     save(updated, path)
     return updated
