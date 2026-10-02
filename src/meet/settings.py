@@ -159,6 +159,58 @@ MAX_HINTS_RANGE = (3, 12)
 ANALYSIS_FEATURES = ("types", "importance", "chapters", "insights", "category", "title")
 # Кривая важности над плеером: всегда, при наведении на полосу, не показывать.
 CURVE_MODES = ("always", "hover", "off")
+# Ссылки на задачи Jira в карточке (M3): ключ по умолчанию — «ПРОЕКТ-123».
+DEFAULT_JIRA_KEYS = r"[A-Z][A-Z0-9]+-\d+"
+JIRA_TEXT_MAX = 200
+# https://хост[:порт][/путь] — без логина и пароля, «?» и «#». Тот же разбор у
+# окна (app/src/lib/jira.ts) и у оболочки (windows.rs, jira_prefix): open_url
+# пускает ссылки только на этот хост.
+_JIRA_BASE = re.compile(r"https://(?![.-])[A-Za-z0-9.-]+(?<![.-])(?::\d{1,5})?(?:/[A-Za-z0-9._~%/-]*)?")
+_JIRA_PROJECTS = re.compile(r"[A-Z][A-Z0-9]+(?:\s*,\s*[A-Z][A-Z0-9]+)*")
+# Синтаксис, которого нет в JavaScript или который понимается иначе: флаги, (?P…), комментарии.
+_JIRA_NOT_PORTABLE = re.compile(r"\(\?[aiLmsux#P]")
+
+
+def jira_base_error(value) -> str | None:
+    """Адрес Jira из окна: None — годится (пустой — ссылки выключены)."""
+    base = str(value or "").strip()
+    if not base:
+        return None
+    if len(base) > JIRA_TEXT_MAX:
+        return "Слишком длинный адрес Jira"
+    if not base.lower().startswith("https://"):
+        return "Адрес Jira должен начинаться с https://"
+    if not _JIRA_BASE.fullmatch(base) or ".." in base:
+        return "Адрес Jira — вида https://jira.example.com, без логина, пароля, «?» и «#»"
+    return None
+
+
+def clean_jira_base(value) -> str:
+    """Адрес Jira для хранения: без «/» в конце, хост — строчными; негодный — пусто."""
+    base = str(value or "").strip()
+    if not base or jira_base_error(base):
+        return ""
+    rest = base[len("https://"):].rstrip("/")
+    host, slash, path = rest.partition("/")
+    return f"https://{host.lower()}{slash}{path}"
+
+
+def jira_keys_error(value) -> str | None:
+    """Шаблон ключей задач: список проектов через запятую или регулярное выражение."""
+    keys = str(value or "").strip()
+    if len(keys) > JIRA_TEXT_MAX:
+        return "Слишком длинный шаблон ключей задач"
+    if not keys or _JIRA_PROJECTS.fullmatch(keys):
+        return None
+    if _JIRA_NOT_PORTABLE.search(keys):
+        return "Флаги и именованные группы в шаблоне ключей не поддерживаются"
+    try:
+        pattern = re.compile(keys)
+    except re.error:
+        return "Шаблон ключей задач не разобрался: проверьте скобки и экранирование"
+    if pattern.fullmatch(""):
+        return "Шаблон ключей задач находит пустую строку — уточните его"
+    return None
 
 # Категории встреч по умолчанию: id — стабильная латиница (её хранят analysis.json
 # и meta.json), имя, цвет и описание — для человека и для модели. Список правит
@@ -933,15 +985,33 @@ class Integrations:
     # Наружу (to_raw, GET /settings) не отдаётся никогда; пишут его только
     # write_hf_token/drop_hf_token.
     hf_token: str = ""
+    # Ссылки на задачи Jira в карточке записи (M3): адрес (пусто — ссылок нет)
+    # и шаблон ключей. Негодное значение из файла — по умолчанию; из окна —
+    # отказ с текстом (check). Оболочка читает адрес отсюда же и открывает
+    # ссылки только на его хост.
+    jira_base_url: str = ""
+    jira_keys: str = DEFAULT_JIRA_KEYS
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Integrations":
         token = raw.get("hf_token")
+        keys = str(raw.get("jira_keys") or "").strip()
         return cls(
             gpu_marker=as_flag(raw.get("gpu_marker"), True),
             gpu_marker_path=as_path(raw.get("gpu_marker_path")),
             hf_token=str(token).strip() if token else "",
+            jira_base_url=clean_jira_base(raw.get("jira_base_url")),
+            jira_keys=keys if keys and not jira_keys_error(keys) else DEFAULT_JIRA_KEYS,
         )
+
+    @staticmethod
+    def check(update: dict) -> None:
+        """Правка из окна: ValueError с текстом для человека (адрес Jira, шаблон ключей)."""
+        for key, error_of in (("jira_base_url", jira_base_error), ("jira_keys", jira_keys_error)):
+            if key in update:
+                error = error_of(update[key])
+                if error:
+                    raise ValueError(error)
 
     def to_raw(self) -> dict:
         return {
@@ -949,6 +1019,8 @@ class Integrations:
             "gpu_marker_path": str(self.gpu_marker_path)
             if self.gpu_marker_path
             else None,
+            "jira_base_url": self.jira_base_url,
+            "jira_keys": self.jira_keys,
         }
 
 
@@ -1364,6 +1436,8 @@ def patch(updates: dict, path: Path | None = None) -> Settings:
             Export.check(section_update, current.export)
         if name == "llm":
             Llm.check(section_update)
+        if name == "integrations":
+            Integrations.check(section_update)
         merged = getattr(current, name).to_raw()
         merged.update(section_update)
         if name == "recording":

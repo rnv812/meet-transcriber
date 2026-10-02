@@ -1,0 +1,7 @@
+/* Ключ задачи Jira в тексте — ссылка в цвет акцента; подсветка поиска внутри неё сохраняется. */
+.jira-link {
+  color: var(--accent-hi); text-decoration: underline; text-decoration-color: rgba(124, 134, 240, 0.45);
+  text-underline-offset: 2px; cursor: pointer; border-radius: 2px;
+}
+.jira-link:hover { color: var(--accent-hover); text-decoration-color: currentColor; }
+.jira-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

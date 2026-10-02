@@ -6,6 +6,7 @@ import {
   kbExport, patchRecording, runAnalysis, transcribe, type Endpoint,
 } from "../../lib/api";
 import { clock, errorText } from "../../lib/format";
+import { JiraLinks, jiraLinker, type JiraLinker } from "../../lib/jira";
 import { DEFAULT_PREFS, markupPrefs, type MarkupPrefs } from "../../lib/markupPrefs";
 import { agentKillRecording, inTauri, openFolder, saveText } from "../../lib/shell";
 import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
@@ -87,6 +88,8 @@ export function RecordingCard({
   const [owner, setOwner] = useState("Вы");
   /** Что из разметки встречи показывать («Расшифровка: подсветка и разметка», «Анализ встречи»). */
   const [prefs, setPrefs] = useState<MarkupPrefs>(DEFAULT_PREFS);
+  /** Ссылки на задачи Jira (адрес и шаблон ключей из настроек); null — выключены. */
+  const [jira, setJira] = useState<JiraLinker | null>(null);
   /** Куда выгружено нажатием «В базу знаний» (для этой записи) и что не перезаписано. */
   const [kbDone, setKbDone] = useState<KbExport | null>(null);
   /** Дорожка плеера не загрузилась: реплики не перематывают, внизу — «Аудио недоступно». */
@@ -107,6 +110,7 @@ export function RecordingCard({
       const name = (s.recording as { speaker_name?: unknown } | undefined)?.speaker_name;
       if (typeof name === "string" && name.trim()) setOwner(name.trim());
       setPrefs(markupPrefs(s));
+      setJira(jiraLinker(s));
     }).catch(() => {});
     return () => { live = false; };
   }, [endpoint]);
@@ -452,7 +456,7 @@ export function RecordingCard({
           {onOpenSettings && <Button onClick={() => onOpenSettings("engine")}>Настроить</Button>}
         </div>
       )}
-      <div className="card__body">{body}</div>
+      <div className="card__body"><JiraLinks.Provider value={jira}>{body}</JiraLinks.Provider></div>
       {status.kind === "ready" && turnEdit.menu}
       {status.kind === "ready" && textFix.node}
       {status.kind === "ready" && rediarizeOpen && (

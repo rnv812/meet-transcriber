@@ -247,3 +247,16 @@ test("карточка: ✦ у наблюдения — текст, «почем
     "[00:40] Анна: «Есть риск, что поставщик поднимет цены.»",
   ].join("\n"));
 });
+
+test("карточка: адрес Jira в настройках — ключи задач ссылками; выключено — нет", async () => {
+  const withKey = { ...ANALYSIS, insights: [{ ...ANALYSIS.insights![0]!, text: "Расчёт по SPR-42 нужен до роста цен." }] };
+  mocks({ integrations: { jira_base_url: "https://jira.example.com" } }, { state: "ready", analysis: withKey });
+  const first = await card();
+  expect(await screen.findByRole("link", { name: "SPR-42" })).toHaveAttribute("href", "https://jira.example.com/browse/SPR-42");
+  first.unmount();
+  mocks({ integrations: { jira_base_url: "https://jira.example.com" }, transcript_view: { jira: false } },
+    { state: "ready", analysis: withKey });
+  await card();
+  await screen.findByRole("region", { name: "Наблюдения анализа встречи" });
+  expect(screen.queryByRole("link", { name: "SPR-42" })).toBeNull();
+});

@@ -17,7 +17,9 @@
  */
 
 import { Fragment, useMemo, type ReactNode } from "react";
+import { LinkedText } from "../ui/LinkedText";
 import { plainMarkdown } from "./agentRef";
+import type { JiraLinker } from "./jira";
 
 type Align = "left" | "center" | "right" | undefined;
 type Item = { text: string; children: Block[] };
@@ -192,15 +194,19 @@ const TIME = /^\[(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\]/;
 export type ItemAction = (text: string, section: string | null) => ReactNode;
 
 /** Чем отрисовка дополняет текст: щелчок по таймкоду (секунды), действие у пункта. */
-type Ctx = { onTime?: (seconds: number) => void; itemAction?: ItemAction; section?: string | null };
+type Ctx = {
+  onTime?: (seconds: number) => void; itemAction?: ItemAction; section?: string | null; jira?: JiraLinker | null;
+};
 const WORD = /[\p{L}\p{N}_]/u;
 const isWord = (c: string | undefined) => c !== undefined && WORD.test(c);
 
 function inline(text: string, ctx: Ctx = {}): ReactNode[] {
   const out: ReactNode[] = [];
   let buf = "";
+  // Простой текст — с ключами задач Jira как ссылками (внутри `кода` — нет).
+  const plain = (t: string): ReactNode => (ctx.jira ? <LinkedText key={`l${out.length}`} text={t} linker={ctx.jira} /> : t);
   const push = (node: ReactNode) => {
-    if (buf) { out.push(buf); buf = ""; }
+    if (buf) { out.push(plain(buf)); buf = ""; }
     out.push(node);
   };
   let i = 0;
@@ -239,7 +245,7 @@ function inline(text: string, ctx: Ctx = {}): ReactNode[] {
     buf += c;
     i++;
   }
-  if (buf) out.push(buf);
+  if (buf) out.push(plain(buf));
   return out;
 }
 
@@ -315,17 +321,19 @@ function render(blocks: Block[], outer: Ctx = {}): ReactNode[] {
   });
 }
 
-export function Markdown({ source, className, onTime, itemAction }: {
+export function Markdown({ source, className, onTime, itemAction, jira = null }: {
   source: string;
   className?: string;
   /** Таймкоды «[мм:сс]» — кнопки; щелчок передаёт секунды. */
   onTime?: (seconds: number) => void;
   /** Действие у каждого пункта списка и строки таблицы. */
   itemAction?: ItemAction;
+  /** Ключи задач Jira — ссылками. */
+  jira?: JiraLinker | null;
 }) {
   const nodes = useMemo(
-    () => render(parseBlocks(source.replace(/\r\n?/g, "\n").split("\n")), { onTime, itemAction }),
-    [source, onTime, itemAction],
+    () => render(parseBlocks(source.replace(/\r\n?/g, "\n").split("\n")), { onTime, itemAction, jira }),
+    [source, onTime, itemAction, jira],
   );
   return <div className={className ? `md ${className}` : "md"}>{nodes}</div>;
 }

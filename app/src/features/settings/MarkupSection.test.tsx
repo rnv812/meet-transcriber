@@ -67,3 +67,20 @@ test("что показывать: «Подсветка и разметка» в
     .toEqual([false, true, false, true, "off", false]);
   expect(markupPrefs({ transcript_view: { curve: "сбоку" } }).curve).toBe("hover");
 });
+
+test("Jira: переключатель, адрес и ключи уходят в настройки; негодный адрес не сохраняется", async () => {
+  open();
+  expect(await toggle("Ссылки на задачи Jira")).toHaveAttribute("aria-checked", "true");
+  expect(screen.getByRole("button", { name: "Как работают ссылки на Jira" })).toBeInTheDocument();
+  const base = screen.getByRole("textbox", { name: "Адрес Jira" });
+  await userEvent.type(base, "http://jira.example.com");
+  expect(screen.getByText("Адрес должен начинаться с https://")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  await userEvent.clear(base);
+  await userEvent.type(base, "https://jira.example.com");
+  await userEvent.type(screen.getByRole("textbox", { name: "Ключи задач" }), "SPR, OPS");
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
+    integrations: { jira_base_url: "https://jira.example.com", jira_keys: "SPR, OPS" },
+  }));
+});
