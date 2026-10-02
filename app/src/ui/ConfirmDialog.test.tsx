@@ -201,3 +201,28 @@ test("useConfirm resolves true on confirm and false on cancel", async () => {
   expect(results).toEqual([true, false]);
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });
+
+test("stacked modals: Esc closes only the top one, the page stays inert until the last closes", () => {
+  const bottomCancel = vi.fn();
+  const topCancel = vi.fn();
+  function Stack({ top, bottom }: { top: boolean; bottom: boolean }) {
+    return (
+      <>
+        {bottom && <ConfirmDialog title="Отменить правки?" confirmLabel="Отменить правки" onConfirm={() => {}} onCancel={bottomCancel} />}
+        {top && <ConfirmDialog title="Уйти из настроек?" confirmLabel="Уйти" onConfirm={() => {}} onCancel={topCancel} />}
+      </>
+    );
+  }
+  const { container, rerender } = render(<Stack top={false} bottom />);
+  rerender(<Stack top bottom />);
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  expect(topCancel).toHaveBeenCalledTimes(1);
+  expect(bottomCancel).not.toHaveBeenCalled();
+  // Нижнее закрыли первым — страница под верхним всё ещё inert.
+  rerender(<Stack top bottom={false} />);
+  expect(container).toHaveAttribute("inert");
+  rerender(<Stack top={false} bottom={false} />);
+  expect(container).not.toHaveAttribute("inert");
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  expect(bottomCancel).not.toHaveBeenCalled();
+});

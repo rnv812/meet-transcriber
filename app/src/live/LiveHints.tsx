@@ -48,11 +48,16 @@ export function LiveHints({
   const urgentEl = useRef<HTMLLIElement>(null);
   const urgentId = orderHints(hints).find(isUrgent)?.id ?? null;
   const seenUrgent = useRef<string | null>(urgentId);
+  /** Новый «Вам вопрос» — вслух для экранного диктора (сам список не live-регион). */
+  const [announce, setAnnounce] = useState("");
+  const urgentText = hints.find((h) => h.id === urgentId)?.text ?? "";
   useEffect(() => {
     if (!urgentId || urgentId === seenUrgent.current) return;
     seenUrgent.current = urgentId;
+    setAnnounce(`Вам вопрос: ${urgentText}`);
     urgentEl.current?.scrollIntoView?.({ block: "nearest", behavior: quiet ? "auto" : "smooth" });
-  }, [urgentId, quiet]);
+  }, [urgentId, urgentText, quiet]);
+  const announcer = <div className="sr-only" role="alert">{announce}</div>;
   if (!enabled) {
     return (
       <p className="live-empty muted">
@@ -71,6 +76,8 @@ export function LiveHints({
     }).catch(() => {});
   };
   return (
+    <>
+    {announcer}
     <ul className="live-hints" aria-label="Подсказки">
       {orderHints(hints).map((h) => (
         <li key={h.id} ref={h.id === urgentId ? urgentEl : undefined} className={`live-hint live-hint--${h.kind}${fresh.has(hintKey(h)) ? (isUrgent(h) ? " is-fresh is-urgent-new" : " is-fresh") : ""}${h.pinned ? " is-pinned" : ""}`}>
@@ -116,5 +123,6 @@ export function LiveHints({
         </li>
       ))}
     </ul>
+    </>
   );
 }

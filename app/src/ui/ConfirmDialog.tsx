@@ -40,6 +40,35 @@ type Props = ConfirmOptions & {
   returnFocus?: RefObject<HTMLElement | null>;
 };
 
+/**
+ * Модальные окна могут встать друг на друга (вопрос «Отменить правки?», а
+ * поверх — «Уйти из настроек?» по закрытию окна). Esc закрывает только верхнее
+ * (стек), а `inert` снимается с элемента, только когда его отпустили все окна,
+ * которые его ставили (счётчик): закрытое нижнее не «размораживает» страницу
+ * под открытым верхним.
+ */
+const modalStack: symbol[] = [];
+const inertBy = new Map<Element, number>();
+
+function holdInert(own: Element | null): Element[] {
+  const held = [...document.body.children].filter(
+    (el) => el !== own && (inertBy.has(el) || !el.hasAttribute("inert")));
+  for (const el of held) {
+    inertBy.set(el, (inertBy.get(el) ?? 0) + 1);
+    el.setAttribute("inert", "");
+  }
+  return held;
+}
+
+function releaseInert(held: Element[]) {
+  for (const el of held) {
+    const left = (inertBy.get(el) ?? 1) - 1;
+    if (left > 0) { inertBy.set(el, left); continue; }
+    inertBy.delete(el);
+    el.removeAttribute("inert");
+  }
+}
+
 const FOCUSABLE = "button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
 export function ConfirmDialog({
@@ -64,25 +93,31 @@ export function ConfirmDialog({
   useEffect(() => {
     const before = document.activeElement as HTMLElement | null;
     safe.current?.focus();
-    const own = backdrop.current;
-    const marked = inline ? []
-      : [...document.body.children].filter((el) => el !== own && !el.hasAttribute("inert"));
-    marked.forEach((el) => el.setAttribute("inert", ""));
+    const held = inline ? [] : holdInert(backdrop.current);
     return () => {
-      marked.forEach((el) => el.removeAttribute("inert"));
+      releaseInert(held);
       const target = returnRef.current?.current ?? before;
       if (target && target !== document.body && document.contains(target)) target.focus();
     };
   }, [inline]);
 
-  // Модальное окно ловит Esc, где бы ни был фокус.
+  // Модальное окно ловит Esc, где бы ни был фокус; из стопки окон — только верхнее.
   useEffect(() => {
     if (inline) return;
+    const me = Symbol("confirm");
+    modalStack.push(me);
     const onKey = (e: globalThis.KeyboardEvent) => {
-      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelRef.current(); }
+      if (e.key !== "Escape" || modalStack[modalStack.length - 1] !== me) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      cancelRef.current();
     };
     document.addEventListener("keydown", onKey, true);
-    return () => document.removeEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      const at = modalStack.indexOf(me);
+      if (at >= 0) modalStack.splice(at, 1);
+    };
   }, [inline]);
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
