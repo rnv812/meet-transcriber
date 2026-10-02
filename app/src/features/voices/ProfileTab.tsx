@@ -21,6 +21,7 @@ import { dayLabel, errorText, plural } from "../../lib/format";
 import { discussText, grounded, prepareText, SECTION_ORDER, SECTION_TITLES } from "../../lib/profileAgent";
 import type { Job, Profile, ProfileView } from "../../lib/types";
 import { Button } from "../../ui/Button";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { PcmSection } from "./PcmSection";
 import { HideButton, RefChips, type OpenAt } from "./RefChips";
 import "./profile.css";
@@ -372,11 +373,9 @@ export function ProfileTab({
         </div>
       ) : null}
       {confirm ? (
-        <div className="confirm" role="alertdialog" aria-label="Удалить профиль">
-          <span>Удалить профиль и ваши заметки о человеке «{name}»?</span>
-          <Button variant="danger" onClick={remove}>Удалить</Button>
-          <Button onClick={() => setConfirm(false)} autoFocus>Отмена</Button>
-        </div>
+        <ConfirmDialog title="Удалить профиль?" confirmLabel="Удалить"
+          message={`Профиль и ваши заметки о человеке «${name}» будут удалены. Голос в базе останется.`}
+          onConfirm={remove} onCancel={() => setConfirm(false)} />
       ) : null}
       {status}
       {error ? <div className="profile__err" role="alert">{error}</div> : null}

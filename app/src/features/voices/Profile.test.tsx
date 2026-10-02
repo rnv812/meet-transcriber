@@ -143,7 +143,7 @@ test("не удалось — «Повторить»; удаление проф�
   expect(screen.getByRole("button", { name: "Повторить" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Ещё действия с профилем" }));
   fireEvent.click(screen.getByRole("menuitem", { name: /Удалить профиль/ }));
-  const dialog = screen.getByRole("alertdialog", { name: "Удалить профиль" });
+  const dialog = screen.getByRole("alertdialog", { name: "Удалить профиль?" });
   fireEvent.click(within(dialog).getByRole("button", { name: "Удалить" }));
   await waitFor(() => expect(api.deleteProfile).toHaveBeenCalledWith(ep, "Вера"));
 });
@@ -323,7 +323,7 @@ test("удаление профиля в паузе перед сохранен�
     fireEvent.change(screen.getByRole("textbox", { name: "Мои заметки" }), { target: { value: "Черновик" } });
     fireEvent.click(screen.getByRole("button", { name: "Ещё действия с профилем" }));
     fireEvent.click(screen.getByRole("menuitem", { name: /Удалить профиль/ }));
-    fireEvent.click(within(screen.getByRole("alertdialog", { name: "Удалить профиль" }))
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "Удалить профиль?" }))
       .getByRole("button", { name: "Удалить" }));
     await act(async () => { vi.advanceTimersByTime(NOTES_SAVE_MS * 2); });
     await waitFor(() => expect(api.deleteProfile).toHaveBeenCalled());
@@ -373,7 +373,7 @@ test("после «Удалить профиль» поле заметок пу�
   vi.mocked(api.getProfile).mockResolvedValue({ ...ready, profile: null, state: "none", notes: "" });
   fireEvent.click(screen.getByRole("button", { name: "Ещё действия с профилем" }));
   fireEvent.click(screen.getByRole("menuitem", { name: /Удалить профиль/ }));
-  fireEvent.click(within(screen.getByRole("alertdialog", { name: "Удалить профиль" }))
+  fireEvent.click(within(screen.getByRole("alertdialog", { name: "Удалить профиль?" }))
     .getByRole("button", { name: "Удалить" }));
   await waitFor(() => expect(screen.getByRole("textbox", { name: "Мои заметки" })).toHaveValue(""));
   expect(api.saveProfileNotes).not.toHaveBeenCalled();

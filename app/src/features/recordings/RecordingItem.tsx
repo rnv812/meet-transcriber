@@ -8,6 +8,7 @@ import { AiBadge } from "../../ui/AiBadge";
 import { CategoryDot, CategoryMark } from "../../ui/Category";
 import { Highlight } from "../../ui/Highlight";
 import { BookOpen, ChevronLeft, ChevronRight, FolderOpen, Pencil, Settings2, Tag, Trash2 } from "lucide-react";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { ItemMenu, type MenuItem } from "./ItemMenu";
 
 const ICON = { size: 16, strokeWidth: 1.75, "aria-hidden": true } as const;
@@ -118,12 +119,11 @@ export function RecordingItem({
 
   const closeMenu = (focusBack = true) => {
     setMenu(null);
-    setConfirmDelete(false);
     setPickCategory(false);
     if (focusBack) more_.current?.focus();
   };
   const openMenuAt = (x: number, y: number) => {
-    setConfirmDelete(false); setPickCategory(false); setBackFromCategory(false); setMenu({ x, y });
+    setPickCategory(false); setBackFromCategory(false); setMenu({ x, y });
   };
   const chooseCategory = (id: string | null) => { closeMenu(); void actions?.onCategory?.(rec.id, id); };
   const openFromButton = () => {
@@ -146,11 +146,7 @@ export function RecordingItem({
       onSelect: () => { setBackFromCategory(true); setPickCategory(false); } },
   ];
 
-  const menuItems: MenuItem[] = pickCategory ? categoryItems : confirmDelete ? [
-    { label: "Удалить", danger: true, icon: <Trash2 {...ICON} />,
-      onSelect: () => { closeMenu(false); actions?.onDelete?.(rec.id); } },
-    { label: "Отмена", autoFocus: true, onSelect: () => setConfirmDelete(false) },
-  ] : [
+  const menuItems: MenuItem[] = pickCategory ? categoryItems : [
     { label: "Переименовать", icon: <Pencil {...ICON} />, onSelect: () => { closeMenu(false); begin(); } },
     ...(actions?.onCategory ? [{
       label: "Категория", icon: <Tag {...ICON} />, hint: `Сейчас: ${category?.name ?? NO_CATEGORY_NAME}`,
@@ -165,7 +161,8 @@ export function RecordingItem({
       onSelect: () => { closeMenu(); actions.onKbExport?.(rec.id); },
     }] : []),
     ...(actions?.onDelete ? [{
-      label: "Удалить…", danger: true, separator: true, icon: <Trash2 {...ICON} />, onSelect: () => setConfirmDelete(true),
+      label: "Удалить…", danger: true, separator: true, icon: <Trash2 {...ICON} />,
+      onSelect: () => { closeMenu(false); setConfirmDelete(true); },
     }] : []),
   ];
 
@@ -231,9 +228,14 @@ export function RecordingItem({
       {menu && (
         <ItemMenu at={menu} label={pickCategory ? `Категория записи «${title}»` : `Действия с записью «${title}»`}
           items={menuItems}
-          note={pickCategory ? "Категория встречи"
-            : confirmDelete ? "Удалить запись и расшифровку? Это действие нельзя отменить." : undefined}
+          note={pickCategory ? "Категория встречи" : undefined}
           anchor={more_} onClose={() => closeMenu()} />
+      )}
+      {confirmDelete && (
+        <ConfirmDialog title="Удалить запись?" confirmLabel="Удалить"
+          message={<>«{title}»: звук, расшифровка и итоги будут удалены с диска. Это действие нельзя отменить.</>}
+          onCancel={() => { setConfirmDelete(false); more_.current?.focus(); }}
+          onConfirm={() => { setConfirmDelete(false); actions?.onDelete?.(rec.id); }} />
       )}
       {hits.length > 0 && (
         <ul className="rec-hits" aria-label={`Найдено в записи «${title}»`}>

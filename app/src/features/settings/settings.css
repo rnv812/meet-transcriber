@@ -200,12 +200,7 @@
 .catedit__name:focus, .catedit__desc:focus { outline: none; border-color: var(--accent); }
 .catedit__name::placeholder, .catedit__desc::placeholder { color: var(--text-3); }
 .catedit__remove { flex: none; }
-.catedit__remove:hover { color: var(--red); }
-.catedit__confirm {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 8px; margin-left: 56px;
-  font-size: 12px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
-}
-.catedit__confirm > span { flex: 1 1 200px; }
+.catedit__confirm { margin-left: 56px; }
 .catedit__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 0; }
 .catedit__help { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 12px; }
 .catedit__palette { display: grid; grid-template-columns: repeat(6, 24px); gap: 8px; padding: 2px; }
@@ -225,3 +220,8 @@
   border-radius: var(--r-md); padding: 5px 8px; resize: vertical;
 }
 .agent-launch__preview { margin: 6px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+
+/* «Движок и модели»: строка модели — выбор, загрузка с полоской, удаление с подтверждением в строке. */
+.model-row__chosen { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px; color: var(--ok); }
+.model-row__chosen--muted { color: var(--text-2); }
+.model-row__progress { flex-basis: 100%; }

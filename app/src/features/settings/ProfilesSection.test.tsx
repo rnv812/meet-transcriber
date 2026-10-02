@@ -65,13 +65,14 @@ test("по умолчанию выключено; включение — тол�
 test("«Удалить все профили» — с подтверждением, сразу, без «Сохранить»", async () => {
   open();
   expect(await screen.findByText(/Сохранено: 2 профиля/)).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Удалить все профили" }));
-  const confirm = screen.getByRole("alertdialog", { name: "Удалить все профили" });
+  await userEvent.click(screen.getByRole("button", { name: "Удалить все профили…" }));
+  const confirm = screen.getByRole("alertdialog", { name: "Удалить все профили?" });
+  expect(confirm).toHaveTextContent("2 профиля, ваши заметки о людях и индекс реплик будут удалены без возврата.");
   vi.mocked(api.getProfilesInfo).mockResolvedValue({ enabled: false, count: 0 });
   await userEvent.click(within(confirm).getByRole("button", { name: "Удалить" }));
   await waitFor(() => expect(api.deleteAllProfiles).toHaveBeenCalledWith(ep));
   expect(await screen.findByText("Удалено профилей: 2")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Удалить все профили" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Удалить все профили…" })).toBeDisabled();
   expect(api.patchSettings).not.toHaveBeenCalled();
 });
 

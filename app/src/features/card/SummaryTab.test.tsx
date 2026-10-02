@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SummaryTab } from "./SummaryTab";
 import * as api from "../../lib/api";
@@ -81,7 +81,7 @@ test("итоги есть: заголовки из Markdown; выгрузка �
   expect(await screen.findByRole("heading", { name: "Решения" })).toBeInTheDocument();
   expect(screen.getByRole("table")).toBeInTheDocument();
   expect(screen.getByText("в пятницу").tagName).toBe("STRONG");
-  expect(screen.getByRole("button", { name: "Переделать" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Переделать…" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "В заметки" })).toBeNull();
 });
 
@@ -94,11 +94,15 @@ test("«Копировать» кладёт сырой Markdown и пишет «
   expect(screen.getByRole("button", { name: "Скопировано" })).toBeInTheDocument();
 });
 
-test("«Переделать» зовёт makeSummary", async () => {
+test("«Переделать…» спрашивает и зовёт makeSummary", async () => {
   hasSummary();
   vi.mocked(api.makeSummary).mockResolvedValue(job({ state: "queued" }));
   show();
-  await userEvent.click(await screen.findByRole("button", { name: "Переделать" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Переделать…" }));
+  const ask = screen.getByRole("alertdialog", { name: "Переделать итоги?" });
+  expect(ask).toHaveTextContent("выгрузка обновится");
+  expect(api.makeSummary).not.toHaveBeenCalled();
+  await userEvent.click(within(ask).getByRole("button", { name: "Переделать" }));
   expect(api.makeSummary).toHaveBeenCalledWith(ep, "r1");
   expect(await screen.findByText("Модель думает…")).toBeInTheDocument();
 });

@@ -16,6 +16,8 @@ import { getCategoriesInfo, type CategoriesInfo, type Endpoint } from "../../lib
 import { CATEGORY_PALETTE, NO_CATEGORY_NAME, newCategoryId } from "../../lib/categories";
 import type { Category } from "../../lib/types";
 import { Button } from "../../ui/Button";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
+import { IconButton } from "../../ui/IconButton";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Popover } from "../../ui/Popover";
 
@@ -138,6 +140,7 @@ export function CategoriesSection({ value, onChange, endpoint }: {
   const list = draftCategories(value);
   const [info, setInfo] = useState<CategoriesInfo | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
+  const [askReset, setAskReset] = useState(false);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   /** Ошибку в названиях показываем, когда из поля названия ушли, а не сразу после «Добавить». */
   const [touched, setTouched] = useState(false);
@@ -218,21 +221,15 @@ export function CategoriesSection({ value, onChange, endpoint }: {
                   <input type="text" className="catedit__desc" aria-label={`Описание категории «${shown}» для ИИ`}
                     maxLength={DESCRIPTION_MAX} placeholder="Описание для ИИ: какие встречи сюда относятся"
                     value={c.description} onChange={(e) => update(i, { description: e.target.value })} />
-                  <button type="button" className="icon-btn catedit__remove" aria-label={`Удалить «${shown}»`}
-                    title="Удалить" aria-expanded={confirm === k} onClick={() => setConfirm(confirm === k ? null : k)}>
-                    <Trash2 {...ICON} />
-                  </button>
+                  <IconButton icon={Trash2} label={`Удалить «${shown}»`} tooltip="Удалить" variant="danger"
+                    className="catedit__remove" aria-expanded={confirm === k}
+                    onClick={() => setConfirm(confirm === k ? null : k)} />
                 </div>
                 {confirm === k && (
-                  <div className="catedit__confirm" role="alert">
-                    <span>
-                      {used === null ? "Встречи с этой категорией будут показаны «Без категории»."
-                        : used > 0 ? `У ${meetings(used)} эта категория будет снята.` : "Встреч с этой категорией нет."}
-                      {" "}Удалить категорию «{shown}»?
-                    </span>
-                    <Button variant="danger" onClick={() => remove(c)}>Удалить</Button>
-                    <Button autoFocus onClick={() => setConfirm(null)}>Отмена</Button>
-                  </div>
+                  <ConfirmDialog inline className="catedit__confirm" title={`Удалить категорию «${shown}»?`}
+                    message={used === null ? "Встречи с этой категорией будут показаны «Без категории»."
+                      : used > 0 ? `У ${meetings(used)} эта категория будет снята.` : "Встреч с этой категорией нет."}
+                    confirmLabel="Удалить" onConfirm={() => remove(c)} onCancel={() => setConfirm(null)} />
                 )}
               </li>
             );
@@ -242,10 +239,16 @@ export function CategoriesSection({ value, onChange, endpoint }: {
         <p className="muted">Категорий нет: ИИ не будет определять категорию, а фильтр в списке записей скрыт.</p>
       )}
       {error && (touched || !list.some((x) => !x.id && !clean(x.name))) && <p className="error">{error}</p>}
+      {askReset && (
+        <ConfirmDialog title="Вернуть стандартные категории?" confirmLabel="Сбросить"
+          message="Ваши категории и описания будут заменены стандартным списком. Изменение вступит в силу после «Сохранить»."
+          onCancel={() => setAskReset(false)}
+          onConfirm={() => { setAskReset(false); onChange(info?.defaults ?? []); }} />
+      )}
       <div className="catedit__actions">
         <Button onClick={add}>Добавить категорию</Button>
-        <Button disabled={!info?.defaults.length} onClick={() => { setConfirm(null); onChange(info?.defaults ?? []); }}>
-          Сбросить к стандартным
+        <Button disabled={!info?.defaults.length} onClick={() => { setConfirm(null); setAskReset(true); }}>
+          Сбросить к стандартным…
         </Button>
         <span className="catedit__help">
           <span className="muted">Описание помогает ИИ отличать категории</span>

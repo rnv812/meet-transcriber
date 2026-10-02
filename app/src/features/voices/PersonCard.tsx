@@ -6,6 +6,7 @@ import {
 import { dayLabel, duration, errorText } from "../../lib/format";
 import type { Job, Person, PersonCard as PersonData } from "../../lib/types";
 import { Button } from "../../ui/Button";
+import { ConfirmDialog, useConfirm } from "../../ui/ConfirmDialog";
 import { AvatarEditor, pastedImage } from "./AvatarEditor";
 import { ProfileTab, useProfile } from "./ProfileTab";
 import type { OpenAt } from "./RefChips";
@@ -75,10 +76,16 @@ export function PersonCard({
     await putAvatar(endpoint, name, blob);
     onAvatar();
   });
-  const reset = () => run(async () => {
-    await deleteAvatar(endpoint, name);
-    onAvatar();
-  });
+  const [confirmNode, ask] = useConfirm();
+  const reset = async () => {
+    const ok = await ask({ title: "Убрать фотографию?", confirmLabel: "Убрать",
+      message: `Вместо фотографии «${name}» снова будут показаны инициалы.` });
+    if (!ok) return;
+    await run(async () => {
+      await deleteAvatar(endpoint, name);
+      onAvatar();
+    });
+  };
   const rename = () => {
     if (cancelled.current) { cancelled.current = false; setDraft(name); return; }
     const to = draft.trim();
@@ -210,16 +217,17 @@ export function PersonCard({
         <Button variant="danger" onClick={() => setConfirm("delete")}>Удалить голос</Button>
       </div>
       {confirm && (
-        <div className="confirm" role="alertdialog">
-          <span>
-            {confirm === "delete"
-              ? `Удалить голос «${name}»?${profile.view?.profile ? " Профиль человека тоже удалится." : ""}`
-              : `Объединить «${name}» с «${confirm.merge}»? «${name}» исчезнет${profile.view?.profile ? " вместе со своим профилем" : ""}.`}
-          </span>
-          <Button variant="danger" onClick={doConfirmed}>Да</Button>
-          <Button onClick={() => setConfirm(null)}>Отмена</Button>
-        </div>
+        <ConfirmDialog
+          title={confirm === "delete" ? `Удалить голос «${name}»?` : `Объединить «${name}» с «${confirm.merge}»?`}
+          message={confirm === "delete"
+            ? `Образцы голоса будут удалены: в новых встречах «${name}» больше не будет узнаваться.`
+              + (profile.view?.profile ? " Профиль человека тоже удалится." : "")
+            : `Образцы «${name}» перейдут к «${confirm.merge}», а «${name}» исчезнет из базы голосов`
+              + (profile.view?.profile ? " вместе со своим профилем." : ".")}
+          confirmLabel={confirm === "delete" ? "Удалить" : "Объединить"}
+          onConfirm={doConfirmed} onCancel={() => setConfirm(null)} />
       )}
+      {confirmNode}
       </>)}
       </div>
     </div>

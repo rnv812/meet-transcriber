@@ -1,0 +1,82 @@
+/* Общие элементы окна: подтверждение, полоска прогресса, загрузка, строки
+   состояния, обрезанный текст, раскрывающийся блок. Кнопки — в tokens.css. */
+
+/* --- Подтверждение ------------------------------------------------------ */
+.confirm-backdrop {
+  position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center;
+  padding: 16px; background: rgba(0, 0, 0, 0.5);
+}
+.confirm {
+  display: flex; flex-direction: column; gap: 8px; width: min(420px, 100%); padding: 16px;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45); color: var(--text);
+}
+.confirm--inline {
+  width: auto; padding: 10px 12px; gap: 6px; box-shadow: none; background: var(--surface-2);
+  border-radius: var(--r-md);
+}
+.confirm__title { font-weight: 600; }
+.confirm--inline .confirm__title { font-weight: 500; }
+.confirm__text { color: var(--text-2); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.confirm__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.confirm--inline .confirm__actions { margin-top: 2px; }
+
+/* --- Полоска прогресса -------------------------------------------------- */
+.progressbar { display: flex; flex-direction: column; gap: 6px; min-width: 0; width: 100%; }
+.progressbar__head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px; min-height: 18px;
+  font-size: 12px;
+}
+.progressbar__label { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.progressbar__detail { color: var(--text-2); flex: none; white-space: nowrap; }
+.progressbar__track {
+  position: relative; height: 6px; overflow: hidden; border-radius: 3px; background: var(--surface-2);
+}
+.progressbar--sm .progressbar__track { height: 4px; border-radius: 2px; }
+/* Ширину ведёт rAF; короткий переход сглаживает кадры без rAF (фоновая вкладка). */
+.progressbar__fill {
+  height: 100%; border-radius: inherit; background: var(--accent);
+  transition: width 200ms linear;
+}
+.progressbar__track--indeterminate::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 35%; border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--accent-hi), transparent);
+  animation: progressbar-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes progressbar-shimmer { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+@media (prefers-reduced-motion: reduce) {
+  .progressbar__fill { transition: none; }
+  .progressbar__track--indeterminate::after { animation-duration: 4s; }
+}
+
+/* --- Загрузка, заготовки, строки состояния ------------------------------ */
+.loading {
+  display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 32px; padding: 12px;
+  color: var(--text-2);
+}
+.skeleton {
+  display: inline-block; max-width: 100%; border-radius: var(--r-sm); vertical-align: middle;
+  background: linear-gradient(90deg, var(--surface-2), var(--surface-hover), var(--surface-2));
+  background-size: 200% 100%; animation: skeleton-wave 1.6s ease-in-out infinite;
+}
+@keyframes skeleton-wave { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.status-slot { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); min-width: 0; }
+.status-slot--1 { min-height: 18px; }
+.status-slot--2 { min-height: 36px; align-items: flex-start; }
+.status-slot--ok { color: var(--ok); }
+.status-slot--error { color: var(--err); }
+.status-slot--muted { color: var(--text-2); }
+
+/* --- Обрезанный текст --------------------------------------------------- */
+.truncate { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- Раскрывающийся блок ------------------------------------------------ */
+.disclosure { border-bottom: 1px solid var(--line); padding: 4px 0; }
+.disclosure__head {
+  display: flex; align-items: center; gap: 6px; width: 100%; padding: 6px 0; border: 0; background: none;
+  color: var(--text); font: inherit; text-align: left; cursor: pointer;
+}
+.disclosure__head:hover { color: #fff; }
+.disclosure__chevron { flex: none; color: var(--text-2); transition: transform var(--t); }
+.disclosure--open > .disclosure__head .disclosure__chevron { transform: rotate(90deg); }
+.disclosure__body { padding: 0 0 4px; }
