@@ -55,7 +55,8 @@ function Claim({ title, claim, profile, onOpenAt }: {
 export function PcmSection({ profile, note, onOpenAt, onHide }: {
   profile: Profile; note?: string; onOpenAt: Open; onHide?: (text: string) => void;
 }) {
-  const pcm = profile.pcm;
+  // У гипотезы не осталось живой опоры (встречи удалили, реплики изменились) — как будто её нет.
+  const pcm = profile.pcm && profile.pcm.base.refs.some((r) => !r.stale) ? profile.pcm : undefined;
   const head = (
     <div className="pcm__head">
       <h4 id="pcm-h" className="profile__h pcm__title">Модель PCM</h4>

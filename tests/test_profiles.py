@@ -316,7 +316,8 @@ def test_safety_filter_keeps_ordinary_work_language(text):
 
 # --- целиком -------------------------------------------------------------------------------
 
-GOOD = json.dumps({"summary": "Предпочитает конкретику: цифры, сроки, владельцы.", "sections": {
+GOOD = json.dumps({"summary": "Предпочитает конкретику: цифры, сроки, владельцы.", "summary_refs": ["m1#1"],
+                   "sections": {
     "style": [{"text": "Формулирует коротко, начинает с вывода.", "refs": ["m1#1", "m2#3"]}],
     "values": [{"text": "Ясные сроки и ответственные.", "refs": ["m1#1"]}],
     "how_to_talk": [{"text": "Приходить с цифрами и вариантами.", "refs": ["m3#1"]}],
@@ -749,3 +750,147 @@ def test_turns_merge_consecutive_segments_and_escape_tags(lib):
     assert "[m1№40" in line and "(контекст, не его слова — Тимур:" in line
     assert "по словам других участников" in profiles.build_system()
     assert "без указания пола" in profiles.build_system()
+
+
+# --- fix round 2 -------------------------------------------------------------------------------
+
+PROBE2_BLOCKED = [
+    "Видимо, стесняется своего заикания",
+    "Похоже, страдает бессонницей — по утрам рассеян",
+    "Говорит как человек советской закалки",
+    "Ему за пятьдесят, поэтому с трудом принимает новое",
+    "Часто упоминает свою веру и пасху",
+    "Типичная блондинка в обсуждении цифр",
+    "Явно гуманитарий, в расчётах плавает и туповато спорит",
+    "Не тянет на тимлида, посредственный специалист",
+    "Ведёт себя как мать-одиночка: всё тащит сама",
+    "Кажется, у него СДВГ: перескакивает с темы на тему",
+    "Выглядит как типичный эмигрант, держится особняком",
+    "Сразу видно — недавно из декрета, отвыкла от темпа",
+    "Seems like a typical millennial snowflake",
+    "Говорит с иностранным акцентом, его трудно понять",
+    "Он просто тормоз в обсуждениях",
+    "Примитивный человек, не видит деталей",
+]
+PROBE2_ALLOWED = [
+    "Обращает внимание на маленькие детали интерфейса",
+    "Когда есть детальный план, быстро соглашается",
+    "Сохраняет спокойствие без паники при сбоях",
+    "Часто говорит об азиатском рынке и логистике",
+    "Обсуждает национальную платёжную систему и интеграцию с ней",
+    "Предлагает сначала примитивное решение, потом улучшать",
+    "Называет сроки неадекватными и просит пересчитать",
+    "Считает старую версию API главным тормозом",
+    "Предлагает поддержать старшее поколение устройств",
+    "Беспокоится о нервной обстановке на проекте",
+    "Говорит о психологическом комфорте команды на ретро",
+    "Предлагает перейти на новое поколение серверов",
+    "Находит пасхалки в интерфейсе и просит их убрать",
+    "Предлагает детальный разбор каждого риска",
+]
+
+
+@pytest.mark.parametrize("text", PROBE2_BLOCKED)
+def test_safety_filter_catches_euphemisms(text):
+    assert profile_safety.reason(text) is not None
+
+
+@pytest.mark.parametrize("text", PROBE2_ALLOWED)
+def test_safety_filter_precise_on_work_phrases(text):
+    assert profile_safety.reason(text) is None
+
+
+def test_duplicate_verdict_blocked_wins():
+    got = profile_safety._parse_check(json.dumps({"items": [
+        {"id": "s1", "verdict": "blocked"}, {"id": "s1", "verdict": "allowed"},
+        {"id": "s2", "verdict": "allowed"}, {"id": "s2", "verdict": "blocked"}]}), {"s1", "s2"})
+    assert got["s1"]["verdict"] == "blocked" and got["s2"]["verdict"] == "blocked"
+
+
+def test_unchecked_refresh_keeps_the_checked_profile(lib):
+    _library(lib)
+    root, vo = lib["root"], lib["voices"]
+    pid = profiles.person_id("Вера", vo, create=True)
+    profiles.refresh(pid, vo, lib["rec"], _runner([GOOD]), _cfg(), root=root)
+    first = profiles.read(pid, root)
+    assert first["review"]["checked"] is True
+    other = GOOD.replace("Формулирует коротко, начинает с вывода.", "Новое утверждение про стиль.")
+    profiles.refresh(pid, vo, lib["rec"], _runner([other], check=lambda p: "не JSON"), _cfg(), root=root)
+    assert profiles.read(pid, root) == first  # прежний, проверенный
+    assert profiles.read_state(pid, root)["unchecked"]["error"]
+    # следующее удачное обновление снимает пометку
+    profiles.refresh(pid, vo, lib["rec"], _runner([other]), _cfg(), root=root)
+    assert "unchecked" not in profiles.read_state(pid, root)
+    assert profiles.read(pid, root)["sections"]["style"][0]["text"] == "Новое утверждение про стиль."
+
+
+def test_summary_needs_its_own_refs(lib):
+    _library(lib)
+    no_refs = json.dumps({**json.loads(GOOD), "summary_refs": []}, ensure_ascii=False)
+    doc = profiles.build("0123456789abcdef", "Вера", lib["rec"], _runner([no_refs]), _cfg())
+    assert doc["summary"] == "" and doc["sections"]["style"]
+    # на чтении: ссылки «Коротко» устарели или их нет — «Коротко» не показываем
+    from meet import profile_index
+
+    entries = profile_index.Index(lib["rec"]).refresh()
+    shown = profiles.resolve_refs({"summary": "По делу.", "sections": {}, "summary_refs": [
+        {"m": "2026-09-12_10-00", "i": 77, "t": 900.0, "h": "x", "q": "нет такой"}]}, "Вера", entries)
+    assert shown["summary"] == ""
+
+
+def test_relabel_away_never_binds_a_neighbouring_turn(lib):
+    rec = lib["rec"]
+    folder = _meeting(rec, "2026-09-10_10-00", [
+        {"start": 0, "end": 3, "speaker": "Тимур", "text": "Что по срокам?"},
+        {"start": 46, "end": 49, "speaker": "Вера", "text": "Давайте сначала сверим сроки по задаче."},
+        {"start": 50, "end": 51, "speaker": "Тимур", "text": "Хорошо, давайте."},
+        {"start": 49.5, "end": 52, "speaker": "Вера", "text": "Давайте сначала сверим сроки по другой задаче."},
+    ])
+    ref = _ref_for(rec, "2026-09-10_10-00", 1)
+    data = library.read_transcript(folder)
+    data["segments"][1]["speaker"] = "Тимур"  # реплику отдали другому
+    library.write_transcript(folder, data)
+    assert _resolve(rec, "Вера", ref)[0]["refs"][0]["stale"] is True
+
+
+def test_pcm_without_live_base_refs_is_hidden(lib):
+    from meet import profile_index
+
+    _meeting(lib["rec"], "2026-09-10_10-00", _turns("Вера", 3))
+    entries = profile_index.Index(lib["rec"]).refresh()
+    doc = {"sections": {}, "pcm": {"base": {"type": "thinker", "confidence": 0.6, "refs": [
+        {"m": "2026-01-01_10-00", "i": 1, "t": 1.0, "h": "x"}]}, "floors": {}}}
+    assert "pcm" not in profiles.resolve_refs(doc, "Вера", entries)
+
+
+def test_index_keeps_the_previous_entry_when_a_transcript_is_unreadable(lib, monkeypatch):
+    from meet import profile_index
+
+    rec, store = lib["rec"], lib["tmp"] / "idx"
+    folder = _meeting(rec, "2026-09-10_10-00", _turns("Вера", 3))
+    ix = profile_index.Index(rec, store)
+    before = ix.refresh()["2026-09-10_10-00"]
+    data = library.read_transcript(folder)
+    data["segments"].append({"start": 500, "end": 505, "speaker": "Вера", "text": "Ещё одна мысль про сроки."})
+    library.write_transcript(folder, data)
+    monkeypatch.setattr(profile_index, "extract", lambda f, key=None: None)  # «пишется прямо сейчас»
+    assert ix.refresh()["2026-09-10_10-00"] is before
+    assert (store / "2026-09-10_10-00.json").exists()
+    assert profile_index.Index(rec, store).refresh()["2026-09-10_10-00"]["people"] == before["people"]
+
+
+def test_delete_all_forgets_the_index_on_disk_and_in_memory(lib, monkeypatch):
+    from meet import profile_index
+
+    monkeypatch.setattr(profile_index, "_registry", {})
+    root = lib["root"]
+    _meeting(lib["rec"], "2026-09-10_10-00", _turns("Вера", 3))
+    ix = profile_index.get(lib["rec"], root / profile_index.DIR_NAME)
+    ix.refresh()
+    assert (root / profile_index.DIR_NAME / "2026-09-10_10-00.json").exists()
+    profiles.write("0123456789abcdef", {"version": 1}, root)
+    assert profiles.delete_all(root) == 1
+    assert not (root / profile_index.DIR_NAME).exists()
+    assert profile_index._registry == {} and ix.warm is False and ix.store is None
+    ix.refresh()  # «старый» индекс, если кто-то его ещё держит, на диск больше не пишет
+    assert not (root / profile_index.DIR_NAME).exists()

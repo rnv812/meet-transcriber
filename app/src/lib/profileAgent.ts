@@ -76,12 +76,11 @@ function pcmPart(profile: Profile): string {
 }
 
 /**
- * Есть ли у «Коротко» опора: свои ссылки на реплики или хоть одно утверждение
- * со ссылками. Без опоры «Коротко» не показывается и агенту не уходит.
+ * Есть ли у «Коротко» своя опора: хоть одна ссылка на реплику, которая не
+ * изменилась. Без неё «Коротко» не показывается и агенту не уходит.
  */
 export function grounded(profile: Profile): boolean {
-  if ((profile.summary_refs ?? []).length) return true;
-  return SECTION_ORDER.some((k) => (profile.sections[k] ?? []).some((s) => s.refs.length > 0));
+  return (profile.summary_refs ?? []).some((r) => !r.stale);
 }
 
 const summaryPart = (profile: Profile) =>

@@ -88,7 +88,8 @@ function turnsIn(turns: number, meetings: number): string {
   return `${turns} ${plural(turns, "реплика", "реплики", "реплик")} в ${meetings} ${plural(meetings, "встрече", "встречах", "встречах")}`;
 }
 
-export type NotesControl = { cancel: () => void };
+/** `cancel` — забыть несохранённое; `settle` — дождаться уже отправленных сохранений. */
+export type NotesControl = { cancel: () => void; settle: () => Promise<void> };
 
 /**
  * «Мои заметки»: markdown как есть, сохраняется сам (пауза NOTES_SAVE_MS) и по
@@ -140,6 +141,7 @@ export function ProfileNotes({ endpoint, name, initial, control }: {
         if (timer.current) { clearTimeout(timer.current); timer.current = null; }
         pending.current = null;
       },
+      settle: () => chain.current,
     };
     return () => { control.current = null; };
   }, [control]);
@@ -219,6 +221,8 @@ export function ProfileTab({
   const [menu, setMenu] = useState(false);
   const [confirm, setConfirm] = useState(false);
   const notes = useRef<NotesControl | null>(null);
+  /** Растёт после «Удалить профиль»: поле заметок начинается заново (пустым). */
+  const [notesRev, setNotesRev] = useState(0);
   const profile = view.profile ?? null;
   const running = view.state === "queued" || view.state === "running";
   const stats = view.stats ?? { turns: 0, meetings: 0 };
@@ -233,8 +237,13 @@ export function ProfileTab({
   const remove = () => {
     setConfirm(false);
     setMenu(false);
-    notes.current?.cancel(); // несохранённые заметки после удаления не возвращаются
-    void act(() => deleteProfile(endpoint, name));
+    // Несохранённые заметки — забыть, отправленные — дождаться: после удаления
+    // ничего из них не должно вернуться ни на сервер, ни в поле.
+    notes.current?.cancel();
+    void act(async () => {
+      await notes.current?.settle();
+      await deleteProfile(endpoint, name);
+    }).then(() => setNotesRev((n) => n + 1));
   };
   const hide = (text: string) => void act(() => hideProfileStatement(endpoint, name, text, true));
   const unhideAll = () => void act(() => hideProfileStatement(endpoint, name, null, false));
@@ -252,6 +261,11 @@ export function ProfileTab({
       <span title={view.error || undefined}>
         {view.error?.startsWith("Не удалось составить профиль с опорой") ? view.error : "Не удалось составить профиль"}
       </span>
+      <Button onClick={() => void make()} disabled={busy}>Повторить</Button>
+    </div>
+  ) : view.kept_previous !== undefined && profile ? (
+    <div className="profile__status profile__status--warn" role="status">
+      <span title={view.kept_previous || undefined}>Проверка не завершена — показан прежний профиль</span>
       <Button onClick={() => void make()} disabled={busy}>Повторить</Button>
     </div>
   ) : profile?.review && profile.review.checked === false ? (
@@ -380,7 +394,8 @@ export function ProfileTab({
         </p>
       ) : null}
       {main}
-      <ProfileNotes key={name} endpoint={endpoint} name={name} initial={view.notes ?? ""} control={notes} />
+      <ProfileNotes key={`${name}#${notesRev}`} endpoint={endpoint} name={name} initial={view.notes ?? ""}
+        control={notes} />
       <p className="profile__foot">{FOOT}</p>
     </div>
   );

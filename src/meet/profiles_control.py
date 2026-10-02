@@ -121,6 +121,10 @@ class ProfilesMixin:
                                                      meetings=profiles.FULL_MEETINGS)
         job = self._profile_job(pid) if pid else None
         failure = state.get("error") if isinstance(state.get("error"), dict) else None
+        unchecked = state.get("unchecked") if isinstance(state.get("unchecked"), dict) else None
+        if unchecked and doc and float(unchecked.get("at") or 0) >= float(doc.get("updated_at") or 0):
+            # Новый профиль не прошёл проверку агентом — показан прежний, проверенный.
+            out["kept_previous"] = str(unchecked.get("error") or "")
         if job is not None:
             out.update(state=job.state, job=job.to_raw())
         elif failure and float(failure.get("at") or 0) >= float((doc or {}).get("updated_at") or 0):
@@ -278,6 +282,12 @@ class ProfilesMixin:
         for pid in profiles.all_ids():
             if profiles.read_state(pid).get("pending"):
                 self._mark_profile(pid, False)
+        # Индекс реплик (кто сколько говорил во встречах) нужен только профилям:
+        # выключили или удалили все — его тоже нет; включат — построится заново.
+        try:
+            profiles.forget_index()
+        except OSError as e:
+            self.tray.log(f"индекс реплик для профилей не удалён: {e}")
 
     def _profile_cancelled(self, folder: str) -> None:
         """Задачу профиля сняли из списка задач: ждущая уходит без события —

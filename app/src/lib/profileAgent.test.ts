@@ -3,7 +3,7 @@ import type { Profile } from "./types";
 
 const base: Profile = {
   version: 1, person_id: "0123456789abcdef", name: "Вера", updated_at: 0, meetings: 3, turns: 40,
-  summary: "Говорит по делу", sections: {
+  summary: "Говорит по делу", summary_refs: [{ m: "a", i: 1, t: 61 }], sections: {
     how_to_talk: [{ text: "Приходить с вариантами", refs: [{ m: "a", i: 1, t: 61 }] }],
     avoid: [{ text: "Длинных вступлений.", refs: [{ m: "a", i: 2, t: 70 }] }],
   },
@@ -41,7 +41,7 @@ test("управляющие символы и переводы строк вы�
 });
 
 test("«Коротко» без опоры на реплики агенту не уходит; без общей встречи — без «материалов этой встречи»", () => {
-  const ungrounded: Profile = { ...base, sections: { how_to_talk: [{ text: "Совет", refs: [] }] } };
+  const ungrounded: Profile = { ...base, summary_refs: [], sections: { how_to_talk: [{ text: "Совет", refs: [] }] } };
   expect(prepareText("Вера", ungrounded)).not.toContain("Коротко");
   expect(discussText("Вера", ungrounded)).not.toContain("Коротко");
   const text = prepareText("Вера", base, true, false);
@@ -53,4 +53,11 @@ test("ссылки «реплика изменилась» в текст для 
   const p: Profile = { ...base, sections: { style: [{ text: "Коротко", refs: [
     { m: "a", i: 1, t: 61, stale: true }, { m: "a", i: 2, t: 70 }] }] } };
   expect(discussText("Вера", p)).toContain("Стиль общения: Коротко. [Очень длинное название… · 01:10]");
+});
+
+test("«Коротко» только со своей живой опорой", () => {
+  expect(prepareText("Вера", { ...base, summary_refs: [] })).not.toContain("Коротко");
+  expect(prepareText("Вера", { ...base, summary_refs: [{ m: "a", i: 1, t: 61, stale: true }] }))
+    .not.toContain("Коротко");
+  expect(prepareText("Вера", base)).toContain("Коротко: Говорит по делу.");
 });
