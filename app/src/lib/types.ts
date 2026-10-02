@@ -531,7 +531,12 @@ export type LiveQa = {
   pending: boolean;
   at: number;
   quick: LiveQuick | null;
+  /** Ответ, который ещё пишется (событие `qa_partial`), — только в окне. */
+  partial?: string;
 };
+
+/** `event: qa_partial`: текст ответа на сейчас, пока модель его пишет. */
+export type LiveQaPartial = { id: number; a: string };
 
 /** Пункт живой сводки со стабильным id (`p3`, `d1`, `q2`). */
 export type LiveItem = { id: string; text: string };
@@ -546,8 +551,11 @@ export type LiveSummary = {
   open_questions: LiveItem[];
 };
 
-/** Вид подсказки: стоит спросить, риск, без ответа, термин, следующий шаг. */
-export type LiveHintKind = "question" | "risk" | "unanswered" | "term" | "followup";
+/**
+ * Вид подсказки: «Вам вопрос» (к владельцу обратились — с черновиком ответа),
+ * стоит спросить, риск, без ответа, термин, следующий шаг.
+ */
+export type LiveHintKind = "ask_you" | "question" | "risk" | "unanswered" | "term" | "followup";
 
 export type LiveHint = {
   id: string;
@@ -559,6 +567,8 @@ export type LiveHint = {
   source_t: number;
   /** Файл базы знаний (у «Термина»). */
   ref: string | null;
+  /** Черновик ответа владельца (у «Вам вопрос»); у старого ассистента поля нет. */
+  reply?: string | null;
   pinned: boolean;
   dismissed: boolean;
   created_at: number;

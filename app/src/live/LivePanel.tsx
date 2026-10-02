@@ -10,6 +10,8 @@
  *
  * «Не отвлекать»: ни подсветки, ни счётчиков, строка свёрнутой панели не
  * меняется, пока её подсказка жива; содержимое при этом обновляется.
+ * Исключение — «Вам вопрос»: он встаёт в строку свёрнутой панели и в
+ * «Не отвлекать» (без анимации) — ответа ждут сейчас.
  *
  * Размер и место помнит оболочка (`useLiveWindow`). Фокус панель не берёт:
  * окно создаётся без фокуса, и ни один элемент не фокусируется сам —
@@ -25,7 +27,7 @@ import type { LiveHint } from "../lib/types";
 import { Button } from "../ui/Button";
 import { LiveWorkspace, useLiveView } from "./LiveWorkspace";
 import { ExpandIcon, MaximizeIcon, PinIcon, QuietIcon, StopIcon } from "./icons";
-import { KIND_LABEL, topHint } from "./liveModel";
+import { KIND_LABEL, isUrgent, topHint } from "./liveModel";
 import { useQuiet } from "./useAttention";
 import { useLiveAsk } from "./useLastLook";
 import { useLive } from "./useLive";
@@ -70,13 +72,14 @@ export function headPress(e: MouseEvent, drag: () => void, toggle?: () => void) 
 
 /**
  * Подсказка строки свёрнутой панели: самая важная; сменяется, только когда
- * сменилась самая важная. «Не отвлекать» — держим показанную, пока она жива.
+ * сменилась самая важная. «Не отвлекать» — держим показанную, пока она жива,
+ * но «Вам вопрос» встаёт в строку и тогда.
  */
 function useShownHint(hints: LiveHint[], quiet: boolean): LiveHint | null {
   const shownId = useRef<string | null>(null);
   const best = topHint(hints);
   const kept = quiet && shownId.current ? hints.find((h) => h.id === shownId.current) : undefined;
-  const shown = kept ?? best;
+  const shown = best && isUrgent(best) && !(kept && isUrgent(kept)) ? best : kept ?? best;
   shownId.current = shown?.id ?? null;
   return shown;
 }
@@ -186,7 +189,7 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
           <LiveWorkspace live={live} view={ws} onAsk={ask} disabled={stopping} />
         </div>
       ) : (
-        <button type="button" className="live-last" onClick={openHints}
+        <button type="button" className={`live-last${shown && isUrgent(shown) ? " live-last--urgent" : ""}`} onClick={openHints}
           aria-label={shown ? `Подсказка: ${shown.text}. Открыть подсказки` : "Развернуть панель"}>
           {shown ? (
             <>

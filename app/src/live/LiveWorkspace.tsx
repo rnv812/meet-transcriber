@@ -63,13 +63,19 @@ export function useLiveView(live: Live, { open, wide, quiet }: { open: boolean; 
     setDraft(`Расскажите подробнее: «${hint.text}»`);
     if (!wide) setTab("ask");
   }, [wide]);
+  const openAsk = useCallback(() => { if (!wide) setTab("ask"); }, [wide]);
 
-  return { tab, setTab, focus, jump, draft, setDraft, askAbout, unseen, fresh, quiet, wide };
+  return { tab, setTab, focus, jump, draft, setDraft, askAbout, openAsk, unseen, fresh, quiet, wide };
 }
 
 function count(n: number, quiet: boolean) {
   if (quiet || n <= 0) return null;
   return <span className="live-tabs__count" aria-label={`новых: ${n}`}>{n}</span>;
+}
+
+/** Вопрос агенту по «Вам вопрос»: что ответить. */
+export function urgentQuestion(hint: LiveHint): string {
+  return `Что мне ответить: «${hint.text}»? Предложите 1–2 коротких варианта от первого лица.`;
 }
 
 export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }: {
@@ -81,7 +87,7 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }
   /** Режим кончается — спрашивать уже некого. */
   disabled?: boolean;
 }) {
-  const { tab, setTab, focus, jump, draft, setDraft, askAbout, unseen, fresh, quiet, wide } = view;
+  const { tab, setTab, focus, jump, draft, setDraft, askAbout, openAsk, unseen, fresh, quiet, wide } = view;
   const uid = useId();
   const hintAction = (id: string, action: "pin" | "unpin" | "dismiss") => { void live.hint(id, action); };
 
@@ -90,6 +96,7 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }
   const hints = (
     <LiveHints hints={live.hints} fresh={fresh} enabled={live.hintsEnabled} error={live.hintError}
       onAction={hintAction} onAsk={onAskHint ?? askAbout} onTime={jump}
+      onAskUrgent={onAskHint ?? ((h) => { void onAsk(urgentQuestion(h)); openAsk(); })}
       askTitle={onAskHint ? "Спросить агента об этой подсказке: откроется вкладка «Агент»" : undefined} />
   );
   const ask = (

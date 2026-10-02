@@ -10,14 +10,16 @@
  * хук живёт в окне одной записи — новый режим придёт в новый экземпляр.
  *
  * История вопросов живёт у ассистента (событие `qa`): её видят и панель, и
- * карточка, и вопрос в ней появляется сразу — с «Модель думает…».
+ * карточка, и вопрос в ней появляется сразу — с «Модель думает…». Ответ,
+ * который ещё пишется, приходит кусками (`qa_partial`) и виден по мере
+ * генерации; окно обновляет его не чаще 10 раз в секунду (PARTIAL_MS).
  *
  * Действие с подсказкой (закрепить, скрыть) видно сразу, до ответа
  * ассистента: оно лежит поверх его состояния, пока следующее `state` не
  * пришло; не дошло — откатывается.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { type Endpoint, liveAsk, liveHint, liveTask, openLiveEvents } from "../lib/api";
 import { errorText } from "../lib/format";
@@ -28,6 +30,8 @@ export const MAX_LINES = 300;
 const RETRY_MIN_MS = 1000;
 const RETRY_MAX_MS = 10_000;
 const NO_LINK = "Нет связи с ассистентом — переподключаюсь…";
+/** Частичный ответ в окне — не чаще раза в 100 мс (≤ 10 обновлений в секунду). */
+export const PARTIAL_MS = 100;
 
 /** Строка ленты с её номером в потоке (`id:` события; null — без номера). */
 export type FeedLine = LiveLine & { id: number | null };
@@ -48,7 +52,7 @@ export type Live = {
   hintsEnabled: boolean;
   /** «Не отвлекать по умолчанию» из настроек; null — состояние ещё не пришло. */
   quietDefault: boolean | null;
-  /** История вопросов (у ассистента). */
+  /** История вопросов (у ассистента); у ответа, который пишется, — `partial`. */
   qa: LiveQa[];
   /** Хоть одно `state` пришло: дальше новое — действительно новое. */
   loaded: boolean;
@@ -90,6 +94,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
   const [quietDefault, setQuietDefault] = useState<boolean | null>(null);
   const [pending, setPending] = useState<Pending>({});
   const [qa, setQa] = useState<LiveQa[]>([]);
+  const [partials, setPartials] = useState<Record<number, string>>({});
   const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -105,6 +110,16 @@ export function useLive(ep: Endpoint | null, active = true): Live {
     let stream: { close: () => void } | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let delay = RETRY_MIN_MS;
+    // Куски ответа копятся здесь и уходят в состояние не чаще PARTIAL_MS.
+    let latest: Record<number, string> = {};
+    let partialTimer: ReturnType<typeof setTimeout> | undefined;
+    let partialAt = 0;
+    const flushPartials = () => {
+      partialTimer = undefined;
+      partialAt = Date.now();
+      const snapshot = { ...latest };
+      setPartials(snapshot);
+    };
     const alive = () => {
       delay = RETRY_MIN_MS;
       setError(null);
@@ -126,6 +141,18 @@ export function useLive(ep: Endpoint | null, active = true): Live {
         onQa: (items) => {
           alive();
           setQa(items);
+          // Готовый ответ пришёл в историю — его частичный текст больше не нужен.
+          const pending = new Set(items.filter((it) => it.pending).map((it) => it.id));
+          latest = Object.fromEntries(Object.entries(latest).filter(([id]) => pending.has(Number(id))));
+          setPartials((cur) => Object.fromEntries(Object.entries(cur).filter(([id]) => pending.has(Number(id)))));
+        },
+        onQaPartial: ({ id, a }) => {
+          alive();
+          latest = { ...latest, [id]: a };
+          if (partialTimer !== undefined) return;
+          const wait = partialAt + PARTIAL_MS - Date.now();
+          if (wait <= 0) flushPartials();
+          else partialTimer = setTimeout(flushPartials, wait);
         },
         onLine: (line, id) => {
           alive();
@@ -151,6 +178,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
     return () => {
       closed = true;
       clearTimeout(timer);
+      clearTimeout(partialTimer);
       stream?.close();
       setError(null); // режим кончился — переподключаться больше некуда
     };
@@ -194,8 +222,13 @@ export function useLive(ep: Endpoint | null, active = true): Live {
     await liveTask(ep, task);
   }, [ep]);
 
+  const qaView = useMemo(
+    () => qa.map((it) => (it.pending && partials[it.id] ? { ...it, partial: partials[it.id] } : it)),
+    [qa, partials],
+  );
+
   return {
-    status, lines, digest, summary, hints: withPending(hints, pending), hintsEnabled, quietDefault, qa, loaded, error,
+    status, lines, digest, summary, hints: withPending(hints, pending), hintsEnabled, quietDefault, qa: qaView, loaded, error,
     asking, askError, hintError, ask, hint, setTask,
   };
 }

@@ -10,7 +10,7 @@
 
 import { inTauri, invoke } from "./shell";
 import type {
-  AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQuick, LiveState, LiveStatus, Person, PersonCard, ProfileView,
+  AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, Person, PersonCard, ProfileView,
   Category, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript,
@@ -549,8 +549,8 @@ export function openEvents(
 
 /**
  * Поток живого ассистента: `state` (сводка, подсказки, статус) при каждом их
- * изменении, `qa` (история вопросов) — когда меняется она, и `line` на каждую
- * новую строку.
+ * изменении, `qa` (история вопросов) — когда меняется она, `qa_partial` —
+ * ответ, который ещё пишется, и `line` на каждую новую строку.
  *
  * `onLine` получает и номер строки (`id:` события, null — без него): поток,
  * открытый заново, начинает с хвоста ленты, и по номеру повторы отбрасываются.
@@ -563,6 +563,8 @@ export function openLiveEvents(
   handlers: {
     onState?: (s: LiveState) => void;
     onQa?: (qa: LiveQa[]) => void;
+    /** Кусок ответа, который ещё пишется (`qa_partial`): текст ответа на сейчас. */
+    onQaPartial?: (part: LiveQaPartial) => void;
     onLine?: (l: LiveLine, id: number | null) => void;
     onError?: (closed: boolean) => void;
   },
@@ -576,6 +578,12 @@ export function openLiveEvents(
   source.addEventListener("qa", (m) => {
     const data = parseEvent((m as MessageEvent<string>).data) as { qa?: unknown } | null;
     if (data && Array.isArray(data.qa)) handlers.onQa?.(data.qa as LiveQa[]);
+  });
+  source.addEventListener("qa_partial", (m) => {
+    const data = parseEvent((m as MessageEvent<string>).data) as Partial<LiveQaPartial> | null;
+    if (data && typeof data.id === "number" && typeof data.a === "string") {
+      handlers.onQaPartial?.({ id: data.id, a: data.a });
+    }
   });
   source.addEventListener("line", (m) => {
     const event = m as MessageEvent<string>;

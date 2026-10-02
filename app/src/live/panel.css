@@ -37,6 +37,7 @@ html, body { background: transparent; }
 }
 .live-last:hover { background: var(--surface-hover); }
 .live-last__kind { flex: none; color: var(--kind); font-size: 11px; font-weight: 500; }
+.live-last--urgent { box-shadow: inset 3px 0 0 var(--accent); }
 .live-last__text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .live-last__count {
   flex: none; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;

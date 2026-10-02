@@ -3,6 +3,7 @@
 import type { LiveHint, LiveHintKind, LiveSummary } from "../lib/types";
 
 export const KIND_LABEL: Record<LiveHintKind, string> = {
+  ask_you: "Вам вопрос",
   question: "Стоит спросить",
   risk: "Риск или неясность",
   unanswered: "Без ответа",
@@ -11,21 +12,36 @@ export const KIND_LABEL: Record<LiveHintKind, string> = {
 };
 
 /** Ценность вида (как у ассистента): для строки свёрнутой панели. */
-const KIND_VALUE: Record<LiveHintKind, number> = { unanswered: 5, risk: 4, question: 3, followup: 2, term: 1 };
+const KIND_VALUE: Record<LiveHintKind, number> = { ask_you: 6, unanswered: 5, risk: 4, question: 3, followup: 2, term: 1 };
+
+/** «Вам вопрос»: к владельцу обратились и ждут ответа. */
+export const isUrgent = (h: LiveHint) => h.kind === "ask_you";
+
+/**
+ * Порядок в «Подсказках»: «Вам вопрос» — наверху (свежий первым), остальные
+ * — как у ассистента (новые в конце, ничего не прыгает).
+ */
+export function orderHints(hints: LiveHint[]): LiveHint[] {
+  const urgent = hints.filter(isUrgent).sort((a, b) => b.created_at - a.created_at);
+  return urgent.length ? [...urgent, ...hints.filter((h) => !isUrgent(h))] : hints;
+}
 
 export const EMPTY_SUMMARY: LiveSummary = { topic: "", points: [], decisions: [], tasks: [], open_questions: [] };
 
 /**
- * Самая важная подсказка: закреплённая, затем по ценности вида, затем
- * свежая. Нет подсказок — null.
+ * Самая важная подсказка: «Вам вопрос», затем закреплённая, затем по
+ * ценности вида, затем свежая. Нет подсказок — null.
  */
 export function topHint(hints: LiveHint[]): LiveHint | null {
   let best: LiveHint | null = null;
-  const rank = (h: LiveHint) => [h.pinned ? 1 : 0, KIND_VALUE[h.kind] ?? 0, h.updated_at] as const;
+  const rank = (h: LiveHint) =>
+    [isUrgent(h) ? 1 : 0, h.pinned ? 1 : 0, KIND_VALUE[h.kind] ?? 0, h.updated_at] as const;
+  const better = (a: readonly number[], b: readonly number[]) => {
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i]! > b[i]!;
+    return false;
+  };
   for (const h of hints) {
-    if (!best) { best = h; continue; }
-    const a = rank(h), b = rank(best);
-    if (a[0] !== b[0] ? a[0] > b[0] : a[1] !== b[1] ? a[1] > b[1] : a[2] > b[2]) best = h;
+    if (!best || better(rank(h), rank(best))) best = h;
   }
   return best;
 }
