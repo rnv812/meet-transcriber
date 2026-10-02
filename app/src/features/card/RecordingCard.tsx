@@ -258,9 +258,10 @@ export function RecordingCard({
 
   // Вкладки — на всех этапах: агент (вкладка «Агент») переживает переход «живой
   // режим → расшифровка → готово», и даже остановку ассистента посреди записи
-  // (запись идёт дальше — «Расшифровка · Агент», агент получает ленту, что успела).
+  // (запись идёт дальше — «Запись · Агент», агент получает ленту, что успела).
   const live = status.kind === "recording" && !!snapshot?.live && isLiveRecording(rec, snapshot);
-  const stage: CardStage = status.kind === "ready" ? "ready" : live ? "live" : "pending";
+  const stage: CardStage = status.kind === "ready" ? "ready" : live ? "live"
+    : status.kind === "recording" ? "recording" : "pending";
   let first;
   switch (status.kind) {
     case "ready":

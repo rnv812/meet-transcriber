@@ -44,11 +44,12 @@ const h = vi.hoisted(() => {
     /** Как будто подгонка под окно поменяла размер. */
     resize(cols: number, rows: number) { this.cols = cols; this.rows = rows; this.onResizeCb?.({ cols, rows }); }
     get text() { return this.written.join(""); }
-    /** Что видно на экране (первая строка буфера) — для распознавания вопроса первого запуска. */
+    /** Что видно внизу экрана (последняя строка) — для распознавания диалога первого запуска. */
     screen = "";
     get buffer() {
       const screen = () => this.screen;
-      return { active: { viewportY: 0, getLine: (i: number) => ({ translateToString: () => (i === 0 ? screen() : "") }) } };
+      const last = this.rows - 1;
+      return { active: { viewportY: 0, getLine: (i: number) => ({ translateToString: () => (i === last ? screen() : "") }) } };
     }
   }
   return {
@@ -324,153 +325,197 @@ const LINE = pasteLine(REF);
 const SLOW = { timeout: QUIET_MS + 1500 };
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\x00-\x1f\x7f-\x9f]/;
+const TRUST = "Accessing workspace: … Quick safety check: Is this a project you created or one you trust?";
+
+afterEach(() => vi.useRealTimers());
+
+/** Время — поддельное, но идёт и само (waitFor работает); `skip` — перескочить вперёд. */
+const fakeTime = () => vi.useFakeTimers({ shouldAdvanceTime: true });
+const skip = (ms: number) => act(async () => { vi.advanceTimersByTime(ms); });
+const output = (text: string) => act(async () => { h.listeners.data.forEach((cb) => cb({ id: "agent-1", data: text })); });
+const strip = () => screen.queryByRole("status", { name: "Ссылка ждёт вставки" });
+
+/** Просьба при незапущенном агенте: запуск начинает сама просьба (cold). */
+async function coldStart(insert: { text: string } = { text: REF }) {
+  let resolve: (id: string) => void = () => {};
+  h.shell.agentSpawn.mockReturnValue(new Promise<string>((r) => { resolve = r; }));
+  const view = await show(assistant(), { insert });
+  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalledTimes(1));
+  return { view, started: () => act(async () => resolve("agent-1")) };
+}
 
 test("агент не запущен — запускается сам, ссылка вставляется одной строкой, без Enter", async () => {
   const onTaken = vi.fn();
   await show(assistant(), { insert: { text: REF }, onTaken });
   expect(onTaken).toHaveBeenCalledTimes(1);
   await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalledWith("r1", "claude-code", 80, 24));
-  expect(screen.getByRole("status", { name: "Ссылка ждёт вставки" }))
-    .toHaveTextContent("Реплика будет вставлена в поле ввода, когда агент будет готов.");
+  expect(strip()).toHaveTextContent("Ссылка будет вставлена в поле ввода, когда агент будет готов.");
   await waitFor(() => expect(term().pasted).toEqual([LINE]), SLOW);
   expect(LINE).toBe("Про реплику: [01:05] Анна: «Сдаём отчёт в пятницу.» ");
   expect(CONTROL.test(term().pasted[0]!)).toBe(false);
   expect(screen.getByText("Работает")).toBeInTheDocument();
   expect(term().focused).toBeGreaterThan(0);
-  expect(screen.queryByRole("status", { name: "Ссылка ждёт вставки" })).toBeNull();
+  expect(strip()).toBeNull();
   // Вставка — не нажатие клавиш: напрямую в агента ничего не пишется.
   expect(h.shell.agentWrite).not.toHaveBeenCalled();
 });
 
-test("сеанс уже работает — ссылка вставляется, второго запуска нет; та же просьба — один раз", async () => {
+test("сеанс уже работает — ссылка вставляется сразу, второго запуска нет; та же просьба — один раз", async () => {
   const view = await show();
   await userEvent.click(startButton());
   await screen.findByText("Работает");
+  // Агент ещё что-то выводит, режим вставки не включён — работающему сеансу всё равно сразу.
+  term().modes.bracketedPasteMode = false;
+  await output("…");
   const first = { text: REF };
   view.rerender(<AgentTab id="r1" assistant={assistant()} insert={first} />);
-  await waitFor(() => expect(term().pasted).toEqual([LINE]), SLOW);
+  await waitFor(() => expect(term().pasted).toEqual([LINE]));
   expect(h.shell.agentSpawn).toHaveBeenCalledTimes(1);
   view.rerender(<AgentTab id="r1" assistant={assistant()} insert={first} />);
   const next = { text: "Про реплику:\n[00:01] Олег: «да»\n" };
   view.rerender(<AgentTab id="r1" assistant={assistant()} insert={next} />);
   view.rerender(<AgentTab id="r1" assistant={assistant()} insert={next} />);
-  await waitFor(() => expect(term().pasted).toHaveLength(2), SLOW);
-  await new Promise((r) => setTimeout(r, QUIET_MS + 200));
+  await waitFor(() => expect(term().pasted).toHaveLength(2));
+  await new Promise((r) => setTimeout(r, 300));
   expect(term().pasted).toHaveLength(2);
 });
 
-test("вывод не затих — вставки нет; затих на QUIET_MS — вставка", async () => {
+test("разговор с фразами про вход и подтверждение не мешает готовому сеансу", async () => {
   const view = await show();
   await userEvent.click(startButton());
   await screen.findByText("Работает");
-  vi.useFakeTimers();
-  try {
-    view.rerender(<AgentTab id="r1" assistant={assistant()} insert={{ text: REF }} />);
-    // Агент рисует экран: вывод каждые полсекунды, дольше, чем окно тишины.
-    for (let i = 0; i < 6; i++) {
-      await act(async () => { h.listeners.data.forEach((cb) => cb({ id: "agent-1", data: "·" })); });
-      await act(async () => { vi.advanceTimersByTime(QUIET_MS / 2); });
-    }
-    expect(term().pasted).toEqual([]);
-    await act(async () => { vi.advanceTimersByTime(QUIET_MS + 200); });
-    expect(term().pasted).toEqual([LINE]);
-  } finally {
-    vi.useRealTimers();
+  term().screen = [
+    "login to the portal fails · нужен sign in with Google · Approval for the budget is pending",
+    "approval policy: on-request · Run npm install (y/n)? · Quick safety check (из письма заказчика)",
+  ].join(" ");
+  view.rerender(<AgentTab id="r1" assistant={assistant()} insert={{ text: REF }} />);
+  await waitFor(() => expect(term().pasted).toEqual([LINE]));
+  expect(screen.queryByText(/Подтвердите запуск агента/)).toBeNull();
+});
+
+test("холодный запуск: вывод не затих — ждём; затих на QUIET_MS — вставка", async () => {
+  fakeTime();
+  const { started } = await coldStart();
+  await started();
+  // Агент рисует экран: вывод каждые полсекунды, дольше, чем окно тишины.
+  for (let i = 0; i < 6; i++) {
+    await output("·");
+    await skip(QUIET_MS / 2);
   }
+  expect(term().pasted).toEqual([]);
+  await skip(QUIET_MS + 200);
+  expect(term().pasted).toEqual([LINE]);
 });
 
-test("первый запуск: вопрос «доверять ли папке» — ждём подтверждения, потом вставка", async () => {
-  const view = await show();
-  await userEvent.click(startButton());
-  await screen.findByText("Работает");
-  term().screen = "Do you trust the files in this folder?   ❯ 1. Yes, proceed   2. No, exit";
-  vi.useFakeTimers();
-  try {
-    view.rerender(<AgentTab id="r1" assistant={assistant()} insert={{ text: REF }} />);
-    await act(async () => { vi.advanceTimersByTime(PASTE_WAIT_MS * 2); });
-    expect(term().pasted).toEqual([]);
-    expect(screen.getByRole("status", { name: "Ссылка ждёт вставки" }))
-      .toHaveTextContent("Подтвердите запуск агента — реплика будет вставлена после.");
-    expect(screen.queryByRole("button", { name: "Вставить реплику" })).toBeNull();
-    // Человек подтвердил — агент показал поле ввода.
-    term().screen = "> ";
-    await act(async () => { h.listeners.data.forEach((cb) => cb({ id: "agent-1", data: "> " })); });
-    await act(async () => { vi.advanceTimersByTime(QUIET_MS + 200); });
-    expect(term().pasted).toEqual([LINE]);
-  } finally {
-    vi.useRealTimers();
+test("первый запуск: диалог «доверять ли папке» — ждём; срок от щелчка не сдвигается; ответили — вставка", async () => {
+  fakeTime();
+  const { started } = await coldStart();
+  term().screen = TRUST;
+  await started();
+  await skip(QUIET_MS + 200);
+  expect(term().pasted).toEqual([]);
+  expect(strip()).toHaveTextContent("Подтвердите запуск агента — ссылка будет вставлена после.");
+  expect(within(strip()!).getByRole("button", { name: "Вставить сейчас" })).toBeEnabled();
+  expect(within(strip()!).getByRole("button", { name: "Копировать" })).toBeInTheDocument();
+  // Диалог висит, агент что-то дорисовывает — срок всё равно наступает.
+  for (let i = 0; i < 4; i++) {
+    await output("·");
+    await skip(PASTE_WAIT_MS / 4);
   }
+  expect(term().pasted).toEqual([]);
+  expect(within(strip()!).getByRole("button", { name: "Вставить ссылку" })).toBeEnabled();
+  expect(strip()).toHaveTextContent("Вставьте ссылку, когда поле ввода будет видно");
+  // Человек ответил на вопрос — агент показал поле ввода: вставка сама, один раз.
+  term().screen = "> ";
+  await output("> ");
+  await skip(QUIET_MS + 200);
+  expect(term().pasted).toEqual([LINE]);
+  expect(strip()).toBeNull();
 });
 
-test.each([
-  "Accessing workspace: … Quick safety check: Is this a project you created or one you trust?",
-  "❯ 1. Yes, I trust this folder   2. No, exit",
-  "Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.",
-  "Continue only if you trust these files. Your trust decision will be saved.",
-  "Allow Codex to work in this folder without asking for approval?",
-  "Press Enter to continue",
-  "Select login method:",
-  "Continue? (y/n)",
-])("экран подтверждения «%s» — не вставляем", (text) => {
-  expect(CONFIRM_SCREEN.test(text)).toBe(true);
-});
-
-test("обычный экран агента — не вопрос подтверждения", () => {
-  expect(CONFIRM_SCREEN.test("✻ Welcome to Claude Code!   cwd: …\\recordings\\2026-09-14_11-00\n> ")).toBe(false);
-  expect(CONFIRM_SCREEN.test("Про реплику: [01:05] Анна: «Сдаём отчёт в пятницу.»")).toBe(false);
-});
-
-test("агент не включил режим вставки — вслепую не вставляем: кнопка «Вставить реплику», один раз", async () => {
-  const view = await show();
-  await userEvent.click(startButton());
-  await screen.findByText("Работает");
+test("однажды готовый сеанс: следующая просьба вставляется сразу, даже если внизу похожие слова", async () => {
+  const { view, started } = await coldStart();
+  await started();
+  await waitFor(() => expect(term().pasted).toEqual([LINE]), SLOW);
+  term().screen = TRUST;
   term().modes.bracketedPasteMode = false;
-  vi.useFakeTimers();
-  try {
-    view.rerender(<AgentTab id="r1" assistant={assistant()} insert={{ text: REF }} />);
-    await act(async () => { vi.advanceTimersByTime(PASTE_WAIT_MS + 500); });
-    expect(term().pasted).toEqual([]);
-  } finally {
-    vi.useRealTimers();
-  }
-  const insertBtn = screen.getByRole("button", { name: "Вставить реплику" });
-  await userEvent.click(insertBtn);
+  await output("ещё пишет");
+  view.rerender(<AgentTab id="r1" assistant={assistant()} insert={{ text: "Про реплику:\n[00:01] Олег: «да»\n" }} />);
+  await waitFor(() => expect(term().pasted).toHaveLength(2));
+});
+
+test("«Вставить сейчас» в диалоге — вставка один раз", async () => {
+  fakeTime();
+  const { started } = await coldStart();
+  term().screen = TRUST;
+  await started();
+  await skip(200);
+  await userEvent.click(within(strip()!).getByRole("button", { name: "Вставить сейчас" }));
   expect(term().pasted).toEqual([LINE]);
-  expect(screen.queryByRole("button", { name: "Вставить реплику" })).toBeNull();
-  await new Promise((r) => setTimeout(r, QUIET_MS + 200));
+  await skip(PASTE_WAIT_MS);
   expect(term().pasted).toEqual([LINE]);
+});
+
+test("агент не включил режим вставки — вслепую не вставляем: после срока «Вставить ссылку», один раз", async () => {
+  fakeTime();
+  const { started } = await coldStart();
+  term().modes.bracketedPasteMode = false;
+  await started();
+  await skip(PASTE_WAIT_MS - 1000);
+  expect(term().pasted).toEqual([]);
+  expect(within(strip()!).queryByRole("button", { name: "Вставить ссылку" })).toBeNull();
+  await skip(1500);
+  expect(term().pasted).toEqual([]);
+  await userEvent.click(within(strip()!).getByRole("button", { name: "Вставить ссылку" }));
+  expect(term().pasted).toEqual([LINE]);
+  expect(strip()).toBeNull();
+  await skip(PASTE_WAIT_MS);
+  expect(term().pasted).toEqual([LINE]);
+});
+
+test("срок от первого щелчка: вторая просьба его не продлевает", async () => {
+  fakeTime();
+  const { view, started } = await coldStart();
+  term().modes.bracketedPasteMode = false;
+  await started();
+  await skip(PASTE_WAIT_MS - 2000);
+  view.rerender(<AgentTab id="r1" assistant={assistant()} insert={{ text: "Про реплику:\n[00:01] Олег: «да»\n" }} />);
+  await skip(2500);
+  expect(within(strip()!).getByRole("button", { name: "Вставить ссылку" })).toBeInTheDocument();
 });
 
 test("несколько просьб, пока агент запускается: один запуск, обе ссылки одной вставкой", async () => {
-  let resolve: (id: string) => void = () => {};
-  h.shell.agentSpawn.mockReturnValue(new Promise<string>((r) => { resolve = r; }));
-  const view = await show(assistant(), { insert: { text: REF } });
-  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalledTimes(1));
+  const { view, started } = await coldStart();
   view.rerender(<AgentTab id="r1" assistant={assistant()} insert={{ text: "Про реплику:\n[00:01] Олег: «да»\n" }} />);
-  await act(async () => resolve("agent-1"));
+  await started();
   await waitFor(() => expect(term().pasted).toHaveLength(1), SLOW);
   expect(term().pasted[0]).toBe(`${LINE.trimEnd()} Про реплику: [00:01] Олег: «да» `);
   expect(h.shell.agentSpawn).toHaveBeenCalledTimes(1);
 });
 
-test("«Отменить» — ссылка не вставляется", async () => {
-  let resolve: (id: string) => void = () => {};
-  h.shell.agentSpawn.mockReturnValue(new Promise<string>((r) => { resolve = r; }));
-  await show(assistant(), { insert: { text: REF } });
-  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalled());
-  await userEvent.click(within(screen.getByRole("status", { name: "Ссылка ждёт вставки" }))
-    .getByRole("button", { name: "Отменить" }));
-  await act(async () => resolve("agent-1"));
+test("«Отменить» — ссылка не вставляется, но и не пропадает: уведомление с «Копировать»", async () => {
+  const { started } = await coldStart();
+  await userEvent.click(within(strip()!).getByRole("button", { name: "Отменить" }));
+  const note = await screen.findByRole("status", { name: "Ссылка не вставлена" });
+  expect(note).toHaveTextContent("Вставка отменена");
+  expect(note.querySelector("pre")!.textContent).toBe(REF.trimEnd());
+  expect(within(note).getByRole("button", { name: "Копировать" })).toBeInTheDocument();
+  await started();
   await new Promise((r) => setTimeout(r, QUIET_MS + 200));
   expect(term().pasted).toEqual([]);
 });
 
+test("«Копировать» в полосе ожидания", async () => {
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  await coldStart();
+  await userEvent.click(within(strip()!).getByRole("button", { name: "Копировать" }));
+  expect(writeText).toHaveBeenCalledWith(REF.trimEnd());
+});
+
 test("агент закрылся до вставки — ссылка не теряется: уведомление с «Копировать»", async () => {
-  let resolve: (id: string) => void = () => {};
-  h.shell.agentSpawn.mockReturnValue(new Promise<string>((r) => { resolve = r; }));
-  await show(assistant(), { insert: { text: REF } });
-  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalled());
-  await act(async () => resolve("agent-1"));
+  const { started } = await coldStart();
+  await started();
   await exit("agent-1", 1);
   const note = await screen.findByRole("status", { name: "Ссылка не вставлена" });
   expect(note).toHaveTextContent("Агент завершил работу раньше, чем ссылка была вставлена");
@@ -489,7 +534,31 @@ test("агент не запустился — ссылка в уведомле�
   const note = await screen.findByRole("status", { name: "Ссылка не вставлена" });
   expect(note).toHaveTextContent("Агент не запустился");
   await waitFor(() => expect(within(note).getByRole("button", { name: "Копировать" })).toHaveFocus());
-  expect(screen.queryByRole("status", { name: "Ссылка ждёт вставки" })).toBeNull();
+  expect(strip()).toBeNull();
+});
+
+test("диалог первого запуска: точные фразы Claude Code и Codex", () => {
+  for (const text of [
+    TRUST,
+    "❯ 1. Yes, I trust this folder   2. No, exit",
+    "Do you trust the files in this folder?",
+    "Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.",
+    "Continue only if you trust these files. Your trust decision will be saved.",
+    "Allow Codex to work in this folder without asking for approval?",
+  ]) expect(CONFIRM_SCREEN.test(text)).toBe(true);
+});
+
+test("обычный разговор — не диалог первого запуска", () => {
+  for (const text of [
+    "✻ Welcome to Claude Code!   cwd: …/recordings/2026-09-14_11-00",
+    "login to the portal fails",
+    "нужен sign in with Google",
+    "Approval for the budget is pending",
+    "approval policy: on-request",
+    "Run npm install (y/n)?",
+    "Press Enter to continue",
+    "Про реплику: [01:05] Анна: «Сдаём отчёт в пятницу.»",
+  ]) expect(CONFIRM_SCREEN.test(text)).toBe(false);
 });
 
 test("без установленного агента — ссылку можно скопировать, есть «Открыть настройки»", async () => {

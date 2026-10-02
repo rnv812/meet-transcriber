@@ -111,7 +111,28 @@ export function flatPrompt(text: string): string {
  * из поля ввода.
  */
 export function pasteLine(text: string): string {
-  return flatPrompt(text).replace(ESCAPES, "").replace(BREAKS, " ").replace(CONTROLS, "");
+  return flatPrompt(text).replace(ESCAPES, "").replace(BREAKS, " ").replace(CONTROLS, "").replace(/ {2,}/g, " ");
+}
+
+const refCount = (block: string) => block.split("\n").filter((l) => l.startsWith("[") || l.startsWith("«")).length;
+
+/**
+ * Несколько просьб, пока агент не готов, — одной вставкой. Ссылок в сумме не
+ * больше REF_CAP: остаются последние просьбы целиком (последняя — всегда),
+ * о ранних — «…и ещё N раньше».
+ */
+export function joinPrompts(texts: string[]): string {
+  const blocks = texts.map((t) => t.trimEnd()).filter(Boolean);
+  const kept: string[] = [];
+  let count = 0;
+  let dropped = 0;
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const n = refCount(blocks[i]!);
+    if (dropped || (kept.length && count + n > REF_CAP)) dropped += n;
+    else { kept.unshift(blocks[i]!); count += n; }
+  }
+  const out = kept.join("\n");
+  return dropped ? `…и ещё ${dropped} раньше\n${out}\n` : `${out}\n`;
 }
 
 /** Текст пункта Markdown без разметки: жирный, курсив, код, ссылки, экранирование. */
