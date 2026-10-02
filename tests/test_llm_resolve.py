@@ -134,7 +134,7 @@ def test_runner_for_passes_proxy_setting(monkeypatch):
 def test_tier_kwargs_fast_per_provider():
     from meet.llm import tier_kwargs
 
-    assert tier_kwargs("claude-code", "fast") == {"model": "haiku"}
+    assert tier_kwargs("claude-code", "fast") == {"model": "haiku", "thinking": "disabled"}
     assert tier_kwargs("codex", "fast") == {"effort": "low"}
     assert tier_kwargs("openai-compatible", "fast") == {}
     for provider in ("claude-code", "codex", "openai-compatible", None):
@@ -145,7 +145,7 @@ def test_tier_kwargs_agent_takes_the_configured_model():
     from meet.llm import tier_kwargs
 
     assert tier_kwargs("claude-code", "agent", "opus") == {"model": "opus"}
-    assert tier_kwargs("claude-code", "fast", "opus") == {"model": "haiku"}
+    assert tier_kwargs("claude-code", "fast", "opus") == {"model": "haiku", "thinking": "disabled"}
     # Codex — модель из своего конфига, локальная — llm.local_model.
     assert tier_kwargs("codex", "agent", "opus") == {}
     assert tier_kwargs("openai-compatible", "agent", "opus") == {}

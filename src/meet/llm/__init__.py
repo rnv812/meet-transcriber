@@ -18,20 +18,22 @@ PROVIDERS = ("claude-code", "codex", "openai-compatible")
 __all__ = ["PROVIDERS", "AgentReply", "Runner", "agent_model", "provider_ready", "resolve",
            "runner_for", "tier_kwargs"]
 
-# «Быстрее» для живых подсказок: та же подписка, модель полегче.
+# «Быстрее» для живых подсказок: та же подписка, модель полегче. haiku без
+# явного «не размышлять» думает по умолчанию — и тик идёт 16–90 с вместо 2–4 с.
 FAST_CLAUDE_MODEL = "haiku"
+FAST_CLAUDE_THINKING = "disabled"
 FAST_CODEX_EFFORT = "low"
 
 
 def tier_kwargs(provider: str | None, tier: str, model: str | None = None) -> dict:
     """Что добавить к вызову модели для уровня `tier` (`agent` — как у
-    агента, `fast` — быстрее). «Быстрее»: Claude — модель haiku, Codex —
-    низкое усилие рассуждения. «Как у агента»: Claude — модель из настроек
+    агента, `fast` — быстрее). «Быстрее»: Claude — модель haiku без
+    размышлений, Codex — низкое усилие рассуждения. «Как у агента»: Claude — модель из настроек
     (`model` — `llm.model`); Codex берёт модель из своего конфига, локальная
     модель одна — им добавлять нечего."""
     if tier == "fast":
         if provider == "claude-code":
-            return {"model": FAST_CLAUDE_MODEL}
+            return {"model": FAST_CLAUDE_MODEL, "thinking": FAST_CLAUDE_THINKING}
         if provider == "codex":
             return {"effort": FAST_CODEX_EFFORT}
         return {}

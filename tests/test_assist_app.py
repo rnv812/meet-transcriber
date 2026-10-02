@@ -579,7 +579,7 @@ def test_cadence_follows_assist_settings():
     assert cadence_of(assist(activity="summary")).hints is False
     assert cadence_of(assist(activity="summary")) == SUMMARY_ONLY
     tuned = cadence_of(assist(max_hints=3, min_words=100))
-    assert (tuned.max_hints, tuned.min_words, tuned.min_s) == (3, 100, CALM.min_s)
+    assert (tuned.max_hints, tuned.min_words, tuned.hint_gap_s) == (3, 100, CALM.hint_gap_s)
 
 
 def test_run_assist_applies_activity_tier_and_prefs(tmp_path, monkeypatch):
@@ -600,12 +600,12 @@ def test_run_assist_applies_activity_tier_and_prefs(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app_mod, "AssistState", capture)
     _run(tmp_path, open_browser=False, port=0, cfg=cfg)
-    assert heavy.digester_kwargs["call_kwargs"] == {"model": "haiku"}
+    assert heavy.digester_kwargs["call_kwargs"] == {"model": "haiku", "thinking": "disabled"}
     assert heavy.digester_kwargs["cadence"].hints is False
     assert heavy.live.hints_enabled is False
     state = seen["state"]
     assert state.view()["prefs"] == {"quiet_default": True, "activity": "summary"}
-    assert "Подсказки не нужны" in state.digester_system
+    assert '"kind"' not in state.digester_system  # сводка — без схемы подсказок
 
 
 def test_model_comes_from_settings(tmp_path, monkeypatch):
@@ -628,5 +628,5 @@ def test_fast_ticks_keep_their_model_but_questions_use_the_configured_one(tmp_pa
     heavy = _Heavy(monkeypatch, resolved=("claude-code", _never_called_runner), digester_run=done)
     cfg = Settings.from_raw({"llm": {"model": "opus"}, "assist": {"hints_model": "fast"}})
     _run(tmp_path, open_browser=False, port=0, cfg=cfg)
-    assert heavy.digester_kwargs["call_kwargs"] == {"model": "haiku"}
+    assert heavy.digester_kwargs["call_kwargs"] == {"model": "haiku", "thinking": "disabled"}
     assert heavy.qa_kwargs["model"] == "opus"

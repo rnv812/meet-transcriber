@@ -35,9 +35,13 @@ from pathlib import Path
 
 LIVE_STATE_JSON = "live_state.json"
 
-HINT_KINDS = ("question", "risk", "unanswered", "term", "followup")
+HINT_KINDS = ("ask_you", "question", "risk", "unanswered", "term", "followup")
+# «Вам вопрос»: вопрос или просьба, обращённые к владельцу, — с черновиком
+# ответа (`reply`). Окно ставит такие подсказки первыми и выделяет.
+URGENT = "ask_you"
+MAX_URGENT = 2
 # Ценность вида подсказки: сверх лимита первой уходит наименее ценная.
-KIND_VALUE = {"unanswered": 5, "risk": 4, "question": 3, "followup": 2, "term": 1}
+KIND_VALUE = {"ask_you": 6, "unanswered": 5, "risk": 4, "question": 3, "followup": 2, "term": 1}
 
 SECTIONS = ("points", "decisions", "tasks", "open_questions")
 PREFIX = {"points": "p", "decisions": "d", "tasks": "t", "open_questions": "q", "hints": "h"}
@@ -52,6 +56,7 @@ TOPIC_MAX = 120
 ITEM_MAX = 300
 HINT_MAX = 200
 WHY_MAX = 160
+REPLY_MAX = 240
 FIELD_MAX = 80        # кто / срок задачи
 COMPACT_MAX = 2500       # сжатое состояние в промпте тика, символов
 COMPACT_ITEM_LIMITS = (160, 90, 50)
@@ -201,6 +206,10 @@ class LiveState:
             self.version += 1
         return changed
 
+    def session(self, *, lane: str | None = None, allowed_refs=()) -> "PatchSession":
+        """Построчное применение ответа одного тика (см. PatchSession)."""
+        return PatchSession(self, lane=lane, allowed_refs=allowed_refs)
+
     def _validate(self, patch) -> tuple[str | None, list[dict]]:
         if not isinstance(patch, dict):
             raise PatchError("ожидался JSON-объект")
@@ -269,6 +278,7 @@ class LiveState:
         return {"op": "add", "section": "hints", "kind": kind,
                 "text": _text(op, "text", HINT_MAX, required=True),
                 "why": _text(op, "why", WHY_MAX, required=False) or "",
+                "reply": _text(op, "reply", REPLY_MAX, required=False) or None,
                 # ref сверяется с присланными фрагментами как есть, без обрезки.
                 "source_t": t, "ref": ref.strip() if isinstance(ref, str) and ref.strip() else None}
 
@@ -286,6 +296,8 @@ class LiveState:
                 fields["text"] = _text(op, "text", HINT_MAX, required=True)
             if op.get("why") is not None:
                 fields["why"] = _text(op, "why", WHY_MAX, required=False) or ""
+            if op.get("reply") is not None:
+                fields["reply"] = _text(op, "reply", REPLY_MAX, required=False) or None
             if op.get("t") is not None:
                 t = parse_clock(op.get("t"))
                 if t is None:
@@ -382,9 +394,21 @@ class LiveState:
         if any(similar(text, gone) for gone in self._dismissed.values()):
             return False
         now = self._clock()
+        if op["kind"] == URGENT:
+            # «Вам вопрос» — не больше MAX_URGENT: свежий вопрос вытесняет
+            # самый старый незакреплённый.
+            urgent = [h for h in self._hints.values() if h["kind"] == URGENT]
+            loose = sorted((h for h in urgent if not h["pinned"]),
+                           key=lambda h: (h["created_at"], int(h["id"][1:])))
+            while loose and len(urgent) >= MAX_URGENT:
+                oldest = loose.pop(0)
+                urgent.remove(oldest)
+                del self._hints[oldest["id"]]
+                self._retired.add(oldest["id"])
         item_id = self._new_id("hints")
         self._hints[item_id] = {
             "id": item_id, "kind": op["kind"], "text": text, "why": op["why"],
+            "reply": op.get("reply"),
             "source_t": op["source_t"], "ref": op["ref"], "pinned": False,
             "dismissed": False, "created_at": now, "updated_at": now,
         }
@@ -439,28 +463,41 @@ class LiveState:
     def is_empty(self) -> bool:
         return not self.topic and not self._hints and not any(self._items.values())
 
-    def render_compact(self) -> str:
+    def render_compact(self, *, summary: bool = True, hints: bool = True) -> str:
         """Состояние для промпта тика: коротко, с id, без служебных полей.
+        `summary`/`hints` — какие части (линия сводки видит только сводку).
 
         Не длиннее COMPACT_MAX: при полном состоянии пункты укорачиваются, но
         ни один id не пропадает (иначе модель добавила бы его заново)."""
         for limit in COMPACT_ITEM_LIMITS:
-            text = self._compact(limit)
+            text = self._compact(limit, summary=summary, hints=hints)
             if len(text) <= COMPACT_MAX:
                 return text
         return text[:COMPACT_MAX]
 
-    def _compact(self, item_max: int) -> str:
+    def hints_brief(self) -> str:
+        """Подсказки одной строкой — id и пометки, без текста: в постоянном
+        диалоге тексты модель уже видела (свои же ответы)."""
+        active = [f"{h['id']}{' (закреплена)' if h['pinned'] else ''}" for h in self._hints.values()]
+        dismissed = sorted(self._dismissed, key=lambda i: int(i[1:]))[-DISMISSED_IN_PROMPT:]
+        out = "Активные подсказки: " + (", ".join(active) if active else "нет")
+        if dismissed:
+            out += ". Скрыты пользователем (не предлагать снова): " + ", ".join(dismissed)
+        return out
+
+    def _compact(self, item_max: int, *, summary: bool = True, hints: bool = True) -> str:
         out: list[str] = []
-        if self.topic:
+        if summary and self.topic:
             out.append(f"Тема: {self.topic}")
-        for section in SECTIONS:
+        for section in SECTIONS if summary else ():
             items = self._items[section].values()
             if not items:
                 continue
             out.append(f"{COMPACT_TITLES[section]}:")
             for it in items:
                 out.append(f"[{it['id']}] {_flat(_item_text(section, it), item_max)}")
+        if not hints:
+            return "\n".join(out) if out else "(пока пусто)"
         if self._hints:
             out.append("Подсказки (активные):")
             for h in self._hints.values():
@@ -485,6 +522,147 @@ class LiveState:
             os.replace(tmp, path)
         finally:
             tmp.unlink(missing_ok=True)
+
+
+LANES = ("hints", "summary")
+
+
+class PatchSession:
+    """Ответ одного тика, применяемый по строке: одна JSON-операция — одна
+    строка (`{"op": "add", ...}`), каждая проверенная строка меняет состояние
+    сразу, как только модель её дописала (окно видит подсказку, не дожидаясь
+    конца ответа). Невалидная строка — PatchError, состояние не тронуто; ей
+    положена одна попытка исправления у тикера.
+
+    `lane` — чья это линия: `hints` трогает только подсказки, `summary` —
+    только сводку и тему (`{"op": "topic", "text": …}`); None — всё.
+    `{"op": "none"}` — «ничего ценного», ничего не меняется. Старый формат
+    (целый патч `{"topic", "ops"}` одной строкой) тоже принимается.
+
+    Защита сводки — на весь ответ, а не на строку: не больше
+    MAX_SUMMARY_REMOVES удалений и ни одного раздела (из двух и больше
+    пунктов на начало тика) целиком; не больше MAX_OPS операций."""
+
+    def __init__(self, state: LiveState, *, lane: str | None = None, allowed_refs=()) -> None:
+        if lane is not None and lane not in LANES:
+            raise ValueError(f"неизвестная линия: {lane}")
+        self._state = state
+        self._lane = lane
+        self._refs = set(allowed_refs)
+        self._ops = 0
+        self._removed: list[str] = []
+        self._start = {s: set(state._items[s]) for s in SECTIONS}
+        self.applied = 0
+
+    def apply(self, obj) -> bool:
+        """Одна операция (dict). True — состояние изменилось."""
+        if not isinstance(obj, dict):
+            raise PatchError("строка должна быть JSON-объектом")
+        if "op" not in obj and ("ops" in obj or "topic" in obj):
+            return self._apply_patch(obj)
+        kind = obj.get("op")
+        if kind == "none":
+            return False
+        if kind == "topic":
+            return self._topic(obj.get("text"))
+        if self._lane == "hints" and kind == "add" and "section" not in obj:
+            obj = {**obj, "section": "hints"}  # у линии подсказок секция одна
+        self._ops += 1
+        if self._ops > MAX_OPS:
+            raise PatchError(f"слишком много операций ({self._ops} > {MAX_OPS})")
+        state = self._state
+        op = state._check_op(obj)
+        section = op["section"] if op["op"] == "add" else SECTION_OF[op["id"][0]]
+        self._check_lane(section)
+        if op["op"] == "remove" and section != "hints":
+            self._check_removal(op["id"], section)
+        changed = state._apply_op(op, self._refs)
+        changed |= state._enforce_cap()
+        if changed:
+            state.version += 1
+            self.applied += 1
+        return changed
+
+    def _apply_patch(self, patch: dict) -> bool:
+        ops = patch.get("ops", [])
+        if not isinstance(ops, list):
+            raise PatchError("ops должен быть списком")
+        changed = False
+        if patch.get("topic") is not None and self._lane != "hints":
+            changed |= self._topic(patch.get("topic"))
+        for op in ops:
+            changed |= self.apply(op)
+        return changed
+
+    def _topic(self, value) -> bool:
+        if value is None:
+            return False
+        if self._lane == "hints":
+            raise PatchError("тему ведёт линия сводки, а не подсказок")
+        if not isinstance(value, str):
+            raise PatchError("topic должен быть строкой или null")
+        topic = _flat(value, TOPIC_MAX)
+        if not topic or topic == self._state.topic:
+            return False
+        self._state.topic = topic
+        self._state.version += 1
+        self.applied += 1
+        return True
+
+    def _check_lane(self, section: str) -> None:
+        if self._lane == "hints" and section != "hints":
+            raise PatchError("линия подсказок меняет только подсказки")
+        if self._lane == "summary" and section == "hints":
+            raise PatchError("линия сводки не меняет подсказки")
+
+    def _check_removal(self, item_id: str, section: str) -> None:
+        removed = self._removed + [item_id]
+        if len(removed) > MAX_SUMMARY_REMOVES:
+            raise PatchError(f"слишком много удалений из сводки за раз ({len(removed)})")
+        live = set(self._state._items[section])
+        if len(self._start[section]) > 1 and live and live <= set(removed):
+            raise PatchError(f"удаление всего раздела {section} за раз")
+        self._removed = removed
+
+
+_FENCE_LINE = re.compile(r"^\s*```")
+
+
+def parse_line(line: str) -> dict | None:
+    """Строка ответа → JSON-объект операции; не JSON (пустая, ограда ```,
+    пояснение без «{») — None. Строка с «{», которая не разбирается, —
+    PatchError (её исправит повторный запрос)."""
+    raw = (line or "").strip()
+    if not raw or _FENCE_LINE.match(raw) or "{" not in raw or raw.strip("{}[],") == "":
+        return None
+    start, end = raw.find("{"), raw.rfind("}")
+    if end <= start:
+        raise PatchError("строка JSON оборвана")
+    try:
+        data = json.loads(raw[start:end + 1])
+    except ValueError as e:
+        raise PatchError(f"JSON не разбирается: {e}") from None
+    if not isinstance(data, dict):
+        raise PatchError("ожидался JSON-объект")
+    return data
+
+
+class LineSplitter:
+    """Текст, приходящий кусками (поток модели), → законченные строки."""
+
+    def __init__(self) -> None:
+        self._buf = ""
+
+    def feed(self, text: str) -> list[str]:
+        self._buf += text or ""
+        if "\n" not in self._buf:
+            return []
+        *done, self._buf = self._buf.split("\n")
+        return done
+
+    def finish(self) -> list[str]:
+        rest, self._buf = self._buf, ""
+        return [rest] if rest.strip() else []
 
 
 def _item_text(section: str, item: dict) -> str:

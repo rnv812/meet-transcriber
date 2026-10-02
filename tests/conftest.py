@@ -140,3 +140,15 @@ def _no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", connect)
     monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+
+@pytest.fixture(autouse=True)
+def _no_model_process(monkeypatch):
+    """Постоянный процесс Claude Code (диалог подсказок) в тестах не
+    запускается: настоящий claude.exe на машине разработчика сделал бы
+    настоящий вызов модели. Тесты процесса передают свой `cli`."""
+    try:
+        from meet.llm import claude_stream
+    except ImportError:
+        return
+    monkeypatch.setattr(claude_stream, "default_cli", lambda: None)

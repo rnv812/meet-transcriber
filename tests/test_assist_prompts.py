@@ -2,10 +2,14 @@ from pathlib import Path
 
 from meet.assist.prompts import (
     GLOSSARY_IN_TICK,
-    build_digester_system,
+    build_hints_delta,
+    build_hints_seed,
+    build_hints_system,
     build_qa_system,
-    build_repair_prompt,
-    build_tick_prompt,
+    build_repair_lines,
+    build_repair_once,
+    build_summary_prompt,
+    build_summary_system,
     load_glossary,
 )
 
@@ -19,36 +23,56 @@ def test_load_glossary_reads_file(tmp_path):
     assert "джоба" in load_glossary(tmp_path)
 
 
-def test_digester_system_has_json_schema_hints_and_context():
-    s = build_digester_system("термин X", "# Контекст задачи demo", max_hints=5)
-    assert '"ops"' in s and '"section":"hints"' in s and "unanswered" in s
-    assert "не больше 5" in s
+def test_hints_system_has_line_schema_kinds_quality_rules_and_owner():
+    s = build_hints_system("термин X", "# Контекст задачи demo", max_hints=5, owner="Кузьма")
+    assert '"op":"add"' in s and '"op":"none"' in s and "ask_you" in s and '"reply"' in s
+    assert "не больше 5" in s and "«Кузьма»" in s
+    assert "не больше 1–2 новых" in s and "общих советов" in s
+    assert "весь разговор" in s                      # контекст прежнего диалога
     assert "термин X" in s and "Контекст задачи demo" in s
-    assert "{" in s and "{{" not in s  # фигурные скобки схемы не удвоены
+    assert "{{" not in s and "{max_hints}" not in s
 
 
-def test_summary_only_system_has_no_hint_schema():
-    s = build_digester_system("", "", hints=False)
-    assert '"section":"hints"' not in s and "Подсказки не нужны" in s
+def test_summary_system_has_no_hint_schema():
+    s = build_summary_system("", "")
+    assert '"op":"topic"' in s and '"section":"tasks"' in s and '"op":"none"' in s
+    assert "ask_you" not in s and '"kind"' not in s
 
 
-def test_digester_system_trims_glossary_and_task_context():
-    base = build_digester_system("", "")
-    s = build_digester_system("г" * 10_000, "к" * 10_000)
-    assert s.count("г") - base.count("г") <= GLOSSARY_IN_TICK
-    assert s.count("к") - base.count("к") <= 1000
+def test_systems_trim_glossary_and_task_context():
+    for build in (lambda g, t: build_summary_system(g, t), lambda g, t: build_hints_system(g, t)):
+        base = build("", "")
+        s = build("г" * 10_000, "к" * 10_000)
+        assert s.count("г") - base.count("г") <= GLOSSARY_IN_TICK
+        assert s.count("к") - base.count("к") <= 1000
 
 
-def test_tick_prompt_sections():
-    p = build_tick_prompt("Тема: Запуск", ["[00:01:00] Вы: новое"], ["[00:00:30] Вы: старое"],
-                          [{"term": "Шлюз", "ref": "Шлюз.md", "text": "Сервис платежей"}])
-    assert p.index("старое") < p.index("Шлюз.md") < p.index("новое")
-    assert build_tick_prompt("(пока пусто)", ["x"], [], []).count("База знаний") == 0
+def test_hints_delta_only_new_lines_ids_excerpts_and_trigger():
+    p = build_hints_delta(["[00:01:00] Ольга: новое"], "Активные подсказки: h1",
+                          [{"term": "Шлюз", "ref": "Шлюз.md", "text": "Сервис платежей"}],
+                          ("question", "00:01:00"))
+    assert p.index("новое") < p.index("h1") < p.index("Шлюз.md") < p.index("Повод")
+    assert "Сводка" not in p
+    assert "База знаний" not in build_hints_delta(["x"], "Активные подсказки: нет", [])
 
 
-def test_repair_prompt_carries_error_bad_reply_and_original():
-    p = build_repair_prompt("ИСХОДНЫЙ", "плохо" * 1000, "нет поля 'text'")
-    assert "нет поля 'text'" in p and "ИСХОДНЫЙ" in p and len(p) < 2000
+def test_hints_seed_order():
+    p = build_hints_seed(summary="Тема: Запуск", hints="[h1] (risk) Нет владельца",
+                         earlier=["[00:00:10] Ольга: давнее"], recent=["[00:05:00] Ольга: недавнее"],
+                         new_lines=["[00:06:00] Ольга: новое"], excerpts=[])
+    assert p.index("Запуск") < p.index("Нет владельца") < p.index("давнее") < p.index("недавнее") < p.index("новое")
+
+
+def test_summary_prompt_sections():
+    p = build_summary_prompt("Тема: Запуск", ["[00:01:00] Вы: новое"], ["[00:00:30] Вы: старое"])
+    assert p.index("Запуск") < p.index("старое") < p.index("новое")
+
+
+def test_repair_prompts_carry_errors_lines_and_original():
+    lines = build_repair_lines([("плохо" * 1000, "нет поля 'text'")])
+    assert "нет поля 'text'" in lines and len(lines) < 2000 and '{"op":"none"}' in lines
+    once = build_repair_once("ИСХОДНЫЙ", [("{", "строка JSON оборвана")])
+    assert "ИСХОДНЫЙ" in once and "оборвана" in once
 
 
 def test_qa_system_vault_rules_only_with_vault():

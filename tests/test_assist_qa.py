@@ -286,3 +286,67 @@ def test_failed_resume_starts_a_new_session_with_the_meeting_lines():
     prompt3, third = calls[2]
     assert third["resume"] is None and third["session_id"] not in ("s1", calls[0][1]["session_id"])
     assert "два миллиона" in prompt3 and "Ранее спросили: сколько бюджет?" in prompt3
+
+
+def test_answer_streams_partials_throttled_and_final_replaces_them():
+    """Ответ виден по мере генерации: куски копятся в partials(), сигнал
+    окнам — не чаще 10 раз в секунду (последний кусок — по таймеру); готовый
+    ответ уходит в историю, частичный исчезает."""
+    from meet.assist.notify import Notifier
+
+    signal = Notifier()
+    snapshots = []
+
+    async def scenario():
+        bus, digest = TranscriptBus(), LiveState()
+
+        async def runner(prompt, *, on_text=None, **kw):
+            for piece in ("Предлагаю ", "перенести ", "релиз ", "на среду."):
+                on_text(piece)
+                snapshots.append((qa.partial_version, [dict(p) for p in qa.partials()]))
+            await asyncio.sleep(0.15)  # таймер дошлёт последний кусок
+            snapshots.append((qa.partial_version, [dict(p) for p in qa.partials()]))
+            return AgentReply(text="Предлагаю перенести релиз на среду.")
+
+        qa = QAService(bus, digest, system_prompt="s", allowed_dirs=(), cwd=".",
+                       runner=runner, changed=signal)
+        answer = await qa.ask("что предложить?")
+        return qa, answer
+
+    qa, answer = asyncio.run(scenario())
+    assert answer == "Предлагаю перенести релиз на среду."
+    versions = [v for v, _ in snapshots]
+    assert versions[0] == 1 and versions[3] == 1          # куски подряд — один сигнал
+    assert versions[-1] == 2                              # хвост — по таймеру
+    assert snapshots[-1][1] == [{"id": 1, "a": "Предлагаю перенести релиз на среду."}]
+    assert qa.partials() == [] and qa.history()[0]["a"] == answer
+    assert signal.seq >= 4                                # новый вопрос, куски, ответ
+
+
+def test_question_does_not_wait_for_an_in_progress_window():
+    """Перед вопросом — только хвост речи, и не дольше, чем он распознаётся:
+    on_fresh_audio вызывается в отдельном потоке и окно, которое сейчас
+    распознаётся, не ждёт (это делает движок: flush_tail)."""
+    import threading
+
+    window = threading.Lock()
+    window.acquire()  # «окно распознаётся прямо сейчас»
+    calls = []
+
+    def flush_tail():
+        if not window.acquire(blocking=False):
+            return False
+        window.release()
+        return True
+
+    _, qa = _service([AgentReply(text="ок")], calls, on_fresh_audio=flush_tail)
+    started = asyncio.run(_timed(qa.ask("вопрос")))
+    assert started < 1.0 and calls
+
+
+async def _timed(coro):
+    import time
+
+    t = time.monotonic()
+    await coro
+    return time.monotonic() - t

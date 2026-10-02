@@ -4,10 +4,12 @@
 Digester и QAService):
 
     runner(prompt, *, system_prompt, model, resume, session_id, allowed_dirs,
-           cwd, timeout_s, max_turns) -> AgentReply
+           cwd, timeout_s, max_turns, on_text) -> AgentReply
 
 `session_id`/`resume` — свой сохраняемый сеанс (только Claude Code; у
 остальных сессий нет, они параметры принимают и не используют).
+`on_text(кусок)` — текст ответа по мере генерации (Claude Code; Codex и
+локальная модель отдают ответ целиком, параметр принимают и не зовут).
 
 Ошибки не бросаются, а возвращаются в `AgentReply.error`.
 """

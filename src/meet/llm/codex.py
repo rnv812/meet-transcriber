@@ -108,6 +108,7 @@ async def run(
     cwd: str | Path | None = None,
     timeout_s: float = 180.0,
     max_turns: int = 8,
+    on_text=None,
     proxy: str | None = None,
     effort: str | None = None,
 ) -> AgentReply:

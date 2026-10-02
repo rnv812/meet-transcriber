@@ -60,6 +60,7 @@ async def run(
     cwd: str | Path | None = None,
     timeout_s: float = 180.0,
     max_turns: int = 8,
+    on_text=None,
     base_url: str = DEFAULT_LOCAL_BASE_URL,
     local_model: str | None = None,
 ) -> AgentReply:
