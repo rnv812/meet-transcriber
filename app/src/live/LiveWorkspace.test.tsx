@@ -2,7 +2,7 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { LiveHint, LiveSummary } from "../lib/types";
-import { LiveWorkspace, useLiveView } from "./LiveWorkspace";
+import { LiveWorkspace, UNDO_MS, useLiveView } from "./LiveWorkspace";
 import { FRESH_MS } from "./useAttention";
 import type { Live } from "./useLive";
 
@@ -119,11 +119,37 @@ test("действия подсказки: закрепить, скрыть, к�
   expect(within(second!).getByRole("button", { name: "Открепить" })).toHaveAttribute("aria-pressed", "true");
   await userEvent.click(within(second!).getByRole("button", { name: "Открепить" }));
   expect(live.hint).toHaveBeenLastCalledWith("h2", "unpin");
-  await userEvent.click(within(first!).getByRole("button", { name: "Скрыть" }));
-  expect(live.hint).toHaveBeenLastCalledWith("h1", "dismiss");
   await userEvent.click(within(first!).getByRole("button", { name: "Копировать" }));
   expect(writeText).toHaveBeenCalledWith("У миграции нет ответственного");
   expect(await within(first!).findByText("Скопировано")).toBeInTheDocument();
+});
+
+test("«Скрыть» можно отменить несколько секунд; потом (или при уходе) — к ассистенту", async () => {
+  const live = makeLive({ hints: [hint(), hint({ id: "h2", text: "Вторая" })] });
+  const { unmount } = render(<Host live={live} wide />);
+  const list = () => screen.getByRole("list", { name: "Подсказки" });
+  await userEvent.click(within(within(list()).getAllByRole("listitem")[0]!).getByRole("button", { name: "Скрыть" }));
+  expect(within(list()).queryByText("У миграции нет ответственного")).toBeNull();
+  expect(screen.getByText("Подсказка скрыта")).toBeInTheDocument();
+  expect(live.hint).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Вернуть" }));
+  expect(within(list()).getByText("У миграции нет ответственного")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Вернуть" })).toBeNull();
+  // Скрыли снова и ушли — скрытие отправлено, не потерялось.
+  await userEvent.click(within(within(list()).getAllByRole("listitem")[0]!).getByRole("button", { name: "Скрыть" }));
+  unmount();
+  expect(live.hint).toHaveBeenCalledWith("h1", "dismiss");
+});
+
+test("«Скрыть» уходит к ассистенту сам через несколько секунд", () => {
+  vi.useFakeTimers();
+  const live = makeLive();
+  render(<Host live={live} wide />);
+  act(() => { within(screen.getByRole("list", { name: "Подсказки" })).getByRole("button", { name: "Скрыть" }).click(); });
+  expect(live.hint).not.toHaveBeenCalled();
+  act(() => { vi.advanceTimersByTime(UNDO_MS); });
+  expect(live.hint).toHaveBeenCalledWith("h1", "dismiss");
+  expect(screen.queryByRole("button", { name: "Вернуть" })).toBeNull();
 });
 
 test("«Спросить об этом» подставляет вопрос и открывает «Спросить», не отправляя", async () => {

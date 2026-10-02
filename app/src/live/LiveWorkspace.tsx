@@ -11,9 +11,10 @@
  * развернуться по щелчку.
  */
 
-import { type KeyboardEvent, useCallback, useId, useMemo, useState } from "react";
+import { type KeyboardEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import type { LiveHint, LiveQuick } from "../lib/types";
+import { Button } from "../ui/Button";
 import { LiveAsk } from "./LiveAsk";
 import { type FeedFocus, LiveFeed } from "./LiveFeed";
 import { LiveHints } from "./LiveHints";
@@ -73,6 +74,43 @@ function count(n: number, quiet: boolean) {
   return <span className="live-tabs__count" aria-label={`новых: ${n}`}>{n}</span>;
 }
 
+/** Сколько «Скрыть» ещё можно отменить. */
+export const UNDO_MS = 5000;
+
+/**
+ * «Скрыть» с возможностью передумать: подсказка сразу пропадает с экрана, а
+ * ассистенту уходит через UNDO_MS — до этого «Вернуть» её возвращает.
+ * Следующее «Скрыть» и уход со страницы отправляют отложенное сразу.
+ */
+function useUndoDismiss(send: (id: string) => void) {
+  const [hidden, setHidden] = useState<{ id: string; text: string } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pending = useRef<string | null>(null);
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const flush = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    const id = pending.current;
+    pending.current = null;
+    if (id) sendRef.current(id);
+  }, []);
+  const hide = useCallback((hint: LiveHint) => {
+    flush();
+    pending.current = hint.id;
+    setHidden({ id: hint.id, text: hint.text });
+    timer.current = setTimeout(() => { flush(); setHidden(null); }, UNDO_MS);
+  }, [flush]);
+  const undo = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    pending.current = null;
+    setHidden(null);
+  }, []);
+  useEffect(() => () => flush(), [flush]);
+  return { hidden, hide, undo };
+}
+
 /** Вопрос агенту по «Вам вопрос»: что ответить. */
 export function urgentQuestion(hint: LiveHint): string {
   return `Что мне ответить: «${hint.text}»? Предложите 1–2 коротких варианта от первого лица.`;
@@ -89,12 +127,25 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }
 }) {
   const { tab, setTab, focus, jump, draft, setDraft, askAbout, openAsk, unseen, fresh, quiet, wide } = view;
   const uid = useId();
-  const hintAction = (id: string, action: "pin" | "unpin" | "dismiss") => { void live.hint(id, action); };
+  const dismissal = useUndoDismiss((id) => { void live.hint(id, "dismiss"); });
+  const hintAction = (id: string, action: "pin" | "unpin" | "dismiss") => {
+    const target = live.hints.find((h) => h.id === id);
+    if (action === "dismiss" && target) dismissal.hide(target);
+    else void live.hint(id, action);
+  };
+  const visibleHints = dismissal.hidden ? live.hints.filter((h) => h.id !== dismissal.hidden!.id) : live.hints;
+  // «Подсказка скрыта · Вернуть» — плашкой поверх низа области: ничего не сдвигает.
+  const undoBar = dismissal.hidden && (
+    <div className="live-undo" role="status">
+      <span className="live-undo__text">Подсказка скрыта</span>
+      <Button size="sm" variant="link" onClick={dismissal.undo}>Вернуть</Button>
+    </div>
+  );
 
   const feed = <LiveFeed lines={live.lines} className="live-ws__feed" focus={focus} />;
   const summary = <LiveSummary summary={live.summary} fresh={fresh} />;
   const hints = (
-    <LiveHints hints={live.hints} fresh={fresh} enabled={live.hintsEnabled} error={live.hintError}
+    <LiveHints hints={visibleHints} fresh={fresh} enabled={live.hintsEnabled} error={live.hintError}
       onAction={hintAction} onAsk={onAskHint ?? askAbout} onTime={jump}
       onAskUrgent={onAskHint ?? ((h) => { void onAsk(urgentQuestion(h)); openAsk(); })}
       askTitle={onAskHint ? "Спросить агента об этой подсказке: откроется вкладка «Агент»" : undefined} />
@@ -108,17 +159,20 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }
     return (
       <div className="live-ws live-ws--wide">
         {feed}
+        {/* Сводка и подсказки — одна прокрутка (раньше у каждой своя, и карточки
+            резались посередине), «Спросить» — внизу колонки. */}
         <div className="live-ws__side">
           <section className="live-ws__pane" aria-label="Сводка">
             <h3 className="live-ws__title">Сводка</h3>
-            <div className="live-ws__scroll">{summary}</div>
+            {summary}
           </section>
           <section className="live-ws__pane" aria-label="Подсказки">
             <h3 className="live-ws__title">Подсказки</h3>
-            <div className="live-ws__scroll">{hints}</div>
+            {hints}
           </section>
           <section className="live-ws__ask" aria-label="Спросить">{ask}</section>
         </div>
+        {undoBar}
       </div>
     );
   }
@@ -151,6 +205,7 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }
         aria-labelledby={`${uid}-tab-${tab}`}>
         {tab === "feed" ? feed : tab === "summary" ? summary : tab === "hints" ? hints : ask}
       </div>
+      {undoBar}
     </div>
   );
 }

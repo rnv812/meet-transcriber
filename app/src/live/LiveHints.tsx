@@ -11,11 +11,13 @@
  */
 
 import { useState } from "react";
-import { Sparkles } from "lucide-react";
+import { Copy, Pin, Sparkles, X } from "lucide-react";
 
 import { clock } from "../lib/format";
 import type { LiveHint } from "../lib/types";
-import { CloseIcon, CopyIcon, PinIcon } from "./icons";
+import { Icon } from "../ui/Icon";
+import { IconButton } from "../ui/IconButton";
+import { Truncate } from "../ui/Truncate";
 import { KIND_LABEL, hintKey, isUrgent, orderHints } from "./liveModel";
 import type { HintAction } from "./useLive";
 import "./live.css";
@@ -67,38 +69,33 @@ export function LiveHints({ hints, fresh, enabled = true, error = null, onAction
               {clock(h.source_t)}
             </button>
             <span className="live-hint__actions">
-              <button type="button" className="icon-btn live-hint__pin" aria-pressed={h.pinned}
-                aria-label={h.pinned ? "Открепить" : "Закрепить"}
-                title={h.pinned ? "Открепить" : "Закрепить: подсказка не уйдёт сама"}
-                onClick={() => onAction(h.id, h.pinned ? "unpin" : "pin")}>
-                <PinIcon />
-              </button>
-              <button type="button" className="icon-btn" aria-label="Копировать"
-                title={copied === h.id ? "Скопировано" : isUrgent(h) && h.reply ? "Копировать черновик ответа" : "Копировать текст"}
-                onClick={() => copy(h)}>
-                <CopyIcon />
-              </button>
-              <button type="button" className="icon-btn" aria-label="Скрыть"
-                title="Скрыть: эта подсказка больше не появится" onClick={() => onAction(h.id, "dismiss")}>
-                <CloseIcon />
-              </button>
+              <IconButton icon={Pin} size="sm" className="live-hint__pin" pressed={h.pinned}
+                label={h.pinned ? "Открепить" : "Закрепить"}
+                tooltip={h.pinned ? "Открепить" : "Закрепить: подсказка не уйдёт сама"}
+                onClick={() => onAction(h.id, h.pinned ? "unpin" : "pin")} />
+              <IconButton icon={Copy} size="sm" label="Копировать"
+                tooltip={copied === h.id ? "Скопировано" : isUrgent(h) && h.reply ? "Копировать черновик ответа" : "Копировать текст"}
+                onClick={() => copy(h)} />
+              <IconButton icon={X} size="sm" label="Скрыть"
+                tooltip="Скрыть: подсказка больше не появится (несколько секунд её можно вернуть)"
+                onClick={() => onAction(h.id, "dismiss")} />
             </span>
           </div>
           <div className="live-hint__text">{h.text}</div>
           {isUrgent(h) && h.reply && (
             <div className="live-hint__reply"><span className="live-hint__reply-label">Что ответить:</span>{h.reply}</div>
           )}
-          {h.why && <div className="live-hint__why muted">{h.why}</div>}
+          {h.why && <Truncate as="div" className="live-hint__why muted">{h.why}</Truncate>}
           <div className="live-hint__foot">
-            {h.ref && <span className="live-hint__ref muted" title={h.ref}>База знаний: {h.ref}</span>}
+            {h.ref && <Truncate className="live-hint__ref muted" text={`База знаний: ${h.ref}`}>База знаний: {h.ref}</Truncate>}
             {isUrgent(h) ? (
               <button type="button" className="live-chip" title="Спросить агента, что ответить"
                 onClick={() => (onAskUrgent ?? onAsk)(h)}>
-                <Sparkles size={12} strokeWidth={1.75} aria-hidden="true" />Спросить агента
+                <Icon as={Sparkles} size="sm" />Спросить агента
               </button>
             ) : (
               <button type="button" className="live-chip" title={askTitle} onClick={() => onAsk(h)}>
-                {askTitle && <Sparkles size={12} strokeWidth={1.75} aria-hidden="true" />}Спросить об этом
+                {askTitle && <Icon as={Sparkles} size="sm" />}Спросить об этом
               </button>
             )}
             {copied === h.id && <span className="muted live-hint__copied" role="status">Скопировано</span>}

@@ -99,8 +99,9 @@ export function LiveHintsRows({ draft, set, provider }: {
       <Radio label="Модель для живых подсказок" help={<HintsModelTip />} value={tier} options={TIERS}
         hint={tier === "fast" ? `«Быстрее» — ${fastMeaning(provider)}` : "Та же модель, что отвечает на вопросы и готовит итоги"}
         onChange={(v) => set("assist", "hints_model", v)} />
-      <Row label="Сколько подсказок держать" htmlFor="assist-max-hints"
-        hint="Сверх этого числа уходят наименее важные; закреплённые остаются">
+      <Row label="Сколько подсказок держать" htmlFor="assist-max-hints" disabled={activity === "summary"}
+        hint={activity === "summary" ? "Подсказок нет: выбрано «Только сводка». Выберите «Сдержанно» или «Активно», чтобы задать"
+          : "Сверх этого числа уходят наименее важные; закреплённые остаются"}>
         <select id="assist-max-hints" value={maxHints} disabled={activity === "summary"}
           onChange={(e) => set("assist", "max_hints", Number(e.target.value))}>
           {choices.map((n) => (

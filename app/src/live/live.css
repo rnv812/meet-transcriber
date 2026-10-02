@@ -38,10 +38,9 @@
 .live-ask__a { font-size: 12.5px; }
 /* Ответ, который ещё пишется: тот же шрифт и место, что у готового. */
 .live-ask__a--streaming { color: var(--text); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-/* Быстрые вопросы — одной строкой; не влезли — прокрутка вбок (колесом и
-   тачпадом), а не три ряда, съедающие место у истории. */
-.live-ask__quick { display: flex; flex-wrap: nowrap; gap: 4px; overflow-x: auto; scrollbar-width: none; flex: none; }
-.live-ask__quick::-webkit-scrollbar { display: none; }
+/* Быстрые вопросы переносятся на вторую строку, а не прячутся за краем:
+   скрытая полоса прокрутки обрезала последний вопрос («Что…»). */
+.live-ask__quick { display: flex; flex-wrap: wrap; gap: 4px; flex: none; }
 .live-ask__quick .live-chip { flex: none; }
 
 /* Маленькая кнопка-«таблетка»: быстрые вопросы, действия подсказок. */
@@ -71,7 +70,15 @@
 .live-status__text { overflow: hidden; text-overflow: ellipsis; }
 
 /* Рабочая область: вкладки (узкая) или две колонки (широкая, от 720). */
-.live-ws { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.live-ws { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+/* «Подсказка скрыта · Вернуть» — поверх низа области, ничего не сдвигая. */
+.live-undo {
+  position: absolute; left: 50%; bottom: 8px; z-index: 3; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; padding: 4px 12px; white-space: nowrap;
+  background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35); font-size: 12px;
+}
+.live-undo__text { color: var(--text-2); }
 .live-tabs { flex: none; display: flex; gap: 2px; border-bottom: 1px solid var(--line); }
 .live-tabs__tab {
   display: inline-flex; align-items: center; gap: 5px; margin-bottom: -1px; padding: 4px 8px 6px;
@@ -98,13 +105,18 @@
   grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); grid-template-rows: minmax(0, 1fr);
 }
 .live-ws--wide .live-ws__feed { min-height: 0; }
-.live-ws__side { min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-left: 12px; border-left: 1px solid var(--line); }
-.live-ws__pane { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
+.live-ws__side {
+  min-height: 0; display: flex; flex-direction: column; gap: 14px; padding-left: 12px; border-left: 1px solid var(--line);
+  overflow-y: auto;
+}
+.live-ws__pane { flex: none; display: flex; flex-direction: column; gap: 4px; }
 .live-ws__title { margin: 0; color: var(--text-3); font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
-.live-ws__scroll { min-height: 0; overflow-y: auto; }
-/* «Спросить» внизу правой колонки: по содержимому, но не больше ~40 % высоты —
-   история прокручивается внутри, сводке и подсказкам остаётся место. */
-.live-ws__ask { flex: 0 1 auto; max-height: 42%; min-height: 0; display: flex; flex-direction: column; padding-top: 8px; border-top: 1px solid var(--line); }
+/* «Спросить» прилипает к низу правой колонки (колонка прокручивается одной
+   лентой): по содержимому, но не больше ~40 % высоты, история — внутри. */
+.live-ws__ask {
+  position: sticky; bottom: 0; margin-top: auto; flex: none; max-height: 42%; min-height: 0;
+  display: flex; flex-direction: column; padding-top: 8px; border-top: 1px solid var(--line); background: var(--bg);
+}
 
 .live-empty { margin: 4px 0; font-size: 12px; }
 
@@ -144,13 +156,11 @@
   color: var(--text-3); font: inherit; font-size: 11px; cursor: pointer;
 }
 .live-hint__time:hover { color: var(--accent-hover); background: rgba(94, 106, 210, 0.14); }
-.live-hint__actions { margin-left: auto; display: flex; }
-.live-hint__actions .icon-btn { width: 22px; height: 22px; }
-.live-hint__pin[aria-pressed="true"] { color: var(--accent-hover); }
+.live-hint__actions { margin-left: auto; display: flex; gap: 2px; }
 .live-hint__text { color: var(--text); line-height: 1.45; overflow-wrap: anywhere; }
-.live-hint__why { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.live-hint__why { font-size: 11.5px; }
 .live-hint__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 2px; }
-.live-hint__ref { max-width: 60%; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.live-hint__ref { max-width: 60%; font-size: 11px; }
 .live-hint__copied { font-size: 11px; }
 .live-hint__error { color: var(--err); font-size: 11.5px; }
 
