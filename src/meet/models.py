@@ -20,6 +20,16 @@ ASR = "asr"
 DIARIZATION = "diarization"
 ALIGN = "align"
 
+# Модели GigaAM качаются не с Hugging Face, а с сервера авторов, и лежат в
+# папке моделей приложения (meet.gigaam_asr.cache_dir). В каталоге — с
+# префиксом, чтобы не спутать с репозиториями HF: «gigaam/v3_e2e_rnnt».
+GIGAAM_PREFIX = "gigaam/"
+
+
+def gigaam_name(model_id: str) -> str | None:
+    """Имя модели GigaAM из id каталога; не GigaAM — None."""
+    return model_id[len(GIGAAM_PREFIX):] if model_id.startswith(GIGAAM_PREFIX) else None
+
 # Каталог: то, что пайплайн умеет использовать сегодня. Не «все модели мира» —
 # список, за который есть чем отвечать: каждая строка проверена на реальных
 # встречах либо подтверждена замерами на машине без NVIDIA.
@@ -51,6 +61,24 @@ CATALOGUE = (
         "note": "вдвое быстрее и легче; на терминах и именах ошибается заметно чаще",
         "size_gb": 1.5,
         "language": "multi",
+    },
+    {
+        "id": GIGAAM_PREFIX + "v3_e2e_rnnt",
+        "kind": ASR,
+        "backend": "gigaam",
+        "title": "GigaAM v3 — русский",
+        "note": "быстро и с пунктуацией; только русский язык",
+        "size_gb": 0.45,
+        "language": "ru",
+    },
+    {
+        "id": GIGAAM_PREFIX + "v3_e2e_ctc",
+        "kind": ASR,
+        "backend": "gigaam",
+        "title": "GigaAM v3 CTC — русский",
+        "note": "быстрее, чуть менее точно",
+        "size_gb": 0.44,
+        "language": "ru",
     },
     {
         "id": "pyannote/speaker-diarization-community-1",
@@ -93,6 +121,10 @@ def downloaded(repo_id: str) -> bool:
 
     Проверяем по снапшотам, а не по самой папке: скачивание оставляет её и при
     обрыве, и «скачано» тогда означало бы «пусто»."""
+    if (name := gigaam_name(repo_id)) is not None:
+        from meet import gigaam_asr
+
+        return gigaam_asr.downloaded(name)
     snapshots = _folder(repo_id) / "snapshots"
     if not snapshots.is_dir():
         return False
@@ -102,6 +134,10 @@ def downloaded(repo_id: str) -> bool:
 
 def size_on_disk(repo_id: str) -> int:
     """Сколько занято на диске, байт. Нет — ноль."""
+    if (name := gigaam_name(repo_id)) is not None:
+        from meet import gigaam_asr
+
+        return gigaam_asr.size_on_disk(name)
     folder = _folder(repo_id)
     if not folder.is_dir():
         return 0
@@ -247,19 +283,27 @@ def check_hf_access(token: str, base_url: str = HF_BASE_URL,
     return _hf_result("network")
 
 
-def state(selected: str | None = None) -> dict:
-    """Каталог с отметками «скачано» и «выбрано» — для окна настроек."""
+def state(selected: str | None = None, selected_gigaam: str | None = None) -> dict:
+    """Каталог с отметками «скачано» и «выбрано» — для окна настроек.
+
+    `selected` — модель Whisper (`asr.model`), `selected_gigaam` — модель
+    GigaAM (`asr.gigaam_model`, имя без префикса). Модели GigaAM можно и
+    удалить (`removable`): они в папке приложения, а не в общем кэше HF."""
     have_token = bool(token())
+    gigaam_selected = GIGAAM_PREFIX + selected_gigaam if selected_gigaam else None
     items = []
     for model in CATALOGUE:
+        is_gigaam = model.get("backend") == "gigaam"
+        is_downloaded = downloaded(model["id"])
         items.append({
             **model,
-            "downloaded": downloaded(model["id"]),
+            "downloaded": is_downloaded,
             "size_on_disk": size_on_disk(model["id"]),
-            "selected": model["id"] == selected,
+            "selected": model["id"] == (gigaam_selected if is_gigaam else selected),
             # Гейтед-модель без токена скачать нельзя — это видно до нажатия,
             # а не по ошибке 401 в середине.
             "blocked": bool(model.get("gated")) and not have_token,
+            "removable": is_gigaam and is_downloaded,
         })
     return {
         "items": items,
@@ -269,7 +313,37 @@ def state(selected: str | None = None) -> dict:
         # Скачивать модели можно только когда есть загрузчик, а он приходит с
         # движком. Без него UI показывает это, а не роняет кнопку в ошибку.
         "can_download": _hub_available(),
+        # Модели GigaAM качает сам пакет GigaAM (он тоже приходит с движком).
+        "can_download_gigaam": _gigaam_available(),
+        "gigaam_cache": str(_gigaam_cache()),
     }
+
+
+def _gigaam_available() -> bool:
+    from meet import gigaam_asr
+
+    return gigaam_asr.installed()
+
+
+def _gigaam_cache() -> Path:
+    from meet import gigaam_asr
+
+    return gigaam_asr.cache_dir()
+
+
+def remove(model_id: str) -> dict:
+    """Удалить скачанную модель GigaAM. Модели Hugging Face не удаляем: их
+    кэш общий с другими программами (см. cache_root)."""
+    name = gigaam_name(model_id)
+    if name is None or model_id not in {m["id"] for m in CATALOGUE}:
+        return {"ok": False, "error": "удалить можно только модель GigaAM из каталога"}
+    from meet import gigaam_asr
+
+    try:
+        removed = gigaam_asr.remove(name)
+    except OSError as e:
+        return {"ok": False, "error": f"не удалось удалить модель: {e}"}
+    return {"ok": True, "id": model_id, "removed": removed}
 
 
 def _hub_available() -> bool:
@@ -294,6 +368,8 @@ def download(repo_id: str, on_line=None) -> int:
         if on_line:
             on_line(f"модель не из каталога: {repo_id}")
         return 2
+    if (name := gigaam_name(repo_id)) is not None:
+        return _download_gigaam(name, on_line)
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
@@ -310,6 +386,28 @@ def download(repo_id: str, on_line=None) -> int:
         return 1
     if on_line:
         on_line(f"скачано: {path}")
+    return 0
+
+
+def _download_gigaam(name: str, on_line=None) -> int:
+    """Скачать модель GigaAM: публичный `gigaam.load_model` сам качает веса
+    (с проверкой контрольной суммы) в папку моделей приложения; загруженная
+    модель тут же отпускается. Прокси — из переменных среды задачи (urllib)."""
+    from meet import gigaam_asr
+
+    if not gigaam_asr.installed():
+        if on_line:
+            on_line("сначала установите движок расшифровки — он приносит и GigaAM")
+        return 3
+    try:
+        model = gigaam_asr.load(name, "cpu")
+        del model
+    except Exception as e:
+        if on_line:
+            on_line(f"GigaAM {name}: не скачалось ({type(e).__name__}: {str(e)[:300]})")
+        return 1
+    if on_line:
+        on_line(f"скачано: {gigaam_asr.cache_dir() / name}")
     return 0
 
 

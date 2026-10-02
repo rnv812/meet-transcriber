@@ -34,6 +34,8 @@ from meet import paths
 from meet.asr import CPU_MODEL_NAME as DEFAULT_CPU_WHISPER_MODEL
 from meet.asr import DEVICES as ASR_DEVICES
 from meet.asr import MODEL_NAME as DEFAULT_WHISPER_MODEL
+from meet.gigaam_asr import MODEL_NAME as DEFAULT_GIGAAM_MODEL
+from meet.gigaam_asr import MODELS as GIGAAM_MODELS
 
 # Порог узнавания голоса по умолчанию — тот же, что meet.voices.THRESHOLD
 # (там калибровка); здесь копия, чтобы настройки не тянули numpy.
@@ -131,7 +133,13 @@ HISTORIC_RECURRING_PROMPT = (
 )
 HISTORIC_RECURRING_WINDOW = ("11:00", "12:00")
 
-ASR_BACKENDS = ("faster-whisper", "whisper.cpp")
+# Движок распознавания (`asr.backend` — на видеокарте, `asr.cpu_backend` — на
+# процессоре). "whisper.cpp" — задел NPU-плана, не реализован: читается как
+# Whisper. "whisper" — синоним "faster-whisper" (так короче писать руками).
+ASR_BACKENDS = ("faster-whisper", "whisper.cpp", "gigaam")
+WHISPER = "faster-whisper"
+GIGAAM = "gigaam"
+ASR_BACKEND_ALIASES = {"whisper": WHISPER}
 LLM_PROVIDERS = ("auto", "claude-code", "codex", "openai-compatible")
 # Провайдер для конфига без явного выбора у уже работавшего пользователя: до
 # появления "auto" ассистент ходил через Claude Code, и это не должно меняться.
@@ -537,21 +545,26 @@ class Recording:
 
 @dataclass(frozen=True)
 class Asr:
-    """Распознавание: сменный бэкенд и модель.
+    """Распознавание: движок и модель — свои для видеокарты и для процессора.
 
-    `faster-whisper` — эталонный путь на CUDA (русский fine-tune large-v3).
-    `whisper.cpp` — путь для машин без CUDA: по замерам NPU-плана iGPU через
-    Vulkan даёт RTF ~0.08 на ASR, но качество зависит от ggml-модели, поэтому
-    модель — тоже настройка, а не константа.
+    Движок (`faster-whisper` или `gigaam`): `backend` — на видеокарте
+    (Whisper: русский fine-tune large-v3 лучше на латинских терминах и берёт
+    подсказки), `cpu_backend` — на процессоре (GigaAM в разы быстрее Whisper
+    medium и точнее на русском, но только русский). Модели: `model`/`cpu_model` —
+    Whisper, `gigaam_model` — GigaAM. `align_after_gigaam` — уточнять время слов
+    wav2vec2 и после GigaAM (свои пословные таймкоды у него есть).
     """
 
-    backend: str = ASR_BACKENDS[0]
+    backend: str = WHISPER
     model: str = DEFAULT_WHISPER_MODEL
     language: str = "ru"
     align: bool = True
     overlap: bool = True
     device: str = "auto"
     cpu_model: str = DEFAULT_CPU_WHISPER_MODEL
+    cpu_backend: str = WHISPER
+    gigaam_model: str = DEFAULT_GIGAAM_MODEL
+    align_after_gigaam: bool = False
     # Порог узнавания голоса по базе (косинусная близость кластера к образцам
     # человека): ниже — честный «Спикер N». Калибровка — meet.voices.THRESHOLD;
     # у встречи может быть свой (панель «Спикеры»).
@@ -565,17 +578,25 @@ class Asr:
         from meet.replacements import clean_rules
 
         model = raw.get("model")
+        cpu_model = str(raw.get("cpu_model") or "").strip() or DEFAULT_CPU_WHISPER_MODEL
         return cls(
-            backend=as_choice(raw.get("backend"), ASR_BACKENDS, ASR_BACKENDS[0]),
+            backend=_asr_backend(raw.get("backend"), WHISPER),
             model=str(model).strip() if model else DEFAULT_WHISPER_MODEL,
             language=str(raw.get("language") or "ru").strip() or "ru",
             align=as_flag(raw.get("align"), True),
             overlap=as_flag(raw.get("overlap"), True),
             device=as_choice(raw.get("device"), ASR_DEVICES, "auto"),
-            cpu_model=str(raw.get("cpu_model") or "").strip() or DEFAULT_CPU_WHISPER_MODEL,
+            cpu_model=cpu_model,
+            cpu_backend=_asr_backend(raw.get("cpu_backend"), WHISPER),
+            gigaam_model=as_choice(raw.get("gigaam_model"), GIGAAM_MODELS, DEFAULT_GIGAAM_MODEL),
+            align_after_gigaam=as_flag(raw.get("align_after_gigaam"), False),
             voice_threshold=as_ratio(raw.get("voice_threshold"), VOICE_THRESHOLD, *VOICE_THRESHOLD_RANGE),
             replacements=tuple(clean_rules(raw.get("replacements"))),
         )
+
+    def backend_for(self, device: str) -> str:
+        """Движок распознавания для устройства ("cuda" или "cpu")."""
+        return self.backend if device == "cuda" else self.cpu_backend
 
     def to_raw(self) -> dict:
         return {
@@ -586,9 +607,20 @@ class Asr:
             "overlap": self.overlap,
             "device": self.device,
             "cpu_model": self.cpu_model,
+            "cpu_backend": self.cpu_backend,
+            "gigaam_model": self.gigaam_model,
+            "align_after_gigaam": self.align_after_gigaam,
             "voice_threshold": self.voice_threshold,
             "replacements": [dict(r) for r in self.replacements],
         }
+
+
+def _asr_backend(value, default: str) -> str:
+    """Движок распознавания из закрытого списка; "whisper" — как
+    "faster-whisper", опечатка — дефолт."""
+    if isinstance(value, str) and value.strip() in ASR_BACKEND_ALIASES:
+        return ASR_BACKEND_ALIASES[value.strip()]
+    return as_choice(value, ASR_BACKENDS, default)
 
 
 @dataclass(frozen=True)

@@ -237,6 +237,8 @@ export type EngineState = {
 export type Model = {
   id: string;
   kind: "asr" | "diarization" | "align";
+  /** Движок модели распознавания: "faster-whisper" или "gigaam" (id с префиксом «gigaam/»). */
+  backend?: string;
   title: string;
   note: string;
   size_gb: number;
@@ -246,6 +248,8 @@ export type Model = {
   size_on_disk: number;
   selected: boolean;
   blocked: boolean;
+  /** Скачанную модель можно удалить (GigaAM: в папке приложения, не в общем кэше HF). */
+  removable?: boolean;
 };
 export type ModelsState = {
   items: Model[];
@@ -253,7 +257,18 @@ export type ModelsState = {
   token: boolean;
   selected: string | null;
   can_download: boolean;
+  /** GigaAM качает свой пакет — он приходит с движком. Нет у старых резидентов. */
+  can_download_gigaam?: boolean;
+  /** Папка моделей GigaAM (внутри папки данных приложения). */
+  gigaam_cache?: string;
 };
+
+/** Префикс id моделей GigaAM в каталоге: «gigaam/v3_e2e_rnnt». */
+export const GIGAAM_PREFIX = "gigaam/";
+export const isGigaam = (m: Pick<Model, "id">) => m.id.startsWith(GIGAAM_PREFIX);
+/** Можно ли скачать модель: у GigaAM свой загрузчик. */
+export const canDownloadModel = (state: ModelsState, m: Model) =>
+  isGigaam(m) ? Boolean(state.can_download_gigaam) : state.can_download;
 
 export const getSettings = (ep: Endpoint) => json<Record<string, unknown>>(ep, "/settings");
 export const patchSettings = (ep: Endpoint, updates: Record<string, unknown>) =>
@@ -269,6 +284,9 @@ export const getEngine = (ep: Endpoint) => json<EngineState>(ep, "/engine");
 export const getModels = (ep: Endpoint) => json<ModelsState>(ep, "/models");
 export const downloadModel = (ep: Endpoint, id: string) =>
   json<Job>(ep, "/models/download", body("POST", { id }));
+/** Удалить скачанную модель GigaAM. */
+export const removeModel = (ep: Endpoint, id: string) =>
+  json<{ ok: boolean; error?: string }>(ep, "/models/remove", body("POST", { id }));
 export const getDiagnostics = (ep: Endpoint, lines = 200) =>
   json<Record<string, unknown>>(ep, `/diagnostics?lines=${lines}`);
 export const getDevices = (ep: Endpoint) => json<Devices>(ep, "/devices");

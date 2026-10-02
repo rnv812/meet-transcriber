@@ -70,6 +70,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     install_engine(options) -> dict       поставить движок задачей
     models() -> dict                      каталог моделей и что уже скачано
     download_model(body) -> dict          скачать модель задачей
+    remove_model(body) -> dict            удалить скачанную модель GigaAM {"id"}
     make_summary(id) -> dict              итоги записи задачей (409 без провайдера)
     summary(id) -> dict                   готовые итоги {"markdown", "created_at"}
     live_draft(id) -> dict                черновик итогов из живого режима
@@ -792,6 +793,7 @@ _ROUTES = {
     ("POST", "/models/download"): lambda h, p: _server_of(h).state.download_model(
         h._body()
     ),
+    ("POST", "/models/remove"): lambda h, p: _server_of(h).state.remove_model(h._body()),
     ("POST", "/engine/install"): lambda h, p: _server_of(h).state.install_engine(
         h._body()
     ),

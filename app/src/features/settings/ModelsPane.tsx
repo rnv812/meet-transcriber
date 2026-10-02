@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { type Endpoint, type Model, type ModelsState, downloadModel, getModels } from "../../lib/api";
+import {
+  type Endpoint, type Model, type ModelsState, GIGAAM_PREFIX, canDownloadModel, downloadModel, getModels, isGigaam,
+  removeModel,
+} from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { jobActive, useTrackedJob } from "../../state/useTrackedJob";
 import { Button } from "../../ui/Button";
@@ -8,9 +11,9 @@ import { PathText, Row } from "./Section";
 
 const KIND: Record<string, string> = { asr: "распознавание", diarization: "разделение на спикеров", align: "время слов" };
 
-function ModelRow({ model, busy, canDownload, selected, onDownload, onSelect }: {
+function ModelRow({ model, busy, canDownload, selected, onDownload, onSelect, onRemove }: {
   model: Model; busy: boolean; canDownload: boolean; selected: boolean;
-  onDownload: () => void; onSelect: () => void;
+  onDownload: () => void; onSelect: () => void; onRemove: () => void;
 }) {
   return (
     <div className="srow">
@@ -34,20 +37,28 @@ function ModelRow({ model, busy, canDownload, selected, onDownload, onSelect }: 
         <Button onClick={onDownload} disabled={busy || model.blocked || !canDownload}>
           {model.downloaded ? "Обновить" : "Скачать"}
         </Button>
+        {model.removable && (
+          <Button onClick={onRemove} disabled={busy} aria-label={`Удалить модель ${model.title}`}>Удалить</Button>
+        )}
       </div>
     </div>
   );
 }
 
-export function ModelsPane({ endpoint, selectedModel, onSelect }: {
+export function ModelsPane({ endpoint, selectedModel, selectedGigaam = null, onSelect, onSelectGigaam }: {
   endpoint: Endpoint;
-  /** Модель распознавания из черновика (а не сохранённая). */
+  /** Модель Whisper из черновика (а не сохранённая). */
   selectedModel: string | null;
+  /** Модель GigaAM из черновика (`asr.gigaam_model`, без префикса). */
+  selectedGigaam?: string | null;
   onSelect: (id: string) => void;
+  /** Выбрана модель GigaAM: имя без префикса («v3_e2e_rnnt»). */
+  onSelectGigaam?: (name: string) => void;
 }) {
   const [models, setModels] = useState<ModelsState | null>(null);
   const [tried, setTried] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   const load = useCallback(async () => {
     try { setModels(await getModels(endpoint)); setError(null); }
@@ -61,13 +72,31 @@ export function ModelsPane({ endpoint, selectedModel, onSelect }: {
   const download = async (id: string) => {
     try { setJob(await downloadModel(endpoint, id)); } catch (e) { setError(errorText(e)); }
   };
+  const remove = async (id: string) => {
+    setRemoving(true);
+    try {
+      const result = await removeModel(endpoint, id);
+      await load();
+      if (!result.ok) setError(result.error ?? "Модель не удалена");
+    } catch (e) { setError(errorText(e)); }
+    finally { setRemoving(false); }
+  };
 
   // Токен — до каталога: он нужен и тогда, когда каталог не загрузился.
   const token = <HfTokenRow endpoint={endpoint} onChanged={() => void load()} />;
   if (!models) {
     return <>{token}{error && <p className="error">{error}</p>}<p className="muted">{tried ? "Нет данных." : "Загружаю…"}</p></>;
   }
-  const busy = jobActive(job);
+  const downloading = jobActive(job);
+  const busy = downloading || removing;
+  const isSelected = (m: Model) => {
+    if (isGigaam(m)) return selectedGigaam !== null ? m.id === GIGAAM_PREFIX + selectedGigaam : m.selected;
+    return selectedModel !== null ? m.id === selectedModel : m.selected;
+  };
+  const select = (m: Model) => {
+    if (isGigaam(m)) onSelectGigaam?.(m.id.slice(GIGAAM_PREFIX.length));
+    else onSelect(m.id);
+  };
   return (
     <>
       {token}
@@ -80,15 +109,20 @@ export function ModelsPane({ endpoint, selectedModel, onSelect }: {
       )}
       {models.items.map((m) => (
         <ModelRow
-          key={m.id} model={m} busy={busy} canDownload={models.can_download}
-          selected={selectedModel !== null ? m.id === selectedModel : m.selected}
-          onDownload={() => void download(m.id)} onSelect={() => onSelect(m.id)}
+          key={m.id} model={m} busy={busy} canDownload={canDownloadModel(models, m)}
+          selected={isSelected(m)}
+          onDownload={() => void download(m.id)} onSelect={() => select(m)} onRemove={() => void remove(m.id)}
         />
       ))}
       <Row label="Папка моделей" hint="Общая с библиотеками движка: скачанные модели не загружаются повторно">
         <span className="folder"><PathText path={models.cache} /></span>
       </Row>
-      {busy && <p className="muted">Скачивается {job?.folder}. Окно можно закрыть — загрузка продолжится в службе записи.</p>}
+      {models.gigaam_cache && (
+        <Row label="Папка моделей GigaAM" hint="В папке данных приложения; после загрузки работает без сети">
+          <span className="folder"><PathText path={models.gigaam_cache} /></span>
+        </Row>
+      )}
+      {downloading && <p className="muted">Скачивается {job?.folder}. Окно можно закрыть — загрузка продолжится в службе записи.</p>}
       {job?.state === "failed" && <p className="error">{job.error}</p>}
       {job?.state === "done" && <p className="notice">Скачано: {job.result}</p>}
     </>

@@ -12,6 +12,7 @@ vi.mock("../../lib/api", async (orig) => ({
   putHotwords: vi.fn(),
   getEngine: vi.fn(),
   getModels: vi.fn(),
+  removeModel: vi.fn(),
   getJobs: vi.fn(),
   getDiagnostics: vi.fn(),
   getDevices: vi.fn(),
@@ -278,4 +279,91 @@ test("«Распознавание»: порог узнавания голоса
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
   const call = vi.mocked(api.patchSettings).mock.calls[0]?.[1] as { asr: { voice_threshold: number } };
   expect(call.asr.voice_threshold).toBe(0.82);
+});
+
+// --- движок распознавания и модели GigaAM -------------------------------------
+
+const modelItem = (over: Partial<api.Model>): api.Model => ({
+  id: "x", kind: "asr", title: "x", note: "", size_gb: 1, downloaded: false, size_on_disk: 0,
+  selected: false, blocked: false, ...over,
+});
+
+const catalogue = (): api.ModelsState => ({
+  items: [
+    modelItem({ id: "large-v3", backend: "faster-whisper", downloaded: true,
+      title: "Whisper large-v3 — русский fine-tune", size_gb: 3.1, recommended: true, selected: true }),
+    modelItem({ id: "gigaam/v3_e2e_rnnt", backend: "gigaam", title: "GigaAM v3 — русский", size_gb: 0.45,
+      note: "по умолчанию на процессоре", downloaded: true, size_on_disk: 449_000_000, selected: true, removable: true }),
+    modelItem({ id: "gigaam/v3_e2e_ctc", backend: "gigaam", title: "GigaAM v3 CTC — русский", size_gb: 0.44,
+      note: "быстрее, чуть менее точно" }),
+  ],
+  cache: "C:\\hf", token: true, selected: "large-v3",
+  can_download: true, can_download_gigaam: true, gigaam_cache: "C:\\data\\meet\\models\\gigaam",
+});
+
+const modelRow = (title: string) => {
+  const label = screen.getByText(title);
+  return label.closest(".srow") as HTMLElement;
+};
+
+test("«Движок и модели»: выбор движка для процессора и видеокарты сохраняется в asr", async () => {
+  await openEngine();
+  const cpu = await screen.findByRole("radiogroup", { name: "Распознавание на процессоре" });
+  expect(within(cpu).getByRole("radio", { name: "Whisper (многоязычный)" })).toBeChecked();
+  const gpu = screen.getByRole("radiogroup", { name: "Распознавание на видеокарте" });
+  expect(within(gpu).getByRole("radio", { name: "Whisper" })).toBeChecked();
+  await userEvent.click(within(cpu).getByRole("radio", { name: "GigaAM (русский, быстро)" }));
+  await userEvent.click(within(gpu).getByRole("radio", { name: "GigaAM (быстрее, только русский)" }));
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
+  expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1])
+    .toEqual({ asr: { cpu_backend: "gigaam", backend: "gigaam" } });
+});
+
+test("«Движок и модели»: сохранённый движок «whisper.cpp» показывается как Whisper", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(
+    { ...structuredClone(settings), asr: { ...settings.asr, backend: "whisper.cpp", cpu_backend: "faster-whisper" } });
+  await openEngine();
+  const cpu = await screen.findByRole("radiogroup", { name: "Распознавание на процессоре" });
+  expect(within(cpu).getByRole("radio", { name: "Whisper (многоязычный)" })).toBeChecked();
+  const gpu = screen.getByRole("radiogroup", { name: "Распознавание на видеокарте" });
+  expect(within(gpu).getByRole("radio", { name: "Whisper" })).toBeChecked();
+});
+
+test("«Движок и модели»: модели GigaAM — размер, выбор и удаление", async () => {
+  vi.mocked(api.getModels).mockResolvedValue(catalogue());
+  vi.mocked(api.removeModel).mockResolvedValue({ ok: true });
+  await openEngine();
+  await screen.findByText("GigaAM v3 — русский");
+  const rnnt = modelRow("GigaAM v3 — русский");
+  const ctc = modelRow("GigaAM v3 CTC — русский");
+  expect(rnnt).toHaveTextContent("0.45 ГБ");
+  expect(ctc).toHaveTextContent("быстрее, чуть менее точно");
+  expect(within(rnnt).getByRole("button", { name: "Выбрана" })).toBeDisabled();
+  // Whisper и GigaAM выбираются независимо: у каждого своя «Выбрана».
+  expect(within(modelRow("Whisper large-v3 — русский fine-tune")).getByRole("button", { name: "Выбрана" }))
+    .toBeDisabled();
+  expect(within(ctc).queryByRole("button", { name: /Удалить/ })).toBeNull();
+  expect(screen.getByText("C:\\data\\meet\\models\\gigaam")).toBeInTheDocument();
+
+  await userEvent.click(within(ctc).getByRole("button", { name: "Выбрать" }));
+  expect(within(ctc).getByRole("button", { name: "Выбрана" })).toBeDisabled();
+  expect(within(rnnt).getByRole("button", { name: "Выбрать" })).toBeEnabled();
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
+  expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1]).toEqual({ asr: { gigaam_model: "v3_e2e_ctc" } });
+
+  const loads = vi.mocked(api.getModels).mock.calls.length;
+  await userEvent.click(within(rnnt).getByRole("button", { name: "Удалить модель GigaAM v3 — русский" }));
+  expect(api.removeModel).toHaveBeenCalledWith(ep, "gigaam/v3_e2e_rnnt");
+  await waitFor(() => expect(vi.mocked(api.getModels).mock.calls.length).toBeGreaterThan(loads));
+});
+
+test("«Движок и модели»: без пакета GigaAM его модели не скачать", async () => {
+  vi.mocked(api.getModels).mockResolvedValue({ ...catalogue(), can_download_gigaam: false });
+  await openEngine();
+  await screen.findByText("GigaAM v3 CTC — русский");
+  expect(within(modelRow("GigaAM v3 CTC — русский")).getByRole("button", { name: "Скачать" })).toBeDisabled();
+  expect(within(modelRow("Whisper large-v3 — русский fine-tune")).getByRole("button", { name: "Обновить" }))
+    .toBeEnabled();
 });

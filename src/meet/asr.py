@@ -240,12 +240,91 @@ def drop_hallucinations(
     return kept
 
 
+# Почему встреча распознана не тем движком, что выбран (пометка транскрипта
+# `asr_note`): запись не на русском, а GigaAM — только русский.
+NOT_RUSSIAN = "not_russian"
+# Язык распознавания «определить по записи» (`asr.language`).
+AUTO_LANGUAGE = "auto"
+# Сколько секунд от начала записи слушать, чтобы определить язык.
+DETECT_LANGUAGE_S = 60
+
+
+@dataclass(frozen=True)
+class Choice:
+    """Чем распознавать встречу: движок, устройство, модель GigaAM и, если
+    движок не тот, что выбран в настройках, — почему (`note`)."""
+
+    backend: str = "faster-whisper"
+    device: str = "cpu"
+    gigaam_model: str | None = None
+    note: str | None = None
+
+
+def detect_language(path: Path, seconds: float = DETECT_LANGUAGE_S) -> str | None:
+    """Язык первой минуты записи — детектором Whisper той модели, что
+    распознаёт на этом устройстве. Нужен только при `asr.language = auto`.
+    Ошибка — None («не знаю»)."""
+    try:
+        import wave
+
+        import numpy as np
+
+        _add_nvidia_dll_dirs()
+        _apply_hf_token()
+        from faster_whisper import WhisperModel
+
+        with wave.open(str(path), "rb") as wf:
+            frames = wf.readframes(min(wf.getnframes(), int(seconds * wf.getframerate())))
+        audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        device = resolve_device()
+        model = WhisperModel(_model_for(device, None), device=device,
+                             compute_type=COMPUTE_TYPES[device][-1], **_whisper_kwargs(device))
+        language, probability, _ = model.detect_language(audio)
+        del model
+        print(f"язык записи: {language} ({probability:.2f})")
+        return language
+    except Exception as e:
+        print(f"язык записи не определён ({type(e).__name__}: {e})")
+        return None
+
+
+def choose(path: Path | None = None, *, detect=None) -> Choice:
+    """Движок для встречи — один на обе дорожки.
+
+    GigaAM только русский: язык встречи не русский (или `auto` определил
+    другой по первой минуте) — распознаёт Whisper, с пометкой NOT_RUSSIAN.
+    Пакета GigaAM нет в движке (старая установка) — тоже Whisper."""
+    from meet import gigaam_asr, settings
+
+    device = resolve_device()
+    try:
+        cfg = settings.load().asr
+    except Exception:
+        cfg = settings.Asr()
+    if cfg.backend_for(device) != "gigaam":
+        return Choice("faster-whisper", device)
+    language = (cfg.language or DEFAULT_LANGUAGE).strip().lower()
+    if language == AUTO_LANGUAGE:
+        found = (detect or detect_language)(path) if path is not None else None
+        language = (found or DEFAULT_LANGUAGE).lower()
+    if language != "ru":
+        print(f"GigaAM распознаёт только русский, а язык записи — {language}: "
+              "распознаёт Whisper")
+        return Choice("faster-whisper", device, note=NOT_RUSSIAN)
+    if not gigaam_asr.installed():
+        print("GigaAM не установлен в движке — распознаёт Whisper "
+              "(переустановите движок в настройках)")
+        return Choice("faster-whisper", device)
+    return Choice("gigaam", device, cfg.gigaam_model)
+
+
 def transcribe_wav(
     path: Path,
     hotwords: str | None = None,
     *,
     model_name: str | None = None,
     language: str | None = None,
+    choice: Choice | None = None,
 ) -> list[Segment]:
     """Распознать речь; при нехватке видеопамяти — квантованная модель.
 
@@ -255,14 +334,25 @@ def transcribe_wav(
     Пословные таймкоды нужны для точной привязки спикеров.
     condition_on_previous_text оставлен включённым (по умолчанию): проверка
     на реальной встрече показала, что без него пунктуация и термины заметно
-    деградируют, а зацикливаний и так не было благодаря vad_filter."""
+    деградируют, а зацикливаний и так не было благодаря vad_filter.
+
+    `choice` (asr.choose) с движком GigaAM — распознаёт GigaAM (подсказок
+    у него нет: `hotwords` не нужны, термины чинит пайплайн после)."""
+    if choice is not None and choice.backend == "gigaam":
+        from meet import gigaam_asr
+
+        _add_nvidia_dll_dirs()
+        return gigaam_asr.transcribe(
+            path, model_name=choice.gigaam_model or gigaam_asr.MODEL_NAME, device=choice.device)
     _add_nvidia_dll_dirs()
     _apply_hf_token()
     from faster_whisper import WhisperModel
 
-    device = resolve_device()
+    device = choice.device if choice is not None else resolve_device()
     model_name = _model_for(device, model_name)
     language = language or _asr_settings()[1]
+    if language.strip().lower() == AUTO_LANGUAGE:
+        language = None  # Whisper определит сам
     last_error: Exception | None = None
     for compute_type in COMPUTE_TYPES[device]:
         try:

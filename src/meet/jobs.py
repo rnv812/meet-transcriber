@@ -258,6 +258,15 @@ def _folder_key(folder: str) -> str:
         return os.path.normcase(str(folder))
 
 
+def _log_line(text: str) -> None:
+    """Строка в вывод резидента (оболочка пишет его в logs/resident.log).
+    Под pythonw вывода может не быть — тогда молча."""
+    try:
+        print(text, flush=True)
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
 def _creationflags() -> int:
     """Флаги подпроцесса задачи: без окна консоли и с пониженным приоритетом —
     расшифровка грузит все ядра, а встреча и остальная работа тормозить не
@@ -478,6 +487,11 @@ class JobQueue:
             job.result = payload.get("path")
         elif kind == "error":
             job.error = str(payload.get("text") or payload.get("error") or "")[:500]
+        elif kind == "log" and payload.get("source") == "timing":
+            # Время ступеней расшифровки — в журнал резидента (resident.log):
+            # по нему видно, где уходят минуты (распознавание, выравнивание,
+            # диаризация).
+            _log_line(f"задача {job.kind} ({Path(job.folder).name}): {payload.get('text')}")
 
     def _finish(self, job: Job, state: str, error: str | None = None) -> None:
         job.state = state

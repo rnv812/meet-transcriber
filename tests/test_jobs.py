@@ -361,3 +361,23 @@ def test_low_priority_jobs_wait_behind_later_normal_ones():
     finally:
         release.set()
         q.stop()
+
+
+def test_stage_timing_goes_to_the_resident_log(tmp_path, capsys):
+    """«время ступеней …» задачи расшифровки — в вывод резидента
+    (logs/resident.log); прочие строки журнала задачи туда не льются."""
+    folder = tmp_path / "2026-10-01_10-00"
+    queue = jobs.JobQueue(spawn=_fake_spawn([
+        {"kind": "log", "text": "время ступеней (GigaAM, cpu): распознавание 20.0 с",
+         "source": "timing"},
+        {"kind": "log", "text": "шум"},
+        {"kind": "job.result", "path": "x"},
+    ]))
+    job = queue.submit(jobs.TRANSCRIBE, str(folder))
+    try:
+        _wait(lambda: queue.get(job.id).state == jobs.DONE)
+    finally:
+        queue.stop()
+    out = capsys.readouterr().out
+    assert "задача transcribe (2026-10-01_10-00): время ступеней (GigaAM, cpu)" in out
+    assert "шум" not in out

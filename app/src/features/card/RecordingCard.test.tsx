@@ -527,6 +527,21 @@ test("со спикерами — подсказки про Hugging Face нет"
   expect(screen.queryByText(/настройте Hugging Face/)).toBeNull();
 });
 
+test("запись не на русском — тихая пометка «использован Whisper», без кнопок", async () => {
+  load({ asr_note: "not_russian" });
+  render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={() => {}} />);
+  const note = await screen.findByRole("note");
+  expect(note).toHaveTextContent("Запись не на русском — использован Whisper");
+  expect(within(note).queryByRole("button")).toBeNull();
+});
+
+test("обычная расшифровка — пометки о движке нет", async () => {
+  load({ asr_note: null });
+  render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={() => {}} />);
+  expect(await screen.findByText("Привет всем")).toBeInTheDocument();
+  expect(screen.queryByText(/использован Whisper/)).toBeNull();
+});
+
 
 // --- база знаний ------------------------------------------------------------
 
