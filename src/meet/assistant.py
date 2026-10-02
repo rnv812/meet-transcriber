@@ -9,6 +9,8 @@
     summary.md   итоги последнего прогона (атомарная замена; ошибка не трогает)
     qa.jsonl     вопросы и ответы по одной паре в строке {"q","a","at","provider"}
     meta.json    summary_at — когда сделаны итоги (epoch, как transcript_at)
+    live_state.json  сводка живого режима (пишет `meet assist`): итоги берут
+                 её черновиком и сверяют с полной расшифровкой
 """
 
 import asyncio
@@ -60,6 +62,16 @@ SUMMARY_SYSTEM = """\
   названия продуктов и имена людей; в итогах пиши их так, как в базе.
 - Отвечай только итогами, без вступлений и пояснений.
 """
+
+# Черновик из живого режима: сводка по неполной живой расшифровке. Модель
+# сверяет его с полным транскриптом — подтверждённое берёт, остальное нет.
+DRAFT_INTRO = (
+    "Черновик итогов, собранный во время встречи живым ассистентом по неполной "
+    "расшифровке. Используй его как подсказку, а не как источник: каждое утверждение "
+    "проверь по транскрипту выше; чего в транскрипте нет — не включай, расхождения "
+    "решай в пользу транскрипта."
+)
+DRAFT_MAX_CHARS = 6000
 
 ASK_SYSTEM = """\
 Ты — помощник по прошедшей встрече. Тебе дают расшифровку записи (реплики вида
@@ -164,7 +176,7 @@ def summarize(folder: Path, runner, knowledge_dir, *, provider: str | None = Non
     title, date = library.title_and_date(folder, data, today_if_unknown=True)
     dirs = _allowed_dirs(folder, knowledge_dir)
     prompt = (f"Встреча: {title} ({date})\n\nТранскрипт:\n{transcript_text(data)}"
-              f"{_knowledge_hint(dirs)}")
+              f"{_live_draft(folder)}{_knowledge_hint(dirs)}")
     text = _call(runner, prompt, system_prompt=SUMMARY_SYSTEM, allowed_dirs=dirs,
                  cwd=folder, timeout_s=SUMMARY_TIMEOUT_S)
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -173,6 +185,21 @@ def summarize(folder: Path, runner, knowledge_dir, *, provider: str | None = Non
                         f"_Модель: {provider or 'модель'} · {stamp}_\n")
     library.write_meta(folder, {"summary_at": time.time()})
     return path
+
+
+def _live_draft(folder: Path) -> str:
+    """Сводка живого режима как черновик для промпта итогов; нет — пусто."""
+    from meet.assist.live_state import load_saved
+
+    saved = load_saved(folder)
+    if saved is None:
+        return ""
+    draft = saved["markdown"].strip()
+    if not draft or draft.startswith("_Пока пусто"):
+        return ""
+    if len(draft) > DRAFT_MAX_CHARS:
+        draft = draft[:DRAFT_MAX_CHARS].rstrip() + "…"
+    return f"\n\n{DRAFT_INTRO}\n\n{draft}"
 
 
 def read_summary(folder: Path) -> dict | None:

@@ -10,7 +10,7 @@
 
 import { inTauri, invoke } from "./shell";
 import type {
-  AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveLine, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
+  AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
   ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   Transcript,
@@ -304,6 +304,15 @@ export const makeSummary = (ep: Endpoint, id: string) =>
   json<Job>(ep, `/recordings/${enc(id)}/summary`, { method: "POST" });
 /** Итогов нет — ApiError 404. */
 export const getSummary = (ep: Endpoint, id: string) => json<Summary>(ep, `/recordings/${enc(id)}/summary`);
+/** Черновик итогов из живого режима (сводка ассистента во время встречи); нет — null. */
+export async function getLiveDraft(ep: Endpoint, id: string): Promise<LiveDraft | null> {
+  try {
+    return await json<LiveDraft>(ep, `/recordings/${enc(id)}/live-draft`);
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
+}
 /** Вопрос задачей (kind "ask"); ответ ляжет в `getQa` к `job.done`. */
 export const ask = (ep: Endpoint, id: string, question: string) =>
   json<Job>(ep, `/recordings/${enc(id)}/ask`, body("POST", { question }));

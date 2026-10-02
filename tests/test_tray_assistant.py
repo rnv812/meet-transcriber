@@ -324,3 +324,18 @@ def test_assistant_describes_proxy(state, monkeypatch):
     assert state.assistant()["proxy"] == {
         "mode": "system", "effective": "http://127.0.0.1:3067", "source": "system",
         "system": "http://127.0.0.1:3067"}
+
+
+def test_live_draft_of_a_recording(state, tmp_path):
+    assert state.live_draft(RID) == {"error": "черновика нет"}
+    folder = tmp_path / "recordings" / RID
+    (folder / "live_state.json").write_text(json.dumps({
+        "version": 2, "saved_at": 5.0,
+        "summary": {"topic": "Планёрка", "points": [], "decisions": [{"id": "d1", "text": "Срок — пятница"}],
+                    "tasks": [], "open_questions": []},
+        "hints": [{"id": "h1", "kind": "risk", "text": "Нет владельца"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    draft = state.live_draft(RID)
+    assert draft["summary"]["topic"] == "Планёрка" and draft["hints"][0]["id"] == "h1"
+    assert "- Срок — пятница" in draft["markdown"]
+    assert state.live_draft("нет-такой") == {"error": "черновика нет"}

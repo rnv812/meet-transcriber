@@ -69,6 +69,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     download_model(body) -> dict          скачать модель задачей
     make_summary(id) -> dict              итоги записи задачей (409 без провайдера)
     summary(id) -> dict                   готовые итоги {"markdown", "created_at"}
+    live_draft(id) -> dict                черновик итогов из живого режима
     ask(id, body) -> dict                 вопрос по записи задачей
     qa(id) -> dict                        прошлые вопросы и ответы
     kb_export(id) -> dict                 выгрузить встречу в базу знаний (400 без папки)
@@ -859,6 +860,8 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.make_summary(unquote(rid))),
     ("GET", re.compile(r"^/recordings/([^/]+)/summary$"),
      lambda h, p, rid: _server_of(h).state.summary(unquote(rid))),
+    ("GET", re.compile(r"^/recordings/([^/]+)/live-draft$"),
+     lambda h, p, rid: _server_of(h).state.live_draft(unquote(rid))),
     ("POST", re.compile(r"^/recordings/([^/]+)/ask$"),
      lambda h, p, rid: _server_of(h).state.ask(unquote(rid), h._body())),
     ("GET", re.compile(r"^/recordings/([^/]+)/qa$"),

@@ -173,3 +173,44 @@ def test_transcript_text_shows_break_marks_as_lines():
         {"start": 61, "end": 62, "speaker": "Вы", "text": "два"},
     ]})
     assert text.splitlines() == ["[00:00] Вы: раз", "— перерыв 5 мин —", "[01:01] Вы: два"]
+
+
+# --- черновик из живого режима -------------------------------------------------
+
+
+def _live_state(folder, **summary):
+    from meet.assist.live_state import LIVE_STATE_JSON
+
+    data = {"version": 3, "summary": {"topic": "", "points": [], "decisions": [], "tasks": [],
+                                      "open_questions": [], **summary}, "hints": []}
+    (folder / LIVE_STATE_JSON).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def test_summarize_gets_live_state_as_draft_to_verify(tmp_path):
+    folder = _folder(tmp_path)
+    _live_state(folder, topic="Планёрка", decisions=[{"id": "d1", "text": "Срок — пятница"}],
+                tasks=[{"id": "t1", "who": "Демьян", "what": "Подготовить отчёт", "due": None}])
+    calls = []
+    assistant.summarize(folder, _runner([AgentReply(text="## Итоги\n- ок")], calls), None)
+    prompt = calls[0][0]
+    assert prompt.index("Транскрипт:") < prompt.index("Черновик итогов")
+    assert "проверь по транскрипту" in prompt
+    assert "- Срок — пятница" in prompt and "Демьян — Подготовить отчёт" in prompt
+
+
+def test_summarize_without_or_with_empty_live_state_has_no_draft(tmp_path):
+    folder = _folder(tmp_path)
+    calls = []
+    assistant.summarize(folder, _runner([AgentReply(text="## Итоги"), AgentReply(text="## Итоги")], calls), None)
+    _live_state(folder)
+    assistant.summarize(folder, _runner([AgentReply(text="## Итоги")], calls), None)
+    assert all("Черновик итогов" not in prompt for prompt, _ in calls)
+
+
+def test_summarize_draft_is_bounded(tmp_path):
+    folder = _folder(tmp_path)
+    _live_state(folder, points=[{"id": f"p{i}", "text": "очень длинный тезис " * 40} for i in range(30)])
+    calls = []
+    assistant.summarize(folder, _runner([AgentReply(text="## Итоги")], calls), None)
+    draft = calls[0][0].split("Черновик итогов", 1)[1]
+    assert len(draft) <= assistant.DRAFT_MAX_CHARS + 400

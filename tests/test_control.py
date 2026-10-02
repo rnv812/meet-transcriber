@@ -199,6 +199,11 @@ class FakeState:
             return {"error": "итогов нет"}
         return {"markdown": "# Итоги", "created_at": 1.0}
 
+    def live_draft(self, rid):
+        if rid == "нет":
+            return {"error": "черновика нет"}
+        return {"summary": {"topic": "Т"}, "hints": [], "markdown": "**Тема:** Т"}
+
     def ask(self, rid, body):
         self.calls.append(("ask", rid, body))
         return {"id": "j2", "kind": "ask"}
@@ -1076,6 +1081,8 @@ def test_summary_routes(server):
     assert _post(server, "/recordings/r%201/summary")["kind"] == "summary"
     assert ("summary", "r 1") in server.state_obj.calls
     assert _get(server, "/recordings/r1/summary")["markdown"] == "# Итоги"
+    assert _get(server, "/recordings/r1/live-draft")["markdown"] == "**Тема:** Т"
+    assert _get(server, "/recordings/%D0%BD%D0%B5%D1%82/live-draft", expect=404) == {"error": "черновика нет"}
     assert _get(server, "/recordings/нет/summary".replace("нет", "%D0%BD%D0%B5%D1%82"),
                 expect=404) == {"error": "итогов нет"}
 

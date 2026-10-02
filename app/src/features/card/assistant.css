@@ -25,6 +25,10 @@
 .assist__failed { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .assist__toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .assist__when { margin-left: auto; font-size: 12px; }
+/* Черновик из живого режима: пока итогов нет. Рамка — чтобы не спутать с итогами. */
+.assist__draft { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px dashed var(--line-2); border-radius: var(--r-lg); }
+.assist__draft-title { margin: 0; color: var(--text-2); font-size: 12px; font-weight: 500; }
+.assist__draft-note { margin: 0; font-size: 12px; }
 .assist__hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--amber); }
 .assist__stage { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 12px; }
 .assist__pulse {
