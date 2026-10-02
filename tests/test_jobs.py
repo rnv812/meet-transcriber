@@ -137,6 +137,15 @@ def test_listing_is_newest_last_and_bounded(tmp_path):
     assert [j["id"] for j in listing] == ids[-2:]
 
 
+def test_created_at_is_strictly_increasing_within_one_clock_tick(monkeypatch):
+    # Общий список двух очередей сортируется по created_at; при равных метках
+    # порядок зависел бы от того, в какой очереди задача.
+    monkeypatch.setattr(jobs.time, "time", lambda: 1000.0)
+    first = jobs.Job(id="a", kind=jobs.TRANSCRIBE, folder="x")
+    second = jobs.Job(id="b", kind=jobs.TRANSCRIBE, folder="x")
+    assert first.created_at < second.created_at
+
+
 def test_worker_argv_carries_options(tmp_path):
     job = jobs.Job(id="1", kind=jobs.TRANSCRIBE, folder=str(tmp_path),
                    options={"speakers": 3, "align": False, "hotwords": "джоба"})
