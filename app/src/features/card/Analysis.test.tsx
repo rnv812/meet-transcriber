@@ -15,6 +15,7 @@ vi.mock("../../lib/api", async (orig) => ({
   getQa: vi.fn(async () => ({ items: [] })),
   getAnalysis: vi.fn(),
   runAnalysis: vi.fn(),
+  suggestTitle: vi.fn(),
   getRediarized: vi.fn(async () => { throw new Error("нового разделения нет"); }),
 }));
 vi.mock("../../lib/shell", () => ({
@@ -32,6 +33,7 @@ const transcript: Transcript = {
 const base: Recording = {
   id: "r1", path: "C:/rec/r1", started_at: "2026-10-01T10:00:00", duration_s: 1800,
   tracks: { sys: "s.wav" }, has_transcript: true, has_voices: false, title: "Встреча", source: "record",
+  title_source: "user",
 };
 const job = (state: Job["state"]): Job => ({
   id: "a1", kind: "analyze", folder: "C:\\rec\\r1", state, stage: null, label: null, done: null, total: null,
@@ -131,4 +133,53 @@ test("карточка: анализ не удался — тихая строк
   expect(await screen.findByText("Анализ не удался: rate_limit")).toBeInTheDocument();
   await userEvent.click(within(await openMore()).getByRole("menuitem", { name: "Переанализировать" }));
   expect(api.runAnalysis).toHaveBeenCalledTimes(1);
+});
+
+test("«Предложить название»: окно «Применить / Отмена», применённое — от ИИ", async () => {
+  vi.mocked(api.suggestTitle).mockResolvedValue({ title: "Запуск беты", from: "analysis" });
+  vi.mocked(api.patchRecording).mockResolvedValue({ ...base, title: "Запуск беты", title_source: "ai" });
+  const onChanged = vi.fn();
+  load();
+  render(<RecordingCard id="r1" endpoint={ep} onChanged={onChanged} />);
+  await screen.findByText("Начнём с беты");
+  await userEvent.click(within(await openMore()).getByRole("menuitem", { name: "Предложить название" }));
+  const box = await screen.findByRole("dialog", { name: "Предложенное название" });
+  expect(await within(box).findByText("Запуск беты")).toBeInTheDocument();
+  expect(within(box).getByText("Название из анализа встречи")).toBeInTheDocument();
+  await userEvent.click(within(box).getByRole("button", { name: "Применить" }));
+  expect(api.patchRecording).toHaveBeenCalledWith(ep, "r1", { title: "Запуск беты", title_source: "ai" });
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "Предложенное название" })).toBeNull());
+  expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Запуск беты");
+  expect(screen.getByLabelText(/Название предложено ИИ/)).toBeInTheDocument();
+  expect(onChanged).toHaveBeenCalled();
+});
+
+test("«Предложить название»: «Отмена» ничего не меняет; ошибка — текстом", async () => {
+  vi.mocked(api.suggestTitle).mockResolvedValueOnce({ title: "Запуск беты", from: "model" });
+  load();
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Начнём с беты");
+  await userEvent.click(within(await openMore()).getByRole("menuitem", { name: "Предложить название" }));
+  const box = await screen.findByRole("dialog", { name: "Предложенное название" });
+  await within(box).findByText("Название по началу встречи");
+  await userEvent.click(within(box).getByRole("button", { name: "Отмена" }));
+  expect(screen.queryByRole("dialog", { name: "Предложенное название" })).toBeNull();
+  expect(api.patchRecording).not.toHaveBeenCalled();
+
+  vi.mocked(api.suggestTitle).mockRejectedValueOnce(new api.ApiError(409, "Подключите Claude Code или Codex в настройках"));
+  await userEvent.click(within(await openMore()).getByRole("menuitem", { name: "Предложить название" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Не удалось предложить название");
+});
+
+test("бейдж «ИИ» у названия от модели; нажатие — переименовать, своё название — без бейджа", async () => {
+  vi.mocked(api.patchRecording).mockResolvedValue({ ...base, title: "Моё", title_source: "user" });
+  load({ title: "Запуск беты", title_source: "ai" });
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("Начнём с беты");
+  await userEvent.click(screen.getByLabelText(/Название предложено ИИ/));
+  const input = screen.getByRole("textbox", { name: "Название записи" });
+  await userEvent.clear(input);
+  await userEvent.type(input, "Моё{Enter}");
+  expect(api.patchRecording).toHaveBeenCalledWith(ep, "r1", { title: "Моё" });
+  await waitFor(() => expect(screen.queryByLabelText(/Название предложено ИИ/)).toBeNull());
 });

@@ -930,6 +930,13 @@ ANALYSIS_REPLY = json.dumps({
     ensure_ascii=False)
 
 
+def _auto_title(env):
+    path = Path(os.environ["MEET_DATA_DIR"]) / "config.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["assistant"]["auto_title"] = True
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
 def test_analyze_without_the_app_writes_analysis_json(env, capsys, monkeypatch):
     folder = _meeting(env)
     _fake_llm(monkeypatch, [ANALYSIS_REPLY])
@@ -937,7 +944,18 @@ def test_analyze_without_the_app_writes_analysis_json(env, capsys, monkeypatch):
     got = _json_out(capsys)
     assert got["via_app"] is False and got["analysis"]["title"] == "Утренний старт"
     assert json.loads((folder / "analysis.json").read_text(encoding="utf-8"))["chapters"][0]["title"] == "Старт"
+    # «Придумывать название» выключено — название записи не трогаем
     assert "title" not in library.read_meta(folder)
+
+
+def test_analyze_applies_ai_title_when_enabled(env, capsys, monkeypatch):
+    folder = _meeting(env)
+    _auto_title(env)
+    _fake_llm(monkeypatch, [ANALYSIS_REPLY])
+    assert _main(["analyze", RID]) == 0
+    assert "Главы: 1" in capsys.readouterr().out
+    meta = library.read_meta(folder)
+    assert meta["title"] == "Утренний старт" and meta["title_source"] == "ai"
 
 
 def test_analyze_model_failure_is_exit_1(env, capsys, monkeypatch):
@@ -981,3 +999,44 @@ def test_analyze_reports_the_apps_failure(env, capsys, monkeypatch):
     monkeypatch.setattr(control, "request", fake_request)
     assert _main(["analyze", RID]) == 1
     assert "таймаут вызова модели" in capsys.readouterr().err
+
+
+def test_title_suggests_and_applies_without_the_app(env, capsys, monkeypatch):
+    folder = _meeting(env)
+    _fake_llm(monkeypatch, ["«Утренний старт»", "Утренний старт"])
+    assert _main(["title", RID]) == 0
+    assert capsys.readouterr().out == "Утренний старт\n"
+    assert "title" not in library.read_meta(folder)
+    assert _main(["title", RID, "--apply", "--json"]) == 0
+    got = _json_out(capsys)
+    assert got["applied"] is True and got["from"] == "model"
+    meta = library.read_meta(folder)
+    assert meta["title"] == "Утренний старт" and meta["title_source"] == "ai"
+
+
+def test_title_through_the_running_app(env, capsys, monkeypatch):
+    from meet import control
+
+    _meeting(env)
+    calls = []
+
+    def fake_request(path, method="GET", payload=None, timeout=5.0):
+        calls.append((method, path, payload))
+        if path.endswith("/title/suggest"):
+            return {"title": "Утренний старт", "from": "analysis"}
+        return {"id": RID, "title": payload["title"], "title_source": "ai"}
+
+    monkeypatch.setattr(control, "alive", lambda *a, **k: True)
+    monkeypatch.setattr(control, "request", fake_request)
+    assert _main(["title", RID, "--apply"]) == 0
+    assert calls == [("POST", f"/recordings/{RID}/title/suggest", {}),
+                     ("PATCH", f"/recordings/{RID}", {"title": "Утренний старт", "title_source": "ai"})]
+
+
+def test_summary_applies_the_title_line_when_enabled(env, capsys, monkeypatch):
+    folder = _meeting(env)
+    _auto_title(env)
+    _fake_llm(monkeypatch, ["Название: Утренний старт\n## Итоги\n- решили X"])
+    assert _main(["summary", RID]) == 0
+    assert "Название:" not in (folder / "summary.md").read_text(encoding="utf-8")
+    assert library.read_meta(folder)["title"] == "Утренний старт"

@@ -37,16 +37,20 @@ test("раздел «Анализ встречи» есть в меню и от�
   for (const name of ["Типы реплик", "Важность реплик", "Главы", "Наблюдения", "Категория встречи", "Название встречи"]) {
     expect(await toggle(name)).toHaveAttribute("aria-checked", "true");
   }
+  expect(await toggle("Придумывать название встречи")).toHaveAttribute("aria-checked", "false");
   expect(screen.getByRole("button", { name: "Что такое анализ встречи" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Как придумывается название встречи" })).toBeInTheDocument();
 });
 
-test("переключатели уходят в analysis", async () => {
+test("переключатели уходят в analysis и assistant.auto_title", async () => {
   open();
   await userEvent.click(await toggle("Анализировать встречу после расшифровки"));
   await userEvent.click(await toggle("Наблюдения"));
+  await userEvent.click(await toggle("Придумывать название встречи"));
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
     analysis: { auto: false, insights: false },
+    assistant: { auto_title: true },
   }));
 });
 
@@ -54,4 +58,5 @@ test("старый резидент без секции analysis: всё вкл�
   vi.mocked(api.getSettings).mockResolvedValue({ assistant: { knowledge_dir: null } });
   open();
   expect(await toggle("Главы")).toHaveAttribute("aria-checked", "true");
+  expect(await toggle("Придумывать название встречи")).toHaveAttribute("aria-checked", "false");
 });

@@ -49,6 +49,10 @@ class Recording:
     has_transcript: bool = False
     has_voices: bool = False
     title: str | None = None
+    # Откуда название (title_source): "auto" — по дате или из транскрипта,
+    # "user" — задал человек, "ai" — предложила модель, "site" — заголовок
+    # окна звонка в браузере.
+    title_source: str = "auto"
     source: str = "record"
     # mtime транскрипта: окно сравнивает его с концом упавшей перерасшифровки.
     transcript_at: float | None = None
@@ -75,6 +79,7 @@ class Recording:
             "has_transcript": self.has_transcript,
             "has_voices": self.has_voices,
             "title": self.title,
+            "title_source": self.title_source,
             "source": self.source,
             "transcript_at": self.transcript_at,
             "diarization": self.diarization,
@@ -610,6 +615,7 @@ def create_import(root: Path, src: Path) -> Path:
         "original_path": str(src),
         "original_name": src.name,
         "title": src.stem,
+        "title_source": "auto",
     })
     return folder
 
@@ -660,6 +666,30 @@ def title_and_date(folder: Path, data: dict | None, *,
     return str(title), date
 
 
+# Откуда название записи (meta.json `title_source`), см. title_source().
+TITLE_SOURCES = ("auto", "user", "ai", "site")
+
+
+def title_source(meta: dict) -> str:
+    """Откуда название записи. Явная пометка — она. Без пометки (записи до
+    0.3.0) — по самому названию: его нет — "auto"; имя импортированного файла
+    или «Объединённая встреча …» — тоже "auto"; любое другое название в
+    meta.json задал человек — "user" (его модель не трогает никогда)."""
+    source = meta.get("title_source")
+    if source in TITLE_SOURCES:
+        return source
+    title = str(meta.get("title") or "").strip()
+    if not title:
+        return "auto"
+    original = meta.get("original_name")
+    if (meta.get("source") == "import" and isinstance(original, str)
+            and title == Path(original).stem):
+        return "auto"
+    if meta.get("source") == "merge" and title.startswith("Объединённая встреча"):
+        return "auto"
+    return "user"
+
+
 def describe(folder: Path) -> Recording | None:
     """Папка записи → карточка для библиотеки. Не папка записи — None."""
     if not folder.is_dir():
@@ -685,6 +715,7 @@ def describe(folder: Path) -> Recording | None:
         has_transcript=has_json or bool(list(folder.glob("*_transcript.md"))),
         has_voices=bool(list(folder.glob("*_speakers.json"))),
         title=title,
+        title_source=title_source(meta),
         source=source,
         transcript_at=transcript_at,
         diarization=diarization,

@@ -229,6 +229,33 @@ def _check_provider(provider: str) -> dict:
     return data
 
 
+def _suggest_title(folder: Path) -> dict:
+    """`python -m meet.titles <папка>` подпроцессом: вызов модели не живёт в
+    резиденте (как проверка провайдера). → {"title", "from"} или {"error"}."""
+    from meet import netproxy
+
+    try:
+        out = subprocess.run(
+            [sys.executable, "-m", "meet.titles", str(folder)],
+            env=netproxy.settings_env(),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=TITLE_TIMEOUT_S,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": f"модель не ответила за {TITLE_TIMEOUT_S} с"}
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+    lines = (out.stdout or "").strip().splitlines()
+    try:
+        data = json.loads(lines[-1]) if lines else None
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        return {"error": (out.stderr or out.stdout or "нет ответа").strip()[-300:]}
+    return data
+
+
 def _bad_request(text: str):
     """400 для API: ошибка ввода (имя, картинка), а не «не найдено»."""
     from meet.control import BadRequest
@@ -268,6 +295,8 @@ RECORDING_UPDATED = "recording.updated"  # {"id"}: запись изменила
 # Анализ встречи готов, не удался или устарел (правка текста): {"id", "state"}.
 # Очередь и ход самой задачи — обычные job.* (вид "analyze").
 ANALYSIS_UPDATED = "analysis.updated"
+# «Предложить название» без свежего анализа — короткий вызов модели подпроцессом.
+TITLE_TIMEOUT_S = 150
 PROCESSING = "Запись ещё обрабатывается (обрезка ожидания после звонка) — подождите минуту"
 # Восстановление после перезапуска берёт записи не старше этого.
 RECOVER_DAYS = 7
@@ -438,6 +467,8 @@ class TrayControl:
         if kind not in (jobs.TRANSCRIBE, jobs.IMPORT, jobs.SUMMARY) or not folder:
             return
         path = Path(folder)
+        if kind == jobs.SUMMARY:
+            self._background(lambda: self._summary_title(path), "meet-title")
         if kind in (jobs.TRANSCRIBE, jobs.IMPORT):
             # Свести дорожки для плеера заранее, в фоне: первое «▶» — без ожидания.
             from meet import playback
@@ -524,6 +555,9 @@ class TrayControl:
         card = library.describe(folder)
         full = bool(event.data.get("complete")) and bool(card and card.tracks)
         self._on_saved(str(folder), LIVE, full)
+        # Тема, которую вёл живой ассистент, — черновое название (если включено
+        # «Придумывать название»); итоги или анализ потом его уточнят.
+        self._background(lambda: self._live_title(folder), "meet-title")
 
     def _on_saved(self, folder: str, source: str | None, full: bool) -> None:
         """Запись штатно сохранена: пометить, откуда она, и поставить в очередь.
@@ -542,7 +576,7 @@ class TrayControl:
             # уже переименовали (пока она шла), не трогаем.
             try:
                 library.update_meta(path, lambda meta: meta if meta.get("title")
-                                    else {**meta, "title": title})
+                                    else {**meta, "title": title, "title_source": "site"})
             except Exception as e:
                 self.tray.log(f"название записи не сохранено ({path.name}): {e}")
         transcribe = full and settings.load().recording.auto_transcribe
@@ -1331,15 +1365,62 @@ class TrayControl:
         if card is None:
             return {"error": "записи нет"}
         title = str((body or {}).get("title") or "").strip()[:TITLE_MAX]
+        # "ai" — человек принял предложенное моделью («Предложить название»);
+        # всё остальное — название человека, его модель больше не тронет.
+        source = "ai" if (body or {}).get("title_source") == "ai" and title else "user"
         exported = kb_export.previously_exported(folder)
         old_title = kb_export.meeting(folder)[0] if exported else None
         if title:
-            library.write_meta(folder, {"title": title})
+            library.write_meta(folder, {"title": title, "title_source": source})
         else:
-            library.update_meta(folder, lambda meta: {k: v for k, v in meta.items() if k != "title"})
+            library.update_meta(folder, lambda meta: {
+                k: v for k, v in meta.items() if k not in ("title", "title_source")})
         if exported:
             self._background(lambda: self._follow_title(folder, old_title))
         return library.describe(folder).to_raw()
+
+    def _retitle_ai(self, folder: Path, title, why: str) -> str | None:
+        """Название от модели (анализ, итоги, тема живого режима) — по правилам
+        meet.titles: только при включённом «Придумывать название» и только
+        вместо автоматического, прежнего от модели или общего из окна звонка.
+        Тот же путь, что переименование из окна: папка в базе знаний следует за
+        названием, окно перечитывает список. Фоновый поток: сбой — в журнал."""
+        from meet import kb_export, titles
+
+        try:
+            cfg = settings.load()
+            if not cfg.assistant.auto_title:
+                return None
+            exported = kb_export.previously_exported(folder)
+            old_title = kb_export.meeting(folder)[0] if exported else None
+            applied = titles.apply_ai(folder, title, cfg)
+        except Exception as e:
+            self.tray.log(f"название от модели не поставлено ({Path(folder).name}): "
+                          f"{type(e).__name__}: {e}")
+            return None
+        if not applied:
+            return None
+        self.tray.log(f"название встречи от модели ({why}): {Path(folder).name} → «{applied}»")
+        self._updated(folder)
+        if exported:
+            self._follow_title(folder, old_title)
+        return applied
+
+    def _summary_title(self, folder: Path) -> None:
+        """Итоги готовы: название из их первой строки (если его просили)."""
+        found = library.read_meta(folder).get("summary_title")
+        if isinstance(found, dict) and found.get("title"):
+            self._retitle_ai(folder, found["title"], "итоги")
+
+    def _live_title(self, folder: Path) -> None:
+        from meet import titles
+
+        try:
+            topic = titles.live_topic_title(folder)
+        except Exception:
+            topic = None
+        if topic:
+            self._retitle_ai(folder, topic, "тема живого режима")
 
     def _follow_title(self, folder: Path, old_title: str) -> None:
         """Папка встречи в базе знаний — под новое название (если она целиком
@@ -2107,6 +2188,24 @@ class TrayControl:
         job, _created = self._queue_analysis(folder, low=False)
         return job.to_raw()
 
+    def suggest_title(self, recording_id: str) -> dict:
+        """«Предложить название»: из свежего анализа сразу, иначе — коротким
+        вызовом модели подпроцессом (до TITLE_TIMEOUT_S). Ничего не меняет:
+        применяет окно (PATCH с title_source "ai"). → {"title", "from"}."""
+        from meet import analysis
+
+        folder = self._transcribed(recording_id)
+        if isinstance(folder, dict):
+            return folder
+        title = analysis.fresh_title(folder)
+        if title:
+            return {"title": title, "from": "analysis"}
+        self._ready_for_model(folder)
+        got = _suggest_title(folder)
+        if got.get("error"):
+            raise RuntimeError(f"название не предложено: {got['error']}")
+        return got
+
     def _queue_analysis(self, folder: Path, *, low: bool):
         """Одна задача анализа на запись: ждущая или идущая — та же (идущей
         помечаем «повторить после», если расшифровку тем временем поменяли).
@@ -2194,12 +2293,16 @@ class TrayControl:
             pass  # событие — подсказка окну, не повод ронять правку
 
     def _analysis_finished(self, folder: Path, job_state) -> None:
-        """Задача анализа кончилась: событие окну, повтор, если расшифровку
-        поменяли, пока она шла."""
+        """Задача анализа кончилась: название (если включено), событие окну,
+        повтор, если расшифровку поменяли, пока она шла."""
         from meet import analysis
 
         try:
             got = analysis.state(folder) if folder.is_dir() else {"state": "none"}
+            if job_state == jobs.DONE:
+                doc = got.get("analysis") or {}
+                if doc.get("title") and got.get("state") == "ready":
+                    self._retitle_ai(folder, doc["title"], "анализ встречи")
             self.bus.emit(ANALYSIS_UPDATED, id=folder.name, state=got.get("state"))
             self._updated(folder)
         except Exception as e:

@@ -314,3 +314,21 @@ test("подсказка объединения предупреждает пр�
   await user.click(tip);
   expect(tip).toHaveAccessibleDescription(/заново определяются по базе голосов/);
 });
+
+test("бейдж «ИИ» у названия от модели: нажатие — переименовать; своё название — без бейджа", async () => {
+  const withAi = [rec("a", { has_transcript: true, title: "Запуск беты", title_source: "ai" }),
+    rec("b", { has_transcript: true, title: "Моё", title_source: "user" })];
+  const onSelect = vi.fn();
+  render(<RecordingsList selected="a" onSelect={onSelect} library={{ ...library, items: withAi, jobs: [] }}
+    resident={resident} q="" onQ={vi.fn()} />);
+  const badges = screen.getAllByLabelText("Название предложено ИИ — нажмите, чтобы изменить");
+  expect(badges).toHaveLength(1);
+  expect(mains()[0]!).toContainElement(badges[0]!);
+  await userEvent.click(badges[0]!);
+  expect(onSelect).not.toHaveBeenCalled();
+  const input = screen.getByRole("textbox", { name: "Название записи" });
+  expect(input).toHaveValue("Запуск беты");
+  await userEvent.clear(input);
+  await userEvent.type(input, "Бета{Enter}");
+  expect(api.patchRecording).toHaveBeenCalledWith(ep, "a", { title: "Бета" });
+});

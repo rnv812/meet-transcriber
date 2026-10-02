@@ -13,12 +13,12 @@ import type {
   AnalysisState, AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
   ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
-  TextFixRequest, TextFixResult, TextPreview, Transcript,
+  TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript,
 } from "./types";
 
 export type {
   Analysis, AnalysisChapter, AnalysisFeature, AnalysisInsight, AnalysisState, AnalysisStateName, InsightKind,
-  PhraseType,
+  PhraseType, TitleSource, TitleSuggestion,
 } from "./types";
 
 export type Endpoint = {
@@ -95,8 +95,12 @@ export const getRecording = (ep: Endpoint, id: string) =>
   json<Recording & { transcript: Transcript | null }>(ep, `/recordings/${enc(id)}`);
 /** Название записи не длиннее (резидент обрезает так же). */
 export const TITLE_MAX = 200;
-/** `title: null` (или пустое) — вернуть автоматическое название. */
-export const patchRecording = (ep: Endpoint, id: string, patch: { title: string | null }) =>
+/**
+ * `title: null` (или пустое) — вернуть автоматическое название. `title_source: "ai"` —
+ * человек принял предложенное моделью (бейдж «ИИ» остаётся); без него название — «своё».
+ */
+export const patchRecording = (ep: Endpoint, id: string,
+  patch: { title: string | null; title_source?: Extract<TitleSource, "ai"> }) =>
   json<Recording>(ep, `/recordings/${enc(id)}`, body("PATCH", patch));
 export const deleteRecording = (ep: Endpoint, id: string) =>
   json<{ ok: boolean }>(ep, `/recordings/${enc(id)}`, { method: "DELETE" });
@@ -343,7 +347,7 @@ export const getAssistant = (ep: Endpoint) => json<AssistantInfo>(ep, "/assistan
 export const checkProvider = (ep: Endpoint, provider: string) =>
   json<ProviderCheck>(ep, "/assistant/check", body("POST", { provider }));
 
-// --- анализ встречи ----------------------------------------------------------------
+// --- анализ встречи и название ---------------------------------------------------
 
 /** Состояние анализа и сама разметка (для M3/M4 — `analysis`). */
 export const getAnalysis = (ep: Endpoint, id: string) =>
@@ -351,6 +355,9 @@ export const getAnalysis = (ep: Endpoint, id: string) =>
 /** «Переанализировать»: задача (kind "analyze"); уже ждёт или идёт — та же. 409 — нет модели или идёт расшифровка. */
 export const runAnalysis = (ep: Endpoint, id: string) =>
   json<Job>(ep, `/recordings/${enc(id)}/analysis`, { method: "POST" });
+/** «Предложить название»: только предложение (до пары минут, если нужен вызов модели). */
+export const suggestTitle = (ep: Endpoint, id: string) =>
+  json<TitleSuggestion>(ep, `/recordings/${enc(id)}/title/suggest`, { method: "POST" });
 
 // --- база знаний ----------------------------------------------------------------
 

@@ -1,6 +1,7 @@
 /**
- * Настройки «Анализ встречи»: ставить ли анализ сам (`analysis.auto`) и что
- * размечать (типы реплик, важность, главы, наблюдения, категория, название).
+ * Настройки «Анализ встречи»: ставить ли анализ сам (`analysis.auto`), что
+ * размечать (типы реплик, важность, главы, наблюдения, категория, название) и
+ * «Придумывать название встречи» (`assistant.auto_title`).
  *
  * Выключенная часть не запрашивается у модели (промпт короче) и не
  * показывается в карточке. Анализ делает тот же агент, что итоги, — провайдер
@@ -36,6 +37,18 @@ export function AnalysisTip() {
   );
 }
 
+export function AutoTitleTip() {
+  return (
+    <HelpTip label="Как придумывается название встречи" title="Название встречи от ИИ">
+      <TipLine>Название берётся из анализа встречи, из итогов или из начала разговора.</TipLine>
+      <TipLine>
+        Названия, которые вы задали сами, не меняются. Название от ИИ отмечено в списке значком «ИИ» —
+        нажмите на него, чтобы переименовать запись.
+      </TipLine>
+    </HelpTip>
+  );
+}
+
 export function AnalysisSection({ draft, set }: { draft: Raw; set: SetFn }) {
   const v = (k: string) => draft.analysis?.[k];
   const on = (k: string) => v(k) !== false;
@@ -53,6 +66,10 @@ export function AnalysisSection({ draft, set }: { draft: Raw; set: SetFn }) {
         <Switch key={part.key} label={part.label} hint={part.hint} value={on(part.key)}
           onChange={(x) => set("analysis", part.key, x)} />
       ))}
+      <h3 className="shead">Название</h3>
+      <Switch label="Придумывать название встречи" help={<AutoTitleTip />}
+        hint="Название из анализа или итогов ставится само; заданные вами названия не меняются"
+        value={Boolean(draft.assistant?.auto_title)} onChange={(x) => set("assistant", "auto_title", x)} />
     </>
   );
 }

@@ -327,6 +327,9 @@ def create(root: Path, folders: list[Path], keep_originals: bool) -> Path:
     found.sort(key=lambda item: item[0])
     first_start, _, first = found[0]
     title = first.title or f"Объединённая встреча {first_start:%d.%m.%Y}"
+    # Название первой части переходит вместе с его происхождением: заданное
+    # человеком остаётся «его», автоматическое — автоматическим.
+    title_source = first.title_source if first.title else "auto"
     exported = []
     for _, folder, _card in found:
         record = library.read_meta(folder).get("kb_export")
@@ -336,6 +339,7 @@ def create(root: Path, folders: list[Path], keep_originals: bool) -> Path:
     library.write_meta(target, {
         "source": SOURCE,
         "title": title,
+        "title_source": title_source,
         "merged_from": [folder.name for _, folder, _ in found],
         "merge": {"keep_originals": bool(keep_originals), "state": "pending",
                   "kb_exported": exported},

@@ -201,8 +201,15 @@ def _add_library_parsers(sub) -> None:
                     "категория и название (что именно — настройки «Анализ встречи»). Если "
                     "приложение запущено, анализ идёт задачей через него.")
     p_an.add_argument("folder", help=folder_help)
-    p_an.add_argument("--provider", default=None, choices=("auto",) + PROVIDERS,
-                      help=provider_help + " (без приложения)")
+    p_ti = sub.add_parser(
+        "title", parents=[as_json], help="предложить название встречи (с --apply — поставить)",
+        description="Название встречи по её содержанию: из свежего анализа или коротким вызовом "
+                    "модели по началу встречи. С --apply — поставить его вместо нынешнего.")
+    p_ti.add_argument("folder", help=folder_help)
+    p_ti.add_argument("--apply", action="store_true", help="поставить предложенное название")
+    for p in (p_an, p_ti):
+        p.add_argument("--provider", default=None, choices=("auto",) + PROVIDERS,
+                       help=provider_help + " (без приложения)")
 
     p_mr = sub.add_parser("merge", parents=[as_json],
                           help="объединить записи одной встречи в одну и расшифровать")

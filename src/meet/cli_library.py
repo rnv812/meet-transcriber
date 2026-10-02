@@ -24,7 +24,7 @@ from pathlib import Path
 from meet import library
 
 COMMANDS = ("import", "export", "voices", "summary", "ask", "notes", "kb-export", "merge", "fix",
-            "analyze")
+            "analyze", "title")
 NO_PROVIDER_HINT = ("Подключите Claude Code или Codex: meet {command} … --provider codex "
                     "или настройка llm.provider")
 
@@ -453,11 +453,31 @@ def _summary(args, cfg) -> None:
     provider, runner = _model(args, cfg)
     try:
         path = assistant.summarize(folder, runner, cfg.assistant.knowledge_dir,
-                                   provider=provider)
+                                   provider=provider, want_title=cfg.assistant.auto_title)
         markdown = path.read_text(encoding="utf-8")
     except (RuntimeError, OSError) as e:
         raise CliError(f"Итоги не получились: {e}")
-    _result(args, {"path": str(path), "provider": provider, "markdown": markdown}, markdown)
+    title = _apply_ai_title(folder, (library.read_meta(folder).get("summary_title") or {}).get("title"),
+                            cfg)
+    _result(args, {"path": str(path), "provider": provider, "markdown": markdown, "title": title},
+            markdown)
+
+
+def _apply_ai_title(folder: Path, title, cfg) -> str | None:
+    """Название от модели без приложения — по тем же правилам (meet.titles):
+    только при включённом «Придумывать название» и не вместо названия
+    человека. Папку в базе знаний переименовывает следующая выгрузка."""
+    from meet import titles
+
+    if not title:
+        return None
+    try:
+        applied = titles.apply_ai(folder, title, cfg)
+    except OSError:
+        return None
+    if applied:
+        _say(f"Название встречи: {applied}")
+    return applied
 
 
 def _ask(args, cfg) -> None:
@@ -655,6 +675,7 @@ def _analyze(args, cfg) -> None:
         except OSError as e:
             raise CliError(f"Не удалось сохранить анализ: {e}")
         doc = analysis.read(folder)
+        _apply_ai_title(folder, (doc or {}).get("title"), cfg)
         via_app = False
     _result(args, {"folder": str(folder), "path": str(folder / analysis.ANALYSIS_JSON),
                    "via_app": via_app, "analysis": doc}, _analysis_text(doc))
@@ -707,8 +728,45 @@ def _analyze_via_resident(rid: str, *, sleep=None, clock=None) -> dict | None:
     return got.get("analysis")
 
 
+def _title(args, cfg) -> None:
+    """`meet title`: предложить название встречи (из свежего анализа или
+    коротким вызовом модели); `--apply` — поставить его (происхождение "ai")."""
+    from meet import titles
+
+    folder = _recording(args.folder, cfg)
+    _transcript(folder)
+    via_app = _resident_root(folder, cfg.recording.recordings)
+    if via_app:
+        got = _resident_call(folder.name, "/title/suggest", "POST", {}, timeout=180)
+    else:
+        from meet import analysis
+
+        try:
+            if analysis.fresh_title(folder):
+                got = titles.suggest(folder)
+            else:
+                got = titles.suggest(folder, _model(args, cfg)[1])
+        except RuntimeError as e:
+            raise CliError(f"Название не предложено: {e}")
+    title = got.get("title")
+    applied = False
+    if args.apply and title:
+        if via_app:
+            _resident_call(folder.name, "", "PATCH", {"title": title, "title_source": "ai"})
+        else:
+            titles.write_title(folder, title, "ai")
+        applied = True
+    doc = {"folder": str(folder), "title": title, "from": got.get("from"), "applied": applied,
+           "via_app": via_app}
+    text = f"{title}\n"
+    if applied:
+        text += "Название поставлено\n" + ("" if via_app else
+                                            "Папку в базе знаний переименует `meet kb-export`\n")
+    _result(args, doc, text)
+
+
 _HANDLERS = {"import": _import, "export": _export, "summary": _summary,
              "ask": _ask, "notes": _kb_export, "kb-export": _kb_export, "merge": _merge, "fix": _fix,
-             "analyze": _analyze}
+             "analyze": _analyze, "title": _title}
 _VOICES = {"list": _voices_list, "rename": _voices_rename, "merge": _voices_merge,
            "delete": _voices_delete, "avatar": _voices_avatar}

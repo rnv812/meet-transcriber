@@ -730,21 +730,24 @@ def test_asr_replacements_rules_are_cleaned_and_patched(tmp_path):
 # --- анализ встречи, категории, название от ИИ (M2) -----------------------------
 
 
-def test_analysis_defaults_on(tmp_path):
+def test_analysis_defaults_on_and_auto_title_off(tmp_path):
     cfg = settings.load(tmp_path / "config.json")
     assert cfg.analysis.auto is True
     assert cfg.analysis.features() == settings.ANALYSIS_FEATURES
+    assert cfg.assistant.auto_title is False
     raw = cfg.to_raw()
     assert raw["analysis"] == {"auto": True, "types": True, "importance": True, "chapters": True,
                                "insights": True, "category": True, "title": True}
+    assert raw["assistant"]["auto_title"] is False
 
 
 def test_analysis_features_follow_flags(tmp_path):
     f = tmp_path / "config.json"
-    cfg = settings.patch({"analysis": {"types": False, "insights": "false"}}, f)
+    cfg = settings.patch({"analysis": {"types": False, "insights": "false"},
+                          "assistant": {"auto_title": True}}, f)
     assert cfg.analysis.features() == ("importance", "chapters", "category", "title")
     loaded = settings.load(f)
-    assert loaded.analysis == cfg.analysis
+    assert loaded.analysis == cfg.analysis and loaded.assistant.auto_title is True
 
 
 def test_default_categories_have_stable_ascii_ids(tmp_path):
