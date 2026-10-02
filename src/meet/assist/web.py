@@ -1,12 +1,12 @@
 """Локальный веб-интерфейс live-ассистента: сводка, подсказки, вопросы, лента.
 
 Отдаёт одну HTML-страницу, поток состояния через SSE (`GET /events`),
-приём вопросов (`POST /ask`), действия с подсказками (`POST /hint`:
+приём вопросов (`POST /ask`: вопрос или быстрое действие `quick`), действия с подсказками (`POST /hint`:
 закрепить, открепить, скрыть), смену задачи-контекста (`POST /task`) и
 штатную остановку (`POST /stop` — так резидент гасит дочерний `meet assist`).
 
-SSE шлёт `event: state` (`state.view()`: сводка, подсказки, статус, хвост
-ленты) при каждом изменении
+SSE шлёт `event: state` (`state.view()`: сводка, подсказки, история вопросов,
+статус, хвост ленты) при каждом изменении
 и `event: line` с `{"t", "speaker", "text"}` на каждую новую строку ленты;
 `id:` строки — её номер в шине, поэтому переподключившийся EventSource
 (заголовок Last-Event-ID) получает только пропущенные строки.
@@ -17,6 +17,8 @@ import asyncio
 import json
 
 from aiohttp import web
+
+from meet.assist.qa import QUICK
 
 PAGE = """<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8"><title>meet assist</title>
@@ -160,13 +162,25 @@ def build_app(state) -> web.Application:
             body = await request.json()
         except Exception:
             raise web.HTTPBadRequest(text="ожидается JSON (UTF-8)")
-        question = body.get("question", "").strip()
-        if not question:
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text="ожидается JSON-объект")
+        question = body.get("question") or ""
+        quick = body.get("quick")
+        since = body.get("since_t")
+        if not isinstance(question, str):
+            raise web.HTTPBadRequest(text="вопрос должен быть строкой")
+        question = question.strip()
+        if quick is not None and quick not in QUICK:
+            raise web.HTTPBadRequest(text="неизвестное быстрое действие")
+        if quick is None and not question:
             raise web.HTTPBadRequest(text="пустой вопрос")
+        if since is not None and (isinstance(since, bool) or not isinstance(since, (int, float))
+                                  or since < 0):
+            raise web.HTTPBadRequest(text="since_t — секунды от начала записи")
         # QA-раннер может пробросить исключение (ревью Task 9) —
         # не роняем хендлер, а возвращаем ошибку текстом ответа.
         try:
-            answer = await state.qa.ask(question)
+            answer = await state.qa.ask(question or None, quick=quick, since_t=since)
         except Exception as e:
             return _json_response({"answer": f"⚠ внутренняя ошибка: {e}"})
         return _json_response({"answer": answer})

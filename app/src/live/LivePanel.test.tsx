@@ -226,13 +226,27 @@ test("оболочка отказала — вид возвращается пр
   warn.mockRestore();
 });
 
-test("«Что я пропустил?» спрашивает ассистента фиксированным текстом, ответ — под полем", async () => {
+test("«Что я пропустил?» — с момента, когда панель последний раз свернули", async () => {
   vi.mocked(liveAsk).mockResolvedValue({ answer: "Решили релиз в пятницу" });
   render(<LivePanel endpoint={ep} />);
   await userEvent.click(screen.getByRole("button", { name: "Развернуть" }));
+  // Ещё не сворачивали — ассистент возьмёт последние минуты сам.
   await userEvent.click(screen.getByRole("button", { name: "Что я пропустил?" }));
-  expect(liveAsk).toHaveBeenCalledWith(ep, "Что я пропустил за последние минуты?");
-  expect(await screen.findByText("Решили релиз в пятницу")).toBeInTheDocument();
+  expect(liveAsk).toHaveBeenLastCalledWith(ep, "", { quick: "missed" });
+  act(() => liveStream().emit("line", { t: 125, speaker: "Демьян", text: "до ухода" }, 0));
+  await userEvent.click(screen.getByRole("button", { name: "Свернуть" }));
+  act(() => liveStream().emit("line", { t: 300, speaker: "Демьян", text: "без меня" }, 1));
+  await userEvent.click(screen.getByRole("button", { name: "Развернуть" }));
+  await userEvent.click(screen.getByRole("button", { name: "Что я пропустил?" }));
+  expect(liveAsk).toHaveBeenLastCalledWith(ep, "", { quick: "missed", since_t: 125 });
+  // История — у ассистента: ответ приходит в state.
+  act(() => liveStream().emit("state", { digest: "", transcript: [], status: null, qa: [
+    { id: 1, q: "Что я пропустил?", a: "Решили релиз в пятницу [00:05:00]", error: null, pending: false, at: 1, quick: "missed" },
+  ] }));
+  expect(screen.getByText(/Решили релиз в пятницу/)).toBeInTheDocument();
+  // Таймкод ответа ведёт к реплике в ленте.
+  await userEvent.click(screen.getByRole("button", { name: "00:05:00" }));
+  expect(screen.getByText("без меня").closest("li")).toHaveClass("is-target");
 });
 
 test("панель не берёт фокус при появлении", () => {

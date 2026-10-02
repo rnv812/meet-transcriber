@@ -865,12 +865,22 @@ class TrayControl:
             raise _bad_request(str(e))
 
     def live_ask(self, body: dict | None) -> dict:
-        question = (body or {}).get("question")
-        if not isinstance(question, str) or not question.strip():
+        """Вопрос ассистенту или быстрое действие (`quick`, тогда вопрос
+        не нужен); `since_t` — с какой секунды записи «Что я пропустил?»."""
+        body = body or {}
+        question, quick, since = body.get("question"), body.get("quick"), body.get("since_t")
+        if quick is not None and quick not in live_control.QUICK_ACTIONS:
+            raise _bad_request("неизвестное быстрое действие")
+        if since is not None and (isinstance(since, bool) or not isinstance(since, (int, float))
+                                  or since < 0):
+            raise _bad_request("since_t — секунды от начала записи")
+        if question is None and quick is not None:
+            question = ""
+        if not isinstance(question, str) or (quick is None and not question.strip()):
             raise _bad_request("пустой вопрос")
         if len(question) > QUESTION_MAX_CHARS:
             raise _bad_request(f"вопрос длиннее {QUESTION_MAX_CHARS} символов")
-        return self._live_call(self.live.ask, question.strip())
+        return self._live_call(self.live.ask, question.strip(), quick, since)
 
     def live_task(self, body: dict | None) -> dict:
         task = (body or {}).get("task")

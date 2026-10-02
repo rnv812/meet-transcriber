@@ -10,14 +10,15 @@
  * человек не щёлкнет в панель.
  */
 
-import { type MouseEvent, useEffect, useState } from "react";
+import { type MouseEvent, useCallback, useEffect, useState } from "react";
 
 import { type Endpoint, NoResidentError, liveStop, resolveEndpoint } from "../lib/api";
 import { clock, errorText } from "../lib/format";
 import { inTauri, invoke } from "../lib/shell";
 import { Button } from "../ui/Button";
 import { LiveAsk } from "./LiveAsk";
-import { LiveDigest, LiveFeed } from "./LiveFeed";
+import { type FeedFocus, LiveDigest, LiveFeed } from "./LiveFeed";
+import { useLiveAsk } from "./useLastLook";
 import { useLive } from "./useLive";
 import { useLiveStatus } from "./useLiveStatus";
 import { useLiveWindow } from "./useLiveWindow";
@@ -90,6 +91,9 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   const [stopError, setStopError] = useState<string | null>(null);
   // На весь экран — всё содержимое, как у развёрнутой.
   const open = view.expanded || view.maximized;
+  const ask = useLiveAsk(live, open);
+  const [focus, setFocus] = useState<FeedFocus | null>(null);
+  const jump = useCallback((t: number) => setFocus((f) => ({ t, seq: (f?.seq ?? 0) + 1 })), []);
 
   // Esc возвращает обычный размер (клавиатура у панели, только если по ней
   // щёлкнули). В поле вопроса Esc — дело поля, окно не трогаем.
@@ -148,10 +152,11 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
       {live.error && <div className="live-panel__note muted">{live.error}</div>}
       {open ? (
         <div className="live-panel__body">
-          <LiveFeed lines={live.lines} className="live-panel__feed" />
+          <LiveFeed lines={live.lines} className="live-panel__feed" focus={focus} />
           <div className="live-panel__side">
             <LiveDigest digest={live.digest} defaultOpen={false} />
-            <LiveAsk reply={live.reply} onAsk={live.ask} disabled={stopping} />
+            <LiveAsk qa={live.qa} asking={live.asking} error={live.askError} onAsk={ask}
+              disabled={stopping} onTime={jump} />
           </div>
         </div>
       ) : (

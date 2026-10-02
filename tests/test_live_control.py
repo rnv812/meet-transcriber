@@ -92,6 +92,7 @@ class H(BaseHTTPRequestHandler):
             stop.set()
         elif self.path == "/ask":
             note("ask", body.get("question", ""))
+            note("ask_body", json.dumps(body, ensure_ascii=False, sort_keys=True))
             self._json(200, {"answer": "ответ: " + body.get("question", "")})
         elif self.path == "/task":
             note("task", body.get("task", ""))
@@ -614,6 +615,9 @@ def test_ask_and_task_are_proxied(make_live, tmp_path):
     assert live.task("Ревью архитектуры") == {"ok": True}
     assert stub.note("ask") == ["что решили?"]
     assert stub.note("task") == ["Ревью архитектуры"]
+    live.ask("", "missed", 300.0)
+    assert json.loads(stub.note("ask_body")[-1]) == {
+        "question": "", "quick": "missed", "since_t": 300.0}
 
 
 def test_ask_without_live_is_refused(make_live):
@@ -883,6 +887,24 @@ def test_live_ask_validates_question(resident):
         resident.live_ask({"question": "  "})
     with pytest.raises(control.Conflict):
         resident.live_ask({"question": "что решили?"})
+
+
+def test_live_ask_validates_quick_actions(resident):
+    for bad in ({"quick": "dance"}, {"quick": "missed", "since_t": -1},
+                {"quick": "missed", "since_t": "вчера"}, {"quick": "missed", "since_t": True},
+                {"question": 5, "quick": "brief"}):
+        with pytest.raises(control.BadRequest):
+            resident.live_ask(bad)
+    with pytest.raises(control.Conflict):  # проверка прошла — дальше «не запущен»
+        resident.live_ask({"quick": "missed", "since_t": 120})
+
+
+def test_live_ask_forwards_quick_and_since(resident, monkeypatch):
+    calls = []
+    monkeypatch.setattr(resident.live, "ask", lambda *a: calls.append(a) or {"answer": "ок"})
+    assert resident.live_ask({"quick": "reply"}) == {"answer": "ок"}
+    resident.live_ask({"question": " срок? ", "quick": None, "since_t": 30})
+    assert calls == [("", "reply", None), ("срок?", None, 30)]
 
 
 def test_delete_refuses_live_folder(resident):

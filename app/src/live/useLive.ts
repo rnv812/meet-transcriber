@@ -1,5 +1,5 @@
 /**
- * Живой ассистент глазами окна: лента строк, дайджест и вопросы.
+ * Живой ассистент глазами окна: лента строк, сводка и вопросы.
  *
  * Поток `/live/events`. Обычный обрыв браузер чинит сам и переподключается с
  * Last-Event-ID — сервер досылает только пропущенные строки. Отказ (409:
@@ -8,13 +8,16 @@
  * Новый поток начинает с хвоста ленты: строки с номером не больше последнего
  * показанного отбрасываем. Номера сквозные в пределах одного живого режима, а
  * хук живёт в окне одной записи — новый режим придёт в новый экземпляр.
+ *
+ * История вопросов живёт у ассистента (`qa` в `state`): её видят и панель, и
+ * карточка, и вопрос в ней появляется сразу — с «Модель думает…».
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { type Endpoint, liveAsk, liveTask, openLiveEvents } from "../lib/api";
 import { errorText } from "../lib/format";
-import type { LiveLine } from "../lib/types";
+import type { LiveLine, LiveQa, LiveQuick } from "../lib/types";
 
 export const MAX_LINES = 300;
 const RETRY_MIN_MS = 1000;
@@ -24,30 +27,37 @@ const NO_LINK = "Нет связи с ассистентом — перепод�
 /** Строка ленты с её номером в потоке (`id:` события; null — без номера). */
 export type FeedLine = LiveLine & { id: number | null };
 
-/** Последний вопрос: ждём ответа, ответ или ошибка. */
-export type LiveReply = { pending: boolean; question: string | null; answer: string | null; error: string | null };
+export type AskOptions = { quick?: LiveQuick; since_t?: number };
 
 export type Live = {
-  /** Статус дайджестера из `state` (что он сейчас делает), null — нет. */
+  /** Тихий статус ассистента («Подсказки временно недоступны»), null — всё в порядке. */
   status: string | null;
   lines: FeedLine[];
-  /** Дайджест встречи, Markdown. */
+  /** Сводка встречи, Markdown. */
   digest: string;
+  /** История вопросов (у ассистента). */
+  qa: LiveQa[];
+  /** Хоть одно `state` пришло: дальше новое — действительно новое. */
+  loaded: boolean;
   /** Связи с ассистентом нет (переподключаемся), иначе null. */
   error: string | null;
-  reply: LiveReply;
-  ask: (question: string) => Promise<void>;
+  /** Запрос вопроса ушёл, ответа ещё нет. */
+  asking: boolean;
+  /** Вопрос не дошёл до ассистента (в историю он не попал). */
+  askError: string | null;
+  ask: (question: string, opts?: AskOptions) => Promise<void>;
   setTask: (task: string) => Promise<void>;
 };
-
-const IDLE: LiveReply = { pending: false, question: null, answer: null, error: null };
 
 export function useLive(ep: Endpoint | null, active = true): Live {
   const [lines, setLines] = useState<FeedLine[]>([]);
   const [digest, setDigest] = useState("");
+  const [qa, setQa] = useState<LiveQa[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [reply, setReply] = useState<LiveReply>(IDLE);
+  const [asking, setAsking] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
   const lastId = useRef(-1);
   const askSeq = useRef(0);
 
@@ -67,6 +77,8 @@ export function useLive(ep: Endpoint | null, active = true): Live {
           alive();
           setDigest(s.digest ?? "");
           setStatus(s.status ?? null);
+          setQa(Array.isArray(s.qa) ? s.qa : []);
+          setLoaded(true);
         },
         onLine: (line, id) => {
           alive();
@@ -100,15 +112,17 @@ export function useLive(ep: Endpoint | null, active = true): Live {
   // Ответ после размонтирования или устаревший (задан новый вопрос) не применяем.
   useEffect(() => () => { askSeq.current++; }, []);
 
-  const ask = useCallback(async (question: string) => {
+  const ask = useCallback(async (question: string, opts: AskOptions = {}) => {
     if (!ep) return;
     const mine = ++askSeq.current;
-    setReply({ pending: true, question, answer: null, error: null });
+    setAsking(true);
+    setAskError(null);
     try {
-      const { answer } = await liveAsk(ep, question);
-      if (mine === askSeq.current) setReply({ pending: false, question, answer, error: null });
+      await liveAsk(ep, question, opts);
     } catch (e) {
-      if (mine === askSeq.current) setReply({ pending: false, question, answer: null, error: errorText(e) });
+      if (mine === askSeq.current) setAskError(errorText(e));
+    } finally {
+      if (mine === askSeq.current) setAsking(false);
     }
   }, [ep]);
 
@@ -117,5 +131,5 @@ export function useLive(ep: Endpoint | null, active = true): Live {
     await liveTask(ep, task);
   }, [ep]);
 
-  return { status, lines, digest, error, reply, ask, setTask };
+  return { status, lines, digest, qa, loaded, error, asking, askError, ask, setTask };
 }

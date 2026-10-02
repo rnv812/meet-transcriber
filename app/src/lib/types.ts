@@ -361,8 +361,30 @@ export type LiveStatus = {
   started_at: number | null;
 };
 
-/** `event: state` потока `/live/events`: дайджест, хвост ленты, статус дайджестера. */
-export type LiveState = { digest: string; transcript: string[]; status: string | null };
+/** Быстрые действия вопросов ассистенту (`meet.assist.qa.QUICK`). */
+export type LiveQuick = "missed" | "decisions" | "reply" | "brief";
+
+/** Вопрос в истории ассистента: ждёт ответа (`pending`), ответ или ошибка. */
+export type LiveQa = {
+  id: number;
+  q: string;
+  a: string | null;
+  error: string | null;
+  pending: boolean;
+  at: number;
+  quick: LiveQuick | null;
+};
+
+/**
+ * `event: state` потока `/live/events`: сводка Markdown'ом (`digest`), хвост
+ * ленты, история вопросов, тихий статус («Подсказки временно недоступны»).
+ */
+export type LiveState = {
+  digest: string;
+  transcript: string[];
+  status: string | null;
+  qa?: LiveQa[];
+};
 
 /** `event: line`: новая строка ленты; `t` — секунды от начала записи. */
 export type LiveLine = { t: number; speaker: string | null; text: string };
