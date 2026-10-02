@@ -23,21 +23,31 @@ export function placePopover(anchor: Rect, box: Size, view: Size): { left: numbe
 }
 
 /** Всплывающее окно у элемента-якоря; закрывается по Esc и клику снаружи. */
-export function Popover({ anchor, onClose, children, label }: {
+export function Popover({ anchor, onClose, children, label, width = W }: {
   anchor: HTMLElement;
   onClose: () => void;
   children: ReactNode;
   label: string;
+  /** Ширина окна, px. */
+  width?: number;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: 0, top: 0 });
 
   useLayoutEffect(() => {
     // Высота от позиции не зависит: меряем уже отрисованное окно до того, как его увидят.
-    const height = box.current?.getBoundingClientRect().height ?? 0;
-    setPos(placePopover(anchor.getBoundingClientRect(), { width: W, height },
-      { width: window.innerWidth, height: window.innerHeight }));
-  }, [anchor]);
+    const place = () => {
+      const height = box.current?.getBoundingClientRect().height ?? 0;
+      setPos(placePopover(anchor.getBoundingClientRect(), { width, height },
+        { width: window.innerWidth, height: window.innerHeight }));
+    };
+    place();
+    // Содержимое выросло (раскрылся список) — окно не должно уйти за край экрана.
+    if (typeof ResizeObserver === "undefined" || !box.current) return;
+    const watch = new ResizeObserver(place);
+    watch.observe(box.current);
+    return () => watch.disconnect();
+  }, [anchor, width]);
 
   useEffect(() => {
     const down = (e: MouseEvent) => {
@@ -54,7 +64,7 @@ export function Popover({ anchor, onClose, children, label }: {
 
   return (
     <div ref={box} className="popover" role="dialog" aria-label={label}
-      style={{ left: pos.left, top: pos.top, width: W }}>
+      style={{ left: pos.left, top: pos.top, width }}>
       {children}
     </div>
   );

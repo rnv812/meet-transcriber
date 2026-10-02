@@ -213,3 +213,32 @@ mark.hit--current, .turn__text.hit--current mark.hit { background: var(--accent)
 .tmenu__links .spk-link { text-align: left; }
 .turn:focus { outline: none; }
 .turn:focus-visible { margin: 0 -8px; padding: 8px; border-radius: var(--r-md); box-shadow: 0 0 0 1px var(--accent); }
+
+/* «Исправить…» (TextFix): кнопка у выделения, окно исправления, итог над репликами. */
+.tfix-float {
+  position: fixed; z-index: 40; height: 24px; padding: 0 10px;
+  background: var(--accent); color: #fff; border: 1px solid var(--accent-hover); border-radius: var(--r-md);
+  box-shadow: 0 4px 14px #0006; font: inherit; font-size: 12px; cursor: pointer;
+}
+.tfix-float:hover { background: var(--accent-hover); }
+.tfix-float--anchor { visibility: hidden; pointer-events: none; }
+.tfix { gap: 8px; }
+.tfix__heard { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--text); }
+.tfix__find { font-weight: 600; }
+.tfix__field { display: flex; flex-direction: column; gap: 4px; color: var(--text); }
+.tfix__field input {
+  height: 28px; padding: 0 8px; background: var(--surface-2); color: var(--text);
+  border: 1px solid var(--line-2); border-radius: var(--r-sm); font: inherit; font-size: 13px;
+}
+.tfix__field input:focus { outline: none; border-color: var(--accent); }
+.tfix__check { display: flex; align-items: center; gap: 6px; color: var(--text); cursor: pointer; }
+.tfix__check input { margin: 0; accent-color: var(--accent); }
+.tfix__check input:disabled + span { color: var(--text-3); }
+.tfix__samples {
+  display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; margin: 0; padding: 6px 8px;
+  list-style: none; border-radius: var(--r-sm); background: var(--surface); line-height: 1.45; overflow-wrap: anywhere;
+}
+.tfix__actions { display: flex; justify-content: flex-end; gap: 6px; padding-top: 2px; }
+/* Полосы итогов над репликами (правка спикеров, «Исправить…») прилипают к верху вместе. */
+.tbars { position: sticky; top: 0; z-index: 5; }
+.tbars .tsel { position: static; }

@@ -808,3 +808,49 @@ def test_merge_refuses_what_the_resident_is_transcribing(env, capsys, monkeypatc
     assert _main(["merge", a.name, b.name]) == 1
     assert "работает приложение" in capsys.readouterr().err
     assert not list(env["rec"].glob("*_merged*"))
+
+
+# --- fix -----------------------------------------------------------------------
+
+
+def _fix_meeting(env):
+    folder = env["rec"] / RID
+    folder.mkdir()
+    library.write_transcript(folder, {"version": 1, "created_at": "2026-09-01T10:00:00", "segments": [
+        {"start": 0.0, "end": 2.0, "speaker": "Демьян", "text": "Поднимем кубер нетис."},
+        {"start": 2.0, "end": 4.0, "speaker": "Анна", "text": "Кубер нетис готов."},
+    ]})
+    return folder
+
+
+def _texts(folder):
+    return [s["text"] for s in library.read_transcript(folder)["segments"]]
+
+
+def test_fix_first_occurrence_by_default(env, capsys, monkeypatch):
+    folder = _fix_meeting(env)
+    assert _main(["fix", RID, "кубер нетис", "Kubernetes"]) == 0
+    assert _texts(folder) == ["Поднимем Kubernetes.", "Кубер нетис готов."]
+    out = capsys.readouterr().out
+    assert "Исправлено: 1 из 2" in out and "--all" in out
+
+
+def test_fix_all_with_hotword_json(env, capsys, monkeypatch):
+    from meet import paths
+
+    target = env["tmp"] / "hotwords.txt"
+    monkeypatch.setattr(paths, "hotwords_path", lambda: target)
+    folder = _fix_meeting(env)
+    assert _main(["fix", str(folder), "кубер нетис", "kubernetes", "--all", "--hotword", "--json"]) == 0
+    got = _json_out(capsys)
+    assert got["changed"] == 2 and got["found"] == 2
+    assert got["hotword"] == {"term": "kubernetes", "added": True, "over_budget": False}
+    assert _texts(folder) == ["Поднимем kubernetes.", "Kubernetes готов."]
+    assert target.read_text(encoding="utf-8") == "kubernetes\n"
+
+
+def test_fix_not_found_is_exit_1(env, capsys):
+    folder = _fix_meeting(env)
+    assert _main(["fix", RID, "Docker", "Докер"]) == 1
+    assert "нет «Docker»" in capsys.readouterr().err
+    assert _texts(folder) == ["Поднимем кубер нетис.", "Кубер нетис готов."]

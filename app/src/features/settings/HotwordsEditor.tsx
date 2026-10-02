@@ -45,10 +45,10 @@ export function HotwordsEditor({ endpoint }: { endpoint: Endpoint }) {
 
   return (
     <div className="hotwords">
-      <div className="srow__head"><span className="srow__label">Горячие слова</span><HotwordsTip /></div>
+      <div className="srow__head"><span className="srow__label">Термины распознавания</span><HotwordsTip /></div>
       <div className="srow__hint">Термины и имена, по одному на строку; строки, начинающиеся с #, не учитываются</div>
       <textarea
-        aria-label="Горячие слова" className="hotwords__text" rows={8} value={text}
+        aria-label="Термины распознавания" className="hotwords__text" rows={8} value={text}
         onChange={(e) => setText(e.target.value)}
       />
       <div className="hotwords__bar">
@@ -58,7 +58,7 @@ export function HotwordsEditor({ endpoint }: { endpoint: Endpoint }) {
         {over && <span className="error">Лимит превышен: лишние слова не будут учтены</span>}
         {error && <span className="error">{error}</span>}
         <Button variant="primary" onClick={() => void save()} disabled={pending || text === saved && !over}>
-          Сохранить слова
+          Сохранить термины
         </Button>
       </div>
     </div>

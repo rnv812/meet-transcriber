@@ -25,3 +25,58 @@ def terms(text: str) -> list[str]:
         if term:
             found.append(term)
     return list(dict.fromkeys(found))
+
+
+def _key(term: str) -> str:
+    return " ".join(term.lower().replace("ё", "е").split())
+
+
+def add_term(text: str, term: str) -> tuple[str, bool]:
+    """Термин — в конец списка (свежие важнее при обрезке по бюджету), если
+    его там ещё нет (без учёта регистра, «ё» = «е»). → (текст, добавлен ли)."""
+    term = " ".join(term.split())
+    if not term or _key(term) in {_key(t) for t in terms(text)}:
+        return text, False
+    if text and not text.endswith("\n"):
+        text += "\n"
+    return f"{text}{term}\n", True
+
+
+def remove_term(text: str, term: str) -> str:
+    """Убрать строку с этим термином (последнюю такую — её и добавили);
+    комментарии и остальные строки не трогать."""
+    lines = text.splitlines(keepends=True)
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].split("#", 1)[0].strip() == " ".join(term.split()):
+            return "".join(lines[:i] + lines[i + 1:])
+    return text
+
+
+def read(path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def write(path, text: str) -> None:
+    """Атомарно: список читают расшифровка и окно настроек."""
+    import os
+
+    tmp = path.with_name(path.name + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def add_to_file(path, term: str) -> dict:
+    """Термин — в файл списка (окно «Исправить…», `meet fix --hotword`):
+    {"term", "added", "over_budget"} или {"term", "added": False, "error"}."""
+    try:
+        text, added = add_term(read(path), term)
+        if added:
+            write(path, text)
+    except OSError as e:
+        return {"term": term, "added": False, "error": f"не удалось сохранить термины: {e}"}
+    used = len(", ".join(terms(text)))
+    return {"term": term, "added": added, "over_budget": used > HOTWORDS_CHAR_BUDGET}

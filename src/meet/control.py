@@ -56,6 +56,8 @@ IMPORTANT: токен принимается и в query-параметре `?to
     speakers_split_apply(id, body)        развести реплики по группам одним шагом
     speakers_threshold(id, body)          что сделает порог узнавания {"value"}
     speakers_threshold_apply(id, body)    пересчитать имена с порогом одним шагом
+    text_preview(id, body)                «Исправить…»: сколько раз слово во встрече {"find"}
+    text_apply(id, body)                  заменить одно или все одним шагом, + в термины
     speakers_undo(id) / speakers_redo(id) отменить / повторить шаг (409 — уже нельзя)
     speakers_revert(id, body) -> dict     к состоянию после шага {"to_step_id"}
     transcribe(id, options) -> dict       поставить расшифровку в очередь
@@ -848,6 +850,10 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.speakers_threshold(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers/threshold/apply$"),
      lambda h, p, rid: _server_of(h).state.speakers_threshold_apply(unquote(rid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/text/preview$"),
+     lambda h, p, rid: _server_of(h).state.text_preview(unquote(rid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/text/apply$"),
+     lambda h, p, rid: _server_of(h).state.text_apply(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers/undo$"),
      lambda h, p, rid: _server_of(h).state.speakers_undo(unquote(rid))),
     ("POST", re.compile(r"^/recordings/([^/]+)/speakers/redo$"),

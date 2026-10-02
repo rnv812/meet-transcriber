@@ -277,6 +277,10 @@ def _window_transcript(data: dict | None) -> dict | None:
     return {**data, "segments": [_for_window(s) for s in data["segments"]]}
 
 
+def _int_or_none(value) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 def _without_marks(data: dict) -> dict:
     """Сохранение из редактора: служебное `has_words` окна — не в файл. Слов
     окно не видит, они остаются в words.json; у сегментов, текст или время
@@ -331,8 +335,9 @@ class TrayControl:
         # ключ — путь без регистра, значение — путь для снимка.
         self._processing: dict[str, str] = {}
         self._processing_lock = threading.Lock()
-        # Правки спикеров (панель «Спикеры»): по одной за раз — шаги истории
-        # и образцы голосов не должны переплетаться.
+        # Правки расшифровки — спикеров (панель «Спикеры») и текста
+        # («Исправить…»): по одной за раз — шаги общей истории встречи и
+        # образцы голосов не должны переплетаться.
         self._speakers_lock = threading.Lock()
         self.bus.subscribe(self._on_job_event)
 
@@ -1233,24 +1238,14 @@ class TrayControl:
                 "used": len(", ".join(hotwords.terms(text)))}
 
     def get_hotwords(self) -> dict:
-        try:
-            text = paths.hotwords_path().read_text(encoding="utf-8")
-        except OSError:
-            text = ""
-        return self._hotwords_reply(text)
+        return self._hotwords_reply(hotwords.read(paths.hotwords_path()))
 
     def put_hotwords(self, body: dict) -> dict:
-        import os
-
         text = (body or {}).get("text")
         if not isinstance(text, str):
             raise _bad_request("text должен быть строкой")
-        path = paths.hotwords_path()
-        tmp = path.with_name(path.name + ".tmp")
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(text, encoding="utf-8")
-            os.replace(tmp, path)
+            hotwords.write(paths.hotwords_path(), text)
         except OSError as e:
             raise RuntimeError(f"не удалось сохранить список слов: {e}") from e
         return self._hotwords_reply(text)
@@ -1471,9 +1466,11 @@ class TrayControl:
                 raise _bad_request(str(e))
             except OSError as e:
                 raise RuntimeError(f"не удалось сохранить: {e}") from e
-        search.forget(folder)
-        self._updated(folder)
-        self._speakers_reexport(folder)
+        if result is not None:  # None — правка ничего не записала
+            search.forget(folder)
+            self._updated(folder)
+            self._speakers_reexport(folder)
+        result = result or {}
         view = self._speakers_view(folder)
         return {**view, "voices_error": result.get("voices_error"),
                 **({"step": result["step"]} if "step" in result else {})}
@@ -1521,6 +1518,51 @@ class TrayControl:
             folder, body.get("turn"), at if isinstance(at, int) else -1,
             char if isinstance(char, int) else 0, body.get("to"), voices,
             count=body.get("count"), labels=body.get("labels")))
+
+    # --- «Исправить…»: распознанное слово во встрече и в терминах --------------
+
+    def text_preview(self, recording_id: str, body: dict | None) -> dict:
+        """Сколько раз слово или фраза встречается во встрече: {"find",
+        "whole_word", "segment", "offset"} → {"count", "samples", "here"}."""
+        from meet import textfix
+
+        body = body or {}
+        return self._speakers_read(recording_id, lambda folder: textfix.preview(
+            folder, body.get("find"), whole_word=body.get("whole_word") is not False,
+            segment=_int_or_none(body.get("segment")), offset=_int_or_none(body.get("offset"))))
+
+    def text_apply(self, recording_id: str, body: dict | None) -> dict:
+        """Исправить распознанное: {"find", "replace", "scope": "one" | "all",
+        "segment", "offset", "count", "add_hotword"} — замена одним шагом
+        истории встречи (её отменяют, как правки спикеров), исправление — в
+        термины распознавания. Текст уже такой, а термин просили — только термин."""
+        from meet import textfix
+
+        body = body or {}
+        term = body.get("add_hotword") is True
+        result: dict = {}
+
+        def change(folder: Path, voices: Path) -> dict | None:
+            try:
+                got = textfix.apply(
+                    folder, body.get("find"), body.get("replace"), str(body.get("scope") or ""), voices,
+                    segment=_int_or_none(body.get("segment")), offset=_int_or_none(body.get("offset")),
+                    whole_word=body.get("whole_word") is not False, count=_int_or_none(body.get("count")))
+            except textfix.Unchanged:
+                if not term:
+                    raise
+                return None
+            result.update(got)
+            return got
+
+        reply = self._speakers_change(recording_id, change)
+        if "error" in reply:
+            return reply
+        reply["changed"] = result.get("changed", 0)
+        if term:
+            reply["hotword"] = hotwords.add_to_file(paths.hotwords_path(),
+                                                    textfix.clean_text(body.get("replace")))
+        return reply
 
     # --- «Разделить спикера» и порог узнавания ----------------------------------
 

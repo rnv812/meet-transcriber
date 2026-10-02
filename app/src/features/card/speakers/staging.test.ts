@@ -65,3 +65,10 @@ test("шаг истории словами: реплики другому спи
     ops: [{ type: "relabel", from: ["Спикер 2", "Вы"], to: "Анна", segments: 4, turns: 3 }],
   })).toBe("3 реплики (Спикер 2, Вы) → Анна");
 });
+
+test("шаг «Исправить…» словами: что на что и сколько раз", () => {
+  expect(describeStep({
+    id: "t", at: "2026-09-30T10:00:00", enrolled: [], created_people: [],
+    ops: [{ type: "text", from: "кубер нетис", to: "Kubernetes", count: 3, scope: "all" }],
+  })).toBe("Исправлено: кубер нетис → Kubernetes (3)");
+});

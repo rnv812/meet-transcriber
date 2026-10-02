@@ -11,6 +11,7 @@ import { relabelTurns, splitTurn, undoSpeakers, type Endpoint } from "../../lib/
 import { nfc } from "../../lib/search";
 import { clock, errorText, plural } from "../../lib/format";
 import { NO_SPEAKER, runFrom, speakersOf, type Turn } from "../../lib/speakers";
+import { wordAt } from "../../lib/textfix";
 import type { Segment } from "../../lib/types";
 import { Popover } from "../../ui/Popover";
 import { TargetPicker, type Target } from "./speakers/TargetPicker";
@@ -18,7 +19,11 @@ import type { PersonColor } from "./Turns";
 
 type Menu = { anchor: HTMLElement; turn: number | null };
 /** «Разделить реплику здесь»: реплика, сегмент и место в его тексте; текст вокруг места — для подписи. */
-type SplitAt = { anchor: HTMLElement; turn: number; seg: number; char: number; before: string; after: string };
+type SplitAt = {
+  anchor: HTMLElement; turn: number; seg: number; char: number; before: string; after: string;
+  /** Место в тексте реплики целиком (для «Исправить слово…»). */
+  offset: number;
+};
 type Done = { text: string; undo: boolean };
 
 const turnsWord = (n: number) => plural(n, "реплика", "реплики", "реплик");
@@ -81,7 +86,7 @@ export type TurnEdit = {
 };
 
 export function useTurnEdit({
-  endpoint, id, turns, segments, people, owner, avatarVersion, onOpenPanel, onChanged,
+  endpoint, id, turns, segments, people, owner, avatarVersion, onOpenPanel, onChanged, onFixWord,
 }: {
   endpoint: Endpoint;
   id: string;
@@ -94,6 +99,8 @@ export function useTurnEdit({
   onOpenPanel: (label: string) => void;
   /** Назначено или отменено: перечитать запись. */
   onChanged: () => void;
+  /** «Исправить слово…» в меню правого щелчка: слово в месте `at` текста реплики. */
+  onFixWord?: (turn: number, at: number, anchor: HTMLElement) => void;
 }): TurnEdit {
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
   const [anchorTurn, setAnchorTurn] = useState<number | null>(null);
@@ -148,7 +155,7 @@ export function useTurnEdit({
     setError(null);
     setMenu(null);
     setSplitAt({
-      anchor: root, turn: t, seg: turn.idx[k] ?? turn.idx[0]!, char,
+      anchor: root, turn: t, seg: turn.idx[k] ?? turn.idx[0]!, char, offset,
       before: text.slice(Math.max(0, offset - QUOTE), offset).trimStart(),
       after: text.slice(offset, offset + QUOTE).trimEnd(),
     });
@@ -267,6 +274,8 @@ export function useTurnEdit({
   if (splitAt) {
     const turn = turns[splitAt.turn];
     const words = segments[splitAt.seg]?.has_words;
+    const turnText = nfc(turn?.texts.join(" ") ?? "");
+    const word = onFixWord ? wordAt(turnText, splitAt.offset) : null;
     menuNode = (
       <Popover anchor={splitAt.anchor} onClose={closeMenu} label="Разделить реплику здесь">
         <div className="tmenu">
@@ -286,6 +295,14 @@ export function useTurnEdit({
             people={people} owner={owner} endpoint={endpoint} avatarVersion={avatarVersion}
             placeholder="Спикер встречи, имя или поиск" onPick={(to) => void split(splitAt, to)} />
           {error && <div className="card__error tmenu__error" role="alert">{error}</div>}
+          {word && onFixWord && (
+            <div className="tmenu__links">
+              <button type="button" className="spk-link" title="Исправить распознанное (выделите слова и нажмите Ctrl+E)"
+                onClick={() => { const at = splitAt; closeMenu(); onFixWord(at.turn, at.offset, at.anchor); }}>
+                Исправить слово «{turnText.slice(word.start, word.end)}»…
+              </button>
+            </div>
+          )}
         </div>
       </Popover>
     );

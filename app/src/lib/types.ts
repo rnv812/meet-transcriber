@@ -201,7 +201,9 @@ export type SpeakerOp =
   /** Реплика разделена в `at` секунд, вторая часть — спикеру `to`. */
   | { type: "split_turn"; label: string; to: string; at: number; cut: "word" | "segment" }
   /** Заново разделено на спикеров: `speakers` — сколько их стало. */
-  | { type: "rediarize"; speakers: number; params: Record<string, number> };
+  | { type: "rediarize"; speakers: number; params: Record<string, number> }
+  /** «Исправить…»: распознанное `from` заменено на `to` — `count` раз (одно или во всей встрече). */
+  | { type: "text"; from: string; to: string; count: number; scope: "one" | "all" };
 export type SpeakerStep = {
   id: string;
   at: string;
@@ -292,6 +294,21 @@ export type SpeakersView = {
 export type SplitTurnRequest = {
   turn: number[]; at: number; char: number; to: string | null; labels: string[]; count: number;
 };
+/** Совпадение для «Исправить…»: сегмент, начало в его тексте, когда звучит и окружение. */
+export type TextSample = {
+  segment: number; offset: number; speaker: string | null; start: number; end: number;
+  before: string; match: string; after: string;
+};
+/** `POST …/text/preview`: сколько раз слово во встрече, первые совпадения, когда звучит выбранное. */
+export type TextPreview = { count: number; samples: TextSample[]; here: { start: number; end: number } | null };
+/** `POST …/text/apply`: заменить выбранное совпадение (`one`) или все (`all`); `count` — сегментов в окне. */
+export type TextFixRequest = {
+  find: string; replace: string; scope: "one" | "all"; segment: number; offset: number; count: number;
+  add_hotword: boolean;
+};
+/** Термин распознавания после «Исправить…»: добавлен ли (или уже был), не длиннее ли список лимита. */
+export type HotwordAdded = { term: string; added: boolean; over_budget?: boolean; error?: string };
+export type TextFixResult = SpeakersView & { changed: number; hotword?: HotwordAdded };
 /** Реплики — другому спикеру (`POST …/speakers/relabel`). */
 export type RelabelRequest = { idx: number[]; labels: string[]; count: number; to: string | null };
 /** Правка, как её шлёт окно: `to` — имя (rename) или подпись другого спикера (merge). */

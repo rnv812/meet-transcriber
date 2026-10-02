@@ -176,6 +176,16 @@ def _add_library_parsers(sub) -> None:
                           help="то же, что kb-export (прежнее имя)")
     p_no.add_argument("folder", help=folder_help)
 
+    p_fx = sub.add_parser("fix", parents=[as_json],
+                          help="исправить распознанное слово или фразу во встрече")
+    p_fx.add_argument("folder", help=folder_help)
+    p_fx.add_argument("wrong", help="как распознано (в кавычках, если несколько слов)")
+    p_fx.add_argument("right", help="как правильно")
+    p_fx.add_argument("--all", action="store_true",
+                      help="заменить во всей встрече (без флага — только первое совпадение)")
+    p_fx.add_argument("--hotword", action="store_true",
+                      help="добавить исправление в термины распознавания")
+
     p_mr = sub.add_parser("merge", parents=[as_json],
                           help="объединить записи одной встречи в одну и расшифровать")
     p_mr.add_argument("folders", nargs="+", metavar="запись",
