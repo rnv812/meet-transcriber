@@ -97,7 +97,7 @@ export type Recording = {
   transcript_at?: number | null;
   /** Спикеры не разделены: "skipped_no_token" — нет токена HF, "skipped_no_access" — HF отказал. */
   diarization?: string | null;
-  /** Распознано не выбранным движком: "not_russian" — запись не на русском, вместо GigaAM работал Whisper. */
+  /** Распознано не выбранным движком: "not_russian" — запись не на русском, вместо GigaAM работал Whisper; "cuda_failed" — видеокарта без библиотек CUDA, распознал процессор. */
   asr_note?: string | null;
   /** macOS: звук собеседников не записан ("missing") или записан не с начала ("partial"). */
   system_audio?: "missing" | "partial" | null;

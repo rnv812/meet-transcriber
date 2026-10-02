@@ -150,7 +150,12 @@ def _backend(device: str) -> str:
 def _device(gpu_available: bool) -> str:
     """Устройство для оценки времени — без ctranslate2/torch: state() зовут в
     резиденте и в воркере установки, где загруженная DLL мешает pip обновить её.
-    Явный выбор из настроек побеждает, «auto» опирается на nvidia-smi."""
+    Явный выбор из настроек побеждает. «auto» — то же правило, что у
+    распознавания (asr.resolve_device): карта видна (nvidia-smi) и есть чем
+    на ней считать (asr.cuda_runtime_ok без загрузки DLL) — движок профиля CPU
+    на машине с NVIDIA показывает процессор и GigaAM, а не CUDA."""
+    from meet import asr
+
     try:
         from meet import settings
 
@@ -159,7 +164,7 @@ def _device(gpu_available: bool) -> str:
         setting = "auto"
     if setting in ("cuda", "cpu"):
         return setting
-    return "cuda" if gpu_available else "cpu"
+    return "cuda" if gpu_available and asr.cuda_runtime_ok(load=False) else "cpu"
 
 
 def estimate_seconds(duration_s: float, device: str, backend: str | None = None) -> float:

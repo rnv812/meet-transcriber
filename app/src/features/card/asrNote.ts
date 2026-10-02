@@ -7,6 +7,8 @@ export const ASR_NOTES: Record<string, string> = {
   not_russian: "Запись не на русском — использован Whisper",
   // GigaAM не скачалась или не загрузилась (нет сети, файл повреждён); причина — в журнале.
   gigaam_failed: "GigaAM недоступна — использован Whisper",
+  // Видеокарта не заработала (нет библиотек CUDA): распознал процессор; причина — в журнале.
+  cuda_failed: "Видеокарта недоступна — распознано на процессоре",
 };
 
 export const asrNoteText = (note: string | null | undefined): string | null =>

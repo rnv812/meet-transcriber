@@ -1,4 +1,4 @@
-import { systemAudioText } from "./asrNote";
+import { asrNoteText, systemAudioText } from "./asrNote";
 
 test("про разрешение — только когда дело было в нём", () => {
   expect(systemAudioText("missing", "permission"))
@@ -16,4 +16,11 @@ test("про разрешение — только когда дело было 
   }
   expect(systemAudioText(null, "permission")).toBeNull();
   expect(systemAudioText(undefined)).toBeNull();
+});
+
+test("пометка о распознавании: видеокарта без библиотек CUDA — процессор", () => {
+  expect(asrNoteText("cuda_failed")).toBe("Видеокарта недоступна — распознано на процессоре");
+  expect(asrNoteText("gigaam_failed")).toBe("GigaAM недоступна — использован Whisper");
+  expect(asrNoteText("неизвестно")).toBeNull();
+  expect(asrNoteText(null)).toBeNull();
 });
