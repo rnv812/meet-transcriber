@@ -247,6 +247,17 @@ def _conflict(text: str):
 TITLE_MAX = 200
 # Расшифровка для агента во вкладке «Агент» (Claude Code / Codex в папке записи).
 AGENT_TRANSCRIPT_MD = "transcript.md"
+# Лента живого режима (пишет meet.live во время записи с ассистентом) и разметка
+# встречи (задача анализа): агент получает их, если они есть.
+LIVE_TRANSCRIPT_MD = "live_transcript.md"
+AGENT_ANALYSIS_JSON = "analysis.json"
+# Шапка transcript.md, пока точной расшифровки нет, а лента живого режима есть.
+AGENT_LIVE_HEADER = (
+    "# Черновая расшифровка живого режима\n\n"
+    "Запись ещё идёт или расшифровывается: это лента живого ассистента, имена "
+    "спикеров в ней могут быть неточными. Точная расшифровка заменит этот файл "
+    "при следующем запуске агента.\n\n"
+)
 
 # Сколько «Удалить» ждёт, пока плеер и сведение отпустят файлы записи.
 DELETE_WAIT_S = 3.0
@@ -1353,20 +1364,49 @@ class TrayControl:
         safe_name = export.safe_filename(title, recording_id)
         return {"filename": f"{safe_name}.{fmt}", "content": content}
 
+    def _agent_extras(self, folder: Path) -> list[str]:
+        """Файлы рядом с расшифровкой, которые стоит знать агенту: итоги и
+        разметка встречи — если они есть."""
+        from meet import assistant
+
+        return [name for name in (assistant.SUMMARY_MD, AGENT_ANALYSIS_JSON)
+                if (folder / name).is_file()]
+
+    def agent_files(self, recording_id: str) -> dict:
+        """Что получит агент, без записи файлов (строка «Контекст: …» во
+        вкладке «Агент»). `live` — расшифровки ещё нет, агент получит ленту
+        живого режима; пустой список — агенту пока нечего дать."""
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        if library.transcript_path(folder).is_file():
+            return {"files": [AGENT_TRANSCRIPT_MD, *self._agent_extras(folder)], "live": False}
+        if (folder / LIVE_TRANSCRIPT_MD).is_file():
+            return {"files": [AGENT_TRANSCRIPT_MD], "live": True}
+        return {"files": [], "live": False}
+
     def agent_context(self, recording_id: str) -> dict:
         """Файлы для вкладки «Агент» (Claude Code / Codex в папке встречи):
         `transcript.md` — расшифровка тем же Markdown, что «Экспорт» (имена
         спикеров, таймкоды), переписывается при каждом запуске агента
-        атомарно; `summary.md` — итоги, если они есть (пишет их задача итогов).
-        Папку оболочка проверяет сама: она должна лежать в папке записей."""
-        from meet import assistant
-
+        атомарно; `summary.md` — итоги и `analysis.json` — разметка встречи,
+        если они есть. Пока точной расшифровки нет (идёт запись с ассистентом
+        или расшифровка), transcript.md — лента живого режима с пометкой
+        «черновая». Папку оболочка проверяет сама: она должна лежать в папке
+        записей."""
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
         rendered = self.export(recording_id, "md")
-        if "error" in rendered:
-            return rendered
+        live = "error" in rendered
+        if live:
+            try:
+                feed = (folder / LIVE_TRANSCRIPT_MD).read_text(encoding="utf-8")
+            except OSError:
+                return rendered
+            content = AGENT_LIVE_HEADER + feed
+        else:
+            content = rendered["content"]
         import tempfile
 
         path = folder / AGENT_TRANSCRIPT_MD
@@ -1378,15 +1418,15 @@ class TrayControl:
                                         dir=folder)
             tmp = Path(name)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(rendered["content"])
+                f.write(content)
             os.replace(tmp, path)
         except OSError as e:
             if tmp is not None:
                 tmp.unlink(missing_ok=True)
             raise RuntimeError(f"не удалось подготовить расшифровку для агента: {e}") from e
         files = [AGENT_TRANSCRIPT_MD]
-        if (folder / assistant.SUMMARY_MD).is_file():
-            files.append(assistant.SUMMARY_MD)
+        if not live:
+            files += self._agent_extras(folder)
         return {"folder": str(folder), "files": files}
 
     def save_transcript(self, recording_id: str, data: dict) -> dict:

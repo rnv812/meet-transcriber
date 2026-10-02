@@ -324,10 +324,15 @@ export async function getLiveDraft(ep: Endpoint, id: string): Promise<LiveDraft 
     throw e;
   }
 }
-/** Вопрос задачей (kind "ask"); ответ ляжет в `getQa` к `job.done`. */
-export const ask = (ep: Endpoint, id: string, question: string) =>
-  json<Job>(ep, `/recordings/${enc(id)}/ask`, body("POST", { question }));
+/** Прошлые вопросы (`qa.jsonl`; новые задаёт `meet ask` или агент во вкладке «Агент»). */
 export const getQa = (ep: Endpoint, id: string) => json<{ items: QaItem[] }>(ep, `/recordings/${enc(id)}/qa`);
+/**
+ * Что получит агент во вкладке «Агент» (без записи файлов). `live` — точной
+ * расшифровки ещё нет, агент получит ленту живого режима; пустой список —
+ * агенту пока нечего дать.
+ */
+export const getAgentContext = (ep: Endpoint, id: string) =>
+  json<{ files: string[]; live: boolean }>(ep, `/recordings/${enc(id)}/agent-context`);
 export const getAssistant = (ep: Endpoint) => json<AssistantInfo>(ep, "/assistant");
 /** Короткий вызов модели — до полутора минут. */
 export const checkProvider = (ep: Endpoint, provider: string) =>

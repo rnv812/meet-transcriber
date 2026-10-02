@@ -124,6 +124,10 @@ button.turn__speaker { padding: 0; border: 0; background: none; font-family: inh
 button.turn__speaker:hover { text-decoration: underline; }
 .turn__speaker--unnamed:hover { color: var(--accent-hover); }
 .turn__flag { color: var(--amber); font-size: 11px; }
+/* ✦ «Спросить агента» у реплики: видна при наведении и фокусе (и с клавиатуры — A). */
+.turn__ask { align-self: center; margin: -3px 0; opacity: 0; }
+.turn:hover .turn__ask, .turn:focus-within .turn__ask, .turn:focus .turn__ask, .turn__ask:focus-visible { opacity: 1; }
+@media (hover: none) { .turn__ask { opacity: 0.7; } }
 .turn__text { margin: 2px 0 0; color: var(--text); line-height: 1.55; }
 .popover {
   position: fixed; z-index: 50; padding: 10px; background: var(--surface-2);
@@ -149,6 +153,21 @@ button.turn__speaker:hover { text-decoration: underline; }
 .tmenu__hint { font-size: 11px; }
 .tmenu__error { margin: 0; font-size: 12px; }
 .tmenu__links { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+/* «Спросить агента…» и готовые вопросы в меню правого щелчка. */
+.tmenu__ask { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 6px; border-top: 1px solid var(--line); }
+.tmenu__ask-main {
+  display: inline-flex; align-items: center; gap: 6px; flex-basis: 100%; padding: 4px 6px; margin: 0 -6px;
+  border: 0; border-radius: var(--r-md); background: none; color: var(--accent-hi); font: inherit; text-align: left;
+  cursor: pointer;
+}
+.tmenu__ask-main:hover { background: var(--surface-hover); }
+.tmenu__intent {
+  height: 22px; padding: 0 8px; border: 1px solid var(--line-2); border-radius: 11px; background: transparent;
+  color: var(--text-2); font: inherit; font-size: 11.5px; cursor: pointer;
+}
+.tmenu__intent:hover { background: var(--surface-hover); color: var(--text); }
+.tsel__ask { display: inline-flex; align-items: center; gap: 5px; }
+.tsel__ask svg { color: var(--accent-hi); }
 .tpick { padding: 4px; }
 
 /* Запись с ассистентом: шапка и рабочая область ассистента (live/live.css). */

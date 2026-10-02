@@ -58,11 +58,11 @@ test("предпросмотр выгрузки: значения чернови
   expect(url.searchParams.get("include_srt")).toBe("true");
 });
 
-test("ask: POST {question} на запись", async () => {
+test("getAgentContext: GET — что получит агент, без записи файлов", async () => {
   const f = okFetch();
-  await api.ask(ep, "a b", "что решили?");
-  expect(f.mock.calls[0]![0]).toBe("http://h/recordings/a%20b/ask");
-  expect(f.mock.calls[0]![1]).toMatchObject({ method: "POST", body: JSON.stringify({ question: "что решили?" }) });
+  await api.getAgentContext(ep, "a b");
+  expect(f.mock.calls[0]![0]).toBe("http://h/recordings/a%20b/agent-context");
+  expect((f.mock.calls[0]![1] as RequestInit).method ?? "GET").toBe("GET");
 });
 
 test("итоги, вопросы, база знаний, ассистент: адреса и методы", async () => {

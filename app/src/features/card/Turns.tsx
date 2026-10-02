@@ -2,6 +2,7 @@ import { memo, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { clock } from "../../lib/format";
 import { nfc, type Range } from "../../lib/search";
 import { NO_SPEAKER, isUnnamed, type Turn } from "../../lib/speakers";
+import { AskAgentButton } from "../../ui/AskAgent";
 import { Highlight } from "../../ui/Highlight";
 
 export type PersonColor = { name: string; color: string; has_avatar: boolean };
@@ -11,7 +12,7 @@ export type TurnMarks = Map<number, { ranges: Range[]; first: number }>;
 
 /** Плоский список без компонента на реплику: 2 часа записи — около тысячи блоков. */
 export const Turns = memo(function Turns({
-  turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, marks,
+  turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, marks, onAskAgent,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
@@ -26,6 +27,8 @@ export const Turns = memo(function Turns({
   /** Правый щелчок по тексту: «Разделить реплику здесь». */
   onSplitAt?: (turn: number, event: MouseEvent<HTMLElement>) => void;
   marks?: TurnMarks;
+  /** ✦ «Спросить агента» (кнопка при наведении и фокусе, клавиша A): номера реплик. */
+  onAskAgent?: (turns: number[]) => void;
 }) {
   // Ctrl/Shift+щелчок по реплике — выбор; простой щелчок по тексту остаётся выделением текста.
   const pick = (e: MouseEvent, i: number) => {
@@ -40,6 +43,13 @@ export const Turns = memo(function Turns({
   const [focusAt, setFocusAt] = useState(0);
   const rowKey = (e: KeyboardEvent<HTMLDivElement>, i: number) => {
     if (!onSelect || e.target !== e.currentTarget) return;
+    // A (по коду клавиши — и в русской раскладке): спросить агента об этой реплике
+    // или, если она среди выбранных, обо всех выбранных.
+    if (e.code === "KeyA" && onAskAgent && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      onAskAgent(selected?.has(i) && selected.size > 1 ? [...selected].sort((a, b) => a - b) : [i]);
+      return;
+    }
     const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
     if (step || e.key === "Home" || e.key === "End") {
       e.preventDefault();
@@ -77,7 +87,7 @@ export const Turns = memo(function Turns({
             tabIndex={onSelect ? (i === roving ? 0 : -1) : undefined}
             role={onSelect ? "group" : undefined}
             aria-label={onSelect ? `Реплика ${clock(t.start)}, ${t.speaker}${on ? ", выбрана" : ""}` : undefined}
-            aria-keyshortcuts={onSelect ? "Space Shift+Space" : undefined}
+            aria-keyshortcuts={onSelect ? (onAskAgent ? "Space Shift+Space A" : "Space Shift+Space") : undefined}
             onFocus={onSelect ? () => setFocusAt(i) : undefined}
             onKeyDown={onSelect ? (e) => rowKey(e, i) : undefined}
             onMouseDown={onSelect ? (e) => { if (e.shiftKey) e.preventDefault(); } : undefined}
@@ -106,6 +116,11 @@ export const Turns = memo(function Turns({
                     }}>{t.speaker}</button>
                 )}
                 {t.uncertain && <span className="turn__flag">(нахлёст)</span>}
+                {onAskAgent && t.speaker !== NO_SPEAKER && (
+                  <AskAgentButton className="turn__ask" label="Спросить агента об этой реплике"
+                    title="Спросить агента об этой реплике (A)" aria-keyshortcuts="A"
+                    onClick={(e) => { if (!(onSelect && (e.ctrlKey || e.metaKey || e.shiftKey))) onAskAgent([i]); }} />
+                )}
               </div>
               {/* Реплика, найденная только по спикеру, — совпадение целиком. */}
               <p className="turn__text" data-hit={mark && !mark.ranges.length ? mark.first : undefined}

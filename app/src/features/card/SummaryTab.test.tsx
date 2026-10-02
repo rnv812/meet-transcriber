@@ -234,3 +234,32 @@ test("итоги есть — черновик не спрашиваем и не
   expect(api.getLiveDraft).not.toHaveBeenCalled();
   expect(screen.queryByText("Черновик из живого режима")).toBeNull();
 });
+
+test("✦ у пунктов итогов: спросить агента о пункте (с разделом)", async () => {
+  hasSummary();
+  const onAskAgent = vi.fn();
+  show({ onAskAgent });
+  const ask = await screen.findByRole("button", { name: "Спросить агента об этом пункте: выпускаем в пятницу" });
+  await userEvent.click(ask);
+  expect(onAskAgent).toHaveBeenCalledWith({ kind: "summary", refs: [{ text: "выпускаем в пятницу", section: "Решения" }] });
+  await userEvent.click(screen.getByRole("button", { name: /Спросить агента об этом пункте: Кто: Демьян/ }));
+  expect(onAskAgent).toHaveBeenLastCalledWith({
+    kind: "summary", refs: [{ text: "Кто: Демьян; Что: отчёт; Срок: пт", section: "Решения" }],
+  });
+});
+
+test("без onAskAgent кнопок ✦ нет", async () => {
+  hasSummary();
+  show();
+  await screen.findByText("Копировать");
+  expect(screen.queryByRole("button", { name: /Спросить агента/ })).toBeNull();
+});
+
+test("✦ и у черновика из живого режима", async () => {
+  noSummary();
+  vi.mocked(api.getLiveDraft).mockResolvedValue({ markdown: "## Главное\n\n- бюджет на квартал", summary: {}, hints: [], saved_at: 1 } as never);
+  const onAskAgent = vi.fn();
+  show({ onAskAgent });
+  await userEvent.click(await screen.findByRole("button", { name: "Спросить агента об этом пункте: бюджет на квартал" }));
+  expect(onAskAgent).toHaveBeenCalledWith({ kind: "summary", refs: [{ text: "бюджет на квартал", section: "Главное" }] });
+});

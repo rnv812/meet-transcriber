@@ -1,6 +1,10 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { AgentTab, CODEX_SCRIPT_NOTE, agentProviders, codexScriptOnly, defaultProvider } from "./AgentTab";
+import {
+  AgentTab, CODEX_SCRIPT_NOTE, PASTE_WAIT_MS, agentProviders, codexScriptOnly, defaultProvider,
+} from "./AgentTab";
+import { flatPrompt } from "../../lib/agentRef";
 import { CardTabs } from "./CardTabs";
 import * as api from "../../lib/api";
 import type { AgentData, AgentExit } from "../../lib/shell";
@@ -16,6 +20,9 @@ const h = vi.hoisted(() => {
     pasted: string[] = [];
     disposed = false;
     resets = 0;
+    focused = 0;
+    /** Режим вставки, который включает сам агент (Claude Code, Codex). */
+    modes = { bracketedPasteMode: true };
     onDataCb: ((d: string) => void) | null = null;
     onResizeCb: ((s: { cols: number; rows: number }) => void) | null = null;
     keys: ((e: KeyboardEvent) => boolean) | null = null;
@@ -27,7 +34,7 @@ const h = vi.hoisted(() => {
     onResize(cb: (s: { cols: number; rows: number }) => void) { this.onResizeCb = cb; return { dispose() {} }; }
     write(data: string) { this.written.push(data); }
     reset() { this.written = []; this.resets++; }
-    focus() {}
+    focus() { this.focused++; }
     dispose() { this.disposed = true; }
     hasSelection() { return this.selection !== ""; }
     getSelection() { return this.selection; }
@@ -58,6 +65,8 @@ vi.mock("../../lib/shell", () => h.shell);
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
   getAssistant: vi.fn(),
+  getQa: vi.fn(),
+  getAgentContext: vi.fn(),
 }));
 
 const assistant = (o: Partial<AssistantInfo> = {}): AssistantInfo => ({
@@ -71,10 +80,13 @@ const assistant = (o: Partial<AssistantInfo> = {}): AssistantInfo => ({
 });
 
 const term = () => h.FakeTerminal.all.at(-1)!;
+const ep = { base: "/api", token: null };
 const data = (id: string, text: string) => act(() => h.listeners.data.forEach((cb) => cb({ id, data: text })));
 const exit = (id: string, code: number | null) => act(() => h.listeners.exit.forEach((cb) => cb({ id, code })));
 
-async function show(info: AssistantInfo | null = assistant(), more: { onOpenSettings?: (s: string) => void } = {}) {
+type More = Partial<Pick<Parameters<typeof AgentTab>[0], "onOpenSettings" | "endpoint" | "insert">>;
+
+async function show(info: AssistantInfo | null = assistant(), more: More = {}) {
   const view = render(<AgentTab id="r1" assistant={info} {...more} />);
   if (h.shell.inTauri() && agentProviders(info).length) {
     await waitFor(() => expect(h.FakeTerminal.all.length).toBe(1));
@@ -98,6 +110,8 @@ beforeEach(() => {
     return () => { h.listeners.exit = h.listeners.exit.filter((x) => x !== cb); };
   });
   h.shell.agentSpawn.mockResolvedValue("agent-1");
+  vi.mocked(api.getQa).mockResolvedValue({ items: [] });
+  vi.mocked(api.getAgentContext).mockResolvedValue({ files: ["transcript.md", "summary.md"], live: false });
 });
 
 test("агенты — только установленные Claude Code и Codex; по умолчанию выбранный для итогов", () => {
@@ -157,7 +171,7 @@ test("экран терминала исчез (список агентов на
 test("вкладка «Агент» в карточке готовой записи", async () => {
   vi.mocked(api.getAssistant).mockResolvedValue(assistant());
   h.shell.inTauri.mockReturnValue(false);
-  render(<CardTabs endpoint={{ base: "/api", token: null }} id="r1" folder="C:/r1" jobs={[]} transcript={<p>текст</p>} />);
+  render(<CardTabs endpoint={ep} id="r1" folder="C:/r1" jobs={[]} transcript={<p>текст</p>} />);
   await userEvent.click(screen.getByRole("tab", { name: "Агент" }));
   expect(screen.getByRole("tab", { name: "Агент" })).toHaveAttribute("aria-selected", "true");
   expect(screen.getByText("Доступно в приложении")).toBeInTheDocument();
@@ -293,4 +307,209 @@ test("Ctrl+Shift+C копирует выделение, Ctrl+Shift+V встав�
   expect(t.keys!(key("KeyV"))).toBe(false);
   await waitFor(() => expect(t.pasted).toEqual(["вставка"]));
   expect(t.keys!(new KeyboardEvent("keydown", { code: "KeyC", ctrlKey: true }))).toBe(true);
+});
+
+// --- вставка ссылок («Спросить агента») -----------------------------------------
+
+const REF = "Про реплику:\n[01:05] Анна: «Сдаём отчёт в пятницу.»\n";
+
+test("агент не запущен — запускается сам, ссылка вставляется в поле ввода без Enter", async () => {
+  await show(assistant(), { insert: { text: REF } });
+  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalledWith("r1", "claude-code", 80, 24));
+  await waitFor(() => expect(term().pasted).toEqual([REF]));
+  expect(screen.getByText("Работает")).toBeInTheDocument();
+  expect(term().focused).toBeGreaterThan(0);
+  // Вставка — не нажатие клавиш: напрямую в агента ничего не пишется.
+  expect(h.shell.agentWrite).not.toHaveBeenCalled();
+});
+
+test("сеанс уже работает — ссылка вставляется сразу, второго запуска нет", async () => {
+  const view = await show();
+  await userEvent.click(startButton());
+  await screen.findByText("Работает");
+  view.rerender(<AgentTab id="r1" assistant={assistant()} insert={{ text: REF }} />);
+  await waitFor(() => expect(term().pasted).toEqual([REF]));
+  expect(h.shell.agentSpawn).toHaveBeenCalledTimes(1);
+  // Тот же запрос при перерисовке второй раз не вставляется; новый — вставляется.
+  const next = { text: "Про реплику:\n[00:01] Олег: «да»\n" };
+  view.rerender(<AgentTab id="r1" assistant={assistant()} insert={next} />);
+  view.rerender(<AgentTab id="r1" assistant={assistant()} insert={next} />);
+  await waitFor(() => expect(term().pasted).toHaveLength(2));
+  await new Promise((r) => setTimeout(r, 50));
+  expect(term().pasted).toHaveLength(2);
+});
+
+test("агент ещё рисует экран — вставка ждёт, пока вывод затихнет", async () => {
+  let resolve: (id: string) => void = () => {};
+  h.shell.agentSpawn.mockReturnValue(new Promise<string>((r) => { resolve = r; }));
+  await show(assistant(), { insert: { text: REF } });
+  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalled());
+  await act(async () => resolve("agent-1"));
+  await data("agent-1", "Claude Code\r\n> ");
+  expect(term().pasted).toEqual([]);
+  await waitFor(() => expect(term().pasted).toEqual([REF]));
+});
+
+test("агент не включил режим вставки — через время ссылка вставляется одной строкой", async () => {
+  const view = await show();
+  await userEvent.click(startButton());
+  await screen.findByText("Работает");
+  term().modes.bracketedPasteMode = false;
+  vi.useFakeTimers();
+  try {
+    view.rerender(<AgentTab id="r1" assistant={assistant()} insert={{ text: REF }} />);
+    act(() => { vi.advanceTimersByTime(PASTE_WAIT_MS / 2); });
+    expect(term().pasted).toEqual([]);
+    act(() => { vi.advanceTimersByTime(PASTE_WAIT_MS); });
+    expect(term().pasted).toEqual([flatPrompt(REF)]);
+    expect(term().pasted[0]).not.toContain("\n");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("без установленного агента — ссылку можно скопировать, есть «Открыть настройки»", async () => {
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  const onOpenSettings = vi.fn();
+  await show(assistant({ available: { "claude-code": { found: false }, codex: { found: false } } }),
+    { onOpenSettings, insert: { text: REF } });
+  const note = await screen.findByRole("status", { name: "Ссылка не вставлена" });
+  expect(note).toHaveTextContent("Агент недоступен");
+  expect(note).toHaveTextContent("[01:05] Анна: «Сдаём отчёт в пятницу.»");
+  await userEvent.click(within(note).getByRole("button", { name: "Копировать" }));
+  expect(writeText).toHaveBeenCalledWith(REF.trimEnd());
+  await userEvent.click(within(note).getByRole("button", { name: "Открыть настройки" }));
+  expect(onOpenSettings).toHaveBeenCalledWith("assistant");
+  expect(h.shell.agentSpawn).not.toHaveBeenCalled();
+});
+
+test("вне приложения — то же уведомление вместо вставки", async () => {
+  h.shell.inTauri.mockReturnValue(false);
+  await show(assistant(), { insert: { text: REF } });
+  expect(await screen.findByRole("status", { name: "Ссылка не вставлена" })).toHaveTextContent("Сдаём отчёт");
+});
+
+// --- контекст и прошлые вопросы ----------------------------------------------------
+
+test("строка «Контекст»: какие файлы получит агент", async () => {
+  await show(assistant(), { endpoint: ep });
+  expect(await screen.findByText("Контекст: transcript.md · summary.md")).toBeInTheDocument();
+  expect(api.getAgentContext).toHaveBeenCalledWith(ep, "r1");
+});
+
+test("идёт запись — агент получит ленту живого режима", async () => {
+  vi.mocked(api.getAgentContext).mockResolvedValue({ files: ["transcript.md"], live: true });
+  await show(assistant(), { endpoint: ep });
+  expect(await screen.findByText(/Контекст: transcript\.md — черновая лента живого режима/)).toBeInTheDocument();
+});
+
+test("агенту нечего дать (расшифровки нет) — запуск недоступен, сказано почему", async () => {
+  vi.mocked(api.getAgentContext).mockResolvedValue({ files: [], live: false });
+  await show(assistant(), { endpoint: ep, insert: { text: REF } });
+  expect(await screen.findByText(/Агент станет доступен, когда появится расшифровка/)).toBeInTheDocument();
+  expect(startButton()).toBeDisabled();
+  expect(h.shell.agentSpawn).not.toHaveBeenCalled();
+});
+
+test("контекст перечитывается при запуске (итоги могли появиться)", async () => {
+  await show(assistant(), { endpoint: ep });
+  await screen.findByText("Контекст: transcript.md · summary.md");
+  vi.mocked(api.getAgentContext).mockResolvedValue({ files: ["transcript.md", "summary.md", "analysis.json"], live: false });
+  await userEvent.click(startButton());
+  expect(await screen.findByText("Контекст: transcript.md · summary.md · analysis.json")).toBeInTheDocument();
+});
+
+test("«Прошлые вопросы»: свёрнутый список только для чтения, пока агент не запущен", async () => {
+  vi.mocked(api.getQa).mockResolvedValue({ items: [
+    { q: "Кто готовит отчёт?", a: "**Анна**, к пятнице.", at: 1_790_000_000, provider: "claude-code" },
+  ] });
+  await show(assistant(), { endpoint: ep });
+  const past = await screen.findByRole("group", { name: "Прошлые вопросы" });
+  expect(within(past).getByText("Прошлые вопросы (1)")).toBeInTheDocument();
+  expect(within(past).getByText("Кто готовит отчёт?")).toBeInTheDocument();
+  expect(within(past).getByText("Анна").tagName).toBe("STRONG");
+  expect(screen.queryByRole("textbox")).toBeNull();
+  await userEvent.click(startButton());
+  await screen.findByText("Работает");
+  expect(screen.queryByRole("group", { name: "Прошлые вопросы" })).toBeNull();
+});
+
+test("прошлых вопросов нет — и блока нет", async () => {
+  await show(assistant(), { endpoint: ep });
+  await screen.findByText("Контекст: transcript.md · summary.md");
+  expect(screen.queryByRole("group", { name: "Прошлые вопросы" })).toBeNull();
+});
+
+test("прошлые вопросы видны и без агента", async () => {
+  vi.mocked(api.getQa).mockResolvedValue({ items: [{ q: "Что решили?", a: "Перенести релиз.", at: 1, provider: null }] });
+  await show(assistant({ available: { "claude-code": { found: false }, codex: { found: false } } }), { endpoint: ep });
+  expect(await screen.findByText("Что решили?")).toBeInTheDocument();
+});
+
+// --- этапы карточки: агент переживает «живой режим → расшифровка → готово» -----------
+
+test("этапы: «Живой режим · Агент» → «Расшифровка · Агент» → «Расшифровка · Итоги · Агент», сеанс не гаснет", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue(assistant());
+  const props = { endpoint: ep, id: "r1", folder: "C:/r1", jobs: [] };
+  const view = render(<CardTabs {...props} stage="live" transcript={<p>лента</p>} />);
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Живой режим", "Агент"]);
+  await userEvent.click(screen.getByRole("tab", { name: "Агент" }));
+  await waitFor(() => expect(h.FakeTerminal.all).toHaveLength(1));
+  await userEvent.click(await screen.findByRole("button", { name: "Запустить" }));
+  await screen.findByText("Работает");
+  view.rerender(<CardTabs {...props} stage="pending" transcript={<p>расшифровка идёт</p>} />);
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Расшифровка", "Агент"]);
+  view.rerender(<CardTabs {...props} stage="ready" transcript={<p>текст</p>} />);
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Расшифровка", "Итоги", "Агент"]);
+  expect(screen.getByRole("tab", { name: "Агент" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByText("Работает")).toBeInTheDocument();
+  expect(h.FakeTerminal.all).toHaveLength(1);
+  expect(h.shell.agentKill).not.toHaveBeenCalled();
+});
+
+test("вкладки этапа нет (итоги во время перерасшифровки) — показана первая", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue(assistant());
+  h.shell.inTauri.mockReturnValue(false);
+  const props = { endpoint: ep, id: "r1", folder: "C:/r1", jobs: [] };
+  const view = render(<CardTabs {...props} stage="ready" transcript={<p>текст</p>} />);
+  await userEvent.click(screen.getByRole("tab", { name: "Итоги" }));
+  view.rerender(<CardTabs {...props} stage="pending" transcript={<p>идёт расшифровка</p>} />);
+  expect(screen.getByRole("tab", { name: "Расшифровка" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByText("идёт расшифровка")).toBeVisible();
+});
+
+test("просьба «Спросить агента» открывает вкладку «Агент» и передаёт ссылку", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue(assistant());
+  const props = { endpoint: ep, id: "r1", folder: "C:/r1", jobs: [], transcript: <p>текст</p> };
+  const view = render(<CardTabs {...props} />);
+  expect(screen.getByRole("tab", { name: "Расшифровка" })).toHaveAttribute("aria-selected", "true");
+  view.rerender(<CardTabs {...props} agentRequest={{ text: REF }} />);
+  expect(screen.getByRole("tab", { name: "Агент" })).toHaveAttribute("aria-selected", "true");
+  await waitFor(() => expect(term().pasted).toEqual([REF]));
+});
+
+test("StrictMode (двойной запуск эффектов в окне разработки): ссылка всё равно вставляется", async () => {
+  render(<StrictMode><AgentTab id="r1" assistant={assistant()} insert={{ text: REF }} /></StrictMode>);
+  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(term().pasted).toEqual([REF]));
+});
+
+test("StrictMode без агента: уведомление со ссылкой не пропадает", async () => {
+  h.shell.inTauri.mockReturnValue(false);
+  render(<StrictMode><AgentTab id="r1" assistant={assistant()} insert={{ text: REF }} /></StrictMode>);
+  expect(await screen.findByRole("status", { name: "Ссылка не вставлена" })).toHaveTextContent("Сдаём отчёт");
+});
+
+test("другая запись — недоставленная ссылка не уходит в её агента", async () => {
+  let resolve: (id: string) => void = () => {};
+  h.shell.agentSpawn.mockReturnValue(new Promise<string>((r) => { resolve = r; }));
+  const request = { text: REF };
+  const view = await show(assistant(), { insert: request });
+  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalled());
+  h.shell.agentSpawn.mockResolvedValue("agent-2");
+  view.rerender(<AgentTab id="r2" assistant={assistant()} insert={request} />);
+  await act(async () => resolve("agent-1"));
+  await new Promise((r) => setTimeout(r, 400));
+  expect(term().pasted).toEqual([]);
 });

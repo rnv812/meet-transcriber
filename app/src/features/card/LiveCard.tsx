@@ -3,12 +3,16 @@
  * в плавающей панели (вкладки «Лента · Сводка · Подсказки · Спросить», в
  * широкой карточке — две колонки), но в полный размер. Пока ассистент
  * дописывает дорожки (`stopping`), лента остаётся, а поток и вопросы — нет.
+ *
+ * «Спросить об этом» у подсказки здесь — к агенту: `onAskAgent` переводит
+ * карточку на вкладку «Агент» со ссылкой на подсказку (в плавающей панели —
+ * вопрос ассистенту, как раньше).
  */
 
 import { useRef } from "react";
 
 import type { Endpoint } from "../../lib/api";
-import type { LiveStatus } from "../../lib/types";
+import type { LiveHint, LiveStatus } from "../../lib/types";
 import { LiveWorkspace, useLiveView } from "../../live/LiveWorkspace";
 import { QuietIcon } from "../../live/icons";
 import { useQuiet } from "../../live/useAttention";
@@ -16,7 +20,12 @@ import { useLiveAsk } from "../../live/useLastLook";
 import { useLive } from "../../live/useLive";
 import { useWide } from "../../live/useWide";
 
-export function LiveCard({ endpoint, live }: { endpoint: Endpoint; live: LiveStatus }) {
+export function LiveCard({ endpoint, live, onAskAgent }: {
+  endpoint: Endpoint;
+  live: LiveStatus;
+  /** «Спросить об этом» у подсказки — агенту во вкладке «Агент». */
+  onAskAgent?: (hint: LiveHint) => void;
+}) {
   const stopping = live.stopping || !live.active;
   // При остановке резидент поток уже закрыл: без `!stopping` хук
   // переподключался бы и писал «Нет связи с ассистентом».
@@ -39,7 +48,7 @@ export function LiveCard({ endpoint, live }: { endpoint: Endpoint; live: LiveSta
         </button>
       </div>
       <div className="live-card__body">
-        <LiveWorkspace live={state} view={view} onAsk={ask} disabled={stopping} />
+        <LiveWorkspace live={state} view={view} onAsk={ask} disabled={stopping} onAskHint={onAskAgent} />
       </div>
     </div>
   );

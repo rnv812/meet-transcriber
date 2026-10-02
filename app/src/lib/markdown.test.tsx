@@ -139,3 +139,38 @@ test("ссылка рядом с таймкодом остаётся ссылк�
   expect(screen.getByText("док")).toHaveClass("md-link");
   expect(screen.getByRole("button", { name: "3:07" })).toBeInTheDocument();
 });
+
+test("itemAction: действие у каждого пункта списка и строки таблицы — с текстом без разметки и разделом", () => {
+  const md = [
+    "## Решения",
+    "",
+    "- выпускаем **в пятницу**",
+    "  - вложенный пункт",
+    "",
+    "## Задачи",
+    "",
+    "| Кто | Что | Срок |",
+    "|---|---|---|",
+    "| Демьян | `отчёт` | — |",
+  ].join("\n");
+  const seen: Array<[string, string | null]> = [];
+  render(<Markdown source={md} itemAction={(text, section) => {
+    seen.push([text, section]);
+    return <button type="button">✦ {text}</button>;
+  }} />);
+  expect(seen).toEqual([
+    ["выпускаем в пятницу", "Решения"],
+    ["вложенный пункт", "Решения"],
+    ["Кто: Демьян; Что: отчёт; Срок: —", "Задачи"],
+  ]);
+  expect(screen.getByRole("button", { name: "✦ выпускаем в пятницу" }).closest("li")).toHaveTextContent("выпускаем");
+  // У таблицы — своя колонка для действий, заголовок которой видит только экранный диктор.
+  expect(screen.getAllByRole("columnheader")).toHaveLength(4);
+  expect(screen.getByRole("button", { name: "✦ Кто: Демьян; Что: отчёт; Срок: —" }).closest("td")).not.toBeNull();
+});
+
+test("без itemAction — ни кнопок, ни лишней колонки", () => {
+  render(<Markdown source={"- пункт\n\n| a | b |\n|---|---|\n| 1 | 2 |"} />);
+  expect(screen.queryByRole("button")).toBeNull();
+  expect(screen.getAllByRole("columnheader")).toHaveLength(2);
+});

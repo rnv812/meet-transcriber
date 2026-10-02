@@ -41,7 +41,7 @@ const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce
 const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
 
 export function TranscriptView({
-  turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find,
+  turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
@@ -56,6 +56,8 @@ export function TranscriptView({
   /** Полоса над репликами (выбранные, итог назначения). */
   toolbar?: ReactNode;
   find?: FindRequest | null;
+  /** ✦ «Спросить агента» у реплик (номера реплик). */
+  onAskAgent?: (turns: number[]) => void;
 }) {
   const [text, setText] = useState(find?.q ?? "");
   const [query, setQuery] = useState(find?.q ?? "");
@@ -194,7 +196,7 @@ export function TranscriptView({
       {toolbar}
       <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onNameSpeaker={onNameSpeaker}
         onSpeaker={onSpeaker} selected={selected} onSelect={onSelect} onSplitAt={onSplitAt}
-        marks={active ? marks : undefined} />
+        marks={active ? marks : undefined} onAskAgent={onAskAgent} />
     </div>
   );
 }

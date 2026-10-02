@@ -482,13 +482,13 @@ test("импорт без duration_s: длительность по концу �
   expect(container.querySelector(".card__meta")).toHaveTextContent("2 мин");
 });
 
-test("готовая запись: вкладки «Расшифровка · Итоги · Вопросы · Агент», расшифровка по умолчанию", async () => {
+test("готовая запись: вкладки «Расшифровка · Итоги · Агент», расшифровка по умолчанию", async () => {
   load();
   const onOpenSettings = vi.fn();
   render(<RecordingCard id="r1" endpoint={ep} onOpenSettings={onOpenSettings} />);
   await screen.findByText("Привет всем");
   const tabs = screen.getAllByRole("tab");
-  expect(tabs.map((t) => t.textContent)).toEqual(["Расшифровка", "Итоги", "Вопросы", "Агент"]);
+  expect(tabs.map((t) => t.textContent)).toEqual(["Расшифровка", "Итоги", "Агент"]);
   expect(tabs[0]).toHaveAttribute("aria-selected", "true");
   await userEvent.click(tabs[1]!);
   expect(await screen.findByText("Итогов пока нет")).toBeVisible();
@@ -497,17 +497,16 @@ test("готовая запись: вкладки «Расшифровка · И
   // Без провайдера — ссылка в настройки, раздел «Ассистент».
   await userEvent.click(await screen.findByRole("button", { name: "Открыть настройки" }));
   expect(onOpenSettings).toHaveBeenCalledWith("assistant");
-  await userEvent.click(screen.getByRole("tab", { name: "Вопросы" }));
-  expect(await screen.findByText("Вопросов пока не было")).toBeVisible();
   expect(api.getSummary).toHaveBeenCalledWith(ep, "r1");
-  expect(api.getQa).toHaveBeenCalledWith(ep, "r1");
+  // Прошлые вопросы (qa.jsonl) — во вкладке «Агент»: пока её не открывали, не запрашиваются.
+  expect(api.getQa).not.toHaveBeenCalled();
 });
 
-test("не расшифрованная запись — без вкладок", async () => {
+test("не расшифрованная запись — «Расшифровка · Агент», итогов нет", async () => {
   load({ has_transcript: false }, null);
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Запись не расшифрована");
-  expect(screen.queryByRole("tablist")).toBeNull();
+  expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Расшифровка", "Агент"]);
   expect(api.getSummary).not.toHaveBeenCalled();
 });
 

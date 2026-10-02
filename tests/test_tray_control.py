@@ -1541,6 +1541,46 @@ def test_agent_context_needs_a_transcript(control_state, tmp_path, monkeypatch):
     assert not (folder / "transcript.md").exists()
 
 
+def test_agent_context_lists_analysis_when_present(control_state, tmp_path, monkeypatch):
+    folder = _agent_folder(tmp_path, control_state, monkeypatch)
+    (folder / "analysis.json").write_text("{}", encoding="utf-8")
+    (folder / "summary.md").write_text("## Итоги\n", encoding="utf-8")
+    assert control_state.agent_context(folder.name)["files"] == [
+        "transcript.md", "summary.md", "analysis.json"]
+
+
+def test_agent_context_during_live_uses_the_live_transcript(control_state, tmp_path, monkeypatch):
+    """Идёт запись с ассистентом: расшифровки ещё нет, но есть лента живого
+    режима — агент получает её как transcript.md с пометкой «черновая»."""
+    folder = _saved_folder(tmp_path)
+    monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
+    (folder / "live_transcript.md").write_text(
+        "[00:00:05] Анна: Начнём с бюджета.\n[00:01:10] Олег: Согласен.\n", encoding="utf-8")
+    got = control_state.agent_context(folder.name)
+    assert got == {"folder": str(folder), "files": ["transcript.md"]}
+    text = (folder / "transcript.md").read_text(encoding="utf-8")
+    assert "черновая расшифровка живого режима" in text.lower()
+    assert "[00:00:05] Анна: Начнём с бюджета." in text
+    assert control_state.agent_files(folder.name) == {"files": ["transcript.md"], "live": True}
+
+
+def test_agent_files_lists_without_writing(control_state, tmp_path, monkeypatch):
+    folder = _agent_folder(tmp_path, control_state, monkeypatch)
+    assert control_state.agent_files(folder.name) == {"files": ["transcript.md"], "live": False}
+    assert not (folder / "transcript.md").exists()
+    (folder / "summary.md").write_text("## Итоги\n", encoding="utf-8")
+    (folder / "analysis.json").write_text("{}", encoding="utf-8")
+    assert control_state.agent_files(folder.name)["files"] == [
+        "transcript.md", "summary.md", "analysis.json"]
+
+
+def test_agent_files_without_transcript_is_empty(control_state, tmp_path, monkeypatch):
+    folder = _saved_folder(tmp_path)
+    monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
+    assert control_state.agent_files(folder.name) == {"files": [], "live": False}
+    assert control_state.agent_files("..") == {"error": "записи нет"}
+
+
 # --- панель «Спикеры»: применение, откат, отказ во время обработки ------------
 
 

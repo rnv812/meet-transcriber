@@ -10,9 +10,14 @@
  *
  * С `onTime` таймкоды в квадратных скобках — «[12:34]», «[01:02:03]» —
  * становятся кнопками: щелчок передаёт секунды (переход к реплике в ленте).
+ *
+ * С `itemAction` у каждого пункта списка и строки таблицы — своё действие
+ * (✦ «Спросить агента»): ему передаётся текст пункта без разметки и раздел
+ * (ближайший заголовок выше).
  */
 
 import { Fragment, useMemo, type ReactNode } from "react";
+import { plainMarkdown } from "./agentRef";
 
 type Align = "left" | "center" | "right" | undefined;
 type Item = { text: string; children: Block[] };
@@ -183,8 +188,11 @@ const EM_UNDER = /^_(?=[^\s_])([^_]*?[^\s_])_/;
 const DEL = /^~~(?=\S)(.*?\S)~~/;
 const TIME = /^\[(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\]/;
 
-/** Чем отрисовка дополняет текст: щелчок по таймкоду (секунды). */
-type Ctx = { onTime?: (seconds: number) => void };
+/** Действие у пункта: текст без разметки и раздел (заголовок выше), если есть. */
+export type ItemAction = (text: string, section: string | null) => ReactNode;
+
+/** Чем отрисовка дополняет текст: щелчок по таймкоду (секунды), действие у пункта. */
+type Ctx = { onTime?: (seconds: number) => void; itemAction?: ItemAction; section?: string | null };
 const WORD = /[\p{L}\p{N}_]/u;
 const isWord = (c: string | undefined) => c !== undefined && WORD.test(c);
 
@@ -237,8 +245,21 @@ function inline(text: string, ctx: Ctx = {}): ReactNode[] {
 
 // --- отрисовка ----------------------------------------------------------------------
 
-function render(blocks: Block[], ctx: Ctx = {}): ReactNode[] {
+/** Строка таблицы для действия: «Кто: Демьян; Что: отчёт; Срок: —». */
+function rowText(head: string[], row: string[]): string {
+  return row
+    .map((cell, j) => [plainMarkdown(head[j] ?? ""), plainMarkdown(cell)] as const)
+    .filter(([, v]) => v)
+    .map(([h, v]) => (h ? `${h}: ${v}` : v))
+    .join("; ");
+}
+
+function render(blocks: Block[], outer: Ctx = {}): ReactNode[] {
+  let section = outer.section ?? null;
   return blocks.map((b, k) => {
+    if (b.kind === "heading") section = plainMarkdown(b.text) || null;
+    const ctx = section === (outer.section ?? null) ? outer : { ...outer, section };
+    const act = ctx.itemAction;
     switch (b.kind) {
       case "heading": {
         // Уровни сдвинуты: над итогами уже есть заголовок карточки.
@@ -252,7 +273,13 @@ function render(blocks: Block[], ctx: Ctx = {}): ReactNode[] {
           </p>
         );
       case "list": {
-        const items = b.items.map((it, j) => <li key={j}>{inline(it.text, ctx)}{render(it.children, ctx)}</li>);
+        const items = b.items.map((it, j) => (
+          <li key={j}>
+            {inline(it.text, ctx)}
+            {act && <span className="md-act">{act(plainMarkdown(it.text), section)}</span>}
+            {render(it.children, ctx)}
+          </li>
+        ));
         return b.ordered
           ? <ol key={k} start={b.start !== 1 ? b.start : undefined}>{items}</ol>
           : <ul key={k}>{items}</ul>;
@@ -262,11 +289,17 @@ function render(blocks: Block[], ctx: Ctx = {}): ReactNode[] {
           <div key={k} className="md-table">
             <table>
               <thead>
-                <tr>{b.head.map((c, j) => <th key={j} style={{ textAlign: b.align[j] }}>{inline(c, ctx)}</th>)}</tr>
+                <tr>
+                  {b.head.map((c, j) => <th key={j} style={{ textAlign: b.align[j] }}>{inline(c, ctx)}</th>)}
+                  {act && <th className="md-act-col"><span className="sr-only">Действия</span></th>}
+                </tr>
               </thead>
               <tbody>
                 {b.rows.map((row, r) => (
-                  <tr key={r}>{row.map((c, j) => <td key={j} style={{ textAlign: b.align[j] }}>{inline(c, ctx)}</td>)}</tr>
+                  <tr key={r}>
+                    {row.map((c, j) => <td key={j} style={{ textAlign: b.align[j] }}>{inline(c, ctx)}</td>)}
+                    {act && <td className="md-act-col">{act(rowText(b.head, row), section)}</td>}
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -282,15 +315,17 @@ function render(blocks: Block[], ctx: Ctx = {}): ReactNode[] {
   });
 }
 
-export function Markdown({ source, className, onTime }: {
+export function Markdown({ source, className, onTime, itemAction }: {
   source: string;
   className?: string;
   /** Таймкоды «[мм:сс]» — кнопки; щелчок передаёт секунды. */
   onTime?: (seconds: number) => void;
+  /** Действие у каждого пункта списка и строки таблицы. */
+  itemAction?: ItemAction;
 }) {
   const nodes = useMemo(
-    () => render(parseBlocks(source.replace(/\r\n?/g, "\n").split("\n")), { onTime }),
-    [source, onTime],
+    () => render(parseBlocks(source.replace(/\r\n?/g, "\n").split("\n")), { onTime, itemAction }),
+    [source, onTime, itemAction],
   );
   return <div className={className ? `md ${className}` : "md"}>{nodes}</div>;
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { agentPrompt, type AgentRequest } from "../../lib/agentRef";
 import {
   ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
   kbExport, patchRecording, transcribe, type Endpoint,
@@ -7,12 +8,14 @@ import { errorText } from "../../lib/format";
 import { agentKillRecording, inTauri, openFolder, saveText } from "../../lib/shell";
 import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
 import { activeJobOf, failedRetranscribe, isLiveRecording, statusOf } from "../../lib/status";
-import type { Job, KbExport, Recording, Segment, Snapshot, Transcript } from "../../lib/types";
+import type { Job, KbExport, LiveHint, Recording, Segment, Snapshot, Transcript } from "../../lib/types";
+import { KIND_LABEL } from "../../live/liveModel";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
+import type { AgentInsert } from "./AgentTab";
 import { AudioPlayer, type AudioPlayerHandle } from "./AudioPlayer";
 import { CardActions } from "./CardActions";
-import { CardTabs } from "./CardTabs";
+import { CardTabs, type CardStage } from "./CardTabs";
 import { CardHeader } from "./CardHeader";
 import { LiveCard } from "./LiveCard";
 import { RediarizeDialog, rediarizeJobOf } from "./RediarizeDialog";
@@ -78,6 +81,8 @@ export function RecordingCard({
   const [kbDone, setKbDone] = useState<KbExport | null>(null);
   /** Дорожка плеера не загрузилась: реплики не перематывают, внизу — «Аудио недоступно». */
   const [audioFailed, setAudioFailed] = useState(false);
+  /** «Спросить агента»: последняя ссылка для поля ввода вкладки «Агент». */
+  const [agentAsk, setAgentAsk] = useState<AgentInsert | null>(null);
   const current = useRef({ endpoint, id });
   current.current = { endpoint, id };
 
@@ -123,6 +128,7 @@ export function RecordingCard({
   useEffect(() => {
     setRec(null); setError(null); setMissing(false); setKbDone(null); setAudioFailed(false);
     setPanel({ open: false, mounted: false, focus: null }); setOwnFind(null); setRediarizeOpen(false);
+    setAgentAsk(null);
     void load();
   }, [load]);
   // Просьба из поиска по записям важнее прежней своей.
@@ -155,6 +161,21 @@ export function RecordingCard({
     void load(); onChanged?.(); onPeopleChanged?.();
   }, [load, onChanged, onPeopleChanged]);
   const shownFind = ownFind ?? find;
+  // «Спросить агента» отовсюду: ссылка (очищенная, lib/agentRef) — во вкладку «Агент».
+  const askAgent = useCallback((request: AgentRequest) => {
+    const text = agentPrompt(request);
+    if (text) setAgentAsk({ text });
+  }, []);
+  const askTurns = useCallback((which: number[], intent?: string) => {
+    const refs = which.flatMap((i) => {
+      const t = turns[i];
+      return t && t.kind !== "break" ? [{ t: t.start, speaker: t.speaker, text: t.texts.join(" ") }] : [];
+    });
+    askAgent({ kind: "turns", refs, intent });
+  }, [turns, askAgent]);
+  const askHint = useCallback((h: LiveHint) => askAgent({
+    kind: "hint", refs: [{ t: h.source_t, speaker: KIND_LABEL[h.kind] ?? null, text: h.text }],
+  }), [askAgent]);
   const colors = useMemo(() => new Map(people.map((p) => [p.name, p.color])), [people]);
   const textFix = useTextFix({
     endpoint, id, turns, segments: segments ?? NO_SEGMENTS, playable: !!rec && Object.keys(rec.tracks).length > 0
@@ -163,6 +184,7 @@ export function RecordingCard({
   const turnEdit = useTurnEdit({
     endpoint, id, turns, segments: segments ?? NO_SEGMENTS, people, owner, avatarVersion,
     onOpenPanel: nameSpeaker, onChanged: speakersChanged, onFixWord: textFix.openWord, head: rec?.edit_head,
+    onAskAgent: askTurns,
   });
   // Правый щелчок по тексту: выделены слова — «Исправить…», иначе «Разделить реплику здесь».
   const { onContextMenu: fixMenu } = textFix;
@@ -232,31 +254,32 @@ export function RecordingCard({
   });
   const kbError = rec.kb_export?.error;
 
-  let body;
+  // Вкладки — у всех этапов, кроме записи без ассистента: агент (вкладка «Агент»)
+  // переживает переход «живой режим → расшифровка → готово».
+  const live = status.kind === "recording" && !!snapshot?.live && isLiveRecording(rec, snapshot);
+  const stage: CardStage | null = status.kind === "ready" ? "ready" : live ? "live"
+    : status.kind === "recording" ? null : "pending";
+  let first;
   switch (status.kind) {
     case "ready":
-      body = (
-        <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
-          showTranscript={shownFind?.n}
-          transcript={turns.length ? (
-            <TranscriptView turns={turns} colors={colors} playable={playable} onPlay={play}
-              onNameSpeaker={nameSpeaker} onSpeaker={turnEdit.onSpeaker} selected={turnEdit.selected}
-              onSelect={turnEdit.onSelect} onSplitAt={onTextMenu}
-              toolbar={turnEdit.bar || textFix.bar ? <div className="tbars">{turnEdit.bar}{textFix.bar}</div> : null}
-              find={shownFind} />
-          ) : <EmptyState title="В записи нет речи" />} />
-      );
+      first = turns.length ? (
+        <TranscriptView turns={turns} colors={colors} playable={playable} onPlay={play}
+          onNameSpeaker={nameSpeaker} onSpeaker={turnEdit.onSpeaker} selected={turnEdit.selected}
+          onSelect={turnEdit.onSelect} onSplitAt={onTextMenu} onAskAgent={askTurns}
+          toolbar={turnEdit.bar || textFix.bar ? <div className="tbars">{turnEdit.bar}{textFix.bar}</div> : null}
+          find={shownFind} />
+      ) : <EmptyState title="В записи нет речи" />;
       break;
     case "untranscribed":
-      body = <EmptyState title="Запись не расшифрована"
+      first = <EmptyState title="Запись не расшифрована"
         action={<Button variant="primary" onClick={doTranscribe} disabled={busy}>Расшифровать</Button>} />;
       break;
     case "queued":
-      body = <EmptyState title="В очереди на расшифровку" action={cancelButton} />;
+      first = <EmptyState title="В очереди на расшифровку" action={cancelButton} />;
       break;
     case "running": {
       const pct = status.total ? Math.round(((status.done ?? 0) / status.total) * 100) : null;
-      body = (
+      first = (
         <div className="card__progress">
           <div>{status.label}{pct !== null ? ` ${pct}%` : "…"}</div>
           <div className="progress"><div className="progress__bar" style={{ width: `${pct ?? 100}%` }} /></div>
@@ -266,7 +289,7 @@ export function RecordingCard({
       break;
     }
     case "failed":
-      body = (
+      first = (
         <div className="card__failed">
           <div className="card__error">{status.error || "Расшифровка не удалась"}</div>
           <div className="card__row">
@@ -277,11 +300,16 @@ export function RecordingCard({
       );
       break;
     case "recording":
-      body = snapshot?.live && isLiveRecording(rec, snapshot)
-        ? <LiveCard endpoint={endpoint} live={snapshot.live} />
+      first = live && snapshot?.live
+        ? <LiveCard endpoint={endpoint} live={snapshot.live} onAskAgent={askHint} />
         : <EmptyState title="Идёт запись…" />;
       break;
   }
+  const body = stage ? (
+    <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
+      showTranscript={shownFind?.n} stage={stage} transcript={first} agentRequest={agentAsk}
+      onAskAgent={askAgent} />
+  ) : first;
 
   return (
     <section className={`card${panel.open && status.kind === "ready" ? " card--with-spk" : ""}`} ref={cardEl}>

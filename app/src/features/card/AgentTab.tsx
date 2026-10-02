@@ -7,12 +7,22 @@
  * Вкладка остаётся смонтированной при переключении (CardTabs), поэтому сеанс
  * переживает переход на «Итоги» и обратно; закрытие карточки (другая запись,
  * другой раздел) агента останавливает.
+ *
+ * «Спросить агента» (✦ у реплики, пункта итогов, подсказки ассистента)
+ * приходит пропом `insert`: вкладка запускает агента, если он не запущен, и
+ * вставляет ссылку в поле ввода так же, как вставку из буфера (`term.paste`):
+ * в режиме bracketed paste переводы строк — часть текста, а не Enter. Пока
+ * агент не включил этот режим и рисует экран, вставка ждёт; не включил за
+ * PASTE_WAIT_MS — ссылка вставляется одной строкой. Агента нет — ссылку
+ * показывает уведомление, её можно скопировать.
  */
 
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import type { ITerminalOptions, Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { flatPrompt } from "../../lib/agentRef";
+import { getAgentContext, type Endpoint } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import {
   agentKill, agentResize, agentSpawn, agentWrite, inTauri, onAgentData, onAgentExit,
@@ -21,7 +31,17 @@ import type { AssistantInfo } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { PastQuestions } from "./PastQuestions";
 import "./agent.css";
+
+/** Ссылка для поля ввода агента (lib/agentRef). Новый объект — новая просьба. */
+export type AgentInsert = { text: string };
+
+/** Сколько ждать, пока агент включит режим вставки (bracketed paste). */
+export const PASTE_WAIT_MS = 15_000;
+/** Вывод агента затих на столько — экран дорисован, можно вставлять. */
+const QUIET_MS = 300;
+const POLL_MS = 100;
 
 export type AgentProvider = { id: string; label: string };
 
@@ -58,6 +78,10 @@ export function agentProviders(info: AssistantInfo | null): AgentProvider[] {
 export function defaultProvider(info: AssistantInfo | null, list: AgentProvider[]): string | null {
   return list.find((p) => p.id === info?.provider)?.id ?? list[0]?.id ?? null;
 }
+
+/** xterm грузится один раз, при первом открытии вкладки (StrictMode создаёт терминал дважды). */
+let xterm: Promise<[typeof import("@xterm/xterm"), typeof import("@xterm/addon-fit")]> | null = null;
+const loadXterm = () => (xterm ??= Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]));
 
 /** Цвета и шрифт терминала — как у приложения. */
 export const TERMINAL_OPTIONS: ITerminalOptions = {
@@ -118,10 +142,49 @@ async function pasteInto(term: Terminal) {
   }
 }
 
-export function AgentTab({ id, assistant, onOpenSettings }: {
+type Context = { files: string[]; live: boolean };
+
+function contextText(ctx: Context): string {
+  if (!ctx.files.length) return "Контекст: расшифровки пока нет";
+  return `Контекст: ${ctx.files.join(" · ")}${ctx.live ? " — черновая лента живого режима" : ""}`;
+}
+
+/** Агента нет (не установлен, браузер): ссылка не вставлена, но её можно скопировать. */
+function Unsent({ text, browser, onOpenSettings, onClose }: {
+  text: string;
+  browser: boolean;
+  onOpenSettings?: (section: string) => void;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(text.trimEnd()).then(() => setCopied(true)).catch(() => {});
+  };
+  return (
+    <div className="agent__unsent" role="status" aria-label="Ссылка не вставлена">
+      <div>
+        {browser
+          ? "Агент недоступен в браузере — ссылка не вставлена. Скопируйте её и задайте вопрос в окне приложения."
+          : "Агент недоступен — ссылка не вставлена. Подключите Claude Code или Codex в настройках или скопируйте ссылку."}
+      </div>
+      <pre className="agent__ref">{text.trimEnd()}</pre>
+      <div className="agent__unsent-row">
+        <Button onClick={copy}>{copied ? "Скопировано" : "Копировать"}</Button>
+        {onOpenSettings && !browser && <Button onClick={() => onOpenSettings("assistant")}>Открыть настройки</Button>}
+        <button type="button" className="link-btn" onClick={onClose}>Скрыть</button>
+      </div>
+    </div>
+  );
+}
+
+export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = null }: {
   id: string;
   assistant: AssistantInfo | null;
   onOpenSettings?: (section: string) => void;
+  /** Резидент: строка «Контекст» и «Прошлые вопросы». Нет — их нет. */
+  endpoint?: Endpoint;
+  /** «Спросить агента»: ссылка для поля ввода. */
+  insert?: AgentInsert | null;
 }) {
   const shell = inTauri();
   const providers = agentProviders(assistant);
@@ -134,6 +197,44 @@ export function AgentTab({ id, assistant, onOpenSettings }: {
   const [ready, setReady] = useState(false);
   /** Есть ли где показать терминал: в приложении и с установленным агентом. */
   const withScreen = shell && !(assistant && providers.length === 0);
+  /** Вставить ссылку негде: браузер или ни одного агента. */
+  const unavailable = !withScreen;
+
+  /** Что получит агент (GET agent-context); null — ещё не знаем. */
+  const [context, setContext] = useState<Context | null>(null);
+  /** Ответ на запрос контекста пришёл (или запрос не удался — резидент старый). */
+  const [contextTried, setContextTried] = useState(!endpoint);
+  const contextSeq = useRef(0);
+  const loadContext = useCallback(() => {
+    if (!endpoint) return;
+    const mine = ++contextSeq.current;
+    getAgentContext(endpoint, id)
+      .then((c) => { if (mine === contextSeq.current) setContext(c); })
+      .catch(() => {})
+      .finally(() => { if (mine === contextSeq.current) setContextTried(true); });
+  }, [endpoint, id]);
+  useEffect(() => {
+    setContext(null);
+    setContextTried(!endpoint);
+    loadContext();
+  }, [loadContext, endpoint]);
+  /** Агенту пока нечего дать — запуск недоступен. */
+  const nothing = context !== null && context.files.length === 0;
+
+  /**
+   * Ссылка, ждущая вставки, и для какой записи; `wanted` растёт с каждой
+   * просьбой. Запись сменилась — ссылка чужая и не вставляется. (Не очищается
+   * эффектом смены записи: в StrictMode эффекты запускаются дважды, и
+   * просьба, принятая в первый раз, пропала бы.)
+   */
+  const pending = useRef<{ text: string; id: string } | null>(null);
+  const [wanted, setWanted] = useState(0);
+  const handled = useRef<AgentInsert | null>(null);
+  /** Для какой просьбы агент уже запускался сам: упавший запуск не повторяется по кругу. */
+  const autoStarted = useRef(0);
+  const [unsent, setUnsent] = useState<{ text: string; id: string } | null>(null);
+  /** Когда агент последний раз что-то вывел и когда сеанс заработал (Date.now). */
+  const lastOutput = useRef(0);
 
   const screen = useRef<HTMLDivElement>(null);
   const term = useRef<Terminal | null>(null);
@@ -153,6 +254,7 @@ export function AgentTab({ id, assistant, onOpenSettings }: {
 
   const apply = useCallback((e: AgentEvent) => {
     if ("data" in e) {
+      lastOutput.current = Date.now();
       term.current?.write(e.data);
       return;
     }
@@ -168,7 +270,7 @@ export function AgentTab({ id, assistant, onOpenSettings }: {
     let gone = false;
     let cleanup = () => {};
     void (async () => {
-      const [{ Terminal }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
+      const [{ Terminal }, { FitAddon }] = await loadXterm();
       const el = screen.current;
       if (gone || !el) return;
       const t = new Terminal(TERMINAL_OPTIONS);
@@ -265,6 +367,9 @@ export function AgentTab({ id, assistant, onOpenSettings }: {
         return;
       }
       session.current = sid;
+      // Запуск обновил файлы встречи — строка «Контекст» тоже.
+      loadContext();
+      lastOutput.current = Date.now();
       setPhase("running");
       const queued = early.current ?? [];
       early.current = null;
@@ -277,6 +382,57 @@ export function AgentTab({ id, assistant, onOpenSettings }: {
       setError(errorText(e));
     }
   };
+
+  // Просьба «Спросить агента»: ссылка ждёт вставки; одна и та же просьба — один раз.
+  useEffect(() => {
+    if (!insert || insert === handled.current) return;
+    handled.current = insert;
+    if (!insert.text) return;
+    pending.current = { text: insert.text, id };
+    setUnsent(null);
+    setWanted((n) => n + 1);
+    loadContext();
+  }, [insert, loadContext]);
+
+  // Вставить негде — ссылка в уведомление (её можно скопировать).
+  useEffect(() => {
+    if (!wanted || !pending.current || !unavailable) return;
+    if (pending.current.id === id) setUnsent(pending.current);
+    pending.current = null;
+  }, [wanted, unavailable]);
+
+  // Агент не запущен — запускаем сами (один раз на просьбу; упавший запуск — кнопкой).
+  useEffect(() => {
+    if (!wanted || pending.current?.id !== id || unavailable || !ready || !provider || !contextTried || nothing) return;
+    if (autoStarted.current === wanted || (phase !== "idle" && phase !== "exited")) return;
+    autoStarted.current = wanted;
+    void start();
+  });
+
+  // Сеанс работает — вставка, как только агент включил режим вставки и дорисовал экран.
+  useEffect(() => {
+    if (phase !== "running" || !wanted) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const began = Date.now();
+    const tick = () => {
+      const t = term.current;
+      if (pending.current && pending.current.id !== id) pending.current = null;
+      const text = pending.current?.text;
+      if (!t || !text || !session.current) return;
+      const bracketed = t.modes?.bracketedPasteMode === true;
+      const now = Date.now();
+      if ((bracketed && now - lastOutput.current >= QUIET_MS) || now - began >= PASTE_WAIT_MS) {
+        pending.current = null;
+        // Без режима вставки перевод строки был бы Enter: тогда — одной строкой.
+        t.paste(bracketed ? text : flatPrompt(text));
+        t.focus();
+        return;
+      }
+      timer = setTimeout(tick, POLL_MS);
+    };
+    tick();
+    return () => clearTimeout(timer);
+  }, [phase, wanted, id]);
 
   const stop = () => {
     const sid = session.current;
@@ -298,20 +454,29 @@ export function AgentTab({ id, assistant, onOpenSettings }: {
     }
   };
 
+  const unsentNote = unsent?.id === id && (
+    <Unsent text={unsent.text} browser={!shell} onOpenSettings={onOpenSettings} onClose={() => setUnsent(null)} />
+  );
+  const past = endpoint ? <PastQuestions endpoint={endpoint} id={id} /> : null;
+
   if (!shell) {
     return (
       <div className="agent agent--empty">
+        {unsentNote}
         <EmptyState title="Доступно в приложении"
           hint="Терминал с Claude Code или Codex работает только в окне приложения Meet, в браузере его нет." />
+        {past}
       </div>
     );
   }
   if (assistant && providers.length === 0) {
     return (
       <div className="agent agent--empty">
+        {unsentNote}
         <EmptyState title="Подключите Claude Code или Codex в настройках"
           hint={codexNote ? CODEX_SCRIPT_NOTE : "Во вкладке запускается агент, установленный на компьютере."}
           action={onOpenSettings && <Button onClick={() => onOpenSettings("assistant")}>Открыть настройки</Button>} />
+        {past}
       </div>
     );
   }
@@ -331,8 +496,13 @@ export function AgentTab({ id, assistant, onOpenSettings }: {
             просить черновик письма или сверить договорённости с базой знаний.
           </TipLine>
           <TipLine>
-            Агент запускается в папке встречи. Перед запуском приложение обновляет transcript.md — расшифровку с
-            именами и таймкодами; итоги, если они есть, лежат рядом в summary.md.
+            Агент запускается в папке встречи. Перед каждым запуском приложение обновляет transcript.md — расшифровку
+            с именами и таймкодами; рядом лежат итоги (summary.md) и разметка встречи (analysis.json), если они есть.
+            Пока идёт запись с ассистентом, transcript.md — черновая лента живого режима.
+          </TipLine>
+          <TipLine>
+            Кнопка со звёздочками у реплики, пункта итогов или подсказки ассистента открывает эту вкладку и вставляет
+            ссылку на них в поле ввода агента: допишите вопрос и нажмите Enter. У реплики то же — клавиша A.
           </TipLine>
           <TipLine>
             Агент может читать файлы, создавать их в папке встречи и выполнять команды. Что требует подтверждения,
@@ -347,25 +517,32 @@ export function AgentTab({ id, assistant, onOpenSettings }: {
             <Button onClick={stop} disabled={phase !== "running"}>Остановить</Button>
           </>
         ) : (
-          <Button variant="primary" onClick={() => void start()} disabled={!ready || !provider}>Запустить</Button>
+          <Button variant="primary" onClick={() => void start()} disabled={!ready || !provider || nothing}>
+            Запустить
+          </Button>
         )}
         <span className="agent__phase" role="status">
           <span className={`agent__dot${phase === "running" ? " agent__dot--run" : ""}`} aria-hidden="true" />
           {phaseText(phase, code)}
         </span>
       </div>
+      {context && <div className="agent__context">{contextText(context)}</div>}
       <div className="agent__hint">
-        {active ? "Агент запущен в папке встречи" : "Агент откроется в папке встречи"}: transcript.md, summary.md.
-        База знаний подключена для чтения; права на запись определяются настройками агента.
+        {active ? "Агент запущен в папке встречи" : "Агент откроется в папке встречи"}. База знаний подключена для
+        чтения; права на запись определяются настройками агента.
       </div>
       {codexNote && <div className="agent__hint">{CODEX_SCRIPT_NOTE}</div>}
       {error && <div className="assist__error" role="alert">{error}</div>}
       <div className="agent__screen" onContextMenu={onContextMenu}>
         <div className="agent__xterm" ref={screen} data-agent-terminal />
         {phase === "idle" && (
-          <div className="agent__idle">Нажмите «Запустить» — агент откроется в папке этой встречи.</div>
+          <div className="agent__idle">
+            {nothing ? "Агент станет доступен, когда появится расшифровка."
+              : "Нажмите «Запустить» — агент откроется в папке этой встречи."}
+          </div>
         )}
       </div>
+      {!active && past}
     </div>
   );
 }

@@ -1,0 +1,9 @@
+/* ✦ «Спросить агента»: тихая кнопка в цвет акцента. */
+.ask-agent {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 22px; height: 22px; padding: 0; vertical-align: middle;
+  background: transparent; color: var(--accent-hi);
+  border: 0; border-radius: var(--r-md); cursor: pointer;
+  transition: background var(--t), color var(--t), opacity var(--t);
+}
+.ask-agent:hover { background: var(--surface-hover); color: var(--accent-hover); }

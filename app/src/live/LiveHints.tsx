@@ -6,6 +6,7 @@
  */
 
 import { useState } from "react";
+import { Sparkles } from "lucide-react";
 
 import { clock } from "../lib/format";
 import type { LiveHint } from "../lib/types";
@@ -16,7 +17,7 @@ import "./live.css";
 
 const COPIED_MS = 1500;
 
-export function LiveHints({ hints, fresh, enabled = true, error = null, onAction, onAsk, onTime }: {
+export function LiveHints({ hints, fresh, enabled = true, error = null, onAction, onAsk, onTime, askTitle }: {
   hints: LiveHint[];
   /** Ключи `hintKey` недавно появившихся или изменённых. */
   fresh: Set<string>;
@@ -27,6 +28,8 @@ export function LiveHints({ hints, fresh, enabled = true, error = null, onAction
   onAction: (id: string, action: HintAction) => void;
   onAsk: (hint: LiveHint) => void;
   onTime: (seconds: number) => void;
+  /** Подсказка у «Спросить об этом» (в карточке вопрос уходит агенту). */
+  askTitle?: string;
 }) {
   const [copied, setCopied] = useState<string | null>(null);
   if (!enabled) {
@@ -77,7 +80,9 @@ export function LiveHints({ hints, fresh, enabled = true, error = null, onAction
           {h.why && <div className="live-hint__why muted">{h.why}</div>}
           <div className="live-hint__foot">
             {h.ref && <span className="live-hint__ref muted" title={h.ref}>База знаний: {h.ref}</span>}
-            <button type="button" className="live-chip" onClick={() => onAsk(h)}>Спросить об этом</button>
+            <button type="button" className="live-chip" title={askTitle} onClick={() => onAsk(h)}>
+              {askTitle && <Sparkles size={12} strokeWidth={1.75} aria-hidden="true" />}Спросить об этом
+            </button>
             {copied === h.id && <span className="muted live-hint__copied" role="status">Скопировано</span>}
           </div>
           {error?.id === h.id && <div className="live-hint__error" role="alert">{error.text}</div>}

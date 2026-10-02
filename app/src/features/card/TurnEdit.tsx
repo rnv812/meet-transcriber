@@ -4,9 +4,14 @@
  * спикера), Ctrl+щелчок и Shift+щелчок по репликам — выбор нескольких и
  * «Назначить выбранные…». Каждое назначение — шаг истории встречи: его
  * отменяет «Отменить» здесь же или в панели «Спикеры».
+ *
+ * Здесь же — «Спросить агента» (✦): в меню реплики, в меню правого щелчка (с
+ * готовыми вопросами) и для выбранных реплик.
  */
 
 import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
+import { Sparkles } from "lucide-react";
+import { AGENT_INTENTS } from "../../lib/agentRef";
 import { relabelTurns, splitTurn, undoSpeakers, type Endpoint } from "../../lib/api";
 import { nfc } from "../../lib/search";
 import { clock, errorText, plural } from "../../lib/format";
@@ -87,7 +92,7 @@ export type TurnEdit = {
 };
 
 export function useTurnEdit({
-  endpoint, id, turns, segments, people, owner, avatarVersion, onOpenPanel, onChanged, onFixWord, head,
+  endpoint, id, turns, segments, people, owner, avatarVersion, onOpenPanel, onChanged, onFixWord, head, onAskAgent,
 }: {
   endpoint: Endpoint;
   id: string;
@@ -104,6 +109,8 @@ export function useTurnEdit({
   onFixWord?: (turn: number, at: number, anchor: HTMLElement) => void;
   /** Последний применённый шаг истории встречи (`edit_head` записи). */
   head?: string | null;
+  /** «Спросить агента» о репликах; `intent` — готовый вопрос («Объясни»…). */
+  onAskAgent?: (turns: number[], intent?: string) => void;
 }): TurnEdit {
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
   const [anchorTurn, setAnchorTurn] = useState<number | null>(null);
@@ -267,6 +274,11 @@ export function useTurnEdit({
               <button type="button" className="spk-link" onClick={() => { closeMenu(); onOpenPanel(turn.speaker); }}>
                 Все реплики спикера — в панели «Спикеры»
               </button>
+              {onAskAgent && (
+                <button type="button" className="spk-link" onClick={() => { closeMenu(); onAskAgent([one]); }}>
+                  Спросить агента об этой реплике
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -298,6 +310,18 @@ export function useTurnEdit({
             people={people} owner={owner} endpoint={endpoint} avatarVersion={avatarVersion}
             placeholder="Спикер встречи, имя или поиск" onPick={(to) => void split(splitAt, to)} />
           {error && <div className="card__error tmenu__error" role="alert">{error}</div>}
+          {onAskAgent && (
+            <div className="tmenu__ask" role="group" aria-label="Спросить агента об этой реплике">
+              <button type="button" className="tmenu__ask-main"
+                onClick={() => { const at = splitAt.turn; closeMenu(); onAskAgent([at]); }}>
+                <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />Спросить агента…
+              </button>
+              {AGENT_INTENTS.map((intent) => (
+                <button key={intent} type="button" className="tmenu__intent"
+                  onClick={() => { const at = splitAt.turn; closeMenu(); onAskAgent([at], intent); }}>{intent}</button>
+              ))}
+            </div>
+          )}
           {word && onFixWord && (
             <div className="tmenu__links">
               <button type="button" className="spk-link" title="Исправить распознанное (выделите слова и нажмите Ctrl+E)"
@@ -320,6 +344,12 @@ export function useTurnEdit({
             onClick={(e) => { setError(null); setMenu({ anchor: e.currentTarget, turn: null }); }}>
             Назначить выбранные…
           </button>
+          {onAskAgent && (
+            <button type="button" className="spk-btn tsel__ask"
+              onClick={() => onAskAgent([...selected].sort((a, b) => a - b))}>
+              <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />Спросить агента о выбранных
+            </button>
+          )}
           <button type="button" className="spk-link" onClick={clear}>Снять выделение</button>
           <span className="muted tsel__hint">Ctrl+щелчок — добавить реплику, Shift+щелчок — диапазон, Esc — снять</span>
         </>
