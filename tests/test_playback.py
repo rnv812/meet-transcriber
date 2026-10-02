@@ -15,6 +15,16 @@ from meet import playback
 REAL_SCHEDULE = playback.schedule
 
 
+@pytest.fixture(autouse=True)
+def _ffmpeg_on_path(monkeypatch):
+    """Тесты с FakeRun не зависят от ffmpeg на машине (на CI его нет в PATH).
+    Тест про отсутствие ffmpeg переопределяет это своим monkeypatch."""
+    real_which = shutil.which
+    monkeypatch.setattr(
+        playback.shutil, "which",
+        lambda name, *a, **k: "ffmpeg" if name == "ffmpeg" else real_which(name, *a, **k))
+
+
 def _touch(path, data=b"x", mtime=None):
     path.write_bytes(data)
     if mtime is not None:
