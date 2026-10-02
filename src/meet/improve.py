@@ -7,21 +7,32 @@
 так изменения видны списком и модель не может молча перефразировать текст.
 Каждая пара проверяется здесь:
 
+* кавычки и знаки препинания по краям `find` и `replace` снимаются (замена —
+  только слова; знаки вокруг места в тексте остаются как были), а пара, у
+  которой внутри меняется что-то, кроме букв, цифр, пробелов, дефисов и
+  апострофов, отбрасывается;
 * `find` действительно есть в каждой названной фразе — по правилам поиска
   (meet.replacements: целые слова, без учёта регистра, «ё» = «е»); фразы, где
   его нет, отбрасываются, а пара без единой такой фразы — целиком;
-* меняется не больше MAX_WORDS слов с каждой стороны;
-* числа и отрицания («не», «ни», «нет», «без») не меняются — пара, которая их
-  трогает, отбрасывается (смысл важнее опечатки);
+* меняется не больше MAX_WORDS слов, а `replace` длиннее `find` не больше чем
+  на слово (модель не дописывает своего);
+* числа (и падежи, и порядковые — по основам) и отрицания («не», «нет»,
+  «нельзя», «никогда»…) не меняются — пара, которая их трогает, отбрасывается
+  (смысл важнее опечатки);
+* исправление должно звучать похоже: сходство букв `find` и `replace` (для
+  термина — с его кириллическими записями, meet.translit) не ниже
+  MIN_SIMILARITY — «можно» → «нельзя» не пройдёт;
 * уверенность ниже MIN_CONFIDENCE — отбрасывается.
 
 Битый JSON — одна попытка исправления (как у анализа, meet.analysis); годные
 пары принимаются, негодные — отбрасываются (частичное принятие).
 
-Термин (`kind: "term"`) заменяется во всей встрече — это термин, а не
-опечатка в одном месте; исправление обычного слова (`kind: "fix"`) — только в
-тех фразах, где его нашла модель. Совпадения считаются здесь же; одно место
-текста не попадает в две группы (длинная фраза важнее короткой).
+Замена по умолчанию применяется только в фразах, которые назвала модель.
+Другие места того же термина во встрече (`kind: "term"`, не короче
+SHORT_FIND букв) показываются отдельно, каждое со своим флажком — по
+умолчанию выключенным: «Кафка» писателя не станет «Kafka» молча. Одно место
+текста не попадает в две группы (термины раньше исправлений, длинная фраза
+раньше короткой).
 
 Предложение лежит в `improve.json` рядом с записью вместе с отпечатком
 расшифровки (meet.analysis.fingerprint): текст поменяли — предложение
@@ -32,8 +43,10 @@
 runner — в подпроцессе задачи или CLI, не в резиденте.
 """
 
+import itertools
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -46,22 +59,41 @@ KINDS = ("term", "fix")
 # Сколько слов может менять одна замена (с каждой стороны).
 MAX_WORDS = 4
 MIN_CONFIDENCE = 0.5
+# Сходство букв «как распознано» и «как правильно» (1 − расстояние
+# Левенштейна / длина): ниже — это уже не ослышка, а другое слово.
+MIN_SIMILARITY = 0.5
+# Термин короче (букв) не ищется по всей встрече: «го», «ии» — обычные слоги.
+SHORT_FIND = 3
 SAMPLES = 5
+# Сколько мест вне названных моделью показывать на проверку (по одному флажку).
+EXTRA_MAX = 50
 CONTEXT = 40
 GROUPS_MAX = 200
 IMPROVE_TIMEOUT_S = 600.0
 
 # Смысловые слова: замена, которая их добавляет, убирает или меняет, — не
 # исправление распознавания, а правка смысла.
-NEGATIONS = frozenset({"не", "ни", "нет", "без", "no", "not"})
-NUMBER_WORDS = frozenset("""
-ноль один одна одно одного одной два две двух три трех четыре четырех пять пяти шесть шести
-семь семи восемь восьми девять девяти десять десяти одиннадцать двенадцать тринадцать
-четырнадцать пятнадцать шестнадцать семнадцать восемнадцать девятнадцать двадцать
-тридцать сорок пятьдесят шестьдесят семьдесят восемьдесят девяносто сто двести триста
-четыреста пятьсот шестьсот семьсот восемьсот девятьсот тысяча тысячи тысяч миллион
-миллиона миллионов миллиард полтора полторы половина треть четверть первый второй третий
+NEGATIONS = frozenset("""
+не ни нет нельзя никогда ничего ничто нигде никто никак никуда нечего некогда невозможно без
+no not never none nothing nobody nowhere cannot
 """.split())
+# Числительные — по основам, со всеми падежами и порядковыми: «пятнадцати» и
+# «пятидесяти», «первого» и «второго» — разные числа.
+_ORD = r"(?:ой|ый|ий|ая|ое|ого|ому|ым|ом|ую|ые|ых|ыми|ь|и|ья|ье|ьего|ьему|ьим|ьем|ью|ьи|ьих)"
+_NUMERAL = re.compile("^(?:" + "|".join([
+    r"н[оу]л(?:ь|я|ю|ем|е|и|ей|ев)?", r"один|одн(?:а|о|ого|ому|им|ой|у|их|ими|ом|и)",
+    r"дв(?:а|е|ух|ум|умя)", r"тр(?:и|ех|ем|емя)", r"четыр\w*",
+    r"(?:пят|шест|сем|восем|девят|десят)(?:ь|и|ью)", r"\w*дцат\w*", r"\w*десят\w*",
+    r"сорок\w*", r"девяност\w*", r"ст[оа]", r"сот(?:ня|ни|ен|ню|нями|нях)",
+    r"(?:двест|трист|четырест)\w*", r"(?:пят|шест|сем|восем|девят)(?:ьсот|исот|истам|ьюстами|истах)",
+    r"тысяч\w*", r"миллион\w*", r"миллиард\w*", r"полтор\w*", r"половин\w*",
+    r"перв\w*", r"втор" + _ORD, r"трет" + _ORD, r"четверт" + _ORD, r"(?:пят|шест|седьм|восьм|девят|десят|сот)" + _ORD,
+    r"one|two|three|four|five|six|seven|eight|nine|ten|hundred|thousand|million|first|second|third",
+]) + ")$")
+# Края `find`/`replace`, которые снимаются: пробелы, кавычки, знаки препинания.
+_EDGES = re.compile(r"^[\s.,;:!?…\"'«»„“”‚‘’`()\[\]{}—–-]+|[\s.,;:!?…\"'«»„“”‚‘’`()\[\]{}—–-]+$")
+# Что может отличаться внутри: буквы, цифры, пробелы, дефисы, апострофы.
+_PLAIN = re.compile(r"[^\W_]|[\s\-‐‑'’]")
 
 
 class ImproveError(RuntimeError):
@@ -103,7 +135,8 @@ _SYSTEM = """Ты проверяешь расшифровку рабочей в�
 - fix — явные ошибки распознавания обычных слов, когда верное слово очевидно по смыслу фразы.
 
 Правила:
-- Только замены: "find" — ровно как в тексте, от одного до четырёх слов подряд; "replace" — как должно быть. Не переписывай фразы, не меняй стиль, порядок слов и пунктуацию, ничего не добавляй от себя.
+- Только замены слов: "find" — слова ровно как в тексте, от одного до четырёх подряд, без кавычек и знаков препинания по краям; "replace" — как эти слова должны быть написаны. Не переписывай фразы, не меняй стиль, порядок слов и пунктуацию, ничего не добавляй от себя.
+- Исправление — это ослышка: правильное слово звучит похоже на распознанное. Слово с другим смыслом не предлагай.
 - Не меняй числа, даты, суммы и отрицания («не», «ни», «нет», «без»).
 - Сомневаешься — не предлагай. Написание терминов бери из списка терминов и правил ниже, если оно там есть.
 - Одна и та же ошибка в нескольких фразах — одна замена со всеми номерами в "segments".
@@ -155,13 +188,71 @@ def meeting_header(folder: Path, data: dict, categories=()) -> str:
 # --- проверка ответа -------------------------------------------------------------
 
 
-def _guarded(text: str) -> list[str]:
-    """Числа и отрицания фразы — то, что замена менять не вправе."""
-    out = []
-    for word in words_of(text):
-        if any(c.isdigit() for c in word) or word in NUMBER_WORDS or word in NEGATIONS:
-            out.append(word)
-    return sorted(out)
+def _numerals(words: list[str]) -> list[str]:
+    """Числа фразы: слова с цифрами и числительные (по основам)."""
+    return sorted(w for w in words if any(c.isdigit() for c in w) or _NUMERAL.match(w))
+
+
+def _negations(words: list[str]) -> list[str]:
+    return sorted(w for w in words if w in NEGATIONS)
+
+
+def _negated(a: list[str], b: list[str]) -> bool:
+    """Одна сторона отличается от другой приставкой «не»/«ни»: «правильно» ↔
+    «неправильно»."""
+    return any(x == p + y or y == p + x for x in a for y in b for p in ("не", "ни"))
+
+
+def _fold(text: str) -> str:
+    return "".join(c for c in nfc(text).lower().replace("ё", "е") if c.isalnum())
+
+
+def similarity(a: str, b: str) -> float:
+    """Сходство букв (без регистра, пробелов и знаков): 1 − Левенштейн / длина."""
+    a, b = _fold(a), _fold(b)
+    if not a or not b:
+        return 0.0
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return 1.0 - prev[-1] / max(len(a), len(b))
+
+
+def _spellings(replace: str) -> set[str]:
+    """Как термин мог быть записан кириллицей (meet.translit) и он сам."""
+    from meet import translit
+
+    out = {replace, *translit.variants(replace)}
+    words = replace.split()
+    if words:
+        combos = itertools.product(*(translit.word_variants(w) for w in words))
+        out |= {" ".join(c) for c in itertools.islice(combos, 8)}
+    return out
+
+
+def sound_alike(find: str, replace: str, kind: str) -> bool:
+    """Похоже ли это на ослышку: исправление — по буквам, термин — по его
+    кириллическим записям («апи» ~ API, «обзор бити» ~ observability)."""
+    if kind == "fix":
+        return similarity(find, replace) >= MIN_SIMILARITY
+    return max(similarity(find, v) for v in _spellings(replace)) >= MIN_SIMILARITY
+
+
+def _clean(value) -> str:
+    """Строка модели → одна строка без краевых кавычек и знаков."""
+    from meet.analysis import _flat
+
+    if not isinstance(value, str):
+        return ""
+    return _EDGES.sub("", _flat(value, TEXT_MAX + 1)).strip()
+
+
+def _others(text: str) -> list[str]:
+    """Знаки внутри фразы, кроме букв, цифр, пробелов, дефисов и апострофов."""
+    return sorted(c for c in text if not _PLAIN.match(c))
 
 
 def _confidence(value) -> float | None:
@@ -175,12 +266,12 @@ def _confidence(value) -> float | None:
 def check_pair(item, texts: dict[int, str]) -> tuple[dict | None, str | None]:
     """Одна пара из ответа → (пара, None) или (None, почему отброшена).
     `texts` — {номер фразы: текст} части, которую видела модель."""
-    from meet.analysis import _flat, _int
+    from meet.analysis import _int
 
     if not isinstance(item, dict):
         return None, "не объект"
-    find = _flat(item.get("find") or "", TEXT_MAX + 1).strip() if isinstance(item.get("find"), str) else ""
-    replace = _flat(item.get("replace") or "", TEXT_MAX + 1).strip() if isinstance(item.get("replace"), str) else ""
+    # Только слова: знаки по краям — у места в тексте свои, их замена не трогает.
+    find, replace = _clean(item.get("find")), _clean(item.get("replace"))
     if not find or not replace:
         return None, "пустая замена"
     if len(find) > TEXT_MAX or len(replace) > TEXT_MAX:
@@ -192,11 +283,19 @@ def check_pair(item, texts: dict[int, str]) -> tuple[dict | None, str | None]:
         return None, f"«{find}»: нет слов"
     if len(a) > MAX_WORDS or len(b) > MAX_WORDS:
         return None, f"«{find}»: больше {MAX_WORDS} слов"
-    if _guarded(find) != _guarded(replace):
-        return None, f"«{find}» → «{replace}»: меняет числа или отрицание"
+    if len(b) > len(a) + 1:
+        return None, f"«{find}» → «{replace}»: замена добавляет слова"
+    if _others(find) != _others(replace):
+        return None, f"«{find}» → «{replace}»: меняет знаки внутри фразы"
+    if _numerals(a) != _numerals(b):
+        return None, f"«{find}» → «{replace}»: меняет числа"
+    if _negations(a) != _negations(b) or _negated(a, b):
+        return None, f"«{find}» → «{replace}»: меняет отрицание"
     kind = str(item.get("kind") or "").strip().lower()
     if kind not in KINDS:
         return None, f"«{find}»: неизвестный вид «{kind}»"
+    if not sound_alike(find, replace, kind):
+        return None, f"«{find}» → «{replace}»: не похоже на ослышку"
     confidence = _confidence(item.get("confidence"))
     if confidence is None or confidence < MIN_CONFIDENCE:
         return None, f"«{find}»: низкая уверенность"
@@ -292,35 +391,52 @@ def _sample(segment: dict, i: int, a: int, b: int) -> dict:
     return {**s, "segment": i}
 
 
+def _letters(text: str) -> int:
+    return sum(1 for c in text if c.isalpha())
+
+
 def build_groups(data: dict, pairs: list[dict]) -> list[dict]:
-    """Пары → группы со всеми совпадениями: термин — во всей встрече,
-    исправление — в названных фразах. Длинная фраза забирает свои места
-    первой; совпадение, задетое другой группой, в эту не входит; группа без
-    совпадений и без изменений текста — не группа."""
+    """Пары → группы. `occ` — места в фразах, названных моделью (применяются
+    по умолчанию); `extra` — другие места того же термина во встрече (только
+    у терминов не короче SHORT_FIND букв; каждое — на отдельную проверку,
+    по умолчанию не применяется). Термины раньше исправлений, длинная фраза
+    раньше короткой; место, задетое другой группой, в эту не входит; группа
+    без мест в названных фразах — не группа."""
     segments = data.get("segments") or []
     texts = {i: nfc(str(s.get("text") or "")) for i, s in enumerate(segments)
              if isinstance(s, dict) and s.get("kind") != "break"}
     taken: dict[int, list[tuple[int, int]]] = {}
-    order = sorted(pairs, key=lambda p: (-len(_key(p["find"])), p["kind"] != "term", -p["confidence"]))
-    groups = []
-    for p in order:
-        where = texts.keys() if p["kind"] == "term" else [i for i in p["segments"] if i in texts]
-        occ = []
+
+    def places(p, where) -> list[list[int]]:
+        out = []
         for i in sorted(where):
             for a, b in matches(texts[i], p["find"]):
                 if any(a < y and b > x for x, y in taken.get(i, [])):
                     continue
                 if texts[i][a:b] == case_like(texts[i][a:b], p["replace"]):
                     continue  # уже так написано
-                occ.append([i, a, b])
+                out.append([i, a, b])
+        return out
+
+    order = sorted(pairs, key=lambda p: (p["kind"] != "term", -len(_key(p["find"])), -p["confidence"]))
+    groups = []
+    for p in order:
+        named = [i for i in p["segments"] if i in texts]
+        occ = places(p, named)
         if not occ:
             continue
         for i, a, b in occ:
             taken.setdefault(i, []).append((a, b))
+        extra: list[list[int]] = []
+        if p["kind"] == "term" and _letters(p["find"]) > SHORT_FIND:
+            extra = places(p, [i for i in texts if i not in set(named)])[:EXTRA_MAX]
+            for i, a, b in extra:
+                taken.setdefault(i, []).append((a, b))
         groups.append({
             "find": p["find"], "replace": p["replace"], "kind": p["kind"],
             "confidence": p["confidence"], "count": len(occ), "occ": occ,
             "samples": [_sample(segments[i], i, a, b) for i, a, b in occ[:SAMPLES]],
+            "extra": extra, "more": [_sample(segments[i], i, a, b) for i, a, b in extra],
         })
     groups.sort(key=lambda g: (g["kind"] != "term", -g["count"], g["find"].lower()))
     for n, g in enumerate(groups[:GROUPS_MAX], start=1):
@@ -409,6 +525,7 @@ def improve(folder: Path, runner, cfg, *, provider: str | None = None, bus=None)
     doc = run(folder, runner, cfg, provider=provider, bus=bus)
     path = write(folder, doc)
     library.update_meta(folder, lambda meta: {k: v for k, v in meta.items() if k != "improve_error"})
+    hint_done(folder)  # улучшение уже сделано — подсказка после GigaAM своё отслужила
     return path
 
 
@@ -452,20 +569,24 @@ def fresh(folder: Path, data: dict | None = None) -> dict | None:
 
 
 def public(doc: dict) -> dict:
-    """Предложение для окна: без полного списка мест (их бывает много)."""
+    """Предложение для окна: без координат мест (окну хватает образцов)."""
     return {**{k: v for k, v in doc.items() if k != "groups"},
-            "groups": [{k: v for k, v in g.items() if k != "occ"} for g in doc.get("groups") or []]}
+            "groups": [{k: v for k, v in g.items() if k not in ("occ", "extra")}
+                       for g in doc.get("groups") or []]}
 
 
 def state(folder: Path) -> dict:
-    """{"state": none|ready|failed, "proposal"?, "error"?} без учёта очереди."""
+    """{"state": none|ready|failed, "proposal"?, "error"?} без учёта очереди.
+    Повтор не удался, а прежнее предложение ещё свежее — оно отдаётся вместе
+    с ошибкой (как прежний анализ)."""
     folder = Path(folder)
     doc = fresh(folder)
     failure = library.read_meta(folder).get("improve_error")
     failed_at = failure.get("at") if isinstance(failure, dict) else None
     created = float(doc.get("created_at") or 0.0) if doc else 0.0
     if isinstance(failed_at, (int, float)) and not isinstance(failed_at, bool) and failed_at >= created:
-        return {"state": "failed", "error": str(failure.get("error") or "")}
+        return {"state": "failed", "error": str(failure.get("error") or ""),
+                **({"proposal": public(doc)} if doc else {})}
     if doc is None:
         return {"state": "none"}
     return {"state": "ready", "proposal": public(doc)}
@@ -474,9 +595,20 @@ def state(folder: Path) -> dict:
 # --- применение -----------------------------------------------------------------------
 
 
-def apply(folder: Path, group_ids, voices_dir: Path, *, now=None) -> dict:
-    """Выбранные группы — одним шагом истории встречи (операция `text` с
-    `scope: "ai"`; отмена, повтор и откат — как у «Исправить…»). Предложение
+def _extra_ids(extra) -> dict[str, set[int]]:
+    out: dict[str, set[int]] = {}
+    for gid, idx in (extra or {}).items() if isinstance(extra, dict) else []:
+        if isinstance(gid, str) and isinstance(idx, list):
+            out[gid] = {k for k in idx if isinstance(k, int) and not isinstance(k, bool)}
+    return out
+
+
+def apply(folder: Path, group_ids, voices_dir: Path, *, extra=None, created_at=None, now=None) -> dict:
+    """Выбранное — одним шагом истории встречи (операция `text` с `scope:
+    "ai"`; отмена, повтор и откат — как у «Исправить…»). `group_ids` — группы,
+    чьи места в названных моделью фразах применяются; `extra` — {группа:
+    [номера мест вне них]}, отмеченные человеком. `created_at` — какое
+    предложение видел человек: его заменили новым — Stale. Предложение
     устарело — Stale; ничего не выбрано — SpeakerError. Применённое
     предложение выбрасывается. → результат textfix.commit_spans + `groups`."""
     from meet import speakers, textfix
@@ -484,8 +616,12 @@ def apply(folder: Path, group_ids, voices_dir: Path, *, now=None) -> dict:
     doc = read(folder)
     if doc is None:
         raise speakers.SpeakerError("предложения нет — запустите улучшение заново")
+    if created_at is not None and created_at != doc.get("created_at"):
+        raise speakers.Stale("Список замен обновился — откройте его заново")
     wanted = {str(x) for x in group_ids or [] if isinstance(x, str)}
-    chosen = [g for g in doc["groups"] if g.get("id") in wanted]
+    extras = _extra_ids(extra)
+    chosen = [(g, g.get("id") in wanted, extras.get(g.get("id"), set())) for g in doc["groups"]]
+    chosen = [(g, named, more) for g, named, more in chosen if named or more]
     if not chosen:
         raise speakers.SpeakerError("ничего не выбрано")
     data = speakers.editable(folder)
@@ -495,9 +631,12 @@ def apply(folder: Path, group_ids, voices_dir: Path, *, now=None) -> dict:
     segments = data["segments"]
     by_segment: dict[int, list[tuple[int, int, str]]] = {}
     used: list[dict] = []
-    for g in chosen:
+    for g, named, more in chosen:
         n = 0
-        for i, a, b in g.get("occ") or []:
+        extra_places = g.get("extra") or []
+        places = (list(g.get("occ") or []) if named else []) + [
+            extra_places[k] for k in sorted(more) if 0 <= k < len(extra_places)]
+        for i, a, b in places:
             seg = segments[i] if isinstance(i, int) and 0 <= i < len(segments) else None
             text = nfc(str((seg or {}).get("text") or ""))
             if seg is None or (a, b) not in matches(text, g["find"]):
@@ -533,6 +672,9 @@ LATIN_TERMS = (
     "OpenSearch", "Kibana", "Slack", "Zoom", "Linux", "Figma", "Notion", "Miro", "Helm", "Terraform",
     "Ansible", "nginx", "observability", "OAuth", "ClickHouse", "MongoDB", "RabbitMQ", "Airflow",
 )
+# Записи, которые бывают и обычными русскими словами («зум» камеры, «питон»
+# в зоопарке, писатель Кафка): в списке остаются, но подсказку не вызывают.
+HINT_AMBIGUOUS = frozenset({"Zoom", "Python", "Kafka", "Miro", "REST", "Git", "AI"})
 HINT_MIN = 2
 _hint_variants: dict[tuple[str, ...], str] | None = None
 
@@ -566,9 +708,10 @@ def likely_transliterations(data: dict | None) -> list[str]:
             for n in range(min(longest, len(tokens) - k), 0, -1):
                 term = table.get(tuple(tokens[k:k + n]))
                 if term:
-                    hits += 1
-                    if term not in found:
-                        found.append(term)
+                    if term not in HINT_AMBIGUOUS:
+                        hits += 1
+                        if term not in found:
+                            found.append(term)
                     break
     return found if hits >= HINT_MIN else []
 
@@ -598,5 +741,8 @@ def hint_done(folder: Path) -> None:
 
 
 def rule_pairs(groups) -> list[dict]:
-    """Выбранные группы → правила `asr.replacements` ({"from", "to"})."""
-    return [{"from": g["from"], "to": g["to"]} for g in groups or [] if g.get("from") and g.get("to")]
+    """Выбранные группы терминов → правила `asr.replacements` ({"from", "to"}).
+    Исправления обычных слов правилами не становятся: в другой встрече те же
+    слова могут быть верными."""
+    return [{"from": g["from"], "to": g["to"]} for g in groups or []
+            if g.get("kind") == "term" and g.get("from") and g.get("to")]

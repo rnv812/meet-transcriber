@@ -500,7 +500,7 @@ class TrayControl:
             # приходит сюда же: после объединения идёт обычная расшифровка).
             self._background(lambda: self._auto_analyze(path), "meet-analysis")
             # Прежнее предложение «Улучшить расшифровку» — по старому тексту.
-            self._background(lambda: self._auto_improve(path), "meet-improve")
+            self._background(lambda: self._auto_improve(path, transcribed=True), "meet-improve")
         merged_exported = finish_merge = False
         if kind == jobs.TRANSCRIBE:
             info = self._merge_info(path)
@@ -2599,9 +2599,11 @@ class TrayControl:
         return {"ok": True}
 
     def improve_apply(self, recording_id: str, body: dict | None) -> dict:
-        """Применить выбранное: {"groups": [id…], "add_rules", "add_terms"} —
-        одним шагом истории встречи (тот же путь и те же отказы, что у
-        «Исправить…»); по желанию — правилами для будущих расшифровок и в
+        """Применить выбранное: {"groups": [id…], "extra": {id: [номера мест]},
+        "created_at", "add_rules", "add_terms"} — одним шагом истории встречи
+        (тот же путь и те же отказы, что у «Исправить…»); `created_at` — какой
+        список видел человек (его заменили новым — 409). По желанию — термины
+        (не исправления обычных слов) правилами для будущих расшифровок и в
         термины распознавания."""
         from meet import improve, replacements
 
@@ -2609,7 +2611,10 @@ class TrayControl:
         result: dict = {}
 
         def change(folder: Path, voices: Path) -> dict:
-            got = improve.apply(folder, body.get("groups"), voices)
+            created = body.get("created_at")
+            got = improve.apply(folder, body.get("groups"), voices, extra=body.get("extra"),
+                                created_at=created if isinstance(created, (int, float))
+                                and not isinstance(created, bool) else None)
             result.update(got)
             return got
 
@@ -2623,7 +2628,7 @@ class TrayControl:
             reply["rules"] = self._add_rules(improve.rule_pairs(used))
         if body.get("add_terms") is True and used:
             added, errors = [], []
-            for g in used:
+            for g in (g for g in used if g.get("kind") == "term"):
                 got = hotwords.add_to_file(paths.hotwords_path(), replacements.hotword_for(g["from"], g["to"]))
                 if got.get("error"):
                     errors.append(got["error"])
@@ -2679,26 +2684,37 @@ class TrayControl:
         self._mark_improve(folder, True, manual=manual)
         return job, True
 
-    def _auto_improve(self, folder: Path) -> None:
-        """После расшифровки: прежнее предложение (по старому тексту) —
-        выбросить; если включено «Улучшать расшифровку автоматически после
-        распознавания» (`analysis.improve_auto`), подготовить новое фоновой
-        задачей — применяет его человек. Идёт запись или живой режим — после них."""
+    def _auto_improve(self, folder: Path, *, transcribed: bool = False) -> None:
+        """После расшифровки (`transcribed`): прежнее предложение и прежняя
+        ошибка — по старому тексту, их долой; если включено «Улучшать
+        расшифровку автоматически после распознавания» (`analysis.improve_auto`),
+        подготовить новое фоновой задачей — применяет его человек. Не ставится,
+        как и анализ: запись короче `auto_record.min_call_seconds`, модель не
+        подключена. Идёт запись или живой режим — после них."""
         from meet import improve
 
         try:
             improve.fresh(folder)  # устаревшее выбрасывается
+            if transcribed and "improve_error" in library.read_meta(folder):
+                library.update_meta(folder, lambda meta: {
+                    k: v for k, v in meta.items() if k != "improve_error"})
             cfg = settings.load()
-            if not cfg.analysis.improve_auto or library.read_transcript(folder) is None:
+            data = library.read_transcript(folder)
+            if not cfg.analysis.improve_auto or data is None:
                 return
             if improve.read(folder) is not None:
                 return  # свежее уже есть
+            spoken = max((float(x.get("end") or 0.0) for x in data.get("segments") or []
+                          if isinstance(x, dict)), default=0.0)
+            card = library.describe(folder)
+            if max(spoken, float((card.duration_s if card else None) or 0.0)) < cfg.auto_record.min_call_seconds:
+                return
+            if not _provider_installed(cfg):
+                return
             if self._busy_now():
                 with self._analysis_lock:
                     self._improve_deferred[self._key(folder)] = folder
                 self._mark_improve(folder, True)
-                return
-            if not _provider_installed(cfg):
                 return
             job, created = self._queue_improve(folder, low=True)
             if created:

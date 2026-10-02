@@ -779,7 +779,10 @@ def _improve_text(groups: list[dict], applied: dict | None) -> str:
         mark = "" if g["kind"] == "term" else " (исправление)"
         lines.append(f"{g['find']} → {g['replace']} · {g['count']}{mark}")
     if applied is not None:
-        lines.append(f"Применено: {applied.get('changed', 0)} замен; отменить — в карточке встречи: "
+        n = applied.get("changed", 0)
+        word = "замена" if n % 10 == 1 and n % 100 != 11 else (
+            "замены" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "замен")
+        lines.append(f"Применено: {n} {word}; отменить — в карточке встречи: "
                      "«Спикеры» → «История изменений»")
     return "\n".join(lines) + "\n"
 

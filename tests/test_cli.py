@@ -1080,7 +1080,7 @@ def test_improve_all_includes_recognition_fixes(env, capsys, monkeypatch):
     _fake_llm(monkeypatch, [IMPROVE_REPLY])
     assert _main(["improve", RID, "--all", "--apply"]) == 0
     out = capsys.readouterr().out
-    assert "согласен → согласна · 1 (исправление)" in out and "Применено: 3 замен" in out
+    assert "согласен → согласна · 1 (исправление)" in out and "Применено: 3 замены;" in out
     assert library.read_transcript(folder)["segments"][1]["text"] == "Согласна."
 
 

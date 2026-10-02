@@ -41,10 +41,23 @@ export function improveBlocked(noModel: boolean): string | null {
   return noModel ? "Подключите Claude Code или Codex в настройках" : null;
 }
 
-/** Выбранные группы: термины с флажком и, в режиме «Термины и явные ошибки», — исправления, если отмечены. */
+/** Выбранные группы: термины с флажком и, в режиме «Термины и явные ошибки», — отмеченные исправления. */
 export function chosenGroups(groups: ImproveGroup[], scope: ImproveScope, off: ReadonlySet<string>,
-  fixesOn: boolean): ImproveGroup[] {
-  return groups.filter((g) => (g.kind === "term" ? !off.has(g.id) : scope === "all" && fixesOn));
+  fixesOn: ReadonlySet<string>): ImproveGroup[] {
+  return groups.filter((g) => (g.kind === "term" ? !off.has(g.id) : scope === "all" && fixesOn.has(g.id)));
+}
+
+/** Ключ отмеченного места вне названных моделью фраз: группа и номер в `more`. */
+const extraKey = (group: string, k: number) => `${group}:${k}`;
+
+/** Отмеченные места вне названных фраз → {группа: [номера]} для запроса. */
+export function chosenExtra(groups: ImproveGroup[], on: ReadonlySet<string>): Record<string, number[]> {
+  const out: Record<string, number[]> = {};
+  for (const g of groups) {
+    const idx = (g.more ?? []).map((_, k) => k).filter((k) => on.has(extraKey(g.id, k)));
+    if (idx.length) out[g.id] = idx;
+  }
+  return out;
 }
 
 type Notice = { text: string; step?: string; undone?: boolean };
@@ -132,11 +145,15 @@ export function useImprove({ endpoint, id, folder, jobs, version, head, noModel,
     try { await dismissImproveHint(endpoint, id); } catch { /* подсказка — не повод для ошибки */ }
   }, [endpoint, id]);
 
-  const apply = useCallback(async (ids: string[], addRules: boolean, addTerms: boolean) => {
+  const created = state?.proposal?.created_at;
+  const apply = useCallback(async (ids: string[], extra: Record<string, number[]>, addRules: boolean,
+    addTerms: boolean) => {
     setBusy(true);
     setError(null);
     try {
-      const res = await applyImprove(endpoint, id, { groups: ids, add_rules: addRules, add_terms: addTerms });
+      const res = await applyImprove(endpoint, id, {
+        groups: ids, extra, created_at: created, add_rules: addRules, add_terms: addTerms,
+      });
       const terms = res.groups.filter((g) => g.kind === "term").length;
       const parts = [`${improvedText(res.changed, terms)}. Итоги не пересчитываются автоматически.`];
       if (res.rules?.error) parts.push(res.rules.error);
@@ -154,7 +171,7 @@ export function useImprove({ endpoint, id, folder, jobs, version, head, noModel,
     } finally {
       setBusy(false);
     }
-  }, [endpoint, id, onChanged, reload]);
+  }, [endpoint, id, created, onChanged, reload]);
 
   const undo = useCallback(async () => {
     if (!notice?.step) return;
@@ -178,7 +195,7 @@ export function useImprove({ endpoint, id, folder, jobs, version, head, noModel,
   );
   const dialog = open ? (
     <ImproveDialog state={shown} busy={busy} error={error} playable={playable} onPlay={onPlay}
-      onApply={(ids, rules, terms) => void apply(ids, rules, terms)} onRerun={blocked ? undefined : () => void rerun()}
+      onApply={(ids, extra, rules, terms) => void apply(ids, extra, rules, terms)} onRerun={blocked ? undefined : () => void rerun()}
       onClose={() => { setOpen(false); setError(null); }} />
   ) : null;
   const bar = notice ? (
@@ -215,12 +232,16 @@ export function ImproveStatus({ state, busy, onOpen, onRetry, onDismiss }: {
         </div>
       );
     case "ready": {
-      const n = state.proposal?.groups.filter((g) => g.kind === "term").length ?? 0;
-      if (!n) return null;
+      const groups = state.proposal?.groups ?? [];
+      const terms = groups.filter((g) => g.kind === "term").length;
+      const fixes = groups.length - terms;
+      if (!groups.length) return null;
       return (
         <div className="analysis-status" role="status">
           <span className="muted">
-            ИИ предлагает исправить {n} {plural(n, "термин", "термина", "терминов")}
+            {terms
+              ? `ИИ предлагает исправить ${terms} ${plural(terms, "термин", "термина", "терминов")}`
+              : `ИИ предлагает ${fixes} ${plural(fixes, "исправление", "исправления", "исправлений")} распознавания`}
           </span>
           <button type="button" className="link-btn" onClick={onOpen} disabled={busy}>Просмотреть</button>
         </div>
@@ -230,6 +251,9 @@ export function ImproveStatus({ state, busy, onOpen, onRetry, onDismiss }: {
       return (
         <div className="analysis-status" role="status">
           <span className="muted" title={state.error || undefined}>Улучшение расшифровки не удалось</span>
+          {state.proposal && state.proposal.groups.length > 0 && (
+            <button type="button" className="link-btn" onClick={onOpen} disabled={busy}>Прежний список</button>
+          )}
           {onRetry && <button type="button" className="link-btn" onClick={onRetry} disabled={busy}>Повторить</button>}
         </div>
       );
@@ -279,7 +303,7 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
   error: string | null;
   playable: boolean;
   onPlay: (start: number, until: number) => void;
-  onApply: (ids: string[], addRules: boolean, addTerms: boolean) => void;
+  onApply: (ids: string[], extra: Record<string, number[]>, addRules: boolean, addTerms: boolean) => void;
   /** «Проверить заново»; нет — модель не подключена. */
   onRerun?: () => void;
   onClose: () => void;
@@ -287,17 +311,22 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
   const [scope, setScope] = useState<ImproveScope>("terms");
   /** Снятые флажки групп терминов (по умолчанию все отмечены). */
   const [off, setOff] = useState<ReadonlySet<string>>(new Set());
-  /** «Прочие исправления» — по умолчанию не отмечены. */
-  const [fixesOn, setFixesOn] = useState(false);
+  /** Отмеченные исправления обычных слов — по умолчанию ни одного. */
+  const [fixesOn, setFixesOn] = useState<ReadonlySet<string>>(new Set());
+  /** Отмеченные места вне названных моделью фраз — по умолчанию ни одного. */
+  const [extraOn, setExtraOn] = useState<ReadonlySet<string>>(new Set());
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [rules, setRules] = useState(false);
   const [terms, setTerms] = useState(false);
   const title = useRef<HTMLHeadingElement>(null);
-  const groups = state?.state === "ready" ? state.proposal?.groups ?? [] : [];
+  // Повтор не удался — прежний свежий список всё ещё можно применить.
+  const groups = state?.state === "ready" || state?.state === "failed" ? state.proposal?.groups ?? [] : [];
   const created = state?.proposal?.created_at;
 
   // Новое предложение — заново выбор по умолчанию.
-  useEffect(() => { setOff(new Set()); setFixesOn(false); setExpanded(new Set()); }, [created]);
+  useEffect(() => {
+    setOff(new Set()); setFixesOn(new Set()); setExtraOn(new Set()); setExpanded(new Set());
+  }, [created]);
   useEffect(() => { title.current?.focus(); }, []);
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -307,9 +336,14 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
 
   const termGroups = groups.filter((g) => g.kind === "term");
   const fixGroups = groups.filter((g) => g.kind === "fix");
-  const fixCount = fixGroups.reduce((n, g) => n + g.count, 0);
   const chosen = chosenGroups(groups, scope, off, fixesOn);
-  const total = chosen.reduce((n, g) => n + g.count, 0);
+  const extra = chosenExtra(termGroups, extraOn);
+  const extraCount = Object.values(extra).reduce((n, x) => n + x.length, 0);
+  const total = chosen.reduce((n, g) => n + g.count, 0) + extraCount;
+  const fixChosen = fixGroups.filter((g) => fixesOn.has(g.id));
+  const fixCount = fixChosen.reduce((n, g) => n + g.count, 0);
+  /** Сколько мест группы будет заменено: отмеченные названные и отмеченные остальные. */
+  const willReplace = (g: ImproveGroup) => (off.has(g.id) ? 0 : g.count) + (extra[g.id]?.length ?? 0);
   const toggle = (set: ReadonlySet<string>, key: string) => {
     const next = new Set(set);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -323,8 +357,14 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
     </button>
   );
 
+  const failure = state?.state === "failed" ? (
+    <div className="card__error" role="alert" title={state.error || undefined}>
+      Улучшение расшифровки не удалось{state.error ? `: ${state.error}` : ""}
+      {groups.length > 0 && <span className="muted"> · ниже — прежний список</span>}
+    </div>
+  ) : null;
   let content: ReactNode;
-  if (!state || state.state === "none" || state.state === "queued" || state.state === "running") {
+  if (!state || state.state === "queued" || state.state === "running" || (state.state === "none" && busy)) {
     content = (
       <div className="improve__work" role="status">
         <span className="analysis-chip">
@@ -334,12 +374,11 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
         <p className="muted improve__hint">Окно можно закрыть: когда список будет готов, ссылка на него появится в карточке.</p>
       </div>
     );
-  } else if (state.state === "failed") {
-    content = (
-      <div className="card__error" role="alert" title={state.error || undefined}>
-        Улучшение расшифровки не удалось{state.error ? `: ${state.error}` : ""}
-      </div>
-    );
+  } else if (state.state === "none") {
+    // Ничего не идёт: запуск не удался или расшифровку изменили и список устарел.
+    content = <p className="improve__empty">Списка замен нет — расшифровку изменили или проверку ещё не запускали.</p>;
+  } else if (state.state === "failed" && !groups.length) {
+    content = failure;
   } else if (!groups.length) {
     content = <p className="improve__empty">ИИ не нашёл неверно распознанных терминов.</p>;
   } else {
@@ -357,27 +396,58 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
             в режиме «Термины и явные ошибки распознавания».</p>
         )}
         <ul className="improve__groups" aria-label="Предложенные замены">
-          {termGroups.map((g) => (
-            <li key={g.id} className="improve__group">
-              <div className="improve__row">
-                {expander(g.id, g.find)}
-                <label className="improve__check">
-                  <input type="checkbox" checked={!off.has(g.id)} onChange={() => setOff((x) => toggle(x, g.id))} />
-                  <span className="improve__pair">
-                    <span className="improve__from">{g.find}</span> → <strong>{g.replace}</strong>
-                  </span>
-                  <span className="muted num" title={`${g.count} ${placesWord(g.count)}`}>· {g.count}</span>
-                </label>
-              </div>
-              {expanded.has(g.id) && <Places group={g} playable={playable} onPlay={onPlay} />}
-            </li>
-          ))}
+          {termGroups.map((g) => {
+            const more = g.more ?? [];
+            const n = willReplace(g);
+            return (
+              <li key={g.id} className="improve__group">
+                <div className="improve__row">
+                  {expander(g.id, g.find)}
+                  <label className="improve__check">
+                    <input type="checkbox" checked={!off.has(g.id)} onChange={() => setOff((x) => toggle(x, g.id))} />
+                    <span className="improve__pair">
+                      <span className="improve__from">{g.find}</span> → <strong>{g.replace}</strong>
+                    </span>
+                    <span className="muted num" title={`Будет заменено: ${n} ${placesWord(n)}`}>· {n}</span>
+                  </label>
+                </div>
+                {expanded.has(g.id) && (
+                  <>
+                    <Places group={g} playable={playable} onPlay={onPlay} />
+                    {more.length > 0 && (
+                      <div className="improve__more">
+                        <div className="muted improve__more-head">
+                          Ещё {more.length} {placesWord(more.length)} — проверьте: ИИ их не отмечал
+                        </div>
+                        <ul className="improve__places" aria-label={`Ещё места: ${g.find}`}>
+                          {more.map((x, k) => (
+                            <li key={`${x.segment}:${x.offset}`}>
+                              <input type="checkbox" aria-label={`Заменить и здесь: ${clock(x.start)}`}
+                                checked={extraOn.has(extraKey(g.id, k))}
+                                onChange={() => setExtraOn((on) => toggle(on, extraKey(g.id, k)))} />
+                              {playable ? (
+                                <button type="button" className="spk-link improve__play" title="Прослушать это место"
+                                  onClick={() => onPlay(Math.max(0, x.start - 0.3), x.end + 0.5)}>▶ {clock(x.start)}</button>
+                              ) : <span className="muted num">{clock(x.start)}</span>}
+                              <span className="improve__ctx">{x.before}<mark className="hit">{x.match}</mark>{x.after}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </>
+                )}
+              </li>
+            );
+          })}
           {scope === "all" && fixGroups.length > 0 && (
             <li className="improve__group">
               <div className="improve__row">
                 {expander("fix", "Прочие исправления")}
                 <label className="improve__check">
-                  <input type="checkbox" checked={fixesOn} onChange={(e) => setFixesOn(e.target.checked)} />
+                  <input type="checkbox" checked={fixChosen.length === fixGroups.length}
+                    ref={(el) => { if (el) el.indeterminate = fixChosen.length > 0 && fixChosen.length < fixGroups.length; }}
+                    onChange={(e) => setFixesOn(e.target.checked ? new Set(fixGroups.map((g) => g.id)) : new Set())} />
                   <span className="improve__pair">Прочие исправления</span>
                   <span className="muted num">· {fixCount}</span>
                 </label>
@@ -386,8 +456,11 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
                 <ul className="improve__fixes">
                   {fixGroups.map((g) => (
                     <li key={g.id}>
-                      <span className="improve__pair"><span className="improve__from">{g.find}</span> → <strong>{g.replace}</strong></span>
-                      <span className="muted num"> · {g.count}</span>
+                      <label className="improve__check">
+                        <input type="checkbox" checked={fixesOn.has(g.id)} onChange={() => setFixesOn((x) => toggle(x, g.id))} />
+                        <span className="improve__pair"><span className="improve__from">{g.find}</span> → <strong>{g.replace}</strong></span>
+                        <span className="muted num">· {g.count}</span>
+                      </label>
                       <Places group={g} playable={playable} onPlay={onPlay} />
                     </li>
                   ))}
@@ -401,8 +474,9 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
             <input type="checkbox" checked={rules} onChange={(e) => setRules(e.target.checked)} />
             <span>Запомнить как правила для будущих встреч</span>
             <HelpTip label="Как работают правила для будущих встреч" title="Правила для будущих встреч">
-              <TipLine>Каждая новая расшифровка сразу после распознавания заменит выбранное так же: целые слова,
-                без учёта регистра, «ё» и «е» не различаются.</TipLine>
+              <TipLine>Каждая новая расшифровка сразу после распознавания заменит выбранные термины так же: целые
+                слова, без учёта регистра, «ё» и «е» не различаются. Исправления обычных слов правилами не
+                становятся: в другой встрече те же слова могут быть верными.</TipLine>
               <TipLine>Список правил — «Настройки → Распознавание», там их можно удалить.</TipLine>
             </HelpTip>
           </label>
@@ -410,7 +484,7 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
             <input type="checkbox" checked={terms} onChange={(e) => setTerms(e.target.checked)} />
             <span>Добавить в термины</span>
             <HelpTip label="Что такое термины распознавания" title="Термины распознавания">
-              <TipLine>Правильные написания попадут в список терминов распознавания («Настройки → Распознавание»):
+              <TipLine>Правильные написания выбранных терминов (не исправлений обычных слов) попадут в список терминов распознавания («Настройки → Распознавание»):
                 их реже путают в новых расшифровках, и ИИ при улучшении берёт написание оттуда.</TipLine>
             </HelpTip>
           </label>
@@ -419,7 +493,7 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
     );
   }
 
-  const ready = state?.state === "ready" && groups.length > 0;
+  const ready = (state?.state === "ready" || state?.state === "failed") && groups.length > 0;
   return (
     <div className="modal" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="modal__box improve" role="dialog" aria-modal="true" aria-labelledby="improve-title">
@@ -434,9 +508,10 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
           переписываются, спикеры не меняются. Применённое можно отменить в истории изменений.
         </p>
         {error && <div className="card__error" role="alert">{error}</div>}
+        {state?.state === "failed" && groups.length > 0 && failure}
         {content}
         <div className="improve__foot">
-          {(state?.state === "ready" || state?.state === "failed") && onRerun ? (
+          {(state?.state === "ready" || state?.state === "failed" || (state?.state === "none" && !busy)) && onRerun ? (
             <button type="button" className="link-btn" onClick={onRerun} disabled={busy}>Проверить заново</button>
           ) : <span />}
           <span className="improve__btns">
@@ -445,8 +520,8 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
             )}
             <Button onClick={onClose}>{ready ? "Отмена" : "Закрыть"}</Button>
             {ready && (
-              <Button variant="primary" disabled={busy || !chosen.length}
-                onClick={() => onApply(chosen.map((g) => g.id), rules, terms)}>Применить выбранное</Button>
+              <Button variant="primary" disabled={busy || !total}
+                onClick={() => onApply(chosen.map((g) => g.id), extra, rules, terms)}>Применить выбранное</Button>
             )}
           </span>
         </div>
