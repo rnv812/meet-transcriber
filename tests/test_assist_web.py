@@ -7,13 +7,6 @@ from meet.assist.web import build_app
 
 
 class FakeState:
-    class _D:
-        version = 1
-
-        @staticmethod
-        def render():
-            return "## Тема\n- [1] Тезис"
-
     class _B:
         @staticmethod
         def since(i):
@@ -27,12 +20,26 @@ class FakeState:
         def size():
             return 1
 
-    digest, bus = _D(), _B()
+    bus = _B()
     tasks_set: list[str] = []
 
     @staticmethod
     def status():
         return None
+
+    def signature(self):
+        return (1, self.bus.size(), self.status())
+
+    def view(self):
+        return {"version": 1, "digest": "### Решения\n- Тезис",
+                "summary": {"topic": "Запуск", "points": [], "decisions": [{"id": "d1", "text": "Тезис"}],
+                            "tasks": [], "open_questions": []},
+                "hints": [{"id": "h1", "kind": "risk", "text": "Нет владельца"}],
+                "status": self.status()}
+
+    def hint_action(self, hint_id, action):
+        self.hint_calls.append((hint_id, action))
+        return hint_id == "h1"
 
     class _QA:
         @staticmethod
@@ -43,6 +50,9 @@ class FakeState:
 
     async def set_task(self, name):
         self.tasks_set.append(name)
+
+    def __init__(self):
+        self.hint_calls = []
 
 
 def _run(coro):
@@ -95,14 +105,18 @@ def test_sse_first_event_has_digest():
                     raw.decode("utf-8").split("data: ", 1)[1].strip()
                 )
                 assert "Тезис" in payload["digest"]
+                assert payload["summary"]["topic"] == "Запуск"
+                assert payload["hints"][0]["id"] == "h1"
+                assert payload["transcript"] == ["[00:00:01] Вы: привет"]
 
     _run(scenario())
 
 
-class LiveState(FakeState):
+class BusState(FakeState):
     """Состояние с настоящей шиной и событием остановки."""
 
     def __init__(self):
+        super().__init__()
         from meet.assist.bus import TranscriptBus
 
         self.bus = TranscriptBus()
@@ -130,7 +144,7 @@ async def _read_events(resp, count):
 
 def test_stop_route_requests_shutdown():
     async def scenario():
-        state = LiveState()
+        state = BusState()
         async with TestClient(TestServer(build_app(state))) as client:
             r = await client.post("/stop")
             assert r.status == 200 and await r.json() == {"ok": True}
@@ -141,7 +155,7 @@ def test_stop_route_requests_shutdown():
 
 def test_sse_sends_structured_line_for_each_new_line():
     async def scenario():
-        state = LiveState()
+        state = BusState()
         state.bus.publish("[00:00:03] Вы: привет",
                           {"t": 3.0, "speaker": "Вы", "text": "привет"})
         async with TestClient(TestServer(build_app(state))) as client:
@@ -165,7 +179,7 @@ def test_sse_sends_structured_line_for_each_new_line():
 def test_sse_resumes_after_last_event_id():
     """Переподключившийся EventSource шлёт Last-Event-ID — строки не дублируются."""
     async def scenario():
-        state = LiveState()
+        state = BusState()
         for i in range(3):
             state.bus.publish(f"l{i}", {"t": float(i), "speaker": "Вы", "text": f"l{i}"})
         async with TestClient(TestServer(build_app(state))) as client:
@@ -180,7 +194,7 @@ def test_sse_resumes_after_last_event_id():
 
 def test_sse_closes_when_stop_requested():
     async def scenario():
-        state = LiveState()
+        state = BusState()
         async with TestClient(TestServer(build_app(state))) as client:
             async with client.get("/events") as resp:
                 await _read_events(resp, 1)
@@ -193,7 +207,7 @@ def test_sse_closes_when_stop_requested():
 
 def test_post_routes_reject_foreign_origin():
     async def scenario():
-        state = LiveState()
+        state = BusState()
         async with TestClient(TestServer(build_app(state))) as client:
             evil = {"Origin": "http://evil.example"}
             r = await client.post("/stop", headers=evil)
@@ -211,7 +225,7 @@ def test_post_routes_reject_foreign_origin():
 
 def test_post_routes_allow_own_origin_and_no_origin():
     async def scenario():
-        state = LiveState()
+        state = BusState()
         async with TestClient(TestServer(build_app(state))) as client:
             port = client.server.port
             for origin in (f"http://127.0.0.1:{port}", f"http://localhost:{port}"):
@@ -223,5 +237,24 @@ def test_post_routes_allow_own_origin_and_no_origin():
             r = await client.post("/stop",
                                   headers={"Origin": f"http://localhost:{port}"})
             assert r.status == 200 and state.stop_requests == 2
+
+    _run(scenario())
+
+
+def test_hint_route_validates_and_forwards():
+    async def scenario():
+        state = FakeState()
+        async with TestClient(TestServer(build_app(state))) as client:
+            r = await client.post("/hint", json={"id": "h1", "action": "pin"})
+            assert r.status == 200 and await r.json() == {"ok": True, "changed": True}
+            r = await client.post("/hint", json={"id": "h9", "action": "dismiss"})
+            assert (await r.json())["changed"] is False
+            for bad in ({"id": "h1", "action": "delete"}, {"action": "pin"}, [1]):
+                r = await client.post("/hint", json=bad)
+                assert r.status == 400
+            r = await client.post("/hint", json={"id": "h1", "action": "pin"},
+                                  headers={"Origin": "http://evil.example"})
+            assert r.status == 403
+        assert state.hint_calls == [("h1", "pin"), ("h9", "dismiss")]
 
     _run(scenario())

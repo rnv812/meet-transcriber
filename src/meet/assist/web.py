@@ -1,10 +1,12 @@
-"""Локальный веб-интерфейс live-ассистента: дайджест, чат вопросов, лента транскрипта.
+"""Локальный веб-интерфейс live-ассистента: сводка, подсказки, вопросы, лента.
 
 Отдаёт одну HTML-страницу, поток состояния через SSE (`GET /events`),
-приём вопросов (`POST /ask`), смену задачи-контекста (`POST /task`) и штатную
-остановку (`POST /stop` — так резидент гасит дочерний `meet assist`).
+приём вопросов (`POST /ask`), действия с подсказками (`POST /hint`:
+закрепить, открепить, скрыть), смену задачи-контекста (`POST /task`) и
+штатную остановку (`POST /stop` — так резидент гасит дочерний `meet assist`).
 
-SSE шлёт `event: state` (дайджест, хвост ленты, статус) при каждом изменении
+SSE шлёт `event: state` (`state.view()`: сводка, подсказки, статус, хвост
+ленты) при каждом изменении
 и `event: line` с `{"t", "speaker", "text"}` на каждую новую строку ленты;
 `id:` строки — её номер в шине, поэтому переподключившийся EventSource
 (заголовок Last-Event-ID) получает только пропущенные строки.
@@ -45,7 +47,13 @@ h1{grid-column:1/3;margin:8px 16px;font-size:18px}
 const es = new EventSource('/events');
 es.addEventListener('state', e => {
   const s = JSON.parse(e.data);
-  document.getElementById('digest').textContent = s.digest;
+  const hints = (s.hints || []).map(h => '• ' + h.text).join('
+');
+  document.getElementById('digest').textContent =
+    s.digest + (hints ? '
+
+Подсказки:
+' + hints : '');
   document.getElementById('transcript').textContent = s.transcript.join('\\n');
   document.getElementById('status').textContent = s.status || '';
 });
@@ -72,6 +80,7 @@ document.getElementById('q').addEventListener('keydown',
 </script></body></html>"""
 
 TRANSCRIPT_TAIL = 50
+HINT_ACTIONS = ("pin", "unpin", "dismiss")
 
 
 def _stop_requested(state) -> bool:
@@ -123,14 +132,10 @@ def build_app(state) -> web.Application:
             while not _stop_requested(state):
                 lines, _ = state.bus.since(
                     max(0, state.bus.size() - TRANSCRIPT_TAIL))
-                snapshot = (state.digest.version, state.bus.size(),
-                            state.status())
+                snapshot = state.signature()
                 if snapshot != sent:
-                    payload = json.dumps({
-                        "digest": state.digest.render(),
-                        "transcript": lines,
-                        "status": state.status(),
-                    }, ensure_ascii=False)
+                    payload = json.dumps({**state.view(), "transcript": lines},
+                                         ensure_ascii=False)
                     await resp.write(
                         f"event: state\ndata: {payload}\n\n".encode())
                     sent = snapshot
@@ -166,6 +171,18 @@ def build_app(state) -> web.Application:
             return _json_response({"answer": f"⚠ внутренняя ошибка: {e}"})
         return _json_response({"answer": answer})
 
+    async def hint(request):
+        try:
+            body = await request.json()
+        except Exception:
+            raise web.HTTPBadRequest(text="ожидается JSON (UTF-8)")
+        hint_id = body.get("id") if isinstance(body, dict) else None
+        action = body.get("action") if isinstance(body, dict) else None
+        if not isinstance(hint_id, str) or action not in HINT_ACTIONS:
+            raise web.HTTPBadRequest(text="ожидается id и action: pin, unpin или dismiss")
+        changed = state.hint_action(hint_id, action)
+        return _json_response({"ok": True, "changed": changed})
+
     async def set_task(request):
         try:
             body = await request.json()
@@ -187,6 +204,7 @@ def build_app(state) -> web.Application:
         web.get("/", index),
         web.get("/events", events),
         web.post("/ask", ask),
+        web.post("/hint", hint),
         web.post("/task", set_task),
         web.post("/stop", stop),
     ])

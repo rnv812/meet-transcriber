@@ -1,4 +1,4 @@
-"""Оркестратор live-ассистента: связывает LiveEngine, шину, дайджестер, Q&A и веб.
+"""Оркестратор live-ассистента: связывает LiveEngine, шину, тикер живого состояния, Q&A и веб.
 
 `run_assist` — блокирующая точка входа команды `meet assist`: поднимает запись
 с потоковой расшифровкой, дайджестер и веб-страницу, живёт до Ctrl-C или
@@ -6,6 +6,10 @@
 Резидент запускает его дочерним процессом (`--no-browser --port 0
 --endpoint-file <путь>`) и узнаёт порт из файла эндпоинта.
 `AssistState` — состояние, которое видят веб-слой и линии SDK.
+
+Живое состояние (сводка и подсказки) пишется в папку записи как
+`live_state.json` после каждого изменения и при выходе: его берёт задача
+итогов как черновик.
 """
 
 import asyncio
@@ -21,8 +25,9 @@ from meet import paths
 from meet.assist.agent import check_auth
 from meet.assist.bus import TranscriptBus
 from meet.assist.context import collect_task_context
-from meet.assist.digest import Digest
-from meet.assist.digester import Digester
+from meet.assist.digester import CALM, Digester
+from meet.assist.kb_index import TermIndex
+from meet.assist.live_state import LIVE_STATE_JSON, LiveState
 from meet.assist.prompts import (
     build_digester_system,
     build_qa_system,
@@ -77,12 +82,13 @@ class AssistState:
     каждый тик/вопрос и так делает свежий SDK-вызов.
     """
 
-    def __init__(self, *, bus: TranscriptBus, digest: Digest, glossary: str,
+    def __init__(self, *, bus: TranscriptBus, live: LiveState, glossary: str,
                  vault: Path | None, cwd: Path,
                  knowledge: Path | None = None,
                  vault_index: str = "Claude Docs.md", hub_prefix: str = "_") -> None:
         self.bus = bus
-        self.digest = digest
+        self.live = live
+        self.on_change = None  # после действия человека (запись live_state.json)
         self._glossary = glossary
         self._vault = vault
         self._vault_index = vault_index
@@ -103,14 +109,14 @@ class AssistState:
             d for d in (self._knowledge, self._vault) if d is not None)
 
     @property
-    def digest_allowed_dirs(self) -> tuple[Path, ...]:
-        """Дайджестеру — только база знаний (без неё — без инструментов, как
-        раньше); хранилище задач ему не нужно: контекст задачи и так в промпте."""
-        return (self._cwd, self._knowledge) if self._knowledge else ()
+    def knowledge(self) -> Path | None:
+        """База знаний живого режима (для указателя терминов тиков)."""
+        return self._knowledge
 
     def _rebuild(self) -> None:
         self.digester_system = build_digester_system(
-            self._glossary, self._task_context, self._knowledge)
+            self._glossary, self._task_context,
+            hints=self.live.hints_enabled, max_hints=self.live.max_hints)
         self.qa_system = build_qa_system(
             self._glossary, self._task_context, self._vault, self._knowledge)
         if self.digester is not None:
@@ -127,6 +133,30 @@ class AssistState:
 
     def status(self) -> str | None:
         return self.digester.status if self.digester else None
+
+    def signature(self) -> tuple:
+        """Меняется — пора слать клиентам новое `state`."""
+        return (self.live.version, self.bus.size(), self.status())
+
+    def view(self) -> dict:
+        """Тело `event: state`: сводка, подсказки, статус. `digest` —
+        сводка Markdown'ом (страница `meet assist` в браузере)."""
+        data = self.live.to_dict()
+        return {**data, "digest": self.live.render_markdown(), "status": self.status()}
+
+    def hint_action(self, hint_id: str, action: str) -> bool:
+        """Закрепить, открепить или скрыть подсказку. False — такой нет."""
+        if action == "pin":
+            changed = self.live.pin(hint_id, True)
+        elif action == "unpin":
+            changed = self.live.pin(hint_id, False)
+        elif action == "dismiss":
+            changed = self.live.dismiss(hint_id)
+        else:
+            raise ValueError(f"неизвестное действие: {action}")
+        if changed and self.on_change is not None:
+            self.on_change()
+        return changed
 
     def request_stop(self) -> None:
         """`POST /stop`: штатная остановка (дорожки дописывает run_assist)."""
@@ -301,10 +331,11 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
 
     out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
     bus = TranscriptBus()
-    digest = Digest()
+    cadence = CALM
+    live = LiveState(max_hints=cadence.max_hints, hints_enabled=cadence.hints)
     vault_path = Path(vault) if vault else None
     state = AssistState(
-        bus=bus, digest=digest,
+        bus=bus, live=live,
         # Лексика лежит рядом с настройками (в dev-режиме — в корне репозитория),
         # а не в рабочей папке процесса: под треем и из установленного
         # приложения cwd произвольная.
@@ -317,18 +348,29 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                         hotwords=_load_hotwords(hotwords),
                         on_entry=bus.publish,
                         voice_matcher=None if no_voices else VoiceMatcher())
-    digest_file = out_dir / "live_digest.md"
+    state_file = out_dir / LIVE_STATE_JSON
 
-    def _write_digest() -> None:
-        digest_file.write_text(digest.render(), encoding="utf-8")
+    def _save_state() -> None:
+        # Папку создаёт engine.start(); до неё (и при сбое диска) — молча:
+        # состояние в памяти, следующее изменение запишет его снова.
+        if not out_dir.is_dir():
+            return
+        try:
+            live.save(state_file)
+        except OSError as e:
+            print(f"live_state.json не записан: {e}", flush=True)
 
-    digest_dirs = state.digest_allowed_dirs
-    state.digester = Digester(bus, digest, system_prompt=state.digester_system,
-                              runner=runner, on_update=_write_digest,
-                              allowed_dirs=digest_dirs,
-                              cwd=out_dir if digest_dirs else None)
+    state.on_change = _save_state
+    # Указатель терминов базы знаний — один раз, до старта: тики по базе не ходят.
+    kb = TermIndex.build(state.knowledge) if state.knowledge else None
+    if kb is not None:
+        print(f"база знаний: {len(kb)} терминов в указателе", flush=True)
+    state.digester = Digester(bus, live, system_prompt=state.digester_system,
+                              runner=runner, cadence=cadence, kb=kb,
+                              on_update=_save_state,
+                              log=lambda line: print(line, flush=True))
     state.qa = QAService(
-        bus, digest, system_prompt=state.qa_system,
+        bus, live, system_prompt=state.qa_system,
         allowed_dirs=state.qa_allowed_dirs, cwd=out_dir,
         runner=runner,
         on_fresh_audio=engine.process_window,
@@ -349,6 +391,8 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         pass
     finally:
         engine.stop()
+        if started and not live.is_empty():
+            _save_state()  # итог живого режима — черновик для задачи итогов
         if started:
             print(f"\nОстановлено: {out_dir}", flush=True)
             print(f'Точный транскрипт: meet transcribe "{out_dir}"', flush=True)
