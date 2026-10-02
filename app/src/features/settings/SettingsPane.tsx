@@ -188,14 +188,15 @@ function AsrSection({ draft, set, endpoint }: { draft: Raw; set: SetFn; endpoint
           <option value="cpu">Процессор</option>
         </select>
       </Row>
-      <TextRow id="asr-model" label="Модель для видеокарты (CUDA)" value={String(v("model") ?? "")}
+      <TextRow id="asr-model" label="Модель Whisper для видеокарты (CUDA)" value={String(v("model") ?? "")}
         hint="Скачать и выбрать модель можно в разделе «Движок и модели»"
         onChange={(x) => set("asr", "model", x)} />
-      <TextRow id="asr-cpu-model" label="Модель для процессора (CPU)" value={String(v("cpu_model") ?? "")}
+      <TextRow id="asr-cpu-model" label="Модель Whisper для процессора (CPU)" value={String(v("cpu_model") ?? "")}
+        hint="Если на процессоре выбран Whisper; движок выбирается в разделе «Движок и модели»"
         onChange={(x) => set("asr", "cpu_model", x)} />
-      <TextRow id="asr-language" label="Язык речи" short hint="Код языка, например ru или en" value={String(v("language") ?? "ru")}
+      <TextRow id="asr-language" label="Язык речи" short hint="Код языка, например ru или en; auto — определить по записи" value={String(v("language") ?? "ru")}
         onChange={(x) => set("asr", "language", x)} />
-      <Switch label="Уточнять время каждого слова" hint="Точнее границы реплик; расшифровка занимает немного больше времени"
+      <Switch label="Уточнять время каждого слова" hint="Точнее границы реплик; расшифровка занимает немного больше времени. После GigaAM не нужно: время слов у него своё"
         value={Boolean(v("align"))} onChange={(x) => set("asr", "align", x)} />
       <Switch label="Отмечать одновременную речь" hint="Реплики, где говорят одновременно, помечаются «нахлёст»: спикер в них может быть определён неточно"
         value={Boolean(v("overlap"))} onChange={(x) => set("asr", "overlap", x)} />
@@ -211,6 +212,37 @@ function AsrSection({ draft, set, endpoint }: { draft: Raw; set: SetFn; endpoint
       </Row>
       <HotwordsEditor endpoint={endpoint} />
       <ReplacementsEditor value={v("replacements")} onChange={(x) => set("asr", "replacements", x)} />
+    </>
+  );
+}
+
+/** "whisper.cpp" (задел, не реализован) показывается как Whisper. */
+type AsrBackend = "faster-whisper" | "gigaam";
+
+/**
+ * Движок распознавания — свой для процессора и для видеокарты: GigaAM быстрее
+ * и точнее на русском, Whisper многоязычный и учитывает список терминов.
+ * Запись не на русском GigaAM всё равно отдаёт Whisper.
+ */
+function AsrEngineRows({ draft, set }: { draft: Raw; set: SetFn }) {
+  const backend = (key: string, fallback: AsrBackend): AsrBackend =>
+    draft.asr?.[key] === "gigaam" ? "gigaam" : draft.asr?.[key] ? "faster-whisper" : fallback;
+  return (
+    <>
+      <Radio label="Распознавание на процессоре" value={backend("cpu_backend", "faster-whisper")}
+        hint="GigaAM расшифровывает в 15–20 раз быстрее Whisper; запись не на русском всё равно распознаёт Whisper"
+        options={[
+          { value: "gigaam", label: "GigaAM (русский, быстро)" },
+          { value: "faster-whisper", label: "Whisper (многоязычный)" },
+        ]}
+        onChange={(x) => set("asr", "cpu_backend", x)} />
+      <Radio label="Распознавание на видеокарте" value={backend("backend", "faster-whisper")}
+        hint="Whisper точнее на английских терминах и учитывает список терминов распознавания"
+        options={[
+          { value: "faster-whisper", label: "Whisper" },
+          { value: "gigaam", label: "GigaAM (быстрее, только русский)" },
+        ]}
+        onChange={(x) => set("asr", "backend", x)} />
     </>
   );
 }
@@ -405,10 +437,14 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
                 </Row>
               )}
               <EnginePane endpoint={endpoint} onReinstall={onRunWizard && (() => onRunWizard("engine"))} />
+              <h3 className="shead">Распознавание речи</h3>
+              <AsrEngineRows draft={draft} set={set} />
               <h3 className="shead">Модели</h3>
               <ModelsPane endpoint={endpoint}
                 selectedModel={(draft.asr?.model as string | undefined) ?? null}
-                onSelect={(id) => { set("asr", "model", id); setNotice("Модель выбрана. Сохраните изменения"); }} />
+                selectedGigaam={(draft.asr?.gigaam_model as string | undefined) ?? null}
+                onSelect={(id) => { set("asr", "model", id); setNotice("Модель выбрана. Сохраните изменения"); }}
+                onSelectGigaam={(name) => { set("asr", "gigaam_model", name); setNotice("Модель выбрана. Сохраните изменения"); }} />
             </>
           ) : section === "export" ? (
             <ExportSection draft={draft} set={set} endpoint={endpoint} />

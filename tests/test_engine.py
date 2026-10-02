@@ -182,14 +182,49 @@ def test_state_reports_device_speed_and_disk(monkeypatch):
     monkeypatch.setattr(engine, "_device", lambda available: "cpu")
     state = engine.state()
     assert state["device"] == "cpu"
-    assert state["speed_factor"] == engine.SPEED_FACTOR["cpu"]
+    assert state["backend"] == "faster-whisper"
+    assert state["speed_factor"] == engine.SPEED_FACTOR["cpu"]["faster-whisper"]
     assert state["disk_free_gb"] > 0
 
 
 def test_estimate_seconds_scales_with_duration():
-    assert engine.estimate_seconds(600, "cuda") == 600 * engine.SPEED_FACTOR["cuda"]
+    assert engine.estimate_seconds(600, "cuda") == 600 * engine.SPEED_FACTOR["cuda"]["faster-whisper"]
+    assert engine.estimate_seconds(600, "cpu", "gigaam") == 600 * engine.SPEED_FACTOR["cpu"]["gigaam"]
     assert engine.estimate_seconds(600, "cpu") > engine.estimate_seconds(600, "cuda")
-    assert engine.estimate_seconds(600, "непонятно") == 600 * engine.SPEED_FACTOR["cpu"]
+    assert engine.estimate_seconds(600, "непонятно") == 600 * engine.SPEED_FACTOR["cpu"]["faster-whisper"]
+
+
+def test_speed_factor_per_backend():
+    """Whisper — прежние замеры (30.09); GigaAM на процессоре в разы быстрее
+    Whisper medium; «whisper.cpp» и прочее не-GigaAM считается как Whisper."""
+    assert engine.speed_factor("cpu", "faster-whisper") == 1.26
+    assert engine.speed_factor("cuda", "faster-whisper") == 0.22
+    assert engine.speed_factor("cpu", "gigaam") < engine.speed_factor("cpu", "faster-whisper") / 2
+    assert engine.speed_factor("cpu", "whisper.cpp") == engine.speed_factor("cpu", "faster-whisper")
+    assert engine.speed_factor("cuda") == engine.speed_factor("cuda", "faster-whisper")
+    assert engine.speed_factor("cpu") == engine.speed_factor("cpu", "faster-whisper")
+
+
+def test_state_uses_the_backend_chosen_for_the_device(monkeypatch, tmp_path):
+    import json
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+    (tmp_path / "config.json").write_text(json.dumps(
+        {"asr": {"device": "cpu", "cpu_backend": "gigaam"}}), encoding="utf-8")
+    state = engine.state()
+    assert (state["device"], state["backend"]) == ("cpu", "gigaam")
+    assert state["speed_factor"] == engine.SPEED_FACTOR["cpu"]["gigaam"]
+
+
+def test_gigaam_is_pinned_to_a_commit_archive_in_both_profiles():
+    """GigaAM — архив зафиксированного коммита (не git+https: git у
+    пользователя может не стоять) в обоих профилях движка."""
+    assert len(engine.GIGAAM_COMMIT) == 40
+    assert engine.GIGAAM == ("gigaam @ https://github.com/salute-developers/GigaAM/archive/"
+                             f"{engine.GIGAAM_COMMIT}.zip")
+    for flavor in ("cpu", "cuda"):
+        assert engine.GIGAAM in engine.install_steps(flavor)[1]
+    assert "gigaam" in {module for module, _ in engine.COMPONENTS}
 
 
 def _with_setting(monkeypatch, value, gpu_available):

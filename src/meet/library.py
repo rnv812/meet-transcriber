@@ -59,6 +59,9 @@ class Recording:
     # Пометка транскрипта о диаризации: "skipped_no_token" — расшифровано без
     # разделения на спикеров (не было токена Hugging Face). None — как обычно.
     diarization: str | None = None
+    # Пометка транскрипта о распознавании (`asr_note`): "not_russian" — запись
+    # не на русском, вместо GigaAM распознавал Whisper. None — как выбрано.
+    asr_note: str | None = None
     # Выгрузка в базу знаний (meta.json): {"path", "at", "files"} и, если
     # последняя не удалась, "error". Не выгружалась — None.
     kb_export: dict | None = None
@@ -83,6 +86,7 @@ class Recording:
             "source": self.source,
             "transcript_at": self.transcript_at,
             "diarization": self.diarization,
+            "asr_note": self.asr_note,
             "kb_export": self.kb_export,
             "merge": self.merge,
             "rediarize_ready": self.rediarize_ready,
@@ -265,25 +269,27 @@ _heads: dict[str, tuple] = {}
 _heads_lock = threading.Lock()
 
 
-def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None]:
+def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None, str | None]:
     path = transcript_path(folder)
     try:
         st = path.stat()
     except OSError:
-        return False, None, None
+        return False, None, None, None
     key = (st.st_mtime_ns, st.st_size)
     with _heads_lock:
         hit = _heads.get(str(path))
     if hit is not None and hit[0] == key:
         return hit[1]
     transcript = read_transcript(folder)
-    title = diarization = None
+    title = diarization = asr_note = None
     if isinstance(transcript, dict):
         raw_title = transcript.get("title")
         title = str(raw_title) if raw_title else None
         flag = transcript.get("diarization")
         diarization = str(flag) if isinstance(flag, str) and flag else None
-    head = (transcript is not None, title, diarization)
+        note = transcript.get("asr_note")
+        asr_note = str(note) if isinstance(note, str) and note else None
+    head = (transcript is not None, title, diarization, asr_note)
     with _heads_lock:
         _heads[str(path)] = (key, head)
     return head
@@ -706,7 +712,7 @@ def describe(folder: Path) -> Recording | None:
     meta = read_meta(folder)
     if not _recognised(tracks, meta):
         return None
-    has_json, title, diarization = _transcript_head(folder)
+    has_json, title, diarization, asr_note = _transcript_head(folder)
     if meta.get("title"):
         title = str(meta["title"])
     source = meta.get("source") if meta.get("source") in SOURCES else "record"
@@ -727,6 +733,7 @@ def describe(folder: Path) -> Recording | None:
         source=source,
         transcript_at=transcript_at,
         diarization=diarization,
+        asr_note=asr_note,
         kb_export=meta["kb_export"] if isinstance(meta.get("kb_export"), dict) else None,
         merge=_merge_summary(meta),
         rediarize_ready=(folder / REDIARIZE_PREVIEW).is_file(),

@@ -5,7 +5,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { type Endpoint, type Model, type ModelsState, downloadModel, getModels } from "../../lib/api";
+import { type Endpoint, type Model, type ModelsState, canDownloadModel, downloadModel, getModels } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { jobActive, useTrackedJob } from "../../state/useTrackedJob";
 import type { Job } from "../../lib/types";
@@ -89,7 +89,7 @@ export function StepModels({ endpoint, onNext }: { endpoint: Endpoint; onNext: (
       {models && (
         <div className="wizard__models">
           {models.items.map((m) => (
-            <ModelItem key={m.id} model={m} job={job} busy={busy} canDownload={models.can_download}
+            <ModelItem key={m.id} model={m} job={job} busy={busy} canDownload={canDownloadModel(models, m)}
               onDownload={() => void download(m.id)} />
           ))}
         </div>

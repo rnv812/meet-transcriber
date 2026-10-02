@@ -12,7 +12,8 @@ authors = [
 # Лёгкое ядро: запись, трей, панель, ассистент. Тяжёлый стек расшифровки живёт в
 # extras engine-cuda / engine-cpu (список зеркалит engine.PACKAGES, тест следит
 # за расхождением); torch ставится отдельным шагом с нужного индекса
-# (engine.uv_steps), поэтому в extras его нет.
+# (engine.uv_steps), поэтому в extras его нет. GigaAM — архивом коммита с
+# GitHub (на PyPI его нет; git у пользователя может не стоять), см. engine.GIGAAM.
 # pycaw — второй сигнал детектора звонка (WASAPI-сессии); psutil объявлен явно:
 # на нём держатся проверка живости клиента конференций и отпечаток процесса в tray.lock.
 dependencies = [
@@ -27,6 +28,7 @@ engine-cpu = [
     "pyannote.audio>=4.0,<5",
     "transformers>=4.40,<6",
     "scipy>=1.11",
+    "gigaam @ https://github.com/salute-developers/GigaAM/archive/7447938d791c4f3e643386ee22c33777004293a5.zip",
 ]
 engine-cuda = [
     "faster-whisper>=1.2,<2",
@@ -34,6 +36,7 @@ engine-cuda = [
     "pyannote.audio>=4.0,<5",
     "transformers>=4.40,<6",
     "scipy>=1.11",
+    "gigaam @ https://github.com/salute-developers/GigaAM/archive/7447938d791c4f3e643386ee22c33777004293a5.zip",
     "nvidia-cublas-cu12",
     "nvidia-cudnn-cu12",
 ]

@@ -31,18 +31,25 @@ JavaScript and Rust libraries compiled into the application window and shell
 app/package-lock.json and app/src-tauri/Cargo.lock.
 
 Python packages (faster-whisper, CTranslate2, pyannote.audio, PyTorch,
-transformers and others) are installed from their package indexes on first
-run under their own licenses; they are not part of this repository.
+transformers, GigaAM and others) are installed from their package indexes on
+first run under their own licenses; they are not part of this repository.
+GigaAM (https://github.com/salute-developers/GigaAM; MIT License, Copyright
+(c) 2024 GigaChat Team) is installed from a pinned commit of its GitHub
+repository.
 
 Models
 ------
-Models are downloaded at runtime from Hugging Face and are not distributed
-with this product; each is governed by its own license:
+Models are downloaded at runtime (from Hugging Face; GigaAM — from its
+authors' server) and are not distributed with this product; each is governed
+by its own license:
 
 * Speech recognition (GPU profile): bzikst/faster-whisper-large-v3-russian —
   a CTranslate2 conversion of antony66/whisper-large-v3-russian (a Russian
   fine-tune of OpenAI Whisper large-v3); Apache-2.0.
-* Speech recognition (CPU profile): Systran/faster-whisper-medium —
+* Speech recognition (CPU profile, default): GigaAM v3 (v3_e2e_rnnt, and
+  v3_e2e_ctc on request) by GigaChat Team — downloaded from the GigaAM authors'
+  server into the application's models folder; MIT.
+* Speech recognition (CPU profile, Whisper option): Systran/faster-whisper-medium —
   OpenAI Whisper medium in CTranslate2 format; MIT.
   (faster-whisper and CTranslate2 themselves are MIT-licensed.)
 * Word timestamps (forced alignment):

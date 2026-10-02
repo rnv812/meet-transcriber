@@ -2019,7 +2019,17 @@ class TrayControl:
         """Каталог моделей с отметками «скачано» и «выбрано»."""
         from meet import models as models_module
 
-        return models_module.state(selected=settings.load().asr.model)
+        asr = settings.load().asr
+        return models_module.state(selected=asr.model, selected_gigaam=asr.gigaam_model)
+
+    def remove_model(self, body: dict | None = None) -> dict:
+        """Удалить скачанную модель GigaAM (быстро: удаление файлов)."""
+        from meet import models as models_module
+
+        model_id = str((body or {}).get("id") or "").strip()
+        if not model_id:
+            return {"ok": False, "error": "не сказано, какую модель удалить"}
+        return models_module.remove(model_id)
 
     # --- токен Hugging Face ------------------------------------------------
     #

@@ -61,6 +61,8 @@ button.chip:hover { background: var(--surface-hover); }
   background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-md);
 }
 .card__banner--ok { color: var(--text-2); }
+/* Тихая пометка без действия (например, «Запись не на русском — использован Whisper»). */
+.card__note { margin: 6px 20px 0; font-size: 12px; }
 .card__path { color: var(--text); word-break: break-all; }
 .card__kept { display: block; color: var(--amber); }
 .card__progress { display: flex; flex-direction: column; gap: 8px; color: var(--text-2); }

@@ -22,6 +22,7 @@ from pathlib import Path
 # сначала распознавание, потом выравнивание, потом диаризация.
 COMPONENTS = (
     ("faster_whisper", "распознавание речи (faster-whisper)"),
+    ("gigaam", "распознавание речи (GigaAM)"),
     ("torch", "вычисления (torch)"),
     ("pyannote.audio", "диаризация (pyannote)"),
     ("transformers", "выравнивание по словам (wav2vec2)"),
@@ -37,6 +38,16 @@ TORCH_CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 # scripts/build_release.ps1 ($TorchSpecs, тест следит).
 TORCH_SPECS = ("torch==2.11.*", "torchaudio==2.11.*")
 
+# GigaAM (MIT, salute-developers/GigaAM) — русское распознавание для CPU. На
+# PyPI его нет; ставим архивом зафиксированного коммита, а не git+https: у
+# пользователя может не быть git, а uv тянет git-зависимости через него.
+# Смена коммита — осознанно, после проверки на замерах (docs/release-notes).
+GIGAAM_COMMIT = "7447938d791c4f3e643386ee22c33777004293a5"
+GIGAAM = (
+    "gigaam @ https://github.com/salute-developers/GigaAM/archive/"
+    f"{GIGAAM_COMMIT}.zip"
+)
+
 PACKAGES = (
     "faster-whisper>=1.2,<2",
     # faster-whisper 1.2 передаёт av.open(metadata_errors=...), которого нет в
@@ -46,6 +57,7 @@ PACKAGES = (
     "pyannote.audio>=4.0,<5",
     "transformers>=4.40,<6",
     "scipy>=1.11",
+    GIGAAM,
 )
 CUDA_RUNTIME = ("nvidia-cublas-cu12", "nvidia-cudnn-cu12")
 
@@ -55,11 +67,41 @@ CUDA_RUNTIME = ("nvidia-cublas-cu12", "nvidia-cudnn-cu12")
 # nvidia-cudnn 0,74, nvidia-cublas 0,55).
 DOWNLOAD_HINT_GB = {"cuda": 4.5, "cpu": 0.6}
 
-# Время расшифровки / длительность записи, замер 30.09.2026 на 6-минутном
-# фрагменте встречи (docs/2026-09-30-cpu-profile-bench.md). Оценка для UI,
-# не обещание: на коротком фрагменте загрузка моделей весит больше, так что
-# на длинных записях фактическое время обычно ниже.
-SPEED_FACTOR = {"cuda": 0.22, "cpu": 1.26}
+# Время расшифровки / длительность записи — по устройству и движку. Whisper —
+# замер 30.09.2026 на 6-минутном фрагменте встречи
+# (docs/2026-09-30-cpu-profile-bench.md), GigaAM — замер 02.10.2026 на том же
+# фрагменте, весь пайплайн с диаризацией: CPU 172 с (распознавание 27 с,
+# диаризация 144 с, выравнивания нет), CUDA 34 с. Оценка для UI, не обещание: на
+# коротком фрагменте загрузка моделей весит больше, так что на длинных записях
+# фактическое время обычно ниже.
+SPEED_FACTOR = {
+    "cuda": {"faster-whisper": 0.22, "gigaam": 0.09},
+    "cpu": {"faster-whisper": 1.26, "gigaam": 0.48},
+}
+# Движок по умолчанию для профиля — им же считается оценка в мастере, пока
+# настроек ещё нет.
+DEFAULT_BACKEND = {"cuda": "faster-whisper", "cpu": "faster-whisper"}
+
+
+def speed_factor(device: str, backend: str | None = None) -> float:
+    """Коэффициент «время расшифровки / длительность записи». Неизвестное
+    устройство — как CPU; движок не указан — движок профиля по умолчанию;
+    любой не-GigaAM — Whisper."""
+    profile = device if device in SPEED_FACTOR else "cpu"
+    table = SPEED_FACTOR[profile]
+    if not backend:
+        backend = DEFAULT_BACKEND[profile]
+    return table["gigaam" if backend == "gigaam" else "faster-whisper"]
+
+
+def _backend(device: str) -> str:
+    """Движок из настроек для устройства; без настроек — по умолчанию."""
+    try:
+        from meet import settings
+
+        return settings.load().asr.backend_for(device)
+    except Exception:
+        return DEFAULT_BACKEND.get(device, "faster-whisper")
 
 
 def _device(gpu_available: bool) -> str:
@@ -77,8 +119,8 @@ def _device(gpu_available: bool) -> str:
     return "cuda" if gpu_available else "cpu"
 
 
-def estimate_seconds(duration_s: float, device: str) -> float:
-    return duration_s * SPEED_FACTOR.get(device, SPEED_FACTOR["cpu"])
+def estimate_seconds(duration_s: float, device: str, backend: str | None = None) -> float:
+    return duration_s * speed_factor(device, backend)
 
 
 def _free_gb(path: Path) -> float | None:
@@ -143,7 +185,8 @@ def state() -> dict:
         "target": str(Path(sys.prefix)),
         "ffmpeg": bool(shutil.which("ffmpeg")),
         "device": device,
-        "speed_factor": SPEED_FACTOR.get(device, SPEED_FACTOR["cpu"]),
+        "backend": _backend(device),
+        "speed_factor": speed_factor(device, _backend(device)),
         "disk_free_gb": _free_gb(Path(sys.prefix)),
     }
 

@@ -284,7 +284,7 @@ def test_import_folder_uses_single_track_and_writes_into_folder(tmp_path, monkey
     (folder / "source.mp4").write_bytes(b"media")
     seen = {}
 
-    def fake_single(src, speakers, hotwords, align, overlap, bus):
+    def fake_single(src, speakers, hotwords, align, overlap, bus, run=None):
         seen["src"] = src
         return [Segment(0.0, 1.0, "привет", speaker="SPEAKER_00")], None, {}
 
@@ -495,7 +495,7 @@ def test_merged_folder_gets_break_marks_in_markdown_and_json(monkeypatch, tmp_pa
         {"id": "b", "start_offset_s": 10.0, "gap_s": 900.0},
     ]})
 
-    def fake_two(path, speakers, hotwords, align, overlap, bus):
+    def fake_two(path, speakers, hotwords, align, overlap, bus, run=None):
         return [Segment(1.0, 2.0, "до перерыва", "Вы"), Segment(12.0, 13.0, "после", "Вы")], None, {}
 
     monkeypatch.setattr(tr, "_transcribe_two_track", fake_two)

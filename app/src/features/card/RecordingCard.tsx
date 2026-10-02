@@ -457,6 +457,10 @@ export function RecordingCard({
           {onOpenSettings && <Button onClick={() => onOpenSettings("engine")}>Настроить</Button>}
         </div>
       )}
+      {status.kind === "ready" && rec.asr_note === "not_russian" && (
+        // GigaAM распознаёт только русский: такую запись расшифровал Whisper.
+        <p className="muted card__note" role="note">Запись не на русском — использован Whisper</p>
+      )}
       <div className="card__body"><JiraLinks.Provider value={jira}>{body}</JiraLinks.Provider></div>
       {status.kind === "ready" && turnEdit.menu}
       {status.kind === "ready" && textFix.node}
