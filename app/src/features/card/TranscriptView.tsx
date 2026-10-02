@@ -52,7 +52,7 @@ const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavio
 
 export function TranscriptView({
   turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
-  view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection,
+  view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection, tools,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
@@ -69,6 +69,8 @@ export function TranscriptView({
   onSplitAt?: (turn: number, event: MouseEvent<HTMLElement>) => void;
   /** Полоса над репликами (выбранные, итог назначения). */
   toolbar?: ReactNode;
+  /** Кнопки в строке поиска справа (✦ «Улучшить расшифровку»). */
+  tools?: ReactNode;
   find?: FindRequest | null;
   /** ✦ «Спросить агента» у реплик (номера реплик). */
   onAskAgent?: (turns: number[]) => void;
@@ -293,6 +295,7 @@ export function TranscriptView({
           <TipLine><code>спикер:Анна</code> — только реплики этого спикера.</TipLine>
           <TipLine>Ctrl+F — к поиску, Enter и Shift+Enter — следующее и предыдущее совпадение, Esc — очистить.</TipLine>
         </HelpTip>
+        {tools}
       </div>
       {view && view.insights.length > 0 && (
         <InsightsBlock insights={view.insights} turns={turns} onJump={jumpTo} onAsk={onAskInsight} />

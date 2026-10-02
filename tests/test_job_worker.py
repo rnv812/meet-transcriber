@@ -206,3 +206,44 @@ def test_analyze_job_argv_and_kind(tmp_path):
     job = jobs.Job(id="a", kind=jobs.ANALYZE, folder=str(tmp_path))
     assert jobs.worker_argv(job)[-2:] == ["analyze", str(tmp_path)]
     assert jobs.ANALYZE in jobs.KINDS and jobs.ANALYZE in jobs.MODEL_KINDS
+
+
+# --- «Улучшить расшифровку» (M8) ------------------------------------------------
+
+
+def test_improve_job_writes_the_proposal(tmp_path, monkeypatch, capsys):
+    import json
+
+    import meet.llm as llm
+    from meet import improve
+    from meet.llm.base import AgentReply
+
+    async def runner(prompt, **kwargs):
+        return AgentReply(text='{"replacements": []}')
+
+    monkeypatch.setattr(llm, "resolve", lambda cfg: ("codex", runner))
+    folder = _transcribed(tmp_path, monkeypatch)
+    library.write_meta(folder, {"improve_error": {"error": "прошлый сбой", "at": 1.0}})
+    assert job_worker.main(["improve", str(folder)]) == 0
+    lines = _lines(capsys)
+    assert {"kind": "job.result", "path": str(folder / improve.IMPROVE_JSON)} in lines
+    assert any(x.get("kind") == "progress" and x.get("stage") == "improve" for x in lines)
+    assert json.loads((folder / improve.IMPROVE_JSON).read_text(encoding="utf-8"))["groups"] == []
+    assert "improve_error" not in library.read_meta(folder)
+
+
+def test_improve_job_failure_is_remembered_for_the_window(tmp_path, monkeypatch, capsys):
+    import meet.llm as llm
+
+    monkeypatch.setattr(llm, "resolve", lambda cfg: (None, None))
+    folder = _transcribed(tmp_path, monkeypatch)
+    assert job_worker.main(["improve", str(folder)]) == 2
+    assert library.read_meta(folder)["improve_error"]["error"] == "Подключите Claude Code или Codex в настройках"
+
+
+def test_improve_job_argv_and_kind(tmp_path):
+    from meet import jobs
+
+    job = jobs.Job(id="i", kind=jobs.IMPROVE, folder=str(tmp_path))
+    assert jobs.worker_argv(job)[-2:] == ["improve", str(tmp_path)]
+    assert jobs.IMPROVE in jobs.KINDS and jobs.IMPROVE in jobs.MODEL_KINDS

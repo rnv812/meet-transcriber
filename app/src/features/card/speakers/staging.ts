@@ -71,11 +71,20 @@ export function prune(staged: Staged, labels: string[]): Staged {
   return out;
 }
 
+/** «Улучшено ИИ: 17 замен (3 термина)» — шаг «Улучшить расшифровку». */
+export function improvedText(count: number, terms: number): string {
+  const what = `${count} ${plural(count, "замена", "замены", "замен")}`;
+  return terms > 0
+    ? `Улучшено ИИ: ${what} (${terms} ${plural(terms, "термин", "термина", "терминов")})`
+    : `Улучшено ИИ: ${what}`;
+}
+
 function opText(op: SpeakerOp): string {
   if (op.type === "split") return `${op.label} разделён: ${op.into.join(", ")}`;
   if (op.type === "split_turn") return `Реплика ${op.label} разделена (${clock(op.at)}), вторая часть → ${op.to}`;
   if (op.type === "rediarize") return `Заново разделено на спикеров: ${op.speakers}`;
   if (op.type === "threshold") return `Порог узнавания ${Math.round(op.value * 100)}%`;
+  if (op.type === "text" && op.scope === "ai") return improvedText(op.count, op.terms);
   if (op.type === "text") return `Исправлено: ${op.from} → ${op.to} (${op.count})`;
   if (op.type === "relabel") {
     const n = op.turns;

@@ -1,7 +1,8 @@
 /**
  * Настройки «Анализ встречи»: ставить ли анализ сам (`analysis.auto`), что
  * размечать (типы реплик, важность, главы, наблюдения, категория, название) и
- * «Придумывать название встречи» (`assistant.auto_title`).
+ * «Придумывать название встречи» (`assistant.auto_title`), а также «Улучшать
+ * расшифровку автоматически после распознавания» (`analysis.improve_auto`).
  *
  * Выключенная часть не запрашивается у модели (промпт короче) и не
  * показывается в карточке. Анализ делает тот же агент, что итоги, — провайдер
@@ -53,6 +54,21 @@ export function AutoTitleTip() {
   );
 }
 
+export function ImproveTip() {
+  return (
+    <HelpTip label="Что такое улучшение расшифровки" title="Улучшить расшифровку">
+      <TipLine>
+        Агент ищет неверно распознанные термины («апи» → «API», «кафка» → «Kafka») и показывает короткий список
+        замен. Фразы он не переписывает.
+      </TipLine>
+      <TipLine>
+        Запустить вручную — ✦ «Улучшить» в строке поиска расшифровки или «Ещё действия» → «Улучшить расшифровку».
+        Применённые замены отменяются в истории изменений.
+      </TipLine>
+    </HelpTip>
+  );
+}
+
 export function AnalysisSection({ draft, set }: { draft: Raw; set: SetFn }) {
   const v = (k: string) => draft.analysis?.[k];
   const on = (k: string) => v(k) !== false;
@@ -70,6 +86,10 @@ export function AnalysisSection({ draft, set }: { draft: Raw; set: SetFn }) {
         <Switch key={part.key} label={part.label} hint={part.hint} value={on(part.key)}
           onChange={(x) => set("analysis", part.key, x)} />
       ))}
+      <h3 className="shead">Улучшение расшифровки</h3>
+      <Switch label="Улучшать расшифровку автоматически после распознавания" help={<ImproveTip />}
+        hint="ИИ сам готовит список исправлений терминов; текст меняется, только когда вы примените выбранное"
+        value={draft.analysis?.improve_auto === true} onChange={(x) => set("analysis", "improve_auto", x)} />
       <h3 className="shead">Название</h3>
       <Switch label="Придумывать название встречи" help={<AutoTitleTip />}
         hint="Название из анализа или итогов ставится само; заданные вами названия не меняются"

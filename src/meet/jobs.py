@@ -57,10 +57,13 @@ REDIARIZE = "rediarize"
 # «Анализ встречи» (meet.analysis): разметка расшифровки моделью → analysis.json.
 # Очередь модели, как итоги; автоматический — с низким приоритетом.
 ANALYZE = "analyze"
+# «Улучшить расшифровку» (meet.improve): модель предлагает замены неверно
+# распознанных терминов → improve.json; применяет их человек. Очередь модели.
+IMPROVE = "improve"
 KINDS = (TRANSCRIBE, IMPORT, INSTALL_ENGINE, DOWNLOAD_MODEL, SUMMARY, ASK, MERGE, SPEAKER_SPLIT, REDIARIZE,
-         ANALYZE)
+         ANALYZE, IMPROVE)
 # Задачи модели над папкой записи: пишут в неё итоги, ответы и разметку.
-MODEL_KINDS = (SUMMARY, ASK, ANALYZE)
+MODEL_KINDS = (SUMMARY, ASK, ANALYZE, IMPROVE)
 # Задачи, которые пишут в папку записи звук или транскрипт: пока такая ждёт или
 # идёт, запись нельзя удалить, объединить или поставить вторую такую же.
 FOLDER_KINDS = (TRANSCRIBE, IMPORT, MERGE)
@@ -178,7 +181,7 @@ def worker_argv(job: Job) -> list[str]:
         return argv
     if job.kind == DOWNLOAD_MODEL:
         return argv  # путь задачи — это repo_id модели
-    if job.kind in (SUMMARY, MERGE, ANALYZE):
+    if job.kind in (SUMMARY, MERGE, ANALYZE, IMPROVE):
         return argv
     if job.kind == SPEAKER_SPLIT:
         # Одним аргументом через «=»: подпись с ведущим дефисом не станет флагом.

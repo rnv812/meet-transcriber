@@ -72,3 +72,14 @@ test("шаг «Исправить…» словами: что на что и с�
     ops: [{ type: "text", from: "кубер нетис", to: "Kubernetes", count: 3, scope: "all" }],
   })).toBe("Исправлено: кубер нетис → Kubernetes (3)");
 });
+
+test("шаг «Улучшить расшифровку» словами: сколько замен и терминов", () => {
+  expect(describeStep({
+    id: "i", at: "2026-10-02T10:00:00", enrolled: [], created_people: [],
+    ops: [{ type: "text", scope: "ai", from: "", to: "", count: 17, terms: 3 }],
+  })).toBe("Улучшено ИИ: 17 замен (3 термина)");
+  expect(describeStep({
+    id: "i", at: "2026-10-02T10:00:00", enrolled: [], created_people: [],
+    ops: [{ type: "text", scope: "ai", from: "в торник", to: "во вторник", count: 1, terms: 0 }],
+  })).toBe("Улучшено ИИ: 1 замена");
+});

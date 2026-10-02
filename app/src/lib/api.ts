@@ -10,7 +10,7 @@
 
 import { inTauri, invoke } from "./shell";
 import type {
-  AnalysisState, AssistantInfo, BusEvent, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
+  AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
   ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript,
@@ -18,7 +18,8 @@ import type {
 
 export type {
   Analysis, AnalysisChapter, AnalysisFeature, AnalysisInsight, AnalysisState, AnalysisStateName, InsightKind,
-  PhraseType, TitleSource, TitleSuggestion,
+  ImproveApplied, ImproveGroup, ImproveKind, ImproveProposal, ImproveState, ImproveStateName, PhraseType, TitleSource,
+  TitleSuggestion,
 } from "./types";
 
 export type Endpoint = {
@@ -377,6 +378,21 @@ export const runAnalysis = (ep: Endpoint, id: string) =>
 export const suggestTitle = (ep: Endpoint, id: string) =>
   json<TitleSuggestion>(ep, `/recordings/${enc(id)}/title/suggest`, { method: "POST" });
 
+// --- «Улучшить расшифровку» ------------------------------------------------------
+
+/** Состояние улучшения: задача, готовое предложение (группы замен) и подсказка после GigaAM. */
+export const getImprove = (ep: Endpoint, id: string) =>
+  json<ImproveState>(ep, `/recordings/${enc(id)}/improve`);
+/** Поставить задачу (kind "improve"); уже ждёт или идёт — та же. 409 — нет модели или идёт расшифровка. */
+export const runImprove = (ep: Endpoint, id: string) =>
+  json<Job>(ep, `/recordings/${enc(id)}/improve`, { method: "POST" });
+/** Выбранные группы — одним шагом истории встречи; по желанию — правилами и в термины. */
+export const applyImprove = (ep: Endpoint, id: string, req: ImproveApplyRequest) =>
+  json<ImproveApplyResult>(ep, `/recordings/${enc(id)}/improve/apply`, body("POST", req));
+/** Подсказку «Похоже, в тексте есть термины латиницей» больше не показывать. */
+export const dismissImproveHint = (ep: Endpoint, id: string) =>
+  json<{ ok: boolean }>(ep, `/recordings/${enc(id)}/improve/dismiss`, { method: "POST" });
+
 // --- база знаний ----------------------------------------------------------------
 
 /** Выгрузить встречу в базу знаний; 400 — папка для встреч не задана или шаблон негоден. */
@@ -441,6 +457,8 @@ const EVENT_KINDS = [
   "recording.processing", "recording.updated",
   // Анализ встречи готов, не удался или устарел: {"id", "state"}.
   "analysis.updated",
+  // «Улучшить расшифровку»: предложение готово, не удалось или применено: {"id", "state"}.
+  "improve.updated",
 ];
 
 function parseEvent(raw: string): unknown {

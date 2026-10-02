@@ -24,7 +24,7 @@ from pathlib import Path
 from meet import library
 
 COMMANDS = ("import", "export", "voices", "summary", "ask", "notes", "kb-export", "merge", "fix",
-            "analyze", "title")
+            "analyze", "title", "improve")
 NO_PROVIDER_HINT = ("Подключите Claude Code или Codex: meet {command} … --provider codex "
                     "или настройка llm.provider")
 
@@ -766,8 +766,91 @@ def _title(args, cfg) -> None:
     _result(args, doc, text)
 
 
+# --- «Улучшить расшифровку» -----------------------------------------------------
+
+IMPROVE_WAIT_S = 1800.0
+
+
+def _improve_text(groups: list[dict], applied: dict | None) -> str:
+    if not groups:
+        return "Неверно распознанных терминов не найдено\n"
+    lines = []
+    for g in groups:
+        mark = "" if g["kind"] == "term" else " (исправление)"
+        lines.append(f"{g['find']} → {g['replace']} · {g['count']}{mark}")
+    if applied is not None:
+        lines.append(f"Применено: {applied.get('changed', 0)} замен; отменить — в карточке встречи: "
+                     "«Спикеры» → «История изменений»")
+    return "\n".join(lines) + "\n"
+
+
+def _improve(args, cfg) -> None:
+    """`meet improve`: модель находит неверно распознанные термины; список —
+    в stdout; `--apply` — применить одним шагом истории встречи; `--all` — ещё
+    и явные ошибки распознавания обычных слов. Приложение запущено — задачей
+    через него (одна очередь модели, его замок правок и отказы)."""
+    from meet import improve, speakers, textfix
+
+    folder = _recording(args.folder, cfg)
+    _transcript(folder)
+    root = cfg.recording.recordings
+    via_app = _resident_root(folder, root)
+    if via_app:
+        proposal = _improve_via_resident(folder.name)
+    else:
+        provider, runner = _model(args, cfg)
+        try:
+            improve.improve(folder, runner, cfg, provider=provider, bus=_cli_bus())
+        except (improve.ImproveError, RuntimeError) as e:
+            improve.mark_failed(folder, str(e))
+            raise CliError(f"Улучшение не получилось: {e}")
+        except OSError as e:
+            raise CliError(f"Не удалось сохранить предложение: {e}")
+        proposal = improve.public(improve.read(folder) or {"groups": []})
+    groups = [g for g in proposal.get("groups") or [] if args.all or g.get("kind") == "term"]
+    applied = None
+    if args.apply and groups:
+        ids = [g["id"] for g in groups]
+        if via_app:
+            applied = _resident_call(folder.name, "/improve/apply", "POST", {"groups": ids})
+        else:
+            reason = _merge_busy(folder, root)
+            if reason:
+                raise CliError(f"{folder.name}: {reason}")
+            try:
+                applied = improve.apply(folder, ids, cfg.recording.voices)
+            except (speakers.SpeakerError, textfix.Unchanged) as e:
+                raise CliError(str(e)[:1].upper() + str(e)[1:])
+            except OSError as e:
+                raise CliError(f"Не удалось сохранить расшифровку: {e}")
+        applied = {"changed": applied.get("changed", 0), "step": (applied.get("step") or {}).get("id")}
+    doc = {"folder": str(folder), "via_app": via_app, "groups": groups, "applied": applied}
+    _result(args, doc, _improve_text(groups, applied))
+
+
+def _improve_via_resident(rid: str, *, sleep=None, clock=None) -> dict:
+    import time
+
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    job = _resident_call(rid, "/improve", "POST", {})
+    _say(f"Улучшение расшифровки поставлено в очередь приложения ({job.get('id')})")
+    deadline = clock() + IMPROVE_WAIT_S
+    while True:
+        got = _resident_call(rid, "/improve")
+        state = got.get("state")
+        if state not in ("queued", "running"):
+            break
+        if clock() > deadline:
+            raise CliError("Улучшение идёт дольше получаса — результат появится в приложении")
+        sleep(ANALYZE_POLL_S)
+    if state == "failed":
+        raise CliError(f"Улучшение не получилось: {got.get('error') or 'без подробностей'}")
+    return got.get("proposal") or {"groups": []}
+
+
 _HANDLERS = {"import": _import, "export": _export, "summary": _summary,
              "ask": _ask, "notes": _kb_export, "kb-export": _kb_export, "merge": _merge, "fix": _fix,
-             "analyze": _analyze, "title": _title}
+             "analyze": _analyze, "title": _title, "improve": _improve}
 _VOICES = {"list": _voices_list, "rename": _voices_rename, "merge": _voices_merge,
            "delete": _voices_delete, "avatar": _voices_avatar}

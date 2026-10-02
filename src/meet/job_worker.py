@@ -44,7 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("kind",
                         choices=["transcribe", "import", "install-engine", "download-model",
                                  "summary", "ask", "merge", "speaker_split", "rediarize",
-                                 "analyze"])
+                                 "analyze", "improve"])
     parser.add_argument("path")
     parser.add_argument("--speakers", type=int)
     parser.add_argument("--hotwords")
@@ -64,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
         return _assistant(args.kind, args.path, args.question)
     if args.kind == "analyze":
         return _analyze(args.path)
+    if args.kind == "improve":
+        return _improve(args.path)
 
     if args.kind == "merge":
         return _merge(args.path)
@@ -362,6 +364,41 @@ def _analyze(folder_str: str) -> int:
     try:
         out = analysis.analyze(folder, runner, cfg, provider=provider, bus=bus)
     except (analysis.AnalysisError, RuntimeError) as e:
+        return fail(str(e), 1)
+    except Exception as e:
+        return fail(f"{type(e).__name__}: {e}", 1)
+    _emit({"kind": "job.result", "path": str(out)})
+    return 0
+
+
+def _improve(folder_str: str) -> int:
+    """«Улучшить расшифровку» (meet.improve) — тем же провайдером, что итоги и
+    анализ (`llm.resolve`, без инструментов). Ошибка — в meta.json записи
+    (`improve_error`): окно покажет «Повторить»."""
+    from pathlib import Path
+
+    from meet import assistant, events, improve, llm, settings
+
+    folder = Path(folder_str)
+    bus = events.EventBus()
+    bus.subscribe(lambda event: _emit(event.to_dict()))
+    bus.progress("improve", label="улучшение расшифровки")
+    cfg = settings.load()
+
+    def fail(text: str, code: int) -> int:
+        improve.mark_failed(folder, text)
+        _emit({"kind": "error", "text": text})
+        return code
+
+    try:
+        provider, runner = llm.resolve(cfg)
+    except Exception as e:
+        return fail(f"{type(e).__name__}: {e}", 2)
+    if runner is None:
+        return fail(assistant.NO_PROVIDER, 2)
+    try:
+        out = improve.improve(folder, runner, cfg, provider=provider, bus=bus)
+    except (improve.ImproveError, RuntimeError) as e:
         return fail(str(e), 1)
     except Exception as e:
         return fail(f"{type(e).__name__}: {e}", 1)

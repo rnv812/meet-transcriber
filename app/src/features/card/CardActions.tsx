@@ -4,7 +4,8 @@
  * Слева — главное, со значком и подписью: «Экспорт» (меню форматов) и «В базу
  * знаний». Справа — значками с подсказками: «Открыть папку» и «Ещё действия»
  * (⋯) — редкое и опасное: «Переразделить на спикеров…», «Перерасшифровать…»,
- * «Переанализировать», «Предложить название» и за чертой «Удалить…».
+ * ✦ «Улучшить расшифровку», «Переанализировать», «Предложить название» и за
+ * чертой «Удалить…».
  * Подтверждения — в том же меню, как у записи в списке.
  *
  * Узкая карточка (меньше COMPACT_PX) — подписи свёрнуты в значки; имя кнопки
@@ -13,7 +14,7 @@
 
 import { useRef, useState, type ReactNode } from "react";
 import {
-  BookOpen, ChevronDown, Download, Ellipsis, FolderOpen, RotateCcw, ScanSearch, Trash2, Users, WandSparkles,
+  BookOpen, ChevronDown, Download, Ellipsis, FolderOpen, RotateCcw, ScanSearch, Sparkles, Trash2, Users, WandSparkles,
 } from "lucide-react";
 import { inTauri } from "../../lib/shell";
 import { useWide } from "../../live/useWide";
@@ -47,7 +48,8 @@ function below(el: HTMLElement | null, alignRight: boolean): { x: number; y: num
 
 export function CardActions({
   canExport, canRetranscribe, busy, onExport, onKbExport, onOpenFolder, onRetranscribe, onRediarize, onReanalyze,
-  reanalyzeBlocked = null, reanalyzeLabel = "Переанализировать", onSuggestTitle, onDelete,
+  reanalyzeBlocked = null, reanalyzeLabel = "Переанализировать", onSuggestTitle, onImprove, improveBlocked = null,
+  onDelete,
 }: {
   canExport: boolean;
   canRetranscribe: boolean;
@@ -67,6 +69,10 @@ export function CardActions({
   reanalyzeLabel?: string;
   /** «Предложить название»; нет — пункта нет. */
   onSuggestTitle?: () => void;
+  /** ✦ «Улучшить расшифровку» (ИИ находит неверно распознанные термины); нет — пункта нет. */
+  onImprove?: () => void;
+  /** Почему «Улучшить расшифровку» сейчас недоступно (нет модели) — подсказкой; null — доступно. */
+  improveBlocked?: string | null;
   onDelete: () => void;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -117,6 +123,11 @@ export function CardActions({
       ...opt(canRetranscribe, {
         label: "Перерасшифровать…", icon: <RotateCcw {...ICON} />, disabled: busy,
         hint: "Распознать запись заново", onSelect: () => setConfirm("retranscribe"),
+      }),
+      ...opt(!!onImprove, {
+        label: "Улучшить расшифровку", icon: <Sparkles {...ICON} />, disabled: busy || !!improveBlocked,
+        hint: improveBlocked ?? "ИИ найдёт неверно распознанные термины и покажет короткий список замен",
+        onSelect: run(() => onImprove?.()),
       }),
       ...opt(!!onReanalyze, {
         label: reanalyzeLabel, icon: <ScanSearch {...ICON} />, disabled: busy || !!reanalyzeBlocked,

@@ -79,6 +79,10 @@ IMPORTANT: токен принимается и в query-параметре `?to
     analysis(id) -> dict                  анализ встречи {"state", "analysis"?, "error"?}
     make_analysis(id) -> dict             «Переанализировать»: задача анализа (409 без модели)
     suggest_title(id) -> dict             «Предложить название» {"title", "from"}
+    improve(id) -> dict                   «Улучшить расшифровку» {"state", "proposal"?, "hint"}
+    make_improve(id) -> dict              поставить задачу улучшения (409 без модели)
+    improve_apply(id, body)               выбранные замены — одним шагом истории
+    improve_dismiss(id)                   подсказку после GigaAM больше не показывать
     kb_export(id) -> dict                 выгрузить встречу в базу знаний (400 без папки)
     export_preview(params) -> dict        как назовётся папка встречи по шаблону
     assistant() -> dict                   кто отвечает, что установлено, папки
@@ -884,6 +888,16 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.analysis(unquote(rid))),
     ("POST", re.compile(r"^/recordings/([^/]+)/analysis$"),
      lambda h, p, rid: _server_of(h).state.make_analysis(unquote(rid))),
+    # «Улучшить расшифровку» (improve.json): состояние и предложение; POST —
+    # поставить задачу; apply — выбранные замены одним шагом истории.
+    ("GET", re.compile(r"^/recordings/([^/]+)/improve$"),
+     lambda h, p, rid: _server_of(h).state.improve(unquote(rid))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/improve$"),
+     lambda h, p, rid: _server_of(h).state.make_improve(unquote(rid))),
+    ("POST", re.compile(r"^/recordings/([^/]+)/improve/apply$"),
+     lambda h, p, rid: _server_of(h).state.improve_apply(unquote(rid), h._body())),
+    ("POST", re.compile(r"^/recordings/([^/]+)/improve/dismiss$"),
+     lambda h, p, rid: _server_of(h).state.improve_dismiss(unquote(rid))),
     # «Предложить название»: только предложение, применяет окно (PATCH записи).
     ("POST", re.compile(r"^/recordings/([^/]+)/title/suggest$"),
      lambda h, p, rid: _server_of(h).state.suggest_title(unquote(rid))),

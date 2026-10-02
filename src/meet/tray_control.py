@@ -295,6 +295,9 @@ RECORDING_UPDATED = "recording.updated"  # {"id"}: запись изменила
 # Анализ встречи готов, не удался или устарел (правка текста): {"id", "state"}.
 # Очередь и ход самой задачи — обычные job.* (вид "analyze").
 ANALYSIS_UPDATED = "analysis.updated"
+# «Улучшить расшифровку»: предложение готово, не удалось или применено:
+# {"id", "state"}. Ход самой задачи — обычные job.* (вид "improve").
+IMPROVE_UPDATED = "improve.updated"
 # «Предложить название» без свежего анализа — короткий вызов модели подпроцессом.
 TITLE_TIMEOUT_S = 150
 # Удаление и объединение снимают идущий анализ записи: столько ждём, пока его
@@ -393,6 +396,9 @@ class TrayControl:
         # (тогда повтор не зависит от `analysis.auto`).
         self._analysis_rerun: dict[str, bool] = {}
         self._analysis_lock = threading.Lock()
+        # «Улучшить расшифровку» автоматически после распознавания, отложенное до
+        # конца записи или живого режима (модель во время встречи не зовём).
+        self._improve_deferred: dict[str, Path] = {}
         # «Предложить название», которое уже считается: второй запрос по той же
         # записи ждёт его, а не платит за второй вызов модели.
         self._suggesting: dict[str, dict] = {}
@@ -468,7 +474,12 @@ class TrayControl:
             self._background(lambda: self._analysis_finished(Path(folder), job.get("state"),
                                                              job=job, stopping=stopping),
                              "meet-analysis")
-        if self._analysis_deferred:
+        if kind == jobs.IMPROVE and folder:
+            stopping = bool(getattr(self.llm_queue, "stopping", False))
+            self._background(lambda: self._improve_finished(Path(folder), job.get("state"),
+                                                            job=job, stopping=stopping),
+                             "meet-improve")
+        if self._analysis_deferred or self._improve_deferred:
             self._background(self._flush_deferred_analysis, "meet-analysis")
         if event.kind != jobs.JOB_DONE:
             return
@@ -488,6 +499,8 @@ class TrayControl:
             # Анализ встречи — следом, если включён (объединённая встреча
             # приходит сюда же: после объединения идёт обычная расшифровка).
             self._background(lambda: self._auto_analyze(path), "meet-analysis")
+            # Прежнее предложение «Улучшить расшифровку» — по старому тексту.
+            self._background(lambda: self._auto_improve(path), "meet-improve")
         merged_exported = finish_merge = False
         if kind == jobs.TRANSCRIBE:
             info = self._merge_info(path)
@@ -556,7 +569,7 @@ class TrayControl:
         расшифровки: она шла бы по неполным дорожкам. Упавший (`live.failed`)
         сюда не попадает: его папка в библиотеке, расшифровать можно вручную."""
         if event.kind in (live_control.LIVE_STOPPED, live_control.LIVE_FAILED) \
-                and self._analysis_deferred:
+                and (self._analysis_deferred or self._improve_deferred):
             self._background(self._flush_deferred_analysis, "meet-analysis")
         if event.kind != live_control.LIVE_STOPPED or not event.data.get("folder"):
             return
@@ -607,7 +620,7 @@ class TrayControl:
                 return
         if transcribe:
             self._queue_transcription(path)
-        if self._analysis_deferred:
+        if self._analysis_deferred or self._improve_deferred:
             self._background(self._flush_deferred_analysis, "meet-analysis")
 
     # --- восстановление после перезапуска ---------------------------------
@@ -756,6 +769,11 @@ class TrayControl:
                 continue
             if self._resume_analysis(folder, mark, cutoff):
                 done.setdefault("analysis", []).append(folder.name)
+        # «Улучшить расшифровку», прерванное выходом (`pending_improve`).
+        for folder in library.recording_folders(root):
+            mark = library.read_meta(folder).get("pending_improve")
+            if isinstance(mark, dict) and self._resume_improve(folder, mark, cutoff):
+                done.setdefault("improve", []).append(folder.name)
         return done
 
     def _queue_transcription(self, path: Path) -> None:
@@ -2151,6 +2169,8 @@ class TrayControl:
         if ok and job is not None and job.kind in jobs.FOLDER_KINDS:
             # Отменённую человеком задачу после перезапуска не повторяем.
             self._mark_pending(Path(job.folder), False)
+        if ok and job is not None and job.kind == jobs.IMPROVE:
+            self._mark_improve(Path(job.folder), False)
         if ok and job is not None and job.kind == jobs.ANALYZE:
             # Ждущая задача снимается без события (_analysis_finished не придёт):
             # отметку снимаем здесь, иначе анализ вернётся при следующем запуске.
@@ -2393,9 +2413,16 @@ class TrayControl:
                           f"{type(e).__name__}: {e}")
 
     def _flush_deferred_analysis(self) -> None:
-        """Запись или живой режим кончились — отложенные анализы в очередь."""
+        """Запись или живой режим кончились — отложенные анализы (и улучшения
+        расшифровки) в очередь."""
         if self._busy_now():
             return
+        with self._analysis_lock:
+            improves = list(self._improve_deferred.values())
+            self._improve_deferred.clear()
+        for folder in improves:
+            if folder.is_dir():
+                self._auto_improve(folder)
         with self._analysis_lock:
             waiting = list(self._analysis_deferred.values())
             self._analysis_deferred.clear()
@@ -2438,6 +2465,7 @@ class TrayControl:
         остановив, отложенный и повтор — забыть. Анализ — производное, его
         можно сделать заново; ждать его ради удаления незачем. Идущую задачу
         ждём недолго: её процесс работает в папке записи."""
+        self._drop_improve(folder)
         key = self._key(folder)
         with self._analysis_lock:
             self._analysis_deferred.pop(key, None)
@@ -2519,6 +2547,231 @@ class TrayControl:
                 self._manual_again(folder)
             else:
                 self._auto_analyze(folder)
+
+    # --- «Улучшить расшифровку» ---------------------------------------------
+
+    def improve(self, recording_id: str) -> dict:
+        """Состояние для окна: {"state": none|queued|running|ready|failed,
+        "proposal"?, "error"?, "job"?, "hint"}. Предложение по устаревшему
+        тексту выбрасывается. `hint` — предложить улучшение после GigaAM
+        (похоже, термины записаны кириллицей)."""
+        from meet import improve
+
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        out = improve.state(folder)
+        job = self.llm_queue.active_for(str(folder), (jobs.IMPROVE,))
+        if job is not None:
+            out = {"state": job.state, "job": job.to_raw()}
+        hint = False
+        if out["state"] == "none":
+            try:
+                hint = improve.hint_wanted(folder)
+            except Exception:
+                hint = False  # подсказка необязательна
+        return {**out, "hint": hint}
+
+    def make_improve(self, recording_id: str) -> dict:
+        """«Улучшить расшифровку»: задача в очередь модели. Уже ждёт или идёт —
+        та же задача. 409 — идёт расшифровка, не подключена модель или запись
+        ещё пишется."""
+        from meet import improve
+
+        folder = self._transcribed(recording_id)
+        if isinstance(folder, dict):
+            return folder
+        self._ready_for_model(folder)
+        if self._key(folder) in self._busy_now():
+            raise _conflict("Запись ещё идёт — улучшение будет доступно после её окончания")
+        improve.hint_done(folder)
+        job, _created = self._queue_improve(folder, low=False, manual=True)
+        return job.to_raw()
+
+    def improve_dismiss(self, recording_id: str) -> dict:
+        """Подсказку «Похоже, в тексте есть термины латиницей» больше не показывать."""
+        from meet import improve
+
+        folder = self._folder(recording_id)
+        if folder is None:
+            return {"error": "записи нет"}
+        improve.hint_done(folder)
+        return {"ok": True}
+
+    def improve_apply(self, recording_id: str, body: dict | None) -> dict:
+        """Применить выбранное: {"groups": [id…], "add_rules", "add_terms"} —
+        одним шагом истории встречи (тот же путь и те же отказы, что у
+        «Исправить…»); по желанию — правилами для будущих расшифровок и в
+        термины распознавания."""
+        from meet import improve, replacements
+
+        body = body or {}
+        result: dict = {}
+
+        def change(folder: Path, voices: Path) -> dict:
+            got = improve.apply(folder, body.get("groups"), voices)
+            result.update(got)
+            return got
+
+        reply = self._speakers_change(recording_id, change)
+        if "error" in reply:
+            return reply
+        used = result.get("groups") or []
+        reply["changed"] = result.get("changed", 0)
+        reply["groups"] = used
+        if body.get("add_rules") is True and used:
+            reply["rules"] = self._add_rules(improve.rule_pairs(used))
+        if body.get("add_terms") is True and used:
+            added, errors = [], []
+            for g in used:
+                got = hotwords.add_to_file(paths.hotwords_path(), replacements.hotword_for(g["from"], g["to"]))
+                if got.get("error"):
+                    errors.append(got["error"])
+                elif got.get("added"):
+                    added.append(got["term"])
+            reply["terms"] = {"added": added, **({"error": errors[0]} if errors else {})}
+        folder = self._folder(recording_id)
+        if folder is not None:
+            self.bus.emit(IMPROVE_UPDATED, id=folder.name, state="none")
+        return reply
+
+    def _add_rules(self, pairs: list[dict]) -> dict:
+        """Правила замены для будущих расшифровок (`asr.replacements`) из
+        выбранных групп: то же «from» — заменяется. → {"added": [...]}."""
+        from meet import replacements
+
+        try:
+            rules = list(settings.load().asr.replacements)
+            added = []
+            for pair in pairs:
+                src, dst = replacements.clean_text(pair["from"]), replacements.clean_text(pair["to"])
+                if src and dst and src != dst:
+                    rules = replacements.with_rule(rules, src, dst)
+                    added.append({"from": src, "to": dst})
+            if added:
+                settings.patch({"asr": {"replacements": rules}})
+        except OSError as e:  # замены уже применены — о правилах только сообщаем
+            return {"added": [], "error": f"не удалось сохранить правила: {e}"}
+        return {"added": added}
+
+    def _mark_improve(self, folder: Path, on: bool, *, manual: bool = False) -> None:
+        """`pending_improve` в meta.json: улучшение поставлено или отложено, но
+        не закончилось — следующий запуск резидента поставит его снова."""
+        try:
+            if on:
+                library.write_meta(folder, {"pending_improve": {"at": time.time(), "manual": manual}})
+            elif "pending_improve" in library.read_meta(folder):
+                library.update_meta(folder, lambda meta: {
+                    k: v for k, v in meta.items() if k != "pending_improve"})
+        except Exception as e:
+            self.tray.log(f"отметка об улучшении не записана ({Path(folder).name}): {e}")
+
+    def _queue_improve(self, folder: Path, *, low: bool, manual: bool = False):
+        """Одна задача улучшения на запись: ждущая или идущая — та же (просьба
+        человека поднимает фоновую вперёд). → (задача, поставлена ли новая)."""
+        with self._submit_lock:
+            job = self.llm_queue.active_for(str(folder), (jobs.IMPROVE,))
+            if job is not None:
+                if job.state != jobs.RUNNING and not low and hasattr(self.llm_queue, "promote"):
+                    self.llm_queue.promote(job.id)
+                return job, False
+            job = self.llm_queue.submit(jobs.IMPROVE, str(folder), {}, low=low)
+        self._mark_improve(folder, True, manual=manual)
+        return job, True
+
+    def _auto_improve(self, folder: Path) -> None:
+        """После расшифровки: прежнее предложение (по старому тексту) —
+        выбросить; если включено «Улучшать расшифровку автоматически после
+        распознавания» (`analysis.improve_auto`), подготовить новое фоновой
+        задачей — применяет его человек. Идёт запись или живой режим — после них."""
+        from meet import improve
+
+        try:
+            improve.fresh(folder)  # устаревшее выбрасывается
+            cfg = settings.load()
+            if not cfg.analysis.improve_auto or library.read_transcript(folder) is None:
+                return
+            if improve.read(folder) is not None:
+                return  # свежее уже есть
+            if self._busy_now():
+                with self._analysis_lock:
+                    self._improve_deferred[self._key(folder)] = folder
+                self._mark_improve(folder, True)
+                return
+            if not _provider_installed(cfg):
+                return
+            job, created = self._queue_improve(folder, low=True)
+            if created:
+                self.tray.log(f"улучшение расшифровки поставлено в очередь: {folder.name} ({job.id})")
+        except Exception as e:
+            self.tray.log(f"улучшение расшифровки не поставлено ({Path(folder).name}): "
+                          f"{type(e).__name__}: {e}")
+
+    def _resume_improve(self, folder: Path, mark: dict, cutoff: float) -> bool:
+        """Улучшение, прерванное выходом резидента, — снова в очередь, если ещё
+        нужно: расшифровка есть, свежего предложения нет, модель подключена;
+        автоматическое — только при включённой настройке."""
+        from meet import improve
+
+        at = mark.get("at")
+        manual = bool(mark.get("manual"))
+        if (not isinstance(at, (int, float)) or isinstance(at, bool) or at < cutoff
+                or library.read_transcript(folder) is None or improve.fresh(folder) is not None
+                or self.queue.active_for(str(folder), jobs.FOLDER_KINDS)):
+            self._mark_improve(folder, False)
+            return False
+        cfg = settings.load()
+        if not manual and not cfg.analysis.improve_auto:
+            self._mark_improve(folder, False)
+            return False
+        if self._busy_now():
+            with self._analysis_lock:
+                self._improve_deferred[self._key(folder)] = folder
+            return True
+        if not _provider_installed(cfg):
+            return False  # отметка остаётся: модель подключат — поставим при следующем запуске
+        self._queue_improve(folder, low=not manual, manual=manual)
+        self.tray.log(f"улучшение расшифровки восстановлено после перезапуска: {folder.name}")
+        return True
+
+    def _drop_improve(self, folder: Path) -> None:
+        """Снять улучшение записи (удаление, объединение): задачу — из очереди
+        или остановив; отложенное — забыть. Как анализ: это производное."""
+        with self._analysis_lock:
+            self._improve_deferred.pop(self._key(folder), None)
+        job = self.llm_queue.active_for(str(folder), (jobs.IMPROVE,))
+        self._mark_improve(folder, False)
+        if job is None:
+            return
+        self.llm_queue.cancel(job.id)
+        deadline = time.monotonic() + DROP_ANALYSIS_WAIT_S
+        while time.monotonic() < deadline:
+            current = self.llm_queue.active()
+            if current is None or current.id != job.id:
+                break
+            time.sleep(0.05)
+        self.tray.log(f"улучшение расшифровки снято: {Path(folder).name} ({job.id})")
+
+    def _improve_finished(self, folder: Path, job_state, *, job: dict | None = None,
+                          stopping: bool = False) -> None:
+        """Задача улучшения кончилась: снять отметку, записать ошибку упавшего
+        процесса (если он не успел сам), событие окну. Убитая остановкой
+        резидента — отметку сохраняет."""
+        from meet import improve
+
+        if stopping or not folder.is_dir():
+            return
+        self._mark_improve(folder, False)
+        try:
+            if job_state == jobs.FAILED:
+                failure = library.read_meta(folder).get("improve_error")
+                at = failure.get("at") if isinstance(failure, dict) else None
+                started = (job or {}).get("started_at") or 0.0
+                if not isinstance(at, (int, float)) or at < started:
+                    improve.mark_failed(folder, (job or {}).get("error") or "задача улучшения прервалась")
+            self.bus.emit(IMPROVE_UPDATED, id=folder.name, state=improve.state(folder).get("state"))
+        except Exception as e:
+            self.tray.log(f"улучшение расшифровки не обработано ({folder.name}): {type(e).__name__}: {e}")
 
     # --- выгрузка в базу знаний --------------------------------------------
 

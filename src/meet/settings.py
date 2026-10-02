@@ -808,7 +808,11 @@ class Analysis:
     переразделения на спикеров (если подключена модель и встреча не короче
     `auto_record.min_call_seconds`). Остальные флаги — что размечать: типы
     реплик, важность, главы, наблюдения, категория, название. Выключенное не
-    запрашивается и не показывается."""
+    запрашивается и не показывается.
+
+    `improve_auto` — «Улучшать расшифровку автоматически после распознавания»
+    (meet.improve): после расшифровки модель сама готовит список исправлений
+    терминов; применяет их человек. По умолчанию выключено."""
 
     auto: bool = True
     types: bool = True
@@ -817,10 +821,11 @@ class Analysis:
     insights: bool = True
     category: bool = True
     title: bool = True
+    improve_auto: bool = False
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Analysis":
-        return cls(auto=as_flag(raw.get("auto"), True),
+        return cls(auto=as_flag(raw.get("auto"), True), improve_auto=as_flag(raw.get("improve_auto"), False),
                    **{name: as_flag(raw.get(name), True) for name in ANALYSIS_FEATURES})
 
     def features(self) -> tuple[str, ...]:
@@ -828,7 +833,8 @@ class Analysis:
         return tuple(name for name in ANALYSIS_FEATURES if getattr(self, name))
 
     def to_raw(self) -> dict:
-        return {"auto": self.auto, **{name: getattr(self, name) for name in ANALYSIS_FEATURES}}
+        return {"auto": self.auto, **{name: getattr(self, name) for name in ANALYSIS_FEATURES},
+                "improve_auto": self.improve_auto}
 
 
 @dataclass(frozen=True)
