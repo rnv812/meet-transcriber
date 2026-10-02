@@ -5,14 +5,22 @@
 нужна, пока собеседник ждёт ответа. Здесь — простые проверяемые правила
 по одной реплике (русский язык), без модели:
 
-* `question` — реплика не владельца кончается вопросительным знаком;
-* `addressed` — в реплике не владельца прозвучало имя владельца (с
-  падежными окончаниями: «Кузьма», «Кузьму», «Кузьме») или «вы/ты» вместе
-  с вопросительным словом («Вы сможете…», «А ты когда…»).
+* `addressed` — к владельцу обратились:
+  - его имя (из настроек или прежние имена в базе голосов) в позиции
+    обращения: «Марина, посмотрите…», «…, Марина?» — имя отделено запятой
+    или стоит перед «!»/«?». Имя в косвенном падеже («вопрос к Марине») —
+    рассказ о человеке, а не обращение;
+  - или короткая реплика с «?» на конце и формами второго лица: «Вы
+    успеете к пятнице?», «Сможете прислать оценку?». Без «?» — нет:
+    «Я думаю, что вы правы», «Спасибо вам, что пришли» — обычные фразы
+    делового «вы»;
+* `question` — любая другая реплика с «?» на конце.
 
 Реплики самого владельца поводом не бывают: свои вопросы он слышит сам.
 Распознавание речи неидеально, поэтому правило — повод спросить модель, а
-не вывод: модель сама решает, есть ли что подсказать.
+не вывод: модель сама решает, есть ли что подсказать. Частоту таких
+внеочередных тиков ограничивает тикер (минимальный промежуток и свой
+бюджет в час).
 """
 
 import re
@@ -20,65 +28,78 @@ import re
 QUESTION = "question"
 ADDRESSED = "addressed"
 
-# Слова второго лица (обращение к собеседнику на «вы» и на «ты»).
+# Местоимения второго лица (обращение на «вы» и на «ты»).
 SECOND_PERSON = frozenset(
-    "вы вас вам вами ваш ваша ваше ваши вашего вашей вашим ваших вашу "
-    "ты тебя тебе тобой твой твоя твоё твое твои твоего твоей твоим твоих твою".split())
+    "вы вас вам вами ваш ваша ваше ваши вашего вашей вашим ваших вашу вашем "
+    "ты тебя тебе тобой твой твоя твое твои твоего твоей твоим твоих твою твоем".split())
 
-# Вопросительные слова и частицы, по которым «вы/ты» — это вопрос к человеку.
-QUESTION_WORDS = frozenset(
-    "как что когда кто где куда откуда почему зачем сколько какой какая какое какие "
-    "каким какую чей чья ли можете сможете могли могли бы готовы успеете знаете "
-    "помните подскажете скажете расскажете думаете считаете согласны планируете "
-    "можешь сможешь готов успеешь знаешь помнишь подскажешь скажешь думаешь "
-    "считаешь согласен планируешь".split())
+# Глаголы второго лица, которыми спрашивают без местоимения («Успеете?»).
+SECOND_PERSON_VERBS = frozenset(
+    "можете сможете успеете готовы знаете помните подскажете скажете расскажете "
+    "думаете считаете согласны планируете возьмете берете пришлете посмотрите "
+    "можешь сможешь успеешь готов знаешь помнишь подскажешь скажешь думаешь "
+    "считаешь согласен планируешь возьмешь пришлешь посмотришь".split())
 
-# Имя короче — без падежного «хвоста» (иначе «Ян» совпадёт с чем угодно).
-STEM_MIN = 4
+# Короткая реплика: длинная фраза с «?» в конце — скорее рассуждение вслух.
+SHORT_WORDS = 16
 
 _WORD = re.compile(r"[а-яёa-z]+", re.I)
+_END = "»\"') "
+
+
+def _norm(text: str) -> str:
+    return (text or "").lower().replace("ё", "е")
 
 
 def _words(text: str) -> list[str]:
-    return [w.lower().replace("ё", "е") for w in _WORD.findall(text or "")]
+    return _WORD.findall(_norm(text))
 
 
-def owner_names(name: str | None) -> list[str]:
-    """Имя владельца для поиска обращений: первое слово, без «Вы» (это
-    подпись микрофона по умолчанию, а не имя)."""
-    words = _words(name or "")
-    if not words or words[0] in SECOND_PERSON:
-        return []
-    return [words[0]]
-
-
-def _calls_name(words: list[str], names: list[str]) -> bool:
+def owner_names(*names: str | None) -> list[str]:
+    """Имена владельца для поиска обращений: первое слово каждого, без «Вы»
+    (это подпись микрофона по умолчанию, а не имя)."""
+    out: list[str] = []
     for name in names:
-        stem = name[:-1] if len(name) >= STEM_MIN + 1 else name
-        for w in words:
-            if w == name or (len(stem) >= STEM_MIN and w.startswith(stem)
-                             and len(w) - len(stem) <= 3):
-                return True
+        words = _words(name or "")
+        if words and words[0] not in SECOND_PERSON and words[0] not in out:
+            out.append(words[0])
+    return out
+
+
+def _vocative(text: str, names: list[str]) -> bool:
+    """Имя в позиции обращения: за ним запятая, «!» или «?», либо оно
+    стоит в конце реплики после запятой («…, Марина?»)."""
+    norm = _norm(text)
+    for name in names:
+        n = re.escape(name)
+        if re.search(rf"(?<![а-яa-z]){n}(?![а-яa-z])\s*[,!?]", norm):
+            return True
+        if re.search(rf",\s*{n}\s*[.!?…]*\s*$", norm):
+            return True
     return False
 
 
-def trigger_of(entry: dict, *, owner_speaker: str, owner_name: str | None = None) -> str | None:
+def trigger_of(entry: dict, *, owner_speaker: str, owner_name: str | None = None,
+               names: list[str] | None = None) -> str | None:
     """Повод внеочередной подсказки по реплике или None.
 
     `owner_speaker` — подпись владельца в ленте (реплики микрофона);
-    `owner_name` — его имя для поиска обращений (обычно та же подпись)."""
+    `owner_name`/`names` — его имена для поиска обращений (по умолчанию —
+    подпись)."""
     speaker = str(entry.get("speaker") or "")
     if speaker and speaker == owner_speaker:
         return None
     text = str(entry.get("text") or "").strip()
     if not text:
         return None
+    if names is None:
+        names = owner_names(owner_name if owner_name is not None else owner_speaker)
+    if names and _vocative(text, names):
+        return ADDRESSED
+    if not text.rstrip(_END).endswith("?"):
+        return None
     words = _words(text)
-    names = owner_names(owner_name if owner_name is not None else owner_speaker)
-    if names and _calls_name(words, names):
+    if len(words) <= SHORT_WORDS and any(w in SECOND_PERSON or w in SECOND_PERSON_VERBS
+                                         for w in words):
         return ADDRESSED
-    if any(w in SECOND_PERSON for w in words) and any(w in QUESTION_WORDS for w in words):
-        return ADDRESSED
-    if text.rstrip("»\"')").endswith("?"):
-        return QUESTION
-    return None
+    return QUESTION

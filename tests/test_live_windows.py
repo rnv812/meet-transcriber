@@ -171,3 +171,12 @@ def test_window_ends_at_the_first_pause_after_the_middle_without_waiting_for_7_s
     buf.push(tone(0.6).tobytes())                       # 5,6 с в очереди
     assert engine.step() == 1
     assert 4.6 <= asr.windows[0][1] <= 5.0              # по паузе 4,6–5,0
+
+
+def test_long_tail_at_stop_goes_in_parts_gigaam_can_take(tmp_path):
+    asr = FakeGigaam()
+    engine, buf, _ = _engine(tmp_path, asr)
+    engine._tracks["mic.wav"]["pending"].append((tone(45.0).astype(np.float32) / 32768, False))
+    engine._tracks["mic.wav"]["pending_n"] += 45 * SR
+    engine.process_window()
+    assert [d for _, d in asr.windows] == [20.0, 20.0, 5.0]

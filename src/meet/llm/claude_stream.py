@@ -222,7 +222,7 @@ class Conversation:
     async def _send(self, text: str, on_text, timeout_s: float) -> AgentReply:
         if not self.alive:
             if self._proc is not None:
-                self.kill()
+                await asyncio.to_thread(self.kill)
             error = self._spawn()
             if error:
                 return AgentReply(text="", error=error)
@@ -234,7 +234,7 @@ class Conversation:
             await asyncio.to_thread(_write, proc, line.encode("utf-8"))
         except (OSError, ValueError) as e:
             error = self._stderr_tail() or f"{type(e).__name__}: {e}"
-            self.kill()
+            await asyncio.to_thread(self.kill)
             return AgentReply(text="", error=netproxy.with_hint(f"процесс Claude Code не принял запрос: {error}"))
         parts: list[str] = []
         streamed = False
@@ -243,7 +243,7 @@ class Conversation:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                self.kill()
+                await asyncio.to_thread(self.kill)
                 return AgentReply(text="".join(parts).strip(), error=TIMEOUT_ERROR)
             try:
                 msg = await asyncio.wait_for(queue.get(), remaining)
@@ -251,7 +251,7 @@ class Conversation:
                 continue
             if msg is None:
                 detail = self._stderr_tail() or "процесс завершился"
-                self.kill()
+                await asyncio.to_thread(self.kill)
                 return AgentReply(text="".join(parts).strip(),
                                   error=netproxy.with_hint(f"Claude Code: {detail}"))
             kind = msg.get("type")

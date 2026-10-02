@@ -331,7 +331,9 @@ class LiveEngine:
         rate = tr["rate"]
         have = tr["pending_n"] / rate
         if final:
-            return self._take(tr, None) if have >= TAIL_MIN_S else None
+            # Хвост длиннее `merge_s` (после долгой задержки) — частями: GigaAM
+            # больше ~25 с за вызов не принимает.
+            return self._take(tr, min(have, self.policy.merge_s)) if have >= TAIL_MIN_S else None
         policy = self.policy
         if have < (policy.min_s + policy.max_s) / 2:
             return None

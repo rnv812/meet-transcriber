@@ -165,16 +165,26 @@ async def run(
     reported: str | None = None
     error: str | None = None
 
+    streamed = False
+
     async def _consume() -> None:
-        nonlocal result_text, reported, error
+        nonlocal result_text, reported, error, streamed
         async for msg in claude_agent_sdk.query(prompt=_single_message(), options=options):
             if on_text is not None and isinstance(msg, StreamEvent):
-                delta = text_delta(msg.event)
-                if delta:
-                    try:
-                        on_text(delta)
-                    except Exception:  # сбой показа не обрывает ответ
-                        log.exception("on_text")
+                event = msg.event if isinstance(msg.event, dict) else {}
+                # Новое сообщение модели после инструмента: прежний текст был
+                # пояснением к нему («посмотрю заметки»), ответ — дальше.
+                # on_text(None) — «начать текст заново».
+                piece = None if event.get("type") == "message_start" else text_delta(event)
+                if piece is None and not streamed:
+                    continue
+                if piece == "":
+                    continue
+                streamed = piece is not None
+                try:
+                    on_text(piece)
+                except Exception:  # сбой показа не обрывает ответ
+                    log.exception("on_text")
                 continue
             if isinstance(msg, AssistantMessage):
                 if getattr(msg, "error", None):

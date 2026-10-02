@@ -410,3 +410,21 @@ def test_sse_streams_partial_answers():
 
     event = _run(scenario())
     assert event[0] == "qa_partial" and event[2] == {"id": 3, "a": "Предлагаю пере"}
+
+
+def test_reconnected_stream_gets_the_answer_being_written_at_once():
+    class Partial(BusState):
+        def qa_partial_version(self):
+            return 5
+
+        def qa_partials(self):
+            return [{"id": 2, "a": "Предлагаю"}]
+
+    async def scenario():
+        state = Partial()
+        async with TestClient(TestServer(build_app(state))) as client:
+            async with client.get("/events") as resp:
+                return await _read_events(resp, 3)
+
+    events = _run(scenario())
+    assert ("qa_partial", None, {"id": 2, "a": "Предлагаю"}) in events

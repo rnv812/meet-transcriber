@@ -87,3 +87,9 @@ def test_knowledge_block_only_when_given():
     kb = Path("C:/kb/Docs")
     assert str(kb) in build_qa_system("", "", None, knowledge=kb)
     assert build_qa_system("", "", None) == build_qa_system("", "", None, knowledge=None)
+
+
+def test_qa_system_names_the_recording_folder():
+    folder = Path("D:/Записи/2026-10-02_10-00")
+    assert str(folder) in build_qa_system("", "", None, folder=folder)
+    assert "Папка этой записи" not in build_qa_system("", "", None)

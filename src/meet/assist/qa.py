@@ -148,8 +148,17 @@ class QAService:
             self.partial_version += 1
             self._notify()
 
-        def on_text(chunk: str) -> None:
-            if not chunk or item_id not in self._partials:
+        def on_text(chunk: str | None) -> None:
+            if item_id not in self._partials:
+                return
+            if chunk is None:
+                # Новое сообщение модели (после чтения файлов): прежний текст —
+                # пояснение к инструменту, а не ответ; ответ пишется заново.
+                if self._partials[item_id]:
+                    self._partials[item_id] = ""
+                    emit()
+                return
+            if not chunk:
                 return
             self._partials[item_id] += chunk
             wait = self._partial_at + PARTIAL_EVERY_S - time.monotonic()
@@ -196,7 +205,10 @@ class QAService:
         try:
             async with self._lock:
                 if self._on_fresh_audio is not None:
-                    await asyncio.to_thread(self._on_fresh_audio)
+                    try:
+                        await asyncio.to_thread(self._on_fresh_audio)
+                    except Exception as e:  # хвост не распознался — отвечаем по готовым репликам
+                        print(f"вопрос: хвост речи не распознан ({type(e).__name__}: {e})", flush=True)
                 prompt, cursor = self._build(label, quick, since_t)
                 kwargs = {"model": self._model} if self._model else {}
                 resume = self._session_id

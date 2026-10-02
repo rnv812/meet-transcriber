@@ -252,3 +252,12 @@ def test_in_process_wav_reads_our_wav_without_ffmpeg(monkeypatch, tmp_path):
     with wave.open(str(other), "wb") as w:                # 44,1 кГц — не наш формат
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(44100); w.writeframes(b"\0\0" * 10)
     assert fake_model.load_audio(str(other)) == "ffmpeg" and calls == [str(other)]
+
+
+def test_window_wav_never_stays_in_temp():
+    model = FakeModel()
+    g = _live(model=model)
+    g.load()
+    g.transcribe_window(np.full(SR, 0.1, dtype=np.float32), offset_s=0.0)
+    assert not list(g._tmp.glob("w*.wav"))
+    g.unload()

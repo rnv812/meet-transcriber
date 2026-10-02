@@ -175,8 +175,9 @@ def build_app(state) -> web.Application:
                     wrote = True
                 partial_version = getattr(state, "qa_partial_version", lambda: 0)()
                 if partial_version != sent_partial:
-                    if sent_partial is not None:
-                        for part in state.qa_partials():
+                    # Переподключились посреди ответа — сразу его текст на сейчас.
+                    for part in state.qa_partials() if hasattr(state, "qa_partials") else ():
+                        if sent_partial is not None or part.get("a"):
                             await resp.write(_event("qa_partial", part))
                             wrote = True
                     sent_partial = partial_version
