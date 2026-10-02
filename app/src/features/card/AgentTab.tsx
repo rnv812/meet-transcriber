@@ -62,12 +62,15 @@ export const CONFIRM_ROWS = 12;
  * Claude Code — «Accessing workspace: … Quick safety check: Is this a project
  * you created or one you trust?», «Yes, I trust this folder», выбор темы и
  * способа входа; прежние версии — «Do you trust the files in this folder?».
- * Codex — «Trust this folder? Codex can read, edit, and run files here…»,
- * «Continue only if you trust these files», «Allow Codex to work in this folder».
+ * Codex (0.159) — «Trust this folder? Codex can read, edit, and run files
+ * here…», «Continue only if you trust these files» и экран входа: «Sign in with
+ * ChatGPT», «Provide your own API key»; прежние версии — «Allow Codex to work in
+ * this folder» (в 0.159 этой строки нет).
  */
 export const CONFIRM_SCREEN = new RegExp([
   "quick safety check", "is this a project you created or one you trust", "yes, i trust this folder",
   "do you trust the files in this folder", "trust this folder[?] codex", "continue only if you trust these files",
+  "sign in with chatgpt", "provide your own api key",
   "allow codex to work in this folder", "choose the text style that looks best", "select login method",
 ].join("|"), "i");
 
