@@ -279,6 +279,11 @@ AGENT_TRANSCRIPT_MD = "transcript.md"
 # встречи (задача анализа): агент получает их, если они есть.
 LIVE_TRANSCRIPT_MD = "live_transcript.md"
 AGENT_ANALYSIS_JSON = "analysis.json"
+# Метка в meta.json: в папке записи уже работал агент — {провайдер: когда}. По
+# ней вкладка «Агент» предлагает «Продолжить прошлую»; хранилище самих CLI
+# (их сеансы) не читаем.
+AGENT_SESSIONS_META = "agent_sessions"
+AGENT_PROVIDERS = ("claude-code", "codex")
 # Шапка transcript.md, пока точной расшифровки нет, а лента живого режима есть.
 AGENT_LIVE_HEADER = (
     "# Черновая расшифровка живого режима\n\n"
@@ -329,6 +334,15 @@ def _window_transcript(data: dict | None) -> dict | None:
 
 def _int_or_none(value) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _agent_sessions(meta: dict) -> list[str]:
+    """Агенты, уже работавшие в папке записи (метка `agent_sessions`), в
+    порядке AGENT_PROVIDERS."""
+    marks = meta.get(AGENT_SESSIONS_META)
+    if not isinstance(marks, dict):
+        return []
+    return [name for name in AGENT_PROVIDERS if marks.get(name)]
 
 
 def _without_marks(data: dict) -> dict:
@@ -1654,12 +1668,35 @@ class TrayControl(ProfilesMixin):
         if folder is None:
             return {"error": "записи нет"}
         if library.transcript_path(folder).is_file():
-            return {"files": [AGENT_TRANSCRIPT_MD, *self._agent_extras(folder)], "live": False}
-        if (folder / LIVE_TRANSCRIPT_MD).is_file():
-            return {"files": [AGENT_TRANSCRIPT_MD], "live": True}
-        return {"files": [], "live": False}
+            out = {"files": [AGENT_TRANSCRIPT_MD, *self._agent_extras(folder)], "live": False}
+        elif (folder / LIVE_TRANSCRIPT_MD).is_file():
+            out = {"files": [AGENT_TRANSCRIPT_MD], "live": True}
+        else:
+            out = {"files": [], "live": False}
+        # `sessions` — агенты, уже работавшие в папке (только если такие есть).
+        sessions = _agent_sessions(library.read_meta(folder))
+        if sessions:
+            out["sessions"] = sessions
+        return out
 
-    def agent_context(self, recording_id: str) -> dict:
+    def _mark_agent_session(self, folder: Path, provider) -> None:
+        """Запомнить в meta.json, что в папке запускается агент `provider`.
+        Неизвестный провайдер или сбой записи — без метки, запуск не мешаем."""
+        if provider not in AGENT_PROVIDERS:
+            return
+
+        def change(meta: dict) -> dict:
+            marks = meta.get(AGENT_SESSIONS_META)
+            marks = dict(marks) if isinstance(marks, dict) else {}
+            marks[provider] = time.time()
+            return {**meta, AGENT_SESSIONS_META: marks}
+
+        try:
+            library.update_meta(folder, change)
+        except OSError as e:
+            self.tray.log(f"метка сеанса агента не записана ({folder.name}): {e}")
+
+    def agent_context(self, recording_id: str, body: dict | None = None) -> dict:
         """Файлы для вкладки «Агент» (Claude Code / Codex в папке встречи):
         `transcript.md` — расшифровка тем же Markdown, что «Экспорт» (имена
         спикеров, таймкоды), переписывается при каждом запуске агента
@@ -1667,7 +1704,8 @@ class TrayControl(ProfilesMixin):
         если они есть. Пока точной расшифровки нет (идёт запись с ассистентом
         или расшифровка), transcript.md — лента живого режима с пометкой
         «черновая». Папку оболочка проверяет сама: она должна лежать в папке
-        записей."""
+        записей. `body.provider` — какой агент запускается: его метка ложится
+        в meta.json (`agent_sessions`, см. `agent_files`)."""
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
@@ -1701,6 +1739,7 @@ class TrayControl(ProfilesMixin):
         files = [AGENT_TRANSCRIPT_MD]
         if not live:
             files += self._agent_extras(folder)
+        self._mark_agent_session(folder, (body or {}).get("provider"))
         return {"folder": str(folder), "files": files}
 
     def save_transcript(self, recording_id: str, data: dict) -> dict:

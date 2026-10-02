@@ -209,7 +209,7 @@ test("выбор агента: только установленные, запу
   expect([...(select as HTMLSelectElement).options].map((o) => o.text)).toEqual(["Claude Code", "Codex"]);
   await userEvent.selectOptions(select, "claude-code");
   await userEvent.click(startButton());
-  expect(h.shell.agentSpawn).toHaveBeenCalledWith("r1", "claude-code", 80, 24);
+  expect(h.shell.agentSpawn).toHaveBeenCalledWith("r1", "claude-code", 80, 24, false);
   expect(await screen.findByText("Работает")).toBeInTheDocument();
   expect(screen.getByText(/Агент запущен в папке встречи/)).toBeInTheDocument();
 });
@@ -348,7 +348,7 @@ test("агент не запущен — запускается сам, ссыл
   const onTaken = vi.fn();
   await show(assistant(), { insert: { text: REF }, onTaken });
   expect(onTaken).toHaveBeenCalledTimes(1);
-  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalledWith("r1", "claude-code", 80, 24));
+  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalledWith("r1", "claude-code", 80, 24, false));
   expect(strip()).toHaveTextContent("Ссылка будет вставлена в поле ввода, когда агент будет готов.");
   await waitFor(() => expect(term().pasted).toEqual([LINE]), SLOW);
   expect(LINE).toBe("Про реплику: [01:05] Анна: «Сдаём отчёт в пятницу.» ");
@@ -708,4 +708,31 @@ test("другая запись — недоставленная ссылка н
   await act(async () => resolve("agent-1"));
   await new Promise((r) => setTimeout(r, 400));
   expect(term().pasted).toEqual([]);
+});
+
+test("«Продолжить прошлую» — только если этот агент уже работал в папке встречи", async () => {
+  vi.mocked(api.getAgentContext).mockResolvedValue({
+    files: ["transcript.md"], live: false, sessions: ["codex"],
+  });
+  await show(assistant(), { endpoint: ep });
+  await screen.findByText(/Контекст: transcript\.md/);
+  // Claude Code в этой папке не запускался — как раньше, только «Запустить».
+  expect(screen.queryByRole("button", { name: "Продолжить прошлую" })).toBeNull();
+  expect(startButton()).toBeInTheDocument();
+  await userEvent.selectOptions(screen.getByRole("combobox", { name: "Агент" }), "codex");
+  const resume = screen.getByRole("button", { name: "Продолжить прошлую" });
+  expect(screen.getByRole("button", { name: "Новая сессия" })).toHaveClass("btn--primary");
+  await userEvent.click(resume);
+  expect(h.shell.agentSpawn).toHaveBeenCalledWith("r1", "codex", 80, 24, true);
+  expect(await screen.findByText("Работает")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Продолжить прошлую" })).toBeNull();
+});
+
+test("«Новая сессия» при прошлом сеансе запускает агента заново, без продолжения", async () => {
+  vi.mocked(api.getAgentContext).mockResolvedValue({
+    files: ["transcript.md"], live: false, sessions: ["claude-code"],
+  });
+  await show(assistant(), { endpoint: ep });
+  await userEvent.click(await screen.findByRole("button", { name: "Новая сессия" }));
+  expect(h.shell.agentSpawn).toHaveBeenCalledWith("r1", "claude-code", 80, 24, false);
 });

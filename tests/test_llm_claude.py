@@ -132,3 +132,36 @@ def test_check_auth_passes_proxy(monkeypatch):
     monkeypatch.setattr(claude, "run", fake_run)
     assert asyncio.run(claude.check_auth(proxy="none")) is None
     assert seen["proxy"] == "none"
+
+
+def test_run_drops_inherited_session_markers_but_keeps_auth(monkeypatch):
+    """Резидент запустили из сеанса Claude Code: вызов модели — свой сеанс,
+    не «вложенный» (с CLAUDE_CODE_CHILD_SESSION Claude не сохраняет сеанс, и
+    `resume` живого ассистента не нашёл бы его). Вход и настройки остаются."""
+    for name, value in (("CLAUDE_CODE_CHILD_SESSION", "1"), ("CLAUDECODE", "1"),
+                        ("CLAUDE_CODE_SSE_PORT", "45123"), ("CLAUDE_CODE_ENTRYPOINT", "cli"),
+                        ("CLAUDE_CODE_MESSAGING_TOKEN", "m9-test-token"),
+                        ("ANTHROPIC_BASE_URL", "https://gateway.example.invalid"),
+                        ("CLAUDE_CONFIG_DIR", "D:/m9-test/claude")):
+        monkeypatch.setenv(name, value)
+    seen = {}
+
+    def fake_query(*, prompt, options):
+        seen["environ"] = dict(os.environ)
+        seen["options_env"] = dict(options.env)
+
+        async def gen():
+            if False:
+                yield None
+        return gen()
+
+    monkeypatch.setattr(claude_agent_sdk, "query", fake_query)
+    monkeypatch.setattr(claude, "find_cli", lambda: "C:/claude.exe")
+    asyncio.run(claude.run("привет", system_prompt="s"))
+    upper = {k.upper() for k in seen["environ"]} | {k.upper() for k in seen["options_env"]}
+    for marker in base.SESSION_MARKERS:
+        assert marker not in upper, marker
+    assert seen["environ"]["ANTHROPIC_BASE_URL"] == "https://gateway.example.invalid"
+    assert seen["environ"]["CLAUDE_CONFIG_DIR"] == "D:/m9-test/claude"
+    # Сохранение сеанса ничем не выключено.
+    assert not any("PERSIST" in k or "SKIP_PROMPT_HISTORY" in k for k in upper)

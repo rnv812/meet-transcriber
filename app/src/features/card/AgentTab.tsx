@@ -204,7 +204,7 @@ async function pasteInto(term: Terminal) {
   }
 }
 
-type Context = { files: string[]; live: boolean };
+type Context = { files: string[]; live: boolean; sessions?: string[] };
 
 function contextText(ctx: Context): string {
   if (!ctx.files.length) return "Контекст: расшифровки пока нет";
@@ -469,7 +469,8 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
     };
   }, [id]);
 
-  const start = async () => {
+  /** `resume` — «Продолжить прошлую»: последний разговор агента в папке встречи. */
+  const start = async (resume = false) => {
     const t = term.current;
     if (!provider || !t) return;
     const old = session.current;
@@ -483,7 +484,7 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
     setCode(null);
     setError(null);
     try {
-      const sid = await agentSpawn(id, provider, t.cols, t.rows);
+      const sid = await agentSpawn(id, provider, t.cols, t.rows, resume);
       if (mine !== attempt.current) {
         agentKill(sid).catch(() => {});
         return;
@@ -659,6 +660,8 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
   }
 
   const active = phase === "starting" || phase === "running" || phase === "stopping";
+  /** В папке встречи уже работал этот агент (метка резидента) — можно продолжить. */
+  const hadSession = !!provider && !!context?.sessions?.includes(provider);
   return (
     <div className="agent" ref={root} tabIndex={-1}>
       <div className="agent__bar">
@@ -685,6 +688,11 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
             Агент может читать файлы, создавать их в папке встречи и выполнять команды. Что требует подтверждения,
             определяют настройки самого агента.
           </TipLine>
+          <TipLine>
+            Если агент уже работал с этой встречей, «Продолжить прошлую» возвращает к последнему разговору в её папке
+            (Claude Code — <code>--continue</code>, Codex — <code>resume --last</code>); «Новая сессия» начинает
+            разговор заново.
+          </TipLine>
           <TipLine>Копировать — Ctrl+Shift+C, вставить — Ctrl+Shift+V или правой кнопкой мыши.</TipLine>
           <TipLine>Агент останавливается, когда вы закрываете карточку встречи или окно приложения.</TipLine>
         </HelpTip>
@@ -694,9 +702,14 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
             <Button onClick={stop} disabled={phase !== "running"}>Остановить</Button>
           </>
         ) : (
-          <Button variant="primary" onClick={() => void start()} disabled={!ready || !provider || nothing}>
-            Запустить
-          </Button>
+          <>
+            <Button variant="primary" onClick={() => void start()} disabled={!ready || !provider || nothing}>
+              {hadSession ? "Новая сессия" : "Запустить"}
+            </Button>
+            {hadSession && (
+              <Button onClick={() => void start(true)} disabled={!ready || nothing}>Продолжить прошлую</Button>
+            )}
+          </>
         )}
         <span className="agent__phase" role="status">
           <span className={`agent__dot${phase === "running" ? " agent__dot--run" : ""}`} aria-hidden="true" />

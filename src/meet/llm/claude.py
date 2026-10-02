@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 from meet import netproxy
-from meet.llm.base import TIMEOUT_ERROR, AgentReply
+from meet.llm.base import TIMEOUT_ERROR, AgentReply, drop_session_markers
 from meet.llm.detect import find_claude
 
 log = logging.getLogger(__name__)
@@ -97,6 +97,8 @@ async def run(
     )
 
     drop_api_key()
+    # Как и ключ — из окружения своего процесса (SDK переменные только добавляет).
+    drop_session_markers(os.environ)
     options = ClaudeAgentOptions(
         env=netproxy.prepare(proxy),
         system_prompt=system_prompt,

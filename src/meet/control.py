@@ -915,9 +915,10 @@ _PATTERNS = (
     # «Предложить название»: только предложение, применяет окно (PATCH записи).
     ("POST", re.compile(r"^/recordings/([^/]+)/title/suggest$"),
      lambda h, p, rid: _server_of(h).state.suggest_title(unquote(rid))),
-    # Вкладка «Агент»: transcript.md в папке записи перед запуском Claude Code / Codex.
+    # Вкладка «Агент»: transcript.md в папке записи перед запуском Claude Code / Codex;
+    # тело {"provider": …} — метка «здесь работал агент» в meta.json.
     ("POST", re.compile(r"^/recordings/([^/]+)/agent-context$"),
-     lambda h, p, rid: _server_of(h).state.agent_context(unquote(rid))),
+     lambda h, p, rid: _server_of(h).state.agent_context(unquote(rid), h._body())),
     # Что получит агент (строка «Контекст: …»), без записи файлов.
     ("GET", re.compile(r"^/recordings/([^/]+)/agent-context$"),
      lambda h, p, rid: _server_of(h).state.agent_files(unquote(rid))),

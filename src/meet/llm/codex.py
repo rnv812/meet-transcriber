@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 from meet import netproxy
-from meet.llm.base import EMPTY_ERROR, TIMEOUT_ERROR, AgentReply
+from meet.llm.base import EMPTY_ERROR, TIMEOUT_ERROR, AgentReply, drop_session_markers
 from meet.llm.detect import find_codex
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
@@ -116,9 +116,10 @@ async def run(
     if exe is None:
         return AgentReply(text="", error="не найден Codex CLI (codex)")
     stdin_text = f"{system_prompt}\n\n{prompt}"
+    env = netproxy.child_env(proxy)
+    drop_session_markers(env)  # сеанс сам по себе, не «вложенный» (llm.base)
     reply = await asyncio.to_thread(
-        _exec, exe, _workdir(allowed_dirs, cwd), stdin_text, timeout_s,
-        netproxy.child_env(proxy), effort,
+        _exec, exe, _workdir(allowed_dirs, cwd), stdin_text, timeout_s, env, effort,
     )
     reply.error = netproxy.with_hint(reply.error)
     return reply

@@ -406,8 +406,9 @@ export const getQa = (ep: Endpoint, id: string) => json<{ items: QaItem[] }>(ep,
  * расшифровки ещё нет, агент получит ленту живого режима; пустой список —
  * агенту пока нечего дать.
  */
+/** `sessions` — агенты, уже работавшие в папке встречи (нет поля — ни одного). */
 export const getAgentContext = (ep: Endpoint, id: string) =>
-  json<{ files: string[]; live: boolean }>(ep, `/recordings/${enc(id)}/agent-context`);
+  json<{ files: string[]; live: boolean; sessions?: string[] }>(ep, `/recordings/${enc(id)}/agent-context`);
 export const getAssistant = (ep: Endpoint) => json<AssistantInfo>(ep, "/assistant");
 /** Короткий вызов модели — до полутора минут. */
 export const checkProvider = (ep: Endpoint, provider: string) =>

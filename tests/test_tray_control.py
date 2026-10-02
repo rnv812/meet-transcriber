@@ -1574,6 +1574,25 @@ def test_agent_files_lists_without_writing(control_state, tmp_path, monkeypatch)
         "transcript.md", "summary.md", "analysis.json"]
 
 
+def test_agent_session_mark_is_written_and_listed(control_state, tmp_path, monkeypatch):
+    """Запуск агента помечает папку (meta.json, `agent_sessions`): по метке
+    вкладка предлагает «Продолжить прошлую». Без метки поля `sessions` нет."""
+    from meet import library
+
+    folder = _agent_folder(tmp_path, control_state, monkeypatch)
+    assert "sessions" not in control_state.agent_files(folder.name)
+    control_state.agent_context(folder.name)  # прежняя оболочка: без провайдера
+    control_state.agent_context(folder.name, {"provider": "строка"})
+    assert "agent_sessions" not in library.read_meta(folder)
+    control_state.agent_context(folder.name, {"provider": "codex"})
+    assert control_state.agent_files(folder.name)["sessions"] == ["codex"]
+    control_state.agent_context(folder.name, {"provider": "claude-code"})
+    meta = library.read_meta(folder)
+    assert set(meta["agent_sessions"]) == {"claude-code", "codex"}
+    assert meta["title"] == "Планирование спринта"  # остальная meta на месте
+    assert control_state.agent_files(folder.name)["sessions"] == ["claude-code", "codex"]
+
+
 def test_agent_files_without_transcript_is_empty(control_state, tmp_path, monkeypatch):
     folder = _saved_folder(tmp_path)
     monkeypatch.setattr(control_state, "_root", lambda: folder.parent)
