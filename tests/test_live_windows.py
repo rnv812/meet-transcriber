@@ -159,3 +159,15 @@ def test_stats_line_has_timing_but_no_text(tmp_path):
     line = engine.stats_line()
     assert "GigaAM" in line and "окон 1" in line and "окно" not in line.split("окон")[0]
     assert "с на секунду" in line
+
+
+def test_window_ends_at_the_first_pause_after_the_middle_without_waiting_for_7_s(tmp_path):
+    """Набралось больше 5,5 с и после 4 с была пауза — окно уходит сразу, не
+    дожидаясь 7 с: последнее слово окна не ждёт лишнего."""
+    asr = FakeGigaam()
+    engine, buf, _ = _engine(tmp_path, asr)
+    buf.push(tone(4.6).tobytes())
+    buf.push(quiet(0.4).tobytes())
+    buf.push(tone(0.6).tobytes())                       # 5,6 с в очереди
+    assert engine.step() == 1
+    assert 4.6 <= asr.windows[0][1] <= 5.0              # по паузе 4,6–5,0

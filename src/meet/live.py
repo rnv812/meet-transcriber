@@ -321,16 +321,23 @@ class LiveEngine:
     def _next_window(self, tr: dict, final: bool):
         """Созревшее окно дорожки: (звук, начало в секундах) или None.
 
-        Обычно — когда набралось `max_s`: резка в паузе между `min_s` и
+        Набралось больше середины между `min_s` и `max_s` и после `min_s`
+        была пауза между словами — окно до неё (не ждём `max_s`); набралось
+        `max_s` — резка в паузе или самом тихом месте между `min_s` и
         `max_s`. Отстали (в очереди больше `behind_s`) — окно до `merge_s`.
         `final` — забрать всё, что есть (вопрос, остановка)."""
+        from meet.gigaam_asr import find_pause, quiet_cut
+
         rate = tr["rate"]
         have = tr["pending_n"] / rate
         if final:
             return self._take(tr, None) if have >= TAIL_MIN_S else None
         policy = self.policy
-        if have < policy.max_s:
+        if have < (policy.min_s + policy.max_s) / 2:
             return None
+        if have < policy.max_s:
+            cut = find_pause(self._audio(tr), rate, policy.min_s, have)
+            return self._take(tr, cut) if cut is not None else None
         if have > BACKLOG_MAX_S:
             skip = have - policy.merge_s
             self._take(tr, skip)
@@ -342,8 +349,6 @@ class LiveEngine:
             lo = max(policy.min_s, hi - 5.0)
         else:
             lo, hi = policy.min_s, policy.max_s
-        from meet.gigaam_asr import quiet_cut
-
         cut = quiet_cut(self._audio(tr)[: int(hi * rate) + 1], rate, lo, hi)
         return self._take(tr, cut)
 

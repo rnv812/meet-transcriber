@@ -1,6 +1,7 @@
 """Выбор и работа распознавания живого режима (GigaAM / Whisper).
 Модели поддельные; звук синтетический."""
 
+import sys
 import types
 import wave
 
@@ -89,6 +90,9 @@ class FakeModel:
 
     def transcribe(self, path, word_timestamps=False):
         assert word_timestamps is True
+        if path.endswith("warm.wav"):  # прогрев при загрузке
+            self.warmed = True
+            return types.SimpleNamespace(text="", words=[])
         if self.fail:
             self.fail -= 1
             raise RuntimeError("модель упала")
@@ -142,7 +146,7 @@ def test_no_speech_or_silence_never_reaches_the_model():
     g.load()
     assert g.transcribe_window(np.full(SR, 0.1, dtype=np.float32)) == []
     assert g.transcribe_window(np.zeros(SR, dtype=np.float32)) == []
-    assert model.paths == []
+    assert model.paths == [] and model.warmed  # прогрев — при загрузке, не на окне
     g.unload()
 
 
@@ -215,3 +219,36 @@ def test_text_fixes_never_break_a_window(monkeypatch):
     seg = asr.Segment(0.0, 1.0, "текст")
     fixes = live_asr.TextFixes([{"from": "а", "to": "б"}], ["API"], latin=True)
     assert fixes([seg], latin=True) == [seg] and seg.text == "текст"
+
+
+def test_find_pause_only_reports_real_pauses():
+    rng = np.random.default_rng(0)
+    speech = lambda s: rng.normal(0, 0.3, int(s * SR)).astype(np.float32)  # noqa: E731
+    pause = lambda s: rng.normal(0, 0.001, int(s * SR)).astype(np.float32)  # noqa: E731
+    assert gigaam_asr.find_pause(speech(8.0), SR, 4.0, 7.0) is None
+    audio = np.concatenate([speech(4.6), pause(0.4), speech(1.0)])
+    assert 4.6 <= gigaam_asr.find_pause(audio, SR, 4.0, len(audio) / SR) <= 5.0
+
+
+def test_in_process_wav_reads_our_wav_without_ffmpeg(monkeypatch, tmp_path):
+    """Окно живого режима GigaAM читает без процесса ffmpeg: подмена
+    `gigaam.model.load_audio` читает свой wav (16 кГц, моно, PCM16) модулем
+    wave, остальное — прежним путём."""
+    calls = []
+    fake_model = types.ModuleType("gigaam.model")
+    fake_model.load_audio = lambda path, sample_rate=16000: calls.append(path) or "ffmpeg"
+    fake_pkg = types.ModuleType("gigaam")
+    fake_pkg.model = fake_model
+    monkeypatch.setitem(sys.modules, "gigaam", fake_pkg)
+    monkeypatch.setitem(sys.modules, "gigaam.model", fake_model)
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(from_numpy=lambda a: a))
+    assert gigaam_asr.in_process_wav() is True
+    assert gigaam_asr.in_process_wav() is True            # повторно — без второй обёртки
+    ours = tmp_path / "w.wav"
+    gigaam_asr._write_wav(ours, (np.ones(SR) * 1000).astype(np.int16), SR)
+    got = fake_model.load_audio(str(ours))
+    assert len(got) == SR and abs(float(got[0]) - 1000 / 32768) < 1e-6 and calls == []
+    other = tmp_path / "x.wav"
+    with wave.open(str(other), "wb") as w:                # 44,1 кГц — не наш формат
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(44100); w.writeframes(b"\0\0" * 10)
+    assert fake_model.load_audio(str(other)) == "ffmpeg" and calls == [str(other)]

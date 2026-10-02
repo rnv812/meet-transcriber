@@ -386,26 +386,57 @@ def _split_long(start: float, end: float, audio, sr: int) -> list[Chunk]:
     return out
 
 
-def quiet_cut(audio, sr: int, lo_s: float, hi_s: float) -> float:
-    """Где резать звук между lo_s и hi_s секундами (от начала `audio`):
-    в паузе между словами (последней, см. _pause_in), а нет паузы — в самом
-    тихом кадре. Для окон живого режима: окно кончается там, где человек
-    замолчал, а не посреди слова. → секунды от начала."""
+def _quiet_level(energy):
     import numpy as np
 
+    median = float(np.median(energy)) if len(energy) else 0.0
+    return QUIET_RATIO * median if median > 0 else float("inf")
+
+
+def _latest_run(window, quiet: float) -> float | None:
+    """Середина последней паузы (не короче PAUSE_S тихих кадров) или None."""
+    need = max(1, int(round(PAUSE_S / FRAME_S)))
+    best, run_start = None, None
+    for i, q in enumerate(list(window <= quiet) + [False]):
+        if q and run_start is None:
+            run_start = i
+        elif not q and run_start is not None:
+            if i - run_start >= need:
+                best = (run_start + i) / 2
+            run_start = None
+    return best
+
+
+def find_pause(audio, sr: int, lo_s: float, hi_s: float) -> float | None:
+    """Последняя пауза между словами между lo_s и hi_s секундами (от начала
+    `audio`) или None — только настоящая пауза, не просто тихий кадр."""
+    hi_s = min(hi_s, len(audio) / sr)
+    lo_s = min(max(0.0, lo_s), hi_s)
+    energy = _frame_energy(audio[: int(hi_s * sr)], sr)
+    lo, hi = int(lo_s / FRAME_S), int(hi_s / FRAME_S)
+    if hi <= lo or not len(energy):
+        return None
+    at = _latest_run(energy[lo:hi], _quiet_level(energy))
+    return None if at is None else min(hi_s, (lo + at) * FRAME_S)
+
+
+def quiet_cut(audio, sr: int, lo_s: float, hi_s: float) -> float:
+    """Где резать звук между lo_s и hi_s секундами (от начала `audio`): в
+    последней паузе между словами (find_pause), а нет паузы — в самом тихом
+    кадре. Для окон живого режима: окно кончается там, где человек замолчал,
+    а не посреди слова. → секунды от начала."""
+    import numpy as np
+
+    at = find_pause(audio, sr, lo_s, hi_s)
+    if at is not None:
+        return at
     hi_s = min(hi_s, len(audio) / sr)
     lo_s = min(max(0.0, lo_s), hi_s)
     energy = _frame_energy(audio[: int(hi_s * sr)], sr)
     lo, hi = int(lo_s / FRAME_S), int(hi_s / FRAME_S)
     if hi <= lo or not len(energy):
         return hi_s
-    median = float(np.median(energy))
-    quiet = QUIET_RATIO * median if median > 0 else float("inf")
-    window = energy[lo:hi]
-    at = _pause_in(window, quiet)
-    if at is None:
-        at = int(np.argmin(window)) + 0.5
-    return min(hi_s, max(lo_s, (lo + at) * FRAME_S))
+    return min(hi_s, max(lo_s, (lo + int(np.argmin(energy[lo:hi])) + 0.5) * FRAME_S))
 
 
 def plan_chunks(regions: list[tuple[float, float]], audio, sr: int = SAMPLE_RATE) -> list[Chunk]:
@@ -537,6 +568,47 @@ def _proto_tokenizer() -> None:
         load = Load
 
     decoding.SentencePieceProcessor = FromBytes
+
+
+def in_process_wav() -> bool:
+    """Свои wav (16 кГц, моно, PCM16) GigaAM читает в процессе, без ffmpeg.
+
+    `model.transcribe(path)` грузит файл через `gigaam.load_audio` — это
+    новый процесс ffmpeg на каждый вызов. Для окна живого режима (~5 с) это
+    ~0,06 с из ~0,5 с и, главное, редкие зависания запуска процесса на
+    десятки секунд (замер M10 на CPU: 2 окна из ~140 по 25–30 с, в памяти —
+    ни одного). Подменяем имя `load_audio` в модуле модели GigaAM: файл
+    нужного формата читается модулем `wave`, любой другой — прежним путём.
+    Точки подмены нет — ничего не меняем (ffmpeg, как раньше). → True —
+    подмена стоит."""
+    try:
+        import gigaam.model as model_mod
+    except Exception:
+        return False
+    base = getattr(model_mod, "load_audio", None)
+    if base is None:
+        return False
+    if getattr(base, "_meet_wav", False):
+        return True
+
+    def load_audio(audio_path, sample_rate: int = SAMPLE_RATE):
+        import wave
+
+        import numpy as np
+        import torch
+
+        try:
+            with wave.open(str(audio_path), "rb") as wf:
+                if (wf.getframerate(), wf.getnchannels(), wf.getsampwidth()) == (sample_rate, 1, 2):
+                    pcm = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+                    return torch.from_numpy(pcm.astype(np.float32) / 32768.0)
+        except (OSError, EOFError, wave.Error):
+            pass
+        return base(audio_path, sample_rate)
+
+    load_audio._meet_wav = True
+    model_mod.load_audio = load_audio
+    return True
 
 
 def load(name: str = MODEL_NAME, device: str = "cpu", on_line=None):
