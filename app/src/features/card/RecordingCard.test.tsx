@@ -39,6 +39,11 @@ async function more(item: string) {
   }
   await userEvent.click(screen.getByRole("menuitem", { name: item }));
 }
+
+/** Ответ в окне подтверждения. */
+async function answer(button: string) {
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: button }));
+}
 const ep = { base: "/api", token: null };
 const transcript: Transcript = {
   version: 1, title: null,
@@ -130,8 +135,8 @@ test("удаление во время расшифровки: ошибка ви
   render(<RecordingCard id="r1" endpoint={ep} onDeleted={onDeleted} />);
   await screen.findByText("Привет всем");
   await more("Удалить…");
-  expect(screen.getByText("Удалить запись и расшифровку? Это действие нельзя отменить.")).toBeInTheDocument();
-  await more("Удалить");
+  expect(screen.getByRole("alertdialog", { name: "Удалить запись?" })).toHaveTextContent("нельзя отменить");
+  await answer("Удалить");
   expect(await screen.findByRole("alert")).toHaveTextContent("идёт расшифровка, подождите");
   expect(onDeleted).not.toHaveBeenCalled();
 });
@@ -143,7 +148,7 @@ test("удаление: onDeleted после успеха", async () => {
   render(<RecordingCard id="r1" endpoint={ep} onDeleted={onDeleted} />);
   await screen.findByText("Привет всем");
   await more("Удалить…");
-  await more("Удалить");
+  await answer("Удалить");
   await waitFor(() => expect(onDeleted).toHaveBeenCalled());
 });
 
@@ -159,7 +164,7 @@ test("failed import: «Повторить» зовёт transcribe", async () => 
   await userEvent.click(screen.getByRole("button", { name: "Повторить" }));
   expect(api.transcribe).toHaveBeenCalledWith(ep, "r1");
   await more("Удалить…");
-  expect(screen.getByRole("menuitem", { name: "Удалить" })).toBeInTheDocument();
+  expect(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Удалить" })).toBeInTheDocument();
 });
 
 test("untranscribed: пустое состояние и «Расшифровать»", async () => {
@@ -227,7 +232,7 @@ test("экспорт srt сохраняет файл", async () => {
   render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
   await userEvent.click(screen.getByRole("button", { name: /Экспорт/ }));
-  await userEvent.click(screen.getByRole("menuitem", { name: "srt" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Субтитры (.srt)" }));
   await waitFor(() => expect(shell.saveText).toHaveBeenCalledWith("Acme.srt", "1\n..."));
   expect(api.exportRecording).toHaveBeenCalledWith(ep, "r1", "srt");
 });
@@ -310,7 +315,7 @@ test("удаление: плеер отпускает файл до запрос
     return { ok: true };
   });
   await more("Удалить…");
-  await more("Удалить");
+  await answer("Удалить");
   expect(api.deleteRecording).toHaveBeenCalled();
   expect(srcAtDelete).toBeNull();
 });
@@ -323,7 +328,7 @@ test("удаление: агент во вкладке «Агент» гасит
   render(<RecordingCard id="r1" endpoint={ep} onDeleted={() => {}} />);
   await screen.findByText("Привет всем");
   await more("Удалить…");
-  await more("Удалить");
+  await answer("Удалить");
   await waitFor(() => expect(order).toEqual(["kill r1", "delete"]));
 });
 
@@ -449,12 +454,12 @@ test("«Перерасшифровать» спрашивает подтверж
   await screen.findByText("Привет всем");
   await more("Перерасшифровать…");
   expect(api.transcribe).not.toHaveBeenCalled();
-  expect(screen.getByText(
-    "Расшифровка будет создана заново: ручные правки и имена, не сохранённые в базе голосов, будут потеряны. Продолжить?")).toBeInTheDocument();
-  await more("Отмена");
+  expect(screen.getByRole("alertdialog", { name: "Перерасшифровать запись?" })).toHaveTextContent(
+    "Расшифровка будет создана заново: ручные правки и имена, не сохранённые в базе голосов, будут потеряны.");
+  await answer("Отмена");
   expect(api.transcribe).not.toHaveBeenCalled();
   await more("Перерасшифровать…");
-  await more("Перерасшифровать");
+  await answer("Перерасшифровать");
   await waitFor(() => expect(api.transcribe).toHaveBeenCalledWith(ep, "r1"));
 });
 

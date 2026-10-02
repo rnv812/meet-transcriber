@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { VoicesPane } from "./VoicesPane";
 import * as api from "../../lib/api";
@@ -119,6 +119,10 @@ test("сброс к инициалам: deleteAvatar и onAvatar", async () => {
   await userEvent.click(screen.getByText("Демьян"));
   await userEvent.click(await screen.findByRole("button", { name: "Аватар" }));
   await userEvent.click(screen.getByRole("button", { name: "Сбросить к инициалам" }));
+  // Сначала подтверждение: фотография пропадёт.
+  expect(api.deleteAvatar).not.toHaveBeenCalled();
+  await userEvent.click(within(screen.getByRole("alertdialog", { name: "Убрать фотографию?" }))
+    .getByRole("button", { name: "Убрать" }));
   await waitFor(() => expect(api.deleteAvatar).toHaveBeenCalledWith(ep, "Демьян"));
   expect(onAvatar).toHaveBeenCalledWith("Демьян");
 });
@@ -165,8 +169,9 @@ test("объединение: выбор, подтверждение, mergePerso
   setup(people, { onChanged });
   await userEvent.click(screen.getByText("Аркаша"));
   await userEvent.selectOptions(await screen.findByLabelText("Объединить с…"), "Аркадий");
+  expect(screen.getByRole("alertdialog")).toHaveAccessibleName(/^Объединить «.+» с «Аркадий»\?$/);
   expect(api.mergePerson).not.toHaveBeenCalled();
-  await userEvent.click(screen.getByRole("button", { name: "Да" }));
+  await userEvent.click(screen.getByRole("button", { name: /^(Объединить|Удалить)$/ }));
   await waitFor(() => expect(api.mergePerson).toHaveBeenCalledWith(ep, "Аркаша", "Аркадий"));
   expect(onChanged).toHaveBeenCalled();
 });
@@ -176,7 +181,7 @@ test("удаление: подтверждение, deletePerson, карточк
   setup();
   await userEvent.click(screen.getByText("Демьян"));
   await userEvent.click(await screen.findByRole("button", { name: "Удалить голос" }));
-  await userEvent.click(screen.getByRole("button", { name: "Да" }));
+  await userEvent.click(screen.getByRole("button", { name: /^(Объединить|Удалить)$/ }));
   await waitFor(() => expect(api.deletePerson).toHaveBeenCalledWith(ep, "Демьян"));
   expect(document.querySelector(".pcard")).toBeNull();
 });

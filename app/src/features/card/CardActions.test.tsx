@@ -59,7 +59,7 @@ test("«Ещё действия»: меню с клавиатуры — фоку
   await userEvent.keyboard("{Enter}");
   const menu = screen.getByRole("menu", { name: "Ещё действия с записью" });
   expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual([
-    "Переразделить на спикеров…", "Перерасшифровать…", "Переанализировать", "Предложить название", "Удалить…",
+    "Переразделить на спикеров…", "Перерасшифровать…", "Переанализировать…", "Предложить название", "Удалить…",
   ]);
   // Удаление отделено чертой и стоит последним.
   expect(within(menu).getByRole("separator")).toBeInTheDocument();
@@ -79,30 +79,53 @@ test("пунктов нет, если действие недоступно", as
   expect(screen.getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["Удалить…"]);
 });
 
-test("«Удалить…» спрашивает подтверждение в том же меню", async () => {
+test("«Удалить…» спрашивает подтверждение общим окном", async () => {
   const p = setup();
   await userEvent.click(screen.getByRole("button", { name: "Ещё действия" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Удалить…" }));
-  expect(screen.getByRole("menu")).toHaveTextContent("Удалить запись и расшифровку? Это действие нельзя отменить.");
-  // Подтверждение: фокус на «Отмена» (два Enter не удаляют), предупреждение связано с меню.
-  expect(screen.getByRole("menuitem", { name: "Отмена" })).toHaveFocus();
-  expect(screen.getByRole("menu")).toHaveAccessibleDescription("Удалить запись и расшифровку? Это действие нельзя отменить.");
-  expect(p.onDelete).not.toHaveBeenCalled();
-  await userEvent.click(screen.getByRole("menuitem", { name: "Отмена" }));
-  expect(screen.getByRole("menuitem", { name: "Удалить…" })).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("menuitem", { name: "Удалить…" }));
-  await userEvent.click(screen.getByRole("menuitem", { name: "Удалить" }));
-  expect(p.onDelete).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole("menu")).toBeNull();
+  const ask = screen.getByRole("alertdialog", { name: "Удалить запись?" });
+  expect(ask).toHaveAccessibleDescription(/нельзя отменить/);
+  // Фокус на «Отмена» (два Enter не удаляют), Esc — отмена.
+  expect(within(ask).getByRole("button", { name: "Отмена" })).toHaveFocus();
+  await userEvent.keyboard("{Escape}");
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(p.onDelete).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Ещё действия" })).toHaveFocus();
+  await userEvent.click(screen.getByRole("button", { name: "Ещё действия" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Удалить…" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Удалить" }));
+  expect(p.onDelete).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("alertdialog")).toBeNull();
 });
 
 test("«Перерасшифровать…» предупреждает о потере правок", async () => {
   const p = setup();
   await userEvent.click(screen.getByRole("button", { name: "Ещё действия" }));
   await userEvent.click(screen.getByRole("menuitem", { name: "Перерасшифровать…" }));
-  expect(screen.getByRole("menu")).toHaveTextContent(/ручные правки и имена/);
-  await userEvent.click(screen.getByRole("menuitem", { name: "Перерасшифровать" }));
+  const ask = screen.getByRole("alertdialog", { name: "Перерасшифровать запись?" });
+  expect(ask).toHaveTextContent(/ручные правки и имена/);
+  await userEvent.click(within(ask).getByRole("button", { name: "Перерасшифровать" }));
   expect(p.onRetranscribe).toHaveBeenCalledTimes(1);
+});
+
+test("«Переанализировать…» говорит, что разметка будет заменена", async () => {
+  const p = setup({ onReanalyze: vi.fn() });
+  await userEvent.click(screen.getByRole("button", { name: "Ещё действия" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Переанализировать…" }));
+  const ask = screen.getByRole("alertdialog", { name: "Разметить встречу заново?" });
+  expect(ask).toHaveTextContent(/базу знаний/);
+  expect(p.onReanalyze).not.toHaveBeenCalled();
+  await userEvent.click(within(ask).getByRole("button", { name: "Переанализировать" }));
+  expect(p.onReanalyze).toHaveBeenCalledTimes(1);
+});
+
+test("«Анализировать» без прежней разметки — сразу, без вопроса", async () => {
+  const p = setup({ onReanalyze: vi.fn(), reanalyzeLabel: "Анализировать" });
+  await userEvent.click(screen.getByRole("button", { name: "Ещё действия" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Анализировать" }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(p.onReanalyze).toHaveBeenCalledTimes(1);
 });
 
 test("«Переразделить на спикеров…» и папка", async () => {
@@ -118,7 +141,8 @@ test("экспорт: меню форматов с клавиатуры", async 
   const p = setup();
   await userEvent.click(screen.getByRole("button", { name: "Экспорт" }));
   const menu = screen.getByRole("menu", { name: "Формат экспорта" });
-  expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(["md", "txt", "srt"]);
+  expect(within(menu).getAllByRole("menuitem").map((i) => i.textContent)).toEqual(
+    ["Markdown (.md)", "Текст (.txt)", "Субтитры (.srt)"]);
   expect(within(menu).getAllByRole("menuitem")[0]).toHaveFocus();
   await userEvent.keyboard("{ArrowUp}{Enter}");
   expect(p.onExport).toHaveBeenCalledWith("srt");

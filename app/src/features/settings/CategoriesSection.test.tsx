@@ -109,14 +109,14 @@ test("добавить: фокус в название, id появляется 
 test("удаление — с подтверждением и числом встреч", async () => {
   await open();
   await userEvent.click(screen.getByRole("button", { name: "Удалить «Дейлик»" }));
-  const alert = screen.getByRole("alert");
-  expect(alert).toHaveTextContent("У 4 встреч эта категория будет снята. Удалить категорию «Дейлик»?");
+  const alert = screen.getByRole("alertdialog", { name: "Удалить категорию «Дейлик»?" });
+  expect(alert).toHaveTextContent("У 4 встреч эта категория будет снята.");
   expect(within(alert).getByRole("button", { name: "Отмена" })).toHaveFocus();
   await userEvent.keyboard("{Enter}");
   expect(names()).toEqual(["Дейлик", "Ретроспектива"]);
   await userEvent.click(screen.getByRole("button", { name: "Удалить «Ретроспектива»" }));
-  expect(screen.getByRole("alert")).toHaveTextContent("У 1 встречи эта категория будет снята.");
-  await userEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "Удалить" }));
+  expect(screen.getByRole("alertdialog")).toHaveTextContent("У 1 встречи эта категория будет снята.");
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Удалить" }));
   expect(names()).toEqual(["Дейлик"]);
   await save();
   await waitFor(() => expect(sent()).toEqual([saved[0]]));
@@ -125,9 +125,12 @@ test("удаление — с подтверждением и числом вс�
 test("«Сбросить к стандартным» возвращает стандартный список", async () => {
   await open();
   await userEvent.click(screen.getByRole("button", { name: "Удалить «Дейлик»" }));
-  await userEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "Удалить" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Сбросить к стандартным" })).toBeEnabled());
-  await userEvent.click(screen.getByRole("button", { name: "Сбросить к стандартным" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Удалить" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Сбросить к стандартным…" })).toBeEnabled());
+  await userEvent.click(screen.getByRole("button", { name: "Сбросить к стандартным…" }));
+  expect(names()).toEqual(["Ретроспектива"]);
+  await userEvent.click(within(screen.getByRole("alertdialog", { name: "Вернуть стандартные категории?" }))
+    .getByRole("button", { name: "Сбросить" }));
   expect(names()).toEqual(["Дейлик", "Планирование", "Ретроспектива"]);
   await save();
   await waitFor(() => expect(sent()).toEqual(defaults));
@@ -169,5 +172,5 @@ test("счётчики не пришли — подтверждение удал
   vi.mocked(api.getCategoriesInfo).mockRejectedValue(new Error("нет связи"));
   await open();
   await userEvent.click(screen.getByRole("button", { name: "Удалить «Дейлик»" }));
-  expect(screen.getByRole("alert")).toHaveTextContent("Встречи с этой категорией будут показаны «Без категории».");
+  expect(screen.getByRole("alertdialog")).toHaveTextContent("Встречи с этой категорией будут показаны «Без категории».");
 });

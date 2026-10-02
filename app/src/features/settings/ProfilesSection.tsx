@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { deleteAllProfiles, getProfilesInfo, type Endpoint } from "../../lib/api";
 import { errorText, plural } from "../../lib/format";
 import { Button } from "../../ui/Button";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Row, Switch, type Raw, type SetFn } from "./Section";
 import "./profiles.css";
@@ -118,18 +119,16 @@ export function ProfilesSection({ draft, set, endpoint }: { draft: Raw; set: Set
           : count === 0 ? "Сохранённых профилей нет"
             : `Сохранено: ${count} ${plural(count, "профиль", "профиля", "профилей")} — удалятся вместе с вашими `
               + "заметками и индексом реплик"}>
-        {confirmDelete ? (
-          <span className="confirm" role="alertdialog" aria-label="Удалить все профили">
-            <span>Удалить без возврата?</span>
-            <Button variant="danger" onClick={() => void removeAll()}>Удалить</Button>
-            <Button onClick={() => setConfirmDelete(false)} autoFocus>Отмена</Button>
-          </span>
-        ) : (
-          <Button variant="danger" onClick={() => { setNotice(null); setConfirmDelete(true); }} disabled={count === 0}>
-            Удалить все профили
-          </Button>
-        )}
+        <Button variant="danger" onClick={() => { setNotice(null); setConfirmDelete(true); }} disabled={count === 0}>
+          Удалить все профили…
+        </Button>
       </Row>
+      {confirmDelete && (
+        <ConfirmDialog title="Удалить все профили?" confirmLabel="Удалить"
+          message={`${count ? `${count} ${plural(count, "профиль", "профиля", "профилей")}, ` : "Профили, "}`
+            + "ваши заметки о людях и индекс реплик будут удалены без возврата."}
+          onCancel={() => setConfirmDelete(false)} onConfirm={() => void removeAll()} />
+      )}
       {notice && <p className="notice" role="status">{notice}</p>}
       {error && <p className="error" role="alert">{error}</p>}
     </>

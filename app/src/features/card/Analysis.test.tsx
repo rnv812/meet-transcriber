@@ -71,7 +71,9 @@ test("AnalysisStatus: идёт, устарел, не удался", async () => 
   expect(screen.getByRole("status")).toHaveTextContent("Анализ в очереди…");
   rerender(<AnalysisStatus state={{ state: "stale" }} busy={false} onRun={onRun} />);
   expect(screen.getByRole("status")).toHaveTextContent("Анализ устарел");
-  await userEvent.click(screen.getByRole("button", { name: "Переанализировать" }));
+  await userEvent.click(screen.getByRole("button", { name: "Переанализировать…" }));
+  await userEvent.click(within(screen.getByRole("alertdialog", { name: "Разметить встречу заново?" }))
+    .getByRole("button", { name: "Переанализировать" }));
   rerender(<AnalysisStatus state={{ state: "failed", error: "таймаут вызова модели" }} busy={false} onRun={onRun} />);
   expect(screen.getByRole("status")).toHaveTextContent("Анализ не удался");
   expect(screen.getByText("Анализ не удался")).toHaveAttribute("title", "таймаут вызова модели");
@@ -103,7 +105,7 @@ test("карточка: идёт анализ — «Анализ…», «Пер�
   await screen.findByText("Начнём с беты");
   expect(screen.getByText("Анализ…")).toBeInTheDocument();
   const menu = await openMore();
-  const item = within(menu).getByRole("menuitem", { name: "Переанализировать" });
+  const item = within(menu).getByRole("menuitem", { name: "Переанализировать…" });
   expect(item).toBeDisabled();
   expect(item).toHaveAttribute("title", "Анализ уже идёт");
 });
@@ -124,7 +126,9 @@ test("карточка: устаревший анализ — «Переанал
   load();
   render(<RecordingCard id="r1" endpoint={ep} />);
   expect(await screen.findByText(/Анализ устарел/)).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Переанализировать" }));
+  await userEvent.click(screen.getByRole("button", { name: "Переанализировать…" }));
+  expect(api.runAnalysis).not.toHaveBeenCalled();
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Переанализировать" }));
   expect(api.runAnalysis).toHaveBeenCalledWith(ep, "r1");
 });
 
@@ -134,7 +138,8 @@ test("карточка: анализ не удался — тихая строк
   load();
   render(<RecordingCard id="r1" endpoint={ep} />);
   expect(await screen.findByTitle("rate_limit")).toHaveTextContent("Анализ не удался");
-  await userEvent.click(within(await openMore()).getByRole("menuitem", { name: "Переанализировать" }));
+  await userEvent.click(within(await openMore()).getByRole("menuitem", { name: "Переанализировать…" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Переанализировать" }));
   expect(api.runAnalysis).toHaveBeenCalledTimes(1);
 });
 

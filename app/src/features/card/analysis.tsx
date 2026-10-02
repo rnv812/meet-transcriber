@@ -12,6 +12,8 @@ import { ApiError, getAnalysis, patchRecording, suggestTitle, type Endpoint } fr
 import { errorText } from "../../lib/format";
 import type { AnalysisState, Job, Recording, TitleSuggestion } from "../../lib/types";
 import { Button } from "../../ui/Button";
+import { ConfirmDialog } from "../../ui/ConfirmDialog";
+import { CONFIRMS } from "./CardActions";
 import { Popover } from "../../ui/Popover";
 import "./analysis.css";
 
@@ -77,12 +79,7 @@ export function AnalysisStatus({ state, busy, onRun }: {
         </div>
       );
     case "stale":
-      return (
-        <div className="analysis-status" role="status">
-          <span className="muted">Анализ устарел: расшифровку изменили после него</span>
-          {onRun && <button type="button" className="link-btn" onClick={onRun} disabled={busy}>Переанализировать</button>}
-        </div>
-      );
+      return <StaleAnalysis busy={busy} onRun={onRun} />;
     case "failed":
       return (
         <div className="analysis-status" role="status">
@@ -94,6 +91,21 @@ export function AnalysisStatus({ state, busy, onRun }: {
     default:
       return null;
   }
+}
+
+/** «Анализ устарел» и «Переанализировать…» — с подтверждением: прежняя разметка будет заменена. */
+function StaleAnalysis({ busy, onRun }: { busy: boolean; onRun?: () => void }) {
+  const [asking, setAsking] = useState(false);
+  return (
+    <div className="analysis-status" role="status">
+      <span className="muted">Анализ устарел: расшифровку изменили после него</span>
+      {onRun && <button type="button" className="link-btn" onClick={() => setAsking(true)} disabled={busy}>Переанализировать…</button>}
+      {asking && onRun && (
+        <ConfirmDialog {...CONFIRMS.reanalyze} onCancel={() => setAsking(false)}
+          onConfirm={() => { setAsking(false); onRun(); }} />
+      )}
+    </div>
+  );
 }
 
 /** Пункт меню: встречу ещё не анализировали — «Анализировать», иначе «Переанализировать». */

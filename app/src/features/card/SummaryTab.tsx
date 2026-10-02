@@ -24,6 +24,7 @@ import { isActiveJob, modelJobsOf } from "../../lib/status";
 import type { AssistantInfo, Job, LiveDraft, Summary } from "../../lib/types";
 import { AskAgentButton } from "../../ui/AskAgent";
 import { Button } from "../../ui/Button";
+import { useConfirm } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
 import { ProviderHint, ThinkingStage, noProvider, useLostJobs } from "./assistant";
 
@@ -125,6 +126,15 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
     try { await fn(); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   };
   const make = () => act(async () => { setSubmitted(await makeSummary(endpoint, id)); });
+  const [confirmNode, confirm] = useConfirm();
+  /** «Переделать…» заменяет готовые итоги — сначала спросить. */
+  const remake = async () => {
+    const ok = await confirm({
+      title: "Переделать итоги?", confirmLabel: "Переделать", danger: false,
+      message: "Текущие итоги будут заменены новыми. Если встреча уже выгружена в базу знаний, выгрузка обновится.",
+    });
+    if (ok) await make();
+  };
   const copy = (markdown: string) => act(async () => {
     try {
       await navigator.clipboard.writeText(markdown);
@@ -143,7 +153,8 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
     main = (
       <>
         <div className="assist__toolbar">
-          <Button onClick={make} disabled={!canMake}>Переделать</Button>
+          <Button onClick={() => void remake()} disabled={!canMake}>Переделать…</Button>
+          {confirmNode}
           <Button onClick={() => copy(summary.markdown)} disabled={busy}>{copied ? "Скопировано" : "Копировать"}</Button>
           {typeof summary.created_at === "number" && (
             <span className="muted assist__when">{dayLabel(new Date(summary.created_at * 1000).toISOString())}</span>

@@ -339,15 +339,14 @@ test("«Движок и модели»: модели GigaAM — размер, в
   const ctc = modelRow("GigaAM v3 CTC — русский");
   expect(rnnt).toHaveTextContent("0.45 ГБ");
   expect(ctc).toHaveTextContent("быстрее, чуть менее точно");
-  expect(within(rnnt).getByRole("button", { name: "Выбрана" })).toBeDisabled();
+  expect(within(rnnt).getByText("Выбрана")).toBeInTheDocument();
   // Whisper и GigaAM выбираются независимо: у каждого своя «Выбрана».
-  expect(within(modelRow("Whisper large-v3 — русский fine-tune")).getByRole("button", { name: "Выбрана" }))
-    .toBeDisabled();
+  expect(within(modelRow("Whisper large-v3 — русский fine-tune")).getByText("Выбрана")).toBeInTheDocument();
   expect(within(ctc).queryByRole("button", { name: /Удалить/ })).toBeNull();
   expect(screen.getByText("C:\\data\\meet\\models\\gigaam")).toBeInTheDocument();
 
   await userEvent.click(within(ctc).getByRole("button", { name: "Выбрать" }));
-  expect(within(ctc).getByRole("button", { name: "Выбрана" })).toBeDisabled();
+  expect(within(ctc).getByText("Выбрана")).toBeInTheDocument();
   expect(within(rnnt).getByRole("button", { name: "Выбрать" })).toBeEnabled();
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
@@ -355,6 +354,11 @@ test("«Движок и модели»: модели GigaAM — размер, в
 
   const loads = vi.mocked(api.getModels).mock.calls.length;
   await userEvent.click(within(rnnt).getByRole("button", { name: "Удалить модель GigaAM v3 — русский" }));
+  // И невыбранную модель — только после подтверждения в её строке: это гигабайты повторной загрузки.
+  expect(api.removeModel).not.toHaveBeenCalled();
+  const ask = within(rnnt).getByRole("alertdialog");
+  expect(ask).toHaveTextContent("будут удалены с диска");
+  await userEvent.click(within(ask).getByRole("button", { name: "Удалить" }));
   expect(api.removeModel).toHaveBeenCalledWith(ep, "gigaam/v3_e2e_rnnt");
   await waitFor(() => expect(vi.mocked(api.getModels).mock.calls.length).toBeGreaterThan(loads));
 });
@@ -375,7 +379,7 @@ test("«Движок и модели»: скачанная GigaAM — «Скач
   await openEngine();
   await screen.findByText("GigaAM v3 — русский");
   const rnnt = modelRow("GigaAM v3 — русский");
-  expect(within(rnnt).getByRole("button", { name: "Скачана" })).toBeDisabled();
+  expect(within(rnnt).getByText("Скачана")).toBeInTheDocument();
   expect(within(rnnt).queryByRole("button", { name: "Обновить" })).toBeNull();
   const ctc = modelRow("GigaAM v3 CTC — русский");
   expect(ctc).toHaveTextContent("загрузка не завершена");
@@ -390,8 +394,8 @@ test("«Движок и модели»: удаление выбранной Giga
   await screen.findByText("GigaAM v3 — русский");
   const rnnt = modelRow("GigaAM v3 — русский");
   await userEvent.click(within(rnnt).getByRole("button", { name: "Удалить модель GigaAM v3 — русский" }));
-  const ask = screen.getByRole("alertdialog", { name: "Удалить выбранную модель" });
-  expect(ask).toHaveTextContent("используется по умолчанию — она скачается снова при следующей расшифровке");
+  const ask = within(rnnt).getByRole("alertdialog", { name: "Удалить модель «GigaAM v3 — русский»?" });
+  expect(ask).toHaveTextContent("выбрана для распознавания — она скачается снова");
   expect(api.removeModel).not.toHaveBeenCalled();
   await userEvent.click(within(ask).getByRole("button", { name: "Отмена" }));
   expect(screen.queryByRole("alertdialog")).toBeNull();

@@ -6,7 +6,7 @@
  * (⋯) — редкое и опасное: «Переразделить на спикеров…», «Перерасшифровать…»,
  * ✦ «Улучшить расшифровку», «Переанализировать», «Предложить название» и за
  * чертой «Удалить…».
- * Подтверждения — в том же меню, как у записи в списке.
+ * Подтверждения — общим окном (ui/ConfirmDialog): фокус на «Отмена», Esc — отмена.
  *
  * Узкая карточка (меньше COMPACT_PX) — подписи свёрнуты в значки; имя кнопки
  * для экранного диктора и подсказка при наведении остаются.
@@ -19,25 +19,39 @@ import {
 import { inTauri } from "../../lib/shell";
 import { useWide } from "../../live/useWide";
 import { Button } from "../../ui/Button";
+import { ConfirmDialog, type ConfirmOptions } from "../../ui/ConfirmDialog";
 import { ItemMenu, type MenuItem } from "../recordings/ItemMenu";
 
 /** Уже этого — подписи главных кнопок свёрнуты в значки. */
 export const COMPACT_PX = 360;
 
-const FORMATS: { id: string; hint: string }[] = [
-  { id: "md", hint: "Markdown: названия, спикеры и таймкоды" },
-  { id: "txt", hint: "Простой текст" },
-  { id: "srt", hint: "Субтитры для видеоплеера" },
+const FORMATS: { id: string; label: string; hint: string }[] = [
+  { id: "md", label: "Markdown (.md)", hint: "Названия, спикеры и таймкоды" },
+  { id: "txt", label: "Текст (.txt)", hint: "Простой текст" },
+  { id: "srt", label: "Субтитры (.srt)", hint: "Субтитры для видеоплеера" },
 ];
 
 const ICON = { size: 16, strokeWidth: 1.75, "aria-hidden": true } as const;
 
-const DELETE_NOTE = "Удалить запись и расшифровку? Это действие нельзя отменить.";
-const RETRANSCRIBE_NOTE = "Расшифровка будет создана заново: ручные правки и имена, не сохранённые в базе голосов, "
-  + "будут потеряны. Продолжить?";
+/** Тексты подтверждений: что именно пропадёт или будет заменено. */
+export const CONFIRMS: Record<"delete" | "retranscribe" | "reanalyze", ConfirmOptions> = {
+  delete: {
+    title: "Удалить запись?", confirmLabel: "Удалить",
+    message: "Звук, расшифровка, итоги и разметка будут удалены с диска. Это действие нельзя отменить.",
+  },
+  retranscribe: {
+    title: "Перерасшифровать запись?", confirmLabel: "Перерасшифровать",
+    message: "Расшифровка будет создана заново: ручные правки и имена, не сохранённые в базе голосов, будут потеряны.",
+  },
+  reanalyze: {
+    title: "Разметить встречу заново?", confirmLabel: "Переанализировать", danger: false,
+    message: "Главы, наблюдения и важные фрагменты будут заменены новой разметкой. "
+      + "Файлы, уже выгруженные в базу знаний, не изменятся.",
+  },
+};
 
 type Menu = { kind: "export" | "more"; at: { x: number; y: number } };
-type Confirm = "delete" | "retranscribe" | null;
+type Confirm = keyof typeof CONFIRMS | null;
 
 /** Где раскрыть меню: под кнопкой, по её левому (или правому) краю. */
 function below(el: HTMLElement | null, alignRight: boolean): { x: number; y: number } {
@@ -85,34 +99,29 @@ export function CardActions({
   const close = (focusBack = true) => {
     const kind = menu?.kind;
     setMenu(null);
-    setConfirm(null);
     if (focusBack) (kind === "export" ? exportBtn : moreBtn).current?.focus();
   };
   const toggle = (kind: Menu["kind"]) => {
     if (menu?.kind === kind) { close(); return; }
-    setConfirm(null);
     setMenu({ kind, at: below((kind === "export" ? exportBtn : moreBtn).current, kind === "more") });
   };
   const run = (fn: () => void) => () => { close(false); fn(); };
 
   const label = (text: string) => <span className={compact ? "sr-only" : "act__label"}>{text}</span>;
 
+  /** Пункт меню, который сначала спрашивает: меню закрывается, открывается подтверждение. */
+  const ask = (kind: NonNullable<Confirm>) => () => { close(false); setConfirm(kind); };
+  const confirmed = () => {
+    const kind = confirm;
+    setConfirm(null);
+    if (kind === "delete") onDelete();
+    else if (kind === "retranscribe") onRetranscribe();
+    else if (kind === "reanalyze") onReanalyze?.();
+  };
+
   let items: MenuItem[] = [];
-  let note: string | undefined;
   if (menu?.kind === "export") {
-    items = FORMATS.map((f) => ({ label: f.id, hint: f.hint, onSelect: run(() => onExport(f.id)) }));
-  } else if (confirm === "delete") {
-    note = DELETE_NOTE;
-    items = [
-      { label: "Удалить", danger: true, icon: <Trash2 {...ICON} />, onSelect: run(onDelete) },
-      { label: "Отмена", autoFocus: true, onSelect: () => setConfirm(null) },
-    ];
-  } else if (confirm === "retranscribe") {
-    note = RETRANSCRIBE_NOTE;
-    items = [
-      { label: "Перерасшифровать", icon: <RotateCcw {...ICON} />, disabled: busy, onSelect: run(onRetranscribe) },
-      { label: "Отмена", autoFocus: true, onSelect: () => setConfirm(null) },
-    ];
+    items = FORMATS.map((f) => ({ label: f.label, hint: f.hint, onSelect: run(() => onExport(f.id)) }));
   } else if (menu) {
     const opt = (on: boolean | undefined, item: MenuItem): MenuItem[] => (on ? [item] : []);
     items = [
@@ -122,7 +131,7 @@ export function CardActions({
       }),
       ...opt(canRetranscribe, {
         label: "Перерасшифровать…", icon: <RotateCcw {...ICON} />, disabled: busy,
-        hint: "Распознать запись заново", onSelect: () => setConfirm("retranscribe"),
+        hint: "Распознать запись заново", onSelect: ask("retranscribe"),
       }),
       ...opt(!!onImprove, {
         label: "Улучшить расшифровку", icon: <Sparkles {...ICON} />, disabled: busy || !!improveBlocked,
@@ -130,8 +139,11 @@ export function CardActions({
         onSelect: run(() => onImprove?.()),
       }),
       ...opt(!!onReanalyze, {
-        label: reanalyzeLabel, icon: <ScanSearch {...ICON} />, disabled: busy || !!reanalyzeBlocked,
-        hint: reanalyzeBlocked ?? "Заново разметить встречу агентом", onSelect: run(() => onReanalyze?.()),
+        // Разметки ещё нет — заменять нечего, спрашивать незачем.
+        label: reanalyzeLabel === "Анализировать" ? reanalyzeLabel : `${reanalyzeLabel}…`,
+        icon: <ScanSearch {...ICON} />, disabled: busy || !!reanalyzeBlocked,
+        hint: reanalyzeBlocked ?? "Заново разметить встречу агентом",
+        onSelect: reanalyzeLabel === "Анализировать" ? run(() => onReanalyze?.()) : ask("reanalyze"),
       }),
       ...opt(!!onSuggestTitle, {
         label: "Предложить название", icon: <WandSparkles {...ICON} />, disabled: busy,
@@ -139,7 +151,7 @@ export function CardActions({
       }),
       {
         label: "Удалить…", danger: true, separator: true, icon: <Trash2 {...ICON} />,
-        onSelect: () => setConfirm("delete"),
+        onSelect: ask("delete"),
       },
     ];
   }
@@ -152,7 +164,7 @@ export function CardActions({
     <div ref={root} className={`card__actions${compact ? " card__actions--compact" : ""}`}>
       <div className="act-group" role="group" aria-label="Главные действия">
         {canExport && (
-          <Button ref={exportBtn} className="act" title="Сохранить расшифровку файлом: md, txt или srt"
+          <Button ref={exportBtn} className="act" title="Сохранить расшифровку файлом: Markdown, текст или субтитры"
             aria-haspopup="menu" aria-expanded={menu?.kind === "export"} onClick={() => toggle("export")}>
             <Download {...ICON} />{label("Экспорт")}<ChevronDown {...ICON} size={14} className="act__chevron" />
           </Button>
@@ -172,9 +184,13 @@ export function CardActions({
           { ref: moreBtn, "aria-haspopup": "menu", "aria-expanded": menu?.kind === "more" })}
       </div>
       {menu && (
-        <ItemMenu at={menu.at} items={items} note={note}
+        <ItemMenu at={menu.at} items={items}
           label={menu.kind === "export" ? "Формат экспорта" : "Ещё действия с записью"}
           anchor={menu.kind === "export" ? exportBtn : moreBtn} onClose={() => close()} />
+      )}
+      {confirm && (
+        <ConfirmDialog {...CONFIRMS[confirm]} onConfirm={confirmed}
+          onCancel={() => { setConfirm(null); moreBtn.current?.focus(); }} />
       )}
     </div>
   );

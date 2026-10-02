@@ -153,14 +153,18 @@ test("меню «⋯»: пункты, переименование и удале
 
   await userEvent.click(more);
   await userEvent.click(screen.getByRole("menuitem", { name: "Удалить…" }));
-  expect(screen.getByRole("menu")).toHaveTextContent("Удалить запись и расшифровку? Это действие нельзя отменить.");
+  // Подтверждение — общее окно: меню закрыто, фокус на «Отмена».
+  expect(screen.queryByRole("menu")).toBeNull();
+  const ask = screen.getByRole("alertdialog", { name: "Удалить запись?" });
+  expect(ask).toHaveTextContent("Это действие нельзя отменить.");
+  expect(within(ask).getByRole("button", { name: "Отмена" })).toHaveFocus();
   killed.length = 0;
   vi.mocked(api.deleteRecording).mockImplementationOnce(async () => {
     // Агент во вкладке «Агент» уже погашен: его рабочая папка не держит запись.
     expect(killed).toEqual(["a"]);
     return { ok: true };
   });
-  await userEvent.click(screen.getByRole("menuitem", { name: "Удалить" }));
+  await userEvent.click(within(ask).getByRole("button", { name: "Удалить" }));
   expect(onDeleting).toHaveBeenCalledWith("a");
   await vi.waitFor(() => expect(api.deleteRecording).toHaveBeenCalledWith(ep, "a"));
 
