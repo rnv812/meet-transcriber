@@ -256,6 +256,8 @@ test("окно: другие места термина — на проверку
   const props = dialog({ ...ready, proposal: { ...ready.proposal!, groups: [kafka] } });
   const label = screen.getByText("кафка").closest("label")!;
   expect(label).toHaveTextContent("· 1");
+  // Свёрнутая строка сразу говорит о непроверенных местах.
+  expect(label).toHaveTextContent("· ещё 2 места");
   await userEvent.click(screen.getByRole("button", { name: "Показать места: кафка" }));
   expect(screen.getByText("Ещё 2 места — проверьте: ИИ их не отмечал")).toBeInTheDocument();
   const extra = within(screen.getByRole("list", { name: "Ещё места: кафка" })).getAllByRole("checkbox");
@@ -263,6 +265,7 @@ test("окно: другие места термина — на проверку
   expect(screen.getByText(/Франц/).closest("li")).toHaveTextContent("Франц Кафка писал романы");
   await userEvent.click(extra[1]!);
   expect(label).toHaveTextContent("· 2");
+  expect(label).toHaveTextContent("· ещё 1 место");
   expect(screen.getByText("Будет заменено: 2 места")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
   expect(props.onApply).toHaveBeenCalledWith(["g1"], { g1: [1] }, false, false);
