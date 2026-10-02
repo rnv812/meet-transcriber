@@ -27,7 +27,6 @@ stream-json` на встречу: каждый тик — новое сообщ�
 import asyncio
 import json
 import subprocess
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -43,8 +42,12 @@ WORKDIR = "meet-live"
 
 
 def workdir(name: str = WORKDIR) -> Path:
-    """Служебная рабочая папка процессов модели (пустая, во временной)."""
-    path = Path(tempfile.gettempdir()) / name
+    """Служебная рабочая папка процессов модели (пустая, во временной папке
+    системы: у ассистента свой корень временных файлов, а папка «Спросить»
+    должна быть той же от встречи к встрече — по ней Claude Code ведёт сессии)."""
+    from meet import tempdirs
+
+    path = tempdirs.system_temp() / name
     path.mkdir(parents=True, exist_ok=True)
     return path
 

@@ -27,6 +27,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from meet import tempdirs
+
 
 @dataclass(frozen=True)
 class WindowPolicy:
@@ -98,7 +100,8 @@ class GigaamLive:
                 self._log(f"живой режим: {e} — распознаёт Whisper")
                 self._switch()
                 return
-        self._tmp = Path(tempfile.mkdtemp(prefix="meet-live-gigaam-"))
+        # С pid в имени (meet.tempdirs): ассистента убили — папку удалит резидент.
+        self._tmp = Path(tempfile.mkdtemp(prefix=tempdirs.prefix("live-gigaam-")))
         self._warm_up()
         self._log(f"живой режим: распознаёт GigaAM ({self.model_name}, {self.device}), окна ~5 с")
 
@@ -123,6 +126,7 @@ class GigaamLive:
         if self._fallback_factory is None:
             raise RuntimeError("GigaAM недоступна, а запасного Whisper нет")
         self._drop_model()
+        self._drop_tmp()  # окна GigaAM больше не пишутся
         fallback = self._fallback_factory()
         fallback.load()
         self._fallback = fallback
@@ -168,7 +172,7 @@ class GigaamLive:
             # Звук встречи во временной папке не лежит, даже если ассистента
             # потом убьют и unload() не случится.
             path.unlink(missing_ok=True)
-        chunk =gigaam_asr.Chunk(offset_s, offset_s + len(audio) / SAMPLE_RATE)
+        chunk = gigaam_asr.Chunk(offset_s, offset_s + len(audio) / SAMPLE_RATE)
         words = gigaam_asr.words_of_chunk(chunk, getattr(result, "words", None))
         return gigaam_asr.to_segments(words)
 
@@ -188,6 +192,9 @@ class GigaamLive:
         if self._fallback is not None:
             self._fallback.unload()
         self._drop_model()
+        self._drop_tmp()
+
+    def _drop_tmp(self) -> None:
         tmp, self._tmp = self._tmp, None
         if tmp is not None:
             import shutil

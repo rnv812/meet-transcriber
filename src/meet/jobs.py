@@ -16,14 +16,11 @@ CUDA или ctranslate2 не должно ронять резидента вме
 
 import json
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import uuid
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -147,41 +144,23 @@ class Job:
         }
 
 
-# Временные папки задач (WAV 16 кГц на время распознавания и диаризации):
-# в имени — pid процесса. Задачу, убитую отменой или выходом резидента,
-# finally не дочищает; при следующем запуске резидент удаляет папки с этим
-# префиксом, чей процесс уже не жив (чужих не трогает).
-TEMP_PREFIX = "meet-job-"
+# Временные папки задач (WAV 16 кГц на время распознавания и диаризации,
+# куски GigaAM, ответы Codex): в имени — pid процесса, см. meet.tempdirs.
+# Задачу, убитую отменой или выходом резидента, finally не дочищает: её папки
+# резидент удаляет сразу после конца задачи и при следующем запуске.
+from meet.tempdirs import TEMP_PREFIX, sweep_temp, temp_dir  # noqa: E402,F401
 
 
-@contextmanager
-def temp_dir():
-    with tempfile.TemporaryDirectory(prefix=f"{TEMP_PREFIX}{os.getpid()}-") as td:
-        yield td
+def _sweep_after() -> None:
+    """Задача кончилась (или её убили): папки умерших процессов — прочь.
 
-
-def sweep_temp(root: Path | None = None, alive=None) -> list[str]:
-    """Удалить временные папки задач умерших процессов. → имена удалённых."""
-    if alive is None:
-        from meet.gpu_lock import _pid_alive as alive
-    root = Path(root or tempfile.gettempdir())
-    removed = []
-    for d in root.glob(f"{TEMP_PREFIX}*"):
-        try:
-            pid = int(d.name[len(TEMP_PREFIX):].split("-", 1)[0])
-        except ValueError:
-            continue
-        if not d.is_dir() or pid == os.getpid():
-            continue
-        try:
-            if alive(pid):
-                continue
-        except Exception:
-            continue
-        shutil.rmtree(d, ignore_errors=True)
-        if not d.exists():
-            removed.append(d.name)
-    return removed
+    По всем, а не по pid задачи: `python.exe` venv на Windows — лаунчер, и
+    папку пишет его дочерний интерпретатор со своим pid. Идущие процессы (задача
+    второй очереди, ассистент) живы — их папки не трогаются."""
+    try:
+        sweep_temp()
+    except Exception:
+        pass  # уборка не должна ломать очередь; остальное — при следующем запуске
 
 
 def worker_argv(job: Job) -> list[str]:
@@ -557,4 +536,7 @@ class JobQueue:
         assert process.stdout is not None
         for line in process.stdout:
             on_line(line)
-        return process.wait()
+        code = process.wait()
+        # Убитая (отмена) или упавшая задача своих временных папок не дочистила.
+        _sweep_after()
+        return code

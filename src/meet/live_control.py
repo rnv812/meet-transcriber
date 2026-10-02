@@ -108,6 +108,17 @@ def log_path() -> Path:
     return paths.logs_dir() / LOG_NAME
 
 
+def _sweep_temp() -> None:
+    """Временные папки (meet.tempdirs) уже умерших процессов: ассистента,
+    которого убили, задач. Сбой уборки — не повод мешать живому режиму."""
+    from meet import tempdirs
+
+    try:
+        tempdirs.sweep_temp()
+    except Exception:
+        pass
+
+
 def _descends_from(pid, root: int) -> bool:
     """pid — наш ребёнок или его потомок.
 
@@ -335,6 +346,8 @@ class LiveControl:
     def start(self, out_root) -> dict:
         """Запустить ассистента. Не ждёт загрузки модели: статус `starting`
         сразу, дальше — события `live.started` / `live.failed`."""
+        # Временные папки убитых раньше процессов (ассистент, задачи) — до старта.
+        _sweep_temp()
         with self._emit_lock:
             with self._lock:
                 if self._process is not None:
@@ -501,6 +514,7 @@ class LiveControl:
                 killed = True
         finalized = finalized_at is not None
         self._drop_endpoint(endpoint, {process.pid, self._child_pid})
+        _sweep_temp()
         with self._emit_lock:
             with self._lock:
                 stop_requested = self._stop_requested

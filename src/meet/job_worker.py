@@ -67,7 +67,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-speakers", type=int)
     parser.add_argument("--sensitivity", type=float)
     args = parser.parse_args(argv)
+    from meet import tempdirs
 
+    # Свой корень временных файлов (и у ffmpeg, Claude Code, Codex — детей
+    # задачи): задачу убьют отменой или выходом резидента — куски звука встречи
+    # уйдут одной папкой (резидент удаляет её по pid).
+    with tempdirs.own_root():
+        return _dispatch(args)
+
+
+def _dispatch(args) -> int:
     if args.kind in ("summary", "ask"):
         return _assistant(args.kind, args.path, args.question)
     if args.kind == "analyze":
