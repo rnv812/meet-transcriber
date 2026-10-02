@@ -172,3 +172,20 @@ def test_effort_goes_as_config_override_only_when_set(monkeypatch, tmp_path):
     assert cmd[-1] == "-"
     _run(cwd=tmp_path)
     assert "-c" not in FakePopen.calls[1].cmd
+
+
+def test_codex_child_env_has_no_session_markers(monkeypatch):
+    _setup(monkeypatch)
+    monkeypatch.setenv("CODEX_SANDBOX_NETWORK_DISABLED", "1")
+    monkeypatch.setenv("CLAUDE_CODE_CHILD_SESSION", "1")
+    monkeypatch.setenv("CODEX_HOME", "D:/m9-test/codex")
+    _run()
+    env = FakePopen.calls[0].kw["env"]
+    assert "CODEX_SANDBOX_NETWORK_DISABLED" not in env
+    assert "CLAUDE_CODE_CHILD_SESSION" not in env
+    assert env["CODEX_HOME"] == "D:/m9-test/codex"
+    # Свой процесс резидента не трогаем: чистится только окружение Codex.
+    import os
+    assert os.environ["CODEX_SANDBOX_NETWORK_DISABLED"] == "1"
+    # Codex exec — без сохранения сеанса, как и раньше (--ephemeral).
+    assert "--ephemeral" in FakePopen.calls[0].cmd

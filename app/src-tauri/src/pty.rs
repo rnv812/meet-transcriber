@@ -50,6 +50,41 @@ analysis.json — разметка встречи (если есть): типы 
 /// Переменные прокси, которые понимают Claude Code и Codex (регистр любой).
 const PROXY_VARS: [&str; 3] = ["HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY"];
 
+/// Метки чужого сеанса Claude Code / Codex, унаследованные оболочкой (её
+/// запустили из терминала агента, из его команды и т. п.). Агенту во вкладке
+/// они вредят: с `CLAUDE_CODE_CHILD_SESSION` Claude Code считает себя
+/// вложенным и не сохраняет сеанс («Transcript saving is off — inherited
+/// CLAUDE_CODE_CHILD_SESSION marker»), и `--continue` потом нечего продолжать.
+///
+/// Имена — из самих программ (строки claude.exe 2.1.x и codex.exe 0.159,
+/// 2026-10): это ровно то, что Claude Code выставляет своим дочерним командам
+/// (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`,
+/// `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `AI_AGENT`) и
+/// сам же убирает, запуская независимый сеанс; связь с родителем (канал
+/// сообщений с токеном, порт IDE, путь к его программе, точка входа) и метка
+/// песочницы Codex. Настройки и вход (`ANTHROPIC_*`, `CLAUDE_CONFIG_DIR`,
+/// `CODEX_HOME`, прокси) не трогаем. Сохранение сеансов ничем не выключаем.
+pub const SESSION_MARKERS: [&str; 18] = [
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_SESSION_ID",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_SSE_PORT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_CODE_HOST_SESSION_ID",
+    "CLAUDE_CODE_EVAL_INTERVIEW_SESSION",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
+    "AI_AGENT",
+    "CODEX_SANDBOX",
+    "CODEX_SANDBOX_NETWORK_DISABLED",
+];
+
 /// Размер терминала: ConPTY не принимает нулевой, а огромный — признак
 /// ошибки окна, не реального экрана.
 const MIN_COLS: u16 = 20;
@@ -134,18 +169,36 @@ pub fn check_executable(provider: Provider, path: &str, windows: bool) -> Result
     }
 }
 
-/// Аргументы агента. Claude: промпт и база знаний через `--add-dir`. Codex:
+/// Аргументы агента. Claude: база знаний через `--add-dir` и промпт. Codex:
 /// `--cd` и промпт в `developer_instructions`; `--add-dir` у Codex делает
 /// папку доступной на запись, поэтому базу знаний ему только называем
 /// (читать файлы вне рабочей папки песочница Codex и так разрешает).
-pub fn agent_args(provider: Provider, folder: &str, knowledge: Option<&str>) -> Vec<String> {
+///
+/// `resume` — «Продолжить прошлую»: Claude — `--continue` (последний разговор
+/// в текущей папке), Codex — `codex resume --last` (последний сеанс; отбор по
+/// рабочей папке — его поведение по умолчанию). Сверено с `claude --help` и
+/// `codex resume --help` (2.1.287, 0.159.0).
+///
+/// `--add-dir` у Claude принимает несколько папок подряд, поэтому он идёт
+/// раньше `--append-system-prompt`: следующий за ним аргумент не станет
+/// «ещё одной папкой».
+pub fn agent_args(
+    provider: Provider,
+    folder: &str,
+    knowledge: Option<&str>,
+    resume: bool,
+) -> Vec<String> {
     let knowledge = knowledge.map(str::trim).filter(|k| !k.is_empty());
     match provider {
         Provider::Claude => {
-            let mut args = vec!["--append-system-prompt".to_string(), AGENT_PROMPT.into()];
+            let mut args = Vec::new();
+            if resume {
+                args.push("--continue".to_string());
+            }
             if let Some(dir) = knowledge {
                 args.extend(["--add-dir".to_string(), dir.to_string()]);
             }
+            args.extend(["--append-system-prompt".to_string(), AGENT_PROMPT.into()]);
             args
         }
         Provider::Codex => {
@@ -153,12 +206,17 @@ pub fn agent_args(provider: Provider, folder: &str, knowledge: Option<&str>) -> 
             if let Some(dir) = knowledge {
                 prompt.push_str(&format!(" Папка базы знаний: {dir}"));
             }
-            vec![
+            let mut args = Vec::new();
+            if resume {
+                args.extend(["resume".to_string(), "--last".to_string()]);
+            }
+            args.extend([
                 "--cd".into(),
                 folder.to_string(),
                 "-c".into(),
                 format!("developer_instructions={}", toml_string(&prompt)),
-            ]
+            ]);
+            args
         }
     }
 }
@@ -214,7 +272,8 @@ impl EnvPlan {
 }
 
 /// Окружение агента поверх унаследованного (`inherited` — чтение переменной
-/// оболочки без учёта регистра). Claude без ANTHROPIC_API_KEY (подписка
+/// оболочки без учёта регистра). Без меток чужого сеанса (`SESSION_MARKERS`);
+/// Claude без ANTHROPIC_API_KEY (подписка
 /// важнее ключа — как у резидента); прокси по `llm.proxy` — так же, как
 /// `meet.netproxy.child_env`: без него Claude Code за VPN отвечает 403
 /// «Request not allowed»; терминал — xterm-256color с truecolor.
@@ -228,6 +287,9 @@ pub fn agent_env(
     if provider == Provider::Claude {
         plan.remove.push("ANTHROPIC_API_KEY".into());
     }
+    // Метки чужого сеанса — у обоих агентов (см. SESSION_MARKERS).
+    plan.remove
+        .extend(SESSION_MARKERS.iter().map(|name| name.to_string()));
     let present = |name: &str| inherited(name).is_some_and(|v| !v.trim().is_empty());
     let inherited_no_proxy = inherited("NO_PROXY").filter(|v| !v.trim().is_empty());
     let mut proxied = false;
@@ -355,6 +417,22 @@ pub struct SpawnSpec {
     pub rows: u16,
 }
 
+/// Команда запуска: программа, аргументы, папка и окружение — унаследованное
+/// окружение оболочки без `env.remove` (без учёта регистра на Windows), затем
+/// `env.set` по порядку: позднее перекрывает раннее.
+pub fn command_for(spec: &SpawnSpec) -> CommandBuilder {
+    let mut command = CommandBuilder::new(&spec.program);
+    command.args(&spec.args);
+    command.cwd(&spec.cwd);
+    for key in &spec.env.remove {
+        command.env_remove(key);
+    }
+    for (key, value) in &spec.env.set {
+        command.env(key, value);
+    }
+    command
+}
+
 /// «Сеанс закончился»: агент вышел, псевдоконсоль закрыта, его job закрыт.
 #[derive(Default)]
 struct Exited {
@@ -465,18 +543,9 @@ impl Sessions {
                 pixel_height: 0,
             })
             .map_err(|e| format!("не удалось открыть терминал: {e}"))?;
-        let mut command = CommandBuilder::new(&spec.program);
-        command.args(&spec.args);
-        command.cwd(&spec.cwd);
-        for key in &spec.env.remove {
-            command.env_remove(key);
-        }
-        for (key, value) in &spec.env.set {
-            command.env(key, value);
-        }
         let mut child = pair
             .slave
-            .spawn_command(command)
+            .spawn_command(command_for(&spec))
             .map_err(|e| format!("агент не запустился: {e}"))?;
         // Слейв больше не нужен: держи его — псевдоконсоль не закрылась бы.
         drop(pair.slave);
@@ -730,8 +799,16 @@ fn text_at<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
 }
 
 /// Всё, что нужно для запуска, — у резидента: путь к CLI, база знаний,
-/// прокси, папка записи (и свежий transcript.md в ней).
-fn prepare(recording: &str, provider: Provider, cols: u16, rows: u16) -> Result<SpawnSpec, String> {
+/// прокси, папка записи (и свежий transcript.md в ней). Резидент заодно
+/// помечает в meta.json записи, что в её папке работал этот агент: по метке
+/// окно предлагает «Продолжить прошлую» (хранилище самих CLI не читаем).
+fn prepare(
+    recording: &str,
+    provider: Provider,
+    resume: bool,
+    cols: u16,
+    rows: u16,
+) -> Result<SpawnSpec, String> {
     if !recording_id_valid(recording) {
         return Err("неизвестная запись".into());
     }
@@ -762,7 +839,7 @@ fn prepare(recording: &str, provider: Provider, cols: u16, rows: u16) -> Result<
                 "/recordings/{}/agent-context",
                 windows::encode_component(recording)
             ),
-            Value::Null,
+            serde_json::json!({ "provider": provider.key() }),
         )
         .map_err(fail)?;
     let folder = text_at(&context, &["folder"]).ok_or("Служба записи не назвала папку записи")?;
@@ -779,7 +856,7 @@ fn prepare(recording: &str, provider: Provider, cols: u16, rows: u16) -> Result<
     );
     Ok(SpawnSpec {
         recording: recording.to_string(),
-        args: agent_args(provider, &folder_text, knowledge.as_deref()),
+        args: agent_args(provider, &folder_text, knowledge.as_deref(), resume),
         program,
         cwd: folder,
         env,
@@ -789,7 +866,8 @@ fn prepare(recording: &str, provider: Provider, cols: u16, rows: u16) -> Result<
 }
 
 /// Запустить агента в папке записи. Возвращает id сессии; вывод — события
-/// `agent-data`, конец — `agent-exit`.
+/// `agent-data`, конец — `agent-exit`. `resume` — «Продолжить прошлую»
+/// (см. `agent_args`); нет — новый сеанс.
 #[tauri::command]
 pub async fn agent_spawn(
     app: AppHandle,
@@ -798,11 +876,13 @@ pub async fn agent_spawn(
     provider: String,
     cols: u16,
     rows: u16,
+    resume: Option<bool>,
 ) -> Result<String, String> {
     main_only(&window)?;
     let provider = Provider::parse(&provider).ok_or("неизвестный агент")?;
+    let resume = resume.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || {
-        let spec = prepare(&recording_id, provider, cols, rows)?;
+        let spec = prepare(&recording_id, provider, resume, cols, rows)?;
         let data_app = app.clone();
         let on_data: DataSink = Box::new(move |id, data| {
             let id = id.to_string();
@@ -816,8 +896,13 @@ pub async fn agent_spawn(
         });
         let id = sessions().spawn(spec, on_data, on_exit)?;
         shell_log!(
-            "агент: {} запущен в записи {recording_id} ({id})",
-            provider.title()
+            "агент: {} запущен в записи {recording_id} ({id}{})",
+            provider.title(),
+            if resume {
+                ", продолжение"
+            } else {
+                ""
+            }
         );
         Ok(id)
     })
@@ -916,16 +1001,16 @@ mod tests {
     #[test]
     fn claude_gets_the_prompt_and_the_knowledge_dir() {
         assert_eq!(
-            agent_args(Provider::Claude, r"D:\rec\r1", Some(r"D:\kb")),
+            agent_args(Provider::Claude, r"D:\rec\r1", Some(r"D:\kb"), false),
             vec![
+                "--add-dir",
+                r"D:\kb",
                 "--append-system-prompt",
                 AGENT_PROMPT,
-                "--add-dir",
-                r"D:\kb"
             ]
         );
         assert_eq!(
-            agent_args(Provider::Claude, r"D:\rec\r1", Some("  ")),
+            agent_args(Provider::Claude, r"D:\rec\r1", Some("  "), false),
             vec!["--append-system-prompt", AGENT_PROMPT]
         );
         assert!(
@@ -937,14 +1022,93 @@ mod tests {
 
     #[test]
     fn codex_works_in_the_folder_and_never_gets_write_access_to_the_knowledge_dir() {
-        let args = agent_args(Provider::Codex, r"D:\rec\r1", Some(r"D:\kb"));
+        let args = agent_args(Provider::Codex, r"D:\rec\r1", Some(r"D:\kb"), false);
         assert_eq!(args[..3], ["--cd", r"D:\rec\r1", "-c"]);
         assert!(!args.iter().any(|a| a == "--add-dir"));
         let value = args[3].strip_prefix("developer_instructions=").unwrap();
         let prompt: String = serde_json::from_str(value).unwrap();
         assert!(prompt.starts_with(AGENT_PROMPT));
         assert!(prompt.ends_with(r"Папка базы знаний: D:\kb"));
-        assert_eq!(agent_args(Provider::Codex, "D:/r", None).len(), 4);
+        assert_eq!(agent_args(Provider::Codex, "D:/r", None, false).len(), 4);
+    }
+
+    /// «Продолжить прошлую»: Claude — `--continue` первым, Codex — подкоманда
+    /// `resume --last` (подкоманда — первой), остальное как у нового сеанса.
+    #[test]
+    fn resume_continues_the_last_session_in_the_folder() {
+        let claude = agent_args(Provider::Claude, r"D:\rec\r1", Some(r"D:\kb"), true);
+        assert_eq!(claude[0], "--continue");
+        assert_eq!(
+            claude[1..],
+            agent_args(Provider::Claude, r"D:\rec\r1", Some(r"D:\kb"), false)[..]
+        );
+        let codex = agent_args(Provider::Codex, r"D:\rec\r1", None, true);
+        assert_eq!(codex[..4], ["resume", "--last", "--cd", r"D:\rec\r1"]);
+        assert_eq!(
+            codex[2..],
+            agent_args(Provider::Codex, r"D:\rec\r1", None, false)[..]
+        );
+    }
+
+    /// Оболочку запустили из сеанса Claude Code: его метки агенту не
+    /// достаются (иначе Claude не сохранит сеанс), вход и настройки — да.
+    #[test]
+    fn inherited_session_markers_are_scrubbed_but_auth_and_config_stay() {
+        // Уникальные значения: переменные процесса тестов общие.
+        let parent = [
+            ("CLAUDE_CODE_CHILD_SESSION", "1"),
+            ("CLAUDECODE", "1"),
+            ("CLAUDE_CODE_ENTRYPOINT", "cli"),
+            ("CLAUDE_CODE_SSE_PORT", "45123"),
+            (
+                "CLAUDE_CODE_SESSION_ID",
+                "11111111-2222-3333-4444-555555555555",
+            ),
+            ("CLAUDE_CODE_MESSAGING_TOKEN", "m9-test-token"),
+            ("CODEX_SANDBOX_NETWORK_DISABLED", "1"),
+            ("ANTHROPIC_BASE_URL", "https://gateway.example.invalid"),
+            ("CLAUDE_CONFIG_DIR", r"D:\m9-test\claude"),
+            ("CODEX_HOME", r"D:\m9-test\codex"),
+        ];
+        for (key, value) in parent {
+            std::env::set_var(key, value);
+        }
+        for provider in [Provider::Claude, Provider::Codex] {
+            let plan = agent_env(provider, &ProxyMode::None, &|_| None, &wininet(None));
+            let spec = SpawnSpec {
+                recording: "r1".into(),
+                program: PathBuf::from("agent.exe"),
+                args: Vec::new(),
+                cwd: std::env::temp_dir(),
+                env: plan,
+                cols: 80,
+                rows: 24,
+            };
+            let command = command_for(&spec);
+            for marker in SESSION_MARKERS {
+                assert_eq!(command.get_env(marker), None, "{marker}");
+            }
+            assert_eq!(
+                command.get_env("ANTHROPIC_BASE_URL"),
+                Some(std::ffi::OsStr::new("https://gateway.example.invalid"))
+            );
+            assert!(command.get_env("CLAUDE_CONFIG_DIR").is_some());
+            assert!(command.get_env("CODEX_HOME").is_some());
+            assert_eq!(
+                command.get_env("TERM"),
+                Some(std::ffi::OsStr::new("xterm-256color"))
+            );
+        }
+        // Ничего, что выключало бы сохранение, не выставляется.
+        let plan = agent_env(
+            Provider::Claude,
+            &ProxyMode::System,
+            &|_| None,
+            &wininet(None),
+        );
+        assert!(!plan.set.iter().any(|(k, _)| k.contains("PERSIST")
+            || k.contains("SKIP_PROMPT_HISTORY")
+            || k.contains("SESSION")));
     }
 
     #[test]
@@ -972,7 +1136,8 @@ mod tests {
             &env_of(&[("ANTHROPIC_API_KEY", "sk-test")]),
             &wininet(None),
         );
-        assert_eq!(plan.remove, vec!["ANTHROPIC_API_KEY"]);
+        assert_eq!(plan.remove[0], "ANTHROPIC_API_KEY");
+        assert_eq!(plan.remove[1..], SESSION_MARKERS);
         assert_eq!(plan.get("TERM"), Some("xterm-256color"));
         assert_eq!(plan.get("COLORTERM"), Some("truecolor"));
         assert_eq!(plan.get("HTTPS_PROXY"), None);
@@ -983,7 +1148,7 @@ mod tests {
             &env_of(&[]),
             &wininet(None),
         );
-        assert!(codex.remove.is_empty());
+        assert_eq!(codex.remove, SESSION_MARKERS);
     }
 
     #[test]

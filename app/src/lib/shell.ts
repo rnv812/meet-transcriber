@@ -260,8 +260,9 @@ export type AgentExit = { id: string; code: number | null };
  * сначала просит резидента обновить transcript.md, затем запускает CLI в
  * псевдоконсоли. Возвращает id сессии; прежняя сессия этой записи гасится.
  */
-export const agentSpawn = (recordingId: string, provider: string, cols: number, rows: number) =>
-  invoke<string>("agent_spawn", { recordingId, provider, cols, rows });
+/** `resume` — «Продолжить прошлую»: Claude Code `--continue`, Codex `resume --last`. */
+export const agentSpawn = (recordingId: string, provider: string, cols: number, rows: number, resume = false) =>
+  invoke<string>("agent_spawn", { recordingId, provider, cols, rows, resume });
 export const agentWrite = (id: string, data: string) => invoke<void>("agent_write", { id, data });
 export const agentResize = (id: string, cols: number, rows: number) =>
   invoke<void>("agent_resize", { id, cols, rows });
