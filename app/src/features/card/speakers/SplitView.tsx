@@ -10,6 +10,7 @@
  * 4. «Применить» — один шаг истории встречи (его отменяет «Отменить»).
  */
 
+import { ChevronDown, Play } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   applySplit, cancelJob, prepareSplit, previewSplit, type Endpoint,
@@ -24,6 +25,7 @@ import { ProgressBar } from "../../../ui/ProgressBar";
 import { HelpTip, TipLine } from "../../../ui/HelpTip";
 import type { PersonColor } from "../Turns";
 import { TargetPicker, type Target } from "./TargetPicker";
+import { Icon } from "../../../ui/Icon";
 
 const PHRASE_S = 6;
 const KS = [2, 3, 4, 5];
@@ -322,7 +324,7 @@ function GroupCard({
             <li key={s.start} className="spk-phrase">
               <button type="button" className="spk-phrase__play" disabled={!playable}
                 aria-label={`Прослушать фразу с ${clock(s.start)}`}
-                onClick={() => onPlay(s.start, Math.min(s.end, s.start + PHRASE_S))}>▶</button>
+                onClick={() => onPlay(s.start, Math.min(s.end, s.start + PHRASE_S))}><Icon as={Play} size="sm" /></button>
               <span className="spk-phrase__time num muted">{clock(s.start)}</span>
               <span className="spk-phrase__text">{s.text}</span>
             </li>
@@ -351,7 +353,7 @@ function GroupCard({
         <span className="muted">Кому:</span>
         <button type="button" className="spk-btn" aria-expanded={picking} onClick={onPick}
           aria-label={`Кому отдать группу «${title}»: ${choiceText(choice, label)}`}>
-          {choiceText(choice, label)} ▾
+          {choiceText(choice, label)}<Icon as={ChevronDown} size="sm" />
         </button>
       </div>
       {picking && (

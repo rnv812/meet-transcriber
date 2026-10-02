@@ -157,3 +157,8 @@ test("пока идёт действие, «В базу знаний» и пун
   expect(screen.getByRole("menuitem", { name: "Переразделить на спикеров…" })).toBeDisabled();
   expect(screen.getByRole("menuitem", { name: "Удалить…" })).toHaveFocus();
 });
+
+test("пока неизвестно, будет ли «В базу знаний», — кнопка на месте, неактивная (строка не сдвигается)", () => {
+  setup({ onKbExport: undefined, kbPending: true });
+  expect(screen.getByRole("button", { name: "В базу знаний" })).toBeDisabled();
+});

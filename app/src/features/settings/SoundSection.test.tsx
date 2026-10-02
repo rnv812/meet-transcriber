@@ -114,3 +114,8 @@ test("список недоступен — только «Как в систе�
   expect(mic).toHaveDisplayValue("Как в системе");
   expect(screen.getByText(/Список устройств недоступен: нет WASAPI/)).toBeInTheDocument();
 });
+
+test("строка итога проверки есть и до проверки: её появление не сдвигает разделы ниже", () => {
+  const { container } = render(<SoundSection draft={{ recording: {} }} set={() => {}} devices={null} endpoint={{ base: "/api", token: null }} />);
+  expect(container.querySelectorAll(".sound__result").length).toBeGreaterThan(0);
+});

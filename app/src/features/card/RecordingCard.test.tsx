@@ -87,7 +87,7 @@ test("ready: реплики и участники", async () => {
   expect(screen.getByText("Здравствуйте")).toBeInTheDocument();
   expect(screen.getByText("(нахлёст)")).toBeInTheDocument();
   expect(screen.getAllByText("Демьян Петров").length).toBeGreaterThan(0);
-  expect(screen.getByRole("button", { name: /▶ 00:00/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Слушать с 00:00" })).toBeInTheDocument();
 });
 
 test("клик по безымянному спикеру открывает панель «Спикеры» на его строке, Esc закрывает", async () => {
@@ -294,11 +294,11 @@ test("клик по реплике перематывает общий плее�
     const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
     await screen.findByText("Привет всем");
     const audio = container.querySelector("audio")!;
-    await userEvent.click(screen.getAllByRole("button", { name: /▶/ })[1]!);
+    await userEvent.click(screen.getAllByRole("button", { name: /^(Слушать|Прослушать) с / })[1]!);
     expect(audio.currentTime).toBe(6);
     expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(1);
     // Реплика владельца микрофона (переименованного) — тот же источник, без смены дорожки.
-    await userEvent.click(screen.getAllByRole("button", { name: /▶/ })[0]!);
+    await userEvent.click(screen.getAllByRole("button", { name: /^(Слушать|Прослушать) с / })[0]!);
     expect(audio.currentTime).toBe(0);
     expect(audio.getAttribute("src")).toBe(api.audioUrl(ep, "r1", "playback"));
     expect(HTMLMediaElement.prototype.play).toHaveBeenCalledTimes(2);
@@ -336,7 +336,7 @@ test("без дорожек: кнопок воспроизведения нет,
   load({ tracks: {} });
   const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
-  expect(screen.queryByRole("button", { name: /▶/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^(Слушать|Прослушать) с / })).toBeNull();
   expect(container.querySelector("audio")).toBeNull();
   expect(screen.getByText("Аудио недоступно")).toBeInTheDocument();
 });
@@ -345,10 +345,10 @@ test("дорожка не загрузилась — «Аудио недосту
   load({ tracks: { sys: "s.wav", mic: "m.wav" } });
   const { container } = render(<RecordingCard id="r1" endpoint={ep} />);
   await screen.findByText("Привет всем");
-  expect(screen.getAllByRole("button", { name: /▶/ }).length).toBeGreaterThan(0);
+  expect(screen.getAllByRole("button", { name: /^(Слушать|Прослушать) с / }).length).toBeGreaterThan(0);
   fireEvent.error(container.querySelector("audio")!);
   expect(screen.getByText("Аудио недоступно")).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: /▶/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^(Слушать|Прослушать) с / })).toBeNull();
 });
 
 test("устаревший ответ не перекрывает текущую запись", async () => {

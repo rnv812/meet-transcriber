@@ -67,7 +67,7 @@ test("ничего не нашлось — так и сказано; фраза 
 
 test("Esc очищает поиск и возвращает фокус туда, где он был", async () => {
   const { container } = setup();
-  const before = screen.getAllByRole("button", { name: /▶/ })[0]!;
+  const before = screen.getAllByRole("button", { name: /^(Слушать|Прослушать) с / })[0]!;
   before.focus();
   await userEvent.type(field(), "бюджет");
   await vi.waitFor(() => expect(counter()).toHaveTextContent("1 из 3"));
@@ -95,7 +95,7 @@ test("просьба из списка: запрос уже введён, тек
 
 test("таймкод найденной реплики по-прежнему перематывает запись", async () => {
   const { onPlay } = setup({ find: { q: "бюджет", t: null, n: 1 } });
-  await userEvent.click(screen.getByRole("button", { name: "▶ 00:30" }));
+  await userEvent.click(screen.getByRole("button", { name: "Слушать с 00:30" }));
   expect(onPlay).toHaveBeenCalledWith(TURNS[1]);
 });
 
@@ -155,7 +155,7 @@ test("Ctrl+F в диалоге, всплывающем окне или поле 
 
 test("Esc после фокуса без источника не возвращает фокус на старое место", async () => {
   setup();
-  const before = screen.getAllByRole("button", { name: /▶/ })[0]!;
+  const before = screen.getAllByRole("button", { name: /^(Слушать|Прослушать) с / })[0]!;
   before.focus();
   await userEvent.type(field(), "бюджет"); // фокус пришёл с «▶»
   field().blur();

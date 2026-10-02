@@ -9,6 +9,7 @@
  * при двух и больше — «Сбросить».
  */
 
+import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { getCategoriesInfo, type CategoriesInfo, type Endpoint } from "../../lib/api";
 import { NO_CATEGORY, NO_CATEGORY_NAME } from "../../lib/categories";
@@ -16,6 +17,7 @@ import { searchable } from "../../lib/search";
 import type { Category } from "../../lib/types";
 import { CategoryDot } from "../../ui/Category";
 import { Popover } from "../../ui/Popover";
+import { Icon } from "../../ui/Icon";
 
 export function CategoryFilter({ list, endpoint, q, selected, onChange }: {
   list: Category[];
@@ -54,8 +56,11 @@ export function CategoryFilter({ list, endpoint, q, selected, onChange }: {
       <button ref={button} type="button" aria-haspopup="dialog" aria-expanded={open}
         className={`cat-filter__button${selected.length ? " cat-filter__button--active" : ""}`}
         title="Показать записи только выбранных категорий"
+        aria-label={selected.length ? `Категории · ${selected.length}` : "Категории"}
         onClick={() => setOpen((v) => !v)}>
-        {selected.length ? `Категории · ${selected.length}` : "Категории"}
+        Категории
+        {/* Число выбранных — значком поверх кнопки: ширина кнопки не меняется, поиск не сжимается. */}
+        {selected.length > 0 && <span className="cat-filter__count num" aria-hidden="true">{selected.length}</span>}
       </button>
       {open && button.current && (
         <Popover anchor={button.current} label="Фильтр по категориям" width={250} onClose={close} anchorToggles>
@@ -99,7 +104,7 @@ export function CategoryFilterChips({ list, selected, onChange }: {
             <CategoryDot color={key === NO_CATEGORY ? null : category?.color} />
             <span className="cat-filter__chip-text" title={name}>{name}</span>
             <button type="button" className="cat-filter__clear" aria-label={`Убрать «${name}» из фильтра`}
-              onClick={() => onChange(selected.filter((k) => k !== key))}>✕</button>
+              onClick={() => onChange(selected.filter((k) => k !== key))}><Icon as={X} size="sm" /></button>
           </span>
         );
       })}

@@ -48,6 +48,9 @@ body {
 }
 
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Фокус, поставленный программно (заголовок открытой панели, найденная реплика), — без рамки:
+   туда не переходили с клавиатуры, рамка только сбивает. */
+[tabindex="-1"]:focus-visible { outline: none; }
 
 /* Кнопки (ui/Button): secondary — по умолчанию, primary, ghost, danger, link;
    размеры md 28 px и sm 24 px. Нажатие видно сразу (:active), занятость —
@@ -138,13 +141,26 @@ body {
   box-shadow: 0 0 10px var(--accent-glow);
 }
 .nav__item {
-  display: flex; align-items: center; height: 30px; padding: 0 10px;
+  display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px;
   border: 0; border-radius: var(--r-md); background: transparent;
   color: var(--text-2); font: inherit; text-align: left; cursor: pointer;
   transition: background var(--t), color var(--t);
 }
 .nav__item:hover { background: var(--surface-hover); color: var(--text); }
 .nav__item[aria-current="page"] { background: var(--surface-2); color: #fff; }
+.nav__icon { flex: none; }
+.nav__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Узкое окно (до 1000 px): навигация — полоса значков, список записей уже —
+   карточке остаётся не меньше ~520 px и в 900 px. Подписи разделов остаются
+   доступными именами кнопок и всплывают подсказкой (title). */
+@media (max-width: 1000px) {
+  :root { --nav-w: 56px; --list-w: 260px; }
+  .nav { padding: 12px 6px; align-items: stretch; }
+  .nav__brand { justify-content: center; padding: 0; gap: 0; }
+  .nav__item { justify-content: center; padding: 0; height: 36px; }
+  .nav .nav__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .panes { flex: 1; min-height: 0; display: flex; }
 .pane-list {

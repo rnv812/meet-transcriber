@@ -33,6 +33,8 @@
 .rec-item { position: relative; border-radius: var(--r-md); transition: background var(--t); }
 .rec-item:hover { background: var(--surface-hover); }
 .rec-item--selected, .rec-item--selected:hover { background: var(--surface-2); }
+/* Бейдж без своего цвета («Не расшифровано», «В очереди») не сливается с выделенной строкой. */
+.rec-item--selected .badge:not(.badge--ok):not(.badge--run):not(.badge--err) { background: var(--line-2); }
 .rec-item__main {
   display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: var(--r-md);
   background: none; color: inherit; font: inherit; text-align: left; cursor: pointer;
@@ -154,3 +156,5 @@
 .rec-pickbar__count { color: var(--text); font-weight: 500; }
 .rec-pickbar__keep { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); cursor: pointer; }
 .rec-pickbar__note { font-size: 12px; }
+/* Заготовки строк, пока библиотека загружается впервые. */
+.rec-skel__row { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }

@@ -7,6 +7,7 @@
  * её отменяет «Отменить» здесь же, в панели «Спикеры» и Ctrl+Z там.
  */
 
+import { Play, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import {
   applyTextFix, getSettings, patchSettings, previewTextFix, removeHotword, undoSpeakers, type Endpoint,
@@ -20,6 +21,7 @@ import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Popover } from "../../ui/Popover";
 import { rulesOf, withRule } from "../settings/ReplacementsEditor";
+import { Icon } from "../../ui/Icon";
 
 type Box = { left: number; top: number; bottom: number };
 /** Что исправляем: реплика, сегмент и начало в его тексте; `split` — выделение через границу фраз. */
@@ -289,8 +291,9 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
                 <span>Распознано: <q className="tfix__find">{target.find}</q></span>
                 {playable && here && (
                   <button type="button" className="spk-link" title="Прослушать это место"
+                    aria-label={`Прослушать с ${clock(here.start)}`}
                     onClick={() => onPlay(Math.max(0, here.start - 0.3), here.end + 0.5)}>
-                    ▶ {clock(here.start)}
+                    <Icon as={Play} size="sm" />{clock(here.start)}
                   </button>
                 )}
               </div>
@@ -373,7 +376,7 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
             <button type="button" className="spk-link" disabled={busy} onClick={() => void undo(n)}>Отменить</button>
           )}
           <button type="button" className="spk-link tsel__close" aria-label="Скрыть"
-            onClick={() => setNotices((cur) => cur.filter((x) => x.key !== n.key))}>×</button>
+            onClick={() => setNotices((cur) => cur.filter((x) => x.key !== n.key))}><Icon as={X} size="sm" /></button>
         </div>
       ))}
     </div>

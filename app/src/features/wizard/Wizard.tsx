@@ -174,7 +174,7 @@ export function Wizard({
         </header>
         <ol className="wizard__steps" aria-label="Шаги мастера">
           {STEPS.map((s, i) => (
-            <li key={s.id} aria-current={i === index ? "step" : undefined}
+            <li key={s.id} aria-current={i === index ? "step" : undefined} title={s.title}
               className={i < index ? "is-done" : i === index ? "is-current" : undefined}>
               <span className="wizard__num">{i + 1}</span>
               <span className="wizard__name">{s.title}</span>

@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import "./recordings.css";
 import { useCallback, useMemo, useState, type KeyboardEvent } from "react";
 import type { Resident } from "../../state/useResident";
@@ -14,6 +15,8 @@ import { CategoryFilter, CategoryFilterChips } from "./CategoryFilter";
 import { ImportZone } from "./ImportZone";
 import { RecordingItem, type ItemActions, type PickHow } from "./RecordingItem";
 import { SearchBox } from "./SearchBox";
+import { Icon } from "../../ui/Icon";
+import { Skeleton } from "../../ui/Loading";
 
 type Props = {
   selected: string | null;
@@ -209,7 +212,7 @@ export function RecordingsList({
       {notice && (
         <div className={`rec-notice${notice.error ? " rec-notice--error" : ""}`} role={notice.error ? "alert" : "status"}>
           <span className="rec-notice__text">{notice.text}</span>
-          <button type="button" className="import__close" aria-label="Скрыть сообщение" onClick={() => setNotice(null)}>×</button>
+          <button type="button" className="import__close" aria-label="Скрыть сообщение" onClick={() => setNotice(null)}><Icon as={X} size="sm" /></button>
         </div>
       )}
       {picking && endpoint && (
@@ -261,12 +264,24 @@ export function RecordingsList({
           />
         ))}
       </ul>
+      {library.items.length === 0 && library.loading && (
+        // Первая загрузка библиотеки бывает долгой (холодный старт): заготовки строк, а не пустота.
+        <ul className="rec-list__items rec-skel" aria-busy="true" aria-label="Загрузка записей">
+          {[72, 54, 64, 48, 60].map((w, i) => (
+            <li key={i} className="rec-skel__row">
+              <Skeleton width={`${w}%`} height={13} />
+              <Skeleton width="38%" height={10} />
+            </li>
+          ))}
+        </ul>
+      )}
       {library.items.length === 0 && !library.loading && resident.endpoint && categoryFilter.length > 0 && (
         <EmptyState title={q ? "Ничего не найдено в выбранных категориях" : "Нет записей в выбранных категориях"}
           action={<Button onClick={() => setFilter([])}>Показать все категории</Button>} />
       )}
       {library.items.length === 0 && !library.loading && resident.endpoint && categoryFilter.length === 0 && (
-        q ? <EmptyState title="Ничего не найдено" />
+        q ? <EmptyState title="Ничего не найдено" hint="Проверьте написание или ищите по слову из расшифровки"
+          action={<Button variant="link" onClick={() => onQ("")}>Сбросить поиск</Button>} />
           : <EmptyState title="Записей пока нет" hint="Нажмите «Начать запись» или перетащите файл" />
       )}
     </div>

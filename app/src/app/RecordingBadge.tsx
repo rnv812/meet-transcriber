@@ -1,3 +1,4 @@
+import { ChevronDown, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { noProvider } from "../features/card/assistant";
@@ -6,6 +7,7 @@ import { clock, errorText } from "../lib/format";
 import { openScreenRecordingSettings } from "../lib/shell";
 import type { AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
 import { Button } from "../ui/Button";
+import { Icon } from "../ui/Icon";
 
 const LOW_DISK_GB = 5;
 const ERROR_MS = 6000;
@@ -203,7 +205,7 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
       <span className="split" ref={split}>
         <Button variant="primary" className="split__main" onClick={() => run("start")}>Начать запись</Button>
         <Button ref={more} variant="primary" className="split__more" aria-label="Другие варианты записи"
-          aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}>▾</Button>
+          aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><Icon as={ChevronDown} size="sm" /></Button>
         {menu && (
           <div className="rec-menu" role="menu" aria-label="Варианты записи">
             <button ref={item} type="button" role="menuitem" className="rec-menu__item" disabled={blocked}
@@ -224,7 +226,7 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
         <span className="import__error import__error--box" role="alert">
           {shownError}
           <button type="button" className="import__close" aria-label="Скрыть ошибку"
-            onClick={dismiss}>×</button>
+            onClick={dismiss}><Icon as={X} size="sm" /></button>
         </span>
       )}
       {low && <span className="rec-badge__warn">Мало места: {snapshot.disk_free_gb} ГБ</span>}

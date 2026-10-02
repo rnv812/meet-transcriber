@@ -939,6 +939,34 @@ impl LivePhase {
     }
 }
 
+/// «Открыть» — что именно: окно приложения.
+pub const OPEN_LABEL: &str = "Открыть Meet";
+/// «Выход», пока идёт работа: вопрос с безопасной кнопкой первой (по умолчанию).
+pub const QUIT_TITLE: &str = "Выход из Meet";
+pub const QUIT_RECORDING: &str = "Идёт запись. При выходе она остановится и сохранится. Выйти?";
+pub const QUIT_WORK: &str =
+    "Идёт расшифровка. При выходе она прервётся и начнётся заново при следующем запуске Meet. Выйти?";
+pub const QUIT_CONFIRM: &str = "Выйти";
+pub const QUIT_KEEP: &str = "Не выходить";
+
+/// О чём спросить перед «Выход»: идёт запись или работа (расшифровка, задачи
+/// в очереди) — вопрос; ничего не идёт или резидент молчит — None, выходим сразу.
+pub fn quit_question(state: Option<&Value>, jobs: Option<&Value>) -> Option<&'static str> {
+    let state = state?;
+    if crate::upgrade::resident_busy(state) {
+        return Some(QUIT_RECORDING);
+    }
+    if crate::upgrade::resident_working(state, jobs) {
+        return Some(QUIT_WORK);
+    }
+    None
+}
+
+/// Ответ на вопрос о выходе: выходим только по явной кнопке «Выйти».
+pub fn quit_confirmed_by(answer: &rfd::MessageDialogResult) -> bool {
+    matches!(answer, rfd::MessageDialogResult::Custom(label) if label == QUIT_CONFIRM)
+}
+
 /// Остановка записи (обычной и с ассистентом): записанное сохраняется.
 pub const STOP_LABEL: &str = "Остановить и сохранить";
 /// Отмена записи: многоточие — перед удалением спрашиваем подтверждение.
@@ -1004,7 +1032,7 @@ pub fn menu_model(state: &MenuState) -> Vec<Entry> {
         text,
         enabled: enabled && usable,
     };
-    let mut model = vec![item("open", "Открыть", true)];
+    let mut model = vec![item("open", OPEN_LABEL, true)];
     for (id, text, enabled) in record_items(state) {
         model.push(item(id, text, enabled));
     }
@@ -1317,7 +1345,7 @@ fn on_menu(app: &AppHandle, id: &str) {
         "import" => import(app),
         "log" => open_log(app),
         "restart" => app.state::<Supervisor>().restart(app),
-        "quit" => quit(app),
+        "quit" => confirm_quit(app),
         _ => {}
     }
 }
@@ -1408,6 +1436,56 @@ pub(crate) fn log_folder(log: &Path, data_dir: &Path) -> PathBuf {
         .filter(|dir| dir.is_dir())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| data_dir.to_path_buf())
+}
+
+static QUIT_ASKING: AtomicBool = AtomicBool::new(false);
+
+/// «Выход» из меню трея: идёт запись или расшифровка — сначала вопрос
+/// (тот же rfd, что у отмены записи: Esc и крестик — «Не выходить»).
+/// Состояние резидента — в отдельном потоке, вопрос — в главном.
+fn confirm_quit(app: &AppHandle) {
+    if QUIT_ASKING.swap(true, Ordering::SeqCst) {
+        return; // вопрос уже открыт
+    }
+    let app = app.clone();
+    thread::spawn(move || {
+        let (state, jobs) = match resident::read_endpoint() {
+            Some(endpoint) => {
+                let client = Client::new(&endpoint);
+                let state = client.get_state().ok();
+                let jobs = state.as_ref().and_then(|_| client.get_jobs().ok());
+                (state, jobs)
+            }
+            None => (None, None),
+        };
+        let Some(question) = quit_question(state.as_ref(), jobs.as_ref()) else {
+            QUIT_ASKING.store(false, Ordering::SeqCst);
+            quit(&app);
+            return;
+        };
+        let handle = app.clone();
+        let shown = app.run_on_main_thread(move || {
+            let dialog = rfd::AsyncMessageDialog::new()
+                .set_level(rfd::MessageLevel::Warning)
+                .set_title(QUIT_TITLE)
+                .set_description(question)
+                .set_buttons(rfd::MessageButtons::OkCancelCustom(
+                    QUIT_KEEP.to_string(),
+                    QUIT_CONFIRM.to_string(),
+                ))
+                .show();
+            thread::spawn(move || {
+                let answer = tauri::async_runtime::block_on(dialog);
+                QUIT_ASKING.store(false, Ordering::SeqCst);
+                if quit_confirmed_by(&answer) {
+                    quit(&handle);
+                }
+            });
+        });
+        if shown.is_err() {
+            QUIT_ASKING.store(false, Ordering::SeqCst);
+        }
+    });
 }
 
 /// «Выход»: резидент сохраняет идущую запись и гасится (до 70 с), и только
@@ -2677,7 +2755,7 @@ mod tests {
         assert_eq!(
             layout(&menu_of(true)),
             [
-                "Открыть",
+                "Открыть Meet",
                 "Остановить и сохранить",
                 "Импортировать файл…",
                 "[x] Автозапись",
@@ -2704,7 +2782,7 @@ mod tests {
         assert_eq!(
             layout(&menu_of(false)),
             [
-                "Открыть",
+                "Открыть Meet",
                 "Начать запись",
                 "Начать запись с ассистентом",
                 "Импортировать файл…",
@@ -2730,7 +2808,7 @@ mod tests {
         assert_eq!(
             layout(&failed),
             [
-                "Открыть",
+                "Открыть Meet",
                 "Начать запись (-)",
                 "Начать запись с ассистентом (-)",
                 "Импортировать файл… (-)",
@@ -2757,6 +2835,25 @@ mod tests {
         assert!(!cancel_still_meant(a, b)); // автозапись начала новую
         assert!(!cancel_still_meant(a, None)); // запись уже закончилась
         assert!(!cancel_still_meant(None, a)); // резидент не ответил при открытии
+    }
+
+    #[test]
+    fn quit_asks_only_while_work_is_running() {
+        use rfd::MessageDialogResult as Answer;
+        use serde_json::json;
+        let idle = json!({ "status": "idle" });
+        let recording = json!({ "status": "recording" });
+        let jobs = json!({ "items": [{ "state": "running" }] });
+        let none = json!({ "items": [{ "state": "done" }] });
+        assert_eq!(quit_question(None, None), None); // резидент молчит — выходим
+        assert_eq!(quit_question(Some(&idle), Some(&none)), None);
+        assert_eq!(quit_question(Some(&recording), None), Some(QUIT_RECORDING));
+        assert_eq!(quit_question(Some(&idle), Some(&jobs)), Some(QUIT_WORK));
+        assert!(quit_confirmed_by(&Answer::Custom("Выйти".into())));
+        assert!(!quit_confirmed_by(&Answer::Custom("Не выходить".into())));
+        assert!(!quit_confirmed_by(&Answer::Cancel)); // Esc, крестик
+                                                      // Кнопка по умолчанию — первая: «Не выходить».
+        assert_eq!((QUIT_KEEP, QUIT_CONFIRM), ("Не выходить", "Выйти"));
     }
 
     #[test]

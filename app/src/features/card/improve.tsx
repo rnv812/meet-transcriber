@@ -11,7 +11,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronRight, Play, Sparkles, X } from "lucide-react";
 import {
   ApiError, applyImprove, dismissImproveHint, getImprove, runImprove, undoSpeakers, type Endpoint,
 } from "../../lib/api";
@@ -21,6 +21,7 @@ import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { improvedText } from "./speakers/staging";
 import "./improve.css";
+import { Icon } from "../../ui/Icon";
 
 const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 /** Сколько мест группы показывать раскрытыми. */
@@ -204,7 +205,7 @@ export function useImprove({ endpoint, id, folder, jobs, version, head, noModel,
       {notice.step && notice.step === head && (
         <button type="button" className="spk-link" disabled={busy} onClick={() => void undo()}>Отменить</button>
       )}
-      <button type="button" className="spk-link tsel__close" aria-label="Скрыть" onClick={() => setNotice(null)}>×</button>
+      <button type="button" className="spk-link tsel__close" aria-label="Скрыть" onClick={() => setNotice(null)}><Icon as={X} size="sm" /></button>
     </div>
   ) : null;
   return { state: shown, start, blocked, status, dialog, bar };
@@ -282,7 +283,8 @@ function Places({ group, playable, onPlay }: {
         <li key={`${s.segment}:${s.offset}`}>
           {playable ? (
             <button type="button" className="spk-link improve__play" title="Прослушать это место"
-              onClick={() => onPlay(Math.max(0, s.start - 0.3), s.end + 0.5)}>▶ {clock(s.start)}</button>
+              aria-label={`Прослушать с ${clock(s.start)}`}
+              onClick={() => onPlay(Math.max(0, s.start - 0.3), s.end + 0.5)}><Icon as={Play} size="sm" />{clock(s.start)}</button>
           ) : <span className="muted num">{clock(s.start)}</span>}
           <span className="improve__ctx">
             {s.before}<mark className="hit">{s.match}</mark>{s.after}
@@ -434,7 +436,8 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
                                 onChange={() => setExtraOn((on) => toggle(on, extraKey(g.id, k)))} />
                               {playable ? (
                                 <button type="button" className="spk-link improve__play" title="Прослушать это место"
-                                  onClick={() => onPlay(Math.max(0, x.start - 0.3), x.end + 0.5)}>▶ {clock(x.start)}</button>
+                                  aria-label={`Прослушать с ${clock(x.start)}`}
+                                  onClick={() => onPlay(Math.max(0, x.start - 0.3), x.end + 0.5)}><Icon as={Play} size="sm" />{clock(x.start)}</button>
                               ) : <span className="muted num">{clock(x.start)}</span>}
                               <span className="improve__ctx">{x.before}<mark className="hit">{x.match}</mark>{x.after}</span>
                             </li>
@@ -508,7 +511,7 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
           <h3 id="improve-title" tabIndex={-1} ref={title}>
             <Sparkles size={15} strokeWidth={1.75} aria-hidden="true" className="improve__star" />Улучшить расшифровку
           </h3>
-          <button type="button" className="spk__close" aria-label="Закрыть" onClick={onClose}>×</button>
+          <button type="button" className="spk__close" aria-label="Закрыть" onClick={onClose}><Icon as={X} size="sm" /></button>
         </div>
         <p className="muted redia__lead">
           ИИ ищет неверно распознанные термины и предлагает замены. Меняются только эти слова: фразы не

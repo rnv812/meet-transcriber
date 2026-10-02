@@ -92,3 +92,10 @@ test("повторный щелчок по метке закрывает мен�
   expect(screen.queryByRole("menu")).toBeNull();
   expect(chip).toHaveAttribute("aria-expanded", "false");
 });
+
+test("категории ещё читаются — заготовка на месте метки, а не пустота", () => {
+  const { container } = render(<CardHeader rec={rec({ id: "daily", source: "user" })} speakers={[]} people={[]}
+    endpoint={ep} onRename={vi.fn()} onCategory={vi.fn()} />);
+  expect(container.querySelector(".card__cat-skel")).not.toBeNull();
+  expect(screen.queryByRole("button", { name: /^Категория:/ })).toBeNull();
+});

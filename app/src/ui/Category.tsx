@@ -7,10 +7,12 @@
  * (это делает Popover вокруг меню).
  */
 
+import { Check } from "lucide-react";
 import { useEffect, useRef, type KeyboardEvent } from "react";
 import { NO_CATEGORY_NAME } from "../lib/categories";
 import type { Category } from "../lib/types";
 import "./category.css";
+import { Icon } from "./Icon";
 
 /** Цветная точка категории; без цвета — пустой кружок «Без категории». */
 export function CategoryDot({ color }: { color?: string | null }) {
@@ -84,7 +86,7 @@ export function CategoryMenu({ list, current, onPick, onSettings, label = "Ка�
       onClick={() => onPick(id)}>
       <CategoryDot color={color} />
       <span className="cat-menu__name">{name}</span>
-      {known === id && <span className="cat-menu__check" aria-hidden="true">✓</span>}
+      {known === id && <span className="cat-menu__check" aria-hidden="true"><Icon as={Check} size="sm" /></span>}
     </button>
   );
 

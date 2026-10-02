@@ -219,16 +219,26 @@ test("история изменений: шаги словами, текущий
   const list = within(screen.getByRole("region", { name: "История изменений" })).getByRole("list");
   const items = within(list).getAllByRole("listitem");
   expect(items.map((li) => li.textContent)).toEqual([
-    "Исходное состояниеВернуть к этому состоянию",
+    "Исходное состояниеВернуть к этому состоянию…",
     expect.stringContaining("Спикер 2 → Анна Смирнова · голос запомнен: Анна Смирновасейчас"),
-    expect.stringContaining("Спикер 3 объединён со спикером «Анна Смирнова» (отменено)Вернуть к этому состоянию"),
+    expect.stringContaining("Спикер 3 объединён со спикером «Анна Смирнова» (отменено)Вернуть к этому состоянию…"),
   ]);
   expect(items[1]).toHaveAttribute("aria-current", "step");
-  await userEvent.click(within(items[2]!).getByRole("button", { name: "Вернуть к этому состоянию" }));
+  await userEvent.click(within(items[2]!).getByRole("button", { name: "Вернуть к этому состоянию…" }));
+  // Вперёд по истории: повторить отменённое — без красной кнопки.
+  let ask = screen.getByRole("alertdialog", { name: "Вернуться к этому состоянию?" });
+  expect(ask).toHaveTextContent("Отменённые раньше изменения (1) будут применены снова.");
+  expect(api.revertSpeakers).not.toHaveBeenCalled();
+  await userEvent.click(within(ask).getByRole("button", { name: "Вернуть" }));
   expect(api.revertSpeakers).toHaveBeenCalledWith(ep, "r1", "s2");
   await waitFor(() => expect(within(list).getAllByRole("listitem")[2]).toHaveAttribute("aria-current", "step"));
   await userEvent.click(within(within(list).getAllByRole("listitem")[0]!).getByRole("button",
-    { name: "Вернуть к этому состоянию" }));
+    { name: "Вернуть к этому состоянию…" }));
+  // Назад: число отменяемых изменений названо, кнопка — красная.
+  ask = screen.getByRole("alertdialog", { name: "Вернуться к этому состоянию?" });
+  expect(ask).toHaveTextContent("Последние изменения спикеров этой встречи (2) будут отменены.");
+  expect(within(ask).getByRole("button", { name: "Вернуть" })).toHaveClass("btn--danger");
+  await userEvent.click(within(ask).getByRole("button", { name: "Вернуть" }));
   expect(api.revertSpeakers).toHaveBeenLastCalledWith(ep, "r1", null);
 });
 

@@ -200,6 +200,6 @@ test("образец: getSample и src с #t=start,end", async () => {
   vi.mocked(api.getSample).mockResolvedValue({ recording: "r1", start: 5, end: 9, track: "sys" });
   setup();
   await userEvent.click(screen.getByText("Демьян"));
-  await userEvent.click(await screen.findByRole("button", { name: "▶ Прослушать образец" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Прослушать образец" }));
   await waitFor(() => expect(document.querySelector("audio")!.getAttribute("src")).toMatch(/track=sys#t=5,9$/));
 });

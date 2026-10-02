@@ -25,7 +25,7 @@
 button.chip { cursor: pointer; transition: background var(--t); }
 button.chip:hover { background: var(--surface-hover); }
 .chip--unnamed { color: var(--text-2); }
-.chip--action { padding: 0 10px; color: var(--accent-hover); border-style: dashed; }
+.chip--action { padding: 0 10px; color: var(--accent-hi); border-style: dashed; }
 .chip--action[aria-expanded="true"] { border-style: solid; border-color: var(--accent); }
 /* Действия карточки (CardActions): главное слева, значки справа; узкая — только значки. */
 .card__actions {
@@ -67,6 +67,7 @@ button.chip:hover { background: var(--surface-hover); }
 .card__path { color: var(--text); word-break: break-all; }
 .card__kept { display: block; color: var(--amber); }
 .card__progress { display: flex; flex-direction: column; gap: 8px; color: var(--text-2); }
+.card__advice { margin: 0; color: var(--text); font-size: 12px; line-height: 1.5; }
 /* Плеер записи (AudioPlayer): одна строка внизу карточки. */
 .player {
   flex: none; display: flex; align-items: center; gap: 10px; padding: 6px 16px;
@@ -117,6 +118,14 @@ button.chip:hover { background: var(--surface-hover); }
   border: 0; background: none; color: var(--text-3); font: inherit; font-size: 12px; cursor: pointer;
 }
 .turn__time:hover { color: var(--accent-hover); }
+/* Значок «слушать» — тот же lucide Play (14 px, штрих 1.75), но маской: в длинной
+   расшифровке тысячи строк, и SVG-элемент в каждой утяжеляет отрисовку. */
+button.turn__time { display: inline-flex; align-items: center; gap: 4px; }
+button.turn__time::before {
+  content: ""; flex: none; width: 14px; height: 14px; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='6 3 20 12 6 21 6 3'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='6 3 20 12 6 21 6 3'/%3E%3C/svg%3E") center / contain no-repeat;
+}
 .turn__body { min-width: 0; }
 .turn__head { display: flex; gap: 8px; align-items: baseline; }
 .turn__speaker { font-weight: 600; font-size: 12px; color: var(--text); }
@@ -181,11 +190,11 @@ button.turn__speaker:hover { text-decoration: underline; }
 
 /* Поиск по расшифровке (TranscriptView): поле прилипает к верху прокрутки. */
 .find {
-  position: sticky; top: -8px; z-index: 2; display: flex; align-items: center; gap: 6px;
+  position: sticky; top: -8px; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   margin: -8px 0 4px; padding: 8px 0; background: var(--bg);
 }
 .find__input {
-  flex: 1; min-width: 0; height: 28px; padding: 0 10px;
+  flex: 1; min-width: 160px; height: 28px; padding: 0 10px;
   background: var(--surface); color: var(--text);
   border: 1px solid var(--line-2); border-radius: var(--r-md); font: inherit;
 }

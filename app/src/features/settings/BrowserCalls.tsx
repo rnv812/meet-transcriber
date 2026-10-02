@@ -9,9 +9,11 @@
  * (`browser_require_site`) решается, звонок ли это вообще.
  */
 
+import { X } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { Icon } from "../../ui/Icon";
 
 export type Browser = { exe: string; title: string };
 
@@ -105,7 +107,7 @@ export function BrowserCalls({ browsers, requireSite, sites, onBrowsers, onRequi
           <li key={site} className="callchip">
             <span>{site}</span>
             <button type="button" className="callchip__remove" aria-label={`Убрать ${site}`}
-              onClick={() => onSites(sites.filter((s) => s !== site))}>×</button>
+              onClick={() => onSites(sites.filter((s) => s !== site))}><Icon as={X} size="sm" /></button>
           </li>
         ))}
       </ul>

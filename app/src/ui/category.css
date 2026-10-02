@@ -38,6 +38,7 @@
 /* Фильтр списка по категориям. */
 .cat-filter { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .cat-filter__button {
+  position: relative;
   display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; flex: none;
   background: var(--surface); color: var(--text-2); border: 1px solid var(--line-2); border-radius: var(--r-md);
   font: inherit; cursor: pointer;
@@ -45,6 +46,10 @@
 .cat-filter__button:hover { color: var(--text); background: var(--surface-hover); }
 .cat-filter__button[aria-expanded="true"] { border-color: var(--accent); }
 .cat-filter__button--active { color: var(--text); border-color: var(--accent); }
+.cat-filter__count {
+  position: absolute; top: -7px; right: -7px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--accent); color: #fff; font-size: 10px; line-height: 16px; text-align: center;
+}
 .cat-filter__list {
   display: flex; flex-direction: column; gap: 1px; max-height: 340px; overflow-y: auto;
   min-width: 0; margin: 0; padding: 0; border: 0;

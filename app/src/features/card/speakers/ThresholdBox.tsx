@@ -6,12 +6,14 @@
  * спикеров порог не трогает.
  */
 
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { applyThreshold, thresholdPlan, type Endpoint } from "../../../lib/api";
 import { errorText } from "../../../lib/format";
 import type { SpeakersView, ThresholdPlan } from "../../../lib/types";
 import { Button } from "../../../ui/Button";
 import { HelpTip, TipLine } from "../../../ui/HelpTip";
+import { Icon } from "../../../ui/Icon";
 
 const PLAN_DELAY_MS = 250;
 const pct = (x: number) => `${Math.round(x * 100)}%`;
@@ -61,7 +63,7 @@ export function ThresholdBox({ endpoint, recordingId, own, fallback, busy, onApp
   return (
     <section className="spk-thr" aria-label="Порог узнавания голоса">
       <button type="button" className="spk-hist__toggle" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        {open ? "▾" : "▸"} Порог узнавания голоса: {pct(current)} {own === null ? "(общий)" : "(для этой встречи)"}
+        <Icon as={open ? ChevronDown : ChevronRight} size="sm" />Порог узнавания голоса: {pct(current)} {own === null ? "(общий)" : "(для этой встречи)"}
       </button>
       {open && (
         <div className="spk-thr__body">

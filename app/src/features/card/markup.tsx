@@ -85,8 +85,12 @@ export function TypeFilters({ counts, value, onChange }: {
 }
 
 const COLLAPSED_KEY = "meet.insights.collapsed";
+/** Свёрнуто ли «Наблюдения»: как человек оставил; не выбирал — свёрнуто в узком окне (до 1000 px). */
 function readCollapsed(): boolean {
-  try { return window.localStorage?.getItem(COLLAPSED_KEY) === "1"; } catch { return false; }
+  let stored: string | null = null;
+  try { stored = window.localStorage?.getItem(COLLAPSED_KEY) ?? null; } catch { /* хранилище недоступно */ }
+  if (stored === "1" || stored === "0") return stored === "1";
+  return typeof window !== "undefined" && window.innerWidth > 0 && window.innerWidth <= 1000;
 }
 function writeCollapsed(v: boolean) {
   try { window.localStorage?.setItem(COLLAPSED_KEY, v ? "1" : "0"); } catch { /* хранилище недоступно */ }

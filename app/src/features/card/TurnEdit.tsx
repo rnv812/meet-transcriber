@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { Sparkles } from "lucide-react";
+import { Sparkles, X } from "lucide-react";
 import { AGENT_INTENTS } from "../../lib/agentRef";
 import { relabelTurns, splitTurn, undoSpeakers, type Endpoint } from "../../lib/api";
 import { nfc } from "../../lib/search";
@@ -21,6 +21,7 @@ import type { Segment } from "../../lib/types";
 import { Popover } from "../../ui/Popover";
 import { TargetPicker, type Target } from "./speakers/TargetPicker";
 import type { PersonColor } from "./Turns";
+import { Icon } from "../../ui/Icon";
 
 type Menu = { anchor: HTMLElement; turn: number | null };
 /** «Разделить реплику здесь»: реплика, сегмент и место в его тексте; текст вокруг места — для подписи. */
@@ -407,7 +408,7 @@ export function useTurnEdit({
           {done.undo && (!done.step || done.step === head) && (
             <button type="button" className="spk-link" disabled={busy} onClick={() => void undo()}>Отменить</button>
           )}
-          <button type="button" className="spk-link tsel__close" aria-label="Скрыть" onClick={() => setDone(null)}>×</button>
+          <button type="button" className="spk-link tsel__close" aria-label="Скрыть" onClick={() => setDone(null)}><Icon as={X} size="sm" /></button>
         </>
       )}
     </div>

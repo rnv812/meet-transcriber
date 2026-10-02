@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { RecordingsList } from "./RecordingsList";
+import { CategoryFilter } from "./CategoryFilter";
 import * as api from "../../lib/api";
 import { loadCategoryFilter, saveCategoryFilter } from "../../lib/categories";
 import type { Category, Recording } from "../../lib/types";
@@ -153,7 +154,7 @@ test("меню «⋯» → «Категория»: список с клавиа�
   await userEvent.click(screen.getByRole("menuitem", { name: "Категория" }));
   const menu = screen.getByRole("menu", { name: "Категория записи «Без разметки»" });
   const radios = within(menu).getAllByRole("menuitemradio");
-  expect(radios.map((r) => r.textContent)).toEqual(["Без категории✓", "Дейлик", "Встреча с клиентом", "Ретроспектива"]);
+  expect(radios.map((r) => r.textContent)).toEqual(["Без категории", "Дейлик", "Встреча с клиентом", "Ретроспектива"]);
   expect(radios[0]).toHaveAttribute("aria-checked", "true");
   expect(radios[0]).toHaveFocus();
   await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
@@ -183,4 +184,11 @@ test("без категорий в настройках фильтра нет", 
   render(<RecordingsList selected={null} onSelect={vi.fn()} library={library()} resident={resident} q=""
     onQ={vi.fn()} categories={[]} categoryFilter={[]} onCategoryFilter={vi.fn()} />);
   expect(screen.queryByRole("button", { name: "Категории" })).toBeNull();
+});
+
+test("число выбранных категорий — значком поверх кнопки: подпись и ширина кнопки те же", () => {
+  render(<CategoryFilter list={categories} endpoint={null} q="" selected={[categories[0]!.id]} onChange={() => {}} />);
+  const button = screen.getByRole("button", { name: "Категории · 1" });
+  expect(button.firstChild?.textContent).toBe("Категории");
+  expect(button.querySelector(".cat-filter__count")).toHaveTextContent("1");
 });

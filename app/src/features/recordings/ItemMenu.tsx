@@ -6,9 +6,11 @@
  * `onClose`). Клик снаружи закрывает. Положение — fixed, в пределах окна.
  */
 
+import { Check } from "lucide-react";
 import {
   Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject,
 } from "react";
+import { Icon } from "../../ui/Icon";
 
 export type MenuItem = {
   label: string;
@@ -109,7 +111,7 @@ export function ItemMenu({ at, label, items, note, anchor, onClose }: {
             onClick={item.onSelect}>
             {item.icon && <span className="item-menu__icon" aria-hidden="true">{item.icon}</span>}
             {item.label}
-            {item.checked && <span className="item-menu__end" aria-hidden="true">✓</span>}
+            {item.checked && <span className="item-menu__end" aria-hidden="true"><Icon as={Check} size="sm" /></span>}
             {item.trailing && <span className="item-menu__end item-menu__icon" aria-hidden="true">{item.trailing}</span>}
           </button>
         </Fragment>

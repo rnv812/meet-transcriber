@@ -268,7 +268,7 @@ test("Shift+щелчок — диапазон; флажок снимает; «С
   await user.click(screen.getByRole("button", { name: "Объединить (2)" }));
   await vi.waitFor(() => expect(api.mergeRecordings).toHaveBeenCalledWith(ep, ["d", "f"], true));
   expect(killed).toEqual([]);  // исходные остаются — агентов не трогаем
-  expect(await screen.findByRole("status")).toHaveTextContent(/^Встречи объединены×$/);
+  expect(await screen.findByRole("status")).toHaveTextContent(/^Встречи объединены$/);
 });
 
 test("Ctrl+A — все записи; запись в обработке не даёт объединить; Esc снимает выбор", async () => {
@@ -337,4 +337,30 @@ test("бейдж «ИИ» у названия от модели: нажатие 
   await userEvent.clear(input);
   await userEvent.type(input, "Бета{Enter}");
   expect(api.patchRecording).toHaveBeenCalledWith(ep, "a", { title: "Бета" });
+});
+
+test("первая загрузка библиотеки — заготовки строк, поиск на месте; пустой поиск предлагает сбросить", async () => {
+  setup({ library: { ...library, items: [], loading: true } });
+  expect(screen.getByRole("list", { name: "Загрузка записей" })).toHaveAttribute("aria-busy", "true");
+  expect(screen.getByRole("searchbox", { name: "Поиск по записям" })).toBeInTheDocument();
+  expect(screen.queryByText("Записей пока нет")).toBeNull();
+});
+
+test("ничего не найдено — подсказка и «Сбросить поиск»", async () => {
+  const { onQ } = setup({ library: { ...library, items: [] }, q: "бюджет" });
+  expect(screen.getByText("Ничего не найдено")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Сбросить поиск" }));
+  expect(onQ).toHaveBeenCalledWith("");
+});
+
+test("название в строке: подсказка — полное название, только если оно обрезано", () => {
+  setup();
+  const title = within(screen.getByRole("list", { name: "Записи" })).getByText("Планёрка");
+  Object.defineProperty(title, "clientWidth", { value: 100, configurable: true });
+  Object.defineProperty(title, "scrollWidth", { value: 100, configurable: true });
+  fireEvent.mouseEnter(title);
+  expect(title).toHaveAttribute("title", "Двойной щелчок или F2 — переименовать");
+  Object.defineProperty(title, "scrollWidth", { value: 300, configurable: true });
+  fireEvent.mouseEnter(title);
+  expect(title.getAttribute("title")).toBe("Планёрка\nДвойной щелчок или F2 — переименовать");
 });

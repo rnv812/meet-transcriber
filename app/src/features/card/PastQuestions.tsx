@@ -5,10 +5,12 @@
  */
 
 import { useEffect, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { getQa, type Endpoint } from "../../lib/api";
 import { dayLabel } from "../../lib/format";
 import { Markdown } from "../../lib/markdown";
 import type { QaItem } from "../../lib/types";
+import { Icon } from "../../ui/Icon";
 
 export function PastQuestions({ endpoint, id }: { endpoint: Endpoint; id: string }) {
   const [items, setItems] = useState<QaItem[]>([]);
@@ -23,7 +25,9 @@ export function PastQuestions({ endpoint, id }: { endpoint: Endpoint; id: string
   if (!items.length) return null;
   return (
     <details className="agent__past" role="group" aria-label="Прошлые вопросы">
-      <summary className="agent__past-title">Прошлые вопросы ({items.length})</summary>
+      <summary className="agent__past-title">
+        <Icon as={ChevronRight} size="sm" className="agent__past-chevron" />Прошлые вопросы ({items.length})
+      </summary>
       <p className="agent__past-note muted">
         Ответы модели на вопросы, заданные раньше. Новые вопросы задавайте агенту.
       </p>
