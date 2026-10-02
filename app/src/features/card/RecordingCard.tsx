@@ -12,6 +12,7 @@ import { clock, errorText } from "../../lib/format";
 import { JiraLinks, jiraLinker, type JiraLinker } from "../../lib/jira";
 import { DEFAULT_PREFS, markupPrefs, type MarkupPrefs } from "../../lib/markupPrefs";
 import { agentKillRecording, inTauri, openFolder, saveText } from "../../lib/shell";
+import { keepTranscript } from "../../lib/sameTranscript";
 import { mergeTurns, speakersOf, type Turn } from "../../lib/speakers";
 import { activeJobOf, failedRetranscribe, failureAdvice, isLiveRecording, statusOf } from "../../lib/status";
 import type { Category, Job, KbExport, LiveHint, Recording, Segment, Snapshot, Transcript } from "../../lib/types";
@@ -155,7 +156,11 @@ export function RecordingCard({
     try {
       const data = await getRecording(endpoint, id);
       if (stale()) return;
-      setRec(data);
+      // Та же расшифровка — тот же объект: открытые окна правки не сбрасываются.
+      setRec((prev) => {
+        const transcript = keepTranscript(prev?.id === data.id ? prev.transcript : null, data.transcript);
+        return transcript === data.transcript ? data : { ...data, transcript };
+      });
       setError(null);
       setMissing(false);
     } catch (e) {
