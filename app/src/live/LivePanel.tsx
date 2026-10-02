@@ -148,7 +148,19 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
           <span className="live-dot" aria-hidden="true" />
           <span className="num">{elapsed === null ? "—" : clock(elapsed)}</span> · {state}
           {quiet && <span className="live-head__quiet-tag">тихо</span>}
-          {live.status && !stopping && (
+          {/* Ошибки и связь — в той же строке состояния шапки (одна, по важности):
+              не закрывают поле вопроса и действия и не сдвигают содержимое. */}
+          {stopError ? (
+            <span className="live-status live-status--error" role="alert" title={stopError}>
+              <span className="live-status__dot" aria-hidden="true" />
+              <span className="live-status__text">{stopError}</span>
+            </span>
+          ) : live.error ? (
+            <span className="live-status" role="status" title={live.error}>
+              <span className="live-status__dot" aria-hidden="true" />
+              <span className="live-status__text">{live.error}</span>
+            </span>
+          ) : live.status && !stopping && (
             <span className="live-status" role="status" title={live.status}>
               <span className="live-status__dot" aria-hidden="true" />
               <span className="live-status__text">{live.status}</span>
@@ -171,13 +183,6 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
             tooltip="Остановить и сохранить запись" onClick={stop} disabled={stopping} />
         </span>
       </header>
-      {/* Ошибки — поверх низа панели, а не строкой над содержимым: оно не сдвигается. */}
-      {(stopError || live.error) && (
-        <div className="live-panel__notices">
-          {stopError && <div className="live-panel__error" role="alert">{stopError}</div>}
-          {live.error && <div className="live-panel__note muted" role="status">{live.error}</div>}
-        </div>
-      )}
       {open ? (
         <div className="live-panel__body">
           <LiveWorkspace live={live} view={ws} onAsk={ask} disabled={stopping} />

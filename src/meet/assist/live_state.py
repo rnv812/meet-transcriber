@@ -68,6 +68,9 @@ DISMISSED_IN_PROMPT = 5
 MAX_OPS = 24
 MAX_SUMMARY_REMOVES = 3
 DEFAULT_MAX_HINTS = 5
+# Сколько секунд после «Скрыть» подсказку можно вернуть («Вернуть» в панели —
+# пять секунд; запас на задержку сети и окна).
+RESTORE_S = 30.0
 
 # Похожесть текстов: посимвольно или по набору слов.
 SIMILAR_RATIO = 0.9
@@ -193,6 +196,8 @@ class LiveState:
         self._items: dict[str, dict[str, dict]] = {s: {} for s in SECTIONS}
         self._hints: dict[str, dict] = {}
         self._dismissed: dict[str, str] = {}   # id -> текст (не предлагать снова)
+        # Скрытые недавно — целиком, для «Вернуть» в панели (RESTORE_S секунд).
+        self._recent_dismissed: dict[str, tuple[float, dict]] = {}
         self._retired: set[str] = set()        # ушли (удалены, вытеснены, скрыты)
         self._next = {p: 1 for p in PREFIX.values()}
         self.version = 0
@@ -459,6 +464,21 @@ class LiveState:
             return False
         self._dismissed[hint_id] = hint["text"]
         self._retired.add(hint_id)
+        now = self._clock()
+        self._recent_dismissed = {k: v for k, v in self._recent_dismissed.items() if now - v[0] <= RESTORE_S}
+        self._recent_dismissed[hint_id] = (now, hint)
+        self.version += 1
+        return True
+
+    def restore(self, hint_id: str) -> bool:
+        """«Вернуть» сразу после «Скрыть» (не позже RESTORE_S): подсказка снова
+        на месте и снова может повторяться. Позже, или такой не скрывали, — False."""
+        entry = self._recent_dismissed.pop(hint_id, None)
+        if entry is None or self._clock() - entry[0] > RESTORE_S or hint_id in self._hints:
+            return False
+        self._dismissed.pop(hint_id, None)
+        self._retired.discard(hint_id)
+        self._hints[hint_id] = entry[1]
         self.version += 1
         return True
 

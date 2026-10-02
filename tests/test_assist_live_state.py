@@ -215,6 +215,35 @@ def test_dismissed_hint_never_comes_back():
     assert s.dismiss("h1") is False and s.dismiss("h404") is False
 
 
+def test_restore_right_after_dismiss_brings_the_hint_back():
+    """«Вернуть» в панели: скрытие ушло сразу (текст запомнен — «не
+    предлагать снова»), а возврат в течение RESTORE_S снимает и его."""
+    s = _state()
+    s.apply({"ops": [_hint("Спросить про сроки тестов")]})
+    s.dismiss("h1")
+    assert s.apply({"ops": [_hint("Спросить про сроки тестов!")]}) is False  # скрыта — не повторять
+    v = s.version
+    assert s.restore("h1") is True
+    assert [h["text"] for h in s.to_dict()["hints"]] == ["Спросить про сроки тестов"]
+    assert s.version == v + 1
+    assert s.restore("h1") is False  # уже вернули
+    assert s.restore("h404") is False
+
+
+def test_restore_is_only_possible_shortly_after_dismiss():
+    from meet.assist.live_state import RESTORE_S
+
+    clock = Clock()
+    s = _state(clock=clock)
+    s.apply({"ops": [_hint("Спросить про сроки тестов")]})
+    s.dismiss("h1")
+    clock.t += RESTORE_S + 5
+    assert s.restore("h1") is False
+    assert s.to_dict()["hints"] == []
+    # Текст по-прежнему «не предлагать снова».
+    assert s.apply({"ops": [_hint("Спросить про сроки тестов")]}) is False
+
+
 def test_cap_drops_lowest_value_but_never_pinned():
     s = _state(max_hints=3)
     s.apply({"ops": [_hint("Следующий шаг: созвон с партнёром", kind="followup")]})

@@ -68,6 +68,8 @@
 .live-status { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--text-3); font-weight: 400; font-size: 11.5px; }
 .live-status__dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--amber); opacity: 0.8; }
 .live-status__text { overflow: hidden; text-overflow: ellipsis; }
+.live-status--error { color: var(--err); }
+.live-status--error .live-status__dot { background: var(--err); }
 
 /* Рабочая область: вкладки (узкая) или две колонки (широкая, от 720). */
 .live-ws { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -105,18 +107,23 @@
   grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); grid-template-rows: minmax(0, 1fr);
 }
 .live-ws--wide .live-ws__feed { min-height: 0; }
-.live-ws__side {
-  min-height: 0; display: flex; flex-direction: column; gap: 14px; padding-left: 12px; border-left: 1px solid var(--line);
-  overflow-y: auto;
-}
-.live-ws__pane { flex: none; display: flex; flex-direction: column; gap: 4px; }
+.live-ws__side { min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-left: 12px; border-left: 1px solid var(--line); }
+/* Подсказки первыми и с гарантированной областью (не меньше ~40 % колонки),
+   сводка — ниже; у каждой своя прокрутка. */
+.live-ws__pane { min-height: 0; display: flex; flex-direction: column; gap: 4px; }
+.live-ws__pane--hints { flex: 3 1 0; min-height: 40%; }
+.live-ws__pane--summary { flex: 2 1 0; min-height: 64px; }
+.live-ws__scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.live-ws__n { color: var(--text-3); font-weight: 400; letter-spacing: 0; text-transform: none; }
 .live-ws__title { margin: 0; color: var(--text-3); font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
-/* «Спросить» прилипает к низу правой колонки (колонка прокручивается одной
-   лентой): по содержимому, но не больше ~40 % высоты, история — внутри. */
+/* «Спросить» внизу колонки: не выше ~30 %, история прокручивается внутри;
+   пока им не пользуются — одна строка (поле вопроса). */
 .live-ws__ask {
-  position: sticky; bottom: 0; margin-top: auto; flex: none; max-height: 42%; min-height: 0;
-  display: flex; flex-direction: column; padding-top: 8px; border-top: 1px solid var(--line); background: var(--bg);
+  flex: none; max-height: 30%; min-height: 0;
+  display: flex; flex-direction: column; padding-top: 8px; border-top: 1px solid var(--line);
 }
+.live-ws__ask--compact .live-ask__history, .live-ws__ask--compact .live-ask__quick,
+.live-ws__ask--compact .live-ask__error { display: none; }
 
 .live-empty { margin: 4px 0; font-size: 12px; }
 

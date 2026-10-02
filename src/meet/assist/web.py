@@ -83,7 +83,7 @@ document.getElementById('q').addEventListener('keydown',
 </script></body></html>"""
 
 TRANSCRIPT_TAIL = 50
-HINT_ACTIONS = ("pin", "unpin", "dismiss")
+HINT_ACTIONS = ("pin", "unpin", "dismiss", "restore")
 KEEPALIVE_S = 15.0
 # Состояние без сигнала изменений (старый утиный объект) — опрос раз в секунду.
 POLL_S = 1.0
@@ -236,7 +236,7 @@ def build_app(state) -> web.Application:
         hint_id = body.get("id") if isinstance(body, dict) else None
         action = body.get("action") if isinstance(body, dict) else None
         if not isinstance(hint_id, str) or action not in HINT_ACTIONS:
-            raise web.HTTPBadRequest(text="ожидается id и action: pin, unpin или dismiss")
+            raise web.HTTPBadRequest(text="ожидается id и action: pin, unpin, dismiss или restore")
         changed = state.hint_action(hint_id, action)
         return _json_response({"ok": True, "changed": changed})
 

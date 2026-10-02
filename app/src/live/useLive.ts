@@ -37,7 +37,8 @@ export const PARTIAL_MS = 100;
 export type FeedLine = LiveLine & { id: number | null };
 
 export type AskOptions = { quick?: LiveQuick; since_t?: number };
-export type HintAction = "pin" | "unpin" | "dismiss";
+/** `restore` — «Вернуть» сразу после «Скрыть» (ассистент помнит скрытую несколько секунд). */
+export type HintAction = "pin" | "unpin" | "dismiss" | "restore";
 
 export type Live = {
   /** Тихий статус ассистента («Подсказки временно недоступны»), null — всё в порядке. */
@@ -65,7 +66,8 @@ export type Live = {
   /** Действие с подсказкой не дошло: у какой подсказки и почему. */
   hintError: { id: string; text: string } | null;
   ask: (question: string, opts?: AskOptions) => Promise<void>;
-  hint: (id: string, action: HintAction) => Promise<void>;
+  /** → false: ассистент ничего не изменил (подсказки уже нет); void — не дошло или без связи. */
+  hint: (id: string, action: HintAction) => Promise<boolean | void>;
   setTask: (task: string) => Promise<void>;
 };
 
@@ -206,8 +208,9 @@ export function useLive(ep: Endpoint | null, active = true): Live {
     setHintError(null);
     setPending((cur) => ({ ...cur, [id]: { action, done: false } }));
     try {
-      await liveHint(ep, id, action);
+      const reply = await liveHint(ep, id, action);
       setPending((cur) => (cur[id] ? { ...cur, [id]: { action, done: true } } : cur));
+      return reply?.changed !== false;
     } catch (e) {
       setPending((cur) => {
         const { [id]: _drop, ...rest } = cur;

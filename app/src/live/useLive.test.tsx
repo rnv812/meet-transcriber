@@ -175,7 +175,7 @@ test("пометка держится, пока ассистент не подт
   const { result } = renderHook(() => useLive(ep));
   const es = liveSources().at(-1)!;
   act(() => es.emit("state", { digest: "", transcript: [], status: null, hints: [hintOf("h1")] }));
-  let call!: Promise<void>;
+  let call!: Promise<boolean | void>;
   act(() => { call = result.current.hint("h1", "pin"); });
   // Старое состояние, пришедшее до ответа, пометку не стирает.
   act(() => es.emit("state", { digest: "", transcript: [], status: null, hints: [hintOf("h1")] }));
