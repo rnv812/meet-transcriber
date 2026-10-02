@@ -74,6 +74,19 @@ ENGINE_HINT = (
 )
 
 
+_created_lock = threading.Lock()
+_last_created = 0.0
+
+
+def _created_at() -> float:
+    """Время создания задачи, строго возрастающее: у задач, созданных в один тик
+    часов, порядок в общем списке очередей не зависит от сортировки."""
+    global _last_created
+    with _created_lock:
+        _last_created = max(time.time(), _last_created + 1e-6)
+        return _last_created
+
+
 @dataclass
 class Job:
     id: str
@@ -88,7 +101,7 @@ class Job:
     note: str | None = None
     result: str | None = None
     error: str | None = None
-    created_at: float = field(default_factory=time.time)
+    created_at: float = field(default_factory=_created_at)
     started_at: float | None = None
     finished_at: float | None = None
 
