@@ -16,6 +16,8 @@ vi.mock("../../lib/api", async (orig) => ({
   renamePerson: vi.fn(),
   mergePerson: vi.fn(),
   deletePerson: vi.fn(),
+  getProfilesRemoved: vi.fn(async () => ({ notice: null })),
+  dismissProfilesRemoved: vi.fn(),
 }));
 
 const ep = { base: "/api", token: null };

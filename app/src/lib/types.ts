@@ -242,6 +242,9 @@ export type PersonCard = {
 
 export type Sample = { recording: string; start: number; end: number; track: string };
 
+/** Профили людей убраны (0.3.2): строка об уборке в «Голосах». `notes` — файл с заметками людей, `folder` — где он. */
+export type ProfilesRemovedNotice = { notes: string | null; folder: string };
+
 /** Фраза спикера для прослушивания в панели «Спикеры». */
 export type SpeakerPhrase = { start: number; end: number; text: string };
 /** Похожий голос из базы: `score` — сходство 0..1. */

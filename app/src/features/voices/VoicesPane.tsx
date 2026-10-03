@@ -1,8 +1,10 @@
-import { useState } from "react";
-import type { Endpoint } from "../../lib/api";
+import { useEffect, useState } from "react";
+import { dismissProfilesRemoved, getProfilesRemoved, type Endpoint } from "../../lib/api";
 import { duration } from "../../lib/format";
-import type { Person } from "../../lib/types";
+import { inTauri, openFolder } from "../../lib/shell";
+import type { Person, ProfilesRemovedNotice } from "../../lib/types";
 import { Avatar } from "../../ui/Avatar";
+import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { PaneResizer } from "../../ui/PaneResizer";
 import { VoiceBaseTip } from "../settings/tips";
@@ -27,20 +29,56 @@ type Props = {
   onOpenRecording: (id: string) => void;
 };
 
+/**
+ * Профили людей убраны в 0.3.2: резидент при обновлении перенёс заметки в один
+ * файл и удалил остальное. Здесь — одна тихая строка об этом, до «Понятно».
+ */
+function ProfilesRemoved({ endpoint }: { endpoint: Endpoint }) {
+  const [notice, setNotice] = useState<ProfilesRemovedNotice | null>(null);
+  useEffect(() => {
+    let live = true;
+    getProfilesRemoved(endpoint).then((r) => live && setNotice(r.notice), () => {});
+    return () => { live = false; };
+  }, [endpoint]);
+  if (!notice) return null;
+  const done = () => {
+    setNotice(null);
+    void dismissProfilesRemoved(endpoint).catch(() => {});
+  };
+  return (
+    <div className="voices__notice" role="status">
+      <span>
+        Профили людей убраны из Meet; сгенерированные профили удалены.
+        {notice.notes ? ` Ваши заметки сохранены в ${notice.notes}` : ""}
+      </span>
+      <span className="voices__notice-actions">
+        {notice.notes && inTauri() && (
+          <Button onClick={() => openFolder(notice.folder).catch(() => {})}>Открыть папку</Button>
+        )}
+        <Button onClick={done}>Понятно</Button>
+      </span>
+    </div>
+  );
+}
+
 export function VoicesPane({ endpoint, people, avatarVersion, onAvatar, onChanged, onOpenRecording }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const current = people.find((p) => p.name === selected) ?? null;
 
   if (people.length === 0) {
     return (
-      <EmptyState title="База голосов пуста"
-        hint="Назовите спикеров в карточке записи — их голоса сохранятся здесь и будут узнаваться автоматически." />
+      <div className="voices__empty">
+        <ProfilesRemoved endpoint={endpoint} />
+        <EmptyState title="База голосов пуста"
+          hint="Назовите спикеров в карточке записи — их голоса сохранятся здесь и будут узнаваться автоматически." />
+      </div>
     );
   }
 
   return (
     <div className="voices">
       <section className="voices__main">
+        <ProfilesRemoved endpoint={endpoint} />
         <h2 className="voices__title">
           {people.length} {plural(people.length, "человек", "человека", "человек")} · узнаются автоматически
           <VoiceBaseTip />
