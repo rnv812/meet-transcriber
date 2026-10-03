@@ -107,6 +107,17 @@
   grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); grid-template-rows: minmax(0, 1fr);
 }
 .live-ws--wide .live-ws__feed { min-height: 0; }
+/* Ассистент догоняет начало встречи: полоса хода над рабочей областью. */
+.live-ws--wide.live-ws--catchup { grid-template-rows: auto minmax(0, 1fr); }
+.live-ws--wide .live-catchup { grid-column: 1 / -1; }
+.live-catchup {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px;
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--surface-2); color: var(--text-2); font-size: 12px;
+}
+.live-catchup__bar { flex: 1 1 80px; min-width: 60px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.live-catchup__fill { display: block; height: 100%; background: var(--accent); transition: width 0.4s ease; }
+.live-catchup__note { flex-basis: 100%; font-size: 11px; }
 .live-ws__side { min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-left: 12px; border-left: 1px solid var(--line); }
 /* Подсказки первыми и с гарантированной областью (не меньше ~40 % колонки),
    сводка — ниже; у каждой своя прокрутка. */

@@ -218,6 +218,14 @@ test("запись с ассистентом: в карточке живая л�
   expect(await screen.findByText("Обсуждали релиз")).toBeInTheDocument();
 });
 
+test("ассистент включён посреди обычной записи — в её карточке та же живая область", async () => {
+  load({ has_transcript: false }, null);
+  const snapshot = { status: "recording", folder: "C:/rec/r1", live: live({ attached: true }) } as never;
+  render(<RecordingCard id="r1" endpoint={ep} snapshot={snapshot} />);
+  expect(await screen.findByText("Идёт запись с ассистентом")).toBeInTheDocument();
+  expect(screen.queryByText("Идёт запись…")).toBeNull();
+});
+
 test("ассистент пишет другую папку — у этой записи обычный статус", async () => {
   load({ has_transcript: false }, null);
   const snapshot = { status: "idle", folder: null, live: live({ folder: "C:/rec/other" }) } as never;

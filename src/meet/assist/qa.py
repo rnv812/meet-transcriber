@@ -26,6 +26,7 @@ import uuid
 from pathlib import Path
 
 from meet.assist import prompts
+from meet.assist.bus import chronological
 
 # Сколько последних пар «вопрос-ответ» класть в промпт провайдеру без сессий.
 HISTORY_PAIRS = 6
@@ -249,6 +250,10 @@ class QAService:
         entries, size = self._bus.entries_since(0)
         lines, _ = self._bus.since(0)
         lines = lines[:size]
+        if self._session_id is None or quick is not None:
+            # Догнанное начало встречи приходит в шину позже живых реплик:
+            # модели — по времени, «последние» — действительно последние.
+            lines, entries = chronological(lines, entries)
         if quick == "missed":
             last = max((e.get("t") or 0.0 for e in entries), default=0.0)
             start = since_t if since_t is not None else max(0.0, last - MISSED_DEFAULT_S)

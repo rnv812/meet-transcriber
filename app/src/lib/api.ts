@@ -476,6 +476,14 @@ export const liveStart = (ep: Endpoint) => json<{ ok: boolean } & LiveStatus>(ep
 export const liveStop = (ep: Endpoint) =>
   json<{ ok: boolean; action: string } & LiveStatus>(ep, "/live/stop", { method: "POST" });
 /**
+ * «Включить ассистента» посреди обычной записи: запись не прерывается,
+ * ассистент догоняет уже записанное и слушает дальше. Ответ сразу (`starting`).
+ */
+export const liveAttach = (ep: Endpoint) => json<{ ok: boolean } & LiveStatus>(ep, "/live/attach", { method: "POST" });
+/** «Выключить ассистента»: запись идёт дальше, его сводка остаётся с пометкой «неполная». */
+export const liveDetach = (ep: Endpoint) =>
+  json<{ ok: boolean; action: string } & LiveStatus>(ep, "/live/detach", { method: "POST" });
+/**
  * Вопрос или быстрое действие (`quick`, тогда вопрос не нужен); `since_t` —
  * с какой секунды записи «Что я пропустил?». Ответ модели может идти минуты.
  */

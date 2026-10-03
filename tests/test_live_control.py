@@ -35,16 +35,25 @@ def note(name, text=""):
 
 
 note("argv", json.dumps(args, ensure_ascii=False))
+note("env_token", os.environ.get("MEET_TAP_TOKEN", "-"))
+attach = args[args.index("--attach-to") + 1] if "--attach-to" in args else None
+if attach:
+    # Как настоящий ребёнок: отвод звука записи — по порту и токену.
+    import socket
+    tap = socket.create_connection(("127.0.0.1", int(args[args.index("--tap-port") + 1])), 5)
+    tap.sendall(os.environ["MEET_TAP_TOKEN"].encode("ascii") + b"\n")
+    note("tap_header", tap.makefile("rb").readline().decode("utf-8").strip())
 if mode == "no-provider":
     print("Подключите Claude Code или Codex в настройках", file=sys.stderr, flush=True)
     sys.exit(1)
 if mode == "slow":
     time.sleep(60)
     sys.exit(0)
-folder = os.path.join(out, "2026-10-01_10-00")
+folder = attach or os.path.join(out, "2026-10-01_10-00")
 os.makedirs(folder, exist_ok=True)
-with open(os.path.join(folder, "sys.opus"), "wb") as f:
-    f.write(b"x")
+if not attach:  # дорожки подключённого пишет запись резидента, не ассистент
+    with open(os.path.join(folder, "sys.opus"), "wb") as f:
+        f.write(b"x")
 stop = threading.Event()
 
 
@@ -91,6 +100,7 @@ class H(BaseHTTPRequestHandler):
             note("origin", self.headers["Origin"])
         if self.path == "/stop":
             note("stop")
+            note("stop_body", json.dumps(body, sort_keys=True))
             self._json(200, {"ok": True})
             stop.set()
         elif self.path == "/ask":
@@ -172,11 +182,12 @@ class Stub:
         self.argv: list | None = None
         self.processes: list = []
 
-    def __call__(self, argv, log_file):
+    def __call__(self, argv, log_file, extra_env=None):
         self.argv = list(argv)
         tail = argv[argv.index("assist") + 1:]
         process = live_control._spawn_process(
-            [sys.executable, str(self.script), self.mode, str(self.notes), *tail], log_file)
+            [sys.executable, str(self.script), self.mode, str(self.notes), *tail], log_file,
+            extra_env)
         self.processes.append(process)
         return process
 
@@ -289,7 +300,8 @@ def test_stop_asks_child_and_reports_stopped(make_live, data_dir, tmp_path):
     assert rec.kinds()[-1] == live_control.LIVE_STOPPED
     assert rec.last(live_control.LIVE_STOPPED).data["folder"] == folder
     assert live.status() == {"active": False, "starting": False, "stopping": False,
-                             "folder": None, "error": None, "started_at": None}
+                             "folder": None, "error": None, "started_at": None,
+                             "attached": False}
     assert not (data_dir / "live.json").exists()
 
 

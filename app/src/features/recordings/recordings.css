@@ -86,6 +86,9 @@
   padding: 0 7px; border-top-left-radius: 0; border-bottom-left-radius: 0;
   border-left-color: rgba(255, 255, 255, 0.18);
 }
+/* «Стоп ▾» идущей записи: без свечения главной кнопки, разделитель — линией. */
+.split--plain { box-shadow: none; }
+.split--plain .split__more { border-left-color: var(--line-2); }
 .rec-menu {
   position: fixed; z-index: 60; width: 240px; max-width: calc(100vw - 16px);
   display: flex; flex-direction: column; gap: 4px; padding: 4px;

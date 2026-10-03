@@ -70,6 +70,15 @@ pub const LIVE_FAILED: &str = "Ассистент завершился с оши
 pub const LIVE_CANCELLED: &str = "Запуск ассистента отменён";
 pub const LIVE_START_FAILED: &str = "Не удалось запустить ассистента";
 pub const LIVE_STOP_FAILED: &str = "Не удалось остановить ассистента";
+/// Ассистент включён посреди обычной записи («Включить ассистента»).
+pub const LIVE_ATTACHED: &str = "Ассистент включён в запись";
+/// Ассистента, включённого в запись, выключили: запись идёт дальше.
+pub const LIVE_DETACHED: &str = "Ассистент выключен";
+pub const LIVE_ATTACH_FAILED: &str = "Не удалось включить ассистента";
+pub const LIVE_DETACH_FAILED: &str = "Не удалось выключить ассистента";
+/// Пункты меню записи для ассистента, включаемого посреди неё.
+pub const ATTACH_LABEL: &str = "Включить ассистента";
+pub const DETACH_LABEL: &str = "Выключить ассистента";
 /// Автоматическая выгрузка встречи в базу знаний не удалась (`/state.kb_export_failed`).
 pub const KB_EXPORT_FAILED: &str = "Не удалось выгрузить встречу в базу знаний";
 /// Раздел настроек, куда ведёт отказ `/live/start` без провайдера (409).
@@ -91,6 +100,8 @@ const IMPORTANT: &[&str] = &[
     LIVE_FAILED,
     LIVE_START_FAILED,
     LIVE_STOP_FAILED,
+    LIVE_ATTACH_FAILED,
+    LIVE_DETACH_FAILED,
     KB_EXPORT_FAILED,
 ];
 
@@ -118,8 +129,9 @@ pub struct View {
     /// пусть и `null`). Старый резидент — нет, и тогда отмену из трея
     /// распознаёт `CancelMark`.
     pub reports_stops: bool,
-    /// Запись с ассистентом (`/state.live`). Обычная запись при этом не идёт:
-    /// `recording` — только про неё.
+    /// Запись с ассистентом (`/state.live`). Обычная запись при этом не идёт
+    /// (`recording` — только про неё), кроме ассистента, включённого посреди
+    /// обычной записи (`live.attached`).
     pub live: Live,
     /// Последний сбой автоматической выгрузки в базу знаний. Резидент
     /// сообщает о каждой встрече не больше одного раза; новое `at` — новое
@@ -226,6 +238,9 @@ pub struct Live {
     /// Почему упал или остановился с ошибкой последний запуск; сбрасывается
     /// следующим стартом.
     pub error: Option<String>,
+    /// Включён посреди обычной записи: запись ведёт резидент, ассистент её
+    /// слушает; «Выключить ассистента» запись не останавливает.
+    pub attached: bool,
 }
 
 impl Live {
@@ -243,6 +258,7 @@ impl Live {
             stopping: flag("stopping"),
             folder: text("folder"),
             error: text("error"),
+            attached: flag("attached"),
         }
     }
 
@@ -417,14 +433,20 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
         ));
     }
     if !prev.live.active && next.live.active {
-        out.push(Notice::new(
-            LIVE_LISTENING,
-            "Остановить — в меню значка Meet",
-            None,
-        ));
+        out.push(if next.live.attached {
+            Notice::new(
+                LIVE_ATTACHED,
+                "Догоняет начало встречи и слушает дальше. Выключить — в меню значка Meet",
+                None,
+            )
+        } else {
+            Notice::new(LIVE_LISTENING, "Остановить — в меню значка Meet", None)
+        });
     }
     if prev.live.running() && !next.live.running() {
-        out.push(live_ended(&prev.live, &next.live));
+        if let Some(notice) = live_ended(prev, next) {
+            out.push(notice);
+        }
     }
     for id in added(&prev.jobs_done, &next.jobs_done) {
         out.push(Notice::new(
@@ -461,9 +483,35 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
 /// `live.failed` всегда несёт ошибку, а `live.stopped` — только неудачный:
 /// ошибки нет — это штатная остановка (или ассистент вышел сам, кодом 0).
 /// Ошибка без просьбы остановиться — падение.
-fn live_ended(was: &Live, now: &Live) -> Notice {
+///
+/// Ассистент, включённый посреди обычной записи: остановилась сама запись —
+/// о ней скажет «Запись сохранена», ассистент молчит; выключили его, а запись
+/// идёт — «Ассистент выключен» (с ошибкой — она в теле).
+fn live_ended(prev: &View, next: &View) -> Option<Notice> {
+    let (was, now) = (&prev.live, &next.live);
     let recording = was.folder.as_deref().and_then(recording_id);
-    match now.error.as_deref() {
+    if was.attached {
+        return match now.error.as_deref() {
+            Some(error) if !was.stopping => Some(Notice::new(
+                LIVE_FAILED,
+                format!("{} — запись продолжается", shorten(error, ERROR_CHARS)),
+                recording,
+            )),
+            _ if prev.recording && !next.recording => None,
+            Some(error) => Some(Notice::new(
+                LIVE_DETACHED,
+                shorten(error, ERROR_CHARS),
+                recording,
+            )),
+            None if was.active => Some(Notice::new(
+                LIVE_DETACHED,
+                "Запись продолжается; его сводка — в карточке записи",
+                recording,
+            )),
+            None => Some(Notice::new(LIVE_CANCELLED, "Запись продолжается", None)),
+        };
+    }
+    Some(match now.error.as_deref() {
         None if was.active => Notice::new(
             LIVE_SAVED,
             "О готовой расшифровке придёт отдельное уведомление",
@@ -476,7 +524,7 @@ fn live_ended(was: &Live, now: &Live) -> Notice {
             recording,
         ),
         Some(error) => Notice::new(LIVE_FAILED, shorten(error, ERROR_CHARS), recording),
-    }
+    })
 }
 
 /// Окно ассистента по фронту `live.active`: `Some(true)` — открыть,
@@ -652,6 +700,9 @@ pub enum Action {
     /// Запись с ассистентом.
     LiveStart,
     LiveStop,
+    /// Ассистент посреди обычной записи: включить / выключить (запись идёт).
+    LiveAttach,
+    LiveDetach,
 }
 
 impl Action {
@@ -663,6 +714,8 @@ impl Action {
             Action::AutoRecord(_) => "/auto-record",
             Action::LiveStart => "/live/start",
             Action::LiveStop => "/live/stop",
+            Action::LiveAttach => "/live/attach",
+            Action::LiveDetach => "/live/detach",
         }
     }
 
@@ -681,6 +734,8 @@ impl Action {
             Action::AutoRecord(_) => AUTO_FAILED,
             Action::LiveStart => LIVE_START_FAILED,
             Action::LiveStop => LIVE_STOP_FAILED,
+            Action::LiveAttach => LIVE_ATTACH_FAILED,
+            Action::LiveDetach => LIVE_DETACH_FAILED,
         }
     }
 }
@@ -707,6 +762,7 @@ pub fn action_notice(action: Action, reply: Option<&api::Result<Value>>) -> Opti
                 (Some("already-recording"), _) => "Запись уже идёт".to_string(),
                 (Some("not-recording"), _) => "Запись не идёт".to_string(),
                 (Some("not-live"), _) => "Ассистент не запущен".to_string(),
+                (Some("not-attached"), _) => "Ассистент не включён в эту запись".to_string(),
                 (_, Some(error)) => error.to_string(),
                 _ => "Служба записи отклонила команду".to_string(),
             }
@@ -719,10 +775,11 @@ pub fn action_notice(action: Action, reply: Option<&api::Result<Value>>) -> Opti
     ))
 }
 
-/// `/live/start` ответил 409: не подключён ни Claude Code, ни Codex. Кроме
-/// уведомления — открыть окно на разделе настроек ассистента.
+/// `/live/start` или `/live/attach` ответил 409: не подключён ни Claude Code,
+/// ни Codex. Кроме уведомления — открыть окно на разделе настроек ассистента.
 pub fn needs_provider(action: Action, reply: Option<&api::Result<Value>>) -> bool {
-    action == Action::LiveStart && matches!(reply, Some(Err(api::Error::Status { code: 409, .. })))
+    matches!(action, Action::LiveStart | Action::LiveAttach)
+        && matches!(reply, Some(Err(api::Error::Status { code: 409, .. })))
 }
 
 /// Значок трея — кольцо Meet (`scripts/make_app_icons.py`): приглушённое —
@@ -880,6 +937,9 @@ pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
             let mut text = format!("идёт запись {}", clock(view.elapsed_s));
             if view.source.as_deref() == Some("auto") {
                 text.push_str(" (авто)");
+            }
+            if view.live.attached && view.live.active && !view.live.stopping {
+                text.push_str(" · ассистент");
             }
             text
         }
@@ -1099,10 +1159,20 @@ pub const CANCEL_STALE: &str =
 /// ассистента своя остановка (`/live/stop`) и нет отмены: резидент её не
 /// умеет. Отмены обычной записи здесь тоже нет: она внизу меню, отдельно от
 /// остановки (`menu_model`), — рядом их легко перепутать.
+///
+/// Во время обычной записи под «Остановить и сохранить» — ассистент для неё:
+/// «Включить ассистента» (запись не прерывается) или, когда он включён,
+/// «Выключить ассистента» (запись идёт дальше).
 pub fn record_items(state: &MenuState) -> Vec<(&'static str, &'static str, bool)> {
     let online = state.online;
     if state.recording {
-        return vec![("stop", STOP_LABEL, online)];
+        let assistant = match state.live {
+            LivePhase::Off => ("live-attach", ATTACH_LABEL, online),
+            LivePhase::Starting => ("live-starting", "Ассистент запускается…", false),
+            LivePhase::Active => ("live-detach", DETACH_LABEL, online),
+            LivePhase::Stopping => ("live-stopping", "Ассистент выключается…", false),
+        };
+        return vec![("stop", STOP_LABEL, online), assistant];
     }
     match state.live {
         LivePhase::Off => vec![
@@ -1450,6 +1520,8 @@ fn on_menu(app: &AppHandle, id: &str) {
         "stop" => command(app, Action::Stop),
         "live-start" => command(app, Action::LiveStart),
         "live-stop" => command(app, Action::LiveStop),
+        "live-attach" => command(app, Action::LiveAttach),
+        "live-detach" => command(app, Action::LiveDetach),
         "cancel" => confirm_cancel(app),
         "auto-on" | "auto-off" => {
             if let Some(state) = app.try_state::<TrayState>() {
@@ -2541,6 +2613,7 @@ mod tests {
                 stopping,
                 folder: active.then(|| LIVE_FOLDER.to_string()),
                 error: None,
+                attached: false,
             },
             ..idle()
         }
@@ -2609,6 +2682,7 @@ mod tests {
                 stopping: true,
                 folder: Some(LIVE_FOLDER.into()),
                 error: None,
+                attached: false,
             }
         );
         let v = View::from_json(
@@ -2847,8 +2921,152 @@ mod tests {
         );
         assert_eq!(
             items(true, LivePhase::Off),
-            vec![("stop", "Остановить и сохранить", true)]
+            vec![
+                ("stop", "Остановить и сохранить", true),
+                ("live-attach", "Включить ассистента", true),
+            ]
         );
+    }
+
+    #[test]
+    fn record_items_switch_the_assistant_during_a_recording() {
+        assert_eq!(
+            items(true, LivePhase::Starting),
+            vec![
+                ("stop", "Остановить и сохранить", true),
+                ("live-starting", "Ассистент запускается…", false),
+            ]
+        );
+        assert_eq!(
+            items(true, LivePhase::Active),
+            vec![
+                ("stop", "Остановить и сохранить", true),
+                ("live-detach", "Выключить ассистента", true),
+            ]
+        );
+        assert_eq!(
+            items(true, LivePhase::Stopping),
+            vec![
+                ("stop", "Остановить и сохранить", true),
+                ("live-stopping", "Ассистент выключается…", false),
+            ]
+        );
+        // Без связи с резидентом — ни включить, ни выключить.
+        let offline = record_items(&MenuState {
+            online: false,
+            recording: true,
+            live: LivePhase::Off,
+            auto: false,
+            log: None,
+            restart: false,
+            quitting: false,
+        });
+        assert_eq!(offline[1], ("live-attach", "Включить ассистента", false));
+    }
+
+    #[test]
+    fn attach_and_detach_actions_hit_their_routes() {
+        assert_eq!(Action::LiveAttach.path(), "/live/attach");
+        assert_eq!(Action::LiveDetach.path(), "/live/detach");
+        assert_eq!(Action::LiveAttach.failure_title(), LIVE_ATTACH_FAILED);
+        assert_eq!(Action::LiveDetach.failure_title(), LIVE_DETACH_FAILED);
+        let no_provider: api::Result<Value> = Err(api::Error::Status {
+            code: 409,
+            message: "Подключите Claude Code или Codex в настройках".into(),
+        });
+        assert!(needs_provider(Action::LiveAttach, Some(&no_provider)));
+        assert!(!needs_provider(Action::LiveDetach, Some(&no_provider)));
+        let refused = Ok(json!({"ok": false, "action": "not-attached"}));
+        let notice = action_notice(Action::LiveDetach, Some(&refused)).unwrap();
+        assert_eq!(notice.title, LIVE_DETACH_FAILED);
+        assert_eq!(notice.body, "Ассистент не включён в эту запись");
+    }
+
+    fn recording_with(live: Live) -> View {
+        View {
+            recording: true,
+            live,
+            ..idle()
+        }
+    }
+
+    fn attached(active: bool, starting: bool, stopping: bool) -> Live {
+        Live {
+            active,
+            starting,
+            stopping,
+            folder: Some(LIVE_FOLDER.to_string()),
+            error: None,
+            attached: true,
+        }
+    }
+
+    #[test]
+    fn attached_assistant_is_read_and_shown_in_the_menu() {
+        let state = json!({"status": "recording", "live": {
+            "active": true, "starting": false, "stopping": false,
+            "folder": LIVE_FOLDER, "error": null, "attached": true}});
+        let v = View::from_json(&state, &json!({"items": []}));
+        assert!(v.recording && v.live.attached && v.live.active);
+        let running = ResidentStatus::Running;
+        let menu = menu_state(Some(&v), &running);
+        assert!(menu.recording);
+        assert_eq!(menu.live, LivePhase::Active);
+        assert_eq!(
+            layout(&menu),
+            [
+                "Открыть Meet",
+                "Остановить и сохранить",
+                "Выключить ассистента",
+                "Импортировать файл…",
+                "[ ] Автозапись",
+                "—",
+                "Отменить запись…",
+                "Выход",
+            ]
+        );
+        // Значок — запись (она главное), в подсказке — что ассистент слушает.
+        assert_eq!(icon_for(Some(&v), &running), TrayIconKind::Recording);
+        assert!(tooltip(Some(&v), &running).contains("· ассистент"));
+    }
+
+    #[test]
+    fn attaching_says_it_catches_up() {
+        let before = recording_with(attached(false, true, false));
+        let after = recording_with(attached(true, false, false));
+        let n = transitions(Some(&before), &after);
+        assert_eq!(n.len(), 1);
+        assert_eq!(n[0].title, LIVE_ATTACHED);
+        assert!(n[0].body.contains("Догоняет начало встречи"));
+    }
+
+    #[test]
+    fn detaching_keeps_the_recording_going() {
+        let before = recording_with(attached(true, false, true));
+        let mut after = recording_with(Live::default());
+        let n = transitions(Some(&before), &after);
+        assert_eq!(n.len(), 1);
+        assert_eq!(n[0].title, LIVE_DETACHED);
+        assert!(n[0].body.contains("Запись продолжается"));
+        // Упал сам, без просьбы — ошибка, но запись идёт.
+        let before = recording_with(attached(true, false, false));
+        after.live.error = Some("CUDA out of memory".into());
+        let n = transitions(Some(&before), &after);
+        assert_eq!(n.len(), 1);
+        assert_eq!(n[0].title, LIVE_FAILED);
+        assert!(n[0].body.contains("запись продолжается"));
+    }
+
+    #[test]
+    fn stopping_the_recording_with_an_attached_assistant_says_saved_once() {
+        let before = View {
+            last_stop: None,
+            ..recording_with(attached(true, false, true))
+        };
+        let after = idle();
+        let n = transitions(Some(&before), &after);
+        let titles: Vec<&str> = n.iter().map(|notice| notice.title.as_str()).collect();
+        assert_eq!(titles, [RECORDING_SAVED]);
     }
 
     #[test]
@@ -2906,6 +3124,7 @@ mod tests {
             [
                 "Открыть Meet",
                 "Остановить и сохранить",
+                "Включить ассистента",
                 "Импортировать файл…",
                 "[x] Автозапись",
                 "—",
@@ -2922,7 +3141,15 @@ mod tests {
             .collect();
         assert_eq!(
             ids,
-            ["open", "stop", "import", "auto-off", "cancel", "quit"]
+            [
+                "open",
+                "stop",
+                "live-attach",
+                "import",
+                "auto-off",
+                "cancel",
+                "quit"
+            ]
         );
     }
 

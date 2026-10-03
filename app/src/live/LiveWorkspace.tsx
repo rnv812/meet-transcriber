@@ -13,7 +13,8 @@
 
 import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
-import type { LiveHint, LiveQuick } from "../lib/types";
+import { clock } from "../lib/format";
+import type { LiveCatchup, LiveHint, LiveQuick } from "../lib/types";
 import { Button } from "../ui/Button";
 import { LiveAsk } from "./LiveAsk";
 import { type FeedFocus, LiveFeed } from "./LiveFeed";
@@ -152,6 +153,24 @@ export function urgentQuestion(hint: LiveHint): string {
   return `Что мне ответить: «${hint.text}»? Предложите 1–2 коротких варианта от первого лица.`;
 }
 
+/**
+ * Ассистент включён посреди записи и догоняет уже записанное: полоса хода над
+ * рабочей областью. Строки начала встречи встают в ленту выше живых.
+ */
+export function CatchupNote({ catchup }: { catchup: LiveCatchup }) {
+  const from = catchup.capped && catchup.from_t != null ? clock(catchup.from_t) : null;
+  return (
+    <div className="live-catchup" role="status"
+      title="Ассистента включили посреди записи: он распознаёт уже записанное, чтобы сводка и подсказки знали начало встречи">
+      <span className="live-catchup__text">Догоняю начало встречи… <span className="num">{catchup.percent} %</span></span>
+      <span className="live-catchup__bar" aria-hidden="true">
+        <span className="live-catchup__fill" style={{ width: `${Math.max(0, Math.min(100, catchup.percent))}%` }} />
+      </span>
+      {from && <span className="live-catchup__note muted">с {from}; раньше — в итогах по полной расшифровке</span>}
+    </div>
+  );
+}
+
 export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }: {
   live: Live;
   view: LiveView;
@@ -181,6 +200,7 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }
   );
 
   const feed = <LiveFeed lines={live.lines} className="live-ws__feed" focus={focus} />;
+  const catchup = live.catchup?.active ? <CatchupNote catchup={live.catchup} /> : null;
   const summary = <LiveSummary summary={live.summary} fresh={fresh} />;
   const hints = (
     <LiveHints hints={live.hints} fresh={fresh} enabled={live.hintsEnabled} error={live.hintError} quiet={quiet}
@@ -195,7 +215,8 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }
 
   if (wide) {
     return (
-      <div className="live-ws live-ws--wide">
+      <div className={`live-ws live-ws--wide${catchup ? " live-ws--catchup" : ""}`}>
+        {catchup}
         {feed}
         {/* Сначала подсказки («Вам вопрос» — первым), у них гарантированная
             область (не меньше ~40 % колонки) со своей прокруткой; ниже — сводка
@@ -235,6 +256,7 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }
   };
   return (
     <div className="live-ws">
+      {catchup}
       <div className="live-tabs" role="tablist" aria-label="Ассистент" onKeyDown={onKey}>
         {TABS.map((t) => (
           <button key={t.id} type="button" role="tab" id={`${uid}-tab-${t.id}`} aria-selected={tab === t.id}

@@ -23,7 +23,7 @@ import threading
 import time
 from pathlib import Path
 
-from meet import events, paths, plat, settings, watch
+from meet import events, paths, pcm_tap, plat, settings, watch
 from meet.output import fmt_ts
 from meet.recorder import LOCK_NAME, _pid_alive, record
 from meet.tray_control import AUTO, MANUAL, TrayControl
@@ -339,6 +339,13 @@ class TrayApp:
         # () -> bool: пишет ассистент (живой режим, дочерний процесс). Тогда
         # вторую запись не поднимаем ни из меню, ни автозаписью.
         self.live_busy = None
+        # Отвод звука идущей записи для ассистента, включённого посреди неё
+        # (meet.pcm_tap): запись отдаёт ему копию байтов дорожек.
+        self.pcm_tap = pcm_tap.TapHub()
+        # (discard) -> None: перед остановкой записи — выключить подключённого
+        # к ней ассистента (TrayControl): он дописывает сводку в папку записи,
+        # пока запись ещё идёт, а при отмене не пишет в удаляемую папку.
+        self.before_stop = None
         # Чем кончилась последняя запись: {"folder", "reason", "at"} (см.
         # stop_recording). None — остановок ещё не было.
         self.last_stop: dict | None = None
@@ -400,7 +407,8 @@ class TrayApp:
     def _run_record(self, result: dict, stop_event: threading.Event) -> None:
         try:
             result["folder"] = record(
-                str(_out_root()), stop_event=stop_event, bus=self.bus
+                str(_out_root()), stop_event=stop_event, bus=self.bus,
+                pcm_tap=self.pcm_tap,
             )
         except BaseException as e:  # и SystemExit «запись уже идёт»
             result["error"] = str(e) or repr(e)
@@ -431,6 +439,11 @@ class TrayApp:
     def stop_recording(self, discard: bool = False, hook: bool = True) -> None:
         """Штатно остановить запись. discard — отменить: удалить папку и не
         звать Claude (автозапись поймала то, что писать не надо)."""
+        if self.recording and self.before_stop is not None:
+            try:
+                self.before_stop(discard)
+            except Exception as e:  # ассистент не должен мешать остановке записи
+                self.log(f"перед остановкой записи: {e!r}")
         with self._mutex:
             if not self.recording:
                 return

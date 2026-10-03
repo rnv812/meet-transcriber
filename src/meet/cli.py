@@ -53,7 +53,8 @@ def print_status() -> None:
     except RuntimeError as e:
         raise SystemExit(f"Статус недоступен: {e}")
     live = snap.get("live") or {}
-    if live.get("active"):
+    attached = bool(live.get("attached"))
+    if live.get("active") and not attached:
         # Запись с ассистентом: status резидента при ней остаётся idle —
         # пишет дочерний `meet assist`, а не трей.
         print(f"Идёт запись с ассистентом: {live.get('folder')}")
@@ -62,7 +63,7 @@ def print_status() -> None:
             print(f"Длительность: {fmt_ts(max(0.0, time.time() - started))}")
         if live.get("stopping"):
             print("Ассистент останавливается — дописывает запись")
-    elif live.get("starting"):
+    elif live.get("starting") and not attached:
         print("Ассистент запускается (загружается модель распознавания)")
     elif snap.get("status") == "recording":
         source = "вручную" if snap.get("source") == "manual" else "автоматически"
@@ -73,6 +74,10 @@ def print_status() -> None:
             print("Уровни: " + ", ".join(
                 f"{name} {value:.2f}" for name, value in sorted(levels.items())
             ))
+        if attached:
+            # Ассистент, включённый посреди этой записи (meet assist --attach).
+            print("Ассистент: " + ("выключается" if live.get("stopping") else
+                                   "слушает запись" if live.get("active") else "запускается"))
     else:
         print("Записи нет.")
     if live.get("error") and not live.get("active") and not live.get("starting"):
@@ -109,6 +114,33 @@ def live_stop() -> int:
     print("Ассистент останавливается — дописывает запись"
           + (f": {folder}" if folder else ""))
     print("Готово, когда `meet status` перестанет показывать запись с ассистентом.")
+    return 0
+
+
+def live_attach(detach: bool = False) -> int:
+    """`meet assist --attach` / `--detach`: включить ассистента посреди идущей
+    обычной записи (или выключить его) через резидента — запись не
+    прерывается. Ассистент догоняет уже записанное и слушает дальше."""
+    from meet import control
+
+    path = "/live/detach" if detach else "/live/attach"
+    try:
+        reply = control.request(path, method="POST", payload={})
+    except RuntimeError as e:
+        raise SystemExit(f"Не удалось {'выключить' if detach else 'включить'} ассистента: {e}")
+    if detach:
+        if reply.get("action") == "not-attached":
+            print("Ассистент не подключён к записи.")
+            return 1
+        print("Ассистент выключается — запись продолжается.")
+        return 0
+    if not reply.get("ok", True):
+        print(reply.get("error") or "Ассистент не запустился.")
+        return 1
+    print("Ассистент включается в идущую запись"
+          + (f": {reply.get('folder')}" if reply.get("folder") else "")
+          + " — сначала догонит уже записанное.")
+    print("Выключить, не останавливая запись: meet assist --detach")
     return 0
 
 
@@ -351,6 +383,20 @@ def main(argv: list[str] | None = None) -> int | None:
         "--provider", default=None, choices=PROVIDERS,
         help="провайдер модели (по умолчанию — из настроек)",
     )
+    attach = p_as.add_mutually_exclusive_group()
+    attach.add_argument(
+        "--attach", action="store_true",
+        help="включить ассистента в идущую обычную запись (через приложение, "
+        "запись не прерывается)",
+    )
+    attach.add_argument(
+        "--detach", action="store_true",
+        help="выключить ассистента, включённого в запись; запись идёт дальше",
+    )
+    # Режим дочернего процесса резидента для --attach: папка идущей записи и
+    # порт отвода звука (токен — в окружении MEET_TAP_TOKEN).
+    p_as.add_argument("--attach-to", default=None, help=argparse.SUPPRESS)
+    p_as.add_argument("--tap-port", type=int, default=None, help=argparse.SUPPRESS)
 
     p_en = sub.add_parser(
         "enroll", help="запомнить голоса: «Спикер N» из записи → имя в базе голосов"
@@ -402,9 +448,14 @@ def main(argv: list[str] | None = None) -> int | None:
                      window_seconds=args.window or cfg.assist.window_seconds,
                      hotwords=args.hotwords,
                      no_voices=args.no_voices or not cfg.assist.voices)
+    elif args.command == "assist" and (args.attach or args.detach):
+        return live_attach(detach=args.detach)
     elif args.command == "assist":
+        import os
+
         from meet.assist.app import run_assist
         from meet.gpu_lock import hold_gpu_lock
+        from meet.live_control import TAP_TOKEN_ENV
 
         vault = args.vault or (str(cfg.assist.vault) if cfg.assist.vault else None)
         knowledge = cfg.assistant.knowledge_dir
@@ -420,7 +471,9 @@ def main(argv: list[str] | None = None) -> int | None:
                        endpoint_file=args.endpoint_file,
                        provider=args.provider, cfg=cfg,
                        knowledge_dir=str(knowledge) if knowledge else None,
-                       parent_pid=args.parent_pid)
+                       parent_pid=args.parent_pid,
+                       attach_to=args.attach_to, tap_port=args.tap_port,
+                       tap_token=os.environ.get(TAP_TOKEN_ENV) if args.attach_to else None)
     elif args.command == "status":
         print_status()
     elif args.command == "live-stop":

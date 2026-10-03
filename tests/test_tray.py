@@ -510,7 +510,7 @@ def _stub_record(folder, finalize=0.0):
     bus без default: трей обязан передавать свою шину событий — без неё панель
     не видит ни уровней дорожек, ни хода записи, и тест падает TypeError."""
 
-    def rec(out_root, stop_event=None, *, bus):
+    def rec(out_root, stop_event=None, *, bus, pcm_tap=None):
         assert bus is not None
         stop_event.wait(timeout=5)
         time.sleep(finalize)

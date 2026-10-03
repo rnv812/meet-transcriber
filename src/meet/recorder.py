@@ -368,8 +368,11 @@ class _Track:
     абсолютным таймкодам) остаётся корректным."""
 
     def __init__(self, fname: str, pick_device, role: int, out_dir: Path,
-                 log, bus=None) -> None:
+                 log, bus=None, pcm_tap=None) -> None:
         self.fname = fname
+        # Отвод звука (`meet.pcm_tap.TapHub`) для ассистента, включённого
+        # посреди записи: получает те же байты, что ffmpeg, и доливку тишины.
+        self.pcm_tap = pcm_tap
         self.pick = pick_device  # PyAudio -> device info (или исключение)
         self.role = role  # индекс в _DefaultEndpoints.ids(): 0 вывод, 1 ввод
         self.path = out_dir / fname
@@ -445,6 +448,22 @@ class _Track:
         self.channels = min(2, max(1, int(dev["maxInputChannels"])))
         self.writer = OpusWriter(self.path, self.channels, self.rate)
         self.started = time.monotonic()
+        if self.pcm_tap is not None:
+            try:
+                self.pcm_tap.configure(self.role, self.fname, self.rate, self.channels)
+            except Exception:
+                pass  # отвод — не повод не писать
+
+    def _to_tap(self, data: bytes, pad: bool) -> None:
+        """Копия того, что ушло в файл, — отводу (под локом дорожки, до
+        прибавки `bytes_written`: позиция — начало этих данных). TapHub.push
+        не ждёт и не бросает; страховка — чтобы сбой отвода никогда не дошёл
+        до callback'а (там исключение остановило бы стрим)."""
+        if self.pcm_tap is not None:
+            try:
+                self.pcm_tap.push(self.role, data, self.bytes_written, pad)
+            except Exception:
+                pass
 
     def _tap_failure(self, error) -> bool:
         """Отказ помощника системного звука на macOS (а не сбой устройства)."""
@@ -621,6 +640,7 @@ class _Track:
                 data = convert(in_data)
                 with self._lock:
                     self.writer.write(data)
+                    self._to_tap(data, False)
                     self.bytes_written += len(data)
                 self._stalled = False
                 peak = _peak(data)
@@ -664,6 +684,7 @@ class _Track:
                 n = min(int(gap * self.rate), self.rate)
                 pad = b"\x00" * (n * frame)
                 self.writer.write(pad)
+                self._to_tap(pad, True)
                 self.bytes_written += len(pad)
 
     def _log(self, msg: str) -> None:
@@ -865,8 +886,9 @@ class _Session:
     terminate → свежий PyAudio → переоткрыть дорожки."""
 
     def __init__(self, out_dir: Path, bus=None, mic_device: "str | None" = None,
-                 output_device: "str | None" = None) -> None:
+                 output_device: "str | None" = None, pcm_tap=None) -> None:
         self.p = None
+        self.pcm_tap = pcm_tap
         self.out_dir = out_dir
         self.bus = bus if bus is not None else events.EventBus()
         self.log = _RecordLog(out_dir, self.bus)
@@ -882,9 +904,9 @@ class _Session:
         self.preflight_next = 0.0
         self.tracks = (
             _Track("sys.opus", _Picker("output", output_device), 0, out_dir,
-                   self.log, self.bus),
+                   self.log, self.bus, pcm_tap),
             _Track("mic.opus", _Picker("mic", mic_device), 1, out_dir,
-                   self.log, self.bus),
+                   self.log, self.bus, pcm_tap),
         )
 
     def _new_audio(self):
@@ -897,6 +919,17 @@ class _Session:
 
     def start(self) -> None:
         self.log(f"запись начата {datetime.now():%Y-%m-%d}, pid {os.getpid()}")
+        if self.pcm_tap is not None:
+            try:
+                # Сторона записи этой сессии: поток прошлой записи, если он
+                # ещё дописывает дорожки, в отвод новой не попадёт.
+                feed = self.pcm_tap.begin(len(self.tracks))
+            except Exception as e:
+                feed = None
+                self.log(f"отвод звука: {e!r}")
+            self.pcm_tap = feed
+            for t in self.tracks:
+                t.pcm_tap = feed
         self.p = self._new_audio()
         self.ids = self.endpoints.ids()
         if self.ids is None and not _MAC:
@@ -981,6 +1014,11 @@ class _Session:
                 t.close()
             except Exception as e:
                 self.log(f"{t.fname}: закрытие: {e!r}")
+        if self.pcm_tap is not None:
+            try:
+                self.pcm_tap.end()  # подключённый ассистент дочитает и остановится
+            except Exception as e:
+                self.log(f"отвод звука: {e!r}")
         self._terminate()
         self.endpoints.close()
         self.log("запись остановлена штатно")  # нет этой строки → процесс убили
@@ -1102,9 +1140,12 @@ _FROM_SETTINGS = object()
 
 
 def record(out_root: str, stop_event: "threading.Event | None" = None,
-           bus=None, mic_device=_FROM_SETTINGS, output_device=_FROM_SETTINGS) -> Path:
+           bus=None, mic_device=_FROM_SETTINGS, output_device=_FROM_SETTINGS,
+           pcm_tap=None) -> Path:
     """Записать встречу двумя дорожками. `bus` — шина событий для UI: без неё
-    всё работает как раньше, только события уходят в никуда.
+    всё работает как раньше, только события уходят в никуда. `pcm_tap` —
+    `meet.pcm_tap.TapHub`: отвод звука для ассистента, включённого посреди
+    записи (файлы от него не зависят).
 
     `mic_device` / `output_device` — имена устройств; None — системные (запись
     следит за дефолтами Windows), не переданы — из настроек на момент старта.
@@ -1123,7 +1164,7 @@ def record(out_root: str, stop_event: "threading.Event | None" = None,
     lock = _acquire_lock(Path(out_root), out_dir)
 
     session = _Session(out_dir, bus, mic_device=mic_device,
-                       output_device=output_device)
+                       output_device=output_device, pcm_tap=pcm_tap)
     # Машинный двойник record.log рядом с дорожками: по нему экран диагностики
     # разбирает запись после того, как она кончилась. Уровни в файл не идут.
     sink = events.JsonlSink(out_dir / "events.jsonl")

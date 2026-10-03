@@ -29,6 +29,14 @@
 идут в своём потоке и сообщаются в шину (`live.started`, `live.stopped`,
 `live.failed`). Иначе HTTP-обработчик панели висел бы минуту загрузки модели.
 
+Ассистент можно включить и посреди обычной записи (`start(..., attach=...)`):
+тогда ребёнок (`--attach-to <папка записи> --tap-port <порт>`, токен отвода —
+в окружении MEET_TAP_TOKEN) не берёт lock записи и не открывает устройства —
+звук он получает из отвода резидента (`meet.pcm_tap`), пишет в папку идущей
+записи только ленту и `live_state.json`. Остановка с `detach` («Выключить
+ассистента», запись продолжается) помечает его сводку неполной. Расшифровку
+такой записи ставит в очередь остановка самой записи, а не ассистента.
+
 Вывод ребёнка уходит в `<data_dir>/logs/live.log` (не в pipe: непрочитанный
 pipe заполнился бы и повесил ребёнка). Последняя непустая строка журнала —
 текст ошибки, если ребёнок умер сам: «Подключите Claude Code…», «Запись уже
@@ -75,6 +83,7 @@ STOPPED_MARK = "Остановлено:"  # run_assist печатает посл
 # напечатать ошибку финализации; дальше добиваем зависший вызов модели.
 FINALIZE_GRACE_S = 2.0
 STOP_ATTEMPTS = 2  # /stop не дошёл — ещё одна попытка, потом только дедлайн
+TAP_TOKEN_ENV = "MEET_TAP_TOKEN"  # токен отвода звука — ребёнку в окружении, не в argv
 POLL_S = 0.1
 REQUEST_TIMEOUT_S = 5.0
 ASK_TIMEOUT_S = 240.0  # вопрос — вызов модели (у ребёнка до 180 с) плюс дослив окна
@@ -206,12 +215,13 @@ def _orphan_endpoint(path: Path) -> dict | None:
     return data if _is_assist_process(data.get("pid")) else None
 
 
-def _spawn_process(argv: list[str], log_file):
+def _spawn_process(argv: list[str], log_file, extra_env: dict | None = None):
     """Запустить ребёнка без окна консоли, весь вывод — в журнал."""
     from meet import netproxy
 
     # Прокси из настроек: ребёнок зовёт Claude Code/Codex (см. meet.netproxy).
-    env = {**netproxy.settings_env(), "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+    env = {**netproxy.settings_env(), "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1",
+           **(extra_env or {})}
     return subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,
@@ -313,15 +323,20 @@ class LiveControl:
         self._stop_requested = False
         self._stop_deadline: float | None = None
         self._streams: set = set()
+        # Подключён к идущей обычной записи: {"folder", "server", "started_at"}
+        # (server — meet.pcm_tap.TapServer, его закрываем в конце). None — сам пишет.
+        self._attach: dict | None = None
+        self._detach = False  # остановка — «Выключить ассистента», запись идёт дальше
 
     # --- что показывать -------------------------------------------------
 
     def status(self) -> dict:
-        """{"active", "starting", "stopping", "folder", "error", "started_at"}:
-        error — почему упал (или остановился с ошибкой) последний запуск,
-        сбрасывается следующим стартом; started_at — стенное время, когда
-        ассистент начал слушать (`live.started`; пока грузится модель — None),
-        для секундомера панели."""
+        """{"active", "starting", "stopping", "folder", "error", "started_at",
+        "attached"}: error — почему упал (или остановился с ошибкой) последний
+        запуск, сбрасывается следующим стартом; started_at — стенное время,
+        когда ассистент начал слушать (`live.started`; пока грузится модель —
+        None), для секундомера панели, а у подключённого к записи — начало
+        самой записи; attached — включён посреди обычной записи."""
         with self._lock:
             return self._status_unlocked()
 
@@ -335,19 +350,46 @@ class LiveControl:
         with self._lock:
             return self._process is not None
 
+    def attached(self) -> bool:
+        """Идёт (или поднимается) ассистент, подключённый к обычной записи."""
+        with self._lock:
+            return self._process is not None and self._attach is not None
+
     def _status_unlocked(self) -> dict:
         running = self._process is not None
         return {"active": self._active, "starting": running and not self._active,
                 "stopping": running and self._stop_requested, "folder": self._folder,
-                "error": self._error, "started_at": self._started_at}
+                "error": self._error, "started_at": self._started_at,
+                "attached": running and self._attach is not None}
 
     # --- старт и стоп ---------------------------------------------------
 
-    def start(self, out_root) -> dict:
+    def start(self, out_root, attach: dict | None = None) -> dict:
         """Запустить ассистента. Не ждёт загрузки модели: статус `starting`
-        сразу, дальше — события `live.started` / `live.failed`."""
+        сразу, дальше — события `live.started` / `live.failed`.
+
+        `attach` — включить посреди обычной записи: {"folder": папка записи,
+        "server": TapServer отвода звука, "started_at": стенное время начала
+        записи}. Сервер отвода закрывается, когда ассистент кончился (или не
+        запустился)."""
         # Временные папки убитых раньше процессов (ассистент, задачи) — до старта.
         _sweep_temp()
+        try:
+            return self._start(out_root, attach)
+        except BaseException:
+            self._close_server(attach)
+            raise
+
+    @staticmethod
+    def _close_server(attach: dict | None) -> None:
+        server = (attach or {}).get("server")
+        if server is not None:
+            try:
+                server.close()
+            except Exception:
+                pass
+
+    def _start(self, out_root, attach: dict | None) -> dict:
         with self._emit_lock:
             with self._lock:
                 if self._process is not None:
@@ -367,10 +409,17 @@ class LiveControl:
                 argv = [sys.executable, "-m", "meet.cli", "assist", "--no-browser",
                         "--port", "0", "--endpoint-file", str(endpoint),
                         "--out", str(out_root), "--parent-pid", str(os.getpid())]
+                if attach is not None:
+                    argv += ["--attach-to", str(attach["folder"]),
+                             "--tap-port", str(attach["server"].port)]
                 log_file = None
                 try:
                     log_file, path, offset = _open_log()
-                    process = self._spawn(argv, log_file)
+                    if attach is None:
+                        process = self._spawn(argv, log_file)
+                    else:
+                        process = self._spawn(argv, log_file,
+                                              {TAP_TOKEN_ENV: attach["server"].token})
                 except OSError as e:
                     self._error = f"Не удалось запустить ассистента: {e}"
                     process = None
@@ -382,22 +431,28 @@ class LiveControl:
                     self._active = False
                     self._port = None
                     self._child_pid = None
-                    self._folder = None
+                    # Подключённый пишет в папку идущей записи — она известна сразу.
+                    self._folder = str(attach["folder"]) if attach is not None else None
                     self._fallback = []
                     self._error = None
                     self._started_at = None  # с live.started: прогрев модели не в счёт
                     self._stop_requested = False
                     self._stop_deadline = None
+                    self._attach = attach
+                    self._detach = False
                     self._thread = threading.Thread(
                         target=self._watch, args=(process, endpoint, path, offset),
                         name="meet-live", daemon=True)
                 thread, error = self._thread, self._error
                 reply = self._status_unlocked()
             if process is None:
+                self._close_server(attach)
                 self._log(f"ассистент: {error}")
-                self.bus.emit(LIVE_FAILED, error=error, folder=None)
+                self.bus.emit(LIVE_FAILED, error=error, folder=None,
+                              attached=attach is not None)
                 return {"ok": False, **reply}
-            self._log(f"ассистент запускается (pid {process.pid})")
+            self._log(f"ассистент запускается (pid {process.pid})"
+                      + (f", подключается к записи {attach['folder']}" if attach else ""))
             self.bus.emit(LIVE_STARTING)
             # Поток — после `live.starting`: его started/failed не обгонят начало.
             thread.start()
@@ -424,13 +479,16 @@ class LiveControl:
         threading.Thread(target=self._send_stop, args=(int(orphan["port"]),),
                          name="meet-live-orphan", daemon=True).start()
 
-    def stop(self, wait: bool = False, timeout: float | None = None) -> dict:
+    def stop(self, wait: bool = False, timeout: float | None = None,
+             detach: bool = False) -> dict:
         """Штатная остановка: `POST /stop` (не дошёл — ещё раз), конец — когда
         ребёнок дописал запись (исчез файл эндпоинта) или вышел. Не уложился
         в STOP_TIMEOUT_S (или в `timeout`, если он короче) — убийство дерева.
 
         `wait=True` — ждать конца (выход резидента, /shutdown); без него ответ
-        сразу, а конец — событием `live.stopped`."""
+        сразу, а конец — событием `live.stopped`. `detach` — ассистента,
+        подключённого к записи, выключают, а запись идёт дальше: его сводка
+        помечается неполной."""
         with self._emit_lock:
             with self._lock:
                 process, thread = self._process, self._thread
@@ -438,6 +496,9 @@ class LiveControl:
                     return {"ok": False, "action": "not-live", **self._status_unlocked()}
                 first = not self._stop_requested
                 self._stop_requested = True
+                if first:
+                    self._detach = bool(detach and self._attach is not None)
+                detaching = self._detach
                 port = self._port
                 now = time.monotonic()
                 deadline = now + self._stop_timeout
@@ -454,7 +515,7 @@ class LiveControl:
                 self._log("ассистент остановлен до старта")
                 self._kill(process)
             else:
-                self._send_stop(port)
+                self._send_stop(port, detaching)
         if wait and thread is not None and thread is not threading.current_thread():
             # start() запускает поток сразу после лока — дождаться этого мига.
             began = time.monotonic()
@@ -464,13 +525,14 @@ class LiveControl:
                 thread.join(timeout=max(0.0, deadline - time.monotonic()) + JOIN_SLACK_S)
         return {"ok": True, "action": "stopping", **self.status()}
 
-    def _send_stop(self, port: int) -> None:
+    def _send_stop(self, port: int, detach: bool = False) -> None:
         """`POST /stop` с одной повторной попыткой. Не дошёл и он — не убиваем
         сразу: ребёнок мог быть занят, а убийство до финализации теряет хвост
         записи. Дальше решает дедлайн остановки."""
         for attempt in range(1, STOP_ATTEMPTS + 1):
             try:
-                self._request(port, "/stop", {}, REQUEST_TIMEOUT_S)
+                self._request(port, "/stop", {"detach": True} if detach else {},
+                              REQUEST_TIMEOUT_S)
                 self._log("ассистенту отправлена остановка")
                 return
             except Exception as e:
@@ -520,10 +582,16 @@ class LiveControl:
                 stop_requested = self._stop_requested
                 active = self._active
                 folder = self._folder
+                attach, detached = self._attach, self._detach
                 if stop_requested or (code == 0 and active and error is None):
                     kind = LIVE_STOPPED
                     if not active:
                         error, complete = None, False  # остановлен до старта
+                    elif killed and not finalized and attach is not None:
+                        # Запись ведёт резидент — она цела; не успела сводка.
+                        error = ("Ассистент не успел сохранить сводку — процесс убит, "
+                                 "запись не затронута")
+                        complete = False
                     elif killed and not finalized:
                         error = ("Ассистент не дописал запись за отведённое время — "
                                  "процесс убит, запись может быть неполной")
@@ -557,17 +625,21 @@ class LiveControl:
                 self._stop_requested = False
                 self._stop_deadline = None
                 self._error = error
+                self._attach = None
+                self._detach = False
                 streams = list(self._streams)
             for stream in streams:
                 stream.close()
+            self._close_server(attach)
+            attached = attach is not None
             if kind == LIVE_STOPPED:
-                self._log(f"ассистент остановлен: {folder}"
+                self._log(f"ассистент {'выключен' if detached else 'остановлен'}: {folder}"
                           + (f" ({error})" if error else ""))
                 self.bus.emit(LIVE_STOPPED, folder=folder, error=error,
-                              complete=complete)
+                              complete=complete, attached=attached, detached=detached)
             else:
                 self._log(f"ассистент упал (код {code}): {error}")
-                self.bus.emit(LIVE_FAILED, error=error, folder=folder)
+                self.bus.emit(LIVE_FAILED, error=error, folder=folder, attached=attached)
 
     @staticmethod
     def _drop_endpoint(endpoint: Path, pids: set) -> None:
@@ -595,7 +667,10 @@ class LiveControl:
                         if self._stop_requested:
                             return None  # остановлен до старта — его уже убивают
                         self._active = True
-                        self._started_at = time.time()
+                        # Подключённый к записи: секундомер панели — от начала записи.
+                        attach_started = (self._attach or {}).get("started_at")
+                        self._started_at = attach_started if isinstance(
+                            attach_started, (int, float)) else time.time()
                         self._port = int(info["port"])
                         self._child_pid = info["pid"]
                         self._folder = str(info.get("folder") or "") or None

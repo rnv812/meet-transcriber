@@ -60,6 +60,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, replace
 
+from meet.assist.bus import chronological
 from meet.assist.live_state import URGENT, LineSplitter, PatchError, parse_line, parse_reply
 from meet.assist.prompts import (
     build_hints_delta,
@@ -141,6 +142,13 @@ CADENCES = {"calm": CALM, "active": ACTIVE, "summary": SUMMARY_ONLY}
 
 def cadence_for(activity: str) -> Cadence:
     return CADENCES.get(activity, CALM)
+
+
+def _live(entries: list[dict]) -> list[dict]:
+    """Реплики, сказанные при ассистенте: без догнанного начала встречи
+    (`catchup` — ассистента включили посреди записи). Подсказки — про то, что
+    идёт сейчас: по началу встречи они не тикают и поводов не ищут."""
+    return [e for e in entries if not e.get("catchup")]
 
 
 def _words(entries: list[dict]) -> int:
@@ -355,7 +363,13 @@ class Digester:
         линией сводки)."""
         lane = self.hints if self.cadence.hints else self.summary
         entries, _ = self._bus.entries_since(lane.cursor)
-        return _words(entries)
+        return _words(_live(entries) if lane is self.hints else entries)
+
+    def skip_existing(self) -> None:
+        """Всё, что уже лежит в шине (лента прошлого включения ассистента в
+        этой записи), — только контекст: обе линии начинают после него."""
+        size = self._bus.size()
+        self.hints.cursor = self.summary.cursor = self._scanned = size
 
     def retry_in(self) -> float:
         """Сколько ещё ждать повтора после сбоя провайдера (0 — не ждём)."""
@@ -371,6 +385,9 @@ class Digester:
         if not entries:
             return
         self._scanned = size
+        entries = _live(entries)
+        if not entries:
+            return  # догонялка начала встречи: не «разговор идёт сейчас»
         self._last_line_at = self._clock()
         if not self.cadence.hints:
             return
@@ -405,7 +422,7 @@ class Digester:
             return False
         if lane.failures and now < lane.retry_at:
             return False
-        entries, _ = self._bus.entries_since(lane.cursor)
+        entries = _live(self._bus.entries_since(lane.cursor)[0])
         if not entries:
             return False
         if lane.failures:
@@ -441,6 +458,8 @@ class Digester:
         wake: list[float] = []
         for lane in self._lanes():
             pending, _ = self._bus.entries_since(lane.cursor)
+            if lane is self.hints:
+                pending = _live(pending)
             if lane.failures and lane.task is None and pending and lane.retry_at > now:
                 wake.append(lane.retry_at - now)
         summary, _ = self._bus.entries_since(self.summary.cursor)
@@ -451,7 +470,7 @@ class Digester:
             if idle > 0:
                 wake.append(idle)
         if self.cadence.hints and self.hints.task is None:
-            hints, _ = self._bus.entries_since(self.hints.cursor)
+            hints = _live(self._bus.entries_since(self.hints.cursor)[0])
             if self._trigger is not None and hints and self._event_wait(now) > 0:
                 wake.append(self._event_wait(now))
             if (hints and self._capped(self.hints, now)
@@ -498,20 +517,29 @@ class Digester:
 
     # --- реплики ---
 
-    def _chunk(self, cursor: int) -> tuple[list[dict], list[str], int]:
-        """Новые реплики в пределах бюджета и позиция шины после них."""
+    def _chunk(self, cursor: int, *, live_only: bool = False) -> tuple[list[dict], list[str], int]:
+        """Новые реплики в пределах бюджета и позиция шины после них.
+        `live_only` — без догнанного начала встречи (линия подсказок): его
+        реплики пропускаются, но курсор их проходит."""
         lines, end = self._bus.since(cursor)
         entries, _ = self._bus.entries_since(cursor)
         taken: list[str] = []
+        taken_entries: list[dict] = []
         size = 0
-        for line in lines:
+        consumed = 0
+        for line, entry in zip(lines, entries):
+            if live_only and entry.get("catchup"):
+                consumed += 1
+                continue
             if taken and size + len(line) + 1 > NEW_LINES_MAX_CHARS:
                 break
             # Одна огромная реплика (склеенное окно) — обрезаем, но берём.
             line = line if len(line) <= NEW_LINES_MAX_CHARS else line[:NEW_LINES_MAX_CHARS] + "…"
             taken.append(line)
+            taken_entries.append(entry)
             size += len(line) + 1
-        return entries[:len(taken)], taken, cursor + len(taken) if taken else end
+            consumed += 1
+        return taken_entries, taken, cursor + consumed if taken else end
 
     def _tail(self, cursor: int) -> list[str]:
         start = max(0, cursor - TAIL_LINES)
@@ -531,7 +559,7 @@ class Digester:
         RECENT_S секунд — дословно), оба в пределах своих бюджетов."""
         lines, _ = self._bus.since(0)
         entries, _ = self._bus.entries_since(0)
-        lines, entries = lines[:cursor], entries[:cursor]
+        lines, entries = chronological(lines[:cursor], entries[:cursor])
         if not lines:
             return [], []
         times = [e.get("t") for e in entries if isinstance(e.get("t"), (int, float))]
@@ -594,12 +622,12 @@ class Digester:
         lane = self.hints
         if not self.cadence.hints:
             return False
-        _, lines, end = self._chunk(lane.cursor)
+        chunk, lines, end = self._chunk(lane.cursor, live_only=True)
         if not lines:
             return False
         trigger, self._trigger = self._trigger, None
         now = self._clock()
-        entries, _ = self._bus.entries_since(lane.cursor)
+        entries = _live(self._bus.entries_since(lane.cursor)[0])
         if trigger is not None and not self._rhythm_due(entries, now):
             lane.event_starts.append(now)  # внеочередной тик — из своего бюджета
         else:
@@ -618,7 +646,7 @@ class Digester:
                 trigger=trigger)
         else:
             message = build_hints_delta(lines, self._state.hints_brief(), excerpts, trigger,
-                                        note=self._answered_note(entries[:len(lines)]))
+                                        note=self._answered_note(chunk))
         applier = _Applier(self._state.session(lane="hints", allowed_refs=refs), self._changed)
 
         async def send(text: str, on_text):
