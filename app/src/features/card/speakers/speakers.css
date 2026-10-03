@@ -1,10 +1,12 @@
 /* Панель «Спикеры встречи»: выезжает справа поверх карточки (карточка — position: relative). */
 .spk {
   position: absolute; top: 0; right: 0; bottom: 0; z-index: 20;
-  display: flex; flex-direction: column; width: min(440px, 100%);
+  display: flex; flex-direction: column; width: min(var(--spk-w, 440px), 100%);
   background: var(--surface); border-left: 1px solid var(--line-2); box-shadow: -12px 0 32px #0007;
 }
 .spk[hidden] { display: none; }
+/* Разделитель панели (ширину --spk-w ставит ui/PaneResizer на .card) — по её левому краю. */
+.card > .spk-resize { position: absolute; top: 0; bottom: 0; right: var(--spk-w, 440px); z-index: 21; }
 .spk__head {
   flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 12px 12px 10px 16px; border-bottom: 1px solid var(--line);

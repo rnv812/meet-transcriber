@@ -41,6 +41,7 @@ import { useTextFix } from "./TextFix";
 import { useTurnEdit } from "./TurnEdit";
 import type { PersonColor } from "./Turns";
 import { asrNoteText, systemAudioText } from "./asrNote";
+import { PaneResizer } from "../../ui/PaneResizer";
 import "./card.css";
 
 type Loaded = Recording & { transcript: Transcript | null };
@@ -66,6 +67,12 @@ const CHAPTER_REFS = 6;
 export type CardRequest = { n: number; id: string; segment?: number; t?: number; speaker?: string; agent?: string };
 /** Реплика из профиля «та же», если её начало сдвинулось не больше чем на столько (с). */
 const REF_SHIFT_S = 5;
+
+/**
+ * Панель «Спикеры встречи»: на широкой карточке (от 880 px) расшифровка видна
+ * рядом и не уже 400 px; на узкой панель — поверх карточки, не шире её.
+ */
+const SPEAKERS_PANE = { def: 440, min: 320, max: 760, reserve: (room: number) => (room >= 880 ? 400 : 0) };
 
 export function RecordingCard({
   id, endpoint, jobs = NO_JOBS, snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
@@ -612,6 +619,10 @@ export function RecordingCard({
         <RediarizeDialog endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} ready={!!rec.rediarize_ready}
           twoTrack={"sys" in rec.tracks && "mic" in rec.tracks} playable={playable} onPlay={playPhrase}
           onClose={() => setRediarizeOpen(false)} onApplied={speakersChanged} />
+      )}
+      {panel.open && status.kind === "ready" && (
+        <PaneResizer name="speakers" cssVar="--spk-w" spec={SPEAKERS_PANE} panel="after"
+          label="Ширина панели спикеров" className="spk-resize" />
       )}
       {panel.mounted && status.kind === "ready" && (
         <SpeakersPanel endpoint={endpoint} recordingId={id} people={people} avatarVersion={avatarVersion}

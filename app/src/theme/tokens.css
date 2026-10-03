@@ -32,6 +32,7 @@
   --t: 120ms;
   --nav-w: 200px;
   --list-w: 320px;
+  --topbar-h: 40px;
   color-scheme: dark;
 }
 
@@ -124,7 +125,7 @@ body {
 .badge--err { color: var(--err); background: rgba(229, 72, 77, 0.12); }
 
 /* Каркас окна: навигация · список · карточка */
-.app { display: flex; height: 100%; min-width: 820px; }
+.app { position: relative; display: flex; height: 100%; min-width: 820px; }
 .nav {
   width: var(--nav-w); flex: none; padding: 12px 8px;
   background: var(--surface); border-right: 1px solid var(--line);
@@ -153,16 +154,19 @@ body {
 .nav__icon { flex: none; }
 .nav__label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Узкое окно (до 1000 px): навигация — полоса значков, список записей уже —
-   карточке остаётся не меньше ~520 px и в 900 px. Подписи разделов остаются
-   доступными именами кнопок и всплывают подсказкой (title). */
-@media (max-width: 1000px) {
-  :root { --nav-w: 56px; --list-w: 260px; }
-  .nav { padding: 12px 6px; align-items: stretch; }
-  .nav__brand { justify-content: center; padding: 0; gap: 0; }
-  .nav__item { justify-content: center; padding: 0; height: 36px; }
-  .nav .nav__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-}
+/* Навигация полосой значков (data-nav-rail ставит app/ShellResize): в узком
+   окне (до 1000 px) по умолчанию или когда её свернули разделителем. Подписи
+   разделов остаются доступными именами кнопок и всплывают подсказкой (title).
+   Ширины --nav-w и --list-w тоже ставит ShellResize: карточке остаётся не
+   меньше 520 px, пока окно не уже 900 px (lib/panes.ts). */
+.app[data-nav-rail] .nav { padding: 12px 6px; align-items: stretch; }
+.app[data-nav-rail] .nav__brand { justify-content: center; padding: 0; gap: 0; }
+.app[data-nav-rail] .nav__item { justify-content: center; padding: 0; height: 36px; }
+.app[data-nav-rail] .nav .nav__label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* Разделители навигации и списка — поверх границ колонок. У навигации захват
+   внутри неё самой; у списка — ниже полосы заголовка: та перетаскивает окно. */
+.app > .shell-split { position: absolute; top: 0; bottom: 0; left: var(--nav-w); }
+.app > .shell-split--list { top: var(--topbar-h); left: calc(var(--nav-w) + var(--list-w)); }
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .panes { flex: 1; min-height: 0; display: flex; }
 .pane-list {

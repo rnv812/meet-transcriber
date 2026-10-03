@@ -21,6 +21,7 @@ import { Wizard } from "../features/wizard/Wizard";
 import { useWizardGate } from "../features/wizard/useWizardGate";
 import { Nav, type Section } from "./Nav";
 import { RecordingBadge } from "./RecordingBadge";
+import { ShellResize } from "./ShellResize";
 
 export function App() {
   /** Раздел настроек, куда просили перейти: адрес `?section=`, событие оболочки, карточка. */
@@ -241,6 +242,7 @@ export function App() {
           </main>
         </div>
       </div>
+      <ShellResize list={section === "recordings"} />
       {leaving && (
         <LeaveSettings guard={settingsGuard.current} onStay={() => { leaving.stay?.(); setLeaving(null); }}
           onLeave={() => { const { go } = leaving; setLeaving(null); go(); }} />

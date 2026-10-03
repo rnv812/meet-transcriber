@@ -4,11 +4,21 @@ import { duration } from "../../lib/format";
 import type { Job, Person } from "../../lib/types";
 import { Avatar } from "../../ui/Avatar";
 import { EmptyState } from "../../ui/EmptyState";
+import { PaneResizer } from "../../ui/PaneResizer";
 import { VoiceBaseTip } from "../settings/tips";
 import { PersonCard } from "./PersonCard";
 import type { OpenAt } from "./RefChips";
 import { plural } from "./plural";
 import "./voices.css";
+
+/**
+ * Панель человека — колонка справа от сетки: сетка перестраивается под
+ * оставшуюся ширину, панель не наезжает на неё и не выходит за край окна
+ * (сетке остаётся не меньше GRID_MIN). Ширина своя у карточки и у «Профиля».
+ */
+export const GRID_MIN = 200;
+const CARD_PANE = { def: 360, min: 300, max: 640, reserve: GRID_MIN };
+const PROFILE_PANE = { def: 680, min: 420, max: 1100, reserve: GRID_MIN };
 
 type Props = {
   endpoint: Endpoint;
@@ -67,6 +77,11 @@ export function VoicesPane({
           })}
         </div>
       </section>
+      {current && (
+        <PaneResizer key={wide ? "profile" : "card"} cssVar="--person-w" panel="after"
+          name={wide ? "voices-profile" : "voices-card"} spec={wide ? PROFILE_PANE : CARD_PANE}
+          label={wide ? "Ширина профиля" : "Ширина карточки человека"} />
+      )}
       {current && (
         <aside className={`voices__card${wide ? " voices__card--wide" : ""}`}>
           <PersonCard

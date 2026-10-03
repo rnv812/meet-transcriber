@@ -4,6 +4,7 @@ import { expect, test, vi } from "vitest";
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fitShell, LIST, NAV } from "../lib/panes";
 import { Nav } from "./Nav";
 
 test("над разделами — знак и имя «Meet», разделы — кнопки", async () => {
@@ -27,11 +28,11 @@ test("у раздела значок и подсказка: в узком окн
   }
 });
 
-test("до 1000 px навигация — полоса 56 px, список — 260 px (карточке остаётся не меньше 520 px в 900 px)", () => {
+test("до 1000 px навигация — полоса 56 px; карточке остаётся не меньше 520 px в 900 px", () => {
+  expect(fitShell(1000, { nav: NAV.def, navMode: "auto", list: LIST.def })).toMatchObject({ rail: true, nav: 56 });
+  const f = fitShell(900, { nav: NAV.def, navMode: "auto", list: LIST.def });
+  expect(900 - f.nav - f.list).toBeGreaterThanOrEqual(520);
+  // Полоса значков: подписи только для экранного диктора (и подсказкой).
   const css = readFileSync(join(process.cwd(), "src", "theme", "tokens.css"), "utf8");
-  const narrow = /@media \(max-width: 1000px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? "";
-  expect(narrow).toMatch(/--nav-w: 56px/);
-  expect(narrow).toMatch(/--list-w: 260px/);
-  expect(narrow).toMatch(/\.nav \.nav__label \{[^}]*clip/);
-  expect(900 - 56 - 260).toBeGreaterThanOrEqual(520);
+  expect(css).toMatch(/\.app\[data-nav-rail\] \.nav \.nav__label \{[^}]*clip/);
 });

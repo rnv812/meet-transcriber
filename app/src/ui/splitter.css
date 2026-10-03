@@ -1,0 +1,27 @@
+/*
+ * Разделитель панелей (ui/Splitter): элемент нулевой ширины на границе.
+ * Область захвата — 6 px (::before), видимая линия — 1 px (::after) поверх
+ * рамки панели: подсвечивается при наведении, перетаскивании и фокусе.
+ * Где стоит разделитель — решает место использования (класс-модификатор).
+ */
+.splitter {
+  position: relative; flex: none; width: 0; align-self: stretch; z-index: 15;
+  outline: none; touch-action: none;
+}
+.splitter::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: -3px; width: 6px; cursor: col-resize;
+}
+.splitter::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: -1px; width: 1px;
+  background: transparent; pointer-events: none; transition: background var(--t);
+}
+/* Панель справа: её рамка — слева у панели, то есть ровно на месте разделителя. */
+.splitter--after::after { left: 0; }
+/* Захват целиком внутри панели слева: соседняя полоса заголовка остаётся перетаскивать окно. */
+.splitter--inside::before { left: -6px; }
+.splitter:hover::after, .splitter[data-dragging]::after { background: var(--accent); transition-delay: 60ms; }
+.splitter[data-dragging]::after { transition-delay: 0s; }
+.splitter:focus-visible::after { background: var(--accent); width: 2px; }
+
+/* Пока тянут: курсор «↔» во всём окне, текст не выделяется. */
+html.is-resizing, html.is-resizing * { cursor: col-resize !important; user-select: none !important; }

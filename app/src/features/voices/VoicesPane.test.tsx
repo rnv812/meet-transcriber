@@ -1,6 +1,6 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { VoicesPane } from "./VoicesPane";
+import { GRID_MIN, VoicesPane } from "./VoicesPane";
 import * as api from "../../lib/api";
 import { usePeople } from "../../state/usePeople";
 import { CardHeader } from "../card/CardHeader";
@@ -202,4 +202,38 @@ test("образец: getSample и src с #t=start,end", async () => {
   await userEvent.click(screen.getByText("Демьян"));
   await userEvent.click(await screen.findByRole("button", { name: "Прослушать образец" }));
   await waitFor(() => expect(document.querySelector("audio")!.getAttribute("src")).toMatch(/track=sys#t=5,9$/));
+});
+
+test("панель человека — колонка рядом с сеткой: не шире области за вычетом сетки, ширину тянут разделителем", async () => {
+  // Область «Голосов» шириной 700 px (в jsdom раскладки нет — ширину задаём сами).
+  const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get")
+    .mockImplementation(function (this: HTMLElement) { return this.classList.contains("voices") ? 700 : 0; });
+  localStorage.setItem("meet.pane.voices-card", "640");
+  try {
+    const { container } = setup();
+    await userEvent.click(screen.getByRole("button", { name: /Демьян/ }));
+    const area = container.querySelector<HTMLElement>(".voices")!;
+    const aside = container.querySelector(".voices__card")!;
+    // Панель — не внутри сетки, а следом за ней.
+    expect(container.querySelector(".voices__main")!.contains(aside)).toBe(false);
+    const split = screen.getByRole("separator", { name: "Ширина карточки человека" });
+    expect(split.nextElementSibling).toBe(aside);
+    // Запомнено 640, но сетке нужно GRID_MIN: панель 500, не дальше края.
+    expect(area.style.getPropertyValue("--person-w")).toBe(`${700 - GRID_MIN}px`);
+    expect(split).toHaveAttribute("aria-valuemax", String(700 - GRID_MIN));
+    // Тянут влево — шире, но не больше предела.
+    fireEvent.pointerDown(split, { button: 0, clientX: 300, pointerId: 1 });
+    fireEvent.pointerMove(split, { clientX: 0, pointerId: 1 });
+    fireEvent.pointerUp(split, { clientX: 0, pointerId: 1 });
+    expect(area.style.getPropertyValue("--person-w")).toBe(`${700 - GRID_MIN}px`);
+    // Вправо — уже, до минимума карточки; ширина запоминается.
+    fireEvent.pointerDown(split, { button: 0, clientX: 300, pointerId: 1 });
+    fireEvent.pointerMove(split, { clientX: 400, pointerId: 1 });
+    fireEvent.pointerUp(split, { clientX: 400, pointerId: 1 });
+    expect(area.style.getPropertyValue("--person-w")).toBe("400px");
+    expect(localStorage.getItem("meet.pane.voices-card")).toBe("400");
+  } finally {
+    width.mockRestore();
+    localStorage.clear();
+  }
 });

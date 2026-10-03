@@ -5,7 +5,7 @@
  */
 .settings { display: flex; height: 100%; min-height: 0; }
 .settings__menu {
-  width: 200px; flex: none; padding: 12px 8px; display: flex; flex-direction: column; gap: 2px;
+  width: var(--settings-menu-w, 200px); flex: none; padding: 12px 8px; display: flex; flex-direction: column; gap: 2px;
   border-right: 1px solid var(--line); overflow: auto;
 }
 .settings__item {
@@ -37,7 +37,6 @@
 }
 .settings__content { padding-top: 4px; }
 @media (max-width: 1000px) {
-  .settings__menu { width: 168px; }
   .settings__body { padding: 0 20px 24px; }
   .settings__state { max-width: 160px; }
 }
