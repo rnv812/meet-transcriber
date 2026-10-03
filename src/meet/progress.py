@@ -32,11 +32,15 @@
 только растёт.
 """
 
+import json
 import math
+import os
 import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
+from statistics import median
 
 from meet import events
 
@@ -44,16 +48,111 @@ from meet import events
 # (docs/2026-09-30-cpu-profile-bench.md) — распознавание и диаризация основные.
 WEIGHTS = {"convert": 5.0, "asr": 55.0, "align": 10.0, "diarize": 25.0, "voices": 3.0, "render": 2.0}
 
-# Диаризация (pyannote) отдельно, «время / длительность звука» — для хода по
-# времени, когда пайплайн не сообщает своего (`hook`), и для оценки
-# «Переразделить на спикеров». Оценка с запасом: на CPU сегментация и голоса
-# идут порядка десятой доли реального времени.
-DIARIZE_FACTOR = {"cuda": 0.04, "cpu": 0.15}
+# Время шагов, секунды: (постоянная часть — загрузка модели и пайплайна,
+# доля от длительности звука шага). Когда движок известен, веса шагов — их
+# ожидаемое время (`Stages.plan_times`): полоска идёт ровно по времени, а не
+# пролетает быстрое распознавание GigaAM и не стоит на диаризации. Замеры CPU
+# GigaAM: 60 с звука — распознавание 18 с на две дорожки, диаризация 76 с, из
+# них ~55 с до первого отчёта pyannote; 6 мин — 30 с и 147 с
+# (docs/2026-09-30-cpu-profile-bench.md, проверка 0.3.1); Whisper — оттуда же.
+STEP_TIMES: dict[tuple[str, str], dict[str, tuple[float, float]]] = {
+    ("cpu", "gigaam"): {"convert": (0.5, 0.005), "asr": (8.0, 0.035), "align": (20.0, 0.3),
+                        "diarize": (50.0, 0.27), "voices": (0.5, 0.0), "render": (0.5, 0.0)},
+    ("cpu", "faster-whisper"): {"convert": (0.5, 0.005), "asr": (15.0, 0.45), "align": (10.0, 0.15),
+                                "diarize": (50.0, 0.27), "voices": (0.5, 0.0), "render": (0.5, 0.0)},
+    ("cuda", "gigaam"): {"convert": (0.5, 0.005), "asr": (4.0, 0.012), "align": (4.0, 0.03),
+                         "diarize": (8.0, 0.04), "voices": (0.5, 0.0), "render": (0.5, 0.0)},
+    ("cuda", "faster-whisper"): {"convert": (0.5, 0.005), "asr": (6.0, 0.06), "align": (4.0, 0.03),
+                                 "diarize": (8.0, 0.04), "voices": (0.5, 0.0), "render": (0.5, 0.0)},
+}
 
 
-def diarize_estimate(seconds: float, device: str | None) -> float:
-    """Ожидаемое время диаризации звука длительностью `seconds`."""
-    return max(0.0, seconds) * DIARIZE_FACTOR.get(device or "cpu", DIARIZE_FACTOR["cpu"])
+def _profile(device: str | None, backend: str | None) -> tuple[str, str]:
+    return (device if device in ("cpu", "cuda") else "cpu", "gigaam" if backend == "gigaam" else "faster-whisper")
+
+
+def step_time(device: str | None, backend: str | None, stage: str, seconds: float,
+              stats: "StepStats | None" = None) -> tuple[float, float]:
+    """(загрузка, работа) шага `stage` над звуком длительностью `seconds`;
+    `stats` — поправка по прошлым расшифровкам этой машины."""
+    device, backend = _profile(device, backend)
+    load, per_s = STEP_TIMES[(device, backend)].get(stage, (0.5, 0.0))
+    load, work = load, per_s * max(0.0, seconds)
+    if stats is not None:
+        k_load, k_work = stats.factors(device, backend, stage)
+        load, work = load * k_load, work * k_work
+    return load, work
+
+
+class StepStats:
+    """Поправки времени шагов по прошлым работам на этой машине
+    (`progress_stats.json` в папке данных): на ключ «устройство:движок:шаг» —
+    последние KEEP отношений «факт / ожидание» для загрузки и для работы;
+    поправка — их медиана (в пределах 0,2…5). Диск медленный или модель уже в
+    памяти — следующая расшифровка идёт ровнее. Файл не читается или не
+    пишется — работаем на таблице STEP_TIMES."""
+
+    NAME = "progress_stats.json"
+    KEEP = 12
+    LIMITS = (0.2, 5.0)
+
+    def __init__(self, path: Path | None = None) -> None:
+        if path is None:
+            from meet import paths
+
+            path = paths.data_dir() / self.NAME
+        self.path = Path(path)
+        self._data: dict | None = None
+
+    def _load(self) -> dict:
+        if self._data is None:
+            try:
+                raw = json.loads(self.path.read_text(encoding="utf-8"))
+                self._data = raw if isinstance(raw, dict) else {}
+            except (OSError, ValueError):
+                self._data = {}
+        return self._data
+
+    @staticmethod
+    def key(device: str, backend: str, stage: str) -> str:
+        # Диаризация и прочие шаги не зависят от движка распознавания.
+        return f"{device}:{backend if stage in ('asr', 'align') else 'any'}:{stage}"
+
+    def factors(self, device: str, backend: str, stage: str) -> tuple[float, float]:
+        runs = self._load().get(self.key(device, backend, stage))
+        if not isinstance(runs, list):
+            return 1.0, 1.0
+        loads = [r[0] for r in runs if isinstance(r, list) and len(r) == 2 and r[0] is not None]
+        works = [r[1] for r in runs if isinstance(r, list) and len(r) == 2 and r[1] is not None]
+        lo, hi = self.LIMITS
+        pick = (lambda xs: min(hi, max(lo, median(xs))) if xs else 1.0)
+        return pick(loads), pick(works)
+
+    def record(self, device: str | None, backend: str | None, stage: str,
+               expected: tuple[float, float], actual: tuple[float | None, float]) -> None:
+        """Замер шага: ожидалось (загрузка, работа) — вышло. Отношения — только
+        у частей, ожидание которых не меньше секунды (иначе шум)."""
+        device, backend = _profile(device, backend)
+        ratio = [a / e if a is not None and e >= 1.0 else None for e, a in zip(expected, actual)]
+        if ratio == [None, None]:
+            return
+        lo, hi = self.LIMITS
+        ratio = [None if r is None else round(min(hi * 2, max(lo / 2, r)), 3) for r in ratio]
+        data = self._load()
+        key = self.key(device, backend, stage)
+        runs = data.get(key) if isinstance(data.get(key), list) else []
+        data[key] = [*runs, ratio][-self.KEEP:]
+
+    def save(self) -> None:
+        if not self._data:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(self._data, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, self.path)
+        except OSError:
+            pass
 
 
 def soft(x: float, edge: float = 0.9, top: float = 0.95) -> float:
@@ -81,6 +180,10 @@ class Step:
     measured: bool = False
     # В чём меряется своя шкала шага (для окна): «audio_s», «segments»…
     unit: str | None = None
+    # Ожидаемое время шага (`plan_times`): загрузка (до первого отчёта своей
+    # шкалы — по времени) и работа (по своей шкале).
+    load_s: float = 0.0
+    work_s: float = 0.0
 
 
 class Stages:
@@ -113,6 +216,9 @@ class Stages:
         self._timed: set[str] = set()
         self._finished = False
         self._ticker = None
+        self._started = clock()
+        # Замер шагов: ключ → [начало, первый отчёт своей шкалы, конец].
+        self._marks: dict[str, list[float | None]] = {}
 
     # --- план --------------------------------------------------------------
     def drop(self, key: str) -> None:
@@ -137,13 +243,44 @@ class Stages:
         if seconds and seconds > 0:
             self.estimate_s = float(seconds)
 
-    def reweight(self, weights: dict[str, float]) -> None:
+    def measured(self) -> dict[str, tuple[Step, tuple[float | None, float]]]:
+        """Пройденные шаги с планом времени: {ключ: (шаг, (загрузка, работа))}.
+        Загрузка — до первого отчёта своей шкалы (None, если её нет)."""
+        out = {}
+        for step in self.steps:
+            mark = self._marks.get(step.key)
+            if not mark or mark[2] is None or step.load_s + step.work_s <= 0:
+                continue
+            begun, first, ended = mark
+            if step.measured and first is not None:
+                out[step.key] = (step, (first - begun, ended - first))
+            else:
+                out[step.key] = (step, (None, ended - begun))
+        return out
+
+    def plan_times(self, times: dict[str, tuple[float, float]]) -> None:
+        """Ожидаемое время шагов {ключ: (загрузка, работа)}: вес ещё не
+        начатых шагов (и текущего, пока он без хода) — по их времени, сумма
+        их весов прежняя (пройденная доля не меняется); оценка всей работы —
+        прошедшее время плюс ожидаемое оставшихся шагов."""
+        with self._lock:
+            for step in self.steps:
+                if step.key in times:
+                    step.load_s, step.work_s = (max(0.0, float(x)) for x in times[step.key])
+            fresh = self.current is not None and self.part == 0 and not self._real
+            pending = [s for s in self.steps if s.key in times and s.key not in self._done
+                       and (self.current is None or s.key != self.current.key or fresh)]
+            self.reweight({s.key: s.load_s + s.work_s for s in pending}, include_current=fresh)
+            left = sum(s.load_s + s.work_s for s in pending)
+            self.estimate(max(0.0, self.clock() - self._started) + left)
+
+    def reweight(self, weights: dict[str, float], include_current: bool = False) -> None:
         """Перераспределить вес между ещё не начатыми шагами (распознавание
         двух дорожек — по их длительности). Сумма весов этих шагов не
         меняется — значит, не меняется и пройденная доля (`fraction`)."""
         with self._lock:
             pending = [s for s in self.steps if s.key in weights and s.key not in self._done
-                       and (self.current is None or s.key != self.current.key)]
+                       and (self.current is None or s.key != self.current.key or include_current)]
             new = sum(max(0.0, float(weights[s.key])) for s in pending)
             old = sum(s.weight for s in pending)
             if not pending or new <= 0 or old <= 0:
@@ -161,8 +298,11 @@ class Stages:
         return max(0.0, min(1.0, done / total))
 
     def expected_s(self, step: Step | None = None) -> float | None:
-        """Ожидаемая длительность шага: доля его веса в оценке всей работы."""
+        """Ожидаемая длительность шага: по плану времени (`plan_times`), иначе
+        доля его веса в оценке всей работы."""
         step = step or self.current
+        if step is not None and step.load_s + step.work_s > 0:
+            return step.load_s + step.work_s
         if step is None or not self.estimate_s:
             return None
         total = sum(s.weight for s in self.steps) or 1.0
@@ -171,8 +311,10 @@ class Stages:
     def begin(self, key: str, note: str | None = None) -> None:
         """Начался шаг `key` (предыдущий считается пройденным)."""
         with self._lock:
+            now = self.clock()
             if self.current is not None:
                 self._done.add(self.current.key)
+                self._marks.get(self.current.key, [None, None, None])[2] = now
             step = next((s for s in self.steps if s.key == key), None)
             if step is None:  # шага нет в плане — добавляем в конец, не теряя событие
                 step = Step(key, key, 0.0)
@@ -182,7 +324,8 @@ class Stages:
             self.current = step
             self.part = 0.0
             self._real = False
-            self._begun_at = self.clock()
+            self._begun_at = now
+            self._marks[key] = [now, None, None]
             self._emit()
 
     def update(self, part: float | None) -> None:
@@ -194,8 +337,12 @@ class Stages:
             if part is None:
                 self._timed.add(self.current.key)
                 return
+            if not self._real and self.current.key in self._marks:
+                self._marks[self.current.key][1] = self.clock()
             self._real = True
-            part = max(self.part, min(1.0, float(part)))
+            # Своя шкала — работа после загрузки: 0 своей шкалы = конец загрузки.
+            lead = self._lead(self.current)
+            part = max(self.part, min(1.0, lead + (1 - lead) * float(part)))
             self.part = part
             now = self.clock()
             if part >= 1.0 or (part - self._last_part >= self.MIN_PART and now - self._last_at >= self.MIN_GAP_S):
@@ -204,18 +351,32 @@ class Stages:
     def _by_time(self, step: Step) -> bool:
         return (not step.measured or step.key in self._timed) and not self._real
 
+    @staticmethod
+    def _lead(step: Step) -> float:
+        """Доля загрузки в шаге со своей шкалой (до первого её отчёта)."""
+        total = step.load_s + step.work_s
+        return step.load_s / total if step.measured and total > 0 else 0.0
+
     def tick(self) -> None:
         """Продлить по времени шаг без своей шкалы: доля `soft(прошло /
         ожидаемое)` — к ~90 % за ожидаемое время, дальше медленно и не до
         конца. Оценки длительности нет — ничего (в окне бегущий блик)."""
         with self._lock:
             step = self.current
-            if step is None or self._finished or not self._by_time(step):
+            if step is None or self._finished:
                 return
-            expect = self.expected_s(step)
-            if not expect:
+            elapsed = self.clock() - self._begun_at
+            if self._by_time(step):
+                expect = self.expected_s(step)
+                if not expect:
+                    return
+                part = soft(elapsed / expect)
+            elif not self._real and self._lead(step) > 0:
+                # Шаг со своей шкалой, а она ещё молчит (грузится модель): по
+                # времени загрузки, но не дальше её доли в шаге.
+                part = self._lead(step) * soft(elapsed / step.load_s)
+            else:
                 return
-            part = soft((self.clock() - self._begun_at) / expect)
             if part - self.part < self.MIN_PART:
                 return
             self.part = part
@@ -259,6 +420,7 @@ class Stages:
         with self._lock:
             if self.current is not None:
                 self._done.add(self.current.key)
+                self._marks.get(self.current.key, [None, None, None])[2] = self.clock()
                 if note is not None:
                     self.current.note = note
                 self.part = 1.0
@@ -284,7 +446,8 @@ class Stages:
         if not final:
             # Следующая известная отметка — конец шага: дальше неё окно полоску не продлевает.
             data["cap"] = round(self.fraction(1.0), 4)
-            unit = "time" if self._by_time(step) and self.part > 0 else step.unit
+            timed = self.part > 0 and (self._by_time(step) or (not self._real and self._lead(step) > 0))
+            unit = "time" if timed else step.unit
             if unit:
                 data["unit"] = unit
         if self.estimate_s:

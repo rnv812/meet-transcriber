@@ -81,6 +81,10 @@ class _Run:
         self.started = time.monotonic()
         # Ход одной шкалой (meet.progress): план задают _transcribe_single/_two_track.
         self.stages: Stages | None = None
+        # Дорожки WAV 16 кГц ({"sys", "mic"} или {"one"}): по их длительности —
+        # ожидаемое время шагов, когда движок выбран.
+        self.tracks: dict[str, Path] = {}
+        self._seconds: dict[str, float] = {}
 
     def choose(self, wav: Path) -> asr.Choice:
         if self.choice is None:
@@ -89,17 +93,58 @@ class _Run:
         return self.choice
 
     def _estimate(self, wav: Path) -> None:
-        """Ожидаемая длительность всей расшифровки — по SPEED_FACTOR выбранного
-        движка и длительности дорожки (WAV 16 кГц моно: 32 000 байт в секунду)."""
+        """Ожидаемое время шагов по выбранному движку и длительности дорожек
+        (`progress.step_time`): веса шагов и оценка всей работы. Дорожек не
+        знаем — оценка всей работы по SPEED_FACTOR и длительности дорожки."""
         if self.stages is None or self.choice is None:
             return
         try:
+            if self.tracks:
+                from meet.progress import StepStats
+
+                self.stages.plan_times(self._step_times(StepStats()))
+                return
             seconds = wav_seconds(wav)
             from meet import engine
 
             self.stages.estimate(seconds * engine.speed_factor(self.choice.device, self.choice.backend))
         except (OSError, ValueError, TypeError):
             pass
+
+    def _step_times(self, stats=None) -> dict[str, tuple[float, float]]:
+        from meet.progress import step_time
+
+        device, backend = self.choice.device, self.choice.backend
+        seconds = self._seconds if self._seconds else {name: wav_seconds(path) for name, path in self.tracks.items()}
+        self._seconds = seconds
+        main = seconds.get("sys", seconds.get("one", 0.0))
+        times = {key: step_time(device, backend, key, main, stats) for key in ("align", "diarize", "voices", "render")}
+        if "one" in seconds:
+            times["asr"] = step_time(device, backend, "asr", main, stats)
+        else:
+            times["asr-sys"] = step_time(device, backend, "asr", main, stats)
+            times["asr-mic"] = step_time(device, backend, "asr", seconds.get("mic", 0.0), stats)
+        return times
+
+    def learn(self) -> None:
+        """Замер шагов этой расшифровки — поправка к ожиданиям следующих
+        (`progress.StepStats`): отношение факта к таблице STEP_TIMES."""
+        if self.stages is None or self.choice is None or not self._seconds:
+            return
+        try:
+            from meet.progress import StepStats
+
+            base = self._step_times()
+            stats = StepStats()
+            for key, (step, actual) in self.stages.measured().items():
+                if key not in base:
+                    continue
+                load, work = base[key]
+                expected = (load, work) if actual[0] is not None else (0.0, load + work)
+                stats.record(self.choice.device, self.choice.backend, step.stage, expected, actual)
+            stats.save()
+        except Exception as e:  # замер — подсказка на будущее, расшифровку не роняет
+            print(f"замер шагов не сохранён ({type(e).__name__})")
 
     def part(self, value: float) -> None:
         """Доля текущего шага (распознавание, диаризация) — в шкалу хода."""
@@ -563,6 +608,7 @@ def transcribe(
     bus.emit(events.LOG, text=timing, source="timing")
     print(f"Готово: {out_md}")
     stages.finish(note=str(out_md))
+    run.learn()
     return out_md
 
 
@@ -661,6 +707,7 @@ def _transcribe_single(
         stages.begin("convert")
         wav = to_wav16k(src, Path(td) / "audio16.wav")
         stages.update(1)
+        run.tracks = {"one": wav}
         stages.begin("asr")
         segments = _recognize(wav, hotwords, run)
         stages.update(1)
@@ -706,6 +753,7 @@ def _transcribe_two_track(
         mic_wav = to_wav16k(mic_src, Path(td) / "mic16.wav")
         stages.update(1)
         _weigh_tracks(stages, sys_wav, mic_wav)
+        run.tracks = {"sys": sys_wav, "mic": mic_wav}
         stages.begin("asr-sys")
         sys_segs = _recognize(sys_wav, hotwords, run)
         stages.update(1)

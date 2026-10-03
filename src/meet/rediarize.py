@@ -328,13 +328,15 @@ def run(folder: Path, *, num_speakers: int | None = None, min_speakers: int | No
 
 
 def _estimate(stages, wav: Path) -> None:
-    """Ожидаемая длительность работы: диаризация — 80 % её веса (план выше)."""
+    """Ожидаемое время шагов (`progress.step_time`): загрузка пайплайна идёт
+    по времени, диаризация — по своей шкале, веса — по времени."""
     from meet.asr import resolve_device
-    from meet.progress import diarize_estimate
+    from meet.progress import StepStats, step_time
     from meet.transcribe import wav_seconds
 
     try:
-        stages.estimate(diarize_estimate(wav_seconds(wav), resolve_device()) / 0.8)
+        seconds, device, stats = wav_seconds(wav), resolve_device(), StepStats()
+        stages.plan_times({key: step_time(device, None, key, seconds, stats) for key in ("diarize", "voices", "render")})
     except Exception:
         pass  # без оценки — бегущий блик там, где своей шкалы нет
 

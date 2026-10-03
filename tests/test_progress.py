@@ -551,3 +551,117 @@ def test_merge_reports_a_step_per_track(tmp_path, monkeypatch):
     assert [(e["step"], e["steps"]) for e in seen if not e.get("final")][:2] == [(1, 2), (2, 2)]
     assert seen[-1]["fraction"] == 1.0
     assert [e["fraction"] for e in seen] == sorted(e["fraction"] for e in seen)
+
+
+# --- 0.3.1: веса шагов — по их ожидаемому времени ------------------------------------
+
+
+def test_step_time_depends_on_engine_and_length():
+    from meet.progress import step_time
+
+    load, work = step_time("cpu", "gigaam", "diarize", 360)
+    assert load > 0 and work == pytest.approx(0.27 * 360)
+    # GigaAM на CPU распознаёт много быстрее Whisper — и вес у распознавания меньше.
+    assert sum(step_time("cpu", "gigaam", "asr", 600)) < sum(step_time("cpu", "faster-whisper", "asr", 600))
+    assert step_time("mps", "что-то", "asr", 10) == step_time("cpu", "faster-whisper", "asr", 10)
+
+
+def test_plan_times_weighs_steps_by_time_without_moving_the_fraction():
+    bus, seen = _bus()
+    now = [0.0]
+    st = Stages(bus, [Step("convert", "convert", 5), Step("asr", "asr", 55, measured=True),
+                      Step("diarize", "diarize", 25, measured=True), Step("render", "render", 15)],
+                clock=lambda: now[0])
+    st.begin("convert")
+    now[0] = 2.0
+    st.update(1.0)
+    st.begin("asr")
+    before = st.fraction()
+    st.plan_times({"asr": (10.0, 10.0), "diarize": (50.0, 20.0), "render": (0.5, 0.0)})
+    assert st.fraction() == before
+    w = {s.key: s.weight for s in st.steps}
+    assert w["diarize"] / w["asr"] == pytest.approx(70 / 20)
+    assert w["asr"] + w["diarize"] + w["render"] == pytest.approx(95.0)
+    assert st.estimate_s == pytest.approx(2.0 + 90.5)
+
+
+def test_measured_step_creeps_through_loading_then_follows_its_scale():
+    bus, seen = _bus()
+    now = [0.0]
+    st = Stages(bus, [Step("diarize", "diarize", 1, measured=True), Step("render", "render", 0.01)],
+                clock=lambda: now[0])
+    st.begin("diarize")
+    st.plan_times({"diarize": (30.0, 10.0), "render": (0.1, 0.0)})  # загрузка — 75 % шага
+    parts = []
+    for t in range(1, 61):  # pyannote молчит минуту (дольше ожидаемой загрузки)
+        now[0] = float(t)
+        st.tick()
+        parts.append(st.part)
+    assert parts == sorted(parts) and parts[14] == pytest.approx(0.75 * 0.45, abs=0.01)
+    assert max(parts) < 0.75  # загрузка не заходит на работу
+    assert seen[-1]["unit"] == "time"
+    st.update(0.0)  # первый отчёт pyannote — конец загрузки
+    assert st.part == pytest.approx(0.75)
+    st.update(0.5)
+    assert st.part == pytest.approx(0.875)
+    now[0] = 100.0
+    st.tick()
+    assert st.part == pytest.approx(0.875)  # дальше — только своя шкала
+
+
+def test_step_times_are_learned_from_finished_runs(tmp_path):
+    from meet.progress import StepStats, step_time
+
+    stats = StepStats(tmp_path / "p.json")
+    assert stats.factors("cpu", "gigaam", "diarize") == (1.0, 1.0)
+    for _ in range(3):  # загрузка вдвое быстрее таблицы, работа — в полтора раза дольше
+        stats.record("cpu", "gigaam", "diarize", (50.0, 16.0), (25.0, 24.0))
+    stats.record("cpu", "gigaam", "diarize", (50.0, 16.0), (None, 40.0))  # без своей шкалы — только работа
+    stats.save()
+    again = StepStats(tmp_path / "p.json")
+    k_load, k_work = again.factors("cpu", "faster-whisper", "diarize")  # диаризации движок не важен
+    assert k_load == pytest.approx(0.5) and k_work == pytest.approx(1.5)
+    base = step_time("cpu", "gigaam", "diarize", 60)
+    assert step_time("cpu", "gigaam", "diarize", 60, again) == pytest.approx((base[0] * 0.5, base[1] * 1.5))
+    assert again.factors("cpu", "gigaam", "asr") == (1.0, 1.0)
+
+
+def test_transcription_learns_step_times(monkeypatch, tmp_path):
+    import meet.transcribe as tr
+    from meet import asr
+    from meet.asr import Segment
+    from meet.diarize import Diarization
+    from meet.progress import StepStats
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "state"))
+
+    def to_wav(src, dst, **k):
+        Path(dst).write_bytes(b"\0" * (44 + 32000 * 60))
+        return dst
+
+    def fake_asr(path, hotwords=None, *, on_progress=None, **kw):
+        on_progress(0.0)
+        on_progress(1.0)
+        return [Segment(0.0, 1.0, "а")]
+
+    def fake_diarize(p, num_speakers=None, exclusive=False, on_progress=None, **kw):
+        on_progress(0.5)
+        return Diarization(turns=[(0.0, 1.0, "SPEAKER_00")])
+
+    monkeypatch.setattr(tr, "to_wav16k", to_wav)
+    monkeypatch.setattr(asr, "choose", lambda path=None, **kw: asr.Choice("gigaam", "cpu", "v3_e2e_rnnt"))
+    monkeypatch.setattr(tr, "transcribe_wav", fake_asr)
+    monkeypatch.setattr(tr, "diarize_wav", fake_diarize)
+    monkeypatch.setattr(tr, "_restore_latin", lambda segments, run: None)
+    monkeypatch.setattr(tr, "_match_names", lambda diar, threshold=None: {})
+    (tmp_path / "sys.opus").write_bytes(b"x")
+    (tmp_path / "mic.opus").write_bytes(b"x")
+    bus, seen = _bus()
+    tr.transcribe(str(tmp_path), align=False, bus=bus)
+    # Веса по времени: на CPU с GigaAM диаризация тяжелее распознавания.
+    diarize_at = next(e for e in seen if e["stage"] == "diarize")
+    asr_at = next(e for e in seen if e["stage"] == "asr")
+    assert diarize_at["cap"] - diarize_at["fraction"] > asr_at["cap"] - asr_at["fraction"]
+    assert diarize_at["estimate_s"] > 0  # оценка всей работы — по времени шагов
+    data = json.loads((tmp_path / "state" / StepStats.NAME).read_text(encoding="utf-8"))
+    assert {"cpu:gigaam:asr", "cpu:any:diarize"} <= set(data)
