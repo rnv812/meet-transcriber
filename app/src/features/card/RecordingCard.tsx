@@ -9,7 +9,7 @@ import {
   kbExport, patchRecording, runAnalysis, setRecordingCategory, transcribe, type Endpoint,
 } from "../../lib/api";
 import { clock, errorText } from "../../lib/format";
-import { JiraLinks, jiraLinker, type JiraLinker } from "../../lib/jira";
+import { jiraCard, JiraLinks, jiraLinker, type JiraLinker } from "../../lib/jira";
 import { DEFAULT_PREFS, markupPrefs, type MarkupPrefs } from "../../lib/markupPrefs";
 import { agentKillRecording, inTauri, openFolder, saveText } from "../../lib/shell";
 import { keepTranscript } from "../../lib/sameTranscript";
@@ -216,6 +216,8 @@ export function RecordingCard({
   const spokenUntil = useMemo(
     () => (segments?.length ? segments.reduce((m, x) => Math.max(m, x.end), 0) : null), [segments]);
   const turns = useMemo(() => mergeTurns(segments ?? []), [segments]);
+  // Ссылки на задачи Jira: настройки + что резидент нашёл во встрече (по репликам карточки).
+  const jiraLinks = useMemo(() => jiraCard(jira, rec?.jira, turns), [jira, rec?.jira, turns]);
   const speakers = useMemo(() => speakersOf(segments ?? []), [segments]);
   const openSpeakers = useCallback((label?: string) => setPanel((p) => ({
     open: true, mounted: true, focus: label ? { label, n: (p.focus?.n ?? 0) + 1 } : p.focus,
@@ -610,7 +612,7 @@ export function RecordingCard({
           {systemAudioText(rec.system_audio, rec.system_audio_reason)}
         </p>
       )}
-      <div className="card__body"><JiraLinks.Provider value={jira}>{body}</JiraLinks.Provider></div>
+      <div className="card__body"><JiraLinks.Provider value={jiraLinks}>{body}</JiraLinks.Provider></div>
       {status.kind === "ready" && turnEdit.menu}
       {status.kind === "ready" && textFix.node}
       {status.kind === "ready" && improve.dialog}

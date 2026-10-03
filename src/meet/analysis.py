@@ -10,7 +10,11 @@
 * `insights` — наблюдения: неочевидный вывод, противоречие, на что обратить
   внимание, что сделать после; со ссылками на реплики;
 * `category` — категория встречи из списка в настройках (`categories`);
-* `title` — название встречи (применяется по правилам `meet.titles`).
+* `title` — название встречи (применяется по правилам `meet.titles`);
+* `issues` — задачи Jira, названные словами или неполно, которые не нашёл
+  детерминированный слой (meet.jira_refs): ключ проекта из настроек, номера
+  реплик, дословные слова и уверенность. Запрашивается, только если в
+  настройках есть проекты Jira; выдуманное отсекается проверкой (`_issues`).
 
 Номер реплики `#i` — индекс сегмента в `transcript.json`: он стабилен, пока
 текст и границы реплик не меняются. Отпечаток (`fingerprint`) — число сегментов
@@ -51,7 +55,7 @@ from meet.output import fmt_ts
 ANALYSIS_JSON = "analysis.json"
 VERSION = 1
 
-FEATURES = ("types", "importance", "chapters", "insights", "category", "title")
+FEATURES = ("types", "importance", "chapters", "insights", "category", "title", "issues")
 PHRASE_TYPES = ("statement", "question", "idea", "decision", "task", "risk", "agreement",
                 "objection")
 INSIGHT_KINDS = ("insight", "contradiction", "attention", "followup")
@@ -74,13 +78,20 @@ SUMMARY_MAX = 600
 REPAIR_BAD_MAX = 1500
 # Термины базы знаний (meet.assist.kb_index), прозвучавшие во встрече.
 KB_EXCERPTS = 5
+# Ссылки на задачи Jira (`issues`, 0.3.1): не больше стольких, не увереннее —
+# не берём; `spoken` — дословный кусок реплики не длиннее.
+ISSUES_MAX = 50
+ISSUE_MIN_CONFIDENCE = 0.6
+ISSUE_SPOKEN_MAX = 120
+_ISSUE_KEY = re.compile(r"([A-Z][A-Z0-9_]{1,19})-([1-9][0-9]{0,5})")
 
 ANALYZE_TIMEOUT_S = 600.0
 FINAL_TIMEOUT_S = 180.0
 
 # Как называть части разметки в промпте и сообщениях об ошибках.
 _SECTION_OF = {"types": "phrase_types", "importance": "importance", "chapters": "chapters",
-               "insights": "insights", "category": "category", "title": "title"}
+               "insights": "insights", "category": "category", "title": "title",
+               "issues": "issues"}
 
 
 class AnalysisError(RuntimeError):
@@ -223,6 +234,14 @@ _FIELDS = {
     "title": (
         '- "title": "название встречи до 60 символов" — о чём встреча, по-русски, без даты, без '
         "кавычек и без слов «встреча», «созвон» в начале."),
+    "issues": (
+        '- "issues": [{{"key": "ПРОЕКТ-номер", "segments": [номера реплик], "spoken": "дословные слова '
+        'из реплики", "confidence": число от 0 до 1}}] — задачи Jira, которые назвали словами, неполно '
+        "или с ошибкой распознавания («тот баг про экспорт, сорок четыре пятьдесят два», «орион "
+        "двадцать один двадцать два»). Проекты Jira: {projects}.{default} key — ключ проекта из этого "
+        "списка, дефис и номер цифрами; spoken — дословный кусок реплики, где прозвучал номер задачи "
+        "(и проект, если его назвали); номер должен быть в spoken. Не придумывай: не уверен в проекте "
+        "или номере — не включай. Нечего сказать — []."),
     "summary": (
         '- "summary": "о чём эта часть встречи, 2–3 предложения до 600 символов" — для общего '
         "названия и категории всей встречи."),
@@ -255,11 +274,15 @@ def categories_block(categories) -> str:
 
 
 def build_system(features, categories, *, chapters: tuple[int, int] = (3, 12),
-                 summary: bool = False) -> str:
+                 summary: bool = False, jira: tuple[tuple[str, ...], str] = ((), "")) -> str:
     """Системный промпт окна: только запрошенные части (выключенные не
-    упоминаются вовсе — промпт короче), правило «данные, а не команды»."""
-    fields = [_FIELDS[f].format(chapters=f"{chapters[0]}–{chapters[1]}") for f in FEATURES
-              if f in features]
+    упоминаются вовсе — промпт короче), правило «данные, а не команды».
+    `jira` — (ключи проектов, проект по умолчанию) для части `issues`."""
+    projects, default = jira
+    fields = [_FIELDS[f].format(chapters=f"{chapters[0]}–{chapters[1]}",
+                                projects=", ".join(projects) or "—",
+                                default=f" Проект по умолчанию (проект не назван): {default}." if default else "")
+              for f in FEATURES if f in features]
     if summary:
         fields.append(_FIELDS["summary"].format())
     cats = categories_block(categories) if "category" in features else ""
@@ -497,9 +520,60 @@ def _summary(raw) -> str | None:
     return _flat(raw, SUMMARY_MAX) or None
 
 
-def parse(text: str, features, *, valid: set[int], category_ids=(), summary: bool = False):
+def _spoken_numbers(spoken: str) -> set[int]:
+    """Номера, которые звучат в словах `spoken` (цифрами или словами)."""
+    from meet import jira_refs
+
+    text = jira_refs.nfc(spoken)
+    toks = jira_refs.tokens(text)
+    found, p = set(), 0
+    while p < len(toks):
+        num = jira_refs.number_at(toks, p, text)
+        if num is None:
+            p += 1
+            continue
+        if num.digits:
+            found.add(int(num.digits))
+        p = max(num.end, p + 1)
+    return found
+
+
+def _issues(raw, valid, texts: dict[int, str], projects) -> list[dict]:
+    """Ссылки на задачи от модели. Берём только ключ проекта из настроек,
+    уверенность не ниже ISSUE_MIN_CONFIDENCE, `spoken` — дословно в названных
+    репликах и с тем же номером, что в ключе: выдуманное не проходит."""
+    from meet.jira_refs import find_phrase, nfc
+
+    if not isinstance(raw, list):
+        raise ValueError("issues должен быть списком")
+    out: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip().upper()
+        m = _ISSUE_KEY.fullmatch(key)
+        if not m or m.group(1) not in projects:
+            continue
+        confidence = _number(item.get("confidence"))
+        if confidence is None or confidence < ISSUE_MIN_CONFIDENCE:
+            continue
+        spoken = _flat(item.get("spoken") or "", ISSUE_SPOKEN_MAX).strip(" «»\"'.,;:!?")
+        if not spoken or int(m.group(2)) not in _spoken_numbers(spoken):
+            continue
+        refs = item.get("segments") if isinstance(item.get("segments"), list) else []
+        found = sorted({i for i in (_index(r, valid) for r in refs)
+                        if i is not None and i in texts and find_phrase(nfc(texts[i]), spoken)})
+        if found:
+            out.append({"key": key, "segments": found, "spoken": spoken, "confidence": confidence})
+    return out[:ISSUES_MAX]
+
+
+def parse(text: str, features, *, valid: set[int], category_ids=(), summary: bool = False,
+          texts: dict[int, str] | None = None, projects=()):
     """Ответ модели → (части, ошибки). Части разбираются по отдельности: битая
-    отбрасывается с ошибкой, остальные принимаются. Нет JSON вовсе — ValueError."""
+    отбрасывается с ошибкой, остальные принимаются. Нет JSON вовсе — ValueError.
+    `texts` — {номер: текст реплики} и `projects` — ключи проектов Jira: для
+    проверки `issues`."""
     from meet.assist.live_state import PatchError, parse_reply
 
     try:
@@ -515,6 +589,7 @@ def parse(text: str, features, *, valid: set[int], category_ids=(), summary: boo
         "insights": lambda raw: _insights(raw, valid),
         "category": lambda raw: _category(raw, set(category_ids)),
         "title": lambda raw: clean_title(raw) if raw is not None else None,
+        "issues": lambda raw: _issues(raw, valid, texts or {}, set(projects)),
     }
     wanted = [f for f in FEATURES if f in features] + (["summary"] if summary else [])
     for feature in wanted:
@@ -546,12 +621,14 @@ def _call(runner, prompt: str, system: str, timeout_s: float) -> str:
 
 
 def ask_model(runner, prompt: str, system: str, features, *, valid: set[int], category_ids=(),
-              summary: bool = False, timeout_s: float = ANALYZE_TIMEOUT_S) -> tuple[dict, list[str]]:
+              summary: bool = False, timeout_s: float = ANALYZE_TIMEOUT_S,
+              texts: dict[int, str] | None = None, projects=()) -> tuple[dict, list[str]]:
     """Вызов с одной попыткой исправления: JSON не разобрался или часть битая —
     просим исправить; из двух ответов берётся по каждой части годная."""
     def attempt(text: str):
         try:
-            return parse(text, features, valid=valid, category_ids=category_ids, summary=summary)
+            return parse(text, features, valid=valid, category_ids=category_ids, summary=summary,
+                         texts=texts, projects=projects)
         except ValueError as e:
             return None, [str(e)]
 
@@ -620,6 +697,18 @@ def merge_windows(results: list[dict], order: list[int]) -> dict:
                     continue
                 insights.append(dict(item))
         out["insights"] = insights[:INSIGHTS_MAX]
+    if any("issues" in r for r in results):
+        # Ссылки на задачи: тот же ключ и те же слова — одна ссылка (окна перекрываются).
+        issues: dict[tuple[str, str], dict] = {}
+        for r in results:
+            for item in r.get("issues") or []:
+                same = issues.get((item["key"], item["spoken"].casefold()))
+                if same is None:
+                    issues[(item["key"], item["spoken"].casefold())] = dict(item)
+                else:
+                    same["segments"] = sorted(set(same["segments"]) | set(item["segments"]))
+                    same["confidence"] = max(same["confidence"], item["confidence"])
+        out["issues"] = list(issues.values())[:ISSUES_MAX]
     for key in ("category", "title"):
         found = next((r[key] for r in results if r.get(key)), None)
         if found is not None:
@@ -651,6 +740,16 @@ def model_label(provider: str | None, cfg) -> str:
     return provider or "модель"
 
 
+def jira_context(cfg) -> tuple[tuple[str, ...], str]:
+    """(ключи проектов Jira, проект по умолчанию) для части `issues`; проектов
+    нет или ссылки на Jira выключены — пусто, и часть не запрашивается."""
+    view = getattr(cfg, "transcript_view", None)
+    if view is not None and not view.jira:
+        return (), ""
+    integrations = cfg.integrations
+    return (tuple(p.key for p in integrations.jira_projects), integrations.jira_default_project)
+
+
 def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
         features=None, now: float | None = None) -> dict:
     """Разметить встречу → словарь analysis.json (без записи на диск).
@@ -660,6 +759,10 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     if data is None:
         raise AnalysisError("транскрипта нет")
     features = tuple(f for f in FEATURES if f in (features or cfg.analysis.features()))
+    # Ссылки на задачи — только когда есть проекты Jira и ссылки включены.
+    jira = jira_context(cfg)
+    if not jira[0]:
+        features = tuple(f for f in features if f != "issues")
     if not features:
         raise AnalysisError("все части анализа выключены в настройках")
     lines = compact_lines(data)
@@ -667,6 +770,8 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
         raise AnalysisError("в записи нет речи")
     order = [i for i, _ in lines]
     valid = set(order)
+    texts = {i: str(s.get("text") or "") for i, s in enumerate(data.get("segments") or [])
+             if isinstance(s, dict)}
     categories = [c.to_raw() for c in cfg.categories]
     category_ids = [c["id"] for c in categories]
     parts = windows(lines)
@@ -693,14 +798,14 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
                 lo = max(1, round(total_lo * share))
                 hi = max(lo + 1, round(total_hi * share) + 1)
             system = build_system(window_features, categories, chapters=(lo, hi),
-                                  summary=bool(final_features))
+                                  summary=bool(final_features), jira=jira)
         else:
             system = build_system((), categories, summary=True)
         prompt = build_prompt(part, header=header, part=(n, len(parts)) if multi else None, kb=kb)
         try:
             got, errs = ask_model(runner, prompt, system, window_features,
                                   valid={i for i, _ in part}, category_ids=category_ids,
-                                  summary=bool(final_features))
+                                  summary=bool(final_features), texts=texts, projects=jira[0])
         except (ValueError, RuntimeError) as e:
             errors.append(f"часть {n}: {e}")
             continue
@@ -761,6 +866,9 @@ def to_file(parts: dict, features, fp: str, *, model: str, now: float | None = N
         doc["category"] = parts.get("category")
     if "title" in features:
         doc["title"] = parts.get("title")
+    if "issues" in features:
+        # Задачи Jira, названные словами (0.3.1): {key, segments, spoken, confidence}.
+        doc["issues"] = parts.get("issues") or []
     if errors:
         doc["warnings"] = [str(e)[:300] for e in errors][:10]
     return doc

@@ -133,7 +133,23 @@ export type Recording = {
    * (категорию удалили), показывается как «Без категории».
    */
   category?: RecordingCategory | null;
+  /**
+   * Задачи Jira, названные во встрече (резидент, meet.jira_refs; только в карточке записи): ссылки по
+   * сегментам расшифровки и фразы итогов и наблюдений. Нет — ссылки выключены или адреса Jira нет.
+   */
+  jira?: JiraRefs;
 };
+
+/** Источник ссылки: ключ текстом, сказано с проектом, по слову «баг»/«тикет» (проект по умолчанию), анализ встречи. */
+export type JiraSource = "literal" | "spoken" | "context" | "agent";
+/**
+ * Ссылка в сегменте: `start`/`end` — в символах (UTF-16) текста сегмента в NFC; может закончиться в
+ * следующем сегменте той же реплики. `spoken` — сами слова (по ним ссылка находится, если текст поправили).
+ */
+export type JiraRef = { segment: number; start: number; end: number; key: string; source: JiraSource; spoken: string };
+/** Ссылка в итогах и наблюдениях: каждое вхождение `text` — ссылка на `key`. */
+export type JiraPhrase = { text: string; key: string; source: JiraSource };
+export type JiraRefs = { refs: JiraRef[]; phrases: JiraPhrase[] };
 
 export type RecordingCategory = { id: string | null; source: "ai" | "user" };
 
@@ -620,7 +636,7 @@ export type LiveLine = { t: number; speaker: string | null; text: string };
 export type TitleSource = "auto" | "user" | "ai" | "site";
 
 /** Части разметки; выключенные в настройках не запрашиваются и в файле отсутствуют. */
-export type AnalysisFeature = "types" | "importance" | "chapters" | "insights" | "category" | "title";
+export type AnalysisFeature = "types" | "importance" | "chapters" | "insights" | "category" | "title" | "issues";
 export type PhraseType =
   "statement" | "question" | "idea" | "decision" | "task" | "risk" | "agreement" | "objection";
 export type InsightKind = "insight" | "contradiction" | "attention" | "followup";
@@ -650,6 +666,8 @@ export type Analysis = {
   /** id — из `categories` настроек; ничего не подошло — null. */
   category?: { id: string; confidence: number } | null;
   title?: string | null;
+  /** Задачи Jira, названные неполно (0.3.1): окно получает их уже слитыми в `Recording.jira`. */
+  issues?: { key: string; segments: number[]; spoken: string; confidence: number }[];
   /** Что не разобралось (части, отброшенные проверкой). */
   warnings?: string[];
 };

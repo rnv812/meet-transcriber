@@ -167,7 +167,7 @@ MAX_HINTS_RANGE = (3, 12)
 
 # Анализ встречи (meet.analysis): что размечать. Выключенное не запрашивается у
 # модели (промпт короче) и не показывается в окне.
-ANALYSIS_FEATURES = ("types", "importance", "chapters", "insights", "category", "title")
+ANALYSIS_FEATURES = ("types", "importance", "chapters", "insights", "category", "title", "issues")
 # Разовое предложение включить авто-анализ тому, кто обновился с 0.2.x
 # (Analysis.consent): ждёт ответа, включил, отказался.
 CONSENT_PENDING = "pending"
@@ -961,6 +961,9 @@ class Analysis:
     insights: bool = True
     category: bool = True
     title: bool = True
+    # «Ссылки на задачи» (0.3.1): задачи Jira, названные неполно, — в том же
+    # вызове модели; запрашиваются, только если в настройках есть проекты Jira.
+    issues: bool = True
     improve_auto: bool = False
     consent: str = ""
 

@@ -8,7 +8,7 @@
  */
 
 import type { MouseEvent, ReactNode } from "react";
-import { findJira, jiraUrl, type JiraLinker } from "../lib/jira";
+import { findJira, jiraUrl, type JiraCard, type JiraLinker, type JiraMatch } from "../lib/jira";
 import type { Range } from "../lib/search";
 import { openUrl } from "../lib/shell";
 import "./linked-text.css";
@@ -33,7 +33,12 @@ function marked(text: string, from: number, to: number, ranges: Range[], firstHi
   return out;
 }
 
-export function JiraLink({ linker, keyText, children }: { linker: JiraLinker; keyText: string; children: ReactNode }) {
+export function JiraLink({ linker, keyText, spoken, children }: {
+  linker: JiraLinker; keyText: string;
+  /** Ключ сказан словами (эти слова — `children`): значок с ключом поверх них, слова — в подсказке. */
+  spoken?: string;
+  children: ReactNode;
+}) {
   const url = jiraUrl(linker, keyText);
   const open = (e: MouseEvent) => {
     // Ctrl/Shift+щелчок по реплике — выбор реплик, а не переход.
@@ -44,7 +49,14 @@ export function JiraLink({ linker, keyText, children }: { linker: JiraLinker; ke
     if (e.detail > 1) return;
     void openUrl(url);
   };
-  return (
+  // Ключ — псевдоэлементом (data-key): текст реплики в DOM тот же, правка слов
+  // и разделение реплики считают позиции по нему.
+  return spoken ? (
+    <a className="jira-link jira-ref" href={url} data-key={keyText} aria-label={keyText}
+      title={`«${spoken}» → ${keyText} · открыть в Jira`} onClick={open} rel="noreferrer noopener" draggable={false}>
+      {children}
+    </a>
+  ) : (
     <a className="jira-link" href={url} title={`Открыть ${keyText} в Jira`} onClick={open} rel="noreferrer noopener"
       draggable={false}>
       {children}
@@ -52,21 +64,26 @@ export function JiraLink({ linker, keyText, children }: { linker: JiraLinker; ke
   );
 }
 
-/** Текст: ссылки Jira (если `linker`) и подсветка `ranges` (если есть). */
-export function LinkedText({ text, ranges = [], firstHit, linker }: {
+/**
+ * Текст: ссылки Jira и подсветка `ranges` (если есть). Ссылки — `links`
+ * (готовые, от резидента: реплика) или найденные в тексте по `linker`.
+ */
+export function LinkedText({ text, ranges = [], firstHit, linker, links: given }: {
   text: string;
   ranges?: Range[];
   firstHit?: number;
-  linker: JiraLinker | null;
+  linker: JiraCard | JiraLinker | null;
+  links?: JiraMatch[];
 }) {
-  const links = findJira(text, linker);
+  const links = linker ? given ?? findJira(text, linker) : [];
   if (!links.length) return <>{marked(text, 0, text.length, ranges, firstHit, "t")}</>;
   const out: ReactNode[] = [];
   let at = 0;
   links.forEach((m, k) => {
+    if (m.start < at || m.end > text.length) return;
     if (m.start > at) out.push(...marked(text, at, m.start, ranges, firstHit, `p${k}`));
     out.push(
-      <JiraLink key={`j${k}`} linker={linker!} keyText={m.key}>
+      <JiraLink key={`j${k}`} linker={linker!} keyText={m.key} spoken={m.source ? m.spoken ?? text.slice(m.start, m.end) : undefined}>
         {marked(text, m.start, m.end, ranges, firstHit, `j${k}`)}
       </JiraLink>,
     );

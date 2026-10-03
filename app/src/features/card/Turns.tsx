@@ -1,7 +1,7 @@
 import { memo, useContext, useState, type KeyboardEvent, type MouseEvent } from "react";
 import type { ChapterView, TurnRow } from "../../lib/analysisView";
 import { clock, plural } from "../../lib/format";
-import { JiraLinks } from "../../lib/jira";
+import { JiraLinks, type JiraMatch } from "../../lib/jira";
 import { nfc, type Range } from "../../lib/search";
 import { NO_SPEAKER, isUnnamed, type Turn } from "../../lib/speakers";
 import type { PhraseType } from "../../lib/types";
@@ -11,6 +11,8 @@ import { LinkedText } from "../../ui/LinkedText";
 import { TypeIcon } from "./markup";
 
 export type PersonColor = { name: string; color: string; has_avatar: boolean };
+
+const NO_LINKS: JiraMatch[] = [];
 
 /** Подсветка поиска: что выделить в реплике и номер её первого совпадения. */
 export type TurnMarks = Map<number, { ranges: Range[]; first: number }>;
@@ -90,7 +92,8 @@ export const Turns = memo(function Turns({
   const rendered = rows ? new Set(rows.flatMap((r) => (r.kind === "turn" && shown(r.i) ? [r.i] : []))) : null;
   const first = rendered ? (rendered.values().next().value ?? -1) : turns.findIndex((t) => t.kind !== "break");
   const roving = shown(focusAt) && (!rendered || rendered.has(focusAt)) ? focusAt : first;
-  // Ключи задач Jira в тексте — ссылки (настройка «Ссылки на задачи Jira»).
+  // Задачи Jira в тексте — ссылки (настройка «Ссылки на задачи Jira»): что
+  // сказано во встрече, находит резидент (jira.turns); без его ответа — ключи текстом.
   const jira = useContext(JiraLinks);
   const types = annotations?.types;
   const key = annotations?.key;
@@ -155,7 +158,8 @@ export const Turns = memo(function Turns({
               {/* Реплика, найденная только по спикеру, — совпадение целиком. */}
               <p className="turn__text" data-hit={mark && !mark.ranges.length ? mark.first : undefined}
                 onContextMenu={onSplitAt ? (e) => onSplitAt(i, e) : undefined}>
-                {jira ? <LinkedText text={text} ranges={mark?.ranges} firstHit={mark?.first} linker={jira} />
+                {jira ? <LinkedText text={text} ranges={mark?.ranges} firstHit={mark?.first} linker={jira}
+                  links={jira.turns ? jira.turns.get(i) ?? NO_LINKS : undefined} />
                   : mark?.ranges.length ? <Highlight text={text} ranges={mark.ranges} firstHit={mark.first} /> : text}
               </p>
             </div>

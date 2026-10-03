@@ -16,6 +16,7 @@ import {
 } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { layoutRows, turnAt, typeCounts, type AnalysisView, type InsightView } from "../../lib/analysisView";
+import { JiraLinks, jiraTasks } from "../../lib/jira";
 import { findHits, parseQuery, prepare } from "../../lib/search";
 import type { Turn } from "../../lib/speakers";
 import type { PhraseType } from "../../lib/types";
@@ -36,6 +37,7 @@ export type RevealRequest = { turn: number; n: number };
 export type SeekRequest = { t: number; n: number };
 
 const NO_FILTER: ReadonlySet<PhraseType> = new Set();
+const NO_INSIGHTS: InsightView[] = [];
 /** Сколько длится подсветка реплики, к которой перешли. */
 const FLASH_MS = 1700;
 
@@ -188,6 +190,9 @@ export function TranscriptView({
     setGoto(reveal);
   }, [reveal]);
   const jumpTo = useCallback((turn: number) => setGoto((g) => ({ turn, n: (g?.n ?? 0) + 1 })), []);
+  // «Задачи»: задачи Jira, названные во встрече (ссылки резидента по репликам).
+  const jira = useContext(JiraLinks);
+  const tasks = useMemo(() => jiraTasks(jira?.turns), [jira]);
   useEffect(() => {
     if (!goto) return;
     setOpened((cur) => (cur.has(goto.turn) ? cur : new Set(cur).add(goto.turn)));
@@ -357,8 +362,9 @@ export function TranscriptView({
         </HelpTip>
         {tools}
       </div>
-      {view && view.insights.length > 0 && (
-        <InsightsBlock insights={view.insights} turns={turns} onJump={jumpTo} onAsk={onAskInsight} />
+      {((view && view.insights.length > 0) || tasks.length > 0) && (
+        <InsightsBlock insights={view?.insights ?? NO_INSIGHTS} tasks={tasks} turns={turns} onJump={jumpTo}
+          onAsk={onAskInsight} />
       )}
       {types && <TypeFilters counts={counts} value={filter} onChange={setFilter} />}
       {toolbar}

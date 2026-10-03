@@ -10,11 +10,11 @@ import {
 } from "lucide-react";
 import { INSIGHT_LABEL, TYPE_FILTERS, TYPE_LABEL, type InsightView } from "../../lib/analysisView";
 import { clock } from "../../lib/format";
-import { JiraLinks } from "../../lib/jira";
+import { JiraLinks, type JiraTask } from "../../lib/jira";
 import type { Turn } from "../../lib/speakers";
 import type { InsightKind, PhraseType } from "../../lib/types";
 import { AskAgentButton } from "../../ui/AskAgent";
-import { LinkedText } from "../../ui/LinkedText";
+import { JiraLink, LinkedText } from "../../ui/LinkedText";
 import "./markup.css";
 
 const TYPE_ICON: Record<PhraseType, LucideIcon | null> = {
@@ -96,9 +96,45 @@ function writeCollapsed(v: boolean) {
   try { window.localStorage?.setItem(COLLAPSED_KEY, v ? "1" : "0"); } catch { /* хранилище недоступно */ }
 }
 
-/** Блок «Наблюдения» под поиском: вид, текст, «почему», ссылки на реплики, ✦. */
-export function InsightsBlock({ insights, turns, onJump, onAsk }: {
+/** Сколько реплик показывать у задачи в «Задачах» (остальные — «ещё N»). */
+const TASK_TURNS = 4;
+
+/** «Задачи»: задачи Jira, названные во встрече, — ключ (ссылка) и реплики, где о ней говорили. */
+function JiraTasks({ tasks, turns, onJump }: { tasks: JiraTask[]; turns: Turn[]; onJump: (turn: number) => void }) {
+  const jira = useContext(JiraLinks);
+  if (!jira || !tasks.length) return null;
+  return (
+    <div className="jtasks" role="group" aria-label="Задачи Jira, названные во встрече">
+      <span className="jtasks__head">Задачи</span>
+      <ul className="jtasks__list">
+        {tasks.map((task) => (
+          <li key={task.key} className="jtask">
+            <JiraLink linker={jira} keyText={task.key}>{task.key}</JiraLink>
+            {task.turns.slice(0, TASK_TURNS).map((r) => {
+              const t = turns[r];
+              if (!t) return null;
+              return (
+                <button key={r} type="button" className="insight__ref num" onClick={() => onJump(r)}
+                  title={`${clock(t.start)} · ${t.speaker} — перейти к реплике`}>
+                  {clock(t.start)} · {t.speaker}
+                </button>
+              );
+            })}
+            {task.turns.length > TASK_TURNS && (
+              <span className="muted jtask__more">ещё {task.turns.length - TASK_TURNS}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** Блок «Наблюдения» под поиском: вид, текст, «почему», ссылки на реплики, ✦; ниже — «Задачи». */
+export function InsightsBlock({ insights, tasks = [], turns, onJump, onAsk }: {
   insights: InsightView[];
+  /** Задачи Jira, названные во встрече (без анализа — блок только из них). */
+  tasks?: JiraTask[];
   turns: Turn[];
   /** Перейти к реплике (номер реплики карточки). */
   onJump: (turn: number) => void;
@@ -107,17 +143,17 @@ export function InsightsBlock({ insights, turns, onJump, onAsk }: {
   const jira = useContext(JiraLinks);
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const [why, setWhy] = useState<ReadonlySet<string>>(() => new Set());
-  if (!insights.length) return null;
+  if (!insights.length && !tasks.length) return null;
   const toggle = () => { setCollapsed((c) => { writeCollapsed(!c); return !c; }); };
   const Chevron = collapsed ? ChevronRight : ChevronDown;
   return (
-    <section className="insights" aria-label="Наблюдения анализа встречи">
+    <section className="insights" aria-label={insights.length ? "Наблюдения анализа встречи" : "Задачи Jira"}>
       <button type="button" className="insights__head" aria-expanded={!collapsed} onClick={toggle}>
         <Chevron size={14} strokeWidth={1.9} aria-hidden="true" />
-        <span>Наблюдения</span>
-        <span className="insights__n num">{insights.length}</span>
+        <span>{insights.length ? "Наблюдения" : "Задачи"}</span>
+        <span className="insights__n num">{insights.length || tasks.length}</span>
       </button>
-      {!collapsed && (
+      {!collapsed && insights.length > 0 && (
         <ul className="insights__list">
           {insights.map((x) => {
             const Icon = INSIGHT_ICON[x.kind] ?? Eye;
@@ -163,6 +199,7 @@ export function InsightsBlock({ insights, turns, onJump, onAsk }: {
           })}
         </ul>
       )}
+      {!collapsed && <JiraTasks tasks={tasks} turns={turns} onJump={onJump} />}
     </section>
   );
 }
