@@ -74,3 +74,100 @@ def test_match_announced_once(capsys):
     m.name_for(_audio())
     out = capsys.readouterr().out
     assert out.count("Демьян") == 1
+
+
+# --- выбор устройства и устойчивость загрузки эмбеддера -------------------------
+
+import sys
+import types
+
+import pytest
+
+from meet import asr, voice_id
+
+
+@pytest.fixture
+def fake_stack(monkeypatch):
+    """Поддельные torch и pyannote: запоминают, на каком устройстве просили модель."""
+    asr._reset_cuda_state()
+    state = {"devices": [], "cuda_ok": True, "fail": {}}
+
+    torch = types.ModuleType("torch")
+    torch.device = lambda name: name
+    torch.cuda = types.SimpleNamespace(is_available=lambda: state["cuda_ok"])
+    torch.from_numpy = lambda a: types.SimpleNamespace(float=lambda: [[a]])
+    monkeypatch.setitem(sys.modules, "torch", torch)
+
+    def pretrained(spec, device, token=None):
+        state["devices"].append(device)
+        if device in state["fail"]:
+            raise state["fail"][device]
+        return lambda wav: [np.zeros(3, dtype=np.float32)]
+
+    for name in ("pyannote", "pyannote.audio", "pyannote.audio.pipelines"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    sv = types.ModuleType("pyannote.audio.pipelines.speaker_verification")
+    sv.PretrainedSpeakerEmbedding = pretrained
+    monkeypatch.setitem(sys.modules, "pyannote.audio.pipelines.speaker_verification", sv)
+    monkeypatch.setattr("meet.credentials.get_hf_token", lambda: "t")
+    yield state
+    asr._reset_cuda_state()
+
+
+def test_cpu_profile_loads_embedder_on_cpu(fake_stack, monkeypatch):
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
+    voice_id._load_embedder()
+    assert fake_stack["devices"] == ["cpu"]
+
+
+def test_usable_cuda_loads_embedder_on_cuda(fake_stack, monkeypatch):
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
+    voice_id._load_embedder()
+    assert fake_stack["devices"] == ["cuda"]
+
+
+def test_cuda_without_torch_support_falls_to_cpu(fake_stack, monkeypatch):
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
+    fake_stack["cuda_ok"] = False
+    voice_id._load_embedder()
+    assert fake_stack["devices"] == ["cpu"]
+
+
+def test_missing_cuda_library_retries_on_cpu(fake_stack, monkeypatch):
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
+    fake_stack["fail"]["cuda"] = RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+    voice_id._load_embedder()
+    assert fake_stack["devices"] == ["cuda", "cpu"]
+    assert asr._cuda_failure is not None  # сбой запомнен на процесс
+
+
+def test_other_load_error_disables_matcher_without_raising(fake_stack, monkeypatch, capsys):
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
+    fake_stack["fail"]["cpu"] = OSError("model not cached")
+    m = VoiceMatcher(base=_base())
+    m.load()
+    assert not m.enabled
+    out = capsys.readouterr().out
+    assert "опознание в живом режиме недоступно" in out and "model not cached" in out
+    assert "имена появятся после расшифровки" in out
+    assert m.name_for(_audio()) is None
+
+
+def test_live_engine_starts_with_failing_embedder(tmp_path, monkeypatch):
+    from meet.live import LiveEngine
+
+    monkeypatch.setattr(voice_id, "_load_embedder", lambda: (_ for _ in ()).throw(OSError("no token")))
+    matcher = VoiceMatcher(base=_base())
+
+    class Stop(Exception):
+        pass
+
+    engine = LiveEngine(tmp_path, types.SimpleNamespace(load=lambda: None), voice_matcher=matcher)
+
+    def connect():
+        raise Stop
+
+    monkeypatch.setattr(engine, "_tap_connect", connect)
+    with pytest.raises(Stop):  # дошли до подключения — загрузка матчера не упала
+        engine._start_from_tap()
+    assert not matcher.enabled
