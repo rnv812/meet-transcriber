@@ -9,7 +9,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Лицензия Apache-2.0"></a>
   <a href="https://github.com/rnv812/meet-transcriber/releases"><img src="https://img.shields.io/github/v/release/rnv812/meet-transcriber?include_prereleases&label=release" alt="Последний выпуск"></a>
-  <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6" alt="Windows 10 | 11">
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20%7C%20macOS%2013%2B%20(beta)-0078D6" alt="Windows 10 | 11 | macOS 13+ (beta)">
   <a href="https://tauri.app"><img src="https://img.shields.io/badge/made%20with-Tauri-24C8DB?logo=tauri&logoColor=white" alt="Сделано на Tauri"></a>
 </p>
 
