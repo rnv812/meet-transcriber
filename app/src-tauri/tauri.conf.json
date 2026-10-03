@@ -18,7 +18,7 @@
   "bundle": {
     "active": true,
     "publisher": "meet",
-    "copyright": "Copyright 2026 Andrey Aleynikov, Nikita Reznikov, Andrey Sivukha (ndrsvh)",
+    "copyright": "Copyright 2026 Andrey Aleynikov, Nikita Reznikov, Andrey Sivukha",
     "license": "Apache-2.0",
     "targets": [
       "nsis"
