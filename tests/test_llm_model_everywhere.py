@@ -1,10 +1,9 @@
 """Модель из настроек (`llm.model`) доходит до КАЖДОГО вызова модели.
 
 Правило: везде работает настроенный агент. Каждый вызывающий — итоги,
-вопросы, анализ, улучшение, название, профиль с проверкой утверждений, тики и
-вопросы живого ассистента — берёт runner у настоящего `llm.resolve`; в тесте
-подменены только поиск CLI (`detect`) и сам вызов Claude (`claude.run`).
-Модель и сеть не трогаются. Люди и реплики выдуманы.
+вопросы, анализ, улучшение, название, тики и вопросы живого ассистента —
+берёт runner у настоящего `llm.resolve`; в тесте подменены только поиск CLI
+(`detect`) и сам вызов Claude (`claude.run`). Модель и сеть не трогаются. Люди и реплики выдуманы.
 """
 
 import asyncio
@@ -12,20 +11,11 @@ import json
 
 import pytest
 
-from meet import job_worker, library, profile_safety, profiles, titles
+from meet import job_worker, library, titles
 from meet.llm import claude, detect
 from meet.llm.base import AgentReply
 
 MODEL = "opus"
-
-PROFILE_REPLY = json.dumps({"summary": "Предпочитает конкретику.", "sections": {
-    "style": [{"text": "Формулирует коротко, начинает с вывода.", "refs": ["m1#1"]}],
-    "values": [{"text": "Ясные сроки и ответственные.", "refs": ["m1#1"]}],
-    "how_to_talk": [{"text": "Приходить с цифрами и вариантами.", "refs": ["m1#1"]}],
-    "avoid": [{"text": "Обсуждать без повестки.", "refs": ["m1#1"]}],
-    "topics": [{"text": "Сроки и риски релиза.", "refs": ["m1#1"]}]}, "pcm": None},
-    ensure_ascii=False)
-
 
 @pytest.fixture
 def world(tmp_path, monkeypatch):
@@ -38,7 +28,6 @@ def world(tmp_path, monkeypatch):
     (data / "config.json").write_text(json.dumps({
         "llm": {"provider": "claude-code", "model": MODEL},
         "recording": {"out_dir": str(rec), "voices_dir": str(voices)},
-        "profiles": {"enabled": True, "pcm": False},
     }), encoding="utf-8")
     monkeypatch.setenv("MEET_DATA_DIR", str(data))
     monkeypatch.setattr(detect, "find_claude", lambda: "C:/bin/claude.exe")
@@ -48,8 +37,6 @@ def world(tmp_path, monkeypatch):
 
     async def fake_run(prompt, **kw):
         calls.append({"model": kw.get("model"), "system": kw.get("system_prompt")})
-        if kw.get("system_prompt") == profile_safety.CHECK_SYSTEM:
-            return AgentReply(text=profile_safety.check_reply(prompt))
         return AgentReply(text=replies.get("text", "ответ модели"))
 
     monkeypatch.setattr(claude, "run", fake_run)
@@ -79,26 +66,6 @@ def _improve(w):
 
 def _title(w):
     titles.main([str(w["folder"])])
-
-
-def _profile(w):
-    """Профиль человека и второй слой — проверка утверждений моделью."""
-    w["voices"].mkdir()
-    (w["voices"] / "Вера.json").write_text(json.dumps(
-        {"samples": [{"embedding": [0.1, 0.2], "source": "x", "id": "s1"}]}), encoding="utf-8")
-    for d in range(3):
-        segments = []
-        for k in range(6):
-            segments.append({"start": k * 20.0, "end": k * 20 + 5.0, "speaker": "Тимур",
-                             "text": f"Предлагаю обсудить пункт {k}."})
-            segments.append({"start": k * 20 + 6.0, "end": k * 20 + 15.0, "speaker": "Вера",
-                             "text": f"Давайте сначала сверим сроки по задаче номер {k}."})
-        meeting = w["rec"] / f"2026-09-{10 + d:02d}_10-00"
-        meeting.mkdir()
-        library.write_transcript(meeting, {"version": 1, "segments": segments})
-    w["replies"]["text"] = PROFILE_REPLY
-    pid = profiles.person_id("Вера", w["voices"], create=True)
-    job_worker.main(["profile", str(w["voices"].parent / "data" / "profiles" / f"{pid}.json")])
 
 
 def _live(w, monkeypatch, *, act):
@@ -179,7 +146,6 @@ CALLERS = [
     ("analyze", "анализ встречи", _analyze, 1),
     ("improve", "улучшение расшифровки", _improve, 1),
     ("title", "название записи", _title, 1),
-    ("profile", "профиль и проверка утверждений", _profile, 2),
     ("live-tick", "тики живого ассистента: подсказки и сводка", "tick", 2),
     ("live-qa", "вопрос во время встречи", "qa", 1),
 ]
@@ -194,5 +160,3 @@ def test_configured_model_reaches_every_caller(world, monkeypatch, name, call, m
     calls = world["calls"]
     assert len(calls) >= min_calls, f"{name}: модель не вызывалась"
     assert {c["model"] for c in calls} == {MODEL}, f"{name}: {calls}"
-    if name.startswith("профиль"):
-        assert any(c["system"] == profile_safety.CHECK_SYSTEM for c in calls)

@@ -79,8 +79,6 @@ Meet — приложение для Windows, которое записывае�
 - Живой ассистент во время звонка: сводка встречи, подсказки по ходу
   разговора, «Вам вопрос», когда обращаются к вам, и ответы на ваши вопросы
   по мере генерации.
-- Профили людей (по желанию): как человек общается во встречах — по его
-  репликам и со ссылками на них.
 
 **Интеграции**
 - Выгрузка в базу знаний (например, Obsidian): папка на встречу по шаблону,
@@ -113,12 +111,10 @@ Meet — приложение для Windows, которое записывае�
     <td align="center">Категории встреч и фильтр списка</td>
   </tr>
   <tr>
-    <td><img src="docs/images/live-panel.png" alt="Живой ассистент: «Вам вопрос», подсказки, сводка и ответ по мере генерации"><br><br><img src="docs/images/live-collapsed.png" alt="Свёрнутая панель ассистента в одну строку" width="60%"></td>
-    <td><img src="docs/images/person-profile.png" alt="Профиль человека с моделью PCM, помеченной как гипотеза"></td>
+    <td colspan="2" align="center"><img src="docs/images/live-panel.png" alt="Живой ассистент: «Вам вопрос», подсказки, сводка и ответ по мере генерации" width="50%"><br><br><img src="docs/images/live-collapsed.png" alt="Свёрнутая панель ассистента в одну строку" width="30%"></td>
   </tr>
   <tr>
-    <td align="center">Живой ассистент: «Вам вопрос», подсказки, ответ по ходу; свёрнутая панель</td>
-    <td align="center">Профиль человека и модель PCM (гипотеза)</td>
+    <td colspan="2" align="center">Живой ассистент: «Вам вопрос», подсказки, ответ по ходу; свёрнутая панель</td>
   </tr>
   <tr>
     <td><img src="docs/images/settings-analysis.png" alt="Настройки: анализ встречи"></td>
@@ -199,8 +195,8 @@ CPU); пакеты почти все берутся из кэша, обычно 
   карточке встречи и предупредит, что текст встречи отправляется выбранной
   модели. «Включить» сразу проанализирует и открытую встречу. Ответ
   запоминается; изменить его можно в «Настройки → Анализ встречи».
-- Названия встреч от ИИ, автоматическое улучшение расшифровки и профили людей
-  выключены, пока вы их не включите.
+- Названия встреч от ИИ и автоматическое улучшение расшифровки выключены,
+  пока вы их не включите.
 
 ### Удаление
 
@@ -432,23 +428,6 @@ Hugging Face — в связке ключей macOS, значок — в стр�
 фото или инициалы, переименование, слияние и удаление; новое имя или слияние
 переходят во все встречи.
 
-### Профили людей
-
-Профили выключены по умолчанию и включаются в «Настройки → Профили людей»
-после подтверждения. Тогда в «Голосах» у человека появляется вкладка
-«**Профиль**»: стиль общения, что для человека важно, как лучше строить
-разговор, чего избегать и типичные темы — по его репликам во встречах. У
-каждого утверждения есть ссылки на реплики, утверждения без такой опоры не
-показываются.
-
-Профиль описывает поведение во встречах, а не оценивает личность: выводы о
-здоровье, возрасте, национальности, взглядах и подобном отфильтровываются, а
-любое утверждение можно скрыть. Профиль составляет выбранная модель по
-репликам человека; хранятся профили и ваши заметки к ним только на этом
-компьютере и в базу знаний не выгружаются. Необязательный раздел «Модель PCM»
-— гипотеза по репликам во встречах, а не сертифицированная оценка; PCM
-(Process Communication Model) — товарный знак Kahler Communications.
-
 ### Поиск
 
 Строка над списком ищет по названиям и тексту всех встреч и показывает
@@ -495,8 +474,8 @@ C:\Obsidian\Работа\
 исходников — `.venv\Scripts\meet`. Запись указывается папкой или id (имя папки
 в библиотеке, например `2026-09-14_11-00`); `--json` печатает машиночитаемый
 ответ. Код выхода: 0 — готово, 1 — ошибка, 2 — неверные аргументы. Если
-приложение запущено, исправления, анализ, улучшение, профили и категории идут
-через него.
+приложение запущено, исправления, анализ, улучшение и категории идут через
+него.
 
 | Команда | Что делает | Пример |
 | --- | --- | --- |
@@ -510,7 +489,6 @@ C:\Obsidian\Работа\
 | `title` | предложить название встречи; `--apply` — поставить | `meet title 2026-09-14_11-00 --apply` |
 | `category` | показать или поставить категорию; `--clear` — «Без категории» | `meet category 2026-09-14_11-00 "Встреча с клиентом"` |
 | `voices` | база голосов: `list`, `rename`, `merge`, `delete`, `avatar` | `meet voices rename "Демьян" "Демьян Петров"` |
-| `profile` | профиль человека (если профили включены); `--refresh` — составить заново | `meet profile "Анна" --refresh` |
 | `summary` | итоги встречи → `summary.md` | `meet summary 2026-09-14_11-00 --provider codex` |
 | `ask` | вопрос по встрече, ответ → `qa.jsonl` | `meet ask 2026-09-14_11-00 "Кто взял экспорт?"` |
 | `kb-export` | выгрузить встречу в базу знаний | `meet kb-export 2026-09-14_11-00` |
@@ -524,10 +502,10 @@ C:\Obsidian\Работа\
 ## Приватность
 
 - **Всегда на компьютере:** запись, распознавание речи (GigaAM и Whisper
-  работают локально), разделение на спикеров, база голосов, хранение профилей
-  людей (составляет их модель — см. ниже), поиск, экспорт. Данные лежат в `%LOCALAPPDATA%\meet` (папку записей можно
-  перенести). Служба записи принимает запросы только с этого компьютера: API
-  слушает `127.0.0.1` и требует токен.
+  работают локально), разделение на спикеров, база голосов, поиск, экспорт.
+  Данные лежат в `%LOCALAPPDATA%\meet` (папку записей можно перенести).
+  Служба записи принимает запросы только с этого компьютера: API слушает
+  `127.0.0.1` и требует токен.
 - **Что получает модель.** Текст встречи (реплики с именами) уходит выбранному
   провайдеру: Claude Code — в Anthropic, Codex — в OpenAI. С локальным
   OpenAI-совместимым сервером текст не покидает компьютер. Это происходит:
@@ -539,8 +517,6 @@ C:\Obsidian\Работа\
   - **итоги, «Улучшить расшифровку», «Предложить название», вопросы `meet
     ask`** — по вашей кнопке или команде. Автоматические названия и
     автоматическое улучшение включаются отдельно и по умолчанию выключены;
-  - **профили людей** — только если вы их включили: модели уходят реплики
-    человека из встреч;
   - **живой ассистент** — пока идёт запись с ассистентом: новые реплики для
     сводки и подсказок, ваши вопросы и, если задана папка базы знаний,
     фрагменты из неё. Разговор «Спросить» Claude Code сохраняет в своей
@@ -644,16 +620,14 @@ Whisper stays selectable); speakers are separated with pyannote.
 Through your own Claude Code or Codex subscription, or a local
 OpenAI-compatible server, Meet adds meeting analysis (phrase types,
 importance, chapters, observations), a chapter-aware player, meeting
-categories, summaries, AI fixes for misrecognised terms, opt-in people
-profiles, a live assistant with a running summary, timely hints and streamed
-answers, and an "Agent" terminal in the meeting folder.
+categories, summaries, AI fixes for misrecognised terms, a live assistant
+with a running summary, timely hints and streamed answers, and an "Agent"
+terminal in the meeting folder.
 
-Audio, transcripts and the voice base stay on your machine; profiles are
-stored locally but written by the model. Meeting text is sent to the chosen
-model provider (Anthropic for Claude Code, OpenAI for Codex) when you request
-a summary, title or AI transcript improvement, when people profiles are
-enabled (including their automatic daily refresh), while a live assistant
-recording runs, when you work in the Agent tab, and automatically after each
+Audio, transcripts and the voice base stay on your machine. Meeting text is
+sent to the chosen model provider (Anthropic for Claude Code, OpenAI for
+Codex) when you request a summary, title or AI transcript improvement, while a
+live assistant recording runs, when you work in the Agent tab, and automatically after each
 transcription for meeting analysis. Automatic analysis is on by default for new installs; users
 upgrading from 0.2.x are asked once before it is enabled, and it can be turned
 off in Settings. Models are downloaded from Hugging Face and, for GigaAM, from

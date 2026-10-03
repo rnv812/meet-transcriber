@@ -6,7 +6,7 @@ import { useResident } from "../state/useResident";
 import { RecordingsList } from "../features/recordings/RecordingsList";
 import { VoicesPane } from "../features/voices/VoicesPane";
 import { SettingsPane, type SettingsGuard } from "../features/settings/SettingsPane";
-import { RecordingCard, type CardRequest } from "../features/card/RecordingCard";
+import { RecordingCard } from "../features/card/RecordingCard";
 import type { FindRequest } from "../features/card/TranscriptView";
 import { loadCategoryFilter, NO_CATEGORY, saveCategoryFilter } from "../lib/categories";
 import { searchable } from "../lib/search";
@@ -66,19 +66,6 @@ export function App() {
   };
 
   const openRecording = (id: string) => leaveSettings(() => { setSelected(id); setFind(null); setSection("recordings"); });
-  /** Просьба к карточке из профиля человека: показать реплику или вставить текст агенту. */
-  const [cardRequest, setCardRequest] = useState<CardRequest | null>(null);
-  const openAt = (id: string, segment: number, t?: number, speaker?: string) => {
-    openRecording(id);
-    setCardRequest((r) => ({ n: (r?.n ?? 0) + 1, id, segment, t, speaker }));
-  };
-  // Нет общей встречи — последняя в библиотеке: агент всё равно получит текст.
-  const askAgentIn = (id: string | null, text: string) => {
-    const target = id ?? library.items[0]?.id ?? null;
-    if (!target) return;
-    openRecording(target);
-    setCardRequest((r) => ({ n: (r?.n ?? 0) + 1, id: target, agent: text }));
-  };
   const selectFromList = (id: string) => {
     setSelected(id);
     setFind(searchable(q) ? { q, t: null, n: ++findN.current } : null);
@@ -207,9 +194,6 @@ export function App() {
                 onAvatar={(name) => { bumpAvatar(name); void refreshPeople(); }}
                 onChanged={() => void refreshPeople()}
                 onOpenRecording={openRecording}
-                jobs={library.jobs}
-                onOpenAt={openAt}
-                onAskAgent={askAgentIn}
               />
             ) : section === "settings" && resident.endpoint ? (
               <SettingsPane endpoint={resident.endpoint} recordingsDir={resident.snapshot?.recordings_dir ?? null}
@@ -229,8 +213,6 @@ export function App() {
                 onPeopleChanged={() => void refreshPeople()}
                 onOpenSettings={openSettings}
                 find={find}
-                request={cardRequest?.id === selected ? cardRequest : null}
-                onRequestTaken={() => setCardRequest(null)}
                 categories={categories.loaded ? categories.list : undefined}
                 refreshKey={cardTick}
                 onChanged={() => void library.refresh()}

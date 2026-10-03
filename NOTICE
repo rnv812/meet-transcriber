@@ -71,9 +71,3 @@ by its own license:
   pyannote/speaker-diarization-community-1 — CC-BY-4.0 (pyannote.audio code
   is MIT-licensed); requires accepting its terms of use on Hugging Face
   before download.
-
-Trademarks
-----------
-Process Communication Model (PCM) is a trademark of Kahler Communications; the
-application mentions it descriptively only (the optional PCM section of people
-profiles), without logos or affiliation.

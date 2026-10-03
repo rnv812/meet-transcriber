@@ -4,9 +4,9 @@
 микрофон) и расшифровывает её локально: на процессоре по умолчанию GigaAM
 (`gigaam_asr.py`), на видеокарте и для не русской речи — Whisper
 (faster-whisper); разделение на спикеров (pyannote), узнавание голосов из базы.
-Анализ встречи, итоги, названия, «Улучшить расшифровку», профили людей и живой
-ассистент — через подключённую модель (Claude Code, Codex или
-OpenAI-совместимый сервер). Платформа — Windows 10/11 x64, macOS — экспериментально.
+Анализ встречи, итоги, названия, «Улучшить расшифровку» и живой ассистент —
+через подключённую модель (Claude Code, Codex или OpenAI-совместимый сервер).
+Платформа — Windows 10/11 x64, macOS — экспериментально.
 
 ## Устройство
 
@@ -17,9 +17,8 @@ OpenAI-совместимый сервер). Платформа — Windows 10/1
   локальный control API (`control.py`), настройки (`settings.py`), CLI
   (`cli.py`, `cli_library.py`).
 - Работа с моделью: анализ встречи (`analysis.py`), названия (`titles.py`),
-  категории (`categories.py`), улучшение расшифровки (`improve.py`), профили
-  людей (`profiles.py`, `profile_safety.py`, `pcm.py`); ручные исправления и
-  правила замены — `textfix.py`, `replacements.py`. Живой ассистент —
+  категории (`categories.py`), улучшение расшифровки (`improve.py`); ручные
+  исправления и правила замены — `textfix.py`, `replacements.py`. Живой ассистент —
   `src/meet/assist/` (сводка и подсказки — `digester.py`, вопросы — `qa.py`,
   промпты — `prompts.py`), живое распознавание — `live_asr.py`.
 - `app/` — окно приложения: React + TypeScript (Vite, тесты — Vitest).
@@ -94,8 +93,6 @@ Python (из корня, venv с установленным пакетом):
   `meet improve <запись>` (`--apply` — применить).
 - **Название и категория**: `meet title <запись>` (`--apply`), `meet category
   <запись> ["Категория" | --clear]`.
-- **Профиль человека**: `meet profile "Имя"` (`--refresh`); работает, только
-  если профили включены в настройках.
 - **В базу знаний**: `meet kb-export <запись>` (синоним — `meet notes`) —
   папка по шаблону `export.folder_template` внутри `export.meetings_dir`.
 - **Голоса**: `meet enroll <папка> "Спикер 1=Имя"`, `meet voices list|rename|merge|delete`.

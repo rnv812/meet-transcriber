@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { Sparkles } from "lucide-react";
 import { agentPrompt, type AgentRequest } from "../../lib/agentRef";
 import {
-  buildView, INSIGHT_LABEL, segmentTurns, turnAt, usableAnalysis, type InsightView,
+  buildView, INSIGHT_LABEL, turnAt, usableAnalysis, type InsightView,
 } from "../../lib/analysisView";
 import {
   answerAnalysisOffer, ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
@@ -36,7 +36,7 @@ import { CardHeader } from "./CardHeader";
 import { LiveCard } from "./LiveCard";
 import { RediarizeDialog, rediarizeJobOf } from "./RediarizeDialog";
 import { SpeakersPanel } from "./speakers/SpeakersPanel";
-import { TranscriptView, type FindRequest, type RevealRequest, type SeekRequest } from "./TranscriptView";
+import { TranscriptView, type FindRequest, type SeekRequest } from "./TranscriptView";
 import { useTextFix } from "./TextFix";
 import { useTurnEdit } from "./TurnEdit";
 import type { PersonColor } from "./Turns";
@@ -60,15 +60,6 @@ const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 const CHAPTER_REFS = 6;
 
 /**
- * Просьба к карточке снаружи (профиль человека): показать реплику — номер
- * сегмента транскрипта — или вставить текст во вкладку «Агент». `n` растёт с
- * каждой просьбой; принятую карточка отдаёт обратно (`onRequestTaken`).
- */
-export type CardRequest = { n: number; id: string; segment?: number; t?: number; speaker?: string; agent?: string };
-/** Реплика из профиля «та же», если её начало сдвинулось не больше чем на столько (с). */
-const REF_SHIFT_S = 5;
-
-/**
  * Панель «Спикеры встречи»: на широкой карточке (от 880 px) расшифровка видна
  * рядом и не уже 400 px; на узкой панель — поверх карточки, не шире её.
  */
@@ -76,7 +67,7 @@ const SPEAKERS_PANE = { def: 440, min: 320, max: 760, reserve: (room: number) =>
 
 export function RecordingCard({
   id, endpoint, jobs = NO_JOBS, snapshot = null, people = NO_PEOPLE, avatarVersion, onDeleted, onChanged, onPeopleChanged,
-  onOpenSettings, find, refreshKey = 0, categories, request = null, onRequestTaken,
+  onOpenSettings, find, refreshKey = 0, categories,
 }: {
   id: string;
   endpoint: Endpoint;
@@ -95,10 +86,6 @@ export function RecordingCard({
   refreshKey?: number;
   /** Категории встреч из настроек: метка под названием и меню выбора. */
   categories?: Category[];
-  /** Просьба из профиля человека: реплика или текст для агента. */
-  request?: CardRequest | null;
-  /** Просьбу `request` выполнили — владелец её сбрасывает (повторно открытая карточка её не повторит). */
-  onRequestTaken?: () => void;
 }) {
   const [rec, setRec] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -133,16 +120,10 @@ export function RecordingCard({
   const [audioFailed, setAudioFailed] = useState(false);
   /** «Спросить агента»: последняя ссылка для поля ввода вкладки «Агент». */
   const [agentAsk, setAgentAsk] = useState<AgentInsert | null>(null);
-  /** Глава из списка глав плеера: показать её в расшифровке. */
-  const [reveal, setReveal] = useState<RevealRequest | null>(null);
   /** Человек перемотал плеер: прокрутить расшифровку к реплике, звучащей в этот момент. */
   const [seekTo, setSeekTo] = useState<SeekRequest | null>(null);
   /** Реплика, звучащая сейчас (отметка «сейчас играет»); обновляется только при её смене. */
   const [nowTurn, setNowTurn] = useState<number | null>(null);
-  /** Растёт, когда реплику просят показать снаружи: вкладка — «Расшифровка». */
-  const [showTick, setShowTick] = useState(0);
-  /** Реплика из профиля не нашлась (расшифровку правили) — тихая строка. */
-  const [refNote, setRefNote] = useState<string | null>(null);
   const current = useRef({ endpoint, id });
   current.current = { endpoint, id };
 
@@ -325,39 +306,6 @@ export function RecordingCard({
   }, [onChanged]);
   const titleSuggest = useTitleSuggest(endpoint, id, titleApplied);
 
-  // Просьба из профиля человека: текст — во «Агент» сразу; реплика — когда
-  // расшифровка загружена (номер сегмента → реплика карточки).
-  const handledRequest = useRef<number | null>(null);
-  const transcriptReady = !!rec && !!segments && statusOf(rec, jobs, snapshot).kind === "ready";
-  useEffect(() => {
-    if (!request || handledRequest.current === request.n) return;
-    if (request.agent) {
-      handledRequest.current = request.n;
-      setAgentAsk({ text: request.agent });
-      onRequestTaken?.();
-      return;
-    }
-    if (typeof request.segment !== "number" || !rec) return;
-    // Одна попытка: расшифровка не готова — просьба отбрасывается, а не
-    // срабатывает потом, когда о ней уже забыли.
-    handledRequest.current = request.n;
-    onRequestTaken?.();
-    if (!transcriptReady) return;
-    // Только та самая реплика: номер есть, начало и спикер совпадают. Иначе —
-    // никуда (не «ближайшая» и не последняя), с пояснением.
-    const seg = segments?.[request.segment];
-    const same = !!seg && (request.t === undefined || Math.abs(seg.start - request.t) <= REF_SHIFT_S)
-      && (request.speaker === undefined || seg.speaker === request.speaker);
-    const turn = same ? segmentTurns(turns, segmentCount)[request.segment] ?? -1 : -1;
-    if (turn >= 0) {
-      setRefNote(null);
-      setReveal((r) => ({ turn, n: (r?.n ?? 0) + 1 }));
-      setShowTick((n) => n + 1);
-    } else {
-      setRefNote("Реплика из профиля изменилась после правки расшифровки — встреча открыта целиком");
-    }
-  }, [request, rec, transcriptReady, segments, turns, segmentCount, onRequestTaken]);
-
   if (!rec) {
     if (missing) return <EmptyState title="Запись не найдена" hint="Возможно, её удалили. Выберите другую в списке." />;
     return error ? <div className="card__error" role="alert">{error}</div> : <Loading label="Загружаю запись…" />;
@@ -473,7 +421,7 @@ export function RecordingCard({
               <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />Улучшить
             </button>
           }
-          find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} reveal={reveal} seekTo={seekTo} nowTurn={nowTurn} />
+          find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} seekTo={seekTo} nowTurn={nowTurn} />
       ) : <EmptyState title="В записи нет речи" />;
       break;
     case "untranscribed":
@@ -512,7 +460,7 @@ export function RecordingCard({
   }
   const body = (
     <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
-      showTranscript={`${shownFind?.n ?? 0}:${showTick}`} stage={stage} transcript={first} agentRequest={agentAsk}
+      showTranscript={shownFind?.n} stage={stage} transcript={first} agentRequest={agentAsk}
       onAskAgent={askAgent} onAgentTaken={agentTaken} />
   );
 
@@ -553,12 +501,6 @@ export function RecordingCard({
       {titleSuggest.suggest && cardEl.current && (
         <TitleSuggestPopover anchor={cardEl.current.querySelector<HTMLElement>(".card__title") ?? cardEl.current}
           suggest={titleSuggest.suggest} onApply={(t) => void titleSuggest.apply(t)} onClose={titleSuggest.close} />
-      )}
-      {refNote && (
-        <div className="card__banner" role="status">
-          <span>{refNote}</span>
-          <Button onClick={() => setRefNote(null)}>Понятно</Button>
-        </div>
       )}
       {kbDone && (
         <div className="card__banner card__banner--ok" role="status" aria-label="Выгрузка в базу знаний">

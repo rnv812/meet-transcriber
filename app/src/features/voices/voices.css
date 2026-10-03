@@ -13,16 +13,10 @@
 .person__meta { font-size: 11px; color: var(--text-3); }
 /* Карточка человека — колонка справа от сетки: сетка перестраивается под оставшуюся
    ширину, панель не наезжает на неё и не выходит за край окна. Ширину (--person-w)
-   ставит разделитель (VoicesPane, ui/PaneResizer): своя у карточки и у «Профиля». */
+   ставит разделитель (VoicesPane, ui/PaneResizer). */
 .voices__card {
   flex: none; width: var(--person-w, 360px); max-width: calc(100% - 200px); min-width: 0; overflow-y: auto;
   border-left: 1px solid var(--line-2); padding: 16px 20px; background: var(--bg);
-  container-type: inline-size;
-}
-.voices__card--wide { width: var(--person-w, 680px); }
-/* Узкая панель: блок «Модель PCM» — в одну колонку (вне зависимости от ширины окна). */
-@container (max-width: 600px) {
-  .voices__card .pcm__grid { grid-template-columns: 1fr; }
 }
 .pcard { display: flex; flex-direction: column; gap: 12px; outline: none; }
 .pcard__head { display: flex; align-items: center; gap: 14px; }

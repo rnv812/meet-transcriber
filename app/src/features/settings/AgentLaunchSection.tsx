@@ -162,8 +162,8 @@ export function AgentLaunchSection({ draft, set }: { draft: Raw; set: SetFn }) {
     <>
       <h3 className="shead">Запуск агента (вкладка «Агент»)</h3>
       <p className="muted sdesc">
-        Свои параметры для Claude Code и Codex во вкладке «Агент». Фоновые задачи (итоги, анализ, живой ассистент,
-        профили) их не получают.
+        Свои параметры для Claude Code и Codex во вкладке «Агент». Фоновые задачи (итоги, анализ, живой ассистент)
+        их не получают.
       </p>
       {AGENTS.map(({ id, label }) => (
         <AgentLaunchRows key={id} agent={id} label={label} launch={launch[id] ?? EMPTY} knowledge={knowledge}
