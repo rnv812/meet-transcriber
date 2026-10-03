@@ -30,7 +30,13 @@ Meet, и ни одна заметка не теряется.
 5. Из config.json убирается секция `profiles`, из `llm_stats.json` — замеры
    задач профилей.
 6. Остаётся отметка NOTICE_NAME: окно один раз показывает в «Голосах» строку
-   об этом; «Понятно» её снимает (`dismiss`).
+   об этом; «Понятно» помечает её снятой (`dismiss`). Повтор, который ничего
+   нового не сделал, отметку не трогает; дочистка остатков снятую не
+   возвращает — только новый перенос заметок.
+7. Ссылки — только symlink и junction. Прочие точки повторной обработки
+   (заглушка OneDrive) — обычные файлы: заметка читается (OneDrive её
+   скачивает); не прочиталась — остаётся. Непрочитанную заметку уборка не
+   удаляет никогда.
 
 Голоса не трогаются: файлы голосов только читаются. Сбой внутри `run` наружу
 не выходит: строка в журнал, следующий запуск попробует снова. Папки
@@ -88,17 +94,23 @@ def _write_text(path: Path, text: str) -> None:
     _write_bytes(path, text.encode("utf-8"))
 
 
+# Настоящие ссылки Windows. Прочие точки повторной обработки (заглушки
+# OneDrive «файлы по запросу», дедупликация) — обычные файлы: чтение их
+# скачивает, и с ними работают как с файлами.
+_LINK_TAGS = (getattr(stat, "IO_REPARSE_TAG_SYMLINK", 0xA000000C),
+              getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", 0xA0000003))
+_lstat = os.lstat  # точка подмены для тестов
+
+
 def _is_link(path: Path) -> bool:
-    """Symlink или junction (любая точка повторной обработки Windows): в её
-    цель уборка не заходит."""
+    """Symlink или junction: в цель ссылки уборка не заходит."""
     try:
-        st = os.lstat(path)
+        st = _lstat(path)
     except OSError:
         return False
     if stat.S_ISLNK(st.st_mode):
         return True
-    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
-    return bool(getattr(st, "st_file_attributes", 0) & reparse)
+    return getattr(st, "st_reparse_tag", 0) in _LINK_TAGS
 
 
 def _unlink_link(path: Path) -> None:
@@ -168,6 +180,8 @@ class _Collected:
         self.raw: list[tuple[str, bytes, Path]] = []  # (имя копии, байты, исходный файл)
         self.keep: set[Path] = set()
         self.problems: list[str] = []
+        # Файлы заметок, которые прочитаны целиком: удалять можно только их.
+        self.read: set[Path] = set()
 
 
 def collect_notes(folder: Path, voices: Path | None) -> _Collected:
@@ -190,6 +204,7 @@ def collect_notes(folder: Path, voices: Path | None) -> _Collected:
             got.keep.add(path)
             got.problems.append(f"{path.name}: {type(e).__name__}: {e}")
             continue
+        got.read.add(path)
         saved[pid] = (raw, mtime)
         text, utf8 = decode(raw)
         if not text.strip():
@@ -214,6 +229,7 @@ def collect_notes(folder: Path, voices: Path | None) -> _Collected:
             got.keep.add(path)
             got.problems.append(f"{path.name}: {type(e).__name__}: {e}")
             continue
+        got.read.add(path)
         base = saved.get(pid)
         if not raw.strip() or (base is not None and (raw == base[0] or mtime <= base[1])):
             continue  # пустая, та же или старше сохранённой — нечего беречь
@@ -240,9 +256,10 @@ def notes_text(notes: list[dict]) -> str:
     return "\n".join(parts) + "\n"
 
 
-def _save_notes(data_dir: Path, notes: list[dict]) -> Path:
+def _save_notes(data_dir: Path, notes: list[dict]) -> tuple[Path, bool]:
     """Записать заметки. Наш файл уже есть (прошлый запуск, оборванный на
-    полпути) — дописать только недостающие разделы; чужой — не трогать."""
+    полпути) — дописать только недостающие разделы; чужой — не трогать.
+    → (файл, было ли что дописать)."""
     stem = NOTES_NAME.removesuffix(".md")
     for k in range(1, 100):
         path = data_dir / (NOTES_NAME if k == 1 else f"{stem} ({k}).md")
@@ -250,7 +267,7 @@ def _save_notes(data_dir: Path, notes: list[dict]) -> Path:
             existing = path.read_bytes().decode("utf-8-sig")
         except FileNotFoundError:
             _write_text(path, notes_text(notes))
-            return path
+            return path, True
         except (OSError, UnicodeDecodeError):
             continue
         if not existing.startswith(NOTES_HEADER):
@@ -259,15 +276,16 @@ def _save_notes(data_dir: Path, notes: list[dict]) -> Path:
         missing = [n for n in notes if _block(n) not in flat]
         if missing:
             _write_text(path, existing.rstrip("\n") + "\n\n" + "\n\n".join(_block(n) for n in missing) + "\n")
-        return path
+        return path, bool(missing)
     raise OSError("не нашлось свободного имени для файла заметок")
 
 
-def _save_raw(data_dir: Path, got: _Collected, say) -> None:
+def _save_raw(data_dir: Path, got: _Collected, say) -> int:
     """Байты заметок — в папку исходных файлов. Не вышло — исходный файл
-    остаётся на месте."""
+    остаётся на месте. → сколько копий записано сейчас."""
+    written = 0
     if not got.raw:
-        return
+        return written
     target = data_dir / SOURCES_NAME
     for name, raw, source in got.raw:
         try:
@@ -280,46 +298,61 @@ def _save_raw(data_dir: Path, got: _Collected, say) -> None:
                         break
                 except FileNotFoundError:
                     _write_bytes(path, raw)
+                    written += 1
                     break
             else:
                 raise OSError("не нашлось свободного имени")
         except OSError as e:
             got.keep.add(source)
             say(f"профили: {source.name} не скопирован ({e}) — файл оставлен до следующего запуска")
+    return written
 
 
-def _remove_index(index: Path) -> bool:
-    """Файлы индекса реплик; чужое остаётся. → опустела ли папка (и удалена)."""
-    if _is_link(index):
-        _unlink_link(index)
-        return True
+def _remove_index(index: Path) -> int:
+    """Файлы индекса реплик; чужое остаётся, пустая папка удаляется. →
+    сколько удалено."""
+    removed = 0
     for path in _entries(index):
-        if _is_link(path):
-            if _INDEX_FILE.match(path.name) or _INDEX_TMP.match(path.name):
-                _unlink_link(path)
+        if not (_INDEX_FILE.match(path.name) or _INDEX_TMP.match(path.name)):
             continue
-        if path.is_file() and (_INDEX_FILE.match(path.name) or _INDEX_TMP.match(path.name)):
+        if _is_link(path):
+            _unlink_link(path)
+            removed += 1
+        elif path.is_file():
             _unlink_file(path)
+            removed += 1
     try:
         index.rmdir()
-        return True
+        removed += 1
     except OSError:
-        return False
+        pass
+    return removed
 
 
-def _remove_own(folder: Path, keep: set[Path], say) -> list[str]:
-    """Удалить файлы Meet, кроме `keep`; пустую папку — тоже. → что осталось."""
+def _note_file(path: Path) -> bool:
+    return bool(_NOTE.match(path.name) or _NOTE_TMP.match(path.name))
+
+
+def _remove_own(folder: Path, got: _Collected, say) -> tuple[list[str], int]:
+    """Удалить файлы Meet, кроме `got.keep` и непрочитанных заметок (заметку,
+    которую не прочитали, не удаляем никогда); пустую папку — тоже. → (что
+    осталось, сколько удалено)."""
+    removed = 0
     for path in _entries(folder):
-        if path in keep or not _own_entry(path):
+        if path in got.keep or not _own_entry(path):
             continue
         try:
             if _is_link(path):
                 _unlink_link(path)
+                removed += 1
+            elif _note_file(path) and path not in got.read:
+                continue
             elif path.name == INDEX_DIR:
                 if path.is_dir():
-                    _remove_index(path)
+                    removed += _remove_index(path)
             elif path.is_file():
                 _unlink_file(path)
+                removed += 1
         except OSError as e:
             say(f"профили: {path.name} не удалён: {e}")
     left = [p.name for p in _entries(folder)]
@@ -328,7 +361,7 @@ def _remove_own(folder: Path, keep: set[Path], say) -> list[str]:
             folder.rmdir()
         except OSError as e:
             say(f"профили: папка не удалена: {e}")
-    return left
+    return left, removed
 
 
 def _drop_stats(data_dir: Path) -> None:
@@ -350,16 +383,23 @@ def _own_notes_file(data_dir: Path) -> Path | None:
 
 
 def notice(data_dir: Path) -> dict | None:
-    """Отметка для окна: {"notes": путь файла заметок или None, "folder"} или None."""
+    """Отметка для окна: {"notes": путь файла заметок или None, "folder"} или
+    None (отметки нет или её уже сняли «Понятно»)."""
     data = _read_json(Path(data_dir) / NOTICE_NAME)
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or data.get("dismissed") is True:
         return None
     notes = data.get("notes")
     return {"notes": notes if isinstance(notes, str) and notes else None, "folder": str(data_dir)}
 
 
 def dismiss(data_dir: Path) -> None:
-    (Path(data_dir) / NOTICE_NAME).unlink(missing_ok=True)
+    """«Понятно»: отметка остаётся, но помечена снятой — повторная уборка
+    (застрявший файл) её не вернёт; вернёт только новый перенос заметок."""
+    path = Path(data_dir) / NOTICE_NAME
+    data = _read_json(path)
+    if not isinstance(data, dict):
+        return
+    _write_text(path, json.dumps({**data, "dismissed": True}, ensure_ascii=False))
 
 
 def _drop_settings(data_dir: Path, config: Path | None, say) -> None:
@@ -403,15 +443,16 @@ def _run(data_dir: Path, voices: Path | None, config: Path | None, say) -> dict 
     got = collect_notes(folder, voices)
     for problem in got.problems:
         say(f"профили: заметка не прочитана ({problem}) — файл оставлен до следующего запуска")
-    _save_raw(data_dir, got, say)
+    new_notes = _save_raw(data_dir, got, say) > 0
     notes_path: Path | None = None
     if got.notes:
         try:
-            notes_path = _save_notes(data_dir, got.notes)
+            notes_path, wrote = _save_notes(data_dir, got.notes)
+            new_notes = new_notes or wrote
         except OSError as e:
             got.keep |= {n["path"] for n in got.notes}
             say(f"профили: заметки не перенесены ({e}) — их файлы оставлены до следующего запуска")
-    left = _remove_own(folder, got.keep, say)
+    left, removed = _remove_own(folder, got, say)
     if left:
         foreign = [name for name in left if not _own_entry(folder / name)]
         if foreign:
@@ -419,11 +460,18 @@ def _run(data_dir: Path, voices: Path | None, config: Path | None, say) -> dict 
     _drop_settings(data_dir, config, say)
 
     previous = _read_json(data_dir / NOTICE_NAME)
-    if notes_path is None and isinstance(previous, dict) and isinstance(previous.get("notes"), str):
+    previous = previous if isinstance(previous, dict) else None
+    if not removed and not new_notes:
+        # Повтор, который ничего нового не сделал (застрявший файл): отметку
+        # не трогаем — снятая «Понятно» не возвращается.
+        return notice(data_dir)
+    if notes_path is None and previous and isinstance(previous.get("notes"), str):
         notes_path = Path(previous["notes"])
     if notes_path is None:
         notes_path = _own_notes_file(data_dir)  # другой процесс успел раньше
     marker = {"notes": str(notes_path) if notes_path else None, "at": time.time()}
+    if previous and previous.get("dismissed") is True and not new_notes:
+        marker["dismissed"] = True  # дочистили остатки — строку уже видели
     try:
         _write_text(data_dir / NOTICE_NAME, json.dumps(marker, ensure_ascii=False))
     except OSError as e:

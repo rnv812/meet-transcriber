@@ -446,3 +446,108 @@ def test_crlf_note_is_not_duplicated_on_retry(tmp_path):
     text = (data / retired_profiles.NOTES_NAME).read_text(encoding="utf-8")
     assert text.count("Вторая строка.") == 1
     assert b"\r" not in (data / retired_profiles.NOTES_NAME).read_bytes()
+
+
+# --- re-review r1: только настоящие ссылки, тихая строка ----------------------------
+
+
+CLOUD_TAG = 0x9000601A  # IO_REPARSE_TAG_CLOUD_6: заглушка OneDrive «файлы по запросу»
+
+
+def _fake_reparse(monkeypatch, names, tag):
+    """lstat для файлов `names` — как у точки повторной обработки с меткой `tag`."""
+    real = retired_profiles._lstat
+
+    class Fake:
+        def __init__(self, st):
+            self.st_mode = st.st_mode
+            self.st_reparse_tag = tag
+            self.st_file_attributes = 0x400
+
+    def lstat(path):
+        st = real(path)
+        return Fake(st) if os.path.basename(path) in names else st
+
+    monkeypatch.setattr(retired_profiles, "_lstat", lstat)
+
+
+def test_cloud_placeholder_note_is_read_not_treated_as_link(tmp_path, monkeypatch):
+    data, voices, config = _world(tmp_path)
+    _fake_reparse(monkeypatch, {f"{PID_A}.notes.md"}, CLOUD_TAG)
+
+    got = retired_profiles.run(data, voices, config=config)
+
+    text = (data / retired_profiles.NOTES_NAME).read_text(encoding="utf-8")
+    assert got["notes"] and "Любит повестку заранее." in text
+    assert not (data / "profiles").exists()
+
+
+def test_cloud_placeholder_that_cannot_be_read_stays(tmp_path, monkeypatch):
+    data, voices, config = _world(tmp_path)
+    note = data / "profiles" / f"{PID_A}.notes.md"
+    _fake_reparse(monkeypatch, {note.name}, CLOUD_TAG)
+    real = type(note).read_bytes
+
+    def offline(self):
+        if self.name == note.name:
+            raise OSError(362, "Поставщик облачных файлов не запущен")
+        return real(self)
+
+    monkeypatch.setattr(type(note), "read_bytes", offline)
+    retired_profiles.run(data, voices, config=config)
+    assert note.read_text(encoding="utf-8") == "Любит повестку заранее.\n"
+
+
+def test_real_link_tags_still_count_as_links(tmp_path, monkeypatch):
+    data, voices, config = _world(tmp_path)
+    _fake_reparse(monkeypatch, {"x"}, 0xA0000003)  # IO_REPARSE_TAG_MOUNT_POINT
+    assert retired_profiles._is_link(tmp_path / "x") is False  # нет такого файла — не ссылка
+    (tmp_path / "x").write_text("", encoding="utf-8")
+    assert retired_profiles._is_link(tmp_path / "x") is True
+    _fake_reparse(monkeypatch, {"x"}, CLOUD_TAG)
+    assert retired_profiles._is_link(tmp_path / "x") is False
+
+
+def test_notice_stays_dismissed_while_a_note_is_stuck(tmp_path, monkeypatch):
+    data, voices, config = _world(tmp_path)
+    note = data / "profiles" / f"{PID_A}.notes.md"
+    real = type(note).read_bytes
+
+    def deny(self):
+        if self.name == note.name:
+            raise PermissionError(13, "Отказано в доступе")
+        return real(self)
+
+    with monkeypatch.context() as mp:
+        mp.setattr(type(note), "read_bytes", deny)
+        assert retired_profiles.run(data, voices, config=config) is not None  # первая уборка — строка
+        retired_profiles.dismiss(data)
+        for _ in range(3):  # перезапуски: заметка всё ещё не читается
+            assert retired_profiles.run(data, voices, config=config) is None
+            assert retired_profiles.notice(data) is None
+        assert note.exists()
+    # Заметка наконец прочиталась и перенесена — об этом строка скажет ещё раз.
+    got = retired_profiles.run(data, voices, config=config)
+    assert got == {"notes": str(data / retired_profiles.NOTES_NAME), "folder": str(data)}
+    assert not (data / "profiles").exists()
+
+
+def test_cleaning_leftovers_after_dismiss_stays_quiet(tmp_path, monkeypatch):
+    data, voices, config = _world(tmp_path)
+    stuck = data / "profiles" / f"{PID_B}.json"
+    real_unlink = retired_profiles._unlink_file
+
+    def locked(path):
+        if path.name == stuck.name:
+            raise PermissionError(32, "Файл занят")
+        real_unlink(path)
+
+    with monkeypatch.context() as mp:
+        mp.setattr(retired_profiles, "_unlink_file", locked)
+        assert retired_profiles.run(data, voices, config=config) is not None
+    retired_profiles.dismiss(data)
+    assert stuck.exists()
+    # Файл освободился: дочищен, но строку уже видели — она не возвращается.
+    assert retired_profiles.run(data, voices, config=config) is None
+    assert not (data / "profiles").exists()
+    assert retired_profiles.notice(data) is None
