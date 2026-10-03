@@ -603,10 +603,10 @@ class TrayControl:
         self._updated(folder)
 
     def _on_live_event(self, event) -> None:
-        """Ассистент остановлен — та же автоматическая расшифровка, что после
-        обычной записи, если запись дописана (`complete`) и дорожки на месте.
-        Убитый до финализации только помечается (`source: live`), без
-        расшифровки: она шла бы по неполным дорожкам. Упавший (`live.failed`)
+        """Ассистент остановлен — та же автоматическая расшифровка и тот же
+        пост-хук, что после обычной записи, если запись дописана (`complete`) и
+        дорожки на месте. Убитый до финализации только помечается
+        (`source: live`), без расшифровки и хука: дорожки неполные. Упавший (`live.failed`)
         сюда не попадает: его папка в библиотеке, расшифровать можно вручную."""
         if event.kind in (live_control.LIVE_STOPPED, live_control.LIVE_FAILED) \
                 and (self._analysis_deferred or self._improve_deferred):
@@ -626,6 +626,13 @@ class TrayControl:
         # Тема, которую вёл живой ассистент, — черновое название (если включено
         # «Придумывать название»); итоги или анализ потом его уточнят.
         self._background(lambda: self._live_title(folder), "meet-title")
+        if full:
+            # Пост-хук — как после обычной записи: её остановка зовёт его сама,
+            # а запись с ассистентом сохраняется здесь.
+            try:
+                self.tray.run_post_hook(str(folder))
+            except Exception as e:  # хук не должен мешать сохранению записи
+                self.tray.log(f"пост-хук не запущен ({folder.name}): {type(e).__name__}: {e}")
 
     def _on_saved(self, folder: str, source: str | None, full: bool) -> None:
         """Запись штатно сохранена: пометить, откуда она, и поставить в очередь.
