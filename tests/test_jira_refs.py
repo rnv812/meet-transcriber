@@ -11,7 +11,7 @@ import pytest
 
 from meet import analysis, jira_refs, library, settings, tray, tray_control
 
-PROJECTS = [("ORION", ["смдэв"]), ("SPR", []), ("OPS", []), ("DEMO", [])]
+PROJECTS = [("ORION", ["орайон"]), ("SPR", []), ("OPS", []), ("DEMO", []), ("KDEV", [])]
 
 
 def _spec(default="ORION", projects=PROJECTS):
@@ -69,14 +69,14 @@ def _forms(key, aliases=()):
 
 
 def test_project_variants_latin_translit_spelling_and_aliases():
-    forms = _forms("ORION", ["смдэв"])
-    assert "orion" in forms and "s m dev" in forms and "sm dev" in forms
-    assert "орион" in forms  # «э» и «е» не различаются: «смдэв» — тот же вариант
-    assert "ес ем дев" in forms
-    assert any(f.startswith("ес ем ди/де и/е ви/ве") for f in forms)
-    assert "есемдев" in forms
-    # Свои варианты — как слова: «эс эм дэв» → три слова.
-    assert "ес ем дев" in _forms("XY", ["эс эм дэв"])
+    forms = _forms("ORION", ["орайон"])
+    assert "orion" in forms and "o r ion" in forms and "or ion" in forms
+    assert "орион" in forms and "орайон" in forms
+    kdev = _forms("KDEV")
+    assert "кдев" in kdev and "кей/ка дев" in kdev and "кейдев" in kdev
+    assert any(f.startswith("кей/ка ди/де и/е ви/ве") for f in kdev)
+    # Свои варианты — как слова, «э» и «е» не различаются: «кей дэв» → «кей дев».
+    assert "кей дев" in _forms("XY", ["кей дэв"])
 
 
 def test_short_key_spelling_has_no_one_letter_words():
@@ -106,10 +106,10 @@ POSITIVE = [
     ("в баге 4452 нужен лог", ["ORION-4452"]),
     ("задача номер сорок четыре пятьдесят два готова", ["ORION-4452"]),
     ("тикет 4452 закрыли вчера", ["ORION-4452"]),
-    ("эс эм дев сорок четыре пятьдесят два", ["ORION-4452"]),
+    ("кей дев сорок четыре пятьдесят два", ["KDEV-4452"]),
     ("SPR две тысячи сто двадцать два", ["SPR-2122"]),
     ("в орионе 2122 поправили фильтр", ["ORION-2122"]),
-    ("смдэв 21-22 переоткрыт", ["ORION-2122"]),
+    ("орайон 21-22 переоткрыт", ["ORION-2122"]),
     ("по эс пи ар сто два ответа нет", ["SPR-102"]),
     ("OPS № 77 про сертификаты", ["OPS-77"]),
     ("ORION-2122 и SPR-15 связаны", ["ORION-2122", "SPR-15"]),
@@ -120,8 +120,8 @@ POSITIVE = [
     ("опс номер пять перезапустили", ["OPS-5"]),
     ("орион 2 122 висит", ["ORION-2122"]),
     ("orion 2122 lowercase", ["ORION-2122"]),
-    ("эсэмдев две тысячи сто двадцать два", ["ORION-2122"]),
-    ("SM DEV 2122", ["ORION-2122"]),
+    ("кейдев две тысячи сто двадцать два", ["KDEV-2122"]),
+    ("ORI ON 2122", ["ORION-2122"]),
     ("по ориону 3345 и по спр 120", ["ORION-3345", "SPR-120"]),
     ("эпик 512 пора закрывать", ["ORION-512"]),
     ("в задаче орион 2122 два бага", ["ORION-2122"]),

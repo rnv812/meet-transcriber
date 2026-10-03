@@ -120,11 +120,11 @@ const SPOKEN_TURNS = mergeTurns(SPOKEN);
 const REFS: JiraRefs = {
   refs: [
     { segment: 0, start: 8, end: 40, key: "ORION-2122", source: "spoken", spoken: "орион двадцать один двадцать два" },
-    { segment: 1, start: 9, end: 13, key: "ORION-4452", source: "context", spoken: "4452" },
+    { segment: 1, start: 9, end: 13, key: "KDEV-4452", source: "context", spoken: "4452" },
     { segment: 2, start: 4, end: 11, key: "SPR-131", source: "literal", spoken: "SPR-131" },
     { segment: 2, start: 27, end: 37, key: "ORION-2122", source: "spoken", spoken: "орион 2122" },
   ],
-  phrases: [{ text: "эс эм дев сорок четыре", key: "ORION-44", source: "spoken" }],
+  phrases: [{ text: "кей дев сорок четыре", key: "KDEV-44", source: "spoken" }],
 };
 
 function spoken(props: Partial<Parameters<typeof TranscriptView>[0]> = {}, refs = REFS, turns = SPOKEN_TURNS) {
@@ -150,8 +150,8 @@ test("сказанная задача — значок с ключом пове�
   // Текст реплики в DOM не изменился (ключ — псевдоэлемент).
   const text = container.querySelector("[data-turn='0'] .turn__text")!;
   expect(text.textContent).toBe("Смотрим орион двадцать один двадцать два, там экспорт. И в баге 4452 тоже.");
-  await userEvent.click(turns.getByRole("link", { name: "ORION-4452" }));
-  expect(shell.openUrl).toHaveBeenCalledWith("https://jira.example.com/browse/ORION-4452");
+  await userEvent.click(turns.getByRole("link", { name: "KDEV-4452" }));
+  expect(shell.openUrl).toHaveBeenCalledWith("https://jira.example.com/browse/KDEV-4452");
 });
 
 test("ссылки — только от резидента: «орион 2122» без его ответа — не ссылка", () => {
@@ -182,7 +182,7 @@ test("«Задачи»: уникальные ключи с репликами; �
   expect(within(block).getByRole("button", { name: /Задачи/ })).toHaveAttribute("aria-expanded", "true");
   const list = within(block).getByRole("group", { name: "Задачи Jira, названные во встрече" });
   const items = within(list).getAllByRole("listitem");
-  expect(items.map((li) => within(li).getByRole("link").textContent)).toEqual(["ORION-2122", "ORION-4452", "SPR-131"]);
+  expect(items.map((li) => within(li).getByRole("link").textContent)).toEqual(["ORION-2122", "KDEV-4452", "SPR-131"]);
   // ORION-2122 звучит в двух репликах — у неё две.
   expect(within(items[0]!).getAllByRole("button").map((b) => b.textContent)).toEqual(["00:00 · Анна", "00:10 · Борис"]);
   await userEvent.click(within(items[0]!).getByRole("link", { name: "ORION-2122" }));
@@ -192,23 +192,23 @@ test("«Задачи»: уникальные ключи с репликами; �
 test("«Задачи» под «Наблюдениями» в том же блоке", () => {
   const analysis: Analysis = {
     version: 1, model: "t", created_at: 1, fingerprint: "f", segments: 3, features: ["insights"],
-    insights: [{ id: "i1", kind: "followup", text: "Проверить эс эм дев сорок четыре.", refs: [1], why: "" }],
+    insights: [{ id: "i1", kind: "followup", text: "Проверить кей дев сорок четыре.", refs: [1], why: "" }],
   };
   const view = buildView(SPOKEN_TURNS, analysis, 3, { types: false, importance: false, chapters: false, insights: true });
   spoken({ view });
   const block = screen.getByRole("region", { name: "Наблюдения анализа встречи" });
   expect(within(block).getByRole("group", { name: "Задачи Jira, названные во встрече" })).toBeInTheDocument();
   // Наблюдение: фраза от резидента — значок с ключом.
-  const link = within(block).getByRole("link", { name: "ORION-44" });
+  const link = within(block).getByRole("link", { name: "KDEV-44" });
   expect(link).toHaveClass("jira-ref");
-  expect(link.textContent).toBe("эс эм дев сорок четыре");
+  expect(link.textContent).toBe("кей дев сорок четыре");
 });
 
 test("итоги: фразы от резидента — ссылки, ключи текстом — тоже", () => {
-  render(<Markdown source={"- Починить SPR-131\n- Обсудили эс эм дев сорок четыре, `эс эм дев сорок четыре` — нет"}
+  render(<Markdown source={"- Починить SPR-131\n- Обсудили кей дев сорок четыре, `кей дев сорок четыре` — нет"}
     jira={jiraCard(linker, REFS, SPOKEN_TURNS)} />);
   expect(screen.getByRole("link", { name: "SPR-131" })).toBeInTheDocument();
-  const links = screen.getAllByRole("link", { name: "ORION-44" });
+  const links = screen.getAllByRole("link", { name: "KDEV-44" });
   expect(links).toHaveLength(1);
-  expect(links[0]).toHaveAttribute("title", "«эс эм дев сорок четыре» → ORION-44 · открыть в Jira");
+  expect(links[0]).toHaveAttribute("title", "«кей дев сорок четыре» → KDEV-44 · открыть в Jira");
 });

@@ -59,10 +59,10 @@ def test_new_keys_win_over_legacy():
 
 def test_projects_from_file_are_cleaned():
     got = settings.Integrations.from_raw({"jira_projects": [
-        {"key": "orion", "aliases": ["смдэв", "  эс  эм  дэв ", "смдэв", "x1", "", 5]},
+        {"key": "orion", "aliases": ["орайон", "  о  ри  он ", "орайон", "x1", "", 5]},
         "SPR", {"key": "SPR"}, {"key": "1AB"}, {"key": "A"}, None,
     ], "jira_default_project": "spr"})
-    assert [(p.key, p.aliases) for p in got.jira_projects] == [("ORION", ("смдэв", "эс эм дэв")), ("SPR", ())]
+    assert [(p.key, p.aliases) for p in got.jira_projects] == [("ORION", ("орайон", "о ри он")), ("SPR", ())]
     assert got.jira_default_project == "SPR"
 
 
@@ -74,10 +74,10 @@ def test_default_project_must_be_in_list_from_file():
 def test_window_saves_projects_aliases_and_default(tmp_path):
     path = tmp_path / "config.json"
     updated = settings.patch({"integrations": {
-        "jira_projects": [{"key": "ORION", "aliases": ["смдэв"]}, {"key": "SPR", "aliases": []}],
+        "jira_projects": [{"key": "ORION", "aliases": ["орайон"]}, {"key": "SPR", "aliases": []}],
         "jira_default_project": "ORION"}}, path)
     assert updated.integrations.jira_default_project == "ORION"
-    assert _raw(path)["integrations"]["jira_projects"][0] == {"key": "ORION", "aliases": ["смдэв"]}
+    assert _raw(path)["integrations"]["jira_projects"][0] == {"key": "ORION", "aliases": ["орайон"]}
     # Убрали проект по умолчанию из списка — проект по умолчанию снимается.
     again = settings.patch({"integrations": {"jira_projects": [{"key": "SPR", "aliases": []}]}}, path)
     assert again.integrations.jira_default_project == ""

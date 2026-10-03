@@ -64,7 +64,7 @@ export function JiraTip() {
       <TipLine>«орион двадцать один двадцать два» → <code>ORION-2122</code></TipLine>
       <TipLine>«в баге 4452» → <code>ORION-4452</code>, если ORION — проект по умолчанию</TipLine>
       <TipLine>
-        Ключ проекта, его русская запись и чтение по буквам («эс эм дев») узнаются сами. Если проект называют
+        Ключ проекта, его русская запись и чтение по буквам («эс пи ар» для SPR) узнаются сами. Если проект называют
         иначе, добавьте вариант у его ключа. Номер — цифрами или словами, до шести цифр; «в 2122 году» и
         «2 122 рубля» ссылками не становятся.
       </TipLine>
@@ -114,7 +114,7 @@ function Aliases({ project, disabled, onChange }: {
         </ul>
       )}
       <span className="jproj__add">
-        <input type="text" aria-label={`Новый вариант названия ${project.key}`} placeholder="например, смдэв"
+        <input type="text" aria-label={`Новый вариант названия ${project.key}`} placeholder="например, орайон"
           value={text} disabled={disabled} spellCheck={false} aria-invalid={error ? true : undefined}
           onChange={(e) => setText(e.target.value)} onKeyDown={onKey} />
         <Button onClick={add} disabled={disabled || !typed || !!error}>Добавить вариант</Button>
