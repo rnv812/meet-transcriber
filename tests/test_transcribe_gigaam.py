@@ -37,7 +37,7 @@ def pipeline(monkeypatch, tmp_path):
             return _gigaam_segments()
         return [Segment(0.0, 1.0, "whisper")]
 
-    def fake_align(segments, wav, enabled):
+    def fake_align(segments, wav, enabled, **kw):
         calls["align"].append(enabled)
         return segments
 

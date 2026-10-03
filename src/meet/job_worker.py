@@ -165,20 +165,53 @@ def _copy_import(folder_str: str, emit=None) -> int:
     if not src.is_file():
         emit({"kind": "error", "text": f"исходный файл пропал: {src}"})
         return 3
-    bus.progress("copy", label="копирование файла", done=0, total=1, note=src.name)
+    try:
+        size = src.stat().st_size
+    except OSError:
+        size = 0
+    total = size or 1
+    bus.progress("copy", label="копирование файла", done=0, total=total, note=src.name, unit="bytes")
     # Во временный .part и переименование в конце: оборванная копия (отмена
     # убивает процесс) не должна остаться валидной дорожкой source.<ext>.
     final = folder / f"source{src.suffix.lower()}"
     part = folder / (final.name + ".part")
     try:
-        shutil.copy2(src, part)
+        _copy_with_progress(src, part, lambda done: bus.progress(
+            "copy", label="копирование файла", done=min(done, total), total=total, note=src.name,
+            unit="bytes"))
+        shutil.copystat(src, part)
         os.replace(part, final)
     except Exception as e:
         part.unlink(missing_ok=True)
         emit({"kind": "error", "text": f"не удалось скопировать файл: {e}"})
         return 3
-    bus.progress("copy", label="копирование файла", done=1, total=1, note=src.name)
+    bus.progress("copy", label="копирование файла", done=total, total=total, note=src.name, unit="bytes")
     return 0
+
+
+COPY_CHUNK = 4 * 1024 * 1024
+COPY_GAP_S = 0.25  # не больше 4 событий хода в секунду
+
+
+def _copy_with_progress(src, dst, report, clock=None) -> None:
+    """Копировать файл кусками, сообщая скопированные байты (`report(done)`)
+    не чаще раза в COPY_GAP_S: большой импорт не стоит на «0 %» минутами."""
+    import time
+
+    clock = clock or time.monotonic
+    done = 0
+    last = clock()
+    with open(src, "rb") as fin, open(dst, "wb") as fout:
+        while True:
+            chunk = fin.read(COPY_CHUNK)
+            if not chunk:
+                break
+            fout.write(chunk)
+            done += len(chunk)
+            now = clock()
+            if now - last >= COPY_GAP_S:
+                last = now
+                report(done)
 
 
 def _merge(folder_str: str) -> int:

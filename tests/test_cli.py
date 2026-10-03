@@ -573,12 +573,12 @@ def test_module_run_writes_utf8_even_when_stdout_is_redirected(env):
 
 
 def test_import_copy_failure_is_exit_1_and_leaves_no_empty_card(env, capsys, monkeypatch):
-    import shutil
+    from meet import job_worker
 
     def broken_copy(src, dst, *a, **k):
         raise OSError("диск полон")
 
-    monkeypatch.setattr(shutil, "copy2", broken_copy)
+    monkeypatch.setattr(job_worker, "_copy_with_progress", broken_copy)
     assert _main(["import", str(_media(env)), "--no-transcribe"]) == 1
     assert "диск полон" in capsys.readouterr().err
     assert list(env["rec"].iterdir()) == []

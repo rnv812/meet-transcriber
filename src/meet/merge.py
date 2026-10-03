@@ -447,10 +447,11 @@ def run(folder: Path, run=subprocess.run, probe=probe_duration, bus=None,
     for stale in [*folder.glob("*.opus"), *folder.glob("*.part")]:
         stale.unlink(missing_ok=True)  # повтор после сбоя — начисто
     part_files = {role: folder / f"{role}.opus.part" for role in roles}
+    stages = _stages(bus, roles, sum(p.duration_s for p in parts))
     try:
-        for done, role in enumerate(roles):
-            if bus is not None:
-                bus.progress("merge", label="объединение", done=done, total=len(roles), note=role)
+        for role in roles:
+            if stages is not None:
+                stages.begin(f"merge-{role}")
             try:
                 proc = run(concat_command(pieces(parts, role), part_files[role]),
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -470,12 +471,34 @@ def run(folder: Path, run=subprocess.run, probe=probe_duration, bus=None,
         for role in roles:  # подмену сорвало посередине — пусть не будет ни одной
             (folder / f"{role}.opus").unlink(missing_ok=True)
         raise
+    finally:
+        if stages is not None:
+            stages.stop_ticking()
     total = sum(p.duration_s for p in parts)
     _write_events(folder, parts[0].start, total)
     library.update_meta(folder, lambda m: {
         **m, "parts": parts_meta(parts),
         "merge": {**(m.get("merge") or {}), "state": "merged"},
     })
-    if bus is not None:
-        bus.progress("merge", label="объединение", done=len(roles), total=len(roles))
+    if stages is not None:
+        stages.finish()
     return folder
+
+
+# Перекодирование склейки в Opus, «время / длительность звука» одной дорожки:
+# для хода по времени (ffmpeg своего хода здесь не отдаёт).
+ENCODE_FACTOR = 0.02
+
+
+def _stages(bus, roles: list[str], seconds: float):
+    """Ход объединения одной шкалой (meet.progress): шаг на дорожку, внутри
+    шага — по времени (ожидаемое — длительность встречи × ENCODE_FACTOR)."""
+    if bus is None:
+        return None
+    from meet.progress import Stages, Step
+
+    stages = Stages(bus, [Step(f"merge-{role}", "merge", 1.0, label="объединение", note=role)
+                          for role in roles])
+    stages.estimate(max(1.0, seconds * ENCODE_FACTOR * len(roles)))
+    stages.start_ticking()
+    return stages

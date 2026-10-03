@@ -58,10 +58,12 @@ def _align_device() -> str:
     return "cpu"
 
 
-def align_segments(segments, wav_path, device=None):
+def align_segments(segments, wav_path, device=None, on_progress=None):
     """Вернуть сегменты с точными пословными таймкодами (forced alignment).
     wav_path — mono 16 kHz wav (выход to_wav16k). Текст и границы сегментов
-    не меняются, только word.start/word.end внутри них."""
+    не меняются, только word.start/word.end внутри них.
+
+    `on_progress(доля)` — ход 0…1 по сегментам, с весом их длительности."""
     import wave
 
     import numpy as np
@@ -80,8 +82,13 @@ def align_segments(segments, wav_path, device=None):
 
     out_segments = []
     aligned = 0
+    total_s = sum(max(0.0, seg.end - seg.start) for seg in segments) or 1.0
+    done_s = 0.0
     try:
         for seg in segments:
+            if on_progress is not None:  # пройдено до этого сегмента
+                on_progress(min(1.0, done_s / total_s))
+            done_s += max(0.0, seg.end - seg.start)
             if not seg.words:
                 out_segments.append(seg)
                 continue
@@ -115,5 +122,7 @@ def align_segments(segments, wav_path, device=None):
     finally:
         del model
         torch.cuda.empty_cache()
+    if on_progress is not None:
+        on_progress(1.0)
     print(f"forced alignment: выровнено {aligned}/{len(segments)} сегментов")
     return out_segments

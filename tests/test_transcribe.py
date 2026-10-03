@@ -182,7 +182,7 @@ def _progress_stages(monkeypatch, tmp_path, folder=False, align=False):
         lambda p, num_speakers=None, exclusive=False, **kw: Diarization(turns=[]),
     )
     monkeypatch.setattr(tr, "split_by_speaker", lambda s, t, o=None: s)
-    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled, **kw: s)
 
     bus = events.EventBus()
     seen = []
@@ -294,7 +294,7 @@ def _engine_run(monkeypatch, tmp_path, *, device, backend, layout, align=True, d
     monkeypatch.setattr(asr, "choose", lambda path=None, **kw: choice)
     monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
     monkeypatch.setattr(tr, "transcribe_wav", lambda p, h, **kw: [Segment(0.0, 1.0, "а")])
-    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled, **kw: s)
     monkeypatch.setattr(tr, "diarize_wav", lambda p, num_speakers=None, exclusive=False, **kw:
                         Diarization(turns=[], skipped=diar_skipped))
     monkeypatch.setattr(tr, "split_by_speaker", lambda s, t, o=None: s)
@@ -447,7 +447,7 @@ def test_mic_track_uses_speaker_name_from_settings(monkeypatch, tmp_path):
         lambda p, num_speakers=None, exclusive=False, **kw: Diarization(turns=[]),
     )
     monkeypatch.setattr(tr, "split_by_speaker", lambda s, t, o=None: s)
-    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled, **kw: s)
     (tmp_path / "sys.opus").write_bytes(b"x")
     (tmp_path / "mic.opus").write_bytes(b"x")
     segments, _, _ = tr._transcribe_two_track(tmp_path, None, None, align=False)
@@ -521,7 +521,7 @@ def _no_token_pipeline(monkeypatch):
     import meet.transcribe as tr
 
     monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
-    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled, **kw: s)
     monkeypatch.setattr(tr, "transcribe_wav", lambda p, h, **kw: (
         [Segment(0.0, 1.0, "привет")] if "sys" in str(p) or "audio" in str(p)
         else [Segment(2.0, 3.0, "здравствуйте")]))
@@ -714,7 +714,7 @@ def test_replacement_rules_fix_both_tracks_before_speaker_split(monkeypatch, tmp
 
     monkeypatch.setattr(tr, "diarize_wav", lambda p, num_speakers=None, exclusive=False, **kw: Diarization(turns=[]))
     monkeypatch.setattr(tr, "split_by_speaker", fake_split)
-    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled: s)
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled, **kw: s)
     (tmp_path / "sys.opus").write_bytes(b"x")
     (tmp_path / "mic.opus").write_bytes(b"x")
     segments, _, _ = tr._transcribe_two_track(tmp_path, None, None, align=False)

@@ -1,5 +1,3 @@
-import shutil
-
 from meet import job_worker, library
 
 
@@ -20,11 +18,11 @@ def test_copy_import_leaves_only_final_source(tmp_path):
 def test_copy_import_failure_cleans_up_partial(tmp_path, monkeypatch):
     folder = _import_folder(tmp_path)
 
-    def broken(src, dst):
+    def broken(src, dst, report, clock=None):
         open(dst, "wb").write(b"me")
         raise OSError("диск полон")
 
-    monkeypatch.setattr(shutil, "copy2", broken)
+    monkeypatch.setattr(job_worker, "_copy_with_progress", broken)
     assert job_worker._copy_import(str(folder)) != 0
     assert not (folder / "source.mp3").exists()
     assert not list(folder.glob("*.part"))
