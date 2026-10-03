@@ -19,7 +19,7 @@
   border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg);
 }
 .agent__xterm { position: absolute; inset: 6px 4px 6px 10px; }
-.agent__xterm .xterm-viewport { scrollbar-color: var(--line-2) transparent; }
+/* Полоса .xterm-viewport — общая, из theme/tokens.css. */
 .agent__idle {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   padding: 16px; color: var(--text-3); font-size: 13px; text-align: center; pointer-events: none;
