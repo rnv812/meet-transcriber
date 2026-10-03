@@ -546,9 +546,12 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     kb = analysis._kb_excerpts(cfg.assistant.knowledge_dir, lines)
     parts = analysis.windows(lines)
     pairs, warnings, failed = [], [], []
+    from meet import llm_progress
+
+    llm_progress.plan(bus, [("improve", sum(len(t) for _, t in p)) for p in parts])
     for n, part in enumerate(parts, start=1):
-        if bus is not None:
-            bus.progress("improve", label="улучшение расшифровки", done=n - 1, total=len(parts))
+        llm_progress.part(bus, n, len(parts), stage="improve", label="улучшение расшифровки",
+                          note=f"окно {n} из {len(parts)}" if len(parts) > 1 else None)
         texts = {i: nfc(str(data["segments"][i].get("text") or "")) for i, _ in part}
         prompt = build_prompt(part, header=header, terms=terms, rules=rules, kb=kb,
                               part=(n, len(parts)) if len(parts) > 1 else None)
