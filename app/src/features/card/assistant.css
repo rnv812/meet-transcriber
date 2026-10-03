@@ -31,6 +31,7 @@
 .assist__draft-note { margin: 0; font-size: 12px; }
 .assist__hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--amber); }
 .assist__stage { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: 12px; }
+.assist__stage--progress { max-width: 480px; }
 .assist__pulse {
   width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--accent);
   animation: assist-pulse 1.2s ease-in-out infinite;

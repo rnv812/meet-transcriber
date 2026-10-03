@@ -16,6 +16,8 @@
   display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; min-height: 24px; padding: 2px 10px;
   color: var(--text-2); background: var(--surface); border: 1px solid var(--line-2); border-radius: 12px; font-size: 12px;
 }
+/* Идёт задача профиля с ходом (0.3.1): полоска вместо пульса. */
+.profile__progress { width: 100%; max-width: 480px; font-size: 12px; }
 .profile__status--err { color: var(--err); border-color: rgba(229, 72, 77, 0.35); }
 .profile__status .btn { height: 22px; padding: 0 8px; font-size: 12px; }
 .profile__pulse {

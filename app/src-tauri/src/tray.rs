@@ -104,6 +104,9 @@ pub struct View {
     pub elapsed_s: f64,
     /// Идёт какая-нибудь задача (расшифровка, импорт, загрузка модели).
     pub busy: bool,
+    /// Ход идущей расшифровки, проценты: общая доля задачи (`fraction`), у
+    /// старого резидента — доля этапа. Подсказка трея: «идёт расшифровка · 42 %».
+    pub busy_percent: Option<u8>,
     /// Папки (= id записей) завершённых расшифровок и импортов. Повтор папки —
     /// повторная расшифровка; поэтому это мультимножество, а не множество.
     pub jobs_done: Vec<String>,
@@ -282,6 +285,7 @@ impl View {
                 .and_then(Value::as_f64)
                 .unwrap_or(0.0),
             busy: false,
+            busy_percent: None,
             jobs_done: Vec::new(),
             jobs_failed: Vec::new(),
             last_stop: state.get("last_stop").and_then(LastStop::from_json),
@@ -304,6 +308,7 @@ impl View {
             let job_state = str_at(job, "state").unwrap_or_default();
             if job_state == "running" {
                 view.busy = true;
+                view.busy_percent = view.busy_percent.or_else(|| job_percent(job));
             }
             let Some(id) = str_at(job, "folder").and_then(recording_id) else {
                 continue;
@@ -321,6 +326,21 @@ impl View {
         }
         view
     }
+}
+
+/// Проценты задачи: общая доля (`fraction`) или доля этапа (`done/total`);
+/// неизвестно — None (в подсказке без числа).
+fn job_percent(job: &Value) -> Option<u8> {
+    let fraction = job.get("fraction").and_then(Value::as_f64).or_else(|| {
+        let total = job
+            .get("total")
+            .and_then(Value::as_f64)
+            .filter(|t| *t > 0.0)?;
+        Some(job.get("done").and_then(Value::as_f64)? / total)
+    })?;
+    fraction
+        .is_finite()
+        .then(|| (fraction.clamp(0.0, 1.0) * 100.0).floor() as u8)
 }
 
 fn str_at<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -866,7 +886,10 @@ pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
         Some(view) if view.live.stopping => "ассистент завершает запись".to_string(),
         Some(view) if view.live.active => "ассистент слушает встречу".to_string(),
         Some(view) if view.live.starting => "ассистент запускается".to_string(),
-        Some(view) if view.busy => "идёт расшифровка".to_string(),
+        Some(view) if view.busy => match view.busy_percent {
+            Some(percent) => format!("идёт расшифровка · {percent} %"),
+            None => "идёт расшифровка".to_string(),
+        },
         Some(_) if *status == ResidentStatus::External => {
             "служба записи запущена вне приложения".to_string()
         }
@@ -1719,6 +1742,7 @@ mod tests {
             source: None,
             elapsed_s: 0.0,
             busy: false,
+            busy_percent: None,
             jobs_done: vec![],
             jobs_failed: vec![],
             last_stop: None,
@@ -2127,6 +2151,11 @@ mod tests {
         let mut busy = idle();
         busy.busy = true;
         assert_eq!(tooltip(Some(&busy), &running), "Meet · идёт расшифровка");
+        busy.busy_percent = Some(42);
+        assert_eq!(
+            tooltip(Some(&busy), &running),
+            "Meet · идёт расшифровка · 42 %"
+        );
         assert_eq!(
             tooltip(Some(&idle()), &ResidentStatus::External),
             "Meet · служба записи запущена вне приложения"
@@ -2521,6 +2550,33 @@ mod tests {
         let mut view = idle();
         view.live.error = error.map(str::to_string);
         view
+    }
+
+    #[test]
+    fn busy_percent_is_the_overall_fraction_of_the_running_transcription() {
+        let jobs = json!({"items": [
+            {"kind": "summary", "folder": "D:/rec/a", "state": "running", "fraction": 0.9},
+            {"kind": "transcribe", "folder": "D:/rec/b", "state": "running", "fraction": 0.427,
+             "done": 0.1, "total": 1},
+        ]});
+        assert_eq!(
+            View::from_json(&json!({"status": "idle"}), &jobs).busy_percent,
+            Some(42)
+        );
+        // Старый резидент: доля этапа.
+        let old = json!({"items": [{"kind": "import", "folder": "D:/rec/c", "state": "running",
+                                    "done": 1, "total": 4}]});
+        assert_eq!(
+            View::from_json(&json!({"status": "idle"}), &old).busy_percent,
+            Some(25)
+        );
+        // Хода нет — без числа.
+        let unknown = json!({"items": [{"kind": "transcribe", "folder": "D:/rec/d", "state": "running",
+                                        "done": null, "total": null}]});
+        assert_eq!(
+            View::from_json(&json!({"status": "idle"}), &unknown).busy_percent,
+            None
+        );
     }
 
     #[test]

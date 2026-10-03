@@ -41,3 +41,53 @@ test("custom label and detail (model download)", () => {
   expect(screen.getByText("Скачивается")).toBeInTheDocument();
   expect(screen.getByText("0,5 из 1 ГБ")).toBeInTheDocument();
 });
+
+// --- 0.3.1: задачи модели -------------------------------------------------------
+
+test("model job: window, sub-step, elapsed clock and a confident time left", () => {
+  const started = Date.now() / 1000 - 72;
+  render(<JobProgress job={job({ kind: "analyze", stage: "analyze", label: "анализ встречи", note: "окно 2 из 4",
+    phase: "generating", fraction: 0.37, cap: 0.6, eta_s: 41, started_at: started, done: 0.3, total: 1 })} />);
+  expect(screen.getByText("Анализ встречи · окно 2 из 4 · модель пишет ответ")).toBeInTheDocument();
+  expect(screen.getByText("37 % · 1:12 · осталось ~40 с")).toBeInTheDocument();
+});
+
+test("model job longer than usual: says so, no time left, keeps the clock", () => {
+  const started = Date.now() / 1000 - 200;
+  render(<JobProgress job={job({ kind: "summary", stage: "llm", label: "итоги встречи", phase: "request", slow: true,
+    fraction: 0.85, eta_s: null, started_at: started, done: 0.95, total: 1 })} />);
+  expect(screen.getByText("Итоги встречи · дольше обычного…")).toBeInTheDocument();
+  expect(screen.getByText("85 % · 3:20")).toBeInTheDocument();
+});
+
+test("model job without a confident estimate shows only percent and the clock", () => {
+  const started = Date.now() / 1000 - 9;
+  render(<JobProgress job={job({ kind: "improve", stage: "improve", label: "улучшение расшифровки", phase: "request",
+    fraction: 0.05, started_at: started, done: 0.06, total: 1 })} />);
+  expect(screen.getByText("5 % · 0:09")).toBeInTheDocument();
+});
+
+test("analysis and summary show the job's progress instead of a pulse when the resident reports it", async () => {
+  const { AnalysisStatus } = await import("../features/card/analysis");
+  const { ThinkingStage } = await import("../features/card/assistant");
+  const running = job({ kind: "analyze", stage: "analyze", label: "анализ встречи", note: "окно 1 из 2", phase: "request",
+    fraction: 0.2, done: 0.1, total: 1, started_at: Date.now() / 1000 - 3 });
+  const { unmount } = render(<AnalysisStatus state={{ state: "running", job: running }} busy={false} />);
+  expect(screen.getByRole("progressbar", { name: "Анализ встречи · окно 1 из 2 · модель думает" })).toBeInTheDocument();
+  unmount();
+  // Старый резидент (без подшагов) — прежний тихий «Анализ…».
+  const { unmount: u2 } = render(<AnalysisStatus state={{ state: "running", job: job({ kind: "analyze", stage: "analyze" }) }} busy={false} />);
+  expect(screen.getByText("Анализ…")).toBeInTheDocument();
+  u2();
+  render(<ThinkingStage job={job({ kind: "summary", stage: "llm", label: "итоги встречи", phase: "generating",
+    fraction: 0.5, done: 0.5, total: 1 })} />);
+  expect(screen.getByText("Итоги встречи · модель пишет ответ")).toBeInTheDocument();
+});
+
+test("list badge shows the same value as the bar", async () => {
+  const { badgeOf } = await import("../features/recordings/RecordingItem");
+  const j = job({ stage: "diarize", fraction: 0.4, step: 4, steps: 6 });
+  const st = { kind: "running" as const, stage: "diarize", label: "Разделение на спикеров", job: j };
+  expect(badgeOf(st)?.text).toBe("40% · Разделение на спикеров");
+  expect(badgeOf(st, 0.437)?.text).toBe("43% · Разделение на спикеров");
+});

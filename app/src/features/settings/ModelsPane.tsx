@@ -77,6 +77,7 @@ function ModelRow({ model, job, busy, canDownload, usage, confirming, onDownload
       {loading && mine && (
         <div className="model-row__progress">
           <ProgressBar value={jobFraction(mine)} stageKey={mine.id} size="sm" label="Скачивается"
+            extrapolate={mine.state === "running"} cap={mine.cap ?? 0.99}
             detail={downloadDetail(mine) ?? "Окно можно закрыть — загрузка продолжится"}
             ariaLabel={`Загрузка модели ${model.title}`} />
         </div>

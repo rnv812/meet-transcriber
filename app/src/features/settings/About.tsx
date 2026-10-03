@@ -172,7 +172,7 @@ function InstallProgress({ progress }: { progress: UpdateProgress | null }) {
   // Размер неизвестен (оболочка прислала 0) — бегущий блик, а не пустая или полная полоска.
   const value = total > 0 ? Math.min(1, done / total) : null;
   return (
-    <ProgressBar className="update__progress" value={value} ariaLabel="Загрузка обновления"
+    <ProgressBar className="update__progress" value={value} ariaLabel="Загрузка обновления" extrapolate cap={0.99}
       label={progress === null
         ? "Начинаю загрузку…"
         : total > 0
