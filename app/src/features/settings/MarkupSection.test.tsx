@@ -107,17 +107,17 @@ test("Jira: проекты — чипы ключей с вариантами н�
   await userEvent.click(orion);
   expect(orion).toHaveAttribute("aria-expanded", "true");
   const alias = screen.getByRole("textbox", { name: "Новый вариант названия ORION" });
-  await userEvent.type(alias, "смдэв2");
+  await userEvent.type(alias, "орайон2");
   expect(screen.getByText(/Без цифр/)).toBeInTheDocument();
   await userEvent.clear(alias);
-  await userEvent.type(alias, "смдэв{Enter}");
-  expect(within(screen.getByRole("list", { name: "Варианты названия ORION" })).getByText("смдэв")).toBeInTheDocument();
+  await userEvent.type(alias, "орайон{Enter}");
+  expect(within(screen.getByRole("list", { name: "Варианты названия ORION" })).getByText("орайон")).toBeInTheDocument();
   expect(orion).toHaveTextContent("+1 вариант");
   await userEvent.selectOptions(screen.getByRole("combobox", { name: "Проект по умолчанию" }), "ORION");
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
     integrations: {
-      jira_projects: [{ key: "ORION", aliases: ["смдэв"] }, { key: "SPR", aliases: [] }],
+      jira_projects: [{ key: "ORION", aliases: ["орайон"] }, { key: "SPR", aliases: [] }],
       jira_default_project: "ORION",
     },
   }));

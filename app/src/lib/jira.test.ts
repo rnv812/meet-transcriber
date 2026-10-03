@@ -37,7 +37,7 @@ test("негодный шаблон из файла — шаблон по умо
 
 test("шаблон ключа для текста: свой, иначе ключи проектов, иначе любой ключ", () => {
   expect(literalPattern({})).toBe(DEFAULT_JIRA_KEYS);
-  expect(literalPattern({ jira_projects: [{ key: "ORION", aliases: ["смдэв"] }, { key: "SPR" }] }))
+  expect(literalPattern({ jira_projects: [{ key: "ORION", aliases: ["орайон"] }, { key: "SPR" }] }))
     .toBe("(?:ORION|SPR)-\\d+");
   expect(literalPattern({ jira_projects: [{ key: "ORION" }], jira_pattern: "OPS, DEMO" })).toBe("(?:OPS|DEMO)-\\d+");
   expect(literalPattern({ jira_projects: [{ key: "ORION" }], jira_pattern: "(" })).toBe("(?:ORION)-\\d+");
@@ -56,12 +56,12 @@ test("проверка ключа проекта и вариантов назв�
   expect(projectKeyError("orion")).toBeNull();
   expect(projectKeyError("ORION", ["ORION"])).toBe("Проект ORION уже в списке");
   for (const bad of ["S", "1AB", "SM-DEV", "ОРИОН", "A".repeat(21)]) expect(projectKeyError(bad), bad).not.toBeNull();
-  expect(aliasError("смдэв")).toBeNull();
-  expect(aliasError("эс эм дэв")).toBeNull();
+  expect(aliasError("орайон")).toBeNull();
+  expect(aliasError("кей дэв")).toBeNull();
   expect(aliasError("орион2")).toMatch(/цифр/);
   expect(aliasError("ab")).toMatch(/три буквы/);
   expect(aliasError("см/дев")).toMatch(/Только буквы/);
-  expect(projectsError([{ key: "ORION", aliases: ["смдэв"] }, { key: "SPR", aliases: [] }])).toBeNull();
+  expect(projectsError([{ key: "ORION", aliases: ["орайон"] }, { key: "SPR", aliases: [] }])).toBeNull();
   expect(projectsError([{ key: "ORION", aliases: [] }, { key: "ORION", aliases: [] }])).toMatch(/дважды/);
   expect(projectsError([{ key: "ORION", aliases: ["x1"] }])).toMatch(/^ORION: /);
 });

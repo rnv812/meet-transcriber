@@ -250,7 +250,7 @@ JIRA_ALIAS_MAX = 40
 
 @dataclass(frozen=True)
 class JiraProject:
-    """Проект Jira: ключ («ORION») и свои варианты произношения («смдэв»)."""
+    """Проект Jira: ключ («ORION») и свои варианты произношения («орайон»)."""
 
     key: str
     aliases: tuple[str, ...] = ()
