@@ -22,6 +22,7 @@ import { discussText, grounded, prepareText, SECTION_ORDER, SECTION_TITLES } fro
 import type { Job, Profile, ProfileView } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
+import { ItemMenu } from "../recordings/ItemMenu";
 import { PcmSection } from "./PcmSection";
 import { HideButton, RefChips, type OpenAt } from "./RefChips";
 import "./profile.css";
@@ -220,6 +221,7 @@ export function ProfileTab({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
+  const moreBtn = useRef<HTMLButtonElement>(null);
   const [confirm, setConfirm] = useState(false);
   const notes = useRef<NotesControl | null>(null);
   /** Растёт после «Удалить профиль»: поле заметок начинается заново (пустым). */
@@ -356,19 +358,20 @@ export function ProfileTab({
               title={view.self ? "Ваш профиль обновляется только вручную" : undefined}>
               <RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />Обновить профиль
             </Button>
-            <span className="menu-wrap">
-              <button type="button" className="icon-btn" aria-label="Ещё действия с профилем" aria-haspopup="menu"
-                aria-expanded={menu} onClick={() => setMenu((m) => !m)}>
-                <MoreHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
-              </button>
-              {menu && (
-                <div className="menu profile__menu" role="menu">
-                  <button type="button" role="menuitem" className="danger" onClick={() => { setMenu(false); setConfirm(true); }}>
-                    <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />Удалить профиль…
-                  </button>
-                </div>
-              )}
-            </span>
+            <button ref={moreBtn} type="button" className="icon-btn" aria-label="Ещё действия с профилем"
+              aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)}>
+              <MoreHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
+            </button>
+            {/* «⋯» у правого края: меню раскрывается влево и всегда целиком в окне (ui/floating). */}
+            {menu && (
+              <ItemMenu label="Ещё действия с профилем" anchor={moreBtn} align="end"
+                onClose={() => { setMenu(false); moreBtn.current?.focus(); }}
+                items={[{
+                  label: "Удалить профиль…", danger: true,
+                  icon: <Trash2 size={16} strokeWidth={1.75} />,
+                  onSelect: () => { setMenu(false); setConfirm(true); },
+                }]} />
+            )}
           </span>
         </div>
       ) : null}

@@ -118,7 +118,7 @@ test("сброс к инициалам: deleteAvatar и onAvatar", async () => {
   setup([{ ...people[0]!, has_avatar: true }, ...people.slice(1)], { onAvatar });
   await userEvent.click(screen.getByText("Демьян"));
   await userEvent.click(await screen.findByRole("button", { name: "Аватар" }));
-  await userEvent.click(screen.getByRole("button", { name: "Сбросить к инициалам" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Сбросить к инициалам" }));
   // Сначала подтверждение: фотография пропадёт.
   expect(api.deleteAvatar).not.toHaveBeenCalled();
   await userEvent.click(within(screen.getByRole("alertdialog", { name: "Убрать фотографию?" }))

@@ -94,7 +94,7 @@ export function RecordingItem({
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ at: { x: number; y: number } | null } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   /** В меню открыт список категорий («Категория ▸»). */
   const [pickCategory, setPickCategory] = useState(false);
@@ -130,13 +130,11 @@ export function RecordingItem({
     if (focusBack) more_.current?.focus();
   };
   const openMenuAt = (x: number, y: number) => {
-    setPickCategory(false); setBackFromCategory(false); setMenu({ x, y });
+    setPickCategory(false); setBackFromCategory(false); setMenu({ at: { x, y } });
   };
   const chooseCategory = (id: string | null) => { closeMenu(); void actions?.onCategory?.(rec.id, id); };
-  const openFromButton = () => {
-    const r = more_.current?.getBoundingClientRect();
-    openMenuAt(r ? r.right - 200 : 0, r ? r.bottom + 4 : 0);
-  };
+  // Под «⋯» у правого края строки: меню раскрывается влево (ui/floating).
+  const openFromButton = () => { setPickCategory(false); setBackFromCategory(false); setMenu({ at: null }); };
 
   const categoryItems: MenuItem[] = [
     { label: NO_CATEGORY_NAME, icon: <CategoryDot />, checked: category === null, autoFocus: category === null,
@@ -240,7 +238,7 @@ export function RecordingItem({
           onClick={() => (menu ? closeMenu() : openFromButton())}><Icon as={Ellipsis} /></button>
       )}
       {menu && (
-        <ItemMenu at={menu} label={pickCategory ? `Категория записи «${title}»` : `Действия с записью «${title}»`}
+        <ItemMenu at={menu.at} align="end" label={pickCategory ? `Категория записи «${title}»` : `Действия с записью «${title}»`}
           items={menuItems}
           note={pickCategory ? "Категория встречи" : undefined}
           anchor={more_} onClose={() => closeMenu()} />

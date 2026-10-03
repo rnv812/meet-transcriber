@@ -3,13 +3,16 @@
  *
  * Клавиатура как у обычного меню: фокус на первом пункте, ↑/↓/Home/End —
  * по пунктам, Esc — закрыть и вернуть фокус на «⋯» (это делает вызывающий в
- * `onClose`). Клик снаружи закрывает. Положение — fixed, в пределах окна.
+ * `onClose`). Клик снаружи закрывает. Положение — fixed, по общему правилу
+ * (ui/floating): под кнопкой (или под указателем), у края окна — с другой
+ * стороны, всегда целиком в окне; пересчитывается при прокрутке и смене размера.
  */
 
 import { Check } from "lucide-react";
 import {
-  Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject,
+  Fragment, useEffect, useId, useMemo, useRef, type KeyboardEvent, type ReactNode, type RefObject,
 } from "react";
+import { floatingStyle, pointAnchor, useFloating, type Align } from "../../ui/floating";
 import { Icon } from "../../ui/Icon";
 
 export type MenuItem = {
@@ -32,11 +35,11 @@ export type MenuItem = {
   trailing?: ReactNode;
 };
 
-const MARGIN = 8;
-
-export function ItemMenu({ at, label, items, note, anchor, onClose }: {
-  /** Точка, откуда раскрыть: под «⋯» или под указателем. */
-  at: { x: number; y: number };
+export function ItemMenu({ at, align = "start", label, items, note, anchor, onClose }: {
+  /** Точка под указателем (контекстное меню). Нет — меню раскрывается под кнопкой `anchor`. */
+  at?: { x: number; y: number } | null;
+  /** У кнопки: "start" — левым краем к её левому краю, "end" — правым к правому (раскрытие влево). */
+  align?: Align;
   label: string;
   items: MenuItem[];
   /** Пояснение над пунктами (подтверждение удаления). */
@@ -46,18 +49,12 @@ export function ItemMenu({ at, label, items, note, anchor, onClose }: {
   onClose: () => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState(at);
   const noteId = useId();
-
-  useLayoutEffect(() => {
-    const r = box.current?.getBoundingClientRect();
-    const w = r?.width ?? 0;
-    const h = r?.height ?? 0;
-    setPos({
-      x: Math.max(MARGIN, Math.min(at.x, window.innerWidth - w - MARGIN)),
-      y: Math.max(MARGIN, Math.min(at.y, window.innerHeight - h - MARGIN)),
-    });
-  }, [at, items.length, note]);
+  const x = at?.x;
+  const y = at?.y;
+  const point = useMemo(() => (x === undefined || y === undefined ? null : pointAnchor(x, y)), [x, y]);
+  // Под указателем — без зазора; у кнопки — обычный зазор.
+  const pos = useFloating(point ?? anchor ?? null, box, { align, gap: point ? 0 : 4 });
 
   // Пункты сменились (подтверждение удаления) — фокус снова на первом (или на
   // отмеченном `autoFocus`: в подтверждении это «Отмена», два Enter не удаляют).
@@ -99,7 +96,7 @@ export function ItemMenu({ at, label, items, note, anchor, onClose }: {
 
   return (
     <div ref={box} className="item-menu" role="menu" aria-label={label} onKeyDown={onKeyDown}
-      aria-describedby={note ? noteId : undefined} style={{ left: pos.x, top: pos.y }}>
+      aria-describedby={note ? noteId : undefined} style={floatingStyle(pos)}>
       {note && <div className="item-menu__note" id={noteId}>{note}</div>}
       {items.map((item, i) => (
         <Fragment key={`${i}:${item.label}`}>

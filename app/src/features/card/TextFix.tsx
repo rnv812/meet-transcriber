@@ -8,7 +8,7 @@
  */
 
 import { Play, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import {
   applyTextFix, getSettings, patchSettings, previewTextFix, removeHotword, undoSpeakers, type Endpoint,
 } from "../../lib/api";
@@ -20,6 +20,7 @@ import type { Segment, TextPreview } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Popover } from "../../ui/Popover";
+import { floatingStyle, useFloating } from "../../ui/floating";
 import { rulesOf, withRule } from "../settings/ReplacementsEditor";
 import { Icon } from "../../ui/Icon";
 
@@ -101,6 +102,14 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
   const [target, setTarget] = useState<Target | null>(null);
   const [open, setOpen] = useState(false);
   const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
+  // «Исправить…» под выделением — по общему правилу (ui/floating): у правого и
+  // нижнего края окна не уходит за край.
+  const floatBtn = useRef<HTMLButtonElement | null>(null);
+  const floatRef = useCallback((el: HTMLButtonElement | null) => { floatBtn.current = el; setAnchor(el); }, []);
+  const tBox = target?.box;
+  const selection = useMemo(() => (tBox ? { left: tBox.left, right: tBox.left, top: tBox.top, bottom: tBox.bottom } : null),
+    [tBox]);
+  const floatPos = useFloating(selection, floatBtn, { gap: 4 });
   const [replace, setReplace] = useState("");
   /** «Добавить в термины»: null — по умолчанию (включено, если исправление добавляет значимые слова). */
   const [hotwordSet, setHotword] = useState<boolean | null>(null);
@@ -277,8 +286,8 @@ export function useTextFix({ endpoint, id, turns, segments, playable, head, onPl
     const canApply = !busy && !target.split && !!right && !(same && !hotword) && !(all && count === 0);
     node = (
       <>
-        <button ref={setAnchor} type="button" className={`tfix-float${open ? " tfix-float--anchor" : ""}`}
-          style={{ left: target.box.left, top: target.box.bottom + 4 }} aria-hidden={open || undefined}
+        <button ref={floatRef} type="button" className={`tfix-float${open ? " tfix-float--anchor" : ""}`}
+          style={floatingStyle(floatPos)} aria-hidden={open || undefined}
           tabIndex={open ? -1 : undefined} title="Исправить распознанное (Ctrl+E)" aria-keyshortcuts="Control+E"
           onMouseDown={(e) => e.preventDefault()} onClick={() => show(target)}>
           Исправить…

@@ -7,6 +7,7 @@ import { clock, errorText } from "../lib/format";
 import { openScreenRecordingSettings } from "../lib/shell";
 import type { AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
 import { Button } from "../ui/Button";
+import { floatingStyle, useFloating } from "../ui/floating";
 import { Icon } from "../ui/Icon";
 
 const LOW_DISK_GB = 5;
@@ -107,6 +108,9 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   const split = useRef<HTMLSpanElement>(null);
   const more = useRef<HTMLButtonElement>(null);
   const item = useRef<HTMLButtonElement>(null);
+  const menuBox = useRef<HTMLDivElement>(null);
+  // Под «Начать запись ▾», правым краем к его правому краю; всегда в пределах окна (ui/floating).
+  const menuPos = useFloating(menu ? split : null, menuBox, { align: "end", gap: 4 });
   const hintId = useId();
   const blocked = noProvider(assistant);
   // Ушли из простоя (запись, ассистент) — меню больше не к месту.
@@ -207,7 +211,7 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
         <Button ref={more} variant="primary" className="split__more" aria-label="Другие варианты записи"
           aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><Icon as={ChevronDown} size="sm" /></Button>
         {menu && (
-          <div className="rec-menu" role="menu" aria-label="Варианты записи">
+          <div ref={menuBox} className="rec-menu" role="menu" aria-label="Варианты записи" style={floatingStyle(menuPos)}>
             <button ref={item} type="button" role="menuitem" className="rec-menu__item" disabled={blocked}
               aria-describedby={blocked ? hintId : undefined} onClick={() => runLive(liveStart)}>
               С ассистентом

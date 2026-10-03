@@ -8,24 +8,20 @@
  */
 
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { placeFloating, type AnchorRect } from "./floating";
 import "./helptip.css";
 
 const WIDTH = 300;
-const GAP = 6;
-const MARGIN = 8;
 /** Пауза перед закрытием по уходу мыши: успеть перевести курсор на текст подсказки. */
 export const CLOSE_DELAY_MS = 150;
 
-type Box = { left: number; top: number; right: number; bottom: number };
-
-/** Где показать подсказку у кнопки: под ней, а если снизу тесно — над ней; по горизонтали — в пределах окна. */
-export function placeTip(anchor: Box, tip: { width: number; height: number }, view: { width: number; height: number }) {
-  // Левым краем к кнопке (раскрытие вправо, «?» обычно сразу после подписи); у правого края окна — сдвиг влево.
-  const left = Math.max(MARGIN, Math.min(anchor.left, view.width - tip.width - MARGIN));
-  const below = anchor.bottom + GAP;
-  const above = anchor.top - GAP - tip.height;
-  const top = below + tip.height <= view.height - MARGIN || above < MARGIN ? below : above;
-  return { left, top };
+/**
+ * Где показать подсказку у кнопки — общее правило (ui/floating): под ней, а если
+ * снизу тесно — над ней; левым краем к кнопке («?» обычно сразу после подписи),
+ * у правого края окна — правым краем к кнопке; всегда в пределах окна.
+ */
+export function placeTip(anchor: AnchorRect, tip: { width: number; height: number }, view: { width: number; height: number }) {
+  return placeFloating(anchor, tip, view);
 }
 
 export function HelpTip({ label, title, children }: {

@@ -115,8 +115,14 @@ describe("placeTip", () => {
     expect(placeTip({ left: 400, right: 420, top: 100, bottom: 120 }, size, view)).toEqual({ left: 400, top: 126 });
   });
 
-  test("у правого края окна сдвигается влево, не выходя за край", () => {
-    expect(placeTip({ left: 900, right: 920, top: 100, bottom: 120 }, size, view).left).toBe(1000 - 300 - 8);
+  test("у правого края окна раскрывается влево — правым краем к кнопке", () => {
+    expect(placeTip({ left: 900, right: 920, top: 100, bottom: 120 }, size, view).left).toBe(920 - 300);
+  });
+
+  test("не влезает ни снизу, ни сверху — прижата к краю окна, а не уходит за него", () => {
+    const tall = { width: 300, height: 600 };
+    const { top } = placeTip({ left: 400, right: 420, top: 300, bottom: 320 }, tall, view);
+    expect(top).toBe(700 - 600 - 8);
   });
 
   test("у нижнего края — над кнопкой", () => {
