@@ -115,6 +115,10 @@ class Job:
     steps: int | None = None
     fraction: float | None = None
     estimate_s: float | None = None
+    # Доля в конце текущего шага (дальше окно полоску не продлевает) и в чём
+    # меряется ход шага («audio_s», «time», «bytes»…), см. meet.progress.
+    cap: float | None = None
+    unit: str | None = None
     result: str | None = None
     error: str | None = None
     created_at: float = field(default_factory=_created_at)
@@ -136,6 +140,8 @@ class Job:
             "steps": self.steps,
             "fraction": self.fraction,
             "estimate_s": self.estimate_s,
+            "cap": self.cap,
+            "unit": self.unit,
             "result": self.result,
             "error": self.error,
             "created_at": self.created_at,
@@ -482,6 +488,8 @@ class JobQueue:
             job.steps = payload.get("steps")
             job.fraction = payload.get("fraction")
             job.estimate_s = payload.get("estimate_s")
+            job.cap = payload.get("cap")
+            job.unit = payload.get("unit")
             self._emit(JOB_PROGRESS, job)
         elif kind == "job.result":
             job.result = payload.get("path")

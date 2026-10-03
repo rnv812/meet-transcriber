@@ -3,7 +3,10 @@
 
 import json
 import time
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from meet import events, jobs
 from meet.progress import Stages, Step
@@ -249,3 +252,302 @@ def test_cli_prints_step_starts_and_the_final_line_only(capsys):
     st.finish(note="C:/rec/x_transcript.md")
     err = capsys.readouterr().err.splitlines()
     assert err == ["распознавание", "сборка транскрипта", "сборка транскрипта · C:/rec/x_transcript.md"]
+
+
+# --- 0.3.1: ровный ход внутри этапов ---------------------------------------------
+
+
+def test_soft_estimate_is_monotonic_and_never_claims_completion():
+    from meet.progress import soft
+
+    xs = [i / 10 for i in range(0, 80)]
+    ys = [soft(x) for x in xs]
+    assert ys == sorted(ys)
+    assert soft(0) == 0 and soft(0.5) == pytest.approx(0.45) and soft(1.0) == pytest.approx(0.9)
+    assert max(ys) < 0.95 and soft(1000) <= 0.95
+
+
+def test_updates_are_throttled_to_four_per_second():
+    bus, seen = _bus()
+    now = [0.0]
+    st = Stages(bus, _plan(), clock=lambda: now[0])
+    st.begin("asr")
+    n = len(seen)
+    for i in range(1, 101):  # сотня обновлений за секунду (кусок за куском)
+        now[0] = i / 100
+        st.update(i / 200)
+    assert len(seen) - n <= 4
+    assert [e["fraction"] for e in seen] == sorted(e["fraction"] for e in seen)
+
+
+def test_cap_is_the_end_of_the_current_step():
+    bus, seen = _bus()
+    st = Stages(bus, _plan(), clock=lambda: 0.0)
+    st.begin("convert")
+    assert seen[-1]["cap"] == 0.1
+    st.begin("asr")
+    assert seen[-1]["cap"] == 0.7 and seen[-1]["fraction"] == 0.1
+    st.finish()
+    assert "cap" not in seen[-1]
+
+
+def test_step_without_own_scale_goes_by_time_and_stops_short_of_full():
+    bus, seen = _bus()
+    now = [0.0]
+    st = Stages(bus, _plan(), clock=lambda: now[0])
+    st.estimate(100.0)  # диаризация весит 30 из 100 — ожидается 30 с
+    st.begin("convert")
+    st.begin("asr")
+    st.update(1.0)
+    st.begin("diarize")
+    st.update(None)  # pyannote без hook: своей шкалы не будет
+    parts = []
+    for t in range(1, 200):
+        now[0] = float(t)
+        st.tick()
+        parts.append(st.part)
+    assert parts == sorted(parts)
+    assert parts[14] == pytest.approx(0.45, abs=0.01)  # половина ожидаемого — 45 % шага
+    assert max(parts) < 0.95  # дольше ожидаемого — медленно, но не «готово»
+    assert seen[-1]["unit"] == "time"
+
+
+def test_measured_step_is_not_ticked_unless_it_says_it_has_no_scale():
+    bus, seen = _bus()
+    now = [0.0]
+    st = Stages(bus, _plan(), clock=lambda: now[0])
+    st.estimate(100.0)
+    st.begin("asr")
+    now[0] = 10.0
+    st.tick()
+    assert st.part == 0.0  # у распознавания своя шкала — по времени не продлеваем
+    st.update(None)  # «шкалы не будет»
+    st.tick()
+    assert st.part > 0 and seen[-1]["unit"] == "time"
+    st.update(0.8)  # своя шкала всё же пришла — дальше по ней, без отката
+    assert st.part >= 0.8
+    now[0] = 50.0
+    before = st.part
+    st.tick()
+    assert st.part == before
+
+
+def test_unmeasured_step_is_ticked_from_its_start():
+    bus, seen = _bus()
+    now = [0.0]
+    st = Stages(bus, _plan(), clock=lambda: now[0])
+    st.estimate(100.0)  # конвертация: 10 из 100 — ожидается 10 с
+    st.begin("convert")
+    now[0] = 5.0
+    st.tick()
+    assert st.part == pytest.approx(0.45)
+    assert seen[-1]["fraction"] == pytest.approx(0.045) and seen[-1]["unit"] == "time"
+
+
+def test_ticking_thread_emits_while_work_runs():
+    bus, seen = _bus()
+    st = Stages(bus, [Step("convert", "convert", 1), Step("voices", "voices", 1)])
+    st.estimate(0.4)
+    with st.ticking(interval=0.02):
+        st.begin("convert")
+        time.sleep(0.25)
+    timed = [e for e in seen if e.get("unit") == "time"]
+    assert len(timed) >= 2
+    assert [e["fraction"] for e in seen] == sorted(e["fraction"] for e in seen)
+
+
+def test_reweight_moves_weight_between_pending_steps_without_moving_the_fraction():
+    bus, seen = _bus()
+    st = Stages(bus, [Step("convert", "convert", 10), Step("asr-sys", "asr", 33), Step("diarize", "diarize", 24),
+                      Step("asr-mic", "asr", 33)], clock=lambda: 0.0)
+    st.begin("convert")
+    st.update(1.0)
+    before = st.fraction()
+    st.reweight({"asr-sys": 3.0, "asr-mic": 1.0})
+    assert st.fraction() == before
+    weights = {s.key: s.weight for s in st.steps}
+    assert weights["asr-sys"] == pytest.approx(49.5) and weights["asr-mic"] == pytest.approx(16.5)
+
+
+def test_two_tracks_share_recognition_by_their_length(tmp_path):
+    from meet.transcribe import _two_track_plan, _weigh_tracks
+
+    sys_wav, mic_wav = tmp_path / "s.wav", tmp_path / "m.wav"
+    sys_wav.write_bytes(b"\0" * (44 + 32000 * 60))  # минута собеседников, полминуты микрофона
+    mic_wav.write_bytes(b"\0" * (44 + 32000 * 30))
+    bus, _ = _bus()
+    st = Stages(bus, _two_track_plan(False))
+    _weigh_tracks(st, sys_wav, mic_wav)
+    w = {s.key: s.weight for s in st.steps}
+    assert w["asr-sys"] / w["asr-mic"] == pytest.approx((0.6 * 60) / (0.4 * 30))
+    assert w["asr-sys"] + w["asr-mic"] == pytest.approx(55.0)
+
+
+def test_gigaam_reports_progress_in_chunk_seconds(tmp_path):
+    import types
+    import wave
+
+    import numpy as np
+
+    from meet import gigaam_asr
+
+    wav = tmp_path / "a.wav"
+    with wave.open(str(wav), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes((np.zeros(16000 * 40)).astype(np.int16).tobytes())
+
+    class Model:
+        def transcribe(self, path, word_timestamps=False):
+            return types.SimpleNamespace(text="", words=[])
+
+    got = []
+    # Два куска: 20 с и 4 с — первый весит впятеро больше.
+    gigaam_asr.transcribe(wav, regions=[(0.0, 20.0), (30.0, 34.0)], model=Model(),
+                          on_chunk=lambda done, total: got.append(round(done / total, 3)))
+    assert got == [0.0, round(20 / 24, 3), 1.0]
+
+
+def test_alignment_reports_progress_per_segment(monkeypatch):
+    import sys
+    import types
+
+    from meet import align
+    from meet.asr import Segment
+
+    fake_torch = types.SimpleNamespace(cuda=types.SimpleNamespace(empty_cache=lambda: None))
+    functional = types.ModuleType("torchaudio.functional")
+    torchaudio = types.ModuleType("torchaudio")
+    torchaudio.functional = functional
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "torchaudio", torchaudio)
+    monkeypatch.setitem(sys.modules, "torchaudio.functional", functional)
+    tok = types.SimpleNamespace(get_vocab=lambda: {}, pad_token_id=0)
+    monkeypatch.setattr(align, "_load_align_model", lambda device: (types.SimpleNamespace(tokenizer=tok), object()))
+
+    class Wav:
+        def __enter__(self):
+            return types.SimpleNamespace(getframerate=lambda: 16000, readframes=lambda n: b"\0\0" * 16000,
+                                         getnframes=lambda: 16000)
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("wave.open", lambda *a, **k: Wav())
+    segs = [Segment(0.0, 1.0, "а"), Segment(1.0, 4.0, "б"), Segment(4.0, 5.0, "в")]  # без слов — как есть
+    got = []
+    assert align.align_segments(segs, "x.wav", device="cpu", on_progress=got.append) == segs
+    assert got == [0.0, 0.2, 0.8, 1.0]
+
+
+def test_diarization_without_hook_says_it_has_no_scale(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    from meet import credentials, diarize
+
+    class Pipe:
+        def to(self, device):
+            pass
+
+        def apply(self, file, num_speakers=None):  # без hook
+            pass
+
+        def __call__(self, file, **kw):
+            assert "hook" not in kw
+            return object()
+
+    fake_torch = types.SimpleNamespace(cuda=types.SimpleNamespace(is_available=lambda: False))
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: "hf_x")
+    monkeypatch.setattr(diarize, "_load_pipeline", lambda token: Pipe())
+    monkeypatch.setattr(diarize, "pick_device", lambda torch, use_cuda: types.SimpleNamespace(type="cpu"))
+    monkeypatch.setattr(diarize, "_load_wav", lambda path: (None, 16000))
+    monkeypatch.setattr(diarize, "_to_diarization", lambda result, exclusive=False: diarize.Diarization(turns=[]))
+    got = []
+    diarize.diarize_wav(tmp_path / "x.wav", on_progress=got.append)
+    assert got == [None]
+
+
+def test_two_track_transcription_progress_is_monotonic_with_constant_step_count(monkeypatch, tmp_path):
+    import meet.transcribe as tr
+    from meet.asr import Segment
+    from meet.diarize import Diarization
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(tr, "to_wav16k", lambda src, dst, **k: dst)
+
+    def fake_asr(path, hotwords=None, *, on_progress=None, **kw):
+        for i in range(1, 11):
+            on_progress(i / 10)
+        return [Segment(0.0, 1.0, "а")]
+
+    def fake_diarize(p, num_speakers=None, exclusive=False, on_progress=None, **kw):
+        for x in (0.1, 0.3, 0.6, 0.97):
+            on_progress(x)
+        return Diarization(turns=[(0.0, 1.0, "SPEAKER_00")])
+
+    monkeypatch.setattr(tr, "transcribe_wav", fake_asr)
+    monkeypatch.setattr(tr, "diarize_wav", fake_diarize)
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled, **kw: s)
+    monkeypatch.setattr(tr, "_match_names", lambda diar, threshold=None: {})
+    (tmp_path / "sys.opus").write_bytes(b"x")
+    (tmp_path / "mic.opus").write_bytes(b"x")
+    bus, seen = _bus()
+    tr.transcribe(str(tmp_path), align=False, bus=bus)
+    fractions = [e["fraction"] for e in seen]
+    assert fractions == sorted(fractions) and fractions[-1] == 1.0
+    assert len({e["steps"] for e in seen}) == 1
+    assert all(e["fraction"] <= e["cap"] + 1e-9 for e in seen if "cap" in e)
+    assert any(e.get("unit") == "audio_s" for e in seen)
+
+
+def test_import_copy_reports_bytes(tmp_path, monkeypatch, capsys):
+    from meet import job_worker, library
+
+    src = tmp_path / "in" / "встреча.mp3"
+    src.parent.mkdir()
+    src.write_bytes(b"m" * (3 * 1024 + 5))
+    folder = library.create_import(tmp_path / "rec", src)
+    monkeypatch.setattr(job_worker, "COPY_CHUNK", 1024)
+    monkeypatch.setattr(job_worker, "COPY_GAP_S", 0.0)
+    assert job_worker._copy_import(str(folder)) == 0
+    lines = [json.loads(x) for x in capsys.readouterr().out.splitlines()]
+    progress = [x for x in lines if x["kind"] == "progress"]
+    done = [x["done"] for x in progress]
+    assert done == sorted(done) and done[0] == 0 and done[-1] == 3 * 1024 + 5
+    assert len(done) >= 4 and all(x["unit"] == "bytes" for x in progress)
+    assert (folder / "source.mp3").read_bytes() == src.read_bytes()
+
+
+def test_merge_reports_a_step_per_track(tmp_path, monkeypatch):
+    from meet import merge
+
+    class Done:
+        returncode = 0
+        stderr = ""
+
+    def run(cmd, **kw):
+        Path(cmd[-1]).write_bytes(b"opus")
+        return Done()
+
+    monkeypatch.setattr(merge.shutil, "which", lambda name: "ffmpeg")
+    monkeypatch.setattr(merge, "_write_events", lambda *a, **k: None)
+    monkeypatch.setattr(merge, "describe_part",
+                        lambda source, probe=None, end=None: SimpleNamespace(start=0.0, duration_s=60.0))
+    monkeypatch.setattr(merge, "output_roles", lambda parts: ["sys", "mic"])
+    monkeypatch.setattr(merge, "pieces", lambda parts, role: [])
+    monkeypatch.setattr(merge, "concat_command", lambda items, out: ["ffmpeg", str(out)])
+    monkeypatch.setattr(merge, "parts_meta", lambda parts: [])
+    monkeypatch.setattr(merge.library, "read_meta", lambda f: {"merged_from": ["a", "b"]})
+    monkeypatch.setattr(merge.library, "update_meta", lambda f, fn: None)
+    folder = tmp_path / "m"
+    folder.mkdir()
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+    bus, seen = _bus()
+    merge.run(folder, run=run, bus=bus)
+    assert [(e["step"], e["steps"]) for e in seen if not e.get("final")][:2] == [(1, 2), (2, 2)]
+    assert seen[-1]["fraction"] == 1.0
+    assert [e["fraction"] for e in seen] == sorted(e["fraction"] for e in seen)

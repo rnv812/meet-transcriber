@@ -122,7 +122,9 @@ def diarize_wav(
     меньше («Переразделить на спикеров», чувствительность).
 
     `on_progress(доля)` — ход 0…1 по шагам пайплайна pyannote (сегментация,
-    голоса), если пайплайн умеет сообщать его (`hook`)."""
+    голоса), если пайплайн умеет сообщать его (`hook`); не умеет —
+    `on_progress(None)`: «своей шкалы не будет», вызывающий ведёт ход по
+    времени (meet.progress)."""
     from meet import credentials
 
     token = credentials.get_hf_token()
@@ -150,6 +152,8 @@ def diarize_wav(
     waveform, rate = _load_wav(path)
 
     extra = {"hook": progress_hook(on_progress)} if on_progress and _takes_hook(pipe) else {}
+    if on_progress and not extra:
+        on_progress(None)
 
     def run():
         return pipe(

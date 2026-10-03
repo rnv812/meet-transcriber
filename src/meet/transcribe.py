@@ -94,7 +94,7 @@ class _Run:
         if self.stages is None or self.choice is None:
             return
         try:
-            seconds = max(0, wav.stat().st_size - 44) / 32000
+            seconds = wav_seconds(wav)
             from meet import engine
 
             self.stages.estimate(seconds * engine.speed_factor(self.choice.device, self.choice.backend))
@@ -125,6 +125,22 @@ class _Run:
         return (f"время ступеней ({engine}, {choice.device}): распознавание {s['asr']:.1f} с, "
                 f"выравнивание {s['align']:.1f} с, диаризация {s['diarize']:.1f} с, "
                 f"всего {total:.1f} с")
+
+
+def wav_seconds(wav: Path) -> float:
+    """Длительность WAV 16 кГц моно (выход to_wav16k): 32 000 байт в секунду."""
+    return max(0, Path(wav).stat().st_size - 44) / 32000
+
+
+def _weigh_tracks(stages: Stages, sys_wav: Path, mic_wav: Path) -> None:
+    """Распознавание двух дорожек делит свой вес по их длительности (с тем же
+    перекосом 60/40: в дорожке собеседников речи обычно больше) — часовая
+    встреча с коротким микрофоном не стоит на «распознавании микрофона»."""
+    try:
+        sys_s, mic_s = wav_seconds(sys_wav), wav_seconds(mic_wav)
+    except OSError:
+        return
+    stages.reweight({"asr-sys": 0.6 * sys_s, "asr-mic": 0.4 * mic_s})
 
 
 def _whisper(wav: Path, hotwords: str | None, run: "_Run") -> list[Segment]:
@@ -295,8 +311,8 @@ def _single_plan(align: bool) -> list[Step]:
     """Шаги расшифровки одной дорожки (импорт, файл)."""
     steps = [
         Step("convert", "convert", WEIGHTS["convert"]),
-        Step("asr", "asr", WEIGHTS["asr"], measured=True),
-        Step("align", "align", WEIGHTS["align"]),
+        Step("asr", "asr", WEIGHTS["asr"], measured=True, unit="audio_s"),
+        Step("align", "align", WEIGHTS["align"], measured=True, unit="audio_s"),
         Step("diarize", "diarize", WEIGHTS["diarize"], measured=True),
         Step("voices", "voices", WEIGHTS["voices"]),
         Step("render", "render", WEIGHTS["render"]),
@@ -311,11 +327,13 @@ def _two_track_plan(align: bool) -> list[Step]:
     asr_w = WEIGHTS["asr"]
     steps = [
         Step("convert", "convert", WEIGHTS["convert"]),
-        Step("asr-sys", "asr", asr_w * 0.6, label="распознавание собеседников", note="sys", measured=True),
-        Step("align", "align", WEIGHTS["align"], note="sys"),
+        Step("asr-sys", "asr", asr_w * 0.6, label="распознавание собеседников", note="sys", measured=True,
+             unit="audio_s"),
+        Step("align", "align", WEIGHTS["align"], note="sys", measured=True, unit="audio_s"),
         Step("diarize", "diarize", WEIGHTS["diarize"], note="sys", measured=True),
         Step("voices", "voices", WEIGHTS["voices"]),
-        Step("asr-mic", "asr", asr_w * 0.4, label="распознавание микрофона", note="mic", measured=True),
+        Step("asr-mic", "asr", asr_w * 0.4, label="распознавание микрофона", note="mic", measured=True,
+             unit="audio_s"),
         Step("render", "render", WEIGHTS["render"]),
     ]
     return steps if align else [s for s in steps if s.key != "align"]
@@ -357,16 +375,18 @@ def _find_track(folder: Path, stem: str) -> Path | None:
     return None
 
 
-def _maybe_align(segments: list[Segment], wav: Path, enabled: bool) -> list[Segment]:
+def _maybe_align(segments: list[Segment], wav: Path, enabled: bool, on_progress=None) -> list[Segment]:
     """При enabled — уточнить пословные таймкоды forced alignment'ом (точнее стыки
     спикеров). Ошибка выравнивания не должна ронять транскрибацию: откатываемся на
-    исходные таймкоды whisper."""
+    исходные таймкоды whisper. `on_progress(доля)` — ход по сегментам."""
     if not enabled:
         return segments
     try:
         from meet.align import align_segments
 
-        return align_segments(segments, wav)
+        if on_progress is None:
+            return align_segments(segments, wav)
+        return align_segments(segments, wav, on_progress=on_progress)
     except Exception as e:
         print(f"forced alignment пропущен (ошибка: {e}); беру таймкоды whisper")
         return segments
@@ -637,7 +657,7 @@ def _transcribe_single(
     bus = bus if bus is not None else events.EventBus()
     run = run if run is not None else _Run(bus=bus)
     stages = run.stages = Stages(bus, _single_plan(_align_planned(align)))
-    with temp_dir() as td:
+    with temp_dir() as td, stages.ticking():
         stages.begin("convert")
         wav = to_wav16k(src, Path(td) / "audio16.wav")
         stages.update(1)
@@ -645,7 +665,7 @@ def _transcribe_single(
         segments = _recognize(wav, hotwords, run)
         stages.update(1)
         align = _settle_align(align, run, stages)
-        segments = _fix_terms(run.timed("align", lambda: _maybe_align(segments, wav, align)), run)
+        segments = _fix_terms(run.timed("align", lambda: _maybe_align(segments, wav, align, on_progress=run.part)), run)
         stages.begin("diarize")
         diar = _diarize(wav, speakers, overlap, run)
         if diar.skipped:
@@ -656,9 +676,11 @@ def _transcribe_single(
             return segments, diar, {}
         stages.begin("voices")
         name_map = _match_names(diar, voice_threshold(src.parent if src.stem == "source" else None))
+        stages.update(0.5)
         segments = split_by_speaker(
             segments, _apply_names(diar.turns, name_map), diar.overlaps
         )
+        stages.update(1)
     return segments, diar, name_map
 
 
@@ -677,18 +699,19 @@ def _transcribe_two_track(
     if not (sys_src and mic_src):
         raise SystemExit(f"В {folder} нет дорожек sys/mic")
     stages = run.stages = Stages(bus, _two_track_plan(_align_planned(align)))
-    with temp_dir() as td:
+    with temp_dir() as td, stages.ticking():
         stages.begin("convert")
         sys_wav = to_wav16k(sys_src, Path(td) / "sys16.wav", normalize=True)
         stages.update(0.5)
         mic_wav = to_wav16k(mic_src, Path(td) / "mic16.wav")
         stages.update(1)
+        _weigh_tracks(stages, sys_wav, mic_wav)
         stages.begin("asr-sys")
         sys_segs = _recognize(sys_wav, hotwords, run)
         stages.update(1)
         # forced alignment только для sys: mic — один спикер («Вы»), стыки не важны
         align = _settle_align(align, run, stages)
-        sys_segs = _fix_terms(run.timed("align", lambda: _maybe_align(sys_segs, sys_wav, align)), run)
+        sys_segs = _fix_terms(run.timed("align", lambda: _maybe_align(sys_segs, sys_wav, align, on_progress=run.part)), run)
         stages.begin("diarize")
         diar = _diarize(sys_wav, speakers, overlap, run)
         if diar.skipped:
@@ -700,6 +723,7 @@ def _transcribe_two_track(
         else:
             stages.begin("voices")
             name_map = _match_names(diar, voice_threshold(folder))
+            stages.update(0.5)
             sys_segs = split_by_speaker(
                 sys_segs, _apply_names(diar.turns, name_map), diar.overlaps
             )

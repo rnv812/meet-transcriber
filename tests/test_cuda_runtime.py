@@ -194,7 +194,7 @@ def pipeline(monkeypatch, tmp_path):
         return [Segment(0.0, 1.0, "whisper")]
 
     monkeypatch.setattr(tr, "transcribe_wav", fake_asr)
-    monkeypatch.setattr(tr, "_maybe_align", lambda segments, wav, enabled: segments)
+    monkeypatch.setattr(tr, "_maybe_align", lambda segments, wav, enabled, **kw: segments)
     monkeypatch.setattr(tr, "diarize_wav", lambda p, num_speakers=None, exclusive=False, **kw: Diarization(
         turns=[(0.0, 5.0, "SPEAKER_00")]))
     monkeypatch.setattr(tr, "_match_names", lambda diar, threshold=None: {})

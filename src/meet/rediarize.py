@@ -290,11 +290,12 @@ def run(folder: Path, *, num_speakers: int | None = None, min_speakers: int | No
     # Ход одной шкалой (meet.progress): диаризация — почти всё время работы.
     stages = Stages(bus, [Step("convert", "convert", 10), Step("diarize", "diarize", 80, measured=True),
                           Step("voices", "voices", 5), Step("render", "render", 5)])
-    with temp_dir() as td:
+    with temp_dir() as td, stages.ticking():
         stages.begin("convert")
         # Как у расшифровки: дорожку собеседников выравниваем по громкости.
         wav = to_wav(src, Path(td) / "audio16.wav", normalize=stem == "sys")
         stages.update(1)
+        _estimate(stages, wav)
         stages.begin("diarize")
         diar = diarize(wav, num_speakers=num_speakers, min_speakers=min_speakers,
                        max_speakers=max_speakers, exclusive=not settings.load().asr.overlap,
@@ -324,6 +325,18 @@ def run(folder: Path, *, num_speakers: int | None = None, min_speakers: int | No
     stages.begin("render")
     stages.finish()
     return out
+
+
+def _estimate(stages, wav: Path) -> None:
+    """Ожидаемая длительность работы: диаризация — 80 % её веса (план выше)."""
+    from meet.asr import resolve_device
+    from meet.progress import diarize_estimate
+    from meet.transcribe import wav_seconds
+
+    try:
+        stages.estimate(diarize_estimate(wav_seconds(wav), resolve_device()) / 0.8)
+    except Exception:
+        pass  # без оценки — бегущий блик там, где своей шкалы нет
 
 
 # --- предпросмотр и применение (резидент) ---------------------------------------

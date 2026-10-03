@@ -636,7 +636,9 @@ def transcribe(path: Path, *, model_name: str = MODEL_NAME, device: str = "cpu",
                regions=None, model=None, on_chunk=None) -> list:
     """Распознать mono 16 кГц wav (выход to_wav16k) → list[asr.Segment].
 
-    `regions` и `model` подменяются в тестах; `on_chunk(done, total)` — ход.
+    `regions` и `model` подменяются в тестах; `on_chunk(done, total)` — ход
+    в секундах звука кусков (длинный кусок весит больше короткого): первое
+    `on_chunk(0, total)` — куски нарезаны, распознавание началось.
 
     Куски пишутся во временную папку с pid в имени (meet.tempdirs: процесс
     убили — её удалит резидент), и каждый удаляется сразу после распознавания:
@@ -656,10 +658,15 @@ def transcribe(path: Path, *, model_name: str = MODEL_NAME, device: str = "cpu",
         model = load(model_name, device, on_line=print)
         print(f"Распознавание GigaAM ({model_name}, {device}), кусков: {len(chunks)}...")
     words: list = []
+    total_s = sum(c.length for c in chunks)
+    done_s = 0.0
+    if on_chunk:
+        on_chunk(0.0, total_s)
     try:
         with tempdirs.temp_dir("gigaam-") as td:
             for i, chunk in enumerate(chunks):
                 piece = samples[int(chunk.start * sr): int(chunk.end * sr)]
+                done_s += chunk.length
                 if len(piece) < int(0.1 * sr):
                     continue
                 wav = Path(td) / f"c{i:05d}.wav"
@@ -670,7 +677,7 @@ def transcribe(path: Path, *, model_name: str = MODEL_NAME, device: str = "cpu",
                     wav.unlink(missing_ok=True)
                 words.extend(words_of_chunk(chunk, getattr(result, "words", None)))
                 if on_chunk:
-                    on_chunk(i + 1, len(chunks))
+                    on_chunk(done_s, total_s)
     finally:
         if own:
             del model
