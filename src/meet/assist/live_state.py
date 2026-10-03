@@ -209,6 +209,11 @@ class LiveState:
         # До какого момента записи (секунды) сводка учла реплики: черновик для
         # итогов честно говорит, где кончается (остановка не ждёт тика сводки).
         self.covered_t: float | None = None
+        # Ассистент, включённый посреди записи: с какой секунды он слышал
+        # встречу (начало догонялки) и неполна ли сводка (выключили, пока
+        # запись шла; начало не догнано) — черновик итогов говорит об этом.
+        self.covered_from: float | None = None
+        self.partial = False
 
     # --- патч ---
 
@@ -565,6 +570,44 @@ class LiveState:
         if t is not None and (self.covered_t is None or t > self.covered_t):
             self.covered_t = float(t)
 
+    def heard_from(self, t: float | None) -> None:
+        """Ассистент слышит запись с секунды `t` (включён посреди неё)."""
+        if isinstance(t, (int, float)) and not isinstance(t, bool):
+            self.covered_from = float(t) if self.covered_from is None \
+                else min(self.covered_from, float(t))
+
+    def resume(self, data: dict) -> bool:
+        """Продолжить сохранённое состояние (`live_state.json` прошлого
+        включения ассистента в этой же записи): тема, пункты, активные
+        подсказки, граница учтённого. Новые id — после самых больших прежних.
+        → False — восстанавливать нечего."""
+        summary = data.get("summary") if isinstance(data, dict) else None
+        if not isinstance(summary, dict):
+            return False
+        self.topic = _flat(summary.get("topic") or "", TOPIC_MAX)
+        for section in SECTIONS:
+            for item in summary.get(section) or []:
+                if isinstance(item, dict) and _restorable(item.get("id"), PREFIX[section]):
+                    self._items[section][item["id"]] = dict(item)
+        for hint in data.get("hints") or []:
+            if (isinstance(hint, dict) and _restorable(hint.get("id"), "h")
+                    and hint.get("kind") in HINT_KINDS
+                    and isinstance(hint.get("text"), str) and not hint.get("dismissed")):
+                self._hints[hint["id"]] = {**hint, "pinned": bool(hint.get("pinned"))}
+        ids = [*self._hints, *(k for items in self._items.values() for k in items)]
+        for prefix in PREFIX.values():
+            used = [int(i[1:]) for i in ids if i[0] == prefix]
+            self._next[prefix] = max(used, default=0) + 1
+        for key in ("covered_t", "covered_from"):
+            value = data.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                setattr(self, key, float(value))
+        if self.covered_from is None:
+            self.covered_from = 0.0  # без пометки — слышал запись с начала
+        self.partial = bool(data.get("partial"))
+        self.version += 1
+        return True
+
     def _compact(self, item_max: int, *, summary: bool = True, hints: bool = True) -> str:
         out: list[str] = []
         if summary and self.topic:
@@ -590,13 +633,18 @@ class LiveState:
         return "\n".join(out) if out else "(пока пусто)"
 
     def render_markdown(self) -> str:
-        return render_markdown(self.summary(), covered_t=self.covered_t)
+        return render_markdown(self.summary(), covered_t=self.covered_t,
+                               covered_from=self.covered_from, partial=self.partial)
 
     def save(self, path: Path) -> None:
         """Атомарно: tmp + replace (резидент может читать файл в любой момент)."""
         path = Path(path)
         data = {**self.to_dict(), "saved_at": time.time(), "covered_t": self.covered_t,
                 "markdown": self.render_markdown()}
+        if self.covered_from is not None:
+            data["covered_from"] = self.covered_from
+        if self.partial:
+            data["partial"] = True
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         try:
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -752,17 +800,48 @@ def _item_text(section: str, item: dict) -> str:
     return str(item.get("text") or "")
 
 
-def covered_note(covered_t) -> str:
+_RESTORE_ID = re.compile(r"[pdtqh][1-9][0-9]{0,5}")
+
+
+def _restorable(item_id, prefix: str) -> bool:
+    return isinstance(item_id, str) and bool(_RESTORE_ID.fullmatch(item_id)) \
+        and item_id[0] == prefix
+
+
+def _clock(seconds: float) -> str:
+    s = int(seconds)
+    return f"[{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}]"
+
+
+def _seconds(value) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+# Сводка начинается не с начала записи (ассистента включили позже): с этой
+# секунды и дальше черновик говорит, откуда он.
+FROM_MIN_S = 1.0
+
+
+def covered_note(covered_t, covered_from=None, partial: bool = False) -> str:
     """Где кончается черновик: сводка живого режима не успевает за последними
-    репликами (её тик — раз в ~минуту речи, при остановке не ждём)."""
-    if not isinstance(covered_t, (int, float)) or isinstance(covered_t, bool):
-        return ""
-    s = int(covered_t)
-    return (f"_Сводка учитывает реплики до [{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}]; "
-            "более поздние — только в расшифровке._")
+    репликами (её тик — раз в ~минуту речи, при остановке не ждём). У
+    ассистента, включённого посреди записи, — и где начинается; `partial` —
+    ассистент слышал встречу не целиком."""
+    end, start = _seconds(covered_t), _seconds(covered_from)
+    lines: list[str] = []
+    if end is not None and start is not None and start >= FROM_MIN_S:
+        lines.append(f"_Сводка учитывает реплики с {_clock(start)} до {_clock(end)}; "
+                     "остальное — только в расшифровке._")
+    elif end is not None:
+        lines.append(f"_Сводка учитывает реплики до {_clock(end)}; "
+                     "более поздние — только в расшифровке._")
+    if partial:
+        lines.append("_Ассистент слышал встречу не целиком — черновик неполный._")
+    return "\n\n".join(lines)
 
 
-def render_markdown(summary: dict, covered_t=None) -> str:
+def render_markdown(summary: dict, covered_t=None, covered_from=None,
+                    partial: bool = False) -> str:
     """Сводка в Markdown: для страницы `meet assist`, черновика итогов и промпта."""
     out: list[str] = []
     topic = str(summary.get("topic") or "").strip()
@@ -785,7 +864,7 @@ def render_markdown(summary: dict, covered_t=None) -> str:
     text = "\n".join(out).strip()
     if not text:
         return "_Пока пусто — сводка появится по ходу разговора._"
-    note = covered_note(covered_t)
+    note = covered_note(covered_t, covered_from, partial)
     return f"{text}\n\n{note}" if note else text
 
 
@@ -799,5 +878,7 @@ def load_saved(folder: Path) -> dict | None:
         return None
     hints = data.get("hints")
     data["hints"] = [h for h in hints if isinstance(h, dict)] if isinstance(hints, list) else []
-    data["markdown"] = render_markdown(data["summary"], covered_t=data.get("covered_t"))
+    data["markdown"] = render_markdown(data["summary"], covered_t=data.get("covered_t"),
+                                       covered_from=data.get("covered_from"),
+                                       partial=bool(data.get("partial")))
     return data

@@ -41,6 +41,9 @@ _META_SOURCE = {AUTO: "auto", LIVE: "live"}
 RESTART_REQUIRED_SECTIONS = ("auto_record",)
 
 TAIL_DEFAULT = 200
+# Остановка записи ждёт подключённого к ней ассистента не дольше этого: он
+# дописывает сводку (секунды), застрявший — убивается, запись это не задевает.
+ATTACH_STOP_WAIT_S = 10.0
 
 PACKAGE = "meet-transcriber"
 
@@ -406,6 +409,10 @@ class TrayControl(ProfilesMixin):
         self.live = live if live is not None else live_control.LiveControl(
             self.bus, log=tray.log)
         tray.live_busy = self.live.busy
+        # Ассистент, включённый посреди записи, выключается до её остановки:
+        # сводку он дописывает, пока запись идёт, а в отменённую (удаляемую)
+        # папку уже ничего не пишет.
+        tray.before_stop = self._stop_attached
         self.bus.subscribe(self._on_live_event)
         # Выгрузка в базу знаний: по одной за раз (кнопка поверх автоматики не
         # должна писать в ту же папку одновременно). Последний сбой автоматики —
@@ -614,6 +621,10 @@ class TrayControl(ProfilesMixin):
                 and (self._analysis_deferred or self._improve_deferred):
             self._background(self._flush_deferred_analysis, "meet-analysis")
         if event.kind != live_control.LIVE_STOPPED or not event.data.get("folder"):
+            return
+        if event.data.get("attached"):
+            # Ассистент был подключён к обычной записи: её сохранит (и поставит
+            # в расшифровку) остановка самой записи, а не ассистента.
             return
         folder = Path(event.data["folder"])
         if not folder.is_dir():
@@ -1022,7 +1033,8 @@ class TrayControl(ProfilesMixin):
         from meet import assistant
 
         if self.tray.recording:
-            raise _bad_request("Идёт обычная запись — сначала остановите её")
+            raise _bad_request("Идёт обычная запись — включите ассистента в ней "
+                               "(«Включить ассистента»)")
         if not _provider_installed(settings.load()):
             raise _conflict(assistant.NO_PROVIDER)
         try:
@@ -1032,8 +1044,72 @@ class TrayControl(ProfilesMixin):
 
     def live_stop(self) -> dict:
         """Остановить ассистента. Ответ сразу; дорожки он дописывает сам, конец —
-        событием `live.stopped`, после которого запись встаёт в расшифровку."""
+        событием `live.stopped`, после которого запись встаёт в расшифровку.
+        Ассистента, включённого посреди обычной записи, это только выключает:
+        запись идёт дальше (как `live_detach`)."""
+        if self._live_attached():
+            return self.live_detach()
         return self.live.stop()
+
+    def live_attach(self) -> dict:
+        """«Включить ассистента» посреди обычной записи: ребёнок `meet assist`
+        берёт звук из отвода записи (`meet.pcm_tap`), второй раз устройства не
+        открывает и lock записи не трогает; сначала догоняет уже записанное
+        (с дорожек на диске), дальше слушает вживую. Ответ сразу (`starting`)."""
+        from meet import assistant, pcm_tap
+
+        if not self.tray.recording:
+            raise _bad_request("Запись не идёт — включить ассистента можно только во время записи")
+        if self.live.busy():
+            st = self.live.status()
+            raise _bad_request("Ассистент уже включён" if st.get("attached") or st.get("active")
+                               else "Ассистент ещё запускается или останавливается — "
+                                    "попробуйте через несколько секунд")
+        if not _provider_installed(settings.load()):
+            raise _conflict(assistant.NO_PROVIDER)
+        hub = getattr(self.tray, "pcm_tap", None)
+        if hub is None or not hub.active():
+            raise _bad_request("Запись ещё не началась или уже останавливается — "
+                               "попробуйте через несколько секунд")
+        folder = Path(self.tray._current_folder())
+        if not folder.is_dir():
+            raise _bad_request("Папка записи ещё не создана — попробуйте через секунду")
+        started = getattr(self.tray, "started", 0.0) or 0.0
+        started_at = time.time() - max(0.0, time.monotonic() - started) if started else None
+        server = pcm_tap.TapServer(hub, log=self.tray.log)
+        try:
+            reply = self.live.start(self._root(), attach={
+                "folder": str(folder), "server": server, "started_at": started_at})
+        except live_control.LiveBusy as e:
+            raise _bad_request(str(e))
+        if reply.get("ok"):
+            self.tray.log(f"ассистент включается посреди записи: {folder}")
+        return reply
+
+    def live_detach(self) -> dict:
+        """«Выключить ассистента»: запись идёт дальше, его сводка остаётся в
+        папке записи с пометкой «неполная». Ответ сразу."""
+        if not self._live_attached():
+            return {**self.live.status(), "ok": False, "action": "not-attached"}
+        self.tray.log("ассистент выключается, запись продолжается")
+        return self.live.stop(detach=True)
+
+    def _live_attached(self) -> bool:
+        attached = getattr(self.live, "attached", None)  # подмена в тестах может не уметь
+        try:
+            return bool(attached and attached())
+        except Exception:
+            return False
+
+    def _stop_attached(self, discard: bool = False) -> None:
+        """Перед остановкой (или отменой) записи — остановить подключённого к
+        ней ассистента и дождаться, пока он допишет сводку (не дольше
+        ATTACH_STOP_WAIT_S; дальше его дерево убивают — запись это не задевает)."""
+        if not self._live_attached():
+            return
+        self.tray.log("запись останавливается — останавливаю подключённого ассистента"
+                      + (" (запись отменена)" if discard else ""))
+        self.live.stop(wait=True, timeout=ATTACH_STOP_WAIT_S)
 
     def _live_call(self, call, *args) -> dict:
         try:

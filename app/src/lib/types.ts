@@ -546,6 +546,12 @@ export type LiveStatus = {
   folder: string | null;
   error: string | null;
   started_at: number | null;
+  /**
+   * Ассистент включён посреди обычной записи («Включить ассистента»): запись
+   * ведёт резидент (`status: "recording"`), ассистент слушает её отвод.
+   * Старый резидент поля не присылает.
+   */
+  attached?: boolean;
 };
 
 /** Сводка живого режима записи (`live_state.json`) — черновик итогов. */
@@ -626,10 +632,30 @@ export type LiveState = {
   hints_enabled?: boolean;
   /** Настройки `assist`, с которыми запущен ассистент. */
   prefs?: { quiet_default?: boolean; activity?: string };
+  /** Ассистент включён посреди записи и догоняет уже записанное. */
+  catchup?: LiveCatchup;
 };
 
-/** `event: line`: новая строка ленты; `t` — секунды от начала записи. */
-export type LiveLine = { t: number; speaker: string | null; text: string };
+/**
+ * Догонялка ассистента, включённого посреди записи: распознаёт начало
+ * встречи с дорожек на диске (не больше последних 30 минут), пока слушает
+ * дальше. `from_t`/`to_t` — секунды записи; `capped` — самое начало не войдёт.
+ */
+export type LiveCatchup = {
+  active: boolean;
+  percent: number;
+  from_t: number | null;
+  to_t: number | null;
+  capped: boolean;
+  complete: boolean;
+};
+
+/**
+ * `event: line`: новая строка ленты; `t` — секунды от начала записи.
+ * `catchup` — строка догнанного начала встречи (приходит позже живых, а
+ * стоит раньше них).
+ */
+export type LiveLine = { t: number; speaker: string | null; text: string; catchup?: boolean };
 
 // --- анализ встречи (analysis.json, M2) ------------------------------------------
 

@@ -10,6 +10,13 @@
 Живое состояние (сводка и подсказки) пишется в папку записи как
 `live_state.json` после каждого изменения и при выходе: его берёт задача
 итогов как черновик.
+
+`--attach-to <папка> --tap-port <порт>` (токен — MEET_TAP_TOKEN): ассистент
+включён посреди обычной записи резидента. Папка — идущей записи, звук — из
+отвода (`meet.pcm_tap`), lock записи не берётся, дорожки не пишутся. Сначала
+догоняется уже записанное (`meet.live_catchup`, в фоне, прогресс — в `state`),
+прошлое включение ассистента в этой записи продолжается (`live_state.json`,
+лента). Конец записи — конец отвода — штатная остановка.
 """
 
 import asyncio
@@ -111,6 +118,12 @@ class AssistState:
         self.qa = None       # проставляет run_assist после создания QAService
         self.digester = None  # аналогично
         self.stop_event: asyncio.Event | None = None  # ставит _main
+        self.loop: asyncio.AbstractEventLoop | None = None  # ставит _main
+        self._stop_early = False  # остановка пришла до _main (конец записи)
+        # () -> dict | None: ход догонялки начала встречи (подключён к записи).
+        self.catchup = None
+        # Подключённого к записи выключили, пока запись шла: сводка неполная.
+        self.detached = False
         self._rebuild()
 
     @property
@@ -146,18 +159,39 @@ class AssistState:
     def status(self) -> str | None:
         return self.digester.status if self.digester else None
 
+    def catchup_view(self) -> dict | None:
+        """Ход догонялки для панели: {"active", "percent", "from_t", "to_t",
+        "capped", "complete"}; догонялки нет — None."""
+        progress = self.catchup() if self.catchup is not None else None
+        if not progress:
+            return None
+        total = progress.get("total_s") or 0.0
+        done = progress.get("done_s") or 0.0
+        percent = 100 if not progress.get("active") else (
+            min(99, int(100 * done / total)) if total > 0 else 0)
+        return {"active": bool(progress.get("active")), "percent": percent,
+                "from_t": progress.get("from_t"), "to_t": progress.get("to_t"),
+                "capped": bool(progress.get("capped")),
+                "complete": bool(progress.get("complete"))}
+
     def signature(self) -> tuple:
         """Меняется — пора слать клиентам новое `state`."""
-        return (self.live.version, self.status())
+        catchup = self.catchup_view()
+        return (self.live.version, self.status(),
+                None if catchup is None else (catchup["active"], catchup["percent"]))
 
     def view(self) -> dict:
         """Тело `event: state`: сводка, подсказки, статус. `digest` — сводка
         Markdown'ом (страница `meet assist` в браузере). История вопросов —
         отдельным событием `qa` (`qa_items`), когда меняется она."""
         data = self.live.to_dict()
-        return {**data, "digest": self.live.render_markdown(),
-                "status": self.status(), "hints_enabled": self.live.hints_enabled,
-                "prefs": self.prefs}
+        out = {**data, "digest": self.live.render_markdown(),
+               "status": self.status(), "hints_enabled": self.live.hints_enabled,
+               "prefs": self.prefs}
+        catchup = self.catchup_view()
+        if catchup is not None:
+            out["catchup"] = catchup
+        return out
 
     def qa_version(self) -> int:
         return self.qa.version if self.qa is not None else 0
@@ -196,6 +230,22 @@ class AssistState:
         if self.stop_event is not None:
             self.stop_event.set()
         self.changes.notify()  # открытые SSE-потоки замечают остановку сразу
+
+    def mark_detached(self) -> None:
+        """`POST /stop {"detach": true}`: запись идёт дальше без ассистента."""
+        self.detached = True
+
+    def request_stop_threadsafe(self) -> None:
+        """Остановка из чужого потока (отвод записи кончился: запись
+        остановлена). До старта цикла — запомнить, _main остановится сразу."""
+        loop = self.loop
+        if loop is None:
+            self._stop_early = True
+            return
+        try:
+            loop.call_soon_threadsafe(self.request_stop)
+        except RuntimeError:
+            pass  # цикл уже закрыт — выходим и так
 
 
 def _knowledge_path(knowledge, vault: Path | None) -> Path | None:
@@ -263,6 +313,9 @@ async def _main(state: AssistState, port: int, *, open_browser: bool = True,
                 devices_fallback: list | None = None) -> None:
     stop = asyncio.Event()
     state.stop_event = stop
+    state.loop = asyncio.get_running_loop()
+    if state._stop_early:
+        stop.set()
     # Свой пул для asyncio.to_thread (вызовы Codex/локальной модели, дослив
     # окна для Q&A): при выходе его бросаем без ожидания. Иначе asyncio.run
     # ждал бы застрявший вызов модели (до 180 с), а engine.stop() — хвост
@@ -363,12 +416,15 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
                no_voices: bool = False, *, open_browser: bool = True,
                endpoint_file: str | None = None, provider: str | None = None,
                cfg=None, knowledge_dir: str | None = None,
-               parent_pid: int | None = None) -> None:
+               parent_pid: int | None = None, attach_to: str | None = None,
+               tap_port: int | None = None, tap_token: str | None = None) -> None:
     """`port=0` — эфемерный порт; `endpoint_file` получает
     `{"port", "pid", "folder"}` после старта сервера и удаляется при любом
     выходе; `provider` — имя провайдера вместо `llm.resolve(cfg)`;
     `knowledge_dir` — база знаний на чтение для вопросов и дайджеста;
-    `parent_pid` — резидент: умер он — штатная остановка, как по /stop."""
+    `parent_pid` — резидент: умер он — штатная остановка, как по /stop;
+    `attach_to`/`tap_port`/`tap_token` — подключиться к идущей обычной записи
+    (папка и отвод звука резидента)."""
     from meet import tempdirs
 
     endpoint = Path(endpoint_file) if endpoint_file else None
@@ -379,15 +435,45 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
             _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                         no_voices, open_browser=open_browser, endpoint=endpoint,
                         provider=provider, cfg=cfg, knowledge_dir=knowledge_dir,
-                        parent_pid=parent_pid)
+                        parent_pid=parent_pid, attach_to=attach_to,
+                        tap_port=tap_port, tap_token=tap_token)
     finally:
         remove_endpoint(endpoint)
 
 
+def _attach_tap(port: int, token: str):
+    """Подключение к отводу звука резидента (`meet.pcm_tap.TapClient`)."""
+    from meet.pcm_tap import TapClient
+
+    return TapClient(port, token)
+
+
+def _prior_entries(transcript: Path) -> list[tuple[str, dict]]:
+    """Лента прошлого включения ассистента в этой записи — как реплики шины
+    (контекст: подсказки и сводка по ним не тикают)."""
+    import re
+
+    try:
+        text = transcript.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    out = []
+    pattern = re.compile(r"^\[(\d{2}):(\d{2}):(\d{2})\] ([^:]+): (.*)$")
+    for line in text.splitlines():
+        m = pattern.match(line)
+        if not m:
+            continue
+        h, mi, sec, speaker, said = m.groups()
+        out.append((line, {"t": float(int(h) * 3600 + int(mi) * 60 + int(sec)),
+                           "speaker": speaker, "text": said, "catchup": True}))
+    return out
+
+
 def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                 no_voices, *, open_browser, endpoint, provider, cfg,
-                knowledge_dir=None, parent_pid=None) -> None:
-    from meet import live_asr, settings
+                knowledge_dir=None, parent_pid=None, attach_to=None,
+                tap_port=None, tap_token=None) -> None:
+    from meet import live_asr, live_catchup, settings
     from meet.live import LiveEngine
     from meet.transcribe import _load_hotwords
     from meet.voice_id import VoiceMatcher
@@ -408,10 +494,32 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         if auth_error:
             raise SystemExit(f"Авторизация Claude не прошла: {auth_error}")
 
-    out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
+    attached = attach_to is not None
+    if attached:
+        out_dir = Path(attach_to)
+        if not out_dir.is_dir():
+            raise SystemExit(f"Папка записи не найдена: {out_dir}")
+        if not tap_port or not tap_token:
+            raise SystemExit("Нет отвода звука записи (порт и токен) — включите "
+                             "ассистента из приложения или `meet assist --attach`")
+    else:
+        out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
     bus = TranscriptBus()
     cadence = cadence_of(cfg.assist)
     live = LiveState(max_hints=cadence.max_hints, hints_enabled=cadence.hints)
+    transcript_path = out_dir / "live_transcript.md"
+    heard = None
+    prior: list[tuple[str, dict]] = []
+    if attached:
+        # Ассистента в этой записи уже включали: продолжаем его сводку и
+        # подсказки, догоняем только то, чего он не слышал.
+        from meet.assist.live_state import load_saved
+
+        saved = load_saved(out_dir)
+        if saved is not None and live.resume(saved):
+            print("сводка прошлого включения ассистента продолжена", flush=True)
+        heard = live_catchup.heard_until(transcript_path)
+        prior = _prior_entries(transcript_path)
     vault_path = Path(vault) if vault else None
     state = AssistState(
         bus=bus, live=live,
@@ -433,7 +541,13 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                         on_entry=bus.publish,
                         voice_matcher=None if no_voices else VoiceMatcher(),
                         text_fixes=live_asr.TextFixes.from_settings(hotwords, latin=True),
-                        log=lambda line: print(line, flush=True))
+                        log=lambda line: print(line, flush=True),
+                        tap_connect=(lambda: _attach_tap(tap_port, tap_token)) if attached else None,
+                        on_source_end=state.request_stop_threadsafe if attached else None)
+    if attached:
+        # Прогресс догонялки — в `state` панели (сигнал — общий сигнал изменений).
+        engine.on_catchup = bus.changed.notify
+        state.catchup = engine.catchup_progress
     state_file = out_dir / LIVE_STATE_JSON
 
     def _save_state() -> None:
@@ -479,12 +593,25 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     )
     if task:
         asyncio.run(state.set_task(task))
+    if prior:
+        for line, entry in prior:
+            bus.publish(line, entry)
+        state.digester.skip_existing()  # прошлая лента — контекст, не новые реплики
     started = False
+    plan = None
     try:
         # start() берёт общий lock записи («Запись уже идёт» — SystemExit);
-        # stop() в finally безопасен и после частичного старта.
+        # stop() в finally безопасен и после частичного старта. Подключённый
+        # к записи lock не берёт: запись ведёт резидент.
         engine.start()
         started = True
+        if attached:
+            plan = live_catchup.plan(engine.attach_positions, out_dir, heard=heard)
+            positions = list(engine.attach_positions.values())
+            live.heard_from(plan["from_t"] if plan["tracks"] else
+                            (heard if heard is not None else min(positions, default=None)))
+            if plan["tracks"]:
+                engine.start_catchup(plan["tracks"], plan)
         asyncio.run(_main(state, port, open_browser=open_browser,
                           endpoint_file=endpoint, folder=out_dir,
                           parent_pid=parent_pid,
@@ -496,8 +623,26 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         if close is not None:
             close()  # процесс диалога подсказок — не сирота, даже при сбое
         engine.stop()
+        if started and attached:
+            live.partial = _attached_partial(live, state, engine, plan)
         if started and not live.is_empty():
             _save_state()  # итог живого режима — черновик для задачи итогов
         if started:
             print(f"\nОстановлено: {out_dir}", flush=True)
             print(f'Точный транскрипт: meet transcribe "{out_dir}"', flush=True)
+
+
+def _attached_partial(live: LiveState, state: AssistState, engine, plan) -> bool:
+    """Сводка ассистента, включённого посреди записи, неполна: его выключили,
+    пока запись шла; начало встречи не догнано (не дождались или дальше
+    CAP_S); он слышит запись не с начала."""
+    from meet.assist.live_state import FROM_MIN_S
+
+    if state.detached:
+        return True
+    progress = engine.catchup_progress() if hasattr(engine, "catchup_progress") else None
+    if progress is not None and not progress.get("complete"):
+        return True
+    if plan is not None and plan.get("capped"):
+        return True
+    return (live.covered_from or 0.0) >= FROM_MIN_S

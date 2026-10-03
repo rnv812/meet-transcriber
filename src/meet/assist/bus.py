@@ -41,3 +41,19 @@ class TranscriptBus:
     def size(self) -> int:
         with self._lock:
             return len(self._lines)
+
+
+def chronological(lines: list[str], entries: list[dict]) -> tuple[list[str], list[dict]]:
+    """Реплики по времени (устойчиво): догнанное начало встречи приходит в
+    шину позже живых реплик. Реплика без времени идёт за предыдущей."""
+    if not any(e.get("catchup") for e in entries):
+        return lines, entries
+    keyed = []
+    last = 0.0
+    for i, (line, entry) in enumerate(zip(lines, entries)):
+        t = entry.get("t")
+        if isinstance(t, (int, float)) and not isinstance(t, bool):
+            last = float(t)
+        keyed.append((last, i, line, entry))
+    keyed.sort(key=lambda item: (item[0], item[1]))
+    return [k[2] for k in keyed], [k[3] for k in keyed]

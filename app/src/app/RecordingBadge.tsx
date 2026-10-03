@@ -2,7 +2,7 @@ import { ChevronDown, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { noProvider } from "../features/card/assistant";
-import { type Endpoint, getAssistant, liveStart, liveStop, recordingCommand } from "../lib/api";
+import { type Endpoint, getAssistant, liveAttach, liveDetach, liveStart, liveStop, recordingCommand } from "../lib/api";
 import { clock, errorText } from "../lib/format";
 import { openScreenRecordingSettings } from "../lib/shell";
 import type { AssistantInfo, LiveStatus, Snapshot } from "../lib/types";
@@ -15,6 +15,7 @@ const ERROR_MS = 6000;
 const TICK_MS = 1000;
 const NO_PROVIDER = "Подключите Claude Code или Codex в настройках";
 const START_FAILED = "Не удалось запустить ассистента";
+const ATTACH_FAILED = "Не удалось включить ассистента";
 
 /** Выбранное в настройках устройство не нашлось — с какого пишем вместо него. */
 export function fallbackText(f: { kind: "mic" | "output"; name: string }): string {
@@ -27,6 +28,7 @@ export function fallbackText(f: { kind: "mic" | "output"; name: string }): strin
 const liveOf = (r: LiveStatus): LiveStatus => ({
   active: r.active, starting: r.starting, stopping: r.stopping,
   folder: r.folder, error: r.error, started_at: r.started_at,
+  ...(r.attached === undefined ? {} : { attached: r.attached }),
 });
 
 /**
@@ -42,6 +44,11 @@ const liveOf = (r: LiveStatus): LiveStatus => ({
  * ассистент начал слушать; неизвестно — без часов). Ошибка живого режима
  * (`live.error`) видна несколько секунд с момента, как появилась в снимке;
  * любую ошибку можно скрыть «×».
+ *
+ * Во время обычной записи «▾» рядом со «Стоп» — «Включить ассистента»
+ * (запись не прерывается: ассистент догоняет уже записанное и слушает
+ * дальше) или, когда он включён (`live.attached`), «Выключить ассистента»
+ * (запись идёт дальше). Без подключённой модели пункт неактивен с подсказкой.
  */
 export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, onSnapshot }: {
   endpoint: Endpoint | null;
@@ -89,6 +96,9 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   }, [liveNotice]);
   const liveActive = !!live?.active;
   const idle = !recording && !liveActive && !live?.starting && !live?.stopping;
+  // Ассистент, включённый посреди этой записи (запускается, слушает, выключается).
+  const attached = recording && !!live?.attached && (liveActive || !!live?.starting || !!live?.stopping);
+  const mode = idle ? "idle" : recording ? "recording" : "live";
   const elapsedS = snapshot?.elapsed_s;
   useEffect(() => {
     const t = Date.now();
@@ -113,13 +123,13 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   const menuPos = useFloating(menu ? split : null, menuBox, { align: "end", gap: 4 });
   const hintId = useId();
   const blocked = noProvider(assistant);
-  // Ушли из простоя (запись, ассистент) — меню больше не к месту.
-  useEffect(() => { if (!idle) setMenu(false); }, [idle]);
+  // Сменился режим (простой ↔ запись ↔ запись с ассистентом) — меню больше не к месту.
+  useEffect(() => { setMenu(false); }, [mode]);
   // Открытое меню — фокус на пункт; неактивен (нет провайдера) — остаётся на «▾».
   useEffect(() => {
     if (!menu) return;
-    if (blocked) more.current?.focus();
-    else item.current?.focus();
+    if (item.current && !item.current.disabled) item.current.focus();
+    else more.current?.focus();
   }, [menu, blocked]);
   useEffect(() => {
     if (!menu || !endpoint) return;
@@ -156,13 +166,14 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
       .then((result) => onSnapshot?.(result))
       .catch((e) => setError(errorText(e)));
   };
-  const runLive = (call: typeof liveStart | typeof liveStop) => {
+  const runLive = (call: typeof liveStart | typeof liveStop | typeof liveAttach | typeof liveDetach) => {
     setMenu(false);
     setError(null);
     call(endpoint)
       .then((result) => {
         // Не запустился сразу (например, нет интерпретатора): ответ 200 с ok:false.
         if (call === liveStart && !result.ok) setError(result.error || START_FAILED);
+        if (call === liveAttach && !result.ok) setError(result.error || ATTACH_FAILED);
         onSnapshot?.({ ...snapshot, live: liveOf(result) });
       })
       .catch((e) => setError(errorText(e)));
@@ -174,7 +185,41 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   };
 
   let main;
-  if (live?.stopping) {
+  if (recording) {
+    const note = !attached ? null : live?.stopping ? "Ассистент выключается…"
+      : live?.starting ? "Ассистент запускается…" : null;
+    const listening = attached && liveActive && !live?.stopping;
+    main = (
+      <>
+        <span className="rec-badge__live num">● REC {clock(snapshot.elapsed_s + since)}{listening ? " · ассистент" : ""}</span>
+        {snapshot.source === "auto" && <span className="badge">авто</span>}
+        {note && <span className="muted">{note}</span>}
+        <span className="split split--plain" ref={split}>
+          <Button variant="danger" className="split__main" onClick={() => run("stop")}>Стоп</Button>
+          <Button ref={more} variant="danger" className="split__more" aria-label="Ассистент в этой записи"
+            aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><Icon as={ChevronDown} size="sm" /></Button>
+          {menu && (
+            <div ref={menuBox} className="rec-menu" role="menu" aria-label="Ассистент в этой записи" style={floatingStyle(menuPos)}>
+              {attached ? (
+                <button ref={item} type="button" role="menuitem" className="rec-menu__item"
+                  disabled={!liveActive || !!live?.stopping} onClick={() => runLive(liveDetach)}>
+                  Выключить ассистента
+                  <span className="rec-menu__note">запись продолжится, сводка останется в карточке</span>
+                </button>
+              ) : (
+                <button ref={item} type="button" role="menuitem" className="rec-menu__item" disabled={blocked}
+                  aria-describedby={blocked ? hintId : undefined} onClick={() => runLive(liveAttach)}>
+                  Включить ассистента
+                  <span className="rec-menu__note">догонит начало встречи и будет подсказывать дальше</span>
+                </button>
+              )}
+              {blocked && !attached && <div id={hintId} className="rec-menu__hint">{NO_PROVIDER}</div>}
+            </div>
+          )}
+        </span>
+      </>
+    );
+  } else if (live?.stopping) {
     main = (
       <>
         <span className="rec-badge__live">Останавливаю…</span>
@@ -194,14 +239,6 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
       <>
         <span className="rec-badge__live num">● REC {liveS === null ? "" : `${clock(liveS)} `}· ассистент</span>
         <Button variant="danger" onClick={() => runLive(liveStop)}>Стоп</Button>
-      </>
-    );
-  } else if (recording) {
-    main = (
-      <>
-        <span className="rec-badge__live num">● REC {clock(snapshot.elapsed_s + since)}</span>
-        {snapshot.source === "auto" && <span className="badge">авто</span>}
-        <Button variant="danger" onClick={() => run("stop")}>Стоп</Button>
       </>
     );
   } else {

@@ -23,7 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { type Endpoint, liveAsk, liveHint, liveTask, openLiveEvents } from "../lib/api";
 import { errorText } from "../lib/format";
-import type { LiveHint, LiveLine, LiveQa, LiveQuick, LiveSummary } from "../lib/types";
+import type { LiveCatchup, LiveHint, LiveLine, LiveQa, LiveQuick, LiveSummary } from "../lib/types";
 import { EMPTY_SUMMARY } from "./liveModel";
 
 export const MAX_LINES = 300;
@@ -35,6 +35,23 @@ export const PARTIAL_MS = 100;
 
 /** Строка ленты с её номером в потоке (`id:` события; null — без номера). */
 export type FeedLine = LiveLine & { id: number | null };
+
+/**
+ * Новая строка в ленту. Строка догнанного начала встречи (`catchup`)
+ * приходит позже живых, а стоит раньше: она встаёт перед первой живой
+ * строкой (догонялка идёт по времени — порядок внутри сохраняется).
+ * Переполнение срезает самые старые.
+ */
+export function addLine(cur: FeedLine[], line: FeedLine, max = MAX_LINES): FeedLine[] {
+  let next: FeedLine[];
+  if (line.catchup) {
+    const at = cur.findIndex((l) => !l.catchup);
+    next = at < 0 ? [...cur, line] : [...cur.slice(0, at), line, ...cur.slice(at)];
+  } else {
+    next = [...cur, line];
+  }
+  return next.length > max ? next.slice(next.length - max) : next;
+}
 
 export type AskOptions = { quick?: LiveQuick; since_t?: number };
 /** `restore` — «Вернуть» сразу после «Скрыть» (ассистент помнит скрытую несколько секунд). */
@@ -53,6 +70,8 @@ export type Live = {
   hintsEnabled: boolean;
   /** «Не отвлекать по умолчанию» из настроек; null — состояние ещё не пришло. */
   quietDefault: boolean | null;
+  /** Ассистент включён посреди записи: ход догонялки начала встречи; null — её нет. */
+  catchup: LiveCatchup | null;
   /** История вопросов (у ассистента); у ответа, который пишется, — `partial`. */
   qa: LiveQa[];
   /** Хоть одно `state` пришло: дальше новое — действительно новое. */
@@ -94,6 +113,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
   const [hints, setHints] = useState<LiveHint[]>([]);
   const [hintsEnabled, setHintsEnabled] = useState(true);
   const [quietDefault, setQuietDefault] = useState<boolean | null>(null);
+  const [catchup, setCatchup] = useState<LiveCatchup | null>(null);
   const [pending, setPending] = useState<Pending>({});
   const [qa, setQa] = useState<LiveQa[]>([]);
   const [partials, setPartials] = useState<Record<number, string>>({});
@@ -133,6 +153,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
           setDigest(s.digest ?? "");
           setSummary(s.summary ?? EMPTY_SUMMARY);
           setHints(Array.isArray(s.hints) ? s.hints : []);
+          setCatchup(s.catchup ?? null);
           setHintsEnabled(s.hints_enabled !== false);
           setQuietDefault(s.prefs?.quiet_default === true);
           setPending(unconfirmed); // принятые ассистентом действия уже в его состоянии
@@ -162,10 +183,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
             if (id <= lastId.current) return;
             lastId.current = id;
           }
-          setLines((cur) => {
-            const next = [...cur, { ...line, id }];
-            return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
-          });
+          setLines((cur) => addLine(cur, { ...line, id }));
         },
         onError: (gaveUp) => {
           if (!gaveUp || closed) return; // браузер переподключится сам
@@ -231,7 +249,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
   );
 
   return {
-    status, lines, digest, summary, hints: withPending(hints, pending), hintsEnabled, quietDefault, qa: qaView, loaded, error,
+    status, lines, digest, summary, hints: withPending(hints, pending), hintsEnabled, quietDefault, catchup, qa: qaView, loaded, error,
     asking, askError, hintError, ask, hint, setTask,
   };
 }

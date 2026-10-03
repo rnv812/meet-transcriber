@@ -3,7 +3,8 @@
 Отдаёт одну HTML-страницу, поток состояния через SSE (`GET /events`),
 приём вопросов (`POST /ask`: вопрос или быстрое действие `quick`), действия с подсказками (`POST /hint`:
 закрепить, открепить, скрыть), смену задачи-контекста (`POST /task`) и
-штатную остановку (`POST /stop` — так резидент гасит дочерний `meet assist`).
+штатную остановку (`POST /stop` — так резидент гасит дочерний `meet assist`;
+`{"detach": true}` — выключить ассистента, подключённого к идущей записи).
 
 SSE шлёт `event: state` (`state.view()`: сводка, подсказки, статус) при
 каждом их изменении, `event: qa` (`{"qa": [...]}` — история вопросов) — только
@@ -252,7 +253,16 @@ def build_app(state) -> web.Application:
 
     async def stop(request):
         # Только просим остановиться: дорожки дописывает run_assist уже после
-        # ответа, иначе клиент ждал бы финальную расшифровку.
+        # ответа, иначе клиент ждал бы финальную расшифровку. `{"detach":
+        # true}` — ассистента, подключённого к записи, выключают, а запись
+        # идёт дальше: сводка помечается неполной.
+        try:
+            body = await request.json() if request.can_read_body else {}
+        except Exception:
+            body = {}
+        detach = isinstance(body, dict) and body.get("detach") is True
+        if detach and hasattr(state, "mark_detached"):
+            state.mark_detached()
         state.request_stop()
         return _json_response({"ok": True})
 

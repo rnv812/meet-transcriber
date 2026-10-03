@@ -19,6 +19,13 @@ TAIL_MIN_S = 0.3
 # Распознавание безнадёжно отстало (больше этого в очереди) — старый звук
 # живой режим пропускает: лента важнее сейчас, полный текст даст офлайн-проход.
 BACKLOG_MAX_S = 90.0
+# Догонялка (ассистент включён посреди записи): за такт рабочего потока —
+# окна уже записанного не дольше этого, потом снова живой звук. Живая лента
+# отстаёт от речи не больше чем на это время плюс одно окно.
+CATCHUP_SLICE_S = 1.0
+# Дорожки записи резидента (отвод `meet.pcm_tap`) → ключ дорожки движка,
+# нормализовать ли, опознавать ли голос (как у собственного захвата).
+TAP_TRACKS = {"sys.opus": ("sys.wav", True, True), "mic.opus": ("mic.wav", False, False)}
 
 
 def fmt_hms(seconds: float) -> str:
@@ -186,7 +193,14 @@ class LiveEngine:
     Живой режим — тоже запись: start() берёт общий `.recording.lock` в папке
     записей (`out_root`, по умолчанию — родитель `out_dir`), поэтому
     резидентная запись и второй живой режим получают «Запись уже идёт».
-    stop() снимает lock в finally."""
+    stop() снимает lock в finally.
+
+    `tap_connect` — ассистент включён посреди обычной записи: `() ->
+    TapClient` (`meet.pcm_tap`). Тогда движок устройств не открывает, lock не
+    берёт и дорожек не пишет — звук идёт из отвода записи резидента, с той же
+    позиции дорожки (таймкоды ленты — время записи). Конец записи — конец
+    отвода: `on_source_end()`. Уже записанное до подключения догоняет
+    `start_catchup()` (`meet.live_catchup`)."""
 
     SPEAKERS = {"sys.wav": "Собеседник", "mic.wav": "Вы"}
 
@@ -194,7 +208,8 @@ class LiveEngine:
                  hotwords: str | None = None, clock=None,
                  on_line=None, voice_matcher=None, speaker_name=None,
                  on_entry=None, out_root=None, mic_device=_FROM_SETTINGS,
-                 output_device=_FROM_SETTINGS, text_fixes=None, log=print) -> None:
+                 output_device=_FROM_SETTINGS, text_fixes=None, log=print,
+                 tap_connect=None, on_source_end=None) -> None:
         # Имя владельца микрофона — из настроек, как и в офлайн-проходе, чтобы
         # живая лента и точный транскрипт называли человека одинаково. Оттуда
         # же — выбранные микрофон и устройство вывода (None — системные).
@@ -243,6 +258,22 @@ class LiveEngine:
         # Выбранное устройство не нашлось — пишем с системного (для резидента:
         # уходит в файл эндпоинта): [{"kind", "name", "device"}].
         self.devices_fallback: list[dict] = []
+        # Подключение к идущей записи (см. докстринг класса).
+        self._tap_connect = tap_connect
+        self._on_source_end = on_source_end
+        self._tap = None
+        self._tap_reader: "threading.Thread | None" = None
+        self._tap_tracks: dict[int, dict] = {}
+        self.source_ended = threading.Event()
+        # С какой секунды дорожки (ключ — sys.wav/mic.wav) пошёл живой звук.
+        self.attach_positions: dict[str, float] = {}
+        # Догонялка: дорожки уже записанного, строки ленты до слияния с файлом
+        # и итог для панели.
+        self._catch: dict[str, dict] = {}
+        self._catch_lines: list[str] = []
+        self._catch_info: dict | None = None
+        self._catch_error: str | None = None
+        self.on_catchup = None  # () -> None после каждого догнанного окна
 
     def register_track(self, fname: str, rate: int, channels: int,
                        normalize: bool = False, identify: bool = False) -> None:
@@ -354,7 +385,8 @@ class LiveEngine:
         cut = quiet_cut(self._audio(tr)[: int(hi * rate) + 1], rate, lo, hi)
         return self._take(tr, cut)
 
-    def _recognize(self, fname: str, tr: dict, mono, start_s: float, pad_only: bool) -> None:
+    def _recognize(self, fname: str, tr: dict, mono, start_s: float, pad_only: bool,
+                   catchup: bool = False) -> None:
         import numpy as np
 
         from meet.asr import drop_hallucinations
@@ -398,9 +430,17 @@ class LiveEngine:
                 if name:
                     speaker = name
             line = format_live_line(s.start, speaker, s.text)
-            self._write_line(line)
-            self._notify(line, {"t": round(s.start, 2), "end": round(s.end, 2),
-                                "speaker": speaker, "text": s.text})
+            entry = {"t": round(s.start, 2), "end": round(s.end, 2),
+                     "speaker": speaker, "text": s.text}
+            if catchup:
+                # Начало встречи: в файл ленты — по времени, слиянием в конце
+                # догонялки; потребителям — с пометкой (подсказки по нему не
+                # тикают, лента ставит его выше живых строк).
+                self._catch_lines.append(line)
+                entry["catchup"] = True
+            else:
+                self._write_line(line)
+            self._notify(line, entry)
 
     def _windows(self, final: bool) -> int:
         """Распознать созревшие окна дорожек по очереди (по окну за круг —
@@ -471,6 +511,18 @@ class LiveEngine:
         self._out.flush()
 
     def start(self) -> None:
+        if self._tap_connect is not None:
+            try:
+                self._start_from_tap()
+            except BaseException:
+                self._close_tap()
+                if self._transcriber is not None:
+                    try:
+                        self._transcriber.unload()
+                    except Exception:
+                        pass
+                raise
+            return
         from meet.recorder import _acquire_lock
 
         # Lock — первым делом: при идущей записи отказ мгновенный, без
@@ -572,6 +624,236 @@ class LiveEngine:
                 if text != self._last_error:  # один и тот же сбой — один раз
                     self._last_error = text
                     self._write_line(f"<!-- ошибка окна: {e} -->")
+            if self._catch:
+                try:
+                    self.catchup_step()
+                except Exception as e:  # догонялка — не повод ронять живой режим
+                    self._abort_catchup(f"{type(e).__name__}: {e}")
+
+    # --- подключение к идущей записи ------------------------------------
+
+    def _start_from_tap(self) -> None:
+        """Звук — из отвода записи резидента: модели, затем подключение (с
+        этого места пойдёт живой звук; всё раньше — догонялке)."""
+        self._transcriber.load()
+        if self._matcher is not None:
+            self._matcher.load()
+        client = self._tap_connect()
+        self._tap = client
+        for info in client.tracks:
+            known = TAP_TRACKS.get(str(info.get("name")))
+            if known is None:
+                continue
+            key, normalize, identify = known
+            rate, channels = int(info["rate"]), max(1, int(info["channels"]))
+            frame = 2 * channels
+            self.register_track(key, rate, channels, normalize=normalize, identify=identify)
+            pos = int(info.get("pos") or 0)
+            # Таймкоды ленты — время записи: очередь дорожки начинается там же,
+            # где первый кадр отвода.
+            self._tracks[key]["pos"] = pos / (frame * rate)
+            self.attach_positions[key] = pos / (frame * rate)
+            self._tap_tracks[int(info["index"])] = {"key": key, "next": pos,
+                                                    "frame": frame, "rate": rate}
+        if not self._tracks:
+            raise RuntimeError("Отвод записи без знакомых дорожек")
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        self._t0 = self._clock()
+        self._tap_reader = threading.Thread(target=self._read_tap, name="meet-live-tap",
+                                            daemon=True)
+        self._tap_reader.start()
+        self._worker = threading.Thread(target=self._run, daemon=True)
+        self._worker.start()
+        print(f"Ассистент подключён к записи: {self.out_dir}")
+
+    def _read_tap(self) -> None:
+        """Кадры отвода → буферы дорожек. Дыру (резидент выбросил кадры, пока
+        мы не успевали читать) заполняем тишиной: таймкоды не уезжают."""
+        try:
+            for index, pad, pos, data in self._tap.frames():
+                track = self._tap_tracks.get(index)
+                if track is None:
+                    continue
+                buffer = self._tracks[track["key"]]["buffer"]
+                end = pos + len(data)
+                if pos > track["next"]:
+                    gap = pos - track["next"]
+                    gap -= gap % track["frame"]
+                    step = track["rate"] * track["frame"]
+                    while gap > 0:
+                        n = min(gap, step)
+                        buffer.push_silence(b"\x00" * n)
+                        gap -= n
+                elif pos < track["next"]:
+                    data = data[track["next"] - pos:]
+                if data:
+                    (buffer.push_silence if pad else buffer.push)(data)
+                track["next"] = max(track["next"], end)
+        except Exception as e:
+            self._log(f"отвод записи: {type(e).__name__}: {e}")
+        finally:
+            self.source_ended.set()
+            if not self._stop.is_set() and self._on_source_end is not None:
+                try:
+                    self._on_source_end()  # запись кончилась — ассистенту пора стоп
+                except Exception:
+                    pass
+
+    def _close_tap(self) -> None:
+        tap, self._tap = self._tap, None
+        if tap is not None:
+            try:
+                tap.close()
+            except Exception:
+                pass
+        if self._tap_reader is not None and self._tap_reader is not threading.current_thread():
+            self._tap_reader.join(timeout=5)
+
+    # --- догонялка ------------------------------------------------------
+
+    def start_catchup(self, tracks: dict, info: dict | None = None, reader=None) -> bool:
+        """Догнать уже записанное: `tracks` — {ключ: (путь, начало, конец)} из
+        `live_catchup.plan`, `info` — сам план (для панели). Окна режутся и
+        распознаются тем же движком в рабочем потоке, между живыми окнами.
+        `reader(path, start, end)` — подмена `PcmReader` в тестах. → False —
+        догонять нечего."""
+        from meet.live_catchup import PcmReader
+
+        make = reader or PcmReader
+        catch: dict[str, dict] = {}
+        for key, (path, start, end) in tracks.items():
+            base = self._tracks.get(key) or {}
+            catch[key] = {
+                "rate": 16000, "channels": 1,
+                "normalize": base.get("normalize", key == "sys.wav"),
+                "identify": base.get("identify", key == "sys.wav"),
+                "gain": None, "last_text": None,
+                "pending": [], "pending_n": 0, "pos": float(start),
+                "start": float(start), "end": float(end),
+                "reader": make(path, start, end), "done": False,
+            }
+        if not catch:
+            return False
+        with self._window_lock:
+            self._catch = catch
+            self._catch_error = None
+            self._catch_info = {**(info or {}), "from_t": min(c["start"] for c in catch.values()),
+                                "to_t": max(c["end"] for c in catch.values()),
+                                "total_s": sum(c["end"] - c["start"] for c in catch.values())}
+        self._log(f"догоняю начало встречи: {self._catch_info['total_s']:.0f} с звука дорожек")
+        return True
+
+    def _fill(self, tr: dict) -> None:
+        """Очередь догоняемой дорожки — до окна «отстали» (длинные окна:
+        быстрее на секунду звука), из ffmpeg."""
+        policy = self.policy
+        target = max(policy.max_s, policy.merge_s) + policy.min_s
+        need = target - tr["pending_n"] / tr["rate"]
+        reader = tr["reader"]
+        if need > 0 and not reader.eof:
+            audio = reader.read(need)
+            if len(audio):
+                tr["pending"].append((audio, False))
+                tr["pending_n"] += len(audio)
+
+    def catchup_step(self, budget_s: float = CATCHUP_SLICE_S) -> bool:
+        """Окна догонялки, пока не вышло `budget_s` секунд. → True — ещё есть
+        что догонять."""
+        deadline = time.perf_counter() + budget_s
+        while not self._stop.is_set():
+            with self._window_lock:
+                left = [k for k, tr in self._catch.items() if not tr["done"]]
+                if not left:
+                    self._finish_catchup()
+                    return False
+                # Дорожки — вровень по времени: лента начала встречи идёт по порядку.
+                key = min(left, key=lambda k: self._catch[k]["pos"])
+                tr = self._catch[key]
+                self._fill(tr)
+                window = self._next_window(tr, final=tr["reader"].eof)
+                if window is None:
+                    if tr["reader"].eof:
+                        tr["done"] = True
+                        tr["reader"].close()
+                else:
+                    self._recognize(key, tr, *window, catchup=True)
+            self._catchup_changed()
+            if time.perf_counter() >= deadline:
+                return True
+        return bool(self._catch)
+
+    def _catchup_changed(self) -> None:
+        if self.on_catchup is not None:
+            try:
+                self.on_catchup()
+            except Exception:
+                pass
+
+    def _abort_catchup(self, error: str) -> None:
+        with self._window_lock:
+            for tr in self._catch.values():
+                tr["reader"].close()
+            if self._catch:
+                self._log(f"догонялка остановлена: {error}")
+            self._catch_error = error
+            self._finish_catchup(complete=False)
+        self._catchup_changed()
+
+    def _finish_catchup(self, complete: bool = True) -> None:
+        """Под `_window_lock`: строки начала встречи — в файл ленты по времени."""
+        if self._catch_info is not None and not self._catch_info.get("finished"):
+            done = self._catch_done_s()
+            self._catch_info = {**self._catch_info, "finished": True, "done_s": done,
+                                "complete": complete and not self._catch_error}
+            if complete:
+                self._log("начало встречи догнано")
+        for tr in self._catch.values():
+            if not tr["done"]:
+                tr["reader"].close()
+                tr["done"] = True
+        self._catch = {}
+        self._merge_catchup_lines()
+
+    def _catch_done_s(self) -> float:
+        done = 0.0
+        for tr in self._catch.values():
+            done += tr["end"] - tr["start"] if tr["done"] else \
+                max(0.0, min(tr["pos"], tr["end"]) - tr["start"])
+        return done
+
+    def _merge_catchup_lines(self) -> None:
+        from meet.live_catchup import chronological
+
+        lines, self._catch_lines = self._catch_lines, []
+        if not lines:
+            return
+        if self._out is not None:
+            self._out.close()
+            self._out = None
+        try:
+            existing = self._transcript.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            existing = []
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        tmp = self._transcript.with_name(self._transcript.name + ".tmp")
+        tmp.write_text("\n".join(chronological(existing + lines)) + "\n", encoding="utf-8")
+        import os
+
+        os.replace(tmp, self._transcript)
+
+    def catchup_progress(self) -> dict | None:
+        """Для панели: {"active", "done_s", "total_s", "from_t", "to_t",
+        "capped", "complete"}; догонялки не было — None."""
+        info = self._catch_info
+        if info is None:
+            return None
+        if info.get("finished"):
+            return {"active": False, "done_s": info.get("done_s", info["total_s"]),
+                    "total_s": info["total_s"], "from_t": info["from_t"], "to_t": info["to_t"],
+                    "capped": bool(info.get("capped")), "complete": bool(info.get("complete"))}
+        return {"active": True, "done_s": round(self._catch_done_s(), 1),
+                "total_s": info["total_s"], "from_t": info["from_t"], "to_t": info["to_t"],
+                "capped": bool(info.get("capped")), "complete": False}
 
     def stats_line(self) -> str:
         """Итог распознавания живого режима для журнала (без текста)."""
@@ -631,10 +913,19 @@ class LiveEngine:
                 self._worker.join(timeout=self.window_seconds + 30)
             if self._pad_thread is not None:
                 self._pad_thread.join(timeout=10)
+            # Подключённый к записи: отвод больше не читаем (что пришло — в буферах).
+            self._close_tap()
             try:
                 self.process_window()  # финальный слив остатка буфера
             except Exception:
                 pass
+            if self._catch:
+                # Остановили, не догнав начало: что успели — в ленту, сводка —
+                # с пометкой о неполноте (её ставит ассистент).
+                self._abort_catchup("ассистент остановлен раньше")
+            elif self._catch_lines:
+                with self._window_lock:
+                    self._merge_catchup_lines()
             if self.stats["windows"]:
                 self._log(self.stats_line())
             close_error = self._close_capture()

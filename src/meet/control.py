@@ -94,6 +94,8 @@ IMPORTANT: токен принимается и в query-параметре `?to
     check_provider(body) -> dict          проверить провайдера коротким вызовом
     live_start() -> dict                  живой режим (409 без провайдера, 400 при записи)
     live_stop() -> dict                   остановить живой режим (ответ сразу)
+    live_attach() / live_detach() -> dict включить ассистента посреди обычной
+                                          записи / выключить его, запись идёт
     live_ask(body) / live_task(body)      прокси к /ask и /task ассистента
     live_hint(body) -> dict               закрепить, открепить, скрыть, вернуть подсказку
     live_events(last_event_id) -> stream  поток ассистента: get(timeout), close()
@@ -823,6 +825,8 @@ _ROUTES = {
     ),
     ("POST", "/live/start"): lambda h, p: _server_of(h).state.live_start(),
     ("POST", "/live/stop"): lambda h, p: _server_of(h).state.live_stop(),
+    ("POST", "/live/attach"): lambda h, p: _server_of(h).state.live_attach(),
+    ("POST", "/live/detach"): lambda h, p: _server_of(h).state.live_detach(),
     ("POST", "/live/ask"): lambda h, p: _server_of(h).state.live_ask(h._body()),
     ("POST", "/live/task"): lambda h, p: _server_of(h).state.live_task(h._body()),
     ("POST", "/live/hint"): lambda h, p: _server_of(h).state.live_hint(h._body()),

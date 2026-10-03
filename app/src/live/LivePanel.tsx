@@ -13,6 +13,10 @@
  * Исключение — «Вам вопрос»: он встаёт в строку свёрнутой панели и в
  * «Не отвлекать» (без анимации) — ответа ждут сейчас.
  *
+ * Ассистент, включённый посреди обычной записи (`status.attached`): вместо
+ * «Стоп» — «Выключить ассистента», запись при этом идёт дальше; пока он
+ * догоняет начало встречи, в шапке — «Догоняю N %».
+ *
  * Размер и место помнит оболочка (`useLiveWindow`). Фокус панель не берёт:
  * окно создаётся без фокуса, и ни один элемент не фокусируется сам —
  * клавиатура остаётся у звонка, пока человек не щёлкнет в панель.
@@ -20,11 +24,11 @@
 
 import { type MouseEvent, useEffect, useRef, useState } from "react";
 
-import { type Endpoint, NoResidentError, liveStop, resolveEndpoint } from "../lib/api";
+import { type Endpoint, NoResidentError, liveDetach, liveStop, resolveEndpoint } from "../lib/api";
 import { clock, errorText } from "../lib/format";
 import { inTauri, invoke } from "../lib/shell";
 import type { LiveHint } from "../lib/types";
-import { Bell, BellOff, ChevronDown, ChevronUp, Maximize2, Minimize2, Pin, Square } from "lucide-react";
+import { Bell, BellOff, ChevronDown, ChevronUp, Maximize2, Minimize2, Pin, PowerOff, Square } from "lucide-react";
 import { IconButton } from "../ui/IconButton";
 import { Truncate } from "../ui/Truncate";
 import { LiveWorkspace, useLiveView } from "./LiveWorkspace";
@@ -139,10 +143,11 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [view.maximized, setMaximized]);
 
+  const attached = !!status?.attached;
   const stop = () => {
     setStopRequested(true);
     setStopError(null);
-    liveStop(endpoint).catch((e) => {
+    (attached ? liveDetach : liveStop)(endpoint).catch((e) => {
       setStopRequested(false);
       setStopError(errorText(e));
     });
@@ -154,7 +159,9 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   };
 
   // Коротко: шапка узкой панели (от 300 px) вмещает таймер, состояние и пять кнопок.
-  const state = stopping ? "Останавливаю…" : "Слушает";
+  const catchup = live.catchup?.active ? live.catchup : null;
+  const state = stopping ? (attached ? "Выключаю…" : "Останавливаю…")
+    : catchup ? `Догоняю ${catchup.percent} %` : "Слушает";
   const sizeLabel = view.maximized ? "Обычный размер" : "На весь экран";
   const last = live.lines.at(-1);
   const newHints = quiet ? 0 : ws.unseen.hints;
@@ -206,8 +213,13 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
             tooltip={`${sizeLabel} (двойной щелчок по шапке)`} onClick={() => setMaximized(!view.maximized)} />
           <IconButton icon={open ? ChevronUp : ChevronDown} label={open ? "Свернуть" : "Развернуть"}
             aria-expanded={open} onClick={() => setExpanded(!open)} />
-          <IconButton icon={Square} label="Стоп" variant="danger" className="live-head__stop"
-            tooltip="Остановить и сохранить запись" onClick={stop} disabled={stopping} />
+          {attached ? (
+            <IconButton icon={PowerOff} label="Выключить ассистента" variant="danger" className="live-head__stop"
+              tooltip="Выключить ассистента — запись продолжится" onClick={stop} disabled={stopping} />
+          ) : (
+            <IconButton icon={Square} label="Стоп" variant="danger" className="live-head__stop"
+              tooltip="Остановить и сохранить запись" onClick={stop} disabled={stopping} />
+          )}
         </span>
       </header>
       {open ? (
