@@ -36,18 +36,34 @@
 .progressbar--sm .progressbar__track { height: 4px; border-radius: 2px; }
 /* Ширину ведёт rAF; короткий переход сглаживает кадры без rAF (фоновая вкладка). */
 .progressbar__fill {
-  height: 100%; border-radius: inherit; background: var(--accent);
+  position: relative; height: 100%; overflow: hidden; border-radius: inherit; background: var(--accent);
   transition: width 200ms linear;
 }
-.progressbar__track--indeterminate::after, .progressbar__track--working::after {
-  content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 35%; border-radius: inherit;
+/*
+ * «Работа идёт» у известной шкалы: блик бежит только по закрашенной части —
+ * он внутри заливки (`overflow: hidden`), и его ширина и путь — доли ширины
+ * заливки, а не дорожки. Пустая часть дорожки остаётся пустой.
+ */
+.progressbar__track--working .progressbar__fill::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%;
   background: linear-gradient(90deg, transparent, var(--accent-hi), transparent);
-  animation: progressbar-shimmer 1.4s ease-in-out infinite;
+  animation: progressbar-shimmer 1.6s ease-in-out infinite;
 }
-@keyframes progressbar-shimmer { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+/*
+ * Шкала неизвестна: заливки нет, по дорожке идёт приглушённая полупрозрачная
+ * полоса — видно, что это не доля, а «выполняется».
+ */
+.progressbar__track--indeterminate::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 30%; border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--accent-hi), transparent);
+  opacity: 0.45;
+  animation: progressbar-shimmer 2s ease-in-out infinite;
+}
+@keyframes progressbar-shimmer { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
 @media (prefers-reduced-motion: reduce) {
   .progressbar__fill { transition: none; }
-  .progressbar__track--indeterminate::after, .progressbar__track--working::after { animation-duration: 4s; }
+  .progressbar__track--working .progressbar__fill::after { display: none; }
+  .progressbar__track--indeterminate::after { animation-duration: 4s; }
 }
 
 /* --- Загрузка, заготовки, строки состояния ------------------------------ */

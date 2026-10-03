@@ -155,3 +155,29 @@ test("detail as a function shows the same percent as the bar", () => {
   expect(screen.getByText("42 %")).toBeInTheDocument();
   expect(document.querySelector<HTMLElement>(".progressbar__fill")!.style.width).toBe("42%");
 });
+
+test("a known bar's shimmer lives inside the fill, never over the empty track", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const css = readFileSync(join(process.cwd(), "src", "ui", "primitives.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  // Селекторы правил — текст между скобками перед «{» (и внутри @media тоже).
+  const has = (selector: string) => [...css.matchAll(/([^{}]+)\{/g)]
+    .some((m) => (m[1] ?? "").split(",").some((part) => part.trim() === selector));
+  // Блик «работа идёт» — псевдоэлемент заливки, а заливка его обрезает.
+  expect(has(".progressbar__track--working .progressbar__fill::after")).toBe(true);
+  expect(has(".progressbar__track--working::after")).toBe(false);
+  const fill = /\.progressbar__fill \{([^}]*)\}/.exec(css)?.[1] ?? "";
+  expect(fill).toMatch(/overflow: hidden/);
+  expect(fill).toMatch(/position: relative/);
+  // «Меньше движения»: блика на заливке нет.
+  const reduced = /prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? "";
+  expect(reduced).toMatch(/\.progressbar__track--working \.progressbar__fill::after \{ display: none; \}/);
+  // Неизвестная шкала — своя, приглушённая полоса по дорожке (заливки нет).
+  const unknown = /\.progressbar__track--indeterminate::after \{([^}]*)\}/.exec(css)?.[1] ?? "";
+  expect(unknown).toMatch(/opacity: 0\.\d+/);
+
+  render(<ProgressBar value={0.38} working label="Этап 3 из 7 · Выравнивание" />);
+  const track = screen.getByRole("progressbar");
+  expect(track).toHaveClass("progressbar__track--working");
+  expect(track.querySelector(".progressbar__fill")).not.toBeNull();
+});
