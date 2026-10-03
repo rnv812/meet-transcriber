@@ -12,6 +12,7 @@ import type { AgentData, AgentExit } from "../../lib/shell";
 import type { AssistantInfo } from "../../lib/types";
 
 const h = vi.hoisted(() => {
+  const PROMPT = "❯ ";
   class FakeTerminal {
     static all: FakeTerminal[] = [];
     cols = 80;
@@ -26,6 +27,7 @@ const h = vi.hoisted(() => {
     modes = { bracketedPasteMode: true };
     onDataCb: ((d: string) => void) | null = null;
     onResizeCb: ((s: { cols: number; rows: number }) => void) | null = null;
+    onTitleCb: ((t: string) => void) | null = null;
     keys: ((e: KeyboardEvent) => boolean) | null = null;
     constructor(public options: unknown) { FakeTerminal.all.push(this); }
     loadAddon() {}
@@ -33,6 +35,9 @@ const h = vi.hoisted(() => {
     attachCustomKeyEventHandler(fn: (e: KeyboardEvent) => boolean) { this.keys = fn; }
     onData(cb: (d: string) => void) { this.onDataCb = cb; return { dispose() {} }; }
     onResize(cb: (s: { cols: number; rows: number }) => void) { this.onResizeCb = cb; return { dispose() {} }; }
+    onTitleChange(cb: (t: string) => void) { this.onTitleCb = cb; return { dispose() {} }; }
+    /** Агент (или псевдоконсоль) поставил заголовок окна. */
+    title(text: string) { this.onTitleCb?.(text); }
     write(data: string) { this.written.push(data); }
     reset() { this.written = []; this.resets++; }
     focus() { this.focused++; }
@@ -44,15 +49,21 @@ const h = vi.hoisted(() => {
     /** Как будто подгонка под окно поменяла размер. */
     resize(cols: number, rows: number) { this.cols = cols; this.rows = rows; this.onResizeCb?.({ cols, rows }); }
     get text() { return this.written.join(""); }
-    /** Что видно внизу экрана (последняя строка) — для распознавания диалога первого запуска. */
-    screen = "";
+    /**
+     * Последняя строка экрана; по умолчанию — поле ввода Claude Code («❯» и
+     * неразрывный пробел): агент показал, куда вставлять.
+     */
+    screen = PROMPT;
+    /** Остальные строки экрана сверху (диалог агента рисует вверху). */
+    lines: string[] = [];
     get buffer() {
-      const screen = () => this.screen;
       const last = this.rows - 1;
-      return { active: { viewportY: 0, getLine: (i: number) => ({ translateToString: () => (i === last ? screen() : "") }) } };
+      const line = (i: number) => (i === last ? this.screen : this.lines[i] ?? "");
+      return { active: { viewportY: 0, baseY: 0, getLine: (i: number) => ({ translateToString: () => line(i) }) } };
     }
   }
   return {
+    PROMPT,
     FakeTerminal,
     listeners: { data: [] as Array<(d: AgentData) => void>, exit: [] as Array<(e: AgentExit) => void> },
     shell: {
@@ -407,6 +418,85 @@ test("холодный запуск: вывод не затих — ждём; з
   expect(term().pasted).toEqual([LINE]);
 });
 
+test("холодный запуск: режим вставки включён и вывод затих, но поля ввода ещё нет — ждём, не теряем ссылку", async () => {
+  // Claude Code включает режим вставки сразу и молчит до секунды, пока готовит
+  // сеанс (fixtures/claude-trusted.json): прежнее правило вставляло в эту паузу.
+  fakeTime();
+  const { started } = await coldStart();
+  term().screen = "";
+  await started();
+  await output("\x1b[?2004h\x1b[?25l");
+  await skip(QUIET_MS * 3);
+  expect(term().pasted).toEqual([]);
+  expect(strip()).toHaveTextContent("Ссылка будет вставлена в поле ввода, когда агент будет готов.");
+  // Поле ввода появилось, экран затих — вставка, один раз.
+  term().screen = h.PROMPT;
+  await output("\x1b[?1049h❯\u00a0");
+  await skip(QUIET_MS / 2);
+  expect(term().pasted).toEqual([]);
+  await skip(QUIET_MS);
+  expect(term().pasted).toEqual([LINE]);
+  await skip(PASTE_WAIT_MS);
+  expect(term().pasted).toEqual([LINE]);
+});
+
+test("диалог «доверять ли папке» вверху высокого экрана — не вставляем, хотя внизу пусто", async () => {
+  fakeTime();
+  const { started } = await coldStart();
+  term().rows = 40;
+  term().lines = ["", "", "", "", " Accessing workspace:", "", " C:\\meet\\recordings\\2026-01-01_10-00", "",
+    " Quick safety check: Is this a project you created or one you trust?", "", "", "", "", "", "",
+    " ❯ No, exit", "   Yes, I trust this folder", "", " Enter to confirm · Esc to cancel"];
+  term().screen = "";
+  await started();
+  await skip(QUIET_MS * 3);
+  expect(term().pasted).toEqual([]);
+  expect(strip()).toHaveTextContent("Подтвердите запуск агента — ссылка будет вставлена после.");
+  // Срок вышел — «Вставить ссылку» видна над терминалом.
+  await skip(PASTE_WAIT_MS);
+  const strip15 = strip()!;
+  expect(within(strip15).getByRole("button", { name: "Вставить ссылку" })).toBeEnabled();
+  expect(strip15.compareDocumentPosition(document.querySelector("[data-agent-terminal]")!)
+    & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(term().pasted).toEqual([]);
+});
+
+test("Codex: поле ввода видно, но сеанс ещё не начался (нет его заголовка окна) — ждём; начался — вставка", async () => {
+  // Codex рисует поле ввода сразу, а вопрос о папке — через 0,8–1,3 с
+  // (fixtures/codex-trust-dialog.json); свой заголовок окна он ставит, только
+  // когда сеанс начался (fixtures/codex-trusted.json).
+  fakeTime();
+  let resolve: (id: string) => void = () => {};
+  h.shell.agentSpawn.mockReturnValue(new Promise<string>((r) => { resolve = r; }));
+  await show(assistant({ provider: "codex" }), { insert: { text: REF } });
+  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalledWith("r1", "codex", 80, 24, false));
+  term().screen = "› Ask Codex to do anything";
+  await act(async () => resolve("agent-1"));
+  term().title("C:\\agent\\bin\\codex.exe"); // заголовок псевдоконсоли — не в счёт
+  await skip(QUIET_MS * 3);
+  expect(term().pasted).toEqual([]);
+  term().title("2026-01-01_10-00");
+  await skip(QUIET_MS + 200);
+  expect(term().pasted).toEqual([LINE]);
+});
+
+test("Codex спрашивает об обновлении — не вставляем: цифра ссылки выбрала бы пункт", async () => {
+  fakeTime();
+  let resolve: (id: string) => void = () => {};
+  h.shell.agentSpawn.mockReturnValue(new Promise<string>((r) => { resolve = r; }));
+  await show(assistant({ provider: "codex" }), { insert: { text: REF } });
+  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalledTimes(1));
+  term().lines = ["", "  Update available · 0.159.0 → 0.160.0", "", "",
+    "› 1. Update now (runs `powershell -ExecutionPolicy Bypass -c '…'`)", "", "  2. Skip",
+    "  3. Skip until next version"];
+  term().screen = "";
+  await act(async () => resolve("agent-1"));
+  term().title("2026-01-01_10-00");
+  await skip(QUIET_MS * 3);
+  expect(term().pasted).toEqual([]);
+  expect(strip()).toHaveTextContent("Подтвердите запуск агента");
+});
+
 test("первый запуск: диалог «доверять ли папке» — ждём; срок от щелчка не сдвигается; ответили — вставка", async () => {
   fakeTime();
   const { started } = await coldStart();
@@ -426,8 +516,8 @@ test("первый запуск: диалог «доверять ли папке
   expect(within(strip()!).getByRole("button", { name: "Вставить ссылку" })).toBeEnabled();
   expect(strip()).toHaveTextContent("Вставьте ссылку, когда поле ввода будет видно");
   // Человек ответил на вопрос — агент показал поле ввода: вставка сама, один раз.
-  term().screen = "> ";
-  await output("> ");
+  term().screen = h.PROMPT;
+  await output(h.PROMPT);
   await skip(QUIET_MS + 200);
   expect(term().pasted).toEqual([LINE]);
   expect(strip()).toBeNull();
