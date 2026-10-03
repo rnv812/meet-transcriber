@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import type { Endpoint } from "../../lib/api";
 import type { Person } from "../../lib/types";
 import { Avatar } from "../../ui/Avatar";
+import { ItemMenu } from "../recordings/ItemMenu";
 
 type Props = {
   endpoint: Endpoint;
@@ -17,6 +18,7 @@ type Props = {
 export function AvatarEditor({ endpoint, person, hasAvatar, version, onUpload, onReset, onError }: Props) {
   const [open, setOpen] = useState(false);
   const file = useRef<HTMLInputElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
 
   async function fromClipboard() {
     setOpen(false);
@@ -32,22 +34,19 @@ export function AvatarEditor({ endpoint, person, hasAvatar, version, onUpload, o
   }
 
   return (
-    <div className="menu-wrap">
-      <button type="button" className="avatar-btn" aria-label="Аватар" onClick={() => setOpen((o) => !o)}>
+    <div>
+      <button ref={button} type="button" className="avatar-btn" aria-label="Аватар" aria-haspopup="menu"
+        aria-expanded={open} onClick={() => setOpen((o) => !o)}>
         <Avatar name={person.name} color={person.color} hasAvatar={hasAvatar} version={version} size={72} endpoint={endpoint} />
       </button>
+      {/* Общее меню (ui/floating): под аватаром, у края окна — с другой стороны, всегда в окне. */}
       {open && (
-        <div className="menu" role="menu">
-          <button type="button" className="menu__item" onClick={() => { setOpen(false); file.current?.click(); }}>
-            Загрузить фото…
-          </button>
-          <button type="button" className="menu__item" onClick={() => void fromClipboard()}>
-            Вставить из буфера
-          </button>
-          <button type="button" className="menu__item" onClick={() => { setOpen(false); onReset(); }}>
-            Сбросить к инициалам
-          </button>
-        </div>
+        <ItemMenu label="Аватар" anchor={button} onClose={() => { setOpen(false); button.current?.focus(); }}
+          items={[
+            { label: "Загрузить фото…", onSelect: () => { setOpen(false); file.current?.click(); } },
+            { label: "Вставить из буфера", onSelect: () => void fromClipboard() },
+            { label: "Сбросить к инициалам", onSelect: () => { setOpen(false); onReset(); } },
+          ]} />
       )}
       <input
         ref={file}

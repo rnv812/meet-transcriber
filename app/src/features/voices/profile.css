@@ -11,10 +11,6 @@
 .profile__bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .profile__meta { color: var(--text-3); font-size: 12px; }
 .profile__tools { display: inline-flex; align-items: center; gap: 4px; }
-.profile__menu { left: auto; right: 0; min-width: 180px; }
-.profile__menu .danger { color: var(--red); display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px;
-  border: 0; border-radius: var(--r-sm); background: none; font: inherit; cursor: pointer; text-align: left; }
-.profile__menu .danger:hover { background: rgba(229, 72, 77, 0.12); }
 
 .profile__status {
   display: inline-flex; align-items: center; gap: 8px; align-self: flex-start; min-height: 24px; padding: 2px 10px;

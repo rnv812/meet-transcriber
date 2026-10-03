@@ -149,6 +149,47 @@ test("не удалось — «Повторить»; удаление проф�
   await waitFor(() => expect(api.deleteProfile).toHaveBeenCalledWith(ep, "Вера"));
 });
 
+test("меню «⋯» у «Обновить профиль» у правого края окна раскрывается влево и целиком в окне", async () => {
+  // Регрессия: «Удалить профиль…» уходило за правый край окна.
+  const realRect = HTMLElement.prototype.getBoundingClientRect;
+  const realWidth = window.innerWidth;
+  const rect = (left: number, top: number, width: number, height: number) =>
+    ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+  let view = 900;
+  Object.defineProperty(window, "innerWidth", { configurable: true, get: () => view });
+  HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+    if (this.getAttribute("aria-label") === "Ещё действия с профилем" && this.tagName === "BUTTON") {
+      return rect(view - 30, 100, 24, 24); // «⋯» в 6 px от правого края
+    }
+    if (this.getAttribute("role") === "menu") return rect(0, 0, 200, 40);
+    return realRect.call(this);
+  };
+  try {
+    open(ready);
+    fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+    fireEvent.click(screen.getByRole("button", { name: "Ещё действия с профилем" }));
+    const menu = screen.getByRole("menu", { name: "Ещё действия с профилем" });
+    expect(within(menu).getByRole("menuitem", { name: /Удалить профиль/ })).toBeInTheDocument();
+    const left = () => parseFloat(menu.style.left);
+    expect(menu.style.opacity).not.toBe("0");
+    expect(within(menu).getByRole("menuitem", { name: /Удалить профиль/ })).toHaveFocus();
+    expect(left() + 200).toBeLessThanOrEqual(view - 8); // правый край — в окне, с отступом
+    expect(left()).toBe(view - 200 - 8);
+    expect(parseFloat(menu.style.top)).toBe(124 + 4); // под кнопкой
+    // Окно расширили — меню пересчиталось вслед за «⋯» и снова в окне.
+    view = 1280;
+    act(() => { window.dispatchEvent(new Event("resize")); });
+    expect(left()).toBe(1280 - 200 - 8);
+    // Esc закрывает меню и возвращает фокус на «⋯».
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("button", { name: "Ещё действия с профилем" })).toHaveFocus();
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = realRect;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: realWidth, writable: true });
+  }
+});
+
 test("«Мои заметки» сохраняются сами после паузы и при уходе", async () => {
   vi.useFakeTimers();
   try {

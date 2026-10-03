@@ -50,15 +50,8 @@ export const CONFIRMS: Record<"delete" | "retranscribe" | "reanalyze", ConfirmOp
   },
 };
 
-type Menu = { kind: "export" | "more"; at: { x: number; y: number } };
+type Menu = { kind: "export" | "more" };
 type Confirm = keyof typeof CONFIRMS | null;
-
-/** Где раскрыть меню: под кнопкой, по её левому (или правому) краю. */
-function below(el: HTMLElement | null, alignRight: boolean): { x: number; y: number } {
-  const r = el?.getBoundingClientRect();
-  if (!r) return { x: 0, y: 0 };
-  return { x: alignRight ? r.right - 240 : r.left, y: r.bottom + 4 };
-}
 
 export function CardActions({
   canExport, canRetranscribe, busy, onExport, onKbExport, onOpenFolder, onRetranscribe, onRediarize, onReanalyze,
@@ -105,7 +98,7 @@ export function CardActions({
   };
   const toggle = (kind: Menu["kind"]) => {
     if (menu?.kind === kind) { close(); return; }
-    setMenu({ kind, at: below((kind === "export" ? exportBtn : moreBtn).current, kind === "more") });
+    setMenu({ kind });
   };
   const run = (fn: () => void) => () => { close(false); fn(); };
 
@@ -186,7 +179,7 @@ export function CardActions({
           { ref: moreBtn, "aria-haspopup": "menu", "aria-expanded": menu?.kind === "more" })}
       </div>
       {menu && (
-        <ItemMenu at={menu.at} items={items}
+        <ItemMenu items={items} align={menu.kind === "more" ? "end" : "start"}
           label={menu.kind === "export" ? "Формат экспорта" : "Ещё действия с записью"}
           anchor={menu.kind === "export" ? exportBtn : moreBtn} onClose={() => close()} />
       )}
