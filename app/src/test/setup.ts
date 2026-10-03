@@ -39,3 +39,9 @@ export class FakeEventSource {
 beforeEach(() => {
   FakeEventSource.instances = [];
 });
+// Сеансы вкладки «Агент» живут вне React (features/card/agentSessions): каждый
+// тест начинает без сеансов и подписок прошлого. Модуль сам кладёт сюда сброс
+// (импорт отсюда загрузил бы lib/shell раньше, чем тест подменит его vi.mock).
+afterEach(() => {
+  (globalThis as { __resetAgentSessions?: () => void }).__resetAgentSessions?.();
+});

@@ -6,6 +6,7 @@ import {
   defaultProvider,
 } from "./AgentTab";
 import { pasteLine } from "../../lib/agentRef";
+import { BUSY_MS } from "./agentSessions";
 import { CardTabs } from "./CardTabs";
 import * as api from "../../lib/api";
 import type { AgentData, AgentExit } from "../../lib/shell";
@@ -174,17 +175,19 @@ test("подсказка о базе знаний не обещает того, 
     .toBeInTheDocument();
 });
 
-test("экран терминала исчез (список агентов на время пуст) — сеанс гасится", async () => {
+test("экран терминала на время исчез (список агентов пуст) — сеанс живёт, терминал возвращается тот же", async () => {
   const view = await show();
   await userEvent.click(startButton());
   await screen.findByText("Работает");
+  await data("agent-1", "ответ агента");
   view.rerender(<AgentTab id="r1" assistant={assistant({ available: {
     "claude-code": { found: false }, codex: { found: false } } })} />);
-  expect(h.shell.agentKill).toHaveBeenCalledWith("agent-1");
+  expect(h.shell.agentKill).not.toHaveBeenCalled();
   view.rerender(<AgentTab id="r1" assistant={assistant()} />);
-  await waitFor(() => expect(h.FakeTerminal.all.length).toBe(2));
-  expect(await screen.findByRole("button", { name: "Запустить" })).toBeInTheDocument();
-  expect(screen.getByText("Не запущен")).toBeInTheDocument();
+  expect(await screen.findByText("Работает")).toBeInTheDocument();
+  expect(h.FakeTerminal.all).toHaveLength(1);
+  expect(term().text).toContain("ответ агента");
+  expect(document.querySelector("[data-agent-terminal] .agent__term")).not.toBeNull();
 });
 
 test("вкладка «Агент» в карточке готовой записи", async () => {
@@ -292,25 +295,39 @@ test("ошибка запуска видна", async () => {
   expect(startButton()).toBeEnabled();
 });
 
-test("закрытие карточки гасит агента и терминал", async () => {
-  const { unmount } = await show();
+test("карточку закрыли (другая запись, «Голоса», «Настройки») — агент работает дальше; вернулись — тот же сеанс", async () => {
+  const first = await show();
   await userEvent.click(startButton());
   await screen.findByText("Работает");
+  await data("agent-1", "строка 1\r\n");
   const t = term();
-  unmount();
-  expect(h.shell.agentKill).toHaveBeenCalledWith("agent-1");
-  expect(t.disposed).toBe(true);
-  expect(h.listeners.data).toHaveLength(0);
+  first.unmount();
+  expect(h.shell.agentKill).not.toHaveBeenCalled();
+  expect(t.disposed).toBe(false);
+  // Пока карточки нет, агент продолжает выводить — всё попадает в его терминал.
+  await data("agent-1", "строка 2\r\n");
+  render(<AgentTab id="r1" assistant={assistant()} />);
+  expect(await screen.findByText("Работает")).toBeInTheDocument();
+  expect(h.FakeTerminal.all).toHaveLength(1);
+  expect(term()).toBe(t);
+  expect(t.text).toBe("строка 1\r\nстрока 2\r\n");
+  expect(screen.getByRole("button", { name: "Остановить" })).toBeEnabled();
+  expect(h.shell.agentSpawn).toHaveBeenCalledTimes(1);
+  // Ввод — в тот же сеанс.
+  await act(async () => t.onDataCb?.("q"));
+  expect(h.shell.agentWrite).toHaveBeenCalledWith("agent-1", "q");
 });
 
-test("ответ на запуск после закрытия карточки — сеанс сразу гасится", async () => {
+test("ответ на запуск пришёл, когда карточку уже закрыли, — сеанс остаётся за записью", async () => {
   let resolve: (id: string) => void = () => {};
   h.shell.agentSpawn.mockReturnValue(new Promise<string>((r) => { resolve = r; }));
   const { unmount } = await show();
   await userEvent.click(startButton());
   unmount();
   await act(async () => resolve("agent-7"));
-  expect(h.shell.agentKill).toHaveBeenCalledWith("agent-7");
+  expect(h.shell.agentKill).not.toHaveBeenCalled();
+  render(<AgentTab id="r1" assistant={assistant()} />);
+  expect(await screen.findByText("Работает")).toBeInTheDocument();
 });
 
 test("Ctrl+Shift+C копирует выделение, Ctrl+Shift+V вставляет", async () => {
@@ -837,4 +854,137 @@ test("«Новая сессия» при прошлом сеансе запус�
   await show(assistant(), { endpoint: ep });
   await userEvent.click(await screen.findByRole("button", { name: "Новая сессия" }));
   expect(h.shell.agentSpawn).toHaveBeenCalledWith("r1", "claude-code", 80, 24, false);
+});
+
+// --- сеанс живёт вне карточки: вкладки, другие записи, разделы -----------------------
+
+/** Запустить агента записи `id` (сеанс `sid`) кнопкой и вернуть вид. */
+async function running(id: string, sid: string) {
+  h.shell.agentSpawn.mockResolvedValueOnce(sid);
+  const view = render(<AgentTab id={id} assistant={assistant()} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Запустить" }));
+  await screen.findByText("Работает");
+  return view;
+}
+
+test("вкладки карточки: «Расшифровка» и обратно — сеанс не гаснет, вывод на месте", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue(assistant());
+  render(<CardTabs endpoint={ep} id="r1" folder="C:/r1" jobs={[]} transcript={<p>текст</p>} />);
+  await userEvent.click(screen.getByRole("tab", { name: "Агент" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Запустить" }));
+  await screen.findByText("Работает");
+  await data("agent-1", "ответ\r\n");
+  await userEvent.click(screen.getByRole("tab", { name: "Расшифровка" }));
+  // Точка «агент работает» на вкладке «Агент», пока она закрыта.
+  expect(screen.getByRole("tab", { name: "Агент" }).querySelector(".agent-live")).not.toBeNull();
+  await data("agent-1", "ещё\r\n");
+  await userEvent.click(screen.getByRole("tab", { name: "Агент" }));
+  expect(h.shell.agentKill).not.toHaveBeenCalled();
+  expect(h.FakeTerminal.all).toHaveLength(1);
+  expect(term().text).toBe("ответ\r\nещё\r\n");
+  expect(screen.getByText("Работает")).toBeInTheDocument();
+});
+
+test("другая запись: у каждой свой сеанс; вернулись — свой терминал с прокруткой", async () => {
+  const one = await running("r1", "agent-1");
+  await data("agent-1", "про первую\r\n");
+  one.unmount();
+  const two = await running("r2", "agent-2");
+  await data("agent-2", "про вторую\r\n");
+  two.unmount();
+  render(<AgentTab id="r1" assistant={assistant()} />);
+  expect(await screen.findByText("Работает")).toBeInTheDocument();
+  const [t1, t2] = h.FakeTerminal.all;
+  expect(t1!.text).toBe("про первую\r\n");
+  expect(t2!.text).toBe("про вторую\r\n");
+  expect(document.querySelector("[data-agent-terminal] .agent__term")).not.toBeNull();
+  expect(h.shell.agentKill).not.toHaveBeenCalled();
+});
+
+test("«Спросить агента» — в сеанс своей записи, даже если на экране была другая", async () => {
+  const one = await running("r1", "agent-1");
+  one.unmount();
+  const two = await running("r2", "agent-2");
+  two.unmount();
+  render(<AgentTab id="r1" assistant={assistant()} insert={{ text: REF }} />);
+  const [t1, t2] = h.FakeTerminal.all;
+  await waitFor(() => expect(t1!.pasted).toEqual([LINE]));
+  expect(t2!.pasted).toEqual([]);
+  expect(h.shell.agentSpawn).toHaveBeenCalledTimes(2);
+});
+
+test("ссылка ждёт холодного запуска, а карточку закрыли — агент готов, ссылка вставлена в его поле ввода", async () => {
+  fakeTime();
+  const { view, started } = await coldStart();
+  term().screen = "";
+  await started();
+  view.unmount();
+  // Агент дорисовал поле ввода, пока карточки не было.
+  term().screen = h.PROMPT;
+  await output("❯\u00a0");
+  await skip(QUIET_MS + 200);
+  expect(term().pasted).toEqual([LINE]);
+  expect(h.shell.agentKill).not.toHaveBeenCalled();
+});
+
+test("ссылка ждёт холодного запуска — переход на другую вкладку карточки её не теряет", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue(assistant());
+  let resolve: (id: string) => void = () => {};
+  h.shell.agentSpawn.mockReturnValue(new Promise<string>((r) => { resolve = r; }));
+  const props = { endpoint: ep, id: "r1", folder: "C:/r1", jobs: [], transcript: <p>текст</p> };
+  const view = render(<CardTabs {...props} />);
+  view.rerender(<CardTabs {...props} agentRequest={{ text: REF }} />);
+  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalledTimes(1));
+  term().screen = "";
+  await userEvent.click(screen.getByRole("tab", { name: "Расшифровка" }));
+  await act(async () => resolve("agent-1"));
+  term().screen = h.PROMPT;
+  await output("❯\u00a0");
+  await waitFor(() => expect(term().pasted).toEqual([LINE]), SLOW);
+});
+
+test("больше трёх агентов: закрывается давно не открывавшийся бездельник, занятый — никогда; вернулись — «Продолжить прошлую»", async () => {
+  fakeTime();
+  (await running("r1", "agent-1")).unmount();
+  await skip(1000);
+  (await running("r2", "agent-2")).unmount();
+  await skip(1000);
+  (await running("r3", "agent-3")).unmount();
+  await skip(BUSY_MS + 1000);
+  // Первая запись отвечает прямо сейчас — она занята, хоть и самая давняя.
+  await data("agent-1", "думаю…");
+  (await running("r4", "agent-4")).unmount();
+  expect(h.shell.agentKill).toHaveBeenCalledTimes(1);
+  expect(h.shell.agentKill).toHaveBeenCalledWith("agent-2");
+  await exit("agent-2", null);
+  render(<AgentTab id="r2" assistant={assistant()} />);
+  const note = await screen.findByRole("status", { name: "Сессия закрыта" });
+  expect(note).toHaveTextContent("Сессия была закрыта, чтобы освободить ресурсы");
+  h.shell.agentSpawn.mockResolvedValueOnce("agent-5");
+  await userEvent.click(within(note).getByRole("button", { name: "Продолжить прошлую" }));
+  expect(h.shell.agentSpawn).toHaveBeenLastCalledWith("r2", "claude-code", 80, 24, true);
+  expect(await screen.findByText("Работает")).toBeInTheDocument();
+  expect(screen.queryByRole("status", { name: "Сессия закрыта" })).toBeNull();
+});
+
+test("все три агента заняты — четвёртый запуск никого не закрывает", async () => {
+  for (const [id, sid] of [["r1", "agent-1"], ["r2", "agent-2"], ["r3", "agent-3"]] as const) {
+    (await running(id, sid)).unmount();
+    await data(sid, "отвечаю…");
+  }
+  (await running("r4", "agent-4")).unmount();
+  expect(h.shell.agentKill).not.toHaveBeenCalled();
+});
+
+test("«Остановить», пока агент что-то выводит, — сначала вопрос; без вывода — сразу", async () => {
+  await running("r1", "agent-1");
+  await data("agent-1", "пишу ответ…");
+  await userEvent.click(screen.getByRole("button", { name: "Остановить" }));
+  const ask = screen.getByRole("alertdialog", { name: "Остановить агента?" });
+  await userEvent.click(within(ask).getByRole("button", { name: "Отмена" }));
+  expect(h.shell.agentKill).not.toHaveBeenCalled();
+  expect(screen.getByText("Работает")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Остановить" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Остановить" }));
+  expect(h.shell.agentKill).toHaveBeenCalledWith("agent-1");
 });

@@ -14,6 +14,7 @@ import { BookOpen, ChevronLeft, ChevronRight, Ellipsis, FolderOpen, Pencil, Sett
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { ItemMenu, type MenuItem } from "./ItemMenu";
 import { Icon } from "../../ui/Icon";
+import { useAgentLive } from "../card/agentSessions";
 
 const ICON = { size: 16, strokeWidth: 1.75, "aria-hidden": true } as const;
 
@@ -91,6 +92,8 @@ export function RecordingItem({
   onPick?: (id: string, how: PickHow) => void;
 }) {
   const when = rec.started_at ? dayLabel(rec.started_at) : "";
+  /** Агент этой записи работает (вкладка «Агент»), хоть открыта и другая запись. */
+  const agentLive = useAgentLive(rec.id);
   const job = status.kind === "running" ? status.job ?? null : null;
   const shown = useSmoothProgress(job ? jobFraction(job) : null, job ? jobStageKey(job) : null,
     { extrapolate: job?.state === "running", cap: job?.cap ?? null });
@@ -236,6 +239,7 @@ export function RecordingItem({
             <span className="rec-item__when">
               <span className="muted num">{meta}</span>
               {category && <CategoryMark category={category} />}
+              {agentLive && <span className="rec-item__agent" role="img" aria-label="агент работает" title="Агент работает" />}
             </span>
             {badge && <span className={`badge${badge.tone ? ` badge--${badge.tone}` : ""}`}>{badge.text}</span>}
           </span>
