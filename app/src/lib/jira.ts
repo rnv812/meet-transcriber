@@ -188,7 +188,8 @@ export function findJira(text: string, linker: JiraCard | JiraLinker | null): Ji
   const phrases = (linker as JiraCard).phrases;
   if (!phrases?.length) return out;
   for (const p of phrases) {
-    if (!p.text) continue;
+    // Голое число («4452») ссылкой не делаем: в итогах оно может значить что угодно.
+    if (!p.text || /^[\d\s-]+$/.test(p.text)) continue;
     for (let at = text.indexOf(p.text); at >= 0; at = text.indexOf(p.text, at + 1)) {
       const end = at + p.text.length;
       if (WORD_CHAR.test(text[at - 1] ?? "") || WORD_CHAR.test(text[end] ?? "")) continue;

@@ -93,6 +93,14 @@ test("фразы от резидента: каждое вхождение цел
   expect(jiraCard(null, { refs: [], phrases: [] }, [])).toBeNull();
 });
 
+test("голое число от старого резидента ссылкой не становится, со словом-признаком — да", () => {
+  const card = jiraCard(on({ jira_base_url: "https://jira.example.com" }),
+    { refs: [], phrases: [{ text: "4452", key: "ORION-4452", source: "context" },
+      { text: "баге 4452", key: "ORION-4452", source: "context" }] }, [])!;
+  expect(findJira("Бюджет 4452 рубля; в баге 4452 — логи", card).map((m) => [m.key, m.start])).toEqual([
+    ["ORION-4452", 21]]);
+});
+
 test("«Задачи»: ключи по первому упоминанию, реплики без повторов", () => {
   const turns = new Map([
     [3, [{ start: 0, end: 5, key: "SPR-1" }, { start: 9, end: 20, key: "ORION-7", source: "spoken" as const, spoken: "орион семь" }]],

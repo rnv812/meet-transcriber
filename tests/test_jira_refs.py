@@ -113,11 +113,12 @@ POSITIVE = [
     ("по эс пи ар сто два ответа нет", ["SPR-102"]),
     ("OPS № 77 про сертификаты", ["OPS-77"]),
     ("ORION-2122 и SPR-15 связаны", ["ORION-2122", "SPR-15"]),
-    ("орион, кажется, 2122 и 2123", ["ORION-2122", "ORION-2123"]),
+    ("орион 2122 и 2123", ["ORION-2122", "ORION-2123"]),
+    ("по ориону 2122, 2123 и 2124 — всё в ревью", ["ORION-2122", "ORION-2123", "ORION-2124"]),
     ("issue 4452 assigned to Anna", ["ORION-4452"]),
     ("SPR twenty one twenty two is blocked", ["SPR-2122"]),
     ("в джире под номером сорок четыре пятьдесят два", ["ORION-4452"]),
-    ("опс номер пять перезапустили", ["OPS-5"]),
+    ("опс номер 5 перезапустили", ["OPS-5"]),
     ("орион 2 122 висит", ["ORION-2122"]),
     ("orion 2122 lowercase", ["ORION-2122"]),
     ("кейдев две тысячи сто двадцать два", ["KDEV-2122"]),
@@ -159,6 +160,39 @@ NEGATIVE = [
     "по задаче было 15 комментариев",
     "баг висит 2122 часа",
     "орион, где-то 2122 года назад",
+    # Даты, время суток, суммы и оценки (ревью 0.3.1, I1).
+    "Релиз ориона 15 марта, успеваем?",
+    "По ориону 20 мая финальная приёмка.",
+    "Давайте сделаем демо 20 октября",
+    "Демо 10 утра в четверг",
+    "Задача 30 июня должна быть закрыта",
+    "У нас задача 300 тысяч пользователей подключить",
+    "Задача 10 тысяч строк кода переписать",
+    "Стори 13 поинтов",
+    "Задача номер один — стабилизировать релиз",
+    "Задача номер два — нанять людей",
+    "Орион номер один в рейтинге продуктов",
+    # Свободные числа после проекта и слова-признака (ревью 0.3.1, m2).
+    "Орион, у нас там 12 открытых вопросов и 40 мелочей",
+    "Значит, задача 18 переходит дальше",
+    # Свои: обычные фразы встреч с датами, суммами и временем.
+    "Демо 25 декабря, а орион 1 января уже в проде",
+    "Созвон по SPR 14 числа, не забудьте",
+    "Орион 3 ночи упал, дежурный поднял",
+    "По KDEV 7 вечера выкатываем",
+    "В баге 200 сотен строк лога, бесполезно",
+    "Тикет 150 рублей стоит подписка",
+    "Задача 500 тысяч рублей бюджета",
+    "Демо 2026 года будет онлайн",
+    "Опс 5 баллов из десяти, так себе",
+    "Стори 8 очков, берём в спринт",
+    "ORION 25 Dec release",
+    "SPR 9 am standup",
+    "Орион, кажется, в 2122 году появился",
+    "Эпик 120 дней тянется",
+    "Задача номер три в списке приоритетов",
+    "Тикет 40 процентов готов",
+    "Орион в среду, 2122 и 2123 подождут",
 ]
 
 
@@ -217,6 +251,8 @@ def test_without_default_project_context_numbers_are_left_to_the_analysis():
     assert _keys("в баге 4452", _spec(default="")) == []
     # Номер дальше трёх слов от признака — не задача.
     assert _keys("баг который мы вчера нашли 4452") == []
+    # Двузначный номер по слову-признаку — только с «номер»/«№».
+    assert _keys("задача 18") == [] and _keys("задача номер 18") == ["ORION-18"] and _keys("тикет № 7") == ["ORION-7"]
 
 
 def test_literal_pattern_only_for_configured_projects():
@@ -273,10 +309,12 @@ def test_agent_issues_fill_gaps_and_lose_on_overlap():
 
 def test_phrases_for_summary_and_insights():
     got = jira_refs.phrases(["- [ ] Починить ORION-2122\n- орион двадцать один двадцать три — Анна",
-                             "Повторяется ORION-2122"], _spec())
+                             "Повторяется ORION-2122\nСроки — в баге 4452."], _spec())
     assert got == [
         {"text": "ORION-2122", "key": "ORION-2122", "source": "literal"},
         {"text": "орион двадцать один двадцать три", "key": "ORION-2123", "source": "spoken"},
+        # По слову-признаку — вместе со словом: голое «4452» в итогах ссылкой не станет.
+        {"text": "баге 4452", "key": "ORION-4452", "source": "context"},
     ]
 
 
@@ -431,3 +469,29 @@ def test_merge_windows_joins_same_issue():
     assert got == [{"key": "ORION-4452", "segments": [0, 3], "spoken": "сорок четыре пятьдесят два",
                     "confidence": 0.9},
                    {"key": "SPR-15", "segments": [4], "spoken": "спр 15", "confidence": 0.8}]
+
+
+def test_recording_detail_reuses_refs_until_something_changes(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    config = tmp_path / "meet" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({
+        "recording": {"out_dir": str(tmp_path / "recordings"), "voices_dir": str(tmp_path / "voices")},
+        "integrations": {"jira_base_url": "https://jira.example.com",
+                         "jira_projects": [{"key": "ORION", "aliases": []}]},
+    }, ensure_ascii=False), encoding="utf-8")
+    folder = tmp_path / "recordings" / "2026-10-01_10-00"
+    folder.mkdir(parents=True)
+    (folder / "sys.opus").write_bytes(b"x")
+    library.write_transcript(folder, {"version": 1, "segments": [_seg(0, "SPEAKER_00", "орион 2122")]})
+    app = tray.TrayApp()
+    app.cfg = tray._auto_config()
+    state = tray_control.TrayControl(app)
+    calls = []
+    real = jira_refs.for_recording
+    monkeypatch.setattr(jira_refs, "for_recording", lambda *a, **k: calls.append(1) or real(*a, **k))
+    first = state.recording(folder.name)["jira"]
+    assert state.recording(folder.name)["jira"] == first and len(calls) == 1
+    (folder / "summary.md").write_text("- ORION-7\n", encoding="utf-8")
+    assert state.recording(folder.name)["jira"]["phrases"][0]["key"] == "ORION-7" and len(calls) == 2

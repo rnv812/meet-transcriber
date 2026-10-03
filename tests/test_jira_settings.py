@@ -109,3 +109,28 @@ def test_default_project_not_in_list_rejected(tmp_path):
 def test_advanced_pattern_wins_over_projects():
     got = settings.Integrations.from_raw({"jira_projects": [{"key": "SPR"}], "jira_pattern": "OPS, DEMO"})
     assert got.jira_literal() == r"(?:OPS|DEMO)-\d+"
+
+
+# --- «Ссылки на задачи» у обновившихся (ревью 0.3.1, m1) ------------------------------
+
+
+def test_issues_part_follows_other_parts_of_an_old_config():
+    off = {name: False for name in ("types", "importance", "chapters", "insights", "category", "title")}
+    assert settings.Analysis.from_raw(off).issues is False
+    assert settings.Analysis.from_raw(off).features() == ()
+    assert settings.Analysis.from_raw({**off, "chapters": True}).issues is True
+    assert settings.Analysis.from_raw({}).issues is True  # новая установка
+    assert settings.Analysis.from_raw({**off, "issues": True}).issues is True  # выбрано явно
+
+
+def test_effective_features_drop_issues_without_jira_projects():
+    from meet import analysis
+
+    only_issues = {name: False for name in ("types", "importance", "chapters", "insights", "category",
+                                            "title")} | {"issues": True}
+    cfg = settings.Settings.from_raw({"analysis": only_issues})
+    assert cfg.analysis.features() == ("issues",)
+    assert analysis.effective_features(cfg) == ()  # автоанализ не ставится ради пустой части
+    with_jira = settings.Settings.from_raw({"analysis": only_issues, "integrations": {
+        "jira_base_url": "https://jira.example.com", "jira_projects": [{"key": "ORION"}]}})
+    assert analysis.effective_features(with_jira) == ("issues",)
