@@ -64,7 +64,9 @@ function InstallProgress({ progress }: { progress: Progress }) {
   const value = progress.step > 0 ? (progress.step - 1) / progress.of : null;
   return (
     <div className="wizard__install">
-      <ProgressBar value={value} stageKey="engine" working
+      {/* Между шагами полоска идёт по темпу пройденных шагов, но не дальше конца текущего. */}
+      <ProgressBar value={value} stageKey="engine" working extrapolate={progress.step > 0}
+        cap={progress.step > 0 ? progress.step / progress.of : null}
         label={progress.step > 0 ? stageText(title(progress.step), progress.step, progress.of) : "Подготовка к установке"}
         detail={progress.startedAt ? elapsedText((now - progress.startedAt) / 1000) : null} />
       <ol className="wizard__progress" aria-label="Шаги установки">

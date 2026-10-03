@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getAssistant, type Endpoint } from "../../lib/api";
+import { isModelProgress } from "../../lib/progress";
 import type { AssistantInfo, Job } from "../../lib/types";
+import { JobProgress } from "../../ui/JobProgress";
 
 /** Пока резидент проверяет вход в CLI (`checking`), спрашиваем снова через паузу. */
 const RECHECK_MS = 1500;
@@ -106,7 +108,11 @@ export function ProviderHint({ onOpenSettings }: { onOpenSettings?: (section: st
   );
 }
 
-export function ThinkingStage() {
+/** Модель работает: ход задачи, если резидент его сообщает (0.3.1), иначе «Модель думает…». */
+export function ThinkingStage({ job }: { job?: Job | null }) {
+  if (job && job.state === "running" && isModelProgress(job)) {
+    return <div className="assist__stage assist__stage--progress" role="status"><JobProgress job={job} size="sm" /></div>;
+  }
   return (
     <div className="assist__stage" role="status">
       <span className="assist__pulse" aria-hidden="true" />

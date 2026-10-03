@@ -3,6 +3,8 @@ import { TITLE_MAX } from "../../lib/api";
 import { clock, dayLabel, duration } from "../../lib/format";
 import { categoryOf, NO_CATEGORY_NAME } from "../../lib/categories";
 import { jobFraction } from "../../lib/progress";
+import { jobStageKey } from "../../ui/JobProgress";
+import { useSmoothProgress } from "../../ui/ProgressBar";
 import { stageLabel, type RecStatus } from "../../lib/status";
 import type { Category, LibraryItem } from "../../lib/types";
 import { AiBadge } from "../../ui/AiBadge";
@@ -15,8 +17,12 @@ import { Icon } from "../../ui/Icon";
 
 const ICON = { size: 16, strokeWidth: 1.75, "aria-hidden": true } as const;
 
-/** Текст и вид бейджа; у готовой записи бейджа нет. */
-export function badgeOf(st: RecStatus): { text: string; tone: "run" | "err" | "" } | null {
+/**
+ * Текст и вид бейджа; у готовой записи бейджа нет. `shown` — доля, которую
+ * сейчас показывает полоска этой задачи (сглаженная и продлённая между
+ * событиями): бейдж и карточка говорят одно и то же число.
+ */
+export function badgeOf(st: RecStatus, shown?: number | null): { text: string; tone: "run" | "err" | "" } | null {
   switch (st.kind) {
     case "recording":
       return { text: "Идёт запись", tone: "err" };
@@ -24,7 +30,7 @@ export function badgeOf(st: RecStatus): { text: string; tone: "run" | "err" | ""
       return { text: "В очереди", tone: "" };
     case "running": {
       // Общая доля задачи (новые резиденты) или доля этапа; неизвестно — многоточие, а не «100%».
-      const f = st.job ? jobFraction(st.job) : st.total ? (st.done ?? 0) / st.total : null;
+      const f = shown ?? (st.job ? jobFraction(st.job) : st.total ? (st.done ?? 0) / st.total : null);
       const label = st.job ? stageLabel(st.job) : st.label;
       // Общая доля — впереди («62% · Разделение на спикеров»): это ход всей расшифровки, а не этапа.
       if (f !== null && typeof st.job?.fraction === "number") return { text: `${Math.floor(f * 100)}% · ${label}`, tone: "run" };
@@ -85,7 +91,10 @@ export function RecordingItem({
   onPick?: (id: string, how: PickHow) => void;
 }) {
   const when = rec.started_at ? dayLabel(rec.started_at) : "";
-  const badge = badgeOf(status);
+  const job = status.kind === "running" ? status.job ?? null : null;
+  const shown = useSmoothProgress(job ? jobFraction(job) : null, job ? jobStageKey(job) : null,
+    { extrapolate: job?.state === "running", cap: job?.cap ?? null });
+  const badge = badgeOf(status, job ? shown : null);
   const meta = [when, rec.duration_s ? duration(rec.duration_s) : ""].filter(Boolean).join(" · ");
   const title = rec.title ?? (when || rec.id);
   const hits = rec.hits ?? [];

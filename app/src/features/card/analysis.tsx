@@ -11,8 +11,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, getAnalysis, patchRecording, suggestTitle, type Endpoint } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import type { AnalysisState, Job, Recording, TitleSuggestion } from "../../lib/types";
+import { isModelProgress } from "../../lib/progress";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
+import { JobProgress } from "../../ui/JobProgress";
 import { CONFIRMS } from "./CardActions";
 import { Popover } from "../../ui/Popover";
 import "./analysis.css";
@@ -70,6 +72,10 @@ export function AnalysisStatus({ state, busy, onRun }: {
   switch (state.state) {
     case "queued":
     case "running":
+      // Резидент сообщает ход (окно, подшаг, проценты) — полоска; иначе тихий пульс.
+      if (state.state === "running" && state.job && isModelProgress(state.job)) {
+        return <div className="analysis-status" role="status"><JobProgress job={state.job} size="sm" /></div>;
+      }
       return (
         <div className="analysis-status" role="status">
           <span className="analysis-chip" title={state.state === "queued" ? "Анализ встречи ждёт в очереди" : "Агент размечает встречу"}>

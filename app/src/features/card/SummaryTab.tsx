@@ -201,7 +201,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
     <div className="assist">
       {loadError && <div className="assist__error" role="alert">{loadError}</div>}
       {error && <div className="assist__error" role="alert">{error}</div>}
-      {thinking && <ThinkingStage />}
+      {thinking && <ThinkingStage job={latest} />}
       {failed && (
         <div className="assist__failed">
           <div className="assist__error">{failed.error || "Не удалось сделать итоги"}</div>

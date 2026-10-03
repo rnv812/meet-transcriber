@@ -17,8 +17,10 @@ import {
 } from "../../lib/api";
 import { clock, errorText, plural } from "../../lib/format";
 import type { ImproveGroup, ImproveState, Job } from "../../lib/types";
+import { isModelProgress } from "../../lib/progress";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { JobProgress } from "../../ui/JobProgress";
 import { improvedText } from "./speakers/staging";
 import "./improve.css";
 import { Icon } from "../../ui/Icon";
@@ -224,6 +226,9 @@ export function ImproveStatus({ state, busy, onOpen, onRetry, onDismiss }: {
   switch (state.state) {
     case "queued":
     case "running":
+      if (state.state === "running" && state.job && isModelProgress(state.job)) {
+        return <div className="analysis-status" role="status"><JobProgress job={state.job} size="sm" /></div>;
+      }
       return (
         <div className="analysis-status" role="status">
           <span className="analysis-chip" title={state.state === "queued" ? "Улучшение расшифровки ждёт в очереди" : "ИИ проверяет расшифровку"}>
@@ -369,10 +374,12 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
   if (!state || state.state === "queued" || state.state === "running" || (state.state === "none" && busy)) {
     content = (
       <div className="improve__work" role="status">
-        <span className="analysis-chip">
-          <span className="analysis-chip__pulse" aria-hidden="true" />
-          {state?.state === "queued" ? "Улучшение в очереди…" : "ИИ проверяет расшифровку…"}
-        </span>
+        {state?.state === "running" && state.job && isModelProgress(state.job) ? <JobProgress job={state.job} size="sm" /> : (
+          <span className="analysis-chip">
+            <span className="analysis-chip__pulse" aria-hidden="true" />
+            {state?.state === "queued" ? "Улучшение в очереди…" : "ИИ проверяет расшифровку…"}
+          </span>
+        )}
         <p className="muted improve__hint">Окно можно закрыть: когда список будет готов, ссылка на него появится в карточке.</p>
       </div>
     );

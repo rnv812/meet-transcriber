@@ -20,8 +20,10 @@ import {
 import { dayLabel, errorText, plural } from "../../lib/format";
 import { discussText, grounded, prepareText, SECTION_ORDER, SECTION_TITLES } from "../../lib/profileAgent";
 import type { Job, Profile, ProfileView } from "../../lib/types";
+import { isModelProgress } from "../../lib/progress";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
+import { JobProgress } from "../../ui/JobProgress";
 import { ItemMenu } from "../recordings/ItemMenu";
 import { PcmSection } from "./PcmSection";
 import { HideButton, RefChips, type OpenAt } from "./RefChips";
@@ -73,7 +75,10 @@ export function useProfile(endpoint: Endpoint, name: string, jobs: Job[]) {
     const timer = setTimeout(() => void reload(), INDEXING_POLL_MS);
     return () => clearTimeout(timer);
   }, [indexing, view, reload]);
-  return { view, error, reload };
+  // Идущая задача профиля — из очереди, а не из снимка сервера: её ход живой.
+  const live = pid ? jobs.find((j) => j.kind === "profile" && j.state === "running"
+    && norm(j.folder).endsWith(`/${pid}.json`)) : undefined;
+  return { view: view && live ? { ...view, job: live } : view, error, reload };
 }
 
 /** «обновлено сегодня 14:05», «обновлено 2 окт 14:05». */
@@ -254,7 +259,9 @@ export function ProfileTab({
   const shared = view.latest_meeting ?? null;
   const target = shared ?? view.latest_any ?? null;
 
-  const status = running ? (
+  const status = running && view.state === "running" && view.job && isModelProgress(view.job) ? (
+    <div className="profile__progress" role="status"><JobProgress job={view.job} size="sm" /></div>
+  ) : running ? (
     <div className="profile__status" role="status">
       <span className="profile__pulse" aria-hidden="true" />
       {view.state === "queued" ? "Профиль в очереди…" : profile ? "Профиль обновляется…" : "Профиль составляется…"}

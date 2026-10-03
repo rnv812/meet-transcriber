@@ -7,6 +7,11 @@
  * долю 0…1 с весами этапов, `estimate_s` — ожидаемую длительность всей работы
  * по `SPEED_FACTOR`. Старый резидент без них — доля из `done/total`, а без
  * `total` — «неизвестно» (бегущая полоска, а не полная шкала).
+ *
+ * С 0.3.1 резидент сообщает ещё `cap` — долю в конце текущего шага: между
+ * событиями полоска продлевается по скорости хода (`extrapolate`), но не дальше
+ * неё. У задач модели — `part`/`parts` («окно 2 из 4»), `phase` (подшаг),
+ * `slow` («дольше обычного») и `eta_s` (сколько осталось, когда оценка уверенная).
  */
 
 import type { Job } from "./types";
@@ -44,15 +49,99 @@ export function etaSeconds(fraction: number | null, elapsedS: number | null, est
   return w * byPace + (1 - w) * byEstimate;
 }
 
-/** «осталось ~4 мин», «осталось меньше минуты», «осталось ~1 ч 10 мин». */
+/** «осталось ~4 мин», «осталось ~40 с», «осталось ~1 ч 10 мин». */
 export function etaText(seconds: number | null): string | null {
   if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return null;
-  if (seconds < 60) return "осталось меньше минуты";
+  if (seconds < 8) return "осталось несколько секунд";
+  if (seconds < 55) return `осталось ~${Math.round(seconds / 5) * 5} с`;
+  if (seconds < 90) return "осталось ~1 мин";
   const min = Math.round(seconds / 60);
   if (min < 60) return `осталось ~${min} мин`;
   const h = Math.floor(min / 60);
   const m = min % 60;
   return m ? `осталось ~${h} ч ${m} мин` : `осталось ~${h} ч`;
+}
+
+/** Прошедшее время часами: «0:07», «1:12», «1:02:03». */
+export function clockText(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+}
+
+/** Подшаг вызова модели — для подписи хода задачи модели. */
+export const PHASES: Record<string, string> = {
+  request: "модель думает",
+  generating: "модель пишет ответ",
+  validating: "проверка ответа",
+  repair: "исправление ответа",
+};
+
+/** Задача модели (анализ, итоги, улучшение, профиль): ход по подшагам. */
+export const isModelProgress = (job: { phase?: string | null }) => typeof job.phase === "string";
+
+/**
+ * Сколько осталось, секунд, или null — не уверены. Задача модели: «дольше
+ * обычного» — ничего, своя оценка резидента (`eta_s`) — она; без неё молчим.
+ * Расшифровка и прочее — по оценке и замеру (`etaSeconds`).
+ */
+export function jobEta(job: { phase?: string | null; slow?: boolean | null; eta_s?: number | null; estimate_s?: number | null },
+  fraction: number | null, elapsedS: number | null): number | null {
+  if (job.slow) return null;
+  if (typeof job.eta_s === "number" && Number.isFinite(job.eta_s)) return Math.max(0, job.eta_s);
+  if (isModelProgress(job)) return null;
+  return etaSeconds(fraction, elapsedS, job.estimate_s);
+}
+
+// --- продление полоски между событиями ---------------------------------------
+
+/** Значение резидента и когда оно пришло (мс, `performance.now()`). */
+export type Sample = { v: number; t: number };
+
+/** Окно замера скорости, мс: старше — не в счёт (ход мог смениться). */
+export const VELOCITY_WINDOW_MS = 30_000;
+/** Скорость не больше этой (доля в мс): рывок в одном событии — не темп. */
+export const MAX_RATE = 0.2 / 1000;
+/** Без `cap` (старый резидент) — не дальше этого от последнего значения. */
+export const MAX_LEAD = 0.05;
+/** «Готово» — только от резидента: продление не доходит до полной полоски. */
+export const EXTRAPOLATE_TOP = 0.995;
+
+/** Скорость хода по недавним значениям, доля в мс (≥ 0). */
+export function velocity(samples: Sample[], windowMs = VELOCITY_WINDOW_MS): number {
+  const last = samples.at(-1);
+  if (!last) return 0;
+  const recent = samples.filter((s) => last.t - s.t <= windowMs);
+  const first = recent[0]!;
+  if (recent.length < 2 || last.t <= first.t || last.v <= first.v) return 0;
+  return Math.min(MAX_RATE, (last.v - first.v) / (last.t - first.t));
+}
+
+/**
+ * Сколько показывать в момент `now` между событиями: последнее значение плюс
+ * темп последних событий × прошедшее время. Не дальше `cap` (следующая
+ * известная отметка — конец шага) и не дольше `maxAheadMs` после последнего
+ * события: резидент замолчал — полоска встаёт, а не уезжает к концу.
+ */
+export function extrapolate(samples: Sample[], now: number, cap?: number | null): number | null {
+  const last = samples.at(-1);
+  if (!last) return null;
+  if (last.v >= 1) return 1;
+  const ceiling = Math.min(EXTRAPOLATE_TOP, typeof cap === "number" && cap > last.v ? cap : last.v + MAX_LEAD);
+  const v = velocity(samples);
+  if (v <= 0 || ceiling <= last.v) return last.v;
+  const dt = Math.min(Math.max(0, now - last.t), maxAheadMs(samples));
+  return Math.min(ceiling, last.v + v * dt);
+}
+
+/** Сколько продлевать после последнего события: 2,5 обычных промежутка (1,5…15 с). */
+export function maxAheadMs(samples: Sample[]): number {
+  const recent = samples.slice(-6);
+  if (recent.length < 2) return 1500;
+  const gap = (recent.at(-1)!.t - recent[0]!.t) / (recent.length - 1);
+  return Math.min(15_000, Math.max(1500, gap * 2.5));
 }
 
 /** «прошло 3 мин» — для работ без оценки (установка движка). */

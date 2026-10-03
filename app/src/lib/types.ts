@@ -70,6 +70,22 @@ export type Job = {
   steps?: number | null;
   fraction?: number | null;
   estimate_s?: number | null;
+  /**
+   * С 0.3.1: доля в конце текущего шага (дальше неё полоска между событиями не
+   * продлевается) и в чём меряется ход («audio_s», «time», «chars», «bytes»).
+   */
+  cap?: number | null;
+  unit?: string | null;
+  /**
+   * Задачи модели: часть n из N («окно 2 из 4»), подшаг (request / generating
+   * / validating / repair), «дольше обычного» и сколько осталось, секунд
+   * (только уверенная оценка резидента).
+   */
+  part?: number | null;
+  parts?: number | null;
+  phase?: string | null;
+  slow?: boolean | null;
+  eta_s?: number | null;
   result: string | null;
   error: string | null;
   /** Секунды эпохи; старые резиденты их не присылали. */
