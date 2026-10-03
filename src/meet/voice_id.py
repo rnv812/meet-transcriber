@@ -14,8 +14,23 @@ MIN_SECONDS = 1.0
 SAMPLE_RATE = 16000
 
 
-def _load_embedder():
-    """Реальный эмбеддер на GPU: np.float32 16 кГц -> np.ndarray (256,)."""
+def _embedder_device() -> str:
+    """cuda — только если на ней правда есть чем считать (правила
+    asr.resolve_device: профиль CPU, библиотеки CUDA, сбой CUDA) и сам torch
+    собран с CUDA; иначе cpu (на macOS — тоже cpu)."""
+    from meet import asr
+
+    if asr.resolve_device() != "cuda":
+        return "cpu"
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+def _build_embedder(device: str):
     import torch
     from pyannote.audio.pipelines.speaker_verification import (
         PretrainedSpeakerEmbedding,
@@ -25,7 +40,7 @@ def _load_embedder():
 
     model = PretrainedSpeakerEmbedding(
         {"checkpoint": DIARIZATION_MODEL, "subfolder": "embedding"},
-        device=torch.device("cuda"),
+        device=torch.device(device),
         token=credentials.get_hf_token(),
     )
 
@@ -34,6 +49,21 @@ def _load_embedder():
         return np.asarray(model(wav)[0])
 
     return embed
+
+
+def _load_embedder():
+    """Реальный эмбеддер: np.float32 16 кГц -> np.ndarray (256,). Видеокарта,
+    если она рабочая; не нашлись библиотеки CUDA — один повтор на процессоре."""
+    from meet import asr
+
+    device = _embedder_device()
+    try:
+        return _build_embedder(device)
+    except Exception as e:
+        if device == "cuda" and asr.missing_cuda_library(e):
+            asr.cuda_failed(e)
+            return _build_embedder("cpu")
+        raise
 
 
 class VoiceMatcher:
@@ -62,7 +92,12 @@ class VoiceMatcher:
             print("голоса: база пуста - live-имена выключены")
             return
         if self._embed is None:
-            self._embed = _load_embedder()
+            try:
+                self._embed = _load_embedder()
+            except Exception as e:
+                print(f"голоса: опознание в живом режиме недоступно ({type(e).__name__}: {e})"
+                      " — имена появятся после расшифровки")
+                return
         print(f"голоса: live-имена включены ({len(self.base)} чел. в базе)")
 
     def name_for(self, audio: np.ndarray) -> "str | None":
