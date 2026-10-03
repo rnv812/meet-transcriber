@@ -603,8 +603,10 @@ pub fn open_live(app: &AppHandle) {
             height: None,
         });
     });
-    if let Err(error) = builder.build() {
-        shell_log!("панель ассистента не открылась: {error}");
+    match builder.build() {
+        // Значок окна — кадр icon.ico под размер, а не растянутый 16 px.
+        Ok(window) => crate::app_icon::apply(&window),
+        Err(error) => shell_log!("панель ассистента не открылась: {error}"),
     }
 }
 

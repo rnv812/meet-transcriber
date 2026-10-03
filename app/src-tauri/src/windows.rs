@@ -104,8 +104,10 @@ pub fn open_main(app: &AppHandle, recording: Option<String>, section: Option<&st
     .min_inner_size(820.0, 520.0)
     .center()
     .build();
-    if let Err(error) = built {
-        shell_log!("окно не открылось: {error}");
+    match built {
+        // Значок окна — кадр icon.ico под размер, а не растянутый 16 px.
+        Ok(window) => crate::app_icon::apply(&window),
+        Err(error) => shell_log!("окно не открылось: {error}"),
     }
 }
 
