@@ -1,0 +1,17 @@
+[
+[13, "\u001b[6n\u001b[?9001h\u001b[?1004h\u001b[m\u001b]0;C:\\agent\\bin\\codex.exe\u0007\u001b[?25h"],
+[37, "\u001b[?2004h"],
+[38, "\u001b[?2026h\u001b[?25l\u001b[?1049h\u001b[?1003;1006h"],
+[40, "\u001b[?2026h\u001b[0 q\u001b[?2026l\u001b[?2026l\u001b[?2026h\u001b[?2026l\u001b[?2026h"],
+[41, "\u001b[?2026l\u001b[?2026h\u001b[?2026l"],
+[43, "\u001b[?2026h\u001b[?2026l"],
+[48, "\u001b[?2026h\u001b[?2026l"],
+[49, "\u001b[?2026h\u001b[?2026l"],
+[50, "\u001b[?2026h"],
+[51, "\u001b[?2026l\u001b[K\r\n  \u001b[38;2;99;168;248m>_ \u001b[m\u001b[1mOpenAI Codex\u001b[22m\u001b[2m (v0.159.0)\u001b[22m\u001b[K\r\n     \u001b[2mC:\\meet\\recordings\\2026-01-01_10-00\u001b[22m\u001b[K\r\n\u001b[K\r\n  \u001b[38;2;99;168;248mWelcome. There’s no dress code, just code.\u001b[K\u001b[m\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n\u001b[K\u001b[1m\r\n›\u001b[22m \u001b[2mAsk Codex to do anything\u001b[22m\u001b[K\r\n\u001b[K\r\n\u001b[K\r\n  \u001b[1m?\u001b[22m for shortcuts\u001b[K\u001b[27;3H\u001b[?25h"],
+[52, "\u001b[?2026h\u001b[?2026l"],
+[128, "\u001b[?2026h\u001b[?2026l"],
+[147, "\u001b[?2026h\u001b[?2026l"],
+[148, "\u001b[?2026h\u001b[?2026l"],
+[160, "\u001b[?25l\u001b[1m\u001b[2;3HUpdat\u001b[1C available\u001b[22m\u001b[2m · 0.159.0 → 0.160.0\u001b[3;3HRelease notes: \u001b]8;id=36168-1;https://github.com/openai/codex/releases/latest\u001b\\\u001b[4mhttps://github.com/openai/codex/releases/latest\u001b]8;;\u001b\\\u001b[22m\u001b[1m\u001b[24m\u001b[7m\u001b[5;1H› 1. Update now (runs `powershell -ExecutionPolicy Bypass -c '$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/         codex/install.ps1 | iex'`)                                                                                         \u001b[22m\u001b[27m\u001b[7;3H2.\u001b[1CSkip\u001b[8;3H3.\u001b[1CSkip\u001b[1Cuntil\u001b[1Cnext\u001b[1Cversion\u001b[1m\u001b[10;3Henter\u001b[22m\u001b[2m continue · \u001b[22m\u001b[1mesc\u001b[22m\u001b[2m skip\u001b[22m\u001b[27;1H\u001b[K\u001b[30;2H\u001b[K\u001b[119C"]
+]
