@@ -165,6 +165,8 @@ export function TranscriptView({
       if (!visible.has(i)) { onRestrictSelection((k) => visible.has(k)); return; }
     }
   }, [visible, selected, onRestrictSelection]);
+  // Фильтр скрыл все главы целиком — вместо пустой ленты подсказка со сбросом.
+  const noMatches = !!view?.chapters.length && filter.size > 0 && !!rows && !rows.some((r) => r.kind === "turn");
   const annotations = useMemo(
     () => (view ? { types: view.types, key: view.key, chapters: view.chapters } : null), [view]);
 
@@ -302,10 +304,17 @@ export function TranscriptView({
       )}
       {types && <TypeFilters counts={counts} value={filter} onChange={setFilter} />}
       {toolbar}
-      <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onNameSpeaker={onNameSpeaker}
-        onSpeaker={onSpeaker} selected={selected} onSelect={onSelect ? select : undefined} onSplitAt={onSplitAt}
-        marks={active ? marks : undefined} onAskAgent={onAskAgent} rows={rows} annotations={annotations}
-        onAskChapter={onAskChapter} onExpand={expand} />
+      {noMatches ? (
+        <div className="turns-empty" role="status">
+          <p className="turns-empty__text">Нет реплик по выбранным фильтрам</p>
+          <button type="button" className="link-btn" onClick={() => setFilter(NO_FILTER)}>Сбросить фильтр</button>
+        </div>
+      ) : (
+        <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onNameSpeaker={onNameSpeaker}
+          onSpeaker={onSpeaker} selected={selected} onSelect={onSelect ? select : undefined} onSplitAt={onSplitAt}
+          marks={active ? marks : undefined} onAskAgent={onAskAgent} rows={rows} annotations={annotations}
+          onAskChapter={onAskChapter} onExpand={expand} />
+      )}
     </div>
   );
 }

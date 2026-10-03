@@ -104,12 +104,41 @@ test("фильтры по типам: несколько сразу, остал�
   await userEvent.click(within(chips).getByRole("button", { name: /Риски/ }));
   expect(turnRows(container).map((r) => r.dataset.turn)).toEqual(["1", "4"]);
   const more = [...container.querySelectorAll<HTMLElement>(".turns-more")];
-  expect(more.map((m) => m.textContent)).toEqual(["… 1 реплика", "… 2 реплики", "… 2 реплики"]);
-  // Заголовки глав видны и с фильтром.
-  expect(container.querySelectorAll(".chapter-head")).toHaveLength(2);
+  expect(more.map((m) => m.textContent)).toEqual(["… 1 реплика", "… 2 реплики"]);
+  // Глава 2 («Найм») без подходящих реплик скрыта целиком, глава 1 остаётся «Глава 1».
+  expect([...container.querySelectorAll(".chapter-head h3")].map((h) => h.textContent)).toEqual(["Глава 1 · Бюджет на квартал"]);
   await userEvent.click(more[1]!);
   expect(turnRows(container).map((r) => r.dataset.turn)).toEqual(["1", "2", "3", "4"]);
   await userEvent.click(screen.getByRole("button", { name: "Показать все" }));
+  expect(turnRows(container)).toHaveLength(7);
+});
+
+test("глава без реплик по фильтру скрыта целиком; номера глав не сдвигаются; без фильтра — всё как было", async () => {
+  const { container } = view();
+  const heads = () => [...container.querySelectorAll(".chapter-head h3")].map((h) => h.textContent);
+  expect(heads()).toEqual(["Глава 1 · Бюджет на квартал", "Глава 2 · Найм в команду"]);
+  // Идея только в главе 2: глава 1 пропадает вместе со своими «… N реплик», «Глава 2» остаётся второй.
+  await userEvent.click(screen.getByRole("button", { name: /Идеи/ }));
+  expect(heads()).toEqual(["Глава 2 · Найм в команду"]);
+  expect(container.querySelectorAll(".turns-more")).toHaveLength(1);
+  expect(turnRows(container).map((r) => r.dataset.turn)).toEqual(["6"]);
+  await userEvent.click(screen.getByRole("button", { name: /Идеи/ }));
+  expect(heads()).toEqual(["Глава 1 · Бюджет на квартал", "Глава 2 · Найм в команду"]);
+  expect(container.querySelectorAll(".turns-more")).toHaveLength(0);
+  expect(turnRows(container)).toHaveLength(7);
+});
+
+test("все главы пусты по фильтру: одно «Нет реплик по выбранным фильтрам» и «Сбросить фильтр»", async () => {
+  const { container, rerender } = view();
+  await userEvent.click(screen.getByRole("button", { name: /Идеи/ }));
+  // Анализ обновился: идей в нём больше нет, а фильтр остался включённым.
+  const noIdeas = buildView(TURNS, { ...ANALYSIS, phrase_types: { 1: "question" } }, SEGMENTS.length, ALL);
+  rerender(<TranscriptView turns={TURNS} colors={new Map()} playable onPlay={() => {}} view={noIdeas} />);
+  expect(screen.getByText("Нет реплик по выбранным фильтрам")).toBeInTheDocument();
+  expect(container.querySelectorAll(".chapter-head, .turns-more, .turn")).toHaveLength(0);
+  await userEvent.click(screen.getByRole("button", { name: "Сбросить фильтр" }));
+  expect(screen.queryByText("Нет реплик по выбранным фильтрам")).toBeNull();
+  expect(container.querySelectorAll(".chapter-head")).toHaveLength(2);
   expect(turnRows(container)).toHaveLength(7);
 });
 
