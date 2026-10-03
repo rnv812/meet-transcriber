@@ -447,7 +447,8 @@ export type TurnRow =
  * репликой главы). С фильтром по типам — подходящие реплики, а также `shown`
  * (найденные поиском, открытые по ссылке, развёрнутые); подряд идущие
  * остальные — одной строкой «… N реплик». Свёрнутое не переходит через начало
- * главы: заголовки глав видны всегда.
+ * главы. Глава без подходящих реплик (при фильтре) скрыта целиком: ни заголовка,
+ * ни «… N реплик»; номер главы берётся из данных, так что остальные не сдвигаются.
  */
 export function layoutRows(
   turns: Turn[],
@@ -465,10 +466,20 @@ export function layoutRows(
     if (run && run.count > 0) rows.push({ kind: "more", ...run });
     run = null;
   };
+  // Начало открытой главы в `rows` и есть ли в ней показанные реплики.
+  let head = -1;
+  let hasTurn = false;
+  const closeChapter = () => {
+    flush();
+    if (filtering && head >= 0 && !hasTurn) rows.length = head;
+    head = -1;
+  };
   for (let i = 0; i < turns.length; i++) {
     const c = opts.chapterStart?.[i] ?? -1;
     if (c >= 0) {
-      flush();
+      closeChapter();
+      head = rows.length;
+      hasTurn = false;
       rows.push({ kind: "chapter", c });
     }
     const t = turns[i]!;
@@ -477,13 +488,14 @@ export function layoutRows(
     if (visible) {
       flush();
       rows.push({ kind: "turn", i });
+      hasTurn = true;
     } else {
       run ??= { from: i, to: i, count: 0 };
       run.to = i;
       if (t.kind !== "break") run.count += 1;
     }
   }
-  flush();
+  closeChapter();
   return rows;
 }
 

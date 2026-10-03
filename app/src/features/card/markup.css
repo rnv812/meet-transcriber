@@ -75,3 +75,6 @@
   max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .insight__ref:hover { color: var(--text); border-color: var(--accent); }
+
+.turns-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 32px 16px; color: var(--text-3); font-size: 13px; text-align: center; }
+.turns-empty__text { margin: 0; }

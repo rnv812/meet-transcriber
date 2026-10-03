@@ -106,9 +106,13 @@ test("строки ленты: заголовки глав, фильтр сво�
     { kind: "chapter", c: 1 }, { kind: "turn", i: 3 }, { kind: "turn", i: 4 },
   ]);
   expect(layoutRows(TURNS, { types: v.types, chapterStart: v.chapterStart, filter: new Set(["risk"]) })).toEqual([
-    { kind: "chapter", c: 0 }, { kind: "more", from: 0, to: 2, count: 2 },
     { kind: "chapter", c: 1 }, { kind: "turn", i: 3 }, { kind: "more", from: 4, to: 4, count: 1 },
   ]);
+  // Глава без подходящих реплик скрыта целиком (и заголовок, и «… N реплик»).
+  expect(layoutRows(TURNS, { types: v.types, chapterStart: v.chapterStart, filter: new Set(["question"]) })).toEqual([
+    { kind: "chapter", c: 0 }, { kind: "turn", i: 0 }, { kind: "more", from: 1, to: 2, count: 1 },
+  ]);
+  expect(layoutRows(TURNS, { types: v.types, chapterStart: v.chapterStart, filter: new Set(["idea"]) })).toEqual([]);
   // Найденное поиском или открытое по ссылке — видно несмотря на фильтр.
   // Свёрнутый один перерыв (ни одной реплики) строки «… 0 реплик» не даёт.
   expect(layoutRows(TURNS, { types: v.types, filter: new Set(["risk"]), shown: (i) => i === 1 })).toEqual([
