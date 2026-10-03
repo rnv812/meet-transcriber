@@ -1604,6 +1604,20 @@ def save(settings: Settings, path: Path | None = None) -> None:
         _write_raw(target, merged)
 
 
+def drop_retired(path: Path | None = None) -> bool:
+    """Убрать из файла настроек RETIRED_SECTIONS, не трогая остального. →
+    было ли что убирать. Файла нет или он не читается — ничего."""
+    target = Path(path or paths.config_path())
+    with _FILE_LOCK:
+        if not target.is_file():
+            return False
+        raw = read_raw(target)
+        if not any(name in raw for name in RETIRED_SECTIONS):
+            return False
+        _write_raw(target, {k: v for k, v in raw.items() if k not in RETIRED_SECTIONS})
+        return True
+
+
 # --- токен Hugging Face в файле: только запасной путь ------------------------
 
 # Чтение-правка-запись config.json из разных потоков резидента (PATCH из окна,

@@ -84,6 +84,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     make_improve(id) -> dict              поставить задачу улучшения (409 без модели)
     improve_apply(id, body)               выбранные замены — одним шагом истории
     improve_dismiss(id)                   подсказку после GigaAM больше не показывать
+    profiles_removed() / dismiss_...()    отметка «профили людей убраны» и «Понятно»
     kb_export(id) -> dict                 выгрузить встречу в базу знаний (400 без папки)
     export_preview(params) -> dict        как назовётся папка встречи по шаблону
     assistant() -> dict                   кто отвечает, что установлено, папки
@@ -794,6 +795,10 @@ _ROUTES = {
     ("PUT", "/hotwords"): lambda h, p: _server_of(h).state.put_hotwords(h._body()),
     ("POST", "/hotwords/remove"): lambda h, p: _server_of(h).state.remove_hotword(h._body()),
     ("GET", "/voices"): lambda h, p: _server_of(h).state.people(),
+    # Профили людей убраны в 0.3.2: отметка об уборке и «Понятно».
+    ("GET", "/notices/profiles-removed"): lambda h, p: _server_of(h).state.profiles_removed(),
+    ("DELETE", "/notices/profiles-removed"):
+        lambda h, p: _server_of(h).state.dismiss_profiles_removed(),
     ("GET", "/jobs"): lambda h, p: _server_of(h).state.jobs(),
     ("GET", "/engine"): lambda h, p: _server_of(h).state.engine(),
     ("GET", "/models"): lambda h, p: _server_of(h).state.models(),

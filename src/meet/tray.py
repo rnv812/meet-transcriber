@@ -886,6 +886,7 @@ class TrayApp:
         — пишем строку в журнал и работаем как раньше, без UI."""
         from meet import control
 
+        self._retire_profiles()
         try:
             # Фиксированный порт + постоянный токен: адрес API не меняется между
             # перезапусками, UI не дёргает переподключение. fallback — откат на
@@ -913,6 +914,17 @@ class TrayApp:
         except Exception as e:
             self.log(f"восстановление после перезапуска не запущено: {e!r}")
         return server
+
+    def _retire_profiles(self) -> None:
+        """Профили людей убраны в 0.3.2: заметки — в один файл, остальное
+        удалить (meet.retired_profiles). До control API — окно сразу видит
+        отметку. Сбой уборки не мешает запуску."""
+        from meet import retired_profiles
+
+        try:
+            retired_profiles.run(_state_dir(), settings.load().recording.voices, log=self.log)
+        except Exception as e:
+            self.log(f"профили: уборка не удалась: {type(e).__name__}: {e}")
 
     def _release_lock(self, lock: Path) -> None:
         """Снять свой lock — но только свой: за время работы его мог перехватить

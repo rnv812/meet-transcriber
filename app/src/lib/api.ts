@@ -10,7 +10,7 @@
 
 import { inTauri, invoke } from "./shell";
 import type {
-  AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, Person, PersonCard,
+  AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, Person, PersonCard, ProfilesRemovedNotice,
   Category, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript,
@@ -228,6 +228,12 @@ export const mergePerson = (ep: Endpoint, name: string, into: string) =>
   json<unknown>(ep, `/voices/${enc(name)}/merge`, body("POST", { into }));
 export const deletePerson = (ep: Endpoint, name: string) =>
   json<unknown>(ep, `/voices/${enc(name)}`, { method: "DELETE" });
+
+// Профили людей убраны в 0.3.2: строка об уборке в «Голосах» и «Понятно».
+export const getProfilesRemoved = (ep: Endpoint) =>
+  json<{ notice: ProfilesRemovedNotice | null }>(ep, "/notices/profiles-removed");
+export const dismissProfilesRemoved = (ep: Endpoint) =>
+  json<{ ok: boolean }>(ep, "/notices/profiles-removed", { method: "DELETE" });
 
 // --- настройки и сервис -----------------------------------------------------
 

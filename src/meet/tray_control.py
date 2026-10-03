@@ -1168,6 +1168,22 @@ class TrayControl:
     def settings(self) -> dict:
         return settings.load().to_raw()
 
+    # --- профили людей убраны (0.3.2) -------------------------------------
+
+    def profiles_removed(self) -> dict:
+        """Отметка об уборке профилей (meet.retired_profiles) для строки в
+        «Голосах»: {"notice": {"notes", "folder"} | None}."""
+        from meet import retired_profiles
+
+        return {"notice": retired_profiles.notice(paths.data_dir())}
+
+    def dismiss_profiles_removed(self) -> dict:
+        """«Понятно»: строку больше не показывать."""
+        from meet import retired_profiles
+
+        retired_profiles.dismiss(paths.data_dir())
+        return {"ok": True}
+
     def patch_settings(self, updates: dict) -> dict:
         integrations = (updates or {}).get("integrations")
         if isinstance(integrations, dict) and str(integrations.get("hf_token") or "").strip():
