@@ -4,6 +4,7 @@ import { VoicesPane } from "./VoicesPane";
 import { NOTES_SAVE_MS, ProfileNotes, ProfileTab } from "./ProfileTab";
 import * as api from "../../lib/api";
 import type { Person, Profile, ProfileView } from "../../lib/types";
+import { PCM_COLORS, PCM_LABELS, PCM_TYPES, pcmLabel } from "../../lib/pcm";
 
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
@@ -209,13 +210,40 @@ test("PCM: «этажи» — шесть строк, база внизу, фаз
   expect(rows.at(-1)!.textContent).toContain("Логик (Thinker)");
   expect(chart).toHaveAttribute("aria-label", "Этажи модели PCM снизу вверх. 1: Логик (Thinker) — 5 из 5 (база); "
     + "2: Деятель (Promoter) — 4 из 5 (фаза); 3: Упорный (Persister) — 2 из 5; 4: Бунтарь (Rebel) — 2 из 5; "
-    + "5: Гармонизатор (Harmonizer) — 1 из 5; 6: Мечтатель (Imaginer) — 0 из 5.");
+    + "5: Душевный (Harmonizer) — 1 из 5; 6: Мечтатель (Imaginer) — 0 из 5.");
   expect(within(section).getByText("уверенность 62 %")).toBeInTheDocument();
   expect(within(section).getByText("«Какие данные у нас есть по срокам?»")).toBeInTheDocument();
   expect(within(section).getByRole("region", { name: "Как давать признание" })).toHaveTextContent("Отмечать точность");
   expect(within(section).getByRole("region", { name: "Признаки напряжения" })).toHaveTextContent("Как вернуть в конструктив");
   expect(within(section).getByRole("region", { name: "Как строить разговор" })).toHaveTextContent("Начинать с цели");
   expect(within(section).getByText(/товарный знак Kahler Communications/)).toBeInTheDocument();
+});
+
+test("PCM: клетки уровня — в цвете типа, пустые — без цвета; у «База» и «Фаза» — точка того же цвета", async () => {
+  open({ ...ready, profile: PCM_PROFILE, pcm_enabled: true });
+  fireEvent.click(await screen.findByRole("tab", { name: "Профиль" }));
+  const section = screen.getByRole("region", { name: "Модель PCM" });
+  const rows = [...within(section).getByRole("img").querySelectorAll<HTMLElement>(".pcm-floor")];
+  const colorOf = (t: string) => rows.find((r) => r.dataset.type === t)!.style.getPropertyValue("--pcm");
+  expect(Object.fromEntries(PCM_TYPES.map((t) => [t, colorOf(t)]))).toEqual(PCM_COLORS);
+  expect(PCM_COLORS).toMatchObject({ thinker: "#0096D6", harmonizer: "#F7941D", rebel: "#F0E80F", promoter: "#EE3A2B" });
+  // Закрашено столько клеток, сколько уровень; остальные — пустые (приглушённые).
+  const promoter = rows.find((r) => r.dataset.type === "promoter")!;
+  expect(promoter.querySelectorAll(".pcm-floor__cell--on")).toHaveLength(4);
+  expect(promoter.querySelectorAll(".pcm-floor__cell:not(.pcm-floor__cell--on)")).toHaveLength(1);
+  // «База» / «Фаза»: точка в цвете типа, название словами остаётся.
+  const base = within(section).getByText("База").parentElement!;
+  expect(base.querySelector<HTMLElement>(".pcm-dot")!.style.getPropertyValue("--pcm")).toBe(PCM_COLORS.thinker);
+  expect(base).toHaveTextContent("Логик (Thinker)");
+  const phase = within(section).getByText("Фаза").parentElement!;
+  expect(phase.querySelector<HTMLElement>(".pcm-dot")!.style.getPropertyValue("--pcm")).toBe(PCM_COLORS.promoter);
+  expect(phase.querySelector(".pcm-dot")).toHaveAttribute("aria-hidden", "true");
+});
+
+test("PCM: русские названия типов — Логик, Душевный, Упорный, Бунтарь, Деятель, Мечтатель", () => {
+  expect(PCM_TYPES.map((t) => PCM_LABELS[t].ru).sort()).toEqual(
+    ["Бунтарь", "Деятель", "Душевный", "Логик", "Мечтатель", "Упорный"]);
+  expect(pcmLabel("harmonizer")).toBe("Душевный (Harmonizer)");
 });
 
 test("PCM: мало данных — понятная строка вместо «этажей»", async () => {

@@ -29,8 +29,8 @@
 .pcm-floor__en { color: var(--text-3); }
 .pcm-floor__bar { display: inline-flex; gap: 2px; }
 .pcm-floor__cell { width: 10px; height: 8px; border-radius: 2px; background: var(--line-2); }
-.pcm-floor__cell--on { background: var(--accent-hi); }
-.pcm-floor--base .pcm-floor__cell--on { background: var(--accent); }
+/* Закрашенные клетки — в цвете типа (--pcm из PCM_COLORS), пустые — приглушённые. */
+.pcm-floor__cell--on { background: var(--pcm, var(--accent-hi)); }
 .pcm-floor__marks { display: inline-flex; gap: 3px; justify-content: flex-end; }
 .pcm-mark { font-size: 10px; padding: 0 5px; border-radius: 8px; color: var(--accent-hi); border: 1px solid rgba(124, 134, 240, 0.45); }
 .pcm-mark--phase { color: var(--amber); border-color: rgba(245, 165, 36, 0.45); }
@@ -38,7 +38,8 @@
 .pcm__facts { display: flex; flex-direction: column; gap: 10px; }
 .pcm-fact { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
 .pcm-fact__k { width: 100%; font-size: 11px; color: var(--text-3); }
-.pcm-fact__v { color: var(--text); font-weight: 600; }
+.pcm-fact__v { display: inline-flex; align-items: baseline; gap: 6px; color: var(--text); font-weight: 600; }
+.pcm-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--pcm); align-self: center; }
 .pcm-fact__c { color: var(--text-3); font-size: 11px; }
 .pcm-fact .profile__refs { width: 100%; }
 .pcm__phrases { width: 100%; margin: 2px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }

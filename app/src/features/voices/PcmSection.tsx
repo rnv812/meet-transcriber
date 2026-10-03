@@ -6,20 +6,31 @@
  * Подписан прямо: гипотеза, не сертифицированная оценка.
  */
 
-import type { Pcm, Profile } from "../../lib/types";
-import { floorsText, PCM_FLOOR_MAX, PCM_HYPOTHESIS, PCM_LABELS, pcmFloors, pcmLabel, percent } from "../../lib/pcm";
+import type { CSSProperties } from "react";
+import type { Pcm, PcmType, Profile } from "../../lib/types";
+import {
+  floorsText, PCM_COLORS, PCM_FLOOR_MAX, PCM_HYPOTHESIS, PCM_LABELS, pcmFloors, pcmLabel, percent,
+} from "../../lib/pcm";
 import { HideButton, RefChips, type OpenAt as Open } from "./RefChips";
 import { Truncate } from "../../ui/Truncate";
 import "./pcm.css";
 
-/** «Этажи»: шесть строк, база — нижняя, полоса 0–5, отмечены база и фаза. */
+/** Цвет типа для CSS: закрашенные клетки и точка у названия берут его из --pcm. */
+const typeColor = (t: PcmType) => ({ "--pcm": PCM_COLORS[t] }) as CSSProperties;
+
+/** Точка цвета типа перед названием (только украшение: тип подписан словами). */
+function PcmDot({ type }: { type: PcmType }) {
+  return <span className="pcm-dot" style={typeColor(type)} aria-hidden="true" />;
+}
+
+/** «Этажи»: шесть строк, база — нижняя, полоса 0–5 в цвете типа, отмечены база и фаза. */
 export function PcmFloors({ pcm }: { pcm: Pcm }) {
   const floors = pcmFloors(pcm);
   return (
     <figure className="pcm-house" role="img" aria-label={floorsText(pcm)}>
       <div className="pcm-house__roof" aria-hidden="true" />
       {[...floors].reverse().map((f) => (
-        <div key={f.type} aria-hidden="true" data-type={f.type}
+        <div key={f.type} aria-hidden="true" data-type={f.type} style={typeColor(f.type)}
           className={`pcm-floor${f.base ? " pcm-floor--base" : ""}${f.phase ? " pcm-floor--phase" : ""}`}>
           <Truncate className="pcm-floor__name" text={`${PCM_LABELS[f.type].ru} (${PCM_LABELS[f.type].en})`}>
             {PCM_LABELS[f.type].ru} <span className="pcm-floor__en">({PCM_LABELS[f.type].en})</span>
@@ -46,7 +57,7 @@ function Claim({ title, claim, profile, onOpenAt }: {
   return (
     <div className="pcm-fact">
       <span className="pcm-fact__k">{title}</span>
-      <span className="pcm-fact__v">{pcmLabel(claim.type)}</span>
+      <span className="pcm-fact__v"><PcmDot type={claim.type} />{pcmLabel(claim.type)}</span>
       <span className="pcm-fact__c">уверенность {percent(claim.confidence)}</span>
       <RefChips profile={profile} refs={claim.refs} onOpenAt={onOpenAt} />
     </div>
