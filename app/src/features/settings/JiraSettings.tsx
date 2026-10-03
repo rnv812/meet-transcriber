@@ -114,7 +114,7 @@ function Aliases({ project, disabled, onChange }: {
         </ul>
       )}
       <span className="jproj__add">
-        <input type="text" aria-label={`Новый вариант названия ${project.key}`} placeholder="например, орайон"
+        <input type="text" aria-label={`Новый вариант названия ${project.key}`} placeholder="как ещё говорят на встречах"
           value={text} disabled={disabled} spellCheck={false} aria-invalid={error ? true : undefined}
           onChange={(e) => setText(e.target.value)} onKeyDown={onKey} />
         <Button onClick={add} disabled={disabled || !typed || !!error}>Добавить вариант</Button>
