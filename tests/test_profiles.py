@@ -486,15 +486,15 @@ def test_pcm_without_a_referenced_base_is_dropped_and_repaired_once(lib):
 def test_pcm_text_and_public_view(lib):
     from meet import pcm
 
-    assert pcm.label("harmonizer") == "Гармонизатор (Harmonizer)"
-    assert [pcm.LABELS[t] for t in pcm.TYPES] == ["Логик", "Упорный", "Гармонизатор", "Мечтатель", "Бунтарь",
+    assert pcm.label("harmonizer") == "Душевный (Harmonizer)"
+    assert [pcm.LABELS[t] for t in pcm.TYPES] == ["Логик", "Упорный", "Душевный", "Мечтатель", "Бунтарь",
                                                   "Деятель"]
     _library(lib)
     doc = profiles.build("0123456789abcdef", "Вера", lib["rec"], _runner([_pcm_reply(PCM)]), _cfg())
     text = profiles.text_view(doc, "Вера")
     assert "Модель PCM — гипотеза по репликам во встречах, не сертифицированная оценка" in text
     assert "База: Логик (Thinker), уверенность 62 %" in text
-    assert "Этажи (снизу вверх): Логик 5, Бунтарь 5, Упорный 3, Гармонизатор 1" in text
+    assert "Этажи (снизу вверх): Логик 5, Бунтарь 5, Упорный 3, Душевный 1" in text
     assert "pcm" not in profiles.public(doc, with_pcm=False) and "pcm" in profiles.public(doc)
 
 

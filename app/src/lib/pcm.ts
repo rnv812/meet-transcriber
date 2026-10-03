@@ -12,10 +12,27 @@ export const PCM_TYPES: PcmType[] = ["thinker", "persister", "harmonizer", "imag
 export const PCM_LABELS: Record<PcmType, { ru: string; en: string }> = {
   thinker: { ru: "Логик", en: "Thinker" },
   persister: { ru: "Упорный", en: "Persister" },
-  harmonizer: { ru: "Гармонизатор", en: "Harmonizer" },
+  harmonizer: { ru: "Душевный", en: "Harmonizer" },
   imaginer: { ru: "Мечтатель", en: "Imaginer" },
   rebel: { ru: "Бунтарь", en: "Rebel" },
   promoter: { ru: "Деятель", en: "Promoter" },
+};
+
+/**
+ * Цвета типов — канонические цвета «этажей» модели: Логик — голубой, Душевный —
+ * оранжевый, Упорный — фиолетовый, Бунтарь — жёлтый, Деятель — красный,
+ * Мечтатель — коричневый. Оттенок сохранён; фиолетовый светлее оригинала
+ * (#7B3F99), чтобы на тёмном фоне закрашенные клетки были заметны (контраст
+ * не ниже 3:1 с фоном и с пустой клеткой). Цвет — только дополнительная
+ * подсказка: тип всегда подписан словами, уровень — числом закрашенных клеток.
+ */
+export const PCM_COLORS: Record<PcmType, string> = {
+  thinker: "#0096D6",
+  persister: "#A666C9",
+  harmonizer: "#F7941D",
+  imaginer: "#B8826C",
+  rebel: "#F0E80F",
+  promoter: "#EE3A2B",
 };
 
 export const PCM_HYPOTHESIS = "Гипотеза по репликам во встречах, не сертифицированная оценка";
