@@ -54,17 +54,21 @@ export function Switch({ label, hint, help, value, onChange }: {
   );
 }
 
-export function Radio<T extends string>({ label, hint, help, value, options, onChange }: {
+export function Radio<T extends string>({ label, hint, help, value, options, disabled, onChange }: {
   label: string; hint?: ReactNode; help?: ReactNode; value: T;
-  options: { value: T; label: string }[]; onChange: (v: T) => void;
+  options: { value: T; label: string }[];
+  /** Выбор сейчас недоступен (строка приглушена, причина — рядом). */
+  disabled?: boolean;
+  onChange: (v: T) => void;
 }) {
   const name = useId();
   return (
-    <Row label={label} hint={hint} help={help}>
-      <div role="radiogroup" aria-label={label} className="radios">
+    <Row label={label} hint={hint} help={help} disabled={disabled}>
+      <div role="radiogroup" aria-label={label} aria-disabled={disabled || undefined} className="radios">
         {options.map((o) => (
           <label key={o.value} className="radios__item">
-            <input type="radio" name={name} checked={value === o.value} onChange={() => onChange(o.value)} />
+            <input type="radio" name={name} checked={value === o.value} disabled={disabled}
+              onChange={() => onChange(o.value)} />
             {o.label}
           </label>
         ))}

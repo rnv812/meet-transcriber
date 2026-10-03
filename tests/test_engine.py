@@ -256,6 +256,35 @@ def test_explicit_device_setting_wins_over_gpu_probe(monkeypatch):
     assert engine.state()["device"] == "cpu"
 
 
+def test_state_tells_whether_the_gpu_can_recognise_and_why_not(monkeypatch):
+    """Для настроек «Распознавание»: годится ли видеокарта независимо от
+    выбранного устройства (явный «Процессор» её не прячет) и почему нет."""
+    from meet import asr
+
+    monkeypatch.setattr(asr, "engine_profile", lambda prefix=None: "cuda")
+    monkeypatch.setattr(asr, "cuda_runtime_ok", lambda **kw: True)
+    _with_setting(monkeypatch, "cpu", True)
+    state = engine.state()
+    assert (state["device"], state["cuda_ok"], state["cuda_reason"]) == ("cpu", True, None)
+
+    _with_setting(monkeypatch, "auto", False)
+    state = engine.state()
+    assert (state["cuda_ok"], state["cuda_reason"]) == (False, "видеокарта NVIDIA не найдена")
+
+    monkeypatch.setattr(asr, "engine_profile", lambda prefix=None: "cpu")
+    monkeypatch.setattr(asr, "cuda_runtime_ok", lambda **kw: False)
+    _with_setting(monkeypatch, "auto", True)
+    assert engine.state()["cuda_reason"] == "установлен движок для процессора"
+
+    monkeypatch.setattr(asr, "engine_profile", lambda prefix=None: None)
+    calls = []
+    monkeypatch.setattr(asr, "cuda_runtime_ok", lambda **kw: calls.append(kw) or False)
+    state = engine.state()
+    assert (state["cuda_ok"], state["cuda_reason"]) == (False, "не найдены библиотеки CUDA (cuBLAS, cuDNN)")
+    # Без загрузки DLL: загруженная библиотека мешает pip обновить её.
+    assert calls and all(kw == {"load": False} for kw in calls)
+
+
 def test_state_does_not_import_ctranslate2(monkeypatch):
     from meet import asr
 

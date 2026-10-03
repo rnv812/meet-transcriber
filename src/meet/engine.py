@@ -167,6 +167,21 @@ def _device(gpu_available: bool) -> str:
     return "cuda" if gpu_available and asr.cuda_runtime_ok(load=False) else "cpu"
 
 
+def cuda_status(gpu_available: bool) -> tuple[bool, str | None]:
+    """Годится ли видеокарта для распознавания — независимо от выбранного
+    устройства (настройки показывают её строку и при явном «Процессор»), и
+    почему нет. Правило то же, что у «auto» в `_device`, без загрузки DLL."""
+    from meet import asr
+
+    if not gpu_available:
+        return False, "видеокарта NVIDIA не найдена"
+    if asr.engine_profile() in asr.CPU_PROFILES:
+        return False, "установлен движок для процессора"
+    if not asr.cuda_runtime_ok(load=False):
+        return False, "не найдены библиотеки CUDA (cuBLAS, cuDNN)"
+    return True, None
+
+
 def estimate_seconds(duration_s: float, device: str, backend: str | None = None) -> float:
     return duration_s * speed_factor(device, backend)
 
@@ -236,6 +251,7 @@ def state() -> dict:
                if not c["installed"] and not c.get("optional")]
     card = gpu()
     device = _device(card["available"])
+    cuda_ok, cuda_reason = cuda_status(card["available"])
     return {
         "installed": not missing,
         "missing": missing,
@@ -247,6 +263,8 @@ def state() -> dict:
         "target": str(Path(sys.prefix)),
         "ffmpeg": bool(shutil.which("ffmpeg")),
         "device": device,
+        "cuda_ok": cuda_ok,
+        "cuda_reason": cuda_reason,
         "backend": _backend(device),
         "speed_factor": speed_factor(device, _backend(device)),
         "disk_free_gb": _free_gb(Path(sys.prefix)),

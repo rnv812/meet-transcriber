@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  type Endpoint, type Model, type ModelsState, GIGAAM_PREFIX, canDownloadModel, downloadModel, getModels, isGigaam,
-  removeModel,
+  type Endpoint, type Model, type ModelsState, canDownloadModel, downloadModel, getModels, isGigaam, removeModel,
 } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { inTauri, retryGigaamInstall } from "../../lib/shell";
@@ -27,12 +26,16 @@ function downloadBlocked(model: Model, busy: boolean, canDownload: boolean): str
   return null;
 }
 
-function ModelRow({ model, job, busy, canDownload, selected, confirming, onDownload, onSelect, onRemove,
+function ModelRow({ model, job, busy, canDownload, usage, confirming, onDownload, onRemove,
   onConfirmRemove, onCancelRemove }: {
-  model: Model; job: Job | null; busy: boolean; canDownload: boolean; selected: boolean; confirming: boolean;
-  onDownload: () => void; onSelect: () => void; onRemove: () => void;
+  model: Model; job: Job | null; busy: boolean; canDownload: boolean;
+  /** Где модель выбрана в «Распознавании»; пусто — нигде. */
+  usage: string[];
+  confirming: boolean;
+  onDownload: () => void; onRemove: () => void;
   onConfirmRemove: () => void; onCancelRemove: () => void;
 }) {
+  const selected = usage.length > 0;
   const mine = job && job.folder === model.id ? job : null;
   const loading = mine !== null && jobActive(mine);
   const blocked = downloadBlocked(model, busy, canDownload);
@@ -49,15 +52,14 @@ function ModelRow({ model, job, busy, canDownload, selected, confirming, onDownl
           {model.downloaded ? " · скачана" : ""}{model.blocked ? " · нужен токен Hugging Face" : ""}
           {!model.downloaded && model.removable ? " · загрузка не завершена" : ""}
         </span>
+        {selected && <span className="srow__hint model-row__usage">Выбрана в «Распознавании»: {usage.join("; ")}</span>}
       </div>
       <div className="srow__control">
-        {model.kind === "asr" && (selected ? (
-          <span className="model-row__chosen" title="Эта модель распознаёт речь по умолчанию">
+        {selected && (
+          <span className="model-row__chosen" title="Модель выбрана в разделе «Распознавание»">
             <Icon as={Check} size="sm" />Выбрана
           </span>
-        ) : (
-          <Button onClick={onSelect}>Выбрать</Button>
-        ))}
+        )}
         {isGigaam(model) && model.downloaded ? (
           // GigaAM не обновляется: веса закреплены контрольной суммой.
           <span className="model-row__chosen model-row__chosen--muted">Скачана</span>
@@ -91,15 +93,14 @@ function ModelRow({ model, job, busy, canDownload, selected, confirming, onDownl
   );
 }
 
-export function ModelsPane({ endpoint, selectedModel, selectedGigaam = null, onSelect, onSelectGigaam }: {
+/**
+ * Модели: загрузка, удаление, размеры. Выбирают модель в «Распознавании»;
+ * здесь только видно, где она выбрана (`usage` — по черновику настроек).
+ */
+export function ModelsPane({ endpoint, usage = {} }: {
   endpoint: Endpoint;
-  /** Модель Whisper из черновика (а не сохранённая). */
-  selectedModel: string | null;
-  /** Модель GigaAM из черновика (`asr.gigaam_model`, без префикса). */
-  selectedGigaam?: string | null;
-  onSelect: (id: string) => void;
-  /** Выбрана модель GigaAM: имя без префикса («v3_e2e_rnnt»). */
-  onSelectGigaam?: (name: string) => void;
+  /** id модели → где она выбрана («видеокарта», «процессор — записи не на русском»). */
+  usage?: Record<string, string[]>;
 }) {
   const [models, setModels] = useState<ModelsState | null>(null);
   const [tried, setTried] = useState(false);
@@ -148,14 +149,6 @@ export function ModelsPane({ endpoint, selectedModel, selectedGigaam = null, onS
   }
   const downloading = jobActive(job);
   const busy = downloading || removing;
-  const isSelected = (m: Model) => {
-    if (isGigaam(m)) return selectedGigaam !== null ? m.id === GIGAAM_PREFIX + selectedGigaam : m.selected;
-    return selectedModel !== null ? m.id === selectedModel : m.selected;
-  };
-  const select = (m: Model) => {
-    if (isGigaam(m)) onSelectGigaam?.(m.id.slice(GIGAAM_PREFIX.length));
-    else onSelect(m.id);
-  };
   return (
     <>
       {token}
@@ -179,8 +172,8 @@ export function ModelsPane({ endpoint, selectedModel, selectedGigaam = null, onS
       {models.items.map((m) => (
         <ModelRow
           key={m.id} model={m} job={job} busy={busy} canDownload={canDownloadModel(models, m)}
-          selected={isSelected(m)} confirming={confirmRemove === m.id}
-          onDownload={() => void download(m.id)} onSelect={() => select(m)}
+          usage={m.kind === "asr" ? usage[m.id] ?? [] : []} confirming={confirmRemove === m.id}
+          onDownload={() => void download(m.id)}
           onRemove={() => setConfirmRemove(m.id)}
           onConfirmRemove={() => void remove(m.id)} onCancelRemove={() => setConfirmRemove(null)}
         />
