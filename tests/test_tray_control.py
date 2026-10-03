@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from meet import events, jobs, library, settings, tray, tray_control, watch
+from meet import events, jobs, library, live_control, settings, tray, tray_control, watch
 
 
 def _write_config(root, data: dict) -> None:
@@ -619,6 +619,41 @@ def test_auto_transcribe_off_skips_queue(app, tmp_path, monkeypatch):
         {"recording": {"auto_transcribe": False}}))
     app.on_saved(str(_saved_folder(tmp_path)), tray_control.MANUAL, True)
     assert queue.submitted == []
+
+
+def _live_hooks(app, monkeypatch):
+    """Резидент, у которого пост-хук только запоминает папку."""
+    hooks = []
+    monkeypatch.setattr(tray, "_run_post_hook", lambda f: hooks.append(f))
+    state = tray_control.TrayControl(app, queue=_Queue())
+    state._background = lambda fn, name=None: fn()
+    return hooks
+
+
+def test_live_stop_runs_post_hook(app, tmp_path, monkeypatch):
+    """Запись с ассистентом — такая же сохранённая запись: пост-хук зовётся и
+    после неё, а не только после остановки обычной."""
+    hooks = _live_hooks(app, monkeypatch)
+    folder = _saved_folder(tmp_path)
+    app.bus.emit(live_control.LIVE_STOPPED, folder=str(folder), complete=True)
+    assert hooks == [str(folder)]
+
+
+def test_unfinished_live_stop_skips_post_hook(app, tmp_path, monkeypatch):
+    """Ассистент убит до финализации: дорожки неполные, звать некого."""
+    hooks = _live_hooks(app, monkeypatch)
+    folder = _saved_folder(tmp_path)
+    app.bus.emit(live_control.LIVE_STOPPED, folder=str(folder), complete=False)
+    assert hooks == []
+
+
+def test_attached_live_stop_leaves_post_hook_to_the_recording(app, tmp_path, monkeypatch):
+    """Ассистент, подключённый к обычной записи: хук позовёт остановка самой
+    записи, второй раз — не нужно."""
+    hooks = _live_hooks(app, monkeypatch)
+    folder = _saved_folder(tmp_path)
+    app.bus.emit(live_control.LIVE_STOPPED, folder=str(folder), complete=True, attached=True)
+    assert hooks == []
 
 
 def test_discarded_recording_never_reaches_on_saved(app, tmp_path, monkeypatch):

@@ -514,6 +514,11 @@ class TrayApp:
                 self.log("звонок был короткий — Claude не зову, папка осталась")
         self._refresh()
 
+    def run_post_hook(self, folder: str) -> None:
+        """Пост-хук для записи, которую сохранил не stop_recording: запись с
+        ассистентом ведёт дочерний процесс, и её остановку видит адаптер."""
+        _run_post_hook(folder)
+
     # --- пункты меню ----------------------------------------------------
 
     def _on_start(self, icon=None, item=None) -> None:
