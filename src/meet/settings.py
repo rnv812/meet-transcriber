@@ -229,6 +229,122 @@ def jira_keys_error(value) -> str | None:
         return "Шаблон ключей задач находит пустую строку — уточните его"
     return None
 
+
+def jira_keys_pattern(keys: str) -> str:
+    """Шаблон ключа как регулярное выражение: список проектов «SPR, OPS» →
+    `(?:SPR|OPS)-\\d+`, иначе — как есть (так же в окне, lib/jira.ts)."""
+    keys = keys.strip()
+    if _JIRA_PROJECTS.fullmatch(keys):
+        return "(?:" + "|".join(k.strip() for k in keys.split(",")) + r")-\d+"
+    return keys
+
+
+# Проекты Jira (0.3.1): ключ проекта и варианты, как его произносят, сверх
+# построенных автоматически (meet.jira_refs). Ключ — как в Jira: латинская
+# заглавная, дальше заглавные, цифры и «_».
+JIRA_PROJECT_KEY = re.compile(r"[A-Z][A-Z0-9_]{1,19}")
+JIRA_PROJECTS_MAX = 30
+JIRA_ALIASES_MAX = 10
+JIRA_ALIAS_MAX = 40
+
+
+@dataclass(frozen=True)
+class JiraProject:
+    """Проект Jira: ключ («ORION») и свои варианты произношения («смдэв»)."""
+
+    key: str
+    aliases: tuple[str, ...] = ()
+
+    def to_raw(self) -> dict:
+        return {"key": self.key, "aliases": list(self.aliases)}
+
+
+def jira_alias_error(alias) -> str | None:
+    """Свой вариант названия проекта: буквы (хотя бы три), пробелы, дефис; без цифр."""
+    if not isinstance(alias, str):
+        return "вариант названия — строка"
+    text = " ".join(alias.split())
+    if not text:
+        return "пустой вариант названия"
+    if len(text) > JIRA_ALIAS_MAX:
+        return f"вариант названия длиннее {JIRA_ALIAS_MAX} символов"
+    if any(c.isdigit() for c in text):
+        return f"«{text}» — без цифр: цифры читаются как номер задачи"
+    if any(not (c.isalpha() or c in " -'’") for c in text):
+        return f"«{text}» — только буквы, пробелы и дефис"
+    if sum(c.isalpha() for c in text) < 3:
+        return f"«{text}» — нужно хотя бы три буквы"
+    return None
+
+
+def jira_projects_error(value) -> str | None:
+    """Список проектов из окна: [{"key", "aliases"}]. None — годится."""
+    if not isinstance(value, list):
+        return "Проекты Jira — список"
+    if len(value) > JIRA_PROJECTS_MAX:
+        return f"Проектов Jira больше {JIRA_PROJECTS_MAX}"
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            return "Проект Jira — объект с ключом и вариантами названия"
+        key = item.get("key")
+        if not isinstance(key, str) or not JIRA_PROJECT_KEY.fullmatch(key.strip()):
+            return (f"«{key}»: ключ проекта — латинские заглавные буквы и цифры, начинается с буквы, "
+                    "от 2 до 20 знаков (например, ORION)")
+        key = key.strip()
+        if key in seen:
+            return f"Проект {key} указан дважды"
+        seen.add(key)
+        aliases = item.get("aliases", [])
+        if not isinstance(aliases, list):
+            return f"{key}: варианты названия — список"
+        if len(aliases) > JIRA_ALIASES_MAX:
+            return f"{key}: вариантов названия больше {JIRA_ALIASES_MAX}"
+        for alias in aliases:
+            error = jira_alias_error(alias)
+            if error:
+                return f"{key}: {error}"
+    return None
+
+
+def as_jira_projects(value) -> tuple[JiraProject, ...]:
+    """Проекты из файла (правка руками): битые ключи и варианты молча
+    отбрасываются, повторы — тоже. Строка вместо объекта — ключ без вариантов."""
+    if not isinstance(value, list):
+        return ()
+    out: list[JiraProject] = []
+    seen: set[str] = set()
+    for item in value[:JIRA_PROJECTS_MAX]:
+        if isinstance(item, str):
+            item = {"key": item}
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip().upper()
+        if not JIRA_PROJECT_KEY.fullmatch(key) or key in seen:
+            continue
+        seen.add(key)
+        raw_aliases = item.get("aliases") if isinstance(item.get("aliases"), list) else []
+        aliases: list[str] = []
+        for alias in raw_aliases:
+            if jira_alias_error(alias) is None:
+                text = " ".join(alias.split())
+                if text.casefold() not in {a.casefold() for a in aliases}:
+                    aliases.append(text)
+        out.append(JiraProject(key=key, aliases=tuple(aliases[:JIRA_ALIASES_MAX])))
+    return tuple(out)
+
+
+def _legacy_jira_keys(raw: dict) -> tuple[tuple[JiraProject, ...], str]:
+    """Прежний `jira_keys` (0.3.0) → (проекты, шаблон для текста): список
+    проектов через запятую становится проектами, своё регулярное выражение —
+    «Дополнительно: шаблон ключа для текста», шаблон по умолчанию — пусто."""
+    keys = str(raw.get("jira_keys") or "").strip()
+    if not keys or keys == DEFAULT_JIRA_KEYS or jira_keys_error(keys):
+        return (), ""
+    if _JIRA_PROJECTS.fullmatch(keys):
+        return as_jira_projects([k.strip() for k in keys.split(",")]), ""
+    return (), keys
+
 # Категории встреч по умолчанию: id — стабильная латиница (её хранят analysis.json
 # и meta.json), имя, цвет и описание — для человека и для модели. Список правит
 # человек (окно настроек — M4); анализ берёт отсюда, что предложить.
@@ -1166,33 +1282,67 @@ class Integrations:
     # Наружу (to_raw, GET /settings) не отдаётся никогда; пишут его только
     # write_hf_token/drop_hf_token.
     hf_token: str = ""
-    # Ссылки на задачи Jira в карточке записи (M3): адрес (пусто — ссылок нет)
-    # и шаблон ключей. Негодное значение из файла — по умолчанию; из окна —
-    # отказ с текстом (check). Оболочка читает адрес отсюда же и открывает
-    # ссылки только на его хост.
+    # Ссылки на задачи Jira в карточке записи: адрес (пусто — ссылок нет),
+    # проекты (ключ и варианты произношения, 0.3.1), проект по умолчанию для
+    # «в баге 4452» и необязательный шаблон ключа для текста («Дополнительно»;
+    # пусто — ключи проектов, а без проектов — любой «ПРОЕКТ-123»). Негодное
+    # значение из файла — по умолчанию; из окна — отказ с текстом (check).
+    # Оболочка читает адрес отсюда же и открывает ссылки только на его хост.
+    # Прежний `jira_keys` (0.3.0) мигрирует при чтении (_legacy_jira_keys).
     jira_base_url: str = ""
-    jira_keys: str = DEFAULT_JIRA_KEYS
+    jira_projects: tuple[JiraProject, ...] = ()
+    jira_default_project: str = ""
+    jira_pattern: str = ""
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Integrations":
         token = raw.get("hf_token")
-        keys = str(raw.get("jira_keys") or "").strip()
+        if "jira_projects" in raw or "jira_pattern" in raw:
+            projects = as_jira_projects(raw.get("jira_projects"))
+            pattern = str(raw.get("jira_pattern") or "").strip()
+            pattern = pattern if pattern and not jira_keys_error(pattern) else ""
+        else:
+            projects, pattern = _legacy_jira_keys(raw)
+        default = str(raw.get("jira_default_project") or "").strip().upper()
         return cls(
             gpu_marker=as_flag(raw.get("gpu_marker"), True),
             gpu_marker_path=as_path(raw.get("gpu_marker_path")),
             hf_token=str(token).strip() if token else "",
             jira_base_url=clean_jira_base(raw.get("jira_base_url")),
-            jira_keys=keys if keys and not jira_keys_error(keys) else DEFAULT_JIRA_KEYS,
+            jira_projects=projects,
+            jira_default_project=default if default in {p.key for p in projects} else "",
+            jira_pattern=pattern,
         )
 
     @staticmethod
-    def check(update: dict) -> None:
-        """Правка из окна: ValueError с текстом для человека (адрес Jira, шаблон ключей)."""
-        for key, error_of in (("jira_base_url", jira_base_error), ("jira_keys", jira_keys_error)):
+    def check(update: dict, current: "Integrations | None" = None) -> None:
+        """Правка из окна: ValueError с текстом для человека (адрес Jira,
+        проекты, проект по умолчанию, шаблон ключа)."""
+        for key, error_of in (("jira_base_url", jira_base_error), ("jira_pattern", jira_keys_error),
+                              ("jira_projects", jira_projects_error)):
             if key in update:
                 error = error_of(update[key])
                 if error:
                     raise ValueError(error)
+        if "jira_default_project" in update:
+            default = update["jira_default_project"]
+            if not isinstance(default, str):
+                raise ValueError("Проект по умолчанию — ключ проекта")
+            if "jira_projects" in update:
+                keys = {str(p.get("key") or "").strip() for p in update["jira_projects"]}
+            else:
+                keys = {p.key for p in (current.jira_projects if current else ())}
+            if default.strip() and default.strip() not in keys:
+                raise ValueError(f"Проекта {default.strip()} нет в списке проектов Jira")
+
+    def jira_literal(self) -> str:
+        """Регулярное выражение ключа в тексте («ORION-2122»): шаблон из
+        «Дополнительно», иначе ключи проектов, иначе любой ключ."""
+        if self.jira_pattern:
+            return jira_keys_pattern(self.jira_pattern)
+        if self.jira_projects:
+            return "(?:" + "|".join(p.key for p in self.jira_projects) + r")-\d+"
+        return DEFAULT_JIRA_KEYS
 
     def to_raw(self) -> dict:
         return {
@@ -1201,7 +1351,9 @@ class Integrations:
             if self.gpu_marker_path
             else None,
             "jira_base_url": self.jira_base_url,
-            "jira_keys": self.jira_keys,
+            "jira_projects": [p.to_raw() for p in self.jira_projects],
+            "jira_default_project": self.jira_default_project,
+            "jira_pattern": self.jira_pattern,
         }
 
 
@@ -1635,7 +1787,7 @@ def _patch(updates: dict, path: Path | None) -> Settings:
         if name == "llm":
             Llm.check(section_update)
         if name == "integrations":
-            Integrations.check(section_update)
+            Integrations.check(section_update, current.integrations)
         if name == "agent":
             Agent.check(section_update)
         if name == "analysis":
