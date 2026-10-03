@@ -161,6 +161,10 @@ export const TERMINAL_OPTIONS: ITerminalOptions = {
     cursor: "#5e6ad2",
     cursorAccent: "#0f1012",
     selectionBackground: "#5e6ad266",
+    // xterm 6 рисует свою полосу прокрутки (не нативную): цвета — как --sb-thumb* в theme/tokens.css.
+    scrollbarSliderBackground: "rgba(138, 140, 150, 0.28)",
+    scrollbarSliderHoverBackground: "rgba(138, 140, 150, 0.62)",
+    scrollbarSliderActiveBackground: "rgba(138, 140, 150, 0.8)",
   },
 };
 
