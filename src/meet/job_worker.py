@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("kind",
                         choices=["transcribe", "import", "install-engine", "download-model",
                                  "summary", "ask", "merge", "speaker_split", "rediarize",
-                                 "analyze", "improve", "profile"])
+                                 "analyze", "improve"])
     parser.add_argument("path")
     parser.add_argument("--speakers", type=int)
     parser.add_argument("--hotwords")
@@ -83,8 +83,6 @@ def _dispatch(args) -> int:
         return _analyze(args.path)
     if args.kind == "improve":
         return _improve(args.path)
-    if args.kind == "profile":
-        return _profile(args.path)
 
     if args.kind == "merge":
         return _merge(args.path)
@@ -518,51 +516,6 @@ def _improve(folder_str: str) -> int:
         with tracker:
             out = improve.improve(folder, runner, cfg, provider=provider, bus=bus)
     except (improve.ImproveError, RuntimeError) as e:
-        return fail(str(e), 1)
-    except Exception as e:
-        return fail(f"{type(e).__name__}: {e}", 1)
-    _emit({"kind": "job.result", "path": str(out)})
-    return 0
-
-
-def _profile(path_str: str) -> int:
-    """Профиль человека (meet.profiles) — тем же провайдером, что итоги и
-    анализ (`llm.resolve`, без инструментов). `path_str` — путь файла профиля
-    (`<data_dir>/profiles/<id>.json`). Ошибка — в `<id>.state.json`: окно
-    покажет «Повторить»."""
-    from pathlib import Path
-
-    from meet import assistant, events, llm, profiles, settings
-
-    pid = profiles.pid_of_path(path_str)
-    if pid is None:
-        _emit({"kind": "error", "text": "не профиль человека"})
-        return 3
-    root = Path(path_str).parent
-    bus = events.EventBus()
-    bus.subscribe(lambda event: _emit(event.to_dict()))
-    bus.progress("profile", label="профиль человека")
-    cfg = settings.load()
-
-    def fail(text: str, code: int) -> int:
-        profiles.mark_failed(pid, text, root)
-        _emit({"kind": "error", "text": text})
-        return code
-
-    if not cfg.profiles.enabled:
-        return fail("профили людей выключены в настройках", 3)
-    try:
-        provider, runner = llm.resolve(cfg)
-    except Exception as e:
-        return fail(f"{type(e).__name__}: {e}", 2)
-    if runner is None:
-        return fail(assistant.NO_PROVIDER, 2)
-    tracker, runner = _llm_tracker(bus, "profile", "профиль человека", provider, runner)
-    try:
-        with tracker:
-            out = profiles.refresh(pid, cfg.recording.voices, cfg.recording.recordings, runner, cfg,
-                                   provider=provider, bus=bus, root=root)
-    except (profiles.ProfileError, RuntimeError) as e:
         return fail(str(e), 1)
     except Exception as e:
         return fail(f"{type(e).__name__}: {e}", 1)

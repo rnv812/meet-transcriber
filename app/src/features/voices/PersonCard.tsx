@@ -5,12 +5,10 @@ import {
   type Endpoint,
 } from "../../lib/api";
 import { dayLabel, duration, errorText } from "../../lib/format";
-import type { Job, Person, PersonCard as PersonData } from "../../lib/types";
+import type { Person, PersonCard as PersonData } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog, useConfirm } from "../../ui/ConfirmDialog";
 import { AvatarEditor, pastedImage } from "./AvatarEditor";
-import { ProfileTab, useProfile } from "./ProfileTab";
-import type { OpenAt } from "./RefChips";
 
 type Props = {
   endpoint: Endpoint;
@@ -21,24 +19,12 @@ type Props = {
   onRenamed: (to: string) => void;
   onRemoved: (next: string | null) => void;
   onOpenRecording: (id: string) => void;
-  /** Задачи резидента: профиль перечитывается, когда его задача кончилась. */
-  jobs?: Job[];
-  /** Открыть встречу на реплике (ссылка утверждения профиля). */
-  onOpenAt?: OpenAt;
-  /** Текст во вкладку «Агент» встречи (null — последней в библиотеке). */
-  onAskAgent?: (recording: string | null, text: string) => void;
-  /** Открыта вкладка «Профиль»: панель человека шире. */
-  onWide?: (wide: boolean) => void;
 };
-
-const NO_JOBS: Job[] = [];
-type PersonTab = "voice" | "profile";
 
 const MAX_AVATAR = 10 * 1024 * 1024;
 
 export function PersonCard({
-  endpoint, person, others, version, onAvatar, onRenamed, onRemoved, onOpenRecording, jobs = NO_JOBS, onOpenAt,
-  onAskAgent, onWide,
+  endpoint, person, others, version, onAvatar, onRenamed, onRemoved, onOpenRecording,
 }: Props) {
   const name = person.name;
   const [data, setData] = useState<PersonData | null>(null);
@@ -49,11 +35,6 @@ export function PersonCard({
   const stopAt = useRef<number | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const cancelled = useRef(false);
-  const profile = useProfile(endpoint, name, jobs);
-  const profilesOn = profile.view?.enabled === true;
-  const [tab, setTab] = useState<PersonTab>("voice");
-  const shown: PersonTab = profilesOn ? tab : "voice";
-  useEffect(() => { onWide?.(shown === "profile"); }, [shown, onWide]);
 
   useEffect(() => root.current?.focus(), []);
 
@@ -154,26 +135,6 @@ export function PersonCard({
       </div>
       {error && <div className="card__error" role="alert">{error}</div>}
 
-      {profilesOn && (
-        <div className="ptabs" role="tablist" aria-label="О человеке">
-          {(["voice", "profile"] as const).map((t) => (
-            <button key={t} type="button" role="tab" className="ptabs__tab" aria-selected={shown === t}
-              id={`ptab-${t}`} aria-controls="ptab-panel"
-              tabIndex={shown === t ? 0 : -1} onClick={() => setTab(t)}
-              onKeyDown={(e) => {
-                if (e.key === "ArrowRight" || e.key === "ArrowLeft") { e.preventDefault(); setTab(t === "voice" ? "profile" : "voice"); }
-              }}>
-              {t === "voice" ? "Голос" : "Профиль"}
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="ptabs__panel" {...(profilesOn
-        ? { role: "tabpanel", id: "ptab-panel", "aria-labelledby": `ptab-${shown}` } : {})}>
-      {shown === "profile" && profile.view ? (
-        <ProfileTab endpoint={endpoint} name={name} view={profile.view} reload={profile.reload}
-          onOpenAt={(m, i, t) => onOpenAt?.(m, i, t, name)} onAskAgent={(m, text) => onAskAgent?.(m, text)} />
-      ) : (<>
       <div className="pcard__row">
         <Button icon={Play} onClick={() => void play()}>Прослушать образец</Button>
       </div>
@@ -222,15 +183,11 @@ export function PersonCard({
           title={confirm === "delete" ? `Удалить голос «${name}»?` : `Объединить «${name}» с «${confirm.merge}»?`}
           message={confirm === "delete"
             ? `Образцы голоса будут удалены: в новых встречах «${name}» больше не будет узнаваться.`
-              + (profile.view?.profile ? " Профиль человека тоже удалится." : "")
-            : `Образцы «${name}» перейдут к «${confirm.merge}», а «${name}» исчезнет из базы голосов`
-              + (profile.view?.profile ? " вместе со своим профилем." : ".")}
+            : `Образцы «${name}» перейдут к «${confirm.merge}», а «${name}» исчезнет из базы голосов.`}
           confirmLabel={confirm === "delete" ? "Удалить" : "Объединить"}
           onConfirm={doConfirmed} onCancel={() => setConfirm(null)} />
       )}
       {confirmNode}
-      </>)}
-      </div>
     </div>
   );
 }

@@ -1076,7 +1076,6 @@ fn job_kind_text(kind: &str) -> &'static str {
         "summary" | "ask" => "итоги и вопросы",
         "analyze" => "анализ встречи",
         "improve" => "улучшение расшифровки",
-        "profile" => "профиль человека",
         "speaker_split" | "rediarize" => "разделение на спикеров",
         _ => "фоновая задача",
     }

@@ -84,10 +84,6 @@ IMPORTANT: токен принимается и в query-параметре `?to
     make_improve(id) -> dict              поставить задачу улучшения (409 без модели)
     improve_apply(id, body)               выбранные замены — одним шагом истории
     improve_dismiss(id)                   подсказку после GigaAM больше не показывать
-    profile(name) / make_profile(name)    профиль человека и задача «Обновить профиль»
-    delete_profile(name), profile_notes   удалить профиль; «Мои заметки»
-    hide_statement(name, body)            «Скрыть» утверждение профиля (и вернуть)
-    profiles_info() / delete_profiles()   сколько профилей; «Удалить все профили»
     kb_export(id) -> dict                 выгрузить встречу в базу знаний (400 без папки)
     export_preview(params) -> dict        как назовётся папка встречи по шаблону
     assistant() -> dict                   кто отвечает, что установлено, папки
@@ -798,9 +794,6 @@ _ROUTES = {
     ("PUT", "/hotwords"): lambda h, p: _server_of(h).state.put_hotwords(h._body()),
     ("POST", "/hotwords/remove"): lambda h, p: _server_of(h).state.remove_hotword(h._body()),
     ("GET", "/voices"): lambda h, p: _server_of(h).state.people(),
-    # Профили людей: сколько их; «Удалить все профили» (настройки).
-    ("GET", "/profiles"): lambda h, p: _server_of(h).state.profiles_info(),
-    ("DELETE", "/profiles"): lambda h, p: _server_of(h).state.delete_profiles(),
     ("GET", "/jobs"): lambda h, p: _server_of(h).state.jobs(),
     ("GET", "/engine"): lambda h, p: _server_of(h).state.engine(),
     ("GET", "/models"): lambda h, p: _server_of(h).state.models(),
@@ -947,18 +940,6 @@ _PATTERNS = (
      lambda h, p, n: _server_of(h).state.person_action(unquote(n), "rename", h._body())),
     ("POST", re.compile(r"^/voices/([^/]+)/merge$"),
      lambda h, p, n: _server_of(h).state.person_action(unquote(n), "merge", h._body())),
-    # Профиль человека: состояние и профиль; POST — составить или обновить
-    # задачей; DELETE — удалить профиль и заметки; notes — «Мои заметки».
-    ("GET", re.compile(r"^/voices/([^/]+)/profile$"),
-     lambda h, p, n: _server_of(h).state.profile(unquote(n))),
-    ("POST", re.compile(r"^/voices/([^/]+)/profile$"),
-     lambda h, p, n: _server_of(h).state.make_profile(unquote(n))),
-    ("DELETE", re.compile(r"^/voices/([^/]+)/profile$"),
-     lambda h, p, n: _server_of(h).state.delete_profile(unquote(n))),
-    ("POST", re.compile(r"^/voices/([^/]+)/profile/hide$"),
-     lambda h, p, n: _server_of(h).state.hide_statement(unquote(n), h._body())),
-    ("PUT", re.compile(r"^/voices/([^/]+)/profile/notes$"),
-     lambda h, p, n: _server_of(h).state.profile_notes(unquote(n), h._body())),
     ("DELETE", re.compile(r"^/recordings/([^/]+)$"),
      lambda h, p, rid: _server_of(h).state.delete_recording(unquote(rid))),
     ("GET", re.compile(r"^/voices/([^/]+)$"),

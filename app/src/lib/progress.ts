@@ -79,7 +79,7 @@ export const PHASES: Record<string, string> = {
   repair: "исправление ответа",
 };
 
-/** Задача модели (анализ, итоги, улучшение, профиль): ход по подшагам. */
+/** Задача модели (анализ, итоги, улучшение): ход по подшагам. */
 export const isModelProgress = (job: { phase?: string | null }) => typeof job.phase === "string";
 
 /**

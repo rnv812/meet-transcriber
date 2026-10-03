@@ -1,24 +1,22 @@
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import type { Endpoint } from "../../lib/api";
 import { duration } from "../../lib/format";
-import type { Job, Person } from "../../lib/types";
+import type { Person } from "../../lib/types";
 import { Avatar } from "../../ui/Avatar";
 import { EmptyState } from "../../ui/EmptyState";
 import { PaneResizer } from "../../ui/PaneResizer";
 import { VoiceBaseTip } from "../settings/tips";
 import { PersonCard } from "./PersonCard";
-import type { OpenAt } from "./RefChips";
 import { plural } from "./plural";
 import "./voices.css";
 
 /**
  * Панель человека — колонка справа от сетки: сетка перестраивается под
  * оставшуюся ширину, панель не наезжает на неё и не выходит за край окна
- * (сетке остаётся не меньше GRID_MIN). Ширина своя у карточки и у «Профиля».
+ * (сетке остаётся не меньше GRID_MIN).
  */
 export const GRID_MIN = 200;
 const CARD_PANE = { def: 360, min: 300, max: 640, reserve: GRID_MIN };
-const PROFILE_PANE = { def: 680, min: 420, max: 1100, reserve: GRID_MIN };
 
 type Props = {
   endpoint: Endpoint;
@@ -27,22 +25,11 @@ type Props = {
   onAvatar: (name: string) => void;
   onChanged: () => void;
   onOpenRecording: (id: string) => void;
-  /** Задачи резидента (профиль перечитывается, когда его задача кончилась). */
-  jobs?: Job[];
-  /** Открыть встречу на реплике (ссылка в профиле). */
-  onOpenAt?: OpenAt;
-  /** Текст профиля во вкладку «Агент» встречи (null — последней в библиотеке). */
-  onAskAgent?: (recording: string | null, text: string) => void;
 };
 
-export function VoicesPane({
-  endpoint, people, avatarVersion, onAvatar, onChanged, onOpenRecording, jobs, onOpenAt, onAskAgent,
-}: Props) {
+export function VoicesPane({ endpoint, people, avatarVersion, onAvatar, onChanged, onOpenRecording }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const current = people.find((p) => p.name === selected) ?? null;
-  /** Открыт «Профиль»: панели человека нужно больше места. */
-  const [wide, setWide] = useState(false);
-  const onWide = useCallback((w: boolean) => setWide(w), []);
 
   if (people.length === 0) {
     return (
@@ -78,12 +65,11 @@ export function VoicesPane({
         </div>
       </section>
       {current && (
-        <PaneResizer key={wide ? "profile" : "card"} cssVar="--person-w" panel="after"
-          name={wide ? "voices-profile" : "voices-card"} spec={wide ? PROFILE_PANE : CARD_PANE}
-          label={wide ? "Ширина профиля" : "Ширина карточки человека"} />
+        <PaneResizer cssVar="--person-w" panel="after" name="voices-card" spec={CARD_PANE}
+          label="Ширина карточки человека" />
       )}
       {current && (
-        <aside className={`voices__card${wide ? " voices__card--wide" : ""}`}>
+        <aside className="voices__card">
           <PersonCard
             key={current.name}
             endpoint={endpoint}
@@ -94,10 +80,6 @@ export function VoicesPane({
             onRenamed={(to) => { setSelected(to); onChanged(); }}
             onRemoved={(next) => { setSelected(next); onChanged(); }}
             onOpenRecording={onOpenRecording}
-            jobs={jobs}
-            onOpenAt={onOpenAt}
-            onAskAgent={onAskAgent}
-            onWide={onWide}
           />
         </aside>
       )}

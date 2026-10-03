@@ -58,8 +58,7 @@ def _read_samples(f: Path) -> list[dict]:
 
 def _write_samples(f: Path, samples: list[dict]) -> None:
     """Атомарно: оборванная запись не должна оставить человека без голоса.
-    Остальные ключи файла (постоянный "id" человека — по нему живёт его
-    профиль, meet.profiles) сохраняются."""
+    Остальные ключи файла сохраняются."""
     from meet.people import VOICE_FILE_LOCK
 
     with VOICE_FILE_LOCK:

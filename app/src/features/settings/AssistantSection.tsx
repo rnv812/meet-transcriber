@@ -40,7 +40,7 @@ function ModelTip() {
   return (
     <HelpTip label="Какая модель отвечает" title={MODEL_LABEL}>
       <TipLine>
-        Модель, на которой Claude Code готовит итоги, анализ, названия и профили, отвечает на вопросы и ведёт
+        Модель, на которой Claude Code готовит итоги, анализ и названия, отвечает на вопросы и ведёт
         живого ассистента: sonnet, opus, haiku или полное имя модели. Пусто — sonnet. «Проверить» у Claude Code
         проверяет и эту модель.
       </TipLine>
@@ -232,7 +232,7 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
       </Row>
       {chosen !== LOCAL && chosen !== "codex" && (
         <Row label={MODEL_LABEL} htmlFor="llm-model" help={<ModelTip />}
-          hint="Готовит итоги, анализ, профили, отвечает на вопросы и ведёт живого ассистента">
+          hint="Готовит итоги и анализ, отвечает на вопросы и ведёт живого ассистента">
           <input id="llm-model" type="text" placeholder="sonnet"
             value={String(llm("model") ?? "")}
             onChange={(e) => set("llm", "model", e.target.value)} />

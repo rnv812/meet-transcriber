@@ -1016,28 +1016,6 @@ class Analysis:
 
 
 @dataclass(frozen=True)
-class Profiles:
-    """Профили людей (meet.profiles): как человек общается во встречах — по
-    его репликам, моделью. По умолчанию выключены: включает человек сам,
-    прочитав, что это и где хранится. Выключены — задач профилей нет, вкладка
-    «Профиль» скрыта, сохранённые профили остаются (удалить — в настройках).
-
-    `pcm` — раздел «Модель PCM» (гипотеза по Process Communication Model,
-    meet.pcm): просить ли его у модели и показывать ли. Действует, только
-    когда профили включены."""
-
-    enabled: bool = False
-    pcm: bool = True
-
-    @classmethod
-    def from_raw(cls, raw: dict) -> "Profiles":
-        return cls(enabled=as_flag(raw.get("enabled"), False), pcm=as_flag(raw.get("pcm"), True))
-
-    def to_raw(self) -> dict:
-        return {"enabled": self.enabled, "pcm": self.pcm}
-
-
-@dataclass(frozen=True)
 class AgentLaunch:
     """Свои параметры запуска агента во вкладке «Агент» (один провайдер):
     `args` — строка дополнительных параметров (разбирает оболочка, правила —
@@ -1403,7 +1381,6 @@ class Settings:
     ui: Ui = field(default_factory=Ui)
     analysis: Analysis = field(default_factory=Analysis)
     transcript_view: TranscriptView = field(default_factory=TranscriptView)
-    profiles: Profiles = field(default_factory=Profiles)
     agent: Agent = field(default_factory=Agent)
     # Не секция, а список (см. as_categories): patch() заменяет его целиком.
     categories: tuple[Category, ...] = field(default_factory=default_categories)
@@ -1451,7 +1428,6 @@ class Settings:
             analysis=(Analysis.from_raw(_section(raw, "analysis")) if is_new or "analysis" in raw
                       else Analysis.upgraded()),
             transcript_view=TranscriptView.from_raw(_section(raw, "transcript_view")),
-            profiles=Profiles.from_raw(_section(raw, "profiles")),
             agent=Agent.from_raw(_section(raw, "agent")),
             categories=as_categories(raw.get("categories")),
         )
@@ -1471,7 +1447,6 @@ class Settings:
             "ui": self.ui.to_raw(),
             "analysis": self.analysis.to_raw(),
             "transcript_view": self.transcript_view.to_raw(),
-            "profiles": self.profiles.to_raw(),
             "agent": self.agent.to_raw(),
             "categories": [c.to_raw() for c in self.categories],
         }
@@ -1608,11 +1583,17 @@ def _write_raw(target: Path, data: dict) -> None:
     os.replace(tmp, target)
 
 
+# Секции, которых больше нет: при сохранении из файла убираются (остальные
+# неизвестные ключи сохраняются). `profiles` — профили людей, убраны в 0.3.2.
+RETIRED_SECTIONS = ("profiles",)
+
+
 def save(settings: Settings, path: Path | None = None) -> None:
-    """Записать настройки, сохранив неизвестные ключи из файла."""
+    """Записать настройки, сохранив неизвестные ключи из файла (кроме
+    RETIRED_SECTIONS)."""
     target = Path(path or paths.config_path())
     with _FILE_LOCK:
-        merged = dict(read_raw(target))
+        merged = {k: v for k, v in read_raw(target).items() if k not in RETIRED_SECTIONS}
         merged.update(settings.to_raw())
         # Integrations.to_raw токена не содержит: запасная копия токена
         # (диспетчер недоступен) приходит из файла выше и так и сохраняется.
