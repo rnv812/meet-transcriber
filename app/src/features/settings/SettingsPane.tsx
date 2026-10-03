@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import {
   type Devices, type Endpoint, type Processes,
-  NoResidentError, getDevices, getProcesses, getSettings, patchSettings, setAutoRecord,
+  GIGAAM_PREFIX, NoResidentError, getDevices, getProcesses, getSettings, patchSettings, setAutoRecord,
 } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { inTauri, openFolder } from "../../lib/shell";
@@ -26,6 +26,7 @@ import { EmptyState } from "../../ui/EmptyState";
 import { Loading, StatusSlot } from "../../ui/Loading";
 import { About } from "./About";
 import { AnalysisSection } from "./AnalysisSection";
+import { AsrChoice, backendOf } from "./AsrChoice";
 import { AssistantSection, assistantChangesInvalid } from "./AssistantSection";
 import { AutostartRow } from "./AutostartRow";
 import {
@@ -74,7 +75,8 @@ const NO_DRAFT: SectionId[] = ["diagnostics", "about"];
 
 /**
  * Разделы, в которых видна правка ключа `group.key`: точка у раздела в меню.
- * Модель Whisper выбирается и в «Распознавании», и в «Движке и моделях».
+ * Движок и модели распознавания выбираются только в «Распознавании»; «Движок и
+ * модели» — установка и загрузка.
  */
 export function sectionsOf(group: string, key: string): SectionId[] {
   switch (group) {
@@ -82,9 +84,7 @@ export function sectionsOf(group: string, key: string): SectionId[] {
       return key === "mic_device" || key === "output_device" ? ["sound"] : ["recording"];
     case "ui": return ["recording"];
     case "auto_record": return ["auto"];
-    case "asr":
-      if (key === "model") return ["asr", "engine"];
-      return key === "backend" || key === "cpu_backend" || key === "gigaam_model" ? ["engine"] : ["asr"];
+    case "asr": return ["asr"];
     case "export": return ["export"];
     case "llm": case "assist": case "agent": return ["assistant"];
     case "assistant": return key === "auto_title" ? ["analysis"] : ["assistant"];
@@ -236,26 +236,18 @@ function AutoSection({ draft, set, processes, loadProcesses, onToggle }: {
   );
 }
 
-function AsrSection({ draft, set, endpoint }: { draft: Raw; set: SetFn; endpoint: Endpoint }) {
+function AsrSection({ draft, saved, set, endpoint, onOpenEngine }: {
+  draft: Raw; saved: Raw; set: SetFn; endpoint: Endpoint; onOpenEngine: () => void;
+}) {
   const v = (k: string) => draft.asr?.[k];
   return (
     <>
-      <Row label="Устройство для распознавания" htmlFor="asr-device" help={<AsrModelTip />}
-        hint="Авто: видеокарта, если она доступна, иначе процессор">
-        <select id="asr-device" value={String(v("device") ?? "auto")} onChange={(e) => set("asr", "device", e.target.value)}>
-          <option value="auto">Авто</option>
-          <option value="cuda">Видеокарта</option>
-          <option value="cpu">Процессор</option>
-        </select>
-      </Row>
-      <TextRow id="asr-model" label="Модель Whisper для видеокарты (CUDA)" wide value={String(v("model") ?? "")}
-        hint="Скачать и выбрать модель можно в разделе «Движок и модели»"
-        onChange={(x) => set("asr", "model", x)} />
-      <TextRow id="asr-cpu-model" label="Модель Whisper для процессора (CPU)" wide value={String(v("cpu_model") ?? "")}
-        hint="Если на процессоре выбран Whisper; движок выбирается в разделе «Движок и модели»"
-        onChange={(x) => set("asr", "cpu_model", x)} />
-      <TextRow id="asr-language" label="Язык речи" short hint="Код языка, например ru или en; auto — определить по записи" value={String(v("language") ?? "ru")}
-        onChange={(x) => set("asr", "language", x)} />
+      <AsrChoice draft={draft} saved={saved} set={set} endpoint={endpoint} help={<AsrModelTip />}
+        onOpenEngine={onOpenEngine} />
+      <TextRow id="asr-language" label="Язык речи" short
+        hint="Код языка, например ru или en; auto — определить по записи. GigaAM понимает только русский"
+        value={String(v("language") ?? "ru")} onChange={(x) => set("asr", "language", x)} />
+      <h3 className="shead">Расшифровка</h3>
       <Switch label="Уточнять время каждого слова" hint="Точнее границы реплик; расшифровка занимает немного больше времени. После GigaAM не нужно: время слов у него своё"
         value={Boolean(v("align"))} onChange={(x) => set("asr", "align", x)} />
       <Switch label="Отмечать одновременную речь" hint="Реплики, где говорят одновременно, помечаются «нахлёст»: спикер в них может быть определён неточно"
@@ -276,35 +268,25 @@ function AsrSection({ draft, set, endpoint }: { draft: Raw; set: SetFn; endpoint
   );
 }
 
-/** "whisper.cpp" (задел, не реализован) показывается как Whisper. */
-type AsrBackend = "faster-whisper" | "gigaam";
-
 /**
- * Движок распознавания — свой для процессора и для видеокарты: GigaAM быстрее
- * и точнее на русском, Whisper многоязычный и учитывает список терминов.
- * Запись не на русском GigaAM всё равно отдаёт Whisper.
+ * Где используется модель по черновику «Распознавания» — для строки модели в
+ * «Движке и моделях»: id → «видеокарта», «процессор — записи не на русском», …
  */
-function AsrEngineRows({ draft, set }: { draft: Raw; set: SetFn }) {
-  const backend = (key: string, fallback: AsrBackend): AsrBackend =>
-    draft.asr?.[key] === "gigaam" ? "gigaam" : draft.asr?.[key] ? "faster-whisper" : fallback;
-  return (
-    <>
-      <Radio label="Распознавание на процессоре" value={backend("cpu_backend", "gigaam")}
-        hint="GigaAM распознаёт речь примерно в 10 раз быстрее Whisper (вся обработка — примерно втрое быстрее); запись не на русском всё равно распознаёт Whisper"
-        options={[
-          { value: "gigaam", label: "GigaAM (русский, быстро)" },
-          { value: "faster-whisper", label: "Whisper (многоязычный)" },
-        ]}
-        onChange={(x) => set("asr", "cpu_backend", x)} />
-      <Radio label="Распознавание на видеокарте" value={backend("backend", "faster-whisper")}
-        hint="Whisper точнее на английских терминах и учитывает список терминов распознавания"
-        options={[
-          { value: "faster-whisper", label: "Whisper" },
-          { value: "gigaam", label: "GigaAM (быстрее, только русский)" },
-        ]}
-        onChange={(x) => set("asr", "backend", x)} />
-    </>
-  );
+export function modelUsage(draft: Raw): Record<string, string[]> {
+  const asr = draft.asr ?? {};
+  const out: Record<string, string[]> = {};
+  const add = (id: unknown, text: string) => {
+    if (typeof id === "string" && id) (out[id] ??= []).push(text);
+  };
+  for (const [device, title, key] of [["cuda", "видеокарта", "model"], ["cpu", "процессор", "cpu_model"]] as const) {
+    if (backendOf(asr, device) === "gigaam") {
+      add(GIGAAM_PREFIX + String(asr.gigaam_model ?? "v3_e2e_rnnt"), title);
+      add(asr[key], `${title} — записи не на русском`);
+    } else {
+      add(asr[key], title);
+    }
+  }
+  return out;
 }
 
 function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
@@ -543,23 +525,23 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
             <AutoSection draft={draft} set={set} processes={processes} loadProcesses={loadProcesses}
               onToggle={(v) => void toggleAuto(v)} />
           ) : section === "asr" ? (
-            <AsrSection draft={draft} set={set} endpoint={endpoint} />
+            <AsrSection draft={draft} saved={settings ?? {}} set={set} endpoint={endpoint}
+              onOpenEngine={() => setSection("engine")} />
           ) : section === "engine" ? (
             <>
+              <p className="muted sdesc engine-choice-link">
+                Выбор движка и моделей — в разделе{" "}
+                <Button variant="link" onClick={() => setSection("asr")}>«Распознавание»</Button>.
+                Здесь — установка движка и загрузка моделей.
+              </p>
               {onRunWizard && (
                 <Row label="Мастер первого запуска" hint="Пошаговая настройка: движок, токен Hugging Face, модели и запись">
                   <Button onClick={() => onRunWizard("hardware")}>Запустить мастер</Button>
                 </Row>
               )}
               <EnginePane endpoint={endpoint} onReinstall={onRunWizard && (() => onRunWizard("engine"))} />
-              <h3 className="shead">Распознавание речи</h3>
-              <AsrEngineRows draft={draft} set={set} />
               <h3 className="shead">Модели</h3>
-              <ModelsPane endpoint={endpoint}
-                selectedModel={(draft.asr?.model as string | undefined) ?? null}
-                selectedGigaam={(draft.asr?.gigaam_model as string | undefined) ?? null}
-                onSelect={(id) => { set("asr", "model", id); setNotice("Модель выбрана. Сохраните изменения"); }}
-                onSelectGigaam={(name) => { set("asr", "gigaam_model", name); setNotice("Модель выбрана. Сохраните изменения"); }} />
+              <ModelsPane endpoint={endpoint} usage={modelUsage(draft)} />
             </>
           ) : section === "export" ? (
             <ExportSection draft={draft} set={set} endpoint={endpoint} />

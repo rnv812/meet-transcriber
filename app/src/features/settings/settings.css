@@ -265,7 +265,32 @@
 }
 .agent-launch__preview { margin: 6px 0 0; font-size: 12px; overflow-wrap: anywhere; }
 
-/* «Движок и модели»: строка модели — выбор, загрузка с полоской, удаление с подтверждением в строке. */
+/*
+ * «Распознавание»: строки «Видеокарта» и «Процессор». Та, что распознаёт при
+ * выбранном устройстве, — с рамкой акцентного цвета и меткой «используется»;
+ * другая — тише; недоступная видеокарта — приглушена, с причиной.
+ */
+.asr-now { display: block; margin-top: 2px; color: var(--text-2); }
+.asr-intro { margin: 10px 0 4px; line-height: 1.5; }
+.asr-device {
+  margin: 10px 0; padding: 2px 14px; border: 1px solid var(--line-2); border-radius: var(--r-lg);
+}
+.asr-device--active { border-color: var(--accent); background: rgba(94, 106, 210, 0.07); }
+.asr-device--secondary .asr-device__title { color: var(--text-2); }
+.asr-device--disabled { border-style: dashed; }
+.asr-device--disabled .asr-device__title { color: var(--text-3); }
+.asr-device__head { display: flex; align-items: center; gap: 8px; padding-top: 10px; }
+.asr-device__title { font-weight: 600; color: var(--text); }
+.asr-device__note { margin: 2px 0 0; font-size: 12px; color: var(--text-3); }
+.asr-device .srow:last-child { border-bottom: 0; }
+.asr-model { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.asr-model select { width: 100%; }
+.asr-fallback { margin: 0; padding: 10px 0 12px; font-size: 12px; color: var(--text-3); }
+.asr-fallback__model { color: var(--text-2); }
+.asr-fallback .btn--link { font-size: 12px; }
+.engine-choice-link { margin: 4px 0 8px; }
+
+/* «Движок и модели»: строка модели — где выбрана, загрузка с полоской, удаление с подтверждением в строке. */
 .model-row__chosen { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px; color: var(--ok); }
 .model-row__chosen--muted { color: var(--text-2); }
 .model-row__progress { flex-basis: 100%; }

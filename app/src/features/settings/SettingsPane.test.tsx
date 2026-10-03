@@ -300,6 +300,7 @@ const catalogue = (): api.ModelsState => ({
       note: "по умолчанию на процессоре", downloaded: true, size_on_disk: 449_000_000, selected: true, removable: true }),
     modelItem({ id: "gigaam/v3_e2e_ctc", backend: "gigaam", title: "GigaAM v3 CTC — русский", size_gb: 0.44,
       note: "быстрее, чуть менее точно" }),
+    modelItem({ id: "medium", backend: "faster-whisper", title: "Whisper medium", size_gb: 1.5 }),
   ],
   cache: "C:\\hf", token: true, selected: "large-v3",
   can_download: true, can_download_gigaam: true, gigaam_cache: "C:\\data\\meet\\models\\gigaam",
@@ -310,31 +311,181 @@ const modelRow = (title: string) => {
   return label.closest(".srow") as HTMLElement;
 };
 
-test("«Движок и модели»: выбор движка для процессора и видеокарты сохраняется в asr", async () => {
-  await openEngine();
-  const cpu = await screen.findByRole("radiogroup", { name: "Распознавание на процессоре" });
-  expect(within(cpu).getByRole("radio", { name: "GigaAM (русский, быстро)" })).toBeChecked();
-  const gpu = screen.getByRole("radiogroup", { name: "Распознавание на видеокарте" });
-  expect(within(gpu).getByRole("radio", { name: "Whisper" })).toBeChecked();
-  await userEvent.click(within(cpu).getByRole("radio", { name: "Whisper (многоязычный)" }));
-  await userEvent.click(within(gpu).getByRole("radio", { name: "GigaAM (быстрее, только русский)" }));
+// --- «Распознавание»: устройство, движок и модель для видеокарты и процессора ---
+
+const OTHER = "\u0000other";
+const openAsr = async (engine: Partial<api.EngineState> | null, asr: Record<string, unknown> = {}) => {
+  if (engine) vi.mocked(api.getEngine).mockResolvedValue({ ...structuredClone(engineState), ...engine });
+  vi.mocked(api.getSettings).mockResolvedValue({ ...structuredClone(settings), asr: { ...settings.asr, ...asr } });
+  vi.mocked(api.getModels).mockResolvedValue(catalogue());
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Распознавание" }));
+};
+const deviceRow = (name: "Видеокарта" | "Процессор") => screen.getByRole("group", { name });
+const savedPatch = async () => {
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
-  expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1])
-    .toEqual({ asr: { cpu_backend: "faster-whisper", backend: "gigaam" } });
+  return vi.mocked(api.patchSettings).mock.calls[0]?.[1];
+};
+
+test("«Распознавание»: строки видеокарты и процессора показывают движок и модель из настроек", async () => {
+  await openAsr({ cuda_ok: true });
+  const gpu = await screen.findByRole("group", { name: "Видеокарта" });
+  expect(within(within(gpu).getByRole("radiogroup", { name: "Движок" })).getByRole("radio", { name: "Whisper" }))
+    .toBeChecked();
+  expect(await within(gpu).findByRole("combobox", { name: "Модель Whisper" })).toHaveValue("large-v3");
+  expect(within(gpu).getByRole("option", { name: "Whisper large-v3 — русский fine-tune — скачана" })).toBeInTheDocument();
+  expect(within(gpu).getByRole("option", { name: "Whisper medium — 1.5 ГБ, не скачана" })).toBeInTheDocument();
+  const cpu = deviceRow("Процессор");
+  // Нет cpu_backend в настройках — GigaAM, как у резидента по умолчанию.
+  expect(within(cpu).getByRole("radio", { name: "GigaAM" })).toBeChecked();
+  expect(within(cpu).getByRole("combobox", { name: "Модель GigaAM" })).toHaveValue("v3_e2e_rnnt");
+  // Модель Whisper процессора — не отдельное поле, а запасной путь GigaAM.
+  expect(within(cpu).queryByRole("combobox", { name: "Модель Whisper" })).toBeNull();
+  expect(cpu).toHaveTextContent("Записи не на русском распознаёт Whisper: small");
 });
 
-test("«Движок и модели»: сохранённый движок «whisper.cpp» показывается как Whisper", async () => {
-  vi.mocked(api.getSettings).mockResolvedValue(
-    { ...structuredClone(settings), asr: { ...settings.asr, backend: "whisper.cpp", cpu_backend: "faster-whisper" } });
-  await openEngine();
-  const cpu = await screen.findByRole("radiogroup", { name: "Распознавание на процессоре" });
-  expect(within(cpu).getByRole("radio", { name: "Whisper (многоязычный)" })).toBeChecked();
-  const gpu = screen.getByRole("radiogroup", { name: "Распознавание на видеокарте" });
+test.each([
+  // устройство, видеокарта годится, кто распознаёт, строка «Сейчас», пояснение у другой строки
+  ["auto", true, "cuda", "Сейчас: видеокарта (RTX 5070 Ti)", "Запасной вариант, если видеокарта недоступна"],
+  ["auto", false, "cpu", "Сейчас: процессор — видеокарта недоступна (установлен движок для процессора)",
+    "Недоступна: установлен движок для процессора"],
+  ["cpu", true, "cpu", "Сейчас: процессор", "Используется, если выбрать устройство «Видеокарта» или «Авто»"],
+  ["cpu", false, "cpu", "Сейчас: процессор", "Недоступна: установлен движок для процессора"],
+  ["cuda", true, "cuda", "Сейчас: видеокарта (RTX 5070 Ti)", "Используется, если выбрать устройство «Процессор»"],
+  ["cuda", false, "cpu", "Сейчас: процессор — видеокарта недоступна (установлен движок для процессора)",
+    "Недоступна: установлен движок для процессора"],
+] as const)("«Распознавание»: устройство %s, видеокарта годится — %s: распознаёт %s", async (device, ok, active, now, note) => {
+  await openAsr({ cuda_ok: ok, cuda_reason: ok ? null : "установлен движок для процессора" }, { device });
+  expect(await screen.findByText(now)).toBeInTheDocument();
+  const on = deviceRow(active === "cuda" ? "Видеокарта" : "Процессор");
+  const off = deviceRow(active === "cuda" ? "Процессор" : "Видеокарта");
+  expect(on).toHaveAttribute("data-state", "active");
+  expect(within(on).getByText("используется")).toBeInTheDocument();
+  expect(within(off).queryByText("используется")).toBeNull();
+  expect(off).toHaveAttribute("data-state", ok ? "secondary" : "disabled");
+  expect(off).toHaveTextContent(note);
+});
+
+test("«Распознавание»: состояние движка не загрузилось — при «Авто» ни одна строка не отмечена", async () => {
+  await openAsr(null);
+  expect(await screen.findByText(/состояние движка не загрузилось/)).toBeInTheDocument();
+  expect(deviceRow("Видеокарта")).toHaveAttribute("data-state", "secondary");
+  expect(deviceRow("Процессор")).toHaveAttribute("data-state", "secondary");
+  expect(deviceRow("Процессор")).toHaveTextContent("Запасной вариант, если видеокарта недоступна");
+});
+
+test("«Распознавание»: другое устройство в черновике — «После сохранения», отметка переезжает сразу", async () => {
+  await openAsr({ cuda_ok: true });
+  await screen.findByText("Сейчас: видеокарта (RTX 5070 Ti)");
+  await userEvent.selectOptions(screen.getByLabelText("Устройство"), "cpu");
+  expect(screen.getByText("После сохранения: процессор")).toBeInTheDocument();
+  expect(deviceRow("Процессор")).toHaveAttribute("data-state", "active");
+  expect(await savedPatch()).toEqual({ asr: { device: "cpu" } });
+});
+
+test("«Распознавание»: старый резидент без cuda_ok — видеокарта годится, если она видна", async () => {
+  await openAsr({ gpu: { available: false, name: null } });
+  expect(await screen.findByText("Сейчас: процессор — видеокарта недоступна (видеокарта NVIDIA не найдена)"))
+    .toBeInTheDocument();
+});
+
+test("«Распознавание»: недоступная видеокарта — строка приглушена, выбор в ней недоступен, причина видна", async () => {
+  await openAsr({ cuda_ok: false, cuda_reason: "не найдены библиотеки CUDA (cuBLAS, cuDNN)" });
+  const gpu = await screen.findByRole("group", { name: "Видеокарта" });
+  await waitFor(() => expect(gpu).toHaveAttribute("data-state", "disabled"));
+  expect(gpu).toHaveTextContent("Недоступна: не найдены библиотеки CUDA (cuBLAS, cuDNN)");
+  for (const radio of within(gpu).getAllByRole("radio")) expect(radio).toBeDisabled();
+  expect(await within(gpu).findByRole("combobox", { name: "Модель Whisper" })).toBeDisabled();
+  expect(deviceRow("Процессор")).toHaveAttribute("data-state", "active");
+});
+
+test("«Распознавание»: смена движка меняет поле модели; сохраняются прежние ключи asr", async () => {
+  await openAsr({ cuda_ok: true });
+  const gpu = await screen.findByRole("group", { name: "Видеокарта" });
+  await within(gpu).findByRole("combobox", { name: "Модель Whisper" });
+  await userEvent.click(within(gpu).getByRole("radio", { name: "GigaAM" }));
+  expect(within(gpu).queryByRole("combobox", { name: "Модель Whisper" })).toBeNull();
+  expect(within(gpu).getByRole("combobox", { name: "Модель GigaAM" })).toHaveValue("v3_e2e_rnnt");
+  // Модель GigaAM одна на оба устройства — так и сказано, когда она у обоих.
+  expect(gpu).toHaveTextContent("Одна модель GigaAM для видеокарты и процессора");
+  expect(gpu).toHaveTextContent("Записи не на русском распознаёт Whisper: Whisper large-v3 — русский fine-tune");
+
+  const cpu = deviceRow("Процессор");
+  await userEvent.click(within(cpu).getByRole("radio", { name: "Whisper" }));
+  expect(within(cpu).queryByRole("combobox", { name: "Модель GigaAM" })).toBeNull();
+  // «small» нет в каталоге — «Другая…» и поле с id.
+  expect(within(cpu).getByRole("combobox", { name: "Модель Whisper" })).toHaveValue(OTHER);
+  expect(within(cpu).getByRole("textbox", { name: "Модель Whisper: id модели или папка" })).toHaveValue("small");
+  expect(gpu).not.toHaveTextContent("Одна модель GigaAM");
+  await userEvent.selectOptions(within(gpu).getByRole("combobox", { name: "Модель GigaAM" }), "v3_e2e_ctc");
+  expect(await savedPatch())
+    .toEqual({ asr: { backend: "gigaam", cpu_backend: "faster-whisper", gigaam_model: "v3_e2e_ctc" } });
+});
+
+test("«Распознавание»: модель Whisper для записей не на русском — по «изменить» под строкой GigaAM", async () => {
+  await openAsr({ cuda_ok: true });
+  const cpu = await screen.findByRole("group", { name: "Процессор" });
+  expect(within(cpu).queryByRole("combobox", { name: "Модель Whisper для записей не на русском" })).toBeNull();
+  const change = within(cpu).getByRole("button", { name: "изменить" });
+  expect(change).toHaveAttribute("aria-expanded", "false");
+  await userEvent.click(change);
+  expect(within(cpu).getByRole("button", { name: "скрыть" })).toHaveAttribute("aria-expanded", "true");
+  const picker = await within(cpu).findByRole("combobox", { name: "Модель Whisper для записей не на русском" });
+  await userEvent.selectOptions(picker, "medium");
+  expect(cpu).toHaveTextContent("Записи не на русском распознаёт Whisper: Whisper medium");
+  // «Другая…» — своё значение.
+  await userEvent.selectOptions(picker, OTHER);
+  const custom = within(cpu).getByRole("textbox", { name: "Модель Whisper для записей не на русском: id модели или папка" });
+  await userEvent.clear(custom);
+  await userEvent.type(custom, "D:\\models\\whisper");
+  expect(await savedPatch()).toEqual({ asr: { cpu_model: "D:\\models\\whisper" } });
+});
+
+test("«Распознавание»: язык не русский — под GigaAM сказано, что распознаёт Whisper", async () => {
+  await openAsr({ cuda_ok: true }, { language: "en" });
+  const cpu = await screen.findByRole("group", { name: "Процессор" });
+  expect(cpu).toHaveTextContent("Язык речи «en»: GigaAM его не понимает, распознаёт Whisper: small");
+});
+
+test("«Распознавание»: каталог не загрузился — модель Whisper вводится полем", async () => {
+  vi.mocked(api.getEngine).mockResolvedValue({ ...structuredClone(engineState), cuda_ok: true });
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Распознавание" }));
+  const gpu = deviceRow("Видеокарта");
+  expect(within(gpu).getByRole("textbox", { name: "Модель Whisper" })).toHaveValue("large-v3");
+  await userEvent.type(within(gpu).getByRole("textbox", { name: "Модель Whisper" }), "-x");
+  expect(await savedPatch()).toEqual({ asr: { model: "large-v3-x" } });
+});
+
+test("«Распознавание»: сохранённый движок «whisper.cpp» показывается как Whisper", async () => {
+  await openAsr({ cuda_ok: true }, { backend: "whisper.cpp", cpu_backend: "faster-whisper" });
+  const gpu = await screen.findByRole("group", { name: "Видеокарта" });
   expect(within(gpu).getByRole("radio", { name: "Whisper" })).toBeChecked();
+  expect(within(deviceRow("Процессор")).getByRole("radio", { name: "Whisper" })).toBeChecked();
 });
 
-test("«Движок и модели»: модели GigaAM — размер, выбор и удаление", async () => {
+test("«Распознавание»: вопрос при уходе знает о правке движка и сохраняет её", async () => {
+  const guard = { current: null } as { current: import("./SettingsPane").SettingsGuard | null };
+  vi.mocked(api.getEngine).mockResolvedValue({ ...structuredClone(engineState), cuda_ok: true });
+  render(<SettingsPane endpoint={ep} recordingsDir={null} guardRef={guard} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Распознавание" }));
+  await userEvent.click(within(deviceRow("Процессор")).getByRole("radio", { name: "Whisper" }));
+  expect(guard.current?.dirty).toEqual(["Распознавание"]);
+  expect(await guard.current!.save()).toBe(true);
+  expect(api.patchSettings).toHaveBeenCalledWith(ep, { asr: { cpu_backend: "faster-whisper" } });
+  await waitFor(() => expect(guard.current?.dirty).toEqual([]));
+});
+
+test("«Движок и модели»: выбора движка нет — ссылка ведёт в «Распознавание»", async () => {
+  await openEngine();
+  expect(screen.queryByRole("radiogroup")).toBeNull();
+  await userEvent.click(await screen.findByRole("button", { name: "«Распознавание»" }));
+  expect(screen.getByRole("heading", { name: "Распознавание" })).toBeInTheDocument();
+  expect(screen.getByRole("group", { name: "Видеокарта" })).toBeInTheDocument();
+});
+
+test("«Движок и модели»: модели GigaAM — размер, где выбрана, удаление", async () => {
   vi.mocked(api.getModels).mockResolvedValue(catalogue());
   vi.mocked(api.removeModel).mockResolvedValue({ ok: true });
   await openEngine();
@@ -343,24 +494,27 @@ test("«Движок и модели»: модели GigaAM — размер, в
   const ctc = modelRow("GigaAM v3 CTC — русский");
   expect(rnnt).toHaveTextContent("0.45 ГБ");
   expect(ctc).toHaveTextContent("быстрее, чуть менее точно");
+  // Выбирают в «Распознавании»; здесь видно только, где модель выбрана.
   expect(within(rnnt).getByText("Выбрана")).toBeInTheDocument();
-  // Whisper и GigaAM выбираются независимо: у каждого своя «Выбрана».
-  expect(within(modelRow("Whisper large-v3 — русский fine-tune")).getByText("Выбрана")).toBeInTheDocument();
+  expect(rnnt).toHaveTextContent("Выбрана в «Распознавании»: процессор");
+  expect(modelRow("Whisper large-v3 — русский fine-tune")).toHaveTextContent("Выбрана в «Распознавании»: видеокарта");
+  expect(within(ctc).queryByText("Выбрана")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Выбрать" })).toBeNull();
   expect(within(ctc).queryByRole("button", { name: /Удалить/ })).toBeNull();
   expect(screen.getByText("C:\\data\\meet\\models\\gigaam")).toBeInTheDocument();
 
-  await userEvent.click(within(ctc).getByRole("button", { name: "Выбрать" }));
-  expect(within(ctc).getByText("Выбрана")).toBeInTheDocument();
-  expect(within(rnnt).getByRole("button", { name: "Выбрать" })).toBeEnabled();
-  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
-  await waitFor(() => expect(api.patchSettings).toHaveBeenCalled());
-  expect(vi.mocked(api.patchSettings).mock.calls[0]?.[1]).toEqual({ asr: { gigaam_model: "v3_e2e_ctc" } });
-
+  // Отметка следует черновику «Распознавания»: процессор на Whisper — GigaAM больше нигде не выбрана.
+  await userEvent.click(screen.getByRole("button", { name: "Распознавание" }));
+  await userEvent.click(within(screen.getByRole("group", { name: "Процессор" })).getByRole("radio", { name: "Whisper" }));
+  await userEvent.click(screen.getByRole("button", { name: "Движок и модели" }));
+  await screen.findByText("GigaAM v3 — русский");
+  const unused = modelRow("GigaAM v3 — русский");
+  expect(within(unused).queryByText("Выбрана")).toBeNull();
   const loads = vi.mocked(api.getModels).mock.calls.length;
-  await userEvent.click(within(rnnt).getByRole("button", { name: "Удалить модель GigaAM v3 — русский" }));
+  await userEvent.click(within(unused).getByRole("button", { name: "Удалить модель GigaAM v3 — русский" }));
   // И невыбранную модель — только после подтверждения в её строке: это гигабайты повторной загрузки.
   expect(api.removeModel).not.toHaveBeenCalled();
-  const ask = within(rnnt).getByRole("alertdialog");
+  const ask = within(unused).getByRole("alertdialog");
   expect(ask).toHaveTextContent("будут удалены с диска");
   await userEvent.click(within(ask).getByRole("button", { name: "Удалить" }));
   expect(api.removeModel).toHaveBeenCalledWith(ep, "gigaam/v3_e2e_rnnt");
@@ -452,9 +606,10 @@ test("правка — точка у своего раздела в меню и 
   expect(document.querySelector(".settings__state")).toHaveTextContent("Есть несохранённые изменения");
   await userEvent.click(menuItem("Распознавание"));
   expect(screen.getByText("Не сохранено: Запись")).toBeInTheDocument();
-  // Модель Whisper видна в двух разделах — и точка в обоих.
-  await userEvent.type(screen.getByLabelText("Модель Whisper для видеокарты (CUDA)"), "x");
-  expect(menuItem("Движок и модели").querySelector("[data-dirty]")).not.toBeNull();
+  // Движок и модель выбираются только в «Распознавании» — и точка только там.
+  await userEvent.click(within(screen.getByRole("group", { name: "Видеокарта" })).getByRole("radio", { name: "GigaAM" }));
+  expect(menuItem("Распознавание").querySelector("[data-dirty]")).not.toBeNull();
+  expect(menuItem("Движок и модели").querySelector("[data-dirty]")).toBeNull();
 });
 
 test("«Сбросить…» спрашивает и только потом отменяет правки всех разделов", async () => {
@@ -496,7 +651,8 @@ test("guardRef: список разделов с правками и save для
 test("пути, команды и id моделей — во всю ширину; зависимые поля недоступны при выключенном переключателе", async () => {
   render(<SettingsPane endpoint={ep} recordingsDir={null} />);
   await userEvent.click(await screen.findByRole("button", { name: "Распознавание" }));
-  const model = screen.getByLabelText("Модель Whisper для видеокарты (CUDA)");
+  // Каталог моделей не загрузился — id модели вводится полем во всю ширину.
+  const model = screen.getByLabelText("Модель Whisper");
   expect(model).toHaveClass("input--wide");
   expect(model.closest(".srow")).toHaveClass("srow--stack");
   expect(screen.getByLabelText("Язык речи")).toHaveClass("input--short");

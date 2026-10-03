@@ -33,7 +33,7 @@ beforeEach(() => {
 test("GigaAM не установилась — причина, «используется Whisper» и «Повторить»", async () => {
   vi.mocked(api.getModels).mockResolvedValueOnce(state(failed)).mockResolvedValue(state(null));
   vi.mocked(shell.retryGigaamInstall).mockResolvedValue();
-  render(<ModelsPane endpoint={ep} selectedModel={null} onSelect={() => {}} />);
+  render(<ModelsPane endpoint={ep} />);
   expect(await screen.findByText(failed, { exact: false })).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Повторить" }));
   expect(shell.retryGigaamInstall).toHaveBeenCalled();
@@ -43,7 +43,7 @@ test("GigaAM не установилась — причина, «использ�
 test("повтор не удался — понятная ошибка, причина остаётся", async () => {
   vi.mocked(api.getModels).mockResolvedValue(state(failed));
   vi.mocked(shell.retryGigaamInstall).mockRejectedValue("нет связи с GitHub — проверьте подключение или прокси в настройках");
-  render(<ModelsPane endpoint={ep} selectedModel={null} onSelect={() => {}} />);
+  render(<ModelsPane endpoint={ep} />);
   await userEvent.click(await screen.findByRole("button", { name: "Повторить" }));
   expect(await screen.findByText(/^GigaAM не установилась: нет связи с GitHub — проверьте/)).toBeInTheDocument();
 });
@@ -51,12 +51,12 @@ test("повтор не удался — понятная ошибка, прич
 test("вне приложения кнопки «Повторить» нет; без ошибки — и строки нет", async () => {
   vi.mocked(shell.inTauri).mockReturnValue(false);
   vi.mocked(api.getModels).mockResolvedValue(state(failed));
-  const { unmount } = render(<ModelsPane endpoint={ep} selectedModel={null} onSelect={() => {}} />);
+  const { unmount } = render(<ModelsPane endpoint={ep} />);
   expect(await screen.findByText(failed, { exact: false })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Повторить" })).toBeNull();
   unmount();
   vi.mocked(api.getModels).mockResolvedValue(state(null));
-  render(<ModelsPane endpoint={ep} selectedModel={null} onSelect={() => {}} />);
+  render(<ModelsPane endpoint={ep} />);
   await screen.findByText("Папка моделей");
   expect(screen.queryByText(/GigaAM не установилась/)).toBeNull();
 });
