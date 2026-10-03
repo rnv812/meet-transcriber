@@ -428,16 +428,19 @@ def _assistant(kind: str, folder_str: str, question: str | None) -> int:
         return 2
     folder = Path(folder_str)
     knowledge = cfg.assistant.knowledge_dir
+    tracker, runner = _llm_tracker(bus, kind, "итоги встречи" if kind == "summary" else "ответ на вопрос",
+                                   provider, runner, stage="llm")
     try:
-        if kind == "summary":
-            out = assistant.summarize(folder, runner, knowledge, provider=provider,
-                                      want_title=cfg.assistant.auto_title)
-        else:
-            if not (question or "").strip():
-                _emit({"kind": "error", "text": "пустой вопрос"})
-                return 3
-            assistant.ask(folder, question.strip(), runner, knowledge, provider=provider)
-            out = folder / assistant.QA_JSONL
+        with tracker:
+            if kind == "summary":
+                out = assistant.summarize(folder, runner, knowledge, provider=provider,
+                                          want_title=cfg.assistant.auto_title)
+            else:
+                if not (question or "").strip():
+                    _emit({"kind": "error", "text": "пустой вопрос"})
+                    return 3
+                assistant.ask(folder, question.strip(), runner, knowledge, provider=provider)
+                out = folder / assistant.QA_JSONL
     except RuntimeError as e:
         _emit({"kind": "error", "text": str(e)})
         return 1
@@ -473,8 +476,10 @@ def _analyze(folder_str: str) -> int:
         return fail(f"{type(e).__name__}: {e}", 2)
     if runner is None:
         return fail(assistant.NO_PROVIDER, 2)
+    tracker, runner = _llm_tracker(bus, "analyze", "анализ встречи", provider, runner)
     try:
-        out = analysis.analyze(folder, runner, cfg, provider=provider, bus=bus)
+        with tracker:
+            out = analysis.analyze(folder, runner, cfg, provider=provider, bus=bus)
     except (analysis.AnalysisError, RuntimeError) as e:
         return fail(str(e), 1)
     except Exception as e:
@@ -508,8 +513,10 @@ def _improve(folder_str: str) -> int:
         return fail(f"{type(e).__name__}: {e}", 2)
     if runner is None:
         return fail(assistant.NO_PROVIDER, 2)
+    tracker, runner = _llm_tracker(bus, "improve", "улучшение расшифровки", provider, runner)
     try:
-        out = improve.improve(folder, runner, cfg, provider=provider, bus=bus)
+        with tracker:
+            out = improve.improve(folder, runner, cfg, provider=provider, bus=bus)
     except (improve.ImproveError, RuntimeError) as e:
         return fail(str(e), 1)
     except Exception as e:
@@ -550,15 +557,27 @@ def _profile(path_str: str) -> int:
         return fail(f"{type(e).__name__}: {e}", 2)
     if runner is None:
         return fail(assistant.NO_PROVIDER, 2)
+    tracker, runner = _llm_tracker(bus, "profile", "профиль человека", provider, runner)
     try:
-        out = profiles.refresh(pid, cfg.recording.voices, cfg.recording.recordings, runner, cfg,
-                               provider=provider, bus=bus, root=root)
+        with tracker:
+            out = profiles.refresh(pid, cfg.recording.voices, cfg.recording.recordings, runner, cfg,
+                                   provider=provider, bus=bus, root=root)
     except (profiles.ProfileError, RuntimeError) as e:
         return fail(str(e), 1)
     except Exception as e:
         return fail(f"{type(e).__name__}: {e}", 1)
     _emit({"kind": "job.result", "path": str(out)})
     return 0
+
+
+def _llm_tracker(bus, kind: str, label: str, provider: str | None, runner, stage: str | None = None):
+    """Ход задачи модели (meet.llm_progress): трекер на шине и runner,
+    сообщающий начало, поток текста и конец каждого вызова."""
+    from meet import llm_progress
+
+    tracker = llm_progress.Tracker(bus, kind, label, stage=stage, provider=provider)
+    llm_progress.attach(bus, tracker)
+    return tracker, tracker.wrap(runner)
 
 
 def jobs_hint() -> str:

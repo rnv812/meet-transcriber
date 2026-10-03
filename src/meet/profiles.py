@@ -772,8 +772,9 @@ def build(pid: str, name: str, recordings: Path, runner, cfg, *, provider: str |
     depth = level(st)
     if depth == "none":
         raise NotEnoughData(data_note(st))
-    if bus is not None:
-        bus.progress("profile", label="профиль человека", done=0, total=2)
+    from meet import llm_progress
+
+    llm_progress.part(bus, 1, 2, stage="profile", label="профиль человека", note="составление")
     # Выборка по индексу, тексты — только выбранных встреч, затем точная выборка.
     rough = sample(meetings)
     picked = sample(fill_texts(recordings, [{**m, "turns": ts} for m, ts in rough]))
@@ -783,14 +784,15 @@ def build(pid: str, name: str, recordings: Path, runner, cfg, *, provider: str |
     want_pcm = depth == "full" and bool(getattr(getattr(cfg, "profiles", None), "pcm", True))
     system = build_system(limit=limit, want_pcm=want_pcm)
     prompt = build_prompt(name, picked, st)
+    llm_progress.plan(bus, [("profile", len(prompt) + len(system)), ("profile-check", 3000)])
     try:
         got, errors, dropped = ask_model(runner, prompt, system, index, limit=limit, want_pcm=want_pcm)
     except ValueError as e:
         raise ProfileError(f"модель не дала профиль: {e}") from None
     if not any(got["sections"].values()):
         raise ProfileError(GROUNDED_FAIL)
-    if bus is not None:
-        bus.progress("profile", label="проверка профиля", done=1, total=2)
+    llm_progress.part(bus, 2, 2, stage="profile", label="проверка профиля", key="profile-check",
+                      note="проверка")
     got, review_state = review(runner, got)
     sections = {key: got["sections"].get(key, []) for key in SECTIONS}
     if not any(sections.values()):

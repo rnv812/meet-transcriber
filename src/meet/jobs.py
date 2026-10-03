@@ -119,6 +119,14 @@ class Job:
     # меряется ход шага («audio_s», «time», «bytes»…), см. meet.progress.
     cap: float | None = None
     unit: str | None = None
+    # Задачи модели (meet.llm_progress): часть n из N («окно 2 из 4»),
+    # подшаг (request / generating / validating / repair), «дольше обычного»
+    # и сколько осталось, секунд (только уверенная оценка).
+    part: int | None = None
+    parts: int | None = None
+    phase: str | None = None
+    slow: bool | None = None
+    eta_s: float | None = None
     result: str | None = None
     error: str | None = None
     created_at: float = field(default_factory=_created_at)
@@ -142,6 +150,11 @@ class Job:
             "estimate_s": self.estimate_s,
             "cap": self.cap,
             "unit": self.unit,
+            "part": self.part,
+            "parts": self.parts,
+            "phase": self.phase,
+            "slow": self.slow,
+            "eta_s": self.eta_s,
             "result": self.result,
             "error": self.error,
             "created_at": self.created_at,
@@ -490,6 +503,11 @@ class JobQueue:
             job.estimate_s = payload.get("estimate_s")
             job.cap = payload.get("cap")
             job.unit = payload.get("unit")
+            job.part = payload.get("part")
+            job.parts = payload.get("parts")
+            job.phase = payload.get("phase")
+            job.slow = payload.get("slow")
+            job.eta_s = payload.get("eta_s")
             self._emit(JOB_PROGRESS, job)
         elif kind == "job.result":
             job.result = payload.get("path")

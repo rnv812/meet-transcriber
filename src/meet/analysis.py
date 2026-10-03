@@ -45,7 +45,7 @@ import time
 import unicodedata
 from pathlib import Path
 
-from meet import library
+from meet import library, llm_progress
 from meet.output import fmt_ts
 
 ANALYSIS_JSON = "analysis.json"
@@ -679,9 +679,12 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     kb = _kb_excerpts(cfg.assistant.knowledge_dir, lines)
     total_lo, total_hi = chapter_target(_duration(data) / 60.0)
     results, summaries, errors = [], [], []
+    # Ход по окнам и итоговому вызову (meet.llm_progress): вес части — её объём.
+    llm_progress.plan(bus, [("analyze", sum(len(t) for _, t in p)) for p in parts]
+                      + ([("analyze-final", 3000)] if final_features else []))
     for n, part in enumerate(parts, start=1):
-        if bus is not None:
-            bus.progress("analyze", label="анализ встречи", done=n - 1, total=len(parts) + bool(final_features))
+        llm_progress.part(bus, n, len(parts) + bool(final_features), stage="analyze", label="анализ встречи",
+                          note=f"окно {n} из {len(parts)}" if multi else None)
         if window_features:
             # Главы окна — доля от глав всей встречи (окно — доля реплик).
             share = len(part) / max(1, len(lines))
@@ -711,8 +714,8 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     if not multi and "chapters" in merged:
         merged["chapters"] = repair_chapters(merged["chapters"], order)
     if final_features and summaries:
-        if bus is not None:
-            bus.progress("analyze", label="анализ встречи", done=len(parts), total=len(parts) + 1)
+        llm_progress.part(bus, len(parts) + 1, len(parts) + 1, stage="analyze", label="анализ встречи",
+                          key="analyze-final", note="категория и название")
         chapter_titles = [f"- {c['title']}" for c in merged.get("chapters") or []]
         system = _FINAL_SYSTEM.format(
             fields="\n".join(_FIELDS[f].format() for f in final_features),
