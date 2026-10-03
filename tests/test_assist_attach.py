@@ -13,7 +13,7 @@ import urllib.request
 from pathlib import Path
 
 from meet.assist.agent import AgentReply
-from meet.assist.app import AssistState, _attached_partial, _prior_entries
+from meet.assist.app import AssistState, _attached_reasons, _heard_end, _prior_entries
 from meet.assist.bus import TranscriptBus, chronological
 from meet.assist.live_state import LIVE_STATE_JSON, LiveState, covered_note, load_saved
 from meet.settings import Settings
@@ -164,14 +164,43 @@ def test_partial_marking_rules(tmp_path):
     state, live = _state(tmp_path), LiveState()
     complete = {"active": False, "complete": True}
     live.heard_from(0.0)
-    assert not _attached_partial(live, state, _Engine(complete), {"capped": False})
-    assert _attached_partial(live, state, _Engine({"active": False, "complete": False}), None)
-    assert _attached_partial(live, state, _Engine(complete), {"capped": True})
+    assert _attached_reasons(live, state, _Engine(complete), {"capped": False}) == []
+    assert _attached_reasons(live, state, _Engine({"active": False, "complete": False}),
+                             None) == ["catchup_incomplete"]
+    assert _attached_reasons(live, state, _Engine(complete), {"capped": True}) == ["capped"]
     late = LiveState()
     late.heard_from(1200.0)
-    assert _attached_partial(late, state, _Engine(None), None)
+    assert _attached_reasons(late, state, _Engine(None), None) == ["late_start"]
     state.mark_detached()
-    assert _attached_partial(live, state, _Engine(complete), {"capped": False})
+    assert _attached_reasons(live, state, _Engine(complete), {"capped": False}) == ["detached"]
+
+
+def test_reattach_keeps_holes_a_gap_catchup_cannot_fill(tmp_path):
+    """Первое включение не догнало начало (или упёрлось в 30 минут) — следующее
+    догоняет только после услышанного: та дыра остаётся, сводка — неполной.
+    «Выключили» чинится: дыру после выключения новое включение догоняет."""
+    state = _state(tmp_path)
+    complete = {"active": False, "complete": True}
+    first = LiveState()
+    first.heard_from(0.0)
+    first.partial_reasons = ["catchup_incomplete", "detached"]
+    first.partial = True
+    first.mark_covered(300.0)
+    first.save(tmp_path / LIVE_STATE_JSON)
+    again = LiveState()
+    again.resume(load_saved(tmp_path))
+    assert again.partial_reasons == ["catchup_incomplete", "detached"]
+    reasons = _attached_reasons(again, state, _Engine(complete), {"capped": False})
+    assert reasons == ["catchup_incomplete"]
+
+
+def test_heard_end_is_the_end_of_the_last_line():
+    bus = TranscriptBus()
+    _publish(bus, 100, "Демьян", "раз", dur=6.5)
+    _catchup(bus, 10, "Демьян", "начало")
+    assert _heard_end(bus, None) == 106.5
+    assert _heard_end(bus, 200.0) == 200.0
+    assert _heard_end(TranscriptBus(), None) is None
 
 
 # --- state: ход догонялки --------------------------------------------------------
@@ -361,6 +390,10 @@ def test_cli_child_mode_passes_attach_and_token_from_env(monkeypatch):
               "--tap-port", "4567"])
     assert seen["attach_to"] == "D:/rec/f" and seen["tap_port"] == 4567
     assert seen["tap_token"] == "a" * 32
+    # Токен ушёл из окружения: процессы модели и их инструменты его не наследуют.
+    import os
+
+    assert "MEET_TAP_TOKEN" not in os.environ
     seen.clear()
     cli.main(["assist", "--no-browser", "--port", "0"])
     assert seen["attach_to"] is None and seen["tap_token"] is None
@@ -378,3 +411,35 @@ def test_status_shows_the_attached_assistant(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Идёт запись (вручную): D:/rec/f" in out and "Ассистент: слушает запись" in out
     assert "Идёт запись с ассистентом" not in out
+
+
+def test_reattach_catches_up_from_the_end_of_the_last_heard_line(tmp_path, monkeypatch):
+    """Конец последней реплики прошлого включения — в live_state.json; новое
+    включение догоняет с него, а не с её начала (без повтора реплики)."""
+    folder = tmp_path / "rec" / "2026-10-03_09-00"
+    folder.mkdir(parents=True)
+    for name in ("sys.opus", "mic.opus"):
+        (folder / name).write_bytes(b"x")
+    prior = LiveState()
+    prior.heard_from(0.0)
+    prior.heard_t = 66.5
+    prior.save(folder / LIVE_STATE_JSON)
+    (folder / "live_transcript.md").write_text("[00:01:00] Вы: прошлое\n", encoding="utf-8")
+
+    async def stop_soon(stop):
+        await asyncio.sleep(0.05)
+
+    heavy = _Heavy(monkeypatch, digester_run=stop_soon)
+    captured = {}
+
+    def on_engine(engine):
+        engine.attach_positions = {"mic.wav": 300.0}
+        engine.catchup_progress = lambda: None
+        engine.start_catchup = lambda tracks, info=None: captured.update(tracks=tracks)
+
+    heavy.on_engine = on_engine
+    _run(tmp_path, open_browser=False, port=0, attach_to=str(folder), tap_port=1,
+         tap_token="t" * 32)
+    assert captured["tracks"]["mic.wav"][1:] == (66.5, 300.0)
+    saved = json.loads((folder / LIVE_STATE_JSON).read_text(encoding="utf-8"))
+    assert saved["heard_t"] == 66.5 and "partial" not in saved

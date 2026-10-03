@@ -6,6 +6,7 @@
 """
 
 import json
+from types import SimpleNamespace
 import socket
 import threading
 import time
@@ -544,3 +545,162 @@ def test_tap_tracks_map_to_engine_keys():
 
     assert TAP_TRACKS["sys.opus"][0] == "sys.wav" and TAP_TRACKS["sys.opus"][2] is True
     assert TAP_TRACKS["mic.opus"][0] == "mic.wav" and TAP_TRACKS["mic.opus"][2] is False
+
+
+# --- раунд 1: отвод не держат молчащие и не читающие клиенты --------------------
+
+
+def test_silent_connection_does_not_block_the_real_client():
+    hub = _hub()
+    server = pcm_tap.TapServer(hub)
+    silent = socket.create_connection(("127.0.0.1", server.port), timeout=5)
+    try:
+        began = time.monotonic()
+        client = pcm_tap.TapClient(server.port, server.token)
+        assert time.monotonic() - began < 1.0  # не ждёт молчуна
+        assert len(client.tracks) == 2
+        client.close()
+    finally:
+        silent.close()
+        server.close()
+
+
+def test_client_that_stops_reading_is_dropped_after_the_send_timeout(monkeypatch):
+    monkeypatch.setattr(pcm_tap, "SEND_TIMEOUT_S", 0.3)
+    hub = _hub()
+    server = pcm_tap.TapServer(hub)
+    raw = socket.create_connection(("127.0.0.1", server.port), timeout=5)
+    raw.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    raw.sendall(server.token.encode("ascii") + b"\n")
+    try:
+        _wait(lambda: hub.subscribers() == 1)
+        deadline = time.monotonic() + 10
+        while hub.subscribers() and time.monotonic() < deadline:
+            hub.push(0, b"\x01\x00" * 65536, 0)  # клиент не читает
+            time.sleep(0.02)
+        assert hub.subscribers() == 0  # сброшен, очередь освобождена
+        _wait(lambda: server.closed)
+    finally:
+        raw.close()
+        server.close()
+
+
+# --- раунд 1: догонялка — вежливо и без потерь ----------------------------------
+
+
+class ThreadsAsr(FakeGigaam):
+    def __init__(self):
+        super().__init__()
+        self.threads = []
+
+    def set_cpu_threads(self, n):
+        self.threads.append(n)
+
+
+def test_catchup_uses_fewer_threads_and_gives_them_back(tmp_path):
+    tap = FakeTap([{"index": 1, "name": "mic.opus", "rate": SR, "channels": 1, "pos": 0}])
+    asr = ThreadsAsr()
+    engine = LiveEngine(tmp_path, asr, speaker_name="Вы", mic_device=None, output_device=None,
+                        tap_connect=lambda: tap)
+    engine.start()
+    try:
+        from meet import live as live_mod
+
+        engine.start_catchup({"mic.wav": ("x", 0.0, 20.0)}, reader=lambda *a: FakeReader(20))
+        while engine.catchup_step(budget_s=0.0):
+            pass
+        assert asr.threads == [live_mod.CATCHUP_THREADS, None]
+    finally:
+        tap.end()
+        engine.stop()
+
+
+def test_catchup_takes_at_most_its_duty_share_of_the_worker(tmp_path, monkeypatch):
+    from meet import live as live_mod
+
+    tap = FakeTap([{"index": 1, "name": "mic.opus", "rate": SR, "channels": 1, "pos": 0}])
+    asr = FakeGigaam()
+    slow = asr.transcribe_window
+
+    def window(audio, **kw):
+        time.sleep(0.2)  # окно догонялки «считается» 0,2 с
+        return slow(audio, **kw)
+
+    asr.transcribe_window = window
+    engine = LiveEngine(tmp_path, asr, speaker_name="Вы", mic_device=None, output_device=None,
+                        tap_connect=lambda: tap)
+    monkeypatch.setattr(live_mod, "CATCHUP_SLICE_S", 0.05)
+    engine.start()
+    try:
+        engine.start_catchup({"mic.wav": ("x", 0.0, 600.0)}, reader=lambda *a: FakeReader(600))
+        began = time.monotonic()
+        time.sleep(3.0)
+        busy = len(asr.windows) * 0.2
+        assert busy <= 0.5 * (time.monotonic() - began) + 0.4
+        assert asr.windows  # и при этом идёт
+    finally:
+        tap.end()
+        engine.stop()
+
+
+def test_catchup_lines_survive_a_killed_assistant(tmp_path):
+    tap = FakeTap([{"index": 1, "name": "mic.opus", "rate": SR, "channels": 1, "pos": 60 * SR * 2}])
+    engine, _ = _attached_engine(tmp_path, tap)
+    engine.start()
+    try:
+        engine.start_catchup({"mic.wav": ("x", 0.0, 60.0)}, reader=lambda *a: FakeReader(60))
+        engine.catchup_step(budget_s=0.0)
+        side = tmp_path / "live_transcript.catchup.md"
+        # Строка уже на диске, хотя догонялка не кончилась (убьют — не пропадёт).
+        assert side.read_text(encoding="utf-8").strip()
+        saved = side.read_text(encoding="utf-8")
+    finally:
+        tap.end()
+        engine.stop()
+    assert not (tmp_path / "live_transcript.catchup.md").exists()  # слита при остановке
+    # Убитый ассистент: файл остался — следующее включение сливает его в ленту.
+    (tmp_path / "live_transcript.catchup.md").write_text(saved, encoding="utf-8")
+    before = (tmp_path / "live_transcript.md").read_text(encoding="utf-8").splitlines()
+    assert live_catchup.recover_side(tmp_path) == 0  # те же строки — не дублируются
+    (tmp_path / "live_transcript.catchup.md").write_text("[00:00:01] Вы: новая\n",
+                                                         encoding="utf-8")
+    assert live_catchup.recover_side(tmp_path) == 1
+    lines = (tmp_path / "live_transcript.md").read_text(encoding="utf-8").splitlines()
+    assert "[00:00:01] Вы: новая" in lines and len(lines) == len(before) + 1
+    assert lines == live_catchup.chronological(lines)
+    assert not (tmp_path / "live_transcript.catchup.md").exists()
+
+
+def test_catchup_decoder_runs_below_normal_priority(monkeypatch):
+    import subprocess
+
+    seen = {}
+
+    def popen(argv, **kw):
+        seen.update(kw)
+        raise OSError("не запускаем")
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    with pytest.raises(OSError):
+        live_catchup.PcmReader("x.opus", 0.0, 1.0)
+    below = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+    assert seen["creationflags"] & below == below
+
+
+def test_attached_child_is_spawned_below_normal_priority(monkeypatch):
+    import subprocess
+
+    from meet import live_control
+
+    seen = []
+
+    def popen(argv, **kw):
+        seen.append(kw["creationflags"])
+        return SimpleNamespace(pid=1)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    live_control._spawn_process(["x"], None)
+    live_control._spawn_process(["x"], None, {live_control.TAP_TOKEN_ENV: "t"})
+    below = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
+    assert seen[0] & below == 0 or below == 0  # обычный ассистент — как раньше
+    assert seen[1] & below == below

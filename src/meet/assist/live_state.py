@@ -214,6 +214,12 @@ class LiveState:
         # запись шла; начало не догнано) — черновик итогов говорит об этом.
         self.covered_from: float | None = None
         self.partial = False
+        # Почему неполна (`detached`, `catchup_incomplete`, `capped`,
+        # `late_start`): следующее включение в эту запись чинит не всё.
+        self.partial_reasons: list[str] = []
+        # До какой секунды записи доходит уже услышанное (конец последней
+        # реплики): следующее включение догоняет с этого места, без повтора.
+        self.heard_t: float | None = None
 
     # --- патч ---
 
@@ -598,13 +604,18 @@ class LiveState:
         for prefix in PREFIX.values():
             used = [int(i[1:]) for i in ids if i[0] == prefix]
             self._next[prefix] = max(used, default=0) + 1
-        for key in ("covered_t", "covered_from"):
+        for key in ("covered_t", "covered_from", "heard_t"):
             value = data.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 setattr(self, key, float(value))
         if self.covered_from is None:
             self.covered_from = 0.0  # без пометки — слышал запись с начала
         self.partial = bool(data.get("partial"))
+        reasons = data.get("partial_reasons")
+        self.partial_reasons = ([str(r) for r in reasons if isinstance(r, str)]
+                                if isinstance(reasons, list) else [])
+        if self.partial and not self.partial_reasons:
+            self.partial_reasons = ["unknown"]
         self.version += 1
         return True
 
@@ -643,8 +654,11 @@ class LiveState:
                 "markdown": self.render_markdown()}
         if self.covered_from is not None:
             data["covered_from"] = self.covered_from
+        if self.heard_t is not None:
+            data["heard_t"] = self.heard_t
         if self.partial:
             data["partial"] = True
+            data["partial_reasons"] = list(self.partial_reasons)
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         try:
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")

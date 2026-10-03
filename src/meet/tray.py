@@ -342,10 +342,13 @@ class TrayApp:
         # Отвод звука идущей записи для ассистента, включённого посреди неё
         # (meet.pcm_tap): запись отдаёт ему копию байтов дорожек.
         self.pcm_tap = pcm_tap.TapHub()
-        # (discard) -> None: перед остановкой записи — выключить подключённого
-        # к ней ассистента (TrayControl): он дописывает сводку в папку записи,
-        # пока запись ещё идёт, а при отмене не пишет в удаляемую папку.
-        self.before_stop = None
+        # (discard) -> None: запись уже остановлена (захват кончился в момент
+        # «Стоп», отвод закрыт) — дождаться подключённого к ней ассистента
+        # (TrayControl): он дописывает сводку из того, что успел получить, до
+        # сохранения записи и до удаления папки при отмене.
+        self.after_stop = None
+        # Идёт остановка записи: ассистента в неё уже не включить.
+        self.stopping = False
         # Чем кончилась последняя запись: {"folder", "reason", "at"} (см.
         # stop_recording). None — остановок ещё не было.
         self.last_stop: dict | None = None
@@ -439,14 +442,12 @@ class TrayApp:
     def stop_recording(self, discard: bool = False, hook: bool = True) -> None:
         """Штатно остановить запись. discard — отменить: удалить папку и не
         звать Claude (автозапись поймала то, что писать не надо)."""
-        if self.recording and self.before_stop is not None:
-            try:
-                self.before_stop(discard)
-            except Exception as e:  # ассистент не должен мешать остановке записи
-                self.log(f"перед остановкой записи: {e!r}")
         with self._mutex:
             if not self.recording:
                 return
+            # Захват кончается в момент «Стоп»: ассистента, подключённого к
+            # записи, ждём уже после (after_stop), а не до остановки.
+            self.stopping = True
             self.stop_event.set()
             thread, result = self.thread, self.result
             if thread is not None:
@@ -471,6 +472,12 @@ class TrayApp:
             # стал бы невидим для _clear_own_lock, и тот снял бы ещё рабочий
             # lock, пустив вторую запись в ту же папку.
             self.thread = None if not alive else thread
+            self.stopping = False
+        if self.after_stop is not None:
+            try:
+                self.after_stop(discard)
+            except Exception as e:  # ассистент не должен мешать сохранению записи
+                self.log(f"после остановки записи: {e!r}")
         folder = result.get("folder")
         if folder is None and alive:
             # поток жив и дописывает дорожки — данные целы, просто ещё не наши

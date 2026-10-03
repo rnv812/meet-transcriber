@@ -38,7 +38,11 @@ FLAG_PAD = 1  # доливка тишины по часам, а не звук у
 # теряет старые кадры (дыра → тишина у клиента), а память резидента не растёт.
 QUEUE_MAX_BYTES = 16 * 1024 * 1024
 TOKEN_MAX = 128
-HELLO_TIMEOUT_S = 5.0  # клиент присылает токен сразу после подключения
+HELLO_TIMEOUT_S = 1.0  # клиент присылает токен сразу после подключения
+MAX_HELLOS = 8  # одновременно ждущих токен подключений; сверх — закрываются сразу
+# Клиент жив, но не читает дольше этого — отключаем: поток сервера и его
+# очередь (до QUEUE_MAX_BYTES) не висят до смерти ассистента.
+SEND_TIMEOUT_S = 10.0
 READY_TIMEOUT_S = 5.0  # дорожки записи открываются за доли секунды
 TAKE_WAIT_S = 1.0
 VERSION = 1
@@ -229,24 +233,59 @@ class TapServer:
         self._conn: socket.socket | None = None
         self._lock = threading.Lock()
         self.served = threading.Event()  # клиент подключился и получил заголовок
+        self._claimed = False
+        self._claimed_event = threading.Event()
+        self._hellos = 0
         self._thread = threading.Thread(target=self._serve, name="meet-tap", daemon=True)
         self._thread.start()
 
     def _serve(self) -> None:
+        """Приём подключений. Токен каждое ждёт в своём коротком потоке:
+        молчащее подключение (чужой локальный процесс) не держит очередь, и
+        настоящий ассистент входит сразу."""
         try:
             while not self._closed.is_set():
                 try:
                     conn, _ = self._sock.accept()
                 except OSError:
                     return  # сокет закрыли (close())
-                if self._hello(conn):
-                    self._stream(conn)
-                    return
+                with self._lock:
+                    busy = self._claimed or self._hellos >= MAX_HELLOS
+                    if not busy:
+                        self._hellos += 1
+                if busy:
+                    conn.close()
+                    continue
+                threading.Thread(target=self._handle, args=(conn,), name="meet-tap-hello",
+                                 daemon=True).start()
+        finally:
+            if self._claimed_event.is_set():
+                return  # сервер закроет поток клиента, когда тот кончится
+            self.close()
+
+    def _handle(self, conn: socket.socket) -> None:
+        ok = self._hello(conn)
+        with self._lock:
+            self._hellos -= 1
+            claim = ok and not self._claimed and not self._closed.is_set()
+            if claim:
+                self._claimed = True
+                self._claimed_event.set()
+        if not claim:
+            if ok:  # верный токен, но клиент уже есть — второго не обслуживаем
+                conn.close()
+            return
+        try:
+            self._sock.close()  # больше никого не ждём
+        except OSError:
+            pass
+        try:
+            self._stream(conn)
         finally:
             self.close()
 
     def _hello(self, conn: socket.socket) -> bool:
-        """Токен первой строкой. Неверный — закрыть и ждать следующего."""
+        """Токен первой строкой (не дольше HELLO_TIMEOUT_S). Неверный — закрыть."""
         try:
             conn.settimeout(HELLO_TIMEOUT_S)
             raw = b""
@@ -279,7 +318,7 @@ class TapServer:
             self._conn = conn
         sub = None
         try:
-            conn.settimeout(None)
+            conn.settimeout(SEND_TIMEOUT_S)
             try:
                 sub, tracks = self.hub.subscribe()
             except TapError as e:
@@ -295,7 +334,9 @@ class TapServer:
                     conn.sendall(FRAME.pack(index, flags, pos, len(data)))
                     conn.sendall(data)
         except OSError:
-            pass  # клиент ушёл (ассистент выключен или упал) — запись не касается
+            # Клиент ушёл (ассистент выключен или упал) или не читает дольше
+            # SEND_TIMEOUT_S — запись это не касается.
+            pass
         finally:
             if sub is not None:
                 self.hub.unsubscribe(sub)
@@ -321,6 +362,10 @@ class TapServer:
         if conn is not None:
             try:
                 conn.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                conn.close()
             except OSError:
                 pass
 
