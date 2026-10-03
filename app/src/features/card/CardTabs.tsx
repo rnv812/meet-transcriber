@@ -8,7 +8,8 @@
  * не теряется при переключении, а итоги не запрашиваются у тех, кто их не
  * открывал. Агент (терминал с Claude Code или Codex) так же переживает
  * переключение вкладок — и смену этапа записи: живой режим → расшифровка →
- * готово (панели ключуются по вкладке); останавливается вместе с карточкой.
+ * готово (панели ключуются по вкладке); сам сеанс агента живёт и без карточки
+ * (agentSessions), пока работает — на вкладке «Агент» зелёная точка.
  *
  * `agentRequest` — «Спросить агента» (✦): новая просьба открывает «Агент» и
  * уходит туда ссылкой для поля ввода.
@@ -19,6 +20,7 @@ import type { AgentRequest } from "../../lib/agentRef";
 import type { Endpoint } from "../../lib/api";
 import type { Job } from "../../lib/types";
 import { AgentTab, type AgentInsert } from "./AgentTab";
+import { useAgentLive } from "./agentSessions";
 import { useAssistant } from "./assistant";
 import { SummaryTab } from "./SummaryTab";
 import { TranscriptShown } from "./transcriptShown";
@@ -81,6 +83,8 @@ export function CardTabs({
   const tab = tabs.some((t) => t.id === chosen) ? chosen : "transcript";
   const [opened, setOpened] = useState<Set<Tab>>(() => new Set(["transcript"]));
   const assistant = useAssistant(endpoint);
+  /** Агент этой записи работает (и когда вкладка «Агент» закрыта) — точка на вкладке. */
+  const agentLive = useAgentLive(id);
   const base = useId();
   const buttons = useRef<Record<string, HTMLButtonElement | null>>({});
 
@@ -168,6 +172,9 @@ export function CardTabs({
             onClick={() => open(t.id)}
           >
             {t.label}
+            {t.id === "agent" && agentLive && (
+              <span className="agent-live" aria-hidden="true" title="Агент работает" />
+            )}
           </button>
         ))}
       </div>

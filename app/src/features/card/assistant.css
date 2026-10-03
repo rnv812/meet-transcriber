@@ -11,6 +11,8 @@
   color: var(--text-2); font: inherit; cursor: pointer; transition: color var(--t);
 }
 .tabs__tab:hover { color: var(--text); }
+/* Агент записи работает (agentSessions): точка на вкладке «Агент». */
+.tabs__tab .agent-live { display: inline-block; width: 6px; height: 6px; margin-left: 6px; vertical-align: middle; border-radius: 50%; background: var(--ok); }
 .tabs__tab[aria-selected="true"] { color: var(--text); font-weight: 500; }
 .tabs__tab[aria-selected="true"]::after {
   content: ""; position: absolute; left: 6px; right: 6px; bottom: -1px; height: 2px;

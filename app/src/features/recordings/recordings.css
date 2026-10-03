@@ -49,6 +49,8 @@
 /* Дата, длительность и метка категории: метка не выше строки — список не прыгает. */
 .rec-item__when { display: flex; align-items: center; gap: 6px; min-width: 0; height: 17px; }
 .rec-item__when > .muted { flex: none; }
+/* Агент записи работает (вкладка «Агент», agentSessions) — и когда открыта другая запись. */
+.rec-item__agent { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
 /* Фрагменты из поиска по тексту: под записью, до трёх. */
 .rec-hits { margin: -2px 0 0; padding: 0 6px 6px; list-style: none; display: flex; flex-direction: column; gap: 2px; }
 .rec-hit {
