@@ -83,7 +83,15 @@ STOPPED_MARK = "Остановлено:"  # run_assist печатает посл
 # напечатать ошибку финализации; дальше добиваем зависший вызов модели.
 FINALIZE_GRACE_S = 2.0
 STOP_ATTEMPTS = 2  # /stop не дошёл — ещё одна попытка, потом только дедлайн
-TAP_TOKEN_ENV = "MEET_TAP_TOKEN"  # токен отвода звука — ребёнку в окружении, не в argv
+TAP_TOKEN_ENV = "MEET_TAP_TOKEN"
+# Чем кончился последний запуск (`status()["ended_by"]`): остановилась запись,
+# к которой ассистент был подключён; его выключили («Выключить ассистента»);
+# упал сам; остановили обычный ассистент. Трей по этому молчит, когда
+# ассистент кончился вместе с записью (о ней — своё уведомление).
+ENDED_RECORDING = "recording"
+ENDED_DETACH = "detach"
+ENDED_CRASH = "crash"
+ENDED_STOP = "stop"  # токен отвода звука — ребёнку в окружении, не в argv
 POLL_S = 0.1
 REQUEST_TIMEOUT_S = 5.0
 ASK_TIMEOUT_S = 240.0  # вопрос — вызов модели (у ребёнка до 180 с) плюс дослив окна
@@ -216,19 +224,27 @@ def _orphan_endpoint(path: Path) -> dict | None:
 
 
 def _spawn_process(argv: list[str], log_file, extra_env: dict | None = None):
-    """Запустить ребёнка без окна консоли, весь вывод — в журнал."""
+    """Запустить ребёнка без окна консоли, весь вывод — в журнал.
+
+    Ассистент, подключённый к обычной записи (в окружении токен отвода), —
+    с пониженным приоритетом, как задачи расшифровки: его догонялка грузит
+    процессор минутами, а запись резидента (callback → ffmpeg) и звонок
+    тормозить не должны. Его ffmpeg догонялки наследуют приоритет."""
     from meet import netproxy
 
     # Прокси из настроек: ребёнок зовёт Claude Code/Codex (см. meet.netproxy).
     env = {**netproxy.settings_env(), "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1",
            **(extra_env or {})}
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if extra_env and TAP_TOKEN_ENV in extra_env:
+        flags |= getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
     return subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,
         stdout=log_file,
         stderr=subprocess.STDOUT,
         env=env,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        creationflags=flags,
     )
 
 
@@ -327,6 +343,8 @@ class LiveControl:
         # (server — meet.pcm_tap.TapServer, его закрываем в конце). None — сам пишет.
         self._attach: dict | None = None
         self._detach = False  # остановка — «Выключить ассистента», запись идёт дальше
+        self._reason: str | None = None  # с чем просили остановиться (ENDED_*)
+        self._ended_by: str | None = None  # чем кончился последний запуск
 
     # --- что показывать -------------------------------------------------
 
@@ -360,7 +378,8 @@ class LiveControl:
         return {"active": self._active, "starting": running and not self._active,
                 "stopping": running and self._stop_requested, "folder": self._folder,
                 "error": self._error, "started_at": self._started_at,
-                "attached": running and self._attach is not None}
+                "attached": running and self._attach is not None,
+                "ended_by": None if running else self._ended_by}
 
     # --- старт и стоп ---------------------------------------------------
 
@@ -422,6 +441,7 @@ class LiveControl:
                                               {TAP_TOKEN_ENV: attach["server"].token})
                 except OSError as e:
                     self._error = f"Не удалось запустить ассистента: {e}"
+                    self._ended_by = ENDED_CRASH
                     process = None
                 finally:
                     if log_file is not None:
@@ -440,6 +460,8 @@ class LiveControl:
                     self._stop_deadline = None
                     self._attach = attach
                     self._detach = False
+                    self._reason = None
+                    self._ended_by = None
                     self._thread = threading.Thread(
                         target=self._watch, args=(process, endpoint, path, offset),
                         name="meet-live", daemon=True)
@@ -480,7 +502,7 @@ class LiveControl:
                          name="meet-live-orphan", daemon=True).start()
 
     def stop(self, wait: bool = False, timeout: float | None = None,
-             detach: bool = False) -> dict:
+             detach: bool = False, reason: str | None = None) -> dict:
         """Штатная остановка: `POST /stop` (не дошёл — ещё раз), конец — когда
         ребёнок дописал запись (исчез файл эндпоинта) или вышел. Не уложился
         в STOP_TIMEOUT_S (или в `timeout`, если он короче) — убийство дерева.
@@ -488,7 +510,7 @@ class LiveControl:
         `wait=True` — ждать конца (выход резидента, /shutdown); без него ответ
         сразу, а конец — событием `live.stopped`. `detach` — ассистента,
         подключённого к записи, выключают, а запись идёт дальше: его сводка
-        помечается неполной."""
+        помечается неполной. `reason` — ENDED_* для `status()["ended_by"]`."""
         with self._emit_lock:
             with self._lock:
                 process, thread = self._process, self._thread
@@ -498,6 +520,7 @@ class LiveControl:
                 self._stop_requested = True
                 if first:
                     self._detach = bool(detach and self._attach is not None)
+                    self._reason = ENDED_DETACH if self._detach else reason
                 detaching = self._detach
                 port = self._port
                 now = time.monotonic()
@@ -582,7 +605,7 @@ class LiveControl:
                 stop_requested = self._stop_requested
                 active = self._active
                 folder = self._folder
-                attach, detached = self._attach, self._detach
+                attach, detached, reason = self._attach, self._detach, self._reason
                 if stop_requested or (code == 0 and active and error is None):
                     kind = LIVE_STOPPED
                     if not active:
@@ -625,8 +648,20 @@ class LiveControl:
                 self._stop_requested = False
                 self._stop_deadline = None
                 self._error = error
+                if kind == LIVE_FAILED:
+                    self._ended_by = ENDED_CRASH
+                elif detached:
+                    self._ended_by = ENDED_DETACH
+                elif attach is not None:
+                    # Подключённый кончается вместе с записью: её остановка
+                    # (просьба резидента или конец отвода — вышел сам).
+                    self._ended_by = ENDED_RECORDING
+                else:
+                    self._ended_by = reason or ENDED_STOP
+                ended_by = self._ended_by
                 self._attach = None
                 self._detach = False
+                self._reason = None
                 streams = list(self._streams)
             for stream in streams:
                 stream.close()
@@ -636,10 +671,12 @@ class LiveControl:
                 self._log(f"ассистент {'выключен' if detached else 'остановлен'}: {folder}"
                           + (f" ({error})" if error else ""))
                 self.bus.emit(LIVE_STOPPED, folder=folder, error=error,
-                              complete=complete, attached=attached, detached=detached)
+                              complete=complete, attached=attached, detached=detached,
+                              ended_by=ended_by)
             else:
                 self._log(f"ассистент упал (код {code}): {error}")
-                self.bus.emit(LIVE_FAILED, error=error, folder=folder, attached=attached)
+                self.bus.emit(LIVE_FAILED, error=error, folder=folder, attached=attached,
+                              ended_by=ended_by)
 
     @staticmethod
     def _drop_endpoint(endpoint: Path, pids: set) -> None:

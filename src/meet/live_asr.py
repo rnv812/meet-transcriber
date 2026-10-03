@@ -176,6 +176,18 @@ class GigaamLive:
         words = gigaam_asr.words_of_chunk(chunk, getattr(result, "words", None))
         return gigaam_asr.to_segments(words)
 
+    def set_cpu_threads(self, n: int | None) -> None:
+        """Потоки torch на CPU: `n` (догонялка — поменьше), None — обычные
+        (CPU_THREADS). На видеокарте и у запасного Whisper — ничего."""
+        if self.device != "cpu" or self._fallback is not None or self._model is None:
+            return
+        try:
+            import torch
+
+            torch.set_num_threads(max(1, int(n)) if n else _default_threads())
+        except Exception:
+            pass
+
     def _drop_model(self) -> None:
         model, self._model = self._model, None
         if model is not None:
@@ -206,6 +218,10 @@ class GigaamLive:
 # потоков — 0,47 с на окно ~5 с, 14 — 0,45–0,55 с, но с редкими провалами,
 # когда процессор занят и другим (звонок, задачи расшифровки).
 CPU_THREADS = 8
+
+
+def _default_threads() -> int:
+    return max(1, min(CPU_THREADS, os.cpu_count() or CPU_THREADS))
 
 
 def _limit_cpu_threads() -> None:

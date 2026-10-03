@@ -177,6 +177,7 @@ def test_attach_detach_keeps_the_recording_going(resident, monkeypatch, tmp_path
         assert resident.queue.submitted == []  # и в расшифровку не встала
         assert "source" not in library.read_meta(Path(folder))
         assert order == ["live.stop detach"]
+        assert resident.live.status()["ended_by"] == live_control.ENDED_DETACH
         # Снова включить в ту же запись — можно.
         resident.live_attach()
         _wait_for(lambda: resident.live.status()["active"])
@@ -185,29 +186,76 @@ def test_attach_detach_keeps_the_recording_going(resident, monkeypatch, tmp_path
     _wait_for(lambda: not resident.live.busy())
 
 
-def test_stopping_the_recording_stops_its_assistant_first(resident, monkeypatch, tmp_path):
+def test_stop_ends_the_recording_first_then_waits_for_its_assistant(resident, monkeypatch, tmp_path):
     folder, order = _recording_resident(resident, monkeypatch, tmp_path)
     resident.live_attach()
     _wait_for(lambda: resident.live.status()["active"])
     resident.stop_recording()
-    # Ассистент дописал сводку, пока запись шла, потом остановилась запись.
-    assert order == ["live.stop wait", "record.stopped"]
+    # Захват кончился в момент «Стоп»; ассистент дописал сводку уже после.
+    assert order == ["record.stopped", "live.stop wait"]
     assert not resident.live.busy() and resident.tray.recording is False
     assert [json.loads(b) for b in resident.stub.note("stop_body")] == [{}]
+    # Кончился вместе с записью — трей об этом молчит.
+    assert resident.live.status()["ended_by"] == live_control.ENDED_RECORDING
     # Расшифровка — одна, от записи (не «live»).
     _wait_for(lambda: resident.queue.submitted)
     assert resident.queue.submitted == [(jobs.TRANSCRIBE, str(folder))]
     assert library.read_meta(Path(folder))["source"] == "record"
 
 
-def test_cancelled_recording_stops_its_assistant_before_deleting(resident, monkeypatch, tmp_path):
+def test_cancelled_recording_waits_for_its_assistant_before_deleting(resident, monkeypatch,
+                                                                     tmp_path):
     folder, order = _recording_resident(resident, monkeypatch, tmp_path)
     resident.live_attach()
     _wait_for(lambda: resident.live.status()["active"])
+    seen = {}
+    real_finish = resident.tray.after_stop
+
+    def finish(discard):
+        real_finish(discard)
+        seen["live_gone_before_delete"] = not resident.live.busy() and folder.exists()
+
+    monkeypatch.setattr(resident.tray, "after_stop", finish)
     resident.stop_recording(discard=True)
-    assert order == ["live.stop wait", "record.stopped"]
+    assert order == ["record.stopped", "live.stop wait"]
+    assert seen["live_gone_before_delete"] is True
     assert not folder.exists()
     assert resident.queue.submitted == []
+
+
+def test_audio_ends_at_the_click_even_if_the_assistant_takes_its_time(resident, monkeypatch,
+                                                                     tmp_path):
+    """Длина звука записи — до момента «Стоп» (± буфер), хотя подключённый
+    ассистент дописывает сводку ещё секунду."""
+    import time
+
+    import test_recorder as tr
+
+    from meet import recorder
+
+    tr._fake_audio(monkeypatch)
+    created = []
+
+    class Writer(tr._DummyWriter):
+        def __init__(self, path, channels, rate):
+            super().__init__(path, channels, rate)
+            created.append(time.monotonic())
+
+    monkeypatch.setattr(recorder, "OpusWriter", Writer)
+    resident.stub.mode = "slow-finalize"  # ассистент финализируется ≥ 1 с
+    assert resident.tray.start_recording(tray_control.MANUAL)
+    _wait_for(lambda: resident.tray.pcm_tap.active() and len(created) == 2)
+    resident.live_attach()
+    _wait_for(lambda: resident.live.status()["active"])
+    time.sleep(0.5)
+    click = time.monotonic()
+    resident.stop_recording()
+    took = time.monotonic() - click
+    assert took >= 1.0  # ассистента дождались…
+    for writer, began in zip(tr._DummyWriter.instances, created):
+        seconds = len(writer.data) / (2 * writer.channels * writer.rate)
+        # …а звук кончился в момент нажатия (буфер 1024 кадра — 64 мс).
+        assert abs(seconds - (click - began)) < 0.15, (seconds, click - began)
 
 
 def test_assistant_crash_does_not_touch_the_recording(resident, monkeypatch, tmp_path):
@@ -220,6 +268,7 @@ def test_assistant_crash_does_not_touch_the_recording(resident, monkeypatch, tmp
             timeout=5).close()
         _wait_for(lambda: not resident.live.busy())
         assert resident.snapshot()["live"]["error"] == "RuntimeError: устройство пропало"
+        assert resident.snapshot()["live"]["ended_by"] == live_control.ENDED_CRASH
         assert resident.tray.recording is True and resident.tray.pcm_tap.active()
         assert resident.queue.submitted == [] and order == []
     finally:
@@ -236,6 +285,18 @@ def test_live_stop_of_an_attached_assistant_only_detaches(resident, monkeypatch,
         assert resident.tray.recording is True
         assert order == ["live.stop detach"]
     finally:
+        resident.tray.stop_recording()
+
+
+def test_attach_is_refused_while_the_recording_stops(resident, monkeypatch, tmp_path):
+    _recording_resident(resident, monkeypatch, tmp_path)
+    resident.tray.stopping = True
+    try:
+        with pytest.raises(control.BadRequest, match="останавливается"):
+            resident.live_attach()
+        assert resident.stub.argv is None
+    finally:
+        resident.tray.stopping = False
         resident.tray.stop_recording()
 
 

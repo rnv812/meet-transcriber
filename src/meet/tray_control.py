@@ -409,10 +409,11 @@ class TrayControl(ProfilesMixin):
         self.live = live if live is not None else live_control.LiveControl(
             self.bus, log=tray.log)
         tray.live_busy = self.live.busy
-        # Ассистент, включённый посреди записи, выключается до её остановки:
-        # сводку он дописывает, пока запись идёт, а в отменённую (удаляемую)
-        # папку уже ничего не пишет.
-        tray.before_stop = self._stop_attached
+        # Ассистент, включённый посреди записи: запись останавливается в
+        # момент «Стоп» (отвод закрывается), а его ждём сразу после — он
+        # дописывает сводку из того, что успел получить, до сохранения записи
+        # и до удаления отменённой папки.
+        tray.after_stop = self._finish_attached
         self.bus.subscribe(self._on_live_event)
         # Выгрузка в базу знаний: по одной за раз (кнопка поверх автоматики не
         # должна писать в ту же папку одновременно). Последний сбой автоматики —
@@ -1060,6 +1061,8 @@ class TrayControl(ProfilesMixin):
 
         if not self.tray.recording:
             raise _bad_request("Запись не идёт — включить ассистента можно только во время записи")
+        if getattr(self.tray, "stopping", False):
+            raise _bad_request("Запись останавливается — ассистента в неё уже не включить")
         if self.live.busy():
             st = self.live.status()
             raise _bad_request("Ассистент уже включён" if st.get("attached") or st.get("active")
@@ -1092,7 +1095,7 @@ class TrayControl(ProfilesMixin):
         if not self._live_attached():
             return {**self.live.status(), "ok": False, "action": "not-attached"}
         self.tray.log("ассистент выключается, запись продолжается")
-        return self.live.stop(detach=True)
+        return self.live.stop(detach=True, reason=live_control.ENDED_DETACH)
 
     def _live_attached(self) -> bool:
         attached = getattr(self.live, "attached", None)  # подмена в тестах может не уметь
@@ -1101,15 +1104,16 @@ class TrayControl(ProfilesMixin):
         except Exception:
             return False
 
-    def _stop_attached(self, discard: bool = False) -> None:
-        """Перед остановкой (или отменой) записи — остановить подключённого к
-        ней ассистента и дождаться, пока он допишет сводку (не дольше
-        ATTACH_STOP_WAIT_S; дальше его дерево убивают — запись это не задевает)."""
+    def _finish_attached(self, discard: bool = False) -> None:
+        """Запись остановлена (или отменена): захват кончился в момент «Стоп»,
+        отвод закрыт. Подключённый ассистент дописывает сводку из того, что
+        успел получить; ждём его не дольше ATTACH_STOP_WAIT_S (дальше дерево
+        убивают — запись это не задевает), потом — сохранение или удаление."""
         if not self._live_attached():
             return
-        self.tray.log("запись останавливается — останавливаю подключённого ассистента"
+        self.tray.log("запись остановлена — жду, пока подключённый ассистент допишет сводку"
                       + (" (запись отменена)" if discard else ""))
-        self.live.stop(wait=True, timeout=ATTACH_STOP_WAIT_S)
+        self.live.stop(wait=True, timeout=ATTACH_STOP_WAIT_S, reason=live_control.ENDED_RECORDING)
 
     def _live_call(self, call, *args) -> dict:
         try:

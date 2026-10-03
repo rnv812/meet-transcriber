@@ -23,6 +23,17 @@ BACKLOG_MAX_S = 90.0
 # окна уже записанного не дольше этого, потом снова живой звук. Живая лента
 # отстаёт от речи не больше чем на это время плюс одно окно.
 CATCHUP_SLICE_S = 1.0
+# Доля времени рабочего потока, которую догонялка может занять: после куска
+# окон она ждёт не меньше, чем на него ушло (не больше половины процессорного
+# времени потока) — живому звуку и чужим процессам остаётся место.
+CATCHUP_DUTY = 0.5
+# Потоков torch на CPU, пока идёт догонялка (обычно — live_asr.CPU_THREADS):
+# фоновая работа не должна занимать все ядра, пока идёт запись.
+CATCHUP_THREADS = 4
+# Строки догонялки по мере распознавания — в этот файл рядом с лентой (ассистент
+# убит посреди догонялки — они не пропадут; слияние — в конце или при новом
+# включении ассистента в эту запись).
+CATCHUP_SIDE = "live_transcript.catchup.md"
 # Дорожки записи резидента (отвод `meet.pcm_tap`) → ключ дорожки движка,
 # нормализовать ли, опознавать ли голос (как у собственного захвата).
 TAP_TRACKS = {"sys.opus": ("sys.wav", True, True), "mic.opus": ("mic.wav", False, False)}
@@ -273,6 +284,8 @@ class LiveEngine:
         self._catch_lines: list[str] = []
         self._catch_info: dict | None = None
         self._catch_error: str | None = None
+        self._catch_resume = 0.0  # раньше этого (monotonic) догонялка не продолжается
+        self._catch_threads = False  # потоки torch урезаны на время догонялки
         self.on_catchup = None  # () -> None после каждого догнанного окна
 
     def register_track(self, fname: str, rate: int, channels: int,
@@ -437,6 +450,7 @@ class LiveEngine:
                 # догонялки; потребителям — с пометкой (подсказки по нему не
                 # тикают, лента ставит его выше живых строк).
                 self._catch_lines.append(line)
+                self._catch_side(line)
                 entry["catchup"] = True
             else:
                 self._write_line(line)
@@ -624,11 +638,15 @@ class LiveEngine:
                 if text != self._last_error:  # один и тот же сбой — один раз
                     self._last_error = text
                     self._write_line(f"<!-- ошибка окна: {e} -->")
-            if self._catch:
+            if self._catch and time.monotonic() >= self._catch_resume:
+                began = time.monotonic()
                 try:
                     self.catchup_step()
                 except Exception as e:  # догонялка — не повод ронять живой режим
                     self._abort_catchup(f"{type(e).__name__}: {e}")
+                spent = time.monotonic() - began
+                # Не больше CATCHUP_DUTY времени потока: пауза — по куску.
+                self._catch_resume = time.monotonic() + spent * (1 - CATCHUP_DUTY) / CATCHUP_DUTY
 
     # --- подключение к идущей записи ------------------------------------
 
@@ -744,10 +762,11 @@ class LiveEngine:
         return True
 
     def _fill(self, tr: dict) -> None:
-        """Очередь догоняемой дорожки — до окна «отстали» (длинные окна:
-        быстрее на секунду звука), из ffmpeg."""
+        """Очередь догоняемой дорожки — на одно обычное окно с запасом (окна
+        обычной длины: кусок догонялки короткий, живой звук ждёт его меньше),
+        из ffmpeg."""
         policy = self.policy
-        target = max(policy.max_s, policy.merge_s) + policy.min_s
+        target = policy.max_s + policy.min_s
         need = target - tr["pending_n"] / tr["rate"]
         reader = tr["reader"]
         if need > 0 and not reader.eof:
@@ -760,6 +779,9 @@ class LiveEngine:
         """Окна догонялки, пока не вышло `budget_s` секунд. → True — ещё есть
         что догонять."""
         deadline = time.perf_counter() + budget_s
+        if not self._catch_threads:
+            self._catch_threads = True
+            self._cpu_threads(CATCHUP_THREADS)
         while not self._stop.is_set():
             with self._window_lock:
                 left = [k for k, tr in self._catch.items() if not tr["done"]]
@@ -781,6 +803,23 @@ class LiveEngine:
             if time.perf_counter() >= deadline:
                 return True
         return bool(self._catch)
+
+    def _cpu_threads(self, n: int | None) -> None:
+        """Потоки torch распознавания (None — обычные); у кого их нет — ничего."""
+        set_threads = getattr(self._transcriber, "set_cpu_threads", None)
+        if set_threads is not None:
+            try:
+                set_threads(n)
+            except Exception:
+                pass
+
+    def _catch_side(self, line: str) -> None:
+        try:
+            self.out_dir.mkdir(parents=True, exist_ok=True)
+            with open(self.out_dir / CATCHUP_SIDE, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except OSError:
+            pass  # строка всё равно в памяти и уйдёт в ленту слиянием
 
     def _catchup_changed(self) -> None:
         if self.on_catchup is not None:
@@ -812,6 +851,9 @@ class LiveEngine:
                 tr["reader"].close()
                 tr["done"] = True
         self._catch = {}
+        if self._catch_threads:
+            self._catch_threads = False
+            self._cpu_threads(None)
         self._merge_catchup_lines()
 
     def _catch_done_s(self) -> float:
@@ -822,7 +864,7 @@ class LiveEngine:
         return done
 
     def _merge_catchup_lines(self) -> None:
-        from meet.live_catchup import chronological
+        from meet.live_catchup import merge_lines
 
         lines, self._catch_lines = self._catch_lines, []
         if not lines:
@@ -830,16 +872,8 @@ class LiveEngine:
         if self._out is not None:
             self._out.close()
             self._out = None
-        try:
-            existing = self._transcript.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            existing = []
-        self.out_dir.mkdir(parents=True, exist_ok=True)
-        tmp = self._transcript.with_name(self._transcript.name + ".tmp")
-        tmp.write_text("\n".join(chronological(existing + lines)) + "\n", encoding="utf-8")
-        import os
-
-        os.replace(tmp, self._transcript)
+        merge_lines(self._transcript, lines)
+        (self.out_dir / CATCHUP_SIDE).unlink(missing_ok=True)
 
     def catchup_progress(self) -> dict | None:
         """Для панели: {"active", "done_s", "total_s", "from_t", "to_t",

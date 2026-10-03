@@ -117,6 +117,16 @@ def live_stop() -> int:
     return 0
 
 
+def _take_tap_token() -> str | None:
+    """Токен отвода звука из окружения — и убрать его оттуда: процессы
+    ассистента (Claude Code, Codex, их инструменты) его не наследуют."""
+    import os
+
+    from meet.live_control import TAP_TOKEN_ENV
+
+    return os.environ.pop(TAP_TOKEN_ENV, None)
+
+
 def live_attach(detach: bool = False) -> int:
     """`meet assist --attach` / `--detach`: включить ассистента посреди идущей
     обычной записи (или выключить его) через резидента — запись не
@@ -451,11 +461,8 @@ def main(argv: list[str] | None = None) -> int | None:
     elif args.command == "assist" and (args.attach or args.detach):
         return live_attach(detach=args.detach)
     elif args.command == "assist":
-        import os
-
         from meet.assist.app import run_assist
         from meet.gpu_lock import hold_gpu_lock
-        from meet.live_control import TAP_TOKEN_ENV
 
         vault = args.vault or (str(cfg.assist.vault) if cfg.assist.vault else None)
         knowledge = cfg.assistant.knowledge_dir
@@ -473,7 +480,7 @@ def main(argv: list[str] | None = None) -> int | None:
                        knowledge_dir=str(knowledge) if knowledge else None,
                        parent_pid=args.parent_pid,
                        attach_to=args.attach_to, tap_port=args.tap_port,
-                       tap_token=os.environ.get(TAP_TOKEN_ENV) if args.attach_to else None)
+                       tap_token=_take_tap_token() if args.attach_to else None)
     elif args.command == "status":
         print_status()
     elif args.command == "live-stop":

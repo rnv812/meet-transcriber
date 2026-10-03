@@ -241,6 +241,11 @@ pub struct Live {
     /// Включён посреди обычной записи: запись ведёт резидент, ассистент её
     /// слушает; «Выключить ассистента» запись не останавливает.
     pub attached: bool,
+    /// Чем кончился последний запуск (`"recording"` — вместе с записью, к
+    /// которой был подключён; `"detach"` — выключили; `"crash"` — упал;
+    /// `"stop"` — остановили). Пока ассистент жив — `None`; старый резидент
+    /// поля не присылает.
+    pub ended_by: Option<String>,
 }
 
 impl Live {
@@ -259,6 +264,7 @@ impl Live {
             folder: text("folder"),
             error: text("error"),
             attached: flag("attached"),
+            ended_by: text("ended_by"),
         }
     }
 
@@ -484,15 +490,21 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
 /// ошибки нет — это штатная остановка (или ассистент вышел сам, кодом 0).
 /// Ошибка без просьбы остановиться — падение.
 ///
-/// Ассистент, включённый посреди обычной записи: остановилась сама запись —
-/// о ней скажет «Запись сохранена», ассистент молчит; выключили его, а запись
-/// идёт — «Ассистент выключен» (с ошибкой — она в теле).
+/// Ассистент, включённый посреди обычной записи: кончился вместе с записью
+/// (`ended_by: "recording"` — резидент знает это точно, даже если снимок
+/// между ними показал «запись идёт, ассистента нет») — о ней скажет «Запись
+/// сохранена», ассистент молчит; выключили его, а запись идёт — «Ассистент
+/// выключен» (с ошибкой — она в теле); упал — ошибка и «запись продолжается».
 fn live_ended(prev: &View, next: &View) -> Option<Notice> {
     let (was, now) = (&prev.live, &next.live);
     let recording = was.folder.as_deref().and_then(recording_id);
     if was.attached {
+        if now.ended_by.as_deref() == Some("recording") {
+            return None;
+        }
+        let crashed = now.ended_by.as_deref() == Some("crash");
         return match now.error.as_deref() {
-            Some(error) if !was.stopping => Some(Notice::new(
+            Some(error) if crashed || !was.stopping => Some(Notice::new(
                 LIVE_FAILED,
                 format!("{} — запись продолжается", shorten(error, ERROR_CHARS)),
                 recording,
@@ -2614,6 +2626,7 @@ mod tests {
                 folder: active.then(|| LIVE_FOLDER.to_string()),
                 error: None,
                 attached: false,
+                ended_by: None,
             },
             ..idle()
         }
@@ -2683,6 +2696,7 @@ mod tests {
                 folder: Some(LIVE_FOLDER.into()),
                 error: None,
                 attached: false,
+                ended_by: None,
             }
         );
         let v = View::from_json(
@@ -2998,6 +3012,7 @@ mod tests {
             folder: Some(LIVE_FOLDER.to_string()),
             error: None,
             attached: true,
+            ended_by: None,
         }
     }
 
@@ -3055,6 +3070,43 @@ mod tests {
         assert_eq!(n.len(), 1);
         assert_eq!(n[0].title, LIVE_FAILED);
         assert!(n[0].body.contains("запись продолжается"));
+    }
+
+    #[test]
+    fn three_step_stop_of_an_attached_recording_is_one_notice() {
+        // (запись, ассистент выключается) → (запись ещё сохраняется, ассистента
+        // уже нет: кончился вместе с ней) → (простой).
+        let first = recording_with(attached(true, false, true));
+        let mut second = recording_with(Live::default());
+        second.live.ended_by = Some("recording".into());
+        let mut third = idle();
+        third.live.ended_by = Some("recording".into());
+        assert!(transitions(Some(&first), &second).is_empty());
+        let n = transitions(Some(&second), &third);
+        let titles: Vec<&str> = n.iter().map(|notice| notice.title.as_str()).collect();
+        assert_eq!(titles, [RECORDING_SAVED]);
+        // Выключили и упал — по-прежнему сказать.
+        let mut detached = recording_with(Live::default());
+        detached.live.ended_by = Some("detach".into());
+        let n = transitions(Some(&first), &detached);
+        assert_eq!(n[0].title, LIVE_DETACHED);
+        let mut crashed = recording_with(Live::default());
+        crashed.live.ended_by = Some("crash".into());
+        crashed.live.error = Some("упал".into());
+        let n = transitions(Some(&first), &crashed);
+        assert_eq!(n[0].title, LIVE_FAILED);
+        assert!(n[0].body.contains("запись продолжается"));
+    }
+
+    #[test]
+    fn ended_by_is_read_from_the_snapshot() {
+        let v = View::from_json(
+            &json!({"live": {"active": false, "ended_by": "recording"}}),
+            &json!({}),
+        );
+        assert_eq!(v.live.ended_by.as_deref(), Some("recording"));
+        let old = View::from_json(&json!({"live": {"active": false}}), &json!({}));
+        assert_eq!(old.live.ended_by, None);
     }
 
     #[test]

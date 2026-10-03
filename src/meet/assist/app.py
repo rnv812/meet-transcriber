@@ -515,10 +515,16 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         # подсказки, догоняем только то, чего он не слышал.
         from meet.assist.live_state import load_saved
 
+        _lower_priority()
+        # Строки догонялки убитого посреди неё прошлого ассистента — в ленту.
+        live_catchup.recover_side(out_dir)
         saved = load_saved(out_dir)
         if saved is not None and live.resume(saved):
             print("сводка прошлого включения ассистента продолжена", flush=True)
-        heard = live_catchup.heard_until(transcript_path)
+        # Догоняем с конца уже услышанного (конец последней реплики), без
+        # повтора её самой; старый live_state.json — по метке последней строки.
+        heard = live.heard_t if live.heard_t is not None else \
+            live_catchup.heard_until(transcript_path)
         prior = _prior_entries(transcript_path)
     vault_path = Path(vault) if vault else None
     state = AssistState(
@@ -596,7 +602,9 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     if prior:
         for line, entry in prior:
             bus.publish(line, entry)
-        state.digester.skip_existing()  # прошлая лента — контекст, не новые реплики
+        skip = getattr(state.digester, "skip_existing", None)
+        if skip is not None:
+            skip()  # прошлая лента — контекст, не новые реплики
     started = False
     plan = None
     try:
@@ -624,25 +632,63 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
             close()  # процесс диалога подсказок — не сирота, даже при сбое
         engine.stop()
         if started and attached:
-            live.partial = _attached_partial(live, state, engine, plan)
-        if started and not live.is_empty():
-            _save_state()  # итог живого режима — черновик для задачи итогов
+            live.partial_reasons = _attached_reasons(live, state, engine, plan)
+            live.partial = bool(live.partial_reasons)
+            live.heard_t = _heard_end(bus, live.heard_t)
+        if started and (attached or not live.is_empty()):
+            # Итог живого режима — черновик для задачи итогов; у подключённого
+            # к записи — и пустой: граница услышанного и пометка о неполноте
+            # нужны следующему включению.
+            _save_state()
         if started:
             print(f"\nОстановлено: {out_dir}", flush=True)
             print(f'Точный транскрипт: meet transcribe "{out_dir}"', flush=True)
 
 
-def _attached_partial(live: LiveState, state: AssistState, engine, plan) -> bool:
-    """Сводка ассистента, включённого посреди записи, неполна: его выключили,
-    пока запись шла; начало встречи не догнано (не дождались или дальше
-    CAP_S); он слышит запись не с начала."""
+# Причины неполноты, которые следующее включение в эту запись не чинит: его
+# догонялка начинается после уже услышанного, а дыра — раньше.
+PERMANENT_REASONS = ("catchup_incomplete", "capped", "unknown")
+
+
+def _attached_reasons(live: LiveState, state: AssistState, engine, plan) -> list[str]:
+    """Почему сводка ассистента, включённого посреди записи, неполна (пусто —
+    полна): его выключили, пока запись шла (`detached`); начало встречи не
+    догнано — не дождались (`catchup_incomplete`) или дальше CAP_S
+    (`capped`); он слышит запись не с начала (`late_start`). Из прошлого
+    включения остаются причины, которые нынешняя догонялка не чинит."""
     from meet.assist.live_state import FROM_MIN_S
 
+    reasons = {r for r in live.partial_reasons if r in PERMANENT_REASONS}
     if state.detached:
-        return True
+        reasons.add("detached")
     progress = engine.catchup_progress() if hasattr(engine, "catchup_progress") else None
     if progress is not None and not progress.get("complete"):
-        return True
+        reasons.add("catchup_incomplete")
     if plan is not None and plan.get("capped"):
-        return True
-    return (live.covered_from or 0.0) >= FROM_MIN_S
+        reasons.add("capped")
+    if (live.covered_from or 0.0) >= FROM_MIN_S:
+        reasons.add("late_start")
+    return sorted(reasons)
+
+
+def _heard_end(bus: TranscriptBus, before: float | None) -> float | None:
+    """Конец последней услышанной реплики (секунды записи)."""
+    entries, _ = bus.entries_since(0)
+    ends = [float(e.get("end") if isinstance(e.get("end"), (int, float)) else e["t"])
+            for e in entries if isinstance(e.get("t"), (int, float))]
+    if before is not None:
+        ends.append(before)
+    return max(ends) if ends else None
+
+
+def _lower_priority() -> None:
+    """Ассистент, подключённый к записи, — фоновая работа. На Windows
+    приоритет ниже обычного ставит резидент при запуске; на macOS — nice."""
+    from meet import plat
+
+    if plat.is_windows():
+        return
+    try:
+        os.nice(5)
+    except (OSError, AttributeError):
+        pass

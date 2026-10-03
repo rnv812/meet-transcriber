@@ -1174,7 +1174,13 @@ def record(out_root: str, stop_event: "threading.Event | None" = None,
         print(f"Запись идёт... Остановить: Ctrl+C. Папка: {out_dir}")
         try:
             while not (stop_event and stop_event.is_set()):
-                time.sleep(POLL_S)
+                # «Стоп» будит такт сразу: захват кончается в момент нажатия,
+                # а не через полтакта (иначе в файл уходит звук после него).
+                if stop_event is not None:
+                    if stop_event.wait(POLL_S):
+                        break
+                else:
+                    time.sleep(POLL_S)
                 try:
                     session.tick()
                 except Exception as e:  # вотчдог не должен ронять запись

@@ -57,6 +57,41 @@ def chronological(lines: list[str]) -> list[str]:
     return [line for _, _, line in keyed]
 
 
+def merge_lines(transcript: Path, lines: list[str]) -> None:
+    """Дописать строки в ленту по времени (атомарно: tmp + replace)."""
+    import os
+
+    try:
+        existing = transcript.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        existing = []
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    tmp = transcript.with_name(transcript.name + ".tmp")
+    tmp.write_text("\n".join(chronological(existing + lines)) + "\n", encoding="utf-8")
+    os.replace(tmp, transcript)
+
+
+def recover_side(folder: Path, side: str = "live_transcript.catchup.md") -> int:
+    """Строки догонялки, оставшиеся от убитого посреди неё ассистента, — в
+    ленту по времени; уже слитые туда (та же строка) не дублируются. →
+    сколько строк добавлено."""
+    path = Path(folder) / side
+    try:
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except OSError:
+        return 0
+    transcript = Path(folder) / "live_transcript.md"
+    try:
+        have = set(transcript.read_text(encoding="utf-8").splitlines())
+    except OSError:
+        have = set()
+    new = [line for line in lines if line not in have]
+    if new:
+        merge_lines(transcript, new)
+    path.unlink(missing_ok=True)
+    return len(new)
+
+
 def heard_until(transcript: Path) -> float | None:
     """Докуда уже есть лента от прошлого включения ассистента в этой записи
     (последняя метка времени в `live_transcript.md`); ленты нет — None."""
@@ -117,8 +152,11 @@ class PcmReader:
 
     @staticmethod
     def _spawn(argv: list[str]):
+        # Фоновая работа: ниже обычного приоритета, как задачи расшифровки
+        # (вне Windows приоритет наследуется от ассистента, см. assist.app).
+        flags = plat.no_window() | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
         return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, creationflags=plat.no_window())
+                                stderr=subprocess.DEVNULL, creationflags=flags)
 
     def read(self, seconds: float):
         """До `seconds` секунд звука (меньше — у конца куска); конец — пустой
