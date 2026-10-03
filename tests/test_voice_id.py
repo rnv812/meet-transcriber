@@ -90,19 +90,27 @@ from meet import asr, voice_id
 def fake_stack(monkeypatch):
     """Поддельные torch и pyannote: запоминают, на каком устройстве просили модель."""
     asr._reset_cuda_state()
-    state = {"devices": [], "cuda_ok": True, "fail": {}}
+    state = {"devices": [], "cuda_ok": True, "fail": {}, "call_fail": {}, "calls": []}
 
     torch = types.ModuleType("torch")
     torch.device = lambda name: name
     torch.cuda = types.SimpleNamespace(is_available=lambda: state["cuda_ok"])
-    torch.from_numpy = lambda a: types.SimpleNamespace(float=lambda: [[a]])
+    torch.from_numpy = lambda a: types.SimpleNamespace(float=lambda: a.astype(np.float32))
     monkeypatch.setitem(sys.modules, "torch", torch)
 
     def pretrained(spec, device, token=None):
         state["devices"].append(device)
         if device in state["fail"]:
             raise state["fail"][device]
-        return lambda wav: [np.zeros(3, dtype=np.float32)]
+
+        def model(wav):
+            state["calls"].append(device)
+            errors = state["call_fail"].get(device)
+            if errors:
+                raise errors.pop(0)
+            return [np.zeros(3, dtype=np.float32)]
+
+        return model
 
     for name in ("pyannote", "pyannote.audio", "pyannote.audio.pipelines"):
         monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
@@ -139,6 +147,38 @@ def test_missing_cuda_library_retries_on_cpu(fake_stack, monkeypatch):
     voice_id._load_embedder()
     assert fake_stack["devices"] == ["cuda", "cpu"]
     assert asr._cuda_failure is not None  # сбой запомнен на процесс
+
+
+CUDNN_MISSING = RuntimeError("Could not load library cudnn_ops64_9.dll. Error code 126")
+
+
+def test_cuda_library_failing_on_first_embedding_falls_to_cpu_at_load(fake_stack, monkeypatch):
+    """cuDNN грузится лениво: модель на видеокарте собралась, а первая свёртка
+    падает — пробный эмбеддинг при загрузке это ловит."""
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
+    fake_stack["call_fail"]["cuda"] = [CUDNN_MISSING]
+    embed = voice_id._load_embedder()
+    assert fake_stack["devices"] == ["cuda", "cpu"]
+    assert embed(_audio()) is not None and fake_stack["calls"][-1] == "cpu"
+
+
+def test_cuda_library_failing_later_moves_matcher_to_cpu_once(fake_stack, monkeypatch):
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
+    embed = voice_id._load_embedder()  # пробный эмбеддинг прошёл
+    fake_stack["call_fail"]["cuda"] = [CUDNN_MISSING]
+    assert embed(_audio()) is not None
+    assert embed(_audio()) is not None
+    assert fake_stack["devices"] == ["cuda", "cpu"]  # на процессор — один раз
+    assert fake_stack["calls"] == ["cuda", "cuda", "cpu", "cpu"]
+
+
+def test_other_embedding_error_is_not_swallowed(fake_stack, monkeypatch):
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
+    embed = voice_id._load_embedder()
+    fake_stack["call_fail"]["cuda"] = [ValueError("bad shape")]
+    with pytest.raises(ValueError):
+        embed(_audio())
+    assert fake_stack["devices"] == ["cuda"]
 
 
 def test_other_load_error_disables_matcher_without_raising(fake_stack, monkeypatch, capsys):

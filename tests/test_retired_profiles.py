@@ -1,12 +1,19 @@
 """Уборка после профилей людей (убраны в 0.3.2): заметки — в один файл,
-сгенерированное и служебное — удалить, голоса не трогать, повтор безвреден.
-Папка данных — синтетическая; люди и тексты выдуманы."""
+удалить только то, что писал Meet, ни одной заметки не потерять, голоса не
+трогать, повтор безвреден. Папка данных — синтетическая; люди и тексты
+выдуманы."""
 
 import json
 import os
+import subprocess
+import sys
 import time
 
+import pytest
+
 from meet import retired_profiles, settings
+
+HEX32 = "0123456789abcdef" * 2
 
 PID_A = "0123456789abcdef"
 PID_B = "fedcba9876543210"
@@ -37,7 +44,8 @@ def _world(tmp_path):
     (profiles / f"{PID_B}.notes.md").write_text("  \n", encoding="utf-8")  # пустые — не заметки
     (profiles / f"{PID_C}.notes.md").write_text("Человека уже нет в базе.", encoding="utf-8")
     (profiles / "_index" / "2026-09-30_16-04.json").write_text("{}", encoding="utf-8")
-    (profiles / "pcm-eval.json").write_text("{}", encoding="utf-8")
+    (profiles / "_index" / f".2026-09-30_16-04.json.{HEX32}.tmp").write_text("{", encoding="utf-8")
+    (profiles / f".{PID_A}.json.{HEX32}.tmp").write_text("{", encoding="utf-8")
     when = time.mktime((2026, 10, 2, 12, 0, 0, 0, 0, -1))
     os.utime(profiles / f"{PID_A}.notes.md", (when, when))
     config = data / "config.json"
@@ -130,7 +138,7 @@ def test_partial_previous_run_reuses_same_notes_file(tmp_path):
     """Прошлый запуск записал заметки, но папку удалить не успел: тот же файл,
     без второго."""
     data, voices, config = _world(tmp_path)
-    notes = retired_profiles.collect_notes(data / "profiles", voices)
+    notes = retired_profiles.collect_notes(data / "profiles", voices).notes
     (data / retired_profiles.NOTES_NAME).write_text(retired_profiles.notes_text(notes), encoding="utf-8")
     got = retired_profiles.run(data, voices, config=config)
     assert got["notes"] == str(data / retired_profiles.NOTES_NAME)
@@ -204,3 +212,237 @@ def test_resident_start_cleans_up(tmp_path, monkeypatch):
     assert "## Вера Соколова" in (data / retired_profiles.NOTES_NAME).read_text(encoding="utf-8")
     assert "profiles" not in json.loads(config.read_text(encoding="utf-8"))
     assert any("профили людей убраны" in line for line in lines)
+
+
+# --- только файлы Meet ----------------------------------------------------------
+
+
+def _link_dir(link, target):
+    """Junction на Windows (без прав администратора), symlink в остальных ОС."""
+    if sys.platform == "win32":
+        try:
+            import _winapi
+
+            _winapi.CreateJunction(str(target), str(link))
+            return
+        except (ImportError, OSError) as e:
+            pytest.skip(f"junction не создаётся: {e}")
+    try:
+        os.symlink(target, link, target_is_directory=True)
+    except OSError as e:
+        pytest.skip(f"symlink не создаётся: {e}")
+
+
+def test_profiles_as_junction_removes_only_the_link(tmp_path):
+    data, voices, config = _world(tmp_path)
+    outside = tmp_path / "elsewhere"
+    (data / "profiles").rename(outside)
+    (outside / "unrelated-user-file.docx").write_bytes(b"PK user document")
+    before = _snapshot(outside)
+    _link_dir(data / "profiles", outside)
+    lines = []
+
+    assert retired_profiles.run(data, voices, config=config, log=lines.append) is None
+
+    assert not os.path.lexists(data / "profiles")
+    assert _snapshot(outside) == before  # цель ссылки — ни байта
+    assert not (data / retired_profiles.NOTES_NAME).exists()
+    assert any("ссылкой" in line for line in lines)
+
+
+def test_junction_inside_profiles_is_unlinked_not_followed(tmp_path):
+    import shutil
+
+    data, voices, config = _world(tmp_path)
+    outside = tmp_path / "index-elsewhere"
+    outside.mkdir()
+    (outside / "keep.json").write_text("{}", encoding="utf-8")
+    shutil.rmtree(data / "profiles" / "_index")
+    _link_dir(data / "profiles" / "_index", outside)
+
+    retired_profiles.run(data, voices, config=config)
+
+    assert not (data / "profiles").exists()
+    assert (outside / "keep.json").read_text(encoding="utf-8") == "{}"
+
+
+def test_data_dir_is_a_parent_with_unrelated_profiles_folder(tmp_path):
+    """MEET_DATA_DIR указали на родительскую папку, где лежит чужая profiles/."""
+    data = tmp_path / "home"
+    work = data / "profiles" / "work"
+    work.mkdir(parents=True)
+    (work / "contract.pdf").write_bytes(b"%PDF-1.7")
+    (data / "profiles" / "cv.notes.md").write_text("моё резюме", encoding="utf-8")
+    (data / "profiles" / "settings.json").write_text("{}", encoding="utf-8")
+    before = _snapshot(data)
+
+    assert retired_profiles.run(data, None, config=data / "config.json") is None
+
+    assert _snapshot(data) == before
+    assert not (data / retired_profiles.NOTES_NAME).exists()
+    assert retired_profiles.notice(data) is None
+
+
+def test_foreign_files_inside_profiles_are_kept(tmp_path):
+    data, voices, config = _world(tmp_path)
+    profiles = data / "profiles"
+    (profiles / "мой список.txt").write_text("своё", encoding="utf-8")
+    (profiles / "cv.notes.md").write_text("не заметка Meet", encoding="utf-8")
+    (profiles / "pcm-eval.json").write_text("{}", encoding="utf-8")
+    (profiles / "_index" / "readme.txt").write_text("своё", encoding="utf-8")
+    (profiles / "archive").mkdir()
+    (profiles / "archive" / f"{PID_A}.json").write_text("{}", encoding="utf-8")
+
+    got = retired_profiles.run(data, voices, config=config)
+
+    assert got["notes"] == str(data / retired_profiles.NOTES_NAME)
+    assert sorted(p.relative_to(profiles).as_posix() for p in profiles.rglob("*")) == sorted([
+        "_index", "_index/readme.txt", "archive", f"archive/{PID_A}.json",
+        "cv.notes.md", "pcm-eval.json", "мой список.txt"])
+    assert "не заметка Meet" not in (data / retired_profiles.NOTES_NAME).read_text(encoding="utf-8")
+
+
+# --- ни одной заметки не потерять ------------------------------------------------
+
+
+def test_non_utf8_note_decoded_and_raw_bytes_kept(tmp_path):
+    data, voices, config = _world(tmp_path)
+    raw = "Договорились созвониться в пятницу — «срок».".encode("cp1251")
+    (data / "profiles" / f"{PID_B}.notes.md").write_bytes(raw)
+
+    got = retired_profiles.run(data, voices, config=config)
+
+    assert got["notes"] == str(data / retired_profiles.NOTES_NAME)
+    text = (data / retired_profiles.NOTES_NAME).read_text(encoding="utf-8")
+    assert "## Вадим" in text and "Договорились созвониться в пятницу — «срок»." in text
+    copy = data / retired_profiles.SOURCES_NAME / f"Вадим — {PID_B}.notes.md"
+    assert copy.read_bytes() == raw
+    assert not (data / "profiles").exists()
+
+
+def test_undecodable_bytes_are_never_dropped():
+    text, utf8 = retired_profiles.decode(b"\x98\xff abc")
+    assert not utf8 and "abc" in text
+    bom = bytes([0xEF, 0xBB, 0xBF]) + "привет".encode("utf-8")
+    assert retired_profiles.decode(bom) == ("привет", True)
+
+
+def test_unreadable_note_stays_until_next_start(tmp_path, monkeypatch):
+    data, voices, config = _world(tmp_path)
+    note = data / "profiles" / f"{PID_A}.notes.md"
+    real = type(note).read_bytes
+
+    def deny(self):
+        if self.name == note.name:
+            raise PermissionError(13, "Отказано в доступе")
+        return real(self)
+
+    lines = []
+    with monkeypatch.context() as mp:
+        mp.setattr(type(note), "read_bytes", deny)
+        retired_profiles.run(data, voices, config=config, log=lines.append)
+    assert note.exists()  # не прочитали — не удаляем
+    assert sorted(p.name for p in (data / "profiles").iterdir()) == [note.name]
+    assert any("не прочитана" in line for line in lines)
+    assert "Любит повестку" not in (data / retired_profiles.NOTES_NAME).read_text(encoding="utf-8")
+    # Следующий запуск: файл читается — заметка дописана в тот же файл, папки нет.
+    got = retired_profiles.run(data, voices, config=config)
+    text = (data / retired_profiles.NOTES_NAME).read_text(encoding="utf-8")
+    assert got["notes"] == str(data / retired_profiles.NOTES_NAME)
+    assert "Любит повестку заранее." in text and text.count("## Без имени") == 1
+    assert not (data / "profiles").exists()
+    assert sorted(p.name for p in data.glob("*.md")) == [retired_profiles.NOTES_NAME]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="ACL Windows")
+def test_deny_read_acl_note_is_not_deleted(tmp_path):
+    data, voices, config = _world(tmp_path)
+    note = data / "profiles" / f"{PID_A}.notes.md"
+    user = os.environ.get("USERNAME") or ""
+    deny = subprocess.run(["icacls", str(note), "/deny", f"{user}:(RD)"], capture_output=True)
+    if deny.returncode != 0:
+        pytest.skip("icacls недоступен")
+    try:
+        try:
+            note.read_bytes()
+            pytest.skip("запрет чтения не действует (права администратора?)")
+        except PermissionError:
+            pass
+        retired_profiles.run(data, voices, config=config)
+        assert os.path.lexists(note)
+    finally:
+        subprocess.run(["icacls", str(note), "/remove:d", user], capture_output=True)
+    retired_profiles.run(data, voices, config=config)
+    assert "Любит повестку заранее." in (data / retired_profiles.NOTES_NAME).read_text(encoding="utf-8")
+    assert not (data / "profiles").exists()
+
+
+def test_unsaved_note_edit_tmp_is_kept_as_raw_copy(tmp_path):
+    data, voices, config = _world(tmp_path)
+    later = time.time() + 60
+    tmp = data / "profiles" / f".{PID_A}.notes.md.{HEX32}.tmp"
+    tmp.write_text("Любит повестку заранее. И короткие встречи.", encoding="utf-8")
+    os.utime(tmp, (later, later))
+    same = data / "profiles" / f".{PID_C}.notes.md.{HEX32}.tmp"
+    same.write_text("Человека уже нет в базе.", encoding="utf-8")  # то же, что сохранено
+    os.utime(same, (later, later))
+
+    retired_profiles.run(data, voices, config=config)
+
+    copies = sorted(p.name for p in (data / retired_profiles.SOURCES_NAME).iterdir())
+    assert copies == [f"Вера Соколова — несохранённая правка {PID_A}.notes.md"]
+    copy = data / retired_profiles.SOURCES_NAME / copies[0]
+    assert "И короткие встречи." in copy.read_text(encoding="utf-8")
+    assert not (data / "profiles").exists()
+
+
+def test_failure_inside_run_never_escapes(tmp_path, monkeypatch):
+    data, voices, config = _world(tmp_path)
+    before = _snapshot(data / "profiles")
+
+    def boom(*a, **kw):
+        raise RuntimeError("сбой")
+
+    lines = []
+    monkeypatch.setattr(retired_profiles, "collect_notes", boom)
+    assert retired_profiles.run(data, voices, config=config, log=lines.append) is None
+    assert _snapshot(data / "profiles") == before
+    assert any("повторю при следующем запуске" in line for line in lines)
+
+
+def test_second_run_appends_to_own_notes_file_without_duplicates(tmp_path):
+    data, voices, config = _world(tmp_path)
+    first = retired_profiles.collect_notes(data / "profiles", voices).notes[:1]
+    (data / retired_profiles.NOTES_NAME).write_text(retired_profiles.notes_text(first), encoding="utf-8")
+
+    retired_profiles.run(data, voices, config=config)
+
+    text = (data / retired_profiles.NOTES_NAME).read_text(encoding="utf-8")
+    assert text.count("\n## ") == 2 and text.count("# Заметки о людях") == 1
+    assert sorted(p.name for p in data.glob("*.md")) == [retired_profiles.NOTES_NAME]
+
+
+def test_late_process_keeps_notes_link_in_notice(tmp_path):
+    """Второй процесс пришёл, когда заметки уже перенесены, а отметки ещё нет."""
+    data, voices, config = _world(tmp_path)
+    notes = retired_profiles.collect_notes(data / "profiles", voices).notes
+    (data / retired_profiles.NOTES_NAME).write_text(retired_profiles.notes_text(notes), encoding="utf-8")
+    for path in (data / "profiles").glob("*.notes.md"):
+        path.unlink()
+
+    got = retired_profiles.run(data, voices, config=config)
+
+    assert got["notes"] == str(data / retired_profiles.NOTES_NAME)
+
+
+def test_crlf_note_is_not_duplicated_on_retry(tmp_path):
+    data, voices, config = _world(tmp_path)
+    note = data / "profiles" / f"{PID_A}.notes.md"
+    note.write_bytes("Первая строка.\r\nВторая строка.\r\n".encode("utf-8"))
+    keep = data / "profiles" / f"{PID_C}.notes.md"
+    retired_profiles._save_notes(data, retired_profiles.collect_notes(data / "profiles", voices).notes)
+    keep.unlink()
+    retired_profiles.run(data, voices, config=config)
+    text = (data / retired_profiles.NOTES_NAME).read_text(encoding="utf-8")
+    assert text.count("Вторая строка.") == 1
+    assert b"\r" not in (data / retired_profiles.NOTES_NAME).read_bytes()
