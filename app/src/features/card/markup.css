@@ -83,6 +83,14 @@
   max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .insight__ref:hover { color: var(--text); border-color: var(--accent); }
+/* «Задачи»: задачи Jira, названные во встрече, — ключ и реплики. */
+.jtasks { display: flex; flex-direction: column; gap: 4px; padding: 0 10px 8px; }
+.insights__list + .jtasks { padding-top: 6px; border-top: 1px solid var(--line); }
+.jtasks__head { font-size: 11px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.04em; }
+.jtasks__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 24vh; overflow-y: auto; }
+.jtask { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.jtask > .jira-link { font: 600 12px/20px ui-monospace, Consolas, monospace; min-width: 92px; }
+.jtask__more { font-size: 11px; }
 
 .turns-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 32px 16px; color: var(--text-3); font-size: 13px; text-align: center; }
 .turns-empty__text { margin: 0; }

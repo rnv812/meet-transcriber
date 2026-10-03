@@ -681,6 +681,7 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
           <TipLine>
             Агент запускается в папке встречи. Перед каждым запуском приложение обновляет transcript.md — расшифровку
             с именами и таймкодами; рядом лежат итоги (summary.md) и разметка встречи (analysis.json), если они есть.
+            В analysis.json поле issues — задачи Jira, которые анализ нашёл в речи.
             Пока идёт запись с ассистентом, transcript.md — черновая лента живого режима.
           </TipLine>
           <TipLine>

@@ -1,5 +1,6 @@
 import {
-  aliasError, DEFAULT_JIRA_KEYS, findJira, jiraBaseError, jiraKeysError, jiraLinker, jiraProjects, jiraUrl, keysPattern,
+  aliasError, DEFAULT_JIRA_KEYS, findJira, jiraBaseError, jiraCard, jiraKeysError, jiraLinker, jiraProjects, jiraTasks,
+  jiraUrl, keysPattern,
   literalPattern, projectKeyError, projectsError,
 } from "./jira";
 
@@ -79,4 +80,27 @@ test("проверка адреса и шаблона в настройках", 
   for (const bad of ["(", "x*", "(?i)spr-\\d+", "(?P<k>A)-\\d+", "A".repeat(201)]) {
     expect(jiraKeysError(bad), bad).not.toBeNull();
   }
+});
+
+test("фразы от резидента: каждое вхождение целыми словами, ключ текстом важнее", () => {
+  const card = jiraCard(on({ jira_base_url: "https://jira.example.com" }),
+    { refs: [], phrases: [{ text: "орион 2122", key: "ORION-2122", source: "spoken" },
+      { text: "SPR-1", key: "SPR-1", source: "literal" }] }, [])!;
+  const text = "орион 2122, и снова орион 2122; но не орион 21223 и не xорион 2122";
+  expect(findJira(text, card).map((m) => [m.key, m.start, m.source])).toEqual([
+    ["ORION-2122", 0, "spoken"], ["ORION-2122", 20, "spoken"]]);
+  expect(findJira("про SPR-1", card)).toEqual([{ start: 4, end: 9, key: "SPR-1" }]);
+  expect(jiraCard(null, { refs: [], phrases: [] }, [])).toBeNull();
+});
+
+test("«Задачи»: ключи по первому упоминанию, реплики без повторов", () => {
+  const turns = new Map([
+    [3, [{ start: 0, end: 5, key: "SPR-1" }, { start: 9, end: 20, key: "ORION-7", source: "spoken" as const, spoken: "орион семь" }]],
+    [1, [{ start: 0, end: 10, key: "ORION-7", source: "context" as const, spoken: "7" }]],
+  ]);
+  expect(jiraTasks(turns)).toEqual([
+    { key: "ORION-7", turns: [1, 3], spoken: ["7", "орион семь"] },
+    { key: "SPR-1", turns: [3], spoken: ["SPR-1"] },
+  ]);
+  expect(jiraTasks(undefined)).toEqual([]);
 });

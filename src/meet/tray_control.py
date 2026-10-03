@@ -1476,7 +1476,28 @@ class TrayControl(ProfilesMixin):
         raw = card.to_raw()
         raw["transcript"] = _window_transcript(library.read_transcript_full(folder))
         raw["edit_head"] = self._edit_head(folder)
+        jira = self._jira_refs(folder, raw["transcript"])
+        if jira is not None:
+            raw["jira"] = jira
         return raw
+
+    def _jira_refs(self, folder: Path, transcript: dict | None) -> dict | None:
+        """Задачи Jira, названные во встрече (meet.jira_refs): ссылки по
+        сегментам расшифровки (свои и из анализа) и фразы итогов и наблюдений.
+        None — ссылки выключены или адреса Jira нет. Сбой — без ссылок: карточка
+        важнее."""
+        from meet import analysis, assistant, jira_refs
+
+        try:
+            cfg = settings.load()
+            if jira_refs.spec_of(cfg) is None:
+                return None
+            summary = assistant.read_summary(folder)
+            return jira_refs.for_recording(transcript, cfg, analysis_doc=analysis.read(folder),
+                                           summary=(summary or {}).get("markdown"))
+        except Exception as e:  # noqa: BLE001 — ссылки необязательны
+            self.tray.log(f"ссылки на Jira не посчитаны ({folder.name}): {type(e).__name__}")
+            return None
 
     def _edit_head(self, folder: Path) -> str | None:
         """Последний применённый шаг истории встречи (для «Отменить» у итогов)."""

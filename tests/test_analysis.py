@@ -139,7 +139,8 @@ def test_full_analysis_is_validated_and_written(tmp_path):
     path = analysis.analyze(folder, runner, cfg, provider="claude-code")
     doc = json.loads(path.read_text(encoding="utf-8"))
     assert doc["version"] == 1 and doc["model"] == "claude-code:sonnet"
-    assert doc["features"] == list(analysis.FEATURES)
+    # Ссылки на задачи — только с проектами Jira в настройках (здесь их нет).
+    assert doc["features"] == [f for f in analysis.FEATURES if f != "issues"]
     assert doc["fingerprint"] == analysis.fingerprint(library.read_transcript(folder))
     # неизвестный тип и номер вне расшифровки (99; 3 — пустая реплика) отброшены
     assert doc["phrase_types"] == {"1": "question", "2": "decision", "4": "task", "5": "risk"}

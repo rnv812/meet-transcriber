@@ -737,7 +737,8 @@ def test_analysis_defaults_on_and_auto_title_off(tmp_path):
     assert cfg.assistant.auto_title is False
     raw = cfg.to_raw()
     assert raw["analysis"] == {"auto": True, "types": True, "importance": True, "chapters": True,
-                               "insights": True, "category": True, "title": True, "improve_auto": False}
+                               "insights": True, "category": True, "title": True, "issues": True,
+                               "improve_auto": False}
     assert raw["assistant"]["auto_title"] is False
 
 
@@ -754,7 +755,7 @@ def test_analysis_features_follow_flags(tmp_path):
     f = tmp_path / "config.json"
     cfg = settings.patch({"analysis": {"types": False, "insights": "false"},
                           "assistant": {"auto_title": True}}, f)
-    assert cfg.analysis.features() == ("importance", "chapters", "category", "title")
+    assert cfg.analysis.features() == ("importance", "chapters", "category", "title", "issues")
     loaded = settings.load(f)
     assert loaded.analysis == cfg.analysis and loaded.assistant.auto_title is True
 

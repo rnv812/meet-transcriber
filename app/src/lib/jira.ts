@@ -12,6 +12,9 @@
  */
 
 import { createContext } from "react";
+import { nfc } from "./search";
+import type { Turn } from "./speakers";
+import type { JiraPhrase, JiraRef, JiraRefs, JiraSource } from "./types";
 
 export const DEFAULT_JIRA_KEYS = "[A-Z][A-Z0-9]+-\\d+";
 const MAX_LEN = 200;
@@ -151,18 +154,117 @@ export function jiraLinker(settings: Record<string, unknown> | null | undefined)
 /** Адрес задачи: `<база>/browse/<ключ>`. */
 export const jiraUrl = (linker: JiraLinker, key: string) => `${linker.base}/browse/${encodeURIComponent(key)}`;
 
-export type JiraMatch = { start: number; end: number; key: string };
+/**
+ * Ссылка в тексте: [start, end) и ключ. `source` нет — ключ написан текстом
+ * («SPR-131»); иначе он сказан словами (`spoken` — эти слова): ссылка
+ * показывается значком с ключом поверх сказанного.
+ */
+export type JiraMatch = { start: number; end: number; key: string; source?: JiraSource; spoken?: string };
 
-/** Ключи задач в тексте: начало, конец, ключ. Пустые совпадения пропускаются. */
-export function findJira(text: string, linker: JiraLinker | null): JiraMatch[] {
+/**
+ * Ссылки карточки: из настроек (адрес, ключ текстом) и от резидента — что
+ * сказано во встрече (meet.jira_refs, единственный источник ссылок «словами»).
+ */
+export type JiraCard = JiraLinker & {
+  /** Ссылки по репликам карточки (номер реплики → ссылки в её тексте); нет — резидент их не прислал. */
+  turns?: Map<number, JiraMatch[]>;
+  /** Фразы итогов и наблюдений: каждое вхождение — ссылка. */
+  phrases?: JiraPhrase[];
+};
+
+const WORD_CHAR = /[\p{L}\p{N}_]/u;
+
+/**
+ * Ссылки в тексте: ключи, написанные текстом (шаблон из настроек), и фразы
+ * от резидента (`linker.phrases`) — каждое их вхождение целыми словами.
+ */
+export function findJira(text: string, linker: JiraCard | JiraLinker | null): JiraMatch[] {
   if (!linker || !text) return [];
   const out: JiraMatch[] = [];
   for (const m of text.matchAll(linker.re)) {
     if (!m[0]) continue;
     out.push({ start: m.index!, end: m.index! + m[0].length, key: m[0] });
   }
+  const phrases = (linker as JiraCard).phrases;
+  if (!phrases?.length) return out;
+  for (const p of phrases) {
+    if (!p.text) continue;
+    for (let at = text.indexOf(p.text); at >= 0; at = text.indexOf(p.text, at + 1)) {
+      const end = at + p.text.length;
+      if (WORD_CHAR.test(text[at - 1] ?? "") || WORD_CHAR.test(text[end] ?? "")) continue;
+      if (out.some((m) => at < m.end && m.start < end)) continue;
+      out.push(p.source === "literal" ? { start: at, end, key: p.key }
+        : { start: at, end, key: p.key, source: p.source, spoken: p.text });
+    }
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
+/**
+ * Ссылки резидента по сегментам → по репликам карточки. Позиция сверяется со
+ * сказанными словами; текст успели поправить — те же слова ищутся в реплике
+ * заново, не нашлись — ссылки нет.
+ */
+export function turnLinks(turns: Turn[], refs: JiraRef[]): Map<number, JiraMatch[]> {
+  const at = new Map<number, [number, number]>();
+  turns.forEach((t, ti) => {
+    if (t.kind === "break") return;
+    let offset = 0;
+    (t.idx ?? []).forEach((si, k) => {
+      at.set(si, [ti, offset]);
+      offset += nfc(t.texts[k] ?? "").length + 1;
+    });
+  });
+  const texts = new Map<number, string>();
+  const out = new Map<number, JiraMatch[]>();
+  for (const r of refs) {
+    const place = at.get(r.segment);
+    if (!place || !r.spoken) continue;
+    const [ti, offset] = place;
+    const text = texts.get(ti) ?? nfc(turns[ti]!.texts.join(" "));
+    texts.set(ti, text);
+    let start = offset + r.start;
+    if (text.slice(start, start + r.spoken.length) !== r.spoken) {
+      start = text.indexOf(r.spoken, Math.min(offset, text.length));
+      if (start < 0) start = text.indexOf(r.spoken);
+      if (start < 0) continue;
+    }
+    const end = start + r.spoken.length;
+    const list = out.get(ti) ?? [];
+    if (list.some((m) => start < m.end && m.start < end)) continue;
+    list.push(r.source === "literal" ? { start, end, key: r.key }
+      : { start, end, key: r.key, source: r.source, spoken: r.spoken });
+    out.set(ti, list);
+  }
+  for (const list of out.values()) list.sort((a, b) => a.start - b.start);
   return out;
 }
 
-/** Ссылки Jira карточки (из настроек): расшифровка, итоги, наблюдения. */
-export const JiraLinks = createContext<JiraLinker | null>(null);
+/** Ссылки карточки: настройки + ответ резидента (`Recording.jira`); null — ссылки выключены. */
+export function jiraCard(linker: JiraLinker | null, data: JiraRefs | null | undefined, turns: Turn[]): JiraCard | null {
+  if (!linker) return null;
+  if (!data) return linker;
+  return { ...linker, turns: turnLinks(turns, data.refs ?? []), phrases: data.phrases ?? [] };
+}
+
+/** Задача, названная во встрече: ключ и реплики, где о ней говорили (по порядку). */
+export type JiraTask = { key: string; turns: number[]; spoken: string[] };
+
+/** «Задачи»: уникальные ключи по первому упоминанию, с репликами. */
+export function jiraTasks(turns: Map<number, JiraMatch[]> | undefined): JiraTask[] {
+  if (!turns) return [];
+  const byKey = new Map<string, JiraTask>();
+  for (const ti of [...turns.keys()].sort((a, b) => a - b)) {
+    for (const m of turns.get(ti)!) {
+      const task = byKey.get(m.key) ?? { key: m.key, turns: [], spoken: [] };
+      if (!task.turns.includes(ti)) task.turns.push(ti);
+      const said = m.spoken ?? m.key;
+      if (!task.spoken.includes(said)) task.spoken.push(said);
+      byKey.set(m.key, task);
+    }
+  }
+  return [...byKey.values()];
+}
+
+/** Ссылки Jira карточки: расшифровка, итоги, наблюдения. */
+export const JiraLinks = createContext<JiraCard | null>(null);
