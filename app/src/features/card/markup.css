@@ -9,8 +9,16 @@
 .turn__type--risk { color: #c9914a; }
 
 /* Важная реплика (верхние ~15 %): тонкая полоса слева. */
-.turn--key { margin-left: -10px; padding-left: 10px; box-shadow: inset 2px 0 0 rgba(124, 134, 240, 0.55); }
-.turn--key.turn--selected { margin: 0 -8px; padding: 8px; box-shadow: inset 3px 0 0 var(--accent); }
+/* Отступ от полосы до значка ▷ — 10 px; поле и отступ слева равны, колонка текста не сдвигается. */
+.turn--key { margin-left: -12px; padding-left: 12px; box-shadow: inset 2px 0 0 rgba(124, 134, 240, 0.55); }
+.turn--key.turn--selected { margin: 0 -8px 0 -12px; padding: 8px 8px 8px 12px; box-shadow: inset 3px 0 0 var(--accent); }
+/* «Сейчас играет» (data-now ставит TranscriptView): не полоса, чтобы не слиться с важностью, —
+   закрашенный ▶ и цвет времени. */
+.turn[data-now] .turn__time { color: var(--accent); }
+.turn[data-now] button.turn__time::before {
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='6 3 20 12 6 21 6 3'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='6 3 20 12 6 21 6 3'/%3E%3C/svg%3E");
+}
 .turn--flash { animation: turn-flash 1.6s ease-out; border-radius: var(--r-md); }
 @keyframes turn-flash { from { background: rgba(124, 134, 240, 0.22); } to { background: transparent; } }
 @media (prefers-reduced-motion: reduce) { .turn--flash { animation: none; background: rgba(124, 134, 240, 0.12); } }

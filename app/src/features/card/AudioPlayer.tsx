@@ -203,9 +203,14 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   avatarVersion?: Record<string, number>;
   /** Выбрали главу в списке: карточка показывает её в расшифровке. */
   onChapter?: (chapter: number) => void;
+  /** Человек сам перемотал (полоса, главы, клавиши, «Только важное»): на эту секунду — прокрутить расшифровку. */
+  onSeeked?: (at: number) => void;
+  /** Где сейчас воспроизведение (каждый кадр при игре и после перемотки): для отметки «сейчас играет». */
+  onPlayhead?: (at: number) => void;
 }>(function AudioPlayer({
   endpoint, id, durationHint, onAvailable, turns = NO_TURNS, chapters = NO_CHAPTERS, importance = null,
   curveMode = "hover", barLabels = true, people = NO_PEOPLE, avatarVersion, onChapter,
+  onSeeked, onPlayhead,
 }, ref) {
   const el = useRef<HTMLAudioElement>(null);
   const bar = useRef<HTMLDivElement>(null);
@@ -235,6 +240,10 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
   const [width, setWidth] = useState(0);
   const available = useRef(onAvailable);
   available.current = onAvailable;
+  const seeked = useRef(onSeeked);
+  seeked.current = onSeeked;
+  const playhead = useRef(onPlayhead);
+  playhead.current = onPlayhead;
   /** Где остановиться (прослушивание фразы); любая другая перемотка это снимает. */
   const stopAt = useRef<number | null>(null);
   /** «Только важное»: человек сам перемотал в неважное — играем до следующего важного фрагмента. */
@@ -282,11 +291,13 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
     if (target === Infinity) { a.pause(); return; }
     a.currentTime = target;
     paint(target);
+    playhead.current?.(target);
+    seeked.current?.(target);
   }, [paint]);
 
-  const seek = useCallback((at: number) => {
+  const seek = useCallback((at: number): number | undefined => {
     const a = el.current;
-    if (!a) return;
+    if (!a) return undefined;
     stopAt.current = null;
     const end = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : totalRef.current || Infinity;
     const t = Math.max(0, Math.min(at, end));
@@ -295,7 +306,15 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
     free.current = only.current !== null && skipTarget(only.current, t) !== null;
     setCurrent(t);
     paint(t);
+    playhead.current?.(t);
+    return t;
   }, [paint]);
+
+  /** Перемотка по просьбе человека из плеера: ещё и прокрутить расшифровку к этой реплике. */
+  const userSeek = useCallback((at: number) => {
+    const t = seek(at);
+    if (t !== undefined) seeked.current?.(t);
+  }, [seek]);
 
   useImperativeHandle(ref, () => ({
     seek(at, play = false, until) {
@@ -326,9 +345,9 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
     // «Только важное» доиграло последний фрагмент: пуск — снова с первого (как повтор на YouTube).
     const list = only.current;
     const a = el.current;
-    if (list?.length && a && skipTarget(list, a.currentTime) === Infinity) seek(list[0]!.start);
+    if (list?.length && a && skipTarget(list, a.currentTime) === Infinity) userSeek(list[0]!.start);
     start();
-  }, [start, seek]);
+  }, [start, userSeek]);
 
   const nextSpeed = () => {
     const next = SPEEDS[(SPEEDS.indexOf(rate) + 1) % SPEEDS.length] ?? 1;
@@ -360,6 +379,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
       const a = el.current;
       if (a) {
         paint(a.currentTime);
+        playhead.current?.(a.currentTime);
         skip(a);
       }
       id = requestAnimationFrame(tick);
@@ -450,7 +470,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
     e.currentTarget.classList.remove("is-drag");
     if (scrub.current) { cancelFrame(scrub.current.id); scrub.current = null; }
     const r = rect.current;
-    seek(fracAt(e.clientX) * totalRef.current);
+    userSeek(fracAt(e.clientX) * totalRef.current);
     if (!r || e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) {
       e.currentTarget.classList.remove("is-hover");
       rect.current = null;
@@ -464,19 +484,19 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
     switch (k.kind) {
       case "toggle": toggle(); return;
       case "mute": toggleMute(); return;
-      case "seek": seek(now + k.by); return;
-      case "percent": if (end > 0) seek((end * k.p) / 100); return;
+      case "seek": userSeek(now + k.by); return;
+      case "percent": if (end > 0) userSeek((end * k.p) / 100); return;
       case "chapter": {
         const to = chapterJump(chapters, now, k.dir);
-        if (to !== null) seek(to);
+        if (to !== null) userSeek(to);
         return;
       }
       case "turn": {
         const to = turnJump(turns, now, k.dir);
-        if (to !== null) seek(to);
+        if (to !== null) userSeek(to);
       }
     }
-  }, [chapters, turns, seek, toggle, toggleMute]);
+  }, [chapters, turns, userSeek, toggle, toggleMute]);
 
   useEffect(() => {
     if (failed) return;
@@ -498,10 +518,10 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
     const now = el.current?.currentTime ?? current;
     if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.shiftKey) {
       e.preventDefault();
-      seek(now + (e.key === "ArrowRight" ? SEEK_STEP_S : -SEEK_STEP_S));
+      userSeek(now + (e.key === "ArrowRight" ? SEEK_STEP_S : -SEEK_STEP_S));
     } else if (e.key === "Home" || e.key === "End") {
       e.preventDefault();
-      seek(e.key === "Home" ? 0 : total);
+      userSeek(e.key === "Home" ? 0 : total);
     } else if (e.key === " ") {
       e.preventDefault();
       toggle();
@@ -513,7 +533,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, {
     const ch = chapters[c];
     setChaptersAnchor(null);
     if (!ch) return;
-    seek(c === 0 ? 0 : ch.start);
+    userSeek(c === 0 ? 0 : ch.start);
     onChapter?.(c);
   };
 
