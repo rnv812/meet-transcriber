@@ -87,7 +87,7 @@ def test_wheel_contents_and_entry_points(wheel):
     assert "Provides-Extra: engine-cuda" in meta and "Provides-Extra: engine-cpu" in meta
 
 
-AUTHORS = ["Andrey Aleynikov", "Nikita Reznikov", "Andrey Sivukha (ndrsvh)"]
+AUTHORS = ["Andrey Aleynikov", "Nikita Reznikov", "Andrey Sivukha"]
 
 
 def test_license_and_authors_are_declared_everywhere():
@@ -110,7 +110,7 @@ def test_license_and_authors_are_declared_everywhere():
     assert bundle["publisher"] == "meet"
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
     assert "Apache License" in license_text and "Version 2.0, January 2004" in license_text
-    assert "Copyright 2026 Andrey Aleynikov, Nikita Reznikov, Andrey Sivukha (ndrsvh)" in license_text
+    assert "Copyright 2026 Andrey Aleynikov, Nikita Reznikov, Andrey Sivukha" in license_text
     notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
     for name in AUTHORS + ["ffmpeg", "uv", "faster-whisper", "CTranslate2", "pyannote"]:
         assert name in notice
