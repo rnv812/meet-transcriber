@@ -135,6 +135,10 @@ export function RecordingCard({
   const [agentAsk, setAgentAsk] = useState<AgentInsert | null>(null);
   /** Глава из списка глав плеера: показать её в расшифровке. */
   const [reveal, setReveal] = useState<RevealRequest | null>(null);
+  /** Человек перемотал плеер: прокрутить расшифровку к реплике, звучащей в этот момент. */
+  const [seekTo, setSeekTo] = useState<SeekRequest | null>(null);
+  /** Реплика, звучащая сейчас (отметка «сейчас играет»); обновляется только при её смене. */
+  const [nowTurn, setNowTurn] = useState<number | null>(null);
   /** Растёт, когда реплику просят показать снаружи: вкладка — «Расшифровка». */
   const [showTick, setShowTick] = useState(0);
   /** Реплика из профиля не нашлась (расшифровку правили) — тихая строка. */
@@ -142,10 +146,6 @@ export function RecordingCard({
   const current = useRef({ endpoint, id });
   current.current = { endpoint, id };
 
-  /** Человек перемотал плеер: прокрутить расшифровку к реплике, звучащей в этот момент. */
-  const [seekTo, setSeekTo] = useState<SeekRequest | null>(null);
-  /** Реплика, звучащая сейчас (отметка «сейчас играет»); обновляется только при её смене. */
-  const [nowTurn, setNowTurn] = useState<number | null>(null);
   useEffect(() => {
     let live = true;
     getSettings(endpoint).then((s) => {
@@ -185,6 +185,7 @@ export function RecordingCard({
   // Реплика перематывает общий плеер: он играет обе стороны звонка сразу,
   // поэтому дорожку по имени спикера выбирать не нужно.
   const play = useCallback((t: Turn) => player.current?.seek(t.start, true), []);
+  const seeked = useCallback((t: number) => setSeekTo((r) => ({ t, n: (r?.n ?? 0) + 1 })), []);
   const audioAvailable = useCallback((ok: boolean) => setAudioFailed(!ok), []);
 
   // Состояние задач этой записи: при смене (очередь, готово) карточку надо перечитать.
@@ -192,7 +193,6 @@ export function RecordingCard({
     () => jobs.filter((j) => rec && norm(j.folder) === norm(rec.path)).map((j) => `${j.id}:${j.state}`).join(","),
     [jobs, rec],
   );
-  const seeked = useCallback((t: number) => setSeekTo((r) => ({ t, n: (r?.n ?? 0) + 1 })), []);
 
   useEffect(() => {
     setRec(null); setError(null); setMissing(false); setKbDone(null); setAudioFailed(false);
@@ -218,6 +218,12 @@ export function RecordingCard({
   const turns = useMemo(() => mergeTurns(segments ?? []), [segments]);
   // Ссылки на задачи Jira: настройки + что резидент нашёл во встрече (по репликам карточки).
   const jiraLinks = useMemo(() => jiraCard(jira, rec?.jira, turns), [jira, rec?.jira, turns]);
+  const turnsRef = useRef(turns);
+  turnsRef.current = turns;
+  const playhead = useCallback((t: number) => {
+    const i = turnAt(turnsRef.current, t);
+    setNowTurn(i < 0 ? null : i); // тот же номер — React не перерисует
+  }, []);
   const speakers = useMemo(() => speakersOf(segments ?? []), [segments]);
   const openSpeakers = useCallback((label?: string) => setPanel((p) => ({
     open: true, mounted: true, focus: label ? { label, n: (p.focus?.n ?? 0) + 1 } : p.focus,
@@ -225,12 +231,6 @@ export function RecordingCard({
   const nameSpeaker = useCallback((label: string) => openSpeakers(label), [openSpeakers]);
   const closeSpeakers = useCallback(() => setPanel((p) => ({ ...p, open: false })), []);
   const playPhrase = useCallback((start: number, until: number) => player.current?.seek(start, true, until), []);
-  const turnsRef = useRef(turns);
-  turnsRef.current = turns;
-  const playhead = useCallback((t: number) => {
-    const i = turnAt(turnsRef.current, t);
-    setNowTurn(i < 0 ? null : i); // тот же номер — React не перерисует
-  }, []);
   const showTurns = useCallback((label: string) => setOwnFind((f) => ({
     q: `спикер:"${label}"`, t: null, n: Math.max(f?.n ?? 0, find?.n ?? 0) + 1,
   })), [find]);
