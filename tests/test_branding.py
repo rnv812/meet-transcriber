@@ -58,6 +58,42 @@ def test_apps_list_shows_meet():
     assert 'WriteRegStr SHCTX "${UNINSTKEY}" "DisplayName" "Meet"' in post
 
 
+def _macro(text: str, name: str) -> str:
+    return text.split(f"!macro {name}\n", 1)[1].split("!macroend", 1)[0]
+
+
+def test_shortcuts_and_notifications_say_meet():
+    """Уведомления Windows подписаны именем ярлыка в «Пуске» с тем же AUMID,
+    а шаблон Tauri называет ярлыки ${PRODUCTNAME}.lnk = «meet.lnk». Хук
+    меняет только регистр имени — и после секции установки, и после страницы
+    «Готово» (ярлык на рабочем столе по её галочке)."""
+    hooks = _text(TAURI / "windows" / "hooks.nsh").replace("\r\n", "\n")
+    one = _macro(hooks, "MEET_SHORTCUT_CASE dir")
+    # только наш ярлык, только переименование, имя — «Meet.lnk»
+    assert ('!insertmacro IsShortcutTarget "${dir}\\${PRODUCTNAME}.lnk" '
+            '"$INSTDIR\\${MAINBINARYNAME}.exe"') in one
+    assert '${AndIf} $1 S!= "Meet.lnk"' in one
+    assert 'Rename "${dir}\\$1" "${dir}\\Meet.lnk"' in one
+    for verb in ("Delete", "CreateShortcut", "RMDir", "SetLnkAppUserModelId"):
+        assert verb not in one, verb
+    both = _macro(hooks, "MEET_SHORTCUTS_CASE")
+    assert '!insertmacro MEET_SHORTCUT_CASE "$SMPROGRAMS"' in both
+    assert '!insertmacro MEET_SHORTCUT_CASE "$DESKTOP"' in both
+    # регистры, которые портит IsShortcutTarget шаблона, возвращаются
+    stack = [line.strip() for line in both.splitlines()
+             if line.strip().startswith(("Push", "Pop"))]
+    assert stack == ["Push $0", "Push $1", "Push $2", "Push $3",
+                     "Pop $3", "Pop $2", "Pop $1", "Pop $0"]
+    post = _macro(hooks, "NSIS_HOOK_POSTINSTALL")
+    assert "!insertmacro MEET_SHORTCUTS_CASE" in post
+    functions = _macro(hooks, "MEET_UPGRADE_FUNCTIONS")
+    gui_end = functions.split("Function .onGUIEnd", 1)[1].split("FunctionEnd", 1)[0]
+    assert "!insertmacro MEET_SHORTCUTS_CASE" in gui_end
+    # AUMID тостов — identifier: его ставят и плагин уведомлений, и ярлык.
+    conf = json.loads(_text(TAURI / "tauri.conf.json"))
+    assert conf["identifier"] == "com.meet.desktop"
+
+
 def test_window_titles_and_shell_texts():
     assert "<title>Meet</title>" in _text(ROOT / "app" / "index.html")
     assert "<title>Meet — ассистент</title>" in _text(ROOT / "app" / "live.html")

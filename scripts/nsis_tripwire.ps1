@@ -24,7 +24,9 @@
   MeetGuiInit (hooks.nsh): переменная шаблона ReinstallPageCheck и выбор
   второго варианта, когда она равна 2; для обновления и для отката второй
   вариант — «не удалять» (поставить поверх), откат разрешён
-  (ALLOWDOWNGRADES). Другой шаблон Tauri — сборка падает,
+  (ALLOWDOWNGRADES). И что ярлыки — $SMPROGRAMS\${PRODUCTNAME}.lnk и
+  $DESKTOP\${PRODUCTNAME}.lnk: их имя в «Meet» правит MEET_SHORTCUT_CASE.
+  Другой шаблон Tauri — сборка падает,
   а не выпускает установщик, который по умолчанию запускает деинсталлятор.
 
 .PARAMETER Path
@@ -82,6 +84,10 @@ function Find-MissingUpgradeHooks([string]$Text) {
         'откат поверх без деинсталлятора'        = '(?s)\$\{ElseIf\}\s+\$R0\s+=\s+-1\s+;[^\r\n]*\s+\$\{If\}\s+\$R1\s+=\s+1\s+;[^\r\n]*\s+Goto\s+reinst_uninstall\s+\$\{Else\}\s+Goto\s+reinst_done'
         'откат разрешён'                          = '(?m)^!define\s+ALLOWDOWNGRADES\s+"true"'
         'хуки meet подключены'                   = '(?m)^!include\s+"[^"]*hooks\.nsh"'
+        # MEET_SHORTCUT_CASE (hooks.nsh) переименовывает ярлыки по этим путям.
+        'ярлык в «Пуске» — ${PRODUCTNAME}.lnk'   = '(?m)^\s*CreateShortcut\s+"\$SMPROGRAMS\\\$\{PRODUCTNAME\}\.lnk"'
+        'ярлык на столе — ${PRODUCTNAME}.lnk'    = '(?m)^\s*CreateShortcut\s+"\$DESKTOP\\\$\{PRODUCTNAME\}\.lnk"'
+        'без папки в «Пуске»'                    = '(?m)^!define\s+STARTMENUFOLDER\s+""'
     }
     $missing = @()
     foreach ($item in $needed.GetEnumerator()) {
@@ -162,6 +168,9 @@ Page custom PageReinstall PageLeaveReinstall
       Goto reinst_done         ; User chose NOT to uninstall
 !define ALLOWDOWNGRADES "true"
 !include "D:\x\windows\hooks.nsh"
+!define STARTMENUFOLDER ""
+    CreateShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
 '@
     $missing = Find-MissingUpgradeHooks $page
     if ($missing.Count -ne 0) { $failures += "шаблон: не нашлось $($missing -join ', ')" }
@@ -169,6 +178,10 @@ Page custom PageReinstall PageLeaveReinstall
     if ((Find-MissingUpgradeHooks $changed).Count -ne 1) { $failures += 'шаблон: смена условия не замечена' }
     $noDowngrade = $page.Replace('!define ALLOWDOWNGRADES "true"', '!define ALLOWDOWNGRADES "false"')
     if ((Find-MissingUpgradeHooks $noDowngrade).Count -ne 1) { $failures += 'шаблон: запрет отката не замечен' }
+    $folder = $page.Replace('!define STARTMENUFOLDER ""', '!define STARTMENUFOLDER "meet"')
+    if ((Find-MissingUpgradeHooks $folder).Count -ne 1) { $failures += 'шаблон: папка в «Пуске» не замечена' }
+    $desktop = $page.Replace('"$DESKTOP\${PRODUCTNAME}.lnk"', '"$DESKTOP\${PRODUCTNAME} app.lnk"')
+    if ((Find-MissingUpgradeHooks $desktop).Count -ne 1) { $failures += 'шаблон: другое имя ярлыка не замечено' }
     $swapped = $page.Replace("  `${ElseIf} `$R0 = -1 ; Downgrading`r`n    `${If} `$R1 = 1              ; User chose to uninstall`r`n      Goto reinst_uninstall", "  `${ElseIf} `$R0 = -1 ; Downgrading`r`n    `${If} `$R1 = 1              ; User chose to uninstall`r`n      Goto reinst_done")
     if ($swapped -eq $page) { $failures += 'шаблон: пример отката не подменился' }
     elseif ((Find-MissingUpgradeHooks $swapped).Count -ne 1) { $failures += 'шаблон: смена ветки отката не замечена' }
