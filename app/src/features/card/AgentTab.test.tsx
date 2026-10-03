@@ -388,10 +388,17 @@ test("агент не запущен — запускается сам, ссыл
   expect(h.shell.agentWrite).not.toHaveBeenCalled();
 });
 
-test("сеанс уже работает — ссылка вставляется сразу, второго запуска нет; та же просьба — один раз", async () => {
+/** Запустить кнопкой и дождаться, пока сеанс впервые готов (поле ввода, режим вставки, тишина). */
+async function readySession() {
   const view = await show();
   await userEvent.click(startButton());
   await screen.findByText("Работает");
+  await act(() => new Promise((r) => setTimeout(r, QUIET_MS + 500)));
+  return view;
+}
+
+test("сеанс уже работает — ссылка вставляется сразу, второго запуска нет; та же просьба — один раз", async () => {
+  const view = await readySession();
   // Агент ещё что-то выводит, режим вставки не включён — работающему сеансу всё равно сразу.
   term().modes.bracketedPasteMode = false;
   await output("…");
@@ -409,9 +416,7 @@ test("сеанс уже работает — ссылка вставляется
 });
 
 test("разговор с фразами про вход и подтверждение не мешает готовому сеансу", async () => {
-  const view = await show();
-  await userEvent.click(startButton());
-  await screen.findByText("Работает");
+  const view = await readySession();
   term().screen = [
     "login to the portal fails · нужен sign in with Google · Approval for the budget is pending",
     "approval policy: on-request · Run npm install (y/n)? · Quick safety check (из письма заказчика)",
@@ -987,4 +992,46 @@ test("«Остановить», пока агент что-то выводит, 
   await userEvent.click(screen.getByRole("button", { name: "Остановить" }));
   await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Остановить" }));
   expect(h.shell.agentKill).toHaveBeenCalledWith("agent-1");
+});
+
+test("агент ждёт ответа на вопрос о разрешении (поля ввода нет) — занят: его не закрывают ради четвёртого", async () => {
+  fakeTime();
+  (await running("r1", "agent-1")).unmount();
+  // Claude Code спрашивает разрешения: вместо поля ввода — пункты выбора, вывода нет.
+  term().lines = ["", " Bash command", "   rm -rf build", " Do you want to proceed?"];
+  term().screen = " ❯ 1. Yes   2. No";
+  await skip(1000);
+  (await running("r2", "agent-2")).unmount();
+  await skip(1000);
+  (await running("r3", "agent-3")).unmount();
+  await skip(BUSY_MS + 1000);
+  (await running("r4", "agent-4")).unmount();
+  expect(h.shell.agentKill).toHaveBeenCalledTimes(1);
+  expect(h.shell.agentKill).toHaveBeenCalledWith("agent-2");
+});
+
+test("«Перезапустить», пока агент что-то выводит, — тот же вопрос, что у «Остановить»", async () => {
+  await running("r1", "agent-1");
+  await data("agent-1", "пишу ответ…");
+  await userEvent.click(screen.getByRole("button", { name: "Перезапустить" }));
+  const ask = screen.getByRole("alertdialog", { name: "Перезапустить агента?" });
+  await userEvent.click(within(ask).getByRole("button", { name: "Отмена" }));
+  expect(h.shell.agentKill).not.toHaveBeenCalled();
+  expect(h.shell.agentSpawn).toHaveBeenCalledTimes(1);
+  h.shell.agentSpawn.mockResolvedValueOnce("agent-2");
+  await userEvent.click(screen.getByRole("button", { name: "Перезапустить" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Перезапустить" }));
+  expect(h.shell.agentKill).toHaveBeenCalledWith("agent-1");
+  await waitFor(() => expect(h.shell.agentSpawn).toHaveBeenCalledTimes(2));
+});
+
+test("сеанс закончился, пока его вкладка закрыта, — терминал освобождается; вернулись — «Завершён» и новый терминал", async () => {
+  (await running("r1", "agent-1")).unmount();
+  const t = term();
+  await exit("agent-1", 0);
+  expect(t.disposed).toBe(true);
+  render(<AgentTab id="r1" assistant={assistant()} />);
+  expect(await screen.findByText("Завершён")).toBeInTheDocument();
+  await waitFor(() => expect(h.FakeTerminal.all).toHaveLength(2));
+  expect(await screen.findByRole("button", { name: "Запустить" })).toBeEnabled();
 });
