@@ -34,6 +34,8 @@
 ;      стоит по умолчанию — и при обновлении, и при первой установке.
 ;   5. Ярлыки называются «Meet.lnk» (MEET_SHORTCUT_CASE ниже): шаблон Tauri
 ;      создаёт их под именем ${PRODUCTNAME}.lnk = «meet.lnk».
+;   6. Explorer перечитывает значки (MEET_REFRESH_SHELL_ICONS): иначе после
+;      обновления на панели задач и в «Пуске» остаётся прежний значок.
 
 !define MEET_QUIT_ARG "--quit"
 ; Версии новее этой понимают --quit. У 0.1.0 флага нет: её экземпляр открыл
@@ -92,6 +94,7 @@ Var MeetKeepChoice
     ; MUI2 своей точки для .onGUIEnd не даёт, шаблон Tauri её не объявляет.
     Function .onGUIEnd
       !insertmacro MEET_SHORTCUTS_CASE
+      !insertmacro MEET_REFRESH_SHELL_ICONS
     FunctionEnd
   !endif
 !macroend
@@ -224,6 +227,17 @@ Var MeetKeepChoice
   Pop $0
 !macroend
 
+; Значок на панели задач, в «Пуске» и на рабочем столе Explorer берёт из
+; своего кэша значков по пути «meet-desktop.exe,0». Обновление поверх
+; заменяет exe по тому же пути, ярлык указывает туда же — и Explorer
+; продолжает показывать закэшированный прежний значок (у 0.3.0 после 0.2.x —
+; старый вместо кольца), пока кэш не сбросят. SHCNE_ASSOCCHANGED (0x08000000)
+; с SHCNF_IDLIST говорит оболочке перечитать значки (так же делает
+; установщик electron-builder, refreshShellIcons). Файлы не трогает.
+!macro MEET_REFRESH_SHELL_ICONS
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+!macroend
+
 ; Колёса прежних версий в resources: установка поверх кладёт новое рядом, а
 ; деинсталлятор новой версии знает только своё. Удаляем по одному, по
 ; точному имени и только если новое на месте (имя колеса несёт версию
@@ -250,6 +264,8 @@ Var MeetKeepChoice
   ${EndIf}
   Pop $1
   Pop $0
+  ; Новый exe и ярлыки на месте — сбросить закэшированные значки.
+  !insertmacro MEET_REFRESH_SHELL_ICONS
 !macroend
 
 ; Удаление из «Параметры → Приложения» — тоже со штатным выходом.

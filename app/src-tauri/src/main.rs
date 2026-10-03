@@ -11,6 +11,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod api;
+mod app_icon;
 mod autostart;
 mod close_guard;
 mod engine;

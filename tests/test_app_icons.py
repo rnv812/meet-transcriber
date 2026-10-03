@@ -91,6 +91,31 @@ def test_tauri_bundles_existing_icons():
         assert (ROOT / "app" / "src-tauri" / icon).exists(), icon
 
 
+def test_ring_reaches_installer_windows_and_taskbar():
+    """Кольцо — не только в exe: у установщика и деинсталлятора (иначе значок
+    NSIS по умолчанию), у окон — кадр под размер из ресурса exe (generate_context!
+    даёт окну первый кадр icon.ico, 16 px), а после установки Explorer
+    сбрасывает кэш значков (иначе на панели задач остаётся прежний значок)."""
+    tauri = ROOT / "app" / "src-tauri"
+    nsis = json.loads((tauri / "tauri.conf.json").read_text(encoding="utf-8"))["bundle"][
+        "windows"
+    ]["nsis"]
+    assert nsis["installerIcon"] == "icons/icon.ico"
+    assert nsis["uninstallerIcon"] == "icons/icon.ico"
+    for source in ("windows.rs", "live_panel.rs"):
+        text = (tauri / "src" / source).read_text(encoding="utf-8")
+        assert "Ok(window) => crate::app_icon::apply(&window)," in text, source
+    app_icon = (tauri / "src" / "app_icon.rs").read_text(encoding="utf-8")
+    assert "const APP_ICON_RESOURCE: u16 = 32512;" in app_icon
+    hooks = (tauri / "windows" / "hooks.nsh").read_text(encoding="utf-8-sig").replace("\r\n", "\n")
+    refresh = "System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'"
+    assert refresh in hooks.split("!macro MEET_REFRESH_SHELL_ICONS\n", 1)[1].split("!macroend")[0]
+    post = hooks.split("!macro NSIS_HOOK_POSTINSTALL\n", 1)[1].split("!macroend", 1)[0]
+    assert post.rstrip().endswith("!insertmacro MEET_REFRESH_SHELL_ICONS")
+    gui_end = hooks.split("Function .onGUIEnd", 1)[1].split("FunctionEnd", 1)[0]
+    assert "!insertmacro MEET_REFRESH_SHELL_ICONS" in gui_end
+
+
 def test_drawing_is_deterministic():
     gen = _generator()
     for state in gen.TRAY_STATES:
