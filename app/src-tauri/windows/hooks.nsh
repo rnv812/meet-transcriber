@@ -32,6 +32,8 @@
 ;   3. После установки колёса прежних версий из resources убираются.
 ;   4. Страница «Готово» запускает новую версию: галочка «Запустить Meet»
 ;      стоит по умолчанию — и при обновлении, и при первой установке.
+;   5. Ярлыки называются «Meet.lnk» (MEET_SHORTCUT_CASE ниже): шаблон Tauri
+;      создаёт их под именем ${PRODUCTNAME}.lnk = «meet.lnk».
 
 !define MEET_QUIT_ARG "--quit"
 ; Версии новее этой понимают --quit. У 0.1.0 флага нет: её экземпляр открыл
@@ -83,6 +85,13 @@ Var MeetKeepChoice
         ${EndIf}
       ${EndIf}
       Pop $0
+    FunctionEnd
+
+    ; Окно установщика закрывается после страницы «Готово»: ярлык на рабочем
+    ; столе по её галочке уже создан (CreateOrUpdateDesktopShortcut шаблона).
+    ; MUI2 своей точки для .onGUIEnd не даёт, шаблон Tauri её не объявляет.
+    Function .onGUIEnd
+      !insertmacro MEET_SHORTCUTS_CASE
     FunctionEnd
   !endif
 !macroend
@@ -164,6 +173,57 @@ Var MeetKeepChoice
   Delete "${MEET_HELPER}"
 !macroend
 
+; Имя ярлыка — это имя приложения в уведомлениях Windows. Оболочка показывает
+; тосты с AppUserModelID = identifier (com.meet.desktop; так делает
+; tauri-plugin-notification у установленного приложения). У приложения без
+; пакета MSIX Windows узнаёт имя и значок для этого AUMID по ярлыку в меню
+; «Пуск» с тем же System.AppUserModel.ID (его ставит SetLnkAppUserModelId
+; шаблона). Имя ярлыка — имя его файла без .lnk. Шаблон называет ярлыки
+; ${PRODUCTNAME}.lnk = «meet.lnk», отсюда «meet» в заголовке уведомлений.
+; Переименовываем только регистр: «meet.lnk» → «Meet.lnk». AUMID, цель и
+; значок не меняются. NTFS и COM-методы шаблона не различают регистр:
+; деинсталлятор (Delete "$SMPROGRAMS\${PRODUCTNAME}.lnk"), открепление и
+; CreateShortcut при следующем обновлении находят этот же файл, второго
+; ярлыка не появляется. Чужой «meet.lnk» (другая цель) не трогаем.
+; Портит $0–$3 (IsShortcutTarget шаблона).
+!macro MEET_SHORTCUT_CASE dir
+  !insertmacro IsShortcutTarget "${dir}\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  Pop $0
+  ${If} $0 = 1
+    ; Настоящее имя файла с его регистром.
+    FindFirst $0 $1 "${dir}\${PRODUCTNAME}.lnk"
+    FindClose $0
+    ${If} $1 != ""
+    ${AndIf} $1 S!= "Meet.lnk"
+      ClearErrors
+      Rename "${dir}\$1" "${dir}\Meet.lnk"
+      ${IfNot} ${Errors}
+        ; SHCNE_RENAMEITEM, SHCNF_PATHW: меню «Пуск» и рабочий стол
+        ; перечитывают ярлык сразу.
+        System::Call 'shell32::SHChangeNotify(i 0x00000001, i 0x0005, w "${dir}\$1", w "${dir}\Meet.lnk")'
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+; Ярлыки создаются в двух местах: в меню «Пуск» (и на рабочем столе в тихом и
+; пассивном режиме) — в секции установки до NSIS_HOOK_POSTINSTALL; на рабочем
+; столе по галочке страницы «Готово» — уже после неё. Поэтому имя правят и
+; хук, и .onGUIEnd (в MEET_UPGRADE_FUNCTIONS; в тихом режиме её
+; нет, но там всё создано до хука).
+!macro MEET_SHORTCUTS_CASE
+  Push $0
+  Push $1
+  Push $2
+  Push $3
+  !insertmacro MEET_SHORTCUT_CASE "$SMPROGRAMS"
+  !insertmacro MEET_SHORTCUT_CASE "$DESKTOP"
+  Pop $3
+  Pop $2
+  Pop $1
+  Pop $0
+!macroend
+
 ; Колёса прежних версий в resources: установка поверх кладёт новое рядом, а
 ; деинсталлятор новой версии знает только своё. Удаляем по одному, по
 ; точному имени и только если новое на месте (имя колеса несёт версию
@@ -174,6 +234,8 @@ Var MeetKeepChoice
   ; автозапуск, имя установщика для прежних версий — см. windows/lang/*.nsh).
   ; Ключ тот же, меняется только подпись; деинсталлятор удаляет ключ целиком.
   WriteRegStr SHCTX "${UNINSTKEY}" "DisplayName" "Meet"
+  ; Ярлыки — «Meet.lnk»: это имя Windows пишет в уведомлениях.
+  !insertmacro MEET_SHORTCUTS_CASE
   Push $0
   Push $1
   ${If} ${FileExists} "$INSTDIR\resources\meet_transcriber-${VERSION}-py3-none-any.whl"
