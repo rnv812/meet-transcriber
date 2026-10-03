@@ -94,6 +94,3 @@
 }
 .profile__textarea:focus { outline: none; border-color: var(--accent); }
 .profile__foot { margin: 0; color: var(--text-3); font-size: 11px; }
-
-/* Специфичнее .voices__card (voices.css грузится позже). */
-.voices__card.voices__card--wide { width: min(680px, 75%); }

@@ -24,6 +24,7 @@ import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { Disclosure } from "../../ui/Disclosure";
 import { EmptyState } from "../../ui/EmptyState";
 import { Loading, StatusSlot } from "../../ui/Loading";
+import { PaneResizer } from "../../ui/PaneResizer";
 import { About } from "./About";
 import { AnalysisSection } from "./AnalysisSection";
 import { AsrChoice, backendOf } from "./AsrChoice";
@@ -337,6 +338,9 @@ function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
   );
 }
 
+/** Меню разделов: тексту настроек справа остаётся не меньше 420 px. */
+const SETTINGS_MENU = { def: 200, min: 140, max: 360, reserve: 420 };
+
 export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, onRunWizard, guardRef, onDirtyChange }: {
   endpoint: Endpoint;
   /** Появились или пропали несохранённые правки (оболочке: «Выход» из трея спрашивает). */
@@ -488,6 +492,8 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
           </button>
         ))}
       </nav>
+      <PaneResizer name="settings-menu" cssVar="--settings-menu-w" spec={SETTINGS_MENU}
+        panel="before" label="Ширина меню настроек" />
       <div className="settings__body">
         <div className="settings__column">
           {/* Шапка постоянной высоты и над той же колонкой, что и строки. */}

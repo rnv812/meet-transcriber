@@ -32,8 +32,16 @@ test("a CSS block class is declared in one file only", () => {
   expect(clashes).toEqual([]);
 });
 
-test("карточка человека в «Голосах» — поверх сетки: сетка не перестраивается при открытии", () => {
+test("карточка человека в «Голосах» — колонка рядом с сеткой: не наезжает на неё и не выходит за край", () => {
   const css = readFileSync(join(process.cwd(), "src", "features", "voices", "voices.css"), "utf8");
   const card = /\.voices__card \{([^}]*)\}/.exec(css)?.[1] ?? "";
-  expect(card).toMatch(/position: absolute/);
+  const main = /\.voices__main \{([^}]*)\}/.exec(css)?.[1] ?? "";
+  expect(card).not.toMatch(/position: absolute/);
+  expect(card).toMatch(/flex: none/);
+  expect(card).toMatch(/width: var\(--person-w/);
+  expect(card).toMatch(/max-width: calc\(100% - 200px\)/);
+  // Сетка берёт остаток и перестраивается (auto-fill), а не уходит под панель.
+  expect(main).toMatch(/flex: 1/);
+  expect(main).toMatch(/min-width: 0/);
+  expect(css).toMatch(/\.voices__grid \{[^}]*repeat\(auto-fill/);
 });
