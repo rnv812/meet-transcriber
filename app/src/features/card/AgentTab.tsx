@@ -241,7 +241,8 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
 
   const root = useRef<HTMLDivElement>(null);
   const screen = useRef<HTMLDivElement>(null);
-  const [asking, setAsking] = useState(false);
+  /** Вопрос перед «Остановить» или «Перезапустить», пока агент что-то выводит. */
+  const [asking, setAsking] = useState<"stop" | "restart" | null>(null);
 
   // Терминал сеанса — в эту вкладку, пока она открыта; закрытая вкладка его не гасит.
   useEffect(() => {
@@ -289,10 +290,15 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
     void start();
   });
 
-  // «Остановить»: агент только что что-то выводил (отвечает) — сначала спросить.
+  // «Остановить» и «Перезапустить»: агент только что что-то выводил (отвечает) — сначала спросить.
+  const answering = () => Date.now() - s.lastData < STOP_CONFIRM_MS;
   const stop = () => {
-    if (Date.now() - s.lastData < STOP_CONFIRM_MS) setAsking(true);
+    if (answering()) setAsking("stop");
     else s.stop();
+  };
+  const restart = () => {
+    if (answering()) setAsking("restart");
+    else void start();
   };
 
   // Правая кнопка: есть выделение — копировать, нет — вставить (как в терминале Windows).
@@ -382,14 +388,14 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
           <TipLine>Копировать — Ctrl+Shift+C, вставить — Ctrl+Shift+V или правой кнопкой мыши.</TipLine>
           <TipLine>
             Агент продолжает работать, когда вы переходите на другую вкладку, к другой встрече или в настройки; у
-            встречи в списке тогда зелёная точка. Одновременно работают не больше трёх агентов: давно не открывавшийся
-            и ничего не делающий закрывается сам, и его можно продолжить. Остановить агента — «Остановить»; все агенты
+            встречи в списке тогда зелёная точка. Одновременно работают до трёх агентов (включая открытый): давно не
+            открывавшийся и ничего не делающий закрывается сам, и его можно продолжить. Остановить агента — «Остановить»; все агенты
             останавливаются, когда вы закрываете окно приложения.
           </TipLine>
         </HelpTip>
         {active ? (
           <>
-            <Button onClick={() => void start()} disabled={!ready || !provider || phase === "starting"}>Перезапустить</Button>
+            <Button onClick={restart} disabled={!ready || !provider || phase === "starting"}>Перезапустить</Button>
             <Button onClick={stop} disabled={phase !== "running"}>Остановить</Button>
           </>
         ) : (
@@ -431,10 +437,15 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
       </div>
       {!active && past}
       {asking && (
-        <ConfirmDialog title="Остановить агента?" confirmLabel="Остановить"
+        <ConfirmDialog title={asking === "stop" ? "Остановить агента?" : "Перезапустить агента?"}
+          confirmLabel={asking === "stop" ? "Остановить" : "Перезапустить"}
           message="Агент только что что-то выводил — возможно, ещё отвечает. Ответ оборвётся."
-          onCancel={() => setAsking(false)}
-          onConfirm={() => { setAsking(false); s.stop(); }} />
+          onCancel={() => setAsking(null)}
+          onConfirm={() => {
+            setAsking(null);
+            if (asking === "stop") s.stop();
+            else void start();
+          }} />
       )}
     </div>
   );

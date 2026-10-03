@@ -162,3 +162,110 @@ test("заголовок окна и вывод, меняющий экран", (
   expect(screenOutput("\x1b]0;⠼ 2026-01-01_10-00\x07")).toBe(false);
   expect(screenOutput("\x1b]0;x\x07\x1b[27;3H")).toBe(true);
 });
+
+afterEach(() => vi.useRealTimers());
+
+// --- запуск кнопкой: ссылка тоже ждёт готовности (сеанс agentSessions, настоящий xterm) ----
+
+const shellMock = vi.hoisted(() => ({
+  listeners: [] as Array<(e: { id: string; data?: string; code?: number | null }) => void>,
+}));
+vi.mock("../../lib/shell", () => ({
+  inTauri: () => true,
+  agentSpawn: vi.fn(async () => "agent-1"),
+  agentWrite: vi.fn(async () => {}),
+  agentResize: vi.fn(async () => {}),
+  agentKill: vi.fn(async () => {}),
+  onAgentData: vi.fn(async (cb: (e: { id: string; data: string }) => void) => {
+    shellMock.listeners.push(cb as never);
+    return () => {};
+  }),
+  onAgentExit: vi.fn(async () => () => {}),
+}));
+
+/**
+ * Агента запустили кнопкой (сама просьба его не запускала), он вывел `fx`;
+ * просьба «Спросить агента» приходит в `askAt` мс. Возвращает, что и когда
+ * вставлено в терминал и что видно в полосе ожидания во время диалога.
+ */
+async function manualStart(fx: Fixture, provider: Provider, askAt: number) {
+  const { agentSession } = await import("./agentSessions");
+  shellMock.listeners = [];
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const s = agentSession(`manual-${provider}-${askAt}`);
+  // Терминал создаётся при первом показе; jsdom не знает matchMedia, которую зовёт xterm.
+  window.matchMedia ??= ((query: string) => ({
+    matches: false, media: query, onchange: null, addListener() {}, removeListener() {},
+    addEventListener() {}, removeEventListener() {}, dispatchEvent: () => false,
+  })) as typeof window.matchMedia;
+  const detach = s.attach(host);
+  await vi.waitFor(() => expect(s.term).not.toBeNull());
+  // Дальше — без экрана, как сеанс записи, открытой не сейчас.
+  detach();
+  s.term!.resize(120, 30); // размер, в котором записан вывод
+  vi.useFakeTimers();
+  const pasted: Array<[number, string]> = [];
+  let now = 0;
+  vi.spyOn(s.term!, "paste").mockImplementation((text: string) => { pasted.push([now, text]); });
+  expect(await s.start(provider)).toBe(true);
+  const views: string[] = [];
+  let asked = false;
+  const end = fx[fx.length - 1]![0] + 3000;
+  let i = 0;
+  for (; now <= end; now += 50) {
+    while (i < fx.length && fx[i]![0] <= now) {
+      const data = fx[i]![1];
+      shellMock.listeners.forEach((cb) => cb({ id: "agent-1", data }));
+      i++;
+    }
+    if (!asked && now >= askAt) {
+      s.request("Про реплику: [12:34] Анна: «Сдаём отчёт.»");
+      asked = true;
+    }
+    await vi.advanceTimersByTimeAsync(50);
+    if (asked && s.snapshot().pending) views.push(s.snapshot().pending!.view);
+  }
+  vi.useRealTimers();
+  host.remove();
+  return { pasted, views };
+}
+
+test("запуск кнопкой, на экране вопрос Codex об обновлении — ссылку не вставляем", async () => {
+  const r = await manualStart(codexUpdateDialog as Fixture, "codex", 500);
+  expect(r.pasted).toEqual([]);
+  expect(r.views).toContain("confirm");
+});
+
+test("запуск кнопкой, на экране вопрос Codex о папке — ссылку не вставляем", async () => {
+  const r = await manualStart(codexTrustDialog as Fixture, "codex", 2400);
+  expect(r.pasted).toEqual([]);
+  expect(r.views).toContain("confirm");
+});
+
+test("запуск кнопкой, на экране вопрос Claude Code о папке — ссылку не вставляем", async () => {
+  const r = await manualStart(claudeTrustDialog as Fixture, "claude-code", 600);
+  expect(r.pasted).toEqual([]);
+  expect(r.views).toContain("confirm");
+});
+
+test("запуск кнопкой: ссылка, пришедшая во время вопроса о папке, вставляется один раз — когда видно поле ввода", async () => {
+  const fx = claudeTrustConfirmed as Fixture;
+  const answered = firstAt(fx, "\x1b[?2004l")!;
+  const r = await manualStart(fx, "claude-code", 1000);
+  expect(r.views).toContain("confirm");
+  expect(r.pasted).toHaveLength(1);
+  expect(r.pasted[0]![0]).toBeGreaterThan(answered);
+  expect(r.pasted[0]![1]).toBe("Про реплику: [12:34] Анна: «Сдаём отчёт.»");
+});
+
+test("фразы диалога, перенесённые узким терминалом или самим агентом, всё равно узнаются", async () => {
+  const { dialogShown, screenText } = await import("./agentReady");
+  const t = new Terminal({ cols: 20, rows: 6, allowProposedApi: true });
+  await write(t, "\x1b[2;1H❯ No, exit\r\n  Yes, I trust this folder");
+  expect(screenRows(t).some((row) => /trust this folder/i.test(row))).toBe(false);
+  expect(dialogShown(screenText(t))).toBe(true);
+  t.dispose();
+  // Агент сам переносит текст на новую строку с отступом.
+  expect(dialogShown(["Quick safety check: Is this a project you created or one you", "  trust?"].join(" "))).toBe(true);
+});

@@ -28,8 +28,13 @@ import type { FitAddon } from "@xterm/addon-fit";
 import { joinPrompts, pasteLine } from "../../lib/agentRef";
 import { errorText } from "../../lib/format";
 import { agentKill, agentResize, agentSpawn, agentWrite, onAgentData, onAgentExit } from "../../lib/shell";
-import { PASTE_WAIT_MS, POLL_MS, QUIET_MS, coldReadiness, ownTitle, screenOutput, screenRows } from "./agentReady";
+import {
+  PASTE_WAIT_MS, POLL_MS, QUIET_MS, coldReadiness, dialogShown, ownTitle, promptVisible, screenOutput, screenRows,
+  screenText,
+} from "./agentReady";
 
+/** Как часто смотреть, не стал ли готов сеанс, когда ссылки, ждущей вставки, нет. */
+const WATCH_MS = 250;
 /** Сколько агентов работает одновременно, пока ни один не занят. */
 export const MAX_SESSIONS = 3;
 /** Агент выводил что-то так недавно — занят (отвечает): сам он не закрывается. */
@@ -42,11 +47,8 @@ export type PendView = "waiting" | "confirm" | "manual";
 export type UnsentReason = "browser" | "none" | "nothing" | "failed" | "exited" | "cancelled";
 type AgentEvent = { id: string } & ({ data: string } | { code: number | null });
 
-/**
- * Ссылка, ждущая вставки: номер просьбы, когда был первый щелчок (срок не
- * сдвигается) и запустила ли агента сама просьба (тогда — ждать готовности).
- */
-type Pending = { text: string; seq: number; at: number; cold: boolean };
+/** Ссылка, ждущая вставки: номер просьбы и когда был первый щелчок (срок не сдвигается). */
+type Pending = { text: string; seq: number; at: number };
 
 /** Что видно во вкладке: снимок сеанса (новый объект — что-то изменилось). */
 export type AgentView = {
@@ -148,7 +150,11 @@ export class AgentSession {
   lastData = 0;
   /** Поставил ли агент свой заголовок окна (готовность Codex). */
   private titled = false;
-  /** Сеанс хоть раз был готов принять текст: диалог первого запуска больше не проверяется. */
+  /**
+   * Сеанс хоть раз был готов принять текст (coldReadiness + тишина): до этого
+   * любая ссылка ждёт готовности — и при запуске кнопкой (на экране может быть
+   * вопрос о папке или об обновлении); после — вставляется сразу.
+   */
   private sessionReady = false;
   /** Когда сеанс последний раз открывали или трогали — для выбора, кого закрыть. */
   lastUsed = Date.now();
@@ -221,7 +227,9 @@ export class AgentSession {
     // Сеанса не было и ничего не ждёт — терминал не нужен (вкладку открывали и
     // только). Не сразу: StrictMode тут же присоединяет вкладку снова.
     setTimeout(() => {
-      if (!this.host && this.phase === "idle" && !this.pend && !this.unsent && !this.evicted) forget(this);
+      if (this.host) return;
+      if (this.phase === "idle" && !this.pend && !this.unsent && !this.evicted) forget(this);
+      else if (this.phase === "exited" || this.phase === "error") this.releaseTerminal();
     }, 0);
   }
 
@@ -292,9 +300,16 @@ export class AgentSession {
     return this.phase === "starting" || this.phase === "running" || this.phase === "stopping";
   }
 
-  /** Занят: запускается, ждёт вставки или недавно что-то выводил. Такой сам не закрывается. */
+  /**
+   * Занят: запускается, ждёт вставки, недавно что-то выводил или ждёт ответа
+   * человека — поля ввода не видно (вопрос о разрешении, «Do you want to
+   * proceed? 1. Yes…», его заменяет) или на экране диалог. Такой сам не закрывается.
+   */
   busy(now = Date.now()): boolean {
-    return this.phase === "starting" || this.pend !== null || now - this.lastData < BUSY_MS;
+    if (this.phase === "starting" || this.pend !== null || now - this.lastData < BUSY_MS) return true;
+    const t = this.term;
+    if (this.phase !== "running" || !t) return false;
+    return !promptVisible(screenRows(t)) || dialogShown(screenText(t));
   }
 
   /** `resume` — «Продолжить прошлую»: последний разговор агента в папке встречи. */
@@ -392,6 +407,8 @@ export class AgentSession {
     this.notify();
     // Агент закрылся раньше, чем ссылка вставлена: она не теряется — в уведомление.
     this.giveUp("exited");
+    // Закрытый сеанс не на экране — терминал (с прокруткой до 5000 строк) не держим.
+    if (!this.host) this.releaseTerminal();
   }
 
   // --- ссылка «Спросить агента» -------------------------------------------------
@@ -399,15 +416,12 @@ export class AgentSession {
   /**
    * Новая просьба: ссылка ждёт вставки. Несколько просьб, пока агент не готов, —
    * все ссылки подряд, ни одна не теряется. Агент ещё не работает — эту
-   * просьбу запустит (или дождётся) запуск: тогда ждём готовности.
+   * просьбу запустит (или дождётся) запуск; сеанс ещё ни разу не был готов —
+   * ждём готовности (schedule).
    */
   request(text: string) {
     const prev = this.pend;
-    const cold = this.phase !== "running";
-    this.pend = {
-      text: prev ? joinPrompts([prev.text, text]) : text, seq: ++this.seq,
-      at: prev?.at ?? Date.now(), cold: (prev?.cold ?? false) || cold,
-    };
+    this.pend = { text: prev ? joinPrompts([prev.text, text]) : text, seq: ++this.seq, at: prev?.at ?? Date.now() };
     if (!prev) {
       this.pendView = "waiting";
       this.overdue = false;
@@ -457,46 +471,58 @@ export class AgentSession {
   private clearPending() {
     this.pend = null;
     clearTimeout(this.overdueTimer);
-    clearTimeout(this.tickTimer);
-    this.tickTimer = undefined;
   }
 
   /**
-   * Сеанс работает и ссылка ждёт — вставка. Сеанс уже был готов или работал к
-   * моменту щелчка — сразу. Запуск начала сама просьба (cold) и сеанс ещё ни
-   * разу не был готов — ждём готовности (coldReadiness): режим вставки
-   * включён, видно поле ввода агента, у Codex — его заголовок окна, нигде на
-   * экране нет диалога (тогда — «Подтвердите запуск агента…»), и экран не
-   * менялся QUIET_MS. Однажды готовый сеанс диалог больше не проверяет.
-   * Работает и без вкладки на экране (другая запись, другой раздел).
+   * Пока сеанс работает и ещё ни разу не был готов — смотрим на экран
+   * (coldReadiness): режим вставки включён, видно поле ввода агента, у Codex —
+   * его заголовок окна, нигде на экране нет диалога (тогда в полосе —
+   * «Подтвердите запуск агента…»), и экран не менялся QUIET_MS. Так и при
+   * запуске кнопкой: вопрос о папке или об обновлении — не место для ссылки.
+   * Стал готов — ждущая ссылка вставляется; однажды готовый сеанс вставляет
+   * сразу и диалог больше не проверяет. Работает и без вкладки на экране.
    */
   private schedule() {
-    if (this.tickTimer !== undefined || this.phase !== "running" || !this.pend) return;
+    if (this.tickTimer !== undefined || this.phase !== "running") return;
+    if (this.sessionReady && !this.pend) return;
     const tick = () => {
       this.tickTimer = undefined;
       const t = this.term;
-      const p = this.pend;
-      if (!t || !p || !this.session || this.phase !== "running") return;
-      if (!p.cold || this.sessionReady) {
+      if (!t || !this.session || this.phase !== "running") return;
+      if (!this.sessionReady) {
+        const state = coldReadiness(screenRows(t), {
+          bracketed: t.modes?.bracketedPasteMode === true, provider: this.provider, titled: this.titled,
+          text: screenText(t),
+        });
+        const view: PendView = state === "confirm" ? "confirm" : "waiting";
+        if (this.pend && view !== this.pendView) {
+          this.pendView = view;
+          this.notify();
+        }
+        if (state === "ready" && Date.now() - this.lastOutput >= QUIET_MS) this.sessionReady = true;
+      }
+      if (this.sessionReady) {
         this.deliver();
         return;
       }
-      const state = coldReadiness(screenRows(t), {
-        bracketed: t.modes?.bracketedPasteMode === true, provider: this.provider, titled: this.titled,
-      });
-      const view: PendView = state === "confirm" ? "confirm" : "waiting";
-      if (view !== this.pendView) {
-        this.pendView = view;
-        this.notify();
-      }
-      if (state === "ready" && Date.now() - this.lastOutput >= QUIET_MS) {
-        this.sessionReady = true;
-        this.deliver();
-        return;
-      }
-      this.tickTimer = setTimeout(tick, POLL_MS);
+      this.tickTimer = setTimeout(tick, this.pend ? POLL_MS : WATCH_MS);
     };
     tick();
+  }
+
+  /** Закрытый сеанс не на экране: терминал закрыть (вернутся — будет новый, пустой). */
+  private releaseTerminal() {
+    if (!this.term || this.host || this.isLive()) return;
+    this.observer?.disconnect();
+    this.observer = null;
+    this.el?.remove();
+    this.term.dispose();
+    this.term = null;
+    this.fit = null;
+    this.el = null;
+    this.opened = false;
+    this.creating = null;
+    this.notify();
   }
 
   /**
@@ -507,6 +533,8 @@ export class AgentSession {
   dispose(quiet = false) {
     this.attempt++;
     this.clearPending();
+    clearTimeout(this.tickTimer);
+    this.tickTimer = undefined;
     this.observer?.disconnect();
     this.el?.remove();
     this.term?.dispose();

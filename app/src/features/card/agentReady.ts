@@ -80,17 +80,23 @@ export function screenOutput(data: string): boolean {
   return data.replace(TITLE_ONLY, "") !== "";
 }
 
+/** На экране диалог агента (CONFIRM_SCREEN). `text` — экран одной строкой (`screenText`). */
+export function dialogShown(text: string): boolean {
+  return CONFIRM_SCREEN.test(text.replace(/\s+/g, " "));
+}
+
 /**
- * Готов ли агент, запущенный самой просьбой, принять вставку (тишину считает
- * вкладка): «confirm» — на экране диалог (CONFIRM_SCREEN); «ready» — режим
- * вставки включён и видно поле ввода (`promptVisible`), у Codex ещё и свой
- * заголовок окна (`ownTitle`); иначе — «waiting».
+ * Готов ли агент, который ещё ни разу не был готов, принять вставку (тишину
+ * считает сеанс): «confirm» — на экране диалог (`dialogShown`); «ready» —
+ * режим вставки включён и видно поле ввода (`promptVisible`), у Codex ещё и
+ * свой заголовок окна (`ownTitle`); иначе — «waiting». `text` — экран одной
+ * строкой с перенесёнными строками вместе (`screenText`); нет — строки `rows`.
  */
 export function coldReadiness(
   rows: string[],
-  { bracketed, provider, titled }: { bracketed: boolean; provider: string | null; titled: boolean },
+  { bracketed, provider, titled, text }: { bracketed: boolean; provider: string | null; titled: boolean; text?: string },
 ): "ready" | "confirm" | "waiting" {
-  if (CONFIRM_SCREEN.test(rows.join(" "))) return "confirm";
+  if (dialogShown(text ?? rows.join(" "))) return "confirm";
   if (!bracketed || !promptVisible(rows)) return "waiting";
   if (provider === "codex" && !titled) return "waiting";
   return "ready";
@@ -107,5 +113,28 @@ export function screenRows(t: Pick<Terminal, "rows" | "buffer">): string[] {
     return lines;
   } catch {
     return [];
+  }
+}
+
+/**
+ * Экран одной строкой — для фраз диалогов: строка, перенесённая терминалом
+ * (узкое окно), склеивается с предыдущей без пробела, остальные — через
+ * пробел; пробелы схлопывает `dialogShown` (агенты сами переносят текст на
+ * новую строку с отступом).
+ */
+export function screenText(t: Pick<Terminal, "rows" | "buffer">): string {
+  try {
+    const buf = t.buffer.active;
+    let text = "";
+    for (let i = buf.baseY; i < buf.baseY + t.rows; i++) {
+      const line = buf.getLine(i);
+      if (!line) continue;
+      const wrappedNext = buf.getLine(i + 1)?.isWrapped === true && i + 1 < buf.baseY + t.rows;
+      const part = line.translateToString(!wrappedNext);
+      text += line.isWrapped ? part : ` ${part}`;
+    }
+    return text;
+  } catch {
+    return "";
   }
 }
