@@ -418,6 +418,13 @@ test("опрос «starting» ограничен: оболочка так и н�
     vi.mocked(shell.residentStatus).mockResolvedValue("starting");
     render(<App />);
     await waitFor(() => expect(shell.residentStatus).toHaveBeenCalled());
+    // Опрос заводится только после того, как ответ оболочки применён; под
+    // нагрузкой это случается позже первого вызова. Крутим по одному тику, пока
+    // опрос не подтвердит себя вторым вызовом, — и только потом считаем потолок.
+    await waitFor(async () => {
+      await act(async () => { await vi.advanceTimersByTimeAsync(SHELL_POLL_MS); });
+      expect(vi.mocked(shell.residentStatus).mock.calls.length).toBeGreaterThan(1);
+    });
     await act(async () => { await vi.advanceTimersByTimeAsync(SHELL_POLL_MS * (SHELL_STARTING_POLLS + 5)); });
     const calls = vi.mocked(shell.residentStatus).mock.calls.length;
     expect(calls).toBeLessThanOrEqual(SHELL_STARTING_POLLS + 1);
