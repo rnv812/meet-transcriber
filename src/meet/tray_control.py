@@ -295,6 +295,8 @@ AGENT_LIVE_HEADER = (
 
 # Сколько «Удалить» ждёт, пока плеер и сведение отпустят файлы записи.
 DELETE_WAIT_S = 3.0
+# Сколько ответов «ссылки на Jira» помнить (по записи, тексту, итогам, анализу, настройкам).
+JIRA_CACHE_MAX = 16
 
 # События шины о записи вне задач очереди: окно перечитывает список и снимок.
 RECORDING_PROCESSING = "recording.processing"  # {"id"}: началась обработка в фоне
@@ -1492,9 +1494,29 @@ class TrayControl(ProfilesMixin):
             cfg = settings.load()
             if jira_refs.spec_of(cfg) is None:
                 return None
+            # Карточку перечитывают на каждом шаге задач записи: тот же текст,
+            # итоги, анализ и настройки ссылок — тот же ответ, без пересчёта.
+            stamps = []
+            for path in (library.transcript_path(folder), folder / assistant.SUMMARY_MD,
+                         folder / analysis.ANALYSIS_JSON):
+                try:
+                    st = path.stat()
+                    stamps.append((st.st_mtime_ns, st.st_size))
+                except OSError:
+                    stamps.append(None)
+            key = (str(folder), tuple(stamps), json.dumps(
+                [cfg.integrations.to_raw(), cfg.transcript_view.jira, cfg.analysis.issues],
+                sort_keys=True, default=str))
+            cache = self.__dict__.setdefault("_jira_cache", {})
+            if key in cache:
+                return cache[key]
             summary = assistant.read_summary(folder)
-            return jira_refs.for_recording(transcript, cfg, analysis_doc=analysis.read(folder),
-                                           summary=(summary or {}).get("markdown"))
+            got = jira_refs.for_recording(transcript, cfg, analysis_doc=analysis.read(folder),
+                                          summary=(summary or {}).get("markdown"))
+            if len(cache) >= JIRA_CACHE_MAX:
+                cache.pop(next(iter(cache)))
+            cache[key] = got
+            return got
         except Exception as e:  # noqa: BLE001 — ссылки необязательны
             self.tray.log(f"ссылки на Jira не посчитаны ({folder.name}): {type(e).__name__}")
             return None
@@ -2582,7 +2604,7 @@ class TrayControl(ProfilesMixin):
 
         try:
             cfg = settings.load()
-            if not cfg.analysis.auto or not cfg.analysis.features():
+            if not cfg.analysis.auto or not analysis.effective_features(cfg):
                 return
             data = library.read_transcript(folder)
             if data is None:
@@ -2662,7 +2684,7 @@ class TrayControl(ProfilesMixin):
             self._mark_analysis(folder, False)
             return False
         cfg = settings.load()
-        if not manual and (not cfg.analysis.auto or not cfg.analysis.features()):
+        if not manual and (not cfg.analysis.auto or not analysis.effective_features(cfg)):
             self._mark_analysis(folder, False)
             return False
         if self._busy_now():

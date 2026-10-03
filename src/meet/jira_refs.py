@@ -13,16 +13,18 @@
 * **Номер** — цифры (2122, «2 122», «21-22», «21 22»), русские и английские
   числительные, в том числе парами («двадцать один двадцать два»,
   «сорок четыре пятьдесят два» → 2122, 4452). Больше шести цифр — не номер.
-* **Шаблоны.** `<проект> [№|номер|-]? <номер>`; номер не дальше NEAR_WORDS
-  слов после упоминания проекта в той же реплике (тогда — от двух цифр:
-  «орион, где-то пять человек» — не задача); номер после слова-признака
-  («баг», «тикет», «задача», «issue», «джира»…) не дальше CONTEXT_WORDS слов —
-  в проекте по умолчанию, если он задан; иначе такое упоминание остаётся
-  анализу встречи (слой модели, meet.analysis `issues`).
-* **Не номер:** за числом единица или счёт («2 122 рубля», «2122 года»,
-  «сорок четыре минуты», «двадцать два бага»), порядковое («двадцать
-  первого»), время и дроби («21:22», «2,5»), процент; перед свободным числом —
-  предлог («в 2122 году», «к 15»).
+* **Шаблоны.** `<проект> [№|номер|-]? <номер>` — номер сразу за проектом
+  (или за «номер»/«№»), дальше — перечисление («орион 2122 и 2123»); номер
+  словами меньше десяти — не номер («орион номер один в рейтинге»). Номер
+  после слова-признака («баг», «тикет», «задача», «issue», «джира»…) не
+  дальше CONTEXT_WORDS слов, от трёх цифр или после «номер»/«№», — в проекте
+  по умолчанию, если он задан; иначе такое упоминание остаётся анализу
+  встречи (слой модели, meet.analysis `issues`).
+* **Не номер:** за числом единица, дата, время суток, сумма, оценка или
+  счёт («2 122 рубля», «15 марта», «10 утра», «300 тысяч», «13 поинтов»,
+  «двадцать два бага»), порядковое («двадцать первого»), время и дроби
+  («21:22», «2,5»), процент; перед свободным числом — предлог («в 2122
+  году», «к 15»).
 * Ключ, написанный текстом («ORION-2122»), — по шаблону из настроек
   (`Integrations.jira_literal`): источник "literal".
 
@@ -34,6 +36,7 @@
 текстом и, если текст успели поправить, ищет эти слова заново.
 """
 
+import bisect
 import itertools
 import re
 import unicodedata
@@ -42,12 +45,16 @@ from dataclasses import dataclass, field
 from meet import translit
 
 MAX_DIGITS = 6
-# Номер не сразу после проекта — не дальше стольких слов от упоминания.
-NEAR_WORDS = 4
 # Номер после слова-признака («в баге 4452») — не дальше стольких слов.
 CONTEXT_WORDS = 3
-# Свободный номер (не сразу после проекта) — от двух цифр, если не сказано «номер».
-MIN_LOOSE = 10
+# Номер после слова-признака без проекта — от трёх цифр, если не сказано
+# «номер»/«№»: «задача 18 переходит дальше» — не задача.
+MIN_CONTEXT = 100
+# Номер словами меньше десяти — не номер задачи даже после «номер»: «задача
+# номер один — стабилизировать релиз».
+MIN_WORDS = 10
+# Перечисление после номера («2122 и 2123») — от двух цифр.
+MIN_LIST = 10
 # Реплика окна: сегменты одного спикера с паузой меньше (как GAP_S в lib/speakers.ts).
 TURN_GAP_S = 2.0
 # Сколько вариантов произношения строить на проект (сверх своих).
@@ -240,7 +247,18 @@ _UNIT = re.compile(
     r"сообщени(?:й|я)$|коммит(?:а|ов)$|шаг(?:а|ов)$|этап(?:а|ов)$|попыт(?:ка|ки|ок)$|"
     r"раунд(?:а|ов)$|копе(?:ек|йки|йка)$|years?$|months?$|weeks?$|days?$|hours?$|minutes?$|"
     r"seconds?$|percent$|users?$|rubles?$|dollars?$|times?$|items?$|points?$|pages?$|files?$|"
-    r"lines?$|people$|persons?$|gb$|mb$|kb$|ms$|мс$|гб$|мб$|кб$|тб$|г$|ч$)")
+    r"lines?$|people$|persons?$|gb$|mb$|kb$|ms$|мс$|гб$|мб$|кб$|тб$|г$|ч$|"
+    # Даты: «15 марта», «20 мая», «15 числа», «янв».
+    r"январ|феврал|март[аеу]?$|апрел|ма[йяюе]$|июн[ьяюе]$|июл[ьяюе]$|август|сентябр|октябр|ноябр|"
+    r"декабр|янв$|фев$|мар$|апр$|авг$|сент?$|окт$|нояб?$|дек$|числ[оау]$|"
+    r"(?:january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|"
+    r"sept|sep|october|oct|november|nov|december|dec)$|"
+    # Время суток: «10 утра», «7 вечера», «3 ночи».
+    r"утра$|вечера$|ночи$|пополудни$|am$|pm$|"
+    # Суммы и счёт: «300 тысяч», «две сотни», «десяток», «долл.».
+    r"тысяч\w*$|сот(?:ни|ен|ня|ню)$|десят(?:ок|ка|ков|ки)$|долл|"
+    # Оценки: «13 поинтов», «5 очков», «8 баллов».
+    r"поинт\w*$|очк(?:о|а|ов)$|балл\w*$|sp$)")
 # Счётные существительные: «двадцать два бага», «пять тикетов»; именительный
 # («двадцать один баг») — только после числа на 1 (кроме 11).
 _COUNT_GEN = re.compile(r"(?:бага|багов|задачи|задач|тикета|тикетов|таска|тасков|ишью|issues|"
@@ -261,6 +279,9 @@ _PREPS = {
     "at", "in", "on", "by", "for", "from", "to", "until", "about", "after", "before", "since", "of",
     "around", "than",
 }
+# Перечисление номеров: «2122 и 2123», «2122, 2123».
+_LIST_WORDS = {"и", "или", "and", "or"}
+_LIST_GAP = re.compile(r"[\s,]*")
 # Слова, после которых номер — явно номер: «номер», «№» (знак — не слово).
 _EXPLICIT = {"номер", "номером", "номеру", "номера", "number", "num", "no", "n"}
 # Слова-признаки задачи без проекта: «в баге 4452», «тикет 4452», «issue 4452».
@@ -473,6 +494,9 @@ class Ref:
     end: int
     key: str
     source: str  # literal | spoken | context | agent
+    # Начало фразы для итогов и наблюдений: у номера по слову-признаку — само
+    # слово («баге 4452»), голое число там ссылкой не становится.
+    lead: int | None = None
 
 
 def _mentions(toks: list[Tok], text: str, spec: Spec) -> list[tuple[int, int, str]]:
@@ -506,49 +530,41 @@ def find(text: str, spec: Spec) -> list[Ref]:
                    for m in spec.literal.finditer(text) if m.group()]
     spoken: list[Ref] = []
     mentions = _mentions(toks, text, spec)
-    starts = {m[0] for m in mentions}
 
-    def ref(a: int, num: Number, key: str, source: str) -> Ref:
-        return Ref(toks[a].start, toks[num.end - 1].end, f"{key}-{int(num.digits)}", source)
+    def ref(a: int, num: Number, key: str, source: str, lead: int | None = None) -> Ref:
+        return Ref(toks[a].start, toks[num.end - 1].end, f"{key}-{int(num.digits)}", source, lead)
 
-    def near(p: int, key: str, out: list[Ref]) -> None:
-        """Номера не дальше NEAR_WORDS слов: «орион, кажется, 2122 и 2123»."""
-        words = 0
-        while p < len(toks) and words <= NEAR_WORDS:
-            if p > 0 and _SENTENCE.search(text, toks[p - 1].end, toks[p].start):
+    def listed(p: int, key: str) -> None:
+        """Перечисление сразу за номером: «2122 и 2123», «2122, 2123»."""
+        while p < len(toks):
+            q = p + 1 if toks[p].word in _LIST_WORDS else p
+            if q >= len(toks) or _SENTENCE.search(text, toks[p - 1].end, toks[q].start) \
+                    or not _LIST_GAP.fullmatch(text, toks[p - 1].end, toks[p].start):
                 return
-            if p in starts:
+            num = number_at(toks, q, text)
+            if num is None or not num.digits or int(num.digits) < MIN_LIST \
+                    or _after_rejects(toks, num, text):
                 return
-            num = number_at(toks, p, text)
-            if num is not None:
-                if not num.digits or _prep_before(toks, p, text) or _after_rejects(toks, num, text):
-                    return
-                if int(num.digits) < MIN_LOOSE and not _explicit_before(toks, p, text):
-                    return
-                out.append(ref(p, num, key, "spoken"))
-                p, words = num.end, 0
-                continue
-            words += 1
-            p += 1
+            spoken.append(ref(q, num, key, "spoken"))
+            p = num.end
 
     for first, after, key in mentions:
+        # Номер — сразу за проектом или за «номер»/«№»: «орион 2122», «орион номер 2122».
         j = after
         while j < len(toks) and toks[j].word in _EXPLICIT \
                 and _KEY_GAP.fullmatch(text, toks[j - 1].end, toks[j].start):
             j += 1
-        num = None
-        if j < len(toks) and _KEY_GAP.fullmatch(text, toks[j - 1].end, toks[j].start):
-            num = number_at(toks, j, text)
-        if num is not None:
-            if not num.digits or _after_rejects(toks, num, text):
-                continue
-            # «орион один из тикетов»: маленький номер словами — только с «номер».
-            if num.words and int(num.digits) < MIN_LOOSE and j == after:
-                continue
-            spoken.append(ref(first, num, key, "spoken"))
-            near(num.end, key, spoken)
-        else:
-            near(after, key, spoken)
+        if j >= len(toks) or not _KEY_GAP.fullmatch(text, toks[j - 1].end, toks[j].start):
+            continue
+        num = number_at(toks, j, text)
+        if num is None or not num.digits or _after_rejects(toks, num, text):
+            continue
+        # «орион один из тикетов», «орион номер один в рейтинге»: номер словами
+        # меньше десяти — не задача.
+        if num.words and int(num.digits) < MIN_WORDS:
+            continue
+        spoken.append(ref(first, num, key, "spoken"))
+        listed(num.end, key)
 
     context: list[Ref] = []
     if spec.default:
@@ -561,20 +577,27 @@ def find(text: str, spec: Spec) -> list[Ref]:
                     break
                 num = number_at(toks, p, text)
                 if num is not None:
+                    value = int(num.digits) if num.digits else 0
+                    explicit = _explicit_before(toks, p, text) and not (num.words and value < MIN_WORDS)
                     if num.digits and not _prep_before(toks, p, text) \
                             and not _after_rejects(toks, num, text) \
-                            and (int(num.digits) >= MIN_LOOSE or _explicit_before(toks, p, text)):
-                        context.append(ref(p, num, spec.default, "context"))
+                            and (value >= MIN_CONTEXT or explicit):
+                        context.append(ref(p, num, spec.default, "context", lead=tok.start))
                     break
                 if toks[p].word not in _FILLERS:
                     break
                 p += 1
 
+    # На наложении побеждает раньше найденное; принятые — по порядку начала.
+    starts: list[int] = []
     out: list[Ref] = []
-    for r in literal + spoken + context:  # на наложении побеждает раньше найденное
-        if not any(r.start < x.end and x.start < r.end for x in out):
-            out.append(r)
-    return sorted(out, key=lambda r: r.start)
+    for r in literal + spoken + context:
+        i = bisect.bisect_right(starts, r.start)
+        if (i > 0 and out[i - 1].end > r.start) or (i < len(starts) and starts[i] < r.end):
+            continue
+        starts.insert(i, r.start)
+        out.insert(i, r)
+    return out
 
 
 # --- реплики, анализ, окно ----------------------------------------------------------
@@ -638,7 +661,7 @@ def segment_refs(segments: list, spec: Spec, issues=()) -> list[dict]:
     spoken}]. `issues` — из анализа (meet.analysis): добавляются там, где
     детерминированный слой ничего не нашёл (он побеждает на наложении)."""
     out: list[dict] = []
-    turn_of: dict[int, tuple[list[int], list[int], str]] = {}
+    turn_of: dict[int, tuple[list[int], list[int], str, bool]] = {}
     found: dict[int, list[tuple[int, int]]] = {}
     for idx in turns_of(segments):
         if any(isinstance(segments[i], dict) and segments[i].get("kind") == "break" for i in idx):
@@ -649,7 +672,8 @@ def segment_refs(segments: list, spec: Spec, issues=()) -> list[dict]:
             offsets.append(at)
             at += len(t) + 1
         text = " ".join(texts)
-        info = (idx, offsets, text)
+        # Без символов вне BMP позиции UTF-16 те же, что в Python: не перекодируем.
+        info = (idx, offsets, text, max(text, default=" ") <= "\uffff")
         for i in idx:
             turn_of[i] = info
         spans = found.setdefault(idx[0], [])
@@ -661,7 +685,7 @@ def segment_refs(segments: list, spec: Spec, issues=()) -> list[dict]:
         for i in issue.get("segments") or ():
             if i not in turn_of:
                 continue
-            idx, offsets, text = turn_of[i]
+            idx, offsets = turn_of[i][0], turn_of[i][1]
             k = idx.index(i)
             for a, b in find_phrase(_seg_text(segments[i]), issue.get("spoken") or ""):
                 a, b = a + offsets[k], b + offsets[k]
@@ -674,10 +698,11 @@ def segment_refs(segments: list, spec: Spec, issues=()) -> list[dict]:
 
 
 def _span(info, r: Ref) -> dict:
-    idx, offsets, text = info
-    k = max(n for n in range(len(idx)) if offsets[n] <= r.start)
-    base = _u16(text, offsets[k])
-    return {"segment": idx[k], "start": _u16(text, r.start) - base, "end": _u16(text, r.end) - base,
+    idx, offsets, text, bmp = info
+    k = bisect.bisect_right(offsets, r.start) - 1
+    u16 = (lambda i: i) if bmp else (lambda i: _u16(text, i))
+    base = u16(offsets[k])
+    return {"segment": idx[k], "start": u16(r.start) - base, "end": u16(r.end) - base,
             "key": r.key, "source": r.source, "spoken": text[r.start:r.end]}
 
 
@@ -689,8 +714,8 @@ def phrases(texts, spec: Spec) -> list[dict]:
         for line in str(text or "").splitlines():
             line = nfc(line)
             for r in find(line, spec):
-                out.setdefault((line[r.start:r.end], r.key),
-                               {"text": line[r.start:r.end], "key": r.key, "source": r.source})
+                said = line[r.start if r.lead is None else r.lead:r.end]
+                out.setdefault((said, r.key), {"text": said, "key": r.key, "source": r.source})
     return list(out.values())
 
 

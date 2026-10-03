@@ -971,8 +971,12 @@ class Analysis:
     def from_raw(cls, raw: dict) -> "Analysis":
         consent = as_choice(raw.get("consent"), ANALYSIS_CONSENTS, "")
         auto = as_flag(raw.get("auto"), True) and consent != CONSENT_PENDING
+        parts = {name: as_flag(raw.get(name), True) for name in ANALYSIS_FEATURES if name != "issues"}
+        # «Ссылки на задачи» (0.3.1) у конфига 0.3.0 — как остальные части: кто
+        # выключил их все, тому новая часть анализ не включает.
+        issues = as_flag(raw.get("issues"), any(parts.values()))
         return cls(auto=auto, improve_auto=as_flag(raw.get("improve_auto"), False), consent=consent,
-                   **{name: as_flag(raw.get(name), True) for name in ANALYSIS_FEATURES})
+                   issues=issues, **parts)
 
     @classmethod
     def upgraded(cls) -> "Analysis":

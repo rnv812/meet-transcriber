@@ -750,6 +750,13 @@ def jira_context(cfg) -> tuple[tuple[str, ...], str]:
     return (tuple(p.key for p in integrations.jira_projects), integrations.jira_default_project)
 
 
+def effective_features(cfg) -> tuple[str, ...]:
+    """Части, которые анализ действительно запросит: «Ссылки на задачи» — только
+    с проектами Jira. Пусто — автоматический анализ не ставится."""
+    features = cfg.analysis.features()
+    return features if jira_context(cfg)[0] else tuple(f for f in features if f != "issues")
+
+
 def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
         features=None, now: float | None = None) -> dict:
     """Разметить встречу → словарь analysis.json (без записи на диск).
