@@ -15,7 +15,7 @@ import {
   type ReactNode,
 } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import { layoutRows, typeCounts, type AnalysisView, type InsightView } from "../../lib/analysisView";
+import { layoutRows, turnAt, typeCounts, type AnalysisView, type InsightView } from "../../lib/analysisView";
 import { findHits, parseQuery, prepare } from "../../lib/search";
 import type { Turn } from "../../lib/speakers";
 import type { PhraseType } from "../../lib/types";
@@ -31,6 +31,9 @@ export type FindRequest = { q: string; t: number | null; n: number };
 
 /** Показать реплику (номер в `turns`): развернуть, если свёрнута фильтром, прокрутить и подсветить; `n` — номер просьбы. */
 export type RevealRequest = { turn: number; n: number };
+
+/** Плеер перемотали на секунду `t` (`n` — номер перемотки): прокрутить к реплике, которая там звучит. */
+export type SeekRequest = { t: number; n: number };
 
 const NO_FILTER: ReadonlySet<PhraseType> = new Set();
 /** Сколько длится подсветка реплики, к которой перешли. */
@@ -48,11 +51,13 @@ function hitAt(turns: Turn[], hits: { turn: number }[], t: number): number {
 }
 
 const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+/** Куда ставить реплику при перемотке: примерно 30 % высоты от верха. */
+const SEEK_TOP = "30vh";
 const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavior: reducedMotion() ? "auto" : "smooth" });
 
 export function TranscriptView({
   turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
-  view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection, tools,
+  view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection, tools, seekTo = null, nowTurn = null,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
@@ -82,6 +87,10 @@ export function TranscriptView({
   onAskInsight?: (insight: InsightView) => void;
   /** Показать реплику (глава из плеера). */
   reveal?: RevealRequest | null;
+  /** Перемотка из плеера: прокрутить к реплике (свёрнутую фильтром не разворачивать). */
+  seekTo?: SeekRequest | null;
+  /** Реплика, которая звучит сейчас (номер в `turns`): отметка «сейчас играет». */
+  nowTurn?: number | null;
 }) {
   const [text, setText] = useState(find?.q ?? "");
   const [query, setQuery] = useState(find?.q ?? "");
@@ -200,6 +209,55 @@ export function TranscriptView({
     el.classList.add("turn--flash");
     // Класс ставится мимо React: снять самим (иначе без анимации подсветка осталась бы навсегда).
     setTimeout(() => el.classList.remove("turn--flash"), FLASH_MS);
+  });
+
+  // Перемотка из плеера: прокрутить к реплике, звучащей в этот момент. Свёрнутую фильтром не
+  // разворачиваем — к строке «… N реплик», где она спряталась (иначе к ближайшей видимой).
+  const [pendingSeek, setPendingSeek] = useState<SeekRequest | null>(null);
+  const lastSeek = useRef(seekTo?.n);
+  useEffect(() => {
+    if (!seekTo || seekTo.n === lastSeek.current) return;
+    lastSeek.current = seekTo.n;
+    setPendingSeek(seekTo);
+  }, [seekTo]);
+  const shownNow = useContext(TranscriptShown);
+  useLayoutEffect(() => {
+    if (!pendingSeek) return;
+    const root = box.current;
+    if (!root) return;
+    const idx = turnAt(turns, pendingSeek.t);
+    if (idx < 0) { setPendingSeek(null); return; }
+    let el = root.querySelector<HTMLElement>(`[data-turn="${idx}"]`);
+    if (!el) {
+      const row = rows?.find((r) => r.kind === "more" && r.from <= idx && idx <= r.to);
+      if (row && row.kind === "more") el = root.querySelector<HTMLElement>(`[data-more="${row.from}"]`);
+    }
+    if (!el) {
+      let best = Infinity;
+      for (const c of root.querySelectorAll<HTMLElement>("[data-turn]")) {
+        const d = Math.abs(Number(c.dataset.turn) - idx);
+        if (d < best) { best = d; el = c; }
+      }
+    }
+    if (!el) { setPendingSeek(null); return; }
+    // «Расшифровка» скрыта (открыты «Итоги» или «Агент») — прокрутим, когда её покажут.
+    if (el.closest("[hidden]")) return;
+    setPendingSeek(null);
+    el.style.scrollMarginTop = SEEK_TOP;
+    el.scrollIntoView?.({ block: "start", behavior: reducedMotion() ? "auto" : "smooth" });
+    el.classList.remove("turn--flash");
+    void el.offsetWidth; // перезапуск анимации
+    el.classList.add("turn--flash");
+    const done = el;
+    setTimeout(() => done.classList.remove("turn--flash"), FLASH_MS);
+  }, [pendingSeek, shownNow, turns, rows]);
+
+  // «Сейчас играет»: атрибут мимо React — реплики не перерисовываются при смене.
+  useLayoutEffect(() => {
+    const root = box.current;
+    if (!root) return;
+    for (const old of root.querySelectorAll("[data-now]")) old.removeAttribute("data-now");
+    if (nowTurn !== null) root.querySelector(`[data-turn="${nowTurn}"]`)?.setAttribute("data-now", "true");
   });
 
   // Новый результат: к нужной реплике (просьба из списка), новый запрос — к

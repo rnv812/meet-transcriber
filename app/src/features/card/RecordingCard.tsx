@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import { Sparkles } from "lucide-react";
 import { agentPrompt, type AgentRequest } from "../../lib/agentRef";
 import {
-  buildView, INSIGHT_LABEL, segmentTurns, usableAnalysis, type InsightView,
+  buildView, INSIGHT_LABEL, segmentTurns, turnAt, usableAnalysis, type InsightView,
 } from "../../lib/analysisView";
 import {
   answerAnalysisOffer, ApiError, cancelJob, deleteRecording, exportRecording, getDiagnostics, getRecording, getSettings,
@@ -36,7 +36,7 @@ import { CardHeader } from "./CardHeader";
 import { LiveCard } from "./LiveCard";
 import { RediarizeDialog, rediarizeJobOf } from "./RediarizeDialog";
 import { SpeakersPanel } from "./speakers/SpeakersPanel";
-import { TranscriptView, type FindRequest, type RevealRequest } from "./TranscriptView";
+import { TranscriptView, type FindRequest, type RevealRequest, type SeekRequest } from "./TranscriptView";
 import { useTextFix } from "./TextFix";
 import { useTurnEdit } from "./TurnEdit";
 import type { PersonColor } from "./Turns";
@@ -135,6 +135,10 @@ export function RecordingCard({
   const current = useRef({ endpoint, id });
   current.current = { endpoint, id };
 
+  /** Человек перемотал плеер: прокрутить расшифровку к реплике, звучащей в этот момент. */
+  const [seekTo, setSeekTo] = useState<SeekRequest | null>(null);
+  /** Реплика, звучащая сейчас (отметка «сейчас играет»); обновляется только при её смене. */
+  const [nowTurn, setNowTurn] = useState<number | null>(null);
   useEffect(() => {
     let live = true;
     getSettings(endpoint).then((s) => {
@@ -181,11 +185,12 @@ export function RecordingCard({
     () => jobs.filter((j) => rec && norm(j.folder) === norm(rec.path)).map((j) => `${j.id}:${j.state}`).join(","),
     [jobs, rec],
   );
+  const seeked = useCallback((t: number) => setSeekTo((r) => ({ t, n: (r?.n ?? 0) + 1 })), []);
 
   useEffect(() => {
     setRec(null); setError(null); setMissing(false); setKbDone(null); setAudioFailed(false);
     setPanel({ open: false, mounted: false, focus: null }); setOwnFind(null); setRediarizeOpen(false);
-    setAgentAsk(null);
+    setAgentAsk(null); setNowTurn(null);
     void load();
   }, [load]);
   // Просьба из поиска по записям важнее прежней своей.
@@ -211,6 +216,12 @@ export function RecordingCard({
   const nameSpeaker = useCallback((label: string) => openSpeakers(label), [openSpeakers]);
   const closeSpeakers = useCallback(() => setPanel((p) => ({ ...p, open: false })), []);
   const playPhrase = useCallback((start: number, until: number) => player.current?.seek(start, true, until), []);
+  const turnsRef = useRef(turns);
+  turnsRef.current = turns;
+  const playhead = useCallback((t: number) => {
+    const i = turnAt(turnsRef.current, t);
+    setNowTurn(i < 0 ? null : i); // тот же номер — React не перерисует
+  }, []);
   const showTurns = useCallback((label: string) => setOwnFind((f) => ({
     q: `спикер:"${label}"`, t: null, n: Math.max(f?.n ?? 0, find?.n ?? 0) + 1,
   })), [find]);
@@ -299,10 +310,6 @@ export function RecordingCard({
       refs: x.refs.flatMap((r) => turnRefs(r, r)),
     });
   }, [turnRefs, askAgent]);
-  const showChapter = useCallback((c: number) => {
-    const ch = view?.chapters[c];
-    if (ch) setReveal((r) => ({ turn: ch.turn, n: (r?.n ?? 0) + 1 }));
-  }, [view]);
   const titleApplied = useCallback((updated: Recording) => {
     setRec((cur) => (cur ? { ...cur, ...updated, transcript: cur.transcript } : cur));
     onChanged?.();
@@ -457,7 +464,7 @@ export function RecordingCard({
               <Sparkles size={14} strokeWidth={1.75} aria-hidden="true" />Улучшить
             </button>
           }
-          find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} reveal={reveal} />
+          find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} reveal={reveal} seekTo={seekTo} nowTurn={nowTurn} />
       ) : <EmptyState title="В записи нет речи" />;
       break;
     case "untranscribed":
@@ -615,7 +622,7 @@ export function RecordingCard({
         <AudioPlayer key={id} ref={player} endpoint={endpoint} id={id} durationHint={rec.duration_s ?? spokenUntil}
           onAvailable={audioAvailable} turns={turns} chapters={view?.chapters} importance={view?.importance}
           curveMode={prefs.curve} barLabels={prefs.barLabels} people={people} avatarVersion={avatarVersion}
-          onChapter={showChapter} />
+          onSeeked={seeked} onPlayhead={playhead} />
       ) : (
         <div className="player player--off" role="status"><span className="muted">Аудио недоступно</span></div>
       ))}
