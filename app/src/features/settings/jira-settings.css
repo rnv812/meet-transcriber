@@ -1,0 +1,35 @@
+/* «Ссылки на Jira»: проекты — чипы ключей, у открытого — его варианты названия. */
+.jproj .jproj__control { flex-direction: column; align-items: stretch; gap: 8px; }
+.jproj__chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.jchip {
+  display: inline-flex; align-items: center; gap: 2px; padding: 1px 4px 1px 2px; border-radius: 12px;
+  background: var(--surface-2); color: var(--text); font-size: 12px; border: 1px solid transparent;
+}
+.jchip--open { border-color: var(--accent); }
+.jchip--alias { padding-left: 10px; }
+.jchip__key {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px 1px 4px; border: 0; border-radius: 10px;
+  background: none; color: inherit; font: inherit; cursor: pointer;
+}
+.jchip__key:hover, .jchip__key:focus-visible { background: var(--surface-hover); }
+.jchip__name { font-family: ui-monospace, Consolas, monospace; font-weight: 600; letter-spacing: 0.02em; }
+.jchip__n { color: var(--text-3); }
+.jchip__remove {
+  width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: none;
+  color: var(--text-2); font: inherit; line-height: 1; cursor: pointer;
+}
+.jchip__remove:hover, .jchip__remove:focus-visible { background: var(--surface-hover); color: var(--text); }
+.jchip__remove:disabled { opacity: 0.5; cursor: not-allowed; }
+.jproj__aliases {
+  display: flex; flex-direction: column; gap: 6px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
+}
+.jproj__add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.srow .jproj__add input[type="text"] { width: 200px; }
+.jproj__error, .jproj__empty { font-size: 12px; }
+.jadv { border-bottom: 1px solid var(--line); }
+.jadv__summary { padding: 12px 0; color: var(--text-2); cursor: pointer; }
+.jadv__summary:hover { color: var(--text); }
+.jadv[open] .jadv__summary { padding-bottom: 0; }
+.jadv .srow { border-bottom: 0; }
+.srow #jira-pattern { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }

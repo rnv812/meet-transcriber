@@ -132,15 +132,16 @@ def test_transcript_view_settings_defaults_and_round_trip(tmp_path):
 def test_jira_settings_defaults_and_cleaning():
     integrations = settings.Settings().integrations
     assert integrations.to_raw()["jira_base_url"] == ""
-    assert integrations.to_raw()["jira_keys"] == r"[A-Z][A-Z0-9]+-\d+"
+    assert integrations.to_raw()["jira_pattern"] == ""
+    assert integrations.jira_literal() == r"[A-Z][A-Z0-9]+-\d+"
     got = settings.Integrations.from_raw({"jira_base_url": " https://Jira.Example.com/ ", "jira_keys": "SPR, OPS"})
     assert got.jira_base_url == "https://jira.example.com"
-    assert got.jira_keys == "SPR, OPS"
+    assert [p.key for p in got.jira_projects] == ["SPR", "OPS"]
     with_path = settings.Integrations.from_raw({"jira_base_url": "https://example.com/Jira/"})
     assert with_path.jira_base_url == "https://example.com/Jira"
     # Негодное из файла (правка руками) — по умолчанию, без ошибки.
-    bad = settings.Integrations.from_raw({"jira_base_url": "http://jira.example.com", "jira_keys": "(?P<k>x)"})
-    assert bad.jira_base_url == "" and bad.jira_keys == r"[A-Z][A-Z0-9]+-\d+"
+    bad = settings.Integrations.from_raw({"jira_base_url": "http://jira.example.com", "jira_pattern": "(?P<k>x)"})
+    assert bad.jira_base_url == "" and bad.jira_pattern == "" and bad.jira_literal() == r"[A-Z][A-Z0-9]+-\d+"
 
 
 @pytest.mark.parametrize("base", [
@@ -156,13 +157,13 @@ def test_jira_base_url_rejected_from_window(tmp_path, base):
 @pytest.mark.parametrize("keys", ["(", r"(?i)abc-\d+", r"(?P<k>[A-Z]+)-\d+", "x*", "A" * 201])
 def test_jira_keys_rejected_from_window(tmp_path, keys):
     with pytest.raises(ValueError):
-        settings.patch({"integrations": {"jira_keys": keys}}, tmp_path / "config.json")
+        settings.patch({"integrations": {"jira_pattern": keys}}, tmp_path / "config.json")
 
 
 def test_jira_settings_saved_from_window(tmp_path):
     path = tmp_path / "config.json"
-    updated = settings.patch({"integrations": {"jira_base_url": "https://jira.example.com:8443/", "jira_keys": "SPR"}},
-                             path)
+    updated = settings.patch({"integrations": {"jira_base_url": "https://jira.example.com:8443/",
+                                               "jira_projects": [{"key": "SPR", "aliases": []}]}}, path)
     assert updated.integrations.jira_base_url == "https://jira.example.com:8443"
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw["integrations"]["jira_base_url"] == "https://jira.example.com:8443"
