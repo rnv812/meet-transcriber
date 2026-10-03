@@ -53,17 +53,39 @@ def _build_embedder(device: str):
 
 def _load_embedder():
     """Реальный эмбеддер: np.float32 16 кГц -> np.ndarray (256,). Видеокарта,
-    если она рабочая; не нашлись библиотеки CUDA — один повтор на процессоре."""
+    если она рабочая; не нашлись библиотеки CUDA — один повтор на процессоре.
+
+    torch грузит cuDNN лениво, на первой свёртке: поэтому на видеокарте сразу
+    пробный эмбеддинг секунды тишины, а если библиотека всё же отвалится на
+    живом сегменте — эмбеддер один раз переезжает на процессор там же."""
     from meet import asr
 
     device = _embedder_device()
     try:
-        return _build_embedder(device)
+        embed = _build_embedder(device)
+        if device == "cuda":
+            embed(np.zeros(SAMPLE_RATE, dtype=np.float32))
     except Exception as e:
         if device == "cuda" and asr.missing_cuda_library(e):
             asr.cuda_failed(e)
             return _build_embedder("cpu")
         raise
+    if device != "cuda":
+        return embed
+    current = {"embed": embed, "on_cuda": True}
+
+    def guarded(audio: np.ndarray) -> np.ndarray:
+        try:
+            return current["embed"](audio)
+        except Exception as e:
+            if not (current["on_cuda"] and asr.missing_cuda_library(e)):
+                raise
+            asr.cuda_failed(e)
+            current["on_cuda"] = False
+            current["embed"] = _build_embedder("cpu")
+            return current["embed"](audio)
+
+    return guarded
 
 
 class VoiceMatcher:
