@@ -83,3 +83,10 @@ test("шаг «Улучшить расшифровку» словами: ско�
     ops: [{ type: "text", scope: "ai", from: "в торник", to: "во вторник", count: 1, terms: 0 }],
   })).toBe("Улучшено ИИ: 1 замена");
 });
+
+test("шаг истории словами: ваш голос запомнен", () => {
+  expect(describeStep({
+    id: "o", at: "2026-10-05T14:00:00", created_people: [], enrolled: [], owner_voice: true,
+    ops: [{ type: "rename", label: "Спикер 3", from: "Спикер 3", to: "Вы" }],
+  })).toBe("Спикер 3 → Вы · ваш голос запомнен");
+});

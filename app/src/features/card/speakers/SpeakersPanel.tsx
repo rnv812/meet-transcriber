@@ -6,6 +6,11 @@
  * шаг истории встречи. Шаги отменяются и повторяются (Ctrl+Z / Ctrl+Shift+Z,
  * пока фокус в карточке и не в поле ввода), из истории можно вернуться к
  * любому состоянию. Отмена убирает и голоса, которые шаг запомнил в базе.
+ *
+ * «Это я — {владелец}» с флажком «Запомнить мой голос» запоминает ваш голос из
+ * этой встречи образцом владельца (не человеком базы голосов). Флажок есть,
+ * только если у встречи есть отпечаток вашего голоса с микрофона
+ * (`owner_voice` обзора); отмена шага убирает и образец.
  */
 
 import {
@@ -76,6 +81,8 @@ export function SpeakersPanel({
   const inflight = useRef(false);
   const [staged, setStaged] = useState<Staged>({});
   const [remember, setRemember] = useState<Record<string, boolean>>({});
+  /** «Запомнить мой голос» — один на панель: все строки «Это я» — один голос. */
+  const [rememberOwner, setRememberOwner] = useState(true);
   const [pick, setPick] = useState<Pick | null>(null);
   /** «Разделить спикера…»: чья строка разделяется (панель показывает мастер вместо списка). */
   const [split, setSplit] = useState<string | null>(null);
@@ -188,21 +195,28 @@ export function SpeakersPanel({
   const canRemember = (row: SpeakerRow) => {
     if (!row.has_voice || !staged[row.label]) return false;
     const final = finalOf(row.label, staged);
-    return final !== null && !isUnnamed(final);
+    // Ваш голос — не человек базы голосов: для «Это я» свой флажок (ниже).
+    return final !== null && !isUnnamed(final) && final !== owner;
   };
+  /** Строка стала «Это я», и у встречи есть отпечаток вашего голоса. */
+  const isMe = (row: SpeakerRow) =>
+    !!view?.owner_voice && row.label !== owner && !!staged[row.label] && finalOf(row.label, staged) === owner;
 
   const apply = () => {
     if (!view || !pending) return;
     const flags: Record<string, boolean> = {};
     for (const row of view.speakers) if (staged[row.label] && canRemember(row)) flags[row.label] = rememberOf(row);
+    const owned = rememberOwner && view.speakers.some(isMe);
     void run(async () => {
-      const next = await applySpeakers(endpoint, recordingId, toOps(order, staged), flags);
+      const next = await applySpeakers(endpoint, recordingId, toOps(order, staged), flags, owned);
       setStaged({});
       setRemember({});
+      setRememberOwner(true);
       return next;
-    }, "Изменения применены. Итоги не пересчитываются автоматически.");
+    }, owned ? "Изменения применены, ваш голос запомнен. Итоги не пересчитываются автоматически."
+      : "Изменения применены. Итоги не пересчитываются автоматически.");
   };
-  const discard = () => { setStaged({}); setRemember({}); setPick(null); };
+  const discard = () => { setStaged({}); setRemember({}); setRememberOwner(true); setPick(null); };
   const splitDone = (next: SpeakersView) => {
     setSplit(null);
     show(next);
@@ -258,6 +272,8 @@ export function SpeakersPanel({
             focused={focus?.label === row.label}
             pick={pick?.label === row.label ? pick.mode : null}
             remember={canRemember(row) ? rememberOf(row) : null}
+            rememberOwner={isMe(row) ? rememberOwner : null}
+            onRememberOwner={setRememberOwner}
             refEl={(el) => { rows.current[row.label] = el; }}
             onPick={(mode) => setPick((p) => (p?.label === row.label && p.mode === mode ? null : { label: row.label, mode }))}
             onStage={(c) => stage(row.label, c)}
@@ -286,8 +302,8 @@ export function SpeakersPanel({
 }
 
 function SpeakerRowView({
-  row, rows, staged, owner, people, avatarVersion, endpoint, playable, focused, pick, remember, refEl,
-  onPick, onStage, onRemember, onPlay, onShowTurns, onSplit,
+  row, rows, staged, owner, people, avatarVersion, endpoint, playable, focused, pick, remember, rememberOwner, refEl,
+  onPick, onStage, onRemember, onRememberOwner, onPlay, onShowTurns, onSplit,
 }: {
   row: SpeakerRow;
   rows: SpeakerRow[];
@@ -301,10 +317,13 @@ function SpeakerRowView({
   pick: Pick["mode"] | null;
   /** null — флажка нет (нечего запоминать). */
   remember: boolean | null;
+  /** «Запомнить мой голос» у строки «Это я»; null — флажка нет. */
+  rememberOwner: boolean | null;
   refEl: (el: HTMLElement | null) => void;
   onPick: (mode: Pick["mode"]) => void;
   onStage: (c: Change | null) => void;
   onRemember: (v: boolean) => void;
+  onRememberOwner: (v: boolean) => void;
   onPlay: (start: number, until: number) => void;
   onShowTurns: (label: string) => void;
   /** «Разделить…»: под этим спикером оказались разные люди. */
@@ -414,6 +433,17 @@ function SpeakerRowView({
           <HelpTip label="Что значит «Запомнить голос»" title="Запомнить голос">
             <TipLine>Голос этого спикера будет записан под новым именем и убран у прежнего.</TipLine>
             <TipLine>На следующих встречах человек будет узнан автоматически.</TipLine>
+            <TipLine>Отмена изменения убирает и запомненный голос.</TipLine>
+          </HelpTip>
+        </label>
+      )}
+      {rememberOwner !== null && (
+        <label className="spk-row__remember">
+          <input type="checkbox" checked={rememberOwner} onChange={(e) => onRememberOwner(e.target.checked)} />
+          Запомнить мой голос
+          <HelpTip label="Что значит «Запомнить мой голос»" title="Запомнить мой голос">
+            <TipLine>Отпечаток вашего голоса из этой встречи поможет отличать вас от людей рядом, которых слышит ваш микрофон.</TipLine>
+            <TipLine>Хранится только отпечаток голоса — набор чисел, без звука.</TipLine>
             <TipLine>Отмена изменения убирает и запомненный голос.</TipLine>
           </HelpTip>
         </label>

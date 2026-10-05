@@ -89,7 +89,7 @@ test("подсказка из базы: щелчок намечает имя, «
   expect(within(rowOf("Спикер 2")).getByRole("checkbox", { name: /Запомнить голос/ })).toBeChecked();
   await userEvent.click(screen.getByRole("button", { name: "Применить" }));
   expect(api.applySpeakers).toHaveBeenCalledWith(ep, "r1",
-    [{ type: "rename", label: "Спикер 2", to: "Анна Смирнова" }], { "Спикер 2": true });
+    [{ type: "rename", label: "Спикер 2", to: "Анна Смирнова" }], { "Спикер 2": true }, false);
   await waitFor(() => expect(onChanged).toHaveBeenCalled());
   expect(screen.queryByText(/Будет изменено/)).toBeNull();
   expect(screen.getByRole("status")).toHaveTextContent("Изменения применены");
@@ -139,7 +139,7 @@ test("«Объединить с…» другого спикера встреч�
   expect(api.applySpeakers).toHaveBeenCalledWith(ep, "r1", [
     { type: "rename", label: "Спикер 1", to: "Борис Козлов" },
     { type: "merge", label: "Спикер 3", to: "Спикер 1" },
-  ], { "Спикер 1": true, "Спикер 3": false });
+  ], { "Спикер 1": true, "Спикер 3": false }, false);
 });
 
 test("ошибка резидента видна, наметки остаются", async () => {
@@ -269,4 +269,45 @@ test("открытие ставит фокус на заголовок пане�
   expect(screen.getByRole("heading", { name: "Спикеры встречи" })).toHaveFocus();
   await userEvent.keyboard("{Escape}");
   expect(onClose).toHaveBeenCalled();
+});
+
+test("«Это я» + «Запомнить мой голос»: ваш голос из встречи, а не человек базы", async () => {
+  vi.mocked(api.getSpeakers).mockResolvedValue(view({ owner_voice: true }));
+  vi.mocked(api.applySpeakers).mockResolvedValue(view({ owner_voice: true, pos: 1,
+    history: [step("s1", { owner_voice: true })] }));
+  setup();
+  await screen.findByRole("region", { name: /^Спикер 3/ });
+  await userEvent.click(within(rowOf("Спикер 3")).getByRole("button", { name: "Назначить…" }));
+  await userEvent.click(screen.getByRole("option", { name: /Это я — Вы/ }));
+  expect(screen.getByText("Будет изменено: Спикер 3 → Вы")).toBeInTheDocument();
+  const mine = within(rowOf("Спикер 3")).getByRole("checkbox", { name: /Запомнить мой голос/ });
+  expect(mine).toBeChecked();
+  expect(within(rowOf("Спикер 3")).queryByRole("checkbox", { name: /Запомнить голос$/ })).toBeNull();
+  expect(within(rowOf("Спикер 3")).getAllByRole("checkbox")).toHaveLength(1);
+  await userEvent.click(screen.getByRole("button", { name: "Применить" }));
+  expect(api.applySpeakers).toHaveBeenCalledWith(ep, "r1", [{ type: "rename", label: "Спикер 3", to: "Вы" }], {}, true);
+  expect(await screen.findByRole("status")).toHaveTextContent("ваш голос запомнен");
+});
+
+test("«Запомнить мой голос» можно снять", async () => {
+  vi.mocked(api.getSpeakers).mockResolvedValue(view({ owner_voice: true }));
+  vi.mocked(api.applySpeakers).mockResolvedValue(view({ owner_voice: true }));
+  setup();
+  await screen.findByRole("region", { name: /^Спикер 3/ });
+  await userEvent.click(within(rowOf("Спикер 3")).getByRole("button", { name: "Назначить…" }));
+  await userEvent.click(screen.getByRole("option", { name: /Это я — Вы/ }));
+  await userEvent.click(within(rowOf("Спикер 3")).getByRole("checkbox", { name: /Запомнить мой голос/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Применить" }));
+  expect(api.applySpeakers).toHaveBeenCalledWith(ep, "r1", [{ type: "rename", label: "Спикер 3", to: "Вы" }], {}, false);
+});
+
+test("без отпечатка вашего голоса у встречи флажка «Запомнить мой голос» нет", async () => {
+  vi.mocked(api.applySpeakers).mockResolvedValue(view());
+  setup();
+  await screen.findByRole("region", { name: /^Спикер 3/ });
+  await userEvent.click(within(rowOf("Спикер 3")).getByRole("button", { name: "Назначить…" }));
+  await userEvent.click(screen.getByRole("option", { name: /Это я — Вы/ }));
+  expect(within(rowOf("Спикер 3")).queryByRole("checkbox")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Применить" }));
+  expect(api.applySpeakers).toHaveBeenCalledWith(ep, "r1", [{ type: "rename", label: "Спикер 3", to: "Вы" }], {}, false);
 });

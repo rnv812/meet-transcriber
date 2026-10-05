@@ -11,7 +11,7 @@
 import { inTauri, invoke } from "./shell";
 import type {
   AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, Person, PersonCard, ProfilesRemovedNotice,
-  Category, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
+  Category, OwnerVoiceStatus, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript,
 } from "./types";
@@ -152,9 +152,14 @@ export const transcribe = (ep: Endpoint, id: string) =>
 
 export const getSpeakers = (ep: Endpoint, id: string) =>
   json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers`);
-/** Набор правок одним шагом истории; `remember` — запомнить голос строки в базе. */
-export const applySpeakers = (ep: Endpoint, id: string, ops: SpeakerOpInput[], remember: Record<string, boolean>) =>
-  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/apply`, body("POST", { ops, remember }));
+/**
+ * Набор правок одним шагом истории; `remember` — запомнить голос строки в базе,
+ * `rememberOwner` — «Запомнить мой голос»: ваш голос из этой встречи — образцом владельца.
+ */
+export const applySpeakers = (ep: Endpoint, id: string, ops: SpeakerOpInput[], remember: Record<string, boolean>,
+  rememberOwner = false) =>
+  json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/apply`,
+    body("POST", rememberOwner ? { ops, remember, remember_owner: true } : { ops, remember }));
 /**
  * Реплики (номера сегментов) — другому спикеру одним шагом истории. `labels` и
  * `count` — как их видит окно: расшифровка изменилась — 409, а не правка не тех реплик.
@@ -342,6 +347,16 @@ export const getDevices = (ep: Endpoint) => json<Devices>(ep, "/devices");
 export const testDevice = (ep: Endpoint, kind: DeviceKind, name: string | null) =>
   json<DeviceCheck>(ep, "/devices/test", body("POST", { kind, name }));
 export const getProcesses = (ep: Endpoint) => json<Processes>(ep, "/processes");
+
+// --- образец вашего голоса ------------------------------------------------------
+
+/** Что записано, ход записи и можно ли записать. */
+export const getOwnerVoice = (ep: Endpoint) => json<OwnerVoiceStatus>(ep, "/owner-voice");
+/** Записать ~25 с с микрофона (null — системный) и разобрать; 409 во время записи встречи. */
+export const recordOwnerVoice = (ep: Endpoint, device: string | null) =>
+  json<OwnerVoiceStatus>(ep, "/owner-voice/record", body("POST", { device }));
+export const deleteOwnerVoice = (ep: Endpoint, id: string) =>
+  json<OwnerVoiceStatus>(ep, `/owner-voice/${enc(id)}`, { method: "DELETE" });
 
 
 // --- Hugging Face ---------------------------------------------------------------

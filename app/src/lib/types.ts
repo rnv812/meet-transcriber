@@ -299,6 +299,8 @@ export type SpeakerStep = {
   ops: SpeakerOp[];
   enrolled: { person: string; sample_id: string; label: string; created: boolean }[];
   created_people: string[];
+  /** Шаг запомнил ваш голос («Это я» + «Запомнить мой голос»); нет у старых резидентов. */
+  owner_voice?: boolean;
 };
 /** «Разделить спикера», шаг 1: голоса реплик готовы или считаются задачей. */
 export type SplitStatus = {
@@ -378,6 +380,44 @@ export type SpeakersView = {
   voice_threshold?: number | null;
   /** Общий порог (Настройки → Распознавание). */
   voice_threshold_default?: number;
+  /** У встречи есть отпечаток вашего голоса с микрофона: «Это я» может его запомнить. */
+  owner_voice?: boolean;
+};
+
+/** Образец вашего голоса: только отпечаток (набор чисел), без звука. */
+export type OwnerVoiceSample = {
+  id: string;
+  /** enroll — записан в мастере или настройках, meeting — «Это я» во встрече, auto — найден по встречам. */
+  source: "enroll" | "meeting" | "auto";
+  /** ГГГГ-ММ-ДД. */
+  date: string;
+  seconds: number;
+  device: string | null;
+  recording: string | null;
+  quality: number | null;
+};
+/** Запись образца: ~25 с с микрофона, затем разбор задачей. */
+export type OwnerVoiceTake = {
+  state: "recording" | "analyzing" | "done" | "failed";
+  device: string | null;
+  seconds: number;
+  started_at: number;
+  /** Почему не получилось — словами для человека. */
+  error: string | null;
+  sample_id: string | null;
+  job: string | null;
+};
+export type OwnerVoiceStatus = {
+  samples: OwnerVoiceSample[];
+  take: OwnerVoiceTake | null;
+  /** Можно ли записать: движок, токен Hugging Face и модель разделения на спикеров на месте. */
+  ready: boolean;
+  /** Чего не хватает (если !ready). */
+  reason: string | null;
+  /** Идёт запись встречи — микрофон занят. */
+  recording: boolean;
+  /** Сколько секунд пишется образец. */
+  seconds: number;
 };
 /** «Разделить реплику здесь» (`POST …/speakers/split-turn`): место — символ `char` сегмента `at`. */
 export type SplitTurnRequest = {

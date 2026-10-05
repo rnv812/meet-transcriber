@@ -99,7 +99,9 @@ function opText(op: SpeakerOp): string {
 export function describeStep(step: SpeakerStep): string {
   const text = step.ops.map(opText).join(", ");
   const voices = [...new Set(step.enrolled.map((e) => e.person))];
-  return voices.length ? `${text} · голос запомнен: ${voices.join(", ")}` : text;
+  const parts = [text || null, voices.length ? `голос запомнен: ${voices.join(", ")}` : null,
+    step.owner_voice ? "ваш голос запомнен" : null];
+  return parts.filter(Boolean).join(" · ");
 }
 
 /** Только время для шагов сегодняшнего дня, иначе дата и время. */

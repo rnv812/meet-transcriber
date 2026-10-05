@@ -191,3 +191,21 @@ test("testDevice: POST /devices/test {kind, name}; null — системное",
   await api.testDevice(ep, "output", null);
   expect(f.mock.calls[1]![1]).toMatchObject({ body: JSON.stringify({ kind: "output", name: null }) });
 });
+
+test("образец голоса: состояние, запись с микрофона, удаление; «Запомнить мой голос» в наборе правок", async () => {
+  const f = okFetch();
+  await api.getOwnerVoice(ep);
+  await api.recordOwnerVoice(ep, "USB-микрофон");
+  await api.recordOwnerVoice(ep, null);
+  await api.deleteOwnerVoice(ep, "a/b");
+  await applySpeakers(ep, "r", [{ type: "rename", label: "Спикер 3", to: "Вы" }], {}, true);
+  const calls = f.mock.calls.map(([url, init]) => [url, (init as RequestInit).method ?? "GET", (init as RequestInit).body]);
+  expect(calls).toEqual([
+    ["http://h/owner-voice", "GET", undefined],
+    ["http://h/owner-voice/record", "POST", JSON.stringify({ device: "USB-микрофон" })],
+    ["http://h/owner-voice/record", "POST", JSON.stringify({ device: null })],
+    ["http://h/owner-voice/a%2Fb", "DELETE", undefined],
+    ["http://h/recordings/r/speakers/apply", "POST",
+      JSON.stringify({ ops: [{ type: "rename", label: "Спикер 3", to: "Вы" }], remember: {}, remember_owner: true })],
+  ]);
+});
