@@ -1,5 +1,5 @@
-// Вкладка «Агент» карточки встречи: настоящий интерактивный Claude Code или
-// Codex во встроенном терминале окна (xterm.js).
+// Вкладка «Агент» карточки встречи: настоящий интерактивный Claude Code,
+// Codex или OpenCode во встроенном терминале окна (xterm.js).
 //
 // Терминал — псевдоконсоль (ConPTY на Windows, крейт portable-pty). Процесс
 // агента запускается в папке записи, где резидент перед этим кладёт
@@ -9,8 +9,9 @@
 // IMPORTANT — безопасность:
 // * запускаются только найденные резидентом программы провайдеров
 //   (GET /assistant `available`): claude — только родной claude.exe, codex —
-//   только codex.exe (сценарий .cmd не запускаем: аргументы через cmd.exe
-//   разбираются по его правилам, путь с `%` или `"` превратился бы в команду);
+//   только codex.exe, opencode — только opencode.exe (сценарий .cmd не
+//   запускаем: аргументы через cmd.exe разбираются по его правилам, путь с `%`
+//   или `"` превратился бы в команду);
 // * папка записи — прямой потомок папки записей (после canonicalize);
 // * команды — только из главного окна;
 // * у каждой сессии свой job object с KILL_ON_JOB_CLOSE: «Остановить» гасит
@@ -39,7 +40,7 @@ use crate::{platform, resident, windows};
 const MAIN: &str = "main";
 
 /// Добавка к системному промпту (Claude — `--append-system-prompt`, Codex —
-/// `developer_instructions`).
+/// `developer_instructions`, OpenCode — файл в `instructions` его конфига).
 pub const AGENT_PROMPT: &str = "Ты помогаешь разобрать встречу. В текущей папке \
 transcript.md — расшифровка с именами и таймкодами, summary.md — итоги (если есть), \
 analysis.json — разметка встречи (если есть): типы и важность реплик, главы, наблюдения, \
@@ -110,6 +111,7 @@ const NO_RESIDENT: &str = "Служба записи не отвечает — �
 pub enum Provider {
     Claude,
     Codex,
+    OpenCode,
 }
 
 impl Provider {
@@ -118,6 +120,7 @@ impl Provider {
         match name.trim() {
             "claude-code" | "claude" => Some(Provider::Claude),
             "codex" => Some(Provider::Codex),
+            "opencode" => Some(Provider::OpenCode),
             _ => None,
         }
     }
@@ -127,6 +130,7 @@ impl Provider {
         match self {
             Provider::Claude => "claude-code",
             Provider::Codex => "codex",
+            Provider::OpenCode => "opencode",
         }
     }
 
@@ -134,6 +138,7 @@ impl Provider {
         match self {
             Provider::Claude => "Claude Code",
             Provider::Codex => "Codex",
+            Provider::OpenCode => "OpenCode",
         }
     }
 }
@@ -163,6 +168,12 @@ pub fn check_executable(provider: Provider, path: &str, windows: bool) -> Result
              только программу codex.exe — установите Codex отдельной программой"
                 .into(),
         ),
+        (Provider::OpenCode, Some("cmd" | "bat")) => Err(
+            "OpenCode найден только как сценарий npm (opencode.cmd), а программы \
+             opencode.exe рядом нет. Встроенный терминал запускает только программу — \
+             переустановите OpenCode (npm i -g opencode-ai) или поставьте его через scoop или choco"
+                .into(),
+        ),
         _ => Err(format!(
             "{} найден не как программа .exe — встроенный терминал его не запускает",
             provider.title()
@@ -180,15 +191,20 @@ pub fn check_executable(provider: Provider, path: &str, windows: bool) -> Result
 /// только в своё хранилище (его не читаем) — у него «Продолжить» — `codex
 /// resume --last`: отбор по рабочей папке и только интерактивные сеансы;
 /// фоновые вызовы Codex — `exec --ephemeral` и в этот отбор не попадают.
+/// OpenCode тоже не принимает id нового сеанса (`--session` — только
+/// продолжить существующий): «Продолжить» — `--continue`, последний сеанс в
+/// папке встречи (TUI отбирает сеансы по папке; фоновые вызовы работают в
+/// служебной папке и свои сеансы удаляют).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentSession {
-    /// Новый сеанс без нашего id (Codex; свой `--session-id` в параметрах).
+    /// Новый сеанс без нашего id (Codex, OpenCode; свой `--session-id` в параметрах).
     Fresh,
     /// Новый сеанс Claude с этим id.
     New(String),
     /// Продолжить сеанс Claude с этим id.
     Resume(String),
-    /// Продолжить последний: Claude `--continue`, Codex `resume --last`.
+    /// Продолжить последний: Claude `--continue`, Codex `resume --last`,
+    /// OpenCode `--continue`.
     ResumeLast,
 }
 
@@ -197,8 +213,12 @@ pub enum AgentSession {
 /// папку доступной на запись, поэтому базу знаний ему только называем
 /// (читать файлы вне рабочей папки песочница Codex и так разрешает).
 ///
-/// `session` — какой сеанс (см. `AgentSession`). Сверено с `claude --help` и
-/// `codex resume --help` (2.1.287, 0.159.0).
+/// OpenCode: папка встречи — рабочая папка процесса (она же его проект),
+/// подсказка о встрече и база знаний — в окружении (`opencode_config`), здесь
+/// только «Продолжить» (`--continue`).
+///
+/// `session` — какой сеанс (см. `AgentSession`). Сверено с `claude --help`,
+/// `codex resume --help` (2.1.287, 0.159.0) и opencode.ai/docs/cli.
 ///
 /// `--add-dir` у Claude принимает несколько папок подряд, поэтому он идёт
 /// раньше `--append-system-prompt`: следующий за ним аргумент не станет
@@ -242,6 +262,91 @@ pub fn agent_args(
                 format!("developer_instructions={}", toml_string(&prompt)),
             ]);
             args
+        }
+        Provider::OpenCode => {
+            if resume {
+                vec!["--continue".to_string()]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+}
+
+/// Текст подсказки о встрече для OpenCode (файл из `instructions` его
+/// конфига): тот же, что у других агентов, и папка базы знаний.
+pub fn opencode_prompt(knowledge: Option<&str>) -> String {
+    let mut prompt = AGENT_PROMPT.to_string();
+    if let Some(dir) = knowledge.map(str::trim).filter(|k| !k.is_empty()) {
+        prompt.push_str(&format!(" Папка базы знаний: {dir}"));
+    }
+    prompt.push('\n');
+    prompt
+}
+
+/// Шаблон пути базы знаний для правила `edit` OpenCode: правка сверяет путь
+/// относительно корня проекта (`../../Docs/KB/a.md`, у папки вне git — от
+/// корня диска), поэтому — хвост пути без диска и корня: `*Docs/KB/*`. Корень
+/// диска целиком — None (такое правило запретило бы правку везде).
+fn edit_pattern(dir: &str) -> Option<String> {
+    let path = dir.trim().replace('\\', "/");
+    let bytes = path.as_bytes();
+    let no_drive = if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        &path[2..]
+    } else {
+        &path[..]
+    };
+    let tail = no_drive.trim_matches('/');
+    (!tail.is_empty()).then(|| format!("*{tail}/*"))
+}
+
+/// Конфиг OpenCode поверх конфига человека (`OPENCODE_CONFIG_CONTENT`):
+/// файл с подсказкой о встрече — в `instructions` (OpenCode добавляет их к
+/// своим, а не заменяет), база знаний — читать без вопроса
+/// (`external_directory`) и не править (`edit`: deny) у агентов `build` и
+/// `plan`. Правила агента OpenCode ставит после общих правил человека, а
+/// побеждает последнее подходящее — остальные его правила не меняются.
+/// Сверено с opencode.ai/docs (config, permissions, agents, rules) и
+/// исходниками (agent/agent.ts, session/instruction.ts, 2026-10).
+pub fn opencode_config(instructions: Option<&Path>, knowledge: Option<&str>) -> String {
+    let mut config = serde_json::Map::new();
+    if let Some(file) = instructions {
+        config.insert(
+            "instructions".into(),
+            serde_json::json!([file.to_string_lossy()]),
+        );
+    }
+    if let Some(dir) = knowledge.map(str::trim).filter(|k| !k.is_empty()) {
+        let mut permission = serde_json::Map::new();
+        let read = Path::new(dir).join("*").to_string_lossy().into_owned();
+        permission.insert(
+            "external_directory".into(),
+            serde_json::json!({ read: "allow" }),
+        );
+        if let Some(edit) = edit_pattern(dir) {
+            permission.insert("edit".into(), serde_json::json!({ edit: "deny" }));
+        }
+        let agent = serde_json::json!({ "permission": permission });
+        config.insert(
+            "agent".into(),
+            serde_json::json!({ "build": agent.clone(), "plan": agent }),
+        );
+    }
+    Value::Object(config).to_string()
+}
+
+/// Файл подсказки о встрече для OpenCode — во временной папке системы (в нём
+/// нет ничего о самой встрече: общий текст и путь базы знаний).
+fn write_opencode_prompt(knowledge: Option<&str>) -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join("meet-agent");
+    let file = dir.join("opencode-instructions.md");
+    let written = std::fs::create_dir_all(&dir)
+        .and_then(|_| std::fs::write(&file, opencode_prompt(knowledge)));
+    match written {
+        Ok(()) => Some(file),
+        Err(e) => {
+            shell_log!("агент: подсказка для OpenCode не записана: {e}");
+            None
         }
     }
 }
@@ -383,7 +488,7 @@ pub fn planned_session(
         (Provider::Claude, _) if user_has(user, &CLAUDE_SESSION_FLAGS) => AgentSession::Fresh,
         (Provider::Claude, false) => AgentSession::New(new_id()),
         (_, true) => AgentSession::ResumeLast,
-        (Provider::Codex, false) => AgentSession::Fresh,
+        (Provider::Codex | Provider::OpenCode, false) => AgentSession::Fresh,
     }
 }
 
@@ -406,6 +511,10 @@ pub fn resolved_session(
 /// (`--session-id`, `--resume`, `--continue`) не передаётся.
 pub const CLAUDE_SESSION_FLAGS: [&str; 5] = ["--continue", "-c", "--resume", "-r", "--session-id"];
 
+/// Свои параметры, которые сами выбирают сеанс OpenCode: с ними наш
+/// `--continue` не передаётся.
+pub const OPENCODE_SESSION_FLAGS: [&str; 4] = ["--continue", "-c", "--session", "-s"];
+
 /// Убрать из `args` флаг `name` вместе с его значением (если `valued`).
 fn drop_flag(args: &mut Vec<String>, name: &str, valued: bool) {
     if let Some(at) = args.iter().position(|a| a == name) {
@@ -419,7 +528,8 @@ fn drop_flag(args: &mut Vec<String>, name: &str, valued: bool) {
 /// дубликат убирается, если повтор был бы ошибкой или лишним: Claude —
 /// наш выбор сеанса, когда человек сам задал `--continue`/`-c`/`--resume`/
 /// `-r`/`--session-id`; Codex — `--last` (при «Продолжить») и `--cd`, когда
-/// они есть у человека. Папка запуска, подсказка о встрече и `resume` Codex
+/// они есть у человека; OpenCode — наш `--continue`, когда человек сам задал
+/// `--continue`/`-c`/`--session`/`-s`. Папка запуска, подсказка о встрече и `resume` Codex
 /// остаются.
 pub fn with_user_args(provider: Provider, ours: Vec<String>, user: &[String]) -> Vec<String> {
     let mut args = ours;
@@ -437,6 +547,11 @@ pub fn with_user_args(provider: Provider, ours: Vec<String>, user: &[String]) ->
             }
             if user_has(user, &["--cd", "-C"]) {
                 drop_flag(&mut args, "--cd", true);
+            }
+        }
+        Provider::OpenCode => {
+            if user_has(user, &OPENCODE_SESSION_FLAGS) {
+                drop_flag(&mut args, "--continue", false);
             }
         }
     }
@@ -1092,6 +1207,14 @@ fn prepare(
                 env.set.push(("PATH".into(), path));
             }
         }
+    }
+    // OpenCode: подсказка о встрече и база знаний — через его конфиг в окружении.
+    // Своя переменная OPENCODE_CONFIG_CONTENT человека (параметры запуска) —
+    // позже и заменит нашу.
+    if provider == Provider::OpenCode {
+        let prompt = write_opencode_prompt(knowledge.as_deref());
+        let config = opencode_config(prompt.as_deref(), knowledge.as_deref());
+        env.set.push(("OPENCODE_CONFIG_CONTENT".into(), config));
     }
     // Свои переменные — последними: они перекрывают и очистку меток, и наши.
     env.set.extend(launch.env);
@@ -2014,5 +2137,119 @@ mod tests {
         );
         assert_eq!(get("CLAUDE_EFFORT").as_deref(), Some("high"));
         assert_eq!(get("TERM").as_deref(), Some("xterm"));
+    }
+
+    // --- OpenCode ----------------------------------------------------------------
+
+    #[test]
+    fn opencode_is_a_provider_and_runs_only_as_a_program_on_windows() {
+        assert_eq!(Provider::parse("opencode"), Some(Provider::OpenCode));
+        assert_eq!(Provider::OpenCode.key(), "opencode");
+        assert!(check_executable(Provider::OpenCode, r"C:\oc\opencode.exe", true).is_ok());
+        let shim = check_executable(Provider::OpenCode, r"C:\npm\opencode.cmd", true).unwrap_err();
+        assert!(
+            shim.contains("opencode.cmd") && shim.contains("opencode.exe"),
+            "{shim}"
+        );
+        assert!(check_executable(Provider::OpenCode, "", true).is_err());
+        assert!(check_executable(Provider::OpenCode, "/usr/local/bin/opencode", false).is_ok());
+    }
+
+    /// Новый сеанс — без аргументов (папка встречи — рабочая папка процесса),
+    /// «Продолжить прошлую» — `--continue`; свой выбор сеанса — нашего нет.
+    #[test]
+    fn opencode_new_and_resumed_sessions() {
+        let none: Vec<String> = Vec::new();
+        let new = planned_session(Provider::OpenCode, false, &none, || unreachable!());
+        assert_eq!(new, AgentSession::Fresh);
+        assert!(agent_args(Provider::OpenCode, r"D:\rec\r1", Some(r"D:\kb"), &new).is_empty());
+        let resume = planned_session(Provider::OpenCode, true, &none, || unreachable!());
+        let resume = resolved_session(resume, Provider::OpenCode, Some(SID));
+        assert_eq!(resume, AgentSession::ResumeLast);
+        let ours = agent_args(Provider::OpenCode, r"D:\rec\r1", None, &resume);
+        assert_eq!(ours, ["--continue"]);
+        for user in [&["-s", "ses_1"][..], &["--session=ses_1"][..], &["-c"][..]] {
+            let args = with_user_args(Provider::OpenCode, ours.clone(), &strings(user));
+            assert_eq!(args, strings(user), "{user:?}");
+        }
+        let args = with_user_args(Provider::OpenCode, ours, &strings(&["-m", "openai/gpt-5"]));
+        assert_eq!(args, ["--continue", "-m", "openai/gpt-5"]);
+    }
+
+    #[test]
+    fn opencode_prompt_names_the_knowledge_dir() {
+        let prompt = opencode_prompt(Some(r"D:\kb"));
+        assert!(prompt.starts_with(AGENT_PROMPT));
+        assert!(prompt.trim_end().ends_with(r"Папка базы знаний: D:\kb"));
+        assert_eq!(opencode_prompt(Some("  ")).trim_end(), AGENT_PROMPT);
+    }
+
+    #[test]
+    fn opencode_config_reads_the_knowledge_dir_and_never_edits_it() {
+        let file = Path::new(r"C:\Temp\meet-agent\opencode-instructions.md");
+        let config: Value =
+            serde_json::from_str(&opencode_config(Some(file), Some(r"D:\Docs\KB"))).unwrap();
+        assert_eq!(
+            config["instructions"],
+            serde_json::json!([file.to_string_lossy()])
+        );
+        for agent in ["build", "plan"] {
+            let permission = &config["agent"][agent]["permission"];
+            let read = Path::new(r"D:\Docs\KB")
+                .join("*")
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(permission["external_directory"][&read], "allow");
+            assert_eq!(permission["edit"]["*Docs/KB/*"], "deny");
+            // Ничего, кроме базы знаний: остальные права — как у человека.
+            assert_eq!(permission.as_object().unwrap().len(), 2);
+            assert_eq!(permission["edit"].as_object().unwrap().len(), 1);
+        }
+        // Без базы знаний и без файла подсказки — пустой конфиг.
+        assert_eq!(opencode_config(None, None), "{}");
+        let config: Value = serde_json::from_str(&opencode_config(Some(file), None)).unwrap();
+        assert!(config.get("agent").is_none());
+    }
+
+    #[test]
+    fn opencode_edit_pattern_is_the_path_tail() {
+        assert_eq!(edit_pattern(r"D:\Docs\KB\").as_deref(), Some("*Docs/KB/*"));
+        assert_eq!(
+            edit_pattern("/Users/u/KB").as_deref(),
+            Some("*Users/u/KB/*")
+        );
+        assert_eq!(
+            edit_pattern(r"\\server\share\kb").as_deref(),
+            Some("*server/share/kb/*")
+        );
+        // Корень диска — правило запретило бы правку везде.
+        assert_eq!(edit_pattern(r"D:\"), None);
+        assert_eq!(edit_pattern("/"), None);
+    }
+
+    #[test]
+    fn opencode_launch_comes_from_its_own_section() {
+        let settings = serde_json::json!({ "agent": { "launch": {
+            "opencode": { "args": "-m openai/gpt-5", "env": [{ "key": "OPENCODE_CONFIG", "value": "D:/oc.json" }] }
+        } } });
+        let launch = launch_from_settings(&settings, Provider::OpenCode).unwrap();
+        assert_eq!(launch.args, ["-m", "openai/gpt-5"]);
+        assert_eq!(
+            launch.env,
+            [("OPENCODE_CONFIG".to_string(), "D:/oc.json".to_string())]
+        );
+    }
+
+    #[test]
+    fn opencode_env_drops_session_markers_and_keeps_the_api_keys() {
+        let plan = agent_env(
+            Provider::OpenCode,
+            &ProxyMode::System,
+            &env_of(&[("ANTHROPIC_API_KEY", "sk-test")]),
+            &wininet(None),
+        );
+        // У OpenCode ключ провайдера — законный способ входа: не убираем.
+        assert_eq!(plan.remove, SESSION_MARKERS);
+        assert_eq!(plan.get("TERM"), Some("xterm-256color"));
     }
 }

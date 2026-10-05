@@ -263,6 +263,7 @@ const URL_PREFIXES: &[&str] = &[
     "https://huggingface.co/",
     "https://claude.ai/",
     "https://github.com/openai/codex/",
+    "https://opencode.ai/",
     "https://github.com/rnv812/ai_transcriber/releases/",
     "https://github.com/rnv812/meet-transcriber/releases/",
 ];
@@ -679,6 +680,7 @@ mod tests {
             "https://claude.ai/code",
             "https://github.com/openai/codex",
             "https://github.com/openai/codex/releases",
+            "https://opencode.ai/docs/",
             "https://github.com/rnv812/ai_transcriber/releases",
             "https://github.com/rnv812/ai_transcriber/releases/tag/v0.1.0",
             "https://github.com/rnv812/meet-transcriber/releases",
@@ -695,6 +697,8 @@ mod tests {
             "https://github.com/openai/codexx",
             "https://github.com/openai/other",
             "https://github.com/evil/codex",
+            "https://opencode.ai.evil.example/docs/",
+            "http://opencode.ai/docs/",
             // Только Releases форка: не сам репозиторий и не чужой форк.
             "https://github.com/rnv812/ai_transcriber",
             "https://github.com/rnv812/ai_transcriber/issues",

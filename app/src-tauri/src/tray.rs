@@ -3033,7 +3033,7 @@ mod tests {
         assert_eq!(Action::LiveDetach.failure_title(), LIVE_DETACH_FAILED);
         let no_provider: api::Result<Value> = Err(api::Error::Status {
             code: 409,
-            message: "Подключите Claude Code или Codex в настройках".into(),
+            message: "Подключите Claude Code, Codex или OpenCode в настройках".into(),
         });
         assert!(needs_provider(Action::LiveAttach, Some(&no_provider)));
         assert!(!needs_provider(Action::LiveDetach, Some(&no_provider)));
@@ -3380,13 +3380,13 @@ mod tests {
     fn live_start_without_provider_points_to_settings() {
         let conflict: api::Result<Value> = Err(api::Error::Status {
             code: 409,
-            message: "Подключите Claude Code или Codex в настройках".into(),
+            message: "Подключите Claude Code, Codex или OpenCode в настройках".into(),
         });
         assert_eq!(
             body_of(Action::LiveStart, Some(&conflict)),
             (
                 "Не удалось запустить ассистента".into(),
-                "Подключите Claude Code или Codex в настройках".into()
+                "Подключите Claude Code, Codex или OpenCode в настройках".into()
             )
         );
         assert!(needs_provider(Action::LiveStart, Some(&conflict)));
