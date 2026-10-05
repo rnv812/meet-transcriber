@@ -721,6 +721,12 @@ class Asr:
     # Правила замены распознанного для новых расшифровок: ({"from", "to"}, …),
     # «Исправлять так же в будущих встречах» в «Исправить…» (meet.replacements).
     replacements: tuple[dict, ...] = ()
+    # Микрофон записи звонка: «Разделять микрофон на спикеров» — голоса людей
+    # в комнате отделяются от владельца по его образцу (meet.mic_split);
+    # «Убирать дубли соседа и эхо» — реплики, попавшие и в микрофон, и в звук
+    # собеседников (meet.mic_dedupe), остаются один раз.
+    mic_speakers: bool = True
+    mic_dedupe: bool = True
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Asr":
@@ -741,6 +747,8 @@ class Asr:
             align_after_gigaam=as_flag(raw.get("align_after_gigaam"), False),
             voice_threshold=as_ratio(raw.get("voice_threshold"), VOICE_THRESHOLD, *VOICE_THRESHOLD_RANGE),
             replacements=tuple(clean_rules(raw.get("replacements"))),
+            mic_speakers=as_flag(raw.get("mic_speakers"), True),
+            mic_dedupe=as_flag(raw.get("mic_dedupe"), True),
         )
 
     def backend_for(self, device: str) -> str:
@@ -761,6 +769,8 @@ class Asr:
             "align_after_gigaam": self.align_after_gigaam,
             "voice_threshold": self.voice_threshold,
             "replacements": [dict(r) for r in self.replacements],
+            "mic_speakers": self.mic_speakers,
+            "mic_dedupe": self.mic_dedupe,
         }
 
 

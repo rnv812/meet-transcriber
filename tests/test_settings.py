@@ -321,6 +321,23 @@ def test_voice_threshold_default_matches_calibration_and_is_clamped(tmp_path):
     assert settings.load(f).asr.voice_threshold == 0.7
 
 
+def test_mic_speakers_and_dedupe_flags_default_on_and_roundtrip(tmp_path):
+    """«Разделять микрофон на спикеров» и «Убирать дубли соседа и эхо»: по
+    умолчанию включены (и у обновившегося пользователя без этих ключей),
+    строковое "false" из правленного руками конфига — выключено, patch меняет
+    один флаг."""
+    cfg = settings.Settings.from_raw({"version": settings.SCHEMA_VERSION})
+    assert cfg.asr.mic_speakers is True and cfg.asr.mic_dedupe is True
+    raw = cfg.to_raw()["asr"]
+    assert raw["mic_speakers"] is True and raw["mic_dedupe"] is True
+    off = settings.Settings.from_raw({"asr": {"mic_speakers": "false", "mic_dedupe": None}}).asr
+    assert off.mic_speakers is False and off.mic_dedupe is True
+    f = tmp_path / "config.json"
+    assert settings.patch({"asr": {"mic_dedupe": False}}, f).asr.mic_dedupe is False
+    again = settings.load(f).asr
+    assert again.mic_dedupe is False and again.mic_speakers is True
+
+
 def test_auto_transcribe_default_for_new_user():
     assert settings.Settings.from_raw({}).recording.auto_transcribe is True
 
