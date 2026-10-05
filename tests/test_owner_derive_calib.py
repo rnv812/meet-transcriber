@@ -54,7 +54,10 @@ def test_calibrate_reads_copies_and_deletes_them(tmp_path, monkeypatch):
     calib = _calib()
     from meet import credentials
 
+    from meet import segvoices
+
     monkeypatch.setattr(credentials, "get_hf_token", lambda: "секрет")
+    monkeypatch.setattr(segvoices, "owners", segvoices.owners)  # --calibrate подменяет — вернуть
     monkeypatch.delenv("MEET_DATA_DIR", raising=False)
     monkeypatch.setenv("HF_HUB_OFFLINE", "0")
     lib = Library(tmp_path / "source")
@@ -83,3 +86,25 @@ def test_calibrate_reads_copies_and_deletes_them(tmp_path, monkeypatch):
 def test_calibrate_mode_is_required():
     with pytest.raises(SystemExit):
         _calib().main([])
+
+
+def test_calibrate_without_owner_uses_app_names_per_meeting(tmp_path, monkeypatch):
+    calib = _calib()
+    from meet import credentials, segvoices
+
+    monkeypatch.setattr(credentials, "get_hf_token", credentials.get_hf_token)
+    monkeypatch.setattr(segvoices, "owners", segvoices.owners)
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    lib = Library(tmp_path / "source")
+    _five_and_one(lib)
+    monkeypatch.setattr(calib, "app_setup", lambda: (lib.root, {"Вы", "Кузьма"}))
+    seen = {}
+
+    def fake_run(root, folders, labels, args, **kw):
+        seen.update(labels=labels, owners=segvoices.owners())
+        return 0
+
+    monkeypatch.setattr(calib, "run", fake_run)
+    assert calib.main(["--calibrate"]) == 0
+    assert seen == {"labels": None, "owners": {"Вы", "Кузьма"}}

@@ -22,7 +22,8 @@
 Печатает только числа (встречи обезличены: «встреча 3»): размеры кластеров
 по встречам, распределение попарного косинуса голосов встреч и решение при
 каждой паре CLUSTER_STOP × GROUP_COS. Подписи владельца — из настроек
-приложения (читаются до подмены папки данных) или `--owner`."""
+приложения (читаются до подмены папки данных) с переименованиями каждой
+встречи, или `--owner` — одни на все встречи."""
 
 from __future__ import annotations
 
@@ -105,7 +106,7 @@ def _pct(values: list[float]) -> dict:
     return out
 
 
-def sweep(folders: list[Path], *, embed, decode, labels: set[str], vad=None) -> dict:
+def sweep(folders: list[Path], *, embed, decode, labels: set[str] | None, vad=None) -> dict:
     """Голоса участков по встречам — один раз; затем остановки и пороги."""
     per = [(f.name, owner_derive.meeting_runs(f, embed=embed, decode=decode, owner_labels=labels, vad=vad))
            for f in folders]
@@ -132,7 +133,8 @@ def sweep(folders: list[Path], *, embed, decode, labels: set[str], vad=None) -> 
             "current": {"stop": owner_derive.CLUSTER_STOP, "group_cos": owner_derive.GROUP_COS}}
 
 
-def run(root: Path, folders: list[Path], labels: set[str], args, *, embed=None, decode=None, vad=None) -> int:
+def run(root: Path, folders: list[Path], labels: set[str] | None, args, *, embed=None, decode=None,
+        vad=None) -> int:
     """Поиск на копиях (`root` — их папка записей) и перебор. Печатает числа."""
     if embed is None:
         from meet import owner_enroll
@@ -179,10 +181,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.calibrate:
         parser.error("нужен режим --calibrate")
-    source, labels = (args.recordings, set()) if args.recordings else app_setup()
-    if args.owner:
-        labels = set(args.owner)
-    labels = labels or {"Вы"}
+    source, names = (args.recordings, set()) if args.recordings else app_setup()
+    names = names or {"Вы"}
+    # `--owner` — эти подписи во всех встречах; иначе подписи каждой встречи
+    # (owner_derive.meeting_labels) от имён владельца из настроек приложения.
+    labels = set(args.owner) if args.owner else None
     folders = owner_derive.candidates(Path(source), args.max)  # только чтение
     tmp = Path(tempfile.mkdtemp(prefix="owner-derive-calib-"))
     code = 1
@@ -194,6 +197,10 @@ def main(argv: list[str] | None = None) -> int:
         from meet import credentials
 
         credentials.get_hf_token = lambda: None  # токен из диспетчера не нужен и не читается
+        from meet import segvoices
+
+        # Имена владельца прочитаны до подмены папки данных — дальше их не перечитать.
+        segvoices.owners = lambda: set(names)
         root = tmp / "recordings"
         copies = [copy_meeting(f, root) for f in folders]
         code = run(root, copies, labels, args)

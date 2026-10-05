@@ -492,3 +492,53 @@ def test_voice_unlike_saved_sample_is_flagged(lib, voices_dir):
     assert got.status == "suggested" and got.suggestion["conflict"] is True
     owner_voice.remove(owner_voice.load(voices_dir)[0].id, voices_dir)
     assert _find(lib, voices_dir).suggestion["conflict"] is False
+
+
+# --- подписи владельца по встрече (segvoices.owner_labels) --------------------------
+
+
+def _rename(folder, names, sidecar):
+    data = json.loads((folder / "transcript.json").read_text(encoding="utf-8"))
+    data["names"] = names
+    (folder / "transcript.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    (folder / f"{folder.name}_speakers.json").write_text(json.dumps(
+        {"model": "m", "speakers": sidecar}, ensure_ascii=False), encoding="utf-8")
+
+
+def _owner_entry(**extra):
+    # Вектор сайдкара — чужой голос: поиск его не читает никогда.
+    return {"label": "OWNER", "display": "Вы", "embedding": [float(x) for x in VOICES[OTHER]],
+            "track": "mic", "owner": True, **extra}
+
+
+def test_owner_renamed_in_the_meeting_is_still_the_owner(lib, monkeypatch):
+    monkeypatch.setattr(segvoices, "owners", lambda: {"Вы"})
+    folder = lib.meeting("2026-09-01_10-00", [OWNER] * 20, speaker="Кузьма")
+    _rename(folder, {"Вы": "Кузьма"}, [_owner_entry()])
+    voice = owner_derive.meeting_voice(folder, embed=FakeEmbed(), decode=lib.decode, owner_labels=None)
+    assert voice.usable and voice.seconds == pytest.approx(80.0)
+    assert float(voice.centroid @ VOICES[OWNER]) > 0.95  # голос — из звука, не из сайдкара
+
+
+def test_rename_of_an_unconfirmed_owner_candidate_is_not_evidence(lib, monkeypatch):
+    """Кандидат (образец владельца не узнал) переименован в другого человека —
+    его реплики не становятся речью владельца."""
+    monkeypatch.setattr(segvoices, "owners", lambda: {"Вы"})
+    folder = lib.meeting("2026-09-01_10-00", [OWNER] * 20, speaker="Демьян")
+    _rename(folder, {"Вы": "Демьян"}, [_owner_entry(candidate=True)])
+    voice = owner_derive.meeting_voice(folder, embed=FakeEmbed(), decode=lib.decode, owner_labels=None)
+    assert voice.runs == [] and not voice.usable
+    # Те же реплики под подписью владельца — как у встречи без образца.
+    folder2 = lib.meeting("2026-09-02_10-00", [OWNER] * 20)
+    _rename(folder2, {}, [_owner_entry(candidate=True)])
+    assert owner_derive.meeting_voice(folder2, embed=FakeEmbed(), decode=lib.decode, owner_labels=None).usable
+
+
+def test_find_uses_labels_of_each_meeting(lib, voices_dir, monkeypatch):
+    monkeypatch.setattr(segvoices, "owners", lambda: {"Вы"})
+    for day in range(1, 4):
+        folder = lib.meeting(f"2026-09-0{day}_10-00", [OWNER] * 20, speaker="Кузьма" if day == 2 else "Вы")
+        if day == 2:
+            _rename(folder, {"Вы": "Кузьма"}, [_owner_entry()])
+    got = owner_derive.find(lib.root, voices_dir, embed=FakeEmbed(), decode=lib.decode, threshold=0.75)
+    assert got.status == "suggested" and got.found == 3

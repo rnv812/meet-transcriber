@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -360,12 +361,42 @@ def _centroid(runs: list[Run]) -> np.ndarray | None:
     return _unit((np.stack([r.emb for r in use]) * np.array([r.seconds for r in use])[:, None]).sum(0))
 
 
-def meeting_runs(folder: Path, *, embed, decode, owner_labels: set[str], vad=None) -> list[Run]:
+def _candidate_only(folder: Path) -> bool:
+    """Голос владельца в сайдкаре встречи — только кандидат (`candidate: true`:
+    образец его не узнал, mic_split owner_not_found), не проверенный."""
+    for path in sorted(Path(folder).glob("*_speakers.json"), reverse=True):
+        try:
+            side = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        entries = side.get("speakers") if isinstance(side, dict) else None
+        if not isinstance(entries, list):
+            continue
+        owners = [e for e in entries if isinstance(e, dict) and e.get("owner")]
+        return bool(owners) and all(e.get("candidate") is True for e in owners)
+    return False
+
+
+def meeting_labels(folder: Path, data: dict) -> set[str]:
+    """Подписи владельца в этой встрече (`segvoices.owner_labels`: имена из
+    настроек, голос OWNER сайдкара и переименования встречи). Если голос
+    владельца — только непроверенный кандидат, переименования встречи не в
+    счёт: «Вы», переименованный в другого человека, — его реплики, не ваши.
+    Векторы сайдкара не читаются никогда: голос встречи — только из звука."""
+    if _candidate_only(folder):
+        return set(segvoices.owners())
+    return segvoices.owner_labels(folder, data)
+
+
+def meeting_runs(folder: Path, *, embed, decode, owner_labels: set[str] | None, vad=None) -> list[Run]:
     """Участки речи владельца встречи с голосами (собеседники молчат, речь
-    не больше MAX_SPEECH_S); участки без голоса отброшены."""
+    не больше MAX_SPEECH_S); участки без голоса отброшены. `owner_labels` —
+    None: подписи владельца по самой встрече (meeting_labels)."""
     folder = Path(folder)
     data = library.read_transcript_full(folder) or {}
     data = {**data, "segments": [dict(s) for s in data.get("segments") or [] if isinstance(s, dict)]}
+    if owner_labels is None:
+        owner_labels = meeting_labels(folder, data)
     segvoices.mark_tracks(folder, data, owner_labels)  # старые записи: дорожка по звуку или подписи
     loaded: dict[str, np.ndarray] = {}
 
@@ -400,7 +431,7 @@ def summarize(name: str, runs: list[Run], stop: float = CLUSTER_STOP) -> Meeting
     return out
 
 
-def meeting_voice(folder: Path, *, embed, decode, owner_labels: set[str], vad=None) -> MeetingVoice:
+def meeting_voice(folder: Path, *, embed, decode, owner_labels: set[str] | None, vad=None) -> MeetingVoice:
     """Голос владельца в одной встрече: доминирующий кластер его участков."""
     runs = meeting_runs(folder, embed=embed, decode=decode, owner_labels=owner_labels, vad=vad)
     return summarize(Path(folder).name, runs)
@@ -506,7 +537,7 @@ def find(root: Path, voices: Path, *, embed=None, vad=None, decode=None, bus=Non
     if checked < GROUP_MIN_MEETINGS:
         return Outcome(TOO_FEW, _too_few(checked, 0), checked=checked,
                        extra={"newest": newest_recording(root)})
-    labels = segvoices.owners() if owner_labels is None else owner_labels
+    labels = owner_labels  # None — свои у каждой встречи (meeting_labels)
     decode = decode or segvoices.decode
     vad = vad or _default_vad
     loaded = {}
