@@ -205,3 +205,38 @@ def test_resident_passes_remember_owner_with_owner_name(make, monkeypatch, tmp_p
     assert [s.source for s in owner_voice.load(base)] == ["meeting"]
     state.speakers_undo(NAME, {})
     assert owner_voice.load(base) == []
+
+
+def test_remember_alone_without_owner_voice_is_refused_not_an_empty_step(make):
+    folder, base = make(owner=False)
+    with pytest.raises(speakers.SpeakerError, match="не запомнен"):
+        speakers.apply(folder, [], {}, base, remember_owner=True, owner="Вы")
+    assert library.read_meta(folder).get(speakers.HISTORY) in (None, [])
+
+
+def test_rollback_restores_owner_file_even_if_its_folder_is_gone(make, monkeypatch):
+    """Откат пишет файл владельца атомарно и заводит папку заново."""
+    import shutil
+
+    folder, base = make()
+    keep = owner_voice.add([1.0, 0.0, 0.0], source="enroll", seconds=20, device="USB", voices=base)
+    raw = owner_voice.path(base).read_bytes()
+    real_add = owner_voice.add
+
+    def add_then_lose_folder(*a, **kw):
+        got = real_add(*a, **kw)
+        shutil.rmtree(owner_voice.path(base).parent)
+        return got
+
+    def broken(*a, **kw):
+        raise OSError("диск полон")
+
+    monkeypatch.setattr(owner_voice, "add", add_then_lose_folder)
+    monkeypatch.setattr(voices, "enroll_sample", broken)
+    with pytest.raises(speakers.VoiceBaseError):
+        speakers.apply(folder, [{"type": "rename", "label": "Спикер 3", "to": "Вы"},
+                                {"type": "rename", "label": "Спикер 1", "to": "Анна"}],
+                       {"Спикер 1": True}, base, remember_owner=True, owner="Вы")
+    assert owner_voice.path(base).read_bytes() == raw
+    assert [s.id for s in owner_voice.load(base)] == [keep.id]
+    assert not list(owner_voice.path(base).parent.glob("*.tmp"))

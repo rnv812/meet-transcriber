@@ -493,18 +493,36 @@ def _voice_snapshot(voices_dir: Path) -> dict[str, bytes]:
     return snap
 
 
+def _owner_restore(own: Path, data: bytes | None) -> None:
+    """Файл владельца — как в снимке: под его замком (его пишет и задача
+    записи образца) и атомарно, как пишет сам owner_voice."""
+    if data is None and not own.exists():
+        return
+    with owner_voice._locked(own):
+        if data is None:
+            own.unlink(missing_ok=True)
+        elif not own.exists() or own.read_bytes() != data:
+            own.parent.mkdir(parents=True, exist_ok=True)
+            tmp = own.with_name(f".{own.name}.{uuid.uuid4().hex}.restore.tmp")
+            try:
+                tmp.write_bytes(data)
+                library._replace(tmp, own)
+            finally:
+                tmp.unlink(missing_ok=True)
+
+
 def _voice_restore(voices_dir: Path, snap: dict[str, bytes]) -> None:
     try:
         for f in voices_dir.glob("*.json"):
             if f.name not in snap:
                 f.unlink(missing_ok=True)
-        own = owner_voice.path(voices_dir)
-        if OWNER_SNAP not in snap:
-            own.unlink(missing_ok=True)
         for name, data in snap.items():
-            f = own if name == OWNER_SNAP else voices_dir / name
+            if name == OWNER_SNAP:
+                continue
+            f = voices_dir / name
             if not f.exists() or f.read_bytes() != data:
                 f.write_bytes(data)
+        _owner_restore(owner_voice.path(voices_dir), snap.get(OWNER_SNAP))
     except OSError:
         pass  # сообщим о первой ошибке; вторая — тот же сбой диска
 
@@ -786,6 +804,8 @@ def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
     if not deltas and not wanted and not remember_owner:
         raise SpeakerError("нечего применять — имена уже такие")
     owner_parts = _owner_parts(segments, shown, clusters, finals, owner) if remember_owner else []
+    if remember_owner and not owner_parts and not deltas and not wanted:
+        raise SpeakerError(NO_OWNER_VOICE)  # шаг, который ничего не делает, — не шаг
 
     names_before = data.get("names") if isinstance(data.get("names"), dict) else None
     names_after = _names_after(data, finals, sidecar)
