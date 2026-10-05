@@ -360,6 +360,12 @@ export const recordOwnerVoice = (ep: Endpoint, device: string | null) =>
   json<OwnerVoiceStatus>(ep, "/owner-voice/record", body("POST", { device }));
 export const deleteOwnerVoice = (ep: Endpoint, id: string) =>
   json<OwnerVoiceStatus>(ep, `/owner-voice/${enc(id)}`, { method: "DELETE" });
+/** «Найти по прошлым встречам»: задача ищет ваш голос; найденное — только предложение. */
+export const deriveOwnerVoice = (ep: Endpoint) =>
+  json<OwnerVoiceStatus>(ep, "/owner-voice/derive", body("POST", {}));
+/** Ответ на найденный голос: `true` — «Да, это я» (станет образцом), `false` — «Нет». */
+export const answerOwnerSuggestion = (ep: Endpoint, accept: boolean) =>
+  json<OwnerVoiceStatus>(ep, "/owner-voice/suggestion", body("POST", { accept }));
 
 
 // --- Hugging Face ---------------------------------------------------------------

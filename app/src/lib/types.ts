@@ -461,6 +461,37 @@ export type OwnerVoiceStatus = {
   recording: boolean;
   /** Сколько секунд пишется образец. */
   seconds: number;
+  /** Голос, найденный по прошлым встречам и ещё не подтверждённый (нет — null). */
+  suggestion?: OwnerVoiceSuggestion | null;
+  /** «Найти по прошлым встречам»: идёт ли поиск и чем кончился последний. */
+  derive?: OwnerVoiceDerive;
+};
+/** Кусок микрофона прошлой встречи — послушать найденный голос. */
+export type OwnerVoiceSampleRef = { recording: string; start: number; end: number; track: "mic" };
+/** Найденный по прошлым встречам голос: образцом станет только после «Да, это я». */
+export type OwnerVoiceSuggestion = {
+  meetings: string[];
+  /** Три куска из разных встреч. */
+  samples: OwnerVoiceSampleRef[];
+  /** Сколько секунд вашей речи нашлось. */
+  seconds: number;
+  quality: number | null;
+  /** ГГГГ-ММ-ДД. */
+  date: string | null;
+};
+export type OwnerVoiceDerive = {
+  running: boolean;
+  /** Задача упала — текст ошибки. */
+  error: string | null;
+  /** Итог последнего поиска; `reason` — почему ничего не предложено. */
+  last: {
+    status: "suggested" | "too_few" | "inconsistent" | "already" | "in_base";
+    reason: string | null;
+    date?: string;
+    checked?: number;
+    used?: number;
+    found?: number;
+  } | null;
 };
 /** «Разделить реплику здесь» (`POST …/speakers/split-turn`): место — символ `char` сегмента `at`. */
 export type SplitTurnRequest = {

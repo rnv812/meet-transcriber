@@ -309,3 +309,6 @@
 .ownv__privacy { font-size: 12px; }
 .ownv__samples { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .ownv__sample { display: inline-flex; align-items: center; gap: 8px; }
+.ownv__found { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 4px 0 8px; }
+.ownv__audio { display: none; }
+.ownv__note { margin: 0 0 8px; font-size: 12px; }

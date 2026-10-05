@@ -1,7 +1,9 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as api from "../../lib/api";
-import type { OwnerVoiceSample, OwnerVoiceStatus, OwnerVoiceTake } from "../../lib/types";
+import type {
+  OwnerVoiceDerive, OwnerVoiceSample, OwnerVoiceStatus, OwnerVoiceSuggestion, OwnerVoiceTake,
+} from "../../lib/types";
 import { StepVoice } from "../wizard/StepVoice";
 import { OwnerVoiceRow, sampleText, shortDate } from "./OwnerVoice";
 
@@ -10,6 +12,8 @@ vi.mock("../../lib/api", async (orig) => ({
   getOwnerVoice: vi.fn(),
   recordOwnerVoice: vi.fn(),
   deleteOwnerVoice: vi.fn(),
+  deriveOwnerVoice: vi.fn(),
+  answerOwnerSuggestion: vi.fn(),
 }));
 
 const ep = { base: "/api", token: null };
@@ -159,4 +163,101 @@ test("запись: сбой опроса посреди разбора — оп
   render(<StepVoice endpoint={ep} onNext={vi.fn()} pollMs={5} />);
   await userEvent.click(await screen.findByRole("button", { name: "Начать запись" }));
   expect(await screen.findByText("Голос записан.")).toBeInTheDocument();
+});
+
+// --- «Найти по прошлым встречам» ------------------------------------------------
+
+const found = (extra: Partial<OwnerVoiceSuggestion> = {}): OwnerVoiceSuggestion => ({
+  meetings: ["2026-10-01_10-00", "2026-10-02_10-00", "2026-10-03_10-00"],
+  samples: [1, 2, 3].map((d) => ({ recording: `2026-10-0${d}_10-00`, start: 12, end: 16.5, track: "mic" as const })),
+  seconds: 412, quality: 0.83, date: "2026-10-06", ...extra,
+});
+const derive = (extra: Partial<OwnerVoiceDerive> = {}): OwnerVoiceDerive => ({
+  running: false, error: null, last: null, ...extra,
+});
+
+test("поиск по встречам: идёт — словами, затем карточка с тремя примерами", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValueOnce(status({ derive: derive() }))
+    .mockResolvedValueOnce(status({ derive: derive({ running: true }) }))
+    .mockResolvedValue(status({ suggestion: found(), derive: derive({ last: { status: "suggested", reason: null } }) }));
+  vi.mocked(api.deriveOwnerVoice).mockResolvedValue(status({ derive: derive({ running: true }) }));
+  render(<OwnerVoiceRow endpoint={ep} device={null} pollMs={5} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Найти по прошлым встречам" }));
+  expect(api.deriveOwnerVoice).toHaveBeenCalledWith(ep);
+  expect(screen.getByText(/Ищу ваш голос в последних встречах/)).toBeInTheDocument();
+  const card = await screen.findByRole("group", { name: "Найденный голос" });
+  expect(card).toHaveTextContent("Похоже, это ваш голос — послушайте:");
+  expect(within(card).getAllByRole("button", { name: /^Послушать пример/ })).toHaveLength(3);
+  expect(within(card).getByRole("button", { name: "Послушать пример 2 — встреча 02.10" })).toBeInTheDocument();
+  expect(within(card).getByRole("button", { name: "Да, это я" })).toBeInTheDocument();
+  expect(within(card).getByRole("button", { name: "Нет" })).toBeInTheDocument();
+  // Ничего не применено: образцов по-прежнему нет.
+  expect(screen.getByText("не записан")).toBeInTheDocument();
+});
+
+test("поиск по встречам: ▶ играет кусок микрофона нужной встречи", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ suggestion: found(), derive: derive() }));
+  const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  const load = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Послушать пример 3 — встреча 03.10" }));
+  const audio = document.querySelector("audio")!;
+  expect(audio.getAttribute("src")).toBe("/api/recordings/2026-10-03_10-00/audio?track=mic#t=12,16.5");
+  expect(play).toHaveBeenCalled();
+  play.mockRestore();
+  load.mockRestore();
+});
+
+test("поиск по встречам: «Да, это я» — образец, карточка исчезает", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ suggestion: found(), derive: derive() }));
+  vi.mocked(api.answerOwnerSuggestion).mockResolvedValue(status({
+    samples: [sample({ id: "a1", source: "auto", date: "2026-10-06", device: null })], derive: derive() }));
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Да, это я" }));
+  expect(api.answerOwnerSuggestion).toHaveBeenCalledWith(ep, true);
+  expect(await screen.findByText("найден по прошлым встречам 06.10")).toBeInTheDocument();
+  expect(screen.queryByRole("group", { name: "Найденный голос" })).toBeNull();
+});
+
+test("поиск по встречам: «Нет» снимает предложение без образца", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ suggestion: found(), derive: derive() }));
+  vi.mocked(api.answerOwnerSuggestion).mockResolvedValue(status({ derive: derive() }));
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Нет" }));
+  expect(api.answerOwnerSuggestion).toHaveBeenCalledWith(ep, false);
+  await waitFor(() => expect(screen.queryByRole("group", { name: "Найденный голос" })).toBeNull());
+  expect(screen.getByText("не записан")).toBeInTheDocument();
+});
+
+test("поиск по встречам: ничего не нашлось — честная причина", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ derive: derive({ last: {
+    status: "too_few", reason: "Подходящих встреч пока 2, а нужно хотя бы 3", date: "2026-10-06" } }) }));
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  expect(await screen.findByText("Поиск 06.10: ничего не найдено. Подходящих встреч пока 2, а нужно хотя бы 3."))
+    .toBeInTheDocument();
+  expect(screen.queryByRole("group", { name: "Найденный голос" })).toBeNull();
+});
+
+test("поиск по встречам: сбой задачи — ошибкой", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ derive: derive({ error: "RuntimeError: сломалось" }) }));
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Поиск не удался: RuntimeError: сломалось");
+});
+
+test("поиск по встречам: во время записи встречи или без модели — недоступен", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ recording: true, derive: derive() }));
+  const { unmount } = render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  expect(await screen.findByRole("button", { name: "Найти по прошлым встречам" })).toBeDisabled();
+  unmount();
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ ready: false, reason: "Нет модели", derive: derive() }));
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  expect(await screen.findByRole("button", { name: "Найти по прошлым встречам" })).toBeDisabled();
+});
+
+test("поиск по встречам: отказ резидента — текстом", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ derive: derive() }));
+  vi.mocked(api.deriveOwnerVoice).mockRejectedValue(new api.ApiError(409, "Образец голоса сейчас записывается"));
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Найти по прошлым встречам" }));
+  expect(await screen.findByText(/Образец голоса сейчас записывается/)).toBeInTheDocument();
 });
