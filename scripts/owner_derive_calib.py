@@ -6,20 +6,23 @@
         [--owner ИМЯ …] [--max 10] [--out отчёт.json]
 
 Режим `--calibrate`:
-1. Кандидаты — те же, что у поиска (`owner_derive.candidates`): последние
-   записи звонка из папки записей приложения (из настроек, или `--recordings`).
-   Папки записей только читаются.
-2. Их дорожки, транскрипт, слова и кэш голосов копируются во временную папку;
-   дальше читаются только копии, в конце копии удаляются (не вышло — путь в
-   stderr и код 2).
-3. Своя пустая папка данных: настройки и токен приложения после этого не
-   читаются; HF_HUB_OFFLINE=1 — модель голосов из кэша Hugging Face. База
-   голосов и образцы владельца не читаются: проверки «уже есть образец» и «в
-   базе» здесь не делаются.
+1. Папка записей и имена владельца — из config.json приложения, прочитанного
+   как текст (без `settings.load`: та переносит старый токен из файла в
+   диспетчер учётных данных, то есть пишет), или `--recordings`/`--owner`.
+2. Сразу после этого — своя пустая папка данных и HF_HUB_OFFLINE=1: ни
+   настройки, ни токен, ни папка данных приложения больше не читаются и не
+   пишутся; модель голосов — из кэша Hugging Face.
+3. Кандидаты — те же, что у поиска (`owner_derive.candidates`): последние
+   записи звонка. Папки записей только читаются: их дорожки, транскрипт,
+   слова, кэш голосов и сайдкары спикеров копируются во временную папку,
+   дальше читаются только копии, в конце копии удаляются (не вышло — путь
+   временной папки в stderr и код 2). База голосов и образцы владельца не
+   читаются: проверки «уже есть образец» и «в базе» здесь не делаются.
 4. `owner_derive.find` на копиях с нынешними константами, затем перебор
    остановок и порогов на тех же голосах участков (посчитаны один раз).
 
-Печатает только числа (встречи обезличены: «встреча 3»): размеры кластеров
+Печатает только числа (встречи обезличены: «встреча 3»); сбой или Ctrl+C —
+в stderr только тип ошибки, копии всё равно удаляются: размеры кластеров
 по встречам, распределение попарного косинуса голосов встреч и решение при
 каждой паре CLUSTER_STOP × GROUP_COS. Подписи владельца — из настроек
 приложения (читаются до подмены папки данных) с переименованиями каждой
@@ -83,16 +86,18 @@ class Memo:
 
 
 def copy_meeting(folder: Path, into: Path) -> Path:
-    """Копия нужного для поиска из папки записи; папка записи только читается."""
+    """Копия нужного для поиска из папки записи; папка записи только читается.
+    Сайдкары спикеров — тоже: по ним подписи владельца встречи (OWNER,
+    правило «только кандидат»), как у настоящего поиска."""
     dst = into / folder.name
     dst.mkdir(parents=True)
     for stem in ("mic", "sys"):
         src = library.find_track(folder, stem)
         if src is not None:
             shutil.copyfile(src, dst / src.name)
-    for name in FILES:
-        if (folder / name).is_file():
-            shutil.copyfile(folder / name, dst / name)
+    names = [n for n in FILES if (folder / n).is_file()] + sorted(p.name for p in folder.glob("*_speakers.json"))
+    for name in names:
+        shutil.copyfile(folder / name, dst / name)
     return dst
 
 
@@ -108,8 +113,13 @@ def _pct(values: list[float]) -> dict:
 
 def sweep(folders: list[Path], *, embed, decode, labels: set[str] | None, vad=None) -> dict:
     """Голоса участков по встречам — один раз; затем остановки и пороги."""
-    per = [(f.name, owner_derive.meeting_runs(f, embed=embed, decode=decode, owner_labels=labels, vad=vad))
-           for f in folders]
+    per, failed = [], []
+    for n, f in enumerate(folders, 1):
+        try:
+            per.append((f.name, owner_derive.meeting_runs(f, embed=embed, decode=decode, owner_labels=labels,
+                                                          vad=vad)))
+        except Exception as e:  # встреча не разобралась — без неё; текст ошибки может назвать запись
+            failed.append({"meeting": n, "error": type(e).__name__})
     meetings = []
     for n, (name, runs) in enumerate(per, 1):
         now = owner_derive.summarize(name, runs)
@@ -129,7 +139,7 @@ def sweep(folders: list[Path], *, embed, decode, labels: set[str] | None, vad=No
             decisions[f"{group_cos:.2f}"] = {"status": status, "group": len(group), "need": need}
         by_stop[f"{stop:.2f}"] = {"usable": len(found), "pair_cos": _pct(cos),
                                   "pairs": sorted(round(c, 3) for c in cos), "decide": decisions}
-    return {"meetings": meetings, "by_stop": by_stop,
+    return {"meetings": meetings, "failed": failed, "by_stop": by_stop,
             "current": {"stop": owner_derive.CLUSTER_STOP, "group_cos": owner_derive.GROUP_COS}}
 
 
@@ -151,7 +161,7 @@ def run(root: Path, folders: list[Path], labels: set[str] | None, args, *, embed
     if args.out:
         args.out.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
     print(json.dumps({"find": report["find"], "current": report["current"]}))
-    for row in report["meetings"]:
+    for row in report["meetings"] + report["failed"]:
         print(json.dumps(row))
     for stop, entry in report["by_stop"].items():
         print(json.dumps({"stop": float(stop), **entry}))
@@ -165,10 +175,21 @@ def _decode():
 
 
 def app_setup() -> tuple[Path, set[str]]:
-    """Папка записей и подписи владельца из настроек приложения (только чтение)."""
-    from meet import segvoices, settings
+    """Папка записей и имена владельца из config.json приложения — чтение
+    файла как текста. Не `settings.load()`: та переносит старый токен HF из
+    файла в диспетчер учётных данных (пишет и туда, и в файл). Папка записей
+    по умолчанию — как у установленного приложения (data_dir/recordings), а не
+    папка репозитория, из которого запущен скрипт."""
+    from meet import paths, settings
 
-    return settings.load().recording.recordings, segvoices.owners()
+    base = paths.data_dir()
+    try:
+        raw = json.loads((base / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raw = {}
+    section = raw.get("recording") if isinstance(raw, dict) else None
+    rec = settings.Recording.from_raw(section if isinstance(section, dict) else {})
+    return rec.out_dir or base / "recordings", {"Вы", rec.speaker_name, *rec.former_speaker_names}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -181,33 +202,44 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.calibrate:
         parser.error("нужен режим --calibrate")
-    source, names = (args.recordings, set()) if args.recordings else app_setup()
-    names = names or {"Вы"}
-    # `--owner` — эти подписи во всех встречах; иначе подписи каждой встречи
-    # (owner_derive.meeting_labels) от имён владельца из настроек приложения.
-    labels = set(args.owner) if args.owner else None
-    folders = owner_derive.candidates(Path(source), args.max)  # только чтение
     tmp = Path(tempfile.mkdtemp(prefix="owner-derive-calib-"))
     code = 1
     try:
-        # Своя пустая папка данных: ни настроек, ни токена приложения; модель —
-        # из кэша Hugging Face, и сеть — нет, даже если в окружении иначе.
-        os.environ["MEET_DATA_DIR"] = str(tmp / "data")
-        os.environ["HF_HUB_OFFLINE"] = "1"
-        from meet import credentials
-
-        credentials.get_hf_token = lambda: None  # токен из диспетчера не нужен и не читается
-        from meet import segvoices
-
-        # Имена владельца прочитаны до подмены папки данных — дальше их не перечитать.
-        segvoices.owners = lambda: set(names)
-        root = tmp / "recordings"
-        copies = [copy_meeting(f, root) for f in folders]
-        code = run(root, copies, labels, args)
+        try:
+            code = _calibrate(args, tmp)
+        except KeyboardInterrupt:
+            print("прервано", file=sys.stderr)
+            code = 130
+        except Exception as e:  # текст ошибки может назвать запись — только тип
+            print(f"ошибка: {type(e).__name__}", file=sys.stderr)
+            code = 1
     finally:
         if not remove_copy(tmp):
             code = 2
     return code
+
+
+def _calibrate(args, tmp: Path) -> int:
+    if args.recordings:
+        source, names = args.recordings, {"Вы"}
+    else:
+        source, names = app_setup()
+    # `--owner` — эти подписи во всех встречах; иначе подписи каждой встречи
+    # (owner_derive.meeting_labels) от имён владельца из настроек приложения.
+    labels = set(args.owner) if args.owner else None
+    # Своя пустая папка данных: дальше ни настроек, ни токена приложения;
+    # модель — из кэша Hugging Face, и сеть — нет, даже если в окружении иначе.
+    os.environ["MEET_DATA_DIR"] = str(tmp / "data")
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    from meet import credentials, segvoices
+
+    credentials.get_hf_token = lambda: None  # токен из диспетчера не нужен и не читается
+    # Имена владельца прочитаны до подмены папки данных — дальше их не перечитать.
+    segvoices.owners = lambda: set(names)
+    folders = owner_derive.candidates(Path(source), args.max)  # только чтение
+    root = tmp / "recordings"
+    copies = [copy_meeting(f, root) for f in folders]
+    return run(root, copies, labels, args)
 
 
 if __name__ == "__main__":
