@@ -18,7 +18,7 @@
 import { Play } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  answerOwnerSuggestion, audioUrl, deleteOwnerVoice, deriveOwnerVoice, type Endpoint, getOwnerVoice,
+  answerOwnerSuggestion, audioUrl, cancelJob, deleteOwnerVoice, deriveOwnerVoice, type Endpoint, getOwnerVoice,
   recordOwnerVoice,
 } from "../../lib/api";
 import { errorText } from "../../lib/format";
@@ -123,22 +123,41 @@ export function useOwnerVoice(endpoint: Endpoint, { pollMs = POLL_MS, readyPollM
     }
   };
 
+  /** Идёт запрос поиска или ответа на найденный голос: кнопки не нажимаются дважды. */
+  const [pending, setPending] = useState(false);
   /** Ответ резидента вместо статуса или текст отказа. */
   const call = async (request: () => Promise<OwnerVoiceStatus>) => {
     setError(null);
+    setPending(true);
     try {
       const next = await request();
       if (live.current) setStatus(next);
     } catch (e) {
       if (live.current) setError(errorText(e));
+    } finally {
+      if (live.current) setPending(false);
     }
   };
   /** «Найти по прошлым встречам». */
   const derive = () => call(() => deriveOwnerVoice(endpoint));
   /** Найденный голос: `true` — «Да, это я», `false` — «Нет». */
   const answer = (accept: boolean) => call(() => answerOwnerSuggestion(endpoint, accept));
+  /** «Остановить поиск»: снять задачу и перечитать статус. */
+  const stopDerive = async () => {
+    const job = status?.derive?.job;
+    if (!job) return;
+    setError(null);
+    try {
+      await cancelJob(endpoint, job);
+    } catch (e) {
+      if (live.current) setError(errorText(e));
+    }
+    await reload();
+  };
 
-  return { status, error, starting, busy: starting || polling, record, remove, reload, derive, answer };
+  return {
+    status, error, starting, pending, busy: starting || polling, record, remove, reload, derive, answer, stopDerive,
+  };
 }
 
 export type OwnerVoice = ReturnType<typeof useOwnerVoice>;
@@ -196,12 +215,17 @@ export function OwnerVoiceRecorder({ voice, device }: { voice: OwnerVoice; devic
   );
 }
 
-/** «Поиск 06.10: ничего не найдено. Причина.» — если последний поиск ничего не предложил. */
+/**
+ * «Поиск 06.10: голос не предложен. Причина.» — если последний поиск ничего не
+ * предложил (устаревшие причины резидент уже убрал). Пока поиск идёт или он
+ * упал — не показываем: там своя строка.
+ */
 export function deriveNote(status: OwnerVoiceStatus | null): string | null {
   const d = status?.derive;
-  if (!d || d.running || status?.suggestion || !d.last || d.last.status === "suggested" || !d.last.reason) return null;
+  if (!d || d.running || d.error || status?.suggestion || !d.last || d.last.status === "suggested"
+    || !d.last.reason) return null;
   const when = d.last.date ? ` ${shortDate(d.last.date)}` : "";
-  return `Поиск${when}: ничего не найдено. ${sentence(d.last.reason)}`;
+  return `Поиск${when}: голос не предложен. ${sentence(d.last.reason)}`;
 }
 
 /**
@@ -211,37 +235,56 @@ export function deriveNote(status: OwnerVoiceStatus | null): string | null {
 export function OwnerVoiceFound({ endpoint, voice }: { endpoint: Endpoint; voice: OwnerVoice }) {
   const audio = useRef<HTMLAudioElement>(null);
   const stopAt = useRef<number | null>(null);
+  /** Какой пример играет: не открылся (запись удалили) — его ▶ гасим. */
+  const playing = useRef<number | null>(null);
+  const [dead, setDead] = useState<Set<number>>(() => new Set());
   const found = voice.status?.suggestion;
   if (!found) return null;
-  const play = (s: OwnerVoiceSampleRef) => {
+  const play = (s: OwnerVoiceSampleRef, i: number) => {
     const a = audio.current;
     if (!a) return;
     stopAt.current = s.end;
+    playing.current = i;
     a.src = `${audioUrl(endpoint, s.recording, "mic")}#t=${s.start},${s.end}`;
     a.load?.();
     void a.play?.()?.catch?.(() => {});
   };
+  const answering = voice.pending;
   return (
     <div className="ownv__found" role="group" aria-label="Найденный голос">
-      <span>Похоже, это ваш голос — послушайте:</span>
-      {found.samples.map((s, i) => (
-        <IconButton key={`${s.recording}-${s.start}`} icon={Play} size="sm"
-          label={`Послушать пример ${i + 1} — встреча ${shortDate(s.recording)}`} onClick={() => play(s)} />
+      {found.samples.length > 0
+        ? <span>Похоже, это ваш голос — послушайте:</span>
+        : <span>Похоже, это ваш голос, но записи с примерами уже удалены.</span>}
+      {found.samples.map((s, i) => (dead.has(i)
+        ? <IconButton key={`${s.recording}-${s.start}`} icon={Play} size="sm" disabled
+            label={`Пример ${i + 1} недоступен — запись удалена`} />
+        : <IconButton key={`${s.recording}-${s.start}`} icon={Play} size="sm"
+            label={`Послушать пример ${i + 1} — встреча ${shortDate(s.recording)}`} onClick={() => play(s, i)} />
       ))}
       <span className="muted" aria-hidden="true">·</span>
-      <Button size="sm" variant="primary" onClick={() => voice.answer(true)}>Да, это я</Button>
+      <Button size="sm" variant="primary" disabled={answering} onClick={() => voice.answer(true)}>Да, это я</Button>
       <span className="muted" aria-hidden="true">·</span>
-      <Button size="sm" onClick={() => voice.answer(false)}>Нет</Button>
+      <Button size="sm" disabled={answering} onClick={() => voice.answer(false)}>Нет</Button>
+      {found.conflict && (
+        <span className="notice">Он не похож на ваш записанный образец — послушайте внимательно.</span>
+      )}
       <audio ref={audio} className="ownv__audio" onTimeUpdate={(e) => {
         const a = e.currentTarget;
         if (stopAt.current !== null && a.currentTime >= stopAt.current) {
           a.pause();
           stopAt.current = null;
         }
+      }} onError={() => {
+        const i = playing.current;
+        if (i !== null) setDead((prev) => new Set(prev).add(i));
+        playing.current = null;
       }} />
     </div>
   );
 }
+
+const suggestionKey = (status: OwnerVoiceStatus | null) =>
+  status?.suggestion ? `${status.suggestion.date}:${status.suggestion.meetings.join(",")}` : "none";
 
 /** Настройки «Звук» → «Мой голос»: что записано, «Перезаписать», «Удалить», «Найти по прошлым встречам». */
 export function OwnerVoiceRow({ endpoint, device, pollMs }: {
@@ -298,16 +341,21 @@ export function OwnerVoiceRow({ endpoint, device, pollMs }: {
           )}
           {!open && (
             <Button size="sm" variant="ghost" onClick={() => voice.derive()}
-              disabled={!voice.status || voice.status.recording || !voice.status.ready || voice.busy}
+              disabled={!voice.status || voice.status.recording || !voice.status.ready || voice.busy
+                || voice.pending}
               title="Поискать ваш голос в последних звонках — без записи образца">
               Найти по прошлым встречам
             </Button>
           )}
           {deriving && <span className="muted" aria-live="polite">Ищу ваш голос в последних встречах…</span>}
+          {deriving && voice.status?.derive?.job && (
+            <Button size="sm" variant="ghost" onClick={() => voice.stopDerive()}>Остановить поиск</Button>
+          )}
           {!open && voice.error && <span className="error">{voice.error}</span>}
         </div>
       </Row>
-      <OwnerVoiceFound endpoint={endpoint} voice={voice} />
+      {/* Новое предложение — новая карточка: погашенные ▶ прежнего не переносятся. */}
+      <OwnerVoiceFound key={suggestionKey(voice.status)} endpoint={endpoint} voice={voice} />
       {note && <p className="muted ownv__note">{note}</p>}
       {failed && <p className="error ownv__note" role="alert">Поиск не удался: {failed}</p>}
       {open && <OwnerVoiceRecorder voice={voice} device={device} />}

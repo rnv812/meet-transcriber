@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import * as api from "../../lib/api";
 import type {
@@ -14,6 +14,7 @@ vi.mock("../../lib/api", async (orig) => ({
   deleteOwnerVoice: vi.fn(),
   deriveOwnerVoice: vi.fn(),
   answerOwnerSuggestion: vi.fn(),
+  cancelJob: vi.fn(),
 }));
 
 const ep = { base: "/api", token: null };
@@ -234,7 +235,7 @@ test("поиск по встречам: ничего не нашлось — ч�
   vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ derive: derive({ last: {
     status: "too_few", reason: "Подходящих встреч пока 2, а нужно хотя бы 3", date: "2026-10-06" } }) }));
   render(<OwnerVoiceRow endpoint={ep} device={null} />);
-  expect(await screen.findByText("Поиск 06.10: ничего не найдено. Подходящих встреч пока 2, а нужно хотя бы 3."))
+  expect(await screen.findByText("Поиск 06.10: голос не предложен. Подходящих встреч пока 2, а нужно хотя бы 3."))
     .toBeInTheDocument();
   expect(screen.queryByRole("group", { name: "Найденный голос" })).toBeNull();
 });
@@ -261,4 +262,65 @@ test("поиск по встречам: отказ резидента — тек
   render(<OwnerVoiceRow endpoint={ep} device={null} />);
   await userEvent.click(await screen.findByRole("button", { name: "Найти по прошлым встречам" }));
   expect(await screen.findByText(/Образец голоса сейчас записывается/)).toBeInTheDocument();
+});
+
+test("поиск по встречам: сбой задачи — только ошибка, без старой причины", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ derive: derive({ error: "RuntimeError: сломалось",
+    last: { status: "too_few", reason: "Мало встреч", date: "2026-10-05" } }) }));
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("Поиск не удался");
+  expect(screen.queryByText(/Мало встреч/)).toBeNull();
+});
+
+test("поиск по встречам: «Остановить поиск» снимает задачу", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValueOnce(status({ derive: derive({ running: true, job: "j9" }) }))
+    .mockResolvedValue(status({ derive: derive() }));
+  vi.mocked(api.cancelJob).mockResolvedValue({ ok: true } as never);
+  render(<OwnerVoiceRow endpoint={ep} device={null} pollMs={100000} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Остановить поиск" }));
+  expect(api.cancelJob).toHaveBeenCalledWith(ep, "j9");
+  await waitFor(() => expect(screen.queryByText(/Ищу ваш голос/)).toBeNull());
+  expect(screen.getByRole("button", { name: "Найти по прошлым встречам" })).toBeEnabled();
+});
+
+test("поиск по встречам: голос не похож на записанный образец — предупреждение", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ samples: [sample()], suggestion: found({ conflict: true }),
+    derive: derive() }));
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  const card = await screen.findByRole("group", { name: "Найденный голос" });
+  expect(card).toHaveTextContent("Он не похож на ваш записанный образец — послушайте внимательно.");
+});
+
+test("поиск по встречам: пока ответ идёт, «Да» и «Нет» недоступны", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ suggestion: found(), derive: derive() }));
+  let done: (v: OwnerVoiceStatus) => void = () => {};
+  vi.mocked(api.answerOwnerSuggestion).mockReturnValue(new Promise((r) => { done = r; }));
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Да, это я" }));
+  expect(screen.getByRole("button", { name: "Нет" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Да, это я" })).toBeDisabled();
+  done(status({ derive: derive() }));
+  await waitFor(() => expect(screen.queryByRole("group", { name: "Найденный голос" })).toBeNull());
+  expect(api.answerOwnerSuggestion).toHaveBeenCalledTimes(1);
+});
+
+test("поиск по встречам: запись удалена — её ▶ недоступен", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ suggestion: found(), derive: derive() }));
+  const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+  const load = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  const button = await screen.findByRole("button", { name: "Послушать пример 1 — встреча 01.10" });
+  await userEvent.click(button);
+  fireEvent.error(document.querySelector("audio")!);
+  expect(await screen.findByRole("button", { name: "Пример 1 недоступен — запись удалена" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Послушать пример 2 — встреча 02.10" })).toBeEnabled();
+  play.mockRestore();
+  load.mockRestore();
+});
+
+test("поиск по встречам: примеров не осталось — так и сказано", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ suggestion: found({ samples: [] }), derive: derive() }));
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  const card = await screen.findByRole("group", { name: "Найденный голос" });
+  expect(card).toHaveTextContent("Похоже, это ваш голос, но записи с примерами уже удалены.");
 });

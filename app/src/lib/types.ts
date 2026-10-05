@@ -478,9 +478,13 @@ export type OwnerVoiceSuggestion = {
   quality: number | null;
   /** ГГГГ-ММ-ДД. */
   date: string | null;
+  /** Есть записанный образец, а найденный голос на него не похож. */
+  conflict?: boolean;
 };
 export type OwnerVoiceDerive = {
   running: boolean;
+  /** Идущая задача поиска — её можно остановить. */
+  job?: string | null;
   /** Задача упала — текст ошибки. */
   error: string | null;
   /** Итог последнего поиска; `reason` — почему ничего не предложено. */
@@ -488,6 +492,10 @@ export type OwnerVoiceDerive = {
     status: "suggested" | "too_few" | "inconsistent" | "already" | "in_base";
     reason: string | null;
     date?: string;
+    /** already — совпавший образец; in_base — человек из базы; newest — самая новая запись тогда. */
+    sample_id?: string;
+    person?: string;
+    newest?: string | null;
     checked?: number;
     used?: number;
     found?: number;
