@@ -1146,9 +1146,18 @@ class TrayControl:
         started = getattr(self.tray, "started", 0.0) or 0.0
         started_at = time.time() - max(0.0, time.monotonic() - started) if started else None
         server = pcm_tap.TapServer(hub, log=self.tray.log)
+
+        def reopen():
+            # Повтор упавшего старта (LiveControl): отвод одноразовый — новый,
+            # пока запись идёт; кончилась — повторять некуда.
+            if not hub.active() or getattr(self.tray, "stopping", False):
+                return None
+            return pcm_tap.TapServer(hub, log=self.tray.log)
+
         try:
             reply = self.live.start(self._root(), attach={
-                "folder": str(folder), "server": server, "started_at": started_at})
+                "folder": str(folder), "server": server, "started_at": started_at,
+                "reopen": reopen})
         except live_control.LiveBusy as e:
             raise _bad_request(str(e))
         if reply.get("ok"):

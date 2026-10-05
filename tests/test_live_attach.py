@@ -687,7 +687,11 @@ def test_catchup_decoder_runs_below_normal_priority(monkeypatch):
     assert seen["creationflags"] & below == below
 
 
-def test_attached_child_is_spawned_below_normal_priority(monkeypatch):
+def test_attached_child_starts_at_normal_priority(monkeypatch):
+    """Старт подключённого ассистента — с обычным приоритетом: с пониженным
+    на занятом звонком процессоре загрузка моделей растягивалась за минуту, и
+    резидент убивал его по таймауту. Ниже обычного он ставит себя сам, когда
+    готов (`meet.assist.app._lower_priority`), — на догонялку."""
     import subprocess
 
     from meet import live_control
@@ -702,5 +706,4 @@ def test_attached_child_is_spawned_below_normal_priority(monkeypatch):
     live_control._spawn_process(["x"], None)
     live_control._spawn_process(["x"], None, {live_control.TAP_TOKEN_ENV: "t"})
     below = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
-    assert seen[0] & below == 0 or below == 0  # обычный ассистент — как раньше
-    assert seen[1] & below == below
+    assert all(flags & below == 0 for flags in seen) or below == 0

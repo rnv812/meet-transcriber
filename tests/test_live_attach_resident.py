@@ -335,3 +335,37 @@ def test_attach_routes_end_to_end(resident, monkeypatch, tmp_path):
     finally:
         srv.stop()
         resident.tray.stop_recording()
+
+
+def test_attach_start_that_fails_is_retried_on_a_fresh_tap(resident, monkeypatch, tmp_path):
+    """Подключённый ассистент упал до готовности — резидент повторяет старт
+    с новым отводом той же записи (старый одноразовый)."""
+    folder, order = _recording_resident(resident, monkeypatch, tmp_path)
+    resident.stub.mode = "fail-once"
+    try:
+        resident.live_attach()
+        _wait_for(lambda: resident.live.status()["active"])
+        assert len(resident.stub.processes) == 2
+        tokens = resident.stub.note("env_token")
+        assert len(tokens) == 2 and tokens[0] != tokens[1]
+        assert resident.live.status()["error"] is None
+    finally:
+        resident.tray.stop_recording()
+    _wait_for(lambda: not resident.live.busy())
+
+
+def test_attach_reopen_gives_no_tap_once_the_recording_stopped(resident, monkeypatch, tmp_path):
+    seen = {}
+    real_start = resident.live.start
+
+    def start(out_root, attach=None):
+        seen["attach"] = attach
+        return real_start(out_root, attach=attach)
+
+    monkeypatch.setattr(resident.live, "start", start)
+    _recording_resident(resident, monkeypatch, tmp_path)
+    resident.live_attach()
+    _wait_for(lambda: resident.live.status()["active"])
+    resident.tray.stop_recording()
+    _wait_for(lambda: not resident.tray.pcm_tap.active())
+    assert seen["attach"]["reopen"]() is None  # записи нет — и повторять некуда

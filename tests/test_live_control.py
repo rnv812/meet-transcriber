@@ -36,6 +36,19 @@ def note(name, text=""):
 
 note("argv", json.dumps(args, ensure_ascii=False))
 note("env_token", os.environ.get("MEET_TAP_TOKEN", "-"))
+note("runs")
+runs = len(open(os.path.join(notes, "runs"), encoding="utf-8").read().splitlines())
+if mode == "fail-once" and runs == 1:
+    # Первый запуск падает до готовности (как сбой загрузки модели), второй — штатно.
+    print("Traceback (most recent call last):", flush=True)
+    print("RuntimeError: модель не загрузилась", flush=True)
+    sys.exit(1)
+if mode == "fatal":
+    # Ошибка, которую повтор не исправит (SystemExit с текстом у настоящего ребёнка).
+    print("Авторизация Claude не прошла: войдите заново", flush=True)
+    sys.exit(3)
+if mode == "native-crash":
+    os._exit(-1073741819)  # 0xC0000005 — без единой строки в журнале
 attach = args[args.index("--attach-to") + 1] if "--attach-to" in args else None
 if attach:
     # Как настоящий ребёнок: отвод звука записи — по порту и токену.
@@ -126,14 +139,45 @@ threading.Thread(target=srv.serve_forever, daemon=True).start()
 if mode == "hang":
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     note("grandchild", str(child.pid))
-tmp = endpoint + ".tmp"
-with open(tmp, "w", encoding="utf-8") as f:
-    info = {"port": srv.server_address[1], "pid": os.getpid(), "folder": folder}
-    if mode == "fallback":
-        info["devices_fallback"] = [{"kind": "mic", "name": "USB-микрофон",
-                                     "device": "Микрофон"}]
-    json.dump(info, f)
-os.replace(tmp, endpoint)
+
+
+def publish(**extra):
+    tmp = endpoint + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        info = {"port": srv.server_address[1], "pid": os.getpid(), "folder": folder, **extra}
+        if mode == "fallback":
+            info["devices_fallback"] = [{"kind": "mic", "name": "USB-микрофон",
+                                         "device": "Микрофон"}]
+        json.dump(info, f)
+    os.replace(tmp, endpoint)
+
+
+def gate(name):
+    # Шаг старта ждёт файла-разрешения от теста (или /stop).
+    while not os.path.exists(os.path.join(notes, name)) and not stop.is_set():
+        time.sleep(0.02)
+
+
+if mode in ("staged", "stall", "crash-loading"):
+    # Новый протокол: порт — сразу, затем захват звука, затем готовность.
+    publish(ready=False, capturing=False, stage="подключаюсь к записи…")
+    if mode == "stall":
+        stop.wait()
+        sys.exit(0)
+    gate("capture")
+    publish(ready=False, capturing=True, stage="загружаю модель распознавания…")
+    if mode == "crash-loading":
+        gate("crash")
+        print("Traceback (most recent call last):", flush=True)
+        print("OSError: модель повреждена", flush=True)
+        sys.exit(1)
+    gate("ready")
+    if stop.is_set():
+        note("stopped_before_ready")
+    else:
+        publish(ready=True, capturing=True)
+else:
+    publish()
 print("Ассистент: http://127.0.0.1:%d/" % srv.server_address[1], flush=True)
 stop.wait()
 if mode == "hang":
@@ -300,6 +344,7 @@ def test_stop_asks_child_and_reports_stopped(make_live, data_dir, tmp_path):
     assert rec.kinds()[-1] == live_control.LIVE_STOPPED
     assert rec.last(live_control.LIVE_STOPPED).data["folder"] == folder
     assert live.status() == {"active": False, "starting": False, "stopping": False,
+                             "ready": False, "stage": None,
                              "folder": None, "error": None, "started_at": None,
                              "attached": False, "ended_by": "stop"}
     assert not (data_dir / "live.json").exists()

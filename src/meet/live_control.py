@@ -8,8 +8,15 @@
 Протокол с ребёнком (`python -m meet.cli assist --no-browser --port 0
 --endpoint-file <data_dir>/live.json --out <папка записей> --parent-pid <pid>`):
 
-* ребёнок атомарно пишет `{"port", "pid", "folder"}` в файл эндпоинта, когда
-  его сервер поднялся (модели к этому моменту загружены — до минуты);
+* ребёнок атомарно пишет `{"port", "pid", "folder", "ready", "capturing",
+  "stage"}` в файл эндпоинта, как только поднял свой сервер (за секунды), и
+  переписывает его на каждом этапе старта: `stage` — что он сейчас делает
+  («загружаю модель распознавания…»), `capturing` — звук уже пишется (своя
+  запись или отвод чужой; для резидента это `active`), `ready` — модель
+  распознавания загружена, ассистент слушает. Файл без `ready` (ребёнок
+  старой версии) — готов сразу. Таймаут старта — не на весь старт, а на
+  этап: идущий, хоть и медленный, старт (холодный диск, модель на
+  процессоре) не убивают, застрявший — убивают с названием этапа в ошибке;
 * `POST /stop` → `{"ok": true}` сразу, затем финализация (дорожки, снятие
   `.recording.lock`), удаление файла эндпоинта и выход с кодом 0. Застрявший
   вызов модели может держать процесс ещё до ~180 с уже после финализации —
@@ -40,7 +47,16 @@
 Вывод ребёнка уходит в `<data_dir>/logs/live.log` (не в pipe: непрочитанный
 pipe заполнился бы и повесил ребёнка). Последняя непустая строка журнала —
 текст ошибки, если ребёнок умер сам: «Подключите Claude Code…», «Запись уже
-идёт…», последняя строка traceback'а.
+идёт…», последняя строка traceback'а. Любой конец ребёнка не по просьбе
+(сбой до готовности, убийство по таймауту этапа, падение посреди встречи,
+падение без единой строки — код вроде 0xC0000005) резидент дописывает в тот
+же live.log строкой с причиной: молча исчезнувших ассистентов нет.
+
+Старт, упавший до готовности, резидент один раз повторяет сам — кроме
+ошибок, которые повтор не исправит (ребёнок выходит с кодом EXIT_FATAL:
+нет провайдера, вход в Claude, занятая запись) и кроме своей записи, уже
+начавшей писать дорожки (повтор начал бы другую папку). Подключённому к
+записи для повтора нужен новый отвод (`attach["reopen"]`).
 """
 
 import http.client
@@ -59,6 +75,8 @@ from pathlib import Path
 from meet import paths
 
 LIVE_STARTING = "live.starting"
+# Этап старта сменился: {"stage": текст или None, "ready": готов ли}.
+LIVE_STAGE = "live.stage"
 LIVE_STARTED = "live.started"
 LIVE_STOPPING = "live.stopping"
 LIVE_STOPPED = "live.stopped"
@@ -68,7 +86,17 @@ ENDPOINT_NAME = "live.json"
 LOG_NAME = "live.log"
 LOG_MAX_BYTES = 1024 * 1024  # больше — прежний журнал уезжает в live.log.1
 
-START_TIMEOUT_S = 60.0  # модель распознавания грузится до минуты
+# До первого файла эндпоинта: интерпретатор, импорты, свой веб-сервер ребёнка.
+START_TIMEOUT_S = 60.0
+# Этап старта (загрузка модели, проверка входа) не сменился за это время —
+# старт застрял. Холодная модель Whisper на процессоре с медленного диска —
+# десятки секунд, поэтому с запасом.
+STAGE_TIMEOUT_S = 120.0
+START_MAX_S = 300.0  # весь старт целиком, как бы ни менялись этапы
+MAX_START_ATTEMPTS = 2  # упавший до готовности старт — ещё одна попытка
+# Код выхода ребёнка «повтор не поможет» (meet.assist.app.EXIT_FATAL).
+EXIT_FATAL = 3
+STAGE_RETRY = "повторяю запуск после ошибки…"
 STOP_TIMEOUT_S = 90.0  # финализация дорожек; дальше — убийство дерева
 # Выход резидента (/shutdown, смерть оболочки): оболочка ждёт ответа /shutdown
 # 70 с (app/src-tauri/src/api.rs, LONG_TIMEOUT) — укладываемся с запасом, как
@@ -226,18 +254,17 @@ def _orphan_endpoint(path: Path) -> dict | None:
 def _spawn_process(argv: list[str], log_file, extra_env: dict | None = None):
     """Запустить ребёнка без окна консоли, весь вывод — в журнал.
 
-    Ассистент, подключённый к обычной записи (в окружении токен отвода), —
-    с пониженным приоритетом, как задачи расшифровки: его догонялка грузит
-    процессор минутами, а запись резидента (callback → ffmpeg) и звонок
-    тормозить не должны. Его ffmpeg догонялки наследуют приоритет."""
+    Приоритет — обычный, и у ассистента, подключённого к обычной записи:
+    с пониженным его старт (импорты, загрузка моделей) на процессоре, занятом
+    звонком, растягивался за минуту. Подключённый понижает себя сам, когда
+    готов (`meet.assist.app._lower_priority`): его догонялка грузит процессор
+    минутами, а запись резидента и звонок тормозить не должны."""
     from meet import netproxy
 
     # Прокси из настроек: ребёнок зовёт Claude Code/Codex (см. meet.netproxy).
     env = {**netproxy.settings_env(), "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1",
            **(extra_env or {})}
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    if extra_env and TAP_TOKEN_ENV in extra_env:
-        flags |= getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)
     return subprocess.Popen(
         argv,
         stdin=subprocess.DEVNULL,
@@ -298,6 +325,28 @@ def _last_line(path: Path | None, offset: int) -> str | None:
     return lines[-1][:ERROR_MAX_CHARS] if lines else None
 
 
+def _code_text(code) -> str:
+    """Код выхода для человека: отрицательный или огромный (исключение
+    Windows вроде 0xC0000005 — нарушение доступа) — шестнадцатеричным."""
+    if isinstance(code, int) and (code < 0 or code > 0xFFFF):
+        return f"0x{code & 0xFFFFFFFF:08X}"
+    return str(code)
+
+
+def _note_log(path: Path | None, text: str) -> None:
+    """Строка резидента в live.log: ребёнок мог умереть, не написав ни слова
+    (убит по таймауту, упал в машинном коде), — причина остаётся рядом с его
+    выводом. Сбой записи журнала — не повод мешать остальному."""
+    if path is None:
+        return
+    stamp = time.strftime("%H:%M:%S")
+    try:
+        with open(path, "ab") as f:
+            f.write(f"--- {stamp} резидент: {text}\n".encode("utf-8"))
+    except OSError:
+        pass
+
+
 class LiveControl:
     """Один дочерний `meet assist` под присмотром резидента.
 
@@ -314,7 +363,10 @@ class LiveControl:
                  start_timeout: float = START_TIMEOUT_S,
                  stop_timeout: float = STOP_TIMEOUT_S,
                  finalize_grace: float = FINALIZE_GRACE_S,
-                 poll_s: float = POLL_S) -> None:
+                 poll_s: float = POLL_S,
+                 stage_timeout: float = STAGE_TIMEOUT_S,
+                 start_max: float = START_MAX_S,
+                 max_attempts: int = MAX_START_ATTEMPTS) -> None:
         self.bus = bus
         self._spawn = spawn or _spawn_process
         self._kill = kill or _kill_tree
@@ -323,6 +375,13 @@ class LiveControl:
         self._stop_timeout = stop_timeout
         self._finalize_grace = finalize_grace
         self._poll_s = poll_s
+        self._stage_timeout = stage_timeout
+        self._start_max = max(start_max, start_timeout)
+        self._max_attempts = max(1, int(max_attempts))
+        self._ready = False  # модель загружена, ассистент слушает
+        self._stage: str | None = None  # что ребёнок делает, пока не готов
+        self._out_root = None
+        self._attempt = 0  # какая это попытка старта (повтор после сбоя — вторая)
         self._lock = threading.Lock()
         self._emit_lock = threading.RLock()
         self._process = None
@@ -349,12 +408,15 @@ class LiveControl:
     # --- что показывать -------------------------------------------------
 
     def status(self) -> dict:
-        """{"active", "starting", "stopping", "folder", "error", "started_at",
-        "attached"}: error — почему упал (или остановился с ошибкой) последний
-        запуск, сбрасывается следующим стартом; started_at — стенное время,
-        когда ассистент начал слушать (`live.started`; пока грузится модель —
-        None), для секундомера панели, а у подключённого к записи — начало
-        самой записи; attached — включён посреди обычной записи."""
+        """{"active", "starting", "stopping", "ready", "stage", "folder",
+        "error", "started_at", "attached"}: active — звук уже пишется (своя
+        запись или отвод чужой); ready — модель загружена, ассистент слушает;
+        stage — этап старта, пока не готов («загружаю модель распознавания…»;
+        None — ещё неизвестен); error — почему упал (или остановился с
+        ошибкой) последний запуск, сбрасывается следующим стартом; started_at —
+        стенное время начала захвата звука (`live.started`; до него — None),
+        для секундомера панели, а у подключённого к записи — начало самой
+        записи; attached — включён посреди обычной записи."""
         with self._lock:
             return self._status_unlocked()
 
@@ -376,7 +438,10 @@ class LiveControl:
     def _status_unlocked(self) -> dict:
         running = self._process is not None
         return {"active": self._active, "starting": running and not self._active,
-                "stopping": running and self._stop_requested, "folder": self._folder,
+                "stopping": running and self._stop_requested,
+                "ready": running and self._ready,
+                "stage": self._stage if running and not self._ready else None,
+                "folder": self._folder,
                 "error": self._error, "started_at": self._started_at,
                 "attached": running and self._attach is not None,
                 "ended_by": None if running else self._ended_by}
@@ -425,20 +490,11 @@ class LiveControl:
                     endpoint.unlink(missing_ok=True)  # от убитого прошлого запуска
                 except OSError:
                     pass
-                argv = [sys.executable, "-m", "meet.cli", "assist", "--no-browser",
-                        "--port", "0", "--endpoint-file", str(endpoint),
-                        "--out", str(out_root), "--parent-pid", str(os.getpid())]
-                if attach is not None:
-                    argv += ["--attach-to", str(attach["folder"]),
-                             "--tap-port", str(attach["server"].port)]
+                argv = self._argv(out_root, attach)
                 log_file = None
                 try:
                     log_file, path, offset = _open_log()
-                    if attach is None:
-                        process = self._spawn(argv, log_file)
-                    else:
-                        process = self._spawn(argv, log_file,
-                                              {TAP_TOKEN_ENV: attach["server"].token})
+                    process = self._spawn_with(argv, log_file, attach)
                 except OSError as e:
                     self._error = f"Не удалось запустить ассистента: {e}"
                     self._ended_by = ENDED_CRASH
@@ -462,6 +518,10 @@ class LiveControl:
                     self._detach = False
                     self._reason = None
                     self._ended_by = None
+                    self._ready = False
+                    self._stage = None
+                    self._out_root = out_root
+                    self._attempt = 1
                     self._thread = threading.Thread(
                         target=self._watch, args=(process, endpoint, path, offset),
                         name="meet-live", daemon=True)
@@ -479,6 +539,21 @@ class LiveControl:
             # Поток — после `live.starting`: его started/failed не обгонят начало.
             thread.start()
         return {"ok": True, **reply}
+
+    @staticmethod
+    def _argv(out_root, attach: dict | None) -> list[str]:
+        argv = [sys.executable, "-m", "meet.cli", "assist", "--no-browser",
+                "--port", "0", "--endpoint-file", str(endpoint_path()),
+                "--out", str(out_root), "--parent-pid", str(os.getpid())]
+        if attach is not None:
+            argv += ["--attach-to", str(attach["folder"]),
+                     "--tap-port", str(attach["server"].port)]
+        return argv
+
+    def _spawn_with(self, argv: list[str], log_file, attach: dict | None):
+        if attach is None:
+            return self._spawn(argv, log_file)
+        return self._spawn(argv, log_file, {TAP_TOKEN_ENV: attach["server"].token})
 
     def adopt_orphan(self) -> bool:
         """Старт резидента: ребёнок прошлого (умершего жёстко) резидента ещё
@@ -565,7 +640,18 @@ class LiveControl:
     # --- наблюдение -----------------------------------------------------
 
     def _watch(self, process, endpoint: Path, path: Path, offset: int) -> None:
-        error = self._await_endpoint(process, endpoint)
+        while True:
+            error, code, killed, finalized = self._follow(process, endpoint)
+            retry = self._retry(process, endpoint, path, offset, error, code, killed)
+            if retry is None:
+                break
+            process, path, offset = retry
+        self._finish(process, endpoint, path, offset, error, code, killed, finalized)
+
+    def _follow(self, process, endpoint: Path) -> tuple:
+        """Один ребёнок от старта до выхода. → (ошибка старта, код выхода,
+        убит ли по дедлайну, дописал ли запись после /stop)."""
+        error = self._await_ready(process, endpoint)
         killed = False  # убит по дедлайну, не дописав запись
         finalized_at = None  # когда после /stop исчез файл эндпоинта
         while True:
@@ -597,13 +683,83 @@ class LiveControl:
                           "убиваю дерево процессов")
                 self._kill(process)
                 killed = True
-        finalized = finalized_at is not None
+        return error, code, killed, finalized_at is not None
+
+    def _retry(self, process, endpoint: Path, path: Path, offset: int,
+               error: str | None, code, killed: bool):
+        """Старт упал до готовности — одна повторная попытка. → (новый
+        процесс, журнал, смещение) или None — не повторяем: просили
+        остановиться, ассистент уже слушал (падение посреди встречи — не
+        старт), попытки кончились, ошибка из тех, что повтор не исправит
+        (EXIT_FATAL), своя запись уже пишет дорожки (повтор начал бы другую
+        папку), у подключённого к записи нет нового отвода."""
+        with self._emit_lock:
+            with self._lock:
+                if self._stop_requested or self._ready or self._attempt >= self._max_attempts:
+                    return None
+                if code == EXIT_FATAL and not killed:
+                    return None
+                attach = self._attach
+                if attach is None and self._active:
+                    return None
+                child_pid = self._child_pid
+            reason = error or _last_line(path, offset) or \
+                f"завершился без сообщения (код {_code_text(code)})"
+            if attach is not None:
+                reopen = attach.get("reopen")
+                if reopen is None:
+                    return None
+                self._close_server(attach)  # отвод одноразовый: старый уже закрыт или не нужен
+                try:
+                    server = reopen()
+                except Exception as e:
+                    self._log(f"ассистент: отвод звука для повтора не открылся: {e}")
+                    return None
+                if server is None:
+                    return None
+                attach = {**attach, "server": server}
+            self._drop_endpoint(endpoint, {process.pid, child_pid})
+            _note_log(path, f"ассистент не запустился (код {_code_text(code)}): {reason} "
+                            "— повторяю запуск")
+            self._log(f"ассистент не запустился: {reason} — повторяю запуск")
+            log_file = None
+            try:
+                log_file, new_path, new_offset = _open_log()
+                new = self._spawn_with(self._argv(self._out_root, attach), log_file, attach)
+            except OSError as e:
+                self._log(f"ассистент: повторный запуск не удался: {e}")
+                _note_log(path, f"повторный запуск не удался: {e}")
+                self._close_server(attach)
+                with self._lock:
+                    self._attach = attach  # закроет _finish (уже закрыт — не страшно)
+                return None
+            finally:
+                if log_file is not None:
+                    log_file.close()
+            with self._lock:
+                self._process = new
+                self._attach = attach
+                self._attempt += 1
+                self._active = False
+                self._ready = False
+                self._stage = STAGE_RETRY
+                self._port = None
+                self._child_pid = None
+                self._folder = str(attach["folder"]) if attach is not None else None
+                self._fallback = []
+                self._started_at = None
+            self.bus.emit(LIVE_STAGE, stage=STAGE_RETRY, ready=False)
+        return new, new_path, new_offset
+
+    def _finish(self, process, endpoint: Path, path: Path, offset: int,
+                error: str | None, code, killed: bool, finalized: bool) -> None:
         self._drop_endpoint(endpoint, {process.pid, self._child_pid})
         _sweep_temp()
         with self._emit_lock:
             with self._lock:
                 stop_requested = self._stop_requested
                 active = self._active
+                ready = self._ready
                 folder = self._folder
                 attach, detached, reason = self._attach, self._detach, self._reason
                 if stop_requested or (code == 0 and active and error is None):
@@ -624,7 +780,7 @@ class LiveControl:
                         # проход): дорожки на диске, запись оставляем и
                         # расшифровываем, причину показываем — из журнала.
                         error = _last_line(path, offset) or \
-                            f"Ассистент завершился с кодом {code}"
+                            f"Ассистент завершился с кодом {_code_text(code)}"
                         complete = True
                     elif killed and not _log_has(path, offset, STOPPED_MARK):
                         # Дописал (убрал эндпоинт), но «Остановлено:» не
@@ -637,10 +793,19 @@ class LiveControl:
                     kind = LIVE_FAILED
                     complete = False
                     error = error or _last_line(path, offset) or \
-                        f"Ассистент завершился (код {code})"
+                        f"Ассистент завершился без сообщения (код {_code_text(code)})"
+                # Причина — и в live.log (до смены состояния: кто дождался
+                # конца, читает журнал уже с ней): ребёнок мог не написать ни слова.
+                if kind == LIVE_FAILED:
+                    what = "завершился посреди встречи" if ready else "не запустился"
+                    _note_log(path, f"ассистент {what} (код {_code_text(code)}): {error}")
+                elif error:
+                    _note_log(path, f"ассистент остановлен с ошибкой: {error}")
                 self._process = None
                 self._thread = None
                 self._active = False
+                self._ready = False
+                self._stage = None
                 self._port = None
                 self._folder = None
                 self._fallback = []
@@ -674,7 +839,7 @@ class LiveControl:
                               complete=complete, attached=attached, detached=detached,
                               ended_by=ended_by)
             else:
-                self._log(f"ассистент упал (код {code}): {error}")
+                self._log(f"ассистент упал (код {_code_text(code)}): {error}")
                 self.bus.emit(LIVE_FAILED, error=error, folder=folder, attached=attached,
                               ended_by=ended_by)
 
@@ -689,38 +854,81 @@ class LiveControl:
         except (OSError, ValueError):
             pass
 
-    def _await_endpoint(self, process, endpoint: Path) -> str | None:
-        """Ждать, пока ребёнок опубликует свой порт. Возвращает текст ошибки
-        таймаута или None (дождались, вышел сам или его остановили)."""
-        deadline = time.monotonic() + self._start_timeout
+    def _await_ready(self, process, endpoint: Path) -> str | None:
+        """Ждать, пока ребёнок будет готов, следя за этапами его старта.
+        Возвращает текст ошибки таймаута или None (готов, вышел сам или его
+        остановили).
+
+        Первый файл эндпоинта — не дольше start_timeout; дальше каждый новый
+        этап (или захват звука) даёт ещё stage_timeout, но весь старт — не
+        дольше start_max."""
+        began = time.monotonic()
+        deadline = began + self._start_timeout
+        seen = None  # (ready, capturing, stage) последнего прочитанного файла
         while process.poll() is None:
             with self._lock:
                 if self._stop_requested:
                     return None
             info = _read_endpoint(endpoint, process.pid)
             if info is not None:
-                with self._emit_lock:
-                    with self._lock:
-                        if self._stop_requested:
-                            return None  # остановлен до старта — его уже убивают
-                        self._active = True
-                        # Подключённый к записи: секундомер панели — от начала записи.
-                        attach_started = (self._attach or {}).get("started_at")
-                        self._started_at = attach_started if isinstance(
-                            attach_started, (int, float)) else time.time()
-                        self._port = int(info["port"])
-                        self._child_pid = info["pid"]
-                        self._folder = str(info.get("folder") or "") or None
-                        self._fallback = _fallback_of(info)
-                        folder = self._folder
-                    self._log(f"ассистент слушает встречу: {folder}")
-                    self.bus.emit(LIVE_STARTED, folder=folder)
-                return None
+                view = self._apply_endpoint(info)
+                if view is None or view[0]:
+                    return None  # остановлен до старта или готов
+                if view != seen:
+                    seen = view
+                    deadline = min(began + self._start_max,
+                                   time.monotonic() + self._stage_timeout)
             if time.monotonic() >= deadline:
+                with self._lock:
+                    stage = self._stage
                 self._kill(process)
-                return f"Ассистент не запустился за {self._start_timeout:.0f} с"
+                waited = time.monotonic() - began
+                text = f"Ассистент не запустился за {waited:.0f} с"
+                if stage:
+                    text += f": этап «{stage.rstrip('…. ')}» не закончился"
+                return text
             time.sleep(self._poll_s)
         return None
+
+    def _apply_endpoint(self, info: dict) -> tuple | None:
+        """Файл эндпоинта ребёнка → состояние и события. → (готов, пишет ли
+        звук, этап) или None — остановка уже запрошена."""
+        ready = info.get("ready", True) is not False  # без поля — старый ребёнок, готов
+        capturing = bool(info.get("capturing", ready)) or ready
+        stage = None if ready else (str(info.get("stage") or "").strip() or None)
+        with self._emit_lock:
+            with self._lock:
+                if self._stop_requested:
+                    return None
+                if self._port is None:
+                    # Порт — сразу: остановка во время загрузки штатная (/stop).
+                    self._port = int(info["port"])
+                    self._child_pid = info["pid"]
+                started = capturing and not self._active
+                if started:
+                    self._active = True
+                    # Подключённый к записи: секундомер панели — от начала записи.
+                    attach_started = (self._attach or {}).get("started_at")
+                    self._started_at = attach_started if isinstance(
+                        attach_started, (int, float)) else time.time()
+                    self._folder = str(info.get("folder") or "") or self._folder
+                if self._active:
+                    self._fallback = _fallback_of(info)
+                changed = stage != self._stage or (ready and not self._ready)
+                self._stage = stage
+                if ready:
+                    self._ready = True
+                folder = self._folder
+            if started:
+                self._log(f"ассистент пишет звук: {folder}")
+                self.bus.emit(LIVE_STARTED, folder=folder)
+            if changed:
+                if ready:
+                    self._log(f"ассистент слушает встречу: {folder}")
+                elif stage:
+                    self._log(f"ассистент запускается: {stage}")
+                self.bus.emit(LIVE_STAGE, stage=stage, ready=ready)
+        return ready, capturing, stage
 
     # --- прокси к ребёнку -----------------------------------------------
 
