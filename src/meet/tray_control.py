@@ -467,7 +467,9 @@ class TrayControl:
 
         self.owner_takes = owner_voice_control.OwnerTakes(
             queue=self.downloads, bus=self.bus, voices=self._voices, log=tray.log,
-            busy=lambda: bool(self.tray.recording) or self.live.busy())
+            busy=lambda: bool(self.tray.recording) or self.live.busy(),
+            installing=lambda: self.queue.active_for(
+                str(paths.data_dir()), (jobs.INSTALL_ENGINE,)) is not None)
 
     @staticmethod
     def _background(fn, name: str = "meet-background") -> None:

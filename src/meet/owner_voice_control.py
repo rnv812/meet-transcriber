@@ -38,6 +38,7 @@ ACTIVE = (RECORDING, ANALYZING)
 
 BUSY_RECORDING = "Идёт запись — образец голоса можно записать после неё"
 BUSY_TAKE = "Образец голоса уже записывается"
+ENGINE_INSTALLING = "Идёт установка движка — образец голоса можно записать после неё"
 NO_ENGINE = "Сначала установите движок расшифровки — без него голос не разобрать"
 NO_TOKEN = "Нужен токен Hugging Face: без него модель голосов не загрузить"
 NO_MODEL = "Скачайте модель разделения на спикеров: отпечаток голоса строит она"
@@ -91,14 +92,16 @@ def _bad_request(text: str):
 class OwnerTakes:
     """Запись и разбор образца голоса, по одной попытке за раз.
 
-    `busy()` — идёт ли запись встречи; `voices()` — папка базы голосов;
-    `queue` — KeyedQueues резидента (слот по папке базы голосов). Запись,
-    готовность и фон подменяются в тестах."""
+    `busy()` — идёт ли запись встречи; `installing()` — ставится ли движок
+    (задача грузит его torch, а pip переставлял бы его на ходу); `voices()` —
+    папка базы голосов; `queue` — KeyedQueues резидента (слот по папке базы
+    голосов). Запись, готовность и фон подменяются в тестах."""
 
-    def __init__(self, *, queue, bus, busy, voices, log=print, record=None, ready=None,
-                 background=None, clock=time.time) -> None:
+    def __init__(self, *, queue, bus, busy, voices, installing=lambda: False, log=print, record=None,
+                 ready=None, background=None, clock=time.time) -> None:
         self.queue = queue
         self.busy = busy
+        self.installing = installing
         self.voices = voices
         self.log = log
         self._record = record or capture
@@ -134,6 +137,8 @@ class OwnerTakes:
         device = (device or "").strip() or None
         if self.busy():
             raise _conflict(BUSY_RECORDING)
+        if self.installing():
+            raise _conflict(ENGINE_INSTALLING)
         reason = self._ready()
         if reason:
             raise _conflict(reason)

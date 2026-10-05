@@ -264,3 +264,12 @@ def test_tray_control_refuses_take_while_recording(monkeypatch, tmp_path):
     with pytest.raises(control.Conflict, match="Идёт запись"):
         state.owner_voice_record({})
     assert state.owner_voice_delete("нет") == {"error": "образца нет"}
+
+
+def test_refused_while_the_engine_is_being_installed(tmp_path):
+    takes = owner_voice_control.OwnerTakes(
+        queue=jobs.KeyedQueues(events.EventBus()), bus=events.EventBus(), busy=lambda: False,
+        installing=lambda: True, voices=lambda: tmp_path, ready=lambda: None, record=lambda d, o: {},
+        background=lambda fn: fn())
+    with pytest.raises(control.Conflict, match="установка движка"):
+        takes.record({})
