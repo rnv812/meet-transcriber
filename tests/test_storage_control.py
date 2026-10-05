@@ -178,7 +178,8 @@ def test_while_held_nothing_new_starts(app, tmp_path):
         assert state.storage_hold()["held"] is True
         with pytest.raises(control.Conflict, match="перенос"):
             state.start_recording()
-        assert app.start_recording(tray.AUTO) is False  # автозапись
+        with pytest.raises(storage.Held):  # автозапись и меню трея
+            app.start_recording(tray.AUTO)
         assert app.recording is False
         with pytest.raises(control.Conflict, match="перенос"):
             state.download_model({"id": "gigaam/v3_e2e_rnnt"})
@@ -289,6 +290,37 @@ def test_auto_analysis_refused_by_the_hold_is_deferred_not_lost(app, tmp_path, m
     with pytest.raises(storage.Held):
         state._queue_improve(folder, low=True)
     assert state.llm_queue.listing() == []
+
+
+def test_hold_landing_after_the_precheck_still_says_transfer(app, monkeypatch):
+    """Удержание пришло между быстрой проверкой и воротами записи: отказ —
+    «идёт перенос» (409), а не «запись уже идёт»; автозапись повторит."""
+    state = tray_control.TrayControl(app)
+    answers = iter([False])
+
+    def held():
+        return next(answers, True)
+
+    monkeypatch.setattr(storage.HOLD, "held", held)
+    with pytest.raises(control.Conflict, match="перенос"):
+        state.start_recording()
+    assert app.recording is False
+    monkeypatch.setattr(tray_control, "_provider_installed", lambda cfg: True)
+    answers = iter([False])
+    monkeypatch.setattr(storage.HOLD, "held", lambda: next(answers, True))
+    with pytest.raises(control.Conflict, match="перенос"):
+        state.live_start()
+    assert app.recording is False
+    released = []
+
+    class Watcher:
+        def release(self):
+            released.append(True)
+
+    app.watcher = Watcher()
+    monkeypatch.setattr(storage.HOLD, "held", lambda: True)
+    app._auto_start()
+    assert released == [True], "автозапись повторит попытку на этом же звонке"
 
 
 def test_auto_record_while_held_retries_on_the_same_call(app):

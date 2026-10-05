@@ -412,19 +412,17 @@ class TrayApp:
     # --- запись ---------------------------------------------------------
 
     def start_recording(self, source: str, attempt: "RecordAttempt | None" = None) -> bool:
-        """Поднять запись. False — если запись уже идёт (своя или ассистента)
-        или резидент удержан для переключения папки движка (`storage.HOLD`):
-        проверка удержания и начало записи — под одним замком.
+        """Поднять запись. False — если запись уже идёт (своя или ассистента).
+        Резидент удержан для переключения папки движка (`storage.HOLD`) —
+        `storage.Held`: проверка удержания и начало записи — один шаг под
+        одним замком, и причина отказа доходит до вызывающего (409 «идёт
+        перенос», повтор автозаписи), а не превращается в «уже идёт».
         `attempt` — канал этой попытки: чем кончился поток записи (ошибка
         старта не теряется, даже когда тикер уже забрал её из `result`)."""
         from meet import storage
 
-        try:
-            with storage.HOLD.gate():
-                return self._start_recording(source, attempt)
-        except storage.Held:
-            self.log("идёт перенос движка и моделей — запись не начата")
-            return False
+        with storage.HOLD.gate():
+            return self._start_recording(source, attempt)
 
     def _start_recording(self, source: str, attempt: "RecordAttempt | None" = None) -> bool:
         with self._mutex:
@@ -581,7 +579,15 @@ class TrayApp:
     # --- пункты меню ----------------------------------------------------
 
     def _on_start(self, icon=None, item=None) -> None:
-        if self.start_recording(MANUAL):
+        from meet import storage
+
+        try:
+            started = self.start_recording(MANUAL)
+        except storage.Held:
+            self.log("идёт перенос движка и моделей — запись не начата")
+            self._notify("Идёт перенос движка и моделей — запись будет доступна через минуту")
+            return
+        if started:
             self.log("запись запущена вручную")
             return
         if self.source == AUTO:
@@ -797,19 +803,21 @@ class TrayApp:
             return
         from meet import storage
 
-        if storage.HOLD.held():
+        left = self._retry_after - time.monotonic()
+        if left > 0:
+            self.log(f"предыдущая попытка сорвалась — повторю через {left:.0f} с")
+            self.watcher.release()  # чтобы попытка повторилась на этом же звонке
+            return
+        try:
+            started = self.start_recording(AUTO)
+        except storage.Held:
             # Оболочка переключает папку движка: не начнём сейчас — попробуем
             # снова на этом же звонке (новый резидент тоже его увидит).
             self.log("звонок начался, идёт перенос движка и моделей — запись позже")
             self._retry_after = time.monotonic() + RETRY_AFTER_S
             self.watcher.release()
             return
-        left = self._retry_after - time.monotonic()
-        if left > 0:
-            self.log(f"предыдущая попытка сорвалась — повторю через {left:.0f} с")
-            self.watcher.release()  # чтобы попытка повторилась на этом же звонке
-            return
-        if not self.start_recording(AUTO):
+        if not started:
             return
         browser = getattr(self.signals, "browser_call", None)
         self.recording_title = (browser or {}).get("title") or None
