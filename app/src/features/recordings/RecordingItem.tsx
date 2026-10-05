@@ -37,6 +37,13 @@ export function badgeOf(st: RecStatus, shown?: number | null): { text: string; t
       if (f !== null && typeof st.job?.fraction === "number") return { text: `${Math.floor(f * 100)}% · ${label}`, tone: "run" };
       return { text: `${label}${f !== null ? ` ${Math.floor(f * 100)}%` : "…"}`, tone: "run" };
     }
+    case "text": {
+      // Текст уже виден, идут спикеры: доля всей расшифровки и что сейчас делается.
+      if (!st.job) return { text: "Без спикеров", tone: "" };
+      if (st.job.state === "queued") return { text: "В очереди", tone: "" };
+      const f = shown ?? jobFraction(st.job);
+      return { text: f !== null ? `${Math.floor(f * 100)}% · Определяю спикеров` : "Определяю спикеров…", tone: "run" };
+    }
     case "failed":
       return { text: "Ошибка", tone: "err" };
     case "untranscribed":
@@ -94,7 +101,8 @@ export function RecordingItem({
   const when = rec.started_at ? dayLabel(rec.started_at) : "";
   /** Агент этой записи работает (вкладка «Агент»), хоть открыта и другая запись. */
   const agentLive = useAgentLive(rec.id);
-  const job = status.kind === "running" ? status.job ?? null : null;
+  const job = status.kind === "running" ? status.job ?? null
+    : status.kind === "text" && status.job?.state === "running" ? status.job : null;
   const shown = useSmoothProgress(job ? jobFraction(job) : null, job ? jobStageKey(job) : null,
     { extrapolate: job?.state === "running", cap: job?.cap ?? null });
   const badge = badgeOf(status, job ? shown : null);
@@ -173,7 +181,7 @@ export function RecordingItem({
     ...(actions?.onOpenFolder ? [{
       label: "Открыть папку", icon: <FolderOpen {...ICON} />, onSelect: () => { closeMenu(); actions.onOpenFolder?.(rec); },
     }] : []),
-    ...(actions?.onKbExport && rec.has_transcript ? [{
+    ...(actions?.onKbExport && rec.has_transcript && rec.transcript_phase !== "text" ? [{
       label: "Экспорт в базу знаний", icon: <BookOpen {...ICON} />,
       onSelect: () => { closeMenu(); actions.onKbExport?.(rec.id); },
     }] : []),

@@ -29,7 +29,7 @@ export type TurnAnnotations = {
 /** Плоский список без компонента на реплику: 2 часа записи — около тысячи блоков. */
 export const Turns = memo(function Turns({
   turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, marks, onAskAgent,
-  rows, annotations, onAskChapter, onExpand,
+  rows, annotations, onAskChapter, onExpand, textPhase = false,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
@@ -53,6 +53,11 @@ export const Turns = memo(function Turns({
   onAskChapter?: (chapter: number) => void;
   /** Развернуть свёрнутые реплики «… N реплик» (по первой из них). */
   onExpand?: (from: number) => void;
+  /**
+   * Текст до спикеров (Р4): подписи — просто текст, не кнопки; у собеседников подписи нет вовсе
+   * (ни «Неизвестный», ни «Спикер N» — их скажет диаризация).
+   */
+  textPhase?: boolean;
 }) {
   // Ctrl/Shift+щелчок по реплике — выбор; простой щелчок по тексту остаётся выделением текста.
   const pick = (e: MouseEvent, i: number) => {
@@ -136,7 +141,11 @@ export const Turns = memo(function Turns({
             <div className="turn__body">
               <div className="turn__head">
                 {types?.[i] && <TypeIcon type={types[i]!} />}
-                {t.speaker === NO_SPEAKER ? (
+                {textPhase && t.speaker === NO_SPEAKER ? (
+                  <span className="sr-only">Спикер ещё не определён</span>
+                ) : textPhase ? (
+                  <span className="turn__speaker">{t.speaker}</span>
+                ) : t.speaker === NO_SPEAKER ? (
                   <span className="turn__speaker turn__speaker--unnamed">{t.speaker}</span>
                 ) : (
                   <button type="button" className={`turn__speaker${unnamed ? " turn__speaker--unnamed" : ""}`}

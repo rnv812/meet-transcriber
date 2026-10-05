@@ -17,6 +17,7 @@ import {
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { layoutRows, turnAt, typeCounts, type AnalysisView, type InsightView } from "../../lib/analysisView";
 import { JiraLinks, jiraTasks } from "../../lib/jira";
+import { placeOf, restorePlace, scrollParent, type Place } from "../../lib/keepPlace";
 import { findHits, parseQuery, prepare } from "../../lib/search";
 import type { Turn } from "../../lib/speakers";
 import type { PhraseType } from "../../lib/types";
@@ -60,6 +61,7 @@ const scrollTo = (el: Element) => el.scrollIntoView?.({ block: "center", behavio
 export function TranscriptView({
   turns, colors, playable, onPlay, onNameSpeaker, onSpeaker, selected, onSelect, onSplitAt, toolbar, find, onAskAgent,
   view = null, onAskChapter, onAskInsight, reveal = null, onRestrictSelection, tools, seekTo = null, nowTurn = null,
+  textPhase = false,
 }: {
   turns: Turn[];
   colors: Map<string, string>;
@@ -93,6 +95,8 @@ export function TranscriptView({
   seekTo?: SeekRequest | null;
   /** Реплика, которая звучит сейчас (номер в `turns`): отметка «сейчас играет». */
   nowTurn?: number | null;
+  /** Текст до спикеров (Р4): подписи без действий; пришли спикеры — место чтения сохраняется. */
+  textPhase?: boolean;
 }) {
   const [text, setText] = useState(find?.q ?? "");
   const [query, setQuery] = useState(find?.q ?? "");
@@ -257,6 +261,27 @@ export function TranscriptView({
     setTimeout(() => done.classList.remove("turn--flash"), FLASH_MS);
   }, [pendingSeek, shownNow, turns, rows]);
 
+  // Текст до спикеров сменился окончательной расшифровкой: реплики пересобраны, а
+  // читают то же место. Где оно было, смотрим по ещё не обновлённому DOM (во время
+  // отрисовки), возвращаем — после неё, до показа кадра.
+  const lastPhase = useRef(textPhase);
+  const lastTurns = useRef(turns);
+  const keep = useRef<{ place: Place; scroller: HTMLElement } | null>(null);
+  if (lastTurns.current !== turns) {
+    if (lastPhase.current && !textPhase && box.current) {
+      const scroller = scrollParent(box.current);
+      const place = scroller ? placeOf(scroller, box.current, lastTurns.current) : null;
+      keep.current = scroller && place ? { place, scroller } : null;
+    }
+    lastTurns.current = turns;
+    lastPhase.current = textPhase;
+  }
+  useLayoutEffect(() => {
+    const held = keep.current;
+    keep.current = null;
+    if (held && box.current) restorePlace(held.scroller, box.current, turns, held.place);
+  }, [turns]);
+
   // «Сейчас играет»: атрибут мимо React — реплики не перерисовываются при смене.
   useLayoutEffect(() => {
     const root = box.current;
@@ -377,7 +402,7 @@ export function TranscriptView({
         <Turns turns={turns} colors={colors} playable={playable} onPlay={onPlay} onNameSpeaker={onNameSpeaker}
           onSpeaker={onSpeaker} selected={selected} onSelect={onSelect ? select : undefined} onSplitAt={onSplitAt}
           marks={active ? marks : undefined} onAskAgent={onAskAgent} rows={rows} annotations={annotations}
-          onAskChapter={onAskChapter} onExpand={expand} />
+          onAskChapter={onAskChapter} onExpand={expand} textPhase={textPhase} />
       )}
     </div>
   );

@@ -6,7 +6,12 @@ export type RecStatus =
   | { kind: "running"; stage: string; label: string; done?: number; total?: number; job?: Job }
   | { kind: "failed"; error: string; retry: "transcribe" | "import" }
   | { kind: "ready" }
-  | { kind: "untranscribed" };
+  | { kind: "untranscribed" }
+  /**
+   * Текст расшифровки готов, спикеров ещё нет (`transcript_phase: "text"`, Р4): `job` — задача, которая их
+   * определяет (идёт или ждёт); null — её нет (отменили, упала, резидент перезапустился), `error` — почему упала.
+   */
+  | { kind: "text"; job: Job | null; error?: string };
 
 const STAGES: Record<string, string> = {
   convert: "Подготовка звука",
@@ -89,6 +94,13 @@ export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null)
     return { kind: "recording" };
   if (isLiveRecording(rec, snapshot)) return { kind: "recording" };
   if (snapshot?.processing?.some((p) => norm(p) === norm(rec.path))) return PROCESSING;
+  if (rec.transcript_phase === "text") {
+    const active = activeJobOf(rec, jobs);
+    if (active) return { kind: "text", job: active };
+    const failed = mine.at(-1);
+    return failed?.state === "failed" && failed.error ? { kind: "text", job: null, error: failed.error }
+      : { kind: "text", job: null };
+  }
   if (mine.some((j) => j.state === "queued")) return { kind: "queued" };
   const running = mine.find((j) => j.state === "running");
   if (running) {

@@ -90,6 +90,8 @@ export type Job = {
   eta_s?: number | null;
   /** Предупреждение на всю задачу, например «Распознаётся на процессоре: видеокарта NVIDIA не найдена». */
   warning?: string | null;
+  /** Расшифровка: текст уже записан, идут спикеры (`transcript.text`, с 0.3.3) — карточку пора перечитать. */
+  text_ready?: boolean | null;
   result: string | null;
   error: string | null;
   /** Секунды эпохи; старые резиденты их не присылали. */
@@ -123,6 +125,11 @@ export type Recording = {
   system_audio?: "missing" | "partial" | null;
   /** Почему: нет разрешения «Запись экрана», нет помощника, старая macOS, помощник не запустился. */
   system_audio_reason?: "permission" | "helper" | "unsupported" | "failed" | null;
+  /**
+   * "text" — транскрипт пока только текст, спикеры не определены (идёт диаризация или расшифровку
+   * прервали между фазами): по нему нет анализа, итогов, правки спикеров. null — окончательный.
+   */
+  transcript_phase?: "text" | null;
   /** Выгрузка в базу знаний: куда и когда; `error` — последняя не удалась. Не выгружалась — null. */
   kb_export?: KbExportRecord | null;
   /** Объединённая встреча (`source: "merge"`); у остальных — null. */
@@ -216,6 +223,8 @@ export type Segment = {
 export type Transcript = {
   version: number;
   title: string | null;
+  /** "text" — текст до спикеров (см. `Recording.transcript_phase`); у окончательного поля нет. */
+  phase?: "text";
   segments: Segment[];
   names?: Record<string, string>;
 };

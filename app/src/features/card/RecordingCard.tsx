@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { Sparkles } from "lucide-react";
 import { agentPrompt, type AgentRequest } from "../../lib/agentRef";
 import {
@@ -47,6 +47,8 @@ import "./card.css";
 type Loaded = Recording & { transcript: Transcript | null };
 
 const NO_PEOPLE: PersonColor[] = [];
+/** Текст до спикеров: в шапке чипов спикеров нет. */
+const NO_NAMES: string[] = [];
 const NO_SEGMENTS: Segment[] = [];
 /** Одна ссылка на «задач нет»: новая ссылка `jobs` для вкладок — это обновление списка. */
 const NO_JOBS: Job[] = [];
@@ -171,7 +173,9 @@ export function RecordingCard({
 
   // Состояние задач этой записи: при смене (очередь, готово) карточку надо перечитать.
   const jobSig = useMemo(
-    () => jobs.filter((j) => rec && norm(j.folder) === norm(rec.path)).map((j) => `${j.id}:${j.state}`).join(","),
+    // `text_ready` — текст уже записан, идут спикеры (Р4): показать его, не дожидаясь конца задачи.
+    () => jobs.filter((j) => rec && norm(j.folder) === norm(rec.path))
+      .map((j) => `${j.id}:${j.state}${j.text_ready ? ":text" : ""}`).join(","),
     [jobs, rec],
   );
 
@@ -201,10 +205,21 @@ export function RecordingCard({
   const jiraLinks = useMemo(() => jiraCard(jira, rec?.jira, turns), [jira, rec?.jira, turns]);
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
+  /** Где плеер сейчас (последнее сообщение): реплики пересобраны — отметка «играет» по нему. */
+  const playheadAt = useRef<number | null>(null);
   const playhead = useCallback((t: number) => {
+    playheadAt.current = t;
     const i = turnAt(turnsRef.current, t);
     setNowTurn(i < 0 ? null : i); // тот же номер — React не перерисует
   }, []);
+  // Пришли спикеры (или правка пересобрала реплики): номер звучащей реплики — в новом списке,
+  // до показа кадра, чтобы отметка не мигнула на чужой реплике.
+  useLayoutEffect(() => {
+    const t = playheadAt.current;
+    if (t === null) return;
+    const i = turnAt(turns, t);
+    setNowTurn(i < 0 ? null : i);
+  }, [turns]);
   const speakers = useMemo(() => speakersOf(segments ?? []), [segments]);
   const openSpeakers = useCallback((label?: string) => setPanel((p) => ({
     open: true, mounted: true, focus: label ? { label, n: (p.focus?.n ?? 0) + 1 } : p.focus,
@@ -347,11 +362,15 @@ export function RecordingCard({
   const doCancel = async () => {
     if (!active) return;
     const queued = active.state === "queued";
+    // Текст уже записан (Р4): он останется, без спикеров.
+    const textKept = rec.transcript_phase === "text";
     const ok = await confirm({
       title: queued ? "Убрать из очереди?" : "Отменить расшифровку?",
-      message: queued
-        ? "Запись не будет расшифрована, пока вы не запустите расшифровку снова."
-        : "Сделанная часть работы будет потеряна. Расшифровку можно будет запустить заново.",
+      message: textKept
+        ? "Текст останется без спикеров. Расшифровку можно будет запустить заново."
+        : queued
+          ? "Запись не будет расшифрована, пока вы не запустите расшифровку снова."
+          : "Сделанная часть работы будет потеряна. Расшифровку можно будет запустить заново.",
       confirmLabel: queued ? "Убрать из очереди" : "Отменить расшифровку",
       cancelLabel: queued ? "Оставить" : "Продолжить расшифровку",
     });
@@ -375,6 +394,20 @@ export function RecordingCard({
     </Button>
   ) : null;
   const retranscribeFailed = status.kind === "ready" ? failedRetranscribe(rec, jobs) : null;
+  /** Строка хода над текстом до спикеров: спокойно, без полосы — текст уже можно читать. */
+  const textNote = (st: Extract<typeof status, { kind: "text" }>) => (
+    <div className="card__textfirst" role="status" aria-label="Ход расшифровки">
+      <span className="card__textfirst-text">
+        {!st.job ? "Спикеры не определены: расшифровка прервалась"
+          : st.job.state === "queued" ? "Текст готов · спикеры — в очереди" : "Текст готов · определяю спикеров…"}
+      </span>
+      {/* Например, разделение на спикеров идёт на процессоре — и почему. */}
+      {st.job?.warning && <span className="muted card__textfirst-note">{st.job.warning}</span>}
+      {!st.job && st.error && <span className="muted card__textfirst-note" title={st.error}>{st.error}</span>}
+      {st.job ? cancelButton
+        : <Button onClick={doTranscribe} disabled={busy}>Расшифровать заново</Button>}
+    </div>
+  );
   const doDelete = () => act(async () => {
     // Плеер отпускает файл до запроса: резидент не удалит открытый playback.opus.
     player.current?.release();
@@ -402,7 +435,7 @@ export function RecordingCard({
   // режим → расшифровка → готово», и даже остановку ассистента посреди записи
   // (запись идёт дальше — «Запись · Агент», агент получает ленту, что успела).
   const live = status.kind === "recording" && !!snapshot?.live && isLiveRecording(rec, snapshot);
-  const stage: CardStage = status.kind === "ready" ? "ready" : live ? "live"
+  const stage: CardStage = status.kind === "ready" ? "ready" : status.kind === "text" ? "text" : live ? "live"
     : status.kind === "recording" ? "recording" : "pending";
   let first;
   switch (status.kind) {
@@ -423,6 +456,16 @@ export function RecordingCard({
           }
           find={shownFind} view={transcriptView} onAskChapter={askChapter} onAskInsight={askInsight} seekTo={seekTo} nowTurn={nowTurn} />
       ) : <EmptyState title="В записи нет речи" />;
+      break;
+    case "text":
+      // Текст до спикеров (Р4): тот же список реплик, что у готовой записи (спикеры придут на
+      // него же — место чтения и поиск не теряются), но без действий, которым нужны спикеры.
+      first = turns.length ? (
+        <TranscriptView turns={turns} colors={colors} playable={playable} onPlay={play} textPhase
+          toolbar={textNote(status)} find={shownFind} seekTo={seekTo} nowTurn={nowTurn} />
+      ) : (
+        <EmptyState title="В записи нет речи" action={textNote(status)} />
+      );
       break;
     case "untranscribed":
       first = <EmptyState title="Запись не расшифрована"
@@ -468,14 +511,15 @@ export function RecordingCard({
 
   return (
     <section className={`card${panel.open && status.kind === "ready" ? " card--with-spk" : ""}`} ref={cardEl}>
-      <CardHeader rec={rec} durationS={rec.duration_s ?? spokenUntil} speakers={speakers} people={people}
+      <CardHeader rec={rec} durationS={rec.duration_s ?? spokenUntil}
+        speakers={status.kind === "text" ? NO_NAMES : speakers} people={people}
         endpoint={endpoint} avatarVersion={avatarVersion} onRename={rename} onNameSpeaker={nameSpeaker}
         onOpenSpeakers={status.kind === "ready" ? () => openSpeakers() : undefined} speakersOpen={panel.open}
         categories={categories} onCategory={chooseCategory}
         onOpenCategories={onOpenSettings ? () => onOpenSettings("categories") : undefined} />
       <CardActions
         canExport={status.kind === "ready"}
-        canRetranscribe={status.kind === "ready"}
+        canRetranscribe={status.kind === "ready" || (status.kind === "text" && !status.job)}
         busy={busy}
         onExport={doExport}
         onKbExport={meetingsDir && status.kind === "ready" ? doKbExport : undefined}

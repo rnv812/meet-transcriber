@@ -29,9 +29,10 @@ import "./assistant.css";
 type Tab = "transcript" | "summary" | "agent";
 /**
  * Этап записи: готова, идёт запись с ассистентом, идёт запись без него, ждёт
- * расшифровки или расшифровывается.
+ * расшифровки или расшифровывается; `text` — текст расшифровки уже есть, а
+ * спикеров ещё нет (Р4): итогов по нему нет, а поиск по тексту есть.
  */
-export type CardStage = "ready" | "live" | "recording" | "pending";
+export type CardStage = "ready" | "live" | "recording" | "pending" | "text";
 
 /** Где Ctrl+F не уводит к поиску по расшифровке (в терминале агента клавиши — агенту). */
 const FIND_IGNORED = ".rec-item__input, [role=dialog], [role=alertdialog], [aria-modal=true], .popover, .item-menu, [data-agent-terminal]";
@@ -51,6 +52,10 @@ const TABS: Record<CardStage, { id: Tab; label: string }[]> = {
     { id: "agent", label: "Агент" },
   ],
   pending: [
+    { id: "transcript", label: "Расшифровка" },
+    { id: "agent", label: "Агент" },
+  ],
+  text: [
     { id: "transcript", label: "Расшифровка" },
     { id: "agent", label: "Агент" },
   ],
@@ -123,7 +128,7 @@ export function CardTabs({
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       // Поиска по расшифровке ещё нет (живой режим, расшифровка идёт) — Ctrl+F браузера.
-      if (stage !== "ready") return;
+      if (stage !== "ready" && stage !== "text") return;
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.code !== "KeyF") return;
       if (e.target instanceof Element && e.target.closest(FIND_IGNORED)) return;
       e.preventDefault();
