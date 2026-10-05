@@ -109,11 +109,32 @@ def cache_root() -> Path:
     home = os.environ.get("HF_HOME")
     if home:
         return Path(home) / "hub"
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg:  # так же решает huggingface_hub (Linux)
+        return Path(xdg) / "huggingface" / "hub"
     return Path.home() / ".cache" / "huggingface" / "hub"
 
 
 def _folder(repo_id: str) -> Path:
     return cache_root() / ("models--" + repo_id.replace("/", "--"))
+
+
+def local_snapshot(repo_id: str, required: tuple[str, ...] = ("config.yaml",)) -> Path | None:
+    """Скачанная модель: папка снапшота `refs/main` в кэше, если в ней есть
+    все `required` файлы. Нет модели или загрузка оборвалась — None.
+
+    По папке снапшота модель грузится без единого запроса к Hugging Face (по
+    имени репозитория библиотеки спрашивают Hub о ревизии на каждой загрузке:
+    зависший прокси или DNS — десятки секунд, а то и ошибка)."""
+    folder = _folder(repo_id)
+    try:
+        ref = (folder / "refs" / "main").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return None
+    snapshot = folder / "snapshots" / ref
+    if not ref or not all((snapshot / name).is_file() for name in required):
+        return None
+    return snapshot
 
 
 def downloaded(repo_id: str) -> bool:

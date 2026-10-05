@@ -388,6 +388,39 @@ def _whisper_kwargs(device: str) -> dict:
     return {"cpu_threads": max(1, (os.cpu_count() or 2) - 1)}
 
 
+def _whisper_model(WhisperModel, model_name: str, device: str, compute_type: str):
+    """Модель Whisper. Скачана — из кэша (`local_files_only`): по имени
+    faster-whisper на каждой загрузке спрашивает Hugging Face о ревизии, а на
+    плохой сети это десятки секунд. Не скачана, кэш неполный или папка своей
+    модели — как раньше."""
+    kwargs = {"device": device, "compute_type": compute_type, **_whisper_kwargs(device)}
+    if _whisper_cached(model_name):
+        try:
+            return WhisperModel(model_name, local_files_only=True, **kwargs)
+        except FileNotFoundError:  # в кэше не всё — докачает сеть
+            pass
+    return WhisperModel(model_name, **kwargs)
+
+
+def _whisper_cached(model_name: str) -> bool:
+    """Скачана ли модель Whisper (имя репозитория или размер: «medium»)."""
+    from pathlib import Path
+
+    from meet import models
+
+    if Path(model_name).is_dir():
+        return False  # своя папка: faster-whisper в сеть и так не ходит
+    repo = model_name
+    if "/" not in repo:
+        try:
+            from faster_whisper.utils import _MODELS
+
+            repo = _MODELS.get(repo)
+        except Exception:
+            repo = None
+    return bool(repo) and models.local_snapshot(repo, required=("model.bin",)) is not None
+
+
 @dataclass
 class Word:
     start: float
@@ -799,8 +832,7 @@ def transcribe_wav(
     last_error: Exception | None = None
     for compute_type in COMPUTE_TYPES[device]:
         try:
-            model = WhisperModel(model_name, device=device, compute_type=compute_type,
-                                 **_whisper_kwargs(device))
+            model = _whisper_model(WhisperModel, model_name, device, compute_type)
             print(f"Распознавание ({device}, {compute_type})...")
             segments, info = model.transcribe(
                 str(path),
@@ -881,10 +913,7 @@ class Transcriber:
         last_error: Exception | None = None
         for compute_type in COMPUTE_TYPES[self.device]:
             try:
-                self._model = WhisperModel(
-                    self.model_name, device=self.device, compute_type=compute_type,
-                    **_whisper_kwargs(self.device),
-                )
+                self._model = _whisper_model(WhisperModel, self.model_name, self.device, compute_type)
                 self.compute_type = compute_type
                 print(f"Модель загружена ({self.device}, {compute_type})")
                 return

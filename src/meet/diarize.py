@@ -94,23 +94,19 @@ def _access_reason(error: Exception) -> str:
 
 
 LOCAL_FAILED_NOTE = (
-    "Модель диаризации из кэша не загрузилась ({reason}): загружаю с Hugging Face"
+    "Модель диаризации из кэша не загрузилась ({reason}): пробую через Hugging Face"
+)
+EMBEDDING_FAILED_NOTE = (
+    "Модель голосов из кэша не загрузилась ({reason}): пробую через Hugging Face"
 )
 
 
 def _local_snapshot() -> Path | None:
-    """Скачанная модель диаризации: папка снапшота `refs/main` в кэше Hugging
-    Face (`models.cache_root`, туда же качает окно «Модели»), если в ней есть
-    config.yaml. Нет модели или загрузка оборвалась — None."""
+    """Скачанная модель диаризации (`models.local_snapshot`: снапшот `refs/main`
+    в кэше Hugging Face, туда же качает окно «Модели»)."""
     from meet import models
 
-    folder = models.cache_root() / ("models--" + DIARIZATION_MODEL.replace("/", "--"))
-    try:
-        ref = (folder / "refs" / "main").read_text(encoding="utf-8").strip()
-    except (OSError, UnicodeError):
-        return None
-    snapshot = folder / "snapshots" / ref
-    return snapshot if ref and (snapshot / "config.yaml").is_file() else None
+    return models.local_snapshot(DIARIZATION_MODEL)
 
 
 def _load_local():
@@ -128,11 +124,35 @@ def _load_local():
     try:
         pipe = Pipeline.from_pretrained(snapshot)
     except Exception as e:  # битый кэш — не повод терять спикеров: есть сеть
-        print(LOCAL_FAILED_NOTE.format(reason=type(e).__name__))
+        _log(LOCAL_FAILED_NOTE.format(reason=type(e).__name__))
         return None
     if pipe is None:
-        print(LOCAL_FAILED_NOTE.format(reason="пустой пайплайн"))
+        _log(LOCAL_FAILED_NOTE.format(reason="пустой пайплайн"))
     return pipe
+
+
+def load_speaker_embedding(device):
+    """Модель голосов WeSpeaker из чекпойнта диаризации (`device` — torch.device)
+    для «Разделить спикера» и голосов живого режима. Скачана — с диска, без
+    сети и токена; не скачана или копия битая — по имени репозитория с
+    токеном, как раньше. Телеметрия pyannote — выключена (живой процесс
+    задачей не запускается)."""
+    quiet_pyannote()
+    from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
+
+    from meet import models
+
+    snapshot = models.local_snapshot(DIARIZATION_MODEL, required=("embedding/pytorch_model.bin",))
+    if snapshot is not None:
+        try:
+            return PretrainedSpeakerEmbedding({"checkpoint": str(snapshot), "subfolder": "embedding"},
+                                              device=device)
+        except Exception as e:
+            _log(EMBEDDING_FAILED_NOTE.format(reason=type(e).__name__))
+    from meet import credentials
+
+    return PretrainedSpeakerEmbedding({"checkpoint": DIARIZATION_MODEL, "subfolder": "embedding"},
+                                      device=device, token=credentials.get_hf_token())
 
 
 def _load_pipeline(token: str):

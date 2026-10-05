@@ -40,11 +40,26 @@ def _regroup_words(words, token_counts, spans, seg_start, spf):
 
 
 def _load_align_model(device):
+    """wav2vec2 для выравнивания. Скачана — из кэша (`local_files_only`): по
+    имени transformers спрашивает Hugging Face о каждом файле на каждой
+    загрузке, а это 5–8 запросов по 10 с на плохой сети. Не скачана или кэш
+    неполный — как раньше, с сетью."""
     from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 
-    processor = Wav2Vec2Processor.from_pretrained(ALIGN_MODEL)
-    model = Wav2Vec2ForCTC.from_pretrained(ALIGN_MODEL).to(device).eval()
-    return processor, model
+    from meet import models
+
+    def load(**kw):
+        return Wav2Vec2Processor.from_pretrained(ALIGN_MODEL, **kw), Wav2Vec2ForCTC.from_pretrained(ALIGN_MODEL, **kw)
+
+    processor = model = None
+    if models.local_snapshot(ALIGN_MODEL, required=("config.json",)) is not None:
+        try:
+            processor, model = load(local_files_only=True)
+        except OSError:  # нет файла в кэше — докачает сеть
+            processor = model = None
+    if model is None:
+        processor, model = load()
+    return processor, model.to(device).eval()
 
 
 def _align_device() -> str:

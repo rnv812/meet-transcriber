@@ -5,7 +5,6 @@
 
 import numpy as np
 
-from meet.diarize import DIARIZATION_MODEL
 from meet.voices import MARGIN, THRESHOLD, best_match, load_voices
 
 # Короче секунды эмбеддинг неустойчив (и упирается в min_num_samples модели —
@@ -25,17 +24,12 @@ def _embedder_device() -> str:
 
 def _build_embedder(device: str):
     import torch
-    from pyannote.audio.pipelines.speaker_verification import (
-        PretrainedSpeakerEmbedding,
-    )
 
-    from meet import credentials
+    from meet.diarize import load_speaker_embedding
 
-    model = PretrainedSpeakerEmbedding(
-        {"checkpoint": DIARIZATION_MODEL, "subfolder": "embedding"},
-        device=torch.device(device),
-        token=credentials.get_hf_token(),
-    )
+    # Скачанная модель — с диска, без запросов к Hugging Face и токена;
+    # телеметрию pyannote выключает загрузчик (живой процесс — не задача).
+    model = load_speaker_embedding(torch.device(device))
 
     def embed(audio: np.ndarray) -> np.ndarray:
         wav = torch.from_numpy(audio).float()[None, None, :]
