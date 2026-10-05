@@ -113,3 +113,33 @@ def test_window_titles_are_empty_on_mac(monkeypatch):
     путём) — сайт звонка не определяется, сбоя нет."""
     monkeypatch.setattr(watch, "_USER32", False)
     assert watch.window_titles({1, 2}) == []
+
+
+def test_native_mac_names_match_case_insensitively(monkeypatch):
+    """Имена процессов macOS из настроек (без .exe) сверяются без учёта
+    регистра и с «… Helper»."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert watch.mac_names("zoom.us") == ("zoom.us",)
+    assert watch.mac_match("zoom.us", "zoom.us")
+    assert watch.mac_match("ZOOM.US", "zoom.us")
+    assert watch.mac_match("Microsoft Teams", "microsoft teams")
+    assert watch.mac_match("MSTeams", "MSTeams")
+    assert watch.mac_match("Slack Helper (Renderer)", "Slack")
+    assert watch.mac_match("Discord", "discord")
+    assert not watch.mac_match("Slackbot", "Slack")
+    # имя с «Yandex …» длиннее браузера и принадлежит Телемосту
+    assert watch.mac_match("Yandex Telemost", "Yandex Telemost")
+    assert not watch.mac_match("Yandex Telemost", "Yandex")
+
+
+def test_process_running_native_name_on_macos(monkeypatch):
+    class _P:
+        def __init__(self, name):
+            self.info = {"name": name}
+
+    import psutil
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(psutil, "process_iter", lambda attrs=None: [_P("zoom.us"), _P("Finder")])
+    assert watch.process_running("zoom.us") is True
+    assert watch.process_running("ZOOM.US") is True
+    assert watch.process_running("Telegram") is False

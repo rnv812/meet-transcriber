@@ -11,6 +11,7 @@
 
 import { X } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
+import { OS, type Os } from "../../lib/platform";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Icon } from "../../ui/Icon";
@@ -28,9 +29,23 @@ export const BROWSERS: Browser[] = [
   { exe: "vivaldi.exe", title: "Vivaldi" },
 ];
 
+/** Браузеры macOS: имена процессов как в мониторинге системы (Яндекс Браузер — «Yandex»). */
+const MAC_BROWSERS: Browser[] = [
+  { exe: "Google Chrome", title: "Google Chrome" },
+  { exe: "Microsoft Edge", title: "Microsoft Edge" },
+  { exe: "firefox", title: "Firefox" },
+  { exe: "Yandex", title: "Яндекс Браузер" },
+  { exe: "Opera", title: "Opera" },
+  { exe: "Brave Browser", title: "Brave" },
+  { exe: "Vivaldi", title: "Vivaldi" },
+];
+
+export const browsersFor = (os: Os): Browser[] => (os === "macos" ? MAC_BROWSERS : BROWSERS);
+
 const lower = (s: string) => s.toLowerCase();
 
-export function BrowserCalls({ browsers, requireSite, sites, onBrowsers, onRequireSite, onSites }: {
+export function BrowserCalls({ browsers, requireSite, sites, onBrowsers, onRequireSite, onSites, os = OS }: {
+  os?: Os;
   browsers: string[]; requireSite: boolean; sites: string[];
   onBrowsers: (v: string[]) => void; onRequireSite: (v: boolean) => void; onSites: (v: string[]) => void;
 }) {
@@ -74,7 +89,7 @@ export function BrowserCalls({ browsers, requireSite, sites, onBrowsers, onRequi
       </div>
       <span className="srow__hint">Отметьте браузеры, в которых вы созваниваетесь</span>
       <div className="callapps__grid">
-        {BROWSERS.map((b) => (
+        {browsersFor(os).map((b) => (
           <label key={b.exe} className="callapps__item">
             <input type="checkbox" aria-label={b.title} checked={selected.has(lower(b.exe))} onChange={() => toggle(b.exe)} />
             <span className="callapps__name">

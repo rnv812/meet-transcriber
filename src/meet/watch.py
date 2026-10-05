@@ -36,8 +36,10 @@
 **macOS** (экспериментально): реестра и WASAPI нет. Оба сигнала — от
 помощника `meet-audiotap --mic-users` (CoreAudio, macOS 14+): какие процессы
 сейчас слушают микрофон и какие играют звук. Списки программ в настройках —
-имена exe Windows; на macOS они переводятся в имена процессов (`MAC_NAMES`):
-«Zoom.exe» → «zoom.us», «chrome.exe» → «Google Chrome» (и его «… Helper»).
+на macOS это имена процессов как есть («zoom.us», «Microsoft Teams», «Slack»;
+сверка без учёта регистра, «… Helper» подходит), а имена exe Windows (старый
+или перенесённый конфиг) переводятся в них через `MAC_NAMES`: «Zoom.exe» →
+«zoom.us», «chrome.exe» → «Google Chrome».
 Заголовки окон браузера на macOS не читаются — сайт звонка не определяется."""
 
 import re
@@ -110,7 +112,8 @@ _mac_users_cache: "tuple[float, list | None] | None" = None
 
 
 def mac_names(exe_name: str) -> "tuple[str, ...]":
-    """Имена процессов macOS для имени exe из настроек; незнакомое — без `.exe`."""
+    """Имена процессов macOS для записи из настроек: известное имя exe — по
+    таблице, любое другое (в том числе родное имя macOS) — как есть, без `.exe`."""
     key = exe_name.strip().lower()
     if key in MAC_NAMES:
         return MAC_NAMES[key]

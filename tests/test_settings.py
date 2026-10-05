@@ -897,3 +897,36 @@ def test_concurrent_patches_do_not_lose_each_other(tmp_path, monkeypatch):
         t.join(timeout=10)
     got = real(f)
     assert got.hooks.post_record is True and got.analysis.types is False
+
+
+def test_default_processes_per_platform(monkeypatch):
+    """На macOS умолчание — имена процессов macOS (`zoom.us`), без `.exe`;
+    на Windows — прежний список."""
+    monkeypatch.setattr("sys.platform", "darwin")
+    mac = settings.default_processes()
+    assert "zoom.us" in mac
+    assert "MSTeams" in mac
+    assert not any(n.lower().endswith(".exe") for n in mac)
+    for chat in ("Slack", "Discord", "Telegram"):
+        assert chat not in mac
+    monkeypatch.setattr("sys.platform", "win32")
+    assert settings.default_processes() == list(settings.DEFAULT_PROCESSES)
+
+
+def test_new_install_on_macos_gets_mac_defaults(tmp_path, monkeypatch):
+    monkeypatch.setattr("sys.platform", "darwin")
+    cfg = settings.load(tmp_path / "нет.json")
+    assert cfg.auto_record.processes == settings.default_processes()
+    assert "zoom.us" in cfg.auto_record.processes
+    # мусор и пустой список — тоже умолчание своей платформы
+    assert settings.as_process_list([]) == settings.default_processes()
+
+
+def test_existing_config_is_kept_on_macos(tmp_path, monkeypatch):
+    """Сохранённый список (в том числе с именами exe, перенесённый с Windows)
+    не трогается: детектор переводит такие имена сам."""
+    monkeypatch.setattr("sys.platform", "darwin")
+    f = tmp_path / "settings.json"
+    _write(f, {"version": settings.SCHEMA_VERSION,
+               "auto_record": {"processes": ["Zoom.exe", "Slack"]}})
+    assert settings.load(f).auto_record.processes == ["Zoom.exe", "Slack"]

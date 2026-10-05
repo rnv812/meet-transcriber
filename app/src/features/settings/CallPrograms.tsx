@@ -2,7 +2,8 @@
  * «Программы звонков» для автозаписи: пресеты с понятными именами, свои
  * программы чипами и «Добавить программу…» с поиском по запущенным.
  *
- * Хранится по-прежнему список имён exe (`auto_record.processes`): пресет —
+ * Хранится по-прежнему список имён процессов (`auto_record.processes`: exe на
+ * Windows, имена процессов на macOS — без .exe): пресет —
  * лишь способ отметить сразу все exe одного клиента. Детектор сравнивает имена
  * без учёта регистра, поэтому и здесь сравнение такое же.
  */
@@ -12,46 +13,76 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent, type RefObject 
 import type { Processes } from "../../lib/api";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { OS, type Os } from "../../lib/platform";
 import { Icon } from "../../ui/Icon";
 
 export type CallProgram = { id: string; title: string; exes: string[]; messenger?: boolean };
 
+/** Запись каталога: имена процессов отдельно для Windows (exe) и macOS. */
+type ProgramDef = {
+  id: string; title: string; messenger?: boolean;
+  /** Имена exe Windows; пусто — программы на Windows нет. */
+  win: string[];
+  /** Имена процессов macOS (как в мониторинге системы, без .exe); пусто — программы на macOS нет. */
+  mac: string[];
+};
+
 /**
- * Известные клиенты. Имена exe сверены по документации и описаниям процессов;
+ * Известные клиенты. Имена сверены по документации и описаниям процессов;
  * где у клиента несколько вариантов установки, перечислены все — лишнее имя
- * безвредно (детектор ищет точное совпадение).
+ * безвредно (детектор ищет точное совпадение; на macOS ещё и «… Helper»).
  */
-export const CALL_PROGRAMS: CallProgram[] = [
-  { id: "zoom", title: "Zoom", exes: ["Zoom.exe"] },
-  // Новый Teams — ms-teams.exe, классический — Teams.exe.
-  { id: "teams", title: "Microsoft Teams", exes: ["ms-teams.exe", "Teams.exe"] },
+const PROGRAM_DEFS: ProgramDef[] = [
+  { id: "zoom", title: "Zoom", win: ["Zoom.exe"], mac: ["zoom.us"] },
+  // Новый Teams — ms-teams.exe / MSTeams, классический — Teams.exe / Microsoft Teams.
+  { id: "teams", title: "Microsoft Teams", win: ["ms-teams.exe", "Teams.exe"], mac: ["MSTeams", "Microsoft Teams"] },
   // Телемост в составе Яндекс Диска — YandexTelemost.exe (подтверждено).
   // Telemost.exe — кандидат для отдельной установки (MSI для организаций),
-  // имя не подтверждено.
-  { id: "telemost", title: "Яндекс Телемост", exes: ["YandexTelemost.exe", "Telemost.exe"] },
-  { id: "dion", title: "Dion", exes: ["Dion.exe"] },
+  // имя не подтверждено. Имена на macOS тоже не подтверждены.
+  { id: "telemost", title: "Яндекс Телемост", win: ["YandexTelemost.exe", "Telemost.exe"], mac: ["Yandex Telemost", "Telemost"] },
+  // Имя процесса Dion на macOS не подтверждено.
+  { id: "dion", title: "Dion", win: ["Dion.exe"], mac: ["Dion"] },
   // Webex App: звук встречи ведёт CiscoCollabHost.exe; Webex.exe был в
   // списке по умолчанию; классический Webex Meetings — webexmta.exe и atmgr.exe.
-  { id: "webex", title: "Webex", exes: ["Webex.exe", "CiscoCollabHost.exe", "webexmta.exe", "atmgr.exe"] },
-  { id: "telegram", title: "Telegram", exes: ["Telegram.exe"], messenger: true },
-  { id: "discord", title: "Discord", exes: ["Discord.exe"], messenger: true },
-  { id: "slack", title: "Slack", exes: ["slack.exe"], messenger: true },
-  { id: "skype", title: "Skype", exes: ["Skype.exe"], messenger: true },
+  // На macOS — «Webex» и классический «Cisco Webex Meetings».
+  { id: "webex", title: "Webex", win: ["Webex.exe", "CiscoCollabHost.exe", "webexmta.exe", "atmgr.exe"],
+    mac: ["Webex", "Cisco Webex Meetings"] },
+  // Имя процесса TrueConf не подтверждено.
+  { id: "trueconf", title: "TrueConf", win: ["TrueConf.exe"], mac: ["TrueConf"] },
+  // FaceTime — только macOS; звук звонка ведёт и системный avconferenced.
+  { id: "facetime", title: "FaceTime", win: [], mac: ["FaceTime"] },
+  { id: "telegram", title: "Telegram", win: ["Telegram.exe"], mac: ["Telegram"], messenger: true },
+  { id: "discord", title: "Discord", win: ["Discord.exe"], mac: ["Discord"], messenger: true },
+  { id: "slack", title: "Slack", win: ["slack.exe"], mac: ["Slack"], messenger: true },
+  { id: "skype", title: "Skype", win: ["Skype.exe"], mac: ["Skype"], messenger: true },
   // С конца 2025 WhatsApp для Windows — оболочка WebView2 (WhatsApp.Root.exe);
   // прежнее приложение — WhatsApp.exe.
-  { id: "whatsapp", title: "WhatsApp", exes: ["WhatsApp.exe", "WhatsApp.Root.exe"], messenger: true },
-  { id: "viber", title: "Viber", exes: ["Viber.exe"], messenger: true },
+  { id: "whatsapp", title: "WhatsApp", win: ["WhatsApp.exe", "WhatsApp.Root.exe"], mac: ["WhatsApp"], messenger: true },
+  { id: "viber", title: "Viber", win: ["Viber.exe"], mac: ["Viber"], messenger: true },
 ];
+
+/** Каталог программ для ОС: только существующие там, с её именами процессов. */
+export function callPrograms(os: Os): CallProgram[] {
+  return PROGRAM_DEFS
+    .map(({ win, mac, ...rest }) => ({ ...rest, exes: os === "macos" ? mac : win }))
+    .filter((p) => p.exes.length > 0);
+}
+
+/** Каталог Windows — как и раньше; для текущей ОС окна см. `callPrograms(OS)`. */
+export const CALL_PROGRAMS: CallProgram[] = callPrograms("windows");
 
 const MAX_OPTIONS = 50;
 const BAD_CHARS = /[\\/:*?"<>|]/;
+// macOS: в имени процесса допустимы пробелы, точки и двоеточия; нельзя только «/».
+const BAD_CHARS_MAC = /[/]/;
 
 const lower = (s: string) => s.toLowerCase();
-const PRESET_EXES = new Set(CALL_PROGRAMS.flatMap((p) => p.exes.map(lower)));
+const presetExes = (os: Os) => new Set(callPrograms(os).flatMap((p) => p.exes.map(lower)));
 
 /** Ошибка в имени программы или null, если имя годится. */
-export function exeProblem(name: string): string | null {
+export function exeProblem(name: string, os: Os = OS): string | null {
   if (!name) return null;
+  if (os === "macos") return BAD_CHARS_MAC.test(name) ? "Имя процесса — без символа /" : null;
   if (BAD_CHARS.test(name)) return "Имя программы — без пути и символов \\ / : * ? \" < > |";
   if (!lower(name).endsWith(".exe") || name.length <= 4) return "Имя программы должно оканчиваться на .exe";
   return null;
@@ -78,8 +109,8 @@ function PresetBox({ program, selected, onToggle }: {
   );
 }
 
-function AddProgram({ processes: initial, loadProcesses, selected, onAdd, onClose }: {
-  processes: Processes | null; loadProcesses?: () => Promise<Processes>; selected: Set<string>;
+function AddProgram({ processes: initial, loadProcesses, selected, os, onAdd, onClose }: {
+  processes: Processes | null; loadProcesses?: () => Promise<Processes>; selected: Set<string>; os: Os;
   onAdd: (name: string) => void; onClose: () => void;
 }) {
   // Список запущенных — свежий на каждое открытие: пользователь мог только что
@@ -103,7 +134,7 @@ function AddProgram({ processes: initial, loadProcesses, selected, onAdd, onClos
     return true;
   }).slice(0, MAX_OPTIONS);
   const typed = query.trim();
-  const problem = exeProblem(typed);
+  const problem = exeProblem(typed, os);
   const expanded = options.length > 0;
 
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -129,7 +160,7 @@ function AddProgram({ processes: initial, loadProcesses, selected, onAdd, onClos
       <span className="with-unit">
         <input type="text" role="combobox" aria-label="Программа" aria-expanded={expanded} aria-controls={listId}
           aria-autocomplete="list" aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
-          placeholder="Поиск по запущенным или имя.exe" autoFocus value={query}
+          placeholder={os === "macos" ? "Поиск по запущенным или имя процесса" : "Поиск по запущенным или имя.exe"} autoFocus value={query}
           onChange={(e) => { setQuery(e.target.value); setActive(-1); }} onKeyDown={onKey} />
         <Button onClick={onClose}>Отмена</Button>
       </span>
@@ -157,8 +188,10 @@ function AddButton({ buttonRef, onClick }: { buttonRef: RefObject<HTMLButtonElem
   return <div><Button ref={buttonRef} onClick={onClick}>Добавить программу…</Button></div>;
 }
 
-export function CallPrograms({ value, processes, loadProcesses, onChange }: {
+export function CallPrograms({ value, processes, loadProcesses, onChange, os = OS }: {
   value: string[]; processes: Processes | null;
+  /** Платформа; по умолчанию — окна (в тестах подменяется). */
+  os?: Os;
   /** Перечитать запущенные программы — при каждом открытии поиска. */
   loadProcesses?: () => Promise<Processes>;
   onChange: (v: string[]) => void;
@@ -172,7 +205,8 @@ export function CallPrograms({ value, processes, loadProcesses, onChange }: {
     wasAdding.current = adding;
   }, [adding]);
   const selected = new Set(value.map(lower));
-  const custom = value.filter((name) => !PRESET_EXES.has(lower(name)));
+  const catalog = callPrograms(os);
+  const custom = value.filter((name) => !presetExes(os).has(lower(name)));
 
   const toggle = (program: CallProgram) => {
     const exes = new Set(program.exes.map(lower));
@@ -187,7 +221,7 @@ export function CallPrograms({ value, processes, loadProcesses, onChange }: {
   };
   const remove = (name: string) => onChange(value.filter((n) => n !== name));
 
-  const group = (messengers: boolean) => CALL_PROGRAMS.filter((p) => Boolean(p.messenger) === messengers)
+  const group = (messengers: boolean) => catalog.filter((p) => Boolean(p.messenger) === messengers)
     .map((p) => <PresetBox key={p.id} program={p} selected={selected} onToggle={() => toggle(p)} />);
 
   return (
@@ -225,7 +259,7 @@ export function CallPrograms({ value, processes, loadProcesses, onChange }: {
         </ul>
       )}
       {adding
-        ? <AddProgram processes={processes} loadProcesses={loadProcesses} selected={selected} onAdd={add}
+        ? <AddProgram processes={processes} loadProcesses={loadProcesses} selected={selected} os={os} onAdd={add}
             onClose={() => setAdding(false)} />
         : <AddButton buttonRef={addButton} onClick={() => setAdding(true)} />}
       {value.length === 0 && (

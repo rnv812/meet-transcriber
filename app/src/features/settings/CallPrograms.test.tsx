@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { CALL_PROGRAMS, CallPrograms } from "./CallPrograms";
+import { CALL_PROGRAMS, CallPrograms, callPrograms, exeProblem } from "./CallPrograms";
 
 function Harness({ initial, running = [], onChange }: {
   initial: string[]; running?: string[]; onChange?: (v: string[]) => void;
@@ -161,4 +161,66 @@ test("подсказки «?» — общий HelpTip: открываются н
   const chat = screen.getByRole("button", { name: "Почему осторожно с мессенджерами" });
   await userEvent.click(chat);
   expect(chat).toHaveAccessibleDescription(/звуки уведомлений/);
+});
+
+describe("macOS", () => {
+  const MacHarness = ({ initial, running = [], onChange }: {
+    initial: string[]; running?: string[]; onChange?: (v: string[]) => void;
+  }) => {
+    const [value, setValue] = useState(initial);
+    return (
+      <CallPrograms os="macos" value={value} processes={{ available: true, running }}
+        onChange={(v) => { setValue(v); onChange?.(v); }} />
+    );
+  };
+
+  test("каталог macOS: имена процессов без .exe, есть FaceTime и TrueConf", () => {
+    render(<MacHarness initial={["zoom.us"]} />);
+    const mac = callPrograms("macos");
+    expect(mac.flatMap((p) => p.exes).some((n) => /\.exe$/i.test(n))).toBe(false);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(mac.length);
+    expect(screen.getByRole("checkbox", { name: "Zoom" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "FaceTime" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "TrueConf" })).toBeInTheDocument();
+    expect(screen.getByText("MSTeams, Microsoft Teams")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\.exe/i);
+  });
+
+  test("каталог Windows не содержит программ только для macOS", () => {
+    expect(callPrograms("windows").some((p) => p.id === "facetime")).toBe(false);
+    expect(callPrograms("windows").flatMap((p) => p.exes).every((n) => /\.exe$/i.test(n))).toBe(true);
+  });
+
+  test("пресет отмечается по имени процесса без учёта регистра; клик добавляет недостающие", async () => {
+    const changes: string[][] = [];
+    render(<MacHarness initial={["MSTEAMS"]} onChange={(v) => changes.push(v)} />);
+    const teams = screen.getByRole("checkbox", { name: "Microsoft Teams" }) as HTMLInputElement;
+    expect(teams.indeterminate).toBe(true);
+    await userEvent.click(teams);
+    expect(changes.at(-1)).toEqual(["MSTEAMS", "Microsoft Teams"]);
+  });
+
+  test("свободный ввод без .exe принимается; плейсхолдер без .exe", async () => {
+    const changes: string[][] = [];
+    render(<MacHarness initial={[]} onChange={(v) => changes.push(v)} />);
+    await userEvent.click(screen.getByRole("button", { name: "Добавить программу…" }));
+    const box = screen.getByRole("combobox", { name: "Программа" });
+    expect(box.getAttribute("placeholder")).not.toMatch(/\.exe/);
+    await userEvent.type(box, "My Call App{Enter}");
+    expect(changes.at(-1)).toEqual(["My Call App"]);
+  });
+
+  test("exeProblem: на macOS .exe не требуется, запрещён только «/»", () => {
+    expect(exeProblem("Ringo", "macos")).toBeNull();
+    expect(exeProblem("a/b", "macos")).not.toBeNull();
+    expect(exeProblem("Ringo", "windows")).toBe("Имя программы должно оканчиваться на .exe");
+    expect(exeProblem("Ringo.exe", "windows")).toBeNull();
+  });
+
+  test("свои программы с учётом платформы: Zoom.exe на macOS — чип, zoom.us — пресет", () => {
+    render(<MacHarness initial={["zoom.us", "Zoom.exe"]} />);
+    const custom = screen.getByRole("list", { name: "Другие программы" });
+    expect(within(custom).getByText("Zoom.exe")).toBeInTheDocument();
+    expect(within(custom).queryByText("zoom.us")).toBeNull();
+  });
 });

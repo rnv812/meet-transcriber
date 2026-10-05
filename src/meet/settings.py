@@ -77,6 +77,26 @@ DEFAULT_PROCESSES = (
     "Telemost.exe",
     "Dion.exe",
 )
+# macOS: имена процессов, как их отдаёт система (без `.exe`, регистр не важен).
+# «zoom.us» — процесс Zoom (подтверждено); новый Teams — «MSTeams», классический
+# — «Microsoft Teams»; имена Телемоста и Dion на macOS НЕ подтверждены —
+# детектор сверяет и «… Helper» этих имён.
+DEFAULT_PROCESSES_MAC = (
+    "zoom.us",
+    "MSTeams",
+    "Microsoft Teams",
+    "Yandex Telemost",
+    "Telemost",
+    "Dion",
+)
+
+
+def default_processes() -> list[str]:
+    """Умолчание программ звонков для текущей ОС (платформа читается при каждом
+    вызове — тесты подменяют `sys.platform`)."""
+    return list(DEFAULT_PROCESSES_MAC if sys.platform == "darwin" else DEFAULT_PROCESSES)
+
+
 # Прежние умолчания — для миграции: старый конфиг без списка программ жил на
 # них, у него они и остаются (см. migrate).
 HISTORIC_PROCESSES = (
@@ -433,11 +453,12 @@ def as_str_list(value, default: tuple[str, ...]) -> list[str]:
 
 
 def as_process_list(value) -> list[str]:
-    """Программы звонков (имена exe). Пробелы по краям и повторы (без учёта
+    """Программы звонков (имена exe на Windows, имена процессов на macOS). Пробелы по краям и повторы (без учёта
     регистра — детектор сравнивает имена так же) убираются. Пустой список, как
     и мусор, — список по умолчанию: детектор без программ не видел бы звонков
     вовсе, а выключатель для этого есть отдельный (`enabled`)."""
-    return _unique(as_str_list(value, DEFAULT_PROCESSES)) or list(DEFAULT_PROCESSES)
+    fallback = tuple(default_processes())
+    return _unique(as_str_list(value, fallback)) or list(fallback)
 
 
 def _unique(values) -> list[str]:
@@ -503,7 +524,7 @@ class AutoRecord:
     ничего не записывая)."""
 
     enabled: bool = False
-    processes: list[str] = field(default_factory=lambda: list(DEFAULT_PROCESSES))
+    processes: list[str] = field(default_factory=default_processes)
     grace_minutes: float = DEFAULT_GRACE_MIN
     poll_seconds: float = DEFAULT_POLL_S
     min_call_seconds: float = DEFAULT_MIN_CALL_S

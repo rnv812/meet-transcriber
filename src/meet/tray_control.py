@@ -1227,7 +1227,7 @@ class TrayControl:
         за пользователя, какая программа у него для звонков, нельзя, а показать
         реальность — можно."""
         selected = set(self.tray.cfg["processes"])
-        known = set(settings.DEFAULT_PROCESSES)
+        known = set(settings.default_processes())
         names: set[str] = set()
         try:
             import psutil

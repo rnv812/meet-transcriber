@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { BROWSERS, BrowserCalls } from "./BrowserCalls";
+import { BROWSERS, BrowserCalls, browsersFor } from "./BrowserCalls";
 
 type Value = { browsers: string[]; requireSite: boolean; sites: string[] };
 
@@ -81,4 +81,14 @@ test("подсказка честно говорит про мьют в веб-�
   await userEvent.click(tip);
   expect(tip).toHaveAccessibleDescription(/дольше 15 секунд/);
   expect(tip).toHaveAccessibleDescription(/выключенным микрофоном может его освободить/);
+});
+
+test("macOS: браузеры — имена процессов без .exe", () => {
+  const onBrowsers = vi.fn();
+  render(<BrowserCalls os="macos" browsers={["google chrome"]} requireSite={false} sites={[]}
+    onBrowsers={onBrowsers} onRequireSite={() => {}} onSites={() => {}} />);
+  expect(browsersFor("macos").some((b) => /\.exe$/i.test(b.exe))).toBe(false);
+  expect(screen.getByRole("checkbox", { name: "Google Chrome" })).toBeChecked();
+  expect(screen.getByText("Brave Browser")).toBeInTheDocument();
+  expect(document.body.textContent).not.toMatch(/\.exe/i);
 });
