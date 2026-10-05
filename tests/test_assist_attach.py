@@ -443,3 +443,17 @@ def test_reattach_catches_up_from_the_end_of_the_last_heard_line(tmp_path, monke
     assert captured["tracks"]["mic.wav"][1:] == (66.5, 300.0)
     saved = json.loads((folder / LIVE_STATE_JSON).read_text(encoding="utf-8"))
     assert saved["heard_t"] == 66.5 and "partial" not in saved
+
+
+def test_status_of_a_recording_with_assistant_shows_its_stage(monkeypatch, capsys):
+    from meet import cli, control
+
+    monkeypatch.setattr(control, "request", lambda path, **kw: {
+        "status": "recording", "source": "live", "folder": "D:/rec/f", "elapsed_s": 5,
+        "live": {"active": True, "ready": False, "attached": True, "folder": "D:/rec/f",
+                 "stage": "загружаю модель распознавания…", "started_at": time.time() - 5},
+        "auto_record": {}, "recordings_dir": "D:/rec"})
+    cli.print_status()
+    out = capsys.readouterr().out
+    assert "Идёт запись (с ассистентом): D:/rec/f" in out
+    assert "Ассистент: запускается (загружаю модель распознавания…)" in out

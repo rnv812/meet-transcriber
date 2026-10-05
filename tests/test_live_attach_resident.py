@@ -234,6 +234,10 @@ def test_audio_ends_at_the_click_even_if_the_assistant_takes_its_time(resident, 
     from meet import recorder
 
     tr._fake_audio(monkeypatch)
+    # Настоящий recorder.record (на поддельном звуке), а не подделка фикстуры.
+    monkeypatch.setattr(tray, "record", recorder.record)
+    monkeypatch.setattr(resident.tray, "_current_folder",
+                        tray.TrayApp._current_folder.__get__(resident.tray))
     created = []
 
     class Writer(tr._DummyWriter):
@@ -267,7 +271,7 @@ def test_assistant_crash_does_not_touch_the_recording(resident, monkeypatch, tmp
             f"http://127.0.0.1:{resident.live._port}/crash", data=b"{}", method="POST"),
             timeout=5).close()
         _wait_for(lambda: not resident.live.busy())
-        assert resident.snapshot()["live"]["error"] == "RuntimeError: устройство пропало"
+        assert resident.snapshot()["live"]["error"] ==             "Ассистент упал — запись продолжается: RuntimeError: устройство пропало"
         assert resident.snapshot()["live"]["ended_by"] == live_control.ENDED_CRASH
         assert resident.tray.recording is True and resident.tray.pcm_tap.active()
         assert resident.queue.submitted == [] and order == []

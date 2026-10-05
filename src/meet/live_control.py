@@ -61,6 +61,7 @@ pipe заполнился бы и повесил ребёнка). Последн
 
 import http.client
 import json
+import re
 import os
 import queue
 import socket
@@ -94,8 +95,9 @@ START_TIMEOUT_S = 60.0
 STAGE_TIMEOUT_S = 120.0
 START_MAX_S = 300.0  # весь старт целиком, как бы ни менялись этапы
 MAX_START_ATTEMPTS = 2  # упавший до готовности старт — ещё одна попытка
-# Код выхода ребёнка «повтор не поможет» (meet.assist.app.EXIT_FATAL).
-EXIT_FATAL = 3
+# Код выхода ребёнка «повтор не поможет» (meet.assist.app.EXIT_FATAL). Не 3:
+# 3 — код abort()/std::terminate у MSVC CRT, им падают и нативные библиотеки.
+EXIT_FATAL = 78
 STAGE_RETRY = "повторяю запуск после ошибки…"
 STOP_TIMEOUT_S = 90.0  # финализация дорожек; дальше — убийство дерева
 # Выход резидента (/shutdown, смерть оболочки): оболочка ждёт ответа /shutdown
@@ -325,6 +327,28 @@ def _last_line(path: Path | None, offset: int) -> str | None:
     return lines[-1][:ERROR_MAX_CHARS] if lines else None
 
 
+# Последняя строка вывода — ошибка: исключение Python («RuntimeError: …»,
+# «gigaam.Unavailable: …» после Traceback) или текст отказа (код EXIT_FATAL).
+_EXCEPTION_LINE = re.compile(r"^[A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt)\b.*:")
+TRACEBACK_MARK = "Traceback (most recent call last)"
+
+
+def _child_error(path: Path | None, offset: int, code) -> str:
+    """Причина конца ребёнка для окна и уведомления. Последняя строка его
+    вывода — только если она и есть ошибка: иначе это строка хода работы
+    («старт: модель распознавания загружена — за 19.5 с»), а процесс упал
+    молча (нативный сбой, снят диспетчером задач, нехватка памяти)."""
+    text = _run_output(path, offset) or ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    lines = [line for line in lines if not line.startswith("--- ")]  # строки резидента
+    last = lines[-1][:ERROR_MAX_CHARS] if lines else None
+    if last is not None:
+        after_traceback = any(line.startswith(TRACEBACK_MARK) for line in lines[:-1])
+        if code == EXIT_FATAL or after_traceback or _EXCEPTION_LINE.match(last):
+            return last
+    return f"Ассистент аварийно завершился (код {_code_text(code)})"
+
+
 def _code_text(code) -> str:
     """Код выхода для человека: отрицательный или огромный (исключение
     Windows вроде 0xC0000005 — нарушение доступа) — шестнадцатеричным."""
@@ -376,12 +400,15 @@ class LiveControl:
         self._finalize_grace = finalize_grace
         self._poll_s = poll_s
         self._stage_timeout = stage_timeout
-        self._start_max = max(start_max, start_timeout)
+        self._start_max = start_max
         self._max_attempts = max(1, int(max_attempts))
         self._ready = False  # модель загружена, ассистент слушает
         self._stage: str | None = None  # что ребёнок делает, пока не готов
         self._out_root = None
         self._attempt = 0  # какая это попытка старта (повтор после сбоя — вторая)
+        # Старт не уложился в таймаут, а звук уже писался: остановлен штатно,
+        # причина — эта (см. _await_ready).
+        self._timeout_error: str | None = None
         self._lock = threading.Lock()
         self._emit_lock = threading.RLock()
         self._process = None
@@ -520,6 +547,7 @@ class LiveControl:
                     self._ended_by = None
                     self._ready = False
                     self._stage = None
+                    self._timeout_error = None
                     self._out_root = out_root
                     self._attempt = 1
                     self._thread = threading.Thread(
@@ -609,7 +637,15 @@ class LiveControl:
                 self.bus.emit(LIVE_STOPPING)
         if first:
             if port is None:
-                # Ещё грузит модель: записи нет, ждать минуту незачем.
+                # Ребёнок мог опубликовать порт в паузе опроса — прочитать ещё раз.
+                info = _read_endpoint(endpoint_path(), process.pid)
+                if info is not None:
+                    port = int(info["port"])
+                    with self._lock:
+                        if self._port is None:
+                            self._port, self._child_pid = port, info["pid"]
+            if port is None:
+                # Ещё не поднял даже веб: ни записи, ни сводки — ждать незачем.
                 self._log("ассистент остановлен до старта")
                 self._kill(process)
             else:
@@ -640,12 +676,26 @@ class LiveControl:
     # --- наблюдение -----------------------------------------------------
 
     def _watch(self, process, endpoint: Path, path: Path, offset: int) -> None:
-        while True:
-            error, code, killed, finalized = self._follow(process, endpoint)
-            retry = self._retry(process, endpoint, path, offset, error, code, killed)
-            if retry is None:
-                break
-            process, path, offset = retry
+        error = code = None
+        killed = finalized = False
+        try:
+            while True:
+                error, code, killed, finalized = self._follow(process, endpoint)
+                retry = self._retry(process, endpoint, path, offset, error, code, killed)
+                if retry is None:
+                    break
+                process, path, offset = retry
+        except BaseException as e:  # noqa: BLE001 — поток наблюдения не умирает молча
+            # Иначе _process остался бы занят до перезапуска резидента, а
+            # окно не узнало бы ничего: убить ребёнка и сообщить.
+            self._log(f"ассистент: сбой наблюдения: {type(e).__name__}: {e}")
+            try:
+                self._kill(process)
+                process.wait(timeout=10)
+            except Exception:
+                pass
+            error = f"Сбой резидента при наблюдении за ассистентом: {type(e).__name__}: {e}"
+            code = process.poll()
         self._finish(process, endpoint, path, offset, error, code, killed, finalized)
 
     def _follow(self, process, endpoint: Path) -> tuple:
@@ -703,8 +753,7 @@ class LiveControl:
                 if attach is None and self._active:
                     return None
                 child_pid = self._child_pid
-            reason = error or _last_line(path, offset) or \
-                f"завершился без сообщения (код {_code_text(code)})"
+            reason = error or _child_error(path, offset, code)
             if attach is not None:
                 reopen = attach.get("reopen")
                 if reopen is None:
@@ -762,6 +811,7 @@ class LiveControl:
                 ready = self._ready
                 folder = self._folder
                 attach, detached, reason = self._attach, self._detach, self._reason
+                timeout_error, self._timeout_error = self._timeout_error, None
                 if stop_requested or (code == 0 and active and error is None):
                     kind = LIVE_STOPPED
                     if not active:
@@ -779,8 +829,7 @@ class LiveControl:
                         # Вышел сам, но с ошибкой (например, упал финальный
                         # проход): дорожки на диске, запись оставляем и
                         # расшифровываем, причину показываем — из журнала.
-                        error = _last_line(path, offset) or \
-                            f"Ассистент завершился с кодом {_code_text(code)}"
+                        error = _child_error(path, offset, code)
                         complete = True
                     elif killed and not _log_has(path, offset, STOPPED_MARK):
                         # Дописал (убрал эндпоинт), но «Остановлено:» не
@@ -789,11 +838,20 @@ class LiveControl:
                         error, complete = _last_line(path, offset), True
                     else:
                         error, complete = None, True
+                    if timeout_error:
+                        # Остановлен резидентом: старт не уложился в таймаут.
+                        error = timeout_error
+                        if attach is not None:
+                            kind, complete = LIVE_FAILED, False  # запись — резидента, идёт
                 else:
                     kind = LIVE_FAILED
                     complete = False
-                    error = error or _last_line(path, offset) or \
-                        f"Ассистент завершился без сообщения (код {_code_text(code)})"
+                    error = error or _child_error(path, offset, code)
+                if kind == LIVE_FAILED and attach is not None and \
+                        "запись продолжается" not in (error or ""):
+                    # Запись ведёт резидент, она идёт дальше — так и говорим.
+                    what = "упал" if ready else "не запустился"
+                    error = f"Ассистент {what} — запись продолжается: {error}"
                 # Причина — и в live.log (до смены состояния: кто дождался
                 # конца, читает журнал уже с ней): ребёнок мог не написать ни слова.
                 if kind == LIVE_FAILED:
@@ -813,7 +871,7 @@ class LiveControl:
                 self._stop_requested = False
                 self._stop_deadline = None
                 self._error = error
-                if kind == LIVE_FAILED:
+                if kind == LIVE_FAILED or timeout_error:
                     self._ended_by = ENDED_CRASH
                 elif detached:
                     self._ended_by = ENDED_DETACH
@@ -863,7 +921,7 @@ class LiveControl:
         этап (или захват звука) даёт ещё stage_timeout, но весь старт — не
         дольше start_max."""
         began = time.monotonic()
-        deadline = began + self._start_timeout
+        deadline = began + min(self._start_timeout, self._start_max)
         seen = None  # (ready, capturing, stage) последнего прочитанного файла
         while process.poll() is None:
             with self._lock:
@@ -881,11 +939,20 @@ class LiveControl:
             if time.monotonic() >= deadline:
                 with self._lock:
                     stage = self._stage
-                self._kill(process)
+                    graceful = self._port is not None and self._active
                 waited = time.monotonic() - began
                 text = f"Ассистент не запустился за {waited:.0f} с"
                 if stage:
                     text += f": этап «{stage.rstrip('…. ')}» не закончился"
+                if graceful:
+                    # Звук уже пишется: не убиваем, а штатно останавливаем
+                    # (/stop) — запись дописывается; убьёт только дедлайн остановки.
+                    with self._lock:
+                        self._timeout_error = text
+                    self._log(f"{text} — останавливаю штатно")
+                    self.stop()
+                    return None
+                self._kill(process)
                 return text
             time.sleep(self._poll_s)
         return None

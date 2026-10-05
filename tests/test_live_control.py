@@ -46,7 +46,11 @@ if mode == "fail-once" and runs == 1:
 if mode == "fatal":
     # Ошибка, которую повтор не исправит (SystemExit с текстом у настоящего ребёнка).
     print("Авторизация Claude не прошла: войдите заново", flush=True)
-    sys.exit(3)
+    sys.exit(78)  # EXIT_FATAL
+if mode == "progress-crash":
+    # Строка хода работы, а потом молча упал (как нативный сбой после загрузки модели).
+    print("старт: модель распознавания загружена — за 19.5 с", flush=True)
+    os._exit(-1073741819)
 if mode == "native-crash":
     os._exit(-1073741819)  # 0xC0000005 — без единой строки в журнале
 attach = args[args.index("--attach-to") + 1] if "--attach-to" in args else None
@@ -58,7 +62,7 @@ if attach:
     note("tap_header", tap.makefile("rb").readline().decode("utf-8").strip())
 if mode == "no-provider":
     print("Подключите Claude Code, Codex или OpenCode в настройках", file=sys.stderr, flush=True)
-    sys.exit(1)
+    sys.exit(78)  # EXIT_FATAL: текст отказа, как у настоящего ребёнка
 if mode == "slow":
     time.sleep(60)
     sys.exit(0)
@@ -804,29 +808,51 @@ def resident(monkeypatch, tmp_path):
     })
     monkeypatch.setattr(detect, "available",
                         lambda base_url=None: {"codex": {"found": True}})
+    # Запись резидента — поддельная (без устройств), с настоящим отводом звука:
+    # «запись с ассистентом» — это она плюс подключённый к ней ассистент.
+    folder = tmp_path / "recordings" / "2026-10-01_10-00"
+
+    def fake_record(out_root, stop_event=None, *, bus, pcm_tap=None):
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "sys.opus").write_bytes(b"x")
+        feed = pcm_tap.begin(2)
+        feed.configure(0, "sys.opus", 48000, 2)
+        feed.configure(1, "mic.opus", 16000, 1)
+        stop_event.wait(60)
+        feed.end()
+        return folder
+
+    monkeypatch.setattr(tray, "record", fake_record)
     app = tray.TrayApp()
+    monkeypatch.setattr(app, "_current_folder", lambda: str(folder))
     stub = Stub(tmp_path)
     queue = _Queue()
     state = tray_control.TrayControl(
         app, queue=queue, llm_queue=_Queue(),
         live=live_control.LiveControl(app.bus, spawn=stub, stop_timeout=5))
     state.stub = stub
+    state.folder = folder
     try:
         yield state
     finally:
+        app.stop_recording()
         state.live.stop(wait=True)
         stub.cleanup()
 
 
-def test_snapshot_carries_live_status(resident, tmp_path):
+def test_live_start_is_a_recording_with_the_assistant_attached(resident, tmp_path):
+    """«Запись с ассистентом» — обычная запись резидента и ассистент,
+    подключённый к ней с первой секунды (отвод звука, как «Включить ассистента»)."""
     assert resident.snapshot()["live"]["active"] is False
     reply = resident.live_start()
-    assert reply["starting"] is True
+    assert reply["starting"] is True and reply["attached"] is True
     _wait_for(lambda: resident.snapshot()["live"]["active"])
-    live = resident.snapshot()["live"]
-    assert live["folder"] == str(tmp_path / "recordings" / "2026-10-01_10-00")
-    assert resident.stub.argv[resident.stub.argv.index("--out") + 1] == \
-        str(tmp_path / "recordings")
+    snap = resident.snapshot()
+    assert snap["status"] == "recording" and snap["source"] == tray_control.LIVE
+    assert snap["live"]["folder"] == str(resident.folder)
+    argv = resident.stub.argv
+    assert argv[argv.index("--attach-to") + 1] == str(resident.folder)
+    assert json.loads(resident.stub.note("tap_header")[0])["tracks"][0]["name"] == "sys.opus"
 
 
 def test_start_recording_while_live_is_refused(resident, monkeypatch):
@@ -834,7 +860,7 @@ def test_start_recording_while_live_is_refused(resident, monkeypatch):
     _wait_for(lambda: resident.live.status()["active"])
     reply = resident.start_recording()
     assert reply["ok"] is False and reply["action"] == "already-recording"
-    assert resident.tray.recording is False
+    assert resident.tray.recording is True
     # И меню/автозапись трея не поднимут вторую запись поверх живой.
     assert resident.tray.start_recording(tray_control.AUTO) is False
 
@@ -847,9 +873,12 @@ def test_live_start_twice_is_bad_request(resident):
 
 def test_live_start_during_normal_recording_is_bad_request(resident):
     resident.tray.recording = True
-    with pytest.raises(control.BadRequest):
-        resident.live_start()
-    assert resident.stub.argv is None
+    try:
+        with pytest.raises(control.BadRequest):
+            resident.live_start()
+        assert resident.stub.argv is None
+    finally:
+        resident.tray.recording = False
 
 
 def test_live_start_without_provider_is_conflict(resident, monkeypatch):
@@ -860,18 +889,33 @@ def test_live_start_without_provider_is_conflict(resident, monkeypatch):
         resident.live_start()
     assert "Подключите Claude Code, Codex или OpenCode" in str(e.value)
     assert resident.stub.argv is None
+    assert resident.tray.recording is False  # записи без ассистента не начали
 
 
-def test_live_stop_queues_transcription_and_marks_source(resident):
+def test_live_start_keeps_recording_when_the_assistant_cannot_attach(resident, monkeypatch):
+    """Ассистента не подключить (отвод так и не открылся) — запись уже идёт и
+    идёт дальше, окно получает причину."""
+    monkeypatch.setattr(tray_control, "LIVE_RECORD_WAIT_S", 0.2)
+    monkeypatch.setattr(resident.tray.pcm_tap, "active", lambda: False)
+    reply = resident.live_start()
+    assert reply["ok"] is False
+    assert reply["error"].startswith("Ассистент не запустился — запись продолжается: ")
+    assert resident.tray.recording is True and resident.stub.argv is None
+
+
+def test_live_stop_stops_the_recording_and_queues_it(resident):
     resident.live_start()
     _wait_for(lambda: resident.live.status()["active"])
-    folder = resident.live.status()["folder"]
-    resident.live_stop()
+    reply = resident.live_stop()
+    assert reply["ok"] is True
     _wait_for(lambda: resident.queue.submitted)
-    assert resident.queue.submitted == [(jobs.TRANSCRIBE, folder)]
+    folder = resident.folder
+    assert resident.queue.submitted == [(jobs.TRANSCRIBE, str(folder))]
     from pathlib import Path
     assert library.read_meta(Path(folder))["source"] == "live"
     assert library.describe(Path(folder)).source == "live"
+    assert resident.stub.note("stop_body") == ["{}"]  # ассистента дождались, не выключили
+    assert resident.tray.recording is False and not resident.live.busy()
 
 
 def test_live_stop_when_idle(resident):
@@ -879,15 +923,18 @@ def test_live_stop_when_idle(resident):
     assert reply["ok"] is False and reply["action"] == "not-live"
 
 
-def test_failed_live_is_not_transcribed(resident):
+def test_crashed_assistant_leaves_the_recording_going(resident):
     resident.live_start()
     _wait_for(lambda: resident.live.status()["active"])
     urllib.request.urlopen(urllib.request.Request(
         f"http://127.0.0.1:{resident.live._port}/crash", data=b"{}", method="POST"),
         timeout=5).close()
     _wait_for(lambda: resident.live.status()["error"])
-    assert resident.queue.submitted == []
-    assert resident.snapshot()["live"]["error"] == "RuntimeError: устройство пропало"
+    assert resident.snapshot()["live"]["error"] == \
+        "Ассистент упал — запись продолжается: RuntimeError: устройство пропало"
+    assert resident.tray.recording is True and resident.queue.submitted == []
+    resident.tray.stop_recording()  # запись сохраняется и расшифровывается как обычная
+    assert resident.queue.submitted == [(jobs.TRANSCRIBE, str(resident.folder))]
 
 
 def test_shutdown_stops_live_mode(resident, monkeypatch):
@@ -902,53 +949,48 @@ def test_shutdown_stops_live_mode(resident, monkeypatch):
 
 def test_shutdown_waits_until_live_finalizes(resident, monkeypatch):
     """После ответа /shutdown оболочка даёт резиденту 10 с и гасит его вместе
-    с ребёнком — поэтому дописать запись ассистент должен до ответа."""
+    с ребёнком — поэтому дописать сводку ассистент должен до ответа."""
     monkeypatch.setattr(resident.tray, "request_exit", lambda: None)
     resident.stub.mode = "slow-finalize"
     resident.live_start()
     _wait_for(lambda: resident.live.status()["active"])
-    folder = resident.live.status()["folder"]
     began = time.monotonic()
     resident.shutdown()
     assert time.monotonic() - began >= 1.0  # ждал финального прохода
     assert not resident.live.busy()
-    assert resident.queue.submitted == [(jobs.TRANSCRIBE, folder)]
+    assert resident.queue.submitted == [(jobs.TRANSCRIBE, str(resident.folder))]
 
 
 def test_shutdown_wait_is_bounded(resident, monkeypatch):
     monkeypatch.setattr(resident.tray, "request_exit", lambda: None)
     monkeypatch.setattr(live_control, "SHUTDOWN_WAIT_S", 0.5)
+    monkeypatch.setattr(tray_control, "ATTACH_STOP_WAIT_S", 0.5)
     resident.stub.mode = "hang"
     resident.live_start()
     _wait_for(lambda: resident.live.status()["active"])
     began = time.monotonic()
     resident.shutdown()
-    assert time.monotonic() - began < 10
+    assert time.monotonic() - began < 15
     assert not resident.live.busy()
 
 
-def test_unfinalized_kill_is_marked_but_not_transcribed(resident):
-    from pathlib import Path
-
+def test_killed_assistant_does_not_touch_the_recording(resident):
     resident.stub.mode = "hang"
     resident.live._stop_timeout = 0.5
     resident.live_start()
     _wait_for(lambda: resident.live.status()["active"])
-    folder = resident.live.status()["folder"]
     resident.live.stop(wait=True)
-    assert resident.queue.submitted == []
-    assert library.read_meta(Path(folder))["source"] == "live"
-    assert "не дописал" in resident.snapshot()["live"]["error"]
+    assert "не успел сохранить сводку" in resident.snapshot()["live"]["error"]
+    assert resident.tray.recording is True and resident.queue.submitted == []
 
 
-def test_stop_with_error_still_transcribes_existing_tracks(resident):
+def test_assistant_stop_error_is_shown_and_the_recording_goes_on(resident):
     resident.stub.mode = "stop-error"
     resident.live_start()
     _wait_for(lambda: resident.live.status()["active"])
-    folder = resident.live.status()["folder"]
     resident.live.stop(wait=True)
-    assert resident.queue.submitted == [(jobs.TRANSCRIBE, folder)]
     assert resident.snapshot()["live"]["error"] == "RuntimeError: финальный проход упал"
+    assert resident.tray.recording is True
 
 
 def test_live_ask_validates_question(resident):
@@ -1146,6 +1188,7 @@ def test_live_routes_end_to_end(resident, monkeypatch):
         status, reply = _call(srv, "/live/stop")
         assert status == 200 and reply["ok"] is True
         _wait_for(lambda: not _call(srv, "/state", method="GET")[1]["live"]["active"])
+        _wait_for(lambda: _call(srv, "/state", method="GET")[1]["status"] == "idle")
         assert _call(srv, "/live/ask", {"question": "ещё?"})[0] == 409
         assert _call(srv, "/live/events", method="GET")[0] == 409
     finally:

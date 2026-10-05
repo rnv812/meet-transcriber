@@ -65,7 +65,9 @@ def test_old_style_endpoint_means_ready(make_live, tmp_path):
 
 def test_stage_progress_extends_the_start_deadline(make_live, tmp_path):
     """Медленный, но идущий старт не убивают: таймаут — на этап, а не на весь старт."""
-    live, stub, rec = make_live("staged", start_timeout=1.0, stage_timeout=1.5)
+    # start_timeout — с запасом: старт настоящего процесса под нагрузкой бывает дольше секунды;
+    # тугой здесь только этапный таймаут.
+    live, stub, rec = make_live("staged", start_timeout=10.0, stage_timeout=1.5)
     live.start(tmp_path / "recordings")
     _wait_for(lambda: live.status()["stage"] == "подключаюсь к записи…")
     time.sleep(1.0)  # меньше этапного таймаута — жив
@@ -240,3 +242,113 @@ def test_endpoint_reading_keeps_new_fields(tmp_path):
     path.write_text(json.dumps({"port": 5, "pid": 7, "folder": "F", "ready": False,
                                 "stage": "x"}), encoding="utf-8")
     assert live_control._read_endpoint(path, 7)["stage"] == "x"
+
+
+def test_silent_crash_after_a_progress_line_is_not_shown_as_that_line(make_live, data_dir,
+                                                                      tmp_path):
+    """Последняя строка вывода — ход работы, а не ошибка: в окне — «аварийно
+    завершился» с кодом, а не «старт: модель … загружена»."""
+    live, _, rec = make_live("progress-crash", max_attempts=1)
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: live_control.LIVE_FAILED in rec.kinds())
+    error = rec.last(live_control.LIVE_FAILED).data["error"]
+    assert error == "Ассистент аварийно завершился (код 0xC0000005)"
+    assert "0xC0000005" in _log(data_dir)
+
+
+def test_child_error_classification(tmp_path):
+    log = tmp_path / "live.log"
+
+    def error(text, code):
+        log.write_text(text, encoding="utf-8")
+        return live_control._child_error(log, 0, code)
+
+    assert error("старт: импорты\nRuntimeError: модель повреждена\n", 1) == \
+        "RuntimeError: модель повреждена"
+    assert error("Traceback (most recent call last):\n  File x\ngigaam.Unavailable: нет\n", 1) \
+        == "gigaam.Unavailable: нет"
+    assert error("Подключите Claude Code или Codex в настройках\n", live_control.EXIT_FATAL) == \
+        "Подключите Claude Code или Codex в настройках"
+    assert error("живые подсказки: calm\n", 1) == "Ассистент аварийно завершился (код 1)"
+    assert error("", -1073741819) == "Ассистент аварийно завершился (код 0xC0000005)"
+
+
+def test_stage_timeout_while_capturing_stops_gracefully_and_keeps_the_recording(make_live,
+                                                                               tmp_path):
+    """Своя запись уже пишется, а модель так и не загрузилась: не убийство, а
+    штатная остановка — запись дописана и уходит в расшифровку, причина видна."""
+    live, stub, rec = make_live("staged", stage_timeout=1.0, max_attempts=1)
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: live.status()["stage"] == "подключаюсь к записи…")
+    _allow(stub, "capture")
+    _wait_for(lambda: live_control.LIVE_STOPPED in rec.kinds(), timeout=20)
+    stopped = rec.last(live_control.LIVE_STOPPED).data
+    assert stub.note("stop") == [""] and stub.note("stopped_before_ready") == [""]
+    assert stopped["complete"] is True
+    assert "не запустился" in stopped["error"] and "загружаю модель" in stopped["error"]
+    assert live.status()["ended_by"] == live_control.ENDED_CRASH
+
+
+def test_attached_stage_timeout_while_capturing_says_the_recording_goes_on(make_live, tmp_path):
+    live, stub, rec = make_live("staged", stage_timeout=1.0, max_attempts=1)
+    folder = tmp_path / "rec" / "f"
+    folder.mkdir(parents=True)
+    live.start(tmp_path / "rec", attach={"folder": str(folder),
+                                         "server": pcm_tap.TapServer(_hub())})
+    _wait_for(lambda: live.status()["stage"] == "подключаюсь к записи…")
+    _allow(stub, "capture")
+    _wait_for(lambda: live_control.LIVE_FAILED in rec.kinds(), timeout=20)
+    error = rec.last(live_control.LIVE_FAILED).data["error"]
+    assert error.startswith("Ассистент не запустился — запись продолжается: ")
+    assert stub.note("stop") == [""]  # штатно, а не убийство
+
+
+def test_whole_start_is_capped(make_live, tmp_path):
+    live, stub, rec = make_live("staged", start_timeout=10.0, stage_timeout=10.0,
+                                start_max=2.0, max_attempts=1)
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: live_control.LIVE_FAILED in rec.kinds(), timeout=20)
+    assert "не запустился за 2 с" in rec.last(live_control.LIVE_FAILED).data["error"]
+
+
+def test_attached_crash_says_the_recording_goes_on(make_live, tmp_path):
+    live, stub, rec = make_live("native-crash", max_attempts=1)
+    folder = tmp_path / "rec" / "f"
+    folder.mkdir(parents=True)
+    live.start(tmp_path / "rec", attach={"folder": str(folder),
+                                         "server": pcm_tap.TapServer(_hub())})
+    _wait_for(lambda: live_control.LIVE_FAILED in rec.kinds())
+    assert rec.last(live_control.LIVE_FAILED).data["error"] == (
+        "Ассистент не запустился — запись продолжается: "
+        "Ассистент аварийно завершился (код 0xC0000005)")
+
+
+def test_stop_rereads_the_endpoint_before_killing(make_live, tmp_path, monkeypatch):
+    """Ребёнок опубликовал порт в паузе опроса: остановка — /stop, не убийство."""
+    live, stub, rec = make_live("staged", poll_s=5.0)
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: (live_control.endpoint_path()).exists())
+    _allow(stub, "capture")
+    time.sleep(0.3)
+    live.stop(wait=True)
+    assert stub.note("stop") == [""]
+
+
+def test_watch_thread_failure_is_reported_not_silent(make_live, tmp_path, monkeypatch):
+    live, stub, rec = make_live("fail-once")
+
+    def broken(*a, **kw):
+        raise ValueError("сломалось")
+
+    monkeypatch.setattr(live, "_retry", broken)
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: live_control.LIVE_FAILED in rec.kinds())
+    assert "сломалось" in rec.last(live_control.LIVE_FAILED).data["error"]
+    assert not live.busy()
+
+
+def test_child_and_resident_agree_on_the_no_retry_code():
+    from meet.assist import app
+
+    assert app.EXIT_FATAL == live_control.EXIT_FATAL
+    assert live_control.EXIT_FATAL != 3  # 3 — abort()/std::terminate у MSVC CRT

@@ -43,6 +43,9 @@ TAIL_DEFAULT = 200
 # Остановка записи ждёт подключённого к ней ассистента не дольше этого: он
 # дописывает сводку (секунды), застрявший — убивается, запись это не задевает.
 ATTACH_STOP_WAIT_S = 10.0
+# «Запись с ассистентом»: столько ждём, пока у только что начатой записи
+# откроются дорожки (отвод и папка), чтобы подключить к ней ассистента.
+LIVE_RECORD_WAIT_S = 10.0
 
 PACKAGE = "meet-transcriber"
 
@@ -1095,8 +1098,11 @@ class TrayControl:
     # --- живой режим (запись с ассистентом) -----------------------------
 
     def live_start(self) -> dict:
-        """Запись с ассистентом. Ответ сразу (`starting`): модель грузится до
-        минуты, дальше — события `live.started` / `live.failed`."""
+        """Запись с ассистентом — это обычная запись резидента (`source:
+        live`) и ассистент, подключённый к ней с первой секунды (тот же путь,
+        что «Включить ассистента»). Ассистент не запустился или упал — запись
+        идёт дальше как обычная, сохраняется и расшифровывается своей
+        остановкой. Ответ сразу (`starting`), дальше — события `live.*`."""
         from meet import assistant
 
         if self.tray.recording:
@@ -1104,16 +1110,40 @@ class TrayControl:
                                "(«Включить ассистента»)")
         if not _provider_installed(settings.load()):
             raise _conflict(assistant.NO_PROVIDER)
+        if self.live.busy():
+            raise _bad_request("Ассистент ещё запускается или останавливается — "
+                               "попробуйте через несколько секунд")
+        if not self.tray.start_recording(LIVE):
+            raise _bad_request("Запись уже идёт")
+        self.tray.log("запись с ассистентом: запись пошла, подключаю ассистента")
+        # Отвод и папка записи появляются, когда открылись дорожки (доли секунды).
+        hub = getattr(self.tray, "pcm_tap", None)
+        deadline = time.monotonic() + LIVE_RECORD_WAIT_S
+        while time.monotonic() < deadline and self.tray.recording:
+            if hub is not None and hub.active() and \
+                    Path(self.tray._current_folder()).is_dir():
+                break
+            time.sleep(0.05)
+        from meet.control import BadRequest, Conflict
+
         try:
-            return self.live.start(self._root())
-        except live_control.LiveBusy as e:
-            raise _bad_request(str(e))
+            return self.live_attach()
+        except (BadRequest, Conflict) as e:
+            # Запись уже идёт и пусть идёт: ассистент — не повод её терять.
+            error = f"Ассистент не запустился — запись продолжается: {e}"
+            self.tray.log(error)
+            return {**self.live.status(), "ok": False, "error": error}
 
     def live_stop(self) -> dict:
-        """Остановить ассистента. Ответ сразу; дорожки он дописывает сам, конец —
-        событием `live.stopped`, после которого запись встаёт в расшифровку.
-        Ассистента, включённого посреди обычной записи, это только выключает:
-        запись идёт дальше (как `live_detach`)."""
+        """Остановить запись с ассистентом (`source: live`) — это остановка
+        самой записи: она сохраняется и встаёт в расшифровку, ассистента она
+        дожидается сама. Ассистента, включённого посреди обычной записи, это
+        только выключает: запись идёт дальше (как `live_detach`). Ассистент
+        `meet assist`, пишущий сам, — `/stop` ему."""
+        if self.tray.recording and getattr(self.tray, "source", None) == LIVE:
+            threading.Thread(target=self.tray.stop_recording, name="meet-live-stop",
+                             daemon=True).start()
+            return {"ok": True, "action": "stopping", **self.live.status()}
         if self._live_attached():
             return self.live_detach()
         return self.live.stop()

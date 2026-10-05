@@ -67,7 +67,8 @@ def print_status() -> None:
     elif live.get("starting") and not attached:
         print("Ассистент запускается (загружается модель распознавания)")
     elif snap.get("status") == "recording":
-        source = "вручную" if snap.get("source") == "manual" else "автоматически"
+        source = {"manual": "вручную", "live": "с ассистентом"}.get(
+            snap.get("source"), "автоматически")
         print(f"Идёт запись ({source}): {snap.get('folder')}")
         print(f"Длительность: {fmt_ts(snap.get('elapsed_s') or 0)}")
         levels = snap.get("levels") or {}
@@ -77,8 +78,11 @@ def print_status() -> None:
             ))
         if attached:
             # Ассистент, включённый посреди этой записи (meet assist --attach).
+            stage = live.get("stage")
+            starting = not live.get("active") or live.get("ready") is False
             print("Ассистент: " + ("выключается" if live.get("stopping") else
-                                   "слушает запись" if live.get("active") else "запускается"))
+                                   f"запускается ({stage})" if starting and stage else
+                                   "запускается" if starting else "слушает запись"))
     else:
         print("Записи нет.")
     if live.get("error") and not live.get("active") and not live.get("starting"):

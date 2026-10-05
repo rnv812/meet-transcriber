@@ -48,7 +48,7 @@ NO_PROVIDER_ERROR = "Подключите Claude Code, Codex или OpenCode в 
 PARENT_POLL_S = 1.0  # как резидент следит за оболочкой (tray.run_headless)
 # Код выхода «повтор не поможет» (нет провайдера, вход в Claude, занятая
 # запись): резидент не повторяет такой старт (meet.live_control.EXIT_FATAL).
-EXIT_FATAL = 3
+EXIT_FATAL = 78  # не 3: им же падает abort() у MSVC CRT
 BELOW_NORMAL_PRIORITY_CLASS = 0x4000
 
 
