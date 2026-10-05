@@ -75,7 +75,17 @@ async def _check_opencode() -> str | None:
     llm = settings.load().llm
     if llm.opencode_model:
         ok, why = detect.opencode_model_listed(path, llm.opencode_model, llm.proxy)
-        return None if ok else why
+        if ok:
+            return None
+        # Модели нет — подскажем, если у её провайдера нет и входа (запись в
+        # auth.json или его ключ в переменной среды). Локальным провайдерам
+        # (ollama и т. п.) ключ не нужен — поэтому это только подсказка.
+        provider = llm.opencode_model.split("/", 1)[0]
+        if not detect.opencode_auth_present(provider):
+            keys = " или ".join(detect.opencode_provider_env(provider))
+            why = (f"{why}; входа для {provider} в OpenCode нет — выполните "
+                   f"opencode auth login или задайте {keys}")
+        return why
     ok, why = detect.logged_in("opencode", path)
     return None if ok else f"не авторизован: {why}"
 

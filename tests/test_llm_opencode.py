@@ -512,3 +512,33 @@ def test_run_proxy_hint_on_connection_errors(fake):
     reply = _run()
     assert reply.error.startswith("OpenCode: Unable to connect")
     assert netproxy.HINT in reply.error
+
+
+def test_sweep_removes_dead_call_folders_after_their_sessions(fake, tmp_path, monkeypatch):
+    root = (tmp_path / opencode.WORKDIR)
+    dead = root / "1-old"
+    dead.mkdir(parents=True)
+    live = root / "4242-live"
+    live.mkdir()
+    other = root / "notes"  # не папка вызова — не трогаем
+    other.mkdir()
+    monkeypatch.setattr(opencode, "_pid_alive", lambda pid: pid == 4242)
+    order = []
+    real_rmtree = opencode.shutil.rmtree
+    monkeypatch.setattr(opencode.shutil, "rmtree",
+                        lambda p, **kw: (order.append(("rm", Path(p).name)), real_rmtree(p, **kw)))
+    fake["sessions"] = [{"id": "ses_dead", "directory": str(dead.resolve())}]
+    opencode._sweep_stale("oc", root.resolve(), {})
+    assert fake["deleted"] == ["ses_dead"]
+    assert not dead.exists() and live.exists() and other.exists()
+    assert ("rm", "1-old") in order
+
+
+def test_dead_dirs(tmp_path):
+    (tmp_path / "1-a").mkdir()
+    (tmp_path / "2-b").mkdir()
+    (tmp_path / f"{opencode.os.getpid()}-c").mkdir()
+    (tmp_path / "x-d").mkdir()
+    (tmp_path / "3-file").write_text("")
+    got = sorted(d.name for d in opencode.dead_dirs(tmp_path, alive=lambda pid: pid == 2))
+    assert got == ["1-a"]

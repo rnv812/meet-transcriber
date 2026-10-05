@@ -139,6 +139,7 @@ def _opencode_env(monkeypatch, *, path="C:/oc/opencode.exe", logged=(True, None)
         raise AssertionError("«Проверить» OpenCode не зовёт модель")
 
     monkeypatch.setattr(detect, "logged_in", fake_logged)
+    monkeypatch.setattr(detect, "opencode_auth_present", lambda provider=None: True)
     monkeypatch.setattr(detect, "opencode_model_listed", fake_listed)
     monkeypatch.setattr(opencode, "run", no_call)
     return seen
@@ -172,3 +173,23 @@ def test_opencode_with_model_checks_that_the_model_is_available(monkeypatch):
     assert seen["listed"] == [("C:/oc/opencode.exe", "openai/gpt-5", "none")]
     _opencode_env(monkeypatch)
     assert asyncio.run(check.check("opencode"))["ok"] is True
+
+
+def test_opencode_model_missing_names_the_providers_login(monkeypatch):
+    from meet import settings
+
+    settings.patch({"llm": {"opencode_model": "openrouter/meta-llama/llama-3.3-70b"}})
+    _opencode_env(monkeypatch, listed=(False, "у OpenCode нет модели"))
+    seen = []
+
+    def present(provider=None):
+        seen.append(provider)
+        return False
+
+    monkeypatch.setattr(detect, "opencode_auth_present", present)
+    res = asyncio.run(check.check("opencode"))
+    assert seen == ["openrouter"]
+    assert "входа для openrouter" in res["error"] and "OPENROUTER_API_KEY" in res["error"]
+    monkeypatch.setattr(detect, "opencode_auth_present", lambda provider=None: True)
+    res = asyncio.run(check.check("opencode"))
+    assert res["error"] == "у OpenCode нет модели"  # вход есть — только причина

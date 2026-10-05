@@ -309,10 +309,15 @@ def ours_in(sessions: list[dict], call_dir) -> list[str]:
     return [s["id"] for s in sessions if _key(s["directory"]) == key]
 
 
-def stale(sessions: list[dict], root, alive=_pid_alive) -> list[str]:
+def stale(sessions: list[dict], root, alive=None) -> list[str]:
     """Оставленные сеансы служебных папок: сама служебная папка, папка
     вызова умершего процесса или уже удалённая папка. Сеансы живых вызовов
-    (папка есть, процесс жив) и любых других папок не трогаются."""
+    (папка есть, процесс жив) и любых других папок не трогаются.
+
+    Сеансы самой служебной папки — от ранней сборки 0.3.3, где все вызовы
+    шли в ней: они удаляются всегда, и если такая сборка (другая копия
+    приложения) ещё работает, её идущий вызов потеряет свой сеанс."""
+    alive = alive or _pid_alive
     root_key = _key(root)
     found = []
     for s in sessions:
@@ -332,14 +337,32 @@ def stale(sessions: list[dict], root, alive=_pid_alive) -> list[str]:
 _swept = False
 
 
+def dead_dirs(root, alive=None) -> list[Path]:
+    """Папки вызовов `<pid>-<id>` умерших процессов (свои и живых — нет)."""
+    alive = alive or _pid_alive
+    found = []
+    try:
+        children = list(Path(root).iterdir())
+    except OSError:
+        return []
+    for d in children:
+        pid = d.name.split("-", 1)[0]
+        if d.is_dir() and pid.isdigit() and int(pid) != os.getpid() and not alive(int(pid)):
+            found.append(d)
+    return found
+
+
 def _sweep_stale(exe: str, root: Path, env: dict) -> None:
-    """Перед первым вызовом в процессе: сеансы, оставленные убитыми вызовами."""
+    """Перед первым вызовом в процессе: сеансы, оставленные убитыми вызовами,
+    затем папки этих вызовов (их сеансы к этому времени уже удалены)."""
     global _swept
     if _swept:
         return
     _swept = True
     for sid in stale(list_sessions(exe, str(root), env), root):
         delete_session(exe, sid, str(root), env)
+    for d in dead_dirs(root):
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def _cleanup(exe: str, root: Path, call_dir: Path, env: dict, known: str | None) -> None:
