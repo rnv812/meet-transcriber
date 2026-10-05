@@ -1101,22 +1101,31 @@ class TrayControl:
         if not self.tray.start_recording(LIVE, attempt=attempt):
             raise _bad_request("Запись уже идёт")
         self.tray.log("запись с ассистентом: запись пошла, подключаю ассистента")
-        # Отвод и папка записи появляются, когда открылись дорожки (доли секунды).
-        hub = getattr(self.tray, "pcm_tap", None)
+        # Подключаем, когда у этой записи открылись устройства (её
+        # `record.started`, доли секунды). Отвод и папка появляются раньше
+        # устройств: по ним одним ассистент подключился бы к записи, которая
+        # через миг падает («нет устройства»).
         deadline = time.monotonic() + LIVE_RECORD_WAIT_S
         while time.monotonic() < deadline and self.tray.recording and not attempt.done.is_set():
-            if hub is not None and hub.active() and \
-                    Path(self.tray._current_folder()).is_dir():
+            if attempt.started.wait(0.05):
                 break
-            time.sleep(0.05)
-        if attempt.done.is_set() and (attempt.error or not attempt.folder):
+        if attempt.error or (attempt.done.is_set() and not attempt.folder):
             # Не началась сама запись (lock занят, нет устройства): это её
             # ошибка, ассистенту подключаться не к чему.
             return {**self.live.status(), "ok": False,
                     "error": f"Запись не началась: {attempt.error or 'поток записи завершился'}"}
-        if not self.tray.recording:
-            # Запись остановили, пока она открывалась: ничего не «продолжается».
+        if attempt.done.is_set() or not self.tray.recording:
+            # Запись остановили, пока она открывалась (поток уже вернул папку,
+            # а флаг записи снимется через миг): ничего не «продолжается».
             return {**self.live.status(), "ok": True, "action": "stopped"}
+        if not attempt.started.is_set():
+            # Устройства открываются дольше обычного: запись ещё может пойти
+            # (или упасть — о ней скажет её собственная ошибка), ассистента
+            # к ней не подключаем вслепую.
+            error = (f"Ассистент не запустился: запись не открыла устройства за "
+                     f"{LIVE_RECORD_WAIT_S:.0f} с — включите ассистента, когда она пойдёт")
+            self.tray.log(error)
+            return {**self.live.status(), "ok": False, "error": error}
         from meet.control import BadRequest, Conflict
 
         try:

@@ -302,14 +302,32 @@ def _confirm_cancel() -> bool:
 
 
 class RecordAttempt:
-    """Чем кончился поток одной записи: `done` — кончился, `error` — не
-    стартовала (lock, устройство), `folder` — сохранена. Своё у каждой
-    попытки: общий `result` тикер чистит (`_collect_error`)."""
+    """Как идёт поток одной записи: `started` — устройства открыты (её
+    `record.started`), `done` — поток кончился, `error` — не стартовала
+    (lock, устройство), `folder` — сохранена. Своё у каждой попытки: общий
+    `result` тикер чистит (`_collect_error`).
+
+    IMPORTANT: отвод звука и папка появляются раньше устройств (`hub.begin()`
+    — до `first_open`), поэтому «отвод открыт» ещё не значит «запись идёт»:
+    подключать ассистента можно только после `started`."""
 
     def __init__(self) -> None:
+        self.started = threading.Event()
         self.done = threading.Event()
         self.error: str | None = None
         self.folder = None
+
+    def watch(self, bus):
+        """Ловить `record.started` этого потока записи: шина зовёт подписчиков
+        в потоке издателя, так что чужая запись (доживающая прошлая) не в
+        счёт. → функция отписки."""
+        mine = threading.current_thread()
+
+        def on_event(event) -> None:
+            if event.kind == events.RECORD_STARTED and threading.current_thread() is mine:
+                self.started.set()
+
+        return bus.subscribe(on_event)
 
 
 class TrayApp:
@@ -423,6 +441,7 @@ class TrayApp:
 
     def _run_record(self, result: dict, stop_event: threading.Event,
                     attempt: "RecordAttempt | None" = None) -> None:
+        unwatch = attempt.watch(self.bus) if attempt is not None else None
         try:
             result["folder"] = record(
                 str(_out_root()), stop_event=stop_event, bus=self.bus,
@@ -431,10 +450,15 @@ class TrayApp:
             if attempt is not None:
                 attempt.folder = result["folder"]
         except BaseException as e:  # и SystemExit «запись уже идёт»
-            result["error"] = str(e) or repr(e)
+            error = str(e) or repr(e)
+            # Сначала в попытку, потом в общий `result`: тикер, увидевший
+            # ошибку там (и снявший флаг записи), не обгонит её здесь.
             if attempt is not None:
-                attempt.error = result["error"]
+                attempt.error = error
+            result["error"] = error
         finally:
+            if unwatch is not None:
+                unwatch()
             if attempt is not None:
                 attempt.done.set()
 

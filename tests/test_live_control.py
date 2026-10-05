@@ -819,6 +819,8 @@ def resident(monkeypatch, tmp_path):
         feed = pcm_tap.begin(2)
         feed.configure(0, "sys.opus", 48000, 2)
         feed.configure(1, "mic.opus", 16000, 1)
+        # Устройства открыты — как у настоящей записи (_Session.start).
+        bus.emit(events.RECORD_STARTED, folder=str(folder))
         stop_event.wait(60)
         feed.end()
         return folder
@@ -1284,8 +1286,16 @@ def test_live_start_reports_the_recording_error_when_the_recording_fails(residen
 def test_stop_while_the_recording_opens_is_not_reported_as_going_on(resident, monkeypatch):
     import threading
 
+    def opening_record(out_root, stop_event=None, *, bus, pcm_tap=None):
+        # Устройства всё ещё открываются, когда нажали «Стоп».
+        resident.folder.mkdir(parents=True, exist_ok=True)
+        feed = pcm_tap.begin(2)
+        stop_event.wait(60)
+        feed.end()
+        return resident.folder
+
+    monkeypatch.setattr(tray, "record", opening_record)
     monkeypatch.setattr(tray_control, "LIVE_RECORD_WAIT_S", 5.0)
-    monkeypatch.setattr(resident.tray.pcm_tap, "active", lambda: False)
     threading.Timer(0.3, resident.tray.stop_recording).start()
     reply = resident.live_start()
     assert reply["ok"] is True and reply["action"] == "stopped"
@@ -1387,21 +1397,99 @@ def test_auto_start_refused_by_a_running_assistant_keeps_the_call(resident, monk
     assert released == [True]  # START не съеден: следующий такт попробует снова
 
 
-def test_live_start_catches_a_recording_that_fails_a_moment_later(resident, monkeypatch):
-    """Запись падает не сразу (устройство через полсекунды), а тикер уже
-    успевает забрать ошибку из общего `result`: старт всё равно её видит."""
-    import threading
+def _device_failing_record(folder, delay):
+    """Порядок настоящего recorder.record: папка и lock, отвод (`hub.begin()`),
+    и только потом устройства (`first_open`) — их нет, сбой через `delay` с;
+    `session.close()` в finally закрывает отвод."""
 
     def failing_record(out_root, stop_event=None, *, bus, pcm_tap=None):
+        folder.mkdir(parents=True, exist_ok=True)
+        feed = pcm_tap.begin(2)
+        time.sleep(delay)  # PyAudio, выбор и открытие устройства
+        feed.end()
+        raise OSError("Устройство записи не найдено")
+
+    return failing_record
+
+
+@pytest.mark.parametrize("ticker", [False, True], ids=["no-ticker", "ticker"])
+@pytest.mark.parametrize("delay", [0.2, 0.5, 1.0])
+def test_live_start_reports_a_device_that_fails_after_the_tap_opened(resident, monkeypatch,
+                                                                    delay, ticker):
+    """Отвод и папка уже есть, а устройства не открылись: ассистента не
+    подключают, ответ — ошибка самой записи, без «запись продолжается».
+    Тикер (`_collect_error`) может забрать ошибку из общего `result` раньше."""
+    monkeypatch.setattr(tray, "record", _device_failing_record(resident.folder, delay))
+    timer = threading.Timer(delay + 0.3, resident.tray._collect_error) if ticker else None
+    if timer is not None:
+        timer.start()
+    reply = resident.live_start()
+    if timer is not None:
+        timer.join()
+    assert reply["ok"] is False, reply
+    assert reply["error"] == "Запись не началась: Устройство записи не найдено"
+    assert resident.stub.argv is None  # ассистента не запускали
+    assert not reply.get("attached")
+
+
+def test_live_start_attaches_only_after_the_devices_opened(resident, monkeypatch):
+    """Ассистент подключается после `record.started` этой записи (устройства
+    открыты), а не когда появились отвод и папка."""
+    seen: list = []
+
+    def slow_record(out_root, stop_event=None, *, bus, pcm_tap=None):
+        resident.folder.mkdir(parents=True, exist_ok=True)
+        feed = pcm_tap.begin(2)
+        feed.configure(0, "sys.opus", 48000, 2)
+        feed.configure(1, "mic.opus", 16000, 1)
         time.sleep(0.5)
-        raise SystemExit("Запись уже идёт (папка D:/rec/x)")
+        seen.append(resident.stub.argv is None)
+        bus.emit(events.RECORD_STARTED, folder=str(resident.folder))
+        stop_event.wait(60)
+        feed.end()
+        return resident.folder
+
+    monkeypatch.setattr(tray, "record", slow_record)
+    reply = resident.live_start()
+    assert seen == [True]  # до открытия устройств ассистента не было
+    assert reply["ok"] is True and reply["attached"] is True
+
+
+def test_live_start_does_not_attach_while_the_devices_are_still_opening(resident, monkeypatch):
+    """Устройства не открылись за отведённое время: ассистента не подключают
+    вслепую, запись идёт (и скажет о себе сама)."""
+    def opening_record(out_root, stop_event=None, *, bus, pcm_tap=None):
+        resident.folder.mkdir(parents=True, exist_ok=True)
+        feed = pcm_tap.begin(2)
+        stop_event.wait(60)
+        feed.end()
+        return resident.folder
+
+    monkeypatch.setattr(tray, "record", opening_record)
+    monkeypatch.setattr(tray_control, "LIVE_RECORD_WAIT_S", 0.3)
+    reply = resident.live_start()
+    assert reply["ok"] is False
+    assert "не открыла устройства" in reply["error"]
+    assert resident.stub.argv is None
+    assert resident.tray.recording is True
+
+
+def test_record_started_of_another_recording_does_not_count(resident, monkeypatch):
+    """`record.started` из чужого потока (доживающая прошлая запись) — не
+    сигнал этой попытки."""
+    def failing_record(out_root, stop_event=None, *, bus, pcm_tap=None):
+        resident.folder.mkdir(parents=True, exist_ok=True)
+        feed = pcm_tap.begin(2)
+        other = threading.Thread(
+            target=lambda: bus.emit(events.RECORD_STARTED, folder="D:/rec/old"))
+        other.start()
+        other.join()
+        time.sleep(0.3)
+        feed.end()
+        raise OSError("Устройство записи не найдено")
 
     monkeypatch.setattr(tray, "record", failing_record)
-    monkeypatch.setattr(resident.tray.pcm_tap, "active", lambda: False)
-    ticker = threading.Timer(0.8, resident.tray._collect_error)  # как такт тикера
-    ticker.start()
     reply = resident.live_start()
-    ticker.join()
     assert reply["ok"] is False
-    assert reply["error"] == "Запись не началась: Запись уже идёт (папка D:/rec/x)"
+    assert reply["error"] == "Запись не началась: Устройство записи не найдено"
     assert resident.stub.argv is None
