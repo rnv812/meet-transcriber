@@ -915,6 +915,11 @@ class TrayControl:
             "source": tray.source,
             "folder": tray._current_folder() if recording else None,
             "elapsed_s": round(elapsed, 1),
+            # Название звонка из окна браузера (автозапись), пока запись идёт:
+            # панель записи под значком в строке меню macOS показывает его над
+            # таймером. Тот же источник и то же условие, что у названия
+            # сохранённой записи (`_on_saved`); неизвестно — None.
+            "title": self._call_title() if recording else None,
             "levels": dict(self._levels) if recording else {},
             # Выбранный в настройках микрофон или вывод не найден — эта запись
             # (или запись ассистента) идёт с системного: [{"kind", "name",
@@ -964,6 +969,10 @@ class TrayControl:
             # ожидания после звонка): окно показывает «Обработка».
             "processing": self._processing_list(),
         }
+
+    def _call_title(self) -> str | None:
+        tray = self.tray
+        return getattr(tray, "recording_title", None) if tray.source == AUTO else None
 
     def _processing_list(self) -> list[str]:
         with self._processing_lock:

@@ -1593,6 +1593,21 @@ def test_manual_recording_ignores_call_title(app, tmp_path):
     assert "title" not in library.read_meta(folder)
 
 
+def test_snapshot_carries_the_call_title_while_auto_recording(control_state, app):
+    """Панель записи macOS показывает название звонка над таймером — то же,
+    что потом станет названием записи: только у автозаписи и пока она идёт."""
+    assert control_state.snapshot()["title"] is None
+    app.recording = True
+    app.source = tray_control.AUTO
+    app.recording_title = "Dion — Планёрка отдела"
+    assert control_state.snapshot()["title"] == "Dion — Планёрка отдела"
+    app.source = tray_control.MANUAL
+    assert control_state.snapshot()["title"] is None
+    app.recording = False
+    app.source = tray_control.AUTO
+    assert control_state.snapshot()["title"] is None
+
+
 def test_snapshot_shows_browsers_and_browser_call(control_state, app):
     app.signals.browser_call = {"exe": "chrome.exe", "site": "Dion", "title": "Dion — Встреча"}
     snap = control_state.snapshot()["auto_record"]
