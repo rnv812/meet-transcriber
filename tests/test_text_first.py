@@ -298,7 +298,7 @@ def test_gigaam_failing_on_mic_keeps_sys_postprocessing_of_gigaam(pipeline, monk
         return [_seg(3.0, "да")]
 
     monkeypatch.setattr(tr, "_recognize", recognize)
-    monkeypatch.setattr(tr, "_restore_latin", lambda segs, run, quiet=False: seen["latin"].append(
+    monkeypatch.setattr(tr, "_restore_latin", lambda segs, run: seen["latin"].append(
         [s.text for s in segs]))
     monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled, **kw: seen["align"].append(enabled) or s)
     tr.transcribe(str(folder), align=True, bus=pipeline["bus"])

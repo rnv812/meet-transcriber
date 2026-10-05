@@ -1,5 +1,6 @@
 import copy
 import re
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -337,14 +338,23 @@ def _fallback_to_whisper(wav: Path, hotwords: str | None, run: "_Run", device: s
                          f"({type(w).__name__}: {w}). {advice}") from w
 
 
-def _restore_latin(segments: list[Segment], run: "_Run", quiet: bool = False) -> None:
+# Копия для текста до спикеров правится молча: те же строки напечатает основной проход.
+_QUIET = threading.local()
+
+
+def _say(text: str) -> None:
+    if not getattr(_QUIET, "on", False):
+        print(text)
+
+
+def _restore_latin(segments: list[Segment], run: "_Run") -> None:
     """После GigaAM — латинские термины из кириллицы (meet.translit)."""
     try:
         from meet import translit
 
         n = translit.apply(segments, _hotword_terms(run.extra_hotwords))
-        if n and not quiet:
-            print(f"термины латиницей: возвращено {n}")
+        if n:
+            _say(f"термины латиницей: возвращено {n}")
     except Exception as e:  # термины не должны ронять расшифровку
         print(f"термины латиницей пропущены (ошибка: {e})")
 
@@ -524,13 +534,20 @@ def _fix_terms(segments: list[Segment], run: "_Run | None" = None, *, gigaam: bo
     `gigaam` — чем распознаны эти сегменты, если движок с тех пор сменился;
     `quiet` — без строк в журнал (копия для текста до спикеров: те же правки
     напечатает основной проход)."""
-    _apply_rules(segments, quiet)
+    if quiet:
+        # Не подменой sys.stdout: в задаче им же идут события хода из потока часов.
+        _QUIET.on = True
+        try:
+            return _fix_terms(segments, run, gigaam=gigaam)
+        finally:
+            _QUIET.on = False
+    _apply_rules(segments)
     if run is not None and (run.gigaam if gigaam is None else gigaam):
-        _restore_latin(segments, run, quiet)
+        _restore_latin(segments, run)
     return segments
 
 
-def _apply_rules(segments: list[Segment], quiet: bool = False) -> list[Segment]:
+def _apply_rules(segments: list[Segment]) -> list[Segment]:
     rules = _replacement_rules()
     if not rules:
         return segments
@@ -542,13 +559,11 @@ def _apply_rules(segments: list[Segment], quiet: bool = False) -> list[Segment]:
     except Exception as e:
         print(f"правила замены пропущены (ошибка: {e})")
         return segments
-    if quiet:
-        return segments
     if n:
-        print(f"правила замены: исправлено {n}")
+        _say(f"правила замены: исправлено {n}")
     if skipped:
-        print(f"правила замены: у {len(skipped)} сегм. время слов не выровнено — сняты, "
-              "реплика делится по сегменту целиком")
+        _say(f"правила замены: у {len(skipped)} сегм. время слов не выровнено — сняты, "
+             "реплика делится по сегменту целиком")
     return segments
 
 
