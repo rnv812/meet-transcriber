@@ -45,12 +45,19 @@ export function TrayWindow() {
     return () => observer.disconnect();
   }, []);
 
+  // Фокус — на панель при каждом показе: Esc и Tab работают сразу. Не на
+  // кнопку: Enter не должен остановить запись случайно.
+  useEffect(() => {
+    if (data.visible) box.current?.focus({ preventScroll: true });
+  }, [data.visible, data.shownTick]);
+
   const open = useCallback((target: OpenTarget) => { void trayPanelOpen(target); }, []);
   const recent = recentOf(data);
 
   return (
-    <div ref={box} className="tp" data-glass={glass}
-      data-recording={data.snapshot?.status === "recording" || !!data.snapshot?.live?.active || undefined}>
+    <div ref={box} className="tp" data-glass={glass} role="dialog" aria-label="Запись Meet" tabIndex={-1}
+      // Сияние дышит и точка пульсирует только на экране.
+      data-recording={(data.visible && (data.snapshot?.status === "recording" || !!data.snapshot?.live?.active)) || undefined}>
       <div className="tp__aura" aria-hidden="true" />
       {/* Ключ — номер показа: появление проигрывается при каждом открытии. */}
       <div key={data.shownTick} className="tp__body">

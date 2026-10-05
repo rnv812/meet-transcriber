@@ -128,7 +128,7 @@ export function TrayPanel({
         {[...fallbacks.map(fallbackText), ...(sysAudio ? [sysAudio] : [])].map((text) => (
           <p key={text} className="tp__warn">{text}</p>
         ))}
-        <button type="button" className="tp__primary" disabled={pending}
+        <button type="button" className="tp__primary tp__primary--stop" disabled={pending}
           onClick={() => (phase.liveOnly ? stopLive() : record("stop"))}>
           <Icon as={Square} size="sm" className="tp__glyph-fill" />
           Остановить
@@ -139,8 +139,8 @@ export function TrayPanel({
     hero = (
       <>
         <Status tone="busy">Ассистент запускается…</Status>
-        <p className="tp__note">Загружается модель — запись начнётся через несколько секунд.</p>
-        <button type="button" className="tp__primary" disabled={pending} onClick={stopLive}>
+        <p className="tp__note">Запись уже идёт — ассистент загружает модель.</p>
+        <button type="button" className="tp__primary tp__primary--stop" disabled={pending} onClick={stopLive}>
           <Icon as={Square} size="sm" className="tp__glyph-fill" />
           Остановить
         </button>
@@ -151,7 +151,7 @@ export function TrayPanel({
       <>
         <Status tone="busy">Сохраняю запись…</Status>
         <p className="tp__note">Ассистент дописывает встречу. Окно можно закрыть.</p>
-        <button type="button" className="tp__primary" disabled>
+        <button type="button" className="tp__primary tp__primary--stop" disabled>
           <Icon as={Square} size="sm" className="tp__glyph-fill" />
           Остановить
         </button>
@@ -212,7 +212,7 @@ export function TrayPanel({
           </button>
         </div>
       )}
-      <section className="tp__hero" aria-live="polite">{hero}</section>
+      <section className="tp__hero">{hero}</section>
       {showRecent && recent && (
         <section className="tp__recent" aria-label="Последняя запись">
           <div className="tp__label">Последняя запись</div>
@@ -249,7 +249,7 @@ export function recordingName(recording: Recording): string {
 
 function Status({ tone, children }: { tone: "rec" | "busy" | "done" | "quiet"; children: ReactNode }) {
   return (
-    <div className={`tp__status tp__status--${tone}`}>
+    <div className={`tp__status tp__status--${tone}`} role="status">
       {tone === "rec" && <span className="tp__dot" aria-hidden="true" />}
       {tone === "busy" && <Icon as={LoaderCircle} size="sm" className="tp__spin" />}
       {tone === "done" && <Icon as={Check} size="sm" className="tp__glyph-accent" />}

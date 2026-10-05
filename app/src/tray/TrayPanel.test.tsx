@@ -116,6 +116,14 @@ test("запись с ассистентом с начала: таймер от 
   expect(onSnapshot.mock.calls[0]?.[0].live.stopping).toBe(true);
 });
 
+test("ассистент запускается — запись уже идёт, «Остановить» — /live/stop", async () => {
+  const spy = vi.spyOn(api, "liveStop").mockResolvedValue({ ok: true, action: "stopping", ...live({ stopping: true }) });
+  panel({ snapshot: snap({ live: live({ starting: true }) }) });
+  expect(screen.getByText("Запись уже идёт — ассистент загружает модель.")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Остановить" }));
+  expect(spy).toHaveBeenCalledWith(ep);
+});
+
 test("ассистент дописывает запись — «Остановить» недоступна", () => {
   panel({ snapshot: snap({ live: live({ active: true, stopping: true }) }) });
   expect(screen.getByText("Сохраняю запись…")).toBeInTheDocument();

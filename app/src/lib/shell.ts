@@ -333,6 +333,13 @@ export async function onTrayPanel(cb: (visible: boolean) => void): Promise<() =>
   return listen<{ visible?: unknown }>("tray-panel", (e) => cb(e.payload?.visible === true));
 }
 
+/** Видно ли окно панели сейчас; вне оболочки — null. */
+export async function trayPanelVisible(): Promise<boolean | null> {
+  if (!inTauri()) return null;
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  return getCurrentWindow().isVisible();
+}
+
 /** Высота содержимого панели: оболочка подгоняет под неё окно. */
 export async function trayPanelFit(height: number): Promise<void> {
   if (inTauri()) await invoke<void>("tray_panel_fit", { height }).catch(() => {});

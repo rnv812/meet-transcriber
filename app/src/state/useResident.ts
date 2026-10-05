@@ -20,7 +20,7 @@ const RECONNECT_MS = 2000;
  * (`recording.processing`) или закончилась, выгрузка в базу знаний, объединение
  * завершено (`recording.updated`).
  */
-const stateChanging = (e: BusEvent) =>
+export const stateChanging = (e: BusEvent) =>
   e.kind === "record.started" || e.kind === "record.stopped" || e.kind === "record.discarded"
   || e.kind.startsWith("live.") || e.kind.startsWith("recording.");
 

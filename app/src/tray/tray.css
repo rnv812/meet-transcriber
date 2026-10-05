@@ -8,7 +8,9 @@
    Стекло: на macOS (`data-glass="native"`) — системное NSVisualEffectView
    (Effect::Popover, скругление 12 задаёт оболочка), страница кладёт поверх
    лишь лёгкий фиолетовый тон. Без него (`css`: браузер, dev) фон и размытие
-   рисует сама страница. */
+   рисует сама страница.
+
+   Без color-mix(): macOS 13.0 — это Safari 16.1, а он появился в 16.2. */
 
 html, body, #root { margin: 0; background: transparent; }
 body {
@@ -22,10 +24,13 @@ body {
 
 .tp {
   /* Фиолетовый — градиент от бренда приложения к лиловому. */
-  --tp-violet: #a666c9;
-  --tp-iris: #8b6ae0;
   --tp-indigo: #5e6ad2;
-  --tp-gradient: linear-gradient(135deg, #b178d8 0%, var(--tp-violet) 22%, var(--tp-iris) 62%, var(--tp-indigo) 100%);
+  /* Белая подпись — не ниже 4,5:1 по всей длине: светлый край — #9456c0
+     (тон #a666c9, но темнее), середина #8159cf, конец — акцент окна. */
+  --tp-gradient: linear-gradient(135deg, #9456c0 0%, #8159cf 50%, var(--tp-indigo) 100%);
+  /* «Остановить» — тот же фиолетовый, но от тона записи: не путать с
+     «Начать запись». */
+  --tp-stop-gradient: linear-gradient(135deg, #b23a63 0%, #8e45ad 55%, #6b57c9 100%);
   --tp-rec: #ff5c74;
   --tp-ok: #4cc38a;
   --tp-warn: #f5a524;
@@ -69,9 +74,12 @@ body {
     --tp-ok: #1f9a62;
     --tp-error-bg: rgba(229, 54, 79, 0.10);
     --tp-error-ink: #b4233a;
+    --tp-warn: #a86500;
     color-scheme: light;
   }
 }
+
+.tp:focus { outline: none; }
 
 .tp[data-glass="native"] {
   background: var(--tp-tint);
@@ -187,6 +195,13 @@ body {
     inset 0 -1px 0 rgba(30, 10, 60, 0.18),
     0 8px 20px -10px rgba(120, 70, 200, 0.85);
   text-shadow: 0 1px 1px rgba(40, 10, 70, 0.25);
+}
+.tp__primary--stop {
+  background: var(--tp-stop-gradient);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.24),
+    inset 0 -1px 0 rgba(60, 10, 40, 0.2),
+    0 8px 20px -10px rgba(178, 58, 99, 0.8);
 }
 .tp__primary:hover:not(:disabled) { filter: brightness(1.07) saturate(1.05); }
 .tp__primary:active:not(:disabled) { transform: translateY(1px); filter: brightness(0.96); }

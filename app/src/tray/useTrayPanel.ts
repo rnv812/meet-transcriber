@@ -15,7 +15,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type Endpoint, NoResidentError, getAssistant, getRecentRecordings, getState, openEvents, resolveEndpoint,
 } from "../lib/api";
-import { onTrayPanel } from "../lib/shell";
+import { onTrayPanel, trayPanelVisible } from "../lib/shell";
+import { stateChanging } from "../state/useResident";
 import type { AssistantInfo, BusEvent, Recording, Snapshot } from "../lib/types";
 import { latestSaved, stoppedBetween } from "./trayModel";
 
@@ -23,8 +24,14 @@ const RECONNECT_MS = 2000;
 /** Столько свежих папок берём, чтобы среди них нашлась не идущая запись. */
 const RECENT_LIMIT = 3;
 
-const changesState = (e: BusEvent) =>
-  e.kind.startsWith("record.") || e.kind.startsWith("live.") || e.kind.startsWith("recording.");
+/**
+ * После каких событий перечитать снимок: те же, что у окна (`stateChanging`),
+ * и подмена устройства или пропавший звук собеседников — панель показывает
+ * их у таймера. Только перечнем: `record.level` приходит дважды в секунду, и
+ * `/state` на каждый был бы опросом 2 раза в секунду.
+ */
+const PANEL_STATE_EVENTS = new Set(["record.device_fallback", "record.device_pinned", "record.system_audio"]);
+const changesState = (e: BusEvent) => stateChanging(e) || PANEL_STATE_EVENTS.has(e.kind);
 const changesLibrary = (e: BusEvent) =>
   e.kind === "record.stopped" || e.kind === "record.discarded" || e.kind === "live.stopped"
   || e.kind === "job.done" || e.kind === "recording.updated";
@@ -65,10 +72,14 @@ export function useTrayPanel(): TrayData {
     setOnline(true);
   }, []);
 
-  // Показ и скрытие окна оболочкой.
+  // Показ и скрытие окна оболочкой. Подписка асинхронная — событие,
+  // пришедшее до неё, потерялось бы: видно ли окно, спрашиваем и сами.
   useEffect(() => {
     let gone = false;
     let off: (() => void) | null = null;
+    trayPanelVisible()
+      .then((shown) => { if (!gone && shown === false) setVisible(false); })
+      .catch(() => {});
     onTrayPanel((shown) => {
       setVisible(shown);
       if (shown) setShownTick((t) => t + 1);

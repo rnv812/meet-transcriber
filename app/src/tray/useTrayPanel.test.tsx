@@ -43,3 +43,18 @@ test("поток событий открыт, только пока панель
   expect(result.current.shownTick).toBe(1);
   expect(api.getRecentRecordings).toHaveBeenCalledTimes(2);
 });
+
+test("уровни звука снимок не перечитывают — только события, что его меняют", async () => {
+  const getState = vi.spyOn(api, "getState").mockResolvedValue(snap({ status: "recording" }));
+  renderHook(() => useTrayPanel());
+  await waitFor(() => expect(FakeEventSource.instances.length).toBeGreaterThan(0));
+  const es = FakeEventSource.instances.at(-1)!;
+  act(() => es.emit("state", snap({ status: "recording" })));
+  for (let i = 0; i < 3; i++) act(() => es.emit("record.level", { kind: "record.level", levels: { mic: 0.3 } }));
+  act(() => es.emit("record.silence", { kind: "record.silence" }));
+  act(() => es.emit("log", { kind: "log", line: "x" }));
+  expect(getState).not.toHaveBeenCalled();
+  act(() => es.emit("record.stopped", { kind: "record.stopped" }));
+  act(() => es.emit("record.device_fallback", { kind: "record.device_fallback" }));
+  await waitFor(() => expect(getState).toHaveBeenCalledTimes(2));
+});
