@@ -126,6 +126,9 @@ class Job:
     # Предупреждение на всю задачу (meet.progress `warn`): например,
     # «Распознаётся на процессоре: видеокарта NVIDIA не найдена».
     warning: str | None = None
+    # Расшифровка: текст уже в transcript.json, идут спикеры (Р4, событие
+    # `transcript.text`). Окно показывает текст, не дожидаясь конца задачи.
+    text_ready: bool | None = None
     result: str | None = None
     error: str | None = None
     created_at: float = field(default_factory=_created_at)
@@ -155,6 +158,7 @@ class Job:
             "slow": self.slow,
             "eta_s": self.eta_s,
             "warning": self.warning,
+            "text_ready": self.text_ready,
             "result": self.result,
             "error": self.error,
             "created_at": self.created_at,
@@ -514,6 +518,11 @@ class JobQueue:
             job.slow = payload.get("slow")
             job.eta_s = payload.get("eta_s")
             job.warning = payload.get("warning") or job.warning
+            self._emit(JOB_PROGRESS, job)
+        elif kind == events.TRANSCRIPT_TEXT:
+            # Текст записан до спикеров: окно перечитывает карточку по этому
+            # событию хода, а не ждёт конца задачи.
+            job.text_ready = True
             self._emit(JOB_PROGRESS, job)
         elif kind == "job.result":
             job.result = payload.get("path")

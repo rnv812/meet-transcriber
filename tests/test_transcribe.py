@@ -242,7 +242,8 @@ def test_progress_is_one_monotonic_scale_with_step_numbers(monkeypatch, tmp_path
     steps = [e["step"] for e in events_]
     assert steps == sorted(steps) and steps[0] == 1 and steps[-1] == 7
     order = list(dict.fromkeys((e["stage"], e["label"]) for e in events_))
-    assert [s for s, _ in order] == ["convert", "asr", "align", "diarize", "voices", "asr", "render"]
+    # Обе дорожки распознаются до выравнивания и диаризации: текст — раньше спикеров (Р4).
+    assert [s for s, _ in order] == ["convert", "asr", "asr", "align", "diarize", "voices", "render"]
 
 
 def test_progress_without_align_has_one_step_less(monkeypatch, tmp_path):
@@ -332,7 +333,7 @@ def test_plan_gigaam_cpu_two_tracks_has_no_alignment_from_the_start(monkeypatch,
 def test_plan_whisper_cuda_keeps_alignment(monkeypatch, tmp_path):
     events_ = _engine_run(monkeypatch, tmp_path, device="cuda", backend="faster-whisper", layout="two")
     _assert_steady(events_, 7)
-    assert [e["step"] for e in events_ if e["stage"] == "align"][0] == 3
+    assert [e["step"] for e in events_ if e["stage"] == "align"][0] == 4
 
 
 def test_plan_without_diarization_keeps_its_count(monkeypatch, tmp_path):
@@ -357,7 +358,7 @@ def test_plan_with_gigaam_backend_but_english_keeps_alignment(monkeypatch, tmp_p
     (state / "config.json").write_text(json.dumps({"asr": {"language": "en"}}), encoding="utf-8")
     events_ = _engine_run(monkeypatch, tmp_path, device="cpu", backend="faster-whisper", layout="two")
     _assert_steady(events_, 7)
-    assert [e["step"] for e in events_ if e["stage"] == "align"][0] == 3
+    assert [e["step"] for e in events_ if e["stage"] == "align"][0] == 4
 
 
 def test_plan_engine_changed_after_start_skips_alignment_without_recount(monkeypatch, tmp_path):

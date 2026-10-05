@@ -1,3 +1,4 @@
+import copy
 import re
 import time
 from datetime import datetime
@@ -93,6 +94,9 @@ class _Run:
         # torch. Не шла ещё — оценка `_torch_guess`.
         self.torch_used: str | None = None
         self._announced: set[str] = set()
+        # Текст распознан, спикеров ещё нет (Р4): `on_text(сегменты)` пишет его
+        # в папку записи до диаризации (`_TextPhase`). None — не пишем.
+        self.on_text = None
 
     def choose(self, wav: Path) -> asr.Choice:
         if self.choice is None:
@@ -427,17 +431,18 @@ def _single_plan(align: bool) -> list[Step]:
 def _two_track_plan(align: bool) -> list[Step]:
     """Шаги встречи из двух дорожек: собеседники распознаются и делятся на
     спикеров, микрофон только распознаётся (на нём один человек); речи в нём
-    обычно меньше — и вес меньше."""
+    обычно меньше — и вес меньше. Обе дорожки распознаются подряд, до
+    выравнивания и диаризации: текст встречи готов раньше спикеров (Р4)."""
     asr_w = WEIGHTS["asr"]
     steps = [
         Step("convert", "convert", WEIGHTS["convert"]),
         Step("asr-sys", "asr", asr_w * 0.6, label="распознавание собеседников", note="sys", measured=True,
              unit="audio_s"),
+        Step("asr-mic", "asr", asr_w * 0.4, label="распознавание микрофона", note="mic", measured=True,
+             unit="audio_s"),
         Step("align", "align", WEIGHTS["align"], note="sys", measured=True, unit="audio_s"),
         Step("diarize", "diarize", WEIGHTS["diarize"], note="sys", measured=True),
         Step("voices", "voices", WEIGHTS["voices"]),
-        Step("asr-mic", "asr", asr_w * 0.4, label="распознавание микрофона", note="mic", measured=True,
-             unit="audio_s"),
         Step("render", "render", WEIGHTS["render"]),
     ]
     return steps if align else [s for s in steps if s.key != "align"]
@@ -626,29 +631,33 @@ def transcribe(
     run = _Run(hotwords, bus)
     hotwords = _load_hotwords(hotwords)
 
+    if path.is_dir():
+        iso, dmy = _folder_dates(path.name)
+        out_md = path / f"{iso}_transcript.md"
+        title = f"Встреча — {dmy}"
+    else:
+        iso, dmy = _file_dates(path)
+        out_md = path.with_suffix(".md")
+        title = f"{path.stem} — {dmy}"
+    # Текст до спикеров — только в папку записи (у одиночного файла нет
+    # transcript.json вовсе) и только если окончательной расшифровки в ней нет.
+    text_phase = _TextPhase(path, title, run) if path.is_dir() and _TextPhase.wanted(path) else None
+    run.on_text = text_phase
+
     if path.is_dir() and _find_track(path, "source") and not _find_track(path, "sys"):
         # Папка импорта: одна дорожка чужой записи, но вывод — внутрь папки,
         # как у обычной записи, чтобы библиотека и редактор её видели.
         segments, diar, name_map = _transcribe_single(
             _find_track(path, "source"), speakers, hotwords, align, overlap, bus, run=run
         )
-        iso, dmy = _folder_dates(path.name)
-        out_md = path / f"{iso}_transcript.md"
-        title = f"Встреча — {dmy}"
     elif path.is_dir():
         segments, diar, name_map = _transcribe_two_track(
             path, speakers, hotwords, align, overlap, bus, run=run
         )
-        iso, dmy = _folder_dates(path.name)
-        out_md = path / f"{iso}_transcript.md"
-        title = f"Встреча — {dmy}"
     else:
         segments, diar, name_map = _transcribe_single(
             path, speakers, hotwords, align, overlap, bus, run=run
         )
-        iso, dmy = _file_dates(path)
-        out_md = path.with_suffix(".md")
-        title = f"{path.stem} — {dmy}"
 
     if path.is_dir():
         # Объединённая встреча: на стыках частей — отметки перерыва.
@@ -661,7 +670,8 @@ def transcribe(
     _write_sidecar(out_md, path, iso, segments, diar, name_map)
     _write_structured(path, segments, title, name_map,
                       diarization=diar.skipped if diar is not None else None,
-                      choice=run.choice)
+                      choice=run.choice,
+                      created_at=text_phase.created_at if text_phase is not None else None)
     timing = run.timing_line()
     print(timing)
     bus.emit(events.LOG, text=timing, source="timing")
@@ -671,8 +681,22 @@ def transcribe(
     return out_md
 
 
+def _asr_fields(raw: dict, choice) -> None:
+    """Поля распознавания транскрипта: `asr` ({"backend", "device", "model"}) и
+    `asr_note`, если движок не тот, что выбран."""
+    if choice is None:
+        return
+    raw["asr"] = {"backend": choice.backend, "device": choice.device,
+                  **({"model": choice.gigaam_model} if choice.backend == "gigaam" else {})}
+    # Своя пометка выбора (не тот движок) важнее причины процессора.
+    note = choice.note or getattr(choice, "cpu_reason", None)
+    if note:
+        raw["asr_note"] = note
+
+
 def _write_structured(path: Path, segments, title: str, name_map: dict,
-                      diarization: str | None = None, choice=None) -> None:
+                      diarization: str | None = None, choice=None,
+                      created_at: str | None = None) -> None:
     """`transcript.json` рядом с записью — структурный источник для редактора.
 
     Markdown остаётся человеческим артефактом и форматом экспорта, но править
@@ -685,7 +709,10 @@ def _write_structured(path: Path, segments, title: str, name_map: dict,
 
     `choice` (asr.Choice) — чем распознано: поле `asr` ({"backend", "device",
     "model"}) и, если движок не тот, что выбран, `asr_note` (например,
-    `not_russian` — запись не на русском, GigaAM заменён Whisper)."""
+    `not_russian` — запись не на русском, GigaAM заменён Whisper).
+
+    `created_at` — время текста до спикеров (`_TextPhase`), если он был:
+    окончательная расшифровка заменяет его и остаётся той же расшифровкой."""
     if not path.is_dir():
         return
     from meet import library
@@ -704,15 +731,11 @@ def _write_structured(path: Path, segments, title: str, name_map: dict,
     raw = library.segments_to_raw(
         segments, speakers=name_map, title=title, source=str(path)
     )
+    if created_at:
+        raw["created_at"] = created_at
     if diarization:
         raw["diarization"] = diarization
-    if choice is not None:
-        raw["asr"] = {"backend": choice.backend, "device": choice.device,
-                      **({"model": choice.gigaam_model} if choice.backend == "gigaam" else {})}
-        # Своя пометка выбора (не тот движок) важнее причины процессора.
-        note = choice.note or getattr(choice, "cpu_reason", None)
-        if note:
-            raw["asr_note"] = note
+    _asr_fields(raw, choice)
     if _find_track(path, "sys") and _find_track(path, "mic"):
         # Микрофонные сегменты помечены пайплайном (`track`): выводить их по
         # подписям, как у старых расшифровок (meet.segvoices), не нужно.
@@ -752,6 +775,69 @@ def _write_sidecar(out_md, path, iso, segments, diar, name_map) -> None:
     print(f"Голосовые отпечатки: {p}")
 
 
+def _unassigned(segment: Segment) -> Segment:
+    """Сегмент собеседников в тексте до спикеров: без подписи — ни «Спикер N»,
+    ни «Собеседник», пока диаризация не сказала, кто это."""
+    segment.speaker = None
+    return segment
+
+
+def _text_ready(run: "_Run", segments: list[Segment]) -> None:
+    """Текст распознан — отдать его `run.on_text` (запись в папку до спикеров).
+    Сбой записи расшифровку не роняет: окончательная запишется как обычно."""
+    if run.on_text is None:
+        return
+    try:
+        run.on_text(segments)
+    except Exception as e:
+        print(f"текст до спикеров не записан ({type(e).__name__}: {e})")
+
+
+class _TextPhase:
+    """Текст встречи до спикеров (Р4): transcript.json с `phase: "text"` —
+    окно показывает его сразу после распознавания, спикеры приходят с
+    окончательной расшифровкой, которая заменяет его целиком (атомарно,
+    `library.write_transcript`) и сохраняет его `created_at`: для истории
+    правок спикеров это одна и та же расшифровка.
+
+    Пишется только в папку, где окончательной расшифровки нет (первая
+    расшифровка, импорт, объединение, повтор прерванной): перерасшифровка
+    готовой записи показывает прежнюю до конца — отмена посередине не теряет
+    ни её, ни её правки."""
+
+    def __init__(self, folder: Path, title: str, run: "_Run") -> None:
+        self.folder = folder
+        self.title = title
+        self.run = run
+        self.created_at: str | None = None
+
+    @staticmethod
+    def wanted(folder: Path) -> bool:
+        from meet import library
+
+        if not library.transcript_path(folder).exists():
+            return True
+        return library.is_text_phase(library.read_transcript(folder))
+
+    def __call__(self, segments: list[Segment]) -> None:
+        from meet import library, merge
+
+        segments = merge.with_breaks(segments, library.read_meta(self.folder).get("parts"))
+        # Слов черновику не нужно (правка спикеров по нему не идёт), а
+        # words="replace" убирает слова прошлого черновика.
+        plain = [Segment(s.start, s.end, s.text, s.speaker, uncertain=getattr(s, "uncertain", False),
+                         kind=getattr(s, "kind", None), track=getattr(s, "track", None))
+                 for s in segments]
+        raw = library.segments_to_raw(plain, title=self.title, source=str(self.folder))
+        raw[library.PHASE] = library.TEXT_PHASE
+        _asr_fields(raw, self.run.choice)
+        if _find_track(self.folder, "sys") and _find_track(self.folder, "mic"):
+            raw["track_marks"] = "pipeline"
+        library.write_transcript(self.folder, raw, words="replace")
+        self.created_at = raw["created_at"]
+        self.run.bus.emit(events.TRANSCRIPT_TEXT, path=str(self.folder))
+
+
 def _transcribe_single(
     src: Path,
     speakers: int | None,
@@ -772,6 +858,7 @@ def _transcribe_single(
         stages.begin("asr")
         segments = _recognize(wav, hotwords, run)
         stages.update(1)
+        _text_ready(run, [_unassigned(s) for s in _fix_terms(copy.deepcopy(segments), run)])
         align = _settle_align(align, run, stages)
         segments = _fix_terms(run.timed("align", lambda: _maybe_align(segments, wav, align, on_progress=run.part)), run)
         stages.begin("diarize")
@@ -818,6 +905,21 @@ def _transcribe_two_track(
         stages.begin("asr-sys")
         sys_segs = _recognize(sys_wav, hotwords, run)
         stages.update(1)
+        stages.begin("asr-mic")
+        mic_segs = _fix_terms(_recognize(mic_wav, hotwords, run), run)
+        stages.update(1)
+        # Микрофонная дорожка — всегда владелец машины; как его подписывать,
+        # решает настройка (по умолчанию «Вы»).
+        from meet import settings
+
+        speaker = settings.load().recording.speaker_name
+        for seg in mic_segs:
+            seg.speaker = speaker
+            seg.track = "mic"
+        # Текст обеих дорожек готов — в папку записи до спикеров (Р4). Копии:
+        # правила замены у собеседников идут после выравнивания, а не до него.
+        _text_ready(run, interleave_tracks(
+            [_unassigned(s) for s in _fix_terms(copy.deepcopy(sys_segs), run)], copy.deepcopy(mic_segs)))
         # forced alignment только для sys: mic — один спикер («Вы»), стыки не важны
         align = _settle_align(align, run, stages)
         sys_segs = _fix_terms(run.timed("align", lambda: _maybe_align(sys_segs, sys_wav, align, on_progress=run.part)), run)
@@ -836,15 +938,5 @@ def _transcribe_two_track(
             sys_segs = split_by_speaker(
                 sys_segs, _apply_names(diar.turns, name_map), diar.overlaps
             )
-        stages.begin("asr-mic")
-        mic_segs = _fix_terms(_recognize(mic_wav, hotwords, run), run)
-        stages.update(1)
-        # Микрофонная дорожка — всегда владелец машины; как его подписывать,
-        # решает настройка (по умолчанию «Вы»).
-        from meet import settings
-
-        speaker = settings.load().recording.speaker_name
-        for seg in mic_segs:
-            seg.speaker = speaker
-            seg.track = "mic"
+            stages.update(1)
     return interleave_tracks(sys_segs, mic_segs), diar, name_map

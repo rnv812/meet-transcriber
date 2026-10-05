@@ -45,6 +45,9 @@ RECORD_SYSTEM_AUDIO = "record.system_audio"
 RECORD_LEVEL = "record.level"  # уровни дорожек, только для живого UI
 LOG = "log"  # строка журнала записи (дубль record.log)
 PROGRESS = "progress"  # ступень расшифровки
+# Текст расшифровки записан до спикеров (transcript.json, `phase: "text"`):
+# {"path": папка записи}. Окно перечитывает карточку, не дожидаясь конца задачи.
+TRANSCRIPT_TEXT = "transcript.text"
 ERROR = "error"
 
 # Ступени расшифровки в порядке прохождения. Ключ — машинный, ярлык — для UI.

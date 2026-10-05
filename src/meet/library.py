@@ -25,6 +25,12 @@ TRANSCRIPT_JSON = "transcript.json"
 # сегмента, у каждого слова сегмента его время и текст для сверки.
 WORDS_JSON = "words.json"
 META_JSON = "meta.json"
+# Фаза расшифровки в transcript.json (Р4, 0.3.3): `"text"` — распознанный текст
+# до диаризации, без спикеров (микрофон — владелец, собеседники — без подписи).
+# Окончательная расшифровка поля не несёт вовсе. Анализ, итоги, база знаний,
+# правка спикеров и «Улучшить расшифровку» по такому транскрипту не идут.
+PHASE = "phase"
+TEXT_PHASE = "text"
 FOLDER_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})(?:_.+)?$")
 # Форматы дорожек в порядке предпочтения — те же, что понимает transcribe.
 TRACK_EXTS = (".opus", ".wav", ".ogg", ".flac", ".mp3", ".m4a",
@@ -82,6 +88,9 @@ class Recording:
     # "helper" — нет помощника, "unsupported" — macOS старше 13, "failed" —
     # помощник не запустился. Старая пометка без причины — None.
     system_audio_reason: str | None = None
+    # Транскрипт — только текст, спикеры ещё не определены (`phase: "text"`):
+    # идёт диаризация или расшифровку прервали между фазами. None — окончательный.
+    transcript_phase: str | None = None
 
     def to_raw(self) -> dict:
         return {
@@ -104,6 +113,7 @@ class Recording:
             "category": self.category,
             "system_audio": self.system_audio,
             "system_audio_reason": self.system_audio_reason,
+            "transcript_phase": self.transcript_phase,
         }
 
 
@@ -219,6 +229,18 @@ def read_transcript(folder: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+def is_text_phase(data) -> bool:
+    """Транскрипт — текст до спикеров (`phase: "text"`), а не окончательный."""
+    return isinstance(data, dict) and data.get(PHASE) == TEXT_PHASE
+
+
+def final_transcript(folder: Path) -> dict | None:
+    """Окончательный транскрипт папки: текст до спикеров — как его нет. Для
+    всего, что опирается на спикеров или отдаёт расшифровку наружу."""
+    data = read_transcript(folder)
+    return None if is_text_phase(data) else data
+
+
 def display_names(segments: list[dict]) -> dict[str, str]:
     """Сырая метка SPEAKER_XX → «Спикер N» в порядке первого появления.
 
@@ -277,25 +299,25 @@ def write_transcript(folder: Path, data: dict, words: str = "keep") -> Path:
 
 
 # Заголовок транскрипта для списка записей: (path, mtime_ns, size) → (есть ли
-# транскрипт, название, пометка диаризации). Список не разбирает каждый раз
-# все транскрипты целиком.
+# транскрипт, название, пометка диаризации, пометка распознавания, фаза).
+# Список не разбирает каждый раз все транскрипты целиком.
 _heads: dict[str, tuple] = {}
 _heads_lock = threading.Lock()
 
 
-def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None, str | None]:
+def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None, str | None, str | None]:
     path = transcript_path(folder)
     try:
         st = path.stat()
     except OSError:
-        return False, None, None, None
+        return False, None, None, None, None
     key = (st.st_mtime_ns, st.st_size)
     with _heads_lock:
         hit = _heads.get(str(path))
     if hit is not None and hit[0] == key:
         return hit[1]
     transcript = read_transcript(folder)
-    title = diarization = asr_note = None
+    title = diarization = asr_note = phase = None
     if isinstance(transcript, dict):
         raw_title = transcript.get("title")
         title = str(raw_title) if raw_title else None
@@ -303,7 +325,8 @@ def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None, str | 
         diarization = str(flag) if isinstance(flag, str) and flag else None
         note = transcript.get("asr_note")
         asr_note = str(note) if isinstance(note, str) and note else None
-    head = (transcript is not None, title, diarization, asr_note)
+        phase = TEXT_PHASE if is_text_phase(transcript) else None
+    head = (transcript is not None, title, diarization, asr_note, phase)
     with _heads_lock:
         _heads[str(path)] = (key, head)
     return head
@@ -728,7 +751,7 @@ def describe(folder: Path) -> Recording | None:
     meta = read_meta(folder)
     if not _recognised(tracks, meta):
         return None
-    has_json, title, diarization, asr_note = _transcript_head(folder)
+    has_json, title, diarization, asr_note, phase = _transcript_head(folder)
     if meta.get("title"):
         title = str(meta["title"])
     source = meta.get("source") if meta.get("source") in SOURCES else "record"
@@ -758,6 +781,7 @@ def describe(folder: Path) -> Recording | None:
         else None,
         system_audio_reason=meta["system_audio_reason"]
         if meta.get("system_audio_reason") in SYSTEM_AUDIO_REASONS else None,
+        transcript_phase=phase,
     )
 
 
