@@ -3,8 +3,10 @@
 Источник тот же, что у Handy, — Hugging Face. Разница в том, кто качает: Handy
 тянет ggml-файлы напрямую в свою папку, а у нас это делают библиотеки движка
 (faster-whisper для распознавания, pyannote для диаризации, transformers для
-выравнивания). Кэш у них общий — `huggingface_hub`, — и переносить его мы не
-будем: уже скачанные гигабайты не должны качаться заново.
+выравнивания). Кэш у них общий — `huggingface_hub`: уже скачанные гигабайты не
+должны качаться заново. Когда человек выбрал папку движка и моделей (0.3.3),
+модели каталога переезжают в свой кэш Meet (`cache_root`, `meet.storage`);
+чужие модели общего кэша Meet не трогает никогда.
 
 Две вещи, которые обязаны быть видны человеку до нажатия «скачать»:
 **размер** (модели измеряются гигабайтами) и **гейт** — диаризация лежит за
@@ -99,9 +101,9 @@ CATALOGUE = (
 )
 
 
-def cache_root() -> Path:
-    """Кэш Hugging Face. Тот же, что у библиотек движка: свой заводить нельзя —
-    иначе уже скачанное качается заново."""
+def shared_cache_root() -> Path:
+    """Общий кэш Hugging Face — тот же, что у библиотек движка по умолчанию
+    (и у других программ на машине)."""
     for env in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE"):
         value = os.environ.get(env)
         if value:
@@ -113,6 +115,38 @@ def cache_root() -> Path:
     if xdg:  # так же решает huggingface_hub (Linux)
         return Path(xdg) / "huggingface" / "hub"
     return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def cache_root() -> Path:
+    """Кэш Hugging Face, которым пользуется Meet. Единственный ответ на «где
+    модели HF» для всех процессов Meet (резидент, задачи, ассистент, проба
+    устройств).
+
+    Без выбранной папки (`paths.storage_root`) — общий кэш: свой заводить
+    нельзя, иначе уже скачанное качалось бы заново. С выбранной папкой —
+    свой кэш `<папка>/models/hf` в той же раскладке: туда перенос копирует
+    модели каталога из общего кэша (`meet.storage`), там их ищут и туда качают.
+    """
+    from meet import paths
+
+    if paths.storage_root() is not None:
+        return paths.models_dir() / "hf"
+    return shared_cache_root()
+
+
+def use_meet_cache() -> None:
+    """Направить библиотеки движка в кэш Meet — один раз при старте процесса
+    (резидент, CLI), до импорта huggingface_hub: faster-whisper, transformers
+    и pyannote читают HF_HUB_CACHE при импорте, а дети резидента наследуют его
+    окружение. Без выбранной папки окружение не трогаем: всё как раньше,
+    включая HF_HOME/HF_HUB_CACHE, заданные человеком."""
+    from meet import paths
+
+    if paths.storage_root() is None:
+        return
+    os.environ["HF_HUB_CACHE"] = str(cache_root())
+    # Кэш кусков загрузчика Xet (до 10 ГБ) — тоже не на системном диске.
+    os.environ["HF_XET_CACHE"] = str(paths.models_dir() / "xet")
 
 
 def _folder(repo_id: str) -> Path:
@@ -421,12 +455,19 @@ def _hub_available() -> bool:
 
 
 def download(repo_id: str, on_line=None) -> int:
-    """Скачать модель в общий кэш.
+    """Скачать модель в кэш Meet (`cache_root`).
 
     Тянет `huggingface_hub`, который приходит вместе с движком: без движка
     качать нечем и незачем — расшифровывать всё равно будет некому.
     """
     known = {model["id"] for model in CATALOGUE}
+    from meet import paths
+
+    if (missing := paths.storage_missing()) is not None:
+        # Внешний диск отключён: молча качать гигабайты на системный нельзя.
+        if on_line:
+            on_line(f"папка движка и моделей недоступна: {missing} — подключите диск")
+        return 4
     if repo_id not in known:
         # Скачивать что попало по строке из сети — плохая идея: это путь на
         # диск и трафик. Каталог тут и есть список разрешённого.
@@ -444,7 +485,7 @@ def download(repo_id: str, on_line=None) -> int:
             on_line("сначала установите движок расшифровки — он приносит и загрузчик")
         return 3
     try:
-        path = snapshot_download(repo_id, token=token())
+        path = snapshot_download(repo_id, token=token(), cache_dir=str(cache_root()))
     except Exception as e:
         if on_line:
             on_line(_explain(repo_id, e))

@@ -101,11 +101,54 @@ def default_recordings_dir() -> Path:
     return (root / "recordings") if root else (data_dir() / "recordings")
 
 
+# Где лежат движок и модели (0.3.3): выбранная человеком папка — например,
+# другой диск, когда на C: тесно. Файл пишет оболочка (её перенос, `storage.rs`):
+# она же должна знать, где движок, ещё до запуска резидента. Нет файла — всё
+# там же, где было до этой настройки.
+STORAGE_FILE = "storage.json"
+
+
+def storage_file() -> Path:
+    return data_dir() / STORAGE_FILE
+
+
+def storage_root() -> Path | None:
+    """Выбранная папка движка и моделей или None (по умолчанию: data_dir и
+    общий кэш Hugging Face). Битый файл, пустой или относительный путь — как
+    будто выбора нет: относительный путь значил бы «от рабочей папки», то есть
+    разное место у разных процессов."""
+    import json
+
+    try:
+        raw = json.loads(storage_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = raw.get("root") if isinstance(raw, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    root = Path(value.strip())
+    return root if root.is_absolute() else None
+
+
+def storage_home() -> Path:
+    """Папка, в которой лежат `engine/` и `models/`."""
+    return storage_root() or data_dir()
+
+
+def storage_missing() -> Path | None:
+    """Выбранная папка, которой сейчас нет (внешний диск отключён), или None.
+    Её не создаём: на macOS это была бы папка в /Volumes на системном диске,
+    и туда молча поехали бы гигабайты."""
+    root = storage_root()
+    return root if root is not None and not root.is_dir() else None
+
+
 def models_dir() -> Path:
-    """Модели, которые качает приложение (кэш HuggingFace тут не при чём:
-    faster-whisper и pyannote продолжают жить в своём кэше, чтобы уже
-    скачанные гигабайты не качались заново)."""
-    return data_dir() / "models"
+    """Модели, которые качает приложение: GigaAM, а при выбранной папке — и
+    свой кэш Hugging Face (`models/hf`, см. `models.cache_root`). Без выбора
+    faster-whisper и pyannote живут в общем кэше HF, как раньше: уже скачанные
+    гигабайты не качаются заново."""
+    return storage_home() / "models"
 
 
 def logs_dir() -> Path:
@@ -114,5 +157,5 @@ def logs_dir() -> Path:
 
 def engine_dir() -> Path:
     """Приватный venv движка, который тонкий инсталлятор ставит при первом
-    запуске: `<data_dir>/engine/<версия>`."""
-    return data_dir() / "engine"
+    запуске: `<папка движка и моделей>/engine/<версия>`."""
+    return storage_home() / "engine"

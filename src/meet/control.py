@@ -816,6 +816,10 @@ _ROUTES = {
         h._body()
     ),
     ("POST", "/models/remove"): lambda h, p: _server_of(h).state.remove_model(h._body()),
+    # Где хранить движок и модели: перенос ведёт оболочка, здесь — сведения и
+    # ответ на вопрос об остатках в общем кэше Hugging Face.
+    ("GET", "/storage"): lambda h, p: _server_of(h).state.storage(),
+    ("POST", "/storage/leftovers"): lambda h, p: _server_of(h).state.storage_leftovers(h._body()),
     ("POST", "/engine/install"): lambda h, p: _server_of(h).state.install_engine(
         h._body()
     ),

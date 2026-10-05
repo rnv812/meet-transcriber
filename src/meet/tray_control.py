@@ -330,6 +330,7 @@ ENGINE_INSTALLING = "идёт установка движка — модели �
 MODELS_DOWNLOADING = "идут загрузки моделей — движок можно ставить после них"
 OWNER_VOICE_BUSY = "записывается образец голоса или идёт его поиск по встречам — движок можно ставить после этого"
 RESIDENT_STOPPING = "служба записи останавливается — скачайте модель после её перезапуска"
+STORAGE_MOVING = "идёт перенос движка и моделей — скачайте модель после него"
 # Восстановление после перезапуска берёт записи не старше этого.
 RECOVER_DAYS = 7
 # Транскрипт — только текст, спикеров ещё нет (`phase: "text"`, Р4): действия,
@@ -2539,6 +2540,40 @@ class TrayControl:
             )
         return job.to_raw()
 
+    # --- где хранить движок и модели (переносит оболочка, storage.rs) --------
+
+    def storage(self) -> dict:
+        """Где лежат движок и модели, сколько весят модели Meet и можно ли
+        переносить прямо сейчас (`busy` — причина «нельзя» или None)."""
+        from meet import storage
+
+        return {**storage.info(), "busy": self._storage_busy()}
+
+    def _storage_busy(self) -> str | None:
+        """Перенос перезапускает резидент и меняет место моделей: не во время
+        записи, ассистента, загрузки моделей и фоновых задач (их подпроцессы —
+        из старого движка)."""
+        if self.tray.recording:
+            return "идёт запись"
+        if self.live.busy():
+            return "работает ассистент"
+        if self.downloads.any_active():
+            return "скачиваются модели"
+        for item in self.queue.listing() + self.llm_queue.listing():
+            if item.get("state") in (jobs.QUEUED, jobs.RUNNING):
+                return "идёт расшифровка или другая фоновая задача"
+        return None
+
+    def storage_leftovers(self, body: dict | None = None) -> dict:
+        """Ответ на вопрос после переезда: удалить ли модели Meet из общего
+        кэша Hugging Face (`{"delete": true}`) или оставить (`false`)."""
+        from meet import storage
+
+        delete = (body or {}).get("delete")
+        if not isinstance(delete, bool):
+            raise _bad_request("ответ — delete: true или false")
+        return storage.answer_leftovers(delete)
+
     def models(self) -> dict:
         """Каталог моделей с отметками «скачано» и «выбрано»."""
         from meet import models as models_module
@@ -2618,6 +2653,11 @@ class TrayControl:
         repo_id = str((body or {}).get("id") or "").strip()
         if not repo_id:
             return {"error": "не сказано, какую модель качать"}
+        from meet import storage
+
+        # Посреди переноса новая модель легла бы в старое место мимо копии.
+        if storage.moving():
+            raise _conflict(STORAGE_MOVING)
         with self._engine_lock:
             if self.queue.active_for(str(paths.data_dir()), (jobs.INSTALL_ENGINE,)) is not None:
                 raise _conflict(ENGINE_INSTALLING)

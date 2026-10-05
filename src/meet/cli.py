@@ -316,6 +316,10 @@ def _add_library_parsers(sub) -> None:
 
 
 def main(argv: list[str] | None = None) -> int | None:
+    from meet import models
+
+    # Кэш моделей Meet (выбранная папка движка и моделей) — до любых загрузок.
+    models.use_meet_cache()
     _quiet_known_warnings()
     # Страховка от UnicodeEncodeError: cp866-консоль Windows не кодирует часть
     # Юникода, а падение print не должно ломать пайплайн — лучше '?' в логе.
