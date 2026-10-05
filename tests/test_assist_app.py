@@ -131,6 +131,7 @@ class _Heavy:
         self.digester_kwargs = None
         self.qa_kwargs = None
         self.opened = []
+        self.kb = None
         self.on_stop = None   # зовётся из FakeEngine.stop (проверки момента)
         self.on_engine = None  # подправить движок сразу после создания
         self.live = None
@@ -169,6 +170,9 @@ class _Heavy:
 
             def set_system_prompt(self, text):
                 pass
+
+            def set_kb(self, kb):
+                heavy.kb = kb  # указатель базы знаний строится в фоне
 
             async def run(self, stop):
                 heavy.stop_event = stop
@@ -503,7 +507,8 @@ def test_run_assist_passes_knowledge_dir_to_qa_and_term_index(tmp_path, monkeypa
     _run(tmp_path, open_browser=False, port=0, knowledge_dir=str(kb))
     assert kb in heavy.qa_kwargs["allowed_dirs"]
     assert "allowed_dirs" not in heavy.digester_kwargs  # тики без инструментов
-    assert len(heavy.digester_kwargs["kb"]) >= 1
+    assert heavy.digester_kwargs["kb"] is None  # старт его не ждёт
+    assert len(heavy.kb) >= 1
 
 
 def test_final_live_state_saved_to_recording(tmp_path, monkeypatch):

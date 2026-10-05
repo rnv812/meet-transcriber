@@ -46,6 +46,10 @@ from meet.assist.web import bound_port, run_web
 
 NO_PROVIDER_ERROR = "Подключите Claude Code, Codex или OpenCode в настройках"
 PARENT_POLL_S = 1.0  # как резидент следит за оболочкой (tray.run_headless)
+# Код выхода «повтор не поможет» (нет провайдера, вход в Claude, занятая
+# запись): резидент не повторяет такой старт (meet.live_control.EXIT_FATAL).
+EXIT_FATAL = 3
+BELOW_NORMAL_PRIORITY_CLASS = 0x4000
 
 
 def _pid_alive(pid: int) -> bool:
@@ -106,6 +110,10 @@ class AssistState:
         self.catchup = None
         # Подключённого к записи выключили, пока запись шла: сводка неполная.
         self.detached = False
+        # Модель распознавания загружена (поэтапный старт, `_run_assist`);
+        # пока нет — `stage`: что делается. Вопросы до готовности не принимаются.
+        self.ready = True
+        self.stage: str | None = None
         self._rebuild()
 
     @property
@@ -159,7 +167,7 @@ class AssistState:
     def signature(self) -> tuple:
         """Меняется — пора слать клиентам новое `state`."""
         catchup = self.catchup_view()
-        return (self.live.version, self.status(),
+        return (self.live.version, self.status(), self.ready, self.stage,
                 None if catchup is None else (catchup["active"], catchup["percent"]))
 
     def view(self) -> dict:
@@ -173,6 +181,8 @@ class AssistState:
         catchup = self.catchup_view()
         if catchup is not None:
             out["catchup"] = catchup
+        if not self.ready:
+            out["starting"] = self.stage or "запускается…"
         return out
 
     def qa_version(self) -> int:
@@ -250,14 +260,20 @@ def _knowledge_path(knowledge, vault: Path | None) -> Path | None:
 
 
 def write_endpoint(path: Path, *, port: int, folder: Path,
-                   devices_fallback: list | None = None) -> None:
+                   devices_fallback: list | None = None, ready: bool = True,
+                   capturing: bool = True, stage: str | None = None) -> None:
     """Атомарно (tmp + replace) записать, где слушает ассистент: резидент
     не должен прочитать недописанный файл. `devices_fallback` — выбранные в
     настройках устройства, которых не нашлось (резидент покажет это в окне
-    и в трее)."""
+    и в трее). Пока идёт старт, файл переписывается на каждом этапе
+    (`meet.live_control`): `capturing` — звук уже пишется, `ready` — модель
+    загружена, ассистент слушает, `stage` — что делается сейчас."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    info = {"port": port, "pid": os.getpid(), "folder": os.path.abspath(folder)}
+    info = {"port": port, "pid": os.getpid(), "folder": os.path.abspath(folder),
+            "ready": bool(ready), "capturing": bool(capturing or ready)}
+    if stage and not ready:
+        info["stage"] = stage
     if devices_fallback:
         info["devices_fallback"] = devices_fallback
     try:
@@ -288,11 +304,36 @@ def remove_endpoint(path: Path | None) -> None:
             return  # уборка не должна заслонять настоящую причину выхода
 
 
+class _Endpoint:
+    """Файл эндпоинта ребёнка резидента: порт — сразу, как поднят веб,
+    дальше — этапы старта (`meet.live_control`). Без файла (страница в
+    браузере) — только состояние для окна."""
+
+    def __init__(self, path: Path | None, state: "AssistState", *, port: int,
+                 folder: Path) -> None:
+        self._path = path
+        self._state = state
+        self._fields = {"port": port, "folder": folder, "ready": False,
+                        "capturing": False, "stage": None, "devices_fallback": None}
+
+    def publish(self, **changes) -> None:
+        self._fields.update(changes)
+        self._state.stage = None if self._fields["ready"] else self._fields["stage"]
+        self._state.ready = bool(self._fields["ready"])
+        self._state.changes.notify()
+        if self._path is not None:
+            write_endpoint(self._path, **self._fields)
+
+
 async def _main(state: AssistState, port: int, *, open_browser: bool = True,
                 endpoint_file: Path | None = None,
                 folder: Path | None = None,
                 parent_pid: int | None = None,
-                devices_fallback: list | None = None) -> None:
+                devices_fallback: list | None = None,
+                prepare=None) -> None:
+    """`prepare(endpoint)` — поэтапный старт (`_run_assist`): веб и файл
+    эндпоинта поднимаются раньше него, остановка во время него штатная.
+    Без него — ассистент уже готов (тесты, прежний путь)."""
     stop = asyncio.Event()
     state.stop_event = stop
     state.loop = asyncio.get_running_loop()
@@ -310,9 +351,23 @@ async def _main(state: AssistState, port: int, *, open_browser: bool = True,
     try:
         actual_port = bound_port(runner)
         url = f"http://127.0.0.1:{actual_port}/"
-        if endpoint_file is not None:
-            write_endpoint(endpoint_file, port=actual_port, folder=folder,
-                           devices_fallback=devices_fallback)
+        endpoint = _Endpoint(endpoint_file, state, port=actual_port, folder=folder)
+        if prepare is not None:
+            # Порт — резиденту сразу: он видит этапы старта и останавливает штатно.
+            endpoint.publish()
+            started = asyncio.ensure_future(prepare(endpoint))
+            stopped = asyncio.ensure_future(stop.wait())
+            await asyncio.wait({started, stopped}, return_when=asyncio.FIRST_COMPLETED)
+            stopped.cancel()
+            if not started.done():
+                started.cancel()  # остановили во время загрузки: её поток доработает сам
+                await asyncio.gather(started, return_exceptions=True)
+                return
+            started.result()  # сбой старта — наружу (traceback в live.log)
+            if stop.is_set():
+                return
+        else:
+            endpoint.publish(ready=True, devices_fallback=devices_fallback)
         if open_browser:
             webbrowser.open(url)
         print(f"Ассистент: {url} (Ctrl-C — стоп)", flush=True)
@@ -392,37 +447,6 @@ def _pick_runner(provider: str | None, cfg):
     return name, runner
 
 
-def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
-               hotwords: str | None = None, task: str | None = None,
-               vault: str | None = None, port: int = 8765,
-               no_voices: bool = False, *, open_browser: bool = True,
-               endpoint_file: str | None = None, provider: str | None = None,
-               cfg=None, knowledge_dir: str | None = None,
-               parent_pid: int | None = None, attach_to: str | None = None,
-               tap_port: int | None = None, tap_token: str | None = None) -> None:
-    """`port=0` — эфемерный порт; `endpoint_file` получает
-    `{"port", "pid", "folder"}` после старта сервера и удаляется при любом
-    выходе; `provider` — имя провайдера вместо `llm.resolve(cfg)`;
-    `knowledge_dir` — база знаний на чтение для вопросов и дайджеста;
-    `parent_pid` — резидент: умер он — штатная остановка, как по /stop;
-    `attach_to`/`tap_port`/`tap_token` — подключиться к идущей обычной записи
-    (папка и отвод звука резидента)."""
-    from meet import tempdirs
-
-    endpoint = Path(endpoint_file) if endpoint_file else None
-    try:
-        # Свой корень временных файлов (окна GigaAM, ответы Codex): удаляется
-        # при выходе, а убитого ассистента дочищает резидент (по pid).
-        with tempdirs.own_root():
-            _run_assist(out_root, window_seconds, hotwords, task, vault, port,
-                        no_voices, open_browser=open_browser, endpoint=endpoint,
-                        provider=provider, cfg=cfg, knowledge_dir=knowledge_dir,
-                        parent_pid=parent_pid, attach_to=attach_to,
-                        tap_port=tap_port, tap_token=tap_token)
-    finally:
-        remove_endpoint(endpoint)
-
-
 def _attach_tap(port: int, token: str):
     """Подключение к отводу звука резидента (`meet.pcm_tap.TapClient`)."""
     from meet.pcm_tap import TapClient
@@ -451,10 +475,140 @@ def _prior_entries(transcript: Path) -> list[tuple[str, dict]]:
     return out
 
 
+def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
+               hotwords: str | None = None, task: str | None = None,
+               vault: str | None = None, port: int = 8765,
+               no_voices: bool = False, *, open_browser: bool = True,
+               endpoint_file: str | None = None, provider: str | None = None,
+               cfg=None, knowledge_dir: str | None = None,
+               parent_pid: int | None = None, attach_to: str | None = None,
+               tap_port: int | None = None, tap_token: str | None = None) -> None:
+    """`port=0` — эфемерный порт; `endpoint_file` получает
+    `{"port", "pid", "folder", "ready", "capturing", "stage"}`, как только
+    поднят веб, переписывается на каждом этапе старта и удаляется при любом
+    выходе; `provider` — имя провайдера вместо `llm.resolve(cfg)`;
+    `knowledge_dir` — база знаний на чтение для вопросов и дайджеста;
+    `parent_pid` — резидент: умер он — штатная остановка, как по /stop;
+    `attach_to`/`tap_port`/`tap_token` — подключиться к идущей обычной записи
+    (папка и отвод звука резидента)."""
+    from meet import tempdirs
+
+    endpoint = Path(endpoint_file) if endpoint_file else None
+    _LOADERS.clear()
+    try:
+        # Свой корень временных файлов (окна GigaAM, ответы Codex): удаляется
+        # при выходе, а убитого ассистента дочищает резидент (по pid).
+        with tempdirs.own_root():
+            _run_assist(out_root, window_seconds, hotwords, task, vault, port,
+                        no_voices, open_browser=open_browser, endpoint=endpoint,
+                        provider=provider, cfg=cfg, knowledge_dir=knowledge_dir,
+                        parent_pid=parent_pid, attach_to=attach_to,
+                        tap_port=tap_port, tap_token=tap_token)
+    finally:
+        remove_endpoint(endpoint)
+        # Остановили посреди загрузки модели: её поток ещё работает. Запись
+        # уже дописана (файл эндпоинта убран), а выход с недогруженным torch
+        # в фоне мог бы упасть уже при завершении интерпретатора.
+        _join_loaders(LOADERS_JOIN_S)
+
+
+# Потоки поэтапного старта (модель, голоса, база знаний): ждём их при выходе.
+_LOADERS: list = []
+LOADERS_JOIN_S = 30.0
+
+
+class StartRefused(Exception):
+    """Старт невозможен по причине, которую повтор не исправит (вход в
+    Claude, запись уже идёт): `_run_assist` превращает её в SystemExit с
+    текстом уже вне цикла asyncio."""
+
+
+def _join_loaders(timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    for thread in list(_LOADERS):
+        thread.join(max(0.0, deadline - time.monotonic()))
+
+
+def _in_thread(fn, name: str) -> "asyncio.Future":
+    """`fn()` в своём потоке → future цикла. Не пул: поток, который не
+    дождались (остановка во время загрузки модели), не держит asyncio.run."""
+    import threading
+
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+
+    def settle(ok: bool, value) -> None:
+        if not future.done():
+            (future.set_result if ok else future.set_exception)(value)
+
+    def run() -> None:
+        try:
+            result = fn()
+        except SystemExit as e:
+            # Отказ с текстом («Запись уже идёт») — обычным исключением: SystemExit
+            # внутри цикла asyncio вылетел бы мимо его уборки.
+            outcome = (False, StartRefused(e.code) if isinstance(e.code, str) else e)
+        except BaseException as e:  # noqa: BLE001
+            outcome = (False, e)
+        else:
+            outcome = (True, result)
+        try:
+            loop.call_soon_threadsafe(settle, *outcome)
+        except RuntimeError:
+            pass  # цикл уже закрыт — нас не ждут
+
+    thread = threading.Thread(target=run, name=f"meet-assist-{name}", daemon=True)
+    _LOADERS.append(thread)
+    thread.start()
+    return future
+
+
+def _process_age() -> float | None:
+    """Сколько живёт процесс (запуск интерпретатора и импорты до старта)."""
+    try:
+        import psutil
+
+        return max(0.0, time.time() - psutil.Process().create_time())
+    except Exception:
+        return None
+
+
+class StartClock:
+    """Этапы старта со временем — в live.log (`старт: … за N.N с`): по ним
+    видно, куда уходят секунды до «ассистент готов»."""
+
+    def __init__(self, log=print) -> None:
+        self._log = log
+        self._began = time.monotonic()
+        self._age = _process_age()  # к этому моменту процесс уже жил столько
+        if self._age is not None:
+            self._log(f"старт: запуск процесса и импорты — за {self._age:.1f} с")
+
+    def mark(self, what: str, since: float) -> None:
+        self._log(f"старт: {what} — за {time.monotonic() - since:.1f} с")
+
+    def timed(self, what: str, fn):
+        """fn, который отмечает в журнале своё время."""
+        def run():
+            began = time.monotonic()
+            result = fn()
+            self.mark(what, began)
+            return result
+        return run
+
+    def total(self, what: str) -> None:
+        spent = time.monotonic() - self._began + (self._age or 0.0)
+        self._log(f"старт: {what} — за {spent:.1f} с от запуска процесса")
+
+
 def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                 no_voices, *, open_browser, endpoint, provider, cfg,
                 knowledge_dir=None, parent_pid=None, attach_to=None,
                 tap_port=None, tap_token=None) -> None:
+    def log(line: str) -> None:
+        print(line, flush=True)
+
+    clock = StartClock(log)
     from meet import live_asr, live_catchup, settings
     from meet.live import LiveEngine
     from meet.transcribe import _load_hotwords
@@ -462,19 +616,10 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
 
     if cfg is None:
         cfg = settings.load()
-    # Провайдер и авторизация — до engine.start(): без провайдера пользователь
-    # не должен ждать минуту загрузки распознавания. Папку встречи создаёт
-    # engine.start() уже после загрузки моделей — ни отказ здесь, ни остановка
-    # во время загрузки пустой датированной папки не оставляют.
+    # Провайдер — до всего остального: без него пользователь не должен ждать
+    # загрузки распознавания. Вход в Claude Code (вызов модели, секунды)
+    # проверяется параллельно с загрузкой модели распознавания — см. prepare.
     provider_name, runner = _pick_runner(provider, cfg)
-    if provider_name == "claude-code":
-        # Тот же прокси, что у вызовов модели (llm.proxy), иначе проверка
-        # пошла бы «как в системе» при выбранном «Без прокси».
-        # Той же моделью, что работает ассистент (`llm.model`): модели «haiku»
-        # может не быть в разрешённых у организации или прокси.
-        auth_error = asyncio.run(check_auth(proxy=cfg.llm.proxy, model=cfg.llm.model))
-        if auth_error:
-            raise SystemExit(f"Авторизация Claude не прошла: {auth_error}")
 
     attached = attach_to is not None
     if attached:
@@ -497,7 +642,6 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         # подсказки, догоняем только то, чего он не слышал.
         from meet.assist.live_state import load_saved
 
-        _lower_priority()
         # Строки догонялки убитого посреди неё прошлого ассистента — в ленту.
         live_catchup.recover_side(out_dir)
         saved = load_saved(out_dir)
@@ -521,15 +665,17 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         prefs={"quiet_default": cfg.assist.quiet_default, "activity": cfg.assist.activity},
         owner=cfg.recording.speaker_name,
     )
+    state.ready = False
     # Распознавание: GigaAM короткими окнами для русского (если скачана),
-    # иначе Whisper; правила замены и латиница — к каждой реплике.
-    engine = LiveEngine(out_dir, live_asr.pick(cfg, log=lambda line: print(line, flush=True)),
+    # иначе Whisper; правила замены и латиница — к каждой реплике. Здесь
+    # модель только выбирается — грузится она в prepare.
+    engine = LiveEngine(out_dir, live_asr.pick(cfg, log=log),
                         window_seconds=window_seconds,
                         hotwords=_load_hotwords(hotwords),
                         on_entry=bus.publish,
                         voice_matcher=None if no_voices else VoiceMatcher(),
                         text_fixes=live_asr.TextFixes.from_settings(hotwords, latin=True),
-                        log=lambda line: print(line, flush=True),
+                        log=log,
                         tap_connect=(lambda: _attach_tap(tap_port, tap_token)) if attached else None,
                         on_source_end=state.request_stop_threadsafe if attached else None)
     if attached:
@@ -539,8 +685,8 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     state_file = out_dir / LIVE_STATE_JSON
 
     def _save_state() -> None:
-        # Папку создаёт engine.start(); до неё (и при сбое диска) — молча:
-        # состояние в памяти, следующее изменение запишет его снова.
+        # Папку создаёт открытие источника звука; до неё (и при сбое диска) —
+        # молча: состояние в памяти, следующее изменение запишет его снова.
         if not out_dir.is_dir():
             return
         try:
@@ -549,23 +695,16 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
             print(f"live_state.json не записан: {e}", flush=True)
 
     state.on_change = _save_state
-    # Указатель терминов базы знаний — один раз, до старта: тики по базе не ходят.
-    kb = TermIndex.build(state.knowledge) if state.knowledge else None
-    if kb is not None:
-        print(f"база знаний: {len(kb)} терминов в указателе", flush=True)
     from meet import llm
 
     # «Как у агента» — модель из настроек (llm.model), «Быстрее» — своя.
     tick_kwargs = llm.tier_kwargs(provider_name, cfg.assist.hints_model, cfg.llm.model)
     print(f"живые подсказки: {cfg.assist.activity}, модель тиков: "
           f"{cfg.assist.hints_model} {tick_kwargs or ''}".rstrip(), flush=True)
-    def log(line: str) -> None:
-        print(line, flush=True)
-
     state.digester = Digester(bus, live, system_prompt=state.digester_system,
                               hints_system=state.hints_system,
                               hints_session=hints_session_for(provider_name, cfg, tick_kwargs, log),
-                              runner=runner, cadence=cadence, kb=kb,
+                              runner=runner, cadence=cadence, kb=None,
                               call_kwargs=tick_kwargs,
                               owner_speaker=cfg.recording.speaker_name,
                               # Имя из настроек и прежние имена владельца в базе голосов.
@@ -579,40 +718,106 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         on_fresh_audio=getattr(engine, "flush_tail", engine.process_window),
         owner=cfg.recording.speaker_name, changed=bus.changed,
     )
-    if task:
-        asyncio.run(state.set_task(task))
     if prior:
         for line, entry in prior:
             bus.publish(line, entry)
         skip = getattr(state.digester, "skip_existing", None)
         if skip is not None:
             skip()  # прошлая лента — контекст, не новые реплики
-    started = False
-    plan = None
-    try:
-        # start() берёт общий lock записи («Запись уже идёт» — SystemExit);
-        # stop() в finally безопасен и после частичного старта. Подключённый
-        # к записи lock не берёт: запись ведёт резидент.
-        engine.start()
-        started = True
+    run = {"started": False, "plan": None}
+    clock.mark("настройки, провайдер и ассистент собраны", clock._began)
+
+    async def prepare(endpoint_file: _Endpoint) -> None:
+        """Поэтапный старт: звук пишется сразу, модель грузится параллельно со
+        входом в Claude и указателем базы знаний; голоса — уже после
+        готовности, в фоне. Каждый этап — в файл эндпоинта (окно видит его)
+        и со временем — в live.log."""
+        staged = hasattr(engine, "open_source")
+        auth = None
+        if provider_name == "claude-code":
+            # Тот же прокси, что у вызовов модели (llm.proxy), иначе проверка
+            # пошла бы «как в системе» при выбранном «Без прокси». Той же
+            # моделью, что работает ассистент (`llm.model`): модели «haiku»
+            # может не быть в разрешённых у организации или прокси.
+            async def checked():
+                began = time.monotonic()
+                error = await check_auth(proxy=cfg.llm.proxy, model=cfg.llm.model)
+                clock.mark("вход в Claude Code проверен", began)
+                return error
+
+            auth = asyncio.ensure_future(checked())
+        if state.knowledge:
+            # Указатель терминов базы знаний — в фоне: тики по базе не ходят,
+            # а первый тик всё равно не раньше первых реплик.
+            def build_kb():
+                kb = TermIndex.build(state.knowledge)
+                print(f"база знаний: {len(kb)} терминов в указателе", flush=True)
+                setter = getattr(state.digester, "set_kb", None)
+                if setter is not None:
+                    setter(kb)
+
+            _in_thread(clock.timed("указатель базы знаний построен", build_kb), "kb")
+        if task:
+            asyncio.ensure_future(state.set_task(task))
+        if staged:
+            asr = _in_thread(clock.timed("модель распознавания загружена", engine.load_asr),
+                             "asr")
+            endpoint_file.publish(stage=STAGE_ATTACH if attached else STAGE_DEVICES)
+            await _in_thread(clock.timed("звук пошёл" if not attached else
+                                         "подключение к записи", engine.open_source), "source")
+            run["started"] = True
+            endpoint_file.publish(capturing=True, stage=STAGE_ASR,
+                                  devices_fallback=getattr(engine, "devices_fallback", None))
+            await asr
+        else:
+            endpoint_file.publish(stage=STAGE_ASR)
+            await _in_thread(engine.start, "start")
+            run["started"] = True
+            endpoint_file.publish(capturing=True,
+                                  devices_fallback=getattr(engine, "devices_fallback", None))
+        if auth is not None:
+            if not auth.done():
+                endpoint_file.publish(stage=STAGE_AUTH)
+            auth_error = await auth
+            if auth_error:
+                raise StartRefused(f"Авторизация Claude не прошла: {auth_error}")
+        if staged:
+            engine.begin()
         if attached:
             plan = live_catchup.plan(engine.attach_positions, out_dir, heard=heard)
+            run["plan"] = plan
             positions = list(engine.attach_positions.values())
             live.heard_from(plan["from_t"] if plan["tracks"] else
                             (heard if heard is not None else min(positions, default=None)))
             if plan["tracks"]:
                 engine.start_catchup(plan["tracks"], plan)
+            # Дальше — фоновая работа (догонялка минутами грузит процессор):
+            # приоритет ниже обычного, запись резидента и звонок важнее.
+            _lower_priority()
+        endpoint_file.publish(ready=True, stage=None)
+        clock.total("ассистент готов")
+        if staged:
+            # Голоса — после модели (не грузим два больших пакета torch
+            # одновременно) и не задерживая готовность: окна до них — без имён.
+            _in_thread(clock.timed("голоса загружены", engine.load_voices), "voices")
+
+    try:
+        # Подключённый к записи lock не берёт (запись ведёт резидент); свой —
+        # берёт при открытии источника («Запись уже идёт» — SystemExit), а
+        # stop() в finally безопасен и после частичного старта.
         asyncio.run(_main(state, port, open_browser=open_browser,
                           endpoint_file=endpoint, folder=out_dir,
-                          parent_pid=parent_pid,
-                          devices_fallback=getattr(engine, "devices_fallback", None)))
+                          parent_pid=parent_pid, prepare=prepare))
     except KeyboardInterrupt:
         pass
+    except StartRefused as e:
+        raise SystemExit(str(e)) from None
     finally:
         close = getattr(state.digester, "close", None)
         if close is not None:
             close()  # процесс диалога подсказок — не сирота, даже при сбое
         engine.stop()
+        started, plan = run["started"], run["plan"]
         if started and attached:
             live.partial_reasons = _attached_reasons(live, state, engine, plan)
             live.partial = bool(live.partial_reasons)
@@ -625,6 +830,13 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         if started:
             print(f"\nОстановлено: {out_dir}", flush=True)
             print(f'Точный транскрипт: meet transcribe "{out_dir}"', flush=True)
+
+
+# Этапы старта для окна (`live.stage`): что ассистент делает сейчас.
+STAGE_DEVICES = "открываю микрофон и звук…"
+STAGE_ATTACH = "подключаюсь к записи…"
+STAGE_ASR = "загружаю модель распознавания…"
+STAGE_AUTH = "проверяю вход в Claude Code…"
 
 
 # Причины неполноты, которые следующее включение в эту запись не чинит: его
@@ -664,11 +876,20 @@ def _heard_end(bus: TranscriptBus, before: float | None) -> float | None:
 
 
 def _lower_priority() -> None:
-    """Ассистент, подключённый к записи, — фоновая работа. На Windows
-    приоритет ниже обычного ставит резидент при запуске; на macOS — nice."""
+    """Ассистент, подключённый к записи, после старта — фоновая работа:
+    приоритет ниже обычного (его ffmpeg догонялки — тоже). Старт идёт с
+    обычным: с пониженным на занятом звонком процессоре загрузка моделей
+    растягивалась за минуту. На macOS — nice."""
     from meet import plat
 
     if plat.is_windows():
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS)
+        except Exception:
+            pass
         return
     try:
         os.nice(5)

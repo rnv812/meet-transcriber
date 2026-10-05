@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import sys
 import time
 
@@ -125,6 +126,22 @@ def _take_tap_token() -> str | None:
     from meet.live_control import TAP_TOKEN_ENV
 
     return os.environ.pop(TAP_TOKEN_ENV, None)
+
+
+@contextlib.contextmanager
+def _fatal_exit_code():
+    """Ошибка с текстом (`SystemExit("…")`: нет провайдера, вход в Claude,
+    запись уже идёт) — текст в stderr (он же последняя строка live.log) и
+    код EXIT_FATAL: резидент такой старт не повторяет, повтор не поможет."""
+    from meet.assist.app import EXIT_FATAL
+
+    try:
+        yield
+    except SystemExit as e:
+        if isinstance(e.code, str):
+            print(e.code, file=sys.stderr, flush=True)
+            raise SystemExit(EXIT_FATAL) from None
+        raise
 
 
 def live_attach(detach: bool = False) -> int:
@@ -453,7 +470,7 @@ def main(argv: list[str] | None = None) -> int | None:
 
         vault = args.vault or (str(cfg.assist.vault) if cfg.assist.vault else None)
         knowledge = cfg.assistant.knowledge_dir
-        with hold_gpu_lock("assist"):
+        with hold_gpu_lock("assist"), _fatal_exit_code():
             run_assist(out_root,
                        window_seconds=args.window or cfg.assist.window_seconds,
                        hotwords=args.hotwords,

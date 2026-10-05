@@ -221,6 +221,9 @@ def build_app(state) -> web.Application:
         if since is not None and (isinstance(since, bool) or not isinstance(since, (int, float))
                                   or since < 0):
             raise web.HTTPBadRequest(text="since_t — секунды от начала записи")
+        if getattr(state, "ready", True) is False:
+            # Звук уже пишется, а модель распознавания ещё грузится: отвечать не по чему.
+            raise web.HTTPConflict(text="Ассистент ещё запускается — спросите через несколько секунд")
         # QA-раннер может пробросить исключение (ревью Task 9) —
         # не роняем хендлер, а возвращаем ошибку текстом ответа.
         try:

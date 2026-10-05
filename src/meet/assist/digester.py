@@ -347,6 +347,11 @@ class Digester:
             return self.hints.last_latency
         return self.summary.last_latency
 
+    def set_kb(self, kb) -> None:
+        """Указатель терминов базы знаний, построенный в фоне (старт
+        ассистента его не ждёт): тики до него — без фрагментов базы."""
+        self._kb = kb
+
     def set_system_prompt(self, text: str, hints: str | None = None) -> None:
         """Сменить системные промпты на лету (смена задачи-контекста). Новый
         промпт подсказок — новый диалог со следующего тика."""
