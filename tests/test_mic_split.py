@@ -7,6 +7,7 @@
 Фразы и имена выдуманы, моделей нет."""
 
 import wave
+import zlib
 
 import numpy as np
 import pytest
@@ -50,15 +51,17 @@ def fake_embed(audio):
 class Track:
     """Звук дорожки: фразы-тоны по словам."""
 
-    def __init__(self):
-        self.audio = np.zeros(int(TOTAL * RATE), dtype=np.float64)
+    def __init__(self, total=TOTAL):
+        self.audio = np.zeros(int(total * RATE), dtype=np.float64)
 
     def say(self, words, voice, amp, seed=0):
         rng = np.random.default_rng(seed)
         for w in words:
             a, b = int(w.start * RATE), int(w.end * RATE)
             t = np.arange(b - a) / RATE
-            env = rng.uniform(0.6, 1.0)
+            # Громкость слова — от самого слова: копия той же фразы на другой
+            # дорожке звучит с той же огибающей.
+            env = 0.6 + 0.4 * (zlib.crc32(w.text.encode("utf-8")) % 1000) / 1000
             for v in (voice if isinstance(voice, tuple) else (voice,)):
                 self.audio[a:b] += amp * env * np.sin(2 * np.pi * FREQS[v] * t + rng.uniform(0, 6))
         self.audio[:] += 0.0005 * rng.normal(size=len(self.audio))  # фон
@@ -89,17 +92,21 @@ OWNER_PHRASES = [
     (22.0, "мне кажется сроки реальные если никто не заболеет опять"),
     (32.0, "я напишу поставщику сегодня вечером и пришлю ответ всем"),
 ]
-# Люди в комнате: по три фразы ~4 с — больше MIN_DECIDE_S речи на голос.
+# Люди в комнате: по четыре фразы ~4 с — больше MIN_DECIDE_S речи на голос,
+# и у копий через звонок хватает независимых пар для лага (mic_dedupe).
 ROOM1_PHRASES = [
     (40.0, "а по бюджету у нас что получается на следующий квартал"),
-    (45.0, "я бы ещё раз проверил цифры перед тем как отправлять"),
-    (50.0, "и с бухгалтерией тоже надо бы это всё согласовать"),
+    (44.5, "я бы ещё раз проверил цифры перед тем как отправлять"),
+    (49.0, "и с бухгалтерией тоже надо бы это всё согласовать"),
+    (53.5, "в прошлый раз они нам вернули счёт без всяких объяснений"),
 ]
 ROOM2_PHRASES = [
     (60.0, "склад готов принять всю партию в четверг утром до обеда"),
-    (65.0, "и машину надо заказать заранее иначе не успеем никак"),
-    (70.0, "водитель обещал позвонить накануне вечером после шести"),
+    (64.5, "и машину надо заказать заранее иначе не успеем никак"),
+    (69.0, "водитель обещал позвонить накануне вечером после шести"),
+    (73.5, "а грузчиков на месте будет двое или даже трое человек"),
 ]
+LEAK_LAG = 0.3  # мой голос через ноутбук соседа
 
 
 def _meeting(tmp_path, *, room1=False, room2=False, extra_mic=(), sys_phrases=()):
@@ -299,13 +306,13 @@ def test_mixed_segment_is_cut_by_voice(tmp_path):
 def test_short_reply_inherits_nearby_window_far_one_stays_owner(tmp_path):
     """«Ага» короче секунды голоса не имеет: метка соседнего окна до 1,5 с,
     дальше — владелец."""
-    near = [Word(54.5, 54.8, " ага")]  # 0,55 с после фразы человека в комнате (… 53.95)
-    far = [Word(57.0, 57.3, " угу")]  # 3 с после неё
+    near = [Word(58.0, 58.3, " ага")]  # 0,55 с после фразы человека в комнате (… 57.45)
+    far = [Word(61.0, 61.3, " угу")]  # 3,5 с после неё
     got, _ = _run(_meeting(tmp_path, room1=True, extra_mic=[(near, ROOM1, QUIET), (far, ROOM1, QUIET)]),
                   _owner())
     speaker_at = {round(s.start, 1): s.speaker for s in got.mic}
-    assert speaker_at[54.5] == "SPEAKER_M0"
-    assert speaker_at[57.0] == "Вы"
+    assert speaker_at[58.0] == "SPEAKER_M0"
+    assert speaker_at[61.0] == "Вы"
 
 
 def test_between_thresholds_far_cluster_is_owner_but_uncertain(tmp_path):
@@ -363,6 +370,110 @@ def test_no_mic_speech(tmp_path):
     assert got.mic == [] and got.report["status"] == "ok" and got.sidecar == []
 
 
+# --- мало голоса, нет звука ----------------------------------------------------------
+
+
+def test_broken_embedder_means_no_voice_and_no_owner_leak(tmp_path):
+    """Эмбеддер вернул NaN: голоса нет — статус no_voice, микрофон владельца,
+    и копии в sys «по голосу владельца» не удаляются."""
+    sys_phrases = [(_words(t, s + LEAK_LAG), OWNER) for s, t in OWNER_PHRASES]
+    got, _ = _run(_meeting(tmp_path, sys_phrases=sys_phrases), _owner(),
+                  embed=lambda a: np.full(DIM, np.nan, dtype=np.float32))
+    assert got.report["status"] == "no_voice" and got.report["dropped"]["owner_leak"] == 0
+    assert len(got.sys) == len(OWNER_PHRASES) and {s.speaker for s in got.mic} == {"Вы"}
+
+
+def test_too_little_voiced_speech_is_no_voice(tmp_path):
+    """Одно окно 1,5 с — не основание ни для быстрого пути, ни для удалений."""
+    ws = _words("ну да давайте", 5.0)
+    mic, sys = Track(), Track()
+    mic.say(ws, OWNER, LOUD)
+    sys.say(_words("ну да давайте", 5.0 + LEAK_LAG), OWNER, LOUD)
+    meeting = ([_seg(ws)], [_seg(_words("ну да давайте", 5.0 + LEAK_LAG), speaker="SPEAKER_00")],
+               mic.write(tmp_path / "mic16.wav"), sys.write(tmp_path / "sys16.wav"))
+    got, _ = _run(meeting, _owner())
+    assert got.report["status"] == "no_voice" and len(got.sys) == 1 and got.sidecar == []
+
+
+def test_missing_mic_audio_falls_back_to_today(tmp_path):
+    """Звук микрофона не прочитать: расшифровка не падает, всё как раньше."""
+    sys_phrases = [(_words(t, s + 0.4), ROOM1) for s, t in ROOM1_PHRASES]
+    segs, sys_segs, _, sys_wav = _meeting(tmp_path, room1=True, sys_phrases=sys_phrases)
+    gone = tmp_path / "нет.wav"
+    for owner, status in (([], "no_profile"), (_owner(), "skipped_error")):
+        got, logs = mic_split.run(segs, sys_segs, gone, sys_wav, None, owner=owner, base={}, threshold=0.75,
+                                  owner_label="Вы", embed=fake_embed, log=(out := []).append), out
+        assert got.report["status"] == status and {s.speaker for s in got.mic} == {"Вы"}
+        assert got.dropped == [] and got.sys == sys_segs
+        assert any("звук не прочитать" in line for line in logs)
+
+
+def test_nothing_to_do_does_not_read_audio(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(mic_split, "_read", lambda p: calls.append(p))
+    segs, sys_segs, mic_wav, sys_wav = _meeting(tmp_path, room1=True)
+    got = mic_split.run(segs, sys_segs, mic_wav, sys_wav, None, owner=_owner(), base={}, threshold=0.75,
+                        owner_label="Вы", embed=fake_embed, log=lambda m: None, speakers=False, dedupe=False)
+    assert calls == [] and got.report["status"] == "off"
+    got = mic_split.run(segs, [], mic_wav, sys_wav, None, owner=[], base={}, threshold=0.75,
+                        owner_label="Вы", embed=fake_embed, log=lambda m: None)
+    assert calls == [] and got.report["status"] == "no_profile"
+
+
+def test_embedder_failure_with_token_is_a_generic_skip(tmp_path, monkeypatch):
+    from meet import credentials, segvoices
+
+    def broken():
+        raise MemoryError("CUDA out of memory")
+
+    monkeypatch.setattr(segvoices, "load_embedder", broken)
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: "hf_x")
+    got, _ = _run(_meeting(tmp_path, room1=True), _owner(), embed=None)
+    assert got.report["status"] == "skipped_error" and {s.speaker for s in got.mic} == {"Вы"}
+
+
+def test_owner_not_found_dedupes_only_quiet_copies(tmp_path):
+    """Образец не нашёлся: дубли — как без образца (тихие копии с уликами)."""
+    sys_phrases = [(_words(t, s + 0.4), ROOM1) for s, t in ROOM1_PHRASES]
+    sys_phrases += [(_words(t, s + LEAK_LAG), OWNER) for s, t in OWNER_PHRASES[:1]]
+    got, _ = _run(_meeting(tmp_path, room1=True, sys_phrases=sys_phrases), _owner(_e(ROOM2)))
+    assert got.report["status"] == "owner_not_found"
+    assert got.report["dropped"] == {"echo": 0, "neighbour": 4, "owner_leak": 0}
+    assert _by_speaker(got.mic) == {"Вы": [s for s, _ in OWNER_PHRASES]}
+
+
+def test_fast_path_embeds_only_a_sample_of_windows(tmp_path):
+    """Длинная запись одного владельца: быстрый путь решается по выборке окон."""
+    total = 260.0
+    mic = Track(total)
+    segs = []
+    for i in range(90):
+        ws = _words("я согласен давайте так", 2.0 + i * 2.8)
+        mic.say(ws, OWNER, LOUD, seed=i)
+        segs.append(_seg(ws))
+    meeting = (segs, [], mic.write(tmp_path / "mic16.wav"), Track(total).write(tmp_path / "sys16.wav"))
+    calls = []
+
+    def counting(audio):
+        calls.append(1)
+        return fake_embed(audio)
+
+    got, _ = _run(meeting, _owner(), embed=counting)
+    assert got.report["status"] == "ok" and got.voices["fast"] is True
+    assert len(mic_split.windows(segs)) == 90 and len(calls) == mic_split.FAST_SAMPLE
+
+
+def test_break_segments_are_kept_and_never_windowed(tmp_path):
+    meeting = _meeting(tmp_path)
+    brk = Segment(40.0, 40.0, "", kind="break")
+    segs = sorted(meeting[0] + [brk], key=lambda s: s.start)
+    assert all(k[0] != segs.index(brk) for w in mic_split.windows(segs) for k in w.keys)
+    sys_segs = [brk, _seg(_words("коллеги всем добрый день", 60.0), speaker="SPEAKER_00")]
+    got, _ = _run((segs, sys_segs, *meeting[2:]), _owner())
+    assert brk in got.mic and got.sys == sys_segs
+    assert all(t.seg[1] != 0 for t in mic_split._toks(sys_segs, "sys"))
+
+
 # --- дубли ----------------------------------------------------------------------
 
 
@@ -373,9 +484,9 @@ def test_room_speaker_heard_through_the_call_is_dropped_from_mic(tmp_path):
     meeting = _meeting(tmp_path, room1=True, sys_phrases=sys_phrases)
     got, _ = _run(meeting, _owner())
     assert _by_speaker(got.mic) == {"Вы": [s for s, _ in OWNER_PHRASES]}
-    assert got.report["dropped"] == {"echo": 0, "neighbour": 3, "owner_leak": 0}
-    assert len(got.sys) == 3 and got.sys == meeting[1]
-    assert [d["reason"] for d in got.dropped] == ["neighbour"] * 3
+    assert got.report["dropped"] == {"echo": 0, "neighbour": 4, "owner_leak": 0}
+    assert len(got.sys) == 4 and got.sys == meeting[1]
+    assert [d["reason"] for d in got.dropped] == ["neighbour"] * 4
     assert got.voices["dropped"] == got.dropped
     assert got.voices["lag_s"]["neighbour"] == pytest.approx(0.4, abs=0.01)
     # Все его слова ушли дублями: в расшифровке и сайдкаре его нет, а в
@@ -393,32 +504,34 @@ def test_speaker_echo_is_dropped_from_mic(tmp_path):
     meeting = _meeting(tmp_path, extra_mic=echo, sys_phrases=remote)
     got, _ = _run(meeting, _owner())
     assert _by_speaker(got.mic) == {"Вы": [s for s, _ in OWNER_PHRASES]}
-    assert got.report["dropped"] == {"echo": 3, "neighbour": 0, "owner_leak": 0}
-    assert len(got.sys) == 3
+    assert got.report["dropped"] == {"echo": 4, "neighbour": 0, "owner_leak": 0}
+    assert len(got.sys) == 4
     assert got.voices["lag_s"]["echo"] == pytest.approx(-0.03, abs=0.01)
 
 
 def test_owner_voice_leaking_into_sys_is_dropped_from_sys(tmp_path):
-    sys_phrases = [(_words(OWNER_PHRASES[1][1], OWNER_PHRASES[1][0] + 0.5), OWNER)]
+    sys_phrases = [(_words(t, s + LEAK_LAG), OWNER) for s, t in OWNER_PHRASES]
     other = _words("коллеги всем добрый день начнём", 60.0)
     meeting = _meeting(tmp_path, sys_phrases=sys_phrases + [(other, ROOM2)])
     got, _ = _run(meeting, _owner())
     assert [s.text for s in got.sys] == ["коллеги всем добрый день начнём"]
     assert len(got.mic) == len(OWNER_PHRASES)
-    assert got.report["dropped"]["owner_leak"] == 1
+    assert got.report["dropped"]["owner_leak"] == 4
     assert got.dropped[0]["track"] == "sys"
 
 
 def test_partial_sys_drop_keeps_rest_of_segment(tmp_path):
     """Утечка — только часть длинной реплики sys: остальное остаётся."""
-    leak = _words(OWNER_PHRASES[1][1], OWNER_PHRASES[1][0] + 0.5)
-    tail = _words("а ещё про отпуск хотел спросить", leak[-1].end + 0.3)
+    leaks = [_words(t, s + LEAK_LAG) for s, t in OWNER_PHRASES]
+    tail = _words("а ещё про отпуск хотел спросить", leaks[1][-1].end + 0.3)
     meeting = _meeting(tmp_path)
     sys_track = Track()
-    sys_track.say(leak, OWNER, LOUD, seed=1)
-    sys_track.say(tail, ROOM2, LOUD, seed=2)
-    meeting = (meeting[0], [_seg(leak + tail, speaker="SPEAKER_00")], meeting[2],
-               sys_track.write(tmp_path / "sys16.wav"))
+    for n, leak in enumerate(leaks):
+        sys_track.say(leak, OWNER, LOUD, seed=n)
+    sys_track.say(tail, ROOM2, LOUD, seed=9)
+    sys_segs = [_seg(leaks[0], speaker="SPEAKER_00"), _seg(leaks[1] + tail, speaker="SPEAKER_00"),
+                _seg(leaks[2], speaker="SPEAKER_00"), _seg(leaks[3], speaker="SPEAKER_00")]
+    meeting = (meeting[0], sys_segs, meeting[2], sys_track.write(tmp_path / "sys16.wav"))
     got, _ = _run(meeting, _owner())
     (rest,) = got.sys
     assert rest.text == "а ещё про отпуск хотел спросить" and rest.start == tail[0].start
@@ -434,8 +547,8 @@ def test_dedupe_switched_off(tmp_path):
 def test_without_sample_only_quiet_copies_are_dropped(tmp_path):
     """Без образца: тихая копия соседа уходит, громкий владелец — никогда."""
     sys_phrases = [(_words(t, s + 0.4), ROOM1) for s, t in ROOM1_PHRASES]
-    sys_phrases += [(_words(OWNER_PHRASES[0][1], OWNER_PHRASES[0][0] + 0.5), OWNER)]
+    sys_phrases += [(_words(OWNER_PHRASES[0][1], OWNER_PHRASES[0][0] + LEAK_LAG), OWNER)]
     got, _ = _run(_meeting(tmp_path, room1=True, sys_phrases=sys_phrases), [])
     assert _by_speaker(got.mic) == {"Вы": [s for s, _ in OWNER_PHRASES]}
-    assert got.report["dropped"] == {"echo": 0, "neighbour": 3, "owner_leak": 0}
-    assert len(got.sys) == 4
+    assert got.report["dropped"] == {"echo": 0, "neighbour": 4, "owner_leak": 0}
+    assert len(got.sys) == 5

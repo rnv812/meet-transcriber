@@ -154,11 +154,13 @@ def ahc_threshold(x: np.ndarray, w: np.ndarray, stop: float = 0.55) -> np.ndarra
         return np.zeros(0, dtype=int)
     w = np.asarray(w, dtype=np.float64)
     w = np.where(w > 0, w, 1e-3)
-    sums = x.astype(np.float64) * w[:, None]
+    # NaN в одном векторе остановил бы все слияния (argmax выбирает NaN).
+    sums = np.nan_to_num(x.astype(np.float64)) * w[:, None]
     sizes = w.copy()
     alive = np.ones(n, dtype=bool)
     members = [[i] for i in range(n)]
-    sim = (sums @ sums.T) / np.outer(sizes, sizes)
+    # Матрица близостей — float32: 3000 окон — 36 МБ, а не 72.
+    sim = ((sums @ sums.T) / np.outer(sizes, sizes)).astype(np.float32)
     np.fill_diagonal(sim, -np.inf)
     arg = sim.argmax(axis=1)
     best = sim[np.arange(n), arg]

@@ -204,6 +204,14 @@ def test_ahc_threshold_weighted_average_linkage():
     assert got[1] == got[2] == 0 and got[0] == 1
 
 
+def test_ahc_threshold_survives_a_nan_vector():
+    """Один битый вектор не останавливает все слияния."""
+    x = np.stack([_noisy(A, i) for i in range(6)] + [_noisy(B, 100 + i) for i in range(6)])
+    x[3] = np.nan
+    got = speaker_split.ahc_threshold(x, np.ones(len(x)), stop=0.55)
+    assert len(set(got)) <= 3 and len(set(got[6:])) == 1
+
+
 def test_ahc_threshold_edge_sizes():
     assert speaker_split.ahc_threshold(np.zeros((0, 4)), np.zeros(0)).shape == (0,)
     assert speaker_split.ahc_threshold(np.stack([A]), np.ones(1)).tolist() == [0]
