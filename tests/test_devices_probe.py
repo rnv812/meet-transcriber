@@ -196,3 +196,28 @@ def test_main_record_prints_json_and_requires_out(fake_pa, tmp_path, capsys, mon
     assert devices_probe.main(["--record", "mic"]) == 0
     got = json.loads(capsys.readouterr().out.strip())
     assert got["ok"] is False and "--out" in got["error"]
+
+
+def test_record_writes_nothing_when_the_resident_is_gone(fake_pa, tmp_path):
+    """Резидент умер посреди записи: удалить файл было бы некому — не пишем."""
+    out = tmp_path / "a.wav"
+    with pytest.raises(devices_probe.ParentGone):
+        devices_probe.record(None, out, seconds=1, sleep=_stereo(fake_pa, [(1, 1)]),
+                             parent_pid=4242, alive=lambda pid: False)
+    assert not out.exists()
+    _, stream = fake_pa.instances[0].opened[0]
+    assert stream.closed and fake_pa.instances[0].terminated
+    got = devices_probe.record(None, out, seconds=1, sleep=lambda s: None, parent_pid=4242,
+                               alive=lambda pid: pid == 4242)
+    assert got["ok"] and out.exists()
+
+
+def test_main_record_passes_parent_pid(fake_pa, tmp_path, capsys, monkeypatch):
+    import meet.plat as plat
+
+    monkeypatch.setattr(devices_probe.time, "sleep", lambda s: None)
+    monkeypatch.setattr(plat, "pid_alive", lambda pid: False)
+    out = tmp_path / "a.wav"
+    assert devices_probe.main(["--record", "mic", "--out", str(out), "--parent-pid", "4242"]) == 0
+    got = json.loads(capsys.readouterr().out.strip())
+    assert got["ok"] is False and "4242" in got["error"] and not out.exists()

@@ -2,7 +2,8 @@
 маршруты `/owner-voice*`.
 
 Микрофон не открывается: запись подменена (пишет пустой файл), задача —
-подставной подпроцесс, который печатает строки JSON как job_worker."""
+подставной подпроцесс, который печатает строки JSON как job_worker. Попытка
+идёт настоящим фоновым потоком: он ждёт конца задачи и убирает папку записи."""
 
 import json
 import threading
@@ -36,8 +37,11 @@ def _spawn(lines, code=0, seen=None):
 
 
 @pytest.fixture
-def setup(tmp_path):
-    def make(*, spawn=None, record=None, ready=lambda: None, busy=False):
+def setup(tmp_path, monkeypatch):
+    monkeypatch.setattr(owner_voice_control, "JOB_POLL_S", 0.01)
+
+    def make(*, spawn=None, record=None, ready=lambda: None, busy=False, installing=False, mic=None,
+             clock=time.time):
         bus = events.EventBus()
         queue = jobs.KeyedQueues(bus, spawn=spawn or _spawn(lambda job: [
             {"kind": "job.result", "path": "id1"}]))
@@ -49,10 +53,11 @@ def setup(tmp_path):
             return {"ok": True, "path": str(out), "device": device or "Микрофон", "fallback": False,
                     "seconds": 25.0, "rate": 48000}
 
+        state = {"busy": busy, "installing": installing}
         takes = owner_voice_control.OwnerTakes(
-            queue=queue, bus=bus, busy=lambda: state["busy"], voices=lambda: tmp_path / "voices",
-            log=lambda text: None, record=record or fake_record, ready=ready, background=lambda fn: fn())
-        state = {"busy": busy}
+            queue=queue, bus=bus, busy=lambda: state["busy"], installing=lambda: state["installing"],
+            voices=lambda: tmp_path / "voices", mic=lambda: mic, log=lambda text: None,
+            record=record or fake_record, ready=ready, clock=clock)
         takes.captured = captured
         takes.state = state
         takes.jobs = queue
@@ -69,10 +74,10 @@ def test_record_runs_probe_then_job_and_reports_done(setup, tmp_path):
     seen = []
     takes = setup(spawn=_spawn(lambda job: [{"kind": "job.result", "path": "abc"}], seen=seen))
     got = takes.record({"device": "USB-микрофон"})
-    assert got["take"]["state"] in ("analyzing", "done")
+    assert got["take"]["state"] in owner_voice_control.ACTIVE + ("done",)
+    take = _settled(takes)
     ((device, wav),) = takes.captured
     assert device == "USB-микрофон" and wav.name == "owner.wav"
-    take = _settled(takes)
     assert take["state"] == "done" and take["sample_id"] == "abc" and take["error"] is None
     assert take["device"] == "USB-микрофон" and "dir" not in take
     (job,) = seen
@@ -84,8 +89,16 @@ def test_record_runs_probe_then_job_and_reports_done(setup, tmp_path):
 def test_system_mic_name_comes_from_the_probe(setup):
     takes = setup()
     takes.record({})
-    assert takes.captured[0][0] is None
-    assert _settled(takes)["device"] == "Микрофон"
+    take = _settled(takes)
+    assert takes.captured[0][0] is None and take["device"] == "Микрофон"
+
+
+def test_without_device_records_the_configured_mic(setup):
+    """Мастер не выбирает микрофон: образец — с того, с которого пишутся встречи."""
+    takes = setup(mic="USB-микрофон")
+    takes.record({"device": None})
+    assert _settled(takes)["device"] == "USB-микрофон"
+    assert takes.captured[0][0] == "USB-микрофон"
 
 
 def test_quality_error_reaches_the_window_in_plain_words(setup):
@@ -93,18 +106,122 @@ def test_quality_error_reaches_the_window_in_plain_words(setup):
     takes.record({})
     take = _settled(takes)
     assert take["state"] == "failed" and take["error"] == "Голос не слышен."
+    assert not takes.captured[0][1].parent.exists()
 
 
 def test_probe_failure_fails_the_take_without_a_job(setup):
-    seen = []
+    seen, outs = [], []
 
     def broken(device, out):
+        outs.append(out)
+        out.write_bytes(b"RIFF")  # даже если файл остался — папка уходит
         return {"ok": False, "error": "Устройство не ответило"}
 
     takes = setup(record=broken, spawn=_spawn(lambda job: [], seen=seen))
     takes.record({})
-    take = takes.status()["take"]
+    take = _settled(takes)
     assert take["state"] == "failed" and "Устройство не ответило" in take["error"]
+    assert seen == [] and not outs[0].parent.exists()
+
+
+@pytest.mark.parametrize("answer", [None, "строка", ["список"]])
+def test_strange_probe_answer_fails_and_cleans_up(setup, answer):
+    outs = []
+
+    def odd(device, out):
+        outs.append(out)
+        out.write_bytes(b"RIFF")
+        return answer
+
+    takes = setup(record=odd)
+    takes.record({})
+    assert _settled(takes)["state"] == "failed"
+    assert not outs[0].parent.exists()
+    takes.record({})  # не «уже записывается» навсегда
+
+
+def test_crash_in_the_take_thread_fails_and_cleans_up(setup):
+    outs = []
+
+    def boom(device, out):
+        outs.append(out)
+        out.write_bytes(b"RIFF")
+        raise OSError("сбой")
+
+    takes = setup(record=boom)
+    takes.record({})
+    take = _settled(takes)
+    assert take["state"] == "failed" and "OSError" in take["error"]
+    assert not outs[0].parent.exists()
+
+
+def test_failing_job_submit_fails_and_cleans_up(setup):
+    takes = setup()
+
+    def broken(*a, **kw):
+        raise RuntimeError("очередь сломана")
+
+    takes.jobs.submit_once = broken
+    takes.record({})
+    assert _settled(takes)["state"] == "failed"
+    assert not takes.captured[0][1].parent.exists()
+
+
+def test_stuck_recording_fails_after_timeout(setup):
+    """Поток записи пропал (подпроцесс завис дольше таймаута) — попытка не
+    висит «записывается» вечно, папка уходит."""
+    now = [1000.0]
+    release = threading.Event()
+    outs = []
+
+    def hang(device, out):
+        outs.append(out)
+        out.write_bytes(b"RIFF")
+        release.wait(5)
+        return {"ok": True, "device": "Микрофон"}
+
+    takes = setup(record=hang, clock=lambda: now[0])
+    takes.record({})
+    assert _wait(lambda: outs)
+    assert takes.status()["take"]["state"] == "recording"
+    now[0] += owner_voice_control.STUCK_S + 1
+    take = takes.status()["take"]
+    assert take["state"] == "failed" and take["error"] == owner_voice_control.STUCK
+    assert not outs[0].parent.exists()
+    release.set()  # поздно вернувшаяся запись итог не меняет
+    time.sleep(0.05)
+    assert takes.status()["take"]["state"] == "failed"
+    takes.record({})
+
+
+def test_meeting_started_mid_take_aborts_it(setup):
+    seen = []
+    takes = setup(spawn=_spawn(lambda job: [], seen=seen))
+
+    def record(device, out):
+        out.write_bytes(b"RIFF")
+        takes.state["busy"] = True  # автозапись звонка началась во время образца
+        return {"ok": True, "device": "Микрофон"}
+
+    takes._record = record
+    takes.record({})
+    take = _settled(takes)
+    assert take["state"] == "failed" and take["error"] == owner_voice_control.STARTED_RECORDING
+    assert seen == []
+
+
+def test_engine_install_started_mid_take_aborts_it(setup):
+    seen = []
+    takes = setup(spawn=_spawn(lambda job: [], seen=seen))
+
+    def record(device, out):
+        out.write_bytes(b"RIFF")
+        takes.state["installing"] = True
+        return {"ok": True, "device": "Микрофон"}
+
+    takes._record = record
+    takes.record({})
+    assert _settled(takes)["error"] == owner_voice_control.ENGINE_INSTALLING
     assert seen == []
 
 
@@ -113,6 +230,12 @@ def test_refused_while_a_meeting_is_recorded(setup):
     with pytest.raises(control.Conflict, match="Идёт запись"):
         takes.record({})
     assert takes.captured == [] and takes.status()["recording"] is True
+
+
+def test_refused_while_the_engine_is_being_installed(setup):
+    takes = setup(installing=True)
+    with pytest.raises(control.Conflict, match="установка движка"):
+        takes.record({})
 
 
 def test_refused_without_model_or_token(setup):
@@ -127,11 +250,24 @@ def test_one_take_at_a_time(setup):
     gate = threading.Event()
     takes = setup(spawn=_spawn(lambda job: gate.wait(5) and [{"kind": "job.result", "path": "x"}]))
     takes.record({})
+    assert takes.active()
     with pytest.raises(control.Conflict, match="уже записывается"):
         takes.record({})
     gate.set()
     assert _settled(takes)["state"] == "done"
+    assert not takes.active()
     takes.record({})  # после конца — снова можно
+
+
+def test_slot_busy_with_another_job_fails_instead_of_attaching(setup, tmp_path):
+    gate = threading.Event()
+    takes = setup(spawn=_spawn(lambda job: gate.wait(5) and []))
+    other, _ = takes.jobs.submit_once(jobs.OWNER_VOICE, str(tmp_path / "voices"), {"wav": "чужой.wav"})
+    takes.record({})
+    take = _settled(takes)
+    assert take["state"] == "failed" and take["error"] == owner_voice_control.BUSY_JOB
+    assert not takes.captured[0][1].parent.exists()
+    gate.set()
 
 
 def test_bad_device_is_a_bad_request(setup):
@@ -152,15 +288,20 @@ def test_status_lists_samples_without_vectors_and_delete_removes(setup, tmp_path
     assert takes.delete(sample.id) == {"error": "образца нет"}
 
 
-def test_cancelled_job_settles_on_status(setup):
+def test_cancelled_job_settles_and_cleans_up_without_polling(setup):
+    """Снятая задача события не шлёт; окно закрыто (status() не зовут) — папку
+    записи всё равно убирает поток попытки."""
     gate = threading.Event()
     takes = setup(spawn=_spawn(lambda job: gate.wait(5) and []))
     takes.record({})
-    job_id = takes.status()["take"]["job"]
+    assert _wait(lambda: takes._take["job"] is not None)
+    job_id = takes._take["job"]
+    folder = takes.captured[0][1].parent
     assert _wait(lambda: takes.jobs.get(job_id).state == jobs.RUNNING)
     assert takes.jobs.cancel(job_id)
     gate.set()
-    assert _settled(takes)["state"] == "failed"
+    assert _wait(lambda: takes._take["state"] == "failed")
+    assert not folder.exists()
 
 
 def test_readiness_names_what_is_missing(monkeypatch):
@@ -174,11 +315,33 @@ def test_readiness_names_what_is_missing(monkeypatch):
     monkeypatch.setattr(credentials, "hf_token_source", lambda: "keyring")
     monkeypatch.setattr(models, "downloaded", lambda repo: False)
     assert owner_voice_control.readiness() == owner_voice_control.NO_MODEL
+    assert owner_voice_control.readiness(downloading=True) == owner_voice_control.MODEL_DOWNLOADING
     monkeypatch.setattr(models, "downloaded", lambda repo: True)
     assert owner_voice_control.readiness() is None
 
 
+def test_default_readiness_sees_the_model_downloading(tmp_path, monkeypatch):
+    """Мастер отпускает с шага моделей, пока модель качается: шаг голоса
+    говорит «ещё скачивается», а не «скачайте»."""
+    from meet.diarize import DIARIZATION_MODEL
+
+    seen = []
+    monkeypatch.setattr(owner_voice_control, "readiness", lambda downloading=False: seen.append(
+        downloading) or None)
+    gate = threading.Event()
+    queue = jobs.KeyedQueues(events.EventBus(), spawn=_spawn(lambda job: gate.wait(5) and []))
+    takes = owner_voice_control.OwnerTakes(queue=queue, bus=events.EventBus(), busy=lambda: False,
+                                           voices=lambda: tmp_path)
+    takes.status()
+    queue.submit_once(jobs.DOWNLOAD_MODEL, DIARIZATION_MODEL, {})
+    takes.status()
+    gate.set()
+    assert seen == [False, True]
+
+
 def test_capture_asks_the_probe_subprocess(monkeypatch, tmp_path):
+    import os
+
     from meet import tray_control
 
     calls = []
@@ -187,7 +350,7 @@ def test_capture_asks_the_probe_subprocess(monkeypatch, tmp_path):
     owner_voice_control.capture("USB", tmp_path / "a.wav")
     ((args, failed, timeout),) = calls
     assert args == ["--record", "mic", "--seconds", "25.0", "--out", str(tmp_path / "a.wav"),
-                    "--name", "USB"]
+                    "--parent-pid", str(os.getpid()), "--name", "USB"]
     assert failed == "ok" and timeout > 25
 
 
@@ -256,7 +419,7 @@ def test_tray_control_refuses_take_while_recording(monkeypatch, tmp_path):
 
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.delenv("MEET_DATA_DIR", raising=False)
-    monkeypatch.setattr(owner_voice_control, "readiness", lambda: None)
+    monkeypatch.setattr(owner_voice_control, "readiness", lambda downloading=False: None)
     app = tray.TrayApp()
     state = tray_control.TrayControl(app)
     assert state.owner_voice()["take"] is None
@@ -266,10 +429,13 @@ def test_tray_control_refuses_take_while_recording(monkeypatch, tmp_path):
     assert state.owner_voice_delete("нет") == {"error": "образца нет"}
 
 
-def test_refused_while_the_engine_is_being_installed(tmp_path):
-    takes = owner_voice_control.OwnerTakes(
-        queue=jobs.KeyedQueues(events.EventBus()), bus=events.EventBus(), busy=lambda: False,
-        installing=lambda: True, voices=lambda: tmp_path, ready=lambda: None, record=lambda d, o: {},
-        background=lambda fn: fn())
-    with pytest.raises(control.Conflict, match="установка движка"):
-        takes.record({})
+
+def test_engine_install_is_refused_during_a_take(monkeypatch, tmp_path):
+    from meet import tray, tray_control
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    state = tray_control.TrayControl(tray.TrayApp())
+    monkeypatch.setattr(state.owner_takes, "active", lambda: True)
+    with pytest.raises(control.Conflict, match="образец голоса"):
+        state.install_engine({})

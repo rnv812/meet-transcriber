@@ -15,10 +15,12 @@ CLAUDE.md). Второй инстанс, созданный и завершён�
 * `--check mic|output [--name ИМЯ] [--seconds 2]` — записать пару секунд с
   микрофона или с loopback устройства вывода и вернуть пиковый уровень:
   `{"ok", "peak" 0..1, "device", "fallback"}`. Без имени — системное;
-* `--record mic --out ФАЙЛ.wav [--name ИМЯ] [--seconds 25]` — записать образец
-  голоса владельца (мастер, настройки «Звук»): WAV 16 бит моно на частоте
-  устройства → `{"ok", "path", "device", "fallback", "seconds", "rate"}`.
-  Разбирает его задача `owner_voice` (meet.owner_enroll), она же его удаляет.
+* `--record mic --out ФАЙЛ.wav [--name ИМЯ] [--seconds 25] [--parent-pid PID]`
+  — записать образец голоса владельца (мастер, настройки «Звук»): WAV 16 бит
+  моно на частоте устройства → `{"ok", "path", "device", "fallback",
+  "seconds", "rate"}`. Разбирает его задача `owner_voice` (meet.owner_enroll),
+  она же его удаляет. Резидент (`--parent-pid`) умер, пока шла запись, — файл
+  не пишется: удалить его было бы уже некому.
 """
 
 import argparse
@@ -105,10 +107,16 @@ def check_level(kind: str, name: "str | None", seconds: float = CHECK_SECONDS,
         audio.terminate()
 
 
-def record(name: "str | None", out, seconds: float = RECORD_SECONDS, sleep=None) -> dict:
+class ParentGone(RuntimeError):
+    """Резидент, заказавший запись, завершился: файл не пишется."""
+
+
+def record(name: "str | None", out, seconds: float = RECORD_SECONDS, sleep=None,
+           parent_pid: "int | None" = None, alive=None) -> dict:
     """Записать `seconds` с микрофона в WAV (16 бит, моно — среднее каналов,
     частота устройства). Тот же callback, что у проверки уровня; файл пишется
-    целиком по окончании, при сбое его нет."""
+    целиком по окончании, при сбое его нет. `parent_pid` умер к концу записи
+    — ParentGone, файла нет."""
     import wave
     from pathlib import Path
 
@@ -146,6 +154,11 @@ def record(name: "str | None", out, seconds: float = RECORD_SECONDS, sleep=None)
                 stream.stop_stream()
             finally:
                 stream.close()
+        if parent_pid is not None:
+            if alive is None:
+                from meet.plat import pid_alive as alive
+            if not alive(parent_pid):
+                raise ParentGone(f"процесс {parent_pid} завершился — запись не сохранена")
         pcm = np.frombuffer(b"".join(chunks), dtype="<i2")
         pcm = pcm[: len(pcm) - len(pcm) % channels].reshape(-1, channels)
         mono = pcm.astype(np.int32).mean(axis=1).round().astype("<i2")
@@ -169,6 +182,7 @@ def main(argv: "list[str] | None" = None) -> int:
     parser.add_argument("--check", choices=("mic", "output"))
     parser.add_argument("--record", choices=("mic",))
     parser.add_argument("--out")
+    parser.add_argument("--parent-pid", type=int)
     parser.add_argument("--name")
     parser.add_argument("--seconds", type=float)
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
@@ -177,7 +191,8 @@ def main(argv: "list[str] | None" = None) -> int:
             if not args.out:
                 raise ValueError("нужен --out: куда писать образец")
             seconds = RECORD_SECONDS if args.seconds is None else args.seconds
-            payload = record(args.name or None, args.out, seconds=min(max(seconds, 1.0), RECORD_MAX_S))
+            payload = record(args.name or None, args.out, seconds=min(max(seconds, 1.0), RECORD_MAX_S),
+                             parent_pid=args.parent_pid)
         except Exception as e:
             payload = {"ok": False, "error": f"{type(e).__name__}: {e}"}
     elif args.check:

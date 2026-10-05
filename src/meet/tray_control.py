@@ -320,6 +320,7 @@ PROCESSING = "Запись ещё обрабатывается (обрезка �
 MODEL_DOWNLOADING = "модель сейчас скачивается — удалить её можно после загрузки"
 ENGINE_INSTALLING = "идёт установка движка — модели можно скачать после неё"
 MODELS_DOWNLOADING = "идут загрузки моделей — движок можно ставить после них"
+OWNER_VOICE_BUSY = "записывается образец голоса — движок можно ставить после него"
 RESIDENT_STOPPING = "служба записи останавливается — скачайте модель после её перезапуска"
 # Восстановление после перезапуска берёт записи не старше этого.
 RECOVER_DAYS = 7
@@ -2411,6 +2412,10 @@ class TrayControl:
         (GigaAM — и torch), а pip переставлял бы их на ходу (на Windows —
         поверх загруженных DLL, с полуразобранным движком в итоге)."""
         with self._engine_lock:
+            # Разбор образца голоса грузит torch движка — о нём и говорим, а не
+            # о загрузках моделей (его задача живёт в том же слоте).
+            if self.owner_takes.active():
+                raise _conflict(OWNER_VOICE_BUSY)
             if self.downloads.any_active():
                 raise _conflict(MODELS_DOWNLOADING)
             job = self.queue.submit(
