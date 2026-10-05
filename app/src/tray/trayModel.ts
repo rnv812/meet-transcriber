@@ -32,15 +32,18 @@ export function phaseOf(snapshot: Snapshot | null, online: boolean | null): Phas
   if (online === false) return { kind: "offline" };
   if (!snapshot) return { kind: online === null ? "connecting" : "offline" };
   const live = snapshot.live;
+  // Звук уже идёт, а модель ещё грузится (`ready: false`; старый резидент поля не
+  // присылает — тогда `active` и значит «слушает»).
+  const warming = !!live?.active && live.ready === false;
   if (snapshot.status === "recording") {
     const attached = !!live?.attached;
     const assistant: AssistantMark = !attached ? null
-      : live?.stopping ? "stopping" : live?.starting ? "starting" : live?.active ? "on" : null;
+      : live?.stopping ? "stopping" : live?.starting || warming ? "starting" : live?.active ? "on" : null;
     return { kind: "recording", liveOnly: false, assistant, auto: snapshot.source === "auto" };
   }
   if (live?.stopping) return { kind: "saving" };
+  if (warming || live?.starting) return { kind: "live-starting" };
   if (live?.active) return { kind: "recording", liveOnly: true, assistant: "on", auto: false };
-  if (live?.starting) return { kind: "live-starting" };
   return { kind: "idle" };
 }
 

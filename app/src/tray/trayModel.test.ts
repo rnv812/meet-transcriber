@@ -73,3 +73,14 @@ test("«только что остановлена» — по резиденту
   expect(isJustStopped(a, snap({ last_stop: { folder: "a", reason: "saved", at: now / 1000 } }), null, now)).toBe(true);
   expect(isJustStopped(null, snap(), { id: "a", at: now }, now)).toBe(false);
 });
+
+test("звук идёт, модель грузится (ready: false) — ассистент ещё запускается", () => {
+  // Запись с ассистентом: обычная запись резидента, ассистент к ней подключён.
+  expect(phaseOf(snap({ status: "recording", live: live({ active: true, ready: false, attached: true }) }), true))
+    .toMatchObject({ kind: "recording", assistant: "starting" });
+  expect(phaseOf(snap({ status: "recording", live: live({ active: true, ready: true, attached: true }) }), true))
+    .toMatchObject({ kind: "recording", assistant: "on" });
+  // Ассистент, пишущий сам: «Запись уже идёт — ассистент загружает модель».
+  expect(phaseOf(snap({ live: live({ active: true, ready: false }) }), true).kind).toBe("live-starting");
+  expect(phaseOf(snap({ live: live({ active: true, ready: true }) }), true).kind).toBe("recording");
+});
