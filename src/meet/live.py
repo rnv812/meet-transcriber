@@ -36,7 +36,9 @@ CATCHUP_THREADS = 4
 CATCHUP_SIDE = "live_transcript.catchup.md"
 # Дорожки записи резидента (отвод `meet.pcm_tap`) → ключ дорожки движка,
 # нормализовать ли, опознавать ли голос (как у собственного захвата).
-TAP_TRACKS = {"sys.opus": ("sys.wav", True, True), "mic.opus": ("mic.wav", False, False)}
+# Микрофон тоже опознаётся: голоса делит meet.live_voices — только при
+# образце владельца, без него микрофон весь владельца, как раньше.
+TAP_TRACKS = {"sys.opus": ("sys.wav", True, True), "mic.opus": ("mic.wav", False, True)}
 
 
 def fmt_hms(seconds: float) -> str:
@@ -310,7 +312,11 @@ class LiveEngine:
         self.on_entry = on_entry
         self.out_root = Path(out_root) if out_root is not None else self.out_dir.parent
         self._lock_path: Path | None = None  # наш .recording.lock, пока держим
-        self._matcher = voice_matcher  # опознание голоса far-end (duck-typed)
+        # Голоса (meet.voice_id.VoiceMatcher, duck-typed): онлайн-кластеры
+        # дорожек (meet.live_voices) — когда матчер загрузится (в фоне).
+        self._matcher = voice_matcher
+        self._voices = None
+        self._voices_error: str | None = None
         self._window_lock = threading.Lock()  # process_window зовут и внеочередно
         # Исправления текста реплики (правила замены, латиница после GigaAM).
         self._text_fixes = text_fixes
@@ -374,7 +380,7 @@ class LiveEngine:
             "rate": rate,
             "channels": channels,
             "normalize": normalize,
-            "identify": identify,  # опознавать говорящего по голосу (far-end)
+            "identify": identify,  # голоса дорожки — в meet.live_voices
             "gain": None,
             "last_text": None,  # хвост прошлого окна → initial_prompt следующего
             # Звук, ещё не ушедший в распознавание: mono float32 в частоте
@@ -519,15 +525,19 @@ class LiveEngine:
         if segs:
             tr["last_text"] = segs[-1].text  # хвост → контекст следующего окна
         default_speaker = self.SPEAKERS.get(fname, fname)
+        voices = self._live_voices() if tr["identify"] else None
         for s in segs:
-            speaker = default_speaker
-            if tr["identify"] and self._matcher is not None:
-                name = self._segment_name(audio, s.start - start_s, s.end - start_s)
-                if name:
-                    speaker = name
+            speaker, voice = default_speaker, None
+            if voices is not None:
+                got = self._assign(voices, fname, audio, s.start - start_s, s.end - start_s,
+                                   s.start, s.end)
+                if got is not None and got.voice is not None:
+                    speaker, voice = got.speaker, got.voice
             line = format_live_line(s.start, speaker, s.text)
             entry = {"t": round(s.start, 2), "end": round(s.end, 2),
                      "speaker": speaker, "text": s.text}
+            if voice is not None:
+                entry["voice"] = voice  # подпись голоса может смениться задним числом
             if catchup:
                 # Начало встречи: в файл ленты — по времени, слиянием в конце
                 # догонялки; потребителям — с пометкой (подсказки по нему не
@@ -592,14 +602,35 @@ class LiveEngine:
             except Exception:
                 pass  # потребитель не должен валить запись
 
-    def _segment_name(self, audio, start_s: float, end_s: float):
-        """Имя по голосу сегмента; любой сбой -> None (окно важнее имени)."""
+    def _live_voices(self):
+        """Голоса дорожек (meet.live_voices.LiveVoices), как только матчер
+        загрузился; до того и без матчера — None (подписи по умолчанию)."""
+        if self._voices is None and self._matcher is not None                 and getattr(self._matcher, "enabled", False):
+            make = getattr(self._matcher, "live_voices", None)
+            try:
+                self._voices = make(
+                    {"sys": self.SPEAKERS["sys.wav"], "mic": self.SPEAKERS["mic.wav"]},
+                    log=self._log) if make is not None else None
+            except Exception as e:
+                self._voice_failed(e)
+        return self._voices
+
+    def _assign(self, voices, fname: str, audio, rel_start: float, rel_end: float,
+                start: float, end: float):
+        """Голос сегмента; любой сбой → None (окно важнее имени)."""
         try:
-            lo = max(0, int(start_s * WINDOW_RATE))
-            hi = min(len(audio), int(end_s * WINDOW_RATE))
-            return self._matcher.name_for(audio[lo:hi])
-        except Exception:
+            lo = max(0, int(rel_start * WINDOW_RATE))
+            hi = min(len(audio), int(rel_end * WINDOW_RATE))
+            return voices.assign(fname.removesuffix(".wav"), audio[lo:hi], start, end)
+        except Exception as e:
+            self._voice_failed(e)
             return None
+
+    def _voice_failed(self, e: Exception) -> None:
+        text = f"{type(e).__name__}: {e}"
+        if text != self._voices_error:  # один и тот же сбой — одна строка
+            self._voices_error = text
+            self._log(f"голоса: сбой живых имён ({text})")
 
     def _write_line(self, line: str) -> None:
         if self._out is None:
@@ -730,7 +761,7 @@ class LiveEngine:
             (_CaptureTrack("sys.wav", recorder._Picker("output", self.output_device), 0),
              True, True),
             (_CaptureTrack("mic.wav", recorder._Picker("mic", self.mic_device), 1),
-             False, False),
+             False, True),
         )
         picked = []
         for track, _, _ in tracks:
@@ -885,7 +916,7 @@ class LiveEngine:
             catch[key] = {
                 "rate": 16000, "channels": 1,
                 "normalize": base.get("normalize", key == "sys.wav"),
-                "identify": base.get("identify", key == "sys.wav"),
+                "identify": base.get("identify", True),
                 "gain": None, "last_text": None,
                 "pending": [], "pending_n": 0, "pos": float(start),
                 "start": float(start), "end": float(end),
@@ -1341,6 +1372,9 @@ class LiveEngine:
                     self._merge_catchup_lines()
             if self.stats["windows"]:
                 self._log(self.stats_line())
+            voices_line = self._voices.stats_line() if self._voices is not None else None
+            if voices_line:
+                self._log(voices_line)
             close_error = self._close_capture()
             if self._out is not None:
                 self._out.close()

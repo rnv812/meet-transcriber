@@ -544,7 +544,9 @@ def test_tap_tracks_map_to_engine_keys():
     from meet.live import TAP_TRACKS
 
     assert TAP_TRACKS["sys.opus"][0] == "sys.wav" and TAP_TRACKS["sys.opus"][2] is True
-    assert TAP_TRACKS["mic.opus"][0] == "mic.wav" and TAP_TRACKS["mic.opus"][2] is False
+    # Микрофон тоже идёт в голоса: делит его meet.live_voices, только при образце владельца.
+    assert TAP_TRACKS["mic.opus"][0] == "mic.wav" and TAP_TRACKS["mic.opus"][1] is False
+    assert TAP_TRACKS["mic.opus"][2] is True
 
 
 # --- раунд 1: отвод не держат молчащие и не читающие клиенты --------------------

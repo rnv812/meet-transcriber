@@ -1,16 +1,41 @@
-"""Live-опознание голоса по сегменту аудио: эмбеддинг WeSpeaker (та же модель,
-что внутри pyannote community-1 — подпапка embedding того же чекпойнта, поэтому
-векторы косинус-совместимы с центроидами базы voices/) + тихий матч против базы.
-Работает без диаризации: один сегмент — один эмбеддинг — одно имя."""
+"""Голоса живого режима: эмбеддинг WeSpeaker (та же модель, что внутри pyannote
+community-1 — подпапка embedding того же чекпойнта, поэтому векторы
+косинус-совместимы с центроидами базы voices/ и образцом владельца), база
+голосов и образец владельца. Решения об именах — по накопленным онлайн-
+кластерам (meet.live_voices), а не по одному сегменту: короткий клип против
+центроида встречи порог узнавания почти никогда не проходит (калибровка T0)."""
 
 import numpy as np
 
-from meet.voices import MARGIN, THRESHOLD, best_match, load_voices
+from meet.voices import load_voices
 
 # Короче секунды эмбеддинг неустойчив (и упирается в min_num_samples модели —
-# та возвращает NaN, не ошибку); такие сегменты честно остаются «Собеседник».
+# та возвращает NaN, не ошибку): такие сегменты берут голос соседнего
+# (meet.live_voices.EMBED_MIN_S).
 MIN_SECONDS = 1.0
 SAMPLE_RATE = 16000
+# Потоков torch на эмбеддинг: с потоками по умолчанию время на гибридных ядрах
+# скачет 170–1300 мс на сегмент, с 4 — 60–110 мс (калибровка T0).
+EMBED_THREADS = 4
+
+
+def _capped(call):
+    """`call()` с потоками torch не больше EMBED_THREADS, потом — как было.
+    Распознавание и эмбеддинги идут в одном рабочем потоке живого режима
+    по очереди, так что временное урезание чужих вызовов не задевает."""
+    try:
+        import torch
+
+        before = torch.get_num_threads()
+    except Exception:
+        return call()
+    if before <= EMBED_THREADS:
+        return call()
+    torch.set_num_threads(EMBED_THREADS)
+    try:
+        return call()
+    finally:
+        torch.set_num_threads(before)
 
 
 def _embedder_device() -> str:
@@ -33,7 +58,8 @@ def _build_embedder(device: str):
 
     def embed(audio: np.ndarray) -> np.ndarray:
         wav = torch.from_numpy(audio).float()[None, None, :]
-        return np.asarray(model(wav)[0])
+        out = model(wav) if device == "cuda" else _capped(lambda: model(wav))
+        return np.asarray(out[0])
 
     return embed
 
@@ -76,49 +102,83 @@ def _load_embedder():
 
 
 class VoiceMatcher:
-    """name_for(audio) для живого режима: имя из базы или None.
+    """База голосов, образец владельца и эмбеддер для живого режима.
 
-    embed_fn инжектируется в тестах; в бою load() строит реальный эмбеддер.
-    Пустая база — матчер выключен, модель не грузится."""
+    `load()` грузит эмбеддер, если есть база голосов или образец владельца
+    (иначе называть некого и делить микрофон не по чему — модель не
+    грузится). `live_voices()` — онлайн-кластеры дорожек (meet.live_voices).
+    Порог имени — T_live из настроек (`mic_split.live_threshold(
+    asr.voice_threshold)`), микрофон делится по голосам при
+    `asr.mic_speakers`. `embed_fn` инжектируется в тестах."""
 
-    def __init__(self, base=None, embed_fn=None, min_seconds: float = MIN_SECONDS,
-                 threshold: float = THRESHOLD, margin: float = MARGIN) -> None:
+    def __init__(self, base=None, embed_fn=None, threshold: float | None = None,
+                 owner=None, mic: bool | None = None, log=print) -> None:
         self.base = base
+        self.owner = owner
         self._embed = embed_fn
-        self.min_seconds = min_seconds
         self.threshold = threshold
-        self.margin = margin
-        self._announced: set[str] = set()
+        self.mic = mic
+        self._log = log
 
     @property
     def enabled(self) -> bool:
-        return bool(self.base) and self._embed is not None
+        return self._embed is not None and (bool(self.base) or bool(self.owner))
+
+    def _settings(self) -> None:
+        """Порог имени и «делить микрофон» — из настроек, если не заданы."""
+        if self.threshold is not None and self.mic is not None:
+            return
+        from meet import mic_split
+
+        try:
+            from meet import settings
+
+            asr = settings.load().asr
+            voice_threshold, mic = asr.voice_threshold, asr.mic_speakers
+        except Exception:
+            from meet.settings import VOICE_THRESHOLD
+
+            voice_threshold, mic = VOICE_THRESHOLD, True
+        if self.threshold is None:
+            self.threshold = mic_split.live_threshold(voice_threshold)
+        if self.mic is None:
+            self.mic = bool(mic)
 
     def load(self) -> None:
         if self.base is None:
             self.base = load_voices()
-        if not self.base:
-            print("голоса: база пуста - live-имена выключены")
+        if self.owner is None:
+            try:
+                from meet import owner_voice
+
+                self.owner = owner_voice.load()
+            except Exception as e:
+                self._log(f"голоса: образец владельца не прочитан ({type(e).__name__}: {e})")
+                self.owner = []
+        self._settings()
+        if not self.base and not self.owner:
+            self._log("голоса: база пуста и образца владельца нет - live-имена выключены")
             return
         if self._embed is None:
             try:
                 self._embed = _load_embedder()
             except Exception as e:
-                print(f"голоса: опознание в живом режиме недоступно ({type(e).__name__}: {e})"
-                      " — имена появятся после расшифровки")
+                self._log(f"голоса: опознание в живом режиме недоступно ({type(e).__name__}: {e})"
+                          " — имена появятся после расшифровки")
                 return
-        print(f"голоса: live-имена включены ({len(self.base)} чел. в базе)")
+        parts = [f"{len(self.base)} чел. в базе"] if self.base else []
+        if self.owner:
+            parts.append("микрофон по голосам" if self.mic else "образец владельца есть, "
+                         "микрофон не делится (настройки)")
+        self._log(f"голоса: live-имена включены ({', '.join(parts)}, порог {self.threshold:.2f})")
 
-    def name_for(self, audio: np.ndarray) -> "str | None":
-        if not self.enabled or len(audio) < self.min_seconds * SAMPLE_RATE:
+    def live_voices(self, defaults: dict | None = None, log=None):
+        """Онлайн-кластеры дорожек (meet.live_voices.LiveVoices) или None —
+        эмбеддера нет или называть некого."""
+        if not self.enabled:
             return None
-        emb = self._embed(audio)
-        if emb is None or not np.isfinite(emb).all():
-            return None
-        score, name, second = best_match(emb, self.base)
-        if score >= self.threshold and (second is None or score - second >= self.margin):
-            if name not in self._announced:
-                self._announced.add(name)
-                print(f"голоса: live {name} (cos {score:.2f})")
-            return name
-        return None
+        from meet.live_voices import LiveVoices
+
+        self._settings()
+        return LiveVoices(self._embed, self.base, self.owner, name_threshold=self.threshold,
+                          defaults=defaults, mic=self.mic, log=log or self._log)

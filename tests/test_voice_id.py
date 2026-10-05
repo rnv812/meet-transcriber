@@ -14,66 +14,83 @@ def _audio(seconds=2.0):
     return np.zeros(int(seconds * SAMPLE_RATE), dtype=np.float32)
 
 
-def test_matches_confident_embedding():
-    m = VoiceMatcher(base=_base(), embed_fn=lambda a: np.array([1.0, 0.05], dtype=np.float32))
-    assert m.name_for(_audio()) == "Демьян"
+def _embed(a):
+    return np.array([1.0, 0.05], dtype=np.float32)
 
 
-def test_margin_too_small_returns_none():
-    # Два человека с почти одинаковыми образцами: у обоих cos ~1.0 к запросу,
-    # так что лучший проходит порог, но отрыв от второго меньше MARGIN -> None.
-    base = {
-        "Демьян": [np.array([1.0, 0.0], dtype=np.float32)],
-        "Пётр": [np.array([1.0, 0.02], dtype=np.float32)],
-    }
-    m = VoiceMatcher(base=base, embed_fn=lambda a: np.array([1.0, 0.0], dtype=np.float32))
-    assert m.name_for(_audio()) is None
+def test_enabled_with_base_or_owner_sample():
+    from meet.owner_voice import OwnerSample
+
+    owner = [OwnerSample(id="a", embedding=np.array([0.0, 1.0]), source="enroll", date="d", seconds=20.0)]
+    assert VoiceMatcher(base=_base(), embed_fn=_embed).enabled
+    assert VoiceMatcher(base={}, owner=owner, embed_fn=_embed).enabled
+    assert not VoiceMatcher(base={}, owner=[], embed_fn=_embed).enabled
+    assert not VoiceMatcher(base=_base()).enabled  # эмбеддер не загружен
 
 
-def test_below_threshold_returns_none():
-    m = VoiceMatcher(base=_base(), embed_fn=lambda a: np.array([1.0, 0.9], dtype=np.float32))
-    assert m.name_for(_audio()) is None
-
-
-def test_short_segment_skipped_without_embedding():
-    calls = []
-
-    def embed(a):
-        calls.append(a)
-        return np.array([1.0, 0.0], dtype=np.float32)
-
-    m = VoiceMatcher(base=_base(), embed_fn=embed)
-    assert m.name_for(_audio(seconds=0.5)) is None
-    assert calls == []
-
-
-def test_nan_embedding_returns_none():
-    m = VoiceMatcher(base=_base(), embed_fn=lambda a: np.array([np.nan, 0.0], dtype=np.float32))
-    assert m.name_for(_audio()) is None
-
-
-def test_empty_base_disabled():
-    m = VoiceMatcher(base={}, embed_fn=lambda a: np.array([1.0, 0.0], dtype=np.float32))
-    assert not m.enabled
-    assert m.name_for(_audio()) is None
-
-
-def test_load_with_empty_base_does_not_build_embedder(monkeypatch, capsys):
+def test_load_with_empty_base_and_no_owner_does_not_build_embedder(monkeypatch):
     import meet.voice_id as vid
 
+    built = []
     monkeypatch.setattr(vid, "load_voices", lambda: {})
-    m = VoiceMatcher()
+    monkeypatch.setattr("meet.owner_voice.load", lambda voices=None: [])
+    monkeypatch.setattr(vid, "_load_embedder", lambda: built.append(1))
+    lines = []
+    m = VoiceMatcher(log=lines.append)
     m.load()
-    assert not m.enabled
-    assert "live-имена выключены" in capsys.readouterr().out
+    assert not m.enabled and built == []
+    assert any("live-имена выключены" in line for line in lines)
 
 
-def test_match_announced_once(capsys):
-    m = VoiceMatcher(base=_base(), embed_fn=lambda a: np.array([1.0, 0.0], dtype=np.float32))
-    m.name_for(_audio())
-    m.name_for(_audio())
-    out = capsys.readouterr().out
-    assert out.count("Демьян") == 1
+def test_load_builds_embedder_for_owner_sample_alone(monkeypatch):
+    import meet.voice_id as vid
+    from meet.owner_voice import OwnerSample
+
+    owner = [OwnerSample(id="a", embedding=np.array([0.0, 1.0]), source="enroll", date="d", seconds=20.0)]
+    monkeypatch.setattr(vid, "load_voices", lambda: {})
+    monkeypatch.setattr("meet.owner_voice.load", lambda voices=None: owner)
+    monkeypatch.setattr(vid, "_load_embedder", lambda: _embed)
+    m = VoiceMatcher(log=lambda line: None)
+    m.load()
+    assert m.enabled and m.owner == owner
+
+
+def test_threshold_and_mic_flag_come_from_settings(monkeypatch):
+    import dataclasses
+
+    from meet import settings
+
+    cfg = settings.load()
+    asr = dataclasses.replace(cfg.asr, voice_threshold=0.82, mic_speakers=False)
+    monkeypatch.setattr(settings, "load", lambda: dataclasses.replace(cfg, asr=asr))
+    m = VoiceMatcher(base=_base(), embed_fn=_embed, log=lambda line: None)
+    m.load()
+    assert m.threshold == pytest.approx(0.70)  # min(0.82 − 0.05, 0.70)
+    assert m.mic is False
+    asr = dataclasses.replace(asr, voice_threshold=0.70)
+    m2 = VoiceMatcher(base=_base(), embed_fn=_embed, log=lambda line: None)
+    m2.load()
+    assert m2.threshold == pytest.approx(0.65)
+
+
+def test_live_voices_uses_matcher_state():
+    m = VoiceMatcher(base=_base(), embed_fn=_embed, threshold=0.6, mic=True, owner=[])
+    voices = m.live_voices({"sys": "Собеседник", "mic": "Вы"})
+    assert voices is not None and voices.threshold == 0.6
+    assert VoiceMatcher(base=_base(), threshold=0.6, mic=True).live_voices() is None
+
+
+def test_embedding_capped_at_four_torch_threads(monkeypatch):
+    import types
+
+    import meet.voice_id as vid
+
+    state = {"n": 8, "seen": []}
+    torch = types.SimpleNamespace(get_num_threads=lambda: state["n"],
+                                  set_num_threads=lambda n: state.update(n=n))
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    assert vid._capped(lambda: state["seen"].append(state["n"]) or 1) == 1
+    assert state["seen"] == [4] and state["n"] == 8
 
 
 # --- выбор устройства и устойчивость загрузки эмбеддера -------------------------
@@ -193,7 +210,7 @@ def test_other_load_error_disables_matcher_without_raising(fake_stack, monkeypat
     out = capsys.readouterr().out
     assert "опознание в живом режиме недоступно" in out and "model not cached" in out
     assert "имена появятся после расшифровки" in out
-    assert m.name_for(_audio()) is None
+    assert m.live_voices() is None
 
 
 def test_live_engine_starts_with_failing_embedder(tmp_path, monkeypatch):
