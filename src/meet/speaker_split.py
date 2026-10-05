@@ -139,6 +139,63 @@ def _ahc(x: np.ndarray, k: int) -> np.ndarray:
     return out
 
 
+def ahc_threshold(x: np.ndarray, w: np.ndarray, stop: float = 0.55) -> np.ndarray:
+    """Агломеративная кластеризация без заданного числа групп: средняя связь
+    по косинусу с весом (длительность окна), слияние — пока близость лучшей
+    пары групп не ниже `stop`. Нужна микрофону (meet.mic_split): сколько людей
+    говорит рядом с владельцем, заранее не известно.
+
+    Для нормированных векторов взвешенная средняя близость двух групп =
+    (Σwa·a)·(Σwb·b) / (Wa·Wb) — хватает взвешенных сумм; лучшая пара каждой
+    строки кэшируется, поэтому сотни окон — доли секунды. Группы нумеруются
+    по убыванию суммарного веса."""
+    n = len(x)
+    if n == 0:
+        return np.zeros(0, dtype=int)
+    w = np.asarray(w, dtype=np.float64)
+    w = np.where(w > 0, w, 1e-3)
+    sums = x.astype(np.float64) * w[:, None]
+    sizes = w.copy()
+    alive = np.ones(n, dtype=bool)
+    members = [[i] for i in range(n)]
+    sim = (sums @ sums.T) / np.outer(sizes, sizes)
+    np.fill_diagonal(sim, -np.inf)
+    arg = sim.argmax(axis=1)
+    best = sim[np.arange(n), arg]
+    for _ in range(n - 1):
+        a = int(np.argmax(best))
+        if not best[a] >= stop:
+            break
+        a, b = sorted((a, int(arg[a])))
+        sums[a] += sums[b]
+        sizes[a] += sizes[b]
+        members[a] += members[b]
+        alive[b] = False
+        sim[b, :] = -np.inf
+        sim[:, b] = -np.inf
+        best[b] = -np.inf
+        row = (sums @ sums[a]) / (sizes * sizes[a])
+        row[~alive] = -np.inf
+        row[a] = -np.inf
+        sim[a, :] = row
+        sim[:, a] = row
+        arg[a] = int(np.argmax(row))
+        best[a] = row[arg[a]]
+        for i in np.flatnonzero(alive):
+            if i == a:
+                continue
+            if arg[i] in (a, b):
+                arg[i] = int(np.argmax(sim[i]))
+                best[i] = sim[i, arg[i]]
+            elif row[i] > best[i]:
+                arg[i], best[i] = a, row[i]
+    groups = sorted(np.flatnonzero(alive), key=lambda i: (-sizes[i], min(members[i])))
+    out = np.zeros(n, dtype=int)
+    for g, i in enumerate(groups):
+        out[members[i]] = g
+    return out
+
+
 def _refine(x: np.ndarray, w: np.ndarray, assign: np.ndarray, k: int) -> tuple[np.ndarray, float]:
     """Уточнение к центрам групп (сферический k-means с весом — длительностью
     реплики). → разбиение и взвешенное среднее сходство с центром."""

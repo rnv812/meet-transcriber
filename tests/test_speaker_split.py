@@ -174,6 +174,41 @@ def test_cluster_three_voices():
     assert len(set(got)) == 3
 
 
+def test_ahc_threshold_finds_number_of_voices_itself():
+    """Микрофон: сколько голосов — заранее не известно; слияние групп идёт,
+    пока средняя близость не опустится ниже порога."""
+    x = np.stack([_noisy(c, n * 10 + i) for n, c in enumerate((A, B, C)) for i in range(7)])
+    got = speaker_split.ahc_threshold(x, np.ones(len(x)), stop=0.55)
+    assert [len(set(got[n * 7:(n + 1) * 7])) for n in range(3)] == [1, 1, 1]
+    assert len(set(got)) == 3
+
+
+def test_ahc_threshold_orders_groups_by_weight_and_obeys_stop():
+    x = np.stack([_noisy(A, i) for i in range(10)] + [_noisy(B, 100 + i) for i in range(6)])
+    w = np.array([1.0] * 10 + [5.0] * 6)  # у B меньше окон, но речи больше
+    got = speaker_split.ahc_threshold(x, w, stop=0.55)
+    assert got[10] == 0 and got[0] == 1 and len(set(got)) == 2
+    # Порог выше любой близости — каждое окно само по себе; ниже любой — одна группа.
+    assert len(set(speaker_split.ahc_threshold(x, w, stop=1.01))) == len(x)
+    assert set(speaker_split.ahc_threshold(x, w, stop=-1.01)) == {0}
+
+
+def test_ahc_threshold_weighted_average_linkage():
+    """Средняя связь с весом окна: длинное окно тянет группу сильнее."""
+    a, mid, b = np.array([1.0, 0.0]), np.array([0.6, 0.8]), np.array([0.0, 1.0])
+    x = np.stack([a, mid, b])
+    # Сначала сливаются mid и b (0.8); группа {mid, b} против a:
+    # (w_mid·0.6 + w_b·0) / (w_mid + w_b) — 0.54 при длинном mid, 0.06 при длинном b.
+    assert set(speaker_split.ahc_threshold(x, np.array([1.0, 9.0, 1.0]), stop=0.5)) == {0}
+    got = speaker_split.ahc_threshold(x, np.array([1.0, 1.0, 9.0]), stop=0.5)
+    assert got[1] == got[2] == 0 and got[0] == 1
+
+
+def test_ahc_threshold_edge_sizes():
+    assert speaker_split.ahc_threshold(np.zeros((0, 4)), np.zeros(0)).shape == (0,)
+    assert speaker_split.ahc_threshold(np.stack([A]), np.ones(1)).tolist() == [0]
+
+
 def test_by_people_puts_weak_and_ambiguous_segments_into_unsure():
     base = {"Анна": [A], "Борис": [B]}
     x = np.stack([_noisy(A, 1, 0.05), _noisy(B, 2, 0.05),
