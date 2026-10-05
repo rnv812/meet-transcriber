@@ -91,6 +91,7 @@ def _run_assist_capturing_matcher(tmp_path, monkeypatch, **kwargs):
     monkeypatch.setattr("meet.llm.resolve",
                         lambda cfg: ("claude-code", _never_called_runner))
     monkeypatch.setattr("meet.assist.app.check_auth", fake_check_auth)
+    monkeypatch.setattr("meet.assist.app._claude_login_problem", lambda: None)
     monkeypatch.setattr("meet.assist.app._main", fake_main)
     monkeypatch.setattr("meet.asr.Transcriber", lambda: object())
     monkeypatch.setattr("meet.live.LiveEngine", FakeEngine)
@@ -207,6 +208,8 @@ class _Heavy:
         monkeypatch.setattr("meet.llm.resolve", fake_resolve)
         monkeypatch.setattr("meet.llm.runner_for", fake_runner_for)
         monkeypatch.setattr("meet.assist.app.check_auth", fake_check_auth)
+        # Быстрая проверка CLI/входа (`claude auth status`) — не в тестах.
+        monkeypatch.setattr("meet.assist.app._claude_login_problem", lambda: None)
         monkeypatch.setattr("meet.assist.app.Digester", FakeDigester)
         monkeypatch.setattr("meet.assist.app.QAService", fake_qa)
         monkeypatch.setattr("meet.asr.Transcriber", lambda: object())

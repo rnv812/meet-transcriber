@@ -280,8 +280,27 @@ class TextFixes:
         return segments
 
 
+MODEL_MISSING = "модель распознавания не скачана — скачайте в «Движок и модели»"
+
+
+class ModelMissing(RuntimeError):
+    """Модели Whisper нет на диске. Живой режим её не качает: полтора
+    гигабайта посреди старта — это минуты без единого признака хода, и
+    резидент снял бы такой старт по таймауту этапа."""
+
+
+def _on_disk(model_name: str) -> bool:
+    from meet import models
+
+    try:
+        return Path(model_name).is_dir() or models.downloaded(model_name)
+    except Exception:
+        return True  # не знаем — не мешаем (качать будет faster-whisper)
+
+
 def pick(cfg=None, *, log=print):
-    """Движок распознавания живого режима по настройкам (см. модуль)."""
+    """Движок распознавания живого режима по настройкам (см. модуль).
+    Whisper, которого нет на диске, — ModelMissing (не качаем, см. выше)."""
     from meet import asr, gigaam_asr, settings
 
     if cfg is None:
@@ -289,7 +308,11 @@ def pick(cfg=None, *, log=print):
 
     def whisper():
         # Окна Whisper задаёт движок живого режима (`window_seconds`).
-        return asr.Transcriber()
+        model = asr.Transcriber()
+        name = getattr(model, "model_name", None)
+        if isinstance(name, str) and not _on_disk(name):
+            raise ModelMissing(MODEL_MISSING)
+        return model
 
     if getattr(cfg.assist, "live_asr", "auto") == "whisper":
         log("живой режим: распознаёт Whisper (так в настройках)")

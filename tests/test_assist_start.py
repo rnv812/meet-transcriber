@@ -98,11 +98,11 @@ def test_failed_login_stops_the_start_with_its_text(tmp_path, monkeypatch):
     _staged(heavy)
 
     async def auth(proxy=None, model=None):
-        return "войдите заново"
+        return "Invalid API key · Please run /login"
 
     monkeypatch.setattr(app_mod, "check_auth", auth)
     ep = tmp_path / "live.json"
-    with pytest.raises(SystemExit, match="Авторизация Claude не прошла: войдите заново"):
+    with pytest.raises(SystemExit, match="Авторизация Claude не прошла: Invalid API key"):
         _run(tmp_path, open_browser=False, port=0, endpoint_file=str(ep),
              cfg=Settings.from_raw({"llm": {"provider": "claude-code"}}))
     assert "begin" not in heavy.calls
@@ -203,3 +203,109 @@ def test_view_says_what_is_starting(tmp_path):
     state.ready, state.stage = False, app_mod.STAGE_ASR
     assert state.view()["starting"] == app_mod.STAGE_ASR
     assert state.signature() != sig
+
+
+def test_transient_login_check_failure_only_warns(tmp_path, monkeypatch):
+    """Тайм-аут или сбой сети при проверке входа — не повод не запускаться:
+    ассистент готов, а предупреждение — в строке состояния панели."""
+    heavy = _Heavy(monkeypatch, digester_run=_done)
+    _staged(heavy)
+    seen = {}
+
+    async def auth(proxy=None, model=None):
+        return "Превышено время ожидания ответа"
+
+    monkeypatch.setattr(app_mod, "check_auth", auth)
+    real_state = app_mod.AssistState
+
+    def capture(**kw):
+        seen["state"] = real_state(**kw)
+        return seen["state"]
+
+    monkeypatch.setattr(app_mod, "AssistState", capture)
+    _run(tmp_path, open_browser=False, port=0,
+         cfg=Settings.from_raw({"llm": {"provider": "claude-code"}}))
+    assert "begin" in heavy.calls
+    assert seen["state"].warning == "Claude Code пока не ответил: Превышено время ожидания ответа"
+
+
+def test_missing_claude_login_is_refused_before_anything_starts(tmp_path, monkeypatch):
+    heavy = _Heavy(monkeypatch)
+    _staged(heavy)
+    monkeypatch.setattr(app_mod, "_claude_login_problem",
+                        lambda: "вход в Claude Code не выполнен (claude auth login)")
+    with pytest.raises(SystemExit, match="вход в Claude Code не выполнен"):
+        _run(tmp_path, open_browser=False, port=0,
+             cfg=Settings.from_raw({"llm": {"provider": "claude-code"}}))
+    assert heavy.engine is None  # ни движка, ни звука
+
+
+def test_login_problem_check_is_definite_only(monkeypatch):
+    from meet.llm import claude, detect
+
+    monkeypatch.setattr(claude, "find_cli", lambda: None)
+    assert "не найден Claude Code CLI" in app_mod._claude_login_problem()
+    monkeypatch.setattr(claude, "find_cli", lambda: "claude.exe")
+    monkeypatch.setattr(detect, "logged_in", lambda name, path: (
+        False, "вход в Claude Code не выполнен (claude auth login)"))
+    assert "claude auth login" in app_mod._claude_login_problem()
+    monkeypatch.setattr(detect, "logged_in", lambda name, path: (False, "TimeoutExpired: 20"))
+    assert app_mod._claude_login_problem() is None  # сама проверка не удалась — не отказ
+    monkeypatch.setattr(detect, "logged_in", lambda name, path: (True, None))
+    assert app_mod._claude_login_problem() is None
+    assert app_mod._auth_is_definite("Not logged in · Please run /login")
+    assert not app_mod._auth_is_definite("Превышено время ожидания ответа")
+
+
+def test_missing_whisper_model_is_refused_not_downloaded(tmp_path, monkeypatch):
+    from meet import asr, live_asr, models
+
+    class FakeTranscriber:
+        model_name = "Systran/faster-whisper-medium"
+
+    monkeypatch.setattr(asr, "Transcriber", FakeTranscriber)
+    monkeypatch.setattr(models, "downloaded", lambda repo_id: False)
+    cfg = Settings.from_raw({"assist": {"live_asr": "whisper"}})
+    with pytest.raises(live_asr.ModelMissing, match="не скачана"):
+        live_asr.pick(cfg, log=lambda line: None)
+    heavy = _Heavy(monkeypatch)
+    monkeypatch.setattr(live_asr, "pick", lambda cfg, log=print: (_ for _ in ()).throw(
+        live_asr.ModelMissing(live_asr.MODEL_MISSING)))
+    with pytest.raises(SystemExit, match="модель распознавания не скачана"):
+        _run(tmp_path, open_browser=False, port=0)
+    assert heavy.engine is None
+
+
+def test_model_that_cannot_load_for_good_is_a_refusal(tmp_path, monkeypatch):
+    heavy = _Heavy(monkeypatch)
+    _staged(heavy)
+    real = heavy.on_engine
+
+    def on_engine(engine):
+        real(engine)
+
+        def broken():
+            raise ModuleNotFoundError("No module named 'faster_whisper'")
+
+        engine.load_asr = broken
+
+    heavy.on_engine = on_engine
+    with pytest.raises(SystemExit, match="No module named 'faster_whisper'"):
+        _run(tmp_path, open_browser=False, port=0)
+
+
+def test_whole_lines_keep_thread_output_apart(capsys):
+    import sys
+
+    with app_mod._whole_lines():
+        threads = [threading.Thread(target=lambda i=i: [print(f"поток {i} строка {k}")
+                                                         for k in range(50)])
+                   for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        sys.stdout.write("хвост")
+    out = capsys.readouterr().out.splitlines()
+    assert len(out) == 201 and out[-1] == "хвост"
+    assert all(line.startswith("поток ") or line == "хвост" for line in out)

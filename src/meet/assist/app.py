@@ -20,6 +20,7 @@
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import time
@@ -114,6 +115,7 @@ class AssistState:
         # пока нет — `stage`: что делается. Вопросы до готовности не принимаются.
         self.ready = True
         self.stage: str | None = None
+        self.warning: str | None = None
         self._rebuild()
 
     @property
@@ -147,7 +149,9 @@ class AssistState:
         self._rebuild()
 
     def status(self) -> str | None:
-        return self.digester.status if self.digester else None
+        """Строка состояния панели: дайджестера, иначе — предупреждение
+        старта (вход в Claude не проверился — подсказки могут молчать)."""
+        return (self.digester.status if self.digester else None) or self.warning
 
     def catchup_view(self) -> dict | None:
         """Ход догонялки для панели: {"active", "percent", "from_t", "to_t",
@@ -352,6 +356,10 @@ async def _main(state: AssistState, port: int, *, open_browser: bool = True,
         actual_port = bound_port(runner)
         url = f"http://127.0.0.1:{actual_port}/"
         endpoint = _Endpoint(endpoint_file, state, port=actual_port, folder=folder)
+        if parent_pid:
+            # С самого начала: умер резидент посреди загрузки модели —
+            # останавливаемся сразу, а не сиротой до готовности.
+            tasks.append(asyncio.ensure_future(_watch_parent(parent_pid, stop)))
         if prepare is not None:
             # Порт — резиденту сразу: он видит этапы старта и останавливает штатно.
             endpoint.publish()
@@ -372,9 +380,7 @@ async def _main(state: AssistState, port: int, *, open_browser: bool = True,
             webbrowser.open(url)
         print(f"Ассистент: {url} (Ctrl-C — стоп)", flush=True)
         digester = asyncio.ensure_future(state.digester.run(stop))
-        tasks = [digester, asyncio.ensure_future(stop.wait())]
-        if parent_pid:
-            tasks.append(asyncio.ensure_future(_watch_parent(parent_pid, stop)))
+        tasks += [digester, asyncio.ensure_future(stop.wait())]
         # Выход — по /stop (не ждём сна дайджестера и его вызова модели) или
         # если дайджестер кончился сам; его сбой пробрасываем наружу.
         await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -498,7 +504,7 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
     try:
         # Свой корень временных файлов (окна GigaAM, ответы Codex): удаляется
         # при выходе, а убитого ассистента дочищает резидент (по pid).
-        with tempdirs.own_root():
+        with tempdirs.own_root(), _whole_lines():
             _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                         no_voices, open_browser=open_browser, endpoint=endpoint,
                         provider=provider, cfg=cfg, knowledge_dir=knowledge_dir,
@@ -512,9 +518,100 @@ def run_assist(out_root: str = "recordings", window_seconds: float = 20.0,
         _join_loaders(LOADERS_JOIN_S)
 
 
+class _LineWriter:
+    """Поток вывода, в который строки уходят целиком: print() пишет текст и
+    перевод строки двумя вызовами, и строки фоновых потоков старта
+    (модель, голоса, база знаний) перемешивались в live.log."""
+
+    def __init__(self, stream) -> None:
+        import threading
+
+        self._stream = stream
+        self._lock = threading.Lock()
+        self._local = threading.local()
+
+    def write(self, text: str) -> int:
+        buf = getattr(self._local, "buf", "") + text
+        head, sep, tail = buf.rpartition("\n")
+        self._local.buf = tail
+        if sep:
+            with self._lock:
+                self._stream.write(head + sep)
+                self._stream.flush()
+        return len(text)
+
+    def flush(self) -> None:
+        buf = getattr(self._local, "buf", "")
+        self._local.buf = ""
+        with self._lock:
+            if buf:
+                self._stream.write(buf)
+            self._stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+@contextlib.contextmanager
+def _whole_lines():
+    import sys
+
+    saved = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = _LineWriter(saved[0]), _LineWriter(saved[1])
+    try:
+        yield
+    finally:
+        for writer in (sys.stdout, sys.stderr):
+            try:
+                writer.flush()
+            except Exception:
+                pass
+        sys.stdout, sys.stderr = saved
+
+
 # Потоки поэтапного старта (модель, голоса, база знаний): ждём их при выходе.
 _LOADERS: list = []
 LOADERS_JOIN_S = 30.0
+
+
+# Ответ проверки входа, который повтор не исправит (а не сеть или перегрузка).
+_AUTH_DEFINITE = ("login", "logged in", "log in", "authenticat", "unauthorized", "401",
+                  "403", "invalid api key", "oauth", "вход", "не найден claude code cli")
+
+
+def _auth_is_definite(error: str) -> bool:
+    text = error.lower()
+    return any(mark in text for mark in _AUTH_DEFINITE)
+
+
+def _claude_login_problem() -> str | None:
+    """CLI Claude Code нет или вход в нём не выполнен — текст; иначе (и если
+    сама проверка не удалась) None. `claude auth status` — без вызова модели."""
+    from meet.llm import claude, detect
+
+    path = claude.find_cli()
+    if path is None:
+        return ("не найден Claude Code CLI (claude.exe); npm-шим claude.cmd "
+                "не подходит — нужна родная установка Claude Code")
+    ok, text = detect.logged_in("claude-code", str(path))
+    if ok or not text or "(claude auth login)" not in text:
+        return None  # вошёл — или проверка сама не удалась: решит вызов модели
+    return text
+
+
+def _refusing(load):
+    """Загрузка модели, сбой которой повтор не исправит (нет пакета движка,
+    нет модели на диске), — отказ (EXIT_FATAL), а не повод грузить ещё раз."""
+    def run():
+        from meet.live_asr import ModelMissing
+
+        try:
+            return load()
+        except (ImportError, ModelMissing) as e:
+            raise StartRefused(f"Ассистент не запустился: {type(e).__name__}: {e}"
+                               if isinstance(e, ImportError) else
+                               f"Ассистент не запустился: {e}") from e
+    return run
 
 
 class StartRefused(Exception):
@@ -622,6 +719,12 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     # загрузки распознавания. Вход в Claude Code (вызов модели, секунды)
     # проверяется параллельно с загрузкой модели распознавания — см. prepare.
     provider_name, runner = _pick_runner(provider, cfg)
+    if provider_name == "claude-code":
+        # Быстро и до захвата звука: CLI нет или вход не выполнен — повтор не
+        # поможет. Сбой самой проверки (тайм-аут) — не повод не запускаться.
+        problem = _claude_login_problem()
+        if problem:
+            raise SystemExit(f"Авторизация Claude не прошла: {problem}")
 
     attached = attach_to is not None
     if attached:
@@ -671,7 +774,11 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
     # Распознавание: GigaAM короткими окнами для русского (если скачана),
     # иначе Whisper; правила замены и латиница — к каждой реплике. Здесь
     # модель только выбирается — грузится она в prepare.
-    engine = LiveEngine(out_dir, live_asr.pick(cfg, log=log),
+    try:
+        transcriber = live_asr.pick(cfg, log=log)
+    except live_asr.ModelMissing as e:
+        raise SystemExit(f"Ассистент не запустился: {e}") from None
+    engine = LiveEngine(out_dir, transcriber,
                         window_seconds=window_seconds,
                         hotwords=_load_hotwords(hotwords),
                         on_entry=bus.publish,
@@ -762,8 +869,8 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         if task:
             asyncio.ensure_future(state.set_task(task))
         if staged:
-            asr = _in_thread(clock.timed("модель распознавания загружена", engine.load_asr),
-                             "asr")
+            asr = _in_thread(clock.timed("модель распознавания загружена",
+                                         _refusing(engine.load_asr)), "asr")
             endpoint_file.publish(stage=STAGE_ATTACH if attached else STAGE_DEVICES)
             await _in_thread(clock.timed("звук пошёл" if not attached else
                                          "подключение к записи", engine.open_source), "source")
@@ -781,8 +888,13 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
             if not auth.done():
                 endpoint_file.publish(stage=STAGE_AUTH)
             auth_error = await auth
-            if auth_error:
+            if auth_error and _auth_is_definite(auth_error):
                 raise StartRefused(f"Авторизация Claude не прошла: {auth_error}")
+            if auth_error:
+                # Сеть, прокси, перегрузка: распознавание и сводка не ждут — ассистент
+                # запускается, подсказки и ответы заработают, когда модель ответит.
+                state.warning = f"Claude Code пока не ответил: {auth_error}"
+                print(f"предупреждение: {state.warning}", flush=True)
         if staged:
             engine.begin()
         if attached:
