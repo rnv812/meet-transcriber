@@ -130,6 +130,8 @@ export type Recording = {
    * прервали между фазами): по нему нет анализа, итогов, правки спикеров. null — окончательный.
    */
   transcript_phase?: "text" | null;
+  /** Микрофон звонка по голосам (с 0.3.3): статус — для подсказки, убрано копий — по причинам. */
+  mic_split?: MicSplitInfo | null;
   /** Выгрузка в базу знаний: куда и когда; `error` — последняя не удалась. Не выгружалась — null. */
   kb_export?: KbExportRecord | null;
   /** Объединённая встреча (`source: "merge"`); у остальных — null. */
@@ -218,6 +220,13 @@ export type Segment = {
   kind?: "break";
   /** У сегмента есть слова с таймкодами: реплику можно разделить по слову. */
   has_words?: boolean;
+  /**
+   * "mic" — реплика с микрофона владельца в записи звонка; нет — собеседники. У микрофона
+   * `uncertain` — голос под вопросом (между «точно вы» и «точно не вы»), а не нахлёст.
+   */
+  track?: "mic" | "sys";
+  /** Человек рядом с владельцем в комнате: голос с микрофона, но не владелец (с 0.3.3). */
+  room?: boolean;
 };
 
 export type Transcript = {
@@ -258,6 +267,25 @@ export type Sample = { recording: string; start: number; end: number; track: str
 /** Профили людей убраны (0.3.2): строка об уборке в «Голосах». `notes` — файл с заметками людей, `folder` — где он. */
 export type ProfilesRemovedNotice = { notes: string | null; folder: string };
 
+/**
+ * Итог разделения микрофона звонка (`mic_split`): "ok" — разделён, "off" — выключено в настройках;
+ * "no_profile" — нет образца голоса владельца, "owner_not_found" — образец не похож ни на один голос
+ * микрофона, "no_voice" — мало речи, "skipped_error" — сбой, "skipped_no_token" — нет доступа к HF.
+ * В каждом из них, кроме "ok", микрофон подписан владельцем целиком.
+ */
+export type MicSplitStatus =
+  | "ok" | "off" | "no_profile" | "owner_not_found" | "no_voice" | "skipped_error" | "skipped_no_token";
+/** Причина, по которой фраза убрана: дубль соседа, эхо колонок, ваш голос через чужой ноутбук. */
+export type MicDropReason = "neighbour" | "echo" | "owner_leak";
+export type MicSplitInfo = {
+  status: MicSplitStatus | string;
+  room_speakers?: number;
+  /** Сколько фраз убрано, по причинам. */
+  dropped?: Partial<Record<MicDropReason | string, number>>;
+};
+/** Фраза, убранная из расшифровки как повтор (`track` — с какой дорожки она убрана). */
+export type MicRemovedItem = { start: number; end: number; text: string; reason: MicDropReason; track: "mic" | "sys" };
+
 /** Фраза спикера для прослушивания в панели «Спикеры». */
 export type SpeakerPhrase = { start: number; end: number; text: string };
 /** Похожий голос из базы: `score` — сходство 0..1. */
@@ -274,6 +302,8 @@ export type SpeakerRow = {
   /** Есть голосовой отпечаток (его можно запомнить и по нему есть подсказки). */
   has_voice: boolean;
   suggestions: SpeakerSuggestion[];
+  /** Запись звонка: где звучит спикер — микрофон (вы или человек в комнате), звонок или оба; иначе null. */
+  track?: "mic" | "sys" | "mixed" | null;
 };
 /** Правка из набора: rename — имя, reset — «Неизвестный», merge — объединить с `into`. */
 export type SpeakerOp =
@@ -382,6 +412,10 @@ export type SpeakersView = {
   voice_threshold_default?: number;
   /** У встречи есть отпечаток вашего голоса с микрофона: «Это я» может его запомнить. */
   owner_voice?: boolean;
+  /** Итог разделения микрофона (`mic_split` транскрипта); не звонок или старая расшифровка — null. */
+  mic_split?: (MicSplitInfo & { rule?: number; owner_profile?: string | null }) | null;
+  /** Что убрано из расшифровки как дубль соседа, эхо или ваш голос через звонок — по времени. */
+  mic_removed?: MicRemovedItem[];
 };
 
 /** Образец вашего голоса: только отпечаток (набор чисел), без звука. */

@@ -31,6 +31,7 @@ export function stageLabel(job: Pick<Job, "stage" | "label" | "note">): string {
   const stage = job.stage ?? "";
   if (stage === "asr" && job.note === "sys") return "Распознавание собеседников";
   if (stage === "asr" && job.note === "mic") return "Распознавание микрофона";
+  if (stage === "voices" && job.note === "mic") return "Голоса микрофона";
   const known = STAGES[stage];
   if (known) return known;
   const raw = job.label ?? stage;

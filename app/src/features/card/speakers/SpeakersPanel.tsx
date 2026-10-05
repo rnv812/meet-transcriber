@@ -28,6 +28,7 @@ import { Button } from "../../../ui/Button";
 import { HelpTip, TipLine } from "../../../ui/HelpTip";
 import type { PersonColor } from "../Turns";
 import { HistoryList, HistoryTools, useUndoKeys } from "./SpeakerHistory";
+import { MicRemoved } from "./MicRemoved";
 import { SplitView } from "./SplitView";
 import { ThresholdBox } from "./ThresholdBox";
 import {
@@ -280,6 +281,9 @@ export function SpeakersPanel({
             onRemember={(v) => setRemember((r) => ({ ...r, [row.label]: v }))}
             onPlay={onPlay} onShowTurns={onShowTurns} onSplit={() => { setPick(null); setNotice(null); setSplit(row.label); }} />
         ))}
+        {view?.mic_removed && view.mic_removed.length > 0 && (
+          <MicRemoved items={view.mic_removed} playable={playable} onPlay={onPlay} />
+        )}
         {view && view.speakers.some((r) => r.has_voice) && (
           <ThresholdBox endpoint={endpoint} recordingId={recordingId} own={view.voice_threshold ?? null}
             fallback={view.voice_threshold_default ?? 0.75} busy={busy || pending} onApplied={thresholdDone} />
@@ -341,6 +345,7 @@ function SpeakerRowView({
         <div className="spk-row__who">
           <div className="spk-row__name" id={titleId}>
             <span className={isUnnamed(row.label) ? "spk-row__label--unnamed" : ""}>{row.label}</span>
+            {row.label !== owner && trackBadge(row.track)}
             {change && <span className="spk-row__change">{changeText(row.label, staged).slice(row.label.length + 1)}</span>}
           </div>
           <div className="spk-row__stats muted num">
@@ -450,6 +455,17 @@ function SpeakerRowView({
       )}
     </section>
   );
+}
+
+/** Где звучит спикер записи звонка: у микрофона, но не владелец, — человек рядом с ним в комнате. */
+function trackBadge(track: SpeakerRow["track"]) {
+  if (track === "mic") {
+    return <span className="spk-badge" title="Говорил в ваш микрофон: человек рядом с вами">в комнате</span>;
+  }
+  if (track === "mixed") {
+    return <span className="spk-badge" title="Слышен и в звонке, и в вашем микрофоне">в звонке и в комнате</span>;
+  }
+  return null;
 }
 
 /** «Кто это?»: поиск по базе голосов, новый человек, «Это я» и «Неизвестный». */

@@ -10,7 +10,7 @@
 
 import type { Segment, Transcript } from "./types";
 
-const SEGMENT_KEYS = ["start", "end", "speaker", "text", "uncertain", "kind", "has_words"] as const;
+const SEGMENT_KEYS = ["start", "end", "speaker", "text", "uncertain", "kind", "has_words", "track", "room"] as const;
 
 export function sameSegments(a: Segment[], b: Segment[]): boolean {
   if (a === b) return true;

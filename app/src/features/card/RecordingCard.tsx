@@ -41,6 +41,7 @@ import { useTextFix } from "./TextFix";
 import { useTurnEdit } from "./TurnEdit";
 import type { PersonColor } from "./Turns";
 import { asrNoteText, systemAudioText } from "./asrNote";
+import { MicSplitNote } from "./micSplit";
 import { PaneResizer } from "../../ui/PaneResizer";
 import "./card.css";
 
@@ -611,6 +612,10 @@ export function RecordingCard({
       )}
       {status.kind === "ready" && asrNoteText(rec.asr_note) && (
         <p className="muted card__note" role="note">{asrNoteText(rec.asr_note)}</p>
+      )}
+      {status.kind === "ready" && (
+        <MicSplitNote info={rec.mic_split} diarization={rec.diarization} onOpenSettings={onOpenSettings}
+          onShowRemoved={() => openSpeakers()} />
       )}
       {systemAudioText(rec.system_audio, rec.system_audio_reason) && (
         <p className="muted card__note" role="note">

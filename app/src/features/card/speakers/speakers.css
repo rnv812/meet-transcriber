@@ -46,6 +46,15 @@
 .spk-row__who { flex: 1; min-width: 0; }
 .spk-row__name { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; font-weight: 600; color: var(--text); }
 .spk-row__label--unnamed { color: var(--text-2); }
+/* Дорожка спикера записи звонка: «в комнате» — голос с микрофона владельца. */
+.spk-badge {
+  align-self: center; padding: 0 6px; border: 1px solid var(--line-2); border-radius: 8px;
+  color: var(--text-2); font-size: 11px; font-weight: 500; line-height: 16px;
+}
+/* «Убрано с микрофона»: повторы, оставленные в расшифровке один раз. */
+.spk-removed { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; padding: 0 2px; font-size: 12px; }
+.spk-removed__head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--text-2); }
+.spk-removed__why { margin-right: 6px; }
 .spk-row__change { color: var(--accent-hover); font-weight: 500; font-size: 12px; }
 .spk-row__stats { margin-top: 2px; font-size: 11px; }
 .spk-row__bar { height: 3px; margin-top: 4px; border-radius: 2px; background: var(--line-2); overflow: hidden; }

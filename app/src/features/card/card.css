@@ -131,6 +131,13 @@ button.turn__speaker { padding: 0; border: 0; background: none; font-family: inh
 button.turn__speaker:hover { text-decoration: underline; }
 .turn__speaker--unnamed:hover { color: var(--accent-hover); }
 .turn__flag { color: var(--amber); font-size: 11px; }
+/* Человек рядом с владельцем в комнате: голос с микрофона (meet.mic_split). */
+.turn__room {
+  padding: 0 5px; border: 1px solid var(--line-2); border-radius: 8px;
+  color: var(--text-2); font-size: 11px; line-height: 15px;
+}
+.mic-note { display: flex; flex-direction: column; gap: 2px; }
+.mic-note__line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
 /* ✦ «Спросить агента» у реплики: видна при наведении и фокусе (и с клавиатуры — A). */
 .turn__ask { align-self: center; margin: -3px 0; opacity: 0; }
 .turn:hover .turn__ask, .turn:focus-within .turn__ask, .turn:focus .turn__ask, .turn__ask:focus-visible { opacity: 1; }

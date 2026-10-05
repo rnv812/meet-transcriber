@@ -1,7 +1,12 @@
 import type { Segment } from "./types";
 
 export type Turn = {
+  /** `uncertain` — нахлёст спикеров (диаризация собеседников). */
   speaker: string; start: number; end: number; texts: string[]; uncertain: boolean;
+  /** Человек рядом с владельцем в комнате (голос с микрофона, не владелец). */
+  room?: boolean;
+  /** Голос микрофона под вопросом: подписан владельцем, но мог быть кто-то рядом. */
+  unsure?: boolean;
   /** "break" — отметка перерыва объединённой встречи: разделитель, не реплика. */
   kind?: "break";
   /** Номера сегментов транскрипта, из которых склеена реплика (для правки спикера). */
@@ -25,13 +30,20 @@ export function mergeTurns(segments: Segment[]): Turn[] {
     }
     // Пустой спикер — как null (так же склеивает и поиск резидента, meet/search.py).
     const speaker = s.speaker || NO_SPEAKER;
+    // `uncertain` у микрофона — голос под вопросом, у собеседников — нахлёст.
+    const unsure = s.uncertain && s.track === "mic";
+    const overlap = s.uncertain && !unsure;
     if (cur && cur.speaker === speaker && s.start - cur.end < GAP_S) {
       cur.texts.push(s.text);
       cur.end = Math.max(cur.end, s.end);
-      if (s.uncertain) cur.uncertain = true;
+      if (overlap) cur.uncertain = true;
+      if (unsure) cur.unsure = true;
+      if (s.room) cur.room = true;
       cur.idx?.push(i);
     } else {
-      cur = { speaker, start: s.start, end: s.end, texts: [s.text], uncertain: s.uncertain, idx: [i] };
+      cur = { speaker, start: s.start, end: s.end, texts: [s.text], uncertain: overlap, idx: [i] };
+      if (unsure) cur.unsure = true;
+      if (s.room) cur.room = true;
       out.push(cur);
     }
   });

@@ -157,7 +157,16 @@ export const Turns = memo(function Turns({
                       else onNameSpeaker?.(t.speaker);
                     }}>{t.speaker}</button>
                 )}
+                {t.room && !textPhase && (
+                  <span className="turn__room" title="Голос с вашего микрофона: человек рядом с вами">в комнате</span>
+                )}
                 {t.uncertain && <span className="turn__flag">(нахлёст)</span>}
+                {t.unsure && (
+                  <span className="turn__flag"
+                    title="Голос с микрофона похож на ваш не наверняка: возможно, говорил кто-то рядом">
+                    (голос под вопросом)
+                  </span>
+                )}
                 {onAskAgent && (
                   <AskAgentButton className="turn__ask" label="Спросить агента об этой реплике"
                     title="Спросить агента об этой реплике (A)" aria-keyshortcuts="A"
