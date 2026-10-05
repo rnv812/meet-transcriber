@@ -44,7 +44,10 @@ TAIL_DEFAULT = 200
 # столько ждём, потом обрываем — один ребёнок за раз.
 TAIL_CUT_WAIT_S = 5.0
 # «Запись с ассистентом»: столько ждём, пока у только что начатой записи
-# откроются дорожки (отвод и папка), чтобы подключить к ней ассистента.
+# откроются устройства (её `record.started`), чтобы подключить к ней ассистента.
+# Оболочка ждёт ответа /live/start и /live/attach 30 с (api.rs, LIVE_TIMEOUT):
+# проверка провайдера (~1 с) + это + обрыв хвоста (TAIL_CUT_WAIT_S +
+# live_control.JOIN_SLACK_S) + запуск ребёнка — около 22 с, с запасом.
 LIVE_RECORD_WAIT_S = 10.0
 
 PACKAGE = "meet-transcriber"
@@ -1168,7 +1171,9 @@ class TrayControl:
             raise _bad_request("Ассистент уже включён" if st.get("attached") or st.get("active")
                                else "Ассистент ещё запускается или останавливается — "
                                     "попробуйте через несколько секунд")
-        if not _provider_installed(settings.load()):
+        # «Запись с ассистентом» провайдера уже проверила: второй раз — лишняя
+        # секунда к ответу (TCP к локальной модели), а у оболочки предел.
+        if not with_recording and not _provider_installed(settings.load()):
             raise _conflict(assistant.NO_PROVIDER)
         hub = getattr(self.tray, "pcm_tap", None)
         if hub is None or not hub.active():

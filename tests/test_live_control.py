@@ -480,6 +480,29 @@ def test_shutdown_join_fits_the_shell_timeout():
     assert live_control.SHUTDOWN_WAIT_S + live_control.JOIN_SLACK_S < 70
 
 
+def test_live_start_and_attach_fit_the_shell_timeout():
+    """Оболочка ждёт ответа /live/start и /live/attach 30 с (api.rs
+    LIVE_TIMEOUT). Худший случай /live/start: проверка провайдера (до ~1 с,
+    TCP к локальной модели), ожидание устройств записи, обрыв хвоста прошлого
+    ассистента (дедлайн + ожидание потока), запуск ребёнка — с запасом."""
+    worst = (1.0 + tray_control.LIVE_RECORD_WAIT_S
+             + tray_control.TAIL_CUT_WAIT_S + live_control.JOIN_SLACK_S + 1.0)
+    assert worst + 5.0 <= 30.0
+
+
+def test_attach_from_live_start_checks_the_provider_once(resident, monkeypatch):
+    """«Запись с ассистентом» уже проверила провайдера — подключение не
+    проверяет его второй раз (это TCP к локальной модели, до секунды)."""
+    from meet.llm import detect
+
+    calls = []
+    monkeypatch.setattr(detect, "available",
+                        lambda base_url=None: calls.append(1) or {"codex": {"found": True}})
+    reply = resident.live_start()
+    assert reply["ok"] is True
+    assert len(calls) == 1
+
+
 def test_stop_error_is_surfaced_and_recording_kept(make_live, tmp_path):
     live, stub, rec = make_live("stop-error")
     live.start(tmp_path / "recordings")

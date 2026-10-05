@@ -19,7 +19,10 @@ const TIMEOUT: Duration = Duration::from_secs(3);
 /// того, как резидент дождётся потока записи (до 60 с): короткий таймаут дал бы
 /// ложную ошибку при медленной, но успешной остановке.
 const LONG_TIMEOUT: Duration = Duration::from_secs(70);
-const LIVE_START_TIMEOUT: Duration = Duration::from_secs(20);
+/// `/live/start` и `/live/attach`: резидент ждёт, пока у записи откроются
+/// устройства (до 10 с, `tray_control.LIVE_RECORD_WAIT_S`), и обрывает хвост
+/// прошлого ассистента (до 5 + 5 с) — в худшем случае около 22 с.
+const LIVE_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub enum Error {
@@ -94,9 +97,8 @@ impl Client {
 fn timeout_for(path: &str) -> Duration {
     match path {
         "/shutdown" | "/recording/stop" | "/recording/cancel" => LONG_TIMEOUT,
-        // Запись с ассистентом: резидент ждёт, пока у записи откроются дорожки
-        // (до 10 с, `tray_control.LIVE_RECORD_WAIT_S`), и запускает ассистента.
-        "/live/start" => LIVE_START_TIMEOUT,
+        // Запись с ассистентом и «Включить ассистента»: см. LIVE_TIMEOUT.
+        "/live/start" | "/live/attach" => LIVE_TIMEOUT,
         _ => TIMEOUT,
     }
 }
@@ -246,7 +248,13 @@ mod tests {
         assert_eq!(timeout_for("/recording/stop"), Duration::from_secs(70));
         assert_eq!(timeout_for("/recording/cancel"), Duration::from_secs(70));
         assert_eq!(timeout_for("/recording/start"), Duration::from_secs(3));
-        // Дольше, чем резидент ждёт дорожки записи с ассистентом (10 с).
-        assert_eq!(timeout_for("/live/start"), Duration::from_secs(20));
+    }
+
+    #[test]
+    fn live_start_and_attach_outlast_the_resident_waits() {
+        // Резидент ждёт устройства записи (до 10 с) и обрывает хвост прошлого
+        // ассистента (до 5 + 5 с): вместе с проверкой провайдера — около 22 с.
+        assert_eq!(timeout_for("/live/start"), Duration::from_secs(30));
+        assert_eq!(timeout_for("/live/attach"), Duration::from_secs(30));
     }
 }
