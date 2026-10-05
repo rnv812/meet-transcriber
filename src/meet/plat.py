@@ -48,22 +48,32 @@ def pid_alive(pid: int) -> bool:
     """Жив ли процесс.
 
     IMPORTANT: `os.kill(pid, 0)` на Windows — не проверка, а безусловный
-    TerminateProcess (убьёт запись); там — OpenProcess через ctypes. На macOS
+    TerminateProcess (убьёт запись); там — OpenProcess через ctypes и код
+    выхода: пока кто-то держит хэндл умершего процесса (оболочка — резидента,
+    Popen — своего ребёнка), OpenProcess на него удаётся, и одно это сказало
+    бы «жив» — замок записи и временные папки мёртвого процесса считались бы
+    занятыми. Код выхода не узнали — «жив» (не трогаем чужое зря). На macOS
     сигнал 0 ничего не посылает: ESRCH — процесса нет, EPERM — есть, но чужой.
     """
     if pid <= 0:
         return False
     if is_windows():
         import ctypes
+        from ctypes import wintypes
 
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION, False, pid
-        )
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
             return False
-        ctypes.windll.kernel32.CloseHandle(handle)
-        return True
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

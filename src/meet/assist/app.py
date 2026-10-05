@@ -49,30 +49,12 @@ PARENT_POLL_S = 1.0  # как резидент следит за оболочк�
 
 
 def _pid_alive(pid: int) -> bool:
-    """Жив ли процесс — по коду выхода, а не по OpenProcess: оболочка держит
-    хэндл резидента, и открыть уже умерший процесс по нему удаётся
-    (`recorder._pid_alive` сказал бы «жив»). os.kill(pid, 0) на Windows —
-    это TerminateProcess, его нельзя. На macOS — `plat.pid_alive` (сигнал 0)."""
+    """Жив ли процесс — по коду выхода, а не по одному OpenProcess: оболочка
+    держит хэндл резидента, и открыть уже умерший процесс по нему удаётся.
+    Так теперь проверяет и `plat.pid_alive` (на macOS — сигнал 0)."""
     from meet import plat
 
-    if not plat.is_windows():
-        return plat.pid_alive(pid)
-    import ctypes
-    from ctypes import wintypes
-
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    STILL_ACTIVE = 259
-    kernel32 = ctypes.windll.kernel32
-    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not handle:
-        return False
-    try:
-        code = wintypes.DWORD()
-        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-            return True  # не узнали — не останавливаем запись зря
-        return code.value == STILL_ACTIVE
-    finally:
-        kernel32.CloseHandle(handle)
+    return plat.pid_alive(pid)
 
 
 async def _watch_parent(parent_pid: int, stop: asyncio.Event) -> None:

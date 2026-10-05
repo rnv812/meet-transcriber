@@ -75,3 +75,35 @@ def test_pid_alive_on_windows_never_signals(monkeypatch):
 
     monkeypatch.setattr(plat.os, "kill", forbidden)
     assert plat.pid_alive(os.getpid()) is True
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="ветка Windows: OpenProcess и код выхода")
+def test_pid_alive_sees_death_while_someone_holds_the_handle():
+    """Хэндл умершего процесса открыт (Popen ещё жив, оболочка держит
+    резидента): OpenProcess удаётся, но мёртвый — по коду выхода. Иначе замок
+    записи, маркер GPU и временные папки мёртвого процесса считались бы чужими."""
+    import subprocess
+
+    assert plat.pid_alive(os.getpid()) is True
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()  # объект жив — хэндл процесса открыт
+    assert plat.pid_alive(proc.pid) is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="ветка Windows")
+def test_pid_alive_unknown_exit_code_counts_as_alive(monkeypatch):
+    """Код выхода не узнали — «жив»: чужой замок и чужие папки не трогаем зря."""
+    import ctypes
+
+    real = ctypes.windll.kernel32
+
+    class Kernel32:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        @staticmethod
+        def GetExitCodeProcess(handle, code):
+            return 0
+
+    monkeypatch.setattr(ctypes.windll, "kernel32", Kernel32())
+    assert plat.pid_alive(os.getpid()) is True
