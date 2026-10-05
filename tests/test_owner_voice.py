@@ -388,3 +388,19 @@ def test_sample_edits_keep_suggestion_and_outcome(tmp_path):
     owner_voice.remove(s.id, tmp_path)
     assert owner_voice.suggestion(tmp_path) is not None
     assert owner_voice.derived(tmp_path)["status"] == "suggested"
+
+
+def test_clear_derived_only_if_unchanged(tmp_path):
+    """Устаревшая причина снимается, но не затирает итог, записанный поиском
+    тем временем; предложение и образцы не трогаются."""
+    owner_voice.save_derived({"status": "already", "reason": "уже есть", "sample_id": "x"}, None,
+                             voices=tmp_path)
+    old = owner_voice.derived(tmp_path)
+    owner_voice.save_derived({"status": "suggested"}, {"embedding": A, "meetings": ["r1"],
+                                                       "samples": [], "seconds": 90}, voices=tmp_path)
+    assert owner_voice.clear_derived(old, tmp_path) is False
+    assert owner_voice.derived(tmp_path)["status"] == "suggested"
+    now = owner_voice.derived(tmp_path)
+    assert owner_voice.clear_derived(now, tmp_path) is True
+    assert owner_voice.derived(tmp_path) is None and owner_voice.suggestion(tmp_path) is not None
+    assert owner_voice.clear_derived(now, tmp_path / "пусто") is False

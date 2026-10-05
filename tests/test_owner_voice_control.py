@@ -328,6 +328,8 @@ FOUND = {"embedding": np.eye(8)[0], "meetings": ["2026-10-01_10-00", "2026-10-02
 
 def test_derive_runs_job_and_status_shows_suggestion_without_vector(setup, tmp_path):
     seen = []
+    for d in (1, 2, 3):
+        _recording(tmp_path, f"2026-10-0{d}_10-00")
     takes = setup(spawn=_derive_spawn({"status": "suggested", "reason": None}, FOUND, seen))
     got = takes.derive()
     assert got["derive"]["running"] is True or got["suggestion"] is not None
@@ -337,7 +339,7 @@ def test_derive_runs_job_and_status_shows_suggestion_without_vector(setup, tmp_p
     assert job.options == {"derive": True, "recordings": str(tmp_path / "recordings")}
     status = takes.status()
     assert status["suggestion"] == {k: v for k, v in FOUND.items() if k != "embedding"} | {
-        "date": status["suggestion"]["date"]}
+        "date": status["suggestion"]["date"], "conflict": False}
     assert status["derive"]["last"]["status"] == "suggested" and status["derive"]["error"] is None
     assert status["samples"] == []  # без подтверждения — не образец
 
@@ -407,6 +409,76 @@ def test_derive_refused_during_take(setup):
     with pytest.raises(control.Conflict, match="записывается"):
         takes.derive()
     gate.set()
+
+
+def _recording(tmp_path, name):
+    folder = tmp_path / "recordings" / name
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "mic.opus").write_bytes(b"")
+    return folder
+
+
+TODAY = 1_791_331_200.0 + 12 * 3600  # 2026-10-07, полдень по UTC
+
+
+def test_stale_reasons_are_dropped(setup, tmp_path):
+    """Причина последнего поиска перестала быть правдой — окно её не видит,
+    и из файла она снимается."""
+    voices = tmp_path / "voices"
+    takes = setup(clock=lambda: TODAY)
+    sample = owner_voice.add(np.eye(8)[0], source="enroll", seconds=20, voices=voices)
+    owner_voice.save_derived({"status": "already", "reason": "уже есть", "sample_id": sample.id,
+                              "date": "2026-10-06"}, None, voices=voices)
+    assert takes.status()["derive"]["last"]["status"] == "already"
+    owner_voice.remove(sample.id, voices)
+    assert takes.status()["derive"]["last"] is None and owner_voice.derived(voices) is None
+
+    (voices / "Демьян.json").write_text('{"samples": []}', encoding="utf-8")
+    owner_voice.save_derived({"status": "in_base", "reason": "похож на «Демьян»", "person": "Демьян",
+                              "date": "2026-10-06"}, None, voices=voices)
+    assert takes.status()["derive"]["last"]["person"] == "Демьян"
+    (voices / "Демьян.json").unlink()
+    assert takes.status()["derive"]["last"] is None
+
+    _recording(tmp_path, "2026-10-05_10-00")
+    owner_voice.save_derived({"status": "too_few", "reason": "мало", "newest": "2026-10-05_10-00",
+                              "date": "2026-10-06"}, None, voices=voices)
+    assert takes.status()["derive"]["last"]["status"] == "too_few"
+    _recording(tmp_path, "2026-10-06_15-00")  # новая встреча — повод искать снова
+    assert takes.status()["derive"]["last"] is None
+
+
+def test_old_reason_is_dropped_after_a_week(setup, tmp_path):
+    voices = tmp_path / "voices"
+    owner_voice.save_derived({"status": "inconsistent", "reason": "по-разному", "date": "2026-09-29"},
+                             None, voices=voices)
+    assert setup(clock=lambda: TODAY).status()["derive"]["last"] is None
+    owner_voice.save_derived({"status": "inconsistent", "reason": "по-разному", "date": "2026-10-01"},
+                             None, voices=voices)
+    assert setup(clock=lambda: TODAY).status()["derive"]["last"]["reason"] == "по-разному"
+
+
+def test_suggestion_drops_samples_of_deleted_recordings_and_keeps_conflict(setup, tmp_path):
+    voices = tmp_path / "voices"
+    for d in (1, 2):
+        _recording(tmp_path, f"2026-10-0{d}_10-00")
+    owner_voice.save_derived({"status": "suggested"}, {**FOUND, "conflict": True}, voices=voices)
+    got = setup().status()["suggestion"]
+    assert [r["recording"] for r in got["samples"]] == ["2026-10-01_10-00", "2026-10-02_10-00"]
+    assert got["conflict"] is True
+
+
+def test_derive_job_id_is_shown_and_stop_cancels(setup):
+    gate = threading.Event()
+    takes = setup(spawn=_derive_spawn({"status": "too_few", "reason": "мало"}, gate=gate))
+    job_id = takes.derive()["derive"]["job"]
+    assert job_id and takes.jobs.get(job_id).kind == jobs.OWNER_VOICE
+    assert _wait(lambda: takes.jobs.get(job_id).state == jobs.RUNNING)
+    assert takes.jobs.cancel(job_id)
+    gate.set()
+    assert _wait(lambda: not takes.status()["derive"]["running"])
+    got = takes.status()["derive"]
+    assert got["error"] is None and got["job"] is None
 
 
 def test_readiness_names_what_is_missing(monkeypatch):

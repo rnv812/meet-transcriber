@@ -66,6 +66,10 @@ DERIVE_BUSY = "Идёт поиск вашего голоса по прошлым
 DERIVE_TAKE = "Образец голоса сейчас записывается — искать по встречам можно после этого"
 DERIVE_SLOT = "Образец голоса сейчас разбирается — искать по встречам можно после этого"
 NO_SUGGESTION = "Предложения уже нет — запустите поиск по прошлым встречам снова"
+# Причина последнего поиска («ничего не предложено») показывается не дольше
+# недели и пока она правда: совпавший образец на месте, человек — в базе,
+# новых встреч не появилось. Иначе она снимается.
+NOTE_MAX_DAYS = 7
 
 
 def readiness(downloading: bool = False) -> str | None:
@@ -113,12 +117,25 @@ def configured_recordings() -> Path:
     return settings.load().recording.recordings
 
 
-def public_suggestion(found: dict | None) -> dict | None:
-    """Найденный голос для окна — без вектора: встречи и участки для прослушивания."""
+def _playable(ref: dict, root: Path) -> bool:
+    """Кусок ещё можно послушать: запись (и её микрофон) не удалена."""
+    from meet import library
+
+    name = ref.get("recording")
+    if not isinstance(name, str) or not name or Path(name).name != name or name in (".", ".."):
+        return False
+    return library.find_track(Path(root) / name, "mic") is not None
+
+
+def public_suggestion(found: dict | None, root: Path | None = None) -> dict | None:
+    """Найденный голос для окна — без вектора: встречи и участки для
+    прослушивания (кроме кусков удалённых с тех пор записей)."""
     if found is None:
         return None
-    return {"meetings": found["meetings"], "samples": found["samples"], "seconds": found["seconds"],
-            "quality": found.get("quality"), "date": found.get("date")}
+    samples = found["samples"] if root is None else [r for r in found["samples"] if _playable(r, root)]
+    return {"meetings": found["meetings"], "samples": samples, "seconds": found["seconds"],
+            "quality": found.get("quality"), "date": found.get("date"),
+            "conflict": bool(found.get("conflict"))}
 
 
 def public(sample: owner_voice.OwnerSample) -> dict:
@@ -201,7 +218,7 @@ class OwnerTakes:
         return {"samples": [public(s) for s in owner_voice.load(voices)],
                 "take": take, "ready": reason is None, "reason": reason,
                 "recording": bool(self.busy()), "seconds": RECORD_S,
-                "suggestion": public_suggestion(owner_voice.suggestion(voices)),
+                "suggestion": public_suggestion(owner_voice.suggestion(voices), self._root()),
                 "derive": self._derive_status(voices)}
 
     def record(self, body: dict | None) -> dict:
@@ -246,13 +263,56 @@ class OwnerTakes:
         job = self.queue.get(job_id) if job_id else None
         return job if job is not None and job.state in (jobs.QUEUED, jobs.RUNNING) else None
 
+    def _root(self) -> Path | None:
+        try:
+            return Path(self._recordings())
+        except Exception:
+            return None  # нечитаемые настройки — без проверки записей
+
     def _derive_status(self, voices: Path) -> dict:
         job = self.queue.get(self._derive_job) if self._derive_job else None
         running = job is not None and job.state in (jobs.QUEUED, jobs.RUNNING)
         error = None
         if job is not None and job.state == jobs.FAILED:
             error = job.error or "Поиск не удался"
-        return {"running": running, "error": error, "last": owner_voice.derived(voices)}
+        return {"running": running, "job": job.id if running else None, "error": error,
+                "last": self._last(voices)}
+
+    def _last(self, voices: Path) -> dict | None:
+        """Итог последнего поиска; устаревший — снимается (и в файле)."""
+        last = owner_voice.derived(voices)
+        if not last or last.get("status") == "suggested":
+            return last  # предложение показывает карточка, причина не нужна
+        if self._stale(last, voices):
+            owner_voice.clear_derived(last, voices)
+            return None
+        return last
+
+    def _stale(self, last: dict, voices: Path) -> bool:
+        from datetime import date
+
+        try:
+            when = date.fromisoformat(str(last.get("date")))
+        except ValueError:
+            return True
+        if (date.fromtimestamp(self._clock()) - when).days > NOTE_MAX_DAYS:
+            return True
+        status = last.get("status")
+        if status == "already":
+            return last.get("sample_id") not in {s.id for s in owner_voice.load(voices)}
+        if status == "in_base":
+            person = last.get("person")
+            if not isinstance(person, str) or Path(person).name != person:
+                return True
+            return not (Path(voices) / f"{person}.json").is_file()
+        root = self._root()
+        if root is not None:
+            from meet import owner_derive
+
+            newest = owner_derive.newest_recording(root)
+            if newest is not None and newest > str(last.get("newest") or ""):
+                return True  # с тех пор записаны новые встречи — стоит искать снова
+        return False
 
     def derive(self) -> dict:
         """Запустить поиск голоса по прошлым встречам. Найденное — только

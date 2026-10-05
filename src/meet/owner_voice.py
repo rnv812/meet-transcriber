@@ -357,8 +357,10 @@ def _suggestion_of(data: dict) -> dict | None:
     vec = _vector(raw.get("embedding"))
     if vec is None:
         return None
-    meetings = [m for m in raw.get("meetings") or [] if isinstance(m, str)]         if isinstance(raw.get("meetings"), list) else []
-    samples = [x for x in raw.get("samples") or [] if isinstance(x, dict)]         if isinstance(raw.get("samples"), list) else []
+    meetings = ([m for m in raw["meetings"] if isinstance(m, str)]
+                if isinstance(raw.get("meetings"), list) else [])
+    samples = ([x for x in raw["samples"] if isinstance(x, dict)]
+               if isinstance(raw.get("samples"), list) else [])
     return {**raw, "embedding": vec, "meetings": meetings, "samples": samples,
             "seconds": _optional_float(raw.get("seconds")) or 0.0,
             "quality": _optional_float(raw.get("quality"))}
@@ -397,7 +399,9 @@ def save_derived(outcome: dict, found: dict | None, voices: Path | None = None) 
 
 def accept_suggestion(voices: Path | None = None) -> OwnerSample | None:
     """«Да, это я»: найденный голос — образцом `auto` (прежний auto
-    заменяется), предложение снимается. Предложения нет — None."""
+    заменяется), предложение снимается. Предложения нет — None.
+    Совпадения с образцами и базой голосов здесь не перепроверяются: их
+    проверил поиск, а решение — за человеком, который голос послушал."""
     p = path(voices)
     with _locked(p):
         data = _read(p)
@@ -422,4 +426,19 @@ def clear_suggestion(voices: Path | None = None) -> bool:
         if data.get("suggestion") is None:
             return False
         _write(p, {**data, "suggestion": None}, _samples_of(data))
+    return True
+
+
+def clear_derived(expect: dict, voices: Path | None = None) -> bool:
+    """Снять устаревший итог поиска (его причина больше не верна: образец
+    удалён, человека нет в базе, появились новые встречи), если он всё ещё
+    тот же `expect` — новый итог идущего поиска не затирается. → снят ли."""
+    p = path(voices)
+    if not p.exists():
+        return False
+    with _locked(p):
+        data = _read(p)
+        if data.get("derived") != expect:
+            return False
+        _write(p, {**data, "derived": None}, _samples_of(data))
     return True
