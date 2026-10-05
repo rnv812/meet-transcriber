@@ -301,6 +301,17 @@ def _confirm_cancel() -> bool:
     return ctypes.windll.user32.MessageBoxW(None, text, CANCEL_TITLE, flags) == 6
 
 
+class RecordAttempt:
+    """Чем кончился поток одной записи: `done` — кончился, `error` — не
+    стартовала (lock, устройство), `folder` — сохранена. Своё у каждой
+    попытки: общий `result` тикер чистит (`_collect_error`)."""
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.error: str | None = None
+        self.folder = None
+
+
 class TrayApp:
     """Состояние трея: дежурю или пишу, и кто эту запись начал.
 
@@ -343,15 +354,11 @@ class TrayApp:
         # (meet.pcm_tap): запись отдаёт ему копию байтов дорожек.
         self.pcm_tap = pcm_tap.TapHub()
         # (discard) -> None: запись уже остановлена (захват кончился в момент
-        # «Стоп», отвод закрыт) — дождаться подключённого к ней ассистента
-        # (TrayControl): он дописывает сводку из того, что успел получить, до
-        # сохранения записи и до удаления папки при отмене.
+        # «Стоп», отвод закрыт) — что делать с подключённым к ней ассистентом
+        # (TrayControl): сохраняемую запись он не задерживает — дописывает
+        # хвост ленты и сводку в её папку в фоне; при отмене его убивают
+        # сразу, до удаления папки. Не ждёт.
         self.after_stop = None
-        # () -> bool: дописывать остановленную запись (ожидание ассистента,
-        # сохранение, хук) в фоне — к ней подключён ассистент, а его ждать
-        # долго (TrayControl). Сама остановка записи его не ждёт.
-        self.finish_in_background = None
-        self.finishing: threading.Thread | None = None
         # Идёт остановка записи: ассистента в неё уже не включить.
         self.stopping = False
         # Чем кончилась последняя запись: {"folder", "reason", "at"} (см.
@@ -380,8 +387,10 @@ class TrayApp:
 
     # --- запись ---------------------------------------------------------
 
-    def start_recording(self, source: str) -> bool:
-        """Поднять запись. False — если запись уже идёт (своя или ассистента)."""
+    def start_recording(self, source: str, attempt: "RecordAttempt | None" = None) -> bool:
+        """Поднять запись. False — если запись уже идёт (своя или ассистента).
+        `attempt` — канал этой попытки: чем кончился поток записи (ошибка
+        старта не теряется, даже когда тикер уже забрал её из `result`)."""
         with self._mutex:
             if self.recording or self._live_busy():
                 return False
@@ -400,7 +409,7 @@ class TrayApp:
             # если join истечёт по таймауту, доживающий поток допишет их в свой
             # словарь, а не в состояние следующей записи
             self.thread = threading.Thread(
-                target=self._run_record, args=(result, stop_event), daemon=True
+                target=self._run_record, args=(result, stop_event, attempt), daemon=True
             )
             self.thread.start()
         self._refresh()
@@ -412,14 +421,22 @@ class TrayApp:
         except Exception:
             return False  # сбой проверки не должен запрещать запись
 
-    def _run_record(self, result: dict, stop_event: threading.Event) -> None:
+    def _run_record(self, result: dict, stop_event: threading.Event,
+                    attempt: "RecordAttempt | None" = None) -> None:
         try:
             result["folder"] = record(
                 str(_out_root()), stop_event=stop_event, bus=self.bus,
                 pcm_tap=self.pcm_tap,
             )
+            if attempt is not None:
+                attempt.folder = result["folder"]
         except BaseException as e:  # и SystemExit «запись уже идёт»
             result["error"] = str(e) or repr(e)
+            if attempt is not None:
+                attempt.error = result["error"]
+        finally:
+            if attempt is not None:
+                attempt.done.set()
 
     def _clear_own_lock(self) -> None:
         """Снять lock записи, оставшийся от нас самих.
@@ -450,8 +467,8 @@ class TrayApp:
         with self._mutex:
             if not self.recording:
                 return
-            # Захват кончается в момент «Стоп»: ассистента, подключённого к
-            # записи, ждём уже после (after_stop), а не до остановки.
+            # Захват кончается в момент «Стоп»; подключённый ассистент своё
+            # дописывает после (after_stop), сохранение записи его не ждёт.
             self.stopping = True
             self.stop_event.set()
             thread, result = self.thread, self.result
@@ -478,34 +495,6 @@ class TrayApp:
             # lock, пустив вторую запись в ту же папку.
             self.thread = None if not alive else thread
             self.stopping = False
-        args = (result, alive, discard, hook, source)
-        if self._finish_later():
-            # Захват уже кончился; подключённого ассистента (он дописывает
-            # сводку) ждём в фоне, и только потом — сохранение и хук.
-            finishing = threading.Thread(target=self._after_capture, args=args,
-                                         name="meet-record-finish", daemon=True)
-            self.finishing = finishing
-            finishing.start()
-            self._refresh()
-            return
-        self._after_capture(*args)
-
-    def _finish_later(self) -> bool:
-        try:
-            return bool(self.finish_in_background and self.finish_in_background())
-        except Exception:
-            return False
-
-    def wait_finished(self, timeout: float | None = None) -> None:
-        """Дождаться фонового конца остановленной записи (выход резидента)."""
-        finishing = self.finishing
-        if finishing is not None and finishing is not threading.current_thread():
-            finishing.join(timeout)
-
-    def _after_capture(self, result: dict, alive: bool, discard: bool, hook: bool,
-                       source) -> None:
-        """Захват кончился: дождаться подключённого ассистента, затем
-        сохранить запись (очередь, хук) или удалить отменённую."""
         if self.after_stop is not None:
             try:
                 self.after_stop(discard)
@@ -758,8 +747,11 @@ class TrayApp:
             self.log("звонок начался, запись уже идёт — не вмешиваюсь")
             return
         if self._live_busy():
-            # Нарочно: запись с ассистентом уже пишет этот звонок.
+            # Нарочно: запись с ассистентом уже пишет этот звонок. START не
+            # съедаем — освободился ассистент, а звонок идёт: следующий такт
+            # попробует снова.
             self.log("звонок начался, пишет ассистент — не вмешиваюсь")
+            self.watcher.release()
             return
         left = self._retry_after - time.monotonic()
         if left > 0:
@@ -891,9 +883,9 @@ class TrayApp:
     def _stop_services(self, api) -> None:
         """Погасить то, что резидент держит подпроцессами, и только потом API.
 
-        Ассистент первым и с ожиданием (до 60 с, дальше убийство дерева): он
-        пишет встречу, и осиротевший держал бы микрофон и lock записи. Его
-        `live.stopped` ставит расшифровку — очередь ещё жива. Очереди задач —
+        Ассистент первым: запись, к которой он подключён, уже сохранена её
+        остановкой (её расшифровка в очереди), осталось дописать его хвост —
+        до SHUTDOWN_WAIT_S (10 с), дальше убийство дерева. Очереди задач —
         раньше сервера: иначе идущая расшифровка (подпроцесс job_worker)
         осиротеет, продолжая держать VRAM и gpu.lock, невидимая для очереди
         перезапущенного резидента."""

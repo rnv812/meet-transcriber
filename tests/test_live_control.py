@@ -351,6 +351,7 @@ def test_stop_asks_child_and_reports_stopped(make_live, data_dir, tmp_path):
     assert rec.last(live_control.LIVE_STOPPED).data["folder"] == folder
     assert live.status() == {"active": False, "starting": False, "stopping": False,
                              "ready": False, "stage": None, "error_at": None,
+                             "finishing": False, "with_recording": False,
                              "folder": None, "error": None, "started_at": None,
                              "attached": False, "ended_by": "stop"}
     assert not (data_dir / "live.json").exists()
@@ -836,7 +837,6 @@ def resident(monkeypatch, tmp_path):
         yield state
     finally:
         app.stop_recording()
-        app.wait_finished(30)
         state.live.stop(wait=True)
         stub.cleanup()
 
@@ -965,7 +965,6 @@ def test_shutdown_waits_until_live_finalizes(resident, monkeypatch):
 def test_shutdown_wait_is_bounded(resident, monkeypatch):
     monkeypatch.setattr(resident.tray, "request_exit", lambda: None)
     monkeypatch.setattr(live_control, "SHUTDOWN_WAIT_S", 0.5)
-    monkeypatch.setattr(tray_control, "ATTACH_STOP_WAIT_S", 0.5)
     resident.stub.mode = "hang"
     resident.live_start()
     _wait_for(lambda: resident.live.status()["active"])
@@ -1137,7 +1136,8 @@ def test_resident_exit_stops_live_before_api(monkeypatch, tmp_path):
     app.run_headless(parent_pid=999999)  # оболочка «умерла»
     assert calls == [("live.stop", True, live_control.SHUTDOWN_WAIT_S),
                      "queue.stop", "llm_queue.stop", "api.stop"]
-    assert live_control.SHUTDOWN_WAIT_S == 60.0
+    # Запись сохраняет её остановка; хвосту ассистента — не больше 10 с.
+    assert live_control.SHUTDOWN_WAIT_S == 10.0
 
 
 # --- сквозь control API ------------------------------------------------------
@@ -1261,7 +1261,6 @@ def test_recording_with_a_failed_assistant_is_saved_transcribed_and_hooked_once(
     assert resident.tray.recording is True
     resident.live_stop()  # «Стоп» записи с ассистентом — остановка самой записи
     _wait_for(lambda: hooks)
-    resident.tray.wait_finished(30)
     folder = str(resident.folder)
     assert hooks == [folder]
     assert resident.queue.submitted == [(jobs.TRANSCRIBE, folder)]
@@ -1291,4 +1290,118 @@ def test_stop_while_the_recording_opens_is_not_reported_as_going_on(resident, mo
     reply = resident.live_start()
     assert reply["ok"] is True and reply["action"] == "stopped"
     assert not reply.get("error")
+    assert resident.stub.argv is None
+
+
+# --- хвост ассистента после остановки записи ------------------------------
+
+
+def _hooks_and_titles(resident, monkeypatch):
+    hooks, titled = [], []
+    monkeypatch.setattr(tray, "_run_post_hook", hooks.append)
+    monkeypatch.setattr(resident, "_live_title", titled.append)
+    monkeypatch.setattr(resident, "_background", lambda fn, name=None: fn())
+    return hooks, titled
+
+
+def test_stop_with_the_assistant_still_attached_saves_at_once(resident, monkeypatch):
+    """Ассистент подключён и слушает: «Стоп» сохраняет запись сразу (source,
+    расшифровка, хук и название — по разу), его хвост идёт после, в фоне."""
+    hooks, titled = _hooks_and_titles(resident, monkeypatch)
+    resident.stub.mode = "slow-finalize"  # дописывает сводку ≥ 1 с
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["ready"])
+    began = time.monotonic()
+    resident.tray.stop_recording()
+    assert time.monotonic() - began < 1.0  # не ждали ассистента
+    folder = str(resident.folder)
+    assert hooks == [folder] and [str(f) for f in titled] == [folder]
+    assert resident.queue.submitted == [(jobs.TRANSCRIBE, folder)]
+    assert library.read_meta(resident.folder)["source"] == "live"
+    status = resident.live.status()
+    assert status["finishing"] is True and status["active"] is False
+    assert resident.live.busy() is False
+    _wait_for(lambda: not resident.live.finishing())
+    assert resident.stub.note("stop") == [""]  # штатно дописал
+    assert hooks == [folder]  # и ничего не повторилось
+
+
+def test_new_recording_starts_while_the_old_tail_runs(resident, monkeypatch):
+    resident.stub.mode = "hang"  # хвост держится до дедлайна (5 с в фикстуре)
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["active"])
+    resident.tray.stop_recording()
+    assert resident.live.finishing()
+    reply = resident.start_recording()
+    assert reply["ok"] is True and resident.tray.recording is True
+    # Хвост прошлого ассистента пишет только в свою папку и не подключён к новой.
+    assert resident.live.status()["attached"] is False
+    assert resident.live.status()["finishing"] is True
+    resident.tray.stop_recording()
+
+
+def test_cancel_of_a_new_recording_during_the_tail_is_immediate(resident, monkeypatch):
+    resident.stub.mode = "hang"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["active"])
+    resident.tray.stop_recording()
+    assert resident.live.finishing()
+    assert resident.start_recording()["ok"] is True
+    began = time.monotonic()
+    resident.tray.stop_recording(discard=True)
+    assert time.monotonic() - began < 3.0
+    assert not resident.folder.exists()  # удалена сразу
+    assert resident.live.finishing()  # чужой хвост отмена не трогает
+
+
+def test_quit_gives_the_tail_a_short_grace_then_kills_it(resident, monkeypatch):
+    monkeypatch.setattr(resident.tray, "request_exit", lambda: None)
+    monkeypatch.setattr(live_control, "SHUTDOWN_WAIT_S", 0.5)
+    resident.stub.mode = "hang"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["active"])
+    began = time.monotonic()
+    resident.shutdown()
+    assert time.monotonic() - began < 10
+    assert resident.queue.submitted == [(jobs.TRANSCRIBE, str(resident.folder))]
+    assert not resident.live.finishing() and not resident.live.busy()
+
+
+def test_auto_start_right_after_stop_is_not_blocked_by_the_tail(resident, monkeypatch):
+    resident.stub.mode = "hang"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["active"])
+    resident.tray.stop_recording()
+    assert resident.live.finishing()
+    resident.tray._auto_start()
+    assert resident.tray.recording is True and resident.tray.source == tray_control.AUTO
+    resident.tray.stop_recording()
+
+
+def test_auto_start_refused_by_a_running_assistant_keeps_the_call(resident, monkeypatch):
+    released = []
+    monkeypatch.setattr(resident.tray.watcher, "release", lambda: released.append(True))
+    monkeypatch.setattr(resident.tray, "live_busy", lambda: True)
+    resident.tray._auto_start()
+    assert resident.tray.recording is False
+    assert released == [True]  # START не съеден: следующий такт попробует снова
+
+
+def test_live_start_catches_a_recording_that_fails_a_moment_later(resident, monkeypatch):
+    """Запись падает не сразу (устройство через полсекунды), а тикер уже
+    успевает забрать ошибку из общего `result`: старт всё равно её видит."""
+    import threading
+
+    def failing_record(out_root, stop_event=None, *, bus, pcm_tap=None):
+        time.sleep(0.5)
+        raise SystemExit("Запись уже идёт (папка D:/rec/x)")
+
+    monkeypatch.setattr(tray, "record", failing_record)
+    monkeypatch.setattr(resident.tray.pcm_tap, "active", lambda: False)
+    ticker = threading.Timer(0.8, resident.tray._collect_error)  # как такт тикера
+    ticker.start()
+    reply = resident.live_start()
+    ticker.join()
+    assert reply["ok"] is False
+    assert reply["error"] == "Запись не началась: Запись уже идёт (папка D:/rec/x)"
     assert resident.stub.argv is None

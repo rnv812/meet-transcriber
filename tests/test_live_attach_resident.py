@@ -186,29 +186,32 @@ def test_attach_detach_keeps_the_recording_going(resident, monkeypatch, tmp_path
     _wait_for(lambda: not resident.live.busy())
 
 
-def test_stop_ends_the_recording_first_then_waits_for_its_assistant(resident, monkeypatch, tmp_path):
+def test_stop_saves_the_recording_at_once_and_the_assistant_finishes_after(resident, monkeypatch,
+                                                                          tmp_path):
     folder, order = _recording_resident(resident, monkeypatch, tmp_path)
     resident.live_attach()
     _wait_for(lambda: resident.live.status()["active"])
     resident.stop_recording()
-    # Захват кончился в момент «Стоп»; ассистент дописал сводку уже после.
-    assert order == ["record.stopped", "live.stop wait"]
-    # Остановка записи ассистента не ждёт: его дожидается фоновый конец записи.
+    # Захват кончился в момент «Стоп», запись сохранена сразу; ассистенту —
+    # просьба дописать хвост (без ожидания), он пишет его в фоне.
+    assert order == ["record.stopped", "live.stop"]
     assert resident.tray.recording is False
-    resident.tray.wait_finished(30)
+    assert resident.queue.submitted == [(jobs.TRANSCRIBE, str(folder))]
+    assert library.read_meta(Path(folder))["source"] == "record"
+    # Хвост ассистента — не «идёт»: новая запись не заблокирована.
     assert not resident.live.busy()
+    _wait_for(lambda: not resident.live.finishing())
     assert [json.loads(b) for b in resident.stub.note("stop_body")] == [{}]
     # Кончился вместе с записью — трей об этом молчит.
     assert resident.live.status()["ended_by"] == live_control.ENDED_RECORDING
-    # Расшифровка — одна, от записи (не «live»).
-    _wait_for(lambda: resident.queue.submitted)
-    assert resident.queue.submitted == [(jobs.TRANSCRIBE, str(folder))]
-    assert library.read_meta(Path(folder))["source"] == "record"
 
 
-def test_cancelled_recording_waits_for_its_assistant_before_deleting(resident, monkeypatch,
-                                                                     tmp_path):
+def test_cancel_kills_the_assistant_at_once_and_deletes_the_folder_at_once(resident, monkeypatch,
+                                                                           tmp_path):
+    import time
+
     folder, order = _recording_resident(resident, monkeypatch, tmp_path)
+    resident.stub.mode = "hang"  # штатно он не дописал бы и за минуту
     resident.live_attach()
     _wait_for(lambda: resident.live.status()["active"])
     seen = {}
@@ -216,15 +219,18 @@ def test_cancelled_recording_waits_for_its_assistant_before_deleting(resident, m
 
     def finish(discard):
         real_finish(discard)
-        seen["live_gone_before_delete"] = not resident.live.busy() and folder.exists()
+        seen["gone_before_delete"] = resident.live.status()["finishing"] is False \
+            and not resident.live.busy() and folder.exists()
 
     monkeypatch.setattr(resident.tray, "after_stop", finish)
+    began = time.monotonic()
     resident.stop_recording(discard=True)
-    resident.tray.wait_finished(30)
-    assert order == ["record.stopped", "live.stop wait"]
-    assert seen["live_gone_before_delete"] is True
+    assert time.monotonic() - began < 10  # не 90 с хвоста
+    assert seen["gone_before_delete"] is True
     assert not folder.exists()
     assert resident.queue.submitted == []
+    assert resident.live.status()["error"] is None  # отмена — не сбой
+    assert order == ["record.stopped"]  # ни /stop, ни ожидания
 
 
 def test_audio_ends_at_the_click_even_if_the_assistant_takes_its_time(resident, monkeypatch,
@@ -260,9 +266,8 @@ def test_audio_ends_at_the_click_even_if_the_assistant_takes_its_time(resident, 
     click = time.monotonic()
     resident.stop_recording()
     took = time.monotonic() - click
-    assert took < 1.0  # остановка записи ассистента не ждёт…
-    resident.tray.wait_finished(30)
-    assert time.monotonic() - click >= 1.0  # …а сохранение — ждёт (в фоне)
+    assert took < 1.0  # остановка и сохранение записи ассистента не ждут…
+    _wait_for(lambda: not resident.live.finishing())  # …он дописывает своё после
     for writer, began in zip(tr._DummyWriter.instances, created):
         seconds = len(writer.data) / (2 * writer.channels * writer.rate)
         # …а звук кончился в момент нажатия (буфер 1024 кадра — 64 мс).

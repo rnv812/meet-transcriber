@@ -100,12 +100,15 @@ MAX_START_ATTEMPTS = 2  # упавший до готовности старт �
 EXIT_FATAL = 78
 STAGE_RETRY = "повторяю запуск после ошибки…"
 STOP_TIMEOUT_S = 90.0  # финализация дорожек; дальше — убийство дерева
-# Выход резидента (/shutdown, смерть оболочки): оболочка ждёт ответа /shutdown
-# 70 с (app/src-tauri/src/api.rs, LONG_TIMEOUT) — укладываемся с запасом, как
-# остановка обычной записи (join 60 с).
-SHUTDOWN_WAIT_S = 60.0
+# Выход резидента (/shutdown, смерть оболочки, «Выход», обновление): запись к
+# этому моменту уже сохранена её остановкой (ассистент резидента всегда
+# подключён к записи), осталось лишь дописать хвост ленты и сводку. Даём ему
+# столько, потом убиваем. Оболочка ждёт ответа /shutdown 70 с (api.rs,
+# LONG_TIMEOUT): остановка записи (join до 60 с — в худшем случае, обычно
+# доли секунды) + 10 + JOIN_SLACK_S укладываются в это с запасом.
+SHUTDOWN_WAIT_S = 10.0
 # Сверх дедлайна stop(wait=True) ждёт поток наблюдения ещё столько (убийство
-# дерева и событие): 60 + 5 < 70 с оболочки.
+# дерева и событие).
 JOIN_SLACK_S = 5.0
 STOPPED_MARK = "Остановлено:"  # run_assist печатает после удачного engine.stop()
 # Файл эндпоинта исчез после /stop — ребёнок дописал запись (run_assist убирает
@@ -331,6 +334,8 @@ def _last_line(path: Path | None, offset: int) -> str | None:
 # «gigaam.Unavailable: …» после Traceback) или текст отказа (код EXIT_FATAL).
 _EXCEPTION_LINE = re.compile(r"^[A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt)\b.*:")
 TRACEBACK_MARK = "Traceback (most recent call last)"
+# Последняя строка ребёнка при непредвиденном исключении (meet.assist.app.CRASH_MARK).
+CRASH_MARK = "Ассистент упал: "
 
 
 def _child_error(path: Path | None, offset: int, code) -> str:
@@ -343,6 +348,8 @@ def _child_error(path: Path | None, offset: int, code) -> str:
     raw = [line for line in raw if not line.startswith("--- ")]  # строки резидента
     last = raw[-1].strip()[:ERROR_MAX_CHARS] if raw else None
     if last is not None:
+        if last.startswith(CRASH_MARK):
+            return last  # своя строка ребёнка: исключение одной строкой
         if code == EXIT_FATAL or _EXCEPTION_LINE.match(last) or _ends_traceback(raw):
             return last
     return f"Ассистент аварийно завершился (код {_code_text(code)})"
@@ -437,6 +444,10 @@ class LiveControl:
         # Старт не уложился в таймаут, а звук уже писался: остановлен штатно,
         # причина — эта (см. _await_ready).
         self._timeout_error: str | None = None
+        # Запись остановлена — ассистент дописывает хвост в фоне.
+        self._tail = False
+        # Убит сразу (abort): запись отменена, ошибки нет.
+        self._aborted = False
         self._lock = threading.Lock()
         self._emit_lock = threading.RLock()
         self._process = None
@@ -479,29 +490,86 @@ class LiveControl:
     def devices_fallback(self) -> list[dict]:
         """Подмены устройств у идущего ассистента; не идёт — пусто."""
         with self._lock:
-            return [dict(f) for f in self._fallback] if self._active else []
+            return [dict(f) for f in self._fallback] if self._active and not self._tail else []
 
     def busy(self) -> bool:
-        """Идёт или поднимается — вторая запись сейчас невозможна."""
+        """Идёт или поднимается — вторая запись сейчас невозможна. Ассистент,
+        чья запись уже остановлена и сохранена (дописывает хвост в фоне), —
+        не помеха: он не держит ни устройств, ни lock записи."""
         with self._lock:
-            return self._process is not None
+            return self._process is not None and not self._tail
 
     def attached(self) -> bool:
-        """Идёт (или поднимается) ассистент, подключённый к обычной записи."""
+        """Идёт (или поднимается) ассистент, подключённый к идущей записи."""
         with self._lock:
-            return self._process is not None and self._attach is not None
+            return self._process is not None and self._attach is not None and not self._tail
+
+    def finishing(self) -> bool:
+        """Запись остановлена, а её ассистент дописывает хвост в фоне."""
+        with self._lock:
+            return self._process is not None and self._tail
 
     def _status_unlocked(self) -> dict:
-        running = self._process is not None
-        return {"active": self._active, "starting": running and not self._active,
+        # Хвост ассистента остановленной записи — уже не «идёт»: окно и трей
+        # видят простой и дают начать новую запись; папку держим (`folder`),
+        # чтобы её не удалили и не склеили, пока он пишет туда.
+        running = self._process is not None and not self._tail
+        tail = self._process is not None and self._tail
+        return {"active": running and self._active, "starting": running and not self._active,
                 "stopping": running and self._stop_requested,
                 "ready": running and self._ready,
                 "stage": self._stage if running and not self._ready else None,
                 "folder": self._folder,
                 "error": self._error, "error_at": self._error_at,
-                "started_at": self._started_at,
+                "started_at": self._started_at if running else None,
                 "attached": running and self._attach is not None,
-                "ended_by": None if running else self._ended_by}
+                "finishing": tail,
+                # Подключён с самого начала «Записи с ассистентом» (а не
+                # включён посреди обычной записи): трей о готовности молчит.
+                "with_recording": running and bool((self._attach or {}).get("with_recording")),
+                "ended_by": None if running else (ENDED_RECORDING if tail else self._ended_by)}
+
+    def finish_after_recording(self) -> None:
+        """Запись, к которой подключён ассистент, остановлена и сохранена.
+        Его последний проход (хвост ленты, сводка — в папку той записи) идёт в
+        фоне, до STOP_TIMEOUT_S; он ничего не блокирует: ни новую запись, ни
+        автозапись. Новый ассистент сначала его обрывает (`end_tail`)."""
+        with self._emit_lock:
+            with self._lock:
+                if self._process is None or self._attach is None or self._tail:
+                    return
+                self._tail = True
+            self._log("запись сохранена — ассистент дописывает сводку в фоне")
+            self.stop(reason=ENDED_RECORDING)
+
+    def end_tail(self, timeout: float = 5.0) -> None:
+        """Хвост прошлого ассистента мешает новому (один ребёнок за раз):
+        дать ему `timeout` секунд, потом убить. Что он успел — в папке."""
+        if self.finishing():
+            self._log("новый ассистент — обрываю хвост прошлого")
+            self.stop(wait=True, timeout=timeout)
+
+    def abort(self, reason: str | None = None) -> None:
+        """Убить ассистента сразу (запись отменена — её папку удаляют): ни
+        /stop, ни ожидания сводки. Ждём только конца процесса."""
+        with self._emit_lock:
+            with self._lock:
+                process, thread = self._process, self._thread
+                if process is None:
+                    return
+                first = not self._stop_requested
+                self._stop_requested = True
+                self._aborted = True
+                if first:
+                    self._reason = reason
+                self._stop_deadline = time.monotonic()
+            if first:
+                self.bus.emit(LIVE_STOPPING)
+        self._log("ассистент остановлен сразу (запись отменена)")
+        self._kill(process)
+        if thread is not None and thread is not threading.current_thread() \
+                and thread.ident is not None:
+            thread.join(timeout=JOIN_SLACK_S)
 
     # --- старт и стоп ---------------------------------------------------
 
@@ -580,6 +648,8 @@ class LiveControl:
                     self._ready = False
                     self._stage = None
                     self._timeout_error = None
+                    self._tail = False
+                    self._aborted = False
                     self._out_root = out_root
                     self._attempt = 1
                     self._thread = threading.Thread(
@@ -844,6 +914,7 @@ class LiveControl:
                 folder = self._folder
                 attach, detached, reason = self._attach, self._detach, self._reason
                 timeout_error, self._timeout_error = self._timeout_error, None
+                aborted, self._aborted = self._aborted, False
                 if stop_requested or (code == 0 and active and error is None):
                     kind = LIVE_STOPPED
                     if not active:
@@ -870,6 +941,8 @@ class LiveControl:
                         error, complete = _last_line(path, offset), True
                     else:
                         error, complete = None, True
+                    if aborted:
+                        error, complete = None, False  # запись отменена — сводка не нужна
                     if timeout_error:
                         # Остановлен резидентом: старт не уложился в таймаут.
                         error = timeout_error
@@ -891,6 +964,7 @@ class LiveControl:
                     _note_log(path, f"ассистент остановлен с ошибкой: {error}")
                 self._process = None
                 self._thread = None
+                self._tail = False
                 self._active = False
                 self._ready = False
                 self._stage = None

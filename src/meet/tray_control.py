@@ -40,10 +40,9 @@ _META_SOURCE = {AUTO: "auto", LIVE: "live"}
 RESTART_REQUIRED_SECTIONS = ("auto_record",)
 
 TAIL_DEFAULT = 200
-# После остановки записи подключённый ассистент дописывает хвост ленты и
-# сводку (на Whisper CPU — до минуты); ждём его не дольше этого — в фоне, сама
-# остановка записи его не ждёт. Застрявший — убивается, запись это не задевает.
-ATTACH_STOP_WAIT_S = live_control.STOP_TIMEOUT_S
+# Новый ассистент, а хвост прошлого (его запись уже сохранена) ещё пишется:
+# столько ждём, потом обрываем — один ребёнок за раз.
+TAIL_CUT_WAIT_S = 5.0
 # «Запись с ассистентом»: столько ждём, пока у только что начатой записи
 # откроются дорожки (отвод и папка), чтобы подключить к ней ассистента.
 LIVE_RECORD_WAIT_S = 10.0
@@ -447,7 +446,6 @@ class TrayControl:
         # дописывает сводку из того, что успел получить, до сохранения записи
         # и до удаления отменённой папки.
         tray.after_stop = self._finish_attached
-        tray.finish_in_background = self._live_attached
         self.bus.subscribe(self._on_live_event)
         # Выгрузка в базу знаний: по одной за раз (кнопка поверх автоматики не
         # должна писать в ту же папку одновременно). Последний сбой автоматики —
@@ -1069,15 +1067,13 @@ class TrayControl:
     def shutdown(self) -> dict:
         """Выход по просьбе оболочки: идущая запись сохраняется штатно.
 
-        Ассистента ждём здесь же, как и обычную запись (до 60 с, дальше —
-        убийство дерева): после ответа оболочка даёт резиденту всего 10 с на
-        выход, а потом гасит его вместе с ребёнком — финальный проход и
-        закрытие дорожек потерялись бы."""
+        Запись сохраняет её остановка (с ассистентом — тоже, сразу). Хвосту
+        ассистента (лента, сводка) — до SHUTDOWN_WAIT_S, потом его убивают:
+        после ответа оболочка даёт резиденту всего 10 с на выход и гасит его
+        вместе с ребёнком."""
         if self.tray.recording:
             self.tray.stop_recording()
         self.live.stop(wait=True, timeout=live_control.SHUTDOWN_WAIT_S)
-        # Запись с ассистентом сохраняется в фоне после него (stop_recording).
-        self.tray.wait_finished(live_control.JOIN_SLACK_S)
         self.tray.request_exit()
         return {"ok": True}
 
@@ -1099,30 +1095,32 @@ class TrayControl:
         if self.live.busy():
             raise _bad_request("Ассистент ещё запускается или останавливается — "
                                "попробуйте через несколько секунд")
-        if not self.tray.start_recording(LIVE):
+        from meet.tray import RecordAttempt
+
+        attempt = RecordAttempt()
+        if not self.tray.start_recording(LIVE, attempt=attempt):
             raise _bad_request("Запись уже идёт")
         self.tray.log("запись с ассистентом: запись пошла, подключаю ассистента")
         # Отвод и папка записи появляются, когда открылись дорожки (доли секунды).
         hub = getattr(self.tray, "pcm_tap", None)
-        result = getattr(self.tray, "result", None) or {}
         deadline = time.monotonic() + LIVE_RECORD_WAIT_S
-        while time.monotonic() < deadline and self.tray.recording and not result.get("error"):
+        while time.monotonic() < deadline and self.tray.recording and not attempt.done.is_set():
             if hub is not None and hub.active() and \
                     Path(self.tray._current_folder()).is_dir():
                 break
             time.sleep(0.05)
-        if result.get("error"):
+        if attempt.done.is_set() and (attempt.error or not attempt.folder):
             # Не началась сама запись (lock занят, нет устройства): это её
             # ошибка, ассистенту подключаться не к чему.
             return {**self.live.status(), "ok": False,
-                    "error": f"Запись не началась: {result['error']}"}
+                    "error": f"Запись не началась: {attempt.error or 'поток записи завершился'}"}
         if not self.tray.recording:
             # Запись остановили, пока она открывалась: ничего не «продолжается».
             return {**self.live.status(), "ok": True, "action": "stopped"}
         from meet.control import BadRequest, Conflict
 
         try:
-            return self.live_attach()
+            return self.live_attach(with_recording=True)
         except (BadRequest, Conflict) as e:
             if not self.tray.recording:
                 return {**self.live.status(), "ok": True, "action": "stopped"}
@@ -1145,7 +1143,7 @@ class TrayControl:
             return self.live_detach()
         return self.live.stop()
 
-    def live_attach(self) -> dict:
+    def live_attach(self, with_recording: bool = False) -> dict:
         """«Включить ассистента» посреди обычной записи: ребёнок `meet assist`
         берёт звук из отвода записи (`meet.pcm_tap`), второй раз устройства не
         открывает и lock записи не трогает; сначала догоняет уже записанное
@@ -1181,10 +1179,12 @@ class TrayControl:
                 return None
             return pcm_tap.TapServer(hub, log=self.tray.log)
 
+        # Хвост ассистента прошлой записи ещё пишется — один ребёнок за раз.
+        self.live.end_tail(TAIL_CUT_WAIT_S)
         try:
             reply = self.live.start(self._root(), attach={
                 "folder": str(folder), "server": server, "started_at": started_at,
-                "reopen": reopen})
+                "reopen": reopen, "with_recording": with_recording})
         except live_control.LiveBusy as e:
             raise _bad_request(str(e))
         if reply.get("ok"):
@@ -1208,14 +1208,16 @@ class TrayControl:
 
     def _finish_attached(self, discard: bool = False) -> None:
         """Запись остановлена (или отменена): захват кончился в момент «Стоп»,
-        отвод закрыт. Подключённый ассистент дописывает сводку из того, что
-        успел получить; ждём его не дольше ATTACH_STOP_WAIT_S (дальше дерево
-        убивают — запись это не задевает), потом — сохранение или удаление."""
+        отвод закрыт. Сохранение записи ассистента не ждёт: он дописывает
+        хвост ленты и сводку в её папку в фоне (`finish_after_recording`, до
+        STOP_TIMEOUT_S) и ничему не мешает. Отменённую запись удаляют сразу —
+        ассистента перед этим убивают."""
         if not self._live_attached():
             return
-        self.tray.log("запись остановлена — жду, пока подключённый ассистент допишет сводку"
-                      + (" (запись отменена)" if discard else ""))
-        self.live.stop(wait=True, timeout=ATTACH_STOP_WAIT_S, reason=live_control.ENDED_RECORDING)
+        if discard:
+            self.live.abort(reason=live_control.ENDED_RECORDING)
+            return
+        self.live.finish_after_recording()
 
     def _live_call(self, call, *args) -> dict:
         try:
