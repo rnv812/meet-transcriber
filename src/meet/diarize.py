@@ -163,6 +163,108 @@ def _load_pipeline(token: str):
     return pipe
 
 
+# --- голоса за один проход на окно (pyannote-audio#2050) ---------------------
+#
+# pyannote считает голос (эмбеддинг WeSpeaker ResNet34) на каждую пару «окно
+# 10 с × слот спикера»: три полных прогона сети на окно, и на тихие слоты тоже,
+# хотя маска спикера нужна только последнему слою (статистическое усреднение).
+# Сеть умеет маски всех слотов сразу (`weights` формы (batch, speakers,
+# frames)): один прогон на окно и три усреднения дают те же числа втрое
+# быстрее (замер 0.3.3: DER 0.00 % к штатному, 2,6–3,3× на процессоре). Это
+# правка внутренностей pyannote — поэтому только на проверенной версии и
+# классе, а любая ошибка — откат на штатный способ. Убрать, когда #2050 примут.
+
+FAST_EMBEDDINGS_VERSION = "4.0."
+FAST_FAILED_NOTE = "голоса за один проход на окно не сработали ({reason}): штатный способ pyannote"
+
+
+def _fast_embeddings_ok(pipe) -> bool:
+    """Ставить ли ускорение: pyannote.audio 4.0.x, пайплайн — SpeakerDiarization
+    со штатным get_embeddings, голоса — PyannoteAudioPretrainedSpeakerEmbedding."""
+    try:
+        import pyannote.audio as pa
+        from pyannote.audio.pipelines.speaker_diarization import SpeakerDiarization
+    except Exception:
+        return False
+    return (str(getattr(pa, "__version__", "")).startswith(FAST_EMBEDDINGS_VERSION)
+            and isinstance(pipe, SpeakerDiarization)
+            and type(pipe).get_embeddings is SpeakerDiarization.get_embeddings
+            and type(getattr(pipe, "_embedding", None)).__name__ == "PyannoteAudioPretrainedSpeakerEmbedding")
+
+
+def _install_fast_embeddings(pipe) -> bool:
+    """Подменить `pipe.get_embeddings` проходом на окно (`_shared_embeddings`).
+    Ошибка прохода — штатный способ и строка в журнал; если и он не смог
+    (MPS без операции), ускорение не виновато и остаётся. → поставлено ли."""
+    if not _fast_embeddings_ok(pipe):
+        return False
+    stock = pipe.get_embeddings
+    state = {"on": True}
+
+    def get_embeddings(file, binary_segmentations, exclude_overlap=False, hook=None):
+        if not state["on"] or getattr(pipe, "training", False):
+            return stock(file, binary_segmentations, exclude_overlap=exclude_overlap, hook=hook)
+        try:
+            return _shared_embeddings(pipe, file, binary_segmentations, exclude_overlap, hook)
+        except Exception as e:
+            result = stock(file, binary_segmentations, exclude_overlap=exclude_overlap, hook=hook)
+            state["on"] = False
+            _log(FAST_FAILED_NOTE.format(reason=f"{type(e).__name__}: {str(e)[:200]}"))
+            return result
+
+    pipe.get_embeddings = get_embeddings
+    pipe._meet_fast_embeddings = state
+    return True
+
+
+def _shared_embeddings(self, file, binary_segmentations, exclude_overlap=False, hook=None):
+    """То же, что `SpeakerDiarization.get_embeddings` pyannote 4.0 (тот же
+    выбор маски: без нахлёста, если чистых кадров хватает; иначе полная), но
+    одна сеть на окно — с масками всех слотов разом. Окна, где все слоты
+    молчат, не считаются: их голоса — заглушка (такие слоты pyannote всё равно
+    отправляет в выброшенный кластер -2).
+
+    → (окна, слоты, размерность), float32."""
+    import math
+
+    import torch
+
+    duration = binary_segmentations.sliding_window.duration
+    num_chunks, num_frames, num_speakers = binary_segmentations.data.shape
+    raw = binary_segmentations.data
+    if exclude_overlap:
+        min_num_samples = self._embedding.min_num_samples
+        num_samples = duration * self._embedding.sample_rate
+        min_num_frames = math.ceil(num_frames * min_num_samples / num_samples)
+        # Как у pyannote: кадр с NaN не «чистый» (сумма NaN < 2 — ложь).
+        clean = raw * (np.sum(raw, axis=2, keepdims=True) < 2)
+    else:
+        min_num_frames = -1
+        clean = raw
+    masks = np.nan_to_num(raw, nan=0.0).astype(np.float32)
+    clean = np.nan_to_num(clean, nan=0.0).astype(np.float32)
+    use_clean = np.sum(clean, axis=1) > min_num_frames  # (окна, слоты)
+    used = np.where(use_clean[:, None, :], clean, masks).transpose(0, 2, 1).copy()  # (окна, слоты, кадры)
+
+    chunks = [chunk for chunk, _ in binary_segmentations]
+    todo = [c for c in range(num_chunks) if used[c].any()]
+    batch_size = self.embedding_batch_size
+    total = math.ceil(len(todo) / batch_size)
+    out = np.full((num_chunks, num_speakers, self._embedding.dimension), np.nan, dtype=np.float32)
+    if hook is not None:
+        hook("embeddings", None, total=total, completed=0)
+    for i, start in enumerate(range(0, len(todo), batch_size), 1):
+        idx = todo[start:start + batch_size]
+        waveforms = torch.vstack([self._audio.crop(file, chunks[c], mode="pad")[0][None] for c in idx])
+        batch = self._embedding(waveforms, masks=torch.from_numpy(used[idx]))
+        out[idx] = batch
+        if hook is not None:
+            hook("embeddings", batch, total=total, completed=i)
+    valid = ~np.isnan(out).any(axis=2)
+    out[~valid] = out[valid][0] if valid.any() else 0.0
+    return out
+
+
 def _load_wav(path: Path):
     """mono 16k PCM16 wav (выход to_wav16k) → тензор (1, time) и частота.
     Читаем сами: torchcodec, на который полагается pyannote 4.x,
@@ -232,6 +334,7 @@ def diarize_wav(
         pipe = clock.timed("model", lambda: _load_pipeline(token))
         if pipe is None:
             return Diarization(turns=[], skipped=SKIPPED_NO_ACCESS)
+    _install_fast_embeddings(pipe)
     import torch
 
     from meet import asr
@@ -283,7 +386,8 @@ def diarize_wav(
     diar = _to_diarization(result, exclusive=exclusive)
     diar.device = used
     diar.timings = clock.result()
-    _log(clock.line(used))
+    fast = getattr(pipe, "_meet_fast_embeddings", None)
+    _log(clock.line(used) + ("; голоса за один проход на окно" if fast and fast["on"] else ""))
     return diar
 
 

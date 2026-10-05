@@ -250,3 +250,207 @@ def test_job_worker_forwards_diarization_lines_as_timing_logs(monkeypatch, tmp_p
     assert {"kind": "log", "text": "время диаризации (cpu): всего 1.0 с", "source": "timing"} in events
 
 
+# --- C3: голоса за один проход на окно -----------------------------------------
+
+
+class _StockPipe:
+    def __init__(self):
+        self.calls = 0
+
+    def get_embeddings(self, file, binary_segmentations, exclude_overlap=False, hook=None):
+        self.calls += 1
+        return "штатно"
+
+
+def test_fast_embeddings_fall_back_to_stock_once_and_say_it(monkeypatch):
+    pipe = _StockPipe()
+    monkeypatch.setattr(diarize, "_fast_embeddings_ok", lambda p: True)
+    tries = []
+
+    def broken(p, file, segs, exclude_overlap, hook):
+        tries.append(1)
+        raise ValueError("форма масок")
+
+    monkeypatch.setattr(diarize, "_shared_embeddings", broken)
+    lines = []
+    monkeypatch.setattr(diarize, "_log_sink", lines.append)
+    assert diarize._install_fast_embeddings(pipe) is True
+    assert pipe.get_embeddings("f", "segs") == "штатно"
+    assert pipe.get_embeddings("f", "segs") == "штатно"
+    assert len(tries) == 1 and pipe.calls == 2
+    assert len(lines) == 1 and "ValueError" in lines[0]
+
+
+def test_fast_embeddings_stay_on_when_stock_fails_too(monkeypatch):
+    """Падает и штатный способ (MPS без операции) — виноват не наш проход:
+    он остаётся, ошибка уходит наверх (диаризация повторит на процессоре)."""
+
+    class Pipe:
+        def get_embeddings(self, file, binary_segmentations, exclude_overlap=False, hook=None):
+            raise RuntimeError("MPS")
+
+    pipe = Pipe()
+    monkeypatch.setattr(diarize, "_fast_embeddings_ok", lambda p: True)
+    calls = []
+
+    def fast(p, file, segs, exclude_overlap, hook):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("MPS")
+        return "быстро"
+
+    monkeypatch.setattr(diarize, "_shared_embeddings", fast)
+    monkeypatch.setattr(diarize, "_log_sink", lambda text: pytest.fail("не о чем сообщать"))
+    diarize._install_fast_embeddings(pipe)
+    with pytest.raises(RuntimeError):
+        pipe.get_embeddings("f", "segs")
+    assert pipe.get_embeddings("f", "segs") == "быстро"
+
+
+def test_fast_embeddings_not_installed_on_unknown_pipeline():
+    pipe = _StockPipe()
+    assert diarize._install_fast_embeddings(pipe) is False
+    assert "get_embeddings" not in vars(pipe)
+
+
+def test_fast_embeddings_guard_wants_pyannote_4_0_and_its_embedding(monkeypatch):
+    pa = pytest.importorskip("pyannote.audio")
+    from pyannote.audio.pipelines.speaker_diarization import SpeakerDiarization
+
+    class PyannoteAudioPretrainedSpeakerEmbedding:
+        pass
+
+    pipe = SpeakerDiarization.__new__(SpeakerDiarization)
+    object.__setattr__(pipe, "_embedding", PyannoteAudioPretrainedSpeakerEmbedding())
+    monkeypatch.setattr(pa, "__version__", "4.0.7")
+    assert diarize._fast_embeddings_ok(pipe)
+    monkeypatch.setattr(pa, "__version__", "4.1.0")
+    assert not diarize._fast_embeddings_ok(pipe)
+    monkeypatch.setattr(pa, "__version__", "4.0.7")
+    object.__setattr__(pipe, "_embedding", object())
+    assert not diarize._fast_embeddings_ok(pipe)
+
+    class Custom(SpeakerDiarization):
+        def get_embeddings(self, *a, **k):
+            return None
+
+    other = Custom.__new__(Custom)
+    object.__setattr__(other, "_embedding", PyannoteAudioPretrainedSpeakerEmbedding())
+    assert not diarize._fast_embeddings_ok(other)
+
+
+class _ToyEmbedding:
+    """Детерминированная «модель голоса» с тем же контрактом, что у
+    PyannoteAudioPretrainedSpeakerEmbedding: маски (B, F) или (B, S, F)."""
+
+    sample_rate = 16000
+    dimension = 3
+    min_num_samples = 640
+
+    def __call__(self, waveforms, masks=None):
+        import torch
+
+        b, _, n = waveforms.shape
+        frames = masks.shape[-1]
+        feats = waveforms[:, 0, : n - n % frames].reshape(b, frames, -1)
+        feats = torch.stack([feats.mean(-1), feats.abs().mean(-1), (feats ** 2).mean(-1)], dim=-1)  # (B, F, 3)
+        w = masks if masks.dim() == 3 else masks[:, None, :]
+        out = torch.einsum("bsf,bfd->bsd", w, feats) / (w.sum(-1, keepdim=True) + 1e-8)
+        out = out.numpy()
+        return out if masks.dim() == 3 else out[:, 0]
+
+
+def _toy_segmentations(num_chunks=23, num_frames=50, num_speakers=3, seed=0):
+    from pyannote.core import SlidingWindow, SlidingWindowFeature
+
+    rng = np.random.default_rng(seed)
+    data = (rng.random((num_chunks, num_frames, num_speakers)) > 0.6).astype(np.float64)
+    data[3] = 0.0  # тишина во всём окне
+    data[7] = 0.0
+    data[5, :, 1] = 1.0  # много нахлёста: чистых кадров не хватит
+    data[5, :, 2] = 1.0
+    data[9, :, :] = 0.0
+    data[9, :2, 0] = 1.0  # мало речи — короче min_num_frames
+    return SlidingWindowFeature(data, SlidingWindow(start=0.0, duration=1.0, step=0.5))
+
+
+class _ToyAudio:
+    def __init__(self, waveform):
+        self.waveform = waveform
+
+    def crop(self, file, chunk, mode="pad"):
+        import torch
+
+        start = int(round(chunk.start * 16000))
+        piece = self.waveform[:, start:start + 16000]
+        if piece.shape[1] < 16000:
+            piece = torch.nn.functional.pad(piece, (0, 16000 - piece.shape[1]))
+        return piece, 16000
+
+
+@pytest.mark.parametrize("exclude_overlap", [True, False])
+@pytest.mark.parametrize("batch", [1, 4, 32])
+def test_shared_embeddings_equal_stock_on_synthetic_input(exclude_overlap, batch):
+    """Один проход на окно со всеми масками — те же голоса, что штатные
+    (chunk x speaker) проходы pyannote: на каждом слоте, где есть речь."""
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("pyannote.audio")
+    from pyannote.audio.pipelines.speaker_diarization import SpeakerDiarization
+
+    segs = _toy_segmentations()
+    waveform = torch.from_numpy(np.random.default_rng(1).standard_normal((1, 16000 * 13)).astype(np.float32))
+    fake = types.SimpleNamespace(training=False, _embedding=_ToyEmbedding(), _audio=_ToyAudio(waveform),
+                                 embedding_batch_size=batch)
+    marks = []
+    stock = SpeakerDiarization.get_embeddings(fake, {"uri": "x"}, segs, exclude_overlap=exclude_overlap)
+    fast = diarize._shared_embeddings(fake, {"uri": "x"}, segs, exclude_overlap,
+                                      lambda name, art=None, total=None, completed=None: marks.append(
+                                          (name, total, completed)))
+    assert fast.shape == stock.shape and fast.dtype == np.float32
+    active = np.nan_to_num(segs.data).sum(axis=1) > 0  # (chunk, speaker)
+    assert active.any() and not active.all()
+    np.testing.assert_allclose(fast[active], stock[active], rtol=1e-5, atol=1e-6)
+    assert np.isfinite(fast).all()
+    silent = ~active.any(axis=1)
+    assert silent[3] and silent[7]
+    assert marks[0][2] == 0 and marks[-1][1] == marks[-1][2]  # шкала хода — от 0 до конца
+
+
+# --- настоящая модель (если она в кэше) ---------------------------------------
+
+
+def _bundled_sample():
+    pa = pytest.importorskip("pyannote.audio")
+    path = Path(pa.__file__).parent / "sample" / "sample.wav"
+    if not path.is_file():
+        pytest.skip("нет sample.wav у pyannote")
+    return path
+
+
+def test_real_model_loads_offline_and_fast_embeddings_match(monkeypatch, tmp_path):
+    """Модель из кэша — без сети (conftest рвёт любое соединение наружу);
+    голоса за один проход на окно дают тот же результат, что штатные."""
+    torch = pytest.importorskip("torch")
+    sample = _bundled_sample()
+    monkeypatch.setenv("HF_HUB_CACHE", str(_REAL_CACHE))
+    if diarize._local_snapshot() is None:
+        pytest.skip("модели диаризации нет в кэше Hugging Face")
+    monkeypatch.setenv("PYANNOTE_METRICS_ENABLED", "false")
+    pipe = diarize._load_local()
+    assert pipe is not None
+    threads = torch.get_num_threads()
+    torch.set_num_threads(min(threads, 4))
+    try:
+        with wave.open(str(sample), "rb") as wf:
+            pcm = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+        audio = {"waveform": torch.from_numpy(pcm[: 16000 * 15].astype(np.float32) / 32768.0)[None],
+                 "sample_rate": 16000}
+        stock = pipe(dict(audio))
+        assert diarize._install_fast_embeddings(pipe)
+        fast = pipe(dict(audio))
+    finally:
+        torch.set_num_threads(threads)
+    turns = lambda r: [(round(s.start, 3), round(s.end, 3), label)  # noqa: E731
+                       for s, _, label in r.speaker_diarization.itertracks(yield_label=True)]
+    assert turns(fast) == turns(stock) and turns(stock)
+    np.testing.assert_allclose(fast.speaker_embeddings, stock.speaker_embeddings, rtol=1e-4, atol=1e-5)
