@@ -283,3 +283,18 @@ def test_best_source_names_the_closest_sample(tmp_path):
     assert owner_voice.best_source(_vec(0.1, 1), samples) == "meeting"
     assert owner_voice.best_source(A, samples) == "enroll"
     assert owner_voice.best_source(A, []) is None
+
+
+def test_put_back_restores_samples_with_their_ids(tmp_path):
+    """Откат «Это я» возвращает вытесненный образец встречи тем же (по id):
+    шаг, который его записал, потом отменит именно его."""
+    old = owner_voice.add(A, source="meeting", seconds=40, recording="r1", voices=tmp_path)
+    raw = old.to_raw()
+    new = owner_voice.add(B, source="meeting", seconds=50, recording="r1", voices=tmp_path)
+    assert [s.id for s in owner_voice.load(tmp_path)] == [new.id]
+    owner_voice.remove(new.id, tmp_path)
+    owner_voice.put_back([raw, {"мусор": 1}], tmp_path)
+    (back,) = owner_voice.load(tmp_path)
+    assert back.id == old.id and back.recording == "r1" and np.allclose(back.embedding, A)
+    owner_voice.put_back([raw], tmp_path)  # уже есть — не дублируется
+    assert [s.id for s in owner_voice.load(tmp_path)] == [old.id]

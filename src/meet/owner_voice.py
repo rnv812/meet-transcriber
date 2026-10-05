@@ -267,6 +267,24 @@ def remove(sample_id: str, voices: Path | None = None) -> bool:
     return True
 
 
+def put_back(samples: list[dict], voices: Path | None = None) -> int:
+    """Вернуть образцы как были (тем же id) — откат шага, который их вытеснил
+    («Это я» в панели «Спикеры»). Негодные и уже лежащие пропускаются.
+    → сколько вернули."""
+    back = [s for s in (_sample(x) for x in samples or []) if s is not None]
+    if not back:
+        return 0
+    p = path(voices)
+    with _locked(p):
+        data = _read(p)
+        have = _samples_of(data)
+        ids = {s.id for s in have}
+        fresh = [s for s in back if s.id not in ids]
+        if fresh:
+            _write(p, data, _evict(have + fresh))
+    return len(fresh)
+
+
 def _unit(x: np.ndarray) -> np.ndarray:
     n = float(np.linalg.norm(x))
     return x / n if n else x

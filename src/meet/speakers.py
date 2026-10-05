@@ -20,9 +20,18 @@
 транскриптом: если реплики с тех пор поменяли (переименовали человека в базе
 голосов, правили вручную), откат честно отказывает, а не портит расшифровку.
 
+«Это я — {владелец}» с флажком «Запомнить мой голос» пишет центроид голоса
+владельца встречи образцом `owner_voice` (`source="meeting"`): записи
+микрофона из сайдкара (`OWNER` и кластеры микрофона, отданные владельцу) с
+весом по секундам речи. Шаг помнит id образца и вытесненный им образец этой же
+встречи — откат убирает свой и возвращает прежний; повтор строит образец
+заново из сайдкара. Нет записи `OWNER` (её пишет разделение микрофона,
+speakers-design §3.4) — образец не пишется, окно флажок не показывает.
+
 Порядок записи — транскрипт и meta.json, затем база голосов. Сбой базы голосов
-возвращает и транскрипт, и историю, и сами файлы голосов к прежнему виду
-(VoiceBaseError): правка применяется целиком или никак."""
+возвращает и транскрипт, и историю, и сами файлы голосов (с образцом
+владельца) к прежнему виду (VoiceBaseError): правка применяется целиком или
+никак."""
 
 import json
 import re
@@ -32,7 +41,7 @@ from pathlib import Path
 
 import numpy as np
 
-from meet import library, people, voices
+from meet import library, owner_voice, people, voices
 
 HISTORY = "speaker_history"
 POS = "speaker_history_pos"
@@ -52,6 +61,8 @@ SAMPLE_TEXT_MAX = 300
 GAP_S = 2.0
 _UNNAMED = re.compile(r"^(Спикер \d+|SPEAKER_\d+)$")
 TYPES = ("rename", "merge", "reset")
+# Запись сайдкара с голосом владельца микрофона (meet.mic_split, §3.4).
+OWNER_LABEL = "OWNER"
 
 
 class SpeakerError(ValueError):
@@ -275,7 +286,7 @@ def _trimmed(meta: dict, data: dict) -> bool:
 def _public(steps: list[dict]) -> list[dict]:
     """Шаги для окна: без служебного (реплики, names) — только что и когда."""
     keep = ("id", "at", "ops", "enrolled", "created_people")
-    return [{k: s.get(k) for k in keep} for s in steps]
+    return [{**{k: s.get(k) for k in keep}, "owner_voice": bool(s.get("owner_voice"))} for s in steps]
 
 
 def overview(folder: Path, voices_dir: Path, owner: str = "Вы") -> dict:
@@ -308,7 +319,8 @@ def overview(folder: Path, voices_dir: Path, owner: str = "Вы") -> dict:
     meta = library.read_meta(folder)
     steps, pos = _history_of(meta, data)
     return {"speakers": rows, "owner": owner, "history": _public(steps), "pos": pos,
-            "trimmed": _trimmed(meta, data), "voice_threshold": own_threshold(meta)}
+            "trimmed": _trimmed(meta, data), "voice_threshold": own_threshold(meta),
+            "owner_voice": bool(_owner_entries(sidecar))}
 
 
 # --- применение ---------------------------------------------------------------
@@ -466,12 +478,19 @@ def _deleted(name: str) -> str:
 # --- запись: транскрипт и история, затем база голосов, сбой — откат всего -----
 
 
+OWNER_SNAP = f"{owner_voice.SUBDIR}/{owner_voice.FILE_NAME}"
+
+
 def _voice_snapshot(voices_dir: Path) -> dict[str, bytes]:
-    """Файлы голосов как есть: база маленькая (векторы), а откат по снимку не
-    зависит от того, какие файлы успела тронуть операция."""
+    """Файлы голосов как есть (и образец владельца): база маленькая (векторы),
+    а откат по снимку не зависит от того, какие файлы успела тронуть операция."""
     if not voices_dir.is_dir():
         return {}
-    return {f.name: f.read_bytes() for f in voices_dir.glob("*.json")}
+    snap = {f.name: f.read_bytes() for f in voices_dir.glob("*.json")}
+    own = owner_voice.path(voices_dir)
+    if own.exists():
+        snap[OWNER_SNAP] = own.read_bytes()
+    return snap
 
 
 def _voice_restore(voices_dir: Path, snap: dict[str, bytes]) -> None:
@@ -479,8 +498,11 @@ def _voice_restore(voices_dir: Path, snap: dict[str, bytes]) -> None:
         for f in voices_dir.glob("*.json"):
             if f.name not in snap:
                 f.unlink(missing_ok=True)
+        own = owner_voice.path(voices_dir)
+        if OWNER_SNAP not in snap:
+            own.unlink(missing_ok=True)
         for name, data in snap.items():
-            f = voices_dir / name
+            f = own if name == OWNER_SNAP else voices_dir / name
             if not f.exists() or f.read_bytes() != data:
                 f.write_bytes(data)
     except OSError:
@@ -650,26 +672,120 @@ def _set_names(data: dict, names: dict | None) -> None:
         data.pop("names", None)
 
 
+# --- «Это я» + «Запомнить мой голос»: образец владельца из встречи ------------
+
+NO_OWNER_VOICE = ("Ваш голос не запомнен: у встречи нет отпечатка вашего голоса с микрофона — "
+                  "перерасшифруйте её с разделением на спикеров")
+
+
+def _owner_entries(sidecar: dict | None) -> list[dict]:
+    return [e for e in (sidecar or {}).get("speakers") or []
+            if isinstance(e, dict) and isinstance(e.get("embedding"), list)
+            and (e.get("owner") is True or e.get("label") == OWNER_LABEL)]
+
+
+def _mic(entry: dict) -> bool:
+    """Голос с микрофона: в образец микрофона не идёт голос из звука
+    собеседников (через кодек звонка он звучит иначе)."""
+    return entry.get("owner") is True or entry.get("track") == "mic" or entry.get("label") == OWNER_LABEL
+
+
+def _owner_parts(segments: list[dict], shown: list[str | None], clusters: dict[str, list[dict]],
+                 finals: dict, owner: str | None) -> list[dict]:
+    """Записи сайдкара, из которых складывается голос владельца после шага:
+    микрофонные кластеры всех строк, ставших владельцем, с весом — секунды
+    речи строки поровну между её кластерами. Без записи OWNER — пусто."""
+    seconds: dict[str, float] = {}
+    for seg, label in zip(segments, shown):
+        if label:
+            seconds[label] = seconds.get(label, 0.0) + _duration(seg)
+    parts = []
+    for label, final in finals.items():
+        if final != owner:
+            continue
+        mic = [e for e in clusters.get(label, []) if _mic(e)]
+        for e in mic:
+            parts.append({"label": str(e.get("label") or e.get("display")),
+                          "weight": round(seconds.get(label, 0.0) / len(mic), 3),
+                          "owner": e.get("owner") is True or e.get("label") == OWNER_LABEL,
+                          "embedding": e["embedding"]})
+    return parts if any(p["owner"] for p in parts) else []
+
+
+def _owner_centroid(parts: list[dict]) -> tuple[np.ndarray, float]:
+    """Нормированное среднее единичных векторов с весом по секундам."""
+    total = None
+    for p in parts:
+        v = np.asarray(p["embedding"], dtype=np.float64)
+        v = v / (np.linalg.norm(v) or 1.0) * max(float(p["weight"]), 1e-3)
+        total = v if total is None else total + v
+    return total / (np.linalg.norm(total) or 1.0), round(sum(float(p["weight"]) for p in parts), 2)
+
+
+def _remember_owner(folder: Path, parts: list[dict], voices_dir: Path) -> dict:
+    """Записать образец `meeting` этой встречи; прежний образец встречи
+    (он вытесняется) — в шаг, чтобы откат вернул его тем же."""
+    replaced = [s.to_raw() for s in owner_voice.load(voices_dir)
+                if s.source == "meeting" and s.recording == folder.name]
+    vec, seconds = _owner_centroid(parts)
+    sample = owner_voice.add(vec, source="meeting", seconds=seconds, recording=folder.name,
+                             voices=voices_dir)
+    return {"sample_id": sample.id, "seconds": seconds, "replaced": replaced,
+            "parts": [{k: p[k] for k in ("label", "weight", "owner")} for p in parts]}
+
+
+def _forget_owner(step: dict, voices_dir: Path) -> None:
+    got = step.get("owner_voice")
+    if not isinstance(got, dict):
+        return
+    owner_voice.remove(str(got.get("sample_id") or ""), voices_dir)
+    owner_voice.put_back(got.get("replaced") or [], voices_dir)
+
+
+def _reowner(folder: Path, step: dict, voices_dir: Path) -> list[str]:
+    """Повтор шага: образец заново из сайдкара (новый id)."""
+    got = step.get("owner_voice")
+    if not isinstance(got, dict):
+        return []
+    by_label = {str(e.get("label") or e.get("display")): e
+                for e in (_sidecar(folder) or {}).get("speakers") or []
+                if isinstance(e, dict) and isinstance(e.get("embedding"), list)}
+    parts = [{**p, "embedding": by_label[p["label"]]["embedding"]}
+             for p in got.get("parts") or [] if isinstance(p, dict) and p.get("label") in by_label]
+    if not any(p.get("owner") for p in parts):
+        step["owner_voice"] = None
+        return [NO_OWNER_VOICE]
+    step["owner_voice"] = _remember_owner(folder, parts, voices_dir)
+    return []
+
+
 def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
           now: datetime | None = None, *, lead: dict | None = None,
-          threshold: list | None = None) -> dict:
+          threshold: list | None = None, remember_owner: bool = False,
+          owner: str | None = None) -> dict:
     """Применить набор правок одним шагом истории. Всё проверяется до записи:
     отказ не оставляет транскрипт наполовину переименованным. `lead` — что
     это за шаг, если не ручные правки (порог узнавания); `threshold` — [было,
-    стало] порога встречи: шаг помнит и его."""
+    стало] порога встречи: шаг помнит и его. `remember_owner` — «Запомнить мой
+    голос»: голос владельца (`owner`) после шага — образцом владельца."""
     data = editable(folder)
     segments = data["segments"]
     shown = _shown(segments)
     order = _order(shown)
     sidecar = _sidecar(folder)
     clusters = _clusters(data, sidecar, set(order))
-    finals, normal = _finals(ops, order, clusters)
+    remember_owner = bool(remember_owner and owner)
+    if remember_owner and not ops:
+        finals, normal = {label: label for label in order}, []
+    else:
+        finals, normal = _finals(ops, order, clusters)
     remember = remember if isinstance(remember, dict) else {}
     wanted = [label for label in order if remember.get(label) is True and not unnamed(finals[label])]
     targets = [finals[label] if label else None for label in shown]
     deltas = _deltas(segments, targets)
-    if not deltas and not wanted:
+    if not deltas and not wanted and not remember_owner:
         raise SpeakerError("нечего применять — имена уже такие")
+    owner_parts = _owner_parts(segments, shown, clusters, finals, owner) if remember_owner else []
 
     names_before = data.get("names") if isinstance(data.get("names"), dict) else None
     names_after = _names_after(data, finals, sidecar)
@@ -679,6 +795,8 @@ def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
     _set_names(data, names_after)
 
     errors = [_no_voice(finals[label]) for label in wanted if not clusters.get(label)]
+    if remember_owner and not owner_parts:
+        errors.append(NO_OWNER_VOICE)
     step = {
         "id": uuid.uuid4().hex[:12],
         "at": (now or datetime.now()).isoformat(timespec="seconds"),
@@ -691,13 +809,15 @@ def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
     }
 
     def enroll(meta: dict) -> dict:
+        if owner_parts:
+            step["owner_voice"] = _remember_owner(folder, owner_parts, voices_dir)
         enrolled: list[dict] = []
         for label in wanted:
             if clusters.get(label):
                 enrolled += _enroll(folder, sidecar, finals[label], clusters[label], voices_dir)
         step["enrolled"] = enrolled
         step["created_people"] = sorted({e["person"] for e in enrolled if e["created"]})
-        if not enrolled:
+        if not enrolled and not step.get("owner_voice"):
             return meta
         return library.update_meta(folder, lambda m: {**m, HISTORY: [
             step if isinstance(x, dict) and x.get("id") == step["id"] else x for x in m.get(HISTORY) or []]})
@@ -1054,8 +1174,9 @@ def _shift(folder: Path, voices_dir: Path, forward: bool, expect_step: str | Non
 
     def voice_ops(m: dict) -> list[str]:
         if not forward:
+            _forget_owner(step, voices_dir)
             return _unenroll(folder, step, voices_dir)
-        notes = _reenroll(folder, step, voices_dir)
+        notes = _reowner(folder, step, voices_dir) + _reenroll(folder, step, voices_dir)
         library.update_meta(folder, lambda x: {**x, HISTORY: [
             step if isinstance(s, dict) and s.get("id") == step["id"] else s for s in x.get(HISTORY) or []]})
         return notes
