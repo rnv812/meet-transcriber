@@ -236,11 +236,16 @@ def test_file_of_other_model_drops_its_suggestion_on_rewrite(tmp_path):
 
 
 def test_owner_folder_is_invisible_to_people_and_voice_snapshot(tmp_path):
+    """Владелец — не человек: ни в списке людей, ни среди файлов людей в снимке
+    базы голосов. Сам файл владельца снимок держит отдельным ключом — откат
+    правки спикеров («Это я» + «Запомнить мой голос») возвращает и его."""
     from meet import people, speakers
 
     owner_voice.add(A, source="enroll", seconds=20, voices=tmp_path)
     assert people.listing(tmp_path, tmp_path / "записи") == []
-    assert speakers._voice_snapshot(tmp_path) == {}
+    snap = speakers._voice_snapshot(tmp_path)
+    assert list(snap) == [speakers.OWNER_SNAP]
+    assert snap[speakers.OWNER_SNAP] == owner_voice.path(tmp_path).read_bytes()
 
 
 def test_score_is_max_cos(tmp_path):
