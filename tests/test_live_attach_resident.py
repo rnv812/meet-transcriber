@@ -236,8 +236,8 @@ def test_cancel_kills_the_assistant_at_once_and_deletes_the_folder_at_once(resid
 def test_audio_ends_at_the_click_even_if_the_assistant_takes_its_time(resident, monkeypatch,
                                                                      tmp_path):
     """Длина звука записи — до момента «Стоп» (± буфер), хотя подключённый
-    ассистент дописывает сводку ещё секунду: остановка его не ждёт, запись
-    сохраняется после него, в фоне."""
+    ассистент дописывает сводку ещё секунду: остановка его не ждёт — запись
+    сохраняется сразу, а он дописывает свой хвост после, в фоне."""
     import time
 
     import test_recorder as tr

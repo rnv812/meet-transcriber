@@ -1474,6 +1474,21 @@ def test_a_tail_killed_at_its_deadline_marks_its_summary_and_its_error(resident,
     assert status["error_folder"] == str(resident.folder)
 
 
+def test_a_folder_whose_tail_still_runs_says_why_it_cannot_be_deleted(resident, monkeypatch):
+    """Запись уже сохранена, а ассистент дописывает её сводку: удалить её
+    пока нельзя, и причина — не «запись ещё идёт»."""
+    resident.stub.mode = "hang"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["ready"])
+    resident.tray.stop_recording()
+    assert resident.live.finishing()
+    with pytest.raises(control.BadRequest) as e:
+        resident.delete_recording(resident.folder.name)
+    assert "ассистент дописывает сводку этой встречи — подождите немного" in str(e.value)
+    assert "запись ещё идёт" not in str(e.value)
+    assert resident.folder.is_dir()
+
+
 def test_a_tail_without_a_saved_summary_is_not_given_one(resident, monkeypatch):
     """Сводки не было — пометку писать некуда: пустой live_state.json не
     создаётся (черновик итогов из ничего хуже, чем никакого)."""
