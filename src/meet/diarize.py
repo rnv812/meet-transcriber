@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -6,6 +7,13 @@ import numpy as np
 from meet.asr import Segment, Word
 
 DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
+
+
+def quiet_pyannote() -> None:
+    """Телеметрия pyannote 4 выключена (до первого импорта pyannote: он читает
+    переменную при загрузке): иначе каждая задача шлёт данные на
+    otel.pyannote.ai из фонового потока. Явное значение в окружении — его."""
+    os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "false")
 
 # Минимальная длительность региона нахлёста (сек): короче — поддакивания
 # («ага» на фоне) и дребезг на стыках, а не осмысленное перебивание; такие
@@ -129,6 +137,7 @@ def diarize_wav(
     времени (meet.progress)."""
     from meet import credentials
 
+    quiet_pyannote()
     token = credentials.get_hf_token()
     if not token:
         print(NO_TOKEN_NOTE)

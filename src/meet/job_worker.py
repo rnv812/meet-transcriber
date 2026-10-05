@@ -77,6 +77,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _dispatch(args) -> int:
+    import os
+
+    # Телеметрия pyannote — выключена до любого его импорта (как
+    # meet.diarize.quiet_pyannote, но без импорта numpy в задачах без torch).
+    os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "false")
     if args.kind in ("summary", "ask"):
         return _assistant(args.kind, args.path, args.question)
     if args.kind == "analyze":
