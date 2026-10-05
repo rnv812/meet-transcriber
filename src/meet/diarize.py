@@ -29,6 +29,8 @@ class Diarization:
     # Диаризация пропущена — почему (SKIPPED_NO_TOKEN / SKIPPED_NO_ACCESS).
     # None — диаризация была. Пропущенная не несёт ни интервалов, ни голосов.
     skipped: str | None = None
+    # На чём шла диаризация ("cuda", "mps", "cpu"); None — не шла.
+    device: str | None = None
 
 
 # Диаризации нет, но расшифровка идёт: реплики подписываются по дорожкам
@@ -138,12 +140,16 @@ def diarize_wav(
         return Diarization(turns=[], skipped=SKIPPED_NO_ACCESS)
     import torch
 
-    from meet.asr import resolve_device
+    from meet import asr
 
-    # На машине без NVIDIA (или с CPU-сборкой torch) pyannote идёт на CPU —
-    # медленнее, но работает; раньше здесь был жёсткий cuda и падение.
-    use_cuda = resolve_device() == "cuda" and torch.cuda.is_available()
+    # Видеокарта — когда torch её видит, чем бы ни распознавался текст (GigaAM
+    # на процессоре — не повод гнать диаризацию часовой встречи процессором).
+    # Без NVIDIA (или с CPU-сборкой torch) pyannote идёт на CPU — медленнее,
+    # но работает; раньше здесь был жёсткий cuda и падение.
+    use_cuda = asr.torch_device() == "cuda"
     device = pick_device(torch, use_cuda)
+    if device.type == "cpu" and asr.gpu_engine():
+        print("диаризация на процессоре: torch не видит видеокарту")
     pipe.to(device)
     if clustering_threshold is not None:
         params = pipe.parameters(instantiated=True)
@@ -164,6 +170,7 @@ def diarize_wav(
             **extra,
         )
 
+    used = device.type
     try:
         result = run()
     except Exception as e:
@@ -172,8 +179,11 @@ def diarize_wav(
         # MPS (Apple Silicon) поддерживает не все операции: тогда — процессор.
         print(f"Диаризация на MPS не прошла ({type(e).__name__}) — повторяю на процессоре")
         pipe.to(torch.device("cpu"))
+        used = "cpu"
         result = run()
-    return _to_diarization(result, exclusive=exclusive)
+    diar = _to_diarization(result, exclusive=exclusive)
+    diar.device = used
+    return diar
 
 
 # Доли шагов pyannote в общем ходе диаризации: сегментация и голоса (эмбеддинги)

@@ -123,30 +123,36 @@ def fake_stack(monkeypatch):
 
 
 def test_cpu_profile_loads_embedder_on_cpu(fake_stack, monkeypatch):
-    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
+    monkeypatch.setattr(asr, "engine_profile", lambda prefix=None: "cpu")
     voice_id._load_embedder()
     assert fake_stack["devices"] == ["cpu"]
 
 
 def test_usable_cuda_loads_embedder_on_cuda(fake_stack, monkeypatch):
-    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
+    voice_id._load_embedder()
+    assert fake_stack["devices"] == ["cuda"]
+
+
+def test_embedder_on_cuda_even_when_text_is_recognised_on_cpu(fake_stack, monkeypatch):
+    """Текст — на процессоре (GigaAM, выбрано или нет библиотек ctranslate2),
+    а torch видит карту: голоса — на видеокарте."""
+    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
     voice_id._load_embedder()
     assert fake_stack["devices"] == ["cuda"]
 
 
 def test_cuda_without_torch_support_falls_to_cpu(fake_stack, monkeypatch):
-    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
     fake_stack["cuda_ok"] = False
     voice_id._load_embedder()
     assert fake_stack["devices"] == ["cpu"]
 
 
 def test_missing_cuda_library_retries_on_cpu(fake_stack, monkeypatch):
-    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
     fake_stack["fail"]["cuda"] = RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
     voice_id._load_embedder()
     assert fake_stack["devices"] == ["cuda", "cpu"]
-    assert asr._cuda_failure is not None  # сбой запомнен на процесс
+    assert asr._torch_failure is not None  # сбой запомнен на процесс
+    assert asr._cuda_failure is None  # распознаванию (ctranslate2) он не помеха
 
 
 CUDNN_MISSING = RuntimeError("Could not load library cudnn_ops64_9.dll. Error code 126")
@@ -155,7 +161,6 @@ CUDNN_MISSING = RuntimeError("Could not load library cudnn_ops64_9.dll. Error co
 def test_cuda_library_failing_on_first_embedding_falls_to_cpu_at_load(fake_stack, monkeypatch):
     """cuDNN грузится лениво: модель на видеокарте собралась, а первая свёртка
     падает — пробный эмбеддинг при загрузке это ловит."""
-    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
     fake_stack["call_fail"]["cuda"] = [CUDNN_MISSING]
     embed = voice_id._load_embedder()
     assert fake_stack["devices"] == ["cuda", "cpu"]
@@ -163,7 +168,6 @@ def test_cuda_library_failing_on_first_embedding_falls_to_cpu_at_load(fake_stack
 
 
 def test_cuda_library_failing_later_moves_matcher_to_cpu_once(fake_stack, monkeypatch):
-    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
     embed = voice_id._load_embedder()  # пробный эмбеддинг прошёл
     fake_stack["call_fail"]["cuda"] = [CUDNN_MISSING]
     assert embed(_audio()) is not None
@@ -173,7 +177,6 @@ def test_cuda_library_failing_later_moves_matcher_to_cpu_once(fake_stack, monkey
 
 
 def test_other_embedding_error_is_not_swallowed(fake_stack, monkeypatch):
-    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
     embed = voice_id._load_embedder()
     fake_stack["call_fail"]["cuda"] = [ValueError("bad shape")]
     with pytest.raises(ValueError):
@@ -182,7 +185,7 @@ def test_other_embedding_error_is_not_swallowed(fake_stack, monkeypatch):
 
 
 def test_other_load_error_disables_matcher_without_raising(fake_stack, monkeypatch, capsys):
-    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
+    fake_stack["cuda_ok"] = False
     fake_stack["fail"]["cpu"] = OSError("model not cached")
     m = VoiceMatcher(base=_base())
     m.load()

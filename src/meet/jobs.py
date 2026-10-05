@@ -123,6 +123,9 @@ class Job:
     phase: str | None = None
     slow: bool | None = None
     eta_s: float | None = None
+    # Предупреждение на всю задачу (meet.progress `warn`): например,
+    # «Распознаётся на процессоре: видеокарта NVIDIA не найдена».
+    warning: str | None = None
     result: str | None = None
     error: str | None = None
     created_at: float = field(default_factory=_created_at)
@@ -151,6 +154,7 @@ class Job:
             "phase": self.phase,
             "slow": self.slow,
             "eta_s": self.eta_s,
+            "warning": self.warning,
             "result": self.result,
             "error": self.error,
             "created_at": self.created_at,
@@ -267,6 +271,11 @@ def _folder_key(folder: str) -> str:
         return os.path.normcase(str(Path(folder).resolve()))
     except (OSError, ValueError):
         return os.path.normcase(str(folder))
+
+
+# Строки журнала задачи, которые идут и в журнал резидента: время ступеней
+# расшифровки и устройство (процессор вместо видеокарты — почему).
+RESIDENT_LOG_SOURCES = ("timing", "device")
 
 
 def _log_line(text: str) -> None:
@@ -504,15 +513,16 @@ class JobQueue:
             job.phase = payload.get("phase")
             job.slow = payload.get("slow")
             job.eta_s = payload.get("eta_s")
+            job.warning = payload.get("warning") or job.warning
             self._emit(JOB_PROGRESS, job)
         elif kind == "job.result":
             job.result = payload.get("path")
         elif kind == "error":
             job.error = str(payload.get("text") or payload.get("error") or "")[:500]
-        elif kind == "log" and payload.get("source") == "timing":
-            # Время ступеней расшифровки — в журнал резидента (resident.log):
-            # по нему видно, где уходят минуты (распознавание, выравнивание,
-            # диаризация).
+        elif kind == "log" and payload.get("source") in RESIDENT_LOG_SOURCES:
+            # Время ступеней расшифровки и устройство (процессор вместо
+            # видеокарты — почему) — в журнал резидента (resident.log): по
+            # нему видно, где и почему уходят минуты.
             _log_line(f"задача {job.kind} ({Path(job.folder).name}): {payload.get('text')}")
 
     def _finish(self, job: Job, state: str, error: str | None = None) -> None:

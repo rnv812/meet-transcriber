@@ -48,14 +48,10 @@ def _load_align_model(device):
 
 
 def _align_device() -> str:
-    """Устройство выравнивания — по тому же выбору, что у распознавания
-    (`asr.device`): профиль CPU держит на CPU и wav2vec2, даже если карта есть.
-    CUDA — только если её выбрали (или «auto» её нашёл) и torch её видит."""
-    import torch
-
-    if asr.resolve_device() == "cuda" and torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
+    """Устройство выравнивания (wav2vec2, torch) — как у диаризации
+    (`asr.torch_device`): видеокарта, когда torch её видит, чем бы ни
+    распознавался текст; профиль CPU держит wav2vec2 на процессоре."""
+    return asr.torch_device()
 
 
 def align_segments(segments, wav_path, device=None, on_progress=None):

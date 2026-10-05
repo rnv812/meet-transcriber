@@ -15,19 +15,12 @@ SAMPLE_RATE = 16000
 
 
 def _embedder_device() -> str:
-    """cuda — только если на ней правда есть чем считать (правила
-    asr.resolve_device: профиль CPU, библиотеки CUDA, сбой CUDA) и сам torch
-    собран с CUDA; иначе cpu (на macOS — тоже cpu)."""
+    """cuda — когда torch видит видеокарту (`asr.torch_device`: не профиль
+    CPU, без сбоя CUDA у torch), чем бы ни распознавался текст; иначе cpu (на
+    macOS — тоже cpu)."""
     from meet import asr
 
-    if asr.resolve_device() != "cuda":
-        return "cpu"
-    try:
-        import torch
-
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    except Exception:
-        return "cpu"
+    return asr.torch_device()
 
 
 def _build_embedder(device: str):
@@ -67,7 +60,7 @@ def _load_embedder():
             embed(np.zeros(SAMPLE_RATE, dtype=np.float32))
     except Exception as e:
         if device == "cuda" and asr.missing_cuda_library(e):
-            asr.cuda_failed(e)
+            asr.torch_cuda_failed(e)
             return _build_embedder("cpu")
         raise
     if device != "cuda":
@@ -80,7 +73,7 @@ def _load_embedder():
         except Exception as e:
             if not (current["on_cuda"] and asr.missing_cuda_library(e)):
                 raise
-            asr.cuda_failed(e)
+            asr.torch_cuda_failed(e)
             current["on_cuda"] = False
             current["embed"] = _build_embedder("cpu")
             return current["embed"](audio)

@@ -44,19 +44,20 @@ class _FakeTorch:
     cuda = _FakeCuda()
 
 
-def test_align_device_follows_cpu_profile(monkeypatch):
-    """Профиль CPU (asr.device = cpu) держит на CPU и выравнивание, даже если
-    карта есть: иначе wav2vec2 полез бы в видеопамять, которую профиль
-    сознательно не трогает. torch подменён — тест не тянет CUDA."""
+def test_align_device_follows_torch_not_recognition(monkeypatch):
+    """Выравнивание (wav2vec2, torch) — на видеокарте, когда torch её видит,
+    чем бы ни распознавался текст (`asr.torch_device`); движок профиля CPU
+    держит его на процессоре. torch подменён — тест не тянет CUDA."""
     import sys
 
     from meet import align, asr
 
     monkeypatch.setitem(sys.modules, "torch", _FakeTorch())
     monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")
-    assert align._align_device() == "cpu"
-    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
+    monkeypatch.setattr(asr, "engine_profile", lambda prefix=None: "cuda")
     assert align._align_device() == "cuda"
+    monkeypatch.setattr(asr, "engine_profile", lambda prefix=None: "cpu")
+    assert align._align_device() == "cpu"
 
 
 def test_align_device_needs_a_visible_card(monkeypatch):
@@ -71,5 +72,5 @@ def test_align_device_needs_a_visible_card(monkeypatch):
                 return False
 
     monkeypatch.setitem(sys.modules, "torch", NoCuda())
-    monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cuda")
+    monkeypatch.setattr(asr, "engine_profile", lambda prefix=None: "cuda")
     assert align._align_device() == "cpu"

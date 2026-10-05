@@ -481,11 +481,12 @@ def load_embedder():
     import torch
     from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
 
-    from meet import credentials
-    from meet.asr import resolve_device
+    from meet import asr, credentials
     from meet.diarize import DIARIZATION_MODEL
 
-    cuda = resolve_device() == "cuda" and torch.cuda.is_available()
+    # Видеокарта — когда torch её видит (`asr.torch_device`), а не по выбору
+    # распознавания: тот после `import torch` ещё и ошибался (WinError 127).
+    cuda = asr.torch_device() == "cuda"
     model = PretrainedSpeakerEmbedding(
         {"checkpoint": DIARIZATION_MODEL, "subfolder": "embedding"},
         device=torch.device("cuda" if cuda else "cpu"),

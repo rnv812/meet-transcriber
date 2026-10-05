@@ -54,11 +54,27 @@ _LOAD_FAILURE_WORDS = ("not found", "cannot be loaded", "cannot load", "could no
 # Пометка транскрипта (`asr_note`): видеокарта не заработала (нет библиотек
 # CUDA), встречу распознал процессор.
 CUDA_FAILED = "cuda_failed"
+# Почему «auto» взял процессор на движке, который умеет видеокарту (пометка
+# транскрипта `asr_note` и строка в журнал): карты нет (внешняя видеокарта
+# отключена вместе с доком, дискретная выключена) или нет библиотек CUDA.
+NO_GPU = "no_gpu"
+NO_CUDA_LIBS = "no_cuda_libs"
+CPU_REASONS = {
+    NO_GPU: "видеокарта NVIDIA не найдена (не подключена или выключена)",
+    NO_CUDA_LIBS: "не найдены или не загружаются библиотеки CUDA (cuBLAS, cuDNN)",
+    CUDA_FAILED: "видеокарта не заработала (нет библиотек CUDA)",
+}
 
 # Итог проверки библиотек CUDA на процесс: {load: годится ли}. Сбой CUDA при
 # распознавании (`cuda_failed`) — дальше в этом процессе только процессор.
 _cuda_runtime: dict[bool, bool] = {}
 _cuda_failure: str | None = None
+# Сбой CUDA у torch (диаризация, голоса): дальше torch — на процессоре. Свой
+# флаг: у torch свои cuBLAS/cuDNN, распознаванию (ctranslate2) он не помеха.
+_torch_failure: str | None = None
+# Причины процессора, уже названные в выводе этого процесса: одна строка, а
+# не на каждый вызов resolve_device.
+_announced: set[str] = set()
 _WINDOWS = os.name == "nt"
 
 
@@ -112,12 +128,35 @@ def find_cuda_libraries(dirs: list[Path] | None = None) -> list[Path] | None:
     return found
 
 
+def _module_loaded(name: str) -> bool:
+    """Загружена ли уже в процесс DLL с таким именем (Windows)."""
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+    kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+    return bool(kernel32.GetModuleHandleW(name))
+
+
 def _libraries_load(libraries: list[Path]) -> bool:
     """Грузятся ли найденные DLL (битая, не той разрядности, без зависимостей
-    — «нет»)."""
+    — «нет»).
+
+    IMPORTANT: библиотека с тем же именем уже в процессе — годится, вторую
+    копию не грузим. `import torch` на Windows сам грузит torch/lib/cublas64_12
+    и cudnn64_9; копия из пакета nvidia-cublas после этого падает с WinError
+    127 (её cublasLt связывается с уже загруженным, более старым), хотя
+    ctranslate2 возьмёт загруженную по имени. Без этого «auto» уходил на
+    процессор в любом процессе, где torch импортирован раньше проверки
+    (например, «Разделить спикера»: segvoices; зонд 05.10.2026)."""
     import ctypes
 
     for library in libraries:
+        try:
+            if _module_loaded(library.name):
+                continue
+        except Exception:
+            pass  # не узнали — проверяем загрузкой, как раньше
         try:
             ctypes.WinDLL(str(library))
         except OSError as e:
@@ -164,11 +203,79 @@ def cuda_failed(error: BaseException) -> None:
     print(f"видеокарта недоступна: нет библиотек CUDA ({_cuda_failure}) — распознаёт процессор")
 
 
+def torch_cuda_failed(error: BaseException) -> None:
+    """torch на видеокарте упал без своих библиотек CUDA: дальше в этом
+    процессе диаризация и голоса — на процессоре. Распознавание (ctranslate2,
+    свои cuBLAS/cuDNN) этот сбой не трогает."""
+    global _torch_failure
+    _torch_failure = f"{type(error).__name__}: {error}"
+    logger.warning("torch: CUDA недоступна: %s — процессор", _torch_failure)
+    print(f"torch: видеокарта недоступна ({_torch_failure}) — диаризация и голоса на процессоре")
+
+
 def _reset_cuda_state() -> None:
-    """Забыть проверку библиотек и сбой CUDA (для тестов)."""
-    global _cuda_failure
+    """Забыть проверку библиотек и сбои CUDA (для тестов)."""
+    global _cuda_failure, _torch_failure
     _cuda_runtime.clear()
+    _announced.clear()
     _cuda_failure = None
+    _torch_failure = None
+
+
+def _device_setting(setting: str | None) -> str:
+    """Настройка `asr.device`; не прочиталась — «auto»."""
+    if setting is not None:
+        return setting
+    try:
+        from meet import settings
+
+        return settings.load().asr.device
+    except Exception:
+        return "auto"
+
+
+def gpu_engine() -> bool:
+    """Умеет ли этот движок видеокарту: профиль CUDA — да, CPU и mac — нет;
+    dev-окружение (маркера нет) — если в нём есть библиотеки CUDA (пакеты
+    nvidia-*). Только на таком движке процессор вместо карты — повод сказать
+    почему; на движке для процессора так и задумано."""
+    profile = engine_profile()
+    if profile in CPU_PROFILES:
+        return False
+    if profile is not None:
+        return True
+    return find_cuda_libraries() is not None
+
+
+def cpu_reason(setting: str | None = None) -> str | None:
+    """Почему распознавание идёт на процессоре, хотя движок умеет видеокарту:
+    код из CPU_REASONS (NO_GPU, NO_CUDA_LIBS, CUDA_FAILED). None — видеокарта
+    работает, процессор выбран в настройках или движок для процессора."""
+    if _cuda_failure is not None:
+        return CUDA_FAILED
+    if _device_setting(setting) == "cpu" or not gpu_engine():
+        return None
+    if not cuda_runtime_ok():
+        return NO_CUDA_LIBS
+    if not cuda_available():
+        return NO_GPU
+    return None
+
+
+def cpu_reason_text(code: str | None) -> str | None:
+    """Причина процессора словами (журнал, ход задачи)."""
+    return CPU_REASONS.get(code) if code else None
+
+
+def _announce_cpu(code: str | None) -> None:
+    """Причина процессора — одной строкой в вывод процесса (журнал задачи,
+    live.log), один раз на процесс."""
+    text = cpu_reason_text(code)
+    if text is None or code in _announced:
+        return
+    _announced.add(code)
+    logger.warning("распознавание на процессоре: %s", text)
+    print(f"распознавание на процессоре: {text}")
 
 
 def resolve_device(setting: str | None = None) -> str:
@@ -178,19 +285,37 @@ def resolve_device(setting: str | None = None) -> str:
     «auto» — видеокарта, только если на ней правда есть чем считать
     (`cuda_runtime_ok`): движок профиля CPU на машине с NVIDIA распознаёт
     процессором (GigaAM), а не падает в Whisper на CUDA. CUDA уже упала в
-    этом процессе без библиотек — процессор и при явном выборе."""
+    этом процессе без библиотек — процессор и при явном выборе.
+
+    Движок с CUDA, а «auto» взял процессор (карта не подключена, нет
+    библиотек) — причина строкой в вывод процесса (`cpu_reason`), не молча."""
     if _cuda_failure is not None:
         return "cpu"
-    if setting is None:
-        try:
-            from meet import settings
-
-            setting = settings.load().asr.device
-        except Exception:
-            setting = "auto"
+    setting = _device_setting(setting)
     if setting in ("cuda", "cpu"):
         return setting
-    return "cuda" if cuda_runtime_ok() and cuda_available() else "cpu"
+    if cuda_runtime_ok() and cuda_available():
+        return "cuda"
+    _announce_cpu(cpu_reason(setting))
+    return "cpu"
+
+
+def torch_device() -> str:
+    """Устройство torch (диаризация pyannote, голоса, выравнивание):
+    видеокарта, если torch правда её видит, — чем бы ни распознавался текст.
+    GigaAM на процессоре (выбрано в настройках или у ctranslate2 нет
+    библиотек) — не повод гнать диаризацию часовой встречи процессором: там
+    она в десятки раз дольше. Движок профиля CPU (torch процессорный), сбой
+    CUDA у torch в этом процессе, torch не импортируется — процессор. MPS
+    на macOS решает `diarize.pick_device`."""
+    if _torch_failure is not None or engine_profile() in CPU_PROFILES:
+        return "cpu"
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
 
 
 def _cpu_model_setting() -> str:
@@ -425,6 +550,8 @@ class Choice:
     device: str = "cpu"
     gigaam_model: str | None = None
     note: str | None = None
+    # Движок умеет видеокарту, а распознаёт процессор — почему (`cpu_reason`).
+    cpu_reason: str | None = None
 
 
 # Запасной Whisper на процессоре — от лёгкого к тяжёлому; large-v3 (кроме
@@ -580,12 +707,13 @@ def choose(path: Path | None = None, *, detect=None) -> Choice:
     from meet import gigaam_asr, settings
 
     device = resolve_device()
+    reason = cpu_reason() if device == "cpu" else None
     try:
         cfg = settings.load().asr
     except Exception:
         cfg = settings.Asr()
     if cfg.backend_for(device) != "gigaam":
-        return Choice("faster-whisper", device)
+        return Choice("faster-whisper", device, cpu_reason=reason)
     language = (cfg.language or DEFAULT_LANGUAGE).strip().lower()
     if language == AUTO_LANGUAGE:
         found = (detect or detect_language)(path) if path is not None else None
@@ -598,12 +726,12 @@ def choose(path: Path | None = None, *, detect=None) -> Choice:
     if language != "ru":
         print(f"GigaAM распознаёт только русский, а язык записи — {language}: "
               "распознаёт Whisper")
-        return Choice("faster-whisper", device, note=NOT_RUSSIAN)
+        return Choice("faster-whisper", device, note=NOT_RUSSIAN, cpu_reason=reason)
     if not gigaam_asr.installed():
         print("GigaAM не установлен в движке — распознаёт Whisper "
               "(переустановите движок в настройках)")
-        return Choice("faster-whisper", device)
-    return Choice("gigaam", device, cfg.gigaam_model)
+        return Choice("faster-whisper", device, cpu_reason=reason)
+    return Choice("gigaam", device, cfg.gigaam_model, cpu_reason=reason)
 
 
 def transcribe_wav(

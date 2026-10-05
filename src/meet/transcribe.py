@@ -64,6 +64,10 @@ def _hotword_terms(extra: str | None, path: Path | None = None) -> list[str]:
     return list(dict.fromkeys(terms))
 
 
+# Шаги на torch: их устройство — `asr.torch_device`, а не устройство распознавания.
+TORCH_STAGES = ("align", "diarize", "voices")
+
+
 class _Run:
     """Состояние одной расшифровки: каким движком распознаём (решается один
     раз на встречу, по первой дорожке) и сколько секунд заняли ступени —
@@ -85,12 +89,51 @@ class _Run:
         # ожидаемое время шагов, когда движок выбран.
         self.tracks: dict[str, Path] = {}
         self._seconds: dict[str, float] = {}
+        # На чём шла диаризация (torch): по нему — ключ поправки времени шагов
+        # torch. Не шла ещё — оценка `_torch_guess`.
+        self.torch_used: str | None = None
+        self._announced: set[str] = set()
 
     def choose(self, wav: Path) -> asr.Choice:
         if self.choice is None:
             self.choice = asr.choose(wav)
+            self.announce_device()
             self._estimate(wav)
         return self.choice
+
+    def announce_device(self) -> None:
+        """Движок умеет видеокарту, а распознаёт процессор — не молча: причина
+        строкой в журнал резидента (событие `log`, source="device") и
+        предупреждением в ход задачи (окно показывает его под полоской)."""
+        code = self.choice.cpu_reason if self.choice is not None else None
+        reason = asr.cpu_reason_text(code)
+        if reason is None or code in self._announced:
+            return
+        self._announced.add(code)
+        # В вывод процесса её уже напечатали asr.resolve_device / asr.cuda_failed.
+        self.bus.emit(events.LOG, text=f"распознавание на процессоре: {reason}", source="device")
+        if self.stages is not None:
+            self.stages.warn(f"Распознаётся на процессоре: {reason}")
+
+    def _torch_guess(self) -> str:
+        """Устройство шагов torch (выравнивание, диаризация, голоса) до самой
+        диаризации — для оценки времени, без импорта torch: распознаёт карта —
+        и torch на ней; карта видна (ctranslate2) на движке с CUDA — тоже."""
+        if self.torch_used:
+            return self.torch_used
+        if self.choice is not None and self.choice.device == "cuda":
+            return "cuda"
+        try:
+            return "cuda" if asr.gpu_engine() and asr.cuda_available() else "cpu"
+        except Exception:
+            return "cpu"
+
+    def device_of(self, stage: str) -> str:
+        """Устройство шага: распознавание и подготовка — устройство выбора,
+        шаги torch — своё (`asr.torch_device`)."""
+        if stage in TORCH_STAGES:
+            return self._torch_guess()
+        return self.choice.device if self.choice is not None else "cpu"
 
     def _estimate(self, wav: Path) -> None:
         """Ожидаемое время шагов по выбранному движку и длительности дорожек
@@ -118,7 +161,8 @@ class _Run:
         seconds = self._seconds if self._seconds else {name: wav_seconds(path) for name, path in self.tracks.items()}
         self._seconds = seconds
         main = seconds.get("sys", seconds.get("one", 0.0))
-        times = {key: step_time(device, backend, key, main, stats) for key in ("align", "diarize", "voices", "render")}
+        times = {key: step_time(self.device_of(key), backend, key, main, stats)
+                 for key in ("align", "diarize", "voices", "render")}
         if "one" in seconds:
             times["asr"] = step_time(device, backend, "asr", main, stats)
         else:
@@ -141,7 +185,7 @@ class _Run:
                     continue
                 load, work = base[key]
                 expected = (load, work) if actual[0] is not None else (0.0, load + work)
-                stats.record(self.choice.device, self.choice.backend, step.stage, expected, actual)
+                stats.record(self.device_of(step.stage), self.choice.backend, step.stage, expected, actual)
             stats.save()
         except Exception as e:  # замер — подсказка на будущее, расшифровку не роняет
             print(f"замер шагов не сохранён ({type(e).__name__})")
@@ -256,7 +300,8 @@ def _fallback_to_whisper(wav: Path, hotwords: str | None, run: "_Run", device: s
     гигабайтной загрузки. Не скачалась — тоже одна ошибка с обеими причинами."""
     gigaam_reason = _reason(error)
     print(f"GigaAM недоступна ({gigaam_reason}) — распознаёт Whisper")
-    run.choice = asr.Choice("faster-whisper", device, note=asr.GIGAAM_FAILED)
+    run.choice = asr.Choice("faster-whisper", device, note=asr.GIGAAM_FAILED,
+                            cpu_reason=run.choice.cpu_reason if run.choice is not None else None)
     try:
         run.whisper_model = asr.local_whisper_model(device)
     except Exception:
@@ -311,8 +356,17 @@ def _align_enabled(align: bool, run: "_Run") -> bool:
 
 
 def _diarize(wav: Path, speakers, overlap: bool, run: "_Run"):
-    return run.timed("diarize", lambda: diarize_wav(wav, num_speakers=speakers, exclusive=not overlap,
+    diar = run.timed("diarize", lambda: diarize_wav(wav, num_speakers=speakers, exclusive=not overlap,
                                                     on_progress=run.part))
+    used = getattr(diar, "device", None)
+    if used:
+        run.torch_used = used
+        if used == "cpu" and "torch" not in run._announced and asr.gpu_engine():
+            run._announced.add("torch")
+            # В журнал резидента: диаризация на процессоре — десятки минут, а не секунды.
+            run.bus.emit(events.LOG, text="диаризация на процессоре: torch не видит видеокарту",
+                         source="device")
+    return diar
 
 
 def _align_planned(align: bool) -> bool:
@@ -650,8 +704,10 @@ def _write_structured(path: Path, segments, title: str, name_map: dict,
     if choice is not None:
         raw["asr"] = {"backend": choice.backend, "device": choice.device,
                       **({"model": choice.gigaam_model} if choice.backend == "gigaam" else {})}
-        if choice.note:
-            raw["asr_note"] = choice.note
+        # Своя пометка выбора (не тот движок) важнее причины процессора.
+        note = choice.note or getattr(choice, "cpu_reason", None)
+        if note:
+            raw["asr_note"] = note
     if _find_track(path, "sys") and _find_track(path, "mic"):
         # Микрофонные сегменты помечены пайплайном (`track`): выводить их по
         # подписям, как у старых расшифровок (meet.segvoices), не нужно.

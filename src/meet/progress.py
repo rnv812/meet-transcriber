@@ -219,6 +219,8 @@ class Stages:
         self._started = clock()
         # Замер шагов: ключ → [начало, первый отчёт своей шкалы, конец].
         self._marks: dict[str, list[float | None]] = {}
+        # Предупреждение на всю работу (`warn`): уходит с каждым событием хода.
+        self.warning: str | None = None
 
     # --- план --------------------------------------------------------------
     def drop(self, key: str) -> None:
@@ -427,6 +429,14 @@ class Stages:
             self._finished = True
             self._emit(final=True)
 
+    def warn(self, text: str | None) -> None:
+        """Предупреждение на всю работу, а не на шаг (например, «Распознаётся
+        на процессоре: видеокарта NVIDIA не найдена»): поле `warning` каждого
+        следующего события хода — окно показывает его под полоской."""
+        with self._lock:
+            self.warning = text
+            self._emit()
+
     def note(self, text: str | None) -> None:
         """Пояснение к текущему шагу (например, «диаризация пропущена»)."""
         with self._lock:
@@ -454,6 +464,8 @@ class Stages:
             data["estimate_s"] = round(self.estimate_s, 1)
         if final:
             data["final"] = True  # конец работы: консоль печатает эту строку (путь результата)
+        if self.warning:
+            data["warning"] = self.warning
         self.bus.progress(
             step.stage,
             label=step.label or events.STAGE_LABELS.get(step.stage, step.stage),
