@@ -72,19 +72,38 @@ export function useTrayPanel(): TrayData {
     setOnline(true);
   }, []);
 
-  // Показ и скрытие окна оболочкой. Подписка асинхронная — событие,
-  // пришедшее до неё, потерялось бы: видно ли окно, спрашиваем и сами.
+  // Показ и скрытие окна оболочкой. Подписка асинхронная: окно создаётся
+  // спрятанным, и первое `{visible: true}` может прийти раньше, чем она
+  // готова, — тогда оно потерялось бы, и первая панель осталась бы пустой.
+  // Поэтому, *когда подписка готова*, спрашиваем, видно ли окно, сами. Ответ
+  // устарел, если за время вопроса пришло событие, — его и не применяем.
   useEffect(() => {
     let gone = false;
     let off: (() => void) | null = null;
-    trayPanelVisible()
-      .then((shown) => { if (!gone && shown === false) setVisible(false); })
-      .catch(() => {});
-    onTrayPanel((shown) => {
+    let events = 0;
+    let shownNow = true;
+    const apply = (shown: boolean) => {
+      if (shown && !shownNow) setShownTick((t) => t + 1);
+      shownNow = shown;
       setVisible(shown);
+    };
+    onTrayPanel((shown) => {
+      events++;
       if (shown) setShownTick((t) => t + 1);
+      shownNow = shown;
+      setVisible(shown);
     })
-      .then((unlisten) => { if (gone) unlisten(); else off = unlisten; })
+      .then((unlisten) => {
+        if (gone) {
+          unlisten();
+          return;
+        }
+        off = unlisten;
+        const asked = events;
+        return trayPanelVisible().then((shown) => {
+          if (!gone && shown !== null && events === asked) apply(shown);
+        });
+      })
       .catch((cause) => console.warn("tray-panel:", cause));
     return () => { gone = true; off?.(); };
   }, []);
