@@ -112,22 +112,50 @@ def storage_file() -> Path:
     return data_dir() / STORAGE_FILE
 
 
-def storage_root() -> Path | None:
-    """Выбранная папка движка и моделей или None (по умолчанию: data_dir и
-    общий кэш Hugging Face). Битый файл, пустой или относительный путь — как
-    будто выбора нет: относительный путь значил бы «от рабочей папки», то есть
-    разное место у разных процессов."""
+# Версия формата storage.json. Неизвестная — «файл не прочитан», а не «по
+# умолчанию»: новая версия приложения могла записать то, чего мы не понимаем.
+STORAGE_VERSION = 1
+
+
+def _read_storage() -> tuple[str, Path | None]:
+    """("absent" | "ok" | "bad", папка). "bad" — файл есть, но не прочитан:
+    оборванная запись, чужой формат, пустой или относительный путь."""
     import json
 
     try:
-        raw = json.loads(storage_file().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    value = raw.get("root") if isinstance(raw, dict) else None
+        text = storage_file().read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return "absent", None
+    except (OSError, UnicodeError):
+        return "bad", None
+    try:
+        raw = json.loads(text)
+    except ValueError:
+        return "bad", None
+    if not isinstance(raw, dict) or raw.get("version", STORAGE_VERSION) != STORAGE_VERSION:
+        return "bad", None
+    value = raw.get("root")
     if not isinstance(value, str) or not value.strip():
-        return None
+        return "bad", None
     root = Path(value.strip())
-    return root if root.is_absolute() else None
+    # Относительный путь значил бы «от рабочей папки» — разное место у
+    # разных процессов.
+    return ("ok", root) if root.is_absolute() else ("bad", None)
+
+
+def storage_root() -> Path | None:
+    """Выбранная папка движка и моделей или None (по умолчанию: data_dir и
+    общий кэш Hugging Face; и когда файл выбора не прочитан — см.
+    `storage_unreadable`)."""
+    return _read_storage()[1]
+
+
+def storage_unreadable() -> bool:
+    """storage.json есть, но не прочитан. Это не «по умолчанию»: движок там
+    уже удалён переносом, и молча ставить его заново на системный диск
+    нельзя — решает человек (окно: «Указать папку» / «Вернуть на системный
+    диск»)."""
+    return _read_storage()[0] == "bad"
 
 
 def storage_home() -> Path:
@@ -138,8 +166,11 @@ def storage_home() -> Path:
 def storage_missing() -> Path | None:
     """Выбранная папка, которой сейчас нет (внешний диск отключён), или None.
     Её не создаём: на macOS это была бы папка в /Volumes на системном диске,
-    и туда молча поехали бы гигабайты."""
-    root = storage_root()
+    и туда молча поехали бы гигабайты. Файл выбора не прочитан — сам файл:
+    куда класть модели, неизвестно."""
+    state, root = _read_storage()
+    if state == "bad":
+        return storage_file()
     return root if root is not None and not root.is_dir() else None
 
 

@@ -14,6 +14,7 @@ CUDA или ctranslate2 не должно ронять резидента вме
 падает с понятным текстом, а не молчит.
 """
 
+import contextlib
 import json
 import os
 import subprocess
@@ -345,6 +346,8 @@ class JobQueue:
     """
 
     def __init__(self, bus=None, spawn=None) -> None:
+        # Ворота постановки (резидент — `storage.HOLD.gate`); None — без них.
+        self.gate = None
         self.bus = bus if bus is not None else events.EventBus()
         self._spawn = spawn or self._spawn_subprocess
         self._jobs: dict[str, Job] = {}
@@ -366,6 +369,13 @@ class JobQueue:
                low: bool = False) -> Job:
         """Поставить задачу. `low` — фоновая: обычные задачи, поставленные
         позже, встают перед ждущими фоновыми (идущую никто не прерывает)."""
+        # Ворота (резидент — `storage.HOLD.gate`): пока оболочка переключает
+        # папку движка, новая задача не ставится — проверка и постановка под
+        # тем же замком, что и удержание.
+        with (self.gate() if self.gate else contextlib.nullcontext()):
+            return self._submit(kind, folder, options, low)
+
+    def _submit(self, kind: str, folder: str, options: dict | None, low: bool) -> Job:
         job = Job(id=uuid.uuid4().hex[:12], kind=kind, folder=str(folder),
                   options=dict(options or {}))
         with self._lock:
@@ -638,6 +648,8 @@ class KeyedQueues:
     def __init__(self, bus=None, spawn=None) -> None:
         self.bus = bus if bus is not None else events.EventBus()
         self._spawn = spawn
+        # Ворота постановки (см. JobQueue.submit); None — без них.
+        self.gate = None
         self._queues: dict[str, JobQueue] = {}
         self._lock = threading.Lock()
         self._alive = True
@@ -648,6 +660,10 @@ class KeyedQueues:
         идёт. → (задача, поставлена ли новая). Проверка и постановка — под
         одним локом: двойной клик и два окна (мастер и настройки) не ставят
         вторую загрузку той же модели."""
+        with (self.gate() if self.gate else contextlib.nullcontext()):
+            return self._submit_once(kind, folder, options)
+
+    def _submit_once(self, kind: str, folder: str, options: dict | None) -> tuple[Job, bool]:
         key = _folder_key(str(folder))
         with self._lock:
             # Резидент гасится: слот, заведённый после stop, жил бы сиротой.

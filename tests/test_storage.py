@@ -8,6 +8,7 @@ GigaAM во временных папках. Настоящий `~/.cache/huggin
 
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -93,11 +94,30 @@ def test_chosen_folder_holds_engine_and_models(data, tmp_path):
 
 
 @pytest.mark.parametrize("raw", ["", "{", "[]", '{"root": ""}', '{"root": "   "}', '{"root": 5}',
-                                 '{"root": "relative/path"}'])
-def test_broken_choice_file_means_default(data, raw):
+                                 '{"root": "relative/path"}', '{"version": 2, "root": "C:/x"}'])
+def test_broken_choice_file_is_not_a_silent_default(data, raw):
+    """Оборванная запись или чужой формат — «не прочитан», а не «по
+    умолчанию»: движок на системном диске перенос уже удалил, молча ставить
+    его заново нельзя. Модели не качаются, пока человек не решит."""
     (data / paths.STORAGE_FILE).write_text(raw, encoding="utf-8")
     assert paths.storage_root() is None
-    assert paths.engine_dir() == data / "engine"
+    assert paths.storage_unreadable() is True
+    assert paths.storage_missing() == data / paths.STORAGE_FILE
+    lines = []
+    assert models.download(MEET_REPO, on_line=lines.append) == 4
+
+
+def test_versioned_choice_is_read(data, tmp_path):
+    root = tmp_path / "Meet"
+    root.mkdir()
+    (data / paths.STORAGE_FILE).write_text(json.dumps({"version": 1, "root": str(root)}), encoding="utf-8")
+    assert paths.storage_root() == root
+    assert paths.storage_unreadable() is False
+    assert paths.storage_missing() is None
+
+
+def test_no_choice_file_is_not_unreadable(data):
+    assert paths.storage_unreadable() is False
 
 
 def test_missing_folder_is_reported_not_created(data, tmp_path):
@@ -123,6 +143,17 @@ def test_meet_cache_reaches_children_through_the_environment(data, tmp_path, mon
 
     child = netproxy.settings_env()
     assert child["HF_HUB_CACHE"] == str(root / "models" / "hf")
+
+
+def test_user_transformers_cache_does_not_bypass_the_meet_cache(data, tmp_path, monkeypatch):
+    monkeypatch.setenv("TRANSFORMERS_CACHE", str(tmp_path / "tc"))
+    monkeypatch.setenv("PYTORCH_TRANSFORMERS_CACHE", str(tmp_path / "ptc"))
+    root = tmp_path / "Meet"
+    root.mkdir()
+    _choose(data, root)
+    models.use_meet_cache()
+    assert "TRANSFORMERS_CACHE" not in os.environ
+    assert "PYTORCH_TRANSFORMERS_CACHE" not in os.environ
 
 
 def test_without_choice_the_environment_is_untouched(data, tmp_path):
@@ -367,6 +398,117 @@ def test_shared_cache_equal_to_own_is_never_offered(data, tmp_path, monkeypatch)
     assert shared.is_dir()
 
 
+def test_partial_own_copy_is_not_offered_for_deletion(data, tmp_path):
+    """Своя копия без одного файла или с другим размером — из общего кэша не
+    удаляем: там единственная целая копия."""
+    _moved(data, tmp_path)
+    own = paths.models_dir() / "hf" / ("models--" + MEET_REPO.replace("/", "--")) / "snapshots" / "rev1"
+    (own / "config.json").unlink()
+    (own / "model.bin").write_bytes(b"w" * 10)
+    assert [r["id"] for r in storage.leftovers()["repos"]] == [DIAR_REPO]
+
+
+def test_leftover_behind_a_link_is_not_deleted_through_it(data, tmp_path):
+    """Папка репозитория в общем кэше — ссылка (junction/symlink) на чужое
+    место: удаляем не через неё — содержимое по ту сторону цело."""
+    import shutil
+
+    shared = _moved(data, tmp_path)
+    folder = shared / ("models--" + MEET_REPO.replace("/", "--"))
+    elsewhere = tmp_path / "elsewhere"
+    shutil.copytree(folder, elsewhere)
+    shutil.rmtree(folder)
+    try:
+        import _winapi
+
+        _winapi.CreateJunction(str(elsewhere), str(folder))
+    except (ImportError, AttributeError, OSError):
+        try:
+            folder.symlink_to(elsewhere, target_is_directory=True)
+        except OSError:
+            pytest.skip("ни junction, ни символической ссылки")
+    storage.answer_leftovers(delete=True)
+    assert (elsewhere / "snapshots" / "rev1" / "model.bin").is_file()
+
+
+def test_copied_cache_resolves_offline_with_real_huggingface_hub(data, tmp_path, monkeypatch):
+    """Настоящий huggingface_hub находит модель в скопированном кэше без сети
+    и без `blobs/` (как кэш HF на Windows без символических ссылок)."""
+    hub = pytest.importorskip("huggingface_hub")
+    _source(data, tmp_path / "hf-shared")
+    target = tmp_path / "Meet"
+    storage.copy_models(target)
+    own = target / "models" / "hf"
+    assert not (own / ("models--" + MEET_REPO.replace("/", "--")) / "blobs").exists()
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    snap = hub.snapshot_download(MEET_REPO, cache_dir=str(own), local_files_only=True)
+    assert Path(snap, "model.bin").read_bytes() == b"w" * 1000
+    one = hub.hf_hub_download(DIAR_REPO, "embedding/pytorch_model.bin", cache_dir=str(own),
+                              local_files_only=True)
+    assert Path(one).read_bytes() == b"e" * 50
+
+
+def test_moving_is_only_the_steps_before_the_switch(data):
+    journal = data / storage.JOURNAL_FILE
+    for phase, moving in (("engine", True), ("models", True), ("switching", True),
+                          ("interrupted", False), ("cleanup", False)):
+        journal.write_text(json.dumps({"version": 1, "phase": phase}), encoding="utf-8")
+        assert storage.moving() is moving, phase
+    journal.write_text("{", encoding="utf-8")
+    assert storage.moving() is True  # оболочка при старте отложит его в .bad
+    journal.unlink()
+    assert storage.moving() is False
+
+
+# --- удержание резидента перед переключением -------------------------------------
+
+
+def test_hold_is_taken_only_when_idle_and_blocks_new_work():
+    hold = storage.Hold()
+    assert hold.take(lambda: "идёт запись") == "идёт запись"
+    assert not hold.held()
+    assert hold.take(lambda: None) is None
+    assert hold.held()
+    with pytest.raises(storage.Held):
+        with hold.gate():
+            pass
+    hold.release()
+    with hold.gate():
+        pass
+
+
+def test_hold_expires_by_itself():
+    now = [100.0]
+    hold = storage.Hold(clock=lambda: now[0])
+    hold.take(lambda: None, seconds=300)
+    now[0] += 299
+    assert hold.held()
+    now[0] += 2
+    assert not hold.held()
+
+
+def test_hold_and_start_are_atomic():
+    """Начало (запись, задача) под воротами и удержание — под одним замком:
+    начавшееся до удержания видно его проверке «занят»."""
+    import threading
+
+    hold = storage.Hold()
+    entered, started = threading.Event(), []
+
+    def start():
+        with hold.gate():
+            entered.set()
+            time.sleep(0.2)
+            started.append(True)
+
+    worker = threading.Thread(target=start)
+    worker.start()
+    entered.wait(2)
+    assert hold.take(lambda: "идёт запись" if started else None) == "идёт запись"
+    worker.join()
+    assert not hold.held()
+
+
 def test_info_describes_locations(data, tmp_path):
     _source(data, tmp_path / "hf-shared")
     info = storage.info()
@@ -375,7 +517,8 @@ def test_info_describes_locations(data, tmp_path):
     assert info["hf_cache"] == str(tmp_path / "hf-shared")
     assert info["models_bytes"] > 0
     assert info["moving"] is False and info["leftovers"] is None
-    (data / storage.JOURNAL_FILE).write_text('{"phase": "models"}', encoding="utf-8")
+    assert info["unreadable"] is False and info["prefix"]
+    (data / storage.JOURNAL_FILE).write_text('{"version": 1, "phase": "models"}', encoding="utf-8")
     assert storage.info()["moving"] is True
     # Переключились, убираем прежнюю папку — качать можно, уже в новую.
     (data / storage.JOURNAL_FILE).write_text('{"phase": "cleanup"}', encoding="utf-8")

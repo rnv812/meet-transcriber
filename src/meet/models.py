@@ -153,6 +153,10 @@ def use_meet_cache() -> None:
         return
     os.environ.setdefault(USER_HF_HUB_CACHE, os.environ.get("HF_HUB_CACHE", ""))
     os.environ["HF_HUB_CACHE"] = str(cache_root())
+    # Свой кэш transformers у человека важнее HF_HUB_CACHE (transformers 4.x):
+    # модель выравнивания ушла бы мимо кэша Meet.
+    for name in ("TRANSFORMERS_CACHE", "PYTORCH_TRANSFORMERS_CACHE"):
+        os.environ.pop(name, None)
     # Кэш кусков загрузчика Xet (до 10 ГБ) — тоже не на системном диске.
     os.environ["HF_XET_CACHE"] = str(paths.models_dir() / "xet")
 
@@ -474,7 +478,8 @@ def download(repo_id: str, on_line=None) -> int:
     if (missing := paths.storage_missing()) is not None:
         # Внешний диск отключён: молча качать гигабайты на системный нельзя.
         if on_line:
-            on_line(f"папка движка и моделей недоступна: {missing} — подключите диск")
+            on_line(f"папка движка и моделей недоступна: {missing} — подключите диск "
+                    "или выберите папку в окне Meet")
         return 4
     if repo_id not in known:
         # Скачивать что попало по строке из сети — плохая идея: это путь на

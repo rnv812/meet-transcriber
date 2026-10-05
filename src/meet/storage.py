@@ -31,11 +31,14 @@ import json
 import os
 import shutil
 import sys
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from meet import models, paths
+from meet.control import Conflict
 
 # Журнал идущего переноса (пишет и удаляет оболочка). Есть — перенос идёт или
 # прерван и будет доведён/откачен при следующем запуске оболочки: модели в это
@@ -192,7 +195,11 @@ def _already(src: Path, dst: Path, size: int) -> bool:
 def _copy_one(src: Path, dst: Path, on_bytes) -> None:
     """Скопировать через временный файл, сверить и только тогда положить на
     место; время изменения — как у оригинала (GigaAM по нему не пересчитывает
-    сумму весов)."""
+    сумму весов).
+
+    Сверка перечитывает копию сразу после fsync — обычно из кэша страниц ОС:
+    она подтверждает байты, отданные системе (оборванное копирование, полный
+    или отключившийся диск), а не то, что лежит на носителе."""
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_name(dst.name + _TMP_SUFFIX)
     h = hashlib.sha256()
@@ -215,7 +222,7 @@ def _copy_one(src: Path, dst: Path, on_bytes) -> None:
         pass  # ФС без точного времени (FAT): GigaAM один раз пересчитает сумму
     if _digest(dst) != h.hexdigest():
         dst.unlink(missing_ok=True)
-        raise CopyError(f"копия {src.name} не совпала с оригиналом — диск неисправен или отключился")
+        raise CopyError(f"копия {src.name} не совпала с оригиналом — диск отключился или переполнен")
 
 
 def _gb(n: int) -> str:
@@ -259,32 +266,111 @@ def copy_models(to_root: Path, on_progress=None) -> dict:
     return {"files": len(pairs), "bytes": total, "copied": copied}
 
 
+# --- удержание на время переключения ------------------------------------------
+
+HOLD_TEXT = "идёт перенос движка и моделей — это займёт минуту, повторите после"
+# Удержание само кончается через столько секунд: оболочка, упавшая посреди
+# переключения, не должна оставить резидент без записи навсегда.
+HOLD_S = 300.0
+
+
+class Held(Conflict):
+    """Резидент удержан для переключения папки: новое не начинается (409)."""
+
+
+class Hold:
+    """Удержание резидента перед переключением на новую папку.
+
+    Оболочка просит `take` (`POST /storage/hold`): под тем же замком, под
+    которым начинаются запись (ручная и автозапись), ассистент, задачи и
+    загрузки (`gate`), проверяется, что ничего не идёт, и ставится удержание.
+    Между проверкой и перезапуском резидента ничего нового начаться не может:
+    точки входа в это время получают `Held`. Снимается `release`
+    (`DELETE /storage/hold`) или само через HOLD_S."""
+
+    def __init__(self, clock=time.monotonic) -> None:
+        self._lock = threading.RLock()
+        self._clock = clock
+        self._until = 0.0
+
+    def held(self) -> bool:
+        return self._clock() < self._until
+
+    @contextmanager
+    def gate(self):
+        """Для точек входа: удержан — Held, иначе действие идёт под замком."""
+        with self._lock:
+            if self.held():
+                raise Held(HOLD_TEXT)
+            yield
+
+    def take(self, busy, seconds: float = HOLD_S) -> str | None:
+        """Удержать, если `busy()` — None; иначе вернуть причину «занят»."""
+        with self._lock:
+            reason = busy()
+            if reason:
+                return reason
+            self._until = self._clock() + seconds
+            return None
+
+    def release(self) -> None:
+        with self._lock:
+            self._until = 0.0
+
+
+# Одно на процесс: его делят трей (автозапись) и control API.
+HOLD = Hold()
+
+
 # --- остатки в общем кэше ----------------------------------------------------
 
 
+# Шаги журнала (`storage.rs`, `Phase`): engine, models, switching — перенос
+# идёт. Прерванный («interrupted»: ждёт «Продолжить»/«Отменить») и уборка
+# после переключения («cleanup») — не идёт: качать можно, модели ложатся
+# туда, где сейчас всё.
+
+
 def moving() -> bool:
-    """Идёт перенос (до переключения на новую папку). Уборка прежней папки
-    после переключения (`"phase": "cleanup"`) загрузкам не мешает: качается
-    уже в новую папку. Нечитаемый журнал — считаем, что идёт."""
+    """Идёт перенос (до переключения на новую папку). Нечитаемый журнал —
+    считаем, что идёт: оболочка при старте откладывает такой в `.bad`."""
     try:
         raw = json.loads((paths.data_dir() / JOURNAL_FILE).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return False
     except (OSError, ValueError):
         return True
-    return not (isinstance(raw, dict) and raw.get("phase") == "cleanup")
+    # Неизвестный шаг (журнал другой версии) — тоже «идёт»: так безопаснее.
+    return not isinstance(raw, dict) or raw.get("phase") not in ("interrupted", "cleanup")
 
 
-def _complete_in_own(repo: str) -> bool:
-    """Копия репозитория в своём кэше цела: refs/main указывает на снапшот, и
-    в нём есть файлы."""
-    folder = _repo_folder(models.cache_root(), repo)
+def _main_snapshot(folder: Path) -> Path | None:
     try:
         ref = (folder / "refs" / "main").read_text(encoding="utf-8").strip()
     except (OSError, UnicodeError):
+        return None
+    return folder / "snapshots" / ref if ref else None
+
+
+def _complete_in_own(repo: str, shared: Path) -> bool:
+    """Копия в своём кэше цела относительно общего: у своей есть refs/main, и
+    каждый файл снапшота `main` общего кэша лежит в своём снапшоте того же
+    размера. Иначе удалять из общего кэша нельзя — потеряли бы единственную
+    целую копию."""
+    own = _main_snapshot(_repo_folder(models.cache_root(), repo))
+    theirs = _main_snapshot(_repo_folder(shared, repo))
+    if own is None or not own.is_dir():
         return False
-    snapshot = folder / "snapshots" / ref
-    return bool(ref) and bool(_files_under(snapshot))
+    files = _files_under(theirs) if theirs is not None else []
+    if not files:
+        return bool(_files_under(own))
+    for path in files:
+        try:
+            if (own / path.relative_to(theirs)).stat().st_size != path.stat().st_size:
+                return False
+        except OSError:
+            return False
+    return True
 
 
 def _size(folder: Path) -> int:
@@ -310,7 +396,7 @@ def leftovers() -> dict | None:
     repos = []
     for repo in hf_repos():
         folder = _repo_folder(shared, repo)
-        if folder.is_dir() and _complete_in_own(repo):
+        if folder.is_dir() and _complete_in_own(repo, shared):
             repos.append({"id": repo, "bytes": _size(folder)})
     if not repos:
         return None
@@ -355,6 +441,10 @@ def info() -> dict:
         "hf_cache": str(here.hf),
         "shared_cache": str(models.shared_cache_root()),
         "missing": str(m) if (m := paths.storage_missing()) is not None else None,
+        "unreadable": paths.storage_unreadable(),
+        # Окружение, из которого запущен этот резидент: оболочка не берёт под
+        # себя резидент из движка вне выбранной папки (`storage.rs`).
+        "prefix": sys.prefix,
         "models_bytes": models_bytes(),
         "moving": moving(),
         "leftovers": leftovers(),

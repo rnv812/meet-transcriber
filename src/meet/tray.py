@@ -412,9 +412,21 @@ class TrayApp:
     # --- запись ---------------------------------------------------------
 
     def start_recording(self, source: str, attempt: "RecordAttempt | None" = None) -> bool:
-        """Поднять запись. False — если запись уже идёт (своя или ассистента).
+        """Поднять запись. False — если запись уже идёт (своя или ассистента)
+        или резидент удержан для переключения папки движка (`storage.HOLD`):
+        проверка удержания и начало записи — под одним замком.
         `attempt` — канал этой попытки: чем кончился поток записи (ошибка
         старта не теряется, даже когда тикер уже забрал её из `result`)."""
+        from meet import storage
+
+        try:
+            with storage.HOLD.gate():
+                return self._start_recording(source, attempt)
+        except storage.Held:
+            self.log("идёт перенос движка и моделей — запись не начата")
+            return False
+
+    def _start_recording(self, source: str, attempt: "RecordAttempt | None" = None) -> bool:
         with self._mutex:
             if self.recording or self._live_busy():
                 return False

@@ -26,6 +26,14 @@ def app(monkeypatch, tmp_path):
     return tray.TrayApp()
 
 
+@pytest.fixture(autouse=True)
+def _no_hold():
+    """Удержание — одно на процесс: тест его за собой снимает."""
+    storage.HOLD.release()
+    yield
+    storage.HOLD.release()
+
+
 def test_storage_is_free_to_move_when_idle(app, tmp_path):
     state = tray_control.TrayControl(app)
     got = state.storage()
@@ -145,3 +153,62 @@ def test_storage_routes_reach_the_state(monkeypatch, tmp_path):
         assert state.answers == [{"delete": True}]
     finally:
         srv.stop(pid=4243)
+
+
+def test_hold_refuses_while_busy_and_holds_when_idle(app):
+    state = tray_control.TrayControl(app)
+    app.recording = True
+    assert state.storage_hold() == {"held": False, "busy": "идёт запись"}
+    assert not storage.HOLD.held()
+    app.recording = False
+    assert state.storage_hold() == {"held": True, "busy": None}
+    assert storage.HOLD.held()
+    assert state.storage_release() == {"ok": True}
+    assert not storage.HOLD.held()
+
+
+def test_while_held_nothing_new_starts(app, tmp_path):
+    """Удержан: ручная запись, автозапись, задачи и загрузки — отказ (409),
+    а не начало, которое перезапуск резидента оборвал бы."""
+    release = threading.Event()
+    queue = jobs.JobQueue(app.bus, spawn=_blocking(app, release))
+    downloads = jobs.KeyedQueues(app.bus, spawn=_blocking(app, release))
+    state = tray_control.TrayControl(app, queue=queue, downloads=downloads)
+    try:
+        assert state.storage_hold()["held"] is True
+        with pytest.raises(control.Conflict, match="перенос"):
+            state.start_recording()
+        assert app.start_recording(tray.AUTO) is False  # автозапись
+        assert app.recording is False
+        with pytest.raises(control.Conflict, match="перенос"):
+            state.download_model({"id": "gigaam/v3_e2e_rnnt"})
+        with pytest.raises(control.Conflict, match="перенос"):
+            queue.submit(jobs.TRANSCRIBE, str(tmp_path / "rec"), {})
+        with pytest.raises(control.Conflict, match="перенос"):
+            state.llm_queue.submit(jobs.SUMMARY, str(tmp_path / "rec"), {})
+        assert queue.listing() == [] and downloads.listing() == []
+        state.storage_release()
+        state.download_model({"id": "gigaam/v3_e2e_rnnt"})
+        assert downloads.listing()
+    finally:
+        release.set()
+        queue.stop()
+        downloads.stop()
+        state.llm_queue.stop()
+
+
+def test_assistant_does_not_start_while_held(app, monkeypatch):
+    state = tray_control.TrayControl(app)
+    monkeypatch.setattr(tray_control, "_provider_installed", lambda cfg: True)
+    started = []
+    monkeypatch.setattr(state.live, "start", lambda root, *a: started.append(root) or {"ok": True})
+    state.storage_hold()
+    with pytest.raises(control.Conflict, match="перенос"):
+        state.live_start()
+    assert started == []
+
+
+def test_storage_reports_the_engine_prefix(app):
+    import sys
+
+    assert tray_control.TrayControl(app).storage()["prefix"] == sys.prefix

@@ -820,6 +820,8 @@ _ROUTES = {
     # ответ на вопрос об остатках в общем кэше Hugging Face.
     ("GET", "/storage"): lambda h, p: _server_of(h).state.storage(),
     ("POST", "/storage/leftovers"): lambda h, p: _server_of(h).state.storage_leftovers(h._body()),
+    ("POST", "/storage/hold"): lambda h, p: _server_of(h).state.storage_hold(),
+    ("DELETE", "/storage/hold"): lambda h, p: _server_of(h).state.storage_release(),
     ("POST", "/engine/install"): lambda h, p: _server_of(h).state.install_engine(
         h._body()
     ),

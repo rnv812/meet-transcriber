@@ -418,6 +418,15 @@ class TrayControl:
         # Загрузки моделей — по слоту на модель: разные качаются одновременно
         # (сеть и диск, не GPU), одна и та же — не дважды.
         self.downloads = downloads if downloads is not None else jobs.KeyedQueues(self.bus)
+        # Перенос движка и моделей: пока оболочка переключает папку, новые
+        # задачи и загрузки не ставятся (`storage.HOLD`, POST /storage/hold).
+        from meet import storage
+
+        for q in (self.queue, self.llm_queue, self.downloads):
+            try:
+                q.gate = storage.HOLD.gate
+            except AttributeError:  # заглушка теста без атрибутов
+                pass
         # Установка движка и загрузки моделей исключают друг друга (обе
         # стороны — под этим локом): подпроцесс загрузки грузит пакеты того
         # самого окружения, которое переставляет pip.
@@ -1068,6 +1077,10 @@ class TrayControl:
         """Начать вручную. Если запись уже идёт автоматически — это то же
         нажатие «Начать запись» поверх автозаписи, что и в меню трея: человек
         берёт её под свою руку, автостоп отключается."""
+        from meet import storage
+
+        if storage.HOLD.held():
+            raise _conflict(storage.HOLD_TEXT)
         if self.live.busy():  # пишет ассистент — вторая запись не нужна
             return {**self.snapshot(), "ok": False, "action": "already-recording"}
         if self.tray.start_recording(MANUAL):
@@ -1124,8 +1137,14 @@ class TrayControl:
         if self.live.busy():
             raise _bad_request("Ассистент ещё запускается или останавливается — "
                                "попробуйте через несколько секунд")
+        from meet import storage
         from meet.tray import RecordAttempt
 
+        # Перенос движка удерживает резидент: запись (и ассистент в ней) не
+        # начнётся — понятный отказ вместо «запись уже идёт». Атомарность —
+        # в воротах самой записи (`TrayApp.start_recording`).
+        if storage.HOLD.held():
+            raise _conflict(storage.HOLD_TEXT)
         attempt = RecordAttempt()
         if not self.tray.start_recording(LIVE, attempt=attempt):
             raise _bad_request("Запись уже идёт")
@@ -2563,6 +2582,22 @@ class TrayControl:
             if item.get("state") in (jobs.QUEUED, jobs.RUNNING):
                 return "идёт расшифровка или другая фоновая задача"
         return None
+
+    def storage_hold(self) -> dict:
+        """Удержать резидент перед переключением папки: ничего не идёт —
+        удержание на `storage.HOLD_S` (новые запись, ассистент, задачи,
+        загрузки — отказ), иначе — чем занят. Проверка и удержание атомарны."""
+        from meet import storage
+
+        reason = storage.HOLD.take(self._storage_busy)
+        return {"held": reason is None, "busy": reason}
+
+    def storage_release(self) -> dict:
+        """Снять удержание (переключение сорвалось до перезапуска)."""
+        from meet import storage
+
+        storage.HOLD.release()
+        return {"ok": True}
 
     def storage_leftovers(self, body: dict | None = None) -> dict:
         """Ответ на вопрос после переезда: удалить ли модели Meet из общего
