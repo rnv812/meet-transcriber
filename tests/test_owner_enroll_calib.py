@@ -120,7 +120,16 @@ def test_run_prints_numbers_only(monkeypatch, capsys):
 
 def test_failed_copy_delete_is_reported_with_its_path(tmp_path, monkeypatch, capsys):
     """Копия записи не удалилась — не молчим: путь в stderr и код возврата 2."""
+    import shutil
+
+    from meet import credentials
+
+    real_rmtree = shutil.rmtree
     calib = _calib()
+    # --meeting меняет окружение и credentials процесса — вернуть после теста.
+    monkeypatch.setattr(credentials, "get_hf_token", credentials.get_hf_token)
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
     folder = tmp_path / "Local" / "meet" / "recordings" / "2026-10-05_10-00"
     folder.mkdir(parents=True)
     (folder / "mic.opus").write_bytes(b"opus")
@@ -137,7 +146,4 @@ def test_failed_copy_delete_is_reported_with_its_path(tmp_path, monkeypatch, cap
     assert calib.main(["--meeting", "2026-10-05_10-00"]) == 2
     err = capsys.readouterr().err
     assert str(seen[0]) in err and "PermissionError" in err and len(seen) == 2
-    monkeypatch.undo()
-    import shutil
-
-    shutil.rmtree(seen[0])
+    real_rmtree(seen[0])
