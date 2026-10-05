@@ -688,3 +688,38 @@ def test_without_sample_only_quiet_copies_are_dropped(tmp_path):
     assert _by_speaker(got.mic) == {"Вы": [s for s, _ in OWNER_PHRASES]}
     assert got.report["dropped"] == {"echo": 0, "neighbour": 4, "owner_leak": 0}
     assert len(got.sys) == 5
+
+
+def test_loaded_embedder_is_really_released(tmp_path, monkeypatch):
+    """N4: эмбеддер, загруженный разделением, после него не держит никто —
+    ни сам run, ни замыкание проверки утечек (иначе empty_cache не вернёт
+    видеопамять)."""
+    import gc
+    import weakref
+
+    from meet import segvoices
+
+    class Embedder:
+        def __call__(self, audio):
+            return fake_embed(audio)
+
+    refs = []
+
+    def load():
+        model = Embedder()
+        refs.append(weakref.ref(model))
+        return model
+
+    alive_at_release = []
+
+    def release():
+        gc.collect()
+        alive_at_release.append(refs[0]() is not None)
+
+    monkeypatch.setattr(segvoices, "load_embedder", load)
+    monkeypatch.setattr(mic_split, "_release", release)
+    sys_phrases = [(_words(t, s + LEAK_LAG), OWNER) for s, t in OWNER_PHRASES]
+    got, _ = _run(_meeting(tmp_path, room1=True, sys_phrases=sys_phrases), _owner(), embed=None)
+    assert got.voices["leak"]["gate"] == "voice_match"
+    # Когда отпускается видеопамять, модель уже никому не нужна.
+    assert alive_at_release == [False]

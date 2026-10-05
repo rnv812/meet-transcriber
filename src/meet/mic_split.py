@@ -425,12 +425,12 @@ def _leak_voice(sys_audio, embed, owner, device: str | None):
     """Голос кандидатов в утечку владельца (mic_dedupe, вся встреча): центроид
     эмбеддингов отрезков sys (вес — длительность, отрезки короче EMBED_MIN не
     считаются) против образца владельца — от T_OWN, как у кластера микрофона.
-    → (владелец?, cos | None)."""
-    def check(spans: list[tuple[float, float]]) -> tuple[bool, float | None]:
-        vecs, weights = [], []
+    → (владелец?, cos | None, номера посчитанных отрезков | None — сбой)."""
+    def check(spans: list[tuple[float, float]]) -> tuple[bool, float | None, list[int] | None]:
+        vecs, weights, used = [], [], []
         try:
             with _torch_threads(EMBED_THREADS):
-                for start, end in spans:
+                for n, (start, end) in enumerate(spans):
                     a, b = max(0, int(start * SAMPLE_RATE)), max(0, int(end * SAMPLE_RATE))
                     clip = sys_audio[a:b].astype(np.float32) / 32768.0
                     if clip.size < int(EMBED_MIN * SAMPLE_RATE):
@@ -441,12 +441,13 @@ def _leak_voice(sys_audio, embed, owner, device: str | None):
                         continue
                     vecs.append(_unit(vec))
                     weights.append(clip.size / SAMPLE_RATE)
+                    used.append(n)
         except Exception:
-            return False, None
+            return False, None, None
         if not vecs:
-            return False, None
+            return False, None, []
         cos = owner_voice.score(_unit((np.stack(vecs) * np.array(weights)[:, None]).sum(0)), owner, device)
-        return cos >= T_OWN, cos
+        return cos >= T_OWN, cos, used
     return check
 
 
@@ -632,6 +633,9 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
                    "align": aligned, "lag_s": lag_s, "leak": leak or None, "clusters": clusters,
                    "dropped": dropped}
     if loaded:
+        # Замыкание проверки утечек тоже держит модель: без него empty_cache
+        # видеопамять не вернёт.
+        leak_voice = None  # noqa: F841
         del embed
         _release()
     log(f"микрофон: окон {len(wins)}, голосов {len(clusters)}, людей в комнате {len(room_labels)}, "

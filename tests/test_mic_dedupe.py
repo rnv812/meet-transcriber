@@ -60,8 +60,9 @@ def _lead(n=3, lag=LAG, role="room", t0=120.0, level=-30.0):
 
 
 def _owner_voice(spans):
-    """Центроид голоса копий в sys — владелец (по образцу): в этих тестах — да."""
-    return True, 0.9
+    """Центроид голоса копий в sys — владелец (по образцу): в этих тестах — да,
+    голос посчитан у всех отрезков."""
+    return True, 0.9, list(range(len(spans)))
 
 
 def _find(mic, sys, *, owner_known=True, lead=3, lag=LAG, lead_role="room", mic_ev=None, sys_ev=None,
@@ -191,7 +192,7 @@ def test_speaker_echo_in_room_window_is_dropped_from_mic():
 
 LEAK_PHRASES = ["я пришлю отчёт до пятницы", "мы созвонимся с поставщиком завтра",
                 "надо проверить счёт ещё раз", "давайте закончим на этом сегодня",
-                "я напишу всем после обеда"]
+                "я напишу всем после обеда", "и ещё одна фраза про склад"]
 
 
 def _leak_case(*, same_env=True, with_env=True, lag=0.25, sound_lag=None, leak_voice=_owner_voice, n=5,
@@ -223,7 +224,8 @@ def test_owner_leak_with_established_lag_and_same_envelope_is_dropped_from_sys()
     drops, _ = _leak_case(report=report)
     assert _reasons(drops) == LEAKED
     assert drops[0].to_raw()["pair"]["track"] == "mic" and drops[0].env_corr > 0.9
-    assert report == {"candidates": 5, "seconds": pytest.approx(9.6, abs=0.05), "cos": 0.9, "gate": "voice_match"}
+    assert report == {"candidates": 5, "seconds": pytest.approx(9.6, abs=0.05),
+                      "judged_s": pytest.approx(9.6, abs=0.05), "cos": 0.9, "gate": "voice_match"}
 
 
 def test_owner_leak_needs_envelope_evidence():
@@ -246,7 +248,7 @@ def test_owner_leak_needs_the_owner_voice_in_sys():
     образцу не владельца (или его не посчитать) — это не утечка: оригиналы
     собеседника остаются все."""
     report = {}
-    assert _leak_case(leak_voice=lambda spans: (False, 0.41), report=report)[0] == []
+    assert _leak_case(leak_voice=lambda spans: (False, 0.41, list(range(len(spans)))), report=report)[0] == []
     assert report["gate"] == "voice_mismatch" and report["cos"] == 0.41 and report["candidates"] == 5
     report = {}
     assert _leak_case(leak_voice=None, report=report)[0] == []
@@ -258,14 +260,46 @@ def test_owner_leak_needs_enough_audio_to_judge_the_voice():
     голос и не спрашивается."""
     asked = []
     report = {}
-    drops, _ = _leak_case(n=2, leak_voice=lambda spans: asked.append(spans) or (True, 0.9), report=report)
+    drops, _ = _leak_case(n=2, leak_voice=lambda spans: asked.append(spans) or _owner_voice(spans),
+                          report=report)
     assert drops == [] and asked == [] and report["gate"] == "too_little_audio"
 
 
 def test_owner_leak_voice_is_judged_once_on_all_candidates():
     asked = []
-    drops, _ = _leak_case(leak_voice=lambda spans: asked.append(spans) or (True, 0.9))
+    drops, _ = _leak_case(leak_voice=lambda spans: asked.append(spans) or _owner_voice(spans))
     assert len(asked) == 1 and len(asked[0]) == 5 and _reasons(drops) == LEAKED
+
+
+def test_owner_leak_floor_counts_only_judged_audio():
+    """N3: голос посчитан только у части кандидатов (остальные короче 1 с) —
+    порог 8 с — по посчитанному звуку: четыре фразы по 1,92 с — мало."""
+    report = {}
+    drops, _ = _leak_case(leak_voice=lambda spans: (True, 0.9, [0, 1, 2, 3]), report=report)
+    assert drops == [] and report["gate"] == "too_little_audio"
+    assert report["judged_s"] == pytest.approx(7.68, abs=0.05) and report["seconds"] > 8.0
+
+
+def test_owner_leak_check_failure_is_an_error_not_a_mismatch():
+    report = {}
+
+    def broken(spans):
+        raise RuntimeError("CUDA OOM")
+
+    assert _leak_case(leak_voice=broken, report=report)[0] == []
+    assert report["gate"] == "voice_error"
+    report = {}
+    assert _leak_case(leak_voice=lambda spans: (False, None, None), report=report)[0] == []
+    assert report["gate"] == "voice_error"
+
+
+def test_owner_leak_removes_only_candidates_whose_voice_was_judged():
+    """Отрезок, у которого голос не посчитан, не удаляется, даже когда
+    центроид остальных — владелец."""
+    report = {}
+    drops, _ = _leak_case(n=6, leak_voice=lambda spans: (True, 0.9, [0, 1, 2, 3, 4]), report=report)
+    assert report["gate"] == "voice_match" and report["candidates"] == 6
+    assert len(drops) == 5 and "склад" not in " ".join(w.text for d in drops for w in d.words)
 
 
 def test_echo_in_owner_window_with_jittered_word_lag_keeps_the_sys_original():

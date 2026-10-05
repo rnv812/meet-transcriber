@@ -523,26 +523,42 @@ def _fresh(drops: list[Drop], used: set) -> list[Drop]:
 
 
 def _leaks(candidates: list[Drop], leak_voice, report: dict | None) -> list[Drop]:
-    """Утечки владельца по всей встрече: центроид голоса всех кандидатов —
-    владелец (`leak_voice(spans) -> (да/нет, cos)`)? Да — удаляются все
-    кандидаты, нет или мало звука — ни один. `report` — чем решено
+    """Утечки владельца по всей встрече: центроид голоса кандидатов —
+    владелец? `leak_voice(spans) -> (да/нет, cos, номера отрезков, которые
+    правда вошли в центроид)`; номеров нет (None) — сбой проверки. Да —
+    удаляются кандидаты, чей голос посчитан; нет, сбой или посчитанного
+    звука меньше LEAK_MIN_AUDIO_S — ни один. `report` — чем решено
     (mic_voices.json)."""
     spans = [(d.words[0].start, d.words[-1].end) for d in candidates]
-    seconds = sum(max(0.0, b - a) for a, b in spans)
-    info = {"candidates": len(candidates), "seconds": round(seconds, 2), "cos": None}
+    length = [max(0.0, b - a) for a, b in spans]
+    info = {"candidates": len(candidates), "seconds": round(sum(length), 2), "judged_s": 0.0, "cos": None}
+    keep: list[Drop] = []
     if not candidates:
         info["gate"] = "no_candidates"
     elif leak_voice is None:
         info["gate"] = "no_voice_check"
-    elif seconds < LEAK_MIN_AUDIO_S:
+    elif sum(length) < LEAK_MIN_AUDIO_S:
         info["gate"] = "too_little_audio"
     else:
-        ok, cos = leak_voice(spans)
+        try:
+            ok, cos, used = leak_voice(spans)
+        except Exception:
+            ok, cos, used = False, None, None
         info["cos"] = None if cos is None else round(float(cos), 3)
-        info["gate"] = "voice_match" if ok else "voice_mismatch"
+        used = sorted(set(used)) if used is not None else None
+        info["judged_s"] = round(sum(length[i] for i in used), 2) if used is not None else 0.0
+        if used is None:
+            info["gate"] = "voice_error"
+        elif info["judged_s"] < LEAK_MIN_AUDIO_S:
+            info["gate"] = "too_little_audio"
+        elif ok:
+            info["gate"] = "voice_match"
+            keep = [candidates[i] for i in used]
+        else:
+            info["gate"] = "voice_mismatch"
     if report is not None:
         report.update(info)
-    return candidates if info["gate"] == "voice_match" else []
+    return keep
 
 
 def _resolve(mic: list[Tok], sys: list[Tok], lags: Lags, env: Envelope | None,
