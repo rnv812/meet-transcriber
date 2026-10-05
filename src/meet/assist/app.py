@@ -606,7 +606,9 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                 knowledge_dir=None, parent_pid=None, attach_to=None,
                 tap_port=None, tap_token=None) -> None:
     def log(line: str) -> None:
-        print(line, flush=True)
+        # Одной записью со своим переводом строки: строки этапов пишут и
+        # фоновые потоки старта, print() кусками их перемешивал бы.
+        print(line + "\n", end="", flush=True)
 
     clock = StartClock(log)
     from meet import live_asr, live_catchup, settings
