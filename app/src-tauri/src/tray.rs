@@ -51,6 +51,8 @@ const ERROR_CHARS: usize = 120;
 
 pub const RECORDING_STARTED: &str = "Идёт запись";
 pub const AUTO_RECORDING_STARTED: &str = "Идёт запись (авто)";
+/// «Запись с ассистентом» (`source: live`): одно уведомление на весь старт.
+pub const LIVE_RECORDING_STARTED: &str = "Запись с ассистентом начата";
 pub const RECORDING_SAVED: &str = "Запись сохранена";
 pub const TRANSCRIPT_READY: &str = "Расшифровка готова";
 pub const TRANSCRIPT_FAILED: &str = "Ошибка расшифровки";
@@ -428,6 +430,15 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
                 "Автозапись по звонку",
                 None,
             ));
+        } else if next.source.as_deref() == Some("live") {
+            // Одно уведомление на запись с ассистентом: запись идёт с этой
+            // секунды, а готовность ассистента — тихо, в подсказке значка
+            // («· ассистент запускается» → «· ассистент»). Сбой — своим.
+            out.push(Notice::new(
+                LIVE_RECORDING_STARTED,
+                "Ассистент загружает модель — подсказки появятся через несколько секунд",
+                None,
+            ));
         } else {
             out.push(Notice::new(
                 RECORDING_STARTED,
@@ -456,11 +467,10 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
     }
     // «Слушает» — когда модель загрузилась, а не когда пошёл звук: до этого
     // ассистент ещё ничего не умеет, а запуск может и не удаться.
-    if !prev.live.listening() && next.live.listening() {
-        // «Запись с ассистентом» (source: live) — тоже подключение к записи, но
-        // с первой секунды: догонять нечего, это «слушает встречу».
-        let with_assistant = next.source.as_deref() == Some("live");
-        out.push(if next.live.attached && !with_assistant {
+    // У записи с ассистентом (source: live) уведомление было при её начале.
+    let with_assistant = next.source.as_deref() == Some("live");
+    if !prev.live.listening() && next.live.listening() && !with_assistant {
+        out.push(if next.live.attached {
             Notice::new(
                 LIVE_ATTACHED,
                 "Догоняет начало встречи и слушает дальше. Выключить — в меню значка Meet",
@@ -2778,6 +2788,32 @@ mod tests {
             &json!({}),
         );
         assert!(old.live.ready && old.live.listening());
+    }
+
+    #[test]
+    fn recording_with_assistant_gives_one_toast_and_a_quiet_ready() {
+        // Запись пошла, ассистент к ней подключается: одно уведомление.
+        let mut warming = idle();
+        warming.recording = true;
+        warming.source = Some("live".into());
+        warming.live = attached(true, false, false);
+        warming.live.ready = false;
+        let started = transitions(Some(&idle()), &warming);
+        assert_eq!(
+            started.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(),
+            vec![LIVE_RECORDING_STARTED]
+        );
+        let tip = tooltip(Some(&warming), &ResidentStatus::Running);
+        assert!(tip.contains("· ассистент запускается"), "{tip}");
+        // Модель загрузилась — без уведомления, подсказка значка — «· ассистент».
+        let mut ready = warming.clone();
+        ready.live.ready = true;
+        assert!(transitions(Some(&warming), &ready).is_empty());
+        let tip = tooltip(Some(&ready), &ResidentStatus::Running);
+        assert!(
+            tip.contains("· ассистент") && !tip.contains("запускается"),
+            "{tip}"
+        );
     }
 
     #[test]

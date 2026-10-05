@@ -16,8 +16,11 @@ import type { LiveStatus, Snapshot } from "../lib/types";
 
 const RECONNECT_MS = 2000;
 
-export function useLiveStatus(ep: Endpoint | null): LiveStatus | null {
-  const [live, setLive] = useState<LiveStatus | null>(null);
+/** Состояние ассистента и откуда идущая запись (`source: "live"` — «Запись с ассистентом»). */
+export type PanelStatus = LiveStatus & { source?: string | null };
+
+export function useLiveStatus(ep: Endpoint | null): PanelStatus | null {
+  const [live, setLive] = useState<PanelStatus | null>(null);
 
   useEffect(() => {
     if (!ep) return;
@@ -27,7 +30,7 @@ export function useLiveStatus(ep: Endpoint | null): LiveStatus | null {
     // Ответы /state приходят в любом порядке: применяется только последний
     // запрошенный, а снимок из потока отменяет все ещё не пришедшие.
     let seq = 0;
-    const apply = (s: Snapshot) => { if (!closed && s.live) setLive(s.live); };
+    const apply = (s: Snapshot) => { if (!closed && s.live) setLive({ ...s.live, source: s.source ?? null }); };
     const connect = () => {
       close = openEvents(ep, {
         onSnapshot: (s) => { seq++; apply(s); },

@@ -23,7 +23,8 @@ export type AutoRecord = {
 
 export type Snapshot = {
   status: "idle" | "recording";
-  source: "auto" | "manual" | null;
+  /** Откуда идущая запись; `live` — «Запись с ассистентом» (обычная запись и подключённый ассистент). */
+  source: "auto" | "manual" | "live" | null;
   folder: string | null;
   elapsed_s: number;
   /** Название звонка из окна браузера, пока идёт автозапись; неизвестно — null. Нет у старых резидентов. */

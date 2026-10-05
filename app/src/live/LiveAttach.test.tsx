@@ -93,3 +93,15 @@ test("строки догнанного начала встают выше жи�
   // Только начало (живых ещё нет) — по порядку прихода.
   expect(addLine([line(10, 0, true)], line(20, 1, true)).map((l) => l.t)).toEqual([10, 20]);
 });
+
+
+test("запись с ассистентом: в панели и «Остановить и сохранить», и «Выключить ассистента»", async () => {
+  vi.mocked(liveStop).mockReturnValue(new Promise(() => {}));
+  render(<LivePanel endpoint={ep} />);
+  act(() => bus().emit("state", { ...snap(status()), source: "live" } as Snapshot));
+  expect(screen.getByRole("button", { name: "Выключить ассистента" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Остановить и сохранить" }));
+  expect(liveStop).toHaveBeenCalledWith(ep);
+  expect(liveDetach).not.toHaveBeenCalled();
+  expect(screen.getByRole("banner")).toHaveTextContent("Останавливаю…");
+});

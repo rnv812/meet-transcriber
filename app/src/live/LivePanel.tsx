@@ -144,10 +144,15 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   }, [view.maximized, setMaximized]);
 
   const attached = !!status?.attached;
-  const stop = () => {
+  // «Запись с ассистентом»: запись — обычная, ассистент к ней подключён; из
+  // панели её можно и остановить с сохранением, и только выключить ассистента.
+  const withAssistant = attached && status?.source === "live";
+  const [fullStop, setFullStop] = useState(false);
+  const stop = (detach: boolean = attached) => {
+    setFullStop(!detach);
     setStopRequested(true);
     setStopError(null);
-    (attached ? liveDetach : liveStop)(endpoint).catch((e) => {
+    (detach ? liveDetach : liveStop)(endpoint).catch((e) => {
       setStopRequested(false);
       setStopError(errorText(e));
     });
@@ -163,7 +168,7 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   // Звук уже идёт, а модель распознавания ещё грузится — этап старта.
   const warming = !!status?.active && status.ready === false;
   const stage = status?.stage?.trim();
-  const state = stopping ? (attached ? "Выключаю…" : "Останавливаю…")
+  const state = stopping ? (attached && !fullStop ? "Выключаю…" : "Останавливаю…")
     : warming ? (stage ? `Запускается: ${stage}` : "Запускается…")
     : catchup ? `Догоняю ${catchup.percent} %` : "Слушает";
   const sizeLabel = view.maximized ? "Обычный размер" : "На весь экран";
@@ -217,12 +222,15 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
             tooltip={`${sizeLabel} (двойной щелчок по шапке)`} onClick={() => setMaximized(!view.maximized)} />
           <IconButton icon={open ? ChevronUp : ChevronDown} label={open ? "Свернуть" : "Развернуть"}
             aria-expanded={open} onClick={() => setExpanded(!open)} />
-          {attached ? (
-            <IconButton icon={PowerOff} label="Выключить ассистента" variant="danger" className="live-head__stop"
-              tooltip="Выключить ассистента — запись продолжится" onClick={stop} disabled={stopping} />
-          ) : (
-            <IconButton icon={Square} label="Стоп" variant="danger" className="live-head__stop"
-              tooltip="Остановить и сохранить запись" onClick={stop} disabled={stopping} />
+          {attached && (
+            <IconButton icon={PowerOff} label="Выключить ассистента" variant={withAssistant ? undefined : "danger"}
+              className={withAssistant ? "live-head__detach" : "live-head__stop"}
+              tooltip="Выключить ассистента — запись продолжится" onClick={() => stop(true)} disabled={stopping} />
+          )}
+          {(!attached || withAssistant) && (
+            <IconButton icon={Square} label={withAssistant ? "Остановить и сохранить" : "Стоп"} variant="danger"
+              className="live-head__stop" tooltip="Остановить и сохранить запись" onClick={() => stop(false)}
+              disabled={stopping} />
           )}
         </span>
       </header>
