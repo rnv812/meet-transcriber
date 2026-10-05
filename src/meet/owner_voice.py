@@ -80,10 +80,20 @@ def path(voices: Path | None = None) -> Path:
     return Path(voices) / SUBDIR / FILE_NAME
 
 
+READ_RETRY_S = 0.05
+
+
 def _read(p: Path) -> dict:
-    """Файл как есть; нет или битый — пустой."""
+    """Файл как есть; нет или битый — пустой. На Windows файл, который как раз
+    заменяет другой процесс, на миг не открыть (PermissionError) — один
+    короткий повтор, а не «образца нет» для всей расшифровки."""
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        try:
+            text = p.read_text(encoding="utf-8")
+        except PermissionError:
+            time.sleep(READ_RETRY_S)
+            text = p.read_text(encoding="utf-8")
+        data = json.loads(text)
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as e:

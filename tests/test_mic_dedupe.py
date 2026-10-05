@@ -188,9 +188,11 @@ def _leak_case(*, same_env=True, with_env=True, lag=0.25):
     text = "я пришлю отчёт до пятницы"
     mic = _words(text, 30.0, seg="m1", role="owner")
     sys = _words(text, 30.0 + lag, seg="s1")
+    lead_lag = lag if lag > mic_dedupe.NEIGHBOUR_MIN_LAG else LAG
     if not with_env:
-        return _find(mic, sys)
-    return _find(mic, sys, mic_ev=[(30.0, 2.0, 5, -10.0)], sys_ev=[(30.0 + lag, 2.0, 5 if same_env else 6, -12.0)])
+        return _find(mic, sys, lag=lead_lag)
+    return _find(mic, sys, lag=lead_lag, mic_ev=[(30.0, 2.0, 5, -10.0)],
+                 sys_ev=[(30.0 + lag, 2.0, 5 if same_env else 6, -12.0)])
 
 
 def test_owner_leak_with_established_lag_and_same_envelope_is_dropped_from_sys():
@@ -205,6 +207,14 @@ def test_owner_leak_needs_envelope_evidence():
     (другая огибающая) или огибающей нет — его слова остаются."""
     assert _leak_case(same_env=False)[0] == []
     assert _leak_case(with_env=False)[0] == []
+
+
+def test_owner_leak_needs_lag_of_at_least_a_tenth():
+    """Эхо колонок ещё не откалибровано: пара в окне владельца с лагом 0,07 с
+    (эхо с дрожанием начала слов) — не утечка, слова собеседника остаются."""
+    drops, _ = _leak_case(lag=0.07)
+    assert drops == []
+    assert _reasons(_leak_case(lag=0.1)[0]) == [("sys", "owner_leak", 5)]
 
 
 def test_owner_window_with_echo_lag_keeps_both():

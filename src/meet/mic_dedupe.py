@@ -58,6 +58,10 @@ WINDOW_AFTER = 2.5
 # вместе; не откалибровано — в записях эха не было).
 NEIGHBOUR_MIN_LAG = 0.05
 ECHO_MAX_LAG = 0.05
+# Утечка владельца (копия в sys удаляется) — только от LEAK_MIN_LAG: пока эхо
+# колонок не откалибровано, пара эха с дрожанием начала слов чуть выше 0,05
+# в окне владельца иначе стёрла бы настоящие слова собеседника из sys.
+LEAK_MIN_LAG = 0.1
 # Уверенная пара (задаёт L*): покрытие и число совпавших слов. Старт (T0).
 CONFIDENT_COVERAGE = 0.8
 CONFIDENT_WORDS = 4
@@ -461,7 +465,7 @@ def _decide(pair: Pair, own: float | None, lags: Lags, env: Envelope | None, own
         if side == "owner":
             # Окно владельца: его слова в микрофоне не трогаем. Копия в sys
             # позже микрофона и с той же огибающей — мой голос через чужой ноутбук.
-            if strong and pair.lag > NEIGHBOUR_MIN_LAG and other and _big_enough(other, sys_sizes):
+            if strong and pair.lag >= LEAK_MIN_LAG and other and _big_enough(other, sys_sizes):
                 drops.append(Drop("sys", other, words, pair.coverage, pair.lag, env_corr, "owner_leak"))
             continue
         if side == "weak":

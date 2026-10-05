@@ -171,6 +171,26 @@ def test_replace_is_retried_while_another_process_reads(tmp_path, monkeypatch):
     assert len(calls) == 2 and [x.id for x in owner_voice.load(tmp_path)] == [s.id]
 
 
+def test_read_retries_once_while_another_process_replaces(tmp_path, monkeypatch):
+    """Windows: файл на миг занят заменой из другого процесса — чтение
+    повторяется, а не превращается в «образца нет»."""
+    from pathlib import Path
+
+    s = owner_voice.add(A, source="enroll", seconds=20, voices=tmp_path)
+    real = Path.read_text
+    calls = []
+
+    def busy_once(self, *a, **kw):
+        if self.name == "owner.json":
+            calls.append(1)
+            if len(calls) == 1:
+                raise PermissionError("занято")
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", busy_once)
+    assert [x.id for x in owner_voice.load(tmp_path)] == [s.id] and len(calls) == 2
+
+
 def test_read_modify_write_holds_a_cross_process_file_lock(tmp_path, monkeypatch):
     """Пока идёт правка, файл-замок рядом с образцом занят: второй процесс
     (другой дескриптор) его не возьмёт."""
