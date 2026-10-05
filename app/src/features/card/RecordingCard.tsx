@@ -244,6 +244,9 @@ export function RecordingCard({
     open: true, mounted: true, focus: label ? { label, n: (p.focus?.n ?? 0) + 1 } : p.focus,
   })), []);
   const nameSpeaker = useCallback((label: string) => openSpeakers(label), [openSpeakers]);
+  // «Показать» убранные повторы: панель «Спикеры» со списком раскрытым.
+  const [removedAsk, setRemovedAsk] = useState(0);
+  const showRemoved = useCallback(() => { setRemovedAsk((n) => n + 1); openSpeakers(); }, [openSpeakers]);
   const closeSpeakers = useCallback(() => setPanel((p) => ({ ...p, open: false })), []);
   const playPhrase = useCallback((start: number, until: number) => player.current?.seek(start, true, until), []);
   const showTurns = useCallback((label: string) => setOwnFind((f) => ({
@@ -615,7 +618,7 @@ export function RecordingCard({
       )}
       {status.kind === "ready" && (
         <MicSplitNote info={rec.mic_split} diarization={rec.diarization} onOpenSettings={onOpenSettings}
-          onShowRemoved={() => openSpeakers()} />
+          onShowRemoved={showRemoved} />
       )}
       {systemAudioText(rec.system_audio, rec.system_audio_reason) && (
         <p className="muted card__note" role="note">
@@ -639,7 +642,8 @@ export function RecordingCard({
       {panel.mounted && status.kind === "ready" && (
         <SpeakersPanel endpoint={endpoint} recordingId={id} people={people} avatarVersion={avatarVersion}
           open={panel.open} focus={panel.focus} version={rec.transcript} playable={playable} cardRef={cardEl} jobs={jobs}
-          onClose={closeSpeakers} onPlay={playPhrase} onShowTurns={showTurns} onChanged={speakersChanged} />
+          onClose={closeSpeakers} onPlay={playPhrase} onShowTurns={showTurns} onChanged={speakersChanged}
+          removedAsk={removedAsk} />
       )}
       {status.kind !== "recording" && (hasAudio ? (
         <AudioPlayer key={id} ref={player} endpoint={endpoint} id={id} durationHint={rec.duration_s ?? spokenUntil}

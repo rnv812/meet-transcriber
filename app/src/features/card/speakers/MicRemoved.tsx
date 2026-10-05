@@ -4,7 +4,7 @@
  * ноутбуком в том же звонке, эхо колонок, ваш голос через чужой ноутбук, —
  * оставлены один раз. Каждую убранную копию можно послушать (▶).
  */
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Play } from "lucide-react";
 import { clock } from "../../../lib/format";
 import type { MicRemovedItem } from "../../../lib/types";
@@ -14,29 +14,37 @@ import { removedSummary } from "../micSplit";
 
 const REASON: Record<MicRemovedItem["reason"], string> = {
   neighbour: "дубль соседа",
-  echo: "эхо колонок",
+  echo: "эхо",
   owner_leak: "ваш голос через звонок",
 };
 
-export function MicRemoved({ items, playable, onPlay }: {
+export function MicRemoved({ items, playable, onPlay, ask = 0 }: {
   items: MicRemovedItem[];
   playable: boolean;
   onPlay: (start: number, until: number) => void;
+  /** Растёт с каждым «Показать» из карточки: список раскрыт и виден. */
+  ask?: number;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(ask > 0);
   const listId = useId();
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!ask) return;
+    setOpen(true);
+    box.current?.scrollIntoView?.({ block: "nearest" });
+  }, [ask]);
   const counts: Record<string, number> = {};
   for (const it of items) counts[it.reason] = (counts[it.reason] ?? 0) + 1;
   const summary = removedSummary(counts);
   if (!items.length || !summary) return null;
   const fromMic = items.every((it) => it.track === "mic");
   return (
-    <div className="spk-removed" role="group" aria-label="Убрано с микрофона">
+    <div className="spk-removed" role="group" aria-label="Убрано с микрофона" ref={box}>
       <div className="spk-removed__head">
         <span>{fromMic ? "Убрано с микрофона" : "Убраны повторы"}: {summary}</span>
         <HelpTip label="Что значит «Убрано с микрофона»" title="Повторы убраны">
           <TipLine>Эти фразы прозвучали в записи дважды: в микрофон и в звук собеседников.</TipLine>
-          <TipLine>Так бывает, когда сосед в том же звонке сидит рядом с вами или звук идёт из колонок.</TipLine>
+          <TipLine>Так бывает, когда сосед в том же звонке сидит рядом с вами или звук звонка слышен в микрофоне.</TipLine>
           <TipLine>В расшифровке осталась одна копия — тому, кто говорил. Убранное можно послушать.</TipLine>
         </HelpTip>
         <span aria-hidden="true">·</span>

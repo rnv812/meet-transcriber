@@ -76,5 +76,7 @@ test("убранные повторы: строка в карточке, «По�
   expect(screen.getByText(/С микрофона убраны повторы: 1 дубль соседа/)).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Показать" }));
   const panel = await screen.findByRole("dialog", { name: "Спикеры встречи" });
-  await waitFor(() => expect(within(panel).getByRole("group", { name: "Убрано с микрофона" })).toBeInTheDocument());
+  const box = await within(panel).findByRole("group", { name: "Убрано с микрофона" });
+  // Список сразу раскрыт: второе «Показать» не нужно.
+  await waitFor(() => expect(within(box).getByText("всем привет")).toBeInTheDocument());
 });

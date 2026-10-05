@@ -21,6 +21,7 @@ export const NO_SPEAKER = "Неизвестный";
 export function mergeTurns(segments: Segment[]): Turn[] {
   const out: Turn[] = [];
   let cur: Turn | null = null;
+  let curMic = false;
   segments.forEach((s, i) => {
     if (s.kind === "break") {
       // Сама по себе и соседей не склеивает (как meet/search.py).
@@ -31,9 +32,12 @@ export function mergeTurns(segments: Segment[]): Turn[] {
     // Пустой спикер — как null (так же склеивает и поиск резидента, meet/search.py).
     const speaker = s.speaker || NO_SPEAKER;
     // `uncertain` у микрофона — голос под вопросом, у собеседников — нахлёст.
-    const unsure = s.uncertain && s.track === "mic";
+    const mic = s.track === "mic";
+    const unsure = s.uncertain && mic;
     const overlap = s.uncertain && !unsure;
-    if (cur && cur.speaker === speaker && s.start - cur.end < GAP_S) {
+    // Микрофон и звонок, голос под вопросом — разные реплики (как library.turn_mark у резидента:
+    // номера реплик окна и поиска совпадают).
+    if (cur && cur.speaker === speaker && s.start - cur.end < GAP_S && curMic === mic && !!cur.unsure === unsure) {
       cur.texts.push(s.text);
       cur.end = Math.max(cur.end, s.end);
       if (overlap) cur.uncertain = true;
@@ -42,6 +46,7 @@ export function mergeTurns(segments: Segment[]): Turn[] {
       cur.idx?.push(i);
     } else {
       cur = { speaker, start: s.start, end: s.end, texts: [s.text], uncertain: overlap, idx: [i] };
+      curMic = mic;
       if (unsure) cur.unsure = true;
       if (s.room) cur.room = true;
       out.push(cur);

@@ -19,6 +19,8 @@ export function micSplitHint(info: Pick<MicSplitInfo, "status"> | null | undefin
   diarization?: string | null): Hint | null {
   switch (info?.status) {
     case "no_profile":
+      // Без доступа к HF образец не записать (та же модель) — баннер уже про Hugging Face.
+      if (diarization?.startsWith("skipped_")) return null;
       return { text: "Запишите образец голоса — тогда люди рядом с вами получат свои подписи. "
         + "Пока весь микрофон подписан вами", ...RECORD };
     case "owner_not_found":
@@ -74,7 +76,7 @@ export function MicSplitNote({ info, diarization, onOpenSettings, onShowRemoved 
       )}
       {removed && (
         <span className="mic-note__line">
-          <span>С микрофона убраны повторы: {removed}</span>
+          <span>{(info?.dropped?.owner_leak ?? 0) > 0 ? "Убраны повторы" : "С микрофона убраны повторы"}: {removed}</span>
           {onShowRemoved && <Button variant="link" size="sm" onClick={onShowRemoved}>Показать</Button>}
         </span>
       )}

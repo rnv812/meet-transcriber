@@ -43,6 +43,22 @@ describe("реплики", () => {
     ]);
   });
 
+  test("звонок и микрофон одного человека, голос под вопросом — отдельные реплики", () => {
+    const turns = mergeTurns([
+      seg(0, "Анна", "В звонке."),
+      seg(1.5, "Анна", "В комнате.", { track: "mic", room: true }),
+      seg(3, "Вы", "Да.", { track: "mic" }),
+      seg(4, "Вы", "Наверное.", { track: "mic", uncertain: true }),
+      seg(5, "Вы", "Точно.", { track: "mic", uncertain: true }),
+    ]);
+    expect(turns.map((t) => [t.texts.join(" "), !!t.room, !!t.unsure])).toEqual([
+      ["В звонке.", false, false],
+      ["В комнате.", true, false],
+      ["Да.", false, false],
+      ["Наверное. Точно.", false, true],
+    ]);
+  });
+
   test("у человека в комнате — пометка, у сомнительного голоса микрофона — своя", () => {
     render(<Turns turns={mergeTurns(segments)} colors={new Map()} playable={false} onPlay={() => {}} />);
     const rows = document.querySelectorAll("[data-turn]");
@@ -67,8 +83,10 @@ describe("панель «Спикеры»", () => {
   });
   const view = (extra: Partial<SpeakersView> = {}): SpeakersView => ({
     owner: "Вы", history: [], pos: 0,
-    speakers: [row("Спикер 1", { track: "sys" }), row("Спикер 2", { track: "mic" }),
-      row("Анна", { track: "mixed" }), row("Вы", { track: "mic" })],
+    speakers: [row("Спикер 1", { track: "sys" }), row("Спикер 2", { track: "mic", room: true }),
+      row("Анна", { track: "mixed", room: true }), row("Вы", { track: "mic", owner_voice_only: true }),
+      // Владелец под прежним именем или переименованный «Вы»: резидент говорит — не в комнате.
+      row("Кузьма", { track: "mic", room: false })],
     mic_split: { rule: 1, status: "ok", owner_profile: "enroll", room_speakers: 1,
       dropped: { echo: 1, neighbour: 2, owner_leak: 0 } },
     mic_removed: [
@@ -102,6 +120,33 @@ describe("панель «Спикеры»", () => {
       .toBeInTheDocument();
     expect(within(screen.getByRole("region", { name: /^Спикер 1/ })).queryByText(/комнате/)).toBeNull();
     expect(within(screen.getByRole("region", { name: /^Вы/ })).queryByText(/комнате/)).toBeNull();
+    expect(within(screen.getByRole("region", { name: /^Кузьма/ })).queryByText(/комнате/)).toBeNull();
+  });
+
+  test("голос владельца не предлагают запомнить в базу людей", async () => {
+    setup();
+    const me = await screen.findByRole("region", { name: /^Вы/ });
+    await userEvent.click(within(me).getByRole("button", { name: "Назначить…" }));
+    await userEvent.type(screen.getByRole("combobox"), "Пётр{Enter}");
+    expect(within(me).queryByRole("checkbox", { name: /Запомнить голос/ })).toBeNull();
+    const room = screen.getByRole("region", { name: /^Спикер 2/ });
+    await userEvent.click(within(room).getByRole("button", { name: "Назначить…" }));
+    await userEvent.type(screen.getByRole("combobox"), "Ольга{Enter}");
+    expect(within(room).getByRole("checkbox", { name: /Запомнить голос/ })).toBeInTheDocument();
+  });
+
+  test("«Показать» из карточки раскрывает список убранного", async () => {
+    const cardRef = createRef<HTMLElement>();
+    render(
+      <section ref={cardRef}>
+        <SpeakersPanel endpoint={{ base: "/api", token: null }} recordingId="r1" people={[]} open focus={null}
+          version={1} playable cardRef={cardRef} onClose={vi.fn()} onPlay={vi.fn()} onShowTurns={vi.fn()}
+          onChanged={vi.fn()} removedAsk={1} />
+      </section>,
+    );
+    const box = await screen.findByRole("group", { name: "Убрано с микрофона" });
+    expect(within(box).getByRole("button", { name: "Скрыть" })).toHaveAttribute("aria-expanded", "true");
+    expect(within(box).getAllByRole("listitem")).toHaveLength(3);
   });
 
   test("«Убрано с микрофона»: счёт, «Показать» и ▶ у каждой убранной фразы", async () => {
@@ -115,7 +160,7 @@ describe("панель «Спикеры»", () => {
     expect(within(box).getByRole("button", { name: "Скрыть" })).toHaveAttribute("aria-expanded", "true");
     const items = within(box).getAllByRole("listitem");
     expect(items.map((li) => li.textContent)).toEqual([
-      expect.stringContaining("эхо колонокда слышно"),
+      expect.stringContaining("эхода слышно"),
       expect.stringContaining("дубль соседавсем привет"),
       expect.stringContaining("дубль соседадо завтра"),
     ]);
@@ -148,8 +193,10 @@ describe("подсказки карточки", () => {
     expect(micSplitHint({ status: "skipped_error" })?.text).toMatch(/ошибк/);
     expect(micSplitHint({ status: "skipped_no_token" })?.text).toMatch(/Hugging Face/);
     expect(micSplitHint({ status: "skipped_no_token" })?.action).toBe("engine");
-    // Без токена диаризации уже есть баннер «настройте Hugging Face» — второй раз не говорим.
+    // Без токена диаризации уже есть баннер «настройте Hugging Face» — второй раз не говорим,
+    // и образец без него не записать.
     expect(micSplitHint({ status: "skipped_no_token" }, "skipped_no_token")).toBeNull();
+    expect(micSplitHint({ status: "no_profile" }, "skipped_no_token")).toBeNull();
     expect(micSplitHint({ status: "ok" })).toBeNull();
     expect(micSplitHint({ status: "off" })).toBeNull();
     expect(micSplitHint(null)).toBeNull();
@@ -175,6 +222,12 @@ describe("подсказки карточки", () => {
     expect(screen.getByRole("note")).toHaveTextContent("С микрофона убраны повторы: 2 дубля соседа");
     await userEvent.click(screen.getByRole("button", { name: "Показать" }));
     expect(onShowRemoved).toHaveBeenCalled();
+
+    // Убрано только из звука собеседников (ваш голос через звонок) — не «с микрофона».
+    rerender(<MicSplitNote info={{ status: "ok", room_speakers: 0, dropped: { owner_leak: 2 } }}
+      onOpenSettings={onOpenSettings} onShowRemoved={onShowRemoved} />);
+    expect(screen.getByRole("note")).toHaveTextContent("Убраны повторы: 2 ваши фразы через звонок");
+    expect(screen.getByRole("note")).not.toHaveTextContent("С микрофона");
 
     rerender(<MicSplitNote info={{ status: "ok", room_speakers: 0, dropped: { neighbour: 0 } }}
       onOpenSettings={onOpenSettings} onShowRemoved={onShowRemoved} />);

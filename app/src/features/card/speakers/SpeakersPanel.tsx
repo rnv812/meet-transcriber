@@ -51,8 +51,10 @@ type Option = { key: string; text: string; hint?: string; change: Change; person
 
 export function SpeakersPanel({
   endpoint, recordingId, people, avatarVersion, open, focus, version, playable, cardRef, jobs = NO_JOBS,
-  onClose, onPlay, onShowTurns, onChanged,
+  onClose, onPlay, onShowTurns, onChanged, removedAsk = 0,
 }: {
+  /** Растёт с каждым «Показать» убранные повторы из карточки: список «Убрано с микрофона» раскрыт. */
+  removedAsk?: number;
   endpoint: Endpoint;
   recordingId: string;
   /** Задачи резидента: счёт голосов для «Разделить спикера». */
@@ -194,7 +196,8 @@ export function SpeakersPanel({
 
   const rememberOf = (row: SpeakerRow) => remember[row.label] ?? rememberDefault(row, staged, owner);
   const canRemember = (row: SpeakerRow) => {
-    if (!row.has_voice || !staged[row.label]) return false;
+    // Голос владельца в базу людей не пишется: для него — «Запомнить мой голос».
+    if (!row.has_voice || row.owner_voice_only || !staged[row.label]) return false;
     const final = finalOf(row.label, staged);
     // Ваш голос — не человек базы голосов: для «Это я» свой флажок (ниже).
     return final !== null && !isUnnamed(final) && final !== owner;
@@ -282,7 +285,7 @@ export function SpeakersPanel({
             onPlay={onPlay} onShowTurns={onShowTurns} onSplit={() => { setPick(null); setNotice(null); setSplit(row.label); }} />
         ))}
         {view?.mic_removed && view.mic_removed.length > 0 && (
-          <MicRemoved items={view.mic_removed} playable={playable} onPlay={onPlay} />
+          <MicRemoved items={view.mic_removed} playable={playable} onPlay={onPlay} ask={removedAsk} />
         )}
         {view && view.speakers.some((r) => r.has_voice) && (
           <ThresholdBox endpoint={endpoint} recordingId={recordingId} own={view.voice_threshold ?? null}
@@ -345,7 +348,7 @@ function SpeakerRowView({
         <div className="spk-row__who">
           <div className="spk-row__name" id={titleId}>
             <span className={isUnnamed(row.label) ? "spk-row__label--unnamed" : ""}>{row.label}</span>
-            {row.label !== owner && trackBadge(row.track)}
+            {row.room && trackBadge(row.track)}
             {change && <span className="spk-row__change">{changeText(row.label, staged).slice(row.label.length + 1)}</span>}
           </div>
           <div className="spk-row__stats muted num">
