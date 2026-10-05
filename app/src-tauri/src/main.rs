@@ -22,6 +22,7 @@ mod netproxy;
 mod platform;
 mod pty;
 mod resident;
+mod storage;
 mod tray;
 mod tray_panel;
 mod updater;
@@ -124,6 +125,14 @@ fn main() {
             engine::reinstall_engine,
             engine::retry_gigaam_install,
             engine::gpu_info,
+            // «Где хранить движок и модели»: проверка, перенос, отмена,
+            // «Вернуть на системный диск» при отключённом диске.
+            storage::storage_status,
+            storage::storage_check,
+            storage::storage_move,
+            storage::storage_cancel,
+            storage::storage_reset,
+            storage::storage_retry,
             windows::open_url,
             windows::mark_wizard_done,
             windows::open_logs,
@@ -176,6 +185,9 @@ fn main() {
             if upgrade::quit_requested(&args) {
                 std::process::exit(0);
             }
+            // Прерванный перенос движка и моделей — откатить или довести до
+            // того, как надзор будет искать движок (`storage.rs`).
+            storage::recover_at_startup();
             // Движок, собранный из другого колеса той же версии, и движок
             // новой версии после обновления приложения ставятся в фоне;
             // резидент ждёт конца, чтобы не подняться из старого кода.

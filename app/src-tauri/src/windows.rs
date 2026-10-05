@@ -455,8 +455,15 @@ pub fn wizard_at_startup(
 /// Из `setup` (главный поток).
 pub fn open_wizard_on_first_run(app: &AppHandle, engine_upkeep: bool) {
     let data = resident::data_dir();
+    // Папка движка и моделей недоступна: окно с ошибкой и «Вернуть на
+    // системный диск», а не мастер, который поставил бы движок заново.
+    if crate::storage::missing(&data).is_some() {
+        open_main(app, None, None);
+        return;
+    }
     let version = app.package_info().version.to_string();
-    let installed = engine::is_installed(&engine::env_dir(&data, &version), &version);
+    let home = crate::storage::home(&data);
+    let installed = engine::is_installed(&engine::env_dir(&home, &version), &version);
     if wizard_at_startup(
         !cfg!(debug_assertions),
         installed,
@@ -511,6 +518,7 @@ pub fn resident_status(app: AppHandle) -> String {
         ResidentStatus::Failed { .. } => "failed",
         ResidentStatus::EngineMissing => "engine-missing",
         ResidentStatus::EngineUpdating { .. } => "engine-updating",
+        ResidentStatus::StorageMissing { .. } => "storage-missing",
         ResidentStatus::Quitting => "quitting",
     }
     .to_string()

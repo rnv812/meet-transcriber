@@ -347,5 +347,8 @@ def test_info_describes_locations(data, tmp_path):
     assert info["hf_cache"] == str(tmp_path / "hf-shared")
     assert info["models_bytes"] > 0
     assert info["moving"] is False and info["leftovers"] is None
-    (data / storage.JOURNAL_FILE).write_text("{}", encoding="utf-8")
+    (data / storage.JOURNAL_FILE).write_text('{"phase": "models"}', encoding="utf-8")
     assert storage.info()["moving"] is True
+    # Переключились, убираем прежнюю папку — качать можно, уже в новую.
+    (data / storage.JOURNAL_FILE).write_text('{"phase": "cleanup"}', encoding="utf-8")
+    assert storage.moving() is False

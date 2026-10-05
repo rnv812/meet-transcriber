@@ -358,6 +358,12 @@ pub enum ResidentStatus {
         step: usize,
         of: usize,
     },
+    /// Выбранной папки движка и моделей нет (внешний диск отключён): резидент
+    /// не запускается, окно предлагает «Повторить» или «Вернуть на системный
+    /// диск» (`storage.rs`).
+    StorageMissing {
+        path: PathBuf,
+    },
     /// «Выход»: резидент сохраняет запись и гасится, затем выйдет оболочка.
     Quitting,
 }
@@ -421,7 +427,8 @@ struct Inner {
 
 /// Окружение движка текущей версии и PATH с ffmpeg для резидента из него.
 struct EngineContext {
-    data_dir: PathBuf,
+    /// Папка движка и моделей (`storage::home`): в ней `engine`.
+    home: PathBuf,
     version: String,
     env_dir: PathBuf,
     ffmpeg_dir: Option<PathBuf>,
@@ -429,12 +436,14 @@ struct EngineContext {
 
 impl EngineContext {
     fn of(app: &AppHandle) -> Self {
-        let data_dir = data_dir();
+        // Движок — в папке движка и моделей (`storage.json`), по умолчанию —
+        // в папке данных.
+        let home = crate::storage::home(&data_dir());
         let version = app.package_info().version.to_string();
         EngineContext {
-            env_dir: engine::env_dir(&data_dir, &version),
+            env_dir: engine::env_dir(&home, &version),
             ffmpeg_dir: engine::ffmpeg_dir(app),
-            data_dir,
+            home,
             version,
         }
     }
@@ -559,6 +568,12 @@ impl Supervisor {
         lock(&self.inner.status).clone()
     }
 
+    /// Кандидат, из которого запущен свой резидент (перенос движка ждёт, что
+    /// он поднимется из новой папки).
+    pub fn running_from(&self) -> Option<PathBuf> {
+        lock(&self.inner.running_from).clone()
+    }
+
     /// Статус от надзора поколения `generation`. Прежнее поколение молчит:
     /// его поток уже не отвечает за резидент. После «Выхода» статус остаётся
     /// `Quitting`: надзор, ещё не заметивший флаг, не должен вернуть трею
@@ -581,6 +596,25 @@ impl Supervisor {
     }
 
     fn supervise(&self, app: &AppHandle, generation: u64) {
+        // Папки движка и моделей нет — не запускаем ничего: ни движка из
+        // ниоткуда, ни мастера, который поставил бы его заново на системный
+        // диск. Решает человек в окне.
+        if let Some(path) = crate::storage::missing(&data_dir()) {
+            shell_log!(
+                "папка движка и моделей недоступна: {} — резидент не запускается",
+                path.display()
+            );
+            self.set_status(generation, ResidentStatus::StorageMissing { path });
+            tray::notify(
+                app,
+                vec![Notice {
+                    title: crate::storage::MISSING_TITLE.into(),
+                    body: "Подключите диск или откройте окно Meet".into(),
+                    recording: None,
+                }],
+            );
+            return;
+        }
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(Path::to_path_buf))
@@ -589,7 +623,7 @@ impl Supervisor {
         let list = candidates(
             &exe_dir,
             std::env::var_os(OVERRIDE_ENV).as_deref(),
-            &engine.data_dir,
+            &engine.home,
             &engine.version,
             cfg!(debug_assertions),
         );
@@ -874,7 +908,7 @@ impl Supervisor {
                     self.set_status(generation, ResidentStatus::Running);
                     if let Some(engine) = cleanup {
                         engine::remove_stale_in_background(
-                            engine.data_dir.clone(),
+                            engine.home.clone(),
                             engine.version.clone(),
                         );
                     }

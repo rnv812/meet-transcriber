@@ -263,7 +263,16 @@ def copy_models(to_root: Path, on_progress=None) -> dict:
 
 
 def moving() -> bool:
-    return (paths.data_dir() / JOURNAL_FILE).exists()
+    """Идёт перенос (до переключения на новую папку). Уборка прежней папки
+    после переключения (`"phase": "cleanup"`) загрузкам не мешает: качается
+    уже в новую папку. Нечитаемый журнал — считаем, что идёт."""
+    try:
+        raw = json.loads((paths.data_dir() / JOURNAL_FILE).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return True
+    return not (isinstance(raw, dict) and raw.get("phase") == "cleanup")
 
 
 def _complete_in_own(repo: str) -> bool:

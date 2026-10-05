@@ -36,6 +36,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::logs::{self, shell_log};
 use crate::platform;
 use crate::resident::{self, Supervisor};
+use crate::storage;
 use crate::tray;
 
 /// Индексы колёс torch — как `TORCH_CUDA_INDEX`/`TORCH_CPU_INDEX` в
@@ -382,6 +383,11 @@ pub fn space_needed(data_dir: &Path, profile: &str, cache: Option<&Path>) -> f64
     needs_for(profile, warm)
 }
 
+/// Места под движок профиля в папке `home` с учётом кэша uv этой машины.
+pub fn space_for(home: &Path, profile: &str) -> f64 {
+    space_needed(home, profile, current_uv_cache().as_deref())
+}
+
 #[cfg(windows)]
 fn current_uv_cache() -> Option<PathBuf> {
     uv_cache_dir(
@@ -451,6 +457,22 @@ pub fn file_sha256(path: &Path) -> io::Result<String> {
 
 fn read_marker(env_dir: &Path) -> Option<Marker> {
     serde_json::from_str(&fs::read_to_string(env_dir.join(MARKER)).ok()?).ok()
+}
+
+/// Профиль установленного движка этой версии (`cuda`/`cpu`/`mac`); не
+/// установлен — `None`.
+pub fn installed_profile(env_dir: &Path, version: &str) -> Option<String> {
+    is_installed(env_dir, version)
+        .then(|| read_marker(env_dir))
+        .flatten()
+        .map(|marker| marker.profile)
+}
+
+/// Интерпретатор окружения движка (рядом с `meet-tray`).
+pub fn python_of(env_dir: &Path) -> PathBuf {
+    env_dir
+        .join(platform::venv_bin())
+        .join(platform::exe("python"))
 }
 
 /// Движок этой версии установлен: есть резидент и маркер с версией
@@ -803,6 +825,13 @@ impl Job {
         }
     }
 
+    /// Погасить все процессы job; сам job остаётся годным для новых.
+    pub fn terminate(&self) -> bool {
+        use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+        // SAFETY: хэндл наш и жив, пока жив `self`.
+        unsafe { TerminateJobObject(self.0, 1) != 0 }
+    }
+
     pub fn assign(&self, child: &std::process::Child) -> bool {
         use std::os::windows::io::AsRawHandle;
         self.assign_handle(child.as_raw_handle())
@@ -859,6 +888,17 @@ fn unbind_from_shell(pid: u32) {
     if let Ok(mut pids) = INSTALL_GROUPS.lock() {
         pids.retain(|known| *known != pid);
     }
+}
+
+/// «Отменить» перенос движка и моделей: погасить идущую установку или
+/// копирование (всё, что запущено через `run_streamed`). Шаг вернётся с
+/// «процесс прерван». На Windows — все процессы job установки разом.
+pub fn cancel_installs() {
+    #[cfg(windows)]
+    if let Some(job) = install_job() {
+        job.terminate();
+    }
+    kill_installs();
 }
 
 /// Выход оболочки: погасить установку, которая ещё идёт (на Windows это
@@ -1080,50 +1120,18 @@ pub fn install(app: &AppHandle, profile: &str, fresh: bool) -> Result<(), String
 
 pub fn install_with(app: &AppHandle, profile: &str, mode: InstallMode) -> Result<(), String> {
     let _busy = begin_install()?;
-    if !known_profile(profile) {
-        return Err(format!("Неизвестный профиль движка: {profile}"));
-    }
     let data = resident::data_dir();
-    let version = app_version(app);
-    let env = env_dir(&data, &version);
-    let resources = resource_dir_with(app, UV).ok_or(NO_UV)?;
-    let wheel = find_wheel(&resources, &version).ok_or(NO_WHEEL)?;
-    let fresh = mode == InstallMode::Full { fresh: true };
-    // Повторная установка: места не хватает — отказ раньше, чем гасить
-    // работающий резидент. Переустановка проверяет место после удаления
-    // окружения (`prepare`): оно само его и освобождает. Замена колеса
-    // meet занимает мегабайты — её не проверяем.
-    if mode == (InstallMode::Full { fresh: false }) {
-        check_space(&data, profile)?;
-    }
-    let _lock = InstallLock::acquire(&engine_root(&data))?;
+    // Движок — в папке движка и моделей (`storage.json`), по умолчанию — в
+    // папке данных.
+    let home = storage::home(&data);
+    let prepared = prepare_install(app, &home, profile, mode)?;
     let supervisor = app.state::<Supervisor>();
     // Резидент из этого окружения держит его файлы: uv не пересоздаст venv
     // под работающим python.exe, а удалить папку не даст Windows.
-    let stopped = supervisor.stop_if_from(&env);
-    // Хэш колеса — в маркер: по нему следующий старт узнает пересборку той
-    // же версии. Не посчитался — маркер без хэша, колесо переставится при
-    // следующем старте (лишние секунды, не поломка).
-    let wheel_sha256 = file_sha256(&wheel)
-        .map_err(|error| shell_log!("хэш колеса {} не посчитался: {error}", wheel.display()))
-        .ok();
-    let result = prepare(&data, &env, profile, fresh).and_then(|()| {
-        run_steps(
-            app,
-            &Target {
-                data_dir: &data,
-                env: &env,
-                version: &version,
-                profile,
-            },
-            &resources.join(UV),
-            (&wheel, wheel_sha256.as_deref()),
-            mode,
-        )
-    });
+    let stopped = supervisor.stop_if_from(&prepared.env);
+    let result = run_install(app, &data, &home, &prepared, profile, mode);
     match &result {
         Ok(()) => {
-            shell_log!("движок {version} ({profile}) установлен: {}", env.display());
             // Новый надзор заново соберёт кандидатов и возьмёт движок.
             supervisor.respawn(app);
         }
@@ -1137,12 +1145,105 @@ pub fn install_with(app: &AppHandle, profile: &str, mode: InstallMode) -> Result
     result
 }
 
-/// Хватит ли места на диске с данными под профиль (с учётом кэша uv); не
-/// узнать — не мешаем. Ошибся в меньшую сторону — uv упадёт с «нет места»,
-/// и это будет в хвосте лога.
-fn check_space(data_dir: &Path, profile: &str) -> Result<(), String> {
-    let needs = space_needed(data_dir, profile, current_uv_cache().as_deref());
-    match free_gb(data_dir).and_then(|free| space_error(needs, free)) {
+/// Поставить движок этой версии в папку `home` (перенос движка и моделей,
+/// `storage.rs`): все шаги, без остановки и перезапуска резидента — он
+/// работает из прежней папки, пока перенос не переключит её. Замок установки
+/// (`begin_install`) держит вызывающий.
+pub fn install_into(app: &AppHandle, home: &Path, profile: &str) -> Result<(), String> {
+    let mode = InstallMode::Full { fresh: false };
+    let prepared = prepare_install(app, home, profile, mode)?;
+    let result = run_install(app, &resident::data_dir(), home, &prepared, profile, mode);
+    if let Err(error) = &result {
+        shell_log!("установка движка в {} не удалась: {error}", home.display());
+    }
+    result
+}
+
+/// Проверено и занято до установки: окружение, колесо, замок.
+struct Prepared {
+    version: String,
+    env: PathBuf,
+    resources: PathBuf,
+    wheel: PathBuf,
+    _lock: InstallLock,
+}
+
+fn prepare_install(
+    app: &AppHandle,
+    home: &Path,
+    profile: &str,
+    mode: InstallMode,
+) -> Result<Prepared, String> {
+    if !known_profile(profile) {
+        return Err(format!("Неизвестный профиль движка: {profile}"));
+    }
+    let version = app_version(app);
+    let env = env_dir(home, &version);
+    let resources = resource_dir_with(app, UV).ok_or(NO_UV)?;
+    let wheel = find_wheel(&resources, &version).ok_or(NO_WHEEL)?;
+    // Повторная установка: места не хватает — отказ раньше, чем гасить
+    // работающий резидент. Переустановка проверяет место после удаления
+    // окружения (`prepare`): оно само его и освобождает. Замена колеса
+    // meet занимает мегабайты — её не проверяем.
+    if mode == (InstallMode::Full { fresh: false }) {
+        check_space(home, profile)?;
+    }
+    let lock = InstallLock::acquire(&engine_root(home))?;
+    Ok(Prepared {
+        version,
+        env,
+        resources,
+        wheel,
+        _lock: lock,
+    })
+}
+
+fn run_install(
+    app: &AppHandle,
+    data: &Path,
+    home: &Path,
+    prepared: &Prepared,
+    profile: &str,
+    mode: InstallMode,
+) -> Result<(), String> {
+    let Prepared {
+        version,
+        env,
+        resources,
+        wheel,
+        ..
+    } = prepared;
+    // Хэш колеса — в маркер: по нему следующий старт узнает пересборку той
+    // же версии. Не посчитался — маркер без хэша, колесо переставится при
+    // следующем старте (лишние секунды, не поломка).
+    let wheel_sha256 = file_sha256(wheel)
+        .map_err(|error| shell_log!("хэш колеса {} не посчитался: {error}", wheel.display()))
+        .ok();
+    let fresh = mode == InstallMode::Full { fresh: true };
+    prepare(home, env, profile, fresh)?;
+    run_steps(
+        app,
+        &Target {
+            data_dir: data,
+            home,
+            env,
+            version,
+            profile,
+        },
+        &resources.join(UV),
+        (wheel, wheel_sha256.as_deref()),
+        mode,
+    )?;
+    shell_log!("движок {version} ({profile}) установлен: {}", env.display());
+    Ok(())
+}
+
+/// Хватит ли места на диске движка (`home`) под профиль (с учётом кэша uv);
+/// не узнать — не мешаем. Ошибся в меньшую сторону — uv упадёт с «нет
+/// места», и это будет в хвосте лога.
+fn check_space(home: &Path, profile: &str) -> Result<(), String> {
+    let needs = space_needed(home, profile, current_uv_cache().as_deref());
+    match free_gb(home).and_then(|free| space_error(needs, free)) {
         Some(error) => Err(error),
         None => Ok(()),
     }
@@ -1152,7 +1253,7 @@ fn check_space(data_dir: &Path, profile: &str) -> Result<(), String> {
 /// законченной — в том числе когда удаление ниже споткнулось на занятом
 /// файле и окружение осталось наполовину), переустановка удаляет окружение
 /// и проверяет место.
-fn prepare(data_dir: &Path, env: &Path, profile: &str, fresh: bool) -> Result<(), String> {
+fn prepare(home: &Path, env: &Path, profile: &str, fresh: bool) -> Result<(), String> {
     match fs::remove_file(env.join(MARKER)) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -1168,15 +1269,17 @@ fn prepare(data_dir: &Path, env: &Path, profile: &str, fresh: bool) -> Result<()
                 )
             })?;
         }
-        check_space(data_dir, profile)?;
+        check_space(home, profile)?;
     }
-    fs::create_dir_all(engine_root(data_dir))
+    fs::create_dir_all(engine_root(home))
         .map_err(|error| format!("Не удалось создать папку движка: {error}"))
 }
 
-/// Куда и что ставится.
+/// Куда и что ставится: `home` — папка движка и моделей (в ней `engine`),
+/// `data_dir` — папка данных (журнал установки).
 struct Target<'a> {
     data_dir: &'a Path,
+    home: &'a Path,
     env: &'a Path,
     version: &'a str,
     profile: &'a str,
@@ -1191,6 +1294,7 @@ fn run_steps(
 ) -> Result<(), String> {
     let Target {
         data_dir,
+        home,
         env,
         version,
         profile,
@@ -1209,10 +1313,10 @@ fn run_steps(
     );
     let of = steps.len();
     let plan = install_plan(steps, mode);
-    let mut envs = uv_env(data_dir);
+    let mut envs = uv_env(home);
     // Прокси из настроек Windows: uv их сам не читает (см. netproxy.rs).
     envs.extend(crate::netproxy::system_proxy_env());
-    let cwd = engine_root(data_dir);
+    let cwd = engine_root(home);
     let mut log = InstallLog::open(data_dir);
     log.write(&format!(
         "--- {} движка {version} ({profile}) в {}",
@@ -1335,14 +1439,15 @@ fn run_gigaam(
 pub fn retry_gigaam(app: &AppHandle) -> Result<(), String> {
     let _busy = begin_install()?;
     let data = resident::data_dir();
+    let home = storage::home(&data);
     let version = app_version(app);
-    let env = env_dir(&data, &version);
+    let env = env_dir(&home, &version);
     let marker = read_marker(&env)
         .filter(|marker| marker.version == version)
         .ok_or("Движок не установлен")?;
     let resources = resource_dir_with(app, UV).ok_or(NO_UV)?;
     let wheel = find_wheel(&resources, &version).ok_or(NO_WHEEL)?;
-    let _lock = InstallLock::acquire(&engine_root(&data))?;
+    let _lock = InstallLock::acquire(&engine_root(&home))?;
     let constraints = constraints_file(&resources, &marker.profile)
         .map(|file| file.to_string_lossy().into_owned());
     let argv = uv_gigaam_step(
@@ -1352,7 +1457,7 @@ pub fn retry_gigaam(app: &AppHandle) -> Result<(), String> {
         &marker.profile,
         constraints.as_deref(),
     );
-    let mut envs = uv_env(&data);
+    let mut envs = uv_env(&home);
     envs.extend(crate::netproxy::system_proxy_env());
     let mut log = InstallLog::open(&data);
     log.write(&format!(
@@ -1363,7 +1468,7 @@ pub fn retry_gigaam(app: &AppHandle) -> Result<(), String> {
         app,
         &argv,
         &envs,
-        &engine_root(&data),
+        &engine_root(&home),
         &env,
         &mut log,
         (1, 1),
@@ -1374,6 +1479,12 @@ pub fn retry_gigaam(app: &AppHandle) -> Result<(), String> {
 /// зависит, ждать ли резиденту (`Upkeep::holds_resident`).
 pub fn plan_upkeep(app: &AppHandle) -> Upkeep {
     let data = resident::data_dir();
+    // Папка движка на отключённом диске: ставить некуда (и нельзя — на macOS
+    // это создало бы папку в /Volumes на системном диске). Окно покажет ошибку.
+    if storage::missing(&data).is_some() {
+        return Upkeep::Nothing;
+    }
+    let data = storage::home(&data);
     let version = app_version(app);
     let env = env_dir(&data, &version);
     let marker = is_installed(&env, &version)
@@ -1502,7 +1613,7 @@ pub fn installing() -> bool {
 }
 
 pub fn status(app: &AppHandle) -> EngineStatus {
-    let data = resident::data_dir();
+    let data = storage::home(&resident::data_dir());
     let version = app_version(app);
     let env = env_dir(&data, &version);
     let installed = is_installed(&env, &version);

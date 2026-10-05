@@ -123,7 +123,8 @@ pub fn note_version_at_startup(app: &AppHandle) {
     let current = app.package_info().version.to_string();
     let marker = data.join(LAST_VERSION);
     let stored = std::fs::read_to_string(&marker).ok();
-    let engines: Vec<String> = engine::stale_envs(&engine::engine_root(&data), &current)
+    let home = crate::storage::home(&data);
+    let engines: Vec<String> = engine::stale_envs(&engine::engine_root(&home), &current)
         .iter()
         .filter_map(|dir| {
             dir.file_name()
