@@ -198,3 +198,55 @@ def test_job_worker_turns_telemetry_off(monkeypatch, tmp_path, capsys):
     assert os.environ["PYANNOTE_METRICS_ENABLED"] == "false"
 
 
+# --- C7: время стадий — в журнал резидента --------------------------------------
+
+
+def test_stage_timing_line_reaches_the_log_sink(monkeypatch, tmp_path, capsys):
+    from meet import credentials
+
+    clock = [100.0]
+    monkeypatch.setattr(diarize.time, "perf_counter", lambda: clock[0])
+    _fake_torch(monkeypatch)
+    pipe = _Pipe(clock=clock)
+
+    def load(token):
+        clock[0] += 2.0
+        return pipe
+
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: "hf_x")
+    monkeypatch.setattr(diarize, "_load_pipeline", load)
+    _wire(monkeypatch, pipe)
+    lines = []
+    monkeypatch.setattr(diarize, "_log_sink", lines.append)
+    diar = diarize.diarize_wav(tmp_path / "x.wav")
+    t = diar.timings
+    assert t["load"] == pytest.approx(3.0)  # загрузка 2 с + до первого отчёта сегментации 1 с
+    assert t["segmentation"] == pytest.approx(4.0)  # 3 с сегментации + подсчёт 0,5 + 0,5 до голосов
+    assert t["embeddings"] == pytest.approx(60.0)
+    assert t["clustering"] == pytest.approx(0.3)
+    assert t["total"] == pytest.approx(67.3)
+    assert len(lines) == 1
+    line = lines[0]
+    assert line.startswith("время диаризации (cpu")
+    for part in ("загрузка 3.0 с", "сегментация 4.0 с", "голоса 60.0 с", "кластеризация 0.3 с", "всего 67.3 с",
+                 "модель 2.0 с из сети"):
+        assert part in line
+    assert line in capsys.readouterr().out
+    line.encode("cp866")  # печатается и в консоль
+
+
+def test_job_worker_forwards_diarization_lines_as_timing_logs(monkeypatch, tmp_path, capsys):
+    from meet import job_worker
+
+    monkeypatch.setattr(diarize, "_log_sink", None)
+
+    def fake_transcribe(path, **kw):
+        diarize._log("время диаризации (cpu): всего 1.0 с")
+        return tmp_path / "x.md"
+
+    monkeypatch.setitem(sys.modules, "meet.transcribe", types.SimpleNamespace(transcribe=fake_transcribe))
+    assert job_worker.main(["transcribe", str(tmp_path)]) == 0
+    events = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.startswith("{")]
+    assert {"kind": "log", "text": "время диаризации (cpu): всего 1.0 с", "source": "timing"} in events
+
+

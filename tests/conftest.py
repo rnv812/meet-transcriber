@@ -105,6 +105,18 @@ def _isolated_hf_cache(monkeypatch, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _no_diarize_log_sink(monkeypatch):
+    """Приёмник строк диаризации, который ставит подпроцесс задачи
+    (job_worker), не переживает тест: иначе JSON-строки `log` попадали бы в
+    вывод следующих тестов."""
+    try:
+        from meet import diarize
+    except ImportError:
+        return
+    monkeypatch.setattr(diarize, "_log_sink", None)
+
+
+@pytest.fixture(autouse=True)
 def _no_system_proxy(monkeypatch):
     """Системный прокси машины разработчика (реестр WinINET) в тесты не
     попадает: кому он нужен, подменяет `netproxy.read_registry` сам."""

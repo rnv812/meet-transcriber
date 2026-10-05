@@ -1,4 +1,5 @@
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +15,30 @@ def quiet_pyannote() -> None:
     переменную при загрузке): иначе каждая задача шлёт данные на
     otel.pyannote.ai из фонового потока. Явное значение в окружении — его."""
     os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "false")
+
+
+# Куда, кроме вывода процесса, уходят строки диаризации (время стадий, откат
+# ускорения голосов): подпроцесс задачи (meet.job_worker) отдаёт их событием
+# `log` с source="timing" — голый print очередь выбрасывает, а искать их будут
+# в resident.log. Диаризация шины задачи не знает, поэтому — приёмник модуля.
+_log_sink = None
+
+
+def set_log_sink(sink) -> None:
+    """Приёмник строк диаризации (`sink(text)`); None — только вывод процесса."""
+    global _log_sink
+    _log_sink = sink
+
+
+def _log(text: str) -> None:
+    print(text)
+    sink = _log_sink
+    if sink is not None:
+        try:
+            sink(text)
+        except Exception:
+            pass  # журнал — подсказка, а не повод уронить диаризацию
+
 
 # Минимальная длительность региона нахлёста (сек): короче — поддакивания
 # («ага» на фоне) и дребезг на стыках, а не осмысленное перебивание; такие
@@ -39,6 +64,9 @@ class Diarization:
     skipped: str | None = None
     # На чём шла диаризация ("cuda", "mps", "cpu"); None — не шла.
     device: str | None = None
+    # Время стадий, секунд (load, segmentation, embeddings, clustering, total
+    # и части загрузки: token, import, model, device); None — не шла.
+    timings: dict | None = None
 
 
 # Диаризации нет, но расшифровка идёт: реплики подписываются по дорожкам
@@ -183,22 +211,25 @@ def diarize_wav(
     from meet import credentials
 
     quiet_pyannote()
+    clock = _StageClock()
     # Токен — только для сети: модель в кэше его не просит (и связку ключей
     # macOS второй раз за задачу не трогаем).
     cached = _local_snapshot() is not None
-    token = None if cached else credentials.get_hf_token()
+    token = None if cached else clock.timed("token", credentials.get_hf_token)
     if not cached and not token:
         print(NO_TOKEN_NOTE)
         return Diarization(turns=[], skipped=SKIPPED_NO_TOKEN)
 
     print("Диаризация...")
-    pipe = _load_local() if cached else None
+    clock.timed("import", _import_pyannote)
+    pipe = clock.timed("model", _load_local) if cached else None
+    clock.source = "из кэша" if pipe is not None else "из сети"
     if pipe is None:
-        token = token or credentials.get_hf_token()
+        token = token or clock.timed("token", credentials.get_hf_token)
         if not token:
             print(NO_TOKEN_NOTE)
             return Diarization(turns=[], skipped=SKIPPED_NO_TOKEN)
-        pipe = _load_pipeline(token)
+        pipe = clock.timed("model", lambda: _load_pipeline(token))
         if pipe is None:
             return Diarization(turns=[], skipped=SKIPPED_NO_ACCESS)
     import torch
@@ -215,14 +246,15 @@ def diarize_wav(
     reason = asr.torch_cpu_reason() if device.type == "cpu" else None
     if reason:
         print(f"диаризация на процессоре: {reason}")
-    pipe.to(device)
+    clock.timed("device", lambda: pipe.to(device))
     if clustering_threshold is not None:
         params = pipe.parameters(instantiated=True)
         params.setdefault("clustering", {})["threshold"] = float(clustering_threshold)
         pipe.instantiate(params)
     waveform, rate = _load_wav(path)
 
-    extra = {"hook": progress_hook(on_progress)} if on_progress and _takes_hook(pipe) else {}
+    # Отметки шагов pyannote — всегда (время стадий), ход — если его ждут.
+    extra = {"hook": clock.hook(progress_hook(on_progress) if on_progress else None)} if _takes_hook(pipe) else {}
     if on_progress and not extra:
         on_progress(None)
 
@@ -245,10 +277,94 @@ def diarize_wav(
         print(f"Диаризация на MPS не прошла ({type(e).__name__}) — повторяю на процессоре")
         pipe.to(torch.device("cpu"))
         used = "cpu"
+        clock.retry("после сбоя MPS")
         result = run()
+    clock.stop()
     diar = _to_diarization(result, exclusive=exclusive)
     diar.device = used
+    diar.timings = clock.result()
+    _log(clock.line(used))
     return diar
+
+
+def _import_pyannote() -> None:
+    """Импорт pyannote отдельно от загрузки модели — для времени стадий (на
+    свежем движке он сам по себе секунды). Нет пакета — скажет загрузка."""
+    import importlib
+
+    try:
+        importlib.import_module("pyannote.audio")
+    except ImportError:
+        pass
+
+
+class _StageClock:
+    """Время стадий диаризации: загрузка (всё до первого отчёта сегментации:
+    токен, импорт pyannote, модель, перенос на устройство, звук) и шаги
+    pyannote по отметкам `hook` — сегментация, голоса, кластеризация."""
+
+    def __init__(self) -> None:
+        self.start = time.perf_counter()
+        self.end: float | None = None
+        self.parts: dict[str, float] = {}
+        self.marks: list[tuple[str, float]] = []
+        self.source: str | None = None
+        self.note: str | None = None
+
+    def timed(self, name: str, call):
+        since = time.perf_counter()
+        try:
+            return call()
+        finally:
+            self.parts[name] = self.parts.get(name, 0.0) + time.perf_counter() - since
+
+    def hook(self, forward=None):
+        def hook(step_name, step_artifact=None, file=None, total=None, completed=None):
+            self.marks.append((step_name, time.perf_counter()))
+            if forward is not None:
+                forward(step_name, step_artifact, file=file, total=total, completed=completed)
+        return hook
+
+    def retry(self, note: str) -> None:
+        """Повтор прогона (MPS → процессор): шаги — второго прогона, а первый
+        уходит в загрузку."""
+        self.marks.clear()
+        self.note = note
+
+    def stop(self) -> None:
+        self.end = time.perf_counter()
+
+    def result(self) -> dict:
+        end = self.end if self.end is not None else time.perf_counter()
+
+        def first(name):
+            return next((t for step, t in self.marks if step == name), None)
+
+        def last(name):
+            return next((t for step, t in reversed(self.marks) if step == name), None)
+
+        seg, emb, emb_end = first("segmentation"), first("embeddings"), last("embeddings")
+        out = {"load": (seg if seg is not None else end) - self.start,
+               "segmentation": ((emb if emb is not None else end) - seg) if seg is not None else 0.0,
+               "embeddings": emb_end - emb if emb is not None else 0.0,
+               "clustering": end - emb_end if emb is not None else 0.0,
+               "total": end - self.start,
+               "source": self.source}
+        out.update(self.parts)
+        return out
+
+    def line(self, device: str) -> str:
+        """Строка для журнала: где ушло время (ASCII-пунктуация: печатается и в
+        консоль cp866)."""
+        t = self.result()
+        names = (("token", "токен"), ("import", "импорт"), ("model", "модель"), ("device", "устройство"))
+        parts = [f"{label} {t[key]:.1f} с" + (f" {self.source}" if key == "model" and self.source else "")
+                 for key, label in names if key in t]
+        load = f"загрузка {t['load']:.1f} с" + (f" ({', '.join(parts)})" if parts else "")
+        head = ", ".join([device] + ([self.note] if self.note else []))
+        return (f"время диаризации ({head}): {load}, сегментация {t['segmentation']:.1f} с, "
+                f"голоса {t['embeddings']:.1f} с, кластеризация {t['clustering']:.1f} с, "
+                f"всего {t['total']:.1f} с")
 
 
 def report_cpu(bus, stages=None, what: str = "диаризация") -> bool:

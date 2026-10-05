@@ -47,6 +47,17 @@ def _apply_hf_token() -> None:
         pass
 
 
+def _diarize_log_to_resident() -> None:
+    """Строки диаризации (время стадий, откат ускорения) — событием `log` с
+    source="timing": такие очередь пишет в resident.log
+    (jobs.RESIDENT_LOG_SOURCES), а голый print подпроцесса выбрасывает."""
+    try:
+        from meet import diarize
+    except ImportError:
+        return
+    diarize.set_log_sink(lambda text: _emit({"kind": "log", "text": text, "source": "timing"}))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="meet-job")
     parser.add_argument("kind",
@@ -112,6 +123,7 @@ def _dispatch(args) -> int:
     # только из env, а он у нас в настройках. Ставим один раз на весь
     # подпроцесс, чтобы и распознавание, и диаризация его видели.
     _apply_hf_token()
+    _diarize_log_to_resident()
 
     bus = events.EventBus()
     bus.subscribe(lambda event: _emit(event.to_dict()))
@@ -244,6 +256,7 @@ def _speaker_voices(work, reason: str) -> int:
     from meet import events
 
     _apply_hf_token()
+    _diarize_log_to_resident()
     bus = events.EventBus()
     bus.subscribe(lambda event: _emit(event.to_dict()))
     try:
