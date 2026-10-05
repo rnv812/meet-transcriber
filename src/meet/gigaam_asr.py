@@ -27,6 +27,7 @@ GPU) — внутренности библиотеки, и обновление 
 читают настройки и каталог моделей в резиденте.
 """
 
+import errno
 import hashlib
 import json
 import os
@@ -199,16 +200,25 @@ def size_on_disk(name: str) -> int:
     return total
 
 
+class Busy(OSError):
+    """Файлы модели сейчас качает или сверяет другой процесс."""
+
+
 def remove(name: str) -> int:
-    """Удалить файлы модели (и недокачанные). → сколько файлов удалено."""
+    """Удалить файлы модели (и недокачанные). → сколько файлов удалено.
+    Модель качает или сверяет другой процесс (загрузка, расшифровка,
+    ассистент) — Busy: удалить из-под него нельзя."""
     removed = 0
-    for p in _all_files(name):
-        try:
-            p.unlink()
-            if not p.name.endswith(_VERIFIED):
-                removed += 1
-        except FileNotFoundError:
-            continue
+    with _files_lock(name, wait=False) as busy:
+        if busy:
+            raise Busy("модель сейчас скачивается или проверяется — удалить её можно после")
+        for p in _all_files(name):
+            try:
+                p.unlink()
+                if not p.name.endswith(_VERIFIED):
+                    removed += 1
+            except FileNotFoundError:
+                continue
     return removed
 
 
@@ -291,6 +301,10 @@ def _lock_path(name: str) -> Path:
     return tempdirs.system_temp() / "meet-model-locks" / f"{digest}.lock"
 
 
+# errno «замок держит другой»: EACCES и EDEADLK (EDEADLOCK) — у msvcrt.locking,
+# EWOULDBLOCK (= EAGAIN) — у flock. Прочие ошибки — ФС замков не умеет.
+_LOCK_BUSY = {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK, errno.EDEADLK}
+
 if os.name == "nt":
     import msvcrt
 
@@ -312,36 +326,50 @@ else:
 
 
 @contextmanager
-def _files_lock(name: str, on_line=None):
+def _files_lock(name: str, on_line=None, wait: bool = True):
     """Замок файлов модели между процессами: загрузка из окна, расшифровка и
     ассистент могут прийти за одной моделью одновременно, а `.part` у них
     один. Второй ждёт, пока первый докачает, и находит файлы готовыми.
-    Замок не открылся — работаем без него, как раньше."""
+
+    Отдаёт «занят»: True — только при `wait=False`, когда замок держит
+    другой (тогда замка у нас нет). Замок не открылся или ФС его не
+    поддерживает — работаем без него, как раньше (False).
+
+    Срока ожидания нет: держатель качает с таймаутами обрыва и «капания»
+    (`_fetch`), отмена задачи его убивает, а умерший процесс замок отпускает."""
     path = _lock_path(name)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         handle = open(path, "a+b")
     except OSError:
-        yield
+        yield False
         return
+    locked = busy = False
     try:
         told = False
         while True:
             try:
                 _try_lock(handle)
+                locked = True
                 break
-            except OSError:
+            except OSError as e:
+                if e.errno not in _LOCK_BUSY:
+                    break  # не «занят», а «не умею» (ENOLCK и т. п.) — без замка
+                if not wait:
+                    busy = True
+                    break
                 if on_line and not told:
                     on_line(f"GigaAM {name}: модель уже скачивается — жду окончания")
                     told = True
                 time.sleep(LOCK_POLL_S)
         try:
-            yield
+            yield busy
         finally:
-            try:
-                _unlock(handle)
-            except OSError:
-                pass
+            if locked:
+                try:
+                    _unlock(handle)
+                except OSError:
+                    pass
     finally:
         handle.close()
 

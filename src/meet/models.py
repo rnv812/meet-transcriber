@@ -383,6 +383,8 @@ def remove(model_id: str) -> dict:
 
     try:
         removed = gigaam_asr.remove(name)
+    except gigaam_asr.Busy as e:
+        return {"ok": False, "error": str(e)}
     except OSError as e:
         return {"ok": False, "error": f"не удалось удалить модель: {e}"}
     return {"ok": True, "id": model_id, "removed": removed}

@@ -330,13 +330,21 @@ def test_ensure_downloads_through_a_part_file_and_verifies(tmp_path, monkeypatch
     assert calls == []
 
 
-def test_ensure_waits_while_another_process_downloads_the_model(tmp_path, monkeypatch):
+def _lock_env(tmp_path, monkeypatch):
+    # Замки — во временной папке теста, а не в общей %TEMP%\meet-model-locks.
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MEET_SYSTEM_TEMP", str(tmp_path / "sys"))
+    monkeypatch.setattr(g, "LOCK_POLL_S", 0.01)
+
+
+def test_ensure_waits_while_the_model_lock_is_held(tmp_path, monkeypatch):
     """Загрузка из окна и расшифровка пришли за одной моделью: второй ждёт
-    замка модели, а потом находит файлы готовыми и не качает их снова."""
+    замка модели, а потом находит файлы готовыми и не качает их снова.
+    Держатель здесь — поток со своим дескриптором: замок ОС тот же, что
+    между процессами (flock — на открытый файл, LockFileEx — на дескриптор)."""
     import threading
 
-    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(g, "LOCK_POLL_S", 0.01)
+    _lock_env(tmp_path, monkeypatch)
     g.cache_dir().mkdir(parents=True)
     holding, release = threading.Event(), threading.Event()
 
@@ -364,6 +372,49 @@ def test_ensure_waits_while_another_process_downloads_the_model(tmp_path, monkey
     assert any("уже скачивается" in line for line in lines)
     # Замок модели своей папки моделей не держит чужую модель.
     assert g._lock_path("v3_e2e_rnnt") != g._lock_path("v3_e2e_ctc")
+    assert g._lock_path("v3_e2e_rnnt").is_relative_to(tmp_path / "sys")
+
+
+def test_model_is_not_removed_while_its_lock_is_held(tmp_path, monkeypatch):
+    """Расшифровка или ассистент внутри ensure() — удалить модель из-под них
+    нельзя; отпустили — удаляется."""
+    import threading
+
+    _lock_env(tmp_path, monkeypatch)
+    for name in ("v3_e2e_rnnt.ckpt", "v3_e2e_rnnt_tokenizer.model"):
+        put(name, BLOBS[name])
+    result = {}
+    with g._files_lock("v3_e2e_rnnt"):
+
+        def try_remove():
+            try:
+                result["n"] = g.remove("v3_e2e_rnnt")
+            except g.Busy as e:
+                result["busy"] = str(e)
+
+        worker = threading.Thread(target=try_remove)
+        worker.start()
+        worker.join(5)
+    assert "скачивается или проверяется" in result["busy"]
+    assert g.downloaded("v3_e2e_rnnt")
+    assert g.remove("v3_e2e_rnnt") == 2
+    assert not g.present("v3_e2e_rnnt")
+
+
+def test_lock_that_the_filesystem_cannot_take_is_skipped(tmp_path, monkeypatch):
+    """ENOLCK и подобные — не «занят»: ждать вечно нельзя, работаем без замка."""
+    import errno
+
+    _lock_env(tmp_path, monkeypatch)
+
+    def unsupported(handle):
+        raise OSError(errno.ENOLCK, "No locks available")
+
+    monkeypatch.setattr(g, "_try_lock", unsupported)
+    calls = []
+    g.ensure("v3_e2e_rnnt", opener=opener(calls=calls))
+    assert calls == ["v3_e2e_rnnt.ckpt", "v3_e2e_rnnt_tokenizer.model"]
+    assert g.remove("v3_e2e_rnnt") == 2
 
 
 def test_corrupt_or_partial_file_is_replaced_once(tmp_path, monkeypatch):
