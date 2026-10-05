@@ -280,3 +280,39 @@ def test_job_queue_relays_text_ready_as_progress(tmp_path):
     progress = [e.data["job"] for e in got if e.kind == jobs.JOB_PROGRESS]
     assert [p["text_ready"] for p in progress] == [None, True, True]
     assert job.to_raw()["text_ready"] is True
+
+
+def test_gigaam_failing_on_mic_keeps_sys_postprocessing_of_gigaam(pipeline, monkeypatch):
+    """GigaAM распознала собеседников, а на микрофоне не вышла (дальше —
+    Whisper): выравнивание и латиница у собеседников — по их движку."""
+    from meet import asr
+
+    tr, folder = pipeline["tr"], pipeline["folder"]
+    seen = {"latin": [], "align": []}
+
+    def recognize(wav, hotwords, run):
+        if "sys" in Path(wav).name:
+            run.choice = asr.Choice("gigaam", "cpu")
+            return [_seg(0.0, "добрый день коллеги")]
+        run.choice = asr.Choice("faster-whisper", "cpu", note=asr.GIGAAM_FAILED)
+        return [_seg(3.0, "да")]
+
+    monkeypatch.setattr(tr, "_recognize", recognize)
+    monkeypatch.setattr(tr, "_restore_latin", lambda segs, run, quiet=False: seen["latin"].append(
+        [s.text for s in segs]))
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled, **kw: seen["align"].append(enabled) or s)
+    tr.transcribe(str(folder), align=True, bus=pipeline["bus"])
+    # Латиница — у собеседников (копия для текста и основной проход), не у микрофона Whisper.
+    assert seen["latin"] == [["добрый день коллеги"], ["добрый день коллеги"]]
+    # После GigaAM выравнивания нет (align_after_gigaam выключено по умолчанию).
+    assert seen["align"] == [False]
+
+
+def test_text_phase_copy_does_not_repeat_log_lines(pipeline, capsys):
+    state = Path(pipeline["folder"]).parents[1] / "state"
+    state.mkdir(exist_ok=True)
+    (state / "config.json").write_text(json.dumps(
+        {"asr": {"replacements": [{"from": "коллеги", "to": "друзья"}]}}), encoding="utf-8")
+    tr, folder = pipeline["tr"], pipeline["folder"]
+    tr.transcribe(str(folder), align=False, bus=pipeline["bus"])
+    assert capsys.readouterr().out.count("правила замены: исправлено") == 1

@@ -503,7 +503,7 @@ class TrayControl:
         """Почему по транскрипту записи нельзя то, что опирается на спикеров:
         это текст до них (`phase: "text"`). None — транскрипт окончательный
         (или его нет — об этом скажут сами действия)."""
-        if not library.is_text_phase(library.read_transcript(folder)):
+        if library.transcript_phase(folder) != library.TEXT_PHASE:
             return None
         if self.queue.active_for(str(folder), jobs.FOLDER_KINDS) is not None:
             return TEXT_ONLY_RUNNING
@@ -618,7 +618,7 @@ class TrayControl:
     def _auto_kb_export(self, folder: Path) -> None:
         from meet import kb_export
 
-        if library.is_text_phase(library.read_transcript(folder)):
+        if library.transcript_phase(folder) == library.TEXT_PHASE:
             # Переименование, категория, правка — посреди расшифровки или после
             # прерванной: в базу знаний уходит только окончательная.
             self.tray.log(f"выгрузка в базу знаний отложена — спикеры ещё не определены: {folder.name}")

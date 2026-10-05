@@ -175,6 +175,8 @@ def preview(folder: Path, find: str, whole_word: bool = True, segment: int | Non
     segments = (data or {}).get("segments")
     if not isinstance(segments, list):
         raise speakers.SpeakerError("у записи нет расшифровки")
+    if library.is_text_phase(data):
+        raise speakers.SpeakerError(library.TEXT_ONLY)
     find = _clean(find, "Что исправить")
     found = _found(segments, find, whole_word)
     here = next((_time(segments[i], a, b) for i, a, b in found

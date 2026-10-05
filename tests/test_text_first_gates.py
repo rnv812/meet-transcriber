@@ -250,3 +250,73 @@ def test_console_enroll_does_not_rename_in_text_phase(folder):
     before = (folder / library.TRANSCRIPT_JSON).read_bytes()
     assert voices._name_in_transcript(folder, {"Вы": "Анна"}) == 0
     assert (folder / library.TRANSCRIPT_JSON).read_bytes() == before
+
+
+def test_speaker_and_text_edit_modules_refuse_text_phase(folder, tmp_path):
+    from meet import speakers, textfix
+
+    with pytest.raises(speakers.SpeakerError, match="Спикеры ещё не определены"):
+        speakers.apply(folder, [{"type": "rename", "label": "Вы", "to": "Анна"}], {}, tmp_path / "voices")
+    with pytest.raises(speakers.SpeakerError, match="Спикеры ещё не определены"):
+        textfix.preview(folder, "коллеги")
+    with pytest.raises(speakers.SpeakerError, match="Спикеры ещё не определены"):
+        textfix.apply(folder, "коллеги", "друзья", "all", tmp_path / "voices")
+    assert "speaker_history" not in library.read_meta(folder)
+
+
+def test_people_cards_and_samples_ignore_text_phase(folder, tmp_path):
+    voices = tmp_path / "voices"
+    voices.mkdir(exist_ok=True)
+    (voices / "Вы.json").write_text(json.dumps({"samples": [{"embedding": [0.1]}]}), encoding="utf-8")
+    assert people.person("Вы", voices, folder.parent)["meetings"] == []
+    assert people.sample("Вы", voices, folder.parent) is None
+
+
+def test_search_hits_in_text_phase_have_no_speaker_label(folder):
+    from meet import search
+
+    search.clear_cache()
+    found = search.search_library(folder.parent, "коллеги")
+    hits = found[0]["hits"]
+    assert hits and hits[0]["speaker"] == ""
+    assert search.search_library(folder.parent, 'спикер:"Неизвестный"') == []
+
+
+def test_resume_marks_are_dropped_on_text_phase(state, folder):
+    import time
+
+    mark = {"at": time.time(), "manual": True}
+    library.write_meta(folder, {"pending_analysis": mark, "pending_improve": mark})
+    assert state._resume_analysis(folder, mark, 0.0) is False
+    assert state._resume_improve(folder, mark, 0.0) is False
+    meta = library.read_meta(folder)
+    assert "pending_analysis" not in meta and "pending_improve" not in meta
+    assert state.llm_queue.listing() == []
+
+
+def test_merge_failing_after_text_keeps_parts_until_the_final(state, folder, monkeypatch):
+    """Объединённая встреча, расшифровка которой упала после текста: исходные
+    части не трогаются (`state: merged`); их обработает конец следующей."""
+    from meet import events as ev
+
+    library.write_meta(folder, {"source": "merge", "merge": {"state": "merged"}, "merged_from": ["a", "b"]})
+    finished = []
+    monkeypatch.setattr(state, "_finish_merge", lambda f: finished.append(f))
+    job = jobs.Job(id="x1", kind=jobs.TRANSCRIBE, folder=str(folder), state=jobs.FAILED)
+    state._on_job_event(ev.Event(jobs.JOB_FAILED, {"job": job.to_raw()}))
+    assert finished == [] and library.read_meta(folder)["merge"]["state"] == "merged"
+    library.write_transcript(folder, {"version": 1, "segments": SEGMENTS})
+    job.state = jobs.DONE
+    state._on_job_event(ev.Event(jobs.JOB_DONE, {"job": job.to_raw()}))
+    assert finished == [folder]
+
+
+def test_phase_check_uses_the_cached_head(state, folder, monkeypatch):
+    """Отказ по фазе не разбирает весь transcript.json на каждый запрос окна."""
+    library.final_transcript(folder)  # заголовок — в кэш через describe ниже
+    library.describe(folder)
+    calls = []
+    real = library.read_transcript
+    monkeypatch.setattr(library, "read_transcript", lambda f: calls.append(f) or real(f))
+    assert state._text_only(folder)
+    assert calls == []

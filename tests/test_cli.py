@@ -1115,3 +1115,32 @@ def test_improve_goes_through_the_running_app(env, capsys, monkeypatch):
     assert got["via_app"] is True and got["applied"] == {"changed": 2, "step": "s1"}
     assert calls[0][:2] == ("POST", f"/recordings/{RID}/improve")
     assert calls[-1] == ("POST", f"/recordings/{RID}/improve/apply", {"groups": ["g1"]})
+
+
+# --- текст до спикеров (Р4): CLI его не принимает за расшифровку ------------------
+
+
+def _text_phase_meeting(env):
+    folder = env["rec"] / RID
+    folder.mkdir()
+    (folder / "sys.opus").write_bytes(b"x")
+    library.write_transcript(folder, {"version": 1, "title": "Планёрка", "phase": "text",
+                                      "created_at": "2026-09-29T15:40:00", "segments": [
+        {"start": 5.0, "end": 7.25, "speaker": None, "text": "Поднимем кубер нетис."}]})
+    return folder
+
+
+@pytest.mark.parametrize("argv", [
+    ["fix", RID, "кубер нетис", "Kubernetes"],
+    ["export", RID, "--format", "md"],
+    ["analyze", RID],
+    ["title", RID],
+], ids=["fix", "export", "analyze", "title"])
+def test_cli_refuses_text_phase(env, capsys, argv):
+    folder = _text_phase_meeting(env)
+    before = (folder / library.TRANSCRIPT_JSON).read_bytes()
+    assert _main(argv) == 1
+    assert "Спикеры ещё не определены" in capsys.readouterr().err
+    assert (folder / library.TRANSCRIPT_JSON).read_bytes() == before
+    meta = library.read_meta(folder)
+    assert "analysis_error" not in meta and "speaker_history" not in meta

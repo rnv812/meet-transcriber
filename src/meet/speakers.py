@@ -77,6 +77,9 @@ def _transcript(folder: Path) -> dict:
     data = library.read_transcript_full(folder)
     if not data or not isinstance(data.get("segments"), list):
         raise SpeakerError("у записи нет расшифровки")
+    if library.is_text_phase(data):
+        # Текст до спикеров: шаг истории по нему пропал бы с окончательной расшифровкой.
+        raise SpeakerError(library.TEXT_ONLY)
     if not all(isinstance(s, dict) for s in data["segments"]):
         # Переписав такой транскрипт, мы бы молча потеряли непонятные куски.
         raise SpeakerError("расшифровка повреждена — перерасшифруйте запись")
@@ -966,7 +969,7 @@ def _move(folder: Path, data: dict, step: dict, forward: bool) -> tuple[Path, di
 
 def _in_library(root: Path, name: str) -> bool:
     for folder in library.recording_folders(root):
-        for s in (library.read_transcript(folder) or {}).get("segments") or []:
+        for s in (library.final_transcript(folder) or {}).get("segments") or []:
             if isinstance(s, dict) and s.get("speaker") == name:
                 return True
     return False

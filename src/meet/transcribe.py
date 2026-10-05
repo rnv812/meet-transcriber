@@ -337,22 +337,24 @@ def _fallback_to_whisper(wav: Path, hotwords: str | None, run: "_Run", device: s
                          f"({type(w).__name__}: {w}). {advice}") from w
 
 
-def _restore_latin(segments: list[Segment], run: "_Run") -> None:
+def _restore_latin(segments: list[Segment], run: "_Run", quiet: bool = False) -> None:
     """После GigaAM — латинские термины из кириллицы (meet.translit)."""
     try:
         from meet import translit
 
         n = translit.apply(segments, _hotword_terms(run.extra_hotwords))
-        if n:
+        if n and not quiet:
             print(f"термины латиницей: возвращено {n}")
     except Exception as e:  # термины не должны ронять расшифровку
         print(f"термины латиницей пропущены (ошибка: {e})")
 
 
-def _align_enabled(align: bool, run: "_Run") -> bool:
+def _align_enabled(align: bool, run: "_Run", gigaam: bool | None = None) -> bool:
     """Выравнивание wav2vec2 после GigaAM — только по `asr.align_after_gigaam`:
-    у GigaAM свои пословные таймкоды, а выравнивание — минута на CPU."""
-    if not align or not run.gigaam:
+    у GigaAM свои пословные таймкоды, а выравнивание — минута на CPU.
+    `gigaam` — чем распознана выравниваемая дорожка, если движок с тех пор
+    сменился (GigaAM не вышла на микрофоне); по умолчанию — нынешний."""
+    if not align or not (run.gigaam if gigaam is None else gigaam):
         return align
     from meet import settings
 
@@ -402,12 +404,12 @@ def _align_planned(align: bool) -> bool:
         return True
 
 
-def _settle_align(align: bool, run: "_Run", stages: Stages) -> bool:
+def _settle_align(align: bool, run: "_Run", stages: Stages, gigaam: bool | None = None) -> bool:
     """После распознавания: нужно ли выравнивание на самом деле (движок мог
     смениться — GigaAM не загрузилась, язык не русский). Шаг в плане — начать
     или пропустить; шага нет, а выравнивание всё же нужно — оно идёт внутри
-    текущего этапа, без нового номера."""
-    align = _align_enabled(align, run)
+    текущего этапа, без нового номера. `gigaam` — как у `_align_enabled`."""
+    align = _align_enabled(align, run, gigaam)
     if align and stages.has("align"):
         stages.begin("align")
     elif stages.has("align"):
@@ -510,20 +512,25 @@ def _replacement_rules() -> list[dict]:
         return []
 
 
-def _fix_terms(segments: list[Segment], run: "_Run | None" = None) -> list[Segment]:
+def _fix_terms(segments: list[Segment], run: "_Run | None" = None, *, gigaam: bool | None = None,
+               quiet: bool = False) -> list[Segment]:
     """Правила замены из настроек (`asr.replacements`, «Исправлять так же в
     будущих встречах») — сразу после распознавания и выравнивания: слова
     исправляются вместе с текстом, раздача реплик спикерам их уже видит.
     После GigaAM за ними — возврат латинских терминов (meet.translit): правило
     человека («апи» → «API-шлюз») важнее автоматической замены («апи» → «API»).
-    Сбой правил не роняет расшифровку."""
-    _apply_rules(segments)
-    if run is not None and run.gigaam:
-        _restore_latin(segments, run)
+    Сбой правил не роняет расшифровку.
+
+    `gigaam` — чем распознаны эти сегменты, если движок с тех пор сменился;
+    `quiet` — без строк в журнал (копия для текста до спикеров: те же правки
+    напечатает основной проход)."""
+    _apply_rules(segments, quiet)
+    if run is not None and (run.gigaam if gigaam is None else gigaam):
+        _restore_latin(segments, run, quiet)
     return segments
 
 
-def _apply_rules(segments: list[Segment]) -> list[Segment]:
+def _apply_rules(segments: list[Segment], quiet: bool = False) -> list[Segment]:
     rules = _replacement_rules()
     if not rules:
         return segments
@@ -534,6 +541,8 @@ def _apply_rules(segments: list[Segment]) -> list[Segment]:
         n = textfix.apply_rules(segments, rules, skipped)
     except Exception as e:
         print(f"правила замены пропущены (ошибка: {e})")
+        return segments
+    if quiet:
         return segments
     if n:
         print(f"правила замены: исправлено {n}")
@@ -858,7 +867,7 @@ def _transcribe_single(
         stages.begin("asr")
         segments = _recognize(wav, hotwords, run)
         stages.update(1)
-        _text_ready(run, [_unassigned(s) for s in _fix_terms(copy.deepcopy(segments), run)])
+        _text_ready(run, [_unassigned(s) for s in _fix_terms(copy.deepcopy(segments), run, quiet=True)])
         align = _settle_align(align, run, stages)
         segments = _fix_terms(run.timed("align", lambda: _maybe_align(segments, wav, align, on_progress=run.part)), run)
         stages.begin("diarize")
@@ -905,6 +914,9 @@ def _transcribe_two_track(
         stages.begin("asr-sys")
         sys_segs = _recognize(sys_wav, hotwords, run)
         stages.update(1)
+        # Чем распознаны собеседники: выравнивание и латиница — по их движку, даже
+        # если на микрофоне GigaAM не вышла и дальше распознаёт Whisper.
+        sys_gigaam = run.gigaam
         stages.begin("asr-mic")
         mic_segs = _fix_terms(_recognize(mic_wav, hotwords, run), run)
         stages.update(1)
@@ -919,10 +931,12 @@ def _transcribe_two_track(
         # Текст обеих дорожек готов — в папку записи до спикеров (Р4). Копии:
         # правила замены у собеседников идут после выравнивания, а не до него.
         _text_ready(run, interleave_tracks(
-            [_unassigned(s) for s in _fix_terms(copy.deepcopy(sys_segs), run)], copy.deepcopy(mic_segs)))
+            [_unassigned(s) for s in _fix_terms(copy.deepcopy(sys_segs), run, gigaam=sys_gigaam, quiet=True)],
+            copy.deepcopy(mic_segs)))
         # forced alignment только для sys: mic — один спикер («Вы»), стыки не важны
-        align = _settle_align(align, run, stages)
-        sys_segs = _fix_terms(run.timed("align", lambda: _maybe_align(sys_segs, sys_wav, align, on_progress=run.part)), run)
+        align = _settle_align(align, run, stages, gigaam=sys_gigaam)
+        sys_segs = _fix_terms(run.timed("align", lambda: _maybe_align(sys_segs, sys_wav, align, on_progress=run.part)),
+                              run, gigaam=sys_gigaam)
         stages.begin("diarize")
         diar = _diarize(sys_wav, speakers, overlap, run)
         if diar.skipped:

@@ -132,6 +132,10 @@ def _transcript(folder: Path) -> dict:
     data = library.read_transcript(folder)
     if data is None:
         raise CliError(f"Транскрипта нет: {folder}. Сначала: meet transcribe \"{folder}\"")
+    # Текст до спикеров (`phase: "text"`): правка, экспорт, название и анализ —
+    # только по окончательной расшифровке (её запись заменит черновик целиком).
+    if library.is_text_phase(data):
+        raise CliError(library.TEXT_ONLY)
     return data
 
 

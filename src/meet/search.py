@@ -306,6 +306,12 @@ class _Cache:
                 return got[2]
         data = library.with_display_names(library.read_transcript(folder)) or {}
         turns = turns_of(data.get("segments") if isinstance(data.get("segments"), list) else [])
+        if library.is_text_phase(data):
+            # Текст до спикеров: у собеседников подписи нет (окно не пишет и
+            # «Неизвестный»), и запрос `спикер:` их не находит.
+            for turn in turns:
+                if turn.speaker == NO_SPEAKER:
+                    turn.speaker = ""
         size = sum(2 * len(t.text) + WORD_BYTES * len(t.tokens) for t in turns)
         with self._lock:
             old = self._items.pop(key, None)

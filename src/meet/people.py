@@ -166,7 +166,7 @@ def person(name: str, voices: Path, recordings: Path) -> dict:
         raise KeyError(name)
     meetings = []
     for folder in reversed(library.recording_folders(recordings)):
-        seconds = sum(_duration(s) for s in _turns(library.read_transcript(folder), name))
+        seconds = sum(_duration(s) for s in _turns(library.final_transcript(folder), name))
         if not seconds:
             continue
         card = library.describe(folder)
@@ -191,7 +191,7 @@ def sample(name: str, voices: Path, recordings: Path) -> dict | None:
     из транскриптов, а не из базы голосов."""
     name = valid_name(name)
     for folder in reversed(library.recording_folders(recordings)):
-        turns = _turns(library.read_transcript(folder), name)
+        turns = _turns(library.final_transcript(folder), name)
         if turns:
             best = max(turns, key=_duration)
             track = next((stem for stem in ("sys", "source", "mic")

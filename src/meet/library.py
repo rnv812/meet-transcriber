@@ -333,6 +333,13 @@ def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None, str | 
     return head
 
 
+def transcript_phase(folder: Path) -> str | None:
+    """Фаза транскрипта папки ("text" — текст до спикеров, None —
+    окончательный или его нет) — из кэша заголовков: не разбирать весь
+    transcript.json на каждый запрос окна."""
+    return _transcript_head(Path(folder))[4]
+
+
 def _forget_heads(root: Path, names: set[str]) -> None:
     """Заголовки записей этой библиотеки, папок которых больше нет (удалены,
     объединены, переименованы), — из кэша: он не должен расти без конца."""
