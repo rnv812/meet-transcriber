@@ -50,6 +50,15 @@ def format_live_line(start_s: float, speaker: str, text: str) -> str:
     return f"[{fmt_hms(start_s)}] {speaker}: {text}"
 
 
+def relabel_line(line: str, old: str, new: str) -> str:
+    """`[чч:мм:сс] Старый: текст` → `[чч:мм:сс] Новый: текст`; строка другого
+    вида — без изменений."""
+    head, sep, rest = line.partition("] ")
+    if not sep or not head.startswith("[") or not rest.startswith(f"{old}: "):
+        return line
+    return f"{head}{sep}{new}: {rest[len(old) + 2:]}"
+
+
 class _Silence(bytes):
     """Чанк доливки тишины (а не звук устройства) в TrackBuffer."""
 
@@ -285,7 +294,7 @@ class LiveEngine:
                  on_line=None, voice_matcher=None, speaker_name=None,
                  on_entry=None, out_root=None, mic_device=_FROM_SETTINGS,
                  output_device=_FROM_SETTINGS, text_fixes=None, log=print,
-                 tap_connect=None, on_source_end=None) -> None:
+                 tap_connect=None, on_source_end=None, on_relabel=None) -> None:
         # Имя владельца микрофона — из настроек, как и в офлайн-проходе, чтобы
         # живая лента и точный транскрипт называли человека одинаково. Оттуда
         # же — выбранные микрофон и устройство вывода (None — системные).
@@ -308,8 +317,13 @@ class LiveEngine:
         self.hotwords = hotwords
         self._clock = clock or time.monotonic
         self.on_line = on_line  # колбэк на каждую записанную строку (Q&A-сервис)
-        # Колбэк (line, {"t", "speaker", "text"}): та же строка и её структура.
+        # Колбэк (line, {"t", "speaker", "text", "voice"?}): та же строка и её структура.
         self.on_entry = on_entry
+        # Колбэк (voice, speaker): голос переименован задним числом (meet.live_voices).
+        self.on_relabel = on_relabel
+        # Строки ленты с ключом голоса: {"voice", "speaker", "line"} — их
+        # подпись может смениться задним числом.
+        self._voiced: list[dict] = []
         self.out_root = Path(out_root) if out_root is not None else self.out_dir.parent
         self._lock_path: Path | None = None  # наш .recording.lock, пока держим
         # Голоса (meet.voice_id.VoiceMatcher, duck-typed): онлайн-кластеры
@@ -539,15 +553,112 @@ class LiveEngine:
             if voice is not None:
                 entry["voice"] = voice  # подпись голоса может смениться задним числом
             if catchup:
-                # Начало встречи: в файл ленты — по времени, слиянием в конце
-                # догонялки; потребителям — с пометкой (подсказки по нему не
-                # тикают, лента ставит его выше живых строк).
-                self._catch_lines.append(line)
-                self._catch_side(line)
                 entry["catchup"] = True
+            self._emit(line, entry)
+        if voices is not None:
+            self._apply_renames(voices)
+
+    def _emit(self, line: str, entry: dict) -> None:
+        """Строка — в ленту (файл) и потребителям."""
+        if entry.get("catchup"):
+            # Начало встречи: в файл ленты — по времени, слиянием в конце
+            # догонялки; потребителям — с пометкой (подсказки по нему не
+            # тикают, лента ставит его выше живых строк).
+            self._catch_lines.append(line)
+            self._catch_side(line)
+        else:
+            self._write_line(line)
+        if entry.get("voice"):
+            # Подпись голоса может смениться задним числом — помним строку.
+            self._voiced.append({"voice": entry["voice"], "speaker": entry["speaker"],
+                                 "line": line})
+        self._notify(line, entry)
+
+    def _apply_renames(self, voices) -> None:
+        """Переименования голосов после окна: строки ленты (файл, строки
+        догонялки) и потребители (`on_relabel`) — задним числом."""
+        try:
+            renames = dict(voices.drain())
+        except Exception as e:
+            self._voice_failed(e)
+            return
+        if not renames:
+            return
+        swaps = []
+        for rec in self._voiced:
+            speaker = renames.get(rec["voice"])
+            if speaker is None or speaker == rec["speaker"]:
+                continue
+            new = relabel_line(rec["line"], rec["speaker"], speaker)
+            swaps.append((rec["line"], new))
+            rec["line"], rec["speaker"] = new, speaker
+        self._swap_lines(swaps)
+        for voice, speaker in renames.items():
+            if self.on_relabel is not None:
+                try:
+                    self.on_relabel(voice, speaker)
+                except Exception:
+                    pass  # потребитель не должен валить запись
+
+    def _swap_lines(self, swaps: list) -> None:
+        """Заменить строки ленты: [(старая, новая | None — убрать)]. Строки
+        догонялки, ещё не слитые в файл, — в памяти (и в её запасном файле),
+        остальные — атомарной перезаписью `live_transcript.md` (под
+        `_window_lock`: его держит распознавание окна)."""
+        if not swaps:
+            return
+        in_file, in_side = [], []
+        for old, new in swaps:
+            if old in self._catch_lines:
+                i = self._catch_lines.index(old)
+                if new is None:
+                    self._catch_lines.pop(i)
+                else:
+                    self._catch_lines[i] = new
+                in_side.append((old, new))
             else:
-                self._write_line(line)
-            self._notify(line, entry)
+                in_file.append((old, new))
+        if in_file:
+            if self._out is not None:
+                self._out.close()
+                self._out = None
+            self._rewrite(self._transcript, in_file)
+        if in_side:
+            self._rewrite(self.out_dir / CATCHUP_SIDE, in_side)
+
+    def _rewrite(self, path: Path, swaps: list) -> None:
+        """Атомарно (tmp + replace) заменить строки файла; каждая замена — у
+        последнего ещё не тронутого вхождения (наши строки дописаны после
+        ленты прошлого включения ассистента). Сбой диска — одна строка в
+        журнал: лента в памяти и у потребителей уже верная."""
+        import os
+
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return
+        used: set[int] = set()
+        drop: set[int] = set()
+        for old, new in swaps:
+            i = next((k for k in range(len(lines) - 1, -1, -1)
+                      if k not in used and lines[k] == old), None)
+            if i is None:
+                continue
+            used.add(i)
+            if new is None:
+                drop.add(i)
+            else:
+                lines[i] = new
+        if not used:
+            return
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            tmp.write_text("".join(line + "\n" for k, line in enumerate(lines) if k not in drop),
+                           encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError as e:
+            tmp.unlink(missing_ok=True)
+            self._say(f"лента не переписана ({type(e).__name__}: {e})")
 
     def _windows(self, final: bool) -> int:
         """Распознать созревшие окна дорожек по очереди (по окну за круг —

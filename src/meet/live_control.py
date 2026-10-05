@@ -134,7 +134,8 @@ POLL_S = 0.1
 REQUEST_TIMEOUT_S = 5.0
 ASK_TIMEOUT_S = 240.0  # вопрос — вызов модели (у ребёнка до 180 с) плюс дослив окна
 RELAY_THREAD = "meet-live-relay"
-RELAYED_EVENTS = ("state", "line", "qa", "qa_partial")
+# `voices` — подписи голосов задним числом и спрятанные дубли (meet.assist.web).
+RELAYED_EVENTS = ("state", "line", "qa", "qa_partial", "voices")
 ERROR_MAX_CHARS = 300
 # Быстрые действия вопросов (`meet.assist.qa.QUICK`): «Что я пропустил?»,
 # «Какие решения уже приняты?», «Что мне ответить?», «Кратко за 1 минуту».

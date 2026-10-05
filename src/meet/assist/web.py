@@ -9,8 +9,10 @@
 SSE шлёт `event: state` (`state.view()`: сводка, подсказки, статус) при
 каждом их изменении, `event: qa` (`{"qa": [...]}` — история вопросов) — только
 когда меняется она, `event: qa_partial` (`{"id", "a"}` — ответ, который ещё
-пишется) и `event: line` с `{"t", "speaker", "text"}` на каждую новую строку
-ленты. Поток не опрашивает состояние по таймеру: он ждёт сигнала
+пишется), `event: line` с `{"t", "speaker", "text", "voice"?}` на каждую новую
+строку ленты и `event: voices` (`{"rev", "speakers", "hidden"}`: подписи голосов,
+пришедшие задним числом, и номера спрятанных строк-дублей) — при каждом
+подключении и при смене `rev`; это состояние, а не дельта, и без `id:`. Поток не опрашивает состояние по таймеру: он ждёт сигнала
 `state.changes` (`Notifier`) и шлёт изменения сразу; в тишине — комментарий
 `: keepalive` раз в KEEPALIVE_S. Хвост ленты строками (`transcript` в `state`) — только по
 `/events?transcript=1`, для страницы в браузере: панели он не нужен;
@@ -150,6 +152,8 @@ def build_app(state) -> web.Application:
         with_transcript = request.query.get("transcript") == "1"
         cursor = _first_line_index(request, state.bus.size())
         signal = _signal(state)
+        voices_of = getattr(state.bus, "voices", None)
+        sent_voices = None  # при подключении — всегда (новый ассистент: карта пуста)
         # Клиент закрыл вкладку → ConnectionResetError (в т.ч. наследник
         # aiohttp.ClientConnectionResetError). Тихо завершаем хендлер без
         # traceback'а. CancelledError не глотаем — это штатная отмена задачи.
@@ -159,7 +163,8 @@ def build_app(state) -> web.Application:
                 wrote = False
                 snapshot = state.signature()
                 if with_transcript:
-                    snapshot = (*snapshot, state.bus.size())
+                    snapshot = (*snapshot, state.bus.size(),
+                                voices_of()[0] if voices_of is not None else 0)
                 if snapshot != sent:
                     view = state.view()
                     if with_transcript:
@@ -182,6 +187,13 @@ def build_app(state) -> web.Application:
                             await resp.write(_event("qa_partial", part))
                             wrote = True
                     sent_partial = partial_version
+                if voices_of is not None:
+                    rev, speakers, hidden = voices_of()
+                    if rev != sent_voices:
+                        await resp.write(_event("voices", {"rev": rev, "speakers": speakers,
+                                                           "hidden": hidden}))
+                        sent_voices = rev
+                        wrote = True
                 entries, size = state.bus.entries_since(cursor)
                 for i, entry in enumerate(entries, start=cursor):
                     await resp.write(_event("line", entry, event_id=i))

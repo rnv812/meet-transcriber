@@ -172,9 +172,9 @@ def test_sse_sends_structured_line_for_each_new_line():
                           {"t": 3.0, "speaker": "Вы", "text": "привет"})
         async with TestClient(TestServer(build_app(state))) as client:
             async with client.get("/events") as resp:
-                events = await _read_events(resp, 3)
+                events = await _read_events(resp, 4)
                 kinds = {e[0] for e in events}
-                assert kinds == {"state", "qa", "line"}
+                assert kinds == {"state", "qa", "voices", "line"}
                 line = next(e for e in events if e[0] == "line")
                 assert line[1] == "0"
                 assert line[2] == {"t": 3.0, "speaker": "Вы", "text": "привет"}
@@ -199,7 +199,7 @@ def test_sse_resumes_after_last_event_id():
         async with TestClient(TestServer(build_app(state))) as client:
             async with client.get("/events",
                                   headers={"Last-Event-ID": "1"}) as resp:
-                events = await _read_events(resp, 3)
+                events = await _read_events(resp, 4)
                 lines = [e for e in events if e[0] == "line"]
                 assert [e[2]["text"] for e in lines] == ["l2"]
 
@@ -298,7 +298,7 @@ def test_qa_event_only_when_history_changes_and_transcript_only_for_the_page():
         state.bus.publish("[00:00:03] Вы: привет", {"t": 3.0, "speaker": "Вы", "text": "привет"})
         async with TestClient(TestServer(build_app(state))) as client:
             async with client.get("/events") as resp:
-                first = await _read_events(resp, 3)
+                first = await _read_events(resp, 4)
                 qa = next(e for e in first if e[0] == "qa")
                 assert qa[2] == {"qa": []}
                 state.qa_v = 1
@@ -306,7 +306,7 @@ def test_qa_event_only_when_history_changes_and_transcript_only_for_the_page():
                 again = await _read_events(resp, 1)
                 assert again[0][0] == "qa" and again[0][2]["qa"][0]["a"] == "пятница"
             async with client.get("/events?transcript=1") as resp:
-                events = await _read_events(resp, 3)
+                events = await _read_events(resp, 4)
                 st = next(e for e in events if e[0] == "state")
                 assert st[2]["transcript"] == ["[00:00:03] Вы: привет"]
 
@@ -352,7 +352,7 @@ def test_sse_pushes_a_new_line_within_100_ms():
         state = BusState()
         async with TestClient(TestServer(build_app(state))) as client:
             async with client.get("/events") as resp:
-                await _read_events(resp, 2)          # state + qa
+                await _read_events(resp, 3)          # state + qa + voices
                 await asyncio.sleep(0.05)            # поток ждёт сигнала
                 sent = {}
 
@@ -380,7 +380,7 @@ def test_sse_sends_keepalive_when_nothing_happens(monkeypatch):
         state = BusState()
         async with TestClient(TestServer(build_app(state))) as client:
             async with client.get("/events") as resp:
-                await _read_events(resp, 2)
+                await _read_events(resp, 3)
                 raw = await asyncio.wait_for(resp.content.readuntil(b"\n\n"), 5)
                 return raw
 
@@ -404,7 +404,7 @@ def test_sse_streams_partial_answers():
         state = Partial()
         async with TestClient(TestServer(build_app(state))) as client:
             async with client.get("/events") as resp:
-                await _read_events(resp, 2)
+                await _read_events(resp, 3)
                 state.parts = [{"id": 3, "a": "Предлагаю пере"}]
                 state.partial_v = 1
                 state.bus.changed.notify()
@@ -426,7 +426,54 @@ def test_reconnected_stream_gets_the_answer_being_written_at_once():
         state = Partial()
         async with TestClient(TestServer(build_app(state))) as client:
             async with client.get("/events") as resp:
-                return await _read_events(resp, 3)
+                return await _read_events(resp, 4)
 
     events = _run(scenario())
     assert ("qa_partial", None, {"id": 2, "a": "Предлагаю"}) in events
+
+
+def test_sse_sends_voices_on_connect_and_on_change():
+    """Подписи голосов задним числом: состояние при каждом подключении
+    (новый ассистент — пустая карта) и при каждой смене, без `id:`."""
+    async def scenario():
+        state = BusState()
+        state.bus.publish("[00:00:03] Собеседник: привет",
+                          {"t": 3.0, "speaker": "Собеседник", "text": "привет", "voice": "sys:0"})
+        async with TestClient(TestServer(build_app(state))) as client:
+            async with client.get("/events") as resp:
+                first = await _read_events(resp, 4)
+                voices = next(e for e in first if e[0] == "voices")
+                assert voices[1] is None
+                assert voices[2] == {"rev": 0, "speakers": {}, "hidden": []}
+                line = next(e for e in first if e[0] == "line")
+                assert line[2]["voice"] == "sys:0"
+                state.bus.relabel("sys:0", "Демьян")
+                again = await _read_events(resp, 1)
+                assert again[0][0] == "voices" and again[0][1] is None
+                assert again[0][2] == {"rev": 1, "speakers": {"sys:0": "Демьян"}, "hidden": []}
+                state.bus.hide([0])
+                hidden = await _read_events(resp, 1)
+                assert hidden[0][2] == {"rev": 2, "speakers": {"sys:0": "Демьян"}, "hidden": [0]}
+            # Переподключение после всех строк: состояние голосов — сразу.
+            async with client.get("/events", headers={"Last-Event-ID": "0"}) as resp:
+                events = await _read_events(resp, 3)
+                assert ("voices", None, {"rev": 2, "speakers": {"sys:0": "Демьян"}, "hidden": [0]}) in events
+                assert not [e for e in events if e[0] == "line"]
+
+    _run(scenario())
+
+
+def test_page_transcript_follows_relabel():
+    async def scenario():
+        state = BusState()
+        state.bus.publish("[00:00:03] Собеседник: привет",
+                          {"t": 3.0, "speaker": "Собеседник", "text": "привет", "voice": "sys:0"})
+        async with TestClient(TestServer(build_app(state))) as client:
+            async with client.get("/events?transcript=1") as resp:
+                await _read_events(resp, 4)
+                state.bus.relabel("sys:0", "Демьян")
+                events = await _read_events(resp, 2)
+                st = next(e for e in events if e[0] == "state")
+                assert st[2]["transcript"] == ["[00:00:03] Демьян: привет"]
+
+    _run(scenario())

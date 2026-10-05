@@ -1434,3 +1434,63 @@ def test_writer_ignores_a_late_callback_after_close():
     w.write(b"\x02\x00" * 100)
     w.catch_up()
     assert sink.data == b"\x01\x00" * 100
+
+
+# --- переименование задним числом (С3, §4.3) --------------------------------------
+
+
+def test_name_arrives_retroactively_in_file_and_consumers(tmp_path):
+    segs, total = _segments(6)
+    renames, got = [], []
+    engine = LiveEngine(tmp_path, FakeTranscriber([segs]), voice_matcher=_matcher(),
+                        on_entry=lambda line, entry: got.append(line),
+                        on_relabel=lambda voice, speaker: renames.append((voice, speaker)))
+    (tmp_path / "live_transcript.md").write_text("[00:00:00] Собеседник: реплика 1\n", encoding="utf-8")
+    engine.register_track("sys.wav", rate=16000, channels=1, identify=True)
+    engine._tracks["sys.wav"]["buffer"].push(_pcm(total + 0.5))
+    engine.process_window()
+    assert renames == [("sys:0", "Демьян")]
+    lines = (tmp_path / "live_transcript.md").read_text(encoding="utf-8").splitlines()
+    # Строка прошлого включения ассистента (та же по тексту) не тронута — только наши.
+    assert lines[0] == "[00:00:00] Собеседник: реплика 1"
+    assert lines[1:] == [f"[00:00:{t:02d}] Демьян: реплика {i + 1}"
+                         for i, t in enumerate((0, 2, 4, 6, 8, 11))]
+    assert not (tmp_path / "live_transcript.md.tmp").exists()
+    # Дальше лента дописывается в тот же файл.
+    engine._write_line("[00:01:00] Вы: дальше")
+    engine._out.close()
+    assert (tmp_path / "live_transcript.md").read_text(encoding="utf-8").endswith("Вы: дальше\n")
+
+
+def test_catchup_lines_renamed_before_merge(tmp_path):
+    segs, total = _segments(6)
+    engine = LiveEngine(tmp_path, FakeTranscriber([segs]), voice_matcher=_matcher())
+    engine.register_track("sys.wav", rate=16000, channels=1, identify=True)
+    tr = engine._tracks["sys.wav"]
+    audio = np.full(int(16000 * (total + 0.5)), 1000 / 32768, dtype=np.float32)
+    with engine._window_lock:
+        engine._recognize("sys.wav", tr, audio, 0.0, False, catchup=True)
+    assert engine._catch_lines[0] == "[00:00:00] Демьян: реплика 1"
+    side = (tmp_path / "live_transcript.catchup.md").read_text(encoding="utf-8")
+    assert "Собеседник" not in side and side.count("Демьян") == 6
+    assert not (tmp_path / "live_transcript.md").exists()
+
+
+def test_rename_survives_unwritable_transcript(tmp_path, monkeypatch):
+    import os
+
+    segs, total = _segments(6)
+    lines = []
+    renames = []
+    engine = LiveEngine(tmp_path, FakeTranscriber([segs]), voice_matcher=_matcher(), log=lines.append,
+                        on_relabel=lambda voice, speaker: renames.append(voice))
+    engine.register_track("sys.wav", rate=16000, channels=1, identify=True)
+    engine._tracks["sys.wav"]["buffer"].push(_pcm(total + 0.5))
+
+    def locked(src, dst):
+        raise PermissionError("файл открыт")
+
+    monkeypatch.setattr(os, "replace", locked)
+    engine.process_window()
+    assert renames == ["sys:0"]  # потребители всё равно узнали
+    assert any("лента не переписана" in line for line in lines)

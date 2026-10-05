@@ -72,6 +72,7 @@ def _run_assist_capturing_matcher(tmp_path, monkeypatch, **kwargs):
     class FakeEngine:
         def __init__(self, out_dir, transcriber, **kw):
             captured["voice_matcher"] = kw.get("voice_matcher", "MISSING")
+            captured["kw"] = kw
 
         def start(self):
             pass
@@ -99,6 +100,7 @@ def _run_assist_capturing_matcher(tmp_path, monkeypatch, **kwargs):
     from meet.assist.app import run_assist
 
     run_assist(out_root=str(tmp_path), cfg=Settings.from_raw({}), **kwargs)
+    _run_assist_capturing_matcher.kw = captured["kw"]
     return captured["voice_matcher"]
 
 
@@ -107,6 +109,16 @@ def test_run_assist_creates_voice_matcher_by_default(tmp_path, monkeypatch):
 
     matcher = _run_assist_capturing_matcher(tmp_path, monkeypatch)
     assert isinstance(matcher, VoiceMatcher)
+
+
+def test_run_assist_relabels_voices_through_the_bus(tmp_path, monkeypatch):
+    from meet.assist.bus import TranscriptBus
+
+    _run_assist_capturing_matcher(tmp_path, monkeypatch)
+    kw = _run_assist_capturing_matcher.kw
+    relabel = kw["on_relabel"]
+    assert isinstance(relabel.__self__, TranscriptBus) and relabel.__func__ is TranscriptBus.relabel
+    assert kw["on_entry"].__self__ is relabel.__self__  # та же шина, что у строк
 
 
 def test_run_assist_no_voices_disables_matcher(tmp_path, monkeypatch):

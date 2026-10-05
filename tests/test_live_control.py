@@ -96,6 +96,8 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(b'event: state\ndata: {"status": null, "digest": "", "transcript": []}\n\n')
         self.wfile.write(b'event: qa\ndata: {"qa": []}\n\n')
         self.wfile.write('event: qa_partial\ndata: {"id": 1, "a": "Отв"}\n\n'.encode("utf-8"))
+        self.wfile.write('event: voices\ndata: {"rev": 1, "speakers": {"sys:0": "Демьян"}, "hidden": []}\n\n'
+                         .encode("utf-8"))
         self.wfile.write(b'event: debug\ndata: {}\n\n')
         for i in range(start, 3):
             data = json.dumps({"t": "00:0%d" % i, "speaker": "Демьян", "text": "реплика %d" % i},
@@ -743,6 +745,8 @@ def test_events_relay_passes_last_event_id_and_filters(make_live, tmp_path):
         assert _read_block(stream).startswith("event: state\n")
         assert _read_block(stream).startswith("event: qa\n")  # история вопросов — тоже
         assert _read_block(stream).startswith("event: qa_partial\n")  # ответ, который пишется
+        voices = _read_block(stream)  # подписи голосов задним числом
+        assert voices.startswith("event: voices\n") and "Демьян" in voices and "id:" not in voices
         first = _read_block(stream)  # неизвестное событие (debug) не ретранслируется
         assert first.startswith("event: line\nid: 1\n") and "реплика 1" in first
         assert "id: 2\n" in _read_block(stream)
@@ -1201,14 +1205,15 @@ def test_live_routes_end_to_end(resident, monkeypatch):
         with urllib.request.urlopen(req, timeout=10) as r:
             assert "text/event-stream" in r.headers["Content-Type"]
             seen = []
-            while len(seen) < 4:
+            while len(seen) < 5:
                 line = r.readline().decode("utf-8")
                 assert line, "поток закрылся раньше событий"
                 if line.startswith("event: "):
                     seen.append(line.strip())
                 if line.startswith("id: "):
                     seen.append(line.strip())
-            assert seen == ["event: state", "event: qa", "event: qa_partial", "event: line"]
+            assert seen == ["event: state", "event: qa", "event: qa_partial", "event: voices",
+                            "event: line"]
             assert r.readline().decode("utf-8").strip() == "id: 2"
         assert resident.stub.note("last_event_id") == ["1"]
         status, reply = _call(srv, "/live/stop")
