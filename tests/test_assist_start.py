@@ -370,3 +370,61 @@ def test_live_pick_wraps_the_whisper_load(monkeypatch):
                           log=lambda line: None)
     with pytest.raises(live_asr.ModelMissing):
         model.load()
+
+
+def test_only_missing_files_become_a_missing_model(monkeypatch):
+    """Неполный кэш — «скачайте заново»; CUDA, доступ, тип вычислений — как
+    есть: у загрузчика на них свои откаты и честный текст."""
+    from meet import live_asr
+
+    def loading(error):
+        def load():
+            raise error
+        return live_asr._without_download(load)
+
+    class LocalEntryNotFoundError(Exception):
+        pass
+
+    for missing in (FileNotFoundError("model.bin"), LocalEntryNotFoundError("нет в кэше"),
+                    RuntimeError("Unable to open file 'model.bin' in model 'x'")):
+        with pytest.raises(live_asr.ModelMissing):
+            loading(missing)()
+    for other in (RuntimeError("CUDA failed with error no CUDA-capable device"),
+                  PermissionError("доступ запрещён"),
+                  ValueError("Requested int8_float16 compute type is not supported"),
+                  RuntimeError("CUDA failed: out of memory")):
+        with pytest.raises(type(other)) as got:
+            loading(other)()
+        assert got.value is other
+
+
+def test_unexpected_exception_ends_with_one_readable_line(capsys):
+    """Многострочное сообщение исключения — одной строкой после traceback'а:
+    по ней резидент показывает причину."""
+    from meet import cli, live_control
+
+    with pytest.raises(SystemExit) as exc:
+        with cli._fatal_exit_code():
+            raise RuntimeError("первая строка\nвторая строка")
+    assert exc.value.code == 1
+    err = capsys.readouterr().err.strip().splitlines()
+    assert err[-1] == "Ассистент упал: RuntimeError: первая строка вторая строка"
+    assert any(line.startswith("Traceback") for line in err)
+    assert app_mod.CRASH_MARK == live_control.CRASH_MARK
+
+
+def test_resident_shows_the_crash_line_after_a_multiline_message(tmp_path):
+    from meet import live_control
+
+    log = tmp_path / "live.log"
+    log.write_text("\n".join([
+        "Traceback (most recent call last):",
+        '  File "x.py", line 1',
+        "RuntimeError: первая строка",
+        "вторая строка",
+        "Ассистент упал: RuntimeError: первая строка вторая строка",
+    ]) + "\n", encoding="utf-8")
+    assert live_control._child_error(log, 0, 1) == \
+        "Ассистент упал: RuntimeError: первая строка вторая строка"
+    assert live_control.recording_goes_on(live_control._child_error(log, 0, 1), ready=True) == \
+        "Ассистент упал — запись продолжается: RuntimeError: первая строка вторая строка"

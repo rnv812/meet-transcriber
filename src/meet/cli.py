@@ -136,8 +136,14 @@ def _take_tap_token() -> str | None:
 def _fatal_exit_code():
     """Ошибка с текстом (`SystemExit("…")`: нет провайдера, вход в Claude,
     запись уже идёт) — текст в stderr (он же последняя строка live.log) и
-    код EXIT_FATAL: резидент такой старт не повторяет, повтор не поможет."""
-    from meet.assist.app import EXIT_FATAL
+    код EXIT_FATAL: резидент такой старт не повторяет, повтор не поможет.
+
+    Любое другое исключение — traceback и затем одна строка `CRASH_MARK
+    Тип: сообщение` (сообщение в одну строку): по ней резидент показывает
+    причину, даже если сообщение многострочное."""
+    import traceback
+
+    from meet.assist.app import CRASH_MARK, EXIT_FATAL
 
     try:
         yield
@@ -146,6 +152,12 @@ def _fatal_exit_code():
             print(e.code, file=sys.stderr, flush=True)
             raise SystemExit(EXIT_FATAL) from None
         raise
+    except Exception as e:
+        traceback.print_exc()
+        text = " ".join(str(e).split())
+        print(f"{CRASH_MARK}{type(e).__name__}" + (f": {text}" if text else ""),
+              file=sys.stderr, flush=True)
+        raise SystemExit(1) from None
 
 
 def live_attach(detach: bool = False) -> int:

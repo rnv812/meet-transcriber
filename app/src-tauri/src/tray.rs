@@ -249,6 +249,10 @@ pub struct Live {
     /// Включён посреди обычной записи: запись ведёт резидент, ассистент её
     /// слушает; «Выключить ассистента» запись не останавливает.
     pub attached: bool,
+    /// Подключён с самого начала «Записи с ассистентом» (а не включён посреди
+    /// обычной записи): о его готовности трей молчит — уведомление было при
+    /// начале записи. Старый резидент поля не присылает.
+    pub with_recording: bool,
     /// Чем кончился последний запуск (`"recording"` — вместе с записью, к
     /// которой был подключён; `"detach"` — выключили; `"crash"` — упал;
     /// `"stop"` — остановили). Пока ассистент жив — `None`; старый резидент
@@ -277,6 +281,7 @@ impl Live {
             folder: text("folder"),
             error: text("error"),
             attached: flag("attached"),
+            with_recording: flag("with_recording"),
             ended_by: text("ended_by"),
         }
     }
@@ -467,9 +472,10 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
     }
     // «Слушает» — когда модель загрузилась, а не когда пошёл звук: до этого
     // ассистент ещё ничего не умеет, а запуск может и не удаться.
-    // У записи с ассистентом (source: live) уведомление было при её начале.
-    let with_assistant = next.source.as_deref() == Some("live");
-    if !prev.live.listening() && next.live.listening() && !with_assistant {
+    // У ассистента, подключённого с самого начала «Записи с ассистентом»,
+    // уведомление было при её начале; включённый в неё снова (после
+    // выключения или сбоя) — уведомляет, как обычно.
+    if !prev.live.listening() && next.live.listening() && !next.live.with_recording {
         out.push(if next.live.attached {
             Notice::new(
                 LIVE_ATTACHED,
@@ -2713,6 +2719,7 @@ mod tests {
                 folder: active.then(|| LIVE_FOLDER.to_string()),
                 error: None,
                 attached: false,
+                with_recording: false,
                 ended_by: None,
             },
             ..idle()
@@ -2798,6 +2805,7 @@ mod tests {
         warming.source = Some("live".into());
         warming.live = attached(true, false, false);
         warming.live.ready = false;
+        warming.live.with_recording = true;
         let started = transitions(Some(&idle()), &warming);
         assert_eq!(
             started.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(),
@@ -2813,6 +2821,19 @@ mod tests {
         assert!(
             tip.contains("· ассистент") && !tip.contains("запускается"),
             "{tip}"
+        );
+        // Выключили и включили снова в ту же запись — вот тогда уведомление.
+        let mut again = ready.clone();
+        again.live.with_recording = false;
+        again.live.ready = false;
+        let mut again_ready = again.clone();
+        again_ready.live.ready = true;
+        assert_eq!(
+            transitions(Some(&again), &again_ready)
+                .iter()
+                .map(|n| n.title.as_str())
+                .collect::<Vec<_>>(),
+            vec![LIVE_ATTACHED]
         );
     }
 
@@ -2846,6 +2867,7 @@ mod tests {
                 folder: Some(LIVE_FOLDER.into()),
                 error: None,
                 attached: false,
+                with_recording: false,
                 ended_by: None,
             }
         );
@@ -3163,6 +3185,7 @@ mod tests {
             folder: Some(LIVE_FOLDER.to_string()),
             error: None,
             attached: true,
+            with_recording: false,
             ended_by: None,
         }
     }

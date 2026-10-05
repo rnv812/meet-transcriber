@@ -321,16 +321,39 @@ def _without_download(load):
             constants.HF_HUB_OFFLINE = True
         try:
             return load()
-        except MemoryError:
-            raise
         except Exception as e:
-            if "memory" in str(e).lower():
-                raise
+            if not _looks_missing(e):
+                raise  # CUDA, доступ, тип вычислений — как было: свои откаты и честный текст
             raise ModelMissing(MODEL_BROKEN) from e
         finally:
             if constants is not None:
                 constants.HF_HUB_OFFLINE = saved
     return run
+
+
+# Чем загрузчик говорит «файлов модели нет / не все»: hub без сети
+# (LocalEntryNotFoundError, OfflineModeIsEnabled), ctranslate2 без model.bin.
+_MISSING_TYPES = ("LocalEntryNotFoundError", "EntryNotFoundError", "OfflineModeIsEnabled",
+                  "FileNotFoundError", "IsADirectoryError", "NotADirectoryError")
+_MISSING_TEXT = ("unable to open file", "model.bin", "no such file", "does not exist",
+                 "cannot find", "local_files_only", "offline mode", "not found in")
+
+
+def _looks_missing(error: BaseException) -> bool:
+    """Сбой загрузки — от нехватки файлов модели (а не CUDA, доступа, памяти)."""
+    seen = 0
+    while error is not None and seen < 5:
+        if isinstance(error, PermissionError) or "memory" in str(error).lower():
+            return False
+        names = {cls.__name__ for cls in type(error).__mro__}
+        if names & set(_MISSING_TYPES):
+            return True
+        text = str(error).lower()
+        if any(mark in text for mark in _MISSING_TEXT):
+            return True
+        error = error.__cause__ or error.__context__
+        seen += 1
+    return False
 
 
 def pick(cfg=None, *, log=print):
