@@ -42,6 +42,7 @@ import { HotwordsEditor } from "./HotwordsEditor";
 import { MarkupSection, dropHiddenJira, markupChangesInvalid } from "./MarkupSection";
 import { ReplacementsEditor } from "./ReplacementsEditor";
 import { ModelsPane } from "./ModelsPane";
+import { StoragePane } from "./StoragePane";
 import { PathText, Radio, Row, Switch, type Raw, type SetFn } from "./Section";
 import {
   AsrModelTip, AutoRecordTip, GpuMarkerTip, GraceTip, HookCommandTip, RecurringWindowTip, VoiceThresholdTip,
@@ -543,6 +544,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
                 </Row>
               )}
               <EnginePane endpoint={endpoint} onReinstall={onRunWizard && (() => onRunWizard("engine"))} />
+              <StoragePane endpoint={endpoint} />
               <h3 className="shead">Модели</h3>
               <ModelsPane endpoint={endpoint} usage={modelUsage(draft)} />
             </>

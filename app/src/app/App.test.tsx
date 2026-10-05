@@ -337,6 +337,18 @@ test("«Пропустить» мастер: флаг в localStorage и в об
   expect(screen.getAllByText("Движок не установлен").length).toBeGreaterThan(0);
 });
 
+test("папки движка и моделей нет — не мастер, а «Повторить» и «Вернуть на системный диск»", async () => {
+  engineState.current = missingEngine();
+  vi.mocked(shell.residentStatus).mockResolvedValue("storage-missing");
+  const { container } = render(<App />);
+  const detail = container.querySelector<HTMLElement>('[data-pane="detail"]')!;
+  await waitFor(() => expect(detail).toHaveTextContent("Папка движка и моделей недоступна"));
+  expect(screen.queryByTestId("wizard")).toBeNull();
+  expect(detail).not.toHaveTextContent("Движок не установлен");
+  expect(within(detail).getByRole("button", { name: "Повторить" })).toBeInTheDocument();
+  expect(within(detail).getByRole("button", { name: "Вернуть на системный диск" })).toBeInTheDocument();
+});
+
 test("wizard_done — мастер сам не показывается при installed:false; «Установить» открывает его на движке", async () => {
   localStorage.setItem("meet.wizard_done", "1");
   engineState.current = missingEngine();

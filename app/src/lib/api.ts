@@ -337,6 +337,30 @@ export const putHotwords = (ep: Endpoint, text: string) =>
 export const removeHotword = (ep: Endpoint, term: string) =>
   json<Hotwords>(ep, "/hotwords/remove", body("POST", { term }));
 export const getEngine = (ep: Endpoint) => json<EngineState>(ep, "/engine");
+/** Модели Meet, оставшиеся в общем кэше Hugging Face после переезда в свою папку. */
+export type StorageLeftovers = { cache: string; repos: { id: string; bytes: number }[]; bytes: number };
+/** `GET /storage`: где движок и модели. Переносит их оболочка (`storage_move`). */
+export type StorageInfo = {
+  /** Выбранная папка; null — по умолчанию (папка данных и общий кэш HF). */
+  root: string | null;
+  custom: boolean;
+  home: string;
+  engine_dir: string;
+  models_dir: string;
+  /** Кэш HF, которым пользуется Meet (общий или свой `models/hf`). */
+  hf_cache: string;
+  shared_cache: string;
+  missing: string | null;
+  models_bytes: number;
+  moving: boolean;
+  /** Почему переносить сейчас нельзя («идёт запись»); null — можно. */
+  busy: string | null;
+  leftovers: StorageLeftovers | null;
+};
+export const getStorage = (ep: Endpoint) => json<StorageInfo>(ep, "/storage");
+/** Ответ на вопрос после переезда: удалить модели Meet из общего кэша HF или оставить. */
+export const answerLeftovers = (ep: Endpoint, remove: boolean) =>
+  json<{ ok: boolean; removed: string[]; error?: string }>(ep, "/storage/leftovers", body("POST", { delete: remove }));
 export const getModels = (ep: Endpoint) => json<ModelsState>(ep, "/models");
 export const downloadModel = (ep: Endpoint, id: string) =>
   json<Job>(ep, "/models/download", body("POST", { id }));

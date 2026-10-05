@@ -28,6 +28,8 @@ export type WizardGate = {
   wizard: WizardStep | null;
   /** Движка нет и резидента нет: вместо «Сервис не запущен» — «Движок не установлен». */
   engineMissing: boolean;
+  /** Папки движка и моделей нет (диск отключён): вместо мастера — «Повторить» или «Вернуть на системный диск». */
+  storageMissing: boolean;
   open: (start: WizardStep) => void;
   /** «Пропустить» или «Готово»: сам мастер больше не откроется. */
   close: () => void;
@@ -69,6 +71,7 @@ export function useWizardGate(status: ResidentStatus, endpoint: Endpoint | null)
 
   const residentMissing = status === "offline" && (shell === null || shell === "engine-missing");
   const engineMissing = engine?.installed === false && residentMissing;
+  const storageMissing = status === "offline" && shell === "storage-missing";
 
   useEffect(() => {
     if (!engine || shell === undefined || wizard !== null) return;
@@ -84,7 +87,7 @@ export function useWizardGate(status: ResidentStatus, endpoint: Endpoint | null)
   // первые секунды, иначе так и не узнало бы, что движка нет. Этот опрос
   // ограничен SHELL_STARTING_POLLS — оболочка, зависшая в «starting», не
   // заставит окно спрашивать вечно.
-  const following = (wizard !== null || engineMissing) && shell != null;
+  const following = (wizard !== null || engineMissing || storageMissing) && shell != null;
   const settling = status === "offline" && (shell === "starting" || shell === "engine-updating");
   const watch = following || settling;
   const bounded = useRef(true);
@@ -139,5 +142,5 @@ export function useWizardGate(status: ResidentStatus, endpoint: Endpoint | null)
 
   const installStarted = useCallback(() => setAuto(false), []);
 
-  return { engine, wizard, engineMissing, open, close, installStarted, refreshEngine };
+  return { engine, wizard, engineMissing, storageMissing, open, close, installStarted, refreshEngine };
 }

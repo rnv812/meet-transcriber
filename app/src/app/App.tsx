@@ -19,6 +19,7 @@ import { Button } from "../ui/Button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Wizard } from "../features/wizard/Wizard";
 import { useWizardGate } from "../features/wizard/useWizardGate";
+import { STORAGE_MISSING_TITLE, StorageMissing } from "../features/settings/StorageMissing";
 import { Nav, type Section } from "./Nav";
 import { RecordingBadge } from "./RecordingBadge";
 import { ShellResize } from "./ShellResize";
@@ -147,8 +148,10 @@ export function App() {
   }
 
   // Без движка резидент не запустится: вместо «перезапускаю» — предложение поставить.
-  const offlineList = gate.engineMissing ? <EmptyState title="Движок не установлен" /> : <OfflineState />;
-  const offlineDetail = gate.engineMissing ? (
+  // Папки движка и моделей нет (диск отключён) — выбор человека, а не переустановка.
+  const offlineList = gate.storageMissing ? <EmptyState title={STORAGE_MISSING_TITLE} />
+    : gate.engineMissing ? <EmptyState title="Движок не установлен" /> : <OfflineState />;
+  const offlineDetail = gate.storageMissing ? <StorageMissing /> : gate.engineMissing ? (
     <EmptyState title="Движок не установлен" hint="Без него приложение не записывает и не расшифровывает встречи."
       action={<Button variant="primary" onClick={() => gate.open("engine")}>Установить</Button>} />
   ) : <OfflineState />;

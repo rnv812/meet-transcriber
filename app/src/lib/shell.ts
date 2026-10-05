@@ -154,6 +154,49 @@ async function listenShell<T>(event: string, cb: (payload: T) => void): Promise<
 export const onEngineProgress = (cb: (p: EngineProgress) => void) => listenShell("engine-progress", cb);
 export const onEngineFailed = (cb: (f: EngineFailed) => void) => listenShell("engine-failed", cb);
 
+// --- где хранить движок и модели (storage.rs) --------------------------------
+
+/** `storage_status`: где сейчас движок и модели, идёт ли перенос. */
+export type StorageStatus = {
+  /** Выбранная папка; null — по умолчанию. */
+  root: string | null;
+  home: string;
+  /** Папка по умолчанию на системном диске (папка данных Meet). */
+  default_home: string;
+  /** Выбранной папки нет (внешний диск отключён). */
+  missing: string | null;
+  moving: boolean;
+  /** «Отменить» ещё работает (до переключения на новую папку). */
+  cancellable: boolean;
+};
+/** `storage_check`: куда на самом деле, сколько места и можно ли сейчас. */
+export type StorageCheck = {
+  target: string;
+  free_gb: number | null;
+  needs_gb: number;
+  engine_gb: number;
+  models_gb: number;
+  busy: string | null;
+  error: string | null;
+};
+export type StoragePhase = "engine" | "models" | "waiting" | "switching" | "cleanup" | "rollback";
+/** Событие `storage-progress`: шаг переноса, текст и байты (у копирования моделей). */
+export type StorageProgress = { phase: StoragePhase; text: string; done: number; total: number };
+
+export async function storageStatus(): Promise<StorageStatus | null> {
+  if (!inTauri()) return null;
+  return invoke<StorageStatus>("storage_status");
+}
+export const storageCheck = (target: string) => invoke<StorageCheck>("storage_check", { target });
+/** Перенести движок и модели (минуты). Ответ — папка, куда перенесено. */
+export const storageMove = (target: string) => invoke<string>("storage_move", { target });
+export const storageCancel = () => invoke<void>("storage_cancel");
+/** Выбранной папки нет: вернуть движок и модели на системный диск. */
+export const storageReset = () => invoke<void>("storage_reset");
+/** Диск подключили: проверить папку и запустить службу снова. */
+export const storageRetry = () => invoke<void>("storage_retry");
+export const onStorageProgress = (cb: (p: StorageProgress) => void) => listenShell("storage-progress", cb);
+
 // --- обновление по кнопке («О программе») ------------------------------------
 
 /** `check_update` оболочки: последний выпуск на GitHub против своей версии. */

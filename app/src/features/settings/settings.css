@@ -289,6 +289,20 @@
 .asr-fallback .btn--link { font-size: 12px; }
 .engine-choice-link { margin: 4px 0 8px; }
 
+/* «Где хранить движок и модели»: папка, проверка перед переносом, ход, вопрос об остатках. */
+.storage { display: flex; flex-direction: column; gap: 8px; width: 100%; min-width: 0; }
+.storage p { margin: 0; }
+.storage__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.storage__plan, .storage__leftovers {
+  display: flex; flex-direction: column; gap: 8px; padding: 12px;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2);
+}
+.storage__leftovers { margin: 8px 0 12px; }
+.storage__progress { display: flex; flex-direction: column; gap: 6px; }
+.storage__progress .btn { align-self: flex-start; }
+.storage__line { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.storage-missing .storage__actions { justify-content: center; margin-top: 8px; }
+
 /* «Движок и модели»: строка модели — где выбрана, загрузка с полоской, удаление с подтверждением в строке. */
 .model-row__chosen { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px; color: var(--ok); }
 .model-row__chosen--muted { color: var(--text-2); }
