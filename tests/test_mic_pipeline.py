@@ -975,3 +975,22 @@ def test_resident_passes_candidate_confirmation(call, monkeypatch, tmp_path):
     got = state.speakers_apply(folder.name, {"ops": [], "remember": {}, "remember_owner": True,
                                              "owner_candidate": True})
     assert got["step"]["owner_voice"] is True and [s.source for s in owner_voice.load(voices)] == ["meeting"]
+
+
+def test_confirmed_candidate_is_no_longer_a_candidate_until_undone(call):
+    """Кандидат подтверждён и образец записан — флажок «это точно вы?» на
+    строке «Вы» больше не появляется; отмена шага возвращает и пометку."""
+    from meet import speakers
+
+    folder, voices = call
+    _candidate(folder)
+    speakers.apply(folder, [], {}, voices, remember_owner=True, owner="Вы", confirm_candidate=True)
+    assert speakers.overview(folder, voices)["owner_voice_candidate"] is False
+    entry = next(e for e in _sidecar(folder)["speakers"] if e.get("owner"))
+    assert "candidate" not in entry and entry["label"] == "OWNER"
+    speakers.undo(folder, voices)
+    assert owner_voice.load(voices) == []
+    assert speakers.overview(folder, voices)["owner_voice_candidate"] is True
+    speakers.redo(folder, voices)
+    assert speakers.overview(folder, voices)["owner_voice_candidate"] is False
+    assert [s.source for s in owner_voice.load(voices)] == ["meeting"]

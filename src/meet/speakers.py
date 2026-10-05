@@ -804,6 +804,7 @@ def _owner_parts(segments: list[dict], shown: list[str | None], clusters: dict[s
             parts.append({"label": str(e.get("label") or e.get("display")),
                           "weight": round(seconds.get(label, 0.0) / len(mic), 3),
                           "owner": e.get("owner") is True or e.get("label") == OWNER_LABEL,
+                          "candidate": e.get("candidate") is True,
                           "embedding": e["embedding"]})
     return parts if any(p["owner"] for p in parts) else []
 
@@ -938,7 +939,19 @@ def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
 
     if threshold is not None:
         step["threshold"] = threshold
-    _, meta = _commit(folder, data, _recorder(data, step), voices_dir, enroll)
+    # Подтверждённый кандидат («это точно я» + образец записан) — больше не
+    # кандидат: флажок не возвращается на строку «Вы». Сайдкар меняется
+    # шагом — отмена возвращает пометку вместе с образцом.
+    side_change = payload = None
+    if any(p.get("candidate") for p in owner_parts):
+        side_path, side = sidecar_for_write(folder)
+        before = [e for e in side.get("speakers") or [] if isinstance(e, dict)]
+        after = [{k: v for k, v in e.items() if k != "candidate"} if e.get("owner") else e for e in before]
+        side_change = (side_path, {**side, "speakers": after})
+        payload = (step["id"], {"sidecar": {"before": before, "after": after}})
+        step["payload"] = True
+    _, meta = _commit(folder, data, _recorder(data, step), voices_dir, enroll, sidecar=side_change,
+                      payload=payload)
     steps, pos = _history_of(meta, data)
     return {"step": _public([step])[0], "history": _public(steps), "pos": pos,
             "trimmed": _trimmed(meta, data), "voices_error": "; ".join(errors) or None,

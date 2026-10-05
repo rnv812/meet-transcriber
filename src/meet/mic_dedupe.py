@@ -582,9 +582,11 @@ def find(mic: list[Tok], sys: list[Tok], *, owner_known: bool, env: Envelope | N
          ) -> tuple[list[Drop], Lags]:
     """Дубли по всей встрече (расшифровка): сначала L* по уверенным парам всей
     встречи, потом решение по каждой паре. → (удалённые копии, лаги).
-    `leak_voice(spans) -> (bool, cos | None)` — центроид голоса отрезков sys
-    похож на образец владельца: без него утечки владельца из sys не
-    удаляются. `leak_report` дополняется тем, чем решено об утечках."""
+    `leak_voice(spans) -> (bool, cos | None, номера посчитанных отрезков |
+    None)` — центроид голоса отрезков sys похож на образец владельца;
+    номера — какие отрезки правда вошли в центроид (по ним порог звука и
+    удаление), None — сбой проверки. Без `leak_voice` утечки владельца из sys
+    не удаляются. `leak_report` дополняется тем, чем решено об утечках."""
     lags = lags if lags is not None else Lags()
     return _resolve(mic, sys, lags, env, owner_known, leak_voice, leak_report), lags
 
