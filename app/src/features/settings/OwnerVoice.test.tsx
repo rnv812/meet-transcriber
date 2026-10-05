@@ -53,7 +53,8 @@ test("настройки: не записан → «Записать» откр�
   expect(api.recordOwnerVoice).toHaveBeenCalledWith(ep, "USB-микрофон");
   // Готово — строка свёрнута, в ней новый образец.
   expect(await within(group).findByText("записан 05.10 · USB-микрофон")).toBeInTheDocument();
-  expect(screen.queryByText(/Утро выдалось тихим/)).toBeNull();
+  // Сворачивается эффектом после того, как образец появился в строке.
+  await waitFor(() => expect(screen.queryByText(/Утро выдалось тихим/)).toBeNull());
   expect(within(group).getByRole("button", { name: "Перезаписать" })).toBeInTheDocument();
 });
 
