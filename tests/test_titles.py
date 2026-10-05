@@ -209,6 +209,24 @@ def test_live_topic_is_a_provisional_title(tmp_path):
     assert "Тема по ходу встречи" in titles.excerpt(folder)
 
 
+def test_live_draft_replaces_only_itself(tmp_path):
+    """Черновое название по теме ассистента меняет само себя (тема
+    уточнилась), автоматическое и общее из окна звонка, но не название от
+    итогов или анализа и не человеческое."""
+    folder = _folder(tmp_path)
+    assert titles.apply_live_draft(folder, "Запуск беты", _cfg(auto_title=False)) is None
+    assert titles.apply_live_draft(folder, "Запуск беты", _cfg()) == "Запуск беты"
+    assert titles.apply_live_draft(folder, "Запуск беты в пятницу", _cfg()) == "Запуск беты в пятницу"
+    assert library.read_meta(folder)["title_source"] == "ai"
+    titles.apply_ai(folder, "Итоги беты", _cfg())  # итоги или анализ
+    assert titles.apply_live_draft(folder, "Ещё тема", _cfg()) is None
+    assert library.read_meta(folder)["title"] == "Итоги беты"
+    library.write_meta(folder, {"title": "Моё", "title_source": "user"})
+    assert titles.apply_live_draft(folder, "Ещё тема", _cfg()) is None
+    site = _folder(tmp_path, {"title": "Google Meet", "title_source": "site"}, rid="2026-10-01_12-00")
+    assert titles.apply_live_draft(site, "Запуск беты", _cfg()) == "Запуск беты"
+
+
 def test_titles_main_prints_ascii_json(tmp_path, monkeypatch, capsys):
     folder = _folder(tmp_path)
     from meet import llm

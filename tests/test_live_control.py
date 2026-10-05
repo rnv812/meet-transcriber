@@ -1357,6 +1357,9 @@ def test_stop_with_the_assistant_still_attached_saves_at_once(resident, monkeypa
     _wait_for(lambda: not resident.live.finishing())
     assert resident.stub.note("stop") == [""]  # штатно дописал
     assert hooks == [folder]  # и ничего не повторилось
+    # Хвост дописал последнюю сводку — черновое название ещё раз, по ней.
+    _wait_for(lambda: len(titled) == 2)
+    assert [str(f) for f in titled] == [folder, folder]
 
 
 def test_new_recording_starts_while_the_old_tail_runs(resident, monkeypatch):

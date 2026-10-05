@@ -480,6 +480,8 @@ class TrayControl:
         # записи ждёт его, а не платит за второй вызов модели.
         self._suggesting: dict[str, dict] = {}
         self._suggest_lock = threading.Lock()
+        # Черновое название по теме ассистента (_live_title): по одному за раз.
+        self._live_title_lock = threading.Lock()
         self.bus.subscribe(self._on_job_event)
         # Образец голоса владельца (мастер, настройки «Звук»): запись
         # подпроцессом устройств, разбор — задачей в своём слоте загрузок.
@@ -673,10 +675,28 @@ class TrayControl:
         """Ассистент кончился — отложенный на время встречи анализ пора
         догнать. Запись, к которой он был подключён (в том числе «Запись с
         ассистентом»), сохраняет, ставит в расшифровку и отдаёт хуку остановка
-        самой записи (`_on_saved`), а не ассистента."""
+        самой записи (`_on_saved`), а не ассистента.
+
+        Хвост ассистента остановленной записи с ассистентом дописал последнюю
+        сводку — черновое название ещё раз, по ней (`_live_title`)."""
         if event.kind in (live_control.LIVE_STOPPED, live_control.LIVE_FAILED) \
                 and (self._analysis_deferred or self._improve_deferred):
             self._background(self._flush_deferred_analysis, "meet-analysis")
+        data = event.data or {}
+        folder = data.get("folder")
+        if (event.kind == live_control.LIVE_STOPPED and folder and data.get("attached")
+                and data.get("ended_by") == live_control.ENDED_RECORDING
+                and not data.get("discarded")):
+            path = Path(folder)
+
+            def retitle() -> None:
+                # Только запись с ассистентом (как при её остановке) и только
+                # пока она есть: отменённую удаляют сразу.
+                if path.is_dir() and \
+                        library.read_meta(path).get("source") == _META_SOURCE[LIVE]:
+                    self._live_title(path)
+
+            self._background(retitle, "meet-title")
 
     def _on_saved(self, folder: str, source: str | None, full: bool) -> None:
         """Запись штатно сохранена: пометить, откуда она, и поставить в очередь.
@@ -1774,12 +1794,13 @@ class TrayControl:
             self._background(lambda: self._follow_title(folder, old_title))
         return library.describe(folder).to_raw()
 
-    def _retitle_ai(self, folder: Path, title, why: str) -> str | None:
+    def _retitle_ai(self, folder: Path, title, why: str, apply=None) -> str | None:
         """Название от модели (анализ, итоги, тема живого режима) — по правилам
         meet.titles: только при включённом «Придумывать название» и только
         вместо автоматического, прежнего от модели или общего из окна звонка.
         Тот же путь, что переименование из окна: папка в базе знаний следует за
-        названием, окно перечитывает список. Фоновый поток: сбой — в журнал."""
+        названием, окно перечитывает список. Фоновый поток: сбой — в журнал.
+        `apply` — правило записи (по умолчанию `titles.apply_ai`)."""
         from meet import kb_export, titles
 
         try:
@@ -1788,7 +1809,7 @@ class TrayControl:
                 return None
             exported = kb_export.previously_exported(folder)
             old_title = kb_export.meeting(folder)[0] if exported else None
-            applied = titles.apply_ai(folder, title, cfg)
+            applied = (apply or titles.apply_ai)(folder, title, cfg)
         except Exception as e:
             self.tray.log(f"название от модели не поставлено ({Path(folder).name}): "
                           f"{type(e).__name__}: {e}")
@@ -1863,14 +1884,21 @@ class TrayControl:
             self._retitle_ai(folder, found["title"], "итоги")
 
     def _live_title(self, folder: Path) -> None:
+        """Черновое название записи с ассистентом по теме его сводки: при
+        остановке записи (тема на этот миг) и когда его хвост дописал последнюю
+        сводку. Второй раз — только поверх своего же чернового: название от
+        итогов, анализа или человека не трогаем (`titles.apply_live_draft`).
+        Под замком: два вызова не перепишут свежую тему прочитанной раньше."""
         from meet import titles
 
-        try:
-            topic = titles.live_topic_title(folder)
-        except Exception:
-            topic = None
-        if topic:
-            self._retitle_ai(folder, topic, "тема живого режима")
+        with self._live_title_lock:
+            try:
+                topic = titles.live_topic_title(folder)
+            except Exception:
+                topic = None
+            if topic:
+                self._retitle_ai(folder, topic, "тема живого режима",
+                                 apply=titles.apply_live_draft)
 
     def _follow_title(self, folder: Path, old_title: str) -> None:
         """Папка встречи в базе знаний — под новое название (если она целиком

@@ -15,7 +15,9 @@
 
 Откуда берётся название: из анализа встречи (`analysis.title`), из первой
 строки итогов («Название: …», см. SUMMARY_TITLE_RULE) и — черновое — из темы
-живого режима при остановке записи с ассистентом. Отдельный короткий вызов
+живого режима при остановке записи с ассистентом (и снова, когда его хвост
+дописал последнюю сводку, — если название всё ещё это черновое, см.
+apply_live_draft). Отдельный короткий вызов
 модели по началу встречи нужен только кнопке «Предложить название», когда
 свежего анализа нет (`python -m meet.titles <папка>` — его запускает резидент
 подпроцессом, как проверку провайдера).
@@ -143,6 +145,42 @@ def apply_ai(folder: Path, title, cfg) -> str | None:
     return title if ok else None
 
 
+# Черновое название по теме ассистента, поставленное последним (в meta.json):
+# название `ai`, совпадающее с ним, — всё ещё черновик.
+LIVE_DRAFT = "live_title"
+
+
+def apply_live_draft(folder: Path, title, cfg) -> str | None:
+    """Черновое название по теме ассистента: при остановке записи с ассистентом
+    и ещё раз, когда его хвост дописал последнюю сводку. Меняет то, что меняет
+    `apply_ai`, но название `ai` — только своё прежнее черновое: название от
+    итогов или анализа точнее темы, и хвост, дописанный позже них, его не
+    трогает. → поставленное название или None."""
+    if not cfg.assistant.auto_title:
+        return None
+    title = clean(title)
+    if not title:
+        return None
+    sites = cfg.auto_record.call_sites
+    changed = False
+
+    def change(meta: dict) -> dict:
+        nonlocal changed
+        if not may_replace(meta, sites):
+            return meta
+        source = library.title_source(meta)
+        if source == "ai" and meta.get("title") != meta.get(LIVE_DRAFT):
+            return meta  # от итогов или анализа
+        if source == "ai" and meta.get("title") == title:
+            return meta
+        changed = True
+        rest = {k: v for k, v in meta.items() if k != "title_accepted"}
+        return {**rest, "title": title, "title_source": "ai", LIVE_DRAFT: title}
+
+    library.update_meta(Path(folder), change)
+    return title if changed else None
+
+
 # --- короткий вызов модели: название по началу встречи ---------------------------
 
 
@@ -189,7 +227,7 @@ def _live_topic(folder: Path) -> str | None:
 
 def live_topic_title(folder: Path) -> str | None:
     """Тема живого режима как черновое название (при остановке записи с
-    ассистентом); темы нет — None."""
+    ассистентом и когда его хвост дописал сводку); темы нет — None."""
     topic = _live_topic(folder)
     return clean(topic) if topic else None
 

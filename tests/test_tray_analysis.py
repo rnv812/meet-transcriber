@@ -574,6 +574,86 @@ def test_live_topic_title_when_the_recording_with_assistant_is_saved(state, app,
     assert _meta(tmp_path)["title_source"] == "ai"
 
 
+def _live_topic(folder: Path, topic: str) -> None:
+    (folder / "live_state.json").write_text(json.dumps(
+        {"summary": {"topic": topic}, "hints": []}, ensure_ascii=False), encoding="utf-8")
+
+
+def _tail_done(app, folder: Path, **extra) -> None:
+    """Хвост ассистента остановленной записи кончился (его последний проход
+    дописан в папку)."""
+    from meet import live_control
+
+    app.bus.emit(live_control.LIVE_STOPPED, folder=str(folder), error=None, complete=True,
+                 attached=True, detached=False, ended_by=live_control.ENDED_RECORDING,
+                 **extra)
+
+
+def test_live_draft_title_follows_the_tail_final_digest(state, app, tmp_path):
+    """Черновое название ставится при остановке по текущей теме, а когда
+    хвост ассистента дописал последнюю сводку, — уточняется по ней."""
+    _write_config(tmp_path, assistant={"auto_title": True})
+    folder = _folder(tmp_path)
+    _live_topic(folder, "Запуск беты")
+    state._on_saved(str(folder), tray_control.LIVE, False)
+    assert _meta(tmp_path)["title"] == "Запуск беты"
+    _live_topic(folder, "Запуск беты в пятницу")
+    _tail_done(app, folder)
+    assert _meta(tmp_path)["title"] == "Запуск беты в пятницу"
+    assert _meta(tmp_path)["title_source"] == "ai"
+
+
+def test_short_recording_with_assistant_gets_its_draft_title_from_the_tail(state, app, tmp_path):
+    """Короткая запись: первая сводка случилась уже в хвосте — название всё
+    равно черновое, по ней."""
+    _write_config(tmp_path, assistant={"auto_title": True})
+    folder = _folder(tmp_path)
+    state._on_saved(str(folder), tray_control.LIVE, False)
+    assert "title" not in _meta(tmp_path)
+    _live_topic(folder, "Запуск беты")
+    _tail_done(app, folder)
+    assert _meta(tmp_path)["title"] == "Запуск беты"
+
+
+def test_tail_does_not_replace_a_title_from_the_summary(state, app, tmp_path):
+    """Название от итогов (или анализа) — уже не черновик: хвост его не трогает."""
+    _write_config(tmp_path, assistant={"auto_title": True})
+    folder = _folder(tmp_path)
+    _live_topic(folder, "Запуск беты")
+    state._on_saved(str(folder), tray_control.LIVE, False)
+    library.write_meta(folder, {"summary_title": {"title": "Итоги беты", "at": 1.0}})
+    _done(app, jobs.SUMMARY, folder)
+    assert _meta(tmp_path)["title"] == "Итоги беты"
+    _live_topic(folder, "Запуск беты в пятницу")
+    _tail_done(app, folder)
+    assert _meta(tmp_path)["title"] == "Итоги беты"
+
+
+def test_tail_does_not_replace_a_user_title(state, app, tmp_path):
+    _write_config(tmp_path, assistant={"auto_title": True})
+    folder = _folder(tmp_path)
+    _live_topic(folder, "Запуск беты")
+    state._on_saved(str(folder), tray_control.LIVE, False)
+    state.update_recording(RID, {"title": "Моё название"})
+    _live_topic(folder, "Запуск беты в пятницу")
+    _tail_done(app, folder)
+    assert _meta(tmp_path)["title"] == "Моё название"
+
+
+def test_tail_titles_only_a_recording_with_assistant(state, app, tmp_path):
+    """Ассистент, включённый посреди обычной записи, названия ей не даёт — как
+    и при её остановке; отменённой записи — тем более."""
+    _write_config(tmp_path, assistant={"auto_title": True})
+    folder = _folder(tmp_path)
+    state._on_saved(str(folder), tray_control.MANUAL, False)
+    _live_topic(folder, "Запуск беты")
+    _tail_done(app, folder)
+    assert "title" not in _meta(tmp_path)
+    library.write_meta(folder, {"source": "live"})
+    _tail_done(app, folder, discarded=True)
+    assert "title" not in _meta(tmp_path)
+
+
 def test_browser_call_title_is_site(state, app, tmp_path, monkeypatch):
     folder = _folder(tmp_path)
     app.recording_title = "Google Meet"

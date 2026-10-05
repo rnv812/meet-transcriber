@@ -1054,9 +1054,10 @@ class LiveControl:
             if kind == LIVE_STOPPED:
                 self._log(f"ассистент {'выключен' if detached else 'остановлен'}: {folder}"
                           + (f" ({error})" if error else ""))
+                # discarded — запись отменена (abort): её папку удаляют.
                 self.bus.emit(LIVE_STOPPED, folder=folder, error=error,
                               complete=complete, attached=attached, detached=detached,
-                              ended_by=ended_by)
+                              ended_by=ended_by, discarded=aborted)
             else:
                 self._log(f"ассистент упал (код {_code_text(code)}): {error}")
                 self.bus.emit(LIVE_FAILED, error=error, folder=folder, attached=attached,
