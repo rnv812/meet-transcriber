@@ -10,15 +10,26 @@ VAD образца, речь, уровень над фоном, три трет�
 
     python scripts/owner_enroll_calib.py <mic.opus|wav> [<…> …] [--sys <sys.opus> …] \\
         [--window 25] [--max 12] [--out отчёт.json]
+    python scripts/owner_enroll_calib.py --meeting 2026-10-05_10-00 [--quiet-sys]
 
 `--sys` (по одному на дорожку микрофона, в том же порядке) — брать только окна,
-где звук собеседников почти молчит (не меньше QUIET_SHARE кадров тише QUIET_DB)."""
+где звук собеседников почти молчит (не меньше QUIET_SHARE кадров тише QUIET_DB).
+
+`--meeting ИМЯ` — запись приложения из %LOCALAPPDATA%\\meet\\recordings\\ИМЯ: её
+mic.opus (и sys.opus с `--quiet-sys`) копируется во временную папку, читается
+только копия, копия удаляется в конце. Папку записи скрипт не трогает, движок
+приложения не запускает, настройки и токен приложения не читает (своя пустая
+папка данных, HF_HUB_OFFLINE=1 — модель из кэша Hugging Face). Печатает
+только числа."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -71,21 +82,67 @@ def summary(windows: list[dict]) -> dict:
     return out
 
 
+def meeting_folder(name: str) -> Path:
+    """Папка записи приложения по имени — только чтение."""
+    base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    folder = base / "meet" / "recordings" / name
+    if Path(name).name != name or not (folder / "mic.opus").is_file():
+        raise SystemExit(f"нет дорожки микрофона записи {name!r}")
+    return folder
+
+
+def copy_tracks(folder: Path, into: Path, with_sys: bool) -> tuple[Path, Path | None]:
+    """Копии дорожек во временную папку: дальше читаются только они."""
+    mic = into / "mic.opus"
+    shutil.copyfile(folder / "mic.opus", mic)
+    sys_copy = None
+    if with_sys and (folder / "sys.opus").is_file():
+        sys_copy = into / "sys.opus"
+        shutil.copyfile(folder / "sys.opus", sys_copy)
+    return mic, sys_copy
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="owner_enroll_calib")
-    parser.add_argument("mic", nargs="+", type=Path)
+    parser.add_argument("mic", nargs="*", type=Path)
     parser.add_argument("--sys", nargs="*", type=Path, default=[])
+    parser.add_argument("--meeting")
+    parser.add_argument("--quiet-sys", action="store_true")
     parser.add_argument("--window", type=float, default=25.0)
     parser.add_argument("--max", type=int, default=12)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args(argv)
+    if not args.mic and not args.meeting:
+        parser.error("нужны дорожки микрофона или --meeting")
+    if not args.meeting:
+        return run(args.mic, args.sys, args)
+    folder = meeting_folder(args.meeting)
+    with tempfile.TemporaryDirectory(prefix="owner-calib-", ignore_cleanup_errors=True) as td:
+        tmp = Path(td)
+        # Своя пустая папка данных: ни настроек, ни токена приложения; модель —
+        # из кэша Hugging Face без сети.
+        os.environ["MEET_DATA_DIR"] = str(tmp / "data")
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        from meet import credentials
+
+        credentials.get_hf_token = lambda: None  # токен из диспетчера не нужен и не читается
+        mic, sys_copy = copy_tracks(folder, tmp, args.quiet_sys)
+        try:
+            return run([mic], [sys_copy] if sys_copy else [], args)
+        finally:
+            for f in (mic, sys_copy):
+                if f is not None:
+                    f.unlink(missing_ok=True)
+
+
+def run(mics: list[Path], syss: list[Path], args) -> int:
     from meet import segvoices
 
     embed = owner_enroll.load_embedder()
     windows = []
-    for n, mic in enumerate(args.mic):
+    for n, mic in enumerate(mics):
         audio = segvoices.decode(mic, RATE)
-        sys16 = segvoices.decode(args.sys[n], RATE) if n < len(args.sys) else None
+        sys16 = segvoices.decode(syss[n], RATE) if n < len(syss) else None
         size = int(args.window * RATE)
         for start in range(0, len(audio) - size + 1, size):
             if len([w for w in windows if w["track"] == n + 1]) >= args.max:
@@ -95,10 +152,12 @@ def main(argv: list[str] | None = None) -> int:
             stats = window_stats(audio[start:start + size], vad=owner_enroll._default_vad, embed=embed)
             windows.append({"track": n + 1, "window": len(windows) + 1, **stats})
     report = {"windows": windows, "summary": summary(windows)}
-    text = json.dumps(report, ensure_ascii=False, indent=1)
     if args.out:
-        args.out.write_text(text, encoding="utf-8")
-    print(json.dumps(report["summary"], ensure_ascii=False))
+        args.out.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+    # Только числа: по окну — речь, уровень над фоном, худший попарный cos; итог.
+    for w in windows:
+        print(json.dumps({k: w[k] for k in ("window", "speech_s", "snr_db", "min_cos")}))
+    print(json.dumps(report["summary"]))
     return 0
 
 
