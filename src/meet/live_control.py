@@ -339,14 +339,42 @@ def _child_error(path: Path | None, offset: int, code) -> str:
     («старт: модель распознавания загружена — за 19.5 с»), а процесс упал
     молча (нативный сбой, снят диспетчером задач, нехватка памяти)."""
     text = _run_output(path, offset) or ""
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    lines = [line for line in lines if not line.startswith("--- ")]  # строки резидента
-    last = lines[-1][:ERROR_MAX_CHARS] if lines else None
+    raw = [line.rstrip() for line in text.splitlines() if line.strip()]
+    raw = [line for line in raw if not line.startswith("--- ")]  # строки резидента
+    last = raw[-1].strip()[:ERROR_MAX_CHARS] if raw else None
     if last is not None:
-        after_traceback = any(line.startswith(TRACEBACK_MARK) for line in lines[:-1])
-        if code == EXIT_FATAL or after_traceback or _EXCEPTION_LINE.match(last):
+        if code == EXIT_FATAL or _EXCEPTION_LINE.match(last) or _ends_traceback(raw):
             return last
     return f"Ассистент аварийно завершился (код {_code_text(code)})"
+
+
+def _ends_traceback(lines: list[str]) -> bool:
+    """Последняя строка — конец последнего traceback'а: после его заголовка
+    идут только строки стека (с отступом), а за ними — она. Traceback где-то
+    раньше, а потом строки хода работы — не в счёт."""
+    starts = [i for i, line in enumerate(lines) if line.startswith(TRACEBACK_MARK)]
+    if not starts:
+        return False
+    block = lines[starts[-1] + 1:-1]
+    return all(line[:1] in (" ", "\t") for line in block) and lines[-1][:1] not in (" ", "\t")
+
+
+def recording_goes_on(reason: str, *, ready: bool) -> str:
+    """Сбой ассистента, подключённого к записи, — словами окна и трея: запись
+    идёт дальше. Без двойного «Ассистент не запустился» в одной строке."""
+    reason = (reason or "").strip()
+    if "запись продолжается" in reason:
+        return reason
+    for head in ("Ассистент не запустился:", "Ассистент упал:"):
+        if reason.startswith(head):
+            reason = reason[len(head):].strip()
+            break
+    else:
+        if reason.startswith("Ассистент "):
+            # «Ассистент не запустился за 121 с: этап …», «… аварийно завершился (код …)».
+            return f"{reason} — запись продолжается"
+    what = "упал" if ready else "не запустился"
+    return f"Ассистент {what} — запись продолжается: {reason}"
 
 
 def _code_text(code) -> str:
@@ -851,11 +879,9 @@ class LiveControl:
                     kind = LIVE_FAILED
                     complete = False
                     error = error or _child_error(path, offset, code)
-                if kind == LIVE_FAILED and attach is not None and \
-                        "запись продолжается" not in (error or ""):
+                if kind == LIVE_FAILED and attach is not None:
                     # Запись ведёт резидент, она идёт дальше — так и говорим.
-                    what = "упал" if ready else "не запустился"
-                    error = f"Ассистент {what} — запись продолжается: {error}"
+                    error = recording_goes_on(error or "", ready=ready)
                 # Причина — и в live.log (до смены состояния: кто дождался
                 # конца, читает журнал уже с ней): ребёнок мог не написать ни слова.
                 if kind == LIVE_FAILED:

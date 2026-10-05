@@ -195,19 +195,22 @@ def _sweep_after() -> None:
         sweep_temp()
     except Exception:
         pass  # уборка не должна ломать очередь; остальное — при следующем запуске
-    again = threading.Timer(SWEEP_AGAIN_S, _sweep_quietly)
-    again.daemon = True
-    again.start()
+    threading.Thread(target=_sweep_later, name="meet-sweep", daemon=True).start()
 
 
-SWEEP_AGAIN_S = 1.0
+# Повторные уборки после задачи (секунды от её конца): Windows отпускает папку
+# вышедшего процесса когда секунду, а когда и дольше (антивирус, индексатор).
+SWEEP_AGAIN_S = (1.0, 3.0, 7.0, 15.0)
 
 
-def _sweep_quietly() -> None:
-    try:
-        sweep_temp()
-    except Exception:
-        pass
+def _sweep_later() -> None:
+    began = time.monotonic()
+    for at in SWEEP_AGAIN_S:
+        time.sleep(max(0.0, began + at - time.monotonic()))
+        try:
+            sweep_temp()
+        except Exception:
+            pass
 
 
 def worker_argv(job: Job) -> list[str]:

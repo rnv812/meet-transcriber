@@ -750,19 +750,27 @@ def _live_hooks(app, monkeypatch):
     return hooks
 
 
-def test_live_stop_runs_post_hook(app, tmp_path, monkeypatch):
-    """Запись с ассистентом — такая же сохранённая запись: пост-хук зовётся и
-    после неё, а не только после остановки обычной."""
+def test_recording_with_assistant_runs_post_hook_once(app, tmp_path, monkeypatch):
+    """Запись с ассистентом — обычная запись резидента (`source: live`):
+    пост-хук зовёт её остановка, один раз."""
+    hooks = _live_hooks(app, monkeypatch)
+    folder = _saved_folder(tmp_path)
+    app.recording = True
+    app.source = tray_control.LIVE
+    app.stop_event = __import__("threading").Event()
+    app.thread = None
+    app.result = {"folder": str(folder)}
+    app.stop_recording()
+    assert hooks == [str(folder)]
+    from meet import library
+    assert library.read_meta(folder)["source"] == "live"
+
+
+def test_assistant_events_never_run_the_post_hook(app, tmp_path, monkeypatch):
+    """Конец ассистента — не конец записи: хук — только от остановки записи."""
     hooks = _live_hooks(app, monkeypatch)
     folder = _saved_folder(tmp_path)
     app.bus.emit(live_control.LIVE_STOPPED, folder=str(folder), complete=True)
-    assert hooks == [str(folder)]
-
-
-def test_unfinished_live_stop_skips_post_hook(app, tmp_path, monkeypatch):
-    """Ассистент убит до финализации: дорожки неполные, звать некого."""
-    hooks = _live_hooks(app, monkeypatch)
-    folder = _saved_folder(tmp_path)
     app.bus.emit(live_control.LIVE_STOPPED, folder=str(folder), complete=False)
     assert hooks == []
 

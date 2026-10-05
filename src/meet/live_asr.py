@@ -302,6 +302,37 @@ def _on_disk(model_name: str) -> bool:
         return True  # не знаем — не мешаем (качать будет faster-whisper)
 
 
+MODEL_BROKEN = ("модель распознавания скачана не полностью или повреждена — скачайте её "
+                "заново в «Движок и модели»")
+
+
+def _without_download(load):
+    """Загрузка Whisper в живом режиме — только с диска: Hugging Face на
+    время загрузки «вне сети», и запасная попытка загрузчика (неполный кэш —
+    докачать) тоже не уходит в сеть. Не загрузилась с диска — ModelMissing:
+    качать посреди старта не будем."""
+    def run():
+        try:
+            from huggingface_hub import constants
+        except Exception:
+            constants = None
+        saved = getattr(constants, "HF_HUB_OFFLINE", None)
+        if constants is not None:
+            constants.HF_HUB_OFFLINE = True
+        try:
+            return load()
+        except MemoryError:
+            raise
+        except Exception as e:
+            if "memory" in str(e).lower():
+                raise
+            raise ModelMissing(MODEL_BROKEN) from e
+        finally:
+            if constants is not None:
+                constants.HF_HUB_OFFLINE = saved
+    return run
+
+
 def pick(cfg=None, *, log=print):
     """Движок распознавания живого режима по настройкам (см. модуль).
     Whisper, которого нет на диске, — ModelMissing (не качаем, см. выше)."""
@@ -316,6 +347,10 @@ def pick(cfg=None, *, log=print):
         name = getattr(model, "model_name", None)
         if isinstance(name, str) and not _on_disk(name):
             raise ModelMissing(MODEL_MISSING)
+        try:
+            model.load = _without_download(model.load)
+        except (AttributeError, TypeError):
+            pass  # подделка в тестах
         return model
 
     if getattr(cfg.assist, "live_asr", "auto") == "whisper":

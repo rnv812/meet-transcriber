@@ -121,7 +121,7 @@ def test_queue_sweeps_the_temp_of_a_finished_job(shared, tmp_path, monkeypatch):
         assert job.state == jobs.FAILED
         # Повторная уборка (jobs.SWEEP_AGAIN_S) — для папки, которую Windows
         # отпустила не сразу после выхода процесса.
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + 20
         while list(shared.glob(f"{tempdirs.TEMP_PREFIX}*")) and time.monotonic() < deadline:
             time.sleep(0.1)
     finally:
@@ -133,9 +133,9 @@ def test_queue_sweeps_again_shortly_after_a_job(monkeypatch):
     """Папку, которую Windows отпустила не сразу, убирает повторная уборка."""
     calls = []
     monkeypatch.setattr(jobs, "sweep_temp", lambda: calls.append(time.monotonic()))
-    monkeypatch.setattr(jobs, "SWEEP_AGAIN_S", 0.05)
+    monkeypatch.setattr(jobs, "SWEEP_AGAIN_S", (0.05, 0.1, 0.2))
     jobs._sweep_after()
     deadline = time.monotonic() + 5
-    while len(calls) < 2 and time.monotonic() < deadline:
+    while len(calls) < 4 and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert len(calls) == 2
+    assert len(calls) == 4  # сразу и ещё три раза — папку отпускают не сразу

@@ -193,7 +193,10 @@ def test_stop_ends_the_recording_first_then_waits_for_its_assistant(resident, mo
     resident.stop_recording()
     # Захват кончился в момент «Стоп»; ассистент дописал сводку уже после.
     assert order == ["record.stopped", "live.stop wait"]
-    assert not resident.live.busy() and resident.tray.recording is False
+    # Остановка записи ассистента не ждёт: его дожидается фоновый конец записи.
+    assert resident.tray.recording is False
+    resident.tray.wait_finished(30)
+    assert not resident.live.busy()
     assert [json.loads(b) for b in resident.stub.note("stop_body")] == [{}]
     # Кончился вместе с записью — трей об этом молчит.
     assert resident.live.status()["ended_by"] == live_control.ENDED_RECORDING
@@ -217,6 +220,7 @@ def test_cancelled_recording_waits_for_its_assistant_before_deleting(resident, m
 
     monkeypatch.setattr(resident.tray, "after_stop", finish)
     resident.stop_recording(discard=True)
+    resident.tray.wait_finished(30)
     assert order == ["record.stopped", "live.stop wait"]
     assert seen["live_gone_before_delete"] is True
     assert not folder.exists()
@@ -226,7 +230,8 @@ def test_cancelled_recording_waits_for_its_assistant_before_deleting(resident, m
 def test_audio_ends_at_the_click_even_if_the_assistant_takes_its_time(resident, monkeypatch,
                                                                      tmp_path):
     """Длина звука записи — до момента «Стоп» (± буфер), хотя подключённый
-    ассистент дописывает сводку ещё секунду."""
+    ассистент дописывает сводку ещё секунду: остановка его не ждёт, запись
+    сохраняется после него, в фоне."""
     import time
 
     import test_recorder as tr
@@ -255,7 +260,9 @@ def test_audio_ends_at_the_click_even_if_the_assistant_takes_its_time(resident, 
     click = time.monotonic()
     resident.stop_recording()
     took = time.monotonic() - click
-    assert took >= 1.0  # ассистента дождались…
+    assert took < 1.0  # остановка записи ассистента не ждёт…
+    resident.tray.wait_finished(30)
+    assert time.monotonic() - click >= 1.0  # …а сохранение — ждёт (в фоне)
     for writer, began in zip(tr._DummyWriter.instances, created):
         seconds = len(writer.data) / (2 * writer.channels * writer.rate)
         # …а звук кончился в момент нажатия (буфер 1024 кадра — 64 мс).
@@ -271,7 +278,8 @@ def test_assistant_crash_does_not_touch_the_recording(resident, monkeypatch, tmp
             f"http://127.0.0.1:{resident.live._port}/crash", data=b"{}", method="POST"),
             timeout=5).close()
         _wait_for(lambda: not resident.live.busy())
-        assert resident.snapshot()["live"]["error"] ==             "Ассистент упал — запись продолжается: RuntimeError: устройство пропало"
+        assert resident.snapshot()["live"]["error"] == \
+            "Ассистент упал — запись продолжается: RuntimeError: устройство пропало"
         assert resident.snapshot()["live"]["ended_by"] == live_control.ENDED_CRASH
         assert resident.tray.recording is True and resident.tray.pcm_tap.active()
         assert resident.queue.submitted == [] and order == []

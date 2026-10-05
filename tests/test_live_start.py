@@ -299,7 +299,9 @@ def test_attached_stage_timeout_while_capturing_says_the_recording_goes_on(make_
     _allow(stub, "capture")
     _wait_for(lambda: live_control.LIVE_FAILED in rec.kinds(), timeout=20)
     error = rec.last(live_control.LIVE_FAILED).data["error"]
-    assert error.startswith("Ассистент не запустился — запись продолжается: ")
+    assert error.startswith("Ассистент не запустился за ") and "загружаю модель" in error
+    assert error.endswith(" — запись продолжается")
+    assert error.count("Ассистент") == 1  # без двойного «не запустился»
     assert stub.note("stop") == [""]  # штатно, а не убийство
 
 
@@ -319,8 +321,7 @@ def test_attached_crash_says_the_recording_goes_on(make_live, tmp_path):
                                          "server": pcm_tap.TapServer(_hub())})
     _wait_for(lambda: live_control.LIVE_FAILED in rec.kinds())
     assert rec.last(live_control.LIVE_FAILED).data["error"] == (
-        "Ассистент не запустился — запись продолжается: "
-        "Ассистент аварийно завершился (код 0xC0000005)")
+        "Ассистент аварийно завершился (код 0xC0000005) — запись продолжается")
 
 
 def test_stop_rereads_the_endpoint_before_killing(make_live, tmp_path, monkeypatch):
@@ -364,3 +365,35 @@ def test_each_failure_is_stamped_so_the_window_sees_a_repeat(make_live, tmp_path
     assert live.status()["error_at"] is None  # новый старт — ошибки нет
     _wait_for(lambda: live.status()["error_at"] not in (None, first))
     assert live.status()["error"] == "Авторизация Claude не прошла: войдите заново"
+
+
+def test_recording_goes_on_wording_never_doubles():
+    goes_on = live_control.recording_goes_on
+    assert goes_on("RuntimeError: x", ready=True) == \
+        "Ассистент упал — запись продолжается: RuntimeError: x"
+    assert goes_on("Ассистент не запустился: модель распознавания не скачана", ready=False) == \
+        "Ассистент не запустился — запись продолжается: модель распознавания не скачана"
+    assert goes_on("Ассистент не запустился за 121 с: этап «x» не закончился", ready=False) == \
+        "Ассистент не запустился за 121 с: этап «x» не закончился — запись продолжается"
+    done = "Ассистент упал — запись продолжается: RuntimeError: x"
+    assert goes_on(done, ready=True) == done
+
+
+def test_only_the_last_traceback_makes_the_last_line_an_error(tmp_path):
+    log = tmp_path / "live.log"
+    log.write_text("\n".join([
+        "Traceback (most recent call last):",
+        '  File "web.py", line 1',
+        "ConnectionResetError: клиент ушёл",
+        "старт: модель загружена — за 4.0 с",
+    ]) + "\n", encoding="utf-8")
+    assert live_control._child_error(log, 0, -1073741819) == \
+        "Ассистент аварийно завершился (код 0xC0000005)"
+    log.write_text("\n".join([
+        "старт: импорты",
+        "Traceback (most recent call last):",
+        '  File "x.py", line 2',
+        "    load()",
+        "gigaam.Unavailable: нет файла",
+    ]) + "\n", encoding="utf-8")
+    assert live_control._child_error(log, 0, 1) == "gigaam.Unavailable: нет файла"

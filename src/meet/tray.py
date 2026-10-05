@@ -347,6 +347,11 @@ class TrayApp:
         # (TrayControl): он дописывает сводку из того, что успел получить, до
         # сохранения записи и до удаления папки при отмене.
         self.after_stop = None
+        # () -> bool: дописывать остановленную запись (ожидание ассистента,
+        # сохранение, хук) в фоне — к ней подключён ассистент, а его ждать
+        # долго (TrayControl). Сама остановка записи его не ждёт.
+        self.finish_in_background = None
+        self.finishing: threading.Thread | None = None
         # Идёт остановка записи: ассистента в неё уже не включить.
         self.stopping = False
         # Чем кончилась последняя запись: {"folder", "reason", "at"} (см.
@@ -473,6 +478,34 @@ class TrayApp:
             # lock, пустив вторую запись в ту же папку.
             self.thread = None if not alive else thread
             self.stopping = False
+        args = (result, alive, discard, hook, source)
+        if self._finish_later():
+            # Захват уже кончился; подключённого ассистента (он дописывает
+            # сводку) ждём в фоне, и только потом — сохранение и хук.
+            finishing = threading.Thread(target=self._after_capture, args=args,
+                                         name="meet-record-finish", daemon=True)
+            self.finishing = finishing
+            finishing.start()
+            self._refresh()
+            return
+        self._after_capture(*args)
+
+    def _finish_later(self) -> bool:
+        try:
+            return bool(self.finish_in_background and self.finish_in_background())
+        except Exception:
+            return False
+
+    def wait_finished(self, timeout: float | None = None) -> None:
+        """Дождаться фонового конца остановленной записи (выход резидента)."""
+        finishing = self.finishing
+        if finishing is not None and finishing is not threading.current_thread():
+            finishing.join(timeout)
+
+    def _after_capture(self, result: dict, alive: bool, discard: bool, hook: bool,
+                       source) -> None:
+        """Захват кончился: дождаться подключённого ассистента, затем
+        сохранить запись (очередь, хук) или удалить отменённую."""
         if self.after_stop is not None:
             try:
                 self.after_stop(discard)
@@ -513,11 +546,6 @@ class TrayApp:
             else:
                 self.log("звонок был короткий — Claude не зову, папка осталась")
         self._refresh()
-
-    def run_post_hook(self, folder: str) -> None:
-        """Пост-хук для записи, которую сохранил не stop_recording: запись с
-        ассистентом ведёт дочерний процесс, и её остановку видит адаптер."""
-        _run_post_hook(folder)
 
     # --- пункты меню ----------------------------------------------------
 

@@ -317,3 +317,56 @@ def test_short_whisper_names_are_not_refused(monkeypatch):
     monkeypatch.setattr(models, "downloaded", lambda repo_id: False)
     assert live_asr._on_disk("medium") is True  # не знаем, где кэш, — не мешаем
     assert live_asr._on_disk("Systran/faster-whisper-medium") is False
+
+
+def test_live_whisper_loads_offline_and_refuses_instead_of_downloading(monkeypatch):
+    """Живой старт не качает модель и при неполном кэше: Hugging Face на время
+    загрузки «вне сети», сбой загрузки с диска — отказ ModelMissing."""
+    import sys
+    import types
+
+    from meet import live_asr
+
+    constants = types.SimpleNamespace(HF_HUB_OFFLINE=False)
+    hub = types.ModuleType("huggingface_hub")
+    hub.constants = constants
+    monkeypatch.setitem(sys.modules, "huggingface_hub", hub)
+    monkeypatch.setitem(sys.modules, "huggingface_hub.constants", constants)
+    seen = []
+
+    def load_ok():
+        seen.append(constants.HF_HUB_OFFLINE)
+
+    live_asr._without_download(load_ok)()
+    assert seen == [True] and constants.HF_HUB_OFFLINE is False
+
+    def load_partial():
+        seen.append(constants.HF_HUB_OFFLINE)
+        raise FileNotFoundError("model.bin")
+
+    with pytest.raises(live_asr.ModelMissing, match="скачана не полностью"):
+        live_asr._without_download(load_partial)()
+    assert constants.HF_HUB_OFFLINE is False
+
+    def load_oom():
+        raise RuntimeError("CUDA failed: out of memory")
+
+    with pytest.raises(RuntimeError, match="memory"):
+        live_asr._without_download(load_oom)()
+
+
+def test_live_pick_wraps_the_whisper_load(monkeypatch):
+    from meet import asr, live_asr, models
+
+    class FakeTranscriber:
+        model_name = "Systran/faster-whisper-medium"
+
+        def load(self):
+            raise FileNotFoundError("model.bin")
+
+    monkeypatch.setattr(asr, "Transcriber", FakeTranscriber)
+    monkeypatch.setattr(models, "downloaded", lambda repo_id: True)
+    model = live_asr.pick(Settings.from_raw({"assist": {"live_asr": "whisper"}}),
+                          log=lambda line: None)
+    with pytest.raises(live_asr.ModelMissing):
+        model.load()

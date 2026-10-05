@@ -40,9 +40,10 @@ _META_SOURCE = {AUTO: "auto", LIVE: "live"}
 RESTART_REQUIRED_SECTIONS = ("auto_record",)
 
 TAIL_DEFAULT = 200
-# Остановка записи ждёт подключённого к ней ассистента не дольше этого: он
-# дописывает сводку (секунды), застрявший — убивается, запись это не задевает.
-ATTACH_STOP_WAIT_S = 10.0
+# После остановки записи подключённый ассистент дописывает хвост ленты и
+# сводку (на Whisper CPU — до минуты); ждём его не дольше этого — в фоне, сама
+# остановка записи его не ждёт. Застрявший — убивается, запись это не задевает.
+ATTACH_STOP_WAIT_S = live_control.STOP_TIMEOUT_S
 # «Запись с ассистентом»: столько ждём, пока у только что начатой записи
 # откроются дорожки (отвод и папка), чтобы подключить к ней ассистента.
 LIVE_RECORD_WAIT_S = 10.0
@@ -446,6 +447,7 @@ class TrayControl:
         # дописывает сводку из того, что успел получить, до сохранения записи
         # и до удаления отменённой папки.
         tray.after_stop = self._finish_attached
+        tray.finish_in_background = self._live_attached
         self.bus.subscribe(self._on_live_event)
         # Выгрузка в базу знаний: по одной за раз (кнопка поверх автоматики не
         # должна писать в ту же папку одновременно). Последний сбой автоматики —
@@ -667,36 +669,13 @@ class TrayControl:
         self._updated(folder)
 
     def _on_live_event(self, event) -> None:
-        """Ассистент остановлен — та же автоматическая расшифровка и тот же
-        пост-хук, что после обычной записи, если запись дописана (`complete`) и
-        дорожки на месте. Убитый до финализации только помечается
-        (`source: live`), без расшифровки и хука: дорожки неполные. Упавший (`live.failed`)
-        сюда не попадает: его папка в библиотеке, расшифровать можно вручную."""
+        """Ассистент кончился — отложенный на время встречи анализ пора
+        догнать. Запись, к которой он был подключён (в том числе «Запись с
+        ассистентом»), сохраняет, ставит в расшифровку и отдаёт хуку остановка
+        самой записи (`_on_saved`), а не ассистента."""
         if event.kind in (live_control.LIVE_STOPPED, live_control.LIVE_FAILED) \
                 and (self._analysis_deferred or self._improve_deferred):
             self._background(self._flush_deferred_analysis, "meet-analysis")
-        if event.kind != live_control.LIVE_STOPPED or not event.data.get("folder"):
-            return
-        if event.data.get("attached"):
-            # Ассистент был подключён к обычной записи: её сохранит (и поставит
-            # в расшифровку) остановка самой записи, а не ассистента.
-            return
-        folder = Path(event.data["folder"])
-        if not folder.is_dir():
-            return
-        card = library.describe(folder)
-        full = bool(event.data.get("complete")) and bool(card and card.tracks)
-        self._on_saved(str(folder), LIVE, full)
-        # Тема, которую вёл живой ассистент, — черновое название (если включено
-        # «Придумывать название»); итоги или анализ потом его уточнят.
-        self._background(lambda: self._live_title(folder), "meet-title")
-        if full:
-            # Пост-хук — как после обычной записи: её остановка зовёт его сама,
-            # а запись с ассистентом сохраняется здесь.
-            try:
-                self.tray.run_post_hook(str(folder))
-            except Exception as e:  # хук не должен мешать сохранению записи
-                self.tray.log(f"пост-хук не запущен ({folder.name}): {type(e).__name__}: {e}")
 
     def _on_saved(self, folder: str, source: str | None, full: bool) -> None:
         """Запись штатно сохранена: пометить, откуда она, и поставить в очередь.
@@ -709,6 +688,11 @@ class TrayControl:
         except Exception as e:
             # Пометка «откуда запись» — не повод не расшифровывать её.
             self.tray.log(f"meta.json не записан ({path.name}): {e}")
+        if source == LIVE:
+            # Тема, которую вёл ассистент (live_state.json он дописал до
+            # сохранения), — черновое название, если включено «Придумывать
+            # название»; итоги или анализ потом его уточнят.
+            self._background(lambda: self._live_title(path), "meet-title")
         title = getattr(self.tray, "recording_title", None) if source == AUTO else None
         if title:
             # Название звонка из окна браузера — только начальное: если запись
@@ -1092,6 +1076,8 @@ class TrayControl:
         if self.tray.recording:
             self.tray.stop_recording()
         self.live.stop(wait=True, timeout=live_control.SHUTDOWN_WAIT_S)
+        # Запись с ассистентом сохраняется в фоне после него (stop_recording).
+        self.tray.wait_finished(live_control.JOIN_SLACK_S)
         self.tray.request_exit()
         return {"ok": True}
 
@@ -1118,19 +1104,30 @@ class TrayControl:
         self.tray.log("запись с ассистентом: запись пошла, подключаю ассистента")
         # Отвод и папка записи появляются, когда открылись дорожки (доли секунды).
         hub = getattr(self.tray, "pcm_tap", None)
+        result = getattr(self.tray, "result", None) or {}
         deadline = time.monotonic() + LIVE_RECORD_WAIT_S
-        while time.monotonic() < deadline and self.tray.recording:
+        while time.monotonic() < deadline and self.tray.recording and not result.get("error"):
             if hub is not None and hub.active() and \
                     Path(self.tray._current_folder()).is_dir():
                 break
             time.sleep(0.05)
+        if result.get("error"):
+            # Не началась сама запись (lock занят, нет устройства): это её
+            # ошибка, ассистенту подключаться не к чему.
+            return {**self.live.status(), "ok": False,
+                    "error": f"Запись не началась: {result['error']}"}
+        if not self.tray.recording:
+            # Запись остановили, пока она открывалась: ничего не «продолжается».
+            return {**self.live.status(), "ok": True, "action": "stopped"}
         from meet.control import BadRequest, Conflict
 
         try:
             return self.live_attach()
         except (BadRequest, Conflict) as e:
+            if not self.tray.recording:
+                return {**self.live.status(), "ok": True, "action": "stopped"}
             # Запись уже идёт и пусть идёт: ассистент — не повод её терять.
-            error = f"Ассистент не запустился — запись продолжается: {e}"
+            error = live_control.recording_goes_on(str(e), ready=False)
             self.tray.log(error)
             return {**self.live.status(), "ok": False, "error": error}
 

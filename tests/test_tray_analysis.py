@@ -562,15 +562,14 @@ def test_summary_title_line_is_applied(state, app, tmp_path):
     assert _meta(tmp_path)["title"] == "Итоги беты"
 
 
-def test_live_topic_title_at_live_stop(state, app, tmp_path, monkeypatch):
-    from meet import live_control
-
+def test_live_topic_title_when_the_recording_with_assistant_is_saved(state, app, tmp_path):
+    """Тема, которую вёл ассистент, — черновое название записи с ассистентом:
+    при её сохранении (source: live), а не по событию ассистента."""
     _write_config(tmp_path, assistant={"auto_title": True})
     folder = _folder(tmp_path)
     (folder / "live_state.json").write_text(json.dumps(
         {"summary": {"topic": "Запуск беты"}, "hints": []}, ensure_ascii=False), encoding="utf-8")
-    monkeypatch.setattr(state, "_on_saved", lambda *a: None)
-    app.bus.emit(live_control.LIVE_STOPPED, folder=str(folder), complete=True)
+    state._on_saved(str(folder), tray_control.LIVE, False)
     assert _meta(tmp_path)["title"] == "Запуск беты"
     assert _meta(tmp_path)["title_source"] == "ai"
 

@@ -836,6 +836,7 @@ def resident(monkeypatch, tmp_path):
         yield state
     finally:
         app.stop_recording()
+        app.wait_finished(30)
         state.live.stop(wait=True)
         stub.cleanup()
 
@@ -1236,3 +1237,58 @@ def test_no_fallback_from_ordinary_child(make_live, tmp_path):
     assert live.devices_fallback() == []
     live.stop()
     _wait_for(lambda: _idle(live))
+
+
+# --- «Запись с ассистентом» целиком (обычная запись + подключённый ассистент) ---
+
+
+def test_recording_with_a_failed_assistant_is_saved_transcribed_and_hooked_once(
+        resident, monkeypatch):
+    """Ассистент отказал до готовности — запись идёт дальше; «Стоп» сохраняет
+    её, ставит в расшифровку и зовёт пост-хук ровно один раз."""
+    hooks = []
+    monkeypatch.setattr(tray, "_run_post_hook", hooks.append)
+    titled = []
+    monkeypatch.setattr(resident, "_live_title", titled.append)
+    monkeypatch.setattr(resident, "_background", lambda fn, name=None: fn())
+    resident.stub.mode = "fatal"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["error"])
+    assert resident.live.status()["error"] == (
+        "Ассистент не запустился — запись продолжается: "
+        "Авторизация Claude не прошла: войдите заново")
+    assert len(resident.stub.processes) == 1  # отказ — без повтора
+    assert resident.tray.recording is True
+    resident.live_stop()  # «Стоп» записи с ассистентом — остановка самой записи
+    _wait_for(lambda: hooks)
+    resident.tray.wait_finished(30)
+    folder = str(resident.folder)
+    assert hooks == [folder]
+    assert resident.queue.submitted == [(jobs.TRANSCRIBE, folder)]
+    assert library.read_meta(resident.folder)["source"] == "live"
+    # Черновое название по теме ассистента — при сохранении записи.
+    assert [str(f) for f in titled] == [folder]
+
+
+def test_live_start_reports_the_recording_error_when_the_recording_fails(resident, monkeypatch):
+    def failing_record(out_root, stop_event=None, *, bus, pcm_tap=None):
+        raise SystemExit("Запись уже идёт (папка D:/rec/x)")
+
+    monkeypatch.setattr(tray, "record", failing_record)
+    reply = resident.live_start()
+    assert reply["ok"] is False
+    assert reply["error"] == "Запись не началась: Запись уже идёт (папка D:/rec/x)"
+    assert "продолжается" not in reply["error"]
+    assert resident.stub.argv is None
+
+
+def test_stop_while_the_recording_opens_is_not_reported_as_going_on(resident, monkeypatch):
+    import threading
+
+    monkeypatch.setattr(tray_control, "LIVE_RECORD_WAIT_S", 5.0)
+    monkeypatch.setattr(resident.tray.pcm_tap, "active", lambda: False)
+    threading.Timer(0.3, resident.tray.stop_recording).start()
+    reply = resident.live_start()
+    assert reply["ok"] is True and reply["action"] == "stopped"
+    assert not reply.get("error")
+    assert resident.stub.argv is None
