@@ -4,6 +4,11 @@
 aiohttp. `available()` — быстрая проверка «установлено/отвечает»;
 `logged_in()` спрашивает CLI о входе (доли секунды, квоту не тратит) и
 нужен выбору `auto` и команде «Проверить».
+
+OpenCode (opencode.ai) ставится по-разному: npm -g (`opencode-ai`: в PATH —
+сценарий opencode.cmd, настоящая программа — в node_modules рядом), scoop,
+choco, mise, установщик `curl … | bash` (`~/.opencode/bin`), Homebrew.
+Пути сверены с исходниками opencode (install, script/postinstall.mjs, 2026-10).
 """
 
 import json
@@ -34,7 +39,18 @@ _UNIX_DIRS = (
     "~/.npm-global/bin",     # npm -g с prefix в домашней папке
     "~/.bun/bin",
     "~/.volta/bin",
+    "~/.opencode/bin",       # установщик OpenCode (curl -fsSL https://opencode.ai/install | bash)
 )
+
+# Страница установки OpenCode — подсказка «не найден».
+OPENCODE_INSTALL_URL = "https://opencode.ai/docs/"
+OPENCODE_NOT_FOUND = f"не найден OpenCode (opencode) — установите: {OPENCODE_INSTALL_URL}"
+# npm-пакет OpenCode и его платформенные пакеты с настоящей программой
+# (postinstall копирует её в bin/opencode.exe; без postinstall она лежит в
+# пакете платформы — его выбирает сценарий bin/opencode).
+_OPENCODE_NPM = "opencode-ai"
+_OPENCODE_WIN_PACKAGES = ("opencode-windows-x64", "opencode-windows-x64-baseline",
+                          "opencode-windows-arm64")
 
 
 def _home() -> str:
@@ -124,6 +140,58 @@ def find_codex() -> str | None:
     return None
 
 
+def _opencode_behind_npm(node_modules: Path) -> str | None:
+    """Настоящая opencode.exe в node_modules npm (рядом со сценарием opencode.cmd)."""
+    pkg = node_modules / _OPENCODE_NPM
+    candidates = [pkg / "bin" / "opencode.exe"]
+    for name in _OPENCODE_WIN_PACKAGES:
+        candidates += [pkg / "node_modules" / name / "bin" / "opencode.exe",
+                       node_modules / name / "bin" / "opencode.exe"]
+    for exe in candidates:
+        if exe.is_file():
+            return str(exe)
+    return None
+
+
+def find_opencode() -> str | None:
+    """Путь к OpenCode CLI.
+
+    Windows: opencode.exe в PATH (scoop, choco, mise, своя установка); иначе
+    программа за npm-сценарием opencode.cmd (в node_modules рядом с ним) —
+    вкладка «Агент» запускает только .exe; затем обычные папки установки
+    (`~/.opencode/bin`, npm в %APPDATA%, scoop, choco); последним — сам
+    сценарий opencode.cmd (фоновым задачам годится и он). macOS/Linux — PATH,
+    затем обычные папки установки (`_UNIX_DIRS`)."""
+    if not _WINDOWS:
+        return shutil.which("opencode") or _unix_fallback("opencode")
+    exe = shutil.which("opencode.exe")
+    if exe:
+        return exe
+    shim = shutil.which("opencode.cmd")
+    if shim:
+        native = _opencode_behind_npm(Path(shim).parent / "node_modules")
+        if native:
+            return native
+    home = os.environ.get("USERPROFILE")
+    appdata = os.environ.get("APPDATA")
+    program_data = os.environ.get("ProgramData")
+    if home and (Path(home) / ".opencode" / "bin" / "opencode.exe").is_file():
+        return str(Path(home) / ".opencode" / "bin" / "opencode.exe")
+    if appdata:
+        native = _opencode_behind_npm(Path(appdata) / "npm" / "node_modules")
+        if native:
+            return native
+    places: list[Path] = []
+    if home:
+        places.append(Path(home) / "scoop" / "shims" / "opencode.exe")
+    if program_data:
+        places.append(Path(program_data) / "chocolatey" / "bin" / "opencode.exe")
+    for place in places:
+        if place.is_file():
+            return str(place)
+    return shim
+
+
 def local_reachable(base_url: str, timeout: float = 0.5) -> bool:
     """Слушает ли кто-то адрес локальной модели (TCP-соединение, без запроса)."""
     try:
@@ -149,9 +217,11 @@ def available(base_url: str | None = None, probe_local: bool = True) -> dict:
     url = base_url or DEFAULT_LOCAL_BASE_URL
     claude = find_claude()
     codex = find_codex()
+    opencode = find_opencode()
     return {
         "claude-code": {"found": claude is not None, "path": claude},
         "codex": {"found": codex is not None, "path": codex},
+        "opencode": {"found": opencode is not None, "path": opencode},
         "openai-compatible": {"found": local_reachable(url) if probe_local else None,
                               "base_url": url},
     }
@@ -167,8 +237,72 @@ def _tail(text: str, limit: int = 500) -> str:
     return text[-limit:]
 
 
+def opencode_auth_file() -> Path:
+    """Файл ключей OpenCode (`opencode auth login`): `$XDG_DATA_HOME/opencode/auth.json`,
+    по умолчанию `~/.local/share/opencode/auth.json` — на всех ОС, и на Windows
+    (opencode берёт пути пакета xdg-basedir)."""
+    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(base) / "opencode" / "auth.json"
+
+
+def opencode_auth_present() -> bool:
+    """Есть ли у OpenCode хоть один сохранённый вход: `OPENCODE_AUTH_CONTENT`
+    (им OpenCode и сам подменяет файл) или запись с `type` в auth.json.
+    Дальше типа записи не смотрим; ключи никуда не выводим."""
+    raw = os.environ.get("OPENCODE_AUTH_CONTENT")
+    if raw is None:
+        try:
+            raw = opencode_auth_file().read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return False
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return False
+    if not isinstance(data, dict):
+        return False
+    return any(isinstance(v, dict) and isinstance(v.get("type"), str) for v in data.values())
+
+
+# `opencode auth list` (packages/opencode/src/cli/cmd/providers.ts): итог
+# раздела входов — «N credentials», раздела ключей в переменных среды — «N
+# environment variable(s)». Это текст для человека, не формат: не нашли — по файлу.
+_OC_CREDENTIALS = re.compile(r"(\d+)\s+credentials?\b")
+_OC_ENV_KEYS = re.compile(r"(\d+)\s+environment variables?\b")
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+OPENCODE_NO_LOGIN = ("в OpenCode нет входа ни в одного провайдера — выполните "
+                     "opencode auth login")
+
+
+def _opencode_logged_in(path: str) -> tuple[bool, str | None]:
+    """Вход в OpenCode без вызова модели: `opencode auth list` (входы из auth.json
+    и ключи провайдеров в переменных среды). Вывод не распознан или команда не
+    отработала — проверяем сам файл ключей (`opencode_auth_present`)."""
+    env = dict(os.environ)
+    env.update({"OPENCODE_DISABLE_MODELS_FETCH": "1", "NO_COLOR": "1"})
+    counts = None
+    try:
+        done = subprocess.run(
+            [path, "auth", "list"], capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=20, env=env, creationflags=_NO_WINDOW,
+        )
+        out = _ANSI.sub("", done.stdout or "")
+        creds, keys = _OC_CREDENTIALS.search(out), _OC_ENV_KEYS.search(out)
+        if done.returncode == 0 and creds:
+            counts = int(creds.group(1)) + (int(keys.group(1)) if keys else 0)
+    except (OSError, subprocess.SubprocessError):
+        counts = None
+    if counts is None:
+        if opencode_auth_present():
+            return True, None
+        return False, f"{OPENCODE_NO_LOGIN} (нет записей в {opencode_auth_file()})"
+    return (True, None) if counts > 0 else (False, OPENCODE_NO_LOGIN)
+
+
 def logged_in(name: str, path: str) -> tuple[bool, str | None]:
     """Вошёл ли пользователь в CLI провайдера. (True, None) или (False, текст)."""
+    if name == "opencode":
+        return _opencode_logged_in(path)
     if name == "codex":
         cmd = [path, "login", "status"]
         env = None

@@ -175,12 +175,12 @@ def _no_model_process(monkeypatch):
     monkeypatch.setattr(claude_stream, "default_cli", lambda: None)
 
 
-_AGENT_STEMS = ("claude", "codex")
+_AGENT_STEMS = ("claude", "codex", "opencode")
 
 
 def _agent_program(args) -> str | None:
-    """Запуск Claude Code или Codex в аргументах процесса: имя программы
-    claude*/codex* (не *.py — поддельные CLI тестов идут через python) или
+    """Запуск Claude Code, Codex или OpenCode в аргументах процесса: имя программы
+    claude*/codex*/opencode* (не *.py — поддельные CLI тестов идут через python) или
     cli.js пакета Claude Code где-либо в командной строке."""
     import os
     import shlex
@@ -202,12 +202,14 @@ def _agent_program(args) -> str | None:
         low = arg.replace("\\", "/").lower()
         if low.endswith("cli.js") and ("claude" in low or "anthropic" in low):
             return arg
+        if low.endswith("/opencode-ai/bin/opencode"):  # сценарий npm-пакета OpenCode через node
+            return arg
     return None
 
 
 @pytest.fixture(autouse=True)
 def _no_agent_spawn(monkeypatch):
-    """Ни один тест не запускает Claude Code и Codex: настоящий CLI на машине
+    """Ни один тест не запускает Claude Code, Codex и OpenCode: настоящий CLI на машине
     разработчика сделал бы настоящий вызов модели по подписке. Перехвачены
     `subprocess.Popen` (через него идут и asyncio/anyio-подпроцессы),
     `asyncio.create_subprocess_exec` и запуск процесса транспортом Claude

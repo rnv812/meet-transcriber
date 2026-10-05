@@ -1,4 +1,4 @@
-"""Защита тестов: ни Claude Code, ни Codex не запускаются (conftest)."""
+"""Защита тестов: ни Claude Code, ни Codex, ни OpenCode не запускаются (conftest)."""
 
 import asyncio
 import subprocess
@@ -14,6 +14,10 @@ from conftest import _agent_program
     (["claude", "--version"], True),
     (r'"C:\Program Files\codex\codex.exe" exec -', True),
     (["node", "C:/npm/node_modules/@anthropic-ai/claude-code/cli.js"], True),
+    (["C:/oc/opencode.exe", "run", "--format", "json"], True),
+    (["/usr/local/bin/opencode", "auth", "list"], True),
+    (r'"C:\Users\u\AppData\Roaming\npm\opencode.cmd" models', True),
+    (["node", "C:/npm/node_modules/opencode-ai/bin/opencode", "run"], True),
     ([sys.executable, "tests/fake_claude_stream.py"], False),
     (["ffmpeg", "-i", "x"], False),
     (["taskkill", "/PID", "1"], False),
@@ -31,7 +35,9 @@ def test_popen_and_asyncio_spawns_of_agents_are_refused(_no_agent_spawn):
 
     with pytest.raises(OSError, match="запустил агента"):
         asyncio.run(scenario())
-    assert len(_no_agent_spawn) == 2
+    with pytest.raises(OSError, match="запустил агента"):
+        subprocess.run(["opencode", "auth", "list"], capture_output=True)
+    assert len(_no_agent_spawn) == 3
     _no_agent_spawn.clear()  # своя проверка — тест не проваливаем
 
 

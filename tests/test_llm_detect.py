@@ -188,11 +188,13 @@ def test_local_reachable_true_and_false():
 def test_available_shape(monkeypatch):
     monkeypatch.setattr(detect, "find_claude", lambda: None)
     monkeypatch.setattr(detect, "find_codex", lambda: "C:/codex.exe")
+    monkeypatch.setattr(detect, "find_opencode", lambda: None)
     monkeypatch.setattr(detect, "local_reachable", lambda url, timeout=0.5: False)
     av = detect.available(base_url="http://127.0.0.1:1234/v1")
     assert av == {
         "claude-code": {"found": False, "path": None},
         "codex": {"found": True, "path": "C:/codex.exe"},
+        "opencode": {"found": False, "path": None},
         "openai-compatible": {"found": False, "base_url": "http://127.0.0.1:1234/v1"},
     }
 
@@ -250,6 +252,7 @@ def test_available_can_skip_the_local_model_probe(monkeypatch):
     """Запуск агента во вкладке «Агент» не ждёт сетевой проверки локальной модели."""
     monkeypatch.setattr(detect, "find_claude", lambda: "C:/claude.exe")
     monkeypatch.setattr(detect, "find_codex", lambda: None)
+    monkeypatch.setattr(detect, "find_opencode", lambda: None)
     monkeypatch.setattr(detect, "local_reachable",
                         lambda url, timeout=0.5: (_ for _ in ()).throw(AssertionError("проверка")))
     av = detect.available(base_url="http://127.0.0.1:1234/v1", probe_local=False)
