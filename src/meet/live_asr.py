@@ -293,7 +293,11 @@ def _on_disk(model_name: str) -> bool:
     from meet import models
 
     try:
-        return Path(model_name).is_dir() or models.downloaded(model_name)
+        if Path(model_name).is_dir():
+            return True
+        if "/" not in model_name:
+            return True  # короткое имя («medium»): где его кэш, знает faster-whisper
+        return models.downloaded(model_name)
     except Exception:
         return True  # не знаем — не мешаем (качать будет faster-whisper)
 

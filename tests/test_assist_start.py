@@ -309,3 +309,11 @@ def test_whole_lines_keep_thread_output_apart(capsys):
     out = capsys.readouterr().out.splitlines()
     assert len(out) == 201 and out[-1] == "хвост"
     assert all(line.startswith("поток ") or line == "хвост" for line in out)
+
+
+def test_short_whisper_names_are_not_refused(monkeypatch):
+    from meet import live_asr, models
+
+    monkeypatch.setattr(models, "downloaded", lambda repo_id: False)
+    assert live_asr._on_disk("medium") is True  # не знаем, где кэш, — не мешаем
+    assert live_asr._on_disk("Systran/faster-whisper-medium") is False
