@@ -1,4 +1,6 @@
 import copy
+import json
+import os
 import re
 import threading
 import time
@@ -98,6 +100,10 @@ class _Run:
         # Текст распознан, спикеров ещё нет (Р4): `on_text(сегменты)` пишет его
         # в папку записи до диаризации (`_TextPhase`). None — не пишем.
         self.on_text = None
+        # Микрофон по голосам (шаг mic-voices, meet.mic_split.MicResult): его
+        # сайдкар, mic_voices.json и поле `mic_split` пишет окончательная
+        # расшифровка. None — микрофона нет (одна дорожка).
+        self.mic = None
 
     def choose(self, wav: Path) -> asr.Choice:
         if self.choice is None:
@@ -176,6 +182,7 @@ class _Run:
         else:
             times["asr-sys"] = step_time(device, backend, "asr", main, stats)
             times["asr-mic"] = step_time(device, backend, "asr", seconds.get("mic", 0.0), stats)
+            times["mic-voices"] = _mic_voices_time(self.device_of("voices"), seconds.get("mic", 0.0))
         return times
 
     def learn(self) -> None:
@@ -222,6 +229,17 @@ class _Run:
         return (f"время ступеней ({engine}, {choice.device}): распознавание {s['asr']:.1f} с, "
                 f"выравнивание {s['align']:.1f} с, диаризация {s['diarize']:.1f} с, "
                 f"всего {total:.1f} с")
+
+
+# Голоса микрофона (mic-voices): (загрузка эмбеддера, секунды на секунду
+# микрофона). T0: окно 1,5–3 с — 60–110 мс на CPU при 4 потоках, ~600 окон на
+# час — около минуты на час; на видеокарте — в разы быстрее (не мерили).
+MIC_VOICES_TIME = {"cpu": (3.0, 0.016), "cuda": (3.0, 0.004)}
+
+
+def _mic_voices_time(device: str, seconds: float) -> tuple[float, float]:
+    load, per_s = MIC_VOICES_TIME.get(device, MIC_VOICES_TIME["cpu"])
+    return load, per_s * max(0.0, seconds)
 
 
 def wav_seconds(wav: Path) -> float:
@@ -442,9 +460,10 @@ def _single_plan(align: bool) -> list[Step]:
 
 def _two_track_plan(align: bool) -> list[Step]:
     """Шаги встречи из двух дорожек: собеседники распознаются и делятся на
-    спикеров, микрофон только распознаётся (на нём один человек); речи в нём
-    обычно меньше — и вес меньше. Обе дорожки распознаются подряд, до
-    выравнивания и диаризации: текст встречи готов раньше спикеров (Р4)."""
+    спикеров диаризацией; речи в микрофоне обычно меньше — и вес меньше. Обе
+    дорожки распознаются подряд, до выравнивания и диаризации: текст встречи
+    готов раньше спикеров (Р4). Микрофон делится по голосам (владелец, люди в
+    комнате, дубли соседа и эхо) после собеседников: ему нужны их кластеры."""
     asr_w = WEIGHTS["asr"]
     steps = [
         Step("convert", "convert", WEIGHTS["convert"]),
@@ -455,6 +474,7 @@ def _two_track_plan(align: bool) -> list[Step]:
         Step("align", "align", WEIGHTS["align"], note="sys", measured=True, unit="audio_s"),
         Step("diarize", "diarize", WEIGHTS["diarize"], note="sys", measured=True),
         Step("voices", "voices", WEIGHTS["voices"]),
+        Step("mic-voices", "voices", WEIGHTS["mic-voices"], label="голоса микрофона", note="mic"),
         Step("render", "render", WEIGHTS["render"]),
     ]
     return steps if align else [s for s in steps if s.key != "align"]
@@ -690,12 +710,16 @@ def transcribe(
         segments = merge.with_breaks(segments, library.read_meta(path).get("parts"))
     stages = run.stages or Stages(bus, _single_plan(False))
     stages.begin("render")
+    mic = run.mic
     out_md.write_text(to_markdown(title, segments, iso), encoding="utf-8")
-    _write_sidecar(out_md, path, iso, segments, diar, name_map)
+    _write_sidecar(out_md, path, iso, segments, diar, name_map, mic=mic.sidecar if mic is not None else None)
+    if path.is_dir():
+        _write_mic_voices(path, mic)
     _write_structured(path, segments, title, name_map,
                       diarization=diar.skipped if diar is not None else None,
                       choice=run.choice,
-                      created_at=text_phase.created_at if text_phase is not None else None)
+                      created_at=text_phase.created_at if text_phase is not None else None,
+                      mic_split=mic.report if mic is not None else None)
     timing = run.timing_line()
     print(timing)
     bus.emit(events.LOG, text=timing, source="timing")
@@ -720,7 +744,7 @@ def _asr_fields(raw: dict, choice) -> None:
 
 def _write_structured(path: Path, segments, title: str, name_map: dict,
                       diarization: str | None = None, choice=None,
-                      created_at: str | None = None) -> None:
+                      created_at: str | None = None, mic_split: dict | None = None) -> None:
     """`transcript.json` рядом с записью — структурный источник для редактора.
 
     Markdown остаётся человеческим артефактом и форматом экспорта, но править
@@ -736,7 +760,10 @@ def _write_structured(path: Path, segments, title: str, name_map: dict,
     `not_russian` — запись не на русском, GigaAM заменён Whisper).
 
     `created_at` — время текста до спикеров (`_TextPhase`), если он был:
-    окончательная расшифровка заменяет его и остаётся той же расшифровкой."""
+    окончательная расшифровка заменяет его и остаётся той же расшифровкой.
+
+    `mic_split` — итог разделения микрофона звонка (meet.mic_split: статус,
+    людей в комнате, сколько убрано дублей); у одной дорожки поля нет."""
     if not path.is_dir():
         return
     from meet import library
@@ -759,6 +786,8 @@ def _write_structured(path: Path, segments, title: str, name_map: dict,
         raw["created_at"] = created_at
     if diarization:
         raw["diarization"] = diarization
+    if mic_split:
+        raw["mic_split"] = mic_split
     _asr_fields(raw, choice)
     if _find_track(path, "sys") and _find_track(path, "mic"):
         # Микрофонные сегменты помечены пайплайном (`track`): выводить их по
@@ -770,19 +799,26 @@ def _write_structured(path: Path, segments, title: str, name_map: dict,
         print(f"structured: не записал transcript.json ({e})")
 
 
-def _write_sidecar(out_md, path, iso, segments, diar, name_map) -> None:
+def _write_sidecar(out_md, path, iso, segments, diar, name_map, mic: list[dict] | None = None) -> None:
     """Сайдкар с эмбеддингами спикеров — сырьё для meet enroll.
 
     display повторяет имена транскрипта: уверенно распознанные — по базе,
-    остальные — «Спикер N» той же нумерацией, что в выводе."""
-    if not (diar and diar.embeddings):
+    остальные — «Спикер N» той же нумерацией, что в выводе.
+
+    `mic` — голоса микрофона (meet.mic_split): владелец (`OWNER`, `owner:
+    true`) и люди в комнате (`SPEAKER_M<n>`), все с `track: "mic"`. Их
+    display — тоже как в транскрипте: «Спикер N» общей нумерацией или
+    подпись кластера собеседников с тем же голосом."""
+    names = speaker_names(segments)
+    mic_entries = [{**e, "display": name_map.get(e["display"]) or names.get(e["display"], e["display"])}
+                   for e in mic or [] if isinstance(e, dict) and isinstance(e.get("display"), str)]
+    if not (diar and diar.embeddings) and not mic_entries:
         if diar and diar.turns:
             # только ASCII-пунктуация: cp866-консоль не кодирует тире (см. voices.py)
             print("голоса: pyannote не вернул эмбеддинги, матчинг и сайдкар пропущены")
         return
     from meet.voices import write_sidecar
 
-    names = speaker_names(segments)
     speakers = [
         {
             "label": label,
@@ -791,12 +827,94 @@ def _write_sidecar(out_md, path, iso, segments, diar, name_map) -> None:
             "display": name_map.get(label) or names.get(label, label),
             "embedding": [float(x) for x in emb],
         }
-        for label, emb in diar.embeddings.items()
-    ]
+        for label, emb in ((diar.embeddings if diar is not None else None) or {}).items()
+    ] + mic_entries
     # Абсолютный путь: образец голоса помнит, откуда взят, и относительный
     # (запуск `meet transcribe recordings/x`) зависел бы от рабочей папки.
     p = write_sidecar(out_md, source=str(Path(path).resolve()), date=iso, speakers=speakers)
     print(f"Голосовые отпечатки: {p}")
+
+
+def _write_mic_voices(folder: Path, mic) -> None:
+    """`mic_voices.json` окончательной расшифровки звонка (meet.mic_split):
+    кластеры голосов микрофона и убранные копии — панель «Спикеры» показывает
+    их списком «Убрано с микрофона». Нет разделения (одна дорожка, сбой) —
+    файла нет: прежний от другой расшифровки описывал бы чужие реплики."""
+    from meet import library
+
+    path = folder / library.MIC_VOICES
+    if mic is None or not mic.voices:
+        path.unlink(missing_ok=True)
+        return
+    tmp = path.with_name(f".{path.name}.tmp")
+    try:
+        tmp.write_text(json.dumps(mic.voices, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as e:  # транскрипт важнее списка убранного
+        tmp.unlink(missing_ok=True)
+        print(f"микрофон: не записал {path.name} ({e})")
+
+
+def _mic_device(folder: Path) -> str | None:
+    """Микрофон записи (events.jsonl: старт записи и смены устройства) — по
+    нему берутся образцы владельца того же устройства. Устройство менялось
+    или неизвестно — None (сравнение со всеми образцами)."""
+    try:
+        lines = (Path(folder) / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    found: set[str] = set()
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        tracks = event.get("tracks") if event.get("kind") == events.RECORD_STARTED else [event]
+        for t in tracks if isinstance(tracks, list) else []:
+            if isinstance(t, dict) and t.get("track") == "mic.opus" and isinstance(t.get("device"), str):
+                if event.get("kind") in (events.RECORD_STARTED, events.RECORD_DEVICE) and t["device"]:
+                    found.add(t["device"])
+    return found.pop() if len(found) == 1 else None
+
+
+def _mic_off_report(status: str) -> dict:
+    from meet import mic_split
+
+    return {"rule": mic_split.RULE, "status": status, "owner_profile": None, "room_speakers": 0,
+            "dropped": {reason: 0 for reason in mic_split.REASONS}}
+
+
+def _split_mic(folder: Path, mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav: Path,
+               diar, name_map: dict, owner_label: str, run: "_Run") -> tuple[list[Segment], list[Segment]]:
+    """Шаг mic-voices: микрофон по голосам (владелец, люди в комнате) и без
+    дублей соседа и эха (meet.mic_split), по настройкам `asr.mic_speakers` /
+    `asr.mic_dedupe`. Итог — в `run.mic` для окончательной расшифровки.
+    Любой сбой не роняет расшифровку: микрофон, как раньше, — владелец."""
+    from meet import mic_split, owner_voice, settings
+    from meet import voices as voice_base
+
+    try:
+        cfg = settings.load().asr
+        split_on, dedupe_on = cfg.mic_speakers, cfg.mic_dedupe
+    except Exception:
+        split_on, dedupe_on = True, True
+    try:
+        owner = owner_voice.load() if split_on else []
+        base = voice_base.load_voices() if split_on and owner else {}
+        result = mic_split.run(
+            mic_segs, sys_segs, mic_wav, sys_wav, diar, owner=owner, base=base,
+            threshold=voice_threshold(folder), owner_label=owner_label, log=print, names=dict(name_map),
+            device=_mic_device(folder), speakers=split_on, dedupe=dedupe_on,
+            no_token=bool(diar is not None and diar.skipped))
+    except Exception as e:
+        print(f"микрофон: голоса не разобраны, весь микрофон — {owner_label} ({type(e).__name__}: {e})")
+        run.mic = mic_split.MicResult(mic=mic_segs, sys=sys_segs, dropped=[], sidecar=[],
+                                      report=_mic_off_report(mic_split.STATUS_ERROR), voices={})
+        return mic_segs, sys_segs
+    run.mic = result
+    return result.mic, result.sys
 
 
 def _unassigned(segment: Segment) -> Segment:
@@ -935,8 +1053,9 @@ def _transcribe_two_track(
         stages.begin("asr-mic")
         mic_segs = _fix_terms(_recognize(mic_wav, hotwords, run), run)
         stages.update(1)
-        # Микрофонная дорожка — всегда владелец машины; как его подписывать,
-        # решает настройка (по умолчанию «Вы»).
+        # Микрофонная дорожка — пока владелец машины (как его подписывать,
+        # решает настройка, по умолчанию «Вы»); людей рядом с ним в комнате
+        # отделит шаг mic-voices после диаризации.
         from meet import settings
 
         speaker = settings.load().recording.speaker_name
@@ -968,4 +1087,9 @@ def _transcribe_two_track(
                 sys_segs, _apply_names(diar.turns, name_map), diar.overlaps
             )
             stages.update(1)
+        # Микрофон по голосам — пока wav дорожек ещё есть (temp_dir).
+        stages.begin("mic-voices")
+        mic_segs, sys_segs = _split_mic(folder, mic_segs, sys_segs, mic_wav, sys_wav, diar, name_map,
+                                        speaker, run)
+        stages.update(1)
     return interleave_tracks(sys_segs, mic_segs), diar, name_map

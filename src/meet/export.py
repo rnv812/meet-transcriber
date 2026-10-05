@@ -4,7 +4,7 @@
 переименования в окне живут там."""
 
 from meet.asr import Segment
-from meet.output import to_markdown
+from meet.output import to_markdown, uncertain_mark
 
 FORMATS = ("md", "txt", "srt")
 
@@ -21,7 +21,8 @@ def _srt_time(seconds: float) -> str:
 
 def _who(seg: dict) -> str:
     who = seg.get("speaker") or "Спикер ?"
-    return f"{who} (нахлёст)" if seg.get("uncertain") else who
+    flag = uncertain_mark(bool(seg.get("uncertain")), seg.get("track"))
+    return f"{who} ({flag})" if flag else who
 
 
 # Не длиннее этого — каждая часть пути: глубокое хранилище плюс длинное
@@ -58,7 +59,8 @@ def md_segments(data: dict) -> list[Segment]:
     """Непустые реплики транскрипта как Segment — вход для output.to_markdown."""
     return [Segment(float(s["start"]), float(s["end"]), s["text"],
                     speaker=s.get("speaker"), uncertain=bool(s.get("uncertain")),
-                    kind="break" if is_break(s) else None)
+                    kind="break" if is_break(s) else None,
+                    track=s.get("track") if s.get("track") == "mic" else None)
             for s in data.get("segments", []) if str(s.get("text", "")).strip()]
 
 

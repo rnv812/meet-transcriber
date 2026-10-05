@@ -191,14 +191,30 @@ def sample(name: str, voices: Path, recordings: Path) -> dict | None:
     из транскриптов, а не из базы голосов."""
     name = valid_name(name)
     for folder in reversed(library.recording_folders(recordings)):
-        turns = _turns(library.final_transcript(folder), name)
+        data = library.final_transcript(folder)
+        turns = _turns(data, name)
         if turns:
             best = max(turns, key=_duration)
-            track = next((stem for stem in ("sys", "source", "mic")
-                          if library.find_track(folder, stem)), "source")
             return {"recording": folder.name, "start": best["start"],
-                    "end": best["end"], "track": track}
+                    "end": best["end"], "track": _track_of(folder, data, best)}
     return None
+
+
+def _track_of(folder: Path, data: dict, segment: dict) -> str:
+    """Дорожка, на которой реплика звучит: у звонка — её собственная (человек
+    рядом с владельцем говорит в микрофон, а не в звонок; у старой записи —
+    вычисленная segvoices), иначе — первая из имеющихся дорожек."""
+    from meet import segvoices
+
+    segments = _segments(data)
+    at = next((i for i, s in enumerate(segments) if s is segment), None)
+    if at is not None and segvoices.is_call(folder):
+        marked = {**data, "segments": [dict(s) for s in segments]}
+        segvoices.mark_tracks(folder, marked)
+        track = segvoices.tracks_of(folder, marked["segments"])[at]
+        if track and library.find_track(folder, track):
+            return track
+    return next((stem for stem in ("sys", "source", "mic") if library.find_track(folder, stem)), "source")
 
 
 def _rewrite_speaker(recordings: Path, old: str, new: str) -> int:

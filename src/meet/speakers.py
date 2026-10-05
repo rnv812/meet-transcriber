@@ -249,7 +249,10 @@ def _base_without(voices_dir: Path, recording: str, source: str | None) -> dict[
 
 def _suggestions(entries: list[dict], base: dict[str, list[np.ndarray]]) -> list[dict]:
     """Люди базы, чей голос похож: как в voices.best_match — максимум косинуса
-    по образцам человека (и по кластерам строки, если их несколько)."""
+    по образцам человека (и по кластерам строки, если их несколько). Голос
+    владельца микрофона (`owner: true`, meet.mic_split) — не подсказка: это
+    вы, а не кто-то из базы."""
+    entries = [e for e in entries if not e.get("owner")]
     if not entries or not base:
         return []
     embs = [np.asarray(e["embedding"], dtype=np.float32) for e in entries]
@@ -289,6 +292,48 @@ def _public(steps: list[dict]) -> list[dict]:
     return [{**{k: s.get(k) for k in keep}, "owner_voice": bool(s.get("owner_voice"))} for s in steps]
 
 
+def _tracks(folder: Path, data: dict, shown: list[str | None]) -> dict[str, str]:
+    """Дорожка каждого спикера записи звонка: "mic" (говорил в микрофон —
+    владелец или человек рядом с ним в комнате), "sys" (в звонке) или "mixed".
+    У старой записи дорожки сегментов вычисляются в памяти (segvoices). Не
+    звонок — пусто."""
+    from meet import segvoices
+
+    if not segvoices.is_call(folder):
+        return {}
+    marked = {**data, "segments": [dict(s) for s in data["segments"]]}
+    segvoices.mark_tracks(folder, marked, _owners())
+    seen: dict[str, set[str]] = {}
+    for label, track in zip(shown, segvoices.tracks_of(folder, marked["segments"])):
+        if label and track:
+            seen.setdefault(label, set()).add("mic" if track == "mic" else "sys")
+    return {label: next(iter(t)) if len(t) == 1 else "mixed" for label, t in seen.items()}
+
+
+REMOVED_REASONS = ("echo", "neighbour", "owner_leak")
+
+
+def _mic_removed(folder: Path) -> list[dict]:
+    """Что убрано из расшифровки как дубль соседа, эхо колонок или ваш голос
+    через чужой ноутбук (mic_voices.json, meet.mic_split) — по времени."""
+    try:
+        raw = json.loads((folder / library.MIC_VOICES).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    items = raw.get("dropped") if isinstance(raw, dict) else None
+    out = []
+    for d in items if isinstance(items, list) else []:
+        if not isinstance(d, dict) or d.get("reason") not in REMOVED_REASONS or d.get("track") not in ("mic", "sys"):
+            continue
+        try:
+            start, end = round(float(d["start"]), 2), round(float(d["end"]), 2)
+        except (KeyError, TypeError, ValueError):
+            continue
+        out.append({"start": start, "end": end, "text": str(d.get("text") or ""), "reason": d["reason"],
+                    "track": d["track"]})
+    return sorted(out, key=lambda d: (d["start"], d["end"]))
+
+
 def overview(folder: Path, voices_dir: Path, owner: str = "Вы") -> dict:
     data = _transcript(folder)
     segments = data["segments"]
@@ -303,6 +348,7 @@ def overview(folder: Path, voices_dir: Path, owner: str = "Вы") -> dict:
     sidecar = _sidecar(folder)
     clusters = _clusters(data, sidecar, set(order))
     base = _base_without(voices_dir, folder.name, (sidecar or {}).get("source")) if clusters else {}
+    tracks = _tracks(folder, data, shown)
     rows = []
     for label in order:
         entries = clusters.get(label, [])
@@ -315,12 +361,17 @@ def overview(folder: Path, voices_dir: Path, owner: str = "Вы") -> dict:
             "samples": _samples(turns, label),
             "has_voice": bool(entries),
             "suggestions": _suggestions(entries, base),
+            # Звонок: где звучит спикер — "mic" (микрофон: вы или человек в
+            # комнате), "sys" (звонок), "mixed"; не звонок — None.
+            "track": tracks.get(label),
         })
     meta = library.read_meta(folder)
     steps, pos = _history_of(meta, data)
+    mic_split = data.get("mic_split") if isinstance(data.get("mic_split"), dict) else None
     return {"speakers": rows, "owner": owner, "history": _public(steps), "pos": pos,
             "trimmed": _trimmed(meta, data), "voice_threshold": own_threshold(meta),
-            "owner_voice": bool(_owner_entries(sidecar))}
+            "owner_voice": bool(_owner_entries(sidecar)),
+            "mic_split": mic_split, "mic_removed": _mic_removed(folder)}
 
 
 # --- применение ---------------------------------------------------------------

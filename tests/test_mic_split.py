@@ -218,6 +218,17 @@ def test_embedder_unavailable_means_no_split(tmp_path, monkeypatch):
     assert any("нет токена" in line for line in logs)
 
 
+def test_no_token_known_in_advance_does_not_load_the_embedder(tmp_path, monkeypatch):
+    """Диаризация уже сказала «нет токена HF»: эмбеддер (тот же гейтед-чекпойнт)
+    не грузится вовсе — ни попытки, ни строки об ошибке в журнале."""
+    from meet import segvoices
+
+    monkeypatch.setattr(segvoices, "load_embedder", lambda: pytest.fail("эмбеддер не грузится без токена"))
+    got, logs = _run(_meeting(tmp_path, room1=True), _owner(), embed=None, no_token=True)
+    assert got.report["status"] == "skipped_no_token" and {s.speaker for s in got.mic} == {"Вы"}
+    assert not any("не посчитать" in line for line in logs)
+
+
 # --- быстрый путь ----------------------------------------------------------------
 
 

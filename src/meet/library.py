@@ -92,6 +92,9 @@ class Recording:
     # Транскрипт — только текст, спикеры ещё не определены (`phase: "text"`):
     # идёт диаризация или расшифровку прервали между фазами. None — окончательный.
     transcript_phase: str | None = None
+    # Микрофон звонка по голосам (`mic_split` транскрипта, meet.mic_split):
+    # {"status", "room_speakers", "dropped"} — подсказка в карточке. Нет — None.
+    mic_split: dict | None = None
 
     def to_raw(self) -> dict:
         return {
@@ -115,11 +118,15 @@ class Recording:
             "system_audio": self.system_audio,
             "system_audio_reason": self.system_audio_reason,
             "transcript_phase": self.transcript_phase,
+            "mic_split": self.mic_split,
         }
 
 
 # Результат «Переразделить на спикеров», ждущий применения (meet.rediarize).
 REDIARIZE_PREVIEW = "rediarize.json"
+# Голоса микрофона окончательной расшифровки звонка (meet.mic_split): кластеры
+# окон и убранные дубли соседа, эхо и утечки владельца — для панели «Спикеры».
+MIC_VOICES = "mic_voices.json"
 
 
 def find_track(folder: Path, stem: str) -> Path | None:
@@ -300,25 +307,39 @@ def write_transcript(folder: Path, data: dict, words: str = "keep") -> Path:
 
 
 # Заголовок транскрипта для списка записей: (path, mtime_ns, size) → (есть ли
-# транскрипт, название, пометка диаризации, пометка распознавания, фаза).
+# транскрипт, название, пометка диаризации, пометка распознавания, фаза,
+# итог разделения микрофона).
 # Список не разбирает каждый раз все транскрипты целиком.
 _heads: dict[str, tuple] = {}
 _heads_lock = threading.Lock()
 
 
-def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None, str | None, str | None]:
+def _mic_split_head(raw) -> dict | None:
+    """Итог разделения микрофона (`mic_split` транскрипта, meet.mic_split) для
+    карточки: статус (подсказка), сколько людей в комнате и убрано копий."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("status"), str):
+        return None
+    dropped = raw.get("dropped") if isinstance(raw.get("dropped"), dict) else {}
+    rooms = raw.get("room_speakers")
+    return {"status": raw["status"],
+            "room_speakers": rooms if isinstance(rooms, int) and not isinstance(rooms, bool) else 0,
+            "dropped": {k: v for k, v in dropped.items()
+                        if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)}}
+
+
+def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None, str | None, str | None, dict | None]:
     path = transcript_path(folder)
     try:
         st = path.stat()
     except OSError:
-        return False, None, None, None, None
+        return False, None, None, None, None, None
     key = (st.st_mtime_ns, st.st_size)
     with _heads_lock:
         hit = _heads.get(str(path))
     if hit is not None and hit[0] == key:
         return hit[1]
     transcript = read_transcript(folder)
-    title = diarization = asr_note = phase = None
+    title = diarization = asr_note = phase = mic_split = None
     if isinstance(transcript, dict):
         raw_title = transcript.get("title")
         title = str(raw_title) if raw_title else None
@@ -327,7 +348,8 @@ def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None, str | 
         note = transcript.get("asr_note")
         asr_note = str(note) if isinstance(note, str) and note else None
         phase = TEXT_PHASE if is_text_phase(transcript) else None
-    head = (transcript is not None, title, diarization, asr_note, phase)
+        mic_split = _mic_split_head(transcript.get("mic_split"))
+    head = (transcript is not None, title, diarization, asr_note, phase, mic_split)
     with _heads_lock:
         _heads[str(path)] = (key, head)
     return head
@@ -759,7 +781,7 @@ def describe(folder: Path) -> Recording | None:
     meta = read_meta(folder)
     if not _recognised(tracks, meta):
         return None
-    has_json, title, diarization, asr_note, phase = _transcript_head(folder)
+    has_json, title, diarization, asr_note, phase, mic_split = _transcript_head(folder)
     if meta.get("title"):
         title = str(meta["title"])
     source = meta.get("source") if meta.get("source") in SOURCES else "record"
@@ -790,6 +812,7 @@ def describe(folder: Path) -> Recording | None:
         system_audio_reason=meta["system_audio_reason"]
         if meta.get("system_audio_reason") in SYSTEM_AUDIO_REASONS else None,
         transcript_phase=phase,
+        mic_split=mic_split,
     )
 
 

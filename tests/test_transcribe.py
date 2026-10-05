@@ -238,12 +238,14 @@ def test_progress_is_one_monotonic_scale_with_step_numbers(monkeypatch, tmp_path
     fractions = [e["fraction"] for e in events_]
     assert fractions == sorted(fractions)
     assert fractions[-1] == 1.0
-    assert {e["steps"] for e in events_} == {7}
+    assert {e["steps"] for e in events_} == {8}
     steps = [e["step"] for e in events_]
-    assert steps == sorted(steps) and steps[0] == 1 and steps[-1] == 7
+    assert steps == sorted(steps) and steps[0] == 1 and steps[-1] == 8
     order = list(dict.fromkeys((e["stage"], e["label"]) for e in events_))
-    # Обе дорожки распознаются до выравнивания и диаризации: текст — раньше спикеров (Р4).
-    assert [s for s, _ in order] == ["convert", "asr", "asr", "align", "diarize", "voices", "render"]
+    # Обе дорожки распознаются до выравнивания и диаризации: текст — раньше спикеров (Р4);
+    # голоса микрофона — после голосов собеседников (им нужны их кластеры).
+    assert [s for s, _ in order] == ["convert", "asr", "asr", "align", "diarize", "voices", "voices", "render"]
+    assert order[-2] == ("voices", "голоса микрофона")
 
 
 def test_progress_without_align_has_one_step_less(monkeypatch, tmp_path):
@@ -324,23 +326,25 @@ def _assert_steady(events_, steps):
 
 def test_plan_gigaam_cpu_two_tracks_has_no_alignment_from_the_start(monkeypatch, tmp_path):
     """Путь по умолчанию на процессоре: GigaAM, выравнивание после неё не нужно —
-    «Этап N из 6» с первого события, без «из 7» в начале."""
+    «Этап N из 7» с первого события, без «из 8» в начале."""
     events_ = _engine_run(monkeypatch, tmp_path, device="cpu", backend="gigaam", layout="two")
-    _assert_steady(events_, 6)
+    _assert_steady(events_, 7)
     assert "align" not in {e["stage"] for e in events_}
 
 
 def test_plan_whisper_cuda_keeps_alignment(monkeypatch, tmp_path):
     events_ = _engine_run(monkeypatch, tmp_path, device="cuda", backend="faster-whisper", layout="two")
-    _assert_steady(events_, 7)
+    _assert_steady(events_, 8)
     assert [e["step"] for e in events_ if e["stage"] == "align"][0] == 4
 
 
 def test_plan_without_diarization_keeps_its_count(monkeypatch, tmp_path):
     events_ = _engine_run(monkeypatch, tmp_path, device="cpu", backend="gigaam", layout="two",
                           diar_skipped="skipped_no_token")
-    _assert_steady(events_, 6)
-    assert "voices" not in {e["stage"] for e in events_}
+    _assert_steady(events_, 7)
+    # Голоса собеседников пропущены; голоса микрофона идут (дубли — и без токена).
+    notes = [e["note"] for e in events_ if e["stage"] == "voices"]
+    assert notes and set(notes) == {"mic"}
 
 
 def test_plan_import_single_track_gigaam(monkeypatch, tmp_path):
@@ -357,7 +361,7 @@ def test_plan_with_gigaam_backend_but_english_keeps_alignment(monkeypatch, tmp_p
     state.mkdir()
     (state / "config.json").write_text(json.dumps({"asr": {"language": "en"}}), encoding="utf-8")
     events_ = _engine_run(monkeypatch, tmp_path, device="cpu", backend="faster-whisper", layout="two")
-    _assert_steady(events_, 7)
+    _assert_steady(events_, 8)
     assert [e["step"] for e in events_ if e["stage"] == "align"][0] == 4
 
 
@@ -368,7 +372,7 @@ def test_plan_engine_changed_after_start_skips_alignment_without_recount(monkeyp
 
     monkeypatch.setattr(tr, "_align_planned", lambda align: True)
     events_ = _engine_run(monkeypatch, tmp_path, device="cpu", backend="gigaam", layout="two")
-    _assert_steady(events_, 7)
+    _assert_steady(events_, 8)
     assert "align" not in {e["stage"] for e in events_}
 
 

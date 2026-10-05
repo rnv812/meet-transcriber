@@ -433,7 +433,7 @@ def _toks(segs: list[Segment], track: str, role_of=None) -> list[mic_dedupe.Tok]
 def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav: Path, diar, *,
         owner: list, base: dict, threshold: float, owner_label: str, embed=None, log=print,
         names: dict | None = None, device: str | None = None, speakers: bool = True,
-        dedupe: bool = True) -> MicResult:
+        dedupe: bool = True, no_token: bool = False) -> MicResult:
     """Микрофон по голосам и без дублей.
 
     mic_segs — распознанный микрофон (слова с таймкодами); sys_segs — sys
@@ -442,7 +442,9 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
     метки → имена из базы; owner — образцы владельца (owner_voice.load),
     device — микрофон записи; base — база голосов, threshold — порог узнавания.
     speakers/dedupe — настройки asr.mic_speakers / asr.mic_dedupe. `embed`
-    (звук → вектор) подменяется в тестах; None — эмбеддер segvoices."""
+    (звук → вектор) подменяется в тестах; None — эмбеддер segvoices.
+    no_token — диаризация уже не получила модель (нет токена HF или
+    доступа): эмбеддер из того же чекпойнта и не пробуем."""
     from meet.diarize import DIARIZATION_MODEL
 
     names = names or {}
@@ -464,7 +466,9 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
     elif wins and mic_audio is None:
         status = STATUS_ERROR
     elif wins:
-        if embed is None:
+        if embed is None and no_token:
+            status = STATUS_NO_TOKEN
+        elif embed is None:
             embed, status = _load_embedder(log)
         if embed is not None:
             # Голос — у всех окон: быстрый путь по выборке пропускал соседа,

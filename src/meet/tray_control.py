@@ -339,13 +339,26 @@ def _for_window(segment):
     return out
 
 
+def _in_room(segment, owners: set[str]) -> bool:
+    """Реплика с микрофона не владельца — человек рядом с ним в комнате
+    (meet.mic_split или правка спикеров): окно ставит у неё «в комнате»."""
+    return (isinstance(segment, dict) and segment.get("track") == "mic" and segment.get("kind") != "break"
+            and isinstance(segment.get("speaker"), str) and segment["speaker"] not in owners)
+
+
 def _window_transcript(data: dict | None) -> dict | None:
     """Транскрипт для окна: сырые SPEAKER_XX — «Спикер N», слова с таймкодами
-    убраны (их много), вместо них — `has_words` у сегмента."""
+    убраны (их много), вместо них — `has_words` у сегмента; у реплик людей в
+    комнате (микрофон, не владелец) — `room`."""
+    from meet import segvoices
+
     data = library.with_display_names(data)
     if not data or not isinstance(data.get("segments"), list):
         return data
-    return {**data, "segments": [_for_window(s) for s in data["segments"]]}
+    owners = segvoices.owners()
+    segments = [_for_window(s) for s in data["segments"]]
+    segments = [{**s, "room": True} if _in_room(s, owners) else s for s in segments]
+    return {**data, "segments": segments}
 
 
 def _int_or_none(value) -> int | None:

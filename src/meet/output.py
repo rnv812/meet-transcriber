@@ -9,10 +9,24 @@ def fmt_ts(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
 
 
+# Пометка неуверенной подписи (`uncertain`): у собеседников — нахлёст
+# спикеров (диаризация), у микрофона — голос между «точно владелец» и «точно
+# не он» (meet.mic_split, роль unsure): подписан владельцем, но под вопросом.
+OVERLAP_MARK = "нахлёст"
+UNSURE_VOICE_MARK = "голос под вопросом"
+
+
+def uncertain_mark(uncertain: bool, track: str | None) -> str | None:
+    if not uncertain:
+        return None
+    return UNSURE_VOICE_MARK if track == "mic" else OVERLAP_MARK
+
+
 def merge_consecutive(segments: list[Segment], max_gap: float = 2.0) -> list[Segment]:
     """Склеить подряд идущие сегменты одного спикера с паузой не больше max_gap сек.
 
-    Блоки с разным uncertain не клеятся: зона нахлёста остаётся отдельным блоком.
+    Блоки с разной пометкой (uncertain_mark) не клеятся: зона нахлёста и голос
+    под вопросом остаются отдельными блоками.
     Отметка перерыва (kind="break") — сама по себе и не склеивает соседей."""
     merged: list[Segment] = []
     for seg in segments:
@@ -22,7 +36,7 @@ def merge_consecutive(segments: list[Segment], max_gap: float = 2.0) -> list[Seg
             and not last.kind
             and not seg.kind
             and last.speaker == seg.speaker
-            and last.uncertain == seg.uncertain
+            and uncertain_mark(last.uncertain, last.track) == uncertain_mark(seg.uncertain, seg.track)
             and seg.start - last.end <= max_gap
         ):
             last.text = f"{last.text} {seg.text}"
@@ -31,7 +45,7 @@ def merge_consecutive(segments: list[Segment], max_gap: float = 2.0) -> list[Seg
             merged.append(
                 Segment(
                     seg.start, seg.end, seg.text, seg.speaker, uncertain=seg.uncertain,
-                    kind=seg.kind,
+                    kind=seg.kind, track=seg.track,
                 )
             )
     return merged
@@ -107,6 +121,7 @@ def turn_lines(segments: list[Segment], level: int = 2) -> list[str]:
             lines += [f"*{seg.text}*", ""]
             continue
         who = names.get(seg.speaker, seg.speaker) if seg.speaker else "Спикер ?"
-        mark = " (нахлёст)" if seg.uncertain else ""
+        flag = uncertain_mark(seg.uncertain, seg.track)
+        mark = f" ({flag})" if flag else ""
         lines += [f"{hashes} {fmt_ts(seg.start)} — {who}{mark}", "", seg.text, ""]
     return lines

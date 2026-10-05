@@ -204,6 +204,10 @@ def finish(folder: Path, data: dict, got: dict) -> dict:
     names = data.get("names") if isinstance(data.get("names"), dict) else {}
     old = []
     for e in (speakers._sidecar(folder) or {}).get("speakers") or []:
+        # Голоса микрофона (владелец, люди в комнате) не наследуются собеседниками:
+        # переразделение — только звонка, микрофон остаётся как есть.
+        if isinstance(e, dict) and e.get("track") == "mic":
+            continue
         if isinstance(e, dict) and isinstance(e.get("display"), str) and isinstance(e.get("embedding"), list):
             label = speakers._resolve(names, e["display"])
             if label in present and label not in inherited.values():
@@ -439,7 +443,8 @@ def apply(folder: Path, voices_dir: Path, now: datetime | None = None) -> dict:
     deltas = speakers._deltas(after, targets)
     side_path, side = speakers.sidecar_for_write(folder)
     voices_before = [e for e in side.get("speakers") or [] if isinstance(e, dict)]
-    voices_after = done["voices"]
+    # Голоса микрофона (meet.mic_split) остаются: переразделяется только звонок.
+    voices_after = done["voices"] + [e for e in voices_before if e.get("track") == "mic"]
     names_before = data.get("names") if isinstance(data.get("names"), dict) else None
     if not deltas and not replace and _labels(voices_before) == _labels(voices_after):
         discard(folder)
