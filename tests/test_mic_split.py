@@ -631,6 +631,9 @@ def test_owner_voice_leaking_into_sys_is_dropped_from_sys(tmp_path):
     assert len(got.mic) == len(OWNER_PHRASES)
     assert got.report["dropped"]["owner_leak"] == 4
     assert got.dropped[0]["track"] == "sys"
+    # Голос решён один раз по центроиду всех копий-кандидатов.
+    leak = got.voices["leak"]
+    assert leak["gate"] == "voice_match" and leak["candidates"] == 4 and leak["cos"] >= mic_split.T_OWN
 
 
 def test_same_words_in_sys_by_another_voice_are_not_an_owner_leak(tmp_path):
@@ -640,6 +643,9 @@ def test_same_words_in_sys_by_another_voice_are_not_an_owner_leak(tmp_path):
     meeting = _meeting(tmp_path, sys_phrases=sys_phrases)
     got, _ = _run(meeting, _owner())
     assert got.report["dropped"]["owner_leak"] == 0 and got.sys == meeting[1]
+    # Кандидаты были (лаг и огибающая), но центроид их голоса — не владелец.
+    leak = got.voices["leak"]
+    assert leak["gate"] == "voice_mismatch" and leak["candidates"] == 4 and leak["cos"] < mic_split.T_OWN
 
 
 def test_alignment_state_is_recorded(tmp_path):

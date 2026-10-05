@@ -422,22 +422,31 @@ def _release() -> None:
 
 
 def _leak_voice(sys_audio, embed, owner, device: str | None):
-    """Голос отрезка sys похож на образец владельца (от T_OWN) — улика утечки
-    владельца (mic_dedupe): отрезок короче EMBED_MIN — не улика."""
-    def check(start: float, end: float) -> bool:
-        a, b = max(0, int(start * SAMPLE_RATE)), max(0, int(end * SAMPLE_RATE))
-        clip = sys_audio[a:b].astype(np.float32) / 32768.0
-        if clip.size < int(EMBED_MIN * SAMPLE_RATE):
-            return False
+    """Голос кандидатов в утечку владельца (mic_dedupe, вся встреча): центроид
+    эмбеддингов отрезков sys (вес — длительность, отрезки короче EMBED_MIN не
+    считаются) против образца владельца — от T_OWN, как у кластера микрофона.
+    → (владелец?, cos | None)."""
+    def check(spans: list[tuple[float, float]]) -> tuple[bool, float | None]:
+        vecs, weights = [], []
         try:
             with _torch_threads(EMBED_THREADS):
-                vec = embed(clip)
+                for start, end in spans:
+                    a, b = max(0, int(start * SAMPLE_RATE)), max(0, int(end * SAMPLE_RATE))
+                    clip = sys_audio[a:b].astype(np.float32) / 32768.0
+                    if clip.size < int(EMBED_MIN * SAMPLE_RATE):
+                        continue
+                    vec = embed(clip)
+                    vec = None if vec is None else np.asarray(vec, dtype=np.float64)
+                    if vec is None or not vec.size or not np.isfinite(vec).all() or not np.linalg.norm(vec):
+                        continue
+                    vecs.append(_unit(vec))
+                    weights.append(clip.size / SAMPLE_RATE)
         except Exception:
-            return False
-        vec = None if vec is None else np.asarray(vec, dtype=np.float64)
-        if vec is None or not vec.size or not np.isfinite(vec).all() or not np.linalg.norm(vec):
-            return False
-        return owner_voice.score(vec, owner, device) >= T_OWN
+            return False, None
+        if not vecs:
+            return False, None
+        cos = owner_voice.score(_unit((np.stack(vecs) * np.array(weights)[:, None]).sum(0)), owner, device)
+        return cos >= T_OWN, cos
     return check
 
 
@@ -569,6 +578,9 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
 
     drops: list[mic_dedupe.Drop] = []
     lags = None
+    # Чем решено об утечках владельца (mic_dedupe._leaks): кандидатов,
+    # секунд, cos центроида, gate — для калибровки.
+    leak: dict = {}
     if want_dedupe:
         mic_toks, sys_toks = _toks(mic_segs, "mic", role_of), _toks(sys_segs, "sys")
         env = leak_voice = None
@@ -582,7 +594,8 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
             else:
                 if split and embed is not None:
                     leak_voice = _leak_voice(sys_audio, embed, owner, device)
-        drops, lags = mic_dedupe.find(mic_toks, sys_toks, owner_known=split, env=env, leak_voice=leak_voice)
+        drops, lags = mic_dedupe.find(mic_toks, sys_toks, owner_known=split, env=env, leak_voice=leak_voice,
+                                      leak_report=leak)
     gone = {"mic": set(), "sys": set()}
     for d in drops:
         for w in d.words:
@@ -616,7 +629,8 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
     if lag_s is not None:
         lag_s["align"] = aligned
     voices_file = {"version": 1, "rule": RULE, "model": DIARIZATION_MODEL, "status": status, "fast": fast,
-                   "align": aligned, "lag_s": lag_s, "clusters": clusters, "dropped": dropped}
+                   "align": aligned, "lag_s": lag_s, "leak": leak or None, "clusters": clusters,
+                   "dropped": dropped}
     if loaded:
         del embed
         _release()

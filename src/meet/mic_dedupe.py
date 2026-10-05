@@ -67,6 +67,12 @@ LEAK_MIN_LAG = 0.1
 # эха 0,02), а sys ещё и выравнивается wav2vec отдельно. Огибающая ищется в
 # LEAK_SEARCH (−0,1…0,6 с): у эха лучший сдвиг около 0 — не утечка.
 LEAK_SEARCH = (-0.1, 0.6)
+# Голос утечки решается по встрече, как все решения о голосе здесь: центроид
+# всех кандидатов (копии в sys со сдвигом по звуку от LEAK_MIN_LAG) против
+# образца владельца. Отдельный клип 1–3 с против образца даёт cos 0,55–0,68
+# (T0) — порог владельца ему недостижим. Меньше LEAK_MIN_AUDIO_S кандидатов —
+# не решаем, ничего не удаляем.
+LEAK_MIN_AUDIO_S = 8.0
 # Уверенная пара (задаёт L*): покрытие и число совпавших слов. Старт (T0).
 CONFIDENT_COVERAGE = 0.8
 CONFIDENT_WORDS = 4
@@ -440,26 +446,23 @@ def _aligned(pair: Pair, idx: list[int]) -> list[Tok]:
     return pair.sys[min(js):max(js) + 1] if js else []
 
 
-def _leak(pair: Pair, other: list[Tok], env: Envelope | None, leak_voice) -> bool:
-    """Копия в sys — правда голос владельца через чужой ноутбук: голос копии
-    похож на образец владельца (`leak_voice(start, end)`, эмбеддинг отрезка
-    sys) и по звуку она позже микрофона хотя бы на LEAK_MIN_LAG. Лаг слов ASR
-    сам по себе — не улика: эхо колонок с дрожанием времени слов иначе стирало
-    бы из sys настоящие слова собеседника."""
-    if env is None or leak_voice is None or not other:
+def _sound_shift(pair: Pair, env: Envelope | None) -> bool:
+    """Копия в sys позже микрофона по звуку (огибающая в LEAK_SEARCH) хотя бы
+    на LEAK_MIN_LAG. Лаг слов ASR — не улика: время слов дорожек расходится
+    на 0,05–0,13 с, и эхо колонок с дрожанием слов иначе стирало бы из sys
+    настоящие слова собеседника."""
+    if env is None:
         return False
     lo, hi = LEAK_SEARCH
     got = env.corr(pair.mic[0].start, pair.mic[-1].end, (lo + hi) / 2, (hi - lo) / 2)
-    if got is None or got[0] < MIN_ENV_CORR_LONG or got[1] < LEAK_MIN_LAG - 1e-9:
-        return False
-    return bool(leak_voice(other[0].start, other[-1].end))
+    return got is not None and got[0] >= MIN_ENV_CORR_LONG and got[1] >= LEAK_MIN_LAG - 1e-9
 
 
 def _decide(pair: Pair, own: float | None, lags: Lags, env: Envelope | None, owner_known: bool,
-            mic_sizes: Counter, sys_sizes: Counter, leak_voice=None) -> list[Drop]:
+            mic_sizes: Counter, sys_sizes: Counter) -> list[Drop]:
     """Решение по паре. `own` — лаг самой пары, если он вошёл в L*: пара
-    проверяется по L* без него. `leak_voice(start, end)` — голос отрезка sys
-    похож на владельца (без него утечки владельца не ищутся)."""
+    проверяется по L* без него. Утечки владельца отсюда — только кандидаты:
+    голос решается по всей встрече (`_leaks`)."""
     start, end = pair.mic[0].start, pair.mic[-1].end
     ref = lags.reference(_kind(pair.lag), own)
     if ref is None or not lags.consistent(pair.lag, pair.matched, own):
@@ -485,10 +488,9 @@ def _decide(pair: Pair, own: float | None, lags: Lags, env: Envelope | None, own
         other = _aligned(pair, idx)
         if side == "owner":
             # Окно владельца: его слова в микрофоне не трогаем. Копия в sys
-            # позже микрофона по звуку и голосом владельца — мой голос через
-            # чужой ноутбук.
-            if (pair.lag >= LEAK_MIN_LAG and other and _big_enough(other, sys_sizes)
-                    and _leak(pair, other, env, leak_voice)):
+            # позже микрофона по звуку — кандидат «мой голос через чужой
+            # ноутбук»; голос копий проверяется по встрече.
+            if other and _big_enough(other, sys_sizes) and _sound_shift(pair, env):
                 drops.append(Drop("sys", other, words, pair.coverage, pair.lag, env_corr, "owner_leak"))
             continue
         if side == "weak":
@@ -520,8 +522,31 @@ def _fresh(drops: list[Drop], used: set) -> list[Drop]:
     return out
 
 
+def _leaks(candidates: list[Drop], leak_voice, report: dict | None) -> list[Drop]:
+    """Утечки владельца по всей встрече: центроид голоса всех кандидатов —
+    владелец (`leak_voice(spans) -> (да/нет, cos)`)? Да — удаляются все
+    кандидаты, нет или мало звука — ни один. `report` — чем решено
+    (mic_voices.json)."""
+    spans = [(d.words[0].start, d.words[-1].end) for d in candidates]
+    seconds = sum(max(0.0, b - a) for a, b in spans)
+    info = {"candidates": len(candidates), "seconds": round(seconds, 2), "cos": None}
+    if not candidates:
+        info["gate"] = "no_candidates"
+    elif leak_voice is None:
+        info["gate"] = "no_voice_check"
+    elif seconds < LEAK_MIN_AUDIO_S:
+        info["gate"] = "too_little_audio"
+    else:
+        ok, cos = leak_voice(spans)
+        info["cos"] = None if cos is None else round(float(cos), 3)
+        info["gate"] = "voice_match" if ok else "voice_mismatch"
+    if report is not None:
+        report.update(info)
+    return candidates if info["gate"] == "voice_match" else []
+
+
 def _resolve(mic: list[Tok], sys: list[Tok], lags: Lags, env: Envelope | None,
-             owner_known: bool, leak_voice=None) -> list[Drop]:
+             owner_known: bool, leak_voice=None, report: dict | None = None) -> list[Drop]:
     sys = sorted(sys, key=lambda t: t.start)
     starts = [t.start for t in sys]
     pairs = [p for seg in _by_segment(mic) for p in _pairs(seg, sys, starts)]
@@ -529,19 +554,23 @@ def _resolve(mic: list[Tok], sys: list[Tok], lags: Lags, env: Envelope | None,
     mic_sizes, sys_sizes = Counter(t.seg for t in mic), Counter(t.seg for t in sys)
     used: set = set()
     drops: list[Drop] = []
+    candidates: list[Drop] = []
     for p, lag in zip(pairs, own):
-        drops += _fresh(_decide(p, lag, lags, env, owner_known, mic_sizes, sys_sizes, leak_voice), used)
-    return drops
+        for d in _fresh(_decide(p, lag, lags, env, owner_known, mic_sizes, sys_sizes), used):
+            (candidates if d.reason == "owner_leak" else drops).append(d)
+    return drops + _leaks(candidates, leak_voice, report)
 
 
 def find(mic: list[Tok], sys: list[Tok], *, owner_known: bool, env: Envelope | None = None,
-         lags: Lags | None = None, leak_voice=None) -> tuple[list[Drop], Lags]:
+         lags: Lags | None = None, leak_voice=None, leak_report: dict | None = None
+         ) -> tuple[list[Drop], Lags]:
     """Дубли по всей встрече (расшифровка): сначала L* по уверенным парам всей
     встречи, потом решение по каждой паре. → (удалённые копии, лаги).
-    `leak_voice(start, end) -> bool` — голос отрезка sys похож на образец
-    владельца: без него утечки владельца из sys не удаляются."""
+    `leak_voice(spans) -> (bool, cos | None)` — центроид голоса отрезков sys
+    похож на образец владельца: без него утечки владельца из sys не
+    удаляются. `leak_report` дополняется тем, чем решено об утечках."""
     lags = lags if lags is not None else Lags()
-    return _resolve(mic, sys, lags, env, owner_known, leak_voice), lags
+    return _resolve(mic, sys, lags, env, owner_known, leak_voice, leak_report), lags
 
 
 def match(mic: list[Tok], sys: list[Tok], *, lags: Lags, owner_known: bool = True,

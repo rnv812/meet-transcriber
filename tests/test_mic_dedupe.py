@@ -59,9 +59,9 @@ def _lead(n=3, lag=LAG, role="room", t0=120.0, level=-30.0):
     return mic, sys, me, se
 
 
-def _owner_voice(start, end):
-    """Голос копии в sys — владельца (по образцу): в этих тестах — всегда."""
-    return True
+def _owner_voice(spans):
+    """Центроид голоса копий в sys — владелец (по образцу): в этих тестах — да."""
+    return True, 0.9
 
 
 def _find(mic, sys, *, owner_known=True, lead=3, lag=LAG, lead_role="room", mic_ev=None, sys_ev=None,
@@ -189,25 +189,41 @@ def test_speaker_echo_in_room_window_is_dropped_from_mic():
     assert lags.reference("echo") == pytest.approx(-0.03, abs=0.01)
 
 
-def _leak_case(*, same_env=True, with_env=True, lag=0.25, sound_lag=None, leak_voice=_owner_voice):
-    """Окно владельца, копия в sys: `lag` — по словам ASR, `sound_lag` — по
-    звуку (по умолчанию тот же)."""
-    text = "я пришлю отчёт до пятницы"
-    mic = _words(text, 30.0, seg="m1", role="owner")
-    sys = _words(text, 30.0 + lag, seg="s1")
+LEAK_PHRASES = ["я пришлю отчёт до пятницы", "мы созвонимся с поставщиком завтра",
+                "надо проверить счёт ещё раз", "давайте закончим на этом сегодня",
+                "я напишу всем после обеда"]
+
+
+def _leak_case(*, same_env=True, with_env=True, lag=0.25, sound_lag=None, leak_voice=_owner_voice, n=5,
+               report=None):
+    """Окно владельца, n фраз с копией в sys (по 2 с, пять — 10 с звука):
+    `lag` — по словам ASR, `sound_lag` — по звуку (по умолчанию тот же)."""
     lead_lag = lag if lag > mic_dedupe.NEIGHBOUR_MIN_LAG else LAG
     sound_lag = lag if sound_lag is None else sound_lag
-    if not with_env:
-        return _find(mic, sys, lag=lead_lag, leak_voice=leak_voice)
-    return _find(mic, sys, lag=lead_lag, mic_ev=[(30.0, 2.0, 5, -10.0)],
-                 sys_ev=[(30.0 + sound_lag, 2.0, 5 if same_env else 6, -12.0)], leak_voice=leak_voice)
+    mic, sys, me, se = [], [], [], []
+    for i, text in enumerate(LEAK_PHRASES[:n]):
+        start = 30.0 + i * 8.0
+        mic += _words(text, start, seg=f"m{i}", role="owner")
+        sys += _words(text, start + lag, seg=f"s{i}")
+        me.append((start, 2.0, 50 + i, -10.0))
+        se.append((start + sound_lag, 2.0, 50 + i if same_env else 70 + i, -12.0))
+    lm, ls, le_m, le_s = _lead(3, lead_lag)
+    env = _env(me + le_m, se + le_s) if with_env else None
+    drops, lags = mic_dedupe.find(mic + lm, sys + ls, owner_known=True, env=env, leak_voice=leak_voice,
+                                  leak_report=report)
+    return [d for d in drops if not str(d.words[0].seg).startswith(("L", "S"))], lags
+
+
+LEAKED = [("sys", "owner_leak", 5)] * 5
 
 
 def test_owner_leak_with_established_lag_and_same_envelope_is_dropped_from_sys():
     """Два ноутбука рядом: мой голос через ноутбук соседа приходит в мой sys."""
-    drops, _ = _leak_case()
-    assert _reasons(drops) == [("sys", "owner_leak", 5)]
+    report = {}
+    drops, _ = _leak_case(report=report)
+    assert _reasons(drops) == LEAKED
     assert drops[0].to_raw()["pair"]["track"] == "mic" and drops[0].env_corr > 0.9
+    assert report == {"candidates": 5, "seconds": pytest.approx(9.6, abs=0.05), "cos": 0.9, "gate": "voice_match"}
 
 
 def test_owner_leak_needs_envelope_evidence():
@@ -222,15 +238,34 @@ def test_owner_leak_needs_lag_of_at_least_a_tenth():
     (эхо с дрожанием начала слов) — не утечка, слова собеседника остаются."""
     drops, _ = _leak_case(lag=0.07)
     assert drops == []
-    assert _reasons(_leak_case(lag=0.1)[0]) == [("sys", "owner_leak", 5)]
+    assert _reasons(_leak_case(lag=0.1)[0]) == LEAKED
 
 
 def test_owner_leak_needs_the_owner_voice_in_sys():
-    """Лаг и огибающая говорят «копия», но голос копии в sys по образцу не
-    владельца (или его не посчитать) — это не утечка: оригинал собеседника
-    остаётся."""
-    assert _leak_case(leak_voice=lambda start, end: False)[0] == []
-    assert _leak_case(leak_voice=None)[0] == []
+    """Лаг и огибающая говорят «копия», но центроид голоса всех копий в sys по
+    образцу не владельца (или его не посчитать) — это не утечка: оригиналы
+    собеседника остаются все."""
+    report = {}
+    assert _leak_case(leak_voice=lambda spans: (False, 0.41), report=report)[0] == []
+    assert report["gate"] == "voice_mismatch" and report["cos"] == 0.41 and report["candidates"] == 5
+    report = {}
+    assert _leak_case(leak_voice=None, report=report)[0] == []
+    assert report["gate"] == "no_voice_check"
+
+
+def test_owner_leak_needs_enough_audio_to_judge_the_voice():
+    """Меньше LEAK_MIN_AUDIO_S кандидатов — голос не решить: ничего не удаляется,
+    голос и не спрашивается."""
+    asked = []
+    report = {}
+    drops, _ = _leak_case(n=2, leak_voice=lambda spans: asked.append(spans) or (True, 0.9), report=report)
+    assert drops == [] and asked == [] and report["gate"] == "too_little_audio"
+
+
+def test_owner_leak_voice_is_judged_once_on_all_candidates():
+    asked = []
+    drops, _ = _leak_case(leak_voice=lambda spans: asked.append(spans) or (True, 0.9))
+    assert len(asked) == 1 and len(asked[0]) == 5 and _reasons(drops) == LEAKED
 
 
 def test_echo_in_owner_window_with_jittered_word_lag_keeps_the_sys_original():
@@ -238,10 +273,11 @@ def test_echo_in_owner_window_with_jittered_word_lag_keeps_the_sys_original():
     без сдвига (огибающая та же при 0), а по словам ASR — на 0,1 с позже, и
     L* соседа (0,1) собран из таких же дрожащих пар. Даже если голос копии
     принят за владельца, оригинал собеседника в sys не удаляется."""
-    drops, _ = _leak_case(lag=0.1, sound_lag=0.0)
-    assert drops == []
+    report = {}
+    drops, _ = _leak_case(lag=0.1, sound_lag=0.0, report=report)
+    assert drops == [] and report["gate"] == "no_candidates"
     # По звуку сдвиг настоящий (0,25) — утечка.
-    assert _reasons(_leak_case(lag=0.1, sound_lag=0.25)[0]) == [("sys", "owner_leak", 5)]
+    assert _reasons(_leak_case(lag=0.1, sound_lag=0.25)[0]) == LEAKED
 
 
 def test_owner_window_with_echo_lag_keeps_both():
