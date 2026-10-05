@@ -496,3 +496,11 @@ def test_worker_argv_of_owner_voice(tmp_path):
     job = jobs.Job(id="o", kind=jobs.OWNER_VOICE, folder=str(tmp_path), options={"wav": "x.wav"})
     assert jobs.worker_argv(job)[-1] == "--wav=x.wav"
     assert jobs.OWNER_VOICE in jobs.KINDS
+
+
+def test_worker_argv_of_owner_voice_derive(tmp_path):
+    """Поиск по прошлым встречам: та же задача, флаг --derive и папка записей одним аргументом."""
+    job = jobs.Job(id="o", kind=jobs.OWNER_VOICE, folder=str(tmp_path / "voices"),
+                   options={"derive": True, "recordings": str(tmp_path / "-записи")})
+    assert jobs.worker_argv(job)[-4:] == [
+        "owner_voice", str(tmp_path / "voices"), "--derive", f"--recordings={tmp_path / '-записи'}"]

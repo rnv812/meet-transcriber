@@ -307,3 +307,36 @@ def test_owner_voice_crash_still_deletes_the_recording(tmp_path, monkeypatch, ca
     assert job_worker.main(["owner_voice", str(tmp_path), f"--wav={wav}"]) == 1
     assert "сломалось" in [x for x in _lines(capsys) if x["kind"] == "error"][-1]["text"]
     assert not wav.exists()
+
+
+def test_owner_voice_derive_runs_search_and_reports_status(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from meet import owner_derive
+
+    seen = {}
+
+    def run(root, voices, *, bus=None, **kw):
+        seen.update(root=root, voices=voices)
+        return SimpleNamespace(status="inconsistent", reason="Голос звучит по-разному.")
+
+    monkeypatch.setattr(owner_derive, "run", run)
+    monkeypatch.setattr(job_worker, "_apply_hf_token", lambda: None)
+    voices = tmp_path / "voices"
+    code = job_worker.main(["owner_voice", str(voices), "--derive", f"--recordings={tmp_path / 'rec'}"])
+    assert code == 0
+    assert seen == {"root": tmp_path / "rec", "voices": voices}
+    assert [x for x in _lines(capsys) if x["kind"] == "job.result"] == [
+        {"kind": "job.result", "path": "inconsistent"}]
+
+
+def test_owner_voice_derive_failure_is_an_error(tmp_path, monkeypatch, capsys):
+    from meet import owner_derive
+
+    def run(root, voices, **kw):
+        raise owner_derive.EmbedderError("модель голосов не загрузилась")
+
+    monkeypatch.setattr(owner_derive, "run", run)
+    monkeypatch.setattr(job_worker, "_apply_hf_token", lambda: None)
+    assert job_worker.main(["owner_voice", str(tmp_path), "--derive", f"--recordings={tmp_path}"]) == 1
+    assert "модель голосов" in [x for x in _lines(capsys) if x["kind"] == "error"][-1]["text"]

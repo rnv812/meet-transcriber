@@ -61,6 +61,8 @@ IMPROVE = "improve"
 # подпроцессом устройств, в отпечаток. Папка задачи — база голосов; WAV и
 # устройство — в options. Идёт своим слотом (резидент ставит её в
 # KeyedQueues), а не за часовой расшифровкой: человек ждёт её в мастере.
+# С `derive` в options — поиск голоса по прошлым встречам (meet.owner_derive):
+# тот же слот, поэтому запись образца и поиск не идут одновременно.
 OWNER_VOICE = "owner_voice"
 KINDS = (TRANSCRIBE, IMPORT, INSTALL_ENGINE, DOWNLOAD_MODEL, SUMMARY, ASK, MERGE, SPEAKER_SPLIT, REDIARIZE,
          ANALYZE, IMPROVE, OWNER_VOICE)
@@ -204,6 +206,10 @@ def worker_argv(job: Job) -> list[str]:
         return argv  # путь задачи — это repo_id модели
     if job.kind in (SUMMARY, MERGE, ANALYZE, IMPROVE):
         return argv
+    if job.kind == OWNER_VOICE and options.get("derive"):
+        # Поиск голоса по прошлым встречам (meet.owner_derive): папка записей
+        # одним аргументом через «=» — путь с ведущим дефисом не флаг.
+        return argv + ["--derive", f"--recordings={options.get('recordings') or ''}"]
     if job.kind == OWNER_VOICE:
         # Одним аргументом через «=»: имя устройства с ведущим дефисом не флаг.
         argv.append(f"--wav={options.get('wav') or ''}")

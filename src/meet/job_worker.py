@@ -79,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sensitivity", type=float)
     parser.add_argument("--wav")
     parser.add_argument("--device")
+    parser.add_argument("--derive", action="store_true")
+    parser.add_argument("--recordings")
     args = parser.parse_args(argv)
     from meet import tempdirs
 
@@ -101,6 +103,8 @@ def _dispatch(args) -> int:
         return _analyze(args.path)
     if args.kind == "improve":
         return _improve(args.path)
+    if args.kind == "owner_voice" and args.derive:
+        return _owner_derive(args.path, args.recordings or "")
     if args.kind == "owner_voice":
         return _owner_voice(args.path, args.wav or "", args.device or None)
 
@@ -345,6 +349,31 @@ def _owner_voice(voices_str: str, wav_str: str, device: str | None) -> int:
         except OSError:
             pass  # папку записи удалит резидент после задачи
     _emit({"kind": "job.result", "path": sample.id})
+    return 0
+
+
+def _owner_derive(voices_str: str, recordings_str: str) -> int:
+    """Поиск голоса владельца по прошлым встречам (meet.owner_derive). Итог —
+    предложение или причина словами — пишется рядом с образцами; результат
+    задачи — его статус. Ничего не применяется без «Да, это я»."""
+    from pathlib import Path
+
+    from meet import events, owner_derive
+
+    bus = events.EventBus()
+    bus.subscribe(lambda event: _emit(event.to_dict()))
+    try:
+        # Чекпойнт модели закрыт условиями HF: токен — в окружение загрузчика.
+        _apply_hf_token()
+        outcome = owner_derive.run(Path(recordings_str), Path(voices_str), bus=bus,
+                                   log=lambda text: bus.emit("log", text=text))
+    except ImportError as e:
+        _emit({"kind": "error", "text": f"{jobs_hint()}: {e}"})
+        return 2
+    except Exception as e:
+        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        return 1
+    _emit({"kind": "job.result", "path": outcome.status})
     return 0
 
 
