@@ -349,6 +349,15 @@ test("папки движка и моделей нет — не мастер, а
   expect(within(detail).getByRole("button", { name: "Вернуть на системный диск" })).toBeInTheDocument();
 });
 
+test("повреждённый файл выбора папки — тот же экран, не мастер", async () => {
+  engineState.current = missingEngine();
+  vi.mocked(shell.residentStatus).mockResolvedValue("storage-unreadable");
+  const { container } = render(<App />);
+  const detail = container.querySelector<HTMLElement>('[data-pane="detail"]')!;
+  await waitFor(() => expect(detail).toHaveTextContent("Вернуть на системный диск"));
+  expect(screen.queryByTestId("wizard")).toBeNull();
+});
+
 test("wizard_done — мастер сам не показывается при installed:false; «Установить» открывает его на движке", async () => {
   localStorage.setItem("meet.wizard_done", "1");
   engineState.current = missingEngine();

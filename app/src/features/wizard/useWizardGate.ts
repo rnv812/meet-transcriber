@@ -71,7 +71,7 @@ export function useWizardGate(status: ResidentStatus, endpoint: Endpoint | null)
 
   const residentMissing = status === "offline" && (shell === null || shell === "engine-missing");
   const engineMissing = engine?.installed === false && residentMissing;
-  const storageMissing = status === "offline" && shell === "storage-missing";
+  const storageMissing = status === "offline" && (shell === "storage-missing" || shell === "storage-unreadable");
 
   useEffect(() => {
     if (!engine || shell === undefined || wizard !== null) return;

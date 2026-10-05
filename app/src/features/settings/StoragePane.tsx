@@ -12,7 +12,8 @@ import { useCallback, useEffect, useState } from "react";
 import { type Endpoint, type StorageInfo, answerLeftovers, getStorage } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import {
-  type StorageCheck, type StorageStatus, inTauri, pickFolder, storageCancel, storageCheck, storageStatus,
+  type StorageCheck, type StorageStatus, inTauri, pickFolder, storageAbandon, storageCancel, storageCheck,
+  storageStatus,
 } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { ProgressBar } from "../../ui/ProgressBar";
@@ -68,12 +69,17 @@ function PlanBox({ plan, onStart, onCancel }: { plan: StorageCheck; onStart: () 
       {plan.busy && <p className="error">Перенести сейчас нельзя: {plan.busy}. Повторите, когда закончится.</p>}
       {plan.error && <p className="error">{plan.error}</p>}
       <p className="muted">
-        Движок установится в новую папку заново (пакеты берутся из кэша загрузок, недостающие — из сети),
-        модели скопируются и проверятся. Прежние удалятся, только когда служба записи заработает из новой
-        папки; при сбое всё останется на прежнем месте. Записи не переносятся — их папка задаётся в «Записи».
+        {plan.resume ? "Продолжение прерванного переноса: скопированное уже на месте. " : ""}
+        Движок установится в новую папку заново: его пакеты (около 3 ГБ для видеокарты) скачаются один раз в
+        эту папку — нужен интернет. Модели скопируются и проверятся. Прежние удалятся, только когда служба
+        записи заработает из новой папки; при сбое всё останется на прежнем месте, а скопированное — для
+        «Продолжить». Записи не переносятся — их папка задаётся в «Записи». Модели не из каталога (заданные
+        вручную) скачаются заново при первой расшифровке.
       </p>
       <span className="storage__actions">
-        <Button variant="primary" disabled={blocked} onClick={onStart}>Перенести</Button>
+        <Button variant="primary" disabled={blocked} onClick={onStart}>
+          {plan.resume ? "Продолжить перенос" : "Перенести"}
+        </Button>
         <Button onClick={onCancel}>Отмена</Button>
       </span>
     </div>
@@ -113,6 +119,13 @@ function Leftovers({ endpoint, info, onAnswered }: {
       </span>
     </div>
   );
+}
+
+/** Папка — системный диск по умолчанию (в том числе выбранная явно папка данных). */
+function onSystemDisk(info: StorageInfo, status: StorageStatus | null): boolean {
+  if (!info.custom || !info.root) return true;
+  const norm = (path: string) => path.replace(/[\\/]+$/, "").toLowerCase();
+  return status !== null && norm(info.root) === norm(status.default_home);
 }
 
 export function StoragePane({ endpoint }: { endpoint: Endpoint }) {
@@ -173,27 +186,54 @@ export function StoragePane({ endpoint }: { endpoint: Endpoint }) {
     void startMove(target);
   };
 
+  const abandon = async () => {
+    setError(null);
+    try {
+      await storageAbandon();
+    } catch (cause) {
+      setError(errorText(cause));
+    }
+    await load();
+  };
+
   if (!info) return error ? <p className="error">{error}</p> : null;
   const app = inTauri() && status !== null;
   const running = move.kind === "running";
+  const system = onSystemDisk(info, status);
+  const stopped = !running ? status?.interrupted ?? null : null;
   return (
     <>
       <Row label="Где хранить движок и модели" stack
         hint="Движок — несколько гигабайт, модели — ещё столько же: их можно держать на другом диске">
         <div className="storage">
           <span className="folder"><PathText path={info.home} /></span>
-          {info.custom ? (
+          {info.custom && !system ? (
             <span className="muted">Движок, модели Whisper, разделения на спикеров и GigaAM — в этой папке.</span>
+          ) : info.custom ? (
+            <span className="muted">Системный диск: движок и все модели Meet — в папке Meet.</span>
           ) : (
             <span className="muted">
               По умолчанию: движок и GigaAM — в папке Meet на системном диске, модели Whisper и разделения на
               спикеров — в общем кэше Hugging Face <PathText path={info.hf_cache} />.
             </span>
           )}
-          {app && !running && !plan && (
+          {stopped && (
+            <div className="storage__plan" role="group" aria-label="Прерванный перенос">
+              <span>Перенос в <PathText path={stopped} /> прерван — всё работает из прежней папки, скопированное
+                сохранено.</span>
+              <span className="storage__actions">
+                <Button variant="primary" onClick={() => { clearMove(); void startMove(stopped); }}>Продолжить</Button>
+                <Button onClick={abandon}>Отменить перенос</Button>
+              </span>
+            </div>
+          )}
+          {status?.discarding && !running && (
+            <span className="muted">Убираю недоделанное прошлой попытки — файлы были заняты, повторю позже.</span>
+          )}
+          {app && !running && !plan && !stopped && (
             <span className="storage__actions">
               <Button busy={checking} onClick={choose}>Выбрать папку…</Button>
-              {info.custom && status && (
+              {!system && status && (
                 <Button busy={checking} onClick={() => check(status.default_home)}>Вернуть на системный диск</Button>
               )}
             </span>

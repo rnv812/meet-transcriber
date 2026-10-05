@@ -7,11 +7,14 @@
 
 import { useEffect, useState } from "react";
 import { errorText } from "../../lib/format";
-import { type StorageStatus, storageReset, storageRetry, storageStatus } from "../../lib/shell";
+import {
+  type StorageStatus, pickFolder, storageRepoint, storageReset, storageRetry, storageStatus,
+} from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 
 export const STORAGE_MISSING_TITLE = "Папка движка и моделей недоступна";
+export const STORAGE_UNREADABLE_TITLE = "Файл выбора папки движка повреждён";
 
 export function StorageMissing() {
   const [status, setStatus] = useState<StorageStatus | null>(null);
@@ -36,20 +39,36 @@ export function StorageMissing() {
     }
   };
 
+  const repoint = async () => {
+    const folder = await pickFolder(status?.missing ?? null).catch(() => null);
+    if (folder) await run(async () => { await storageRepoint(folder); setRetried(true); });
+  };
+
   const where = status?.missing ?? status?.root ?? "Выбранная папка";
+  const unreadable = Boolean(status?.unreadable);
   return (
     <div className="empty storage-missing">
-      <div className="empty__title">{STORAGE_MISSING_TITLE}</div>
-      <div>
-        {where} не найдена — внешний диск отключён или папку переименовали. Без неё служба записи не
-        запускается. Подключите диск и нажмите «Повторить».
-      </div>
+      <div className="empty__title">{unreadable ? STORAGE_UNREADABLE_TITLE : STORAGE_MISSING_TITLE}</div>
+      {unreadable ? (
+        <div>
+          Не удалось прочитать, где хранятся движок и модели (файл storage.json повреждён — например, после
+          внезапного выключения). Укажите папку, куда их переносили, или верните на системный диск.
+        </div>
+      ) : (
+        <div>
+          {where} не найдена — внешний диск отключён или папку переименовали. Без неё служба записи не
+          запускается. Подключите диск и нажмите «Повторить» — или укажите папку, если у диска сменилась буква.
+        </div>
+      )}
       {retried && !error && <div className="muted">Проверяю папку…</div>}
       {error && <p className="error">{error}</p>}
       <span className="storage__actions">
-        <Button variant="primary" busy={busy} onClick={() => run(async () => { await storageRetry(); setRetried(true); })}>
-          Повторить
-        </Button>
+        {!unreadable && (
+          <Button variant="primary" busy={busy} onClick={() => run(async () => { await storageRetry(); setRetried(true); })}>
+            Повторить
+          </Button>
+        )}
+        <Button disabled={busy} onClick={() => void repoint()}>Указать папку…</Button>
         <Button disabled={busy} onClick={() => setConfirming(true)}>Вернуть на системный диск</Button>
       </span>
       {confirming && (

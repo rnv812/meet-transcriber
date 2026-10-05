@@ -165,9 +165,15 @@ export type StorageStatus = {
   default_home: string;
   /** Выбранной папки нет (внешний диск отключён). */
   missing: string | null;
+  /** Файл выбора папки не прочитан (повреждён). */
+  unreadable?: boolean;
   moving: boolean;
   /** «Отменить» ещё работает (до переключения на новую папку). */
   cancellable: boolean;
+  /** Перенос в эту папку прерван: «Продолжить» / «Отменить». */
+  interrupted?: string | null;
+  /** Недоделанное ещё удаляется (файлы были заняты). */
+  discarding?: boolean;
 };
 /** `storage_check`: куда на самом деле, сколько места и можно ли сейчас. */
 export type StorageCheck = {
@@ -178,6 +184,8 @@ export type StorageCheck = {
   models_gb: number;
   busy: string | null;
   error: string | null;
+  /** Продолжение прерванного переноса в ту же папку. */
+  resume?: boolean;
 };
 export type StoragePhase = "engine" | "models" | "waiting" | "switching" | "cleanup" | "rollback";
 /** Событие `storage-progress`: шаг переноса, текст и байты (у копирования моделей). */
@@ -191,6 +199,10 @@ export const storageCheck = (target: string) => invoke<StorageCheck>("storage_ch
 /** Перенести движок и модели (минуты). Ответ — папка, куда перенесено. */
 export const storageMove = (target: string) => invoke<string>("storage_move", { target });
 export const storageCancel = () => invoke<void>("storage_cancel");
+/** «Отменить» прерванный перенос: новая папка очищается. */
+export const storageAbandon = () => invoke<void>("storage_abandon");
+/** Папки нет или выбор не прочитан: указать папку, куда переносили движок. */
+export const storageRepoint = (folder: string) => invoke<void>("storage_repoint", { folder });
 /** Выбранной папки нет: вернуть движок и модели на системный диск. */
 export const storageReset = () => invoke<void>("storage_reset");
 /** Диск подключили: проверить папку и запустить службу снова. */

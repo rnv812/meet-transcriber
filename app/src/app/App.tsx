@@ -20,6 +20,7 @@ import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Wizard } from "../features/wizard/Wizard";
 import { useWizardGate } from "../features/wizard/useWizardGate";
 import { STORAGE_MISSING_TITLE, StorageMissing } from "../features/settings/StorageMissing";
+import { StorageNotices } from "../features/settings/StorageNotices";
 import { Nav, type Section } from "./Nav";
 import { RecordingBadge } from "./RecordingBadge";
 import { ShellResize } from "./ShellResize";
@@ -228,6 +229,10 @@ export function App() {
         </div>
       </div>
       <ShellResize list={section === "recordings"} />
+      {/* Итог переноса движка и моделей, остатки в общем кэше, прерванный перенос — где бы ни был человек. */}
+      {resident.endpoint && resident.status === "online" && (
+        <StorageNotices endpoint={resident.endpoint} onOpenEngine={() => openSettings("engine")} />
+      )}
       {leaving && (
         <LeaveSettings guard={settingsGuard.current} onStay={() => { leaving.stay?.(); setLeaving(null); }}
           onLeave={() => { const { go } = leaving; setLeaving(null); go(); }} />

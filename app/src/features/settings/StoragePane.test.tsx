@@ -18,6 +18,7 @@ vi.mock("../../lib/shell", async (orig) => ({
   storageCheck: vi.fn(),
   storageMove: vi.fn(),
   storageCancel: vi.fn(async () => {}),
+  storageAbandon: vi.fn(async () => {}),
   onStorageProgress: vi.fn(),
   onEngineProgress: vi.fn(),
 }));
@@ -45,6 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   resetMoveForTests();
   progress = null;
+  vi.mocked(shell.inTauri).mockReturnValue(true);
   vi.mocked(api.getStorage).mockResolvedValue(info());
   vi.mocked(shell.storageStatus).mockResolvedValue(status());
   vi.mocked(shell.onStorageProgress).mockImplementation(async (cb) => { progress = cb; return () => {}; });
@@ -171,4 +173,34 @@ test("вне приложения переносить нельзя — толь
   render(<StoragePane endpoint={ep} />);
   expect(await screen.findByText("C:\\Users\\u\\AppData\\Local\\meet")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Выбрать папку…" })).toBeNull();
+});
+
+
+test("прерванный перенос в настройках — «Продолжить» и «Отменить перенос»", async () => {
+  vi.mocked(shell.storageStatus).mockResolvedValue(status({ interrupted: "E:\\Meet" }));
+  vi.mocked(shell.storageMove).mockReturnValue(new Promise(() => {}));
+  render(<StoragePane endpoint={ep} />);
+  expect(await screen.findByText(/прерван — всё работает из прежней папки/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Выбрать папку…" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Отменить перенос" }));
+  expect(shell.storageAbandon).toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Продолжить" }));
+  expect(shell.storageMove).toHaveBeenCalledWith("E:\\Meet");
+});
+
+test("явно выбранная папка данных — это системный диск, без «Вернуть»", async () => {
+  vi.mocked(api.getStorage).mockResolvedValue(info({ root: "C:\\Users\\u\\AppData\\Local\\meet\\",
+    custom: true, hf_cache: "C:\\Users\\u\\AppData\\Local\\meet\\models\\hf" }));
+  render(<StoragePane endpoint={ep} />);
+  expect(await screen.findByText(/Системный диск: движок и все модели Meet/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Вернуть на системный диск" })).toBeNull();
+});
+
+test("продолжение — своя надпись и слова о загрузке пакетов", async () => {
+  vi.mocked(shell.pickFolder).mockResolvedValue("E:\\Meet");
+  vi.mocked(shell.storageCheck).mockResolvedValue(plan({ resume: true }));
+  render(<StoragePane endpoint={ep} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Выбрать папку…" }));
+  expect(await screen.findByRole("button", { name: "Продолжить перенос" })).toBeEnabled();
+  expect(screen.getByText(/скачаются один раз в эту папку — нужен интернет/)).toBeInTheDocument();
 });

@@ -8,6 +8,8 @@ vi.mock("../../lib/shell", async (orig) => ({
   storageStatus: vi.fn(),
   storageReset: vi.fn(async () => {}),
   storageRetry: vi.fn(async () => {}),
+  storageRepoint: vi.fn(async () => {}),
+  pickFolder: vi.fn(),
 }));
 
 beforeEach(() => {
@@ -41,4 +43,24 @@ test("сбой — текст ошибки", async () => {
   await userEvent.click(await screen.findByRole("button", { name: "Вернуть на системный диск" }));
   await userEvent.click(screen.getByRole("button", { name: "Вернуть" }));
   expect(await screen.findByText(/доступ запрещён/)).toBeInTheDocument();
+});
+
+
+test("буква диска сменилась — «Указать папку» с движком", async () => {
+  vi.mocked(shell.pickFolder).mockResolvedValue("F:\\Meet");
+  render(<StorageMissing />);
+  await userEvent.click(await screen.findByRole("button", { name: "Указать папку…" }));
+  await waitFor(() => expect(shell.storageRepoint).toHaveBeenCalledWith("F:\\Meet"));
+});
+
+test("файл выбора повреждён — не «по умолчанию», а выбор человека", async () => {
+  vi.mocked(shell.storageStatus).mockResolvedValue({
+    root: null, home: "C:\\data", default_home: "C:\\data", missing: null, unreadable: true,
+    moving: false, cancellable: false,
+  });
+  render(<StorageMissing />);
+  expect(await screen.findByText("Файл выбора папки движка повреждён")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Повторить" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Указать папку…" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Вернуть на системный диск" })).toBeInTheDocument();
 });
