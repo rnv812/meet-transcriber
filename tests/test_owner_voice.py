@@ -148,7 +148,79 @@ def test_samples_of_other_model_are_ignored(tmp_path):
 
 def test_write_is_atomic_no_tmp_left(tmp_path):
     owner_voice.add(A, source="enroll", seconds=20, voices=tmp_path)
-    assert [f.name for f in owner_voice.path(tmp_path).parent.iterdir()] == ["owner.json"]
+    names = {f.name for f in owner_voice.path(tmp_path).parent.iterdir()}
+    assert names == {"owner.json", owner_voice.LOCK_NAME}
+
+
+def test_replace_is_retried_while_another_process_reads(tmp_path, monkeypatch):
+    """Windows: файл, открытый другим процессом (задача читает образец), на миг
+    нельзя заменить — PermissionError; запись повторяется, а не падает."""
+    import os
+
+    real = os.replace
+    calls = []
+
+    def flaky(src, dst):
+        calls.append(dst)
+        if len(calls) == 1:
+            raise PermissionError("занято")
+        return real(src, dst)
+
+    monkeypatch.setattr(os, "replace", flaky)
+    s = owner_voice.add(A, source="enroll", seconds=20, voices=tmp_path)
+    assert len(calls) == 2 and [x.id for x in owner_voice.load(tmp_path)] == [s.id]
+
+
+def test_read_modify_write_holds_a_cross_process_file_lock(tmp_path, monkeypatch):
+    """Пока идёт правка, файл-замок рядом с образцом занят: второй процесс
+    (другой дескриптор) его не возьмёт."""
+    from meet import library
+
+    seen = []
+    real_read = owner_voice._read
+
+    def probe(p):
+        with open(p.parent / owner_voice.LOCK_NAME, "a+b") as other:
+            try:
+                library._lock_file(other)
+            except OSError:
+                seen.append("занят")
+            else:
+                library._unlock_file(other)
+                seen.append("свободен")
+        return real_read(p)
+
+    monkeypatch.setattr(owner_voice, "_read", probe)
+    owner_voice.add(A, source="enroll", seconds=20, voices=tmp_path)
+    assert seen == ["занят"]
+
+
+def test_enroll_sample_survives_many_meeting_samples(tmp_path):
+    """Восемь «Это я» не вытесняют записанный в мастере образец."""
+    enroll = owner_voice.add(A, source="enroll", seconds=25, device="USB", voices=tmp_path)
+    for i in range(owner_voice.MAX_SAMPLES + 1):
+        owner_voice.add(B, source="meeting", seconds=60, recording=f"r{i}", voices=tmp_path)
+    got = owner_voice.load(tmp_path)
+    assert len(got) == owner_voice.MAX_SAMPLES and got[0].id == enroll.id
+    assert [s.recording for s in got[1:]] == [f"r{i}" for i in range(2, owner_voice.MAX_SAMPLES + 1)]
+
+
+def test_file_of_other_model_drops_its_suggestion_on_rewrite(tmp_path):
+    p = owner_voice.path(tmp_path)
+    p.parent.mkdir(parents=True)
+    p.write_text(json.dumps({"version": 1, "model": "другая/модель", "samples": [],
+                             "suggestion": {"embedding": [1.0] * DIM}}), encoding="utf-8")
+    owner_voice.add(A, source="enroll", seconds=20, voices=tmp_path)
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    assert raw["model"] == owner_voice.DIARIZATION_MODEL and raw["suggestion"] is None
+
+
+def test_owner_folder_is_invisible_to_people_and_voice_snapshot(tmp_path):
+    from meet import people, speakers
+
+    owner_voice.add(A, source="enroll", seconds=20, voices=tmp_path)
+    assert people.listing(tmp_path, tmp_path / "записи") == []
+    assert speakers._voice_snapshot(tmp_path) == {}
 
 
 def test_score_is_max_cos(tmp_path):

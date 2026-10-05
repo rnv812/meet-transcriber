@@ -19,8 +19,9 @@
 from __future__ import annotations
 
 import json
-import os
+import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date as _date
 from pathlib import Path
@@ -33,8 +34,13 @@ SUBDIR = "_owner"
 FILE_NAME = "owner.json"
 VERSION = 1
 SOURCES = ("enroll", "meeting", "auto")
-# Образцов не больше: по одному на микрофон и несколько встреч; старые уходят первыми.
+# Образцов не больше: по одному на микрофон и несколько встреч; старые уходят
+# первыми, записанный в мастере (enroll) — последним.
 MAX_SAMPLES = 8
+# Замок чтения-правки-записи между процессами: образец пишут и резидент («Это
+# я»), и задача-подпроцесс (запись образца, поиск по прошлым встречам).
+LOCK_NAME = ".owner.lock"
+LOCK_WAIT_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -121,8 +127,52 @@ def load(voices: Path | None = None) -> list[OwnerSample]:
     return _samples_of(_read(path(voices)))
 
 
+@contextmanager
+def _locked(p: Path):
+    """Чтение-правка-запись файла владельца: замок потоков резидента
+    (people.VOICE_FILE_LOCK) и файл-замок рядом с образцом — между
+    процессами. Не взяли за LOCK_WAIT_S (или замок недоступен) — правим без
+    него, как meta.json (library._meta_file_lock): потерять образец хуже гонки."""
+    from meet import library
+    from meet.people import VOICE_FILE_LOCK
+
+    with VOICE_FILE_LOCK:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            handle = open(p.parent / LOCK_NAME, "a+b")
+        except OSError:
+            yield
+            return
+        locked = False
+        try:
+            deadline = time.monotonic() + LOCK_WAIT_S
+            while True:
+                try:
+                    library._lock_file(handle)
+                    locked = True
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.01)
+            yield
+        finally:
+            if locked:
+                try:
+                    library._unlock_file(handle)
+                except OSError:
+                    pass
+            handle.close()
+
+
 def _write(p: Path, data: dict, samples: list[OwnerSample]) -> None:
-    """Атомарно (tmp + replace); прочие ключи файла (suggestion) сохраняются."""
+    """Атомарно (tmp + замена с повтором: файл может читать другой процесс);
+    прочие ключи файла сохраняются. Файл другой модели: его suggestion — тоже
+    векторы той модели, они уходят вместе с образцами."""
+    from meet import library
+
+    if data.get("model", DIARIZATION_MODEL) != DIARIZATION_MODEL:
+        data = {k: v for k, v in data.items() if k != "suggestion"}
     p.parent.mkdir(parents=True, exist_ok=True)
     out = {**data, "version": VERSION, "model": DIARIZATION_MODEL,
            "samples": [s.to_raw() for s in samples]}
@@ -130,9 +180,19 @@ def _write(p: Path, data: dict, samples: list[OwnerSample]) -> None:
     tmp = p.with_name(f".{p.name}.{uuid.uuid4().hex}.tmp")
     try:
         tmp.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, p)
+        library._replace(tmp, p)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def _evict(samples: list[OwnerSample]) -> list[OwnerSample]:
+    """Не больше MAX_SAMPLES: первыми уходят старые образцы встреч и
+    авто-образец; записанный в мастере (проверенный по качеству) — последним."""
+    out = list(samples)
+    while len(out) > MAX_SAMPLES:
+        spare = [s for s in out if s.source != "enroll"] or out
+        out.remove(spare[0])
+    return out
 
 
 def _replaces(old: OwnerSample, new: OwnerSample) -> bool:
@@ -162,22 +222,20 @@ def add(embedding, *, source: str, seconds: float, device: str | None = None,
                          date=date or _date.today().isoformat(), seconds=round(float(seconds), 2),
                          device=device, recording=recording,
                          quality=None if quality is None else round(float(quality), 4))
-    from meet.people import VOICE_FILE_LOCK
-
     p = path(voices)
-    with VOICE_FILE_LOCK:
+    with _locked(p):
         data = _read(p)
         kept = [s for s in _samples_of(data) if not _replaces(s, sample)]
-        _write(p, data, (kept + [sample])[-MAX_SAMPLES:])
+        _write(p, data, _evict(kept + [sample]))
     return sample
 
 
 def remove(sample_id: str, voices: Path | None = None) -> bool:
     """Убрать образец по id. → был ли такой."""
-    from meet.people import VOICE_FILE_LOCK
-
     p = path(voices)
-    with VOICE_FILE_LOCK:
+    if not p.exists():
+        return False
+    with _locked(p):
         data = _read(p)
         samples = _samples_of(data)
         left = [s for s in samples if s.id != sample_id]
