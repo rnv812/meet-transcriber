@@ -86,6 +86,8 @@ export type Job = {
   phase?: string | null;
   slow?: boolean | null;
   eta_s?: number | null;
+  /** Предупреждение на всю задачу, например «Распознаётся на процессоре: видеокарта NVIDIA не найдена». */
+  warning?: string | null;
   result: string | null;
   error: string | null;
   /** Секунды эпохи; старые резиденты их не присылали. */
@@ -113,7 +115,7 @@ export type Recording = {
   transcript_at?: number | null;
   /** Спикеры не разделены: "skipped_no_token" — нет токена HF, "skipped_no_access" — HF отказал. */
   diarization?: string | null;
-  /** Распознано не выбранным движком: "not_russian" — запись не на русском, вместо GigaAM работал Whisper; "cuda_failed" — видеокарта без библиотек CUDA, распознал процессор. */
+  /** Распознано не выбранным движком: "not_russian" — запись не на русском, вместо GigaAM работал Whisper; "cuda_failed" — видеокарта без библиотек CUDA, распознал процессор; "no_gpu" / "no_cuda_libs" — движок с видеокартой, а «Авто» взял процессор: карты нет / нет библиотек CUDA. */
   asr_note?: string | null;
   /** macOS: звук собеседников не записан ("missing") или записан не с начала ("partial"). */
   system_audio?: "missing" | "partial" | null;

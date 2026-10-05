@@ -24,3 +24,8 @@ test("пометка о распознавании: видеокарта без 
   expect(asrNoteText("неизвестно")).toBeNull();
   expect(asrNoteText(null)).toBeNull();
 });
+
+test("пометка о распознавании: движок с видеокартой, а распознал процессор — с причиной", () => {
+  expect(asrNoteText("no_gpu")).toBe("Распознано на процессоре: видеокарта NVIDIA не найдена");
+  expect(asrNoteText("no_cuda_libs")).toBe("Распознано на процессоре: не найдены библиотеки CUDA");
+});

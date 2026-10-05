@@ -436,6 +436,8 @@ export function RecordingCard({
         <div className="card__progress">
           {status.job ? <JobProgress job={status.job} />
             : <ProgressBar value={null} label={status.label} />}
+          {/* Например, распознаёт процессор вместо видеокарты — и почему. */}
+          {status.job?.warning && <p className="muted card__note" role="note">{status.job.warning}</p>}
           {cancelButton && <div>{cancelButton}</div>}
         </div>
       );

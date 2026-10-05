@@ -427,6 +427,15 @@ test.each([
   await waitFor(() => expect(vi.mocked(api.getRecording).mock.calls.length).toBe(loads + 1));
 });
 
+test("идёт на процессоре вместо видеокарты — причина под полоской хода", async () => {
+  load({ has_transcript: false }, null);
+  const warning = "Распознаётся на процессоре: видеокарта NVIDIA не найдена (не подключена или выключена)";
+  const { rerender } = render(<RecordingCard id="r1" endpoint={ep} jobs={[job({ warning })]} />);
+  expect(await screen.findByText(warning)).toBeInTheDocument();
+  rerender(<RecordingCard id="r1" endpoint={ep} jobs={[job()]} />);
+  expect(screen.queryByText(warning)).toBeNull();
+});
+
 test("прерванный импорт (задачи нет): ошибка, а не вечное «Копирование…»", async () => {
   load({ has_transcript: false, source: "import", tracks: {} }, null);
   render(<RecordingCard id="r1" endpoint={ep} jobs={[]} />);
