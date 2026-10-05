@@ -15,7 +15,7 @@ import { errorText } from "../../lib/format";
 import { type StorageStatus, storageAbandon, storageStatus } from "../../lib/shell";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { gb } from "../wizard/gate";
-import { startMove, useMove } from "./storageMove";
+import { bumpStorage, dismissNotice, startMove, useMove, useNotices, useStorageTick } from "./storageMove";
 
 const GB = 1024 ** 3;
 
@@ -28,7 +28,9 @@ export function StorageNotices({ endpoint, onOpenEngine }: {
   const [info, setInfo] = useState<StorageInfo | null>(null);
   const [status, setStatus] = useState<StorageStatus | null>(null);
   /** «Позже»: в этом окне больше не спрашивать. */
-  const [later, setLater] = useState<{ leftovers?: boolean; interrupted?: string; done?: string }>({});
+  /** «Позже», «Закрыть» — в состоянии окна (переживают перезапуск службы). */
+  const later = useNotices();
+  const tick = useStorageTick();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,7 +43,7 @@ export function StorageNotices({ endpoint, onOpenEngine }: {
     setStatus(nextStatus);
   }, [endpoint]);
 
-  useEffect(() => { void load(); }, [load, move.kind]);
+  useEffect(() => { void load(); }, [load, move.kind, tick]);
 
   const act = async (action: () => Promise<unknown>) => {
     setBusy(true);
@@ -49,6 +51,7 @@ export function StorageNotices({ endpoint, onOpenEngine }: {
     try {
       await action();
       await load();
+      bumpStorage();
     } catch (cause) {
       setError(errorText(cause));
     } finally {
@@ -80,16 +83,16 @@ export function StorageNotices({ endpoint, onOpenEngine }: {
         danger={false}
         cancelLabel="Позже"
         alt={{ label: "Оставить", onClick: () => {
-          setLater((cur) => ({ ...cur, done: donePath ?? cur.done }));
+          if (donePath) dismissNotice({ done: donePath });
           return act(() => answerLeftovers(endpoint, false));
         } }}
         busy={busy}
         onConfirm={() => act(async () => {
-          setLater((cur) => ({ ...cur, done: donePath ?? cur.done }));
+          if (donePath) dismissNotice({ done: donePath });
           const result = await answerLeftovers(endpoint, true);
           if (!result.ok) throw new Error(result.error ?? "Не удалось удалить");
         })}
-        onCancel={() => setLater((cur) => ({ ...cur, leftovers: true, done: donePath ?? cur.done }))}
+        onCancel={() => dismissNotice({ leftovers: true, ...(donePath ? { done: donePath } : {}) })}
       />
     );
   }
@@ -102,8 +105,8 @@ export function StorageNotices({ endpoint, onOpenEngine }: {
         confirmLabel="Показать в настройках"
         danger={false}
         cancelLabel="Закрыть"
-        onConfirm={() => { setLater((cur) => ({ ...cur, done: donePath })); onOpenEngine(); }}
-        onCancel={() => setLater((cur) => ({ ...cur, done: donePath }))}
+        onConfirm={() => { dismissNotice({ done: donePath }); onOpenEngine(); }}
+        onCancel={() => dismissNotice({ done: donePath })}
       />
     );
   }
@@ -127,11 +130,11 @@ export function StorageNotices({ endpoint, onOpenEngine }: {
         alt={{ label: "Отменить перенос", onClick: () => act(() => storageAbandon()) }}
         busy={busy}
         onConfirm={() => {
-          setLater((cur) => ({ ...cur, interrupted: stopped }));
+          dismissNotice({ interrupted: stopped });
           onOpenEngine();
           void startMove(stopped);
         }}
-        onCancel={() => setLater((cur) => ({ ...cur, interrupted: stopped }))}
+        onCancel={() => dismissNotice({ interrupted: stopped })}
       />
     );
   }

@@ -19,7 +19,7 @@ import { Button } from "../../ui/Button";
 import { ProgressBar } from "../../ui/ProgressBar";
 import { gb } from "../wizard/gate";
 import { PathText, Row } from "./Section";
-import { attachMove, clearMove, moveState, startMove, useMove } from "./storageMove";
+import { attachMove, bumpStorage, clearMove, moveState, startMove, useMove, useStorageTick } from "./storageMove";
 
 const GB = 1024 ** 3;
 
@@ -98,6 +98,7 @@ function Leftovers({ endpoint, info, onAnswered }: {
       const result = await answerLeftovers(endpoint, remove);
       if (!result.ok) setError(result.error ?? "Не удалось удалить");
       onAnswered();
+      bumpStorage();
     } catch (cause) {
       setError(errorText(cause));
     }
@@ -135,6 +136,7 @@ export function StoragePane({ endpoint }: { endpoint: Endpoint }) {
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const move = useMove();
+  const tick = useStorageTick();
 
   const load = useCallback(async () => {
     const [nextInfo, nextStatus] = await Promise.all([
@@ -150,7 +152,8 @@ export function StoragePane({ endpoint }: { endpoint: Endpoint }) {
     if (nextStatus?.moving && moveState().kind === "idle") void attachMove().then(() => void load());
   }, [endpoint]);
 
-  useEffect(() => { void load(); }, [load]);
+  // И когда сведения поменялись в другом месте (ответ об остатках в окне).
+  useEffect(() => { void load(); }, [load, tick]);
   // Итог переноса — перечитать, где теперь всё (и вопрос об остатках).
   useEffect(() => { if (move.kind === "done" || move.kind === "failed") void load(); }, [move.kind, load]);
   // «Отменить» доступно до переключения — оболочка знает, когда именно.

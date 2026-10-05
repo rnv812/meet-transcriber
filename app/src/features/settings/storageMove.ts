@@ -79,6 +79,33 @@ export function clearMove(): void {
   if (state.kind !== "running") set({ kind: "idle" });
 }
 
+/**
+ * Что человек уже отложил или видел в вопросах переноса (`StorageNotices`).
+ * Живёт с окном, а не с компонентом: тот монтируется, только пока служба
+ * записи на связи, и после любого её перезапуска спросил бы снова.
+ */
+export type Notices = { leftovers?: boolean; interrupted?: string; done?: string };
+let notices: Notices = {};
+
+export const noticesState = (): Notices => notices;
+
+export function dismissNotice(change: Notices): void {
+  notices = { ...notices, ...change };
+  listeners.forEach((listener) => listener());
+}
+
+/** Сведения о хранении поменялись (ответ об остатках, отмена): перечитать везде. */
+let storageTick = 0;
+
+export function bumpStorage(): void {
+  storageTick += 1;
+  listeners.forEach((listener) => listener());
+}
+
+export const useStorageTick = (): number => useSyncExternalStore(subscribe, () => storageTick);
+export const useNotices = (): Notices => useSyncExternalStore(subscribe, noticesState);
+
 export function resetMoveForTests(): void {
+  notices = {};
   set({ kind: "idle" });
 }

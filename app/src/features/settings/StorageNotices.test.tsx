@@ -107,3 +107,32 @@ test("ничего нет — ничего не показывает", async () 
   expect(container).toBeEmptyDOMElement();
   expect(screen.queryByRole("alertdialog")).toBeNull();
 });
+
+test("«Закрыть» и «Позже» переживают перезапуск службы (новое монтирование)", async () => {
+  vi.mocked(shell.storageMove).mockResolvedValue("E:\Meet");
+  const first = render(<StorageNotices endpoint={ep} onOpenEngine={() => {}} />);
+  await act(async () => { await startMove("E:\Meet"); });
+  await userEvent.click(await screen.findByRole("button", { name: "Закрыть" }));
+  first.unmount();
+  vi.mocked(api.getStorage).mockResolvedValue(info({ leftovers }));
+  const second = render(<StorageNotices endpoint={ep} onOpenEngine={() => {}} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Позже" }));
+  second.unmount();
+  const before = vi.mocked(api.getStorage).mock.calls.length;
+  render(<StorageNotices endpoint={ep} onOpenEngine={() => {}} />);
+  await waitFor(() => expect(vi.mocked(api.getStorage).mock.calls.length).toBeGreaterThan(before));
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+});
+
+test("ответ в окне обновляет блок в настройках", async () => {
+  const { StoragePane } = await import("./StoragePane");
+  vi.mocked(api.getStorage).mockResolvedValue(info({ leftovers }));
+  vi.mocked(api.answerLeftovers).mockResolvedValue({ ok: true, removed: ["a/b"] });
+  render(<><StoragePane endpoint={ep} /><StorageNotices endpoint={ep} onOpenEngine={() => {}} /></>);
+  const dialog = await screen.findByRole("alertdialog", { name: "Модели Meet в общем кэше" });
+  await waitFor(() => expect(screen.getAllByText(/Модели Meet остались и в общем кэше/).length).toBe(2));
+  vi.mocked(api.getStorage).mockResolvedValue(info());
+  await userEvent.click(within(dialog).getByRole("button", { name: "Удалить из общего кэша" }));
+  await waitFor(() => expect(screen.queryByText(/Модели Meet остались/)).toBeNull());
+});
