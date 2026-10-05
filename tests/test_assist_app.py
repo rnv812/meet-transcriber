@@ -99,7 +99,8 @@ def _run_assist_capturing_matcher(tmp_path, monkeypatch, **kwargs):
 
     from meet.assist.app import run_assist
 
-    run_assist(out_root=str(tmp_path), cfg=Settings.from_raw({}), **kwargs)
+    cfg = kwargs.pop("cfg", None) or Settings.from_raw({})
+    run_assist(out_root=str(tmp_path), cfg=cfg, **kwargs)
     _run_assist_capturing_matcher.kw = captured["kw"]
     return captured["voice_matcher"]
 
@@ -119,6 +120,17 @@ def test_run_assist_relabels_voices_through_the_bus(tmp_path, monkeypatch):
     relabel = kw["on_relabel"]
     assert isinstance(relabel.__self__, TranscriptBus) and relabel.__func__ is TranscriptBus.relabel
     assert kw["on_entry"].__self__ is relabel.__self__  # та же шина, что у строк
+    assert kw["on_hide"].__self__ is relabel.__self__ and kw["on_hide"].__func__ is TranscriptBus.hide
+    assert kw["live_dedupe"] is False  # дубли в живой ленте — пока по флагу, по умолчанию выкл.
+
+
+def test_run_assist_live_dedupe_follows_both_flags(tmp_path, monkeypatch):
+    on = Settings.from_raw({"asr": {"live_mic_dedupe": True}})
+    _run_assist_capturing_matcher(tmp_path, monkeypatch, cfg=on)
+    assert _run_assist_capturing_matcher.kw["live_dedupe"] is True
+    off = Settings.from_raw({"asr": {"live_mic_dedupe": True, "mic_dedupe": False}})
+    _run_assist_capturing_matcher(tmp_path, monkeypatch, cfg=off)
+    assert _run_assist_capturing_matcher.kw["live_dedupe"] is False
 
 
 def test_run_assist_no_voices_disables_matcher(tmp_path, monkeypatch):

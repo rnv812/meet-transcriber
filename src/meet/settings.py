@@ -727,6 +727,11 @@ class Asr:
     # собеседников (meet.mic_dedupe), остаются один раз.
     mic_speakers: bool = True
     mic_dedupe: bool = True
+    # Дубли соседа и в живой ленте (при `mic_dedupe` и образце владельца):
+    # реплики людей рядом ждут, пока распознается звук собеседников (до
+    # meet.live.HOLD_MAX_S), и копии не показываются. Пока выключено: на
+    # живом звуке не проверено (калибровка T0 — по расшифровке).
+    live_mic_dedupe: bool = False
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Asr":
@@ -749,6 +754,7 @@ class Asr:
             replacements=tuple(clean_rules(raw.get("replacements"))),
             mic_speakers=as_flag(raw.get("mic_speakers"), True),
             mic_dedupe=as_flag(raw.get("mic_dedupe"), True),
+            live_mic_dedupe=as_flag(raw.get("live_mic_dedupe"), False),
         )
 
     def backend_for(self, device: str) -> str:
@@ -771,6 +777,7 @@ class Asr:
             "replacements": [dict(r) for r in self.replacements],
             "mic_speakers": self.mic_speakers,
             "mic_dedupe": self.mic_dedupe,
+            "live_mic_dedupe": self.live_mic_dedupe,
         }
 
 

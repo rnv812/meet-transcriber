@@ -338,6 +338,17 @@ def test_mic_speakers_and_dedupe_flags_default_on_and_roundtrip(tmp_path):
     assert again.mic_dedupe is False and again.mic_speakers is True
 
 
+def test_live_mic_dedupe_defaults_off_and_roundtrips(tmp_path):
+    """Дубли соседа в живой ленте — пока выключены по умолчанию (на живом
+    звуке не проверены), включаются ключом в конфиге."""
+    cfg = settings.Settings.from_raw({"version": settings.SCHEMA_VERSION})
+    assert cfg.asr.live_mic_dedupe is False
+    assert cfg.to_raw()["asr"]["live_mic_dedupe"] is False
+    f = tmp_path / "config.json"
+    assert settings.patch({"asr": {"live_mic_dedupe": True}}, f).asr.live_mic_dedupe is True
+    assert settings.load(f).asr.live_mic_dedupe is True
+
+
 def test_auto_transcribe_default_for_new_user():
     assert settings.Settings.from_raw({}).recording.auto_transcribe is True
 

@@ -1494,3 +1494,120 @@ def test_rename_survives_unwritable_transcript(tmp_path, monkeypatch):
     engine.process_window()
     assert renames == ["sys:0"]  # потребители всё равно узнали
     assert any("лента не переписана" in line for line in lines)
+
+
+# --- дубли соседа в живой ленте (С2 live, §4.5) ------------------------------------
+
+
+class WordsTranscriber:
+    """Окна по очереди; сегменты — со словами (как у GigaAM), время абсолютное."""
+
+    def __init__(self, scripted):
+        self.scripted = list(scripted)
+
+    def transcribe_window(self, audio, *, offset_s=0.0, hotwords=None, initial_prompt=None):
+        from meet.asr import Word
+
+        out = []
+        for start, end, text in (self.scripted.pop(0) if self.scripted else []):
+            words = text.split()
+            step = (end - start) / len(words)
+            out.append(Segment(start, end, text, words=[
+                Word(start + i * step, start + (i + 1) * step - 0.05, " " + w) for i, w in enumerate(words)]))
+        return out
+
+    def unload(self):
+        pass
+
+
+def _owner():
+    from meet.owner_voice import OwnerSample
+
+    return [OwnerSample(id="o", embedding=OWNER_V, source="enroll", date="d", seconds=20.0)]
+
+
+def test_room_line_waits_for_sys_owner_line_does_not(tmp_path):
+    from meet.assist.bus import TranscriptBus
+
+    bus = TranscriptBus()
+    asr = WordsTranscriber([
+        [(0.0, 2.0, "мой вопрос коллегам"), (2.5, 4.5, "сосед говорит что-то своё")],  # mic
+        [(5.0, 7.0, "собеседник отвечает в звонке")],  # sys
+    ])
+    engine = LiveEngine(tmp_path, asr, voice_matcher=_matcher(owner=_owner(), base={}),
+                        on_entry=bus.publish, on_relabel=bus.relabel, on_hide=bus.hide, live_dedupe=True)
+    engine.register_track("mic.wav", rate=16000, channels=1, identify=True)
+    engine.register_track("sys.wav", rate=16000, channels=1, normalize=False, identify=False)
+    engine._tracks["mic.wav"]["buffer"].push(_pcm(2.25, value=3000) + _pcm(2.75, value=100))
+    engine._tracks["sys.wav"]["buffer"].push(_pcm(9.0))
+    with engine._window_lock:
+        engine._drain()
+        mic = engine._tracks["mic.wav"]
+        engine._recognize("mic.wav", mic, *engine._next_window(mic, final=True))
+        # Владелец — сразу; человек рядом ждёт звук собеседников.
+        assert [e["text"] for e in bus.entries_since(0)[0]] == ["мой вопрос коллегам"]
+        assert engine._dupes.pending() == 1
+        sys_tr = engine._tracks["sys.wav"]
+        engine._recognize("sys.wav", sys_tr, *engine._next_window(sys_tr, final=True))
+    texts = [e["text"] for e in bus.entries_since(0)[0]]
+    assert texts == ["мой вопрос коллегам", "собеседник отвечает в звонке", "сосед говорит что-то своё"]
+    assert engine._dupes.pending() == 0
+    assert "сосед говорит что-то своё" in (tmp_path / "live_transcript.md").read_text(encoding="utf-8")
+
+
+def test_held_lines_flushed_on_stop(tmp_path):
+    got = []
+    asr = WordsTranscriber([[(0.0, 2.0, "сосед говорит что-то своё")]])
+    engine = LiveEngine(tmp_path, asr, voice_matcher=_matcher(owner=_owner(), base={}),
+                        on_entry=lambda line, entry: got.append(entry["text"]), live_dedupe=True)
+    engine.register_track("mic.wav", rate=16000, channels=1, identify=True)
+    engine._tracks["mic.wav"]["buffer"].push(_pcm(3.0, value=100))
+    lines = []
+    engine._log = lines.append
+    engine.stop()
+    assert got == ["сосед говорит что-то своё"]
+    assert any(line.startswith("дубли живого режима: задержано 1") for line in lines)
+
+
+def test_shown_copy_is_hidden_in_file_and_bus(tmp_path):
+    from meet.assist.bus import TranscriptBus
+
+    bus = TranscriptBus()
+    engine = LiveEngine(tmp_path, FakeTranscriber([]), on_entry=bus.publish, on_hide=bus.hide,
+                        live_dedupe=True)
+    entry = {"t": 3.0, "end": 5.0, "speaker": "Вы", "text": "копия соседа", "voice": "mic:1"}
+    bus.publish("[00:00:01] Вы: своё", {"t": 1.0, "speaker": "Вы", "text": "своё"})
+
+    class Dupes:
+        def __init__(self):
+            self.items = []
+
+        def release(self, final=False):
+            item = {"entry": entry, "start": 3.0, "toks": [1], "words": [1], "due": False}
+            self.items.append(item)
+            return [item]
+
+        def shown(self, item):
+            pass
+
+        def recheck(self):
+            return list(self.items)
+
+    engine._dupes = Dupes()
+    with engine._window_lock:
+        engine._flush_dupes()
+    assert bus.voices()[2] == [1]  # строка показана и спрятана как копия
+    text = (tmp_path / "live_transcript.md").read_text(encoding="utf-8")
+    assert "копия соседа" not in text
+    assert engine._voiced == []
+
+
+def test_dedupe_off_publishes_room_lines_at_once(tmp_path):
+    got = []
+    asr = WordsTranscriber([[(0.0, 2.0, "сосед говорит что-то своё")]])
+    engine = LiveEngine(tmp_path, asr, voice_matcher=_matcher(owner=_owner(), base={}),
+                        on_entry=lambda line, entry: got.append(entry["text"]))
+    engine.register_track("mic.wav", rate=16000, channels=1, identify=True)
+    engine._tracks["mic.wav"]["buffer"].push(_pcm(3.0, value=100))
+    engine.process_window()
+    assert got == ["сосед говорит что-то своё"] and engine._dupes is None

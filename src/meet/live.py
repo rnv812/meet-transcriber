@@ -294,7 +294,8 @@ class LiveEngine:
                  on_line=None, voice_matcher=None, speaker_name=None,
                  on_entry=None, out_root=None, mic_device=_FROM_SETTINGS,
                  output_device=_FROM_SETTINGS, text_fixes=None, log=print,
-                 tap_connect=None, on_source_end=None, on_relabel=None) -> None:
+                 tap_connect=None, on_source_end=None, on_relabel=None, on_hide=None,
+                 live_dedupe: bool = False) -> None:
         # Имя владельца микрофона — из настроек, как и в офлайн-проходе, чтобы
         # живая лента и точный транскрипт называли человека одинаково. Оттуда
         # же — выбранные микрофон и устройство вывода (None — системные).
@@ -321,6 +322,15 @@ class LiveEngine:
         self.on_entry = on_entry
         # Колбэк (voice, speaker): голос переименован задним числом (meet.live_voices).
         self.on_relabel = on_relabel
+        # Колбэк ([номер строки у on_entry]): показанные строки-дубли спрятать.
+        self.on_hide = on_hide
+        # Дубли соседа в живой ленте (meet.live_dedupe, `asr.live_mic_dedupe`):
+        # строки людей рядом ждут, пока распознается звук собеседников.
+        self._dupes = None
+        if live_dedupe:
+            from meet.live_dedupe import LiveDuplicates
+
+            self._dupes = LiveDuplicates()
         # Строки ленты с ключом голоса: {"voice", "speaker", "line"} — их
         # подпись может смениться задним числом.
         self._voiced: list[dict] = []
@@ -540,6 +550,9 @@ class LiveEngine:
             tr["last_text"] = segs[-1].text  # хвост → контекст следующего окна
         default_speaker = self.SPEAKERS.get(fname, fname)
         voices = self._live_voices() if tr["identify"] else None
+        dupes = self._dupes if not catchup else None
+        if dupes is not None:
+            dupes.sound(fname.removesuffix(".wav"), start_s, audio)
         for s in segs:
             speaker, voice = default_speaker, None
             if voices is not None:
@@ -554,12 +567,22 @@ class LiveEngine:
                 entry["voice"] = voice  # подпись голоса может смениться задним числом
             if catchup:
                 entry["catchup"] = True
+            if dupes is not None and fname == "mic.wav" and voice is not None \
+                    and dupes.wants(got.role, s):
+                # Человек рядом: строка ждёт звук собеседников — вдруг она копия.
+                dupes.hold({"entry": entry, "start": s.start}, s, got.role)
+                continue
             self._emit(line, entry)
+        if dupes is not None and fname == "sys.wav":
+            dupes.heard_sys(segs, start_s + len(audio) / WINDOW_RATE)
         if voices is not None:
             self._apply_renames(voices)
+        if dupes is not None:
+            self._flush_dupes()
 
-    def _emit(self, line: str, entry: dict) -> None:
-        """Строка — в ленту (файл) и потребителям."""
+    def _emit(self, line: str, entry: dict) -> tuple:
+        """Строка — в ленту (файл) и потребителям. → (номер строки у
+        `on_entry` или None, запись голоса или None)."""
         if entry.get("catchup"):
             # Начало встречи: в файл ленты — по времени, слиянием в конце
             # догонялки; потребителям — с пометкой (подсказки по нему не
@@ -568,11 +591,43 @@ class LiveEngine:
             self._catch_side(line)
         else:
             self._write_line(line)
+        record = None
         if entry.get("voice"):
             # Подпись голоса может смениться задним числом — помним строку.
-            self._voiced.append({"voice": entry["voice"], "speaker": entry["speaker"],
-                                 "line": line})
-        self._notify(line, entry)
+            record = {"voice": entry["voice"], "speaker": entry["speaker"], "line": line}
+            self._voiced.append(record)
+        return self._notify(line, entry), record
+
+    def _flush_dupes(self, final: bool = False) -> None:
+        """Задержанные строки людей рядом, которым пора (meet.live_dedupe): не
+        копии — в ленту с подписью на сейчас; показанные раньше времени и
+        оказавшиеся копией — спрятать (файл, `on_hide`)."""
+        dupes = self._dupes
+        for item in dupes.release(final):
+            entry = dict(item["entry"])
+            voice = entry.get("voice")
+            if voice and self._voices is not None:
+                try:
+                    entry["speaker"] = self._voices.speaker(voice)
+                except Exception as e:
+                    self._voice_failed(e)
+            if len(item["words"]) < len(item["toks"]):
+                entry["text"] = "".join(t.text for t in item["words"]).strip()
+            line = format_live_line(item["start"], entry["speaker"], entry["text"])
+            bus_id, record = self._emit(line, entry)
+            if not item["due"]:
+                item["bus_id"], item["record"] = bus_id, record
+                dupes.shown(item)
+        for item in dupes.recheck():
+            record = item.get("record")
+            if record is not None:
+                self._voiced = [r for r in self._voiced if r is not record]
+                self._swap_lines([(record["line"], None)])
+            if item.get("bus_id") is not None and self.on_hide is not None:
+                try:
+                    self.on_hide([item["bus_id"]])
+                except Exception:
+                    pass  # потребитель не должен валить запись
 
     def _apply_renames(self, voices) -> None:
         """Переименования голосов после окна: строки ленты (файл, строки
@@ -681,7 +736,10 @@ class LiveEngine:
         with self._window_lock:
             self._live_lag = False
             self._drain()
-            return self._windows(final=False)
+            done = self._windows(final=False)
+            if self._dupes is not None and self._dupes.pending():
+                self._flush_dupes()  # задержанные строки — не дольше HOLD_MAX_S
+            return done
 
     def process_window(self) -> None:
         """Распознать всё накопленное сейчас, целиком (остановка, тесты).
@@ -703,15 +761,18 @@ class LiveEngine:
         finally:
             self._window_lock.release()
 
-    def _notify(self, line: str, entry: dict) -> None:
+    def _notify(self, line: str, entry: dict):
+        """→ что вернул `on_entry` (шина — номер строки), иначе None."""
+        got = None
         for callback, args in ((self.on_line, (line,)),
                                (self.on_entry, (line, entry))):
             if callback is None:
                 continue
             try:
-                callback(*args)
+                got = callback(*args)
             except Exception:
                 pass  # потребитель не должен валить запись
+        return got if isinstance(got, int) and not isinstance(got, bool) else None
 
     def _live_voices(self):
         """Голоса дорожек (meet.live_voices.LiveVoices), как только матчер
@@ -1474,6 +1535,12 @@ class LiveEngine:
                     self.process_window()  # финальный слив остатка буфера
                 except Exception:
                     pass
+            if self._dupes is not None:
+                try:
+                    with self._window_lock:
+                        self._flush_dupes(final=True)  # задержанные строки — в ленту
+                except Exception:
+                    pass
             if self._catch:
                 # Остановили, не догнав начало: что успели — в ленту, сводка —
                 # с пометкой о неполноте (её ставит ассистент).
@@ -1483,9 +1550,10 @@ class LiveEngine:
                     self._merge_catchup_lines()
             if self.stats["windows"]:
                 self._log(self.stats_line())
-            voices_line = self._voices.stats_line() if self._voices is not None else None
-            if voices_line:
-                self._log(voices_line)
+            for extra in (self._voices, self._dupes):
+                extra_line = extra.stats_line() if extra is not None else None
+                if extra_line:
+                    self._log(extra_line)
             close_error = self._close_capture()
             if self._out is not None:
                 self._out.close()

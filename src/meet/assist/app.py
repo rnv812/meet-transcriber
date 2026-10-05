@@ -785,8 +785,10 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                         window_seconds=window_seconds,
                         hotwords=_load_hotwords(hotwords),
                         on_entry=bus.publish,
-                        # Имена голосов задним числом — в шину (SSE `voices`).
-                        on_relabel=bus.relabel,
+                        # Имена голосов задним числом и спрятанные дубли — в
+                        # шину (SSE `voices`).
+                        on_relabel=bus.relabel, on_hide=bus.hide,
+                        live_dedupe=cfg.asr.mic_dedupe and cfg.asr.live_mic_dedupe,
                         voice_matcher=None if no_voices else VoiceMatcher(log=log),
                         text_fixes=live_asr.TextFixes.from_settings(hotwords, latin=True),
                         log=log,
