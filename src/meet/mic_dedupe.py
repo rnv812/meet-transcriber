@@ -10,11 +10,22 @@
 
 Механика одна: совпадение слов mic↔sys рядом по времени (токены + символьное
 сходство склеек: копия в микрофоне тише и распознана с ошибками), устойчивый
-лаг по всей встрече (L*, медиана уверенных пар) и, для коротких реплик,
-сходство огибающих громкости. Какую копию оставить, решает голос: окна
-микрофона с ролью `owner` (голос владельца по образцу, meet.mic_split) не
-удаляются никогда — удаляется копия в sys; окна `room`/`unsure` — удаляются
-из микрофона. Без образца владельца — только заметно тихая копия в микрофоне.
+лаг по всей встрече (L*) и сходство огибающих громкости. Какую копию
+оставить, решает голос: окна микрофона с ролью `owner` (голос владельца по
+образцу, meet.mic_split) не удаляются никогда — удаляется копия в sys; окна
+`room` — удаляются из микрофона.
+
+Главное правило: слова владельца без настоящих улик не теряются. Повтор
+(собеседник зачитал номер заказа, «да, в пятницу в десять») — не копия,
+хотя слова те же. Поэтому:
+- L* — только от MIN_LAG_PAIRS уверенных пар с малым разбросом, и каждая
+  пара проверяется по L*, посчитанному без неё самой: одна пара сама себя
+  не подтверждает. Нет L* — не удаляется ничего;
+- удаление, которое может задеть владельца или собеседника, — копия в sys
+  по голосу владельца (`owner_leak`), окна `unsure` (они показаны как
+  владелец) и любое удаление без образца — требует ещё и той же огибающей
+  громкости (акустическая копия, а не второй человек с теми же словами);
+  без образца копия к тому же должна быть заметно тише речи микрофона.
 
 Пороги — стартовые, их калибрует T0 (scripts/speakers_calib.py) на записях
 с согласия владельца. См. .superpowers/sdd/v033/speakers-design.md, §3.3."""
@@ -43,24 +54,32 @@ ECHO_MAX_LAG = 0.05
 # Уверенная пара (задаёт L*): покрытие и число совпавших слов. Старт (T0).
 CONFIDENT_COVERAGE = 0.8
 CONFIDENT_WORDS = 4
+# L* установлен: от MIN_LAG_PAIRS уверенных пар (не считая проверяемую) с
+# разбросом (медиана отклонений от медианы) не больше LAG_MAD; лаги вне
+# PLAUSIBLE_LAG в L* не идут. Старт (T0).
+MIN_LAG_PAIRS = 3
+LAG_MAD = 0.15
+PLAUSIBLE_LAG = (-0.3, 2.0)
 # Лаг согласован с L*: длинная пара — в LAG_TOLERANCE, короткая (1–2 слова) —
-# в SHORT_LAG_TOLERANCE. Без L* — только длинные (от CONFIDENT_WORDS слов) и
-# лаг в FALLBACK_LAG. Старт (T0).
+# в SHORT_LAG_TOLERANCE. Старт (T0).
 LAG_TOLERANCE = 0.5
 SHORT_LAG_TOLERANCE = 0.3
-FALLBACK_LAG = (-0.3, 2.0)
 # Длинная пара (от LONG_WORDS совпавших слов): покрытие mic символами sys. Старт (T0).
 LONG_WORDS = 3
 MIN_COVERAGE = 0.6
-# Огибающая: поиск сдвига вокруг текстового лага (длинные, для отчёта) и
-# вокруг L* (короткие); короткой паре нужна корреляция от MIN_ENV_CORR. Старт (T0).
+# Огибающая: поиск сдвига вокруг текстового лага (длинные пары) и вокруг L*
+# (короткие). Короткой паре нужна корреляция от MIN_ENV_CORR; длинной — от
+# MIN_ENV_CORR_LONG там, где удаление может задеть владельца или собеседника
+# (owner_leak, `unsure`, без образца). Старт (T0).
 ENV_SEARCH = 0.3
 ENV_SHORT_SEARCH = 0.1
 MIN_ENV_CORR = 0.6
+MIN_ENV_CORR_LONG = 0.5
 MIN_ENV_FRAMES = 4
-# Огибающая берётся с полями ENV_PAD по краям реплики: у короткого «ага»
-# внутри слова всего несколько кадров, а вот тишина вокруг него (или чужая
-# сплошная речь) отличает копию от совпадения. Старт (T0).
+# Короткая пара сравнивается с полями ENV_PAD по краям: внутри одного «ага»
+# всего несколько кадров, а вот тишина вокруг него (или чужая сплошная речь)
+# отличает копию от совпадения. Длинная — без полей: у повтора другим
+# человеком границы фразы совпадают, а слоги внутри — нет. Старт (T0).
 ENV_PAD = 0.25
 # Без образца владельца: копия в микрофоне удаляется, только если её медиана
 # громкости не выше QUIET_PERCENTILE-го процентиля речи микрофона минус QUIET_DB. Старт (T0).
@@ -149,29 +168,46 @@ class Lags:
     neighbour: list[float] = field(default_factory=list)
     echo: list[float] = field(default_factory=list)
 
-    def add(self, lag: float) -> None:
-        if not FALLBACK_LAG[0] <= lag <= FALLBACK_LAG[1]:
-            return
+    def add(self, lag: float) -> bool:
+        """Лаг уверенной пары. → вошёл ли он в L*."""
+        if not PLAUSIBLE_LAG[0] <= lag <= PLAUSIBLE_LAG[1]:
+            return False
         if lag > NEIGHBOUR_MIN_LAG:
             self.neighbour.append(float(lag))
         elif lag <= ECHO_MAX_LAG:
             self.echo.append(float(lag))
+        else:
+            return False
+        return True
 
-    def observe(self, pair: Pair) -> None:
-        if pair.matched >= CONFIDENT_WORDS and pair.coverage >= CONFIDENT_COVERAGE:
-            self.add(pair.lag)
+    def observe(self, pair: Pair) -> float | None:
+        """Уверенная пара пополняет L*. → её лаг, если вошёл (его потом
+        исключают при проверке самой пары), иначе None."""
+        if _confident(pair) and self.add(pair.lag):
+            return float(pair.lag)
+        return None
 
-    def reference(self, kind: str) -> float | None:
-        values = self.neighbour if kind == "neighbour" else self.echo
-        return float(np.median(values)) if values else None
+    def reference(self, kind: str, exclude: float | None = None) -> float | None:
+        """L* для соседа или эха: медиана лагов уверенных пар — только если
+        их (без `exclude`, лага самой проверяемой пары) не меньше
+        MIN_LAG_PAIRS и они кучно (MAD ≤ LAG_MAD). Иначе None."""
+        values = list(self.neighbour if kind == "neighbour" else self.echo)
+        if exclude is not None and exclude in values:
+            values.remove(exclude)
+        if len(values) < MIN_LAG_PAIRS:
+            return None
+        med = float(np.median(values))
+        if float(np.median(np.abs(np.asarray(values) - med))) > LAG_MAD:
+            return None
+        return med
 
-    def consistent(self, lag: float, words: int) -> bool:
-        """Лаг пары из `words` совпавших слов согласован с L*. Пока L* нет —
-        только длинным парам и в широком окне: три общих слова («всем спасибо
-        пока») без известного лага — не дубль."""
-        ref = self.reference(_kind(lag))
+    def consistent(self, lag: float, words: int, exclude: float | None = None) -> bool:
+        """Лаг пары из `words` совпавших слов согласован с L* (посчитанным без
+        `exclude`). Нет L* — не согласован: без независимых пар совпадение
+        слов может быть повтором («всем спасибо всем пока»)."""
+        ref = self.reference(_kind(lag), exclude)
         if ref is None:
-            return words >= CONFIDENT_WORDS and FALLBACK_LAG[0] <= lag <= FALLBACK_LAG[1]
+            return False
         tol = SHORT_LAG_TOLERANCE if words < LONG_WORDS else LAG_TOLERANCE
         return abs(lag - ref) <= tol
 
@@ -198,6 +234,12 @@ class Envelope:
         self.loud = float(np.percentile(frames, QUIET_PERCENTILE)) if frames.size else 0.0
 
     @classmethod
+    def from_db(cls, mic_db, sys_db, speech: list[tuple[float, float]] | None = None,
+                frame: float = FRAME_S) -> "Envelope":
+        """Из готовой громкости кадров (дБ) — тесты и калибровка."""
+        return cls(mic_db, sys_db, speech, frame)
+
+    @classmethod
     def from_audio(cls, mic: np.ndarray, sys: np.ndarray, rate: int,
                    speech: list[tuple[float, float]] | None = None) -> "Envelope":
         """Из звука дорожек (int16, `rate` Гц) — громкость кадров как у теста дорожек."""
@@ -211,11 +253,12 @@ class Envelope:
         b = min(len(self.mic), max(a + 1, int(round(end / self.frame))))
         return a, b
 
-    def corr(self, start: float, end: float, center: float, search: float) -> tuple[float, float] | None:
-        """Наибольшая корреляция Пирсона огибающей микрофона на [start, end] с
-        огибающей sys, сдвинутой на center ± search. → (корреляция, сдвиг) или
-        None (мало кадров, ровный звук)."""
-        a, b = self._span(start - ENV_PAD, end + ENV_PAD)
+    def corr(self, start: float, end: float, center: float, search: float,
+             pad: float = 0.0) -> tuple[float, float] | None:
+        """Наибольшая корреляция Пирсона огибающей микрофона на [start − pad,
+        end + pad] с огибающей sys, сдвинутой на center ± search. →
+        (корреляция, сдвиг) или None (мало кадров, ровный звук)."""
+        a, b = self._span(start - pad, end + pad)
         x = self.mic[a:b]
         if len(x) < MIN_ENV_FRAMES or not x.std():
             return None
@@ -232,11 +275,17 @@ class Envelope:
                 best = (r, k * self.frame)
         return best
 
-    def quiet(self, start: float, end: float) -> bool:
-        """Отрезок микрофона заметно тише его речи: дальний голос, не владелец."""
+    def gap_db(self, start: float, end: float) -> float | None:
+        """Громкость отрезка микрофона относительно его речи (медиана отрезка
+        минус QUIET_PERCENTILE-й процентиль речи), дБ."""
         a, b = self._span(start, end)
         part = self.mic[a:b]
-        return bool(part.size) and float(np.median(part)) <= self.loud - QUIET_DB
+        return float(np.median(part)) - self.loud if part.size else None
+
+    def quiet(self, start: float, end: float) -> bool:
+        """Отрезок микрофона заметно тише его речи: дальний голос, не владелец."""
+        gap = self.gap_db(start, end)
+        return gap is not None and gap <= -QUIET_DB
 
 
 # --- кандидаты ------------------------------------------------------------------
@@ -319,16 +368,28 @@ def _pairs(mic: list[Tok], sys: list[Tok], starts: list[float]) -> list[Pair]:
 # --- решение --------------------------------------------------------------------
 
 
-def _role_runs(pair: Pair, owner_known: bool) -> list[tuple[bool, list[int]]]:
-    """Подряд идущие слова пары одной стороны: (владелец?, номера в pair.mic).
-    Без образца владельца ролей нет — один прогон «не известно чей»."""
-    out: list[tuple[bool, list[int]]] = []
+def _confident(pair: Pair) -> bool:
+    return pair.matched >= CONFIDENT_WORDS and pair.coverage >= CONFIDENT_COVERAGE
+
+
+def _side(t: Tok, owner_known: bool) -> str:
+    """Чьё слово микрофона для удаления: `owner` — владелец по образцу;
+    `room` — человек в комнате; `weak` — показан как владелец (`unsure`) или
+    образца нет: удалять только при сильных уликах."""
+    if not owner_known:
+        return "weak"
+    return {OWNER: "owner", "room": "room"}.get(t.role, "weak")
+
+
+def _role_runs(pair: Pair, owner_known: bool) -> list[tuple[str, list[int]]]:
+    """Подряд идущие слова пары одной стороны: (сторона, номера в pair.mic)."""
+    out: list[tuple[str, list[int]]] = []
     for i, t in enumerate(pair.mic):
-        mine = owner_known and t.role == OWNER
-        if out and out[-1][0] == mine:
+        side = _side(t, owner_known)
+        if out and out[-1][0] == side:
             out[-1][1].append(i)
         else:
-            out.append((mine, [i]))
+            out.append((side, [i]))
     return out
 
 
@@ -345,34 +406,44 @@ def _aligned(pair: Pair, idx: list[int]) -> list[Tok]:
     return pair.sys[min(js):max(js) + 1] if js else []
 
 
-def _decide(pair: Pair, lags: Lags, env: Envelope | None, owner_known: bool,
+def _decide(pair: Pair, own: float | None, lags: Lags, env: Envelope | None, owner_known: bool,
             mic_sizes: Counter, sys_sizes: Counter) -> list[Drop]:
+    """Решение по паре. `own` — лаг самой пары, если он вошёл в L*: пара
+    проверяется по L* без него."""
     start, end = pair.mic[0].start, pair.mic[-1].end
+    ref = lags.reference(_kind(pair.lag), own)
+    if ref is None or not lags.consistent(pair.lag, pair.matched, own):
+        return []
     if pair.matched >= LONG_WORDS:
-        if pair.coverage < MIN_COVERAGE or not lags.consistent(pair.lag, pair.matched):
+        if pair.coverage < MIN_COVERAGE:
             return []
         got = env.corr(start, end, pair.lag, ENV_SEARCH) if env is not None else None
+        strong = got is not None and got[0] >= MIN_ENV_CORR_LONG
     else:
         # 1–2 слова: точное совпадение, лаг у самого L* и та же огибающая.
-        if not pair.exact or not lags.consistent(pair.lag, pair.matched) or env is None:
+        if not pair.exact or env is None:
             return []
-        got = env.corr(start, end, lags.reference(_kind(pair.lag)), ENV_SHORT_SEARCH)
+        got = env.corr(start, end, ref, ENV_SHORT_SEARCH, pad=ENV_PAD)
         if got is None or got[0] < MIN_ENV_CORR:
             return []
+        strong = True
     env_corr = got[0] if got else None
     kind = _kind(pair.lag)
     drops = []
-    for mine, idx in _role_runs(pair, owner_known):
+    for side, idx in _role_runs(pair, owner_known):
         words = [pair.mic[i] for i in idx]
         other = _aligned(pair, idx)
-        if mine:
+        if side == "owner":
             # Окно владельца: его слова в микрофоне не трогаем. Копия в sys
-            # позже микрофона — мой голос через чужой ноутбук.
-            if pair.lag > NEIGHBOUR_MIN_LAG and other and _big_enough(other, sys_sizes):
+            # позже микрофона и с той же огибающей — мой голос через чужой ноутбук.
+            if strong and pair.lag > NEIGHBOUR_MIN_LAG and other and _big_enough(other, sys_sizes):
                 drops.append(Drop("sys", other, words, pair.coverage, pair.lag, env_corr, "owner_leak"))
             continue
-        if not owner_known and (env is None or not env.quiet(words[0].start, words[-1].end)):
-            continue  # без образца — только заметно тихая копия
+        if side == "weak":
+            if not strong:
+                continue  # показан как владелец: без той же огибающей не трогаем
+            if not owner_known and not env.quiet(words[0].start, words[-1].end):
+                continue  # без образца — только заметно тихая копия
         if _big_enough(words, mic_sizes):
             drops.append(Drop("mic", words, other, pair.coverage, pair.lag, env_corr, kind))
     return drops
@@ -402,13 +473,12 @@ def _resolve(mic: list[Tok], sys: list[Tok], lags: Lags, env: Envelope | None,
     sys = sorted(sys, key=lambda t: t.start)
     starts = [t.start for t in sys]
     pairs = [p for seg in _by_segment(mic) for p in _pairs(seg, sys, starts)]
-    for p in pairs:
-        lags.observe(p)
+    own = [lags.observe(p) for p in pairs]
     mic_sizes, sys_sizes = Counter(t.seg for t in mic), Counter(t.seg for t in sys)
     used: set = set()
     drops: list[Drop] = []
-    for p in pairs:
-        drops += _fresh(_decide(p, lags, env, owner_known, mic_sizes, sys_sizes), used)
+    for p, lag in zip(pairs, own):
+        drops += _fresh(_decide(p, lag, lags, env, owner_known, mic_sizes, sys_sizes), used)
     return drops
 
 
