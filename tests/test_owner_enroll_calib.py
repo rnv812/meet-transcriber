@@ -147,3 +147,74 @@ def test_failed_copy_delete_is_reported_with_its_path(tmp_path, monkeypatch, cap
     err = capsys.readouterr().err
     assert str(seen[0]) in err and "PermissionError" in err and len(seen) == 2
     real_rmtree(seen[0])
+
+
+def _tmp_dirs(monkeypatch, calib):
+    made = []
+    real = calib.tempfile.mkdtemp
+
+    def mkdtemp(**kw):
+        made.append(Path(real(**kw)))
+        return str(made[-1])
+
+    monkeypatch.setattr(calib.tempfile, "mkdtemp", mkdtemp)
+    return made
+
+
+def _restore_process_state(monkeypatch):
+    """main подменяет окружение и credentials процесса — вернуть после теста."""
+    from meet import credentials
+
+    monkeypatch.setattr(credentials, "get_hf_token", credentials.get_hf_token)
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
+
+
+def test_plain_files_mode_is_isolated_too(tmp_path, monkeypatch):
+    """Дорожки путями: та же пустая папка данных, без сети и токена — иначе
+    запасной путь загрузки модели прочитал бы токен через настройки
+    приложения (а их чтение переносит старый токен в диспетчер)."""
+    calib = _calib()
+    _restore_process_state(monkeypatch)
+    from meet import credentials
+
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: "секрет")
+    made = _tmp_dirs(monkeypatch, calib)
+    seen = {}
+
+    def fake_run(mics, syss, args):
+        seen.update(mics=mics, data=os.environ["MEET_DATA_DIR"], offline=os.environ["HF_HUB_OFFLINE"],
+                    token=credentials.get_hf_token())
+        return 0
+
+    import os
+
+    monkeypatch.setattr(calib, "run", fake_run)
+    assert calib.main([str(tmp_path / "mic.opus")]) == 0
+    assert seen["mics"] == [tmp_path / "mic.opus"]
+    assert seen["offline"] == "1" and seen["token"] is None and "owner-calib-" in seen["data"]
+    assert made and not made[0].exists()
+
+
+@pytest.mark.parametrize("error, code, text", [
+    (RuntimeError("ffmpeg не смог прочитать 2026-10-05_10-00_Совет директоров/mic.opus"), 1,
+     "ошибка: RuntimeError\n"),
+    (KeyboardInterrupt(), 130, "прервано\n"),
+])
+def test_failure_prints_only_error_type_and_still_cleans_up(tmp_path, monkeypatch, capsys, error, code, text):
+    calib = _calib()
+    _restore_process_state(monkeypatch)
+    folder = tmp_path / "Local" / "meet" / "recordings" / "2026-10-05_10-00"
+    folder.mkdir(parents=True)
+    (folder / "mic.opus").write_bytes(b"opus")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    made = _tmp_dirs(monkeypatch, calib)
+
+    def boom(mics, syss, args):
+        raise error
+
+    monkeypatch.setattr(calib, "run", boom)
+    assert calib.main(["--meeting", "2026-10-05_10-00"]) == code
+    captured = capsys.readouterr()
+    assert captured.err == text and "Совет" not in captured.out
+    assert made and not made[0].exists() and (folder / "mic.opus").read_bytes() == b"opus"

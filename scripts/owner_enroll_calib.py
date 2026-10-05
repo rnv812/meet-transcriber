@@ -19,8 +19,9 @@ VAD образца, речь, уровень над фоном, три трет�
 mic.opus (и sys.opus с `--quiet-sys`) копируется во временную папку, читается
 только копия, копия удаляется в конце. Папку записи скрипт не трогает, движок
 приложения не запускает, настройки и токен приложения не читает (своя пустая
-папка данных, HF_HUB_OFFLINE=1 — модель из кэша Hugging Face). Печатает
-только числа."""
+папка данных, HF_HUB_OFFLINE=1 — модель из кэша Hugging Face; так же и с
+дорожками путями). Печатает только числа; сбой или Ctrl+C — в stderr только
+тип ошибки, копия всё равно удаляется."""
 
 from __future__ import annotations
 
@@ -114,25 +115,38 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.mic and not args.meeting:
         parser.error("нужны дорожки микрофона или --meeting")
-    if not args.meeting:
-        return run(args.mic, args.sys, args)
-    folder = meeting_folder(args.meeting)
+    folder = meeting_folder(args.meeting) if args.meeting else None
     tmp = Path(tempfile.mkdtemp(prefix="owner-calib-"))
     code = 1
     try:
-        # Своя пустая папка данных: ни настроек, ни токена приложения; модель —
-        # из кэша Hugging Face, и сеть — нет, даже если в окружении иначе.
-        os.environ["MEET_DATA_DIR"] = str(tmp / "data")
-        os.environ["HF_HUB_OFFLINE"] = "1"
-        from meet import credentials
-
-        credentials.get_hf_token = lambda: None  # токен из диспетчера не нужен и не читается
-        mic, sys_copy = copy_tracks(folder, tmp, args.quiet_sys)
-        code = run([mic], [sys_copy] if sys_copy else [], args)
+        try:
+            code = _calibrate(args, folder, tmp)
+        except KeyboardInterrupt:
+            print("прервано", file=sys.stderr)
+            code = 130
+        except Exception as e:  # текст ошибки может назвать запись — только тип
+            print(f"ошибка: {type(e).__name__}", file=sys.stderr)
+            code = 1
     finally:
         if not remove_copy(tmp):
             code = 2
     return code
+
+
+def _calibrate(args, folder: Path | None, tmp: Path) -> int:
+    # Своя пустая папка данных — и для дорожек путями: ни настроек, ни токена
+    # приложения (запасной путь загрузки модели читал бы токен через
+    # настройки, а их чтение переносит старый токен в диспетчер); модель — из
+    # кэша Hugging Face, и сеть — нет, даже если в окружении иначе.
+    os.environ["MEET_DATA_DIR"] = str(tmp / "data")
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    from meet import credentials
+
+    credentials.get_hf_token = lambda: None  # токен из диспетчера не нужен и не читается
+    if folder is None:
+        return run(args.mic, args.sys, args)
+    mic, sys_copy = copy_tracks(folder, tmp, args.quiet_sys)
+    return run([mic], [sys_copy] if sys_copy else [], args)
 
 
 CLEANUP_RETRY_S = 1.0
