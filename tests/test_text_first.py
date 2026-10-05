@@ -316,3 +316,23 @@ def test_text_phase_copy_does_not_repeat_log_lines(pipeline, capsys):
     tr, folder = pipeline["tr"], pipeline["folder"]
     tr.transcribe(str(folder), align=False, bus=pipeline["bus"])
     assert capsys.readouterr().out.count("правила замены: исправлено") == 1
+
+
+def test_translit_failure_is_reported_once(pipeline, monkeypatch, capsys):
+    from meet import asr, translit
+
+    tr, folder = pipeline["tr"], pipeline["folder"]
+
+    def recognize(wav, hotwords, run):
+        run.choice = asr.Choice("gigaam", "cpu")
+        return [_seg(0.0 if "sys" in Path(wav).name else 3.0, "апи шлюз")]
+
+    def broken(segments, terms):
+        raise RuntimeError("словарь повреждён")
+
+    monkeypatch.setattr(tr, "_recognize", recognize)
+    monkeypatch.setattr(translit, "apply", broken)
+    tr.transcribe(str(folder), align=False, bus=pipeline["bus"])
+    out = capsys.readouterr().out
+    # Собеседники — один раз (копия для текста молчит), микрофон — свой раз.
+    assert out.count("термины латиницей пропущены") == 2

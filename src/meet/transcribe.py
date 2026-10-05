@@ -356,7 +356,7 @@ def _restore_latin(segments: list[Segment], run: "_Run") -> None:
         if n:
             _say(f"термины латиницей: возвращено {n}")
     except Exception as e:  # термины не должны ронять расшифровку
-        print(f"термины латиницей пропущены (ошибка: {e})")
+        _say(f"термины латиницей пропущены (ошибка: {e})")
 
 
 def _align_enabled(align: bool, run: "_Run", gigaam: bool | None = None) -> bool:
@@ -557,7 +557,7 @@ def _apply_rules(segments: list[Segment]) -> list[Segment]:
         skipped: list[float] = []
         n = textfix.apply_rules(segments, rules, skipped)
     except Exception as e:
-        print(f"правила замены пропущены (ошибка: {e})")
+        _say(f"правила замены пропущены (ошибка: {e})")
         return segments
     if n:
         _say(f"правила замены: исправлено {n}")

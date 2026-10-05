@@ -94,11 +94,12 @@ test("статус: текст до спикеров — своё состоян
   expect(statusOf(textRec, [job("failed", { error: "CUDA out of memory" })], null))
     .toEqual({ kind: "text", job: null, error: "CUDA out of memory" });
   expect(statusOf(finalRec, [job("done")], null)).toEqual({ kind: "ready" });
-  // Задача только что кончилась, карточка ещё не перечитана — «заканчиваю», а не «прервалась».
-  expect(statusOf(textRec, [job("done", { finished_at: 1000 })], null, 1010))
+  // Задача кончилась, карточка ещё перечитывается — «заканчиваю», а не «прервалась».
+  expect(statusOf(textRec, [job("done")], null, { reloading: true }))
     .toMatchObject({ kind: "text", job: { state: "done" } });
-  // Кончилась давно, а текст всё ещё без спикеров (окончательная не записалась) — прервано.
-  expect(statusOf(textRec, [job("done", { finished_at: 1000 })], null, 2000)).toEqual({ kind: "text", job: null });
+  // Перечитали, а текст всё ещё без спикеров (окончательная не записалась) — прервано.
+  expect(statusOf(textRec, [job("done")], null, { reloading: false })).toEqual({ kind: "text", job: null });
+  expect(statusOf(textRec, [job("done")], null)).toEqual({ kind: "text", job: null });
 });
 
 test("бейдж в списке: идёт — доля и «спикеры», прервано — «Без спикеров»", () => {
@@ -279,8 +280,7 @@ test("задача кончилась, карточка ещё перечиты�
   vi.mocked(api.getRecording).mockImplementation(() => new Promise((resolve) => {
     release = () => resolve(structuredClone({ ...finalRec, transcript: FINAL }));
   }));
-  rerender(<RecordingCard id="r1" endpoint={ep}
-    jobs={[job("done", { finished_at: Date.now() / 1000 })]} />);
+  rerender(<RecordingCard id="r1" endpoint={ep} jobs={[job("done")]} />);
   const note = screen.getByRole("status", { name: "Ход расшифровки" });
   expect(note).toHaveTextContent("Текст готов · спикеры определены, обновляю…");
   expect(screen.queryByText(/прервалась/)).toBeNull();
@@ -331,4 +331,35 @@ test("фрагмент поиска из текста до спикеров — 
   expect(hit).toHaveTextContent("начнём с бюджета");
   expect(hit.querySelector(".rec-hit__who")).toBeNull();
   expect(hit.textContent).not.toContain(": ");
+});
+
+
+test("перечитывание дольше минуты: всё ещё «обновляю…» — без часов", async () => {
+  const { rerender } = await card([job("running")]);
+  let release: () => void = () => {};
+  vi.mocked(api.getRecording).mockImplementation(() => new Promise((resolve) => {
+    release = () => resolve(structuredClone({ ...finalRec, transcript: FINAL }));
+  }));
+  const done = job("done", { finished_at: Date.now() / 1000 - 120 });
+  rerender(<RecordingCard id="r1" endpoint={ep} jobs={[done]} />);
+  const later = Date.now() + 120_000;
+  const spy = vi.spyOn(Date, "now").mockReturnValue(later);
+  try {
+    rerender(<RecordingCard id="r1" endpoint={ep} jobs={[{ ...done }]} />);
+    expect(screen.getByRole("status", { name: "Ход расшифровки" }))
+      .toHaveTextContent("Текст готов · спикеры определены, обновляю…");
+    expect(screen.queryByRole("button", { name: "Расшифровать заново" })).toBeNull();
+  } finally {
+    spy.mockRestore();
+  }
+  await act(async () => { release(); });
+  await waitFor(() => expect(screen.queryByRole("status", { name: "Ход расшифровки" })).toBeNull());
+});
+
+test("перечитали, а текст всё ещё без спикеров (окончательная не записалась) — прервалась", async () => {
+  const { rerender } = await card([job("running")]);
+  rerender(<RecordingCard id="r1" endpoint={ep} jobs={[job("done")]} />);
+  const note = await screen.findByText("Спикеры не определены: расшифровка прервалась");
+  expect(note).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Расшифровать заново" })).toBeInTheDocument();
 });

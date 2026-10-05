@@ -139,6 +139,10 @@ export function RecordingCard({
   const [nowTurn, setNowTurn] = useState<number | null>(null);
   const current = useRef({ endpoint, id });
   current.current = { endpoint, id };
+  /** Состояние задач записи (`jobSig`) сейчас — и то, при котором началось последнее удачное перечитывание:
+   *  разные — карточка ещё не догнала задачи (конец расшифровки: спикеры уже записаны, а `rec` прежний). */
+  const sigNow = useRef("");
+  const [loadedSig, setLoadedSig] = useState<string | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -158,9 +162,11 @@ export function RecordingCard({
 
   const load = useCallback(async () => {
     const stale = () => current.current.id !== id || current.current.endpoint !== endpoint;
+    const sig = sigNow.current;
     try {
       const data = await getRecording(endpoint, id);
       if (stale()) return;
+      setLoadedSig(sig);
       // Та же расшифровка — тот же объект: открытые окна правки не сбрасываются.
       setRec((prev) => {
         const transcript = keepTranscript(prev?.id === data.id ? prev.transcript : null, data.transcript);
@@ -189,6 +195,7 @@ export function RecordingCard({
       .map((j) => `${j.id}:${j.state}${j.text_ready ? ":text" : ""}`).join(","),
     [jobs, rec],
   );
+  sigNow.current = jobSig;
 
   useEffect(() => {
     setRec(null); setError(null); setMissing(false); setKbDone(null); setAudioFailed(false);
@@ -337,7 +344,7 @@ export function RecordingCard({
     return error ? <div className="card__error" role="alert">{error}</div> : <Loading label="Загружаю запись…" />;
   }
 
-  const status = statusOf(rec, jobs, snapshot);
+  const status = statusOf(rec, jobs, snapshot, { reloading: jobSig !== loadedSig });
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);

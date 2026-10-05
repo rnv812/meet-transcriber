@@ -44,11 +44,6 @@ const INTERRUPTED = "Импорт прерван";
 const PROCESSING: RecStatus = { kind: "running", stage: "trim", label: "Обработка" };
 const RETRANSCRIBE_KINDS = ["transcribe", "import", "merge"];
 const MERGE_INTERRUPTED = "Объединение прервано";
-/**
- * Сколько секунд после конца задачи текст до спикеров считается «карточка ещё перечитывается», а не
- * «окончательная не записалась»: перечитывание часовой встречи — секунды, а не минуты.
- */
-const FINISHING_S = 60;
 
 /**
  * Задачи расшифровки этой записи. `/jobs` отдаёт и задачи модели (итоги,
@@ -88,8 +83,13 @@ export function isLiveRecording(rec: Recording, snapshot: Snapshot | null): bool
   return !!live?.folder && (live.active || live.stopping) && norm(live.folder) === norm(rec.path);
 }
 
+/**
+ * `reloading` — карточка перечитывается после смены задач записи (её `rec` старее `jobs`): текст до спикеров
+ * при только что законченной задаче — «заканчиваю», а не «прервалась». Без часов: перечитали, а текст всё ещё
+ * без спикеров — окончательная не записалась. Список записей флага не знает — для него это прерывание.
+ */
 export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null,
-  now: number = Date.now() / 1000): RecStatus {
+  { reloading = false }: { reloading?: boolean } = {}): RecStatus {
   const mine = jobsOf(rec, jobs);
   const noTracks = Object.keys(rec.tracks ?? {}).length === 0;
   const isImport = rec.source === "import" && noTracks;
@@ -106,8 +106,7 @@ export function statusOf(rec: Recording, jobs: Job[], snapshot: Snapshot | null,
     if (active) return { kind: "text", job: active };
     const last = mine.at(-1);
     // Задача кончилась, а карточка ещё не перечитана: спикеры уже есть — не «прервалась».
-    if (last?.state === "done" && (last.finished_at == null || now - last.finished_at < FINISHING_S))
-      return { kind: "text", job: last };
+    if (last?.state === "done" && reloading) return { kind: "text", job: last };
     return last?.state === "failed" && last.error ? { kind: "text", job: null, error: last.error }
       : { kind: "text", job: null };
   }
