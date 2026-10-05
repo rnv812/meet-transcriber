@@ -777,7 +777,8 @@ class LiveEngine:
     def _live_voices(self):
         """Голоса дорожек (meet.live_voices.LiveVoices), как только матчер
         загрузился; до того и без матчера — None (подписи по умолчанию)."""
-        if self._voices is None and self._matcher is not None                 and getattr(self._matcher, "enabled", False):
+        if self._voices is None and self._matcher is not None \
+                and getattr(self._matcher, "enabled", False):
             make = getattr(self._matcher, "live_voices", None)
             try:
                 self._voices = make(

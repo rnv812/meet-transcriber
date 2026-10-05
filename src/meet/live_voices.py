@@ -450,7 +450,7 @@ class LiveVoices:
             return None
         times = sorted(st["times"])
         p90 = times[min(len(times) - 1, int(len(times) * 0.9))]
-        clusters = {t: len(tv.live()) for t, tv in self._tracks.items()}
+        clusters = ", ".join(f"{t} {len(tv.live())}" for t, tv in self._tracks.items())
         named = sum(1 for tv in self._tracks.values() for c in tv.live() if c.name)
         rooms = sum(1 for c in self._tracks["mic"].live() if c.role == ROOM) \
             if "mic" in self._tracks else 0
