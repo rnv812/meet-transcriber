@@ -3,7 +3,6 @@
 // переносом и команды окна. Сама логика шагов, журнала, отката и уборки —
 // в `storage.rs` (там же тесты на подделке).
 
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -17,9 +16,9 @@ use crate::engine;
 use crate::logs::shell_log;
 use crate::resident::{self, ResidentStatus, Supervisor};
 use crate::storage::{
-    self, abandon, check_target, dir_bytes, execute, finish, home, needs_gb, parse_copy_line,
-    pointer, read_journal, resolve_target, same_path, unqueue_discard, write_pointer, Blocked,
-    CopyLine, Journal, JournalState, MoveControl, MoveEnv, Phase, Pointer, Recover, MARK,
+    self, abandon, check_target, dir_bytes, execute, home, needs_gb, parse_copy_line, pointer,
+    read_journal, resolve_target, same_path, Blocked, CopyLine, Journal, MoveControl, MoveEnv,
+    Phase, Pointer, Recover,
 };
 
 /// Событие хода переноса: `{phase, text, done, total}`.
@@ -76,15 +75,21 @@ fn resident_prefix(client: &api::Client) -> Option<PathBuf> {
 
 /// Погасить резидент, запущенный из `dir`, и дождаться выхода: удалять папку
 /// из-под живого резидента нельзя (его ленивые импорты, запись, загрузки).
-fn stop_resident_in(dir: &Path) {
+/// `false` — не удалось убедиться (резидент отвечает, но окружение не назвал,
+/// или не вышел): удалять нельзя, повторим позже.
+fn stop_resident_in(dir: &Path) -> bool {
     let Some((endpoint, client)) = client() else {
-        return;
+        return true;
     };
     let Some(prefix) = resident_prefix(&client) else {
-        return;
+        shell_log!(
+            "резидент не назвал своё окружение — {} удалю позже",
+            dir.display()
+        );
+        return false;
     };
     if !(same_path(&prefix, dir) || storage::inside(&prefix, dir)) {
-        return;
+        return true;
     }
     shell_log!(
         "резидент работает из {} — прошу его выйти до удаления папки",
@@ -97,6 +102,7 @@ fn stop_resident_in(dir: &Path) {
     while Instant::now() < deadline && resident::answers(&endpoint) {
         thread::sleep(POLL);
     }
+    !resident::answers(&endpoint)
 }
 
 /// Восстановление при старте: оболочки с надзором ещё нет — только резидент
@@ -104,8 +110,8 @@ fn stop_resident_in(dir: &Path) {
 pub struct StartupEnv;
 
 impl Recover for StartupEnv {
-    fn stop_resident_in(&self, dir: &Path) {
-        stop_resident_in(dir);
+    fn stop_resident_in(&self, dir: &Path) -> bool {
+        stop_resident_in(dir)
     }
 }
 
@@ -148,11 +154,13 @@ struct AppEnv<'a> {
     app: &'a AppHandle,
     data: PathBuf,
     version: String,
+    /// Id удержания резидента этого переноса (повтор — идемпотентен).
+    hold_id: String,
 }
 
 impl Recover for AppEnv<'_> {
-    fn stop_resident_in(&self, dir: &Path) {
-        stop_resident_in(dir);
+    fn stop_resident_in(&self, dir: &Path) -> bool {
+        stop_resident_in(dir)
     }
 }
 
@@ -165,13 +173,17 @@ impl MoveEnv for AppEnv<'_> {
         copy_models(self.app, &self.data, to, &self.version)
     }
 
+    fn smoke(&self, env: &Path) -> Result<(), String> {
+        smoke(&self.data, env)
+    }
+
     fn hold(&self) -> Result<Option<String>, String> {
         if self.app.state::<Supervisor>().status() != ResidentStatus::Running {
             return Err(NOT_RUNNING.into());
         }
         let (_, client) = client().ok_or(NOT_RUNNING)?;
         let answer = client
-            .post("/storage/hold", serde_json::Value::Null)
+            .post("/storage/hold", serde_json::json!({ "id": self.hold_id }))
             .map_err(|error| format!("Служба записи не ответила: {error}"))?;
         if answer.get("held").and_then(serde_json::Value::as_bool) == Some(true) {
             Ok(None)
@@ -188,7 +200,7 @@ impl MoveEnv for AppEnv<'_> {
 
     fn release(&self) {
         if let Some((_, client)) = client() {
-            let _ = client.delete("/storage/hold");
+            let _ = client.delete(&format!("/storage/hold?id={}", self.hold_id));
         }
     }
 
@@ -264,6 +276,33 @@ fn copy_models(app: &AppHandle, data: &Path, to: &Path, version: &str) -> Result
     match (code, finished) {
         (Some(0), true) => Ok(()),
         _ => Err(failure.unwrap_or_else(|| "Копирование моделей прервалось".into())),
+    }
+}
+
+/// Новый движок запускается: torch и ctranslate2 импортируются его Python.
+fn smoke(data: &Path, env: &Path) -> Result<(), String> {
+    let python = engine::python_of(env);
+    let argv: Vec<String> = vec![
+        python.to_string_lossy().into_owned(),
+        "-c".into(),
+        "import torch, ctranslate2".into(),
+    ];
+    let envs: [(&str, std::ffi::OsString); 1] = [("PYTHONIOENCODING", "utf-8".into())];
+    let mut tail: Vec<String> = Vec::new();
+    let code = engine::run_streamed(&argv, &envs, data, |line| {
+        shell_log!("проверка движка: {line}");
+        tail.push(line);
+        if tail.len() > 3 {
+            tail.remove(0);
+        }
+    })
+    .map_err(|error| format!("не запустился ({error})"))?;
+    match code {
+        Some(0) => Ok(()),
+        _ => Err(tail
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "импорт torch не прошёл".into())),
     }
 }
 
@@ -383,28 +422,10 @@ fn run_move(app: &AppHandle, picked: &Path) -> Result<String, String> {
         app,
         data: data.clone(),
         version: app.package_info().version.to_string(),
+        hold_id: uuid::Uuid::new_v4().to_string(),
     };
     let wanted = resolve_target(picked, &data);
-    match storage::journal_state(&data) {
-        JournalState::Absent => {}
-        JournalState::Bad => storage::quarantine_journal(&data),
-        JournalState::Ok(journal) if journal.phase == Phase::Cleanup => {
-            finish(&data, &journal, &env).map_err(|error| {
-                format!(
-                    "Прежняя папка движка ещё не удалена ({error}) — перезапустите компьютер и повторите"
-                )
-            })?;
-        }
-        // Прерванный перенос: та же папка — «Продолжить» (скопированное
-        // остаётся), другая — прежняя цель очищается.
-        JournalState::Ok(journal) => {
-            if !same_path(&journal.to, &wanted) {
-                abandon(&data, &journal)?;
-                env.drain(&data);
-            }
-        }
-    }
-    unqueue_discard(&data, &wanted);
+    storage::preamble(&data, &wanted, &env)?;
     let plan = plan(app, picked)?;
     if let Some(busy) = plan.check.busy {
         return Err(format!(
@@ -415,13 +436,9 @@ fn run_move(app: &AppHandle, picked: &Path) -> Result<String, String> {
         return Err(error);
     }
     let target = plan.target;
-    fs::create_dir_all(&target)
-        .map_err(|error| format!("Не удалось создать папку {}: {error}", target.display()))?;
-    if !same_path(&target, &data) {
-        // Метка — она же проверка, что в папку можно писать.
-        fs::write(target.join(MARK), "Meet: движок и модели\n")
-            .map_err(|error| format!("В папку {} нельзя записать: {error}", target.display()))?;
-    }
+    // Только после проверки: отказ (занято, места нет) не снимает папку с
+    // очереди удаления.
+    storage::claim(&data, &target)?;
     shell_log!(
         "перенос движка и моделей: {} -> {}",
         home(&data).display(),
@@ -540,13 +557,14 @@ pub async fn storage_abandon() -> Result<(), String> {
 #[tauri::command]
 pub async fn storage_reset(app: AppHandle) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        if MOVING.load(Ordering::SeqCst) {
+            return Err("Идёт перенос — дождитесь его конца".to_string());
+        }
         let data = resident::data_dir();
         if storage::blocked(&data).is_none() {
             return Err("Папка движка и моделей на месте — возвращать нечего".to_string());
         }
-        write_pointer(&data, None)
-            .map_err(|error| format!("Не удалось снять выбор папки: {error}"))?;
-        let _ = storage::remove_file(&data.join(storage::LEFTOVERS));
+        storage::reset_choice(&data, None)?;
         shell_log!("папка движка и моделей недоступна — возвращаю на системный диск");
         app.state::<Supervisor>().respawn(&app);
         Ok(())
@@ -560,18 +578,13 @@ pub async fn storage_reset(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn storage_repoint(app: AppHandle, folder: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        if MOVING.load(Ordering::SeqCst) {
+            return Err("Идёт перенос — дождитесь его конца".to_string());
+        }
         let data = resident::data_dir();
         let folder = PathBuf::from(folder.trim());
         let version = app.package_info().version.to_string();
-        let ours = folder.join(MARK).is_file() || same_path(&folder, &data);
-        if !ours || !engine::is_installed(&engine::env_dir(&folder, &version), &version) {
-            return Err(format!(
-                "В папке {} нет движка Meet {version} — выберите папку, куда переносили движок",
-                folder.display()
-            ));
-        }
-        write_pointer(&data, Some(&folder))
-            .map_err(|error| format!("Не удалось записать выбор папки: {error}"))?;
+        storage::repoint(&data, &folder, &version)?;
         shell_log!(
             "папка движка и моделей указана заново: {}",
             folder.display()

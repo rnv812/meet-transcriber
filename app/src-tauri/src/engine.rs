@@ -1149,6 +1149,8 @@ pub fn install_with(app: &AppHandle, profile: &str, mode: InstallMode) -> Result
     // Папки движка нет (диск отключён) или выбор не прочитан: create_dir_all
     // создал бы её заново — на другой флешке с той же буквой или в /Volumes.
     storage::ready(&data)?;
+    // Уборка недоделанного переноса не идёт посреди установки.
+    let _drain = storage::drain_lock();
     // Движок — в папке движка и моделей (`storage.json`), по умолчанию — в
     // папке данных.
     let home = storage::home(&data);

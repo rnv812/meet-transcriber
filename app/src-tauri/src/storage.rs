@@ -66,8 +66,15 @@ pub const DISCARDS: &str = "storage-discard.json";
 /// После переезда из общего кэша HF: окно спросит, удалить ли модели Meet из
 /// него (ответ и удаление — резидент, `meet.storage.answer_leftovers`).
 pub const LEFTOVERS: &str = "storage-leftovers.json";
-/// Метка папки движка и моделей: в помеченной папке всё наше.
+/// Метка папки движка и моделей. В ней — id установки (`INSTALL_ID`): папка
+/// с чужим id принадлежит другой установке Meet (другой пользователь, копия
+/// для разработки с отдельной папкой данных) — в неё не ставим и из неё не
+/// удаляем.
 pub const MARK: &str = ".meet-storage";
+/// Id этой установки (папки данных): создаётся при первом переносе.
+pub const INSTALL_ID: &str = "storage-id";
+pub const FOREIGN: &str = "Эта папка принадлежит другой установке Meet (другой пользователь или \
+                           копия приложения) — выберите другую папку";
 /// Кэш uv в выбранной папке (`engine::uv_env`).
 pub const UV_CACHE: &str = "uv-cache";
 /// Версия формата файлов выбора, журнала и очереди.
@@ -89,10 +96,15 @@ pub const START_FAILED: &str = "Служба записи не запустил�
 const MARGIN_GB: f64 = 0.5;
 /// Как часто спрашивать удержание, пока резидент занят.
 pub const IDLE_POLL: Duration = Duration::from_secs(2);
+/// Сколько раз подряд можно не получить ответ на удержание.
+const HOLD_ATTEMPTS: u32 = 3;
 /// Длиннее этого путь к папке без длинных путей Windows не берём: torch и
 /// пакеты nvidia добавляют к нему ~150 символов, предел — 260.
 #[cfg_attr(not(windows), allow(dead_code))]
 const LONG_PATH_LIMIT: usize = 100;
+/// И с длинными путями — не длиннее: загрузка DLL по-прежнему упирается в 260.
+#[cfg_attr(not(windows), allow(dead_code))]
+const LONG_PATH_CAP: usize = 150;
 
 // --- выбранная папка ------------------------------------------------------------
 
@@ -182,7 +194,7 @@ pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
     }
-    fs::rename(&staged, path)?;
+    rename_retrying(&staged, path)?;
     #[cfg(unix)]
     if let Some(parent) = path.parent() {
         if let Ok(dir) = File::open(parent) {
@@ -190,6 +202,22 @@ pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Переименование с повторами: на Windows его ненадолго не дают антивирус,
+/// проверяющий свежий файл, и читатель без FILE_SHARE_DELETE (Python
+/// читает `storage.json`) — «отказано в доступе» на доли секунды.
+fn rename_retrying(from: &Path, to: &Path) -> io::Result<()> {
+    let mut attempt = 0;
+    loop {
+        match fs::rename(from, to) {
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied && attempt < 5 => {
+                attempt += 1;
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            other => return other,
+        }
+    }
 }
 
 pub fn remove_file(path: &Path) -> io::Result<()> {
@@ -210,6 +238,65 @@ pub fn write_pointer(data_dir: &Path, root: Option<&Path>) -> io::Result<()> {
             write_atomic(&path, &text)
         }
     }
+}
+
+// --- своя или чужая папка (N1) -------------------------------------------------
+
+/// Id этой установки; нет — создаётся.
+pub fn install_id(data_dir: &Path) -> String {
+    let path = data_dir.join(INSTALL_ID);
+    if let Ok(text) = fs::read_to_string(&path) {
+        let text = text.trim();
+        if !text.is_empty() {
+            return text.to_string();
+        }
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let _ = fs::create_dir_all(data_dir);
+    if let Err(error) = write_atomic(&path, &id) {
+        shell_log!("id установки не записался: {error}");
+    }
+    id
+}
+
+/// Чья папка.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owner {
+    /// Метки нет.
+    Unmarked,
+    /// Наша: метка с нашим id или сама папка данных.
+    Ours,
+    /// Метка другой установки (или нечитаемая).
+    Foreign,
+}
+
+pub fn owner(dir: &Path, data_dir: &Path) -> Owner {
+    if same_path(dir, data_dir) {
+        return Owner::Ours;
+    }
+    let raw = match fs::read_to_string(dir.join(MARK)) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Owner::Unmarked,
+        Err(_) => return Owner::Foreign,
+    };
+    let id = serde_json::from_str::<serde_json::Value>(&raw)
+        .ok()
+        .and_then(|value| value.get("install")?.as_str().map(String::from));
+    match id {
+        Some(id) if id == install_id(data_dir) => Owner::Ours,
+        _ => Owner::Foreign,
+    }
+}
+
+/// Пометить папку своей (id установки).
+pub fn write_mark(dir: &Path, data_dir: &Path) -> io::Result<()> {
+    let text = serde_json::json!({
+        "version": VERSION,
+        "install": install_id(data_dir),
+        "note": "Meet: движок и модели",
+    })
+    .to_string();
+    write_atomic(&dir.join(MARK), &text)
 }
 
 // --- сравнение путей ------------------------------------------------------------
@@ -280,7 +367,11 @@ pub fn resolve_target(picked: &Path, data_dir: &Path) -> PathBuf {
     if same_path(picked, data_dir) {
         return data_dir.to_path_buf();
     }
-    if !volume_root(picked) && (picked.join(MARK).is_file() || empty_or_absent(picked)) {
+    // Чужая помеченная — она же: проверка откажет понятным текстом, а не
+    // молча положит нас внутрь чужой папки.
+    if !volume_root(picked)
+        && (owner(picked, data_dir) != Owner::Unmarked || empty_or_absent(picked))
+    {
         return picked.to_path_buf();
     }
     let nested = picked.join(NEST);
@@ -311,7 +402,10 @@ pub fn check_target(target: &Path, current: &Path, data_dir: &Path) -> Result<()
     if !target.exists() && !target.parent().is_some_and(Path::is_dir) {
         return Err("Папка недоступна — диск отключён?".into());
     }
-    if !same_path(target, data_dir) && !target.join(MARK).is_file() && !empty_or_absent(target) {
+    if owner(target, data_dir) == Owner::Foreign {
+        return Err(FOREIGN.into());
+    }
+    if owner(target, data_dir) != Owner::Ours && !empty_or_absent(target) {
         return Err(format!(
             "Папка {} не пуста — выберите пустую папку",
             target.display()
@@ -375,9 +469,22 @@ pub mod vet {
         matches!(name.trim().to_ascii_uppercase().as_str(), "FAT" | "FAT32")
     }
 
+    #[cfg_attr(windows, allow(dead_code))]
+    pub const NO_ACCESS: &str = "В эту папку нельзя записать — нет прав. Выберите другую папку";
+
+    /// Путь длиннее допустимого: без длинных путей Windows — 100 символов, с
+    /// ними — 150 (загрузка DLL всё равно упирается в 260). Префикс `\\?\`
+    /// не считается.
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn too_long(path: &Path, long_paths: bool) -> bool {
-        !long_paths && path.to_string_lossy().chars().count() > super::LONG_PATH_LIMIT
+        let text = path.to_string_lossy();
+        let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
+        let limit = if long_paths {
+            super::LONG_PATH_CAP
+        } else {
+            super::LONG_PATH_LIMIT
+        };
+        text.chars().count() > limit
     }
 
     fn existing(path: &Path) -> PathBuf {
@@ -388,33 +495,35 @@ pub mod vet {
     }
 
     #[cfg(windows)]
-    pub fn volume(target: &Path) -> Result<(), String> {
-        use std::path::{Component, Prefix};
+    fn wide(text: &std::ffi::OsStr) -> Vec<u16> {
+        use std::os::windows::ffi::OsStrExt;
+        text.encode_wide().chain(Some(0)).collect()
+    }
 
-        let wide = |text: &str| text.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    #[cfg(windows)]
+    pub fn volume(target: &Path) -> Result<(), String> {
         let text = target.to_string_lossy();
         if text.starts_with(r"\\") && !text.starts_with(r"\\?\") {
             return Err(NETWORK.into());
         }
-        let real = std::fs::canonicalize(existing(target)).unwrap_or_else(|_| existing(target));
-        let letter = match real.components().next() {
-            Some(Component::Prefix(prefix)) => match prefix.kind() {
-                Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => Some(letter as char),
-                Prefix::UNC(..) | Prefix::VerbatimUNC(..) => return Err(NETWORK.into()),
-                _ => None,
-            },
-            _ => None,
-        };
-        let cloud: Vec<PathBuf> = ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"]
+        let place = existing(target);
+        let real = std::fs::canonicalize(&place).unwrap_or_else(|_| place.clone());
+        if real.to_string_lossy().starts_with(r"\\?\UNC\") {
+            return Err(NETWORK.into());
+        }
+        let mut cloud: Vec<PathBuf> = ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"]
             .iter()
             .filter_map(|name| std::env::var_os(name).filter(|value| !value.is_empty()))
             .map(PathBuf::from)
             .collect();
+        cloud.extend(sync_roots());
         if under_cloud(target, &cloud) || cloud_attributes(target) {
             return Err(CLOUD.into());
         }
-        if let Some(letter) = letter {
-            let root = wide(&format!("{letter}:\\"));
+        // Корень тома — и для точки монтирования (`C:\mnt\usb\`), не только
+        // для буквы диска.
+        if let Some(root) = volume_path(&place) {
+            let root = wide(root.as_os_str());
             // SAFETY: строка с нулём на конце живёт до конца вызова.
             let kind =
                 unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(root.as_ptr()) };
@@ -432,21 +541,122 @@ pub mod vet {
         Ok(())
     }
 
-    /// Файлы по требованию облака (OneDrive, Dropbox через Cloud Files API):
-    /// у папки или её родителей — атрибуты «выгружается/закреплено».
+    /// Корень тома, на котором лежит путь (`GetVolumePathNameW`).
+    #[cfg(windows)]
+    fn volume_path(place: &Path) -> Option<PathBuf> {
+        use windows_sys::Win32::Storage::FileSystem::GetVolumePathNameW;
+        let path = wide(place.as_os_str());
+        let mut root = vec![0u16; 1024];
+        // SAFETY: строка с нулём; буфер на 1024 символа, длина передана.
+        let ok = unsafe { GetVolumePathNameW(path.as_ptr(), root.as_mut_ptr(), root.len() as u32) };
+        let end = root.iter().position(|c| *c == 0).unwrap_or(root.len());
+        (ok != 0).then(|| PathBuf::from(String::from_utf16_lossy(&root[..end])))
+    }
+
+    /// Корни синхронизации облаков всех поставщиков (OneDrive любого
+    /// арендатора, SharePoint, iCloud, Dropbox, Box): Windows ведёт их список
+    /// в `HKLM\…\Explorer\SyncRootManager\<поставщик>\UserSyncRoots`.
+    #[cfg(windows)]
+    fn sync_roots() -> Vec<PathBuf> {
+        use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+        use windows_sys::Win32::System::Registry::{
+            RegCloseKey, RegEnumKeyExW, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_LOCAL_MACHINE,
+            KEY_READ, REG_SZ,
+        };
+        const BASE: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager";
+        let open = |parent: HKEY, sub: &str| -> Option<HKEY> {
+            let sub = wide(std::ffi::OsStr::new(sub));
+            let mut key: HKEY = std::ptr::null_mut();
+            // SAFETY: имя с нулём на конце; ключ пишется в локальную переменную.
+            let status = unsafe { RegOpenKeyExW(parent, sub.as_ptr(), 0, KEY_READ, &mut key) };
+            (status == ERROR_SUCCESS).then_some(key)
+        };
+        let mut roots = Vec::new();
+        let Some(base) = open(HKEY_LOCAL_MACHINE, BASE) else {
+            return roots;
+        };
+        for index in 0.. {
+            let mut name = [0u16; 512];
+            let mut len = name.len() as u32;
+            // SAFETY: буфер имени на `len` символов; остальное — null.
+            let status = unsafe {
+                RegEnumKeyExW(
+                    base,
+                    index,
+                    name.as_mut_ptr(),
+                    &mut len,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if status != ERROR_SUCCESS {
+                break;
+            }
+            let provider = String::from_utf16_lossy(&name[..len as usize]);
+            let Some(users) = open(base, &format!(r"{provider}\UserSyncRoots")) else {
+                continue;
+            };
+            for value in 0.. {
+                let mut value_name = [0u16; 256];
+                let mut name_len = value_name.len() as u32;
+                let mut data = [0u8; 2048];
+                let mut data_len = data.len() as u32;
+                let mut kind = 0u32;
+                // SAFETY: буферы имени и данных с длинами; тип — в локальную.
+                let status = unsafe {
+                    RegEnumValueW(
+                        users,
+                        value,
+                        value_name.as_mut_ptr(),
+                        &mut name_len,
+                        std::ptr::null(),
+                        &mut kind,
+                        data.as_mut_ptr(),
+                        &mut data_len,
+                    )
+                };
+                if status != ERROR_SUCCESS {
+                    break;
+                }
+                if kind == REG_SZ {
+                    let units: Vec<u16> = data[..data_len as usize]
+                        .chunks_exact(2)
+                        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                        .take_while(|c| *c != 0)
+                        .collect();
+                    let path = String::from_utf16_lossy(&units);
+                    if !path.trim().is_empty() {
+                        roots.push(PathBuf::from(path.trim()));
+                    }
+                }
+            }
+            // SAFETY: ключ открыт выше и закрывается один раз.
+            unsafe { RegCloseKey(users) };
+        }
+        // SAFETY: ключ открыт выше и закрывается один раз.
+        unsafe { RegCloseKey(base) };
+        roots
+    }
+
+    /// Файлы по требованию облака (Cloud Files API): у папки или её
+    /// родителей — атрибуты «выгружается/закреплено», у папок облака — и
+    /// RECALL_ON_OPEN.
     #[cfg(windows)]
     fn cloud_attributes(target: &Path) -> bool {
-        use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Storage::FileSystem::{
             GetFileAttributesW, FILE_ATTRIBUTE_PINNED, FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,
-            FILE_ATTRIBUTE_UNPINNED,
+            FILE_ATTRIBUTE_RECALL_ON_OPEN, FILE_ATTRIBUTE_UNPINNED,
         };
-        let cloud =
-            FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_PINNED | FILE_ATTRIBUTE_UNPINNED;
+        let cloud = FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+            | FILE_ATTRIBUTE_RECALL_ON_OPEN
+            | FILE_ATTRIBUTE_PINNED
+            | FILE_ATTRIBUTE_UNPINNED;
         target.ancestors().filter(|dir| dir.exists()).any(|dir| {
-            let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
+            let path = wide(dir.as_os_str());
             // SAFETY: строка с нулём на конце живёт до конца вызова.
-            let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+            let attributes = unsafe { GetFileAttributesW(path.as_ptr()) };
             attributes != u32::MAX && attributes & cloud != 0
         })
     }
@@ -480,9 +690,10 @@ pub mod vet {
         use windows_sys::Win32::System::Registry::{
             RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD,
         };
-        let wide = |text: &str| text.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
-        let key = wide(r"SYSTEM\CurrentControlSet\Control\FileSystem");
-        let name = wide("LongPathsEnabled");
+        let key = wide(std::ffi::OsStr::new(
+            r"SYSTEM\CurrentControlSet\Control\FileSystem",
+        ));
+        let name = wide(std::ffi::OsStr::new("LongPathsEnabled"));
         let mut value: u32 = 0;
         let mut size = std::mem::size_of::<u32>() as u32;
         // SAFETY: строки с нулём на конце и буфер под DWORD живут до конца вызова.
@@ -516,7 +727,20 @@ pub mod vet {
         if !local(&place) {
             return Err(NETWORK.into());
         }
-        if !symlinks_work(&place) {
+        probe(&place)
+    }
+
+    /// Сначала обычный файл (права), потом ссылка (файловая система): нет
+    /// прав — так и говорим, а не «exFAT?».
+    #[cfg(unix)]
+    pub fn probe(place: &Path) -> Result<(), String> {
+        let file = place.join(format!(".meet-write-probe-{}", std::process::id()));
+        let written = std::fs::write(&file, b"");
+        let _ = std::fs::remove_file(&file);
+        if written.is_err() {
+            return Err(NO_ACCESS.into());
+        }
+        if !symlinks_work(place) {
             return Err(NO_SYMLINKS.into());
         }
         Ok(())
@@ -678,7 +902,9 @@ struct Discards {
 /// папку, из которой его сейчас удаляют.
 static DRAIN: Mutex<()> = Mutex::new(());
 
-fn drain_lock() -> std::sync::MutexGuard<'static, ()> {
+/// Замок очереди удаления. Его держит и установка движка из мастера и
+/// обслуживания (`engine::install_with`): уборка не идёт посреди установки.
+pub fn drain_lock() -> std::sync::MutexGuard<'static, ()> {
     DRAIN
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -736,8 +962,11 @@ pub fn unqueue_discard(data_dir: &Path, path: &Path) {
     write_discards(data_dir, &items);
 }
 
+/// Есть что удалять сейчас (отключённая флешка ждёт молча, без «убираю…»).
 pub fn discards_pending(data_dir: &Path) -> bool {
-    !read_discards(data_dir).is_empty()
+    read_discards(data_dir)
+        .iter()
+        .any(|item| item.path.exists())
 }
 
 fn remove_tree(path: &Path, errors: &mut Vec<String>) {
@@ -763,8 +992,11 @@ fn remove_ours(home: &Path, whole: bool, data_dir: &Path) -> Vec<String> {
     let _ = fs::remove_dir(&models); // только пустую
     if whole && !same_path(home, data_dir) {
         remove_tree(&home.join(UV_CACHE), &mut errors);
-        let _ = remove_file(&home.join(MARK));
-        let _ = fs::remove_dir(home); // только пустую: чужие файлы — его
+        // Метка — только когда всё наше ушло: иначе повтор не узнал бы папку.
+        if errors.is_empty() {
+            let _ = remove_file(&home.join(MARK));
+            let _ = fs::remove_dir(home); // только пустую: чужие файлы — его
+        }
     }
     errors
 }
@@ -782,9 +1014,21 @@ pub fn drain_once(data_dir: &Path, env: &impl Recover) -> usize {
             continue;
         }
         if !item.path.exists() {
+            // Отключённая флешка: вернётся — уберём.
+            left.push(item);
             continue;
         }
-        env.stop_resident_in(&item.path);
+        if owner(&item.path, data_dir) != Owner::Ours {
+            shell_log!(
+                "{} — не наша папка (метка другой установки или её нет), не удаляю",
+                item.path.display()
+            );
+            continue;
+        }
+        if !env.stop_resident_in(&item.path) {
+            left.push(item);
+            continue;
+        }
         let errors = match item.scope {
             Scope::Engine => {
                 let mut errors = Vec::new();
@@ -809,8 +1053,10 @@ pub fn drain_once(data_dir: &Path, env: &impl Recover) -> usize {
 /// Чем восстановлению нужен мир вокруг (в тестах — подделка).
 pub trait Recover {
     /// Погасить резидент, запущенный из `dir` (его движок там), и дождаться
-    /// выхода — до удаления папки.
-    fn stop_resident_in(&self, dir: &Path);
+    /// выхода — до удаления папки. `false` — не удалось убедиться, что из
+    /// папки никто не работает (резидент не ответил или не вышел): удалять
+    /// нельзя, повторим позже.
+    fn stop_resident_in(&self, dir: &Path) -> bool;
 }
 
 /// Прервать перенос: выбор — прежний, журнал — `interrupted`, из новой папки
@@ -830,18 +1076,99 @@ pub fn interrupt(data_dir: &Path, journal: &Journal) -> Result<(), String> {
     Ok(())
 }
 
-/// Отменить перенос: выбор — прежний, новая папка — в очередь на очистку,
-/// журнала нет.
+/// Отменить перенос: новая папка — в очередь на очистку, журнала нет.
+///
+/// Выбор не трогаем: отменить можно только до переключения (в работе — до
+/// защёлки, прерванный — выбор вернул ещё `interrupt`), а с тех пор его
+/// могли сменить («Вернуть на системный диск», «Указать папку») — вернуть
+/// `from` значило бы указать на устаревшую папку. Живую папку (и ту, в
+/// которой она лежит) в очередь не ставим никогда.
 pub fn abandon(data_dir: &Path, journal: &Journal) -> Result<(), String> {
-    write_pointer(data_dir, journal.from.as_deref())
-        .map_err(|error| format!("Не удалось вернуть прежнюю папку: {error}"))?;
-    if journal.from.is_none() {
-        let _ = remove_file(&data_dir.join(LEFTOVERS));
-    }
-    if !same_path(&journal.to, &journal.previous_home(data_dir)) {
+    let live = home(data_dir);
+    if !same_path(&journal.to, &live) && !inside(&live, &journal.to) {
         queue_discard(data_dir, &journal.to, Scope::All);
     }
     remove_file(&data_dir.join(JOURNAL)).map_err(|error| error.to_string())
+}
+
+/// Сменить выбор вручную («Вернуть на системный диск» — `None`, «Указать
+/// папку»): прерванный перенос теряет смысл — журнал долой, его папка — в
+/// очередь, если это не новая живая; новая живая из очереди уходит.
+pub fn reset_choice(data_dir: &Path, root: Option<&Path>) -> Result<(), String> {
+    write_pointer(data_dir, root)
+        .map_err(|error| format!("Не удалось записать выбор папки: {error}"))?;
+    if root.is_none() {
+        let _ = remove_file(&data_dir.join(LEFTOVERS));
+    }
+    if let JournalState::Ok(journal) = journal_state(data_dir) {
+        if journal.phase != Phase::Cleanup {
+            abandon(data_dir, &journal)?;
+        }
+    }
+    unqueue_discard(data_dir, &home(data_dir));
+    Ok(())
+}
+
+/// «Указать папку»: только своя (метка с нашим id или папка данных) и с
+/// движком этой версии.
+pub fn repoint(data_dir: &Path, folder: &Path, version: &str) -> Result<(), String> {
+    match owner(folder, data_dir) {
+        Owner::Ours => {}
+        Owner::Foreign => return Err(FOREIGN.into()),
+        Owner::Unmarked => {
+            return Err(format!(
+                "В папке {} нет движка Meet — выберите папку, куда переносили движок",
+                folder.display()
+            ))
+        }
+    }
+    if !engine::is_installed(&engine::env_dir(folder, version), version) {
+        return Err(format!(
+            "В папке {} нет движка Meet {version} — выберите папку, куда переносили движок",
+            folder.display()
+        ));
+    }
+    reset_choice(data_dir, Some(folder))
+}
+
+/// Перед переносом в `wanted`: что осталось от прошлого. Уборка после
+/// переключения — доводится; прерванный перенос в другую папку — отменяется
+/// (та же папка — «Продолжить»: скопированное остаётся).
+pub fn preamble(data_dir: &Path, wanted: &Path, env: &impl MoveEnv) -> Result<(), String> {
+    match journal_state(data_dir) {
+        JournalState::Absent => Ok(()),
+        JournalState::Bad => {
+            quarantine_journal(data_dir);
+            Ok(())
+        }
+        JournalState::Ok(journal) if journal.phase == Phase::Cleanup => {
+            finish(data_dir, &journal, env).map_err(|error| {
+                format!(
+                    "Прежняя папка движка ещё не удалена ({error}) — перезапустите компьютер и повторите"
+                )
+            })
+        }
+        JournalState::Ok(journal) => {
+            if !same_path(&journal.to, wanted) {
+                abandon(data_dir, &journal)?;
+                env.drain(data_dir);
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Забрать проверенную папку под перенос: создать, пометить своей (это и
+/// проверка записи), убрать из очереди удаления («Продолжить»).
+pub fn claim(data_dir: &Path, target: &Path) -> Result<(), String> {
+    fs::create_dir_all(target)
+        .map_err(|error| format!("Не удалось создать папку {}: {error}", target.display()))?;
+    if !same_path(target, data_dir) {
+        write_mark(target, data_dir)
+            .map_err(|error| format!("В папку {} нельзя записать: {error}", target.display()))?;
+    }
+    unqueue_discard(data_dir, target);
+    Ok(())
 }
 
 /// Довести перенос: удалить прежние движок и модели Meet (общий кэш HF не
@@ -850,8 +1177,15 @@ pub fn abandon(data_dir: &Path, journal: &Journal) -> Result<(), String> {
 pub fn finish(data_dir: &Path, journal: &Journal, env: &impl Recover) -> Result<(), String> {
     let from = journal.previous_home(data_dir);
     if !same_path(&from, &journal.to) && !same_path(&from, &home(data_dir)) {
-        if from.is_dir() {
-            env.stop_resident_in(&from);
+        if from.is_dir() && owner(&from, data_dir) != Owner::Ours {
+            shell_log!(
+                "прежняя папка {} — не наша (метка другой установки), не удаляю",
+                from.display()
+            );
+        } else if from.is_dir() {
+            if !env.stop_resident_in(&from) {
+                return Err("резидент из прежней папки не ответил — удалю позже".into());
+            }
             let errors = remove_ours(&from, journal.from.is_some(), data_dir);
             if !errors.is_empty() {
                 return Err(errors.join("; "));
@@ -911,15 +1245,18 @@ pub fn recover_slow(data_dir: &Path, cleanup: Option<Journal>, env: &impl Recove
 /// без `/storage`), это не движок Meet (разработка из `.venv`) или движок в
 /// нынешней папке. Резидент из движка другой папки (недобитый после
 /// прерванного переноса) — нельзя: его папку удаляют.
+///
+/// Решает по форме пути (`…\engine\<версия>`), без `installed.json`:
+/// у недоудалённого движка или на отключённом диске его нет. Не узнали
+/// окружение (резидент не ответил на `/storage`) — не подхватываем.
 pub fn adoptable(prefix: Option<&Path>, home: &Path) -> bool {
     let Some(prefix) = prefix else {
-        return true;
+        return false;
     };
     let meet_engine = prefix
         .parent()
         .and_then(Path::file_name)
-        .is_some_and(|name| name == ENGINE)
-        && prefix.join("installed.json").is_file();
+        .is_some_and(|name| name == ENGINE);
     !meet_engine || inside(prefix, &engine::engine_root(home))
 }
 
@@ -974,6 +1311,9 @@ impl Default for MoveControl {
 pub trait MoveEnv: Recover {
     fn install(&self, home: &Path, profile: &str) -> Result<(), String>;
     fn copy_models(&self, to: &Path) -> Result<(), String>;
+    /// Новый движок запускается (`python -c "import torch, ctranslate2"`):
+    /// сломанный путь, DLL или облако ловятся, пока прежний движок цел.
+    fn smoke(&self, env: &Path) -> Result<(), String>;
     /// Удержать резидент перед переключением: `Ok(None)` — удержан, `Ok(Some)`
     /// — занят (чем), `Err` — не ответил.
     fn hold(&self) -> Result<Option<String>, String>;
@@ -1062,14 +1402,33 @@ fn steps(
     env.emit("models", "Копирование моделей", 0, 0);
     env.copy_models(&journal.to)?;
     cancel_check(control)?;
+    env.emit("smoke", "Проверка нового движка", 0, 0);
+    env.smoke(&engine::env_dir(&journal.to, version))
+        .map_err(|error| format!("Новый движок не запускается: {error}"))?;
+    cancel_check(control)?;
 
     advance(env, data_dir, journal, Phase::Switching, "switching")?;
     // Удержание: под замком резидента проверено, что ничего не идёт, и новое
     // (запись, автозапись, ассистент, задачи, загрузки) не начнётся до
     // перезапуска.
+    let mut failures = 0;
     loop {
         cancel_check(control)?;
-        match env.hold()? {
+        let answer = match env.hold() {
+            Ok(answer) => answer,
+            // Ответ потерялся или резидент не успел: удержание идемпотентно
+            // (id), так что спросить снова безопасно; не вышло — снять.
+            Err(error) => {
+                failures += 1;
+                if failures >= HOLD_ATTEMPTS {
+                    env.release();
+                    return Err(error);
+                }
+                env.pause(IDLE_POLL);
+                continue;
+            }
+        };
+        match answer {
             None => break,
             Some(reason) => {
                 env.emit("waiting", &format!("Жду, пока закончится: {reason}"), 0, 0);

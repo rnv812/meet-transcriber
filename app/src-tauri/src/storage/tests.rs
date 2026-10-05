@@ -50,6 +50,13 @@ struct FakeEnv<'a> {
     cancel_in_pause: bool,
     cancel_in_restart: bool,
     restart_fails: bool,
+    /// Отмена, нажатая, пока удержание выдаётся (защёлка её увидит).
+    cancel_in_hold: bool,
+    /// Столько первых удержаний — без ответа (`Err`).
+    hold_errors: Cell<u32>,
+    smoke_fails: bool,
+    /// Резидент из удаляемой папки не подтвердил выход.
+    resident_stuck: bool,
     /// Ответы удержания по очереди; кончились — «удержан».
     busy: RefCell<VecDeque<String>>,
     calls: RefCell<Vec<String>>,
@@ -72,8 +79,9 @@ impl FakeEnv<'_> {
 }
 
 impl Recover for FakeEnv<'_> {
-    fn stop_resident_in(&self, dir: &Path) {
+    fn stop_resident_in(&self, dir: &Path) -> bool {
         self.stopped.borrow_mut().push(dir.to_path_buf());
+        !self.resident_stuck
     }
 }
 
@@ -85,6 +93,8 @@ impl MoveEnv for FakeEnv<'_> {
         fs::write(engine::launcher(&env), "").unwrap();
         fs::create_dir_all(home.join(UV_CACHE)).unwrap();
         fs::write(home.join(UV_CACHE).join("torch.whl"), "w").unwrap();
+        // Посреди установки: движок недостроен.
+        self.checkpoint("install");
         if self.cancel_in_install {
             assert!(self.control.unwrap().cancel());
             return Err("Установка движка прервалась: процесс прерван".into());
@@ -111,9 +121,25 @@ impl MoveEnv for FakeEnv<'_> {
         Ok(())
     }
 
+    fn smoke(&self, env: &Path) -> Result<(), String> {
+        self.log(format!("smoke {}", env.display()));
+        if self.smoke_fails {
+            return Err("ImportError: DLL load failed while importing torch".into());
+        }
+        Ok(())
+    }
+
     fn hold(&self) -> Result<Option<String>, String> {
         self.log("hold");
-        Ok(self.busy.borrow_mut().pop_front())
+        if self.hold_errors.get() > 0 {
+            self.hold_errors.set(self.hold_errors.get() - 1);
+            return Err("Служба записи не ответила: таймаут".into());
+        }
+        let answer = self.busy.borrow_mut().pop_front();
+        if answer.is_none() && self.cancel_in_hold {
+            assert!(self.control.unwrap().cancel());
+        }
+        Ok(answer)
     }
 
     fn release(&self) {
@@ -177,7 +203,7 @@ fn world(name: &str) -> World {
     }
     let to = t.0.join("E").join("Meet");
     fs::create_dir_all(&to).unwrap();
-    fs::write(to.join(MARK), "").unwrap();
+    write_mark(&to, &data).unwrap();
     World { _t: t, data, to }
 }
 
@@ -454,12 +480,12 @@ fn rolling_back_a_move_to_the_data_dir_keeps_settings_and_recordings() {
     t.file("data/recordings/r1/sys.opus");
     let from = t.0.join("E").join("Meet");
     for file in [
-        "E/Meet/.meet-storage",
         "E/Meet/engine/0.3.3/Scripts/python.exe",
         "E/Meet/models/hf/x",
     ] {
         t.file(file);
     }
+    write_mark(&from, &data).unwrap();
     write_pointer(&data, Some(&from)).unwrap();
     let control = MoveControl::new();
     let env = FakeEnv {
@@ -524,6 +550,7 @@ fn locked_files_stay_queued_and_do_not_keep_the_move_going() {
     t.file("data/config.json");
     let to = t.0.join("Meet");
     let locked = t.file("Meet/engine/0.3.3/torch.pyd");
+    write_mark(&to, &data).unwrap();
     let journal = Journal::new(None, to.clone(), Phase::Models);
     write_journal(&data, &journal).unwrap();
     // Без FILE_SHARE_DELETE: так файл держат антивирус и загруженная DLL.
@@ -696,8 +723,8 @@ fn foreign_engine_resident_is_not_adopted() {
         "разработка из .venv — не трогаем"
     );
     assert!(
-        adoptable(None, &home),
-        "старый резидент без /storage — по версии"
+        !adoptable(None, &home),
+        "не узнали окружение — не подхватываем"
     );
 }
 
@@ -714,8 +741,8 @@ fn target_is_the_folder_itself_when_empty_or_ours() {
     let absent = t.0.join("absent");
     assert_eq!(resolve_target(&absent, &data), absent);
     let ours = t.0.join("ours");
-    t.file("ours/.meet-storage");
     t.file("ours/engine/0.3.2/x");
+    write_mark(&ours, &data).unwrap();
     assert_eq!(resolve_target(&ours, &data), ours);
     assert_eq!(resolve_target(&data, &data), data);
 }
@@ -772,7 +799,8 @@ fn back_to_the_system_disk_is_allowed_from_a_chosen_folder() {
     let data = t.0.join("data");
     t.file("data/config.json");
     let current = t.0.join("E").join("Meet");
-    t.file("E/Meet/.meet-storage");
+    fs::create_dir_all(&current).unwrap();
+    write_mark(&current, &data).unwrap();
     assert_eq!(check_target(&data, &current, &data), Ok(()));
 }
 
@@ -868,4 +896,446 @@ fn paths_compare_case_insensitively_on_windows() {
     if cfg!(windows) {
         assert!(same_path(&a, &t.0.join("FOLDER")));
     }
+}
+
+// --- раунд 2: чужие папки (N1) ---------------------------------------------------
+
+/// Папка, помеченная другой установкой (другая папка данных).
+fn foreign(t: &Temp, relative: &str) -> PathBuf {
+    let other = t.0.join("other-data");
+    fs::create_dir_all(&other).unwrap();
+    let dir = t.0.join(relative);
+    fs::create_dir_all(&dir).unwrap();
+    write_mark(&dir, &other).unwrap();
+    dir
+}
+
+#[test]
+fn marker_carries_this_install_id() {
+    let t = Temp::new("mark-id");
+    let data = t.0.join("data");
+    let dir = t.0.join("Meet");
+    fs::create_dir_all(&dir).unwrap();
+    write_mark(&dir, &data).unwrap();
+    assert_eq!(owner(&dir, &data), Owner::Ours);
+    assert_eq!(
+        install_id(&data),
+        install_id(&data),
+        "id один на папку данных"
+    );
+    let raw = fs::read_to_string(dir.join(MARK)).unwrap();
+    assert!(raw.contains(&install_id(&data)));
+    assert_eq!(owner(&t.0.join("none"), &data), Owner::Unmarked);
+    assert_eq!(owner(&data, &data), Owner::Ours);
+    fs::write(dir.join(MARK), "Meet: движок и модели").unwrap();
+    assert_eq!(
+        owner(&dir, &data),
+        Owner::Foreign,
+        "непонятная метка — не наша"
+    );
+}
+
+#[test]
+fn another_installs_folder_is_refused() {
+    let t = Temp::new("foreign-check");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let theirs = foreign(&t, "E/Meet");
+    t.file("E/Meet/engine/0.3.3/python.exe");
+    assert_eq!(resolve_target(&theirs, &data), theirs);
+    assert_eq!(
+        check_target(&theirs, &data, &data),
+        Err(FOREIGN.to_string())
+    );
+    // Выбрали диск выше — «E:\Meet» чужая, отказ тот же.
+    let nested = resolve_target(&t.0.join("E"), &data);
+    assert_eq!(nested, theirs);
+    assert_eq!(
+        check_target(&nested, &data, &data),
+        Err(FOREIGN.to_string())
+    );
+}
+
+#[test]
+fn drain_and_finish_never_delete_another_installs_folder() {
+    let t = Temp::new("foreign-delete");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let theirs = foreign(&t, "Theirs");
+    t.file("Theirs/engine/0.3.3/python.exe");
+    t.file("Theirs/models/hf/x");
+    queue_discard(&data, &theirs, Scope::All);
+    assert_eq!(drain_once(&data, &FakeEnv::default()), 0);
+    assert!(theirs.join("engine").join("0.3.3").is_dir());
+    let unmarked = t.0.join("Plain");
+    t.file("Plain/engine/x");
+    queue_discard(&data, &unmarked, Scope::Engine);
+    drain_once(&data, &FakeEnv::default());
+    assert!(unmarked.join("engine").join("x").is_file());
+    // Прежняя папка переноса — чужая: журнал закрывается, папка цела.
+    let live = t.0.join("Live");
+    fs::create_dir_all(&live).unwrap();
+    write_mark(&live, &data).unwrap();
+    write_pointer(&data, Some(&live)).unwrap();
+    let journal = Journal::new(Some(theirs.clone()), live, Phase::Cleanup);
+    write_journal(&data, &journal).unwrap();
+    finish(&data, &journal, &FakeEnv::default()).unwrap();
+    assert!(theirs.join("models").join("hf").join("x").is_file());
+    assert_eq!(read_journal(&data), None);
+}
+
+#[test]
+fn repoint_takes_only_our_folder_with_an_engine() {
+    let t = Temp::new("repoint");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let theirs = foreign(&t, "Theirs");
+    assert_eq!(
+        repoint(&data, &theirs, VERSION_APP),
+        Err(FOREIGN.to_string())
+    );
+    let plain = t.0.join("Plain");
+    fs::create_dir_all(&plain).unwrap();
+    assert!(repoint(&data, &plain, VERSION_APP)
+        .unwrap_err()
+        .contains("нет движка"));
+    let ours = t.0.join("Ours");
+    fs::create_dir_all(&ours).unwrap();
+    write_mark(&ours, &data).unwrap();
+    assert!(repoint(&data, &ours, VERSION_APP)
+        .unwrap_err()
+        .contains("нет движка Meet 0.3.3"));
+    let env = engine::env_dir(&ours, VERSION_APP);
+    fs::create_dir_all(engine::launcher(&env).parent().unwrap()).unwrap();
+    fs::write(engine::launcher(&env), "").unwrap();
+    fs::write(
+        env.join("installed.json"),
+        engine::marker_json(VERSION_APP, "cuda", "2026-10-06 03:00:00Z", None),
+    )
+    .unwrap();
+    repoint(&data, &ours, VERSION_APP).unwrap();
+    assert_eq!(root(&data), Some(ours));
+}
+
+// --- раунд 2: выбор сменили после прерванного переноса (N2) ------------------------
+
+/// Прерванный перенос из папки данных в `<t>/E/Meet` с недостроенным движком.
+fn interrupted_world(name: &str) -> World {
+    let w = world(name);
+    let control = MoveControl::new();
+    let env = FakeEnv {
+        fail_copy: true,
+        ..Default::default()
+    };
+    run(&w, &env, &control).unwrap_err();
+    assert_eq!(phase(&w.data), Some(Phase::Interrupted));
+    w
+}
+
+#[test]
+fn back_to_the_system_disk_drops_the_interrupted_move() {
+    let w = interrupted_world("n2-reset");
+    let chosen = w.to.parent().unwrap().join("Old");
+    fs::create_dir_all(&chosen).unwrap();
+    write_pointer(&w.data, Some(&chosen)).unwrap(); // как будто выбранная — на флешке
+    reset_choice(&w.data, None).unwrap();
+    assert_eq!(pointer(&w.data), Pointer::Absent);
+    assert_eq!(
+        read_journal(&w.data),
+        None,
+        "прерванный перенос больше не предлагается"
+    );
+    drain_once(&w.data, &FakeEnv::default());
+    assert!(!w.to.join("models").exists(), "его папка очищена");
+    assert!(w.data.join("config.json").is_file());
+}
+
+#[test]
+fn repointing_to_the_interrupted_target_keeps_it_and_closes_the_journal() {
+    let w = interrupted_world("n2-repoint");
+    // Движок в новой папке уцелел (например, удаление упёрлось в занятые файлы).
+    let env = engine::env_dir(&w.to, VERSION_APP);
+    fs::create_dir_all(engine::launcher(&env).parent().unwrap()).unwrap();
+    fs::write(engine::launcher(&env), "").unwrap();
+    fs::write(
+        env.join("installed.json"),
+        engine::marker_json(VERSION_APP, "cuda", "2026-10-06 03:00:00Z", None),
+    )
+    .unwrap();
+    repoint(&w.data, &w.to, VERSION_APP).unwrap();
+    assert_eq!(root(&w.data), Some(w.to.clone()));
+    assert_eq!(read_journal(&w.data), None);
+    assert!(!discards_pending(&w.data), "живая папка не в очереди");
+    drain_once(&w.data, &FakeEnv::default());
+    assert!(
+        engine::launcher(&env).is_file(),
+        "единственный рабочий движок цел"
+    );
+}
+
+#[test]
+fn abandon_never_points_back_and_never_queues_the_live_folder() {
+    let w = interrupted_world("n2-abandon");
+    // Выбор сменили на новую папку назначения (без сброса журнала).
+    write_pointer(&w.data, Some(&w.to)).unwrap();
+    let journal = read_journal(&w.data).unwrap();
+    abandon(&w.data, &journal).unwrap();
+    assert_eq!(
+        root(&w.data),
+        Some(w.to.clone()),
+        "выбор не переписан на устаревший"
+    );
+    assert!(
+        read_discards(&w.data).is_empty(),
+        "живая папка не в очереди"
+    );
+    assert_eq!(read_journal(&w.data), None);
+}
+
+// --- раунд 2: удержание, проверка движка, отмена (m1, M6, m8) ----------------------
+
+#[test]
+fn lost_hold_replies_are_retried_with_the_same_id() {
+    let w = world("hold-retry");
+    let control = MoveControl::new();
+    let env = FakeEnv {
+        hold_errors: Cell::new(2),
+        ..Default::default()
+    };
+    run(&w, &env, &control).unwrap();
+    assert_eq!(env.called("hold"), 3);
+    assert_eq!(root(&w.data), Some(w.to.clone()));
+}
+
+#[test]
+fn hold_that_never_answers_is_released_and_the_move_interrupted() {
+    let w = world("hold-dead");
+    let control = MoveControl::new();
+    let env = FakeEnv {
+        hold_errors: Cell::new(10),
+        ..Default::default()
+    };
+    assert!(run(&w, &env, &control).unwrap_err().contains("не ответила"));
+    assert_eq!(env.called("release"), 1);
+    assert_eq!(env.called("restart"), 0);
+    assert_eq!(root(&w.data), None);
+    assert_eq!(phase(&w.data), Some(Phase::Interrupted));
+}
+
+#[test]
+fn broken_new_engine_stops_the_move_before_the_switch() {
+    let w = world("smoke");
+    let control = MoveControl::new();
+    let env = FakeEnv {
+        smoke_fails: true,
+        ..Default::default()
+    };
+    let error = run(&w, &env, &control).unwrap_err();
+    assert!(error.contains("Новый движок не запускается"), "{error}");
+    assert_eq!(env.called("hold"), 0);
+    assert_eq!(root(&w.data), None);
+    assert_eq!(phase(&w.data), Some(Phase::Interrupted));
+    assert!(w.to.join("models").join("gigaam").join("v3.ckpt").is_file());
+}
+
+#[test]
+fn cancel_pressed_while_the_hold_is_granted_releases_it() {
+    let w = world("cancel-hold");
+    let control = MoveControl::new();
+    let env = FakeEnv {
+        control: Some(&control),
+        cancel_in_hold: true,
+        ..Default::default()
+    };
+    assert_eq!(run(&w, &env, &control).unwrap_err(), CANCELLED);
+    assert_eq!(env.called("release"), 1, "удержание снято");
+    assert_eq!(env.called("restart"), 0);
+    assert_eq!(read_journal(&w.data), None);
+}
+
+#[test]
+fn killed_in_the_middle_of_the_install_drops_the_half_built_engine() {
+    let w = world("kill-install");
+    kill_then_recover(&w, "install");
+    assert_eq!(root(&w.data), None);
+    assert_eq!(phase(&w.data), Some(Phase::Interrupted));
+    assert!(!w.to.join("engine").exists());
+    assert!(w.to.join(UV_CACHE).join("torch.whl").is_file());
+    assert_eq!(owner(&w.to, &w.data), Owner::Ours, "метка цела");
+}
+
+#[test]
+fn killed_inside_interrupt_after_the_pointer_write_is_interrupted_again() {
+    let w = world("kill-interrupt");
+    // Состояние: выбор уже возвращён, журнал ещё «models».
+    write_journal(&w.data, &Journal::new(None, w.to.clone(), Phase::Models)).unwrap();
+    assert_eq!(recover_journal(&w.data), None);
+    assert_eq!(phase(&w.data), Some(Phase::Interrupted));
+    assert_eq!(root(&w.data), None);
+}
+
+#[test]
+fn killed_inside_abandon_after_the_queue_write_still_allows_continue() {
+    let w = world("kill-abandon");
+    t_file(&w.to, "models/hf/x");
+    // Состояние: папка в очереди, журнал «interrupted» ещё не удалён.
+    write_journal(
+        &w.data,
+        &Journal::new(None, w.to.clone(), Phase::Interrupted),
+    )
+    .unwrap();
+    queue_discard(&w.data, &w.to, Scope::All);
+    recover_slow(&w.data, recover_journal(&w.data), &FakeEnv::default());
+    assert!(!w.to.join("models").exists(), "очередь доделала отмену");
+    assert_eq!(phase(&w.data), Some(Phase::Interrupted));
+    // «Продолжить» — папка снова наша, перенос проходит.
+    claim(&w.data, &w.to).unwrap();
+    run(&w, &FakeEnv::default(), &MoveControl::new()).unwrap();
+    assert_eq!(root(&w.data), Some(w.to.clone()));
+}
+
+fn t_file(dir: &Path, relative: &str) {
+    let path = dir.join(relative);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, "x").unwrap();
+}
+
+// --- раунд 2: вступление к переносу и очередь (m6, m8) -------------------------------
+
+#[test]
+fn preamble_finishes_a_left_cleanup_first() {
+    let w = world("pre-cleanup");
+    write_pointer(&w.data, Some(&w.to)).unwrap();
+    write_journal(&w.data, &Journal::new(None, w.to.clone(), Phase::Cleanup)).unwrap();
+    preamble(&w.data, &w.to, &FakeEnv::default()).unwrap();
+    assert_eq!(read_journal(&w.data), None);
+    assert!(!w.data.join("engine").exists());
+}
+
+#[test]
+fn preamble_abandons_an_interrupted_move_to_another_folder_only() {
+    let w = interrupted_world("pre-other");
+    // Та же папка — «Продолжить»: журнал и скопированное на месте.
+    preamble(&w.data, &w.to, &FakeEnv::default()).unwrap();
+    assert_eq!(phase(&w.data), Some(Phase::Interrupted));
+    assert!(w.to.join("models").exists());
+    // Другая — прежняя цель очищается, выбор не трогается.
+    let elsewhere = w.to.parent().unwrap().join("Other");
+    preamble(&w.data, &elsewhere, &FakeEnv::default()).unwrap();
+    assert_eq!(read_journal(&w.data), None);
+    assert!(!w.to.join("models").exists());
+    assert_eq!(root(&w.data), None);
+}
+
+#[test]
+fn claim_marks_the_folder_ours_and_takes_it_out_of_the_queue() {
+    let t = Temp::new("claim");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let to = t.0.join("Meet");
+    queue_discard(&data, &to, Scope::All);
+    claim(&data, &to).unwrap();
+    assert_eq!(owner(&to, &data), Owner::Ours);
+    assert!(read_discards(&data).is_empty());
+}
+
+#[test]
+fn unplugged_folder_stays_queued_and_is_not_reported_as_cleaning() {
+    let t = Temp::new("absent-queue");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let gone = t.0.join("Stick").join("Meet");
+    queue_discard(&data, &gone, Scope::All);
+    assert_eq!(drain_once(&data, &FakeEnv::default()), 1);
+    assert_eq!(read_discards(&data).len(), 1, "вернётся — уберём");
+    assert!(!discards_pending(&data));
+}
+
+#[test]
+fn resident_that_does_not_confirm_keeps_the_folder_queued() {
+    let w = interrupted_world("stuck");
+    let env = FakeEnv {
+        resident_stuck: true,
+        ..Default::default()
+    };
+    abandon(&w.data, &read_journal(&w.data).unwrap()).unwrap();
+    assert_eq!(drain_once(&w.data, &env), 1);
+    assert!(w.to.join("models").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn failed_deletion_keeps_the_marker_for_the_retry() {
+    let t = Temp::new("mark-kept");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let to = t.0.join("Meet");
+    fs::create_dir_all(&to).unwrap();
+    write_mark(&to, &data).unwrap();
+    let locked = to.join("uv-cache").join("wheel.whl");
+    t_file(&to, "uv-cache/wheel.whl");
+    let handle = {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&locked)
+            .unwrap()
+    };
+    queue_discard(&data, &to, Scope::All);
+    assert_eq!(drain_once(&data, &FakeEnv::default()), 1);
+    assert_eq!(
+        owner(&to, &data),
+        Owner::Ours,
+        "метка осталась — повтор узнает папку"
+    );
+    drop(handle);
+    assert_eq!(drain_once(&data, &FakeEnv::default()), 0);
+    assert!(!to.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn atomic_write_waits_out_a_short_sharing_violation() {
+    let t = Temp::new("rename-retry");
+    let path = t.0.join("storage.json");
+    fs::write(&path, "old").unwrap();
+    let handle = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Читатель без FILE_SHARE_DELETE (так читает Python).
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .unwrap()
+    };
+    let holder = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        drop(handle);
+    });
+    write_atomic(&path, "new").unwrap();
+    holder.join().unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+}
+
+#[test]
+fn unknown_resident_environment_is_not_adopted() {
+    let t = Temp::new("adopt-closed");
+    let home = t.0.join("New");
+    assert!(!adoptable(None, &home), "не узнали — не подхватываем");
+    // Недоудалённый движок другой папки (installed.json уже нет).
+    let half = t.0.join("Old").join("engine").join("0.3.3");
+    fs::create_dir_all(&half).unwrap();
+    assert!(!adoptable(Some(&half), &home));
+}
+
+#[test]
+fn long_paths_have_a_cap_even_when_enabled() {
+    let long = PathBuf::from(format!("C:\\{}", "a".repeat(160)));
+    assert!(vet::too_long(&long, true));
+    let verbatim = PathBuf::from(format!("\\\\?\\C:\\{}", "a".repeat(95)));
+    assert!(
+        !vet::too_long(&verbatim, false),
+        "префикс \\\\?\\ не считается"
+    );
 }
