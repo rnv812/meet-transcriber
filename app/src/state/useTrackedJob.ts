@@ -52,7 +52,8 @@ export function useTrackedJobs(endpoint: Endpoint, kind: string, onSettled: () =
       if (fresh.length === 0) return;
       setJobs((cur) => {
         const next = { ...cur };
-        // Модель могли поставить заново — старую задачу на её место не возвращаем.
+        // Модель могли поставить заново — старую задачу на её место не возвращаем
+        // (запас: опрос со старым набором задач и так глушит смена набора).
         for (const job of fresh) if (next[job.folder]?.id === job.id) next[job.folder] = job;
         return next;
       });

@@ -36,7 +36,7 @@ test("две загрузки: кончилась одна — onSettled, вто
   expect(settled).toHaveBeenCalledTimes(1);
 });
 
-test("модель поставили заново — прежняя задача её не затирает", async () => {
+test("модель поставили заново — ход показывается по новой задаче", async () => {
   vi.mocked(getJobs)
     .mockResolvedValueOnce({ items: [] })
     .mockResolvedValue({ items: [job("old", "a", "failed"), job("new", "a", "running")] });
