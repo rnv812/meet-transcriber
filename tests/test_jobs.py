@@ -381,3 +381,71 @@ def test_stage_timing_goes_to_the_resident_log(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "задача transcribe (2026-10-01_10-00): время ступеней (GigaAM, cpu)" in out
     assert "шум" not in out
+
+
+def _gated_spawn(started: dict, release: threading.Event):
+    """Подпроцесс-заглушка загрузки: отмечает начало по id модели и ждёт `release`."""
+
+    def spawn(job, on_line):
+        started[job.folder] = time.monotonic()
+        release.wait(timeout=5)
+        on_line(json.dumps({"kind": "job.result", "path": job.folder}))
+        return 0
+
+    return spawn
+
+
+def test_different_models_download_at_once():
+    """Загрузки разных моделей идут одновременно, у каждой своя задача и ход."""
+    started, release = {}, threading.Event()
+    q = jobs.KeyedQueues(spawn=_gated_spawn(started, release))
+    try:
+        a, new_a = q.submit_once(jobs.DOWNLOAD_MODEL, "Systran/faster-whisper-small")
+        b, new_b = q.submit_once(jobs.DOWNLOAD_MODEL, "gigaam/v3_e2e_rnnt")
+        assert new_a and new_b and a.id != b.id
+        _wait(lambda: len(started) == 2)  # обе пошли, не дожидаясь друг друга
+        assert q.get(a.id).state == q.get(b.id).state == jobs.RUNNING
+        assert {i["id"] for i in q.listing()} == {a.id, b.id}
+        release.set()
+        _wait(lambda: q.get(a.id).state == jobs.DONE and q.get(b.id).state == jobs.DONE)
+    finally:
+        release.set()
+        q.stop()
+
+
+def test_same_model_is_not_downloaded_twice():
+    started, release = {}, threading.Event()
+    q = jobs.KeyedQueues(spawn=_gated_spawn(started, release))
+    try:
+        first, _ = q.submit_once(jobs.DOWNLOAD_MODEL, "m")
+        again, new = q.submit_once(jobs.DOWNLOAD_MODEL, "m")
+        assert again.id == first.id and new is False
+        assert q.active_for("m", (jobs.DOWNLOAD_MODEL,)).id == first.id
+        assert q.active_for("other", (jobs.DOWNLOAD_MODEL,)) is None
+        release.set()
+        _wait(lambda: q.get(first.id).state == jobs.DONE)
+        # Кончилась — «Обновить» ставит новую.
+        later, new = q.submit_once(jobs.DOWNLOAD_MODEL, "m")
+        assert new and later.id != first.id
+        _wait(lambda: q.get(later.id).state == jobs.DONE)
+    finally:
+        release.set()
+        q.stop()
+
+
+def test_cancel_one_download_keeps_the_other():
+    started, release = {}, threading.Event()
+    q = jobs.KeyedQueues(spawn=_gated_spawn(started, release))
+    try:
+        a, _ = q.submit_once(jobs.DOWNLOAD_MODEL, "a")
+        b, _ = q.submit_once(jobs.DOWNLOAD_MODEL, "b")
+        _wait(lambda: len(started) == 2)
+        assert q.cancel(a.id) is True
+        assert q.cancel("нет-такой") is False
+        assert q.get(a.id).state == jobs.CANCELLED
+        release.set()
+        _wait(lambda: q.get(b.id).state == jobs.DONE)
+    finally:
+        release.set()
+        q.stop()
+    assert q.stopping

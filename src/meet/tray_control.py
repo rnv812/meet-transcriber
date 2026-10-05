@@ -315,6 +315,9 @@ TITLE_TIMEOUT_S = 150
 # процесс (он работает в папке записи) завершится.
 DROP_ANALYSIS_WAIT_S = 5.0
 PROCESSING = "Запись ещё обрабатывается (обрезка ожидания после звонка) — подождите минуту"
+# Удалить модель, пока она же качается, и качать, пока ставится движок, нельзя.
+MODEL_DOWNLOADING = "модель сейчас скачивается — удалить её можно после загрузки"
+ENGINE_INSTALLING = "идёт установка движка — модели можно скачать после неё"
 # Восстановление после перезапуска берёт записи не старше этого.
 RECOVER_DAYS = 7
 
@@ -373,7 +376,7 @@ def _without_marks(data: dict) -> dict:
 class TrayControl:
     """Состояние для `meet.control.ControlServer` поверх объекта трея."""
 
-    def __init__(self, tray, queue=None, llm_queue=None, live=None) -> None:
+    def __init__(self, tray, queue=None, llm_queue=None, live=None, downloads=None) -> None:
         self.tray = tray
         self.bus = tray.bus
         # Очередь задач живёт рядом с записью, в том же резиденте: расшифровка
@@ -382,6 +385,9 @@ class TrayControl:
         # Итоги и вопросы — своя очередь: GPU им не нужен, и ждать за часовой
         # расшифровкой ответ на вопрос было бы странно.
         self.llm_queue = llm_queue if llm_queue is not None else jobs.JobQueue(self.bus)
+        # Загрузки моделей — по слоту на модель: разные качаются одновременно
+        # (сеть и диск, не GPU), одна и та же — не дважды.
+        self.downloads = downloads if downloads is not None else jobs.KeyedQueues(self.bus)
         self._providers = ProviderCache()
         self._submit_lock = threading.Lock()
         self._levels: dict = {}
@@ -2337,12 +2343,15 @@ class TrayControl:
         return models_module.state(selected=asr.model, selected_gigaam=asr.gigaam_model)
 
     def remove_model(self, body: dict | None = None) -> dict:
-        """Удалить скачанную модель GigaAM (быстро: удаление файлов)."""
+        """Удалить скачанную модель GigaAM (быстро: удаление файлов). Пока она
+        же качается — нельзя: загрузчик пишет в те же файлы."""
         from meet import models as models_module
 
         model_id = str((body or {}).get("id") or "").strip()
         if not model_id:
             return {"ok": False, "error": "не сказано, какую модель удалить"}
+        if self.downloads.active_for(model_id, (jobs.DOWNLOAD_MODEL,)) is not None:
+            return {"ok": False, "error": MODEL_DOWNLOADING}
         return models_module.remove(model_id)
 
     # --- токен Hugging Face ------------------------------------------------
@@ -2396,11 +2405,18 @@ class TrayControl:
 
     def download_model(self, body: dict | None = None) -> dict:
         """Скачать модель задачей: это гигабайты, и резидент должен оставаться
-        отзывчивым."""
+        отзывчивым. Разные модели качаются одновременно; та же, что уже
+        качается, — та же задача (её ход и показывается).
+
+        Пока очередь ставит движок (`POST /engine/install`, из командной
+        строки), загрузка ждать за ним не будет — отказ: загрузчик приходит с
+        движком, и подпроцесс загрузки поднялся бы из недоставленного пакета."""
         repo_id = str((body or {}).get("id") or "").strip()
         if not repo_id:
             return {"error": "не сказано, какую модель качать"}
-        job = self.queue.submit(jobs.DOWNLOAD_MODEL, repo_id, {})
+        if self.queue.active_for(str(paths.data_dir()), (jobs.INSTALL_ENGINE,)) is not None:
+            raise _conflict(ENGINE_INSTALLING)
+        job, _ = self.downloads.submit_once(jobs.DOWNLOAD_MODEL, repo_id, {})
         return job.to_raw()
 
     def _submit_once(self, kind: str, folder: Path, options: dict | None = None):
@@ -2451,7 +2467,7 @@ class TrayControl:
         return self.transcribe(recording_id, body.get("options"))
 
     def jobs(self) -> dict:
-        items = self.queue.listing() + self.llm_queue.listing()
+        items = self.queue.listing() + self.llm_queue.listing() + self.downloads.listing()
         items.sort(key=lambda item: item.get("created_at") or 0.0)
         return {"items": items}
 
@@ -2461,7 +2477,8 @@ class TrayControl:
         if job is None:
             get = getattr(self.llm_queue, "get", None)
             job = get(job_id) if get else None
-        ok = self.queue.cancel(job_id) or self.llm_queue.cancel(job_id)
+        ok = (self.queue.cancel(job_id) or self.llm_queue.cancel(job_id)
+              or self.downloads.cancel(job_id))
         if ok and job is not None and job.kind in jobs.FOLDER_KINDS:
             # Отменённую человеком задачу после перезапуска не повторяем.
             self._mark_pending(Path(job.folder), False)

@@ -562,3 +562,70 @@ class JobQueue:
         # Убитая (отмена) или упавшая задача своих временных папок не дочистила.
         _sweep_after()
         return code
+
+
+class KeyedQueues:
+    """Задачи, которые идут одновременно, но не по две над одним ключом: у
+    каждого ключа (`folder` задачи; у загрузки модели это её id) свой слот —
+    своя JobQueue. Загрузки моделей нагружают сеть и диск, а не GPU: стоять
+    друг за другом и за часовой расшифровкой им незачем, а одну и ту же
+    модель два загрузчика писали бы в одни и те же файлы.
+
+    Слоты заводятся по первой задаче ключа и живут до `stop` (ключей — столько,
+    сколько моделей в каталоге)."""
+
+    def __init__(self, bus=None, spawn=None) -> None:
+        self.bus = bus if bus is not None else events.EventBus()
+        self._spawn = spawn
+        self._queues: dict[str, JobQueue] = {}
+        self._lock = threading.Lock()
+        self._alive = True
+
+    def submit_once(self, kind: str, folder: str, options: dict | None = None
+                    ) -> tuple[Job, bool]:
+        """Поставить задачу, если над тем же ключом такая же уже не ждёт и не
+        идёт. → (задача, поставлена ли новая). Проверка и постановка — под
+        одним локом: двойной клик и два окна (мастер и настройки) не ставят
+        вторую загрузку той же модели."""
+        key = str(folder)
+        with self._lock:
+            queue = self._queues.get(key)
+            if queue is None:
+                queue = self._queues[key] = JobQueue(self.bus, spawn=self._spawn)
+            existing = queue.active_for(key, (kind,))
+            if existing is not None:
+                return existing, False
+            return queue.submit(kind, key, options), True
+
+    def active_for(self, folder: str, kinds) -> Job | None:
+        with self._lock:
+            queue = self._queues.get(str(folder))
+        return queue.active_for(str(folder), kinds) if queue is not None else None
+
+    def _all(self) -> list[JobQueue]:
+        with self._lock:
+            return list(self._queues.values())
+
+    def get(self, job_id: str) -> Job | None:
+        for queue in self._all():
+            job = queue.get(job_id)
+            if job is not None:
+                return job
+        return None
+
+    def listing(self, limit: int = 50) -> list[dict]:
+        items = [item for queue in self._all() for item in queue.listing(limit)]
+        items.sort(key=lambda item: item.get("created_at") or 0.0)
+        return items[-limit:]
+
+    def cancel(self, job_id: str) -> bool:
+        return any(queue.cancel(job_id) for queue in self._all())
+
+    @property
+    def stopping(self) -> bool:
+        return not self._alive
+
+    def stop(self) -> None:
+        self._alive = False
+        for queue in self._all():
+            queue.stop()

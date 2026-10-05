@@ -4,7 +4,7 @@ import {
 } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { inTauri, retryGigaamInstall } from "../../lib/shell";
-import { jobActive, useTrackedJob } from "../../state/useTrackedJob";
+import { jobActive, useTrackedJobs } from "../../state/useTrackedJob";
 import { Check } from "lucide-react";
 import { downloadDetail, jobFraction } from "../../lib/progress";
 import type { Job } from "../../lib/types";
@@ -18,17 +18,27 @@ import { PathText, Row } from "./Section";
 
 const KIND: Record<string, string> = { asr: "распознавание", diarization: "разделение на спикеров", align: "время слов" };
 
-/** Почему «Скачать» сейчас недоступно — подсказкой на кнопке; null — доступно. */
-function downloadBlocked(model: Model, busy: boolean, canDownload: boolean): string | null {
+/**
+ * Почему «Скачать» сейчас недоступно — подсказкой на кнопке; null — доступно.
+ * Другие загрузки не мешают: разные модели качаются одновременно.
+ */
+function downloadBlocked(model: Model, removing: boolean, canDownload: boolean): string | null {
   if (model.blocked) return "Нужен токен Hugging Face с принятыми условиями модели";
   if (!canDownload) return "Загрузчик моделей устанавливается вместе с движком";
-  if (busy) return "Дождитесь окончания другой загрузки";
+  if (removing) return "Модель удаляется";
   return null;
 }
 
-function ModelRow({ model, job, busy, canDownload, usage, confirming, onDownload, onRemove,
+/** Почему «Удалить…» сейчас недоступно; null — доступно. Мешает только загрузка этой же модели. */
+function removeBlocked(downloading: boolean, removing: boolean): string | null {
+  if (downloading) return "Модель скачивается — удалить её можно после загрузки";
+  if (removing) return "Модель удаляется";
+  return null;
+}
+
+function ModelRow({ model, job, removing, canDownload, usage, confirming, onDownload, onRemove,
   onConfirmRemove, onCancelRemove }: {
-  model: Model; job: Job | null; busy: boolean; canDownload: boolean;
+  model: Model; job: Job | null; removing: boolean; canDownload: boolean;
   /** Где модель выбрана в «Распознавании»; пусто — нигде. */
   usage: string[];
   confirming: boolean;
@@ -38,7 +48,8 @@ function ModelRow({ model, job, busy, canDownload, usage, confirming, onDownload
   const selected = usage.length > 0;
   const mine = job && job.folder === model.id ? job : null;
   const loading = mine !== null && jobActive(mine);
-  const blocked = downloadBlocked(model, busy, canDownload);
+  const blocked = downloadBlocked(model, removing, canDownload);
+  const noRemove = removeBlocked(loading, removing);
   return (
     <div className="srow model-row" role="group" aria-label={model.title}>
       <div className="srow__text">
@@ -69,14 +80,16 @@ function ModelRow({ model, job, busy, canDownload, usage, confirming, onDownload
           </Button>
         )}
         {model.removable && (
-          <Button variant="danger" onClick={onRemove} disabled={busy} aria-label={`Удалить модель ${model.title}`}>
+          <Button variant="danger" onClick={onRemove} disabled={noRemove !== null} title={noRemove ?? undefined}
+            aria-label={`Удалить модель ${model.title}`}>
             Удалить…
           </Button>
         )}
       </div>
       {loading && mine && (
         <div className="model-row__progress">
-          <ProgressBar value={jobFraction(mine)} stageKey={mine.id} size="sm" label="Скачивается"
+          <ProgressBar value={jobFraction(mine)} stageKey={mine.id} size="sm"
+            label={mine.state === "queued" ? "В очереди" : "Скачивается"}
             extrapolate={mine.state === "running"} cap={mine.cap ?? 0.99}
             detail={downloadDetail(mine) ?? "Окно можно закрыть — загрузка продолжится"}
             ariaLabel={`Загрузка модели ${model.title}`} />
@@ -106,7 +119,8 @@ export function ModelsPane({ endpoint, usage = {} }: {
   const [models, setModels] = useState<ModelsState | null>(null);
   const [tried, setTried] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [removing, setRemoving] = useState(false);
+  /** Какая модель сейчас удаляется (запрос идёт); null — никакая. */
+  const [removing, setRemoving] = useState<string | null>(null);
   // Удаление — после подтверждения в строке модели: это гигабайты повторной загрузки.
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
@@ -118,20 +132,20 @@ export function ModelsPane({ endpoint, usage = {} }: {
   }, [endpoint]);
 
   useEffect(() => { void load(); }, [load]);
-  const [job, setJob] = useTrackedJob(endpoint, "download-model", load);
+  const [jobs, track] = useTrackedJobs(endpoint, "download-model", load);
 
   const download = async (id: string) => {
-    try { setJob(await downloadModel(endpoint, id)); } catch (e) { setError(errorText(e)); }
+    try { track(await downloadModel(endpoint, id)); } catch (e) { setError(errorText(e)); }
   };
   const remove = async (id: string) => {
     setConfirmRemove(null);
-    setRemoving(true);
+    setRemoving(id);
     try {
       const result = await removeModel(endpoint, id);
       await load();
       if (!result.ok) setError(result.error ?? "Модель не удалена");
     } catch (e) { setError(errorText(e)); }
-    finally { setRemoving(false); }
+    finally { setRemoving(null); }
   };
 
   /** «Повторить» необязательную установку GigaAM: её делает оболочка (uv). */
@@ -148,8 +162,7 @@ export function ModelsPane({ endpoint, usage = {} }: {
     return <>{token}{error && <p className="error">{error}</p>}
       {tried ? <p className="muted">Нет данных.</p> : <Loading label="Загружаю каталог моделей…" />}</>;
   }
-  const downloading = jobActive(job);
-  const busy = downloading || removing;
+  const done = Object.values(jobs).filter((j) => j.state === "done").map((j) => j.result);
   return (
     <>
       {token}
@@ -172,7 +185,8 @@ export function ModelsPane({ endpoint, usage = {} }: {
       )}
       {models.items.map((m) => (
         <ModelRow
-          key={m.id} model={m} job={job} busy={busy} canDownload={canDownloadModel(models, m)}
+          key={m.id} model={m} job={jobs[m.id] ?? null} removing={removing === m.id}
+          canDownload={canDownloadModel(models, m)}
           usage={m.kind === "asr" ? usage[m.id] ?? [] : []} confirming={confirmRemove === m.id}
           onDownload={() => void download(m.id)}
           onRemove={() => setConfirmRemove(m.id)}
@@ -187,7 +201,7 @@ export function ModelsPane({ endpoint, usage = {} }: {
           <span className="folder"><PathText path={models.gigaam_cache} /></span>
         </Row>
       )}
-      {job?.state === "done" && <p className="notice" role="status">Скачано: {job.result}</p>}
+      {done.length > 0 && <p className="notice" role="status">Скачано: {done.join(", ")}</p>}
     </>
   );
 }

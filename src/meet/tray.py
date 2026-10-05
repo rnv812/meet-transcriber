@@ -877,7 +877,7 @@ class TrayApp:
             api.state.live.stop(wait=True, timeout=SHUTDOWN_WAIT_S)
         except Exception as e:
             self.log(f"ассистент не остановился штатно: {e!r}")
-        for queue in (api.state.queue, api.state.llm_queue):
+        for queue in (api.state.queue, api.state.llm_queue, getattr(api.state, "downloads", None)):
             try:
                 queue.stop()
             except Exception:

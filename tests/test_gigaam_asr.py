@@ -330,6 +330,42 @@ def test_ensure_downloads_through_a_part_file_and_verifies(tmp_path, monkeypatch
     assert calls == []
 
 
+def test_ensure_waits_while_another_process_downloads_the_model(tmp_path, monkeypatch):
+    """Загрузка из окна и расшифровка пришли за одной моделью: второй ждёт
+    замка модели, а потом находит файлы готовыми и не качает их снова."""
+    import threading
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(g, "LOCK_POLL_S", 0.01)
+    g.cache_dir().mkdir(parents=True)
+    holding, release = threading.Event(), threading.Event()
+
+    def first():  # «другой процесс»: держит замок и докачивает
+        with g._files_lock("v3_e2e_rnnt"):
+            holding.set()
+            release.wait(5)
+            for name in ("v3_e2e_rnnt.ckpt", "v3_e2e_rnnt_tokenizer.model"):
+                put(name, BLOBS[name])
+
+    owner = threading.Thread(target=first)
+    owner.start()
+    assert holding.wait(5)
+    calls, lines = [], []
+    second = threading.Thread(
+        target=lambda: g.ensure("v3_e2e_rnnt", lines.append, opener=opener(calls=calls)))
+    second.start()
+    second.join(0.3)
+    assert second.is_alive(), "ensure не ждал замка модели"
+    release.set()
+    owner.join(5)
+    second.join(5)
+    assert not second.is_alive()
+    assert calls == []  # докачал первый — второй не качает
+    assert any("уже скачивается" in line for line in lines)
+    # Замок модели своей папки моделей не держит чужую модель.
+    assert g._lock_path("v3_e2e_rnnt") != g._lock_path("v3_e2e_ctc")
+
+
 def test_corrupt_or_partial_file_is_replaced_once(tmp_path, monkeypatch):
     monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path))
     put("v3_e2e_rnnt.ckpt", b"x" * 10)  # тот же размер, другое содержимое

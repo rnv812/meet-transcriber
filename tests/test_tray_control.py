@@ -379,6 +379,83 @@ def test_transcribe_puts_a_job_in_the_queue(with_recordings, app):
     assert state.cancel_job("j1") == {"ok": True}
 
 
+def _downloads(app, release):
+    """Загрузки-заглушки: идут, пока не отпустят `release`."""
+
+    def spawn(job, on_line):
+        release.wait(timeout=5)
+        on_line(json.dumps({"kind": "job.result", "path": job.folder}))
+        return 0
+
+    return jobs.KeyedQueues(app.bus, spawn=spawn)
+
+
+def _wait_for(condition, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while not condition():
+        assert time.monotonic() < deadline, "не дождались"
+        time.sleep(0.02)
+
+
+def test_models_download_at_once_and_the_same_one_once(app):
+    import threading
+
+    release = threading.Event()
+    state = tray_control.TrayControl(app, downloads=_downloads(app, release))
+    try:
+        a = state.download_model({"id": "Systran/faster-whisper-small"})
+        b = state.download_model({"id": "gigaam/v3_e2e_rnnt"})
+        again = state.download_model({"id": "Systran/faster-whisper-small"})
+        assert a["id"] != b["id"] and again["id"] == a["id"]
+        _wait_for(lambda: all(state.downloads.get(j["id"]).state == jobs.RUNNING for j in (a, b)))
+        listed = {i["id"]: i for i in state.jobs()["items"]}
+        assert listed[a["id"]]["kind"] == listed[b["id"]]["kind"] == jobs.DOWNLOAD_MODEL
+        assert state.cancel_job(b["id"]) == {"ok": True}
+        release.set()
+        _wait_for(lambda: state.downloads.get(a["id"]).state == jobs.DONE)
+        assert state.downloads.get(b["id"]).state == jobs.CANCELLED
+    finally:
+        release.set()
+        state.downloads.stop()
+
+
+def test_model_is_not_removed_while_it_downloads(app, monkeypatch):
+    import threading
+
+    from meet import models
+
+    removed = []
+    monkeypatch.setattr(models, "remove", lambda model_id: removed.append(model_id) or {"ok": True})
+    release = threading.Event()
+    state = tray_control.TrayControl(app, downloads=_downloads(app, release))
+    try:
+        state.download_model({"id": "gigaam/v3_e2e_rnnt"})
+        got = state.remove_model({"id": "gigaam/v3_e2e_rnnt"})
+        assert got == {"ok": False, "error": tray_control.MODEL_DOWNLOADING}
+        # Другую модель — можно: её никто не качает.
+        assert state.remove_model({"id": "gigaam/v3_e2e_ctc"}) == {"ok": True}
+        assert removed == ["gigaam/v3_e2e_ctc"]
+    finally:
+        release.set()
+        state.downloads.stop()
+
+
+def test_model_download_waits_for_no_engine_install(app):
+    from meet import paths
+    from meet.control import Conflict
+
+    class Installing:
+        def active_for(self, folder, kinds):
+            if folder == str(paths.data_dir()) and jobs.INSTALL_ENGINE in kinds:
+                return jobs.Job(id="e1", kind=jobs.INSTALL_ENGINE, folder=folder)
+            return None
+
+    state = tray_control.TrayControl(app, queue=Installing())
+    with pytest.raises(Conflict, match="установка движка"):
+        state.download_model({"id": "Systran/faster-whisper-small"})
+    assert state.downloads.listing() == []
+
+
 def test_saving_transcript_requires_segments(with_recordings, app):
     state = tray_control.TrayControl(app)
     assert "error" in state.save_transcript("2026-08-18_11-00", {"нет": "полей"})

@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { type Endpoint, type Model, type ModelsState, canDownloadModel, downloadModel, getModels } from "../../lib/api";
 import { errorText } from "../../lib/format";
-import { jobActive, useTrackedJob } from "../../state/useTrackedJob";
+import { jobActive, useTrackedJobs } from "../../state/useTrackedJob";
 import type { Job } from "../../lib/types";
 import { downloadDetail } from "../../lib/progress";
 import { Button } from "../../ui/Button";
@@ -18,8 +18,8 @@ import { gb } from "./gate";
 const KIND: Record<string, string> = { asr: "распознавание", diarization: "спикеры", align: "выравнивание" };
 
 
-function ModelItem({ model, job, busy, canDownload, onDownload }: {
-  model: Model; job: Job | null; busy: boolean; canDownload: boolean; onDownload: () => void;
+function ModelItem({ model, job, canDownload, onDownload }: {
+  model: Model; job: Job | null; canDownload: boolean; onDownload: () => void;
 }) {
   const mine = job && job.folder === model.id ? job : null;
   return (
@@ -40,7 +40,7 @@ function ModelItem({ model, job, busy, canDownload, onDownload }: {
         {mine?.state === "failed" && <span className="error">{mine.error}</span>}
       </div>
       {mine && jobActive(mine) ? null : (
-        <Button onClick={onDownload} disabled={busy || model.blocked || !canDownload || model.downloaded}>
+        <Button onClick={onDownload} disabled={model.blocked || !canDownload || model.downloaded}>
           {model.downloaded ? "Скачана" : "Скачать"}
         </Button>
       )}
@@ -62,17 +62,17 @@ export function StepModels({ endpoint, onNext }: { endpoint: Endpoint; onNext: (
   }, [endpoint]);
 
   useEffect(() => { void load(); }, [load]);
-  const [job, setJob] = useTrackedJob(endpoint, "download-model", load);
+  // Разные модели качаются одновременно — у каждой свой ход.
+  const [jobs, track] = useTrackedJobs(endpoint, "download-model", load);
 
   const download = async (id: string) => {
     try {
-      setJob(await downloadModel(endpoint, id));
+      track(await downloadModel(endpoint, id));
     } catch (cause) {
       setError(errorText(cause));
     }
   };
 
-  const busy = jobActive(job);
   return (
     <>
       <p className="muted">
@@ -87,7 +87,7 @@ export function StepModels({ endpoint, onNext }: { endpoint: Endpoint; onNext: (
       {models && (
         <div className="wizard__models">
           {models.items.map((m) => (
-            <ModelItem key={m.id} model={m} job={job} busy={busy} canDownload={canDownloadModel(models, m)}
+            <ModelItem key={m.id} model={m} job={jobs[m.id] ?? null} canDownload={canDownloadModel(models, m)}
               onDownload={() => void download(m.id)} />
           ))}
         </div>

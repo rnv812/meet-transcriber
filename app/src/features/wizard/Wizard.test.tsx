@@ -269,6 +269,32 @@ test("модели: размеры и «Скачать» — задача с п�
   expect(within(gated).getByRole("button", { name: "Скачать" })).toBeDisabled();
 });
 
+test("модели: вторую можно скачать, пока качается первая", async () => {
+  vi.mocked(api.getModels).mockResolvedValue({
+    items: [
+      { id: "large-v3", kind: "asr", title: "Whisper large-v3", note: "", size_gb: 3.1, recommended: true,
+        downloaded: false, size_on_disk: 0, selected: true, blocked: false },
+      { id: "small", kind: "asr", title: "Whisper small", note: "", size_gb: 0.5,
+        downloaded: false, size_on_disk: 0, selected: false, blocked: false },
+    ],
+    cache: "C:/hf", token: false, selected: "large-v3", can_download: true,
+  });
+  vi.mocked(api.downloadModel).mockImplementation(async (_ep, id) => ({
+    id: `j-${id}`, kind: "download-model", folder: id, state: "running", stage: null, label: "Качаю",
+    done: id === "small" ? 3 : 1, total: 4, note: null, result: null, error: null,
+  }));
+  show({ start: "models", endpoint: ep });
+  const big = await screen.findByRole("group", { name: "Whisper large-v3" });
+  const small = screen.getByRole("group", { name: "Whisper small" });
+  await userEvent.click(within(big).getByRole("button", { name: "Скачать" }));
+  expect(await within(big).findByText("25 %")).toBeInTheDocument();
+  const second = within(small).getByRole("button", { name: "Скачать" });
+  expect(second).toBeEnabled();
+  await userEvent.click(second);
+  expect(await within(small).findByText("75 %")).toBeInTheDocument();
+  expect(within(big).getByText("25 %")).toBeInTheDocument();
+});
+
 test("запись: устройства, автозапись и программы звонков", async () => {
   show({ start: "devices", endpoint: ep });
   expect(await screen.findByText(/Динамики/)).toBeInTheDocument();

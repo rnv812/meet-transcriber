@@ -30,6 +30,8 @@ GPU) — внутренности библиотеки, и обновление 
 import hashlib
 import json
 import os
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -104,6 +106,8 @@ CONNECT_TIMEOUT_S = 20
 READ_TIMEOUT_S = 60
 STALL_S = 120
 _PROGRESS_BYTES = 1 << 20
+# Замок модели занят другим процессом — проверять снова через столько секунд.
+LOCK_POLL_S = 0.5
 
 
 class Unavailable(RuntimeError):
@@ -246,8 +250,6 @@ def _fetch(url: str, target: Path, size: int, algo: str, digest: str, on_line=No
     """Скачать во временный файл, сверить и только тогда переименовать.
     Прокси — из переменных среды (urllib), их задаёт задача (meet.netproxy).
     Таймауты — CONNECT_TIMEOUT_S / READ_TIMEOUT_S / STALL_S."""
-    import time
-
     part = target.with_name(target.name + _PART)
     part.unlink(missing_ok=True)
     open_url = opener or _open
@@ -278,13 +280,85 @@ def _fetch(url: str, target: Path, size: int, algo: str, digest: str, on_line=No
     os.replace(part, target)
 
 
+def _lock_path(name: str) -> Path:
+    """Файл замка модели — во временной папке системы (её делят резидент,
+    задачи и ассистент), а не рядом с весами: там он остался бы после
+    удаления модели. В имени — папка моделей: у другой папки данных свой замок."""
+    from meet import tempdirs
+
+    key = os.path.normcase(str(cache_dir().resolve() / name))
+    digest = hashlib.sha1(key.encode("utf-8", "surrogatepass")).hexdigest()[:20]
+    return tempdirs.system_temp() / "meet-model-locks" / f"{digest}.lock"
+
+
+if os.name == "nt":
+    import msvcrt
+
+    def _try_lock(handle) -> None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+
+    def _unlock(handle) -> None:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+
+    def _try_lock(handle) -> None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _unlock(handle) -> None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _files_lock(name: str, on_line=None):
+    """Замок файлов модели между процессами: загрузка из окна, расшифровка и
+    ассистент могут прийти за одной моделью одновременно, а `.part` у них
+    один. Второй ждёт, пока первый докачает, и находит файлы готовыми.
+    Замок не открылся — работаем без него, как раньше."""
+    path = _lock_path(name)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(path, "a+b")
+    except OSError:
+        yield
+        return
+    try:
+        told = False
+        while True:
+            try:
+                _try_lock(handle)
+                break
+            except OSError:
+                if on_line and not told:
+                    on_line(f"GigaAM {name}: модель уже скачивается — жду окончания")
+                    told = True
+                time.sleep(LOCK_POLL_S)
+        try:
+            yield
+        finally:
+            try:
+                _unlock(handle)
+            except OSError:
+                pass
+    finally:
+        handle.close()
+
+
 def ensure(name: str, on_line=None, opener=None) -> None:
     """Модель целиком на диске: недостающие и битые файлы удаляются и
-    скачиваются заново (один раз). Не вышло — Unavailable с понятным текстом."""
+    скачиваются заново (один раз). Не вышло — Unavailable с понятным текстом.
+    Под замком модели (`_files_lock`): одну модель качает один процесс."""
     if name not in FILES:
         raise Unavailable(f"GigaAM: неизвестная модель {name}")
     root = cache_dir()
     root.mkdir(parents=True, exist_ok=True)
+    with _files_lock(name, on_line):
+        _ensure_files(name, root, on_line, opener)
+
+
+def _ensure_files(name: str, root: Path, on_line, opener) -> None:
     seen = _verified(name)
     stamps = {}
     for fname, size, algo, digest in FILES[name]:
