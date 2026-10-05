@@ -163,7 +163,7 @@ def test_enroll_stores_enroll_sample_with_device(tmp_path):
     (stored,) = owner_voice.load(voices)
     assert stored.id == sample.id and stored.source == "enroll"
     assert stored.device == "USB-микрофон" and stored.seconds == pytest.approx(20.0)
-    assert stored.quality == sample.quality and 0.75 <= stored.quality <= 1.0
+    assert stored.quality == sample.quality and owner_enroll.THIRDS_MIN_COS <= stored.quality <= 1.0
     assert wav.exists()  # удаляет файл задача (job_worker), а не разбор
 
 
@@ -224,3 +224,14 @@ def test_default_vad_counts_speech_not_pauses(monkeypatch):
     got = owner_enroll._default_vad(np.zeros(RATE * 4, dtype=np.float32), RATE)
     assert got == [(1.0, 3.0)]
     assert seen == {"min_silence_duration_ms": 500, "speech_pad_ms": 100, "rate": RATE}
+
+
+def test_thirds_threshold_accepts_slightly_differing_pieces():
+    """Порог 0.70 (T0): трети с попарным cos ~0.72 — нормальная запись, не брак."""
+    assert owner_enroll.THIRDS_MIN_COS == 0.70
+    regions = [(1.0, 21.0)]
+    a = _v(1.0)
+    b = _v(0.72, 0.694)          # cos(a, b) ≈ 0.72
+    c = _v(0.92, 0.25, 0.30)     # cos с обоими выше 0.72
+    got = owner_enroll.analyze(_take(speech=regions), vad=_vad(regions), embed=_Embed(a, b, c))
+    assert 0.70 <= got.quality < 0.75
