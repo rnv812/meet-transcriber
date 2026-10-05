@@ -284,30 +284,17 @@ pub fn opencode_prompt(knowledge: Option<&str>) -> String {
     prompt
 }
 
-/// Шаблон пути базы знаний для правила `edit` OpenCode: правка сверяет путь
-/// относительно корня проекта (`../../Docs/KB/a.md`, у папки вне git — от
-/// корня диска), поэтому — хвост пути без диска и корня: `*Docs/KB/*`. Корень
-/// диска целиком — None (такое правило запретило бы правку везде).
-fn edit_pattern(dir: &str) -> Option<String> {
-    let path = dir.trim().replace('\\', "/");
-    let bytes = path.as_bytes();
-    let no_drive = if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-        &path[2..]
-    } else {
-        &path[..]
-    };
-    let tail = no_drive.trim_matches('/');
-    (!tail.is_empty()).then(|| format!("*{tail}/*"))
-}
-
 /// Конфиг OpenCode поверх конфига человека (`OPENCODE_CONFIG_CONTENT`):
 /// файл с подсказкой о встрече — в `instructions` (OpenCode добавляет их к
 /// своим, а не заменяет), база знаний — читать без вопроса
-/// (`external_directory`) и не править (`edit`: deny) у агентов `build` и
-/// `plan`. Правила агента OpenCode ставит после общих правил человека, а
-/// побеждает последнее подходящее — остальные его правила не меняются.
+/// (`external_directory`) у агентов `build` и `plan`. Правила агента OpenCode
+/// ставит после общих правил человека, а побеждает последнее подходящее.
+/// Правило `edit` не передаём: OpenCode сливает наш конфиг с конфигом
+/// человека (mergeDeep), и наш объект заменил бы его строковое правило
+/// агента (`"edit": "ask"`) — правка вне базы знаний стала бы свободной.
+/// Что агенту можно менять, решают его собственные настройки.
 /// Сверено с opencode.ai/docs (config, permissions, agents, rules) и
-/// исходниками (agent/agent.ts, session/instruction.ts, 2026-10).
+/// исходниками (agent/agent.ts, config/config.ts, session/instruction.ts, 2026-10).
 pub fn opencode_config(instructions: Option<&Path>, knowledge: Option<&str>) -> String {
     let mut config = serde_json::Map::new();
     if let Some(file) = instructions {
@@ -317,16 +304,10 @@ pub fn opencode_config(instructions: Option<&Path>, knowledge: Option<&str>) -> 
         );
     }
     if let Some(dir) = knowledge.map(str::trim).filter(|k| !k.is_empty()) {
-        let mut permission = serde_json::Map::new();
         let read = Path::new(dir).join("*").to_string_lossy().into_owned();
-        permission.insert(
-            "external_directory".into(),
-            serde_json::json!({ read: "allow" }),
-        );
-        if let Some(edit) = edit_pattern(dir) {
-            permission.insert("edit".into(), serde_json::json!({ edit: "deny" }));
-        }
-        let agent = serde_json::json!({ "permission": permission });
+        let agent = serde_json::json!({
+            "permission": { "external_directory": { read: "allow" } }
+        });
         config.insert(
             "agent".into(),
             serde_json::json!({ "build": agent.clone(), "plan": agent }),
@@ -2185,7 +2166,7 @@ mod tests {
     }
 
     #[test]
-    fn opencode_config_reads_the_knowledge_dir_and_never_edits_it() {
+    fn opencode_config_only_lets_the_agent_read_the_knowledge_dir() {
         let file = Path::new(r"C:\Temp\meet-agent\opencode-instructions.md");
         let config: Value =
             serde_json::from_str(&opencode_config(Some(file), Some(r"D:\Docs\KB"))).unwrap();
@@ -2200,31 +2181,18 @@ mod tests {
                 .to_string_lossy()
                 .into_owned();
             assert_eq!(permission["external_directory"][&read], "allow");
-            assert_eq!(permission["edit"]["*Docs/KB/*"], "deny");
-            // Ничего, кроме базы знаний: остальные права — как у человека.
-            assert_eq!(permission.as_object().unwrap().len(), 2);
-            assert_eq!(permission["edit"].as_object().unwrap().len(), 1);
+            // Только чтение базы знаний: правила `edit` нет — наш объект при
+            // слиянии заменил бы строковое правило человека ("edit": "ask").
+            assert_eq!(permission.as_object().unwrap().len(), 1);
+            assert_eq!(
+                permission["external_directory"].as_object().unwrap().len(),
+                1
+            );
         }
         // Без базы знаний и без файла подсказки — пустой конфиг.
         assert_eq!(opencode_config(None, None), "{}");
         let config: Value = serde_json::from_str(&opencode_config(Some(file), None)).unwrap();
         assert!(config.get("agent").is_none());
-    }
-
-    #[test]
-    fn opencode_edit_pattern_is_the_path_tail() {
-        assert_eq!(edit_pattern(r"D:\Docs\KB\").as_deref(), Some("*Docs/KB/*"));
-        assert_eq!(
-            edit_pattern("/Users/u/KB").as_deref(),
-            Some("*Users/u/KB/*")
-        );
-        assert_eq!(
-            edit_pattern(r"\\server\share\kb").as_deref(),
-            Some("*server/share/kb/*")
-        );
-        // Корень диска — правило запретило бы правку везде.
-        assert_eq!(edit_pattern(r"D:\"), None);
-        assert_eq!(edit_pattern("/"), None);
     }
 
     #[test]
