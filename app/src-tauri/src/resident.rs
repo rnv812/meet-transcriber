@@ -67,6 +67,13 @@ pub struct Endpoint {
 /// режим, тесты) или `%LOCALAPPDATA%\meet` (macOS — `~/Library/Application
 /// Support/meet`, `platform::data_root`).
 pub fn data_dir() -> PathBuf {
+    // Тесты оболочки не трогают папку установленной программы: иначе
+    // `shell_log!` из теста (замок установки и т. п.) дописывал строки в
+    // настоящий `shell.log`, а запись `daemon.json`/`tray.lock` задела бы
+    // работающую оболочку.
+    if cfg!(test) {
+        return test_data_dir();
+    }
     if let Some(dir) = std::env::var_os("MEET_DATA_DIR") {
         let dir = dir.to_string_lossy();
         if !dir.trim().is_empty() {
@@ -74,6 +81,11 @@ pub fn data_dir() -> PathBuf {
         }
     }
     platform::data_root().join("meet")
+}
+
+/// Папка данных под `cargo test` — во временной, одна на все прогоны.
+fn test_data_dir() -> PathBuf {
+    std::env::temp_dir().join("meet-shell-tests")
 }
 
 pub fn read_endpoint() -> Option<Endpoint> {
@@ -1355,6 +1367,15 @@ mod tests {
     fn answering_api_means_an_external_resident_after_all() {
         assert_eq!(no_api_next(true, true), NoApiStep::Adopt);
         assert_eq!(no_api_next(true, false), NoApiStep::Adopt);
+    }
+
+    #[test]
+    fn tests_never_touch_the_installed_data_dir() {
+        // Сторож: `shell_log!` и прочая запись в папку данных из любого теста
+        // уходит во временную папку, а не в настоящую установку.
+        let dir = data_dir();
+        assert!(dir.starts_with(std::env::temp_dir()), "{}", dir.display());
+        assert_ne!(dir, platform::data_root().join("meet"));
     }
 
     #[test]

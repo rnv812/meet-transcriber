@@ -193,6 +193,15 @@ mod tests {
     }
 
     #[test]
+    fn shell_log_from_tests_lands_in_temp() {
+        let marker = format!("проверка журнала {}", std::process::id());
+        write(&marker);
+        let path = shell_log_path(&resident::data_dir());
+        assert!(path.starts_with(std::env::temp_dir()), "{}", path.display());
+        assert!(fs::read_to_string(&path).unwrap().contains(&marker));
+    }
+
+    #[test]
     fn line_is_stamped_with_utc_time() {
         let at = UNIX_EPOCH + Duration::from_secs(1_790_000_000);
         assert_eq!(line(at, "запуск"), "2026-09-21 14:13:20Z запуск\n");
