@@ -8,6 +8,8 @@ import json
 import threading
 import time
 
+import pytest
+
 from meet import events, jobs
 
 
@@ -449,3 +451,37 @@ def test_cancel_one_download_keeps_the_other():
         release.set()
         q.stop()
     assert q.stopping
+
+
+def test_keyed_slots_any_active_and_stop():
+    started, release = {}, threading.Event()
+    q = jobs.KeyedQueues(spawn=_gated_spawn(started, release))
+    try:
+        assert q.any_active() is False
+        job, _ = q.submit_once(jobs.DOWNLOAD_MODEL, "m")
+        assert q.any_active() is True
+        release.set()
+        _wait(lambda: q.get(job.id).state == jobs.DONE)
+        assert q.any_active() is False
+    finally:
+        release.set()
+        q.stop()
+    # После stop новый слот не заводится: он жил бы сиротой.
+    with pytest.raises(jobs.QueueStopped):
+        q.submit_once(jobs.DOWNLOAD_MODEL, "другая")
+    assert q.listing()[-1]["id"] == job.id and len(q.listing()) == 1
+
+
+def test_keyed_slot_key_is_normalised_like_active_for(monkeypatch):
+    """Ключ слота сравнивается как в JobQueue.active_for: тот же id в другом
+    регистре на Windows — тот же слот, а не вторая параллельная загрузка."""
+    monkeypatch.setattr(jobs, "_folder_key", lambda folder: folder.lower())
+    started, release = {}, threading.Event()
+    q = jobs.KeyedQueues(spawn=_gated_spawn(started, release))
+    try:
+        first, _ = q.submit_once(jobs.DOWNLOAD_MODEL, "Org/Model")
+        again, new = q.submit_once(jobs.DOWNLOAD_MODEL, "org/model")
+        assert new is False and again.id == first.id
+    finally:
+        release.set()
+        q.stop()

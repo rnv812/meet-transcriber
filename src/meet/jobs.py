@@ -564,9 +564,14 @@ class JobQueue:
         return code
 
 
+class QueueStopped(RuntimeError):
+    """Очередь уже гасится вместе с резидентом — новую задачу не поставить."""
+
+
 class KeyedQueues:
     """Задачи, которые идут одновременно, но не по две над одним ключом: у
-    каждого ключа (`folder` задачи; у загрузки модели это её id) свой слот —
+    каждого ключа (`folder` задачи; у загрузки модели это её id; сравнение —
+    как у `active_for`, через `_folder_key`) свой слот —
     своя JobQueue. Загрузки моделей нагружают сеть и диск, а не GPU: стоять
     друг за другом и за часовой расшифровкой им незачем, а одну и ту же
     модель два загрузчика писали бы в одни и те же файлы.
@@ -587,20 +592,29 @@ class KeyedQueues:
         идёт. → (задача, поставлена ли новая). Проверка и постановка — под
         одним локом: двойной клик и два окна (мастер и настройки) не ставят
         вторую загрузку той же модели."""
-        key = str(folder)
+        key = _folder_key(str(folder))
         with self._lock:
+            # Резидент гасится: слот, заведённый после stop, жил бы сиротой.
+            if not self._alive:
+                raise QueueStopped("очередь остановлена")
             queue = self._queues.get(key)
             if queue is None:
                 queue = self._queues[key] = JobQueue(self.bus, spawn=self._spawn)
-            existing = queue.active_for(key, (kind,))
+            existing = queue.active_for(str(folder), (kind,))
             if existing is not None:
                 return existing, False
-            return queue.submit(kind, key, options), True
+            return queue.submit(kind, str(folder), options), True
 
     def active_for(self, folder: str, kinds) -> Job | None:
         with self._lock:
-            queue = self._queues.get(str(folder))
+            queue = self._queues.get(_folder_key(str(folder)))
         return queue.active_for(str(folder), kinds) if queue is not None else None
+
+    def any_active(self) -> bool:
+        """Ждёт или идёт хоть одна задача какого-нибудь ключа (у ключа идущая —
+        всегда среди последних: задачи одного ключа идут по одной)."""
+        return any(item["state"] in (QUEUED, RUNNING)
+                   for queue in self._all() for item in queue.listing())
 
     def _all(self) -> list[JobQueue]:
         with self._lock:
@@ -626,6 +640,7 @@ class KeyedQueues:
         return not self._alive
 
     def stop(self) -> None:
-        self._alive = False
+        with self._lock:
+            self._alive = False
         for queue in self._all():
             queue.stop()

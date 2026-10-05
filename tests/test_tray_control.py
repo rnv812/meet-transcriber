@@ -456,6 +456,49 @@ def test_model_download_waits_for_no_engine_install(app):
     assert state.downloads.listing() == []
 
 
+def test_engine_install_waits_for_no_model_download(app):
+    """Зеркало отказа выше: пока качаются модели, движок не ставится — pip
+    переставлял бы пакеты, которые грузит подпроцесс загрузки."""
+    import threading
+
+    from meet.control import Conflict
+
+    submitted = []
+
+    class Queue:
+        def submit(self, kind, folder, options=None):
+            submitted.append(kind)
+            return jobs.Job(id="e1", kind=kind, folder=folder)
+
+        def active_for(self, folder, kinds):
+            return None
+
+    release = threading.Event()
+    state = tray_control.TrayControl(app, queue=Queue(), downloads=_downloads(app, release))
+    try:
+        state.download_model({"id": "gigaam/v3_e2e_rnnt"})
+        with pytest.raises(Conflict, match="загрузки моделей"):
+            state.install_engine({})
+        assert submitted == []
+        release.set()
+        _wait_for(lambda: not state.downloads.any_active())
+        assert state.install_engine({})["kind"] == jobs.INSTALL_ENGINE
+        assert submitted == [jobs.INSTALL_ENGINE]
+    finally:
+        release.set()
+        state.downloads.stop()
+
+
+def test_model_download_after_resident_stop_is_refused(app):
+    from meet.control import Conflict
+
+    state = tray_control.TrayControl(app)
+    state.downloads.stop()
+    with pytest.raises(Conflict, match="останавливается"):
+        state.download_model({"id": "Systran/faster-whisper-small"})
+    assert state.downloads.listing() == []
+
+
 def test_saving_transcript_requires_segments(with_recordings, app):
     state = tray_control.TrayControl(app)
     assert "error" in state.save_transcript("2026-08-18_11-00", {"нет": "полей"})

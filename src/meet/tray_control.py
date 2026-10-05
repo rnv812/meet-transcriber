@@ -318,6 +318,8 @@ PROCESSING = "Запись ещё обрабатывается (обрезка �
 # Удалить модель, пока она же качается, и качать, пока ставится движок, нельзя.
 MODEL_DOWNLOADING = "модель сейчас скачивается — удалить её можно после загрузки"
 ENGINE_INSTALLING = "идёт установка движка — модели можно скачать после неё"
+MODELS_DOWNLOADING = "идут загрузки моделей — движок можно ставить после них"
+RESIDENT_STOPPING = "служба записи останавливается — скачайте модель после её перезапуска"
 # Восстановление после перезапуска берёт записи не старше этого.
 RECOVER_DAYS = 7
 
@@ -388,6 +390,10 @@ class TrayControl:
         # Загрузки моделей — по слоту на модель: разные качаются одновременно
         # (сеть и диск, не GPU), одна и та же — не дважды.
         self.downloads = downloads if downloads is not None else jobs.KeyedQueues(self.bus)
+        # Установка движка и загрузки моделей исключают друг друга (обе
+        # стороны — под этим локом): подпроцесс загрузки грузит пакеты того
+        # самого окружения, которое переставляет pip.
+        self._engine_lock = threading.Lock()
         self._providers = ProviderCache()
         self._submit_lock = threading.Lock()
         self._levels: dict = {}
@@ -2329,10 +2335,17 @@ class TrayControl:
         """Поставить движок задачей — той же очередью, что и расшифровку.
 
         Установка идёт минуты и гигабайты, поэтому не в потоке резидента: он
-        должен оставаться отзывчивым и продолжать писать встречу, если она идёт."""
-        job = self.queue.submit(
-            jobs.INSTALL_ENGINE, str(paths.data_dir()), options or {}
-        )
+        должен оставаться отзывчивым и продолжать писать встречу, если она идёт.
+
+        Пока качаются модели — отказ: их подпроцессы грузят пакеты движка
+        (GigaAM — и torch), а pip переставлял бы их на ходу (на Windows —
+        поверх загруженных DLL, с полуразобранным движком в итоге)."""
+        with self._engine_lock:
+            if self.downloads.any_active():
+                raise _conflict(MODELS_DOWNLOADING)
+            job = self.queue.submit(
+                jobs.INSTALL_ENGINE, str(paths.data_dir()), options or {}
+            )
         return job.to_raw()
 
     def models(self) -> dict:
@@ -2414,9 +2427,13 @@ class TrayControl:
         repo_id = str((body or {}).get("id") or "").strip()
         if not repo_id:
             return {"error": "не сказано, какую модель качать"}
-        if self.queue.active_for(str(paths.data_dir()), (jobs.INSTALL_ENGINE,)) is not None:
-            raise _conflict(ENGINE_INSTALLING)
-        job, _ = self.downloads.submit_once(jobs.DOWNLOAD_MODEL, repo_id, {})
+        with self._engine_lock:
+            if self.queue.active_for(str(paths.data_dir()), (jobs.INSTALL_ENGINE,)) is not None:
+                raise _conflict(ENGINE_INSTALLING)
+            try:
+                job, _ = self.downloads.submit_once(jobs.DOWNLOAD_MODEL, repo_id, {})
+            except jobs.QueueStopped:
+                raise _conflict(RESIDENT_STOPPING) from None
         return job.to_raw()
 
     def _submit_once(self, kind: str, folder: Path, options: dict | None = None):
