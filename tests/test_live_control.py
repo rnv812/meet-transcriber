@@ -129,6 +129,8 @@ class H(BaseHTTPRequestHandler):
             self.end_headers()
         elif self.path == "/crash":
             self._json(200, {"ok": True})
+            self.wfile.flush()
+            time.sleep(0.2)  # ответ дошёл до клиента, а не оборван выходом
             print("RuntimeError: устройство пропало", flush=True)
             os._exit(3)
 
