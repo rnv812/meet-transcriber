@@ -17,7 +17,7 @@
 
 import re
 
-PROVIDERS = ("claude-code", "codex")
+PROVIDERS = ("claude-code", "codex", "opencode")
 
 ARGS_CONTROL = "Недопустимый управляющий символ в параметрах запуска"
 ARGS_QUOTE = ("Незакрытая кавычка в параметрах запуска (обратная косая черта перед "

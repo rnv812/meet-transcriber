@@ -284,9 +284,10 @@ AGENT_ANALYSIS_JSON = "analysis.json"
 # Метка в meta.json: в папке записи уже работал агент — {провайдер: {"at":
 # когда, "id": id сеанса}}. По ней вкладка «Агент» предлагает «Продолжить
 # прошлую»: Claude Code — `--resume <id>` (id задаёт оболочка при запуске,
-# `--session-id`), Codex — `resume --last`. Хранилище самих CLI не читаем.
+# `--session-id`), Codex — `resume --last`, OpenCode — `--continue` (последний
+# сеанс в папке встречи). Хранилище самих CLI не читаем.
 AGENT_SESSIONS_META = "agent_sessions"
-AGENT_PROVIDERS = ("claude-code", "codex")
+AGENT_PROVIDERS = ("claude-code", "codex", "opencode")
 # Шапка transcript.md, пока точной расшифровки нет, а лента живого режима есть.
 AGENT_LIVE_HEADER = (
     "# Черновая расшифровка живого режима\n\n"

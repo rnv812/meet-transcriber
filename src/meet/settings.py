@@ -160,7 +160,7 @@ ASR_BACKENDS = ("faster-whisper", "whisper.cpp", "gigaam")
 WHISPER = "faster-whisper"
 GIGAAM = "gigaam"
 ASR_BACKEND_ALIASES = {"whisper": WHISPER}
-LLM_PROVIDERS = ("auto", "claude-code", "codex", "openai-compatible")
+LLM_PROVIDERS = ("auto", "claude-code", "codex", "opencode", "openai-compatible")
 # Провайдер для конфига без явного выбора у уже работавшего пользователя: до
 # появления "auto" ассистент ходил через Claude Code, и это не должно меняться.
 LEGACY_LLM_PROVIDER = "claude-code"
@@ -791,6 +791,31 @@ def _legacy_cpu_backend(cpu_model: str) -> str:
     return GIGAAM if cpu_model == DEFAULT_CPU_WHISPER_MODEL else WHISPER
 
 
+# Модель OpenCode — «провайдер/модель», как в `opencode models` (anthropic/
+# claude-sonnet-4-5, ollama/qwen3:8b, openrouter/meta-llama/llama-3.3-70b).
+# Символы — только те, что бывают в именах моделей: значение уходит в
+# командную строку, в том числе через сценарий opencode.cmd (cmd.exe).
+_OPENCODE_MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._:@+-][A-Za-z0-9._:@+/-]*")
+_OPENCODE_MODEL_CHARS = re.compile(r"[A-Za-z0-9._:@+/-]*")
+OPENCODE_MODEL_EXAMPLE = "например anthropic/claude-sonnet-4-5"
+
+
+def opencode_model_error(value) -> str | None:
+    """Негодная модель OpenCode — текст для человека; пусто — годится
+    (OpenCode возьмёт модель из своего конфига)."""
+    if not isinstance(value, str):
+        return f"Модель OpenCode — строка вида провайдер/модель, {OPENCODE_MODEL_EXAMPLE}"
+    text = value.strip()
+    if not text:
+        return None
+    if not _OPENCODE_MODEL_CHARS.fullmatch(text):
+        return ("В имени модели OpenCode недопустимые символы: только латиница, цифры "
+                f"и . _ - : @ + /, {OPENCODE_MODEL_EXAMPLE}")
+    if not _OPENCODE_MODEL.fullmatch(text):
+        return f"Модель OpenCode — в виде провайдер/модель, {OPENCODE_MODEL_EXAMPLE}"
+    return None
+
+
 @dataclass(frozen=True)
 class Llm:
     """Кто отвечает на вопросы по встрече и ведёт дайджест.
@@ -800,8 +825,12 @@ class Llm:
     Ollama: своего рантайма не тащим, а инструменты чтения хранилища такой
     провайдер не поддерживает — это учитывает слой assist.
 
-    `proxy` — прокси для Claude Code/Codex (и загрузок моделей задачами):
+    `proxy` — прокси для Claude Code/Codex/OpenCode (и загрузок моделей задачами):
     `system` — как в Windows, `none` — без прокси, или адрес; см. meet.netproxy.
+
+    `opencode_model` — модель OpenCode «провайдер/модель» (своя: `model` —
+    имя модели Claude Code, «sonnet» OpenCode не поймёт); пусто — модель из
+    конфига OpenCode.
     """
 
     provider: str = "auto"
@@ -809,6 +838,7 @@ class Llm:
     base_url: str = DEFAULT_LOCAL_BASE_URL
     local_model: str | None = None
     proxy: str = "system"
+    opencode_model: str = ""
 
     @classmethod
     def from_raw(cls, raw: dict, default_provider: str = "auto") -> "Llm":
@@ -822,6 +852,7 @@ class Llm:
             base_url=str(base).strip() if base else DEFAULT_LOCAL_BASE_URL,
             local_model=str(local).strip() if local else None,
             proxy=netproxy.normalize(raw.get("proxy")),
+            opencode_model=_opencode_model(raw.get("opencode_model")),
         )
 
     @staticmethod
@@ -833,6 +864,10 @@ class Llm:
             error = netproxy.check(update["proxy"])
             if error:
                 raise ValueError(error)
+        if "opencode_model" in update and update["opencode_model"] is not None:
+            error = opencode_model_error(update["opencode_model"])
+            if error:
+                raise ValueError(error)
 
     def to_raw(self) -> dict:
         return {
@@ -841,7 +876,15 @@ class Llm:
             "base_url": self.base_url,
             "local_model": self.local_model,
             "proxy": self.proxy,
+            "opencode_model": self.opencode_model,
         }
+
+
+def _opencode_model(value) -> str:
+    """`llm.opencode_model` из файла: негодное (испорчено руками) — пусто."""
+    if not isinstance(value, str) or opencode_model_error(value) is not None:
+        return ""
+    return value.strip()
 
 
 @dataclass(frozen=True)
@@ -1082,12 +1125,14 @@ class Agent:
 
     claude: AgentLaunch = field(default_factory=AgentLaunch)
     codex: AgentLaunch = field(default_factory=AgentLaunch)
+    opencode: AgentLaunch = field(default_factory=AgentLaunch)
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Agent":
         launch = raw.get("launch") if isinstance(raw.get("launch"), dict) else {}
         return cls(claude=AgentLaunch.from_raw(launch.get("claude-code")),
-                   codex=AgentLaunch.from_raw(launch.get("codex")))
+                   codex=AgentLaunch.from_raw(launch.get("codex")),
+                   opencode=AgentLaunch.from_raw(launch.get("opencode")))
 
     @staticmethod
     def check(update: dict) -> None:
@@ -1100,7 +1145,8 @@ class Agent:
                 raise ValueError(error)
 
     def to_raw(self) -> dict:
-        return {"launch": {"claude-code": self.claude.to_raw(), "codex": self.codex.to_raw()}}
+        return {"launch": {"claude-code": self.claude.to_raw(), "codex": self.codex.to_raw(),
+                           "opencode": self.opencode.to_raw()}}
 
 
 @dataclass(frozen=True)

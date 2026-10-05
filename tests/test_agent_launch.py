@@ -58,7 +58,8 @@ def test_env_entries_are_checked():
 def test_settings_default_empty_and_round_trip():
     cfg = Settings.from_raw({})
     assert cfg.agent.to_raw() == {"launch": {
-        "claude-code": {"args": "", "env": []}, "codex": {"args": "", "env": []}}}
+        "claude-code": {"args": "", "env": []}, "codex": {"args": "", "env": []},
+        "opencode": {"args": "", "env": []}}}
     raw = {"agent": {"launch": {"claude-code": {
         "args": "--model opus", "env": [{"key": "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE", "value": "1"}]}}}}
     again = Settings.from_raw(Settings.from_raw(raw).to_raw())
@@ -88,3 +89,16 @@ def test_patch_validates_and_saves(tmp_path):
         with pytest.raises(ValueError):
             settings.patch({"agent": {"launch": bad}}, path)
     assert settings.load(path).agent.claude.args == "--permission-mode acceptEdits"
+
+
+def test_opencode_launch_is_its_own_section(tmp_path):
+    path = tmp_path / "config.json"
+    cfg = Settings.from_raw({})
+    assert cfg.agent.to_raw()["launch"]["opencode"] == {"args": "", "env": []}
+    launch = {"opencode": {"args": "--model anthropic/claude-sonnet-4-5",
+                           "env": [{"key": "OPENCODE_CONFIG", "value": r"D:\oc.json"}]}}
+    updated = settings.patch({"agent": {"launch": launch}}, path)
+    assert updated.agent.opencode.args == "--model anthropic/claude-sonnet-4-5"
+    assert settings.load(path).agent.opencode.env == (("OPENCODE_CONFIG", r"D:\oc.json"),)
+    with pytest.raises(ValueError):
+        settings.patch({"agent": {"launch": {"opencode": {"args": '"x', "env": []}}}}, path)

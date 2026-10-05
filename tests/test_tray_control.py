@@ -2291,3 +2291,16 @@ def test_hotword_is_only_the_new_words_and_removal_is_server_side(with_recording
     assert target.read_text(encoding="utf-8") == "SIEM\n# комментарий\nSOC\n" == reply["text"]
     with pytest.raises(control.BadRequest):
         state.remove_hotword({"term": " "})
+
+
+def test_opencode_session_mark_has_no_id(control_state, tmp_path, monkeypatch):
+    """OpenCode своего id при запуске не принимает: метка без id, «Продолжить
+    прошлую» — `--continue` (последний сеанс в папке встречи)."""
+    from meet import library
+
+    folder = _agent_folder(tmp_path, control_state, monkeypatch)
+    got = control_state.agent_context(folder.name, {"provider": "opencode"})
+    assert "session" not in got
+    assert library.read_meta(folder)["agent_sessions"]["opencode"]["id"] is None
+    assert control_state.agent_files(folder.name)["sessions"] == ["opencode"]
+    assert "session" not in control_state.agent_context(folder.name, {"provider": "opencode", "resume": True})

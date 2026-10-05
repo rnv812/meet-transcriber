@@ -411,7 +411,7 @@ def test_new_config_gets_auto_provider_and_no_folders(monkeypatch):
     assert cfg.assistant.knowledge_dir is None
     assert cfg.assistant.notes_dir is None
     assert cfg.assistant.notes_subdir == "Встречи"
-    assert settings.LLM_PROVIDERS == ("auto", "claude-code", "codex", "openai-compatible")
+    assert settings.LLM_PROVIDERS == ("auto", "claude-code", "codex", "opencode", "openai-compatible")
 
 
 def test_first_run_without_llm_sections_is_new():
@@ -431,7 +431,7 @@ def test_legacy_config_without_version_keeps_claude_code():
 
 
 def test_explicit_provider_is_kept():
-    for name in ("codex", "auto", "openai-compatible"):
+    for name in ("codex", "opencode", "auto", "openai-compatible"):
         raw = {"version": 2, "llm": {"provider": name}}
         assert settings.Settings.from_raw(raw).llm.provider == name
 
@@ -947,3 +947,41 @@ def test_existing_config_is_kept_on_macos(tmp_path, monkeypatch):
     _write(f, {"version": settings.SCHEMA_VERSION,
                "auto_record": {"processes": ["Zoom.exe", "Slack"]}})
     assert settings.load(f).auto_record.processes == ["Zoom.exe", "Slack"]
+
+
+# --- OpenCode: своя модель в виде провайдер/модель ---
+
+
+def test_opencode_model_default_empty_and_round_trip():
+    cfg = settings.Settings.from_raw({})
+    assert cfg.llm.opencode_model == ""
+    raw = {"llm": {"provider": "opencode", "opencode_model": " ollama/qwen3:8b "}}
+    again = settings.Settings.from_raw(settings.Settings.from_raw(raw).to_raw())
+    assert again.llm.provider == "opencode"
+    assert again.llm.opencode_model == "ollama/qwen3:8b"
+    # Модель Claude Code своя и не трогается.
+    assert again.llm.model == "sonnet"
+
+
+@pytest.mark.parametrize("value", ["sonnet", "anthropic/", "/gpt-5", "a b/c", 'x/"y"', "a/b&calc",
+                                   "a/%PATH%", 42])
+def test_opencode_model_garbage_from_the_file_is_empty(value):
+    cfg = settings.Settings.from_raw({"llm": {"opencode_model": value}})
+    assert cfg.llm.opencode_model == ""
+
+
+@pytest.mark.parametrize("value", ["anthropic/claude-sonnet-4-5", "openrouter/meta-llama/llama-3.3-70b",
+                                   "ollama/qwen3:8b", "google-vertex/claude@2024", "opencode/gpt-5.1-codex"])
+def test_opencode_model_accepts_provider_slash_model(value):
+    assert settings.opencode_model_error(value) is None
+    assert settings.Settings.from_raw({"llm": {"opencode_model": value}}).llm.opencode_model == value
+
+
+def test_patch_opencode_model_is_validated(tmp_path):
+    f = tmp_path / "config.json"
+    assert settings.patch({"llm": {"opencode_model": "openai/gpt-5"}}, f).llm.opencode_model == "openai/gpt-5"
+    assert settings.patch({"llm": {"opencode_model": ""}}, f).llm.opencode_model == ""
+    with pytest.raises(ValueError, match="провайдер/модель"):
+        settings.patch({"llm": {"opencode_model": "sonnet"}}, f)
+    with pytest.raises(ValueError, match="недопустимые символы"):
+        settings.patch({"llm": {"opencode_model": "a/b c"}}, f)
