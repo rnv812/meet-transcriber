@@ -335,19 +335,22 @@ def _embed_runs(folder: Path, runs: list[Run], embed, mic) -> None:
         r.emb = _vector(vec)
 
 
-def _dominant(runs: list[Run]) -> list[Run]:
-    if len(runs) == 1:
-        return list(runs)
+def clusters(runs: list[Run], stop: float = CLUSTER_STOP) -> list[list[Run]]:
+    """Кластеры участков с голосом: средняя связь до `stop` и уточнение;
+    по убыванию речи."""
+    runs = [r for r in runs if r.emb is not None]
+    if len(runs) <= 1:
+        return [runs] if runs else []
     x = np.stack([r.emb for r in runs])
     w = np.array([r.seconds for r in runs])
-    labels = speaker_split.ahc_threshold(x, w, CLUSTER_STOP)
+    labels = speaker_split.ahc_threshold(x, w, stop)
     k = int(labels.max()) + 1
     if k > 1:
         labels, _ = speaker_split._refine(x, w, labels, k)
     groups: dict[int, list[Run]] = {}
     for r, g in zip(runs, labels):
         groups.setdefault(int(g), []).append(r)
-    return max(groups.values(), key=lambda g: sum(r.seconds for r in g))
+    return sorted(groups.values(), key=lambda g: -sum(r.seconds for r in g))
 
 
 def _centroid(runs: list[Run]) -> np.ndarray | None:
@@ -357,10 +360,10 @@ def _centroid(runs: list[Run]) -> np.ndarray | None:
     return _unit((np.stack([r.emb for r in use]) * np.array([r.seconds for r in use])[:, None]).sum(0))
 
 
-def meeting_voice(folder: Path, *, embed, decode, owner_labels: set[str], vad=None) -> MeetingVoice:
-    """Голос владельца в одной встрече: доминирующий кластер его участков."""
+def meeting_runs(folder: Path, *, embed, decode, owner_labels: set[str], vad=None) -> list[Run]:
+    """Участки речи владельца встречи с голосами (собеседники молчат, речь
+    не больше MAX_SPEECH_S); участки без голоса отброшены."""
     folder = Path(folder)
-    out = MeetingVoice(folder.name)
     data = library.read_transcript_full(folder) or {}
     data = {**data, "segments": [dict(s) for s in data.get("segments") or [] if isinstance(s, dict)]}
     segvoices.mark_tracks(folder, data, owner_labels)  # старые записи: дорожка по звуку или подписи
@@ -373,29 +376,41 @@ def meeting_voice(folder: Path, *, embed, decode, owner_labels: set[str], vad=No
 
     runs = owner_runs(data, owner_labels, mic=mic, vad=vad)
     if not runs:
-        return out
+        return []
     sys_src = library.find_track(folder, "sys")
     runs = _quiet(runs, decode(sys_src, segvoices.ENERGY_RATE), segvoices.ENERGY_RATE)
     runs = _spread(runs)
     _embed_runs(folder, runs, embed, mic)
-    out.runs = [r for r in runs if r.emb is not None]
-    if not out.runs:
+    return [r for r in runs if r.emb is not None]
+
+
+def summarize(name: str, runs: list[Run], stop: float = CLUSTER_STOP) -> MeetingVoice:
+    """Голос встречи по её участкам: доминирующий кластер, если в нём от
+    DOMINANT_SHARE речи и от DOMINANT_MIN_S."""
+    out = MeetingVoice(name, runs=[r for r in runs if r.emb is not None])
+    groups = clusters(out.runs, stop)
+    if not groups:
         return out
     total = sum(r.seconds for r in out.runs)
-    dominant = _dominant(out.runs)
-    out.dominant = dominant
-    out.seconds = round(sum(r.seconds for r in dominant), 2)
+    out.dominant = groups[0]
+    out.seconds = round(sum(r.seconds for r in groups[0]), 2)
     out.share = out.seconds / total if total else 0.0
     if out.share >= DOMINANT_SHARE and out.seconds >= DOMINANT_MIN_S:
-        out.centroid = _centroid(dominant)
+        out.centroid = _centroid(groups[0])
     return out
+
+
+def meeting_voice(folder: Path, *, embed, decode, owner_labels: set[str], vad=None) -> MeetingVoice:
+    """Голос владельца в одной встрече: доминирующий кластер его участков."""
+    runs = meeting_runs(folder, embed=embed, decode=decode, owner_labels=owner_labels, vad=vad)
+    return summarize(Path(folder).name, runs)
 
 
 # --- по всем встречам --------------------------------------------------------------
 
 
-def _group(found: list[MeetingVoice]) -> list[MeetingVoice]:
-    """Самая большая группа голосов встреч с попарным косинусом от GROUP_COS
+def _group(found: list[MeetingVoice], cos: float = GROUP_COS) -> list[MeetingVoice]:
+    """Самая большая группа голосов встреч с попарным косинусом от `cos`
     (при равенстве — с большей речью). Встреч не больше MAX_MEETINGS — перебор."""
     n = len(found)
     if not n:
@@ -404,7 +419,7 @@ def _group(found: list[MeetingVoice]) -> list[MeetingVoice]:
     for size in range(n, 0, -1):
         best, best_talk = None, -1.0
         for combo in itertools.combinations(range(n), size):
-            if all(sim[i, j] >= GROUP_COS for i, j in itertools.combinations(combo, 2)):
+            if all(sim[i, j] >= cos for i, j in itertools.combinations(combo, 2)):
                 talk = sum(found[i].seconds for i in combo)
                 if talk > best_talk:
                     best, best_talk = combo, talk
@@ -463,6 +478,23 @@ def _too_few(checked: int, used: int) -> str:
             "или в микрофоне несколько голосов. Запишите образец голоса сами — так надёжнее.")
 
 
+def decide(found: list[MeetingVoice], group_cos: float = GROUP_COS) -> tuple[str, list[MeetingVoice], int]:
+    """Согласие голосов встреч (только встреч с голосом). → (SUGGESTED |
+    TOO_FEW | INCONSISTENT, группа, сколько встреч нужно). Совпадения с
+    образцом и базой здесь не проверяются."""
+    used = len(found)
+    if used < GROUP_MIN_MEETINGS:
+        return TOO_FEW, [], GROUP_MIN_MEETINGS
+    group = _group(found, group_cos)
+    # Доля — от встреч, где голос владельца вообще нашёлся: встреча, где он
+    # почти молчал, не говорит о том, что голос «другой».
+    need = max(GROUP_MIN_MEETINGS, math.ceil(GROUP_MIN_SHARE * used - 1e-9))
+    if len(group) >= need:
+        return SUGGESTED, group, need
+    # Группа — все встречи с голосом, но их мало: не разнобой, а мало встреч.
+    return (TOO_FEW if len(group) == used else INCONSISTENT), group, need
+
+
 def find(root: Path, voices: Path, *, embed=None, vad=None, decode=None, bus=None,
          owner_labels: set[str] | None = None, threshold: float | None = None,
          limit: int = MAX_MEETINGS, log=print) -> Outcome:
@@ -509,16 +541,11 @@ def find(root: Path, voices: Path, *, embed=None, vad=None, decode=None, bus=Non
         raise DeriveError(f"не удалось разобрать ни одной встречи: {type(first).__name__}: {first}") from first
     newest = {"newest": newest_recording(root)}
     used = len(found)
-    if used < GROUP_MIN_MEETINGS:
-        return Outcome(TOO_FEW, _too_few(checked, used), checked=checked, used=used, extra=newest)
-    group = _group(found)
-    # Доля — от встреч, где голос владельца вообще нашёлся: встреча, где он
-    # почти молчал, не говорит о том, что голос «другой».
-    need = max(GROUP_MIN_MEETINGS, math.ceil(GROUP_MIN_SHARE * used - 1e-9))
+    status, group, need = decide(found)
     counts = dict(checked=checked, used=used, found=len(group))
-    if len(group) < need:
-        if len(group) == used:  # не разнобой, а мало встреч с голосом
-            return Outcome(TOO_FEW, _too_few(checked, used), **counts, extra=newest)
+    if status == TOO_FEW:
+        return Outcome(TOO_FEW, _too_few(checked, used), **counts, extra=newest)
+    if status == INCONSISTENT:
         return Outcome(INCONSISTENT,
                        f"Голос в вашем микрофоне от встречи к встрече звучит по-разному: одинаково — "
                        f"только в {len(group)} из {used} {_meetings_word(used)}, где он хорошо слышен, "
