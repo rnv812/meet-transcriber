@@ -198,6 +198,85 @@ def test_job_worker_turns_telemetry_off(monkeypatch, tmp_path, capsys):
     assert os.environ["PYANNOTE_METRICS_ENABLED"] == "false"
 
 
+# --- C4, C5: потоки и размер пачки ------------------------------------------------
+
+
+def test_cpu_threads_physical_cores_capped_at_8(monkeypatch):
+    import psutil
+
+    from meet import plat
+
+    monkeypatch.setattr(plat, "is_macos", lambda: False)
+    monkeypatch.setattr(psutil, "cpu_count", lambda logical=True: 14 if not logical else 20)
+    assert diarize.cpu_threads() == 8
+    monkeypatch.setattr(psutil, "cpu_count", lambda logical=True: 4 if not logical else 8)
+    assert diarize.cpu_threads() == 4
+    monkeypatch.setattr(psutil, "cpu_count", lambda logical=True: None)
+    assert diarize.cpu_threads() is None  # не знаем — torch решает сам
+
+
+def test_cpu_threads_on_mac_are_performance_cores(monkeypatch):
+    from meet import plat
+
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    asked = []
+
+    def run(argv, **kw):
+        asked.append(argv)
+        return types.SimpleNamespace(returncode=0, stdout="8\n")
+
+    assert diarize.cpu_threads(run=run) == 8
+    assert asked == [["sysctl", "-n", "hw.perflevel0.physicalcpu"]]
+    fail = lambda argv, **kw: types.SimpleNamespace(returncode=1, stdout="")  # noqa: E731
+    import psutil
+
+    monkeypatch.setattr(psutil, "cpu_count", lambda logical=True: 10 if not logical else 10)
+    assert diarize.cpu_threads(run=fail) == 8  # Intel / нет ключа — как на Windows
+
+
+def test_cpu_diarization_caps_threads_and_restores_them(monkeypatch, tmp_path):
+    from meet import credentials
+
+    state = _fake_torch(monkeypatch, threads=14)
+    monkeypatch.setattr(diarize, "cpu_threads", lambda run=None: 8)
+    pipe = _Pipe(threads=state)
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: "hf_x")
+    monkeypatch.setattr(diarize, "_load_pipeline", lambda token: pipe)
+    _wire(monkeypatch, pipe)
+    lines = []
+    monkeypatch.setattr(diarize, "_log_sink", lines.append)
+    diarize.diarize_wav(tmp_path / "x.wav")
+    assert pipe.seen_threads == 8 and state["threads"] == 14
+    assert lines[0].startswith("время диаризации (cpu, потоков 8)")
+
+
+def test_threads_are_never_raised_above_what_torch_has(monkeypatch, tmp_path):
+    """OMP_NUM_THREADS=4 у человека (или torch так решил) — не 8."""
+    from meet import credentials
+
+    state = _fake_torch(monkeypatch, threads=4)
+    monkeypatch.setattr(diarize, "cpu_threads", lambda run=None: 8)
+    pipe = _Pipe(threads=state)
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: "hf_x")
+    monkeypatch.setattr(diarize, "_load_pipeline", lambda token: pipe)
+    _wire(monkeypatch, pipe)
+    diarize.diarize_wav(tmp_path / "x.wav")
+    assert pipe.seen_threads == 4
+
+
+def test_gpu_diarization_leaves_threads_alone(monkeypatch, tmp_path):
+    from meet import credentials
+
+    state = _fake_torch(monkeypatch, threads=14)
+    monkeypatch.setattr(diarize, "cpu_threads", lambda run=None: 8)
+    pipe = _Pipe(threads=state)
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: "hf_x")
+    monkeypatch.setattr(diarize, "_load_pipeline", lambda token: pipe)
+    _wire(monkeypatch, pipe, device="cuda")
+    diarize.diarize_wav(tmp_path / "x.wav")
+    assert pipe.seen_threads == 14 and state["set"] == []
+
+
 # --- C7: время стадий — в журнал резидента --------------------------------------
 
 

@@ -265,6 +265,77 @@ def _shared_embeddings(self, file, binary_segmentations, exclude_overlap=False, 
     return out
 
 
+# Потоки torch для диаризации на процессоре: выше 6–8 на ноутбуке с
+# производительными и энергоэффективными ядрами быстрее не становится, а под
+# фоновой нагрузкой лишние потоки жгут процессор впустую (замер 0.3.3: 14
+# потоков — на ~50 % больше процессорного времени за ту же работу) и машина
+# с идущей встречей отвечает хуже.
+CPU_THREADS_MAX = 8
+
+
+def cpu_threads(run=None) -> int | None:
+    """Сколько потоков дать torch на процессоре: macOS — число
+    производительных ядер (`hw.perflevel0.physicalcpu`, 8 у M1 Pro): работа не
+    уходит на энергоэффективные; иначе — физические ядра, не больше
+    CPU_THREADS_MAX. Не знаем — None (torch решает сам)."""
+    from meet import plat
+
+    if plat.is_macos():
+        import subprocess
+
+        run = run or subprocess.run
+        try:
+            out = run(["sysctl", "-n", "hw.perflevel0.physicalcpu"], capture_output=True, text=True,
+                      timeout=5)
+            if out.returncode == 0 and int(out.stdout.strip()) > 0:
+                return int(out.stdout.strip())
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+    try:
+        import psutil
+
+        physical = psutil.cpu_count(logical=False)
+    except Exception:
+        physical = None
+    return min(physical, CPU_THREADS_MAX) if physical else None
+
+
+class _Threads:
+    """Потоки torch на время диаризации на процессоре — и прежнее число после:
+    в том же процессе дальше идут голоса и выравнивание. Больше, чем у torch
+    уже есть (OMP_NUM_THREADS), не ставим."""
+
+    def __init__(self, torch) -> None:
+        self.torch = torch
+        self.saved: int | None = None
+        self.count: int | None = None
+
+    def cap(self) -> None:
+        get = getattr(self.torch, "get_num_threads", None)
+        put = getattr(self.torch, "set_num_threads", None)
+        want = cpu_threads()
+        if not (get and put and want):
+            return
+        try:
+            current = get()
+            if self.saved is None:
+                self.saved = current
+            self.count = min(want, current)
+            if self.count != current:
+                put(self.count)
+        except Exception:
+            self.count = None
+
+    def restore(self) -> None:
+        if self.saved is None:
+            return
+        try:
+            if self.torch.get_num_threads() != self.saved:
+                self.torch.set_num_threads(self.saved)
+        except Exception:
+            pass
+
+
 def _load_wav(path: Path):
     """mono 16k PCM16 wav (выход to_wav16k) → тензор (1, time) и частота.
     Читаем сами: torchcodec, на который полагается pyannote 4.x,
@@ -371,23 +442,30 @@ def diarize_wav(
         )
 
     used = device.type
+    threads = _Threads(torch)
+    if used == "cpu":
+        threads.cap()
     try:
-        result = run()
-    except Exception as e:
-        if device.type != "mps":
-            raise
-        # MPS (Apple Silicon) поддерживает не все операции: тогда — процессор.
-        print(f"Диаризация на MPS не прошла ({type(e).__name__}) — повторяю на процессоре")
-        pipe.to(torch.device("cpu"))
-        used = "cpu"
-        clock.retry("после сбоя MPS")
-        result = run()
+        try:
+            result = run()
+        except Exception as e:
+            if device.type != "mps":
+                raise
+            # MPS (Apple Silicon) поддерживает не все операции: тогда — процессор.
+            print(f"Диаризация на MPS не прошла ({type(e).__name__}) — повторяю на процессоре")
+            pipe.to(torch.device("cpu"))
+            used = "cpu"
+            threads.cap()
+            clock.retry("после сбоя MPS")
+            result = run()
+    finally:
+        threads.restore()
     clock.stop()
     diar = _to_diarization(result, exclusive=exclusive)
     diar.device = used
     diar.timings = clock.result()
     fast = getattr(pipe, "_meet_fast_embeddings", None)
-    _log(clock.line(used) + ("; голоса за один проход на окно" if fast and fast["on"] else ""))
+    _log(clock.line(used, threads.count) + ("; голоса за один проход на окно" if fast and fast["on"] else ""))
     return diar
 
 
@@ -457,7 +535,7 @@ class _StageClock:
         out.update(self.parts)
         return out
 
-    def line(self, device: str) -> str:
+    def line(self, device: str, threads: int | None = None) -> str:
         """Строка для журнала: где ушло время (ASCII-пунктуация: печатается и в
         консоль cp866)."""
         t = self.result()
@@ -465,7 +543,7 @@ class _StageClock:
         parts = [f"{label} {t[key]:.1f} с" + (f" {self.source}" if key == "model" and self.source else "")
                  for key, label in names if key in t]
         load = f"загрузка {t['load']:.1f} с" + (f" ({', '.join(parts)})" if parts else "")
-        head = ", ".join([device] + ([self.note] if self.note else []))
+        head = ", ".join([device] + ([f"потоков {threads}"] if threads else []) + ([self.note] if self.note else []))
         return (f"время диаризации ({head}): {load}, сегментация {t['segmentation']:.1f} с, "
                 f"голоса {t['embeddings']:.1f} с, кластеризация {t['clustering']:.1f} с, "
                 f"всего {t['total']:.1f} с")
