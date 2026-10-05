@@ -372,6 +372,7 @@ def test_fast_embeddings_fall_back_to_stock_once_and_say_it(monkeypatch):
     assert pipe.get_embeddings("f", "segs") == "штатно"
     assert len(tries) == 1 and pipe.calls == 2
     assert len(lines) == 1 and "ValueError" in lines[0]
+    assert "форма масок" not in lines[0]  # только класс: текст ошибки может нести путь
 
 
 def test_fast_embeddings_stay_on_when_stock_fails_too(monkeypatch):
@@ -389,14 +390,15 @@ def test_fast_embeddings_stay_on_when_stock_fails_too(monkeypatch):
     def fast(p, file, segs, exclude_overlap, hook):
         calls.append(1)
         if len(calls) == 1:
-            raise RuntimeError("MPS")
+            raise RuntimeError("MPS в проходе на окно")
         return "быстро"
 
     monkeypatch.setattr(diarize, "_shared_embeddings", fast)
     monkeypatch.setattr(diarize, "_log_sink", lambda text: pytest.fail("не о чем сообщать"))
     diarize._install_fast_embeddings(pipe)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError) as raised:
         pipe.get_embeddings("f", "segs")
+    assert str(raised.value.__cause__) == "MPS в проходе на окно"  # первая ошибка не потеряна
     assert pipe.get_embeddings("f", "segs") == "быстро"
 
 
@@ -430,6 +432,25 @@ def test_fast_embeddings_guard_wants_pyannote_4_0_and_its_embedding(monkeypatch)
     other = Custom.__new__(Custom)
     object.__setattr__(other, "_embedding", PyannoteAudioPretrainedSpeakerEmbedding())
     assert not diarize._fast_embeddings_ok(other)
+
+
+def test_fast_embeddings_guard_wants_the_verified_stock_source(monkeypatch):
+    """Версия та же, а исходник штатного get_embeddings другой (новая сборка,
+    правка) — штатный способ, пока правку не сверят заново."""
+    pa = pytest.importorskip("pyannote.audio")
+    from pyannote.audio.pipelines.speaker_diarization import SpeakerDiarization
+
+    class PyannoteAudioPretrainedSpeakerEmbedding:
+        pass
+
+    pipe = SpeakerDiarization.__new__(SpeakerDiarization)
+    object.__setattr__(pipe, "_embedding", PyannoteAudioPretrainedSpeakerEmbedding())
+    monkeypatch.setattr(pa, "__version__", "4.0.7")
+    if diarize._stock_fingerprint(SpeakerDiarization) not in diarize.STOCK_EMBEDDINGS_SHA256:
+        pytest.skip("другая сборка pyannote: отпечаток не сверен")
+    assert diarize._fast_embeddings_ok(pipe)
+    monkeypatch.setattr(diarize, "STOCK_EMBEDDINGS_SHA256", {"0" * 64: "4.0.7"})
+    assert not diarize._fast_embeddings_ok(pipe)
 
 
 class _ToyEmbedding:
@@ -509,6 +530,30 @@ def test_shared_embeddings_equal_stock_on_synthetic_input(exclude_overlap, batch
     assert marks[0][2] == 0 and marks[-1][1] == marks[-1][2]  # шкала хода — от 0 до конца
 
 
+class _NanSlotEmbedding(_ToyEmbedding):
+    """Модель, которая на слоте 0 отдаёт NaN (сбой вычислений на MPS)."""
+
+    def __call__(self, waveforms, masks=None):
+        out = super().__call__(waveforms, masks)
+        if masks.dim() == 3:
+            out[:, 0] = np.nan
+        return out
+
+
+def test_shared_embeddings_keep_a_nan_from_the_model():
+    """NaN самой модели на говорящем слоте остаётся NaN, как у штатного (его
+    отсеет кластеризация), а не подменяется чужим голосом."""
+    torch = pytest.importorskip("torch")
+    segs = _toy_segmentations()
+    waveform = torch.from_numpy(np.random.default_rng(1).standard_normal((1, 16000 * 13)).astype(np.float32))
+    fake = types.SimpleNamespace(training=False, _embedding=_NanSlotEmbedding(), _audio=_ToyAudio(waveform),
+                                 embedding_batch_size=4)
+    fast = diarize._shared_embeddings(fake, {"uri": "x"}, segs, True, None)
+    talking = np.nan_to_num(segs.data).sum(axis=(1, 2)) > 0
+    assert np.isnan(fast[talking, 0]).all()
+    assert np.isfinite(fast[~talking]).all()  # тихие окна — заглушка из настоящего голоса
+
+
 # --- настоящая модель (если она в кэше) ---------------------------------------
 
 
@@ -540,7 +585,12 @@ def test_real_model_loads_offline_and_fast_embeddings_match(monkeypatch, tmp_pat
                  "sample_rate": 16000}
         stock = pipe(dict(audio))
         assert diarize._install_fast_embeddings(pipe)
+        ran = []
+        shared = diarize._shared_embeddings
+        monkeypatch.setattr(diarize, "_shared_embeddings", lambda *a: ran.append(1) or shared(*a))
+        monkeypatch.setattr(diarize, "_log_sink", lambda text: pytest.fail(f"откат на штатный: {text}"))
         fast = pipe(dict(audio))
+        assert ran and pipe._meet_fast_embeddings["on"]  # проход на окно правда шёл, без отката
     finally:
         torch.set_num_threads(threads)
     turns = lambda r: [(round(s.start, 3), round(s.end, 3), label)  # noqa: E731

@@ -195,6 +195,14 @@ def _load_pipeline(token: str):
 # классе, а любая ошибка — откат на штатный способ. Убрать, когда #2050 примут.
 
 FAST_EMBEDDINGS_VERSION = "4.0."
+# Отпечаток (sha256 исходника) штатного SpeakerDiarization.get_embeddings, с
+# которым правка сверена (выбор маски, NaN, порядок окон и слотов) — по
+# версии pyannote.audio. Другой исходник (новая версия, пересборка с правкой)
+# — штатный способ, пока правку не сверят заново и не добавят отпечаток сюда
+# (tests/test_diarize_fast.py в окружении с pyannote и моделью).
+STOCK_EMBEDDINGS_SHA256 = {
+    "2c8c00b8b036488db70c9eb9cb55d1067f998339deefb659cf96680fc6ebe5f4": "4.0.7",
+}
 # Пачка голосов pyannote (по умолчанию 32): 16 — пик памяти 1,9 ГБ вместо
 # 2,7 ГБ без потери скорости (замер 0.3.3); с проходом на окно это 16 окон,
 # 48 голосов за прогон.
@@ -202,9 +210,22 @@ EMBEDDING_BATCH_SIZE = 16
 FAST_FAILED_NOTE = "голоса за один проход на окно не сработали ({reason}): штатный способ pyannote"
 
 
+def _stock_fingerprint(cls) -> str | None:
+    """sha256 исходника штатного get_embeddings; исходника нет — None."""
+    import hashlib
+    import inspect
+
+    try:
+        return hashlib.sha256(inspect.getsource(cls.get_embeddings).encode("utf-8")).hexdigest()
+    except (OSError, TypeError):
+        return None
+
+
 def _fast_embeddings_ok(pipe) -> bool:
-    """Ставить ли ускорение: pyannote.audio 4.0.x, пайплайн — SpeakerDiarization
-    со штатным get_embeddings, голоса — PyannoteAudioPretrainedSpeakerEmbedding."""
+    """Ставить ли ускорение: pyannote.audio 4.0.x со сверенным исходником
+    штатного get_embeddings (STOCK_EMBEDDINGS_SHA256), пайплайн —
+    SpeakerDiarization без своего get_embeddings, голоса —
+    PyannoteAudioPretrainedSpeakerEmbedding."""
     try:
         import pyannote.audio as pa
         from pyannote.audio.pipelines.speaker_diarization import SpeakerDiarization
@@ -213,13 +234,15 @@ def _fast_embeddings_ok(pipe) -> bool:
     return (str(getattr(pa, "__version__", "")).startswith(FAST_EMBEDDINGS_VERSION)
             and isinstance(pipe, SpeakerDiarization)
             and type(pipe).get_embeddings is SpeakerDiarization.get_embeddings
-            and type(getattr(pipe, "_embedding", None)).__name__ == "PyannoteAudioPretrainedSpeakerEmbedding")
+            and type(getattr(pipe, "_embedding", None)).__name__ == "PyannoteAudioPretrainedSpeakerEmbedding"
+            and _stock_fingerprint(SpeakerDiarization) in STOCK_EMBEDDINGS_SHA256)
 
 
 def _install_fast_embeddings(pipe) -> bool:
     """Подменить `pipe.get_embeddings` проходом на окно (`_shared_embeddings`).
-    Ошибка прохода — штатный способ и строка в журнал; если и он не смог
-    (MPS без операции), ускорение не виновато и остаётся. → поставлено ли."""
+    Ошибка прохода — штатный способ и строка в журнал (класс ошибки: текст
+    может нести путь); если и он не смог (MPS без операции), ускорение не
+    виновато и остаётся. → поставлено ли."""
     if not _fast_embeddings_ok(pipe):
         return False
     stock = pipe.get_embeddings
@@ -231,9 +254,12 @@ def _install_fast_embeddings(pipe) -> bool:
         try:
             return _shared_embeddings(pipe, file, binary_segmentations, exclude_overlap, hook)
         except Exception as e:
-            result = stock(file, binary_segmentations, exclude_overlap=exclude_overlap, hook=hook)
+            try:
+                result = stock(file, binary_segmentations, exclude_overlap=exclude_overlap, hook=hook)
+            except Exception as stock_error:
+                raise stock_error from e  # первая ошибка — не теряется
             state["on"] = False
-            _log(FAST_FAILED_NOTE.format(reason=f"{type(e).__name__}: {str(e)[:200]}"))
+            _log(FAST_FAILED_NOTE.format(reason=type(e).__name__))
             return result
 
     pipe.get_embeddings = get_embeddings
@@ -246,7 +272,9 @@ def _shared_embeddings(self, file, binary_segmentations, exclude_overlap=False, 
     выбор маски: без нахлёста, если чистых кадров хватает; иначе полная), но
     одна сеть на окно — с масками всех слотов разом. Окна, где все слоты
     молчат, не считаются: их голоса — заглушка (такие слоты pyannote всё равно
-    отправляет в выброшенный кластер -2).
+    отправляет в выброшенный кластер -2). NaN, который вернула сама модель,
+    остаётся NaN, как у штатного (его отсеет кластеризация). Маски — по
+    пачкам: на записи в несколько часов копии масок всех окон — сотни МБ.
 
     → (окна, слоты, размерность), float32."""
     import math
@@ -260,18 +288,22 @@ def _shared_embeddings(self, file, binary_segmentations, exclude_overlap=False, 
         min_num_samples = self._embedding.min_num_samples
         num_samples = duration * self._embedding.sample_rate
         min_num_frames = math.ceil(num_frames * min_num_samples / num_samples)
-        # Как у pyannote: кадр с NaN не «чистый» (сумма NaN < 2 — ложь).
-        clean = raw * (np.sum(raw, axis=2, keepdims=True) < 2)
     else:
         min_num_frames = -1
-        clean = raw
-    masks = np.nan_to_num(raw, nan=0.0).astype(np.float32)
-    clean = np.nan_to_num(clean, nan=0.0).astype(np.float32)
-    use_clean = np.sum(clean, axis=1) > min_num_frames  # (окна, слоты)
-    used = np.where(use_clean[:, None, :], clean, masks).transpose(0, 2, 1).copy()  # (окна, слоты, кадры)
+
+    def used_masks(idx):
+        part = raw[idx]
+        # Как у pyannote: кадр с NaN не «чистый» (сумма NaN < 2 — ложь).
+        clean = part * (np.sum(part, axis=2, keepdims=True) < 2) if exclude_overlap else part
+        masks = np.nan_to_num(part, nan=0.0).astype(np.float32)
+        clean = np.nan_to_num(clean, nan=0.0).astype(np.float32)
+        use_clean = np.sum(clean, axis=1) > min_num_frames  # (окна, слоты)
+        return np.where(use_clean[:, None, :], clean, masks).transpose(0, 2, 1).copy()  # (окна, слоты, кадры)
 
     chunks = [chunk for chunk, _ in binary_segmentations]
-    todo = [c for c in range(num_chunks) if used[c].any()]
+    # Окно считается, если хоть один слот говорит (NaN > 0 — ложь, как 0 у
+    # nan_to_num): выбранная маска слота ненулевая ровно тогда.
+    todo = np.flatnonzero((raw > 0).any(axis=(1, 2)))
     batch_size = self.embedding_batch_size
     total = math.ceil(len(todo) / batch_size)
     out = np.full((num_chunks, num_speakers, self._embedding.dimension), np.nan, dtype=np.float32)
@@ -280,12 +312,15 @@ def _shared_embeddings(self, file, binary_segmentations, exclude_overlap=False, 
     for i, start in enumerate(range(0, len(todo), batch_size), 1):
         idx = todo[start:start + batch_size]
         waveforms = torch.vstack([self._audio.crop(file, chunks[c], mode="pad")[0][None] for c in idx])
-        batch = self._embedding(waveforms, masks=torch.from_numpy(used[idx]))
+        batch = self._embedding(waveforms, masks=torch.from_numpy(used_masks(idx)))
         out[idx] = batch
         if hook is not None:
             hook("embeddings", batch, total=total, completed=i)
-    valid = ~np.isnan(out).any(axis=2)
-    out[~valid] = out[valid][0] if valid.any() else 0.0
+    skipped = np.setdiff1d(np.arange(num_chunks), todo)
+    if len(skipped):
+        done = out[todo].reshape(-1, out.shape[2])
+        valid = done[~np.isnan(done).any(axis=1)]
+        out[skipped] = valid[0] if len(valid) else 0.0
     return out
 
 
