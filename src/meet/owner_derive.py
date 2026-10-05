@@ -52,9 +52,11 @@ SYS_QUIET_SHARE = 0.8
 # Голос из кэша реплик — только если участок покрывает сегмент целиком (края
 # не дальше CACHE_EDGE_S): голос сегмента — голос всего его звука.
 CACHE_EDGE_S = 0.5
-# Участков на встречу не больше: час разговора — сотни участков, а голосу
-# встречи хватает и части (равномерно по встрече). ~100 мс на участок (T0).
-MAX_RUNS = 150
+# Речи на встречу не больше: час разговора — сотни участков, а голосу
+# встречи (от DOMINANT_MIN_S) хватает и части — участки берутся равномерно по
+# встрече. T0: ~35 мс счёта на секунду звука при 4 потоках, то есть ~10 с на
+# встречу и 2–4 мин на десять встреч вместе с декодированием дорожек.
+MAX_SPEECH_S = 240.0
 # --- голос встречи ---
 # Остановка кластеризации — как у окон микрофона (mic_split.AHC_STOP, T0: при
 # 0.35 владелец одним кластером, соседи — своими).
@@ -68,6 +70,10 @@ GROUP_MIN_SHARE = 0.6
 # Найденный голос совпадает с уже сохранённым образцом — от этого косинуса
 # (тот же порог, что «кластер микрофона — владелец», mic_split.T_OWN).
 ALREADY_COS = 0.75
+# Ниже этого — найденный голос не похож на сохранённый образец (как
+# mic_split.T_OTHER): предлагается с пометкой — возможно, это не вы или
+# записанный образец неудачен.
+CONFLICT_COS = 0.65
 # --- примеры для прослушивания ---
 SAMPLE_COUNT = 3
 SAMPLE_MIN_S = 3.0
@@ -81,6 +87,10 @@ IN_BASE = "in_base"
 
 class EmbedderError(RuntimeError):
     """Эмбеддер не загрузился: это сбой задачи, а не «встреча не подошла»."""
+
+
+class DeriveError(RuntimeError):
+    """Ни одну встречу не удалось разобрать: сбой, а не «мало встреч»."""
 
 
 @dataclass
@@ -118,10 +128,14 @@ class Outcome:
     checked: int = 0
     used: int = 0
     found: int = 0
+    # Чем вызван итог (окно по ним прячет устаревшую причину): sample_id —
+    # совпавший образец (already), person — человек из базы (in_base),
+    # newest — самая новая запись на момент поиска.
+    extra: dict = field(default_factory=dict)
 
     def to_raw(self) -> dict:
         return {"status": self.status, "reason": self.reason, "checked": self.checked,
-                "used": self.used, "found": self.found}
+                "used": self.used, "found": self.found, **self.extra}
 
 
 def _unit(x: np.ndarray) -> np.ndarray:
@@ -182,14 +196,36 @@ def candidates(root: Path, limit: int = MAX_MEETINGS) -> list[Path]:
     return out
 
 
+def newest_recording(root: Path) -> str | None:
+    """Имя самой новой папки записи (по имени-дате, без чтения файлов: окно
+    спрашивает часто). Нет записей — None."""
+    try:
+        names = [f.name for f in Path(root).iterdir()
+                 if library.FOLDER_RE.match(f.name) and f.is_dir()]
+    except OSError:
+        return None
+    return max(names, default=None)
+
+
 # --- участки речи владельца --------------------------------------------------
 
 
+def _even(a: float, b: float) -> list[tuple[float, float]]:
+    """Кусок длиннее RUN_MAX_S (участок VAD без слов) — на равные части до RUN_MAX_S."""
+    if b - a <= RUN_MAX_S:
+        return [(a, b)]
+    n = math.ceil((b - a) / RUN_MAX_S - 1e-9)
+    step = (b - a) / n
+    return [(a + i * step, a + (i + 1) * step) for i in range(n)]
+
+
 def _cut(spans: list[tuple[float, float]], seg: tuple[float, float]) -> list[Run]:
-    """Прогоны (пауза внутри до RUN_MAX_PAUSE) → участки RUN_MIN_S…RUN_MAX_S;
-    длинный прогон режется по словам, короткий хвост — к предыдущему куску."""
+    """Прогоны (пауза внутри до RUN_MAX_PAUSE) → участки от RUN_MIN_S и не
+    длиннее RUN_MAX_S + RUN_MIN_S: длинный прогон режется по словам (кусок VAD
+    — на равные части), короткий хвост — к предыдущему куску, только если тот
+    не выйдет за эту границу; иначе хвост отбрасывается."""
     runs: list[list[tuple[float, float]]] = []
-    for a, b in sorted(spans):
+    for a, b in sorted(x for a0, b0 in spans for x in _even(a0, b0)):
         if runs and a - runs[-1][-1][1] <= RUN_MAX_PAUSE:
             runs[-1].append((a, b))
         else:
@@ -203,7 +239,8 @@ def _cut(spans: list[tuple[float, float]], seg: tuple[float, float]) -> list[Run
                 pieces.append([(a, b)])
             else:
                 cur.append((a, b))
-        if len(pieces) > 1 and pieces[-1][-1][1] - pieces[-1][0][0] < RUN_MIN_S:
+        if (len(pieces) > 1 and pieces[-1][-1][1] - pieces[-1][0][0] < RUN_MIN_S
+                and pieces[-1][-1][1] - pieces[-2][0][0] <= RUN_MAX_S + RUN_MIN_S):
             pieces[-2] += pieces.pop()
         for p in pieces:
             start, end = p[0][0], max(b for _, b in p)
@@ -267,11 +304,19 @@ def _quiet(runs: list[Run], sys_audio: np.ndarray, rate: int) -> list[Run]:
     return out
 
 
-def _spread(runs: list[Run], limit: int = MAX_RUNS) -> list[Run]:
-    if len(runs) <= limit:
+def _spread(runs: list[Run], limit_s: float = MAX_SPEECH_S) -> list[Run]:
+    """Не больше limit_s речи — участки равномерно по встрече."""
+    total = sum(r.seconds for r in runs)
+    if total <= limit_s:
         return runs
-    idx = np.linspace(0, len(runs) - 1, limit).round().astype(int)
-    return [runs[i] for i in sorted(set(idx.tolist()))]
+    n = len(runs)
+    k = max(1, int(n * limit_s / total))
+    while True:
+        idx = sorted(set(np.linspace(0, n - 1, k).round().astype(int).tolist()))
+        pick = [runs[i] for i in idx]
+        if k == 1 or sum(r.seconds for r in pick) <= limit_s:
+            return pick
+        k -= 1
 
 
 # --- голос встречи ---------------------------------------------------------------
@@ -427,7 +472,8 @@ def find(root: Path, voices: Path, *, embed=None, vad=None, decode=None, bus=Non
     folders = candidates(root, limit)
     checked = len(folders)
     if checked < GROUP_MIN_MEETINGS:
-        return Outcome(TOO_FEW, _too_few(checked, 0), checked=checked)
+        return Outcome(TOO_FEW, _too_few(checked, 0), checked=checked,
+                       extra={"newest": newest_recording(root)})
     labels = segvoices.owners() if owner_labels is None else owner_labels
     decode = decode or segvoices.decode
     vad = vad or _default_vad
@@ -442,6 +488,7 @@ def find(root: Path, voices: Path, *, embed=None, vad=None, decode=None, bus=Non
         return loaded["embed"](clip)
 
     found: list[MeetingVoice] = []
+    failures: list[Exception] = []
     for i, folder in enumerate(folders):
         if bus is not None:
             bus.progress("owner_derive", label="поиск вашего голоса", done=i, total=checked, note=folder.name)
@@ -451,41 +498,54 @@ def find(root: Path, voices: Path, *, embed=None, vad=None, decode=None, bus=Non
             raise
         except (OSError, RuntimeError, ValueError, KeyError, TypeError) as e:
             log(f"голос владельца: встреча {folder.name} пропущена ({type(e).__name__}: {e})")
+            failures.append(e)
             continue
         if voice.usable:
             found.append(voice)
     if bus is not None:
         bus.progress("owner_derive", label="поиск вашего голоса", done=checked, total=checked)
+    if failures and len(failures) == checked:
+        first = failures[0]
+        raise DeriveError(f"не удалось разобрать ни одной встречи: {type(first).__name__}: {first}") from first
+    newest = {"newest": newest_recording(root)}
     used = len(found)
     if used < GROUP_MIN_MEETINGS:
-        return Outcome(TOO_FEW, _too_few(checked, used), checked=checked, used=used)
+        return Outcome(TOO_FEW, _too_few(checked, used), checked=checked, used=used, extra=newest)
     group = _group(found)
-    need = max(GROUP_MIN_MEETINGS, math.ceil(GROUP_MIN_SHARE * checked - 1e-9))
+    # Доля — от встреч, где голос владельца вообще нашёлся: встреча, где он
+    # почти молчал, не говорит о том, что голос «другой».
+    need = max(GROUP_MIN_MEETINGS, math.ceil(GROUP_MIN_SHARE * used - 1e-9))
+    counts = dict(checked=checked, used=used, found=len(group))
     if len(group) < need:
+        if len(group) == used:  # не разнобой, а мало встреч с голосом
+            return Outcome(TOO_FEW, _too_few(checked, used), **counts, extra=newest)
         return Outcome(INCONSISTENT,
                        f"Голос в вашем микрофоне от встречи к встрече звучит по-разному: одинаково — "
-                       f"только в {len(group)} из {checked} {_meetings_word(checked)}, а нужно хотя бы "
-                       f"{need}. Возможно, микрофоном пользуются и другие люди. Запишите образец голоса "
-                       "сами — так надёжнее.", checked=checked, used=used, found=len(group))
+                       f"только в {len(group)} из {used} {_meetings_word(used)}, где он хорошо слышен, "
+                       f"а нужно хотя бы {need}. Возможно, микрофоном пользуются и другие люди. "
+                       "Запишите образец голоса сами — так надёжнее.", **counts, extra=newest)
     talk = np.array([m.seconds for m in group])
     center = _unit((np.stack([m.centroid for m in group]) * talk[:, None]).sum(0))
     sim = [float(a.centroid @ b.centroid) for a, b in itertools.combinations(group, 2)]
-    counts = dict(checked=checked, used=used, found=len(group))
     own = owner_voice.load(voices)
-    if own and owner_voice.score(center, own) >= ALREADY_COS:
+    own_score = owner_voice.score(center, own) if own else None
+    if own_score is not None and own_score >= ALREADY_COS:
+        closest = max(own, key=lambda s: float(center @ _unit(s.embedding.astype(np.float64))))
         return Outcome(ALREADY, "Найденный голос совпадает с уже сохранённым образцом вашего голоса — "
-                                "добавлять нечего.", **counts)
+                                "добавлять нечего.", **counts, extra={**newest, "sample_id": closest.id})
     base = voice_base.load_voices(Path(voices))
     if base:
         score, name, _ = voice_base.best_match(center.astype(np.float32), base)
         if score >= (threshold if threshold is not None else _base_threshold()):
             return Outcome(IN_BASE, f"Чаще всего в вашем микрофоне звучит голос, похожий на «{name}» из "
                                     "базы голосов, — поэтому не предлагаю его как ваш. Если это вы, "
-                                    "запишите образец голоса сами.", **counts)
+                                    "запишите образец голоса сами.", **counts, extra={**newest, "person": name})
     suggestion = {"embedding": center.astype(np.float32), "meetings": [m.name for m in group],
                   "samples": _samples(group, center), "seconds": round(float(talk.sum()), 2),
-                  "quality": round(min(sim), 4) if sim else None}
-    return Outcome(SUGGESTED, None, suggestion, **counts)
+                  "quality": round(min(sim), 4) if sim else None,
+                  # Есть образец, а найденный голос на него не похож: окно предупредит.
+                  "conflict": own_score is not None and own_score < CONFLICT_COS}
+    return Outcome(SUGGESTED, None, suggestion, **counts, extra=newest)
 
 
 def run(root: Path, voices: Path, **kw) -> Outcome:

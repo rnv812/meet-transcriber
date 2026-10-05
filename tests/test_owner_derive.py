@@ -350,10 +350,31 @@ def test_embedder_is_not_loaded_when_everything_is_cached(lib, voices_dir, monke
 
 
 def test_broken_meeting_is_skipped_not_fatal(lib, voices_dir):
+    """Сбой одной встречи (ffmpeg не прочитал дорожку) — встреча пропускается."""
     _five_and_one(lib)
-    (lib.root / "2026-09-03_10-00" / "transcript.json").write_text("{битый", encoding="utf-8")
-    got = _find(lib, voices_dir)
+    real = lib.decode
+
+    def decode(path, rate=16000):
+        if path.parent.name == "2026-09-03_10-00":
+            raise RuntimeError("ffmpeg не смог прочитать sys.opus")
+        return real(path, rate)
+
+    logged = []
+    got = owner_derive.find(lib.root, voices_dir, embed=FakeEmbed(), decode=decode, owner_labels={"Вы"},
+                            threshold=0.75, log=logged.append)
     assert got.status == "suggested" and "2026-09-03_10-00" not in got.suggestion["meetings"]
+    assert any("2026-09-03_10-00" in line for line in logged)
+
+
+def test_every_meeting_failing_is_an_error_not_too_few(lib, voices_dir):
+    _five_and_one(lib)
+
+    def decode(path, rate=16000):
+        raise RuntimeError("ffmpeg не найден")
+
+    with pytest.raises(owner_derive.DeriveError, match="ffmpeg не найден"):
+        owner_derive.find(lib.root, voices_dir, embed=FakeEmbed(), decode=decode, owner_labels={"Вы"},
+                          threshold=0.75, log=lambda text: None)
 
 
 def test_embedder_failure_is_an_error_not_too_few_meetings(lib, voices_dir, monkeypatch):
@@ -365,3 +386,109 @@ def test_embedder_failure_is_an_error_not_too_few_meetings(lib, voices_dir, monk
     monkeypatch.setattr(owner_derive, "_load_embedder", broken)
     with pytest.raises(owner_derive.EmbedderError, match="нет модели"):
         owner_derive.find(lib.root, voices_dir, decode=lib.decode, owner_labels={"Вы"}, threshold=0.75)
+
+
+# --- исправления после ревью ------------------------------------------------------
+
+
+def test_quiet_meetings_do_not_make_consistent_voice_inconsistent(lib, voices_dir):
+    """Три встречи с ясным голосом и три, где владелец почти молчал: 60 %
+    считается от встреч с голосом, а не от всех кандидатов."""
+    for day in range(1, 4):
+        lib.meeting(f"2026-09-0{day}_10-00", [OWNER] * 20)
+    for day in range(4, 7):
+        lib.meeting(f"2026-09-0{day}_10-00", [OWNER] * 5)
+    got = _find(lib, voices_dir)
+    assert got.status == "suggested" and got.checked == 6 and got.used == 3 and got.found == 3
+
+
+def test_disagreeing_usable_meetings_are_still_inconsistent(lib, voices_dir):
+    for day in range(1, 4):
+        lib.meeting(f"2026-09-0{day}_10-00", [OWNER] * 20)
+    for day, v in zip(range(4, 6), (2, 3)):
+        lib.meeting(f"2026-09-0{day}_10-00", [v] * 20)
+    lib.meeting("2026-09-06_10-00", [4] * 20)
+    lib.meeting("2026-09-07_10-00", [OWNER] * 5)  # без голоса — в долю не идёт
+    got = _find(lib, voices_dir)
+    assert got.status == "inconsistent" and "3 из 6" in got.reason and "4" in got.reason
+
+
+def test_speech_per_meeting_is_capped(lib, voices_dir):
+    lib.meeting("2026-09-01_10-00", [OWNER] * 120)  # 480 с
+    embed = FakeEmbed()
+    voice = owner_derive.meeting_voice(lib.root / "2026-09-01_10-00", embed=embed, decode=lib.decode,
+                                       owner_labels={"Вы"})
+    used = sum(r.seconds for r in voice.runs)
+    assert used <= owner_derive.MAX_SPEECH_S + RUN_S and embed.calls == len(voice.runs)
+    # Равномерно по встрече, а не первые минуты.
+    assert voice.runs[0].start < 60 and voice.runs[-1].start > 600
+
+
+def test_long_vad_region_is_cut_into_pieces():
+    seg = {"start": 0.0, "end": 40.0, "speaker": "Вы", "track": "mic", "text": "x"}
+    audio = np.zeros(40 * 16000, dtype=np.int16)
+    runs = owner_derive.owner_runs({"segments": [seg]}, {"Вы"}, mic=lambda: audio,
+                                   vad=lambda a, rate: [(1.0, 26.0), (26.3, 27.0)])
+    assert len(runs) == 3
+    assert all(r.seconds <= owner_derive.RUN_MAX_S + owner_derive.RUN_MIN_S for r in runs)
+    assert runs[0].start == 1.0 and runs[-1].end == 27.0
+
+
+def test_merged_by_source_is_not_a_candidate(lib):
+    folder = lib.meeting("2026-09-01_10-00", [OWNER])
+    (folder / "meta.json").write_text(json.dumps({"source": "merge"}), encoding="utf-8")
+    assert owner_derive.candidates(lib.root) == []
+
+
+def test_owner_names_and_threshold_come_from_settings(lib, voices_dir, monkeypatch):
+    """Без owner_labels — имена владельца из настроек (и прежние); без
+    threshold — порог узнавания из настроек, не выше 0.75."""
+    from types import SimpleNamespace
+
+    from meet import settings
+
+    cfg = SimpleNamespace(recording=SimpleNamespace(speaker_name="Кузьма", former_speaker_names=("Ник",)),
+                          asr=SimpleNamespace(voice_threshold=0.70))
+    monkeypatch.setattr(settings, "load", lambda: cfg)
+    for day in range(1, 4):
+        lib.meeting(f"2026-09-0{day}_10-00", [OWNER] * 20, speaker="Ник" if day == 1 else "Кузьма")
+    near = 0.72 * VOICES[OWNER] + np.sqrt(1 - 0.72 ** 2) * VOICES[9]
+    (voices_dir / "Демьян.json").write_text(json.dumps({"samples": [
+        {"embedding": [float(x) for x in near]}]}), encoding="utf-8")
+    got = owner_derive.find(lib.root, voices_dir, embed=FakeEmbed(), decode=lib.decode)
+    assert got.status == "in_base" and got.found == 3  # 0.72 ≥ 0.70
+    cfg.asr.voice_threshold = 0.82  # → не выше 0.75: 0.72 — не совпадение
+    assert owner_derive.find(lib.root, voices_dir, embed=FakeEmbed(), decode=lib.decode).status == "suggested"
+
+
+def test_outcome_remembers_what_made_it(lib, voices_dir):
+    """Чем вызван итог — чтобы окно не показывало устаревшую причину."""
+    _five_and_one(lib)
+    sample = owner_voice.add(VOICES[OWNER], source="enroll", seconds=20, device="USB", voices=voices_dir)
+    raw = _find(lib, voices_dir).to_raw()
+    assert raw["status"] == "already" and raw["sample_id"] == sample.id
+    assert raw["newest"] == "2026-09-06_10-00"
+    owner_voice.remove(sample.id, voices_dir)
+    (voices_dir / "Демьян.json").write_text(json.dumps({"samples": [
+        {"embedding": [float(x) for x in VOICES[OWNER]]}]}), encoding="utf-8")
+    raw = _find(lib, voices_dir).to_raw()
+    assert raw["status"] == "in_base" and raw["person"] == "Демьян"
+
+
+def test_newest_recording_is_by_folder_name(lib, tmp_path):
+    lib.meeting("2026-09-01_10-00", [OWNER])
+    lib.meeting("2026-09-03_10-00", [OWNER], call=False)
+    (lib.root / ".deleting-2026-09-09_10-00").mkdir()
+    (lib.root / "заметки").mkdir()
+    assert owner_derive.newest_recording(lib.root) == "2026-09-03_10-00"
+    assert owner_derive.newest_recording(tmp_path / "нет") is None
+
+
+def test_voice_unlike_saved_sample_is_flagged(lib, voices_dir):
+    """Есть образец, а найденный голос на него не похож: предложение с пометкой."""
+    _five_and_one(lib)
+    owner_voice.add(VOICES[5], source="enroll", seconds=20, device="USB", voices=voices_dir)
+    got = _find(lib, voices_dir)
+    assert got.status == "suggested" and got.suggestion["conflict"] is True
+    owner_voice.remove(owner_voice.load(voices_dir)[0].id, voices_dir)
+    assert _find(lib, voices_dir).suggestion["conflict"] is False
