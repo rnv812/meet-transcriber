@@ -27,8 +27,13 @@
   громкости (акустическая копия, а не второй человек с теми же словами);
   без образца копия к тому же должна быть заметно тише речи микрофона.
 
-Пороги — стартовые, их калибрует T0 (scripts/speakers_calib.py) на записях
-с согласия владельца. См. .superpowers/sdd/v033/speakers-design.md, §3.3."""
+Пороги откалиброваны T0 на записях владельца с его согласия (2026-10-05,
+.superpowers/sdd/v033/t0-calibration.md): настоящие копии соседа — лаг
+0.07–0.29 с, покрытие 0.71–1.0, огибающая (амплитуда, кадр 20 мс) медиана
+0.76. Огибающая — слабый признак (у «обе дорожки говорят, текст другой» p90
+0.59), поэтому только дополнительное условие к тексту и лагу. Эхо колонок в
+записях не встретилось — его пороги пока не проверены (нужна синтетика).
+См. .superpowers/sdd/v033/speakers-design.md, §3.3."""
 
 from __future__ import annotations
 
@@ -41,39 +46,44 @@ from typing import Hashable
 
 import numpy as np
 
-# Кадр огибающей громкости — как у теста громкости дорожек (segvoices.FRAME_S).
-FRAME_S = 0.05
+# Кадр огибающей: амплитуда (RMS) по 20 мс. T0: амплитуда отделяет копии от
+# совпадений лучше дБ, а 20 мс — лучше 50 мс.
+FRAME_S = 0.02
 # Кандидаты: слова sys от WINDOW_BEFORE до начала реплики микрофона до
 # WINDOW_AFTER после её конца. Старт, калибрует T0.
 WINDOW_BEFORE = 0.5
 WINDOW_AFTER = 2.5
-# Сосед: mic раньше sys больше чем на NEIGHBOUR_MIN_LAG; эхо: лаг не больше
-# ECHO_MAX_LAG (sys раньше или вместе). Между ними — в L* не идёт. Старт (T0).
-NEIGHBOUR_MIN_LAG = 0.1
+# Сосед: mic раньше sys больше чем на NEIGHBOUR_MIN_LAG (T0: 0.07–0.29 с, у
+# одного человека ~0.08); эхо: лаг не больше ECHO_MAX_LAG (sys раньше или
+# вместе; не откалибровано — в записях эха не было).
+NEIGHBOUR_MIN_LAG = 0.05
 ECHO_MAX_LAG = 0.05
 # Уверенная пара (задаёт L*): покрытие и число совпавших слов. Старт (T0).
 CONFIDENT_COVERAGE = 0.8
 CONFIDENT_WORDS = 4
 # L* установлен: от MIN_LAG_PAIRS уверенных пар (не считая проверяемую) с
 # разбросом (медиана отклонений от медианы) не больше LAG_MAD; лаги вне
-# PLAUSIBLE_LAG в L* не идут. Старт (T0).
+# PLAUSIBLE_LAG в L* не идут. T0: коридор соседа 0–0.6 с (весь разброс
+# настоящих пар — 0.22 с).
 MIN_LAG_PAIRS = 3
 LAG_MAD = 0.15
-PLAUSIBLE_LAG = (-0.3, 2.0)
-# Лаг согласован с L*: длинная пара — в LAG_TOLERANCE, короткая (1–2 слова) —
-# в SHORT_LAG_TOLERANCE. Старт (T0).
-LAG_TOLERANCE = 0.5
+PLAUSIBLE_LAG = (-0.3, 0.6)
+# Лаг согласован с L*: в LAG_TOLERANCE (и для коротких пар). T0: при ±0.5 в
+# коридор попадало случайное «то же самое» владельца с лагом −0.26.
+LAG_TOLERANCE = 0.3
 SHORT_LAG_TOLERANCE = 0.3
-# Длинная пара (от LONG_WORDS совпавших слов): покрытие mic символами sys. Старт (T0).
+# Длинная пара (от LONG_WORDS совпавших слов): покрытие mic символами sys (T0:
+# у настоящих пар 0.71–1.0 — ASR sys иногда добавляет слово).
 LONG_WORDS = 3
 MIN_COVERAGE = 0.6
-# Огибающая: поиск сдвига вокруг текстового лага (длинные пары) и вокруг L*
-# (короткие). Короткой паре нужна корреляция от MIN_ENV_CORR; длинной — от
-# MIN_ENV_CORR_LONG там, где удаление может задеть владельца или собеседника
-# (owner_leak, `unsure`, без образца). Старт (T0).
-ENV_SEARCH = 0.3
+# Огибающая: поиск сдвига ±ENV_SEARCH вокруг текстового лага (длинные пары) и
+# ±ENV_SHORT_SEARCH вокруг L* (короткие). Короткой паре нужна корреляция от
+# MIN_ENV_CORR; длинной — от MIN_ENV_CORR_LONG там, где удаление может задеть
+# владельца или собеседника (owner_leak, `unsure`, без образца). T0: от 0.5
+# проходят 93 % настоящих пар; поиск ±0.3 с завышал контроль (p95 0.80).
+ENV_SEARCH = 0.1
 ENV_SHORT_SEARCH = 0.1
-MIN_ENV_CORR = 0.6
+MIN_ENV_CORR = 0.5
 MIN_ENV_CORR_LONG = 0.5
 MIN_ENV_FRAMES = 4
 # Короткая пара сравнивается с полями ENV_PAD по краям: внутри одного «ага»
@@ -82,7 +92,8 @@ MIN_ENV_FRAMES = 4
 # человеком границы фразы совпадают, а слоги внутри — нет. Старт (T0).
 ENV_PAD = 0.25
 # Без образца владельца: копия в микрофоне удаляется, только если её медиана
-# громкости не выше QUIET_PERCENTILE-го процентиля речи микрофона минус QUIET_DB. Старт (T0).
+# громкости не выше QUIET_PERCENTILE-го процентиля речи микрофона минус
+# QUIET_DB. T0: копии соседа в микрофоне на ~18 дБ тише владельца.
 QUIET_DB = 8.0
 QUIET_PERCENTILE = 90
 # Удаляются прогоны от MIN_RUN_WORDS слов или от SHORT_SEGMENT_SHARE слов
@@ -218,35 +229,49 @@ class Lags:
                 "pairs": {"neighbour": len(self.neighbour), "echo": len(self.echo)}}
 
 
-class Envelope:
-    """Огибающие громкости дорожек (дБ на кадр FRAME_S) — общее время записи."""
+def _frame_amp(audio: np.ndarray, rate: int, frame: float = FRAME_S) -> np.ndarray:
+    """Амплитуда (RMS, доля полной шкалы) кадров int16-звука, по кускам — без
+    float-копии всей дорожки."""
+    size = max(1, int(rate * frame))
+    n = len(audio) // size
+    out = np.empty(n, dtype=np.float32)
+    step = 50000
+    for a in range(0, n, step):
+        b = min(n, a + step)
+        block = audio[a * size:b * size].reshape(b - a, size).astype(np.float32) / 32768.0
+        out[a:b] = np.sqrt((block * block).mean(axis=1))
+    return out
 
-    def __init__(self, mic_db, sys_db, speech: list[tuple[float, float]] | None = None,
+
+class Envelope:
+    """Огибающие дорожек — амплитуда на кадр FRAME_S (общее время записи):
+    корреляция — по амплитуде, «тише речи микрофона» — в дБ."""
+
+    def __init__(self, mic_amp, sys_amp, speech: list[tuple[float, float]] | None = None,
                  frame: float = FRAME_S) -> None:
-        self.mic = np.asarray(mic_db, dtype=np.float64)
-        self.sys = np.asarray(sys_db, dtype=np.float64)
+        self.mic = np.asarray(mic_amp, dtype=np.float64)
+        self.sys = np.asarray(sys_amp, dtype=np.float64)
         self.frame = frame
-        frames = self.mic
+        self.mic_db = 20.0 * np.log10(np.maximum(self.mic, 1e-5))
+        frames = self.mic_db
         if speech:
             idx = [i for a, b in speech for i in range(*self._span(a, b))]
             if idx:
-                frames = self.mic[np.unique(np.asarray(idx))]
+                frames = self.mic_db[np.unique(np.asarray(idx))]
         self.loud = float(np.percentile(frames, QUIET_PERCENTILE)) if frames.size else 0.0
 
     @classmethod
     def from_db(cls, mic_db, sys_db, speech: list[tuple[float, float]] | None = None,
                 frame: float = FRAME_S) -> "Envelope":
-        """Из готовой громкости кадров (дБ) — тесты и калибровка."""
-        return cls(mic_db, sys_db, speech, frame)
+        """Из громкости кадров в дБ — тесты и калибровка."""
+        return cls(10.0 ** (np.asarray(mic_db, dtype=np.float64) / 20.0),
+                   10.0 ** (np.asarray(sys_db, dtype=np.float64) / 20.0), speech, frame)
 
     @classmethod
     def from_audio(cls, mic: np.ndarray, sys: np.ndarray, rate: int,
                    speech: list[tuple[float, float]] | None = None) -> "Envelope":
-        """Из звука дорожек (int16, `rate` Гц) — громкость кадров как у теста дорожек."""
-        from meet import segvoices
-
-        return cls(segvoices._frame_db(mic, rate), segvoices._frame_db(sys, rate), speech,
-                   frame=segvoices.FRAME_S)
+        """Из звука дорожек (int16, `rate` Гц)."""
+        return cls(_frame_amp(mic, rate), _frame_amp(sys, rate), speech)
 
     def _span(self, start: float, end: float) -> tuple[int, int]:
         a = max(0, int(round(start / self.frame)))
@@ -279,7 +304,7 @@ class Envelope:
         """Громкость отрезка микрофона относительно его речи (медиана отрезка
         минус QUIET_PERCENTILE-й процентиль речи), дБ."""
         a, b = self._span(start, end)
-        part = self.mic[a:b]
+        part = self.mic_db[a:b]
         return float(np.median(part)) - self.loud if part.size else None
 
     def quiet(self, start: float, end: float) -> bool:

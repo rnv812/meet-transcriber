@@ -112,7 +112,7 @@ def test_report_has_all_distributions(recording, tmp_path):
     assert raw["dedupe_lags"]["copy_gap_db"]["n"] == 1
     emb = raw["embed_ms"]
     assert emb["n"] > 0 and emb["p50"] >= 0 and raw["device"] == "injected"
-    assert raw["constants"]["T_OWN"] == 0.72
+    assert raw["constants"]["T_OWN"] == calib.mic_split.T_OWN
 
 
 def test_report_contains_no_personal_data(recording, tmp_path):

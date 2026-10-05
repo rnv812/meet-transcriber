@@ -22,12 +22,17 @@
 дубли — только заметно тихие копии. Чистая функция `run`: встраивание в
 пайплайн, шаг и артефакты на диске — задача T6.
 
-Пороги — стартовые, их калибрует T0 (scripts/speakers_calib.py) на записях
-с согласия владельца. См. .superpowers/sdd/v033/speakers-design.md, §2.3, §3.2."""
+Пороги откалиброваны T0 на записях владельца с его согласия (2026-10-05,
+.superpowers/sdd/v033/t0-calibration.md; scripts/speakers_calib.py). Важное
+из калибровки: окна одного человека похожи друг на друга слабо (cos ≈
+0.5–0.6) — решения принимаются по кластерам, пороги для окон низкие;
+громкость людей в комнате не отличает (на 1–2 дБ тише владельца) — серая
+зона только `unsure`. См. .superpowers/sdd/v033/speakers-design.md, §2.3, §3.2."""
 
 from __future__ import annotations
 
 import wave
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -40,7 +45,7 @@ RULE = 1
 SAMPLE_RATE = 16000
 
 # --- окна голоса ---
-# Окно режется на паузе длиннее WIN_GAP и на длине WIN_MAX. Старт, калибрует T0.
+# Окно режется на паузе длиннее WIN_GAP и на длине WIN_MAX (T0 мерил на таких окнах).
 WIN_GAP = 0.3
 WIN_MAX = 3.0
 # Хвост короче TAIL_MIN — к соседнему окну, если пауза меньше TAIL_JOIN_GAP. Старт (T0).
@@ -53,17 +58,19 @@ INHERIT_S = 1.5
 
 # --- владелец (§2.3) ---
 # Центроид кластера против образца: от T_OWN — владелец, ниже T_OTHER — точно
-# не он. Между — владелец, если кластер «ближний» (медиана громкости не ниже
-# кластера, больше всех похожего на владельца, минус NEAR_DB), иначе `unsure`. Старт (T0).
-T_OWN = 0.72
-T_OTHER = 0.55
-NEAR_DB = 6.0
+# не он, между — `unsure` (владелец с пометкой). T0: кластеры владельца
+# 0.81–0.95 (другой микрофон — 0.855), не-владельцы до 0.58 (человек в
+# комнате). По громкости не решаем: люди в комнате на 1–2 дБ тише владельца.
+T_OWN = 0.75
+T_OTHER = 0.65
 # Быстрый путь: от FAST_SHARE секунд окон со сходством от T_WIN_FAST — весь
-# микрофон владельца. Старт (T0).
-T_WIN_FAST = 0.60
+# микрофон владельца. T0: у одного владельца от 0.45 — 98–99 % секунд (от
+# 0.60 — только 88 %), при людях в комнате — 60–71 % (верный отказ).
+T_WIN_FAST = 0.45
 FAST_SHARE = 0.95
-# Кластер «человек в комнате» — только от MIN_DECIDE_S речи: меньше — `unsure`
-# (владелец с пометкой). Старт (T0).
+# Кластер короче MIN_DECIDE_S речи — `unsure` (владелец с пометкой), если он не
+# похож на образец хотя бы на T_OWN: при остановке 0.35 остаются хвосты по
+# 4–12 с с cos 0.2–0.45 (T0).
 MIN_DECIDE_S = 10.0
 # Владелец найден, если среди кластеров от OWNER_PRESENT_SHARE речи есть
 # похожий на образец хотя бы на T_OTHER. Иначе — owner_not_found. Старт (T0).
@@ -77,14 +84,41 @@ MIN_VOICED_S = 10.0
 FAST_SAMPLE = 60
 
 # --- кластеры ---
-# Слияние групп окон — пока средняя близость не ниже AHC_STOP. Старт (T0).
-AHC_STOP = 0.55
-# Кластер короче SMALL_CLUSTER_S — в ближайший при близости от SMALL_MERGE_COS,
-# иначе `unsure`. Старт (T0).
-SMALL_CLUSTER_S = 4.0
-SMALL_MERGE_COS = 0.4
-# Человек в комнате с голосом кластера sys (сосед в том же звонке) — от SYS_LINK. Старт (T0).
+# Слияние групп окон — пока средняя близость не ниже AHC_STOP. T0: при 0.55
+# даже микрофон одного владельца рассыпался на 10 кластеров (а с людьми в
+# комнате — на 67), при 0.35 — владелец одним кластером, соседи — своими.
+AHC_STOP = 0.35
+# Человек в комнате с голосом кластера sys (сосед в том же звонке) — от
+# SYS_LINK. T0: центроиды community-1 в том же пространстве, что сырые
+# эмбеддинги (cos 0.91–0.98), но не единичной длины — сравниваем нормированные.
 SYS_LINK = 0.65
+# Потоков torch на эмбеддинг окон: с потоками по умолчанию время на гибридных
+# ядрах скачет 170–1300 мс на окно, с 4 — 60–110 мс (T0).
+EMBED_THREADS = 4
+
+# --- живые имена (T9/T10, калибровка T0; здесь не используются) ---
+# Имя в живом режиме: накоплено от LIVE_MIN_SPEECH_S речи, сходство от
+# live_threshold(asr.voice_threshold), отрыв от второго от LIVE_MARGIN, тот же
+# кандидат LIVE_CHECKS проверки подряд (каждые +3 с речи). T0: при 0.68–0.70
+# ложных имён 0 из 30, при нынешних 0.77 названо 8 из 12 известных.
+LIVE_THRESHOLD_CAP = 0.70
+LIVE_THRESHOLD_BELOW = 0.05
+LIVE_MIN_SPEECH_S = 8.0
+LIVE_CHECKS = 2
+LIVE_MARGIN = 0.05
+# Сегмент → онлайн-кластер дорожки при cos от LIVE_ASSIGN (и отрыве
+# LIVE_MARGIN); кластеры сливаются при cos от LIVE_MERGE, если оба набрали от
+# LIVE_MERGE_MIN_S речи (T0: один человек — p10 0.70, разные — max 0.55 на 15 с).
+LIVE_ASSIGN = 0.55
+LIVE_MERGE = 0.65
+LIVE_MERGE_MIN_S = 15.0
+
+
+def live_threshold(voice_threshold: float) -> float:
+    """Порог живого имени: на LIVE_THRESHOLD_BELOW ниже порога узнавания, но
+    не выше LIVE_THRESHOLD_CAP."""
+    return min(float(voice_threshold) - LIVE_THRESHOLD_BELOW, LIVE_THRESHOLD_CAP)
+
 
 STATUS_OK = "ok"
 STATUS_NO_PROFILE = "no_profile"
@@ -105,7 +139,6 @@ class Window:
     keys: list[tuple[int, int]]
     short: bool = False
     emb: np.ndarray | None = None
-    db: float | None = None
     role: str = mic_dedupe.OWNER
     label: str | None = None
 
@@ -185,16 +218,20 @@ def _read(path: Path) -> np.ndarray:
     return segvoices.decode(Path(path), SAMPLE_RATE)
 
 
-def _frame_db(audio: np.ndarray) -> np.ndarray:
-    from meet import segvoices
-
-    return segvoices._frame_db(audio, SAMPLE_RATE)
-
-
-def _span_db(db: np.ndarray, start: float, end: float) -> float | None:
-    a = max(0, int(round(start / mic_dedupe.FRAME_S)))
-    b = min(len(db), max(a + 1, int(round(end / mic_dedupe.FRAME_S))))
-    return float(np.median(db[a:b])) if b > a else None
+@contextmanager
+def _torch_threads(n: int):
+    """Потоков torch не больше n на время эмбеддинга окон; потом — как было."""
+    try:
+        import torch
+    except Exception:
+        yield
+        return
+    before = torch.get_num_threads()
+    torch.set_num_threads(max(1, min(n, before)))
+    try:
+        yield
+    finally:
+        torch.set_num_threads(before)
 
 
 def _unit(x: np.ndarray) -> np.ndarray:
@@ -251,9 +288,7 @@ def _fast(voiced: list[Window], owner, device: str | None) -> bool:
 
 
 def _groups(wins: list[Window]) -> list[list[Window]]:
-    """Кластеры окон с голосом: средняя связь до AHC_STOP и уточнение к центрам;
-    мелкие — в ближайший крупный при близости от SMALL_MERGE_COS. → группы
-    (мелкие без пары — отдельно, их помечает вызывающий)."""
+    """Кластеры окон с голосом: средняя связь до AHC_STOP и уточнение к центрам."""
     x = np.stack([w.emb for w in wins])
     secs = np.array([w.seconds for w in wins])
     labels = speaker_split.ahc_threshold(x, secs, AHC_STOP)
@@ -263,22 +298,7 @@ def _groups(wins: list[Window]) -> list[list[Window]]:
     groups: dict[int, list[Window]] = {}
     for win, g in zip(wins, labels):
         groups.setdefault(int(g), []).append(win)
-    found = list(groups.values())
-    big = [g for g in found if sum(w.seconds for w in g) >= SMALL_CLUSTER_S] or found
-    out = [list(g) for g in big]
-    centers = [_centroid(g) for g in big]
-    for g in found:
-        if any(g is b for b in big):
-            continue
-        c = _centroid(g)
-        sims = [_cos(c, other) for other in centers]
-        j = int(np.argmax(sims))
-        if sims[j] >= SMALL_MERGE_COS:
-            out[j] += g
-        else:
-            out.append(g)
-            centers.append(None)  # мелкая и ни на кого не похожа — `unsure`
-    return out
+    return list(groups.values())
 
 
 def _roles(wins: list[Window], owner, device: str | None) -> tuple[str, bool, list[dict], list[list[Window]]]:
@@ -297,30 +317,18 @@ def _roles(wins: list[Window], owner, device: str | None) -> tuple[str, bool, li
                                   "role": "owner", "label": None, "link": None}], [voiced]
     groups = _groups(voiced)
     total = float(secs.sum())
-    info = []
-    for g in groups:
-        c = _centroid(g)
-        seconds = sum(w.seconds for w in g)
-        dbs = [w.db for w in g if w.db is not None]
-        info.append({"seconds": seconds, "cos": owner_voice.score(c, owner, device),
-                     "db": float(np.median(dbs)) if dbs else None,
-                     "small": seconds < SMALL_CLUSTER_S and len(groups) > 1})
+    info = [{"seconds": sum(w.seconds for w in g), "cos": owner_voice.score(_centroid(g), owner, device)}
+            for g in groups]
     if not any(i["seconds"] >= OWNER_PRESENT_SHARE * total and i["cos"] >= T_OTHER for i in info):
         return STATUS_NOT_FOUND, False, [], []
-    # «Ближний» — по громкости кластера, больше всех похожего на владельца (а
-    # не самого длинного: им может оказаться разговорчивый сосед).
-    ref = max((i for i in info if i["cos"] >= T_OTHER), key=lambda i: i["cos"])
     clusters = []
     for g, i in zip(groups, info):
-        near = (i["db"] is not None and ref["db"] is not None and i["db"] >= ref["db"] - NEAR_DB)
         if i["cos"] >= T_OWN:
             role = "owner"
-        elif i["small"]:
-            role = "unsure"
-        elif i["cos"] < T_OTHER:
-            role = "room" if i["seconds"] >= MIN_DECIDE_S else "unsure"
+        elif i["cos"] < T_OTHER and i["seconds"] >= MIN_DECIDE_S:
+            role = "room"
         else:
-            role = "owner" if near else "unsure"
+            role = "unsure"  # серая зона или мало речи: владелец с пометкой
         for w in g:
             w.role = role
         clusters.append({"id": None, "seconds": round(i["seconds"], 2), "owner_cos": round(i["cos"], 3),
@@ -458,9 +466,6 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
             mic_audio = _read(mic_wav)
         except (Exception, SystemExit) as e:
             log(f"микрофон: звук не прочитать, разделения и дублей нет ({type(e).__name__})")
-    mic_db = _frame_db(mic_audio) if mic_audio is not None and mic_audio.size else np.zeros(0, dtype=np.float32)
-    for win in wins:
-        win.db = _span_db(mic_db, win.start, win.end)
     status, fast, clusters, groups = STATUS_OK, False, [], []
     if not speakers:
         status = STATUS_OFF
@@ -475,9 +480,10 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
             # Сначала выборка окон по всей записи: один владелец — и хватит.
             candidates = [w for w in wins if not w.short]
             sample = _spread(candidates, FAST_SAMPLE)
-            _embed(sample, mic_audio, embed)
-            if not _fast([w for w in sample if w.emb is not None], owner, device):
-                _embed(candidates, mic_audio, embed)
+            with _torch_threads(EMBED_THREADS):
+                _embed(sample, mic_audio, embed)
+                if not _fast([w for w in sample if w.emb is not None], owner, device):
+                    _embed(candidates, mic_audio, embed)
             status, fast, clusters, groups = _roles(wins, owner, device)
     split = status == STATUS_OK
     if not split:
@@ -526,7 +532,8 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
         if mic_audio is not None:
             try:
                 sys_audio = _read(sys_wav)
-                env = mic_dedupe.Envelope(mic_db, _frame_db(sys_audio), speech=[(t.start, t.end) for t in mic_toks])
+                env = mic_dedupe.Envelope.from_audio(mic_audio, sys_audio, SAMPLE_RATE,
+                                                     speech=[(t.start, t.end) for t in mic_toks])
             except (Exception, SystemExit) as e:
                 log(f"микрофон: громкость дорожек не прочитать, дубли только по словам ({type(e).__name__})")
         drops, lags = mic_dedupe.find(mic_toks, sys_toks, owner_known=split, env=env)

@@ -205,6 +205,7 @@ def _live_vs_base(voiced, base) -> dict:
         total, acc = 0.0, None
         marks = list(CHECKPOINTS)
         for dur, vec in items:
+            vec = _unit(vec)  # эмбеддинги и центроиды community-1 не единичной длины
             acc = vec * dur if acc is None else acc + vec * dur
             total += dur
             while marks and total >= marks[0]:
@@ -302,7 +303,7 @@ def _dedupe_lags(segs, env=None, seed: int = 0) -> tuple[list, list, list, list,
 def constants() -> dict:
     return {"T_OWN": mic_split.T_OWN, "T_OTHER": mic_split.T_OTHER, "T_WIN_FAST": mic_split.T_WIN_FAST,
             "FAST_SHARE": mic_split.FAST_SHARE, "AHC_STOP": mic_split.AHC_STOP, "SYS_LINK": mic_split.SYS_LINK,
-            "NEAR_DB": mic_split.NEAR_DB, "VOICE_THRESHOLD": voices.THRESHOLD, "VOICE_MARGIN": voices.MARGIN,
+            "VOICE_THRESHOLD": voices.THRESHOLD, "VOICE_MARGIN": voices.MARGIN,
             "UNSURE_MIN": speaker_split.UNSURE_MIN, "NEIGHBOUR_MIN_LAG": mic_dedupe.NEIGHBOUR_MIN_LAG,
             "ECHO_MAX_LAG": mic_dedupe.ECHO_MAX_LAG, "LAG_TOLERANCE": mic_dedupe.LAG_TOLERANCE,
             "MIN_COVERAGE": mic_dedupe.MIN_COVERAGE, "MIN_ENV_CORR": mic_dedupe.MIN_ENV_CORR}

@@ -315,27 +315,63 @@ def test_short_reply_inherits_nearby_window_far_one_stays_owner(tmp_path):
     assert speaker_at[61.0] == "Вы"
 
 
-def test_between_thresholds_far_cluster_is_owner_but_uncertain(tmp_path):
-    """Образец с другого микрофона: голос человека рядом похож на образец лишь
-    средне (между T_OTHER и T_OWN) и звучит дальше владельца — владелец с
-    пометкой «не уверен», а не чужое имя."""
-    sample = _unit(0.85 * _e(OWNER) + 0.62 * _e(ROOM1))
+def test_grey_zone_cluster_is_owner_but_uncertain(tmp_path):
+    """Образец с другого микрофона похож на голос владельца лишь средне (между
+    T_OTHER и T_OWN): владелец с пометкой «не уверен», а не чужое имя; люди
+    в комнате — своими кластерами."""
+    sample = _unit(0.70 * _e(OWNER) + 0.71 * _e(4))
     got, _ = _run(_meeting(tmp_path, room1=True), _owner(sample))
     by_start = {round(s.start, 1): (s.speaker, s.uncertain) for s in got.mic}
-    for start, _ in ROOM1_PHRASES:
-        assert by_start[start] == ("Вы", True)
     for start, _ in OWNER_PHRASES:
-        assert by_start[start] == ("Вы", False)
-    assert got.report["room_speakers"] == 0
-    assert {c["role"] for c in got.voices["clusters"]} == {"owner", "unsure"}
+        assert by_start[start] == ("Вы", True)
+    for start, _ in ROOM1_PHRASES:
+        assert by_start[start] == ("SPEAKER_M0", False)
+    roles = {c["role"]: c for c in got.voices["clusters"]}
+    assert set(roles) == {"unsure", "room"}
+    assert mic_split.T_OTHER <= roles["unsure"]["owner_cos"] < mic_split.T_OWN
 
 
-def test_between_thresholds_near_cluster_is_owner(tmp_path):
-    """Тот же средний голос, но так же громко, как владелец — это он сам."""
+def test_loud_room_voice_is_not_taken_for_the_owner(tmp_path):
+    """Громкость людей в комнате не отличает (T0: на 1–2 дБ тише владельца):
+    так же громкий, но чужой голос — человек в комнате."""
     loud_room = [(_words(t, s), ROOM1, LOUD) for s, t in ROOM1_PHRASES]
-    sample = _unit(0.85 * _e(OWNER) + 0.62 * _e(ROOM1))
-    got, _ = _run(_meeting(tmp_path, extra_mic=loud_room), _owner(sample))
-    assert {(s.speaker, s.uncertain) for s in got.mic} == {("Вы", False)}
+    got, _ = _run(_meeting(tmp_path, extra_mic=loud_room), _owner())
+    assert _by_speaker(got.mic) == {"Вы": [s for s, _ in OWNER_PHRASES],
+                                    "SPEAKER_M0": [s for s, _ in ROOM1_PHRASES]}
+
+
+def test_short_cluster_below_owner_threshold_is_unsure(tmp_path):
+    """Кластер меньше MIN_DECIDE_S речи, не похожий на образец, — не «человек в
+    комнате», а владелец с пометкой."""
+    few = [(_words(ROOM1_PHRASES[0][1], ROOM1_PHRASES[0][0]), ROOM1, QUIET),
+           (_words(ROOM1_PHRASES[1][1], ROOM1_PHRASES[1][0]), ROOM1, QUIET)]
+    got, _ = _run(_meeting(tmp_path, extra_mic=few), _owner())
+    by_start = {round(s.start, 1): (s.speaker, s.uncertain) for s in got.mic}
+    assert by_start[ROOM1_PHRASES[0][0]] == ("Вы", True)
+    assert got.report["room_speakers"] == 0
+
+
+def test_embedding_runs_with_capped_torch_threads(tmp_path, monkeypatch):
+    """Эмбеддинг окон — не больше EMBED_THREADS потоков torch, потом как было."""
+    import sys
+    import types
+
+    state = {"n": 16, "seen": []}
+    fake = types.SimpleNamespace(get_num_threads=lambda: state["n"],
+                                 set_num_threads=lambda n: state.update(n=n))
+    monkeypatch.setitem(sys.modules, "torch", fake)
+
+    def embed(audio):
+        state["seen"].append(state["n"])
+        return fake_embed(audio)
+
+    _run(_meeting(tmp_path, room1=True), _owner(), embed=embed)
+    assert set(state["seen"]) == {mic_split.EMBED_THREADS} and state["n"] == 16
+
+
+def test_live_threshold_is_capped():
+    assert mic_split.live_threshold(0.82) == pytest.approx(0.70)
+    assert mic_split.live_threshold(0.72) == pytest.approx(0.67)
 
 
 def test_owner_not_found_falls_back_to_today(tmp_path):
