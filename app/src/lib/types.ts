@@ -602,6 +602,8 @@ export type LiveStatus = {
   stage?: string | null;
   folder: string | null;
   error: string | null;
+  /** Когда появилась `error` (стенное время резидента): та же ошибка снова — новое время. */
+  error_at?: number | null;
   started_at: number | null;
   /**
    * Ассистент включён посреди обычной записи («Включить ассистента»): запись

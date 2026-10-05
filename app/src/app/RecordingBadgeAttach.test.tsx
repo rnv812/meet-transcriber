@@ -127,3 +127,19 @@ test("подключённый ассистент упал — ошибка ви
     vi.useRealTimers();
   }
 });
+
+test("та же ошибка при новом сбое — снова видна; конец записи убирает её", async () => {
+  const fail = (at: number) => recording(live({
+    error: "Ассистент упал — запись продолжается: сбой", error_at: at, ended_by: "crash" }));
+  const { rerender } = render(<RecordingBadge endpoint={ep} snapshot={recording(live())} />);
+  rerender(<RecordingBadge endpoint={ep} snapshot={fail(100)} />);
+  expect(screen.getByRole("alert")).toHaveTextContent("запись продолжается: сбой");
+  await userEvent.click(screen.getByRole("button", { name: "Скрыть ошибку" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+  // Снова включили и снова упал с тем же текстом (окно не видело промежуточного null).
+  rerender(<RecordingBadge endpoint={ep} snapshot={fail(200)} />);
+  expect(screen.getByRole("alert")).toHaveTextContent("запись продолжается: сбой");
+  // Запись остановили — уведомление про её ассистента больше не висит.
+  rerender(<RecordingBadge endpoint={ep} snapshot={{ ...fail(200), status: "idle" }} />);
+  expect(screen.queryByRole("alert")).toBeNull();
+});

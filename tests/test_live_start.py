@@ -352,3 +352,15 @@ def test_child_and_resident_agree_on_the_no_retry_code():
 
     assert app.EXIT_FATAL == live_control.EXIT_FATAL
     assert live_control.EXIT_FATAL != 3  # 3 — abort()/std::terminate у MSVC CRT
+
+
+def test_each_failure_is_stamped_so_the_window_sees_a_repeat(make_live, tmp_path):
+    live, stub, rec = make_live("fatal")
+    live.start(tmp_path / "recordings")
+    _wait_for(lambda: live_control.LIVE_FAILED in rec.kinds())
+    first = live.status()["error_at"]
+    assert isinstance(first, float)
+    live.start(tmp_path / "recordings")
+    assert live.status()["error_at"] is None  # новый старт — ошибки нет
+    _wait_for(lambda: live.status()["error_at"] not in (None, first))
+    assert live.status()["error"] == "Авторизация Claude не прошла: войдите заново"

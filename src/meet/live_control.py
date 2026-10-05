@@ -418,6 +418,7 @@ class LiveControl:
         self._child_pid: int | None = None  # pid из файла эндпоинта
         self._folder: str | None = None
         self._error: str | None = None
+        self._error_at: float | None = None
         self._started_at: float | None = None
         # Выбранное в настройках устройство не нашлось — ассистент пишет с
         # системного (из файла эндпоинта ребёнка): [{"kind", "name", "device"}].
@@ -469,7 +470,8 @@ class LiveControl:
                 "ready": running and self._ready,
                 "stage": self._stage if running and not self._ready else None,
                 "folder": self._folder,
-                "error": self._error, "started_at": self._started_at,
+                "error": self._error, "error_at": self._error_at,
+                "started_at": self._started_at,
                 "attached": running and self._attach is not None,
                 "ended_by": None if running else self._ended_by}
 
@@ -524,6 +526,7 @@ class LiveControl:
                     process = self._spawn_with(argv, log_file, attach)
                 except OSError as e:
                     self._error = f"Не удалось запустить ассистента: {e}"
+                    self._error_at = time.time()
                     self._ended_by = ENDED_CRASH
                     process = None
                 finally:
@@ -538,6 +541,7 @@ class LiveControl:
                     self._folder = str(attach["folder"]) if attach is not None else None
                     self._fallback = []
                     self._error = None
+                    self._error_at = None
                     self._started_at = None  # с live.started: прогрев модели не в счёт
                     self._stop_requested = False
                     self._stop_deadline = None
@@ -871,6 +875,8 @@ class LiveControl:
                 self._stop_requested = False
                 self._stop_deadline = None
                 self._error = error
+                # Когда появилась: окно отличает новую ошибку от прежней с тем же текстом.
+                self._error_at = time.time() if error else None
                 if kind == LIVE_FAILED or timeout_error:
                     self._ended_by = ENDED_CRASH
                 elif detached:

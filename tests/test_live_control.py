@@ -350,7 +350,7 @@ def test_stop_asks_child_and_reports_stopped(make_live, data_dir, tmp_path):
     assert rec.kinds()[-1] == live_control.LIVE_STOPPED
     assert rec.last(live_control.LIVE_STOPPED).data["folder"] == folder
     assert live.status() == {"active": False, "starting": False, "stopping": False,
-                             "ready": False, "stage": None,
+                             "ready": False, "stage": None, "error_at": None,
                              "folder": None, "error": None, "started_at": None,
                              "attached": False, "ended_by": "stop"}
     assert not (data_dir / "live.json").exists()

@@ -161,7 +161,7 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   // Коротко: шапка узкой панели (от 300 px) вмещает таймер, состояние и пять кнопок.
   const catchup = live.catchup?.active ? live.catchup : null;
   // Звук уже идёт, а модель распознавания ещё грузится — этап старта.
-  const warming = status?.ready === false;
+  const warming = !!status?.active && status.ready === false;
   const stage = status?.stage?.trim();
   const state = stopping ? (attached ? "Выключаю…" : "Останавливаю…")
     : warming ? (stage ? `Запускается: ${stage}` : "Запускается…")

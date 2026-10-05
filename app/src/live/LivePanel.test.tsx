@@ -461,3 +461,9 @@ test("пока модель грузится — в шапке этап стар
   act(() => bus().emit("state", snap(status({ ready: true }))));
   expect(head()).toHaveTextContent("Слушает");
 });
+
+test("ассистент кончился, панель ещё открыта — не «Запускается»", () => {
+  render(<LivePanel endpoint={ep} />);
+  act(() => bus().emit("state", snap(status({ active: false, ready: false }))));
+  expect(head()).not.toHaveTextContent("Запускается");
+});

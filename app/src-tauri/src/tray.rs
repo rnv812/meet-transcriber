@@ -229,9 +229,13 @@ impl KbFailure {
 /// уведомлениям он не нужен.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Live {
-    /// Ассистент слушает встречу (модель загружена, запись идёт). Остаётся
-    /// `true` и во время остановки — пока ассистент дописывает запись.
+    /// Звук уже идёт к ассистенту (своя запись или отвод обычной); модель
+    /// может ещё грузиться — см. `ready`. Остаётся `true` и во время
+    /// остановки — пока ассистент дописывает запись.
     pub active: bool,
+    /// Модель загружена, ассистент слушает. Старый резидент поля не
+    /// присылает — тогда это `active`.
+    pub ready: bool,
     /// Процесс запущен, модель ещё грузится.
     pub starting: bool,
     /// Остановка запрошена, ассистент дописывает запись.
@@ -259,8 +263,13 @@ impl Live {
                 .filter(|text| !text.is_empty())
                 .map(str::to_string)
         };
+        let active = flag("active");
         Live {
-            active: flag("active"),
+            active,
+            ready: value
+                .get("ready")
+                .and_then(Value::as_bool)
+                .unwrap_or(active),
             starting: flag("starting"),
             stopping: flag("stopping"),
             folder: text("folder"),
@@ -273,6 +282,11 @@ impl Live {
     /// Процесс ассистента жив: грузится, слушает или дописывает.
     pub fn running(&self) -> bool {
         self.active || self.starting || self.stopping
+    }
+
+    /// Ассистент слушает встречу: звук идёт и модель загружена.
+    pub fn listening(&self) -> bool {
+        self.active && self.ready
     }
 }
 
@@ -440,8 +454,13 @@ pub fn transitions(prev: Option<&View>, next: &View) -> Vec<Notice> {
             None,
         ));
     }
-    if !prev.live.active && next.live.active {
-        out.push(if next.live.attached {
+    // «Слушает» — когда модель загрузилась, а не когда пошёл звук: до этого
+    // ассистент ещё ничего не умеет, а запуск может и не удаться.
+    if !prev.live.listening() && next.live.listening() {
+        // «Запись с ассистентом» (source: live) — тоже подключение к записи, но
+        // с первой секунды: догонять нечего, это «слушает встречу».
+        let with_assistant = next.source.as_deref() == Some("live");
+        out.push(if next.live.attached && !with_assistant {
             Notice::new(
                 LIVE_ATTACHED,
                 "Догоняет начало встречи и слушает дальше. Выключить — в меню значка Meet",
@@ -508,7 +527,12 @@ fn live_ended(prev: &View, next: &View) -> Option<Notice> {
         return match now.error.as_deref() {
             Some(error) if crashed || !was.stopping => Some(Notice::new(
                 LIVE_FAILED,
-                format!("{} — запись продолжается", shorten(error, ERROR_CHARS)),
+                // Резидент сам пишет «… — запись продолжается: причина».
+                if error.contains("запись продолжается") {
+                    shorten(error, ERROR_CHARS)
+                } else {
+                    format!("{} — запись продолжается", shorten(error, ERROR_CHARS))
+                },
                 recording,
             )),
             _ if prev.recording && !next.recording => None,
@@ -952,13 +976,18 @@ pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
             if view.source.as_deref() == Some("auto") {
                 text.push_str(" (авто)");
             }
-            if view.live.attached && view.live.active && !view.live.stopping {
-                text.push_str(" · ассистент");
+            if view.live.attached && !view.live.stopping {
+                if view.live.listening() {
+                    text.push_str(" · ассистент");
+                } else if view.live.running() {
+                    text.push_str(" · ассистент запускается");
+                }
             }
             text
         }
         Some(view) if view.live.stopping => "ассистент завершает запись".to_string(),
-        Some(view) if view.live.active => "ассистент слушает встречу".to_string(),
+        Some(view) if view.live.listening() => "ассистент слушает встречу".to_string(),
+        Some(view) if view.live.active => "запись идёт · ассистент запускается".to_string(),
         Some(view) if view.live.starting => "ассистент запускается".to_string(),
         Some(view) if view.busy => match view.busy_percent {
             Some(percent) => format!("идёт расшифровка · {percent} %"),
@@ -2668,6 +2697,7 @@ mod tests {
         View {
             live: Live {
                 active,
+                ready: active,
                 starting,
                 stopping,
                 folder: active.then(|| LIVE_FOLDER.to_string()),
@@ -2728,6 +2758,42 @@ mod tests {
     }
 
     #[test]
+    fn listening_toast_waits_for_ready_and_tooltip_says_starting() {
+        // Звук пошёл, модель ещё грузится: тоста «слушает» нет.
+        let mut warming = with_live(true, false, false);
+        warming.live.ready = false;
+        assert!(!transitions(Some(&idle()), &warming)
+            .iter()
+            .any(|n| n.title == LIVE_LISTENING));
+        let tip = tooltip(Some(&warming), &ResidentStatus::Running);
+        assert!(tip.contains("запись идёт · ассистент запускается"), "{tip}");
+        // Модель загрузилась — вот теперь «слушает».
+        let ready = with_live(true, false, false);
+        assert!(transitions(Some(&warming), &ready)
+            .iter()
+            .any(|n| n.title == LIVE_LISTENING));
+        // Старый резидент без `ready` — «слушает» сразу, как раньше.
+        let old = View::from_json(
+            &json!({"status": "idle", "live": {"active": true}}),
+            &json!({}),
+        );
+        assert!(old.live.ready && old.live.listening());
+    }
+
+    #[test]
+    fn attached_failure_text_from_the_resident_is_not_doubled() {
+        let mut was = idle();
+        was.recording = true;
+        was.live = attached(true, false, false);
+        let mut now = idle();
+        now.recording = true;
+        now.live.ended_by = Some("crash".into());
+        now.live.error = Some("Ассистент упал — запись продолжается: RuntimeError: x".into());
+        let notice = live_ended(&was, &now).expect("уведомление");
+        assert_eq!(notice.body.matches("запись продолжается").count(), 1);
+    }
+
+    #[test]
     fn view_reads_live() {
         let state = json!({"status": "idle", "live": {
             "active": true, "starting": false, "stopping": true,
@@ -2738,6 +2804,7 @@ mod tests {
             v.live,
             Live {
                 active: true,
+                ready: true,
                 starting: false,
                 stopping: true,
                 folder: Some(LIVE_FOLDER.into()),
@@ -3054,6 +3121,7 @@ mod tests {
     fn attached(active: bool, starting: bool, stopping: bool) -> Live {
         Live {
             active,
+            ready: active,
             starting,
             stopping,
             folder: Some(LIVE_FOLDER.to_string()),
