@@ -16,8 +16,12 @@ Digester и QAService):
 Ошибки не бросаются, а возвращаются в `AgentReply.error`.
 """
 
+import subprocess
+import sys
 from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
+
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
 # Одинаковый текст таймаута у всех провайдеров: по нему вызывающий отличает
 # «модель не успела» от прочих ошибок.
@@ -63,6 +67,42 @@ SESSION_MARKERS = (
     "CODEX_SANDBOX",
     "CODEX_SANDBOX_NETWORK_DISABLED",
 )
+
+
+def kill_tree(proc) -> None:
+    """Убить процесс CLI со всеми детьми: Codex и OpenCode запускают свои
+    процессы, а у npm-сценария (.cmd) прямой ребёнок — cmd.exe."""
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True, timeout=10, creationflags=_NO_WINDOW,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def run_tree(cmd: list[str], *, timeout: float, **popen) -> tuple[int, bytes, bytes]:
+    """Короткая служебная команда CLI: (код выхода, stdout, stderr). Не
+    уложилась в `timeout` — дерево процессов убито и брошен
+    `subprocess.TimeoutExpired` (`subprocess.run` убил бы только прямого
+    ребёнка, а node и opencode.exe за сценарием .cmd остались бы жить)."""
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, creationflags=_NO_WINDOW, **popen)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        kill_tree(proc)
+        try:
+            proc.communicate(timeout=10)
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            pass
+        raise
+    return proc.returncode, out or b"", err or b""
 
 
 def drop_session_markers(env: MutableMapping[str, str]) -> list[str]:

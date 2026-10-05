@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 from meet import netproxy, tempdirs
-from meet.llm.base import EMPTY_ERROR, TIMEOUT_ERROR, AgentReply, drop_session_markers
+from meet.llm.base import EMPTY_ERROR, TIMEOUT_ERROR, AgentReply, drop_session_markers, kill_tree
 from meet.llm.detect import find_codex
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
@@ -23,19 +23,8 @@ _ERR_LIMIT = 500
 
 
 def _kill_tree(proc) -> None:
-    """Codex запускает дочерние процессы — убиваем всё дерево."""
-    if sys.platform == "win32":
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                capture_output=True, timeout=10, creationflags=_NO_WINDOW,
-            )
-        except (OSError, subprocess.SubprocessError):
-            pass
-    try:
-        proc.kill()
-    except OSError:
-        pass
+    """Codex запускает дочерние процессы — убиваем всё дерево (llm.base)."""
+    kill_tree(proc)
 
 
 def _workdir(allowed_dirs, cwd) -> str:
