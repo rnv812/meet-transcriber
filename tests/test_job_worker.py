@@ -51,7 +51,7 @@ def test_summary_without_provider_says_how_to_connect(tmp_path, monkeypatch, cap
     folder = _transcribed(tmp_path, monkeypatch)
     assert job_worker.main(["summary", str(folder)]) == 2
     errors = [x for x in _lines(capsys) if x.get("kind") == "error"]
-    assert errors[-1]["text"] == "Подключите Claude Code или Codex в настройках"
+    assert errors[-1]["text"] == "Подключите Claude Code, Codex или OpenCode в настройках"
     assert not (folder / "summary.md").exists()
 
 
@@ -194,7 +194,7 @@ def test_analyze_job_failure_is_remembered_for_the_window(tmp_path, monkeypatch,
     monkeypatch.setattr(llm, "resolve", lambda cfg: (None, None))
     folder = _transcribed(tmp_path, monkeypatch)
     assert job_worker.main(["analyze", str(folder)]) == 2
-    assert library.read_meta(folder)["analysis_error"]["error"] == "Подключите Claude Code или Codex в настройках"
+    assert library.read_meta(folder)["analysis_error"]["error"] == "Подключите Claude Code, Codex или OpenCode в настройках"
     assert not (folder / "analysis.json").exists()
 
 
@@ -236,7 +236,7 @@ def test_improve_job_failure_is_remembered_for_the_window(tmp_path, monkeypatch,
     monkeypatch.setattr(llm, "resolve", lambda cfg: (None, None))
     folder = _transcribed(tmp_path, monkeypatch)
     assert job_worker.main(["improve", str(folder)]) == 2
-    assert library.read_meta(folder)["improve_error"]["error"] == "Подключите Claude Code или Codex в настройках"
+    assert library.read_meta(folder)["improve_error"]["error"] == "Подключите Claude Code, Codex или OpenCode в настройках"
 
 
 def test_improve_job_argv_and_kind(tmp_path):

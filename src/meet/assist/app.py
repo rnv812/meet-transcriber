@@ -44,7 +44,7 @@ from meet.assist.prompts import (
 from meet.assist.qa import QAService
 from meet.assist.web import bound_port, run_web
 
-NO_PROVIDER_ERROR = "Подключите Claude Code или Codex в настройках"
+NO_PROVIDER_ERROR = "Подключите Claude Code, Codex или OpenCode в настройках"
 PARENT_POLL_S = 1.0  # как резидент следит за оболочкой (tray.run_headless)
 
 

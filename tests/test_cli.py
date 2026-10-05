@@ -423,7 +423,7 @@ def test_summary_without_provider_is_exit_1_with_hint(env, capsys, monkeypatch):
     monkeypatch.setattr(llm, "resolve", lambda cfg: (None, None))
     assert _main(["summary", RID]) == 1
     err = capsys.readouterr().err
-    assert "Подключите Claude Code или Codex" in err
+    assert "Подключите Claude Code, Codex или OpenCode" in err
     assert "--provider codex" in err and "llm.provider" in err
     assert not (folder / "summary.md").exists()
 

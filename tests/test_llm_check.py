@@ -116,3 +116,59 @@ def test_claude_check_uses_proxy_setting(monkeypatch):
     monkeypatch.setattr(claude, "check_auth", fake_check_auth)
     assert asyncio.run(check.check("claude-code"))["ok"] is True
     assert seen == {"proxy": "http://10.1.1.1:3128", "model": "opus"}  # «Проверить» — моделью из настроек
+
+
+# --- OpenCode: проверка без вызова модели ----------------------------------------
+
+
+def _opencode_env(monkeypatch, *, path="C:/oc/opencode.exe", logged=(True, None), listed=(True, None)):
+    from meet.llm import opencode
+
+    monkeypatch.setattr(detect, "find_opencode", lambda: path)
+    seen = {"logged": [], "listed": []}
+
+    def fake_logged(name, p):
+        seen["logged"].append((name, p))
+        return logged
+
+    def fake_listed(p, model, proxy=None):
+        seen["listed"].append((p, model, proxy))
+        return listed
+
+    async def no_call(*a, **k):
+        raise AssertionError("«Проверить» OpenCode не зовёт модель")
+
+    monkeypatch.setattr(detect, "logged_in", fake_logged)
+    monkeypatch.setattr(detect, "opencode_model_listed", fake_listed)
+    monkeypatch.setattr(opencode, "run", no_call)
+    return seen
+
+
+def test_opencode_not_found(monkeypatch):
+    _opencode_env(monkeypatch, path=None)
+    res = asyncio.run(check.check("opencode"))
+    assert res["ok"] is False and "opencode.ai" in res["error"]
+
+
+def test_opencode_without_model_checks_the_login(monkeypatch):
+    seen = _opencode_env(monkeypatch)
+    assert asyncio.run(check.check("opencode")) == {"ok": True, "error": None, "provider": "opencode"}
+    assert seen["logged"] == [("opencode", "C:/oc/opencode.exe")] and seen["listed"] == []
+
+
+def test_opencode_not_logged_in(monkeypatch):
+    _opencode_env(monkeypatch, logged=(False, "нет входа"))
+    res = asyncio.run(check.check("opencode"))
+    assert res == {"ok": False, "error": "не авторизован: нет входа", "provider": "opencode"}
+
+
+def test_opencode_with_model_checks_that_the_model_is_available(monkeypatch):
+    from meet import settings
+
+    settings.patch({"llm": {"opencode_model": "openai/gpt-5", "proxy": "none"}})
+    seen = _opencode_env(monkeypatch, listed=(False, "провайдер openai не подключён"))
+    res = asyncio.run(check.check("opencode"))
+    assert res == {"ok": False, "error": "провайдер openai не подключён", "provider": "opencode"}
+    assert seen["listed"] == [("C:/oc/opencode.exe", "openai/gpt-5", "none")]
+    _opencode_env(monkeypatch)
+    assert asyncio.run(check.check("opencode"))["ok"] is True

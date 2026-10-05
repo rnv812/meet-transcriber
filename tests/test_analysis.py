@@ -379,3 +379,11 @@ def test_write_retries_while_the_file_is_held(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "replace", flaky)
     path = analysis.write(tmp_path, {"version": 1})
     assert json.loads(path.read_text(encoding="utf-8")) == {"version": 1} and len(calls) == 2
+
+
+def test_model_label_names_the_opencode_model():
+    from meet.settings import Settings
+
+    cfg = Settings.from_raw({"llm": {"opencode_model": "openai/gpt-5"}})
+    assert analysis.model_label("opencode", cfg) == "opencode:openai/gpt-5"
+    assert analysis.model_label("opencode", Settings.from_raw({})) == "opencode"

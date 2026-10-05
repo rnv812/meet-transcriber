@@ -3,6 +3,11 @@
 Печатает одну строку JSON `{"ok": bool, "error": str|None, "provider": str}`;
 код выхода 0 — всё хорошо, 1 — нет. Запускается резидентом подпроцессом
 (кнопка «Проверить»), поэтому вызывать модель здесь можно.
+
+OpenCode проверяется без вызова модели (квоту не тратит): найден ли он, есть
+ли у него модель из настроек (`opencode models <провайдер>`), а без своей
+модели — есть ли вход (`opencode auth list`). Годен ли сам ключ, так не
+узнать: это скажет первый настоящий вызов.
 """
 
 import asyncio
@@ -61,6 +66,20 @@ async def _check_codex() -> str | None:
     return reply.error
 
 
+async def _check_opencode() -> str | None:
+    from meet import settings
+
+    path = detect.find_opencode()
+    if path is None:
+        return detect.OPENCODE_NOT_FOUND
+    llm = settings.load().llm
+    if llm.opencode_model:
+        ok, why = detect.opencode_model_listed(path, llm.opencode_model, llm.proxy)
+        return None if ok else why
+    ok, why = detect.logged_in("opencode", path)
+    return None if ok else f"не авторизован: {why}"
+
+
 async def _check_local() -> str | None:
     from meet import settings
     from meet.llm import openai_compat
@@ -84,7 +103,7 @@ async def check(provider: str) -> dict:
         name, _ = resolve(settings.load())
         if name is None:
             return _result("auto", "нет доступного провайдера: "
-                                   "подключите Claude Code или Codex")
+                                   "подключите Claude Code, Codex или OpenCode")
         provider = name
     if provider not in PROVIDERS:
         return _result(provider, f"неизвестный провайдер: {provider}")
@@ -93,6 +112,8 @@ async def check(provider: str) -> dict:
             error = await _check_claude()
         elif provider == "codex":
             error = await _check_codex()
+        elif provider == "opencode":
+            error = await _check_opencode()
         else:
             error = await _check_local()
     except Exception as e:  # проверка не должна падать трейсбеком

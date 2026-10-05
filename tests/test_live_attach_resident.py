@@ -147,7 +147,7 @@ def test_attach_without_provider_is_conflict(resident, monkeypatch, tmp_path):
     _recording_resident(resident, monkeypatch, tmp_path)
     monkeypatch.setattr(detect, "available", lambda base_url=None: {})
     try:
-        with pytest.raises(control.Conflict, match="Подключите Claude Code или Codex"):
+        with pytest.raises(control.Conflict, match="Подключите Claude Code, Codex или OpenCode"):
             resident.live_attach()
         assert resident.stub.argv is None
     finally:

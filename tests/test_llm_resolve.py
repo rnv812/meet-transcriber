@@ -10,10 +10,11 @@ def _cfg(provider="auto"):
     return Settings.from_raw({"llm": {"provider": provider}})
 
 
-def _env(monkeypatch, *, claude=None, codex=None, local=False, logged=None):
+def _env(monkeypatch, *, claude=None, codex=None, opencode=None, local=False, logged=None):
     logged = logged or {}
     monkeypatch.setattr(detect, "find_claude", lambda: claude)
     monkeypatch.setattr(detect, "find_codex", lambda: codex)
+    monkeypatch.setattr(detect, "find_opencode", lambda: opencode)
     monkeypatch.setattr(detect, "local_reachable", lambda url, timeout=0.5: local)
 
     def fake_logged_in(name, path):
@@ -169,3 +170,56 @@ def test_runner_for_claude_passes_the_configured_model(monkeypatch):
     assert seen == ["opus", "haiku"]
     assert llm.agent_model("claude-code", cfg) == "opus"
     assert llm.agent_model("codex", cfg) is None
+
+
+# --- OpenCode ---------------------------------------------------------------------
+
+
+def test_auto_order_puts_opencode_after_codex_and_before_local(monkeypatch):
+    assert llm.PROVIDERS == ("claude-code", "codex", "opencode", "openai-compatible")
+    _env(monkeypatch, codex="C:/codex.exe", opencode="C:/oc/opencode.exe", local=True)
+    assert llm.resolve(_cfg())[0] == "codex"
+    _env(monkeypatch, opencode="C:/oc/opencode.exe", local=True)
+    assert llm.resolve(_cfg())[0] == "opencode"
+
+
+def test_auto_skips_opencode_without_login(monkeypatch):
+    _env(monkeypatch, opencode="C:/oc/opencode.exe", local=True, logged={"opencode": False})
+    assert llm.resolve(_cfg())[0] == "openai-compatible"
+
+
+def test_explicit_opencode(monkeypatch):
+    # Явный выбор — без проверки входа: её делает «Проверить».
+    _env(monkeypatch, opencode="C:/oc/opencode.exe", logged={"opencode": False})
+    name, runner = llm.resolve(_cfg("opencode"))
+    assert name == "opencode" and callable(runner)
+    _env(monkeypatch)
+    assert llm.resolve(_cfg("opencode")) == (None, None)
+
+
+def test_runner_for_opencode_passes_its_own_model_and_proxy(monkeypatch):
+    import asyncio
+
+    from meet.llm import opencode
+
+    seen = []
+
+    async def fake(prompt, **kw):
+        seen.append((kw.get("model"), kw.get("proxy")))
+
+    monkeypatch.setattr(opencode, "run", fake)
+    cfg = Settings.from_raw({"llm": {"model": "opus", "opencode_model": "openai/gpt-5",
+                                     "proxy": "none"}})
+    asyncio.run(llm.runner_for("opencode", cfg)("q", system_prompt="s"))
+    # Модель Claude Code («opus») OpenCode не получает.
+    assert seen == [("openai/gpt-5", "none")]
+    asyncio.run(llm.runner_for("opencode", Settings.from_raw({}))("q", system_prompt="s"))
+    assert seen[-1][0] is None  # пусто — модель из конфига OpenCode
+    assert llm.agent_model("opencode", cfg) is None
+
+
+def test_tier_kwargs_opencode_adds_nothing():
+    from meet.llm import tier_kwargs
+
+    assert tier_kwargs("opencode", "fast") == {}
+    assert tier_kwargs("opencode", "agent", "opus") == {}

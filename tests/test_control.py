@@ -192,7 +192,7 @@ class FakeState:
 
     def make_summary(self, rid):
         if not self.provider_ready:
-            raise control.Conflict("Подключите Claude Code или Codex в настройках")
+            raise control.Conflict("Подключите Claude Code, Codex или OpenCode в настройках")
         self.calls.append(("summary", rid))
         return {"id": "j1", "kind": "summary"}
 
@@ -256,7 +256,7 @@ class FakeState:
 
     def live_start(self):
         if not self.provider_ready:
-            raise control.Conflict("Подключите Claude Code или Codex в настройках")
+            raise control.Conflict("Подключите Claude Code, Codex или OpenCode в настройках")
         if self.recording:
             raise control.BadRequest("Идёт обычная запись")
         self.calls.append("live.start")
@@ -1106,7 +1106,7 @@ def test_summary_routes(server):
 def test_summary_without_provider_is_409_with_text(server):
     server.state_obj.provider_ready = False
     got = _post(server, "/recordings/r1/summary", expect=409)
-    assert got == {"error": "Подключите Claude Code или Codex в настройках"}
+    assert got == {"error": "Подключите Claude Code, Codex или OpenCode в настройках"}
 
 
 def test_ask_qa_notes_routes(server):
@@ -1183,7 +1183,7 @@ def test_live_routes_reach_state(server):
 def test_live_start_without_provider_is_409(server):
     server.state_obj.provider_ready = False
     assert _post(server, "/live/start", expect=409) == {
-        "error": "Подключите Claude Code или Codex в настройках"}
+        "error": "Подключите Claude Code, Codex или OpenCode в настройках"}
 
 
 def test_live_start_during_recording_is_400(server):

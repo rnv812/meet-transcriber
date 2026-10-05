@@ -1,4 +1,4 @@
-"""Слой провайдеров модели: Claude Code, Codex CLI, локальная OpenAI-совместимая.
+"""Слой провайдеров модели: Claude Code, Codex CLI, OpenCode, локальная OpenAI-совместимая.
 
 Пакет импортирует резидент, поэтому провайдеры здесь подгружаются лениво
 (внутри функций): ни claude_agent_sdk, ни aiohttp при импорте не тянутся.
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from meet.settings import Settings
 
 # Порядок выбора для "auto": подписки CLI раньше локальной модели.
-PROVIDERS = ("claude-code", "codex", "openai-compatible")
+PROVIDERS = ("claude-code", "codex", "opencode", "openai-compatible")
 
 __all__ = ["PROVIDERS", "AgentReply", "Runner", "agent_model", "provider_ready", "resolve",
            "runner_for", "tier_kwargs"]
@@ -29,8 +29,10 @@ def tier_kwargs(provider: str | None, tier: str, model: str | None = None) -> di
     """Что добавить к вызову модели для уровня `tier` (`agent` — как у
     агента, `fast` — быстрее). «Быстрее»: Claude — модель haiku без
     размышлений, Codex — низкое усилие рассуждения. «Как у агента»: Claude — модель из настроек
-    (`model` — `llm.model`); Codex берёт модель из своего конфига, локальная
-    модель одна — им добавлять нечего."""
+    (`model` — `llm.model`); Codex берёт модель из своего конфига, OpenCode —
+    `llm.opencode_model` в самом runner (уровни моделей у его провайдеров
+    разные — «Быстрее» ему ничего не меняет), локальная модель одна — им
+    добавлять нечего."""
     if tier == "fast":
         if provider == "claude-code":
             return {"model": FAST_CLAUDE_MODEL, "thinking": FAST_CLAUDE_THINKING}
@@ -44,8 +46,8 @@ def tier_kwargs(provider: str | None, tier: str, model: str | None = None) -> di
 
 def agent_model(provider: str | None, cfg: "Settings") -> str | None:
     """Модель агента для явной передачи в вызов: `llm.model` у Claude Code,
-    None у остальных (Codex — модель из своего конфига, локальная —
-    `llm.local_model` в самом runner)."""
+    None у остальных (Codex — модель из своего конфига, OpenCode —
+    `llm.opencode_model`, локальная — `llm.local_model` в самом runner)."""
     return tier_kwargs(provider, "agent", cfg.llm.model).get("model")
 
 
@@ -62,6 +64,9 @@ def runner_for(name: str, cfg: "Settings") -> Runner:
     if name == "codex":
         from meet.llm import codex
         return partial(_call, codex, proxy=cfg.llm.proxy)
+    if name == "opencode":
+        from meet.llm import opencode
+        return partial(_call, opencode, proxy=cfg.llm.proxy, model=cfg.llm.opencode_model or None)
     if name == "openai-compatible":
         from meet.llm import openai_compat
         return partial(openai_compat.run, base_url=cfg.llm.base_url,
@@ -81,8 +86,9 @@ def provider_ready(name: str, cfg: "Settings", *, need_login: bool) -> bool:
 
     if name == "openai-compatible":
         return detect.local_reachable(cfg.llm.base_url)
-    path = detect.find_claude() if name == "claude-code" else (
-        detect.find_codex() if name == "codex" else None)
+    finders = {"claude-code": detect.find_claude, "codex": detect.find_codex,
+               "opencode": detect.find_opencode}
+    path = finders[name]() if name in finders else None
     if path is None:
         return False
     if need_login:
@@ -92,7 +98,7 @@ def provider_ready(name: str, cfg: "Settings", *, need_login: bool) -> bool:
 
 def resolve(cfg: "Settings") -> tuple[str | None, Runner | None]:
     """Кто будет отвечать. `auto` — первый готовый из claude-code → codex →
-    openai-compatible (CLI без входа пропускается: выбирается следующий).
+    opencode → openai-compatible (CLI без входа пропускается: выбирается следующий).
     Явный провайдер — он, если найден, иначе (None, None)."""
     choice = cfg.llm.provider
     if choice == "auto":

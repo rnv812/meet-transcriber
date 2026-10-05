@@ -299,6 +299,36 @@ def _opencode_logged_in(path: str) -> tuple[bool, str | None]:
     return (True, None) if counts > 0 else (False, OPENCODE_NO_LOGIN)
 
 
+def opencode_model_listed(path: str, model: str, proxy: str | None = None) -> tuple[bool, str | None]:
+    """Есть ли модель «провайдер/модель» у OpenCode: `opencode models <провайдер>`
+    печатает модели подключённых провайдеров строками «провайдер/модель»
+    (packages/opencode/src/cli/cmd/models.ts); неподключённый провайдер —
+    ошибка «Provider not found». Модель не вызывается; список моделей OpenCode
+    может обновить с models.dev — поэтому с прокси из настроек."""
+    from meet import netproxy
+
+    provider = model.split("/", 1)[0]
+    env = netproxy.child_env(proxy)
+    env["NO_COLOR"] = "1"
+    try:
+        done = subprocess.run(
+            [path, "models", provider], capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=60, env=env, creationflags=_NO_WINDOW,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"OpenCode не ответил на opencode models: {type(e).__name__}: {e}"
+    out = _ANSI.sub("", done.stdout or "")
+    err = _ANSI.sub("", done.stderr or "")
+    if done.returncode != 0:
+        if "provider not found" in (err + out).lower():
+            return False, (f"провайдер {provider} не подключён в OpenCode — выполните "
+                           "opencode auth login")
+        return False, _tail(err or out) or f"код выхода {done.returncode}"
+    if model in {line.strip() for line in out.splitlines()}:
+        return True, None
+    return False, (f"у OpenCode нет модели {model} — список: opencode models {provider}")
+
+
 def logged_in(name: str, path: str) -> tuple[bool, str | None]:
     """Вошёл ли пользователь в CLI провайдера. (True, None) или (False, текст)."""
     if name == "opencode":

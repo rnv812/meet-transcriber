@@ -207,3 +207,36 @@ def test_auth_file_check(monkeypatch, tmp_path):
     auth.unlink()
     monkeypatch.setenv("OPENCODE_AUTH_CONTENT", '{"openai": {"type": "api", "key": "sk"}}')
     assert detect.opencode_auth_present() is True
+
+
+# --- модель из настроек есть у OpenCode (`opencode models <провайдер>`) ---------------
+
+
+def test_model_listed(monkeypatch):
+    seen = {}
+
+    def run(cmd, **kw):
+        seen["cmd"], seen["env"] = cmd, kw.get("env")
+        return _Done(0, "openai/gpt-5\nopenai/gpt-5-mini\n")
+
+    monkeypatch.setattr(detect.subprocess, "run", run)
+    assert detect.opencode_model_listed("C:/oc/opencode.exe", "openai/gpt-5", "none") == (True, None)
+    assert seen["cmd"] == ["C:/oc/opencode.exe", "models", "openai"]
+    ok, why = detect.opencode_model_listed("C:/oc/opencode.exe", "openai/gpt-6", "none")
+    assert ok is False and "openai/gpt-6" in why and "opencode models openai" in why
+
+
+def test_model_provider_not_connected(monkeypatch):
+    monkeypatch.setattr(detect.subprocess, "run",
+                        lambda *a, **k: _Done(1, "", "Error: Provider not found: anthropic"))
+    ok, why = detect.opencode_model_listed("opencode", "anthropic/claude-sonnet-4-5", None)
+    assert ok is False and "anthropic" in why and "opencode auth login" in why
+
+
+def test_model_listing_fails(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("нет файла")
+
+    monkeypatch.setattr(detect.subprocess, "run", boom)
+    ok, why = detect.opencode_model_listed("opencode", "openai/gpt-5", None)
+    assert ok is False and why

@@ -44,7 +44,7 @@ if attach:
     tap.sendall(os.environ["MEET_TAP_TOKEN"].encode("ascii") + b"\n")
     note("tap_header", tap.makefile("rb").readline().decode("utf-8").strip())
 if mode == "no-provider":
-    print("Подключите Claude Code или Codex в настройках", file=sys.stderr, flush=True)
+    print("Подключите Claude Code, Codex или OpenCode в настройках", file=sys.stderr, flush=True)
     sys.exit(1)
 if mode == "slow":
     time.sleep(60)
@@ -320,7 +320,7 @@ def test_child_failing_before_endpoint_reports_its_text_promptly(make_live, data
     _wait_for(lambda: live_control.LIVE_FAILED in rec.kinds())
     assert time.monotonic() - began < 10  # не ждём 60 с таймаута старта
     error = rec.last(live_control.LIVE_FAILED).data["error"]
-    assert error == "Подключите Claude Code или Codex в настройках"
+    assert error == "Подключите Claude Code, Codex или OpenCode в настройках"
     status = live.status()
     assert status["active"] is False and status["starting"] is False
     assert status["error"] == error
@@ -811,7 +811,7 @@ def test_live_start_without_provider_is_conflict(resident, monkeypatch):
     monkeypatch.setattr(detect, "available", lambda base_url=None: {})
     with pytest.raises(control.Conflict) as e:
         resident.live_start()
-    assert "Подключите Claude Code или Codex" in str(e.value)
+    assert "Подключите Claude Code, Codex или OpenCode" in str(e.value)
     assert resident.stub.argv is None
 
 

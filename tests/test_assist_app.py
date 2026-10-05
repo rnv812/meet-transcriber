@@ -378,7 +378,7 @@ def test_no_provider_exits_with_clear_error(tmp_path, monkeypatch):
     heavy = _Heavy(monkeypatch, resolved=(None, None))
     with pytest.raises(SystemExit) as exc:
         _run(tmp_path, open_browser=False, port=0)
-    assert "Подключите Claude Code или Codex в настройках" in str(exc.value.code)
+    assert "Подключите Claude Code, Codex или OpenCode в настройках" in str(exc.value.code)
     assert heavy.engine is None and heavy.auth_calls == 0
 
 
