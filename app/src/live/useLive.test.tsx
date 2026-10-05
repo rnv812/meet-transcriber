@@ -205,3 +205,40 @@ test("ответ, который пишется: куски qa_partial видн�
   expect(result.current.qa[0]!.partial).toBeUndefined();          // готовый ответ — в истории
   expect(result.current.qa[0]!.a).toBe("Предлагаю перенести релиз.");
 });
+
+test("имя голоса задним числом: прежние строки переподписаны, дубли спрятаны", () => {
+  const { result } = renderHook(() => useLive(ep));
+  const es = liveSources().at(-1)!;
+  const said = (i: number, voice?: string) => ({ t: i, speaker: "Собеседник", text: `реплика ${i}`, ...(voice ? { voice } : {}) });
+  act(() => {
+    es.emit("voices", { rev: 0, speakers: {}, hidden: [] });
+    es.emit("line", said(0, "sys:0"), 0);
+    es.emit("line", said(1, "sys:1"), 1);
+    es.emit("line", said(2), 2);
+  });
+  expect(result.current.lines.map((l) => l.speaker)).toEqual(["Собеседник", "Собеседник", "Собеседник"]);
+  act(() => es.emit("voices", { rev: 1, speakers: { "sys:0": "Демьян" }, hidden: [1] }));
+  expect(result.current.lines.map((l) => [l.id, l.speaker])).toEqual([[0, "Демьян"], [2, "Собеседник"]]);
+  // Новая строка того же голоса приходит уже с именем — и показывается с ним же.
+  act(() => es.emit("line", { ...said(3, "sys:0"), speaker: "Демьян" }, 3));
+  expect(result.current.lines.at(-1)!.speaker).toBe("Демьян");
+  // Строка хранится как пришла: подпись — только на показе.
+  expect(result.current.lines[0]).toEqual({ ...said(0, "sys:0"), id: 0, speaker: "Демьян" });
+});
+
+test("переподключение: карта голосов — заново с каждого подключения", async () => {
+  vi.useFakeTimers();
+  const { result } = renderHook(() => useLive(ep));
+  const first = liveSources().at(-1)!;
+  act(() => {
+    first.emit("line", { t: 0, speaker: "Собеседник", text: "привет", voice: "sys:0" }, 0);
+    first.emit("voices", { rev: 3, speakers: { "sys:0": "Демьян" }, hidden: [] });
+  });
+  expect(result.current.lines[0]!.speaker).toBe("Демьян");
+  act(() => first.fail(true));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  const second = liveSources().at(-1)!;
+  // Другой ассистент: его карта пуста — чужое имя к строке не прилипает.
+  act(() => second.emit("voices", { rev: 0, speakers: {}, hidden: [] }));
+  expect(result.current.lines[0]!.speaker).toBe("Собеседник");
+});

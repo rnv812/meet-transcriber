@@ -14,6 +14,12 @@
  * который ещё пишется, приходит кусками (`qa_partial`) и виден по мере
  * генерации; окно обновляет его не чаще 10 раз в секунду (PARTIAL_MS).
  *
+ * Имя голоса приходит позже его первых строк (ассистенту нужно ~10 с речи):
+ * событие `voices` — карта «ключ голоса → подпись» и номера спрятанных
+ * строк-дублей, состояние целиком. Строки хранятся как пришли, а лента
+ * показывает их через карту (`useMemo`); при каждом подключении ассистент
+ * шлёт карту заново — переподключение и новый ассистент её не путают.
+ *
  * Действие с подсказкой (закрепить, скрыть) видно сразу, до ответа
  * ассистента: оно лежит поверх его состояния, пока следующее `state` не
  * пришло; не дошло — откатывается.
@@ -90,6 +96,21 @@ export type Live = {
   setTask: (task: string) => Promise<void>;
 };
 
+/** Подписи голосов задним числом и спрятанные строки (`event: voices`). */
+type Voices = { speakers: Record<string, string>; hidden: Set<number> };
+const NO_VOICES: Voices = { speakers: {}, hidden: new Set() };
+
+/** Лента глазами человека: без спрятанных дублей, с подписями голосов на сейчас. */
+export function voicedLines(lines: FeedLine[], voices: Voices): FeedLine[] {
+  if (!voices.hidden.size && !Object.keys(voices.speakers).length) return lines;
+  return lines
+    .filter((l) => l.id === null || !voices.hidden.has(l.id))
+    .map((l) => {
+      const speaker = l.voice ? voices.speakers[l.voice] : undefined;
+      return speaker !== undefined && speaker !== l.speaker ? { ...l, speaker } : l;
+    });
+}
+
 /** Действие с подсказкой, которое ассистент ещё не подтвердил своим `state`. */
 type Pending = Record<string, { action: HintAction; done: boolean }>;
 
@@ -123,6 +144,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
   const [asking, setAsking] = useState(false);
   const [askError, setAskError] = useState<string | null>(null);
   const [hintError, setHintError] = useState<{ id: string; text: string; action?: HintAction } | null>(null);
+  const [voices, setVoices] = useState<Voices>(NO_VOICES);
   const lastId = useRef(-1);
   const askSeq = useRef(0);
 
@@ -185,6 +207,10 @@ export function useLive(ep: Endpoint | null, active = true): Live {
           }
           setLines((cur) => addLine(cur, { ...line, id }));
         },
+        onVoices: (v) => {
+          alive();
+          setVoices({ speakers: v.speakers, hidden: new Set(v.hidden) });
+        },
         onError: (gaveUp) => {
           if (!gaveUp || closed) return; // браузер переподключится сам
           stream?.close();
@@ -243,13 +269,15 @@ export function useLive(ep: Endpoint | null, active = true): Live {
     await liveTask(ep, task);
   }, [ep]);
 
+  const linesView = useMemo(() => voicedLines(lines, voices), [lines, voices]);
+
   const qaView = useMemo(
     () => qa.map((it) => (it.pending && partials[it.id] ? { ...it, partial: partials[it.id] } : it)),
     [qa, partials],
   );
 
   return {
-    status, lines, digest, summary, hints: withPending(hints, pending), hintsEnabled, quietDefault, catchup, qa: qaView, loaded, error,
+    status, lines: linesView, digest, summary, hints: withPending(hints, pending), hintsEnabled, quietDefault, catchup, qa: qaView, loaded, error,
     asking, askError, hintError, ask, hint, setTask,
   };
 }

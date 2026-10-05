@@ -123,6 +123,16 @@ test("openLiveEvents: токен в query, state и line разбираются,
   expect(source.closed).toBe(true);
 });
 
+test("openLiveEvents: voices — подписи голосов и спрятанные строки; мусор отбрасывается", () => {
+  const onVoices = vi.fn();
+  api.openLiveEvents({ base: "http://h", token: null }, { onVoices });
+  const source = FakeEventSource.instances.at(-1)!;
+  source.emit("voices", { rev: 2, speakers: { "sys:0": "Демьян", "sys:1": 5 }, hidden: [3, "x"] });
+  expect(onVoices).toHaveBeenCalledWith({ rev: 2, speakers: { "sys:0": "Демьян" }, hidden: [3] });
+  source.emit("voices", { speakers: {} });
+  expect(onVoices).toHaveBeenCalledTimes(1);
+});
+
 test("openLiveEvents: onError говорит, сдался ли браузер (409) или переподключается сам", () => {
   const onError = vi.fn();
   api.openLiveEvents({ base: "http://h", token: null }, { onError });

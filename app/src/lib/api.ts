@@ -10,7 +10,7 @@
 
 import { inTauri, invoke } from "./shell";
 import type {
-  AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, Person, PersonCard, ProfilesRemovedNotice,
+  AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, LiveVoices, Person, PersonCard, ProfilesRemovedNotice,
   Category, OwnerVoiceStatus, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript,
@@ -631,6 +631,8 @@ export function openLiveEvents(
     /** Кусок ответа, который ещё пишется (`qa_partial`): текст ответа на сейчас. */
     onQaPartial?: (part: LiveQaPartial) => void;
     onLine?: (l: LiveLine, id: number | null) => void;
+    /** Подписи голосов задним числом и спрятанные дубли — состояние целиком. */
+    onVoices?: (v: LiveVoices) => void;
     onError?: (closed: boolean) => void;
   },
 ): { close: () => void } {
@@ -655,6 +657,18 @@ export function openLiveEvents(
     const data = parseEvent(event.data);
     const id = event.lastEventId === "" ? NaN : Number(event.lastEventId);
     if (data) handlers.onLine?.(data as LiveLine, Number.isFinite(id) ? id : null);
+  });
+  source.addEventListener("voices", (m) => {
+    const data = parseEvent((m as MessageEvent<string>).data) as Partial<LiveVoices> | null;
+    if (!data || typeof data.rev !== "number") return;
+    const speakers: Record<string, string> = {};
+    if (data.speakers && typeof data.speakers === "object") {
+      for (const [voice, speaker] of Object.entries(data.speakers)) {
+        if (typeof speaker === "string") speakers[voice] = speaker;
+      }
+    }
+    const hidden = Array.isArray(data.hidden) ? data.hidden.filter((i): i is number => typeof i === "number") : [];
+    handlers.onVoices?.({ rev: data.rev, speakers, hidden });
   });
   source.onerror = () => handlers.onError?.(source.readyState === EventSource.CLOSED);
   return { close: () => source.close() };

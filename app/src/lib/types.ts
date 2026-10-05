@@ -731,9 +731,18 @@ export type LiveCatchup = {
 /**
  * `event: line`: новая строка ленты; `t` — секунды от начала записи.
  * `catchup` — строка догнанного начала встречи (приходит позже живых, а
- * стоит раньше них).
+ * стоит раньше них). `voice` — ключ голоса строки (`sys:3`, `mic:1`): имя
+ * голоса может прийти позже (`event: voices`).
  */
-export type LiveLine = { t: number; speaker: string | null; text: string; catchup?: boolean };
+export type LiveLine = { t: number; speaker: string | null; text: string; catchup?: boolean; voice?: string };
+
+/**
+ * `event: voices`: подписи голосов, пришедшие задним числом (`speakers`:
+ * ключ голоса → подпись), и номера спрятанных строк-дублей (`hidden`, как
+ * `id:` строк). Состояние целиком, а не дельта: приходит при каждом
+ * подключении и при каждой смене `rev`.
+ */
+export type LiveVoices = { rev: number; speakers: Record<string, string>; hidden: number[] };
 
 // --- анализ встречи (analysis.json, M2) ------------------------------------------
 
