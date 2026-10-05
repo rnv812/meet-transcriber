@@ -185,6 +185,8 @@ class Turn:
     norm: str = ""
     # Слова реплики (tokenize): разбираются один раз и живут в кэше с репликой.
     tokens: list = field(default_factory=list)
+    # library.turn_mark первого сегмента: реплики с разной пометкой не склеиваются.
+    mark: tuple = (False, False)
 
 
 def turns_of(segments) -> list[Turn]:
@@ -205,14 +207,15 @@ def turns_of(segments) -> list[Turn]:
             continue
         speaker = nfc(str(seg.get("speaker") or "")) or NO_SPEAKER  # пустой — как null, как в окне
         text = nfc(str(seg.get("text") or ""))
-        if out and out[-1].speaker == speaker and out[-1].speaker and start - end < GAP_S:
+        mark = library.turn_mark(seg)
+        if out and out[-1].speaker == speaker and out[-1].speaker and out[-1].mark == mark and start - end < GAP_S:
             parts.append(text)
             end = max(end, float(seg.get("end") or start))
             out[-1].text = " ".join(parts)
         else:
             parts = [text]
             end = float(seg.get("end") or start)
-            out.append(Turn(start, str(speaker), text))
+            out.append(Turn(start, str(speaker), text, mark=mark))
     for turn in out:
         turn.norm = norm_word(turn.text)
         turn.tokens = tokenize(turn.text)

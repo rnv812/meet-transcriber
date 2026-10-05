@@ -249,6 +249,15 @@ def final_transcript(folder: Path) -> dict | None:
     return None if is_text_phase(data) else data
 
 
+def turn_mark(segment: dict) -> tuple[bool, bool]:
+    """Чем подряд идущие сегменты одного спикера не склеиваются в одну реплику
+    (окно, поиск, правка спикеров — одинаково): микрофон и звонок — разные
+    реплики (человек в комнате — та же подпись, что у его кластера в звонке),
+    голос микрофона под вопросом — отдельная."""
+    mic = isinstance(segment, dict) and segment.get("track") == "mic"
+    return mic, mic and bool(segment.get("uncertain"))
+
+
 def display_names(segments: list[dict]) -> dict[str, str]:
     """Сырая метка SPEAKER_XX → «Спикер N» в порядке первого появления.
 

@@ -209,12 +209,13 @@ def _turns(segments: list[dict], shown: list[str | None]) -> list[dict]:
         except (TypeError, ValueError):
             continue
         last = out[-1] if out else None
-        if label and last and last["label"] == label and start - last["end"] < GAP_S:
+        mark = library.turn_mark(s)
+        if label and last and last["label"] == label and last["mark"] == mark and start - last["end"] < GAP_S:
             last["end"] = max(last["end"], end)
             last["texts"].append(str(s.get("text") or ""))
             last["uncertain"] = last["uncertain"] or bool(s.get("uncertain"))
         else:
-            out.append({"label": label, "start": start, "end": end,
+            out.append({"label": label, "start": start, "end": end, "mark": mark,
                         "texts": [str(s.get("text") or "")], "uncertain": bool(s.get("uncertain"))})
     return out
 
@@ -349,6 +350,9 @@ def overview(folder: Path, voices_dir: Path, owner: str = "Вы") -> dict:
     clusters = _clusters(data, sidecar, set(order))
     base = _base_without(voices_dir, folder.name, (sidecar or {}).get("source")) if clusters else {}
     tracks = _tracks(folder, data, shown)
+    from meet import segvoices
+
+    owners = segvoices.owner_labels(folder, data)
     rows = []
     for label in order:
         entries = clusters.get(label, [])
@@ -364,6 +368,12 @@ def overview(folder: Path, voices_dir: Path, owner: str = "Вы") -> dict:
             # Звонок: где звучит спикер — "mic" (микрофон: вы или человек в
             # комнате), "sys" (звонок), "mixed"; не звонок — None.
             "track": tracks.get(label),
+            # Человек рядом с владельцем в комнате: говорит в микрофон и не
+            # владелец (segvoices.owner_labels — то же правило, что у реплик окна).
+            "room": tracks.get(label) in ("mic", "mixed") and label not in owners,
+            # Голос строки — только голос владельца (OWNER): в базу людей он не
+            # записывается («Запомнить мой голос» — отдельно).
+            "owner_voice_only": bool(entries) and all(e.get("owner") for e in entries),
         })
     meta = library.read_meta(folder)
     steps, pos = _history_of(meta, data)
@@ -515,6 +525,9 @@ def _enroll(folder: Path, sidecar: dict | None, person: str, entries: list[dict]
                     "label": str(entry.get("label") or entry["display"]),
                     "created": got["created"], "replaced": got["replaced"]})
     return out
+
+
+OWNER_NOT_ENROLLED = "Ваш голос в базу людей не записывается — используйте «Запомнить мой голос»"
 
 
 def _no_voice(name: str) -> str:
@@ -865,7 +878,14 @@ def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
             segments[i]["speaker"] = d["to"]
     _set_names(data, names_after)
 
-    errors = [_no_voice(finals[label]) for label in wanted if not clusters.get(label)]
+    # Голос владельца (OWNER) в базу людей не пишется (speakers-design §1.1):
+    # для своего голоса — «Запомнить мой голос» (owner_parts посчитаны выше,
+    # до этого фильтра).
+    owned = {label for label in wanted if any(e.get("owner") for e in clusters.get(label, []))}
+    clusters = {label: [e for e in entries if not e.get("owner")] for label, entries in clusters.items()}
+    errors = [_no_voice(finals[label]) for label in wanted if not clusters.get(label) and label not in owned]
+    if owned and not owner_parts:
+        errors.append(OWNER_NOT_ENROLLED)
     if remember_owner and not owner_parts:
         errors.append(NO_OWNER_VOICE)
     step = {
@@ -1052,7 +1072,8 @@ def _turn_count(segments: list[dict], chosen: list[int]) -> int:
     n, prev = 0, None
     for i in chosen:
         s = segments[i]
-        if prev is not None and i == prev + 1 and segments[prev].get("speaker") == s.get("speaker"):
+        if (prev is not None and i == prev + 1 and segments[prev].get("speaker") == s.get("speaker")
+                and library.turn_mark(segments[prev]) == library.turn_mark(s)):
             try:
                 if float(s["start"]) - float(segments[prev]["end"]) < GAP_S:
                     prev = i

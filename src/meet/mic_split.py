@@ -291,26 +291,33 @@ def _groups(wins: list[Window]) -> list[list[Window]]:
     return list(groups.values())
 
 
-def _roles(wins: list[Window], owner, device: str | None) -> tuple[str, bool, list[dict], list[list[Window]]]:
+def _roles(wins: list[Window], owner, device: str | None
+           ) -> tuple[str, bool, list[dict], list[list[Window]], np.ndarray | None]:
     """Роли окон с голосом по образцу владельца. → (статус, быстрый путь,
-    кластеры для mic_voices.json, группы окон в том же порядке)."""
+    кластеры для mic_voices.json, группы окон в том же порядке, кандидат в
+    голос владельца при owner_not_found — центроид крупнейшего голоса от
+    OWNER_PRESENT_SHARE речи)."""
     voiced = [w for w in wins if w.emb is not None]
     secs = np.array([w.seconds for w in voiced])
     if secs.sum() < MIN_VOICED_S:
         # Голоса почти нет (короткие окна, эмбеддер не справился): решать
         # «по голосу владельца» не на чем.
-        return STATUS_NO_VOICE, False, [], []
+        return STATUS_NO_VOICE, False, [], [], None
     if _fast(voiced, owner, device):
         c = _centroid(voiced)
         return STATUS_OK, True, [{"id": None, "seconds": round(float(secs.sum()), 2),
                                   "owner_cos": round(owner_voice.score(c, owner, device), 3),
-                                  "role": "owner", "label": None, "link": None}], [voiced]
+                                  "role": "owner", "label": None, "link": None}], [voiced], None
     groups = _groups(voiced)
     total = float(secs.sum())
     info = [{"seconds": sum(w.seconds for w in g), "cos": owner_voice.score(_centroid(g), owner, device)}
             for g in groups]
     if not any(i["seconds"] >= OWNER_PRESENT_SHARE * total and i["cos"] >= T_OTHER for i in info):
-        return STATUS_NOT_FOUND, False, [], []
+        # Образец не узнал владельца (другой микрофон, шум): крупнейший голос
+        # микрофона — кандидат, по нему «Это я» поправит образец из встречи.
+        big = max(range(len(groups)), key=lambda k: info[k]["seconds"])
+        candidate = _centroid(groups[big]) if info[big]["seconds"] >= OWNER_PRESENT_SHARE * total else None
+        return STATUS_NOT_FOUND, False, [], [], candidate
     clusters = []
     for g, i in zip(groups, info):
         if i["cos"] >= T_OWN:
@@ -323,7 +330,7 @@ def _roles(wins: list[Window], owner, device: str | None) -> tuple[str, bool, li
             w.role = role
         clusters.append({"id": None, "seconds": round(i["seconds"], 2), "owner_cos": round(i["cos"], 3),
                          "role": role, "label": None, "link": None})
-    return STATUS_OK, False, clusters, groups
+    return STATUS_OK, False, clusters, groups, None
 
 
 def _name_room(center: np.ndarray, diar, names: dict, base: dict, threshold: float) -> tuple[str | None, dict]:
@@ -402,6 +409,38 @@ def _rebuild(segs: list[Segment], dropped: set, label_of=None, track: str | None
     return out
 
 
+def _release() -> None:
+    """Эмбеддер, загруженный здесь, отпущен: видеопамять — следующим шагам
+    (как распознавание: del model, empty_cache)."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def _leak_voice(sys_audio, embed, owner, device: str | None):
+    """Голос отрезка sys похож на образец владельца (от T_OWN) — улика утечки
+    владельца (mic_dedupe): отрезок короче EMBED_MIN — не улика."""
+    def check(start: float, end: float) -> bool:
+        a, b = max(0, int(start * SAMPLE_RATE)), max(0, int(end * SAMPLE_RATE))
+        clip = sys_audio[a:b].astype(np.float32) / 32768.0
+        if clip.size < int(EMBED_MIN * SAMPLE_RATE):
+            return False
+        try:
+            with _torch_threads(EMBED_THREADS):
+                vec = embed(clip)
+        except Exception:
+            return False
+        vec = None if vec is None else np.asarray(vec, dtype=np.float64)
+        if vec is None or not vec.size or not np.isfinite(vec).all() or not np.linalg.norm(vec):
+            return False
+        return owner_voice.score(vec, owner, device) >= T_OWN
+    return check
+
+
 def _load_embedder(log) -> tuple:
     """Эмбеддер segvoices. → (эмбеддер, статус). Нет токена HF —
     skipped_no_token (подсказка про токен), прочие сбои — skipped_error."""
@@ -433,7 +472,7 @@ def _toks(segs: list[Segment], track: str, role_of=None) -> list[mic_dedupe.Tok]
 def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav: Path, diar, *,
         owner: list, base: dict, threshold: float, owner_label: str, embed=None, log=print,
         names: dict | None = None, device: str | None = None, speakers: bool = True,
-        dedupe: bool = True, no_token: bool = False) -> MicResult:
+        dedupe: bool = True, no_token: bool = False, aligned: bool | None = None) -> MicResult:
     """Микрофон по голосам и без дублей.
 
     mic_segs — распознанный микрофон (слова с таймкодами); sys_segs — sys
@@ -444,7 +483,12 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
     speakers/dedupe — настройки asr.mic_speakers / asr.mic_dedupe. `embed`
     (звук → вектор) подменяется в тестах; None — эмбеддер segvoices.
     no_token — диаризация уже не получила модель (нет токена HF или
-    доступа): эмбеддер из того же чекпойнта и не пробуем."""
+    доступа): эмбеддер из того же чекпойнта и не пробуем (и образец без неё
+    не записать — статус «нет токена», а не «нет образца»). aligned —
+    выравнивались ли слова sys (wav2vec): лаги пар — для калибровки.
+
+    Эмбеддер, загруженный здесь, — вторая копия WeSpeaker после того, как
+    pyannote свою уже отпустил (~3 с загрузки); в конце он отпускается."""
     from meet.diarize import DIARIZATION_MODEL
 
     names = names or {}
@@ -458,18 +502,20 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
             mic_audio = _read(mic_wav)
         except (Exception, SystemExit) as e:
             log(f"микрофон: звук не прочитать, разделения и дублей нет ({type(e).__name__})")
-    status, fast, clusters, groups = STATUS_OK, False, [], []
+    status, fast, clusters, groups, candidate = STATUS_OK, False, [], [], None
+    loaded = False
     if not speakers:
         status = STATUS_OFF
+    elif no_token and embed is None and wins:
+        status = STATUS_NO_TOKEN
     elif not owner:
         status = STATUS_NO_PROFILE
     elif wins and mic_audio is None:
         status = STATUS_ERROR
     elif wins:
-        if embed is None and no_token:
-            status = STATUS_NO_TOKEN
-        elif embed is None:
+        if embed is None:
             embed, status = _load_embedder(log)
+            loaded = embed is not None
         if embed is not None:
             # Голос — у всех окон: быстрый путь по выборке пропускал соседа,
             # говорящего несколько процентов времени, и тот становился «Вы»,
@@ -481,7 +527,7 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
                 log(f"микрофон: голоса окон не посчитать, разделения нет ({type(e).__name__})")
                 status = STATUS_ERROR
             else:
-                status, fast, clusters, groups = _roles(wins, owner, device)
+                status, fast, clusters, groups, candidate = _roles(wins, owner, device)
     split = status == STATUS_OK
     if not split:
         for win in wins:
@@ -525,7 +571,7 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
     lags = None
     if want_dedupe:
         mic_toks, sys_toks = _toks(mic_segs, "mic", role_of), _toks(sys_segs, "sys")
-        env = None
+        env = leak_voice = None
         if mic_audio is not None:
             try:
                 sys_audio = _read(sys_wav)
@@ -533,7 +579,10 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
                                                      speech=[(t.start, t.end) for t in mic_toks])
             except (Exception, SystemExit) as e:
                 log(f"микрофон: громкость дорожек не прочитать, дубли только по словам ({type(e).__name__})")
-        drops, lags = mic_dedupe.find(mic_toks, sys_toks, owner_known=split, env=env)
+            else:
+                if split and embed is not None:
+                    leak_voice = _leak_voice(sys_audio, embed, owner, device)
+        drops, lags = mic_dedupe.find(mic_toks, sys_toks, owner_known=split, env=env, leak_voice=leak_voice)
     gone = {"mic": set(), "sys": set()}
     for d in drops:
         for w in d.words:
@@ -548,6 +597,10 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
     if owner_center is not None:
         sidecar.append({"label": OWNER_LABEL, "display": owner_label,
                         "embedding": [float(v) for v in owner_center], "track": "mic", "owner": True})
+    elif candidate is not None:
+        # owner_not_found: не проверенный образцом голос, только кандидат.
+        sidecar.append({"label": OWNER_LABEL, "display": owner_label, "embedding": [float(v) for v in candidate],
+                        "track": "mic", "owner": True, "candidate": True})
     for c in clusters:
         if c["role"] == "room" and c["label"] in present:
             center = room_center[f"SPEAKER_{c['id']}"]
@@ -559,8 +612,14 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
               "owner_profile": owner_voice.best_source(owner_center, owner, device) if owner_center is not None
               else None,
               "room_speakers": len(room_labels), "dropped": counts}
+    lag_s = lags.to_raw() if lags is not None else None
+    if lag_s is not None:
+        lag_s["align"] = aligned
     voices_file = {"version": 1, "rule": RULE, "model": DIARIZATION_MODEL, "status": status, "fast": fast,
-                   "lag_s": lags.to_raw() if lags is not None else None, "clusters": clusters, "dropped": dropped}
+                   "align": aligned, "lag_s": lag_s, "clusters": clusters, "dropped": dropped}
+    if loaded:
+        del embed
+        _release()
     log(f"микрофон: окон {len(wins)}, голосов {len(clusters)}, людей в комнате {len(room_labels)}, "
         f"убрано дублей {len(drops)} ({status}{', быстрый путь' if fast else ''})")
     return MicResult(mic=mic_out, sys=sys_out, dropped=dropped, sidecar=sidecar, report=report, voices=voices_file)

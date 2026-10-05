@@ -391,6 +391,20 @@ def test_owner_not_found_falls_back_to_today(tmp_path):
     got, _ = _run(_meeting(tmp_path, room1=True), _owner(_e(ROOM2)))
     assert got.report["status"] == "owner_not_found"
     assert {s.speaker for s in got.mic} == {"Вы"} and not any(s.uncertain for s in got.mic)
+    # Кандидат в голос владельца — крупнейший голос микрофона, с пометкой:
+    # по нему «Это я + Запомнить мой голос» может поправить плохой образец.
+    (entry,) = got.sidecar
+    assert entry["label"] == "OWNER" and entry["owner"] is True and entry["candidate"] is True
+    assert entry["display"] == "Вы" and entry["track"] == "mic"
+    center = np.asarray(entry["embedding"])
+    assert max(center @ _e(OWNER), center @ _e(ROOM1)) > 0.8
+
+
+def test_no_token_and_no_sample_says_no_token(tmp_path):
+    """Без токена HF образец всё равно не записать (та же модель): статус —
+    «нет токена», а не «нет образца»."""
+    got, _ = _run(_meeting(tmp_path, room1=True), [], embed=None, no_token=True)
+    assert got.report["status"] == "skipped_no_token"
 
 
 def test_owner_sample_of_this_device_is_preferred(tmp_path):
@@ -617,6 +631,23 @@ def test_owner_voice_leaking_into_sys_is_dropped_from_sys(tmp_path):
     assert len(got.mic) == len(OWNER_PHRASES)
     assert got.report["dropped"]["owner_leak"] == 4
     assert got.dropped[0]["track"] == "sys"
+
+
+def test_same_words_in_sys_by_another_voice_are_not_an_owner_leak(tmp_path):
+    """Собеседник в sys повторил мои фразы с тем же лагом и ритмом, но голос
+    копии — не мой (по образцу): его слова в sys остаются."""
+    sys_phrases = [(_words(t, s + LEAK_LAG), ROOM2) for s, t in OWNER_PHRASES]
+    meeting = _meeting(tmp_path, sys_phrases=sys_phrases)
+    got, _ = _run(meeting, _owner())
+    assert got.report["dropped"]["owner_leak"] == 0 and got.sys == meeting[1]
+
+
+def test_alignment_state_is_recorded(tmp_path):
+    sys_phrases = [(_words(t, s + 0.4), ROOM1) for s, t in ROOM1_PHRASES]
+    got, _ = _run(_meeting(tmp_path, room1=True, sys_phrases=sys_phrases), _owner(), aligned=True)
+    assert got.voices["align"] is True and got.voices["lag_s"]["align"] is True
+    got, _ = _run(_meeting(tmp_path, room1=True), _owner())
+    assert got.voices["align"] is None
 
 
 def test_partial_sys_drop_keeps_rest_of_segment(tmp_path):

@@ -300,8 +300,12 @@ def enroll(path_str: str, mappings: list[str], folder: Path | None = None) -> No
     for s in data["speakers"]:
         # если два кластера авто-совпали с одним человеком, их display-имена
         # совпадают и побеждает последняя запись — приемлемо: авто-совпавших
-        # спикеров в описанном сценарии повторно не энроллят
-        by_key[s["display"]] = s
+        # спикеров в описанном сценарии повторно не энроллят. Человек в комнате
+        # с голосом кластера звонка (meet.mic_split, `track: "mic"`) делит с ним
+        # подпись — по подписи берётся кластер звонка.
+        shown = by_key.get(s["display"])
+        if shown is None or (shown.get("track") and not s.get("track")):
+            by_key[s["display"]] = s
         by_key[s["label"]] = s
     source = data.get("source", str(sidecar))
     date = data.get("date", "")
@@ -319,6 +323,9 @@ def enroll(path_str: str, mappings: list[str], folder: Path | None = None) -> No
         if entry is None:
             known = ", ".join(s["display"] for s in data["speakers"])
             raise SystemExit(f"В {sidecar.name} нет спикера «{who}»; есть: {known}")
+        if entry.get("owner"):
+            raise SystemExit(f"«{who}» — ваш голос с микрофона: в базу людей он не записывается "
+                             "(для своего голоса — «Запомнить мой голос» в окне)")
         try:
             name = valid_name(name)
         except ValueError as e:

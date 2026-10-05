@@ -346,16 +346,16 @@ def _in_room(segment, owners: set[str]) -> bool:
             and isinstance(segment.get("speaker"), str) and segment["speaker"] not in owners)
 
 
-def _window_transcript(data: dict | None) -> dict | None:
+def _window_transcript(data: dict | None, folder: Path | None = None) -> dict | None:
     """Транскрипт для окна: сырые SPEAKER_XX — «Спикер N», слова с таймкодами
     убраны (их много), вместо них — `has_words` у сегмента; у реплик людей в
-    комнате (микрофон, не владелец) — `room`."""
+    комнате (микрофон, не владелец по segvoices.owner_labels) — `room`."""
     from meet import segvoices
 
     data = library.with_display_names(data)
     if not data or not isinstance(data.get("segments"), list):
         return data
-    owners = segvoices.owners()
+    owners = segvoices.owner_labels(folder, data)
     segments = [_for_window(s) for s in data["segments"]]
     segments = [{**s, "room": True} if _in_room(s, owners) else s for s in segments]
     return {**data, "segments": segments}
@@ -1635,7 +1635,7 @@ class TrayControl:
         if card is None:
             return {"error": "записи нет"}
         raw = card.to_raw()
-        raw["transcript"] = _window_transcript(library.read_transcript_full(folder))
+        raw["transcript"] = _window_transcript(library.read_transcript_full(folder), folder)
         raw["edit_head"] = self._edit_head(folder)
         jira = self._jira_refs(folder, raw["transcript"])
         if jira is not None:
@@ -1846,7 +1846,7 @@ class TrayControl:
         """Транскрипт для окна: без слов с таймкодами (их много, окну нужно
         только знать, можно ли резать реплику по слову — `has_words`)."""
         folder = self._folder(recording_id)
-        data = _window_transcript(library.read_transcript_full(folder) if folder else None)
+        data = _window_transcript(library.read_transcript_full(folder) if folder else None, folder)
         return data or {"error": "транскрипта нет"}
 
     def export(self, recording_id: str, fmt: str) -> dict:

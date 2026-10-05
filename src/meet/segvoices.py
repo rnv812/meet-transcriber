@@ -110,6 +110,37 @@ def owners() -> set[str]:
         return {"Вы"}
 
 
+def owner_labels(folder: Path | None, data: dict | None) -> set[str]:
+    """Подписи владельца микрофона в этой расшифровке — одно правило для
+    «в комнате» у реплик окна и у строк панели «Спикеры»: «Вы», нынешнее и
+    прежние имена из настроек (`owners`) и голос `OWNER` сайдкара записи
+    (meet.mic_split) — каждая с переименованиями этой встречи (`names`):
+    владелец, переименованный в «Кузьма», остаётся владельцем."""
+    names = (data or {}).get("names") if isinstance((data or {}).get("names"), dict) else {}
+
+    def resolve(label: str) -> str:
+        seen = {label}
+        while isinstance(names.get(label), str) and names[label] not in seen:
+            label = names[label]
+            seen.add(label)
+        return label
+
+    found = set(owners())
+    if folder is not None:
+        for path in sorted(Path(folder).glob("*_speakers.json"), reverse=True):
+            try:
+                side = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            entries = side.get("speakers") if isinstance(side, dict) else None
+            if not isinstance(entries, list):
+                continue
+            found |= {e["display"] for e in entries
+                      if isinstance(e, dict) and e.get("owner") and isinstance(e.get("display"), str)}
+            break
+    return found | {resolve(label) for label in found}
+
+
 def span(seg: dict) -> str:
     return f"{float(seg['start']):.2f}-{float(seg['end']):.2f}"
 

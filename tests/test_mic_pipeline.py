@@ -148,6 +148,8 @@ def test_mic_split_gets_the_meeting_and_its_settings(pipeline, monkeypatch):
     assert call["owner"] == owner and set(call["base"]) == {"Анна"}
     assert call["owner_label"] == "Вы" and call["device"] == "Микрофон (USB)"
     assert call["speakers"] is True and call["dedupe"] is True and call["no_token"] is False
+    # Слова sys не выравнивались (align=False): так и записано для калибровки лагов.
+    assert call["aligned"] is False
     assert call["threshold"] == pytest.approx(tr.voice_threshold(folder))
 
 
@@ -619,3 +621,259 @@ def test_person_sample_plays_the_track_the_person_spoke_on(call, tmp_path):
     assert people.sample("Пётр", voices, rec) == {"recording": folder.name, "start": 5.2, "end": 5.9,
                                                   "track": "mic"}
     assert people.sample("Анна", voices, rec)["track"] == "sys"
+
+
+# --- fix round 1: порядок записи, оценка времени, охрана поведения без образца ------------
+
+
+def test_mic_voices_is_written_after_the_transcript_and_not_without_it(pipeline, monkeypatch):
+    tr, folder = pipeline["tr"], pipeline["folder"]
+    monkeypatch.setattr(mic_split, "run", _room_split(pipeline, drop_sys_text="тогда начнём"))
+    order = []
+    real = library.write_transcript
+
+    def spy(path, data, words="keep"):
+        if data.get("phase") != "text":
+            order.append(("transcript", (folder / library.MIC_VOICES).exists()))
+        return real(path, data, words=words)
+
+    monkeypatch.setattr(library, "write_transcript", spy)
+    tr.transcribe(str(folder), align=False, bus=pipeline["bus"])
+    assert order == [("transcript", False)] and (folder / library.MIC_VOICES).exists()
+
+    (folder / library.MIC_VOICES).unlink()
+
+    def broken(path, data, words="keep"):
+        if data.get("phase") != "text":
+            raise OSError("диск занят")
+        return real(path, data, words=words)
+
+    monkeypatch.setattr(library, "write_transcript", broken)
+    pipeline["calls"].clear()
+    tr.transcribe(str(folder), align=False, bus=pipeline["bus"])
+    assert not (folder / library.MIC_VOICES).exists()
+
+
+def test_mic_voices_survives_a_busy_file_on_windows(tmp_path, monkeypatch):
+    import os
+
+    import meet.transcribe as tr
+
+    real, calls = os.replace, []
+
+    def busy_once(src, dst):
+        calls.append(dst)
+        if len(calls) == 1:
+            raise PermissionError("файл читает окно")
+        return real(src, dst)
+
+    monkeypatch.setattr(os, "replace", busy_once)
+    result = mic_split.MicResult(mic=[], sys=[], dropped=[], sidecar=[], report={}, voices={"version": 1})
+    tr._write_mic_voices(tmp_path, result)
+    assert len(calls) == 2 and json.loads((tmp_path / library.MIC_VOICES).read_text(encoding="utf-8")) == {
+        "version": 1}
+
+
+def test_mic_voices_estimate_knows_when_voices_are_not_computed(monkeypatch, tmp_path):
+    """Без образца владельца (или с выключенным разделением) шаг — только
+    дубли, секунды: оценка «осталось» не ждёт минуты эмбеддинга."""
+    import meet.transcribe as tr
+
+    monkeypatch.setenv("MEET_DATA_DIR", str(tmp_path / "state"))
+    voices = tmp_path / "voices"
+    monkeypatch.setattr(owner_voice, "path", lambda v=None: voices / "_owner" / "owner.json")
+    load, work = tr._mic_voices_time("cpu", 3600.0)
+    assert load + work < 5.0
+    (voices / "_owner").mkdir(parents=True)
+    (voices / "_owner" / "owner.json").write_text("{}", encoding="utf-8")
+    load, work = tr._mic_voices_time("cpu", 3600.0)
+    assert 40.0 < load + work < 90.0
+
+
+def test_step_times_plan_the_mic_voices_step(monkeypatch, tmp_path):
+    import meet.transcribe as tr
+    from meet import asr
+
+    run = tr._Run()
+    run.choice = asr.Choice("gigaam", "cpu", "v3_e2e_rnnt")
+    run._seconds = {"sys": 600.0, "mic": 600.0}
+    times = run._step_times()
+    assert "mic-voices" in times and times["mic-voices"][0] > 0
+
+
+def test_sidecar_is_written_for_mic_voices_without_call_embeddings(tmp_path):
+    import meet.transcribe as tr
+
+    out_md = tmp_path / "2026-10-05_transcript.md"
+    segs = [Segment(0.0, 1.0, "а", "Вы", track="mic"), Segment(2.0, 3.0, "б", "SPEAKER_M0", track="mic")]
+    mic = [{"label": "OWNER", "display": "Вы", "embedding": [1.0, 0.0], "track": "mic", "owner": True},
+           {"label": "SPEAKER_M0", "display": "SPEAKER_M0", "embedding": [0.0, 1.0], "track": "mic"}]
+    tr._write_sidecar(out_md, tmp_path, "2026-10-05", segs, Diarization(turns=[(0.0, 1.0, "SPEAKER_00")]), {},
+                      mic=mic)
+    side = _sidecar(tmp_path)
+    assert [(e["label"], e["display"]) for e in side["speakers"]] == [("OWNER", "Вы"), ("SPEAKER_M0", "Спикер 1")]
+
+
+def test_without_owner_sample_the_final_transcript_is_as_with_the_split_off(monkeypatch, tmp_path):
+    """Главное свойство: без образца владельца и без дублей, при включённых
+    настройках, расшифровка и сайдкар — те же, что с выключенным разделением
+    (кроме поля mic_split). Настоящий mic_split, поддельный эмбеддер."""
+    import test_mic_split as ms
+
+    import meet.transcribe as tr
+    from meet import segvoices
+
+    mic_segs, _, mic_wav, _ = ms._meeting(tmp_path, room1=True)
+    audio = {"mic16.wav": mic_wav, "sys16.wav": _write_wav(tmp_path / "silence.wav", np.zeros(16000 * 90))}
+
+    def to_wav(src, dst, **k):
+        Path(dst).write_bytes(Path(audio[Path(dst).name]).read_bytes())
+        return dst
+
+    sys_segs = [_seg(80.0, "всем спасибо до встречи")]
+    monkeypatch.setattr(tr, "to_wav16k", to_wav)
+    monkeypatch.setattr(tr, "transcribe_wav", lambda p, h, **kw: [
+        Segment(s.start, s.end, s.text, words=list(s.words)) for s in (mic_segs if "mic" in Path(p).name
+                                                                      else sys_segs)])
+    monkeypatch.setattr(tr, "diarize_wav", lambda p, num_speakers=None, exclusive=False, **kw:
+                        Diarization(turns=[(79.0, 85.0, "SPEAKER_00")],
+                                    embeddings={"SPEAKER_00": ms._e(5).astype(np.float32)}))
+    monkeypatch.setattr(tr, "_maybe_align", lambda s, w, enabled, **kw: s)
+    monkeypatch.setattr(segvoices, "load_embedder", lambda: pytest.fail("без образца эмбеддер не нужен"))
+    monkeypatch.setattr(owner_voice, "load", lambda voices=None: [])
+    out = {}
+    for flags in (True, False):
+        state = tmp_path / f"state-{flags}"
+        state.mkdir()
+        (state / "config.json").write_text(json.dumps({"asr": {"mic_speakers": flags, "mic_dedupe": flags}}),
+                                           encoding="utf-8")
+        monkeypatch.setenv("MEET_DATA_DIR", str(state))
+        folder = tmp_path / f"rec-{flags}" / "2026-10-05_12-00"
+        folder.mkdir(parents=True)
+        for role in ("sys", "mic"):
+            (folder / f"{role}.opus").write_bytes(b"x")
+        tr.transcribe(str(folder), align=False)
+        final = library.read_transcript(folder)
+        out[flags] = (final.pop("mic_split"), [{k: v for k, v in s.items()} for s in final["segments"]],
+                      _sidecar(folder)["speakers"])
+    assert out[True][0]["status"] == "no_profile" and out[False][0]["status"] == "off"
+    assert out[True][1] == out[False][1] and out[True][2] == out[False][2]
+    assert {s["speaker"] for s in out[True][1] if s.get("track") == "mic"} == {"Вы"}
+
+
+# --- fix round 1: кто владелец (I1), голос владельца не в базу людей (I2) ------------------
+
+
+def _config(tmp_path, monkeypatch, **recording):
+    state = tmp_path / "state"
+    state.mkdir(exist_ok=True)
+    (state / "config.json").write_text(json.dumps({"recording": recording}, ensure_ascii=False),
+                                       encoding="utf-8")
+    monkeypatch.setenv("MEET_DATA_DIR", str(state))
+
+
+def test_owner_under_a_former_name_is_not_in_the_room(call, tmp_path, monkeypatch):
+    """Человек сменил подпись микрофона на «Н. Р.»: в старой записи его реплики
+    под прежним «Кузьма» — не «в комнате» ни в расшифровке, ни в панели."""
+    from meet import speakers, tray_control
+
+    folder, voices = call
+    _config(tmp_path, monkeypatch, speaker_name="Н. Р.", former_speaker_names=["Кузьма"])
+    data = library.read_transcript(folder)
+    for seg in data["segments"]:
+        if seg["speaker"] == "Вы":
+            seg["speaker"] = "Кузьма"
+    library.write_transcript(folder, data)
+    side_path = next(folder.glob("*_speakers.json"))
+    side = json.loads(side_path.read_text(encoding="utf-8"))
+    side["speakers"] = [e for e in side["speakers"] if not e.get("owner")]  # старая запись: OWNER нет
+    side_path.write_text(json.dumps(side, ensure_ascii=False), encoding="utf-8")
+    rows = {r["label"]: r for r in speakers.overview(folder, voices, owner="Н. Р.")["speakers"]}
+    assert rows["Кузьма"]["room"] is False and rows["Спикер 3"]["room"] is True
+    assert rows["Спикер 1"]["room"] is False
+    shown = tray_control._window_transcript(library.read_transcript(folder), folder)["segments"]
+    assert [s["speaker"] for s in shown if s.get("room")] == ["Спикер 3"]
+
+
+def test_renamed_owner_row_stays_the_owner(call):
+    """Строку «Вы» переименовали в «Кузьма» (панель «Спикеры»): владелец
+    узнаётся по голосу OWNER сайдкара — его реплики не «в комнате»."""
+    from meet import speakers, tray_control
+
+    folder, voices = call
+    speakers.apply(folder, [{"type": "rename", "label": "Вы", "to": "Кузьма"}], {}, voices)
+    rows = {r["label"]: r for r in speakers.overview(folder, voices)["speakers"]}
+    assert rows["Кузьма"]["room"] is False and rows["Спикер 3"]["room"] is True
+    shown = tray_control._window_transcript(library.read_transcript(folder), folder)["segments"]
+    assert [s["speaker"] for s in shown if s.get("room")] == ["Спикер 3"]
+
+
+def _samples(voices: Path, name: str) -> int:
+    path = voices / f"{name}.json"
+    return len(json.loads(path.read_text(encoding="utf-8"))["samples"]) if path.exists() else 0
+
+
+def test_owner_voice_never_goes_to_the_people_base(call):
+    """«Вы» → «Кузьма» с «Запомнить голос»: голос владельца в базу людей не
+    пишется (для него — «Запомнить мой голос»); строка о причине."""
+    from meet import speakers
+
+    folder, voices = call
+    view = {r["label"]: r for r in speakers.overview(folder, voices)["speakers"]}
+    assert view["Вы"]["owner_voice_only"] is True and view["Спикер 3"]["owner_voice_only"] is False
+    before = _samples(voices, "Кузьма")
+    got = speakers.apply(folder, [{"type": "rename", "label": "Вы", "to": "Кузьма"}], {"Вы": True}, voices)
+    assert _samples(voices, "Кузьма") == before and got["step"]["enrolled"] == []
+    assert got["voices_error"] == speakers.OWNER_NOT_ENROLLED
+
+
+def test_owner_merged_into_a_person_enrolls_only_the_room_voice(call):
+    from meet import speakers
+
+    folder, voices = call
+    got = speakers.apply(folder, [{"type": "rename", "label": "Спикер 3", "to": "Пётр"},
+                                  {"type": "merge", "label": "Вы", "to": "Спикер 3"}],
+                         {"Спикер 3": True, "Вы": True}, voices)
+    assert [e["label"] for e in got["step"]["enrolled"]] == ["SPEAKER_M0"]
+    assert _samples(voices, "Пётр") == 1
+
+
+# --- fix round 1: реплики не склеиваются через дорожку (M8) ---------------------------------
+
+
+def test_call_and_microphone_turns_of_one_person_stay_apart():
+    """Человек в комнате с голосом кластера звонка: его реплика в звонке и
+    сразу за ней в микрофоне — две реплики (окно, поиск, правка спикеров —
+    одинаково), как и голос микрофона под вопросом."""
+    from meet import search, speakers
+
+    segs = [{"start": 0.0, "end": 1.0, "speaker": "Анна", "text": "в звонке"},
+            {"start": 1.5, "end": 2.0, "speaker": "Анна", "text": "в комнате", "track": "mic"},
+            {"start": 2.5, "end": 3.0, "speaker": "Вы", "text": "да", "track": "mic"},
+            {"start": 3.5, "end": 4.0, "speaker": "Вы", "text": "наверное", "track": "mic", "uncertain": True},
+            {"start": 4.5, "end": 5.0, "speaker": "Вы", "text": "точно", "track": "mic", "uncertain": True}]
+    assert [t.text for t in search.turns_of(segs)] == ["в звонке", "в комнате", "да", "наверное точно"]
+    shown = speakers._shown(segs)
+    assert [t["texts"] for t in speakers._turns(segs, shown)] == [["в звонке"], ["в комнате"], ["да"],
+                                                                 ["наверное", "точно"]]
+    assert speakers._turn_count(segs, [0, 1]) == 2 and speakers._turn_count(segs, [3, 4]) == 1
+
+
+def test_meet_enroll_prefers_the_call_cluster_and_refuses_the_owner(tmp_path, monkeypatch):
+    from meet import voices
+
+    rec = tmp_path / "2026-10-05_10-00"
+    rec.mkdir()
+    (rec / "2026-10-05_speakers.json").write_text(json.dumps({"source": str(rec), "date": "2026-10-05",
+                                                              "speakers": [
+        {"label": "SPEAKER_01", "display": "Спикер 2", "embedding": [1.0, 0.0]},
+        {"label": "OWNER", "display": "Вы", "embedding": [0.0, 1.0], "track": "mic", "owner": True},
+        {"label": "SPEAKER_M0", "display": "Спикер 2", "embedding": [0.5, 0.5], "track": "mic"}]},
+        ensure_ascii=False), encoding="utf-8")
+    base = tmp_path / "voices"
+    voices.enroll(str(rec), ["Спикер 2=Анна"], folder=base)
+    saved = json.loads((base / "Анна.json").read_text(encoding="utf-8"))["samples"]
+    assert [s["embedding"] for s in saved] == [[1.0, 0.0]]
+    with pytest.raises(SystemExit, match="ваш голос"):
+        voices.enroll(str(rec), ["Вы=Кузьма"], folder=base)
+    assert not (base / "Кузьма.json").exists()
