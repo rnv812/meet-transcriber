@@ -1,15 +1,22 @@
 """Замер диаризации на Mac (Apple Silicon): где уходит время и что быстрее —
-MPS или процессор. Одна команда, ~5 минут, ничего не меняет и не ставит.
+MPS или процессор. Одна команда, ~5 минут, ничего не ставит.
 
-Запуск — интерпретатором установленного движка Meet (в нём torch и pyannote):
+Запуск — интерпретатором установленного движка Meet (в нём torch и pyannote;
+самая свежая папка движка):
 
-    "$(ls -d ~/Library/Application\\ Support/meet/engine/*/bin/python | tail -1)" diar_bench_mac.py
+    "$(ls -dt ~/Library/Application\\ Support/meet/engine/[0-9]*/bin/python | head -1)" diar_bench_mac.py
+
+macOS может спросить доступ к связке ключей (токен Hugging Face, как у
+задач Meet): нажмите «Разрешить» — время ответа тоже замеряется.
 
 Что делает:
 
 1. Время импорта torch и pyannote, чтения токена из связки ключей и загрузки
    модели диаризации: с диска (как Meet 0.3.3) и по имени репозитория с
    проверкой на huggingface.co (как Meet до 0.3.3; `--no-online` — пропустить).
+   Прокси — как у задач Meet (системный прокси macOS или из настроек); если
+   он есть, отдельно и загрузка напрямую. Как и Meet до 0.3.3 в каждой задаче,
+   загрузка по имени может обновить модель в кэше Hugging Face до новой ревизии.
 2. Звук — пример из пакета pyannote (30 с, два голоса), повторенный до 5 минут:
    запись встречи никуда не уходит. Своя запись — `--wav файл.wav` (16 кГц моно).
 3. Варианты по очереди, `--rounds` раз: MPS как в 0.3.2 (штатные голоса,
@@ -97,7 +104,7 @@ def load_audio(path: str | None, seconds: float):
                 sys.exit(f"{path}: нужен WAV 16 кГц моно 16 бит "
                          "(ffmpeg -i запись -ac 1 -ar 16000 -sample_fmt s16 out.wav)")
             pcm = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
-        source = Path(path).name
+        source = "своя запись"  # имя файла в отчёт не попадает
     else:
         import pyannote.audio
 
@@ -108,6 +115,69 @@ def load_audio(path: str | None, seconds: float):
         source = f"пример pyannote x{math.ceil(seconds / 30)}"
     waveform = torch.from_numpy(pcm.astype(np.float32) / 32768.0).unsqueeze(0)
     return waveform, source
+
+
+# --- сеть как у задач Meet ---------------------------------------------------------
+
+PROXY_VARS = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY")
+
+
+def apply_meet_proxy() -> dict:
+    """Прокси, с которым Meet запускает задачи (`netproxy.settings_env`:
+    системный прокси macOS из scutil или настройка «Прокси»), — в окружение
+    скрипта: из Терминала его нет, и загрузка шла бы напрямую. В отчёт — без
+    адреса: схема, локальный ли узел, порт."""
+    try:
+        from meet import netproxy
+    except Exception:
+        return {"from": "окружение Терминала (meet не найден)", "vars": _proxy_vars()}
+    env = netproxy.settings_env(dict(os.environ))
+    for name in {n for n in list(os.environ) + list(env) if n.upper() in PROXY_VARS}:
+        if name in env:
+            os.environ[name] = env[name]
+        else:
+            os.environ.pop(name, None)
+    return {"from": "netproxy.settings_env", "vars": _proxy_vars()}
+
+
+def _proxy_vars() -> dict:
+    from urllib.parse import urlsplit
+
+    out = {}
+    for name, value in os.environ.items():
+        upper = name.upper()
+        if upper == "NO_PROXY" or upper not in PROXY_VARS or not value:
+            continue
+        try:
+            parts = urlsplit(value if "://" in value else "http://" + value)
+            local = parts.hostname in ("localhost", "127.0.0.1", "::1")
+            out[upper] = f"{parts.scheme}://{'локальный' if local else 'другой узел'}:{parts.port or '-'}"
+        except ValueError:
+            out[upper] = "не разобрать"
+    return out
+
+
+def describe_proxy(proxy: dict) -> str:
+    if not proxy.get("vars"):
+        return "нет, напрямую"
+    return ", ".join(f"{k} {v}" for k, v in sorted(proxy["vars"].items()))
+
+
+def load_online(Pipeline, token) -> dict:
+    """Загрузка по имени репозитория, как в Meet до 0.3.3: время и итог."""
+    t = time.perf_counter()
+    try:
+        online = Pipeline.from_pretrained(REPO, token=token)
+        result = {"seconds": time.perf_counter() - t, "ok": online is not None}
+        del online
+    except Exception as e:
+        result = {"seconds": time.perf_counter() - t, "error": type(e).__name__}
+    return result
+
+
+def describe_load(result: dict) -> str:
+    tail = f" ({result['error']})" if "error" in result else ("" if result.get("ok") else " (нет доступа)")
+    return f"{result['seconds']:.1f} с{tail}"
 
 
 # --- голоса за один проход на окно: та же правка, что meet.diarize 0.3.3 -----
@@ -230,7 +300,9 @@ def main() -> int:
     ap.add_argument("--full", action="store_true", help="добавить процессор как в 0.3.2 (долго)")
     ap.add_argument("--out", help="куда сохранить JSON (по умолчанию — Рабочий стол)")
     args = ap.parse_args()
-    report: dict = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "argv": sys.argv[1:]}
+    report: dict = {"started": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "options": {"own_wav": bool(args.wav), "minutes": args.minutes, "rounds": args.rounds,
+                                "online": not args.no_online, "full": args.full}}
 
     t = time.perf_counter()
     import torch
@@ -271,18 +343,19 @@ def main() -> int:
         token, token_s, where = read_token()
         report["token_read_s"], report["token_from"] = token_s, where
         say(f"Чтение токена ({where}): {token_s:.1f} с" + ("" if token else " - токена нет"))
+        report["proxy"] = apply_meet_proxy()
+        say(f"Прокси (как у задач Meet): {describe_proxy(report['proxy'])}")
         say("Загрузка по имени репозитория с проверкой на huggingface.co (как до 0.3.3)...")
-        t = time.perf_counter()
-        try:
-            online = Pipeline.from_pretrained(REPO, token=token)
-            report["load_online_s"] = time.perf_counter() - t
-            report["load_online_ok"] = online is not None
-            del online
-        except Exception as e:
-            report["load_online_s"] = time.perf_counter() - t
-            report["load_online_error"] = type(e).__name__
-        say(f"  {report['load_online_s']:.1f} с" + (f" ({report['load_online_error']})"
-                                                     if "load_online_error" in report else ""))
+        report["online"] = load_online(Pipeline, token)
+        say(f"  {describe_load(report['online'])}")
+        if report["proxy"].get("vars"):
+            say("То же напрямую, без прокси...")
+            saved = {n: os.environ.pop(n) for n in list(os.environ) if n.upper() in PROXY_VARS}
+            try:
+                report["online_direct"] = load_online(Pipeline, token)
+            finally:
+                os.environ.update(saved)
+            say(f"  {describe_load(report['online_direct'])}")
 
     waveform, source = load_audio(args.wav, args.minutes * 60)
     audio_s = waveform.shape[1] / SAMPLE_RATE
