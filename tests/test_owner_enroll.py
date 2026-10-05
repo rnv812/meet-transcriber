@@ -103,7 +103,23 @@ def test_clipping_is_checked_on_the_original_recording():
     regions = [(1.0, 21.0)]
     raw = np.full(48000 * 25, 32767, dtype=np.int16)
     with pytest.raises(owner_enroll.QualityError):
-        owner_enroll.analyze(_take(speech=regions), raw=raw, vad=_vad(regions), embed=_Embed(*SAME))
+        owner_enroll.analyze(_take(speech=regions), raw=raw, raw_rate=48000, vad=_vad(regions),
+                             embed=_Embed(*SAME))
+
+
+def test_clipping_counts_speech_only_and_limiter_peaks():
+    """Пики ограничителя ОС (~0,97 шкалы) — тоже клиппинг; долгая тишина
+    вокруг речи долю не разбавляет."""
+    regions = [(1.0, 21.0)]
+    raw = np.zeros(48000 * 25, dtype=np.int16)
+    raw[48000:48000 * 21:100] = 31900  # 1 % отсчётов речи у шкалы
+    with pytest.raises(owner_enroll.QualityError):
+        owner_enroll.analyze(_take(speech=regions), raw=raw, raw_rate=48000, vad=_vad(regions),
+                             embed=_Embed(*SAME))
+    raw[:] = 0
+    raw[48000 * 22:48000 * 24] = 32767  # громкий щелчок вне речи — не клиппинг голоса
+    owner_enroll.analyze(_take(speech=regions), raw=raw, raw_rate=48000, vad=_vad(regions),
+                         embed=_Embed(*SAME))
 
 
 def test_noise_close_to_voice_level_is_refused():
@@ -180,7 +196,31 @@ def test_embedder_is_capped_at_four_threads(monkeypatch):
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     from meet import segvoices
 
-    monkeypatch.setattr(segvoices, "load_embedder", lambda: "эмбеддер")
+    monkeypatch.setattr(segvoices, "_build_embedder", lambda device: f"эмбеддер {device}")
     monkeypatch.setattr(owner_enroll.os, "cpu_count", lambda: 20)
-    assert owner_enroll.load_embedder() == "эмбеддер"
+    assert owner_enroll.load_embedder() == "эмбеддер cpu"  # видеокарта для трёх кусков не нужна
     assert calls == [4]
+
+
+def test_default_vad_counts_speech_not_pauses(monkeypatch):
+    """Умолчания faster-whisper склеивают паузы до 2 с и добавляют по 0,4 с
+    полей: «15 с речи» и трети считались бы с паузами чтения."""
+    import sys
+    import types
+
+    seen = {}
+
+    class VadOptions:
+        def __init__(self, **kw):
+            self.kw = kw
+
+    def stamps(audio, options, sampling_rate):
+        seen.update(options.kw, rate=sampling_rate)
+        return [{"start": 16000, "end": 48000}]
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", types.ModuleType("faster_whisper"))
+    monkeypatch.setitem(sys.modules, "faster_whisper.vad", types.SimpleNamespace(
+        VadOptions=VadOptions, get_speech_timestamps=stamps))
+    got = owner_enroll._default_vad(np.zeros(RATE * 4, dtype=np.float32), RATE)
+    assert got == [(1.0, 3.0)]
+    assert seen == {"min_silence_duration_ms": 500, "speech_pad_ms": 100, "rate": RATE}

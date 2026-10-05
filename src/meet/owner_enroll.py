@@ -10,8 +10,13 @@
 (QualityError):
 
 1. речь по Silero VAD — не меньше MIN_SPEECH_S (по участкам VAD, а не по
-   целым кускам записи: калибровка T0 — длинный кусок бывает почти пустым);
-2. клиппинг — в исходном WAV (после передискретизации пики сглажены);
+   целым кускам записи: калибровка T0 — длинный кусок бывает почти пустым).
+   VAD — с паузой внутри участка не длиннее `owner_voice.SAMPLE_RUN_MAX_PAUSE`
+   и узкими полями (VAD_PAD_MS): умолчания faster-whisper (паузы до 2 с, поля
+   по 0,4 с) засчитали бы речью паузы чтения и подмешали бы их в трети;
+2. клиппинг — в исходном WAV (после передискретизации пики сглажены), по
+   отсчётам речи (тишина долю не разбавляет), от 0,97 полной шкалы
+   (ограничители ОС держат пики чуть ниже неё);
 3. уровень голоса над фоном — не меньше MIN_SNR_DB;
 4. речь — на три равные трети, у каждой свой отпечаток; попарный косинус не
    ниже THIRDS_MIN_COS, иначе мешали шум или чужие голоса.
@@ -36,8 +41,8 @@ SAMPLE_RATE = 16000
 MIN_SPEECH_S = 15.0
 MIN_SNR_DB = 15.0
 THIRDS_MIN_COS = 0.75
-# Клиппинг: отсчёт у полной шкалы; таких больше доли CLIP_MAX_SHARE — звук искажён.
-CLIP_LEVEL = 32000
+# Клиппинг: отсчёт речи у полной шкалы; таких больше доли CLIP_MAX_SHARE — звук искажён.
+CLIP_LEVEL = int(0.97 * 32768)
 CLIP_MAX_SHARE = 0.002
 FRAME_S = 0.02
 # Фон — медиана кадров вне речи, если их хватает; иначе тихий процентиль всех.
@@ -45,6 +50,8 @@ NOISE_MIN_FRAMES = 25
 NOISE_PERCENTILE = 5
 FLOOR_DB = -100.0
 EMBED_THREADS = 4
+# Поля вокруг участка речи у VAD образца, мс.
+VAD_PAD_MS = 100
 
 
 class QualityError(ValueError):
@@ -113,10 +120,13 @@ def _snr(audio: np.ndarray, regions) -> float:
     return float(np.median(db[speech])) - floor
 
 
-def _clipped(raw: np.ndarray) -> bool:
-    if not raw.size:
+def _clipped(raw: np.ndarray, rate: int, regions) -> bool:
+    """Доля отсчётов речи у полной шкалы больше CLIP_MAX_SHARE."""
+    parts = [raw[max(0, int(a * rate)):max(0, int(b * rate))] for a, b in regions]
+    speech = np.concatenate([p for p in parts if p.size] or [np.empty(0, dtype=np.int16)])
+    if not speech.size:
         return False
-    return float(np.mean(np.abs(raw.astype(np.int32)) >= CLIP_LEVEL)) > CLIP_MAX_SHARE
+    return float(np.mean(np.abs(speech.astype(np.int32)) >= CLIP_LEVEL)) > CLIP_MAX_SHARE
 
 
 def _speech(audio: np.ndarray, regions) -> np.ndarray:
@@ -125,9 +135,10 @@ def _speech(audio: np.ndarray, regions) -> np.ndarray:
     return np.concatenate(parts) if parts else np.empty(0, dtype=audio.dtype)
 
 
-def analyze(audio16: np.ndarray, *, raw: np.ndarray | None = None, vad, embed) -> Take:
-    """Запись (int16 моно 16 кГц; `raw` — исходный WAV для клиппинга) → отпечаток
-    или QualityError. `vad(audio float32, rate) -> [(start, end)]` в секундах,
+def analyze(audio16: np.ndarray, *, raw: np.ndarray | None = None, raw_rate: int | None = None,
+            vad, embed) -> Take:
+    """Запись (int16 моно 16 кГц; `raw` с частотой `raw_rate` — исходный WAV для
+    клиппинга) → отпечаток или QualityError. `vad(audio float32, rate) -> [(start, end)]` в секундах,
     `embed(audio float32) -> вектор | None`."""
     audio = np.asarray(audio16, dtype=np.int16).astype(np.float32) / 32768.0
     regions = sorted((float(a), float(b)) for a, b in vad(audio, SAMPLE_RATE) if float(b) > float(a))
@@ -136,7 +147,8 @@ def analyze(audio16: np.ndarray, *, raw: np.ndarray | None = None, vad, embed) -
         raise QualityError(NO_VOICE)
     if seconds < MIN_SPEECH_S:
         raise QualityError(_too_short(seconds))
-    if _clipped(np.asarray(raw if raw is not None else audio16)):
+    clip_src, clip_rate = (raw, raw_rate or SAMPLE_RATE) if raw is not None else (audio16, SAMPLE_RATE)
+    if _clipped(np.asarray(clip_src), clip_rate, regions):
         raise QualityError(CLIPPED)
     snr = _snr(audio, regions)
     if snr < MIN_SNR_DB:
@@ -170,20 +182,32 @@ def read_wav(path: Path) -> tuple[np.ndarray, int]:
 
 
 def load_embedder():
-    """Эмбеддер диаризации, torch — не больше EMBED_THREADS потоков (в
-    подпроцессе задачи: ограничение живёт с процессом)."""
+    """Эмбеддер диаризации на процессоре, torch — не больше EMBED_THREADS
+    потоков (в подпроцессе задачи: ограничение живёт с процессом). Видеокарта
+    для трёх кусков по ~5 с не нужна: её запуск (cuDNN, видеопамять) дольше
+    самого расчёта и мешал бы идущей расшифровке."""
     import torch
 
     torch.set_num_threads(max(1, min(EMBED_THREADS, os.cpu_count() or 1)))
     from meet import segvoices
 
-    return segvoices.load_embedder()
+    return segvoices._build_embedder("cpu")
+
+
+def vad_options():
+    """VadOptions образца: паузы внутри участка до SAMPLE_RUN_MAX_PAUSE, поля VAD_PAD_MS."""
+    from faster_whisper.vad import VadOptions
+
+    from meet import owner_voice
+
+    return VadOptions(min_silence_duration_ms=int(owner_voice.SAMPLE_RUN_MAX_PAUSE * 1000),
+                      speech_pad_ms=VAD_PAD_MS)
 
 
 def _default_vad(audio: np.ndarray, rate: int):
     from meet.gigaam_asr import speech_regions
 
-    return speech_regions(audio, rate)
+    return speech_regions(audio, rate, options=vad_options())
 
 
 def _default_decode(path: Path) -> np.ndarray:
@@ -205,12 +229,12 @@ def enroll(wav: Path, *, device: str | None, voices: Path | None = None, vad=Non
 
     wav = Path(wav)
     progress("чтение записи")
-    raw, _ = read_wav(wav)
+    raw, raw_rate = read_wav(wav)
     audio16 = (decode or _default_decode)(wav)
     if embed is None:
         progress("загрузка модели")
         embed = load_embedder()
     progress("отпечаток голоса")
-    take = analyze(audio16, raw=raw, vad=vad or _default_vad, embed=embed)
+    take = analyze(audio16, raw=raw, raw_rate=raw_rate, vad=vad or _default_vad, embed=embed)
     return owner_voice.add(take.embedding, source="enroll", seconds=take.seconds, device=device,
                            quality=take.quality, voices=voices)

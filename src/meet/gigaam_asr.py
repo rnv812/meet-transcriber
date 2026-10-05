@@ -567,12 +567,13 @@ def plan_chunks(regions: list[tuple[float, float]], audio, sr: int = SAMPLE_RATE
     return chunks
 
 
-def speech_regions(audio, sr: int = SAMPLE_RATE) -> list[tuple[float, float]]:
+def speech_regions(audio, sr: int = SAMPLE_RATE, options=None) -> list[tuple[float, float]]:
     """Участки речи — Silero VAD из faster-whisper с теми же настройками, что
-    у `vad_filter=True` в распознавании Whisper."""
+    у `vad_filter=True` в распознавании Whisper. `options` — свои VadOptions
+    (образец голоса: паузы короче, без широких полей вокруг речи)."""
     from faster_whisper.vad import VadOptions, get_speech_timestamps
 
-    stamps = get_speech_timestamps(audio, VadOptions(), sampling_rate=sr)
+    stamps = get_speech_timestamps(audio, options or VadOptions(), sampling_rate=sr)
     return [(s["start"] / sr, s["end"] / sr) for s in stamps]
 
 
