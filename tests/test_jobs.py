@@ -485,3 +485,14 @@ def test_keyed_slot_key_is_normalised_like_active_for(monkeypatch):
     finally:
         release.set()
         q.stop()
+
+
+def test_worker_argv_of_owner_voice(tmp_path):
+    """Путь и устройство — одним аргументом через «=»: имя с дефисом не флаг."""
+    job = jobs.Job(id="o", kind=jobs.OWNER_VOICE, folder=str(tmp_path),
+                   options={"wav": str(tmp_path / "t.wav"), "device": "-Микрофон (USB)"})
+    assert jobs.worker_argv(job)[-4:] == [
+        "owner_voice", str(tmp_path), f"--wav={tmp_path / 't.wav'}", "--device=-Микрофон (USB)"]
+    job = jobs.Job(id="o", kind=jobs.OWNER_VOICE, folder=str(tmp_path), options={"wav": "x.wav"})
+    assert jobs.worker_argv(job)[-1] == "--wav=x.wav"
+    assert jobs.OWNER_VOICE in jobs.KINDS

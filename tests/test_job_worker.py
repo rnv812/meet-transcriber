@@ -245,3 +245,65 @@ def test_improve_job_argv_and_kind(tmp_path):
     job = jobs.Job(id="i", kind=jobs.IMPROVE, folder=str(tmp_path))
     assert jobs.worker_argv(job)[-2:] == ["improve", str(tmp_path)]
     assert jobs.IMPROVE in jobs.KINDS and jobs.IMPROVE in jobs.MODEL_KINDS
+
+
+# --- образец голоса владельца: задача owner_voice -------------------------------
+
+
+def _owner_take(tmp_path):
+    wav = tmp_path / "tmp" / "owner.wav"
+    wav.parent.mkdir()
+    wav.write_bytes(b"RIFF")
+    return wav
+
+
+def test_owner_voice_job_stores_sample_and_deletes_the_recording(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from meet import owner_enroll
+
+    seen = {}
+
+    def enroll(wav, *, device, voices, bus=None, **kw):
+        seen.update(wav=wav, device=device, voices=voices, existed=wav.exists())
+        return SimpleNamespace(id="abc123")
+
+    monkeypatch.setattr(owner_enroll, "enroll", enroll)
+    monkeypatch.setattr(job_worker, "_apply_hf_token", lambda: None)
+    wav = _owner_take(tmp_path)
+    voices = tmp_path / "voices"
+    code = job_worker.main(["owner_voice", str(voices), f"--wav={wav}", "--device=-USB микрофон"])
+    assert code == 0
+    assert seen == {"wav": wav, "device": "-USB микрофон", "voices": voices, "existed": True}
+    assert [x for x in _lines(capsys) if x["kind"] == "job.result"] == [
+        {"kind": "job.result", "path": "abc123"}]
+    assert not wav.exists()
+
+
+def test_owner_voice_quality_error_is_plain_words_and_recording_is_deleted(tmp_path, monkeypatch, capsys):
+    from meet import owner_enroll
+
+    def enroll(wav, **kw):
+        raise owner_enroll.QualityError("Голос не слышен.")
+
+    monkeypatch.setattr(owner_enroll, "enroll", enroll)
+    monkeypatch.setattr(job_worker, "_apply_hf_token", lambda: None)
+    wav = _owner_take(tmp_path)
+    assert job_worker.main(["owner_voice", str(tmp_path), f"--wav={wav}"]) == 3
+    errors = [x for x in _lines(capsys) if x["kind"] == "error"]
+    assert errors[-1]["text"] == "Голос не слышен."
+    assert not wav.exists()
+
+
+def test_owner_voice_crash_still_deletes_the_recording(tmp_path, monkeypatch, capsys):
+    from meet import owner_enroll
+
+    def enroll(wav, **kw):
+        raise RuntimeError("сломалось")
+
+    monkeypatch.setattr(owner_enroll, "enroll", enroll)
+    monkeypatch.setattr(job_worker, "_apply_hf_token", lambda: None)
+    wav = _owner_take(tmp_path)
+    assert job_worker.main(["owner_voice", str(tmp_path), f"--wav={wav}"]) == 1
+    assert "сломалось" in [x for x in _lines(capsys) if x["kind"] == "error"][-1]["text"]
+    assert not wav.exists()

@@ -63,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("kind",
                         choices=["transcribe", "import", "install-engine", "download-model",
                                  "summary", "ask", "merge", "speaker_split", "rediarize",
-                                 "analyze", "improve"])
+                                 "analyze", "improve", "owner_voice"])
     parser.add_argument("path")
     parser.add_argument("--speakers", type=int)
     parser.add_argument("--hotwords")
@@ -77,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-speakers", type=int)
     parser.add_argument("--max-speakers", type=int)
     parser.add_argument("--sensitivity", type=float)
+    parser.add_argument("--wav")
+    parser.add_argument("--device")
     args = parser.parse_args(argv)
     from meet import tempdirs
 
@@ -99,6 +101,8 @@ def _dispatch(args) -> int:
         return _analyze(args.path)
     if args.kind == "improve":
         return _improve(args.path)
+    if args.kind == "owner_voice":
+        return _owner_voice(args.path, args.wav or "", args.device or None)
 
     if args.kind == "merge":
         return _merge(args.path)
@@ -309,6 +313,39 @@ def _rediarize(folder_str: str, args) -> int:
                              sensitivity=args.sensitivity, bus=bus)
 
     return _speaker_voices(work, "rediarize")
+
+
+def _owner_voice(voices_str: str, wav_str: str, device: str | None) -> int:
+    """Образец голоса владельца из записи мастера или настроек
+    (meet.owner_enroll). Негодная запись — понятным текстом, что сделать
+    иначе. Запись удаляется в любом случае: хранится только отпечаток."""
+    from pathlib import Path
+
+    from meet import events, owner_enroll
+
+    wav = Path(wav_str)
+    bus = events.EventBus()
+    bus.subscribe(lambda event: _emit(event.to_dict()))
+    try:
+        # Чекпойнт модели закрыт условиями HF: токен — в окружение загрузчика.
+        _apply_hf_token()
+        sample = owner_enroll.enroll(wav, device=device, voices=Path(voices_str), bus=bus)
+    except owner_enroll.QualityError as e:
+        _emit({"kind": "error", "text": str(e)})
+        return 3
+    except ImportError as e:
+        _emit({"kind": "error", "text": f"{jobs_hint()}: {e}"})
+        return 2
+    except Exception as e:
+        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        return 1
+    finally:
+        try:
+            wav.unlink(missing_ok=True)
+        except OSError:
+            pass  # папку записи удалит резидент после задачи
+    _emit({"kind": "job.result", "path": sample.id})
+    return 0
 
 
 def _install_engine(flavor: str | None) -> int:
