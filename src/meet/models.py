@@ -101,11 +101,18 @@ CATALOGUE = (
 )
 
 
+# Исходное HF_HUB_CACHE человека ("" — переменной не было), до того как
+# `use_meet_cache` направил её в кэш Meet: по нему резидент находит общий кэш
+# (вопрос об остатках после переезда).
+USER_HF_HUB_CACHE = "MEET_USER_HF_HUB_CACHE"
+
+
 def shared_cache_root() -> Path:
     """Общий кэш Hugging Face — тот же, что у библиотек движка по умолчанию
     (и у других программ на машине)."""
-    for env in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE"):
-        value = os.environ.get(env)
+    saved = os.environ.get(USER_HF_HUB_CACHE)
+    hub = saved if saved is not None else os.environ.get("HF_HUB_CACHE")
+    for value in (hub, os.environ.get("HUGGINGFACE_HUB_CACHE")):
         if value:
             return Path(value)
     home = os.environ.get("HF_HOME")
@@ -144,6 +151,7 @@ def use_meet_cache() -> None:
 
     if paths.storage_root() is None:
         return
+    os.environ.setdefault(USER_HF_HUB_CACHE, os.environ.get("HF_HUB_CACHE", ""))
     os.environ["HF_HUB_CACHE"] = str(cache_root())
     # Кэш кусков загрузчика Xet (до 10 ГБ) — тоже не на системном диске.
     os.environ["HF_XET_CACHE"] = str(paths.models_dir() / "xet")

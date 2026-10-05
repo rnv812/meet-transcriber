@@ -52,8 +52,11 @@ def data(monkeypatch, tmp_path):
     shared = tmp_path / "hf-shared"
     shared.mkdir()
     monkeypatch.setenv("HF_HUB_CACHE", str(shared))
-    for env in ("HF_XET_CACHE",):
-        monkeypatch.delenv(env, raising=False)
+    # use_meet_cache пишет их в os.environ: setenv запоминает, что их не
+    # было, и после теста они уберутся (delenv отсутствующей не запоминает).
+    for env in ("HF_XET_CACHE", models.USER_HF_HUB_CACHE):
+        monkeypatch.setenv(env, "")
+        monkeypatch.delenv(env)
     return folder
 
 
@@ -296,6 +299,31 @@ def test_leftovers_are_meet_models_already_copied(data, tmp_path):
     assert found["cache"] == str(shared)
     assert sorted(r["id"] for r in found["repos"]) == sorted([MEET_REPO, DIAR_REPO])
     assert found["bytes"] == sum(r["bytes"] for r in found["repos"]) > 0
+
+
+def test_resident_with_the_meet_cache_still_sees_the_shared_one(data, tmp_path):
+    """Резидент при старте направил HF_HUB_CACHE в свой кэш; общий кэш (для
+    вопроса об остатках) — по исходному окружению человека."""
+    shared = _moved(data, tmp_path)
+    models.use_meet_cache()
+    assert models.cache_root() == paths.models_dir() / "hf"
+    assert models.shared_cache_root() == shared
+    assert storage.leftovers()["cache"] == str(shared)
+    models.use_meet_cache()  # повторный вызов (CLI внутри резидента) не теряет исходное
+    assert models.shared_cache_root() == shared
+
+
+def test_shared_cache_without_user_variable_is_the_default(data, tmp_path, monkeypatch):
+    monkeypatch.delenv("HF_HUB_CACHE")
+    for env in ("HUGGINGFACE_HUB_CACHE", "HF_HOME"):
+        monkeypatch.delenv(env, raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg"))
+    root = tmp_path / "Meet"
+    root.mkdir()
+    _choose(data, root)
+    models.use_meet_cache()
+    assert os.environ["HF_HUB_CACHE"] == str(root / "models" / "hf")
+    assert models.shared_cache_root() == tmp_path / "xdg" / "huggingface" / "hub"
 
 
 def test_no_question_without_a_move(data, tmp_path):
