@@ -357,6 +357,15 @@ class LiveEngine:
         self._catch_resume = 0.0  # раньше этого (monotonic) догонялка не продолжается
         self._catch_threads = False  # потоки torch урезаны на время догонялки
         self.on_catchup = None  # () -> None после каждого догнанного окна
+        # Поэтапный старт (open_source → load_asr → begin): открытие источника
+        # и остановка не идут одновременно; распознавать — только после модели.
+        self._start_lock = threading.Lock()
+        self._asr_loaded = False
+        self._staged = False  # стартовали через open_source(), а не start()
+        self._asr_ready = False
+        # Живой звук отстал в этом такте (в очереди дорожки больше двух окон):
+        # догонялка в этот такт не идёт.
+        self._live_lag = False
 
     def register_track(self, fname: str, rate: int, channels: int,
                        normalize: bool = False, identify: bool = False) -> None:
@@ -449,12 +458,16 @@ class LiveEngine:
             # больше ~25 с за вызов не принимает.
             return self._take(tr, min(have, self.policy.merge_s)) if have >= TAIL_MIN_S else None
         policy = self.policy
+        if "reader" not in tr and have >= policy.behind_s:
+            self._live_lag = True  # живой звук отстал — догонялка подождёт
         if have < (policy.min_s + policy.max_s) / 2:
             return None
         if have < policy.max_s:
             cut = find_pause(self._audio(tr), rate, policy.min_s, have)
             return self._take(tr, cut) if cut is not None else None
-        if have > BACKLOG_MAX_S:
+        # Звук, накопленный, пока грузилась модель (до `protect_until`), не
+        # пропускаем: он распознаётся целиком, пропуск — только для отставания потом.
+        if have > BACKLOG_MAX_S and tr["pos"] >= tr.get("protect_until", 0.0):
             skip = have - policy.merge_s
             self._take(tr, skip)
             self.stats["skipped_s"] += skip
@@ -545,6 +558,7 @@ class LiveEngine:
     def step(self) -> int:
         """Такт рабочего потока: забрать звук, распознать созревшие окна."""
         with self._window_lock:
+            self._live_lag = False
             self._drain()
             return self._windows(final=False)
 
@@ -595,16 +609,18 @@ class LiveEngine:
         self._out.flush()
 
     def start(self) -> None:
+        """Всё сразу (`meet live`, тесты): модели, затем захват и рабочий
+        поток. Ассистент стартует поэтапно — `open_source()` до моделей, см.
+        `meet.assist.app`."""
         if self._tap_connect is not None:
             try:
-                self._start_from_tap()
+                self.load_asr()
+                self.load_voices()
+                self._open_tap()
+                self.begin()
             except BaseException:
                 self._close_tap()
-                if self._transcriber is not None:
-                    try:
-                        self._transcriber.unload()
-                    except Exception:
-                        pass
+                self._unload()
                 raise
             return
         from meet.recorder import _acquire_lock
@@ -614,31 +630,92 @@ class LiveEngine:
         self.out_root.mkdir(parents=True, exist_ok=True)
         self._lock_path = _acquire_lock(self.out_root, self.out_dir)
         try:
-            self._start_capture()
+            from meet import recorder
+
+            recorder.audio_backend()  # нет звуковой библиотеки — отказ до моделей
+            self.load_asr()
+            self.load_voices()
+            # Папка встречи — после загрузки моделей (до минуты): остановка или
+            # сбой на загрузке не оставляют пустую датированную папку.
+            self._open_devices()
+            self.begin()
         except BaseException:
             # Частичный старт: закрыть то, что успело открыться, и отдать lock;
             # модель распознавания — выгрузить (и её временную папку удалить).
             self._close_capture()
-            if self._transcriber is not None:
-                try:
-                    self._transcriber.unload()
-                except Exception:
-                    pass
+            self._unload()
             self._release_lock()
             raise
 
-    def _start_capture(self) -> None:
+    # --- поэтапный старт (ассистент) --------------------------------------
+
+    def open_source(self) -> None:
+        """Источник звука — до моделей: отвод записи резидента или свои
+        устройства (lock записи, папка встречи, дорожки). Звук с этого
+        момента пишется и копится в буферах окон; распознавать его начнёт
+        `begin()`, когда загрузится модель, — ничего не теряется."""
+        with self._start_lock:
+            if self._stop.is_set():
+                return
+            self._staged = True
+            if self._tap_connect is not None:
+                try:
+                    self._open_tap()
+                except BaseException:
+                    self._close_tap()
+                    raise
+                return
+            from meet.recorder import _acquire_lock
+
+            self.out_root.mkdir(parents=True, exist_ok=True)
+            self._lock_path = _acquire_lock(self.out_root, self.out_dir)
+            try:
+                self._open_devices()
+            except BaseException:
+                self._close_capture()
+                self._release_lock()
+                raise
+
+    def load_asr(self) -> None:
+        """Модель распознавания (самое долгое в старте)."""
+        self._transcriber.load()
+        self._asr_loaded = True
+
+    def load_voices(self) -> None:
+        """Эмбеддер голосов для live-имён. Ассистенту — в фоне, после модели
+        распознавания: окна до него идут без имён (имена даст расшифровка)."""
+        if self._matcher is not None:
+            self._matcher.load()
+
+    def begin(self) -> None:
+        """Модель загружена — рабочий поток: сначала звук, накопленный за
+        загрузку (целиком, без пропуска «не успевает»), дальше — по такту."""
+        with self._start_lock:
+            if self._stop.is_set() or self._worker is not None:
+                return
+            with self._window_lock:
+                self._drain()
+                for tr in self._tracks.values():
+                    tr["protect_until"] = tr["pos"] + tr["pending_n"] / tr["rate"]
+            self._asr_ready = True
+            self._worker = threading.Thread(target=self._run, daemon=True)
+            self._worker.start()
+        if self._tap_connect is None:
+            print(f"Живой режим идёт. Транскрипт: {self._transcript}")
+
+    def _unload(self) -> None:
+        if self._transcriber is not None:
+            try:
+                self._transcriber.unload()
+            except Exception:
+                pass
+
+    def _open_devices(self) -> None:
         from meet import recorder
         from meet.recorder import OpusWriter
 
         # pyaudiowpatch на Windows, sounddevice и помощник ScreenCaptureKit на macOS.
         pyaudio = recorder.audio_backend()
-
-        self._transcriber.load()
-        if self._matcher is not None:
-            self._matcher.load()
-        # Папка встречи — после загрузки моделей (до минуты): остановка или
-        # сбой на загрузке не оставляют пустую датированную папку.
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self._backend = pyaudio
         self._p = pyaudio.PyAudio()
@@ -688,9 +765,11 @@ class LiveEngine:
         self._pad_thread = threading.Thread(target=self._pad_loop,
                                             name="meet-live-pad", daemon=True)
         self._pad_thread.start()
-        self._worker = threading.Thread(target=self._run, daemon=True)
-        self._worker.start()
-        print(f"Живой режим идёт. Транскрипт: {self._transcript}")
+
+    def _catchup_due(self) -> bool:
+        """Догонять в этот такт: есть что, живой звук не отстал, вышла пауза доли."""
+        return bool(self._catch) and not self._live_lag and \
+            time.monotonic() >= self._catch_resume
 
     def _run(self) -> None:
         while not self._stop.wait(STEP_S):
@@ -702,7 +781,10 @@ class LiveEngine:
                 if text != self._last_error:  # один и тот же сбой — один раз
                     self._last_error = text
                     self._write_line(f"<!-- ошибка окна: {e} -->")
-            if self._catch and time.monotonic() >= self._catch_resume:
+            # Живой звук отстал — в этот такт не догоняем: иначе его старый
+            # звук пропускался бы («не успевает»), а живая лента важнее начала
+            # встречи (оно и так будет в полной расшифровке).
+            if self._catchup_due():
                 began = time.monotonic()
                 try:
                     self.catchup_step()
@@ -714,12 +796,9 @@ class LiveEngine:
 
     # --- подключение к идущей записи ------------------------------------
 
-    def _start_from_tap(self) -> None:
-        """Звук — из отвода записи резидента: модели, затем подключение (с
-        этого места пойдёт живой звук; всё раньше — догонялке)."""
-        self._transcriber.load()
-        if self._matcher is not None:
-            self._matcher.load()
+    def _open_tap(self) -> None:
+        """Звук — из отвода записи резидента (с этого места пойдёт живой
+        звук; всё раньше — догонялке)."""
         client = self._tap_connect()
         self._tap = client
         for info in client.tracks:
@@ -744,8 +823,6 @@ class LiveEngine:
         self._tap_reader = threading.Thread(target=self._read_tap, name="meet-live-tap",
                                             daemon=True)
         self._tap_reader.start()
-        self._worker = threading.Thread(target=self._run, daemon=True)
-        self._worker.start()
         print(f"Ассистент подключён к записи: {self.out_dir}")
 
     def _read_tap(self) -> None:
@@ -1238,16 +1315,23 @@ class LiveEngine:
         и повторно; чужой lock (start отказал) не трогает."""
         try:
             self._stop.set()
+            # Источник ещё открывается в другом потоке (поэтапный старт) —
+            # дождаться: закрывать полуоткрытое нельзя.
+            with self._start_lock:
+                pass
             if self._worker is not None:
                 self._worker.join(timeout=self.window_seconds + 30)
             if self._pad_thread is not None:
                 self._pad_thread.join(timeout=10)
             # Подключённый к записи: отвод больше не читаем (что пришло — в буферах).
             self._close_tap()
-            try:
-                self.process_window()  # финальный слив остатка буфера
-            except Exception:
-                pass
+            # Поэтапный старт, остановленный до модели: распознавать нечем —
+            # звук остаётся в дорожках (у подключённого — в записи резидента).
+            if not self._staged or self._asr_ready:
+                try:
+                    self.process_window()  # финальный слив остатка буфера
+                except Exception:
+                    pass
             if self._catch:
                 # Остановили, не догнав начало: что успели — в ленту, сводка —
                 # с пометкой о неполноте (её ставит ассистент).
@@ -1261,7 +1345,7 @@ class LiveEngine:
             if self._out is not None:
                 self._out.close()
                 self._out = None
-            if self._transcriber is not None:
+            if self._transcriber is not None and (not self._staged or self._asr_loaded):
                 self._transcriber.unload()
             if close_error is not None:
                 raise close_error  # всё закрыто; сбой дорожки не прячем
