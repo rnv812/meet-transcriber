@@ -11,7 +11,11 @@ rust-version = "1.77"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# macos-private-api: прозрачное окно на macOS — панель записи под значком в
+# строке меню (`tray_panel.rs`) стоит на системном стекле со скруглением.
+# Включена вместе с `app.macOSPrivateApi` в tauri.conf.json (tauri-build
+# сверяет их); на Windows фича ничего не меняет.
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 # Позиция и размер окна между запусками: окно открывается там, где его
 # оставили, а не прыгает в центр экрана.
 tauri-plugin-window-state = "2"

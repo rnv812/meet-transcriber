@@ -23,6 +23,7 @@ mod platform;
 mod pty;
 mod resident;
 mod tray;
+mod tray_panel;
 mod updater;
 mod upgrade;
 mod windows;
@@ -99,6 +100,7 @@ fn main() {
                 .build(),
         )
         .manage(live_panel::LivePanel::default())
+        .manage(tray_panel::TrayPanel::default())
         .invoke_handler(tauri::generate_handler![
             windows::endpoint,
             windows::open_folder,
@@ -112,6 +114,10 @@ fn main() {
             live_panel::live_set_maximized,
             live_panel::live_set_pinned,
             live_panel::live_start_drag,
+            // Панель записи под значком в строке меню macOS.
+            tray_panel::tray_panel_fit,
+            tray_panel::tray_panel_hide,
+            tray_panel::tray_panel_open,
             // Мастер первого запуска: движок расшифровки, страницы HF.
             engine::engine_status,
             engine::install_engine,
@@ -151,6 +157,8 @@ fn main() {
             close_guard::on_window_event(window, event);
             // Панель ассистента запоминает, где и какого размера её оставили.
             live_panel::on_window_event(window, event);
+            // Панель записи прячется, когда щёлкнули мимо неё.
+            tray_panel::on_window_event(window, event);
         })
         .on_page_load(|webview, payload| {
             if webview.label() == "main"

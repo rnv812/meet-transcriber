@@ -29,6 +29,7 @@ use crate::live_panel;
 use crate::logs::shell_log;
 use crate::platform::{self, Os};
 use crate::resident::{self, lock, ResidentStatus, Supervisor};
+use crate::tray_panel;
 use crate::upgrade;
 use crate::windows;
 
@@ -1394,7 +1395,7 @@ fn remember(app: &AppHandle, id: &str) {
     }
 }
 
-fn open_window(app: &AppHandle) {
+pub(crate) fn open_window(app: &AppHandle) {
     let recording = app.try_state::<TrayState>().and_then(|state| {
         let mut slot = lock(&state.last_recording);
         let id = pending_recording(slot.as_ref(), Instant::now());
@@ -1404,11 +1405,22 @@ fn open_window(app: &AppHandle) {
     windows::open_main(app, recording, None);
 }
 
-/// Левый клик по иконке: в трее Windows открывает окно (меню — правым), в
-/// строке меню macOS — показывает меню, как у всех программ там; окно тогда
-/// открывается пунктом меню или щелчком по значку в Dock.
-fn left_click_shows_menu(os: Os) -> bool {
-    os == Os::MacOs
+/// Что делает левый щелчок по значку.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeftClick {
+    /// Трей Windows: окно приложения (меню — правым щелчком).
+    OpenWindow,
+    /// Строка меню macOS: панель записи под значком (`tray_panel`) — как у
+    /// программ строки меню там; меню — правым щелчком, окно — из панели,
+    /// меню или щелчком по значку в Dock.
+    Panel,
+}
+
+pub fn left_click(os: Os) -> LeftClick {
+    match os {
+        Os::MacOs => LeftClick::Panel,
+        Os::Windows => LeftClick::OpenWindow,
+    }
 }
 
 /// Щелчок по значку в Dock (macOS, `RunEvent::Reopen`): окно закрыто или
@@ -1431,20 +1443,36 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
         .icon_as_template(cfg!(target_os = "macos"))
         .tooltip(tooltip(None, &ResidentStatus::Starting))
         .menu(&menu)
-        .show_menu_on_left_click(left_click_shows_menu(platform::current()))
+        // Меню — только правым щелчком (macOS: tray-icon показывает его по
+        // правому сам); левый — `left_click`.
+        .show_menu_on_left_click(false)
         .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
-        .on_tray_icon_event(|tray, event| match event {
-            TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            }
-            | TrayIconEvent::DoubleClick {
-                button: MouseButton::Left,
-                ..
-            } if !left_click_shows_menu(platform::current()) => open_window(tray.app_handle()),
-            _ => {}
-        })
+        .on_tray_icon_event(
+            |tray, event| match (left_click(platform::current()), event) {
+                (
+                    LeftClick::OpenWindow,
+                    TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    }
+                    | TrayIconEvent::DoubleClick {
+                        button: MouseButton::Left,
+                        ..
+                    },
+                ) => open_window(tray.app_handle()),
+                (
+                    LeftClick::Panel,
+                    TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        rect,
+                        ..
+                    },
+                ) => tray_panel::toggle(tray.app_handle(), &rect),
+                _ => {}
+            },
+        )
         .build(app)?;
     thread::Builder::new()
         .name("meet-tray-poll".into())
@@ -3421,8 +3449,8 @@ mod tests {
     }
 
     #[test]
-    fn left_click_opens_the_window_on_windows_and_the_menu_on_mac() {
-        assert!(!left_click_shows_menu(Os::Windows));
-        assert!(left_click_shows_menu(Os::MacOs));
+    fn left_click_opens_the_window_on_windows_and_the_panel_on_mac() {
+        assert_eq!(left_click(Os::Windows), LeftClick::OpenWindow);
+        assert_eq!(left_click(Os::MacOs), LeftClick::Panel);
     }
 }
