@@ -303,3 +303,88 @@ def test_put_back_restores_samples_with_their_ids(tmp_path):
     assert back.id == old.id and back.recording == "r1" and np.allclose(back.embedding, A)
     owner_voice.put_back([raw], tmp_path)  # уже есть — не дублируется
     assert [s.id for s in owner_voice.load(tmp_path)] == [old.id]
+
+
+# --- найденный по прошлым встречам образец (suggestion, T8) ---------------------
+
+
+def _ref(rec, start=10.0, end=14.0):
+    return {"recording": rec, "start": start, "end": end, "track": "mic"}
+
+
+def test_suggestion_is_saved_with_outcome_and_read_back(tmp_path):
+    owner_voice.save_derived({"status": "suggested", "reason": None, "checked": 6},
+                             {"embedding": _vec(1, 0.1), "meetings": ["r1", "r2", "r3"],
+                              "samples": [_ref("r1"), _ref("r2"), _ref("r3")], "seconds": 412.5,
+                              "quality": 0.81}, voices=tmp_path)
+    got = owner_voice.suggestion(tmp_path)
+    assert np.allclose(got["embedding"], _vec(1, 0.1))
+    assert got["meetings"] == ["r1", "r2", "r3"] and got["seconds"] == 412.5
+    assert [s["recording"] for s in got["samples"]] == ["r1", "r2", "r3"]
+    assert owner_voice.derived(tmp_path)["status"] == "suggested"
+    assert owner_voice.derived(tmp_path)["date"]
+    # Найденное — не образец: сравнение с владельцем его не видит.
+    assert owner_voice.load(tmp_path) == []
+
+
+def test_nothing_found_clears_previous_suggestion(tmp_path):
+    owner_voice.save_derived({"status": "suggested"}, {"embedding": A, "meetings": ["r1"],
+                                                       "samples": [_ref("r1")], "seconds": 90},
+                             voices=tmp_path)
+    owner_voice.save_derived({"status": "too_few", "reason": "Мало встреч."}, None, voices=tmp_path)
+    assert owner_voice.suggestion(tmp_path) is None
+    assert owner_voice.derived(tmp_path)["reason"] == "Мало встреч."
+
+
+def test_broken_suggestion_is_none(tmp_path):
+    p = owner_voice.path(tmp_path)
+    p.parent.mkdir(parents=True)
+    for bad in ({"embedding": [0.0] * DIM, "samples": []}, {"embedding": "x"}, ["мусор"], 5):
+        p.write_text(json.dumps({"version": 1, "model": owner_voice.DIARIZATION_MODEL,
+                                 "samples": [], "suggestion": bad}), encoding="utf-8")
+        assert owner_voice.suggestion(tmp_path) is None
+    p.write_text(json.dumps({"version": 1, "model": "другая", "samples": [],
+                             "suggestion": {"embedding": [1.0] * DIM}}), encoding="utf-8")
+    assert owner_voice.suggestion(tmp_path) is None
+
+
+def test_accept_stores_auto_sample_and_clears_suggestion(tmp_path):
+    enrolled = owner_voice.add(B, source="enroll", seconds=20, device="USB", voices=tmp_path)
+    owner_voice.save_derived({"status": "suggested"}, {"embedding": A, "meetings": ["r1", "r2", "r3"],
+                                                       "samples": [_ref("r1")], "seconds": 300,
+                                                       "quality": 0.8}, voices=tmp_path)
+    sample = owner_voice.accept_suggestion(tmp_path)
+    assert sample.source == "auto" and sample.seconds == 300 and sample.quality == 0.8
+    assert sample.device is None and sample.recording is None
+    assert [s.id for s in owner_voice.load(tmp_path)] == [enrolled.id, sample.id]
+    assert owner_voice.suggestion(tmp_path) is None
+    # Второй раз принимать нечего.
+    assert owner_voice.accept_suggestion(tmp_path) is None
+
+
+def test_accept_replaces_previous_auto_sample(tmp_path):
+    old = owner_voice.add(B, source="auto", seconds=100, voices=tmp_path)
+    owner_voice.save_derived({"status": "suggested"}, {"embedding": A, "meetings": ["r1"],
+                                                       "samples": [], "seconds": 200}, voices=tmp_path)
+    new = owner_voice.accept_suggestion(tmp_path)
+    assert [s.id for s in owner_voice.load(tmp_path)] == [new.id] and new.id != old.id
+
+
+def test_decline_clears_suggestion_only(tmp_path):
+    kept = owner_voice.add(B, source="enroll", seconds=20, voices=tmp_path)
+    owner_voice.save_derived({"status": "suggested"}, {"embedding": A, "meetings": ["r1"],
+                                                       "samples": [], "seconds": 200}, voices=tmp_path)
+    assert owner_voice.clear_suggestion(tmp_path) is True
+    assert owner_voice.suggestion(tmp_path) is None
+    assert [s.id for s in owner_voice.load(tmp_path)] == [kept.id]
+    assert owner_voice.clear_suggestion(tmp_path) is False
+    assert owner_voice.clear_suggestion(tmp_path / "пусто") is False
+
+
+def test_sample_edits_keep_suggestion_and_outcome(tmp_path):
+    owner_voice.save_derived({"status": "suggested"}, {"embedding": A, "meetings": ["r1"],
+                                                       "samples": [], "seconds": 200}, voices=tmp_path)
+    s = owner_voice.add(B, source="enroll", seconds=20, voices=tmp_path)
+    owner_voice.remove(s.id, tmp_path)
+    assert owner_voice.suggestion(tmp_path) is not None
+    assert owner_voice.derived(tmp_path)["status"] == "suggested"

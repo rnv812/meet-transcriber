@@ -9,12 +9,14 @@
 в диаризации), без звука:
 
     {"version": 1, "model": "...", "samples": [{"id", "embedding", "source",
-     "date", "seconds", "device", "recording", "quality"}], "suggestion": null}
+     "date", "seconds", "device", "recording", "quality"}], "suggestion": null,
+     "derived": {"status", "reason", "date", ...}}
 
 Откуда образец (`source`): `enroll` — записан в мастере или настройках,
 `meeting` — «Это я» в панели «Спикеры», `auto` — найден по прошлым встречам и
 подтверждён человеком. `suggestion` — найденный, но ещё не подтверждённый
-образец (его пишет поиск по прошлым встречам); правка образцов его не трогает.
+образец (его пишет поиск по прошлым встречам, meet.owner_derive), `derived` —
+итог этого поиска; правка образцов их не трогает.
 
 Как строить образец (запись в мастере, «Это я», поиск по прошлым встречам —
 T2/T7/T8): только по участкам речи — прогонам слов или VAD (пауза внутри не
@@ -248,9 +250,13 @@ def add(embedding, *, source: str, seconds: float, device: str | None = None,
     p = path(voices)
     with _locked(p):
         data = _read(p)
-        kept = [s for s in _samples_of(data) if not _replaces(s, sample)]
-        _write(p, data, _evict(kept + [sample]))
+        _write(p, data, _with(_samples_of(data), sample))
     return sample
+
+
+def _with(samples: list[OwnerSample], sample: OwnerSample) -> list[OwnerSample]:
+    kept = [s for s in samples if not _replaces(s, sample)]
+    return _evict(kept + [sample])
 
 
 def remove(sample_id: str, voices: Path | None = None) -> bool:
@@ -333,3 +339,87 @@ def centroid(samples: list[OwnerSample]) -> np.ndarray | None:
     w = np.array([max(s.seconds, 1.0) for s in use], dtype=np.float64)
     total = (np.stack([_unit(s.embedding.astype(np.float64)) for s in use]) * w[:, None]).sum(0)
     return _unit(total).astype(np.float32)
+
+
+# --- найденный по прошлым встречам (meet.owner_derive) ----------------------------
+# `suggestion` — голос, который поиск по прошлым встречам считает вашим, но
+# человек его ещё не подтвердил: в сравнении с владельцем он не участвует.
+# `derived` — итог последнего поиска (статус и причина словами, без векторов):
+# окно показывает честную причину, если ничего не нашлось.
+
+
+def _suggestion_of(data: dict) -> dict | None:
+    if data.get("model", DIARIZATION_MODEL) != DIARIZATION_MODEL:
+        return None
+    raw = data.get("suggestion")
+    if not isinstance(raw, dict):
+        return None
+    vec = _vector(raw.get("embedding"))
+    if vec is None:
+        return None
+    meetings = [m for m in raw.get("meetings") or [] if isinstance(m, str)]         if isinstance(raw.get("meetings"), list) else []
+    samples = [x for x in raw.get("samples") or [] if isinstance(x, dict)]         if isinstance(raw.get("samples"), list) else []
+    return {**raw, "embedding": vec, "meetings": meetings, "samples": samples,
+            "seconds": _optional_float(raw.get("seconds")) or 0.0,
+            "quality": _optional_float(raw.get("quality"))}
+
+
+def suggestion(voices: Path | None = None) -> dict | None:
+    """Найденный, но не подтверждённый голос: {embedding, meetings, samples
+    [{recording, start, end, track}], seconds, quality, date}; нет — None."""
+    return _suggestion_of(_read(path(voices)))
+
+
+def derived(voices: Path | None = None) -> dict | None:
+    """Итог последнего поиска по прошлым встречам: {status, reason, date, …}."""
+    raw = _read(path(voices)).get("derived")
+    return raw if isinstance(raw, dict) else None
+
+
+def save_derived(outcome: dict, found: dict | None, voices: Path | None = None) -> None:
+    """Записать итог поиска и найденный голос (None — ничего не нашлось:
+    прежнее предложение снимается — поиск запускали заново). Образцы не меняются."""
+    raw = None
+    if found is not None:
+        vec = _vector(found.get("embedding"))
+        if vec is None:
+            raise ValueError("пустой или битый вектор голоса")
+        raw = {**found, "embedding": [float(x) for x in _unit(vec.astype(np.float64))],
+               "date": found.get("date") or _date.today().isoformat()}
+    p = path(voices)
+    with _locked(p):
+        data = _read(p)
+        samples = _samples_of(data)
+        data = {**data, "suggestion": raw,
+                "derived": {**outcome, "date": outcome.get("date") or _date.today().isoformat()}}
+        _write(p, data, samples)
+
+
+def accept_suggestion(voices: Path | None = None) -> OwnerSample | None:
+    """«Да, это я»: найденный голос — образцом `auto` (прежний auto
+    заменяется), предложение снимается. Предложения нет — None."""
+    p = path(voices)
+    with _locked(p):
+        data = _read(p)
+        found = _suggestion_of(data)
+        if found is None:
+            return None
+        quality = found.get("quality")
+        sample = OwnerSample(id=uuid.uuid4().hex, embedding=found["embedding"], source="auto",
+                             date=_date.today().isoformat(), seconds=round(float(found["seconds"]), 2),
+                             quality=None if quality is None else round(float(quality), 4))
+        _write(p, {**data, "suggestion": None}, _with(_samples_of(data), sample))
+    return sample
+
+
+def clear_suggestion(voices: Path | None = None) -> bool:
+    """«Нет»: снять найденный голос. → было ли что снимать."""
+    p = path(voices)
+    if not p.exists():
+        return False
+    with _locked(p):
+        data = _read(p)
+        if data.get("suggestion") is None:
+            return False
+        _write(p, {**data, "suggestion": None}, _samples_of(data))
+    return True
