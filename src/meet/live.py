@@ -141,6 +141,8 @@ class WallClockWriter:
 
     def write(self, data: bytes) -> None:
         with self._lock:
+            if self._closed:
+                return  # callback стрима, запоздавший к остановке
             self._pad(len(data) / (self._frame * self._rate), self.PAD_GAP_S,
                       limit_s=self.MAX_INLINE_PAD_S)
             self._writer.write(data)
@@ -158,6 +160,14 @@ class WallClockWriter:
             with self._lock:
                 if self._closed or not self._pad(0.0, self.TAIL_GAP_S, limit_s=1.0):
                     return
+
+    def catch_up(self) -> None:
+        """Долить всю паузу до часов сейчас — перед стартом переоткрытого
+        стрима. Перезапуск короче PAD_GAP_S ни callback, ни тикер не долили
+        бы: дорожка с непрерывным звуком осталась бы сдвинутой на его длину."""
+        with self._lock:
+            if not self._closed:
+                self._pad(0.0, self.TAIL_GAP_S)
 
     def close(self) -> None:
         with self._lock:
@@ -191,6 +201,59 @@ class WallClockWriter:
                 self._buffer.push_silence(chunk)
             frames -= n
         return True
+
+
+def _track_converter(src_rate: int, src_ch: int, rate: int, channels: int):
+    """bytes→bytes: int16 PCM устройства → формат дорожки. То же устройство —
+    без изменений. Дорожка шире стерео (массив микрофонов, 5.1), а устройство
+    другое: `recorder._make_converter` даёт не больше двух каналов, поэтому
+    звук сводится в стерео и раскладывается по каналам дорожки парами
+    (левый — в чётные, правый — в нечётные). Моно-источник после этого
+    сводится в моно без потерь; у стерео веса каналов в сведении могут
+    отличаться (ffmpeg сводит по раскладке каналов, а не средним)."""
+    from meet import recorder
+
+    if channels <= 2 or (src_rate, src_ch) == (rate, channels):
+        return recorder._make_converter(src_rate, src_ch, rate, channels)
+    from array import array
+
+    to_stereo = recorder._make_converter(src_rate, src_ch, rate, 2)
+
+    def convert(data: bytes) -> bytes:
+        stereo = array("h", to_stereo(data))
+        out = array("h", bytes(len(stereo) * channels))
+        for ch in range(channels):
+            out[ch::channels] = stereo[ch % 2::2]
+        return out.tobytes()
+
+    return convert
+
+
+class _CaptureTrack:
+    """Дорожка собственного захвата живого режима. Устройство под ней может
+    смениться (BT-наушники отключились и вернулись), а файл и буфер окна —
+    одни на всю запись: формат дорожки — у первого устройства, звук другого
+    приводится к нему (`_track_converter`)."""
+
+    def __init__(self, fname: str, pick, role: int) -> None:
+        self.fname = fname  # ключ дорожки движка: sys.wav / mic.wav
+        self.pick = pick  # recorder._Picker: устройство на каждое (пере)открытие
+        self.role = role  # индекс в ids() endpoint'ов: 0 вывод, 1 ввод
+        self.writer: "WallClockWriter | None" = None
+        self.rate = 0
+        self.channels = 0
+        self.stream = None
+        self.device: str | None = None
+        self.waiting = False  # устройства нет — ждём (одна строка в журнал)
+        self.in_fallback = False  # пишет с системного вместо выбранного
+
+    def alive(self) -> bool:
+        if self.stream is None:
+            return False
+        try:
+            return bool(self.stream.is_active())
+        except Exception:
+            return False
 
 
 # «Взять из настроек» — отличается от None («системное устройство»).
@@ -264,8 +327,15 @@ class LiveEngine:
         self._out = None
         self._stop = threading.Event()
         self._worker: "threading.Thread | None" = None
-        self._streams: list = []
+        self._capture: list[_CaptureTrack] = []
+        self._backend = None  # модуль звука этой ОС (recorder.audio_backend())
         self._p = None
+        # Надзор за устройствами (поток доливки): ID дефолтных endpoint'ов на
+        # момент последнего (пере)запуска дорожек и расписание повторов.
+        self._ids = None
+        self._last_restart = 0.0
+        self._retry_wait = 0.0
+        self._watch_error: str | None = None
         # Выбранное устройство не нашлось — пишем с системного (для резидента:
         # уходит в файл эндпоинта): [{"kind", "name", "device"}].
         self.devices_fallback: list[dict] = []
@@ -570,56 +640,50 @@ class LiveEngine:
         # Папка встречи — после загрузки моделей (до минуты): остановка или
         # сбой на загрузке не оставляют пустую датированную папку.
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        self._backend = pyaudio
         self._p = pyaudio.PyAudio()
+        # Системные устройства — до выбора своих: смена между выбором и первым
+        # тактом надзора не потеряется.
+        self._ids = self._default_ids()
         # Выбранное в настройках — по имени; нет его — системное, с одной
-        # строкой об этом (живой режим, в отличие от записи, устройство на
-        # ходу не меняет).
+        # строкой об этом. Дальше за устройствами следит поток доливки
+        # (`_watch_devices`): сменилось системное или стрим умер — дорожки
+        # переоткрываются.
+        tracks = (
+            (_CaptureTrack("sys.wav", recorder._Picker("output", self.output_device), 0),
+             True, True),
+            (_CaptureTrack("mic.wav", recorder._Picker("mic", self.mic_device), 1),
+             False, False),
+        )
         picked = []
-        for kind, wanted in (("output", self.output_device), ("mic", self.mic_device)):
-            dev, fell_back = recorder.resolve_device(self._p, kind, wanted)
-            if fell_back:
-                print(recorder.fallback_text(kind, wanted))
+        for track, _, _ in tracks:
+            dev = track.pick(self._p)
+            if track.pick.fallback:
+                track.in_fallback = True
+                print(recorder.fallback_text(track.pick.kind, track.pick.wanted))
                 self.devices_fallback.append(
-                    {"kind": kind, "name": wanted,
+                    {"kind": track.pick.kind, "name": track.pick.wanted,
                      "device": dev["name"].removesuffix(" [Loopback]")})
             picked.append(dev)
-        devices = (
-            (picked[0], "sys.wav", True, True),
-            (picked[1], "mic.wav", False, False),
-        )
+        self._retry_wait = recorder.RETRY_S
         # Начало координат ленты — старт захвата, как и у дорожек на диске.
         self._t0 = self._clock()
-        for dev, fname, normalize, identify in devices:
-            channels = max(1, int(dev["maxInputChannels"]))
-            rate = int(dev["defaultSampleRate"])
-            self.register_track(fname, rate, channels, normalize=normalize,
+        for (track, normalize, identify), dev in zip(tracks, picked):
+            fname = track.fname
+            track.rate = int(dev["defaultSampleRate"])
+            track.channels = max(1, int(dev["maxInputChannels"]))
+            self.register_track(fname, track.rate, track.channels, normalize=normalize,
                                 identify=identify)
             # fname — внутренний ключ дорожки (завязан на SPEAKERS); на диск для
             # офлайн-прохода пишем сжатый .opus. Буфер окна получает тот же
             # поток, что и файл, — с доливкой пауз.
-            writer = WallClockWriter(
+            track.writer = WallClockWriter(
                 OpusWriter(self.out_dir / fname.replace(".wav", ".opus"),
-                           channels, rate),
-                channels, rate, buffer=self._tracks[fname]["buffer"])
-
-            def make_cb(w: WallClockWriter):
-                def cb(in_data, frame_count, time_info, status):
-                    w.write(in_data)
-                    return (None, pyaudio.paContinue)
-
-                return cb
-
-            stream = self._p.open(
-                format=pyaudio.paInt16,
-                channels=channels,
-                rate=rate,
-                input=True,
-                input_device_index=int(dev["index"]),
-                frames_per_buffer=1024,
-                stream_callback=make_cb(writer),
-            )
-            self._streams.append((stream, writer))
-            print(f"  {fname}: {dev['name']} ({rate} Hz, {channels} ch)")
+                           track.channels, track.rate),
+                track.channels, track.rate, buffer=self._tracks[fname]["buffer"])
+            self._capture.append(track)  # до открытия: сбой старта закроет и файл
+            src_rate, src_ch = self._open_stream(track, dev)
+            print(f"  {fname}: {dev['name']} ({src_rate} Hz, {src_ch} ch)")
 
         self._pad_thread = threading.Thread(target=self._pad_loop,
                                             name="meet-live-pad", daemon=True)
@@ -908,30 +972,261 @@ class LiveEngine:
     def _pad_loop(self) -> None:
         """Тикер доливки: молчащие дорожки растут по часам кусками, а не
         одним залпом из callback'а или при остановке."""
-        while not self._stop.wait(PAD_TICK_S):
-            for _, writer in list(self._streams):
+        from meet import recorder
+
+        # Endpoint'ы — COM-объект этого потока: здесь создаётся, здесь и
+        # закрывается. На macOS надзора нет, ни за системным звуком, ни за
+        # микрофоном: системный звук там идёт через помощник, и обычная
+        # запись перезапускает его отдельно от микрофона
+        # (`recorder._Session._tick_tap`) — здесь это не повторено.
+        endpoints = None if recorder._MAC else recorder._DefaultEndpoints()
+        com_ok = endpoints is not None and endpoints.ids() is not None
+        if endpoints is not None and not com_ok:
+            self._say("COM недоступен — смену дефолтного устройства не отслеживаю")
+        try:
+            while not self._stop.wait(PAD_TICK_S):
+                for track in list(self._capture):
+                    try:
+                        track.writer.tick()
+                    except Exception:
+                        pass  # сбой доливки не валит запись; хвост дольёт close()
+                if endpoints is None:
+                    continue
                 try:
-                    writer.tick()
+                    ids = endpoints.ids()
+                    if com_ok and ids is None:
+                        com_ok = False
+                        self._say("COM перестал отвечать — смену дефолтного "
+                                  "устройства больше не отслеживаю")
+                    self._watch_devices(ids)
+                    self._watch_error = None
+                except Exception as e:  # надзор не должен валить доливку
+                    text = f"{type(e).__name__}: {e}"
+                    if text != self._watch_error:  # один и тот же сбой — один раз
+                        self._watch_error = text
+                        self._say(f"надзор за устройствами: {text}")
+        finally:
+            if endpoints is not None:
+                endpoints.close()
+
+    # --- смена аудио-устройства посреди записи ---------------------------
+
+    def _say(self, line: str) -> None:
+        """Строка надзора в журнал. Сбой журнала не должен остановить поток
+        доливки и аудио-callback."""
+        try:
+            self._log(line)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _default_ids():
+        """ID системных endpoint'ов прямо сейчас, из потока вызывающего.
+        COM-объект — на один вызов: у надзора свой, в его потоке."""
+        from meet import recorder
+
+        if recorder._MAC:
+            return None
+        endpoints = recorder._DefaultEndpoints()
+        try:
+            return endpoints.ids()
+        finally:
+            endpoints.close()
+
+    def _open_stream(self, track: _CaptureTrack, dev: dict,
+                     resume: bool = False) -> tuple[int, int]:
+        """Стрим устройства `dev` в дорожку; → (частота, каналы) устройства.
+        `resume` — переоткрытие посреди записи: пауза перезапуска доливается
+        тишиной до старта стрима, иначе она выпала бы из таймлайна дорожки."""
+        pyaudio = self._backend
+        src_rate = int(dev["defaultSampleRate"])
+        src_ch = max(1, int(dev["maxInputChannels"]))
+        convert = _track_converter(src_rate, src_ch, track.rate, track.channels)
+        writer = track.writer
+
+        def cb(in_data, frame_count, time_info, status):
+            try:
+                writer.write(convert(in_data))
+            except Exception as e:
+                self._say(f"{track.fname}: ошибка в аудио-callback: {e!r} — "
+                          "стрим будет переоткрыт")
+                return (None, pyaudio.paAbort)
+            return (None, pyaudio.paContinue)
+
+        params = dict(
+            format=pyaudio.paInt16,
+            channels=src_ch,
+            rate=src_rate,
+            input=True,
+            input_device_index=int(dev["index"]),
+            frames_per_buffer=1024,
+            stream_callback=cb,
+        )
+        if resume:
+            stream = self._p.open(start=False, **params)
+            try:
+                writer.catch_up()
+                stream.start_stream()
+            except Exception:
+                try:
+                    stream.close()
                 except Exception:
-                    pass  # сбой доливки не валит запись; хвост дольёт close()
+                    pass
+                raise
+        else:
+            stream = self._p.open(**params)
+        track.stream = stream
+        track.device = dev["name"]
+        return src_rate, src_ch
+
+    def _watch_devices(self, ids) -> None:
+        """Такт надзора (поток доливки), та же логика, что у записи
+        (`recorder._Session.tick`): сменилось системное устройство дорожки,
+        которая за ним следит, стрим умер или дорожка ждёт устройство —
+        полный перезапуск захвата. Файлы дорожек при этом не трогаются:
+        паузу доливает `WallClockWriter`."""
+        from meet import recorder
+
+        if self._ids is None:
+            self._ids = ids  # COM не ответил на старте — базлайн с первого такта
+        now = time.monotonic()
+        # Закреплённое (и найденное) устройство от системного не зависит.
+        changed = ids is not None and self._ids is not None and any(
+            ids[t.role] != self._ids[t.role] for t in self._capture if not t.pick.pinned
+        )
+        if ids is not None and self._ids is not None and not changed:
+            self._ids = ids
+        died = any(t.stream is not None and not t.alive() for t in self._capture)
+        waiting = [t for t in self._capture if t.stream is None]
+        # Повтор ждущих — когда для их роли снова есть системное устройство (или
+        # COM сломан и проверить нечем), с нарастающей паузой: перезапуск рвёт
+        # и здоровую дорожку.
+        retry = bool(waiting) and now - self._last_restart >= self._retry_wait and (
+            ids is None or any(ids[t.role] is not None for t in waiting)
+        )
+        if not (changed or died or retry):
+            return
+        if now - self._last_restart < recorder.RESTART_MIN_S:
+            return
+        if changed:
+            reason = "сменилось дефолтное аудио-устройство"
+        elif died:
+            reason = "дорожка остановилась (устройство пропало?)"
+        else:
+            reason = None  # тихий повтор ждущей дорожки
+        self._restart_capture(ids, reason)
+
+    def _restart_capture(self, ids, reason: str | None) -> None:
+        """Закрыть оба стрима → terminate → свежий PyAudio → переоткрыть.
+        Перезапуск всегда полный: список устройств PortAudio обновляет только
+        «холодная» инициализация (см. `recorder._Session`)."""
+        from meet import recorder
+
+        self._last_restart = time.monotonic()
+        if reason:
+            self._say(f"{reason} — перезапускаю дорожки")
+        for track in self._capture:
+            self._close_stream(track)
+        error = self._terminate_audio()
+        if error is not None:
+            self._say(f"PyAudio.terminate: {error!r}")
+        if self._stop.is_set():
+            return  # остановка: поднимать звук заново незачем, закроет stop()
+        try:
+            self._p = self._backend.PyAudio()
+        except Exception as e:
+            self._say(f"PyAudio не инициализировался: {e!r}")
+        if self._stop.is_set():
+            self._terminate_audio()  # остановка пришла, пока поднимался PyAudio
+            return
+        if self._p is not None:
+            for track in self._capture:
+                if self._stop.is_set():
+                    return
+                self._reopen(track)
+            if ids is not None:
+                self._ids = ids
+        if self._p is not None and all(t.stream is not None for t in self._capture):
+            self._retry_wait = recorder.RETRY_S
+        else:
+            self._retry_wait = min(max(self._retry_wait, recorder.RETRY_S) * 2,
+                                   recorder.RETRY_MAX_S)
+
+    def _reopen(self, track: _CaptureTrack) -> bool:
+        """Открыть дорожку заново после перезапуска; неудача — ждать дальше."""
+        from meet import recorder
+
+        try:
+            dev = track.pick(self._p)
+            src_rate, src_ch = self._open_stream(track, dev, resume=True)
+        except Exception as e:
+            if not track.waiting:
+                track.waiting = True
+                self._say(f"{track.fname}: устройство недоступно — жду "
+                          f"(пауза уйдёт в тишину): {e!r}")
+            return False
+        track.waiting = False
+        fallback = bool(track.pick.fallback)
+        if fallback != track.in_fallback:
+            track.in_fallback = fallback
+            text = recorder.fallback_text if fallback else recorder.restored_text
+            self._say(text(track.pick.kind, track.pick.wanted))
+        self._say(f"{track.fname}: запись возобновлена: {track.device} "
+                  f"({src_rate} Hz, {src_ch} ch)")
+        return True
+
+    @staticmethod
+    def _close_stream(track: _CaptureTrack) -> None:
+        stream, track.stream = track.stream, None
+        if stream is None:
+            return
+        for close in (stream.stop_stream, stream.close):
+            try:
+                close()
+            except Exception:
+                pass  # стрим на пропавшем устройстве может не закрыться штатно
+
+    def _terminate_audio(self) -> Exception | None:
+        """Завершить PyAudio; → ошибка, если Pa_Terminate так и не прошёл."""
+        p, self._p = self._p, None
+        if p is None:
+            return None
+        try:
+            p.terminate()
+        except Exception:
+            # Битый стрим (устройство пропало) роняет terminate() до
+            # Pa_Terminate — список устройств замёрз бы до конца процесса
+            # (см. `recorder._Session._terminate`). Выбрасываем реестр стримов
+            # и повторяем.
+            try:
+                p._streams.clear()
+                p.terminate()
+            except Exception as e:
+                return e
+        return None
 
     def _close_capture(self) -> Exception | None:
         """Закрыть стримы, дорожки и PyAudio; безопасно при частичном старте
         и повторном вызове. Сбой одной дорожки не мешает закрыть остальные —
         первая ошибка возвращается вызывающему."""
         first: Exception | None = None
-        streams, self._streams = self._streams, []
-        closers = [c for stream, writer in streams
-                   for c in (stream.stop_stream, stream.close, writer.close)]
-        p, self._p = self._p, None
-        if p is not None:
-            closers.append(p.terminate)
+        tracks, self._capture = self._capture, []
+        closers = []
+        for track in tracks:
+            stream, track.stream = track.stream, None
+            if stream is not None:
+                closers += [stream.stop_stream, stream.close]
+            if track.writer is not None:
+                closers.append(track.writer.close)
         for close in closers:
             try:
                 close()
             except Exception as e:
                 first = first or e
-        return first
+        # Стрим на пропавшем устройстве роняет terminate() до Pa_Terminate —
+        # `_terminate_audio` это обходит, как и при перезапуске.
+        error = self._terminate_audio()
+        return first or error
 
     def _release_lock(self) -> None:
         lock, self._lock_path = self._lock_path, None

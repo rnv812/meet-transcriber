@@ -323,6 +323,7 @@ def test_on_entry_gets_structure_next_to_line(tmp_path):
 
 import json  # noqa: E402
 import os  # noqa: E402
+import struct  # noqa: E402
 import sys  # noqa: E402
 import types  # noqa: E402
 
@@ -352,8 +353,18 @@ class _LoadSpy:
 def _fake_audio(monkeypatch):
     """Подменяет устройства: start() не открывает настоящий звук."""
     class Stream:
+        def is_active(self):
+            return True
+
         def stop_stream(self):
             pass
+
+        def close(self):
+            pass
+
+    class Endpoints:  # настоящий COM тестам не нужен: устройства не меняются
+        def ids(self):
+            return ("out", "mic")
 
         def close(self):
             pass
@@ -388,6 +399,7 @@ def _fake_audio(monkeypatch):
     fake = types.SimpleNamespace(paWASAPI=13, paInt16=8, paContinue=0, PyAudio=PA)
     monkeypatch.setitem(sys.modules, "pyaudiowpatch", fake)
     monkeypatch.setattr(recorder, "OpusWriter", Writer)
+    monkeypatch.setattr(recorder, "_DefaultEndpoints", Endpoints)
     monkeypatch.setattr(recorder, "_find_loopback", lambda p: {
         "index": 0, "name": "loopback", "maxInputChannels": 2,
         "defaultSampleRate": 48000})
@@ -702,3 +714,673 @@ def test_live_capture_reads_devices_from_settings(tmp_path, monkeypatch):
     engine.start()
     engine.stop()
     assert ("mic", "USB-микрофон") in asked and ("output", None) in asked
+
+
+# --- Живой режим переживает смену аудио-устройства -----------------------------
+
+# Надзор за устройствами — только Windows: на macOS его нет.
+_device_watch = pytest.mark.skipif(recorder._MAC, reason="надзор за устройствами — Windows")
+
+
+def _switchable_audio(monkeypatch):
+    """Подделка звука, у которой устройства меняются на ходу. `world` — что
+    сейчас видит система: системные устройства ролей (None — устройства
+    нет), устройства по имени (выбранные в настройках), ID системных
+    endpoint'ов (None — COM не отвечает) и журнал того, что с ней делали."""
+    import meet.live as live_mod
+
+    world = {
+        "output": {"index": 0, "name": "Наушники [Loopback]", "maxInputChannels": 2,
+                   "defaultSampleRate": 48000},
+        "mic": {"index": 1, "name": "Микрофон", "maxInputChannels": 1,
+                "defaultSampleRate": 16000},
+        "ids": ("out-1", "mic-1"),
+        "named": {},  # имя из настроек → устройство; нет имени — fallback на системное
+        "fail_open": set(),  # индексы устройств, которые не открываются
+        # terminate() падает: "streams" — пока в реестре экземпляра есть
+        # стримы (как настоящий на битом стриме), "always" — в любом случае.
+        "terminate_broken": None,
+        "terminated": 0,
+        "fail_start": set(),  # индексы устройств, чей start_stream() падает
+        "on_init": None,  # () -> None при каждом подъёме PyAudio
+        "broken_writers": set(),  # имена файлов, запись в которые падает
+        "on_resolve": None,  # (kind) -> None перед каждым выбором устройства
+        "streams": [],
+        "inits": 0,
+        "polls": 0,
+        "written": {},
+        "created": {},
+        "channels": {},
+        "closed": [],
+        "at_start": [],  # сколько байт было в файлах на момент start_stream()
+    }
+
+    class Stream:
+        def __init__(self, kw):
+            self.kw = kw
+            self.started = kw.get("start", True)
+            self.active = self.started
+            self.closed = False
+
+        def is_active(self):
+            return self.active
+
+        def start_stream(self):
+            if self.kw["input_device_index"] in world["fail_start"]:
+                raise OSError("стрим не стартовал")
+            world["at_start"].append(
+                {name: sum(map(len, chunks)) for name, chunks in world["written"].items()})
+            self.started = self.active = True
+
+        def stop_stream(self):
+            self.active = False
+
+        def close(self):
+            self.closed = True
+
+        def feed(self, data: bytes):
+            return self.kw["stream_callback"](data, 0, None, 0)
+
+    class PA:
+        def __init__(self):
+            world["inits"] += 1
+            self._streams = set()  # закрытый стрим из реестра не уходит: «битый»
+            if world["on_init"] is not None:
+                world["on_init"]()
+
+        def open(self, **kw):
+            if kw["input_device_index"] in world["fail_open"]:
+                raise OSError("устройство не открылось")
+            stream = Stream(kw)
+            self._streams.add(stream)
+            world["streams"].append(stream)
+            return stream
+
+        def terminate(self):
+            broken = world["terminate_broken"]
+            if broken == "always" or (broken == "streams" and self._streams):
+                raise OSError("битый стрим")
+            world["terminated"] += 1
+
+    class Writer:
+        def __init__(self, path, channels, rate):
+            self.name = path.name
+            world["written"].setdefault(self.name, [])
+            world["created"][self.name] = world["created"].get(self.name, 0) + 1
+            world["channels"][self.name] = channels
+
+        def write(self, data):
+            if self.name in world["broken_writers"]:
+                raise OSError("ffmpeg умер")
+            world["written"][self.name].append(bytes(data))
+
+        def close(self):
+            world["closed"].append(self.name)
+
+    class Endpoints:
+        def ids(self):
+            world["polls"] += 1
+            return world["ids"]
+
+        def close(self):
+            pass
+
+    def resolve(p, kind, wanted):
+        if world["on_resolve"] is not None:
+            world["on_resolve"](kind)
+        if wanted and wanted in world["named"]:
+            return dict(world["named"][wanted]), False
+        dev = world[kind]
+        if dev is None:
+            raise OSError("устройства нет")
+        return dict(dev), bool(wanted)
+
+    fake = types.SimpleNamespace(paWASAPI=13, paInt16=8, paContinue=0, paAbort=2, PyAudio=PA)
+    monkeypatch.setitem(sys.modules, "pyaudiowpatch", fake)
+    monkeypatch.setattr(recorder, "OpusWriter", Writer)
+    monkeypatch.setattr(recorder, "resolve_device", resolve)
+    monkeypatch.setattr(recorder, "_DefaultEndpoints", Endpoints)
+    monkeypatch.setattr(recorder, "RESTART_MIN_S", 0.0)
+    monkeypatch.setattr(recorder, "RETRY_S", 0.05)
+    monkeypatch.setattr(live_mod, "PAD_TICK_S", 0.02)
+    # Рабочий поток буферы не трогает: тесты читают их сами.
+    monkeypatch.setattr(live_mod, "STEP_S", 3600)
+    return world
+
+
+def _live(tmp_path, log=None, **kw):
+    return LiveEngine(tmp_path / "2026-10-01_10-00", _LoadSpy(), window_seconds=3600,
+                      speaker_name="Вы", log=(log.append if log is not None else print),
+                      **kw)
+
+
+def _wait(cond, timeout=5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return bool(cond())
+
+
+def _watch_ticks(world, n: int = 5) -> None:
+    """Дождаться ещё `n` завершённых тактов надзора. Считаются опросы
+    endpoint'ов, а опрос — начало такта: один сверху."""
+    target = world["polls"] + n + 1
+    assert _wait(lambda: world["polls"] >= target)
+
+
+def _open_on(world, index: int) -> list:
+    """Запущенные и не закрытые стримы на устройстве с этим индексом."""
+    return [s for s in world["streams"]
+            if s.kw["input_device_index"] == index and s.started and not s.closed]
+
+
+def _audio_chunks(world, name: str) -> list[bytes]:
+    """Что дошло до файла дорожки, кроме доливки тишины."""
+    return [c for c in world["written"][name] if any(c)]
+
+
+def _has(log: list[str], text: str) -> bool:
+    return any(text in line for line in log)
+
+
+SPEAKERS_LB = {"index": 7, "name": "Динамики [Loopback]", "maxInputChannels": 2,
+               "defaultSampleRate": 48000}
+
+
+@_device_watch
+def test_default_device_change_reopens_live_tracks(tmp_path, monkeypatch):
+    """Наушники отключили — система ушла на динамики: дорожка звука
+    собеседников переоткрывается на новом устройстве, а не молчит до конца
+    встречи; звук нового устройства доходит и до файла, и до окна."""
+    world = _switchable_audio(monkeypatch)
+    log: list[str] = []
+    engine = _live(tmp_path, log)
+    engine.start()
+    try:
+        first = _open_on(world, 0)[0]
+        world["output"], world["ids"] = SPEAKERS_LB, ("out-2", "mic-1")
+        assert _wait(lambda: _open_on(world, 7))
+        assert first.closed
+        engine._tracks["sys.wav"]["buffer"].drain_runs()  # доливка до смены — не в счёт
+        _open_on(world, 7)[0].feed(b"\x01\x00" * 2 * 480)
+        assert _audio_chunks(world, "sys.opus") == [b"\x01\x00" * 2 * 480]
+        runs = engine._tracks["sys.wav"]["buffer"].drain_runs()
+        assert (b"\x01\x00" * 2 * 480, False) in runs
+        # Одна смена — один перезапуск: холодный старт PortAudio (свежий
+        # список устройств), а не перезапуск на каждом такте.
+        _watch_ticks(world)
+        assert world["inits"] == 2
+        assert len(_open_on(world, 7)) == 1 and len(_open_on(world, 1)) == 1
+    finally:
+        engine.stop()
+    # Файл дорожки — один на всю запись: переоткрывается стрим, не писатель.
+    assert world["created"] == {"sys.opus": 1, "mic.opus": 1}
+    assert _has(log, "сменилось дефолтное аудио-устройство")
+    assert _has(log, "запись возобновлена: Динамики [Loopback]")
+
+
+@_device_watch
+def test_dead_live_stream_is_reopened(tmp_path, monkeypatch):
+    """Стрим умер, а дефолт не менялся (устройство моргнуло между тактами)."""
+    world = _switchable_audio(monkeypatch)
+    log: list[str] = []
+    engine = _live(tmp_path, log)
+    engine.start()
+    try:
+        first = _open_on(world, 0)[0]
+        first.active = False
+        assert _wait(lambda: len(_open_on(world, 0)) == 1 and _open_on(world, 0)[0] is not first)
+        assert first.closed
+    finally:
+        engine.stop()
+    assert _has(log, "дорожка остановилась")
+
+
+@_device_watch
+def test_missing_device_is_awaited_and_picked_up_when_back(tmp_path, monkeypatch):
+    """Устройства роли нет вовсе: дорожка ждёт без повторов, возврат
+    устройства — смена системного."""
+    world = _switchable_audio(monkeypatch)
+    log: list[str] = []
+    engine = _live(tmp_path, log)
+    engine.start()
+    try:
+        headphones = world["output"]
+        world["output"], world["ids"] = None, (None, "mic-1")
+        assert _wait(lambda: _has(log, "sys.wav: устройство недоступно — жду"))
+        assert _open_on(world, 0) == []  # старый стрим закрыт, нового нет
+        assert _wait(lambda: len(_open_on(world, 1)) == 1)  # микрофон при этом пишет
+        _watch_ticks(world)
+        assert world["inits"] == 2  # системного устройства нет — повторять нечем
+        world["output"], world["ids"] = headphones, ("out-1", "mic-1")
+        assert _wait(lambda: len(_open_on(world, 0)) == 1)
+        _open_on(world, 0)[0].feed(b"\x02\x00" * 2 * 480)
+        assert _audio_chunks(world, "sys.opus") == [b"\x02\x00" * 2 * 480]
+    finally:
+        engine.stop()
+    assert sum("устройство недоступно — жду" in line for line in log) == 1
+    assert _has(log, "запись возобновлена: Наушники [Loopback]")
+
+
+@_device_watch
+def test_waiting_track_is_retried_with_growing_pause(tmp_path, monkeypatch):
+    """Системное устройство есть, а стрим на нём не открывается: повторы с
+    нарастающей паузой (каждый рвёт и здоровую дорожку), строка в журнале —
+    одна, с причиной; открылось — пауза повторов сбрасывается."""
+    world = _switchable_audio(monkeypatch)
+    log: list[str] = []
+    engine = _live(tmp_path, log)
+    engine.start()
+    try:
+        world["fail_open"] = {0}
+        _open_on(world, 0)[0].active = False
+        assert _wait(lambda: world["inits"] >= 4)  # перезапуск и повторы
+        assert engine._retry_wait > recorder.RETRY_S * 2
+        assert _open_on(world, 0) == []
+        world["fail_open"] = set()
+        assert _wait(lambda: len(_open_on(world, 0)) == 1)
+        assert _wait(lambda: engine._retry_wait == recorder.RETRY_S)
+    finally:
+        engine.stop()
+    waits = [line for line in log if "устройство недоступно — жду" in line]
+    assert len(waits) == 1 and "устройство не открылось" in waits[0]
+
+
+@_device_watch
+def test_restarts_are_rate_limited_but_not_lost(tmp_path, monkeypatch):
+    """Вторая смена сразу за первой ждёт RESTART_MIN_S, но не теряется."""
+    world = _switchable_audio(monkeypatch)
+    monkeypatch.setattr(recorder, "RESTART_MIN_S", 1.0)
+    engine = _live(tmp_path, [])
+    engine.start()
+    try:
+        world["output"], world["ids"] = SPEAKERS_LB, ("out-2", "mic-1")
+        assert _wait(lambda: _open_on(world, 7))
+        first_at = time.monotonic()
+        world["output"] = {**SPEAKERS_LB, "index": 8, "name": "Гарнитура [Loopback]"}
+        world["ids"] = ("out-3", "mic-1")
+        _watch_ticks(world)
+        assert world["inits"] == 2 and not _open_on(world, 8)  # ещё рано
+        assert _wait(lambda: _open_on(world, 8))
+        assert time.monotonic() - first_at >= 0.8
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_pinned_live_tracks_ignore_default_change(tmp_path, monkeypatch):
+    """Оба устройства выбраны в настройках и на месте: смена системного их
+    не касается, перезапуск только рвал бы дорожки."""
+    world = _switchable_audio(monkeypatch)
+    world["named"] = {"Наушники": world["output"], "Микрофон": world["mic"]}
+    engine = _live(tmp_path, [], mic_device="Микрофон", output_device="Наушники")
+    engine.start()
+    try:
+        world["ids"] = ("out-2", "mic-2")
+        _watch_ticks(world, 10)
+        assert world["inits"] == 1
+        assert len(world["streams"]) == 2 and not any(s.closed for s in world["streams"])
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_pinned_device_falls_back_and_returns(tmp_path, monkeypatch):
+    """Выбранное устройство пропало — дорожка пишет с системного и с этого
+    момента следит за ним; вернулось к следующему перезапуску — снова с него."""
+    world = _switchable_audio(monkeypatch)
+    headphones = world["output"]
+    world["named"] = {"Наушники": headphones}
+    world["output"] = SPEAKERS_LB  # системное — динамики
+    log: list[str] = []
+    engine = _live(tmp_path, log, output_device="Наушники")
+    engine.start()
+    try:
+        assert engine.devices_fallback == []
+        world["named"] = {}
+        _open_on(world, 0)[0].active = False
+        assert _wait(lambda: _open_on(world, 7))
+        assert _wait(lambda: _has(log, "Выбранное устройство вывода Наушники не найдено"))
+        world["named"] = {"Наушники": headphones}
+        world["ids"] = ("out-2", "mic-1")  # дорожка в fallback следит за системным
+        assert _wait(lambda: _open_on(world, 0))
+        assert not _open_on(world, 7)
+        assert _wait(lambda: _has(log, "Выбранное устройство вывода Наушники снова доступно"))
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_other_device_format_is_converted_to_the_track_format(tmp_path, monkeypatch):
+    """Файл дорожки один на всю запись: звук устройства с другой частотой и
+    числом каналов приводится к формату первого."""
+    world = _switchable_audio(monkeypatch)
+    engine = _live(tmp_path, [])
+    engine.start()
+    try:
+        world["output"] = {"index": 7, "name": "Гарнитура [Loopback]",
+                           "maxInputChannels": 1, "defaultSampleRate": 16000}
+        world["ids"] = ("out-2", "mic-1")
+        assert _wait(lambda: _open_on(world, 7))
+        stream = _open_on(world, 7)[0]
+        assert (stream.kw["rate"], stream.kw["channels"]) == (16000, 1)
+        stream.feed(b"\x10\x00" * 16000)  # секунда моно 16 кГц
+        (chunk,) = _audio_chunks(world, "sys.opus")
+        assert abs(len(chunk) - 48000 * 2 * 2) <= 16  # секунда стерео 48 кГц
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_multichannel_track_keeps_its_format_across_devices(tmp_path, monkeypatch):
+    """Массив из четырёх микрофонов пишется всеми каналами, как и раньше;
+    сменивший его стерео-микрофон раскладывается по тем же четырём парами —
+    моно-сведение дорожки от этого не меняется."""
+    world = _switchable_audio(monkeypatch)
+    world["mic"] = {"index": 1, "name": "Массив микрофонов", "maxInputChannels": 4,
+                    "defaultSampleRate": 16000}
+    engine = _live(tmp_path, [])
+    engine.start()
+    try:
+        assert world["channels"]["mic.opus"] == 4
+        assert engine._tracks["mic.wav"]["channels"] == 4
+        four = struct.pack("<4h", 1, 2, 3, 4) * 160
+        _open_on(world, 1)[0].feed(four)
+        assert _audio_chunks(world, "mic.opus") == [four]  # то же устройство — как есть
+        world["mic"] = {"index": 9, "name": "USB-микрофон", "maxInputChannels": 2,
+                        "defaultSampleRate": 16000}
+        world["ids"] = ("out-1", "mic-2")
+        assert _wait(lambda: _open_on(world, 9))
+        _open_on(world, 9)[0].feed(struct.pack("<2h", 5, 7) * 160)
+        assert _audio_chunks(world, "mic.opus")[-1] == struct.pack("<4h", 5, 7, 5, 7) * 160
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_restart_pause_is_padded_before_the_stream_resumes(tmp_path, monkeypatch):
+    """Перезапуск короче PAD_GAP_S: ни callback, ни тикер паузу не долили бы,
+    и дорожка с непрерывным звуком осталась бы сдвинутой. Тишина до часов
+    дописывается до старта переоткрытого стрима."""
+    world = _switchable_audio(monkeypatch)
+    # Тикер и callback при таком пороге не доливают ничего: всё, что окажется
+    # в файле к старту стрима, дописано перед стартом.
+    monkeypatch.setattr(WallClockWriter, "PAD_GAP_S", 3600.0)
+    engine = _live(tmp_path, [])
+    engine.start()
+    try:
+        time.sleep(0.2)  # заметно больше TAIL_GAP_S
+        world["output"], world["ids"] = SPEAKERS_LB, ("out-2", "mic-1")
+        assert _wait(lambda: _open_on(world, 7))
+        stream = _open_on(world, 7)[0]
+        assert stream.kw["start"] is False and stream.active
+        at_start = world["at_start"][0]  # первый переоткрытый стрим — sys
+        assert at_start["sys.opus"] >= int(0.15 * 48000) * 4
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_baseline_ids_are_taken_before_devices_are_picked(tmp_path, monkeypatch):
+    """Системное устройство сменилось, пока открывались стримы: смена не
+    теряется, дорожка уходит на новое с первым тактом надзора."""
+    world = _switchable_audio(monkeypatch)
+
+    def switch_after_output_is_picked(kind):
+        if kind == "mic" and world["ids"] == ("out-1", "mic-1"):
+            world["output"], world["ids"] = SPEAKERS_LB, ("out-2", "mic-1")
+
+    world["on_resolve"] = switch_after_output_is_picked
+    engine = _live(tmp_path, [])
+    engine.start()
+    try:
+        assert _wait(lambda: _open_on(world, 7))
+        assert not _open_on(world, 0)
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_callback_error_is_logged_and_aborts_the_stream(tmp_path, monkeypatch):
+    """Сбой в аудио-callback — строка в журнале и paAbort (PortAudio на нём
+    останавливает стрим; дальше — путь умершего стрима)."""
+    world = _switchable_audio(monkeypatch)
+    log: list[str] = []
+    engine = _live(tmp_path, log)
+    engine.start()
+    try:
+        stream = _open_on(world, 0)[0]
+        assert stream.feed(b"\x01\x00" * 2 * 480) == (None, 0)
+        world["broken_writers"] = {"sys.opus"}
+        assert stream.feed(b"\x01\x00" * 2 * 480) == (None, 2)
+        assert _has(log, "sys.wav: ошибка в аудио-callback")
+        world["broken_writers"] = set()
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_log_failure_does_not_stop_padding_or_watch(tmp_path, monkeypatch):
+    """Журнал недоступен (закрытый вывод): поток доливки живёт, дорожки
+    переоткрываются."""
+    world = _switchable_audio(monkeypatch)
+
+    def broken_log(line):
+        raise OSError("вывод закрыт")
+
+    engine = LiveEngine(tmp_path / "2026-10-01_10-00", _LoadSpy(), window_seconds=3600,
+                        speaker_name="Вы", log=broken_log)
+    engine.start()
+    try:
+        world["output"], world["ids"] = SPEAKERS_LB, ("out-2", "mic-1")
+        assert _wait(lambda: _open_on(world, 7))
+        assert _wait(lambda: len(_open_on(world, 1)) == 1)
+        assert engine._pad_thread.is_alive()
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_com_unavailable_still_reopens_a_dead_stream(tmp_path, monkeypatch):
+    world = _switchable_audio(monkeypatch)
+    world["ids"] = None
+    log: list[str] = []
+    engine = _live(tmp_path, log)
+    engine.start()
+    try:
+        assert _wait(lambda: _has(log, "COM недоступен"))
+        first = _open_on(world, 0)[0]
+        first.active = False
+        assert _wait(lambda: len(_open_on(world, 0)) == 1 and _open_on(world, 0)[0] is not first)
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_com_breaking_midway_is_logged_once(tmp_path, monkeypatch):
+    world = _switchable_audio(monkeypatch)
+    log: list[str] = []
+    engine = _live(tmp_path, log)
+    engine.start()
+    try:
+        _watch_ticks(world, 2)
+        world["ids"] = None
+        _watch_ticks(world, 5)
+        assert world["inits"] == 1  # пропажа COM — не смена устройства
+    finally:
+        engine.stop()
+    assert sum("COM перестал отвечать" in line for line in log) == 1
+
+
+@_device_watch
+def test_broken_terminate_is_retried_and_reported(tmp_path, monkeypatch):
+    """Битый стрим роняет terminate(): повтор без реестра стримов проходит
+    молча; не прошёл и он — строка в журнале, запись продолжается."""
+    world = _switchable_audio(monkeypatch)
+    log: list[str] = []
+    engine = _live(tmp_path, log)
+    engine.start()
+    try:
+        world["terminate_broken"] = "streams"
+        world["output"], world["ids"] = SPEAKERS_LB, ("out-2", "mic-1")
+        assert _wait(lambda: _open_on(world, 7))
+        assert world["terminated"] == 1 and not _has(log, "PyAudio.terminate")
+        world["terminate_broken"] = "always"
+        first = _open_on(world, 7)[0]
+        first.active = False
+        assert _wait(lambda: _has(log, "PyAudio.terminate"))
+        assert _wait(lambda: len(_open_on(world, 7)) == 1 and _open_on(world, 7)[0] is not first)
+        world["terminate_broken"] = "streams"
+    finally:
+        engine.stop()  # и при остановке — тот же обход, без исключения
+    assert world["terminated"] == 2
+
+
+@_device_watch
+def test_restart_does_not_bring_audio_up_once_stopping(tmp_path, monkeypatch):
+    """Остановка застала перезапуск: стримы закрыты, новый PyAudio уже не
+    поднимается — закрывать его было бы некому."""
+    world = _switchable_audio(monkeypatch)
+    engine = _live(tmp_path, [])
+    engine.start()
+    try:
+        engine._stop.set()
+        engine._pad_thread.join(timeout=5)
+        engine._restart_capture(("out-2", "mic-1"), None)
+        assert world["inits"] == 1
+        assert all(s.closed for s in world["streams"])
+    finally:
+        engine.stop()
+    assert sorted(world["closed"]) == ["mic.opus", "sys.opus"]
+
+
+@_device_watch
+def test_stop_arriving_while_audio_comes_up_leaves_nothing_open(tmp_path, monkeypatch):
+    """Остановка пришла, пока поднимался новый PyAudio: он завершается, стримы
+    не открываются."""
+    world = _switchable_audio(monkeypatch)
+    engine = _live(tmp_path, [])
+    engine.start()
+    try:
+        world["on_init"] = engine._stop.set
+        world["output"], world["ids"] = SPEAKERS_LB, ("out-2", "mic-1")
+        assert _wait(lambda: world["inits"] == 2 and world["terminated"] == 2)
+        assert _wait(lambda: not engine._pad_thread.is_alive())
+        assert engine._p is None and not _open_on(world, 7)
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_stop_arriving_between_tracks_skips_the_rest(tmp_path, monkeypatch):
+    """Остановка пришла, пока переоткрывалась первая дорожка: вторая уже не
+    открывается."""
+    world = _switchable_audio(monkeypatch)
+    engine = _live(tmp_path, [])
+    engine.start()
+    try:
+        mic_opens = len([s for s in world["streams"] if s.kw["input_device_index"] == 1])
+        world["on_resolve"] = lambda kind: engine._stop.set()
+        world["output"], world["ids"] = SPEAKERS_LB, ("out-2", "mic-1")
+        assert _wait(lambda: not engine._pad_thread.is_alive())
+        assert len([s for s in world["streams"]
+                    if s.kw["input_device_index"] == 1]) == mic_opens
+    finally:
+        engine.stop()
+    assert all(s.closed for s in world["streams"])
+
+
+@_device_watch
+def test_stream_that_fails_to_start_is_closed_and_retried(tmp_path, monkeypatch):
+    world = _switchable_audio(monkeypatch)
+    log: list[str] = []
+    engine = _live(tmp_path, log)
+    engine.start()
+    try:
+        world["fail_start"] = {7}
+        world["output"], world["ids"] = SPEAKERS_LB, ("out-2", "mic-1")
+        assert _wait(lambda: _has(log, "sys.wav: устройство недоступно — жду"))
+        assert all(s.closed for s in world["streams"] if s.kw["input_device_index"] == 7)
+        world["fail_start"] = set()
+        assert _wait(lambda: len(_open_on(world, 7)) == 1)
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_log_failure_before_the_loop_and_in_callback(tmp_path, monkeypatch):
+    """Строка «COM недоступен» пишется до цикла доливки, строка о сбое
+    callback'а — из потока PortAudio: сбой журнала не должен остановить ни
+    тот, ни другой."""
+    world = _switchable_audio(monkeypatch)
+    world["ids"] = None
+
+    def broken_log(line):
+        raise OSError("вывод закрыт")
+
+    engine = LiveEngine(tmp_path / "2026-10-01_10-00", _LoadSpy(), window_seconds=3600,
+                        speaker_name="Вы", log=broken_log)
+    engine.start()
+    try:
+        _watch_ticks(world, 3)
+        assert engine._pad_thread.is_alive()
+        world["broken_writers"] = {"sys.opus"}
+        assert _open_on(world, 0)[0].feed(b"\x01\x00" * 2 * 480) == (None, 2)
+        world["broken_writers"] = set()
+    finally:
+        engine.stop()
+
+
+@_device_watch
+def test_partial_start_failure_closes_the_unopened_track_file(tmp_path, monkeypatch):
+    """Микрофон не открылся: закрываются оба файла, включая тот, чей стрим
+    так и не появился (иначе его ffmpeg остался бы висеть)."""
+    world = _switchable_audio(monkeypatch)
+    world["fail_open"] = {1}
+    engine = _live(tmp_path, [])
+    with pytest.raises(OSError):
+        engine.start()
+    assert sorted(world["closed"]) == ["mic.opus", "sys.opus"]
+    assert all(s.closed for s in world["streams"])
+    assert not (tmp_path / recorder.LOCK_NAME).exists()
+
+
+@_device_watch
+def test_stop_during_device_wait_closes_cleanly(tmp_path, monkeypatch):
+    world = _switchable_audio(monkeypatch)
+    log: list[str] = []
+    engine = _live(tmp_path, log)
+    engine.start()
+    try:
+        world["output"], world["ids"] = None, (None, "mic-1")
+        assert _wait(lambda: _has(log, "устройство недоступно — жду"))
+    finally:
+        engine.stop()
+    assert not (tmp_path / recorder.LOCK_NAME).exists()
+    assert not any(t.name == "meet-live-pad" for t in threading.enumerate())
+    assert sorted(world["closed"]) == ["mic.opus", "sys.opus"]
+
+
+def test_catch_up_pads_a_pause_shorter_than_the_gap():
+    sink, clock = _Sink(), _Clock()
+    w = WallClockWriter(sink, channels=1, rate=1000, clock=clock)
+    clock.now += 0.6  # меньше PAD_GAP_S: tick() и write() такое не доливают
+    w.tick()
+    assert sink.data == b""
+    w.catch_up()
+    assert len(sink.data) == 600 * 2 and set(sink.data) == {0}
+    w.write(b"\x01\x00" * 100)
+    assert sink.data[600 * 2:] == b"\x01\x00" * 100  # звук — сразу за паузой
+
+
+def test_writer_ignores_a_late_callback_after_close():
+    sink, clock = _Sink(), _Clock()
+    w = WallClockWriter(sink, channels=1, rate=1000, clock=clock)
+    w.write(b"\x01\x00" * 100)
+    w.close()
+    clock.now += 1.0
+    w.write(b"\x02\x00" * 100)
+    w.catch_up()
+    assert sink.data == b"\x01\x00" * 100
