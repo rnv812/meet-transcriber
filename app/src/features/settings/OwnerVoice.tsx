@@ -69,12 +69,14 @@ export function useOwnerVoice(endpoint: Endpoint, { pollMs = POLL_MS, readyPollM
   const live = useRef(true);
   useEffect(() => () => { live.current = false; }, []);
 
+  /** Растёт при неудачном опросе: статус не изменился, а таймер нужно завести снова. */
+  const [failures, setFailures] = useState(0);
   const reload = useCallback(async () => {
     try {
       const next = await getOwnerVoice(endpoint);
       if (live.current) { setStatus(next); setError(null); }
     } catch (e) {
-      if (live.current) setError(errorText(e));
+      if (live.current) { setError(errorText(e)); setFailures((n) => n + 1); }
     }
   }, [endpoint]);
 
@@ -86,7 +88,7 @@ export function useOwnerVoice(endpoint: Endpoint, { pollMs = POLL_MS, readyPollM
     if (!polling && !waiting) return;
     const timer = setTimeout(() => void reload(), polling ? pollMs : readyPollMs);
     return () => clearTimeout(timer);
-  }, [polling, waiting, status, reload, pollMs, readyPollMs]);
+  }, [polling, waiting, status, failures, reload, pollMs, readyPollMs]);
 
   const record = async (device: string | null) => {
     setStarting(true);

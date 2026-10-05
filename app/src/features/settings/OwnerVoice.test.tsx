@@ -141,3 +141,22 @@ test("мастер: резидент отказал — текст отказа,
   expect(await screen.findByRole("alert")).toHaveTextContent("Образец голоса уже записывается");
   expect(screen.getByRole("button", { name: "Позже, в настройках" })).toBeEnabled();
 });
+
+test("мастер: один неудачный опрос не останавливает перепроверку готовности", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValueOnce(status({ ready: false, reason: "Модель ещё скачивается" }))
+    .mockRejectedValueOnce(new api.NoResidentError("служба записи не отвечает"))
+    .mockResolvedValue(status());
+  render(<StepVoice endpoint={ep} onNext={vi.fn()} pollMs={5} readyPollMs={10} />);
+  expect(await screen.findByRole("button", { name: "Начать запись" })).toBeEnabled();
+  expect(vi.mocked(api.getOwnerVoice).mock.calls.length).toBeGreaterThanOrEqual(3);
+});
+
+test("запись: сбой опроса посреди разбора — опрос продолжается до итога", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValueOnce(status())
+    .mockRejectedValueOnce(new api.NoResidentError("служба записи не отвечает"))
+    .mockResolvedValue(status({ take: take("done", { sample_id: "s1" }), samples: [sample()] }));
+  vi.mocked(api.recordOwnerVoice).mockResolvedValue(status({ take: take("analyzing") }));
+  render(<StepVoice endpoint={ep} onNext={vi.fn()} pollMs={5} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Начать запись" }));
+  expect(await screen.findByText("Голос записан.")).toBeInTheDocument();
+});
