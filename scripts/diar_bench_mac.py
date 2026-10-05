@@ -164,7 +164,16 @@ def describe_proxy(proxy: dict) -> str:
 
 
 def load_online(Pipeline, token) -> dict:
-    """Загрузка по имени репозитория, как в Meet до 0.3.3: время и итог."""
+    """Загрузка по имени репозитория, как в Meet до 0.3.3: время и итог.
+
+    huggingface_hub 1.x держит один HTTP-клиент на процесс, а прокси httpx
+    читает из окружения только при его создании: без закрытия сессии вторая
+    загрузка («напрямую») шла бы через прокси первой."""
+    import huggingface_hub
+
+    close = getattr(huggingface_hub, "close_session", None)  # 0.x (requests) читает прокси на каждый запрос
+    if close is not None:
+        close()
     t = time.perf_counter()
     try:
         online = Pipeline.from_pretrained(REPO, token=token)
