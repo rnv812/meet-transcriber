@@ -67,6 +67,7 @@ def test_meeting_mode_reads_a_copy_and_deletes_it(tmp_path, monkeypatch, capsys)
     before = sorted((p.name, p.stat().st_mtime_ns, p.read_bytes()) for p in folder.iterdir())
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
     monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")  # сеть всё равно выключается
     seen = {}
 
     def fake_run(mics, syss, args):
@@ -115,3 +116,28 @@ def test_run_prints_numbers_only(monkeypatch, capsys):
     assert rows[-1]["usable"] == 1
     for row in rows:
         assert all(isinstance(v, (int, float, dict)) for v in row.values())
+
+
+def test_failed_copy_delete_is_reported_with_its_path(tmp_path, monkeypatch, capsys):
+    """Копия записи не удалилась — не молчим: путь в stderr и код возврата 2."""
+    calib = _calib()
+    folder = tmp_path / "Local" / "meet" / "recordings" / "2026-10-05_10-00"
+    folder.mkdir(parents=True)
+    (folder / "mic.opus").write_bytes(b"opus")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    monkeypatch.setattr(calib, "CLEANUP_RETRY_S", 0.0)
+    monkeypatch.setattr(calib, "run", lambda mics, syss, args: 0)
+    seen = []
+
+    def stuck(path):
+        seen.append(Path(path))
+        raise PermissionError("файл занят")
+
+    monkeypatch.setattr(calib.shutil, "rmtree", stuck)
+    assert calib.main(["--meeting", "2026-10-05_10-00"]) == 2
+    err = capsys.readouterr().err
+    assert str(seen[0]) in err and "PermissionError" in err and len(seen) == 2
+    monkeypatch.undo()
+    import shutil
+
+    shutil.rmtree(seen[0])

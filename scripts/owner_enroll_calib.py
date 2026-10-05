@@ -117,22 +117,47 @@ def main(argv: list[str] | None = None) -> int:
     if not args.meeting:
         return run(args.mic, args.sys, args)
     folder = meeting_folder(args.meeting)
-    with tempfile.TemporaryDirectory(prefix="owner-calib-", ignore_cleanup_errors=True) as td:
-        tmp = Path(td)
+    tmp = Path(tempfile.mkdtemp(prefix="owner-calib-"))
+    code = 1
+    try:
         # Своя пустая папка данных: ни настроек, ни токена приложения; модель —
-        # из кэша Hugging Face без сети.
+        # из кэша Hugging Face, и сеть — нет, даже если в окружении иначе.
         os.environ["MEET_DATA_DIR"] = str(tmp / "data")
-        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ["HF_HUB_OFFLINE"] = "1"
         from meet import credentials
 
         credentials.get_hf_token = lambda: None  # токен из диспетчера не нужен и не читается
         mic, sys_copy = copy_tracks(folder, tmp, args.quiet_sys)
+        code = run([mic], [sys_copy] if sys_copy else [], args)
+    finally:
+        if not remove_copy(tmp):
+            code = 2
+    return code
+
+
+CLEANUP_RETRY_S = 1.0
+
+
+def remove_copy(tmp: Path) -> bool:
+    """Удалить копию записи. Не вышло (файл ещё держит ffmpeg или антивирус) —
+    один повтор, затем сказать громко, где она осталась: копия — звук встречи."""
+    import time
+
+    error: OSError | None = None
+    for attempt in range(2):
         try:
-            return run([mic], [sys_copy] if sys_copy else [], args)
-        finally:
-            for f in (mic, sys_copy):
-                if f is not None:
-                    f.unlink(missing_ok=True)
+            shutil.rmtree(tmp)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            error = e
+        if not tmp.exists():
+            return True
+        if attempt == 0:
+            time.sleep(CLEANUP_RETRY_S)
+    why = type(error).__name__ if error is not None else "папка осталась"
+    print(f"НЕ УДАЛОСЬ удалить копию записи ({why}): {tmp} — удалите её вручную", file=sys.stderr)
+    return False
 
 
 def run(mics: list[Path], syss: list[Path], args) -> int:
