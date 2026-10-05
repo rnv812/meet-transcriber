@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "tray-panel",
+  "description": "Права панели записи под значком в строке меню macOS (tray-panel, tray_panel.rs): только системные по умолчанию — события оболочки (показана/спрятана) и чтение своего окна (видно ли оно). Фокус, закрытие, уведомления и диалоги ей не нужны: прячет и показывает её оболочка.",
+  "windows": [
+    "tray-panel"
+  ],
+  "permissions": [
+    "core:default"
+  ]
+}

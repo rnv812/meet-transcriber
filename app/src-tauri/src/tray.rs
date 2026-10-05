@@ -1463,9 +1463,14 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
                 ) => open_window(tray.app_handle()),
                 (
                     LeftClick::Panel,
+                    // На нажатии, как системные меню строки меню: откликается
+                    // сразу, и защита от повторного открытия (`REOPEN_GUARD`)
+                    // считается от того же нажатия, что сняло с панели фокус.
+                    // Ctrl+щелчок tray-icon тоже отдаёт как левый — он
+                    // открывает панель, а не меню.
                     TrayIconEvent::Click {
                         button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
+                        button_state: MouseButtonState::Down,
                         rect,
                         ..
                     },

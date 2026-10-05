@@ -574,8 +574,9 @@ pub fn open_live(app: &AppHandle) {
             // находят на панели задач.
             .skip_taskbar(geometry.pinned)
             .focused(false);
-    // Прозрачное окно на macOS требует частного API (фича macos-private-api):
-    // там панель непрозрачная — углы квадратные, остальное то же.
+    // macOS: прозрачное окно требует частного API (фича macos-private-api);
+    // она включена ради панели записи (`tray_panel.rs`), но эта панель там
+    // пока непрозрачная — углы квадратные, остальное то же.
     #[cfg(not(target_os = "macos"))]
     {
         builder = builder.transparent(true);
