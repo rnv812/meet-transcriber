@@ -1,5 +1,8 @@
 import socket
+import sys
 from pathlib import Path
+
+import pytest
 
 from meet.llm import detect
 
@@ -113,6 +116,17 @@ def test_find_claude_posix_nvm_newest_first(monkeypatch, tmp_path):
     assert detect.find_claude() == str(new)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="бита исполнения на Windows нет: X_OK всегда истина")
+def test_find_claude_posix_skips_a_file_without_exec_bit(monkeypatch, tmp_path):
+    # Не исполняемый — не CLI: следующая папка, а не «найден» с отказом запуска.
+    plain = _unix_cli(tmp_path, ".local/bin", "claude")
+    plain.chmod(0o644)
+    _no_path(monkeypatch, tmp_path)
+    assert detect.find_claude() is None
+    runnable = _unix_cli(tmp_path, ".bun/bin", "claude")
+    assert detect.find_claude() == str(runnable)
+
+
 def test_find_claude_posix_skips_folders_and_missing(monkeypatch, tmp_path):
     (tmp_path / ".local" / "bin" / "claude").mkdir(parents=True)  # папка, не файл
     _no_path(monkeypatch, tmp_path)
@@ -155,7 +169,7 @@ def test_claude_not_found_names_the_platform_program(monkeypatch):
     monkeypatch.setattr(detect, "_WINDOWS", False)
     for text in (detect.claude_not_found(), detect.claude_not_found(detail=True)):
         assert ".exe" not in text and ".cmd" not in text
-        assert "~/.local/bin" in text
+        assert "~/.local/bin" in text and "Homebrew" in text
 
 
 def test_local_reachable_true_and_false():

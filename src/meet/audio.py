@@ -6,8 +6,8 @@ from pathlib import Path
 
 def ensure_ffmpeg() -> None:
     if shutil.which("ffmpeg") is None:
-        install = ("winget install Gyan.FFmpeg" if sys.platform == "win32"
-                   else "brew install ffmpeg")
+        install = {"win32": "winget install Gyan.FFmpeg", "darwin": "brew install ffmpeg"}.get(
+            sys.platform, "пакетным менеджером системы")
         raise SystemExit(
             f"ffmpeg не найден. Установите: {install} "
             "и перезапустите терминал."

@@ -76,8 +76,8 @@ def claude_not_found(detail: bool = False) -> str:
     """Текст «Claude Code CLI не найден» под ОС. `detail` — с подсказкой: на
     Windows годится только родной claude.exe."""
     if not _WINDOWS:
-        return ("не найден Claude Code CLI (claude) — ни в PATH, "
-                "ни в ~/.local/bin и /opt/homebrew/bin")
+        return ("не найден Claude Code CLI (claude) — ни в PATH, ни в обычных папках "
+                "установки (~/.local/bin, Homebrew, npm)")
     if detail:
         return ("не найден Claude Code CLI (claude.exe); npm-шим claude.cmd "
                 "не подходит — нужна родная установка Claude Code")
