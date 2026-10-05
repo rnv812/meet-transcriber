@@ -65,6 +65,9 @@ DOMINANT_MIN_S = 60.0
 GROUP_COS = 0.75
 GROUP_MIN_MEETINGS = 3
 GROUP_MIN_SHARE = 0.6
+# Найденный голос совпадает с уже сохранённым образцом — от этого косинуса
+# (тот же порог, что «кластер микрофона — владелец», mic_split.T_OWN).
+ALREADY_COS = 0.75
 # --- примеры для прослушивания ---
 SAMPLE_COUNT = 3
 SAMPLE_MIN_S = 3.0
@@ -469,7 +472,7 @@ def find(root: Path, voices: Path, *, embed=None, vad=None, decode=None, bus=Non
     sim = [float(a.centroid @ b.centroid) for a, b in itertools.combinations(group, 2)]
     counts = dict(checked=checked, used=used, found=len(group))
     own = owner_voice.load(voices)
-    if own and owner_voice.score(center, own) >= GROUP_COS:
+    if own and owner_voice.score(center, own) >= ALREADY_COS:
         return Outcome(ALREADY, "Найденный голос совпадает с уже сохранённым образцом вашего голоса — "
                                 "добавлять нечего.", **counts)
     base = voice_base.load_voices(Path(voices))
