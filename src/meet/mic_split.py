@@ -79,9 +79,6 @@ OWNER_PRESENT_SHARE = 0.30
 # секунд окон с голосом: меньше — статус no_voice, микрофон как раньше и
 # никаких удалений «по голосу владельца». Старт (T0).
 MIN_VOICED_S = 10.0
-# Быстрый путь сначала по выборке окон, разнесённых по времени: ясно, что
-# говорит один владелец, — остальные окна не считаем (эмбеддинг ~0,1 с на окно).
-FAST_SAMPLE = 60
 
 # --- кластеры ---
 # Слияние групп окон — пока средняя близость не ниже AHC_STOP. T0: при 0.55
@@ -237,13 +234,6 @@ def _torch_threads(n: int):
 def _unit(x: np.ndarray) -> np.ndarray:
     n = float(np.linalg.norm(x))
     return x / n if n else x
-
-
-def _spread(wins: list[Window], n: int) -> list[Window]:
-    """До n окон, равномерно по времени записи."""
-    if len(wins) <= n:
-        return list(wins)
-    return [wins[i] for i in sorted(set(np.linspace(0, len(wins) - 1, n).round().astype(int).tolist()))]
 
 
 def _embed(wins: list[Window], audio: np.ndarray, embed) -> None:
@@ -477,14 +467,17 @@ def run(mic_segs: list[Segment], sys_segs: list[Segment], mic_wav: Path, sys_wav
         if embed is None:
             embed, status = _load_embedder(log)
         if embed is not None:
-            # Сначала выборка окон по всей записи: один владелец — и хватит.
-            candidates = [w for w in wins if not w.short]
-            sample = _spread(candidates, FAST_SAMPLE)
-            with _torch_threads(EMBED_THREADS):
-                _embed(sample, mic_audio, embed)
-                if not _fast([w for w in sample if w.emb is not None], owner, device):
-                    _embed(candidates, mic_audio, embed)
-            status, fast, clusters, groups = _roles(wins, owner, device)
+            # Голос — у всех окон: быстрый путь по выборке пропускал соседа,
+            # говорящего несколько процентов времени, и тот становился «Вы»,
+            # а его копии в sys удалялись как утечка владельца (~1 мин на час CPU).
+            try:
+                with _torch_threads(EMBED_THREADS):
+                    _embed(wins, mic_audio, embed)
+            except Exception as e:  # CUDA OOM, сбой модели посреди окон
+                log(f"микрофон: голоса окон не посчитать, разделения нет ({type(e).__name__})")
+                status = STATUS_ERROR
+            else:
+                status, fast, clusters, groups = _roles(wins, owner, device)
     split = status == STATUS_OK
     if not split:
         for win in wins:

@@ -478,8 +478,42 @@ def test_owner_not_found_dedupes_only_quiet_copies(tmp_path):
     assert _by_speaker(got.mic) == {"Вы": [s for s, _ in OWNER_PHRASES]}
 
 
-def test_fast_path_embeds_only_a_sample_of_windows(tmp_path):
-    """Длинная запись одного владельца: быстрый путь решается по выборке окон."""
+def _small_neighbour(tmp_path, neighbour_idx, total_windows=107):
+    """Встреча ревьюера: 107 окон по 5 слов, из них несколько — сосед со своим
+    ноутбуком (тихо в микрофоне, копия в sys с лагом 0,2 с)."""
+    total = total_windows * 3.0 + 5
+    mic, sys = Track(total), Track(total)
+    mic_segs, sys_segs = [], []
+    for k in range(total_windows):
+        start = 1.0 + k * 3.0
+        who = "сосед" if k in neighbour_idx else "влад"
+        ws = [Word(round(start + i * 0.4, 3), round(start + i * 0.4 + 0.35, 3), f" {who}{k}ж{i}") for i in range(5)]
+        if k in neighbour_idx:
+            mic.say(ws, ROOM1, QUIET, seed=k)
+            copy = [Word(w.start + 0.2, w.end + 0.2, w.text) for w in ws]
+            sys.say(copy, ROOM1, LOUD, seed=1000 + k)
+            sys_segs.append(_seg(copy, speaker="SPEAKER_01"))
+        else:
+            mic.say(ws, OWNER, LOUD, seed=k)
+        mic_segs.append(_seg(ws))
+    return mic_segs, sys_segs, mic.write(tmp_path / "mic16.wav"), sys.write(tmp_path / "sys16.wav")
+
+
+def test_small_neighbour_is_never_absorbed_by_the_fast_path(tmp_path):
+    """Сосед говорит ~6% окон, и его окна приходятся между точками любой
+    выборки: быстрый путь его не проглатывает — копии уходят из микрофона, а
+    не из sys как «утечка владельца», и «Вы» он не становится."""
+    sampled = set(np.linspace(0, 106, 60).round().astype(int).tolist())
+    between = [k for k in range(107) if k not in sampled][::7][:7]
+    got, _ = _run(_small_neighbour(tmp_path, set(between)), _owner())
+    assert got.voices["fast"] is False
+    assert got.report["dropped"]["owner_leak"] == 0 and got.report["dropped"]["neighbour"] == 7
+    assert sum(s.speaker == "SPEAKER_01" for s in got.sys) == 7
+    assert not any("сосед" in s.text and s.speaker == "Вы" for s in got.mic)
+
+
+def test_fast_path_decides_on_every_window(tmp_path):
+    """Один владелец: быстрый путь — по голосу всех окон."""
     total = 260.0
     mic = Track(total)
     segs = []
@@ -496,7 +530,25 @@ def test_fast_path_embeds_only_a_sample_of_windows(tmp_path):
 
     got, _ = _run(meeting, _owner(), embed=counting)
     assert got.report["status"] == "ok" and got.voices["fast"] is True
-    assert len(mic_split.windows(segs)) == 90 and len(calls) == mic_split.FAST_SAMPLE
+    assert len(calls) == len(mic_split.windows(segs)) == 90
+
+
+def test_embedder_failing_mid_run_falls_back_to_today(tmp_path):
+    """Эмбеддер падает посреди окон (нехватка памяти видеокарты): расшифровка
+    не ломается — skipped_error и микрофон как раньше."""
+    calls = []
+
+    def flaky(audio):
+        calls.append(1)
+        if len(calls) > 3:
+            raise RuntimeError("CUDA out of memory")
+        return fake_embed(audio)
+
+    sys_phrases = [(_words(t, s + LEAK_LAG), OWNER) for s, t in OWNER_PHRASES]
+    got, logs = _run(_meeting(tmp_path, room1=True, sys_phrases=sys_phrases), _owner(), embed=flaky)
+    assert got.report["status"] == "skipped_error" and {s.speaker for s in got.mic} == {"Вы"}
+    assert got.report["dropped"]["owner_leak"] == 0 and len(got.sys) == len(OWNER_PHRASES)
+    assert any("RuntimeError" in line for line in logs)
 
 
 def test_break_segments_are_kept_and_never_windowed(tmp_path):
