@@ -795,6 +795,15 @@ class TrayApp:
             self.log("звонок начался, пишет ассистент — не вмешиваюсь")
             self.watcher.release()
             return
+        from meet import storage
+
+        if storage.HOLD.held():
+            # Оболочка переключает папку движка: не начнём сейчас — попробуем
+            # снова на этом же звонке (новый резидент тоже его увидит).
+            self.log("звонок начался, идёт перенос движка и моделей — запись позже")
+            self._retry_after = time.monotonic() + RETRY_AFTER_S
+            self.watcher.release()
+            return
         left = self._retry_after - time.monotonic()
         if left > 0:
             self.log(f"предыдущая попытка сорвалась — повторю через {left:.0f} с")

@@ -272,6 +272,11 @@ HOLD_TEXT = "идёт перенос движка и моделей — это �
 # Удержание само кончается через столько секунд: оболочка, упавшая посреди
 # переключения, не должна оставить резидент без записи навсегда.
 HOLD_S = 300.0
+# Столько `take` ждёт замок, если под ним как раз начинается запись или
+# задача (открытие устройств — до ~10 с): дольше ждать нельзя — у клиента
+# оболочки таймаут 3 с. Не дождались — «занят», оболочка спросит снова.
+TAKE_WAIT_S = 1.0
+STARTING_TEXT = "начинается запись или задача"
 
 
 class Held(Conflict):
@@ -286,12 +291,16 @@ class Hold:
     загрузки (`gate`), проверяется, что ничего не идёт, и ставится удержание.
     Между проверкой и перезапуском резидента ничего нового начаться не может:
     точки входа в это время получают `Held`. Снимается `release`
-    (`DELETE /storage/hold`) или само через HOLD_S."""
+    (`DELETE /storage/hold`) или само через HOLD_S.
+
+    У удержания — id от оболочки: ответ потерялся — повтор с тем же id
+    удерживает снова (идемпотентно), снятие по id не снимет чужое."""
 
     def __init__(self, clock=time.monotonic) -> None:
         self._lock = threading.RLock()
         self._clock = clock
         self._until = 0.0
+        self._id: str | None = None
 
     def held(self) -> bool:
         return self._clock() < self._until
@@ -304,18 +313,28 @@ class Hold:
                 raise Held(HOLD_TEXT)
             yield
 
-    def take(self, busy, seconds: float = HOLD_S) -> str | None:
-        """Удержать, если `busy()` — None; иначе вернуть причину «занят»."""
-        with self._lock:
+    def take(self, busy, hold_id: str | None = None, seconds: float = HOLD_S,
+             wait: float = TAKE_WAIT_S) -> str | None:
+        """Удержать, если `busy()` — None; иначе вернуть причину «занят».
+        Замок занят начинающейся записью дольше `wait` — тоже «занят»."""
+        if not self._lock.acquire(timeout=wait):
+            return STARTING_TEXT
+        try:
             reason = busy()
             if reason:
                 return reason
             self._until = self._clock() + seconds
+            self._id = hold_id
             return None
+        finally:
+            self._lock.release()
 
-    def release(self) -> None:
+    def release(self, hold_id: str | None = None) -> None:
+        """Снять удержание; с `hold_id` — только своё."""
         with self._lock:
-            self._until = 0.0
+            if hold_id is None or hold_id == self._id:
+                self._until = 0.0
+                self._id = None
 
 
 # Одно на процесс: его делят трей (автозапись) и control API.

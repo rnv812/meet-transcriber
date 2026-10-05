@@ -198,17 +198,108 @@ def test_while_held_nothing_new_starts(app, tmp_path):
 
 
 def test_assistant_does_not_start_while_held(app, monkeypatch):
+    """Запись с ассистентом начинается записью — её ворота и держат."""
     state = tray_control.TrayControl(app)
     monkeypatch.setattr(tray_control, "_provider_installed", lambda cfg: True)
-    started = []
-    monkeypatch.setattr(state.live, "start", lambda root, *a: started.append(root) or {"ok": True})
     state.storage_hold()
     with pytest.raises(control.Conflict, match="перенос"):
         state.live_start()
-    assert started == []
+    assert app.recording is False
 
 
 def test_storage_reports_the_engine_prefix(app):
     import sys
 
     assert tray_control.TrayControl(app).storage()["prefix"] == sys.prefix
+
+
+
+def test_owner_voice_take_counts_as_busy_and_is_gated(app, monkeypatch):
+    """Образец голоса: ~25 с микрофона в фоне — перенос ждёт его, а пока
+    удержан, запись образца не начинается (атомарно, под воротами)."""
+    state = tray_control.TrayControl(app)
+    monkeypatch.setattr(state.owner_takes, "active", lambda: True)
+    assert "образец голоса" in state.storage()["busy"]
+    assert state.storage_hold()["held"] is False
+    monkeypatch.setattr(state.owner_takes, "active", lambda: False)
+    recorded = []
+    monkeypatch.setattr(state.owner_takes, "record", lambda body: recorded.append(body) or {"ok": True})
+    assert state.storage_hold()["held"] is True
+    with pytest.raises(control.Conflict, match="образец голоса"):
+        state.owner_voice_record({})
+    assert recorded == []
+    state.storage_release()
+    assert state.owner_voice_record({}) == {"ok": True}
+
+
+def test_background_processing_counts_as_busy(app, tmp_path):
+    state = tray_control.TrayControl(app)
+    state._set_processing(tmp_path / "rec", True)
+    assert "обработка" in state.storage()["busy"]
+    state._set_processing(tmp_path / "rec", False)
+    assert state.storage()["busy"] is None
+
+
+def test_hold_id_makes_retries_idempotent_and_release_targeted(app):
+    state = tray_control.TrayControl(app)
+    assert state.storage_hold({"id": "move-1"})["held"] is True
+    # Ответ потерялся — повтор с тем же id снова «удержан».
+    assert state.storage_hold({"id": "move-1"})["held"] is True
+    state.storage_release("other")
+    assert storage.HOLD.held(), "чужой id не снимает"
+    state.storage_release("move-1")
+    assert not storage.HOLD.held()
+    with pytest.raises(control.BadRequest):
+        state.storage_hold({"id": 5})
+
+
+def test_take_does_not_wait_past_the_client_timeout():
+    """Под замком начинается запись (устройства открываются секундами): take
+    не ждёт дольше секунды — «начинается запись», оболочка спросит снова."""
+    hold = storage.Hold()
+    inside, leave = threading.Event(), threading.Event()
+
+    def start():
+        with hold.gate():
+            inside.set()
+            leave.wait(5)
+
+    worker = threading.Thread(target=start)
+    worker.start()
+    inside.wait(2)
+    began = time.monotonic()
+    assert hold.take(lambda: None, "m", wait=0.2) == storage.STARTING_TEXT
+    assert time.monotonic() - began < 1.0
+    assert not hold.held()
+    leave.set()
+    worker.join()
+
+
+def test_auto_analysis_refused_by_the_hold_is_deferred_not_lost(app, tmp_path, monkeypatch):
+    from meet import library
+
+    state = tray_control.TrayControl(app)
+    folder = tmp_path / "rec"
+    folder.mkdir()
+    (folder / "meta.json").write_text("{}", encoding="utf-8")
+    state.storage_hold()
+    with pytest.raises(storage.Held):
+        state._queue_analysis(folder, low=True)
+    assert "pending_analysis" in library.read_meta(folder)
+    with pytest.raises(storage.Held):
+        state._queue_improve(folder, low=True)
+    assert state.llm_queue.listing() == []
+
+
+def test_auto_record_while_held_retries_on_the_same_call(app):
+    released = []
+
+    class Watcher:
+        def release(self):
+            released.append(True)
+
+    app.watcher = Watcher()
+    storage.HOLD.take(lambda: None, "m")
+    app._auto_start()
+    assert app.recording is False
+    assert released == [True], "детектор повторит попытку на этом же звонке"

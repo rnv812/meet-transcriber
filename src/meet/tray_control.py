@@ -2576,27 +2576,35 @@ class TrayControl:
             return "идёт запись"
         if self.live.busy():
             return "работает ассистент"
+        if self.owner_takes.active():
+            return "записывается или разбирается образец голоса"
         if self.downloads.any_active():
             return "скачиваются модели"
         for item in self.queue.listing() + self.llm_queue.listing():
             if item.get("state") in (jobs.QUEUED, jobs.RUNNING):
                 return "идёт расшифровка или другая фоновая задача"
+        if self._processing_list():
+            return "идёт обработка записи (обрезка, выгрузка)"
         return None
 
-    def storage_hold(self) -> dict:
+    def storage_hold(self, body: dict | None = None) -> dict:
         """Удержать резидент перед переключением папки: ничего не идёт —
         удержание на `storage.HOLD_S` (новые запись, ассистент, задачи,
         загрузки — отказ), иначе — чем занят. Проверка и удержание атомарны."""
         from meet import storage
 
-        reason = storage.HOLD.take(self._storage_busy)
+        hold_id = (body or {}).get("id") if isinstance(body, dict) else None
+        if hold_id is not None and not isinstance(hold_id, str):
+            raise _bad_request("id удержания — строка")
+        reason = storage.HOLD.take(self._storage_busy, hold_id or None)
         return {"held": reason is None, "busy": reason}
 
-    def storage_release(self) -> dict:
-        """Снять удержание (переключение сорвалось до перезапуска)."""
+    def storage_release(self, hold_id: str | None = None) -> dict:
+        """Снять удержание (переключение сорвалось до перезапуска); с id —
+        только своё."""
         from meet import storage
 
-        storage.HOLD.release()
+        storage.HOLD.release(hold_id or None)
         return {"ok": True}
 
     def storage_leftovers(self, body: dict | None = None) -> dict:
@@ -2951,6 +2959,8 @@ class TrayControl:
         """Одна задача анализа на запись. Ждущая — та же (просьба человека
         поднимает фоновую вперёд); идущая — та же, с пометкой «повторить после»
         (расшифровку тем временем поменяли). → (задача, поставлена ли новая)."""
+        from meet import storage
+
         with self._submit_lock:
             job = self.llm_queue.active_for(str(folder), (jobs.ANALYZE,))
             if job is not None:
@@ -2961,7 +2971,14 @@ class TrayControl:
                 elif not low and hasattr(self.llm_queue, "promote"):
                     self.llm_queue.promote(job.id)
                 return job, False
-            job = self.llm_queue.submit(jobs.ANALYZE, str(folder), {}, low=low)
+            try:
+                job = self.llm_queue.submit(jobs.ANALYZE, str(folder), {}, low=low)
+            except storage.Held:
+                # Перенос удерживает резидент: анализ не теряется — отметка
+                # `pending_analysis`, новый резидент поставит его снова.
+                self._mark_analysis(folder, True, manual=manual)
+                self.tray.log(f"анализ встречи отложен до конца переноса: {folder.name}")
+                raise
         self._mark_analysis(folder, True, manual=manual)
         return job, True
 
@@ -3291,13 +3308,21 @@ class TrayControl:
     def _queue_improve(self, folder: Path, *, low: bool, manual: bool = False):
         """Одна задача улучшения на запись: ждущая или идущая — та же (просьба
         человека поднимает фоновую вперёд). → (задача, поставлена ли новая)."""
+        from meet import storage
+
         with self._submit_lock:
             job = self.llm_queue.active_for(str(folder), (jobs.IMPROVE,))
             if job is not None:
                 if job.state != jobs.RUNNING and not low and hasattr(self.llm_queue, "promote"):
                     self.llm_queue.promote(job.id)
                 return job, False
-            job = self.llm_queue.submit(jobs.IMPROVE, str(folder), {}, low=low)
+            try:
+                job = self.llm_queue.submit(jobs.IMPROVE, str(folder), {}, low=low)
+            except storage.Held:
+                # Как с анализом: отметка остаётся, новый резидент продолжит.
+                self._mark_improve(folder, True, manual=manual)
+                self.tray.log(f"улучшение расшифровки отложено до конца переноса: {folder.name}")
+                raise
         self._mark_improve(folder, True, manual=manual)
         return job, True
 
@@ -3539,7 +3564,16 @@ class TrayControl:
         return self.owner_takes.status()
 
     def owner_voice_record(self, body: dict | None) -> dict:
-        return self.owner_takes.record(body)
+        """Запись образца голоса — под воротами переноса: проверка удержания и
+        начало записи атомарны (её ~25 с микрофона перезапуск оборвал бы)."""
+        from meet import storage
+
+        try:
+            with storage.HOLD.gate():
+                return self.owner_takes.record(body)
+        except storage.Held:
+            raise _conflict("идёт перенос движка и моделей — образец голоса запишите "
+                            "через минуту") from None
 
     def owner_voice_delete(self, sample_id: str) -> dict:
         return self.owner_takes.delete(sample_id)
