@@ -96,6 +96,15 @@ def memory_keyring(_isolated_secrets):
 
 
 @pytest.fixture(autouse=True)
+def _isolated_hf_cache(monkeypatch, tmp_path_factory):
+    """Кэш Hugging Face — пустая временная папка: скачанная на машине модель
+    диаризации иначе грузилась бы с диска без токена (meet.diarize) там, где
+    тест ждёт «нет токена — без спикеров». Кому нужна настоящая модель, ставит
+    `HF_HUB_CACHE` сам."""
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path_factory.mktemp("hf-cache")))
+
+
+@pytest.fixture(autouse=True)
 def _no_system_proxy(monkeypatch):
     """Системный прокси машины разработчика (реестр WinINET) в тесты не
     попадает: кому он нужен, подменяет `netproxy.read_registry` сам."""

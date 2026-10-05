@@ -65,8 +65,52 @@ def _access_reason(error: Exception) -> str:
     return f"{type(error).__name__}, HTTP {status}" if status else type(error).__name__
 
 
+LOCAL_FAILED_NOTE = (
+    "Модель диаризации из кэша не загрузилась ({reason}): загружаю с Hugging Face"
+)
+
+
+def _local_snapshot() -> Path | None:
+    """Скачанная модель диаризации: папка снапшота `refs/main` в кэше Hugging
+    Face (`models.cache_root`, туда же качает окно «Модели»), если в ней есть
+    config.yaml. Нет модели или загрузка оборвалась — None."""
+    from meet import models
+
+    folder = models.cache_root() / ("models--" + DIARIZATION_MODEL.replace("/", "--"))
+    try:
+        ref = (folder / "refs" / "main").read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return None
+    snapshot = folder / "snapshots" / ref
+    return snapshot if ref and (snapshot / "config.yaml").is_file() else None
+
+
+def _load_local():
+    """Пайплайн из скачанной модели — по пути к папке снапшота: так pyannote не
+    делает ни одного запроса к Hugging Face (по имени репозитория — пять HEAD
+    с таймаутом 10 с каждый, а зависший прокси или DNS растягивал загрузку на
+    Mac до 160 с). Токен не нужен: доступ к гейтед-модели проверили, когда её
+    скачивали. Модели нет — None; копия битая — None и строка об этом
+    (вызывающий идёт в сеть)."""
+    snapshot = _local_snapshot()
+    if snapshot is None:
+        return None
+    from pyannote.audio import Pipeline
+
+    try:
+        pipe = Pipeline.from_pretrained(snapshot)
+    except Exception as e:  # битый кэш — не повод терять спикеров: есть сеть
+        print(LOCAL_FAILED_NOTE.format(reason=type(e).__name__))
+        return None
+    if pipe is None:
+        print(LOCAL_FAILED_NOTE.format(reason="пустой пайплайн"))
+    return pipe
+
+
 def _load_pipeline(token: str):
-    """Пайплайн pyannote или None, если Hugging Face не пустил.
+    """Пайплайн pyannote с Hugging Face (модели нет в кэше или копия битая)
+    или None, если Hugging Face не пустил. Прокси — из окружения задачи
+    (netproxy.settings_env).
 
     Неверный, отозванный токен, непринятые условия, fine-grained токен без
     доступа к гейтед-репозиториям: pyannote 4.x ловит HfHubHTTPError сам и
@@ -118,9 +162,10 @@ def diarize_wav(
 ) -> Diarization:
     """Diarization (интервалы + эмбеддинги + регионы нахлёста) по записи.
 
-    Нет токена Hugging Face или нет доступа к гейтед-модели — пустая
-    Diarization со `skipped` (причина): вызывающий расшифровывает без
-    разделения на спикеров, а не падает.
+    Модель скачана — грузится с диска, без сети и без токена (`_load_local`).
+    Не скачана (или копия битая), а токена Hugging Face нет или нет доступа к
+    гейтед-модели — пустая Diarization со `skipped` (причина): вызывающий
+    расшифровывает без разделения на спикеров, а не падает.
 
     По умолчанию — overlap-aware раскладка: turn говорящего непрерывен,
     перебивание лежит поверх, зоны нахлёста возвращаются отдельно.
@@ -138,15 +183,24 @@ def diarize_wav(
     from meet import credentials
 
     quiet_pyannote()
-    token = credentials.get_hf_token()
-    if not token:
+    # Токен — только для сети: модель в кэше его не просит (и связку ключей
+    # macOS второй раз за задачу не трогаем).
+    cached = _local_snapshot() is not None
+    token = None if cached else credentials.get_hf_token()
+    if not cached and not token:
         print(NO_TOKEN_NOTE)
         return Diarization(turns=[], skipped=SKIPPED_NO_TOKEN)
 
     print("Диаризация...")
-    pipe = _load_pipeline(token)
+    pipe = _load_local() if cached else None
     if pipe is None:
-        return Diarization(turns=[], skipped=SKIPPED_NO_ACCESS)
+        token = token or credentials.get_hf_token()
+        if not token:
+            print(NO_TOKEN_NOTE)
+            return Diarization(turns=[], skipped=SKIPPED_NO_TOKEN)
+        pipe = _load_pipeline(token)
+        if pipe is None:
+            return Diarization(turns=[], skipped=SKIPPED_NO_ACCESS)
     import torch
 
     from meet import asr

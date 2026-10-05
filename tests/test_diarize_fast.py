@@ -94,6 +94,78 @@ def _wire(monkeypatch, pipe, device="cpu"):
     monkeypatch.setattr(diarize, "_to_diarization", lambda result, exclusive=False: Diarization(turns=[]))
 
 
+# --- C1: модель из кэша без сети ---------------------------------------------
+
+
+def test_local_snapshot_follows_refs_main(monkeypatch, tmp_path):
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    assert diarize._local_snapshot() is None
+    snap = _snapshot(tmp_path)
+    assert diarize._local_snapshot() == snap
+
+
+def test_local_snapshot_without_config_is_not_a_model(monkeypatch, tmp_path):
+    """Оборванная загрузка: папка снапшота есть, а config.yaml нет."""
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    _snapshot(tmp_path, config=False)
+    assert diarize._local_snapshot() is None
+
+
+def test_cached_model_loads_from_disk_without_token_and_keychain(monkeypatch, tmp_path):
+    """Модель в кэше — пайплайн из папки снапшота: ни запросов к Hub, ни
+    чтения токена (на macOS второе чтение связки ключей — лишний вопрос)."""
+    from meet import credentials
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    snap = _snapshot(tmp_path)
+    _fake_torch(monkeypatch)
+    calls = []
+    pipe = _Pipe()
+    _fake_pyannote(monkeypatch, lambda checkpoint, token: calls.append((checkpoint, token)) or pipe)
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: pytest.fail("токен не нужен"))
+    _wire(monkeypatch, pipe)
+    diar = diarize.diarize_wav(tmp_path / "x.wav")
+    assert diar.skipped is None and diar.device == "cpu"
+    assert calls == [(snap, None)]
+
+
+def test_broken_cache_goes_online_with_the_token(monkeypatch, tmp_path, capsys):
+    from meet import credentials
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    snap = _snapshot(tmp_path)
+    _fake_torch(monkeypatch)
+    pipe = _Pipe()
+    calls = []
+
+    def load(checkpoint, token):
+        calls.append((checkpoint, token))
+        if checkpoint == snap:
+            raise FileNotFoundError("segmentation/pytorch_model.bin")
+        return pipe
+
+    _fake_pyannote(monkeypatch, load)
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: "hf_x")
+    _wire(monkeypatch, pipe)
+    assert diarize.diarize_wav(tmp_path / "x.wav").skipped is None
+    assert calls == [(snap, None), (diarize.DIARIZATION_MODEL, "hf_x")]
+    assert "FileNotFoundError" in capsys.readouterr().out
+
+
+def test_broken_cache_without_token_is_no_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    _snapshot(tmp_path)
+    _fake_torch(monkeypatch)
+    _fake_pyannote(monkeypatch, lambda checkpoint, token: None)
+    assert diarize.diarize_wav(tmp_path / "x.wav").skipped == diarize.SKIPPED_NO_TOKEN
+
+
+def test_not_cached_without_token_is_skipped_before_pyannote(monkeypatch, tmp_path):
+    """Без кэша и без токена — как раньше: пропуск, pyannote не грузится."""
+    _fake_pyannote(monkeypatch, lambda checkpoint, token: pytest.fail("не грузить"))
+    assert diarize.diarize_wav(tmp_path / "x.wav").skipped == diarize.SKIPPED_NO_TOKEN
+
+
 # --- C2: телеметрия pyannote ---------------------------------------------------
 
 
