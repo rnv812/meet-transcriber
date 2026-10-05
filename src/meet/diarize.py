@@ -175,6 +175,10 @@ def _load_pipeline(token: str):
 # классе, а любая ошибка — откат на штатный способ. Убрать, когда #2050 примут.
 
 FAST_EMBEDDINGS_VERSION = "4.0."
+# Пачка голосов pyannote (по умолчанию 32): 16 — пик памяти 1,9 ГБ вместо
+# 2,7 ГБ без потери скорости (замер 0.3.3); с проходом на окно это 16 окон,
+# 48 голосов за прогон.
+EMBEDDING_BATCH_SIZE = 16
 FAST_FAILED_NOTE = "голоса за один проход на окно не сработали ({reason}): штатный способ pyannote"
 
 
@@ -406,6 +410,8 @@ def diarize_wav(
         if pipe is None:
             return Diarization(turns=[], skipped=SKIPPED_NO_ACCESS)
     _install_fast_embeddings(pipe)
+    if hasattr(pipe, "embedding_batch_size"):
+        pipe.embedding_batch_size = EMBEDDING_BATCH_SIZE
     import torch
 
     from meet import asr

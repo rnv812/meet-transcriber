@@ -264,6 +264,20 @@ def test_threads_are_never_raised_above_what_torch_has(monkeypatch, tmp_path):
     assert pipe.seen_threads == 4
 
 
+def test_embedding_batch_is_16_windows(monkeypatch, tmp_path):
+    """Пачка голосов 16 вместо 32: пик памяти −0,8 ГБ, скорость та же (с
+    проходом на окно это 16 окон = 48 голосов)."""
+    from meet import credentials
+
+    _fake_torch(monkeypatch)
+    pipe = _Pipe()
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: "hf_x")
+    monkeypatch.setattr(diarize, "_load_pipeline", lambda token: pipe)
+    _wire(monkeypatch, pipe)
+    diarize.diarize_wav(tmp_path / "x.wav")
+    assert pipe.embedding_batch_size == diarize.EMBEDDING_BATCH_SIZE == 16
+
+
 def test_gpu_diarization_leaves_threads_alone(monkeypatch, tmp_path):
     from meet import credentials
 
