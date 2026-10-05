@@ -76,6 +76,10 @@ impl Client {
         read(request.call())
     }
 
+    pub fn delete(&self, path: &str) -> Result<Value> {
+        read(self.request("DELETE", path).call())
+    }
+
     /// POST с JSON-телом (`Value::Null` — без тела).
     pub fn post(&self, path: &str, body: Value) -> Result<Value> {
         let request = self.request("POST", path);

@@ -981,6 +981,9 @@ pub fn tooltip(view: Option<&View>, status: &ResidentStatus) -> String {
     if matches!(status, ResidentStatus::StorageMissing { .. }) {
         return "Meet · папка движка и моделей недоступна, откройте окно".to_string();
     }
+    if *status == ResidentStatus::StorageUnreadable {
+        return "Meet · файл выбора папки движка повреждён, откройте окно".to_string();
+    }
     if let ResidentStatus::EngineUpdating { step, of } = *status {
         return if step > 0 {
             format!("Meet · обновление движка: шаг {step} из {of}")

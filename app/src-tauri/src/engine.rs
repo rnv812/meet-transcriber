@@ -238,7 +238,27 @@ pub fn constraints_file(resources: &Path, profile: &str) -> Option<PathBuf> {
 /// другим индексом счёл бы стоящий torch подходящим и оставил чужую сборку.
 /// Кэш uv — по умолчанию: на нём держится докачка, так что очистка стоит
 /// только перекладки файлов из кэша.
-pub fn uv_env(data_dir: &Path) -> Vec<(&'static str, OsString)> {
+///
+/// Движок в выбранной папке (`storage.rs`): кэш uv — тоже там
+/// (`<папка>\uv-cache`, `uv_cache_for`). Иначе каждое обновление шло бы копией
+/// с системного диска (жёсткие ссылки между дисками невозможны) и требовало бы
+/// места под движок целиком, а системный диск копил бы гигабайты колёс.
+/// Общий кэш `%LOCALAPPDATA%\uv\cache` Meet не трогает: им может пользоваться
+/// и сам человек.
+pub fn uv_env(home: &Path, data_dir: &Path) -> Vec<(&'static str, OsString)> {
+    let mut env = uv_env_base(home);
+    if let Some(cache) = uv_cache_for(home, data_dir) {
+        env.push(("UV_CACHE_DIR", cache.into_os_string()));
+    }
+    env
+}
+
+/// Кэш uv движка в выбранной папке; в папке данных — `None` (умолчание uv).
+pub fn uv_cache_for(home: &Path, data_dir: &Path) -> Option<PathBuf> {
+    (!storage::same_path(home, data_dir)).then(|| home.join(storage::UV_CACHE))
+}
+
+fn uv_env_base(data_dir: &Path) -> Vec<(&'static str, OsString)> {
     vec![
         (
             "UV_PYTHON_INSTALL_DIR",
@@ -385,7 +405,12 @@ pub fn space_needed(data_dir: &Path, profile: &str, cache: Option<&Path>) -> f64
 
 /// Места под движок профиля в папке `home` с учётом кэша uv этой машины.
 pub fn space_for(home: &Path, profile: &str) -> f64 {
-    space_needed(home, profile, current_uv_cache().as_deref())
+    space_needed(home, profile, install_uv_cache(home).as_deref())
+}
+
+/// Кэш uv, которым пойдёт установка в `home`.
+fn install_uv_cache(home: &Path) -> Option<PathBuf> {
+    uv_cache_for(home, &resident::data_dir()).or_else(current_uv_cache)
 }
 
 #[cfg(windows)]
@@ -1121,6 +1146,9 @@ pub fn install(app: &AppHandle, profile: &str, fresh: bool) -> Result<(), String
 pub fn install_with(app: &AppHandle, profile: &str, mode: InstallMode) -> Result<(), String> {
     let _busy = begin_install()?;
     let data = resident::data_dir();
+    // Папки движка нет (диск отключён) или выбор не прочитан: create_dir_all
+    // создал бы её заново — на другой флешке с той же буквой или в /Volumes.
+    storage::ready(&data)?;
     // Движок — в папке движка и моделей (`storage.json`), по умолчанию — в
     // папке данных.
     let home = storage::home(&data);
@@ -1242,7 +1270,7 @@ fn run_install(
 /// не узнать — не мешаем. Ошибся в меньшую сторону — uv упадёт с «нет
 /// места», и это будет в хвосте лога.
 fn check_space(home: &Path, profile: &str) -> Result<(), String> {
-    let needs = space_needed(home, profile, current_uv_cache().as_deref());
+    let needs = space_needed(home, profile, install_uv_cache(home).as_deref());
     match free_gb(home).and_then(|free| space_error(needs, free)) {
         Some(error) => Err(error),
         None => Ok(()),
@@ -1313,7 +1341,7 @@ fn run_steps(
     );
     let of = steps.len();
     let plan = install_plan(steps, mode);
-    let mut envs = uv_env(home);
+    let mut envs = uv_env(home, data_dir);
     // Прокси из настроек Windows: uv их сам не читает (см. netproxy.rs).
     envs.extend(crate::netproxy::system_proxy_env());
     let cwd = engine_root(home);
@@ -1439,6 +1467,7 @@ fn run_gigaam(
 pub fn retry_gigaam(app: &AppHandle) -> Result<(), String> {
     let _busy = begin_install()?;
     let data = resident::data_dir();
+    storage::ready(&data)?;
     let home = storage::home(&data);
     let version = app_version(app);
     let env = env_dir(&home, &version);
@@ -1457,7 +1486,7 @@ pub fn retry_gigaam(app: &AppHandle) -> Result<(), String> {
         &marker.profile,
         constraints.as_deref(),
     );
-    let mut envs = uv_env(&home);
+    let mut envs = uv_env(&home, &data);
     envs.extend(crate::netproxy::system_proxy_env());
     let mut log = InstallLog::open(&data);
     log.write(&format!(
@@ -1481,7 +1510,7 @@ pub fn plan_upkeep(app: &AppHandle) -> Upkeep {
     let data = resident::data_dir();
     // Папка движка на отключённом диске: ставить некуда (и нельзя — на macOS
     // это создало бы папку в /Volumes на системном диске). Окно покажет ошибку.
-    if storage::missing(&data).is_some() {
+    if storage::blocked(&data).is_some() {
         return Upkeep::Nothing;
     }
     let data = storage::home(&data);
@@ -2302,7 +2331,7 @@ mod tests {
     #[test]
     fn uv_keeps_python_inside_the_app_folder() {
         let data = Path::new(r"C:\Users\u\AppData\Local\meet");
-        let env = uv_env(data);
+        let env = uv_env(data, data);
         let get = |key: &str| env.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone());
         assert_eq!(
             get("UV_PYTHON_INSTALL_DIR"),
@@ -2313,6 +2342,23 @@ mod tests {
         assert_eq!(get("UV_COMPILE_BYTECODE"), Some("1".into()));
         // Кэш uv — по умолчанию: на нём держится докачка после сбоя.
         assert_eq!(get("UV_CACHE_DIR"), None);
+    }
+
+    #[test]
+    fn engine_in_a_chosen_folder_keeps_its_uv_cache_there() {
+        let data = Path::new(r"C:\Users\u\AppData\Local\meet");
+        let home = Path::new(r"E:\Meet");
+        let env = uv_env(home, data);
+        let get = |key: &str| env.iter().find(|(k, _)| *k == key).map(|(_, v)| v.clone());
+        assert_eq!(
+            get("UV_CACHE_DIR"),
+            Some(home.join("uv-cache").into_os_string())
+        );
+        assert_eq!(
+            get("UV_PYTHON_INSTALL_DIR"),
+            Some(home.join("engine").join("python").into_os_string())
+        );
+        assert_eq!(uv_cache_for(data, data), None);
     }
 
     #[cfg(windows)]

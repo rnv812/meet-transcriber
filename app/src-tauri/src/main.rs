@@ -23,6 +23,7 @@ mod platform;
 mod pty;
 mod resident;
 mod storage;
+mod storage_app;
 mod tray;
 mod tray_panel;
 mod updater;
@@ -127,12 +128,14 @@ fn main() {
             engine::gpu_info,
             // «Где хранить движок и модели»: проверка, перенос, отмена,
             // «Вернуть на системный диск» при отключённом диске.
-            storage::storage_status,
-            storage::storage_check,
-            storage::storage_move,
-            storage::storage_cancel,
-            storage::storage_reset,
-            storage::storage_retry,
+            storage_app::storage_status,
+            storage_app::storage_check,
+            storage_app::storage_move,
+            storage_app::storage_cancel,
+            storage_app::storage_abandon,
+            storage_app::storage_reset,
+            storage_app::storage_repoint,
+            storage_app::storage_retry,
             windows::open_url,
             windows::mark_wizard_done,
             windows::open_logs,
@@ -187,7 +190,7 @@ fn main() {
             }
             // Прерванный перенос движка и моделей — откатить или довести до
             // того, как надзор будет искать движок (`storage.rs`).
-            storage::recover_at_startup();
+            storage_app::recover_at_startup();
             // Движок, собранный из другого колеса той же версии, и движок
             // новой версии после обновления приложения ставятся в фоне;
             // резидент ждёт конца, чтобы не подняться из старого кода.

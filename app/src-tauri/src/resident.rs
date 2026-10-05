@@ -364,6 +364,10 @@ pub enum ResidentStatus {
     StorageMissing {
         path: PathBuf,
     },
+    /// `storage.json` есть, но не прочитан: не «по умолчанию» (движок на
+    /// системном диске перенос уже удалил) — окно предлагает «Указать папку»
+    /// или «Вернуть на системный диск».
+    StorageUnreadable,
     /// «Выход»: резидент сохраняет запись и гасится, затем выйдет оболочка.
     Quitting,
 }
@@ -599,16 +603,31 @@ impl Supervisor {
         // Папки движка и моделей нет — не запускаем ничего: ни движка из
         // ниоткуда, ни мастера, который поставил бы его заново на системный
         // диск. Решает человек в окне.
-        if let Some(path) = crate::storage::missing(&data_dir()) {
-            shell_log!(
-                "папка движка и моделей недоступна: {} — резидент не запускается",
-                path.display()
-            );
-            self.set_status(generation, ResidentStatus::StorageMissing { path });
+        if let Some(blocked) = crate::storage::blocked(&data_dir()) {
+            let (status, title) = match blocked {
+                crate::storage::Blocked::Missing(path) => {
+                    shell_log!(
+                        "папка движка и моделей недоступна: {} — резидент не запускается",
+                        path.display()
+                    );
+                    (
+                        ResidentStatus::StorageMissing { path },
+                        crate::storage::MISSING_TITLE,
+                    )
+                }
+                crate::storage::Blocked::Unreadable => {
+                    shell_log!("storage.json не прочитан — резидент не запускается");
+                    (
+                        ResidentStatus::StorageUnreadable,
+                        crate::storage::UNREADABLE_TITLE,
+                    )
+                }
+            };
+            self.set_status(generation, status);
             tray::notify(
                 app,
                 vec![Notice {
-                    title: crate::storage::MISSING_TITLE.into(),
+                    title: title.into(),
                     body: "Подключите диск или откройте окно Meet".into(),
                     recording: None,
                 }],
@@ -779,7 +798,27 @@ impl Supervisor {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("0.1.0 или раньше")
                 .to_string();
-            match upgrade::external_version(&state, jobs.as_ref(), app_version) {
+            let mut decision = upgrade::external_version(&state, jobs.as_ref(), app_version);
+            // Резидент из движка другой папки (недобитый после прерванного
+            // переноса) не подхватываем: его папку удаляют, а кэш моделей у
+            // него — оттуда же. Как с чужой версией: занят — ждём, нет — выйти.
+            if decision == upgrade::ExternalVersion::Keep {
+                let prefix = client
+                    .get("/storage")
+                    .ok()
+                    .and_then(|value| value.get("prefix")?.as_str().map(PathBuf::from));
+                let home = crate::storage::home(&data_dir());
+                if !crate::storage::adoptable(prefix.as_deref(), &home) {
+                    decision = if upgrade::resident_busy(&state)
+                        || upgrade::resident_working(&state, jobs.as_ref())
+                    {
+                        upgrade::ExternalVersion::WaitIdle
+                    } else {
+                        upgrade::ExternalVersion::Replace
+                    };
+                }
+            }
+            match decision {
                 upgrade::ExternalVersion::Keep => {
                     waiting = false;
                     kept = Some(identity);

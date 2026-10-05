@@ -457,7 +457,7 @@ pub fn open_wizard_on_first_run(app: &AppHandle, engine_upkeep: bool) {
     let data = resident::data_dir();
     // Папка движка и моделей недоступна: окно с ошибкой и «Вернуть на
     // системный диск», а не мастер, который поставил бы движок заново.
-    if crate::storage::missing(&data).is_some() {
+    if crate::storage::blocked(&data).is_some() {
         open_main(app, None, None);
         return;
     }
@@ -519,6 +519,7 @@ pub fn resident_status(app: AppHandle) -> String {
         ResidentStatus::EngineMissing => "engine-missing",
         ResidentStatus::EngineUpdating { .. } => "engine-updating",
         ResidentStatus::StorageMissing { .. } => "storage-missing",
+        ResidentStatus::StorageUnreadable => "storage-unreadable",
         ResidentStatus::Quitting => "quitting",
     }
     .to_string()
