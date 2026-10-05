@@ -49,8 +49,9 @@ def _load_align_model(device):
 
 def _align_device() -> str:
     """Устройство выравнивания (wav2vec2, torch) — как у диаризации
-    (`asr.torch_device`): видеокарта, когда torch её видит, чем бы ни
-    распознавался текст; профиль CPU держит wav2vec2 на процессоре."""
+    (`asr.torch_device`): при «Авто» — видеокарта, когда torch её видит,
+    чем бы ни распознавался текст; «Процессор» в настройках и профиль CPU
+    держат wav2vec2 на процессоре."""
     return asr.torch_device()
 
 

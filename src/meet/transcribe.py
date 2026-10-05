@@ -118,11 +118,14 @@ class _Run:
     def _torch_guess(self) -> str:
         """Устройство шагов torch (выравнивание, диаризация, голоса) до самой
         диаризации — для оценки времени, без импорта torch: распознаёт карта —
-        и torch на ней; карта видна (ctranslate2) на движке с CUDA — тоже."""
+        и torch на ней; «Процессор» в настройках — процессор; карта видна
+        (ctranslate2) на движке с CUDA — видеокарта."""
         if self.torch_used:
             return self.torch_used
         if self.choice is not None and self.choice.device == "cuda":
             return "cuda"
+        if asr._device_setting(None) == "cpu":
+            return "cpu"
         try:
             return "cuda" if asr.gpu_engine() and asr.cuda_available() else "cpu"
         except Exception:

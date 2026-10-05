@@ -133,7 +133,7 @@ def test_usable_cuda_loads_embedder_on_cuda(fake_stack, monkeypatch):
     assert fake_stack["devices"] == ["cuda"]
 
 
-def test_embedder_on_cuda_even_when_text_is_recognised_on_cpu(fake_stack, monkeypatch):
+def test_embedder_on_cuda_on_auto_even_when_text_is_recognised_on_cpu(fake_stack, monkeypatch):
     """Текст — на процессоре (GigaAM, выбрано или нет библиотек ctranslate2),
     а torch видит карту: голоса — на видеокарте."""
     monkeypatch.setattr(asr, "resolve_device", lambda setting=None: "cpu")

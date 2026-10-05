@@ -300,15 +300,20 @@ def resolve_device(setting: str | None = None) -> str:
     return "cpu"
 
 
-def torch_device() -> str:
-    """Устройство torch (диаризация pyannote, голоса, выравнивание):
-    видеокарта, если torch правда её видит, — чем бы ни распознавался текст.
-    GigaAM на процессоре (выбрано в настройках или у ctranslate2 нет
-    библиотек) — не повод гнать диаризацию часовой встречи процессором: там
+def torch_device(setting: str | None = None) -> str:
+    """Устройство torch (диаризация pyannote, голоса, выравнивание).
+
+    «Процессор» в настройках (`asr.device = cpu`) — всё на процессоре, и torch
+    тоже: человек так решил (например, держит видеопамять свободной). Иначе
+    («auto», «cuda») — видеокарта, если torch правда её видит, чем бы ни
+    распознавался текст: ctranslate2 без библиотек CUDA (GigaAM/Whisper на
+    процессоре) — не повод гнать диаризацию часовой встречи процессором, там
     она в десятки раз дольше. Движок профиля CPU (torch процессорный), сбой
-    CUDA у torch в этом процессе, torch не импортируется — процессор. MPS
-    на macOS решает `diarize.pick_device`."""
+    CUDA у torch в этом процессе, torch не импортируется — процессор. MPS на
+    macOS решает `diarize.pick_device`."""
     if _torch_failure is not None or engine_profile() in CPU_PROFILES:
+        return "cpu"
+    if _device_setting(setting) == "cpu":
         return "cpu"
     try:
         import torch

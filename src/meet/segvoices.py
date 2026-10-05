@@ -484,8 +484,9 @@ def load_embedder():
     from meet import asr, credentials
     from meet.diarize import DIARIZATION_MODEL
 
-    # Видеокарта — когда torch её видит (`asr.torch_device`), а не по выбору
-    # распознавания: тот после `import torch` ещё и ошибался (WinError 127).
+    # Видеокарта — когда torch её видит (`asr.torch_device`; «Процессор» в
+    # настройках — процессор), а не по устройству распознавания: то после
+    # `import torch` ещё и ошибалось (WinError 127).
     cuda = asr.torch_device() == "cuda"
     model = PretrainedSpeakerEmbedding(
         {"checkpoint": DIARIZATION_MODEL, "subfolder": "embedding"},

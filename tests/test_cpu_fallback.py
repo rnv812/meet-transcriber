@@ -128,15 +128,25 @@ def _fake_torch(monkeypatch, cuda: bool):
     return torch
 
 
-def test_torch_device_ignores_how_text_is_recognised(monkeypatch, tmp_path):
-    """Текст — GigaAM на процессоре (выбрано или ctranslate2 без библиотек), а
+def test_torch_device_on_auto_ignores_how_text_is_recognised(monkeypatch, tmp_path):
+    """«Авто», текст — GigaAM на процессоре (у ctranslate2 нет библиотек), а
     torch видит карту: диаризация и голоса — на видеокарте."""
-    _engine(monkeypatch, tmp_path, libs=False, gpu=False, device="cpu")
+    _engine(monkeypatch, tmp_path, libs=False, gpu=False)
     _fake_torch(monkeypatch, cuda=True)
     assert asr.resolve_device() == "cpu"
     assert asr.torch_device() == "cuda"
     _fake_torch(monkeypatch, cuda=False)
     assert asr.torch_device() == "cpu"
+
+
+def test_explicit_cpu_setting_keeps_torch_on_cpu(monkeypatch, tmp_path):
+    """«Процессор» в настройках — всё на процессоре, хотя torch карту видит;
+    «Видеокарта» — torch на ней."""
+    _engine(monkeypatch, tmp_path, gpu=True, device="cpu")
+    _fake_torch(monkeypatch, cuda=True)
+    assert asr.torch_device() == "cpu"
+    _engine(monkeypatch, tmp_path, gpu=True, device="cuda")
+    assert asr.torch_device() == "cuda"
 
 
 def test_torch_device_cpu_engine_failure_and_missing_torch(monkeypatch, tmp_path):
@@ -153,10 +163,13 @@ def test_torch_device_cpu_engine_failure_and_missing_torch(monkeypatch, tmp_path
     assert asr.torch_device() == "cpu"
 
 
-def test_diarization_runs_on_gpu_while_text_is_on_cpu(monkeypatch, tmp_path):
+@pytest.mark.parametrize("device, want", [("auto", "cuda"), ("cpu", "cpu")])
+def test_diarization_follows_torch_on_auto_and_setting_on_cpu(monkeypatch, tmp_path, device, want):
+    """«Авто»: текст на процессоре (нет библиотек ctranslate2), диаризация — на
+    видеокарте. «Процессор» в настройках: диаризация тоже на процессоре."""
     from meet import credentials, diarize
 
-    _engine(monkeypatch, tmp_path, libs=False, device="cpu")
+    _engine(monkeypatch, tmp_path, libs=False, device=device)
     _fake_torch(monkeypatch, cuda=True)
     asked = []
 
@@ -177,22 +190,24 @@ def test_diarization_runs_on_gpu_while_text_is_on_cpu(monkeypatch, tmp_path):
     monkeypatch.setattr(diarize, "_load_wav", lambda path: (None, 16000))
     monkeypatch.setattr(diarize, "_to_diarization", lambda result, exclusive=False: Diarization(turns=[]))
     diar = diarize.diarize_wav(tmp_path / "x.wav")
-    assert asked == [True] and diar.device == "cuda"
+    assert asked == [want == "cuda"] and diar.device == want
 
 
-def test_voice_embedder_and_alignment_follow_torch(monkeypatch, tmp_path):
+@pytest.mark.parametrize("device, want", [("auto", "cuda"), ("cpu", "cpu")])
+def test_voice_embedder_and_alignment_follow_torch(monkeypatch, tmp_path, device, want):
     from meet import align, voice_id
 
-    _engine(monkeypatch, tmp_path, libs=False, device="cpu")
+    _engine(monkeypatch, tmp_path, libs=False, device=device)
     _fake_torch(monkeypatch, cuda=True)
-    assert voice_id._embedder_device() == "cuda"
-    assert align._align_device() == "cuda"
+    assert voice_id._embedder_device() == want
+    assert align._align_device() == want
 
 
-def test_speaker_split_embedder_follows_torch(monkeypatch, tmp_path):
+@pytest.mark.parametrize("device, want", [("auto", "cuda"), ("cpu", "cpu")])
+def test_speaker_split_embedder_follows_torch(monkeypatch, tmp_path, device, want):
     from meet import segvoices
 
-    _engine(monkeypatch, tmp_path, libs=False, device="cpu")
+    _engine(monkeypatch, tmp_path, libs=False, device=device)
     _fake_torch(monkeypatch, cuda=True)
     devices = []
     for name in ("pyannote", "pyannote.audio", "pyannote.audio.pipelines"):
@@ -202,7 +217,7 @@ def test_speaker_split_embedder_follows_torch(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "pyannote.audio.pipelines.speaker_verification", sv)
     monkeypatch.setattr("meet.credentials.get_hf_token", lambda: "t")
     segvoices.load_embedder()
-    assert devices == ["cuda"]
+    assert devices == [want]
 
 
 # --- расшифровка: журнал, ход и пометка транскрипта --------------------------------
@@ -254,6 +269,17 @@ def test_job_on_gpu_has_no_warning_or_note(monkeypatch, tmp_path, pipeline):
     assert not [e for e in seen if e["kind"] == "log" and e.get("source") == "device"]
     assert not [e for e in seen if e.get("warning")]
     assert "asr_note" not in library.read_transcript(folder)
+
+
+def test_explicit_cpu_estimates_torch_steps_on_cpu(monkeypatch, tmp_path, pipeline):
+    """«Процессор» в настройках, карта видна: оценка шагов torch — процессор."""
+    tr, bus, seen, folder = pipeline
+    _engine(monkeypatch, tmp_path, gpu=True, device="cpu")
+    run = tr._Run(bus=bus)
+    run.choice = asr.Choice("gigaam", "cpu")
+    assert run.device_of("diarize") == "cpu"
+    _engine(monkeypatch, tmp_path, gpu=True, device="auto")
+    assert run.device_of("diarize") == "cuda"
 
 
 def test_stats_of_torch_steps_go_under_the_device_torch_used(monkeypatch, tmp_path, pipeline):

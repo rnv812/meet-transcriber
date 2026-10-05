@@ -16,8 +16,8 @@ SAMPLE_RATE = 16000
 
 def _embedder_device() -> str:
     """cuda — когда torch видит видеокарту (`asr.torch_device`: не профиль
-    CPU, без сбоя CUDA у torch), чем бы ни распознавался текст; иначе cpu (на
-    macOS — тоже cpu)."""
+    CPU, не «Процессор» в настройках, без сбоя CUDA у torch), чем бы ни
+    распознавался текст; иначе cpu (на macOS — тоже cpu)."""
     from meet import asr
 
     return asr.torch_device()
