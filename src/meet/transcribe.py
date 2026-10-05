@@ -124,7 +124,7 @@ class _Run:
             return self.torch_used
         if self.choice is not None and self.choice.device == "cuda":
             return "cuda"
-        if asr._device_setting(None) == "cpu":
+        if asr.device_setting(None) == "cpu":
             return "cpu"
         try:
             return "cuda" if asr.gpu_engine() and asr.cuda_available() else "cpu"
@@ -364,11 +364,13 @@ def _diarize(wav: Path, speakers, overlap: bool, run: "_Run"):
     used = getattr(diar, "device", None)
     if used:
         run.torch_used = used
-        if used == "cpu" and "torch" not in run._announced and asr.gpu_engine():
-            run._announced.add("torch")
-            # В журнал резидента: диаризация на процессоре — десятки минут, а не секунды.
-            run.bus.emit(events.LOG, text="диаризация на процессоре: torch не видит видеокарту",
-                         source="device")
+        # Диаризация на процессоре не по выбору человека — десятки минут вместо
+        # секунд: в журнал резидента и под полоску хода (к причине для текста).
+        if used == "cpu" and "torch" not in run._announced:
+            from meet.diarize import report_cpu
+
+            if report_cpu(run.bus, run.stages):
+                run._announced.add("torch")
     return diar
 
 

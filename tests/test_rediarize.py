@@ -87,6 +87,27 @@ def _segs(folder):
     return library.read_transcript_full(folder)["segments"]
 
 
+def test_rediarize_on_cpu_says_why_in_the_log_and_progress(meeting, base, monkeypatch):
+    """Переразделение — подпроцесс задачи: голый print очередь выбрасывает,
+    а событие `log` source="device" она пишет в журнал резидента."""
+    from meet import asr, events, voices
+
+    monkeypatch.setattr(voices, "voices_dir", lambda: base)
+    monkeypatch.setattr(asr, "torch_cpu_reason", lambda setting=None: "torch не видит видеокарту")
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(lambda e: seen.append(e.to_dict()))
+
+    def diarize(wav, **kw):
+        return Diarization(turns=TURNS, embeddings=EMB, overlaps=[], device="cpu")
+
+    rediarize.run(meeting, diarize=diarize, to_wav=_to_wav, bus=bus)
+    logs = [e["text"] for e in seen if e["kind"] == "log" and e.get("source") == "device"]
+    assert logs == ["диаризация на процессоре: torch не видит видеокарту"]
+    assert seen[-1]["kind"] == "progress"
+    assert seen[-1]["warning"] == "Диаризация на процессоре: torch не видит видеокарту"
+
+
 def test_sensitivity_maps_to_pipeline_clustering_threshold():
     assert rediarize.clustering_threshold(None) is None
     assert rediarize.clustering_threshold(0.5) is None       # как у обычной расшифровки

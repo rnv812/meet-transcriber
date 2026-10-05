@@ -302,6 +302,10 @@ def run(folder: Path, *, num_speakers: int | None = None, min_speakers: int | No
                        clustering_threshold=threshold, on_progress=stages.update)
     if diar.skipped:
         raise RuntimeError("Нет доступа к модели разделения на спикеров — настройте Hugging Face")
+    if getattr(diar, "device", None) == "cpu":
+        from meet.diarize import report_cpu
+
+        report_cpu(bus, stages)
     stages.begin("voices")
     name_map = transcribe._match_names(diar, transcribe.voice_threshold(folder))
     parts = reassign(folder, segments, diar.turns, diar.overlaps)

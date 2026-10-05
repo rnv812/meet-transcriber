@@ -149,8 +149,9 @@ def diarize_wav(
     # но работает; раньше здесь был жёсткий cuda и падение.
     use_cuda = asr.torch_device() == "cuda"
     device = pick_device(torch, use_cuda)
-    if device.type == "cpu" and asr.gpu_engine():
-        print("диаризация на процессоре: torch не видит видеокарту")
+    reason = asr.torch_cpu_reason() if device.type == "cpu" else None
+    if reason:
+        print(f"диаризация на процессоре: {reason}")
     pipe.to(device)
     if clustering_threshold is not None:
         params = pipe.parameters(instantiated=True)
@@ -185,6 +186,22 @@ def diarize_wav(
     diar = _to_diarization(result, exclusive=exclusive)
     diar.device = used
     return diar
+
+
+def report_cpu(bus, stages=None, what: str = "диаризация") -> bool:
+    """Шаги torch идут на процессоре не по выбору человека (`asr.torch_cpu_reason`)
+    — причина строкой в журнал резидента (событие `log`, source="device":
+    голый print подпроцесса задачи очередь выбрасывает) и, если есть ход
+    задачи (`stages`), предупреждением под полоской. → сказано ли."""
+    from meet import asr, events
+
+    reason = asr.torch_cpu_reason()
+    if reason is None:
+        return False
+    bus.emit(events.LOG, text=f"{what} на процессоре: {reason}", source="device")
+    if stages is not None:
+        stages.add_warning(f"{what[0].upper()}{what[1:]} на процессоре: {reason}")
+    return True
 
 
 # Доли шагов pyannote в общем ходе диаризации: сегментация и голоса (эмбеддинги)

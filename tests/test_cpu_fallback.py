@@ -117,6 +117,12 @@ def test_library_already_loaded_by_torch_counts_as_loadable(monkeypatch, tmp_pat
     assert not asr._libraries_load(libs)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="GetModuleHandleW — только Windows")
+def test_module_loaded_asks_windows_for_real():
+    assert asr._module_loaded("kernel32.dll")
+    assert not asr._module_loaded("no_such_lib_xyz.dll")
+
+
 # --- torch: видеокарта, когда torch её видит --------------------------------------
 
 
@@ -203,21 +209,117 @@ def test_voice_embedder_and_alignment_follow_torch(monkeypatch, tmp_path, device
     assert align._align_device() == want
 
 
+def _fake_embedding(monkeypatch, fail_on: str | None = None):
+    """Поддельный PretrainedSpeakerEmbedding: запоминает устройства; на
+    `fail_on` модель собирается, а первая свёртка падает без cuDNN."""
+    import numpy as np
+
+    devices = []
+    for name in ("pyannote", "pyannote.audio", "pyannote.audio.pipelines"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    sv = types.ModuleType("pyannote.audio.pipelines.speaker_verification")
+
+    def pretrained(spec, device, token=None):
+        devices.append(device.type)
+
+        def model(wav):
+            if device.type == fail_on:
+                raise RuntimeError("Could not load library cudnn_ops64_9.dll. Error code 126")
+            return [np.ones(3, dtype=np.float32)]
+
+        return model
+
+    sv.PretrainedSpeakerEmbedding = pretrained
+    monkeypatch.setitem(sys.modules, "pyannote.audio.pipelines.speaker_verification", sv)
+    monkeypatch.setattr("meet.credentials.get_hf_token", lambda: "t")
+    return devices
+
+
 @pytest.mark.parametrize("device, want", [("auto", "cuda"), ("cpu", "cpu")])
 def test_speaker_split_embedder_follows_torch(monkeypatch, tmp_path, device, want):
     from meet import segvoices
 
     _engine(monkeypatch, tmp_path, libs=False, device=device)
-    _fake_torch(monkeypatch, cuda=True)
-    devices = []
-    for name in ("pyannote", "pyannote.audio", "pyannote.audio.pipelines"):
-        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
-    sv = types.ModuleType("pyannote.audio.pipelines.speaker_verification")
-    sv.PretrainedSpeakerEmbedding = lambda spec, device, token=None: devices.append(device.type)
-    monkeypatch.setitem(sys.modules, "pyannote.audio.pipelines.speaker_verification", sv)
-    monkeypatch.setattr("meet.credentials.get_hf_token", lambda: "t")
+    torch = _fake_torch(monkeypatch, cuda=True)
+    torch.from_numpy = lambda a: a
+    devices = _fake_embedding(monkeypatch)
     segvoices.load_embedder()
     assert devices == [want]
+
+
+def test_speaker_split_embedder_retries_on_cpu_without_cudnn(monkeypatch, tmp_path):
+    """«Разделить спикера» теперь идёт на видеокарте: cuDNN грузится лениво,
+    поэтому пробный эмбеддинг сразу, а без библиотеки — один повтор на
+    процессоре (как у голосов живого режима), а не упавшая задача."""
+    import numpy as np
+
+    from meet import segvoices
+
+    _engine(monkeypatch, tmp_path, libs=False)
+    torch = _fake_torch(monkeypatch, cuda=True)
+    torch.from_numpy = lambda a: a
+    devices = _fake_embedding(monkeypatch, fail_on="cuda")
+    embed = segvoices.load_embedder()
+    assert devices == ["cuda", "cpu"]
+    assert asr._torch_failure is not None and asr._cuda_failure is None
+    assert embed(np.zeros(16000, dtype=np.float32)) is not None
+
+
+# --- torch на процессоре: причина только когда это не выбор человека ----------------
+
+
+def test_torch_cpu_reason(monkeypatch, tmp_path):
+    _engine(monkeypatch, tmp_path)
+    _fake_torch(monkeypatch, cuda=True)
+    assert asr.torch_cpu_reason() is None  # torch на видеокарте
+    _fake_torch(monkeypatch, cuda=False)
+    assert asr.torch_cpu_reason() == "torch не видит видеокарту"
+    asr.torch_cuda_failed(RuntimeError("Could not load library cudnn_ops64_9.dll"))
+    assert asr.torch_cpu_reason().startswith("сбой CUDA у torch (RuntimeError: Could not load")
+    asr._reset_cuda_state()
+    _engine(monkeypatch, tmp_path, device="cpu")
+    assert asr.torch_cpu_reason() is None  # «Процессор» выбран
+    _engine(monkeypatch, tmp_path / "cpu", profile="cpu")
+    assert asr.torch_cpu_reason() is None  # движок для процессора
+    _engine(monkeypatch, tmp_path / "dev", profile=None, libs=False)
+    assert asr.torch_cpu_reason() is None  # dev без пакетов CUDA
+
+
+@pytest.mark.parametrize("device", ["auto", "cpu"])
+def test_diarize_line_only_when_cpu_was_not_chosen(monkeypatch, tmp_path, capsys, device):
+    from meet import credentials, diarize
+
+    _engine(monkeypatch, tmp_path, device=device)
+    _fake_torch(monkeypatch, cuda=False)
+
+    class Pipe:
+        def to(self, device):
+            pass
+
+        def __call__(self, *a, **k):
+            return None
+
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: "hf_x")
+    monkeypatch.setattr(diarize, "_load_pipeline", lambda token: Pipe())
+    monkeypatch.setattr(diarize, "pick_device", lambda torch, use_cuda: types.SimpleNamespace(type="cpu"))
+    monkeypatch.setattr(diarize, "_load_wav", lambda path: (None, 16000))
+    monkeypatch.setattr(diarize, "_to_diarization", lambda result, exclusive=False: Diarization(turns=[]))
+    diarize.diarize_wav(tmp_path / "x.wav")
+    line = "диаризация на процессоре: torch не видит видеокарту"
+    assert (line in capsys.readouterr().out) is (device == "auto")
+
+
+def test_rediarize_estimate_uses_the_torch_device(monkeypatch, tmp_path):
+    from meet import progress, rediarize, transcribe
+
+    seen = []
+    monkeypatch.setattr(asr, "torch_device", lambda setting=None: "cuda")
+    monkeypatch.setattr(transcribe, "wav_seconds", lambda wav: 60.0)
+    monkeypatch.setattr(progress, "step_time", lambda device, backend, key, seconds, stats=None: (
+        seen.append(device) or (1.0, 1.0)))
+    stages = types.SimpleNamespace(plan_times=lambda times: None)
+    rediarize._estimate(stages, tmp_path / "x.wav")
+    assert seen and set(seen) == {"cuda"}
 
 
 # --- расшифровка: журнал, ход и пометка транскрипта --------------------------------
@@ -280,6 +382,41 @@ def test_explicit_cpu_estimates_torch_steps_on_cpu(monkeypatch, tmp_path, pipeli
     assert run.device_of("diarize") == "cpu"
     _engine(monkeypatch, tmp_path, gpu=True, device="auto")
     assert run.device_of("diarize") == "cuda"
+
+
+def _torch_on_cpu(monkeypatch, tr):
+    _fake_torch(monkeypatch, cuda=False)
+    monkeypatch.setattr(tr, "diarize_wav", lambda p, num_speakers=None, exclusive=False, **kw: Diarization(
+        turns=[(0.0, 5.0, "SPEAKER_00")], device="cpu"))
+
+
+@pytest.mark.parametrize("device", ["auto", "cpu"])
+def test_text_on_gpu_but_torch_on_cpu_warns_only_on_auto(monkeypatch, tmp_path, pipeline, device):
+    """Текст на видеокарте, а torch её не видит (CPU-колесо torch, сбой
+    cuDNN): диаризация часа — десятки минут. На «Авто» — строка в журнал и
+    предупреждение в ходе; «Процессор» выбран — ни того ни другого."""
+    tr, bus, seen, folder = pipeline
+    _engine(monkeypatch, tmp_path, gpu=True, device=device)
+    _torch_on_cpu(monkeypatch, tr)
+    tr.transcribe(str(folder), align=False, bus=bus)
+    logs = [e["text"] for e in seen if e["kind"] == "log" and e.get("source") == "device"]
+    warnings = {e.get("warning") for e in seen if e["kind"] == "progress"} - {None}
+    if device == "auto":
+        assert logs == ["диаризация на процессоре: torch не видит видеокарту"]
+        assert warnings == {"Диаризация на процессоре: torch не видит видеокарту"}
+    else:
+        assert logs == [] and warnings == set()
+
+
+def test_text_and_torch_warnings_are_merged(monkeypatch, tmp_path, pipeline):
+    tr, bus, seen, folder = pipeline
+    _engine(monkeypatch, tmp_path, gpu=False)
+    _torch_on_cpu(monkeypatch, tr)
+    tr.transcribe(str(folder), align=False, bus=bus)
+    last = [e for e in seen if e["kind"] == "progress"][-1]
+    assert last["warning"] == (
+        "Распознаётся на процессоре: видеокарта NVIDIA не найдена (не подключена или выключена) · "
+        "Диаризация на процессоре: torch не видит видеокарту")
 
 
 def test_stats_of_torch_steps_go_under_the_device_torch_used(monkeypatch, tmp_path, pipeline):

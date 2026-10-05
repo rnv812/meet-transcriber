@@ -98,6 +98,20 @@ def test_cache_roundtrip_is_compact_and_keyed_by_track_and_time(meeting):
     assert isinstance(raw["items"]["sys:3.00-8.00"], str)  # base64 float16, не список чисел
 
 
+def test_compute_with_model_on_cpu_logs_why(meeting, monkeypatch):
+    from meet import asr, events
+
+    monkeypatch.setattr(asr, "torch_cpu_reason", lambda setting=None: "torch не видит видеокарту")
+    monkeypatch.setattr(segvoices, "load_embedder", lambda: (lambda audio: A.astype(np.float32)))
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(lambda e: seen.append(e.to_dict()))
+    segvoices.compute(meeting, list(range(1, 11)), bus=bus,
+                      load=lambda src: np.zeros(16000 * 60, dtype=np.int16))
+    logs = [e["text"] for e in seen if e["kind"] == "log" and e.get("source") == "device"]
+    assert logs == ["голоса реплик на процессоре: torch не видит видеокарту"]
+
+
 def test_compute_embeds_only_missing_long_segments_from_their_track(meeting):
     loaded, embedded = [], []
 

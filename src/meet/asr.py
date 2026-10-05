@@ -222,8 +222,9 @@ def _reset_cuda_state() -> None:
     _torch_failure = None
 
 
-def _device_setting(setting: str | None) -> str:
-    """Настройка `asr.device`; не прочиталась — «auto»."""
+def device_setting(setting: str | None = None) -> str:
+    """Настройка `asr.device` (явно переданная — она же); не прочиталась —
+    «auto»."""
     if setting is not None:
         return setting
     try:
@@ -253,7 +254,7 @@ def cpu_reason(setting: str | None = None) -> str | None:
     работает, процессор выбран в настройках или движок для процессора."""
     if _cuda_failure is not None:
         return CUDA_FAILED
-    if _device_setting(setting) == "cpu" or not gpu_engine():
+    if device_setting(setting) == "cpu" or not gpu_engine():
         return None
     if not cuda_runtime_ok():
         return NO_CUDA_LIBS
@@ -291,7 +292,7 @@ def resolve_device(setting: str | None = None) -> str:
     библиотек) — причина строкой в вывод процесса (`cpu_reason`), не молча."""
     if _cuda_failure is not None:
         return "cpu"
-    setting = _device_setting(setting)
+    setting = device_setting(setting)
     if setting in ("cuda", "cpu"):
         return setting
     if cuda_runtime_ok() and cuda_available():
@@ -313,7 +314,7 @@ def torch_device(setting: str | None = None) -> str:
     macOS решает `diarize.pick_device`."""
     if _torch_failure is not None or engine_profile() in CPU_PROFILES:
         return "cpu"
-    if _device_setting(setting) == "cpu":
+    if device_setting(setting) == "cpu":
         return "cpu"
     try:
         import torch
@@ -321,6 +322,24 @@ def torch_device(setting: str | None = None) -> str:
         return "cuda" if torch.cuda.is_available() else "cpu"
     except Exception:
         return "cpu"
+
+
+def torch_cpu_reason(setting: str | None = None) -> str | None:
+    """Почему шаги torch (диаризация, голоса, выравнивание) идут на
+    процессоре, хотя не должны: сбой CUDA у torch в этом процессе или torch
+    не видит видеокарту. None — torch на видеокарте, либо процессор так и
+    задуман: «Процессор» в настройках, движок для процессора (CPU, mac),
+    движок без CUDA (dev без пакетов nvidia-*)."""
+    if device_setting(setting) == "cpu" or engine_profile() in CPU_PROFILES or not gpu_engine():
+        return None
+    if _torch_failure is not None:
+        return f"сбой CUDA у torch ({_torch_failure})"
+    try:
+        import torch
+
+        return None if torch.cuda.is_available() else "torch не видит видеокарту"
+    except Exception as e:
+        return f"torch не загрузился ({type(e).__name__})"
 
 
 def _cpu_model_setting() -> str:

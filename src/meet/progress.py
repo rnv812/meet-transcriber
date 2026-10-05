@@ -437,6 +437,15 @@ class Stages:
             self.warning = text
             self._emit()
 
+    def add_warning(self, text: str) -> None:
+        """Ещё одно предупреждение к уже сказанному (через « · »): например,
+        текст на процессоре, и диаризация тоже."""
+        with self._lock:
+            if self.warning and text in self.warning:
+                return
+            self.warning = f"{self.warning} · {text}" if self.warning else text
+            self._emit()
+
     def note(self, text: str | None) -> None:
         """Пояснение к текущему шагу (например, «диаризация пропущена»)."""
         with self._lock:

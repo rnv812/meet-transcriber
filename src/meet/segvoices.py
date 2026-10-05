@@ -475,22 +475,16 @@ def decode(src: Path, rate: int = SAMPLE_RATE) -> np.ndarray:
     return np.frombuffer(proc.stdout, dtype=np.int16)
 
 
-def load_embedder():
-    """Эмбеддер WeSpeaker из чекпойнта диаризации: видеокарта, если доступна,
-    иначе процессор. audio float32 16 кГц → вектор (256,) или None."""
+def _build_embedder(device: str):
     import torch
     from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
 
-    from meet import asr, credentials
+    from meet import credentials
     from meet.diarize import DIARIZATION_MODEL
 
-    # Видеокарта — когда torch её видит (`asr.torch_device`; «Процессор» в
-    # настройках — процессор), а не по устройству распознавания: то после
-    # `import torch` ещё и ошибалось (WinError 127).
-    cuda = asr.torch_device() == "cuda"
     model = PretrainedSpeakerEmbedding(
         {"checkpoint": DIARIZATION_MODEL, "subfolder": "embedding"},
-        device=torch.device("cuda" if cuda else "cpu"),
+        device=torch.device(device),
         token=credentials.get_hf_token(),
     )
 
@@ -500,6 +494,31 @@ def load_embedder():
         return vec if np.isfinite(vec).all() else None
 
     return embed
+
+
+def load_embedder():
+    """Эмбеддер WeSpeaker из чекпойнта диаризации: видеокарта, если доступна,
+    иначе процессор. audio float32 16 кГц → вектор (256,) или None.
+
+    Видеокарта — когда torch её видит (`asr.torch_device`; «Процессор» в
+    настройках — процессор), а не по устройству распознавания: то после
+    `import torch` ещё и ошибалось (WinError 127). cuDNN torch грузит лениво,
+    на первой свёртке: на видеокарте — сразу пробный эмбеддинг секунды
+    тишины, без библиотеки CUDA — один повтор на процессоре (как у голосов
+    живого режима, `voice_id`), а не упавшая задача."""
+    from meet import asr
+
+    if asr.torch_device() != "cuda":
+        return _build_embedder("cpu")
+    try:
+        embed = _build_embedder("cuda")
+        embed(np.zeros(16000, dtype=np.float32))
+        return embed
+    except Exception as e:
+        if not asr.missing_cuda_library(e):
+            raise
+        asr.torch_cuda_failed(e)
+        return _build_embedder("cpu")
 
 
 def _clip(audio: np.ndarray, seg: dict) -> np.ndarray:
@@ -529,7 +548,11 @@ def compute(folder: Path, idx: list[int], bus=None, embed=None, load=decode, ene
     if not todo:
         bus.progress("voices", label="голоса реплик", done=total, total=total)
         return {"computed": 0, "skipped": 0, "cached": total}
-    embed = embed or load_embedder()
+    if embed is None:
+        embed = load_embedder()
+        from meet.diarize import report_cpu
+
+        report_cpu(bus, what="голоса реплик")
     fresh: dict[str, np.ndarray] = {}
     failed: list[str] = []
     skipped = 0
