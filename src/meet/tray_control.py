@@ -323,6 +323,10 @@ MODELS_DOWNLOADING = "идут загрузки моделей — движок 
 RESIDENT_STOPPING = "служба записи останавливается — скачайте модель после её перезапуска"
 # Восстановление после перезапуска берёт записи не старше этого.
 RECOVER_DAYS = 7
+# Транскрипт — только текст, спикеров ещё нет (`phase: "text"`, Р4): действия,
+# которым нужны спикеры или окончательный текст, отказывают (409).
+TEXT_ONLY_RUNNING = "Спикеры ещё не определены — дождитесь конца расшифровки"
+TEXT_ONLY_STOPPED = "Спикеры ещё не определены: расшифровка прервалась — расшифруйте запись заново"
 
 
 def _for_window(segment):
@@ -495,6 +499,21 @@ class TrayControl:
         except Exception:
             pass  # шина — не повод ронять фоновую работу
 
+    def _text_only(self, folder: Path) -> str | None:
+        """Почему по транскрипту записи нельзя то, что опирается на спикеров:
+        это текст до них (`phase: "text"`). None — транскрипт окончательный
+        (или его нет — об этом скажут сами действия)."""
+        if not library.is_text_phase(library.read_transcript(folder)):
+            return None
+        if self.queue.active_for(str(folder), jobs.FOLDER_KINDS) is not None:
+            return TEXT_ONLY_RUNNING
+        return TEXT_ONLY_STOPPED
+
+    def _refuse_text_only(self, folder: Path) -> None:
+        reason = self._text_only(folder)
+        if reason:
+            raise _conflict(reason)
+
     def _mark_pending(self, folder: Path, on: bool) -> None:
         """`pending_transcribe` в meta.json: задача над записью (расшифровка,
         импорт, объединение) поставлена, но не закончилась. Резидент, закрытый
@@ -589,7 +608,8 @@ class TrayControl:
                 # Объединённую встречу, части которой уже выгружались, —
                 # выгрузить и её (прежние папки в базе знаний не трогаем).
                 wanted = cfg.auto_export or merged_exported
-            return wanted and library.read_transcript(path) is not None
+            # Текст до спикеров не выгружаем: выгрузит конец расшифровки.
+            return wanted and library.final_transcript(path) is not None
         except Exception as e:
             self.tray.log(f"выгрузка в базу знаний не проверена ({path.name}): "
                           f"{type(e).__name__}: {e}")
@@ -598,6 +618,11 @@ class TrayControl:
     def _auto_kb_export(self, folder: Path) -> None:
         from meet import kb_export
 
+        if library.is_text_phase(library.read_transcript(folder)):
+            # Переименование, категория, правка — посреди расшифровки или после
+            # прерванной: в базу знаний уходит только окончательная.
+            self.tray.log(f"выгрузка в базу знаний отложена — спикеры ещё не определены: {folder.name}")
+            return
         try:
             with self._kb_lock:
                 result = kb_export.export_recording(folder, settings.load())
@@ -783,7 +808,9 @@ class TrayControl:
         auto_transcribe = settings.load().recording.auto_transcribe
         trims: list[tuple[Path, bool]] = []
         for folder in folders:
-            has_transcript = library.read_transcript(folder) is not None
+            # Текст до спикеров — ещё не расшифровка: ни обрезку, ни конец
+            # объединения он не завершает.
+            has_transcript = library.final_transcript(folder) is not None
             if tail.pending(folder) and not has_transcript:
                 event = tail.call_end(folder) or {}
                 wanted = bool(event.get("transcribe", True)) and auto_transcribe
@@ -803,7 +830,10 @@ class TrayControl:
             if not isinstance(pending, (int, float)) or isinstance(pending, bool):
                 continue
             written = library.transcript_path(folder)
-            if pending < cutoff or (written.is_file() and written.stat().st_mtime > pending):
+            # Транскрипт новее отметки — задача дошла до конца; текст до
+            # спикеров (`phase: "text"`) — нет: прервана между фазами.
+            if pending < cutoff or (has_transcript and written.is_file()
+                                    and written.stat().st_mtime > pending):
                 self._mark_pending(folder, False)  # старая или уже сделанная
                 continue
             try:
@@ -1804,6 +1834,7 @@ class TrayControl:
         data = library.with_display_names(library.read_transcript(folder)) if folder else None
         if data is None:
             return {"error": "транскрипта нет"}
+        self._refuse_text_only(folder)
         title, date = library.title_and_date(folder, data)
         try:
             content = export.render({**data, "title": title}, fmt, date=date,
@@ -1829,7 +1860,7 @@ class TrayControl:
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
-        if library.transcript_path(folder).is_file():
+        if library.final_transcript(folder) is not None:
             out = {"files": [AGENT_TRANSCRIPT_MD, *self._agent_extras(folder)], "live": False}
         elif (folder / LIVE_TRANSCRIPT_MD).is_file():
             out = {"files": [AGENT_TRANSCRIPT_MD], "live": True}
@@ -1885,12 +1916,17 @@ class TrayControl:
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
-        rendered = self.export(recording_id, "md")
+        # Текст до спикеров агенту не даём: как и без расшифровки — лента живого
+        # режима, если она есть.
+        text_only = self._text_only(folder)
+        rendered = {"error": text_only} if text_only else self.export(recording_id, "md")
         live = "error" in rendered
         if live:
             try:
                 feed = (folder / LIVE_TRANSCRIPT_MD).read_text(encoding="utf-8")
             except OSError:
+                if text_only:
+                    raise _conflict(text_only)
                 return rendered
             content = AGENT_LIVE_HEADER + feed
         else:
@@ -1930,6 +1966,8 @@ class TrayControl:
         if not isinstance(data, dict) or not isinstance(data.get("segments"), list):
             return {"error": "ожидается транскрипт с полем segments"}
         with self._speakers_lock:  # не посреди правки спикеров
+            # Текст до спикеров заменит окончательная расшифровка: правка пропала бы.
+            self._refuse_text_only(folder)
             library.write_transcript(folder, _without_marks(data))
         self._analysis_check(folder)
         return {"ok": True, "path": str(library.transcript_path(folder))}
@@ -1986,6 +2024,7 @@ class TrayControl:
         folder = self._folder(recording_id)
         if folder is None:
             return {"error": "записи нет"}
+        self._refuse_text_only(folder)
         # Старые сырые SPEAKER_XX — один раз в «Спикер N» (не шаг истории),
         # пока над записью ничего не работает; иначе только показываем.
         with self._speakers_lock:
@@ -2012,6 +2051,8 @@ class TrayControl:
         # Проверка «занята ли запись» и сама правка — под одним замком: между
         # ними не вклинится ни другая правка, ни сохранение транскрипта.
         with self._speakers_lock:
+            # Текст до спикеров: править нечего, а правку заменит окончательная.
+            self._refuse_text_only(folder)
             reason = self._busy_reason(folder, model=False)
             if reason:
                 raise _conflict(reason[:1].upper() + reason[1:])
@@ -2157,6 +2198,7 @@ class TrayControl:
         if folder is None:
             return {"error": "записи нет"}
         with self._speakers_lock:
+            self._refuse_text_only(folder)
             try:
                 return read(folder)
             except speakers.Stale as e:
@@ -2174,6 +2216,7 @@ class TrayControl:
         if folder is None:
             return {"error": "записи нет"}
         with self._speakers_lock:
+            self._refuse_text_only(folder)
             reason = self._busy_reason(folder, model=False)
             if reason:
                 raise _conflict(reason[:1].upper() + reason[1:])
@@ -2243,6 +2286,7 @@ class TrayControl:
                 raise _bad_request("Чувствительность — число от 0 до 1")
             options["sensitivity"] = float(sensitivity)
         with self._speakers_lock:
+            self._refuse_text_only(folder)
             reason = self._busy_reason(folder, model=False)
             if reason:
                 raise _conflict(reason[:1].upper() + reason[1:])
@@ -2532,6 +2576,8 @@ class TrayControl:
             return {"error": "записи нет"}
         if library.read_transcript(folder) is None:
             return {"error": "транскрипта нет"}
+        # Итоги, вопрос, анализ, название, «Улучшить» — по окончательной расшифровке.
+        self._refuse_text_only(folder)
         return folder
 
     def _ready_for_model(self, folder: Path) -> None:
@@ -2732,7 +2778,7 @@ class TrayControl:
             cfg = settings.load()
             if not cfg.analysis.auto or not analysis.effective_features(cfg):
                 return
-            data = library.read_transcript(folder)
+            data = library.final_transcript(folder)
             if data is None:
                 return
             doc = analysis.read(folder)
@@ -2806,7 +2852,7 @@ class TrayControl:
         at = mark.get("at")
         manual = bool(mark.get("manual"))
         if (not isinstance(at, (int, float)) or isinstance(at, bool) or at < cutoff
-                or library.read_transcript(folder) is None or analysis.is_fresh(folder)):
+                or library.final_transcript(folder) is None or analysis.is_fresh(folder)):
             self._mark_analysis(folder, False)
             return False
         cfg = settings.load()
@@ -3062,7 +3108,7 @@ class TrayControl:
                 library.update_meta(folder, lambda meta: {
                     k: v for k, v in meta.items() if k != "improve_error"})
             cfg = settings.load()
-            data = library.read_transcript(folder)
+            data = library.final_transcript(folder)
             if not cfg.analysis.improve_auto or data is None:
                 return
             if improve.read(folder) is not None:
@@ -3095,7 +3141,7 @@ class TrayControl:
         at = mark.get("at")
         manual = bool(mark.get("manual"))
         if (not isinstance(at, (int, float)) or isinstance(at, bool) or at < cutoff
-                or library.read_transcript(folder) is None or improve.fresh(folder) is not None
+                or library.final_transcript(folder) is None or improve.fresh(folder) is not None
                 or self.queue.active_for(str(folder), jobs.FOLDER_KINDS)):
             self._mark_improve(folder, False)
             return False
@@ -3164,6 +3210,7 @@ class TrayControl:
         cfg = settings.load()
         if not cfg.export.meetings_dir:
             raise _bad_request(kb_export.NOT_SET)
+        self._refuse_text_only(folder)
         try:
             with self._kb_lock:
                 return kb_export.export_recording(folder, cfg)

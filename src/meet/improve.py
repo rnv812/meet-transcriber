@@ -535,6 +535,8 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     data = library.read_transcript_full(folder)
     if data is None:
         raise ImproveError("транскрипта нет")
+    if library.is_text_phase(data):
+        raise ImproveError(library.TEXT_ONLY)
     fp = fingerprint(data)  # по тексту, который видела модель
     lines = segment_lines(data)
     if not lines:

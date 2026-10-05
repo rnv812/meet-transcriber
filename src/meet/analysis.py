@@ -768,6 +768,8 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     data = library.read_transcript(folder)
     if data is None:
         raise AnalysisError("транскрипта нет")
+    if library.is_text_phase(data):
+        raise AnalysisError(library.TEXT_ONLY)
     features = tuple(f for f in FEATURES if f in (features or cfg.analysis.features()))
     # Ссылки на задачи — только когда есть проекты Jira и ссылки включены.
     jira = jira_context(cfg)

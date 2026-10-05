@@ -148,6 +148,8 @@ def _read_transcript(folder: Path) -> dict:
     data = library.read_transcript(folder)
     if data is None:
         raise RuntimeError("транскрипта нет")
+    if library.is_text_phase(data):
+        raise RuntimeError(library.TEXT_ONLY)
     return data
 
 

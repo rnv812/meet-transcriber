@@ -103,7 +103,9 @@ def _speech_of(folder: Path) -> dict[str, float]:
     if hit is not None and hit[0] == key:
         return hit[1]
     per_name: dict[str, float] = {}
-    for s in _segments(library.read_transcript(folder)):
+    # Текст до спикеров (`phase: "text"`) — не встреча с людьми: собеседники
+    # без подписи, а владелец посчитался бы дважды после окончательной.
+    for s in _segments(library.final_transcript(folder)):
         speaker, duration = s.get("speaker"), _duration(s)
         if isinstance(speaker, str) and duration is not None:
             per_name[speaker] = per_name.get(speaker, 0.0) + duration

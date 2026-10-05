@@ -343,7 +343,9 @@ def _name_in_transcript(recording: Path, pairs: dict[str, str]) -> int:
     from meet import library
 
     data = library.read_transcript(recording)
-    if not data or not pairs:
+    # Текст до спикеров (`phase: "text"`): «Спикер N» в нём нет, а правку
+    # заменит окончательная расшифровка.
+    if not data or not pairs or library.is_text_phase(data):
         return 0
     renamed = 0
     segments = data.get("segments")

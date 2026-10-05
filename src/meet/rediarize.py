@@ -268,6 +268,8 @@ def run(folder: Path, *, num_speakers: int | None = None, min_speakers: int | No
     data = library.read_transcript_full(folder)
     if not data or not isinstance(data.get("segments"), list):
         raise ValueError("у записи нет расшифровки")
+    if library.is_text_phase(data):
+        raise ValueError(library.TEXT_ONLY)
     data = {**data, "segments": [s for s in data["segments"] if isinstance(s, dict)]}
     segments = data["segments"]
     # Старая запись звонка: чьи реплики с микрофона (их не переразделяем) —

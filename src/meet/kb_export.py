@@ -372,6 +372,8 @@ def _export(folder: Path, cfg, mix, category: str | None = None) -> dict:
     data = library.with_display_names(library.read_transcript(folder))
     if data is None:
         raise ValueError(NO_TRANSCRIPT)
+    if library.is_text_phase(data):
+        raise ValueError(library.TEXT_ONLY)
     title, start = meeting(folder)
     summary_path = folder / assistant.SUMMARY_MD
     sources = _audio_sources(folder)
