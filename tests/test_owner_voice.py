@@ -404,3 +404,27 @@ def test_clear_derived_only_if_unchanged(tmp_path):
     assert owner_voice.clear_derived(now, tmp_path) is True
     assert owner_voice.derived(tmp_path) is None and owner_voice.suggestion(tmp_path) is not None
     assert owner_voice.clear_derived(now, tmp_path / "пусто") is False
+
+
+def test_owner_operations_never_touch_repo_voices(tmp_path):
+    """Настоящая `<корень репо>/voices` разработчика остаётся нетронутой: без
+    явной папки база голосов — во временном корне (tests/conftest.py), а замок
+    `_owner/.owner.lock` не появляется рядом с исходниками."""
+    from pathlib import Path
+
+    from meet import owner_voice, paths, voices
+
+    real = Path(__file__).resolve().parents[1] / "voices"
+    before = sorted(p.relative_to(real).as_posix() for p in real.rglob("*")) if real.exists() else None
+    assert paths.repo_root() != real.parent
+    assert voices.voices_dir() != real
+    assert not str(voices.voices_dir()).startswith(str(real))
+
+    sample = owner_voice.add(_vec(1, 0), source="auto", seconds=5.0)
+    assert len(owner_voice.load()) == 1
+    assert owner_voice.remove(sample.id) is True
+    owner_voice.clear_suggestion()
+    assert owner_voice.path().is_relative_to(voices.voices_dir())
+
+    after = sorted(p.relative_to(real).as_posix() for p in real.rglob("*")) if real.exists() else None
+    assert after == before

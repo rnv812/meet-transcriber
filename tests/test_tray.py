@@ -7,7 +7,7 @@ import pytest
 
 import meet.tray as tray
 import meet.watch as watch
-from meet import settings
+from meet import paths, settings
 from meet.tray import OUT_ROOT, _icon_image
 
 
@@ -71,7 +71,7 @@ def test_migrated_config_keeps_the_historic_hook(monkeypatch):
     folder = r"C:\rec\2026-07-19_10-00"
     tray._run_post_hook(folder)
     (cmd,) = calls
-    assert cmd[:3] == ["wt", "-d", str(OUT_ROOT.parent)]
+    assert cmd[:3] == ["wt", "-d", str(paths.repo_root())]
     assert "powershell" in cmd
     assert any(part.startswith("claude ") and folder in part for part in cmd)
     # 10-00 — не слот регулярной встречи, подсказки про календарь быть не должно

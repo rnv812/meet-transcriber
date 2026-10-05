@@ -89,6 +89,22 @@ def _isolated_secrets(monkeypatch, tmp_path_factory):
     keyring.set_keyring(previous)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_repo_root(monkeypatch, tmp_path_factory):
+    """Корень репозитория dev-режима (`paths.repo_root()`) — пустая временная
+    папка с `pyproject.toml`: режим остаётся dev, но `voices/`, `recordings/`,
+    `hotwords.txt` и `glossary.txt` по умолчанию лежат в ней, а не в настоящем
+    репозитории. Иначе старая база голосов разработчика подмешивалась бы в тесты
+    (образцы другой размерности), а замки и файлы тестов оседали бы в ней.
+    Тесты со своей папкой голосов переопределяют `recording.voices` как раньше."""
+    from meet import paths
+
+    root = tmp_path_factory.mktemp("repo-root")
+    (root / "pyproject.toml").write_text("", encoding="utf-8")
+    monkeypatch.setattr(paths, "repo_root", lambda: root)
+    return root
+
+
 @pytest.fixture
 def memory_keyring(_isolated_secrets):
     """In-memory бэкенд текущего теста: `.store[(service, username)]`."""
