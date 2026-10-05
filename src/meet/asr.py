@@ -388,6 +388,11 @@ def _whisper_kwargs(device: str) -> dict:
     return {"cpu_threads": max(1, (os.cpu_count() or 2) - 1)}
 
 
+# Файлы модели Whisper, без которых снапшот в кэше — не модель (есть у всех
+# репозиториев faster-whisper каталога).
+WHISPER_FILES = ("model.bin", "config.json", "tokenizer.json")
+
+
 def _whisper_model(WhisperModel, model_name: str, device: str, compute_type: str):
     """Модель Whisper. Скачана — из кэша (`local_files_only`): по имени
     faster-whisper на каждой загрузке спрашивает Hugging Face о ревизии, а на
@@ -418,7 +423,10 @@ def _whisper_cached(model_name: str) -> bool:
             repo = _MODELS.get(repo)
         except Exception:
             repo = None
-    return bool(repo) and models.local_snapshot(repo, required=("model.bin",)) is not None
+    # Не только веса: снапшот без словаря (кэш старого huggingface_hub без
+    # списка файлов) отдался бы как готовый, и ctranslate2 упал бы вместо
+    # докачки по сети.
+    return bool(repo) and models.local_snapshot(repo, required=WHISPER_FILES) is not None
 
 
 @dataclass

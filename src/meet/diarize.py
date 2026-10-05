@@ -148,6 +148,10 @@ def load_speaker_embedding(device):
             return PretrainedSpeakerEmbedding({"checkpoint": str(snapshot), "subfolder": "embedding"},
                                               device=device)
         except Exception as e:
+            from meet import asr
+
+            if asr.missing_cuda_library(e):
+                raise  # не битый кэш, а видеокарта без библиотек: повтор на процессоре — у вызывающего
             _log(EMBEDDING_FAILED_NOTE.format(reason=type(e).__name__))
     from meet import credentials
 
@@ -217,7 +221,7 @@ def _stock_fingerprint(cls) -> str | None:
 
     try:
         return hashlib.sha256(inspect.getsource(cls.get_embeddings).encode("utf-8")).hexdigest()
-    except (OSError, TypeError):
+    except Exception:  # любая неожиданность разбора — штатный способ, а не сбой
         return None
 
 
@@ -453,44 +457,52 @@ def diarize_wav(
         return Diarization(turns=[], skipped=SKIPPED_NO_TOKEN)
 
     print("Диаризация...")
-    clock.timed("import", _import_pyannote)
-    pipe = clock.timed("model", _load_local) if cached else None
-    clock.source = "из кэша" if pipe is not None else "из сети"
-    if pipe is None:
-        token = token or clock.timed("token", credentials.get_hf_token)
-        if not token:
-            print(NO_TOKEN_NOTE)
-            return Diarization(turns=[], skipped=SKIPPED_NO_TOKEN)
-        pipe = clock.timed("model", lambda: _load_pipeline(token))
+    where = "-"
+    try:
+        clock.timed("import", _import_pyannote)
+        pipe = clock.timed("model", _load_local) if cached else None
+        clock.source = "из кэша" if pipe is not None else "из сети"
         if pipe is None:
-            # Долгий отказ (сеть, прокси) — тоже в журнал: где ушли секунды.
-            clock.stop()
-            clock.note = "нет доступа к модели"
-            _log(clock.line("-"))
-            return Diarization(turns=[], skipped=SKIPPED_NO_ACCESS)
-    _install_fast_embeddings(pipe)
-    if hasattr(pipe, "embedding_batch_size"):
-        pipe.embedding_batch_size = EMBEDDING_BATCH_SIZE
-    import torch
+            token = token or clock.timed("token", credentials.get_hf_token)
+            if not token:
+                print(NO_TOKEN_NOTE)
+                return Diarization(turns=[], skipped=SKIPPED_NO_TOKEN)
+            pipe = clock.timed("model", lambda: _load_pipeline(token))
+            if pipe is None:
+                # Долгий отказ (сеть, прокси) — тоже в журнал: где ушли секунды.
+                clock.stop()
+                clock.note = "нет доступа к модели"
+                _log(clock.line("-"))
+                return Diarization(turns=[], skipped=SKIPPED_NO_ACCESS)
+        _install_fast_embeddings(pipe)
+        if hasattr(pipe, "embedding_batch_size"):
+            pipe.embedding_batch_size = EMBEDDING_BATCH_SIZE
+        import torch
 
-    from meet import asr
+        from meet import asr
 
-    # Видеокарта — когда torch её видит, чем бы ни распознавался текст (GigaAM
-    # на процессоре — не повод гнать диаризацию часовой встречи процессором);
-    # «Процессор» в настройках — процессор и здесь (`asr.torch_device`).
-    # Без NVIDIA (или с CPU-сборкой torch) pyannote идёт на CPU — медленнее,
-    # но работает; раньше здесь был жёсткий cuda и падение.
-    use_cuda = asr.torch_device() == "cuda"
-    device = pick_device(torch, use_cuda)
-    reason = asr.torch_cpu_reason() if device.type == "cpu" else None
-    if reason:
-        print(f"диаризация на процессоре: {reason}")
-    clock.timed("device", lambda: pipe.to(device))
-    if clustering_threshold is not None:
-        params = pipe.parameters(instantiated=True)
-        params.setdefault("clustering", {})["threshold"] = float(clustering_threshold)
-        pipe.instantiate(params)
-    waveform, rate = _load_wav(path)
+        # Видеокарта — когда torch её видит, чем бы ни распознавался текст (GigaAM
+        # на процессоре — не повод гнать диаризацию часовой встречи процессором);
+        # «Процессор» в настройках — процессор и здесь (`asr.torch_device`).
+        # Без NVIDIA (или с CPU-сборкой torch) pyannote идёт на CPU — медленнее,
+        # но работает; раньше здесь был жёсткий cuda и падение.
+        use_cuda = asr.torch_device() == "cuda"
+        device = pick_device(torch, use_cuda)
+        where = device.type
+        reason = asr.torch_cpu_reason() if device.type == "cpu" else None
+        if reason:
+            print(f"диаризация на процессоре: {reason}")
+        clock.timed("device", lambda: pipe.to(device))
+        if clustering_threshold is not None:
+            params = pipe.parameters(instantiated=True)
+            params.setdefault("clustering", {})["threshold"] = float(clustering_threshold)
+            pipe.instantiate(params)
+        waveform, rate = _load_wav(path)
+    except Exception as e:
+        # Сбой загрузки (сеть, прокси, перенос на устройство, звук) — тоже
+        # строка: где ушло время до него.
+        _log_failure(clock, e, where)
+        raise
 
     # Отметки шагов pyannote — всегда (время стадий), ход — если его ждут.
     extra = {"hook": clock.hook(progress_hook(on_progress) if on_progress else None)} if _takes_hook(pipe) else {}
@@ -524,9 +536,7 @@ def diarize_wav(
             clock.retry("после сбоя MPS")
             result = run()
     except Exception as e:
-        clock.stop()
-        clock.note = ", ".join(filter(None, [clock.note, f"не прошла: {type(e).__name__}"]))
-        _log(clock.line(used, threads.count))
+        _log_failure(clock, e, used, threads.count)
         raise
     finally:
         threads.restore()
@@ -537,6 +547,14 @@ def diarize_wav(
     fast = getattr(pipe, "_meet_fast_embeddings", None)
     _log(clock.line(used, threads.count) + ("; голоса за один проход на окно" if fast and fast["on"] else ""))
     return diar
+
+
+def _log_failure(clock, error: Exception, device: str, threads: int | None = None) -> None:
+    """Строка времени стадий для диаризации, которая не прошла: только класс
+    ошибки (текст может нести путь)."""
+    clock.stop()
+    clock.note = ", ".join(filter(None, [clock.note, f"не прошла: {type(error).__name__}"]))
+    _log(clock.line(device, threads))
 
 
 def _import_pyannote() -> None:

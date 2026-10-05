@@ -373,6 +373,33 @@ def test_timing_line_also_when_access_is_refused(monkeypatch, tmp_path):
     assert len(lines) == 1 and "нет доступа к модели" in lines[0] and "из сети" in lines[0]
 
 
+@pytest.mark.parametrize("stage", ["load", "device", "wav"])
+def test_timing_line_also_when_loading_fails(monkeypatch, tmp_path, stage):
+    """Первая загрузка через сломанный прокси (ProxyError), перенос на
+    устройство, чтение звука — тоже строка, и ошибка уходит наверх."""
+    from meet import credentials
+
+    _fake_torch(monkeypatch)
+    pipe = _Pipe()
+
+    def boom(*a, **k):
+        raise ConnectionError("прокси C:/Users/кто-то")
+
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: "hf_x")
+    monkeypatch.setattr(diarize, "_load_pipeline", boom if stage == "load" else (lambda token: pipe))
+    _wire(monkeypatch, pipe)
+    if stage == "device":
+        monkeypatch.setattr(pipe, "to", boom)
+    if stage == "wav":
+        monkeypatch.setattr(diarize, "_load_wav", boom)
+    lines = []
+    monkeypatch.setattr(diarize, "_log_sink", lines.append)
+    with pytest.raises(ConnectionError):
+        diarize.diarize_wav(tmp_path / "x.wav")
+    assert len(lines) == 1 and "не прошла: ConnectionError" in lines[0] and "кто-то" not in lines[0]
+    assert lines[0].startswith("время диаризации (-" if stage == "load" else "время диаризации (cpu")
+
+
 def test_timing_line_also_when_diarization_fails(monkeypatch, tmp_path):
     from meet import credentials
 
@@ -453,6 +480,18 @@ def test_fast_embeddings_stay_on_when_stock_fails_too(monkeypatch):
         pipe.get_embeddings("f", "segs")
     assert str(raised.value.__cause__) == "MPS в проходе на окно"  # первая ошибка не потеряна
     assert pipe.get_embeddings("f", "segs") == "быстро"
+
+
+def test_fingerprint_failure_means_stock_not_a_crash(monkeypatch):
+    """Любая неожиданность при разборе исходника (SyntaxError, кодировка) —
+    штатный способ, а не упавшая диаризация."""
+    import inspect
+
+    def broken(obj):
+        raise SyntaxError("не разобрать")
+
+    monkeypatch.setattr(inspect, "getsource", broken)
+    assert diarize._stock_fingerprint(_StockPipe) is None
 
 
 def test_fast_embeddings_not_installed_on_unknown_pipeline():

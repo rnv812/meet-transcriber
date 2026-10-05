@@ -51,7 +51,7 @@ def test_cache_root_honours_xdg_cache_home_like_huggingface_hub(monkeypatch, tmp
 # --- голоса pyannote: разделение спикера и живой режим --------------------------------
 
 
-def _fake_embedding(monkeypatch, fail_local=False):
+def _fake_embedding(monkeypatch, fail_local=False, local_error=None):
     calls = []
     for name in ("pyannote", "pyannote.audio", "pyannote.audio.pipelines"):
         monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
@@ -60,7 +60,7 @@ def _fake_embedding(monkeypatch, fail_local=False):
     def pretrained(spec, device=None, token=None):
         calls.append((dict(spec), token))
         if fail_local and spec["checkpoint"] != "pyannote/speaker-diarization-community-1":
-            raise FileNotFoundError("embedding/pytorch_model.bin")
+            raise local_error or FileNotFoundError("embedding/pytorch_model.bin")
         return lambda wav: [np.ones(3, dtype=np.float32)]
 
     sv.PretrainedSpeakerEmbedding = pretrained
@@ -114,6 +114,22 @@ def test_broken_cached_speaker_embedding_falls_back_online(monkeypatch, tmp_path
     monkeypatch.setattr(credentials, "get_hf_token", lambda: "hf_x")
     segvoices._build_embedder("cpu")
     assert [token for _, token in calls] == [None, "hf_x"]
+
+
+def test_cuda_library_error_is_not_mistaken_for_a_broken_cache(monkeypatch, tmp_path):
+    """Видеокарта без cuDNN при загрузке с диска — не «битый кэш»: ошибка
+    уходит наверх как есть, и вызывающий повторяет на процессоре (а не идёт в
+    сеть, где без токена или сети упал бы с другой ошибкой)."""
+    from meet import credentials, diarize, segvoices
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    _snapshot(tmp_path, diarize.DIARIZATION_MODEL, files=("config.yaml", "embedding/pytorch_model.bin"))
+    error = RuntimeError("Could not load library cudnn_ops64_9.dll. Error code 126")
+    calls = _fake_embedding(monkeypatch, fail_local=True, local_error=error)
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: pytest.fail("в сеть не ходить"))
+    with pytest.raises(RuntimeError, match="cudnn"):
+        segvoices._build_embedder("cuda")
+    assert len(calls) == 1
 
 
 # --- выравнивание wav2vec2 ---------------------------------------------------------
@@ -195,7 +211,7 @@ def test_cached_whisper_loads_without_asking_the_hub(monkeypatch, tmp_path, whis
     from meet import asr
 
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
-    _snapshot(tmp_path, "bzikst/faster-whisper-large-v3-russian", files=("model.bin", "config.json"))
+    _snapshot(tmp_path, "bzikst/faster-whisper-large-v3-russian", files=asr.WHISPER_FILES)
     asr._whisper_model(whisper, "bzikst/faster-whisper-large-v3-russian", "cpu", "int8")
     (name, kw), = whisper.calls
     assert kw["local_files_only"] is True and kw["device"] == "cpu" and kw["compute_type"] == "int8"
@@ -206,7 +222,7 @@ def test_whisper_size_alias_is_found_in_the_cache(monkeypatch, tmp_path, whisper
     from meet import asr
 
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
-    _snapshot(tmp_path, "Systran/faster-whisper-medium", files=("model.bin",))
+    _snapshot(tmp_path, "Systran/faster-whisper-medium", files=asr.WHISPER_FILES)
     asr._whisper_model(whisper, "medium", "cpu", "int8")
     assert whisper.calls[0][1]["local_files_only"] is True
 
@@ -217,11 +233,22 @@ def test_whisper_not_cached_or_broken_loads_as_before(monkeypatch, tmp_path, whi
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
     asr._whisper_model(whisper, "a/b", "cpu", "int8")
     assert "local_files_only" not in whisper.calls[-1][1]
-    _snapshot(tmp_path, "a/b", files=("model.bin",))
+    _snapshot(tmp_path, "a/b", files=asr.WHISPER_FILES)
     whisper.fail_local = True
     whisper.calls = []
     asr._whisper_model(whisper, "a/b", "cpu", "int8")
     assert [kw.get("local_files_only") for _, kw in whisper.calls] == [True, None]
+
+
+def test_whisper_weights_without_the_rest_are_not_a_cached_model(monkeypatch, tmp_path, whisper):
+    """Снапшот только с model.bin (кэш старого huggingface_hub без списка
+    файлов) — по сети, как раньше: докачает словарь, а не уронит ctranslate2."""
+    from meet import asr
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path))
+    _snapshot(tmp_path, "a/b", files=("model.bin",))
+    asr._whisper_model(whisper, "a/b", "cpu", "int8")
+    assert [kw.get("local_files_only") for _, kw in whisper.calls] == [None]
 
 
 def test_whisper_from_a_local_folder_is_passed_as_is(tmp_path, whisper):
