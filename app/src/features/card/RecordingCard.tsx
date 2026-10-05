@@ -49,6 +49,17 @@ type Loaded = Recording & { transcript: Transcript | null };
 const NO_PEOPLE: PersonColor[] = [];
 /** Текст до спикеров: в шапке чипов спикеров нет. */
 const NO_NAMES: string[] = [];
+
+/** Строка хода над текстом до спикеров — что сейчас происходит. */
+function textNoteText(st: { job: Job | null }): string {
+  const job = st.job;
+  if (!job) return "Спикеры не определены: расшифровка прервалась";
+  if (job.state === "done") return "Текст готов · спикеры определены, обновляю…";
+  // В очереди или идёт заново, а новый текст ещё не готов: виден прежний, без спикеров.
+  if (job.state === "queued") return "Расшифровка в очереди · текст пока без спикеров";
+  if (!job.text_ready) return "Распознаю заново · прежний текст без спикеров";
+  return "Текст готов · определяю спикеров…";
+}
 const NO_SEGMENTS: Segment[] = [];
 /** Одна ссылка на «задач нет»: новая ссылка `jobs` для вкладок — это обновление списка. */
 const NO_JOBS: Job[] = [];
@@ -397,15 +408,13 @@ export function RecordingCard({
   /** Строка хода над текстом до спикеров: спокойно, без полосы — текст уже можно читать. */
   const textNote = (st: Extract<typeof status, { kind: "text" }>) => (
     <div className="card__textfirst" role="status" aria-label="Ход расшифровки">
-      <span className="card__textfirst-text">
-        {!st.job ? "Спикеры не определены: расшифровка прервалась"
-          : st.job.state === "queued" ? "Текст готов · спикеры — в очереди" : "Текст готов · определяю спикеров…"}
-      </span>
+      <span className="card__textfirst-text">{textNoteText(st)}</span>
       {/* Например, разделение на спикеров идёт на процессоре — и почему. */}
-      {st.job?.warning && <span className="muted card__textfirst-note">{st.job.warning}</span>}
+      {st.job?.state === "running" && st.job.warning && <span className="muted card__textfirst-note">{st.job.warning}</span>}
       {!st.job && st.error && <span className="muted card__textfirst-note" title={st.error}>{st.error}</span>}
-      {st.job ? cancelButton
-        : <Button onClick={doTranscribe} disabled={busy}>Расшифровать заново</Button>}
+      {/* Задача только что кончилась — ни отмены, ни повтора: спикеры уже записаны. */}
+      {!st.job ? <Button onClick={doTranscribe} disabled={busy}>Расшифровать заново</Button>
+        : st.job.state === "done" ? null : cancelButton}
     </div>
   );
   const doDelete = () => act(async () => {
@@ -505,6 +514,7 @@ export function RecordingCard({
   }
   const body = (
     <CardTabs endpoint={endpoint} id={id} folder={rec.path} jobs={jobs} onOpenSettings={onOpenSettings}
+      agentContext={`${rec.transcript_phase ?? "final"}:${rec.transcript_at ?? ""}`}
       showTranscript={shownFind?.n} stage={stage} transcript={first} agentRequest={agentAsk}
       onAskAgent={askAgent} onAgentTaken={agentTaken} />
   );

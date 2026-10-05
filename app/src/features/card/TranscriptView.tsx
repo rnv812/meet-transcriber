@@ -266,12 +266,15 @@ export function TranscriptView({
   // отрисовки), возвращаем — после неё, до показа кадра.
   const lastPhase = useRef(textPhase);
   const lastTurns = useRef(turns);
-  const keep = useRef<{ place: Place; scroller: HTMLElement } | null>(null);
+  const keep = useRef<{ place: Place; scroller: HTMLElement; turns: Turn[] } | null>(null);
   if (lastTurns.current !== turns) {
-    if (lastPhase.current && !textPhase && box.current) {
+    // И текст до спикеров сменился новым (повтор прерванной расшифровки) — тоже пересборка.
+    if ((lastPhase.current || textPhase) && box.current) {
       const scroller = scrollParent(box.current);
       const place = scroller ? placeOf(scroller, box.current, lastTurns.current) : null;
-      keep.current = scroller && place ? { place, scroller } : null;
+      keep.current = scroller && place ? { place, scroller, turns } : null;
+    } else {
+      keep.current = null;
     }
     lastTurns.current = turns;
     lastPhase.current = textPhase;
@@ -279,7 +282,8 @@ export function TranscriptView({
   useLayoutEffect(() => {
     const held = keep.current;
     keep.current = null;
-    if (held && box.current) restorePlace(held.scroller, box.current, turns, held.place);
+    // Место — для тех реплик, при отрисовке которых его сняли (прерванная отрисовка не в счёт).
+    if (held && held.turns === turns && box.current) restorePlace(held.scroller, box.current, turns, held.place);
   }, [turns]);
 
   // «Сейчас играет»: атрибут мимо React — реплики не перерисовываются при смене.

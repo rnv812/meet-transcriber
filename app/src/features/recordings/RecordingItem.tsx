@@ -41,8 +41,11 @@ export function badgeOf(st: RecStatus, shown?: number | null): { text: string; t
       // Текст уже виден, идут спикеры: доля всей расшифровки и что сейчас делается.
       if (!st.job) return { text: "Без спикеров", tone: "" };
       if (st.job.state === "queued") return { text: "В очереди", tone: "" };
+      if (st.job.state === "done") return { text: "Обновляю…", tone: "" };
       const f = shown ?? jobFraction(st.job);
-      return { text: f !== null ? `${Math.floor(f * 100)}% · Определяю спикеров` : "Определяю спикеров…", tone: "run" };
+      // Повтор прерванной: пока новый текст не готов, идёт распознавание — его и называем.
+      const label = st.job.text_ready ? "Определяю спикеров" : stageLabel(st.job);
+      return { text: f !== null ? `${Math.floor(f * 100)}% · ${label}` : `${label}…`, tone: "run" };
     }
     case "failed":
       return { text: "Ошибка", tone: "err" };
@@ -277,7 +280,8 @@ export function RecordingItem({
               <button type="button" className="rec-hit" onClick={() => onOpenHit?.(rec.id, h.t)}>
                 <span className="rec-hit__time num">{clock(h.t)}</span>
                 <span className="rec-hit__text">
-                  <span className="rec-hit__who">{h.speaker}: </span>
+                  {/* Текст до спикеров: у собеседников подписи нет. */}
+                  {h.speaker && <span className="rec-hit__who">{h.speaker}: </span>}
                   <Highlight text={h.snippet} ranges={h.ranges} />
                 </span>
               </button>

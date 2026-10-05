@@ -12,7 +12,7 @@ import { placeOf, restorePlace } from "../../lib/keepPlace";
 import { mergeTurns } from "../../lib/speakers";
 import { statusOf } from "../../lib/status";
 import type { Job, Recording, Segment, Transcript } from "../../lib/types";
-import { badgeOf } from "../recordings/RecordingItem";
+import { badgeOf, RecordingItem } from "../recordings/RecordingItem";
 import { RecordingCard } from "./RecordingCard";
 
 vi.mock("../../lib/api", async (orig) => ({
@@ -94,12 +94,21 @@ test("статус: текст до спикеров — своё состоян
   expect(statusOf(textRec, [job("failed", { error: "CUDA out of memory" })], null))
     .toEqual({ kind: "text", job: null, error: "CUDA out of memory" });
   expect(statusOf(finalRec, [job("done")], null)).toEqual({ kind: "ready" });
+  // Задача только что кончилась, карточка ещё не перечитана — «заканчиваю», а не «прервалась».
+  expect(statusOf(textRec, [job("done", { finished_at: 1000 })], null, 1010))
+    .toMatchObject({ kind: "text", job: { state: "done" } });
+  // Кончилась давно, а текст всё ещё без спикеров (окончательная не записалась) — прервано.
+  expect(statusOf(textRec, [job("done", { finished_at: 1000 })], null, 2000)).toEqual({ kind: "text", job: null });
 });
 
 test("бейдж в списке: идёт — доля и «спикеры», прервано — «Без спикеров»", () => {
   expect(badgeOf({ kind: "text", job: job("running") }, 0.62)).toEqual({ text: "62% · Определяю спикеров", tone: "run" });
   expect(badgeOf({ kind: "text", job: job("queued") })).toEqual({ text: "В очереди", tone: "" });
   expect(badgeOf({ kind: "text", job: null })).toEqual({ text: "Без спикеров", tone: "" });
+  expect(badgeOf({ kind: "text", job: job("done") })).toEqual({ text: "Обновляю…", tone: "" });
+  // Повтор прерванной: пока новый текст не готов — этап распознавания, а не «спикеры».
+  expect(badgeOf({ kind: "text", job: job("running", { text_ready: null, stage: "asr", note: "sys" }) }, 0.2))
+    .toEqual({ text: "20% · Распознавание собеседников", tone: "run" });
 });
 
 // --- карточка ---------------------------------------------------------------------
@@ -180,7 +189,8 @@ test("прервано между фазами: текст остаётся с �
 
 test("в очереди на повтор: текст виден, строка хода — «в очереди»", async () => {
   await card([job("queued", { text_ready: null })]);
-  expect(screen.getByRole("status", { name: "Ход расшифровки" })).toHaveTextContent("Текст готов · спикеры — в очереди");
+  expect(screen.getByRole("status", { name: "Ход расшифровки" }))
+    .toHaveTextContent("Расшифровка в очереди · текст пока без спикеров");
 });
 
 // --- место чтения ---------------------------------------------------------------
@@ -260,4 +270,65 @@ test("место чтения в карточке: пришли спикеры �
   rerender(<RecordingCard id="r1" endpoint={ep} jobs={[job("done")]} />);
   await waitFor(() => expect(container.querySelectorAll("button.turn__speaker").length).toBeGreaterThan(0));
   expect(body.scrollTop).toBeCloseTo(170);
+});
+
+
+test("задача кончилась, карточка ещё перечитывается: ни «прервалась», ни «Расшифровать заново»", async () => {
+  const { rerender } = await card([job("running")]);
+  let release: () => void = () => {};
+  vi.mocked(api.getRecording).mockImplementation(() => new Promise((resolve) => {
+    release = () => resolve(structuredClone({ ...finalRec, transcript: FINAL }));
+  }));
+  rerender(<RecordingCard id="r1" endpoint={ep}
+    jobs={[job("done", { finished_at: Date.now() / 1000 })]} />);
+  const note = screen.getByRole("status", { name: "Ход расшифровки" });
+  expect(note).toHaveTextContent("Текст готов · спикеры определены, обновляю…");
+  expect(screen.queryByText(/прервалась/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Расшифровать заново" })).toBeNull();
+  expect(within(note).queryByRole("button")).toBeNull();
+  await act(async () => { release(); });
+  await waitFor(() => expect(screen.queryByRole("status", { name: "Ход расшифровки" })).toBeNull());
+});
+
+test("повтор прерванной: пока новый текст не готов — «распознаю заново», прежний текст виден", async () => {
+  await card([job("running", { text_ready: null, stage: "asr" })]);
+  expect(screen.getByRole("status", { name: "Ход расшифровки" }))
+    .toHaveTextContent("Распознаю заново · прежний текст без спикеров");
+});
+
+test("место чтения держится и когда текст до спикеров сменился новым (повтор)", async () => {
+  const { container, rerender } = await card([job("running", { id: "t2", text_ready: null, stage: "asr" })]);
+  const body = container.querySelector<HTMLElement>(".card__body")!;
+  body.style.overflowY = "auto";
+  const HEIGHTS: Record<number, number[]> = { 3: [100, 40, 100], 4: [50, 70, 40, 100] };
+  Element.prototype.getBoundingClientRect = function (this: HTMLElement) {
+    if (this === body) return { top: 0, bottom: 300, height: 300 } as DOMRect;
+    if (this.dataset?.turn === undefined) return { top: 0, bottom: 0, height: 0 } as DOMRect;
+    const rows = [...container.querySelectorAll<HTMLElement>(".turns [data-turn]")];
+    const h = HEIGHTS[rows.length] ?? [];
+    let top = -body.scrollTop;
+    for (const [i, el] of rows.entries()) {
+      if (el === this) return { top, bottom: top + h[i]!, height: h[i]! } as DOMRect;
+      top += h[i]!;
+    }
+    return { top: 0, bottom: 0, height: 0 } as DOMRect;
+  };
+  body.scrollTop = 150;
+  // Новый текст до спикеров: те же слова, реплики собраны иначе.
+  const again: Transcript = { ...FINAL, phase: "text", segments: FINAL.segments.map((s, i) =>
+    (i === 1 ? { ...s, speaker: "Вы", track: "mic" } : { ...s, speaker: s.speaker === "Вы" ? "Вы" : null })) };
+  served = { rec: textRec, transcript: again };
+  rerender(<RecordingCard id="r1" endpoint={ep} jobs={[job("running", { id: "t2" })]} />);
+  await waitFor(() => expect(container.querySelectorAll(".turns [data-turn]")).toHaveLength(4));
+  expect(body.scrollTop).toBeCloseTo(170);
+});
+
+
+test("фрагмент поиска из текста до спикеров — без подписи и без «: »", () => {
+  const { container } = render(<RecordingItem rec={{ ...textRec, hits: [{ t: 0, speaker: "", snippet: "начнём с бюджета", ranges: [[8, 15]] }],
+    total: 1 }} status={{ kind: "text", job: null }} selected={false} onSelect={() => {}} />);
+  const hit = container.querySelector<HTMLElement>(".rec-hit")!;
+  expect(hit).toHaveTextContent("начнём с бюджета");
+  expect(hit.querySelector(".rec-hit__who")).toBeNull();
+  expect(hit.textContent).not.toContain(": ");
 });

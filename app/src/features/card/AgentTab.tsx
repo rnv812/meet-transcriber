@@ -209,7 +209,9 @@ function EvictedNote({ canResume, onResume, onClose }: { canResume: boolean; onR
   );
 }
 
-export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = null, onTaken }: {
+export function AgentTab({
+  id, assistant, onOpenSettings, endpoint, insert = null, onTaken, contextVersion, textPhase = false,
+}: {
   id: string;
   assistant: AssistantInfo | null;
   onOpenSettings?: (section: string) => void;
@@ -219,6 +221,10 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
   insert?: AgentInsert | null;
   /** Просьбу `insert` приняли: владелец её сбрасывает (вкладка, открытая заново, не вставит её ещё раз). */
   onTaken?: () => void;
+  /** Версия расшифровки (фаза и время записи): сменилась — заново спросить, что получит агент. */
+  contextVersion?: string;
+  /** Текст до спикеров (Р4): агенту его не дают — сказать, чего ждём. */
+  textPhase?: boolean;
 }) {
   const shell = inTauri();
   const providers = agentProviders(assistant);
@@ -254,6 +260,14 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
     setContextTried(!endpoint);
     loadContext();
   }, [loadContext, endpoint]);
+  // Расшифровка сменилась (пришли спикеры, перерасшифровали): что получит агент — заново,
+  // без сброса показанного (не мигает).
+  const lastVersion = useRef(contextVersion);
+  useEffect(() => {
+    if (contextVersion === lastVersion.current) return;
+    lastVersion.current = contextVersion;
+    loadContext();
+  }, [contextVersion, loadContext]);
   /** Агенту пока нечего дать — запуск недоступен. */
   const nothing = context !== null && context.files.length === 0;
 
@@ -451,7 +465,8 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
         <div className="agent__xterm" ref={screen} data-agent-terminal />
         {phase === "idle" && (
           <div className="agent__idle">
-            {nothing ? "Агент станет доступен, когда появится расшифровка."
+            {nothing ? (textPhase ? "Текст уже виден — агент станет доступен, когда определятся спикеры."
+              : "Агент станет доступен, когда появится расшифровка.")
               : "Нажмите «Запустить» — агент откроется в папке этой встречи."}
           </div>
         )}

@@ -106,7 +106,8 @@ const ep = { base: "/api", token: null };
 const data = (id: string, text: string) => act(() => h.listeners.data.forEach((cb) => cb({ id, data: text })));
 const exit = (id: string, code: number | null) => act(() => h.listeners.exit.forEach((cb) => cb({ id, code })));
 
-type More = Partial<Pick<Parameters<typeof AgentTab>[0], "onOpenSettings" | "endpoint" | "insert" | "onTaken">>;
+type More = Partial<Pick<Parameters<typeof AgentTab>[0],
+  "onOpenSettings" | "endpoint" | "insert" | "onTaken" | "contextVersion" | "textPhase">>;
 
 async function show(info: AssistantInfo | null = assistant(), more: More = {}) {
   const view = render(<AgentTab id="r1" assistant={info} {...more} />);
@@ -1077,4 +1078,22 @@ test("OpenCode: поле ввода по его TUI, без режима вст�
   expect(quietNeeded("confirm", "opencode")).toBeNull();
   // У Claude Code и Codex правило прежнее: «quiet» у них не бывает.
   expect(coldReadiness(["", "  opencode"], { ...opts, provider: "codex" })).toBe("waiting");
+});
+
+test("текст до спикеров (Р4): агент пока недоступен — сказано, что ждём спикеров", async () => {
+  vi.mocked(api.getAgentContext).mockResolvedValue({ files: [], live: false });
+  await show(assistant(), { endpoint: ep, contextVersion: "text:1", textPhase: true });
+  expect(await screen.findByText("Текст уже виден — агент станет доступен, когда определятся спикеры.")).toBeInTheDocument();
+  expect(startButton()).toBeDisabled();
+});
+
+test("пришли спикеры — агент перечитывает, что получит, и запуск становится доступен", async () => {
+  vi.mocked(api.getAgentContext).mockResolvedValue({ files: [], live: false });
+  const view = await show(assistant(), { endpoint: ep, contextVersion: "text:1", textPhase: true });
+  await screen.findByText(/когда определятся спикеры/);
+  vi.mocked(api.getAgentContext).mockResolvedValue({ files: ["transcript.md"], live: false });
+  view.rerender(<AgentTab id="r1" assistant={assistant()} endpoint={ep} contextVersion="final:2" />);
+  await waitFor(() => expect(startButton()).toBeEnabled());
+  expect(api.getAgentContext).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText(/когда определятся спикеры/)).toBeNull();
 });
