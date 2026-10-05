@@ -215,7 +215,8 @@ class LiveState:
         self.covered_from: float | None = None
         self.partial = False
         # Почему неполна (`detached`, `catchup_incomplete`, `capped`,
-        # `late_start`): следующее включение в эту запись чинит не всё.
+        # `late_start`; `tail_cut` ставит резидент — убил ассистента до его
+        # финального прохода): следующее включение в эту запись чинит не всё.
         self.partial_reasons: list[str] = []
         # До какой секунды записи доходит уже услышанное (конец последней
         # реплики): следующее включение догоняет с этого места, без повтора.

@@ -32,7 +32,14 @@ export const liveOf = (r: LiveStatus): LiveStatus => ({
   ...(r.ready === undefined ? {} : { ready: r.ready }),
   ...(r.stage === undefined ? {} : { stage: r.stage }),
   ...(r.error_at === undefined ? {} : { error_at: r.error_at }),
+  ...(r.error_folder === undefined ? {} : { error_folder: r.error_folder }),
 });
+
+/** Одна и та же папка записи: путь от резидента и из снимка пишутся по-разному. */
+const samePath = (a: string, b: string) => {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return norm(a) === norm(b);
+};
 
 /** Ассистент ещё не слушает: этап старта, если резидент его знает. */
 export function startingText(live: LiveStatus | undefined): string {
@@ -92,6 +99,11 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   // Новая ошибка — по времени появления: тот же текст при новом сбое — новое уведомление.
   const liveErrorKey = liveError ? `${live?.error_at ?? ""}|${liveError}` : null;
   const crashed = live?.ended_by === "crash";
+  // Ошибка про другую запись (хвост ассистента прошлой упал, когда идёт уже
+  // эта) — не уведомление об этой: не показываем ни сейчас, ни после её конца.
+  const errorFolder = live?.error_folder;
+  const foreignError = !!errorFolder && recording && !!snapshot?.folder
+    && !samePath(errorFolder, snapshot.folder);
   const [liveNotice, setLiveNotice] = useState<{ text: string; sticky: boolean } | null>(null);
   const seenLiveError = useRef<{ ready: boolean; value: string | null }>({ ready: false, value: null });
   const hasSnapshot = snapshot != null;
@@ -113,8 +125,9 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
     }
     if (liveErrorKey === seen.value) return;
     seen.value = liveErrorKey;
+    if (foreignError) return;
     setLiveNotice(liveError ? { text: liveError, sticky: crashed } : null);
-  }, [hasSnapshot, liveErrorKey, liveError, crashed]);
+  }, [hasSnapshot, liveErrorKey, liveError, crashed, foreignError]);
   useEffect(() => {
     if (!liveNotice || liveNotice.sticky) return;
     const t = setTimeout(() => setLiveNotice(null), ERROR_MS);

@@ -125,6 +125,11 @@ ENDED_RECORDING = "recording"
 ENDED_DETACH = "detach"
 ENDED_CRASH = "crash"
 ENDED_STOP = "stop"  # токен отвода звука — ребёнку в окружении, не в argv
+# Сводка ассистента в папке записи (meet.assist.live_state.LIVE_STATE_JSON) и
+# причина неполноты, которую ставит резидент: ассистента убили, не дав ему
+# финального прохода (хвост оборван новым ассистентом, дедлайном или выходом).
+LIVE_STATE_JSON = "live_state.json"
+TAIL_CUT = "tail_cut"
 POLL_S = 0.1
 REQUEST_TIMEOUT_S = 5.0
 ASK_TIMEOUT_S = 240.0  # вопрос — вызов модели (у ребёнка до 180 с) плюс дослив окна
@@ -392,6 +397,40 @@ def _code_text(code) -> str:
     return str(code)
 
 
+def _mark_cut(folder) -> bool:
+    """Сводку убитого ассистента — неполной, как её пометил бы его финальный
+    проход (`partial`, `partial_reasons`): то, что он сохранил по ходу встречи,
+    цело, а последних реплик в ней нет. Сводки нет — не создаём (черновик из
+    ничего хуже никакого). Процесса к этому моменту нет — гонки за файл нет.
+    → пометили ли."""
+    path = Path(folder) / LIVE_STATE_JSON
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    reasons = data.get("partial_reasons")
+    reasons = [r for r in reasons if isinstance(r, str)] if isinstance(reasons, list) else []
+    if TAIL_CUT not in reasons:
+        reasons.append(TAIL_CUT)
+    data["partial"] = True
+    data["partial_reasons"] = reasons
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.cut.tmp")
+    try:
+        # Атомарно, как сам ассистент (live_state.save): итоги читают его когда угодно.
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        return False
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return True
+
+
 def _note_log(path: Path | None, text: str) -> None:
     """Строка резидента в live.log: ребёнок мог умереть, не написав ни слова
     (убит по таймауту, упал в машинном коде), — причина остаётся рядом с его
@@ -458,6 +497,9 @@ class LiveControl:
         self._folder: str | None = None
         self._error: str | None = None
         self._error_at: float | None = None
+        # К какой записи относится `_error` (папка): хвост прошлой записи
+        # может упасть, когда уже идёт другая, — окно не показывает чужое.
+        self._error_folder: str | None = None
         self._started_at: float | None = None
         # Выбранное в настройках устройство не нашлось — ассистент пишет с
         # системного (из файла эндпоинта ребёнка): [{"kind", "name", "device"}].
@@ -480,7 +522,9 @@ class LiveControl:
         запись или отвод чужой); ready — модель загружена, ассистент слушает;
         stage — этап старта, пока не готов («загружаю модель распознавания…»;
         None — ещё неизвестен); error — почему упал (или остановился с
-        ошибкой) последний запуск, сбрасывается следующим стартом; started_at —
+        ошибкой) последний запуск, сбрасывается следующим стартом;
+        error_folder — папка записи, к которой она относится (None — ни к
+        какой: не запустился до папки); started_at —
         стенное время начала захвата звука (`live.started`; до него — None),
         для секундомера панели, а у подключённого к записи — начало самой
         записи; attached — включён посреди обычной записи."""
@@ -521,6 +565,7 @@ class LiveControl:
                 "stage": self._stage if running and not self._ready else None,
                 "folder": self._folder,
                 "error": self._error, "error_at": self._error_at,
+                "error_folder": self._error_folder if self._error else None,
                 "started_at": self._started_at if running else None,
                 "attached": running and self._attach is not None,
                 "finishing": tail,
@@ -623,6 +668,7 @@ class LiveControl:
                 except OSError as e:
                     self._error = f"Не удалось запустить ассистента: {e}"
                     self._error_at = time.time()
+                    self._error_folder = str(attach["folder"]) if attach is not None else None
                     self._ended_by = ENDED_CRASH
                     process = None
                 finally:
@@ -638,6 +684,7 @@ class LiveControl:
                     self._fallback = []
                     self._error = None
                     self._error_at = None
+                    self._error_folder = None
                     self._started_at = None  # с live.started: прогрев модели не в счёт
                     self._stop_requested = False
                     self._stop_deadline = None
@@ -906,6 +953,13 @@ class LiveControl:
                 error: str | None, code, killed: bool, finalized: bool) -> None:
         self._drop_endpoint(endpoint, {process.pid, self._child_pid})
         _sweep_temp()
+        with self._lock:
+            cut_folder = self._folder if (killed and not finalized and self._attach is not None
+                                          and not self._aborted) else None
+        if cut_folder and _mark_cut(cut_folder):
+            # До событий: кто их ждёт (название, итоги), читает уже с пометкой.
+            _note_log(path, "ассистент убит до финального прохода — сводка помечена неполной")
+            self._log(f"сводка ассистента помечена неполной (хвост оборван): {cut_folder}")
         with self._emit_lock:
             with self._lock:
                 stop_requested = self._stop_requested
@@ -977,6 +1031,7 @@ class LiveControl:
                 self._error = error
                 # Когда появилась: окно отличает новую ошибку от прежней с тем же текстом.
                 self._error_at = time.time() if error else None
+                self._error_folder = folder if error else None
                 if kind == LIVE_FAILED or timeout_error:
                     self._ended_by = ENDED_CRASH
                 elif detached:

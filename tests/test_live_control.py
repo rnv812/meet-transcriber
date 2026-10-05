@@ -350,7 +350,7 @@ def test_stop_asks_child_and_reports_stopped(make_live, data_dir, tmp_path):
     assert rec.kinds()[-1] == live_control.LIVE_STOPPED
     assert rec.last(live_control.LIVE_STOPPED).data["folder"] == folder
     assert live.status() == {"active": False, "starting": False, "stopping": False,
-                             "ready": False, "stage": None, "error_at": None,
+                             "ready": False, "stage": None, "error_at": None, "error_folder": None,
                              "finishing": False, "with_recording": False,
                              "folder": None, "error": None, "started_at": None,
                              "attached": False, "ended_by": "stop"}
@@ -1398,6 +1398,101 @@ def test_quit_gives_the_tail_a_short_grace_then_kills_it(resident, monkeypatch):
     assert time.monotonic() - began < 10
     assert resident.queue.submitted == [(jobs.TRANSCRIBE, str(resident.folder))]
     assert not resident.live.finishing() and not resident.live.busy()
+
+
+def _saved_summary(folder, topic="Бюджет на квартал"):
+    """live_state.json, как его сохраняет ассистент после каждой сводки."""
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "live_state.json").write_text(json.dumps(
+        {"summary": {"topic": topic}, "hints": [], "covered_t": 30.0},
+        ensure_ascii=False), encoding="utf-8")
+
+
+def _next_recording(resident, monkeypatch, tmp_path):
+    """Следующая запись — в свою папку (у фикстуры папка одна на всех)."""
+    folder = tmp_path / "recordings" / "2026-10-01_11-00"
+
+    def fake_record(out_root, stop_event=None, *, bus, pcm_tap=None):
+        folder.mkdir(parents=True, exist_ok=True)
+        feed = pcm_tap.begin(2)
+        feed.configure(0, "sys.opus", 48000, 2)
+        feed.configure(1, "mic.opus", 16000, 1)
+        bus.emit(events.RECORD_STARTED, folder=str(folder))
+        stop_event.wait(60)
+        feed.end()
+        return folder
+
+    monkeypatch.setattr(tray, "record", fake_record)
+    monkeypatch.setattr(resident.tray, "_current_folder", lambda: str(folder))
+    return folder
+
+
+def test_a_tail_cut_by_a_new_assistant_marks_its_summary_partial(resident, monkeypatch,
+                                                                tmp_path):
+    """Новая «Запись с ассистентом» обрывает хвост прошлого: его сводка
+    (сохранённая по ходу встречи) помечается неполной — как это сделал бы
+    финальный проход, — а ошибка обрыва не всплывает над новой записью."""
+    from meet.assist.live_state import load_saved
+
+    monkeypatch.setattr(tray_control, "TAIL_CUT_WAIT_S", 0.5)
+    resident.stub.mode = "hang"  # хвост не дописывается сам
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["ready"])
+    _saved_summary(resident.folder)
+    resident.tray.stop_recording()
+    assert resident.live.finishing()
+    second = _next_recording(resident, monkeypatch, tmp_path)
+    reply = resident.live_start()
+    assert reply["ok"] is True and reply["attached"] is True
+    saved = json.loads((resident.folder / "live_state.json").read_text(encoding="utf-8"))
+    assert saved["partial"] is True and "tail_cut" in saved["partial_reasons"]
+    assert saved["summary"]["topic"] == "Бюджет на квартал"  # сводка цела
+    assert "неполн" in load_saved(resident.folder)["markdown"].lower()
+    status = resident.live.status()
+    assert status["error"] is None  # старт нового сбросил, а пометка — в папке
+    assert status["folder"] == str(second)
+    resident.tray.stop_recording()
+
+
+def test_a_tail_killed_at_its_deadline_marks_its_summary_and_its_error(resident, monkeypatch):
+    """Хвост не уложился в дедлайн (новой записи нет): сводка помечена
+    неполной, ошибка привязана к своей папке (`error_folder`) — окно не
+    покажет её над чужой записью."""
+    resident.stub.mode = "hang"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["ready"])
+    _saved_summary(resident.folder)
+    resident.tray.stop_recording()
+    _wait_for(lambda: not resident.live.finishing(), timeout=15)
+    saved = json.loads((resident.folder / "live_state.json").read_text(encoding="utf-8"))
+    assert saved["partial"] is True and saved["partial_reasons"] == ["tail_cut"]
+    status = resident.live.status()
+    assert "не успел сохранить сводку" in status["error"]
+    assert status["error_folder"] == str(resident.folder)
+
+
+def test_a_tail_without_a_saved_summary_is_not_given_one(resident, monkeypatch):
+    """Сводки не было — пометку писать некуда: пустой live_state.json не
+    создаётся (черновик итогов из ничего хуже, чем никакого)."""
+    resident.stub.mode = "hang"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["ready"])
+    resident.tray.stop_recording()
+    _wait_for(lambda: not resident.live.finishing(), timeout=15)
+    assert not (resident.folder / "live_state.json").exists()
+
+
+def test_a_cancelled_recording_tail_is_not_marked(resident, monkeypatch):
+    """Отмена: ассистента убивают сразу, папку удаляют — ни пометки, ни
+    воскрешённой папки."""
+    resident.stub.mode = "hang"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["ready"])
+    _saved_summary(resident.folder)
+    resident.tray.stop_recording(discard=True)
+    _wait_for(lambda: not resident.live.busy() and not resident.live.finishing())
+    assert not resident.folder.exists()
+    assert resident.live.status()["error"] is None
 
 
 def test_auto_start_right_after_stop_is_not_blocked_by_the_tail(resident, monkeypatch):

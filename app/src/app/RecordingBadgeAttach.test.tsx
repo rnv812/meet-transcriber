@@ -143,3 +143,24 @@ test("та же ошибка при новом сбое — снова видн�
   rerender(<RecordingBadge endpoint={ep} snapshot={{ ...fail(200), status: "idle" }} />);
   expect(screen.queryByRole("alert")).toBeNull();
 });
+
+test("ошибка хвоста ассистента прошлой записи не всплывает над новой", () => {
+  const { rerender } = render(<RecordingBadge endpoint={ep} snapshot={recording(live())} />);
+  // Хвост прошлой записи убит по дедлайну, когда уже идёт другая (D:/rec/f).
+  const late = recording(live({
+    error: "Ассистент не успел сохранить сводку — процесс убит, запись не затронута",
+    error_at: 300, error_folder: "D:\\rec\\old", ended_by: "recording" }));
+  rerender(<RecordingBadge endpoint={ep} snapshot={late} />);
+  expect(screen.queryByRole("alert")).toBeNull();
+  // И после её конца — тоже: это было не про неё.
+  rerender(<RecordingBadge endpoint={ep} snapshot={{ ...late, status: "idle", folder: null }} />);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("ошибка ассистента своей записи видна (папка та же, разделители — любые)", () => {
+  const { rerender } = render(<RecordingBadge endpoint={ep} snapshot={recording(live())} />);
+  rerender(<RecordingBadge endpoint={ep} snapshot={recording(live({
+    error: "Ассистент упал — запись продолжается: сбой", error_at: 400,
+    error_folder: "D:\\rec\\f", ended_by: "crash" }))} />);
+  expect(screen.getByRole("alert")).toHaveTextContent("запись продолжается: сбой");
+});
