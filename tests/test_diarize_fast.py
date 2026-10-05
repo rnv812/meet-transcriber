@@ -343,6 +343,59 @@ def test_job_worker_forwards_diarization_lines_as_timing_logs(monkeypatch, tmp_p
     assert {"kind": "log", "text": "время диаризации (cpu): всего 1.0 с", "source": "timing"} in events
 
 
+def test_rediarize_job_forwards_diarization_lines_too(monkeypatch, tmp_path, capsys):
+    """«Переразделить на спикеров» и «Разделить спикера» — тоже задачи с
+    диаризацией и голосами: их строки — в resident.log."""
+    from meet import job_worker, rediarize
+
+    monkeypatch.setattr(diarize, "_log_sink", None)
+
+    def fake_run(folder, **kw):
+        diarize._log("время диаризации (cpu): всего 2.0 с")
+        return tmp_path / "p.json"
+
+    monkeypatch.setattr(rediarize, "run", fake_run)
+    assert job_worker.main(["rediarize", str(tmp_path)]) == 0
+    events = [json.loads(x) for x in capsys.readouterr().out.splitlines() if x.startswith("{")]
+    assert {"kind": "log", "text": "время диаризации (cpu): всего 2.0 с", "source": "timing"} in events
+
+
+def test_timing_line_also_when_access_is_refused(monkeypatch, tmp_path):
+    """160 с ожидания Hub и отказ — тоже строка: где ушло время."""
+    from meet import credentials
+
+    _fake_torch(monkeypatch)
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: "hf_x")
+    monkeypatch.setattr(diarize, "_load_pipeline", lambda token: None)
+    lines = []
+    monkeypatch.setattr(diarize, "_log_sink", lines.append)
+    assert diarize.diarize_wav(tmp_path / "x.wav").skipped == diarize.SKIPPED_NO_ACCESS
+    assert len(lines) == 1 and "нет доступа к модели" in lines[0] and "из сети" in lines[0]
+
+
+def test_timing_line_also_when_diarization_fails(monkeypatch, tmp_path):
+    from meet import credentials
+
+    _fake_torch(monkeypatch)
+
+    class Broken(_Pipe):
+        def apply(self, file, hook=None, **kw):
+            hook("segmentation", None, total=1, completed=0)
+            raise ValueError("сломалось")
+
+        __call__ = apply
+
+    pipe = Broken()
+    monkeypatch.setattr(credentials, "get_hf_token", lambda: "hf_x")
+    monkeypatch.setattr(diarize, "_load_pipeline", lambda token: pipe)
+    _wire(monkeypatch, pipe)
+    lines = []
+    monkeypatch.setattr(diarize, "_log_sink", lines.append)
+    with pytest.raises(ValueError):
+        diarize.diarize_wav(tmp_path / "x.wav")
+    assert len(lines) == 1 and "не прошла: ValueError" in lines[0] and "сломалось" not in lines[0]
+
+
 # --- C3: голоса за один проход на окно -----------------------------------------
 
 

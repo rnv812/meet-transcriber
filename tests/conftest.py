@@ -99,8 +99,10 @@ def memory_keyring(_isolated_secrets):
 def _isolated_hf_cache(monkeypatch, tmp_path_factory):
     """Кэш Hugging Face — пустая временная папка: скачанная на машине модель
     диаризации иначе грузилась бы с диска без токена (meet.diarize) там, где
-    тест ждёт «нет токена — без спикеров». Кому нужна настоящая модель, ставит
-    `HF_HUB_CACHE` сам."""
+    тест ждёт «нет токена — без спикеров». Кому нужна настоящая модель
+    (диаризации, а в будущем и Whisper, выравнивания: они теперь тоже ищут
+    себя в кэше), ставит `HF_HUB_CACHE` сам — на кэш, прочитанный при импорте
+    модуля теста (`models.cache_root()`), как tests/test_diarize_fast.py."""
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path_factory.mktemp("hf-cache")))
 
 

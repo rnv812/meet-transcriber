@@ -463,6 +463,10 @@ def diarize_wav(
             return Diarization(turns=[], skipped=SKIPPED_NO_TOKEN)
         pipe = clock.timed("model", lambda: _load_pipeline(token))
         if pipe is None:
+            # Долгий отказ (сеть, прокси) — тоже в журнал: где ушли секунды.
+            clock.stop()
+            clock.note = "нет доступа к модели"
+            _log(clock.line("-"))
             return Diarization(turns=[], skipped=SKIPPED_NO_ACCESS)
     _install_fast_embeddings(pipe)
     if hasattr(pipe, "embedding_batch_size"):
@@ -519,6 +523,11 @@ def diarize_wav(
             threads.cap()
             clock.retry("после сбоя MPS")
             result = run()
+    except Exception as e:
+        clock.stop()
+        clock.note = ", ".join(filter(None, [clock.note, f"не прошла: {type(e).__name__}"]))
+        _log(clock.line(used, threads.count))
+        raise
     finally:
         threads.restore()
     clock.stop()
