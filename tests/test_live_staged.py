@@ -11,6 +11,7 @@ import threading
 import time
 
 import numpy as np
+import scipy.signal  # noqa: F401 — первое окно грузит его лениво, долго под нагрузкой
 
 from meet import live as live_mod
 from meet import recorder
@@ -24,7 +25,7 @@ from test_live_attach import FakeReader, FakeTap, tone
 SR = 16000
 
 
-def _wait(cond, timeout=5.0):
+def _wait(cond, timeout=30.0):
     deadline = time.monotonic() + timeout
     while not cond():
         if time.monotonic() > deadline:
@@ -175,7 +176,7 @@ def test_startup_backlog_is_not_skipped_even_when_long(tmp_path, monkeypatch):
         time.sleep(0.2)
         engine.load_asr()
         engine.begin()
-        _wait(lambda: sum(d for _, d in asr.windows) >= 38.0, timeout=10)
+        _wait(lambda: sum(d for _, d in asr.windows) >= 38.0)
         assert engine.stats["skipped_s"] == 0
     finally:
         tap.end()

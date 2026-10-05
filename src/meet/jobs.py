@@ -186,11 +186,28 @@ def _sweep_after() -> None:
 
     По всем, а не по pid задачи: `python.exe` venv на Windows — лаунчер, и
     папку пишет его дочерний интерпретатор со своим pid. Идущие процессы (задача
-    второй очереди, ассистент) живы — их папки не трогаются."""
+    второй очереди, ассистент) живы — их папки не трогаются.
+
+    Сразу после выхода Windows может ещё считать интерпретатор живым (его
+    хэндл открыт) или держать папку — поэтому через SWEEP_AGAIN_S ещё раз,
+    в фоне: очередь следующую задачу из-за этого не ждёт."""
     try:
         sweep_temp()
     except Exception:
         pass  # уборка не должна ломать очередь; остальное — при следующем запуске
+    again = threading.Timer(SWEEP_AGAIN_S, _sweep_quietly)
+    again.daemon = True
+    again.start()
+
+
+SWEEP_AGAIN_S = 1.0
+
+
+def _sweep_quietly() -> None:
+    try:
+        sweep_temp()
+    except Exception:
+        pass
 
 
 def worker_argv(job: Job) -> list[str]:
