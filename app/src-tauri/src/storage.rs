@@ -960,6 +960,40 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_and_resident_look_for_the_engine_in_the_chosen_folder() {
+        let t = Temp::new("upgrade");
+        let data = t.0.join("data");
+        fs::create_dir_all(&data).unwrap();
+        let chosen = t.0.join("Meet");
+        let old_env = chosen.join("engine").join("0.3.3");
+        fs::create_dir_all(engine::launcher(&old_env).parent().unwrap()).unwrap();
+        fs::write(engine::launcher(&old_env), "").unwrap();
+        fs::write(
+            old_env.join("installed.json"),
+            engine::marker_json("0.3.3", "cuda", "2026-10-06 03:00:00Z", None),
+        )
+        .unwrap();
+        write_pointer(&data, Some(&chosen)).unwrap();
+        let home = home(&data);
+        // Новая версия ставится тем же профилем рядом — в выбранной папке.
+        assert_eq!(
+            engine::previous_profile(&engine::engine_root(&home), "0.3.4"),
+            Some("cuda".to_string())
+        );
+        assert_eq!(
+            engine::env_dir(&home, "0.3.4"),
+            chosen.join("engine").join("0.3.4")
+        );
+        // Резидент этой версии — из выбранной папки.
+        let list = resident::candidates(Path::new("."), None, &home, "0.3.3", false);
+        assert_eq!(list[0], engine::launcher(&old_env));
+        assert_eq!(
+            engine::installed_profile(&old_env, "0.3.3"),
+            Some("cuda".to_string())
+        );
+    }
+
+    #[test]
     fn crash_before_the_new_resident_answered_rolls_back_after_it_finishes() {
         assert_eq!(recovery(None), Recovery::Nothing);
         assert_eq!(recovery(Some(Phase::Engine)), Recovery::RollBack);
