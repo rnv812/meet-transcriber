@@ -212,5 +212,5 @@ def test_live_engine_starts_with_failing_embedder(tmp_path, monkeypatch):
 
     monkeypatch.setattr(engine, "_tap_connect", connect)
     with pytest.raises(Stop):  # дошли до подключения — загрузка матчера не упала
-        engine._start_from_tap()
+        engine.start()
     assert not matcher.enabled
