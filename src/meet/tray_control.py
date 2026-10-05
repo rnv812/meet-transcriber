@@ -971,6 +971,10 @@ class TrayControl:
         }
 
     def _call_title(self) -> str | None:
+        """Название звонка для `/state.title`. В отличие от `_browser_call`,
+        который заголовок окна намеренно не отдаёт, здесь он есть — но только
+        у автозаписи и только пока она идёт: это то самое название, что станет
+        у записи (`_on_saved`), а снимок доступен лишь по токену с localhost."""
         tray = self.tray
         return getattr(tray, "recording_title", None) if tray.source == AUTO else None
 
