@@ -152,9 +152,197 @@ pub fn free_gb(path: &Path) -> Option<f64> {
     ok.then(|| free / f64::from(1u32 << 30))
 }
 
+/// Метки вокруг PATH в выводе оболочки входа: профили (`.zprofile`,
+/// `.zshrc`) бывают разговорчивыми — берём только текст между метками.
+const LOGIN_PATH_BEGIN: &str = "__MEET_LOGIN_PATH_BEGIN__";
+const LOGIN_PATH_END: &str = "__MEET_LOGIN_PATH_END__";
+/// Дольше оболочку входа не ждём: запуск приложения важнее.
+#[cfg_attr(not(unix), allow(dead_code))]
+const LOGIN_PATH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// PATH из вывода оболочки входа (между метками); нет меток или пусто — None.
+#[cfg_attr(not(unix), allow(dead_code))]
+pub fn marked_path(output: &str) -> Option<&str> {
+    let start = output.find(LOGIN_PATH_BEGIN)? + LOGIN_PATH_BEGIN.len();
+    let length = output[start..].find(LOGIN_PATH_END)?;
+    let path = output[start..start + length].trim();
+    (!path.is_empty()).then_some(path)
+}
+
+/// PATH (macOS, `:`) с папками из `extra`: прежние остаются на своих местах,
+/// новые — в конец по порядку, без повторов и пустых. Второе — сколько папок
+/// добавилось.
+pub fn merged_path(current: &str, extra: &str) -> (String, usize) {
+    let mut dirs: Vec<&str> = Vec::new();
+    for dir in current.split(':').filter(|d| !d.is_empty()) {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    let before = dirs.len();
+    for dir in extra.split(':').filter(|d| !d.is_empty()) {
+        if !dirs.contains(&dir) {
+            dirs.push(dir);
+        }
+    }
+    let added = dirs.len() - before;
+    (dirs.join(":"), added)
+}
+
+/// Оболочка входа пользователя: `$SHELL`, иначе zsh (по умолчанию в macOS).
+#[cfg_attr(not(unix), allow(dead_code))]
+pub fn login_shell(shell_var: Option<&str>) -> String {
+    shell_var
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("/bin/zsh")
+        .to_string()
+}
+
+/// macOS: дополнить PATH процесса PATH-ом оболочки входа. Приложение из
+/// Finder, Dock или автозапуска получает PATH launchd
+/// (`/usr/bin:/bin:/usr/sbin:/sbin`), и ни резидент, ни агент в терминале не
+/// видят `~/.local/bin/claude`, `/opt/homebrew/bin/codex`, node от npm.
+/// Спрашиваем `$SHELL -ilc` (как Терминал: профиль и rc) и дописываем его
+/// папки в конец; прежние остаются. Вызывать в начале `main`, до потоков:
+/// резидент, задания и агенты наследуют окружение. Не вышло — только строка
+/// в журнале.
+#[cfg(unix)]
+pub fn adopt_login_path() {
+    let shell = login_shell(std::env::var("SHELL").ok().as_deref());
+    match read_login_path(&shell) {
+        Ok(login) => {
+            let current = std::env::var("PATH").unwrap_or_default();
+            let (path, added) = merged_path(&current, &login);
+            if added > 0 {
+                std::env::set_var("PATH", &path);
+            }
+            crate::logs::shell_log!("PATH из оболочки входа ({shell}): добавлено папок {added}");
+        }
+        Err(error) => {
+            crate::logs::shell_log!("PATH оболочки входа ({shell}) не получен: {error}");
+        }
+    }
+}
+
+/// Запустить оболочку входа и прочитать PATH между метками. Вывод читает
+/// отдельный поток и отдаёт его, как только пришла вторая метка: демон из
+/// профиля (ssh-agent и т. п.) может держать вывод открытым и после выхода
+/// оболочки. Не уложилась в `LOGIN_PATH_TIMEOUT` — гасим её группу.
+#[cfg(unix)]
+fn read_login_path(shell: &str) -> Result<String, String> {
+    use std::io::Read;
+    use std::process::Stdio;
+    use std::sync::mpsc;
+
+    let script = format!("printf '%s%s%s' '{LOGIN_PATH_BEGIN}' \"$PATH\" '{LOGIN_PATH_END}'");
+    let mut command = Command::new(shell);
+    command
+        .args(["-i", "-l", "-c", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // Своя сессия без управляющего терминала (как `detached` у VS Code):
+    // интерактивный zsh, запущенный из терминала (`cargo tauri dev`), иначе
+    // тянул бы терминал к себе из фоновой группы и останавливался SIGTTIN.
+    // Лидер сессии — лидер и своей группы: `kill_group` гасит всё.
+    // SAFETY: между fork и exec — только setsid, он async-signal-safe.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("не запустилась: {e}"))?;
+    let mut stdout = child.stdout.take().ok_or("нет вывода")?;
+    let (send, receive) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            match stdout.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => output.extend_from_slice(&chunk[..n]),
+            }
+            if marked_path(&String::from_utf8_lossy(&output)).is_some() {
+                break;
+            }
+        }
+        let _ = send.send(String::from_utf8_lossy(&output).into_owned());
+    });
+    let Ok(output) = receive.recv_timeout(LOGIN_PATH_TIMEOUT) else {
+        // Зависла (ждёт ввода, `exec tmux` и т. п.) — гасим всю её группу.
+        kill_group(child.id(), true);
+        let _ = child.wait();
+        return Err("оболочка не ответила за 3 с".into());
+    };
+    // PATH получен: оболочка после printf выходит сама; не вышла — гасим
+    // только её (демоны профиля, оставшиеся в группе, не наше дело).
+    if !matches!(child.try_wait(), Ok(Some(_))) {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    marked_path(&output)
+        .map(str::to_string)
+        .ok_or_else(|| "в выводе нет PATH".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn login_path_is_read_between_markers() {
+        let noisy = format!(
+            "Last login: Mon\nwelcome!\n{LOGIN_PATH_BEGIN}/opt/homebrew/bin:/usr/bin{LOGIN_PATH_END}"
+        );
+        assert_eq!(marked_path(&noisy), Some("/opt/homebrew/bin:/usr/bin"));
+        assert_eq!(marked_path("/usr/bin"), None, "без меток — не PATH");
+        assert_eq!(marked_path(&format!("{LOGIN_PATH_BEGIN}/usr/bin")), None);
+        assert_eq!(
+            marked_path(&format!("{LOGIN_PATH_BEGIN} {LOGIN_PATH_END}")),
+            None
+        );
+    }
+
+    #[test]
+    fn login_path_is_appended_keeping_existing_dirs() {
+        let (path, added) = merged_path(
+            "/usr/bin:/bin:/usr/sbin:/sbin",
+            "/opt/homebrew/bin:/usr/bin:/Users/u/.local/bin::/bin",
+        );
+        assert_eq!(
+            path,
+            "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/Users/u/.local/bin"
+        );
+        assert_eq!(added, 2);
+        assert_eq!(merged_path("/a:/b", "/b:/a"), ("/a:/b".to_string(), 0));
+        assert_eq!(merged_path("", "/a"), ("/a".to_string(), 1));
+        assert_eq!(merged_path("/a::/a", ""), ("/a".to_string(), 0));
+    }
+
+    #[test]
+    fn login_shell_defaults_to_zsh() {
+        assert_eq!(
+            login_shell(Some("/opt/homebrew/bin/fish")),
+            "/opt/homebrew/bin/fish"
+        );
+        assert_eq!(login_shell(Some("  ")), "/bin/zsh");
+        assert_eq!(login_shell(None), "/bin/zsh");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn login_path_comes_from_a_real_shell() {
+        // /bin/sh: без профилей пользователя, но метки и PATH — настоящие.
+        let path = read_login_path("/bin/sh").unwrap();
+        assert!(!path.is_empty());
+    }
 
     #[test]
     fn data_root_follows_the_os() {

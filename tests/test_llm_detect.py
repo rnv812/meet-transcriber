@@ -30,6 +30,7 @@ def test_find_codex_none(monkeypatch, tmp_path):
     monkeypatch.setattr(detect.shutil, "which", lambda name: None)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.setattr(Path, "exists", lambda self: False)
+    monkeypatch.setattr(detect, "_unix_dirs", lambda home: [])
     assert detect.find_codex() is None
 
 
@@ -68,6 +69,93 @@ def test_find_claude_posix(monkeypatch):
     monkeypatch.setattr(detect.shutil, "which",
                         lambda name: "/usr/bin/claude" if name == "claude" else None)
     assert detect.find_claude() == "/usr/bin/claude"
+
+
+def _unix_cli(home, rel, name):
+    exe = home.joinpath(*rel.split("/")) / name
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_bytes(b"#!/bin/sh\n")
+    exe.chmod(0o755)
+    return exe
+
+
+def _no_path(monkeypatch, home):
+    # PATH launchd: в нём CLI нет; папки установки — только в `home`.
+    monkeypatch.setattr(detect, "_WINDOWS", False)
+    monkeypatch.setattr(detect.shutil, "which", lambda name: None)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(detect, "_UNIX_DIRS",
+                        tuple(d for d in detect._UNIX_DIRS if d.startswith("~")))
+
+
+def test_find_claude_posix_native_install_outside_path(monkeypatch, tmp_path):
+    # Приложение из Finder: PATH без ~/.local/bin — находим родную установку.
+    exe = _unix_cli(tmp_path, ".local/bin", "claude")
+    _no_path(monkeypatch, tmp_path)
+    assert detect.find_claude() == str(exe)
+    # Папку CLI — в PATH процесса: npm-сценарию нужен node рядом.
+    assert str(exe.parent) in detect.os.environ["PATH"].split(detect.os.pathsep)
+
+
+def test_find_claude_posix_order_of_install_dirs(monkeypatch, tmp_path):
+    _unix_cli(tmp_path, ".bun/bin", "claude")
+    old = _unix_cli(tmp_path, ".claude/local", "claude")
+    _no_path(monkeypatch, tmp_path)
+    assert detect.find_claude() == str(old)
+
+
+def test_find_claude_posix_nvm_newest_first(monkeypatch, tmp_path):
+    _unix_cli(tmp_path, ".nvm/versions/node/v9.11.2/bin", "claude")
+    new = _unix_cli(tmp_path, ".nvm/versions/node/v22.1.0/bin", "claude")
+    _no_path(monkeypatch, tmp_path)
+    assert detect.find_claude() == str(new)
+
+
+def test_find_claude_posix_skips_folders_and_missing(monkeypatch, tmp_path):
+    (tmp_path / ".local" / "bin" / "claude").mkdir(parents=True)  # папка, не файл
+    _no_path(monkeypatch, tmp_path)
+    assert detect.find_claude() is None
+
+
+def test_find_claude_posix_path_wins_over_fallback(monkeypatch, tmp_path):
+    _unix_cli(tmp_path, ".local/bin", "claude")
+    _no_path(monkeypatch, tmp_path)
+    monkeypatch.setattr(detect.shutil, "which",
+                        lambda name: "/usr/bin/claude" if name == "claude" else None)
+    assert detect.find_claude() == "/usr/bin/claude"
+
+
+def test_find_codex_posix_install_dir(monkeypatch, tmp_path):
+    exe = _unix_cli(tmp_path, ".npm-global/bin", "codex")
+    _no_path(monkeypatch, tmp_path)
+    assert detect.find_codex() == str(exe)
+
+
+def test_find_codex_windows_has_no_unix_fallback(monkeypatch, tmp_path):
+    _unix_cli(tmp_path, ".local/bin", "codex")
+    _no_path(monkeypatch, tmp_path)
+    monkeypatch.setattr(detect, "_WINDOWS", True)
+    assert detect.find_codex() is None
+
+
+def test_unix_dirs_cover_common_installs():
+    dirs = [str(d).replace("\\", "/") for d in detect._unix_dirs("/Users/u")]
+    for d in ("/Users/u/.local/bin", "/Users/u/.claude/local", "/opt/homebrew/bin",
+              "/usr/local/bin", "/Users/u/.npm-global/bin", "/Users/u/.bun/bin",
+              "/Users/u/.volta/bin"):
+        assert d in dirs, d
+
+
+def test_claude_not_found_names_the_platform_program(monkeypatch):
+    monkeypatch.setattr(detect, "_WINDOWS", True)
+    assert "claude.exe" in detect.claude_not_found()
+    assert "claude.cmd" in detect.claude_not_found(detail=True)
+    monkeypatch.setattr(detect, "_WINDOWS", False)
+    for text in (detect.claude_not_found(), detect.claude_not_found(detail=True)):
+        assert ".exe" not in text and ".cmd" not in text
+        assert "~/.local/bin" in text
 
 
 def test_local_reachable_true_and_false():

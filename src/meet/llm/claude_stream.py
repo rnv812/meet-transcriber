@@ -53,7 +53,7 @@ def workdir(name: str = WORKDIR) -> Path:
 
 
 def default_cli() -> list[str] | None:
-    """Команда запуска найденного claude.exe; не найден — None."""
+    """Команда запуска найденного Claude Code CLI; не найден — None."""
     exe = detect.find_claude()
     return [exe] if exe else None
 
@@ -129,7 +129,7 @@ class Conversation:
         """Поднять процесс; None — ок, иначе текст ошибки."""
         cli = self._cli if self._cli is not None else default_cli()
         if not cli:
-            return "не найден Claude Code CLI (claude.exe)"
+            return detect.claude_not_found()
         cmd = build_command(cli, system_prompt=self._system, model=self._model,
                             thinking=self._thinking, effort=self._effort)
         cwd = str(self._cwd) if self._cwd else str(workdir())

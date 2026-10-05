@@ -1,12 +1,15 @@
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
 def ensure_ffmpeg() -> None:
     if shutil.which("ffmpeg") is None:
+        install = ("winget install Gyan.FFmpeg" if sys.platform == "win32"
+                   else "brew install ffmpeg")
         raise SystemExit(
-            "ffmpeg не найден. Установите: winget install Gyan.FFmpeg "
+            f"ffmpeg не найден. Установите: {install} "
             "и перезапустите терминал."
         )
 

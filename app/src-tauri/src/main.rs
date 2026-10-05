@@ -38,6 +38,11 @@ fn main() {
     if let Some((mode, root)) = install_wait::requested(&args) {
         std::process::exit(install_wait::run(mode, &root));
     }
+    // macOS: PATH терминала (оболочки входа) — до любых потоков и детей:
+    // из Finder и Dock приложение видит только PATH launchd, и Claude Code
+    // с Codex «не находились».
+    #[cfg(unix)]
+    platform::adopt_login_path();
     tauri::Builder::default()
         // Первым: второй экземпляр должен выйти до того, как другие плагины и
         // `setup` успеют что-то сделать (второй трей, второй резидент). Колбэк

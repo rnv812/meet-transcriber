@@ -33,7 +33,7 @@ use tauri::{AppHandle, Emitter};
 use crate::api::Client;
 use crate::logs::shell_log;
 use crate::netproxy::{self, InternetSettings};
-use crate::{resident, windows};
+use crate::{platform, resident, windows};
 
 /// Окно, которому доступны команды агента и уходят его события.
 const MAIN: &str = "main";
@@ -1081,6 +1081,18 @@ fn prepare(
         &|name| std::env::var(name).ok(),
         &netproxy::read_internet_settings(),
     );
+    // macOS: CLI, найденный резидентом вне PATH (запасные папки
+    // `meet.llm.detect`), — его папку в конец PATH: npm-сценарий
+    // (`#!/usr/bin/env node`) ищет node там же, где лежит сам.
+    if !cfg!(windows) {
+        if let Some(dir) = program.parent().and_then(Path::to_str) {
+            let current = std::env::var("PATH").unwrap_or_default();
+            let (path, added) = platform::merged_path(&current, dir);
+            if added > 0 {
+                env.set.push(("PATH".into(), path));
+            }
+        }
+    }
     // Свои переменные — последними: они перекрывают и очистку меток, и наши.
     env.set.extend(launch.env);
     let ours = agent_args(provider, &folder_text, knowledge.as_deref(), &session);

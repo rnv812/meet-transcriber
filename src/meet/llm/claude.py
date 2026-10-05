@@ -14,7 +14,7 @@ from pathlib import Path
 
 from meet import netproxy
 from meet.llm.base import TIMEOUT_ERROR, AgentReply, drop_session_markers
-from meet.llm.detect import find_claude
+from meet.llm.detect import claude_not_found, find_claude
 
 log = logging.getLogger(__name__)
 
@@ -220,8 +220,7 @@ async def check_auth(proxy: str | None = None, model: str = "haiku") -> str | No
     ANTHROPIC_API_KEY не ошибка: он убирается из окружения (подписка важнее)."""
     drop_api_key()
     if find_cli() is None:
-        return ("не найден Claude Code CLI (claude.exe); npm-шим claude.cmd "
-                "не подходит — нужна родная установка Claude Code")
+        return claude_not_found(detail=True)
     reply = await run(
         "Ответь одним словом: ок",
         system_prompt="Отвечай одним словом.",

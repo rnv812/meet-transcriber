@@ -8,6 +8,7 @@ aiohttp. `available()` — быстрая проверка «установле�
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -21,6 +22,67 @@ _WINDOWS = sys.platform == "win32"
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if _WINDOWS else 0
 _BATCH_SUFFIXES = (".cmd", ".bat")
 
+# macOS/Linux: куда ставят CLI, если PATH их не видит. Приложение, открытое из
+# Finder или Dock, получает PATH launchd (`/usr/bin:/bin:/usr/sbin:/sbin`), а
+# не PATH терминала. Оболочка подмешивает PATH входа (`$SHELL -ilc`), а это —
+# запасной путь, если она не смогла. `~` — домашняя папка.
+_UNIX_DIRS = (
+    "~/.local/bin",          # родной установщик Claude Code
+    "~/.claude/local",       # прежняя «локальная» установка Claude Code
+    "/opt/homebrew/bin",     # Homebrew на Apple Silicon (и npm -g от его node)
+    "/usr/local/bin",        # Homebrew на Intel, npm -g от node с nodejs.org
+    "~/.npm-global/bin",     # npm -g с prefix в домашней папке
+    "~/.bun/bin",
+    "~/.volta/bin",
+)
+
+
+def _home() -> str:
+    return os.environ.get("HOME") or str(Path.home())
+
+
+def _unix_dirs(home: str) -> list[Path]:
+    """Папки установки CLI на macOS/Linux, `~` — `home`; у nvm — все версии
+    node, новые первыми."""
+    dirs = [Path(home + d[1:]) if d.startswith("~") else Path(d) for d in _UNIX_DIRS]
+    nvm = Path(home) / ".nvm" / "versions" / "node"
+    try:
+        versions = sorted(nvm.iterdir(), key=_version_key, reverse=True)
+    except OSError:
+        versions = []
+    return dirs + [v / "bin" for v in versions]
+
+
+def _version_key(folder: Path) -> tuple[int, ...]:
+    """«v22.1.0» → (22, 1, 0): v9 старше v22 только по строке."""
+    return tuple(int(n) for n in re.findall(r"\d+", folder.name))
+
+
+def _unix_fallback(name: str) -> str | None:
+    """CLI `name` в обычных папках установки (исполняемый файл). Папку найденного
+    — в конец PATH процесса: npm-сценарий (`#!/usr/bin/env node`) ищет node
+    там же, где лежит сам."""
+    for d in _unix_dirs(_home()):
+        exe = d / name
+        if exe.is_file() and os.access(exe, os.X_OK):
+            path = os.environ.get("PATH", "")
+            if str(d) not in path.split(os.pathsep):
+                os.environ["PATH"] = f"{path}{os.pathsep}{d}" if path else str(d)
+            return str(exe)
+    return None
+
+
+def claude_not_found(detail: bool = False) -> str:
+    """Текст «Claude Code CLI не найден» под ОС. `detail` — с подсказкой: на
+    Windows годится только родной claude.exe."""
+    if not _WINDOWS:
+        return ("не найден Claude Code CLI (claude) — ни в PATH, "
+                "ни в ~/.local/bin и /opt/homebrew/bin")
+    if detail:
+        return ("не найден Claude Code CLI (claude.exe); npm-шим claude.cmd "
+                "не подходит — нужна родная установка Claude Code")
+    return "не найден Claude Code CLI (claude.exe)"
+
 
 def find_claude() -> str | None:
     """Путь к Claude Code CLI, который примет claude-agent-sdk.
@@ -29,9 +91,10 @@ def find_claude() -> str | None:
     от npm (`_reject_windows_batch_cli`), а `shutil.which('claude')` может
     найти bash-скрипт, который CreateProcess не исполняет (agent-sdk #252).
     Такая установка считается «не найден» — `auto` перейдёт к следующему.
+    На macOS/Linux — PATH, затем обычные папки установки (`_UNIX_DIRS`).
     """
     if not _WINDOWS:
-        return shutil.which("claude")
+        return shutil.which("claude") or _unix_fallback("claude")
     p = shutil.which("claude.exe")
     if p and not p.lower().endswith(_BATCH_SUFFIXES):
         return p
@@ -45,7 +108,8 @@ def find_claude() -> str | None:
 
 def find_codex() -> str | None:
     """Codex CLI в PATH (родной codex.exe раньше npm-шима), иначе — место
-    установки по умолчанию на Windows."""
+    установки по умолчанию на Windows, на macOS/Linux — обычные папки
+    установки (`_UNIX_DIRS`)."""
     for name in ("codex.exe", "codex.cmd", "codex"):
         p = shutil.which(name)
         if p:
@@ -55,6 +119,8 @@ def find_codex() -> str | None:
         exe = Path(local) / "Programs" / "OpenAI" / "Codex" / "bin" / "codex.exe"
         if exe.exists():
             return str(exe)
+    if not _WINDOWS:
+        return _unix_fallback("codex")
     return None
 
 
