@@ -26,6 +26,8 @@ export type Snapshot = {
   source: "auto" | "manual" | null;
   folder: string | null;
   elapsed_s: number;
+  /** Название звонка из окна браузера, пока идёт автозапись; неизвестно — null. Нет у старых резидентов. */
+  title?: string | null;
   levels: Record<string, number>;
   auto_record: AutoRecord;
   recordings_dir: string;

@@ -91,6 +91,9 @@ export function getRecordings(ep: Endpoint, q?: string, categories?: string[]) {
     .filter(Boolean).join("&");
   return json<{ root: string; items: Recording[] }>(ep, `/recordings${params ? `?${params}` : ""}`);
 }
+/** Несколько самых свежих записей (папки сортируются как даты): панель записи в строке меню. */
+export const getRecentRecordings = (ep: Endpoint, limit: number) =>
+  json<{ root: string; items: Recording[] }>(ep, `/recordings?limit=${limit}`);
 /** Поиск по тексту встреч и названиям (правила — lib/search.ts): записи с фрагментами. */
 export const searchLibrary = (ep: Endpoint, q: string, signal?: AbortSignal, categories?: string[]) =>
   json<{ items: SearchItem[] }>(ep, `/search?q=${enc(q)}${categories?.length

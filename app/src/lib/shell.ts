@@ -323,3 +323,27 @@ export async function agentKillRecording(recordingId: string): Promise<void> {
 }
 export const onAgentData = (cb: (d: AgentData) => void) => listenShell("agent-data", cb);
 export const onAgentExit = (cb: (e: AgentExit) => void) => listenShell("agent-exit", cb);
+
+// --- панель записи под значком в строке меню macOS (tray_panel.rs) ----------
+
+/** Оболочка показала или спрятала панель (`tray-panel`: `{ visible }`). */
+export async function onTrayPanel(cb: (visible: boolean) => void): Promise<() => void> {
+  if (!inTauri()) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<{ visible?: unknown }>("tray-panel", (e) => cb(e.payload?.visible === true));
+}
+
+/** Высота содержимого панели: оболочка подгоняет под неё окно. */
+export async function trayPanelFit(height: number): Promise<void> {
+  if (inTauri()) await invoke<void>("tray_panel_fit", { height }).catch(() => {});
+}
+
+export async function trayPanelHide(): Promise<void> {
+  if (inTauri()) await invoke<void>("tray_panel_hide").catch(() => {});
+}
+
+/** Спрятать панель и открыть окно Meet — на записи или разделе настроек. */
+export async function trayPanelOpen(target: { recording?: string; section?: string } = {}): Promise<void> {
+  if (!inTauri()) return;
+  await invoke<void>("tray_panel_open", { recording: target.recording ?? null, section: target.section ?? null });
+}

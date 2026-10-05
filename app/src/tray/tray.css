@@ -1,0 +1,278 @@
+/* Панель записи под значком в строке меню macOS (tray.html).
+
+   Своя маленькая система токенов, выведенная из токенов окна (theme/tokens.css):
+   индиго приложения (--accent #5e6ad2, кольцо Meet) уходит в фиолетовый
+   #a666c9 — градиент кнопок и «сияние» за таймером. В отличие от окна,
+   панель следует светлой и тёмной теме системы: под ней стекло строки меню.
+
+   Стекло: на macOS (`data-glass="native"`) — системное NSVisualEffectView
+   (Effect::Popover, скругление 12 задаёт оболочка), страница кладёт поверх
+   лишь лёгкий фиолетовый тон. Без него (`css`: браузер, dev) фон и размытие
+   рисует сама страница. */
+
+html, body, #root { margin: 0; background: transparent; }
+body {
+  overflow: hidden;
+  font: 13px/1.4 "Onest Variable", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-user-select: none; user-select: none;
+  cursor: default;
+}
+* { box-sizing: border-box; }
+
+.tp {
+  /* Фиолетовый — градиент от бренда приложения к лиловому. */
+  --tp-violet: #a666c9;
+  --tp-iris: #8b6ae0;
+  --tp-indigo: #5e6ad2;
+  --tp-gradient: linear-gradient(135deg, #b178d8 0%, var(--tp-violet) 22%, var(--tp-iris) 62%, var(--tp-indigo) 100%);
+  --tp-rec: #ff5c74;
+  --tp-ok: #4cc38a;
+  --tp-warn: #f5a524;
+  /* Тёмная тема (умолчание). */
+  --tp-ink: #f4effb;
+  --tp-ink-2: rgba(244, 239, 251, 0.68);
+  --tp-ink-3: rgba(244, 239, 251, 0.46);
+  --tp-accent: #cfaef2;
+  --tp-hair: rgba(255, 255, 255, 0.10);
+  --tp-fill: rgba(255, 255, 255, 0.07);
+  --tp-fill-hover: rgba(255, 255, 255, 0.12);
+  --tp-tint: rgba(46, 24, 66, 0.30);
+  --tp-solid: rgba(30, 22, 41, 0.78);
+  --tp-aura-a: rgba(166, 102, 201, 0.55);
+  --tp-aura-b: rgba(94, 106, 210, 0.45);
+  --tp-error-bg: rgba(255, 92, 116, 0.14);
+  --tp-error-ink: #ffb3bf;
+
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 12px;
+  color: var(--tp-ink);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  .tp {
+    --tp-ink: #1f1630;
+    --tp-ink-2: rgba(31, 22, 48, 0.66);
+    --tp-ink-3: rgba(31, 22, 48, 0.46);
+    --tp-accent: #8445b4;
+    --tp-hair: rgba(60, 24, 96, 0.12);
+    --tp-fill: rgba(96, 52, 150, 0.07);
+    --tp-fill-hover: rgba(96, 52, 150, 0.12);
+    --tp-tint: rgba(250, 244, 255, 0.28);
+    --tp-solid: rgba(251, 248, 254, 0.80);
+    --tp-aura-a: rgba(166, 102, 201, 0.32);
+    --tp-aura-b: rgba(94, 106, 210, 0.22);
+    --tp-rec: #e5364f;
+    --tp-ok: #1f9a62;
+    --tp-error-bg: rgba(229, 54, 79, 0.10);
+    --tp-error-ink: #b4233a;
+    color-scheme: light;
+  }
+}
+
+.tp[data-glass="native"] {
+  background: var(--tp-tint);
+  /* Внутренняя волосяная грань, как у системных поповеров. */
+  box-shadow: inset 0 0 0 0.5px var(--tp-hair);
+}
+.tp[data-glass="css"] {
+  background: var(--tp-solid);
+  -webkit-backdrop-filter: blur(30px) saturate(170%);
+  backdrop-filter: blur(30px) saturate(170%);
+  box-shadow: inset 0 0 0 0.5px var(--tp-hair);
+}
+
+/* Сияние за таймером — эхо кольца Meet из строки меню. Единственное
+   «громкое» место панели; во время записи оно медленно дышит. */
+.tp__aura {
+  position: absolute; z-index: 0; pointer-events: none;
+  top: -80px; left: -80px; width: 340px; height: 260px;
+  background:
+    radial-gradient(closest-side at 38% 52%, var(--tp-aura-a), transparent),
+    radial-gradient(closest-side at 78% 40%, var(--tp-aura-b), transparent 85%);
+  filter: blur(6px);
+  opacity: 0.55;
+  transition: opacity 400ms ease;
+}
+.tp[data-recording] .tp__aura { opacity: 0.95; animation: tp-breathe 4.2s ease-in-out infinite alternate; }
+@keyframes tp-breathe {
+  from { transform: scale(1) translateY(0); opacity: 0.75; }
+  to { transform: scale(1.08) translateY(6px); opacity: 1; }
+}
+
+.tp__body { position: relative; z-index: 1; animation: tp-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@keyframes tp-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+.tp__content { display: flex; flex-direction: column; }
+
+.tp__hero { display: flex; flex-direction: column; align-items: flex-start; padding: 16px 16px 14px; }
+
+/* Строка состояния */
+.tp__status {
+  display: flex; align-items: center; gap: 8px; min-height: 18px;
+  color: var(--tp-ink-2); font-size: 12.5px; font-weight: 500;
+}
+.tp__status--rec { color: var(--tp-ink); }
+.tp__status--done { color: var(--tp-ink); }
+.tp__status-text { display: inline-flex; align-items: center; gap: 8px; }
+.tp__dot {
+  width: 8px; height: 8px; flex: none; border-radius: 50%;
+  background: var(--tp-rec);
+  box-shadow: 0 0 0 0 rgba(255, 92, 116, 0.55);
+  animation: tp-pulse 1.6s ease-out infinite;
+}
+@keyframes tp-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(255, 92, 116, 0.55); }
+  70% { box-shadow: 0 0 0 7px rgba(255, 92, 116, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 92, 116, 0); }
+}
+/* Простой: кольцо Meet, приглушённое. */
+.tp__ring {
+  width: 9px; height: 9px; flex: none; border-radius: 50%;
+  border: 1.5px solid var(--tp-ink-3);
+}
+.tp__tag {
+  display: inline-flex; align-items: center; height: 17px; padding: 0 6px; border-radius: 9px;
+  background: var(--tp-fill); color: var(--tp-ink-2); font-size: 11px; font-weight: 500;
+}
+.tp__spin { color: var(--tp-accent); animation: tp-spin 0.9s linear infinite; }
+@keyframes tp-spin { to { transform: rotate(360deg); } }
+
+/* Таймер */
+.tp__num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+.tp__timer {
+  margin: 10px 0 2px -2px;
+  font-size: 50px; line-height: 1; font-weight: 300; letter-spacing: -0.035em;
+  color: var(--tp-ink);
+}
+.tp__timer--done { font-size: 36px; color: var(--tp-ink-2); margin-top: 8px; }
+
+.tp__title {
+  margin-top: 8px; max-width: 100%;
+  font-size: 13.5px; font-weight: 500; line-height: 1.35; color: var(--tp-ink);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.tp__chip {
+  display: inline-flex; align-items: center; gap: 5px; margin-top: 10px;
+  height: 22px; padding: 0 9px 0 7px; border-radius: 11px;
+  font-size: 12px; font-weight: 500;
+  color: var(--tp-accent);
+  background: rgba(166, 102, 201, 0.18);
+  box-shadow: inset 0 0 0 0.5px rgba(166, 102, 201, 0.45);
+}
+.tp__chip--muted { color: var(--tp-ink-2); background: var(--tp-fill); box-shadow: none; }
+
+.tp__note { margin: 6px 0 0; color: var(--tp-ink-2); font-size: 12.5px; line-height: 1.4; }
+.tp__warn { margin: 8px 0 0; color: var(--tp-warn); font-size: 12px; line-height: 1.35; }
+
+/* Кнопки */
+.tp__primary, .tp__secondary {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; border: 0; font: inherit; cursor: default;
+  transition: filter 120ms ease, background 120ms ease, transform 80ms ease, box-shadow 120ms ease;
+}
+.tp__primary {
+  height: 40px; margin-top: 16px; border-radius: 10px;
+  background: var(--tp-gradient);
+  color: #fff; font-size: 14px; font-weight: 600; letter-spacing: 0.005em;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -1px 0 rgba(30, 10, 60, 0.18),
+    0 8px 20px -10px rgba(120, 70, 200, 0.85);
+  text-shadow: 0 1px 1px rgba(40, 10, 70, 0.25);
+}
+.tp__primary:hover:not(:disabled) { filter: brightness(1.07) saturate(1.05); }
+.tp__primary:active:not(:disabled) { transform: translateY(1px); filter: brightness(0.96); }
+.tp__primary:disabled { filter: saturate(0.35); opacity: 0.6; }
+.tp__glyph-fill { fill: currentColor; }
+
+.tp__secondary {
+  height: 34px; margin-top: 8px; border-radius: 9px;
+  background: var(--tp-fill); color: var(--tp-ink);
+  box-shadow: inset 0 0 0 0.5px var(--tp-hair);
+  font-size: 13px; font-weight: 500;
+}
+.tp__secondary:hover:not(:disabled) { background: var(--tp-fill-hover); }
+.tp__secondary:active:not(:disabled) { transform: translateY(1px); }
+.tp__secondary:disabled { opacity: 0.45; }
+.tp__glyph-accent { color: var(--tp-accent); }
+.tp__glyph-rec { color: var(--tp-rec); fill: currentColor; }
+
+.tp__inline-link {
+  padding: 0; border: 0; background: none; font: inherit; color: var(--tp-accent); cursor: default;
+  text-decoration: underline; text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+:where(.tp) button:focus-visible {
+  outline: 2px solid var(--tp-accent); outline-offset: 2px;
+}
+
+/* Ошибка — над всем, пока не уйдёт сама или её не скроют. */
+.tp__error {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin: 12px 12px 0; padding: 8px 8px 8px 10px; border-radius: 8px;
+  background: var(--tp-error-bg); color: var(--tp-error-ink);
+  font-size: 12.5px; line-height: 1.35;
+}
+.tp__error > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.tp__error-close {
+  flex: none; display: inline-flex; padding: 2px; border: 0; border-radius: 4px;
+  background: none; color: inherit; opacity: 0.8;
+}
+.tp__error-close:hover { opacity: 1; background: var(--tp-fill); }
+
+/* Последняя запись */
+.tp__recent { padding: 2px 8px 8px; border-top: 0.5px solid var(--tp-hair); }
+.tp__label { padding: 10px 8px 4px; color: var(--tp-ink-3); font-size: 11.5px; font-weight: 500; }
+.tp__recent-row {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 7px 8px; border: 0; border-radius: 8px;
+  background: none; color: var(--tp-ink); font: inherit; text-align: left; cursor: default;
+}
+.tp__recent-row:hover { background: var(--tp-fill); }
+.tp__recent-glyph {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 28px; height: 28px; border-radius: 7px;
+  color: var(--tp-accent);
+  background: rgba(166, 102, 201, 0.16);
+}
+.tp__recent-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.tp__recent-title {
+  font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tp__recent-meta { display: flex; gap: 10px; color: var(--tp-ink-3); font-size: 11.5px; }
+.tp__recent-go { flex: none; color: var(--tp-ink-3); }
+.tp__recent-row:hover .tp__recent-go { color: var(--tp-ink-2); }
+
+/* Низ: ссылка на окно */
+.tp__foot { padding: 4px 8px 8px; border-top: 0.5px solid var(--tp-hair); }
+.tp__link {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  height: 30px; padding: 0 8px; border: 0; border-radius: 7px;
+  background: none; color: var(--tp-ink-2); font: inherit; font-size: 12.5px; text-align: left; cursor: default;
+}
+.tp__link:hover { background: var(--tp-fill); color: var(--tp-ink); }
+/* Знак Meet — кольцо, как значок приложения. */
+.tp__mark {
+  width: 12px; height: 12px; flex: none; border-radius: 50%;
+  background: var(--tp-gradient);
+  -webkit-mask: radial-gradient(closest-side, transparent 52%, #000 56%);
+  mask: radial-gradient(closest-side, transparent 52%, #000 56%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tp__body { animation: tp-fade 120ms ease both; }
+  .tp[data-recording] .tp__aura { animation: none; }
+  .tp__dot { animation: none; box-shadow: 0 0 0 3px rgba(255, 92, 116, 0.3); }
+  .tp__spin { animation-duration: 2.4s; }
+  .tp__primary, .tp__secondary { transition: none; }
+}
+@keyframes tp-fade { from { opacity: 0; } to { opacity: 1; } }

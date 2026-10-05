@@ -25,7 +25,7 @@ export function fallbackText(f: { kind: "mic" | "output"; name: string }): strin
 }
 
 /** Общая часть ответов `/live/start` и `/live/stop` — новое `snapshot.live`. */
-const liveOf = (r: LiveStatus): LiveStatus => ({
+export const liveOf = (r: LiveStatus): LiveStatus => ({
   active: r.active, starting: r.starting, stopping: r.stopping,
   folder: r.folder, error: r.error, started_at: r.started_at,
   ...(r.attached === undefined ? {} : { attached: r.attached }),

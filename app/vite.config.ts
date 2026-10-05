@@ -32,9 +32,10 @@ export default defineConfig({
   plugins: [react()],
   build: {
     target: "chrome110", // WebView2 на Win10/11; лишние полифилы не нужны
-    // Две страницы: окно приложения и плавающая панель ассистента (окно
-    // `live` оболочки грузит live.html и в dev, и в сборке).
-    rollupOptions: { input: { main: "index.html", live: "live.html" } },
+    // Три страницы: окно приложения, плавающая панель ассистента (окно
+    // `live` оболочки грузит live.html и в dev, и в сборке) и панель записи
+    // под значком в строке меню macOS (окно `tray-panel`, tray.html).
+    rollupOptions: { input: { main: "index.html", live: "live.html", tray: "tray.html" } },
   },
   // Вывод cargo не должен затираться очисткой экрана Vite.
   clearScreen: false,
