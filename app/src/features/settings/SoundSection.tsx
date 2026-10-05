@@ -8,6 +8,8 @@
  *
  * «Проверить» пишет ~2 с подпроцессом резидента (`POST /devices/test`) и
  * показывает пиковый уровень; проверяется выбор из черновика, ещё не сохранённый.
+ *
+ * «Мой голос» — образец голоса владельца (OwnerVoice.tsx), с микрофона из черновика.
  */
 
 import { useState, type ReactNode } from "react";
@@ -16,6 +18,7 @@ import { errorText } from "../../lib/format";
 import { IS_MAC, OS_TEXT } from "../../lib/platform";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
+import { OwnerVoiceRow } from "./OwnerVoice";
 import { Row, type Raw, type SetFn } from "./Section";
 
 /** Ниже этого пика считаем, что звука не было (шум тишины, а не речь). */
@@ -137,6 +140,7 @@ export function SoundSection({ draft, set, devices, endpoint }: {
           </HelpTip>
         )}
         items={devices?.outputs ?? []} value={v("output_device")} onChange={choose("output_device")} />
+      <OwnerVoiceRow endpoint={endpoint} device={v("mic_device")} />
     </>
   );
 }

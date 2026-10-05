@@ -1,6 +1,6 @@
 /**
  * Мастер первого запуска: железо → движок → Hugging Face → модели → запись →
- * готово. Шаги 1–2 работают без резидента (команды оболочки); шагам 3–5 он
+ * ваш голос (необязательно) → готово. Шаги 1–2 работают без резидента (команды оболочки); шагам 3–5 он
  * нужен — после установки оболочка поднимает его сама, мастер ждёт до 90 с.
  *
  * «Пропустить мастер» есть на каждом шаге: сам он больше не откроется (флаг
@@ -19,6 +19,7 @@ import { type InstallPhase, StepEngine } from "./StepEngine";
 import { StepHardware } from "./StepHardware";
 import { StepHf } from "./StepHf";
 import { StepModels } from "./StepModels";
+import { StepVoice } from "./StepVoice";
 import type { WizardStep } from "./useWizardGate";
 import "../settings/settings.css";
 import "./wizard.css";
@@ -29,9 +30,10 @@ const STEPS: { id: WizardStep; title: string }[] = [
   { id: "hf", title: "Hugging Face" },
   { id: "models", title: "Модели" },
   { id: "devices", title: "Запись" },
+  { id: "voice", title: "Ваш голос" },
   { id: "done", title: "Готово" },
 ];
-const NEEDS_RESIDENT: WizardStep[] = ["hf", "models", "devices"];
+const NEEDS_RESIDENT: WizardStep[] = ["hf", "models", "devices", "voice"];
 
 /** Ждём резидент после установки: раз в секунду, до 90 попыток. */
 export const SERVICE_POLL_MS = 1000;
@@ -152,6 +154,9 @@ export function Wizard({
         break;
       case "devices":
         body = <StepDevices endpoint={ep} onNext={next} />;
+        break;
+      case "voice":
+        body = <StepVoice endpoint={ep} onNext={next} />;
         break;
       case "done":
         body = <StepDone onFinish={onClose} />;

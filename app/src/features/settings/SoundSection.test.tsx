@@ -8,6 +8,7 @@ import type { Raw } from "./Section";
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
   testDevice: vi.fn(),
+  getOwnerVoice: vi.fn(),
 }));
 
 const ep = { base: "/api", token: null };
@@ -33,7 +34,14 @@ function Harness({ initial, onDraft, list = devices }: {
 
 const recording = { mic_device: null, output_device: null };
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(api.getOwnerVoice).mockResolvedValue({
+    samples: [{ id: "s1", source: "enroll", date: "2026-10-05", seconds: 21, device: "USB-микрофон",
+      recording: null, quality: 0.8 }],
+    take: null, ready: true, reason: null, recording: false, seconds: 25,
+  });
+});
 
 test("по умолчанию — «Как в системе» с именем текущего системного устройства", () => {
   render(<Harness initial={{ recording }} />);
@@ -118,4 +126,13 @@ test("список недоступен — только «Как в систе�
 test("строка итога проверки есть и до проверки: её появление не сдвигает разделы ниже", () => {
   const { container } = render(<SoundSection draft={{ recording: {} }} set={() => {}} devices={null} endpoint={{ base: "/api", token: null }} />);
   expect(container.querySelectorAll(".sound__result").length).toBeGreaterThan(0);
+});
+
+test("«Мой голос»: что записано и «Перезаписать»", async () => {
+  render(<Harness initial={{ recording }} />);
+  const group = screen.getByRole("group", { name: "Мой голос" });
+  expect(await within(group).findByText("записан 05.10 · USB-микрофон")).toBeInTheDocument();
+  expect(within(group).getByRole("button", { name: "Перезаписать" })).toBeInTheDocument();
+  expect(within(group).getByRole("button", { name: "Удалить образец: записан 05.10 · USB-микрофон" }))
+    .toBeInTheDocument();
 });

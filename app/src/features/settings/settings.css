@@ -296,3 +296,16 @@
 
 /* «Диагностика»: заголовок журналов с кнопкой «Обновить». */
 .diag__logs-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+
+/* «Мой голос» (OwnerVoice.tsx): текст для чтения, ход записи образца и что записано. */
+.ownv { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 12px; }
+.ownv p { margin: 0; }
+.ownv__text {
+  margin: 0; padding: 12px 14px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-md); color: var(--text); font-size: 14px; line-height: 1.6;
+}
+.ownv__bar { display: flex; align-items: center; gap: 12px; min-height: 32px; }
+.ownv__meter { width: 100%; }
+.ownv__privacy { font-size: 12px; }
+.ownv__samples { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.ownv__sample { display: inline-flex; align-items: center; gap: 8px; }

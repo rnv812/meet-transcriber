@@ -14,7 +14,7 @@ import { type EngineStatus, engineStatus, markWizardDone, residentStatus } from 
 import type { ResidentStatus } from "../../state/useResident";
 import { readLocalDone, shouldAutoShow, writeLocalDone } from "./gate";
 
-export type WizardStep = "hardware" | "engine" | "hf" | "models" | "devices" | "done";
+export type WizardStep = "hardware" | "engine" | "hf" | "models" | "devices" | "voice" | "done";
 
 /** Как часто перечитывать `resident_status`, пока мастер открыт или движка нет. */
 export const SHELL_POLL_MS = 2000;

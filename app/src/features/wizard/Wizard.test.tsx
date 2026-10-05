@@ -4,6 +4,7 @@ import { Wizard } from "./Wizard";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import type { EngineStatus } from "../../lib/shell";
+import type { OwnerVoiceStatus } from "../../lib/types";
 
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
@@ -19,6 +20,8 @@ vi.mock("../../lib/api", async (orig) => ({
   getSettings: vi.fn(),
   patchSettings: vi.fn(),
   setAutoRecord: vi.fn(),
+  getOwnerVoice: vi.fn(),
+  recordOwnerVoice: vi.fn(),
 }));
 const events = vi.hoisted(() => ({
   progress: null as ((p: { step: number; of: number; line: string }) => void) | null,
@@ -39,6 +42,9 @@ vi.mock("../../lib/shell", async (orig) => ({
 }));
 
 const ep = { base: "http://127.0.0.1:5000", token: "t" };
+const voiceStatus = (extra: Partial<OwnerVoiceStatus> = {}): OwnerVoiceStatus => ({
+  samples: [], take: null, ready: true, reason: null, recording: false, seconds: 25, ...extra,
+});
 const MODEL_URL = "https://huggingface.co/pyannote/speaker-diarization-community-1";
 
 const engine = (extra: Partial<EngineStatus> = {}): EngineStatus => ({
@@ -78,6 +84,7 @@ beforeEach(() => {
   });
   vi.mocked(api.getProcesses).mockResolvedValue({ available: true, running: ["Telegram.exe", "zoom.exe"] });
   vi.mocked(api.getSettings).mockResolvedValue({ auto_record: { enabled: false, processes: ["zoom.exe"] } });
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(voiceStatus());
   vi.mocked(api.patchSettings).mockResolvedValue({ settings: {}, restart_required: [] });
   vi.mocked(api.setAutoRecord).mockResolvedValue({} as never);
 });
@@ -336,7 +343,7 @@ test("«Готово»: оболочка без автозапуска — пе�
 });
 
 test("«Пропустить» мастер доступен на каждом шаге и закрывает его", async () => {
-  for (const start of ["hardware", "engine", "hf", "models", "devices"] as const) {
+  for (const start of ["hardware", "engine", "hf", "models", "devices", "voice"] as const) {
     const { onClose, unmount } = show({ start, endpoint: ep });
     await userEvent.click(screen.getByRole("button", { name: "Пропустить мастер" }));
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -493,4 +500,25 @@ test("названия шагов установки совпадают с об�
   const rust = readFileSync(join(process.cwd(), "src-tauri", "src", "engine.rs"), "utf8");
   const block = /const STEP_TITLES: \[&str; \d+\] = \[([\s\S]*?)\];/.exec(rust)?.[1] ?? "";
   expect([...block.matchAll(/"([^"]+)"/g)].map((m) => m[1])).toEqual(ENGINE_STEP_TITLES);
+});
+
+test("после «Запись» — необязательный шаг «Ваш голос» с текстом для чтения", async () => {
+  show({ start: "devices", endpoint: ep });
+  await userEvent.click(await screen.findByRole("button", { name: "Далее" }));
+  expect(screen.getByRole("heading", { name: "Ваш голос" })).toBeInTheDocument();
+  expect(await screen.findByText(/Утро выдалось тихим/)).toBeInTheDocument();
+  expect(screen.getByText(/Хранится только отпечаток голоса/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Позже, в настройках" }));
+  expect(screen.getByRole("heading", { name: "Готово" })).toBeInTheDocument();
+});
+
+test("«Ваш голос» без модели или токена — только «Позже, в настройках»", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(voiceStatus({
+    ready: false, reason: "Нужен токен Hugging Face: без него модель голосов не загрузить" }));
+  show({ start: "voice", endpoint: ep });
+  expect(await screen.findByText(/Нужен токен Hugging Face/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Начать запись" })).toBeNull();
+  expect(screen.queryByText(/Утро выдалось тихим/)).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Позже, в настройках" }));
+  expect(screen.getByRole("heading", { name: "Готово" })).toBeInTheDocument();
 });
