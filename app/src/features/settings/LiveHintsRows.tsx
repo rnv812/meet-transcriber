@@ -31,6 +31,7 @@ const NEXT_RUN = "Применяется со следующего запуск�
 export function fastMeaning(provider: string | null | undefined): string {
   if (provider === "claude-code") return "Claude Code: модель Haiku без размышлений";
   if (provider === "codex") return "Codex: низкое усилие рассуждения";
+  if (provider === "opencode") return "OpenCode: без изменений, модель из настройки «Модель OpenCode»";
   if (provider === "openai-compatible") return "Локальная модель: без изменений, модель одна";
   return "Claude Code — модель Haiku без размышлений, Codex — низкое усилие рассуждения";
 }
@@ -62,7 +63,7 @@ export function HintsModelTip() {
       <TipLine>
         «Быстрее» — обновления приходят быстрее и расходуют меньше лимита подписки, но подсказки бывают
         проще. У Claude Code это модель Haiku без размышлений, у Codex — низкое усилие рассуждения;
-        локальная модель не меняется.
+        OpenCode и локальная модель не меняются.
       </TipLine>
       <TipLine>Ответы на вопросы во время встречи всегда даёт модель агента.</TipLine>
     </HelpTip>

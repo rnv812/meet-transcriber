@@ -215,7 +215,7 @@ test("карточка: «Ещё действия» и кнопка в стро�
   const menu = screen.getByRole("menu", { name: "Ещё действия с записью" });
   const item = within(menu).getByRole("menuitem", { name: "Улучшить расшифровку" });
   expect(item).toBeDisabled();
-  expect(item).toHaveAttribute("title", "Подключите Claude Code или Codex в настройках");
+  expect(item).toHaveAttribute("title", "Подключите Claude Code, Codex или OpenCode в настройках");
 });
 
 test("карточка: готовое предложение — применить выбранное, итог и «Отменить»", async () => {

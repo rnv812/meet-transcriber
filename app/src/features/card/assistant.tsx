@@ -98,7 +98,7 @@ export const noProvider = (info: AssistantInfo | null): boolean =>
 export function ProviderHint({ onOpenSettings }: { onOpenSettings?: (section: string) => void }) {
   return (
     <div className="assist__hint">
-      <span>Подключите Claude Code или Codex в настройках</span>
+      <span>Подключите Claude Code, Codex или OpenCode в настройках</span>
       {onOpenSettings && (
         <button type="button" className="link-btn" onClick={() => onOpenSettings("assistant")}>
           Открыть настройки

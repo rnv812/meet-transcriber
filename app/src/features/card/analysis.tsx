@@ -155,7 +155,7 @@ export const reanalyzeLabel = (state: AnalysisState | null): string =>
 export function reanalyzeBlocked(state: AnalysisState | null, noModel: boolean): string | null {
   if (state?.state === "queued") return "Анализ уже в очереди";
   if (state?.state === "running") return "Анализ уже идёт";
-  if (noModel) return "Подключите Claude Code или Codex в настройках";
+  if (noModel) return "Подключите Claude Code, Codex или OpenCode в настройках";
   return null;
 }
 

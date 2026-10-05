@@ -216,7 +216,7 @@ export async function residentStatus(): Promise<string | null> {
 
 /**
  * Открыть страницу в браузере. Оболочка открывает только свои адреса
- * (huggingface.co, claude.ai, github.com/openai/codex, Releases форка) — см.
+ * (huggingface.co, claude.ai, github.com/openai/codex, opencode.ai, Releases форка) — см.
  * `open_url`.
  * Не открылась — только в журнал консоли: это ссылка, а не действие.
  */
@@ -288,7 +288,7 @@ export async function openScreenRecordingSettings(): Promise<void> {
   await invoke<void>("open_screen_recording_settings");
 }
 
-// --- вкладка «Агент»: Claude Code / Codex во встроенном терминале -------------
+// --- вкладка «Агент»: Claude Code / Codex / OpenCode во встроенном терминале ---
 
 /** Событие `agent-data`: кусок вывода терминала сессии `id` (UTF-8, целые символы). */
 export type AgentData = { id: string; data: string };
@@ -296,11 +296,11 @@ export type AgentData = { id: string; data: string };
 export type AgentExit = { id: string; code: number | null };
 
 /**
- * Запустить агента (`claude-code` или `codex`) в папке записи. Оболочка
+ * Запустить агента (`claude-code`, `codex` или `opencode`) в папке записи. Оболочка
  * сначала просит резидента обновить transcript.md, затем запускает CLI в
  * псевдоконсоли. Возвращает id сессии; прежняя сессия этой записи гасится.
  */
-/** `resume` — «Продолжить прошлую»: Claude Code `--continue`, Codex `resume --last`. */
+/** `resume` — «Продолжить прошлую»: Claude Code `--resume`, Codex `resume --last`, OpenCode `--continue`. */
 export const agentSpawn = (recordingId: string, provider: string, cols: number, rows: number, resume = false) =>
   invoke<string>("agent_spawn", { recordingId, provider, cols, rows, resume });
 export const agentWrite = (id: string, data: string) => invoke<void>("agent_write", { id, data });

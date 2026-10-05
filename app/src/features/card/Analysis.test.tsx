@@ -174,7 +174,7 @@ test("«Предложить название»: «Отмена» ничего �
   expect(screen.queryByRole("dialog", { name: "Предложенное название" })).toBeNull();
   expect(api.patchRecording).not.toHaveBeenCalled();
 
-  vi.mocked(api.suggestTitle).mockRejectedValueOnce(new api.ApiError(409, "Подключите Claude Code или Codex в настройках"));
+  vi.mocked(api.suggestTitle).mockRejectedValueOnce(new api.ApiError(409, "Подключите Claude Code, Codex или OpenCode в настройках"));
   await userEvent.click(within(await openMore()).getByRole("menuitem", { name: "Предложить название" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Не удалось предложить название");
 });

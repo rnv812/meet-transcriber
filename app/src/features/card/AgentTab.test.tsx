@@ -2,7 +2,9 @@ import { StrictMode } from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
-  AgentTab, CODEX_SCRIPT_NOTE, CONFIRM_SCREEN, PASTE_WAIT_MS, QUIET_MS, agentProviders, codexScriptOnly,
+  AgentTab, CODEX_SCRIPT_NOTE, CONFIRM_SCREEN, OPENCODE_FALLBACK_QUIET_MS, OPENCODE_QUIET_MS, OPENCODE_SCRIPT_NOTE,
+  PASTE_WAIT_MS, QUIET_MS, agentProviders, codexScriptOnly, coldReadiness, opencodePromptVisible, opencodeScriptOnly,
+  quietNeeded,
   defaultProvider,
 } from "./AgentTab";
 import { pasteLine } from "../../lib/agentRef";
@@ -165,7 +167,7 @@ test("только codex.cmd — агентов нет, подсказка об�
     "claude-code": { found: false },
     codex: { found: true, path: "C:\\npm\\codex.CMD" },
   } }));
-  expect(screen.getByText("Подключите Claude Code или Codex в настройках")).toBeInTheDocument();
+  expect(screen.getByText("Подключите Claude Code, Codex или OpenCode в настройках")).toBeInTheDocument();
   expect(screen.getByText(CODEX_SCRIPT_NOTE)).toBeInTheDocument();
 });
 
@@ -211,7 +213,7 @@ test("вне приложения — «Доступно в приложении
 test("без агентов — подсказка и «Открыть настройки»", async () => {
   const onOpenSettings = vi.fn();
   await show(assistant({ available: { "claude-code": { found: false }, codex: { found: false } } }), { onOpenSettings });
-  expect(screen.getByText("Подключите Claude Code или Codex в настройках")).toBeInTheDocument();
+  expect(screen.getByText("Подключите Claude Code, Codex или OpenCode в настройках")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Открыть настройки" }));
   expect(onOpenSettings).toHaveBeenCalledWith("assistant");
 });
@@ -1034,4 +1036,45 @@ test("сеанс закончился, пока его вкладка закры
   expect(await screen.findByText("Завершён")).toBeInTheDocument();
   await waitFor(() => expect(h.FakeTerminal.all).toHaveLength(2));
   expect(await screen.findByRole("button", { name: "Запустить" })).toBeEnabled();
+});
+
+test("OpenCode — третий агент; только как сценарий npm (opencode.cmd) — в список не попадает, вместо него подсказка", async () => {
+  const all = assistant({ available: {
+    "claude-code": { found: true, path: "C:/bin/claude.exe" },
+    codex: { found: false },
+    opencode: { found: true, path: "C:/oc/opencode.exe" },
+  } });
+  expect(agentProviders(all).map((p) => p.label)).toEqual(["Claude Code", "OpenCode"]);
+  expect(defaultProvider({ ...all, provider: "opencode" }, agentProviders(all))).toBe("opencode");
+  const npm = assistant({ available: {
+    "claude-code": { found: false },
+    opencode: { found: true, path: "C:\\npm\\opencode.cmd" },
+  } });
+  expect(opencodeScriptOnly(npm)).toBe(true);
+  expect(agentProviders(npm)).toEqual([]);
+  await show(npm);
+  expect(screen.getByText(OPENCODE_SCRIPT_NOTE)).toBeInTheDocument();
+  expect(OPENCODE_SCRIPT_NOTE).toContain("opencode.exe");
+});
+
+test("OpenCode: поле ввода по его TUI, без режима вставки; диалог входа — не вставляем; без признаков — только после долгой тишины", () => {
+  const prompt = ["", "  ┃  Ask anything… \"Fix a TODO in the codebase\"", "  ┃  Build  Claude Sonnet 4.5", "",
+    "                                   tab agents  ctrl+p commands"];
+  expect(opencodePromptVisible(prompt)).toBe(true);
+  expect(opencodePromptVisible(["", "  ┃  Build", "        ctrl+p commands  "])).toBe(true);
+  expect(opencodePromptVisible(["", "  opencode", "  loading…"])).toBe(false);
+  const opts = { bracketed: false, provider: "opencode", titled: false };
+  expect(coldReadiness(prompt, opts)).toBe("ready");
+  expect(coldReadiness(["  Connect a provider", "  Search", ...prompt], opts)).toBe("confirm");
+  expect(coldReadiness(["  Select auth method", ...prompt], opts)).toBe("confirm");
+  expect(coldReadiness(["", "  opencode"], opts)).toBe("quiet");
+  expect(quietNeeded("ready", "opencode")).toBe(OPENCODE_QUIET_MS);
+  expect(quietNeeded("quiet", "opencode")).toBe(OPENCODE_FALLBACK_QUIET_MS);
+  expect(OPENCODE_FALLBACK_QUIET_MS).toBeGreaterThan(OPENCODE_QUIET_MS);
+  expect(OPENCODE_QUIET_MS).toBeGreaterThan(QUIET_MS);
+  expect(quietNeeded("ready", "claude-code")).toBe(QUIET_MS);
+  expect(quietNeeded("waiting", "opencode")).toBeNull();
+  expect(quietNeeded("confirm", "opencode")).toBeNull();
+  // У Claude Code и Codex правило прежнее: «quiet» у них не бывает.
+  expect(coldReadiness(["", "  opencode"], { ...opts, provider: "codex" })).toBe("waiting");
 });

@@ -71,6 +71,7 @@ test("поля обоих агентов, строка «Команда запу
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { agent: { launch: {
     "claude-code": { args: "--model opus", env: [{ key: "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE", value: "1" }] },
     codex: settings.agent.launch.codex,
+    opencode: { args: "", env: [] },
   } } }));
 });
 
@@ -105,6 +106,7 @@ test("переменные набираются построчно: Enter — н
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { agent: { launch: {
     "claude-code": { args: "", env: [{ key: "A", value: "1" }, { key: "B", value: "2" }, { key: "C", value: "3" }] },
     codex: settings.agent.launch.codex,
+    opencode: { args: "", env: [] },
   } } }));
 });
 
@@ -133,7 +135,7 @@ test("«Сбросить» очищает параметры одного аге
   expect(within(codex).getByRole("button", { name: "Параметры Codex по умолчанию" })).toBeDisabled();
   await userEvent.click(save());
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { agent: { launch: {
-    "claude-code": { args: "", env: [] }, codex: { args: "", env: [] },
+    "claude-code": { args: "", env: [] }, codex: { args: "", env: [] }, opencode: { args: "", env: [] },
   } } }));
 });
 
@@ -144,4 +146,27 @@ test("подсказка: примеры параметров и что фоно
   expect(await screen.findByText(/Для фоновых задач используется модель из настройки «Модель Claude Code»/))
     .toBeInTheDocument();
   expect(screen.getByText("--permission-mode acceptEdits")).toBeInTheDocument();
+});
+
+test("OpenCode: свои поля, «Команда запуска» без наших флагов, сохранение в agent.launch.opencode", async () => {
+  open();
+  const oc = await screen.findByRole("group", { name: "Запуск OpenCode" });
+  expect(within(oc).getByText(/^opencode$/)).toBeInTheDocument();
+  await userEvent.click(within(oc).getByRole("textbox", { name: "Дополнительные параметры" }));
+  await userEvent.paste("-m openai/gpt-5");
+  expect(within(oc).getByText("opencode -m openai/gpt-5")).toBeInTheDocument();
+  await userEvent.click(save());
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { agent: { launch: {
+    "claude-code": { args: "", env: [] },
+    codex: settings.agent.launch.codex,
+    opencode: { args: "-m openai/gpt-5", env: [] },
+  } } }));
+});
+
+test("подсказка OpenCode: как приходят подсказка о встрече и база знаний", async () => {
+  open();
+  const oc = await screen.findByRole("group", { name: "Запуск OpenCode" });
+  await userEvent.click(within(oc).getByRole("button", { name: "Какие параметры можно задать для OpenCode" }));
+  expect(await screen.findByText(/Для фоновых задач используется «Модель OpenCode»/)).toBeInTheDocument();
+  expect(screen.getAllByText("OPENCODE_CONFIG_CONTENT").length).toBeGreaterThan(0);
 });

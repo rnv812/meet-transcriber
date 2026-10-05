@@ -2,7 +2,10 @@
  * Готов ли агент во вкладке «Агент» принять вставку ссылки после запуска,
  * который начала сама просьба «Спросить агента» (agentSessions): поле ввода
  * на экране, нет диалога, экран затих. Проверено на настоящем выводе Claude
- * Code и Codex (AgentTab.coldstart.test.ts, fixtures/).
+ * Code и Codex (AgentTab.coldstart.test.ts, fixtures/). OpenCode — по его
+ * исходникам (packages/tui, 2026-10), на настоящем выводе не проверено: правило
+ * осторожнее — дольше тишина (`OPENCODE_QUIET_MS`), а без признаков поля ввода
+ * — только после долгой тишины (`OPENCODE_FALLBACK_QUIET_MS`).
  */
 
 import type { Terminal } from "@xterm/xterm";
@@ -17,6 +20,10 @@ export const PASTE_WAIT_MS = 15_000;
 export const QUIET_MS = 800;
 /** Как часто смотреть на экран, пока ссылка ждёт вставки. */
 export const POLL_MS = 100;
+/** OpenCode: тишина перед вставкой, когда поле ввода видно. */
+export const OPENCODE_QUIET_MS = 1500;
+/** OpenCode: признаков поля ввода нет (другая версия, своя тема) — вставляем после такой тишины. */
+export const OPENCODE_FALLBACK_QUIET_MS = 4000;
 
 /**
  * Диалог агента, куда вставлять нельзя: первый запуск в папке, вход,
@@ -35,6 +42,8 @@ export const POLL_MS = 100;
  * (runs …) 2. Skip 3. Skip until next version» — цифра из вставленной ссылки
  * выбирает в нём пункт (проверено: вставка запустила обновление); прежние
  * версии — «Allow Codex to work in this folder».
+ * OpenCode — окна выбора провайдера и способа входа («Connect a provider»,
+ * «Select auth method»): по исходникам его TUI, вопроса о папке у него нет.
  */
 export const CONFIRM_SCREEN = new RegExp([
   "quick safety check", "is this a project you created or one you trust", "yes, i trust this folder",
@@ -42,6 +51,7 @@ export const CONFIRM_SCREEN = new RegExp([
   "sign in with chatgpt", "provide your own api key",
   "allow codex to work in this folder", "choose the text style that looks best", "select login method",
   "update now [(]runs", "skip until next version",
+  "connect a provider", "select auth method",
 ].join("|"), "i");
 
 /**
@@ -61,6 +71,15 @@ export function promptVisible(rows: string[]): boolean {
     if (/^\s*›(?!\s*\d+[.)])(?:\s|$)/.test(row)) return true;
     return /^\s*(?:│\s*)?[❯>](?:\s|$)/.test(row) && /^\s*[─╭]─{7,}/.test(rows[i - 1] ?? "");
   });
+}
+
+/**
+ * Поле ввода OpenCode на экране (по исходникам его TUI, packages/tui
+ * component/prompt): подсказка в пустом поле «Ask anything… "…"» или строка
+ * под полем, которая кончается «<клавиша> commands» («ctrl+p commands»).
+ */
+export function opencodePromptVisible(rows: string[]): boolean {
+  return rows.some((row) => /Ask anything(?:…|\.\.\.)/.test(row) || /(?:^|\s)\S+ commands\s*$/.test(row));
 }
 
 /**
@@ -87,19 +106,33 @@ export function dialogShown(text: string): boolean {
 
 /**
  * Готов ли агент, который ещё ни разу не был готов, принять вставку (тишину
- * считает сеанс): «confirm» — на экране диалог (`dialogShown`); «ready» —
- * режим вставки включён и видно поле ввода (`promptVisible`), у Codex ещё и
- * свой заголовок окна (`ownTitle`); иначе — «waiting». `text` — экран одной
- * строкой с перенесёнными строками вместе (`screenText`); нет — строки `rows`.
+ * считает сеанс, сколько — `quietNeeded`): «confirm» — на экране диалог
+ * (`dialogShown`); «ready» — режим вставки включён и видно поле ввода
+ * (`promptVisible`), у Codex ещё и свой заголовок окна (`ownTitle`); у
+ * OpenCode — видно его поле ввода (`opencodePromptVisible`; включает ли он
+ * режим вставки, не проверено), иначе «quiet» — готов только после долгой
+ * тишины; иначе — «waiting». `text` — экран одной строкой с перенесёнными
+ * строками вместе (`screenText`); нет — строки `rows`.
  */
 export function coldReadiness(
   rows: string[],
   { bracketed, provider, titled, text }: { bracketed: boolean; provider: string | null; titled: boolean; text?: string },
-): "ready" | "confirm" | "waiting" {
+): "ready" | "confirm" | "waiting" | "quiet" {
   if (dialogShown(text ?? rows.join(" "))) return "confirm";
+  if (provider === "opencode") return opencodePromptVisible(rows) ? "ready" : "quiet";
   if (!bracketed || !promptVisible(rows)) return "waiting";
   if (provider === "codex" && !titled) return "waiting";
   return "ready";
+}
+
+/**
+ * Сколько экран должен молчать, чтобы вставить при таком состоянии
+ * (`coldReadiness`); null — не вставлять.
+ */
+export function quietNeeded(state: ReturnType<typeof coldReadiness>, provider: string | null): number | null {
+  if (state === "ready") return provider === "opencode" ? OPENCODE_QUIET_MS : QUIET_MS;
+  if (state === "quiet") return OPENCODE_FALLBACK_QUIET_MS;
+  return null;
 }
 
 /** Строки экрана, который рисует агент (а не того места, куда прокрутил человек), — текстом. */

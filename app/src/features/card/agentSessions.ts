@@ -29,8 +29,8 @@ import { joinPrompts, pasteLine } from "../../lib/agentRef";
 import { errorText } from "../../lib/format";
 import { agentKill, agentResize, agentSpawn, agentWrite, onAgentData, onAgentExit } from "../../lib/shell";
 import {
-  PASTE_WAIT_MS, POLL_MS, QUIET_MS, coldReadiness, dialogShown, ownTitle, promptVisible, screenOutput, screenRows,
-  screenText,
+  PASTE_WAIT_MS, POLL_MS, coldReadiness, dialogShown, ownTitle, promptVisible, screenOutput, screenRows,
+  quietNeeded, screenText,
 } from "./agentReady";
 
 /** Как часто смотреть, не стал ли готов сеанс, когда ссылки, ждущей вставки, нет. */
@@ -135,7 +135,7 @@ export class AgentSession {
 
   /** Сеанс оболочки, чей вывод сейчас в терминале. */
   session: string | null = null;
-  /** Агент сеанса (Claude Code, Codex). */
+  /** Агент сеанса (Claude Code, Codex, OpenCode). */
   provider: string | null = null;
   phase: Phase = "idle";
   private code: number | null = null;
@@ -477,7 +477,7 @@ export class AgentSession {
    * Пока сеанс работает и ещё ни разу не был готов — смотрим на экран
    * (coldReadiness): режим вставки включён, видно поле ввода агента, у Codex —
    * его заголовок окна, нигде на экране нет диалога (тогда в полосе —
-   * «Подтвердите запуск агента…»), и экран не менялся QUIET_MS. Так и при
+   * «Подтвердите запуск агента…»), и экран не менялся QUIET_MS (у OpenCode — дольше, quietNeeded). Так и при
    * запуске кнопкой: вопрос о папке или об обновлении — не место для ссылки.
    * Стал готов — ждущая ссылка вставляется; однажды готовый сеанс вставляет
    * сразу и диалог больше не проверяет. Работает и без вкладки на экране.
@@ -499,7 +499,10 @@ export class AgentSession {
           this.pendView = view;
           this.notify();
         }
-        if (state === "ready" && Date.now() - this.lastOutput >= QUIET_MS) this.sessionReady = true;
+        const quiet = quietNeeded(state, this.provider);
+        // «Только тишина» (OpenCode без признаков поля ввода) — после того, как агент что-то вывел.
+        const drawn = state !== "quiet" || this.lastData > 0;
+        if (quiet !== null && drawn && Date.now() - this.lastOutput >= quiet) this.sessionReady = true;
       }
       if (this.sessionReady) {
         this.deliver();

@@ -55,7 +55,7 @@ test("без провайдера «Сделать итоги» неактивн
   show({ assistant: assistant({ provider: null }), onOpenSettings });
   const button = await screen.findByRole("button", { name: "Сделать итоги" });
   expect(button).toBeDisabled();
-  expect(screen.getByText("Подключите Claude Code или Codex в настройках")).toBeInTheDocument();
+  expect(screen.getByText("Подключите Claude Code, Codex или OpenCode в настройках")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "Открыть настройки" }));
   expect(onOpenSettings).toHaveBeenCalledWith("assistant");
 });
@@ -64,7 +64,7 @@ test("провайдер ещё проверяется: кнопка досту�
   noSummary();
   show({ assistant: assistant({ provider: null, checking: true }) });
   expect(await screen.findByRole("button", { name: "Сделать итоги" })).toBeEnabled();
-  expect(screen.queryByText("Подключите Claude Code или Codex в настройках")).toBeNull();
+  expect(screen.queryByText("Подключите Claude Code, Codex или OpenCode в настройках")).toBeNull();
 });
 
 test("409 от резидента показывается текстом", async () => {

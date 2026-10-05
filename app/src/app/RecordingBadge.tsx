@@ -13,7 +13,7 @@ import { Icon } from "../ui/Icon";
 const LOW_DISK_GB = 5;
 const ERROR_MS = 6000;
 const TICK_MS = 1000;
-const NO_PROVIDER = "Подключите Claude Code или Codex в настройках";
+const NO_PROVIDER = "Подключите Claude Code, Codex или OpenCode в настройках";
 const START_FAILED = "Не удалось запустить ассистента";
 const ATTACH_FAILED = "Не удалось включить ассистента";
 

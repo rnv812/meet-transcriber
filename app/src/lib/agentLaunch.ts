@@ -7,7 +7,7 @@
  * Здесь они нужны окну: ошибка на месте и строка «Команда запуска».
  */
 
-export type AgentId = "claude-code" | "codex";
+export type AgentId = "claude-code" | "codex" | "opencode";
 export type EnvEntry = { key: string; value: string };
 /** `env` — список; строка — текст поля с ошибкой (сохранить нельзя). */
 export type LaunchDraft = { args: string; env: EnvEntry[] | string };
@@ -15,6 +15,7 @@ export type LaunchDraft = { args: string; env: EnvEntry[] | string };
 export const AGENTS: { id: AgentId; label: string; program: string }[] = [
   { id: "claude-code", label: "Claude Code", program: "claude" },
   { id: "codex", label: "Codex", program: "codex" },
+  { id: "opencode", label: "OpenCode", program: "opencode" },
 ];
 
 export const ARGS_CONTROL = "Недопустимый управляющий символ в параметрах запуска";
@@ -126,6 +127,8 @@ export const MEETING_FOLDER = "<папка встречи>";
 export const SESSION_ID = "<id сеанса>";
 export function ourArgs(agent: AgentId, knowledge: string | null, resume = false): string[] {
   const kb = knowledge?.trim() || null;
+  // OpenCode: папка встречи — рабочая папка, подсказка и база знаний — в его конфиге (окружение).
+  if (agent === "opencode") return resume ? ["--continue"] : [];
   if (agent === "claude-code") {
     return [resume ? "--resume" : "--session-id", SESSION_ID, ...(kb ? ["--add-dir", kb] : []),
       "--append-system-prompt", MEETING_PROMPT];
@@ -138,6 +141,8 @@ const has = (user: string[], names: string[]) =>
 
 /** Свои параметры, которые сами выбирают сеанс Claude (как CLAUDE_SESSION_FLAGS оболочки). */
 export const CLAUDE_SESSION_FLAGS = ["--continue", "-c", "--resume", "-r", "--session-id"];
+/** Свои параметры, которые сами выбирают сеанс OpenCode (как OPENCODE_SESSION_FLAGS оболочки). */
+export const OPENCODE_SESSION_FLAGS = ["--continue", "-c", "--session", "-s"];
 
 /** Убрать флаг `name` (и его значение, если `valued`). */
 function dropFlag(args: string[], name: string, valued: boolean) {
@@ -154,6 +159,8 @@ export function withUserArgs(agent: AgentId, ours: string[], user: string[]): st
       dropFlag(args, "--resume", true);
       dropFlag(args, "--session-id", true);
     }
+  } else if (agent === "opencode") {
+    if (has(user, OPENCODE_SESSION_FLAGS)) dropFlag(args, "--continue", false);
   } else {
     if (has(user, ["--last"])) dropFlag(args, "--last", false);
     if (has(user, ["--cd", "-C"])) dropFlag(args, "--cd", true);

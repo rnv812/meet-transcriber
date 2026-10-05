@@ -100,10 +100,15 @@ export function ProviderTip() {
         Их нужно установить и войти в учётную запись.
       </TipLine>
       <TipLine>
+        OpenCode — программа, которая работает с моделями разных провайдеров (Anthropic, OpenAI, OpenRouter,
+        Ollama и другие) по вашим ключам или подписке. Её нужно установить и выполнить{" "}
+        <code>opencode auth login</code>.
+      </TipLine>
+      <TipLine>
         Локальная модель работает через LM Studio или Ollama без передачи данных в интернет, но не
         использует базу знаний.
       </TipLine>
-      <TipLine>«Авто» выбирает первого доступного: Claude Code, затем Codex, затем локальную модель.</TipLine>
+      <TipLine>«Авто» выбирает первого доступного: Claude Code, затем Codex, затем OpenCode, затем локальную модель.</TipLine>
     </HelpTip>
   );
 }

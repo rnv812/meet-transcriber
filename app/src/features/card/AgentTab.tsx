@@ -1,5 +1,5 @@
 /**
- * Вкладка «Агент»: настоящий Claude Code или Codex во встроенном терминале,
+ * Вкладка «Агент»: настоящий Claude Code, Codex или OpenCode во встроенном терминале,
  * запущенный в папке встречи (там transcript.md и summary.md).
  *
  * Терминал — xterm.js; процесс агента живёт в оболочке (Rust, псевдоконсоль):
@@ -43,7 +43,8 @@ import { PastQuestions } from "./PastQuestions";
 import "./agent.css";
 
 export {
-  CONFIRM_SCREEN, PASTE_WAIT_MS, QUIET_MS, coldReadiness, ownTitle, promptVisible, screenOutput, screenRows,
+  CONFIRM_SCREEN, OPENCODE_FALLBACK_QUIET_MS, OPENCODE_QUIET_MS, PASTE_WAIT_MS, QUIET_MS, coldReadiness, opencodePromptVisible,
+  ownTitle, promptVisible, quietNeeded, screenOutput, screenRows,
 } from "./agentReady";
 export { MAX_SESSIONS, TERMINAL_OPTIONS } from "./agentSessions";
 
@@ -55,7 +56,7 @@ const taken = new WeakSet<AgentInsert>();
 
 const UNSENT_TEXT: Record<UnsentReason, string> = {
   browser: "Агент недоступен в браузере — ссылка не вставлена. Скопируйте её и задайте вопрос в окне приложения.",
-  none: "Агент недоступен — ссылка не вставлена. Подключите Claude Code или Codex в настройках или скопируйте ссылку.",
+  none: "Агент недоступен — ссылка не вставлена. Подключите Claude Code, Codex или OpenCode в настройках или скопируйте ссылку.",
   nothing: "Расшифровки пока нет, агенту нечего дать — ссылка не вставлена. Её можно скопировать.",
   failed: "Агент не запустился — ссылка не вставлена. Её можно скопировать и вставить после запуска.",
   exited: "Агент завершил работу раньше, чем ссылка была вставлена. Её можно скопировать.",
@@ -67,6 +68,7 @@ export type AgentProvider = { id: string; label: string };
 const KNOWN: AgentProvider[] = [
   { id: "claude-code", label: "Claude Code" },
   { id: "codex", label: "Codex" },
+  { id: "opencode", label: "OpenCode" },
 ];
 
 /** Сценарий npm (codex.cmd), а не программа: встроенный терминал его не запускает. */
@@ -87,10 +89,25 @@ export const CODEX_SCRIPT_NOTE =
   "Установите Codex отдельной программой: codex.exe в PATH или в папке " +
   "%LOCALAPPDATA%\\Programs\\OpenAI\\Codex\\bin.";
 
-/** Агенты, которые можно запустить: установленные Claude Code и Codex (Codex — только как программа). */
+/**
+ * OpenCode найден только как сценарий npm (`opencode.cmd`), без программы
+ * opencode.exe рядом (резидент берёт её, если она есть).
+ */
+export function opencodeScriptOnly(info: AssistantInfo | null): boolean {
+  const opencode = info?.available?.opencode;
+  return !!opencode?.found && SCRIPT.test(opencode.path ?? "");
+}
+
+/** Как поставить OpenCode так, чтобы он запускался во вкладке. */
+export const OPENCODE_SCRIPT_NOTE =
+  "OpenCode найден только как сценарий npm (opencode.cmd) — во встроенном терминале он не запускается. " +
+  "Переустановите его (npm i -g opencode-ai) или поставьте через scoop или choco: нужна программа opencode.exe.";
+
+/** Агенты, которые можно запустить: установленные Claude Code, Codex и OpenCode (Codex и OpenCode — только как программа). */
 export function agentProviders(info: AssistantInfo | null): AgentProvider[] {
   if (!info) return [];
-  return KNOWN.filter((p) => info.available?.[p.id]?.found && !(p.id === "codex" && codexScriptOnly(info)));
+  return KNOWN.filter((p) => info.available?.[p.id]?.found
+    && !(p.id === "codex" && codexScriptOnly(info)) && !(p.id === "opencode" && opencodeScriptOnly(info)));
 }
 
 /** Агент по умолчанию: тот, что выбран для итогов и вопросов, иначе первый установленный. */
@@ -206,6 +223,7 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
   const shell = inTauri();
   const providers = agentProviders(assistant);
   const codexNote = codexScriptOnly(assistant);
+  const opencodeNote = opencodeScriptOnly(assistant);
   const [choice, setChoice] = useState<string | null>(null);
   const provider = providers.some((p) => p.id === choice) ? choice : defaultProvider(assistant, providers);
   /** Есть ли где показать терминал: в приложении и с установленным агентом. */
@@ -332,7 +350,7 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
       <div className="agent agent--empty" ref={root} tabIndex={-1}>
         {unsentNote}
         <EmptyState title="Доступно в приложении"
-          hint="Терминал с Claude Code или Codex работает только в окне приложения Meet, в браузере его нет." />
+          hint="Терминал с Claude Code, Codex или OpenCode работает только в окне приложения Meet, в браузере его нет." />
         {past}
       </div>
     );
@@ -341,8 +359,9 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
     return (
       <div className="agent agent--empty" ref={root} tabIndex={-1}>
         {unsentNote}
-        <EmptyState title="Подключите Claude Code или Codex в настройках"
-          hint={codexNote ? CODEX_SCRIPT_NOTE : "Во вкладке запускается агент, установленный на компьютере."}
+        <EmptyState title="Подключите Claude Code, Codex или OpenCode в настройках"
+          hint={codexNote ? CODEX_SCRIPT_NOTE : opencodeNote ? OPENCODE_SCRIPT_NOTE
+            : "Во вкладке запускается агент, установленный на компьютере."}
           action={onOpenSettings && <Button onClick={() => onOpenSettings("assistant")}>Открыть настройки</Button>} />
         {past}
       </div>
@@ -363,7 +382,7 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
         </select>
         <HelpTip label="Что такое вкладка «Агент»" title="Агент в папке встречи">
           <TipLine>
-            Здесь работает Claude Code или Codex — тот же, что в обычном терминале: можно задавать вопросы по встрече,
+            Здесь работает Claude Code, Codex или OpenCode — тот же, что в обычном терминале: можно задавать вопросы по встрече,
             просить черновик письма или сверить договорённости с базой знаний.
           </TipLine>
           <TipLine>
@@ -382,7 +401,8 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
           </TipLine>
           <TipLine>
             Если агент уже работал с этой встречей, «Продолжить прошлую» возвращает к последнему разговору в её папке
-            (Claude Code — <code>--resume</code> того же сеанса, Codex — <code>resume --last</code>); «Новая сессия» начинает
+            (Claude Code — <code>--resume</code> того же сеанса, Codex — <code>resume --last</code>, OpenCode —{" "}
+            <code>--continue</code>); «Новая сессия» начинает
             разговор заново.
           </TipLine>
           <TipLine>Копировать — Ctrl+Shift+C, вставить — Ctrl+Shift+V или правой кнопкой мыши.</TipLine>
@@ -419,6 +439,7 @@ export function AgentTab({ id, assistant, onOpenSettings, endpoint, insert = nul
         чтения; права на запись определяются настройками агента.
       </div>
       {codexNote && <div className="agent__hint">{CODEX_SCRIPT_NOTE}</div>}
+      {opencodeNote && <div className="agent__hint">{OPENCODE_SCRIPT_NOTE}</div>}
       {error && <div className="assist__error" role="alert">{error}</div>}
       {evicted && (
         <EvictedNote canResume={ready && !nothing && providers.some((p) => p.id === evicted.provider)}

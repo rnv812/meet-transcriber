@@ -111,7 +111,7 @@ test("без провайдера «С ассистентом» неактиве
   render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
   const item = await openMenu();
   await waitFor(() => expect(item).toBeDisabled());
-  expect(screen.getByRole("menu")).toHaveTextContent("Подключите Claude Code или Codex в настройках");
+  expect(screen.getByRole("menu")).toHaveTextContent("Подключите Claude Code, Codex или OpenCode в настройках");
   await userEvent.click(item);
   expect(start).not.toHaveBeenCalled();
 });
@@ -127,10 +127,10 @@ test("провайдер ещё проверяется — пункт досту
 test("отказ живого режима (409) — текст ошибки рядом с кнопкой", async () => {
   vi.spyOn(api, "getAssistant").mockResolvedValue(assistant());
   vi.spyOn(api, "liveStart").mockRejectedValue(
-    new api.ApiError(409, "Подключите Claude Code или Codex в настройках"));
+    new api.ApiError(409, "Подключите Claude Code, Codex или OpenCode в настройках"));
   render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
   await userEvent.click(await openMenu());
-  expect(await screen.findByRole("alert")).toHaveTextContent("Подключите Claude Code или Codex в настройках");
+  expect(await screen.findByRole("alert")).toHaveTextContent("Подключите Claude Code, Codex или OpenCode в настройках");
 });
 
 test("Esc закрывает меню", async () => {
@@ -247,7 +247,7 @@ test("неактивный «С ассистентом» связан с под�
   render(<RecordingBadge endpoint={ep} snapshot={snap({ live: live() })} />);
   const item = await openMenu();
   await waitFor(() => expect(item).toBeDisabled());
-  expect(item).toHaveAccessibleDescription("Подключите Claude Code или Codex в настройках");
+  expect(item).toHaveAccessibleDescription("Подключите Claude Code, Codex или OpenCode в настройках");
   expect(screen.getByRole("button", { name: "Другие варианты записи" })).toHaveFocus();
 });
 

@@ -27,11 +27,13 @@ const PROVIDERS: Provider[] = [
   { value: "auto", label: "Авто" },
   { value: "claude-code", label: "Claude Code", link: "claude.ai/code" },
   { value: "codex", label: "Codex", link: "github.com/openai/codex" },
+  { value: "opencode", label: "OpenCode", link: "opencode.ai/docs/" },
   { value: "openai-compatible", label: "Локальная (LM Studio / Ollama)" },
 ];
 const LOCAL = "openai-compatible";
+const OPENCODE = "opencode";
 /** Ключи `llm`, по которым идёт проверка и выбор «Авто». */
-const LLM_KEYS = ["provider", "base_url", "local_model", "proxy"];
+const LLM_KEYS = ["provider", "base_url", "local_model", "proxy", "opencode_model"];
 
 /** Подпись `llm.model`: на неё ссылаются подсказки других разделов. */
 export const MODEL_LABEL = "Модель Claude Code";
@@ -52,8 +54,45 @@ function ModelTip() {
   );
 }
 
+/** Подпись `llm.opencode_model`. */
+export const OPENCODE_MODEL_LABEL = "Модель OpenCode";
+const OPENCODE_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9._:@+-][A-Za-z0-9._:@+/-]*$/;
+
+/**
+ * Значение `llm.opencode_model` нельзя сохранить: текст для человека, иначе
+ * null. Та же проверка, что у резидента (`meet.settings.opencode_model_error`).
+ */
+export function opencodeModelError(value: string): string | null {
+  const text = value.trim();
+  if (!text) return null;
+  if (!/^[A-Za-z0-9._:@+/-]*$/.test(text)) {
+    return "В имени модели OpenCode недопустимые символы: только латиница, цифры и . _ - : @ + /";
+  }
+  if (!OPENCODE_MODEL_RE.test(text)) return "Модель OpenCode — в виде провайдер/модель, например anthropic/claude-sonnet-4-5";
+  return null;
+}
+
+function OpencodeModelTip() {
+  return (
+    <HelpTip label="Какая модель OpenCode отвечает" title={OPENCODE_MODEL_LABEL}>
+      <TipLine>
+        Модель, на которой OpenCode готовит итоги, анализ и названия, отвечает на вопросы и ведёт живого
+        ассистента, — в виде провайдер/модель, как её показывает <code>opencode models</code>: например
+        anthropic/claude-sonnet-4-5 или ollama/qwen3:8b. Пусто — модель из настроек самого OpenCode.
+      </TipLine>
+      <TipLine>
+        «Проверить» не тратит запросы к модели: смотрит, что OpenCode установлен, что вход выполнен
+        (<code>opencode auth login</code>) и что эта модель у него есть. Годен ли сам ключ, покажет первый ответ.
+      </TipLine>
+      <TipLine>
+        Фоновые задачи OpenCode только читают: файлы не меняет, команды не выполняет, база знаний — для чтения.
+      </TipLine>
+    </HelpTip>
+  );
+}
+
 const PROXY_LABEL = "Прокси для подключения к моделям";
-const PROXY_HELP = "Claude Code и Codex сами не используют системный прокси Windows — приложение передаёт его им. "
+const PROXY_HELP = "Claude Code, Codex и OpenCode сами не используют системный прокси Windows — приложение передаёт его им. "
   + "Прокси нужен, если доступ к сервисам идёт через VPN или прокси-сервер.";
 const PROXY_SCHEMES = ["http", "https", "socks5", "socks5h"];
 const PROXY_EXAMPLE = "например http://127.0.0.1:8080";
@@ -110,13 +149,15 @@ const windowInvalid = (value: unknown): boolean =>
 export function assistantChangesInvalid(changes: Raw): boolean {
   const win = changes.assist?.window_seconds;
   const proxy = changes.llm?.proxy;
+  const ocModel = changes.llm?.opencode_model;
   return (win !== undefined && windowInvalid(win))
     || (typeof proxy === "string" && proxyError(proxy) !== null)
+    || (typeof ocModel === "string" && opencodeModelError(ocModel) !== null)
     || agentLaunchChangesInvalid(changes);
 }
 
 /** Подпись «Авто», пока выбран конкретный провайдер: порядок выбора (llm.resolve). */
-export const AUTO_ORDER = "первый готовый: Claude Code → Codex → локальная";
+export const AUTO_ORDER = "первый готовый: Claude Code → Codex → OpenCode → локальная";
 
 const titleOf = (name: string) => PROVIDERS.find((p) => p.value === name)?.label ?? name;
 
@@ -190,6 +231,8 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
   const [customProxy, setCustomProxy] = useState<string | null>(null);
   const customStart = customProxy ?? (savedProxy === "system" || savedProxy === "none" ? "" : savedProxy);
   const proxyProblem = proxyMode === "custom" ? proxyError(proxy) : null;
+  const ocModel = String(llm("opencode_model") ?? "");
+  const ocModelProblem = opencodeModelError(ocModel);
 
   return (
     <>
@@ -230,12 +273,20 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
           {llmDirty && <span className="muted">Проверяются сохранённые настройки — сначала сохраните изменения</span>}
         </div>
       </Row>
-      {chosen !== LOCAL && chosen !== "codex" && (
+      {chosen !== LOCAL && chosen !== "codex" && chosen !== OPENCODE && (
         <Row label={MODEL_LABEL} htmlFor="llm-model" help={<ModelTip />}
           hint="Готовит итоги и анализ, отвечает на вопросы и ведёт живого ассистента">
           <input id="llm-model" type="text" placeholder="sonnet"
             value={String(llm("model") ?? "")}
             onChange={(e) => set("llm", "model", e.target.value)} />
+        </Row>
+      )}
+      {chosen === OPENCODE && (
+        <Row label={OPENCODE_MODEL_LABEL} htmlFor="llm-opencode-model" help={<OpencodeModelTip />}
+          hint="Провайдер/модель, как в opencode models. Пусто — модель из настроек OpenCode">
+          <input id="llm-opencode-model" type="text" spellCheck={false} placeholder="anthropic/claude-sonnet-4-5"
+            value={ocModel} onChange={(e) => set("llm", "opencode_model", e.target.value)} />
+          {ocModelProblem && <span className="error">{ocModelProblem}</span>}
         </Row>
       )}
       {chosen === LOCAL && (
@@ -251,7 +302,7 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
           </Row>
         </>
       )}
-      <Row label={PROXY_LABEL} hint="Через него Claude Code и Codex подключаются к своим сервисам"
+      <Row label={PROXY_LABEL} hint="Через него Claude Code, Codex и OpenCode подключаются к своим сервисам"
         help={<HelpTip label="Зачем нужен прокси"><TipLine>{PROXY_HELP}</TipLine></HelpTip>} stack>
         <div role="radiogroup" aria-label={PROXY_LABEL} className="radios radios--column">
           <label className="radios__item">

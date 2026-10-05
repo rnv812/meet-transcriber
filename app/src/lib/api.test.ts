@@ -87,9 +87,9 @@ test("итоги, вопросы, база знаний, ассистент: а�
 
 test("409 без провайдера приходит текстом", async () => {
   globalThis.fetch = vi.fn().mockResolvedValue(new Response(
-    JSON.stringify({ error: "Подключите Claude Code или Codex в настройках" }), { status: 409 }));
+    JSON.stringify({ error: "Подключите Claude Code, Codex или OpenCode в настройках" }), { status: 409 }));
   await expect(api.makeSummary(ep, "r1"))
-    .rejects.toEqual(new ApiError(409, "Подключите Claude Code или Codex в настройках"));
+    .rejects.toEqual(new ApiError(409, "Подключите Claude Code, Codex или OpenCode в настройках"));
 });
 
 test("живой режим: start/stop/ask/task", async () => {

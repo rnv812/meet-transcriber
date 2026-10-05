@@ -41,7 +41,7 @@ export function improveJobOf(folder: string | null | undefined, jobs: Job[]): Jo
 
 /** Почему «Улучшить расшифровку» сейчас недоступно; null — доступно. */
 export function improveBlocked(noModel: boolean): string | null {
-  return noModel ? "Подключите Claude Code или Codex в настройках" : null;
+  return noModel ? "Подключите Claude Code, Codex или OpenCode в настройках" : null;
 }
 
 /** Выбранные группы: термины с флажком и, в режиме «Термины и явные ошибки», — отмеченные исправления. */

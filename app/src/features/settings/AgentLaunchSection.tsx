@@ -1,6 +1,6 @@
 /**
  * «Запуск агента (вкладка «Агент»)» в разделе «Ассистент»: свои параметры
- * запуска Claude Code и Codex — дополнительные аргументы и переменные
+ * запуска Claude Code, Codex и OpenCode — дополнительные аргументы и переменные
  * окружения (`agent.launch.<агент>`). Только для вкладки «Агент»: фоновые
  * задачи их не получают.
  *
@@ -18,7 +18,7 @@ import {
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Row, type Raw, type SetFn } from "./Section";
-import { MODEL_LABEL } from "./AssistantSection";
+import { MODEL_LABEL, OPENCODE_MODEL_LABEL } from "./AssistantSection";
 
 const EMPTY: LaunchDraft = { args: "", env: [] };
 
@@ -41,7 +41,39 @@ const QUOTES_LINE = (
   </TipLine>
 );
 
+/** Примеры для полей: параметры и переменные окружения. */
+const PLACEHOLDERS: Record<AgentId, { args: string; env: string }> = {
+  "claude-code": { args: "--model opus", env: "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1" },
+  codex: { args: "-m gpt-5", env: "CODEX_HOME=D:\\codex" },
+  opencode: { args: "-m anthropic/claude-sonnet-4-5", env: "OPENCODE_CONFIG=D:\\opencode.json" },
+};
+
+function OpencodeLaunchTip() {
+  return (
+    <HelpTip label="Какие параметры можно задать для OpenCode" title="Параметры запуска OpenCode">
+      <TipLine>
+        Аргументы командной строки opencode, через пробел. Например: <code>-m anthropic/claude-sonnet-4-5</code>,{" "}
+        <code>--agent plan</code>.
+      </TipLine>
+      {QUOTES_LINE}
+      <TipLine>
+        Приложение само запускает OpenCode в папке встречи, передаёт <code>--continue</code> для «Продолжить
+        прошлую», а подсказку о встрече и базу знаний — через переменную <code>OPENCODE_CONFIG_CONTENT</code>:
+        база знаний читается без вопроса, а править её агентам build и plan запрещено. Ваши параметры идут после
+        наших.
+      </TipLine>
+      <TipLine>
+        Свои <code>--continue</code> или <code>--session</code> выбирают сеанс вместо приложения. Своя переменная{" "}
+        <code>OPENCODE_CONFIG_CONTENT</code> заменит нашу — подсказки о встрече тогда не будет.
+      </TipLine>
+      <TipLine>Переменные окружения — по одной в строке: ИМЯ=значение. Они применяются последними.</TipLine>
+      <TipLine>Действует только во вкладке «Агент». Для фоновых задач используется «{OPENCODE_MODEL_LABEL}».</TipLine>
+    </HelpTip>
+  );
+}
+
 function LaunchTip({ agent }: { agent: AgentId }) {
+  if (agent === "opencode") return <OpencodeLaunchTip />;
   return agent === "claude-code" ? (
     <HelpTip label="Какие параметры можно задать для Claude Code" title="Параметры запуска Claude Code">
       <TipLine>
@@ -101,7 +133,7 @@ function EnvField({ id, agent, env, onChange }: {
   return (
     <>
       <textarea id={id} rows={3} spellCheck={false} value={text}
-        placeholder={agent === "claude-code" ? "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1" : "CODEX_HOME=D:\\codex"}
+        placeholder={PLACEHOLDERS[agent].env}
         onChange={(e) => {
           const value = e.target.value;
           setText(value);
@@ -134,7 +166,7 @@ function AgentLaunchRows({ agent, label, launch, knowledge, onChange }: {
       </h4>
       <Row label="Дополнительные параметры" htmlFor={argsId} hint="Аргументы командной строки, через пробел" stack>
         <input id={argsId} type="text" spellCheck={false} value={launch.args}
-          placeholder={agent === "claude-code" ? "--model opus" : "-m gpt-5"}
+          placeholder={PLACEHOLDERS[agent].args}
           onChange={(e) => onChange({ ...launch, args: e.target.value })} />
         {errors.args && <span className="error">{errors.args}</span>}
       </Row>
@@ -162,7 +194,7 @@ export function AgentLaunchSection({ draft, set }: { draft: Raw; set: SetFn }) {
     <>
       <h3 className="shead">Запуск агента (вкладка «Агент»)</h3>
       <p className="muted sdesc">
-        Свои параметры для Claude Code и Codex во вкладке «Агент». Фоновые задачи (итоги, анализ, живой ассистент)
+        Свои параметры для Claude Code, Codex и OpenCode во вкладке «Агент». Фоновые задачи (итоги, анализ, живой ассистент)
         их не получают.
       </p>
       {AGENTS.map(({ id, label }) => (

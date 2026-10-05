@@ -91,3 +91,15 @@ test("строка «Команда запуска»: переменные, пр
   expect(maskValue("PASSWORD", "x")).toBe("***");
   expect(maskValue("CODEX_HOME", "D:\\c")).toBe("D:\\c");
 });
+
+test("OpenCode: наши аргументы — только --continue для «Продолжить»; свой выбор сеанса его убирает", () => {
+  expect(ourArgs("opencode", "D:\\kb")).toEqual([]);
+  expect(ourArgs("opencode", null, true)).toEqual(["--continue"]);
+  const ours = ourArgs("opencode", null, true);
+  for (const user of [["-s", "ses_1"], ["--session=ses_1"], ["-c"], ["--continue"]]) {
+    expect(withUserArgs("opencode", ours, user)).toEqual(user);
+  }
+  expect(withUserArgs("opencode", ours, ["-m", "openai/gpt-5"])).toEqual(["--continue", "-m", "openai/gpt-5"]);
+  expect(previewCommand("opencode", { args: "--agent plan", env: [{ key: "OPENAI_API_KEY", value: "sk" }] }, "D:\\kb"))
+    .toBe("OPENAI_API_KEY=*** opencode --agent plan");
+});

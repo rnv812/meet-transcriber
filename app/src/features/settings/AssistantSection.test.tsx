@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
-import { AUTO_ORDER, RECHECK_MS, RECHECK_TRIES, proxyError } from "./AssistantSection";
+import { AUTO_ORDER, RECHECK_MS, RECHECK_TRIES, opencodeModelError, proxyError } from "./AssistantSection";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import type { AssistantInfo, ProviderCheck } from "../../lib/types";
@@ -333,7 +333,7 @@ test("прокси: «?» объясняет, зачем он нужен", async
   await screen.findByText("сейчас: Claude Code");
   await userEvent.click(screen.getByRole("button", { name: "Зачем нужен прокси" }));
   expect(screen.getByRole("tooltip")).toHaveTextContent(
-    "Claude Code и Codex сами не используют системный прокси Windows — приложение передаёт его им. "
+    "Claude Code, Codex и OpenCode сами не используют системный прокси Windows — приложение передаёт его им. "
     + "Прокси нужен, если доступ к сервисам идёт через VPN или прокси-сервер.");
 });
 
@@ -394,4 +394,53 @@ test("модель Claude Code: правка уходит в llm.model; у Codex
   expect(screen.queryByRole("textbox", { name: "Модель Claude Code" })).toBeNull();
   await userEvent.click(screen.getByRole("radio", { name: "Локальная (LM Studio / Ollama)" }));
   expect(screen.queryByRole("textbox", { name: "Модель Claude Code" })).toBeNull();
+});
+
+test("OpenCode: не найден — ссылка opencode.ai/docs/; найден — путь", async () => {
+  vi.mocked(api.getAssistant).mockResolvedValue({
+    ...structuredClone(info),
+    available: { ...structuredClone(info.available), opencode: { found: false, path: null } },
+  });
+  open();
+  const oc = await screen.findByRole("group", { name: "OpenCode" });
+  expect(await within(oc).findByText("opencode.ai/docs/")).toBeInTheDocument();
+  await userEvent.click(within(oc).getByText("opencode.ai/docs/"));
+  expect(shell.openUrl).toHaveBeenCalledWith("https://opencode.ai/docs/");
+});
+
+test("OpenCode: своё поле модели провайдер/модель, проверка на месте; модели Claude Code нет", async () => {
+  open();
+  await screen.findByText("сейчас: Claude Code");
+  await userEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
+  expect(screen.queryByRole("textbox", { name: "Модель Claude Code" })).toBeNull();
+  const model = screen.getByRole("textbox", { name: "Модель OpenCode" });
+  expect(model).toHaveValue("");
+  await userEvent.type(model, "sonnet");
+  expect(screen.getByText(/в виде провайдер\/модель/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+  await userEvent.clear(model);
+  await userEvent.type(model, "anthropic/claude-sonnet-4-5");
+  expect(screen.queryByText(/в виде провайдер\/модель/)).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
+    llm: { provider: "opencode", opencode_model: "anthropic/claude-sonnet-4-5" },
+  }));
+});
+
+test("opencodeModelError — как у резидента", () => {
+  expect(opencodeModelError("")).toBeNull();
+  expect(opencodeModelError("ollama/qwen3:8b")).toBeNull();
+  expect(opencodeModelError("openrouter/meta-llama/llama-3.3-70b")).toBeNull();
+  expect(opencodeModelError("sonnet")).toMatch(/провайдер\/модель/);
+  expect(opencodeModelError("a/b c")).toMatch(/недопустимые символы/);
+  expect(opencodeModelError("a/%PATH%")).toMatch(/недопустимые символы/);
+});
+
+test("«Проверить» OpenCode уходит провайдеру opencode", async () => {
+  vi.mocked(api.checkProvider).mockResolvedValue({ ok: false, error: "не авторизован: нет входа", provider: "opencode" });
+  open();
+  const oc = await screen.findByRole("group", { name: "OpenCode" });
+  await userEvent.click(within(oc).getByRole("button", { name: "Проверить" }));
+  expect(await within(oc).findByText("не авторизован: нет входа")).toBeInTheDocument();
+  expect(api.checkProvider).toHaveBeenCalledWith(ep, "opencode");
 });

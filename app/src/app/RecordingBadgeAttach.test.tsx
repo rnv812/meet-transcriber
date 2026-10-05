@@ -53,7 +53,7 @@ test("без подключённой модели «Включить ассис
   await openMenu();
   const item = await screen.findByRole("menuitem", { name: /Включить ассистента/ });
   await waitFor(() => expect(item).toBeDisabled());
-  expect(screen.getByRole("menu")).toHaveTextContent("Подключите Claude Code или Codex в настройках");
+  expect(screen.getByRole("menu")).toHaveTextContent("Подключите Claude Code, Codex или OpenCode в настройках");
   await userEvent.click(item);
   expect(attach).not.toHaveBeenCalled();
 });
