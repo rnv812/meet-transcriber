@@ -170,7 +170,9 @@ pub fn marked_path(output: &str) -> Option<&str> {
 }
 
 /// PATH (macOS, `:`) с папками из `extra`: прежние остаются на своих местах,
-/// новые — в конец по порядку, без повторов и пустых. Второе — сколько папок
+/// новые — в конец по порядку, без повторов и пустых. Из `extra` — только
+/// абсолютные: оболочка, не раскрывшая `"$PATH"` по-POSIX-ски (nu, xonsh),
+/// отдаёт буквальное `$PATH`, и папкой оно не станет. Второе — сколько папок
 /// добавилось.
 pub fn merged_path(current: &str, extra: &str) -> (String, usize) {
     let mut dirs: Vec<&str> = Vec::new();
@@ -180,7 +182,7 @@ pub fn merged_path(current: &str, extra: &str) -> (String, usize) {
         }
     }
     let before = dirs.len();
-    for dir in extra.split(':').filter(|d| !d.is_empty()) {
+    for dir in extra.split(':').filter(|d| d.starts_with('/')) {
         if !dirs.contains(&dir) {
             dirs.push(dir);
         }
@@ -210,7 +212,7 @@ pub fn login_shell(shell_var: Option<&str>) -> String {
 #[cfg(unix)]
 pub fn adopt_login_path() {
     let shell = login_shell(std::env::var("SHELL").ok().as_deref());
-    match read_login_path(&shell) {
+    match read_login_path(&shell, LOGIN_PATH_TIMEOUT) {
         Ok(login) => {
             let current = std::env::var("PATH").unwrap_or_default();
             let (path, added) = merged_path(&current, &login);
@@ -228,9 +230,9 @@ pub fn adopt_login_path() {
 /// Запустить оболочку входа и прочитать PATH между метками. Вывод читает
 /// отдельный поток и отдаёт его, как только пришла вторая метка: демон из
 /// профиля (ssh-agent и т. п.) может держать вывод открытым и после выхода
-/// оболочки. Не уложилась в `LOGIN_PATH_TIMEOUT` — гасим её группу.
+/// оболочки. Не уложилась в `timeout` — гасим её группу.
 #[cfg(unix)]
-fn read_login_path(shell: &str) -> Result<String, String> {
+fn read_login_path(shell: &str, timeout: std::time::Duration) -> Result<String, String> {
     use std::io::Read;
     use std::process::Stdio;
     use std::sync::mpsc;
@@ -239,6 +241,8 @@ fn read_login_path(shell: &str) -> Result<String, String> {
     let mut command = Command::new(shell);
     command
         .args(["-i", "-l", "-c", &script])
+        // Как у VS Code: тяжёлый профиль может пропустить лишнее для нас.
+        .env("MEET_RESOLVING_ENVIRONMENT", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -275,11 +279,14 @@ fn read_login_path(shell: &str) -> Result<String, String> {
         }
         let _ = send.send(String::from_utf8_lossy(&output).into_owned());
     });
-    let Ok(output) = receive.recv_timeout(LOGIN_PATH_TIMEOUT) else {
+    let Ok(output) = receive.recv_timeout(timeout) else {
         // Зависла (ждёт ввода, `exec tmux` и т. п.) — гасим всю её группу.
         kill_group(child.id(), true);
         let _ = child.wait();
-        return Err("оболочка не ответила за 3 с".into());
+        return Err(format!(
+            "оболочка не ответила за {} с",
+            timeout.as_secs_f32()
+        ));
     };
     // PATH получен: оболочка после printf выходит сама; не вышла — гасим
     // только её (демоны профиля, оставшиеся в группе, не наше дело).
@@ -324,6 +331,8 @@ mod tests {
         assert_eq!(merged_path("/a:/b", "/b:/a"), ("/a:/b".to_string(), 0));
         assert_eq!(merged_path("", "/a"), ("/a".to_string(), 1));
         assert_eq!(merged_path("/a::/a", ""), ("/a".to_string(), 0));
+        // nu/xonsh не раскрыли "$PATH", относительное — тоже не папка PATH.
+        assert_eq!(merged_path("/a", "$PATH:bin:/b"), ("/a:/b".to_string(), 1));
     }
 
     #[test]
@@ -340,8 +349,30 @@ mod tests {
     #[test]
     fn login_path_comes_from_a_real_shell() {
         // /bin/sh: без профилей пользователя, но метки и PATH — настоящие.
-        let path = read_login_path("/bin/sh").unwrap();
+        let path = read_login_path("/bin/sh", LOGIN_PATH_TIMEOUT).unwrap();
         assert!(!path.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hung_login_shell_is_killed_at_the_timeout() {
+        use std::os::unix::fs::PermissionsExt;
+        // «Оболочка», которая молчит полминуты (профиль с `exec tmux` и т. п.).
+        let dir = std::env::temp_dir().join(format!("meet-login-shell-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let shell = dir.join("hangs.sh");
+        std::fs::write(&shell, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let started = std::time::Instant::now();
+        let result = read_login_path(
+            shell.to_str().unwrap(),
+            std::time::Duration::from_millis(300),
+        );
+        let took = started.elapsed();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(result.unwrap_err().contains("не ответила"));
+        // wait() после kill вернулся сразу: оболочка убита, а не дождалась sleep.
+        assert!(took < std::time::Duration::from_secs(5), "{took:?}");
     }
 
     #[test]
