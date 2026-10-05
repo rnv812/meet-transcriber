@@ -52,30 +52,50 @@ WEIGHTS = {"convert": 5.0, "asr": 55.0, "align": 10.0, "diarize": 25.0, "voices"
 # доля от длительности звука шага). Когда движок известен, веса шагов — их
 # ожидаемое время (`Stages.plan_times`): полоска идёт ровно по времени, а не
 # пролетает быстрое распознавание GigaAM и не стоит на диаризации. Замеры CPU
-# GigaAM: 60 с звука — распознавание 18 с на две дорожки, диаризация 76 с, из
-# них ~55 с до первого отчёта pyannote; 6 мин — 30 с и 147 с
+# GigaAM: 60 с звука — распознавание 18 с на две дорожки; 6 мин — 30 с
 # (docs/2026-09-30-cpu-profile-bench.md, проверка 0.3.1); Whisper — оттуда же.
+# Диаризация на процессоре с 0.3.3 (модель с диска без сети, голоса за один
+# проход на окно, 8 потоков): ~10 с загрузки и 0,12 с на секунду звука вместо
+# 50 с и 0,27 (замер 0.3.3, .superpowers/sdd/v033/diar-speed-report.md).
 STEP_TIMES: dict[tuple[str, str], dict[str, tuple[float, float]]] = {
     ("cpu", "gigaam"): {"convert": (0.5, 0.005), "asr": (8.0, 0.035), "align": (20.0, 0.3),
-                        "diarize": (50.0, 0.27), "voices": (0.5, 0.0), "render": (0.5, 0.0)},
+                        "diarize": (10.0, 0.12), "voices": (0.5, 0.0), "render": (0.5, 0.0)},
     ("cpu", "faster-whisper"): {"convert": (0.5, 0.005), "asr": (15.0, 0.45), "align": (10.0, 0.15),
-                                "diarize": (50.0, 0.27), "voices": (0.5, 0.0), "render": (0.5, 0.0)},
+                                "diarize": (10.0, 0.12), "voices": (0.5, 0.0), "render": (0.5, 0.0)},
     ("cuda", "gigaam"): {"convert": (0.5, 0.005), "asr": (4.0, 0.012), "align": (4.0, 0.03),
                          "diarize": (8.0, 0.04), "voices": (0.5, 0.0), "render": (0.5, 0.0)},
     ("cuda", "faster-whisper"): {"convert": (0.5, 0.005), "asr": (6.0, 0.06), "align": (4.0, 0.03),
                                  "diarize": (8.0, 0.04), "voices": (0.5, 0.0), "render": (0.5, 0.0)},
 }
+# Apple Silicon (MPS) — свой профиль: текст, выравнивание и голоса там на
+# процессоре (как у cpu), а диаризация pyannote — на MPS, в разы быстрее
+# процессора. Оценка 0.3.3 по чужим замерам (M1 Pro: 15 мин за ~57 с штатным
+# pyannote, голоса втрое легче) — первые расшифровки поправит StepStats.
+MPS_DIARIZE = (10.0, 0.05)
+for _backend in ("gigaam", "faster-whisper"):
+    STEP_TIMES[("mps", _backend)] = {**STEP_TIMES[("cpu", _backend)], "diarize": MPS_DIARIZE}
 
 
-def _profile(device: str | None, backend: str | None) -> tuple[str, str]:
-    return (device if device in ("cpu", "cuda") else "cpu", "gigaam" if backend == "gigaam" else "faster-whisper")
+def _profile(device: str | None, backend: str | None, stage: str | None = None) -> tuple[str, str]:
+    """Ключ профиля: устройство (cpu, cuda, mps) и движок. На Mac диаризация
+    идёт на MPS (diarize.pick_device), а расшифровка до неё знает только
+    cuda/cpu: «cpu» у шага diarize там — профиль mps."""
+    if device == "cpu" and stage == "diarize" and _on_mac():
+        device = "mps"
+    return (device if device in ("cpu", "cuda", "mps") else "cpu", "gigaam" if backend == "gigaam" else "faster-whisper")
+
+
+def _on_mac() -> bool:
+    from meet import plat
+
+    return plat.is_macos()
 
 
 def step_time(device: str | None, backend: str | None, stage: str, seconds: float,
               stats: "StepStats | None" = None) -> tuple[float, float]:
     """(загрузка, работа) шага `stage` над звуком длительностью `seconds`;
     `stats` — поправка по прошлым расшифровкам этой машины."""
-    device, backend = _profile(device, backend)
+    device, backend = _profile(device, backend, stage)
     load, per_s = STEP_TIMES[(device, backend)].get(stage, (0.5, 0.0))
     load, work = load, per_s * max(0.0, seconds)
     if stats is not None:
@@ -119,6 +139,7 @@ class StepStats:
         return f"{device}:{backend if stage in ('asr', 'align') else 'any'}:{stage}"
 
     def factors(self, device: str, backend: str, stage: str) -> tuple[float, float]:
+        device, backend = _profile(device, backend, stage)
         runs = self._load().get(self.key(device, backend, stage))
         if not isinstance(runs, list):
             return 1.0, 1.0
@@ -132,7 +153,7 @@ class StepStats:
                expected: tuple[float, float], actual: tuple[float | None, float]) -> None:
         """Замер шага: ожидалось (загрузка, работа) — вышло. Отношения — только
         у частей, ожидание которых не меньше секунды (иначе шум)."""
-        device, backend = _profile(device, backend)
+        device, backend = _profile(device, backend, stage)
         ratio = [a / e if a is not None and e >= 1.0 else None for e, a in zip(expected, actual)]
         if ratio == [None, None]:
             return

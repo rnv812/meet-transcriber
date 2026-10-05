@@ -560,10 +560,50 @@ def test_step_time_depends_on_engine_and_length():
     from meet.progress import step_time
 
     load, work = step_time("cpu", "gigaam", "diarize", 360)
-    assert load > 0 and work == pytest.approx(0.27 * 360)
+    assert load > 0 and work == pytest.approx(0.12 * 360)
     # GigaAM на CPU распознаёт много быстрее Whisper — и вес у распознавания меньше.
     assert sum(step_time("cpu", "gigaam", "asr", 600)) < sum(step_time("cpu", "faster-whisper", "asr", 600))
     assert step_time("mps", "что-то", "asr", 10) == step_time("cpu", "faster-whisper", "asr", 10)
+
+
+def test_cpu_diarization_after_the_0_3_3_speed_up(monkeypatch):
+    """Модель с диска и голоса за один проход на окно: ~10 с загрузки и
+    0,12 с на секунду звука вместо 50 и 0,27."""
+    from meet import plat
+    from meet.progress import step_time
+
+    monkeypatch.setattr(plat, "is_macos", lambda: False)
+    for backend in ("gigaam", "faster-whisper"):
+        assert step_time("cpu", backend, "diarize", 600) == pytest.approx((10.0, 0.12 * 600))
+
+
+def test_mps_is_its_own_profile(monkeypatch, tmp_path):
+    """Mac (MPS) — свой профиль времени и свои поправки: его замеры больше не
+    сдвигают ожидания процессора на Windows-подобном ключе `cpu`."""
+    from meet import plat
+    from meet.progress import StepStats, step_time
+
+    monkeypatch.setattr(plat, "is_macos", lambda: False)
+    mps, cpu = step_time("mps", "gigaam", "diarize", 600), step_time("cpu", "gigaam", "diarize", 600)
+    assert mps[1] < cpu[1]
+    assert step_time("mps", "gigaam", "asr", 600) == step_time("cpu", "gigaam", "asr", 600)  # текст — процессор
+    stats = StepStats(tmp_path / "p.json")
+    stats.record("mps", "gigaam", "diarize", (10.0, 30.0), (5.0, 15.0))
+    assert stats.factors("cpu", "gigaam", "diarize") == (1.0, 1.0)
+    assert stats.factors("mps", "gigaam", "diarize") == pytest.approx((0.5, 0.5))
+    assert "mps:any:diarize" in stats._load()
+
+
+def test_cpu_guess_for_diarization_on_a_mac_means_mps(monkeypatch):
+    """До диаризации расшифровка знает только cuda/cpu, а на Mac pyannote идёт
+    на MPS (diarize.pick_device): оценка и поправки — по профилю mps."""
+    from meet import plat
+    from meet.progress import step_time
+
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    assert step_time("cpu", "gigaam", "diarize", 600) == step_time("mps", "gigaam", "diarize", 600)
+    monkeypatch.setattr(plat, "is_macos", lambda: False)
+    assert step_time("cpu", "gigaam", "asr", 600) == step_time("mps", "gigaam", "asr", 600)
 
 
 def test_plan_times_weighs_steps_by_time_without_moving_the_fraction():
