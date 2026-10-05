@@ -556,8 +556,11 @@ def test_merge_reports_a_step_per_track(tmp_path, monkeypatch):
 # --- 0.3.1: веса шагов — по их ожидаемому времени ------------------------------------
 
 
-def test_step_time_depends_on_engine_and_length():
+def test_step_time_depends_on_engine_and_length(monkeypatch):
+    from meet import plat
     from meet.progress import step_time
+
+    monkeypatch.setattr(plat, "is_macos", lambda: False)  # на Mac диаризация — профиль mps
 
     load, work = step_time("cpu", "gigaam", "diarize", 360)
     assert load > 0 and work == pytest.approx(0.12 * 360)
@@ -592,6 +595,35 @@ def test_mps_is_its_own_profile(monkeypatch, tmp_path):
     assert stats.factors("cpu", "gigaam", "diarize") == (1.0, 1.0)
     assert stats.factors("mps", "gigaam", "diarize") == pytest.approx((0.5, 0.5))
     assert "mps:any:diarize" in stats._load()
+
+
+def test_old_cpu_diarization_ratios_are_not_applied_to_the_new_table(tmp_path):
+    """Поправки диаризации на процессоре считались от прежней таблицы (50 с,
+    0,27): с новой (10 с, 0,12) они бы ещё 12 работ сдвигали оценку."""
+    import json
+
+    from meet.progress import StepStats
+
+    path = tmp_path / "p.json"
+    path.write_text(json.dumps({"cpu:any:diarize": [[0.1, 0.4]] * 5}), encoding="utf-8")
+    stats = StepStats(path)
+    assert stats.factors("cpu", "gigaam", "diarize") == (1.0, 1.0)
+    stats.record("cpu", "gigaam", "diarize", (10.0, 43.0), (20.0, 43.0))
+    assert stats.factors("cpu", "gigaam", "diarize") == pytest.approx((2.0, 1.0))
+    assert StepStats.key("cuda", "gigaam", "diarize") == "cuda:any:diarize"  # у видеокарты таблица та же
+
+
+def test_a_cpu_retry_on_a_mac_is_recorded_as_cpu(monkeypatch, tmp_path):
+    """Замер знает, где шла диаризация: повтор на процессоре после сбоя MPS
+    не попадает в поправки mps."""
+    from meet import plat
+    from meet.progress import StepStats
+
+    monkeypatch.setattr(plat, "is_macos", lambda: True)
+    stats = StepStats(tmp_path / "p.json")
+    stats.record("cpu", "gigaam", "diarize", (10.0, 30.0), (40.0, 90.0))
+    stats.record("mps", "gigaam", "diarize", (10.0, 30.0), (5.0, 15.0))
+    assert set(stats._load()) == {"cpu:any:diarize@2", "mps:any:diarize"}
 
 
 def test_cpu_guess_for_diarization_on_a_mac_means_mps(monkeypatch):
@@ -649,8 +681,11 @@ def test_measured_step_creeps_through_loading_then_follows_its_scale():
     assert st.part == pytest.approx(0.875)  # дальше — только своя шкала
 
 
-def test_step_times_are_learned_from_finished_runs(tmp_path):
+def test_step_times_are_learned_from_finished_runs(monkeypatch, tmp_path):
+    from meet import plat
     from meet.progress import StepStats, step_time
+
+    monkeypatch.setattr(plat, "is_macos", lambda: False)  # на Mac диаризация — профиль mps
 
     stats = StepStats(tmp_path / "p.json")
     assert stats.factors("cpu", "gigaam", "diarize") == (1.0, 1.0)
@@ -704,4 +739,4 @@ def test_transcription_learns_step_times(monkeypatch, tmp_path):
     assert diarize_at["cap"] - diarize_at["fraction"] > asr_at["cap"] - asr_at["fraction"]
     assert diarize_at["estimate_s"] > 0  # оценка всей работы — по времени шагов
     data = json.loads((tmp_path / "state" / StepStats.NAME).read_text(encoding="utf-8"))
-    assert {"cpu:gigaam:asr", "cpu:any:diarize"} <= set(data)
+    assert {"cpu:gigaam:asr", "cpu:any:diarize@2"} <= set(data)

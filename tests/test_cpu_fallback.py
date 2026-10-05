@@ -428,7 +428,7 @@ def test_stats_of_torch_steps_go_under_the_device_torch_used(monkeypatch, tmp_pa
     _engine(monkeypatch, tmp_path, gpu=False)
     tr.transcribe(str(folder), align=False, bus=bus)
     keys = set(json.loads(StepStats().path.read_text(encoding="utf-8")))
-    assert "cuda:any:diarize" in keys and "cpu:any:diarize" not in keys
+    assert "cuda:any:diarize" in keys and "cpu:any:diarize@2" not in keys
     assert "cpu:gigaam:asr" in keys
 
 

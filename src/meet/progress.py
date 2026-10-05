@@ -76,13 +76,21 @@ for _backend in ("gigaam", "faster-whisper"):
     STEP_TIMES[("mps", _backend)] = {**STEP_TIMES[("cpu", _backend)], "diarize": MPS_DIARIZE}
 
 
-def _profile(device: str | None, backend: str | None, stage: str | None = None) -> tuple[str, str]:
-    """Ключ профиля: устройство (cpu, cuda, mps) и движок. На Mac диаризация
-    идёт на MPS (diarize.pick_device), а расшифровка до неё знает только
-    cuda/cpu: «cpu» у шага diarize там — профиль mps."""
-    if device == "cpu" and stage == "diarize" and _on_mac():
+def _profile(device: str | None, backend: str | None, stage: str | None = None,
+             guess: bool = False) -> tuple[str, str]:
+    """Ключ профиля: устройство (cpu, cuda, mps) и движок. `guess` — устройство
+    угадано до шага (оценка): на Mac диаризация идёт на MPS
+    (diarize.pick_device), а расшифровка до неё знает только cuda/cpu, так что
+    «cpu» у шага diarize там — профиль mps. Замер (`record`) знает настоящее
+    устройство и пишет под ним: повтор на процессоре после сбоя MPS — в cpu."""
+    if guess and device == "cpu" and stage == "diarize" and _on_mac():
         device = "mps"
     return (device if device in ("cpu", "cuda", "mps") else "cpu", "gigaam" if backend == "gigaam" else "faster-whisper")
+
+
+# Версии ожиданий шага (ключ поправок StepStats): 0.3.3 — диаризация на
+# процессоре втрое быстрее (STEP_TIMES (50, 0.27) → (10, 0.12)).
+STATS_VERSIONS = {("cpu", "diarize"): 2}
 
 
 def _on_mac() -> bool:
@@ -95,7 +103,7 @@ def step_time(device: str | None, backend: str | None, stage: str, seconds: floa
               stats: "StepStats | None" = None) -> tuple[float, float]:
     """(загрузка, работа) шага `stage` над звуком длительностью `seconds`;
     `stats` — поправка по прошлым расшифровкам этой машины."""
-    device, backend = _profile(device, backend, stage)
+    device, backend = _profile(device, backend, stage, guess=True)
     load, per_s = STEP_TIMES[(device, backend)].get(stage, (0.5, 0.0))
     load, work = load, per_s * max(0.0, seconds)
     if stats is not None:
@@ -135,11 +143,14 @@ class StepStats:
 
     @staticmethod
     def key(device: str, backend: str, stage: str) -> str:
-        # Диаризация и прочие шаги не зависят от движка распознавания.
-        return f"{device}:{backend if stage in ('asr', 'align') else 'any'}:{stage}"
+        # Диаризация и прочие шаги не зависят от движка распознавания. Таблица
+        # STEP_TIMES шага сменилась — новый ключ (`@версия`): старые отношения
+        # считались от прежнего ожидания и сдвигали бы оценку ещё KEEP работ.
+        version = STATS_VERSIONS.get((device, stage))
+        return f"{device}:{backend if stage in ('asr', 'align') else 'any'}:{stage}" + (
+            f"@{version}" if version else "")
 
     def factors(self, device: str, backend: str, stage: str) -> tuple[float, float]:
-        device, backend = _profile(device, backend, stage)
         runs = self._load().get(self.key(device, backend, stage))
         if not isinstance(runs, list):
             return 1.0, 1.0
