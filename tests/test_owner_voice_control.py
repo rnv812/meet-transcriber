@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -57,7 +58,8 @@ def setup(tmp_path, monkeypatch):
         takes = owner_voice_control.OwnerTakes(
             queue=queue, bus=bus, busy=lambda: state["busy"], installing=lambda: state["installing"],
             voices=lambda: tmp_path / "voices", mic=lambda: mic, log=lambda text: None,
-            record=record or fake_record, ready=ready, clock=clock)
+            record=record or fake_record, ready=ready, clock=clock,
+            recordings=lambda: tmp_path / "recordings")
         takes.captured = captured
         takes.state = state
         takes.jobs = queue
@@ -304,6 +306,109 @@ def test_cancelled_job_settles_and_cleans_up_without_polling(setup):
     assert not folder.exists()
 
 
+# --- «Найти по прошлым встречам» (T8) -------------------------------------------
+
+
+def _derive_spawn(outcome, found=None, seen=None, gate=None):
+    """Задача поиска: пишет итог рядом с образцами, как owner_derive.run."""
+    def lines(job):
+        if seen is not None:
+            seen.append(job)
+        if gate is not None:
+            gate.wait(5)
+        owner_voice.save_derived(outcome, found, voices=Path(job.folder))
+        return [{"kind": "job.result", "path": outcome["status"]}]
+    return _spawn(lines)
+
+
+FOUND = {"embedding": np.eye(8)[0], "meetings": ["2026-10-01_10-00", "2026-10-02_10-00", "2026-10-03_10-00"],
+         "samples": [{"recording": f"2026-10-0{d}_10-00", "start": 12.0, "end": 16.5, "track": "mic"}
+                     for d in (1, 2, 3)], "seconds": 412.0, "quality": 0.83}
+
+
+def test_derive_runs_job_and_status_shows_suggestion_without_vector(setup, tmp_path):
+    seen = []
+    takes = setup(spawn=_derive_spawn({"status": "suggested", "reason": None}, FOUND, seen))
+    got = takes.derive()
+    assert got["derive"]["running"] is True or got["suggestion"] is not None
+    assert _wait(lambda: not takes.status()["derive"]["running"])
+    (job,) = seen
+    assert job.kind == jobs.OWNER_VOICE and job.folder == str(tmp_path / "voices")
+    assert job.options == {"derive": True, "recordings": str(tmp_path / "recordings")}
+    status = takes.status()
+    assert status["suggestion"] == {k: v for k, v in FOUND.items() if k != "embedding"} | {
+        "date": status["suggestion"]["date"]}
+    assert status["derive"]["last"]["status"] == "suggested" and status["derive"]["error"] is None
+    assert status["samples"] == []  # без подтверждения — не образец
+
+
+def test_derive_nothing_found_reports_reason(setup):
+    takes = setup(spawn=_derive_spawn({"status": "too_few", "reason": "Подходящих встреч пока 1."}))
+    takes.derive()
+    assert _wait(lambda: not takes.status()["derive"]["running"])
+    status = takes.status()
+    assert status["suggestion"] is None
+    assert status["derive"]["last"]["reason"] == "Подходящих встреч пока 1."
+
+
+def test_derive_crash_is_shown_as_error(setup):
+    takes = setup(spawn=_spawn(lambda job: [{"kind": "error", "text": "сломалось"}], code=1))
+    takes.derive()
+    assert _wait(lambda: not takes.status()["derive"]["running"])
+    assert "сломалось" in takes.status()["derive"]["error"]
+
+
+def test_accept_stores_auto_sample_decline_clears(setup, tmp_path):
+    takes = setup()
+    voices = tmp_path / "voices"
+    owner_voice.save_derived({"status": "suggested"}, FOUND, voices=voices)
+    got = takes.answer({"accept": True})
+    assert got["suggestion"] is None
+    assert [s["source"] for s in got["samples"]] == ["auto"]
+    with pytest.raises(control.Conflict, match="Предложения уже нет"):
+        takes.answer({"accept": True})
+    owner_voice.save_derived({"status": "suggested"}, FOUND, voices=voices)
+    got = takes.answer({"accept": False})
+    assert got["suggestion"] is None and [s["source"] for s in got["samples"]] == ["auto"]
+    with pytest.raises(control.BadRequest):
+        takes.answer({"accept": "да"})
+
+
+def test_derive_refused_while_recording_installing_or_not_ready(setup):
+    takes = setup(busy=True)
+    with pytest.raises(control.Conflict, match="Идёт запись"):
+        takes.derive()
+    takes = setup(installing=True)
+    with pytest.raises(control.Conflict, match="установка движка"):
+        takes.derive()
+    takes = setup(ready=lambda: owner_voice_control.NO_MODEL)
+    with pytest.raises(control.Conflict, match="Скачайте модель"):
+        takes.derive()
+
+
+def test_derive_and_take_exclude_each_other(setup):
+    gate = threading.Event()
+    takes = setup(spawn=_derive_spawn({"status": "too_few", "reason": "мало"}, gate=gate))
+    takes.derive()
+    assert takes.active() is True  # движок в это время не ставят
+    with pytest.raises(control.Conflict, match="поиск"):
+        takes.record({})
+    again = takes.derive()  # повторное нажатие — та же задача
+    assert again["derive"]["running"] is True
+    gate.set()
+    assert _wait(lambda: not takes.status()["derive"]["running"])
+    assert takes.active() is False
+
+
+def test_derive_refused_during_take(setup):
+    gate = threading.Event()
+    takes = setup(spawn=_spawn(lambda job: gate.wait(5) and []))
+    takes.record({})
+    with pytest.raises(control.Conflict, match="записывается"):
+        takes.derive()
+    gate.set()
+
+
 def test_readiness_names_what_is_missing(monkeypatch):
     from meet import credentials, engine, models
 
@@ -376,6 +481,14 @@ class _State:
         self.calls.append(("delete", sample_id))
         return {"error": "образца нет"} if sample_id == "missing" else {"samples": []}
 
+    def owner_voice_derive(self):
+        self.calls.append("derive")
+        return {"samples": [], "derive": {"running": True}}
+
+    def owner_voice_suggestion(self, body):
+        self.calls.append(("answer", body))
+        return {"samples": [], "suggestion": None}
+
 
 @pytest.fixture
 def server(monkeypatch, tmp_path):
@@ -411,6 +524,12 @@ def test_owner_voice_routes(server):
                                   ("delete", "missing")]
 
 
+def test_owner_voice_derive_routes(server):
+    assert _call(server, "/owner-voice/derive", "POST", {})["derive"]["running"] is True
+    assert _call(server, "/owner-voice/suggestion", "POST", {"accept": True})["suggestion"] is None
+    assert server.state.calls == ["derive", ("answer", {"accept": True})]
+
+
 # --- в резиденте ----------------------------------------------------------------
 
 
@@ -439,3 +558,19 @@ def test_engine_install_is_refused_during_a_take(monkeypatch, tmp_path):
     monkeypatch.setattr(state.owner_takes, "active", lambda: True)
     with pytest.raises(control.Conflict, match="образец голоса"):
         state.install_engine({})
+
+
+def test_tray_control_derive_and_answer(monkeypatch, tmp_path):
+    from meet import tray, tray_control
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    monkeypatch.setattr(owner_voice_control, "readiness", lambda downloading=False: None)
+    app = tray.TrayApp()
+    state = tray_control.TrayControl(app)
+    assert state.owner_voice()["suggestion"] is None
+    with pytest.raises(control.Conflict, match="Предложения уже нет"):
+        state.owner_voice_suggestion({"accept": True})
+    app.recording = True
+    with pytest.raises(control.Conflict, match="Идёт запись"):
+        state.owner_voice_derive()

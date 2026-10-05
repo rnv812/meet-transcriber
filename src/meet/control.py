@@ -777,6 +777,8 @@ _ROUTES = {
     # микрофона, разбор задачей); удалить образец — в _PATTERNS.
     ("GET", "/owner-voice"): lambda h, p: _server_of(h).state.owner_voice(),
     ("POST", "/owner-voice/record"): lambda h, p: _server_of(h).state.owner_voice_record(h._body()),
+    ("POST", "/owner-voice/derive"): lambda h, p: _server_of(h).state.owner_voice_derive(),
+    ("POST", "/owner-voice/suggestion"): lambda h, p: _server_of(h).state.owner_voice_suggestion(h._body()),
     ("PATCH", "/settings"): lambda h, p: _server_of(h).state.patch_settings(h._body()),
     # Редактор категорий: список, стандартный список и сколько встреч в каждой.
     ("GET", "/categories"): lambda h, p: _server_of(h).state.categories((p.get("q") or [""])[0]),

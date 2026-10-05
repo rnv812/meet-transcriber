@@ -320,7 +320,7 @@ PROCESSING = "Запись ещё обрабатывается (обрезка �
 MODEL_DOWNLOADING = "модель сейчас скачивается — удалить её можно после загрузки"
 ENGINE_INSTALLING = "идёт установка движка — модели можно скачать после неё"
 MODELS_DOWNLOADING = "идут загрузки моделей — движок можно ставить после них"
-OWNER_VOICE_BUSY = "записывается образец голоса — движок можно ставить после него"
+OWNER_VOICE_BUSY = "записывается образец голоса или идёт его поиск по встречам — движок можно ставить после этого"
 RESIDENT_STOPPING = "служба записи останавливается — скачайте модель после её перезапуска"
 # Восстановление после перезапуска берёт записи не старше этого.
 RECOVER_DAYS = 7
@@ -3366,6 +3366,12 @@ class TrayControl:
 
     def owner_voice_delete(self, sample_id: str) -> dict:
         return self.owner_takes.delete(sample_id)
+
+    def owner_voice_derive(self) -> dict:
+        return self.owner_takes.derive()
+
+    def owner_voice_suggestion(self, body: dict | None) -> dict:
+        return self.owner_takes.answer(body)
 
     # --- люди -----------------------------------------------------------
 

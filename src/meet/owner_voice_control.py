@@ -1,5 +1,8 @@
 """Резидент: образец голоса владельца для мастера и настроек «Звук» —
-`GET /owner-voice`, `POST /owner-voice/record`, `DELETE /owner-voice/<id>`.
+`GET /owner-voice`, `POST /owner-voice/record`, `DELETE /owner-voice/<id>`,
+а также «Найти по прошлым встречам»: `POST /owner-voice/derive` (задача
+`owner_voice --derive`, meet.owner_derive) и `POST /owner-voice/suggestion`
+(`{"accept": true|false}` — «Да, это я» / «Нет»; без ответа ничего не применяется).
 
 Запись — подпроцессом устройств (`devices_probe --record mic`): в резиденте
 живёт один PyAudio, второй рушил PortAudio у записи (см. devices_probe).
@@ -55,6 +58,14 @@ NO_ENGINE = "Сначала установите движок расшифров
 NO_TOKEN = "Нужен токен Hugging Face — без него модель голосов не загрузить"
 NO_MODEL = "Скачайте модель разделения на спикеров — отпечаток голоса строит она"
 MODEL_DOWNLOADING = "Модель разделения на спикеров ещё скачивается — подождите немного"
+# «Найти по прошлым встречам» (meet.owner_derive): задача читает до десяти
+# записей и грузит модель — не во время встречи и не вместе с записью образца.
+DERIVE_RECORDING = "Идёт запись — искать голос по прошлым встречам можно после неё"
+DERIVE_INSTALLING = "Идёт установка движка — искать голос можно после неё"
+DERIVE_BUSY = "Идёт поиск вашего голоса по прошлым встречам — запишите образец после него"
+DERIVE_TAKE = "Образец голоса сейчас записывается — искать по встречам можно после этого"
+DERIVE_SLOT = "Образец голоса сейчас разбирается — искать по встречам можно после этого"
+NO_SUGGESTION = "Предложения уже нет — запустите поиск по прошлым встречам снова"
 
 
 def readiness(downloading: bool = False) -> str | None:
@@ -95,6 +106,21 @@ def configured_mic() -> str | None:
     return settings.load().recording.mic_device
 
 
+def configured_recordings() -> Path:
+    """Папка записей из настроек — по ней ищет «Найти по прошлым встречам»."""
+    from meet import settings
+
+    return settings.load().recording.recordings
+
+
+def public_suggestion(found: dict | None) -> dict | None:
+    """Найденный голос для окна — без вектора: встречи и участки для прослушивания."""
+    if found is None:
+        return None
+    return {"meetings": found["meetings"], "samples": found["samples"], "seconds": found["seconds"],
+            "quality": found.get("quality"), "date": found.get("date")}
+
+
 def public(sample: owner_voice.OwnerSample) -> dict:
     """Образец для окна — без вектора."""
     return {"id": sample.id, "source": sample.source, "date": sample.date,
@@ -124,7 +150,8 @@ class OwnerTakes:
     окно его не назвало. Запись, готовность, фон и часы подменяются в тестах."""
 
     def __init__(self, *, queue, bus, busy, voices, installing=lambda: False, mic=None, log=print,
-                 record=None, ready=None, background=None, clock=time.time, sleep=time.sleep) -> None:
+                 record=None, ready=None, background=None, clock=time.time, sleep=time.sleep,
+                 recordings=None) -> None:
         self.queue = queue
         self.busy = busy
         self.installing = installing
@@ -137,8 +164,11 @@ class OwnerTakes:
             target=fn, name="meet-owner-voice", daemon=True).start())
         self._clock = clock
         self._sleep = sleep
+        self._recordings = recordings or configured_recordings
         self._lock = threading.Lock()
         self._take: dict | None = None
+        # Задача «Найти по прошлым встречам»: id последней (итог — в файле владельца).
+        self._derive_job: str | None = None
         bus.subscribe(self._on_event)
 
     def _default_ready(self) -> str | None:
@@ -150,10 +180,12 @@ class OwnerTakes:
     # --- маршруты ---------------------------------------------------------
 
     def active(self) -> bool:
-        """Идёт ли попытка (запись или разбор): движок в это время не ставят."""
+        """Идёт ли попытка (запись или разбор) или поиск по прошлым встречам:
+        движок в это время не ставят — задача грузит его torch."""
         self._reconcile()
         with self._lock:
-            return bool(self._take and self._take["state"] in ACTIVE)
+            take = bool(self._take and self._take["state"] in ACTIVE)
+        return take or self._deriving() is not None
 
     def status(self) -> dict:
         self._reconcile()
@@ -165,9 +197,12 @@ class OwnerTakes:
             take = dict(self._take) if self._take else None
         if take:
             take.pop("dir", None)
-        return {"samples": [public(s) for s in owner_voice.load(self.voices())],
+        voices = self.voices()
+        return {"samples": [public(s) for s in owner_voice.load(voices)],
                 "take": take, "ready": reason is None, "reason": reason,
-                "recording": bool(self.busy()), "seconds": RECORD_S}
+                "recording": bool(self.busy()), "seconds": RECORD_S,
+                "suggestion": public_suggestion(owner_voice.suggestion(voices)),
+                "derive": self._derive_status(voices)}
 
     def record(self, body: dict | None) -> dict:
         body = body if isinstance(body, dict) else {}
@@ -186,6 +221,8 @@ class OwnerTakes:
         except Exception:
             device = None  # нечитаемые настройки — системный микрофон
         self._reconcile()
+        if self._deriving() is not None:
+            raise _conflict(DERIVE_BUSY)
         with self._lock:
             if self._take and self._take["state"] in ACTIVE:
                 raise _conflict(BUSY_TAKE)
@@ -199,6 +236,65 @@ class OwnerTakes:
     def delete(self, sample_id: str) -> dict:
         if not owner_voice.remove(sample_id, self.voices()):
             return {"error": "образца нет"}
+        return self.status()
+
+    # --- «Найти по прошлым встречам» -------------------------------------
+
+    def _deriving(self):
+        """Идущая (или ждущая) задача поиска; нет — None."""
+        job_id = self._derive_job
+        job = self.queue.get(job_id) if job_id else None
+        return job if job is not None and job.state in (jobs.QUEUED, jobs.RUNNING) else None
+
+    def _derive_status(self, voices: Path) -> dict:
+        job = self.queue.get(self._derive_job) if self._derive_job else None
+        running = job is not None and job.state in (jobs.QUEUED, jobs.RUNNING)
+        error = None
+        if job is not None and job.state == jobs.FAILED:
+            error = job.error or "Поиск не удался"
+        return {"running": running, "error": error, "last": owner_voice.derived(voices)}
+
+    def derive(self) -> dict:
+        """Запустить поиск голоса по прошлым встречам. Найденное — только
+        предложение: образцом оно станет после «Да, это я» (answer)."""
+        if self.busy():
+            raise _conflict(DERIVE_RECORDING)
+        if self.installing():
+            raise _conflict(DERIVE_INSTALLING)
+        reason = self._ready()
+        if reason:
+            raise _conflict(reason)
+        self._reconcile()
+        with self._lock:
+            if self._take and self._take["state"] in ACTIVE:
+                raise _conflict(DERIVE_TAKE)
+        if self._deriving() is None:
+            try:
+                job, fresh = self.queue.submit_once(
+                    jobs.OWNER_VOICE, str(self.voices()),
+                    {"derive": True, "recordings": str(self._recordings())})
+            except jobs.QueueStopped:
+                raise _conflict("Приложение закрывается — поиск не запущен")
+            if not fresh and not (job.options or {}).get("derive"):
+                raise _conflict(DERIVE_SLOT)  # слот занят разбором записанного образца
+            self._derive_job = job.id
+            self.log(f"голос владельца: поиск по прошлым встречам — задача {job.id}")
+        return self.status()
+
+    def answer(self, body: dict | None) -> dict:
+        """«Да, это я» (`accept: true`) — найденный голос образцом `auto`;
+        «Нет» (`accept: false`) — предложение снимается."""
+        accept = body.get("accept") if isinstance(body, dict) else None
+        if not isinstance(accept, bool):
+            raise _bad_request("accept — true или false")
+        voices = self.voices()
+        if accept:
+            sample = owner_voice.accept_suggestion(voices)
+            if sample is None:
+                raise _conflict(NO_SUGGESTION)
+            self.log(f"голос владельца: найденный по встречам голос подтверждён ({sample.seconds} с)")
+        else:
+            owner_voice.clear_suggestion(voices)
         return self.status()
 
     # --- попытка ---------------------------------------------------------
@@ -288,7 +384,7 @@ class OwnerTakes:
         if event.kind not in (jobs.JOB_DONE, jobs.JOB_FAILED):
             return
         job = event.data.get("job") or {}
-        if job.get("kind") == jobs.OWNER_VOICE:
+        if job.get("kind") == jobs.OWNER_VOICE:  # задача поиска — не попытка: _settle её не узнает
             self._settle(job)
 
     def _reconcile(self) -> None:
