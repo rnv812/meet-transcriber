@@ -33,7 +33,7 @@ export function fastMeaning(provider: string | null | undefined): string {
   if (provider === "codex") return "Codex: низкое усилие рассуждения";
   if (provider === "opencode") return "OpenCode: без изменений, модель из настройки «Модель OpenCode»";
   if (provider === "openai-compatible") return "Локальная модель: без изменений, модель одна";
-  return "Claude Code — модель Haiku без размышлений, Codex — низкое усилие рассуждения";
+  return "Claude Code — модель Haiku без размышлений, Codex — низкое усилие рассуждения, OpenCode — без изменений";
 }
 
 export function LiveActivityTip() {

@@ -444,3 +444,7 @@ test("«Проверить» OpenCode уходит провайдеру opencode
   expect(await within(oc).findByText("не авторизован: нет входа")).toBeInTheDocument();
   expect(api.checkProvider).toHaveBeenCalledWith(ep, "opencode");
 });
+
+test("«Авто» OpenCode не выбирает — так и подписано", async () => {
+  expect(AUTO_ORDER).toBe("первый готовый: Claude Code → Codex → локальная (OpenCode — только явным выбором)");
+});

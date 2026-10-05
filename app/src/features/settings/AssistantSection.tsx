@@ -157,7 +157,7 @@ export function assistantChangesInvalid(changes: Raw): boolean {
 }
 
 /** Подпись «Авто», пока выбран конкретный провайдер: порядок выбора (llm.resolve). */
-export const AUTO_ORDER = "первый готовый: Claude Code → Codex → OpenCode → локальная";
+export const AUTO_ORDER = "первый готовый: Claude Code → Codex → локальная (OpenCode — только явным выбором)";
 
 const titleOf = (name: string) => PROVIDERS.find((p) => p.value === name)?.label ?? name;
 

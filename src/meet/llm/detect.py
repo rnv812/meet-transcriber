@@ -3,7 +3,7 @@
 Модуль читает резидент, поэтому здесь только stdlib: ни claude_agent_sdk, ни
 aiohttp. `available()` — быстрая проверка «установлено/отвечает»;
 `logged_in()` спрашивает CLI о входе (доли секунды, квоту не тратит) и
-нужен выбору `auto` и команде «Проверить».
+нужен выбору `auto` и команде «Проверить»; у OpenCode — читает его файл входов.
 
 OpenCode (opencode.ai) ставится по-разному: npm -g (`opencode-ai`: в PATH —
 сценарий opencode.cmd, настоящая программа — в node_modules рядом), scoop,
@@ -245,58 +245,49 @@ def opencode_auth_file() -> Path:
     return Path(base) / "opencode" / "auth.json"
 
 
-def opencode_auth_present() -> bool:
-    """Есть ли у OpenCode хоть один сохранённый вход: `OPENCODE_AUTH_CONTENT`
-    (им OpenCode и сам подменяет файл) или запись с `type` в auth.json.
+def _opencode_entries() -> dict:
+    """Входы OpenCode: `OPENCODE_AUTH_CONTENT` (им OpenCode и сам подменяет
+    файл) или auth.json; только записи с `type` (oauth, api, wellknown).
     Дальше типа записи не смотрим; ключи никуда не выводим."""
     raw = os.environ.get("OPENCODE_AUTH_CONTENT")
     if raw is None:
         try:
             raw = opencode_auth_file().read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
-            return False
+            return {}
     try:
         data = json.loads(raw)
     except ValueError:
-        return False
+        return {}
     if not isinstance(data, dict):
-        return False
-    return any(isinstance(v, dict) and isinstance(v.get("type"), str) for v in data.values())
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, dict) and isinstance(v.get("type"), str)}
 
 
-# `opencode auth list` (packages/opencode/src/cli/cmd/providers.ts): итог
-# раздела входов — «N credentials», раздела ключей в переменных среды — «N
-# environment variable(s)». Это текст для человека, не формат: не нашли — по файлу.
-_OC_CREDENTIALS = re.compile(r"(\d+)\s+credentials?\b")
-_OC_ENV_KEYS = re.compile(r"(\d+)\s+environment variables?\b")
+# Ключ провайдера в переменной среды: по соглашению `<ПРОВАЙДЕР>_API_KEY`
+# (anthropic → ANTHROPIC_API_KEY, openrouter → OPENROUTER_API_KEY); у Google — свои имена.
+_PROVIDER_ENV = {"google": ("GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY")}
+
+
+def opencode_provider_env(provider: str) -> tuple[str, ...]:
+    """Переменные среды с ключом провайдера OpenCode `provider`."""
+    return _PROVIDER_ENV.get(provider, (re.sub(r"[^A-Za-z0-9]", "_", provider).upper() + "_API_KEY",))
+
+
+def opencode_auth_present(provider: str | None = None) -> bool:
+    """Есть ли у OpenCode вход. Без `provider` — хоть одна запись в auth.json;
+    с ним — запись этого провайдера или его ключ в переменной среды. Ключи
+    других провайдеров в среде (HF_TOKEN, GITHUB_TOKEN, AWS_*…) входом не
+    считаются: `opencode auth list` считал бы и их."""
+    entries = _opencode_entries()
+    if provider is None:
+        return bool(entries)
+    return provider in entries or any(os.environ.get(n, "").strip() for n in opencode_provider_env(provider))
+
+
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 OPENCODE_NO_LOGIN = ("в OpenCode нет входа ни в одного провайдера — выполните "
                      "opencode auth login")
-
-
-def _opencode_logged_in(path: str) -> tuple[bool, str | None]:
-    """Вход в OpenCode без вызова модели: `opencode auth list` (входы из auth.json
-    и ключи провайдеров в переменных среды). Вывод не распознан или команда не
-    отработала — проверяем сам файл ключей (`opencode_auth_present`)."""
-    env = dict(os.environ)
-    env.update({"OPENCODE_DISABLE_MODELS_FETCH": "1", "NO_COLOR": "1"})
-    counts = None
-    try:
-        done = subprocess.run(
-            [path, "auth", "list"], capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=20, env=env, creationflags=_NO_WINDOW,
-        )
-        out = _ANSI.sub("", done.stdout or "")
-        creds, keys = _OC_CREDENTIALS.search(out), _OC_ENV_KEYS.search(out)
-        if done.returncode == 0 and creds:
-            counts = int(creds.group(1)) + (int(keys.group(1)) if keys else 0)
-    except (OSError, subprocess.SubprocessError):
-        counts = None
-    if counts is None:
-        if opencode_auth_present():
-            return True, None
-        return False, f"{OPENCODE_NO_LOGIN} (нет записей в {opencode_auth_file()})"
-    return (True, None) if counts > 0 else (False, OPENCODE_NO_LOGIN)
 
 
 def opencode_model_listed(path: str, model: str, proxy: str | None = None) -> tuple[bool, str | None]:
@@ -304,26 +295,25 @@ def opencode_model_listed(path: str, model: str, proxy: str | None = None) -> tu
     печатает модели подключённых провайдеров строками «провайдер/модель»
     (packages/opencode/src/cli/cmd/models.ts); неподключённый провайдер —
     ошибка «Provider not found». Модель не вызывается; список моделей OpenCode
-    может обновить с models.dev — поэтому с прокси из настроек."""
+    может обновить с models.dev — поэтому с прокси из настроек. Не уложился в
+    срок — дерево процессов убито (за сценарием .cmd живут node и opencode.exe)."""
     from meet import netproxy
+    from meet.llm.base import run_tree
 
     provider = model.split("/", 1)[0]
     env = netproxy.child_env(proxy)
     env["NO_COLOR"] = "1"
     try:
-        done = subprocess.run(
-            [path, "models", provider], capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=60, env=env, creationflags=_NO_WINDOW,
-        )
-    except (OSError, subprocess.SubprocessError) as e:
+        code, raw_out, raw_err = run_tree([path, "models", provider], timeout=60, env=env)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
         return False, f"OpenCode не ответил на opencode models: {type(e).__name__}: {e}"
-    out = _ANSI.sub("", done.stdout or "")
-    err = _ANSI.sub("", done.stderr or "")
-    if done.returncode != 0:
+    out = _ANSI.sub("", raw_out.decode("utf-8", errors="replace"))
+    err = _ANSI.sub("", raw_err.decode("utf-8", errors="replace"))
+    if code != 0:
         if "provider not found" in (err + out).lower():
             return False, (f"провайдер {provider} не подключён в OpenCode — выполните "
                            "opencode auth login")
-        return False, _tail(err or out) or f"код выхода {done.returncode}"
+        return False, _tail(err or out) or f"код выхода {code}"
     if model in {line.strip() for line in out.splitlines()}:
         return True, None
     return False, (f"у OpenCode нет модели {model} — список: opencode models {provider}")
@@ -332,7 +322,10 @@ def opencode_model_listed(path: str, model: str, proxy: str | None = None) -> tu
 def logged_in(name: str, path: str) -> tuple[bool, str | None]:
     """Вошёл ли пользователь в CLI провайдера. (True, None) или (False, текст)."""
     if name == "opencode":
-        return _opencode_logged_in(path)
+        # Без запуска OpenCode: по его файлу входов (путь `path` не нужен).
+        if opencode_auth_present():
+            return True, None
+        return False, f"{OPENCODE_NO_LOGIN} (нет записей в {opencode_auth_file()})"
     if name == "codex":
         cmd = [path, "login", "status"]
         env = None

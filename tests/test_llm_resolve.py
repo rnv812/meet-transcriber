@@ -175,16 +175,31 @@ def test_runner_for_claude_passes_the_configured_model(monkeypatch):
 # --- OpenCode ---------------------------------------------------------------------
 
 
-def test_auto_order_puts_opencode_after_codex_and_before_local(monkeypatch):
-    assert llm.PROVIDERS == ("claude-code", "codex", "opencode", "openai-compatible")
+def test_auto_never_picks_opencode(monkeypatch):
+    # «Авто» — как до OpenCode: Claude Code → Codex → локальная. Кто был на
+    # локальной модели, на ней и остаётся, даже если OpenCode установлен и «вошёл».
+    assert llm.AUTO_PROVIDERS == ("claude-code", "codex", "openai-compatible")
+    assert "opencode" in llm.PROVIDERS
+    _env(monkeypatch, opencode="C:/oc/opencode.exe", local=True)
+    assert llm.resolve(_cfg())[0] == "openai-compatible"
+    _env(monkeypatch, opencode="C:/oc/opencode.exe")
+    assert llm.resolve(_cfg()) == (None, None)
     _env(monkeypatch, codex="C:/codex.exe", opencode="C:/oc/opencode.exe", local=True)
     assert llm.resolve(_cfg())[0] == "codex"
-    _env(monkeypatch, opencode="C:/oc/opencode.exe", local=True)
-    assert llm.resolve(_cfg())[0] == "opencode"
 
 
-def test_auto_skips_opencode_without_login(monkeypatch):
-    _env(monkeypatch, opencode="C:/oc/opencode.exe", local=True, logged={"opencode": False})
+def test_auto_local_model_wins_even_with_opencode_keys_in_env(monkeypatch, tmp_path):
+    # Настоящий logged_in OpenCode: ключ в переменной среды и вход в файле —
+    # «Авто» всё равно его не берёт.
+    monkeypatch.setattr(detect, "find_claude", lambda: None)
+    monkeypatch.setattr(detect, "find_codex", lambda: None)
+    monkeypatch.setattr(detect, "find_opencode", lambda: "C:/oc/opencode.exe")
+    monkeypatch.setattr(detect, "local_reachable", lambda url, timeout=0.5: True)
+    monkeypatch.setenv("HF_TOKEN", "hf_x")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    (tmp_path / "opencode").mkdir()
+    (tmp_path / "opencode" / "auth.json").write_text('{"openai": {"type": "api", "key": "sk"}}',
+                                                       encoding="utf-8")
     assert llm.resolve(_cfg())[0] == "openai-compatible"
 
 

@@ -6,7 +6,7 @@
 
 OpenCode проверяется без вызова модели (квоту не тратит): найден ли он, есть
 ли у него модель из настроек (`opencode models <провайдер>`), а без своей
-модели — есть ли вход (`opencode auth list`). Годен ли сам ключ, так не
+модели — есть ли вход (записи в его auth.json). Годен ли сам ключ, так не
 узнать: это скажет первый настоящий вызов.
 """
 
@@ -103,7 +103,7 @@ async def check(provider: str) -> dict:
         name, _ = resolve(settings.load())
         if name is None:
             return _result("auto", "нет доступного провайдера: "
-                                   "подключите Claude Code, Codex или OpenCode")
+                                   "подключите Claude Code или Codex либо выберите OpenCode")
         provider = name
     if provider not in PROVIDERS:
         return _result(provider, f"неизвестный провайдер: {provider}")

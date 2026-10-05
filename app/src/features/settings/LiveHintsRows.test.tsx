@@ -4,5 +4,6 @@ test("«Быстрее» у каждого провайдера своё", () =>
   expect(fastMeaning("claude-code")).toBe("Claude Code: модель Haiku без размышлений");
   expect(fastMeaning("codex")).toBe("Codex: низкое усилие рассуждения");
   expect(fastMeaning("openai-compatible")).toMatch(/без изменений/);
-  expect(fastMeaning(null)).toMatch(/Haiku.*Codex/);
+  expect(fastMeaning(null)).toMatch(/Haiku.*Codex.*OpenCode — без изменений/);
+  expect(fastMeaning("opencode")).toMatch(/OpenCode: без изменений/);
 });

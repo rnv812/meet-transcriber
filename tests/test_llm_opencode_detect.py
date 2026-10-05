@@ -129,74 +129,55 @@ def test_auth_file_follows_xdg_data_home(monkeypatch, tmp_path):
     assert detect.opencode_auth_file() == tmp_path / "data" / "opencode" / "auth.json"
 
 
-AUTH_LIST = (
-    "\n┌  Credentials ~/.local/share/opencode/auth.json\n│\n"
-    "●  Anthropic oauth\n│\n└  {n} credentials\n"
-)
-
-
-def test_logged_in_by_auth_list(monkeypatch):
-    seen = {}
-
-    def run(cmd, **kw):
-        seen["cmd"], seen["env"] = cmd, kw.get("env")
-        return _Done(0, AUTH_LIST.format(n=1))
-
-    monkeypatch.setattr(detect.subprocess, "run", run)
-    assert detect.logged_in("opencode", "C:/oc/opencode.exe") == (True, None)
-    assert seen["cmd"] == ["C:/oc/opencode.exe", "auth", "list"]
-    # Список — из кэша моделей, без похода на models.dev; без цвета.
-    assert seen["env"]["OPENCODE_DISABLE_MODELS_FETCH"] == "1"
-    assert seen["env"]["NO_COLOR"] == "1"
-
-
-def test_key_in_environment_counts_as_login(monkeypatch):
-    out = (AUTH_LIST.format(n=0)
-           + "\n┌  Environment\n│\n●  OpenAI OPENAI_API_KEY\n│\n└  1 environment variable\n")
-    monkeypatch.setattr(detect.subprocess, "run", lambda *a, **k: _Done(0, out))
-    assert detect.logged_in("opencode", "opencode") == (True, None)
-
-
-def test_no_credentials(monkeypatch):
-    out = "\x1b[2m" + AUTH_LIST.format(n=0) + "\x1b[0m"
-    monkeypatch.setattr(detect.subprocess, "run", lambda *a, **k: _Done(0, out))
-    ok, why = detect.logged_in("opencode", "opencode")
-    assert ok is False and "opencode auth login" in why
-
-
-def test_unknown_auth_list_output_falls_back_to_the_auth_file(monkeypatch, tmp_path):
+def _auth(tmp_path, monkeypatch, text=None):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     monkeypatch.delenv("OPENCODE_AUTH_CONTENT", raising=False)
-    monkeypatch.setattr(detect.subprocess, "run", lambda *a, **k: _Done(0, "что-то новое"))
-    ok, why = detect.logged_in("opencode", "opencode")
-    assert ok is False and "auth.json" in why
     auth = tmp_path / "opencode" / "auth.json"
-    auth.parent.mkdir(parents=True)
-    auth.write_text('{"anthropic": {"type": "oauth", "refresh": "r", "access": "a", "expires": 1}}',
-                    encoding="utf-8")
-    assert detect.logged_in("opencode", "opencode") == (True, None)
+    if text is not None:
+        auth.parent.mkdir(parents=True, exist_ok=True)
+        auth.write_text(text, encoding="utf-8")
+    return auth
 
 
-def test_auth_list_failure_falls_back_to_the_auth_file(monkeypatch, tmp_path):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-    monkeypatch.delenv("OPENCODE_AUTH_CONTENT", raising=False)
-
+def test_logged_in_reads_the_auth_file_without_starting_opencode(monkeypatch, tmp_path):
     def boom(*a, **k):
-        raise subprocess.TimeoutExpired("opencode", 20)
+        raise AssertionError("вход проверяется по файлу, OpenCode не запускается")
 
     monkeypatch.setattr(detect.subprocess, "run", boom)
-    ok, why = detect.logged_in("opencode", "opencode")
-    assert ok is False and why
-    auth = tmp_path / "opencode" / "auth.json"
-    auth.parent.mkdir(parents=True)
-    auth.write_text('{"openai": {"type": "api", "key": "sk"}}', encoding="utf-8")
-    assert detect.logged_in("opencode", "opencode") == (True, None)
+    monkeypatch.setattr(detect.subprocess, "Popen", boom)
+    _auth(tmp_path, monkeypatch)
+    ok, why = detect.logged_in("opencode", "C:/oc/opencode.exe")
+    assert ok is False and "opencode auth login" in why and "auth.json" in why
+    _auth(tmp_path, monkeypatch, '{"anthropic": {"type": "oauth", "refresh": "r", "access": "a", "expires": 1}}')
+    assert detect.logged_in("opencode", "C:/oc/opencode.exe") == (True, None)
+
+
+def test_random_provider_keys_in_the_environment_are_not_a_login(monkeypatch, tmp_path):
+    # HF_TOKEN (Hugging Face для разделения на спикеров), GITHUB_TOKEN, AWS_* —
+    # `opencode auth list` посчитал бы их; нам они ничего не говорят.
+    _auth(tmp_path, monkeypatch)
+    for name in ("HF_TOKEN", "GITHUB_TOKEN", "AWS_PROFILE", "OPENAI_API_KEY"):
+        monkeypatch.setenv(name, "x")
+    assert detect.logged_in("opencode", "opencode")[0] is False
+    assert detect.opencode_auth_present() is False
+
+
+def test_auth_present_for_the_configured_provider(monkeypatch, tmp_path):
+    _auth(tmp_path, monkeypatch, '{"anthropic": {"type": "api", "key": "sk"}}')
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert detect.opencode_auth_present("anthropic") is True
+    assert detect.opencode_auth_present("openai") is False
+    monkeypatch.setenv("HF_TOKEN", "x")
+    assert detect.opencode_auth_present("openai") is False
+    monkeypatch.setenv("OPENAI_API_KEY", "sk")
+    assert detect.opencode_auth_present("openai") is True
+    assert detect.opencode_provider_env("openrouter") == ("OPENROUTER_API_KEY",)
+    assert detect.opencode_provider_env("google-vertex") == ("GOOGLE_VERTEX_API_KEY",)
+    assert "GEMINI_API_KEY" in detect.opencode_provider_env("google")
 
 
 def test_auth_file_check(monkeypatch, tmp_path):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
-    monkeypatch.delenv("OPENCODE_AUTH_CONTENT", raising=False)
-    auth = tmp_path / "opencode" / "auth.json"
+    auth = _auth(tmp_path, monkeypatch)
     assert detect.opencode_auth_present() is False
     auth.parent.mkdir(parents=True)
     for text in ("{}", "не json", "[1]", '{"x": "y"}'):
@@ -212,14 +193,20 @@ def test_auth_file_check(monkeypatch, tmp_path):
 # --- модель из настроек есть у OpenCode (`opencode models <провайдер>`) ---------------
 
 
+def _run_tree(monkeypatch, fn):
+    from meet.llm import base
+
+    monkeypatch.setattr(base, "run_tree", fn)
+
+
 def test_model_listed(monkeypatch):
     seen = {}
 
     def run(cmd, **kw):
-        seen["cmd"], seen["env"] = cmd, kw.get("env")
-        return _Done(0, "openai/gpt-5\nopenai/gpt-5-mini\n")
+        seen["cmd"], seen["timeout"] = cmd, kw.get("timeout")
+        return 0, b"openai/gpt-5\nopenai/gpt-5-mini\n", b""
 
-    monkeypatch.setattr(detect.subprocess, "run", run)
+    _run_tree(monkeypatch, run)
     assert detect.opencode_model_listed("C:/oc/opencode.exe", "openai/gpt-5", "none") == (True, None)
     assert seen["cmd"] == ["C:/oc/opencode.exe", "models", "openai"]
     ok, why = detect.opencode_model_listed("C:/oc/opencode.exe", "openai/gpt-6", "none")
@@ -227,16 +214,43 @@ def test_model_listed(monkeypatch):
 
 
 def test_model_provider_not_connected(monkeypatch):
-    monkeypatch.setattr(detect.subprocess, "run",
-                        lambda *a, **k: _Done(1, "", "Error: Provider not found: anthropic"))
+    _run_tree(monkeypatch, lambda *a, **k: (1, b"", b"Error: Provider not found: anthropic"))
     ok, why = detect.opencode_model_listed("opencode", "anthropic/claude-sonnet-4-5", None)
     assert ok is False and "anthropic" in why and "opencode auth login" in why
 
 
-def test_model_listing_fails(monkeypatch):
-    def boom(*a, **k):
-        raise OSError("нет файла")
+def test_model_listing_times_out(monkeypatch):
+    def boom(cmd, **k):
+        raise subprocess.TimeoutExpired(cmd, 60)
 
-    monkeypatch.setattr(detect.subprocess, "run", boom)
+    _run_tree(monkeypatch, boom)
     ok, why = detect.opencode_model_listed("opencode", "openai/gpt-5", None)
-    assert ok is False and why
+    assert ok is False and "TimeoutExpired" in why
+
+
+def test_run_tree_kills_the_whole_tree_on_timeout(monkeypatch):
+    from meet.llm import base
+
+    killed = []
+
+    class Slow:
+        pid = 77
+
+        def __init__(self, cmd, **kw):
+            self.calls = 0
+
+        def communicate(self, timeout=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise subprocess.TimeoutExpired("x", timeout)
+            return b"", b""
+
+    monkeypatch.setattr(base.subprocess, "Popen", Slow)
+    monkeypatch.setattr(base, "kill_tree", lambda proc: killed.append(proc.pid))
+    try:
+        base.run_tree(["opencode-fake"], timeout=0.01)
+    except subprocess.TimeoutExpired:
+        pass
+    else:
+        raise AssertionError("ждали TimeoutExpired")
+    assert killed == [77]

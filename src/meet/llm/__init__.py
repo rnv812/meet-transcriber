@@ -12,10 +12,14 @@ from meet.llm.base import AgentReply, Runner
 if TYPE_CHECKING:
     from meet.settings import Settings
 
-# Порядок выбора для "auto": подписки CLI раньше локальной модели.
 PROVIDERS = ("claude-code", "codex", "opencode", "openai-compatible")
+# Порядок выбора для "auto": подписки CLI раньше локальной модели. OpenCode в
+# «Авто» не участвует — только явным выбором: у кого «Авто» шло на локальную
+# модель, текст встречи не должен сам уйти облачному провайдеру из конфига
+# OpenCode, едва тот появился на машине.
+AUTO_PROVIDERS = ("claude-code", "codex", "openai-compatible")
 
-__all__ = ["PROVIDERS", "AgentReply", "Runner", "agent_model", "provider_ready", "resolve",
+__all__ = ["AUTO_PROVIDERS", "PROVIDERS", "AgentReply", "Runner", "agent_model", "provider_ready", "resolve",
            "runner_for", "tier_kwargs"]
 
 # «Быстрее» для живых подсказок: та же подписка, модель полегче. haiku без
@@ -98,11 +102,11 @@ def provider_ready(name: str, cfg: "Settings", *, need_login: bool) -> bool:
 
 def resolve(cfg: "Settings") -> tuple[str | None, Runner | None]:
     """Кто будет отвечать. `auto` — первый готовый из claude-code → codex →
-    opencode → openai-compatible (CLI без входа пропускается: выбирается следующий).
+    openai-compatible (OpenCode — только явным выбором) (CLI без входа пропускается: выбирается следующий).
     Явный провайдер — он, если найден, иначе (None, None)."""
     choice = cfg.llm.provider
     if choice == "auto":
-        for name in PROVIDERS:
+        for name in AUTO_PROVIDERS:
             if provider_ready(name, cfg, need_login=True):
                 return name, runner_for(name, cfg)
         return None, None
