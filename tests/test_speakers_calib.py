@@ -106,6 +106,10 @@ def test_report_has_all_distributions(recording, tmp_path):
     assert mic["reference"] == "self" and mic["cos"]["n"] >= 3
     assert raw["dedupe_lags"]["neighbour"]["n"] == 1
     assert raw["dedupe_lags"]["neighbour"]["p50"] == pytest.approx(0.4, abs=0.01)
+    # Огибающие и громкость копий — для порогов mic_dedupe (у синтетики звук
+    # ровный: корреляции нет, а громкость копии — есть).
+    assert set(raw["dedupe_lags"]["env_corr"]) == {"pairs", "null"}
+    assert raw["dedupe_lags"]["copy_gap_db"]["n"] == 1
     emb = raw["embed_ms"]
     assert emb["n"] > 0 and emb["p50"] >= 0 and raw["device"] == "injected"
     assert raw["constants"]["T_OWN"] == 0.72

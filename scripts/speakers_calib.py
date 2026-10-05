@@ -12,7 +12,10 @@
 3. окно микрофона (окна mic_split) против образца владельца (если его нет —
    против голоса самого крупного кластера окон этой же записи); доля секунд
    для быстрого пути, кластеры окон;
-4. лаги уверенных пар mic↔sys (сосед / эхо) и покрытие — для mic_dedupe;
+4. лаги уверенных пар mic↔sys (сосед / эхо) и покрытие, корреляция огибающих
+   у уверенных пар и у тех же отрезков при случайном сдвиге 5–60 с (фон),
+   громкость копии в микрофоне относительно его речи — для mic_dedupe
+   (MIN_ENV_CORR, MIN_ENV_CORR_LONG, QUIET_DB);
 5. время эмбеддинга окна (мс) на выбранном устройстве.
 
 Запускать только на записях, владелец которых согласен (в записях — голоса
@@ -20,7 +23,7 @@
 текста реплик, ни путей.
 
     python scripts/speakers_calib.py <папка записи> [<папка записи> …] \\
-        --voices <папка голосов> --out <отчёт.md> [--device auto|cpu|cuda]
+        --voices <папка голосов> --out <отчёт.md> [--device auto|cpu]
 
 Рядом с отчётом .md пишется .json с теми же числами."""
 
@@ -252,8 +255,11 @@ def _mic_windows(segs, audio, owner, embed) -> tuple[list, dict, list]:
     return cos, {"fast_share": round(fast, 3), "clusters": clusters}, secs
 
 
-def _dedupe_lags(segs) -> tuple[list, list, list]:
-    """Лаги и покрытие уверенных пар mic↔sys (как их видит mic_dedupe)."""
+def _dedupe_lags(segs, env=None, seed: int = 0) -> tuple[list, list, list, list, list, list]:
+    """Лаги и покрытие уверенных пар mic↔sys (как их видит mic_dedupe); при
+    огибающих — их корреляция у пар, у тех же отрезков со случайным сдвигом
+    5–60 с (фон: обе дорожки звучат, но это не копия) и громкость копии в
+    микрофоне относительно его речи."""
     def toks(track):
         out = []
         for si, s in enumerate(segs):
@@ -265,7 +271,8 @@ def _dedupe_lags(segs) -> tuple[list, list, list]:
 
     mic, sys_toks = toks("mic"), sorted(toks("sys"), key=lambda t: t.start)
     starts = [t.start for t in sys_toks]
-    neighbour, echo, coverage = [], [], []
+    neighbour, echo, coverage, env_pairs, env_null, gaps = [], [], [], [], [], []
+    rng = np.random.default_rng(seed)
     for seg in mic_dedupe._by_segment(mic):
         for p in mic_dedupe._pairs(seg, sys_toks, starts):
             if p.matched < mic_dedupe.CONFIDENT_WORDS:
@@ -277,7 +284,16 @@ def _dedupe_lags(segs) -> tuple[list, list, list]:
                 neighbour.append(p.lag)
             elif p.lag <= mic_dedupe.ECHO_MAX_LAG:
                 echo.append(p.lag)
-    return neighbour, echo, coverage
+            if env is None:
+                continue
+            start, end = p.mic[0].start, p.mic[-1].end
+            got = env.corr(start, end, p.lag, mic_dedupe.ENV_SEARCH)
+            env_pairs.append(got[0] if got else None)
+            shift = float(rng.uniform(5.0, 60.0)) * (1 if rng.random() < 0.5 else -1)
+            got = env.corr(start, end, p.lag + shift, mic_dedupe.ENV_SEARCH)
+            env_null.append(got[0] if got else None)
+            gaps.append(env.gap_db(start, end))
+    return neighbour, echo, coverage, env_pairs, env_null, gaps
 
 
 # --- отчёт ----------------------------------------------------------------------
@@ -324,7 +340,10 @@ def markdown(r: dict) -> str:
         lines.append(f"| {rec['id']} | {rec['minutes']} | {rec['sys_segments']} | {rec['mic_windows']} | {cl} |")
     d = r["dedupe_lags"]
     lines += ["", "## 4. Дубли mic↔sys: лаги уверенных пар (с)", "", HEAD, _row("сосед", d["neighbour"]),
-              _row("эхо", d["echo"]), _row("покрытие (от 4 слов)", d["coverage"]), "",
+              _row("эхо", d["echo"]), _row("покрытие (от 4 слов)", d["coverage"]),
+              _row("огибающая: уверенные пары", d["env_corr"]["pairs"]),
+              _row("огибающая: случайный сдвиг (фон)", d["env_corr"]["null"]),
+              _row("копия в mic против речи mic, дБ", d["copy_gap_db"]), "",
               "## 5. Время эмбеддинга окна (мс)", "", HEAD, _row("все окна", r["embed_ms"])]
     for key, s in r["embed_ms_by_length"].items():
         lines.append(_row(f"окно {key} с", s))
@@ -370,7 +389,7 @@ def main(argv=None, *, embed=None, load=None) -> dict:
     own, other, buckets = [], [], {}
     live = {str(c): {"own": [], "best_other": [], "margin": []} for c in CHECKPOINTS}
     win_cos, fast, per_rec = [], [], []
-    neighbour, echo, coverage = [], [], []
+    neighbour, echo, coverage, env_pairs, env_null, gaps = [], [], [], [], [], []
     skipped = 0
     for folder in args.folders:
         segs = _segments(folder)
@@ -397,10 +416,16 @@ def main(argv=None, *, embed=None, load=None) -> dict:
         win_cos += cos
         if info["fast_share"] is not None:
             fast.append(info["fast_share"])
-        nb, ec, cv = _dedupe_lags(segs)
+        mic_words = [(float(w.start), float(w.end)) for s in segs if s.get("track") == "mic"
+                     for w in mic_split._words_of(_to_segment(s))[0]]
+        env = mic_dedupe.Envelope.from_audio(mic_audio, sys_audio, RATE, mic_words)
+        nb, ec, cv, ep, en, gp = _dedupe_lags(segs, env, seed=n)
         neighbour += nb
         echo += ec
         coverage += cv
+        env_pairs += ep
+        env_null += en
+        gaps += gp
         per_rec.append({"id": f"запись {n}", "minutes": round(len(mic_audio) / RATE / 60, 1),
                         "sys_segments": len(o), "mic_windows": len(secs), "mic_clusters": info["clusters"]})
 
@@ -413,7 +438,9 @@ def main(argv=None, *, embed=None, load=None) -> dict:
         "live_vs_base": {"checkpoints": {c: {k: stats(v) for k, v in s.items()} for c, s in live.items()}},
         "mic_windows_vs_owner": {"reference": "owner_sample" if owner else "self", "cos": stats(win_cos),
                                  "fast_share": stats(fast)},
-        "dedupe_lags": {"neighbour": stats(neighbour), "echo": stats(echo), "coverage": stats(coverage)},
+        "dedupe_lags": {"neighbour": stats(neighbour), "echo": stats(echo), "coverage": stats(coverage),
+                        "env_corr": {"pairs": stats(env_pairs), "null": stats(env_null)},
+                        "copy_gap_db": stats(gaps)},
         "embed_ms": stats(timed.ms),
         "embed_ms_by_length": {k: stats(v) for k, v in sorted(timed.by_len.items())},
         "per_recording": per_rec,
