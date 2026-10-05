@@ -665,3 +665,15 @@ test("пути, команды и id моделей — во всю ширину
   await userEvent.click(screen.getByRole("switch", { name: "Запускать команду после записи" }));
   expect(screen.getByLabelText("Команда")).toBeEnabled();
 });
+
+test("команда после записи: сказано, что ассистент дописывает ленту и сводку уже после неё", async () => {
+  render(<SettingsPane endpoint={ep} recordingsDir={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Распознавание" }));
+  await userEvent.click(screen.getByRole("button", { name: "Дополнительно" }));
+  await userEvent.click(screen.getByRole("button", { name: "Команда после записи" }));
+  expect(screen.getByText(/ассистент дописывает ленту и сводку после неё/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Как задать команду" }));
+  const tip = (await screen.findByText("live_transcript.md")).parentElement;
+  expect(tip).toHaveTextContent("live_state.json");
+  expect(tip).toHaveTextContent("дописывает");
+});

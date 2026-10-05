@@ -156,6 +156,11 @@ export function HookCommandTip() {
         Программа и её аргументы через пробел. Команда запускается без командной оболочки, когда запись
         остановлена и сохранена.
       </TipLine>
+      <TipLine>
+        У записи с ассистентом звук к этому моменту записан целиком, а ассистент ещё до полутора минут
+        дописывает в её папку последние строки ленты (<code>live_transcript.md</code>) и сводку
+        (<code>live_state.json</code>): команда может застать их без конца.
+      </TipLine>
       <TipLine>Подстановки в аргументах:</TipLine>
       {HOOK_PLACEHOLDERS.map((p) => (
         <TipLine key={p.token}><code>{p.token}</code> — {p.text}</TipLine>

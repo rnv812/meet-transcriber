@@ -1610,6 +1610,96 @@ def test_live_start_does_not_attach_while_the_devices_are_still_opening(resident
     assert resident.tray.recording is True
 
 
+def test_stop_clicked_while_the_devices_open_is_not_reported_as_going_on(resident,
+                                                                        monkeypatch):
+    """«Стоп», пока открываются устройства: `record.started` всё равно
+    приходит (открытие не прерывается), а запись уже останавливается —
+    ответ «остановлена», без «запись продолжается», ассистента не запускали."""
+    def opening_record(out_root, stop_event=None, *, bus, pcm_tap=None):
+        resident.folder.mkdir(parents=True, exist_ok=True)
+        feed = pcm_tap.begin(2)
+        feed.configure(0, "sys.opus", 48000, 2)
+        feed.configure(1, "mic.opus", 16000, 1)
+        time.sleep(0.4)  # PyAudio и first_open — не прерываются
+        bus.emit(events.RECORD_STARTED, folder=str(resident.folder))
+        stop_event.wait(60)
+        time.sleep(0.5)  # session.close(): потоки, финал opus
+        feed.end()
+        return resident.folder
+
+    monkeypatch.setattr(tray, "record", opening_record)
+    threading.Timer(0.1, resident.tray.stop_recording).start()
+    reply = resident.live_start()
+    _wait_for(lambda: not resident.tray.recording)
+    assert reply["ok"] is True and reply["action"] == "stopped", reply
+    assert not reply.get("error")
+    assert resident.stub.argv is None
+
+
+def test_stop_during_the_tail_cut_spawns_no_assistant(resident, monkeypatch, tmp_path):
+    """Новая «Запись с ассистентом» обрывает хвост прошлого (до 5 + 5 с), а её
+    саму тем временем остановили: ассистента для остановленной записи не
+    запускают, ответ — «остановлена»."""
+    resident.stub.mode = "hang"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["ready"])
+    resident.tray.stop_recording()
+    assert resident.live.finishing()
+    second = _next_recording(resident, monkeypatch, tmp_path)
+    out = {}
+    starter = threading.Thread(target=lambda: out.setdefault("reply", resident.live_start()))
+    starter.start()
+    _wait_for(lambda: resident.tray.recording)
+    time.sleep(1.0)  # внутри end_tail
+    resident.tray.stop_recording()
+    starter.join(30)
+    reply = out["reply"]
+    assert reply["ok"] is True and reply["action"] == "stopped", reply
+    # Ошибка в ответе, если есть, — об оборванном хвосте прошлой записи, не об этой.
+    assert reply.get("error_folder") != str(second)
+    assert "продолжается" not in (reply.get("error") or "")
+    assert len(resident.stub.processes) == 1  # второго ребёнка нет
+    assert not resident.live.busy()
+
+
+def test_plain_attach_refuses_when_the_recording_stopped_during_the_tail_cut(
+        resident, monkeypatch, tmp_path):
+    """«Включить ассистента» в новой записи, пока обрывается хвост прошлого, а
+    запись остановили: отказ, ребёнка нет."""
+    resident.stub.mode = "hang"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["ready"])
+    resident.tray.stop_recording()
+    _next_recording(resident, monkeypatch, tmp_path)
+    assert resident.start_recording()["ok"] is True
+    _wait_for(lambda: resident.tray.pcm_tap.active())
+    threading.Timer(1.0, resident.tray.stop_recording).start()
+    with pytest.raises(control.BadRequest, match="Запись не идёт|останавливается"):
+        resident.live_attach()
+    assert len(resident.stub.processes) == 1
+
+
+def test_attach_during_the_tail_answers_within_the_shell_timeout(resident, monkeypatch,
+                                                                 tmp_path):
+    """«Включить ассистента» в новой записи во время хвоста прошлого: хвост
+    обрывается (до 5 + 5 с), ответ — в пределах 30 с оболочки, ассистент
+    подключён к новой записи."""
+    resident.stub.mode = "hang"
+    resident.live_start()
+    _wait_for(lambda: resident.live.status()["ready"])
+    resident.tray.stop_recording()
+    assert resident.live.finishing()
+    second = _next_recording(resident, monkeypatch, tmp_path)
+    assert resident.start_recording()["ok"] is True
+    _wait_for(lambda: resident.tray.pcm_tap.active())
+    began = time.monotonic()
+    reply = resident.live_attach()
+    assert time.monotonic() - began < 30.0
+    assert reply["ok"] is True and reply["attached"] is True
+    assert resident.live.status()["folder"] == str(second)
+    resident.tray.stop_recording()
+
+
 def test_record_started_of_another_recording_does_not_count(resident, monkeypatch):
     """`record.started` из чужого потока (доживающая прошлая запись) — не
     сигнал этой попытки."""

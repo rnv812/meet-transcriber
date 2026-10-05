@@ -299,7 +299,8 @@ function AdvancedSection({ draft, set }: { draft: Raw; set: SetFn }) {
   return (
     <>
       <Disclosure title="Команда после записи" className="sdetails">
-        <Switch label="Запускать команду после записи" hint="Когда запись остановлена и сохранена"
+        <Switch label="Запускать команду после записи"
+          hint="Когда запись остановлена и сохранена; у записи с ассистентом ассистент дописывает ленту и сводку после неё"
           value={hookOn} onChange={(x) => set("hooks", "post_record", x)} />
         <TextRow id="hook-command" label="Команда" placeholder="Не задана" help={<HookCommandTip />} wide
           disabled={!hookOn}

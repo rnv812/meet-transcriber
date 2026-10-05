@@ -1142,9 +1142,10 @@ class TrayControl:
             # ошибка, ассистенту подключаться не к чему.
             return {**self.live.status(), "ok": False,
                     "error": f"Запись не началась: {attempt.error or 'поток записи завершился'}"}
-        if attempt.done.is_set() or not self.tray.recording:
-            # Запись остановили, пока она открывалась (поток уже вернул папку,
-            # а флаг записи снимется через миг): ничего не «продолжается».
+        if attempt.done.is_set() or not self.tray.recording or self._record_stopping():
+            # Запись остановили, пока она открывалась (поток уже вернул папку
+            # или ещё дописывает её, а флаг записи снимется через миг): ничего
+            # не «продолжается».
             return {**self.live.status(), "ok": True, "action": "stopped"}
         if not attempt.started.is_set():
             # Устройства открываются дольше обычного: запись ещё может пойти
@@ -1159,12 +1160,17 @@ class TrayControl:
         try:
             return self.live_attach(with_recording=True)
         except (BadRequest, Conflict) as e:
-            if not self.tray.recording:
+            if not self.tray.recording or self._record_stopping():
                 return {**self.live.status(), "ok": True, "action": "stopped"}
             # Запись уже идёт и пусть идёт: ассистент — не повод её терять.
             error = live_control.recording_goes_on(str(e), ready=False)
             self.tray.log(error)
             return {**self.live.status(), "ok": False, "error": error}
+
+    def _record_stopping(self) -> bool:
+        """Запись останавливается: «Стоп» уже нажат, поток дописывает дорожки
+        (флаг `recording` снимется, когда он закончит)."""
+        return bool(getattr(self.tray, "stopping", False))
 
     def live_stop(self) -> dict:
         """Остановить запись с ассистентом (`source: live`) — это остановка
@@ -1221,6 +1227,12 @@ class TrayControl:
 
         # Хвост ассистента прошлой записи ещё пишется — один ребёнок за раз.
         self.live.end_tail(TAIL_CUT_WAIT_S)
+        if not self.tray.recording or self._record_stopping() or not hub.active():
+            # Пока обрывали хвост (до 5 + 5 с), эту запись остановили: ребёнок
+            # для неё уже не нужен (а остановка его не увидела бы и не ждала).
+            server.close()
+            raise _bad_request("Запись не идёт — её остановили, пока ассистент "
+                               "прошлой записи дописывал сводку")
         try:
             reply = self.live.start(self._root(), attach={
                 "folder": str(folder), "server": server, "started_at": started_at,

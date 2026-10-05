@@ -11,6 +11,20 @@ def test_emit_reaches_subscriber():
     assert [(e.kind, e.data["text"]) for e in seen] == [("log", "привет")]
 
 
+def test_subscriber_runs_on_the_publisher_thread():
+    """Подписчика зовут в потоке издателя, а не в своём: на этом стоит
+    `tray.RecordAttempt.watch` («record.started» именно этого потока записи)."""
+    import threading
+
+    bus = events.EventBus()
+    seen = []
+    bus.subscribe(lambda e: seen.append(threading.current_thread()))
+    publisher = threading.Thread(target=lambda: bus.emit(events.LOG, text="x"))
+    publisher.start()
+    publisher.join()
+    assert seen == [publisher]
+
+
 def test_event_carries_wall_clock_time():
     """Стенное время, а не монотонное: события сопоставляются с record.log."""
     before = __import__("time").time()
