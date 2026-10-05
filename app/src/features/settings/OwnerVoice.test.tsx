@@ -37,7 +37,7 @@ test("строка образца словами", () => {
 test("настройки: не записан → «Записать» открывает текст; запись с микрофона из черновика", async () => {
   vi.mocked(api.getOwnerVoice).mockResolvedValueOnce(status())
     .mockResolvedValueOnce(status({ take: take("analyzing") }))
-    .mockResolvedValue(status({ take: take("done", { sample_id: "s1" }), samples: [sample()] }));
+    .mockResolvedValue(status({ take: take("done", { sample_id: "s1" }), samples: [sample({ device: "USB-микрофон" })] }));
   vi.mocked(api.recordOwnerVoice).mockResolvedValue(status({ take: take("recording") }));
   render(<OwnerVoiceRow endpoint={ep} device="USB-микрофон" pollMs={5} />);
   const group = screen.getByRole("group", { name: "Мой голос" });
@@ -48,9 +48,42 @@ test("настройки: не записан → «Записать» откр�
   await userEvent.click(screen.getByRole("button", { name: "Начать запись" }));
   expect(api.recordOwnerVoice).toHaveBeenCalledWith(ep, "USB-микрофон");
   // Готово — строка свёрнута, в ней новый образец.
-  expect(await within(group).findByText("записан 05.10 · Onboard MIC")).toBeInTheDocument();
+  expect(await within(group).findByText("записан 05.10 · USB-микрофон")).toBeInTheDocument();
   expect(screen.queryByText(/Утро выдалось тихим/)).toBeNull();
   expect(within(group).getByRole("button", { name: "Перезаписать" })).toBeInTheDocument();
+});
+
+test("настройки: «Перезаписать» — только для образца выбранного микрофона", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ samples: [sample()] }));
+  const { unmount } = render(<OwnerVoiceRow endpoint={ep} device="USB-микрофон" />);
+  expect(await screen.findByRole("button", { name: "Записать" })).toBeInTheDocument();
+  unmount();
+  render(<OwnerVoiceRow endpoint={ep} device="Onboard MIC" />);
+  expect(await screen.findByRole("button", { name: "Перезаписать" })).toBeInTheDocument();
+});
+
+test("настройки: записанный образец удаляется после подтверждения", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValue(status({ samples: [sample()] }));
+  vi.mocked(api.deleteOwnerVoice).mockResolvedValue(status());
+  render(<OwnerVoiceRow endpoint={ep} device={null} />);
+  await userEvent.click(await screen.findByRole("button", { name: "Удалить образец: записан 05.10 · Onboard MIC" }));
+  const dialog = screen.getByRole("alertdialog", { name: "Удалить записанный образец голоса?" });
+  await userEvent.click(within(dialog).getByRole("button", { name: "Оставить" }));
+  expect(api.deleteOwnerVoice).not.toHaveBeenCalled();
+  await userEvent.click(screen.getByRole("button", { name: "Удалить образец: записан 05.10 · Onboard MIC" }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Удалить" }));
+  expect(api.deleteOwnerVoice).toHaveBeenCalledWith(ep, "s1");
+  expect(await screen.findByText("не записан")).toBeInTheDocument();
+});
+
+test("мастер: модель докачалась — шаг сам предлагает запись", async () => {
+  vi.mocked(api.getOwnerVoice).mockResolvedValueOnce(status({
+    ready: false, reason: "Модель разделения на спикеров ещё скачивается — подождите немного" }))
+    .mockResolvedValue(status());
+  render(<StepVoice endpoint={ep} onNext={vi.fn()} pollMs={5} readyPollMs={10} />);
+  expect(await screen.findByText("Модель разделения на спикеров ещё скачивается — подождите немного.")).toBeInTheDocument();
+  expect(screen.getByText("Сейчас его не записать.", { exact: false })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "Начать запись" })).toBeEnabled();
 });
 
 test("настройки: «Удалить» убирает образец", async () => {

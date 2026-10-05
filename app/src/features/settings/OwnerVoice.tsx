@@ -15,11 +15,14 @@ import { deleteOwnerVoice, type Endpoint, getOwnerVoice, recordOwnerVoice } from
 import { errorText } from "../../lib/format";
 import type { OwnerVoiceSample, OwnerVoiceStatus } from "../../lib/types";
 import { Button } from "../../ui/Button";
+import { useConfirm } from "../../ui/ConfirmDialog";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { Row } from "./Section";
 
 /** Как часто спрашивать резидент, пока идёт запись или разбор. */
 export const POLL_MS = 1000;
+/** Мастер: как часто перепроверять готовность (модель могла докачаться). */
+export const READY_POLL_MS = 3000;
 
 /** Нейтральный текст для чтения вслух: ~25 с в обычном темпе. */
 export const READING_TEXT =
@@ -31,6 +34,9 @@ export const READING_TEXT =
 
 export const PRIVACY_NOTE =
   "Хранится только отпечаток голоса — набор чисел. Сама запись удаляется сразу после обработки.";
+
+/** Причина словами — отдельным предложением, с точкой. */
+export const sentence = (s: string) => (/[.!?]$/.test(s.trim()) ? s.trim() : `${s.trim()}.`);
 
 /** «05.10» из «2026-10-05». */
 export function shortDate(iso: string): string {
@@ -49,8 +55,14 @@ export function sampleText(s: OwnerVoiceSample): string {
 const active = (status: OwnerVoiceStatus | null) =>
   status?.take?.state === "recording" || status?.take?.state === "analyzing";
 
-/** Состояние образца у резидента: загрузка, опрос во время записи, запись и удаление. */
-export function useOwnerVoice(endpoint: Endpoint, pollMs = POLL_MS) {
+/**
+ * Состояние образца у резидента: загрузка, опрос во время записи, запись и
+ * удаление. `watchReady` — перепроверять готовность, пока её нет (мастер:
+ * модель разделения на спикеров могла ещё качаться).
+ */
+export function useOwnerVoice(endpoint: Endpoint, { pollMs = POLL_MS, readyPollMs = READY_POLL_MS, watchReady = false }: {
+  pollMs?: number; readyPollMs?: number; watchReady?: boolean;
+} = {}) {
   const [status, setStatus] = useState<OwnerVoiceStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -69,11 +81,12 @@ export function useOwnerVoice(endpoint: Endpoint, pollMs = POLL_MS) {
   useEffect(() => { void reload(); }, [reload]);
 
   const polling = active(status);
+  const waiting = watchReady && !!status && !status.ready && !polling;
   useEffect(() => {
-    if (!polling) return;
-    const timer = setTimeout(() => void reload(), pollMs);
+    if (!polling && !waiting) return;
+    const timer = setTimeout(() => void reload(), polling ? pollMs : readyPollMs);
     return () => clearTimeout(timer);
-  }, [polling, status, reload, pollMs]);
+  }, [polling, waiting, status, reload, pollMs, readyPollMs]);
 
   const record = async (device: string | null) => {
     setStarting(true);
@@ -125,7 +138,7 @@ export function OwnerVoiceRecorder({ voice, device }: { voice: OwnerVoice; devic
   const left = useCountdown(take?.state === "recording", seconds);
   const blocked = status?.recording
     ? "Идёт запись встречи — запишите образец после неё."
-    : status && !status.ready ? status.reason : null;
+    : status && !status.ready ? sentence(status.reason ?? "Записать образец сейчас нельзя") : null;
   const again = take?.state === "done" || take?.state === "failed";
   return (
     <div className="ownv">
@@ -163,10 +176,22 @@ export function OwnerVoiceRow({ endpoint, device, pollMs }: {
   device: string | null;
   pollMs?: number;
 }) {
-  const voice = useOwnerVoice(endpoint, pollMs);
+  const voice = useOwnerVoice(endpoint, { pollMs });
   const [open, setOpen] = useState(false);
+  const [confirmNode, confirm] = useConfirm();
   const samples = voice.status?.samples ?? [];
-  const enrolled = samples.some((s) => s.source === "enroll");
+  // «Перезаписать» — только если запись заменит образец этого микрофона;
+  // с другим микрофоном появится второй образец.
+  const enrolled = samples.some((s) => s.source === "enroll" && (device === null || s.device === device));
+  const remove = async (s: OwnerVoiceSample) => {
+    if (s.source === "enroll" && !(await confirm({
+      title: "Удалить записанный образец голоса?",
+      message: "Расшифровка перестанет отличать ваш голос с этого микрофона от голосов людей рядом, "
+        + "пока вы не запишете образец снова.",
+      confirmLabel: "Удалить", cancelLabel: "Оставить",
+    }))) return;
+    await voice.remove(s.id);
+  };
   const take = voice.status?.take;
   // Запись готова — свернуть: в строке уже виден новый образец.
   useEffect(() => { if (take?.state === "done") setOpen(false); }, [take?.state]);
@@ -185,7 +210,7 @@ export function OwnerVoiceRow({ endpoint, device, pollMs }: {
           {samples.map((s) => (
             <span key={s.id} className="ownv__sample">
               <span>{sampleText(s)}</span>
-              <Button size="sm" onClick={() => void voice.remove(s.id)} disabled={voice.busy}
+              <Button size="sm" onClick={() => void remove(s)} disabled={voice.busy}
                 aria-label={`Удалить образец: ${sampleText(s)}`}>Удалить</Button>
             </span>
           ))}
@@ -198,6 +223,7 @@ export function OwnerVoiceRow({ endpoint, device, pollMs }: {
         </div>
       </Row>
       {open && <OwnerVoiceRecorder voice={voice} device={device} />}
+      {confirmNode}
     </div>
   );
 }
