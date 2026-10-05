@@ -773,6 +773,10 @@ _ROUTES = {
     ("GET", "/processes"): lambda h, p: _server_of(h).state.processes(),
     ("GET", "/devices"): lambda h, p: _server_of(h).state.devices(),
     ("POST", "/devices/test"): lambda h, p: _server_of(h).state.test_device(h._body()),
+    # Образец голоса владельца: что записано и ход записи; записать (~25 с с
+    # микрофона, разбор задачей); удалить образец — в _PATTERNS.
+    ("GET", "/owner-voice"): lambda h, p: _server_of(h).state.owner_voice(),
+    ("POST", "/owner-voice/record"): lambda h, p: _server_of(h).state.owner_voice_record(h._body()),
     ("PATCH", "/settings"): lambda h, p: _server_of(h).state.patch_settings(h._body()),
     # Редактор категорий: список, стандартный список и сколько встреч в каждой.
     ("GET", "/categories"): lambda h, p: _server_of(h).state.categories((p.get("q") or [""])[0]),
@@ -933,6 +937,8 @@ _PATTERNS = (
     # «В заметки» прежнего окна — та же выгрузка в базу знаний.
     ("POST", re.compile(r"^/recordings/([^/]+)/notes$"),
      lambda h, p, rid: _server_of(h).state.kb_export(unquote(rid))),
+    ("DELETE", re.compile(r"^/owner-voice/([^/]+)$"),
+     lambda h, p, sample_id: _server_of(h).state.owner_voice_delete(unquote(sample_id))),
     ("DELETE", re.compile(r"^/jobs/([^/]+)$"),
      lambda h, p, job_id: _server_of(h).state.cancel_job(job_id)),
     ("GET", re.compile(r"^/voices/([^/]+)/sample$"),

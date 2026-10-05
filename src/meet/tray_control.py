@@ -461,6 +461,13 @@ class TrayControl:
         self._suggesting: dict[str, dict] = {}
         self._suggest_lock = threading.Lock()
         self.bus.subscribe(self._on_job_event)
+        # Образец голоса владельца (мастер, настройки «Звук»): запись
+        # подпроцессом устройств, разбор — задачей в своём слоте загрузок.
+        from meet import owner_voice_control
+
+        self.owner_takes = owner_voice_control.OwnerTakes(
+            queue=self.downloads, bus=self.bus, voices=self._voices, log=tray.log,
+            busy=lambda: bool(self.tray.recording) or self.live.busy())
 
     @staticmethod
     def _background(fn, name: str = "meet-background") -> None:
@@ -3324,6 +3331,17 @@ class TrayControl:
             },
             "dev_mode": paths.is_dev(),
         }
+
+    # --- образец голоса владельца (meet.owner_voice_control) ----------------
+
+    def owner_voice(self) -> dict:
+        return self.owner_takes.status()
+
+    def owner_voice_record(self, body: dict | None) -> dict:
+        return self.owner_takes.record(body)
+
+    def owner_voice_delete(self, sample_id: str) -> dict:
+        return self.owner_takes.delete(sample_id)
 
     # --- люди -----------------------------------------------------------
 
