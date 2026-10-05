@@ -140,3 +140,59 @@ def test_main_reports_errors_as_json(monkeypatch, capsys):
     assert devices_probe.main(["--check", "mic"]) == 0
     got = json.loads(capsys.readouterr().out.strip())
     assert got["ok"] is False and "нет WASAPI" in got["error"]
+
+
+# --- запись образца голоса: --record mic --out <wav> ---------------------------
+
+
+def _stereo(pa_holder, frames):
+    """sleep записи: «PortAudio» отдаёт буферы стерео-микрофона по очереди."""
+    def sleep(_seconds):
+        _, stream = pa_holder.instances[-1].opened[-1]
+        for left, right in frames:
+            stream.callback(struct.pack("<2h", left, right), 1, None, 0)
+    return sleep
+
+
+def test_record_writes_mono_wav_of_the_pinned_mic(fake_pa, tmp_path, monkeypatch):
+    import wave
+
+    monkeypatch.setitem(_PA.DEVICES, 2, {**_PA.DEVICES[2], "maxInputChannels": 2})
+    out = tmp_path / "образец.wav"
+    got = devices_probe.record("USB-микрофон", out, seconds=25,
+                               sleep=_stereo(fake_pa, [(100, 300), (-1000, -3000), (32767, 32767)]))
+    assert got == {"ok": True, "path": str(out), "device": "USB-микрофон", "fallback": False,
+                   "seconds": round(3 / 48000, 3), "rate": 48000}
+    with wave.open(str(out), "rb") as w:
+        assert (w.getnchannels(), w.getsampwidth(), w.getframerate()) == (1, 2, 48000)
+        assert struct.unpack("<3h", w.readframes(3)) == (200, -2000, 32767)
+    index, stream = fake_pa.instances[0].opened[0]
+    assert index == 2 and stream.closed and fake_pa.instances[0].terminated
+
+
+def test_record_falls_back_to_system_mic(fake_pa, tmp_path):
+    got = devices_probe.record("Чужой", tmp_path / "a.wav", seconds=1, sleep=lambda s: None)
+    assert got["device"] == "Микрофон" and got["fallback"] is True
+    assert got["seconds"] == 0.0  # тишина без буферов — пустой, но честный файл
+
+
+def test_record_failure_leaves_no_file(fake_pa, tmp_path, monkeypatch):
+    def broken(self, **kw):
+        raise OSError("устройство занято")
+
+    monkeypatch.setattr(_PA, "open", broken)
+    out = tmp_path / "a.wav"
+    with pytest.raises(OSError):
+        devices_probe.record(None, out, seconds=1, sleep=lambda s: None)
+    assert not out.exists()
+
+
+def test_main_record_prints_json_and_requires_out(fake_pa, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(devices_probe.time, "sleep", lambda s: None)
+    out = tmp_path / "образец.wav"
+    assert devices_probe.main(["--record", "mic", "--seconds", "25", "--out", str(out)]) == 0
+    got = json.loads(capsys.readouterr().out.strip())
+    assert got["ok"] is True and got["path"] == str(out) and out.exists()
+    assert devices_probe.main(["--record", "mic"]) == 0
+    got = json.loads(capsys.readouterr().out.strip())
+    assert got["ok"] is False and "--out" in got["error"]

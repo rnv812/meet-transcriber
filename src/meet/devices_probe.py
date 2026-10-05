@@ -14,7 +14,11 @@ CLAUDE.md). Второй инстанс, созданный и завершён�
 * без аргументов — список: `{"available", "inputs", "outputs", "system", "mic"}`;
 * `--check mic|output [--name ИМЯ] [--seconds 2]` — записать пару секунд с
   микрофона или с loopback устройства вывода и вернуть пиковый уровень:
-  `{"ok", "peak" 0..1, "device", "fallback"}`. Без имени — системное.
+  `{"ok", "peak" 0..1, "device", "fallback"}`. Без имени — системное;
+* `--record mic --out ФАЙЛ.wav [--name ИМЯ] [--seconds 25]` — записать образец
+  голоса владельца (мастер, настройки «Звук»): WAV 16 бит моно на частоте
+  устройства → `{"ok", "path", "device", "fallback", "seconds", "rate"}`.
+  Разбирает его задача `owner_voice` (meet.owner_enroll), она же его удаляет.
 """
 
 import argparse
@@ -23,6 +27,9 @@ import sys
 import time
 
 CHECK_SECONDS = 2.0
+# Образец голоса: сколько пишем по умолчанию и не дольше скольких секунд.
+RECORD_SECONDS = 25.0
+RECORD_MAX_S = 60.0
 LOOPBACK_SUFFIX = " [Loopback]"
 
 
@@ -98,16 +105,85 @@ def check_level(kind: str, name: "str | None", seconds: float = CHECK_SECONDS,
         audio.terminate()
 
 
+def record(name: "str | None", out, seconds: float = RECORD_SECONDS, sleep=None) -> dict:
+    """Записать `seconds` с микрофона в WAV (16 бит, моно — среднее каналов,
+    частота устройства). Тот же callback, что у проверки уровня; файл пишется
+    целиком по окончании, при сбое его нет."""
+    import wave
+    from pathlib import Path
+
+    import numpy as np
+
+    from meet import recorder
+
+    sleep = sleep or time.sleep
+    pyaudio = recorder.pyaudio
+    out = Path(out)
+    audio = pyaudio.PyAudio()
+    try:
+        dev, fell_back = recorder.resolve_device(audio, "mic", name)
+        channels = max(1, int(dev["maxInputChannels"]))
+        rate = int(dev["defaultSampleRate"])
+        chunks: list[bytes] = []
+
+        def callback(in_data, frame_count, time_info, status):
+            chunks.append(bytes(in_data))
+            return (None, pyaudio.paContinue)
+
+        stream = audio.open(
+            format=pyaudio.paInt16,
+            channels=channels,
+            rate=rate,
+            input=True,
+            input_device_index=int(dev["index"]),
+            frames_per_buffer=1024,
+            stream_callback=callback,
+        )
+        try:
+            sleep(seconds)
+        finally:
+            try:
+                stream.stop_stream()
+            finally:
+                stream.close()
+        pcm = np.frombuffer(b"".join(chunks), dtype="<i2")
+        pcm = pcm[: len(pcm) - len(pcm) % channels].reshape(-1, channels)
+        mono = pcm.astype(np.int32).mean(axis=1).round().astype("<i2")
+        try:
+            with wave.open(str(out), "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(rate)
+                w.writeframes(mono.tobytes())
+        except Exception:
+            out.unlink(missing_ok=True)
+            raise
+        return {"ok": True, "path": str(out), "device": _display_name(dev["name"]),
+                "fallback": fell_back, "seconds": round(len(mono) / rate, 3), "rate": rate}
+    finally:
+        audio.terminate()
+
+
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m meet.devices_probe")
     parser.add_argument("--check", choices=("mic", "output"))
+    parser.add_argument("--record", choices=("mic",))
+    parser.add_argument("--out")
     parser.add_argument("--name")
-    parser.add_argument("--seconds", type=float, default=CHECK_SECONDS)
+    parser.add_argument("--seconds", type=float)
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
-    if args.check:
+    if args.record:
         try:
-            payload = check_level(args.check, args.name or None,
-                                  seconds=min(max(args.seconds, 0.1), 10.0))
+            if not args.out:
+                raise ValueError("нужен --out: куда писать образец")
+            seconds = RECORD_SECONDS if args.seconds is None else args.seconds
+            payload = record(args.name or None, args.out, seconds=min(max(seconds, 1.0), RECORD_MAX_S))
+        except Exception as e:
+            payload = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    elif args.check:
+        try:
+            seconds = CHECK_SECONDS if args.seconds is None else args.seconds
+            payload = check_level(args.check, args.name or None, seconds=min(max(seconds, 0.1), 10.0))
         except Exception as e:
             payload = {"ok": False, "error": f"{type(e).__name__}: {e}"}
     else:
