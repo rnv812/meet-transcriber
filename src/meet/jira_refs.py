@@ -610,9 +610,13 @@ def _u16(text: str, i: int) -> int:
 
 def turns_of(segments: list) -> list[list[int]]:
     """Реплики окна — номера сегментов (как mergeTurns в lib/speakers.ts):
-    подряд один спикер, пауза меньше TURN_GAP_S; отметки перерыва — отдельно."""
+    подряд один спикер, пауза меньше TURN_GAP_S, та же пометка
+    `library.turn_mark` (микрофон и звонок, голос под вопросом — разные
+    реплики); отметки перерыва — отдельно."""
+    from meet import library
+
     out: list[list[int]] = []
-    cur, speaker, end = None, None, 0.0
+    cur, speaker, end, mark = None, None, 0.0, None
     for i, seg in enumerate(segments):
         if not isinstance(seg, dict):
             continue
@@ -625,11 +629,12 @@ def turns_of(segments: list) -> list[list[int]]:
             start, stop = float(seg.get("start") or 0.0), float(seg.get("end") or 0.0)
         except (TypeError, ValueError):
             start = stop = 0.0
-        if cur is not None and who == speaker and start - end < TURN_GAP_S:
+        here = library.turn_mark(seg)
+        if cur is not None and who == speaker and here == mark and start - end < TURN_GAP_S:
             cur.append(i)
             end = max(end, stop)
         else:
-            cur, speaker, end = [i], who, stop
+            cur, speaker, end, mark = [i], who, stop, here
             out.append(cur)
     return out
 

@@ -381,6 +381,9 @@ def overview(folder: Path, voices_dir: Path, owner: str = "Вы") -> dict:
     return {"speakers": rows, "owner": owner, "history": _public(steps), "pos": pos,
             "trimmed": _trimmed(meta, data), "voice_threshold": own_threshold(meta),
             "owner_voice": bool(_owner_entries(sidecar)),
+            # Голос владельца — только кандидат (образец его не узнал, mic_split
+            # owner_not_found): «Запомнить мой голос» — по явному «это я».
+            "owner_voice_candidate": _owner_candidate_only(sidecar),
             "mic_split": mic_split, "mic_removed": _mic_removed(folder)}
 
 
@@ -761,9 +764,17 @@ NO_OWNER_VOICE = ("Ваш голос не запомнен: у встречи н
 
 
 def _owner_entries(sidecar: dict | None) -> list[dict]:
+    """Записи голоса владельца в сайдкаре — подтверждённые образцом и
+    кандидаты (`candidate: true`: образец не узнал владельца, mic_split
+    owner_not_found)."""
     return [e for e in (sidecar or {}).get("speakers") or []
             if isinstance(e, dict) and isinstance(e.get("embedding"), list)
             and (e.get("owner") is True or e.get("label") == OWNER_LABEL)]
+
+
+def _owner_candidate_only(sidecar: dict | None) -> bool:
+    entries = _owner_entries(sidecar)
+    return bool(entries) and all(e.get("candidate") is True for e in entries)
 
 
 def _mic(entry: dict) -> bool:
@@ -773,10 +784,12 @@ def _mic(entry: dict) -> bool:
 
 
 def _owner_parts(segments: list[dict], shown: list[str | None], clusters: dict[str, list[dict]],
-                 finals: dict, owner: str | None) -> list[dict]:
+                 finals: dict, owner: str | None, confirm_candidate: bool = False) -> list[dict]:
     """Записи сайдкара, из которых складывается голос владельца после шага:
     микрофонные кластеры всех строк, ставших владельцем, с весом — секунды
-    речи строки поровну между её кластерами. Без записи OWNER — пусто."""
+    речи строки поровну между её кластерами. Без записи OWNER — пусто.
+    Кандидат (`candidate: true`, не проверен образцом) берётся, только если
+    человек явно подтвердил, что это его голос (`confirm_candidate`)."""
     seconds: dict[str, float] = {}
     for seg, label in zip(segments, shown):
         if label:
@@ -785,7 +798,8 @@ def _owner_parts(segments: list[dict], shown: list[str | None], clusters: dict[s
     for label, final in finals.items():
         if final != owner:
             continue
-        mic = [e for e in clusters.get(label, []) if _mic(e)]
+        mic = [e for e in clusters.get(label, []) if _mic(e)
+               and (confirm_candidate or e.get("candidate") is not True)]
         for e in mic:
             parts.append({"label": str(e.get("label") or e.get("display")),
                           "weight": round(seconds.get(label, 0.0) / len(mic), 3),
@@ -844,12 +858,13 @@ def _reowner(folder: Path, step: dict, voices_dir: Path) -> list[str]:
 def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
           now: datetime | None = None, *, lead: dict | None = None,
           threshold: list | None = None, remember_owner: bool = False,
-          owner: str | None = None) -> dict:
+          owner: str | None = None, confirm_candidate: bool = False) -> dict:
     """Применить набор правок одним шагом истории. Всё проверяется до записи:
     отказ не оставляет транскрипт наполовину переименованным. `lead` — что
     это за шаг, если не ручные правки (порог узнавания); `threshold` — [было,
     стало] порога встречи: шаг помнит и его. `remember_owner` — «Запомнить мой
-    голос»: голос владельца (`owner`) после шага — образцом владельца."""
+    голос»: голос владельца (`owner`) после шага — образцом владельца;
+    `confirm_candidate` — человек подтвердил голос-кандидат («это точно я»)."""
     data = editable(folder)
     segments = data["segments"]
     shown = _shown(segments)
@@ -862,12 +877,20 @@ def apply(folder: Path, ops: list, remember: dict | None, voices_dir: Path,
     else:
         finals, normal = _finals(ops, order, clusters)
     remember = remember if isinstance(remember, dict) else {}
-    wanted = [label for label in order if remember.get(label) is True and not unnamed(finals[label])]
+    # Владелец — не человек базы голосов: строка, ставшая владельцем, туда не
+    # запоминается (свой голос — «Запомнить мой голос»).
+    from meet import segvoices
+
+    owners = segvoices.owner_labels(folder, data) | ({owner} if owner else set())
+    wanted = [label for label in order if remember.get(label) is True and not unnamed(finals[label])
+              and finals[label] not in owners]
     targets = [finals[label] if label else None for label in shown]
     deltas = _deltas(segments, targets)
     if not deltas and not wanted and not remember_owner:
         raise SpeakerError("нечего применять — имена уже такие")
-    owner_parts = _owner_parts(segments, shown, clusters, finals, owner) if remember_owner else []
+    # До фильтра голоса владельца ниже: из него и складывается образец.
+    owner_parts = (_owner_parts(segments, shown, clusters, finals, owner, confirm_candidate)
+                   if remember_owner else [])
     if remember_owner and not owner_parts and not deltas and not wanted:
         raise SpeakerError(NO_OWNER_VOICE)  # шаг, который ничего не делает, — не шаг
 
@@ -1359,10 +1382,15 @@ def threshold_plan(folder: Path, value: float, voices_dir: Path) -> dict:
     meta = library.read_meta(folder)
     steps, pos = _history_of(meta, data)
     manual = _manual(steps[:pos])
+    # Голос владельца (OWNER, и кандидат тоже) — не человек базы: строку
+    # владельца порог не переименовывает никогда.
+    from meet import segvoices
+
+    owners = segvoices.owner_labels(folder, data)
     rows, changes = [], []
     for label in order:
-        entries = clusters.get(label)
-        if not entries:
+        entries = [e for e in clusters.get(label) or [] if not e.get("owner")]
+        if not entries or label in owners:
             continue
         embs = [np.asarray(e["embedding"], dtype=np.float32) for e in entries]
         scored = sorted(((max((voices._cos(e, x) for e in embs for x in samples if e.shape == x.shape),

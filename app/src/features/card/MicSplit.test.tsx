@@ -18,6 +18,7 @@ import { Turns } from "./Turns";
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
   getSpeakers: vi.fn(),
+  applySpeakers: vi.fn(),
 }));
 
 const seg = (start: number, speaker: string, text: string, extra: Partial<Segment> = {}): Segment => ({
@@ -133,6 +134,47 @@ describe("панель «Спикеры»", () => {
     await userEvent.click(within(room).getByRole("button", { name: "Назначить…" }));
     await userEvent.type(screen.getByRole("combobox"), "Ольга{Enter}");
     expect(within(room).getByRole("checkbox", { name: /Запомнить голос/ })).toBeInTheDocument();
+  });
+
+  test("голос-кандидат: на строке «Вы» честный вопрос, флажок выключен, «Применить» — с подтверждением", async () => {
+    vi.mocked(api.getSpeakers).mockResolvedValue(view({ owner_voice: true, owner_voice_candidate: true }));
+    vi.mocked(api.applySpeakers).mockResolvedValue(view());
+    setup();
+    const me = await screen.findByRole("region", { name: /^Вы/ });
+    expect(within(me).getByText("Голос не совпал с образцом — это точно вы?")).toBeInTheDocument();
+    const box = within(me).getByRole("checkbox", { name: /Запомнить мой голос/ });
+    expect(box).not.toBeChecked();
+    expect(screen.queryByRole("button", { name: "Применить" })).toBeNull();
+    await userEvent.click(box);
+    expect(screen.getByText("Будет запомнен ваш голос из этой встречи")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Применить" }));
+    expect(api.applySpeakers).toHaveBeenCalledWith(expect.anything(), "r1", [], {}, true, true);
+  });
+
+  test("голос-кандидат при «Это я» на другой строке — флажок есть, но выключен", async () => {
+    vi.mocked(api.getSpeakers).mockResolvedValue(view({ owner_voice: true, owner_voice_candidate: true }));
+    vi.mocked(api.applySpeakers).mockResolvedValue(view());
+    setup();
+    const room = await screen.findByRole("region", { name: /^Спикер 2/ });
+    await userEvent.click(within(room).getByRole("button", { name: "Назначить…" }));
+    await userEvent.click(screen.getByRole("option", { name: /Это я — Вы/ }));
+    const box = within(room).getByRole("checkbox", { name: /Запомнить мой голос/ });
+    expect(box).not.toBeChecked();
+    expect(within(room).getByText("Голос не совпал с образцом — это точно вы?")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Применить" }));
+    expect(api.applySpeakers).toHaveBeenLastCalledWith(expect.anything(), "r1", expect.any(Array), {}, false);
+  });
+
+  test("подтверждённый голос владельца: на строке «Вы» флажка нет, при «Это я» — включён", async () => {
+    vi.mocked(api.getSpeakers).mockResolvedValue(view({ owner_voice: true, owner_voice_candidate: false }));
+    setup();
+    const me = await screen.findByRole("region", { name: /^Вы/ });
+    expect(within(me).queryByRole("checkbox", { name: /Запомнить мой голос/ })).toBeNull();
+    const room = screen.getByRole("region", { name: /^Спикер 2/ });
+    await userEvent.click(within(room).getByRole("button", { name: "Назначить…" }));
+    await userEvent.click(screen.getByRole("option", { name: /Это я — Вы/ }));
+    expect(within(room).getByRole("checkbox", { name: /Запомнить мой голос/ })).toBeChecked();
+    expect(within(room).queryByText(/не совпал с образцом/)).toBeNull();
   });
 
   test("«Показать» из карточки раскрывает список убранного", async () => {

@@ -154,12 +154,15 @@ export const getSpeakers = (ep: Endpoint, id: string) =>
   json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers`);
 /**
  * Набор правок одним шагом истории; `remember` — запомнить голос строки в базе,
- * `rememberOwner` — «Запомнить мой голос»: ваш голос из этой встречи — образцом владельца.
+ * `rememberOwner` — «Запомнить мой голос»: ваш голос из этой встречи — образцом владельца;
+ * `ownerCandidate` — вы подтвердили голос-кандидат («это точно я»), не узнанный образцом.
  */
 export const applySpeakers = (ep: Endpoint, id: string, ops: SpeakerOpInput[], remember: Record<string, boolean>,
-  rememberOwner = false) =>
+  rememberOwner = false, ownerCandidate = false) =>
   json<SpeakersView>(ep, `/recordings/${enc(id)}/speakers/apply`,
-    body("POST", rememberOwner ? { ops, remember, remember_owner: true } : { ops, remember }));
+    body("POST", rememberOwner
+      ? { ops, remember, remember_owner: true, ...(ownerCandidate ? { owner_candidate: true } : {}) }
+      : { ops, remember }));
 /**
  * Реплики (номера сегментов) — другому спикеру одним шагом истории. `labels` и
  * `count` — как их видит окно: расшифровка изменилась — 409, а не правка не тех реплик.

@@ -2119,8 +2119,9 @@ class TrayControl:
         # «Это я» + «Запомнить мой голос»: голос владельца встречи — образцом.
         owner = settings.load().recording.speaker_name if body.get("remember_owner") is True else None
         return self._speakers_change(recording_id, lambda folder, voices: speakers.apply(
-            folder, body.get("ops"), body.get("remember"), voices,
-            remember_owner=owner is not None, owner=owner))
+            folder, body.get("ops") or [], body.get("remember"), voices,
+            remember_owner=owner is not None, owner=owner,
+            confirm_candidate=body.get("owner_candidate") is True))
 
     def speakers_relabel(self, recording_id: str, body: dict | None) -> dict:
         """Реплики (индексы сегментов) — другому спикеру: одна, серия подряд или

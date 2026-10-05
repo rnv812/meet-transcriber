@@ -857,6 +857,9 @@ def test_call_and_microphone_turns_of_one_person_stay_apart():
     assert [t["texts"] for t in speakers._turns(segs, shown)] == [["в звонке"], ["в комнате"], ["да"],
                                                                  ["наверное", "точно"]]
     assert speakers._turn_count(segs, [0, 1]) == 2 and speakers._turn_count(segs, [3, 4]) == 1
+    from meet import jira_refs
+
+    assert jira_refs.turns_of(segs) == [[0], [1], [2], [3, 4]]
 
 
 def test_meet_enroll_prefers_the_call_cluster_and_refuses_the_owner(tmp_path, monkeypatch):
@@ -877,3 +880,98 @@ def test_meet_enroll_prefers_the_call_cluster_and_refuses_the_owner(tmp_path, mo
     with pytest.raises(SystemExit, match="ваш голос"):
         voices.enroll(str(rec), ["Вы=Кузьма"], folder=base)
     assert not (base / "Кузьма.json").exists()
+
+
+# --- fix round 2: порог не трогает владельца (N1), голос-кандидат (N2) ----------------------
+
+
+def _candidate(folder: Path) -> None:
+    """Сайдкар встречи owner_not_found: OWNER — кандидат, не проверенный образцом."""
+    side_path = next(folder.glob("*_speakers.json"))
+    side = json.loads(side_path.read_text(encoding="utf-8"))
+    for e in side["speakers"]:
+        if e.get("owner"):
+            e["candidate"] = True
+    side_path.write_text(json.dumps(side, ensure_ascii=False), encoding="utf-8")
+
+
+@pytest.mark.parametrize("candidate", [False, True])
+def test_threshold_never_renames_the_owner_row(call, candidate):
+    """«Порог узнавания»: строка «Вы» (голос OWNER, подтверждённый или
+    кандидат) не переименовывается ни в «Спикер N», ни в человека из базы,
+    даже если его голос похож на кого-то в базе («Кузьма» в базе = OWNER)."""
+    from meet import speakers
+
+    folder, voices = call
+    if candidate:
+        _candidate(folder)
+    plan = speakers.threshold_plan(folder, 0.5, voices)
+    assert "Вы" not in {r["label"] for r in plan["rows"]}
+    speakers.threshold_apply(folder, 0.5, voices)
+    shown = [s["speaker"] for s in library.read_transcript(folder)["segments"] if s.get("track") == "mic"]
+    assert shown.count("Вы") == 2 and "Кузьма" not in shown
+
+
+def test_overview_tells_a_candidate_owner_voice(call):
+    from meet import speakers
+
+    folder, voices = call
+    assert speakers.overview(folder, voices)["owner_voice_candidate"] is False
+    _candidate(folder)
+    view = speakers.overview(folder, voices)
+    assert view["owner_voice"] is True and view["owner_voice_candidate"] is True
+
+
+def test_candidate_owner_voice_is_never_saved_without_confirmation(call):
+    """«Это я» в встрече owner_not_found без явного «это точно я»: голос-
+    кандидат образцом не становится."""
+    from meet import speakers
+
+    folder, voices = call
+    _candidate(folder)
+    got = speakers.apply(folder, [{"type": "rename", "label": "Спикер 3", "to": "Вы"}], {}, voices,
+                         remember_owner=True, owner="Вы")
+    assert owner_voice.load(voices) == [] and speakers.NO_OWNER_VOICE in got["voices_error"]
+
+
+def test_confirmed_candidate_on_the_owner_row_itself_is_saved(call):
+    """Строка «Вы» сама: «Голос не совпал с образцом — это точно вы?» →
+    «Запомнить мой голос» — образец встречи из голоса-кандидата."""
+    from meet import speakers
+
+    folder, voices = call
+    _candidate(folder)
+    got = speakers.apply(folder, [], {}, voices, remember_owner=True, owner="Вы", confirm_candidate=True)
+    (sample,) = owner_voice.load(voices)
+    assert sample.source == "meeting" and sample.recording == folder.name
+    assert got["step"]["owner_voice"] is True and got["voices_error"] is None
+
+
+def test_confirmed_candidate_with_this_is_me_merge(call):
+    """«Это я» на строке человека в комнате + подтверждение: образец из
+    кандидата и той строки (кандидат взят до фильтра голоса владельца)."""
+    from meet import speakers
+
+    folder, voices = call
+    _candidate(folder)
+    got = speakers.apply(folder, [{"type": "rename", "label": "Спикер 3", "to": "Вы"}], {"Спикер 3": True},
+                         voices, remember_owner=True, owner="Вы", confirm_candidate=True)
+    assert [s.source for s in owner_voice.load(voices)] == ["meeting"]
+    assert got["step"]["enrolled"] == [] and got["voices_error"] is None
+
+
+def test_resident_passes_candidate_confirmation(call, monkeypatch, tmp_path):
+    from meet import settings, tray, tray_control
+
+    folder, voices = call
+    _candidate(folder)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.delenv("MEET_DATA_DIR", raising=False)
+    settings.patch({"recording": {"out_dir": str(folder.parent), "voices_dir": str(voices)}})
+    state = tray_control.TrayControl(tray.TrayApp())
+    with pytest.raises(Exception, match="не запомнен"):
+        state.speakers_apply(folder.name, {"ops": [], "remember": {}, "remember_owner": True})
+    assert owner_voice.load(voices) == []
+    got = state.speakers_apply(folder.name, {"ops": [], "remember": {}, "remember_owner": True,
+                                             "owner_candidate": True})
+    assert got["step"]["owner_voice"] is True and [s.source for s in owner_voice.load(voices)] == ["meeting"]
