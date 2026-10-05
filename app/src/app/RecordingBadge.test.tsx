@@ -276,3 +276,16 @@ test("подмена устройства у ассистента тоже ви�
   rerender(<RecordingBadge endpoint={ep} snapshot={snap({ devices_fallback: fallback })} />);
   expect(screen.queryByText(/не найден/)).toBeNull();
 });
+
+test("запуск с ассистентом: этап виден; запись уже идёт, пока грузится модель", () => {
+  const { rerender } = render(<RecordingBadge endpoint={ep}
+    snapshot={snap({ live: live({ starting: true, stage: "открываю микрофон и звук…" }) })} />);
+  expect(screen.getByText("Ассистент запускается: открываю микрофон и звук…")).toBeInTheDocument();
+  rerender(<RecordingBadge endpoint={ep} snapshot={snap({ live: live({
+    active: true, ready: false, stage: "загружаю модель распознавания…",
+    started_at: Date.now() / 1000 - 5 }) })} />);
+  expect(screen.getByText(/REC/)).toHaveTextContent(/● REC 00:0\d/);
+  expect(screen.getByText(/REC/)).not.toHaveTextContent("· ассистент");
+  expect(screen.getByText("Ассистент запускается: загружаю модель распознавания…")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Стоп" })).toBeEnabled();
+});

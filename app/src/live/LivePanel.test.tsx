@@ -452,3 +452,12 @@ test("«Вам вопрос» встаёт в строку свёрнутой п
   expect(line).toHaveTextContent("Ольга спрашивает про отчёт");
   expect(line).toHaveClass("live-last--urgent");
 });
+
+test("пока модель грузится — в шапке этап старта, а не «Слушает»", () => {
+  render(<LivePanel endpoint={ep} />);
+  act(() => bus().emit("state", snap(status({ ready: false, stage: "загружаю модель распознавания…" }))));
+  expect(head()).toHaveTextContent("Запускается: загружаю модель распознавания…");
+  expect(head()).not.toHaveTextContent("Слушает");
+  act(() => bus().emit("state", snap(status({ ready: true }))));
+  expect(head()).toHaveTextContent("Слушает");
+});

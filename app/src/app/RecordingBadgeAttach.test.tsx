@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 
@@ -95,4 +95,35 @@ test("Стоп во время записи с ассистентом — ост
   await userEvent.click(screen.getByRole("button", { name: "Стоп" }));
   expect(stop).toHaveBeenCalledWith(ep, "stop");
   expect(liveStop).not.toHaveBeenCalled();
+});
+
+test("подключается: этап старта виден у REC вместо общего «запускается»", () => {
+  const { rerender } = render(<RecordingBadge endpoint={ep}
+    snapshot={recording(live({ starting: true, attached: true, stage: "подключаюсь к записи…" }))} />);
+  expect(screen.getByText("Ассистент запускается: подключаюсь к записи…")).toBeInTheDocument();
+  // Отвод уже читается, модель ещё грузится: ассистент ещё не слушает.
+  rerender(<RecordingBadge endpoint={ep} snapshot={recording(live({
+    active: true, ready: false, attached: true, stage: "загружаю модель распознавания…" }))} />);
+  expect(screen.getByText("Ассистент запускается: загружаю модель распознавания…")).toBeInTheDocument();
+  expect(screen.getByText(/REC/)).not.toHaveTextContent("· ассистент");
+  rerender(<RecordingBadge endpoint={ep}
+    snapshot={recording(live({ active: true, ready: true, attached: true }))} />);
+  expect(screen.getByText(/REC/)).toHaveTextContent("· ассистент");
+  expect(screen.queryByText(/Ассистент запускается/)).toBeNull();
+});
+
+test("подключённый ассистент упал — ошибка видна, хотя запись идёт, и не гаснет сама", () => {
+  vi.useFakeTimers();
+  try {
+    const { rerender } = render(<RecordingBadge endpoint={ep}
+      snapshot={recording(live({ starting: true, attached: true }))} />);
+    rerender(<RecordingBadge endpoint={ep} snapshot={recording(live({
+      error: "Ассистент не запустился за 120 с: этап «загружаю модель распознавания» не закончился",
+      ended_by: "crash" }))} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Ассистент не запустился за 120 с");
+    act(() => { vi.advanceTimersByTime(30000); });
+    expect(screen.getByRole("alert")).toHaveTextContent("Ассистент не запустился");
+  } finally {
+    vi.useRealTimers();
+  }
 });

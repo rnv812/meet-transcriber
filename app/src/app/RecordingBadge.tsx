@@ -29,7 +29,18 @@ export const liveOf = (r: LiveStatus): LiveStatus => ({
   active: r.active, starting: r.starting, stopping: r.stopping,
   folder: r.folder, error: r.error, started_at: r.started_at,
   ...(r.attached === undefined ? {} : { attached: r.attached }),
+  ...(r.ready === undefined ? {} : { ready: r.ready }),
+  ...(r.stage === undefined ? {} : { stage: r.stage }),
 });
+
+/** Ассистент ещё не слушает: этап старта, если резидент его знает. */
+export function startingText(live: LiveStatus | undefined): string {
+  const stage = live?.stage?.trim();
+  return stage ? `Ассистент запускается: ${stage}` : "Ассистент запускается…";
+}
+
+/** Звук пишется, а модель ещё грузится (старый резидент `ready` не присылает — готов). */
+const warmingUp = (live: LiveStatus | undefined) => !!live?.active && live.ready === false;
 
 /**
  * Кнопка записи и таймер REC.
@@ -41,9 +52,12 @@ export const liveOf = (r: LiveStatus): LiveStatus => ({
  * «▾» рядом с «Начать запись» — меню с записью «С ассистентом» (живой режим).
  * При нём `snapshot.status` остаётся "idle", а состояние — в `snapshot.live`;
  * часы живого режима идут от `started_at` (стенное время резидента, когда
- * ассистент начал слушать; неизвестно — без часов). Ошибка живого режима
- * (`live.error`) видна несколько секунд с момента, как появилась в снимке;
- * любую ошибку можно скрыть «×».
+ * пошёл звук; неизвестно — без часов). Пока ассистент запускается, вместо
+ * общего «запускается» — его этап (`live.stage`: «загружаю модель
+ * распознавания…»); звук при этом уже пишется (`active` без `ready`). Ошибка
+ * живого режима (`live.error`) видна с момента, как появилась в снимке, — и
+ * во время обычной записи (подключённый ассистент упал, запись идёт); упал
+ * (`ended_by: "crash"`) — висит до «×», иначе гаснет через несколько секунд.
  *
  * Во время обычной записи «▾» рядом со «Стоп» — «Включить ассистента»
  * (запись не прерывается: ассистент догоняет уже записанное и слушает
@@ -74,7 +88,8 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   // простоя. Первый снимок — точка отсчёта: окно, открытое через час после
   // сбоя, старую ошибку не показывает.
   const liveError = live?.error?.trim() || null;
-  const [liveNotice, setLiveNotice] = useState<string | null>(null);
+  const crashed = live?.ended_by === "crash";
+  const [liveNotice, setLiveNotice] = useState<{ text: string; sticky: boolean } | null>(null);
   const seenLiveError = useRef<{ ready: boolean; value: string | null }>({ ready: false, value: null });
   const hasSnapshot = snapshot != null;
   useEffect(() => {
@@ -87,10 +102,10 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
     }
     if (liveError === seen.value) return;
     seen.value = liveError;
-    setLiveNotice(liveError);
-  }, [hasSnapshot, liveError]);
+    setLiveNotice(liveError ? { text: liveError, sticky: crashed } : null);
+  }, [hasSnapshot, liveError, crashed]);
   useEffect(() => {
-    if (!liveNotice) return;
+    if (!liveNotice || liveNotice.sticky) return;
     const t = setTimeout(() => setLiveNotice(null), ERROR_MS);
     return () => clearTimeout(t);
   }, [liveNotice]);
@@ -178,7 +193,10 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
       })
       .catch((e) => setError(errorText(e)));
   };
-  const shownError = error ?? (idle ? liveNotice : null);
+  // Ошибка прошлого ассистента — не поверх нового (запускается, слушает,
+  // дописывает), но и во время обычной записи: подключённый упал, запись идёт.
+  const liveBusy = liveActive || !!live?.starting || !!live?.stopping;
+  const shownError = error ?? (liveBusy ? null : liveNotice?.text ?? null);
   const dismiss = () => {
     setError(null);
     setLiveNotice(null);
@@ -187,8 +205,8 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   let main;
   if (recording) {
     const note = !attached ? null : live?.stopping ? "Ассистент выключается…"
-      : live?.starting ? "Ассистент запускается…" : null;
-    const listening = attached && liveActive && !live?.stopping;
+      : live?.starting || warmingUp(live) ? startingText(live) : null;
+    const listening = attached && liveActive && !warmingUp(live) && !live?.stopping;
     main = (
       <>
         <span className="rec-badge__live num">● REC {clock(snapshot.elapsed_s + since)}{listening ? " · ассистент" : ""}</span>
@@ -229,15 +247,20 @@ export function RecordingBadge({ endpoint, snapshot, snapshotAt, online = true, 
   } else if (live?.starting) {
     main = (
       <>
-        <span className="muted">Ассистент запускается…</span>
+        <span className="muted">{startingText(live)}</span>
         <Button variant="danger" onClick={() => runLive(liveStop)}>Стоп</Button>
       </>
     );
   } else if (live?.active) {
     const liveS = live.started_at == null ? null : now / 1000 - live.started_at;
+    // Звук уже пишется, а модель ещё грузится: часы идут, ассистент — скоро.
+    const warming = warmingUp(live);
     main = (
       <>
-        <span className="rec-badge__live num">● REC {liveS === null ? "" : `${clock(liveS)} `}· ассистент</span>
+        <span className="rec-badge__live num">
+          ● REC {liveS === null ? "" : `${clock(liveS)} `}{warming ? "" : "· ассистент"}
+        </span>
+        {warming && <span className="muted">{startingText(live)}</span>}
         <Button variant="danger" onClick={() => runLive(liveStop)}>Стоп</Button>
       </>
     );

@@ -589,9 +589,17 @@ export type ProviderCheck = { ok: boolean; error?: string | null; provider?: str
 
 /** Состояние живого режима, общая часть ответов `/live/start` и `/live/stop`. */
 export type LiveStatus = {
+  /** Звук уже пишется (своя запись или отвод обычной); модель может ещё грузиться — см. `ready`. */
   active: boolean;
   starting: boolean;
   stopping: boolean;
+  /**
+   * Модель распознавания загружена, ассистент слушает. Старый резидент поля
+   * не присылает — тогда `active` и значит «слушает».
+   */
+  ready?: boolean;
+  /** Этап старта, пока ассистент не готов: «загружаю модель распознавания…»; null — ещё неизвестен. */
+  stage?: string | null;
   folder: string | null;
   error: string | null;
   started_at: number | null;

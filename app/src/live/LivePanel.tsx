@@ -160,7 +160,11 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
 
   // Коротко: шапка узкой панели (от 300 px) вмещает таймер, состояние и пять кнопок.
   const catchup = live.catchup?.active ? live.catchup : null;
+  // Звук уже идёт, а модель распознавания ещё грузится — этап старта.
+  const warming = status?.ready === false;
+  const stage = status?.stage?.trim();
   const state = stopping ? (attached ? "Выключаю…" : "Останавливаю…")
+    : warming ? (stage ? `Запускается: ${stage}` : "Запускается…")
     : catchup ? `Догоняю ${catchup.percent} %` : "Слушает";
   const sizeLabel = view.maximized ? "Обычный размер" : "На весь экран";
   const last = live.lines.at(-1);
@@ -173,7 +177,7 @@ export function LivePanel({ endpoint }: { endpoint: Endpoint }) {
   return (
     <div ref={root} className={`live-panel${mods}${quiet ? " live-panel--quiet" : ""}`} onMouseDown={dragAnywhere}>
       <header className="live-head" onMouseDown={(e) => headPress(e, startDrag, () => setMaximized(!view.maximized))}>
-        <span className="live-head__title" title={stopping ? state : "Ассистент слушает встречу"}>
+        <span className="live-head__title" title={stopping || warming ? state : "Ассистент слушает встречу"}>
           <span className="live-dot" aria-hidden="true" />
           <span className="num">{elapsed === null ? "—" : clock(elapsed)}</span> · {state}
           {quiet && <span className="live-head__quiet-tag">тихо</span>}
