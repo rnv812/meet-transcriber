@@ -202,6 +202,10 @@ fn main() {
                 // macOS: job object нет — установку движка гасим сами.
                 engine::kill_installs();
             }
+            // macOS: щелчок по значку в Dock, когда окно закрыто или спрятано,
+            // открывает его снова (без этого Dock молчал — окно только из трея).
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen { .. } => tray::reopen_from_dock(app),
             _ => {}
         });
 }

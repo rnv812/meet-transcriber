@@ -27,6 +27,7 @@ use tauri_plugin_notification::NotificationExt;
 use crate::api::{self, Client};
 use crate::live_panel;
 use crate::logs::shell_log;
+use crate::platform::{self, Os};
 use crate::resident::{self, lock, ResidentStatus, Supervisor};
 use crate::upgrade;
 use crate::windows;
@@ -1403,6 +1404,20 @@ fn open_window(app: &AppHandle) {
     windows::open_main(app, recording, None);
 }
 
+/// Левый клик по иконке: в трее Windows открывает окно (меню — правым), в
+/// строке меню macOS — показывает меню, как у всех программ там; окно тогда
+/// открывается пунктом меню или щелчком по значку в Dock.
+fn left_click_shows_menu(os: Os) -> bool {
+    os == Os::MacOs
+}
+
+/// Щелчок по значку в Dock (macOS, `RunEvent::Reopen`): окно закрыто или
+/// спрятано — открыть его снова, как из трея.
+#[cfg(target_os = "macos")]
+pub fn reopen_from_dock(app: &AppHandle) {
+    open_window(app);
+}
+
 /// Иконка в трее и поток опроса. Вызывать из `setup` после `Supervisor::start`.
 pub fn build(app: &tauri::App) -> tauri::Result<()> {
     app.manage(TrayState::default());
@@ -1416,7 +1431,7 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
         .icon_as_template(cfg!(target_os = "macos"))
         .tooltip(tooltip(None, &ResidentStatus::Starting))
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        .show_menu_on_left_click(left_click_shows_menu(platform::current()))
         .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
         .on_tray_icon_event(|tray, event| match event {
             TrayIconEvent::Click {
@@ -1427,7 +1442,7 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
             | TrayIconEvent::DoubleClick {
                 button: MouseButton::Left,
                 ..
-            } => open_window(tray.app_handle()),
+            } if !left_click_shows_menu(platform::current()) => open_window(tray.app_handle()),
             _ => {}
         })
         .build(app)?;
@@ -3403,5 +3418,11 @@ mod tests {
             None
         );
         assert_eq!(pending_recording(None, t0), None);
+    }
+
+    #[test]
+    fn left_click_opens_the_window_on_windows_and_the_menu_on_mac() {
+        assert!(!left_click_shows_menu(Os::Windows));
+        assert!(left_click_shows_menu(Os::MacOs));
     }
 }
