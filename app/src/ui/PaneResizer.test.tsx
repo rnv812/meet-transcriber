@@ -57,3 +57,96 @@ test("без хранилища всё работает: ширина по ум�
   fireEvent.keyDown(split, { key: "ArrowRight" });
   expect(area().style.getPropertyValue("--menu-w")).toBe("216px");
 });
+
+/** Панели одна над другой: нижняя — по CSS (доля области), пока её не потянули. */
+const FLUID = { min: 64, max: 600, reserve: 100 };
+
+function Stack({ show = true, inside = false }: { show?: boolean; inside?: boolean }) {
+  const resizer = show && (
+    <PaneResizer name="test-low" cssVar="--low" spec={FLUID} panel="after" axis="y" label="Высота сводки"
+      cssValue={(h) => `0 1 ${h}px`}
+      {...(inside ? { area: (h: HTMLElement) => h.parentElement?.parentElement ?? null, pane: (h: HTMLElement) => h.parentElement } : {})} />
+  );
+  return (
+    <div className="stack" data-testid="stack">
+      <section />
+      {!inside && resizer}
+      <section className="low">{inside && resizer}</section>
+    </div>
+  );
+}
+
+const stack = () => screen.getByTestId("stack");
+/** Высота области `room`, нижней панели — `low` (по CSS, до перетаскивания). */
+function heights(room: number, low: number) {
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get")
+    .mockImplementation(function (this: HTMLElement) { return this.classList.contains("stack") ? room : 0; });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get")
+    .mockImplementation(function (this: HTMLElement) { return this.classList.contains("low") ? low : 0; });
+}
+
+test("по высоте без размера по умолчанию: пока не тянули — CSS области, разделитель показывает высоту панели", () => {
+  heights(500, 180);
+  render(<Stack />);
+  expect(stack().style.getPropertyValue("--low")).toBe("");
+  const split = screen.getByRole("separator", { name: "Высота сводки" });
+  expect(split).toHaveAttribute("aria-orientation", "horizontal");
+  expect(split).toHaveAttribute("aria-valuenow", "180");
+  expect(split).toHaveAttribute("aria-valuemin", "64");
+  // 500 − 100 оставить соседу.
+  expect(split).toHaveAttribute("aria-valuemax", "400");
+});
+
+test("по высоте: клавиша меняет и запоминает высоту в своём формате; двойной щелчок — снова по CSS", () => {
+  heights(500, 180);
+  render(<Stack />);
+  const split = screen.getByRole("separator", { name: "Высота сводки" });
+  fireEvent.keyDown(split, { key: "ArrowUp" });
+  expect(stack().style.getPropertyValue("--low")).toBe("0 1 196px");
+  expect(localStorage.getItem("meet.pane.test-low")).toBe("196");
+  expect(split).toHaveAttribute("aria-valuenow", "196");
+  fireEvent.doubleClick(split);
+  expect(stack().style.getPropertyValue("--low")).toBe("");
+  expect(localStorage.getItem("meet.pane.test-low")).toBeNull();
+  expect(split).toHaveAttribute("aria-valuenow", "180");
+});
+
+test("по высоте: перетаскивание мышью — в пределах области; после перезапуска высота та же", async () => {
+  heights(500, 180);
+  const { unmount } = render(<Stack />);
+  const split = screen.getByRole("separator", { name: "Высота сводки" });
+  fireEvent.pointerDown(split, { button: 0, clientY: 300, pointerId: 1 });
+  fireEvent.pointerMove(split, { clientY: 0, pointerId: 1 }); // выше предела
+  await new Promise((r) => requestAnimationFrame(() => r(null)));
+  expect(stack().style.getPropertyValue("--low")).toBe("0 1 400px");
+  fireEvent.pointerUp(split, { clientY: 0, pointerId: 1 });
+  expect(localStorage.getItem("meet.pane.test-low")).toBe("400");
+  unmount();
+
+  render(<Stack />);
+  expect(stack().style.getPropertyValue("--low")).toBe("0 1 400px");
+});
+
+test("по высоте: запомненная высота в низком окне ужимается, но не ниже минимума и не выше области", () => {
+  localStorage.setItem("meet.pane.test-low", "450");
+  heights(300, 120);
+  render(<Stack />);
+  expect(stack().style.getPropertyValue("--low")).toBe("0 1 200px");
+  const split = screen.getByRole("separator", { name: "Высота сводки" });
+  // Запомненное — пожелание: окно снова выше — высота вернётся.
+  expect(localStorage.getItem("meet.pane.test-low")).toBe("450");
+  expect(split).toHaveAttribute("aria-valuemax", "200");
+  fireEvent.keyDown(split, { key: "Home" });
+  expect(stack().style.getPropertyValue("--low")).toBe("0 1 64px");
+  expect(localStorage.getItem("meet.pane.test-low")).toBe("64");
+});
+
+test("разделитель внутри самой панели: область и панель задаются явно", () => {
+  heights(500, 150);
+  render(<Stack inside />);
+  const split = screen.getByRole("separator", { name: "Высота сводки" });
+  expect(split).toHaveAttribute("aria-valuenow", "150");
+  expect(split).toHaveAttribute("aria-valuemax", "400");
+  fireEvent.keyDown(split, { key: "ArrowDown" });
+  expect(stack().style.getPropertyValue("--low")).toBe("0 1 134px");
+});

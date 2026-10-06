@@ -68,7 +68,8 @@ export function navCommit(w: number, win: number, prev: ShellPrefs): ShellPrefs 
 
 /** Панель внутри области: пределы и ширина при ширине области `room`. */
 export type PaneSpec = {
-  def: number;
+  /** Размер по умолчанию; нет — его задаёт CSS (доля области), пока панель не потянули. */
+  def?: number;
   min: number;
   max: number;
   /** Сколько оставить остальной области (сетке, тексту); по умолчанию 0. */

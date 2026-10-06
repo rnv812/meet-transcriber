@@ -25,3 +25,14 @@
 
 /* Пока тянут: курсор «↔» во всём окне, текст не выделяется. */
 html.is-resizing, html.is-resizing * { cursor: col-resize !important; user-select: none !important; }
+
+/*
+ * Разделитель по высоте (`axis="y"`, панели одна над другой): элемент нулевой
+ * высоты во всю ширину области, захват 6 px по вертикали, курсор «↕».
+ */
+.splitter--y { width: auto; height: 0; }
+.splitter--y::before { top: -3px; bottom: auto; left: 0; right: 0; width: auto; height: 6px; cursor: row-resize; }
+.splitter--y::after { top: -1px; bottom: auto; left: 0; right: 0; width: auto; height: 1px; }
+.splitter--y.splitter--after::after { left: 0; top: 0; }
+.splitter--y:focus-visible::after { width: auto; height: 2px; }
+html.is-resizing--y, html.is-resizing--y * { cursor: row-resize !important; }

@@ -107,3 +107,55 @@ test("навигация: уже порога — полоса значков; �
   fireEvent.keyDown(el, { key: "Home" });
   expect(onCommit).toHaveBeenLastCalledWith(NAV.rail);
 });
+
+const downY = (el: HTMLElement, y: number) => fireEvent.pointerDown(el, { button: 0, clientY: y, pointerId: 1 });
+const moveY = (el: HTMLElement, y: number) => fireEvent.pointerMove(el, { clientY: y, pointerId: 1 });
+const upY = (el: HTMLElement, y: number) => fireEvent.pointerUp(el, { clientY: y, pointerId: 1 });
+
+test("разделитель по высоте: ориентация горизонтальная, тянут по вертикали, курсор «↕» во всём окне", () => {
+  const { el, onCommit } = setup({ axis: "y", panel: "after", value: 200, min: 64, max: 400 });
+  expect(el).toHaveAttribute("aria-orientation", "horizontal");
+  expect(el).toHaveClass("splitter--y");
+  downY(el, 300);
+  expect(document.documentElement).toHaveClass("is-resizing", "is-resizing--y");
+  // Панель снизу: тянут вверх — выше.
+  moveY(el, 250);
+  upY(el, 250);
+  expect(onCommit).toHaveBeenLastCalledWith(250);
+  expect(document.documentElement).not.toHaveClass("is-resizing--y");
+  // Горизонтальное движение высоту не меняет.
+  onCommit.mockClear();
+  fireEvent.pointerDown(el, { button: 0, clientX: 0, clientY: 300, pointerId: 1 });
+  fireEvent.pointerMove(el, { clientX: 400, clientY: 300, pointerId: 1 });
+  fireEvent.pointerUp(el, { clientX: 400, clientY: 300, pointerId: 1 });
+  expect(onCommit).not.toHaveBeenCalled();
+});
+
+test("разделитель по высоте: ↑/↓ по 16 px, у панели сверху ↓ — выше; пределы держатся", () => {
+  const below = setup({ axis: "y", panel: "after", value: 200, min: 64, max: 400 });
+  fireEvent.keyDown(below.el, { key: "ArrowUp" });
+  expect(below.onCommit).toHaveBeenLastCalledWith(216);
+  fireEvent.keyDown(below.el, { key: "ArrowDown" });
+  expect(below.onCommit).toHaveBeenLastCalledWith(184);
+  // ←/→ у разделителя по высоте ничего не делают.
+  below.onCommit.mockClear();
+  fireEvent.keyDown(below.el, { key: "ArrowRight" });
+  expect(below.onCommit).not.toHaveBeenCalled();
+});
+
+test("разделитель по высоте, панель сверху: тянут вниз — выше, не выше предела", () => {
+  const { el, onCommit } = setup({ axis: "y", panel: "before", value: 200, min: 64, max: 400 });
+  fireEvent.keyDown(el, { key: "ArrowDown" });
+  expect(onCommit).toHaveBeenLastCalledWith(216);
+  downY(el, 100);
+  moveY(el, 900);
+  upY(el, 900);
+  expect(onCommit).toHaveBeenLastCalledWith(400);
+});
+
+test("нажатие на разделитель переводит на него фокус: клавиши работают сразу после перетаскивания", () => {
+  const { el } = setup();
+  down(el, 500);
+  expect(el).toHaveFocus();
+  up(el, 500);
+});

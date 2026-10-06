@@ -12,14 +12,18 @@ export const isResizing = () => document.documentElement.classList.contains("is-
  * клавишами (←/→ по 16 px, Home/End — к пределам); двойной щелчок — ширина по
  * умолчанию. Пока тянут, ширина меняется через `onPreview` (CSS-переменная,
  * без перерисовки React) не чаще кадра; отпустили — `onCommit` один раз.
+ * Нажатие переводит фокус на разделитель: дальше можно стрелками.
  *
  * `panel`: «before» — панель слева от разделителя (тянут вправо — шире),
  * «after» — справа (тянут влево — шире). Само место полосы задаёт CSS
  * (`className`): разделитель — элемент нулевой ширины, область захвата —
  * его псевдоэлемент.
+ *
+ * `axis: "y"` — разделитель между панелями одна над другой: меняет высоту,
+ * тянут по вертикали, клавиши ↑/↓; «before» — панель сверху, «after» — снизу.
  */
 export function Splitter({
-  label, value, min, max, panel, snap, onPreview, onCommit, onReset, className = "", handle,
+  label, value, min, max, panel, snap, onPreview, onCommit, onReset, className = "", handle, axis = "x",
 }: {
   label: string;
   /** Ширина панели сейчас и её пределы (у навигации нижний предел — полоса значков, `snap.to`). */
@@ -37,12 +41,17 @@ export function Splitter({
    * ссылка на разделитель готова раньше эффектов, ссылка на родителя — позже.
    */
   handle?: RefObject<HTMLDivElement | null>;
+  /** «x» — меняет ширину (по умолчанию), «y» — высоту. */
+  axis?: "x" | "y";
 }) {
   const own = useRef<HTMLDivElement>(null);
   const el = handle ?? own;
-  const drag = useRef<{ x: number; w: number; last: number; shown: boolean } | null>(null);
+  const drag = useRef<{ at: number; w: number; last: number; shown: boolean } | null>(null);
   const frame = useRef<number | null>(null);
   const lo = snap ? snap.to : min;
+  const y = axis === "y";
+  const along = (e: PointerEvent<HTMLDivElement>) => (y ? e.clientY : e.clientX);
+  const resizingClass = y ? ["is-resizing", "is-resizing--y"] : ["is-resizing"];
   // Ширину могли показать на время перетаскивания: после перерисовки — снова та, что в props.
   useLayoutEffect(() => { if (!drag.current) el.current?.setAttribute("aria-valuenow", String(value)); });
 
@@ -53,7 +62,7 @@ export function Splitter({
   // Окно закрыли посреди перетаскивания — снять курсор со всего окна.
   useEffect(() => () => {
     cancelFrame();
-    document.documentElement.classList.remove("is-resizing");
+    document.documentElement.classList.remove("is-resizing", "is-resizing--y");
   }, []);
 
   const show = (w: number) => {
@@ -67,7 +76,7 @@ export function Splitter({
     drag.current = null;
     cancelFrame();
     el.current?.removeAttribute("data-dragging");
-    document.documentElement.classList.remove("is-resizing");
+    document.documentElement.classList.remove(...resizingClass);
     if (d.shown || d.last !== d.w) show(d.last);
     if (d.last !== d.w) onCommit(d.last);
   };
@@ -76,17 +85,19 @@ export function Splitter({
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    drag.current = { x: e.clientX, w: value, last: value, shown: false };
+    drag.current = { at: along(e), w: value, last: value, shown: false };
+    // preventDefault мог оставить фокус где был: фокус — на разделитель, стрелки работают сразу.
+    e.currentTarget.focus({ preventScroll: true });
     try { e.currentTarget.setPointerCapture?.(e.pointerId); } catch { /* указатель уже отпущен */ }
     e.currentTarget.setAttribute("data-dragging", "");
-    document.documentElement.classList.add("is-resizing");
+    document.documentElement.classList.add(...resizingClass);
   };
 
   const onPointerMove = (e: PointerEvent<HTMLDivElement>) => {
     const d = drag.current;
     if (!d) return;
-    const dx = (e.clientX - d.x) * (panel === "before" ? 1 : -1);
-    const w = dragWidth(d.w + dx, min, max, snap);
+    const delta = (along(e) - d.at) * (panel === "before" ? 1 : -1);
+    const w = dragWidth(d.w + delta, min, max, snap);
     if (w === d.last) return;
     d.last = w;
     if (frame.current != null) return;
@@ -101,9 +112,10 @@ export function Splitter({
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     let next: number | null = null;
-    // Стрелка в сторону панели — уже, от панели — шире.
-    const grow = panel === "before" ? "ArrowRight" : "ArrowLeft";
-    const shrink = panel === "before" ? "ArrowLeft" : "ArrowRight";
+    // Стрелка в сторону панели — уже, от панели — шире (по высоте — так же: ↑/↓).
+    const [toAfter, toBefore] = y ? ["ArrowDown", "ArrowUp"] : ["ArrowRight", "ArrowLeft"];
+    const grow = panel === "before" ? toAfter : toBefore;
+    const shrink = panel === "before" ? toBefore : toAfter;
     if (e.key === grow) next = stepWidth(value, 1, min, max, snap);
     else if (e.key === shrink) next = stepWidth(value, -1, min, max, snap);
     else if (e.key === "Home") next = lo;
@@ -119,14 +131,14 @@ export function Splitter({
     <div
       ref={el}
       role="separator"
-      aria-orientation="vertical"
+      aria-orientation={y ? "horizontal" : "vertical"}
       aria-label={label}
       aria-valuenow={value}
       aria-valuemin={lo}
       aria-valuemax={max}
       tabIndex={0}
-      title="Потяните, чтобы изменить ширину. Двойной щелчок — как было"
-      className={`splitter splitter--${panel} ${className}`.trim()}
+      title={`Потяните, чтобы изменить ${y ? "высоту" : "ширину"}. Двойной щелчок — как было`}
+      className={`splitter splitter--${panel}${y ? " splitter--y" : ""} ${className}`.trim()}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={finish}
