@@ -272,6 +272,11 @@ test("новый ассистент: строки прежнего сохран�
   expect(result.current.lines.map((l) => [l.text, l.speaker])).toEqual([
     ["до имени", "Демьян"], ["новая", "Собеседник"],
   ]);
+  // И на следующем событии нового сеанса — тоже (ревью, раунд 3).
+  act(() => second.emit("voices", { rev: 1, speakers: { "b2/sys:0": "Пётр" }, hidden: [], session: "b" }));
+  expect(result.current.lines.map((l) => [l.text, l.speaker])).toEqual([
+    ["до имени", "Демьян"], ["новая", "Пётр"],
+  ]);
 });
 
 test("без метки сеанса карта голосов заменяется целиком с каждого подключения", async () => {

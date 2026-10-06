@@ -124,7 +124,8 @@ export function nextVoices(cur: Voices, v: { speakers: Record<string, string>; h
   return {
     speakers: v.speakers,
     past: changed ? { ...cur.past, ...cur.speakers } : cur.past,
-    hidden: { ...(changed ? cur.hidden : {}), [v.session ?? NO_SESSION]: new Set(v.hidden) },
+    // Спрятанные прежних сеансов — всегда; у нынешнего — его состояние целиком.
+    hidden: { ...cur.hidden, [v.session ?? NO_SESSION]: new Set(v.hidden) },
     session: v.session,
   };
 }
