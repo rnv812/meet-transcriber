@@ -151,8 +151,11 @@ export type Recording = {
    * (категорию удалили), показывается как «Без категории».
    */
   category?: RecordingCategory | null;
-  /** Группы встречи (id из `GET /groups`; неизвестный id — «Группа без названия»). Нет у резидентов до 0.3.5. */
-  groups?: string[];
+  /**
+   * Группа встречи — одна или никакой (null); id из `GET /groups`, неизвестный id — «Группа без
+   * названия». Категория — отдельно. Нет у резидентов до 0.3.5.
+   */
+  group?: string | null;
   /** Названные спикеры окончательной расшифровки по порядку (без «Спикер N», «Неизвестный», «Собеседник»). */
   people?: string[];
   /** Есть итоги встречи. */
@@ -186,13 +189,15 @@ export type RecordingCategory = { id: string | null; source: "ai" | "user" };
 
 /** Группа встреч (`.meet-groups.json` резидента): id стабилен и не переиспользуется. */
 export type Group = { id: string; name: string; color: string; created_at: string };
-/** Группа в `GET /groups`: со счётчиком встреч (с запросом — среди найденного). */
+/** Группа в `GET /groups`: со счётчиком встреч (у встречи одна группа; с запросом — среди найденного). */
 export type GroupInfo = Pick<Group, "id" | "name" | "color"> & { count: number };
 /** Id группы, который есть в meta.json встреч, но не в списке: «Группа без названия». */
 export type UnknownGroup = { id: string; count: number };
 export type GroupsInfo = {
   groups: GroupInfo[];
   unknown: UnknownGroup[];
+  /** Сколько встреч без группы (с запросом — среди найденного). */
+  none?: number;
   scope?: "library" | "search";
   /** Файл групп не прочитать как список (повреждён): первая запись отложит его рядом. */
   broken?: boolean;
@@ -212,9 +217,9 @@ export type Participant = { name: string; meetings: number; last_at: string | nu
 export type LibraryHas = "summary" | "analysis" | "assistant" | "transcript";
 /**
  * Фильтр библиотеки по карточке (резидент — meet.library_filter, до лимита): категории и группы —
- * любая из; участники — по началу слов имени, нужны все; даты `from`/`to` — ГГГГ-ММ-ДД включительно
- * (встреча без даты не проходит); длительность в секундах (без длительности не проходит);
- * `in: "title"` — поиск только в названиях.
+ * любая из (`_none` — «Без категории» / «Без группы»); участники — по началу слов имени, нужны все;
+ * даты `from`/`to` — ГГГГ-ММ-ДД включительно (встреча без даты не проходит); длительность в
+ * секундах (без длительности не проходит); `in: "title"` — поиск только в названиях.
  */
 export type LibraryFilter = {
   categories?: string[];

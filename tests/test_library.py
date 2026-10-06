@@ -326,18 +326,18 @@ def test_text_phase_has_no_people(tmp_path):
     assert library.describe(_recording(tmp_path, "2026-08-19_10-00")).to_raw()["people"] == []
 
 
-def test_card_reports_summary_analysis_and_groups(tmp_path):
+def test_card_reports_summary_analysis_and_group(tmp_path):
     folder = _recording(tmp_path)
     raw = library.describe(folder).to_raw()
-    assert (raw["has_summary"], raw["has_analysis"], raw["groups"]) == (False, False, [])
+    assert (raw["has_summary"], raw["has_analysis"], raw["group"]) == (False, False, None)
     (folder / "summary.md").write_text("# Итоги", encoding="utf-8")
     (folder / "analysis.json").write_text("{}", encoding="utf-8")
-    library.write_meta(folder, {"groups": ["g-1a2b3c4d", "g-1a2b3c4d", 5, "НЕ ТАК", "proj_x"]})
+    library.write_meta(folder, {"group": "g-1a2b3c4d"})
     raw = library.describe(folder).to_raw()
     assert (raw["has_summary"], raw["has_analysis"]) == (True, True)
-    assert raw["groups"] == ["g-1a2b3c4d", "proj_x"]  # повторы и негодные id отброшены
-    library.write_meta(folder, {"groups": "g-1a2b3c4d"})
-    assert library.describe(folder).to_raw()["groups"] == []
+    assert raw["group"] == "g-1a2b3c4d"
+    library.write_meta(folder, {"group": "НЕ ТАК"})
+    assert library.describe(folder).to_raw()["group"] is None  # негодный id — без группы
 
 
 def test_transcript_head_is_a_named_tuple_and_phase_still_works(tmp_path):

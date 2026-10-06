@@ -6,7 +6,8 @@
 
 * `categories=daily,_none` — любая из категорий (`_none` — «Без категории»,
   туда же удалённые из настроек);
-* `groups=g-1,g-2` — любая из групп;
+* `groups=g-1,g-2,_none` — любая из групп (у встречи одна группа; `_none` —
+  «Без группы»);
 * `people=Анна&people=Борис П` — участник встречи (`people` карточки) по
   началу слов имени, без учёта регистра и «ё»; по параметру на участника
   (запятая — часть имени: «Петров, Демьян»), несколько — нужны все;
@@ -26,6 +27,8 @@ import math
 import re
 from dataclasses import dataclass, field, replace
 from datetime import date
+
+from meet.groups import NONE_KEY as GROUP_NONE
 
 PARAMS = ("categories", "groups", "people", "from", "to", "has", "lacks", "min_s", "max_s", "in")
 HAS = ("summary", "analysis", "assistant", "transcript")
@@ -85,7 +88,7 @@ class LibraryFilter:
 
             if key_of(card, self.known_categories) not in self.categories:
                 return False
-        if self.groups and not any(g in self.groups for g in card.get("groups") or ()):
+        if self.groups and (card.get("group") or GROUP_NONE) not in self.groups:
             return False
         if self.people and not self._people(card.get("people") or ()):
             return False
@@ -172,7 +175,7 @@ def from_params(params: dict | None, cfg=None) -> LibraryFilter:
         known = frozenset(cats.ids(settings.load() if cfg is None else cfg))
     group_ids = tuple(dict.fromkeys(_values(params, "groups")))
     for gid in group_ids:
-        if not groups.valid_id(gid):
+        if gid != groups.NONE_KEY and not groups.valid_id(gid):
             raise FilterError(f"негодный id группы «{gid}»")
     people = tuple(dict.fromkeys(w for w in (tuple(_words(v)) for v in _values(params, "people", split=False)) if w))
     where = _one(params, "in").lower()

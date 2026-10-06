@@ -177,7 +177,10 @@ export const deleteGroup = (ep: Endpoint, id: string) =>
 /** Новый порядок групп; не названные остаются за ними. Тот же порядок резидент не пишет. */
 export const orderGroups = (ep: Endpoint, ids: string[]) =>
   json<{ groups: Group[] } & GroupWrite>(ep, "/groups/order", body("PUT", { ids }));
-/** Добавить встречи в группу и (или) убрать: каждая — отдельно, неудачные — в `failed`. */
+/**
+ * Перенести встречи в группу (`add`: прежняя группа встречи заменяется) и (или) убрать из неё
+ * (`remove`: только если встреча в этой группе); каждая — отдельно, неудачные — в `failed`.
+ */
 export const setGroupMembers = (ep: Endpoint, id: string, change: { add?: string[]; remove?: string[] }) =>
   json<GroupMembersResult>(ep, `/groups/${enc(id)}/members`, body("POST", change));
 /** Участники встреч (имена из расшифровок) для подсказок `участник:`; владелец — последним. */

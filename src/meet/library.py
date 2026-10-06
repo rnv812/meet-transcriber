@@ -99,8 +99,9 @@ class Recording:
     # Микрофон звонка по голосам (`mic_split` транскрипта, meet.mic_split):
     # {"status", "room_speakers", "dropped"} — подсказка в карточке. Нет — None.
     mic_split: dict | None = None
-    # Группы встречи (meet.groups): id из meta.json `groups`, многие-ко-многим.
-    groups: list = field(default_factory=list)
+    # Группа встречи (meet.groups): id из meta.json `group`; у встречи одна
+    # группа или ни одной (None). Категория — отдельно, сама по себе.
+    group: str | None = None
     # Названные спикеры окончательной расшифровки по порядку (без «Спикер N»,
     # «Неизвестный», «Собеседник»); у текста до спикеров — пусто.
     people: list = field(default_factory=list)
@@ -138,7 +139,7 @@ class Recording:
             "system_audio_reason": self.system_audio_reason,
             "transcript_phase": self.transcript_phase,
             "mic_split": self.mic_split,
-            "groups": list(self.groups),
+            "group": self.group,
             "people": list(self.people),
             "has_summary": self.has_summary,
             "has_analysis": self.has_analysis,
@@ -894,7 +895,7 @@ def describe(folder: Path) -> Recording | None:
         if meta.get("system_audio_reason") in SYSTEM_AUDIO_REASONS else None,
         transcript_phase=head.phase,
         mic_split=head.mic_split,
-        groups=_groups(meta),
+        group=_group(meta),
         people=list(head.people),
         has_summary=(folder / SUMMARY_MD).is_file(),
         has_analysis=(folder / ANALYSIS_JSON).is_file(),
@@ -920,7 +921,7 @@ def has_assistant(folder: Path, meta: dict | None = None) -> bool:
             or (folder / LIVE_TRANSCRIPT_MD).is_file())
 
 
-def _groups(meta: dict) -> list[str]:
+def _group(meta: dict) -> str | None:
     from meet.groups import of
 
     return of(meta)

@@ -90,7 +90,7 @@ def make_library(root: Path, meetings: int, transcribed: int, minutes: int, seed
         (folder / "events.jsonl").write_text(json.dumps(
             {"kind": "record.stopped", "duration_s": minutes * 60.0}) + "\n", encoding="utf-8")
         if i % 7 == 0:
-            library.write_meta(folder, {"groups": ["g-alpha"], "title": f"Планёрка {i}"})
+            library.write_meta(folder, {"group": "g-alpha", "title": f"Планёрка {i}"})
         if i < transcribed:
             segments = _segments(rng, vocab, weights, minutes, rare=i % 167 == 0)
             library.write_transcript(folder, {"version": 1, "title": None, "segments": segments})

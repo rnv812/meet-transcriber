@@ -1,5 +1,5 @@
-"""Группы встреч: проект, клиент, серия — многие-ко-многим (категория — «тип»
-встречи, группа — к чему она относится).
+"""Группы встреч: проект, клиент, серия — у встречи одна группа или ни одной
+(категория — «тип» встречи, отдельное измерение; группа — к чему она относится).
 
 Описания — в папке записей, `.meet-groups.json`:
 
@@ -7,7 +7,10 @@
                                "color": "#4f8cc9", "created_at": "2026-10-06T10:00:00"}]}
 
 порядок в окне — порядок массива. Членство — в `meta.json` встречи:
-`"groups": ["g-3f9a1c2e", …]`; папка записи по-прежнему самодостаточна.
+`"group": "g-3f9a1c2e"`; у встречи одна группа или ни одной (категория —
+отдельное измерение). Папка записи по-прежнему самодостаточна. Список
+`"groups": [...]` — от ранних сборок 0.3.5: читается его первый годный id,
+пишется всегда `group`.
 
 * id — `g-` + 8 шестнадцатеричных, не переиспользуется (свободным считается
   id, которого нет ни в файле, ни в meta.json встреч); проверка — ID_RE.
@@ -28,8 +31,9 @@
   возвращает группу с тем же id, временем создания и на то же место
   (`create(gid=…, index=…, created_at=…)`). «Назвать» неизвестную — тоже
   `create` с её id.
-* Удаление встречи уносит членство с папкой; объединение получает группы всех
-  частей (meet.merge); импорт и новая запись в группы сами не попадают.
+* Удаление встречи уносит членство с папкой; объединение получает группу
+  первой по времени части, у которой она есть (как категорию, meet.merge);
+  импорт и новая запись в группы сами не попадают.
 """
 
 import json
@@ -77,12 +81,30 @@ def valid_id(gid) -> bool:
     return isinstance(gid, str) and bool(ID_RE.match(gid))
 
 
-def of(meta: dict) -> list[str]:
-    """Группы встречи из meta.json: годные id по порядку, без повторов."""
-    raw = meta.get("groups") if isinstance(meta, dict) else None
-    if not isinstance(raw, list):
-        return []
-    return list(dict.fromkeys(g for g in raw if valid_id(g)))
+# «Без группы» в фильтре (`?groups=g-1,_none`) и счётчиках: id групп
+# начинаются с буквы или цифры, так что с ними он не совпадёт.
+NONE_KEY = "_none"
+
+
+def of(meta: dict) -> str | None:
+    """Группа встречи из meta.json: `group`, а у записей ранних сборок —
+    первый годный id списка `groups`; нет или негодный — None."""
+    if not isinstance(meta, dict):
+        return None
+    gid = meta.get("group")
+    if valid_id(gid):
+        return gid
+    raw = meta.get("groups")
+    if isinstance(raw, list):
+        return next((g for g in raw if valid_id(g)), None)
+    return None
+
+
+def _with_group(meta: dict, gid: str | None) -> dict:
+    """meta.json с группой `gid` (None — без группы); старый список `groups`
+    убирается."""
+    out = {k: v for k, v in meta.items() if k not in ("group", "groups")}
+    return {**out, "group": gid} if gid else out
 
 
 def path(root: Path) -> Path:
@@ -372,10 +394,12 @@ def _recording(root: Path, rid: str) -> Path | None:
 
 
 def members(root: Path, gid, add=None, remove=None) -> dict:
-    """Добавить встречи в группу и (или) убрать из неё → {"changed": [id…],
-    "failed": [{"id", "error"}]}: каждая запись — отдельно, неудача одной не
-    отменяет остальные и названа честно. Добавлять — только в группу из
-    списка; убирать можно и неизвестную («Убрать из встреч»)."""
+    """Перенести встречи в группу (`add`: прежняя группа встречи заменяется)
+    и (или) убрать из неё (`remove`: только если встреча сейчас в этой
+    группе) → {"changed": [id…], "failed": [{"id", "error"}]}: каждая запись —
+    отдельно, неудача одной не отменяет остальные и названа честно. Добавлять
+    — только в группу из списка; убирать можно и неизвестную («Убрать из
+    встреч»)."""
     if not valid_id(gid):
         raise GroupError("негодный id группы")
     add, remove = _ids(add, "add"), _ids(remove, "remove")
@@ -397,13 +421,12 @@ def members(root: Path, gid, add=None, remove=None) -> dict:
         def change(meta: dict) -> dict:
             nonlocal moved
             now = of(meta)
-            if adding and gid not in now:
+            if adding and (now != gid or "groups" in meta):
+                moved = now != gid
+                return _with_group(meta, gid)
+            if not adding and now == gid:
                 moved = True
-                return {**meta, "groups": now + [gid]}
-            if not adding and gid in now:
-                moved = True
-                rest = [g for g in now if g != gid]
-                return {**{k: v for k, v in meta.items() if k != "groups"}, **({"groups": rest} if rest else {})}
+                return _with_group(meta, None)
             return meta
 
         try:
@@ -417,15 +440,19 @@ def members(root: Path, gid, add=None, remove=None) -> dict:
 
 
 def summary(items: list[dict], cards) -> dict:
-    """Группы со счётчиками встреч (среди `cards`) и неизвестные id из
-    meta.json: {"groups": [{id, name, color, count}], "unknown": [{id, count}]}
-    — неизвестные по убыванию числа встреч."""
+    """Группы со счётчиками встреч (среди `cards`), неизвестные id из
+    meta.json и встречи без группы: {"groups": [{id, name, color, count}],
+    "unknown": [{id, count}], "none": n} — неизвестные по убыванию числа встреч."""
     counts: dict[str, int] = {}
+    none = 0
     for card in cards:
-        for gid in card.get("groups") or ():
+        gid = card.get("group")
+        if gid:
             counts[gid] = counts.get(gid, 0) + 1
+        else:
+            none += 1
     known = {g["id"] for g in items}
     unknown = sorted(((gid, n) for gid, n in counts.items() if gid not in known), key=lambda x: (-x[1], x[0]))
     return {"groups": [{"id": g["id"], "name": g["name"], "color": g["color"], "count": counts.get(g["id"], 0)}
                        for g in items],
-            "unknown": [{"id": gid, "count": n} for gid, n in unknown]}
+            "unknown": [{"id": gid, "count": n} for gid, n in unknown], "none": none}

@@ -2031,7 +2031,7 @@ class TrayControl:
 
         body = body if isinstance(body, dict) else {}
         root = self._root()
-        taken = {g for card in search.cards(root) for g in card.get("groups") or ()}
+        taken = {card["group"] for card in search.cards(root) if card.get("group")}
         got = self._group_call(groups.create, root, body.get("name"), body.get("color"),
                                gid=body.get("id"), index=body.get("index"), taken=taken,
                                created_at=body.get("created_at"))
@@ -2070,8 +2070,10 @@ class TrayControl:
         return {k: v for k, v in got.items() if k != "changed"}
 
     def group_members(self, gid: str, body: dict | None) -> dict:
-        """{"add"?: [id записи], "remove"?: [...]} → {"changed", "failed"}.
-        Одно событие на всё действие, и только если что-то поменялось."""
+        """{"add"?: [id записи], "remove"?: [...]} → {"changed", "failed"}:
+        `add` переносит встречу в группу (прежняя заменяется), `remove` убирает
+        её, только если она в этой группе. Одно событие на всё действие, и
+        только если что-то поменялось."""
         from meet import groups
 
         body = body if isinstance(body, dict) else {}

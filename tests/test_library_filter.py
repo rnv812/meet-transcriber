@@ -14,7 +14,7 @@ CFG = settings.Settings()
 def _card(**kw):
     card = {"id": "2026-10-01_10-00", "started_at": "2026-10-01T10:00:00", "duration_s": 1800.0,
             "title": "Планёрка", "source": "record", "has_transcript": True, "has_summary": False,
-            "has_analysis": False, "category": None, "groups": [], "people": []}
+            "has_analysis": False, "category": None, "group": None, "people": []}
     return {**card, **kw}
 
 
@@ -36,10 +36,13 @@ def test_categories_any_of_with_none_key():
     assert not flt(_card(category={"id": "retro", "source": "ai"}))
 
 
-def test_groups_any_of():
+def test_groups_any_of_the_single_group():
     flt = _f(groups="g-1,g-2")
-    assert flt(_card(groups=["g-2", "g-9"]))
-    assert not flt(_card(groups=["g-9"])) and not flt(_card())
+    assert flt(_card(group="g-2"))
+    assert not flt(_card(group="g-9")) and not flt(_card(group=None))
+    nothing = _f(groups="_none")  # «Без группы»
+    assert nothing(_card(group=None)) and nothing(_card()) and not nothing(_card(group="g-1"))
+    assert _f(groups="g-1,_none")(_card(group=None))
 
 
 def test_people_by_word_prefix_and_every_person_must_be_there():
@@ -111,7 +114,7 @@ def test_bad_params_are_refused_in_words(params):
 
 def test_without_drops_one_facet_for_its_own_counts():
     flt = _f(categories="daily", groups="g-1", people="Анна")
-    card = _card(people=["Анна"], groups=["g-1"])
+    card = _card(people=["Анна"], group="g-1")
     assert not flt(card)  # категории нет
     assert flt.without("categories")(card)
     assert not flt.without("groups")(card)
@@ -142,14 +145,14 @@ def state(monkeypatch, tmp_path):
     return tray_control.TrayControl(tray.TrayApp())
 
 
-def _rec(tmp_path, name, *, people=(), text="Обсудили бюджет.", title=None, groups=None, seconds=None):
+def _rec(tmp_path, name, *, people=(), text="Обсудили бюджет.", title=None, group=None, seconds=None):
     folder = tmp_path / "recordings" / name
     folder.mkdir(parents=True)
     (folder / "sys.opus").write_bytes(b"x")
     segments = [{"start": float(i), "end": i + 1.0, "speaker": p, "text": text} for i, p in enumerate(people)]
     library.write_transcript(folder, {"version": 1, "title": title, "segments": segments})
-    if groups is not None:
-        library.write_meta(folder, {"groups": groups})
+    if group is not None:
+        library.write_meta(folder, {"group": group})
     if seconds is not None:
         (folder / "events.jsonl").write_text(json.dumps(
             {"kind": "record.stopped", "duration_s": seconds}) + "\n", encoding="utf-8")
@@ -158,8 +161,8 @@ def _rec(tmp_path, name, *, people=(), text="Обсудили бюджет.", ti
 
 @pytest.fixture
 def lib(tmp_path):
-    _rec(tmp_path, "2026-09-01_10-00", people=["Анна", "Борис"], groups=["g-alpha"], seconds=3600)
-    _rec(tmp_path, "2026-09-15_10-00", people=["Борис"], groups=["g-alpha", "g-beta"], seconds=600,
+    _rec(tmp_path, "2026-09-01_10-00", people=["Анна", "Борис"], group="g-alpha", seconds=3600)
+    _rec(tmp_path, "2026-09-15_10-00", people=["Борис"], group="g-beta", seconds=600,
          title="Бюджет на квартал")
     _rec(tmp_path, "2026-10-01_10-00", people=["Анна"], text="Про отпуск.")
     return tmp_path
@@ -170,8 +173,9 @@ def _ids(items):
 
 
 def test_recordings_with_structural_filters(state, lib):
-    assert _ids(state.recordings(filters={"groups": "g-alpha"})["items"]) == [
+    assert _ids(state.recordings(filters={"groups": "g-alpha,g-beta"})["items"]) == [
         "2026-09-15_10-00", "2026-09-01_10-00"]
+    assert _ids(state.recordings(filters={"groups": "_none"})["items"]) == ["2026-10-01_10-00"]
     assert _ids(state.recordings(filters={"people": "анна"})["items"]) == [
         "2026-10-01_10-00", "2026-09-01_10-00"]
     assert _ids(state.recordings(filters={"from": "2026-09-10", "to": "2026-09-30"})["items"]) == [
@@ -206,7 +210,7 @@ def test_category_counts_respect_the_other_filters(state, lib):
     from meet import categories
 
     categories.set_user(lib / "recordings" / "2026-09-01_10-00", "daily")
-    info = state.categories(filters={"groups": "g-alpha", "categories": "retro"})
+    info = state.categories(filters={"groups": "g-alpha,g-beta", "categories": "retro"})
     # свой фасет (категории) в счётчиках не участвует, остальные — да
     assert info["counts"] == {"daily": 1} and info["none"] == 1
 

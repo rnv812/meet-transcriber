@@ -232,7 +232,7 @@ def test_concurrent_creates_are_not_lost(tmp_path):
 def test_members_add_remove_with_honest_partial_failure(tmp_path):
     a = _rec(tmp_path, "2026-10-01_10-00")
     b = _rec(tmp_path, "2026-10-02_10-00")
-    library.write_meta(b, {"title": "Своё", "groups": ["g-other"]})
+    library.write_meta(b, {"title": "Своё", "group": "g-other"})
     gid = groups.create(tmp_path, "Альфа")["id"]
     got = groups.members(tmp_path, gid, add=[a.name, b.name, "2030-01-01_00-00", "../x"])
     assert got["changed"] == [a.name, b.name]
@@ -241,19 +241,44 @@ def test_members_add_remove_with_honest_partial_failure(tmp_path):
     hidden = _rec(tmp_path, ".2026-10-03_10-00.deleting-1a2b3c4d")
     got_hidden = groups.members(tmp_path, gid, add=[hidden.name])
     assert got_hidden["changed"] == [] and [f["id"] for f in got_hidden["failed"]] == [hidden.name]
-    assert "groups" not in library.read_meta(hidden)
+    assert "group" not in library.read_meta(hidden)
     assert all(f["error"] for f in got["failed"])
-    assert library.read_meta(b) == {"title": "Своё", "groups": ["g-other", gid]}
+    # у встречи одна группа: прежняя («g-other») заменена
+    assert library.read_meta(b) == {"title": "Своё", "group": gid}
     assert groups.members(tmp_path, gid, add=[a.name])["changed"] == []  # уже в группе
     got = groups.members(tmp_path, gid, remove=[a.name, b.name])
     assert got == {"changed": [a.name, b.name], "failed": []}
-    assert library.read_meta(b)["groups"] == ["g-other"]
-    assert "groups" not in library.read_meta(a)
+    assert library.read_meta(b) == {"title": "Своё"}
+    assert "group" not in library.read_meta(a)
+
+
+def test_adding_to_another_group_moves_the_meeting(tmp_path):
+    a = _rec(tmp_path, "2026-10-01_10-00")
+    alpha = groups.create(tmp_path, "Альфа")["id"]
+    beta = groups.create(tmp_path, "Бета")["id"]
+    groups.members(tmp_path, alpha, add=[a.name])
+    assert groups.members(tmp_path, beta, add=[a.name])["changed"] == [a.name]
+    assert library.describe(a).group == beta  # из «Альфы» ушла
+    # убрать из группы, где встречи нет, — ничего не меняет
+    assert groups.members(tmp_path, alpha, remove=[a.name]) == {"changed": [], "failed": []}
+    assert library.read_meta(a)["group"] == beta
+
+
+def test_legacy_groups_list_is_read_leniently_and_rewritten(tmp_path):
+    a = _rec(tmp_path, "2026-10-01_10-00")
+    library.write_meta(a, {"groups": ["НЕ ТАК", "g-first", "g-second"]})
+    assert groups.of(library.read_meta(a)) == "g-first"
+    assert library.describe(a).to_raw()["group"] == "g-first"
+    beta = groups.create(tmp_path, "Бета")["id"]
+    groups.members(tmp_path, beta, add=[a.name])
+    assert library.read_meta(a) == {"group": beta}  # пишется всегда `group`
+    library.write_meta(a, {"group": "НЕ ТАК"})
+    assert groups.of(library.read_meta(a)) is None
 
 
 def test_members_of_unknown_groups(tmp_path):
     a = _rec(tmp_path, "2026-10-01_10-00")
-    library.write_meta(a, {"groups": ["g-lost"]})
+    library.write_meta(a, {"group": "g-lost"})
     with pytest.raises(groups.GroupError):
         groups.members(tmp_path, "g-lost", add=[a.name])  # в неизвестную — нельзя
     # «Убрать из встреч» неизвестную группу — можно
@@ -271,17 +296,19 @@ def test_deleting_a_group_keeps_meta(tmp_path):
     gid = groups.create(tmp_path, "Альфа")["id"]
     groups.members(tmp_path, gid, add=[a.name])
     groups.delete(tmp_path, gid)
-    assert library.read_meta(a)["groups"] == [gid]
+    assert library.read_meta(a)["group"] == gid
 
 
 def test_summary_counts_known_and_unknown():
     known = [{"id": "g-a", "name": "А", "color": "#000000", "created_at": "x"},
              {"id": "g-b", "name": "Б", "color": "#000000", "created_at": "x"}]
-    cards = [{"groups": ["g-a", "g-x"]}, {"groups": ["g-a"]}, {"groups": ["g-y"]}, {"groups": ["g-x"]}, {}]
+    cards = [{"group": "g-a"}, {"group": "g-a"}, {"group": "g-x"}, {"group": "g-y"}, {"group": "g-x"},
+             {"group": None}, {}]
     got = groups.summary(known, cards)
     assert got["groups"] == [{"id": "g-a", "name": "А", "color": "#000000", "count": 2},
                              {"id": "g-b", "name": "Б", "color": "#000000", "count": 0}]
     assert got["unknown"] == [{"id": "g-x", "count": 2}, {"id": "g-y", "count": 1}]
+    assert got["none"] == 2  # без группы
 
 
 def test_file_lock_serialises_threads(tmp_path):
@@ -306,16 +333,17 @@ def test_file_lock_serialises_threads(tmp_path):
 # --- объединение ------------------------------------------------------------------------
 
 
-def test_merge_unions_the_groups_of_its_parts(tmp_path):
+def test_merge_takes_the_group_of_the_first_part_that_has_one(tmp_path):
     a = _rec(tmp_path, "2026-10-01_10-00")
     b = _rec(tmp_path, "2026-10-01_11-00")
     c = _rec(tmp_path, "2026-10-01_12-00")
-    library.write_meta(a, {"groups": ["g-a", "g-b"]})
-    library.write_meta(b, {"groups": ["g-b", "g-c"]})
-    target = merge.create(tmp_path, [b, a, c], keep_originals=True)
-    assert library.read_meta(target)["groups"] == ["g-a", "g-b", "g-c"]
-    target = merge.create(tmp_path, [_rec(tmp_path, "2026-10-02_10-00"), c], keep_originals=True)
-    assert "groups" not in library.read_meta(target)
+    library.write_meta(b, {"group": "g-b"})
+    library.write_meta(c, {"group": "g-c"})
+    # части по времени: a (без группы), b, c — берётся группа b
+    target = merge.create(tmp_path, [c, a, b], keep_originals=True)
+    assert library.read_meta(target)["group"] == "g-b" and "groups" not in library.read_meta(target)
+    target = merge.create(tmp_path, [_rec(tmp_path, "2026-10-02_10-00"), a], keep_originals=True)
+    assert "group" not in library.read_meta(target)
 
 
 # --- резидент ---------------------------------------------------------------------------
@@ -352,7 +380,8 @@ def test_group_routes_and_one_event_per_operation(state, tmp_path):
     root = tmp_path / "recordings"
     a = _rec(root, "2026-10-01_10-00")
     b = _rec(root, "2026-10-02_10-00")
-    assert state.groups() == {"groups": [], "unknown": [], "scope": "library", "broken": False, "newer": False}
+    assert state.groups() == {"groups": [], "unknown": [], "none": 2, "scope": "library", "broken": False,
+                              "newer": False}
     alpha = state.create_group({"name": "Альфа", "color": "#123456"})
     beta = state.create_group({"name": "Бета"})
     assert _changed(state) == 2
@@ -362,7 +391,14 @@ def test_group_routes_and_one_event_per_operation(state, tmp_path):
     assert [s for s in state.seen if s.startswith("recording.")] == []
     info = state.groups()
     assert [(g["id"], g["count"]) for g in info["groups"]] == [(alpha["id"], 2), (beta["id"], 0)]
-    assert state.recordings()["items"][0]["groups"] == [alpha["id"]]  # карточка перечитана
+    assert info["none"] == 0
+    assert state.recordings()["items"][0]["group"] == alpha["id"]  # карточка перечитана
+    # перенос в другую группу — одно событие, «Альфа» пустеет
+    assert state.group_members(beta["id"], {"add": [a.name]})["changed"] == [a.name]
+    assert _changed(state) == 1
+    assert [(g["id"], g["count"]) for g in state.groups()["groups"]] == [(alpha["id"], 1), (beta["id"], 1)]
+    state.group_members(alpha["id"], {"add": [a.name]})
+    _changed(state)
     assert state.patch_group(alpha["id"], {"name": "Альфа-2"})["name"] == "Альфа-2"
     assert [g["id"] for g in state.order_groups({"ids": [beta["id"], alpha["id"]]})["groups"]] == [
         beta["id"], alpha["id"]]
