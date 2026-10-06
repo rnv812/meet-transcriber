@@ -13,12 +13,12 @@ import type {
   AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, LiveVoices, Person, PersonCard, ProfilesRemovedNotice,
   Category, OwnerVoiceStatus, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
-  TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript,
+  TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript, LlmOrigin,
 } from "./types";
 
 export type {
   Analysis, AnalysisChapter, AnalysisFeature, AnalysisInsight, AnalysisState, AnalysisStateName, InsightKind,
-  ImproveApplied, ImproveGroup, ImproveKind, ImproveProposal, ImproveState, ImproveStateName, PhraseType, TitleSource,
+  ImproveApplied, ImproveGroup, ImproveKind, ImproveProposal, ImproveState, ImproveStateName, PhraseType, TitleSource, LlmOrigin, ModelChoice,
   TitleSuggestion, Category, RecordingCategory,
 } from "./types";
 
@@ -107,7 +107,7 @@ export const TITLE_MAX = 200;
  * человек принял предложенное моделью (бейдж «ИИ» остаётся); без него название — «своё».
  */
 export const patchRecording = (ep: Endpoint, id: string,
-  patch: { title: string | null; title_source?: Extract<TitleSource, "ai"> }) =>
+  patch: { title: string | null; title_source?: Extract<TitleSource, "ai">; title_llm?: LlmOrigin | null }) =>
   json<Recording>(ep, `/recordings/${enc(id)}`, body("PATCH", patch));
 /** Категория, выбранная человеком: id из настроек или null — «Без категории» (модель её больше не ставит). */
 export const setRecordingCategory = (ep: Endpoint, id: string, category: string | null) =>
@@ -433,9 +433,15 @@ export const recheckHf = (ep: Endpoint) => hfCheck(ep, "/hf/check", {});
 
 // --- ассистент: итоги и вопросы ----------------------------------------------
 
+/**
+ * POST действия модели: `provider` — модель, выбранная человеком для этого действия
+ * (резидент проверит, что она включена; без неё — модель по умолчанию, без тела).
+ */
+const modelPost = (provider?: string): RequestInit => (provider ? body("POST", { provider }) : { method: "POST" });
+
 /** Итоги задачей (kind "summary"); 409 — нет провайдера или идёт расшифровка. */
-export const makeSummary = (ep: Endpoint, id: string) =>
-  json<Job>(ep, `/recordings/${enc(id)}/summary`, { method: "POST" });
+export const makeSummary = (ep: Endpoint, id: string, provider?: string) =>
+  json<Job>(ep, `/recordings/${enc(id)}/summary`, modelPost(provider));
 /** Итогов нет — ApiError 404. */
 export const getSummary = (ep: Endpoint, id: string) => json<Summary>(ep, `/recordings/${enc(id)}/summary`);
 /** Черновик итогов из живого режима (сводка ассистента во время встречи); нет — null. */
@@ -468,8 +474,8 @@ export const checkProvider = (ep: Endpoint, provider: string) =>
 export const getAnalysis = (ep: Endpoint, id: string) =>
   json<AnalysisState>(ep, `/recordings/${enc(id)}/analysis`);
 /** «Переанализировать»: задача (kind "analyze"); уже ждёт или идёт — та же. 409 — нет модели или идёт расшифровка. */
-export const runAnalysis = (ep: Endpoint, id: string) =>
-  json<Job>(ep, `/recordings/${enc(id)}/analysis`, { method: "POST" });
+export const runAnalysis = (ep: Endpoint, id: string, provider?: string) =>
+  json<Job>(ep, `/recordings/${enc(id)}/analysis`, modelPost(provider));
 /**
  * Ответ на разовое предложение включить авто-анализ (обновившимся с 0.2.x,
  * `analysis.consent`). «Включить» ставит и анализ этой записи — по правилам
@@ -478,8 +484,8 @@ export const runAnalysis = (ep: Endpoint, id: string) =>
 export const answerAnalysisOffer = (ep: Endpoint, id: string, answer: "granted" | "declined") =>
   json<{ analysis: Record<string, unknown> }>(ep, `/recordings/${enc(id)}/analysis/consent`, body("POST", { answer }));
 /** «Предложить название»: только предложение (до пары минут, если нужен вызов модели). */
-export const suggestTitle = (ep: Endpoint, id: string) =>
-  json<TitleSuggestion>(ep, `/recordings/${enc(id)}/title/suggest`, { method: "POST" });
+export const suggestTitle = (ep: Endpoint, id: string, provider?: string) =>
+  json<TitleSuggestion>(ep, `/recordings/${enc(id)}/title/suggest`, modelPost(provider));
 
 // --- «Улучшить расшифровку» ------------------------------------------------------
 
@@ -487,8 +493,8 @@ export const suggestTitle = (ep: Endpoint, id: string) =>
 export const getImprove = (ep: Endpoint, id: string) =>
   json<ImproveState>(ep, `/recordings/${enc(id)}/improve`);
 /** Поставить задачу (kind "improve"); уже ждёт или идёт — та же. 409 — нет модели или идёт расшифровка. */
-export const runImprove = (ep: Endpoint, id: string) =>
-  json<Job>(ep, `/recordings/${enc(id)}/improve`, { method: "POST" });
+export const runImprove = (ep: Endpoint, id: string, provider?: string) =>
+  json<Job>(ep, `/recordings/${enc(id)}/improve`, modelPost(provider));
 /** Выбранные группы — одним шагом истории встречи; по желанию — правилами и в термины. */
 export const applyImprove = (ep: Endpoint, id: string, req: ImproveApplyRequest) =>
   json<ImproveApplyResult>(ep, `/recordings/${enc(id)}/improve/apply`, body("POST", req));

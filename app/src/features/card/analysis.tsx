@@ -1,7 +1,9 @@
 /**
  * Анализ встречи в карточке (M2): состояние (`GET /recordings/{id}/analysis`),
  * тихие строки «Анализ…», «Анализ устарел — Переанализировать», «Анализ не
- * удался — Повторить», и «Предложить название» с подтверждением.
+ * удался — Повторить», какая модель разметила встречу («Анализ: Claude Code
+ * (sonnet) · 06.10» — ушла ли встреча облачной модели), и «Предложить
+ * название» с подтверждением.
  *
  * Сама разметка (типы реплик, главы, наблюдения) рисуется в «Расшифровке» и
  * плеере — это M3; здесь только состояние и действия.
@@ -10,6 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, getAnalysis, patchRecording, suggestTitle, type Endpoint } from "../../lib/api";
 import { errorText } from "../../lib/format";
+import { llmLabel, originOf, provenance } from "../../lib/llm";
 import type { AnalysisState, Job, Recording, TitleSuggestion } from "../../lib/types";
 import { isModelProgress } from "../../lib/progress";
 import { Button } from "../../ui/Button";
@@ -84,6 +87,15 @@ export function AnalysisStatus({ state, busy, onRun }: {
           </span>
         </div>
       );
+    case "ready": {
+      // Какая модель разметила встречу: видно, уходила ли она облачной модели.
+      const line = provenance("Анализ", originOf(state.analysis), state.analysis?.created_at);
+      return line ? (
+        <div className="analysis-status analysis-status--origin">
+          <span className="muted" title="Какая модель разметила встречу">{line}</span>
+        </div>
+      ) : null;
+    }
     case "stale":
       return <StaleAnalysis busy={busy} onRun={onRun} />;
     case "failed":
@@ -172,24 +184,28 @@ export function useTitleSuggest(endpoint: Endpoint, id: string, onApplied: (rec:
 
   useEffect(() => { setSuggest(null); ask.current += 1; }, [endpoint, id]);
 
-  const open = useCallback(() => {
+  /** `provider` — модель, выбранная человеком: зовём её (не название из анализа). */
+  const open = useCallback((provider?: string) => {
     const n = ++ask.current;
     setSuggest({ busy: true });
-    suggestTitle(endpoint, id).then(
+    (provider ? suggestTitle(endpoint, id, provider) : suggestTitle(endpoint, id)).then(
       (got) => { if (ask.current === n) setSuggest({ busy: false, got }); },
       (e) => { if (ask.current === n) setSuggest({ busy: false, error: errorText(e) }); },
     );
   }, [endpoint, id]);
   const close = useCallback(() => { ask.current += 1; setSuggest(null); }, []);
+  // Какая модель предложила показанное название — уходит вместе с ним (`title_llm`).
+  const by = suggest && !suggest.busy && "got" in suggest ? suggest.got.llm : undefined;
   const apply = useCallback(async (title: string) => {
     try {
-      const rec = await patchRecording(endpoint, id, { title, title_source: "ai" });
+      const rec = await patchRecording(endpoint, id, by ? { title, title_source: "ai", title_llm: by }
+        : { title, title_source: "ai" });
       setSuggest(null);
       onApplied(rec);
     } catch (e) {
       setSuggest({ busy: false, error: errorText(e) });
     }
-  }, [endpoint, id, onApplied]);
+  }, [endpoint, id, onApplied, by]);
   return { suggest, open, close, apply };
 }
 
@@ -210,6 +226,7 @@ export function TitleSuggestPopover({ anchor, suggest, onApply, onClose }: {
           <>
             <div className="muted title-suggest__label">
               {suggest.got.from === "analysis" ? "Название из анализа встречи" : "Название по началу встречи"}
+              {suggest.got.llm && ` · ${llmLabel(suggest.got.llm)}`}
             </div>
             <div className="title-suggest__title">{suggest.got.title}</div>
           </>

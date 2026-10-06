@@ -5,7 +5,9 @@
  * знаний». Справа — значками с подсказками: «Открыть папку» и «Ещё действия»
  * (⋯) — редкое и опасное: «Переразделить на спикеров…», «Перерасшифровать…»,
  * ✦ «Улучшить расшифровку», «Переанализировать», «Предложить название» и за
- * чертой «Удалить…».
+ * чертой «Удалить…». У действий модели, когда включено больше одной модели, —
+ * стрелка справа: список включённых моделей, выбранная работает только для
+ * этого действия (основное нажатие — модель по умолчанию).
  * Подтверждения — общим окном (ui/ConfirmDialog): фокус на «Отмена», Esc — отмена.
  *
  * Узкая карточка (меньше COMPACT_PX) — подписи свёрнуты в значки; имя кнопки
@@ -14,13 +16,16 @@
 
 import { useRef, useState, type ReactNode } from "react";
 import {
-  BookOpen, ChevronDown, Download, Ellipsis, FolderOpen, RotateCcw, ScanSearch, Sparkles, Trash2, Users, WandSparkles,
+  BookOpen, ChevronDown, ChevronLeft, Download, Ellipsis, FolderOpen, RotateCcw, ScanSearch, Sparkles, Trash2, Users,
+  WandSparkles,
 } from "lucide-react";
 import { inTauri } from "../../lib/shell";
 import { useWide } from "../../live/useWide";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog, type ConfirmOptions } from "../../ui/ConfirmDialog";
+import type { ModelChoice } from "../../lib/types";
 import { ItemMenu, type MenuItem } from "../recordings/ItemMenu";
+import { modelMenuItems, pickLabel } from "./modelPick";
 
 /** Уже этого — подписи главных кнопок свёрнуты в значки. */
 export const COMPACT_PX = 360;
@@ -52,11 +57,14 @@ export const CONFIRMS: Record<"delete" | "retranscribe" | "reanalyze", ConfirmOp
 
 type Menu = { kind: "export" | "more" };
 type Confirm = keyof typeof CONFIRMS | null;
+/** Действие модели, для которого выбирают модель (стрелка у пункта). */
+type Pick = "improve" | "reanalyze" | "title";
+const NO_MODELS: ModelChoice[] = [];
 
 export function CardActions({
   canExport, canRetranscribe, busy, onExport, onKbExport, onOpenFolder, onRetranscribe, onRediarize, onReanalyze,
   reanalyzeBlocked = null, reanalyzeLabel = "Переанализировать", onSuggestTitle, onImprove, improveBlocked = null,
-  onDelete, kbPending = false,
+  onDelete, kbPending = false, models = NO_MODELS,
 }: {
   canExport: boolean;
   canRetranscribe: boolean;
@@ -70,19 +78,21 @@ export function CardActions({
   onRetranscribe: () => void;
   /** «Переразделить на спикеров…» (только разделение, без распознавания); нет — пункта нет. */
   onRediarize?: () => void;
-  /** «Переанализировать» (анализ встречи агентом); нет — пункта нет. */
-  onReanalyze?: () => void;
+  /** «Переанализировать» (анализ встречи агентом); нет — пункта нет. `provider` — выбранная модель. */
+  onReanalyze?: (provider?: string) => void;
   /** Почему «Переанализировать» сейчас недоступно (анализ уже идёт, нет модели) — подсказкой; null — доступно. */
   reanalyzeBlocked?: string | null;
   /** Подпись пункта: «Анализировать», если анализа ещё не было. */
   reanalyzeLabel?: string;
   /** «Предложить название»; нет — пункта нет. */
-  onSuggestTitle?: () => void;
+  onSuggestTitle?: (provider?: string) => void;
   /** ✦ «Улучшить расшифровку» (ИИ находит неверно распознанные термины); нет — пункта нет. */
-  onImprove?: () => void;
+  onImprove?: (provider?: string) => void;
   /** Почему «Улучшить расшифровку» сейчас недоступно (нет модели) — подсказкой; null — доступно. */
   improveBlocked?: string | null;
   onDelete: () => void;
+  /** Включённые модели (`GET /assistant` → `models`): больше одной — у действий модели есть выбор. */
+  models?: ModelChoice[];
 }) {
   const root = useRef<HTMLDivElement>(null);
   const exportBtn = useRef<HTMLButtonElement>(null);
@@ -90,14 +100,21 @@ export function CardActions({
   const compact = !useWide(root, COMPACT_PX);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [confirm, setConfirm] = useState<Confirm>(null);
+  /** Меню показывает список моделей для этого действия. */
+  const [pick, setPick] = useState<Pick | null>(null);
+  /** Модель, выбранная для «Переанализировать…», ждёт подтверждения. */
+  const [chosen, setChosen] = useState<string | undefined>(undefined);
+  const choose = models.length > 1;
 
   const close = (focusBack = true) => {
     const kind = menu?.kind;
     setMenu(null);
+    setPick(null);
     if (focusBack) (kind === "export" ? exportBtn : moreBtn).current?.focus();
   };
   const toggle = (kind: Menu["kind"]) => {
     if (menu?.kind === kind) { close(); return; }
+    setPick(null);
     setMenu({ kind });
   };
   const run = (fn: () => void) => () => { close(false); fn(); };
@@ -105,17 +122,40 @@ export function CardActions({
   const label = (text: string) => <span className={compact ? "sr-only" : "act__label"}>{text}</span>;
 
   /** Пункт меню, который сначала спрашивает: меню закрывается, открывается подтверждение. */
-  const ask = (kind: NonNullable<Confirm>) => () => { close(false); setConfirm(kind); };
+  const ask = (kind: NonNullable<Confirm>) => () => { close(false); setChosen(undefined); setConfirm(kind); };
   const confirmed = () => {
     const kind = confirm;
     setConfirm(null);
     if (kind === "delete") onDelete();
     else if (kind === "retranscribe") onRetranscribe();
-    else if (kind === "reanalyze") onReanalyze?.();
+    else if (kind === "reanalyze") onReanalyze?.(chosen);
   };
+  const firstAnalysis = reanalyzeLabel === "Анализировать";
+  /** Модель выбрана в списке: действие только с ней (заменить разметку — после подтверждения). */
+  const pickedModel = (kind: Pick, provider: string) => {
+    close(false);
+    if (kind === "improve") onImprove?.(provider);
+    else if (kind === "title") onSuggestTitle?.(provider);
+    else if (firstAnalysis) onReanalyze?.(provider);
+    else { setChosen(provider); setConfirm("reanalyze"); }
+  };
+  const pickTitle: Record<Pick, string> = {
+    improve: "Улучшить расшифровку", reanalyze: reanalyzeLabel, title: "Предложить название",
+  };
+  /** Стрелка у пункта действия модели — список моделей (если выбирать есть из чего). */
+  const splitOf = (kind: Pick): MenuItem["split"] => (choose ? {
+    label: pickLabel(pickTitle[kind]), hint: "Выбрать модель для этого действия", onSelect: () => setPick(kind),
+  } : undefined);
 
   let items: MenuItem[] = [];
-  if (menu?.kind === "export") {
+  let note: string | undefined;
+  if (menu && pick) {
+    note = `«${pickTitle[pick]}» — какой моделью`;
+    items = [
+      ...modelMenuItems(models, (provider) => pickedModel(pick, provider)),
+      { label: "Назад", separator: true, icon: <ChevronLeft {...ICON} />, onSelect: () => setPick(null) },
+    ];
+  } else if (menu?.kind === "export") {
     items = FORMATS.map((f) => ({ label: f.label, hint: f.hint, onSelect: run(() => onExport(f.id)) }));
   } else if (menu) {
     const opt = (on: boolean | undefined, item: MenuItem): MenuItem[] => (on ? [item] : []);
@@ -131,18 +171,18 @@ export function CardActions({
       ...opt(!!onImprove, {
         label: "Улучшить расшифровку", icon: <Sparkles {...ICON} />, disabled: busy || !!improveBlocked,
         hint: improveBlocked ?? "ИИ найдёт неверно распознанные термины и покажет короткий список замен",
-        onSelect: run(() => onImprove?.()),
+        onSelect: run(() => onImprove?.()), split: splitOf("improve"),
       }),
       ...opt(!!onReanalyze, {
         // Разметки ещё нет — заменять нечего, спрашивать незачем.
-        label: reanalyzeLabel === "Анализировать" ? reanalyzeLabel : `${reanalyzeLabel}…`,
+        label: firstAnalysis ? reanalyzeLabel : `${reanalyzeLabel}…`,
         icon: <ScanSearch {...ICON} />, disabled: busy || !!reanalyzeBlocked,
         hint: reanalyzeBlocked ?? "Заново разметить встречу агентом",
-        onSelect: reanalyzeLabel === "Анализировать" ? run(() => onReanalyze?.()) : ask("reanalyze"),
+        onSelect: firstAnalysis ? run(() => onReanalyze?.()) : ask("reanalyze"), split: splitOf("reanalyze"),
       }),
       ...opt(!!onSuggestTitle, {
         label: "Предложить название", icon: <WandSparkles {...ICON} />, disabled: busy,
-        hint: "Название по содержанию встречи", onSelect: run(() => onSuggestTitle?.()),
+        hint: "Название по содержанию встречи", onSelect: run(() => onSuggestTitle?.()), split: splitOf("title"),
       }),
       {
         label: "Удалить…", danger: true, separator: true, icon: <Trash2 {...ICON} />,
@@ -179,8 +219,8 @@ export function CardActions({
           { ref: moreBtn, "aria-haspopup": "menu", "aria-expanded": menu?.kind === "more" })}
       </div>
       {menu && (
-        <ItemMenu items={items} align={menu.kind === "more" ? "end" : "start"}
-          label={menu.kind === "export" ? "Формат экспорта" : "Ещё действия с записью"}
+        <ItemMenu items={items} align={menu.kind === "more" ? "end" : "start"} note={note}
+          label={pick ? "Какой моделью" : menu.kind === "export" ? "Формат экспорта" : "Ещё действия с записью"}
           anchor={menu.kind === "export" ? exportBtn : moreBtn} onClose={() => close()} />
       )}
       {confirm && (

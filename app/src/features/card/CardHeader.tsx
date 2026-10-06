@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { categoryOf } from "../../lib/categories";
 import { TITLE_MAX, type Endpoint } from "../../lib/api";
 import { dayLabel, duration, plural } from "../../lib/format";
+import { llmLabel } from "../../lib/llm";
 import { isUnnamed } from "../../lib/speakers";
 import type { Category, MergeInfo, Recording } from "../../lib/types";
 import { AiBadge } from "../../ui/AiBadge";
@@ -121,7 +122,7 @@ export function CardHeader({
         />
       ) : (
         <h2 className="card__title" title="Нажмите, чтобы переименовать" onClick={begin}>
-          {shown}{rec.title_source === "ai" && rec.title && <AiBadge onClick={begin} />}
+          {shown}{rec.title_source === "ai" && rec.title && <AiBadge onClick={begin} by={llmLabel(rec.title_llm)} />}
         </h2>
       )}
       <div className="card__meta-row">

@@ -19,6 +19,7 @@ import type { AgentRequest } from "../../lib/agentRef";
 import { ApiError, getLiveDraft, getSummary, makeSummary, type Endpoint } from "../../lib/api";
 import { dayLabel, errorText } from "../../lib/format";
 import { JiraLinks } from "../../lib/jira";
+import { llmLabel, modelChoices } from "../../lib/llm";
 import { Markdown, type ItemAction } from "../../lib/markdown";
 import { isActiveJob, modelJobsOf } from "../../lib/status";
 import type { AssistantInfo, Job, LiveDraft, Summary } from "../../lib/types";
@@ -27,6 +28,7 @@ import { Button } from "../../ui/Button";
 import { useConfirm } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
 import { ProviderHint, ThinkingStage, noProvider, useLostJobs } from "./assistant";
+import { ModelSplitButton } from "./modelPick";
 
 const COPIED_MS = 2000;
 
@@ -125,15 +127,18 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
     setError(null);
     try { await fn(); } catch (e) { setError(errorText(e)); } finally { setBusy(false); }
   };
-  const make = () => act(async () => { setSubmitted(await makeSummary(endpoint, id)); });
+  /** `provider` — модель, выбранная стрелкой у кнопки; нет — модель по умолчанию. */
+  const make = (provider?: string) => act(async () => {
+    setSubmitted(await (provider ? makeSummary(endpoint, id, provider) : makeSummary(endpoint, id)));
+  });
   const [confirmNode, confirm] = useConfirm();
   /** «Переделать…» заменяет готовые итоги — сначала спросить. */
-  const remake = async () => {
+  const remake = async (provider?: string) => {
     const ok = await confirm({
       title: "Переделать итоги?", confirmLabel: "Переделать", danger: false,
       message: "Текущие итоги будут заменены новыми. Если встреча уже выгружена в базу знаний, выгрузка обновится.",
     });
-    if (ok) await make();
+    if (ok) await make(provider);
   };
   const copy = (markdown: string) => act(async () => {
     try {
@@ -147,15 +152,23 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
   const blocked = noProvider(assistant);
   const hint = blocked ? <ProviderHint onOpenSettings={onOpenSettings} /> : null;
   const canMake = !busy && !thinking && !blocked;
+  const choices = modelChoices(assistant);
+  const makeButton = (
+    <ModelSplitButton label="Сделать итоги" variant="primary" choices={choices} disabled={!canMake}
+      onRun={(p) => void make(p)} />
+  );
 
   let main;
   if (summary) {
     main = (
       <>
         <div className="assist__toolbar">
-          <Button onClick={() => void remake()} disabled={!canMake}>Переделать…</Button>
+          <ModelSplitButton label="Переделать…" choices={choices} disabled={!canMake} onRun={(p) => void remake(p)} />
           {confirmNode}
           <Button onClick={() => copy(summary.markdown)} disabled={busy}>{copied ? "Скопировано" : "Копировать"}</Button>
+          {summary.llm && (
+            <span className="muted assist__when" title="Какая модель сделала итоги">Итоги: {llmLabel(summary.llm)}</span>
+          )}
           {typeof summary.created_at === "number" && (
             <span className="muted assist__when">{dayLabel(new Date(summary.created_at * 1000).toISOString())}</span>
           )}
@@ -169,7 +182,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
       <>
         {!thinking && (
           <div className="assist__toolbar">
-            <Button variant="primary" onClick={make} disabled={!canMake}>Сделать итоги</Button>
+            {makeButton}
             {hint}
           </div>
         )}
@@ -188,7 +201,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
         title="Итогов пока нет"
         hint="Модель прочитает расшифровку и выделит решения, задачи и сроки."
         action={<>
-          <Button variant="primary" onClick={make} disabled={!canMake}>Сделать итоги</Button>
+          {makeButton}
           {hint}
         </>}
       />
@@ -205,7 +218,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
       {failed && (
         <div className="assist__failed">
           <div className="assist__error">{failed.error || "Не удалось сделать итоги"}</div>
-          <Button onClick={make} disabled={!canMake}>Повторить</Button>
+          <Button onClick={() => void make()} disabled={!canMake}>Повторить</Button>
           {!summary && hint}
         </div>
       )}

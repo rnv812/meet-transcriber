@@ -28,6 +28,7 @@ import {
   AnalysisOffer, AnalysisStatus, reanalyzeBlocked, reanalyzeLabel, TitleSuggestPopover, useAnalysis, useTitleSuggest,
 } from "./analysis";
 import { noProvider, useAssistant } from "./assistant";
+import { modelChoices } from "../../lib/llm";
 import { useImprove } from "./improve";
 import { AudioPlayer, type AudioPlayerHandle } from "./AudioPlayer";
 import { CardActions } from "./CardActions";
@@ -371,7 +372,11 @@ export function RecordingCard({
   });
   const doTranscribe = () => act(async () => { await transcribe(endpoint, id); onChanged?.(); await load(); });
   const noModel = noProvider(assistantInfo);
-  const doReanalyze = () => act(async () => { await runAnalysis(endpoint, id); await analysis.reload(); });
+  /** `provider` — модель, выбранная для этого анализа; нет — модель по умолчанию. */
+  const doReanalyze = (provider?: string) => act(async () => {
+    await (provider ? runAnalysis(endpoint, id, provider) : runAnalysis(endpoint, id));
+    await analysis.reload();
+  });
   // Предложение — одно на всё приложение: ответили (здесь или в настройках) — больше не видно.
   const offerAnalysis = consent === "pending" && status.kind === "ready" && turns.length > 0
     && !!assistantInfo?.provider;
@@ -552,13 +557,14 @@ export function RecordingCard({
         reanalyzeBlocked={reanalyzeBlocked(analysis.state, noModel)}
         reanalyzeLabel={reanalyzeLabel(analysis.state)}
         onSuggestTitle={status.kind === "ready" ? titleSuggest.open : undefined}
-        onImprove={status.kind === "ready" && turns.length ? () => void improve.start() : undefined}
+        onImprove={status.kind === "ready" && turns.length ? (p) => void improve.start(p) : undefined}
+        models={modelChoices(assistantInfo)}
         improveBlocked={improve.blocked}
         onDelete={doDelete}
       />
       {error && <div className="card__error" role="alert">{error}</div>}
       {status.kind === "ready" && (
-        <AnalysisStatus state={analysis.state} busy={busy} onRun={noModel ? undefined : doReanalyze} />
+        <AnalysisStatus state={analysis.state} busy={busy} onRun={noModel ? undefined : () => void doReanalyze()} />
       )}
       {offerAnalysis && (
         <AnalysisOffer busy={busy} onAnswer={answerOffer}

@@ -18,6 +18,7 @@ import {
 } from "../../lib/api";
 import { clock, errorText, plural } from "../../lib/format";
 import type { ImproveGroup, ImproveState, Job } from "../../lib/types";
+import { llmLabel, originOf } from "../../lib/llm";
 import { isModelProgress } from "../../lib/progress";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
@@ -131,14 +132,19 @@ export function useImprove({ endpoint, id, folder, jobs, version, head, noModel,
     ? { state: job.state === "running" ? "running" : "queued", job, hint: false }
     : state;
 
-  const start = useCallback(async () => {
+  /**
+   * Открыть окно и, если предложения ещё нет, поставить задачу. `provider` —
+   * модель, выбранная человеком: с ней задача ставится и при готовом списке
+   * (заново, этой моделью).
+   */
+  const start = useCallback(async (provider?: string) => {
     setError(null);
     setOpen(true);
     const now = job ? "busy" : state?.state;
-    if (now === "busy" || now === "ready") return;
+    if (now === "busy" || (now === "ready" && !provider)) return;
     setBusy(true);
     try {
-      await runImprove(endpoint, id);
+      await (provider ? runImprove(endpoint, id, provider) : runImprove(endpoint, id));
       await reload();
     } catch (e) {
       setError(errorText(e));
@@ -260,12 +266,15 @@ export function ImproveStatus({ state, busy, onOpen, onRetry, onDismiss }: {
       const terms = groups.filter((g) => g.kind === "term").length;
       const fixes = groups.length - terms;
       if (!groups.length) return null;
+      // Какая модель предложила замены (видно, уходил ли текст облачной модели).
+      const by = llmLabel(originOf(state.proposal));
       return (
         <div className="analysis-status" role="status">
           <span className="muted">
             {terms
               ? `ИИ предлагает исправить ${terms} ${plural(terms, "термин", "термина", "терминов")}`
               : `ИИ предлагает ${fixes} ${plural(fixes, "исправление", "исправления", "исправлений")} распознавания`}
+            {by && <span title="Какая модель предложила замены"> · {by}</span>}
           </span>
           <button type="button" className="link-btn" onClick={onOpen} disabled={busy}>Просмотреть</button>
         </div>

@@ -8,7 +8,7 @@
  * стороны, всегда целиком в окне; пересчитывается при прокрутке и смене размера.
  */
 
-import { Check } from "lucide-react";
+import { Check, ChevronRight } from "lucide-react";
 import {
   Fragment, useEffect, useId, useMemo, useRef, type KeyboardEvent, type ReactNode, type RefObject,
 } from "react";
@@ -33,6 +33,13 @@ export type MenuItem = {
   checked?: boolean;
   /** Значок справа (стрелка у пункта, открывающего список). */
   trailing?: ReactNode;
+  /**
+   * Пункт-«разделённая кнопка»: основное нажатие — `onSelect`, стрелка справа —
+   * `split.onSelect` (например, выбрать другую модель для этого действия).
+   */
+  split?: { label: string; onSelect: () => void; hint?: string };
+  /** Вторая строка мелким шрифтом под подписью (куда уходит текст, почему недоступно). */
+  detail?: string;
 };
 
 export function ItemMenu({ at, align = "start", label, items, note, anchor, onClose }: {
@@ -98,21 +105,37 @@ export function ItemMenu({ at, align = "start", label, items, note, anchor, onCl
     <div ref={box} className="item-menu" role="menu" aria-label={label} onKeyDown={onKeyDown}
       aria-describedby={note ? noteId : undefined} style={floatingStyle(pos)}>
       {note && <div className="item-menu__note" id={noteId}>{note}</div>}
-      {items.map((item, i) => (
-        <Fragment key={`${i}:${item.label}`}>
-          {item.separator && <div className="item-menu__sep" role="separator" />}
+      {items.map((item, i) => {
+        const main = (
           <button type="button" role={item.checked === undefined ? "menuitem" : "menuitemradio"}
             aria-checked={item.checked} tabIndex={-1} title={item.hint} disabled={item.disabled}
             data-autofocus={item.autoFocus || undefined}
             className={`item-menu__item${item.danger ? " item-menu__item--danger" : ""}`}
             onClick={item.onSelect}>
             {item.icon && <span className="item-menu__icon" aria-hidden="true">{item.icon}</span>}
-            {item.label}
+            {item.detail ? (
+              <span className="item-menu__text">{item.label}<span className="item-menu__detail">{item.detail}</span></span>
+            ) : item.label}
             {item.checked && <span className="item-menu__end" aria-hidden="true"><Icon as={Check} size="sm" /></span>}
             {item.trailing && <span className="item-menu__end item-menu__icon" aria-hidden="true">{item.trailing}</span>}
           </button>
-        </Fragment>
-      ))}
+        );
+        return (
+          <Fragment key={`${i}:${item.label}`}>
+            {item.separator && <div className="item-menu__sep" role="separator" />}
+            {item.split ? (
+              <div className="item-menu__split">
+                {main}
+                <button type="button" role="menuitem" tabIndex={-1} aria-label={item.split.label}
+                  title={item.split.hint ?? item.split.label} disabled={item.disabled}
+                  className="item-menu__item item-menu__more" onClick={item.split.onSelect}>
+                  <Icon as={ChevronRight} size="sm" />
+                </button>
+              </div>
+            ) : main}
+          </Fragment>
+        );
+      })}
     </div>
   );
 }
