@@ -1541,13 +1541,19 @@ class TrayControl:
         return categories.matcher(keys, settings.load()) if keys else None
 
     def recordings(self, limit: int = 200, q: str | None = None, categories: str | None = None) -> dict:
+        """Записи от свежих к старым — из кэша карточек поиска (meet.search):
+        папки перечитываются, только когда меняются. Окно просит все (5000),
+        трей — последние 200."""
+        from meet import search
+
         root = self._root()
         keep = self._category_filter(categories)
+        cards = [c for c in search.cards(root) if keep is None or keep(c)]
         if (q or "").strip():
-            items = library.search(root, q, limit=limit, keep=keep)
+            items = library.search_cards(cards, q, limit=limit)
         else:
-            items = library.listing(root, limit=limit, keep=keep)
-        return {"root": str(root), "items": items}
+            items = cards[:max(0, limit)]
+        return {"root": str(root), "items": [dict(c) for c in items]}
 
     def search(self, q: str, limit: int = 200, categories: str | None = None) -> dict:
         """Поиск по тексту встреч (и названиям): записи с фрагментами реплик.

@@ -878,11 +878,21 @@ def search(root: Path, q: str, limit: int = 200, keep=None) -> list[dict]:
     любой реплики. Пустой запрос — вся библиотека, как у `listing`. Полный
     обход с чтением transcript.json: библиотека — сотни папок, индекс был бы
     вторым источником истины."""
+    if not (q or "").strip():
+        return listing(root, limit, keep)
+    return search_cards(listing(root, limit=10**9, keep=keep), q, limit)
+
+
+def search_cards(cards, q: str, limit: int = 200) -> list[dict]:
+    """Карточки (по порядку), у которых запрос (без учёта регистра) есть в
+    названии или в тексте любой реплики; пустой запрос — первые `limit`."""
     q = (q or "").strip().lower()
     if not q:
-        return listing(root, limit, keep)
+        return list(cards)[:max(0, limit)]
     found = []
-    for card in listing(root, limit=10**9, keep=keep):
+    for card in cards:
+        if len(found) >= limit:
+            break
         transcript = read_transcript(Path(card["path"])) or {}
         haystack = [card.get("title") or "", str(transcript.get("title") or "")]
         segments = transcript.get("segments")
@@ -891,8 +901,6 @@ def search(root: Path, q: str, limit: int = 200, keep=None) -> list[dict]:
                          if isinstance(s, dict) and s.get("kind") != "break"]
         if any(q in part.lower() for part in haystack):
             found.append(card)
-            if len(found) >= limit:
-                break
     return found
 
 

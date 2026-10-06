@@ -85,11 +85,16 @@ export const getState = (ep: Endpoint) => json<Snapshot>(ep, "/state");
 
 // --- записи ----------------------------------------------------------------
 
+/**
+ * Сколько записей просит окно: все (у резидента по умолчанию 200 — столько берёт трей,
+ * а окну старые записи терять нельзя).
+ */
+export const LIBRARY_LIMIT = 5000;
 /** `categories` — фильтр по категориям (id и "_none" — «Без категории»); резидент применяет его до лимита списка. */
 export function getRecordings(ep: Endpoint, q?: string, categories?: string[]) {
-  const params = [q ? `q=${enc(q)}` : "", categories?.length ? `categories=${enc(categories.join(","))}` : ""]
-    .filter(Boolean).join("&");
-  return json<{ root: string; items: Recording[] }>(ep, `/recordings${params ? `?${params}` : ""}`);
+  const params = [`limit=${LIBRARY_LIMIT}`, q ? `q=${enc(q)}` : "",
+    categories?.length ? `categories=${enc(categories.join(","))}` : ""].filter(Boolean).join("&");
+  return json<{ root: string; items: Recording[] }>(ep, `/recordings?${params}`);
 }
 /** Несколько самых свежих записей (папки сортируются как даты): панель записи в строке меню. */
 export const getRecentRecordings = (ep: Endpoint, limit: number) =>

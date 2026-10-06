@@ -221,3 +221,15 @@ test("образец голоса: состояние, запись с микр�
       JSON.stringify({ ops: [{ type: "rename", label: "Спикер 3", to: "Вы" }], remember: {}, remember_owner: true })],
   ]);
 });
+
+test("список записей окна — все записи (limit=5000), трей — свои последние", async () => {
+  const f = okFetch();
+  await api.getRecordings(ep);
+  await api.getRecordings(ep, "бюджет", ["daily"]);
+  await api.getRecentRecordings(ep, 5);
+  expect(f.mock.calls.map(([url]) => url)).toEqual([
+    "http://h/recordings?limit=5000",
+    "http://h/recordings?limit=5000&q=%D0%B1%D1%8E%D0%B4%D0%B6%D0%B5%D1%82&categories=daily",
+    "http://h/recordings?limit=5",
+  ]);
+});

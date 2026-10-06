@@ -364,6 +364,7 @@ def _cards(root: Path):
     except OSError:
         return
     _CACHE.forget_except({str(f) for f in folders})
+    library._forget_heads(root, {f.name for f in folders})
     for folder in folders:
         card = _CACHE.card(folder)
         if card is not None:

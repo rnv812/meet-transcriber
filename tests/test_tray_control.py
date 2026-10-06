@@ -293,6 +293,49 @@ def test_recordings_listing(with_recordings, app):
     assert got["items"][0]["has_transcript"] is False
 
 
+def test_recordings_come_from_the_card_cache(control_state, tmp_path, monkeypatch):
+    # Список — из кэша карточек поиска: повторный запрос не перечитывает папки.
+    from pathlib import Path
+
+    from meet import search
+
+    search.clear_cache()
+    for name in ("2026-09-28_10-00", "2026-09-30_10-00", "2026-09-29_10-00"):
+        _saved_folder(tmp_path, name)
+    monkeypatch.setattr(control_state, "_root", lambda: tmp_path / "recordings")
+    calls = []
+    real = library.describe
+    monkeypatch.setattr(library, "describe", lambda f: calls.append(Path(f).name) or real(f))
+    first = control_state.recordings()
+    assert [i["id"] for i in first["items"]] == [
+        "2026-09-30_10-00", "2026-09-29_10-00", "2026-09-28_10-00"]
+    assert len(calls) == 3
+    calls.clear()
+    assert control_state.recordings() == first
+    assert calls == []
+    assert [i["id"] for i in control_state.recordings(limit=2)["items"]] == [
+        "2026-09-30_10-00", "2026-09-29_10-00"]
+    library.write_transcript(tmp_path / "recordings" / "2026-09-28_10-00",
+                             {"title": "Созвон", "segments": []})
+    assert [i["id"] for i in control_state.recordings(q="созв")["items"]] == ["2026-09-28_10-00"]
+    assert calls == ["2026-09-28_10-00"]  # перечитана только изменившаяся
+
+
+def test_recordings_limit_is_up_to_the_caller(control_state, tmp_path, monkeypatch):
+    # Окно просит 5000 (старые записи не теряются), трей — 200 по умолчанию.
+    from meet import search
+
+    search.clear_cache()
+    root = tmp_path / "recordings"
+    for i in range(205):
+        folder = root / f"2020-01-01_00-00_{i:03d}"
+        folder.mkdir(parents=True)
+        (folder / "sys.opus").write_bytes(b"x")
+    monkeypatch.setattr(control_state, "_root", lambda: root)
+    assert len(control_state.recordings()["items"]) == 200
+    assert len(control_state.recordings(limit=5000)["items"]) == 205
+
+
 def test_recording_detail_includes_transcript(with_recordings, app):
     from meet import library
 
