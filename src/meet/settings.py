@@ -161,6 +161,12 @@ WHISPER = "faster-whisper"
 GIGAAM = "gigaam"
 ASR_BACKEND_ALIASES = {"whisper": WHISPER}
 LLM_PROVIDERS = ("auto", "claude-code", "codex", "opencode", "openai-compatible")
+# Настоящие провайдеры (без «Авто») — в каноническом порядке окна настроек.
+# Тот же список, что `meet.llm.PROVIDERS` (сверяет тест): пакет llm сюда не
+# импортируется — он сам читает настройки.
+LLM_CONCRETE = LLM_PROVIDERS[1:]
+# Кандидаты «Авто» по порядку (`meet.llm.AUTO_PROVIDERS`): OpenCode — только явным выбором.
+LLM_AUTO_ORDER = ("claude-code", "codex", "openai-compatible")
 # Провайдер для конфига без явного выбора у уже работавшего пользователя: до
 # появления "auto" ассистент ходил через Claude Code, и это не должно меняться.
 LEGACY_LLM_PROVIDER = "claude-code"
@@ -832,6 +838,15 @@ class Llm:
     Ollama: своего рантайма не тащим, а инструменты чтения хранилища такой
     провайдер не поддерживает — это учитывает слой assist.
 
+    `provider` — модель «по умолчанию»: ею идёт вся автоматическая работа
+    (анализ после расшифровки, название, живой ассистент) и ручные действия
+    без явного выбора; `auto` — первый готовый из включённых (OpenCode — только
+    явным выбором). `enabled` — включённые модели: из них человек выбирает
+    модель для одного действия в карточке («Переанализировать», «Итоги»…).
+    Модель по умолчанию включена всегда. Прежний конфиг с одним `provider`
+    читается как «включена только она» (у `auto` — его кандидаты), и
+    поведение не меняется.
+
     `proxy` — прокси для Claude Code/Codex/OpenCode (и загрузок моделей задачами):
     `system` — как в Windows, `none` — без прокси, или адрес; см. meet.netproxy.
 
@@ -846,6 +861,10 @@ class Llm:
     local_model: str | None = None
     proxy: str = "system"
     opencode_model: str = ""
+    enabled: tuple[str, ...] = LLM_AUTO_ORDER
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "enabled", _enabled(self.enabled, self.provider))
 
     @classmethod
     def from_raw(cls, raw: dict, default_provider: str = "auto") -> "Llm":
@@ -853,18 +872,26 @@ class Llm:
 
         local = raw.get("local_model")
         base = raw.get("base_url")
+        provider = as_choice(raw.get("provider"), LLM_PROVIDERS, default_provider)
+        enabled = raw.get("enabled")
+        if not isinstance(enabled, (list, tuple)):
+            # Конфиг до 0.3.4 (или испорченный руками): включена только модель
+            # по умолчанию, у «Авто» — его кандидаты.
+            enabled = LLM_AUTO_ORDER if provider == "auto" else (provider,)
         return cls(
-            provider=as_choice(raw.get("provider"), LLM_PROVIDERS, default_provider),
+            provider=provider,
             model=str(raw.get("model") or "sonnet").strip() or "sonnet",
             base_url=str(base).strip() if base else DEFAULT_LOCAL_BASE_URL,
             local_model=str(local).strip() if local else None,
             proxy=netproxy.normalize(raw.get("proxy")),
             opencode_model=_opencode_model(raw.get("opencode_model")),
+            enabled=tuple(enabled),
         )
 
     @staticmethod
     def check(update: dict) -> None:
-        """Правка из окна: ValueError с текстом для человека (негодный адрес прокси)."""
+        """Правка из окна: ValueError с текстом для человека (негодный адрес
+        прокси, неизвестная модель в списке включённых)."""
         from meet import netproxy
 
         if "proxy" in update:
@@ -875,6 +902,13 @@ class Llm:
             error = opencode_model_error(update["opencode_model"])
             if error:
                 raise ValueError(error)
+        if "enabled" in update:
+            enabled = update["enabled"]
+            if not isinstance(enabled, list):
+                raise ValueError("Включённые модели — список")
+            unknown = [str(x) for x in enabled if x not in LLM_CONCRETE]
+            if unknown:
+                raise ValueError(f"неизвестная модель: {', '.join(unknown)}")
 
     def to_raw(self) -> dict:
         return {
@@ -884,7 +918,17 @@ class Llm:
             "local_model": self.local_model,
             "proxy": self.proxy,
             "opencode_model": self.opencode_model,
+            "enabled": list(self.enabled),
         }
+
+
+def _enabled(values, provider: str) -> tuple[str, ...]:
+    """Включённые модели: только известные, без повторов, в порядке окна
+    настроек; модель по умолчанию (не «Авто») — всегда среди них."""
+    wanted = {v for v in values if isinstance(v, str)} if isinstance(values, (list, tuple)) else set()
+    if provider in LLM_CONCRETE:
+        wanted.add(provider)
+    return tuple(name for name in LLM_CONCRETE if name in wanted)
 
 
 def _opencode_model(value) -> str:

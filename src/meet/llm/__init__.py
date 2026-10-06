@@ -19,8 +19,16 @@ PROVIDERS = ("claude-code", "codex", "opencode", "openai-compatible")
 # OpenCode, едва тот появился на машине.
 AUTO_PROVIDERS = ("claude-code", "codex", "openai-compatible")
 
-__all__ = ["AUTO_PROVIDERS", "PROVIDERS", "AgentReply", "Runner", "agent_model", "provider_ready", "resolve",
-           "runner_for", "tier_kwargs"]
+__all__ = ["AUTO_PROVIDERS", "LABELS", "PROVIDERS", "AgentReply", "Runner", "agent_model", "choice_error",
+           "describe", "is_local", "label", "models", "provider_ready", "resolve", "runner_for", "tier_kwargs"]
+
+# Имена моделей для человека: окно, подпись итогов, журнал.
+LABELS = {
+    "claude-code": "Claude Code",
+    "codex": "Codex",
+    "opencode": "OpenCode",
+    "openai-compatible": "Локальная модель",
+}
 
 # «Быстрее» для живых подсказок: та же подписка, модель полегче. haiku без
 # явного «не размышлять» думает по умолчанию — и тик идёт 16–90 с вместо 2–4 с.
@@ -100,16 +108,113 @@ def provider_ready(name: str, cfg: "Settings", *, need_login: bool) -> bool:
     return True
 
 
-def resolve(cfg: "Settings") -> tuple[str | None, Runner | None]:
-    """Кто будет отвечать. `auto` — первый готовый из claude-code → codex →
-    openai-compatible (OpenCode — только явным выбором) (CLI без входа пропускается: выбирается следующий).
-    Явный провайдер — он, если найден, иначе (None, None)."""
+def resolve(cfg: "Settings", provider: str | None = None) -> tuple[str | None, Runner | None]:
+    """Кто будет отвечать.
+
+    Без `provider` — модель по умолчанию (`llm.provider`): `auto` — первый
+    готовый из включённых по порядку claude-code → codex → openai-compatible
+    (OpenCode — только явным выбором; CLI без входа пропускается: выбирается
+    следующий). Это выбор до вызова: упавший вызов на другую модель не
+    переходит. Явный провайдер по умолчанию — он, если найден, иначе (None, None).
+
+    `provider` — модель, выбранная человеком для одного действия: она, если
+    включена в настройках и найдена, иначе (None, None) — никакого перехода на
+    модель по умолчанию или «Авто» (почему — `choice_error`)."""
+    if provider is not None:
+        if choice_error(cfg, provider) is not None:
+            return None, None
+        return provider, runner_for(provider, cfg)
     choice = cfg.llm.provider
     if choice == "auto":
         for name in AUTO_PROVIDERS:
-            if provider_ready(name, cfg, need_login=True):
+            if name in cfg.llm.enabled and provider_ready(name, cfg, need_login=True):
                 return name, runner_for(name, cfg)
         return None, None
     if choice in PROVIDERS and provider_ready(choice, cfg, need_login=False):
         return choice, runner_for(choice, cfg)
     return None, None
+
+
+def choice_error(cfg: "Settings", name: str) -> str | None:
+    """Почему выбранной человеком модели `name` нельзя дать задачу; None — можно.
+    Неизвестная, не включённая в настройках, не найдена на машине (вход в CLI
+    не проверяется: упадёт сам вызов — с текстом CLI)."""
+    if name not in PROVIDERS:
+        return f"неизвестная модель: {name}"
+    if name not in cfg.llm.enabled:
+        return f"модель «{LABELS[name]}» не включена в настройках (раздел «Ассистент» → «Модели»)"
+    if provider_ready(name, cfg, need_login=False):
+        return None
+    return _not_found(name, cfg)
+
+
+def _not_found(name: str, cfg: "Settings") -> str:
+    from meet.llm import detect
+
+    if name == "claude-code":
+        return detect.claude_not_found()
+    if name == "codex":
+        return "не найден Codex CLI (codex)"
+    if name == "opencode":
+        return detect.OPENCODE_NOT_FOUND
+    return f"локальная модель не отвечает: {cfg.llm.base_url}"
+
+
+def describe(provider: str | None, cfg: "Settings") -> dict:
+    """Происхождение результата: {"provider", "model"} — какая модель его
+    сделала. `model` — имя из настроек (у Codex — из его конфига: None)."""
+    model = None
+    if provider == "claude-code":
+        model = cfg.llm.model
+    elif provider == "opencode":
+        model = cfg.llm.opencode_model or None
+    elif provider == "openai-compatible":
+        model = cfg.llm.local_model or None
+    return {"provider": provider, "model": model}
+
+
+def label(origin: dict | None) -> str:
+    """«Claude Code (sonnet)», «Codex», «Локальная модель (qwen3)»."""
+    if not isinstance(origin, dict) or not origin.get("provider"):
+        return "модель"
+    name = LABELS.get(str(origin["provider"]), str(origin["provider"]))
+    model = origin.get("model")
+    return f"{name} ({model})" if model else name
+
+
+_LOOPBACK = ("localhost", "127.0.0.1", "::1")
+
+
+def is_local(provider: str | None, cfg: "Settings") -> bool:
+    """Данные не покидают компьютер: локальная модель на этом же компьютере
+    (адрес — localhost/127.0.0.1). Сервер в сети, облачные CLI и OpenCode
+    (у него и провайдер может быть облачным) — нет."""
+    if provider != "openai-compatible":
+        return False
+    from urllib.parse import urlparse
+
+    try:
+        host = urlparse(cfg.llm.base_url).hostname or ""
+    except ValueError:
+        return False
+    return host.lower() in _LOOPBACK or host.startswith("127.")
+
+
+def models(cfg: "Settings", found: dict) -> list[dict]:
+    """Включённые модели для окна (выбор модели у действий карточки): имя,
+    модель, по умолчанию ли, локальная ли, есть ли на машине и почему нет.
+    `found` — `detect.available()`; вход в CLI не проверяется (это секунды)."""
+    out = []
+    for name in cfg.llm.enabled:
+        origin = describe(name, cfg)
+        available = bool((found.get(name) or {}).get("found"))
+        out.append({
+            "provider": name,
+            "model": origin["model"],
+            "label": label(origin),
+            "default": cfg.llm.provider == name,
+            "local": is_local(name, cfg),
+            "available": available,
+            "reason": None if available else _not_found(name, cfg),
+        })
+    return out
