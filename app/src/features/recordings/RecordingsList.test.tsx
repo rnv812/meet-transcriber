@@ -106,7 +106,7 @@ test("поиск по тексту: под записью фрагменты с 
 
 test("ввод в поиск передаётся наверх", async () => {
   const { onQ } = setup();
-  await userEvent.type(screen.getByRole("searchbox"), "а");
+  await userEvent.type(screen.getByRole("combobox", { name: "Поиск по записям" }), "а");
   expect(onQ).toHaveBeenLastCalledWith("а");
 });
 
@@ -356,7 +356,7 @@ test("бейдж «ИИ» у названия от модели: нажатие 
 test("первая загрузка библиотеки — заготовки строк, поиск на месте; пустой поиск предлагает сбросить", async () => {
   setup({ library: { ...library, items: [], loading: true } });
   expect(screen.getByRole("list", { name: "Загрузка записей" })).toHaveAttribute("aria-busy", "true");
-  expect(screen.getByRole("searchbox", { name: "Поиск по записям" })).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "Поиск по записям" })).toBeInTheDocument();
   expect(screen.queryByText("Записей пока нет")).toBeNull();
 });
 
@@ -561,13 +561,13 @@ test("Ctrl+K — к поиску списка", async () => {
   setup({ library: datedLib, selected: null });
   head("Сегодня").focus();
   await user.keyboard("{Control>}k{/Control}");
-  expect(screen.getByRole("searchbox")).toHaveFocus();
+  expect(screen.getByRole("combobox", { name: "Поиск по записям" })).toHaveFocus();
   // Из флажка раздела (не текст) — тоже к поиску.
-  await user.click(screen.getByRole("searchbox"));
-  await user.type(screen.getByRole("searchbox"), "x");
+  await user.click(screen.getByRole("combobox", { name: "Поиск по записям" }));
+  await user.type(screen.getByRole("combobox", { name: "Поиск по записям" }), "x");
   mainOf("Утренняя").focus();
   await user.keyboard("{Control>}k{/Control}");
-  expect(screen.getByRole("searchbox")).toHaveFocus();
+  expect(screen.getByRole("combobox", { name: "Поиск по записям" })).toHaveFocus();
 });
 
 test("Ctrl+K не уводит из полей ввода и из терминала агента", async () => {

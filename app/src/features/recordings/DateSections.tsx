@@ -6,11 +6,12 @@
  * Клавиатура заголовка: Enter/Пробел — свернуть или развернуть, ← — свернуть,
  * → — развернуть, Alt+↑/↓ — к соседнему заголовку (из строки Alt+↑ — к
  * заголовку её раздела). Правая кнопка (Shift+F10) — меню «Свернуть все» /
- * «Развернуть все» / «Свернуть остальные». В режиме выбора у заголовка — флажок раздела в трёх
+ * «Развернуть все» / «Свернуть остальные» и «Только этот период» (метка `дата:` с днями
+ * раздела — фильтр, а не сворачивание). В режиме выбора у заголовка — флажок раздела в трёх
  * состояниях: он берёт и строки свёрнутого раздела.
  */
 
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, ListCollapse } from "lucide-react";
+import { CalendarRange, ChevronRight, ChevronsDownUp, ChevronsUpDown, ListCollapse } from "lucide-react";
 import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { DateSection, SectionGroup } from "../../lib/dateSections";
 import { Icon } from "../../ui/Icon";
@@ -19,7 +20,7 @@ import { ItemMenu } from "./ItemMenu";
 const ICON = { size: 16, strokeWidth: 1.75, "aria-hidden": true } as const;
 
 export function DateSections<T extends { id: string }>({
-  groups, isOpen, onToggle, onAll, onOthers, picking = false, picked, onPickSection, renderItem, onKeyDown, multiselectable,
+  groups, isOpen, onToggle, onAll, onOthers, onOnly, picking = false, picked, onPickSection, renderItem, onKeyDown, multiselectable,
 }: {
   groups: SectionGroup<T>[];
   isOpen: (section: DateSection) => boolean;
@@ -28,6 +29,8 @@ export function DateSections<T extends { id: string }>({
   onAll: (open: boolean) => void;
   /** «Свернуть остальные»: этот раздел развернуть, все прочие свернуть. */
   onOthers: (section: DateSection) => void;
+  /** «Только этот период»: показать только записи этого раздела (метка даты). Нет — нет и пункта. */
+  onOnly?: (section: DateSection) => void;
   /** Режим выбора нескольких записей: у заголовков — флажки разделов. */
   picking?: boolean;
   picked?: ReadonlySet<string>;
@@ -115,6 +118,11 @@ export function DateSections<T extends { id: string }>({
             { label: "Развернуть все", icon: <ChevronsUpDown {...ICON} />, onSelect: () => { onAll(true); closeMenu(); } },
             { label: "Свернуть остальные", icon: <ListCollapse {...ICON} />, hint: `Оставить развёрнутым только «${menu.section.label}»`,
               onSelect: () => { onOthers(menu.section); closeMenu(); } },
+            ...(onOnly && menu.section.kind !== "none" ? [{
+              label: "Только этот период", icon: <CalendarRange {...ICON} />, separator: true,
+              hint: `Показать только записи «${menu.section.label}» — меткой даты под поиском`,
+              onSelect: () => { onOnly(menu.section); closeMenu(); },
+            }] : []),
           ]} />
       )}
     </div>

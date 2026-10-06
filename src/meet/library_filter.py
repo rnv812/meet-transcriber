@@ -15,7 +15,11 @@
 * `has`/`lacks` — summary (итоги), analysis (анализ), assistant (во встрече
   работал ассистент — `has_assistant` карточки), transcript (расшифровка);
 * `min_s`/`max_s` — длительность в секундах;
-* `in=title` — `/search` ищет только в названиях.
+* `title=бюджет квартал` — в названии встречи есть все эти слова (по тем же
+  правилам, что поиск: «лёгкая основа», «фразы»); остальные слова запроса `q`
+  ищутся как обычно — так окно передаёт `название:бюджет`;
+* `in=title` — `/search` ищет весь `q` только в названиях (прежний вид,
+  оставлен для совместимости).
 
 Запись без даты не проходит фильтр по дате, без длительности — по
 длительности. Списки — через запятую или повтором параметра. Негодное
@@ -31,8 +35,8 @@ from datetime import date
 from meet.groups import NONE_KEY as GROUP_NONE
 
 # Измерения фильтра: у каждого фасета «Фильтров» — своё (`has` и `lacks` — одно).
-DIMENSIONS = ("categories", "groups", "people", "dates", "has", "duration")
-PARAMS = ("categories", "groups", "people", "from", "to", "has", "lacks", "min_s", "max_s", "in")
+DIMENSIONS = ("categories", "groups", "people", "dates", "has", "duration", "title")
+PARAMS = ("categories", "groups", "people", "from", "to", "has", "lacks", "min_s", "max_s", "in", "title")
 HAS = ("summary", "analysis", "assistant", "transcript")
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -71,6 +75,8 @@ class LibraryFilter:
     min_s: float | None = None
     max_s: float | None = None
     title_only: bool = False
+    # Слова, которые должны быть в названии (`title=`), как их написал человек.
+    title: str = ""
     # id категорий из настроек: неизвестный id — «Без категории».
     known_categories: frozenset = field(default_factory=frozenset)
 
@@ -78,7 +84,8 @@ class LibraryFilter:
     def active(self) -> bool:
         """Есть ли что проверять в карточке (`in=title` — не про карточку)."""
         return bool(self.categories or self.groups or self.people or self.date_from or self.date_to
-                    or self.has or self.lacks or self.min_s is not None or self.max_s is not None)
+                    or self.has or self.lacks or self.min_s is not None or self.max_s is not None
+                    or self.title)
 
     def without(self, *facets: str) -> "LibraryFilter":
         """Тот же фильтр без фасетов (`categories`, `groups`): счётчики фасета
@@ -90,7 +97,7 @@ class LibraryFilter:
         return tuple(d for d, on in (
             ("categories", self.categories), ("groups", self.groups), ("people", self.people),
             ("dates", self.date_from or self.date_to), ("has", self.has or self.lacks),
-            ("duration", self.min_s is not None or self.max_s is not None)) if on)
+            ("duration", self.min_s is not None or self.max_s is not None), ("title", self.title)) if on)
 
     def check(self, dim: str, card: dict) -> bool:
         """Проходит ли карточка условие одного измерения."""
@@ -106,6 +113,8 @@ class LibraryFilter:
             day = (card.get("started_at") or "")[:10]
             return bool(day) and not ((self.date_from and day < self.date_from)
                                       or (self.date_to and day > self.date_to))
+        if dim == "title":
+            return title_matches(card, self.title)
         if dim == "has":
             return (all(card_has(card, h) for h in self.has)
                     and not any(card_has(card, h) for h in self.lacks))
@@ -127,6 +136,25 @@ class LibraryFilter:
         named = [_words(n) for n in names if isinstance(n, str)]
         return all(any(all(any(w.startswith(p) for w in name) for p in person) for name in named)
                    for person in self.people)
+
+
+def title_query(text: str):
+    """Слова `title=` как запрос поиска (meet.search.parse_query): спикеров нет."""
+    from meet import search
+
+    q = search.parse_query(text)
+    return search.Query(q.phrases, q.keywords, q.stems, [])
+
+
+def title_matches(card: dict, text: str) -> bool:
+    """В названии встречи есть все слова (и фразы) `text` — как ищет поиск."""
+    from meet import search
+
+    q = title_query(text)
+    if not q.has_text:
+        return True
+    title = search.nfc(card.get("title") or "")
+    return bool(title) and search.match_tokens(search.tokenize(title), q) is not None
 
 
 def _values(params: dict, name: str, split: bool = True) -> list[str]:
@@ -203,6 +231,7 @@ def from_params(params: dict | None, cfg=None) -> LibraryFilter:
         has=_what(params, "has"), lacks=_what(params, "lacks"),
         min_s=_seconds(params, "min_s"), max_s=_seconds(params, "max_s"),
         title_only=where == "title", known_categories=known,
+        title=" ".join(_values(params, "title", split=False)),
     )
 
 

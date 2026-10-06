@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useCategories } from "../state/useCategories";
+import { useGroups } from "../state/useGroups";
 import { useLibrary } from "../state/useLibrary";
 import { usePeople } from "../state/usePeople";
 import { useResident } from "../state/useResident";
-import { RecordingsList } from "../features/recordings/RecordingsList";
+import { RecordingsList, useToday } from "../features/recordings/RecordingsList";
 import { VoicesPane } from "../features/voices/VoicesPane";
 import { SettingsPane, type SettingsGuard } from "../features/settings/SettingsPane";
 import { RecordingCard } from "../features/card/RecordingCard";
 import type { FindRequest } from "../features/card/TranscriptView";
 import { loadCategoryFilter, NO_CATEGORY, saveCategoryFilter } from "../lib/categories";
+import { effectiveQuery, refreshDates, type Chip } from "../lib/libraryQuery";
 import { searchable } from "../lib/search";
 import {
   initialRecording, initialSection, onOpenRecording, onOpenSection, onSettingsCloseGuard, setSettingsDirty,
@@ -49,7 +51,17 @@ export function App() {
   const activeFilter = useMemo(() => (categories.loaded
     ? catFilter.filter((k) => k === NO_CATEGORY || categories.list.some((c) => c.id === k)) : catFilter),
   [catFilter, categories.loaded, categories.list]);
-  const library = useLibrary(resident.endpoint ?? null, q, resident.libraryTick, resident.contentTick, activeFilter);
+  // Поиск: текст строки и метки условий (lib/libraryQuery). Метки — на сеанс; категории
+  // запоминаются (выше), область группы из левой панели — отдельно (withGroupScope).
+  const [chips, setChips] = useState<Chip[]>([]);
+  const groupList = useGroups(resident.endpoint ?? null, resident.groupsTick);
+  const groupRefs = groupList.supported === false ? null : groupList.groups;
+  // «Сегодня» — как у списка (useToday): после полуночи и метки «Сегодня», «Эта неделя» — заново.
+  const today = useToday();
+  useEffect(() => setChips((cur) => refreshDates(cur, today)), [today]);
+  const query = useMemo(() => effectiveQuery(q, chips, activeFilter,
+    { categories: categories.list, groups: groupRefs ?? [], now: today }), [q, chips, activeFilter, categories.list, groupRefs, today]);
+  const library = useLibrary(resident.endpoint ?? null, query.q, resident.libraryTick, resident.contentTick, query.filter);
   const { people, refresh: refreshPeople, avatarVersion, bumpAvatar } = usePeople(resident.endpoint ?? null, resident.doneTick);
   const offline = resident.status === "offline";
   const gate = useWizardGate(resident.status, resident.endpoint ?? null);
@@ -70,11 +82,12 @@ export function App() {
   const openRecording = (id: string) => leaveSettings(() => { setSelected(id); setFind(null); setSection("recordings"); });
   const selectFromList = (id: string) => {
     setSelected(id);
-    setFind(searchable(q) ? { q, t: null, n: ++findN.current } : null);
+    // В карточку — только текст: префиксы (`группа:`…) её поиск прочёл бы как слова.
+    setFind(searchable(query.find) ? { q: query.find, t: null, n: ++findN.current } : null);
   };
   const openHit = (id: string, t: number) => {
     setSelected(id);
-    setFind({ q, t, n: ++findN.current });
+    setFind({ q: query.find, t, n: ++findN.current });
   };
   const select = (s: Section) => {
     if (s === "settings") { setSettingsPart(undefined); setSection(s); return; }
@@ -180,6 +193,9 @@ export function App() {
                 resident={resident}
                 q={q}
                 onQ={setQ}
+                chips={chips}
+                onChips={setChips}
+                groups={groupRefs}
                 categories={categories.list}
                 categoryFilter={activeFilter}
                 onCategoryFilter={setCatFilter}

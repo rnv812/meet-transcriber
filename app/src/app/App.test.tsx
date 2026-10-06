@@ -15,8 +15,10 @@ vi.mock("../state/usePeople", () => ({
   usePeople: () => ({ people: [], refresh: refreshPeople, avatarVersion: {}, bumpAvatar: () => {} }),
 }));
 vi.mock("../features/card/RecordingCard", () => ({
-  RecordingCard: ({ id, onOpenSettings }: { id: string; onOpenSettings?: (s: string) => void }) => (
-    <div data-testid="card">{id}<button onClick={() => onOpenSettings?.("assistant")}>в настройки</button></div>
+  RecordingCard: ({ id, onOpenSettings, find }: {
+    id: string; onOpenSettings?: (s: string) => void; find?: { q: string } | null;
+  }) => (
+    <div data-testid="card" data-find={find?.q ?? ""}>{id}<button onClick={() => onOpenSettings?.("assistant")}>в настройки</button></div>
   ),
 }));
 vi.mock("../features/voices/VoicesPane", () => ({ VoicesPane: () => <div data-testid="voices" /> }));
@@ -47,6 +49,9 @@ vi.mock("../features/wizard/Wizard", () => ({
 vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
   getSettings: vi.fn(async () => ({ ui: { wizard_done: false } })),
+  // Группы — подписи меток; в этих тестах резидент их не присылает.
+  getGroups: vi.fn(() => new Promise(() => {})),
+  getParticipants: vi.fn(async () => []),
   patchSettings: vi.fn(async () => ({ settings: {}, restart_required: [] })),
 }));
 const engineState = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
@@ -213,8 +218,27 @@ test("три раздела; у записей есть список, у гол�
 test("строка поиска из списка уходит в useLibrary", async () => {
   residentState.current = online();
   render(<App />);
-  await userEvent.type(screen.getByRole("searchbox"), "план");
-  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "план", 0, 0, []);
+  await userEvent.type(screen.getByRole("combobox", { name: "Поиск по записям" }), "план");
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "план", 0, 0, {});
+});
+
+test("префиксы строки — фильтром резиденту, в q — только текст; в карточку — только текст", async () => {
+  residentState.current = online();
+  useLibrarySpy.mockReturnValue({
+    items: [{ id: "a", path: "C:/rec/a", started_at: "2026-09-30T10:00:00", duration_s: 60, tracks: {},
+      has_transcript: true, has_voices: false, title: "Планёрка", source: "record" }],
+    jobs: [], loading: false, error: null, refresh: async () => {},
+  });
+  render(<App />);
+  await userEvent.type(screen.getByRole("combobox", { name: "Поиск по записям" }), "участник:Анна есть:итоги бюджет");
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "бюджет", 0, 0, { people: ["Анна"], has: ["summary"] });
+  // Enter — префиксы становятся метками, в поле остаётся текст.
+  await userEvent.keyboard("{Enter}");
+  expect(screen.getByRole("combobox", { name: "Поиск по записям" })).toHaveValue("бюджет ");
+  expect(within(screen.getByRole("group", { name: "Условия поиска" })).getByText("Анна")).toBeInTheDocument();
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "бюджет", 0, 0, { people: ["Анна"], has: ["summary"] });
+  await userEvent.click(screen.getByText("Планёрка"));
+  expect(screen.getByTestId("card")).toHaveAttribute("data-find", "бюджет");
 });
 
 test("запомненный фильтр по категориям уходит в useLibrary (фильтрует резидент)", () => {
@@ -222,7 +246,7 @@ test("запомненный фильтр по категориям уходит
   try {
     residentState.current = online();
     render(<App />);
-    expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, ["retro", "_none"]);
+    expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { categories: ["retro", "_none"] });
   } finally {
     window.localStorage.removeItem("meet.categoryFilter");
   }

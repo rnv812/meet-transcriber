@@ -143,3 +143,40 @@ export function withPref(prefs: SectionPrefs, key: string, open: boolean, byDefa
   const next = Object.entries({ ...rest, [key]: open });
   return Object.fromEntries(next.slice(Math.max(0, next.length - SECTIONS_MAX)));
 }
+
+// --- «Только этот период» ---------------------------------------------------------
+
+const ymdOf = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+/**
+ * Дни раздела (ГГГГ-ММ-ДД включительно) — для метки `дата:` из меню заголовка «Только этот
+ * период»: день, «Ранее в октябре» (с 1-го по день до недельных разделов), месяц (без дней,
+ * что в начале нового месяца ещё в разделах по дням), «Ранее в
+ * 2025» (с 1 января по месяц до месячных разделов), год. «Без даты» — null.
+ */
+export function sectionRange(section: Pick<DateSection, "key">, now: Date): { from: string; to: string } | null {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const shift = (days: number) => ymdOf(new Date(today.getFullYear(), today.getMonth(), today.getDate() + days));
+  const [kind, value = ""] = section.key.split(/:(.*)/);
+  if (kind === "today") return { from: shift(0), to: shift(0) };
+  if (kind === "yesterday") return { from: shift(-1), to: shift(-1) };
+  if (kind === "day") return { from: value, to: value };
+  const month = /^(\d{4})-(\d{2})$/.exec(value);
+  if (kind === "m" && month) {
+    // Конец месяца, попавший в разделы по дням (1–6 числа: «Суббота, 28 сентября»), — не этот раздел.
+    const [y, m] = [Number(month[1]), Number(month[2]) - 1];
+    const end = ymdOf(new Date(y, m + 1, 0));
+    const week = shift(-7);
+    return { from: `${value}-01`, to: end < week ? end : week };
+  }
+  // Остаток месяца: дни старше недельных разделов (7 дней назад и раньше).
+  if (kind === "rest" && month) return { from: `${value}-01`, to: shift(-7) };
+  if (kind === "y" && /^\d{4}$/.test(value)) return { from: `${value}-01-01`, to: `${value}-12-31` };
+  if (kind === "rest-y" && /^\d{4}$/.test(value)) {
+    // До первого дня самого старого месяца-раздела.
+    const edge = new Date(now.getFullYear(), now.getMonth() - MONTHS_BACK, 1);
+    const last = new Date(edge.getFullYear(), edge.getMonth(), 0);
+    return { from: `${value}-01-01`, to: ymdOf(last) };
+  }
+  return null;
+}

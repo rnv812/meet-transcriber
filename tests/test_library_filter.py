@@ -102,6 +102,22 @@ def test_title_only():
     assert _f(**{"in": ""}).title_only is False
 
 
+def test_title_words_must_all_be_in_the_title_like_search():
+    card = _card(title="Бюджет на квартал")
+    assert _f(title="бюджет")(card)
+    assert _f(title="бюджету квартала")(card)  # лёгкая основа, как у поиска
+    assert _f(title="Квартал БЮДЖЕТ")(card)  # порядок и регистр не важны
+    assert not _f(title="бюджет отпуск")(card)  # нужны все слова
+    assert _f(title='"на квартал"')(card) and not _f(title='"квартал на"')(card)  # фраза — подряд
+    assert not _f(title="бюджет")(_card(title=None))
+    assert _f(title="бюдж", people="Анна")(_card(title="Бюджет", people=["Анна"]))
+    # Повтор параметра — ещё слова; пустое — без условия; спикер в названии не ищется.
+    assert not library_filter.from_params({"title": ["бюджет", "отпуск"]}, CFG)(card)
+    assert not _f(title=" ").active and _f(title="бюджет").active
+    assert _f(title="спикер:Анна")(card)
+    assert _f(title="бюджет").dimensions() == ("title",)
+
+
 @pytest.mark.parametrize("params", [
     {"from": "01.10.2026"}, {"to": "2026-02-31"}, {"has": "чудо"}, {"lacks": "x"},
     {"min_s": "много"}, {"max_s": "-5"}, {"min_s": "nan"}, {"in": "body"}, {"groups": "НЕ ТАК"},
@@ -204,6 +220,21 @@ def test_search_in_title_only(state, lib):
     assert _ids(got) == ["2026-09-15_10-00"]
     assert got[0]["hits"] == [] and got[0]["total"] == 0 and got[0]["title_ranges"] == [[0, 6]]
     assert state.search("отпуск", filters={"in": "title"})["items"] == []
+
+
+def test_search_title_filter_restricts_only_its_words(state, lib):
+    # «название:квартал бюджет»: «квартал» — в названии, «бюджет» — где угодно (здесь — в тексте).
+    got = state.search("бюджет", filters={"title": "квартал"})["items"]
+    assert _ids(got) == ["2026-09-15_10-00"]
+    assert got[0]["total"] == 1 and got[0]["hits"]  # слово запроса нашлось в репликах
+    assert got[0]["title_ranges"] == [[0, 6], [10, 17]]  # подсвечены и «Бюджет», и «квартал»
+    assert state.search("отпуск", filters={"title": "квартал"})["items"] == []
+    assert _ids(state.recordings(filters={"title": "бюджета"})["items"]) == ["2026-09-15_10-00"]
+    assert state.recordings(filters={"title": "отпуск"})["items"] == []
+    # Адрес передаёт `title=` в фильтр (control._filter_params — по PARAMS).
+    assert control._filter_params({"title": ["квартал"], "q": ["бюджет"]}) == {"title": ["квартал"]}
+    # Прежний `in=title` работает как раньше.
+    assert _ids(state.search("квартал", filters={"in": "title"})["items"]) == ["2026-09-15_10-00"]
 
 
 def test_category_counts_respect_the_other_filters(state, lib):

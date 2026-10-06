@@ -5,9 +5,13 @@ import type { Resident } from "../../state/useResident";
 import type { Library } from "../../state/useLibrary";
 import { deleteRecording, kbExport, mergeRecordings, patchRecording, setRecordingCategory } from "../../lib/api";
 import {
-  daysBefore, defaultOpen, groupBySection, loadSectionPrefs, saveSectionPrefs, withPref, type DateSection, type SectionPrefs,
+  daysBefore, defaultOpen, groupBySection, loadSectionPrefs, saveSectionPrefs, sectionRange, withPref, type DateSection,
+  type SectionPrefs,
 } from "../../lib/dateSections";
 import { errorText, plural } from "../../lib/format";
+import {
+  addChip, commit, effectiveQuery, removeChip, titleRanges, toggleChip, whoWords, type Chip, type ChipKind, type GroupRef, type Suggestion,
+} from "../../lib/libraryQuery";
 import { searchable } from "../../lib/search";
 import { agentKillRecording, inTauri, openFolder } from "../../lib/shell";
 import { statusOf, type RecStatus } from "../../lib/status";
@@ -15,11 +19,12 @@ import type { Category } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
-import { CategoryFilter, CategoryFilterChips } from "./CategoryFilter";
 import { DateSections } from "./DateSections";
+import { FiltersButton } from "./FilterPanel";
+import { QueryChips } from "./QueryChips";
 import { ImportZone } from "./ImportZone";
 import { RecordingItem, type ItemActions, type PickHow } from "./RecordingItem";
-import { SearchBox } from "./SearchBox";
+import { SearchSuggest } from "./SearchSuggest";
 import { Icon } from "../../ui/Icon";
 import { Skeleton } from "../../ui/Loading";
 
@@ -28,9 +33,19 @@ type Props = {
   onSelect: (id: string) => void;
   library: Library;
   resident: Pick<Resident, "endpoint" | "snapshot">;
-  /** Строка поиска живёт в App и уходит в useLibrary (задержка — там). */
+  /**
+   * Текст строки поиска (с ещё не ставшими метками префиксами — lib/libraryQuery). Живёт в App;
+   * то, что из него следует (`effectiveQuery`), уходит в useLibrary (задержка — там).
+   */
   q: string;
   onQ: (q: string) => void;
+  /** Метки условий этого сеанса (кроме категорий — те в `categoryFilter` и запоминаются). */
+  chips?: Chip[];
+  onChips?: (chips: Chip[]) => void;
+  /** Группы для меток `группа:`, подсказок и «Фильтров»; null — резидент без групп. */
+  groups?: GroupRef[] | null;
+  /** Подсказка в пустой строке поиска («Поиск в «Проект Альфа»»). */
+  searchPlaceholder?: string;
   /** Фрагмент из поиска: открыть запись на этой реплике. */
   onOpenHit?: (id: string, t: number) => void;
   /** Запись изменили из списка (название, выгрузка): открытая карточка перечитывается. */
@@ -51,6 +66,7 @@ type Props = {
 
 const NO_CATEGORIES: Category[] = [];
 const NO_FILTER: string[] = [];
+const NO_CHIPS: Chip[] = [];
 
 /** Итог действия из меню: строка над списком, закрывается «×». */
 type Notice = { text: string; error: boolean };
@@ -105,7 +121,8 @@ const busy = (st: RecStatus) => st.kind === "recording" || st.kind === "queued" 
 
 export function RecordingsList({
   selected, onSelect, library, resident, q, onQ, onOpenHit, onChanged, onDeleting, categories = NO_CATEGORIES,
-  categoryFilter = NO_FILTER, onCategoryFilter, onOpenSettings,
+  categoryFilter = NO_FILTER, onCategoryFilter, onOpenSettings, chips = NO_CHIPS, onChips, groups: groupList = null,
+  searchPlaceholder,
 }: Props) {
   const snapshot = resident.snapshot ?? null;
   const endpoint = resident.endpoint ?? null;
@@ -120,6 +137,8 @@ export function RecordingsList({
   const [merging, setMerging] = useState(false);
   /** Новые категории, пока резидент не ответил: видны сразу, при ошибке — откат. */
   const [pendingCat, setPendingCat] = useState<Record<string, string | null>>({});
+
+  const root = useRef<HTMLDivElement>(null);
 
   const run = useCallback(async (fn: () => Promise<string | null>) => {
     setNotice(null);
@@ -189,11 +208,66 @@ export function RecordingsList({
   [library.items, pendingCat]);
   const setFilter = (keys: string[]) => onCategoryFilter?.(keys);
 
-  // --- разделы по датам -------------------------------------------------------------
+  // --- строка поиска, метки, «Фильтры» ---------------------------------------------
 
   const now = useToday();
-  const groups = useMemo(() => groupBySection(visible, now), [visible, now]);
-  const searching = searchable(q);
+  const ctx = useMemo(() => ({ categories, groups: groupList ?? [], now }), [categories, groupList, now]);
+  /** Что ищется: текст, метки сеанса, запомненные категории, префиксы, ещё не ставшие метками. */
+  const query = useMemo(() => effectiveQuery(q, chips, categoryFilter, ctx), [q, chips, categoryFilter, ctx]);
+  /** Метки под поиском: запомненные категории и метки сеанса (префиксы в поле видны в самом поле). */
+  const shownChips = useMemo(() => [...categoryFilter.map((value): Chip => ({ kind: "category", value })), ...chips],
+    [categoryFilter, chips]);
+  const canChip = onChips !== undefined;
+  /** Поставить или снять метку: категории — в запоминаемый фильтр, прочее — в метки сеанса. */
+  const toggle = (chip: Chip) => {
+    if (chip.kind === "category") {
+      setFilter(categoryFilter.includes(chip.value) ? categoryFilter.filter((k) => k !== chip.value) : [...categoryFilter, chip.value]);
+    } else onChips?.(toggleChip(chips, chip));
+  };
+  const add = (chip: Chip) => {
+    if (chip.kind === "category") { if (!categoryFilter.includes(chip.value)) setFilter([...categoryFilter, chip.value]); }
+    else onChips?.(addChip(chips, chip, now));
+  };
+  const remove = (chip: Chip) => {
+    if (chip.kind === "category") setFilter(categoryFilter.filter((k) => k !== chip.value));
+    else onChips?.(removeChip(chips, chip));
+  };
+  const clearChips = () => { setFilter([]); onChips?.([]); };
+  /** Enter: годные префиксы и числовая дата из поля — в метки. */
+  const commitText = () => {
+    if (!canChip) return;
+    const done = commit(q, chips, categoryFilter, ctx);
+    if (done.text !== q) onQ(done.text);
+    if (done.chips !== chips) onChips?.(done.chips);
+    if (done.categories !== categoryFilter) setFilter(done.categories);
+  };
+  const applySuggestion = (action: Suggestion["action"]) => {
+    if (action.type === "commit") { commitText(); return; }
+    onQ(action.text);
+    if (action.chip) add(action.chip);
+  };
+  const searchBox = () => root.current?.querySelector<HTMLInputElement>("input[type=search]") ?? null;
+  /** «ещё…» у участников в «Фильтрах»: в строку — `участник:`, фокус туда же (подсказки — участники). */
+  const morePeople = () => {
+    const base = q.trim();
+    onQ(`${base ? `${base} ` : ""}участник:`);
+    requestAnimationFrame(() => searchBox()?.focus());
+  };
+  const replaceKinds = (kinds: ChipKind[], next: Chip[]) =>
+    onChips?.([...chips.filter((c) => !kinds.includes(c.kind)), ...next]);
+  /** Подсветка участника в фрагментах: строкам — один и тот же массив, пока условия те же. */
+  const whoKey = JSON.stringify(whoWords(query.q, query.filter));
+  const who = useMemo(() => JSON.parse(whoKey) as string[][], [whoKey]);
+
+  // --- разделы по датам -------------------------------------------------------------
+
+  // Слова `название:` без текста поиска: резидент подсветку названия не присылает — своя, по тем же правилам.
+  const titleTerms = query.filter.title ?? "";
+  const withTitles = useMemo(() => (titleTerms ? visible.map((rec) => (rec.title && !rec.title_ranges
+    ? { ...rec, title_ranges: titleRanges(rec.title, titleTerms) } : rec)) : visible), [visible, titleTerms]);
+  const groups = useMemo(() => groupBySection(withTitles, now), [withTitles, now]);
+  /** Поиск или условия сеанса: разделы развёрнуты, над списком «Найдено…». */
+  const searching = query.active;
   /** Запомненные отклонения от умолчания (свёрнутый месяц, развёрнутый год). */
   const [prefs, setPrefs] = useState<SectionPrefs>(loadSectionPrefs);
   /** На этот сеанс, без запоминания: раздел открытой записи развёрнут. */
@@ -225,11 +299,11 @@ export function RecordingsList({
       return rest;
     });
   }, [selected, selectedKey]);
-  const places = visible.some((r) => typeof r.total === "number")
+  // Мест — только при поиске по тексту (без него у карточек нет совпадений).
+  const places = searchable(query.q) && visible.some((r) => typeof r.total === "number")
     ? visible.reduce((sum, r) => sum + (r.total ?? r.hits?.length ?? 0), 0) : null;
 
   // Ctrl+K — к поиску списка (Ctrl+F занят поиском в карточке).
-  const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.code !== "KeyK" || e.defaultPrevented) return;
@@ -330,14 +404,16 @@ export function RecordingsList({
     <div className="rec-list" ref={root}>
       <ImportZone endpoint={endpoint} onImported={() => void library.refresh?.()} />
       <div className="rec-list__search">
-        <SearchBox value={q} onChange={onQ} />
-        {onCategoryFilter && (categories.length > 0 || categoryFilter.length > 0) && (
-          <CategoryFilter list={categories} endpoint={endpoint} q={q} selected={categoryFilter} onChange={setFilter} />
+        <SearchSuggest value={q} onChange={onQ} onApply={applySuggestion} endpoint={endpoint} ctx={ctx}
+          placeholder={searchPlaceholder}
+          onBackspaceEmpty={shownChips.length ? () => remove(shownChips[shownChips.length - 1]!) : undefined} />
+        {(onCategoryFilter || canChip) && (
+          <FiltersButton endpoint={endpoint} q={query.q} filter={query.filter} chips={shownChips}
+            categories={categories} groups={groupList} now={now} onToggle={toggle} onReplace={replaceKinds}
+            onClear={clearChips} onMorePeople={morePeople} onOpen={commitText} />
         )}
       </div>
-      {categoryFilter.length > 0 && (
-        <CategoryFilterChips list={categories} selected={categoryFilter} onChange={setFilter} />
-      )}
+      <QueryChips chips={shownChips} ctx={ctx} onRemove={remove} onClear={clearChips} />
       {library.error && <div className="import__error">{library.error}</div>}
       {notice && (
         <div className={`rec-notice${notice.error ? " rec-notice--error" : ""}`} role={notice.error ? "alert" : "status"}>
@@ -386,6 +462,12 @@ export function RecordingsList({
         onToggle={(s, open) => setOpen([[s, open]])}
         onAll={(open) => setOpen(groups.map((g) => [g.section, open]))}
         onOthers={(s) => setOpen(groups.map((g) => [g.section, g.section.key === s.key]))}
+        onOnly={canChip ? (s) => {
+          const range = sectionRange(s, now);
+          // «Сегодня», «Вчера» — относительные: после полуночи метка пересчитается (refreshDates).
+          const expr = s.key === "today" ? "дата:сегодня" : s.key === "yesterday" ? "дата:вчера" : undefined;
+          if (range) add({ kind: "date", value: `${range.from}..${range.to}`, label: s.label, ...(expr ? { expr } : {}) });
+        } : undefined}
         picking={picking}
         picked={pickedSet}
         onPickSection={endpoint ? pickSection : undefined}
@@ -394,7 +476,8 @@ export function RecordingsList({
         renderItem={(rec) => (
           <RecordingItem
             key={rec.id}
-            rec={rec.id in pending ? { ...rec, title: pending[rec.id] ?? null } : rec}
+            // Новое название ещё не у резидента: подсветка совпадений была по старому.
+            rec={rec.id in pending ? { ...rec, title: pending[rec.id] ?? null, title_ranges: undefined } : rec}
             categories={categories}
             status={statuses.get(rec.id) ?? statusOf(rec, library.jobs, snapshot)}
             selected={rec.id === selected}
@@ -405,6 +488,7 @@ export function RecordingsList({
             picked={pickedSet.has(rec.id)}
             onPick={endpoint ? stablePick : undefined}
             now={now}
+            who={who}
           />
         )}
       />
@@ -419,11 +503,16 @@ export function RecordingsList({
           ))}
         </ul>
       )}
-      {library.items.length === 0 && !library.loading && resident.endpoint && categoryFilter.length > 0 && (
+      {library.items.length === 0 && !library.loading && resident.endpoint && query.chips.length > categoryFilter.length && (
+        <EmptyState title="Ничего не найдено" hint="Уберите часть условий или поищите по слову из расшифровки"
+          action={<Button onClick={() => { onChips?.([]); onQ(query.find); }}>Сбросить условия</Button>} />
+      )}
+      {library.items.length === 0 && !library.loading && resident.endpoint && categoryFilter.length > 0
+        && query.chips.length === categoryFilter.length && (
         <EmptyState title={q ? "Ничего не найдено в выбранных категориях" : "Нет записей в выбранных категориях"}
           action={<Button onClick={() => setFilter([])}>Показать все категории</Button>} />
       )}
-      {library.items.length === 0 && !library.loading && resident.endpoint && categoryFilter.length === 0 && (
+      {library.items.length === 0 && !library.loading && resident.endpoint && query.chips.length === 0 && (
         q ? <EmptyState title="Ничего не найдено" hint="Проверьте написание или ищите по слову из расшифровки"
           action={<Button variant="link" onClick={() => onQ("")}>Сбросить поиск</Button>} />
           : <EmptyState title="Записей пока нет" hint="Нажмите «Начать запись» или перетащите файл" />

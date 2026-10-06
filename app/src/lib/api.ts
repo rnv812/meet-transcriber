@@ -106,7 +106,7 @@ export function libraryFilterParams(filter?: LibraryFilter | string[] | null): s
     // Участник — отдельным параметром на каждого: запятая — часть имени («Петров, Демьян»).
     ...(f.people ?? []).filter(Boolean).map((p) => `people=${enc(p)}`),
     ...one("from", f.from), ...one("to", f.to), ...list("has", f.has), ...list("lacks", f.lacks),
-    ...one("min_s", f.min_s), ...one("max_s", f.max_s), ...one("in", f.in),
+    ...one("min_s", f.min_s), ...one("max_s", f.max_s), ...one("title", f.title), ...one("in", f.in),
   ];
 }
 /** Ключ фильтра: одинаковые фильтры — одна строка (по ней хуки решают, перечитывать ли). */
@@ -187,8 +187,8 @@ export const setGroupMembers = (ep: Endpoint, id: string, change: { add?: string
 export const getFacets = (ep: Endpoint, q?: string, filter?: LibraryFilter, signal?: AbortSignal) =>
   json<Facets>(ep, `/facets${query([...(q ? [`q=${enc(q)}`] : []), ...libraryFilterParams(filter)])}`, { signal });
 /** Участники встреч (имена из расшифровок) для подсказок `участник:`; владелец — последним. */
-export const getParticipants = (ep: Endpoint, q = "", limit = 20) =>
-  json<Participant[]>(ep, `/participants${query([...(q ? [`q=${enc(q)}`] : []), `limit=${limit}`])}`);
+export const getParticipants = (ep: Endpoint, q = "", limit = 20, signal?: AbortSignal) =>
+  json<Participant[]>(ep, `/participants${query([...(q ? [`q=${enc(q)}`] : []), `limit=${limit}`])}`, { signal });
 /** Категории из ответа `GET /settings`: битые записи отбрасываются. */
 export function categoriesOf(settings: Record<string, unknown> | null | undefined): Category[] {
   const raw = settings?.categories;

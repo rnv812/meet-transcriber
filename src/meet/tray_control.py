@@ -1585,7 +1585,7 @@ class TrayControl:
         flt = self._library_filter(categories, filters)
         return {"items": search.search_library(self._root(), q or "", limit=limit,
                                                keep=flt if flt.active else None,
-                                               title_only=flt.title_only)}
+                                               title_only=flt.title_only, title_terms=flt.title)}
 
     def delete_recording(self, recording_id: str) -> dict:
         """Удалить папку записи целиком. Отказ, пока в неё пишут или над ней

@@ -1,5 +1,5 @@
 import {
-  defaultOpen, groupBySection, loadSectionPrefs, parseLocal, saveSectionPrefs, sectionOf, SECTIONS_KEY,
+  defaultOpen, groupBySection, loadSectionPrefs, parseLocal, saveSectionPrefs, sectionOf, sectionRange, SECTIONS_KEY,
   SECTIONS_MAX, withPref,
 } from "./dateSections";
 
@@ -189,4 +189,35 @@ describe("запоминание разделов", () => {
     window.localStorage.setItem(SECTIONS_KEY, JSON.stringify({ a: true, b: "да", c: false }));
     expect(loadSectionPrefs()).toEqual({ a: true, c: false });
   });
+});
+
+test("«Только этот период»: дни раздела — день, «Ранее в …», месяц, остаток года, год; «Без даты» — нет", () => {
+  const now = new Date(2026, 9, 20, 15, 0);  // вторник, 20 октября 2026
+  const range = (startedAt: string | null) => sectionRange(sectionOf(startedAt, now), now);
+  expect(range("2026-10-20T09:00:00")).toEqual({ from: "2026-10-20", to: "2026-10-20" });
+  expect(range("2026-10-19T09:00:00")).toEqual({ from: "2026-10-19", to: "2026-10-19" });
+  expect(range("2026-10-15T09:00:00")).toEqual({ from: "2026-10-15", to: "2026-10-15" });
+  // «Ранее в октябре» — с 1-го по день до недельных разделов (7 дней назад).
+  expect(range("2026-10-02T09:00:00")).toEqual({ from: "2026-10-01", to: "2026-10-13" });
+  expect(sectionOf("2026-10-13T09:00:00", now).key).toBe("rest:2026-10");
+  expect(sectionOf("2026-10-14T09:00:00", now).kind).toBe("day");
+  expect(range("2026-02-10T09:00:00")).toEqual({ from: "2026-02-01", to: "2026-02-28" });
+  expect(range("2025-10-10T09:00:00")).toEqual({ from: "2025-10-01", to: "2025-10-31" });
+  // «Ранее в 2025» — до первого месяца-раздела (октябрь 2025).
+  expect(range("2025-03-10T09:00:00")).toEqual({ from: "2025-01-01", to: "2025-09-30" });
+  expect(range("2023-03-10T09:00:00")).toEqual({ from: "2023-01-01", to: "2023-12-31" });
+  expect(range(null)).toBeNull();
+  // «Сегодня»/«Вчера» в полночь Нового года.
+  const jan1 = new Date(2027, 0, 1, 0, 30);
+  expect(sectionRange({ key: "yesterday" }, jan1)).toEqual({ from: "2026-12-31", to: "2026-12-31" });
+  expect(sectionRange({ key: "today" }, jan1)).toEqual({ from: "2027-01-01", to: "2027-01-01" });
+});
+
+test("«Только этот период» у месяца в начале нового — без дней, что ещё в разделах по дням", () => {
+  const oct3 = new Date(2026, 9, 3, 12, 0);
+  expect(sectionOf("2026-09-28T10:00:00", oct3).kind).toBe("day");
+  expect(sectionOf("2026-09-26T10:00:00", oct3).key).toBe("m:2026-09");
+  expect(sectionRange(sectionOf("2026-09-10T10:00:00", oct3), oct3)).toEqual({ from: "2026-09-01", to: "2026-09-26" });
+  // Позже в месяце — весь прошлый месяц.
+  expect(sectionRange({ key: "m:2026-09" }, new Date(2026, 9, 20))).toEqual({ from: "2026-09-01", to: "2026-09-30" });
 });

@@ -45,3 +45,21 @@ test("карточка человека в «Голосах» — колонка
   expect(main).toMatch(/min-width: 0/);
   expect(css).toMatch(/\.voices__grid \{[^}]*repeat\(auto-fill/);
 });
+
+test("«Фильтры»: измерение — и .cat-filter__list, но не сжимается: правило двух классов сильнее при любом порядке файлов", () => {
+  // Окно грузит ui/category.css позже recordings.css: при равной специфичности его
+  // `.cat-filter__list { max-height: 340px; overflow-y: auto }` побеждало, и измерения
+  // в колонке .filters сжимались и наезжали друг на друга (ревью search-ui, C1).
+  const src = join(process.cwd(), "src");
+  const recordings = readFileSync(join(src, "features", "recordings", "recordings.css"), "utf8");
+  const rule = /\.filters > \.filters__dim \{([^}]*)\}/.exec(recordings)?.[1] ?? "";
+  expect(rule).toMatch(/flex: none/);
+  expect(rule).toMatch(/max-height: none/);
+  expect(rule).toMatch(/overflow: visible/);
+  // Допущение правила: `.cat-filter__list` везде — одним классом (специфичность 0,1,0 < 0,2,0).
+  const selectors = cssFiles(src).flatMap((file) => [...readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "")
+    .matchAll(/(?:^|})\s*([^{}@]+)\{/g)].flatMap((m) => (m[1] ?? "").split(",").map((x) => x.trim())))
+    .filter((sel) => sel.includes("cat-filter__list"));
+  expect(selectors.length).toBeGreaterThan(0);
+  expect(selectors.filter((sel) => sel !== ".cat-filter__list")).toEqual([]);
+});

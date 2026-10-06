@@ -239,12 +239,13 @@ test("фильтр библиотеки — параметрами адреса,
   expect(api.libraryFilterParams(["daily", "_none"])).toEqual(["categories=daily%2C_none"]);
   const filter = {
     categories: ["daily"], groups: ["g-1", "g-2"], people: ["Анна", "Борис П"], from: "2026-09-01", to: "",
-    has: ["summary" as const], lacks: ["analysis" as const], min_s: 0, max_s: 3600, in: "title" as const,
+    has: ["summary" as const], lacks: ["analysis" as const], min_s: 0, max_s: 3600, title: "план работ",
+    in: "title" as const,
   };
   expect(api.libraryFilterParams(filter)).toEqual([
     "categories=daily", "groups=g-1%2Cg-2", "people=%D0%90%D0%BD%D0%BD%D0%B0",
     "people=%D0%91%D0%BE%D1%80%D0%B8%D1%81%20%D0%9F", "from=2026-09-01", "has=summary", "lacks=analysis",
-    "min_s=0", "max_s=3600", "in=title",
+    "min_s=0", "max_s=3600", "title=%D0%BF%D0%BB%D0%B0%D0%BD%20%D1%80%D0%B0%D0%B1%D0%BE%D1%82", "in=title",
   ]);
   expect(api.libraryFilterKey({ groups: ["g-1"] })).toBe(api.libraryFilterKey({ groups: ["g-1"], people: [] }));
   const f = okFetch();

@@ -51,8 +51,9 @@ from meet import library
 
 ENDINGS = (
     "ться",
-    "ами", "ями",
+    "ами", "ями", "ого", "его", "ому", "ему", "ыми", "ими", "иях", "иям", "ией",
     "ой", "ей", "ий", "ый", "ая", "яя", "ое", "ее", "ом", "ем", "ам", "ям", "ах", "ях",
+    "ых", "их", "ым", "им", "ую", "юю",
     "ов", "ев", "ия", "ие", "ию", "ии", "ть", "ет", "ут", "ют", "ит", "ат", "ят",
     "а", "я", "ы", "и", "у", "ю", "е", "о",
 )
@@ -672,7 +673,7 @@ def _memo_for(key: tuple) -> _Memo:
 
 
 def search_library(root: Path, q: str, limit: int = 200, keep=None,
-                   title_only: bool = False, count_only: bool = False) -> list[dict]:
+                   title_only: bool = False, count_only: bool = False, title_terms: str = "") -> list[dict]:
     """Записи, где запрос нашёлся в репликах или в названии, от свежих к
     старым: карточка записи и `date`, `hits` (до MAX_HITS: время реплики,
     спикер, фрагмент, подсветка), `total` — сколько реплик подошло,
@@ -683,10 +684,14 @@ def search_library(root: Path, q: str, limit: int = 200, keep=None,
     `title_only` — только в названиях (`in=title`), транскрипты не читаются.
     `count_only` — для счётчиков: только сами карточки (без `hits`, `total`
     и подсветки), встреча проверяется до первой подходящей реплики. Что
-    нашлось, помнится до следующего другого запроса (_Memo)."""
+    нашлось, помнится до следующего другого запроса (_Memo). `title_terms` —
+    слова фильтра по названию (`title=`): их тоже подсветить в названии."""
     if not searchable(q):
         return []
     query = parse_query(q)
+    terms = parse_query(title_terms) if title_terms else None
+    marks = query if terms is None else Query(query.phrases + terms.phrases, query.keywords + terms.keywords,
+                                              query.stems + terms.stems, [])
     plan = _Plan(query)
     cards = list(_cards(Path(root)))  # обход раньше памяти: он и замечает перемены
     memo = _memo_for((str(root), nfc(q).strip(), title_only))
@@ -713,7 +718,7 @@ def search_library(root: Path, q: str, limit: int = 200, keep=None,
             else:
                 found.append({**card, "date": (card.get("started_at") or "")[:10] or None,
                               "hits": hits, "total": total, "title_match": title_match,
-                              "title_ranges": title_ranges(title, query) if title else []})
+                              "title_ranges": title_ranges(title, marks) if title else []})
             if len(found) >= limit:
                 break
     return found

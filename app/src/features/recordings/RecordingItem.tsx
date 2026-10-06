@@ -10,6 +10,8 @@ import type { Category, LibraryItem } from "../../lib/types";
 import { AiBadge } from "../../ui/AiBadge";
 import { CategoryDot, CategoryMark } from "../../ui/Category";
 import { Highlight } from "../../ui/Highlight";
+import { whoRanges } from "../../lib/libraryQuery";
+import { nfc } from "../../lib/search";
 import { BookOpen, ChevronLeft, ChevronRight, Ellipsis, FolderOpen, Pencil, Settings2, Tag, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { ItemMenu, type MenuItem } from "./ItemMenu";
@@ -70,6 +72,7 @@ export type ItemActions = {
 };
 
 const NO_CATEGORIES: Category[] = [];
+const NO_WHO: string[][] = [];
 const RENAME_HINT = "Двойной щелчок или F2 — переименовать";
 
 /** Как отметить запись для групповых действий: Ctrl+щелчок — переключить, Shift+щелчок — диапазон. */
@@ -91,6 +94,7 @@ export const RecordingItem = memo(function RecordingItem({
   onPick,
   categories = NO_CATEGORIES,
   now,
+  who = NO_WHO,
 }: {
   rec: LibraryItem;
   /** Категории встреч из настроек: метка записи и пункт «Категория» в меню. */
@@ -110,6 +114,8 @@ export const RecordingItem = memo(function RecordingItem({
    * дням только время, в месяцах и годах «5 сен, 10:00». Нет — полная дата.
    */
   now?: Date;
+  /** Участники из поиска (`участник:`, `спикер:`) — слова имён: подсветить их в подписи фрагмента. */
+  who?: string[][];
 }) {
   const when = rec.started_at ? dayLabel(rec.started_at) : "";
   const whenShort = rec.started_at && now ? dayLabel(rec.started_at, now, true) : when;
@@ -256,7 +262,10 @@ export const RecordingItem = memo(function RecordingItem({
               if (tip) el.title = tip; else el.removeAttribute("title");
             }}
             onDoubleClick={actions ? (e) => { e.preventDefault(); begin(); } : undefined}>
-            {title}{rec.title_source === "ai" && rec.title && <AiBadge onClick={actions ? begin : undefined} />}
+            {rec.title && rec.title_ranges?.length
+              // Подсветка — по названию в NFC (так считает резидент).
+              ? <Highlight text={nfc(rec.title)} ranges={rec.title_ranges} /> : title}
+            {rec.title_source === "ai" && rec.title && <AiBadge onClick={actions ? begin : undefined} />}
           </span>
           <span className="rec-item__meta">
             <span className="rec-item__when">
@@ -293,7 +302,9 @@ export const RecordingItem = memo(function RecordingItem({
                 <span className="rec-hit__time num">{clock(h.t)}</span>
                 <span className="rec-hit__text">
                   {/* Текст до спикеров: у собеседников подписи нет. */}
-                  {h.speaker && <span className="rec-hit__who">{h.speaker}: </span>}
+                  {h.speaker && (
+                    <span className="rec-hit__who"><Highlight text={nfc(h.speaker)} ranges={whoRanges(h.speaker, who)} />: </span>
+                  )}
                   <Highlight text={h.snippet} ranges={h.ranges} />
                 </span>
               </button>
@@ -301,7 +312,11 @@ export const RecordingItem = memo(function RecordingItem({
           ))}
         </ul>
       )}
-      {more > 0 && <div className="rec-hits__more muted">Ещё совпадений: {more}</div>}
+      {more > 0 && (
+        // Открыть запись с этим поиском: в карточке — все совпадения.
+        <button type="button" className="link rec-hits__more" title="Открыть запись и показать все совпадения"
+          onClick={() => onSelect(rec.id)}>Ещё совпадений: {more}</button>
+      )}
     </li>
   );
 });

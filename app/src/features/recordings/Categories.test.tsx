@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { RecordingsList } from "./RecordingsList";
-import { CategoryFilter } from "./CategoryFilter";
+import { FiltersButton } from "./FilterPanel";
 import * as api from "../../lib/api";
 import { loadCategoryFilter, saveCategoryFilter } from "../../lib/categories";
 import type { Category, Recording } from "../../lib/types";
@@ -12,6 +12,8 @@ vi.mock("../../lib/api", async (orig) => ({
   patchRecording: vi.fn(async () => ({})),
   setRecordingCategory: vi.fn(async () => ({})),
   getCategoriesInfo: vi.fn(),
+  getFacets: vi.fn(),
+  getParticipants: vi.fn(async () => []),
 }));
 
 const ep = { base: "/api", token: null };
@@ -50,12 +52,23 @@ const onOpenSettings = vi.fn();
 
 const item = (title: string) => screen.getByText(title).closest("li")!;
 
+const facets = (over: Partial<import("../../lib/types").Facets> = {}): import("../../lib/types").Facets => ({
+  total: 325, scope: "library",
+  categories: { items: [{ id: "daily", count: 31 }, { id: "client", count: 4 }, { id: "retro", count: 0 }], none: 290 },
+  groups: { items: [], unknown: [], none: 325 }, people: [], has: { summary: 0, analysis: 0, assistant: 0, transcript: 0 },
+  duration: { lt15: 0, m15_60: 0, gt60: 0 }, ...over,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.getFacets).mockResolvedValue(facets());
   vi.mocked(api.getCategoriesInfo).mockResolvedValue({
     categories, defaults: categories, counts: { daily: 31, client: 4 }, none: 290, scope: "library",
   });
 });
+
+/** Окно «Фильтры» и в нём измерение «Категория». */
+const categoryDim = () => within(screen.getByRole("dialog", { name: "Фильтры" })).getByRole("group", { name: "Категория" });
 
 test("в списке у записи — точка цвета, имя категории — в подсказке и для диктора", () => {
   render(<Harness />);
@@ -68,17 +81,20 @@ test("в списке у записи — точка цвета, имя кате
   }
 });
 
-test("фильтр: счётчики по всей библиотеке от резидента, несколько категорий, «Без категории»", async () => {
+test("«Фильтры» → «Категория»: счётчики от резидента, несколько категорий, «Без категории»", async () => {
   const onFilter = vi.fn();
   render(<Harness onFilter={onFilter} />);
-  await userEvent.click(screen.getByRole("button", { name: "Категории" }));
-  const dialog = screen.getByRole("dialog", { name: "Фильтр по категориям" });
-  expect(api.getCategoriesInfo).toHaveBeenCalledWith(ep, undefined);
-  const box = (name: string) => within(dialog).getByRole("checkbox", { name });
+  await userEvent.click(screen.getByRole("button", { name: "Фильтры" }));
+  expect(api.getFacets).toHaveBeenCalledWith(ep, undefined, undefined, expect.any(AbortSignal));
+  const dim = categoryDim();
+  const box = (name: string) => within(dim).getByRole("checkbox", { name });
   await waitFor(() => expect(box("Дейлик").closest("label")).toHaveTextContent("Дейлик31"));
   expect(box("Без категории").closest("label")).toHaveTextContent("Без категории290");
+  // Ноль — бледнее, но выбрать можно.
   expect(box("Ретроспектива").closest("label")).toHaveTextContent("Ретроспектива0");
-  expect(within(dialog).getByText("Число встреч — по всей библиотеке")).toBeInTheDocument();
+  expect(box("Ретроспектива").closest("label")).toHaveClass("filters__option--zero");
+  expect(box("Ретроспектива")).toBeEnabled();
+  expect(screen.getByText("Число встреч — по всей библиотеке")).toBeInTheDocument();
   expect(box("Без категории")).toHaveFocus();
   await userEvent.click(box("Дейлик"));
   await userEvent.click(box("Без категории"));
@@ -87,22 +103,29 @@ test("фильтр: счётчики по всей библиотеке от р�
   expect(onFilter).toHaveBeenLastCalledWith(["_none"]);
   await userEvent.keyboard("{Escape}");
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.getByRole("button", { name: "Категории · 1" })).toHaveFocus();
+  expect(screen.getByRole("button", { name: "Фильтры · 1" })).toHaveFocus();
 });
 
 test("при поиске счётчики — среди найденных", async () => {
-  vi.mocked(api.getCategoriesInfo).mockResolvedValue({
-    categories, defaults: categories, counts: { daily: 2 }, none: 1, scope: "search",
-  });
+  vi.mocked(api.getFacets).mockResolvedValue(facets({ scope: "search" }));
   render(<Harness q="бюджет" />);
-  await userEvent.click(screen.getByRole("button", { name: "Категории" }));
-  expect(api.getCategoriesInfo).toHaveBeenCalledWith(ep, "бюджет");
+  await userEvent.click(screen.getByRole("button", { name: "Фильтры" }));
+  expect(api.getFacets).toHaveBeenCalledWith(ep, "бюджет", undefined, expect.any(AbortSignal));
   expect(await screen.findByText("Число встреч — среди найденных поиском")).toBeInTheDocument();
 });
 
-test("повторный щелчок по кнопке «Категории» закрывает окно", async () => {
+test("резидент без /facets — числа категорий по-старому, из /categories", async () => {
+  vi.mocked(api.getFacets).mockRejectedValue(new api.ApiError(404, "нет"));
   render(<Harness />);
-  const button = screen.getByRole("button", { name: "Категории" });
+  await userEvent.click(screen.getByRole("button", { name: "Фильтры" }));
+  await waitFor(() => expect(within(categoryDim()).getByRole("checkbox", { name: "Дейлик" }).closest("label"))
+    .toHaveTextContent("Дейлик31"));
+  expect(api.getCategoriesInfo).toHaveBeenCalledWith(ep, undefined);
+});
+
+test("повторный щелчок по кнопке «Фильтры» закрывает окно", async () => {
+  render(<Harness />);
+  const button = screen.getByRole("button", { name: "Фильтры" });
   await userEvent.click(button);
   expect(screen.getByRole("dialog")).toBeInTheDocument();
   await userEvent.click(button);
@@ -113,15 +136,15 @@ test("повторный щелчок по кнопке «Категории» �
 test("метки фильтра: у каждой своя «✕», при двух и больше — «Сбросить»", async () => {
   const onFilter = vi.fn();
   render(<Harness initial={["client", "_none"]} onFilter={onFilter} />);
-  const group = screen.getByRole("group", { name: "Фильтр по категориям" });
+  const group = screen.getByRole("group", { name: "Условия поиска" });
   expect(within(group).getByText("Встреча с клиентом")).toBeInTheDocument();
   expect(within(group).getByText("Без категории")).toBeInTheDocument();
   await userEvent.click(within(group).getByRole("button", { name: "Убрать «Встреча с клиентом» из фильтра" }));
   expect(onFilter).toHaveBeenLastCalledWith(["_none"]);
-  expect(within(screen.getByRole("group", { name: "Фильтр по категориям" }))
+  expect(within(screen.getByRole("group", { name: "Условия поиска" }))
     .queryByRole("button", { name: "Сбросить" })).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Убрать «Без категории» из фильтра" }));
-  expect(screen.queryByRole("group", { name: "Фильтр по категориям" })).toBeNull();
+  expect(screen.queryByRole("group", { name: "Условия поиска" })).toBeNull();
 });
 
 test("«Сбросить» снимает весь фильтр; пустой результат — «Показать все категории»", async () => {
@@ -180,15 +203,18 @@ test("меню категории: текущая отмечена, «Назад
   expect(onOpenSettings).toHaveBeenCalledWith("categories");
 });
 
-test("без категорий в настройках фильтра нет", () => {
+test("без категорий в настройках в «Фильтрах» нет измерения «Категория»", async () => {
   render(<RecordingsList selected={null} onSelect={vi.fn()} library={library()} resident={resident} q=""
     onQ={vi.fn()} categories={[]} categoryFilter={[]} onCategoryFilter={vi.fn()} />);
-  expect(screen.queryByRole("button", { name: "Категории" })).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Фильтры" }));
+  expect(within(screen.getByRole("dialog", { name: "Фильтры" })).queryByRole("group", { name: "Категория" })).toBeNull();
 });
 
-test("число выбранных категорий — значком поверх кнопки: подпись и ширина кнопки те же", () => {
-  render(<CategoryFilter list={categories} endpoint={null} q="" selected={[categories[0]!.id]} onChange={() => {}} />);
-  const button = screen.getByRole("button", { name: "Категории · 1" });
-  expect(button.firstChild?.textContent).toBe("Категории");
+test("число условий — значком поверх кнопки: подпись и ширина кнопки те же", () => {
+  render(<FiltersButton endpoint={null} q="" filter={{}} chips={[{ kind: "category", value: "daily" }]}
+    categories={categories} groups={null} now={new Date()} onToggle={() => {}} onReplace={() => {}} onClear={() => {}}
+    onMorePeople={() => {}} />);
+  const button = screen.getByRole("button", { name: "Фильтры · 1" });
+  expect(button.firstChild?.textContent).toBe("Фильтры");
   expect(button.querySelector(".cat-filter__count")).toHaveTextContent("1");
 });
