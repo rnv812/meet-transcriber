@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
 
 TRANSCRIPT_JSON = "transcript.json"
 # Слова сегментов с таймкодами — отдельно от transcript.json: их много, а
@@ -98,6 +99,14 @@ class Recording:
     # Микрофон звонка по голосам (`mic_split` транскрипта, meet.mic_split):
     # {"status", "room_speakers", "dropped"} — подсказка в карточке. Нет — None.
     mic_split: dict | None = None
+    # Группы встречи (meet.groups): id из meta.json `groups`, многие-ко-многим.
+    groups: list = field(default_factory=list)
+    # Названные спикеры окончательной расшифровки по порядку (без «Спикер N»,
+    # «Неизвестный», «Собеседник»); у текста до спикеров — пусто.
+    people: list = field(default_factory=list)
+    # Есть итоги (summary.md) и анализ встречи (analysis.json).
+    has_summary: bool = False
+    has_analysis: bool = False
 
     def to_raw(self) -> dict:
         return {
@@ -123,6 +132,10 @@ class Recording:
             "system_audio_reason": self.system_audio_reason,
             "transcript_phase": self.transcript_phase,
             "mic_split": self.mic_split,
+            "groups": list(self.groups),
+            "people": list(self.people),
+            "has_summary": self.has_summary,
+            "has_analysis": self.has_analysis,
         }
 
 
@@ -340,12 +353,44 @@ def _mic_split_head(raw) -> dict | None:
                         if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool)}}
 
 
-def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None, str | None, str | None, dict | None]:
+class TranscriptHead(NamedTuple):
+    """Заголовок транскрипта для карточки. Кортеж: прежний код берёт фазу по
+    номеру (`[4]`)."""
+
+    has_json: bool = False
+    title: str | None = None
+    diarization: str | None = None
+    asr_note: str | None = None
+    phase: str | None = None
+    mic_split: dict | None = None
+    # Названные спикеры окончательной расшифровки в порядке появления (см. _people).
+    people: tuple[str, ...] = ()
+
+
+# Подписи, которые не имя человека: сырая метка диаризации, её отображаемое
+# «Спикер N», «Неизвестный» (реплика без спикера), «Собеседник» (без диаризации).
+_UNNAMED = re.compile(r"^(?:SPEAKER_\S*|Спикер \d+|Неизвестный|Собеседник(?: .*)?)$")
+
+
+def _people(segments) -> tuple[str, ...]:
+    """Названные спикеры по порядку первой реплики, без повторов."""
+    out: dict[str, None] = {}
+    for seg in segments if isinstance(segments, list) else ():
+        if not isinstance(seg, dict) or seg.get("kind") == "break":
+            continue
+        name = seg.get("speaker")
+        name = " ".join(name.split()) if isinstance(name, str) else ""
+        if name and not _UNNAMED.match(name):
+            out.setdefault(name, None)
+    return tuple(out)
+
+
+def _transcript_head(folder: Path) -> TranscriptHead:
     path = transcript_path(folder)
     try:
         st = path.stat()
     except OSError:
-        return False, None, None, None, None, None
+        return TranscriptHead()
     key = (st.st_mtime_ns, st.st_size)
     with _heads_lock:
         hit = _heads.get(str(path))
@@ -353,6 +398,7 @@ def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None, str | 
         return hit[1]
     transcript = read_transcript(folder)
     title = diarization = asr_note = phase = mic_split = None
+    people: tuple[str, ...] = ()
     if isinstance(transcript, dict):
         raw_title = transcript.get("title")
         title = str(raw_title) if raw_title else None
@@ -362,7 +408,9 @@ def _transcript_head(folder: Path) -> tuple[bool, str | None, str | None, str | 
         asr_note = str(note) if isinstance(note, str) and note else None
         phase = TEXT_PHASE if is_text_phase(transcript) else None
         mic_split = _mic_split_head(transcript.get("mic_split"))
-    head = (transcript is not None, title, diarization, asr_note, phase, mic_split)
+        # Текст до спикеров: подписи в нём не окончательные — участников нет.
+        people = () if phase else _people(transcript.get("segments"))
+    head = TranscriptHead(transcript is not None, title, diarization, asr_note, phase, mic_split, people)
     with _heads_lock:
         _heads[str(path)] = (key, head)
     return head
@@ -794,7 +842,8 @@ def describe(folder: Path) -> Recording | None:
     meta = read_meta(folder)
     if not _recognised(tracks, meta):
         return None
-    has_json, title, diarization, asr_note, phase, mic_split = _transcript_head(folder)
+    head = _transcript_head(folder)
+    title = head.title
     if meta.get("title"):
         title = str(meta["title"])
     source = meta.get("source") if meta.get("source") in SOURCES else "record"
@@ -808,7 +857,7 @@ def describe(folder: Path) -> Recording | None:
         started_at=_started_at(folder.name),
         tracks=tracks,
         duration_s=_duration_from_events(folder),
-        has_transcript=has_json or bool(list(folder.glob("*_transcript.md"))),
+        has_transcript=head.has_json or bool(list(folder.glob("*_transcript.md"))),
         has_voices=bool(list(folder.glob("*_speakers.json"))),
         title=title,
         title_source=title_source(meta),
@@ -816,8 +865,8 @@ def describe(folder: Path) -> Recording | None:
         else None,
         source=source,
         transcript_at=transcript_at,
-        diarization=diarization,
-        asr_note=asr_note,
+        diarization=head.diarization,
+        asr_note=head.asr_note,
         kb_export=meta["kb_export"] if isinstance(meta.get("kb_export"), dict) else None,
         merge=_merge_summary(meta),
         rediarize_ready=(folder / REDIARIZE_PREVIEW).is_file(),
@@ -826,12 +875,26 @@ def describe(folder: Path) -> Recording | None:
         else None,
         system_audio_reason=meta["system_audio_reason"]
         if meta.get("system_audio_reason") in SYSTEM_AUDIO_REASONS else None,
-        transcript_phase=phase,
-        mic_split=mic_split,
+        transcript_phase=head.phase,
+        mic_split=head.mic_split,
+        groups=_groups(meta),
+        people=list(head.people),
+        has_summary=(folder / SUMMARY_MD).is_file(),
+        has_analysis=(folder / ANALYSIS_JSON).is_file(),
     )
 
 
 SYSTEM_AUDIO_REASONS = ("permission", "helper", "unsupported", "failed")
+# Итоги и анализ встречи (meet.assistant.SUMMARY_MD, meet.analysis.ANALYSIS_JSON):
+# имена здесь, чтобы карточка не тянула за собой модули моделей.
+SUMMARY_MD = "summary.md"
+ANALYSIS_JSON = "analysis.json"
+
+
+def _groups(meta: dict) -> list[str]:
+    from meet.groups import of
+
+    return of(meta)
 
 
 def _category(meta: dict) -> dict | None:

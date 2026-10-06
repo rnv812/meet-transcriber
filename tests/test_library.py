@@ -297,3 +297,52 @@ def test_merge_folder_without_sound_yet_is_a_recording(tmp_path):
     library.write_meta(folder, {"source": "merge", "title": "Планёрка", "merged_from": ["a", "b"]})
     card = library.describe(folder)
     assert card is not None and card.source == "merge"
+
+
+# --- поля карточки для групп, участников и фильтров (0.3.5) -------------------------
+
+
+def test_card_lists_named_people_in_order_of_appearance(tmp_path):
+    folder = _recording(tmp_path, transcript={"segments": [
+        {"start": 0, "end": 1, "speaker": "SPEAKER_00", "text": "а"},
+        {"start": 1, "end": 2, "speaker": "Анна", "text": "б"},
+        {"start": 2, "end": 3, "speaker": "Спикер 3", "text": "в"},
+        {"start": 3, "end": 4, "speaker": "Вы", "text": "г"},
+        {"start": 4, "end": 5, "speaker": "Неизвестный", "text": "д"},
+        {"start": 5, "end": 6, "speaker": "Собеседник", "text": "е"},
+        {"start": 6, "end": 7, "speaker": None, "text": "ж"},
+        {"start": 7, "end": 7, "kind": "break", "speaker": "Пауза", "text": ""},
+        {"start": 8, "end": 9, "speaker": " Борис ", "text": "з"},
+        {"start": 9, "end": 10, "speaker": "Анна", "text": "и"},
+    ]})
+    raw = library.describe(folder).to_raw()
+    assert raw["people"] == ["Анна", "Вы", "Борис"]
+
+
+def test_text_phase_has_no_people(tmp_path):
+    folder = _recording(tmp_path, transcript={"phase": "text", "segments": [
+        {"start": 0, "end": 1, "speaker": "Вы", "text": "а"}]})
+    assert library.describe(folder).to_raw()["people"] == []
+    assert library.describe(_recording(tmp_path, "2026-08-19_10-00")).to_raw()["people"] == []
+
+
+def test_card_reports_summary_analysis_and_groups(tmp_path):
+    folder = _recording(tmp_path)
+    raw = library.describe(folder).to_raw()
+    assert (raw["has_summary"], raw["has_analysis"], raw["groups"]) == (False, False, [])
+    (folder / "summary.md").write_text("# Итоги", encoding="utf-8")
+    (folder / "analysis.json").write_text("{}", encoding="utf-8")
+    library.write_meta(folder, {"groups": ["g-1a2b3c4d", "g-1a2b3c4d", 5, "НЕ ТАК", "proj_x"]})
+    raw = library.describe(folder).to_raw()
+    assert (raw["has_summary"], raw["has_analysis"]) == (True, True)
+    assert raw["groups"] == ["g-1a2b3c4d", "proj_x"]  # повторы и негодные id отброшены
+    library.write_meta(folder, {"groups": "g-1a2b3c4d"})
+    assert library.describe(folder).to_raw()["groups"] == []
+
+
+def test_transcript_head_is_a_named_tuple_and_phase_still_works(tmp_path):
+    folder = _recording(tmp_path, transcript={"title": "Т", "phase": "text", "segments": []})
+    head = library._transcript_head(folder)
+    assert head.has_json is True and head.title == "Т" and head.phase == "text"
+    assert head[4] == "text" and head.people == ()
+    assert library.transcript_phase(folder) == "text"
