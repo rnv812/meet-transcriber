@@ -3234,11 +3234,13 @@ class TrayControl:
 
     def improve_apply(self, recording_id: str, body: dict | None) -> dict:
         """Применить выбранное: {"groups": [id…], "extra": {id: [номера мест]},
-        "created_at", "add_rules", "add_terms"} — одним шагом истории встречи
-        (тот же путь и те же отказы, что у «Исправить…»); `created_at` — какой
-        список видел человек (его заменили новым — 409). По желанию — термины
-        (не исправления обычных слов) правилами для будущих расшифровок и в
-        термины распознавания."""
+        "targets": {id: «как правильно»}, "created_at", "add_rules",
+        "add_terms"} — одним шагом истории встречи (тот же путь и те же
+        отказы, что у «Исправить…»); `targets` — вписанное человеком вместо
+        предложенного ИИ (пустое — 400); `created_at` — какой список видел
+        человек (его заменили новым — 409). По желанию — термины (не
+        исправления обычных слов) правилами для будущих расшифровок и в
+        термины распознавания: с вписанным человеком, а не с предложенным."""
         from meet import improve, replacements
 
         body = body or {}
@@ -3247,6 +3249,7 @@ class TrayControl:
         def change(folder: Path, voices: Path) -> dict:
             created = body.get("created_at")
             got = improve.apply(folder, body.get("groups"), voices, extra=body.get("extra"),
+                                targets=body.get("targets"),
                                 created_at=created if isinstance(created, (int, float))
                                 and not isinstance(created, bool) else None)
             result.update(got)

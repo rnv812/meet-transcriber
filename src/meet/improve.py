@@ -51,7 +51,7 @@ import time
 from pathlib import Path
 
 from meet import library, search
-from meet.replacements import TEXT_MAX, case_like, matches, nfc, words_of
+from meet.replacements import TEXT_MAX, case_like, clean_text, matches, nfc, words_of
 
 IMPROVE_JSON = "improve.json"
 VERSION = 1
@@ -676,12 +676,30 @@ def _extra_ids(extra) -> dict[str, set[int]]:
     return out
 
 
-def apply(folder: Path, group_ids, voices_dir: Path, *, extra=None, created_at=None, now=None) -> dict:
+def _target(group: dict, value) -> str:
+    """«Как правильно», вписанное человеком вместо предложенного: пробелы по
+    краям снимаются (и схлопываются внутри), текст — в NFC; пусто или слишком
+    длинно — SpeakerError. Вставляется как есть — не шаблон и не выражение."""
+    from meet import speakers
+
+    text = clean_text(value) if isinstance(value, str) else ""
+    if not text:
+        raise speakers.SpeakerError(f"«{group['find']}»: впишите, как правильно")
+    if len(text) > TEXT_MAX:
+        raise speakers.SpeakerError(f"«{group['find']}»: слишком длинно (не больше {TEXT_MAX} символов)")
+    return text
+
+
+def apply(folder: Path, group_ids, voices_dir: Path, *, extra=None, targets=None, created_at=None,
+          now=None) -> dict:
     """Выбранное — одним шагом истории встречи (операция `text` с `scope:
     "ai"`; отмена, повтор и откат — как у «Исправить…»). `group_ids` — группы,
     чьи места в названных моделью фразах применяются; `extra` — {группа:
-    [номера мест вне них]}, отмеченные человеком. `created_at` — какое
-    предложение видел человек: его заменили новым — Stale. Предложение
+    [номера мест вне них]}, отмеченные человеком. `targets` — {группа: «как
+    правильно»}, вписанное человеком вместо предложенного ИИ: им заменяются
+    все места группы, оно же уходит в итог (`edited`) и дальше — в правила и
+    термины; вписанное, равное исходному, — отказ от группы. `created_at` —
+    какое предложение видел человек: его заменили новым — Stale. Предложение
     устарело — Stale; ничего не выбрано — SpeakerError. Применённое
     предложение выбрасывается. → результат textfix.commit_spans + `groups`."""
     from meet import speakers, textfix
@@ -693,8 +711,19 @@ def apply(folder: Path, group_ids, voices_dir: Path, *, extra=None, created_at=N
         raise speakers.Stale("Список замен обновился — откройте его заново")
     wanted = {str(x) for x in group_ids or [] if isinstance(x, str)}
     extras = _extra_ids(extra)
-    chosen = [(g, g.get("id") in wanted, extras.get(g.get("id"), set())) for g in doc["groups"]]
-    chosen = [(g, named, more) for g, named, more in chosen if named or more]
+    targets = targets if isinstance(targets, dict) else {}
+    chosen = []
+    for g in doc["groups"]:
+        named, more = g.get("id") in wanted, extras.get(g.get("id"), set())
+        if not named and not more:
+            continue
+        if g.get("id") in targets:
+            to = _target(g, targets[g["id"]])
+            if to == nfc(g["find"]):
+                continue  # вписали исходное — значит, менять не нужно
+            if to != g["replace"]:
+                g = {**g, "replace": to, "edited": True}
+        chosen.append((g, named, more))
     if not chosen:
         raise speakers.SpeakerError("ничего не выбрано")
     data = speakers.editable(folder)
@@ -719,7 +748,8 @@ def apply(folder: Path, group_ids, voices_dir: Path, *, extra=None, created_at=N
                 by_segment.setdefault(i, []).append((a, b, repl))
                 n += 1
         if n:
-            used.append({"from": g["find"], "to": g["replace"], "kind": g["kind"], "count": n})
+            used.append({"from": g["find"], "to": g["replace"], "kind": g["kind"], "count": n,
+                         **({"edited": True} if g.get("edited") else {})})
     if not by_segment:
         raise textfix.Unchanged("нечего менять — текст уже такой")
     changed = sum(len(x) for x in by_segment.values())

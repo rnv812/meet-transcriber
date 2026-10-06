@@ -324,3 +324,34 @@ def test_routes_exist():
     assert ("POST", r"^/recordings/([^/]+)/improve$") in found
     assert ("POST", r"^/recordings/([^/]+)/improve/apply$") in found
     assert ("POST", r"^/recordings/([^/]+)/improve/dismiss$") in found
+
+
+def test_apply_with_users_target_remembers_it_not_the_ais(state, tmp_path, monkeypatch):
+    """ИИ предложил «API», человек вписал «REST API»: в тексте, в правилах для
+    будущих встреч и в терминах — вписанное; отмена — обычным шагом истории."""
+    monkeypatch.setattr(paths, "hotwords_path", lambda: tmp_path / "hotwords.txt")
+    folder = _folder(tmp_path)
+    doc = _proposal(folder)
+    api = next(g["id"] for g in doc["groups"] if g["find"] == "апи")
+    reply = state.improve_apply(RID, {"groups": [api], "targets": {api: "  REST API "}, "add_rules": True,
+                                      "add_terms": True, "created_at": doc["created_at"]})
+    assert reply["groups"] == [{"from": "апи", "to": "REST API", "kind": "term", "count": 2, "edited": True}]
+    assert reply["rules"] == {"added": [{"from": "апи", "to": "REST API"}]}
+    assert settings.load().asr.replacements == ({"from": "апи", "to": "REST API"},)
+    assert reply["terms"] == {"added": ["REST API"]}
+    assert "REST API" in (tmp_path / "hotwords.txt").read_text(encoding="utf-8")
+    texts = [s["text"] for s in library.read_transcript(folder)["segments"]]
+    assert texts == ["REST API сервиса отвечает медленно.", "Значит, смотрим кафка и REST API шлюза."]
+    state.speakers_undo(RID, {"expect_step": reply["step"]["id"]})
+    assert library.read_transcript(folder)["segments"][0]["text"] == "Апи сервиса отвечает медленно."
+
+
+def test_apply_with_empty_users_target_is_400_and_changes_nothing(state, tmp_path):
+    folder = _folder(tmp_path)
+    doc = _proposal(folder)
+    api = next(g["id"] for g in doc["groups"] if g["find"] == "апи")
+    with pytest.raises(control.BadRequest, match="апи"):
+        state.improve_apply(RID, {"groups": [api], "targets": {api: "  "}})
+    assert library.read_transcript(folder)["segments"][0]["text"] == "Апи сервиса отвечает медленно."
+    assert settings.load().asr.replacements == ()
+    assert improve.read(folder) is not None

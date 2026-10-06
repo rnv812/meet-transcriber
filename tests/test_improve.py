@@ -461,3 +461,133 @@ def test_antonym_rules_leave_real_mishearings_alone():
     for find, replace in [("в торник", "во вторник"), ("согласен", "согласна"), ("приду", "пришлю")]:
         assert not improve.antonyms(improve.words_of(find), improve.words_of(replace))
     assert improve.antonyms(["включить"], ["выключить"]) and improve.antonyms(["больше"], ["меньше"])
+
+
+# --- «как правильно», исправленное человеком ------------------------------------------------
+
+
+def _ready(folder, cfg):
+    doc, _ = _run(folder, cfg, GOOD)
+    _write(folder, doc)
+    return doc
+
+
+def _texts(folder):
+    return [s["text"] for s in library.read_transcript_full(folder)["segments"]]
+
+
+def test_users_target_replaces_every_place_of_the_group_and_undoes(folder, cfg, tmp_path):
+    """ИИ предложил «Kafka», человек вписал своё: оно — во всех местах группы
+    (и в отмеченных вне названных фраз), в шаге истории и в итоге; отмена,
+    повтор — как у любого шага."""
+    doc = _ready(folder, cfg)
+    kafka = _group(doc, "кафка")["id"]
+    got = improve.apply(folder, [kafka], tmp_path / "voices", extra={kafka: [0]},
+                        targets={kafka: "  Apache Kafka  "})
+    assert got["changed"] == 2
+    assert got["groups"] == [{"from": "кафка", "to": "Apache Kafka", "kind": "term", "count": 2, "edited": True}]
+    op = got["step"]["ops"][0]
+    assert op["from"] == "кафка" and op["to"] == "Apache Kafka" and op["groups"][0]["edited"] is True
+    texts = _texts(folder)
+    assert texts[3] == "Очередь в Apache Kafka не растёт, в торник проверим."
+    assert texts[4] == "Апиарий тут ни при чём, а Apache Kafka — да."
+    speakers.undo(folder, tmp_path / "voices")
+    assert _texts(folder)[3] == "Очередь в кафка не растёт, в торник проверим."
+    speakers.redo(folder, tmp_path / "voices")
+    assert _texts(folder)[4] == "Апиарий тут ни при чём, а Apache Kafka — да."
+
+
+def test_users_target_keeps_words_aligned(folder, cfg, tmp_path):
+    doc = _ready(folder, cfg)
+    api = _group(doc, "апи")["id"]
+    improve.apply(folder, [api], tmp_path / "voices", targets={api: "REST API"})
+    seg = library.read_transcript_full(folder)["segments"][0]
+    assert seg["text"] == "REST API сервиса отдаёт ошибку."
+    assert "".join(w[2] for w in seg["words"]).strip() == seg["text"]
+    assert seg["words"][0][0] == 0.0 and seg["words"][1][1] == 0.5  # два слова — на отрезке прежнего
+
+
+def test_target_equal_to_the_source_rejects_the_group(folder, cfg, tmp_path):
+    doc = _ready(folder, cfg)
+    api, kafka = _group(doc, "апи")["id"], _group(doc, "кафка")["id"]
+    got = improve.apply(folder, [api, kafka], tmp_path / "voices", targets={api: " апи "})
+    assert [g["from"] for g in got["groups"]] == ["кафка"]
+    assert _texts(folder)[0] == "Апи сервиса отдаёт ошибку."
+    speakers.undo(folder, tmp_path / "voices")
+    _write(folder, doc)
+    with pytest.raises(speakers.SpeakerError, match="ничего не выбрано"):
+        improve.apply(folder, [api], tmp_path / "voices", targets={api: "апи"})
+
+
+def test_empty_or_too_long_target_is_refused_and_nothing_changes(folder, cfg, tmp_path):
+    doc = _ready(folder, cfg)
+    api = _group(doc, "апи")["id"]
+    before = _texts(folder)
+    for bad in ("", "   ", None, 5):
+        with pytest.raises(speakers.SpeakerError, match="апи"):
+            improve.apply(folder, [api], tmp_path / "voices", targets={api: bad})
+    with pytest.raises(speakers.SpeakerError, match="длинно"):
+        improve.apply(folder, [api], tmp_path / "voices", targets={api: "x" * 201})
+    assert _texts(folder) == before
+    assert improve.read(folder) is not None  # предложение не потеряно — можно поправить и применить
+    # Правка группы, которую не применяют, ничего не решает.
+    kafka = _group(doc, "кафка")["id"]
+    assert improve.apply(folder, [kafka], tmp_path / "voices", targets={api: ""})["changed"] == 1
+
+
+def test_case_only_edits(folder, cfg, tmp_path):
+    """Заглавные во вписанном — как написано; без заглавных — регистр места
+    (в начале предложения — с заглавной), как у правил и «Исправить…»."""
+    doc = _ready(folder, cfg)
+    api = _group(doc, "апи")["id"]
+    got = improve.apply(folder, [api], tmp_path / "voices", targets={api: "Api"})
+    assert got["groups"][0]["to"] == "Api" and got["groups"][0]["edited"] is True
+    assert _texts(folder)[:2] == ["Api сервиса отдаёт ошибку.", "Проверим обзор бити и Api шлюза."]
+    speakers.undo(folder, tmp_path / "voices")
+    _write(folder, doc)
+    improve.apply(folder, [api], tmp_path / "voices", targets={api: "api"})
+    assert _texts(folder)[:2] == ["Api сервиса отдаёт ошибку.", "Проверим обзор бити и api шлюза."]
+
+
+def test_case_only_edit_of_the_source_still_applies(folder, cfg, tmp_path):
+    """«апи» → «АПИ»: та же запись другим регистром — не отказ, а правка регистра."""
+    doc = _ready(folder, cfg)
+    api = _group(doc, "апи")["id"]
+    got = improve.apply(folder, [api], tmp_path / "voices", targets={api: "АПИ"})
+    assert got["changed"] == 2
+    assert _texts(folder)[:2] == ["АПИ сервиса отдаёт ошибку.", "Проверим обзор бити и АПИ шлюза."]
+
+
+@pytest.mark.parametrize("target", [r"C++ \1 $& (.*)", "Сбер API-шлюз", "АPI", "MS$P[1]"])
+def test_target_is_inserted_literally(folder, cfg, tmp_path, target):
+    """Вписанное вставляется как есть: никаких шаблонов и обратных ссылок, смесь
+    кириллицы и латиницы не трогается."""
+    doc = _ready(folder, cfg)
+    api = _group(doc, "апи")["id"]
+    improve.apply(folder, [api], tmp_path / "voices", targets={api: target})
+    texts = _texts(folder)
+    assert texts[0] == f"{target} сервиса отдаёт ошибку."
+    assert texts[1] == f"Проверим обзор бити и {target} шлюза."
+
+
+def test_nfc_and_inner_spaces_of_the_target(folder, cfg, tmp_path):
+    doc = _ready(folder, cfg)
+    api = _group(doc, "апи")["id"]
+    got = improve.apply(folder, [api], tmp_path / "voices", targets={api: "ЁPay\t  API"})
+    assert got["groups"][0]["to"] == "ЁPay API"
+    assert _texts(folder)[0] == "ЁPay API сервиса отдаёт ошибку."
+
+
+def test_target_same_as_proposed_is_not_an_edit_and_odd_targets_are_ignored(folder, cfg, tmp_path):
+    doc = _ready(folder, cfg)
+    api = _group(doc, "апи")["id"]
+    got = improve.apply(folder, [api], tmp_path / "voices", targets={api: " API "})
+    assert got["groups"] == [{"from": "апи", "to": "API", "kind": "term", "count": 2}]
+    speakers.undo(folder, tmp_path / "voices")
+    _write(folder, doc)
+    assert improve.apply(folder, [api], tmp_path / "voices", targets=["MSSP"])["groups"][0]["to"] == "API"
+
+
+def test_rules_take_the_users_target():
+    used = [{"from": "мсп", "to": "MSSP", "kind": "term", "count": 5, "edited": True}]
+    assert improve.rule_pairs(used) == [{"from": "мсп", "to": "MSSP"}]
