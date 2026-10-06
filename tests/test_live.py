@@ -1530,7 +1530,7 @@ def test_dirty_transcript_retried_on_next_step_and_at_stop(tmp_path, monkeypatch
             return [("x/sys:0", "Демьян")]
 
     engine._apply_renames(Drain())  # первая попытка — сбой
-    engine._retry_at = 0.0  # пауза до повтора вышла
+    engine._rewrite_at = 0.0  # пауза до повтора вышла
     engine.step()  # повтор на такте — снова сбой
     assert engine._file_dirty
     engine.stop()  # и при остановке (без паузы) — прошла
@@ -1563,21 +1563,21 @@ def test_rewrite_retry_backs_off_and_logs_once_per_streak(tmp_path, monkeypatch)
             return [("x/sys:0", "Демьян")]
 
     engine._apply_renames(Drain())
-    assert len(attempts) == 1 and engine._retry_wait == 1.0
+    assert len(attempts) == 1 and engine._rewrite_wait == 1.0
     engine.step()
     engine.step()
     assert len(attempts) == 1  # пауза не вышла — файл не трогаем
     waits = []
     for _ in range(7):
-        engine._retry_at = 0.0
+        engine._rewrite_at = 0.0
         engine.step()
-        waits.append(engine._retry_wait)
+        waits.append(engine._rewrite_wait)
     assert waits == [2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0]
     assert sum("лента не переписана" in line for line in lines) == 1
     state["fail"] = False
-    engine._retry_at = 0.0
+    engine._rewrite_at = 0.0
     engine.step()
-    assert not engine._file_dirty and engine._retry_wait == 0.0
+    assert not engine._file_dirty and engine._rewrite_wait == 0.0
     assert (tmp_path / "live_transcript.md").read_text(encoding="utf-8") == "[00:00:01] Демьян: привет\n"
     assert any(line == "лента переписана" for line in lines)
 
@@ -1605,7 +1605,7 @@ def test_failed_catchup_side_file_write_is_retried(tmp_path, monkeypatch):
     engine._apply_renames(Drain())
     assert engine._file_dirty and engine._catch_lines == ["[00:00:01] Демьян: начало"]
     state["fail"] = False
-    engine._retry_at = 0.0
+    engine._rewrite_at = 0.0
     engine.step()
     assert not engine._file_dirty
     side = (tmp_path / "live_transcript.catchup.md").read_text(encoding="utf-8")
@@ -1761,3 +1761,37 @@ def test_dedupe_off_publishes_room_lines_at_once(tmp_path):
     engine._tracks["mic.wav"]["buffer"].push(_pcm(3.0, value=100))
     engine.process_window()
     assert got == ["сосед говорит что-то своё"] and engine._dupes is None
+
+
+def test_rewrite_backoff_does_not_touch_the_device_restart_backoff(tmp_path, monkeypatch):
+    """Ревью, раунд 3 (N1): пауза повтора перезаписи ленты — своя; удачная
+    перезапись не сбрасывает паузу перезапуска устройства, неудачная не
+    начинается с неё."""
+    import os
+
+    real = os.replace
+    state = {"fail": False}
+
+    def replace(a, b):
+        if state["fail"]:
+            raise PermissionError("открыт")
+        return real(a, b)
+
+    engine = LiveEngine(tmp_path, FakeTranscriber([]), log=lambda line: None)
+    engine._retry_wait = 40.0  # дорожка ждёт устройство: пауза надзора выросла
+    monkeypatch.setattr(os, "replace", replace)
+
+    class Drain:
+        def __init__(self, name):
+            self.name = name
+
+        def drain(self):
+            return [("x/sys:0", self.name)]
+
+    engine._emit("[00:00:01] Собеседник: привет",
+                 {"t": 1.0, "speaker": "Собеседник", "text": "привет", "voice": "x/sys:0"})
+    engine._apply_renames(Drain("Демьян"))  # удачная перезапись
+    assert engine._retry_wait == 40.0
+    state["fail"] = True
+    engine._apply_renames(Drain("Пётр"))  # неудачная — своя пауза с 1 с
+    assert engine._rewrite_wait == 1.0 and engine._retry_wait == 40.0

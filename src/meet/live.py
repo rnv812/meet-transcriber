@@ -339,8 +339,8 @@ class LiveEngine:
         # подпись может смениться задним числом.
         self._voiced: list[dict] = []
         self._file_dirty = False  # перезапись ленты не прошла — повторить
-        self._retry_wait = 0.0  # пауза до повтора (растёт), секунды
-        self._retry_at = 0.0  # monotonic, раньше которого не повторяем
+        self._rewrite_wait = 0.0  # пауза до повтора (растёт), секунды
+        self._rewrite_at = 0.0  # monotonic, раньше которого не повторяем
         self.out_root = Path(out_root) if out_root is not None else self.out_dir.parent
         self._lock_path: Path | None = None  # наш .recording.lock, пока держим
         # Голоса (meet.voice_id.VoiceMatcher, duck-typed): онлайн-кластеры
@@ -704,15 +704,15 @@ class LiveEngine:
         if not errors:
             if self._file_dirty:
                 self._say("лента переписана")
-            self._file_dirty, self._retry_wait = False, 0.0
+            self._file_dirty, self._rewrite_wait = False, 0.0
             return
         # Файл держит другой процесс: повтор с растущей паузой (1, 2, 4… до
         # RETRY_MAX_S), в журнал — одна строка на серию сбоев.
         if not self._file_dirty:
             self._say(f"лента не переписана, повторю ({errors[0]})")
         self._file_dirty = True
-        self._retry_wait = min(max(self._retry_wait * 2, REWRITE_RETRY_S), REWRITE_RETRY_MAX_S)
-        self._retry_at = time.monotonic() + self._retry_wait
+        self._rewrite_wait = min(max(self._rewrite_wait * 2, REWRITE_RETRY_S), REWRITE_RETRY_MAX_S)
+        self._rewrite_at = time.monotonic() + self._rewrite_wait
 
     def _rewrite(self, path: Path, swaps: list) -> bool:
         """Атомарно (tmp + replace) заменить строки файла; каждая замена — у
@@ -776,7 +776,7 @@ class LiveEngine:
             done = self._windows(final=False)
             if self._dupes is not None and self._dupes.pending():
                 self._flush_dupes()  # задержанные строки — не дольше HOLD_MAX_S
-            if self._file_dirty and time.monotonic() >= self._retry_at:
+            if self._file_dirty and time.monotonic() >= self._rewrite_at:
                 self._sync_files()  # прошлая перезапись ленты не прошла
             return done
 
