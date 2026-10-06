@@ -1064,6 +1064,29 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     return doc
 
 
+def outcome_line(doc: dict | None, modes=()) -> str:
+    """Итог анализа одной строкой для журнала резидента: модель, чего она не
+    дала, что отброшено, режим ответа по схеме, первые предупреждения."""
+    if not doc:
+        return "анализ: analysis.json не прочитан"
+    parts = [f"анализ: {doc.get('model')}"]
+    missing = [PART_NAMES.get(f, f) for f in doc.get("missing") or []]
+    if missing:
+        parts.append("не дала: " + ", ".join(missing))
+    dropped = doc.get("dropped") or {}
+    if dropped:
+        parts.append("отброшено: " + ", ".join(f"{k} {v}" for k, v in dropped.items()))
+    counts = [f"глав {len(doc['chapters'])}" if "chapters" in doc else "",
+              f"важность у {len(doc['importance'])} реплик" if "importance" in doc else ""]
+    parts += [c for c in counts if c]
+    if modes:
+        parts.append("формат ответа: " + ", ".join(modes))
+    warnings = doc.get("warnings") or []
+    if warnings:
+        parts.append("предупреждения: " + " | ".join(str(w)[:160] for w in warnings[:3]))
+    return "; ".join(parts)
+
+
 def to_file(parts: dict, features, fp: str, *, model: str, now: float | None = None,
             errors=()) -> dict:
     """Части разметки → документ analysis.json (форма — для окна, M3/M4)."""

@@ -112,6 +112,12 @@ def response_format(mode: str | None, schema: dict) -> dict | None:
     return None
 
 
+def accepted_modes() -> list[str]:
+    """Какими режимами ответа по схеме сервер отвечал в этом процессе
+    (`none` — схема только в промпте): для журнала задачи."""
+    return sorted({mode or "none" for mode in _schema_mode.values()})
+
+
 def _complete(url: str, payload: dict, timeout_s: float, schema: dict | None) -> AgentReply:
     if schema is None:
         return _post(url, payload, timeout_s)[0]

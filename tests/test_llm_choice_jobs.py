@@ -195,3 +195,18 @@ def test_cancel_queued_never_kills_a_started_job(tmp_path):
     finally:
         release.set()
         queue.stop()
+
+
+def test_analyze_outcome_goes_to_the_resident_log(tmp_path, monkeypatch, capsys):
+    # Чего модель не дала и что отброшено — строкой в resident.log: без
+    # analysis.json пользователя по журналу видно, что случилось.
+    folder = _transcribed(tmp_path, monkeypatch, {"provider": "claude-code"})
+    reply = {"phrase_types": {"0": "task", "9": "risk"}, "importance": {}, "insights": [],
+             "category": None, "title": "Старт"}
+    monkeypatch.setattr(llm, "resolve", lambda cfg, provider=None: ("claude-code", _runner(json.dumps(reply))))
+    assert job_worker.main(["analyze", str(folder)]) == 0
+    logs = [line for line in _lines(capsys) if line.get("kind") == "log" and line.get("source") == "analysis"]
+    assert len(logs) == 1
+    text = logs[0]["text"]
+    assert "claude-code:sonnet" in text and "не дала: главы" in text and "отброшено: types 1" in text
+    assert "analysis" in jobs.RESIDENT_LOG_SOURCES

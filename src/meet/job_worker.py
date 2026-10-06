@@ -594,6 +594,13 @@ def _analyze(folder_str: str, chosen: str | None = None) -> int:
         return fail(str(e), 1)
     except Exception as e:
         return fail(f"{type(e).__name__}: {e}", 1)
+    modes = ()
+    if provider == "openai-compatible":
+        from meet.llm import openai_compat
+
+        modes = openai_compat.accepted_modes()
+    # Итог в resident.log: чего модель не дала и что отброшено — видно и без analysis.json.
+    _emit({"kind": "log", "source": "analysis", "text": analysis.outcome_line(analysis.read(folder), modes)})
     _emit({"kind": "job.result", "path": str(out)})
     return 0
 
