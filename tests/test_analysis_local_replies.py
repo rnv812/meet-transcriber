@@ -42,6 +42,12 @@ def _reply(name: str) -> str:
     return (REPLIES / name).read_text(encoding="utf-8")
 
 
+@pytest.fixture(autouse=True)
+def _no_context_lookup(monkeypatch):
+    # Окно контекста локальной модели узнаётся по сети — в тестах его нет.
+    monkeypatch.setattr(analysis, "local_context", lambda cfg: None)
+
+
 @pytest.fixture
 def folder(tmp_path):
     folder = tmp_path / RID
@@ -95,7 +101,7 @@ def test_reply_in_another_schema_fails_instead_of_an_empty_analysis(folder):
     runner = FakeRunner(_reply("wrong_schema.json"), _reply("wrong_schema.json"))
     with pytest.raises(analysis.AnalysisError) as e:
         analysis.run(folder, runner, _cfg())
-    assert "нет поля" in str(e.value) or "без" in str(e.value)
+    assert "в ответе модели нет нужных частей: нет поля phrase_types" in str(e.value)
 
 
 def test_empty_chapters_of_a_long_meeting_are_asked_again_then_marked_missing(folder):
@@ -154,3 +160,114 @@ def test_cli_text_names_the_missing_parts():
                                        "warnings": ["часть 1: chapters пустой"]})
     assert "Модель не дала: главы, важность — попробуйте другую модель" in text
     assert "chapters пустой" in text
+
+
+# --- окно контекста локальной модели, куски, обрезка ------------------------------
+
+
+class UsageRunner:
+    """Отвечает по очереди; строка — текст, AgentReply — как есть."""
+
+    def __init__(self, *replies):
+        self.replies = list(replies)
+        self.calls: list[dict] = []
+
+    async def __call__(self, prompt, **kwargs):
+        self.calls.append({"prompt": prompt, **kwargs})
+        reply = self.replies.pop(0)
+        return reply if isinstance(reply, AgentReply) else AgentReply(text=reply)
+
+
+def _long_folder(tmp_path, n=200, size=600):
+    folder = tmp_path / "long"
+    folder.mkdir()
+    segments = [{"start": float(i * 20), "end": float(i * 20 + 19), "speaker": "Ольга",
+                 "text": f"Реплика {i} " + "слово " * (size // 6)} for i in range(n)]
+    library.write_transcript(folder, {"version": 1, "segments": segments})
+    return folder
+
+
+def _types_only():
+    cfg = settings.Settings()
+    return replace(cfg, analysis=replace(cfg.analysis, importance=False, chapters=False, category=False,
+                                         title=False))
+
+
+def test_too_small_context_is_refused_up_front(folder, monkeypatch):
+    monkeypatch.setattr(analysis, "local_context", lambda cfg: 4096)
+    runner = UsageRunner()
+    with pytest.raises(analysis.AnalysisError) as e:
+        analysis.run(folder, runner, _cfg(), provider="openai-compatible")
+    assert "слишком маленькое окно контекста: 4096" in str(e.value) and "16K" in str(e.value)
+    assert runner.calls == []
+
+
+def test_local_windows_fit_the_context_and_none_are_skipped(tmp_path, monkeypatch):
+    monkeypatch.setattr(analysis, "local_context", lambda cfg: 8192)
+    folder = _long_folder(tmp_path)
+    lines = analysis.compact_lines(library.read_transcript(folder))
+    limit = analysis.window_chars(8192)
+    expected = analysis.windows(lines, limit=limit, max_windows=None)
+    assert len(expected) > analysis.MAX_WINDOWS  # Claude получил бы выборку, локальная — всё
+    reply = json.dumps({"phrase_types": {}, "insights": []})
+    runner = UsageRunner(*([reply] * len(expected)))
+    doc = analysis.run(folder, runner, _types_only(), provider="openai-compatible")
+    assert len(runner.calls) == len(expected) and "unparsed" not in doc
+    assert all(len(c["prompt"]) < limit + 2000 for c in runner.calls)
+    assert all(c["max_tokens"] == analysis.reply_tokens(len(w)) for c, w in zip(runner.calls, expected))
+
+
+def test_window_size_follows_the_context():
+    assert analysis.window_chars(32768) == pytest.approx(54000, rel=0.05)
+    assert analysis.window_chars(8192) < 12000
+    assert analysis.window_chars(131072) == analysis.WINDOW_CHARS
+    assert analysis.window_chars(6144) >= analysis.MIN_WINDOW_CHARS
+
+
+def test_prompt_cut_by_the_server_is_reported(folder):
+    # Сервер насчитал промпту 300 токенов, а в нём ~1000: обрезан по контексту.
+    good = _reply("lmstudio_fenced_prose.txt")
+    runner = UsageRunner(AgentReply(text=good, usage={"prompt_tokens": 300, "completion_tokens": 200}))
+    doc = analysis.run(folder, runner, _cfg(), provider="openai-compatible")
+    assert doc["context_cut"]["seen"] == 300 and doc["context_cut"]["need"] > 1000
+    assert doc["warnings"][0].startswith("модель видела только часть текста")
+
+
+def test_failed_windows_are_counted_with_the_reason(folder, monkeypatch):
+    monkeypatch.setattr(analysis, "windows", lambda ls: [ls[:2], ls[2:4], ls[4:]])
+    ok = json.dumps({"phrase_types": {}, "insights": [], "summary": "Часть."})
+    overflow = AgentReply(text="", error="текст не помещается в контекст модели: maximum context length")
+    final = json.dumps({"category": None, "title": "План"})
+    runner = UsageRunner(ok, overflow, ok, final)
+    cfg = settings.Settings()
+    cfg = replace(cfg, analysis=replace(cfg.analysis, importance=False, chapters=False))
+    doc = analysis.run(folder, runner, cfg)
+    assert len(runner.calls) == 4  # переполнение — без попытки исправления
+    assert doc["unparsed"]["parts"] == 1 and doc["unparsed"]["of"] == 3
+    assert doc["unparsed"]["reason"].startswith("текст не помещается в контекст модели")
+
+
+def test_part_delivered_only_by_some_windows_is_partial(folder, monkeypatch):
+    monkeypatch.setattr(analysis, "windows", lambda ls: [ls[:3], ls[3:]])
+    with_insights = json.dumps({"phrase_types": {}, "insights": [], "summary": "Часть."})
+    without = json.dumps({"phrase_types": {}, "summary": "Часть."})
+    final = json.dumps({"category": None, "title": "План"})
+    runner = UsageRunner(with_insights, without, without, final)
+    cfg = settings.Settings()
+    cfg = replace(cfg, analysis=replace(cfg.analysis, importance=False, chapters=False))
+    doc = analysis.run(folder, runner, cfg)
+    assert doc["partial"] == {"insights": "1/2"} and "missing" not in doc
+
+
+def test_likert_scale_importance():
+    got = analysis._importance({"1": 5, "2": 3, "4": 1}, {1, 2, 4})
+    assert got == {"1": 1.0, "2": 0.6, "4": 0.2}
+
+
+def test_cli_text_names_unparsed_and_partial_parts():
+    from meet import cli_library
+
+    text = cli_library._analysis_text({"unparsed": {"parts": 2, "of": 5, "reason": "таймаут вызова модели"},
+                                       "partial": {"chapters": "1/3"}})
+    assert "Часть встречи не разобрана (2 из 5 кусков): таймаут вызова модели" in text
+    assert "Только для части встречи: главы (1/3 кусков)" in text

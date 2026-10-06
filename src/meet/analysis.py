@@ -97,8 +97,22 @@ _ISSUE_KEY = re.compile(r"([A-Z][A-Z0-9_]{1,19})-([1-9][0-9]{0,5})")
 
 ANALYZE_TIMEOUT_S = 600.0
 FINAL_TIMEOUT_S = 180.0
-# С этого числа реплик в окне пустая важность — не ответ, а сбой: просим исправить.
-IMPORTANCE_MIN_LINES = 8
+# С этого числа реплик в окне пустая важность — не ответ, а сбой: просим
+# исправить (на меньшем куске пустой светской беседы важности может и не быть).
+IMPORTANCE_MIN_LINES = 20
+
+# Локальная модель: кусок встречи — по окну контекста модели (`window_chars`),
+# все куски, без выборки. Оценки в токенах: русский текст — ~3 символа на
+# токен, системный промпт — до SYSTEM_TOKENS, ответ — `reply_tokens`, реплика
+# в среднем LINE_CHARS символов; запас CONTEXT_MARGIN.
+CHARS_PER_TOKEN = 3.0
+SYSTEM_TOKENS = 1500
+LINE_CHARS = 120
+CONTEXT_MARGIN = 0.85
+MIN_WINDOW_CHARS = 3000
+FINAL_REPLY_TOKENS = 1024
+# Сервер насчитал промпту меньше этой доли оценки — промпт обрезан по контексту.
+CUT_SHARE = 0.5
 
 # Как называть части разметки в промпте и сообщениях об ошибках.
 _SECTION_OF = {"types": "phrase_types", "importance": "importance", "chapters": "chapters",
@@ -186,10 +200,11 @@ def compact_lines(data: dict | None) -> list[tuple[int, str]]:
 
 
 def windows(lines: list[tuple[int, str]], limit: int = WINDOW_CHARS, overlap: float = OVERLAP,
-            max_windows: int = MAX_WINDOWS) -> list[list[tuple[int, str]]]:
+            max_windows: int | None = MAX_WINDOWS) -> list[list[tuple[int, str]]]:
     """Окна реплик не длиннее `limit` символов с перекрытием ~`overlap` от
     окна. Больше `max_windows` — равномерная выборка окон (первое и последнее
-    всегда в ней): бюджет на встречу ограничен."""
+    всегда в ней): бюджет на встречу ограничен. `max_windows=None` — все окна
+    (локальная модель: вызовы бесплатны, а пропуск куска — пропуск части встречи)."""
     if not lines:
         return []
     if sum(len(line) + 1 for _, line in lines) <= limit:
@@ -210,12 +225,38 @@ def windows(lines: list[tuple[int, str]], limit: int = WINDOW_CHARS, overlap: fl
             back -= 1
             keep += len(lines[back][1]) + 1
         start = max(back, start + 1)
-    if len(out) > max_windows:
+    if max_windows is not None and len(out) > max_windows:
         if max_windows <= 1:
             return out[:1]
         step = (len(out) - 1) / (max_windows - 1)
         out = [out[round(k * step)] for k in range(max_windows)]
     return out
+
+
+def reply_tokens(lines: int) -> int:
+    """Предел длины ответа на кусок из `lines` реплик (типы и важность — по
+    строке на реплику)."""
+    return max(2048, min(8192, 1024 + 16 * lines))
+
+
+def window_chars(context: int) -> int:
+    """Длина куска встречи (символы) для модели с окном `context` токенов:
+    системный промпт + кусок + ответ на него влезают с запасом ~15 %."""
+    room = context * CONTEXT_MARGIN - SYSTEM_TOKENS - 1024
+    chars = room / (1 / CHARS_PER_TOKEN + 16 / LINE_CHARS)
+    return int(max(MIN_WINDOW_CHARS, min(WINDOW_CHARS, chars)))
+
+
+def local_context(cfg) -> int | None:
+    """Окно контекста локальной модели из настроек (meet.llm.local_models);
+    не узнать — None."""
+    from meet.llm import local_models
+
+    try:
+        return local_models.context_length(cfg.llm.base_url, cfg.llm.local_model,
+                                           via_proxy=cfg.llm.local_via_proxy)["tokens"]
+    except Exception:  # сведения необязательные — без них куски по умолчанию
+        return None
 
 
 def _duration(data: dict) -> float:
@@ -472,7 +513,11 @@ def _importance(raw, valid, drop: dict | None = None) -> dict[str, float]:
     numbers = [v for _, v in scored if v is not None]
     scale = 1.0
     if numbers and 2 * sum(v > 1 for v in numbers) >= len(numbers):
-        scale = 10.0 if max(numbers) <= 10 else 100.0
+        top = max(numbers)
+        if top <= 5 and all(float(v).is_integer() for v in numbers):
+            scale = 5.0  # оценки 1–5
+        else:
+            scale = 10.0 if top <= 10 else 100.0
     out = {}
     for key, value in scored:
         if value is None:
@@ -759,13 +804,25 @@ def response_schema(features, *, summary: bool = False, category_ids=()) -> dict
     return obj(props)
 
 
-def _call(runner, prompt: str, system: str, timeout_s: float, schema: dict | None = None) -> str:
+def _call(runner, prompt: str, system: str, timeout_s: float, schema: dict | None = None,
+          extra: dict | None = None, report: dict | None = None) -> str:
     """Один вызов модели без инструментов (только текст встречи в промпте).
-    `schema` — JSON Schema ответа (только локальной модели, см. `response_schema`)."""
-    extra = {"response_schema": schema} if schema is not None else {}
-    reply = runner(prompt, system_prompt=system, allowed_dirs=(), timeout_s=timeout_s, max_turns=2, **extra)
+    `schema` — JSON Schema ответа, `extra` — прочие параметры вызова (только
+    локальной модели: `max_tokens`). Сервер насчитал промпту намного меньше
+    токенов, чем в нём есть, — он обрезан по контексту: `report["context_cut"]`."""
+    kwargs = dict(extra or {})
+    if schema is not None:
+        kwargs["response_schema"] = schema
+    reply = runner(prompt, system_prompt=system, allowed_dirs=(), timeout_s=timeout_s, max_turns=2, **kwargs)
     if inspect.isawaitable(reply):
         reply = asyncio.run(reply)
+    usage = getattr(reply, "usage", None)
+    seen = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+    if report is not None and isinstance(seen, int) and not isinstance(seen, bool):
+        need = int((len(prompt) + len(system)) / CHARS_PER_TOKEN)
+        cut = report.get("context_cut")
+        if seen < need * CUT_SHARE and (not cut or need > cut["need"]):
+            report["context_cut"] = {"seen": seen, "need": need}
     if reply.error:
         raise RuntimeError(reply.error)
     return reply.text or ""
@@ -774,12 +831,14 @@ def _call(runner, prompt: str, system: str, timeout_s: float, schema: dict | Non
 def ask_model(runner, prompt: str, system: str, features, *, valid: set[int], category_ids=(),
               summary: bool = False, timeout_s: float = ANALYZE_TIMEOUT_S,
               texts: dict[int, str] | None = None, projects=(), need=(), schema: dict | None = None,
-              report: dict | None = None) -> tuple[dict, list[str]]:
+              report: dict | None = None, extra: dict | None = None) -> tuple[dict, list[str]]:
     """Вызов с одной попыткой исправления: JSON не разобрался или часть битая
     (или пустая из `need`) — просим исправить; из двух ответов берётся по
     каждой части годная. Ни одной нужной части ни в одном ответе — ValueError.
     `report` — сводка для analysis.json: `seen` (разобравшиеся части),
-    `dropped` (отброшено элементов по частям), `truncated` (ответ оборван)."""
+    `covered` (в скольких вызовах часть разобралась), `dropped` (отброшено
+    элементов по частям), `truncated` (ответ оборван), `context_cut`
+    (промпт обрезан сервером). `extra` — параметры вызова (см. `_call`)."""
     def attempt(text: str):
         drop: dict = {}
         info: dict = {}
@@ -806,15 +865,19 @@ def ask_model(runner, prompt: str, system: str, features, *, valid: set[int], ca
                     dropped[feature] = dropped.get(feature, 0) + drop[feature]
             report["truncated"] = report.get("truncated", False) or bool(info.get("truncated"))
         report.setdefault("seen", set()).update(taken)
+        covered = report.setdefault("covered", {})
+        for feature in taken:
+            covered[feature] = covered.get(feature, 0) + 1
 
-    text = _call(runner, prompt, system, timeout_s, schema)
+    text = _call(runner, prompt, system, timeout_s, schema, extra, report)
     first = attempt(text)
     if first[0] is not None and not first[1]:
         note(first)
         return first[0], []
     errors = first[1]
     try:
-        fixed_text = _call(runner, build_repair(prompt, text, "; ".join(errors)), system, timeout_s, schema)
+        fixed_text = _call(runner, build_repair(prompt, text, "; ".join(errors)), system, timeout_s, schema,
+                           extra, report)
     except RuntimeError as e:
         fixed_text, errors = "", errors + [str(e)]
     second = attempt(fixed_text) if fixed_text else (None, [], {}, {})
@@ -964,11 +1027,21 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
         raise AnalysisError("в записи нет речи")
     order = [i for i, _ in lines]
     valid = set(order)
+    # Локальную модель просим отвечать строго по схеме (если сервер умеет), а
+    # встречу режем по окну её контекста — без выборки кусков.
+    strict = provider == "openai-compatible"
+    context = local_context(cfg) if strict else None
+    if context:
+        from meet.llm import local_models
+
+        if context < local_models.MIN_CONTEXT:
+            raise AnalysisError(local_models.context_text(context))
     texts = {i: str(s.get("text") or "") for i, s in enumerate(data.get("segments") or [])
              if isinstance(s, dict)}
     categories = [c.to_raw() for c in cfg.categories]
     category_ids = [c["id"] for c in categories]
-    parts = windows(lines)
+    parts = (windows(lines, limit=window_chars(context) if context else WINDOW_CHARS, max_windows=None)
+             if strict else windows(lines))
     multi = len(parts) > 1
     # При нескольких окнах категорию и название даёт отдельный итоговый
     # вызов по сводкам частей, а не первое попавшееся окно.
@@ -978,9 +1051,8 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     kb = _kb_excerpts(cfg.assistant.knowledge_dir, lines)
     total_lo, total_hi = chapter_target(_duration(data) / 60.0)
     results, summaries, errors = [], [], []
-    # Локальную модель просим отвечать строго по схеме (если сервер умеет).
-    strict = provider == "openai-compatible"
-    report: dict = {"seen": set(), "dropped": {}, "truncated": False}
+    failed: list[str] = []  # почему не разобрались куски (по куску)
+    report: dict = {"seen": set(), "covered": {}, "dropped": {}, "truncated": False}
     # Ход по окнам и итоговому вызову (meet.llm_progress): вес части — её объём.
     llm_progress.plan(bus, [("analyze", sum(len(t) for _, t in p)) for p in parts]
                       + ([("analyze-final", 3000)] if final_features else []))
@@ -1008,9 +1080,11 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
             got, errs = ask_model(runner, prompt, system, window_features,
                                   valid={i for i, _ in part}, category_ids=category_ids,
                                   summary=bool(final_features), texts=texts, projects=jira[0],
-                                  need=need, schema=schema, report=report)
+                                  need=need, schema=schema, report=report,
+                                  extra={"max_tokens": reply_tokens(len(part))} if strict else None)
         except (ValueError, RuntimeError) as e:
             errors.append(f"часть {n}: {e}")
+            failed.append(str(e))
             continue
         errors += [f"часть {n}: {e}" for e in errs]
         if got.get("summary"):
@@ -1035,7 +1109,8 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
             got, errs = ask_model(runner, prompt, system, final_features, valid=valid,
                                   category_ids=category_ids, timeout_s=FINAL_TIMEOUT_S, report=report,
                                   schema=response_schema(final_features, category_ids=category_ids)
-                                  if strict else None)
+                                  if strict else None,
+                                  extra={"max_tokens": FINAL_REPLY_TOKENS} if strict else None)
             merged.update({k: v for k, v in got.items() if k in final_features})
             errors += [f"итог: {e}" for e in errs]
         except (ValueError, RuntimeError) as e:
@@ -1047,6 +1122,10 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
         raise AnalysisError("модель вернула анализ без нужных частей: " + "; ".join(errors))
     if report["truncated"]:
         errors.insert(0, "ответ модели оборван (лимит токенов или контекста модели) — взяты целые части")
+    cut = report.get("context_cut")
+    if cut:
+        errors.insert(0, f"модель видела только часть текста: контекст сервера ~{cut['seen']} токенов, "
+                         f"нужно ~{cut['need']} — увеличьте контекст модели до 16K+")
     doc = to_file(merged, features, fingerprint(data), model=model_label(provider, cfg),
                   now=now, errors=errors)
     if missing:
@@ -1054,6 +1133,18 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     if any(report["dropped"].values()):
         # Сколько элементов отброшено проверкой (номер реплики вне встречи и т. п.).
         doc["dropped"] = {k: v for k, v in report["dropped"].items() if v}
+    if failed:
+        # Куски встречи, которые не разобрались совсем: окно скажет «часть
+        # встречи не разобрана (N из M кусков)» с причиной.
+        doc["unparsed"] = {"parts": len(failed), "of": len(parts), "reason": failed[0][:300]}
+    answered = len(parts) - len(failed)
+    partial = {f: f"{report['covered'].get(f, 0)}/{len(parts)}" for f in window_features
+               if f not in missing and multi and report["covered"].get(f, 0) < answered}
+    if partial:
+        # Часть есть не у всех разобравшихся кусков: «главы — только для части встречи».
+        doc["partial"] = partial
+    if cut:
+        doc["context_cut"] = cut
     # Число сегментов: устаревший анализ (правили текст) окно показывает, пока
     # номера реплик те же — то есть пока сегментов столько же (M3).
     doc["segments"] = len(data.get("segments") or [])
@@ -1081,6 +1172,14 @@ def outcome_line(doc: dict | None, modes=()) -> str:
     parts += [c for c in counts if c]
     if modes:
         parts.append("формат ответа: " + ", ".join(modes))
+    unparsed = doc.get("unparsed")
+    if isinstance(unparsed, dict):
+        parts.append(f"не разобрано кусков: {unparsed.get('parts')} из {unparsed.get('of')}")
+    if doc.get("partial"):
+        parts.append("частично: " + ", ".join(f"{k} {v}" for k, v in doc["partial"].items()))
+    if doc.get("context_cut"):
+        parts.append(f"промпт обрезан сервером: ~{doc['context_cut'].get('seen')} из "
+                     f"~{doc['context_cut'].get('need')} токенов")
     warnings = doc.get("warnings") or []
     if warnings:
         parts.append("предупреждения: " + " | ".join(str(w)[:160] for w in warnings[:3]))

@@ -701,6 +701,12 @@ def _analysis_text(doc: dict | None) -> str:
     missing = [analysis.PART_NAMES.get(f, f) for f in doc.get("missing") or []]
     if missing:
         lines.append(f"Модель не дала: {', '.join(missing)} — попробуйте другую модель")
+    unparsed = doc.get("unparsed")
+    if isinstance(unparsed, dict):
+        lines.append(f"Часть встречи не разобрана ({unparsed.get('parts')} из {unparsed.get('of')} кусков): "
+                     f"{unparsed.get('reason')}")
+    for part, share in (doc.get("partial") or {}).items():
+        lines.append(f"Только для части встречи: {analysis.PART_NAMES.get(part, part)} ({share} кусков)")
     lines += [f"  ! {w}" for w in (doc.get("warnings") or [])[:5]]
     return "\n".join(lines) + "\n"
 
