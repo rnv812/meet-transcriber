@@ -194,7 +194,8 @@ jobs:
 
       # Лёгкое ядро без движка. Обязательные — тесты слоя macOS (платформа,
       # прокси scutil, помощник и запись через него, детектор звонка, движок
-      # Apple Silicon, значки строки меню) и сетевой сторож.
+      # Apple Silicon, значки строки меню, поиск Claude Code/Codex вне PATH
+      # launchd, замок файлов GigaAM на flock) и сетевой сторож.
       - name: Python tests (macOS layer)
         run: |
           uv venv --python 3.12 .venv-ci
@@ -202,7 +203,8 @@ jobs:
           PYTHONPATH=src .venv-ci/bin/python -m pytest -q -p no:cacheprovider \
             tests/test_plat.py tests/test_netproxy_mac.py tests/test_audiotap.py \
             tests/test_watch_mac.py tests/test_engine_mac.py tests/test_app_icons.py \
-            tests/test_macos_build.py tests/test_no_network.py
+            tests/test_macos_build.py tests/test_no_network.py \
+            tests/test_llm_detect.py tests/test_gigaam_asr.py
 
       # Остальное ядро на macOS ещё не прогонялось: сведения для пробного
       # прогона, сборку не останавливают.
