@@ -186,12 +186,14 @@ def test_forget_drops_one_recording_from_the_cache(lib, monkeypatch):
 
 
 def test_cache_is_bounded_by_text_size(tmp_path):
-    cache = search._Cache(limit=500)  # одна короткая реплика — около 400 байт по оценке
+    cache = search._Cache(limit=100)  # одна короткая реплика — около 70 байт по оценке
     a = _rec(tmp_path, "a", [_seg(0, "Анна", "Двадцать символов тут.")])
     b = _rec(tmp_path, "b", [_seg(0, "Анна", "И ещё двадцать букв.")])
     cache.turns(a)
     cache.turns(b)
     assert list(cache._items) == [str(b)]
+    # исходный регистр и «ё» восстанавливаются из нормализованного текста
+    assert [(t.start, t.speaker, t.text) for t in cache.turns(b)] == [(0.0, "Анна", "И ещё двадцать букв.")]
 
 
 def test_cards_are_cached_until_folder_or_meta_changes(lib, monkeypatch):
@@ -209,13 +211,16 @@ def test_cards_are_cached_until_folder_or_meta_changes(lib, monkeypatch):
     assert found[0]["title"] == "Бюджетная планёрка" and found[0]["title_match"] is True
 
 
-def test_tokens_are_parsed_once_per_turn(lib, monkeypatch):
-    search.search_library(lib, "бюджет")
+def test_tokens_are_parsed_lazily_and_once_per_turn(lib, monkeypatch):
     seen = []
     real = search.tokenize
     monkeypatch.setattr(search, "tokenize", lambda text: seen.append(text) or real(text))
     assert search.search_library(lib, "задачи спринта")[0]["total"] == 1
-    assert "Обсудили задачи спринта." not in seen  # реплики — из кэша, разбираются только названия
+    # разбираются только реплики, попавшие во фрагменты, и названия
+    assert seen.count("Обсудили задачи спринта.") == 1
+    assert "Бюджет утвердим завтра." not in seen
+    search.search_library(lib, "задачи спринта")
+    assert seen.count("Обсудили задачи спринта.") == 1  # второй раз — из кэша
 
 
 def test_one_letter_query_finds_nothing(lib):
@@ -242,3 +247,58 @@ def test_title_ranges_are_utf16_and_partial():
     assert search.title_ranges("Бюджет отдела", q) == [[0, 6]]
     assert search.title_ranges("Отпуск", q) == []
     assert search.title_ranges("Бюджет", search.parse_query("спикер:Анна")) == []
+
+
+# --- быстрый поиск по нормализованному тексту = правила окна ---------------------------
+
+
+def _doc_found(texts, query, speaker="", others=None):
+    """Встреча из реплик `texts` (спикер `speaker`, кроме номеров из `others`
+    — у них «Посторонний») и что в ней находит быстрый поиск."""
+    turns = [search.Turn(float(i), "Посторонний" if others and i in others
+                         else search.nfc(speaker) or search.NO_SPEAKER,
+                         search.nfc(t), search.norm_word(search.nfc(t)))
+             for i, t in enumerate(texts)]
+    doc = search._Doc(turns)
+    return search._search_doc(("тест", doc.serial), doc, search._Plan(search.parse_query(query)))
+
+
+@pytest.mark.parametrize("case", CASES["cases"], ids=lambda c: c["name"])
+def test_fast_path_agrees_with_shared_cases(case):
+    if not search.searchable(case["query"]):
+        assert search.parse_query(case["query"]).empty or len(case["query"].strip()) < search.MIN_QUERY
+        return  # такой запрос до встреч не доходит
+    # Реплика — среди соседних (другого спикера): перевод строки между ними не склеивает слова.
+    total, hits = _doc_found(["Вступление.", case["text"], "Заключение."], case["query"],
+                             case.get("speaker") or "", others={0, 2})
+    want = search.match_text(case["text"], search.parse_query(case["query"]), case.get("speaker") or "")
+    assert total == (0 if want is None else 1)
+    if want is not None:
+        text, marks = search.snippet(search.nfc(case["text"]), want)
+        assert hits == [{"t": 1.0, "speaker": search.nfc(case.get("speaker") or "") or search.NO_SPEAKER,
+                         "snippet": text, "ranges": marks}]
+
+
+def test_fast_path_case_yo_rare_scripts_and_turn_borders():
+    texts = ["ПЛАН", "работ нет", "Ёлка и ЁЖ", "İstanbul büyük", "Ⓐbc план работ"]
+    # фраза не склеивается через границу реплик
+    assert _doc_found(texts, '"план работ"')[0] == 1
+    total, hits = _doc_found(texts, "ежик ёлк")
+    assert total == 0
+    total, hits = _doc_found(texts, "елка еж")
+    assert total == 1 and hits[0]["snippet"] == "Ёлка и ЁЖ"
+    for query in ("istanbul", "büy", "stanbul"):  # нормализация меняет длину — проверка по словам
+        want = search.match_text(texts[3], search.parse_query(query))
+        total, hits = _doc_found(texts, query)
+        assert total == (want is not None)
+        assert hits == ([] if want is None else [{"t": 3.0, "speaker": search.NO_SPEAKER,
+                                                  "snippet": texts[3], "ranges": search.snippet(texts[3], want)[1]}])
+    assert _doc_found(texts, "план")[1][0]["snippet"] == "ПЛАН"
+    assert _doc_found(texts, "работ")[1][-1]["snippet"] == "Ⓐbc план работ"
+
+
+def test_fast_path_counts_every_turn_but_keeps_three_hits():
+    total, hits = _doc_found([f"Бюджет {i}." for i in range(10)] + ["Бюджетный."], "бюджет")
+    assert total == 11 and [h["t"] for h in hits] == [0.0, 1.0, 2.0]
+    total, hits = _doc_found(["а", "б"], "спикер:Анна", speaker="Анна")
+    assert total == 2 and hits[0]["ranges"] == []
