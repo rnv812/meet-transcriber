@@ -86,6 +86,7 @@ export function RecordingItem({
   picked = false,
   onPick,
   categories = NO_CATEGORIES,
+  now,
 }: {
   rec: LibraryItem;
   /** Категории встреч из настроек: метка записи и пункт «Категория» в меню. */
@@ -100,8 +101,14 @@ export function RecordingItem({
   picking?: boolean;
   picked?: boolean;
   onPick?: (id: string, how: PickHow) => void;
+  /**
+   * Строка под разделом по дате (DateSections): дата короче — в разделах по
+   * дням только время, в месяцах и годах «5 сен, 10:00». Нет — полная дата.
+   */
+  now?: Date;
 }) {
   const when = rec.started_at ? dayLabel(rec.started_at) : "";
+  const whenShort = rec.started_at && now ? dayLabel(rec.started_at, now, true) : when;
   /** Агент этой записи работает (вкладка «Агент»), хоть открыта и другая запись. */
   const agentLive = useAgentLive(rec.id);
   const job = status.kind === "running" ? status.job ?? null
@@ -109,7 +116,7 @@ export function RecordingItem({
   const shown = useSmoothProgress(job ? jobFraction(job) : null, job ? jobStageKey(job) : null,
     { extrapolate: job?.state === "running", cap: job?.cap ?? null });
   const badge = badgeOf(status, job ? shown : null);
-  const meta = [when, rec.duration_s ? duration(rec.duration_s) : ""].filter(Boolean).join(" · ");
+  const meta = [whenShort, rec.duration_s ? duration(rec.duration_s) : ""].filter(Boolean).join(" · ");
   const title = rec.title ?? (when || rec.id);
   const hits = rec.hits ?? [];
   const more = (rec.total ?? 0) - hits.length;
@@ -195,7 +202,8 @@ export function RecordingItem({
   ];
 
   return (
-    <li className={`rec-item${selected ? " rec-item--selected" : ""}${picking ? " rec-item--picking" : ""}${picked ? " rec-item--picked" : ""}`}
+    <li className={`rec-item${selected ? " rec-item--selected" : ""}${picking ? " rec-item--picking" : ""}${
+      picked ? " rec-item--picked" : ""}${menu ? " rec-item--menu" : ""}`}
       onContextMenu={actions ? (e) => {
         if (editing) return;
         e.preventDefault();

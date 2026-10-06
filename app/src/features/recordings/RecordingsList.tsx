@@ -1,10 +1,14 @@
 import { X } from "lucide-react";
 import "./recordings.css";
-import { useCallback, useMemo, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import type { Resident } from "../../state/useResident";
 import type { Library } from "../../state/useLibrary";
 import { deleteRecording, kbExport, mergeRecordings, patchRecording, setRecordingCategory } from "../../lib/api";
-import { errorText } from "../../lib/format";
+import {
+  defaultOpen, groupBySection, loadSectionPrefs, saveSectionPrefs, withPref, type DateSection, type SectionPrefs,
+} from "../../lib/dateSections";
+import { errorText, plural } from "../../lib/format";
+import { searchable } from "../../lib/search";
 import { agentKillRecording, inTauri, openFolder } from "../../lib/shell";
 import { statusOf, type RecStatus } from "../../lib/status";
 import type { Category } from "../../lib/types";
@@ -12,6 +16,7 @@ import { Button } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { CategoryFilter, CategoryFilterChips } from "./CategoryFilter";
+import { DateSections } from "./DateSections";
 import { ImportZone } from "./ImportZone";
 import { RecordingItem, type ItemActions, type PickHow } from "./RecordingItem";
 import { SearchBox } from "./SearchBox";
@@ -49,6 +54,26 @@ const NO_FILTER: string[] = [];
 
 /** Итог действия из меню: строка над списком, закрывается «×». */
 type Notice = { text: string; error: boolean };
+
+/** Сегодняшняя дата для разделов; в полночь — новая («Сегодня» становится «Вчера»). */
+function useToday(): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 1);
+    const timer = setTimeout(() => setNow(new Date()), Math.max(1000, midnight.getTime() - Date.now()));
+    return () => clearTimeout(timer);
+  }, [now]);
+  return now;
+}
+
+/** «Найдено: 3 встречи, 12 мест»; мест нет — без них (резидент без поиска по тексту). */
+function foundLine(n: number, places: number | null): string {
+  const meetings = `${n} ${plural(n, "встреча", "встречи", "встреч")}`;
+  return `Найдено: ${meetings}${places ? `, ${places} ${plural(places, "место", "места", "мест")}` : ""}`;
+}
+
+/** Где Ctrl+K не уводит к поиску списка. */
+const KEEP_CTRL_K = "[data-agent-terminal], .xterm, textarea, [contenteditable=''], [contenteditable='true']";
 
 /** Запись ещё пишется или обрабатывается — объединять её нельзя: звук не окончательный. */
 const busy = (st: RecStatus) => st.kind === "recording" || st.kind === "queued" || st.kind === "running";
@@ -139,12 +164,70 @@ export function RecordingsList({
   [library.items, pendingCat]);
   const setFilter = (keys: string[]) => onCategoryFilter?.(keys);
 
+  // --- разделы по датам -------------------------------------------------------------
+
+  const now = useToday();
+  const groups = useMemo(() => groupBySection(visible, now), [visible, now]);
+  const searching = searchable(q);
+  /** Запомненные отклонения от умолчания (свёрнутый месяц, развёрнутый год). */
+  const [prefs, setPrefs] = useState<SectionPrefs>(loadSectionPrefs);
+  /** На этот сеанс, без запоминания: раздел открытой записи развёрнут. */
+  const [session, setSession] = useState<SectionPrefs>({});
+  /** С поиском разделы развёрнуты; свёрнутое — только до конца поиска. */
+  const [inSearch, setInSearch] = useState<SectionPrefs>({});
+  useEffect(() => { if (!searching) setInSearch({}); }, [searching]);
+  const isOpen = (s: DateSection) => (searching ? inSearch[s.key] ?? true : session[s.key] ?? prefs[s.key] ?? defaultOpen(s));
+  const setOpen = (sections: DateSection[], open: boolean) => {
+    if (searching) {
+      setInSearch((cur) => ({ ...cur, ...Object.fromEntries(sections.map((s) => [s.key, open])) }));
+      return;
+    }
+    const keys = new Set(sections.map((s) => s.key));
+    setSession((cur) => Object.fromEntries(Object.entries(cur).filter(([k]) => !keys.has(k))));
+    const next = sections.reduce((acc, s) => withPref(acc, s.key, open, defaultOpen(s)), prefs);
+    setPrefs(next);
+    saveSectionPrefs(next);
+  };
+  // Открытая запись (из трея, после объединения) в свёрнутом разделе — раздел разворачивается.
+  const selectedKey = selected ? groups.find((g) => g.items.some((r) => r.id === selected))?.section.key : undefined;
+  useEffect(() => {
+    if (!selectedKey) return;
+    setSession((cur) => (cur[selectedKey] ? cur : { ...cur, [selectedKey]: true }));
+    setInSearch((cur) => {
+      if (!(selectedKey in cur)) return cur;
+      const { [selectedKey]: _, ...rest } = cur;
+      return rest;
+    });
+  }, [selected, selectedKey]);
+  const places = visible.some((r) => typeof r.total === "number")
+    ? visible.reduce((sum, r) => sum + (r.total ?? r.hits?.length ?? 0), 0) : null;
+
+  // Ctrl+K — к поиску списка (Ctrl+F занят поиском в карточке).
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.code !== "KeyK" || e.defaultPrevented) return;
+      // В терминале агента и в многострочной правке Ctrl+K — их собственная клавиша.
+      if (e.target instanceof Element && e.target.closest(KEEP_CTRL_K)) return;
+      const box = root.current?.querySelector<HTMLInputElement>("input[type=search]");
+      if (!box) return;
+      e.preventDefault();
+      box.focus();
+      box.select();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   // --- выбор нескольких записей ---------------------------------------------------
 
-  const ids = visible.map((r) => r.id);
-  // Пропавшие из списка (удалены, отфильтрованы поиском) отмеченными не считаются.
-  const chosen = ids.filter((id) => picked.includes(id));
+  // Shift-диапазон и Ctrl+A — по видимым строкам: свёрнутые разделы не задеваются.
+  const ids = groups.filter((g) => isOpen(g.section)).flatMap((g) => g.items.map((r) => r.id));
+  // Пропавшие из списка (удалены, отфильтрованы поиском) отмеченными не считаются; в свёрнутом разделе — считаются.
+  const pickedNow = new Set(picked);
+  const chosen = groups.flatMap((g) => g.items.map((r) => r.id)).filter((id) => pickedNow.has(id));
   const picking = chosen.length > 0;
+  const pickedSet = new Set(chosen);
   const statuses = new Map(library.items.map((rec) => [rec.id, statusOf(rec, library.jobs, snapshot)]));
 
   const clearPicks = () => { setPicked([]); setAnchor(null); };
@@ -162,8 +245,13 @@ export function RecordingsList({
     setPicked(base.includes(id) ? base.filter((x) => x !== id) : [...base, id]);
     setAnchor(id);
   };
+  /** Флажок раздела: отметить все его записи (и в свёрнутом) или снять. */
+  const pickSection = (items: { id: string }[], on: boolean) => {
+    const these = new Set(items.map((r) => r.id));
+    setPicked(on ? [...new Set([...chosen, ...these])] : chosen.filter((id) => !these.has(id)));
+  };
   const select = (id: string) => { clearPicks(); onSelect(id); };
-  const onListKey = (e: KeyboardEvent<HTMLUListElement>) => {
+  const onListKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).tagName === "INPUT" && (e.target as HTMLInputElement).type === "text") return;
     if ((e.ctrlKey || e.metaKey) && e.code === "KeyA") {
       e.preventDefault();
@@ -197,7 +285,7 @@ export function RecordingsList({
   };
 
   return (
-    <div className="rec-list">
+    <div className="rec-list" ref={root}>
       <ImportZone endpoint={endpoint} onImported={() => void library.refresh?.()} />
       <div className="rec-list__search">
         <SearchBox value={q} onChange={onQ} />
@@ -247,8 +335,20 @@ export function RecordingsList({
           {blocked && <span className="muted rec-pickbar__note">{blocked}</span>}
         </div>
       )}
-      <ul aria-label="Записи" aria-multiselectable={picking || undefined} className="rec-list__items" onKeyDown={onListKey}>
-        {visible.map((rec) => (
+      {searching && visible.length > 0 && (
+        <p className="rec-found muted" aria-live="polite">{foundLine(visible.length, places)}</p>
+      )}
+      <DateSections
+        groups={groups}
+        isOpen={isOpen}
+        onToggle={(s, open) => setOpen([s], open)}
+        onAll={(open) => setOpen(groups.map((g) => g.section), open)}
+        picking={picking}
+        picked={pickedSet}
+        onPickSection={endpoint ? pickSection : undefined}
+        onKeyDown={onListKey}
+        multiselectable={picking}
+        renderItem={(rec) => (
           <RecordingItem
             key={rec.id}
             rec={rec.id in pending ? { ...rec, title: pending[rec.id] ?? null } : rec}
@@ -259,11 +359,12 @@ export function RecordingsList({
             onOpenHit={onOpenHit}
             actions={actions}
             picking={picking}
-            picked={chosen.includes(rec.id)}
+            picked={pickedSet.has(rec.id)}
             onPick={endpoint ? pick : undefined}
+            now={now}
           />
-        ))}
-      </ul>
+        )}
+      />
       {library.items.length === 0 && library.loading && (
         // Первая загрузка библиотеки бывает долгой (холодный старт): заготовки строк, а не пустота.
         <ul className="rec-list__items rec-skel" aria-busy="true" aria-label="Загрузка записей">

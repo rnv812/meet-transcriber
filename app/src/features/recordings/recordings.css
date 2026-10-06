@@ -176,3 +176,28 @@
 .rec-pickbar__note { font-size: 12px; }
 /* Заготовки строк, пока библиотека загружается впервые. */
 .rec-skel__row { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
+
+/* Разделы по датам (DateSections): заголовок прилипает к верху .pane-list — она прокручивается. */
+.date-secs { display: flex; flex-direction: column; gap: 6px; }
+.date-sec__head {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px;
+  margin: 0 -8px; padding: 2px 8px; background: var(--bg);
+}
+.date-sec__title { flex: 1; min-width: 0; margin: 0; font-size: 12px; font-weight: 600; }
+.date-sec__toggle {
+  display: flex; align-items: center; gap: 4px; width: 100%; padding: 4px 2px; border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--text-2); font: inherit; text-align: left; cursor: pointer;
+}
+.date-sec__toggle:hover { color: var(--text); }
+.date-sec__chevron { flex: none; color: var(--text-3); transition: transform var(--t); }
+.date-sec--open .date-sec__chevron { transform: rotate(90deg); }
+.date-sec__count { color: var(--text-3); font-weight: 400; }
+/* Флажок раздела — над флажками строк. */
+.date-sec__pick { flex: none; margin: 0 0 0 10px; cursor: pointer; }
+.rec-found { margin: 0; padding: 0 2px; font-size: 12px; }
+/* Длинный список: строки за экраном не раскладываются. Сдерживание отрисовки
+   обрезает всё, что выходит за строку, — рамка фокуса внутрь, а с открытым
+   меню (оно fixed внутри строки) сдерживание снимается. */
+.rec-item { content-visibility: auto; contain-intrinsic-size: auto 52px; }
+.rec-item--menu { content-visibility: visible; }
+.rec-item :focus-visible { outline-offset: -2px; }

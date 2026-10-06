@@ -49,8 +49,16 @@ function setup(props: Partial<Parameters<typeof RecordingsList>[0]> = {}) {
   return { onSelect, onQ };
 }
 
-const mains = () => within(screen.getByRole("list", { name: "Записи" }))
-  .getAllByRole("listitem").map((li) => li.querySelector<HTMLButtonElement>(".rec-item__main")!);
+// Сегодня — 6 октября: записи от 30 сентября в разделе «Среда, 30 сентября» (6 дней назад, развёрнут).
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-06T12:00:00"));
+  window.localStorage.clear();
+});
+afterEach(() => vi.useRealTimers());
+
+/** Строки записей во всех развёрнутых разделах, сверху вниз. */
+const mains = () => [...document.querySelectorAll<HTMLButtonElement>(".rec-item > .rec-item__main")];
 
 test("бейджи статусов: у готовой нет, у идущей процент, у упавшей ошибка", () => {
   setup();
@@ -355,7 +363,7 @@ test("ничего не найдено — подсказка и «Сброси�
 
 test("название в строке: подсказка — полное название, только если оно обрезано", () => {
   setup();
-  const title = within(screen.getByRole("list", { name: "Записи" })).getByText("Планёрка");
+  const title = within(screen.getByRole("list", { name: "Среда, 30 сентября" })).getByText("Планёрка");
   Object.defineProperty(title, "clientWidth", { value: 100, configurable: true });
   Object.defineProperty(title, "scrollWidth", { value: 100, configurable: true });
   fireEvent.mouseEnter(title);
@@ -372,4 +380,187 @@ test("бейдж идущей расшифровки: общая доля впе
   expect(badgeOf({ kind: "running", stage: "diarize", label: "Разделение на спикеров", job })?.text)
     .toBe("62% · Разделение на спикеров");
   expect(badgeOf({ kind: "running", stage: "align", label: "Выравнивание" })?.text).toBe("Выравнивание…");
+});
+
+// --- разделы по датам -------------------------------------------------------------
+
+const dated = [
+  rec("t1", { title: "Сегодняшняя", started_at: "2026-10-06T09:00:00" }),
+  rec("t2", { title: "Утренняя", started_at: "2026-10-06T08:00:00" }),
+  rec("y1", { title: "Вчерашняя", started_at: "2026-10-05T15:30:00" }),
+  rec("s1", { title: "Сентябрьская", started_at: "2026-09-10T10:00:00" }),
+  rec("o1", { title: "Прошлогодняя", started_at: "2025-03-05T10:00:00" }),
+  rec("o2", { title: "Старая", started_at: "2024-02-01T10:00:00" }),
+  rec("n1", { title: "Безымянная дата", started_at: null }),
+];
+const datedLib = { ...library, items: dated, jobs: [] };
+const head = (name: string) => screen.getByRole("button", { name: new RegExp(`^${name} · \\d+$`) });
+const heads = () => screen.getAllByRole("heading", { level: 3 });
+const expanded = () => heads().map((h) => within(h).getByRole("button").getAttribute("aria-expanded"));
+const stored = () => JSON.parse(window.localStorage.getItem("meet.sections.v1") ?? "null");
+
+test("разделы: заголовки со счётчиками, годовые свёрнуты и не отрисованы, дата в строке короче", () => {
+  setup({ library: datedLib, selected: null });
+  expect(heads().map((h) => h.textContent)).toEqual(
+    ["Сегодня · 2", "Вчера · 1", "Сентябрь · 1", "Ранее в 2025 · 1", "2024 · 1", "Без даты · 1"]);
+  expect(expanded()).toEqual(["true", "true", "true", "false", "false", "true"]);
+  // Раздел — область с именем заголовка, у неё свой список.
+  const today = screen.getByRole("region", { name: "Сегодня · 2" });
+  const list = within(today).getByRole("list", { name: "Сегодня" });
+  expect(head("Сегодня")).toHaveAttribute("aria-controls", list.id);
+  expect(mains().map((b) => b.querySelector(".rec-item__title")!.textContent))
+    .toEqual(["Сегодняшняя", "Утренняя", "Вчерашняя", "Сентябрьская", "Безымянная дата"]);
+  expect(screen.queryByText("Прошлогодняя")).toBeNull();
+  expect(item("Сегодняшняя")).toHaveTextContent("09:00 · 30 мин");
+  expect(item("Сегодняшняя")).not.toHaveTextContent("Сегодня 09:00");
+  expect(item("Сентябрьская")).toHaveTextContent("10 сен, 10:00 · 30 мин");
+});
+
+test("свёрнутое и развёрнутое запоминается — только отклонения от умолчания", async () => {
+  const user = userEvent.setup();
+  const { unmount } = render(<RecordingsList selected={null} onSelect={vi.fn()} library={datedLib} resident={resident}
+    q="" onQ={vi.fn()} />);
+  await user.click(head("Сентябрь"));
+  expect(head("Сентябрь")).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByText("Сентябрьская")).toBeNull();
+  expect(stored()).toEqual({ "m:2026-09": false });
+  await user.click(head("2024"));
+  expect(screen.getByText("Старая")).toBeInTheDocument();
+  expect(stored()).toEqual({ "m:2026-09": false, "y:2024": true });
+  await user.click(head("Сентябрь"));
+  expect(stored()).toEqual({ "y:2024": true });
+  await user.click(head("Сентябрь"));
+  unmount();
+  render(<RecordingsList selected={null} onSelect={vi.fn()} library={datedLib} resident={resident} q="" onQ={vi.fn()} />);
+  expect(head("Сентябрь")).toHaveAttribute("aria-expanded", "false");
+  expect(head("2024")).toHaveAttribute("aria-expanded", "true");
+  expect(head("Ранее в 2025")).toHaveAttribute("aria-expanded", "false");
+});
+
+test("открытая запись в свёрнутом разделе разворачивает его (без запоминания)", () => {
+  const props = { onSelect: vi.fn(), library: datedLib, resident, q: "", onQ: vi.fn() };
+  const { rerender } = render(<RecordingsList selected={null} {...props} />);
+  expect(screen.queryByText("Старая")).toBeNull();
+  rerender(<RecordingsList selected="o2" {...props} />);
+  expect(head("2024")).toHaveAttribute("aria-expanded", "true");
+  expect(mainOf("Старая")).toHaveAttribute("aria-current", "true");
+  expect(stored()).toBeNull();
+});
+
+test("клавиатура: Enter/Пробел, ←/→ сворачивают и разворачивают, Alt+↑/↓ — между заголовками", async () => {
+  const user = userEvent.setup();
+  setup({ library: datedLib, selected: null });
+  head("Сегодня").focus();
+  await user.keyboard("{ArrowLeft}");
+  expect(head("Сегодня")).toHaveAttribute("aria-expanded", "false");
+  await user.keyboard("{ArrowLeft}");
+  expect(head("Сегодня")).toHaveAttribute("aria-expanded", "false");
+  await user.keyboard("{ArrowRight}");
+  expect(head("Сегодня")).toHaveAttribute("aria-expanded", "true");
+  await user.keyboard("{Enter}");
+  expect(head("Сегодня")).toHaveAttribute("aria-expanded", "false");
+  await user.keyboard(" ");
+  expect(head("Сегодня")).toHaveAttribute("aria-expanded", "true");
+  // Стрелки дальше не уходят: плеер карточки перематывал бы по ним.
+  expect(fireEvent.keyDown(head("Сегодня"), { key: "ArrowRight" })).toBe(false);
+  await user.keyboard("{Alt>}{ArrowDown}{/Alt}");
+  expect(head("Вчера")).toHaveFocus();
+  await user.keyboard("{Alt>}{ArrowDown}{ArrowDown}{/Alt}");
+  expect(head("Ранее в 2025")).toHaveFocus();
+  await user.keyboard("{Alt>}{ArrowUp}{/Alt}");
+  expect(head("Сентябрь")).toHaveFocus();
+  // Из строки Alt+↑ — к заголовку её раздела.
+  mainOf("Вчерашняя").focus();
+  await user.keyboard("{Alt>}{ArrowUp}{/Alt}");
+  expect(head("Вчера")).toHaveFocus();
+});
+
+test("меню заголовка: «Свернуть все», «Развернуть все»; Esc возвращает фокус на заголовок", async () => {
+  const user = userEvent.setup();
+  setup({ library: datedLib, selected: null });
+  fireEvent.contextMenu(head("Вчера"), { clientX: 30, clientY: 40 });
+  const menu = screen.getByRole("menu", { name: "Разделы" });
+  expect(within(menu).getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Свернуть все", "Развернуть все"]);
+  await user.click(within(menu).getByRole("menuitem", { name: "Развернуть все" }));
+  expect(expanded()).not.toContain("false");
+  expect(stored()).toEqual({ "rest-y:2025": true, "y:2024": true });
+  expect(head("Вчера")).toHaveFocus();
+  fireEvent.contextMenu(head("Вчера"), { clientX: 0, clientY: 0 });
+  await user.click(screen.getByRole("menuitem", { name: "Свернуть все" }));
+  expect(expanded()).not.toContain("true");
+  expect(mains()).toHaveLength(0);
+  expect(stored()).toEqual({ today: false, yesterday: false, "m:2026-09": false, none: false });
+  fireEvent.contextMenu(head("Вчера"), { clientX: 0, clientY: 0 });
+  await user.keyboard("{Escape}");
+  expect(screen.queryByRole("menu")).toBeNull();
+  expect(head("Вчера")).toHaveFocus();
+});
+
+test("выбор: Shift и Ctrl+A — по видимым строкам; флажок раздела в трёх состояниях, и у свёрнутого", async () => {
+  const user = userEvent.setup();
+  setup({ library: datedLib, selected: "t1" });
+  expect(screen.queryByRole("checkbox", { name: /Выбрать все/ })).toBeNull();
+  await user.keyboard("{Shift>}");
+  await user.click(mainOf("Безымянная дата"));
+  await user.keyboard("{/Shift}");
+  // Свёрнутые «Ранее в 2025» и «2024» в диапазон не попали.
+  expect(screen.getByText("Выбрано: 5")).toBeInTheDocument();
+  const year = screen.getByRole("checkbox", { name: "Выбрать все в разделе «2024»" });
+  const today = screen.getByRole("checkbox", { name: "Выбрать все в разделе «Сегодня»" });
+  expect(today).toBeChecked();
+  expect(year).not.toBeChecked();
+  await user.click(year);
+  expect(screen.getByText("Выбрано: 6")).toBeInTheDocument();
+  expect(year).toBeChecked();
+  expect(screen.queryByText("Старая")).toBeNull();  // раздел так и свёрнут
+  await user.click(pickBox("Утренняя")!);
+  expect(today).toBePartiallyChecked();
+  await user.click(today);
+  expect(today).toBeChecked();
+  expect(screen.getByText("Выбрано: 6")).toBeInTheDocument();
+  await user.click(today);
+  expect(today).not.toBeChecked();
+  expect(screen.getByText("Выбрано: 4")).toBeInTheDocument();
+  mainOf("Вчерашняя").focus();
+  await user.keyboard("{Control>}a{/Control}");
+  expect(screen.getByText("Выбрано: 5")).toBeInTheDocument();
+  expect(year).not.toBeChecked();
+});
+
+test("поиск: все разделы развёрнуты, «Найдено: N встреч, M мест»; свернуть — только на этот поиск", async () => {
+  window.localStorage.setItem("meet.sections.v1", JSON.stringify({ "m:2026-09": false }));
+  const user = userEvent.setup();
+  const found = dated.map((r, i) => ({ ...r, hits: [], total: i + 1, title_match: false, date: null }));
+  const props = { selected: null, onSelect: vi.fn(), resident, onQ: vi.fn() };
+  const { rerender } = render(<RecordingsList {...props} library={{ ...datedLib, items: found }} q="бюджет" />);
+  expect(expanded()).not.toContain("false");
+  expect(screen.getByText("Старая")).toBeInTheDocument();
+  expect(screen.getByText("Найдено: 7 встреч, 28 мест")).toBeInTheDocument();
+  await user.click(head("Сегодня"));
+  expect(head("Сегодня")).toHaveAttribute("aria-expanded", "false");
+  expect(stored()).toEqual({ "m:2026-09": false });
+  rerender(<RecordingsList {...props} library={datedLib} q="" />);
+  expect(screen.queryByText(/^Найдено/)).toBeNull();
+  expect(head("Сегодня")).toHaveAttribute("aria-expanded", "true");
+  expect(head("Сентябрь")).toHaveAttribute("aria-expanded", "false");
+  expect(head("2024")).toHaveAttribute("aria-expanded", "false");
+  // Старый резидент без числа совпадений — только встречи.
+  rerender(<RecordingsList {...props} library={{ ...datedLib, items: dated.slice(0, 2) }} q="бюджет" />);
+  expect(screen.getByText("Найдено: 2 встречи")).toBeInTheDocument();
+});
+
+test("Ctrl+K — к поиску списка", async () => {
+  const user = userEvent.setup();
+  setup({ library: datedLib, selected: null });
+  head("Сегодня").focus();
+  await user.keyboard("{Control>}k{/Control}");
+  expect(screen.getByRole("searchbox")).toHaveFocus();
+  // В терминале агента Ctrl+K — его клавиша.
+  const term = document.createElement("textarea");
+  term.setAttribute("data-agent-terminal", "");
+  document.body.append(term);
+  term.focus();
+  await user.keyboard("{Control>}k{/Control}");
+  expect(term).toHaveFocus();
+  term.remove();
 });
