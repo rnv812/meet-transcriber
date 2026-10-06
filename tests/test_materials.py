@@ -1,11 +1,14 @@
 """Материалы ассистента (`meet.materials`): разбор документов с местами,
 фрагменты, пределы, хранение в папке записи, «изменён» / «нет файла». Файлы OOXML собираются здесь же через zipfile; данные выдуманы."""
 
+import codecs
 import importlib.util
 import io
 import json
 import os
 import sys
+import time
+import tracemalloc
 import zipfile
 from pathlib import Path
 
@@ -280,7 +283,7 @@ def test_add_stores_parsed_text_not_the_file(tmp_path):
     assert got["id"] == "a1" and got["status"] == "ok" and got["status_label"] == ""
     assert got["title"] == "План.docx" and got["origin"] == "file" and got["chunks"] == 1
     stored = sorted(p.relative_to(rec).as_posix() for p in rec.rglob("*") if p.is_file())
-    assert stored == ["assistant/materials/a1.json"]  # исходник не скопирован
+    assert stored == ["assistant/.ids", "assistant/materials/a1.json"]  # исходник не скопирован
     data = json.loads((rec / "assistant/materials/a1.json").read_text(encoding="utf-8"))
     assert data["v"] == 1 and data["id"] == "a1" and set(data) == {"v", "id", "meta", "summary", "chunks"}
     assert data["meta"]["source"]["path"] == str(src)
@@ -365,12 +368,14 @@ def test_kb_ref_and_paths_outside_the_kb(tmp_path):
     kb = tmp_path / "kb"
     (kb / "Проекты").mkdir(parents=True)
     (kb / "Проекты" / "Альфа.md").write_text("# Альфа\n\nПро проект.\n", encoding="utf-8")
-    got = materials.add(rec, "Проекты/Альфа.md", origin="kb", kb_root=kb, kind="kb_note")
+    got = materials.add(rec, "Проекты/Альфа.md", origin="kb", kb_root=kb, exclude=[], kind="kb_note")
     assert got["kb_ref"] == "Проекты/Альфа.md"
     assert got["summary"] == "Про проект.\nРазделы: Альфа"  # сводка заметки — без модели
     assert materials.read(rec, got["id"])["meta"]["view"] == "kb_note"
     with pytest.raises(materials.MaterialError, match="вне базы"):
-        materials.add(rec, "../секрет.md", origin="kb", kb_root=kb)
+        materials.add(rec, "../секрет.md", origin="kb", kb_root=kb, exclude=[])
+    with pytest.raises(TypeError):  # с базой знаний исключения обязательны
+        materials.add(rec, "Проекты/Альфа.md", origin="kb", kb_root=kb)
 
 
 def test_ids_are_shared_with_images_and_never_reused(tmp_path):
@@ -400,3 +405,197 @@ def test_broken_records_are_skipped(tmp_path):
 
 def test_terms_drop_function_words():
     assert materials.terms("Ну давайте это вот так: SLA и вебхуки, 15 ноября!") == ["sla", "вебхуки", "15", "ноября"]
+
+
+# --- враждебные файлы -------------------------------------------------------------------
+
+
+def _bomb_xlsx(path: Path, sheet_head: str, filler: bytes, repeat: int, sheet_tail: str = "</sheetData></worksheet>"):
+    """xlsx, лист которого распаковывается в `len(filler) * repeat` байт, а на
+    диске занимает килобайты: пишется потоком, без огромных строк в памяти."""
+    workbook = (f'<workbook xmlns="{S}" xmlns:r="{R}"><sheets>'
+                f'<sheet name="Бомба" sheetId="1" r:id="rId1"/></sheets></workbook>')
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        z.writestr("_rels/.rels", _rels(("rId1", "officeDocument", "xl/workbook.xml")))
+        z.writestr("xl/workbook.xml", workbook)
+        z.writestr("xl/_rels/workbook.xml.rels", _rels(("rId1", "worksheet", "worksheets/sheet1.xml")))
+        with z.open("xl/worksheets/sheet1.xml", "w", force_zip64=True) as f:
+            f.write(sheet_head.encode())
+            block = filler * max(1, 65536 // len(filler))
+            for _ in range(max(1, repeat * len(filler) // len(block))):
+                f.write(block)
+            f.write(sheet_tail.encode())
+    return path
+
+
+def _bounded(fn, seconds: float, megabytes: int):
+    """fn() быстро и без большой памяти (tracemalloc — пик Python-объектов)."""
+    tracemalloc.start()
+    start = time.perf_counter()
+    try:
+        result = fn()
+    finally:
+        _now, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+    assert time.perf_counter() - start < seconds
+    assert peak < megabytes * 1024 * 1024, peak
+    return result
+
+
+def test_huge_cell_bomb_is_cut_by_the_part_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(materials, "MAX_PART_BYTES", 2 * 1024 * 1024)
+    path = _bomb_xlsx(tmp_path / "бомба.xlsx", f'<worksheet xmlns="{S}"><sheetData><row r="1"><c t="str"><v>',
+                      b"A", 20 * 1024 * 1024, "</v></c></row></sheetData></worksheet>")
+    assert path.stat().st_size < 200_000
+    parsed = _bounded(lambda: materials.parse(path), 10, 64)
+    assert materials.PART_TOO_BIG in parsed.warnings
+
+
+def test_empty_rows_bomb_stops_at_the_scan_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(materials, "SHEET_SCAN_ROWS", 50_000)
+    path = _bomb_xlsx(tmp_path / "пусто.xlsx", f'<worksheet xmlns="{S}"><sheetData>', b"<row/>", 3_000_000)
+    parsed = _bounded(lambda: materials.parse(path), 10, 64)
+    assert parsed.chunks == [] and materials.ROWS_CUT.format("лист Бомба", 50_000) in parsed.warnings
+
+
+def test_archive_total_and_time_budgets(tmp_path, monkeypatch):
+    many = tmp_path / "много.pptx"
+    presentation = (f'<p:presentation xmlns:p="{P}" xmlns:r="{R}"><p:sldIdLst>'
+                    + "".join(f'<p:sldId id="{256 + i}" r:id="rId{i + 2}"/>' for i in range(5))
+                    + "</p:sldIdLst></p:presentation>")
+    with zipfile.ZipFile(many, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("_rels/.rels", _rels(("rId1", "officeDocument", "ppt/presentation.xml")))
+        z.writestr("ppt/presentation.xml", presentation)
+        z.writestr("ppt/_rels/presentation.xml.rels",
+                   _rels(*((f"rId{i + 2}", "slide", f"slides/slide{i + 1}.xml") for i in range(5))))
+        for i in range(5):
+            with z.open(f"ppt/slides/slide{i + 1}.xml", "w") as f:
+                f.write(f'<p:sld xmlns:p="{P}" xmlns:a="{A}"><p:cSld><p:spTree>'.encode())
+                f.write(b"<a:x/>" * 200_000)  # 1,2 МБ пустых элементов на слайд
+                f.write(b"</p:spTree></p:cSld></p:sld>")
+    monkeypatch.setattr(materials, "MAX_ARCHIVE_BYTES", 3 * 1024 * 1024)
+    parsed = _bounded(lambda: materials.parse(many), 10, 64)
+    assert materials.ARCHIVE_TOO_BIG in parsed.warnings
+    monkeypatch.setattr(materials, "MAX_ARCHIVE_BYTES", 100 * 1024 * 1024)
+    monkeypatch.setattr(materials, "TIME_BUDGET_S", 0.0)
+    assert materials.TOO_SLOW in materials.parse(many).warnings
+
+
+def test_deep_nesting_and_broken_streams_become_material_errors(tmp_path):
+    deep = tmp_path / "глубоко.docx"
+    body = "<w:sdt><w:sdtContent>" * 3000 + _p("Внутри") + "</w:sdtContent></w:sdt>" * 3000
+    _docx(deep, body)
+    parsed = materials.parse(deep)  # без рекурсии — разбирается
+    assert parsed.text == "Внутри"
+    sst = "<si>" + "<r>" * 3000 + "<t>x</t>" + "</r>" * 3000 + "</si>"
+    with zipfile.ZipFile(_xlsx(tmp_path / "обычный.xlsx")) as src:
+        parts = {n: src.read(n) for n in src.namelist() if n != "[Content_Types].xml"}
+    parts["xl/sharedStrings.xml"] = f'<sst xmlns="{S}">{sst}</sst>'
+    nested = _zip(tmp_path / "вложено.xlsx", parts)
+    assert materials.parse(nested).chunks[0]["text"].startswith("x\n300000")  # одна общая строка — «x»
+    # зашифрованный член архива, битый поток — ошибка разбора, а не исключение наружу
+    broken = tmp_path / "битый.docx"
+    good = _docx(tmp_path / "хороший.docx", _p("текст")).read_bytes()
+    at = good.find(b"word/document.xml") + 200
+    broken.write_bytes(good[:at] + b"\x00" * 64 + good[at + 64:])
+    with pytest.raises(materials.MaterialError):
+        materials.parse(broken)
+
+
+def test_any_parser_crash_becomes_material_error(monkeypatch):
+    def boom(*_a, **_k):
+        raise RecursionError("глубоко")
+
+    monkeypatch.setattr(materials, "_csv", boom)
+    with pytest.raises(materials.MaterialError, match="CSV"):
+        materials.parse_bytes(b"a;b", "x.csv")
+
+
+def test_csv_with_a_huge_field_keeps_what_was_read():
+    data = ("имя;текст\nпервый;коротко\nвторой;\"" + "я" * (materials.CSV_FIELD_MAX + 10) + "\"\n").encode()
+    parsed = materials.parse_bytes(data, "выгрузка.csv")
+    assert parsed.chunks[0]["text"] == "имя | текст\nпервый | коротко"
+    assert parsed.warnings and parsed.warnings[0].startswith("CSV разобран до строки 3")
+    assert __import__("csv").field_size_limit() == 131072  # общий предел процесса не тронут
+
+
+def test_utf16_text_and_nul_bytes():
+    data = codecs.BOM_UTF16_LE + "Привет из Блокнота\x00!".encode("utf-16-le")
+    assert materials.parse_bytes(data, "заметка.txt").text == "Привет из Блокнота!"
+
+
+def test_outline_level_nine_is_body_text(tmp_path):
+    body = ('<w:p><w:pPr><w:outlineLvl w:val="9"/></w:pPr><w:r><w:t>обычный текст</w:t></w:r></w:p>'
+            '<w:p><w:pPr><w:outlineLvl w:val="0"/></w:pPr><w:r><w:t>Заголовок</w:t></w:r></w:p>')
+    parsed = materials.parse(_docx(tmp_path / "у.docx", body))
+    assert [c["loc"] for c in parsed.chunks] == ["", "Заголовок"]
+
+
+@pytest.mark.skipif(importlib.util.find_spec("pypdf") is None, reason="нет pypdf")
+def test_pdf_page_cap(monkeypatch):
+    import pypdf
+
+    writer = pypdf.PdfWriter()
+    for _ in range(5):
+        writer.add_blank_page(width=100, height=100)
+    out = io.BytesIO()
+    writer.write(out)
+    monkeypatch.setattr(materials, "PDF_MAX_PAGES", 3)
+    parsed = materials.parse_bytes(out.getvalue(), "много.pdf")
+    assert parsed.warnings == [materials.PDF_PAGES_CUT.format(3)]
+
+
+def test_kb_exclude_applies_to_added_notes_and_folders(tmp_path):
+    rec = _rec(tmp_path)
+    kb = tmp_path / "kb"
+    (kb / "Личное").mkdir(parents=True)
+    (kb / "Проект").mkdir()
+    (kb / "Личное" / "дневник.md").write_text("личное", encoding="utf-8")
+    (kb / "Проект" / "план.md").write_text("план", encoding="utf-8")
+    (kb / "Проект" / "Черновики").mkdir()
+    (kb / "Проект" / "Черновики" / "черновик.md").write_text("черновик", encoding="utf-8")
+    with pytest.raises(materials.MaterialError, match="закрыта"):
+        materials.add(rec, "личное/дневник.md", origin="kb", kb_root=kb, exclude=["Личное/"])
+    got = materials.add(rec, kb, origin="kb", kb_root=kb, exclude=["Личное/", "Проект/Черновики"])
+    record = materials.read(rec, got["id"])
+    assert [c["loc"] for c in record["chunks"]] == ["Проект/план.md"]
+    assert materials.status(record) == "ok"  # отпечаток — с теми же исключениями
+    (kb / "Личное" / "ещё.md").write_text("ещё личное", encoding="utf-8")
+    assert materials.status(record) == "ok"
+    parsed = materials.parse_folder(kb / "Проект", exclude=["Проект/Черновики"], base=kb)
+    assert [c["loc"] for c in parsed.chunks] == ["план.md"]
+
+
+def test_ids_are_not_reused_after_removal(tmp_path):
+    rec = _rec(tmp_path)
+    aid, path = materials.claim_id(rec, ".json")
+    assert aid == "a1"
+    path.unlink()  # «убрать» вложение
+    assert materials.claim_id(rec, ".json")[0] == "a2"
+
+
+def test_size_and_mtime_are_of_the_bytes_that_were_hashed(tmp_path, monkeypatch):
+    rec = _rec(tmp_path)
+    src = tmp_path / "живой.md"
+    src.write_text("первая версия", encoding="utf-8")
+    real_parse_bytes = materials.parse_bytes
+
+    def edit_during_parse(data, name):
+        got = real_parse_bytes(data, name)
+        src.write_text("вторая версия, сохранили во время разбора", encoding="utf-8")
+        return got
+
+    monkeypatch.setattr(materials, "parse_bytes", edit_during_parse)
+    aid = materials.add(rec, src)["id"]
+    assert materials.status(materials.read(rec, aid)) == "changed"
+
+
+def test_encrypted_zip_member_is_a_material_error(tmp_path):
+    data = bytearray(_docx(tmp_path / "x.docx", _p("текст")).read_bytes())
+    for sig, flag_at in ((b"PK\x03\x04", 6), (b"PK\x01\x02", 8)):  # бит «зашифрован»
+        at = data.find(sig)
+        while at != -1:
+            data[at + flag_at] |= 1
+            at = data.find(sig, at + 4)
+    with pytest.raises(materials.MaterialError):
+        materials.parse_bytes(bytes(data), "зашифрован.docx")

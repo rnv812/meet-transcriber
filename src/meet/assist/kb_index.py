@@ -128,18 +128,62 @@ def _terms_of(path: Path, ref: str) -> list[Term]:
     return out
 
 
+def exclude_parts(item) -> list[str] | None:
+    """Одна запись `assist.kb_exclude` → части пути относительно базы как
+    есть (регистр сохранён) или None, если запись негодная: не строка,
+    пустая, абсолютная, с буквой диска или «..». Хвост вида «/*», «/**»
+    отбрасывается: исключение — всегда папка целиком (или файл), а не шаблон."""
+    if not isinstance(item, str):
+        return None
+    text = item.strip().replace("\\", "/")
+    if text.startswith("/") or re.match(r"^[A-Za-z]:", text):
+        return None
+    parts = [p.strip() for p in text.split("/") if p.strip() and p.strip() != "."]
+    while parts and set(parts[-1]) <= {"*"}:
+        parts.pop()
+    if not parts or ".." in parts:
+        return None
+    return parts
+
+
 def exclude_prefixes(exclude) -> tuple[str, ...]:
     """Настройка `assist.kb_exclude` → приставки путей относительно базы
     («Личное/» → «личное»): разделители — «/», без краевых, без регистра и «ё»."""
     out: list[str] = []
     for item in exclude or ():
-        if not isinstance(item, str):
-            continue
-        text = item.strip().replace("\\", "/").strip("/")
-        text = "/".join(p for p in text.split("/") if p and p != ".")
-        if text:
-            out.append(_norm(text).casefold())
+        parts = exclude_parts(item)
+        if parts:
+            out.append(_norm("/".join(parts)).casefold())
     return tuple(dict.fromkeys(out))
+
+
+def ondisk(root, rel: str) -> str | None:
+    """Путь `rel` (через «/») внутри `root` так, как он записан на диске:
+    каждая часть ищется без учёта регистра и «ё» («проекты/альфа» →
+    «Проекты/Альфа»). Нет такого — None. Ссылки не раскрываются."""
+    here = Path(root)
+    out: list[str] = []
+    for part in [p for p in str(rel).replace("\\", "/").split("/") if p and p != "."]:
+        if part == "..":
+            return None
+        exact = here / part
+        if exact.exists() and part in _names(here):
+            here, name = exact, part
+        else:
+            key = _norm(part).casefold()
+            name = next((n for n in sorted(_names(here)) if _norm(n).casefold() == key), None)
+            if name is None:
+                return None
+            here = here / name
+        out.append(name)
+    return "/".join(out)
+
+
+def _names(folder: Path) -> list[str]:
+    try:
+        return os.listdir(folder)
+    except OSError:
+        return []
 
 
 def is_excluded(rel: str, prefixes) -> bool:

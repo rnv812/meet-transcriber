@@ -1055,14 +1055,43 @@ class Assist:
 
 
 def _kb_exclude(value) -> tuple[str, ...]:
-    """`assist.kb_exclude`: список путей (одна строка — список из неё); пустые
-    и повторы убираются, пустой список — осознанное «без исключений»; нет
-    ключа или мусор — KB_EXCLUDE_DEFAULT."""
+    """`assist.kb_exclude`: список путей (одна строка — список из неё);
+    негодные записи (не строки, пустые, абсолютные, с «..») и повторы
+    убираются. Только явный пустой список — «без исключений». Настройка
+    приватности не должна молча открывать всё: нет ключа — KB_EXCLUDE_DEFAULT,
+    а мусор (не список или список без единой годной записи) — тоже
+    KB_EXCLUDE_DEFAULT, со строкой в журнале."""
+    from meet.assist.kb_index import exclude_parts
+
+    if value is None:
+        return KB_EXCLUDE_DEFAULT
     if isinstance(value, str):
         value = [value]
-    if not isinstance(value, list):
+    if isinstance(value, list) and not value:
+        return ()
+    good = [v.strip() for v in value if exclude_parts(v)] if isinstance(value, list) else []
+    if not good:
+        _warn_once(f"настройки: assist.kb_exclude негодно ({value!r:.120}) — "
+                   f"исключаю папки по умолчанию: {', '.join(KB_EXCLUDE_DEFAULT)}")
         return KB_EXCLUDE_DEFAULT
-    return tuple(_unique(v for v in value if isinstance(v, str)))
+    return tuple(_unique(good))
+
+
+_WARNED: set[str] = set()
+
+
+def _warn_once(line: str) -> None:
+    """Предупреждение о негодной настройке — в stderr и журнал резидента,
+    один раз на процесс (настройки читаются часто)."""
+    if line in _WARNED:
+        return
+    _WARNED.add(line)
+    if sys.stderr is not None:
+        try:
+            print(line, file=sys.stderr, flush=True)
+        except (OSError, ValueError):
+            pass
+    _log(line)
 
 
 def _max_hints(value) -> int:

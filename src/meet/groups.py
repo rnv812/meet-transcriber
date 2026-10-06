@@ -372,14 +372,20 @@ def create(root: Path, name, color=None, *, gid=None, index=None, taken=(), crea
 KEEP = object()
 
 
-def update(root: Path, gid, *, name=None, color=None, kb_folder=KEEP) -> dict:
+def update(root: Path, gid, *, name=None, color=None, kb_folder=KEEP, kb_root=None) -> dict:
     """Переименовать, перекрасить и (или) задать папку базы знаний
-    (`kb_folder`: путь — задать, None или "" — убрать). Нет группы — NoGroup."""
+    (`kb_folder`: путь — задать, None или "" — убрать). `kb_root` — корень
+    базы знаний: если папка там есть, сохраняется так, как она записана на
+    диске («проекты/альфа» → «Проекты/Альфа»). Нет группы — NoGroup."""
     if name is None and color is None and kb_folder is KEEP:
         raise GroupError("нечего менять: нужно название, цвет или папка базы знаний")
     name = None if name is None else _name(name)
     color = None if color is None else _color(color)
     folder = KEEP if kb_folder is KEEP else check_kb_folder(kb_folder)
+    if folder not in (KEEP, None) and kb_root:
+        from meet.assist.kb_index import ondisk
+
+        folder = ondisk(kb_root, folder) or folder
 
     def change(items):
         at = _find(items, gid)

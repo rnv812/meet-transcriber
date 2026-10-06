@@ -9,11 +9,13 @@
   группы (дата, название). Папка группы (`kb_folder` в `.meet-groups.json`)
   — целиком, первой; остальные папки — по алфавиту: число документов, до
   MAP_TOP_TITLES самых свежих названий и «ещё K». Строится один раз на
-  сессию (кэш по аргументам). Настройка `assist.kb_map` выключает карту;
-* **даёт правила запрета** для инструментов агента: `kb_exclude_globs` —
-  абсолютные шаблоны исключённых папок (`assist.kb_exclude`), из них цикл
-  агента собирает deny-правила сессии (Claude Code — `permissions.deny`).
-  Читает и ищет агент сам, своими инструментами (§6);
+  сессию (кэш по аргументам). Настройка `assist.kb_map` выключает
+  структуру базы; список прошлых встреч группы — данные Meet, он остаётся;
+* **называет запреты** для инструментов агента: `kb_exclude_paths` —
+  абсолютные пути исключённых папок (`assist.kb_exclude`) как на диске;
+  цикл агента отдаёт их провайдеру в `deny_paths`, правила своего CLI
+  (у Claude Code — `Read(//d/…)`) собирает слой провайдеров. Читает и ищет
+  агент сам, своими инструментами (§6);
 * **запасной путь для локальной модели без инструментов** — исполняет её
   просьбы буквально: `kb_read(paths)` — разобрать файл в текст с местами
   (`meet.materials`), `kb_search(query, in_path)` — найти слова (по
@@ -78,6 +80,8 @@ NOT_A_FOLDER = "Это файл, а не папка: {}"
 NOT_READABLE = "Этот файл встречи не читается: {}"
 NO_QUERY = "Пустой запрос"
 TOO_MANY_FILES = "За раз — не больше {} файлов"
+READ_SPENT = "Лимит чтения за одну просьбу исчерпан — попросите этот файл отдельно"
+UNREADABLE = "Файл не разобрать: {} ({})"
 CUT = "[… обрезано: показаны первые {} символов]"
 
 
@@ -121,6 +125,13 @@ def _parts(text: str) -> list[str]:
     return parts
 
 
+def _resolved(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except OSError:
+        return path.absolute()
+
+
 def _inside(path: Path, root: Path) -> bool:
     try:
         path.resolve().relative_to(root.resolve())
@@ -136,7 +147,9 @@ class KnowledgeBase:
     `assist.kb_map`."""
 
     def __init__(self, root, *, exclude=(), library_root=None, show_map: bool = True) -> None:
-        self.root = Path(root) if root else None
+        # Корень — как на деле (ссылки, короткие имена 8.3): пути внутри
+        # сравниваются и открываются от него.
+        self.root = _resolved(Path(root)) if root else None
         self.exclude = tuple(exclude or ())
         self.prefixes = kb_index.exclude_prefixes(self.exclude)
         self.library_root = Path(library_root) if library_root else None
@@ -149,9 +162,9 @@ class KnowledgeBase:
     def configured(self) -> bool:
         return self.root is not None and self.root.is_dir()
 
-    def exclude_globs(self) -> list[str]:
-        """Запреты для инструментов агента (см. kb_exclude_globs)."""
-        return kb_exclude_globs(self.root, self.exclude)
+    def exclude_paths(self) -> list[str]:
+        """Запреты для инструментов агента (см. kb_exclude_paths)."""
+        return kb_exclude_paths(self.root, self.exclude)
 
     # --- пути
 
@@ -186,7 +199,9 @@ class KnowledgeBase:
             raise AccessError(BAD_PATH)
         if not self._allowed(full):
             raise AccessError(EXCLUDED)  # ссылка внутрь исключённой или скрытой папки
-        return Place("kb", full, rel)
+        # Открывается тот путь, что проверен: подмена ссылки после проверки
+        # не уведёт за базу.
+        return Place("kb", _resolved(full), rel)
 
     def _meeting_place(self, rest: str) -> Place:
         if self.library_root is None or not self.library_root.is_dir():
@@ -204,9 +219,9 @@ class KnowledgeBase:
             return Place("meet", folder, MEET_PREFIX + parts[0])
         name = parts[1]
         rel = f"{MEET_PREFIX}{parts[0]}/{name}"
-        if name == TRANSCRIPT:
-            return Place("meet", folder / name, rel)
         file = folder / name
+        if name == TRANSCRIPT and not os.path.lexists(file):
+            return Place("meet", file, rel)  # из transcript.json
         if name.startswith(".") or Path(name).suffix.lower() not in MEETING_SUFFIXES:
             raise AccessError(NOT_READABLE.format(rel))
         if not file.is_file():
@@ -233,25 +248,32 @@ class KnowledgeBase:
 
     def _parse(self, place: Place) -> materials.Parsed:
         """Текст файла с местами (кэш на сессию, пока файл не менялся)."""
-        if place.kind == "meet" and place.path.name == TRANSCRIPT and not place.path.is_file():
-            from meet import export
-
-            data = library.with_display_names(library.read_transcript(place.path.parent))
-            if data is None:
-                raise AccessError(NOT_FOUND.format(place.rel))
-            return materials.parse_text(export.render(data, "md"), TRANSCRIPT)
+        rendered = place.kind == "meet" and place.path.name == TRANSCRIPT and not os.path.lexists(place.path)
+        source = library.transcript_path(place.path.parent) if rendered else place.path
         try:
-            st = place.path.stat()
+            st = source.stat()
         except OSError:
             raise AccessError(NOT_FOUND.format(place.rel)) from None
-        key = str(place.path)
+        key = str(source)
         hit = self._parsed.get(key)
         if hit and hit[0] == st.st_size and hit[1] == st.st_mtime_ns:
             return hit[2]
         try:
-            parsed = materials.parse(place.path)
+            if rendered:  # расшифровка — из transcript.json, кэш по нему
+                from meet import export
+
+                data = library.with_display_names(library.read_transcript(place.path.parent))
+                if data is None:
+                    raise AccessError(NOT_FOUND.format(place.rel))
+                parsed = materials.parse_text(export.render(data, "md"), TRANSCRIPT)
+            else:
+                parsed = materials.parse(place.path)
+        except AccessError:
+            raise
         except materials.MaterialError as e:
             raise AccessError(str(e)) from None
+        except Exception as e:  # любой сбой разбора — ошибка этого файла, не всей просьбы
+            raise AccessError(UNREADABLE.format(place.rel, type(e).__name__)) from None
         self._parsed[key] = (st.st_size, st.st_mtime_ns, parsed)
         return parsed
 
@@ -298,6 +320,9 @@ class KnowledgeBase:
                 parsed = self._parse(place)
             except AccessError as e:
                 out.append({"path": path, "error": str(e)})
+                continue
+            if left <= 0:
+                out.append({"path": place.rel, "error": READ_SPENT})
                 continue
             text = "\n\n".join(f"[{c['loc']}]\n{c['text']}" if c["loc"] else c["text"] for c in parsed.chunks)
             limit = max(0, min(READ_MAX_CHARS, left))
@@ -428,7 +453,7 @@ class KnowledgeBase:
         key = (info["id"] if info else None, groups.kb_folder(info) if info else None,
                Path(current).name if current else None, budget_chars)
         if key not in self._maps:
-            self._maps[key] = self._build_map(info, current, budget_chars) if self.show_map else ""
+            self._maps[key] = self._build_map(info, current, budget_chars)
         return self._maps[key]
 
     def _group(self, group) -> dict | None:
@@ -444,13 +469,16 @@ class KnowledgeBase:
     def group_folder(self, group) -> str | None:
         """Папка базы знаний группы, если задана, есть, внутри базы и не в исключённых."""
         rel = groups.kb_folder(self._group(group))
-        if rel is None:
+        if rel is None or not self.configured:
+            return None
+        rel = kb_index.ondisk(self.root, rel)  # «проекты/альфа» → «Проекты/Альфа»
+        if not rel:
             return None
         try:
             place = self.place(rel)
         except AccessError:
             return None
-        return place.rel if place.path.is_dir() else None
+        return rel if place.path.is_dir() else None
 
     def _meetings(self, info: dict | None, current) -> list[dict]:
         if not info or self.library_root is None or not self.library_root.is_dir():
@@ -489,7 +517,7 @@ class KnowledgeBase:
         meeting_cost = min(sum(len(x) + 1 for x in meeting_lines), budget // 4)
 
         docs: list[tuple[str, float]] = []
-        if self.configured:
+        if self.configured and self.show_map:
             for path in self._kb_files(self.root, MAP_MAX_FILES):
                 try:
                     docs.append((path.relative_to(self.root).as_posix(), path.stat().st_mtime))
@@ -534,9 +562,10 @@ class KnowledgeBase:
             if skipped:
                 word = "папка" if skipped % 10 == 1 and skipped % 100 != 11 else "папок"
                 put(f"… ещё {skipped} {word} ({skipped_docs} {_docs_word(skipped_docs)})")
-        for line in meeting_lines:
-            if not put(line):
-                break
+        if meeting_lines and fits(meeting_lines[0], reserve=len(meeting_lines[1]) + 1):
+            for line in meeting_lines:
+                if not put(line):
+                    break
         return "\n".join(lines)
 
 
@@ -575,38 +604,27 @@ def _snippet(text: str, found: list[str]) -> str:
     return ("…" if at else "") + flat[at:end].strip() + ("…" if end < len(flat) else "")
 
 
-def exclude_paths(exclude) -> list[str]:
-    """`assist.kb_exclude` → пути относительно базы как есть (регистр
-    сохранён), через «/», без краевых «/» и пустых; «..» и абсолютные —
-    отбрасываются (выйти за базу исключение не может)."""
-    out: list[str] = []
-    for item in exclude or ():
-        if not isinstance(item, str):
-            continue
-        try:
-            parts = _parts(item)
-        except AccessError:
-            continue
-        if parts and "/".join(parts) not in out:
-            out.append("/".join(parts))
-    return out
-
-
-def kb_exclude_globs(kb_root, exclude=()) -> list[str]:
-    """Абсолютные шаблоны путей, которые агенту читать нельзя: для каждой
-    исключённой папки (или файла) — она сама и всё внутри
-    (`D:/kb/Личное`, `D:/kb/Личное/**`). Разделитель — «/». База не задана —
-    пусто. Формат правил конкретного CLI собирает цикл агента."""
+def kb_exclude_paths(kb_root, exclude=()) -> list[str]:
+    """Абсолютные пути исключённых папок (и файлов) базы, которые есть на
+    диске, — так, как они записаны на диске (запись «личное» → «…/Личное»),
+    после раскрытия ссылок; если исключённое — ссылка, то и сам путь ссылки.
+    Без синтаксиса шаблонов: имена с «[», «]», «*» — как есть. Вызывающий
+    отдаёт их провайдеру в `deny_paths` (правила своего CLI собирает слой
+    провайдеров). Несуществующее не возвращается; база не задана — пусто."""
     if not kb_root:
         return []
-    try:
-        base = Path(kb_root).resolve()
-    except OSError:
-        base = Path(kb_root).absolute()
+    root = _resolved(Path(kb_root))
     out: list[str] = []
-    for rel in exclude_paths(exclude):
-        target = base.joinpath(*rel.split("/")).as_posix()
-        out += [target, f"{target}/**"]
+    for item in exclude or ():
+        parts = kb_index.exclude_parts(item)
+        rel = kb_index.ondisk(root, "/".join(parts)) if parts else None
+        if not rel:
+            continue
+        link = root.joinpath(*rel.split("/"))
+        for path in (_resolved(link), link):
+            text = str(path)
+            if text not in out:
+                out.append(text)
     return out
 
 

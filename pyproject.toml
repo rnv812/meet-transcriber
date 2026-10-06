@@ -21,13 +21,14 @@ authors = [
 # несёт PortAudio), системный звук и сигналы детектора — помощник meet-audiotap;
 # pystray там не нужен (меню — у оболочки).
 # pypdf — текст PDF для материалов ассистента (meet.materials): чистый Python,
-# импорт ленивый; без него PDF подключается только названием.
+# импорт ленивый; без него PDF подключается только названием. Не ниже 6.19:
+# в 6.x — пределы распаковки потоков и исправления зацикливаний на битых PDF.
 dependencies = [
     "pystray; sys_platform == 'win32'", "pillow",
     "pycaw; sys_platform == 'win32'", "psutil",
     "pyaudiowpatch; sys_platform == 'win32'",
     "sounddevice>=0.4.6; sys_platform == 'darwin'",
-    "numpy", "scipy", "aiohttp", "claude-agent-sdk", "keyring", "pypdf",
+    "numpy", "scipy", "aiohttp", "claude-agent-sdk", "keyring", "pypdf>=6.19",
 ]
 
 [project.optional-dependencies]

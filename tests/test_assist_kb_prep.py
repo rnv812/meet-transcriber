@@ -114,7 +114,11 @@ def test_map_without_group_kb_or_when_switched_off(tmp_path):
     no_kb = kb_prep.KnowledgeBase(None, library_root=lib)
     assert no_kb.kb_map(group=alpha).startswith("Прошлые встречи группы «Проект Альфа»")
     off = kb_prep.KnowledgeBase(tmp_path / "kb", library_root=lib, show_map=False)
-    assert off.kb_map(group=alpha, current=current) == ""
+    hidden = off.kb_map(group=alpha, current=current)
+    # без структуры базы, но со встречами группы (это данные Meet, не базы)
+    assert "База знаний" not in hidden and "Проекты" not in hidden
+    assert hidden.startswith("Прошлые встречи группы «Проект Альфа»")
+    assert kb_prep.KnowledgeBase(tmp_path / "kb", show_map=False).kb_map() == ""
 
 
 def test_map_fits_the_budget_on_a_big_kb(tmp_path):
@@ -184,6 +188,11 @@ def test_read_limits(tmp_path, monkeypatch):
     "Личное/Дневник.md", "личное/дневник.md", "meet:../lib/x", "meet:2026-09-30_10-00/../../kb/Входящие.md",
     "meet:2026-09-30_10-00/meta.json", "meet:2026-09-30_10-00/sys.opus", "meet:.deleting-x", "meet:нет",
     "meet:2026-09-30_10-00/a/b", "Входящие.md\x00.png", 42,
+    # приёмы Windows: регистр, точки и пробелы в конце имени, потоки NTFS,
+    # длинные пути, устройства, переменные среды и домашняя папка
+    "ЛИЧНОЕ/Дневник.md", "Личное./Дневник.md", "Личное /Дневник.md", "Входящие.md::$DATA",
+    "\\\\?\\C:\\Windows\\win.ini", "CON", "CON.md", "NUL.md", "COM1.md", "AUX.txt", "Проекты/CON.md",
+    "~/секрет.md", "%USERPROFILE%/секрет.md", "..\\секрет.md",
 ])
 def test_paths_outside_or_excluded_are_rejected_everywhere(tmp_path, bad):
     kb, *_ = _base(tmp_path)
@@ -316,15 +325,67 @@ def test_for_settings(tmp_path):
     assert "Личное" in kb_prep.kb_map(kb)  # исключения — только из настроек
     off = settings.Settings.from_raw({"version": settings.SCHEMA_VERSION,
                                       "assistant": {"knowledge_dir": str(kb_dir)}, "assist": {"kb_map": False}})
-    assert kb_prep.for_settings(off, lib).kb_map(group=alpha) == ""
+    assert "База знаний" not in kb_prep.for_settings(off, lib).kb_map(group=alpha)
 
 
-def test_exclude_globs_for_agent_deny_rules(tmp_path):
+def test_exclude_paths_for_provider_deny_rules(tmp_path):
     kb_dir = _kb(tmp_path)
-    base = kb_dir.resolve().as_posix()
-    got = kb_prep.kb_exclude_globs(kb_dir, [" Личное/ ", "Работа\Клиенты", "../вне", "/abs", "", 5, "Личное"])
-    assert got == [f"{base}/Личное", f"{base}/Личное/**", f"{base}/Работа/Клиенты", f"{base}/Работа/Клиенты/**"]
-    assert all(g.startswith(base + "/") and "\\" not in g for g in got)
-    assert kb_prep.kb_exclude_globs(None, ["Личное/"]) == []
+    (kb_dir / "Work [old]").mkdir()
+    (kb_dir / "Работа" / "Клиенты").mkdir(parents=True)
+    base = kb_dir.resolve()
+    got = kb_prep.kb_exclude_paths(kb_dir, [" личное/ ", r"работа\клиенты", "Work [old]", "Нет такой",
+                                            "../вне", "/abs", "", 5, "Личное/*"])
+    # как на диске, абсолютные, без синтаксиса шаблонов, без повторов и несуществующего
+    assert got == [str(base / "Личное"), str(base / "Работа" / "Клиенты"), str(base / "Work [old]")]
+    assert kb_prep.kb_exclude_paths(None, ["Личное/"]) == []
     kb = kb_prep.KnowledgeBase(kb_dir, exclude=settings.KB_EXCLUDE_DEFAULT)
-    assert kb.exclude_globs() == [f"{base}/Личное", f"{base}/Личное/**", f"{base}/.trash", f"{base}/.trash/**"]
+    assert kb.exclude_paths() == [str(base / "Личное")]  # .trash нет на диске
+
+
+@pytest.mark.skipif(os.name == "nt", reason="«*» в имени папки Windows не допускает")
+def test_exclude_paths_keep_star_in_names(tmp_path):
+    kb_dir = tmp_path / "kb"
+    (kb_dir / "a*b").mkdir(parents=True)
+    (kb_dir / "aXb").mkdir()
+    assert kb_prep.kb_exclude_paths(kb_dir, ["a*b"]) == [str((kb_dir / "a*b").resolve())]
+
+
+def test_exclude_paths_name_the_link_and_its_target(tmp_path):
+    kb_dir = _kb(tmp_path)
+    secret = tmp_path / "секреты"
+    secret.mkdir()
+    _dir_link(secret, kb_dir / "Секреты")
+    got = kb_prep.kb_exclude_paths(kb_dir, ["секреты"])
+    assert got == [str(secret.resolve()), str(kb_dir.resolve() / "Секреты")]
+
+
+def test_group_folder_with_other_casing_is_listed_in_full(tmp_path):
+    kb, lib, alpha, _beta, current = _base(tmp_path)
+    groups.update(lib, alpha, kb_folder="проекты/альфа")  # без базы — как ввели
+    text = kb.kb_map(group=alpha, current=current)
+    assert "[папка группы] Проекты/Альфа/ — 3 документа:" in text
+    assert "Проекты/Альфа/ — 3" not in text.replace("[папка группы] Проекты/Альфа/", "")
+
+
+def test_a_broken_file_does_not_break_search_or_read(tmp_path):
+    kb, *_ = _base(tmp_path)
+    (kb.root / "Справочник" / "битый.docx").write_bytes(b"PK\x03\x04 not really a zip")
+    (kb.root / "Справочник" / "длинный.csv").write_text("a;b\nвебхуки;ок\nдлинное;\"" + "я" * 2_000_000 + "\"\n",
+                                                        encoding="utf-8")
+    got = kb.kb_search("вебхуки", "Справочник")
+    assert "error" not in got and got["hits"][0]["path"] == "Справочник/длинный.csv"
+    read = kb.kb_read(["Справочник/битый.docx", "Справочник/SLA.md"])
+    assert "error" in read[0] and read[1]["text"].startswith("[SLA]")
+
+
+def test_read_budget_spent_is_an_explicit_error(tmp_path, monkeypatch):
+    kb, *_ = _base(tmp_path)
+    monkeypatch.setattr(kb_prep, "READ_TOTAL_CHARS", 30)
+    first, second = kb.kb_read(["Проекты/Альфа/План запуска.md", "Справочник/SLA.md"])
+    assert first["truncated"] and second == {"path": "Справочник/SLA.md", "error": kb_prep.READ_SPENT}
+
+
+def test_meeting_header_is_dropped_when_no_meeting_fits(tmp_path):
+    kb, _lib, alpha, _beta, current = _base(tmp_path)
+    tiny = kb_prep.KnowledgeBase(kb.root, library_root=kb.library_root, show_map=False)
+    assert tiny.kb_map(group=alpha, current=current, budget_chars=70) == ""

@@ -21,6 +21,7 @@
   (буквальный поиск по словам в тексте, который разбирает этот модуль).
 """
 
+import codecs
 import csv
 import hashlib
 import io
@@ -28,6 +29,7 @@ import json
 import os
 import posixpath
 import re
+import threading
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -42,6 +44,8 @@ ASSISTANT_DIR = "assistant"
 MATERIALS_DIR = "materials"
 FILES_DIR = "files"
 FORMAT = 1
+# Последний выданный номер вложения (`a<N>`): id не переиспользуются.
+IDS_FILE = ".ids"
 
 MAX_INPUT_BYTES = 20 * 1024 * 1024
 MAX_TEXT_CHARS = 200_000
@@ -51,8 +55,22 @@ CHUNK_MIN = 800
 CHUNK_MAX = 1_200
 MAX_FOLDER_FILES = 200
 MAX_FOLDER_CHARS = 1_000_000
-# Распакованная часть OOXML больше этого — не читаем (zip-бомба).
-MAX_PART_BYTES = 64 * 1024 * 1024
+# Защита от бомб (архив в 200 КБ, распаковывающийся в гигабайты, миллионы
+# пустых элементов): распакованная часть OOXML — не больше MAX_PART_BYTES,
+# весь архив — не больше MAX_ARCHIVE_BYTES (считается то, что распаковалось
+# на деле, а не объявлено); служебные части деревом — не больше
+# MAX_DOM_BYTES, содержимое — только потоком. На файл — TIME_BUDGET_S
+# секунд. Упёрлись — разобранное остаётся, с предупреждением.
+MAX_PART_BYTES = 32 * 1024 * 1024
+MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
+MAX_DOM_BYTES = 8 * 1024 * 1024
+TIME_BUDGET_S = 10.0
+# Строк листа просматривается (и пустых тоже), общих строк xlsx — не больше.
+SHEET_SCAN_ROWS = 100_000
+MAX_SHARED_STRINGS = 1_000_000
+# Поле CSV длиннее — разбор останавливается (по умолчанию в csv — 128 КБ).
+CSV_FIELD_MAX = 1_000_000
+PDF_MAX_PAGES = 2_000
 # Сессия: вручную и из базы знаний — MAX_MATERIALS, папка базы знаний группы —
 # ещё MAX_GROUP_MATERIALS сверх; всего текста — MAX_SESSION_CHARS.
 MAX_MATERIALS = 30
@@ -74,6 +92,12 @@ NO_PDF_TEXT = "В PDF нет текста (скан) — модель видит
 PDF_LOCKED = "PDF защищён паролем — модель видит только название"
 TRUNCATED = "Текст длиннее {} символов — дальше обрезан"
 ROWS_CUT = "{}: взяты первые {} строк"
+CSV_BROKEN = "CSV разобран до строки {}: {}"
+PDF_PAGES_CUT = "В PDF больше {} страниц — взяты первые"
+PART_TOO_BIG = "Часть документа слишком большая после распаковки — разобрано начало"
+ARCHIVE_TOO_BIG = "Документ слишком большой после распаковки — разобрано начало"
+TOO_SLOW = "Разбор занял слишком долго — разобрано начало"
+EXCLUDED_KB = "Эта папка базы знаний закрыта для ассистента (исключения): {}"
 FOLDER_CUT = "В папке больше {} файлов — взяты первые"
 TOO_MANY = "В сессии уже {} материалов — уберите ненужные"
 TOO_MANY_GROUP = "Из папки группы уже подключено {} заметок"
@@ -96,6 +120,7 @@ class Parsed:
     warnings: list[str] = field(default_factory=list)
     sha256: str = ""
     size: int = 0
+    mtime_ns: int | None = None
 
     @property
     def chars(self) -> int:
@@ -198,15 +223,89 @@ def _finish(title: str, kind: str, sections: list[_Section], warnings: list[str]
     return Parsed(title=title, kind=kind, chunks=chunks, warnings=warnings)
 
 
+# --- бюджет разбора одного файла ---------------------------------------------------
+
+
+class _Limit(Exception):
+    """Разбор упёрся в предел: дальше не читаем, разобранное остаётся,
+    человеку — предупреждение (текст исключения)."""
+
+
+class _Budget:
+    """Пределы одного файла: время (TIME_BUDGET_S), распакованные байты
+    архива (MAX_ARCHIVE_BYTES), набранный текст (MAX_TEXT_CHARS — дальше
+    читать незачем)."""
+
+    def __init__(self) -> None:
+        self.deadline = time.monotonic() + TIME_BUDGET_S
+        self.unpacked = 0
+        self.chars = 0
+        self._ticks = 0
+
+    def tick(self, every: int = 1) -> None:
+        self._ticks += 1
+        if self._ticks % every == 0 and time.monotonic() > self.deadline:
+            raise _Limit(TOO_SLOW)
+
+    def unpack(self, n: int) -> None:
+        self.unpacked += n
+        if self.unpacked > MAX_ARCHIVE_BYTES:
+            raise _Limit(ARCHIVE_TOO_BIG)
+
+    def text(self, n: int) -> None:
+        self.chars += n
+
+    @property
+    def full(self) -> bool:
+        return self.chars >= MAX_TEXT_CHARS
+
+
+class _Capped(io.RawIOBase):
+    """Поток части архива со счётчиком: больше `cap` байт этой части или
+    MAX_ARCHIVE_BYTES всего архива, или вышло время — `_Limit`. Объявленному
+    в архиве размеру не верим: считаем то, что распаковалось на деле."""
+
+    def __init__(self, raw, budget: _Budget, cap: int) -> None:
+        super().__init__()
+        self.raw = raw
+        self.budget = budget
+        self.cap = cap
+        self.size = 0
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        self.budget.tick()
+        n = self.raw.readinto(buffer)
+        if n:
+            self.size += n
+            if self.size > self.cap:
+                raise _Limit(PART_TOO_BIG)
+            self.budget.unpack(n)
+        return n or 0
+
+    def close(self) -> None:
+        try:
+            self.raw.close()
+        finally:
+            super().close()
+
+
 # --- текст: md, txt, csv -----------------------------------------------------------
 
 
 def decode(data: bytes) -> str:
-    """UTF-8 (с BOM или без), иначе cp1251 — так пишут старые файлы Windows."""
-    try:
-        return data.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return data.decode("cp1251", errors="replace")
+    """UTF-16 с BOM (Блокнот, «Юникод»), UTF-8 (с BOM или без), иначе
+    cp1251 — так пишут старые файлы Windows. Нулевые символы убираются."""
+    if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        text = data.decode("utf-16", errors="replace")
+    else:
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = data.decode("cp1251", errors="replace")
+    return text.replace("\x00", "")
 
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
@@ -258,6 +357,8 @@ def parse_text(text: str, title: str, kind: str = "md") -> Parsed:
 
 
 def _csv(data: bytes, title: str) -> Parsed:
+    """Первые CSV_MAX_ROWS строк; поле длиннее CSV_FIELD_MAX или битая
+    строка — разбор останавливается с предупреждением, прочитанное остаётся."""
     text = decode(data)
     try:
         dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
@@ -265,14 +366,33 @@ def _csv(data: bytes, title: str) -> Parsed:
         dialect = csv.excel
     section = _Section(_rows_loc())
     warnings: list[str] = []
-    for i, row in enumerate(csv.reader(io.StringIO(text), dialect), start=1):
-        if i > CSV_MAX_ROWS:
-            warnings.append(ROWS_CUT.format(title, CSV_MAX_ROWS))
-            break
-        cells = [c.strip() for c in row if c and c.strip()]
-        if cells:
-            section.units.append((" | ".join(cells), i))
+    with _CSV_LOCK:
+        # Предел длины поля — общий для процесса: ставим свой и возвращаем.
+        saved = csv.field_size_limit(CSV_FIELD_MAX)
+        try:
+            reader = csv.reader(io.StringIO(text), dialect)
+            i = 0
+            while True:
+                try:
+                    row = next(reader)
+                except StopIteration:
+                    break
+                except csv.Error as e:
+                    warnings.append(CSV_BROKEN.format(i + 1, e))
+                    break
+                i += 1
+                if i > CSV_MAX_ROWS:
+                    warnings.append(ROWS_CUT.format(title, CSV_MAX_ROWS))
+                    break
+                cells = [c.strip() for c in row if c and c.strip()]
+                if cells:
+                    section.units.append((" | ".join(cells), i))
+        finally:
+            csv.field_size_limit(saved)
     return _finish(title, "csv", [section], warnings)
+
+
+_CSV_LOCK = threading.Lock()
 
 
 # --- OOXML: docx, pptx, xlsx ------------------------------------------------------
@@ -306,34 +426,60 @@ def _children(el, name: str):
     return [c for c in el if _local(c.tag) == name]
 
 
-def _part(z: zipfile.ZipFile, name: str) -> bytes | None:
+def _open(z: zipfile.ZipFile, name: str, budget: _Budget, cap: int | None = None) -> _Capped | None:
+    """Поток части архива под счётчиком или None, если части нет."""
     try:
         info = z.getinfo(name)
     except KeyError:
         return None
-    if info.file_size > MAX_PART_BYTES:
-        raise MaterialError(TOO_BIG)
-    with z.open(info) as f:
-        data = f.read(MAX_PART_BYTES + 1)
-    if len(data) > MAX_PART_BYTES:
-        raise MaterialError(TOO_BIG)
-    return data
+    return _Capped(z.open(info), budget, MAX_PART_BYTES if cap is None else cap)
 
 
-def _xml(z: zipfile.ZipFile, name: str):
-    data = _part(z, name)
-    if data is None:
+def _xml(z: zipfile.ZipFile, name: str, budget: _Budget):
+    """Небольшая служебная часть (связи, стили, список слайдов и листов)
+    деревом — не больше MAX_DOM_BYTES; битая — None."""
+    f = _open(z, name, budget, MAX_DOM_BYTES)
+    if f is None:
         return None
+    with f:
+        data = f.read()
     try:
         return ET.fromstring(data)
     except ET.ParseError:
         return None
 
 
-def _rels(z: zipfile.ZipFile, part: str) -> dict[str, tuple[str, str]]:
+def _stream(f: _Capped, budget: _Budget, want):
+    """Элементы части потоком: `want(elem)` — нужен ли элемент; отдаётся
+    самый внешний нужный по закрытии, и после обработки он, как и всё
+    прочее закрытое, отцепляется от родителя — в памяти только открытые
+    предки и текущий элемент. Битый XML — конец разбора части."""
+    stack: list = []
+    inside = 0
+    try:
+        with f:
+            for event, el in ET.iterparse(f, events=("start", "end")):
+                if event == "start":
+                    stack.append(el)
+                    if want(el):
+                        inside += 1
+                    continue
+                stack.pop()
+                budget.tick(4096)
+                if inside and want(el):
+                    inside -= 1
+                    if inside == 0:
+                        yield el
+                if inside == 0 and stack:
+                    stack[-1].remove(el)
+    except ET.ParseError:
+        return
+
+
+def _rels(z: zipfile.ZipFile, part: str, budget: _Budget) -> dict[str, tuple[str, str]]:
     """Связи части: Id → (тип, путь части внутри архива)."""
     base, name = posixpath.split(part)
-    root = _xml(z, posixpath.join(base, "_rels", name + ".rels"))
+    root = _xml(z, posixpath.join(base, "_rels", name + ".rels"), budget)
     out: dict[str, tuple[str, str]] = {}
     if root is None:
         return out
@@ -346,8 +492,8 @@ def _rels(z: zipfile.ZipFile, part: str) -> dict[str, tuple[str, str]]:
     return out
 
 
-def _main_part(z: zipfile.ZipFile, fallback: str) -> str:
-    for kind, path in _rels(z, "").values():
+def _main_part(z: zipfile.ZipFile, fallback: str, budget: _Budget) -> str:
+    for kind, path in _rels(z, "", budget).values():
         if kind.endswith("/officeDocument"):
             return path
     return fallback
@@ -360,29 +506,35 @@ def _by_type(rels: dict, suffix: str) -> str | None:
 _HEADING_NAME = re.compile(r"^(?:heading|заголовок)\s*(\d)", re.I)
 
 
-def _heading_styles(z: zipfile.ZipFile, document: str) -> dict[str, int]:
+def _outline_level(ppr) -> int | None:
+    """Уровень структуры из `w:outlineLvl`: 0–8 — заголовок 1–9; 9 — «основной
+    текст», не заголовок."""
+    outline = _child(ppr, "outlineLvl") if ppr is not None else None
+    value = _attr(outline, "val") if outline is not None else None
+    if value is not None and value.isdigit() and int(value) < 9:
+        return int(value) + 1
+    return None
+
+
+def _heading_styles(z: zipfile.ZipFile, document: str, budget: _Budget) -> dict[str, int]:
     """styleId → уровень заголовка: по имени стиля («heading 1», «Заголовок 2»,
     «Title») или по уровню структуры. Русский Word даёт стилям id вроде «1»,
     поэтому смотрим имя, а не id."""
-    styles = _by_type(_rels(z, document), "/styles") or "word/styles.xml"
-    root = _xml(z, styles)
+    styles = _by_type(_rels(z, document, budget), "/styles") or "word/styles.xml"
+    f = _open(z, styles, budget)
     out: dict[str, int] = {}
-    if root is None:
+    if f is None:
         return out
-    for style in root:
-        if _local(style.tag) != "style" or _attr(style, "type") not in (None, "paragraph"):
+    for style in _stream(f, budget, lambda el: _local(el.tag) == "style"):
+        if _attr(style, "type") not in (None, "paragraph"):
             continue
         sid = _attr(style, "styleId")
         name_el = _child(style, "name")
         name = (_attr(name_el, "val") or "") if name_el is not None else ""
-        ppr = _child(style, "pPr")
-        outline = _child(ppr, "outlineLvl") if ppr is not None else None
-        level = None
-        if outline is not None and (_attr(outline, "val") or "").isdigit():
-            level = int(_attr(outline, "val")) + 1
-        elif (m := _HEADING_NAME.match(name.strip())):
+        level = _outline_level(_child(style, "pPr"))
+        if level is None and (m := _HEADING_NAME.match(name.strip())):
             level = int(m.group(1))
-        elif name.strip().lower() in ("title", "заголовок", "название"):
+        elif level is None and name.strip().lower() in ("title", "заголовок", "название"):
             level = 1
         if sid and level is not None and level <= 9:
             out[sid] = level
@@ -402,14 +554,19 @@ def _w_text(el) -> str:
     return "".join(parts).strip()
 
 
-def _docx(z: zipfile.ZipFile, title: str) -> Parsed:
-    document = _main_part(z, "word/document.xml")
-    root = _xml(z, document)
-    if root is None:
+def _add(section: _Section, text: str, row: int | None, budget: _Budget) -> None:
+    section.units.append((text, row))
+    budget.text(len(text))
+
+
+def _docx(z: zipfile.ZipFile, title: str, sections: list[_Section], warnings: list[str],
+          budget: _Budget) -> None:
+    document = _main_part(z, "word/document.xml", budget)
+    f = _open(z, document, budget)
+    if f is None:
         raise MaterialError(BROKEN.format("документ Word"))
-    styles = _heading_styles(z, document)
-    body = _child(root, "body")
-    sections = [_Section("")]
+    styles = _heading_styles(z, document, budget)
+    sections.append(_Section(""))
 
     def heading_level(p) -> int | None:
         ppr = _child(p, "pPr")
@@ -419,81 +576,72 @@ def _docx(z: zipfile.ZipFile, title: str) -> Parsed:
         sid = _attr(style, "val") if style is not None else None
         if sid in styles:
             return styles[sid]
-        outline = _child(ppr, "outlineLvl")
-        if outline is not None and (_attr(outline, "val") or "").isdigit():
-            return int(_attr(outline, "val")) + 1
+        level = _outline_level(ppr)
+        if level is not None:
+            return level
         if sid and (m := _HEADING_NAME.match(sid)):
             return int(m.group(1))
         return None
 
-    def walk(el):
-        for node in el:
-            tag = _local(node.tag)
-            if tag == "p":
-                text = _w_text(node)
-                if not text:
+    # Абзацы и таблицы тела потоком, в порядке документа; обёртки (sdt,
+    # customXml) — не помеха: нужен самый внешний абзац или таблица.
+    for node in _stream(f, budget, lambda el: _local(el.tag) in ("p", "tbl") and "wordprocessingml" in _ns(el.tag)):
+        if _local(node.tag) == "p":
+            text = _w_text(node)
+            if not text:
+                continue
+            if heading_level(node) is not None:
+                sections.append(_Section(" ".join(text.split())))
+            _add(sections[-1], text, None, budget)
+        else:
+            for tr in node.iter():
+                if _local(tr.tag) != "tr":
                     continue
-                if heading_level(node) is not None:
-                    sections.append(_Section(" ".join(text.split())))
-                sections[-1].units.append((text, None))
-            elif tag == "tbl":
-                for tr in node.iter():
-                    if _local(tr.tag) != "tr":
-                        continue
-                    cells = [" ".join(_w_text(p) for p in tc.iter() if _local(p.tag) == "p").strip()
-                             for tc in _children(tr, "tc")]
-                    cells = [c for c in cells if c]
-                    if cells:
-                        sections[-1].units.append((" | ".join(cells), None))
-            elif tag not in ("sectPr",):
-                walk(node)  # sdt, customXml и прочие обёртки абзацев
-
-    if body is not None:
-        walk(body)
-    return _finish(title, "docx", sections, [])
+                cells = [" ".join(_w_text(p) for p in tc.iter() if _local(p.tag) == "p").strip()
+                         for tc in _children(tr, "tc")]
+                cells = [c for c in cells if c]
+                if cells:
+                    _add(sections[-1], " | ".join(cells), None, budget)
+        if budget.full:
+            break
 
 
-def _drawing_paragraphs(el) -> list[str]:
-    """Абзацы DrawingML (`a:p`) по порядку: текст прогонов, `a:br` — перевод строки."""
-    out: list[str] = []
-    for node in el.iter():
-        if _local(node.tag) != "p" or "drawingml" not in _ns(node.tag):
-            continue
-        parts: list[str] = []
-        for run in node.iter():
-            tag = _local(run.tag)
-            if tag == "t" and run.text:
-                parts.append(run.text)
-            elif tag == "br":
-                parts.append("\n")
-        text = "".join(parts).strip()
-        if text:
-            out.append(text)
-    return out
+def _paragraph_text(p) -> str:
+    parts: list[str] = []
+    for run in p.iter():
+        tag = _local(run.tag)
+        if tag == "t" and run.text:
+            parts.append(run.text)
+        elif tag == "br":
+            parts.append("\n")
+    return "".join(parts).strip()
+
+
+def _is_drawing_p(el) -> bool:
+    return _local(el.tag) == "p" and "drawingml" in _ns(el.tag)
 
 
 # Служебные заполнители страницы заметок: миниатюра слайда, номер, колонтитулы.
 _NOTES_SKIP = {"sldImg", "sldNum", "hdr", "ftr", "dt"}
 
 
-def _notes_text(root) -> list[str]:
+def _notes_text(f: _Capped, budget: _Budget) -> list[str]:
     out: list[str] = []
-    for shape in root.iter():
-        if _local(shape.tag) != "sp":
-            continue
+    for shape in _stream(f, budget, lambda el: _local(el.tag) == "sp"):
         ph = next((n for n in shape.iter() if _local(n.tag) == "ph"), None)
         if ph is not None and _attr(ph, "type") in _NOTES_SKIP:
             continue
-        out.extend(_drawing_paragraphs(shape))
+        out.extend(t for p in shape.iter() if _is_drawing_p(p) and (t := _paragraph_text(p)))
     return out
 
 
-def _pptx(z: zipfile.ZipFile, title: str) -> Parsed:
-    presentation = _main_part(z, "ppt/presentation.xml")
-    root = _xml(z, presentation)
+def _pptx(z: zipfile.ZipFile, title: str, sections: list[_Section], warnings: list[str],
+          budget: _Budget) -> None:
+    presentation = _main_part(z, "ppt/presentation.xml", budget)
+    root = _xml(z, presentation, budget)
     if root is None:
         raise MaterialError(BROKEN.format("презентация PowerPoint"))
-    rels = _rels(z, presentation)
+    rels = _rels(z, presentation, budget)
     slides: list[str] = []
     order = _child(root, "sldIdLst")
     for sld in order if order is not None else ():
@@ -504,20 +652,24 @@ def _pptx(z: zipfile.ZipFile, title: str) -> Parsed:
     if not slides:  # нет списка — по номерам файлов
         names = [n for n in z.namelist() if re.match(r"^ppt/slides/slide\d+\.xml$", n)]
         slides = sorted(names, key=lambda n: int(re.findall(r"\d+", n)[-1]))
-    sections: list[_Section] = []
     for i, part in enumerate(slides, start=1):
-        slide = _xml(z, part)
-        if slide is None:
+        if budget.full:
+            break
+        f = _open(z, part, budget)
+        if f is None:
             continue
-        section = _Section(f"слайд {i}", [(t, None) for t in _drawing_paragraphs(slide)])
-        notes_part = _by_type(_rels(z, part), "/notesSlide")
-        notes = _xml(z, notes_part) if notes_part else None
-        if notes is not None:
-            text = "\n".join(_notes_text(notes))
-            if text:
-                section.units.append((f"Заметки докладчика: {text}", None))
+        section = _Section(f"слайд {i}")
         sections.append(section)
-    return _finish(title, "pptx", sections, [])
+        for p in _stream(f, budget, _is_drawing_p):
+            text = _paragraph_text(p)
+            if text:
+                _add(section, text, None, budget)
+        notes_part = _by_type(_rels(z, part, budget), "/notesSlide")
+        notes = _open(z, notes_part, budget) if notes_part else None
+        if notes is not None:
+            text = "\n".join(_notes_text(notes, budget))
+            if text:
+                _add(section, f"Заметки докладчика: {text}", None, budget)
 
 
 def _number(value: str) -> str:
@@ -531,112 +683,126 @@ def _number(value: str) -> str:
 
 
 def _si_text(si) -> str:
-    """Текст общей строки без фонетических подсказок (`rPh`)."""
-    parts: list[str] = []
-
-    def walk(el):
-        for node in el:
-            tag = _local(node.tag)
-            if tag == "rPh":
-                continue
-            if tag == "t" and node.text:
-                parts.append(node.text)
-            walk(node)
-
-    walk(si)
-    return "".join(parts)
+    """Текст общей строки без фонетических подсказок (`rPh`) — обходом без
+    рекурсии: глубокая вложенность не роняет разбор."""
+    skip: set[int] = set()
+    for node in si.iter():
+        if _local(node.tag) == "rPh":
+            skip.update(id(x) for x in node.iter())
+    return "".join(node.text for node in si.iter()
+                   if _local(node.tag) == "t" and node.text and id(node) not in skip)
 
 
-def _sheet_rows(z: zipfile.ZipFile, part: str, shared: list[str], limit: int):
-    """Непустые строки листа [(номер, текст)] потоком: большой лист не
-    разворачивается в память целиком. → (строки, обрезан ли)."""
-    try:
-        info = z.getinfo(part)
-    except KeyError:
-        return [], False
+def _shared_strings(z: zipfile.ZipFile, part: str, budget: _Budget) -> list[str]:
+    f = _open(z, part, budget)
+    out: list[str] = []
+    if f is None:
+        return out
+    for si in _stream(f, budget, lambda el: _local(el.tag) == "si"):
+        out.append(_si_text(si))
+        if len(out) >= MAX_SHARED_STRINGS:
+            break
+    return out
+
+
+def _sheet_rows(f: _Capped, shared: list[str], budget: _Budget, name: str,
+                warnings: list[str]) -> list[tuple[int, str]]:
+    """Непустые строки листа [(номер, текст)] потоком. Каждая `<row>`, и
+    пустая тоже, считается к SHEET_SCAN_ROWS; непустых — не больше
+    SHEET_MAX_ROWS."""
     rows: list[tuple[int, str]] = []
-    count = 0
-    with z.open(info) as f:
+    seen = 0
+    for el in _stream(f, budget, lambda e: _local(e.tag) == "row"):
+        seen += 1
+        if seen > SHEET_SCAN_ROWS:
+            warnings.append(ROWS_CUT.format(f"лист {name}", SHEET_SCAN_ROWS))
+            break
         try:
-            for _event, el in ET.iterparse(f, events=("end",)):
-                if _local(el.tag) != "row":
-                    continue
-                count += 1
-                try:
-                    number = int(_attr(el, "r") or count)
-                except ValueError:
-                    number = count
-                cells: list[str] = []
-                for c in _children(el, "c"):
-                    kind = _attr(c, "t")
-                    v = _child(c, "v")
-                    raw = v.text if v is not None and v.text is not None else ""
-                    if kind == "s":
-                        text = shared[int(raw)] if raw.isdigit() and int(raw) < len(shared) else ""
-                    elif kind == "inlineStr":
-                        inline = _child(c, "is")
-                        text = _si_text(inline) if inline is not None else ""
-                    elif kind == "b":
-                        text = "TRUE" if raw == "1" else "FALSE" if raw == "0" else raw
-                    elif kind in ("str", "e"):
-                        text = raw
-                    else:
-                        text = _number(raw) if raw else ""
-                    text = " ".join(text.split())
-                    if text:
-                        cells.append(text)
-                el.clear()
-                if cells:
-                    if len(rows) >= limit:
-                        return rows, True
-                    rows.append((number, " | ".join(cells)))
-        except ET.ParseError:
-            pass
-    return rows, False
+            number = int(_attr(el, "r") or seen)
+        except ValueError:
+            number = seen
+        cells: list[str] = []
+        for c in _children(el, "c"):
+            kind = _attr(c, "t")
+            v = _child(c, "v")
+            raw = v.text if v is not None and v.text is not None else ""
+            if kind == "s":
+                text = shared[int(raw)] if raw.isdigit() and int(raw) < len(shared) else ""
+            elif kind == "inlineStr":
+                inline = _child(c, "is")
+                text = _si_text(inline) if inline is not None else ""
+            elif kind == "b":
+                text = "TRUE" if raw == "1" else "FALSE" if raw == "0" else raw
+            elif kind in ("str", "e"):
+                text = raw
+            else:
+                text = _number(raw) if raw else ""
+            text = " ".join(text.split())
+            if text:
+                cells.append(text)
+        if not cells:
+            continue
+        if len(rows) >= SHEET_MAX_ROWS:
+            warnings.append(ROWS_CUT.format(f"лист {name}", SHEET_MAX_ROWS))
+            break
+        line = " | ".join(cells)
+        rows.append((number, line))
+        budget.text(len(line))
+        if budget.full:
+            break
+    return rows
 
 
-def _xlsx(z: zipfile.ZipFile, title: str) -> Parsed:
-    workbook = _main_part(z, "xl/workbook.xml")
-    root = _xml(z, workbook)
+def _xlsx(z: zipfile.ZipFile, title: str, sections: list[_Section], warnings: list[str],
+          budget: _Budget) -> None:
+    workbook = _main_part(z, "xl/workbook.xml", budget)
+    root = _xml(z, workbook, budget)
     if root is None:
         raise MaterialError(BROKEN.format("таблица Excel"))
-    rels = _rels(z, workbook)
-    shared: list[str] = []
-    strings = _xml(z, _by_type(rels, "/sharedStrings") or "xl/sharedStrings.xml")
-    if strings is not None:
-        shared = [_si_text(si) for si in strings if _local(si.tag) == "si"]
+    rels = _rels(z, workbook, budget)
+    shared = _shared_strings(z, _by_type(rels, "/sharedStrings") or "xl/sharedStrings.xml", budget)
     sheets_el = _child(root, "sheets")
-    sections: list[_Section] = []
-    warnings: list[str] = []
     for sheet in sheets_el if sheets_el is not None else ():
+        if budget.full:
+            break
         name = _attr(sheet, "name") or "?"
         rid = next((v for k, v in sheet.attrib.items() if k.endswith("}id")), None)
         if rid not in rels:
             continue
-        rows, cut = _sheet_rows(z, rels[rid][1], shared, SHEET_MAX_ROWS)
-        if cut:
-            warnings.append(ROWS_CUT.format(f"лист {name}", SHEET_MAX_ROWS))
-        sections.append(_Section(_rows_loc(f"лист {name}, "), [(t, n) for n, t in rows]))
-    return _finish(title, "xlsx", sections, warnings)
+        f = _open(z, rels[rid][1], budget)
+        if f is None:
+            continue
+        section = _Section(_rows_loc(f"лист {name}, "))
+        sections.append(section)
+        section.units.extend((t, n) for n, t in _sheet_rows(f, shared, budget, name, warnings))
 
 
 _OOXML = {".docx": (_docx, "документ Word"), ".pptx": (_pptx, "презентация PowerPoint"),
           ".xlsx": (_xlsx, "таблица Excel")}
 
 
-def _ooxml(data: bytes, title: str, suffix: str) -> Parsed:
+def _ooxml(data: bytes, title: str, suffix: str, budget: _Budget) -> Parsed:
+    """Архив OOXML: упёрлись в предел (байты, время) — разобранное до него
+    остаётся, с предупреждением."""
     parse, what = _OOXML[suffix]
+    sections: list[_Section] = []
+    warnings: list[str] = []
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as z:
-            return parse(z, title)
-    except (zipfile.BadZipFile, zipfile.LargeZipFile, EOFError, KeyError, NotImplementedError) as e:
+        z = zipfile.ZipFile(io.BytesIO(data))
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, EOFError, ValueError) as e:
         raise MaterialError(BROKEN.format(what)) from e
+    with z:
+        try:
+            parse(z, title, sections, warnings, budget)
+        except _Limit as e:
+            warnings.append(str(e))
+    return _finish(title, suffix[1:], sections, warnings)
 
 
 # --- PDF --------------------------------------------------------------------------
 
 
-def _pdf(data: bytes, title: str) -> Parsed:
+def _pdf(data: bytes, title: str, budget: _Budget) -> Parsed:
     try:
         import pypdf  # ленивый импорт: модуль нужен только для PDF
     except ImportError:
@@ -644,85 +810,144 @@ def _pdf(data: bytes, title: str) -> Parsed:
     import logging
 
     logging.getLogger("pypdf").setLevel(logging.ERROR)  # шум о кривых PDF — не в журнал процесса
-    try:
-        reader = pypdf.PdfReader(io.BytesIO(data))
-        if reader.is_encrypted:
-            try:
-                if not reader.decrypt(""):
-                    return Parsed(title=title, kind="pdf", warnings=[PDF_LOCKED])
-            except Exception:
+    sections: list[_Section] = []
+    warnings: list[str] = []
+    reader = pypdf.PdfReader(io.BytesIO(data))
+    if reader.is_encrypted:
+        try:
+            if not reader.decrypt(""):
                 return Parsed(title=title, kind="pdf", warnings=[PDF_LOCKED])
-        sections: list[_Section] = []
-        total = 0
+        except Exception:
+            return Parsed(title=title, kind="pdf", warnings=[PDF_LOCKED])
+    try:
         for i, page in enumerate(reader.pages, start=1):
+            if i > PDF_MAX_PAGES:
+                warnings.append(PDF_PAGES_CUT.format(PDF_MAX_PAGES))
+                break
+            budget.tick()
             try:
                 text = page.extract_text() or ""
+            except _Limit:
+                raise
             except Exception:
                 text = ""
             units = [(p, None) for p in re.split(r"\n\s*\n", text) if p.strip()]
             if units:
                 sections.append(_Section(f"стр. {i}", units))
-                total += len(text)
-            if total > MAX_TEXT_CHARS:
+                budget.text(len(text))
+            if budget.full:
                 break
-    except Exception as e:
-        raise MaterialError(BROKEN.format("PDF")) from e
-    warnings = [] if sections else [NO_PDF_TEXT]
+    except _Limit as e:
+        warnings.append(str(e))
+    if not sections and not warnings:
+        warnings.append(NO_PDF_TEXT)
     return _finish(title, "pdf", sections, warnings)
 
 
 # --- разбор ------------------------------------------------------------------------
 
 
+_WHAT = {".md": "текст", ".txt": "текст", ".csv": "таблица CSV", ".pdf": "PDF",
+         **{k: v[1] for k, v in _OOXML.items()}}
+
+
 def parse_bytes(data: bytes, name: str) -> Parsed:
-    """Содержимое файла с именем `name` → Parsed (с хэшем и размером)."""
+    """Содержимое файла с именем `name` → Parsed (с хэшем и размером).
+    Любой сбой разборщика (битый архив, глубокая вложенность, нехватка
+    памяти) — MaterialError: один плохой файл не роняет вызывающего."""
     suffix = Path(name).suffix.lower()
     if suffix not in DOC_SUFFIXES:
         raise MaterialError(UNSUPPORTED.format(", ".join(DOC_SUFFIXES)))
     if len(data) > MAX_INPUT_BYTES:
         raise MaterialError(TOO_BIG)
     title = Path(name).name
-    if suffix in (".md", ".txt"):
-        parsed = parse_text(decode(data), title, suffix[1:])
-    elif suffix == ".csv":
-        parsed = _csv(data, title)
-    elif suffix == ".pdf":
-        parsed = _pdf(data, title)
-    else:
-        parsed = _ooxml(data, title, suffix)
+    budget = _Budget()
+    try:
+        if suffix in (".md", ".txt"):
+            parsed = parse_text(decode(data), title, suffix[1:])
+        elif suffix == ".csv":
+            parsed = _csv(data, title)
+        elif suffix == ".pdf":
+            parsed = _pdf(data, title, budget)
+        else:
+            parsed = _ooxml(data, title, suffix, budget)
+    except MaterialError:
+        raise
+    except Exception as e:  # RecursionError, MemoryError, csv.Error, zlib.error, RuntimeError…
+        raise MaterialError(BROKEN.format(_WHAT[suffix])) from e
     parsed.sha256 = hashlib.sha256(data).hexdigest()
     parsed.size = len(data)
     return parsed
 
 
+def _read_file(path: Path) -> tuple[bytes, os.stat_result]:
+    """Байты файла не больше MAX_INPUT_BYTES (+1, чтобы заметить больший) и
+    его размер и время правки — с того же открытого файла, до чтения."""
+    try:
+        with open(path, "rb") as f:
+            st = os.fstat(f.fileno())
+            if st.st_size > MAX_INPUT_BYTES:
+                raise MaterialError(TOO_BIG)
+            data = f.read(MAX_INPUT_BYTES + 1)
+    except FileNotFoundError:
+        raise MaterialError(NOT_FOUND.format(path.name)) from None
+    except IsADirectoryError:
+        raise MaterialError(NOT_FOUND.format(path.name)) from None
+    except PermissionError as e:
+        raise MaterialError(f"Файл не прочитать: {path.name} ({e.strerror or e})") from None
+    except OSError as e:
+        raise MaterialError(f"Файл не прочитать: {path.name} ({e.strerror or e})") from None
+    if len(data) > MAX_INPUT_BYTES:
+        raise MaterialError(TOO_BIG)
+    return data, st
+
+
 def parse(path) -> Parsed:
-    """Файл → Parsed{title, kind, chunks[{n, loc, text}], warnings}."""
+    """Файл → Parsed{title, kind, chunks[{n, loc, text}], warnings}; размер и
+    время правки — того, что прочитано и захэшировано."""
     path = Path(path)
     if path.suffix.lower() not in DOC_SUFFIXES:
         raise MaterialError(UNSUPPORTED.format(", ".join(DOC_SUFFIXES)))
-    try:
-        if path.stat().st_size > MAX_INPUT_BYTES:
-            raise MaterialError(TOO_BIG)
-        data = path.read_bytes()
-    except FileNotFoundError:
-        raise MaterialError(NOT_FOUND.format(path.name)) from None
-    except OSError as e:
-        raise MaterialError(f"Файл не прочитать: {path.name} ({e.strerror or e})") from None
-    return parse_bytes(data, path.name)
+    data, st = _read_file(path)
+    parsed = parse_bytes(data, path.name)
+    parsed.mtime_ns = st.st_mtime_ns
+    return parsed
 
 
-def folder_files(root, *, limit: int | None = None, suffixes=DOC_SUFFIXES,
-                 exclude=()) -> tuple[list[Path], bool]:
+def folder_files(root, *, limit: int | None = None, suffixes=DOC_SUFFIXES, exclude=(),
+                 base=None) -> tuple[list[Path], bool]:
     """Поддерживаемые файлы папки рекурсивно, по порядку имён, без служебных
-    и скрытых папок (как у `kb_index`) → (файлы, есть ли ещё сверх `limit`)."""
+    и скрытых папок (как у `kb_index`) → (файлы, есть ли ещё сверх `limit`).
+    `exclude` — пути относительно `base` (корня базы знаний; по умолчанию —
+    самой папки); исключённое не берётся, в том числе через ссылки."""
     root = Path(root)
     limit = MAX_FOLDER_FILES if limit is None else limit
     out: list[Path] = []
-    for path in kb_index.walk_kb(root, suffixes=suffixes, exclude=exclude):
+    prefixes = kb_index.exclude_prefixes(exclude)
+    base_real = _real(base) if base is not None else None
+    for path in kb_index.walk_kb(root, suffixes=suffixes, exclude=() if base is not None else exclude):
+        if base_real is not None and _excluded_in(path, base_real, prefixes):
+            continue
         if len(out) >= limit:
             return out, True
         out.append(path)
     return out, False
+
+
+def _real(path) -> Path:
+    try:
+        return Path(path).resolve()
+    except OSError:
+        return Path(path).absolute()
+
+
+def _excluded_in(path: Path, kb_real: Path, prefixes) -> bool:
+    """Путь (после ссылок) — в исключённой папке базы знаний `kb_real`."""
+    try:
+        rel = _real(path).relative_to(kb_real).as_posix()
+    except ValueError:
+        return False  # вне базы — материал вручную, исключения базы не про него
+    return kb_index.is_excluded("" if rel == "." else rel, prefixes)
 
 
 def folder_fingerprint(files: list[Path], root: Path) -> str:
@@ -737,13 +962,13 @@ def folder_fingerprint(files: list[Path], root: Path) -> str:
     return h.hexdigest()
 
 
-def parse_folder(root) -> Parsed:
+def parse_folder(root, *, exclude=(), base=None) -> Parsed:
     """Папка целиком — один материал: до MAX_FOLDER_FILES файлов, место
-    фрагмента — «файл, место в файле»."""
+    фрагмента — «файл, место в файле». `exclude`/`base` — как у folder_files."""
     root = Path(root)
     if not root.is_dir():
         raise MaterialError(NOT_FOUND.format(root.name))
-    files, more = folder_files(root)
+    files, more = folder_files(root, exclude=exclude, base=base)
     chunks: list[dict] = []
     warnings: list[str] = [FOLDER_CUT.format(MAX_FOLDER_FILES)] if more else []
     total = 0
@@ -816,16 +1041,28 @@ def claim_id(folder, ext: str) -> tuple[str, Path]:
     sub = MATERIALS_DIR if ext == ".json" else FILES_DIR
     target_dir = assistant_dir(folder) / sub
     target_dir.mkdir(parents=True, exist_ok=True)
-    with library.file_lock(assistant_dir(folder) / ".ids"):
-        n = max(_taken_ids(folder), default=0) + 1
+    counter = assistant_dir(folder) / IDS_FILE
+    with library.file_lock(counter):
+        try:
+            last = int(counter.read_text(encoding="utf-8").strip() or 0)
+        except (OSError, ValueError):
+            last = 0
+        # Счётчик только растёт: id убранного вложения не выдаётся снова, и
+        # старые ссылки журнала не укажут на новое.
+        n = max(last, max(_taken_ids(folder), default=0)) + 1
         while True:
             path = target_dir / f"a{n}{ext}"
             try:
                 with open(path, "x", encoding="utf-8"):
                     pass
-                return f"a{n}", path
+                break
             except FileExistsError:
                 n += 1
+        try:
+            counter.write_text(str(n), encoding="utf-8")
+        except OSError:
+            pass  # без счётчика — по наибольшему занятому, как раньше
+        return f"a{n}", path
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -890,7 +1127,7 @@ def status(record: dict) -> str:
     if meta.get("kind") == "folder":
         if not path.is_dir():
             return "missing"
-        files, _ = folder_files(path)
+        files, _ = folder_files(path, exclude=meta.get("exclude") or (), base=meta.get("kb_root"))
         return "ok" if folder_fingerprint(files, path) == source.get("sha256") else "changed"
     try:
         st = path.stat()
@@ -941,17 +1178,24 @@ def _kb_path(path, kb_root) -> tuple[Path, str | None]:
     return full, rel.as_posix()
 
 
-def add(folder, path, *, origin: str = "file", kb_root=None, summary: str | None = None,
+def add(folder, path, *, origin: str = "file", kb_root=None, exclude=None, summary: str | None = None,
         kind: str | None = None) -> dict:
     """Разобрать файл или папку и положить в материалы записи → описание
     (`attachment`). Тот же файл с тем же содержимым уже есть — его описание с
     `"duplicate": True`. `kb_root` — корень базы знаний: путь может быть
-    относительным от него, в описании — `kb_ref`. `summary` — готовая сводка;
-    у заметок базы знаний без неё — первый абзац и заголовки. `kind` —
-    вид для окна (`kb_note`, `past_meeting`); по умолчанию — вид файла."""
+    относительным от него, в описании — `kb_ref`; тогда обязателен и
+    `exclude` (`assist.kb_exclude`): исключённая заметка — отказ, из папки
+    исключённое не берётся. `summary` — готовая сводка; у заметок базы знаний
+    без неё — первый абзац и заголовки. `kind` — вид для окна (`kb_note`,
+    `past_meeting`); по умолчанию — вид файла."""
     if origin not in ORIGINS:
         raise MaterialError(f"неизвестный источник материала: {origin}")
+    if kb_root is not None and exclude is None:
+        raise TypeError("materials.add: с kb_root нужен exclude (assist.kb_exclude)")
+    exclude = tuple(exclude or ())
     full, kb_ref = _kb_path(path, kb_root)
+    if kb_root is not None and _excluded_in(full, _real(kb_root), kb_index.exclude_prefixes(exclude)):
+        raise MaterialError(EXCLUDED_KB.format(kb_ref or Path(path).name))
     existing = records(folder)
     is_dir = full.is_dir()
     for record in existing:
@@ -962,17 +1206,16 @@ def add(folder, path, *, origin: str = "file", kb_root=None, summary: str | None
     count = sum(1 for r in existing if ((r.get("meta") or {}).get("origin") in GROUP_ORIGINS) == group)
     if count >= (MAX_GROUP_MATERIALS if group else MAX_MATERIALS):
         raise MaterialError((TOO_MANY_GROUP if group else TOO_MANY).format(count))
-    parsed = parse_folder(full) if is_dir else parse(full)
+    parsed = parse_folder(full, exclude=exclude, base=kb_root) if is_dir else parse(full)
     used = sum(int((r.get("meta") or {}).get("chars") or 0) for r in existing)
     if used + parsed.chars > MAX_SESSION_CHARS:
         raise MaterialError(TOO_MUCH_TEXT)
     if summary is None:
         summary = outline(parsed) if origin in ("kb", "kb_folder", "past_meeting") else ""
-    try:
-        st = full.stat()
-        size, mtime_ns = (parsed.size if not is_dir else 0), st.st_mtime_ns
-    except OSError:
-        size, mtime_ns = parsed.size, None
+    if is_dir:
+        size, mtime_ns = 0, None
+    else:  # то, что прочитано и захэшировано, — не stat после разбора
+        size, mtime_ns = parsed.size, parsed.mtime_ns
     aid, target = claim_id(folder, ".json")
     meta = {"title": parsed.title, "kind": parsed.kind, "origin": origin, "added_at": time.time(),
             "source": {"path": str(full), "sha256": parsed.sha256, "size": size, "mtime_ns": mtime_ns},
@@ -981,6 +1224,8 @@ def add(folder, path, *, origin: str = "file", kb_root=None, summary: str | None
         meta["view"] = kind
     if kb_ref:
         meta["kb_ref"] = kb_ref
+    if is_dir and kb_root is not None:
+        meta.update(kb_root=str(kb_root), exclude=list(exclude))
     record = {"v": FORMAT, "id": aid, "meta": meta, "summary": summary or "", "chunks": parsed.chunks}
     try:
         _write_json(target, record)

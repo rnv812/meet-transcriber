@@ -171,9 +171,12 @@ def save_file(folder, path) -> dict:
     """Изображение с диска (перетаскивание, «📎»): исходник не трогается."""
     path = Path(path)
     try:
-        if path.stat().st_size > MAX_INPUT_BYTES:
+        # Не больше предела (+1, чтобы заметить больший): файл мог вырасти
+        # между проверкой и чтением.
+        with open(path, "rb") as f:
+            data = f.read(MAX_INPUT_BYTES + 1)
+        if len(data) > MAX_INPUT_BYTES:
             raise AttachmentError(TOO_BIG)
-        data = path.read_bytes()
     except FileNotFoundError:
         raise AttachmentError(f"Файла нет: {path.name}") from None
     except OSError as e:

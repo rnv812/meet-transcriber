@@ -1021,7 +1021,19 @@ def test_assist_kb_exclude_from_hand_edits():
     assert exclude("Личное") == ("Личное",)
     assert exclude(None) == settings.KB_EXCLUDE_DEFAULT
     assert exclude({"a": 1}) == settings.KB_EXCLUDE_DEFAULT
-    assert exclude(["A/", 5, None, "a/"]) == ("A/",)
+    assert exclude(["A/", 5, None, "a/", "../вне", "/abs"]) == ("A/",)
+
+
+def test_assist_kb_exclude_junk_fails_closed(capsys):
+    """Приватность: список без единой годной записи — не «без исключений»,
+    а исключения по умолчанию и строка в журнале."""
+    def exclude(value):
+        return settings.Assist.from_raw({"kb_exclude": value}).kb_exclude
+
+    for junk in ([1, 2], [""], ["  "], [None], ["../x", "C:/y"], {"a": 1}, 7):
+        assert exclude(junk) == settings.KB_EXCLUDE_DEFAULT, junk
+    assert "assist.kb_exclude негодно" in capsys.readouterr().err
+    assert exclude([]) == ()  # только явный пустой список — «без исключений»
     # старый конфиг без ключей — значения по умолчанию
     old = settings.Assist.from_raw({"activity": "active", "max_hints": 3})
     assert settings.Assist.from_raw({"kb_map": "false"}).kb_map is False

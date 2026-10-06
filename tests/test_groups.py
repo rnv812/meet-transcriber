@@ -591,3 +591,14 @@ def test_hand_edited_kb_folder_is_ignored_but_kept(tmp_path):
     assert _file(tmp_path)["groups"][0]["kb_folder"] == "../вне"  # чужое не стирается
     with pytest.raises(groups.GroupError, match="нечего менять"):
         groups.update(tmp_path, "g-1")
+
+
+def test_kb_folder_takes_the_on_disk_casing_when_the_kb_is_known(tmp_path):
+    kb = tmp_path / "kb"
+    (kb / "Проекты" / "Альфа").mkdir(parents=True)
+    lib = tmp_path / "lib"
+    gid = groups.create(lib, "Альфа")["id"]
+    assert groups.update(lib, gid, kb_folder="проекты/альфа", kb_root=kb)["kb_folder"] == "Проекты/Альфа"
+    # папки ещё нет — как ввели
+    assert groups.update(lib, gid, kb_folder="Новая/Папка", kb_root=kb)["kb_folder"] == "Новая/Папка"
+    assert groups.update(lib, gid, kb_folder="проекты/альфа")["kb_folder"] == "проекты/альфа"  # без базы
