@@ -8,9 +8,10 @@
 //
 // macOS (экспериментально): файл выпуска — образ диска
 // `Meet_<версия>_aarch64.dmg` (заглавная M: шаблон Windows `meet_…_x64-setup.exe`
-// его не примет, и наоборот). Скачанный и сверенный образ открывается в
-// Finder, приложение выходит — заменить Meet в «Программах» человек
-// перетаскиванием (сами не подменяем: приложение не подписано).
+// его не примет, и наоборот). Скачанный и сверенный образ ставится на место
+// работающего Meet.app после проверки подписи, приложение перезапускается
+// (`mac_update.rs`); папка недоступна на запись — образ открывается в
+// Finder, и Meet заменяют перетаскиванием, как раньше.
 //
 // Всё, что проверяется без сети, — чистые функции с тестами: сравнение
 // версий, разбор выпуска, выбор файла, разбор сумм, отказ во время записи.
@@ -32,7 +33,6 @@ use crate::logs::shell_log;
 use crate::netproxy::{self, InternetSettings};
 use crate::platform::{self, Os};
 use crate::resident;
-use crate::tray;
 use crate::upgrade;
 
 /// Откуда берутся обновления — единственное место с именем репозитория.
@@ -368,6 +368,21 @@ pub fn parse_sums(text: &str, name: &str) -> Option<String> {
     })
 }
 
+/// Чем закончилась «Скачать и установить» (окно выбирает текст).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Outcome {
+    /// Windows: установщик запущен, приложение выходит.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    Installer,
+    /// macOS: новая версия встанет на место старой после выхода и запустится.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    InPlace,
+    /// macOS: образ открыт в Finder — заменить Meet перетаскиванием.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Manual,
+}
+
 /// Ответ `check_update` окну.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UpdateCheck {
@@ -594,14 +609,14 @@ fn refusal_now(confirmed: bool) -> Option<&'static str> {
 /// `confirmed` — человек согласился прервать идущую расшифровку
 /// (см. WORK_IN_PROGRESS).
 #[tauri::command]
-pub async fn install_update(app: AppHandle, confirmed: Option<bool>) -> Result<(), String> {
+pub async fn install_update(app: AppHandle, confirmed: Option<bool>) -> Result<Outcome, String> {
     let confirmed = confirmed.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || install_blocking(&app, confirmed))
         .await
         .map_err(|error| error.to_string())?
 }
 
-fn install_blocking(app: &AppHandle, confirmed: bool) -> Result<(), String> {
+fn install_blocking(app: &AppHandle, confirmed: bool) -> Result<Outcome, String> {
     let _busy = Busy::begin()?;
     CANCEL.store(false, AtomicOrdering::SeqCst);
     if let Some(refusal) = refusal_now(confirmed) {
@@ -753,14 +768,20 @@ fn download(
 
 /// Запустить установщик и выйти штатно. Установщик и сам закроет
 /// приложение (`--quit` в `hooks.nsh`), но выход отсюда быстрее и тот же.
-/// macOS: `open` показывает образ диска в Finder; приложение выходит, чтобы
-/// его можно было заменить перетаскиванием в «Программы».
-fn launch_and_quit(app: &AppHandle, installer: &Path) -> Result<(), String> {
+/// macOS — `mac_update::apply`.
+#[cfg(not(target_os = "macos"))]
+fn launch_and_quit(app: &AppHandle, installer: &Path) -> Result<Outcome, String> {
     shell_log!("обновление: запускаю {}", installer.display());
     crate::windows::shell_execute(&installer.to_string_lossy())
         .map_err(|code| format!("Не удалось запустить установщик (код {code})"))?;
-    tray::quit(app);
-    Ok(())
+    crate::tray::quit(app);
+    Ok(Outcome::Installer)
+}
+
+/// macOS: заменить Meet.app на месте или открыть образ (`mac_update.rs`).
+#[cfg(target_os = "macos")]
+fn launch_and_quit(app: &AppHandle, image: &Path) -> Result<Outcome, String> {
+    crate::mac_update::apply(app, image)
 }
 
 #[cfg(test)]
@@ -1215,6 +1236,14 @@ mod tests {
             ..windows
         };
         assert_eq!(proxy_url(None, &disabled), None);
+    }
+
+    #[test]
+    fn outcome_names_match_the_window() {
+        // Окно (About.tsx) сверяет эти строки дословно.
+        assert_eq!(json!(Outcome::Installer), json!("installer"));
+        assert_eq!(json!(Outcome::InPlace), json!("in-place"));
+        assert_eq!(json!(Outcome::Manual), json!("manual"));
     }
 
     #[test]

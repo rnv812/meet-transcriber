@@ -18,6 +18,7 @@ mod engine;
 mod install_wait;
 mod live_panel;
 mod logs;
+mod mac_update;
 mod netproxy;
 mod platform;
 mod pty;
