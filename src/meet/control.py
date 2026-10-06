@@ -792,6 +792,9 @@ _ROUTES = {
         (p.get("q") or [""])[0], filters=_filter_params(p)),
     ("POST", "/groups"): lambda h, p: _server_of(h).state.create_group(h._body()),
     ("PUT", "/groups/order"): lambda h, p: _server_of(h).state.order_groups(h._body()),
+    # Участники встреч для подсказок поиска: [{name, meetings, last_at, owner}].
+    ("GET", "/participants"): lambda h, p: _server_of(h).state.participants(
+        (p.get("q") or [""])[0], limit=_int_param(p, "limit", 20)),
     ("POST", "/recording/start"): lambda h, p: _server_of(h).state.start_recording(),
     ("POST", "/recording/stop"): lambda h, p: _server_of(h).state.stop_recording(),
     ("POST", "/recording/cancel"): lambda h, p: _server_of(h).state.stop_recording(

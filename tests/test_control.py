@@ -127,6 +127,10 @@ class FakeState:
             raise control.BadRequest("группы нет")
         return {"changed": body.get("add", []), "failed": []}
 
+    def participants(self, q="", limit=20):
+        self.calls.append(("participants", q, limit))
+        return [{"name": "Анна", "meetings": 2, "last_at": None, "owner": False}]
+
     def categories(self, q="", filters=None):
         self.calls.append(("categories", q))
         self.filters = filters
@@ -1345,3 +1349,11 @@ def test_group_routes(server):
     _post(server, "/groups/g-none/members", {"add": ["r1"]}, expect=400)
     assert _post(server, "/groups/g-1", method="DELETE")["index"] == 0
     assert ("delete_group", "g-1") in calls
+
+
+def test_participants_route(server):
+    got = _get(server, "/participants?q=%D0%B0%D0%BD&limit=5")
+    assert got == [{"name": "Анна", "meetings": 2, "last_at": None, "owner": False}]
+    assert ("participants", "ан", 5) in server.state_obj.calls
+    _get(server, "/participants")
+    assert ("participants", "", 20) in server.state_obj.calls

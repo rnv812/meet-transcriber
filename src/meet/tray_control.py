@@ -2064,6 +2064,14 @@ class TrayControl:
             self._groups_changed("members", gid)
         return got
 
+    def participants(self, q: str | None = None, limit: int = 20) -> list[dict]:
+        """Участники встреч для подсказок `участник:` (имена из расшифровок),
+        владелец микрофона — последним (meet.library_filter.participants)."""
+        from meet import library_filter, search, segvoices
+
+        return library_filter.participants(search.cards(self._root()), q or "", limit,
+                                           owners=segvoices.owners())
+
     def categories(self, q: str | None = None, filters: dict | None = None) -> dict:
         """Категории: нынешний список, стандартный («Сбросить к стандартным»)
         и сколько встреч в каждой (подтверждение удаления, счётчики фильтра в

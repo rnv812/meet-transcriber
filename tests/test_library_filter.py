@@ -200,3 +200,33 @@ def test_category_counts_respect_the_other_filters(state, lib):
     info = state.categories(filters={"groups": "g-alpha", "categories": "retro"})
     # свой фасет (категории) в счётчиках не участвует, остальные — да
     assert info["counts"] == {"daily": 1} and info["none"] == 1
+
+
+# --- участники для подсказок (GET /participants) ----------------------------------------
+
+
+def test_participants_rank_by_meetings_owner_last():
+    cards = [_card(people=["Анна", "Вы", "Борис"], started_at="2026-10-01T10:00:00"),
+             _card(people=["Анна", "Вы"], started_at="2026-10-03T10:00:00"),
+             _card(people=["Борис Петров", "Вы"], started_at="2026-10-02T10:00:00"),
+             _card(people=["Глеб"], started_at=None)]
+    got = library_filter.participants(cards, owners={"Вы"})
+    assert got == [
+        {"name": "Анна", "meetings": 2, "last_at": "2026-10-03T10:00:00", "owner": False},
+        {"name": "Борис Петров", "meetings": 1, "last_at": "2026-10-02T10:00:00", "owner": False},
+        {"name": "Борис", "meetings": 1, "last_at": "2026-10-01T10:00:00", "owner": False},
+        {"name": "Глеб", "meetings": 1, "last_at": None, "owner": False},
+        {"name": "Вы", "meetings": 3, "last_at": "2026-10-03T10:00:00", "owner": True},
+    ]
+    assert [p["name"] for p in library_filter.participants(cards, q="пет", owners={"Вы"})] == ["Борис Петров"]
+    assert [p["name"] for p in library_filter.participants(cards, q="бор", owners=set())] == [
+        "Борис Петров", "Борис"]
+    assert len(library_filter.participants(cards, limit=2, owners={"Вы"})) == 2
+
+
+def test_participants_route(state, lib):
+    got = state.participants("", 20)
+    # поровну встреч — раньше тот, с кем встречались позже
+    assert [(p["name"], p["meetings"]) for p in got] == [("Анна", 2), ("Борис", 2)]
+    assert [p["name"] for p in state.participants("ан", 20)] == ["Анна"]
+    assert ("GET", "/participants") in control._ROUTES

@@ -183,3 +183,29 @@ def from_params(params: dict | None, cfg=None) -> LibraryFilter:
         min_s=_seconds(params, "min_s"), max_s=_seconds(params, "max_s"),
         title_only=where == "title", known_categories=known,
     )
+
+
+def participants(cards, q: str = "", limit: int = 20, owners=()) -> list[dict]:
+    """Участники встреч для подсказок `участник:` — только имена из
+    расшифровок (`people` карточек): [{name, meetings, last_at, owner}], чаще
+    встречавшиеся раньше (поровну — с кем виделись позже), владелец
+    (`owners` — его подписи) последним. `q` — начало слов имени."""
+    want = _words(q or "")
+    seen: dict[str, dict] = {}
+    for card in cards:
+        for name in card.get("people") or ():
+            if not isinstance(name, str):
+                continue
+            item = seen.setdefault(name, {"name": name, "meetings": 0, "last_at": None,
+                                          "owner": name in owners})
+            item["meetings"] += 1
+            at = card.get("started_at")
+            if isinstance(at, str) and (item["last_at"] is None or at > item["last_at"]):
+                item["last_at"] = at
+    found = [p for p in seen.values()
+             if all(any(w.startswith(x) for w in _words(p["name"])) for x in want)]
+    # Сортировка устойчива: сначала имя, потом «позже — раньше», потом число встреч.
+    found.sort(key=lambda p: p["name"].casefold())
+    found.sort(key=lambda p: p["last_at"] or "", reverse=True)
+    found.sort(key=lambda p: (p["owner"], -p["meetings"]))
+    return found[:max(0, limit)]
