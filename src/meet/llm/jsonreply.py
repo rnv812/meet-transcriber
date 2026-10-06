@@ -33,6 +33,10 @@ _BRACE_RUN = re.compile(r"\{+")
 # зациклившегося ответа линеен по его длине, а не кубичен.
 _SCANS = 8
 _CUT_TRIES = 50
+# Глубже ответы моделей не бывают: зациклившийся `{"a": 1, {"a": 1, …` без
+# предела растил бы стек, и снимок стека на каждой запятой делал проход
+# квадратичным. Глубже — проход кончается обрывом (берутся целые части).
+_MAX_DEPTH = 64
 UNFINISHED = "модель не закончила рассуждение (лимит токенов или контекста) — ответа нет"
 
 
@@ -60,7 +64,8 @@ def strip_reasoning(text: str) -> tuple[str, bool]:
 
 def _scan(src: str, start: int):
     """Проход от `{` в `start`: → (конец объекта или None, места обрыва).
-    Место обрыва — (позиция, открытые скобки): до неё всё целое."""
+    Место обрыва — (позиция, открытые скобки): до неё всё целое. Глубже
+    `_MAX_DEPTH` — конец прохода, как обрыв."""
     stack: list[str] = []
     cuts: list[tuple[int, str]] = []
     in_str = esc = False
@@ -77,6 +82,8 @@ def _scan(src: str, start: int):
         if ch == '"':
             in_str = True
         elif ch in "{[":
+            if len(stack) >= _MAX_DEPTH:
+                return None, cuts
             stack.append(ch)
         elif ch in "}]":
             if not stack:
@@ -156,6 +163,16 @@ def _unwrap(obj: dict, expected: tuple[str, ...]) -> dict:
         if isinstance(value, dict) and any(k in value for k in expected):
             return value
     return obj
+
+
+def iter_objects(text: str) -> Iterator[dict]:
+    """Все JSON-объекты текста по порядку (верхнего уровня; у массива — его
+    объекты): терпимо к прозе вокруг, оградам ```, висячим запятым и обрыву
+    (у оборванного — его целые части). Рассуждение `<think>` не снимает —
+    сначала `strip_reasoning`. Разбор линейный, как у `extract_object`."""
+    budget = {"scans": _SCANS, "cuts": _CUT_TRIES}
+    for obj, _cut in _objects(text or "", budget):
+        yield obj
 
 
 def extract_object(text: str, expected: Iterable[str] = (), info: dict | None = None) -> dict:
