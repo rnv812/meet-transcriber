@@ -62,7 +62,8 @@ const key = (term: string) => term.toLowerCase().replace(/ё/g, "е").split(/\s+
 
 /** Убрать строку с термином (последнюю такую — её добавило «Исправить…»), остальное как есть. */
 export function removeTerm(text: string, term: string): string {
-  const lines = text.split(/(?<=\n)/);
+  // Строки вместе с переводами строк (без просмотра назад — его нет в WebKit macOS 13.0–13.2).
+  const lines = text.match(/[^\n]*\n|[^\n]+$/g) ?? [""];
   const want = term.split(/\s+/).filter(Boolean).join(" ");
   for (let i = lines.length - 1; i >= 0; i--) {
     if ((lines[i]!.split("#", 1)[0] ?? "").trim() === want) return [...lines.slice(0, i), ...lines.slice(i + 1)].join("");

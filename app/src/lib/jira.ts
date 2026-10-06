@@ -18,8 +18,12 @@ import type { JiraPhrase, JiraRef, JiraRefs, JiraSource } from "./types";
 
 export const DEFAULT_JIRA_KEYS = "[A-Z][A-Z0-9]+-\\d+";
 const MAX_LEN = 200;
-/** https://хост[:порт][/путь] — без логина, запроса и фрагмента. */
-const BASE = /^https:\/\/(?![.-])[A-Za-z0-9.-]+(?<![.-])(?::\d{1,5})?(?:\/[A-Za-z0-9._~%/-]*)?$/;
+/**
+ * https://хост[:порт][/путь] — без логина, запроса и фрагмента; узел не
+ * начинается и не кончается точкой или дефисом. Без просмотра назад: его нет
+ * в WebKit macOS 13.0–13.2 (webkit.test.ts).
+ */
+const BASE = /^https:\/\/[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d{1,5})?(?:\/[A-Za-z0-9._~%/-]*)?$/;
 const PROJECTS = /^[A-Z][A-Z0-9]+(?:\s*,\s*[A-Z][A-Z0-9]+)*$/;
 /** Синтаксис, которого нет в JavaScript (или который понимается по-разному в Python и JS). */
 const NOT_PORTABLE = /\(\?[aiLmsux#P]/;
@@ -143,7 +147,9 @@ export function jiraLinker(settings: Record<string, unknown> | null | undefined)
   if (!base || jiraBaseError(base)) return null;
   try {
     return {
-      re: new RegExp(`(?<![\\p{L}\\p{N}_-])(?:${literalPattern(integrations)})(?![\\p{L}\\p{N}_])`, "gu"),
+      // Слева — не буква, не цифра и не дефис: это проверяет findJira (KEY_BEFORE);
+      // просмотра назад нет в WebKit macOS 13.0–13.2.
+      re: new RegExp(`(?:${literalPattern(integrations)})(?![\\p{L}\\p{N}_])`, "gu"),
       base: base.replace(/\/+$/, ""),
     };
   } catch {
@@ -173,6 +179,8 @@ export type JiraCard = JiraLinker & {
 };
 
 const WORD_CHAR = /[\p{L}\p{N}_]/u;
+/** Что не может стоять перед ключом, написанным текстом. */
+const KEY_BEFORE = /[\p{L}\p{N}_-]/u;
 
 /**
  * Ссылки в тексте: ключи, написанные текстом (шаблон из настроек), и фразы
@@ -182,7 +190,7 @@ export function findJira(text: string, linker: JiraCard | JiraLinker | null): Ji
   if (!linker || !text) return [];
   const out: JiraMatch[] = [];
   for (const m of text.matchAll(linker.re)) {
-    if (!m[0]) continue;
+    if (!m[0] || KEY_BEFORE.test(text[m.index! - 1] ?? "")) continue;
     out.push({ start: m.index!, end: m.index! + m[0].length, key: m[0] });
   }
   const phrases = (linker as JiraCard).phrases;
