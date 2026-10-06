@@ -27,6 +27,16 @@
 отдельно (битая часть отбрасывается, остальные принимаются). Невалидный JSON
 или битые части — одна попытка исправления.
 
+Локальные модели отвечают неаккуратно: JSON в ```json и с текстом вокруг,
+рассуждение <think>, номера строками, свои имена полей, шкала 0–10, обрыв
+ответа — это разбирается (`meet.llm.jsonreply`, синонимы `_ALIASES`).
+Локальную модель к тому же просят отвечать строго по схеме
+(`response_schema`, если сервер умеет). Пустые главы длинной встречи — сбой,
+а не ответ: просим исправить. Чего модель так и не дала — в `missing`
+(окно скажет «Модель вернула анализ без глав», а не покажет молча пустую
+полосу плеера), сколько элементов отброшено проверкой — в `dropped`; ни одной
+части — анализ не удался.
+
 Длинная встреча (больше WINDOW_CHARS символов) размечается окнами с
 перекрытием ~10 %; окон не больше MAX_WINDOWS (дальше — равномерная выборка).
 Результаты окон сливаются: типы и важность по номерам (в перекрытии важность
@@ -87,11 +97,43 @@ _ISSUE_KEY = re.compile(r"([A-Z][A-Z0-9_]{1,19})-([1-9][0-9]{0,5})")
 
 ANALYZE_TIMEOUT_S = 600.0
 FINAL_TIMEOUT_S = 180.0
+# С этого числа реплик в окне пустая важность — не ответ, а сбой: просим исправить.
+IMPORTANCE_MIN_LINES = 8
 
 # Как называть части разметки в промпте и сообщениях об ошибках.
 _SECTION_OF = {"types": "phrase_types", "importance": "importance", "chapters": "chapters",
                "insights": "insights", "category": "category", "title": "title",
                "issues": "issues"}
+# Части разметки для человека (чего модель не дала — `missing`).
+PART_NAMES = {"types": "типы реплик", "importance": "важность", "chapters": "главы",
+              "insights": "наблюдения", "category": "категория", "title": "название",
+              "issues": "ссылки на задачи"}
+
+# Локальные модели называют поля и значения по-своему: имена частей, ключи
+# элементов, типы по-русски, важность словами или по десятибалльной шкале.
+_ALIASES = {"types": ("phrase_types", "types", "phraseTypes", "phrase_type"),
+            "importance": ("importance", "importances", "importance_scores"),
+            "chapters": ("chapters", "sections"),
+            "insights": ("insights", "observations"),
+            "category": ("category",), "title": ("title", "meeting_title"),
+            "issues": ("issues", "jira_issues"), "summary": ("summary",)}
+_TYPE_ALIASES = {"утверждение": "statement", "вопрос": "question", "идея": "idea",
+                 "предложение": "idea", "решение": "decision", "задача": "task",
+                 "поручение": "task", "риск": "risk", "проблема": "risk", "согласие": "agreement",
+                 "возражение": "objection"}
+_INSIGHT_ALIASES = {"наблюдение": "insight", "вывод": "insight", "противоречие": "contradiction",
+                    "внимание": "attention", "follow-up": "followup", "follow_up": "followup",
+                    "действие": "followup"}
+_LEVELS = {"high": 0.9, "высокая": 0.9, "medium": 0.6, "средняя": 0.6, "low": 0.3, "низкая": 0.3}
+_INDEX_KEYS = ("i", "index", "idx", "id", "n", "segment", "номер")
+_TYPE_KEYS = ("type", "kind", "тип", "value")
+_SCORE_KEYS = ("importance", "score", "value", "weight", "важность")
+_START_KEYS = ("start_i", "start", "start_index", "from", "begin", "first")
+_END_KEYS = ("end_i", "end", "end_index", "to", "last")
+_TITLE_KEYS = ("title", "name", "heading", "topic", "название")
+_SHORT_KEYS = ("short", "label", "short_title")
+_EMPTY_ERROR = {"chapters": "chapters пустой: нужны главы по смене темы разговора",
+                "importance": "importance пустой: укажи важность реплик"}
 
 
 class AnalysisError(RuntimeError):
@@ -360,39 +402,86 @@ def _index(key, valid: set[int]) -> int | None:
 
 
 def _number(value) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        if isinstance(value, str):
-            try:
-                value = float(value.replace(",", "."))
-            except ValueError:
-                return None
-        else:
+    score = _score(value)
+    return None if score is None else round(max(0.0, min(1.0, score)), 3)
+
+
+def _score(value) -> float | None:
+    """Число из ответа: число, «0,8», «high»/«высокая»; без приведения к 0..1."""
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in _LEVELS:
+            return _LEVELS[text]
+        try:
+            value = float(text.replace(",", "."))
+        except ValueError:
             return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
     if value != value:  # NaN
         return None
-    return round(max(0.0, min(1.0, float(value))), 3)
+    return float(value)
 
 
-def _types(raw, valid) -> dict[str, str]:
-    if not isinstance(raw, dict):
-        raise ValueError("phrase_types должен быть объектом {номер: тип}")
-    out = {}
-    for key, value in raw.items():
-        i = _index(key, valid)
-        kind = str(value).strip().lower() if isinstance(value, str) else None
-        if i is not None and kind in PHRASE_TYPES:
-            out[str(i)] = kind
+def _bump(drop: dict | None, key: str) -> None:
+    if drop is not None:
+        drop[key] = drop.get(key, 0) + 1
+
+
+def _first(item: dict, keys):
+    return next((item[k] for k in keys if item.get(k) is not None), None)
+
+
+def _pairs(raw, value_keys) -> list[tuple]:
+    """{номер: значение} или список [{"i": номер, "score": …}] / [[номер, значение]]
+    → пары (номер, значение)."""
+    if isinstance(raw, dict):
+        return list(raw.items())
+    out = []
+    for item in raw:
+        if isinstance(item, dict):
+            out.append((_first(item, _INDEX_KEYS), _first(item, value_keys)))
+        elif isinstance(item, (list, tuple)) and len(item) == 2:
+            out.append((item[0], item[1]))
     return out
 
 
-def _importance(raw, valid) -> dict[str, float]:
-    if not isinstance(raw, dict):
-        raise ValueError("importance должен быть объектом {номер: число}")
+def _types(raw, valid, drop: dict | None = None) -> dict[str, str]:
+    if not isinstance(raw, (dict, list)):
+        raise ValueError("phrase_types должен быть объектом {номер: тип}")
     out = {}
-    for key, value in raw.items():
-        i, score = _index(key, valid), _number(value)
-        if i is not None and score is not None:
-            out[str(i)] = score
+    for key, value in _pairs(raw, _TYPE_KEYS):
+        kind = str(value).strip().lower() if isinstance(value, str) else None
+        kind = _TYPE_ALIASES.get(kind, kind)
+        if kind not in PHRASE_TYPES:
+            continue
+        i = _index(key, valid)
+        if i is None:
+            _bump(drop, "types")
+            continue
+        out[str(i)] = kind
+    return out
+
+
+def _importance(raw, valid, drop: dict | None = None) -> dict[str, float]:
+    """Важность 0..1. Шкала 0–10 или 0–100 (так отвечает хотя бы половина
+    оценок) — переводится; отдельная оценка больше 1 — просто 1."""
+    if not isinstance(raw, (dict, list)):
+        raise ValueError("importance должен быть объектом {номер: число}")
+    scored = [(key, _score(value)) for key, value in _pairs(raw, _SCORE_KEYS)]
+    numbers = [v for _, v in scored if v is not None]
+    scale = 1.0
+    if numbers and 2 * sum(v > 1 for v in numbers) >= len(numbers):
+        scale = 10.0 if max(numbers) <= 10 else 100.0
+    out = {}
+    for key, value in scored:
+        if value is None:
+            continue
+        i = _index(key, valid)
+        if i is None:
+            _bump(drop, "importance")
+            continue
+        out[str(i)] = round(max(0.0, min(1.0, value / scale)), 3)
     return out
 
 
@@ -400,23 +489,42 @@ def _short_of(title: str) -> str:
     return _flat(title, CHAPTER_SHORT_MAX)
 
 
-def _chapters(raw, valid) -> list[dict]:
+def _span(value) -> tuple[int | None, int | None]:
+    """Отрезок главы иначе: [12, 30] или «12-30»."""
+    if isinstance(value, (list, tuple)) and value:
+        return _int(value[0]), _int(value[-1])
+    if isinstance(value, str) and "-" in value:
+        a, _, b = value.partition("-")
+        return _int(a), _int(b)
+    return None, None
+
+
+def _chapters(raw, valid, drop: dict | None = None) -> list[dict]:
+    """Главы ответа. Отрезок целиком за пределами реплик (окна) —
+    отбрасывается, задевающий их край — обрезается по краю."""
     if not isinstance(raw, list):
         raise ValueError("chapters должен быть списком")
+    lo, hi = (min(valid), max(valid)) if valid else (None, None)
     out = []
     for item in raw:
         if not isinstance(item, dict):
+            _bump(drop, "chapters")
             continue
-        title = _flat(item.get("title") or "", CHAPTER_TITLE_MAX)
-        if not title:
-            continue
-        start, end = _int(item.get("start_i")), _int(item.get("end_i"))
+        title = _flat(_first(item, _TITLE_KEYS) or "", CHAPTER_TITLE_MAX)
+        start, end = _int(_first(item, _START_KEYS)), _int(_first(item, _END_KEYS))
         if start is None:
+            start, end = _span(item.get("segments") or item.get("range"))
+        if not title or start is None:
+            _bump(drop, "chapters")
             continue
-        if end is None:
-            end = start
-        short = _flat(item.get("short") or "", CHAPTER_SHORT_MAX) or _short_of(title)
-        out.append({"start_i": start, "end_i": max(start, end), "title": title, "short": short})
+        end = start if end is None else max(start, end)
+        if lo is not None and (start > hi or end < lo):
+            _bump(drop, "chapters")
+            continue
+        if lo is not None:
+            start, end = max(start, lo), min(end, hi)
+        short = _flat(_first(item, _SHORT_KEYS) or "", CHAPTER_SHORT_MAX) or _short_of(title)
+        out.append({"start_i": start, "end_i": end, "title": title, "short": short})
     return out
 
 
@@ -474,6 +582,7 @@ def _insights(raw, valid) -> list[dict]:
         if not isinstance(item, dict):
             continue
         kind = str(item.get("kind") or "").strip().lower()
+        kind = _INSIGHT_ALIASES.get(kind, kind)
         text = _flat(item.get("text") or "", INSIGHT_TEXT_MAX)
         if kind not in INSIGHT_KINDS or not text:
             continue
@@ -569,39 +678,46 @@ def _issues(raw, valid, texts: dict[int, str], projects) -> list[dict]:
 
 
 def parse(text: str, features, *, valid: set[int], category_ids=(), summary: bool = False,
-          texts: dict[int, str] | None = None, projects=()):
+          texts: dict[int, str] | None = None, projects=(), need=(), drop: dict | None = None,
+          info: dict | None = None):
     """Ответ модели → (части, ошибки). Части разбираются по отдельности: битая
     отбрасывается с ошибкой, остальные принимаются. Нет JSON вовсе — ValueError.
     `texts` — {номер: текст реплики} и `projects` — ключи проектов Jira: для
-    проверки `issues`."""
-    from meet.assist.live_state import PatchError, parse_reply
+    проверки `issues`. `need` — части, которые не могут быть пустыми (главы
+    длинной встречи): пустая — ошибка, как битая. `drop` — сколько элементов
+    каждой части отброшено (номер вне встречи, глава без названия);
+    `info["seen"]` — какие части разобрались, `info["truncated"]` — ответ оборван."""
+    from meet.llm.jsonreply import extract_object
 
-    try:
-        data = parse_reply(text)
-    except PatchError as e:
-        raise ValueError(str(e)) from None
+    wanted = [f for f in FEATURES if f in features] + (["summary"] if summary else [])
+    info = {} if info is None else info
+    data = extract_object(text, [k for f in wanted for k in _ALIASES[f]], info)
     result: dict = {}
     errors: list[str] = []
+    seen = info.setdefault("seen", set())
     checks = {
-        "types": lambda raw: _types(raw, valid),
-        "importance": lambda raw: _importance(raw, valid),
-        "chapters": lambda raw: _chapters(raw, valid),
+        "types": lambda raw: _types(raw, valid, drop),
+        "importance": lambda raw: _importance(raw, valid, drop),
+        "chapters": lambda raw: _chapters(raw, valid, drop),
         "insights": lambda raw: _insights(raw, valid),
         "category": lambda raw: _category(raw, set(category_ids)),
         "title": lambda raw: clean_title(raw) if raw is not None else None,
         "issues": lambda raw: _issues(raw, valid, texts or {}, set(projects)),
     }
-    wanted = [f for f in FEATURES if f in features] + (["summary"] if summary else [])
     for feature in wanted:
-        key = _SECTION_OF.get(feature, feature)
-        if key not in data:
-            errors.append(f"нет поля {key}")
+        key = next((k for k in _ALIASES[feature] if k in data), None)
+        if key is None:
+            errors.append(f"нет поля {_SECTION_OF.get(feature, feature)}")
             continue
         try:
             value = _summary(data[key]) if feature == "summary" else checks[feature](data[key])
         except ValueError as e:
             errors.append(str(e))
             continue
+        if feature in need and not value:
+            errors.append(_EMPTY_ERROR[feature])
+            continue
+        seen.add(feature)
         if value is not None:
             result[feature] = value
     return result, errors
@@ -610,9 +726,44 @@ def parse(text: str, features, *, valid: set[int], category_ids=(), summary: boo
 # --- вызов модели ---------------------------------------------------------------
 
 
-def _call(runner, prompt: str, system: str, timeout_s: float) -> str:
-    """Один вызов модели без инструментов (только текст встречи в промпте)."""
-    reply = runner(prompt, system_prompt=system, allowed_dirs=(), timeout_s=timeout_s, max_turns=2)
+def response_schema(features, *, summary: bool = False, category_ids=()) -> dict:
+    """JSON Schema ответа окна — для сервера, который умеет отвечать строго по
+    схеме (локальная модель, `response_format: json_schema`). Те же части и
+    поля, что в системном промпте; значения проверяет `parse`."""
+    string, integer, number = {"type": "string"}, {"type": "integer"}, {"type": "number"}
+
+    def nullable(schema: dict) -> dict:
+        return {"anyOf": [schema, {"type": "null"}]}
+
+    def obj(props: dict) -> dict:
+        return {"type": "object", "properties": props, "required": list(props)}
+
+    parts = {
+        "types": {"type": "object", "additionalProperties": {"type": "string", "enum": list(PHRASE_TYPES)}},
+        "importance": {"type": "object", "additionalProperties": number},
+        "chapters": {"type": "array", "items": obj(
+            {"start_i": integer, "end_i": integer, "title": string, "short": string})},
+        "insights": {"type": "array", "items": obj(
+            {"kind": {"type": "string", "enum": list(INSIGHT_KINDS)}, "text": string,
+             "refs": {"type": "array", "items": integer}, "why": string})},
+        "category": nullable(obj({"id": {"type": "string", "enum": list(category_ids)} if category_ids
+                                  else string, "confidence": number})),
+        "title": nullable(string),
+        "issues": {"type": "array", "items": obj(
+            {"key": string, "segments": {"type": "array", "items": integer}, "spoken": string,
+             "confidence": number})},
+    }
+    props = {_SECTION_OF[f]: parts[f] for f in FEATURES if f in features}
+    if summary:
+        props["summary"] = nullable(string)
+    return obj(props)
+
+
+def _call(runner, prompt: str, system: str, timeout_s: float, schema: dict | None = None) -> str:
+    """Один вызов модели без инструментов (только текст встречи в промпте).
+    `schema` — JSON Schema ответа (только локальной модели, см. `response_schema`)."""
+    extra = {"response_schema": schema} if schema is not None else {}
+    reply = runner(prompt, system_prompt=system, allowed_dirs=(), timeout_s=timeout_s, max_turns=2, **extra)
     if inspect.isawaitable(reply):
         reply = asyncio.run(reply)
     if reply.error:
@@ -622,30 +773,61 @@ def _call(runner, prompt: str, system: str, timeout_s: float) -> str:
 
 def ask_model(runner, prompt: str, system: str, features, *, valid: set[int], category_ids=(),
               summary: bool = False, timeout_s: float = ANALYZE_TIMEOUT_S,
-              texts: dict[int, str] | None = None, projects=()) -> tuple[dict, list[str]]:
-    """Вызов с одной попыткой исправления: JSON не разобрался или часть битая —
-    просим исправить; из двух ответов берётся по каждой части годная."""
+              texts: dict[int, str] | None = None, projects=(), need=(), schema: dict | None = None,
+              report: dict | None = None) -> tuple[dict, list[str]]:
+    """Вызов с одной попыткой исправления: JSON не разобрался или часть битая
+    (или пустая из `need`) — просим исправить; из двух ответов берётся по
+    каждой части годная. Ни одной нужной части ни в одном ответе — ValueError.
+    `report` — сводка для analysis.json: `seen` (разобравшиеся части),
+    `dropped` (отброшено элементов по частям), `truncated` (ответ оборван)."""
     def attempt(text: str):
+        drop: dict = {}
+        info: dict = {}
         try:
-            return parse(text, features, valid=valid, category_ids=category_ids, summary=summary,
-                         texts=texts, projects=projects)
+            got, errs = parse(text, features, valid=valid, category_ids=category_ids, summary=summary,
+                              texts=texts, projects=projects, need=need, drop=drop, info=info)
         except ValueError as e:
-            return None, [str(e)]
+            return None, [str(e)], drop, info
+        return got, errs, drop, info
 
-    text = _call(runner, prompt, system, timeout_s)
-    first, errors = attempt(text)
-    if first is not None and not errors:
-        return first, []
+    def note(*tries) -> None:
+        if report is None:
+            return
+        dropped = report.setdefault("dropped", {})
+        # Отброшенное считается по ответу, из которого часть взята.
+        taken: set = set()
+        for got, _errs, drop, info in tries:
+            if got is None:
+                continue
+            fresh = info.get("seen", set()) - taken
+            taken |= fresh
+            for feature in fresh:
+                if drop.get(feature):
+                    dropped[feature] = dropped.get(feature, 0) + drop[feature]
+            report["truncated"] = report.get("truncated", False) or bool(info.get("truncated"))
+        report.setdefault("seen", set()).update(taken)
+
+    text = _call(runner, prompt, system, timeout_s, schema)
+    first = attempt(text)
+    if first[0] is not None and not first[1]:
+        note(first)
+        return first[0], []
+    errors = first[1]
     try:
-        fixed_text = _call(runner, build_repair(prompt, text, "; ".join(errors)), system, timeout_s)
+        fixed_text = _call(runner, build_repair(prompt, text, "; ".join(errors)), system, timeout_s, schema)
     except RuntimeError as e:
         fixed_text, errors = "", errors + [str(e)]
-    second, more = attempt(fixed_text) if fixed_text else (None, [])
+    second = attempt(fixed_text) if fixed_text else (None, [], {}, {})
     # По каждой части — из первого ответа, если она там годная, иначе из исправленного.
-    merged = {**(second or {}), **(first or {})}
-    if first is None and second is None:
-        raise ValueError("; ".join(errors + more) or "модель вернула не JSON")
-    return merged, more if second is not None else errors
+    merged = {**(second[0] or {}), **(first[0] or {})}
+    wanted = [f for f in FEATURES if f in features] + (["summary"] if summary else [])
+    seen = first[3].get("seen", set()) | second[3].get("seen", set())
+    if first[0] is None and second[0] is None:
+        raise ValueError("; ".join(errors + second[1]) or "модель вернула не JSON")
+    if not any(f in seen for f in wanted):
+        raise ValueError("в ответе модели нет нужных частей: " + "; ".join(errors + second[1]))
+    note(first, second)
+    return merged, second[1] if second[0] is not None else errors
 
 
 # --- слияние окон ---------------------------------------------------------------
@@ -796,6 +978,9 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     kb = _kb_excerpts(cfg.assistant.knowledge_dir, lines)
     total_lo, total_hi = chapter_target(_duration(data) / 60.0)
     results, summaries, errors = [], [], []
+    # Локальную модель просим отвечать строго по схеме (если сервер умеет).
+    strict = provider == "openai-compatible"
+    report: dict = {"seen": set(), "dropped": {}, "truncated": False}
     # Ход по окнам и итоговому вызову (meet.llm_progress): вес части — её объём.
     llm_progress.plan(bus, [("analyze", sum(len(t) for _, t in p)) for p in parts]
                       + ([("analyze-final", 3000)] if final_features else []))
@@ -814,10 +999,16 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
         else:
             system = build_system((), categories, summary=True)
         prompt = build_prompt(part, header=header, part=(n, len(parts)) if multi else None, kb=kb)
+        # Пустые главы длинной встречи и пустая важность разговора — сбой, а не ответ.
+        need = tuple(f for f in ("chapters", "importance") if f in window_features and (
+            (f == "chapters" and (multi or total_lo > 0)) or (f == "importance" and len(part) >= IMPORTANCE_MIN_LINES)))
+        schema = response_schema(window_features, summary=bool(final_features),
+                                 category_ids=category_ids) if strict else None
         try:
             got, errs = ask_model(runner, prompt, system, window_features,
                                   valid={i for i, _ in part}, category_ids=category_ids,
-                                  summary=bool(final_features), texts=texts, projects=jira[0])
+                                  summary=bool(final_features), texts=texts, projects=jira[0],
+                                  need=need, schema=schema, report=report)
         except (ValueError, RuntimeError) as e:
             errors.append(f"часть {n}: {e}")
             continue
@@ -842,13 +1033,27 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
                             "Верни JSON."])
         try:
             got, errs = ask_model(runner, prompt, system, final_features, valid=valid,
-                                  category_ids=category_ids, timeout_s=FINAL_TIMEOUT_S)
+                                  category_ids=category_ids, timeout_s=FINAL_TIMEOUT_S, report=report,
+                                  schema=response_schema(final_features, category_ids=category_ids)
+                                  if strict else None)
             merged.update({k: v for k, v in got.items() if k in final_features})
             errors += [f"итог: {e}" for e in errs]
         except (ValueError, RuntimeError) as e:
             errors.append(f"итог: {e}")
+    # Части, которых модель так и не дала (нет поля, битая, пустые главы
+    # длинной встречи): окно скажет об этом, а не покажет молча пустую полосу.
+    missing = [f for f in features if f not in report["seen"]]
+    if not set(features) - set(missing):
+        raise AnalysisError("модель вернула анализ без нужных частей: " + "; ".join(errors))
+    if report["truncated"]:
+        errors.insert(0, "ответ модели оборван (лимит токенов или контекста модели) — взяты целые части")
     doc = to_file(merged, features, fingerprint(data), model=model_label(provider, cfg),
                   now=now, errors=errors)
+    if missing:
+        doc["missing"] = missing
+    if any(report["dropped"].values()):
+        # Сколько элементов отброшено проверкой (номер реплики вне встречи и т. п.).
+        doc["dropped"] = {k: v for k, v in report["dropped"].items() if v}
     # Число сегментов: устаревший анализ (правили текст) окно показывает, пока
     # номера реплик те же — то есть пока сегментов столько же (M3).
     doc["segments"] = len(data.get("segments") or [])

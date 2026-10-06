@@ -678,6 +678,8 @@ ANALYZE_WAIT_S = 1800.0
 
 def _analysis_text(doc: dict | None) -> str:
     """Коротко о разметке для человека."""
+    from meet import analysis
+
     if not doc:
         return "Анализа нет\n"
     lines = []
@@ -696,6 +698,10 @@ def _analysis_text(doc: dict | None) -> str:
         lines.append(f"Размечено реплик по типу: {len(doc['phrase_types'])}")
     if "importance" in doc:
         lines.append(f"Оценено реплик по важности: {len(doc['importance'])}")
+    missing = [analysis.PART_NAMES.get(f, f) for f in doc.get("missing") or []]
+    if missing:
+        lines.append(f"Модель не дала: {', '.join(missing)} — попробуйте другую модель")
+    lines += [f"  ! {w}" for w in (doc.get("warnings") or [])[:5]]
     return "\n".join(lines) + "\n"
 
 

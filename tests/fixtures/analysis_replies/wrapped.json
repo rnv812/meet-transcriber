@@ -1,0 +1,4 @@
+{"analysis": {"phrase_types": {"2": "decision"}, "importance": {"2": 0.9, "4": 0.8},
+  "chapters": [{"start_i": 0, "end_i": 2, "title": "План на неделю", "short": "План"},
+               {"start_i": 4, "end_i": 5, "title": "Задачи и риски", "short": "Задачи"}],
+  "insights": [], "category": null, "title": "Планирование недели"}}

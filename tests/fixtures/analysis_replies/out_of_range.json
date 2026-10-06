@@ -1,0 +1,6 @@
+{"phrase_types": {"2": "decision", "77": "task"},
+ "importance": {"2": 0.9, "4": 0.8, "120": 1.0},
+ "chapters": [{"start_i": 0, "end_i": 2, "title": "План на неделю", "short": "План"},
+              {"start_i": 4, "end_i": 99, "title": "Задачи и риски", "short": "Задачи"},
+              {"start_i": 57, "end_i": 80, "title": "Глава из другой встречи", "short": "Чужая"}],
+ "insights": [], "category": null, "title": "Планирование недели"}

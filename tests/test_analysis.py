@@ -298,12 +298,12 @@ def test_long_meeting_uses_windows_and_a_final_call_for_category_and_title(tmp_p
     lines = analysis.compact_lines(library.read_transcript(folder))
     n = len(_ORIG_WINDOWS(lines, limit=6000))
     assert n >= 2
-    window = {"phrase_types": {}, "importance": {}, "chapters": [], "insights": [],
-              "summary": "Обсуждали план."}
+    # Главы и важность выключены: пустые в длинной встрече были бы поводом переспросить.
+    window = {"phrase_types": {}, "insights": [], "summary": "Обсуждали план."}
     final = {"category": {"id": "planning", "confidence": 0.7}, "title": "План квартала"}
     runner = FakeRunner(*([window] * n), final)
     monkeypatch.setattr(analysis, "windows", lambda ls: _ORIG_WINDOWS(ls, limit=6000))
-    doc = analysis.run(folder, runner, _cfg())
+    doc = analysis.run(folder, runner, _cfg(chapters=False, importance=False))
     assert len(runner.calls) == n + 1
     # окна не просят категорию и название, а просят сводку
     assert '"category"' not in runner.calls[0]["system_prompt"]

@@ -1,0 +1,5 @@
+{"phrase_types": [{"index": 2, "type": "решение"}, {"index": 4, "type": "задача"}, {"index": 5, "type": "риск"}],
+ "importance": [{"i": 2, "score": 9}, {"i": 4, "score": 8}, {"i": 5, "score": 6}, {"i": 1, "score": 3}],
+ "chapters": [{"start": 0, "end": 2, "name": "План на неделю"},
+              {"from": 4, "to": 5, "name": "Задачи и риски", "label": "Задачи"}],
+ "insights": [], "category": null, "title": "Планирование недели"}
