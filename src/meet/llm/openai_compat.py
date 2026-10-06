@@ -92,7 +92,9 @@ def open_url(req: urllib.request.Request, timeout: float, via_proxy: bool = Fals
     включено «через прокси» (`via_proxy`)."""
     if not via_proxy and direct(req.full_url):
         return _DIRECT.open(req, timeout=timeout)
-    return urllib.request.urlopen(req, timeout=timeout)
+    # Свой opener на вызов, а не общий urlopen: тот запоминает прокси при
+    # первом вызове, а задача модели задаёт их переменными позже (netproxy.prepare).
+    return urllib.request.build_opener(urllib.request.ProxyHandler()).open(req, timeout=timeout)
 
 
 def _overflow(detail: str) -> bool:

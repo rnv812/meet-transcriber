@@ -269,6 +269,11 @@ def test_timeout_is_marked(server):
 
 def test_via_proxy_sends_even_local_addresses_through_the_proxy(server, monkeypatch):
     # «Локальную модель — через прокси»: прокси (здесь мёртвый) — и для 127.0.0.1.
+    # Общий opener urllib собран раньше, без прокси (как в задаче, где прокси
+    # задают переменными уже после первого запроса), — он не должен решать.
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "_opener", urllib.request.build_opener(urllib.request.ProxyHandler({})))
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
     monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
     monkeypatch.delenv("NO_PROXY", raising=False)
