@@ -32,7 +32,7 @@
 реже `max_interval_s`, пока речь идёт; нового нет — вызова нет. Сообщения
 пользователя, нажатия кнопок и реакции — в ближайший ход. Сообщение
 пользователя — вне очереди: идущий ход по репликам прерывается (ответ
-закрывается `held`), сообщение уходит вместе с недоставленными репликами.
+закрывается скрытым `dropped`), сообщение уходит вместе с недоставленными репликами.
 
 **Ответ.** Ход начинается репликой агента `writing` (`begin_reply`), текст
 идёт окну событиями `chat_partial`, затем `parse_reply`: `say` — сообщение
@@ -265,7 +265,8 @@ class _Inputs:
 @dataclass
 class _Turn:
     inputs: _Inputs
-    addressed: bool                    # в ходе есть сообщение, нажатие или реакция
+    addressed: bool                    # ход отвечает пользователю (и цепочка запросов к Meet)
+    re: str | None = None              # на какое сообщение пользователя
     reply_id: str | None = None
     raw: list = field(default_factory=list)
     shown: str = ""
@@ -362,6 +363,8 @@ class Participant:
         self._notes: list[str] = []
         self._frequency_note: str | None = None
         self._tool_rounds = 0
+        self._chain: tuple[bool, str | None] | None = None   # цепочка запросов: (addressed, re)
+        self._quiet_until = 0.0        # лимит запросов подряд исчерпан: пауза
         self._failures = 0
         self._retry_at = 0.0
         # ход и лента
@@ -473,6 +476,10 @@ class Participant:
         for task in pending:
             task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
+        # Ход, отменённый посреди begin_reply, мог оставить `writing` без id.
+        with _quiet():
+            if self._started:
+                self._emit_chat(await self._io(self._chatlog.close_interrupted, SHUTDOWN_ERROR))
         await asyncio.to_thread(self.close)
         self._io_pool.shutdown(wait=False)
 
@@ -651,9 +658,11 @@ class Participant:
 
     def turn_due(self, now: float | None = None) -> bool:
         now = self._clock() if now is None else now
+        if self._first_pending_at is not None and not self._has_lines():
+            self._first_pending_at = None   # только спрятанные дубли — не «ждут»
         if self._turn is not None:
             return False
-        waiting = self._failures and now < self._retry_at
+        waiting = (self._failures and now < self._retry_at) or now < self._quiet_until
         if self._user and (self._user_fresh or not waiting):
             return True
         if waiting:
@@ -672,10 +681,12 @@ class Participant:
         """Через сколько секунд ход может стать нужен без нового сигнала."""
         if self._turn is not None:
             return None
+        if self._first_pending_at is not None and not self._has_lines():
+            self._first_pending_at = None
         wake: list[float] = []
-        if self._failures and self._retry_at > now and (self._user or self._reactions
-                                                        or self._tool_results or self._has_lines()):
-            wake.append(self._retry_at - now)
+        held = max(self._retry_at if self._failures else 0.0, self._quiet_until)
+        if held > now and (self._user or self._reactions or self._tool_results or self._has_lines()):
+            wake.append(held - now)
         elif self._has_lines():
             if self._last_line_at is not None:
                 at = self._last_line_at + self._pause
@@ -766,7 +777,11 @@ class Participant:
             if inputs.frequency and self._frequency_note is None:
                 self._frequency_note = inputs.frequency
             return None
-        turn = _Turn(inputs=inputs, addressed=bool(inputs.user or inputs.reactions))
+        addressed = bool(inputs.user or inputs.reactions)
+        re_id = inputs.user[-1]["id"] if inputs.user else None
+        if not addressed and inputs.tools and self._chain is not None:
+            addressed, re_id = self._chain   # ответ Meet — продолжение ответа пользователю
+        turn = _Turn(inputs=inputs, addressed=addressed, re=re_id)
         self._turn = turn
         self._last_turn_at = now
         turn.task = asyncio.ensure_future(self._run_turn(turn))
@@ -818,17 +833,22 @@ class Participant:
             turn.inputs.lines += more
             turn.inputs.end = self._cursor = end
             self._scanned = max(self._scanned, end)
+            if self._bus.size() <= end:
+                self._first_pending_at = None
 
     async def _turn_body(self, turn: _Turn) -> None:
         inputs = turn.inputs
         await self._fresh_audio(turn)
         session = turn.session = await self._ensure_session()
         if turn.stop:          # прервали, пока ход собирался
-            self._requeue(inputs)
+            if turn.stop == "stop":
+                self._requeue_after_stop(inputs)
+            else:
+                self._requeue(inputs)
             return
         fields = {"mode": "reply" if turn.addressed else "proactive"}
-        if inputs.user:
-            fields["re"] = inputs.user[-1]["id"]
+        if turn.re:
+            fields["re"] = turn.re
         t = self._now_t()
         if t is not None:
             fields["t"] = t
@@ -892,11 +912,21 @@ class Participant:
             return False
 
     def _materials_summary(self) -> str:
+        """Материалы для затравки. Id — только журнальные (как в дельте и
+        журнале): у материала свой счётчик, агенту он не показывается."""
+        journal = {}
+        try:
+            for m in self._chatlog.messages():
+                if m.get("kind") == "attachment" and m.get("ref"):
+                    journal[m["ref"]] = m["id"]
+        except Exception:
+            pass
         lines = []
         for record in self._material_records():
             meta = record.get("meta") or {}
             source = (meta.get("source") or {}).get("path") or ""
-            head = f"- {record.get('id')} «{meta.get('title') or Path(source).name}»"
+            jid = journal.get(record.get("id"))
+            head = f"- {jid + ' ' if jid else ''}«{meta.get('title') or Path(source).name}»"
             if meta.get("kind"):
                 head += f" ({meta['kind']})"
             text_path = _text_dump_path(self._folder, str(record.get("id") or ""))
@@ -964,20 +994,28 @@ class Participant:
     async def _finish_stopped(self, turn: _Turn, reply: AgentReply) -> None:
         shown = partial_text(reply.text or "".join(turn.raw)) or turn.shown
         if turn.stop == "message":
-            status, note = "held", "прервано сообщением пользователя"
+            # Скрыта: её сменит ответ на сообщение (журнал и затравка помнят её).
+            status, note = "dropped", "прервано сообщением пользователя"
             self._requeue(turn.inputs)
             self._notes.insert(0, NOTE_INTERRUPTED)
         elif turn.stop == "stop":
             status, note = "cancelled", "остановлено пользователем"
-            self._requeue(turn.inputs, user=False, others=False)
-            self._tool_results = turn.inputs.tools + self._tool_results
-            self._notes.insert(0, NOTE_STOPPED)
+            self._requeue_after_stop(turn.inputs)
         else:
             status, note = "cancelled", "ход прерван"
             self._requeue(turn.inputs)
         self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id,
                                         status=status, text=shown, note=note)])
         self._set_state(LISTENING)
+
+    def _requeue_after_stop(self, inputs: _Inputs) -> None:
+        """«Стоп»: реплики, ответы Meet, заметки и смена частоты — снова в
+        очередь; остановленное сообщение пользователя и реакции — нет."""
+        self._requeue(inputs, user=False, others=False)
+        self._tool_results = inputs.tools + self._tool_results
+        self._notes = [NOTE_STOPPED, *inputs.notes, *self._notes]
+        if inputs.frequency and self._frequency_note is None:
+            self._frequency_note = inputs.frequency
 
     def _failed(self, error: str) -> None:
         self._failures += 1
@@ -1016,7 +1054,10 @@ class Participant:
         else:
             await self._show(turn, says)
         if requests:
+            self._chain = (turn.addressed, turn.re)
             await self._run_tools(requests)
+        else:
+            self._chain = None
 
     async def _mark_dropped(self, turn: _Turn, reply: AgentReply) -> None:
         """Картинки, которые провайдер не отправил модели (негодный файл, не
@@ -1103,7 +1144,17 @@ class Participant:
                 result["error"] = error
             res = await self._io(self._chatlog.append, "tool", call=action.kind, **result)
             self._emit_chat([res.event])
-            self._tool_results.append({"call": action.kind, "args": args, "text": text, "error": error})
+            if not spent:
+                self._tool_results.append({"call": action.kind, "args": args, "text": text,
+                                           "error": error})
+        if spent:
+            # Модель просит и просит: ответ — заметкой в ближайший ход, который
+            # и так нужен (не сразу), и пауза — без нового ввода её не позовут.
+            if TOOLS_SPENT not in self._notes:
+                self._notes.append(TOOLS_SPENT)
+            self._chain = None
+            self._quiet_until = self._clock() + BACKOFF_S[0]
+            self._log("агент: лимит запросов к Meet подряд — пауза")
         self._kick()
 
     def _tool_call(self, action) -> tuple[str, str | None]:

@@ -84,6 +84,17 @@ def test_index_ask_and_task():
     _run(scenario())
 
 
+def test_ask_is_409_when_the_participant_replaces_qa():
+    async def scenario():
+        state = FakeState()
+        state.qa = None   # агент-участник включён: «Спросить» нет
+        async with TestClient(TestServer(build_app(state))) as client:
+            r = await client.post("/ask", json={"question": "срок?"})
+            assert r.status == 409 and "чате" in await r.text()
+
+    _run(scenario())
+
+
 def test_ask_broken_json_returns_400():
     async def scenario():
         async with TestClient(TestServer(build_app(FakeState()))) as client:

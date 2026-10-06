@@ -422,7 +422,8 @@ def test_user_message_interrupts_a_transcript_turn(tmp_path):
 
     posted = run(main())
     held, answer = agents(h)
-    assert held["status"] == "held" and held["text"] == "Начинаю"
+    assert held["status"] == "dropped" and held["text"] == "Начинаю"
+    assert held["note"] == "прервано сообщением пользователя"
     assert not visible_in_feed(held)
     assert answer["status"] == "shown" and answer["mode"] == "reply" and answer["re"] == posted["id"]
     second = h.made[0].sent[1][0]
@@ -449,7 +450,7 @@ def test_user_message_cancels_a_runner_call(tmp_path):
 
     run(main())
     held, answer = agents(h)
-    assert held["status"] == "held" and answer["text"] == "Отвечаю"
+    assert held["status"] == "dropped" and answer["text"] == "Отвечаю"
     assert "Вопрос" in runner.calls[1][0] and "идёт обсуждение" in runner.calls[1][0]
 
 
@@ -464,9 +465,12 @@ def test_user_message_during_a_reply_to_the_user_waits_its_turn(tmp_path):
         assert posted["queued"] is True and h.made[0].interrupts == 0
         h.made[0]._cancel.set()
         await turn
+        assert h.p.turn_due()
+        await h.p.tick()
         await h.p.shutdown()
 
     run(main())
+    assert "Второй вопрос" in h.made[0].sent[1][0]
 
 
 def test_stop_reply_cancels_and_keeps_the_visible_text(tmp_path):
@@ -755,21 +759,30 @@ def test_toolless_model_searches_and_lists(tmp_path):
     assert len(results) == 3 and results[2]["error"]
 
 
-def test_tool_loop_is_bounded(tmp_path):
+def test_tool_loop_is_bounded_when_the_model_never_stops_asking(tmp_path):
     read = AgentReply(text='{"read": ["Проекты/План запуска.md"]}')
-    runner = FakeRunner([read, read, read, read, SILENT])
+    runner = FakeRunner([read] * 50)
     h = _make(tmp_path, provider="openai-compatible", runner=runner, kb=_kb(tmp_path))
 
     async def main():
         await h.p.post_user_message("читай")
-        for _ in range(5):
-            assert await h.p.tick()
+        h.clock.t = 100
+        for _ in range(20):                    # время стоит: только «сразу»
+            await h.p.tick()
+        assert len(runner.calls) == 4          # ход + 3 запроса подряд, дальше — тишина
         assert not h.p.turn_due()
+        publish(h, 50, "Олег", "новая реплика", at=101)
+        assert not h.p.turn_due(105)           # пауза после лимита (10 с)
+        assert h.p.turn_due(111)
+        h.clock.t = 111
+        assert await h.p.tick()
         await h.p.shutdown()
 
     run(main())
     results = [m for m in h.chat.messages() if m["kind"] == "tool" and m["event"] == "result"]
-    assert [r.get("error") for r in results] == [None, None, None, TOOLS_SPENT]
+    assert [r.get("error") for r in results][:4] == [None, None, None, TOOLS_SPENT]
+    assert TOOLS_SPENT in runner.calls[4][0]   # заметкой в следующий нужный ход
+    assert pp.H_TOOLS not in runner.calls[4][0]  # не ответ на запрос, а заметка
 
 
 def test_requests_are_ignored_when_the_model_has_tools(tmp_path):
@@ -946,8 +959,13 @@ def _wired(tmp_path, monkeypatch, cfg):
     return heavy, seen["state"]
 
 
-def test_participant_is_on_by_default_and_the_summary_lane_stays(tmp_path, monkeypatch):
+def test_participant_is_off_by_default_until_the_chat_window(tmp_path, monkeypatch):
     heavy, state = _wired(tmp_path, monkeypatch, Settings.from_raw({}))
+    assert state.participant is None and heavy.qa_kwargs is not None
+
+
+def test_participant_on_keeps_the_summary_lane(tmp_path, monkeypatch):
+    heavy, state = _wired(tmp_path, monkeypatch, Settings.from_raw({"assist": {"participant": True}}))
     assert state.participant is not None and state.qa is None and heavy.qa_kwargs is None
     cadence = heavy.digester_kwargs["cadence"]
     assert cadence.hints is False and heavy.live.hints_enabled is False
@@ -989,7 +1007,8 @@ def test_summary_lane_still_ticks_with_hints_off():
 
 def test_settings_have_participant_and_frequency():
     a = Settings.from_raw({}).assist
-    assert a.participant is True and a.frequency == "more"
+    assert a.participant is False and a.frequency == "more"
+    assert Settings.from_raw({"assist": {"participant": True}}).assist.participant is True
     b = Settings.from_raw({"assist": {"participant": False, "frequency": "less"}}).assist
     assert b.participant is False and b.frequency == "less"
     assert b.to_raw()["participant"] is False and b.to_raw()["frequency"] == "less"
@@ -1004,3 +1023,180 @@ def test_configured_model_reaches_the_participant(tmp_path):
     p = app_mod._make_participant(cfg, TranscriptBus(), folder, "claude-code", None)
     assert p._model == "opus" and p.label == "Claude Code (opus)"
     assert p.frequency == "обычно" and p._library_root == folder.parent
+
+
+# --- раунд исправлений 1 ---
+
+
+def test_shutdown_closes_a_reply_left_in_writing(tmp_path):
+    h = _make(tmp_path)
+
+    async def main():
+        await h.p.start()
+        # Ход отменили, пока begin_reply писался: записан, а id у хода нет.
+        h.chat.begin_reply(mode="proactive")
+        await h.p.shutdown()
+
+    run(main())
+    (reply,) = agents(h)
+    assert reply["status"] == "cancelled" and reply["error"] == "ассистент остановлен"
+
+
+def test_shutdown_mid_turn_cancels_and_closes_the_process(tmp_path):
+    h = _make(tmp_path, script=["block"])
+
+    async def main():
+        publish(h, 5, "Олег", "реплика")
+        h.clock.t = 10
+        turn = asyncio.ensure_future(h.p.tick())
+        await _wait_for(lambda: h.made and h.made[0].started.is_set())
+        await h.p.shutdown()
+        await asyncio.gather(turn, return_exceptions=True)
+
+    run(main())
+    (reply,) = agents(h)
+    assert reply["status"] == "cancelled" and reply["error"] == "ассистент остановлен"
+    assert reply["text"] == "Начинаю" and h.made[0].closed
+
+
+def test_stop_keeps_a_pending_frequency_note(tmp_path):
+    h = _make(tmp_path, script=["block", SILENT])
+
+    async def main():
+        h.p.set_frequency("less")
+        publish(h, 5, "Олег", "раз")
+        h.clock.t = 10
+        turn = asyncio.ensure_future(h.p.tick())
+        await _wait_for(lambda: h.made and h.made[0].started.is_set())
+        await h.p.stop_reply()
+        await turn
+        publish(h, 20, "Олег", "два", at=20)
+        h.clock.t = 40
+        assert await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    second = h.made[0].sent[1][0]
+    assert "сменил «Как часто писать» на «реже»" in second and NOTE_STOPPED in second
+
+
+def test_tool_chain_keeps_answering_the_user(tmp_path):
+    runner = FakeRunner([AgentReply(text='{"read": ["Проекты/План запуска.md"]}'), say("15.11")])
+    h = _make(tmp_path, provider="openai-compatible", runner=runner, kb=_kb(tmp_path))
+
+    async def main():
+        posted = await h.p.post_user_message("какой срок?")
+        await h.p.tick()
+        await h.p.tick()
+        await h.p.shutdown()
+        return posted
+
+    posted = run(main())
+    request, answer = agents(h)
+    assert request["mode"] == "reply" and answer["mode"] == "reply"
+    assert answer["re"] == posted["id"]
+
+
+def test_hidden_duplicate_leaves_no_stale_pause_timer(tmp_path):
+    h = _make(tmp_path, script=[SILENT])
+
+    async def main():
+        hidden = publish(h, 0, "Олег", "дубль", at=0)
+        h.bus.hide([hidden])
+        assert not h.p.turn_due(1)
+        publish(h, 100, "Олег", "настоящая реплика", at=100)
+        assert not h.p.turn_due(100)           # без паузы — нет
+        assert h.p.turn_due(104)
+        await h.p.shutdown()
+
+    run(main())
+
+
+def test_seed_shows_journal_attachment_ids_only(tmp_path):
+    doc = tmp_path / "План.md"
+    doc.write_text("# План\n\nСрок 15.11.\n", encoding="utf-8")
+    h = _make(tmp_path, script=[SILENT])
+    # Чужой материал раньше занял id: у журнала и материалов счётчики разные.
+    h.chat.append("attachment", type="image", name="старое.png", status="ready")
+
+    async def main():
+        posted = await h.p.post_user_message("глянь", [str(doc)])
+        await h.p.tick()
+        await h.p.shutdown()
+        return posted
+
+    posted = run(main())
+    jid = posted["attachments"][0]
+    att = h.chat.get(jid)
+    assert att["ref"] != jid
+    seed = h.made[0].sent[0][0].split(pp.H_USER)[0]
+    assert f"- {jid} «План.md»" in seed and f"{att['ref']} «" not in seed
+
+
+def test_stop_before_the_reply_starts_drops_the_stopped_message(tmp_path):
+    h = _make(tmp_path, script=[SILENT])
+
+    async def main():
+        await h.p.start()
+        await h.p.post_user_message("не надо")
+        publish(h, 5, "Олег", "реплика", at=1)
+        turn = h.p._start_turn(1)
+        turn.stop = "stop"                      # «Стоп» до begin_reply
+        await turn.task
+        assert not h.made or not h.made[0].sent
+        assert h.p._user == [] and h.p._cursor == 0   # сообщение — нет, реплики — снова в очереди
+        await h.p.shutdown()
+
+    run(main())
+    assert agents(h) == []
+
+
+def test_fresh_user_message_bypasses_the_backoff(tmp_path):
+    h = _make(tmp_path, script=[AgentReply(text="", error="сеть"), say("Ответ")])
+
+    async def main():
+        publish(h, 5, "Олег", "реплика")
+        h.clock.t = 10
+        await h.p.tick()
+        assert not h.p.turn_due(11)
+        await h.p.post_user_message("ты тут?")
+        assert h.p.turn_due(11)
+        h.clock.t = 11
+        await h.p.tick()
+        await h.p.shutdown()
+
+    run(main())
+    assert agents(h)[-1]["text"] == "Ответ"
+
+
+def test_resume_failed_twice_backs_off_without_a_loop(tmp_path):
+    h = _make(tmp_path, script=[resume_failure("нет"), resume_failure("снова нет")])
+    h.chat.set_session_id("claude-code", "sess-old")
+
+    async def main():
+        publish(h, 5, "Олег", "реплика")
+        h.clock.t = 10
+        await h.p.tick()
+        assert not h.p.turn_due(12)
+        await h.p.shutdown()
+
+    run(main())
+    assert len(h.made[0].sent) == 2 and h.p.view()["state"] == "error"
+
+
+def test_run_loop_wakes_on_a_user_message(tmp_path):
+    import time
+
+    h = _make(tmp_path, script=[say("На связи")], clock=time.monotonic)
+
+    async def main():
+        stop = asyncio.Event()
+        task = asyncio.ensure_future(h.p.run(stop))
+        await asyncio.sleep(0.05)
+        await h.p.post_user_message("ты тут?")
+        await _wait_for(lambda: any(m["status"] == "shown" for m in agents(h)))
+        stop.set()
+        await asyncio.wait_for(task, 5)
+
+    run(main())
+    assert agents(h)[0]["text"] == "На связи"
