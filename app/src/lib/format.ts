@@ -1,3 +1,5 @@
+import { daysBefore } from "./dateSections";
+
 const pad = (n: number) => String(n).padStart(2, "0");
 
 export function clock(s: number): string {
@@ -16,11 +18,16 @@ export function duration(s: number): string {
 
 const MONTHS = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 
-export function dayLabel(iso: string, now: Date = new Date()): string {
+/**
+ * «Сегодня 10:00», «Вчера 10:00», «5 сен 10:00». `short` — строка под разделом
+ * по дате (lib/dateSections): в разделах по дням (до 6 дней назад) — только
+ * время, старше — «5 сен, 10:00» (месяц или год уже в заголовке раздела).
+ */
+export function dayLabel(iso: string, now: Date = new Date(), short = false): string {
   const d = new Date(iso);
   const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const diff = Math.round((day(now) - day(d)) / 86_400_000);
+  const diff = daysBefore(d, now);
+  if (short) return diff <= 6 ? time : `${d.getDate()} ${MONTHS[d.getMonth()]}, ${time}`;
   if (diff === 0) return `Сегодня ${time}`;
   if (diff === 1) return `Вчера ${time}`;
   return `${d.getDate()} ${MONTHS[d.getMonth()]} ${time}`;

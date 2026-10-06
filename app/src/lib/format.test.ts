@@ -11,6 +11,15 @@ test("форматы", () => {
   expect(dayLabel("2026-09-28T16:04:00", now)).toBe("28 сен 16:04");
 });
 
+test("dayLabel(short): под разделом по дням — только время, в месяцах и годах — «5 сен, 10:00»", () => {
+  const now = new Date("2026-10-06T12:00:00");
+  expect(dayLabel("2026-10-06T09:05:00", now, true)).toBe("09:05");
+  expect(dayLabel("2026-10-05T23:00:00", now, true)).toBe("23:00");
+  expect(dayLabel("2026-09-30T10:00:00", now, true)).toBe("10:00");
+  expect(dayLabel("2026-09-29T10:00:00", now, true)).toBe("29 сен, 10:00");
+  expect(dayLabel("2024-09-05T10:00:00", now, true)).toBe("5 сен, 10:00");
+});
+
 test("errorText: у Error — только сообщение", () => {
   expect(errorText(new Error("сломалось"))).toBe("сломалось");
   expect(errorText("строка")).toBe("строка");
