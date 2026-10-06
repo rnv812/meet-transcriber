@@ -60,8 +60,11 @@ OSError: файл после неудачного чтения не переза
 
 **Запросы агента и ответы Meet** (`read` / `search` / `list`) — вид `tool`:
 `event: "request"` (`call`, `args`) и `event: "result"` (`re` = id запроса,
-`text`, `chars`, `error`). В `assistant_chat.md` их нет; в затравке — по
-одной короткой строке на своём месте, не в счёт `recent`.
+`text`, `chars`, `error`); `call` — из `TOOL_CALLS`. Текст ответа в журнале —
+выдержка до `TOOL_TEXT_MAX` с пометкой обрезки (`chars` — полный размер). В
+`assistant_chat.md` их нет; в затравке — по одной короткой строке на своём
+месте, не в счёт `recent`; в ленте окна их нет (`visible_in_feed`, вместе с
+событиями реакций и скрытыми репликами; `snapshot(feed=True)`).
 
 Запись:
 - межпроцессный замок `library.file_lock(strict=True)` с ключом
@@ -137,7 +140,8 @@ from typing import NamedTuple
 from meet import library
 from meet.library import FileLockTimeout
 
-__all__ = ["ChatLog", "Appended", "ChatLogError", "FileLockTimeout", "chat_dir", "has_chat"]
+__all__ = ["ChatLog", "Appended", "ChatLogError", "FileLockTimeout", "chat_dir", "has_chat",
+           "visible_in_feed"]
 
 CHAT_DIR = "assistant"
 CHAT_JSONL = "chat.jsonl"
@@ -157,6 +161,9 @@ BUTTON_MAX_CHARS = 60
 # Запросы агента и ответы Meet (`kind: tool`): `event` — request | result.
 TOOL_EVENTS = ("request", "result")
 TOOL_CALLS = ("read", "search", "list")
+# Ответ Meet в журнале — выдержка: полный результат уходит модели сразу,
+# затравке хватает строки, окну он не нужен.
+TOOL_TEXT_MAX = 4000
 WRITING = "writing"
 # Статусы реплики агента: `writing` — ответ пишется (§3.4, id нужен с начала
 # хода); `failed` — ход упал (с `error`); остальные — §2.3 и §3.4.
@@ -361,7 +368,30 @@ def _check_fields(kind, fields: dict) -> dict:
         raise ValueError("pin — True или False")
     if kind == "tool" and "event" in fields and fields["event"] not in TOOL_EVENTS:
         raise ValueError(f"event записи tool — {' | '.join(TOOL_EVENTS)}")
+    if kind == "tool" and "call" in fields and fields["call"] not in TOOL_CALLS:
+        raise ValueError(f"call записи tool — {' | '.join(TOOL_CALLS)}")
+    if kind == "tool" and isinstance(fields.get("text"), str) and len(fields["text"]) > TOOL_TEXT_MAX:
+        text = fields["text"]
+        mark = f"… [обрезано: в журнале {TOOL_TEXT_MAX} из {len(text)} симв.]"
+        fields = {**fields, "text": text[:TOOL_TEXT_MAX - len(mark)] + mark}
+        fields.setdefault("chars", len(text))
     return fields
+
+
+def visible_in_feed(record: dict) -> bool:
+    """Показывать ли сообщение в ленте окна (`snapshot(feed=True)`, SSE
+    `chat` add): нет служебных записей `tool`, событий реакций и «озвучено»
+    (это отметки у реплики) и реплик, которых в чате не было видно
+    (`HIDDEN_STATUSES`). Пишущийся ответ (`writing`) виден — пузырь
+    «Пишет…». Окно держит те же правила (задача 7)."""
+    if not isinstance(record, dict):
+        return False
+    kind = record.get("kind")
+    if kind == "tool":
+        return False
+    if kind == "meeting" and record.get("event") in ("reaction", "voiced"):
+        return False
+    return not (kind == "agent" and record.get("status") in HIDDEN_STATUSES)
 
 
 class ChatLog:
@@ -616,12 +646,15 @@ class ChatLog:
             self._sync()
             return self._copy_view()
 
-    def snapshot(self, limit: int | None = None) -> dict:
+    def snapshot(self, limit: int | None = None, *, feed: bool = False) -> dict:
         """`{"messages":[…],"seq":N}` — для `GET /chat` и `chat_snapshot`.
-        `limit` — последние N (0 и меньше — ни одного)."""
+        `limit` — последние N (0 и меньше — ни одного); `feed=True` — только
+        то, что видно в ленте (`visible_in_feed`), limit — после отбора."""
         with self._read_lock():
             self._sync()
             ids = self._order
+            if feed:
+                ids = [rid for rid in ids if visible_in_feed(self._view[rid])]
             if limit is not None:
                 ids = ids[-limit:] if limit > 0 else []
             return {"messages": self._copy_view(ids), "seq": self._seq}
@@ -770,14 +803,24 @@ class ChatLog:
 
     def finish_reply(self, mid: str, *, status: str = "shown", **fields) -> dict | None:
         """Конец хода: готовый текст и статус — `shown`, `cancelled` (стоп;
-        видимый текст остаётся) или `failed` (с `error`)."""
+        видимый текст остаётся) или `failed` (с `error`). Правит только
+        реплику в статусе `writing`; иначе (ход уже закрыт) — `None`."""
         if status == WRITING:
             raise ValueError("finish_reply закрывает ход: статус не writing")
-        return self.patch(mid, {**fields, "status": status})
+        changes = self._check_changes({**fields, "status": status})
+        with self._write_lock():
+            self._sync()
+            msg = self._view.get(mid)
+            if msg is None or msg.get("status") != WRITING:
+                # Ход уже закрыт (close_interrupted, стоп) — не воскрешаем.
+                return None
+            return self._patch_locked(mid, changes)
 
     def close_interrupted(self, error: str = "ответ прерван: ассистент перезапущен") -> list[dict]:
         """Писатель при старте: реплики `writing`, оставшиеся от убитого
-        процесса, → `cancelled` с `error`. События patch (для SSE)."""
+        процесса, → `cancelled` с `error`. События patch (для SSE). Только
+        для единственного живого писателя (резидент во время живой записи
+        отвечает 409, §7.2): чужой идущий ход тоже был бы закрыт."""
         with self._write_lock():
             self._sync()
             stuck = [rid for rid in self._order if self._view[rid].get("status") == WRITING]
@@ -850,15 +893,15 @@ class ChatLog:
                     out.setdefault(head, {})[provider] = _copy(entry)
         return out
 
-    def session(self, provider: str, head: str = DEFAULT_HEAD) -> dict | None:
+    def session(self, provider: str, *, head: str = DEFAULT_HEAD) -> dict | None:
         """Вся запись сеанса: `{"id","used_at",…поля вызывающего}`; нет — None.
         Файл занят дольше повторов — OSError."""
         with self._read_lock():
             return self._entries(self._load_sessions()).get(head, {}).get(provider)
 
-    def session_id(self, provider: str, head: str = DEFAULT_HEAD) -> str | None:
+    def session_id(self, provider: str, *, head: str = DEFAULT_HEAD) -> str | None:
         """Id сеанса провайдера (для `--resume` и т. п.); нет — None."""
-        entry = self.session(provider, head)
+        entry = self.session(provider, head=head)
         return entry["id"] if entry else None
 
     def sessions(self) -> dict:

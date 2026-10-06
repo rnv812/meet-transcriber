@@ -1147,3 +1147,85 @@ def test_tool_records_hidden_from_md_and_compressed_in_seed(tmp_path):
     assert seed.index("глянь план") < seed.index("Ты запросил read") < seed.index("В плане срок")
     small = log.context(20_000, recent=0)
     assert ": Ты запросил search:" in small
+
+
+# --- повторное ревью: R1, R2, R4, R5 ---------------------------------------------------
+
+def test_finish_reply_after_close_interrupted_does_nothing(tmp_path):
+    log = _log(tmp_path)
+    rid = log.begin_reply(mode="reply").message["id"]
+    _log(tmp_path).close_interrupted()
+    size = log.path.stat().st_size
+    assert log.finish_reply(rid, text="поздний ответ") is None
+    assert log.path.stat().st_size == size
+    msg = _log(tmp_path).get(rid)
+    assert msg["status"] == "cancelled" and "text" in msg and msg["text"] == ""
+    done = log.begin_reply(mode="reply").message["id"]
+    assert log.finish_reply(done, text="ок")["set"]["status"] == "shown"
+    assert log.finish_reply(done, text="ещё раз") is None          # уже закрыт
+    assert log.finish_reply("m99", text="x") is None
+
+
+def test_session_head_is_keyword_only(tmp_path):
+    log = _log(tmp_path)
+    log.set_session_id("claude-code", "s1")
+    with pytest.raises(TypeError):
+        log.session_id("agent", "claude-code")
+    with pytest.raises(TypeError):
+        log.session("agent", "claude-code")
+    with pytest.raises(TypeError):
+        log.set_session_id("claude-code", "s2", "agent")
+    assert log.session_id("claude-code", head="agent") == "s1"
+
+
+def test_tool_result_text_is_capped_and_call_validated(tmp_path):
+    log = _log(tmp_path)
+    req = log.append("tool", event="request", call="read", args=["a.md"]).message["id"]
+    big = "абв " * 50_000
+    res = log.append("tool", event="result", re=req, text=big).message
+    assert len(res["text"]) == chatlog.TOOL_TEXT_MAX
+    assert res["text"].endswith(f"[обрезано: в журнале {chatlog.TOOL_TEXT_MAX} из {len(big)} симв.]")
+    assert res["chars"] == len(big)
+    assert _log(tmp_path).get(res["id"])["text"] == res["text"]
+    given = log.append("tool", event="result", re=req, text=big, chars=123).message
+    assert given["chars"] == 123
+    small = log.append("tool", event="result", re=req, text="коротко").message
+    assert small["text"] == "коротко" and "chars" not in small
+    log.patch(small["id"], {"text": big})
+    assert len(log.get(small["id"])["text"]) == chatlog.TOOL_TEXT_MAX
+    for bad in ("write", "exec", ""):
+        with pytest.raises(ValueError):
+            log.append("tool", event="request", call=bad)
+    assert log.path.stat().st_size < 30_000
+
+
+def test_visible_in_feed_and_snapshot_feed(tmp_path):
+    log = _log(tmp_path)
+    shown = log.append("agent", text="видно", buttons=["Да"]).message["id"]
+    log.react(shown, "👍")
+    held = log.append("agent", text="придержано").message["id"]
+    log.patch(held, {"status": "held"})
+    req = log.append("tool", event="request", call="list", args="Проекты").message["id"]
+    log.append("tool", event="result", re=req, text="a.md\nb.md")
+    log.append("meeting", event="voiced", re=shown)
+    log.append("meeting", event="session", text="подключение")
+    log.append("system", text="Сессия продолжена")
+    writing = log.begin_reply(mode="reply").message["id"]
+    log.append("user", text="вопрос")
+    log.click_button(shown, "Да")
+    full = log.snapshot()
+    feed = log.snapshot(feed=True)
+    assert feed["seq"] == full["seq"]
+    kinds = [(m["kind"], m.get("event"), m.get("text")) for m in feed["messages"]]
+    assert kinds == [("agent", None, "видно"), ("meeting", "session", "подключение"),
+                     ("system", None, "Сессия продолжена"), ("agent", None, ""),
+                     ("user", None, "вопрос"), ("user", None, "Да")]
+    assert feed["messages"][3]["id"] == writing
+    assert feed["messages"][0]["reactions"].keys() == {"👍"}       # отметка у реплики
+    assert [m["text"] for m in log.snapshot(2, feed=True)["messages"]] == ["вопрос", "Да"]
+    assert all(chatlog.visible_in_feed(m) for m in feed["messages"])
+    hidden = [m for m in full["messages"] if not chatlog.visible_in_feed(m)]
+    assert {(m["kind"], m.get("event"), m.get("status")) for m in hidden} == {
+        ("meeting", "reaction", None), ("agent", None, "held"), ("tool", "request", None),
+        ("tool", "result", None), ("meeting", "voiced", None)}
+    assert not chatlog.visible_in_feed(None)
