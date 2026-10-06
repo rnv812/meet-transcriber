@@ -98,6 +98,12 @@ LONG_SEGMENT_S = 4.0
 # каждого PINNED_EVERY-го сегмента: GigaAM режет один монолог на много сегментов.
 PINNED_GAP_S = 0.3
 PINNED_EVERY = 2
+# Владелец найден по сильной улике — группа якоря от OWNER_LATCH_S речи с
+# центроидом от T_OWN: дальше «найден» до конца сеанса.
+OWNER_LATCH_S = 30.0
+# Уже найденный владелец «теряется», только если сходство группы якоря упало
+# ниже T_OTHER − PRESENT_SLACK (у образца среднего качества оно гуляет у порога).
+PRESENT_SLACK = 0.05
 # Время эмбеддингов для журнала — последние TIMES_KEPT.
 TIMES_KEPT = 2000
 
@@ -366,6 +372,7 @@ class LiveVoices:
         self._mic_voiced = 0.0
         self._mic_owner_like = 0.0
         self._present = False
+        self._latched = False  # владелец найден по сильной улике — до конца сеанса
         self._missing_logged = False
         self._mic_run = 0  # сегменты владельца подряд (экономия)
         self._sys_run = 0  # сегменты названного собеседника подряд (экономия)
@@ -472,8 +479,16 @@ class LiveVoices:
             return None
         return tv, tv.resolve(n)
 
+    def _near_owner(self, c: _Cluster) -> bool:
+        """Кластер — тот же голос, что якорь владельца (cos от LIVE_MERGE): у
+        шумного образца часть окон владельца ниже T_WIN_FAST и складывается в
+        свой кластер — это не человек рядом."""
+        tv = self._tracks.get("mic")
+        anchor = tv.owner() if tv is not None else None
+        return anchor is not None and float(c.center @ anchor.center) >= mic_split.LIVE_MERGE
+
     def _is_room(self, c: _Cluster) -> bool:
-        return c.n != OWNER_N and c.role == ROOM and self._present
+        return c.n != OWNER_N and c.role == ROOM and self._present and not self._near_owner(c)
 
     def speaker(self, key: str) -> str:
         """Подпись голоса на сейчас."""
@@ -534,25 +549,46 @@ class LiveVoices:
 
     def _owner_present(self, tv: TrackVoices) -> bool:
         """Владелец в микрофоне найден (mic_split._roles, §2.4): от
-        MIN_VOICED_S секунд с голосом и среди кластеров от
-        OWNER_PRESENT_SHARE этой речи есть похожий на образец от T_OTHER.
-        Уже найденный остаётся найденным до половины этой доли: доля владельца
-        в живом микрофоне гуляет около порога, и подписи «рядом» иначе мигали бы."""
+        MIN_VOICED_S секунд с голосом и среди групп от OWNER_PRESENT_SHARE
+        этой речи есть похожая на образец от T_OTHER. Якорь владельца считается
+        вместе с близкими к нему кластерами (cos от LIVE_MERGE): сам якорь —
+        только окна выше T_WIN_FAST, его центроид завышен, а офлайн (AHC) собрал
+        бы голос владельца целиком.
+
+        Уже найденный остаётся найденным до половины доли и до T_OTHER −
+        PRESENT_SLACK (доля и сходство гуляют около порога — подписи «рядом»
+        мигали бы), а при сильной улике
+        (группа владельца от OWNER_LATCH_S с центроидом от T_OWN) — до конца
+        сеанса: «не найден» — про доверие к образцу, а не про то, что владелец
+        сейчас молчит; прошлые строки людей рядом не становятся «Вы»."""
+        if self._latched:
+            return True
         voiced = self._mic_voiced
         if voiced < mic_split.MIN_VOICED_S:
             return False
         share = mic_split.OWNER_PRESENT_SHARE / (2 if self._present else 1)
-        big = [c for c in [tv.owner(), *tv.live()]
-               if c is not None and c.seconds >= share * voiced]
-        present = any(owner_voice.score(c.center, self._owner, self._device) >= mic_split.T_OTHER
-                      for c in big)
+        bar = mic_split.T_OTHER - (PRESENT_SLACK if self._present else 0.0)
+        groups = []  # (центроид, секунды)
+        anchor = tv.owner()
+        near = []
+        if anchor is not None:
+            near = [c for c in tv.live() if float(c.center @ anchor.center) >= mic_split.LIVE_MERGE]
+            total = anchor.total + sum((c.total for c in near), np.zeros_like(anchor.total))
+            seconds = anchor.seconds + sum(c.seconds for c in near)
+            groups.append((_unit(total), seconds))
+            score = owner_voice.score(_unit(total), self._owner, self._device)
+            if seconds >= OWNER_LATCH_S and score >= mic_split.T_OWN:
+                self._latched = True
+                self._log(f"голоса: голос владельца в микрофоне найден (cos {score:.2f})")
+                return True
+        groups += [(c.center, c.seconds) for c in tv.live() if all(c is not n for n in near)]
+        present = any(seconds >= share * voiced
+                      and owner_voice.score(center, self._owner, self._device) >= bar
+                      for center, seconds in groups)
         if not present and not self._missing_logged:
-            self._missing_logged = True
-            self._log("голоса: голос владельца в микрофоне не найден (образец с другого "
+            self._missing_logged = True  # одна строка на сеанс
+            self._log("голоса: голос владельца в микрофоне пока не найден (образец с другого "
                       "микрофона?) — микрофон не делится")
-        elif present and self._missing_logged:
-            self._missing_logged = False
-            self._log("голоса: голос владельца в микрофоне найден")
         return present
 
     def _review(self, track: str, tv: TrackVoices) -> None:
@@ -568,6 +604,12 @@ class LiveVoices:
             self._check_name(tv, c)
 
     def _check_role(self, c: _Cluster) -> None:
+        if self._near_owner(c):
+            # Голос якоря владельца (его окна ниже T_WIN_FAST) — никогда не «рядом».
+            if c.role == ROOM:
+                self._log("голоса: голос микрофона — это владелец (близок к его якорю)")
+            c.role, c.room_streak = OWNER, 0
+            return
         if c.seconds < ROOM_MIN_S or c.seconds - c.role_checked_s < CHECK_STEP_S:
             return
         c.role_checked_s = c.seconds

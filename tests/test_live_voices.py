@@ -469,3 +469,92 @@ def test_found_owner_stays_found_when_the_room_talks_more():
     assert room[-1].speaker == lv.ROOM_SPEAKER
     assert not any("не найден" in line for line in lines)
     assert v.drain() == [("s/mic:0", lv.ROOM_SPEAKER)]
+
+
+# --- реалистичный разброс эмбеддингов (ревью, раунд 2) --------------------------------
+# Окна голоса не одинаковы: cos(окно, голос) ≈ 0.8, сходство окна владельца с
+# образцом разбросано (sd ≈ 0.12; T0: медиана 0.76, p5 0.51). При шумном образце
+# часть окон владельца ниже T_WIN_FAST и складывается в свой кластер — он не
+# должен стать «Собеседник рядом». c0 — cos голоса владельца с образцом.
+
+SPREAD_D = 25
+SPREAD_SIG = 0.75
+
+
+def _u(x):
+    return x / np.linalg.norm(x)
+
+
+def spread_run(c0, plan, seed=0):
+    rng = np.random.default_rng(seed)
+    o = _u(rng.standard_normal(SPREAD_D))
+    r = rng.standard_normal(SPREAD_D)
+    r = _u(r - (r @ o) * o * 0.6)  # человек рядом: cos с владельцем ≈ 0.3–0.4
+    u = rng.standard_normal(SPREAD_D)
+    u = _u(u - (u @ o) * o)
+    sample = _u(c0 * o + np.sqrt(1 - c0 ** 2) * u)
+    nxt = {}
+    v = lv.LiveVoices(lambda clip: nxt["v"], {},
+                      [OwnerSample(id="a", embedding=sample, source="enroll", date="d", seconds=25.0)],
+                      name_threshold=0.70, session="t", log=lambda line: None)
+    t, lines = 0.0, []
+    for who, total in plan:
+        said = 0.0
+        while said < total:
+            d = float(rng.uniform(1.5, 4.0))
+            nxt["v"] = _u((o if who == "owner" else r) + SPREAD_SIG * _u(rng.standard_normal(SPREAD_D)))
+            a = v.assign("mic", np.zeros(int(d * SR), dtype=np.float32), t, t + d)
+            lines.append((who, a.voice, d))
+            t += d + 0.4
+            said += d
+    out = {}
+    for who, key, d in lines:
+        label = v.speaker(key) if key else "Вы"
+        out[(who, label)] = out.get((who, label), 0.0) + d
+    return out, v
+
+
+def test_noisy_samples_never_turn_the_owner_into_a_room_speaker():
+    for c0 in (0.55, 0.65, 0.70, 0.86):
+        for seed in range(3):
+            out, _ = spread_run(c0, [("owner", 900)], seed)
+            shown_as_room = sum(x for (who, label), x in out.items() if label != "Вы")
+            assert shown_as_room == 0, (c0, seed, out)
+
+
+def test_real_room_person_still_detected_with_spread():
+    for c0 in (0.70, 0.86):
+        for seed in range(3):
+            out, _ = spread_run(c0, [("owner", 30), ("room", 20)] * 10, seed)
+            owner_as_room = sum(x for (who, label), x in out.items() if who == "owner" and label != "Вы")
+            room = sum(x for (who, label), x in out.items() if who == "room")
+            room_as_room = out.get(("room", lv.ROOM_SPEAKER), 0.0)
+            assert owner_as_room == 0, (c0, seed, out)
+            assert room_as_room >= 0.8 * room, (c0, seed, out)
+
+
+def test_bad_sample_keeps_the_whole_mic_as_owner_like_offline():
+    out, _ = spread_run(0.60, [("owner", 30), ("room", 20)] * 10, 0)
+    assert all(label == "Вы" for (_, label) in out)  # офлайн: owner_not_found
+
+
+def test_room_lines_do_not_flip_to_owner_after_the_owner_leaves():
+    """Владелец найден по сильной улике — «найден» до конца сеанса: долгий
+    кусок только с человеком рядом не переписывает его строки в «Вы»."""
+    for seed in range(3):
+        out, v = spread_run(0.86, [("owner", 60), ("room", 600)], seed)
+        assert v._latched and v._present
+        assert out.get(("room", lv.ROOM_SPEAKER), 0.0) >= 0.9 * 600
+
+
+def test_room_cluster_near_the_owner_anchor_reverts():
+    v = voices(owner=owner_samples())
+    feed(v, "mic", 3, 6)
+    tv = v._tracks["mic"]
+    c = tv.clusters[tv._new(ROOM, 12.0)]
+    c.role, v._present = lv.ROOM, True
+    assert v.speaker("s/mic:0") == lv.ROOM_SPEAKER
+    c.total = lv._unit(np.array([0.0, 0.0, 0.7, 0.714])) * 12.0  # cos с якорем 0.70
+    assert v.speaker("s/mic:0") == "Вы"
+    v._check_role(c)
+    assert c.role == lv.OWNER and c.room_streak == 0
