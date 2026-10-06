@@ -996,3 +996,33 @@ def test_patch_opencode_model_is_validated(tmp_path):
         settings.patch({"llm": {"opencode_model": "sonnet"}}, f)
     with pytest.raises(ValueError, match="недопустимые символы"):
         settings.patch({"llm": {"opencode_model": "a/b c"}}, f)
+
+
+def test_assist_kb_settings_defaults_and_round_trip(tmp_path):
+    cfg = settings.load(tmp_path / "нет.json")
+    assert cfg.assist.kb_map is True
+    assert cfg.assist.kb_exclude == settings.KB_EXCLUDE_DEFAULT
+    assert "Личное/" in cfg.assist.kb_exclude
+    raw = cfg.to_raw()["assist"]
+    assert "kb_auto" not in raw and raw["kb_map"] is True and raw["kb_exclude"] == list(settings.KB_EXCLUDE_DEFAULT)
+    f = tmp_path / "config.json"
+    updated = settings.patch({"assist": {"kb_map": False, "kb_exclude": [" Работа/Клиенты ", "работа/клиенты", ""]}}, f)
+    assert updated.assist.kb_map is False and updated.assist.kb_exclude == ("Работа/Клиенты",)
+    assert settings.load(f).assist == updated.assist
+    # прочие ключи секции на месте
+    assert settings.load(f).assist.activity == "calm"
+
+
+def test_assist_kb_exclude_from_hand_edits():
+    def exclude(value):
+        return settings.Assist.from_raw({"kb_exclude": value}).kb_exclude
+
+    assert exclude([]) == ()  # осознанное «без исключений»
+    assert exclude("Личное") == ("Личное",)
+    assert exclude(None) == settings.KB_EXCLUDE_DEFAULT
+    assert exclude({"a": 1}) == settings.KB_EXCLUDE_DEFAULT
+    assert exclude(["A/", 5, None, "a/"]) == ("A/",)
+    # старый конфиг без ключей — значения по умолчанию
+    old = settings.Assist.from_raw({"activity": "active", "max_hints": 3})
+    assert settings.Assist.from_raw({"kb_map": "false"}).kb_map is False
+    assert old.kb_map is True and old.kb_exclude == settings.KB_EXCLUDE_DEFAULT

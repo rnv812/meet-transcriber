@@ -31,6 +31,12 @@
   возвращает группу с тем же id, временем создания и на то же место
   (`create(gid=…, index=…, created_at=…)`). «Назвать» неизвестную — тоже
   `create` с её id.
+* `kb_folder` (необязательно, 0.3.6) — папка базы знаний группы, путь
+  относительно `assistant.knowledge_dir` через «/»: когда человек просит
+  ассистента поискать в базе, на встрече группы он ищет сначала там
+  (meet.assist.kb_prep); сам в базу он не ходит. Задаётся
+  `update(kb_folder=…)`, пустое — убрать; читается `kb_folder(group)` —
+  негодное (правка руками) читается как «не задано», но в файле остаётся.
 * Удаление встречи уносит членство с папкой; объединение получает группу
   первой по времени части, у которой она есть (как категорию, meet.merge);
   импорт и новая запись в группы сами не попадают.
@@ -54,6 +60,7 @@ VERSION = 1
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 NAME_MAX = 60
+KB_FOLDER_MAX = 260
 # Область «все встречи» в окне: группа с таким именем путала бы.
 RESERVED = "Все записи"
 # Цвета новых групп по кругу, если окно не выбрало свой.
@@ -132,6 +139,40 @@ def _color(value) -> str:
     if not isinstance(value, str) or not COLOR.match(value):
         raise GroupError("цвет — в виде #RRGGBB")
     return value
+
+
+def check_kb_folder(value) -> str | None:
+    """Путь папки базы знаний группы (относительно базы, через «/») или None
+    — «не задана». Абсолютный путь, буква диска, «..» — отказ: папка группы
+    не выходит за базу знаний."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise GroupError("папка базы знаний — строка")
+    text = value.strip().replace("\\", "/")
+    if not text or text.strip("/") == "":
+        return None
+    if text.startswith("/") or re.match(r"^[A-Za-z]:", text):
+        raise GroupError("папка базы знаний — путь внутри базы, без «/» в начале и буквы диска")
+    parts = [part.strip() for part in text.strip("/").split("/")]
+    if any(part in ("", ".", "..") for part in parts):
+        raise GroupError("в пути папки базы знаний нельзя «..», «.» и пустые части")
+    if any(ord(ch) < 32 or ch in '<>:"|?*' for ch in text):
+        raise GroupError("в пути папки базы знаний недопустимые символы")
+    path = "/".join(parts)
+    if len(path) > KB_FOLDER_MAX:
+        raise GroupError(f"путь папки базы знаний — не длиннее {KB_FOLDER_MAX} символов")
+    return path
+
+
+def kb_folder(group) -> str | None:
+    """Папка базы знаний группы из описания или None (нет, пусто, негодная)."""
+    if not isinstance(group, dict):
+        return None
+    try:
+        return check_kb_folder(group.get("kb_folder"))
+    except GroupError:
+        return None
 
 
 def _created_at(value) -> str:
@@ -327,12 +368,18 @@ def create(root: Path, name, color=None, *, gid=None, index=None, taken=(), crea
     return _with_moved(*_change(root, change))
 
 
-def update(root: Path, gid, *, name=None, color=None) -> dict:
-    """Переименовать и (или) перекрасить. Нет группы — NoGroup."""
-    if name is None and color is None:
-        raise GroupError("нечего менять: нужно название или цвет")
+# «kb_folder не передан» (None и "" значат «убрать папку»).
+KEEP = object()
+
+
+def update(root: Path, gid, *, name=None, color=None, kb_folder=KEEP) -> dict:
+    """Переименовать, перекрасить и (или) задать папку базы знаний
+    (`kb_folder`: путь — задать, None или "" — убрать). Нет группы — NoGroup."""
+    if name is None and color is None and kb_folder is KEEP:
+        raise GroupError("нечего менять: нужно название, цвет или папка базы знаний")
     name = None if name is None else _name(name)
     color = None if color is None else _color(color)
+    folder = KEEP if kb_folder is KEEP else check_kb_folder(kb_folder)
 
     def change(items):
         at = _find(items, gid)
@@ -341,6 +388,11 @@ def update(root: Path, gid, *, name=None, color=None) -> dict:
             items[at]["name"] = name
         if color is not None:
             items[at]["color"] = color
+        if folder is not KEEP:
+            if folder is None:
+                items[at].pop("kb_folder", None)
+            else:
+                items[at]["kb_folder"] = folder
         return items, items[at]
 
     return _with_moved(*_change(root, change))

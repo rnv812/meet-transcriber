@@ -541,3 +541,53 @@ def test_undo_keeps_every_field_of_the_group(state, tmp_path):
     # новая группа чужих полей из тела не берёт
     fresh = state.create_group({"name": "Бета", "parent": "g-1"})
     assert "parent" not in fresh
+
+
+# --- папка базы знаний группы (0.3.6) ---------------------------------------------------
+
+
+def test_kb_folder_round_trip(tmp_path):
+    gid = groups.create(tmp_path, "Альфа")["id"]
+    assert groups.kb_folder(groups.load(tmp_path)[0]) is None
+    got = groups.update(tmp_path, gid, kb_folder="  Проекты\Альфа/ ")
+    assert got["kb_folder"] == "Проекты/Альфа"
+    (group,) = groups.load(tmp_path)
+    assert groups.kb_folder(group) == "Проекты/Альфа"
+    assert _file(tmp_path)["groups"][0]["kb_folder"] == "Проекты/Альфа"
+    # переименование, перекраска и порядок папку не теряют
+    groups.update(tmp_path, gid, name="Альфа 2", color="#112233")
+    other = groups.create(tmp_path, "Бета")["id"]
+    groups.reorder(tmp_path, [other, gid])
+    assert groups.kb_folder(groups.load(tmp_path)[1]) == "Проекты/Альфа"
+    # «Отменить» удаление возвращает и папку
+    gone = groups.delete(tmp_path, gid)
+    groups.create(tmp_path, gone["group"]["name"], gone["group"]["color"], gid=gid, index=gone["index"],
+                  created_at=gone["group"]["created_at"], extra=gone["group"])
+    assert groups.kb_folder(groups.load(tmp_path)[1]) == "Проекты/Альфа"
+    # пусто или None — убрать
+    groups.update(tmp_path, gid, kb_folder="")
+    assert "kb_folder" not in groups.load(tmp_path)[1]
+    groups.update(tmp_path, gid, kb_folder="Альфа")
+    groups.update(tmp_path, gid, kb_folder=None)
+    assert "kb_folder" not in groups.load(tmp_path)[1]
+
+
+@pytest.mark.parametrize("bad", ["../Секреты", "Проекты/../..", "/abs", "C:/kb", "a//b", "a/./b", 5, "a\x01b"])
+def test_kb_folder_must_stay_inside_the_kb(tmp_path, bad):
+    gid = groups.create(tmp_path, "Альфа")["id"]
+    with pytest.raises(groups.GroupError):
+        groups.update(tmp_path, gid, kb_folder=bad)
+    assert "kb_folder" not in groups.load(tmp_path)[0]
+
+
+def test_hand_edited_kb_folder_is_ignored_but_kept(tmp_path):
+    (tmp_path / groups.FILE).write_text(json.dumps({"version": 1, "groups": [
+        {"id": "g-1", "name": "А", "color": "#112233", "created_at": "", "kb_folder": "../вне"},
+        {"id": "g-2", "name": "Б", "color": "#112233", "created_at": "", "kb_folder": 42},
+    ]}), encoding="utf-8")
+    items = groups.load(tmp_path)
+    assert [groups.kb_folder(g) for g in items] == [None, None]
+    groups.update(tmp_path, "g-2", name="Б2")
+    assert _file(tmp_path)["groups"][0]["kb_folder"] == "../вне"  # чужое не стирается
+    with pytest.raises(groups.GroupError, match="нечего менять"):
+        groups.update(tmp_path, "g-1")

@@ -185,6 +185,9 @@ DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:1234/v1"
 NOTIFICATION_LEVELS = ("all", "important", "off")
 # Живые подсказки (`assist`): активность и уровень модели для тиков.
 ASSIST_ACTIVITIES = ("calm", "active", "summary")
+# Папки базы знаний, которых ассистент не касается (`assist.kb_exclude`):
+# пути относительно базы, «/» в конце необязателен.
+KB_EXCLUDE_DEFAULT = ("Личное/", ".trash/")
 HINTS_MODELS = ("agent", "fast")
 # Распознавание живого режима: `auto` — GigaAM короткими окнами, если язык
 # русский и модель GigaAM скачана (иначе Whisper); `whisper` — всегда Whisper.
@@ -983,7 +986,13 @@ class Assist:
     новых слов нужно для тика сводки (0 — по умолчанию); `quiet_default` —
     «Не отвлекать» включено при открытии панели; `live_asr` — распознавание
     живого режима (`auto` — GigaAM для русского, если скачана; `whisper`),
-    только в config.json."""
+    только в config.json.
+
+    База знаний для ассистента-участника (0.3.6): `kb_map` — «Показывать
+    ассистенту структуру базы знаний» (папки и названия документов, без
+    содержимого; читает он только по просьбе или с согласия человека);
+    `kb_exclude` — папки базы (относительно неё), которых ассистент не видит
+    вовсе. Пустой список — исключений нет; не список — значение по умолчанию."""
 
     vault: Path | None = None
     window_seconds: float = 20.0
@@ -999,6 +1008,8 @@ class Assist:
     min_words: int = 0
     quiet_default: bool = False
     live_asr: str = "auto"
+    kb_map: bool = True
+    kb_exclude: tuple[str, ...] = KB_EXCLUDE_DEFAULT
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Assist":
@@ -1020,6 +1031,8 @@ class Assist:
             min_words=as_int(raw.get("min_words"), 0, 0),
             quiet_default=as_flag(raw.get("quiet_default"), False),
             live_asr=as_choice(raw.get("live_asr"), LIVE_ASR, "auto"),
+            kb_map=as_flag(raw.get("kb_map"), True),
+            kb_exclude=_kb_exclude(raw.get("kb_exclude")),
         )
 
     def to_raw(self) -> dict:
@@ -1036,7 +1049,20 @@ class Assist:
             "min_words": self.min_words,
             "quiet_default": self.quiet_default,
             "live_asr": self.live_asr,
+            "kb_map": self.kb_map,
+            "kb_exclude": list(self.kb_exclude),
         }
+
+
+def _kb_exclude(value) -> tuple[str, ...]:
+    """`assist.kb_exclude`: список путей (одна строка — список из неё); пустые
+    и повторы убираются, пустой список — осознанное «без исключений»; нет
+    ключа или мусор — KB_EXCLUDE_DEFAULT."""
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return KB_EXCLUDE_DEFAULT
+    return tuple(_unique(v for v in value if isinstance(v, str)))
 
 
 def _max_hints(value) -> int:
