@@ -49,7 +49,8 @@ test("остатки в общем кэше — вопрос поверх окн
   expect(dialog).toHaveTextContent("могут пользоваться другие программы");
   const remove = within(dialog).getByRole("button", { name: "Удалить из общего кэша" });
   expect(remove).toHaveClass("btn--primary");
-  expect(within(dialog).getByRole("button", { name: "Позже" })).toHaveFocus();
+  // Фокус ставится после отрисовки: на медленной машине (CI на macOS) — не сразу.
+  await waitFor(() => expect(within(dialog).getByRole("button", { name: "Позже" })).toHaveFocus());
   vi.mocked(api.getStorage).mockResolvedValue(info());
   await userEvent.click(remove);
   expect(api.answerLeftovers).toHaveBeenCalledWith(ep, true);

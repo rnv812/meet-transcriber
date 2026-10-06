@@ -99,6 +99,11 @@ def _live(w, monkeypatch, *, act):
         def process_window(self):
             pass
 
+    # Проверка CLI и входа до захвата звука (`_claude_login_problem`) ищет
+    # настоящий claude: на машине разработчика он есть, в CI — нет. Тест — про
+    # модель вызовов, не про установку: вход считаем выполненным.
+    monkeypatch.setattr(app_mod, "_claude_login_problem", lambda: None)
+
     async def fake_check_auth(proxy=None, model=None):
         # Проверка входа перед стартом — тоже вызов модели, и тоже настроенной.
         w["calls"].append({"model": model, "system": "проверка входа"})
