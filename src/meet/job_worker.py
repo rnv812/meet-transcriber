@@ -545,7 +545,8 @@ def _assistant(kind: str, folder_str: str, question: str | None, chosen: str | N
         with tracker:
             if kind == "summary":
                 out = assistant.summarize(folder, runner, knowledge, provider=provider,
-                                          want_title=cfg.assistant.auto_title, origin=origin)
+                                          want_title=cfg.assistant.auto_title, origin=origin,
+                                          context=_local_context(provider, cfg))
             else:
                 if not (question or "").strip():
                     _emit({"kind": "error", "text": "пустой вопрос"})
@@ -638,6 +639,16 @@ def _improve(folder_str: str, chosen: str | None = None) -> int:
         return fail(f"{type(e).__name__}: {e}", 1)
     _emit({"kind": "job.result", "path": str(out)})
     return 0
+
+
+def _local_context(provider: str | None, cfg) -> int | None:
+    """Окно контекста локальной модели — итогам длинной встречи (по частям,
+    если не влезает); у остальных провайдеров — None."""
+    if provider != "openai-compatible":
+        return None
+    from meet.analysis import local_context
+
+    return local_context(cfg)
 
 
 def _llm_tracker(bus, kind: str, label: str, provider: str | None, runner, stage: str | None = None):

@@ -497,9 +497,11 @@ def _summary(args, cfg) -> None:
     _transcript(folder)
     provider, runner = _model(args, cfg)
     try:
+        from meet.job_worker import _local_context
+
         path = assistant.summarize(folder, runner, cfg.assistant.knowledge_dir,
                                    provider=provider, want_title=cfg.assistant.auto_title,
-                                   origin=_origin(provider, cfg))
+                                   origin=_origin(provider, cfg), context=_local_context(provider, cfg))
         markdown = path.read_text(encoding="utf-8")
     except (RuntimeError, OSError) as e:
         raise CliError(f"Итоги не получились: {e}")

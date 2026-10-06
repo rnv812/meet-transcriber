@@ -43,7 +43,7 @@ _EMBEDDING_MARKERS = ("embed",)
 # На процесс: сервер по адресу — Ollama или нет; окно контекста модели.
 # Значение — (что узнали, когда забыть; None — никогда).
 _ollama: dict[str, tuple[bool, float | None]] = {}
-_trained: dict[tuple[str, str], tuple[int | None, float | None]] = {}
+_trained: dict[tuple[str, str], tuple[dict, float | None]] = {}
 # Прокси ответил вместо сервера: сам сервер недоступен.
 PROXY_FAIL = (407, 502, 503, 504)
 
@@ -170,26 +170,41 @@ def is_ollama(base_url: str, *, via_proxy: bool | str = False, timeout: float = 
     return _ollama[root][0]
 
 
-def ollama_trained_context(base_url: str, model: str, *, via_proxy: bool | str = False,
-                           timeout: float = TIMEOUT_S) -> int | None:
-    """Обученное окно контекста модели Ollama (`/api/show` → `model_info`
-    `<архитектура>.context_length`); не узнать — None."""
+def ollama_show(base_url: str, model: str, *, via_proxy: bool | str = False,
+                timeout: float = TIMEOUT_S) -> dict:
+    """Сведения о модели Ollama (`/api/show`, раз на процесс): {"context":
+    обученное окно (`model_info` `<архитектура>.context_length`) или None,
+    "capabilities": [...]} — «thinking» значит, что модель рассуждает."""
     key = (server_root(base_url), model_key(model))
     hit, value = _fresh(_trained, key)
     if hit:
         return value
+    empty = {"context": None, "capabilities": []}
     try:
         body = _get(f"{key[0]}/api/show", timeout, via_proxy, body={"model": model})
         info = body.get("model_info") if isinstance(body, dict) else None
         found = None
         if isinstance(info, dict):
             found = next((_int(v) for k, v in info.items() if str(k).endswith(".context_length") and _int(v)), None)
-        _remember(_trained, key, found, True)
+        caps = body.get("capabilities") if isinstance(body, dict) else None
+        _remember(_trained, key, {"context": found,
+                                  "capabilities": [str(c) for c in caps] if isinstance(caps, list) else []}, True)
     except (_NotList, urllib.error.HTTPError):
-        _remember(_trained, key, None, True)
+        _remember(_trained, key, empty, True)
     except (urllib.error.URLError, OSError, ValueError):
-        _remember(_trained, key, None, False)
+        _remember(_trained, key, empty, False)
     return _trained[key][0]
+
+
+def ollama_trained_context(base_url: str, model: str, *, via_proxy: bool | str = False,
+                           timeout: float = TIMEOUT_S) -> int | None:
+    """Обученное окно контекста модели Ollama; не узнать — None."""
+    return ollama_show(base_url, model, via_proxy=via_proxy, timeout=timeout)["context"]
+
+
+def ollama_thinks(base_url: str, model: str, *, via_proxy: bool | str = False) -> bool:
+    """Модель Ollama рассуждает (`capabilities` содержит «thinking», Ollama 0.9+)."""
+    return "thinking" in ollama_show(base_url, model, via_proxy=via_proxy)["capabilities"]
 
 
 def _lmstudio_context(base_url: str, model: str, via_proxy: bool | str, timeout: float):

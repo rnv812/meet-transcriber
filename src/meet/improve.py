@@ -402,6 +402,15 @@ def parse(text: str, texts: dict[int, str]) -> tuple[list[dict], list[str]]:
     return good, dropped
 
 
+def window_chars(context: int) -> int:
+    """Длина куска (символы) для окна `context`: кусок, промпт (до ~1500
+    токенов) и замены (ответ ≈ вход × 1,3) влезают с запасом ~15 %."""
+    from meet.llm.openai_compat import CHARS_PER_TOKEN
+
+    room = context * 0.85 - 1500
+    return int(max(3000, min(60_000, room * CHARS_PER_TOKEN / 2.3)))
+
+
 def reply_budget(prompt: str) -> int:
     """Предел ответа локальной модели на кусок: замены — не длиннее самого
     куска (≈ ×1,3 в токенах), но не меньше 1024 и не больше 8192."""
@@ -559,7 +568,12 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     terms = _terms(cfg)
     rules = list(getattr(cfg.asr, "replacements", ()) or ())
     kb = analysis._kb_excerpts(cfg.assistant.knowledge_dir, lines)
-    parts = analysis.windows(lines)
+    if provider == "openai-compatible":
+        # Локальная модель: куски — по её окну контекста, все, без выборки.
+        context = analysis.local_context(cfg) or analysis.UNKNOWN_CONTEXT
+        parts = analysis.windows(lines, limit=window_chars(context), max_windows=None)
+    else:
+        parts = analysis.windows(lines)
     pairs, warnings, failed = [], [], []
     from meet import llm_progress
 

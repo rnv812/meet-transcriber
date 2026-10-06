@@ -825,7 +825,7 @@ def _call(runner, prompt: str, system: str, timeout_s: float, schema: dict | Non
     if report is not None and isinstance(found, dict):
         cut = report.get("context_cut")
         if not cut or found.get("need", 0) > cut.get("need", 0):
-            report["context_cut"] = {k: found[k] for k in ("seen", "need", "ollama") if k in found}
+            report["context_cut"] = {k: found[k] for k in ("seen", "need", "ollama", "capped") if k in found}
     if reply.error:
         raise RuntimeError(reply.error)
     return reply.text or ""
@@ -1133,7 +1133,7 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     if cut:
         from meet.llm.openai_compat import cut_error
 
-        errors.insert(0, cut_error(cut, bool(cut.get("ollama"))))
+        errors.insert(0, cut_error(cut, bool(cut.get("ollama")), bool(cut.get("capped"))))
     doc = to_file(merged, features, fingerprint(data), model=model_label(provider, cfg),
                   now=now, errors=errors)
     if missing:

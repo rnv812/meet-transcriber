@@ -27,6 +27,7 @@ _THINK_OPEN = re.compile(r"<think>", re.I)
 _THINK_CLOSE = re.compile(r"</think>", re.I)
 _FENCE = re.compile(r"```[A-Za-z0-9_-]*[ \t]*\r?\n?(.*?)```", re.S)
 _TRAILING_COMMA = re.compile(r",(\s*[}\]])")
+_BRACE_RUN = re.compile(r"\{+")
 # Бюджет дорогих шагов на один ответ: полных проходов по скобкам (`_scan`,
 # O(длины)) и попыток починить обрыв (`json.loads`, O(длины)). Так разбор
 # зациклившегося ответа линеен по его длине, а не кубичен.
@@ -47,6 +48,14 @@ def _strip_think(text: str) -> tuple[str, bool]:
         # Рассуждение не закрыто — ответ оборвался в нём: всё после тега — черновик.
         return text[:opened.start()], True
     return text, False
+
+
+def strip_reasoning(text: str) -> tuple[str, bool]:
+    """Ответ без рассуждения `<think>…</think>` (и без незакрытого — ответ
+    оборвался в нём) → (текст, оборвано ли рассуждение). Одно место для всех
+    ответов локальной модели: названия, итогов, ответов, тиков."""
+    stripped, unfinished = _strip_think(text or "")
+    return stripped.strip(), unfinished
 
 
 def _scan(src: str, start: int):
@@ -106,6 +115,10 @@ def _objects(src: str, budget: dict) -> Iterator[tuple[dict, bool]]:
     decoder = json.JSONDecoder()
     i = src.find("{")
     while i != -1:
+        if src.startswith("{{", i):
+            # Объект не начинается с «{{»: к последней скобке подряд — без
+            # исключения на каждую (зациклившийся ответ из одних «{»).
+            i = _BRACE_RUN.match(src, i).end() - 1
         try:
             obj, end = decoder.raw_decode(src, i)
         except (ValueError, RecursionError):

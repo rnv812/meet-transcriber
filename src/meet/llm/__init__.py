@@ -94,7 +94,10 @@ def local_route(cfg: "Settings", via_proxy: bool | None = None) -> bool | str:
     on = cfg.llm.local_via_proxy if via_proxy is None else via_proxy
     if not on or cfg.llm.proxy == "none":
         return False
-    return True if cfg.llm.proxy == "system" else cfg.llm.proxy
+    if cfg.llm.proxy == "system" or cfg.llm.proxy.lower().startswith("socks"):
+        # SOCKS urllib не умеет (окно не даст сохранить; файл правили руками) — прокси системы.
+        return True
+    return cfg.llm.proxy
 
 
 # Параметры вызова, которые понимает только локальная модель: назначение и

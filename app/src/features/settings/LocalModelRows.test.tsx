@@ -171,3 +171,15 @@ test("«Проверить» локальную модель — с окном �
   await userEvent.click(within(local).getByRole("button", { name: "Проверить" }));
   expect(await within(local).findByText("работает; окно контекста модели: 32768 токенов")).toBeInTheDocument();
 });
+
+
+test("«через прокси» с SOCKS-адресом — понятное сообщение, сохранить нельзя", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue({
+    ...settings(), llm: { ...settings().llm, proxy: "socks5://127.0.0.1:1080" } });
+  open();
+  await picker();
+  expect(screen.queryByRole("alert")).toBeNull();
+  await userEvent.click(screen.getByRole("checkbox", { name: "Локальную модель — через прокси" }));
+  expect(screen.getByRole("alert")).toHaveTextContent("SOCKS-прокси для локальной модели не поддерживается");
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeDisabled();
+});

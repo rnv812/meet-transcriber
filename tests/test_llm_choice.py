@@ -242,3 +242,44 @@ def test_local_route_follows_the_proxy_setting():
     assert llm.local_route(off) is False
     assert llm.local_route(settings.Settings()) is False
     assert llm.local_route(settings.Settings(), via_proxy=True) is True  # черновик окна
+
+
+
+@pytest.mark.parametrize("provider, module_name", [
+    ("claude-code", "claude"), ("codex", "codex"), ("opencode", "opencode")])
+def test_cloud_providers_never_receive_local_only_kwargs(monkeypatch, provider, module_name):
+    # run() облачных провайдеров не принимает **kwargs: назначение, предел,
+    # схема и обрезка (только для локальной модели) до них не доходят.
+    import asyncio
+    import importlib
+    import inspect
+
+    from meet.llm.base import AgentReply
+
+    module = importlib.import_module(f"meet.llm.{module_name}")
+    real = module.run
+    seen = {}
+
+    async def strict(*args, **kwargs):
+        inspect.signature(real).bind(*args, **kwargs)  # лишний параметр — TypeError
+        seen.update(kwargs)
+        return AgentReply(text="ок")
+
+    monkeypatch.setattr(module, "run", strict)
+    runner = llm.runner_for(provider, settings.Settings())
+    reply = asyncio.run(runner("Назови встречу.", system_prompt="С.", allowed_dirs=(), timeout_s=5, max_turns=2,
+                               purpose="title", max_tokens=1, response_schema={"type": "object"},
+                               on_cut="keep"))
+    assert reply.text == "ок"
+    assert not set(llm.LOCAL_ONLY) & set(seen)
+
+
+def test_socks_proxy_is_refused_for_the_local_model():
+    with pytest.raises(ValueError, match="SOCKS-прокси для локальной модели не поддерживается"):
+        settings.Llm.check_merged({"provider": "auto", "enabled": ["claude-code"], "local_via_proxy": True,
+                                   "proxy": "socks5://127.0.0.1:1080"})
+    settings.Llm.check_merged({"provider": "auto", "enabled": ["claude-code"], "local_via_proxy": False,
+                               "proxy": "socks5://127.0.0.1:1080"})  # для CLI SOCKS годится
+    hand = settings.Settings.from_raw({"version": 2, "llm": {"local_via_proxy": True,
+                                                             "proxy": "socks5://127.0.0.1:1080"}})
+    assert llm.local_route(hand) is True  # правили руками — прокси системы, а не «unknown url type»

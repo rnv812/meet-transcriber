@@ -47,6 +47,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import re
 import socket
 import time
 import urllib.error
@@ -72,10 +73,27 @@ CHARS_PER_TOKEN = 2.5
 # Предел ответа по назначению вызова; что не получится, если не влезет.
 REPLY_BUDGET = {"title": 256, "tick": 600, "answer": 1500, "summary": 3000}
 WHAT = {"title": "название", "tick": "подсказки", "answer": "ответ", "summary": "итоги",
+        "summary_part": "итоги",
         "improve": "улучшение расшифровки", "analysis": "анализ"}
 # Меньше этого на ответ в окне не оставляем; запас окна на шаблон чата.
-REPLY_FLOOR = 128
+REPLY_FLOOR = {"title": 64, "tick": 256, "answer": 400, "summary": 800, "summary_part": 400}
+DEFAULT_FLOOR = 128
 WINDOW_MARGIN = 64
+# Влезет ли запрос — по оптимистичной оценке (у моделей с большим словарём
+# ~3–3,5 символа на токен): иначе отказ длинным встречам, которые влезают.
+# Предел ответа — по осторожной (CHARS_PER_TOKEN) с запасом CLAMP_MARGIN:
+# vLLM отвергает промпт + max_tokens больше окна.
+FIT_CHARS_PER_TOKEN = 3.0
+CLAMP_MARGIN = 1.05
+# Рассуждающие модели (Qwen3, DeepSeek-R1, gpt-oss, QwQ): рассуждение
+# тратит предел ответа. Ollama — `think: false` (кроме анализа); остальным —
+# запас к пределу и подсказка шаблону чата выключить рассуждение.
+REASONING_ALLOWANCE = 2048
+_REASONING_NAMES = re.compile(r"qwen3|deepseek-r1|gpt-oss|qwq|thinking", re.I)
+# Ответ упёрся в предел: что сказать в конце (итоги, ответ); название и тик — не годятся.
+LENGTH_NOTE = {"summary": "_Итоги обрезаны: модели не хватило места для ответа._",
+               "answer": "(Ответ обрезан: модели не хватило места для ответа.)"}
+LENGTH_ERROR = "ответ модели оборван: не хватило места для ответа"
 
 # Режимы ответа по схеме — от строгого к свободному; None — без response_format.
 SCHEMA_MODES = ("json_schema", "json_object", None)
@@ -160,9 +178,13 @@ def _request(url: str, payload: dict, timeout_s: float, via_proxy: bool | str):
 
 
 def _reply(text, usage: dict | None) -> AgentReply:
-    text = (text or "").strip() if isinstance(text, str) else ""
+    """Текст ответа без рассуждения `<think>` (jsonreply.strip_reasoning); всё
+    ушло на рассуждение — ошибка «не закончила рассуждение»."""
+    from meet.llm.jsonreply import UNFINISHED, strip_reasoning
+
+    text, unfinished = strip_reasoning(text if isinstance(text, str) else "")
     if not text:
-        return AgentReply(text="", error=EMPTY_ERROR, usage=usage)
+        return AgentReply(text="", error=UNFINISHED if unfinished else EMPTY_ERROR, usage=usage)
     return AgentReply(text=text, usage=usage)
 
 
@@ -174,9 +196,12 @@ def _post(url: str, payload: dict, timeout_s: float, via_proxy: bool | str = Fal
         return failed, status, detail
     usage = dict(body["usage"]) if isinstance(body, dict) and isinstance(body.get("usage"), dict) else None
     try:
-        text = body["choices"][0]["message"]["content"]
+        choice = body["choices"][0]
+        text = choice["message"]["content"]
     except (KeyError, IndexError, TypeError):
         return AgentReply(text="", error="неожиданный ответ локальной модели"), None, ""
+    if isinstance(choice, dict) and choice.get("finish_reason") == "length":
+        usage = {**(usage or {}), "length": True}
     return _reply(text, usage), None, ""
 
 
@@ -231,7 +256,7 @@ def sticky_num_ctx(key: tuple[str, str], need: int, cap: int) -> int:
 
 
 def _ollama_chat(base_url: str, payload: dict, timeout_s: float, schema: dict | None, max_tokens: int,
-                 via_proxy: bool | str) -> AgentReply | None:
+                 via_proxy: bool | str, think_off: bool = False) -> AgentReply | None:
     """Любой вызов локальной модели на Ollama — родной `/api/chat` с окном
     контекста по промпту и ответу; сервер не Ollama (или Ollama без
     `/api/chat`) — None: тогда `/v1`. Окно — в `usage["window"]`."""
@@ -249,6 +274,8 @@ def _ollama_chat(base_url: str, payload: dict, timeout_s: float, schema: dict | 
             "options": {"num_ctx": num_ctx, "num_predict": max_tokens}}
     if schema is not None:
         body["format"] = schema
+    if think_off:
+        body["think"] = False  # рассуждающая модель (capabilities: thinking) — без рассуждения
     data, failed, status, detail = _request(f"{root}/api/chat", body, timeout_s, via_proxy)
     if failed is not None and status in (404, 405) and "model" not in detail.lower():
         # Старая Ollama (или прокси, который пропускает только часть путей).
@@ -268,6 +295,8 @@ def _ollama_chat(base_url: str, payload: dict, timeout_s: float, schema: dict | 
     usage = {"window": num_ctx, "ollama": True}
     if isinstance(count, int):
         usage.update(prompt_tokens=count, completion_tokens=data.get("eval_count"))
+    if isinstance(data, dict) and data.get("done_reason") == "length":
+        usage["length"] = True
     return _reply(message.get("content") if isinstance(message, dict) else None, usage)
 
 
@@ -313,61 +342,105 @@ def prompt_cut(usage: dict | None, prompt_chars: int, window: int | None = None,
     return {"seen": seen, "need": need, "window": window}
 
 
-def cut_advice(ollama: bool) -> str:
-    """Что делать, если встреча не влезает: у Ollama окно ставит сам Meet."""
+def cut_advice(ollama: bool, capped: bool = False) -> str:
+    """Что делать, если встреча не влезает. У Ollama окно ставит сам Meet:
+    упёрлись в его предел (`capped`: модель умеет больше OLLAMA_MAX_CTX) — так и
+    сказать; упёрлись в окно самой модели — нужна модель с бо́льшим окном."""
+    if ollama and capped:
+        return f"встреча длиннее окна, которое Meet запрашивает у Ollama ({OLLAMA_MAX_CTX // 1024}K)"
     if ollama:
         return "окно этой модели меньше нужного — возьмите модель с бо́льшим окном контекста"
     return "увеличьте контекст модели до 16K+"
 
 
-def cut_error(cut: dict, ollama: bool = False) -> str:
+def cut_error(cut: dict, ollama: bool = False, capped: bool = False) -> str:
     return (f"модель видела только часть текста: ~{cut['seen']} из ~{cut['need']} токенов — "
-            f"{cut_advice(ollama)}")
+            f"{cut_advice(ollama, capped)}")
 
 
-def fit_error(purpose: str | None, context: int, ollama: bool) -> str:
+def fit_error(purpose: str | None, context: int, ollama: bool, capped: bool = False) -> str:
     """Промпт с минимальным ответом не влезает в окно — что не получится и почему."""
     what = WHAT.get(purpose or "", "ответ")
     return (f"текст не помещается в окно контекста модели ({context} токенов): {what} не получить — "
-            f"{cut_advice(ollama)}")
+            f"{cut_advice(ollama, capped)}")
+
+
+def fits(chars: int, context: int, purpose: str | None = None) -> bool:
+    """Влезет ли промпт из `chars` символов с минимальным ответом `purpose` в
+    окно `context` (оптимистичная оценка, как у отказа в `_complete`): итоги
+    решают по ней, резать ли встречу на части."""
+    floor = REPLY_FLOOR.get(purpose or "", DEFAULT_FLOOR)
+    return context - int(chars / FIT_CHARS_PER_TOKEN) - WINDOW_MARGIN >= floor
+
+
+def reasons_by_name(model: str) -> bool:
+    """По имени — рассуждающая модель (Qwen3, DeepSeek-R1, gpt-oss, QwQ, *-thinking)."""
+    return bool(_REASONING_NAMES.search(model or ""))
 
 
 def _complete(base_url: str, payload: dict, timeout_s: float, schema: dict | None, max_tokens: int | None,
               via_proxy: bool | str, on_cut: str = "error", purpose: str | None = None) -> AgentReply:
-    """Один вызов: предел ответа по назначению и по окну; не влезает — ошибка
-    без вызова; Ollama — родной путь; промпт обрезан сервером — ошибка
-    (`on_cut="keep"` — ответ как есть, обрезка — в `usage["cut"]`)."""
+    """Один вызов: предел ответа по назначению (с запасом на рассуждение) и по
+    окну; не влезает и минимум — ошибка без вызова; Ollama — родной путь;
+    промпт обрезан сервером — ошибка (`on_cut="keep"` — ответ как есть,
+    обрезка — в `usage["cut"]`); ответ упёрся в предел — пометка или ошибка."""
     from meet.llm import local_models
 
     model = str(payload.get("model"))
     chars = sum(len(m.get("content") or "") for m in payload["messages"])
     budget = max_tokens or REPLY_BUDGET.get(purpose or "", DEFAULT_MAX_TOKENS)
+    floor = min(REPLY_FLOOR.get(purpose or "", DEFAULT_FLOOR), budget)
     context = known_context(base_url, model, via_proxy)
-    ollama = bool(context) and local_models.is_ollama(base_url, via_proxy=via_proxy)
+    ollama = local_models.is_ollama(base_url, via_proxy=via_proxy)
+    trained = local_models.ollama_trained_context(base_url, model, via_proxy=via_proxy) if ollama else None
+    capped = ollama and (trained is None or trained > OLLAMA_MAX_CTX)
+    # Рассуждение: Ollama его выключает (`think: false`), кроме анализа; там и
+    # у остальных серверов (подсказка шаблону не везде действует) — запас.
+    reasoning = local_models.ollama_thinks(base_url, model, via_proxy=via_proxy) if ollama else reasons_by_name(model)
+    think_off = reasoning and purpose != "analysis"
+    if reasoning and not (ollama and think_off):
+        budget += REASONING_ALLOWANCE
     if context:
-        room = context - tokens_of(chars) - WINDOW_MARGIN
-        if room < min(REPLY_FLOOR, budget):
-            return AgentReply(text="", error=fit_error(purpose, context, ollama))
-        budget = min(budget, room)
-    reply = _send(base_url, {**payload, "max_tokens": budget}, timeout_s, schema, budget, via_proxy)
+        if context - int(chars / FIT_CHARS_PER_TOKEN) - WINDOW_MARGIN < floor:
+            return AgentReply(text="", error=fit_error(purpose, context, ollama, capped))
+        room = context - int(tokens_of(chars) * CLAMP_MARGIN) - WINDOW_MARGIN
+        budget = max(floor, min(budget, room))
+    reply = _send(base_url, {**payload, "max_tokens": budget}, timeout_s, schema, budget, via_proxy, think_off)
     if reply.error:
         return reply
     usage = reply.usage or {}
     cut = prompt_cut(usage, chars, usage.get("window") or context, budget)
     if cut:
         cut["ollama"] = bool(usage.get("ollama"))
+        cut["capped"] = bool(cut["ollama"] and capped)
         if on_cut != "keep":
-            return AgentReply(text="", error=cut_error(cut, cut["ollama"]), usage=reply.usage)
+            return AgentReply(text="", error=cut_error(cut, cut["ollama"], cut["capped"]), usage=reply.usage)
         reply.usage = {**usage, "cut": cut}
+    if usage.get("length"):
+        if purpose in ("title", "tick"):
+            return AgentReply(text="", error=LENGTH_ERROR, usage=reply.usage)  # обрывок не годится
+        if purpose in LENGTH_NOTE:
+            reply.text = f"{reply.text}\n\n{LENGTH_NOTE[purpose]}"
     return reply
 
 
+# Подсказка шаблону чата выключить рассуждение (vLLM, llama.cpp: Qwen3 и
+# другие с `enable_thinking`). Не проверено на LM Studio: незнакомое поле он,
+# как и прочие серверы, обычно пропускает; отверг — повтор без неё.
+_THINK_OFF_HINT = {"chat_template_kwargs": {"enable_thinking": False}}
+
+
 def _send(base_url: str, payload: dict, timeout_s: float, schema: dict | None, max_tokens: int,
-          via_proxy: bool | str) -> AgentReply:
-    native = _ollama_chat(base_url, payload, timeout_s, schema, max_tokens, via_proxy)
+          via_proxy: bool | str, think_off: bool = False) -> AgentReply:
+    native = _ollama_chat(base_url, payload, timeout_s, schema, max_tokens, via_proxy, think_off)
     if native is not None:
         return native
     url = base_url.rstrip("/") + "/chat/completions"
+    if think_off:
+        reply, status, detail = _post(url, {**payload, **_THINK_OFF_HINT}, timeout_s, via_proxy) \
+            if schema is None else (None, None, "")
+        if reply is not None and not (status in (400, 422) and "chat_template_kwargs" in detail):
+            return reply
     if schema is None:
         return _post(url, payload, timeout_s, via_proxy)[0]
     key = (url, str(payload.get("model")))

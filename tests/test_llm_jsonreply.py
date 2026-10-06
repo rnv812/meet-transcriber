@@ -121,3 +121,13 @@ def test_degenerate_repetition_is_parsed_fast(text):
     except ValueError:
         pass
     assert time.perf_counter() - started < 2.0
+
+
+
+def test_strip_reasoning_for_plain_text_replies():
+    from meet.llm.jsonreply import strip_reasoning
+
+    assert strip_reasoning("<think>думаю {…}</think>\nВыпуск экспорта") == ("Выпуск экспорта", False)
+    assert strip_reasoning("размышление</think> Итоги") == ("Итоги", False)
+    assert strip_reasoning("Итоги встречи\n<think>а ещё") == ("Итоги встречи", True)
+    assert strip_reasoning("<think>не успела") == ("", True)

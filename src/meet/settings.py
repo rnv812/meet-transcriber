@@ -829,6 +829,11 @@ def opencode_model_error(value) -> str | None:
     return None
 
 
+# urllib не умеет SOCKS: локальная модель «через прокси» с таким адресом не пойдёт.
+SOCKS_LOCAL_ERROR = ("SOCKS-прокси для локальной модели не поддерживается — укажите HTTP-прокси "
+                     "или выключите «Локальную модель — через прокси»")
+
+
 @dataclass(frozen=True)
 class Llm:
     """Кто отвечает на вопросы по встрече и ведёт дайджест.
@@ -927,6 +932,9 @@ class Llm:
         """Секция после правки: модель по умолчанию «Авто» требует хотя бы одного
         своего кандидата среди включённых — иначе ни одной модели для
         автоматической работы (ValueError с текстом для человека)."""
+        proxy = str(merged.get("proxy") or "")
+        if merged.get("local_via_proxy") is True and proxy.lower().startswith("socks"):
+            raise ValueError(SOCKS_LOCAL_ERROR)
         enabled = merged.get("enabled")
         if merged.get("provider") == "auto" and isinstance(enabled, list) and not any(
                 name in enabled for name in LLM_AUTO_ORDER):

@@ -416,7 +416,7 @@ export function SettingsPane({ endpoint, recordingsDir, initial, initialTick, on
   dropHiddenJira(changes, draft);
   const categoriesDirty = settings !== null && categoriesChanged(draft.categories, settings.categories);
   const dirty = [...Object.keys(changes), ...(categoriesDirty ? ["categories"] : [])];
-  const invalid = assistantChangesInvalid(changes) || exportChangesInvalid(changes, settings ?? {})
+  const invalid = assistantChangesInvalid(changes, draft) || exportChangesInvalid(changes, settings ?? {})
     || markupChangesInvalid(changes) || (categoriesDirty && categoriesError(draftCategories(draft.categories)) !== null);
   // Разделы с правками — точки в меню и список в вопросе при уходе.
   const dirtySections = new Set<SectionId>(categoriesDirty ? ["categories"] : []);

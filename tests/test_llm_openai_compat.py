@@ -358,3 +358,20 @@ def test_explicit_proxy_address_is_used_for_via_proxy():
     finally:
         urllib.request.ProxyHandler = original
     assert seen["proxies"] == {"http": "http://proxy.corp:3128", "https": "http://proxy.corp:3128"}
+
+
+
+def test_floors_differ_by_purpose(server, monkeypatch):
+    # В окне 4096 после промпта ~500 токенов: название влезает (минимум 64),
+    # итоги — нет (минимум 800): отказ до вызова.
+    from meet.llm import local_models
+
+    monkeypatch.setattr(local_models, "context_length", lambda *a, **k: {"tokens": 4096, "source": "llamacpp"})
+    prompt = "Реплика. " * 1170  # ≈ 10,5 тыс. символов ≈ 3500 токенов по 3 символа
+    title = asyncio.run(openai_compat.run(prompt, system_prompt="С.", base_url=server["base_url"],
+                                          timeout_s=10, purpose="title"))
+    assert title.error is None
+    summary = asyncio.run(openai_compat.run(prompt, system_prompt="С.", base_url=server["base_url"],
+                                            timeout_s=10, purpose="summary"))
+    assert summary.error.startswith("текст не помещается в окно контекста модели (4096 токенов): итоги")
+    assert len(server["requests"]) == 1

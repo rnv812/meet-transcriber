@@ -191,13 +191,24 @@ const windowInvalid = (value: unknown): boolean =>
  * (`changes` — то, что уйдёт в PATCH): значение, уже лежащее в файле, не должно
  * запирать «Сохранить» для остальных разделов.
  */
-export function assistantChangesInvalid(changes: Raw): boolean {
+/** Как у резидента (`settings.SOCKS_LOCAL_ERROR`): urllib не умеет SOCKS. */
+export const SOCKS_LOCAL_ERROR = "SOCKS-прокси для локальной модели не поддерживается — укажите HTTP-прокси "
+  + "или выключите «Локальную модель — через прокси»";
+
+/** Локальная модель «через прокси» с SOCKS-адресом — не сохранить (текст), иначе null. */
+export function socksLocalError(llm: Record<string, unknown> | undefined): string | null {
+  return llm?.local_via_proxy === true && /^socks/i.test(String(llm?.proxy ?? "")) ? SOCKS_LOCAL_ERROR : null;
+}
+
+export function assistantChangesInvalid(changes: Raw, draft?: Raw): boolean {
   const win = changes.assist?.window_seconds;
   const proxy = changes.llm?.proxy;
   const ocModel = changes.llm?.opencode_model;
   return (win !== undefined && windowInvalid(win))
     || (typeof proxy === "string" && proxyError(proxy) !== null)
     || (typeof ocModel === "string" && opencodeModelError(ocModel) !== null)
+    || ((changes.llm?.local_via_proxy !== undefined || changes.llm?.proxy !== undefined)
+      && socksLocalError(draft?.llm ?? changes.llm) !== null)
     || agentLaunchChangesInvalid(changes);
 }
 
@@ -391,6 +402,7 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
           <p className="muted sdesc">Локальная модель не использует базу знаний.</p>
           <LocalModelRows baseUrl={baseUrl} model={String(llm("local_model") ?? "")} set={set} endpoint={endpoint}
             viaProxy={llm("local_via_proxy") === true} />
+          {socksLocalError(draft.llm) && <span className="error" role="alert">{socksLocalError(draft.llm)}</span>}
         </>
       )}
       <Row label={PROXY_LABEL} hint="Через него Claude Code, Codex и OpenCode подключаются к своим сервисам"
