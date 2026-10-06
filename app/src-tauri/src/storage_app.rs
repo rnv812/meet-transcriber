@@ -424,17 +424,22 @@ fn run_move(app: &AppHandle, picked: &Path) -> Result<String, String> {
         version: app.package_info().version.to_string(),
         hold_id: uuid::Uuid::new_v4().to_string(),
     };
+    // Сначала проверка новой папки (только чтение): отказ (занято, места
+    // нет, чужая) не должен отменить прерванный перенос, который ещё можно
+    // продолжить. Потом — что осталось от прошлого, потом — забрать папку.
     let wanted = resolve_target(picked, &data);
-    storage::preamble(&data, &wanted, &env)?;
-    let plan = plan(app, picked)?;
-    if let Some(busy) = plan.check.busy {
-        return Err(format!(
-            "Перенести сейчас нельзя: {busy}. Повторите, когда закончится"
-        ));
-    }
-    if let Some(error) = plan.check.error {
-        return Err(error);
-    }
+    let plan = storage::begin_move(&data, &wanted, &env, || {
+        let plan = plan(app, picked)?;
+        if let Some(busy) = &plan.check.busy {
+            return Err(format!(
+                "Перенести сейчас нельзя: {busy}. Повторите, когда закончится"
+            ));
+        }
+        if let Some(error) = &plan.check.error {
+            return Err(error.clone());
+        }
+        Ok(plan)
+    })?;
     let target = plan.target;
     // Только после проверки: отказ (занято, места нет) не снимает папку с
     // очереди удаления.

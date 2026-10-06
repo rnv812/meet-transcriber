@@ -73,6 +73,7 @@ pub const LEFTOVERS: &str = "storage-leftovers.json";
 pub const MARK: &str = ".meet-storage";
 /// Id этой установки (папки данных): создаётся при первом переносе.
 pub const INSTALL_ID: &str = "storage-id";
+pub const INSIDE_OURS: &str = "Папка внутри папки движка и моделей Meet — выберите другую";
 pub const FOREIGN: &str = "Эта папка принадлежит другой установке Meet (другой пользователь или \
                            копия приложения) — выберите другую папку";
 /// Кэш uv в выбранной папке (`engine::uv_env`).
@@ -233,30 +234,98 @@ pub fn write_pointer(data_dir: &Path, root: Option<&Path>) -> io::Result<()> {
     match root {
         None => remove_file(&path),
         Some(root) => {
-            let text = serde_json::json!({ "version": VERSION, "root": root.to_string_lossy() })
-                .to_string();
-            write_atomic(&path, &text)
+            // Id папки (из её метки): если эта же папка всплывёт под другим
+            // путём (сменилась буква диска), очередь удаления её узнает.
+            let mut value =
+                serde_json::json!({ "version": VERSION, "root": root.to_string_lossy() });
+            if let Some(folder) = folder_id(root) {
+                value["folder"] = serde_json::Value::String(folder);
+            }
+            write_atomic(&path, &value.to_string())
         }
     }
 }
 
+/// Id выбранной папки, записанный в `storage.json` (нет — `None`).
+pub fn pointer_folder(data_dir: &Path) -> Option<String> {
+    let raw = fs::read_to_string(data_dir.join(POINTER)).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    value.get("folder")?.as_str().map(String::from)
+}
+
 // --- своя или чужая папка (N1) -------------------------------------------------
 
-/// Id этой установки; нет — создаётся.
-pub fn install_id(data_dir: &Path) -> String {
+/// Id этой установки. Создаётся, только когда файла нет, и атомарно
+/// (`create_new`: из двух одновременных первых вызовов файл создаст один,
+/// второй прочитает его id). Файл есть, но не читается — ошибка, а не новый
+/// id: иначе все свои папки разом стали бы «чужими».
+pub fn install_id(data_dir: &Path) -> Result<String, String> {
     let path = data_dir.join(INSTALL_ID);
-    if let Ok(text) = fs::read_to_string(&path) {
-        let text = text.trim();
-        if !text.is_empty() {
-            return text.to_string();
+    let read = |path: &Path| -> Result<Option<String>, String> {
+        match fs::read_to_string(path) {
+            Ok(text) if !text.trim().is_empty() => Ok(Some(text.trim().to_string())),
+            Ok(_) => Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(format!("id установки не прочитан: {error}")),
         }
+    };
+    if let Some(id) = read(&path)? {
+        return Ok(id);
     }
-    let id = uuid::Uuid::new_v4().to_string();
+    if path.exists() {
+        // Пустой файл: его только что создал другой поток — ждём содержимое.
+        for _ in 0..20 {
+            std::thread::sleep(Duration::from_millis(50));
+            if let Some(id) = read(&path)? {
+                return Ok(id);
+            }
+        }
+        return Err("id установки пуст".into());
+    }
     let _ = fs::create_dir_all(data_dir);
-    if let Err(error) = write_atomic(&path, &id) {
-        shell_log!("id установки не записался: {error}");
+    let id = uuid::Uuid::new_v4().to_string();
+    match File::options().write(true).create_new(true).open(&path) {
+        Ok(mut file) => {
+            file.write_all(id.as_bytes())
+                .and_then(|()| file.sync_all())
+                .map_err(|error| format!("id установки не записался: {error}"))?;
+            Ok(id)
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            for _ in 0..20 {
+                if let Some(id) = read(&path)? {
+                    return Ok(id);
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err("id установки пуст".into())
+        }
+        Err(error) => Err(format!("id установки не создан: {error}")),
     }
-    id
+}
+
+/// Метка первых сборок (0.3.3 до id): простой текст «Meet: …».
+fn legacy_mark(raw: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(raw).is_err() && raw.trim_start().starts_with("Meet:")
+}
+
+/// Папка, которую сейчас называют выбор или журнал (для старой метки).
+fn named_now(dir: &Path, data_dir: &Path) -> bool {
+    root(data_dir).is_some_and(|root| same_path(&root, dir))
+        || read_journal(data_dir).is_some_and(|journal| {
+            same_path(&journal.to, dir)
+                || journal
+                    .from
+                    .as_deref()
+                    .is_some_and(|from| same_path(from, dir))
+        })
+}
+
+/// Id папки из её метки.
+pub fn folder_id(dir: &Path) -> Option<String> {
+    let raw = fs::read_to_string(dir.join(MARK)).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    value.get("folder")?.as_str().map(String::from)
 }
 
 /// Чья папка.
@@ -279,24 +348,65 @@ pub fn owner(dir: &Path, data_dir: &Path) -> Owner {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Owner::Unmarked,
         Err(_) => return Owner::Foreign,
     };
+    if legacy_mark(&raw) {
+        // Старая метка без id — наша, только если папку называет наш выбор
+        // или журнал (её перепишет `migrate_legacy_marks`).
+        return if named_now(dir, data_dir) {
+            Owner::Ours
+        } else {
+            Owner::Foreign
+        };
+    }
     let id = serde_json::from_str::<serde_json::Value>(&raw)
         .ok()
         .and_then(|value| value.get("install")?.as_str().map(String::from));
-    match id {
-        Some(id) if id == install_id(data_dir) => Owner::Ours,
+    // Свой id не прочитан — чужая: не удаляем того, в чём не уверены.
+    match (id, install_id(data_dir)) {
+        (Some(id), Ok(ours)) if id == ours => Owner::Ours,
         _ => Owner::Foreign,
     }
 }
 
-/// Пометить папку своей (id установки).
+/// Пометить папку своей: id установки и id папки (прежний, если метка уже
+/// наша — та же папка остаётся той же).
 pub fn write_mark(dir: &Path, data_dir: &Path) -> io::Result<()> {
+    let install = install_id(data_dir).map_err(io::Error::other)?;
+    let folder = (owner(dir, data_dir) == Owner::Ours)
+        .then(|| folder_id(dir))
+        .flatten()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let text = serde_json::json!({
         "version": VERSION,
-        "install": install_id(data_dir),
+        "install": install,
+        "folder": folder,
         "note": "Meet: движок и модели",
     })
     .to_string();
     write_atomic(&dir.join(MARK), &text)
+}
+
+/// Старые метки (без id) у выбранной папки и у папки журнала — переписать.
+pub fn migrate_legacy_marks(data_dir: &Path) {
+    let mut dirs: Vec<PathBuf> = root(data_dir).into_iter().collect();
+    if let Some(journal) = read_journal(data_dir) {
+        dirs.push(journal.to);
+        dirs.extend(journal.from);
+    }
+    for dir in dirs {
+        let legacy = fs::read_to_string(dir.join(MARK)).is_ok_and(|raw| legacy_mark(&raw));
+        if legacy && owner(&dir, data_dir) == Owner::Ours {
+            match write_mark(&dir, data_dir) {
+                Ok(()) => shell_log!("метка папки {} обновлена", dir.display()),
+                Err(error) => shell_log!("метка папки {} не обновлена: {error}", dir.display()),
+            }
+        }
+    }
+    // Выбор — с id папки.
+    if let Some(root) = root(data_dir) {
+        if pointer_folder(data_dir).is_none() && folder_id(&root).is_some() {
+            let _ = write_pointer(data_dir, Some(&root));
+        }
+    }
 }
 
 // --- сравнение путей ------------------------------------------------------------
@@ -404,6 +514,16 @@ pub fn check_target(target: &Path, current: &Path, data_dir: &Path) -> Result<()
     }
     if owner(target, data_dir) == Owner::Foreign {
         return Err(FOREIGN.into());
+    }
+    // Внутри чьей-то папки движка (своей или чужой): её уборка удалила бы
+    // и нашу.
+    for parent in target.ancestors().skip(1) {
+        if parent.join(MARK).exists() {
+            return Err(match owner(parent, data_dir) {
+                Owner::Foreign => FOREIGN.into(),
+                _ => INSIDE_OURS.into(),
+            });
+        }
     }
     if owner(target, data_dir) != Owner::Ours && !empty_or_absent(target) {
         return Err(format!(
@@ -888,6 +1008,10 @@ pub enum Scope {
 pub struct Discard {
     pub path: PathBuf,
     pub scope: Scope,
+    /// Id папки из её метки на момент постановки: удаляется, только если
+    /// по этому пути та же папка (не живая, всплывшая под другой буквой).
+    #[serde(default)]
+    pub folder: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -938,23 +1062,39 @@ fn write_discards(data_dir: &Path, items: &[Discard]) {
 /// Поставить папку в очередь удаления (`All` поглощает `Engine`).
 pub fn queue_discard(data_dir: &Path, path: &Path, scope: Scope) {
     let _lock = drain_lock();
+    queue_discard_locked(data_dir, path, scope);
+}
+
+/// То же под уже взятым замком очереди.
+fn queue_discard_locked(data_dir: &Path, path: &Path, scope: Scope) {
+    let folder = folder_id(path);
     let mut items = read_discards(data_dir);
     if let Some(item) = items.iter_mut().find(|item| same_path(&item.path, path)) {
         if scope == Scope::All {
             item.scope = Scope::All;
         }
+        if item.folder.is_none() {
+            item.folder = folder;
+        }
     } else {
         items.push(Discard {
             path: path.to_path_buf(),
             scope,
+            folder,
         });
     }
     write_discards(data_dir, &items);
 }
 
 /// Папку снова берут под перенос («Продолжить», та же папка) — не удалять.
+/// В работе — внутри `claim` и `reset_choice` (под их замком).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn unqueue_discard(data_dir: &Path, path: &Path) {
     let _lock = drain_lock();
+    unqueue_discard_locked(data_dir, path);
+}
+
+fn unqueue_discard_locked(data_dir: &Path, path: &Path) {
     let items: Vec<Discard> = read_discards(data_dir)
         .into_iter()
         .filter(|item| !same_path(&item.path, path))
@@ -1006,7 +1146,13 @@ fn remove_ours(home: &Path, whole: bool, data_dir: &Path) -> Vec<String> {
 /// удалением гасит резидент, запущенный из удаляемой папки.
 pub fn drain_once(data_dir: &Path, env: &impl Recover) -> usize {
     let _lock = drain_lock();
+    // Живая папка неизвестна (диск отключён, выбор не прочитан): она могла
+    // всплыть под путём из очереди — не удаляем ничего, пока не прояснится.
+    if blocked(data_dir).is_some() {
+        return read_discards(data_dir).len();
+    }
     let live = home(data_dir);
+    let live_folder = pointer_folder(data_dir);
     let mut left = Vec::new();
     for item in read_discards(data_dir) {
         if same_path(&item.path, &live) || inside(&live, &item.path) {
@@ -1021,6 +1167,19 @@ pub fn drain_once(data_dir: &Path, env: &impl Recover) -> usize {
         if owner(&item.path, data_dir) != Owner::Ours {
             shell_log!(
                 "{} — не наша папка (метка другой установки или её нет), не удаляю",
+                item.path.display()
+            );
+            continue;
+        }
+        // Удаляем, только если по этому пути та же папка, что ставили в
+        // очередь, и это не живая папка под другим путём.
+        // Папка данных опознаётся путём (она не переезжает).
+        let here = folder_id(&item.path);
+        let same_folder = same_path(&item.path, data_dir)
+            || (item.folder.is_some() && here == item.folder && here != live_folder);
+        if !same_folder {
+            shell_log!(
+                "{} — папка не опознана как недоделанная (другой id), не удаляю",
                 item.path.display()
             );
             continue;
@@ -1084,9 +1243,14 @@ pub fn interrupt(data_dir: &Path, journal: &Journal) -> Result<(), String> {
 /// `from` значило бы указать на устаревшую папку. Живую папку (и ту, в
 /// которой она лежит) в очередь не ставим никогда.
 pub fn abandon(data_dir: &Path, journal: &Journal) -> Result<(), String> {
+    let _lock = drain_lock();
+    abandon_locked(data_dir, journal)
+}
+
+fn abandon_locked(data_dir: &Path, journal: &Journal) -> Result<(), String> {
     let live = home(data_dir);
     if !same_path(&journal.to, &live) && !inside(&live, &journal.to) {
-        queue_discard(data_dir, &journal.to, Scope::All);
+        queue_discard_locked(data_dir, &journal.to, Scope::All);
     }
     remove_file(&data_dir.join(JOURNAL)).map_err(|error| error.to_string())
 }
@@ -1095,6 +1259,13 @@ pub fn abandon(data_dir: &Path, journal: &Journal) -> Result<(), String> {
 /// папку»): прерванный перенос теряет смысл — журнал долой, его папка — в
 /// очередь, если это не новая живая; новая живая из очереди уходит.
 pub fn reset_choice(data_dir: &Path, root: Option<&Path>) -> Result<(), String> {
+    // Под замком очереди: проход, начатый со старым выбором, не удалит
+    // папку, которая сейчас становится живой.
+    let _lock = drain_lock();
+    reset_choice_locked(data_dir, root)
+}
+
+fn reset_choice_locked(data_dir: &Path, root: Option<&Path>) -> Result<(), String> {
     write_pointer(data_dir, root)
         .map_err(|error| format!("Не удалось записать выбор папки: {error}"))?;
     if root.is_none() {
@@ -1102,16 +1273,19 @@ pub fn reset_choice(data_dir: &Path, root: Option<&Path>) -> Result<(), String> 
     }
     if let JournalState::Ok(journal) = journal_state(data_dir) {
         if journal.phase != Phase::Cleanup {
-            abandon(data_dir, &journal)?;
+            abandon_locked(data_dir, &journal)?;
         }
     }
-    unqueue_discard(data_dir, &home(data_dir));
+    unqueue_discard_locked(data_dir, &home(data_dir));
     Ok(())
 }
 
 /// «Указать папку»: только своя (метка с нашим id или папка данных) и с
 /// движком этой версии.
 pub fn repoint(data_dir: &Path, folder: &Path, version: &str) -> Result<(), String> {
+    // Проверки и смена выбора — под замком очереди: проверенный движок не
+    // удалит проход уборки, начатый со старым выбором.
+    let _lock = drain_lock();
     match owner(folder, data_dir) {
         Owner::Ours => {}
         Owner::Foreign => return Err(FOREIGN.into()),
@@ -1128,7 +1302,7 @@ pub fn repoint(data_dir: &Path, folder: &Path, version: &str) -> Result<(), Stri
             folder.display()
         ));
     }
-    reset_choice(data_dir, Some(folder))
+    reset_choice_locked(data_dir, Some(folder))
 }
 
 /// Перед переносом в `wanted`: что осталось от прошлого. Уборка после
@@ -1158,16 +1332,33 @@ pub fn preamble(data_dir: &Path, wanted: &Path, env: &impl MoveEnv) -> Result<()
     }
 }
 
+/// Начало переноса в правильном порядке: сначала проверка новой папки
+/// (`check`, только чтение) — отказ не трогает прерванный перенос, который
+/// ещё можно продолжить; потом — что осталось от прошлого (`preamble`).
+pub fn begin_move<T>(
+    data_dir: &Path,
+    wanted: &Path,
+    env: &impl MoveEnv,
+    check: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let checked = check()?;
+    preamble(data_dir, wanted, env)?;
+    Ok(checked)
+}
+
 /// Забрать проверенную папку под перенос: создать, пометить своей (это и
 /// проверка записи), убрать из очереди удаления («Продолжить»).
 pub fn claim(data_dir: &Path, target: &Path) -> Result<(), String> {
+    // Метка и снятие с очереди — одним шагом под замком: проход, уже
+    // удаляющий эту папку, не снесёт свежую метку.
+    let _lock = drain_lock();
     fs::create_dir_all(target)
         .map_err(|error| format!("Не удалось создать папку {}: {error}", target.display()))?;
     if !same_path(target, data_dir) {
         write_mark(target, data_dir)
             .map_err(|error| format!("В папку {} нельзя записать: {error}", target.display()))?;
     }
-    unqueue_discard(data_dir, target);
+    unqueue_discard_locked(data_dir, target);
     Ok(())
 }
 
@@ -1175,8 +1366,13 @@ pub fn claim(data_dir: &Path, target: &Path) -> Result<(), String> {
 /// трогаем — о нём спросит окно). Не удалилось (файлы заняты) — журнал
 /// остаётся, следующий запуск попробует снова.
 pub fn finish(data_dir: &Path, journal: &Journal, env: &impl Recover) -> Result<(), String> {
+    if blocked(data_dir).is_some() {
+        return Err("папка движка недоступна — прежнюю уберу, когда она вернётся".into());
+    }
     let from = journal.previous_home(data_dir);
-    if !same_path(&from, &journal.to) && !same_path(&from, &home(data_dir)) {
+    let live_folder = pointer_folder(data_dir);
+    let renamed_live = folder_id(&from).is_some() && folder_id(&from) == live_folder;
+    if !same_path(&from, &journal.to) && !same_path(&from, &home(data_dir)) && !renamed_live {
         if from.is_dir() && owner(&from, data_dir) != Owner::Ours {
             shell_log!(
                 "прежняя папка {} — не наша (метка другой установки), не удаляю",
@@ -1205,6 +1401,7 @@ pub fn finish(data_dir: &Path, journal: &Journal, env: &impl Recover) -> Result<
 /// становится `interrupted` (выбор — прежний). → журнал `cleanup`, который
 /// осталось довести (`recover_slow`).
 pub fn recover_journal(data_dir: &Path) -> Option<Journal> {
+    migrate_legacy_marks(data_dir);
     match journal_state(data_dir) {
         JournalState::Absent => None,
         JournalState::Bad => {
@@ -1412,8 +1609,17 @@ fn steps(
     // (запись, автозапись, ассистент, задачи, загрузки) не начнётся до
     // перезапуска.
     let mut failures = 0;
+    let mut asked = false;
     loop {
-        cancel_check(control)?;
+        if control.cancelled() {
+            // Удержание могли выдать, а ответ потеряться: снять (по id —
+            // идемпотентно), иначе запись не начнётся ещё 5 минут.
+            if asked {
+                env.release();
+            }
+            return Err(CANCELLED.into());
+        }
+        asked = true;
         let answer = match env.hold() {
             Ok(answer) => answer,
             // Ответ потерялся или резидент не успел: удержание идемпотентно

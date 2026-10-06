@@ -919,12 +919,12 @@ fn marker_carries_this_install_id() {
     write_mark(&dir, &data).unwrap();
     assert_eq!(owner(&dir, &data), Owner::Ours);
     assert_eq!(
-        install_id(&data),
-        install_id(&data),
+        install_id(&data).unwrap(),
+        install_id(&data).unwrap(),
         "id один на папку данных"
     );
     let raw = fs::read_to_string(dir.join(MARK)).unwrap();
-    assert!(raw.contains(&install_id(&data)));
+    assert!(raw.contains(&install_id(&data).unwrap()));
     assert_eq!(owner(&t.0.join("none"), &data), Owner::Unmarked);
     assert_eq!(owner(&data, &data), Owner::Ours);
     fs::write(dir.join(MARK), "Meet: движок и модели").unwrap();
@@ -1338,4 +1338,241 @@ fn long_paths_have_a_cap_even_when_enabled() {
         !vet::too_long(&verbatim, false),
         "префикс \\\\?\\ не считается"
     );
+}
+
+// --- раунд 3 ------------------------------------------------------------------------
+
+/// Отмечена своей, с id папки; движок внутри.
+fn ours_with(t: &Temp, data: &Path, relative: &str) -> PathBuf {
+    let dir = t.0.join(relative);
+    fs::create_dir_all(dir.join("engine").join("0.3.3")).unwrap();
+    fs::write(dir.join("engine").join("0.3.3").join("python.exe"), "x").unwrap();
+    write_mark(&dir, data).unwrap();
+    dir
+}
+
+#[test]
+fn drive_letter_change_never_lets_the_queue_delete_the_live_folder() {
+    let t = Temp::new("r1-letter");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    // Живая папка «переехала» на другую букву: выбор указывает на H:,
+    // которого нет, а та же папка всплыла по пути из очереди (G:).
+    let g = ours_with(&t, &data, "G/Meet");
+    queue_discard(&data, &g, Scope::All);
+    write_pointer(&data, Some(&t.0.join("H").join("Meet"))).unwrap();
+    assert!(blocked(&data).is_some());
+    assert_eq!(
+        drain_once(&data, &FakeEnv::default()),
+        1,
+        "выбор недоступен — не трогаем ничего"
+    );
+    assert!(g.join("engine").join("0.3.3").is_dir());
+}
+
+#[test]
+fn queued_path_holding_the_live_folder_under_another_name_is_kept() {
+    let t = Temp::new("r1-id");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let live = ours_with(&t, &data, "Live");
+    write_pointer(&data, Some(&live)).unwrap();
+    // По пути из очереди — та же папка (тот же id), как после смены буквы.
+    let alias = t.0.join("Alias");
+    fs::create_dir_all(alias.join("engine")).unwrap();
+    fs::copy(live.join(MARK), alias.join(MARK)).unwrap();
+    queue_discard(&data, &alias, Scope::All);
+    drain_once(&data, &FakeEnv::default());
+    assert!(
+        alias.join("engine").is_dir(),
+        "id папки — живой: не удаляем"
+    );
+}
+
+#[test]
+fn entry_without_a_folder_id_is_never_deleted() {
+    let t = Temp::new("r1-noid");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let gone = t.0.join("Stick").join("Meet");
+    queue_discard(&data, &gone, Scope::All); // папки не было — id не известен
+    let back = ours_with(&t, &data, "Stick/Meet");
+    drain_once(&data, &FakeEnv::default());
+    assert!(back.join("engine").join("0.3.3").is_dir());
+}
+
+#[test]
+fn finish_waits_while_the_choice_is_blocked_or_the_old_path_is_the_live_folder() {
+    let t = Temp::new("r1-finish");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let old = ours_with(&t, &data, "Old");
+    write_pointer(&data, Some(&t.0.join("Missing"))).unwrap();
+    let journal = Journal::new(Some(old.clone()), t.0.join("Missing"), Phase::Cleanup);
+    write_journal(&data, &journal).unwrap();
+    assert!(finish(&data, &journal, &FakeEnv::default()).is_err());
+    assert!(old.join("engine").is_dir());
+    assert!(read_journal(&data).is_some(), "журнал ждёт");
+    // Прежний путь теперь — живая папка под другим именем (тот же id).
+    let live = t.0.join("Live");
+    fs::create_dir_all(&live).unwrap();
+    fs::copy(old.join(MARK), live.join(MARK)).unwrap();
+    write_pointer(&data, Some(&live)).unwrap();
+    finish(
+        &data,
+        &Journal::new(Some(old.clone()), live, Phase::Cleanup),
+        &FakeEnv::default(),
+    )
+    .unwrap();
+    assert!(old.join("engine").is_dir());
+}
+
+#[test]
+fn cancel_after_a_lost_hold_reply_releases_the_hold() {
+    let w = world("r2-cancel");
+    let control = MoveControl::new();
+    let env = FakeEnv {
+        control: Some(&control),
+        hold_errors: Cell::new(1),
+        cancel_in_pause: true,
+        ..Default::default()
+    };
+    assert_eq!(run(&w, &env, &control).unwrap_err(), CANCELLED);
+    assert_eq!(env.called("release"), 1, "удержание могли выдать — снимаем");
+}
+
+#[test]
+fn target_inside_a_marked_folder_is_refused() {
+    let t = Temp::new("r3-inside");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let ours = ours_with(&t, &data, "Ours");
+    let inner = ours.join("engine").join("Meet");
+    assert_eq!(
+        check_target(&inner, &data, &data),
+        Err(INSIDE_OURS.to_string())
+    );
+    let theirs = foreign(&t, "Theirs");
+    t.file("Theirs/engine/x");
+    let inner = theirs.join("engine").join("Meet");
+    assert_eq!(check_target(&inner, &data, &data), Err(FOREIGN.to_string()));
+}
+
+#[test]
+fn reset_choice_waits_for_a_running_drain_pass() {
+    let t = Temp::new("r4-lock");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        let _lock = drain_lock();
+        started_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    started_rx.recv().unwrap();
+    let data2 = data.clone();
+    let worker = std::thread::spawn(move || {
+        let begin = std::time::Instant::now();
+        reset_choice(&data2, None).unwrap();
+        begin.elapsed()
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    assert!(
+        worker.join().unwrap() >= Duration::from_millis(150),
+        "ждал проход уборки"
+    );
+}
+
+#[test]
+fn refused_new_target_keeps_the_interrupted_move() {
+    let w = interrupted_world("r5-order");
+    let other = w.to.parent().unwrap().join("Other");
+    let result: Result<(), String> = begin_move(&w.data, &other, &FakeEnv::default(), || {
+        Err("Недостаточно места".into())
+    });
+    assert!(result.is_err());
+    assert_eq!(
+        phase(&w.data),
+        Some(Phase::Interrupted),
+        "продолжить ещё можно"
+    );
+    assert!(w.to.join("models").exists());
+    begin_move(&w.data, &other, &FakeEnv::default(), || Ok(())).unwrap();
+    assert_eq!(
+        read_journal(&w.data),
+        None,
+        "новая папка прошла — прежняя отменена"
+    );
+}
+
+#[test]
+fn install_id_is_created_once_and_never_replaced_on_read_errors() {
+    let t = Temp::new("r6-id");
+    let data = t.0.join("data");
+    fs::create_dir_all(&data).unwrap();
+    let workers: Vec<_> = (0..8)
+        .map(|_| {
+            let data = data.clone();
+            std::thread::spawn(move || install_id(&data).unwrap())
+        })
+        .collect();
+    let ids: Vec<String> = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect();
+    assert!(
+        ids.windows(2).all(|pair| pair[0] == pair[1]),
+        "один id на всех"
+    );
+    // Не читается (вместо файла — папка): ошибка, а не новый id.
+    let broken = t.0.join("broken");
+    fs::create_dir_all(broken.join(INSTALL_ID)).unwrap();
+    assert!(install_id(&broken).is_err());
+    let dir = t.0.join("Meet");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join(MARK),
+        r#"{"version":1,"install":"x","folder":"f"}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        owner(&dir, &broken),
+        Owner::Foreign,
+        "свой id не прочитан — не уверены"
+    );
+}
+
+#[test]
+fn round_one_plain_marker_is_ours_only_where_our_choice_points_and_gets_migrated() {
+    let t = Temp::new("r6-legacy");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let live = t.0.join("Live");
+    fs::create_dir_all(&live).unwrap();
+    fs::write(live.join(MARK), "Meet: движок и модели\n").unwrap();
+    let stray = t.0.join("Stray");
+    fs::create_dir_all(&stray).unwrap();
+    fs::write(stray.join(MARK), "Meet: движок и модели\n").unwrap();
+    write_pointer(&data, Some(&live)).unwrap();
+    assert_eq!(owner(&live, &data), Owner::Ours);
+    assert_eq!(owner(&stray, &data), Owner::Foreign);
+    recover_journal(&data);
+    assert!(folder_id(&live).is_some(), "метка переписана с id");
+    assert_eq!(owner(&live, &data), Owner::Ours);
+    assert_eq!(pointer_folder(&data), folder_id(&live));
+}
+
+#[test]
+fn rewriting_our_marker_keeps_the_folder_id() {
+    let t = Temp::new("folder-id");
+    let data = t.0.join("data");
+    let dir = ours_with(&t, &data, "Meet");
+    let first = folder_id(&dir).unwrap();
+    write_mark(&dir, &data).unwrap();
+    assert_eq!(folder_id(&dir).unwrap(), first);
+    write_pointer(&data, Some(&dir)).unwrap();
+    assert_eq!(pointer_folder(&data), Some(first));
 }
