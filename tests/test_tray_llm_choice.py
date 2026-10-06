@@ -354,3 +354,90 @@ def test_improve_proposal_is_public_with_its_model(state, tmp_path):
     got = state.improve(RID)
     assert got["state"] == "ready"
     assert got["proposal"]["llm"] == {"provider": "claude-code", "model": "sonnet"}
+
+
+# --- fix round 1 -----------------------------------------------------------------------
+
+
+def test_choosing_the_default_itself_is_the_default(state):
+    """«Локальная — по умолчанию» из списка — не «другая модель» (M4)."""
+    first = state.make_summary(RID)
+    assert state.make_summary(RID, {"provider": "openai-compatible"})["id"] == first["id"]
+    job = state.make_analysis(RID, {"provider": "openai-compatible"})
+    assert "provider" not in job
+
+
+def test_manual_choice_replaces_a_queued_background_improvement(state, tmp_path):
+    state.llm_queue.submit(jobs.SUMMARY, str(tmp_path / "занято"))
+    background, created = state._queue_improve(_folder(tmp_path), low=True)
+    assert created
+    mine = state.make_improve(RID, {"provider": "claude-code"})
+    alive = [j for j in _llm_jobs(state, jobs.IMPROVE) if j["state"] in ("queued", "running")]
+    assert [j["id"] for j in alive] == [mine["id"]] and mine["provider"] == "claude-code"
+    assert state.llm_queue.get(background.id).state == jobs.CANCELLED
+
+
+def test_started_job_is_not_killed_by_a_replacement_race(state, monkeypatch):
+    """Задача успела начаться между проверкой и снятием — 409, а не убийство (M3)."""
+    job = state.make_analysis(RID)
+    monkeypatch.setattr(state.llm_queue, "cancel_queued", lambda job_id: False)
+    with pytest.raises(control.Conflict, match="другой моделью"):
+        state.make_analysis(RID, {"provider": "claude-code"})
+    assert state.llm_queue.get(job["id"]).state in (jobs.QUEUED, jobs.RUNNING)
+
+
+def test_deferral_keeps_the_chosen_model_against_an_automatic_request(state, tmp_path, monkeypatch):
+    """Отложенный до конца записи выбор человека не стирается фоновой просьбой (M2)."""
+    folder = _folder(tmp_path)
+    monkeypatch.setattr(state, "_busy_now", lambda: {state._key(folder)})
+    state._defer_analysis(folder, True, "claude-code")
+    state._defer_analysis(folder, False)
+    assert library.read_meta(folder)["pending_analysis"]["provider"] == "claude-code"
+    with state._analysis_lock:
+        state._improve_deferred[state._key(folder)] = (folder, "claude-code")
+    _write_config(tmp_path, analysis={"auto": True, "improve_auto": True})
+    state._auto_improve(folder)
+    assert state._improve_deferred[state._key(folder)] == (folder, "claude-code")
+    monkeypatch.setattr(state, "_busy_now", lambda: set())
+    state._flush_deferred_analysis()
+    queued = {j["kind"]: j.get("provider") for j in state.llm_queue.listing()}
+    assert queued == {jobs.ANALYZE: "claude-code", jobs.IMPROVE: "claude-code"}
+
+
+def test_recover_drops_a_disabled_choice_for_improvement_too(app, tmp_path, monkeypatch):
+    _installed(monkeypatch, claude_code=True, openai_compatible=True)
+    _write_config(tmp_path, llm={"enabled": ["openai-compatible"]})
+    library.write_meta(_folder(tmp_path), {
+        "pending_improve": {"at": time.time(), "manual": True, "provider": "claude-code"}})
+    st = tray_control.TrayControl(app, queue=jobs.JobQueue(app.bus, spawn=lambda j, o: 0),
+                                  llm_queue=jobs.JobQueue(app.bus, spawn=lambda j, o: 0))
+    try:
+        st.recover()
+        assert st.llm_queue.listing() == []
+        assert "pending_improve" not in library.read_meta(_folder(tmp_path))
+    finally:
+        st.queue.stop()
+        st.llm_queue.stop()
+
+
+def test_failed_state_carries_the_model_for_retry(state, tmp_path):
+    folder = _folder(tmp_path)
+    analysis.mark_failed(folder, "таймаут", "claude-code")
+    improve.mark_failed(folder, "таймаут", "claude-code")
+    assert state.analysis(RID)["provider"] == "claude-code"
+    assert state.improve(RID)["provider"] == "claude-code"
+
+
+def test_dead_worker_failure_keeps_the_jobs_model(state, tmp_path):
+    folder = _folder(tmp_path)
+    state._analysis_finished(folder, jobs.FAILED, job={"error": "убит", "started_at": time.time() + 10,
+                                                       "provider": "claude-code"})
+    assert library.read_meta(folder)["analysis_error"]["provider"] == "claude-code"
+
+
+def test_default_unavailable_but_chosen_model_still_works(state, monkeypatch):
+    """Модель по умолчанию недоступна — выбранная доступная всё равно работает (I4)."""
+    _installed(monkeypatch, claude_code=True)
+    with pytest.raises(control.Conflict):
+        state.make_analysis(RID)
+    assert state.make_analysis(RID, {"provider": "claude-code"})["provider"] == "claude-code"

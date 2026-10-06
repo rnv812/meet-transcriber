@@ -608,9 +608,11 @@ def improve(folder: Path, runner, cfg, *, provider: str | None = None, bus=None)
     return path
 
 
-def mark_failed(folder: Path, error: str) -> None:
+def mark_failed(folder: Path, error: str, provider: str | None = None) -> None:
+    """Улучшение не получилось; `provider` — выбранная модель (повтор — ею же)."""
     try:
-        library.write_meta(Path(folder), {"improve_error": {"error": str(error)[:500], "at": time.time()}})
+        library.write_meta(Path(folder), {"improve_error": {
+            "error": str(error)[:500], "at": time.time(), **({"provider": provider} if provider else {})}})
     except OSError:
         pass
 
@@ -664,7 +666,9 @@ def state(folder: Path) -> dict:
     failed_at = failure.get("at") if isinstance(failure, dict) else None
     created = float(doc.get("created_at") or 0.0) if doc else 0.0
     if isinstance(failed_at, (int, float)) and not isinstance(failed_at, bool) and failed_at >= created:
+        by = failure.get("provider")
         return {"state": "failed", "error": str(failure.get("error") or ""),
+                **({"provider": by} if isinstance(by, str) and by else {}),
                 **({"proposal": public(doc)} if doc else {})}
     if doc is None:
         return {"state": "none"}

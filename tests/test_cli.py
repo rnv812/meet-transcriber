@@ -1144,3 +1144,87 @@ def test_cli_refuses_text_phase(env, capsys, argv):
     assert (folder / library.TRANSCRIPT_JSON).read_bytes() == before
     meta = library.read_meta(folder)
     assert "analysis_error" not in meta and "speaker_history" not in meta
+
+
+# --- явный --provider (0.3.4, fix round 1) --------------------------------------------
+
+
+def _llm_config(env, **llm_section):
+    path = Path(os.environ["MEET_DATA_DIR"]) / "config.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["llm"] = {**data.get("llm", {}), **llm_section}
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def _app_running(monkeypatch, calls, states):
+    from meet import control
+
+    def fake_request(path, method="GET", payload=None, timeout=5.0):
+        calls.append((method, path, payload))
+        if path.endswith("/title/suggest"):
+            return {"title": "Запуск", "from": "model", "llm": {"provider": "claude-code", "model": "sonnet"}}
+        if method == "PATCH":
+            return {"id": RID}
+        return {"id": "j1"} if method == "POST" else states.pop(0)
+
+    monkeypatch.setattr(control, "alive", lambda *a, **k: True)
+    monkeypatch.setattr(control, "request", fake_request)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+
+@pytest.mark.parametrize("command, route, done", [
+    ("analyze", "/analysis", {"state": "ready", "analysis": {"chapters": []}}),
+    ("improve", "/improve", {"state": "ready", "proposal": {"groups": []}}),
+])
+def test_provider_goes_to_the_running_app(env, capsys, monkeypatch, command, route, done):
+    """С запущенным приложением --provider уходит телом запроса, а не теряется (I1)."""
+    _meeting(env)
+    _llm_config(env, provider="openai-compatible", enabled=["claude-code", "openai-compatible"])
+    calls = []
+    _app_running(monkeypatch, calls, [done])
+    assert _main([command, RID, "--provider", "claude-code"]) == 0
+    assert calls[0] == ("POST", f"/recordings/{RID}{route}", {"provider": "claude-code"})
+
+
+def test_title_via_app_forwards_the_provider_and_its_model(env, capsys, monkeypatch):
+    _meeting(env)
+    _llm_config(env, provider="openai-compatible", enabled=["claude-code", "openai-compatible"])
+    calls = []
+    _app_running(monkeypatch, calls, [])
+    assert _main(["title", RID, "--provider", "claude-code", "--apply"]) == 0
+    assert calls[0] == ("POST", f"/recordings/{RID}/title/suggest", {"provider": "claude-code"})
+    assert calls[-1][0] == "PATCH" and calls[-1][2]["title_llm"] == {"provider": "claude-code", "model": "sonnet"}
+
+
+@pytest.mark.parametrize("command", ["summary", "analyze", "improve", "title"])
+def test_disabled_provider_is_refused_not_enabled(env, capsys, monkeypatch, command):
+    """Явный --provider не включает выключенную модель (M1) — ни с приложением, ни без."""
+    _meeting(env)
+    _llm_config(env, provider="openai-compatible", enabled=["openai-compatible"])
+    _fake_llm(monkeypatch, ["не должно понадобиться"])
+    assert _main([command, RID, "--provider", "claude-code"]) == 1
+    assert "не включена в настройках" in capsys.readouterr().err
+    calls = []
+    _app_running(monkeypatch, calls, [])
+    if command != "summary":
+        assert _main([command, RID, "--provider", "claude-code"]) == 1
+        assert calls == []
+
+
+def test_title_without_app_and_with_provider_calls_that_model(env, capsys, monkeypatch):
+    from meet import analysis, llm
+
+    folder = _meeting(env)
+    _llm_config(env, provider="openai-compatible", enabled=["claude-code", "openai-compatible"])
+    data = library.read_transcript(folder)
+    analysis.write(folder, {"version": 1, "model": "x", "created_at": 1.0, "fingerprint": analysis.fingerprint(data),
+                            "features": ["title"], "title": "Из анализа"})
+
+    async def runner(prompt, **kwargs):
+        return AgentReply(text="От Claude")
+
+    monkeypatch.setattr(llm, "resolve", lambda cfg: (cfg.llm.provider, runner))
+    assert _main(["title", RID, "--provider", "claude-code", "--apply", "--json"]) == 0
+    got = _json_out(capsys)
+    assert got["title"] == "От Claude" and got["from"] == "model"
+    assert library.read_meta(folder)["title_llm"] == {"provider": "claude-code", "model": "sonnet"}

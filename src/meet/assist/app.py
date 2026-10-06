@@ -446,6 +446,9 @@ def _pick_runner(provider: str | None, cfg):
     from meet import llm
 
     if provider:
+        if provider in llm.PROVIDERS and provider not in cfg.llm.enabled:
+            # Явный --provider не включает выключенную в настройках модель.
+            raise SystemExit(f"модель {provider} не включена в настройках («Ассистент» → «Модели»)")
         try:
             return provider, llm.runner_for(provider, cfg)
         except ValueError as e:

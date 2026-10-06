@@ -913,11 +913,13 @@ def analyze(folder: Path, runner, cfg, *, provider: str | None = None, bus=None)
     return path
 
 
-def mark_failed(folder: Path, error: str) -> None:
-    """Анализ не получился: текст ошибки в meta.json (окно покажет «Повторить»)."""
+def mark_failed(folder: Path, error: str, provider: str | None = None) -> None:
+    """Анализ не получился: текст ошибки в meta.json (окно покажет «Повторить»).
+    `provider` — модель, выбранная человеком для этой задачи: «Повторить» пойдёт
+    ею же, а не моделью по умолчанию."""
     try:
-        library.write_meta(Path(folder), {"analysis_error": {"error": str(error)[:500],
-                                                             "at": time.time()}})
+        library.write_meta(Path(folder), {"analysis_error": {
+            "error": str(error)[:500], "at": time.time(), **({"provider": provider} if provider else {})}})
     except OSError:
         pass
 
@@ -954,7 +956,9 @@ def state(folder: Path) -> dict:
     # Ошибка новее анализа (или анализа нет) — «не удалось»; прежний анализ
     # при этом всё равно отдаём: окну есть что показать.
     if isinstance(failed_at, (int, float)) and not isinstance(failed_at, bool) and failed_at >= created:
-        return {"state": "failed", "error": str(failure.get("error") or ""), **out}
+        by = failure.get("provider")
+        return {"state": "failed", "error": str(failure.get("error") or ""),
+                **({"provider": by} if isinstance(by, str) and by else {}), **out}
     if doc is None:
         return {"state": "none"}
     return {"state": "ready" if is_fresh(folder, doc) else "stale", **out}

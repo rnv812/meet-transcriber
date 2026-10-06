@@ -2870,9 +2870,12 @@ class TrayControl:
             raise _bad_request("модель — строка")
         if value not in llm.PROVIDERS:
             raise _bad_request(f"неизвестная модель: {value}")
-        if value not in settings.load().llm.enabled:
+        cfg = settings.load()
+        if value not in cfg.llm.enabled:
             raise _bad_request(f"модель «{llm.LABELS[value]}» не включена в настройках")
-        return value
+        # Выбрана сама модель по умолчанию — то же, что без выбора: задача
+        # по умолчанию, идущая сейчас, не «другая модель».
+        return None if value == cfg.llm.provider else value
 
     def make_summary(self, recording_id: str, body: dict | None = None) -> dict:
         """Итоги задачей. Вторая просьба, пока первая ждёт или идёт, — та же задача;
@@ -3054,9 +3057,9 @@ class TrayControl:
         with self._submit_lock:
             job = self.llm_queue.active_for(str(folder), (jobs.ANALYZE,))
             if job is not None and not low and _job_provider(job) != provider:
-                if job.state == jobs.RUNNING:
+                # Ждущая снимается без события; успела начаться — 409, не убиваем.
+                if job.state == jobs.RUNNING or not self._cancel_queued(job.id):
                     raise _conflict("Анализ уже идёт другой моделью — дождитесь окончания")
-                self.llm_queue.cancel(job.id)  # ждущая снимается без события
                 job = None
             if job is not None:
                 if job.state == jobs.RUNNING:
@@ -3083,9 +3086,10 @@ class TrayControl:
         with self._analysis_lock:
             key = self._key(folder)
             _, was_manual, was_provider = self._analysis_deferred.get(key, (folder, False, None))
-            self._analysis_deferred[key] = (folder, was_manual or manual,
-                                            provider if manual else was_provider)
-        self._mark_analysis(folder, True, manual=manual, provider=provider)
+            merged = (folder, was_manual or manual, provider if manual else was_provider)
+            self._analysis_deferred[key] = merged
+        # Отметка — с объединённым выбором: фоновая просьба не стирает модель человека.
+        self._mark_analysis(folder, True, manual=merged[1], provider=merged[2])
         self.tray.log(f"анализ встречи отложен до конца записи: {folder.name}")
 
     def _auto_analyze(self, folder: Path, *, stale_only: bool = False) -> None:
@@ -3273,7 +3277,8 @@ class TrayControl:
                 started = (job or {}).get("started_at") or 0.0
                 if not isinstance(at, (int, float)) or at < started:
                     # Процесс умер до записи ошибки: окно всё равно покажет «Повторить».
-                    analysis.mark_failed(folder, (job or {}).get("error") or "задача анализа прервалась")
+                    analysis.mark_failed(folder, (job or {}).get("error") or "задача анализа прервалась",
+                                         (job or {}).get("provider"))
             got = analysis.state(folder)
             if job_state == jobs.DONE and got.get("state") == "ready":
                 doc = got.get("analysis") or {}
@@ -3432,9 +3437,8 @@ class TrayControl:
         with self._submit_lock:
             job = self.llm_queue.active_for(str(folder), (jobs.IMPROVE,))
             if job is not None and not low and _job_provider(job) != provider:
-                if job.state == jobs.RUNNING:
+                if job.state == jobs.RUNNING or not self._cancel_queued(job.id):
                     raise _conflict("Улучшение уже идёт другой моделью — дождитесь окончания")
-                self.llm_queue.cancel(job.id)
                 job = None
             if job is not None:
                 if job.state != jobs.RUNNING and not low and hasattr(self.llm_queue, "promote"):
@@ -3449,6 +3453,11 @@ class TrayControl:
                 raise
         self._mark_improve(folder, True, manual=manual, provider=provider)
         return job, True
+
+    def _cancel_queued(self, job_id: str) -> bool:
+        """Снять ждущую задачу очереди модели (идущую — нет)."""
+        cancel = getattr(self.llm_queue, "cancel_queued", None)
+        return bool(cancel(job_id)) if cancel else False
 
     def _improve_again(self, folder: Path, provider: str) -> None:
         """Улучшение выбранной человеком моделью, отложенное до конца записи."""
@@ -3488,8 +3497,9 @@ class TrayControl:
                 return
             if self._busy_now():
                 with self._analysis_lock:
-                    self._improve_deferred[self._key(folder)] = (folder, None)
-                self._mark_improve(folder, True)
+                    kept = self._improve_deferred.setdefault(self._key(folder), (folder, None))
+                if kept[1] is None:  # отложенное моделью человека не трогаем
+                    self._mark_improve(folder, True)
                 return
             job, created = self._queue_improve(folder, low=True)
             if created:
@@ -3563,7 +3573,8 @@ class TrayControl:
                 at = failure.get("at") if isinstance(failure, dict) else None
                 started = (job or {}).get("started_at") or 0.0
                 if not isinstance(at, (int, float)) or at < started:
-                    improve.mark_failed(folder, (job or {}).get("error") or "задача улучшения прервалась")
+                    improve.mark_failed(folder, (job or {}).get("error") or "задача улучшения прервалась",
+                                        (job or {}).get("provider"))
             self.bus.emit(IMPROVE_UPDATED, id=folder.name, state=improve.state(folder).get("state"))
         except Exception as e:
             self.tray.log(f"улучшение расшифровки не обработано ({folder.name}): {type(e).__name__}: {e}")
@@ -3621,7 +3632,7 @@ class TrayControl:
             # выбора модели у действий карточки (U3).
             "setting": cfg.llm.provider,
             "enabled": list(cfg.llm.enabled),
-            "models": llm.models(cfg, found),
+            "models": llm.models(cfg, found, auto_pick=provider),
             "available": found,
             "knowledge_dir": str(knowledge) if knowledge else None,
             # Какой прокси получат Claude Code/Codex (логин и пароль скрыты).

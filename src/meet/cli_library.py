@@ -438,11 +438,39 @@ def _voices_avatar(args, cfg) -> None:
 # --- ассистент ---------------------------------------------------------------
 
 
+def _check_enabled(provider: str | None, cfg) -> None:
+    """`--provider` — только из включённых в настройках моделей («Ассистент» →
+    «Модели»): отказ с понятным текстом, а не тихое включение выключенной."""
+    from meet import llm
+
+    if provider and provider != "auto" and provider not in cfg.llm.enabled:
+        raise CliError(f"Модель «{llm.LABELS.get(provider, provider)}» не включена в настройках "
+                       "(«Ассистент» → «Модели»): включите её или выберите другую")
+
+
+def _chosen_body(args, cfg) -> dict:
+    """Тело запроса к приложению с моделью из `--provider` (только для этого
+    действия). `auto` — не модель, а правило: через приложение его можно
+    попросить, только если «Авто» и есть модель по умолчанию."""
+    provider = getattr(args, "provider", None)
+    if not provider:
+        return {}
+    _check_enabled(provider, cfg)
+    if provider == "auto":
+        if cfg.llm.provider != "auto":
+            raise CliError("--provider auto через приложение недоступен: модель по умолчанию — "
+                           f"{cfg.llm.provider}; укажите модель явно")
+        return {}
+    return {"provider": provider}
+
+
 def _model(args, cfg):
-    """(провайдер, runner) — `--provider` перекрывает llm.provider настроек."""
+    """(провайдер, runner) — `--provider` перекрывает llm.provider настроек
+    (только включённой моделью, см. _check_enabled)."""
     from meet import llm
 
     if args.provider:
+        _check_enabled(args.provider, cfg)
         cfg = replace(cfg, llm=replace(cfg.llm, provider=args.provider))
     try:
         provider, runner = llm.resolve(cfg)
@@ -475,13 +503,13 @@ def _summary(args, cfg) -> None:
         markdown = path.read_text(encoding="utf-8")
     except (RuntimeError, OSError) as e:
         raise CliError(f"Итоги не получились: {e}")
-    title = _apply_ai_title(folder, (library.read_meta(folder).get("summary_title") or {}).get("title"),
-                            cfg)
+    found = library.read_meta(folder).get("summary_title") or {}
+    title = _apply_ai_title(folder, found.get("title"), cfg, origin=found.get("llm"))
     _result(args, {"path": str(path), "provider": provider, "markdown": markdown, "title": title},
             markdown)
 
 
-def _apply_ai_title(folder: Path, title, cfg) -> str | None:
+def _apply_ai_title(folder: Path, title, cfg, origin: dict | None = None) -> str | None:
     """Название от модели без приложения — по тем же правилам (meet.titles):
     только при включённом «Придумывать название» и не вместо названия
     человека. Папку в базе знаний переименовывает следующая выгрузка."""
@@ -490,7 +518,7 @@ def _apply_ai_title(folder: Path, title, cfg) -> str | None:
     if not title:
         return None
     try:
-        applied = titles.apply_ai(folder, title, cfg)
+        applied = titles.apply_ai(folder, title, cfg, origin=origin)
     except OSError:
         return None
     if applied:
@@ -680,7 +708,7 @@ def _analyze(args, cfg) -> None:
     folder = _recording(args.folder, cfg)
     _transcript(folder)
     if _resident_root(folder, cfg.recording.recordings):
-        doc = _analyze_via_resident(folder.name)
+        doc = _analyze_via_resident(folder.name, _chosen_body(args, cfg))
         via_app = True
     else:
         provider, runner = _model(args, cfg)
@@ -693,7 +721,7 @@ def _analyze(args, cfg) -> None:
         except OSError as e:
             raise CliError(f"Не удалось сохранить анализ: {e}")
         doc = analysis.read(folder)
-        _apply_ai_title(folder, (doc or {}).get("title"), cfg)
+        _apply_ai_title(folder, (doc or {}).get("title"), cfg, origin=(doc or {}).get("llm"))
         _apply_ai_category(folder, doc, cfg)
         via_app = False
     _result(args, {"folder": str(folder), "path": str(folder / analysis.ANALYSIS_JSON),
@@ -789,12 +817,13 @@ def _resident_call(rid: str, path: str, method: str = "GET", payload: dict | Non
     return reply
 
 
-def _analyze_via_resident(rid: str, *, sleep=None, clock=None) -> dict | None:
+def _analyze_via_resident(rid: str, body: dict | None = None, *, sleep=None, clock=None) -> dict | None:
+    """Анализ задачей приложения; `body` — {"provider"}: модель для этого анализа."""
     import time
 
     sleep = sleep or time.sleep
     clock = clock or time.monotonic
-    job = _resident_call(rid, "/analysis", "POST", {})
+    job = _resident_call(rid, "/analysis", "POST", body or {})
     _say(f"Анализ встречи поставлен в очередь приложения ({job.get('id')})")
     deadline = clock() + ANALYZE_WAIT_S
     while True:
@@ -819,24 +848,29 @@ def _title(args, cfg) -> None:
     _transcript(folder)
     via_app = _resident_root(folder, cfg.recording.recordings)
     if via_app:
-        got = _resident_call(folder.name, "/title/suggest", "POST", {}, timeout=180)
+        got = _resident_call(folder.name, "/title/suggest", "POST", _chosen_body(args, cfg), timeout=180)
     else:
         from meet import analysis
 
         try:
-            if analysis.fresh_title(folder):
+            # Модель выбрана явно — зовём её, а не берём название из анализа другой модели.
+            if not args.provider and analysis.fresh_title(folder):
                 got = titles.suggest(folder)
             else:
-                got = titles.suggest(folder, _model(args, cfg)[1])
+                provider, runner = _model(args, cfg)
+                got = titles.suggest(folder, runner, origin=_origin(provider, cfg),
+                                     use_analysis=not args.provider)
         except RuntimeError as e:
             raise CliError(f"Название не предложено: {e}")
     title = got.get("title")
+    origin = got.get("llm") if isinstance(got.get("llm"), dict) else None
     applied = False
     if args.apply and title:
         if via_app:
-            _resident_call(folder.name, "", "PATCH", {"title": title, "title_source": "ai"})
+            _resident_call(folder.name, "", "PATCH", {"title": title, "title_source": "ai",
+                                                      **({"title_llm": origin} if origin else {})})
         else:
-            titles.write_title(folder, title, "ai", accepted=True)
+            titles.write_title(folder, title, "ai", accepted=True, origin=origin)
         applied = True
     doc = {"folder": str(folder), "title": title, "from": got.get("from"), "applied": applied,
            "via_app": via_app}
@@ -880,7 +914,7 @@ def _improve(args, cfg) -> None:
     root = cfg.recording.recordings
     via_app = _resident_root(folder, root)
     if via_app:
-        proposal = _improve_via_resident(folder.name)
+        proposal = _improve_via_resident(folder.name, _chosen_body(args, cfg))
     else:
         provider, runner = _model(args, cfg)
         try:
@@ -912,12 +946,13 @@ def _improve(args, cfg) -> None:
     _result(args, doc, _improve_text(groups, applied))
 
 
-def _improve_via_resident(rid: str, *, sleep=None, clock=None) -> dict:
+def _improve_via_resident(rid: str, body: dict | None = None, *, sleep=None, clock=None) -> dict:
+    """Улучшение задачей приложения; `body` — {"provider"}: модель для этого действия."""
     import time
 
     sleep = sleep or time.sleep
     clock = clock or time.monotonic
-    job = _resident_call(rid, "/improve", "POST", {})
+    job = _resident_call(rid, "/improve", "POST", body or {})
     _say(f"Улучшение расшифровки поставлено в очередь приложения ({job.get('id')})")
     deadline = clock() + IMPROVE_WAIT_S
     while True:

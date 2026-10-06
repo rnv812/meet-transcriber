@@ -201,10 +201,12 @@ def is_local(provider: str | None, cfg: "Settings") -> bool:
     return host.lower() in _LOOPBACK or host.startswith("127.")
 
 
-def models(cfg: "Settings", found: dict) -> list[dict]:
+def models(cfg: "Settings", found: dict, auto_pick: str | None = None) -> list[dict]:
     """Включённые модели для окна (выбор модели у действий карточки): имя,
     модель, по умолчанию ли, локальная ли, есть ли на машине и почему нет.
-    `found` — `detect.available()`; вход в CLI не проверяется (это секунды)."""
+    `found` — `detect.available()`; вход в CLI не проверяется (это секунды).
+    `auto_pick` — кого сейчас выбирает «Авто» (если оно по умолчанию): он и
+    отмечен как модель по умолчанию."""
     out = []
     for name in cfg.llm.enabled:
         origin = describe(name, cfg)
@@ -213,7 +215,7 @@ def models(cfg: "Settings", found: dict) -> list[dict]:
             "provider": name,
             "model": origin["model"],
             "label": label(origin),
-            "default": cfg.llm.provider == name,
+            "default": cfg.llm.provider == name or (cfg.llm.provider == "auto" and auto_pick == name),
             "local": is_local(name, cfg),
             "available": available,
             "reason": None if available else not_found(name, cfg),

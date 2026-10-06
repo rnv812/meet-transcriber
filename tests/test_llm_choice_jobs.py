@@ -156,3 +156,42 @@ def test_summary_without_choice_uses_default_resolve(tmp_path, monkeypatch, caps
     assert job_worker.main(["summary", str(folder)]) == 0
     assert seen == [None]
     assert library.read_meta(folder)["summary_llm"] == {"provider": "codex", "model": None}
+
+
+def test_failure_remembers_the_chosen_model_for_retry(tmp_path, monkeypatch, capsys):
+    """«Повторить» после сбоя выбранной модели — ею же (fix round 1, I2)."""
+    from meet import analysis
+
+    folder = _transcribed(tmp_path, monkeypatch, {
+        "provider": "openai-compatible", "enabled": ["claude-code", "openai-compatible"]})
+    monkeypatch.setattr(llm, "choice_error", lambda cfg, name: "не найден Claude Code")
+    assert job_worker.main(["analyze", str(folder), "--provider=claude-code"]) == 2
+    assert job_worker.main(["improve", str(folder), "--provider=claude-code"]) == 2
+    assert analysis.state(folder)["provider"] == "claude-code"
+    assert improve.state(folder)["provider"] == "claude-code"
+    # Без выбора — ключа нет: повтор моделью по умолчанию.
+    monkeypatch.setattr(llm, "resolve", lambda cfg, provider=None: (None, None))
+    assert job_worker.main(["analyze", str(folder)]) == 2
+    assert "provider" not in analysis.state(folder)
+
+
+def test_cancel_queued_never_kills_a_started_job(tmp_path):
+    import threading
+
+    release = threading.Event()
+    queue = jobs.JobQueue(spawn=lambda job, on_line: release.wait(5) and 0)
+    try:
+        first = queue.submit(jobs.ANALYZE, str(tmp_path / "a"))
+        second = queue.submit(jobs.ANALYZE, str(tmp_path / "b"))
+        import time
+
+        deadline = time.monotonic() + 5
+        while queue.get(first.id).state != jobs.RUNNING and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert queue.cancel_queued(first.id) is False
+        assert queue.get(first.id).state == jobs.RUNNING
+        assert queue.cancel_queued(second.id) is True
+        assert queue.get(second.id).state == jobs.CANCELLED
+    finally:
+        release.set()
+        queue.stop()

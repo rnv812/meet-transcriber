@@ -448,6 +448,18 @@ class JobQueue:
                     return job
         return None
 
+    def cancel_queued(self, job_id: str) -> bool:
+        """Снять задачу, только если она ещё ждёт (под замком очереди: успевшую
+        начаться не убиваем). → снята ли."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.id not in self._pending:
+                return False
+            self._pending.remove(job.id)
+            job.state = CANCELLED
+            job.finished_at = time.time()
+            return True
+
     def cancel(self, job_id: str) -> bool:
         """Снять задачу: ждущую — из очереди, идущую — убив подпроцесс.
 

@@ -874,9 +874,12 @@ class Llm:
         base = raw.get("base_url")
         provider = as_choice(raw.get("provider"), LLM_PROVIDERS, default_provider)
         enabled = raw.get("enabled")
-        if not isinstance(enabled, (list, tuple)):
+        if not isinstance(enabled, (list, tuple)) or (
+                provider == "auto" and not any(name in enabled for name in LLM_AUTO_ORDER)):
             # Конфиг до 0.3.4 (или испорченный руками): включена только модель
-            # по умолчанию, у «Авто» — его кандидаты.
+            # по умолчанию, у «Авто» — его кандидаты. «Авто» без единого
+            # кандидата среди включённых (пустой список руками) — то же: ни
+            # одной включённой модели не бывает.
             enabled = LLM_AUTO_ORDER if provider == "auto" else (provider,)
         return cls(
             provider=provider,
@@ -909,6 +912,17 @@ class Llm:
             unknown = [str(x) for x in enabled if x not in LLM_CONCRETE]
             if unknown:
                 raise ValueError(f"неизвестная модель: {', '.join(unknown)}")
+
+    @staticmethod
+    def check_merged(merged: dict) -> None:
+        """Секция после правки: модель по умолчанию «Авто» требует хотя бы одного
+        своего кандидата среди включённых — иначе ни одной модели для
+        автоматической работы (ValueError с текстом для человека)."""
+        enabled = merged.get("enabled")
+        if merged.get("provider") == "auto" and isinstance(enabled, list) and not any(
+                name in enabled for name in LLM_AUTO_ORDER):
+            raise ValueError("Включите хотя бы одну модель для «Авто»: Claude Code, Codex или "
+                             "локальную (OpenCode «Авто» не выбирает)")
 
     def to_raw(self) -> dict:
         return {
@@ -1925,6 +1939,8 @@ def _patch(updates: dict, path: Path | None) -> Settings:
             continue
         merged = getattr(current, name).to_raw()
         merged.update(section_update)
+        if name == "llm":
+            Llm.check_merged(merged)
         if name == "recording":
             merged["former_speaker_names"] = _former_names(current.recording, merged)
         changed[name] = type(getattr(current, name)).from_raw(merged)

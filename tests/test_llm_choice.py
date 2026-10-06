@@ -180,3 +180,42 @@ def test_models_list_for_the_window(monkeypatch):
                       "default": False, "local": False, "available": True, "reason": None}
     assert codex["available"] is False and codex["reason"] == "не найден Codex CLI (codex)"
     assert local["default"] is True and local["local"] is True
+
+
+# --- ни одной включённой модели не бывает (fix round 1, I3) ---------------------------
+
+
+def test_auto_without_any_candidate_is_refused_by_patch(tmp_path):
+    f = tmp_path / "config.json"
+    settings.save(Settings.from_raw({"version": 2, "llm": {"provider": "auto"}}), f)
+    for enabled in ([], ["opencode"]):
+        with pytest.raises(ValueError, match="хотя бы одну модель"):
+            settings.patch({"llm": {"enabled": enabled}}, f)
+    assert settings.load(f).llm.enabled == ("claude-code", "codex", "openai-compatible")
+    # Конкретная модель по умолчанию — пустой список значит «только она».
+    assert settings.patch({"llm": {"provider": "codex", "enabled": []}}, f).llm.enabled == ("codex",)
+
+
+def test_hand_emptied_auto_list_reads_as_the_auto_candidates():
+    for enabled in ([], ["opencode"]):
+        cfg = Settings.from_raw({"version": 2, "llm": {"provider": "auto", "enabled": enabled}})
+        assert cfg.llm.enabled == ("claude-code", "codex", "openai-compatible")
+    # С кандидатом — список как есть.
+    cfg = Settings.from_raw({"version": 2, "llm": {"provider": "auto", "enabled": ["opencode", "codex"]}})
+    assert cfg.llm.enabled == ("codex", "opencode")
+
+
+def test_auto_pick_is_marked_as_default_in_the_window_list():
+    cfg = _cfg("auto", ["claude-code", "openai-compatible"])
+    found = {"claude-code": {"found": True}, "openai-compatible": {"found": True}}
+    got = {m["provider"]: m["default"] for m in llm.models(cfg, found, auto_pick="openai-compatible")}
+    assert got == {"claude-code": False, "openai-compatible": True}
+
+
+def test_assist_provider_flag_does_not_enable_a_disabled_model():
+    from meet.assist import app
+
+    cfg = _cfg("openai-compatible", ["openai-compatible"])
+    with pytest.raises(SystemExit, match="не включена"):
+        app._pick_runner("claude-code", cfg)
+    assert app._pick_runner("openai-compatible", cfg)[0] == "openai-compatible"

@@ -578,7 +578,7 @@ def _analyze(folder_str: str, chosen: str | None = None) -> int:
     cfg = settings.load()
 
     def fail(text: str, code: int) -> int:
-        analysis.mark_failed(folder, text)
+        analysis.mark_failed(folder, text, chosen)
         _emit({"kind": "error", "text": text})
         return code
 
@@ -613,7 +613,7 @@ def _improve(folder_str: str, chosen: str | None = None) -> int:
     cfg = settings.load()
 
     def fail(text: str, code: int) -> int:
-        improve.mark_failed(folder, text)
+        improve.mark_failed(folder, text, chosen)
         _emit({"kind": "error", "text": text})
         return code
 
