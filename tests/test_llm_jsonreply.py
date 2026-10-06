@@ -85,3 +85,39 @@ def test_inner_piece_of_a_broken_object_is_not_the_answer():
     # не должна стать ответом (название встречи = название главы).
     text = '{"chapters": [{"start_i": 0, "title": "План"}] // главы\n}\nИ ещё: {"importance": {"1": 0.5}}'
     assert extract_object(text, ("chapters", "importance", "title")) == {"importance": {"1": 0.5}}
+
+
+def test_unclosed_think_is_no_answer():
+    # Ответ оборвался в рассуждении: черновик из <think> — не ответ.
+    text = '<think>Надо вернуть {"chapters": [{"start_i": 0, "title": "Черновик"}], "importance": {}} и потом'
+    with pytest.raises(ValueError, match="не закончила рассуждение"):
+        extract_object(text, KEYS)
+
+
+def test_answer_before_an_unclosed_think_is_kept():
+    text = '{"chapters": []}\n<think>а ещё можно {"importance": {"1": 1}}'
+    assert extract_object(text, KEYS) == {"chapters": []}
+
+
+def test_uppercase_close_tag_with_wide_lowercase_letters():
+    # «İ» в нижнем регистре длиннее — срез по индексам из lower() съехал бы.
+    text = "İİİİ рассуждение </THINK>{\"chapters\": []}"
+    assert extract_object(text, KEYS) == {"chapters": []}
+
+
+@pytest.mark.parametrize("text", [
+    '{"title": "A", ' * 4000,
+    "{" * 60000,
+    '{"chapters": [{"title": "A", "start_i": 1, ' * 1400,
+    '{"a":' * 3000,
+], ids=["title-loop", "braces", "chapters-loop", "deep-nesting"])
+def test_degenerate_repetition_is_parsed_fast(text):
+    # Маленькая модель зациклилась до лимита: разбор не должен идти минутами.
+    import time
+
+    started = time.perf_counter()
+    try:
+        extract_object(text, KEYS + ("title",))
+    except ValueError:
+        pass
+    assert time.perf_counter() - started < 2.0

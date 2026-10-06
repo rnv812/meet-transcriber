@@ -7,7 +7,12 @@
   в шаблоне чата, а в ответе — только закрывающий);
 * оставляет запятую перед `}` или `]`;
 * кладёт ответ внутрь обёртки (`{"analysis": {...}}`);
-* обрывается на полуслове (лимит токенов) — тогда берутся целые части.
+* обрывается на полуслове (лимит токенов) — тогда берутся целые части;
+* обрывается посреди рассуждения — тогда ответа нет вовсе: черновой JSON из
+  `<think>` ответом не считается;
+* зацикливается (`{"title": "A", {"title": "A", …` на десятки килобайт) —
+  разбор линейный: дорогие шаги (проход по скобкам, починка обрыва)
+  ограничены бюджетом на ответ.
 
 Берётся первый объект, где есть хоть одно ожидаемое поле (`expected`);
 такого нет — первый объект вообще. Только stdlib.
@@ -18,19 +23,30 @@ import re
 from collections.abc import Iterable, Iterator
 
 _THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
+_THINK_OPEN = re.compile(r"<think>", re.I)
+_THINK_CLOSE = re.compile(r"</think>", re.I)
 _FENCE = re.compile(r"```[A-Za-z0-9_-]*[ \t]*\r?\n?(.*?)```", re.S)
 _TRAILING_COMMA = re.compile(r",(\s*[}\]])")
-# Сколько мест обрыва пробовать с конца, прежде чем сдаться.
-_MAX_CUTS = 400
+# Бюджет дорогих шагов на один ответ: полных проходов по скобкам (`_scan`,
+# O(длины)) и попыток починить обрыв (`json.loads`, O(длины)). Так разбор
+# зациклившегося ответа линеен по его длине, а не кубичен.
+_SCANS = 8
+_CUT_TRIES = 50
+UNFINISHED = "модель не закончила рассуждение (лимит токенов или контекста) — ответа нет"
 
 
-def _strip_think(text: str) -> str:
+def _strip_think(text: str) -> tuple[str, bool]:
+    """Текст без рассуждения → (текст, оборвано ли рассуждение)."""
     text = _THINK.sub("", text)
-    low = text.lower()
-    if "</think>" in low:
+    closes = list(_THINK_CLOSE.finditer(text))
+    if closes:
         # Открывающий тег был в шаблоне: всё до закрывающего — рассуждение.
-        text = text[low.rindex("</think>") + len("</think>"):]
-    return re.sub(r"</?think>", "", text, flags=re.I)
+        text = text[closes[-1].end():]
+    opened = _THINK_OPEN.search(text)
+    if opened:
+        # Рассуждение не закрыто — ответ оборвался в нём: всё после тега — черновик.
+        return text[:opened.start()], True
+    return text, False
 
 
 def _scan(src: str, start: int):
@@ -68,36 +84,46 @@ def _scan(src: str, start: int):
 def _loads(text: str):
     try:
         return json.loads(text)
-    except ValueError:
-        try:
-            return json.loads(_TRAILING_COMMA.sub(r"\1", text))
-        except ValueError:
-            return None
+    except (ValueError, RecursionError):
+        pass
+    fixed = _TRAILING_COMMA.sub(r"\1", text)
+    if fixed == text:
+        return None
+    try:
+        return json.loads(fixed)
+    except (ValueError, RecursionError):
+        return None
 
 
 def _closers(stack: str) -> str:
     return "".join("}" if ch == "{" else "]" for ch in reversed(stack))
 
 
-def _objects(src: str) -> Iterator[tuple[dict, bool]]:
-    """Объекты в тексте по порядку: (объект, оборван ли)."""
+def _objects(src: str, budget: dict) -> Iterator[tuple[dict, bool]]:
+    """Объекты в тексте по порядку: (объект, оборван ли). `budget` — остаток
+    дорогих шагов на ответ: кончился — дальше только быстрый `raw_decode`
+    (на зациклившемся тексте он падает через десятки символов)."""
     decoder = json.JSONDecoder()
     i = src.find("{")
     while i != -1:
         try:
             obj, end = decoder.raw_decode(src, i)
-        except ValueError:
-            obj = None
-            end, cuts = _scan(src, i)
-            if end is not None:
-                obj = _loads(src[i:end])
-            else:
-                for pos, stack in reversed(cuts[-_MAX_CUTS:]):
-                    obj = _loads(src[i:pos] + _closers(stack))
-                    if isinstance(obj, dict):
-                        yield obj, True
-                        break
-                obj = None
+        except (ValueError, RecursionError):
+            obj, end = None, None
+            if budget["scans"] > 0:
+                budget["scans"] -= 1
+                end, cuts = _scan(src, i)
+                if end is not None:
+                    obj = _loads(src[i:end])
+                else:
+                    for pos, stack in reversed(cuts):
+                        if budget["cuts"] <= 0:
+                            break
+                        budget["cuts"] -= 1
+                        repaired = _loads(src[i:pos] + _closers(stack))
+                        if isinstance(repaired, dict):
+                            yield repaired, True
+                            break
         if isinstance(obj, dict):
             yield obj, False
             i = src.find("{", end)
@@ -124,11 +150,13 @@ def extract_object(text: str, expected: Iterable[str] = (), info: dict | None = 
     Объекта нет — ValueError с текстом для человека. `info["truncated"]` —
     ответ оборван, взяты его целые части."""
     expected = tuple(expected)
-    raw = _strip_think(text or "").strip()
+    raw, unfinished = _strip_think(text or "")
+    raw = raw.strip()
     sources = [m.group(1) for m in _FENCE.finditer(raw)] + [raw]
     first = None
+    budget = {"scans": _SCANS, "cuts": _CUT_TRIES}
     for src in sources:
-        for obj, cut in _objects(src):
+        for obj, cut in _objects(src, budget):
             obj = _unwrap(obj, expected)
             if not expected or any(k in obj for k in expected):
                 if info is not None:
@@ -138,6 +166,8 @@ def extract_object(text: str, expected: Iterable[str] = (), info: dict | None = 
                 first = obj
     if first is not None:
         return first
+    if unfinished:
+        raise ValueError(UNFINISHED)
     if "{" not in raw:
         raise ValueError("в ответе нет JSON-объекта")
     raise ValueError("JSON не разбирается")
