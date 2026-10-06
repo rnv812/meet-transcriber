@@ -101,6 +101,10 @@ def _objects(src: str) -> Iterator[tuple[dict, bool]]:
         if isinstance(obj, dict):
             yield obj, False
             i = src.find("{", end)
+        elif end is not None:
+            # Скобки сбалансированы, а JSON битый (комментарии, кавычки…): его
+            # внутренние объекты — обрывки (глава с "title" — не ответ), мимо.
+            i = src.find("{", end)
         else:
             i = src.find("{", i + 1)
 

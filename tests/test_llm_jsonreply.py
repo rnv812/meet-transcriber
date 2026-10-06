@@ -78,3 +78,10 @@ def test_no_object_is_an_error(text):
 
 def test_any_object_when_no_keys_expected():
     assert extract_object('ok {"a": 1}') == {"a": 1}
+
+
+def test_inner_piece_of_a_broken_object_is_not_the_answer():
+    # Объект целый по скобкам, но с комментарием — не JSON; его глава с "title"
+    # не должна стать ответом (название встречи = название главы).
+    text = '{"chapters": [{"start_i": 0, "title": "План"}] // главы\n}\nИ ещё: {"importance": {"1": 0.5}}'
+    assert extract_object(text, ("chapters", "importance", "title")) == {"importance": {"1": 0.5}}
