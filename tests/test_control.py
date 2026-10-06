@@ -100,6 +100,33 @@ class FakeState:
         self.filters = filters
         return {"items": [{"id": "r1", "hits": [], "total": 0}]}
 
+    def groups(self, q="", filters=None):
+        self.calls.append(("groups", q))
+        self.filters = filters
+        return {"groups": [], "unknown": []}
+
+    def create_group(self, body):
+        self.calls.append(("create_group", body))
+        return {"id": "g-1", **body}
+
+    def patch_group(self, gid, body):
+        self.calls.append(("patch_group", gid, body))
+        return {"error": "группы нет"} if gid == "g-none" else {"id": gid, **body}
+
+    def delete_group(self, gid):
+        self.calls.append(("delete_group", gid))
+        return {"group": {"id": gid}, "index": 0}
+
+    def order_groups(self, body):
+        self.calls.append(("order_groups", body))
+        return {"groups": []}
+
+    def group_members(self, gid, body):
+        self.calls.append(("group_members", gid, body))
+        if gid == "g-none":
+            raise control.BadRequest("группы нет")
+        return {"changed": body.get("add", []), "failed": []}
+
     def categories(self, q="", filters=None):
         self.calls.append(("categories", q))
         self.filters = filters
@@ -1303,3 +1330,18 @@ def test_declared_but_missing_body_does_not_hold_the_handler(server, token, monk
     reply = b"".join(chunks)
     assert reply.startswith(b"HTTP/1.1 200" if token is None else b"HTTP/1.1 401")
     assert time.monotonic() - started < 2.5
+
+
+def test_group_routes(server):
+    calls = server.state_obj.calls
+    assert _get(server, "/groups?q=x&people=%D0%90%D0%BD%D0%BD%D0%B0") == {"groups": [], "unknown": []}
+    assert ("groups", "x") in calls and server.state_obj.filters == {"people": ["Анна"]}
+    assert _post(server, "/groups", {"name": "Альфа"})["id"] == "g-1"
+    assert _post(server, "/groups/g-1", {"name": "Б"}, method="PATCH") == {"id": "g-1", "name": "Б"}
+    _post(server, "/groups/g-none", {"name": "Б"}, method="PATCH", expect=404)
+    assert _post(server, "/groups/order", {"ids": ["g-1"]}, method="PUT") == {"groups": []}
+    assert ("order_groups", {"ids": ["g-1"]}) in calls
+    assert _post(server, "/groups/g-1/members", {"add": ["r1"]})["changed"] == ["r1"]
+    _post(server, "/groups/g-none/members", {"add": ["r1"]}, expect=400)
+    assert _post(server, "/groups/g-1", method="DELETE")["index"] == 0
+    assert ("delete_group", "g-1") in calls

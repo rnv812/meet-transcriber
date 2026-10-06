@@ -491,6 +491,16 @@ def _meta_lock_path(folder: Path) -> Path:
 
 
 @contextmanager
+def file_lock(path: Path):
+    """Замок чтения-правки-записи файла (или папки записи — её meta.json):
+    и между потоками резидента, и между процессами. Ключ — сам путь; файл
+    замка — во временной папке (см. _meta_file_lock). Так правятся meta.json
+    (update_meta) и описания групп (meet.groups)."""
+    with _meta_lock(Path(path)), _meta_file_lock(Path(path)):
+        yield
+
+
+@contextmanager
 def _meta_file_lock(folder: Path):
     """Замок meta.json между процессами: задачи-подпроцессы (итоги, объединение)
     правят его одновременно с резидентом (переименование из окна), и замок
@@ -554,7 +564,7 @@ def update_meta(folder: Path, change) -> dict:
     теряется. Временный файл свой у каждой записи — параллельные записи не
     делят его."""
     folder = Path(folder)
-    with _meta_lock(folder), _meta_file_lock(folder):
+    with file_lock(folder):
         data = change(read_meta(folder))
         tmp = folder / f"{META_JSON}.{os.getpid()}.{threading.get_ident()}.tmp"
         try:

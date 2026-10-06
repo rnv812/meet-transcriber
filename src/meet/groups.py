@@ -1,12 +1,59 @@
-"""Группы встреч: проект, клиент, серия — многие-ко-многим.
+"""Группы встреч: проект, клиент, серия — многие-ко-многим (категория — «тип»
+встречи, группа — к чему она относится).
 
-Членство — в `meta.json` встречи: `"groups": ["g-3f9a1c2e", …]`.
+Описания — в папке записей, `.meet-groups.json`:
+
+    {"version": 1, "groups": [{"id": "g-3f9a1c2e", "name": "Проект Альфа",
+                               "color": "#4f8cc9", "created_at": "2026-10-06T10:00:00"}]}
+
+порядок в окне — порядок массива. Членство — в `meta.json` встречи:
+`"groups": ["g-3f9a1c2e", …]`; папка записи по-прежнему самодостаточна.
+
+* id — `g-` + 8 шестнадцатеричных, не переиспользуется (свободным считается
+  id, которого нет ни в файле, ни в meta.json встреч); проверка — ID_RE.
+* Имя — 1–NAME_MAX символов, пробелы схлопываются, уникально без учёта
+  регистра и «ё»; «Все записи» — имя области «без группы», его не дать.
+* Файл пишется атомарно (временный + replace с повтором) под
+  `library.file_lock`: чтение-правка-запись не теряют чужую правку. Битый файл
+  не перезаписывается молча: перед записью он откладывается рядом
+  (`.meet-groups.json.broken-<время>`); чтение битого — как пустого.
+* Удаление группы не трогает meta.json: её id у встреч становится
+  «неизвестным» («Группа без названия · N встреч» в окне), и «Отменить»
+  возвращает группу с тем же id и на то же место (`create(gid=…, index=…)`).
+  «Назвать» неизвестную — тоже `create` с её id.
+* Удаление встречи уносит членство с папкой; объединение получает группы всех
+  частей (meet.merge); импорт и новая запись в группы сами не попадают.
 """
 
+import json
+import os
 import re
+import secrets
+import threading
+from datetime import datetime
+from pathlib import Path
 
+from meet import library
+
+FILE = ".meet-groups.json"
+VERSION = 1
 # id группы: `g-` + 8 шестнадцатеричных; проверка шире — на случай правки руками.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+NAME_MAX = 60
+# Область «все встречи» в окне: группа с таким именем путала бы.
+RESERVED = "Все записи"
+# Цвета новых групп по кругу, если окно не выбрало свой.
+PALETTE = ("#4f8cc9", "#d9822b", "#3f9d5d", "#b05cc6", "#c9504f", "#2a9d9b", "#c2a03a", "#7a7f87")
+NO_GROUP = "группы нет"
+
+
+class GroupError(ValueError):
+    """Негодный запрос к группам (текст — человеку, резидент отвечает 400)."""
+
+
+class NoGroup(GroupError):
+    """Такой группы нет в списке (резидент отвечает 404)."""
 
 
 def valid_id(gid) -> bool:
@@ -19,3 +66,261 @@ def of(meta: dict) -> list[str]:
     if not isinstance(raw, list):
         return []
     return list(dict.fromkeys(g for g in raw if valid_id(g)))
+
+
+def path(root: Path) -> Path:
+    return Path(root) / FILE
+
+
+def _key(name: str) -> str:
+    return name.casefold().replace("ё", "е")
+
+
+def _name(value) -> str:
+    if not isinstance(value, str):
+        raise GroupError("нужно название группы")
+    name = " ".join(value.split())
+    if not name:
+        raise GroupError("нужно название группы")
+    if len(name) > NAME_MAX:
+        raise GroupError(f"название группы — не длиннее {NAME_MAX} символов")
+    if _key(name) == _key(RESERVED):
+        raise GroupError(f"«{RESERVED}» — не название группы")
+    return name
+
+
+def _color(value) -> str:
+    if not isinstance(value, str) or not COLOR.match(value):
+        raise GroupError("цвет — в виде #RRGGBB")
+    return value
+
+
+def _clean(raw) -> list[dict]:
+    """Годные описания из файла: битые записи и повторы id отбрасываются."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in raw if isinstance(raw, list) else ():
+        if not isinstance(item, dict) or not valid_id(item.get("id")) or item["id"] in seen:
+            continue
+        name = " ".join(str(item.get("name") or "").split())[:NAME_MAX]
+        if not name:
+            continue
+        color = item.get("color")
+        seen.add(item["id"])
+        out.append({"id": item["id"], "name": name,
+                    "color": color if isinstance(color, str) and COLOR.match(color)
+                    else PALETTE[len(out) % len(PALETTE)],
+                    "created_at": str(item.get("created_at") or "")})
+    return out
+
+
+def _read(file: Path) -> tuple[list[dict], bool]:
+    """(описания, битый ли файл). Нет файла — пусто и не битый."""
+    try:
+        data = json.loads(file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return [], False
+    except (OSError, ValueError):
+        return [], True
+    if not isinstance(data, dict) or not isinstance(data.get("groups"), list):
+        return [], True
+    return _clean(data["groups"]), False
+
+
+def load(root: Path) -> list[dict]:
+    """Группы библиотеки по порядку; нет файла или он битый — пусто (битый
+    при этом не трогается — его отложит первая запись)."""
+    return _read(path(root))[0]
+
+
+def _write(file: Path, items: list[dict]) -> None:
+    tmp = file.with_name(f"{file.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(json.dumps({"version": VERSION, "groups": items}, ensure_ascii=False, indent=1),
+                       encoding="utf-8")
+        library._replace(tmp, file)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _change(root: Path, change):
+    """Прочитать, поправить (`change(items) -> (items, ответ)`) и записать под
+    замком. Битый файл перед записью откладывается рядом."""
+    file = path(root)
+    file.parent.mkdir(parents=True, exist_ok=True)
+    with library.file_lock(file):
+        items, broken = _read(file)
+        items, out = change([dict(g) for g in items])
+        if broken:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            library._replace(file, file.with_name(f"{file.name}.broken-{stamp}"))
+        _write(file, items)
+        return out
+
+
+def _find(items: list[dict], gid) -> int:
+    for i, item in enumerate(items):
+        if item["id"] == gid:
+            return i
+    raise NoGroup(NO_GROUP)
+
+
+def _unique(items: list[dict], name: str, skip: str | None = None) -> None:
+    if any(_key(g["name"]) == _key(name) and g["id"] != skip for g in items):
+        raise GroupError(f"группа «{name}» уже есть")
+
+
+def create(root: Path, name, color=None, *, gid=None, index=None, taken=()) -> dict:
+    """Новая группа (в конец или на место `index`). `gid` — вернуть удалённую
+    («Отменить») или назвать неизвестную с тем же id. `taken` — id, которые
+    уже встречаются в meta.json встреч: новый id их не повторит."""
+    name = _name(name)
+    color = None if color is None else _color(color)
+    if gid is not None and not valid_id(gid):
+        raise GroupError("негодный id группы")
+    if index is not None and (not isinstance(index, int) or isinstance(index, bool)):
+        raise GroupError("место группы — число")
+
+    def change(items):
+        _unique(items, name)
+        if gid is not None and any(g["id"] == gid for g in items):
+            raise GroupError("такая группа уже есть")
+        new_id = gid
+        while new_id is None or (gid is None and (new_id in taken or any(g["id"] == new_id for g in items))):
+            new_id = f"g-{secrets.token_hex(4)}"
+        group = {"id": new_id, "name": name, "color": color or PALETTE[len(items) % len(PALETTE)],
+                 "created_at": datetime.now().isoformat(timespec="seconds")}
+        at = len(items) if index is None else max(0, min(index, len(items)))
+        items.insert(at, group)
+        return items, group
+
+    return _change(root, change)
+
+
+def update(root: Path, gid, *, name=None, color=None) -> dict:
+    """Переименовать и (или) перекрасить. Нет группы — NoGroup."""
+    if name is None and color is None:
+        raise GroupError("нечего менять: нужно название или цвет")
+    name = None if name is None else _name(name)
+    color = None if color is None else _color(color)
+
+    def change(items):
+        at = _find(items, gid)
+        if name is not None:
+            _unique(items, name, skip=gid)
+            items[at]["name"] = name
+        if color is not None:
+            items[at]["color"] = color
+        return items, items[at]
+
+    return _change(root, change)
+
+
+def delete(root: Path, gid) -> dict:
+    """Убрать группу из списка → {"group", "index"} (для «Отменить»).
+    meta.json встреч не трогается."""
+    def change(items):
+        at = _find(items, gid)
+        group = items.pop(at)
+        return items, {"group": group, "index": at}
+
+    return _change(root, change)
+
+
+def reorder(root: Path, ids) -> list[dict]:
+    """Новый порядок: `ids` — группы по порядку; не названные остаются за ними
+    в прежнем порядке. Неизвестный id или повтор — GroupError."""
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        raise GroupError("нужен список id групп")
+    if len(set(ids)) != len(ids):
+        raise GroupError("группа в списке дважды")
+
+    def change(items):
+        by_id = {g["id"]: g for g in items}
+        unknown = [i for i in ids if i not in by_id]
+        if unknown:
+            raise GroupError("таких групп нет — обновите список")
+        ordered = [by_id[i] for i in ids] + [g for g in items if g["id"] not in set(ids)]
+        return ordered, ordered
+
+    return _change(root, change)
+
+
+def _ids(value, what: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(i, str) for i in value):
+        raise GroupError(f"{what} — список id записей")
+    return list(dict.fromkeys(value))
+
+
+def _recording(root: Path, rid: str) -> Path | None:
+    """Папка записи по id — только внутри папки записей (id приходит из сети)."""
+    try:
+        base = Path(root).resolve()
+        folder = (base / rid).resolve()
+    except (OSError, ValueError):
+        return None
+    if folder.parent != base or not library.is_recording(folder):
+        return None
+    return folder
+
+
+def members(root: Path, gid, add=None, remove=None) -> dict:
+    """Добавить встречи в группу и (или) убрать из неё → {"changed": [id…],
+    "failed": [{"id", "error"}]}: каждая запись — отдельно, неудача одной не
+    отменяет остальные и названа честно. Добавлять — только в группу из
+    списка; убирать можно и неизвестную («Убрать из встреч»)."""
+    if not valid_id(gid):
+        raise GroupError("негодный id группы")
+    add, remove = _ids(add, "add"), _ids(remove, "remove")
+    if not add and not remove:
+        raise GroupError("нечего менять: нужны add или remove")
+    if set(add) & set(remove):
+        raise GroupError("запись и в add, и в remove")
+    if add and not any(g["id"] == gid for g in load(root)):
+        raise GroupError(f"{NO_GROUP} — обновите список")
+    changed: list[str] = []
+    failed: list[dict] = []
+    for rid, adding in [(r, True) for r in add] + [(r, False) for r in remove]:
+        folder = _recording(root, rid)
+        if folder is None:
+            failed.append({"id": rid, "error": "записи нет"})
+            continue
+        moved = False
+
+        def change(meta: dict) -> dict:
+            nonlocal moved
+            now = of(meta)
+            if adding and gid not in now:
+                moved = True
+                return {**meta, "groups": now + [gid]}
+            if not adding and gid in now:
+                moved = True
+                rest = [g for g in now if g != gid]
+                return {**{k: v for k, v in meta.items() if k != "groups"}, **({"groups": rest} if rest else {})}
+            return meta
+
+        try:
+            library.update_meta(folder, change)
+        except OSError as e:
+            failed.append({"id": rid, "error": f"не удалось записать meta.json: {e}"})
+            continue
+        if moved:
+            changed.append(rid)
+    return {"changed": changed, "failed": failed}
+
+
+def summary(items: list[dict], cards) -> dict:
+    """Группы со счётчиками встреч (среди `cards`) и неизвестные id из
+    meta.json: {"groups": [{id, name, color, count}], "unknown": [{id, count}]}
+    — неизвестные по убыванию числа встреч."""
+    counts: dict[str, int] = {}
+    for card in cards:
+        for gid in card.get("groups") or ():
+            counts[gid] = counts.get(gid, 0) + 1
+    known = {g["id"] for g in items}
+    unknown = sorted(((gid, n) for gid, n in counts.items() if gid not in known), key=lambda x: (-x[1], x[0]))
+    return {"groups": [{"id": g["id"], "name": g["name"], "color": g["color"], "count": counts.get(g["id"], 0)}
+                       for g in items],
+            "unknown": [{"id": gid, "count": n} for gid, n in unknown]}

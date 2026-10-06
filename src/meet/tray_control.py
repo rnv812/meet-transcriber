@@ -348,6 +348,10 @@ JIRA_CACHE_MAX = 16
 # События шины о записи вне задач очереди: окно перечитывает список и снимок.
 RECORDING_PROCESSING = "recording.processing"  # {"id"}: началась обработка в фоне
 RECORDING_UPDATED = "recording.updated"  # {"id"}: запись изменилась (обрезка, выгрузка)
+# Группы встреч изменились (список, порядок, членство): одно событие на действие,
+# {"op", "id"?}; окно перечитывает группы и список. Не recording.*: массовое
+# «В группу» не должно давать по событию на запись.
+GROUPS_CHANGED = "groups.changed"
 # Анализ встречи готов, не удался или устарел (правка текста): {"id", "state"}.
 # Очередь и ход самой задачи — обычные job.* (вид "analyze").
 ANALYSIS_UPDATED = "analysis.updated"
@@ -1970,6 +1974,95 @@ class TrayControl:
             if kb_export.previously_exported(folder):
                 self._background(lambda: self._auto_kb_export(folder))
         return library.describe(folder).to_raw()
+
+    # --- группы встреч (meet.groups) -----------------------------------
+
+    def _groups_changed(self, op: str, gid: str | None = None) -> None:
+        try:
+            self.bus.emit(GROUPS_CHANGED, op=op, **({"id": gid} if gid else {}))
+        except Exception:
+            pass  # шина — не повод ронять действие, которое уже сделано
+
+    @staticmethod
+    def _group_call(fn, *args, **kwargs):
+        """Вызов meet.groups: нет группы — {"error"} (404), негодный запрос — 400."""
+        from meet import groups
+
+        try:
+            return fn(*args, **kwargs)
+        except groups.NoGroup as e:
+            return {"error": str(e)}
+        except groups.GroupError as e:
+            raise _bad_request(str(e))
+
+    def groups(self, q: str | None = None, filters: dict | None = None) -> dict:
+        """Группы по порядку со счётчиками встреч и неизвестные id из meta.json
+        (meet.groups.summary). С запросом поиска `q` — счётчики среди
+        найденных, с фильтром — среди подходящих под остальные его условия."""
+        from meet import groups, search
+
+        root = self._root()
+        flt = self._library_filter(None, filters).without("groups")
+        keep = flt if flt.active else None
+        scoped = bool(q) and search.searchable(q)
+        if scoped:
+            cards = search.search_library(root, q, limit=10**9, keep=keep, title_only=flt.title_only)
+        else:
+            cards = [c for c in search.cards(root) if keep is None or keep(c)]
+        return {**groups.summary(groups.load(root), cards), "scope": "search" if scoped else "library"}
+
+    def create_group(self, body: dict | None) -> dict:
+        """Новая группа {"name", "color"?}; {"id", "name", "color", "index"} —
+        вернуть удалённую на место («Отменить») или назвать неизвестную."""
+        from meet import groups, search
+
+        body = body if isinstance(body, dict) else {}
+        root = self._root()
+        taken = {g for card in search.cards(root) for g in card.get("groups") or ()}
+        got = self._group_call(groups.create, root, body.get("name"), body.get("color"),
+                               gid=body.get("id"), index=body.get("index"), taken=taken)
+        self._groups_changed("create", got["id"])
+        return got
+
+    def patch_group(self, gid: str, body: dict | None) -> dict:
+        from meet import groups
+
+        body = body if isinstance(body, dict) else {}
+        got = self._group_call(groups.update, self._root(), gid, name=body.get("name"),
+                               color=body.get("color"))
+        if "error" not in got:
+            self._groups_changed("update", gid)
+        return got
+
+    def delete_group(self, gid: str) -> dict:
+        """Убрать группу из списка → {"group", "index"}; встречи остаются с её
+        id в meta.json (неизвестная группа), «Отменить» — create_group с id."""
+        from meet import groups
+
+        got = self._group_call(groups.delete, self._root(), gid)
+        if "error" not in got:
+            self._groups_changed("delete", gid)
+        return got
+
+    def order_groups(self, body: dict | None) -> dict:
+        from meet import groups
+
+        ids = (body or {}).get("ids") if isinstance(body, dict) else None
+        got = self._group_call(groups.reorder, self._root(), ids)
+        self._groups_changed("order")
+        return {"groups": got}
+
+    def group_members(self, gid: str, body: dict | None) -> dict:
+        """{"add"?: [id записи], "remove"?: [...]} → {"changed", "failed"}.
+        Одно событие на всё действие, и только если что-то поменялось."""
+        from meet import groups
+
+        body = body if isinstance(body, dict) else {}
+        got = self._group_call(groups.members, self._root(), gid, add=body.get("add"),
+                               remove=body.get("remove"))
+        if got.get("changed"):
+            self._groups_changed("members", gid)
+        return got
 
     def categories(self, q: str | None = None, filters: dict | None = None) -> dict:
         """Категории: нынешний список, стандартный («Сбросить к стандартным»)

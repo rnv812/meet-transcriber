@@ -36,6 +36,8 @@ IMPORTANT: токен принимается и в query-параметре `?to
     test_device(body) -> dict            ~2 с с устройства → пик (409 при записи)
     recordings(limit, q, filters) -> dict  библиотека записей (q — поиск, filters — library_filter)
     search(q, limit, filters) -> dict    поиск по тексту встреч с фрагментами
+    groups(q, filters) / create_group / patch_group / delete_group / order_groups /
+    group_members(id, body)              группы встреч (meet.groups)
     delete_recording(id) -> dict         удалить запись
     merge_recordings(body) -> dict       объединить записи {"ids", "keep_originals"}
     get_hotwords() / put_hotwords(body)  список слов распознавания
@@ -784,6 +786,12 @@ _ROUTES = {
     # Редактор категорий: список, стандартный список и сколько встреч в каждой.
     ("GET", "/categories"): lambda h, p: _server_of(h).state.categories(
         (p.get("q") or [""])[0], filters=_filter_params(p)),
+    # Группы встреч (meet.groups): список со счётчиками (с q и фильтром — среди
+    # найденного), создать (и вернуть удалённую с тем же id), порядок.
+    ("GET", "/groups"): lambda h, p: _server_of(h).state.groups(
+        (p.get("q") or [""])[0], filters=_filter_params(p)),
+    ("POST", "/groups"): lambda h, p: _server_of(h).state.create_group(h._body()),
+    ("PUT", "/groups/order"): lambda h, p: _server_of(h).state.order_groups(h._body()),
     ("POST", "/recording/start"): lambda h, p: _server_of(h).state.start_recording(),
     ("POST", "/recording/stop"): lambda h, p: _server_of(h).state.stop_recording(),
     ("POST", "/recording/cancel"): lambda h, p: _server_of(h).state.stop_recording(
@@ -967,6 +975,13 @@ _PATTERNS = (
      lambda h, p, n: _server_of(h).state.person_action(unquote(n), "merge", h._body())),
     ("DELETE", re.compile(r"^/recordings/([^/]+)$"),
      lambda h, p, rid: _server_of(h).state.delete_recording(unquote(rid))),
+    ("PATCH", re.compile(r"^/groups/([^/]+)$"),
+     lambda h, p, gid: _server_of(h).state.patch_group(unquote(gid), h._body())),
+    ("DELETE", re.compile(r"^/groups/([^/]+)$"),
+     lambda h, p, gid: _server_of(h).state.delete_group(unquote(gid))),
+    # {"add"?, "remove"?} → {"changed", "failed": [{"id", "error"}]}; неизвестная группа — 400.
+    ("POST", re.compile(r"^/groups/([^/]+)/members$"),
+     lambda h, p, gid: _server_of(h).state.group_members(unquote(gid), h._body())),
     ("GET", re.compile(r"^/voices/([^/]+)$"),
      lambda h, p, n: _server_of(h).state.person(unquote(n))),
     ("DELETE", re.compile(r"^/voices/([^/]+)$"),

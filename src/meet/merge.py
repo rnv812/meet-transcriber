@@ -339,12 +339,15 @@ def create(root: Path, folders: list[Path], keep_originals: bool) -> Path:
     # объединённая встреча наследует; категорию от модели даст её новый анализ.
     category = next((card.category for _, _, card in found
                      if card.category and card.category["source"] == "user" and card.category["id"]), None)
+    # Группы — все группы частей (по порядку частей, без повторов).
+    groups = list(dict.fromkeys(g for _, _, card in found for g in card.groups))
     target = _new_folder(Path(root), first_start)
     library.write_meta(target, {
         "source": SOURCE,
         "title": title,
         "title_source": title_source,
         **({"category": category} if category else {}),
+        **({"groups": groups} if groups else {}),
         "merged_from": [folder.name for _, folder, _ in found],
         "merge": {"keep_originals": bool(keep_originals), "state": "pending",
                   "kb_exported": exported},
