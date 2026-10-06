@@ -333,3 +333,9 @@
 .ownv__found { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 4px 0 8px; }
 .ownv__audio { display: none; }
 .ownv__note { margin: 0 0 8px; font-size: 12px; }
+
+/* Локальная модель: адрес и «Найти модели» в строку, под ними — что нашлось. */
+.local-find { display: flex; gap: 8px; align-items: center; flex: 1 1 100%; min-width: 0; }
+.local-find .btn { flex: none; }
+.local-find__status { flex: 1 1 100%; min-height: 18px; font-size: 12px; }
+.local-find__status:empty { display: none; }

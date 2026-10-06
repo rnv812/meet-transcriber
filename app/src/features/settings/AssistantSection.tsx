@@ -24,6 +24,7 @@ import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
 import { FolderRow, Row, type Raw, type SetFn } from "./Section";
 import { LiveHintsRows } from "./LiveHintsRows";
+import { LocalModelRows } from "./LocalModelRows";
 import { AgentLaunchSection, agentLaunchChangesInvalid } from "./AgentLaunchSection";
 import { KnowledgeTip, LiveWindowTip, ProviderTip } from "./tips";
 import { PRIVACY_CLOUD, PRIVACY_LOCAL } from "../../lib/llm";
@@ -386,14 +387,7 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
       {on(LOCAL) && (
         <>
           <p className="muted sdesc">Локальная модель не использует базу знаний.</p>
-          <Row label="Адрес сервера" htmlFor="llm-base-url" hint="OpenAI-совместимый адрес LM Studio или Ollama">
-            <input id="llm-base-url" type="text" value={String(llm("base_url") ?? "")}
-              onChange={(e) => set("llm", "base_url", e.target.value)} />
-          </Row>
-          <Row label="Имя модели" htmlFor="llm-local-model" hint="Как модель называется в LM Studio или Ollama">
-            <input id="llm-local-model" type="text" value={String(llm("local_model") ?? "")}
-              onChange={(e) => set("llm", "local_model", e.target.value.trim() ? e.target.value : null)} />
-          </Row>
+          <LocalModelRows baseUrl={baseUrl} model={String(llm("local_model") ?? "")} set={set} endpoint={endpoint} />
         </>
       )}
       <Row label={PROXY_LABEL} hint="Через него Claude Code, Codex и OpenCode подключаются к своим сервисам"

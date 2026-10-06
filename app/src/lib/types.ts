@@ -695,6 +695,23 @@ export type ProxyInfo = {
 /** `POST /assistant/check`. */
 export type ProviderCheck = { ok: boolean; error?: string | null; provider?: string | null };
 
+/** Модель на локальном сервере: размер (байты) и число параметров — у Ollama, контекст — у vLLM. */
+export type LocalModel = { id: string; size?: number | null; params?: string | null; context?: number | null };
+
+/** `POST /assistant/local-models`: модели локального сервера или почему их нет. */
+export type LocalModels = {
+  ok: boolean;
+  models: LocalModel[];
+  /** Текст для человека, когда `ok` — false. */
+  error?: string | null;
+  reason?: "bad_url" | "unreachable" | "auth" | "not_openai" | "empty" | null;
+  /** Откуда список: `/v1/models` или родной список Ollama. */
+  source?: "openai" | "ollama" | null;
+  url?: string | null;
+  missing?: boolean;
+  warning?: string | null;
+};
+
 /** Состояние живого режима, общая часть ответов `/live/start` и `/live/stop`. */
 export type LiveStatus = {
   /** Звук уже пишется (своя запись или отвод обычной); модель может ещё грузиться — см. `ready`. */

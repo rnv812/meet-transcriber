@@ -16,6 +16,7 @@ vi.mock("../../lib/api", async (orig) => ({
   getProcesses: vi.fn(),
   getAssistant: vi.fn(),
   checkProvider: vi.fn(),
+  listLocalModels: vi.fn(),
 }));
 vi.mock("../../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../../lib/shell")>()),
@@ -61,6 +62,7 @@ beforeEach(() => {
   vi.mocked(api.getProcesses).mockResolvedValue({ available: false });
   vi.mocked(api.getAssistant).mockResolvedValue(structuredClone(info));
   vi.mocked(api.checkProvider).mockResolvedValue({ ok: true, error: null, provider: "codex" });
+  vi.mocked(api.listLocalModels).mockResolvedValue({ ok: true, models: [] });
   vi.mocked(shell.pickFolder).mockResolvedValue(null);
 });
 
