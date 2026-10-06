@@ -355,3 +355,15 @@ def test_apply_with_empty_users_target_is_400_and_changes_nothing(state, tmp_pat
     assert library.read_transcript(folder)["segments"][0]["text"] == "Апи сервиса отвечает медленно."
     assert settings.load().asr.replacements == ()
     assert improve.read(folder) is not None
+
+
+def test_apply_with_a_zero_width_users_target_is_400_and_remembers_nothing(state, tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "hotwords_path", lambda: tmp_path / "hotwords.txt")
+    folder = _folder(tmp_path)
+    doc = _proposal(folder)
+    api = next(g["id"] for g in doc["groups"] if g["find"] == "апи")
+    for bad in ("\u200b", "RE\u200bST"):
+        with pytest.raises(control.BadRequest):
+            state.improve_apply(RID, {"groups": [api], "targets": {api: bad}, "add_rules": True, "add_terms": True})
+    assert settings.load().asr.replacements == ()
+    assert not (tmp_path / "hotwords.txt").exists()

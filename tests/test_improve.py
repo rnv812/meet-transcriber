@@ -591,3 +591,31 @@ def test_target_same_as_proposed_is_not_an_edit_and_odd_targets_are_ignored(fold
 def test_rules_take_the_users_target():
     used = [{"from": "мсп", "to": "MSSP", "kind": "term", "count": 5, "edited": True}]
     assert improve.rule_pairs(used) == [{"from": "мсп", "to": "MSSP"}]
+
+
+@pytest.mark.parametrize("value, got", [("MS\nSP", "MS SP"), ("MS\r\nSP", "MS SP"), ("\nMSSP\r\n", "MSSP")])
+def test_line_breaks_in_the_target_collapse_to_a_space(folder, cfg, tmp_path, value, got):
+    doc = _ready(folder, cfg)
+    api = _group(doc, "апи")["id"]
+    assert improve.apply(folder, [api], tmp_path / "voices", targets={api: value})["groups"][0]["to"] == got
+
+
+@pytest.mark.parametrize("value", ["\n", "\r\n", "\u200b", "\ufeff", "\u200b\u200d \ufeff", "\u202e"])
+def test_invisible_only_target_counts_as_empty(folder, cfg, tmp_path, value):
+    doc = _ready(folder, cfg)
+    api = _group(doc, "апи")["id"]
+    with pytest.raises(speakers.SpeakerError, match="впишите"):
+        improve.apply(folder, [api], tmp_path / "voices", targets={api: value})
+
+
+@pytest.mark.parametrize("value", ["MS\u200bSP", "\ufeffMSSP", "MS\x00SP", "MS\x1b[31mSP", "\u202eMSSP",
+                                   "MS\x07SP", "MS\ud800SP"])
+def test_control_and_format_characters_in_the_target_are_refused(folder, cfg, tmp_path, value):
+    """Управляющие, невидимые (нулевой ширины, смена направления) и одиночные
+    суррогаты не попадают ни в расшифровку, ни в правила, ни в термины."""
+    doc = _ready(folder, cfg)
+    api = _group(doc, "апи")["id"]
+    before = _texts(folder)
+    with pytest.raises(speakers.SpeakerError, match="невидимые или управляющие"):
+        improve.apply(folder, [api], tmp_path / "voices", targets={api: value})
+    assert _texts(folder) == before

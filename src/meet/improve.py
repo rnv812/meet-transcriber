@@ -48,6 +48,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 from pathlib import Path
 
 from meet import library, search
@@ -111,6 +112,9 @@ ANTONYMS = (
 ANTONYM_PREFIXES = (("в", "вы"), ("за", "от"), ("при", "у"), ("на", "с"))
 # Края `find`/`replace`, которые снимаются: пробелы, кавычки, знаки препинания.
 _EDGES = re.compile(r"^[\s.,;:!?…\"'«»„“”‚‘’`()\[\]{}—–-]+|[\s.,;:!?…\"'«»„“”‚‘’`()\[\]{}—–-]+$")
+# Невидимое и управляющее во вписанном человеком: управляющие (Cc), форматные —
+# нулевой ширины, смена направления (Cf), одиночные суррогаты (Cs).
+_HIDDEN = frozenset(("Cc", "Cf", "Cs"))
 # Что может отличаться внутри: буквы, цифры, пробелы, дефисы, апострофы.
 _PLAIN = re.compile(r"[^\W_]|[\s\-‐‑'’]")
 
@@ -677,14 +681,19 @@ def _extra_ids(extra) -> dict[str, set[int]]:
 
 
 def _target(group: dict, value) -> str:
-    """«Как правильно», вписанное человеком вместо предложенного: пробелы по
-    краям снимаются (и схлопываются внутри), текст — в NFC; пусто или слишком
-    длинно — SpeakerError. Вставляется как есть — не шаблон и не выражение."""
+    """«Как правильно», вписанное человеком вместо предложенного: пробелы и
+    переводы строк по краям снимаются (внутри — схлопываются в пробел), текст
+    — в NFC; пусто (в том числе одни невидимые знаки), с управляющими или
+    невидимыми знаками или слишком длинно — SpeakerError. Вставляется как
+    есть — не шаблон и не выражение."""
     from meet import speakers
 
     text = clean_text(value) if isinstance(value, str) else ""
-    if not text:
+    hidden = [c for c in text if unicodedata.category(c) in _HIDDEN]
+    if not text or not "".join(c for c in text if c not in hidden).strip():
         raise speakers.SpeakerError(f"«{group['find']}»: впишите, как правильно")
+    if hidden:
+        raise speakers.SpeakerError(f"«{group['find']}»: невидимые или управляющие знаки — впишите обычным текстом")
     if len(text) > TEXT_MAX:
         raise speakers.SpeakerError(f"«{group['find']}»: слишком длинно (не больше {TEXT_MAX} символов)")
     return text
