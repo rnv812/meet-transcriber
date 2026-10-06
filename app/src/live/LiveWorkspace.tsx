@@ -4,7 +4,8 @@
  * Узкая — вкладки «Лента · Сводка · Подсказки · Спросить» с маленькими
  * счётчиками нового. Широкая (от 720 px) — две колонки: слева лента, справа
  * сводка и подсказки, «Спросить» внизу правой колонки; счётчики не нужны —
- * видно всё.
+ * видно всё. В широкой размеры областей человек подбирает сам: ширину правой
+ * колонки, высоту сводки и развёрнутого «Спросить» (разделители, `LIVE_PANES`).
  *
  * Состояние вида (`useLiveView`) живёт у владельца, а не здесь: свёрнутой
  * панели тоже нужно знать, сколько подсказок человек ещё не видел, и куда
@@ -16,6 +17,7 @@ import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useId, useM
 import { clock } from "../lib/format";
 import type { LiveCatchup, LiveHint, LiveQuick } from "../lib/types";
 import { Button } from "../ui/Button";
+import { PaneResizer } from "../ui/PaneResizer";
 import { LiveAsk } from "./LiveAsk";
 import { type FeedFocus, LiveFeed } from "./LiveFeed";
 import { LiveHints } from "./LiveHints";
@@ -26,6 +28,28 @@ import type { Live } from "./useLive";
 import "./live.css";
 
 export type LiveTab = "feed" | "summary" | "hints" | "ask";
+
+/** Где рабочая область: плавающая панель или карточка записи — размеры областей у каждой свои. */
+export type LivePlace = "panel" | "card";
+
+/** Промежутки сетки и правой колонки (live.css). */
+const GRID_GAP = 12;
+const SIDE_GAP = 10;
+
+/**
+ * Пределы областей широкой раскладки. Пока их не тянули, размеры — по CSS
+ * (колонка — 2/5 ширины, подсказки и сводка — 3 : 2, «Спросить» — по
+ * содержимому, не выше 30 %); потянули — запоминаются (`meet.pane.live-*`,
+ * у карточки — `meet.pane.live-card-*`). Ленте и подсказкам всегда остаётся
+ * их минимум.
+ */
+export const LIVE_PANES = {
+  feedMin: 240,
+  hintsMin: 96,
+  side: { min: 260, max: 960, reserve: 240 + GRID_GAP },
+  summary: { min: 64, max: 2000 },
+  ask: { min: 88, max: 2000, reserve: 96 + 64 + 2 * SIDE_GAP },
+} as const;
 
 const TABS: { id: LiveTab; label: string }[] = [
   { id: "feed", label: "Лента" },
@@ -122,8 +146,11 @@ export const ASK_STAY_MS = 60_000;
  * когда фокус внутри, пока ждём ответ и ASK_STAY_MS после него — чтобы ответ
  * не свернулся, едва дописавшись.
  */
-function AskSection({ waiting, answers, failed, children }: {
-  waiting: boolean; answers: number; failed: boolean; children: ReactNode;
+function AskSection({ waiting, answers, failed, resizer, children }: {
+  waiting: boolean; answers: number; failed: boolean;
+  /** Разделитель высоты — только у развёрнутого: у одной строки высоты нет. */
+  resizer: ReactNode;
+  children: ReactNode;
 }) {
   const [focused, setFocused] = useState(false);
   const [recent, setRecent] = useState(false);
@@ -143,6 +170,7 @@ function AskSection({ waiting, answers, failed, children }: {
     <section className={`live-ws__ask${open ? "" : " live-ws__ask--compact"}`} aria-label="Спросить"
       onFocus={() => setFocused(true)}
       onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false); }}>
+      {open && resizer}
       {children}
     </section>
   );
@@ -171,7 +199,7 @@ export function CatchupNote({ catchup }: { catchup: LiveCatchup }) {
   );
 }
 
-export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }: {
+export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint, place = "panel" }: {
   live: Live;
   view: LiveView;
   onAsk: (question: string, quick?: LiveQuick) => void | Promise<void>;
@@ -179,9 +207,13 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }
   onAskHint?: (hint: LiveHint) => void;
   /** Режим кончается — спрашивать уже некого. */
   disabled?: boolean;
+  /** Чьи размеры областей помнить: плавающей панели или карточки. */
+  place?: LivePlace;
 }) {
   const { tab, setTab, focus, jump, draft, setDraft, askAbout, openAsk, unseen, fresh, quiet, wide } = view;
   const uid = useId();
+  const side = useRef<HTMLDivElement>(null);
+  const key = place === "card" ? "live-card" : "live";
   const dismissal = useUndoDismiss(live);
   const undoBtn = useRef<HTMLButtonElement>(null);
   const hintAction = (id: string, action: "pin" | "unpin" | "dismiss") => {
@@ -214,27 +246,38 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint }
   );
 
   if (wide) {
+    // Сводке не больше, чем оставляют подсказкам их минимум и «Спросить» — сколько он сейчас занимает.
+    const askNow = () => side.current?.querySelector<HTMLElement>(".live-ws__ask")?.offsetHeight ?? 0;
+    const summarySpec = { ...LIVE_PANES.summary, reserve: () => LIVE_PANES.hintsMin + 2 * SIDE_GAP + askNow() };
     return (
       <div className={`live-ws live-ws--wide${catchup ? " live-ws--catchup" : ""}`}>
         {catchup}
         {feed}
-        {/* Сначала подсказки («Вам вопрос» — первым), у них гарантированная
-            область (не меньше ~40 % колонки) со своей прокруткой; ниже — сводка
-            со своей; «Спросить» — внизу, не выше ~30 % и в одну строку, пока
-            им не пользуются. */}
-        <div className="live-ws__side">
+        <PaneResizer name={`${key}-side`} cssVar="--live-side" spec={LIVE_PANES.side} panel="after"
+          label="Ширина колонки подсказок" className="live-ws__split-side" />
+        {/* Сначала подсказки («Вам вопрос» — первым) со своей прокруткой; ниже —
+            сводка со своей; «Спросить» — внизу, не выше ~30 % и в одну строку,
+            пока им не пользуются. Между ними — разделители высоты. */}
+        <div ref={side} className="live-ws__side">
           <section className="live-ws__pane live-ws__pane--hints" aria-label="Подсказки">
             <h3 className="live-ws__title">
               Подсказки{live.hints.length > 0 && <span className="live-ws__n num"> · {live.hints.length}</span>}
             </h3>
             <div className="live-ws__scroll">{hints}</div>
           </section>
+          <PaneResizer name={`${key}-summary`} cssVar="--live-summary" spec={summarySpec} panel="after" axis="y"
+            label="Высота сводки" cssValue={(h) => `0 1 ${h}px`} />
           <section className="live-ws__pane live-ws__pane--summary" aria-label="Сводка">
             <h3 className="live-ws__title">Сводка</h3>
             <div className="live-ws__scroll">{summary}</div>
           </section>
           <AskSection waiting={live.asking || live.qa.some((q) => q.pending)} answers={live.qa.length}
-            failed={!!live.askError || live.qa.some((q) => !!q.error && !q.pending)}>{ask}</AskSection>
+            failed={!!live.askError || live.qa.some((q) => !!q.error && !q.pending)}
+            resizer={(
+              <PaneResizer name={`${key}-ask`} cssVar="--live-ask" spec={LIVE_PANES.ask} panel="after" axis="y"
+                label="Высота «Спросить»" area={(h) => h.parentElement?.parentElement ?? null}
+                pane={(h) => h.parentElement} />
+            )}>{ask}</AskSection>
         </div>
         {undoBar}
       </div>

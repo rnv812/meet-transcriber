@@ -104,9 +104,16 @@
 
 .live-ws--wide {
   display: grid; gap: 12px;
-  grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); grid-template-rows: minmax(0, 1fr);
+  /* Ширину правой колонки человек может подобрать сам (--live-side, разделитель). */
+  grid-template-columns: minmax(0, 3fr) var(--live-side, minmax(280px, 2fr)); grid-template-rows: minmax(0, 1fr);
 }
 .live-ws--wide .live-ws__feed { min-height: 0; }
+/* Лента, колонка и разделитель между ними — в последней строке (над ними
+   может быть полоса «Догоняю»); разделитель лежит на левой рамке колонки. */
+.live-ws--wide > .live-ws__feed, .live-ws--wide > .live-ws__side, .live-ws--wide > .live-ws__split-side { grid-row: -2 / -1; }
+.live-ws--wide > .live-ws__feed { grid-column: 1; }
+.live-ws--wide > .live-ws__side, .live-ws--wide > .live-ws__split-side { grid-column: 2; }
+.live-ws__split-side { justify-self: start; }
 /* Ассистент догоняет начало встречи: полоса хода над рабочей областью. */
 .live-ws--wide.live-ws--catchup { grid-template-rows: auto minmax(0, 1fr); }
 .live-ws--wide .live-catchup { grid-column: 1 / -1; }
@@ -118,21 +125,31 @@
 .live-catchup__bar { flex: 1 1 80px; min-width: 60px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
 .live-catchup__fill { display: block; height: 100%; background: var(--accent); transition: width 0.4s ease; }
 .live-catchup__note { flex-basis: 100%; font-size: 11px; }
-.live-ws__side { min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-left: 12px; border-left: 1px solid var(--line); }
-/* Подсказки первыми и с гарантированной областью (не меньше ~40 % колонки),
-   сводка — ниже; у каждой своя прокрутка. */
+.live-ws__side {
+  --side-gap: 10px;
+  min-height: 0; display: flex; flex-direction: column; gap: var(--side-gap); padding-left: 12px; border-left: 1px solid var(--line);
+}
+/* Подсказки первыми, сводка — ниже, 3 : 2; у каждой своя прокрутка. Высоту
+   сводки человек может подобрать сам (--live-summary, разделитель) — тогда
+   подсказкам остальное, но не меньше их минимума. */
 .live-ws__pane { min-height: 0; display: flex; flex-direction: column; gap: 4px; }
-.live-ws__pane--hints { flex: 3 1 0; min-height: 40%; }
-.live-ws__pane--summary { flex: 2 1 0; min-height: 64px; }
+.live-ws__pane--hints { flex: 3 1 0; min-height: 96px; }
+.live-ws__pane--summary { flex: var(--live-summary, 2 1 0); min-height: 64px; }
+/* Разделитель высоты — посреди промежутка колонки, лишнего места не добавляет. */
+.live-ws__side > .splitter--y { margin: calc(var(--side-gap) / -2) 0; }
 .live-ws__scroll { flex: 1; min-height: 0; overflow-y: auto; }
 .live-ws__n { color: var(--text-3); font-weight: 400; letter-spacing: 0; text-transform: none; }
 .live-ws__title { margin: 0; color: var(--text-3); font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; }
 /* «Спросить» внизу колонки: не выше ~30 %, история прокручивается внутри;
-   пока им не пользуются — одна строка (поле вопроса). */
+   пока им не пользуются — одна строка (поле вопроса). Развёрнутому человек
+   может задать высоту сам (--live-ask, разделитель на верхней рамке). */
 .live-ws__ask {
-  flex: none; max-height: 30%; min-height: 0;
+  flex: none; max-height: var(--live-ask, 30%); min-height: 0;
   display: flex; flex-direction: column; padding-top: 8px; border-top: 1px solid var(--line);
 }
+.live-ws__ask:not(.live-ws__ask--compact) { height: var(--live-ask, auto); }
+.live-ws__ask > .splitter--y { margin: -8px 0 8px; }
+.live-ws__ask > .splitter--y::after { top: -1px; }
 /* Ошибка вопроса видна и в одной строке. */
 .live-ws__ask--compact .live-ask__history, .live-ws__ask--compact .live-ask__quick { display: none; }
 

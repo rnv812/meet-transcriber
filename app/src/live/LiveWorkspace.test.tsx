@@ -1,8 +1,8 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { LiveHint, LiveSummary } from "../lib/types";
-import { LiveWorkspace, UNDO_MS, useLiveView } from "./LiveWorkspace";
+import { LIVE_PANES, type LivePlace, LiveWorkspace, UNDO_MS, useLiveView } from "./LiveWorkspace";
 import { FRESH_MS } from "./useAttention";
 import type { Live } from "./useLive";
 
@@ -28,11 +28,11 @@ function makeLive(o: Partial<Live> = {}): Live {
   };
 }
 
-function Host({ live, wide = false, quiet = false, open = true, onAskHint }: {
-  live: Live; wide?: boolean; quiet?: boolean; open?: boolean; onAskHint?: (h: LiveHint) => void;
+function Host({ live, wide = false, quiet = false, open = true, onAskHint, place }: {
+  live: Live; wide?: boolean; quiet?: boolean; open?: boolean; onAskHint?: (h: LiveHint) => void; place?: LivePlace;
 }) {
   const view = useLiveView(live, { open, wide, quiet });
-  return <LiveWorkspace live={live} view={view} onAsk={(q) => live.ask(q)} onAskHint={onAskHint} />;
+  return <LiveWorkspace live={live} view={view} onAsk={(q) => live.ask(q)} onAskHint={onAskHint} place={place} />;
 }
 
 afterEach(() => vi.useRealTimers());
@@ -322,4 +322,146 @@ test("в карточке «Спросить агента» у «Вам вопр
   await userEvent.click(screen.getByRole("button", { name: "Спросить агента" }));
   expect(onAskHint).toHaveBeenCalledWith(expect.objectContaining({ id: "h9" }));
   expect(live.ask).not.toHaveBeenCalled();
+});
+
+/**
+ * Раскладка широкой области (jsdom не раскладывает): ширина области 1000,
+ * высота правой колонки 600; панели — своих размеров по CSS.
+ */
+function layout({ room = 1000, column = 600 } = {}) {
+  vi.spyOn(HTMLElement.prototype, "clientWidth", "get")
+    .mockImplementation(function (this: HTMLElement) { return this.classList.contains("live-ws--wide") ? room : 0; });
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get")
+    .mockImplementation(function (this: HTMLElement) { return this.classList.contains("live-ws__side") ? column : 0; });
+  const size = (el: HTMLElement) => el.classList.contains("live-ws__side") ? 400
+    : el.classList.contains("live-ws__pane--summary") ? 200
+      : el.classList.contains("live-ws__ask") ? (el.classList.contains("live-ws__ask--compact") ? 40 : 150) : 0;
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) { return size(this); });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return size(this); });
+}
+
+const ws = () => document.querySelector<HTMLElement>(".live-ws")!;
+const side = () => document.querySelector<HTMLElement>(".live-ws__side")!;
+const split = (name: string) => screen.getByRole("separator", { name });
+
+describe("размеры областей широкой раскладки", () => {
+  afterEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  test("узкая (вкладки) — без разделителей; широкая — ширина колонки и высота сводки, по CSS, пока не тянули", () => {
+    layout();
+    const { rerender } = render(<Host live={makeLive()} />);
+    expect(screen.queryByRole("separator")).toBeNull();
+    rerender(<Host live={makeLive()} wide />);
+    const col = split("Ширина колонки подсказок");
+    expect(col).toHaveAttribute("aria-orientation", "vertical");
+    expect(col).toHaveAttribute("aria-valuenow", "400");
+    expect(col).toHaveAttribute("aria-valuemin", String(LIVE_PANES.side.min));
+    // Ленте остаётся не меньше её минимума.
+    expect(col).toHaveAttribute("aria-valuemax", String(1000 - LIVE_PANES.feedMin - 12));
+    const sum = split("Высота сводки");
+    expect(sum).toHaveAttribute("aria-orientation", "horizontal");
+    expect(sum).toHaveAttribute("aria-valuenow", "200");
+    expect(ws().style.getPropertyValue("--live-side")).toBe("");
+    expect(side().style.getPropertyValue("--live-summary")).toBe("");
+  });
+
+  test("ширина колонки: клавиши и мышь, пределы; запоминается и возвращается после перезапуска", async () => {
+    layout();
+    const { unmount } = render(<Host live={makeLive()} wide />);
+    const col = split("Ширина колонки подсказок");
+    fireEvent.keyDown(col, { key: "ArrowLeft" }); // колонка справа: ← — шире
+    expect(ws().style.getPropertyValue("--live-side")).toBe("416px");
+    expect(localStorage.getItem("meet.pane.live-side")).toBe("416");
+    fireEvent.pointerDown(col, { button: 0, clientX: 500, pointerId: 1 });
+    fireEvent.pointerMove(col, { clientX: 2000, pointerId: 1 }); // вправо до упора — уже, не уже минимума
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    fireEvent.pointerUp(col, { clientX: 2000, pointerId: 1 });
+    expect(ws().style.getPropertyValue("--live-side")).toBe(`${LIVE_PANES.side.min}px`);
+    expect(localStorage.getItem("meet.pane.live-side")).toBe(String(LIVE_PANES.side.min));
+    unmount();
+
+    render(<Host live={makeLive()} wide />);
+    expect(ws().style.getPropertyValue("--live-side")).toBe(`${LIVE_PANES.side.min}px`);
+  });
+
+  test("двойной щелчок — снова как по умолчанию: переменная и запомненное снимаются", () => {
+    layout();
+    localStorage.setItem("meet.pane.live-side", "500");
+    localStorage.setItem("meet.pane.live-summary", "300");
+    render(<Host live={makeLive()} wide />);
+    expect(ws().style.getPropertyValue("--live-side")).toBe("500px");
+    expect(side().style.getPropertyValue("--live-summary")).toBe("0 1 300px");
+    fireEvent.doubleClick(split("Ширина колонки подсказок"));
+    fireEvent.doubleClick(split("Высота сводки"));
+    expect(ws().style.getPropertyValue("--live-side")).toBe("");
+    expect(side().style.getPropertyValue("--live-summary")).toBe("");
+    expect(localStorage.getItem("meet.pane.live-side")).toBeNull();
+    expect(localStorage.getItem("meet.pane.live-summary")).toBeNull();
+  });
+
+  test("запомненное в маленьком окне ужимается: лента и подсказки не схлопываются", () => {
+    localStorage.setItem("meet.pane.live-side", "900");
+    localStorage.setItem("meet.pane.live-summary", "900");
+    layout({ room: 720, column: 360 });
+    render(<Host live={makeLive()} wide />);
+    expect(ws().style.getPropertyValue("--live-side")).toBe(`${720 - LIVE_PANES.feedMin - 12}px`);
+    // Подсказкам — их минимум, «Спросить» — сколько занимает (одна строка), и промежутки.
+    expect(side().style.getPropertyValue("--live-summary")).toBe(`0 1 ${360 - LIVE_PANES.hintsMin - 40 - 20}px`);
+    // Запомненное — пожелание: окно снова больше — размеры вернутся.
+    expect(localStorage.getItem("meet.pane.live-side")).toBe("900");
+  });
+
+  test("высота сводки: ↑ — выше (сводка под разделителем), Home — к минимуму", () => {
+    layout();
+    render(<Host live={makeLive()} wide />);
+    const sum = split("Высота сводки");
+    fireEvent.keyDown(sum, { key: "ArrowUp" });
+    expect(side().style.getPropertyValue("--live-summary")).toBe("0 1 216px");
+    expect(localStorage.getItem("meet.pane.live-summary")).toBe("216");
+    fireEvent.keyDown(sum, { key: "Home" });
+    expect(side().style.getPropertyValue("--live-summary")).toBe(`0 1 ${LIVE_PANES.summary.min}px`);
+  });
+
+  test("высота «Спросить»: разделитель — когда «Спросить» развёрнут; нажатие на него «Спросить» не сворачивает", async () => {
+    layout();
+    render(<Host live={makeLive()} wide />);
+    expect(screen.queryByRole("separator", { name: "Высота «Спросить»" })).toBeNull();
+    await userEvent.click(screen.getByRole("textbox", { name: "Вопрос ассистенту" }));
+    const ask = split("Высота «Спросить»");
+    expect(ask).toHaveAttribute("aria-valuenow", "150");
+    fireEvent.pointerDown(ask, { button: 0, clientY: 400, pointerId: 1 });
+    expect(ask).toHaveFocus();
+    fireEvent.pointerUp(ask, { clientY: 400, pointerId: 1 });
+    expect(screen.getByRole("region", { name: "Спросить" })).not.toHaveClass("live-ws__ask--compact");
+    fireEvent.keyDown(ask, { key: "ArrowUp" });
+    expect(side().style.getPropertyValue("--live-ask")).toBe("166px");
+    expect(localStorage.getItem("meet.pane.live-ask")).toBe("166");
+    // Подсказкам и сводке — их минимумы.
+    expect(ask).toHaveAttribute("aria-valuemax", String(600 - LIVE_PANES.hintsMin - LIVE_PANES.summary.min - 20));
+  });
+
+  test("карточка записи помнит свои размеры, плавающая панель — свои", () => {
+    layout();
+    localStorage.setItem("meet.pane.live-side", "500");
+    render(<Host live={makeLive()} wide place="card" />);
+    expect(ws().style.getPropertyValue("--live-side")).toBe("");
+    fireEvent.keyDown(split("Ширина колонки подсказок"), { key: "ArrowLeft" });
+    expect(localStorage.getItem("meet.pane.live-card-side")).toBe("416");
+    expect(localStorage.getItem("meet.pane.live-side")).toBe("500");
+  });
+
+  test("строки идут — размеры не прыгают", () => {
+    layout();
+    localStorage.setItem("meet.pane.live-side", "480");
+    const live = makeLive();
+    const { rerender } = render(<Host live={live} wide />);
+    for (let i = 0; i < 5; i += 1) {
+      rerender(<Host live={{ ...live, lines: [...live.lines, { t: 200 + i, speaker: "Ольга", text: `ещё ${i}`, id: 10 + i }] }} wide />);
+      expect(ws().style.getPropertyValue("--live-side")).toBe("480px");
+      expect(side().style.getPropertyValue("--live-summary")).toBe("");
+    }
+  });
 });

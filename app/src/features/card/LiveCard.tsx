@@ -47,7 +47,7 @@ export function LiveCard({ endpoint, live, onAskAgent }: {
           tooltip="Не отвлекать: без подсветки и счётчиков" onClick={() => setQuiet(!quiet)} />
       </div>
       <div className="live-card__body">
-        <LiveWorkspace live={state} view={view} onAsk={ask} disabled={stopping} onAskHint={onAskAgent} />
+        <LiveWorkspace live={state} view={view} onAsk={ask} disabled={stopping} onAskHint={onAskAgent} place="card" />
       </div>
     </div>
   );
