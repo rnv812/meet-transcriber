@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # Сборка Meet для macOS (Apple Silicon, экспериментально): образ диска
-# Meet_<версия>_aarch64.dmg без подписи Apple (подпись ad-hoc) и SHA256SUMS.txt.
+# Meet_<версия>_aarch64.dmg без подписи Apple и SHA256SUMS.txt.
+#
+# Подпись: MEET_SIGNING_IDENTITY (SHA-1 личности в связке ключей, её
+# импортирует scripts/macos_keychain.sh из секрета MACOS_CERT_P12) — свой
+# постоянный сертификат: помощники в ресурсах подписываются им здесь, Meet.app
+# и образ — Tauri (APPLE_SIGNING_IDENTITY; APPLE_CERTIFICATE не годится —
+# Tauri ищет в .p12 только сертификаты Apple). Designated requirement тогда
+# одинаков у всех сборок, и macOS сохраняет разрешения после обновления.
+# Без MEET_SIGNING_IDENTITY — ad-hoc, как раньше (signingIdentity "-" в
+# tauri.macos.conf.json), с предупреждением. Проверка подписи —
+# scripts/check_macos_signature.sh.
 #
 # Зеркало scripts/build_release.ps1 (Windows) с отличиями macOS:
 #  1. Сверяет версию в pyproject.toml, tauri.conf.json, Cargo.toml,
@@ -67,6 +77,30 @@ done
 [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]] || fail "сборка — только на macOS arm64"
 
 sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+
+# --- 0. Подпись -------------------------------------------------------------------
+SIGN_ID="${MEET_SIGNING_IDENTITY:-}"
+SIGN_KEYCHAIN="${MEET_SIGNING_KEYCHAIN:-}"
+# Своя подпись — только через APPLE_SIGNING_IDENTITY: с APPLE_CERTIFICATE Tauri
+# сам импортировал бы .p12 и не нашёл бы в нём сертификата Apple.
+unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY
+if [[ -n "$SIGN_ID" ]]; then
+    [[ "$SIGN_ID" =~ ^[0-9A-Fa-f]{40}$ ]] || fail "MEET_SIGNING_IDENTITY — не SHA-1 личности: $SIGN_ID"
+    security find-identity -p codesigning ${SIGN_KEYCHAIN:+"$SIGN_KEYCHAIN"} | grep -i "$SIGN_ID" >/dev/null \
+        || fail "личности $SIGN_ID нет в связке ключей"
+    echo "Подпись: свой сертификат $SIGN_ID"
+else
+    echo "::warning title=Подпись macOS::MEET_SIGNING_IDENTITY не задан — подпись ad-hoc: разрешения macOS не переживут обновление"
+    echo >&2
+    echo "!!! ВНИМАНИЕ: подпись ad-hoc (нет MEET_SIGNING_IDENTITY). Для выпуска нужен секрет MACOS_CERT_P12." >&2
+    echo >&2
+fi
+
+# Подписать файл своей личностью (помощники в ресурсах; Meet.app — Tauri).
+sign_helper() {  # sign_helper <файл> <идентификатор>
+    codesign --force --sign "$SIGN_ID" --timestamp=none --identifier "$2" \
+        ${SIGN_KEYCHAIN:+--keychain "$SIGN_KEYCHAIN"} "$1"
+}
 
 # --- 1. Версия -----------------------------------------------------------------
 step "Версия $VERSION"
@@ -245,6 +279,11 @@ cp "$ROOT/NOTICE" "$RESOURCES/NOTICE"
 cp "$WHEEL" "$RESOURCES/$WHEEL_NAME"
 cp "$CONSTRAINTS" "$RESOURCES/constraints-mac.txt"
 chmod 755 "$RESOURCES/uv" "$RESOURCES/ffmpeg" "$RESOURCES/meet-audiotap"
+if [[ -n "$SIGN_ID" ]]; then
+    for helper in uv ffmpeg meet-audiotap; do
+        sign_helper "$RESOURCES/$helper" "com.meet.desktop.$helper"
+    done
+fi
 "$RESOURCES/uv" --version
 ls -l "$RESOURCES"
 
@@ -254,7 +293,15 @@ rm -rf "$BUNDLE_DIR/dmg" "$BUNDLE_DIR/macos"
 step "npm ci"
 (cd "$APP_DIR" && npm ci --no-audit --no-fund)
 step "tauri build (.app и .dmg, релизный конфиг с ресурсами)"
-(cd "$APP_DIR" && npx --no-install tauri build --config src-tauri/tauri.release.conf.json --bundles app,dmg)
+# Tauri подписывает Meet.app (и образ) личностью из APPLE_SIGNING_IDENTITY,
+# нотаризацию пропускает (данных Apple нет); без неё — signingIdentity "-".
+(
+    cd "$APP_DIR"
+    if [[ -n "$SIGN_ID" ]]; then
+        export APPLE_SIGNING_IDENTITY="$SIGN_ID"
+    fi
+    npx --no-install tauri build --config src-tauri/tauri.release.conf.json --bundles app,dmg
+)
 
 # --- 6. Результат ------------------------------------------------------------------------
 DMG_NAME="Meet_${VERSION}_aarch64.dmg"
@@ -282,6 +329,7 @@ echo "  время:   $(( $(date +%s) - STARTED )) с"
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     {
         echo "dmg=$DMG"
+        echo "app=$APP_BUNDLE"
         echo "sums=$SUMS"
         echo "sources=$SOURCES"
         echo "dmg_name=$DMG_NAME"

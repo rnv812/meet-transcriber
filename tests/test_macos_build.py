@@ -200,7 +200,9 @@ def test_mac_bundle_config_and_permission_strings():
     assert mac["bundle"]["targets"] == ["app", "dmg"]
     macos = mac["bundle"]["macOS"]
     assert macos["minimumSystemVersion"] == "13.0"
-    assert macos["signingIdentity"] == "-"  # ad-hoc: подписи Apple нет
+    # ad-hoc без секрета; свой сертификат — через APPLE_SIGNING_IDENTITY
+    # (test_signing_*).
+    assert macos["signingIdentity"] == "-"
     assert macos["hardenedRuntime"] is False
     plist = plistlib.loads((TAURI / macos["infoPlist"]).read_bytes())
     assert plist["LSUIElement"] is False
@@ -216,6 +218,93 @@ def test_mac_bundle_config_and_permission_strings():
             assert f'"{key}" = "Meet ' in text, (source, key)
     for icon in ("icons/icon.icns",):
         assert (TAURI / icon).is_file()
+
+
+# --- подпись своим сертификатом ------------------------------------------------------
+
+KEYCHAIN = (ROOT / "scripts" / "macos_keychain.sh").read_text(encoding="utf-8")
+CHECK = (ROOT / "scripts" / "check_macos_signature.sh").read_text(encoding="utf-8")
+
+
+def _step(job: str, name: str) -> str:
+    start = job.index(f"- name: {name}\n")
+    nxt = job.find("\n      - ", start + 1)
+    return job[start:] if nxt < 0 else job[start:nxt]
+
+
+def _until_fi(text: str, start: str) -> str:
+    rest = text[text.index(start):]
+    return rest[: rest.index("fi\n")]
+
+
+def test_signing_secrets_reach_only_the_keychain_step():
+    macos = _job("macos")
+    step = _step(macos, "Signing certificate")
+    assert "MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}" in step
+    assert "MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}" in step
+    assert "bash scripts/macos_keychain.sh import" in step
+    # Секреты — ни в каком другом месте выпуска.
+    assert WORKFLOW.count("secrets.MACOS_CERT_P12") == 1
+    assert WORKFLOW.count("secrets.MACOS_CERT_PASSWORD") == 1
+    assert "APPLE_CERTIFICATE" not in WORKFLOW
+    pin = re.search(r'MACOS_CERT_SHA1: "([0-9A-F]+)"', macos)
+    assert pin and len(pin.group(1)) == 40
+    names = ("Signing certificate", "Build .dmg", "Signature check", "Remove signing keychain")
+    order = [macos.index(f"- name: {name}\n") for name in names]
+    assert order == sorted(order)
+    cleanup = _step(macos, "Remove signing keychain")
+    assert "if: always()" in cleanup and "macos_keychain.sh cleanup" in cleanup
+    check = _step(macos, "Signature check")
+    assert "steps.build.outputs.app" in check and "steps.build.outputs.dmg" in check
+    assert 'echo "app=$APP_BUNDLE"' in SCRIPT
+
+
+def test_keychain_import_without_secret_warns_and_keeps_ad_hoc():
+    no_secret = _until_fi(KEYCHAIN, 'if [[ -z "${MACOS_CERT_P12:-}" ]]')
+    assert "warn " in no_secret and "return 0" in no_secret
+    assert "::warning" in KEYCHAIN
+    # .p12 не задерживается на диске, ключ неизвлекаемый, без окон доступа.
+    assert "-x -P" in KEYCHAIN
+    assert 'rm -rf "$(dirname "$p12")"' in KEYCHAIN
+    assert "set-key-partition-list -S apple-tool:,apple:,codesign:" in KEYCHAIN
+    assert "MEET_SIGNING_IDENTITY=$identity" in KEYCHAIN
+    assert "MACOS_CERT_SHA1" in KEYCHAIN
+    # Ни ключ, ни пароль не печатаются.
+    for line in KEYCHAIN.splitlines():
+        if re.search(r"\b(echo|printf)\b", line):
+            assert "PASSWORD" not in line and "keychain_password" not in line, line
+            assert "MACOS_CERT_P12" not in line or "printf '%s' \"$MACOS_CERT_P12\"" in line, line
+
+
+def test_signing_goes_through_tauri_with_our_identity():
+    # Tauri с APPLE_CERTIFICATE ищет в .p12 только сертификаты Apple —
+    # своя личность передаётся хэшем через APPLE_SIGNING_IDENTITY.
+    assert "unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY" in SCRIPT
+    assert 'export APPLE_SIGNING_IDENTITY="$SIGN_ID"' in SCRIPT
+    build = SCRIPT[SCRIPT.index('export APPLE_SIGNING_IDENTITY="$SIGN_ID"'):]
+    assert build.index("tauri build") < build.index("\n)\n")
+    # Помощники в ресурсах — той же личностью, до сборки пакета.
+    signed = SCRIPT.index('sign_helper "$RESOURCES/$helper" "com.meet.desktop.$helper"')
+    assert signed < SCRIPT.index("tauri build --config")
+    loop = "for helper in uv ffmpeg meet-audiotap; do"
+    assert loop in SCRIPT and loop in CHECK
+    assert "::warning title=Подпись macOS::" in SCRIPT
+
+
+def test_signature_check_rejects_cdhash_and_pins_the_requirement():
+    assert 'codesign -d -r- "$APP"' in CHECK
+    assert "*cdhash*) fail" in CHECK
+    assert 'LEAF="identifier \\"$BUNDLE_ID\\" and certificate leaf = H\\"$SHA\\""' in CHECK
+    # -R и требование — отдельными аргументами (как в mac_update.rs).
+    assert 'codesign --verify -R "=$LEAF" "$APP"' in CHECK
+    assert 'codesign --verify --deep -R "=$DR" "$MOUNT/Meet.app"' in CHECK
+    assert "-R=" not in CHECK
+    # Тот же способ монтирования, что в приложении.
+    assert "hdiutil attach -nobrowse -readonly -noautoopen -mountpoint" in CHECK
+    rust = (TAURI / "src" / "mac_update.rs").read_text(encoding="utf-8")
+    assert '"attach",' in rust and '"-nobrowse",' in rust and '"-mountpoint",' in rust
+    assert '[[ "$DR" == "$DR2" ]]' in CHECK
+    assert "exit 0" in _until_fi(CHECK, 'if [[ -z "$IDENTITY" ]]')
 
 
 # --- слияние сумм выпуска (scripts/merge_sums.py) ----------------------------------
