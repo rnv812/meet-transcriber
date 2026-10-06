@@ -160,6 +160,11 @@ export type Recording = {
   /** Есть анализ встречи. */
   has_analysis?: boolean;
   /**
+   * Во встрече работал ассистент (его сводка или живая лента в папке): и у «Записи с ассистентом»,
+   * и у обычной записи, где его включили по ходу. `source: "live"` этого не говорит.
+   */
+  has_assistant?: boolean;
+  /**
    * Задачи Jira, названные во встрече (резидент, meet.jira_refs; только в карточке записи): ссылки по
    * сегментам расшифровки и фразы итогов и наблюдений. Нет — ссылки выключены или адреса Jira нет.
    */
@@ -185,7 +190,19 @@ export type Group = { id: string; name: string; color: string; created_at: strin
 export type GroupInfo = Pick<Group, "id" | "name" | "color"> & { count: number };
 /** Id группы, который есть в meta.json встреч, но не в списке: «Группа без названия». */
 export type UnknownGroup = { id: string; count: number };
-export type GroupsInfo = { groups: GroupInfo[]; unknown: UnknownGroup[]; scope?: "library" | "search" };
+export type GroupsInfo = {
+  groups: GroupInfo[];
+  unknown: UnknownGroup[];
+  scope?: "library" | "search";
+  /** Файл групп не прочитать как список (повреждён): первая запись отложит его рядом. */
+  broken?: boolean;
+  /** Последний отложенный повреждённый файл групп (путь). */
+  broken_copy?: string;
+  /** Файл групп от более новой версии Meet: группы только для чтения. */
+  newer?: boolean;
+};
+/** Ответ записи групп: если повреждённый файл пришлось отложить — куда (`moved_broken`). */
+export type GroupWrite = { moved_broken?: string };
 /** Итог «В группу»/«Убрать из группы»: что поменялось и что не удалось (по записи). */
 export type GroupMembersResult = { changed: string[]; failed: { id: string; error: string }[] };
 /** Участник встреч для подсказок: сколько встреч, когда последняя; `owner` — владелец микрофона. */

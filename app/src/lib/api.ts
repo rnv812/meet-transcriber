@@ -11,7 +11,7 @@
 import { inTauri, invoke } from "./shell";
 import type {
   AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, LiveVoices, Person, PersonCard, ProfilesRemovedNotice,
-  Category, Group, GroupMembersResult, GroupsInfo, LibraryFilter, OwnerVoiceStatus, Participant, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
+  Category, Group, GroupMembersResult, GroupsInfo, GroupWrite, LibraryFilter, OwnerVoiceStatus, Participant, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript, LlmOrigin,
 } from "./types";
@@ -19,7 +19,7 @@ import type {
 export type {
   Analysis, AnalysisChapter, AnalysisFeature, AnalysisInsight, AnalysisState, AnalysisStateName, InsightKind,
   ImproveApplied, ImproveGroup, ImproveKind, ImproveProposal, ImproveState, ImproveStateName, PhraseType, TitleSource, LlmOrigin, ModelChoice,
-  TitleSuggestion, Category, RecordingCategory, Group, GroupInfo, GroupsInfo, GroupMembersResult, LibraryFilter,
+  TitleSuggestion, Category, RecordingCategory, Group, GroupInfo, GroupsInfo, GroupMembersResult, GroupWrite, LibraryFilter,
   LibraryHas, Participant, UnknownGroup,
 } from "./types";
 
@@ -103,7 +103,7 @@ export function libraryFilterParams(filter?: LibraryFilter | string[] | null): s
     (value === undefined || value === null || value === "" ? [] : [`${name}=${enc(String(value))}`]);
   return [
     ...list("categories", f.categories), ...list("groups", f.groups),
-    // Участник — отдельным параметром на каждого (резидент понимает и запятые).
+    // Участник — отдельным параметром на каждого: запятая — часть имени («Петров, Демьян»).
     ...(f.people ?? []).filter(Boolean).map((p) => `people=${enc(p)}`),
     ...one("from", f.from), ...one("to", f.to), ...list("has", f.has), ...list("lacks", f.lacks),
     ...one("min_s", f.min_s), ...one("max_s", f.max_s), ...one("in", f.in),
@@ -163,16 +163,20 @@ export const getGroups = (ep: Endpoint, q?: string, filter?: LibraryFilter) =>
  * Новая группа `{name, color?}`; `{id, name, color, index}` — вернуть удалённую на прежнее место
  * («Отменить») или назвать неизвестную группу её же id.
  */
-export const createGroup = (ep: Endpoint, group: { name: string; color?: string; id?: string; index?: number }) =>
-  json<Group>(ep, "/groups", body("POST", group));
+export const createGroup = (ep: Endpoint,
+  group: { name: string; color?: string; id?: string; index?: number; created_at?: string }) =>
+  json<Group & GroupWrite>(ep, "/groups", body("POST", group));
 export const patchGroup = (ep: Endpoint, id: string, patch: { name?: string; color?: string }) =>
-  json<Group>(ep, `/groups/${enc(id)}`, body("PATCH", patch));
-/** Убрать группу из списка: встречи остаются с её id (станет неизвестной); ответ — для «Отменить». */
+  json<Group & GroupWrite>(ep, `/groups/${enc(id)}`, body("PATCH", patch));
+/**
+ * Убрать группу из списка: встречи остаются с её id (станет неизвестной); ответ — для «Отменить»
+ * (`createGroup({...group, index})` вернёт её с тем же id, временем создания и местом).
+ */
 export const deleteGroup = (ep: Endpoint, id: string) =>
-  json<{ group: Group; index: number }>(ep, `/groups/${enc(id)}`, { method: "DELETE" });
-/** Новый порядок групп; не названные остаются за ними. */
+  json<{ group: Group; index: number } & GroupWrite>(ep, `/groups/${enc(id)}`, { method: "DELETE" });
+/** Новый порядок групп; не названные остаются за ними. Тот же порядок резидент не пишет. */
 export const orderGroups = (ep: Endpoint, ids: string[]) =>
-  json<{ groups: Group[] }>(ep, "/groups/order", body("PUT", { ids }));
+  json<{ groups: Group[] } & GroupWrite>(ep, "/groups/order", body("PUT", { ids }));
 /** Добавить встречи в группу и (или) убрать: каждая — отдельно, неудачные — в `failed`. */
 export const setGroupMembers = (ep: Endpoint, id: string, change: { add?: string[]; remove?: string[] }) =>
   json<GroupMembersResult>(ep, `/groups/${enc(id)}/members`, body("POST", change));

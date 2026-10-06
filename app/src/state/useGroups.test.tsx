@@ -66,3 +66,33 @@ test("перечитываются по тику (groups.changed), запрос�
   rerender({ tick: 1, q: "бюджет", f: filter });
   await vi.waitFor(() => expect(getGroups).toHaveBeenLastCalledWith(ep, "бюджет", filter));
 });
+
+test("запрос — с задержкой, как у списка: на набор слова один вызов; короткий — как без запроса", async () => {
+  vi.useFakeTimers();
+  try {
+    const { rerender } = renderHook(({ q }) => useGroups(ep, 0, q), { initialProps: { q: "" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(getGroups).toHaveBeenCalledTimes(1);
+    for (const q of ["б", "бю", "бюд", "бюдж"]) {
+      rerender({ q });
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    }
+    expect(getGroups).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(getGroups).toHaveBeenCalledTimes(2);
+    expect(getGroups).toHaveBeenLastCalledWith(ep, "бюдж", undefined);
+    rerender({ q: "б" }); // одна буква — счётчики по всей библиотеке
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(getGroups).toHaveBeenLastCalledWith(ep, undefined, undefined);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("повреждённый файл групп и файл новой версии видны окну", async () => {
+  vi.mocked(getGroups).mockResolvedValue({ ...info, broken: true, broken_copy: "C:/r/.meet-groups.json.broken-1", newer: true });
+  const { result } = renderHook(() => useGroups(ep));
+  await vi.waitFor(() => expect(result.current.broken).toBe(true));
+  expect(result.current.brokenCopy).toBe("C:/r/.meet-groups.json.broken-1");
+  expect(result.current.newer).toBe(true);
+});
