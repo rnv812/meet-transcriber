@@ -268,6 +268,13 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
   const chosen = String(llm("provider") ?? "auto");
   const enabled = enabledOf(draft.llm);
   const on = (name: string) => enabled.includes(name);
+  /**
+   * «Авто» выбирает только из своих включённых (Claude Code, Codex, локальная):
+   * ни одной не включено — сначала включить, само оно никого не включает
+   * (текст встречи не должен сам уйти облачной модели). null — выбрать можно.
+   */
+  const autoBlocked = enabled.some((p) => AUTO_CANDIDATES.includes(p)) ? null
+    : "Включите Claude Code, Codex или локальную модель — из них выбирает «Авто»";
   /** Модель по умолчанию — она же включена. */
   const makeDefault = (name: string) => {
     set("llm", "provider", name);
@@ -315,8 +322,10 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
             return (
               <div key={p.value} role="group" aria-label={p.label} className="provider">
                 <div className="provider__head">
-                  <label className="radios__item" title="Модель по умолчанию: вся автоматическая работа">
+                  <label className="radios__item"
+                    title={(!concrete && autoBlocked) || "Модель по умолчанию: вся автоматическая работа"}>
                     <input type="radio" name="llm-provider" checked={chosen === p.value}
+                      disabled={!concrete && autoBlocked !== null && chosen !== "auto"}
                       onChange={() => makeDefault(p.value)} />
                     {p.label}
                   </label>
@@ -337,7 +346,8 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
                         {p.link}
                       </button>
                     </span>
-                  ) : line ? <span className="muted">{line}</span> : null}
+                  ) : !concrete && autoBlocked && chosen !== "auto" ? <span className="muted">{autoBlocked}</span>
+                    : line ? <span className="muted">{line}</span> : null}
                 </div>
                 {concrete && on(p.value) && (
                   <div className={`provider__privacy${p.value === LOCAL && loopback(baseUrl) ? " provider__privacy--local" : ""}`}>

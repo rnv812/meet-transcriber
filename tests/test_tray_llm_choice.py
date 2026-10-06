@@ -359,12 +359,33 @@ def test_improve_proposal_is_public_with_its_model(state, tmp_path):
 # --- fix round 1 -----------------------------------------------------------------------
 
 
-def test_choosing_the_default_itself_is_the_default(state):
-    """«Локальная — по умолчанию» из списка — не «другая модель» (M4)."""
-    first = state.make_summary(RID)
-    assert state.make_summary(RID, {"provider": "openai-compatible"})["id"] == first["id"]
+def test_explicit_default_choice_is_pinned_on_the_job(state, tmp_path):
+    """Явный выбор модели по умолчанию закрепляется за задачей (N1): сменят
+    модель по умолчанию, пока задача ждёт, — встреча всё равно уйдёт выбранной."""
+    state.llm_queue.submit(jobs.SUMMARY, str(tmp_path / "занято"))  # наша — ждёт
     job = state.make_analysis(RID, {"provider": "openai-compatible"})
-    assert "provider" not in job
+    assert job["provider"] == "openai-compatible"
+    assert "--provider=openai-compatible" in jobs.worker_argv(state.llm_queue.get(job["id"]))
+
+
+def test_queued_default_job_is_pinned_by_an_explicit_pick(state, tmp_path):
+    state.llm_queue.submit(jobs.SUMMARY, str(tmp_path / "занято"))
+    background = state.make_summary(RID)
+    pinned = state.make_summary(RID, {"provider": "openai-compatible"})
+    assert pinned["id"] != background["id"] and pinned["provider"] == "openai-compatible"
+    assert state.llm_queue.get(background["id"]).state == jobs.CANCELLED
+
+
+def test_running_default_job_is_the_same_model_not_a_conflict(state):
+    """Идёт задача по умолчанию — выбор той же модели из списка не «другая модель» (M4)."""
+    first = state.make_summary(RID)
+    state.llm_queue.get(first["id"]).state = jobs.RUNNING
+    assert state.make_summary(RID, {"provider": "openai-compatible"})["id"] == first["id"]
+    job = state.make_analysis(RID)
+    state.llm_queue.get(job["id"]).state = jobs.RUNNING
+    assert state.make_analysis(RID, {"provider": "openai-compatible"})["id"] == job["id"]
+    with pytest.raises(control.Conflict, match="другой моделью"):
+        state.make_analysis(RID, {"provider": "claude-code"})
 
 
 def test_manual_choice_replaces_a_queued_background_improvement(state, tmp_path):

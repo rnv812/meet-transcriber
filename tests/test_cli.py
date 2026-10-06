@@ -1228,3 +1228,12 @@ def test_title_without_app_and_with_provider_calls_that_model(env, capsys, monke
     got = _json_out(capsys)
     assert got["title"] == "От Claude" and got["from"] == "model"
     assert library.read_meta(folder)["title_llm"] == {"provider": "claude-code", "model": "sonnet"}
+
+
+def test_provider_help_no_longer_says_without_the_app(capsys):
+    """--provider работает и через приложение (N3) — справка этого не отрицает."""
+    for command in ("analyze", "title", "improve"):
+        with pytest.raises(SystemExit):
+            _main([command, "--help"])
+        out = capsys.readouterr().out
+        assert "--provider" in out and "без приложения" not in out.split("--provider", 1)[1].split("\n  -", 1)[0]

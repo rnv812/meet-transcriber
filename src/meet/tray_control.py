@@ -2873,9 +2873,19 @@ class TrayControl:
         cfg = settings.load()
         if value not in cfg.llm.enabled:
             raise _bad_request(f"модель «{llm.LABELS[value]}» не включена в настройках")
-        # Выбрана сама модель по умолчанию — то же, что без выбора: задача
-        # по умолчанию, идущая сейчас, не «другая модель».
-        return None if value == cfg.llm.provider else value
+        # Выбор закрепляется за задачей, даже если это сама модель по умолчанию:
+        # сменят модель по умолчанию, пока задача ждёт, — встреча уйдёт всё равно
+        # выбранной (а не новой по умолчанию).
+        return value
+
+    @staticmethod
+    def _same_model(job, provider: str | None) -> bool:
+        """Задача `job` — той же модели, что просьба `provider`: без выбора —
+        модель по умолчанию (если она не «Авто»), так что задача по умолчанию и
+        явный выбор той же модели — не «другая модель»."""
+        default = settings.load().llm.provider
+        norm = lambda p: p or (default if default != "auto" else None)  # noqa: E731
+        return norm(_job_provider(job)) == norm(provider)
 
     def make_summary(self, recording_id: str, body: dict | None = None) -> dict:
         """Итоги задачей. Вторая просьба, пока первая ждёт или идёт, — та же задача;
@@ -2888,7 +2898,11 @@ class TrayControl:
         with self._submit_lock:
             job = self.llm_queue.active_for(str(folder), (jobs.SUMMARY,))
             if job is not None and _job_provider(job) != provider:
-                raise _conflict("Итоги уже готовятся другой моделью — дождитесь окончания")
+                # Ждущая без закреплённой модели — заменяется задачей с выбором человека.
+                if job.state != jobs.RUNNING and self._cancel_queued(job.id):
+                    job = None
+                elif not self._same_model(job, provider):
+                    raise _conflict("Итоги уже готовятся другой моделью — дождитесь окончания")
             if job is None:
                 job = self.llm_queue.submit(jobs.SUMMARY, str(folder), _with_provider({}, provider))
         return job.to_raw()
@@ -3057,17 +3071,21 @@ class TrayControl:
         with self._submit_lock:
             job = self.llm_queue.active_for(str(folder), (jobs.ANALYZE,))
             if job is not None and not low and _job_provider(job) != provider:
-                # Ждущая снимается без события; успела начаться — 409, не убиваем.
-                if job.state == jobs.RUNNING or not self._cancel_queued(job.id):
+                # Ждущая снимается без события и заменяется задачей с выбором
+                # человека; идущая — та же модель — та же задача, иначе 409 (не убиваем).
+                if job.state != jobs.RUNNING and self._cancel_queued(job.id):
+                    job = None
+                elif not self._same_model(job, provider):
                     raise _conflict("Анализ уже идёт другой моделью — дождитесь окончания")
-                job = None
             if job is not None:
                 if job.state == jobs.RUNNING:
                     with self._analysis_lock:
                         key = self._key(folder)
                         # Повтор — той же моделью, что идущая задача, если о нём просил человек.
-                        again = self._analysis_rerun.get(key, (False, None))[0] or manual
-                        self._analysis_rerun[key] = (again, _job_provider(job) if again else None)
+                        was, was_by = self._analysis_rerun.get(key, (False, None))
+                        again = was or manual
+                        by = (provider if manual else was_by) or _job_provider(job)
+                        self._analysis_rerun[key] = (again, by if again else None)
                 elif not low and hasattr(self.llm_queue, "promote"):
                     self.llm_queue.promote(job.id)
                 return job, False
@@ -3437,9 +3455,10 @@ class TrayControl:
         with self._submit_lock:
             job = self.llm_queue.active_for(str(folder), (jobs.IMPROVE,))
             if job is not None and not low and _job_provider(job) != provider:
-                if job.state == jobs.RUNNING or not self._cancel_queued(job.id):
+                if job.state != jobs.RUNNING and self._cancel_queued(job.id):
+                    job = None
+                elif not self._same_model(job, provider):
                     raise _conflict("Улучшение уже идёт другой моделью — дождитесь окончания")
-                job = None
             if job is not None:
                 if job.state != jobs.RUNNING and not low and hasattr(self.llm_queue, "promote"):
                     self.llm_queue.promote(job.id)

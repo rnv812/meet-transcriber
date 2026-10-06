@@ -507,3 +507,20 @@ test("у «Авто» нельзя выключить последнюю его 
   // OpenCode «Авто» не выбирает — его выключать можно всегда.
   expect(screen.getByRole("checkbox", { name: "Включить: OpenCode" })).toBeEnabled();
 });
+
+test("«Авто» без своих моделей не выбрать — сначала включить одну, само оно никого не включает (N2)", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, {
+    llm: { provider: "opencode", enabled: ["opencode"] },
+  }));
+  open();
+  const auto = await screen.findByRole("radio", { name: "Авто" });
+  expect(auto).toBeDisabled();
+  expect(within(option("Авто")).getByText(/Включите Claude Code, Codex или локальную модель/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("checkbox", { name: "Включить: Codex" }));
+  expect(auto).toBeEnabled();
+  await userEvent.click(auto);
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
+    llm: { provider: "auto", enabled: ["codex", "opencode"] },
+  }));
+});

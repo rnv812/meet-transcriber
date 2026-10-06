@@ -306,7 +306,7 @@ def _add_library_parsers(sub) -> None:
                       help="не только термины, но и явные ошибки распознавания обычных слов")
     for p in (p_an, p_ti, p_im):
         p.add_argument("--provider", default=None, choices=("auto",) + PROVIDERS,
-                       help=provider_help + " (без приложения)")
+                       help=provider_help)
     p_mr = sub.add_parser("merge", parents=[as_json],
                           help="объединить записи одной встречи в одну и расшифровать")
     p_mr.add_argument("folders", nargs="+", metavar="запись",
