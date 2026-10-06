@@ -389,3 +389,22 @@ def test_meeting_header_is_dropped_when_no_meeting_fits(tmp_path):
     kb, _lib, alpha, _beta, current = _base(tmp_path)
     tiny = kb_prep.KnowledgeBase(kb.root, library_root=kb.library_root, show_map=False)
     assert tiny.kb_map(group=alpha, current=current, budget_chars=70) == ""
+
+
+def test_exclude_paths_fold_yo_like_the_executors(tmp_path):
+    kb_dir = _kb(tmp_path)
+    (kb_dir / "Учеба").mkdir()
+    (kb_dir / "Учёба").mkdir()
+    (kb_dir / "Учёба" / "конспект.md").write_text("лекция про вебхуки", encoding="utf-8")
+    base = kb_dir.resolve()
+    assert kb_prep.kb_exclude_paths(kb_dir, ["учеба"]) == [str(base / "Учеба"), str(base / "Учёба")]
+    kb = kb_prep.KnowledgeBase(kb_dir, exclude=["учеба"])
+    assert "error" in kb.kb_read("Учёба/конспект.md")[0]  # исполнители — так же
+
+
+def test_search_has_an_overall_deadline(tmp_path):
+    kb, *_ = _base(tmp_path)
+    got = kb.kb_search("вебхуки", deadline_s=0)
+    assert got["timed_out"] is True and got["hits"] == []
+    full = kb_prep.kb_search(kb, "вебхуки", deadline_s=60)
+    assert "timed_out" not in full and full["hits"]

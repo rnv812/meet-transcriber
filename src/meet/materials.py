@@ -71,6 +71,9 @@ MAX_SHARED_STRINGS = 1_000_000
 # Поле CSV длиннее — разбор останавливается (по умолчанию в csv — 128 КБ).
 CSV_FIELD_MAX = 1_000_000
 PDF_MAX_PAGES = 2_000
+# Элемент, который разбирается целиком (абзац, строка листа или таблицы,
+# фигура слайда), — не больше стольких вложенных элементов.
+MAX_ELEMENT_NODES = 200_000
 # Сессия: вручную и из базы знаний — MAX_MATERIALS, папка базы знаний группы —
 # ещё MAX_GROUP_MATERIALS сверх; всего текста — MAX_SESSION_CHARS.
 MAX_MATERIALS = 30
@@ -97,6 +100,8 @@ PDF_PAGES_CUT = "В PDF больше {} страниц — взяты первы
 PART_TOO_BIG = "Часть документа слишком большая после распаковки — разобрано начало"
 ARCHIVE_TOO_BIG = "Документ слишком большой после распаковки — разобрано начало"
 TOO_SLOW = "Разбор занял слишком долго — разобрано начало"
+ELEMENT_TOO_BIG = "В документе слишком большой элемент (строка, абзац) — разобрано то, что до него"
+PART_BROKEN = "Часть документа повреждена — разобрано начало"
 EXCLUDED_KB = "Эта папка базы знаний закрыта для ассистента (исключения): {}"
 FOLDER_CUT = "В папке больше {} файлов — взяты первые"
 TOO_MANY = "В сессии уже {} материалов — уберите ненужные"
@@ -449,19 +454,31 @@ def _xml(z: zipfile.ZipFile, name: str, budget: _Budget):
         return None
 
 
-def _stream(f: _Capped, budget: _Budget, want):
+def _stream(f: _Capped, budget: _Budget, want, warnings: list[str] | None = None):
     """Элементы части потоком: `want(elem)` — нужен ли элемент; отдаётся
     самый внешний нужный по закрытии, и после обработки он, как и всё
     прочее закрытое, отцепляется от родителя — в памяти только открытые
-    предки и текущий элемент. Битый XML — конец разбора части."""
+    предки и текущий элемент. Сам этот элемент — не больше
+    MAX_ELEMENT_NODES потомков (строка с миллионами пустых ячеек, абзац с
+    миллионами пустых прогонов): больше — `_Limit`. Время проверяется и на
+    открытии элементов. Битый XML — конец разбора части; если передан
+    `warnings`, туда — PART_BROKEN."""
     stack: list = []
     inside = 0
+    nodes = 0
     try:
         with f:
             for event, el in ET.iterparse(f, events=("start", "end")):
                 if event == "start":
+                    budget.tick(4096)
                     stack.append(el)
+                    if inside:
+                        nodes += 1
+                        if nodes > MAX_ELEMENT_NODES:
+                            raise _Limit(ELEMENT_TOO_BIG)
                     if want(el):
+                        if not inside:
+                            nodes = 0
                         inside += 1
                     continue
                 stack.pop()
@@ -473,6 +490,8 @@ def _stream(f: _Capped, budget: _Budget, want):
                 if inside == 0 and stack:
                     stack[-1].remove(el)
     except ET.ParseError:
+        if warnings is not None and PART_BROKEN not in warnings:
+            warnings.append(PART_BROKEN)
         return
 
 
@@ -583,9 +602,14 @@ def _docx(z: zipfile.ZipFile, title: str, sections: list[_Section], warnings: li
             return int(m.group(1))
         return None
 
-    # Абзацы и таблицы тела потоком, в порядке документа; обёртки (sdt,
-    # customXml) — не помеха: нужен самый внешний абзац или таблица.
-    for node in _stream(f, budget, lambda el: _local(el.tag) in ("p", "tbl") and "wordprocessingml" in _ns(el.tag)):
+    # Абзацы и строки таблиц тела потоком, в порядке документа: большая
+    # таблица не держится в памяти целиком. Обёртки (sdt, customXml) — не
+    # помеха: нужен самый внешний абзац или строка (вложенная таблица — внутри
+    # ячейки своей строки).
+    def wanted(el) -> bool:
+        return _local(el.tag) in ("p", "tr") and "wordprocessingml" in _ns(el.tag)
+
+    for node in _stream(f, budget, wanted, warnings):
         if _local(node.tag) == "p":
             text = _w_text(node)
             if not text:
@@ -594,14 +618,11 @@ def _docx(z: zipfile.ZipFile, title: str, sections: list[_Section], warnings: li
                 sections.append(_Section(" ".join(text.split())))
             _add(sections[-1], text, None, budget)
         else:
-            for tr in node.iter():
-                if _local(tr.tag) != "tr":
-                    continue
-                cells = [" ".join(_w_text(p) for p in tc.iter() if _local(p.tag) == "p").strip()
-                         for tc in _children(tr, "tc")]
-                cells = [c for c in cells if c]
-                if cells:
-                    _add(sections[-1], " | ".join(cells), None, budget)
+            cells = [" ".join(_w_text(p) for p in tc.iter() if _local(p.tag) == "p").strip()
+                     for tc in _children(node, "tc")]
+            cells = [c for c in cells if c]
+            if cells:
+                _add(sections[-1], " | ".join(cells), None, budget)
         if budget.full:
             break
 
@@ -660,7 +681,7 @@ def _pptx(z: zipfile.ZipFile, title: str, sections: list[_Section], warnings: li
             continue
         section = _Section(f"слайд {i}")
         sections.append(section)
-        for p in _stream(f, budget, _is_drawing_p):
+        for p in _stream(f, budget, _is_drawing_p, warnings):
             text = _paragraph_text(p)
             if text:
                 _add(section, text, None, budget)
@@ -712,7 +733,7 @@ def _sheet_rows(f: _Capped, shared: list[str], budget: _Budget, name: str,
     SHEET_MAX_ROWS."""
     rows: list[tuple[int, str]] = []
     seen = 0
-    for el in _stream(f, budget, lambda e: _local(e.tag) == "row"):
+    for el in _stream(f, budget, lambda e: _local(e.tag) == "row", warnings):
         seen += 1
         if seen > SHEET_SCAN_ROWS:
             warnings.append(ROWS_CUT.format(f"лист {name}", SHEET_SCAN_ROWS))
@@ -796,6 +817,8 @@ def _ooxml(data: bytes, title: str, suffix: str, budget: _Budget) -> Parsed:
             parse(z, title, sections, warnings, budget)
         except _Limit as e:
             warnings.append(str(e))
+    if PART_BROKEN in warnings and not any(s.units for s in sections):
+        raise MaterialError(BROKEN.format(what))  # ничего не разобрано — файл битый
     return _finish(title, suffix[1:], sections, warnings)
 
 

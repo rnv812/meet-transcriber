@@ -179,6 +179,23 @@ def ondisk(root, rel: str) -> str | None:
     return "/".join(out)
 
 
+def ondisk_all(root, rel: str) -> list[str]:
+    """Все пути внутри `root`, которые совпадают с `rel` без учёта регистра и
+    «ё» (как сравнивает `is_excluded`): «учеба» → «Учеба» и «Учёба», если
+    есть обе. По порядку имён; ссылки не раскрываются."""
+    found = [""]
+    for part in [p for p in str(rel).replace("\\", "/").split("/") if p and p != "."]:
+        if part == "..":
+            return []
+        key = _norm(part).casefold()
+        found = [f"{base}/{name}" if base else name
+                 for base in found
+                 for name in sorted(_names(Path(root) / base)) if _norm(name).casefold() == key]
+        if not found:
+            return []
+    return [f for f in found if f]
+
+
 def _names(folder: Path) -> list[str]:
     try:
         return os.listdir(folder)

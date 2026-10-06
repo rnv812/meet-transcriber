@@ -37,6 +37,7 @@ summary.md»; `meet:` — список встреч). Выйти за базу �
 
 import os
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,6 +64,8 @@ SEARCH_MAX_PARSED = 100
 SEARCH_MAX_HITS = 20
 SNIPPET_CHARS = 300
 SEARCH_TOTAL_CHARS = 6_000
+# Весь поиск — не дольше (сверх — отдаётся найденное, `timed_out`).
+SEARCH_DEADLINE_S = 20.0
 QUERY_MAX_CHARS = 200
 # list: сколько строк папки или встреч.
 LIST_MAX = 200
@@ -336,12 +339,17 @@ class KnowledgeBase:
 
     # --- search
 
-    def kb_search(self, query: str, in_path: str | None = None) -> dict:
+    def kb_search(self, query: str, in_path: str | None = None, *,
+                  deadline_s: float | None = None) -> dict:
         """Найти слова запроса (по основам, без служебных) в файлах `in_path`
         (файл, папка базы, `meet:<встреча>` или `meet:` — все встречи; пусто —
         вся база) → {"query", "in", "hits": [{"path", "loc", "snippet",
         "matched"}], "files", "more"} или {"error"}. Сначала выдержки со всеми
-        словами, потом — с частью; по порядку файлов."""
+        словами, потом — с частью; по порядку файлов. Весь поиск — не дольше
+        `deadline_s` (SEARCH_DEADLINE_S): дальше файлы не смотрятся, в ответе
+        `"timed_out": True` и найденное к этому времени. Отдельный файл
+        ограничен своим бюджетом разбора; звать — не из цикла событий."""
+        deadline = time.monotonic() + (SEARCH_DEADLINE_S if deadline_s is None else deadline_s)
         words = list(dict.fromkeys(materials.terms((query or "")[:QUERY_MAX_CHARS])))
         if not words:
             return {"error": NO_QUERY}
@@ -352,7 +360,11 @@ class KnowledgeBase:
         targets = self._search_targets(place)
         hits: list[tuple[int, int, dict]] = []
         parsed_count = 0
+        timed_out = False
         for order, target in enumerate(targets[:SEARCH_MAX_FILES]):
+            if time.monotonic() >= deadline:
+                timed_out = True
+                break
             if target.path.suffix.lower() not in (".md", ".txt", ".csv") and target.path.name != TRANSCRIPT:
                 parsed_count += 1
                 if parsed_count > SEARCH_MAX_PARSED:
@@ -374,8 +386,11 @@ class KnowledgeBase:
                 break
             out.append(hit)
             total += len(hit["snippet"])
-        return {"query": query, "in": place.rel or ROOT_LABEL, "words": len(words), "hits": out,
-                "files": min(len(targets), SEARCH_MAX_FILES), "more": len(hits) - len(out)}
+        result = {"query": query, "in": place.rel or ROOT_LABEL, "words": len(words), "hits": out,
+                  "files": min(len(targets), SEARCH_MAX_FILES), "more": len(hits) - len(out)}
+        if timed_out:
+            result["timed_out"] = True
+        return result
 
     def _search_targets(self, place: Place) -> list[Place]:
         if place.kind == "meetings":
@@ -606,25 +621,28 @@ def _snippet(text: str, found: list[str]) -> str:
 
 def kb_exclude_paths(kb_root, exclude=()) -> list[str]:
     """Абсолютные пути исключённых папок (и файлов) базы, которые есть на
-    диске, — так, как они записаны на диске (запись «личное» → «…/Личное»),
-    после раскрытия ссылок; если исключённое — ссылка, то и сам путь ссылки.
-    Без синтаксиса шаблонов: имена с «[», «]», «*» — как есть. Вызывающий
-    отдаёт их провайдеру в `deny_paths` (правила своего CLI собирает слой
-    провайдеров). Несуществующее не возвращается; база не задана — пусто."""
+    диске, — так, как они записаны на диске, после раскрытия ссылок; если
+    исключённое — ссылка, то и сам путь ссылки. Сравнение — как у
+    исполнителей (`is_excluded`): без регистра и «ё», так что «учеба» даёт и
+    «Учеба», и «Учёба», если есть обе. Без синтаксиса шаблонов: имена с «[»,
+    «]», «*» — как есть. Вызывающий отдаёт их провайдеру в `deny_paths`
+    (правила своего CLI собирает слой провайдеров). База не задана — пусто.
+
+    Список — на сессию: считается при её старте. Папку, созданную позже,
+    исполнители Meet всё равно не покажут (они сверяют путь при каждой
+    просьбе), а правила CLI её не закроют до следующей сессии."""
     if not kb_root:
         return []
     root = _resolved(Path(kb_root))
     out: list[str] = []
     for item in exclude or ():
         parts = kb_index.exclude_parts(item)
-        rel = kb_index.ondisk(root, "/".join(parts)) if parts else None
-        if not rel:
-            continue
-        link = root.joinpath(*rel.split("/"))
-        for path in (_resolved(link), link):
-            text = str(path)
-            if text not in out:
-                out.append(text)
+        for rel in kb_index.ondisk_all(root, "/".join(parts)) if parts else ():
+            link = root.joinpath(*rel.split("/"))
+            for path in (_resolved(link), link):
+                text = str(path)
+                if text not in out:
+                    out.append(text)
     return out
 
 
@@ -643,8 +661,9 @@ def kb_read(kb: KnowledgeBase, paths) -> list[dict]:
     return kb.kb_read(paths)
 
 
-def kb_search(kb: KnowledgeBase, query: str, in_path: str | None = None) -> dict:
-    return kb.kb_search(query, in_path)
+def kb_search(kb: KnowledgeBase, query: str, in_path: str | None = None, *,
+              deadline_s: float | None = None) -> dict:
+    return kb.kb_search(query, in_path, deadline_s=deadline_s)
 
 
 def kb_list(kb: KnowledgeBase, folder: str | None = None) -> dict:

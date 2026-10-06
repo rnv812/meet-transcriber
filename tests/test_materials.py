@@ -599,3 +599,60 @@ def test_encrypted_zip_member_is_a_material_error(tmp_path):
             at = data.find(sig, at + 4)
     with pytest.raises(materials.MaterialError):
         materials.parse_bytes(bytes(data), "зашифрован.docx")
+
+
+def _bomb_docx(path: Path, head: str, filler: bytes, repeat: int, tail: str) -> Path:
+    """docx, тело которого распаковывается в `len(filler) * repeat` байт."""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        z.writestr("_rels/.rels", _rels(("rId1", "officeDocument", "word/document.xml")))
+        with z.open("word/document.xml", "w", force_zip64=True) as f:
+            f.write(f'<w:document xmlns:w="{W}"><w:body>{head}'.encode())
+            block = filler * max(1, 65536 // len(filler))
+            for _ in range(max(1, repeat * len(filler) // len(block))):
+                f.write(block)
+            f.write(f"{tail}</w:body></w:document>".encode())
+    return path
+
+
+def test_one_huge_element_is_cut_by_the_node_cap(tmp_path, monkeypatch):
+    """Маленький файл с одним огромным элементом: строка листа с 8 млн
+    пустых ячеек, абзац с 5 млн пустых прогонов — быстро и без большой памяти."""
+    monkeypatch.setattr(materials, "MAX_ELEMENT_NODES", 50_000)
+    row = _bomb_xlsx(tmp_path / "строка.xlsx", f'<worksheet xmlns="{S}"><sheetData><row r="1">',
+                     b"<c/>", 8_000_000, "</row></sheetData></worksheet>")
+    para = _bomb_docx(tmp_path / "абзац.docx", _p("До абзаца.") + "<w:p>", b"<w:r/>", 5_000_000,
+                      "</w:p>" + _p("После."))
+    assert row.stat().st_size < 200_000 and para.stat().st_size < 200_000
+    got = _bounded(lambda: materials.parse(row), 10, 64)
+    assert materials.ELEMENT_TOO_BIG in got.warnings
+    got = _bounded(lambda: materials.parse(para), 10, 64)
+    assert materials.ELEMENT_TOO_BIG in got.warnings and got.text == "До абзаца."
+
+
+def test_huge_table_is_streamed_row_by_row(tmp_path, monkeypatch):
+    """Таблица в 200 тыс. строк × 20 ячеек не держится целиком: строки идут
+    потоком, разбор кончается на пределе текста."""
+    monkeypatch.setattr(materials, "MAX_PART_BYTES", 64 * 1024 * 1024)
+    cell = "<w:tc><w:p><w:r><w:t>яч</w:t></w:r></w:p></w:tc>"
+    path = _bomb_docx(tmp_path / "таблица.docx", "<w:tbl>", f"<w:tr>{cell * 20}</w:tr>".encode(), 200_000,
+                      "</w:tbl>")
+    got = _bounded(lambda: materials.parse(path), 10, 96)
+    assert got.chunks[0]["text"].startswith("яч | яч")
+    assert got.chars == materials.MAX_TEXT_CHARS and any("обрезан" in w for w in got.warnings)
+
+
+def test_broken_body_warns_instead_of_silent_empty(tmp_path):
+    good = _p("Первый абзац.") + _p("Второй абзац.")
+    path = _zip(tmp_path / "оборван.docx", {
+        "_rels/.rels": _rels(("rId1", "officeDocument", "word/document.xml")),
+        "word/document.xml": f'<w:document xmlns:w="{W}"><w:body>{good}<w:p><w:r><w:t>обрыв',
+    })
+    parsed = materials.parse(path)
+    assert parsed.text == "Первый абзац.\nВторой абзац." and materials.PART_BROKEN in parsed.warnings
+    lol = ('<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol">'
+           + "".join(f'<!ENTITY lol{i} "{("&lol%s;" % (i - 1 if i > 1 else "")) * 10}">' for i in range(1, 10))
+           + f']><w:document xmlns:w="{W}"><w:body><w:p><w:r><w:t>&lol9;</w:t></w:r></w:p></w:body></w:document>')
+    bomb = _zip(tmp_path / "lol.docx", {"_rels/.rels": _rels(("rId1", "officeDocument", "word/document.xml")),
+                                         "word/document.xml": lol})
+    with pytest.raises(materials.MaterialError, match="повреждён"):  # ничего не разобрано — битый файл
+        _bounded(lambda: materials.parse(bomb), 10, 64)
