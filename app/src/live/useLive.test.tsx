@@ -250,7 +250,31 @@ test("новый ассистент: его имена и спрятанные �
   expect(result.current.lines.map((l) => l.text)).toEqual(["старая", "ещё старая"]);
 });
 
-test("переподключение: карта голосов — заново с каждого подключения", async () => {
+test("новый ассистент: строки прежнего сохраняют его имена и спрятанные дубли", async () => {
+  vi.useFakeTimers();
+  const { result } = renderHook(() => useLive(ep));
+  const first = liveSources().at(-1)!;
+  act(() => {
+    first.emit("voices", { rev: 0, speakers: {}, hidden: [], session: "a" });
+    first.emit("line", { t: 0, speaker: "Собеседник", text: "до имени", voice: "a1/sys:0" }, 0);
+    first.emit("line", { t: 1, speaker: "Собеседник рядом", text: "дубль", voice: "a1/mic:0" }, 1);
+    first.emit("voices", { rev: 2, speakers: { "a1/sys:0": "Демьян" }, hidden: [1], session: "a" });
+  });
+  expect(result.current.lines.map((l) => [l.text, l.speaker])).toEqual([["до имени", "Демьян"]]);
+  act(() => first.fail(true));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  const second = liveSources().at(-1)!;
+  act(() => {
+    second.emit("voices", { rev: 0, speakers: {}, hidden: [], session: "b" });
+    second.emit("line", { t: 5, speaker: "Собеседник", text: "новая", voice: "b2/sys:0" }, 2);
+  });
+  // Имя, пришедшее задним числом от прежнего ассистента, и его спрятанный дубль — остаются.
+  expect(result.current.lines.map((l) => [l.text, l.speaker])).toEqual([
+    ["до имени", "Демьян"], ["новая", "Собеседник"],
+  ]);
+});
+
+test("без метки сеанса карта голосов заменяется целиком с каждого подключения", async () => {
   vi.useFakeTimers();
   const { result } = renderHook(() => useLive(ep));
   const first = liveSources().at(-1)!;
@@ -262,7 +286,7 @@ test("переподключение: карта голосов — заново
   act(() => first.fail(true));
   await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
   const second = liveSources().at(-1)!;
-  // Другой ассистент: его карта пуста — чужое имя к строке не прилипает.
+  // Карта — состояние, а не дельта: пустая карта снимает прежние имена.
   act(() => second.emit("voices", { rev: 0, speakers: {}, hidden: [] }));
   expect(result.current.lines[0]!.speaker).toBe("Собеседник");
 });

@@ -100,17 +100,43 @@ export type Live = {
   setTask: (task: string) => Promise<void>;
 };
 
-/** Подписи голосов задним числом и спрятанные строки (`event: voices`). */
-type Voices = { speakers: Record<string, string>; hidden: Set<number>; session?: string };
-const NO_VOICES: Voices = { speakers: {}, hidden: new Set() };
+/**
+ * Подписи голосов задним числом и спрятанные строки (`event: voices`).
+ * `speakers` — карта нынешнего ассистента, `past` — прежних (ключи несут метку
+ * сеанса и не пересекаются); `hidden` — номера спрятанных строк по сеансам.
+ */
+export type Voices = {
+  speakers: Record<string, string>;
+  past: Record<string, string>;
+  hidden: Record<string, Set<number>>;
+  session?: string;
+};
+export const NO_VOICES: Voices = { speakers: {}, past: {}, hidden: {} };
+const NO_SESSION = "";
+
+/**
+ * Новое состояние голосов. Тот же ассистент — его карта целиком (состояние,
+ * а не дельта). Другой ассистент (переподключили к той же записи) — строки
+ * прежнего сохраняют свои имена и спрятанные дубли.
+ */
+export function nextVoices(cur: Voices, v: { speakers: Record<string, string>; hidden: number[]; session?: string }): Voices {
+  const changed = cur.session !== undefined && v.session !== undefined && cur.session !== v.session;
+  return {
+    speakers: v.speakers,
+    past: changed ? { ...cur.past, ...cur.speakers } : cur.past,
+    hidden: { ...(changed ? cur.hidden : {}), [v.session ?? NO_SESSION]: new Set(v.hidden) },
+    session: v.session,
+  };
+}
 
 /** Лента глазами человека: без спрятанных дублей, с подписями голосов на сейчас. */
 export function voicedLines(lines: FeedLine[], voices: Voices): FeedLine[] {
-  if (!voices.hidden.size && !Object.keys(voices.speakers).length) return lines;
+  const anyHidden = Object.values(voices.hidden).some((h) => h.size);
+  if (!anyHidden && !Object.keys(voices.speakers).length && !Object.keys(voices.past).length) return lines;
   return lines
-    .filter((l) => l.id === null || l.session !== voices.session || !voices.hidden.has(l.id))
+    .filter((l) => l.id === null || !voices.hidden[l.session ?? NO_SESSION]?.has(l.id))
     .map((l) => {
-      const speaker = l.voice ? voices.speakers[l.voice] : undefined;
+      const speaker = l.voice ? (voices.speakers[l.voice] ?? voices.past[l.voice]) : undefined;
       return speaker !== undefined && speaker !== l.speaker ? { ...l, speaker } : l;
     });
 }
@@ -216,7 +242,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
         onVoices: (v) => {
           alive();
           session.current = v.session;
-          setVoices({ speakers: v.speakers, hidden: new Set(v.hidden), session: v.session });
+          setVoices((cur) => nextVoices(cur, v));
         },
         onError: (gaveUp) => {
           if (!gaveUp || closed) return; // браузер переподключится сам
