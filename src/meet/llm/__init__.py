@@ -82,7 +82,7 @@ def runner_for(name: str, cfg: "Settings") -> Runner:
     if name == "openai-compatible":
         from meet.llm import openai_compat
         return partial(openai_compat.run, base_url=cfg.llm.base_url,
-                       local_model=cfg.llm.local_model)
+                       local_model=cfg.llm.local_model, via_proxy=cfg.llm.local_via_proxy)
     raise ValueError(f"неизвестный провайдер: {name}")
 
 

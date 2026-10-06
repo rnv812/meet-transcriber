@@ -198,7 +198,8 @@ def test_opencode_model_missing_names_the_providers_login(monkeypatch):
 # --- локальная модель: список моделей сервера, затем короткий вызов ------------------
 
 
-def _local_env(monkeypatch, *, model=None, listed=None, reply=AgentReply(text="Да")):
+def _local_env(monkeypatch, *, model=None, listed=None, reply=AgentReply(text="Да"), context=None,
+               via_proxy=False):
     from dataclasses import replace
 
     from meet import settings
@@ -206,19 +207,24 @@ def _local_env(monkeypatch, *, model=None, listed=None, reply=AgentReply(text="�
 
     cfg = settings.Settings()
     cfg = replace(cfg, llm=replace(cfg.llm, provider="openai-compatible", local_model=model,
-                                   base_url="http://127.0.0.1:1234/v1"))
+                                   base_url="http://127.0.0.1:1234/v1", local_via_proxy=via_proxy))
     monkeypatch.setattr(settings, "load", lambda *a, **k: cfg)
     seen = {"listed": [], "calls": []}
 
-    def fake_list(base_url, model=None, timeout=None):
+    def fake_list(base_url, model=None, timeout=None, via_proxy=False):
         seen["listed"].append((base_url, model))
+        seen["via_proxy"] = via_proxy
         return listed
+
+    def fake_context(base_url, model, via_proxy=False):
+        return {"tokens": context, "source": "ollama" if context else None}
 
     async def fake_run(prompt, **kw):
         seen["calls"].append(kw)
         return reply
 
     monkeypatch.setattr(local_models, "list_models", fake_list)
+    monkeypatch.setattr(local_models, "context_length", fake_context)
     monkeypatch.setattr(openai_compat, "run", fake_run)
     return seen
 
@@ -265,3 +271,30 @@ def test_local_without_a_chosen_model_among_several(monkeypatch):
     seen = _local_env(monkeypatch, model=None, listed=_listed("qwen3:8b", "gemma3:4b"))
     res = asyncio.run(check.check("openai-compatible"))
     assert res["ok"] is False and "не выбрана" in res["error"] and seen["calls"] == []
+
+
+def test_local_check_shows_the_context_window(monkeypatch):
+    _local_env(monkeypatch, model="qwen3:8b", listed=_listed("qwen3:8b"), context=32768)
+    res = asyncio.run(check.check("openai-compatible"))
+    assert res["ok"] is True and res["detail"] == "окно контекста модели: 32768 токенов"
+
+
+def test_local_check_warns_about_a_small_context(monkeypatch):
+    _local_env(monkeypatch, model="qwen3:8b", listed=_listed("qwen3:8b"), context=4096)
+    res = asyncio.run(check.check("openai-compatible"))
+    assert res["ok"] is True and "слишком маленькое окно контекста: 4096" in res["detail"]
+
+
+def test_local_list_timeout_still_tries_the_call(monkeypatch):
+    # Медленный сервер в сети не уложился в 3 с со списком — у вызова срок дольше.
+    slow = {"ok": False, "reason": "unreachable", "error": "Сервер не ответил за 3 с", "models": [],
+            "missing": False, "warning": None, "timeout": True}
+    seen = _local_env(monkeypatch, model="m", listed=slow)
+    assert asyncio.run(check.check("openai-compatible"))["ok"] is True
+    assert len(seen["calls"]) == 1
+
+
+def test_local_check_follows_the_proxy_setting(monkeypatch):
+    seen = _local_env(monkeypatch, model="m", listed=_listed("m"), via_proxy=True)
+    asyncio.run(check.check("openai-compatible"))
+    assert seen["via_proxy"] is True and seen["calls"][0]["via_proxy"] is True

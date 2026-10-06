@@ -853,6 +853,11 @@ class Llm:
     `opencode_model` — модель OpenCode «провайдер/модель» (своя: `model` —
     имя модели Claude Code, «sonnet» OpenCode не поймёт); пусто — модель из
     конфига OpenCode.
+
+    `local_via_proxy` — «Локальную модель — через прокси»: по умолчанию
+    сервер локальной модели в своей сети (localhost, частные адреса) идёт
+    напрямую; включают там, где он доступен только через прокси
+    (см. meet.llm.openai_compat).
     """
 
     provider: str = "auto"
@@ -862,6 +867,7 @@ class Llm:
     proxy: str = "system"
     opencode_model: str = ""
     enabled: tuple[str, ...] = LLM_AUTO_ORDER
+    local_via_proxy: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "enabled", _enabled(self.enabled, self.provider))
@@ -889,6 +895,7 @@ class Llm:
             proxy=netproxy.normalize(raw.get("proxy")),
             opencode_model=_opencode_model(raw.get("opencode_model")),
             enabled=tuple(enabled),
+            local_via_proxy=raw.get("local_via_proxy") is True,
         )
 
     @staticmethod
@@ -912,6 +919,8 @@ class Llm:
             unknown = [str(x) for x in enabled if x not in LLM_CONCRETE]
             if unknown:
                 raise ValueError(f"неизвестная модель: {', '.join(unknown)}")
+        if "local_via_proxy" in update and not isinstance(update["local_via_proxy"], bool):
+            raise ValueError("«Локальную модель — через прокси» — да или нет")
 
     @staticmethod
     def check_merged(merged: dict) -> None:
@@ -933,6 +942,7 @@ class Llm:
             "proxy": self.proxy,
             "opencode_model": self.opencode_model,
             "enabled": list(self.enabled),
+            "local_via_proxy": self.local_via_proxy,
         }
 
 

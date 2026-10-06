@@ -3839,7 +3839,8 @@ class TrayControl:
 
     def local_models(self, body: dict | None) -> dict:
         """«Найти модели»: список моделей локального сервера по адресу из окна
-        (может быть ещё не сохранён; нет — из настроек). Короткий GET без
+        (может быть ещё не сохранён; нет — из настроек; `via_proxy` — так же).
+        Короткий GET без
         вызова модели — прямо в резиденте (см. meet.llm.local_models)."""
         from meet.llm import local_models
 
@@ -3852,7 +3853,11 @@ class TrayControl:
             base_url = cfg.llm.base_url
             if "model" not in body:
                 model = cfg.llm.local_model
-        return local_models.list_models(base_url, model)
+        # «Через прокси» — из черновика окна, если он прислан, иначе сохранённое.
+        via_proxy = body.get("via_proxy")
+        if not isinstance(via_proxy, bool):
+            via_proxy = cfg.llm.local_via_proxy
+        return local_models.list_models(base_url, model, via_proxy=via_proxy)
 
     def import_file(self, body: dict) -> dict:
         """Импорт чужой записи: папка + задача (копия и расшифровка)."""

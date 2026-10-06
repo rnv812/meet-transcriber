@@ -35,8 +35,10 @@ def _model() -> str:
     return settings.load().llm.model
 
 
-def _result(provider: str, error: str | None) -> dict:
-    return {"ok": error is None, "error": error, "provider": provider}
+def _result(provider: str, error: str | None, detail: str | None = None) -> dict:
+    """`detail` — что ещё узнали (у локальной модели — окно контекста)."""
+    out = {"ok": error is None, "error": error, "provider": provider}
+    return {**out, "detail": detail} if detail else out
 
 
 async def _check_claude() -> str | None:
@@ -90,30 +92,38 @@ async def _check_opencode() -> str | None:
     return None if ok else f"не авторизован: {why}"
 
 
-async def _check_local() -> str | None:
+async def _check_local() -> tuple[str | None, str | None]:
+    """→ (ошибка, сведения). Сначала список моделей сервера (выбранная
+    должна в нём быть), затем короткий вызов. Сервер без списка моделей (не
+    всякий его отдаёт) или не успевший с ним за 3 с — решает сам вызов (у
+    него срок дольше). В сведениях — окно контекста модели: мало ли его для
+    анализа встречи."""
     from meet import settings
     from meet.llm import local_models, openai_compat
 
     cfg = settings.load()
-    # Сначала список моделей сервера (выбранная должна в нём быть), затем
-    # короткий вызов. Сервер без списка моделей (не всякий его отдаёт) —
-    # решает сам вызов.
-    listed = await asyncio.to_thread(local_models.list_models, cfg.llm.base_url, cfg.llm.local_model)
-    if not listed["ok"] and listed["reason"] != "not_openai":
-        return listed["error"]
+    via_proxy = cfg.llm.local_via_proxy
+    listed = await asyncio.to_thread(local_models.list_models, cfg.llm.base_url, cfg.llm.local_model,
+                                     local_models.TIMEOUT_S, via_proxy)
+    if not listed["ok"] and listed["reason"] != "not_openai" and not listed.get("timeout"):
+        return listed["error"], None
     if listed["ok"]:
         ids = [m["id"] for m in listed["models"]]
         shown = ", ".join(ids[:5]) + (" …" if len(ids) > 5 else "")
         if listed["missing"]:
-            return f"{listed['warning']} (на сервере: {shown})"
+            return f"{listed['warning']} (на сервере: {shown})", None
         if not cfg.llm.local_model and len(ids) > 1:
-            return f"Модель не выбрана, а на сервере их несколько ({shown}) — выберите в «Имя модели»"
+            return f"Модель не выбрана, а на сервере их несколько ({shown}) — выберите в «Имя модели»", None
     reply = await openai_compat.run(
         PROBE_PROMPT, system_prompt=PROBE_SYSTEM, max_turns=1,
         timeout_s=PROBE_TIMEOUT_S, base_url=cfg.llm.base_url,
-        local_model=cfg.llm.local_model,
+        local_model=cfg.llm.local_model, via_proxy=via_proxy, max_tokens=64,
     )
-    return reply.error
+    if reply.error:
+        return reply.error, None
+    context = await asyncio.to_thread(local_models.context_length, cfg.llm.base_url, cfg.llm.local_model,
+                                      via_proxy=via_proxy)
+    return None, local_models.context_text(context["tokens"])
 
 
 async def check(provider: str) -> dict:
@@ -138,7 +148,8 @@ async def check(provider: str) -> dict:
         elif provider == "opencode":
             error = await _check_opencode()
         else:
-            error = await _check_local()
+            error, detail = await _check_local()
+            return _result(provider, error, detail)
     except Exception as e:  # проверка не должна падать трейсбеком
         error = f"{type(e).__name__}: {e}"
     return _result(provider, error)

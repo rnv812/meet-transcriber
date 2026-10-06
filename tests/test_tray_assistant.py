@@ -257,10 +257,11 @@ def test_check_provider_timeout_is_an_answer(state, monkeypatch):
 def test_local_models_asks_the_drafted_address(state, monkeypatch):
     from meet.llm import local_models
 
-    seen = []
+    seen, seen_proxy = [], []
 
-    def fake_list(base_url, model=None, timeout=None):
+    def fake_list(base_url, model=None, timeout=None, via_proxy=False):
         seen.append((base_url, model))
+        seen_proxy.append(via_proxy)
         return {"ok": True, "models": [{"id": "qwen3:8b"}], "missing": False}
 
     monkeypatch.setattr(local_models, "list_models", fake_list)
@@ -270,6 +271,10 @@ def test_local_models_asks_the_drafted_address(state, monkeypatch):
     # Без адреса — сохранённый в настройках.
     state.local_models({})
     assert seen[-1] == ("http://127.0.0.1:1234/v1", None)
+    # «Через прокси»: из черновика окна, без него — сохранённое (по умолчанию нет).
+    assert seen_proxy == [False, False]
+    state.local_models({"via_proxy": True})
+    assert seen_proxy[-1] is True
 
 
 def test_local_models_rejects_a_non_string_address(state):

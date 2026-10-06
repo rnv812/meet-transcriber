@@ -34,6 +34,9 @@ class AgentReply:
     text: str
     session_id: str | None = None
     error: str | None = None
+    # Сколько токенов насчитал сервер (`prompt_tokens`, `completion_tokens`) —
+    # только у локальной модели: по `prompt_tokens` видно, что промпт обрезан.
+    usage: dict | None = None
 
 
 Runner = Callable[..., Awaitable[AgentReply]]

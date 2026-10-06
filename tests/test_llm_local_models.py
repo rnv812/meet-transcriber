@@ -29,6 +29,15 @@ VLLM = {"object": "list", "data": [
 ]}
 
 
+@pytest.fixture(autouse=True)
+def _fresh_caches():
+    local_models._ollama.clear()
+    local_models._trained.clear()
+    yield
+    local_models._ollama.clear()
+    local_models._trained.clear()
+
+
 @pytest.fixture
 def server():
     """Сервер с заготовленными ответами по пути: {путь: (код, тело)}; нет пути — 404."""
@@ -49,6 +58,11 @@ def server():
                 self.wfile.write(data)
             except OSError:
                 pass  # клиент ушёл по таймауту
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            state.setdefault("posted", []).append((self.path, json.loads(self.rfile.read(length) or b"{}")))
+            self.do_GET()
 
         def log_message(self, *a):
             pass
@@ -184,9 +198,80 @@ def test_local_addresses_skip_the_proxy(server, monkeypatch):
     ("http://169.254.10.1/v1", True),
     ("http://gpu-box:1234/v1", True),
     ("http://studio.local:1234/v1", True),
+    ("http://100.101.102.103:11434/v1", True),
     ("https://api.example.com/v1", False),
     ("http://8.8.8.8/v1", False),
 ])
 def test_which_addresses_go_without_proxy(url, direct):
     assert openai_compat.direct(url) is direct
 
+
+
+def test_ollama_latest_alias_is_the_same_model(server):
+    # Ollama принимает «llama3.2» как «llama3.2:latest» — это не пропавшая модель.
+    server["routes"]["/v1/models"] = (200, {"data": [{"id": "llama3.2:latest", "owned_by": "library"}]})
+    server["routes"]["/api/tags"] = (200, {"models": [{"name": "llama3.2:latest", "size": 2019393189}]})
+    got = local_models.list_models(server["root"] + "/v1", model="llama3.2")
+    assert got["missing"] is False and got["models"][0]["size"] == 2019393189
+    assert local_models.same_model("llama3.2:latest", "llama3.2")
+    assert local_models.same_model("hf.co/org/repo", "hf.co/org/repo:latest")
+    assert not local_models.same_model("qwen3:8b", "qwen3")
+    assert not local_models.same_model("", "")
+
+
+def test_context_from_ollama_show(server):
+    server["routes"]["/api/version"] = (200, {"version": "0.12.3"})
+    server["routes"]["/api/show"] = (200, {"model_info": {"general.architecture": "qwen3",
+                                                          "qwen3.context_length": 8192}})
+    got = local_models.context_length(server["root"] + "/v1", "qwen3:8b")
+    assert got == {"tokens": 8192, "source": "ollama"}
+    assert server["posted"][0] == ("/api/show", {"model": "qwen3:8b"})
+
+
+def test_ollama_context_is_capped_at_32k(server):
+    server["routes"]["/api/version"] = (200, {"version": "0.12.3"})
+    server["routes"]["/api/show"] = (200, {"model_info": {"qwen3.context_length": 131072}})
+    assert local_models.context_length(server["root"] + "/v1", "qwen3")["tokens"] == 32768
+
+
+def test_context_from_lm_studio_prefers_the_loaded_window(server):
+    server["routes"]["/v1/models"] = (200, LMSTUDIO)
+    server["routes"]["/api/v0/models"] = (200, {"data": [
+        {"id": "qwen2.5-7b-instruct", "type": "llm", "state": "loaded",
+         "max_context_length": 32768, "loaded_context_length": 4096}]})
+    got = local_models.context_length(server["root"] + "/v1", "qwen2.5-7b-instruct")
+    assert got == {"tokens": 4096, "source": "lmstudio"}
+
+
+def test_context_from_vllm(server):
+    server["routes"]["/v1/models"] = (200, VLLM)
+    got = local_models.context_length(server["root"] + "/v1", "Qwen/Qwen2.5-14B-Instruct")
+    assert got == {"tokens": 32768, "source": "vllm"}
+
+
+def test_context_from_llama_cpp_props(server):
+    server["routes"]["/v1/models"] = (200, {"data": [{"id": "model.gguf"}]})
+    server["routes"]["/props"] = (200, {"default_generation_settings": {"n_ctx": 8192}})
+    assert local_models.context_length(server["root"] + "/v1", "model.gguf") == {
+        "tokens": 8192, "source": "llamacpp"}
+
+
+def test_context_unknown(server):
+    server["routes"]["/v1/models"] = (200, LMSTUDIO)
+    assert local_models.context_length(server["root"] + "/v1", "x") == {"tokens": None, "source": None}
+
+
+def test_timeout_is_marked(server):
+    server["routes"]["/v1/models"] = (200, LMSTUDIO)
+    server["delay"] = 1.0
+    assert local_models.list_models(server["root"] + "/v1", timeout=0.2)["timeout"] is True
+
+
+def test_via_proxy_sends_even_local_addresses_through_the_proxy(server, monkeypatch):
+    # «Локальную модель — через прокси»: прокси (здесь мёртвый) — и для 127.0.0.1.
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    server["routes"]["/v1/models"] = (200, LMSTUDIO)
+    assert local_models.list_models(server["root"] + "/v1", via_proxy=True)["reason"] == "unreachable"

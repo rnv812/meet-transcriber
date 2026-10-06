@@ -219,3 +219,15 @@ def test_assist_provider_flag_does_not_enable_a_disabled_model():
     with pytest.raises(SystemExit, match="не включена"):
         app._pick_runner("claude-code", cfg)
     assert app._pick_runner("openai-compatible", cfg)[0] == "openai-compatible"
+
+
+def test_local_via_proxy_setting():
+    # «Локальную модель — через прокси»: по умолчанию нет; только да/нет.
+    assert settings.Settings().llm.local_via_proxy is False
+    cfg = settings.Settings.from_raw({"version": 2, "llm": {"local_via_proxy": True}})
+    assert cfg.llm.local_via_proxy is True and cfg.llm.to_raw()["local_via_proxy"] is True
+    assert settings.Settings.from_raw({"version": 2, "llm": {"local_via_proxy": "yes"}}).llm.local_via_proxy is False
+    with pytest.raises(ValueError):
+        settings.Llm.check({"local_via_proxy": "yes"})
+    runner = llm.runner_for("openai-compatible", cfg)
+    assert runner.keywords["via_proxy"] is True
