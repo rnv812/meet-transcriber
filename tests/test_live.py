@@ -213,7 +213,7 @@ def test_identify_names_cluster_after_enough_speech(tmp_path):
     engine.process_window()
     # Имя — по накопленному голосу: от 8 с речи и на двух проверках подряд.
     assert [e["speaker"] for e in got] == ["Собеседник"] * 5 + ["Демьян"]
-    assert {e["voice"] for e in got} == {"sys:0"}
+    assert len({e["voice"] for e in got}) == 1 and got[0]["voice"].endswith("/sys:0")
 
 
 def test_identify_unknown_voice_keeps_default_speaker(tmp_path):
@@ -1449,7 +1449,7 @@ def test_name_arrives_retroactively_in_file_and_consumers(tmp_path):
     engine.register_track("sys.wav", rate=16000, channels=1, identify=True)
     engine._tracks["sys.wav"]["buffer"].push(_pcm(total + 0.5))
     engine.process_window()
-    assert renames == [("sys:0", "Демьян")]
+    assert [(v.rpartition("/")[2], name) for v, name in renames] == [("sys:0", "Демьян")]
     lines = (tmp_path / "live_transcript.md").read_text(encoding="utf-8").splitlines()
     # Строка прошлого включения ассистента (та же по тексту) не тронута — только наши.
     assert lines[0] == "[00:00:00] Собеседник: реплика 1"
@@ -1476,24 +1476,98 @@ def test_catchup_lines_renamed_before_merge(tmp_path):
     assert not (tmp_path / "live_transcript.md").exists()
 
 
-def test_rename_survives_unwritable_transcript(tmp_path, monkeypatch):
+def test_failed_rewrite_is_retried_and_file_gets_the_latest_name(tmp_path, monkeypatch):
+    """Ревью I2: файл ленты открыт другим процессом — перезапись не прошла;
+    следующее окно повторяет её, и в файле оказывается последняя подпись."""
     import os
 
-    segs, total = _segments(6)
+    real = os.replace
     lines = []
     renames = []
-    engine = LiveEngine(tmp_path, FakeTranscriber([segs]), voice_matcher=_matcher(), log=lines.append,
-                        on_relabel=lambda voice, speaker: renames.append(voice))
-    engine.register_track("sys.wav", rate=16000, channels=1, identify=True)
-    engine._tracks["sys.wav"]["buffer"].push(_pcm(total + 0.5))
+    engine = LiveEngine(tmp_path, FakeTranscriber([]), log=lines.append,
+                        on_relabel=lambda voice, speaker: renames.append(speaker))
+    engine._emit("[00:00:01] Собеседник: привет",
+                 {"t": 1.0, "speaker": "Собеседник", "text": "привет", "voice": "x/sys:0"})
 
-    def locked(src, dst):
-        raise PermissionError("файл открыт")
+    class Drain:
+        def __init__(self, renames):
+            self.renames = renames
 
-    monkeypatch.setattr(os, "replace", locked)
-    engine.process_window()
-    assert renames == ["sys:0"]  # потребители всё равно узнали
+        def drain(self):
+            return self.renames
+
+    monkeypatch.setattr(os, "replace", lambda a, b: (_ for _ in ()).throw(PermissionError("открыт")))
+    engine._apply_renames(Drain([("x/sys:0", "Демьян")]))
+    assert renames == ["Демьян"]  # потребители всё равно узнали
     assert any("лента не переписана" in line for line in lines)
+    assert engine._file_dirty
+    monkeypatch.setattr(os, "replace", real)
+    engine._apply_renames(Drain([("x/sys:0", "Пётр")]))  # цепочка переименований
+    text = (tmp_path / "live_transcript.md").read_text(encoding="utf-8")
+    assert text == "[00:00:01] Пётр: привет\n" and not engine._file_dirty
+
+
+def test_dirty_transcript_retried_on_next_step_and_at_stop(tmp_path, monkeypatch):
+    import os
+
+    real = os.replace
+    fails = {"n": 2}
+
+    def flaky(a, b):
+        if fails["n"]:
+            fails["n"] -= 1
+            raise PermissionError("открыт")
+        return real(a, b)
+
+    engine = LiveEngine(tmp_path, FakeTranscriber([]), log=lambda line: None)
+    engine._transcriber.unload = lambda: None
+    engine._emit("[00:00:01] Собеседник: привет",
+                 {"t": 1.0, "speaker": "Собеседник", "text": "привет", "voice": "x/sys:0"})
+    monkeypatch.setattr(os, "replace", flaky)
+
+    class Drain:
+        def drain(self):
+            return [("x/sys:0", "Демьян")]
+
+    engine._apply_renames(Drain())  # первая попытка — сбой
+    engine.step()  # повтор на следующем такте — снова сбой
+    assert engine._file_dirty
+    engine.stop()  # и при остановке — прошла
+    assert (tmp_path / "live_transcript.md").read_text(encoding="utf-8") == "[00:00:01] Демьян: привет\n"
+
+
+def test_live_line_equal_to_a_catchup_line_goes_to_the_file(tmp_path):
+    """Ревью M5: куда писать переименованную строку — по записи, а не по
+    совпадению текста со строкой догонялки."""
+    engine = LiveEngine(tmp_path, FakeTranscriber([]), log=lambda line: None)
+    line = "[00:00:01] Собеседник: да"
+    engine._emit(line, {"t": 1.0, "speaker": "Собеседник", "text": "да", "voice": "x/sys:1",
+                        "catchup": True})
+    engine._emit(line, {"t": 1.0, "speaker": "Собеседник", "text": "да", "voice": "x/sys:0"})
+
+    class Drain:
+        def drain(self):
+            return [("x/sys:0", "Демьян")]
+
+    engine._apply_renames(Drain())
+    assert engine._catch_lines == [line]  # строка догонялки — чужой голос, не тронута
+    assert engine._out is None  # файл переписан, дописывание откроет его заново
+    assert (tmp_path / "live_transcript.md").read_text(encoding="utf-8") == "[00:00:01] Демьян: да\n"
+
+
+def test_catchup_line_renamed_after_merge_goes_to_the_file(tmp_path):
+    engine = LiveEngine(tmp_path, FakeTranscriber([]), log=lambda line: None)
+    engine._emit("[00:00:01] Собеседник: начало",
+                 {"t": 1.0, "speaker": "Собеседник", "text": "начало", "voice": "x/sys:0", "catchup": True})
+    with engine._window_lock:
+        engine._merge_catchup_lines()
+
+    class Drain:
+        def drain(self):
+            return [("x/sys:0", "Демьян")]
+
+    engine._apply_renames(Drain())
+    assert (tmp_path / "live_transcript.md").read_text(encoding="utf-8") == "[00:00:01] Демьян: начало\n"
 
 
 # --- дубли соседа в живой ленте (С2 live, §4.5) ------------------------------------

@@ -334,6 +334,7 @@ class LiveEngine:
         # Строки ленты с ключом голоса: {"voice", "speaker", "line"} — их
         # подпись может смениться задним числом.
         self._voiced: list[dict] = []
+        self._file_dirty = False  # перезапись ленты не прошла — повторить
         self.out_root = Path(out_root) if out_root is not None else self.out_dir.parent
         self._lock_path: Path | None = None  # наш .recording.lock, пока держим
         # Голоса (meet.voice_id.VoiceMatcher, duck-typed): онлайн-кластеры
@@ -583,18 +584,25 @@ class LiveEngine:
     def _emit(self, line: str, entry: dict) -> tuple:
         """Строка — в ленту (файл) и потребителям. → (номер строки у
         `on_entry` или None, запись голоса или None)."""
-        if entry.get("catchup"):
+        catchup = bool(entry.get("catchup"))
+        index = None
+        if catchup:
             # Начало встречи: в файл ленты — по времени, слиянием в конце
             # догонялки; потребителям — с пометкой (подсказки по нему не
             # тикают, лента ставит его выше живых строк).
+            index = len(self._catch_lines)
             self._catch_lines.append(line)
             self._catch_side(line)
         else:
             self._write_line(line)
         record = None
         if entry.get("voice"):
-            # Подпись голоса может смениться задним числом — помним строку.
-            record = {"voice": entry["voice"], "speaker": entry["speaker"], "line": line}
+            # Подпись голоса может смениться задним числом — помним строку:
+            # `line` — какой она должна быть, `file_line` — какая она в файле
+            # (перезапись файла может не пройти — повторим), `catchup` и
+            # `index` — строка догонялки, ещё не слитая в ленту.
+            record = {"voice": entry["voice"], "speaker": entry["speaker"], "line": line,
+                      "file_line": line, "catchup": catchup, "index": index, "gone": False}
             self._voiced.append(record)
         return self._notify(line, entry), record
 
@@ -613,21 +621,25 @@ class LiveEngine:
                     self._voice_failed(e)
             if len(item["words"]) < len(item["toks"]):
                 entry["text"] = "".join(t.text for t in item["words"]).strip()
+                entry["end"] = round(item["words"][-1].end, 2)
             line = format_live_line(item["start"], entry["speaker"], entry["text"])
             bus_id, record = self._emit(line, entry)
             if not item["due"]:
                 item["bus_id"], item["record"] = bus_id, record
                 dupes.shown(item)
+        hidden = False
         for item in dupes.recheck():
             record = item.get("record")
             if record is not None:
-                self._voiced = [r for r in self._voiced if r is not record]
-                self._swap_lines([(record["line"], None)])
+                record["gone"] = True
+                hidden = True
             if item.get("bus_id") is not None and self.on_hide is not None:
                 try:
                     self.on_hide([item["bus_id"]])
                 except Exception:
                     pass  # потребитель не должен валить запись
+        if hidden:
+            self._sync_files()
 
     def _apply_renames(self, voices) -> None:
         """Переименования голосов после окна: строки ленты (файл, строки
@@ -639,15 +651,15 @@ class LiveEngine:
             return
         if not renames:
             return
-        swaps = []
         for rec in self._voiced:
             speaker = renames.get(rec["voice"])
             if speaker is None or speaker == rec["speaker"]:
                 continue
-            new = relabel_line(rec["line"], rec["speaker"], speaker)
-            swaps.append((rec["line"], new))
-            rec["line"], rec["speaker"] = new, speaker
-        self._swap_lines(swaps)
+            rec["line"] = relabel_line(rec["line"], rec["speaker"], speaker)
+            rec["speaker"] = speaker
+            if rec["catchup"]:
+                self._catch_lines[rec["index"]] = rec["line"]
+        self._sync_files()
         for voice, speaker in renames.items():
             if self.on_relabel is not None:
                 try:
@@ -655,43 +667,46 @@ class LiveEngine:
                 except Exception:
                     pass  # потребитель не должен валить запись
 
-    def _swap_lines(self, swaps: list) -> None:
-        """Заменить строки ленты: [(старая, новая | None — убрать)]. Строки
-        догонялки, ещё не слитые в файл, — в памяти (и в её запасном файле),
-        остальные — атомарной перезаписью `live_transcript.md` (под
-        `_window_lock`: его держит распознавание окна)."""
-        if not swaps:
-            return
-        in_file, in_side = [], []
-        for old, new in swaps:
-            if old in self._catch_lines:
-                i = self._catch_lines.index(old)
-                if new is None:
-                    self._catch_lines.pop(i)
-                else:
-                    self._catch_lines[i] = new
-                in_side.append((old, new))
-            else:
-                in_file.append((old, new))
-        if in_file:
+    def _sync_files(self) -> None:
+        """Привести файлы к записям голосов: `live_transcript.md` (атомарная
+        перезапись, под `_window_lock`: его держит распознавание окна) и
+        запасной файл догонялки. Не вышло (файл открыт другим процессом) —
+        `_file_dirty`: повтор на следующем окне и при остановке."""
+        live = [r for r in self._voiced
+                if not r["catchup"] and (r["gone"] or r["file_line"] != r["line"])]
+        side = [r for r in self._voiced if r["catchup"] and r["file_line"] != r["line"]]
+        dirty = False
+        if live:
             if self._out is not None:
                 self._out.close()
                 self._out = None
-            self._rewrite(self._transcript, in_file)
-        if in_side:
-            self._rewrite(self.out_dir / CATCHUP_SIDE, in_side)
+            if self._rewrite(self._transcript,
+                             [(r["file_line"], None if r["gone"] else r["line"]) for r in live]):
+                for r in live:
+                    r["file_line"] = r["line"]
+                self._voiced = [r for r in self._voiced if not r["gone"]]
+            else:
+                dirty = True
+        if side and self._rewrite(self.out_dir / CATCHUP_SIDE,
+                                  [(r["file_line"], r["line"]) for r in side]):
+            for r in side:
+                r["file_line"] = r["line"]
+        self._file_dirty = dirty
 
-    def _rewrite(self, path: Path, swaps: list) -> None:
+    def _rewrite(self, path: Path, swaps: list) -> bool:
         """Атомарно (tmp + replace) заменить строки файла; каждая замена — у
         последнего ещё не тронутого вхождения (наши строки дописаны после
-        ленты прошлого включения ассистента). Сбой диска — одна строка в
-        журнал: лента в памяти и у потребителей уже верная."""
+        ленты прошлого включения ассистента). → False — файл не переписан
+        (повторить позже); нечего менять или файла нет — True."""
         import os
 
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return
+        except FileNotFoundError:
+            return True
+        except OSError as e:
+            self._say(f"лента не прочитана ({type(e).__name__}: {e})")
+            return False
         used: set[int] = set()
         drop: set[int] = set()
         for old, new in swaps:
@@ -705,7 +720,7 @@ class LiveEngine:
             else:
                 lines[i] = new
         if not used:
-            return
+            return True
         tmp = path.with_name(path.name + ".tmp")
         try:
             tmp.write_text("".join(line + "\n" for k, line in enumerate(lines) if k not in drop),
@@ -713,7 +728,9 @@ class LiveEngine:
             os.replace(tmp, path)
         except OSError as e:
             tmp.unlink(missing_ok=True)
-            self._say(f"лента не переписана ({type(e).__name__}: {e})")
+            self._say(f"лента не переписана, повторю ({type(e).__name__}: {e})")
+            return False
+        return True
 
     def _windows(self, final: bool) -> int:
         """Распознать созревшие окна дорожек по очереди (по окну за круг —
@@ -739,6 +756,8 @@ class LiveEngine:
             done = self._windows(final=False)
             if self._dupes is not None and self._dupes.pending():
                 self._flush_dupes()  # задержанные строки — не дольше HOLD_MAX_S
+            if self._file_dirty:
+                self._sync_files()  # прошлая перезапись ленты не прошла
             return done
 
     def process_window(self) -> None:
@@ -1219,6 +1238,10 @@ class LiveEngine:
             self._out = None
         merge_lines(self._transcript, lines)
         (self.out_dir / CATCHUP_SIDE).unlink(missing_ok=True)
+        for rec in self._voiced:
+            if rec["catchup"]:
+                # Строка догонялки теперь в ленте — такой, какая она в памяти.
+                rec["catchup"], rec["index"], rec["file_line"] = False, None, rec["line"]
 
     def catchup_progress(self) -> dict | None:
         """Для панели: {"active", "done_s", "total_s", "from_t", "to_t",
@@ -1549,10 +1572,21 @@ class LiveEngine:
             elif self._catch_lines:
                 with self._window_lock:
                     self._merge_catchup_lines()
+            # Под замком окна (рабочий поток мог не успеть выйти за join):
+            # лента — с последними подписями, итоги голосов и дублей.
+            extras = []
+            if self._window_lock.acquire(timeout=5):
+                try:
+                    if self._file_dirty:
+                        self._sync_files()
+                    extras = [x.stats_line() for x in (self._voices, self._dupes) if x is not None]
+                except Exception:
+                    pass
+                finally:
+                    self._window_lock.release()
             if self.stats["windows"]:
                 self._log(self.stats_line())
-            for extra in (self._voices, self._dupes):
-                extra_line = extra.stats_line() if extra is not None else None
+            for extra_line in extras:
                 if extra_line:
                     self._log(extra_line)
             close_error = self._close_capture()
