@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingCard } from "./RecordingCard";
-import { AnalysisStatus, analysisJobOf, missingNote, missingParts, reanalyzeBlocked } from "./analysis";
+import { AnalysisStatus, analysisJobOf, analysisNotes, missingNote, missingParts, reanalyzeBlocked } from "./analysis";
 import * as api from "../../lib/api";
 import type { Analysis, AnalysisState, Job, Recording, Transcript } from "../../lib/types";
 
@@ -98,7 +98,8 @@ test("анализ без глав — честная строка, а не мо
   const warnings = ["часть 1: chapters пустой: нужны главы по смене темы разговора"];
   render(<AnalysisStatus state={{ state: "ready", analysis: doc({ chapters: [], missing: ["chapters"], warnings }) }}
     busy={false} />);
-  const note = screen.getByText("Модель вернула анализ без глав — попробуйте другую модель");
+  // Локальная модель — совет и про окно контекста (частая причина).
+  const note = screen.getByText("Модель вернула анализ без глав — увеличьте контекст модели (16K+) или попробуйте другую модель");
   expect(note).toHaveAttribute("title", warnings[0]);
   // Какая модель разметила — по-прежнему видно.
   expect(screen.getByText(/Анализ: Локальная модель \(qwen3:8b\)/)).toBeInTheDocument();
@@ -132,7 +133,8 @@ test("карточка: анализ без глав и важности — с�
   });
   load();
   render(<RecordingCard id="r1" endpoint={ep} />);
-  expect(await screen.findByText("Модель вернула анализ без глав и оценок важности — попробуйте другую модель"))
+  expect(await screen.findByText(
+    "Модель вернула анализ без глав и оценок важности — увеличьте контекст модели (16K+) или попробуйте другую модель"))
     .toBeInTheDocument();
 });
 
@@ -240,4 +242,37 @@ test("бейдж «ИИ» у названия от модели; нажатие 
   await userEvent.type(input, "Моё{Enter}");
   expect(api.patchRecording).toHaveBeenCalledWith(ep, "r1", { title: "Моё" });
   await waitFor(() => expect(screen.queryByTitle(/Название предложено ИИ/)).toBeNull());
+});
+
+
+const cloud = (extra: Partial<Analysis> = {}) =>
+  doc({ model: "claude-code:sonnet", llm: { provider: "claude-code", model: "sonnet" }, ...extra });
+
+test("облачной модели — только «попробуйте другую модель»", () => {
+  expect(analysisNotes(cloud({ chapters: [], missing: ["chapters"] }))).toEqual([
+    "Модель вернула анализ без глав — попробуйте другую модель"]);
+});
+
+test("не разобранные куски встречи — с причиной; части только для части встречи; обрезанный промпт", () => {
+  const notes = analysisNotes(doc({
+    unparsed: { parts: 2, of: 5, reason: "текст не помещается в контекст модели: maximum context length is 4096" },
+    partial: { chapters: "1/3", importance: "2/3" },
+    context_cut: { seen: 4096, need: 18000 },
+  }));
+  expect(notes).toEqual([
+    "Часть встречи не разобрана (2 из 5 кусков): текст не помещается в контекст модели: maximum context length is 4096",
+    "Главы — только для части встречи (1 из 3 кусков)",
+    "Оценки важности — только для части встречи (2 из 3 кусков)",
+    "Модель видела только часть текста (~4096 из ~18000 токенов) — увеличьте контекст модели до 16K+",
+  ]);
+  expect(analysisNotes(cloud())).toEqual([]);
+});
+
+test("карточка: часть встречи не разобрана — строкой, причина целиком в подсказке", async () => {
+  const reason = "таймаут вызова модели " + "очень длинная причина ".repeat(10);
+  render(<AnalysisStatus state={{ state: "ready", analysis: cloud({ unparsed: { parts: 1, of: 3, reason } }) }}
+    busy={false} />);
+  const note = screen.getByText(/^Часть встречи не разобрана \(1 из 3 кусков\): таймаут/);
+  expect(note.textContent!.length).toBeLessThan(200);
+  expect(note.getAttribute("title")).toContain(reason);
 });

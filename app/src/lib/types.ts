@@ -693,7 +693,11 @@ export type ProxyInfo = {
 };
 
 /** `POST /assistant/check`. */
-export type ProviderCheck = { ok: boolean; error?: string | null; provider?: string | null };
+export type ProviderCheck = {
+  ok: boolean; error?: string | null; provider?: string | null;
+  /** Что ещё узнала проверка: у локальной модели — окно контекста. */
+  detail?: string | null;
+};
 
 /** Модель на локальном сервере: размер (байты) и число параметров — у Ollama, контекст — у vLLM. */
 export type LocalModel = { id: string; size?: number | null; params?: string | null; context?: number | null };
@@ -914,6 +918,12 @@ export type Analysis = {
   missing?: AnalysisFeature[];
   /** Сколько элементов каждой части отброшено проверкой (номер реплики вне встречи и т. п.). */
   dropped?: Partial<Record<AnalysisFeature, number>>;
+  /** Куски встречи, которые не разобрались совсем, и причина первого (0.3.5). */
+  unparsed?: { parts: number; of: number; reason?: string };
+  /** Часть есть не у всех разобравшихся кусков: «1/3» (0.3.5). */
+  partial?: Partial<Record<AnalysisFeature, string>>;
+  /** Сервер обрезал промпт по своему контексту: сколько токенов видел и сколько было нужно (0.3.5). */
+  context_cut?: { seen: number; need: number };
 };
 
 export type AnalysisStateName = "none" | "queued" | "running" | "ready" | "stale" | "failed";

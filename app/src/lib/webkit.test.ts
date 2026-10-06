@@ -13,7 +13,9 @@ import { join, relative } from "node:path";
 import { findJira, jiraBaseError, jiraLinker } from "./jira";
 import { removeTerm } from "./textfix";
 
-const ROOT = join(process.cwd(), "src");
+// Папка src окна — от этого файла, а не от рабочей папки: из корня репозитория
+// `process.cwd()/src` — это Python, и проверка прошла бы впустую.
+const ROOT = join(__dirname, "..");
 
 function sources(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -29,7 +31,10 @@ const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\
 
 test("в коде окна нет просмотра назад в регулярках и color-mix() — их нет в WebKit macOS 13.0", () => {
   const bad: string[] = [];
-  for (const path of sources(ROOT)) {
+  const files = sources(ROOT);
+  expect(files.length).toBeGreaterThan(100);
+  expect(files.some((f) => f.endsWith("jira.ts"))).toBe(true);
+  for (const path of files) {
     const text = code(readFileSync(path, "utf8"));
     if (/\(\?<[=!]/.test(text)) bad.push(`${relative(ROOT, path)}: (?<= / (?<!`);
     if (/color-mix\(/.test(text)) bad.push(`${relative(ROOT, path)}: color-mix()`);

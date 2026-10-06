@@ -538,8 +538,10 @@ export const checkProvider = (ep: Endpoint, provider: string) =>
  * Модели локального OpenAI-совместимого сервера по адресу из окна (может быть
  * не сохранён); `model` — выбранная. Ошибка сервера модели — в ответе, не исключением.
  */
-export const listLocalModels = (ep: Endpoint, baseUrl: string, model?: string | null) =>
-  json<LocalModels>(ep, "/assistant/local-models", body("POST", { base_url: baseUrl, model: model ?? null }));
+export const listLocalModels = (ep: Endpoint, baseUrl: string, model?: string | null, viaProxy?: boolean) =>
+  json<LocalModels>(ep, "/assistant/local-models", body("POST", {
+    base_url: baseUrl, model: model ?? null, ...(viaProxy === undefined ? {} : { via_proxy: viaProxy }),
+  }));
 
 // --- анализ встречи и название ---------------------------------------------------
 

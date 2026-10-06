@@ -73,7 +73,14 @@ const MISSING_NAME: Record<AnalysisFeature, string> = {
 /** Короче этого встрече главы не положены (резидент просит 0–2 главы до 5 минут). */
 const CHAPTERS_MIN_S = 300;
 /** С этого числа сегментов пустая важность — сбой модели, а не ответ (как у резидента). */
-const IMPORTANCE_MIN_SEGMENTS = 8;
+const IMPORTANCE_MIN_SEGMENTS = 20;
+/** Части в строке «… — только для части встречи». */
+const PART_TITLE: Record<AnalysisFeature, string> = {
+  chapters: "Главы", importance: "Оценки важности", types: "Типы реплик", insights: "Наблюдения",
+  title: "Название", category: "Категория", issues: "Ссылки на задачи",
+};
+/** Причина в строке «часть встречи не разобрана» — коротко, целиком — в подсказке. */
+const REASON_MAX = 140;
 
 /**
  * Каких частей модель не дала. С 0.3.5 резидент пишет это сам (`missing`);
@@ -91,19 +98,56 @@ export function missingParts(a: Analysis | undefined, durationS?: number | null)
   return out;
 }
 
-/** «Модель вернула анализ без глав и оценок важности — попробуйте другую модель»; нечего сказать — null. */
-export function missingNote(parts: AnalysisFeature[]): string | null {
+/**
+ * «Модель вернула анализ без глав и оценок важности — попробуйте другую
+ * модель»; нечего сказать — null. У локальной модели (`local`) частая
+ * причина — маленькое окно контекста: совет и про него.
+ */
+export function missingNote(parts: AnalysisFeature[], local = false): string | null {
   const names = MISSING_ORDER.filter((f) => parts.includes(f)).map((f) => MISSING_NAME[f]);
   if (!names.length) return null;
   const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} и ${names.at(-1)}`;
-  return `Модель вернула анализ без ${list} — попробуйте другую модель`;
+  const advice = local ? "увеличьте контекст модели (16K+) или попробуйте другую модель" : "попробуйте другую модель";
+  return `Модель вернула анализ без ${list} — ${advice}`;
 }
 
-/** Строка о недостающих частях; подробности (что не разобралось) — в подсказке. */
-function MissingNote({ analysis, durationS }: { analysis?: Analysis; durationS?: number | null }) {
-  const note = missingNote(missingParts(analysis, durationS));
-  if (!note) return null;
-  return <span className="analysis-status__missing" title={analysis?.warnings?.join("\n") || undefined}>{note}</span>;
+/** Разметила локальная модель (`openai-compatible`). */
+const localModel = (a: Analysis | undefined) =>
+  a?.llm?.provider === "openai-compatible" || !!a?.model?.startsWith("openai-compatible");
+
+/**
+ * Что сказать о неполном анализе: чего модель не дала, какие куски встречи
+ * не разобрались (и почему), какие части есть только для части встречи,
+ * обрезал ли сервер промпт. Всё — строками для карточки; пусто — анализ полный.
+ */
+export function analysisNotes(a: Analysis | undefined, durationS?: number | null): string[] {
+  if (!a) return [];
+  const notes: string[] = [];
+  const missing = missingNote(missingParts(a, durationS), localModel(a));
+  if (missing) notes.push(missing);
+  const u = a.unparsed;
+  if (u && u.parts > 0) {
+    const reason = u.reason && u.reason.length > REASON_MAX ? `${u.reason.slice(0, REASON_MAX - 1)}…` : u.reason;
+    notes.push(`Часть встречи не разобрана (${u.parts} из ${u.of} кусков)${reason ? `: ${reason}` : ""}`);
+  }
+  for (const f of MISSING_ORDER) {
+    const share = a.partial?.[f];
+    const [got, of] = (share ?? "").split("/");
+    if (share && got && of) notes.push(`${PART_TITLE[f]} — только для части встречи (${got} из ${of} кусков)`);
+  }
+  if (a.context_cut) {
+    notes.push(`Модель видела только часть текста (~${a.context_cut.seen} из ~${a.context_cut.need} токенов) — `
+      + "увеличьте контекст модели до 16K+");
+  }
+  return notes;
+}
+
+/** Строки о неполном анализе; подробности (что не разобралось) — в подсказке. */
+function AnalysisNotes({ analysis, durationS }: { analysis?: Analysis; durationS?: number | null }) {
+  const notes = analysisNotes(analysis, durationS);
+  if (!notes.length) return null;
+  const title = [analysis?.unparsed?.reason, ...(analysis?.warnings ?? [])].filter(Boolean).join("\n") || undefined;
+  return <>{notes.map((note) => <span key={note} className="analysis-status__missing" title={title}>{note}</span>)}</>;
 }
 
 /** Тихая строка о состоянии анализа под действиями карточки; нечего сказать — ничего. */
@@ -137,8 +181,8 @@ export function AnalysisStatus({ state, busy, onRun, durationS }: {
     case "ready": {
       // Какая модель разметила встречу: видно, уходила ли она облачной модели.
       const line = provenance("Анализ", originOf(state.analysis), state.analysis?.created_at);
-      const missing = <MissingNote analysis={state.analysis} durationS={durationS} />;
-      return line || missingNote(missingParts(state.analysis, durationS)) ? (
+      const missing = <AnalysisNotes analysis={state.analysis} durationS={durationS} />;
+      return line || analysisNotes(state.analysis, durationS).length ? (
         <div className="analysis-status analysis-status--origin">
           {line && <span className="muted" title="Какая модель разметила встречу">{line}</span>}
           {missing}
@@ -148,7 +192,7 @@ export function AnalysisStatus({ state, busy, onRun, durationS }: {
     case "stale":
       return <StaleAnalysis busy={busy} onRun={onRun && (() => onRun())}
         origin={provenance("Анализ", originOf(state.analysis), state.analysis?.created_at)}
-        missing={<MissingNote analysis={state.analysis} durationS={durationS} />} />;
+        missing={<AnalysisNotes analysis={state.analysis} durationS={durationS} />} />;
     case "failed":
       return (
         <div className="analysis-status" role="status">

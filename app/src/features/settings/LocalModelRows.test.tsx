@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
-import { modelLabel, sizeText } from "./LocalModelRows";
+import { modelLabel, sameModel, sizeText } from "./LocalModelRows";
 import * as api from "../../lib/api";
 import type { AssistantInfo, LocalModels } from "../../lib/types";
 
@@ -56,7 +56,7 @@ const picker = () => screen.findByRole("combobox", { name: "Модели на с
 test("модели сервера ищутся сразу и выбираются из списка в поле имени", async () => {
   open();
   const select = await picker();
-  expect(api.listLocalModels).toHaveBeenCalledWith(ep, URL1, null);
+  expect(api.listLocalModels).toHaveBeenCalledWith(ep, URL1, null, false);
   expect(within(select).getByRole("option", { name: "qwen3:8b" })).toBeInTheDocument();
   expect(screen.getByText("Найдено моделей: 2")).toBeInTheDocument();
   await userEvent.selectOptions(select, "gemma3:4b");
@@ -98,7 +98,7 @@ test("смена адреса — новый поиск по несохранё�
   const address = screen.getByLabelText("Адрес сервера");
   await userEvent.clear(address);
   await userEvent.type(address, "http://localhost:11434/v1");
-  await waitFor(() => expect(api.listLocalModels).toHaveBeenLastCalledWith(ep, "http://localhost:11434/v1", null),
+  await waitFor(() => expect(api.listLocalModels).toHaveBeenLastCalledWith(ep, "http://localhost:11434/v1", null, false),
     { timeout: 3000 });
 });
 
@@ -137,4 +137,37 @@ test("подпись модели: размер и параметры (Ollama), 
   expect(modelLabel({ id: "Qwen/Qwen2.5-14B", context: 32768 })).toBe("Qwen/Qwen2.5-14B — контекст 32K");
   expect(modelLabel({ id: "m" })).toBe("m");
   expect(sizeText(734003200)).toBe("700 МБ");
+});
+
+
+test("Ollama: «llama3.2» — это «llama3.2:latest» из списка, а не пропавшая модель", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(settings("llama3.2"));
+  vi.mocked(api.listLocalModels).mockResolvedValue(found("llama3.2:latest", "qwen3:8b"));
+  open();
+  const select = await picker();
+  expect(select).toHaveValue("llama3.2:latest");
+  expect(screen.queryByText(/на сервере нет/)).toBeNull();
+  expect(sameModel("hf.co/org/repo", "hf.co/org/repo:latest")).toBe(true);
+  expect(sameModel("qwen3:8b", "qwen3")).toBe(false);
+});
+
+test("«Локальную модель — через прокси»: по умолчанию выключено; включить — новый поиск через прокси и сохранение", async () => {
+  open();
+  await picker();
+  const box = screen.getByRole("checkbox", { name: "Локальную модель — через прокси" });
+  expect(box).not.toBeChecked();
+  await userEvent.click(box);
+  await waitFor(() => expect(api.listLocalModels).toHaveBeenLastCalledWith(ep, URL1, null, true), { timeout: 3000 });
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { llm: { local_via_proxy: true } }));
+});
+
+test("«Проверить» локальную модель — с окном контекста", async () => {
+  vi.mocked(api.checkProvider).mockResolvedValue({
+    ok: true, error: null, provider: "openai-compatible", detail: "окно контекста модели: 32768 токенов" });
+  open();
+  await picker();
+  const local = screen.getByRole("group", { name: "Локальная (LM Studio / Ollama)" });
+  await userEvent.click(within(local).getByRole("button", { name: "Проверить" }));
+  expect(await within(local).findByText("работает; окно контекста модели: 32768 токенов")).toBeInTheDocument();
 });

@@ -46,7 +46,7 @@ const CONCRETE = PROVIDERS.filter((p) => p.value !== "auto").map((p) => p.value)
 /** Кандидаты «Авто» — его выбор у конфига без списка включённых. */
 const AUTO_CANDIDATES = ["claude-code", "codex", "openai-compatible"];
 /** Ключи `llm`, по которым идёт проверка и выбор «Авто». */
-const LLM_KEYS = ["provider", "base_url", "local_model", "proxy", "opencode_model", "enabled"];
+const LLM_KEYS = ["provider", "base_url", "local_model", "proxy", "opencode_model", "enabled", "local_via_proxy"];
 
 /**
  * Включённые модели из черновика `llm`: список резидента, а у конфига без него
@@ -256,7 +256,9 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
     let result: Check;
     try {
       const r = await checkProvider(endpoint, provider);
-      result = r.ok ? { busy: false, ok: true, text: "работает" } : { busy: false, ok: false, text: r.error || "не работает" };
+      // У локальной модели проверка сообщает и окно контекста.
+      result = r.ok ? { busy: false, ok: true, text: r.detail ? `работает; ${r.detail}` : "работает" }
+        : { busy: false, ok: false, text: r.error || "не работает" };
     } catch (e) {
       result = { busy: false, ok: false, text: errorText(e) };
     }
@@ -387,7 +389,8 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
       {on(LOCAL) && (
         <>
           <p className="muted sdesc">Локальная модель не использует базу знаний.</p>
-          <LocalModelRows baseUrl={baseUrl} model={String(llm("local_model") ?? "")} set={set} endpoint={endpoint} />
+          <LocalModelRows baseUrl={baseUrl} model={String(llm("local_model") ?? "")} set={set} endpoint={endpoint}
+            viaProxy={llm("local_via_proxy") === true} />
         </>
       )}
       <Row label={PROXY_LABEL} hint="Через него Claude Code, Codex и OpenCode подключаются к своим сервисам"
