@@ -4,10 +4,23 @@
 Digester и QAService):
 
     runner(prompt, *, system_prompt, model, resume, session_id, allowed_dirs,
-           cwd, timeout_s, max_turns, on_text) -> AgentReply
+           cwd, timeout_s, max_turns, on_text, images, keep_session) -> AgentReply
 
-`session_id`/`resume` — свой сохраняемый сеанс (только Claude Code; у
-остальных сессий нет, они параметры принимают и не используют).
+Сеансы (нативное продолжение, v4-design §12):
+* `keep_session=True` — начать сохраняемый сеанс провайдера; его id — в
+  `AgentReply.session_id`. Claude Code принимает и свой id нового сеанса
+  (`session_id`, UUID); Codex и OpenCode id выдают сами.
+* `resume=<id>` — продолжить сохранённый сеанс. Не вышло (сеанс неизвестен,
+  истёк, CLI отказал до начала хода) — `AgentReply.resume_failed`, ошибка
+  начинается с RESUME_ERROR: вызывающий начинает новый сеанс с затравкой
+  из журнала.
+* Без них — вызов без сохранения сеанса, как раньше. `session_id` без
+  `keep_session` у Codex и OpenCode по-прежнему игнорируется.
+* Локальная модель сеансов не держит (`supports_resume` — False).
+
+`images` — пути к изображениям для этого сообщения. Видят их Claude Code и
+Codex (`llm.vision`); остальные параметр принимают и игнорируют — окно
+показывает «модель не видит изображения».
 `on_text(кусок)` — текст ответа по мере генерации (Claude Code; Codex и
 локальная модель отдают ответ целиком, параметр принимают и не зовут).
 `on_text(None)` — новое сообщение модели (после инструмента): показанный
@@ -16,10 +29,12 @@ Digester и QAService):
 Ошибки не бросаются, а возвращаются в `AgentReply.error`.
 """
 
+import re
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
+from pathlib import Path
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
@@ -27,6 +42,16 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win3
 # «модель не успела» от прочих ошибок.
 TIMEOUT_ERROR = "таймаут вызова модели"
 EMPTY_ERROR = "модель вернула пустой ответ"
+# Ход остановлен по просьбе (кнопка «Стоп»): не сбой модели.
+CANCELLED_ERROR = "вызов отменён"
+# Начало текста ошибки «сохранённый сеанс не продолжить» (+ AgentReply.resume_failed).
+RESUME_ERROR = "сеанс модели не продолжить"
+
+_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+# Изображения, которые принимают модели (Anthropic API и Codex): расширение → тип.
+IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+               ".gif": "image/gif", ".webp": "image/webp"}
 
 
 @dataclass
@@ -37,6 +62,28 @@ class AgentReply:
     # Сколько токенов насчитал сервер (`prompt_tokens`, `completion_tokens`) —
     # только у локальной модели: по `prompt_tokens` видно, что промпт обрезан.
     usage: dict | None = None
+    # Продолжить сохранённый сеанс (`resume`) не вышло: сеанс неизвестен,
+    # истёк или CLI отказал до начала хода. Вызывающий начинает новый сеанс
+    # и кладёт контекст затравкой из журнала.
+    resume_failed: bool = False
+    # Ход остановлен по просьбе (`Conversation.interrupt`); `text` — что успело прийти.
+    cancelled: bool = False
+
+
+def resume_failure(detail: str | None) -> AgentReply:
+    """Ответ «сохранённый сеанс не продолжить» с подробностями CLI."""
+    detail = (detail or "").strip()
+    return AgentReply(text="", error=f"{RESUME_ERROR}: {detail}" if detail else RESUME_ERROR,
+                      resume_failed=True)
+
+
+def is_uuid(value) -> bool:
+    return isinstance(value, str) and bool(_UUID.match(value))
+
+
+def image_media_type(path) -> str | None:
+    """MIME-тип изображения по расширению; не изображение для модели — None."""
+    return IMAGE_TYPES.get(Path(str(path)).suffix.lower())
 
 
 Runner = Callable[..., Awaitable[AgentReply]]

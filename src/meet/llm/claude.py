@@ -8,12 +8,16 @@ claude_agent_sdk импортируется только внутри функц
 """
 
 import asyncio
+import base64
 import logging
 import os
+import uuid
 from pathlib import Path
 
 from meet import netproxy
-from meet.llm.base import TIMEOUT_ERROR, AgentReply, drop_session_markers
+from meet.llm.base import (
+    TIMEOUT_ERROR, AgentReply, drop_session_markers, image_media_type, is_uuid, resume_failure,
+)
 from meet.llm.detect import claude_not_found, find_claude
 
 log = logging.getLogger(__name__)
@@ -42,6 +46,39 @@ def text_delta(event) -> str:
     if delta.get("type") != "text_delta":
         return ""
     return str(delta.get("text") or "")
+
+
+# Предел одного изображения для Anthropic API — 5 МБ (base64 ещё +⅓);
+# вложения окна заранее ужимаются до ≤ 1 568 px (assist/attachments.py).
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+# Что пишет CLI, когда сеанса для --resume нет (2.1.292).
+RESUME_MISSING = "no conversation found"
+
+
+def image_block(path) -> dict:
+    """Блок изображения Anthropic API (base64) из файла. Не тот тип или
+    слишком большой — ValueError, не читается — OSError."""
+    media = image_media_type(path)
+    if media is None:
+        raise ValueError(f"не изображение PNG/JPEG/GIF/WebP: {Path(str(path)).name}")
+    data = Path(path).read_bytes()
+    if len(data) > MAX_IMAGE_BYTES:
+        raise ValueError(f"изображение больше 5 МБ: {Path(str(path)).name}")
+    return {"type": "image", "source": {"type": "base64", "media_type": media,
+                                        "data": base64.b64encode(data).decode("ascii")}}
+
+
+def user_content(text: str, images=()) -> str | list[dict]:
+    """`message.content` сообщения пользователя: без изображений — строка (как
+    раньше), с ними — блоки: изображения, затем текст (порядок, который
+    советует документация Anthropic API для vision)."""
+    images = [i for i in images or () if i]
+    if not images:
+        return text
+    blocks = [image_block(i) for i in images]
+    if text:
+        blocks.append({"type": "text", "text": text})
+    return blocks
 
 
 def find_cli() -> str | None:
@@ -104,6 +141,8 @@ async def run(
     proxy: str | None = None,
     on_text=None,
     thinking: str | None = None,
+    images=(),
+    keep_session: bool = False,
 ) -> AgentReply:
     """Один вызов Claude через Agent SDK: свежая сессия (или resume), строгий
     системный промпт, без настроек проекта; ошибки — в AgentReply.error.
@@ -125,12 +164,25 @@ async def run(
     `on_text(кусок)` — текст ответа по мере генерации (частичные сообщения
     CLI): окно показывает ответ, не дожидаясь конца. `thinking="disabled"` —
     без размышлений (только «Быстрее»: haiku иначе думает по умолчанию и
-    отвечает минутами); None — как у модели по умолчанию."""
+    отвечает минутами); None — как у модели по умолчанию.
+
+    `keep_session` — начать сохраняемый сеанс со своим UUID (как
+    `session_id`, id — в ответе). `resume`, которое не вышло (сеанса нет,
+    истёк, CLI отказал до начала хода), — ответ `resume_failed`.
+    `images` — пути к изображениям: блоки base64 в сообщении."""
     import claude_agent_sdk
     from claude_agent_sdk import (
-        AssistantMessage, ClaudeAgentOptions, ResultMessage, StreamEvent, TextBlock,
+        AssistantMessage, ClaudeAgentOptions, ResultMessage, StreamEvent, SystemMessage, TextBlock,
     )
 
+    if resume and not is_uuid(resume):
+        return resume_failure(f"неверный id сеанса: {resume!r}")
+    try:
+        content = user_content(prompt, images)
+    except (OSError, ValueError) as e:
+        return AgentReply(text="", error=f"изображение не отправить: {e}")
+    if keep_session and not (resume or session_id):
+        session_id = str(uuid.uuid4())
     drop_api_key()
     # Как и ключ — из окружения своего процесса (SDK переменные только добавляет).
     drop_session_markers(os.environ)
@@ -158,7 +210,7 @@ async def run(
     # даёт ValueError. Отдаём prompt как AsyncIterable из одного user-сообщения —
     # это включает streaming input и сохраняет per-call семантику.
     async def _single_message():
-        yield {"type": "user", "message": {"role": "user", "content": prompt}}
+        yield {"type": "user", "message": {"role": "user", "content": content}}
 
     text_parts: list[str] = []
     result_text: str | None = None
@@ -166,10 +218,14 @@ async def run(
     error: str | None = None
 
     streamed = False
+    began = False  # было system/init: CLI начал ход (сеанс для resume найден)
 
     async def _consume() -> None:
-        nonlocal result_text, reported, error, streamed
+        nonlocal result_text, reported, error, streamed, began
         async for msg in claude_agent_sdk.query(prompt=_single_message(), options=options):
+            if isinstance(msg, SystemMessage) and getattr(msg, "subtype", None) == "init":
+                began = True
+                continue
             if on_text is not None and isinstance(msg, StreamEvent):
                 event = msg.event if isinstance(msg.event, dict) else {}
                 # Новое сообщение модели после инструмента: прежний текст был
@@ -205,6 +261,9 @@ async def run(
         error = TIMEOUT_ERROR
     except Exception as e:  # ProcessError, CLIConnectionError, JSONDecode...
         error = f"{type(e).__name__}: {e}"
+    if resume and error and error != TIMEOUT_ERROR and (
+            not began or RESUME_MISSING in str(error).lower()):
+        return resume_failure(str(error))
     return AgentReply(
         text=(result_text or "".join(text_parts)).strip(),
         session_id=(reported or resume or session_id) if persist else None,
