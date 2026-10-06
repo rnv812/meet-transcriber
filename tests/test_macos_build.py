@@ -6,9 +6,15 @@ ffmpeg, лицензии в ресурсах, пробный прогон без
 неизменность Windows-сборки, Info.plist и протокол помощника."""
 
 import json
+import os
 import plistlib
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from meet import audiotap, engine
 
@@ -81,7 +87,8 @@ def test_helper_is_built_and_self_tested():
     assert "swiftc -O -swift-version 5 -target arm64-apple-macos13.0" in SCRIPT
     assert "--self-test" in SCRIPT
     assert '"$RESOURCES/meet-audiotap"' in SCRIPT
-    assert 'DMG_NAME="Meet_${VERSION}_aarch64.dmg"' in SCRIPT
+    sign = (ROOT / "scripts" / "sign_macos.sh").read_text(encoding="utf-8")
+    assert 'DMG_NAME="Meet_${VERSION}_aarch64.dmg"' in sign
 
 
 def test_helper_speaks_the_python_protocol():
@@ -221,9 +228,189 @@ def test_mac_bundle_config_and_permission_strings():
 
 
 # --- подпись своим сертификатом ------------------------------------------------------
+#
+# Сценарии подписи прогоняются настоящим bash с заглушками программ Apple
+# (codesign, hdiutil, plutil, …): проверяется поведение, а не написание.
 
-KEYCHAIN = (ROOT / "scripts" / "macos_keychain.sh").read_text(encoding="utf-8")
-CHECK = (ROOT / "scripts" / "check_macos_signature.sh").read_text(encoding="utf-8")
+SHA1 = "68e9e1ae56bd808462a1f52fcff5083f544aba73"
+
+
+def _bash() -> str | None:
+    if sys.platform == "win32":
+        git_bash = Path(r"C:\Program Files\Git\bin\bash.exe")
+        return str(git_bash) if git_bash.is_file() else None
+    return shutil.which("bash")
+
+
+needs_bash = pytest.mark.skipif(_bash() is None, reason="нет bash")
+
+STUBS = {
+    "codesign": r"""
+last="${@: -1}"
+if [[ "$1" == "-d" && "$2" == "-r-" ]]; then
+    base="$(basename "$last")"
+    case "$base" in
+        uv|ffmpeg|meet-audiotap) id="com.meet.desktop.$base" ;;
+        *) id="com.meet.desktop" ;;
+    esac
+    case "${STUB_DR:-leaf}" in
+        cdhash) echo '# designated => cdhash H"0011"' ;;
+        root) echo "designated => identifier \"$id\" and certificate root = H\"$STUB_SHA\"" ;;
+        *) echo "designated => identifier \"$id\" and certificate leaf = H\"$STUB_SHA\"" ;;
+    esac
+fi
+""",
+    "hdiutil": r"""
+if [[ "$1" == "attach" ]]; then
+    while [[ $# -gt 0 ]]; do
+        [[ "$1" == "-mountpoint" ]] && mkdir -p "$2/Meet.app/Contents"
+        shift
+    done
+elif [[ "$1" == "create" ]]; then
+    touch "${@: -1}"
+fi
+""",
+    "plutil": 'echo "${STUB_VERSION:-0.0.1}"',
+    "xattr": "exit 1",
+    "ditto": 'cp -R "$1" "$2"',
+    "ln": "exit 0",
+    "shasum": 'echo "' + "a" * 64 + '  ${@: -1}"',
+    "security": "exit 0",
+}
+
+
+class Stubs:
+    def __init__(self, tmp_path: Path):
+        self.dir = tmp_path / "stubs"
+        self.dir.mkdir()
+        self.calls = tmp_path / "calls.txt"
+        for name, body in STUBS.items():
+            path = self.dir / name
+            path.write_text(f'#!/bin/bash\necho "{name} $*" >> "$STUB_CALLS"\n{body}\nexit 0\n',
+                            encoding="utf-8", newline="\n")
+            path.chmod(0o755)
+        self.env = tmp_path / "stubs.env"
+        self.env.write_text(
+            'PATH="$(cygpath -u "$STUB_DIR" 2>/dev/null || echo "$STUB_DIR"):$PATH"\n',
+            encoding="utf-8", newline="\n")
+
+    def run(self, script: str, *args: str, **env: str) -> subprocess.CompletedProcess:
+        clean = {k: v for k, v in os.environ.items()
+                 if not k.startswith(("MACOS_CERT", "MEET_", "GITHUB_"))}
+        # Через BASH_ENV: Git Bash на Windows ставит свой /usr/bin перед PATH.
+        clean.update(BASH_ENV=str(self.env), STUB_DIR=str(self.dir),
+                     STUB_CALLS=str(self.calls), STUB_SHA=SHA1, **env)
+        return subprocess.run([_bash(), str(ROOT / "scripts" / script), *args], env=clean,
+                              capture_output=True, text=True, encoding="utf-8", timeout=60)
+
+    def called(self, name: str) -> list[str]:
+        if not self.calls.is_file():
+            return []
+        return [line for line in self.calls.read_text(encoding="utf-8").splitlines()
+                if line.startswith(name + " ")]
+
+
+def _fake_app(tmp_path: Path) -> Path:
+    app = tmp_path / "bundle" / "macos" / "Meet.app"
+    for helper in ("uv", "ffmpeg", "meet-audiotap"):
+        (app / "Contents" / "Resources" / "resources").mkdir(parents=True, exist_ok=True)
+        (app / "Contents" / "Resources" / "resources" / helper).write_text("x")
+    return app
+
+
+@needs_bash
+def test_keychain_without_secret_warns_on_branches_and_fails_on_tags(tmp_path):
+    stubs = Stubs(tmp_path)
+    branch = stubs.run("macos_keychain.sh", "import")
+    assert branch.returncode == 0, branch.stderr
+    assert "::warning title=Подпись macOS::" in branch.stdout
+    assert not re.search(r"[0-9A-F]{40}", branch.stdout)
+    tag = stubs.run("macos_keychain.sh", "import", MEET_REQUIRE_SIGNING="true")
+    assert tag.returncode != 0
+    assert "сборка по тегу без сертификата" in tag.stderr
+    assert not stubs.called("security")
+
+
+@needs_bash
+def test_tag_without_secret_is_not_packaged(tmp_path):
+    stubs = Stubs(tmp_path)
+    result = stubs.run("sign_macos.sh", str(_fake_app(tmp_path)), "0.0.1",
+                       MEET_REQUIRE_SIGNING="true")
+    assert result.returncode != 0
+    assert not stubs.called("hdiutil") and not stubs.called("codesign")
+
+
+@needs_bash
+def test_branch_without_secret_packages_the_ad_hoc_app(tmp_path):
+    stubs = Stubs(tmp_path)
+    app = _fake_app(tmp_path)
+    out = tmp_path / "out.txt"
+    out.write_text("")
+    result = stubs.run("sign_macos.sh", str(app), "0.0.1", GITHUB_OUTPUT=str(out))
+    assert result.returncode == 0, result.stderr
+    assert "::warning title=Подпись macOS::" in result.stdout
+    # Без ключа — ничего не переподписывается.
+    assert not stubs.called("codesign")
+    dmg = tmp_path / "bundle" / "dmg" / "Meet_0.0.1_aarch64.dmg"
+    assert dmg.is_file()
+    sums = (tmp_path / "bundle" / "dmg" / "SHA256SUMS.txt").read_text(encoding="utf-8")
+    assert sums == "a" * 64 + "  Meet_0.0.1_aarch64.dmg\n"
+    create = " ".join(stubs.called("hdiutil"))
+    assert "create -volname Meet -srcfolder" in create
+    # Образ — с ссылкой на «Программы»; сам образ не подписывается.
+    assert any("/Applications" in call for call in stubs.called("ln"))
+    outputs = out.read_text(encoding="utf-8")
+    assert "dmg_name=Meet_0.0.1_aarch64.dmg" in outputs and "sums=" in outputs
+
+
+def _check(stubs: Stubs, tmp_path: Path, **env: str) -> subprocess.CompletedProcess:
+    dmg = tmp_path / "Meet_0.0.1_aarch64.dmg"
+    dmg.write_text("dmg")
+    return stubs.run("check_macos_signature.sh", str(_fake_app(tmp_path)), str(dmg), "0.0.1",
+                     **env)
+
+
+@needs_bash
+def test_signature_check_accepts_only_the_explicit_certificate_requirement(tmp_path):
+    stubs = Stubs(tmp_path)
+    ok = _check(stubs, tmp_path, MEET_SIGNING_SHA1=SHA1.upper(),
+                MACOS_CERT_SHA1="68:E9:E1:AE:56:BD:80:84:62:A1:F5:2F:CF:F5:08:3F:54:4A:BA:73")
+    assert ok.returncode == 0, ok.stderr
+    assert f'designated => identifier "com.meet.desktop" and certificate leaf = H"{SHA1}"' \
+        in ok.stdout
+    assert "Meet.app из образа удовлетворяет требованию" in ok.stdout
+    # Образ проверяется так же, как в приложении (mac_update.rs).
+    attach = next(call for call in stubs.called("hdiutil") if call.startswith("hdiutil attach"))
+    assert "-nobrowse -readonly -noautoopen -mountpoint" in attach
+    rust = (TAURI / "src" / "mac_update.rs").read_text(encoding="utf-8")
+    assert re.search(r'"attach",\s*"-nobrowse",\s*"-readonly",\s*"-noautoopen",\s*"-mountpoint"',
+                     rust)
+    verify = [call for call in stubs.called("codesign") if "-R" in call.split()]
+    assert any("--strict" in call for call in verify)
+
+    for bad in ({"STUB_DR": "cdhash"},                         # ad-hoc при сертификате
+                {"STUB_DR": "root"},                           # не наше явное требование
+                {"STUB_VERSION": "0.0.0"},                     # в образе не та версия
+                {"MACOS_CERT_SHA1": "0" * 40}):                # не закреплённый сертификат
+        failed = _check(_fresh(tmp_path), tmp_path, MEET_SIGNING_SHA1=SHA1, **bad)
+        assert failed.returncode != 0, bad
+
+
+def _fresh(tmp_path: Path) -> Stubs:
+    fresh = tmp_path / f"run{len(list(tmp_path.glob('run*')))}"
+    fresh.mkdir()
+    return Stubs(fresh)
+
+
+@needs_bash
+def test_signature_check_without_certificate_warns_on_branches_and_fails_on_tags(tmp_path):
+    stubs = Stubs(tmp_path)
+    branch = _check(stubs, tmp_path, STUB_DR="cdhash")
+    assert branch.returncode == 0, branch.stderr
+    assert "::warning title=Подпись macOS::" in branch.stdout
+    tag = _check(stubs, tmp_path, STUB_DR="cdhash", MEET_REQUIRE_SIGNING="true")
+    assert tag.returncode != 0
+    assert "сборка по тегу подписана ad-hoc" in tag.stderr
 
 
 def _step(job: str, name: str) -> str:
@@ -232,79 +419,41 @@ def _step(job: str, name: str) -> str:
     return job[start:] if nxt < 0 else job[start:nxt]
 
 
-def _until_fi(text: str, start: str) -> str:
-    rest = text[text.index(start):]
-    return rest[: rest.index("fi\n")]
-
-
-def test_signing_secrets_reach_only_the_keychain_step():
+def test_key_reaches_only_the_signing_step_after_the_build():
     macos = _job("macos")
-    step = _step(macos, "Signing certificate")
-    assert "MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}" in step
-    assert "MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}" in step
-    assert "bash scripts/macos_keychain.sh import" in step
-    # Секреты — ни в каком другом месте выпуска.
-    assert WORKFLOW.count("secrets.MACOS_CERT_P12") == 1
-    assert WORKFLOW.count("secrets.MACOS_CERT_PASSWORD") == 1
-    assert "APPLE_CERTIFICATE" not in WORKFLOW
-    pin = re.search(r'MACOS_CERT_SHA1: "([0-9A-F]+)"', macos)
-    assert pin and len(pin.group(1)) == 40
-    names = ("Signing certificate", "Build .dmg", "Signature check", "Remove signing keychain")
+    names = ("Build Meet.app (unsigned)", "Sign and package", "Signature check",
+             "Remove signing keychain")
     order = [macos.index(f"- name: {name}\n") for name in names]
     assert order == sorted(order)
+    sign = _step(macos, "Sign and package")
+    assert "MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}" in sign
+    assert "MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}" in sign
+    assert "bash scripts/sign_macos.sh" in sign
+    assert WORKFLOW.count("secrets.MACOS_CERT_P12") == 1
+    assert WORKFLOW.count("secrets.MACOS_CERT_PASSWORD") == 1
+    # Сборка (чужой код) ни ключа, ни подписи не видит; Tauri подписывает ad-hoc.
+    assert "secrets." not in _step(macos, "Build Meet.app (unsigned)")
+    for word in ("MACOS_CERT", "security ", "codesign --force", "--bundles app,dmg"):
+        assert word not in SCRIPT, word
+    assert "--bundles app)" in SCRIPT
+    assert "unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY" in SCRIPT
     cleanup = _step(macos, "Remove signing keychain")
     assert "if: always()" in cleanup and "macos_keychain.sh cleanup" in cleanup
-    check = _step(macos, "Signature check")
-    assert "steps.build.outputs.app" in check and "steps.build.outputs.dmg" in check
-    assert 'echo "app=$APP_BUNDLE"' in SCRIPT
+    # Тег без подписи — сбой; закреплён SHA-1 сертификата.
+    assert "MEET_REQUIRE_SIGNING: ${{ github.ref_type == 'tag' }}" in macos
+    pin = re.search(r'MACOS_CERT_SHA1: "([0-9A-F]{40})"', macos)
+    assert pin and pin.group(1).lower() == SHA1
+    upload = macos[macos.index("actions/upload-artifact@"):]
+    assert "steps.package.outputs.dmg" in upload and "steps.package.outputs.sums" in upload
 
 
-def test_keychain_import_without_secret_warns_and_keeps_ad_hoc():
-    no_secret = _until_fi(KEYCHAIN, 'if [[ -z "${MACOS_CERT_P12:-}" ]]')
-    assert "warn " in no_secret and "return 0" in no_secret
-    assert "::warning" in KEYCHAIN
-    # .p12 не задерживается на диске, ключ неизвлекаемый, без окон доступа.
-    assert "-x -P" in KEYCHAIN
-    assert 'rm -rf "$(dirname "$p12")"' in KEYCHAIN
-    assert "set-key-partition-list -S apple-tool:,apple:,codesign:" in KEYCHAIN
-    assert "MEET_SIGNING_IDENTITY=$identity" in KEYCHAIN
-    assert "MACOS_CERT_SHA1" in KEYCHAIN
-    # Ни ключ, ни пароль не печатаются.
-    for line in KEYCHAIN.splitlines():
-        if re.search(r"\b(echo|printf)\b", line):
-            assert "PASSWORD" not in line and "keychain_password" not in line, line
-            assert "MACOS_CERT_P12" not in line or "printf '%s' \"$MACOS_CERT_P12\"" in line, line
-
-
-def test_signing_goes_through_tauri_with_our_identity():
-    # Tauri с APPLE_CERTIFICATE ищет в .p12 только сертификаты Apple —
-    # своя личность передаётся хэшем через APPLE_SIGNING_IDENTITY.
-    assert "unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY" in SCRIPT
-    assert 'export APPLE_SIGNING_IDENTITY="$SIGN_ID"' in SCRIPT
-    build = SCRIPT[SCRIPT.index('export APPLE_SIGNING_IDENTITY="$SIGN_ID"'):]
-    assert build.index("tauri build") < build.index("\n)\n")
-    # Помощники в ресурсах — той же личностью, до сборки пакета.
-    signed = SCRIPT.index('sign_helper "$RESOURCES/$helper" "com.meet.desktop.$helper"')
-    assert signed < SCRIPT.index("tauri build --config")
-    loop = "for helper in uv ffmpeg meet-audiotap; do"
-    assert loop in SCRIPT and loop in CHECK
-    assert "::warning title=Подпись macOS::" in SCRIPT
-
-
-def test_signature_check_rejects_cdhash_and_pins_the_requirement():
-    assert 'codesign -d -r- "$APP"' in CHECK
-    assert "*cdhash*) fail" in CHECK
-    assert 'LEAF="identifier \\"$BUNDLE_ID\\" and certificate leaf = H\\"$SHA\\""' in CHECK
-    # -R и требование — отдельными аргументами (как в mac_update.rs).
-    assert 'codesign --verify -R "=$LEAF" "$APP"' in CHECK
-    assert 'codesign --verify --deep -R "=$DR" "$MOUNT/Meet.app"' in CHECK
-    assert "-R=" not in CHECK
-    # Тот же способ монтирования, что в приложении.
-    assert "hdiutil attach -nobrowse -readonly -noautoopen -mountpoint" in CHECK
-    rust = (TAURI / "src" / "mac_update.rs").read_text(encoding="utf-8")
-    assert '"attach",' in rust and '"-nobrowse",' in rust and '"-mountpoint",' in rust
-    assert '[[ "$DR" == "$DR2" ]]' in CHECK
-    assert "exit 0" in _until_fi(CHECK, 'if [[ -z "$IDENTITY" ]]')
+def test_signing_uses_explicit_requirements_and_drops_the_key_at_once():
+    sign = (ROOT / "scripts" / "sign_macos.sh").read_text(encoding="utf-8")
+    assert '--requirements "=designated => identifier \\"$2\\" and certificate leaf = H\\"$SHA\\""' \
+        in sign
+    # Ключ удаляется до образа.
+    assert sign.index("    keychain_cleanup\n") < sign.index("if hdiutil create")
+    assert "trap keychain_cleanup EXIT" in sign
 
 
 # --- слияние сумм выпуска (scripts/merge_sums.py) ----------------------------------

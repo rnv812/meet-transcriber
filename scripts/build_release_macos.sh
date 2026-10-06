@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
-# Сборка Meet для macOS (Apple Silicon, экспериментально): образ диска
-# Meet_<версия>_aarch64.dmg без подписи Apple и SHA256SUMS.txt.
+# Сборка Meet для macOS (Apple Silicon, экспериментально): Meet.app с
+# подписью ad-hoc (от tauri build) и исходники FFmpeg и Opus рядом.
 #
-# Подпись: MEET_SIGNING_IDENTITY (SHA-1 личности в связке ключей, её
-# импортирует scripts/macos_keychain.sh из секрета MACOS_CERT_P12) — свой
-# постоянный сертификат: помощники в ресурсах подписываются им здесь, Meet.app
-# и образ — Tauri (APPLE_SIGNING_IDENTITY; APPLE_CERTIFICATE не годится —
-# Tauri ищет в .p12 только сертификаты Apple). Designated requirement тогда
-# одинаков у всех сборок, и macOS сохраняет разрешения после обновления.
-# Без MEET_SIGNING_IDENTITY — ad-hoc, как раньше (signingIdentity "-" в
-# tauri.macos.conf.json), с предупреждением. Проверка подписи —
-# scripts/check_macos_signature.sh.
+# Ключ подписи эта сборка не видит: здесь работает много чужого кода (npm,
+# crates и их build.rs, configure/make). Подпись своим сертификатом и образ
+# диска Meet_<версия>_aarch64.dmg с SHA256SUMS.txt — следующим шагом,
+# scripts/sign_macos.sh (только программы Apple); проверка —
+# scripts/check_macos_signature.sh. Целиком локально:
+#   bash scripts/build_release_macos.sh 0.3.4
+#   bash scripts/sign_macos.sh app/src-tauri/target/release/bundle/macos/Meet.app 0.3.4
 #
 # Зеркало scripts/build_release.ps1 (Windows) с отличиями macOS:
 #  1. Сверяет версию в pyproject.toml, tauri.conf.json, Cargo.toml,
@@ -27,8 +25,8 @@
 #  5. Помощник meet-audiotap (Swift, ScreenCaptureKit) — swiftc и
 #     `--self-test`.
 #  6. Ресурсы приложения (uv, ffmpeg, meet-audiotap, лицензии, колесо,
-#     ограничения версий) и tauri build: .app и .dmg (tauri.macos.conf.json
-#     Tauri подмешивает сам).
+#     ограничения версий) и tauri build: только .app (tauri.macos.conf.json
+#     Tauri подмешивает сам; подпись — ad-hoc, signingIdentity "-").
 #
 # Запуск: bash scripts/build_release_macos.sh 0.3.0
 # Любой сбой — код выхода 1.
@@ -78,29 +76,9 @@ done
 
 sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
 
-# --- 0. Подпись -------------------------------------------------------------------
-SIGN_ID="${MEET_SIGNING_IDENTITY:-}"
-SIGN_KEYCHAIN="${MEET_SIGNING_KEYCHAIN:-}"
-# Своя подпись — только через APPLE_SIGNING_IDENTITY: с APPLE_CERTIFICATE Tauri
-# сам импортировал бы .p12 и не нашёл бы в нём сертификата Apple.
+# Tauri подписывает только ad-hoc (signingIdentity "-"): чужие личности и
+# сертификаты из среды ему не передаём.
 unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY
-if [[ -n "$SIGN_ID" ]]; then
-    [[ "$SIGN_ID" =~ ^[0-9A-Fa-f]{40}$ ]] || fail "MEET_SIGNING_IDENTITY — не SHA-1 личности: $SIGN_ID"
-    security find-identity -p codesigning ${SIGN_KEYCHAIN:+"$SIGN_KEYCHAIN"} | grep -i "$SIGN_ID" >/dev/null \
-        || fail "личности $SIGN_ID нет в связке ключей"
-    echo "Подпись: свой сертификат $SIGN_ID"
-else
-    echo "::warning title=Подпись macOS::MEET_SIGNING_IDENTITY не задан — подпись ad-hoc: разрешения macOS не переживут обновление"
-    echo >&2
-    echo "!!! ВНИМАНИЕ: подпись ad-hoc (нет MEET_SIGNING_IDENTITY). Для выпуска нужен секрет MACOS_CERT_P12." >&2
-    echo >&2
-fi
-
-# Подписать файл своей личностью (помощники в ресурсах; Meet.app — Tauri).
-sign_helper() {  # sign_helper <файл> <идентификатор>
-    codesign --force --sign "$SIGN_ID" --timestamp=none --identifier "$2" \
-        ${SIGN_KEYCHAIN:+--keychain "$SIGN_KEYCHAIN"} "$1"
-}
 
 # --- 1. Версия -----------------------------------------------------------------
 step "Версия $VERSION"
@@ -279,11 +257,6 @@ cp "$ROOT/NOTICE" "$RESOURCES/NOTICE"
 cp "$WHEEL" "$RESOURCES/$WHEEL_NAME"
 cp "$CONSTRAINTS" "$RESOURCES/constraints-mac.txt"
 chmod 755 "$RESOURCES/uv" "$RESOURCES/ffmpeg" "$RESOURCES/meet-audiotap"
-if [[ -n "$SIGN_ID" ]]; then
-    for helper in uv ffmpeg meet-audiotap; do
-        sign_helper "$RESOURCES/$helper" "com.meet.desktop.$helper"
-    done
-fi
 "$RESOURCES/uv" --version
 ls -l "$RESOURCES"
 
@@ -292,46 +265,26 @@ BUNDLE_DIR="$TAURI_DIR/target/release/bundle"
 rm -rf "$BUNDLE_DIR/dmg" "$BUNDLE_DIR/macos"
 step "npm ci"
 (cd "$APP_DIR" && npm ci --no-audit --no-fund)
-step "tauri build (.app и .dmg, релизный конфиг с ресурсами)"
-# Tauri подписывает Meet.app (и образ) личностью из APPLE_SIGNING_IDENTITY,
-# нотаризацию пропускает (данных Apple нет); без неё — signingIdentity "-".
-(
-    cd "$APP_DIR"
-    if [[ -n "$SIGN_ID" ]]; then
-        export APPLE_SIGNING_IDENTITY="$SIGN_ID"
-    fi
-    npx --no-install tauri build --config src-tauri/tauri.release.conf.json --bundles app,dmg
-)
+step "tauri build (.app, релизный конфиг с ресурсами)"
+(cd "$APP_DIR" && npx --no-install tauri build --config src-tauri/tauri.release.conf.json --bundles app)
 
 # --- 6. Результат ------------------------------------------------------------------------
-DMG_NAME="Meet_${VERSION}_aarch64.dmg"
-DMG="$BUNDLE_DIR/dmg/$DMG_NAME"
-[[ -f "$DMG" ]] || fail "tauri build не оставил $DMG_NAME в $BUNDLE_DIR/dmg"
 APP_BUNDLE="$BUNDLE_DIR/macos/Meet.app"
+[[ -d "$APP_BUNDLE" ]] || fail "tauri build не оставил Meet.app в $BUNDLE_DIR/macos"
 for file in uv ffmpeg meet-audiotap ffmpeg-LICENSE.txt "$WHEEL_NAME" constraints-mac.txt; do
     [[ -f "$APP_BUNDLE/Contents/Resources/resources/$file" ]] || fail "в Meet.app нет resources/$file"
 done
-SUMS="$BUNDLE_DIR/dmg/SHA256SUMS.txt"
 SOURCES="$BUNDLE_DIR/dmg/sources"
 mkdir -p "$SOURCES"
 cp "$FFMPEG_TAR" "$OPUS_TAR" "$SOURCES/"
-HASH="$(sha256 "$DMG")"
-printf '%s  %s\n' "$HASH" "$DMG_NAME" > "$SUMS"
-SIZE_MB=$(( $(stat -f %z "$DMG") / 1048576 ))
 
 step "Готово"
-echo "  образ:   $DMG"
-echo "  размер:  ${SIZE_MB} МБ"
-echo "  SHA-256: $HASH"
-echo "  суммы:   $SUMS"
+echo "  пакет:   $APP_BUNDLE (подпись ad-hoc; своя — scripts/sign_macos.sh)"
 echo "  исходники FFmpeg и Opus: $SOURCES"
 echo "  время:   $(( $(date +%s) - STARTED )) с"
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     {
-        echo "dmg=$DMG"
         echo "app=$APP_BUNDLE"
-        echo "sums=$SUMS"
         echo "sources=$SOURCES"
-        echo "dmg_name=$DMG_NAME"
     } >> "$GITHUB_OUTPUT"
 fi
