@@ -27,7 +27,11 @@ V4 (0.3.6, v4-design §3, §5.1, §12):
 
 * **собеседник** (`responder=True`): инструменты чтения — `--restricted
   --tools Read,Grep,Glob --allowedTools Read,Grep,Glob --permission-mode
-  dontAsk --add-dir <папка>… --max-turns 6`; слушатель — как раньше;
+  dontAsk --add-dir <папка>… --max-turns 6`; слушатель — как раньше.
+  Папки — только те, что передал вызывающий (папка встречи и её материалы);
+  базы знаний среди них нет: её содержимое приходит только по просьбе
+  человека — результатами `kb_search` движка в тексте того сообщения.
+  Поэтому папки не меняются от хода к ходу и процесс остаётся постоянным;
 * **изображения**: `send(text, images=[…])` или `send(content=[блоки])` —
   блоки `{"type":"image","source":{"type":"base64",…}}` в `message.content`;
 * **остановка хода**: `interrupt()` — `control_request` с `subtype:
@@ -99,7 +103,8 @@ def build_command(cli: list[str], *, system_prompt: str, model: str | None = Non
     передаёт и claude_agent_sdk).
 
     Слушатель (по умолчанию) — без инструментов, один ход. Собеседник
-    (`responder`) — чтение в `add_dirs`, до RESPONDER_MAX_TURNS ходов.
+    (`responder`) — чтение только в `add_dirs` (по умолчанию ни одной; базу
+    знаний сюда не передают — см. начало модуля), до RESPONDER_MAX_TURNS ходов.
     Сеанс: без `session_id`/`resume` — не сохраняется; `session_id` — новый
     сохраняемый с этим UUID; `resume` — продолжить сохранённый. Значения —
     через `=`: id не станет отдельным флагом (так же делает SDK)."""

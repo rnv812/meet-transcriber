@@ -53,15 +53,16 @@ def _messages(records):
 
 
 def test_responder_command_has_read_tools_dirs_and_six_turns(tmp_path):
-    rec, kb = tmp_path / "rec", tmp_path / "kb"
+    rec = tmp_path / "rec"
+    materials = rec / "assistant" / "files"
     cmd = claude_stream.build_command(["claude"], system_prompt="s", responder=True,
-                                      add_dirs=(rec, kb, None))
+                                      add_dirs=(rec, materials, None))
     assert "--restricted" in cmd
     assert cmd[cmd.index("--tools") + 1] == "Read,Grep,Glob"
     assert cmd[cmd.index("--allowedTools") + 1] == "Read,Grep,Glob"
     assert cmd[cmd.index("--permission-mode") + 1] == "dontAsk"
     dirs = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--add-dir"]
-    assert dirs == [str(rec), str(kb)]
+    assert dirs == [str(rec), str(materials)]          # только переданные: папка встречи и материалы
     assert cmd[cmd.index("--max-turns") + 1] == "6"
     # За --add-dir (флаг со многими значениями) сразу идёт другой флаг.
     last_dir = len(cmd) - 1 - cmd[::-1].index("--add-dir")
@@ -351,3 +352,22 @@ def test_crash_later_in_a_resumed_process_is_an_ordinary_error(fake_cli, monkeyp
     assert ok.error is None
     assert broken.error and "something broke" in broken.error and not broken.resume_failed
     assert current == sid and ctx is True
+
+
+def test_responder_adds_no_folder_by_default(fake_cli, monkeypatch):
+    """База знаний — только по просьбе человека (результаты kb_search движка в
+    тексте сообщения), не папкой: без явных `add_dirs` у собеседника нет ни
+    одного --add-dir, и сам Conversation ничего не добавляет."""
+    cli, records = fake_cli
+    assert "--add-dir" not in claude_stream.build_command(["claude"], system_prompt="s", responder=True)
+
+    async def scenario():
+        conv = _conv(cli, responder=True)
+        try:
+            await conv.send("x")
+        finally:
+            conv.close()
+
+    asyncio.run(scenario())
+    (argv,) = _starts(records)
+    assert "--restricted" in argv and "--add-dir" not in argv
