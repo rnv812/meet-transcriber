@@ -131,3 +131,19 @@ def test_strip_reasoning_for_plain_text_replies():
     assert strip_reasoning("размышление</think> Итоги") == ("Итоги", False)
     assert strip_reasoning("Итоги встречи\n<think>а ещё") == ("Итоги встречи", True)
     assert strip_reasoning("<think>не успела") == ("", True)
+
+
+def test_depth_cap_keeps_intact_outer_part():
+    # Глубже 64 уровней проход кончается как обрыв: берутся целые части, без
+    # зависания и без квадратичного прохода.
+    import time
+
+    text = '{"title": "ok", "x": ' + '{"a": ' * 70 + '1,' + '}' * 70 + '}'
+    started = time.perf_counter()
+    assert extract_object(text, ("title",)) == {"title": "ok"}
+    runaway = '{"title": "A", ' * 20_000
+    try:
+        extract_object(runaway, ("title",))
+    except ValueError:
+        pass
+    assert time.perf_counter() - started < 10.0
