@@ -594,7 +594,9 @@ class LiveVoices:
         present = any(seconds >= share * voiced
                       and owner_voice.score(center, self._owner, self._device) >= bar
                       for center, seconds in groups)
-        if not present and not self._missing_logged:
+        # «Пока не найден» — только до первой находки: потерю найденного
+        # голоса пишет _review («больше не найден»).
+        if not present and not self._present and not self._missing_logged:
             self._missing_logged = True  # одна строка на сеанс
             self._log("голоса: голос владельца в микрофоне пока не найден (образец с другого "
                       "микрофона?) — микрофон не делится")
