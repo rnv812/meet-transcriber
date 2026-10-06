@@ -666,3 +666,53 @@ def test_rejected_image_without_a_cut_point_asks_for_a_seed(fake_cli, monkeypatc
 
     reply, current = asyncio.run(scenario())
     assert reply.resume_failed and reply.dropped_images == [str(img)] and current is None
+
+
+# --- Fix round 2: знаки шаблона в именах закрытых папок ----------------------------
+
+# (папка, файлы внутри — запрещены, «соседи», которые шаблон без экранирования задел бы)
+GLOB_CASES = [
+    (r"D:\KB\a[1]", ["KB/a[1]/s.md"], ["KB/a1/s.md", "KB/a]/s.md"]),
+    (r"D:\KB\b*c", ["KB/b*c/s.md"], ["KB/bXYc/s.md"]),
+    (r"D:\KB\f (old)", ["KB/f (old)/s.md", "kb/F (OLD)/s.md"], ["KB/f old/s.md"]),
+    (r"D:\KB\{x,y}", ["KB/{x,y}/s.md"], ["KB/x/s.md", "KB/y/s.md"]),
+    (r"D:\KB\g+h^$|", ["KB/g+h^$|/s.md"], ["KB/gh/s.md"]),
+    (r"D:\KB\Личное, черновики", ["KB/Личное, черновики/s.md"], ["KB/Личное/s.md"]),
+    (r"D:\KB\#tag", ["KB/#tag/s.md"], ["KB/tag/s.md"]),
+]
+
+
+def test_glob_metacharacters_in_folder_names_are_escaped():
+    from meet.llm import base
+
+    assert base.claude_rule_path(r"D:\KB\a[1]") == r"//d/KB/a\[1\]"
+    assert base.claude_rule_path(r"D:\KB\b*c") == r"//d/KB/b\*c"
+    assert base.claude_rule_path(r"D:\KB\{x,y}") == "//d/KB/{x,y}"      # в .gitignore не особые
+    assert base.claude_rule_path("/home/u/kb/[x]") == r"//home/u/kb/\[x\]"
+    # Текст в Read(…): CLI снимает один слой (`\(`→`(`, затем `\\`→`\`).
+    assert base.claude_rule_text(r"//d/KB/f \(old\)/**") == r"//d/KB/f \\\(old\\\)/**"
+    assert base.claude_rule_text(r"//d/KB/a\[1\]/**") == r"//d/KB/a\\[1\\]/**"
+
+
+@pytest.mark.skipif(not __import__("os").environ.get("MEET_NODE_IGNORE"),
+                    reason="нужна node-ignore: MEET_NODE_IGNORE=<папка пакета ignore>")
+def test_escaped_rules_match_only_their_folder_in_node_ignore():
+    """Правила проверяются настоящей node-ignore тем же путём, что в claude
+    2.1.292: файлы закрытой папки запрещены, «соседи» — нет."""
+    import os
+    import shutil
+    import subprocess
+
+    from meet.llm import base
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("нет node")
+    cases = [{"rule": base.claude_rule_text(base.claude_rule_path(folder) + "/**"),
+              "inside": inside, "outside": outside} for folder, inside, outside in GLOB_CASES]
+    script = Path(__file__).with_name("node_ignore_rules.js")
+    out = subprocess.run([node, str(script), os.environ["MEET_NODE_IGNORE"], json.dumps(cases)],
+                         capture_output=True, text=True, encoding="utf-8", check=True).stdout
+    for case, res in zip(GLOB_CASES, json.loads(out)):
+        assert all(res["inside"]), (case, res)
+        assert not any(res["outside"]), (case, res)

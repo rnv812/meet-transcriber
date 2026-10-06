@@ -7,8 +7,9 @@
   изображение блоком base64 в stream-json; агент `--restricted --tools
   Read,Grep,Glob --permission-mode dontAsk --add-dir <база знаний>` читает
   файл; закрытая папка (`deny_paths` → `--disallowedTools Read(//…/**)`):
-  Read запрещён, Grep по базе её не видит; изображение, отвергнутое API, не
-  портит сохранённый сеанс (ветка без того хода и повтор без картинки);
+  Read запрещён, Grep по базе её не видит; битое изображение не портит
+  сохранённый сеанс (наша проверка его отбрасывает; готовым блоком его
+  заменяет текстом сам Claude Code);
   «Стоп» (`control_request` interrupt → `control_response`) и ход после него
   в том же процессе; нативное продолжение (`--session-id` → `--resume`);
   неизвестный сеанс → `resume_failed`; изображение через Agent SDK;
@@ -29,7 +30,7 @@ CLI (~/.claude/projects/<временная папка>, ~/.codex/sessions), е�
     python scripts/smoke_assist_providers.py            # только план, без вызовов
     python scripts/smoke_assist_providers.py --run      # выполнить все проверки
     python scripts/smoke_assist_providers.py --run --cleanup --only claude,codex --proxy none
-    python scripts/smoke_assist_providers.py --run --check deny,grep,reject-image
+    python scripts/smoke_assist_providers.py --run --check deny,grep,bad-image
 
 Итог — таблица PASS / FAIL / SKIP; код выхода 1, если есть FAIL, иначе 0
 (в том числе у плана без `--run`).
@@ -163,10 +164,23 @@ class Smoke:
         detail = f"открытое найдено: {found_open}, закрытое: {'УТЕЧКА' if leaked else 'нет'}; {_said(reply)}"
         return (not reply.error and found_open and not leaked), detail
 
-    async def claude_rejected_image(self):
-        """Изображение, которое отвергнет API (заголовок PNG, внутри мусор, в
-        обход проверки — готовыми блоками), не портит сохранённый сеанс."""
+    async def claude_bad_image(self):
+        """Битое изображение (заголовок PNG, внутри мусор) не портит
+        сохранённый сеанс — проверяется свойство, а не путь:
+
+        * через `images=` его отбрасывает наша проверка (`base.check_image`):
+          ход идёт без картинки, с пометкой (`notes`) — обязательно;
+        * готовым блоком (`content=`, в обход нашей проверки) — его разбирает
+          сам Claude Code: 2.1.292 перед API пережимает изображения, а
+          нераскодированное заменяет текстом «[Image could not be processed…]»
+          (проверено без модели), до API оно не доходит. Если же API его
+          отвергнет — сработает наше восстановление (ветка сеанса без хода и
+          повтор, тогда в ответе пометка). Любой из путей годится;
+        * главное — следующий ход помнит кодовое слово."""
         word = code_word()
+        broken = self.work / "broken.png"
+        raw = b"\x89PNG\r\n\x1a\n" + os.urandom(256)
+        broken.write_bytes(raw)
         conv = self._conv(persist=True)
         try:
             first = await conv.send(f"Remember this code word: {word}. Reply with exactly: ok",
@@ -174,8 +188,11 @@ class Smoke:
             self.keep("claude-code", conv.session_id)
             if first.error:
                 return False, f"первый ход: {_said(first)}"
-            junk = base64.b64encode(b"\x89PNG\r\n\x1a\n" + os.urandom(256)).decode()
-            bad = await conv.send(content=[
+            local = await conv.send("What is in this image? One word.", images=[broken],
+                                    timeout_s=TIMEOUT_S)
+            self.keep("claude-code", conv.session_id)
+            junk = base64.b64encode(raw).decode()
+            block = await conv.send(content=[
                 {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": junk}},
                 {"type": "text", "text": "What is in this image? One word."}], timeout_s=TIMEOUT_S)
             self.keep("claude-code", conv.session_id)
@@ -183,8 +200,14 @@ class Smoke:
             self.keep("claude-code", conv.session_id)
         finally:
             conv.close()
-        ok = not bad.error and bool(bad.notes) and not after.error and word in after.text
-        return ok, f"с картинкой: {_said(bad)} {bad.notes}; после: {_said(after)}"
+        dropped_here = bool(local.notes) and local.dropped_images == [str(broken)]
+        how = ("ветка сеанса без хода (API отверг)" if block.notes
+               else "принято CLI — Claude Code сам заменил битое изображение текстом")
+        ok = (not local.error and dropped_here and not block.error and not after.error
+              and word in after.text)
+        detail = (f"images=: {'отброшено нашей проверкой' if dropped_here else 'НЕ отброшено'} "
+                  f"{_said(local)}; готовым блоком: {how} {_said(block)}; после: {_said(after)}")
+        return ok, detail
 
     async def claude_interrupt(self):
         conv = self._conv()
@@ -370,7 +393,7 @@ CHECKS = {
                ("read", "claude: агент читает файл базы знаний", "claude_responder"),
                ("deny", "claude: закрытая папка — Read запрещён", "claude_deny_read"),
                ("grep", "claude: Grep по базе не видит закрытую папку", "claude_deny_grep"),
-               ("reject-image", "claude: отвергнутое изображение не портит сеанс", "claude_rejected_image"),
+               ("bad-image", "claude: битое изображение не портит сеанс", "claude_bad_image"),
                ("stop", "claude: стоп + ход после", "claude_interrupt"),
                ("resume", "claude: продолжение сеанса", "claude_resume"),
                ("resume-missing", "claude: неизвестный сеанс", "claude_resume_missing"),
@@ -459,7 +482,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--run", action="store_true", help="выполнить проверки (настоящие вызовы моделей)")
     parser.add_argument("--only", help="группы через запятую: claude,codex,opencode")
-    parser.add_argument("--check", help="только эти проверки: ключи через запятую (deny,grep,reject-image,"
+    parser.add_argument("--check", help="только эти проверки: ключи через запятую (deny,grep,bad-image,"
                                         "resume-image,…) или группа:ключ (codex:resume-image)")
     parser.add_argument("--cleanup", action="store_true",
                         help="после прогона удалить сеансы проверок из истории Claude Code и Codex")

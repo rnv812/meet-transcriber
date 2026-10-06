@@ -187,14 +187,43 @@ def path_variants(path) -> list[str]:
     return out
 
 
+def claude_glob_escape(text: str) -> str:
+    """Буквальный путь → шаблон правила Claude Code без «джокеров».
+
+    Повторяет собственную функцию claude 2.1.292 для этого (`UCe(путь,
+    {escapeGlobs: true})` в его коде прав): обратная косая → `\\\\`; `[ ] ( )
+    | + ^ $` и `*` — с обратной косой; `!`/`#` в начале и пробелы в конце —
+    тоже. Правила Read сопоставляются библиотекой node-ignore (синтаксис
+    .gitignore): `{ }` там не особые, `?` (один любой знак) CLI не
+    экранирует — в именах Windows его не бывает, а на других системах
+    неэкранированный `?` лишь расширяет запрет (безопасная сторона).
+    Проверено на node-ignore 7.0.12 тем же путём, что у CLI (тест)."""
+    t = text.replace("\\", "\\\\")
+    t = re.sub(r"[\[\]()|+^$]", lambda m: "\\" + m.group(0), t)
+    t = t.replace("*", "\\*")
+    if t.startswith(("!", "#")):
+        t = "\\" + t
+    return re.sub(r"\s+$", lambda m: "".join("\\" + c for c in m.group(0)), t)
+
+
+def claude_rule_text(content: str) -> str:
+    """Содержимое правила → текст внутри `Read(…)`. CLI разбирает его
+    обратно (`Nfo`): сначала `\\(`→`(`, `\\)`→`)`, затем `\\\\`→`\\` — поэтому
+    обратные косые удваиваются, а скобки экранируются ещё раз."""
+    return content.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
 def claude_rule_path(path: str) -> str:
-    """Абсолютный путь → вид правил Claude Code: `D:\\KB\\x` → `//d/KB/x`,
-    `/home/x` → `//home/x` (`//` — от корня файловой системы)."""
+    """Абсолютный путь → вид правил Claude Code (содержимое после разбора):
+    `D:\\KB\\x` → `//d/KB/x`, `/home/x` → `//home/x` (`//` — от корня
+    файловой системы); знаки шаблона в именах папок экранированы
+    (`claude_glob_escape`)."""
     m = re.match(r"^([A-Za-z]):[\\/]?(.*)$", path)
     if m:
-        rest = m.group(2).replace("\\", "/")
-        return f"//{m.group(1).lower()}/{rest}".rstrip("/")
-    return "/" + path.replace("\\", "/").rstrip("/")
+        rest = m.group(2).replace("\\", "/").rstrip("/")
+        return f"//{m.group(1).lower()}/{claude_glob_escape(rest)}".rstrip("/")
+    rest = path.replace("\\", "/").strip("/")
+    return "//" + claude_glob_escape(rest)
 
 
 def claude_deny_rules(paths) -> list[str]:
@@ -209,7 +238,7 @@ def claude_deny_rules(paths) -> list[str]:
         if not p:
             continue
         for variant in path_variants(p):
-            rule = f"Read({claude_rule_path(variant)}/**)"
+            rule = f"Read({claude_rule_text(claude_rule_path(variant) + '/**')})"
             if rule not in rules:
                 rules.append(rule)
     return rules
