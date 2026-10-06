@@ -39,9 +39,12 @@ export type Library = {
  * готова, упала; запись началась, кончилась, изменилась). Прогресс обновляет
  * лишь задачи (бейджи), а список и поиск перечитываются по `contentTick`:
  * полный проход по библиотеке на каждый процент не нужен.
+ *
+ * `typed` — строка поиска, как её набирают (по умолчанию `q`): если изменилась она — запрос с
+ * задержкой, иначе (щелчок по группе, метке, «Фильтрам») — сразу.
  */
 export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, contentTick = libraryTick,
-  filter: LibraryFilter | string[] = NO_FILTER): Library {
+  filter: LibraryFilter | string[] = NO_FILTER, typed: string = q): Library {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(false);
@@ -82,15 +85,23 @@ export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, cont
     }
   }, [ep]);
 
-  // Загрузка; поиск — с задержкой, первая загрузка — сразу.
+  // Загрузка. С задержкой — только набор текста (`typed` — строка, как её набирают: префикс
+  // `участник:Ан…` меняет фильтр на каждую букву); щелчки — область группы, метки, «Фильтры» —
+  // перечитывают сразу, иначе под новым заголовком мелькает прежний список. Первая — сразу.
   const first = useRef(true);
+  const typedRef = useRef(typed);
+  typedRef.current = typed;
+  const lastTyped = useRef(typed);
   useEffect(() => {
     if (!ep) return;
-    const delay = first.current ? 0 : SEARCH_DELAY_MS;
+    const typing = typedRef.current !== lastTyped.current;
+    const delay = first.current || !typing ? 0 : SEARCH_DELAY_MS;
     first.current = false;
     const timer = setTimeout(() => void refresh(), delay);
     return () => clearTimeout(timer);
   }, [ep, q, filterKey, refresh]);
+  // После эффекта загрузки: набранное, которое список не поменяло (`уч…`), — тоже уже не «набор».
+  useEffect(() => { lastTyped.current = typed; }, [typed]);
 
   const refreshJobs = useCallback(async () => {
     if (!ep) return;

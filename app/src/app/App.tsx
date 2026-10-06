@@ -79,7 +79,9 @@ export function App() {
   // Список — в области группы из левой панели; метки `группа:` сужают внутри неё.
   const libraryFilter = useMemo(() => withGroupScope(query.filter, groupsUi.libraryScope),
     [query.filter, groupsUi.libraryScope]);
-  const library = useLibrary(resident.endpoint ?? null, query.q, resident.libraryTick, resident.contentTick, libraryFilter);
+  // С задержкой — только набор текста (`q`); область, метки и «Фильтры» — сразу.
+  const library = useLibrary(resident.endpoint ?? null, query.q, resident.libraryTick, resident.contentTick,
+    libraryFilter, q);
   refreshLibrary.current = () => void library.refresh();
   const { people, refresh: refreshPeople, avatarVersion, bumpAvatar } = usePeople(resident.endpoint ?? null, resident.doneTick);
   const offline = resident.status === "offline";

@@ -219,7 +219,7 @@ test("строка поиска из списка уходит в useLibrary", a
   residentState.current = online();
   render(<App />);
   await userEvent.type(screen.getByRole("combobox", { name: "Поиск по записям" }), "план");
-  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "план", 0, 0, {});
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "план", 0, 0, {}, "план");
 });
 
 test("префиксы строки — фильтром резиденту, в q — только текст; в карточку — только текст", async () => {
@@ -231,12 +231,13 @@ test("префиксы строки — фильтром резиденту, в 
   });
   render(<App />);
   await userEvent.type(screen.getByRole("combobox", { name: "Поиск по записям" }), "участник:Анна есть:итоги бюджет");
-  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "бюджет", 0, 0, { people: ["Анна"], has: ["summary"] });
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "бюджет", 0, 0, { people: ["Анна"], has: ["summary"] },
+    "участник:Анна есть:итоги бюджет");
   // Enter — префиксы становятся метками, в поле остаётся текст.
   await userEvent.keyboard("{Enter}");
   expect(screen.getByRole("combobox", { name: "Поиск по записям" })).toHaveValue("бюджет ");
   expect(within(screen.getByRole("group", { name: "Условия поиска" })).getByText("Анна")).toBeInTheDocument();
-  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "бюджет", 0, 0, { people: ["Анна"], has: ["summary"] });
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "бюджет", 0, 0, { people: ["Анна"], has: ["summary"] }, "бюджет ");
   await userEvent.click(screen.getByText("Планёрка"));
   expect(screen.getByTestId("card")).toHaveAttribute("data-find", "бюджет");
 });
@@ -246,7 +247,7 @@ test("запомненный фильтр по категориям уходит
   try {
     residentState.current = online();
     render(<App />);
-    expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { categories: ["retro", "_none"] });
+    expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { categories: ["retro", "_none"] }, "");
   } finally {
     window.localStorage.removeItem("meet.categoryFilter");
   }
@@ -262,13 +263,13 @@ test("группы — в левой панели под «Записи»; вы�
   const list = await within(nav).findByRole("list", { name: "Группы встреч" });
   expect(nav).toHaveTextContent(/Записи.*Все записи.*Проект Альфа.*Без группы.*Новая группа.*Голоса.*Настройки/);
   await userEvent.click(within(list).getByRole("button", { name: /^Проект Альфа,/ }));
-  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { groups: ["g-a"] });
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { groups: ["g-a"] }, "");
   expect(screen.getByRole("combobox", { name: "Поиск по записям" })).toHaveAttribute("placeholder", "Поиск в «Проект Альфа»");
   // Из «Голосов» щелчок по группе возвращает к списку записей.
   await userEvent.click(screen.getByText("Голоса"));
   await userEvent.click(within(list).getByRole("button", { name: /^Все записи,/ }));
   expect(screen.getByRole("button", { name: "Записи" })).toHaveAttribute("aria-current", "page");
-  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, {});
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, {}, "");
   window.localStorage.removeItem("meet.groupScope");
 });
 
@@ -289,7 +290,7 @@ test("из настроек с несохранённым: группа меня
   await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Не сохранять" }));
   expect(screen.queryByTestId("settings")).toBeNull();
   expect(window.localStorage.getItem("meet.groupScope")).toBe('"g-a"');
-  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { groups: ["g-a"] });
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { groups: ["g-a"] }, "");
   window.localStorage.removeItem("meet.groupScope");
 });
 
@@ -300,13 +301,13 @@ test("/groups не ответил — «Группы недоступны» с �
   render(<App />);
   const nav = screen.getByRole("navigation");
   expect(await within(nav).findByRole("note")).toHaveTextContent("Группы недоступны");
-  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, {});
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, {}, "");
   vi.mocked(api.getGroups).mockResolvedValue({
     groups: [{ id: "g-a", name: "Проект Альфа", color: "#4c8bf5", count: 2 }], unknown: [], none: 1,
   });
   await userEvent.click(within(nav).getByRole("button", { name: "Повторить" }));
   expect(await within(nav).findByRole("list", { name: "Группы встреч" })).toBeInTheDocument();
-  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { groups: ["g-a"] });
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { groups: ["g-a"] }, "");
   window.localStorage.removeItem("meet.groupScope");
 });
 

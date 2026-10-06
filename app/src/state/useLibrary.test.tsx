@@ -14,6 +14,7 @@ vi.mock("../lib/api", async (orig) => ({
 }));
 import { getJobs, getRecordings, searchLibrary } from "../lib/api";
 import { useLibrary } from "./useLibrary";
+import type { LibraryFilter } from "../lib/types";
 
 const ep = { base: "http://h", token: "t" };
 const NO_CATS: string[] = [];
@@ -131,5 +132,37 @@ test("прогресс задач (без смены содержимого) н�
     expect(getJobs).toHaveBeenCalledTimes(1);
     unmount();
     vi.mocked(getRecordings).mockClear();
+  }
+});
+
+test("с задержкой — только набор текста; смена области или метки (щелчок) — запрос сразу", async () => {
+  vi.useFakeTimers();
+  try {
+    const { rerender } = renderHook(({ q, f, typed }) => useLibrary(ep, q, 0, 0, f, typed),
+      { initialProps: { q: "", f: {} as LibraryFilter, typed: "" } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    vi.mocked(getRecordings).mockClear();
+    // Щелчок по группе в панели: только фильтр — сразу, без 250 мс старого списка под новым заголовком.
+    rerender({ q: "", f: { groups: ["g-a"] }, typed: "" });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(getRecordings).toHaveBeenCalledTimes(1);
+    expect(getRecordings).toHaveBeenLastCalledWith(ep, undefined, { groups: ["g-a"] });
+    // Набор префикса меняет фильтр на каждую букву — это набор: с задержкой, один запрос.
+    vi.mocked(getRecordings).mockClear();
+    rerender({ q: "", f: { groups: ["g-a"], people: ["Ан"] }, typed: "участник:Ан" });
+    rerender({ q: "", f: { groups: ["g-a"], people: ["Анн"] }, typed: "участник:Анн" });
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(getRecordings).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(getRecordings).toHaveBeenCalledTimes(1);
+    expect(getRecordings).toHaveBeenLastCalledWith(ep, undefined, { groups: ["g-a"], people: ["Анн"] });
+    // Набранное, которое список не поменяло («уч»), не делает следующий щелчок «набором».
+    vi.mocked(getRecordings).mockClear();
+    rerender({ q: "", f: { groups: ["g-a"], people: ["Анн"] }, typed: "участник:Анн уч" });
+    rerender({ q: "", f: { groups: ["g-b"], people: ["Анн"] }, typed: "участник:Анн уч" });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(getRecordings).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
   }
 });
