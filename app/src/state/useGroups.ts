@@ -15,6 +15,8 @@ export type Groups = {
   groups: GroupInfo[];
   /** Id из meta.json встреч, которых нет в списке: «Группа без названия · N встреч». */
   unknown: UnknownGroup[];
+  /** Сколько встреч без группы (с запросом и фильтром — среди найденного). */
+  none: number;
   /** Ответ уже пришёл: до этого не трогаем запомненную область. */
   loaded: boolean;
   /**
@@ -27,6 +29,11 @@ export type Groups = {
   brokenCopy: string | null;
   /** Файл групп от более новой версии Meet: менять группы нельзя. */
   newer: boolean;
+  /**
+   * Последнее чтение не удалось не из-за старого резидента (5xx, занятый файл, обрыв): пока ответа
+   * не было ни разу, групп не знаем — окно не сужает список и предлагает повторить.
+   */
+  failed: boolean;
   refresh: () => Promise<void>;
 };
 
@@ -40,11 +47,13 @@ export type Groups = {
 export function useGroups(ep: Endpoint | null, tick = 0, q = "", filter: LibraryFilter = NO_FILTER): Groups {
   const [groups, setGroups] = useState<GroupInfo[]>(NO_GROUPS);
   const [unknown, setUnknown] = useState<UnknownGroup[]>(NO_UNKNOWN);
+  const [none, setNone] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [supported, setSupported] = useState<boolean | null>(null);
   const [broken, setBroken] = useState(false);
   const [brokenCopy, setBrokenCopy] = useState<string | null>(null);
   const [newer, setNewer] = useState(false);
+  const [failed, setFailed] = useState(false);
   const seq = useRef(0);
   const key = libraryFilterKey(filter);
   const filterRef = useRef(filter);
@@ -63,20 +72,26 @@ export function useGroups(ep: Endpoint | null, tick = 0, q = "", filter: Library
       if (mine !== seq.current) return;
       setGroups(info.groups ?? NO_GROUPS);
       setUnknown(info.unknown ?? NO_UNKNOWN);
+      setNone(info.none ?? 0);
       setBroken(Boolean(info.broken));
       setBrokenCopy(info.broken_copy ?? null);
       setNewer(Boolean(info.newer));
       setSupported(true);
+      setFailed(false);
       setLoaded(true);
     } catch (cause) {
       if (mine !== seq.current) return;
       if (cause instanceof ApiError && cause.status === 404) {
         setGroups(NO_GROUPS);
         setUnknown(NO_UNKNOWN);
+        setNone(0);
         setSupported(false);
+        setFailed(false);
         setLoaded(true);
+        return;
       }
       /* иначе остаётся прежний список */
+      setFailed(true);
     }
   }, [ep]);
 
@@ -93,5 +108,5 @@ export function useGroups(ep: Endpoint | null, tick = 0, q = "", filter: Library
     return () => clearTimeout(timer);
   }, [refresh, tick, query, key]);
 
-  return { groups, unknown, loaded, supported, broken, brokenCopy, newer, refresh };
+  return { groups, unknown, none, loaded, supported, broken, brokenCopy, newer, failed, refresh };
 }

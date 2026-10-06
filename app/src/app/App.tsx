@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useCategories } from "../state/useCategories";
-import { useGroups } from "../state/useGroups";
 import { useLibrary } from "../state/useLibrary";
 import { usePeople } from "../state/usePeople";
 import { useResident } from "../state/useResident";
@@ -10,7 +9,7 @@ import { SettingsPane, type SettingsGuard } from "../features/settings/SettingsP
 import { RecordingCard } from "../features/card/RecordingCard";
 import type { FindRequest } from "../features/card/TranscriptView";
 import { loadCategoryFilter, NO_CATEGORY, saveCategoryFilter } from "../lib/categories";
-import { effectiveQuery, refreshDates, type Chip } from "../lib/libraryQuery";
+import { effectiveQuery, refreshDates, withGroupScope, type Chip } from "../lib/libraryQuery";
 import { searchable } from "../lib/search";
 import {
   initialRecording, initialSection, onOpenRecording, onOpenSection, onSettingsCloseGuard, setSettingsDirty,
@@ -23,6 +22,9 @@ import { Wizard } from "../features/wizard/Wizard";
 import { useWizardGate } from "../features/wizard/useWizardGate";
 import { STORAGE_MISSING_TITLE, StorageMissing } from "../features/settings/StorageMissing";
 import { StorageNotices } from "../features/settings/StorageNotices";
+import { GroupsLayer } from "../features/groups/GroupsLayer";
+import { GroupsPanel } from "../features/groups/GroupsNav";
+import { useGroupsUi } from "../features/groups/useGroupsUi";
 import { Nav, type Section } from "./Nav";
 import { RecordingBadge } from "./RecordingBadge";
 import { ShellResize } from "./ShellResize";
@@ -52,16 +54,33 @@ export function App() {
     ? catFilter.filter((k) => k === NO_CATEGORY || categories.list.some((c) => c.id === k)) : catFilter),
   [catFilter, categories.loaded, categories.list]);
   // Поиск: текст строки и метки условий (lib/libraryQuery). Метки — на сеанс; категории
-  // запоминаются (выше), область группы из левой панели — отдельно (withGroupScope).
+  // запоминаются (выше). Группы — одно состояние (features/groups/useGroupsUi): левая панель,
+  // область списка (withGroupScope), меню, перетаскивание; их список — и для меток `группа:`.
   const [chips, setChips] = useState<Chip[]>([]);
-  const groupList = useGroups(resident.endpoint ?? null, resident.groupsTick);
-  const groupRefs = groupList.supported === false ? null : groupList.groups;
   // «Сегодня» — как у списка (useToday): после полуночи и метки «Сегодня», «Эта неделя» — заново.
   const today = useToday();
   useEffect(() => setChips((cur) => refreshDates(cur, today)), [today]);
+  // Счётчики групп — при том же поиске и условиях, кроме самих групп (как «Фильтры»). Разбор без
+  // списка групп: `группа:` здесь не нужна (и в текст поиска не уходит), а список групп — из
+  // useGroupsUi, которому эти счётчики и нужны.
+  const counted = useMemo(() => effectiveQuery(q, chips, activeFilter,
+    { categories: categories.list, groups: [], now: today }), [q, chips, activeFilter, categories.list, today]);
+  const countFilter = useMemo(() => {
+    const { groups: _groups, ...rest } = counted.filter;
+    return rest;
+  }, [counted.filter]);
+  const refreshLibrary = useRef(() => {});
+  const groupsUi = useGroupsUi(resident.endpoint ?? null, resident.contentTick, counted.q, countFilter,
+    () => refreshLibrary.current());
+  const groupRefs = groupsUi.supported === false ? null : groupsUi.groups;
   const query = useMemo(() => effectiveQuery(q, chips, activeFilter,
-    { categories: categories.list, groups: groupRefs ?? [], now: today }), [q, chips, activeFilter, categories.list, groupRefs, today]);
-  const library = useLibrary(resident.endpoint ?? null, query.q, resident.libraryTick, resident.contentTick, query.filter);
+    { categories: categories.list, groups: groupRefs ?? [], now: today }),
+  [q, chips, activeFilter, categories.list, groupRefs, today]);
+  // Список — в области группы из левой панели; метки `группа:` сужают внутри неё.
+  const libraryFilter = useMemo(() => withGroupScope(query.filter, groupsUi.libraryScope),
+    [query.filter, groupsUi.libraryScope]);
+  const library = useLibrary(resident.endpoint ?? null, query.q, resident.libraryTick, resident.contentTick, libraryFilter);
+  refreshLibrary.current = () => void library.refresh();
   const { people, refresh: refreshPeople, avatarVersion, bumpAvatar } = usePeople(resident.endpoint ?? null, resident.doneTick);
   const offline = resident.status === "offline";
   const gate = useWizardGate(resident.status, resident.endpoint ?? null);
@@ -172,7 +191,11 @@ export function App() {
 
   return (
     <div className="app">
-      <Nav section={section} onSelect={select} />
+      <Nav section={section} onSelect={select} groups={offline ? undefined : (
+        // Область меняется, только если уход к записям состоялся (несохранённые настройки — вопрос).
+        <GroupsPanel ui={groupsUi} active={section === "recordings"}
+          onOpen={(apply) => leaveSettings(() => { apply(); setSettingsPart(undefined); setSection("recordings"); })} />
+      )} />
       <div className="content">
         {/* Полоса под системным заголовком тоже перетаскивает окно; кнопки в ней — нет (атрибут только у самой полосы). */}
         <header className="topbar" data-tauri-drag-region>
@@ -200,6 +223,8 @@ export function App() {
                 categoryFilter={activeFilter}
                 onCategoryFilter={setCatFilter}
                 onOpenSettings={openSettings}
+                groupsUi={groupsUi}
+                searchPlaceholder={groupsUi.scopeName ? `Поиск в «${groupsUi.scopeName}»` : undefined}
               />}
             </div>
           )}
@@ -249,6 +274,7 @@ export function App() {
       {resident.endpoint && resident.status === "online" && (
         <StorageNotices endpoint={resident.endpoint} onOpenEngine={() => openSettings("engine")} />
       )}
+      <GroupsLayer ui={groupsUi} />
       {leaving && (
         <LeaveSettings guard={settingsGuard.current} onStay={() => { leaving.stay?.(); setLeaving(null); }}
           onLeave={() => { const { go } = leaving; setLeaving(null); go(); }} />

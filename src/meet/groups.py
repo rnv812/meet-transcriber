@@ -401,13 +401,16 @@ def _recording(root: Path, rid: str) -> Path | None:
     return folder
 
 
-def members(root: Path, gid, add=None, remove=None) -> dict:
+def members(root: Path, gid, add=None, remove=None, restore=False) -> dict:
     """Перенести встречи в группу (`add`: прежняя группа встречи заменяется)
     и (или) убрать из неё (`remove`: только если встреча сейчас в этой
     группе) → {"changed": [id…], "failed": [{"id", "error"}]}: каждая запись —
     отдельно, неудача одной не отменяет остальные и названа честно. Добавлять
     — только в группу из списка; убирать можно и неизвестную («Убрать из
-    встреч»)."""
+    встреч»). `restore` — «Отменить» перенос: вернуть встречи в группу, id
+    которой только что был у них в meta.json, даже если её нет в списке
+    (неизвестная): пишется только meta.json, запись в файле групп не
+    появляется. Без него в неизвестную группу — по-прежнему отказ."""
     if not valid_id(gid):
         raise GroupError("негодный id группы")
     add, remove = _ids(add, "add"), _ids(remove, "remove")
@@ -415,7 +418,7 @@ def members(root: Path, gid, add=None, remove=None) -> dict:
         raise GroupError("нечего менять: нужны add или remove")
     if set(add) & set(remove):
         raise GroupError("запись и в add, и в remove")
-    if add and not any(g["id"] == gid for g in load(root)):
+    if add and restore is not True and not any(g["id"] == gid for g in load(root)):
         raise GroupError(f"{NO_GROUP} — обновите список")
     changed: list[str] = []
     failed: list[dict] = []

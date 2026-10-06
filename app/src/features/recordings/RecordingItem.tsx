@@ -12,11 +12,15 @@ import { CategoryDot, CategoryMark } from "../../ui/Category";
 import { Highlight } from "../../ui/Highlight";
 import { whoRanges } from "../../lib/libraryQuery";
 import { nfc } from "../../lib/search";
-import { BookOpen, ChevronLeft, ChevronRight, Ellipsis, FolderOpen, Pencil, Settings2, Tag, Trash2 } from "lucide-react";
+import {
+  BookOpen, ChevronLeft, ChevronRight, Ellipsis, FolderInput, FolderOpen, Pencil, Settings2, Tag, Trash2,
+} from "lucide-react";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { ItemMenu, type MenuItem } from "./ItemMenu";
 import { Icon } from "../../ui/Icon";
 import { useAgentLive } from "../card/agentSessions";
+import { moveItems, type MoveToGroup } from "../groups/moveMenu";
+import { meetingsText } from "../../lib/groups";
 
 const ICON = { size: 16, strokeWidth: 1.75, "aria-hidden": true } as const;
 
@@ -69,6 +73,8 @@ export type ItemActions = {
   onOpenFolder?: (rec: LibraryItem) => void;
   onKbExport?: (id: string) => void;
   onDelete?: (id: string) => void;
+  /** «Переместить в группу ▸» (одну запись или все выбранные, если она среди них); нет — нет пункта. */
+  groups?: MoveToGroup;
 };
 
 const NO_CATEGORIES: Category[] = [];
@@ -140,6 +146,9 @@ export const RecordingItem = memo(function RecordingItem({
   const [pickCategory, setPickCategory] = useState(false);
   /** Вернулись из списка категорий «Назад» — фокус на пункт «Категория». */
   const [backFromCategory, setBackFromCategory] = useState(false);
+  /** В меню открыт выбор группы («Переместить в группу ▸») и для каких встреч. */
+  const [pickGroup, setPickGroup] = useState<string[] | null>(null);
+  const [backFromGroup, setBackFromGroup] = useState(false);
   const main = useRef<HTMLButtonElement>(null);
   const more_ = useRef<HTMLButtonElement>(null);
   const done = useRef(false);
@@ -167,14 +176,19 @@ export const RecordingItem = memo(function RecordingItem({
   const closeMenu = (focusBack = true) => {
     setMenu(null);
     setPickCategory(false);
+    setPickGroup(null);
     if (focusBack) more_.current?.focus();
   };
   const openMenuAt = (x: number, y: number) => {
-    setPickCategory(false); setBackFromCategory(false); setMenu({ at: { x, y } });
+    setPickCategory(false); setBackFromCategory(false); setPickGroup(null); setBackFromGroup(false);
+    setMenu({ at: { x, y } });
   };
   const chooseCategory = (id: string | null) => { closeMenu(); void actions?.onCategory?.(rec.id, id); };
   // Под «⋯» у правого края строки: меню раскрывается влево (ui/floating).
-  const openFromButton = () => { setPickCategory(false); setBackFromCategory(false); setMenu({ at: null }); };
+  const openFromButton = () => {
+    setPickCategory(false); setBackFromCategory(false); setPickGroup(null); setBackFromGroup(false);
+    setMenu({ at: null });
+  };
 
   const categoryItems: MenuItem[] = [
     { label: NO_CATEGORY_NAME, icon: <CategoryDot />, checked: category === null, autoFocus: category === null,
@@ -191,12 +205,21 @@ export const RecordingItem = memo(function RecordingItem({
       onSelect: () => { setBackFromCategory(true); setPickCategory(false); } },
   ];
 
-  const menuItems: MenuItem[] = pickCategory ? categoryItems : [
+  const moveTo = actions?.groups;
+  const groupItems: MenuItem[] = moveTo && pickGroup ? moveItems(moveTo, pickGroup, closeMenu, [
+    { label: "Назад", icon: <ChevronLeft {...ICON} />, onSelect: () => { setBackFromGroup(true); setPickGroup(null); } },
+  ]) : [];
+
+  const menuItems: MenuItem[] = pickCategory ? categoryItems : pickGroup ? groupItems : [
     { label: "Переименовать", icon: <Pencil {...ICON} />, onSelect: () => { closeMenu(false); begin(); } },
     ...(actions?.onCategory ? [{
       label: "Категория", icon: <Tag {...ICON} />, hint: `Сейчас: ${category?.name ?? NO_CATEGORY_NAME}`,
       autoFocus: backFromCategory,
-      trailing: <ChevronRight {...ICON} />, onSelect: () => setPickCategory(true),
+      trailing: <ChevronRight {...ICON} />, onSelect: () => { setBackFromGroup(false); setPickCategory(true); },
+    }] : []),
+    ...(moveTo ? [{
+      label: "Переместить в группу", icon: <FolderInput {...ICON} />, autoFocus: backFromGroup,
+      trailing: <ChevronRight {...ICON} />, onSelect: () => { setBackFromCategory(false); setPickGroup(moveTo.targets(rec.id)); },
     }] : []),
     ...(actions?.onOpenFolder ? [{
       label: "Открыть папку", icon: <FolderOpen {...ICON} />, onSelect: () => { closeMenu(); actions.onOpenFolder?.(rec); },
@@ -283,9 +306,13 @@ export const RecordingItem = memo(function RecordingItem({
           onClick={() => (menu ? closeMenu() : openFromButton())}><Icon as={Ellipsis} /></button>
       )}
       {menu && (
-        <ItemMenu at={menu.at} align="end" label={pickCategory ? `Категория записи «${title}»` : `Действия с записью «${title}»`}
+        <ItemMenu at={menu.at} align="end"
+          label={pickCategory ? `Категория записи «${title}»` : pickGroup
+            ? (pickGroup.length > 1 ? `Переместить в группу: ${meetingsText(pickGroup.length)}` : `Группа записи «${title}»`)
+            : `Действия с записью «${title}»`}
           items={menuItems}
-          note={pickCategory ? "Категория встречи" : undefined}
+          note={pickCategory ? "Категория встречи" : pickGroup
+            ? (pickGroup.length > 1 ? "Группа встреч" : "Группа встречи") : undefined}
           anchor={more_} onClose={() => closeMenu()} />
       )}
       {confirmDelete && (

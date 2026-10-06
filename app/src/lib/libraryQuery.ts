@@ -27,6 +27,7 @@
 
 import { DATE_PRESETS, dateHint, isNumericDate, parseDateExpr, parseYmd, rangeLabel } from "./dateExpr";
 import { NO_CATEGORY, NO_CATEGORY_NAME } from "./categories";
+import { NO_GROUP, NO_GROUP_NAME } from "./groups";
 import { matchTokens, normWord, nfc, parseQuery, searchable, tokenize } from "./search";
 import type { Category, LibraryFilter, LibraryHas } from "./types";
 
@@ -41,9 +42,8 @@ export type ChipKind = "title" | "person" | "group" | "category" | "date" | "has
  */
 export type Chip = { kind: ChipKind; value: string; label?: string; expr?: string };
 
-/** «Без группы» в фильтре (как NO_CATEGORY у категорий). */
-export const NO_GROUP = "_none";
-export const NO_GROUP_NAME = "Без группы";
+/** «Без группы» в фильтре (как NO_CATEGORY у категорий): один источник — lib/groups. */
+export { NO_GROUP, NO_GROUP_NAME };
 /** Группа, которой нет и не будет (id групп — «g-» и 8 знаков): пересечение области и метки пусто. */
 export const NO_GROUP_MATCH = "0-no-match";
 

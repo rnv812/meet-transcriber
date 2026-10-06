@@ -291,6 +291,29 @@ def test_members_of_unknown_groups(tmp_path):
         groups.members(tmp_path, "g-lost")  # нечего делать
 
 
+def test_members_restore_into_unknown_group(tmp_path):
+    """«Отменить» перенос: встреча возвращается в группу, которой нет в списке,
+    — пишется только meta.json, файл групп не меняется."""
+    a = _rec(tmp_path, "2026-10-01_10-00")
+    known = groups.create(tmp_path, "Альфа")["id"]
+    before = groups.path(tmp_path).read_bytes()
+    got = groups.members(tmp_path, "g-lost", add=[a.name], restore=True)
+    assert got == {"changed": [a.name], "failed": []}
+    assert library.read_meta(a)["group"] == "g-lost"
+    assert groups.path(tmp_path).read_bytes() == before
+    assert [g["id"] for g in groups.load(tmp_path)] == [known]
+    # в известную — как обычно
+    assert groups.members(tmp_path, known, add=[a.name], restore=True)["changed"] == [a.name]
+    # негодный id — отказ и с restore; без restore в неизвестную — отказ
+    with pytest.raises(groups.GroupError):
+        groups.members(tmp_path, "НЕ ТАК", add=[a.name], restore=True)
+    with pytest.raises(groups.GroupError):
+        groups.members(tmp_path, "g-lost", add=[a.name])
+    # restore — только True, не «что-то правдивое»
+    with pytest.raises(groups.GroupError):
+        groups.members(tmp_path, "g-lost", add=[a.name], restore="yes")
+
+
 def test_deleting_a_group_keeps_meta(tmp_path):
     a = _rec(tmp_path, "2026-10-01_10-00")
     gid = groups.create(tmp_path, "Альфа")["id"]
@@ -416,6 +439,23 @@ def test_group_routes_and_one_event_per_operation(state, tmp_path):
     # ничего не поменялось — события нет
     state.group_members(alpha["id"], {"add": [a.name]})
     assert _changed(state) == 1  # только от create_group выше
+
+
+def test_group_members_restore_route(state, tmp_path):
+    root = tmp_path / "recordings"
+    a = _rec(root, "2026-10-01_10-00")
+    with pytest.raises(control.BadRequest):
+        state.group_members("g-ffffffff", {"add": [a.name]})
+    assert _changed(state) == 0
+    got = state.group_members("g-ffffffff", {"add": [a.name], "restore": True})
+    assert got["changed"] == [a.name]
+    assert _changed(state) == 1
+    assert state.groups()["unknown"] == [{"id": "g-ffffffff", "count": 1}]
+    with pytest.raises(control.BadRequest):
+        state.group_members("НЕ ТАК", {"add": [a.name], "restore": True})
+    with pytest.raises(control.BadRequest):
+        state.group_members("g-eeeeeeee", {"add": [a.name], "restore": 1})
+    assert _changed(state) == 0
 
 
 def test_group_route_errors(state, tmp_path):

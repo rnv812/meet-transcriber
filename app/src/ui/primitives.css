@@ -97,3 +97,24 @@
 .disclosure__chevron { flex: none; color: var(--text-2); transition: transform var(--t); }
 .disclosure--open > .disclosure__head .disclosure__chevron { transform: rotate(90deg); }
 .disclosure__body { padding: 0 0 4px; }
+
+/* --- Уведомление внизу окна (ui/Toast) ------------------------------------ */
+.toast {
+  position: fixed; z-index: 90; left: 50%; bottom: 16px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; max-width: min(520px, calc(100vw - 32px));
+  padding: 8px 8px 8px 14px; font-size: 13px; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--line-2); border-radius: var(--r-lg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.toast--error { color: var(--err); }
+.toast__text { min-width: 0; overflow-wrap: anywhere; }
+.toast__action {
+  flex: none; padding: 3px 8px; border: 0; border-radius: var(--r-sm); background: none;
+  color: var(--accent-hi); font: inherit; font-weight: 500; cursor: pointer;
+}
+.toast__action:hover { background: var(--surface-hover); }
+.toast__close {
+  display: inline-flex; flex: none; padding: 4px; border: 0; border-radius: var(--r-sm); background: none;
+  color: var(--text-3); cursor: pointer;
+}
+.toast__close:hover { color: var(--text); background: var(--surface-hover); }

@@ -10,7 +10,8 @@ import {
 } from "../../lib/dateSections";
 import { errorText, plural } from "../../lib/format";
 import {
-  addChip, commit, effectiveQuery, removeChip, titleRanges, toggleChip, whoWords, type Chip, type ChipKind, type GroupRef, type Suggestion,
+  addChip, commit, effectiveQuery, removeChip, titleRanges, toggleChip, whoWords, withGroupScope, type Chip, type ChipKind,
+  type GroupRef, type Suggestion,
 } from "../../lib/libraryQuery";
 import { searchable } from "../../lib/search";
 import { agentKillRecording, inTauri, openFolder } from "../../lib/shell";
@@ -27,6 +28,9 @@ import { RecordingItem, type ItemActions, type PickHow } from "./RecordingItem";
 import { SearchSuggest } from "./SearchSuggest";
 import { Icon } from "../../ui/Icon";
 import { Skeleton } from "../../ui/Loading";
+import { GroupHeader, groupEmptyState } from "../groups/GroupHeader";
+import { dragPayload, GroupPickbar, useMoveToGroup, type PickState } from "../groups/listGroups";
+import type { GroupsUi } from "../groups/useGroupsUi";
 
 type Props = {
   selected: string | null;
@@ -62,6 +66,11 @@ type Props = {
   onCategoryFilter?: (keys: string[]) => void;
   /** Перейти в раздел настроек («Настроить категории…»). */
   onOpenSettings?: (section: string) => void;
+  /**
+   * Группы встреч (features/groups): область списка уже в фильтре `library`; здесь — заголовок
+   * группы, «Переместить в группу ▸», «В группу ▾» на панели выбора и перетаскивание строк.
+   */
+  groupsUi?: GroupsUi;
 };
 
 const NO_CATEGORIES: Category[] = [];
@@ -122,7 +131,7 @@ const busy = (st: RecStatus) => st.kind === "recording" || st.kind === "queued" 
 export function RecordingsList({
   selected, onSelect, library, resident, q, onQ, onOpenHit, onChanged, onDeleting, categories = NO_CATEGORIES,
   categoryFilter = NO_FILTER, onCategoryFilter, onOpenSettings, chips = NO_CHIPS, onChips, groups: groupList = null,
-  searchPlaceholder,
+  searchPlaceholder, groupsUi,
 }: Props) {
   const snapshot = resident.snapshot ?? null;
   const endpoint = resident.endpoint ?? null;
@@ -150,15 +159,25 @@ export function RecordingsList({
     }
   }, []);
 
+  // Группы: выбранные и их группы — через ref (меню строк мемоизированы и не перерисовываются от выбора).
+  const pickRef = useRef<PickState>({ chosen: [], items: [] });
+  const move = useMoveToGroup(groupsUi, pickRef);
+
+  // Действия строк — постоянные: библиотека и обработчики App (новые на каждую его отрисовку) —
+  // через ref, иначе каждая отрисовка окна (и перечитывание групп) перерисовывает все строки.
+  const cb = useRef({ library, onChanged, onDeleting, onOpenSettings });
+  cb.current = { library, onChanged, onDeleting, onOpenSettings };
+  const hasSettings = Boolean(onOpenSettings);
   const actions = useMemo<ItemActions | undefined>(() => {
     if (!endpoint) return undefined;
     return {
+      groups: move,
       onRename: (id, title) => run(async () => {
         setPending((cur) => ({ ...cur, [id]: title }));
         try {
           await patchRecording(endpoint, id, { title });
-          onChanged?.(id);
-          await library.refresh();
+          cb.current.onChanged?.(id);
+          await cb.current.library.refresh();
         } finally {
           setPending((cur) => {
             const { [id]: _, ...rest } = cur;
@@ -171,8 +190,8 @@ export function RecordingsList({
         setPendingCat((cur) => ({ ...cur, [id]: category }));
         try {
           await setRecordingCategory(endpoint, id, category);
-          onChanged?.(id);
-          await library.refresh();
+          cb.current.onChanged?.(id);
+          await cb.current.library.refresh();
         } finally {
           setPendingCat((cur) => {
             const { [id]: _, ...rest } = cur;
@@ -181,25 +200,25 @@ export function RecordingsList({
         }
         return null;
       }),
-      onOpenCategories: onOpenSettings ? () => onOpenSettings("categories") : undefined,
+      onOpenCategories: hasSettings ? () => cb.current.onOpenSettings?.("categories") : undefined,
       onOpenFolder: inTauri() ? (rec) => void run(async () => { await openFolder(rec.path); return null; }) : undefined,
       onKbExport: meetingsDir ? (id) => void run(async () => {
         const done = await kbExport(endpoint, id);
-        onChanged?.(id);
+        cb.current.onChanged?.(id);
         return `Выгружено в базу знаний: ${done.path}`;
       }) : undefined,
       onDelete: (id) => void run(async () => {
-        onDeleting?.(id);
+        cb.current.onDeleting?.(id);
         // Карточка закрывается в этом же кадре: её плеер отпускает файл до запроса.
         await new Promise((resolve) => setTimeout(resolve, 0));
         // Агент во вкладке «Агент» работает в папке записи — Windows не удалит её, пока он жив.
         await agentKillRecording(id);
         await deleteRecording(endpoint, id);
-        await library.refresh();
+        await cb.current.library.refresh();
         return null;
       }),
     };
-  }, [endpoint, meetingsDir, library, onChanged, onDeleting, onOpenSettings, run]);
+  }, [endpoint, meetingsDir, hasSettings, run, move]);
 
   // --- фильтр по категориям -------------------------------------------------------
 
@@ -214,6 +233,10 @@ export function RecordingsList({
   const ctx = useMemo(() => ({ categories, groups: groupList ?? [], now }), [categories, groupList, now]);
   /** Что ищется: текст, метки сеанса, запомненные категории, префиксы, ещё не ставшие метками. */
   const query = useMemo(() => effectiveQuery(q, chips, categoryFilter, ctx), [q, chips, categoryFilter, ctx]);
+  // Счётчики «Фильтров» — в области группы из левой панели, как и список. Внутри области
+  // измерения «Группа» в панели нет: другие группы дали бы пустое пересечение.
+  const scopedFilter = useMemo(() => withGroupScope(query.filter, groupsUi?.libraryScope),
+    [query.filter, groupsUi?.libraryScope]);
   /** Метки под поиском: запомненные категории и метки сеанса (префиксы в поле видны в самом поле). */
   const shownChips = useMemo(() => [...categoryFilter.map((value): Chip => ({ kind: "category", value })), ...chips],
     [categoryFilter, chips]);
@@ -337,6 +360,7 @@ export function RecordingsList({
   const chosen = groups.flatMap((g) => g.items.map((r) => r.id)).filter((id) => pickedNow.has(id));
   const picking = chosen.length > 0;
   const pickedSet = new Set(chosen);
+  pickRef.current = { chosen, items: visible };
   // Один раз на смену библиотеки и задач: строки мемоизированы и сравнивают статус по ссылке.
   const statuses = useMemo(() => new Map(library.items.map((rec) => [rec.id, statusOf(rec, library.jobs, snapshot)])),
     [library.items, library.jobs, snapshot]);
@@ -401,19 +425,21 @@ export function RecordingsList({
   };
 
   return (
-    <div className="rec-list" ref={root}>
+    <div className="rec-list" ref={root} onPointerDown={move ? (e) => groupsUi?.drag.begin(e.nativeEvent,
+      () => dragPayload(e.target, pickRef.current)) : undefined}>
       <ImportZone endpoint={endpoint} onImported={() => void library.refresh?.()} />
       <div className="rec-list__search">
         <SearchSuggest value={q} onChange={onQ} onApply={applySuggestion} endpoint={endpoint} ctx={ctx}
           placeholder={searchPlaceholder}
           onBackspaceEmpty={shownChips.length ? () => remove(shownChips[shownChips.length - 1]!) : undefined} />
         {(onCategoryFilter || canChip) && (
-          <FiltersButton endpoint={endpoint} q={query.q} filter={query.filter} chips={shownChips}
-            categories={categories} groups={groupList} now={now} onToggle={toggle} onReplace={replaceKinds}
+          <FiltersButton endpoint={endpoint} q={query.q} filter={scopedFilter} chips={shownChips}
+            categories={categories} groups={groupsUi?.libraryScope ? null : groupList} now={now} onToggle={toggle} onReplace={replaceKinds}
             onClear={clearChips} onMorePeople={morePeople} onOpen={commitText} />
         )}
       </div>
       <QueryChips chips={shownChips} ctx={ctx} onRemove={remove} onClear={clearChips} />
+      {groupsUi && <GroupHeader ui={groupsUi} />}
       {library.error && <div className="import__error">{library.error}</div>}
       {notice && (
         <div className={`rec-notice${notice.error ? " rec-notice--error" : ""}`} role={notice.error ? "alert" : "status"}>
@@ -440,6 +466,7 @@ export function RecordingsList({
               </TipLine>
             </HelpTip>
           </div>
+          {move && <GroupPickbar move={move} chosen={chosen} />}
           <label className="rec-pickbar__keep">
             <input type="checkbox" checked={keepOriginals} onChange={(e) => setKeepOriginals(e.target.checked)} />
             Сохранить исходные записи
@@ -513,9 +540,9 @@ export function RecordingsList({
           action={<Button onClick={() => setFilter([])}>Показать все категории</Button>} />
       )}
       {library.items.length === 0 && !library.loading && resident.endpoint && query.chips.length === 0 && (
-        q ? <EmptyState title="Ничего не найдено" hint="Проверьте написание или ищите по слову из расшифровки"
+        (groupsUi ? groupEmptyState(groupsUi, q) : null) ?? (q ? <EmptyState title="Ничего не найдено" hint="Проверьте написание или ищите по слову из расшифровки"
           action={<Button variant="link" onClick={() => onQ("")}>Сбросить поиск</Button>} />
-          : <EmptyState title="Записей пока нет" hint="Нажмите «Начать запись» или перетащите файл" />
+          : <EmptyState title="Записей пока нет" hint="Нажмите «Начать запись» или перетащите файл" />)
       )}
     </div>
   );

@@ -2080,15 +2080,16 @@ class TrayControl:
         return {k: v for k, v in got.items() if k != "changed"}
 
     def group_members(self, gid: str, body: dict | None) -> dict:
-        """{"add"?: [id записи], "remove"?: [...]} → {"changed", "failed"}:
+        """{"add"?: [id записи], "remove"?: [...], "restore"?: true} → {"changed", "failed"}:
         `add` переносит встречу в группу (прежняя заменяется), `remove` убирает
-        её, только если она в этой группе. Одно событие на всё действие, и
-        только если что-то поменялось."""
+        её, только если она в этой группе; `restore` — «Отменить» перенос:
+        `add` и в неизвестную (но годную) группу, только meta.json. Одно
+        событие на всё действие, и только если что-то поменялось."""
         from meet import groups
 
         body = body if isinstance(body, dict) else {}
         got = self._group_call(groups.members, self._root(), gid, add=body.get("add"),
-                               remove=body.get("remove"))
+                               remove=body.get("remove"), restore=body.get("restore") is True)
         if got.get("changed"):
             self._groups_changed("members", gid)
         return got

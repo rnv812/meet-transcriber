@@ -49,8 +49,8 @@ vi.mock("../features/wizard/Wizard", () => ({
 vi.mock("../lib/api", async (orig) => ({
   ...(await orig<typeof import("../lib/api")>()),
   getSettings: vi.fn(async () => ({ ui: { wizard_done: false } })),
-  // Группы — подписи меток; в этих тестах резидент их не присылает.
-  getGroups: vi.fn(() => new Promise(() => {})),
+  // По умолчанию — резидент без групп (как до 0.3.5): интерфейс групп скрыт.
+  getGroups: vi.fn(async () => { throw new (await import("../lib/api")).ApiError(404, "нет"); }),
   getParticipants: vi.fn(async () => []),
   patchSettings: vi.fn(async () => ({ settings: {}, restart_required: [] })),
 }));
@@ -250,6 +250,74 @@ test("запомненный фильтр по категориям уходит
   } finally {
     window.localStorage.removeItem("meet.categoryFilter");
   }
+});
+
+test("группы — в левой панели под «Записи»; выбранная группа уходит в фильтр useLibrary", async () => {
+  vi.mocked(api.getGroups).mockResolvedValue({
+    groups: [{ id: "g-a", name: "Проект Альфа", color: "#4c8bf5", count: 2 }], unknown: [], none: 1,
+  });
+  residentState.current = online();
+  render(<App />);
+  const nav = screen.getByRole("navigation");
+  const list = await within(nav).findByRole("list", { name: "Группы встреч" });
+  expect(nav).toHaveTextContent(/Записи.*Все записи.*Проект Альфа.*Без группы.*Новая группа.*Голоса.*Настройки/);
+  await userEvent.click(within(list).getByRole("button", { name: /^Проект Альфа,/ }));
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { groups: ["g-a"] });
+  expect(screen.getByRole("combobox", { name: "Поиск по записям" })).toHaveAttribute("placeholder", "Поиск в «Проект Альфа»");
+  // Из «Голосов» щелчок по группе возвращает к списку записей.
+  await userEvent.click(screen.getByText("Голоса"));
+  await userEvent.click(within(list).getByRole("button", { name: /^Все записи,/ }));
+  expect(screen.getByRole("button", { name: "Записи" })).toHaveAttribute("aria-current", "page");
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, {});
+  window.localStorage.removeItem("meet.groupScope");
+});
+
+test("из настроек с несохранённым: группа меняется, только если ушли («Остаться» — прежняя)", async () => {
+  vi.mocked(api.getGroups).mockResolvedValue({
+    groups: [{ id: "g-a", name: "Проект Альфа", color: "#4c8bf5", count: 2 }], unknown: [], none: 1,
+  });
+  residentState.current = online();
+  render(<App />);
+  const list = await within(screen.getByRole("navigation")).findByRole("list", { name: "Группы встреч" });
+  await userEvent.click(screen.getByRole("button", { name: "Настройки" }));
+  await userEvent.click(screen.getByText("правка"));
+  await userEvent.click(within(list).getByRole("button", { name: /^Проект Альфа,/ }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Остаться" }));
+  expect(screen.getByTestId("settings")).toBeInTheDocument();
+  expect(window.localStorage.getItem("meet.groupScope")).toBeNull();
+  await userEvent.click(within(list).getByRole("button", { name: /^Проект Альфа,/ }));
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Не сохранять" }));
+  expect(screen.queryByTestId("settings")).toBeNull();
+  expect(window.localStorage.getItem("meet.groupScope")).toBe('"g-a"');
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { groups: ["g-a"] });
+  window.localStorage.removeItem("meet.groupScope");
+});
+
+test("/groups не ответил — «Группы недоступны» с повтором, список не сужается", async () => {
+  window.localStorage.setItem("meet.groupScope", '"g-a"');
+  vi.mocked(api.getGroups).mockRejectedValueOnce(new api.ApiError(500, "сбой"));
+  residentState.current = online();
+  render(<App />);
+  const nav = screen.getByRole("navigation");
+  expect(await within(nav).findByRole("note")).toHaveTextContent("Группы недоступны");
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, {});
+  vi.mocked(api.getGroups).mockResolvedValue({
+    groups: [{ id: "g-a", name: "Проект Альфа", color: "#4c8bf5", count: 2 }], unknown: [], none: 1,
+  });
+  await userEvent.click(within(nav).getByRole("button", { name: "Повторить" }));
+  expect(await within(nav).findByRole("list", { name: "Группы встреч" })).toBeInTheDocument();
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { groups: ["g-a"] });
+  window.localStorage.removeItem("meet.groupScope");
+});
+
+test("старый резидент без /groups — групп в панели нет", async () => {
+  vi.mocked(api.getGroups).mockRejectedValue(new api.ApiError(404, "нет"));
+  residentState.current = online();
+  render(<App />);
+  await waitFor(() => expect(api.getGroups).toHaveBeenCalled());
+  await act(async () => {});
+  expect(screen.queryByRole("list", { name: "Группы встреч" })).toBeNull();
+  expect(screen.getByRole("navigation")).toHaveTextContent(/^MeetЗаписиГолосаНастройки$/);
 });
 
 test("?recording=abc в адресе — выбрана запись abc", () => {

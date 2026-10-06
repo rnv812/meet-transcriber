@@ -180,8 +180,10 @@ export const orderGroups = (ep: Endpoint, ids: string[]) =>
 /**
  * Перенести встречи в группу (`add`: прежняя группа встречи заменяется) и (или) убрать из неё
  * (`remove`: только если встреча в этой группе); каждая — отдельно, неудачные — в `failed`.
+ * `restore: true` — «Отменить» перенос: `add` и в группу, которой нет в списке (неизвестную).
  */
-export const setGroupMembers = (ep: Endpoint, id: string, change: { add?: string[]; remove?: string[] }) =>
+export const setGroupMembers = (ep: Endpoint, id: string,
+  change: { add?: string[]; remove?: string[]; restore?: boolean }) =>
   json<GroupMembersResult>(ep, `/groups/${enc(id)}/members`, body("POST", change));
 /** Счётчики панели «Фильтры»: каждое измерение — при всех прочих условиях запроса и фильтра. */
 export const getFacets = (ep: Endpoint, q?: string, filter?: LibraryFilter, signal?: AbortSignal) =>
