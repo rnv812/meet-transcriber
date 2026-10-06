@@ -29,6 +29,19 @@ session.ts, agent/agent.ts, permission/index.ts, 2026-10):
   `directory`), а перед первым вызовом в процессе — сеансы служебных папок,
   чей процесс умер или чья папка уже удалена. Чужие сеансы (другие папки)
   не трогаются никогда.
+
+V4 (0.3.6, v4-design §12) — нативное продолжение [не проверено: OpenCode на
+машине разработки не установлен; флаги — по документации opencode.ai/docs/cli
+и вкладке «Агент» (`pty.rs`, OPENCODE_SESSION_FLAGS)]:
+
+* `keep_session=True` — сеанс не удаляется; id — из событий (`sessionID`).
+  Работает в своей постоянной папке KEEP_WORKDIR (не внутри служебной:
+  уборка её не тронет; не папка встречи: `--continue` вкладки «Агент» его
+  не подхватит);
+* `resume=<id>` — `opencode run --session <id>` в той же папке, без
+  `--title`. Ошибка «не найден» (NotFoundError и т. п.) — `resume_failed`;
+* изображения OpenCode не отправляем (`llm.vision` — False): флаг вложения
+  `--file` не проверен.
 """
 
 import asyncio
@@ -43,7 +56,7 @@ from pathlib import Path
 
 from meet import netproxy, tempdirs
 from meet.llm.base import (
-    EMPTY_ERROR, TIMEOUT_ERROR, AgentReply, drop_session_markers, kill_tree, run_tree,
+    EMPTY_ERROR, TIMEOUT_ERROR, AgentReply, drop_session_markers, kill_tree, resume_failure, run_tree,
 )
 from meet.llm.detect import OPENCODE_NOT_FOUND, find_opencode
 
@@ -57,6 +70,12 @@ AGENT = "meet-readonly"
 # (session/prompt.ts: название генерируется, только пока оно по умолчанию).
 TITLE = "meet"
 WORKDIR = "meet-opencode"
+# Папка сохраняемых сеансов (рядом со служебной, не внутри: уборка не трогает).
+KEEP_WORKDIR = "meet-opencode-sessions"
+# id сеанса OpenCode (`ses_…`); другое в --session не передаём.
+_SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+# Сеанса для --session нет [не проверено: формат ошибки OpenCode].
+_RESUME_MISSING = re.compile(r"not ?found|no such session|session.*(missing|unknown)", re.IGNORECASE)
 # Конфиг с системным промптом — в переменной среды; длиннее — промпт в stdin,
 # как у Codex: одна переменная среды Windows — до 32 767 символов.
 ENV_LIMIT = 30_000
@@ -145,10 +164,16 @@ def prompt_placement(system_prompt: str, prompt: str, dirs, max_turns: int) -> t
     return config_content(SHORT_SYSTEM, dirs, max_turns), f"{system_prompt}\n\n{prompt}"
 
 
-def build_command(exe: str, workdir: str, model: str | None) -> list[str]:
+def build_command(exe: str, workdir: str, model: str | None, resume: str | None = None) -> list[str]:
     """`opencode run`. Модель — только «провайдер/модель» (`llm.opencode_model`);
-    иначе — модель из конфига OpenCode. Сообщение — в stdin."""
-    cmd = [exe, "run", "--format", "json", "--agent", AGENT, "--title", TITLE, "--dir", workdir]
+    иначе — модель из конфига OpenCode. Сообщение — в stdin. `resume` —
+    продолжить сеанс (`--session <id>`; заголовок у него уже есть)."""
+    cmd = [exe, "run", "--format", "json", "--agent", AGENT]
+    if resume:
+        cmd += ["--session", resume]
+    else:
+        cmd += ["--title", TITLE]
+    cmd += ["--dir", workdir]
     if model and "/" in model:
         cmd += ["-m", model]
     return cmd
@@ -388,10 +413,17 @@ class _Call:
             _kill_tree(self.proc)
 
 
+def _keep_dir() -> Path:
+    """Постоянная папка сохраняемых сеансов (во временной папке системы)."""
+    path = tempdirs.system_temp() / KEEP_WORKDIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path.resolve()
+
+
 def _exec(exe: str, root: Path, model: str | None, stdin_text: str, timeout_s: float,
-          env: dict, call: _Call) -> AgentReply:
+          env: dict, call: _Call, keep: bool = False, resume: str | None = None) -> AgentReply:
     _sweep_stale(exe, root, env)
-    call_dir = _call_dir(root)
+    call_dir = _keep_dir() if keep else _call_dir(root)
     events = Events()
     try:
         if exe.lower().endswith((".cmd", ".bat")) and _CMD_META & set(exe + str(call_dir)):
@@ -400,7 +432,7 @@ def _exec(exe: str, root: Path, model: str | None, stdin_text: str, timeout_s: f
             return AgentReply(text="", error="вызов отменён")
         try:
             proc = subprocess.Popen(
-                build_command(exe, str(call_dir), model), stdin=subprocess.PIPE,
+                build_command(exe, str(call_dir), model, resume), stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=str(call_dir), env=env,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
@@ -427,16 +459,22 @@ def _exec(exe: str, root: Path, model: str | None, stdin_text: str, timeout_s: f
         stderr = _ANSI.sub("", (err or b"").decode("utf-8", errors="replace")).strip()
         if _FALLBACK in stderr.lower() or _FALLBACK in (out or b"").decode("utf-8", "replace").lower():
             return AgentReply(text="", error=AGENT_LOST)
+        failed = events.error or (stderr if proc.returncode != 0 else "")
+        if resume and failed and not events.text and _RESUME_MISSING.search(failed):
+            return resume_failure(failed[-_ERR_LIMIT:])
+        sid = (events.session_id or resume) if keep else None
         if events.error:
-            return AgentReply(text="", error=events.error[-_ERR_LIMIT:])
+            return AgentReply(text="", error=events.error[-_ERR_LIMIT:], session_id=sid)
         if proc.returncode != 0:
             return AgentReply(
-                text="", error=stderr[-_ERR_LIMIT:] or f"OpenCode завершился с кодом {proc.returncode}")
+                text="", error=stderr[-_ERR_LIMIT:] or f"OpenCode завершился с кодом {proc.returncode}",
+                session_id=sid)
         if not events.text:
-            return AgentReply(text="", error=stderr[-_ERR_LIMIT:] or EMPTY_ERROR)
-        return AgentReply(text=events.text)
+            return AgentReply(text="", error=stderr[-_ERR_LIMIT:] or EMPTY_ERROR, session_id=sid)
+        return AgentReply(text=events.text, session_id=sid)
     finally:
-        _cleanup(exe, root, call_dir, env, events.session_id)
+        if not keep:
+            _cleanup(exe, root, call_dir, env, events.session_id)
 
 
 async def run(
@@ -452,19 +490,28 @@ async def run(
     max_turns: int = 8,
     on_text=None,
     proxy: str | None = None,
+    images=(),
+    keep_session: bool = False,
 ) -> AgentReply:
     """Один вызов `opencode run`; ошибки — в AgentReply.error. `model` —
     `llm.opencode_model` («провайдер/модель»), `proxy` — `llm.proxy`. Папки
     `allowed_dirs` — только для чтения; `cwd` не нужен (своя папка вызова).
-    Отмена (CancelledError) убивает процесс; сеанс убирает поток вызова."""
+    Отмена (CancelledError) убивает процесс; сеанс убирает поток вызова.
+
+    `keep_session` — сеанс сохраняется, id — в ответе; `resume` —
+    продолжить его. `images` не отправляются (модель их не видит)."""
+    if resume and not _SESSION_ID.match(resume):
+        return resume_failure(f"неверный id сеанса OpenCode: {resume!r}")
     exe = find_opencode()
     if exe is None:
         return AgentReply(text="", error=OPENCODE_NOT_FOUND)
     config, stdin_text = prompt_placement(system_prompt, prompt, allowed_dirs, max_turns)
     env = child_env(proxy, config)
     call = _Call()
+    keep = bool(keep_session or resume)
     try:
-        reply = await asyncio.to_thread(_exec, exe, _root(), model, stdin_text, timeout_s, env, call)
+        reply = await asyncio.to_thread(_exec, exe, _root(), model, stdin_text, timeout_s, env, call,
+                                        keep, resume)
     except asyncio.CancelledError:
         call.cancel()
         raise

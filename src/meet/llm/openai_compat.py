@@ -1,7 +1,8 @@
 """Провайдер локальной модели через OpenAI-совместимый API (LM Studio, Ollama, vLLM).
 
 Только stdlib (urllib). Инструментов нет: базу знаний такая модель не читает,
-`allowed_dirs`/`cwd`/`resume`/`session_id`/`max_turns` игнорируются. Имя модели —
+`allowed_dirs`/`cwd`/`session_id`/`max_turns`/`images` игнорируются (`resume` —
+ошибка `resume_failed`: сеансов нет). Имя модели —
 `llm.local_model` из настроек (его подставляет `meet.llm.resolve`).
 
 Прокси: локальная модель через прокси не ходит (как NO_PROXY у детей, см.
@@ -55,7 +56,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
-from meet.llm.base import EMPTY_ERROR, TIMEOUT_ERROR, AgentReply
+from meet.llm.base import EMPTY_ERROR, TIMEOUT_ERROR, AgentReply, resume_failure
 from meet.settings import DEFAULT_LOCAL_BASE_URL
 
 log = logging.getLogger(__name__)
@@ -491,6 +492,8 @@ async def run(
     via_proxy: bool | str = False,
     on_cut: str = "error",
     purpose: str | None = None,
+    images=(),
+    keep_session: bool = False,
 ) -> AgentReply:
     """Вызов модели; ошибки — в AgentReply.error, счёт токенов — в `usage`.
 
@@ -499,7 +502,13 @@ async def run(
     ответа (см. начало модуля); `purpose` — назначение вызова (`title`,
     `tick`, `answer`, `summary`, `improve`, `analysis`): предел ответа и текст
     ошибки; `max_tokens` — свой предел ответа; `on_cut="keep"` — обрезанный
-    сервером промпт не ошибка (анализ встречи сам отмечает его)."""
+    сервером промпт не ошибка (анализ встречи сам отмечает его).
+
+    Сеансов и изображений у локальной модели нет (`llm.supports_resume`,
+    `llm.vision` — False): `images` и `keep_session` игнорируются, а `resume`
+    — сразу `resume_failed` (продолжать нечего, нужна затравка)."""
+    if resume:
+        return resume_failure("локальная модель сеансов не держит")
     payload = {
         "model": local_model or DEFAULT_MODEL,
         "messages": [

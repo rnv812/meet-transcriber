@@ -19,8 +19,19 @@ PROVIDERS = ("claude-code", "codex", "opencode", "openai-compatible")
 # OpenCode, едва тот появился на машине.
 AUTO_PROVIDERS = ("claude-code", "codex", "openai-compatible")
 
-__all__ = ["AUTO_PROVIDERS", "LABELS", "PROVIDERS", "AgentReply", "Runner", "agent_model", "choice_error", "not_found",
-           "describe", "is_local", "label", "models", "provider_ready", "resolve", "runner_for", "tier_kwargs"]
+__all__ = ["AUTO_PROVIDERS", "LABELS", "NO_VISION_NOTE", "PROVIDERS", "AgentReply", "Runner", "agent_model",
+           "choice_error", "not_found", "describe", "is_local", "label", "models", "provider_ready", "resolve",
+           "runner_for", "session_kwargs", "supports_resume", "tier_kwargs", "vision"]
+
+# Кто видит изображения (v4-design §5.1): Claude Code — блоки base64 в
+# сообщении, Codex — `--image=`. OpenCode (флаг вложения не проверен) и
+# локальная модель (решение концепции) — нет: runner параметр `images`
+# принимает и игнорирует, окно показывает NO_VISION_NOTE.
+VISION_PROVIDERS = ("claude-code", "codex")
+NO_VISION_NOTE = "Модель не видит изображения — ушёл только текст сообщения"
+# Кто продолжает свой сеанс нативно (v4-design §12): Claude Code `--resume`,
+# Codex `exec resume`, OpenCode `--session`. Локальная модель — только затравкой.
+RESUME_PROVIDERS = ("claude-code", "codex", "opencode")
 
 # Имена моделей для человека: окно, подпись итогов, журнал.
 LABELS = {
@@ -221,6 +232,30 @@ def is_local(provider: str | None, cfg: "Settings") -> bool:
     except ValueError:
         return False
     return host.lower() in _LOOPBACK or host.startswith("127.")
+
+
+def vision(provider: str | None) -> bool:
+    """Видит ли модель изображения (`images=` у runner, `Conversation.send`)."""
+    return provider in VISION_PROVIDERS
+
+
+def supports_resume(provider: str | None) -> bool:
+    """Продолжает ли провайдер сохранённый сеанс по id (`resume=`)."""
+    return provider in RESUME_PROVIDERS
+
+
+def session_kwargs(provider: str | None, session_id: str | None) -> dict:
+    """Что передать runner, чтобы разговор шёл в сеансе провайдера:
+    известен id — продолжить его (`resume`); нет — начать сохраняемый
+    (`keep_session`, id придёт в `AgentReply.session_id`); провайдер без
+    сеансов — ничего (контекст — затравкой из журнала). Ответ с
+    `resume_failed` — забыть id (`ChatLog.set_session_id(…, None)`) и
+    повторить с затравкой: `session_kwargs(provider, None)`."""
+    if not supports_resume(provider):
+        return {}
+    if session_id:
+        return {"resume": session_id}
+    return {"keep_session": True}
 
 
 def models(cfg: "Settings", found: dict, auto_pick: str | None = None) -> list[dict]:

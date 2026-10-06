@@ -542,3 +542,57 @@ def test_dead_dirs(tmp_path):
     (tmp_path / "3-file").write_text("")
     got = sorted(d.name for d in opencode.dead_dirs(tmp_path, alive=lambda pid: pid == 2))
     assert got == ["1-a"]
+
+
+# --- V4: сохраняемый сеанс и продолжение (флаги не проверены на живом OpenCode) -----
+
+
+def test_keep_session_is_not_deleted_and_lives_outside_the_swept_root(fake, tmp_path):
+    reply = _run(keep_session=True)
+    assert reply.text == "Да" and reply.session_id == SID
+    assert fake["deleted"] == []
+    call = FakePopen.calls[0]
+    workdir = Path(_call_dir())
+    assert workdir == (tmp_path / opencode.KEEP_WORKDIR).resolve() and workdir.is_dir()
+    assert "--session" not in call.cmd and "--title" in call.cmd
+    # Уборка служебной папки этот сеанс не считает брошенным.
+    sessions = [{"id": SID, "directory": str(workdir)}]
+    assert opencode.stale(sessions, (tmp_path / opencode.WORKDIR).resolve(), alive=lambda pid: False) == []
+
+
+def test_resume_passes_session_without_title(fake, tmp_path):
+    reply = _run(resume=SID)
+    cmd = FakePopen.calls[0].cmd
+    assert cmd[cmd.index("--session") + 1] == SID and "--title" not in cmd
+    assert Path(_call_dir()) == (tmp_path / opencode.KEEP_WORKDIR).resolve()
+    assert reply.session_id == SID and not reply.resume_failed
+    assert fake["deleted"] == []
+
+
+def test_unknown_session_is_a_resume_failure(fake):
+    from meet.llm.base import RESUME_ERROR
+
+    FakePopen.out = error("NotFoundError", f"Session not found: {SID}") + "\n"
+    FakePopen.code = 1
+    reply = _run(resume=SID)
+    assert reply.resume_failed and reply.error.startswith(RESUME_ERROR)
+
+
+def test_other_error_while_resuming_is_not_a_resume_failure(fake):
+    FakePopen.out = error("APIError", "Rate limit exceeded", statusCode=429) + "\n"
+    reply = _run(resume=SID)
+    assert reply.error and not reply.resume_failed
+
+
+def test_bad_session_id_is_refused_without_a_process(fake):
+    reply = _run(resume="--share")
+    assert reply.resume_failed and FakePopen.calls == []
+
+
+def test_images_are_ignored(fake, tmp_path):
+    img = tmp_path / "a.png"
+    img.write_bytes(b"\x89PNG")
+    reply = _run(images=[img])
+    assert reply.text == "Да"
+    assert not any("a.png" in a for a in FakePopen.calls[0].cmd)
+    assert "a.png" not in FakePopen.calls[0].input.decode("utf-8")
