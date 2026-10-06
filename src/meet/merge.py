@@ -348,6 +348,8 @@ def create(root: Path, folders: list[Path], keep_originals: bool) -> Path:
         "title_source": title_source,
         **({"category": category} if category else {}),
         **({"groups": groups} if groups else {}),
+        # Следы ассистента остаются в частях: объединённая помнит, что он был.
+        **({"had_assistant": True} if any(card.has_assistant for _, _, card in found) else {}),
         "merged_from": [folder.name for _, folder, _ in found],
         "merge": {"keep_originals": bool(keep_originals), "state": "pending",
                   "kb_exported": exported},

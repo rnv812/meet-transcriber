@@ -7,11 +7,12 @@
 * `categories=daily,_none` — любая из категорий (`_none` — «Без категории»,
   туда же удалённые из настроек);
 * `groups=g-1,g-2` — любая из групп;
-* `people=Анна,Борис П` — участник встречи (`people` карточки) по началу слов
-  имени, без учёта регистра и «ё»; несколько — нужны все;
+* `people=Анна&people=Борис П` — участник встречи (`people` карточки) по
+  началу слов имени, без учёта регистра и «ё»; по параметру на участника
+  (запятая — часть имени: «Петров, Демьян»), несколько — нужны все;
 * `from`/`to` — ГГГГ-ММ-ДД включительно, по дате начала (`started_at[:10]`);
-* `has`/`lacks` — summary (итоги), analysis (анализ), assistant (запись с
-  ассистентом), transcript (расшифровка);
+* `has`/`lacks` — summary (итоги), analysis (анализ), assistant (во встрече
+  работал ассистент — `has_assistant` карточки), transcript (расшифровка);
 * `min_s`/`max_s` — длительность в секундах;
 * `in=title` — `/search` ищет только в названиях.
 
@@ -41,7 +42,7 @@ def _has(card: dict, what: str) -> bool:
     if what == "analysis":
         return bool(card.get("has_analysis"))
     if what == "assistant":
-        return card.get("source") == "live"
+        return bool(card.get("has_assistant"))
     return bool(card.get("has_transcript"))
 
 
@@ -109,12 +110,13 @@ class LibraryFilter:
                    for person in self.people)
 
 
-def _values(params: dict, name: str) -> list[str]:
+def _values(params: dict, name: str, split: bool = True) -> list[str]:
     raw = params.get(name)
     if raw is None:
         return []
     items = raw if isinstance(raw, (list, tuple)) else [raw]
-    return [part.strip() for item in items for part in str(item).split(",") if part.strip()]
+    parts = (part for item in items for part in (str(item).split(",") if split else [str(item)]))
+    return [part.strip() for part in parts if part.strip()]
 
 
 def _one(params: dict, name: str) -> str:
@@ -172,7 +174,7 @@ def from_params(params: dict | None, cfg=None) -> LibraryFilter:
     for gid in group_ids:
         if not groups.valid_id(gid):
             raise FilterError(f"негодный id группы «{gid}»")
-    people = tuple(dict.fromkeys(w for w in (tuple(_words(v)) for v in _values(params, "people")) if w))
+    people = tuple(dict.fromkeys(w for w in (tuple(_words(v)) for v in _values(params, "people", split=False)) if w))
     where = _one(params, "in").lower()
     if where not in ("", "title"):
         raise FilterError(f"искать можно везде или только в названиях (in=title), а не «{where}»")

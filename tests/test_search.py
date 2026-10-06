@@ -186,14 +186,21 @@ def test_forget_drops_one_recording_from_the_cache(lib, monkeypatch):
 
 
 def test_cache_is_bounded_by_text_size(tmp_path):
-    cache = search._Cache(limit=100)  # одна короткая реплика — около 70 байт по оценке
     a = _rec(tmp_path, "a", [_seg(0, "Анна", "Двадцать символов тут.")])
     b = _rec(tmp_path, "b", [_seg(0, "Анна", "И ещё двадцать букв.")])
-    cache.turns(a)
-    cache.turns(b)
+    one = search._Cache().doc(b)[1].size
+    cache = search._Cache(limit=int(one * 1.5))  # помещается одна такая встреча
+    cache.doc(a)
+    _, doc = cache.doc(b)
     assert list(cache._items) == [str(b)]
     # исходный регистр и «ё» восстанавливаются из нормализованного текста
-    assert [(t.start, t.speaker, t.text) for t in cache.turns(b)] == [(0.0, "Анна", "И ещё двадцать букв.")]
+    assert (doc.starts[0], doc.speakers[0], doc.text(0)) == (0.0, "Анна", "И ещё двадцать букв.")
+
+
+def test_size_estimate_counts_wide_characters():
+    narrow = search._Doc([search.Turn(0.0, "А", "бюджет" * 10, "бюджет" * 10)])
+    wide = search._Doc([search.Turn(0.0, "А", "😀" * 60, "😀" * 60)])
+    assert wide.size > narrow.size + 60  # эмодзи — 4 байта на символ, не 2
 
 
 def test_cards_are_cached_until_folder_or_meta_changes(lib, monkeypatch):

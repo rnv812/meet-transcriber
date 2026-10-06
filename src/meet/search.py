@@ -315,7 +315,7 @@ class _Doc:
             # целиком, проверка — по словам, как в окне.
             self.texts = [t.text for t in turns]
             extra = sum(2 * len(t) + 60 for t in self.texts)
-        self.size = 2 * len(self.norm) + TURN_BYTES * len(turns) + extra
+        self.size = sys.getsizeof(self.norm) + TURN_BYTES * len(turns) + extra
 
     def __len__(self) -> int:
         return len(self.speakers)
@@ -403,6 +403,15 @@ class _Plan:
         return all(t.find(doc.norm, a, b) >= 0 for t in self.terms)
 
 
+def _names(folder: str) -> frozenset | None:
+    """Имена файлов папки: что в ней есть — без отдельного stat на каждый."""
+    try:
+        with os.scandir(folder) as it:
+            return frozenset(e.name for e in it)
+    except OSError:
+        return None
+
+
 def _stamp(path) -> tuple | None:
     try:
         st = os.stat(path)
@@ -425,17 +434,24 @@ class _Cache:
         self._token_size = 0
         self._cards: dict[str, tuple[tuple, dict | None]] = {}
         self._lock = threading.Lock()
+        # Растёт, когда меняется содержимое (карточка перечитана — значит, и
+        # транскрипт мог измениться; запись забыта; кэш очищен): по нему
+        # устаревает память последнего запроса (_Memo).
+        self.generation = 0
 
     def card(self, folder) -> dict | None:
         return self.card_stamped(folder)[0]
 
     def card_stamped(self, folder) -> tuple[dict | None, tuple | None]:
-        """Карточка записи (`library.describe`), None — не запись. Перечитывается,
-        когда меняется сама папка (файлы добавлены, удалены), meta.json,
-        транскрипт или events.jsonl."""
+        """Карточка записи (`library.describe`) и отпечаток её транскрипта; None
+        — не запись. Перечитывается, когда меняется состав папки (дорожки,
+        итоги, анализ, следы ассистента — по именам файлов, а не по времени
+        папки: его не обновляют FAT, часть сетевых дисков, а создание и
+        удаление файла в один такт его не меняют), meta.json, транскрипт или
+        events.jsonl."""
         key = str(folder)
         join = os.path.join
-        stamp = (_stamp(key), _stamp(join(key, library.META_JSON)),
+        stamp = (_names(key), _stamp(join(key, library.META_JSON)),
                  _stamp(join(key, library.TRANSCRIPT_JSON)), _stamp(join(key, "events.jsonl")))
         with self._lock:
             got = self._cards.get(key)
@@ -445,13 +461,19 @@ class _Cache:
         raw = card.to_raw() if card is not None else None
         with self._lock:
             self._cards[key] = (stamp, raw)
+            self.generation += 1
         return raw, stamp[2]
 
     def forget_except(self, keep: set[str]) -> None:
-        """Убрать карточки папок, которых больше нет."""
+        """Убрать карточки и тексты папок, которых больше нет."""
         with self._lock:
-            for key in [k for k in self._cards if k not in keep]:
+            gone = [k for k in self._cards if k not in keep]
+            for key in gone:
                 del self._cards[key]
+            for key in [k for k in self._items if k not in keep]:
+                self._size -= self._items.pop(key)[1].size
+            if gone:
+                self.generation += 1
 
     def doc(self, folder, stamp: tuple | None = None) -> tuple[tuple, _Doc] | None:
         """(ключ слов реплик, встреча) — None, если транскрипта нет. `stamp` —
@@ -486,15 +508,6 @@ class _Cache:
                 self._size -= dropped.size
         return (key, doc.serial), doc
 
-    def turns(self, folder: Path) -> list[Turn]:
-        """Реплики записи из кэша (время, спикер, исходный текст)."""
-        got = self.doc(folder)
-        if got is None:
-            return []
-        doc = got[1]
-        return [Turn(doc.starts[i], doc.speakers[i], doc.text(i), doc.norm[slice(*doc.span(i))])
-                for i in range(len(doc))]
-
     def tokens(self, ref: tuple, i: int, text: str) -> list:
         """Слова реплики `i` встречи `ref` (уровень 2): разбираются один раз."""
         key = (*ref, i)
@@ -523,6 +536,7 @@ class _Cache:
                 self._size -= self._items.pop(key)[1].size
             for key in [k for k in self._cards if Path(k).name.lower() == name]:
                 del self._cards[key]
+            self.generation += 1
 
     def clear(self) -> None:
         with self._lock:
@@ -531,6 +545,7 @@ class _Cache:
             self._cards.clear()
             self._size = 0
             self._token_size = 0
+            self.generation += 1
 
 
 _CACHE = _Cache()
@@ -589,8 +604,9 @@ def title_ranges(title: str, q: Query) -> list[list[int]]:
     return [[_utf16(title, a), _utf16(title, b)] for a, b in _merge(ranges)]
 
 
-def _search_doc(ref: tuple, doc: _Doc, plan: _Plan) -> tuple[int, list[dict]]:
-    """Сколько реплик встречи подходит и фрагменты первых MAX_HITS."""
+def _search_doc(ref: tuple, doc: _Doc, plan: _Plan, any_only: bool = False) -> tuple[int, list[dict]]:
+    """Сколько реплик встречи подходит и фрагменты первых MAX_HITS. `any_only`
+    — только «есть ли»: до первой подходящей реплики, без фрагментов."""
     q = plan.q
     if any(s not in doc.norm for s in plan.needles):
         return 0, []  # отсев встречи целиком: одна проверка подстроки
@@ -607,6 +623,8 @@ def _search_doc(ref: tuple, doc: _Doc, plan: _Plan) -> tuple[int, list[dict]]:
         if doc.texts is None:
             if not plan.matches(doc, i):
                 continue
+            if any_only:
+                return 1, []
             if len(hits) >= MAX_HITS:
                 total += 1
                 continue
@@ -614,6 +632,8 @@ def _search_doc(ref: tuple, doc: _Doc, plan: _Plan) -> tuple[int, list[dict]]:
         ranges = match_tokens(_CACHE.tokens(ref, i, text), q)
         if ranges is None:
             continue
+        if any_only:
+            return 1, []
         total += 1
         if len(hits) < MAX_HITS:
             snip, marks = snippet(text, ranges)
@@ -621,8 +641,36 @@ def _search_doc(ref: tuple, doc: _Doc, plan: _Plan) -> tuple[int, list[dict]]:
     return total, hits
 
 
+class _Memo:
+    """Память последнего запроса (одна): что нашлось в каждой проверенной
+    встрече — (сколько реплик, фрагменты, точно ли посчитано). Список
+    (`/search`), счётчики категорий и групп по одному запросу проходят
+    тексты один раз; фильтры у них разные, поэтому память — по встречам, а
+    не готовым списком. Устаревает с поколением кэша (_Cache.generation)."""
+
+    __slots__ = ("key", "generation", "results")
+
+    def __init__(self, key: tuple, generation: int) -> None:
+        self.key = key
+        self.generation = generation
+        self.results: dict[str, tuple[int, list, bool]] = {}
+
+
+_MEMO: _Memo | None = None
+_MEMO_LOCK = threading.Lock()
+
+
+def _memo_for(key: tuple) -> _Memo:
+    global _MEMO
+    with _MEMO_LOCK:
+        generation = _CACHE.generation
+        if _MEMO is None or _MEMO.key != key or _MEMO.generation != generation:
+            _MEMO = _Memo(key, generation)
+        return _MEMO
+
+
 def search_library(root: Path, q: str, limit: int = 200, keep=None,
-                   title_only: bool = False) -> list[dict]:
+                   title_only: bool = False, count_only: bool = False) -> list[dict]:
     """Записи, где запрос нашёлся в репликах или в названии, от свежих к
     старым: карточка записи и `date`, `hits` (до MAX_HITS: время реплики,
     спикер, фрагмент, подсветка), `total` — сколько реплик подошло,
@@ -630,27 +678,39 @@ def search_library(root: Path, q: str, limit: int = 200, keep=None,
     (UTF-16). Пустой запрос или короче MIN_QUERY символов — пустой ответ.
     `keep(card)` — фильтр по карточке (meet.library_filter) до поиска и до
     `limit`: старые записи нужной категории не теряются за свежими.
-    `title_only` — только в названиях (`in=title`), транскрипты не читаются."""
+    `title_only` — только в названиях (`in=title`), транскрипты не читаются.
+    `count_only` — для счётчиков: только сами карточки (без `hits`, `total`
+    и подсветки), встреча проверяется до первой подходящей реплики. Что
+    нашлось, помнится до следующего другого запроса (_Memo)."""
     if not searchable(q):
         return []
     query = parse_query(q)
     plan = _Plan(query)
+    cards = list(_cards(Path(root)))  # обход раньше памяти: он и замечает перемены
+    memo = _memo_for((str(root), nfc(q).strip(), title_only))
     found = []
-    for card, stamp in _cards(Path(root)):
+    for card, stamp in cards:
         if keep is not None and not keep(card):
             continue
         hits, total = [], 0
         if card.get("has_transcript") and not title_only:
-            got = _CACHE.doc(card["path"], stamp)
-            if got is not None:
-                total, hits = _search_doc(*got, plan)
+            got = memo.results.get(card["id"])
+            if got is None or (not got[2] and not count_only):
+                doc = _CACHE.doc(card["path"], stamp)
+                total, hits = _search_doc(*doc, plan, any_only=count_only) if doc is not None else (0, [])
+                memo.results[card["id"]] = (total, hits, not count_only)
+            else:
+                total, hits = got[0], got[1]
         title = nfc(card.get("title") or "")
         title_match = bool(title) and query.has_text and not query.speakers and (
             match_tokens(tokenize(title), query) is not None)
         if total or title_match:
-            found.append({**card, "date": (card.get("started_at") or "")[:10] or None,
-                          "hits": hits, "total": total, "title_match": title_match,
-                          "title_ranges": title_ranges(title, query) if title else []})
+            if count_only:
+                found.append(card)
+            else:
+                found.append({**card, "date": (card.get("started_at") or "")[:10] or None,
+                              "hits": hits, "total": total, "title_match": title_match,
+                              "title_ranges": title_ranges(title, query) if title else []})
             if len(found) >= limit:
                 break
     return found

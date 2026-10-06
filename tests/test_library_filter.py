@@ -48,9 +48,16 @@ def test_people_by_word_prefix_and_every_person_must_be_there():
     assert _f(people="Петр")(card)
     assert _f(people="Анна П")(card)
     assert not _f(people="нна")(card)  # только начало слова
-    assert _f(people="Анна,Бор")(card)
-    assert not _f(people="Анна,Глеб")(card)
+    assert _f(people=["Анна", "Бор"])(card)
+    assert not _f(people=["Анна", "Глеб"])(card)
     assert _f(people="Ёлкин")(_card(people=["Елкин"]))  # ё = е
+
+
+def test_a_comma_is_part_of_one_name():
+    # окно шлёт по параметру на участника: «Петров, Демьян» — один человек
+    flt = _f(people="Петров, Демьян")
+    assert flt(_card(people=["Петров Демьян"]))
+    assert not flt(_card(people=["Петров", "Демьян"]))  # два разных человека — не он
 
 
 def test_people_accept_repeated_params():
@@ -69,13 +76,15 @@ def test_dates_are_inclusive_and_undated_never_pass():
 
 
 def test_has_and_lacks():
-    card = _card(has_summary=True, source="live")
+    card = _card(has_summary=True, has_assistant=True)
     assert _f(has="summary")(card) and _f(has="assistant")(card) and _f(has="transcript")(card)
     assert not _f(has="analysis")(card)
     assert _f(lacks="analysis")(card) and not _f(lacks="summary")(card)
     assert _f(has="summary", lacks="analysis")(card)
     assert not _f(has="transcript")(_card(has_transcript=False))
     assert not _f(has="assistant")(_card())
+    # «Запись с ассистентом», где он так и не подключился, — без ассистента
+    assert not _f(has="assistant")(_card(source="live"))
 
 
 def test_duration_bounds_and_unknown_duration_never_passes():
@@ -230,3 +239,104 @@ def test_participants_route(state, lib):
     assert [(p["name"], p["meetings"]) for p in got] == [("Анна", 2), ("Борис", 2)]
     assert [p["name"] for p in state.participants("ан", 20)] == ["Анна"]
     assert ("GET", "/participants") in control._ROUTES
+
+
+
+# --- ассистент во встрече: по его следам в папке --------------------------------------
+
+
+def test_assistant_is_found_by_its_traces_not_by_source(state, tmp_path):
+    attached = _rec(tmp_path, "2026-10-02_10-00", people=["Анна"])  # обычная запись, ассистента включили
+    (attached / library.LIVE_STATE_JSON).write_text("{}", encoding="utf-8")
+    fed = _rec(tmp_path, "2026-10-03_10-00", people=["Анна"])  # только живая лента
+    (fed / library.LIVE_TRANSCRIPT_MD).write_text("лента", encoding="utf-8")
+    never = _rec(tmp_path, "2026-10-04_10-00", people=["Анна"])  # «с ассистентом», но он не подключился
+    library.write_meta(never, {"source": "live"})
+    cards = {c["id"]: c for c in state.recordings()["items"]}
+    assert cards[attached.name]["has_assistant"] is True and cards[attached.name]["source"] == "record"
+    assert cards[fed.name]["has_assistant"] is True
+    assert cards[never.name]["has_assistant"] is False and cards[never.name]["source"] == "live"
+    assert _ids(state.recordings(filters={"has": "assistant"})["items"]) == [fed.name, attached.name]
+    assert never.name in _ids(state.recordings(filters={"lacks": "assistant"})["items"])
+
+
+def test_merged_meeting_remembers_the_assistant_of_a_part(tmp_path):
+    from meet import merge
+
+    a = _rec(tmp_path, "2026-10-02_10-00", people=["Анна"])
+    b = _rec(tmp_path, "2026-10-02_11-00", people=["Анна"])
+    (b / library.LIVE_STATE_JSON).write_text("{}", encoding="utf-8")
+    target = merge.create(tmp_path / "recordings", [a, b], keep_originals=True)
+    assert library.describe(target).has_assistant is True
+    plain = merge.create(tmp_path / "recordings", [a, _rec(tmp_path, "2026-10-02_12-00")], keep_originals=True)
+    assert library.describe(plain).has_assistant is False
+
+
+# --- карточки следят за составом папки -------------------------------------------------
+
+
+@pytest.mark.parametrize("name,field", [("summary.md", "has_summary"), ("analysis.json", "has_analysis"),
+                                        (library.LIVE_STATE_JSON, "has_assistant"),
+                                        (library.LIVE_TRANSCRIPT_MD, "has_assistant")])
+def test_cards_notice_files_even_when_the_folder_time_stands_still(state, tmp_path, monkeypatch, name, field):
+    folder = _rec(tmp_path, "2026-10-02_10-00")
+    assert state.recordings()["items"][0][field] is False
+    real = search._stamp
+    frozen = real(str(folder))
+    # папка «не меняет время» (FAT, сетевой диск, один такт) — карточка всё равно свежая
+    monkeypatch.setattr(search, "_stamp", lambda p: frozen if str(p) == str(folder) else real(p))
+    (folder / name).write_text("{}", encoding="utf-8")
+    assert state.recordings()["items"][0][field] is True
+    (folder / name).unlink()
+    assert state.recordings()["items"][0][field] is False
+
+
+# --- один запрос — один проход по текстам ------------------------------------------------
+
+
+def test_one_query_scans_the_texts_once_for_list_and_counts(state, lib, monkeypatch):
+    from meet import categories, groups
+
+    gid = groups.create(lib / "recordings", "Альфа")["id"]
+    groups.members(lib / "recordings", gid, add=["2026-09-01_10-00", "2026-09-15_10-00"])
+    categories.set_user(lib / "recordings" / "2026-09-01_10-00", "daily")
+    calls = []
+    real = search._search_doc
+    monkeypatch.setattr(search, "_search_doc", lambda *a, **k: calls.append(k) or real(*a, **k))
+    found = state.search("бюджет")["items"]
+    scanned = len(calls)
+    assert scanned == 3 and all(not k.get("any_only") for k in calls)  # три встречи с текстом
+    cats = state.categories("бюджет")
+    grp = state.groups("бюджет")
+    assert len(calls) == scanned  # счётчики — из памяти запроса, тексты не перечитаны
+    assert cats["scope"] == "search" and cats["counts"] == {"daily": 1} and cats["none"] == 1
+    assert [g["count"] for g in grp["groups"]] == [2]
+    assert len(found) == 2
+    # другой запрос — новый проход; счётчики первыми — без фрагментов, до первой реплики
+    state.groups("отпуск")
+    assert calls[-1] == {"any_only": True}
+    tokens = []
+    monkeypatch.setattr(search._CACHE, "tokens", lambda *a: tokens.append(a) or [])
+    state.categories("квартал")
+    assert tokens == []  # счётчикам слова реплик не нужны
+
+
+def test_query_memory_is_dropped_when_a_transcript_changes(state, lib):
+    assert len(state.search("бюджет")["items"]) == 2
+    folder = lib / "recordings" / "2026-10-01_10-00"
+    library.write_transcript(folder, {"version": 1, "segments": [
+        {"start": 0.0, "end": 1.0, "speaker": "Анна", "text": "Бюджет готов."}]})
+    assert len(state.search("бюджет")["items"]) == 3
+    assert state.categories("бюджет")["none"] == 3
+
+
+def test_deleted_folders_leave_the_text_cache(state, lib):
+    import shutil
+
+    state.search("бюджет")
+    gone = str(lib / "recordings" / "2026-09-01_10-00")
+    assert gone in search._CACHE._items
+    size = search._CACHE._size
+    shutil.rmtree(gone)
+    state.search("бюджет")
+    assert gone not in search._CACHE._items and search._CACHE._size < size

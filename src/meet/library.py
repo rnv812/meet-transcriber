@@ -107,6 +107,12 @@ class Recording:
     # Есть итоги (summary.md) и анализ встречи (analysis.json).
     has_summary: bool = False
     has_analysis: bool = False
+    # Во встрече работал ассистент: его следы в папке (сводка live_state.json
+    # или живая лента live_transcript.md) — и у «Записи с ассистентом», и у
+    # обычной записи, где его включили по ходу; у объединённой — если он был
+    # в одной из частей (meta.json `had_assistant`). `source: "live"` — не то:
+    # он остаётся, даже если ассистент так и не подключился.
+    has_assistant: bool = False
 
     def to_raw(self) -> dict:
         return {
@@ -136,6 +142,7 @@ class Recording:
             "people": list(self.people),
             "has_summary": self.has_summary,
             "has_analysis": self.has_analysis,
+            "has_assistant": self.has_assistant,
         }
 
 
@@ -891,6 +898,7 @@ def describe(folder: Path) -> Recording | None:
         people=list(head.people),
         has_summary=(folder / SUMMARY_MD).is_file(),
         has_analysis=(folder / ANALYSIS_JSON).is_file(),
+        has_assistant=has_assistant(folder, meta),
     )
 
 
@@ -899,6 +907,17 @@ SYSTEM_AUDIO_REASONS = ("permission", "helper", "unsupported", "failed")
 # имена здесь, чтобы карточка не тянула за собой модули моделей.
 SUMMARY_MD = "summary.md"
 ANALYSIS_JSON = "analysis.json"
+# Следы ассистента в папке встречи (meet.assist.live_state.LIVE_STATE_JSON и
+# живая лента meet.live) — без импорта модулей ассистента.
+LIVE_STATE_JSON = "live_state.json"
+LIVE_TRANSCRIPT_MD = "live_transcript.md"
+
+
+def has_assistant(folder: Path, meta: dict | None = None) -> bool:
+    """Работал ли во встрече ассистент (см. Recording.has_assistant)."""
+    meta = read_meta(folder) if meta is None else meta
+    return (meta.get("had_assistant") is True or (folder / LIVE_STATE_JSON).is_file()
+            or (folder / LIVE_TRANSCRIPT_MD).is_file())
 
 
 def _groups(meta: dict) -> list[str]:

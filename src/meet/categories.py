@@ -152,20 +152,6 @@ def key_of(card: dict, known_ids) -> str:
     return cid if cid in known_ids else NONE_KEY
 
 
-def parse_keys(value) -> list[str] | None:
-    """Фильтр из адреса: "daily,_none" → ["daily", "_none"]; пусто — None (без фильтра)."""
-    keys = [k.strip() for k in str(value or "").split(",") if k.strip()]
-    return keys or None
-
-
-def matcher(keys, cfg):
-    """Фильтр списка по категориям: card → подходит ли. Несколько ключей —
-    любой из них. Ключ удалённой категории не находит ничего."""
-    known = set(ids(cfg))
-    want = set(keys)
-    return lambda card: key_of(card, known) in want
-
-
 def counts(root: Path, cfg=None, q: str | None = None, keep=None, title_only: bool = False) -> dict:
     """Сколько встреч в каждой категории: {"counts": {id: n}, "none": n,
     "scope": "library"|"search"}. С запросом поиска (`q`) — среди найденных,
@@ -178,7 +164,8 @@ def counts(root: Path, cfg=None, q: str | None = None, keep=None, title_only: bo
     known = set(ids(cfg))
     scoped = bool(q) and search.searchable(q)
     if scoped:
-        cards = search.search_library(Path(root), q, limit=10**9, keep=keep, title_only=title_only)
+        cards = search.search_library(Path(root), q, limit=10**9, keep=keep, title_only=title_only,
+                                      count_only=True)
     else:
         cards = [c for c in search.cards(Path(root)) if keep is None or keep(c)]
     out: dict[str, int] = {}

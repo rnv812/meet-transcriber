@@ -14,13 +14,20 @@
 * Имя — 1–NAME_MAX символов, пробелы схлопываются, уникально без учёта
   регистра и «ё»; «Все записи» — имя области «без группы», его не дать.
 * Файл пишется атомарно (временный + replace с повтором) под
-  `library.file_lock`: чтение-правка-запись не теряют чужую правку. Битый файл
-  не перезаписывается молча: перед записью он откладывается рядом
-  (`.meet-groups.json.broken-<время>`); чтение битого — как пустого.
+  `library.file_lock`: чтение-правка-запись не теряют чужую правку. Чужие
+  поля (и файла, и групп — их может добавить новая версия) сохраняются;
+  файл версии новее VERSION только читается, запись — отказ.
+* Битый файл (не JSON или не та форма) не перезаписывается молча: окно видит
+  `broken` в `GET /groups`, а первая запись откладывает его рядом
+  (`.meet-groups.json.broken-<время>-…`) и называет, куда (`moved_broken`).
+  Файл, который сейчас не прочитать (занят антивирусом, синхронизацией,
+  индексатором), — не битый: чтение повторяется, потом — ошибка (Busy), и
+  ничего не пишется.
 * Удаление группы не трогает meta.json: её id у встреч становится
   «неизвестным» («Группа без названия · N встреч» в окне), и «Отменить»
-  возвращает группу с тем же id и на то же место (`create(gid=…, index=…)`).
-  «Назвать» неизвестную — тоже `create` с её id.
+  возвращает группу с тем же id, временем создания и на то же место
+  (`create(gid=…, index=…, created_at=…)`). «Назвать» неизвестную — тоже
+  `create` с её id.
 * Удаление встречи уносит членство с папкой; объединение получает группы всех
   частей (meet.merge); импорт и новая запись в группы сами не попадают.
 """
@@ -30,12 +37,14 @@ import os
 import re
 import secrets
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
 from meet import library
 
 FILE = ".meet-groups.json"
+BROKEN_MARK = ".broken-"
 VERSION = 1
 # id группы: `g-` + 8 шестнадцатеричных; проверка шире — на случай правки руками.
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
@@ -46,6 +55,10 @@ RESERVED = "Все записи"
 # Цвета новых групп по кругу, если окно не выбрало свой.
 PALETTE = ("#4f8cc9", "#d9822b", "#3f9d5d", "#b05cc6", "#c9504f", "#2a9d9b", "#c2a03a", "#7a7f87")
 NO_GROUP = "группы нет"
+BUSY = "Файл групп сейчас занят другой программой — повторите через минуту"
+TOO_NEW = "Файл групп записан более новой версией Meet — обновите приложение, чтобы менять группы"
+# Чтение занятого файла: столько попыток с растущей паузой (как library._replace).
+READ_TRIES = 5
 
 
 class GroupError(ValueError):
@@ -54,6 +67,10 @@ class GroupError(ValueError):
 
 class NoGroup(GroupError):
     """Такой группы нет в списке (резидент отвечает 404)."""
+
+
+class Busy(OSError):
+    """Файл групп не прочитать прямо сейчас (резидент отвечает 503)."""
 
 
 def valid_id(gid) -> bool:
@@ -95,8 +112,19 @@ def _color(value) -> str:
     return value
 
 
+def _created_at(value) -> str:
+    if not isinstance(value, str):
+        raise GroupError("время создания — строка ISO")
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        raise GroupError("время создания — строка ISO") from None
+    return value
+
+
 def _clean(raw) -> list[dict]:
-    """Годные описания из файла: битые записи и повторы id отбрасываются."""
+    """Годные описания из файла: битые записи и повторы id отбрасываются,
+    чужие поля групп остаются как есть."""
     out: list[dict] = []
     seen: set[str] = set()
     for item in raw if isinstance(raw, list) else ():
@@ -107,55 +135,125 @@ def _clean(raw) -> list[dict]:
             continue
         color = item.get("color")
         seen.add(item["id"])
-        out.append({"id": item["id"], "name": name,
+        out.append({**item, "id": item["id"], "name": name,
                     "color": color if isinstance(color, str) and COLOR.match(color)
                     else PALETTE[len(out) % len(PALETTE)],
                     "created_at": str(item.get("created_at") or "")})
     return out
 
 
-def _read(file: Path) -> tuple[list[dict], bool]:
-    """(описания, битый ли файл). Нет файла — пусто и не битый."""
+class _File:
+    """Прочитанный файл групп: группы, прочие поля файла, битый ли, новее ли."""
+
+    __slots__ = ("items", "extra", "broken", "newer")
+
+    def __init__(self, items=None, extra=None, broken=False, newer=False) -> None:
+        self.items = items or []
+        self.extra = extra or {}
+        self.broken = broken
+        self.newer = newer
+
+
+def _read(file: Path, *, sleep=time.sleep) -> _File:
+    """Нет файла — пусто. Не JSON или не та форма — `broken`. Не прочитать
+    (занят) — несколько попыток, потом Busy: такой файл не битый, трогать его
+    нельзя."""
+    for attempt in range(READ_TRIES):
+        try:
+            text = file.read_text(encoding="utf-8")
+            break
+        except FileNotFoundError:
+            return _File()
+        except OSError:
+            if attempt == READ_TRIES - 1:
+                raise Busy(BUSY) from None
+            sleep(0.05 * (attempt + 1))
     try:
-        data = json.loads(file.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return [], False
-    except (OSError, ValueError):
-        return [], True
+        data = json.loads(text)
+    except ValueError:
+        return _File(broken=True)
     if not isinstance(data, dict) or not isinstance(data.get("groups"), list):
-        return [], True
-    return _clean(data["groups"]), False
+        return _File(broken=True)
+    version = data.get("version")
+    newer = isinstance(version, int) and not isinstance(version, bool) and version > VERSION
+    extra = {k: v for k, v in data.items() if k not in ("version", "groups")}
+    return _File(_clean(data["groups"]), extra, newer=newer)
 
 
 def load(root: Path) -> list[dict]:
     """Группы библиотеки по порядку; нет файла или он битый — пусто (битый
-    при этом не трогается — его отложит первая запись)."""
-    return _read(path(root))[0]
+    при этом не трогается). Занят — Busy."""
+    return _read(path(root)).items
 
 
-def _write(file: Path, items: list[dict]) -> None:
+def broken_copies(root: Path) -> list[Path]:
+    """Отложенные битые файлы групп, свежие первыми."""
+    try:
+        found = [p for p in Path(root).iterdir() if p.name.startswith(FILE + BROKEN_MARK)]
+    except OSError:
+        return []
+    return sorted(found, key=lambda p: p.name, reverse=True)
+
+
+def state(root: Path) -> dict:
+    """Группы и состояние файла для `GET /groups`: {"items", "broken",
+    "broken_copy"?, "newer"}. `broken` — файл не прочитать как список групп
+    (первая запись отложит его); `broken_copy` — последний отложенный."""
+    got = _read(path(root))
+    out = {"items": got.items, "broken": got.broken, "newer": got.newer}
+    if got.broken:
+        copies = broken_copies(root)
+        if copies:
+            out["broken_copy"] = str(copies[0])
+    return out
+
+
+def _write(file: Path, items: list[dict], extra: dict) -> None:
     tmp = file.with_name(f"{file.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
-        tmp.write_text(json.dumps({"version": VERSION, "groups": items}, ensure_ascii=False, indent=1),
-                       encoding="utf-8")
+        tmp.write_text(json.dumps({**extra, "version": VERSION, "groups": items}, ensure_ascii=False,
+                                  indent=1), encoding="utf-8")
         library._replace(tmp, file)
     finally:
         tmp.unlink(missing_ok=True)
 
 
-def _change(root: Path, change):
-    """Прочитать, поправить (`change(items) -> (items, ответ)`) и записать под
-    замком. Битый файл перед записью откладывается рядом."""
+def _aside(file: Path) -> Path:
+    """Свободное имя для отложенного битого файла: время, номер процесса и,
+    если и такое занято, счётчик."""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    base = f"{file.name}{BROKEN_MARK}{stamp}-{os.getpid()}"
+    target, n = file.with_name(base), 2
+    while target.exists():
+        target, n = file.with_name(f"{base}-{n}"), n + 1
+    return target
+
+
+def _change(root: Path, change) -> tuple[object, str | None]:
+    """Прочитать, поправить (`change(items) -> (items | None, ответ)`; None —
+    ничего не менять) и записать под замком → (ответ, куда отложен битый файл
+    или None). Занятый файл — Busy, файл новее этой версии — отказ; в обоих
+    случаях ничего не пишется."""
     file = path(root)
     file.parent.mkdir(parents=True, exist_ok=True)
     with library.file_lock(file):
-        items, broken = _read(file)
-        items, out = change([dict(g) for g in items])
-        if broken:
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            library._replace(file, file.with_name(f"{file.name}.broken-{stamp}"))
-        _write(file, items)
-        return out
+        got = _read(file)
+        if got.newer:
+            raise GroupError(TOO_NEW)
+        items, out = change([dict(g) for g in got.items])
+        if items is None:
+            return out, None
+        moved = None
+        if got.broken:
+            target = _aside(file)
+            library._replace(file, target)
+            moved = str(target)
+        _write(file, items, got.extra)
+        return out, moved
+
+
+def _with_moved(out: dict, moved: str | None) -> dict:
+    return {**out, "moved_broken": moved} if moved else out
 
 
 def _find(items: list[dict], gid) -> int:
@@ -170,12 +268,14 @@ def _unique(items: list[dict], name: str, skip: str | None = None) -> None:
         raise GroupError(f"группа «{name}» уже есть")
 
 
-def create(root: Path, name, color=None, *, gid=None, index=None, taken=()) -> dict:
+def create(root: Path, name, color=None, *, gid=None, index=None, taken=(), created_at=None) -> dict:
     """Новая группа (в конец или на место `index`). `gid` — вернуть удалённую
-    («Отменить») или назвать неизвестную с тем же id. `taken` — id, которые
-    уже встречаются в meta.json встреч: новый id их не повторит."""
+    («Отменить», с её `created_at`) или назвать неизвестную с тем же id.
+    `taken` — id, которые уже встречаются в meta.json встреч: новый id их не
+    повторит. Отложен битый файл — в ответе `moved_broken`."""
     name = _name(name)
     color = None if color is None else _color(color)
+    created_at = None if created_at is None else _created_at(created_at)
     if gid is not None and not valid_id(gid):
         raise GroupError("негодный id группы")
     if index is not None and (not isinstance(index, int) or isinstance(index, bool)):
@@ -189,12 +289,12 @@ def create(root: Path, name, color=None, *, gid=None, index=None, taken=()) -> d
         while new_id is None or (gid is None and (new_id in taken or any(g["id"] == new_id for g in items))):
             new_id = f"g-{secrets.token_hex(4)}"
         group = {"id": new_id, "name": name, "color": color or PALETTE[len(items) % len(PALETTE)],
-                 "created_at": datetime.now().isoformat(timespec="seconds")}
+                 "created_at": created_at or datetime.now().isoformat(timespec="seconds")}
         at = len(items) if index is None else max(0, min(index, len(items)))
         items.insert(at, group)
         return items, group
 
-    return _change(root, change)
+    return _with_moved(*_change(root, change))
 
 
 def update(root: Path, gid, *, name=None, color=None) -> dict:
@@ -213,7 +313,7 @@ def update(root: Path, gid, *, name=None, color=None) -> dict:
             items[at]["color"] = color
         return items, items[at]
 
-    return _change(root, change)
+    return _with_moved(*_change(root, change))
 
 
 def delete(root: Path, gid) -> dict:
@@ -224,12 +324,13 @@ def delete(root: Path, gid) -> dict:
         group = items.pop(at)
         return items, {"group": group, "index": at}
 
-    return _change(root, change)
+    return _with_moved(*_change(root, change))
 
 
-def reorder(root: Path, ids) -> list[dict]:
+def reorder(root: Path, ids) -> dict:
     """Новый порядок: `ids` — группы по порядку; не названные остаются за ними
-    в прежнем порядке. Неизвестный id или повтор — GroupError."""
+    в прежнем порядке → {"groups", "changed"}. Тот же порядок — файл не
+    пишется. Неизвестный id или повтор — GroupError."""
     if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
         raise GroupError("нужен список id групп")
     if len(set(ids)) != len(ids):
@@ -237,13 +338,14 @@ def reorder(root: Path, ids) -> list[dict]:
 
     def change(items):
         by_id = {g["id"]: g for g in items}
-        unknown = [i for i in ids if i not in by_id]
-        if unknown:
+        if any(i not in by_id for i in ids):
             raise GroupError("таких групп нет — обновите список")
         ordered = [by_id[i] for i in ids] + [g for g in items if g["id"] not in set(ids)]
-        return ordered, ordered
+        if [g["id"] for g in ordered] == [g["id"] for g in items]:
+            return None, {"groups": items, "changed": False}
+        return ordered, {"groups": ordered, "changed": True}
 
-    return _change(root, change)
+    return _with_moved(*_change(root, change))
 
 
 def _ids(value, what: str) -> list[str]:
@@ -255,13 +357,16 @@ def _ids(value, what: str) -> list[str]:
 
 
 def _recording(root: Path, rid: str) -> Path | None:
-    """Папка записи по id — только внутри папки записей (id приходит из сети)."""
+    """Папка записи по id — только внутри папки записей (id приходит из сети)
+    и не служебная (с точки: отложенная к удалению или на проверку)."""
+    if not rid or rid.startswith("."):
+        return None
     try:
         base = Path(root).resolve()
         folder = (base / rid).resolve()
     except (OSError, ValueError):
         return None
-    if folder.parent != base or not library.is_recording(folder):
+    if folder.parent != base or folder.name.startswith(".") or not library.is_recording(folder):
         return None
     return folder
 

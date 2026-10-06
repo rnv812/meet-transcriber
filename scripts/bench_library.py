@@ -12,7 +12,9 @@
 * `cards` — карточки всей библиотеки (основа `GET /recordings`): холодные и из кэша,
   и они же с переводом в JSON, как отдаёт резидент;
 * поиск (`search.search_library`) по нескольким запросам: холодный (кэш пуст —
-  чтение и разбор всех транскриптов) и тёплый;
+  чтение и разбор всех транскриптов), тёплый (тексты в кэше, проход по ним) и
+  повтор того же запроса (`repeat_ms`: счётчики категорий и групп берут
+  найденное из памяти запроса, тексты не проходят);
 * `cpu_spin_ms` — пустой цикл до и после: на ноутбуке частота под нагрузкой
   падает в разы (48 мс в покое, 150 — сброшенная), цифры сравнимы только при
   близкой мерке.
@@ -135,11 +137,16 @@ def run(root: Path, repeat: int) -> dict:
     search.cards(root)  # карточки — не про поиск: их список читает и так
     out["search_cold_ms"], found = _timed(lambda: search.search_library(root, QUERIES[0], limit=5000), 1)
     out["search"] = {}
+    def scan(q):
+        search._MEMO = None  # тёплый кэш текстов, но без памяти прошлого запроса
+        return search.search_library(root, q, limit=5000)
+
     for q in QUERIES:
         best: dict = {}
-        ms, found = _timed(lambda: search.search_library(root, q, limit=5000), repeat, best, "best")
-        out["search"][q] = {"warm_ms": round(ms, 1), "best_ms": best["best"], "meetings": len(found),
-                            "places": sum(f["total"] for f in found)}
+        ms, found = _timed(lambda: scan(q), repeat, best, "best")
+        again, _ = _timed(lambda: search.search_library(root, q, limit=5000), repeat)
+        out["search"][q] = {"warm_ms": round(ms, 1), "best_ms": best["best"], "repeat_ms": round(again, 1),
+                            "meetings": len(found), "places": sum(f["total"] for f in found)}
     out["search_warm_max_ms"] = max(v["warm_ms"] for v in out["search"].values())
     out["cpu_spin_ms_after"] = _spin()
     size = getattr(search._CACHE, "_size", None)

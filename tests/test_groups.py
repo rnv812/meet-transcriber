@@ -67,8 +67,10 @@ def test_restore_with_the_same_id_and_place(tmp_path):
     c = groups.create(tmp_path, "В")
     gone = groups.delete(tmp_path, b["id"])
     assert gone == {"group": b, "index": 1}
-    back = groups.create(tmp_path, "Б", color=b["color"], gid=b["id"], index=1)
-    assert back["id"] == b["id"]
+    back = groups.create(tmp_path, "Б", color=b["color"], gid=b["id"], index=1, created_at="2020-01-02T03:04:05")
+    assert back["id"] == b["id"] and back["created_at"] == "2020-01-02T03:04:05"  # время создания — прежнее
+    with pytest.raises(groups.GroupError):
+        groups.create(tmp_path, "Д", created_at="вчера")
     assert [g["id"] for g in groups.load(tmp_path)] == [a["id"], b["id"], c["id"]]
     with pytest.raises(groups.GroupError):
         groups.create(tmp_path, "Г", gid=a["id"])  # такой id уже есть
@@ -97,8 +99,13 @@ def test_update_and_unknown_group(tmp_path):
 
 def test_reorder(tmp_path):
     a, b, c = (groups.create(tmp_path, n)["id"] for n in "АБВ")
-    assert [g["id"] for g in groups.reorder(tmp_path, [c, a])] == [c, a, b]  # недостающие — в конец
+    got = groups.reorder(tmp_path, [c, a])
+    assert [g["id"] for g in got["groups"]] == [c, a, b] and got["changed"] is True  # недостающие — в конец
     assert [g["id"] for g in groups.load(tmp_path)] == [c, a, b]
+    before = (tmp_path / groups.FILE).stat().st_mtime_ns
+    same = groups.reorder(tmp_path, [c, a, b])
+    assert same["changed"] is False and [g["id"] for g in same["groups"]] == [c, a, b]
+    assert (tmp_path / groups.FILE).stat().st_mtime_ns == before  # тот же порядок — без записи
     with pytest.raises(groups.GroupError):
         groups.reorder(tmp_path, [a, "g-ffffffff"])
     with pytest.raises(groups.GroupError):
@@ -110,11 +117,86 @@ def test_reorder(tmp_path):
 def test_broken_file_is_set_aside_not_overwritten(tmp_path):
     (tmp_path / groups.FILE).write_text("{не json", encoding="utf-8")
     assert groups.load(tmp_path) == []
+    assert groups.state(tmp_path) == {"items": [], "broken": True, "newer": False}
     assert (tmp_path / groups.FILE).read_text(encoding="utf-8") == "{не json"  # чтение не трогает
-    groups.create(tmp_path, "А")
+    got = groups.create(tmp_path, "А")
     aside = list(tmp_path.glob(groups.FILE + ".broken-*"))
     assert len(aside) == 1 and aside[0].read_text(encoding="utf-8") == "{не json"
+    assert got["moved_broken"] == str(aside[0])  # первая запись говорит, куда отложен
     assert [g["name"] for g in groups.load(tmp_path)] == ["А"]
+    assert groups.state(tmp_path)["broken"] is False
+    assert "moved_broken" not in groups.create(tmp_path, "Б")
+
+
+@pytest.mark.parametrize("content", ["[]", '{"groups": "нет"}', "", '{"version": 1}'])
+def test_wrong_shape_is_broken_too(tmp_path, content):
+    (tmp_path / groups.FILE).write_text(content, encoding="utf-8")
+    assert groups.state(tmp_path)["broken"] is True
+
+
+def test_broken_copies_never_overwrite_each_other(tmp_path, monkeypatch):
+    class Frozen(groups.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return groups.datetime(2026, 10, 6, 12, 0, 0)
+
+    monkeypatch.setattr(groups, "datetime", Frozen)
+    for text in ("{первый", "{второй"):
+        (tmp_path / groups.FILE).write_text(text, encoding="utf-8")
+        groups.create(tmp_path, f"Группа {text}")
+    copies = groups.broken_copies(tmp_path)
+    assert len(copies) == 2  # одна и та же секунда — разные имена
+    assert sorted(c.read_text(encoding="utf-8") for c in copies) == ["{второй", "{первый"]
+    (tmp_path / groups.FILE).write_text("{третий", encoding="utf-8")
+    assert groups.state(tmp_path)["broken_copy"] == str(copies[0])
+
+
+def test_busy_file_is_retried_and_never_set_aside(tmp_path, monkeypatch):
+    a = groups.create(tmp_path, "Альфа")
+    b = groups.create(tmp_path, "Бета")
+    real = type(tmp_path).read_text
+    fails = {"left": 1}
+
+    def flaky(self, *args, **kwargs):
+        if self.name == groups.FILE and fails["left"] > 0:
+            fails["left"] -= 1
+            raise PermissionError(32, "файл занят другим процессом")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(tmp_path), "read_text", flaky)
+    monkeypatch.setattr(groups.time, "sleep", lambda s: None)
+    c = groups.create(tmp_path, "Вера")  # одна неудача — повтор, и всё на месте
+    assert [g["id"] for g in groups.load(tmp_path)] == [a["id"], b["id"], c["id"]]
+    assert "moved_broken" not in c and groups.broken_copies(tmp_path) == []
+    # занят всё время — ошибка, файл не тронут, ничего не записано
+    fails["left"] = 10**6
+    before = (tmp_path / groups.FILE).read_bytes()
+    with pytest.raises(groups.Busy):
+        groups.create(tmp_path, "Гамма")
+    with pytest.raises(groups.Busy):
+        groups.state(tmp_path)
+    fails["left"] = 0
+    assert (tmp_path / groups.FILE).read_bytes() == before
+    assert groups.broken_copies(tmp_path) == []
+    assert [g["name"] for g in groups.load(tmp_path)] == ["Альфа", "Бета", "Вера"]
+
+
+def test_unknown_fields_survive_and_newer_files_are_read_only(tmp_path):
+    (tmp_path / groups.FILE).write_text(json.dumps({"version": 1, "owner": "кто-то", "groups": [
+        {"id": "g-1", "name": "А", "color": "#000000", "created_at": "2026-01-01T00:00:00", "parent": "g-0"}]}),
+        encoding="utf-8")
+    groups.create(tmp_path, "Б")
+    data = _file(tmp_path)
+    assert data["owner"] == "кто-то" and data["groups"][0]["parent"] == "g-0"
+    newer = {"version": 2, "groups": [{"id": "g-1", "name": "А", "color": "#000000", "created_at": "x"}]}
+    (tmp_path / groups.FILE).write_text(json.dumps(newer), encoding="utf-8")
+    assert [g["id"] for g in groups.load(tmp_path)] == ["g-1"]  # читать можно
+    assert groups.state(tmp_path)["newer"] is True
+    for action in (lambda: groups.create(tmp_path, "В"), lambda: groups.update(tmp_path, "g-1", name="Х"),
+                   lambda: groups.delete(tmp_path, "g-1"), lambda: groups.reorder(tmp_path, ["g-1"])):
+        with pytest.raises(groups.GroupError, match="новой версией"):
+            action()
+    assert _file(tmp_path) == newer  # не переписан как v1
 
 
 def test_malformed_entries_are_skipped(tmp_path):
@@ -155,6 +237,11 @@ def test_members_add_remove_with_honest_partial_failure(tmp_path):
     got = groups.members(tmp_path, gid, add=[a.name, b.name, "2030-01-01_00-00", "../x"])
     assert got["changed"] == [a.name, b.name]
     assert [f["id"] for f in got["failed"]] == ["2030-01-01_00-00", "../x"]
+    # служебные папки (отложенные к удалению, на проверке) — не записи
+    hidden = _rec(tmp_path, ".2026-10-03_10-00.deleting-1a2b3c4d")
+    got_hidden = groups.members(tmp_path, gid, add=[hidden.name])
+    assert got_hidden["changed"] == [] and [f["id"] for f in got_hidden["failed"]] == [hidden.name]
+    assert "groups" not in library.read_meta(hidden)
     assert all(f["error"] for f in got["failed"])
     assert library.read_meta(b) == {"title": "Своё", "groups": ["g-other", gid]}
     assert groups.members(tmp_path, gid, add=[a.name])["changed"] == []  # уже в группе
@@ -197,10 +284,23 @@ def test_summary_counts_known_and_unknown():
     assert got["unknown"] == [{"id": "g-x", "count": 2}, {"id": "g-y", "count": 1}]
 
 
-def test_file_lock_is_public_and_reentrant_free(tmp_path):
-    with library.file_lock(tmp_path / groups.FILE):
-        pass
-    library.write_meta(_rec(tmp_path, "2026-10-01_10-00"), {"title": "ок"})
+def test_file_lock_serialises_threads(tmp_path):
+    target = tmp_path / groups.FILE
+    order = []
+
+    def second():
+        with library.file_lock(target):
+            order.append("второй")
+
+    with library.file_lock(target):
+        order.append("первый")
+        other = threading.Thread(target=second)
+        other.start()
+        other.join(timeout=0.3)
+        assert other.is_alive()  # ждёт, пока первый не отпустит
+        order.append("первый отпустил")
+    other.join(timeout=5)
+    assert order == ["первый", "первый отпустил", "второй"]
 
 
 # --- объединение ------------------------------------------------------------------------
@@ -252,7 +352,7 @@ def test_group_routes_and_one_event_per_operation(state, tmp_path):
     root = tmp_path / "recordings"
     a = _rec(root, "2026-10-01_10-00")
     b = _rec(root, "2026-10-02_10-00")
-    assert state.groups() == {"groups": [], "unknown": [], "scope": "library"}
+    assert state.groups() == {"groups": [], "unknown": [], "scope": "library", "broken": False, "newer": False}
     alpha = state.create_group({"name": "Альфа", "color": "#123456"})
     beta = state.create_group({"name": "Бета"})
     assert _changed(state) == 2
@@ -267,12 +367,15 @@ def test_group_routes_and_one_event_per_operation(state, tmp_path):
     assert [g["id"] for g in state.order_groups({"ids": [beta["id"], alpha["id"]]})["groups"]] == [
         beta["id"], alpha["id"]]
     assert _changed(state) == 2
+    state.order_groups({"ids": [beta["id"], alpha["id"]]})  # тот же порядок — без события
+    assert _changed(state) == 0
     gone = state.delete_group(alpha["id"])
     assert gone["index"] == 1 and _changed(state) == 1
     info = state.groups()
     assert info["unknown"] == [{"id": alpha["id"], "count": 2}]
-    # отмена удаления: тот же id и место
-    state.create_group({"id": alpha["id"], "name": "Альфа-2", "color": "#123456", "index": 1})
+    # отмена удаления: тот же id, место и время создания
+    back = state.create_group({**gone["group"], "index": gone["index"]})
+    assert back == gone["group"]
     assert [g["id"] for g in state.groups()["groups"]] == [beta["id"], alpha["id"]]
     # ничего не поменялось — события нет
     state.group_members(alpha["id"], {"add": [a.name]})
@@ -316,3 +419,33 @@ def test_routes_exist():
     assert ("PATCH", r"^/groups/([^/]+)$") in paths
     assert ("DELETE", r"^/groups/([^/]+)$") in paths
     assert ("POST", r"^/groups/([^/]+)/members$") in paths
+
+
+def test_broken_file_through_the_resident(state, tmp_path):
+    root = tmp_path / "recordings"
+    _rec(root, "2026-10-01_10-00")
+    (root / groups.FILE).write_text("{битый", encoding="utf-8")
+    info = state.groups()
+    assert info["broken"] is True and "broken_copy" not in info and info["groups"] == []
+    seen = []
+    state.bus.subscribe(lambda e: seen.append(e.data) if e.kind == tray_control.GROUPS_CHANGED else None)
+    got = state.create_group({"name": "Альфа"})
+    assert got["moved_broken"] and (root / groups.FILE).exists()
+    assert seen[-1]["moved_broken"] == got["moved_broken"]
+    assert state.groups()["broken"] is False
+    (root / groups.FILE).write_text("{снова", encoding="utf-8")
+    assert state.groups()["broken_copy"] == got["moved_broken"]
+
+
+def test_busy_file_through_the_resident_is_503(state, tmp_path, monkeypatch):
+    _rec(tmp_path / "recordings", "2026-10-01_10-00")
+    state.create_group({"name": "Альфа"})
+
+    def busy(*a, **k):
+        raise groups.Busy(groups.BUSY)
+
+    monkeypatch.setattr(groups, "_read", busy)
+    with pytest.raises(control.Unavailable):
+        state.create_group({"name": "Бета"})
+    with pytest.raises(control.Unavailable):
+        state.groups()

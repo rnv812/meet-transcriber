@@ -1977,16 +1977,19 @@ class TrayControl:
 
     # --- группы встреч (meet.groups) -----------------------------------
 
-    def _groups_changed(self, op: str, gid: str | None = None) -> None:
+    def _groups_changed(self, op: str, gid: str | None = None, moved_broken: str | None = None) -> None:
         try:
-            self.bus.emit(GROUPS_CHANGED, op=op, **({"id": gid} if gid else {}))
+            self.bus.emit(GROUPS_CHANGED, op=op, **({"id": gid} if gid else {}),
+                          **({"moved_broken": moved_broken} if moved_broken else {}))
         except Exception:
             pass  # шина — не повод ронять действие, которое уже сделано
 
     @staticmethod
     def _group_call(fn, *args, **kwargs):
-        """Вызов meet.groups: нет группы — {"error"} (404), негодный запрос — 400."""
+        """Вызов meet.groups: нет группы — {"error"} (404), негодный запрос —
+        400, файл групп занят — 503 (ничего не записано)."""
         from meet import groups
+        from meet.control import Unavailable
 
         try:
             return fn(*args, **kwargs)
@@ -1994,11 +1997,16 @@ class TrayControl:
             return {"error": str(e)}
         except groups.GroupError as e:
             raise _bad_request(str(e))
+        except groups.Busy as e:
+            raise Unavailable(str(e))
 
     def groups(self, q: str | None = None, filters: dict | None = None) -> dict:
         """Группы по порядку со счётчиками встреч и неизвестные id из meta.json
         (meet.groups.summary). С запросом поиска `q` — счётчики среди
-        найденных, с фильтром — среди подходящих под остальные его условия."""
+        найденных (поиск без фрагментов, общая с /search память запроса), с
+        фильтром — среди подходящих под остальные его условия. `broken` —
+        файл групп не прочитать (первая запись отложит его, `broken_copy` —
+        уже отложенный), `newer` — файл от более новой версии (только чтение)."""
         from meet import groups, search
 
         root = self._root()
@@ -2006,22 +2014,28 @@ class TrayControl:
         keep = flt if flt.active else None
         scoped = bool(q) and search.searchable(q)
         if scoped:
-            cards = search.search_library(root, q, limit=10**9, keep=keep, title_only=flt.title_only)
+            cards = search.search_library(root, q, limit=10**9, keep=keep, title_only=flt.title_only,
+                                          count_only=True)
         else:
             cards = [c for c in search.cards(root) if keep is None or keep(c)]
-        return {**groups.summary(groups.load(root), cards), "scope": "search" if scoped else "library"}
+        info = self._group_call(groups.state, root)
+        extra = {k: info[k] for k in ("broken_copy",) if k in info}
+        return {**groups.summary(info["items"], cards), "scope": "search" if scoped else "library",
+                "broken": info["broken"], "newer": info["newer"], **extra}
 
     def create_group(self, body: dict | None) -> dict:
-        """Новая группа {"name", "color"?}; {"id", "name", "color", "index"} —
-        вернуть удалённую на место («Отменить») или назвать неизвестную."""
+        """Новая группа {"name", "color"?}; {"id", "name", "color", "index",
+        "created_at"?} — вернуть удалённую на место («Отменить») или назвать
+        неизвестную. Отложен битый файл групп — `moved_broken` в ответе."""
         from meet import groups, search
 
         body = body if isinstance(body, dict) else {}
         root = self._root()
         taken = {g for card in search.cards(root) for g in card.get("groups") or ()}
         got = self._group_call(groups.create, root, body.get("name"), body.get("color"),
-                               gid=body.get("id"), index=body.get("index"), taken=taken)
-        self._groups_changed("create", got["id"])
+                               gid=body.get("id"), index=body.get("index"), taken=taken,
+                               created_at=body.get("created_at"))
+        self._groups_changed("create", got["id"], got.get("moved_broken"))
         return got
 
     def patch_group(self, gid: str, body: dict | None) -> dict:
@@ -2031,26 +2045,29 @@ class TrayControl:
         got = self._group_call(groups.update, self._root(), gid, name=body.get("name"),
                                color=body.get("color"))
         if "error" not in got:
-            self._groups_changed("update", gid)
+            self._groups_changed("update", gid, got.get("moved_broken"))
         return got
 
     def delete_group(self, gid: str) -> dict:
         """Убрать группу из списка → {"group", "index"}; встречи остаются с её
-        id в meta.json (неизвестная группа), «Отменить» — create_group с id."""
+        id в meta.json (неизвестная группа), «Отменить» — create_group с id и
+        `created_at` удалённой."""
         from meet import groups
 
         got = self._group_call(groups.delete, self._root(), gid)
         if "error" not in got:
-            self._groups_changed("delete", gid)
+            self._groups_changed("delete", gid, got.get("moved_broken"))
         return got
 
     def order_groups(self, body: dict | None) -> dict:
+        """Новый порядок {"ids"} → {"groups"}; тот же порядок — без записи и события."""
         from meet import groups
 
         ids = (body or {}).get("ids") if isinstance(body, dict) else None
         got = self._group_call(groups.reorder, self._root(), ids)
-        self._groups_changed("order")
-        return {"groups": got}
+        if got["changed"]:
+            self._groups_changed("order", None, got.get("moved_broken"))
+        return {k: v for k, v in got.items() if k != "changed"}
 
     def group_members(self, gid: str, body: dict | None) -> dict:
         """{"add"?: [id записи], "remove"?: [...]} → {"changed", "failed"}.
