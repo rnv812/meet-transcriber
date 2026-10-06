@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import dataclasses
 import json
 
 import pytest
@@ -135,8 +136,11 @@ def _live(w, monkeypatch, *, act):
     monkeypatch.setattr("meet.llm.claude_stream.Conversation", FakeConversation)
     monkeypatch.setattr("meet.asr.Transcriber", lambda: object())
     monkeypatch.setattr("meet.live.LiveEngine", FakeEngine)
+    # Подсказки и «Спросить» — прежний ассистент (без агента-участника).
+    cfg = settings.load()
+    cfg = dataclasses.replace(cfg, assist=dataclasses.replace(cfg.assist, participant=False))
     app_mod.run_assist(out_root=str(w["rec"] / "live"), no_voices=True, open_browser=False,
-                       port=0, cfg=settings.load())
+                       port=0, cfg=cfg)
     w["replies"]["text"] = '{"ops": []}'
     if act == "tick":
         asyncio.run(made["digester"].tick_once())

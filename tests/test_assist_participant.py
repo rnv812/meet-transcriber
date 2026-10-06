@@ -994,3 +994,13 @@ def test_settings_have_participant_and_frequency():
     assert b.participant is False and b.frequency == "less"
     assert b.to_raw()["participant"] is False and b.to_raw()["frequency"] == "less"
     assert Settings.from_raw({"assist": {"frequency": "always"}}).assist.frequency == "more"
+
+
+def test_configured_model_reaches_the_participant(tmp_path):
+    from meet.assist import app as app_mod
+
+    cfg = Settings.from_raw({"llm": {"model": "opus"}, "assist": {"frequency": "normal"}})
+    folder = tmp_path / "rec" / "2026-10-07_10-00"
+    p = app_mod._make_participant(cfg, TranscriptBus(), folder, "claude-code", None)
+    assert p._model == "opus" and p.label == "Claude Code (opus)"
+    assert p.frequency == "обычно" and p._library_root == folder.parent
