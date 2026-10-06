@@ -34,6 +34,10 @@ CATCHUP_THREADS = 4
 # убит посреди догонялки — они не пропадут; слияние — в конце или при новом
 # включении ассистента в эту запись).
 CATCHUP_SIDE = "live_transcript.catchup.md"
+# Перезапись ленты не прошла (файл держит другой процесс) — повтор через
+# REWRITE_RETRY_S, дальше пауза удваивается до REWRITE_RETRY_MAX_S.
+REWRITE_RETRY_S = 1.0
+REWRITE_RETRY_MAX_S = 30.0
 # Дорожки записи резидента (отвод `meet.pcm_tap`) → ключ дорожки движка,
 # нормализовать ли, опознавать ли голос (как у собственного захвата).
 # Микрофон тоже опознаётся: голоса делит meet.live_voices — только при
@@ -335,6 +339,8 @@ class LiveEngine:
         # подпись может смениться задним числом.
         self._voiced: list[dict] = []
         self._file_dirty = False  # перезапись ленты не прошла — повторить
+        self._retry_wait = 0.0  # пауза до повтора (растёт), секунды
+        self._retry_at = 0.0  # monotonic, раньше которого не повторяем
         self.out_root = Path(out_root) if out_root is not None else self.out_dir.parent
         self._lock_path: Path | None = None  # наш .recording.lock, пока держим
         # Голоса (meet.voice_id.VoiceMatcher, duck-typed): онлайн-кластеры
@@ -675,38 +681,53 @@ class LiveEngine:
         live = [r for r in self._voiced
                 if not r["catchup"] and (r["gone"] or r["file_line"] != r["line"])]
         side = [r for r in self._voiced if r["catchup"] and r["file_line"] != r["line"]]
-        dirty = False
+        errors = []
         if live:
             if self._out is not None:
                 self._out.close()
                 self._out = None
-            if self._rewrite(self._transcript,
-                             [(r["file_line"], None if r["gone"] else r["line"]) for r in live]):
+            error = self._rewrite(self._transcript,
+                                  [(r["file_line"], None if r["gone"] else r["line"]) for r in live])
+            if error is None:
                 for r in live:
                     r["file_line"] = r["line"]
                 self._voiced = [r for r in self._voiced if not r["gone"]]
             else:
-                dirty = True
-        if side and self._rewrite(self.out_dir / CATCHUP_SIDE,
-                                  [(r["file_line"], r["line"]) for r in side]):
-            for r in side:
-                r["file_line"] = r["line"]
-        self._file_dirty = dirty
+                errors.append(error)
+        if side:
+            error = self._rewrite(self.out_dir / CATCHUP_SIDE, [(r["file_line"], r["line"]) for r in side])
+            if error is None:
+                for r in side:
+                    r["file_line"] = r["line"]
+            else:
+                errors.append(error)  # запасной файл нужен после сбоя ассистента — тоже повторяем
+        if not errors:
+            if self._file_dirty:
+                self._say("лента переписана")
+            self._file_dirty, self._retry_wait = False, 0.0
+            return
+        # Файл держит другой процесс: повтор с растущей паузой (1, 2, 4… до
+        # RETRY_MAX_S), в журнал — одна строка на серию сбоев.
+        if not self._file_dirty:
+            self._say(f"лента не переписана, повторю ({errors[0]})")
+        self._file_dirty = True
+        self._retry_wait = min(max(self._retry_wait * 2, REWRITE_RETRY_S), REWRITE_RETRY_MAX_S)
+        self._retry_at = time.monotonic() + self._retry_wait
 
     def _rewrite(self, path: Path, swaps: list) -> bool:
         """Атомарно (tmp + replace) заменить строки файла; каждая замена — у
         последнего ещё не тронутого вхождения (наши строки дописаны после
-        ленты прошлого включения ассистента). → False — файл не переписан
-        (повторить позже); нечего менять или файла нет — True."""
+        ленты прошлого включения ассистента). → текст ошибки (файл не
+        переписан — повторить позже); переписан, нечего менять или файла нет —
+        None."""
         import os
 
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except FileNotFoundError:
-            return True
+            return None
         except OSError as e:
-            self._say(f"лента не прочитана ({type(e).__name__}: {e})")
-            return False
+            return f"{path.name} не прочитан: {type(e).__name__}: {e}"
         used: set[int] = set()
         drop: set[int] = set()
         for old, new in swaps:
@@ -720,7 +741,7 @@ class LiveEngine:
             else:
                 lines[i] = new
         if not used:
-            return True
+            return None
         tmp = path.with_name(path.name + ".tmp")
         try:
             tmp.write_text("".join(line + "\n" for k, line in enumerate(lines) if k not in drop),
@@ -728,9 +749,8 @@ class LiveEngine:
             os.replace(tmp, path)
         except OSError as e:
             tmp.unlink(missing_ok=True)
-            self._say(f"лента не переписана, повторю ({type(e).__name__}: {e})")
-            return False
-        return True
+            return f"{path.name}: {type(e).__name__}: {e}"
+        return None
 
     def _windows(self, final: bool) -> int:
         """Распознать созревшие окна дорожек по очереди (по окну за круг —
@@ -756,7 +776,7 @@ class LiveEngine:
             done = self._windows(final=False)
             if self._dupes is not None and self._dupes.pending():
                 self._flush_dupes()  # задержанные строки — не дольше HOLD_MAX_S
-            if self._file_dirty:
+            if self._file_dirty and time.monotonic() >= self._retry_at:
                 self._sync_files()  # прошлая перезапись ленты не прошла
             return done
 

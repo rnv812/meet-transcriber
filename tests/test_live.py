@@ -1530,10 +1530,86 @@ def test_dirty_transcript_retried_on_next_step_and_at_stop(tmp_path, monkeypatch
             return [("x/sys:0", "Демьян")]
 
     engine._apply_renames(Drain())  # первая попытка — сбой
-    engine.step()  # повтор на следующем такте — снова сбой
+    engine._retry_at = 0.0  # пауза до повтора вышла
+    engine.step()  # повтор на такте — снова сбой
     assert engine._file_dirty
-    engine.stop()  # и при остановке — прошла
+    engine.stop()  # и при остановке (без паузы) — прошла
     assert (tmp_path / "live_transcript.md").read_text(encoding="utf-8") == "[00:00:01] Демьян: привет\n"
+
+
+def test_rewrite_retry_backs_off_and_logs_once_per_streak(tmp_path, monkeypatch):
+    """Ревью, раунд 2: пока файл держат, повтор — не каждые 0,25 с, а с
+    растущей паузой 1, 2, 4… до 30 с; в журнал — одна строка на серию."""
+    import os
+
+    real = os.replace
+    attempts = []
+    state = {"fail": True}
+
+    def replace(a, b):
+        attempts.append(1)
+        if state["fail"]:
+            raise PermissionError("открыт")
+        return real(a, b)
+
+    lines = []
+    engine = LiveEngine(tmp_path, FakeTranscriber([]), log=lines.append)
+    engine._emit("[00:00:01] Собеседник: привет",
+                 {"t": 1.0, "speaker": "Собеседник", "text": "привет", "voice": "x/sys:0"})
+    monkeypatch.setattr(os, "replace", replace)
+
+    class Drain:
+        def drain(self):
+            return [("x/sys:0", "Демьян")]
+
+    engine._apply_renames(Drain())
+    assert len(attempts) == 1 and engine._retry_wait == 1.0
+    engine.step()
+    engine.step()
+    assert len(attempts) == 1  # пауза не вышла — файл не трогаем
+    waits = []
+    for _ in range(7):
+        engine._retry_at = 0.0
+        engine.step()
+        waits.append(engine._retry_wait)
+    assert waits == [2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0]
+    assert sum("лента не переписана" in line for line in lines) == 1
+    state["fail"] = False
+    engine._retry_at = 0.0
+    engine.step()
+    assert not engine._file_dirty and engine._retry_wait == 0.0
+    assert (tmp_path / "live_transcript.md").read_text(encoding="utf-8") == "[00:00:01] Демьян: привет\n"
+    assert any(line == "лента переписана" for line in lines)
+
+
+def test_failed_catchup_side_file_write_is_retried(tmp_path, monkeypatch):
+    import os
+
+    real = os.replace
+    state = {"fail": True}
+
+    def replace(a, b):
+        if state["fail"] and str(b).endswith(".catchup.md"):
+            raise PermissionError("открыт")
+        return real(a, b)
+
+    engine = LiveEngine(tmp_path, FakeTranscriber([]), log=lambda line: None)
+    engine._emit("[00:00:01] Собеседник: начало",
+                 {"t": 1.0, "speaker": "Собеседник", "text": "начало", "voice": "x/sys:0", "catchup": True})
+    monkeypatch.setattr(os, "replace", replace)
+
+    class Drain:
+        def drain(self):
+            return [("x/sys:0", "Демьян")]
+
+    engine._apply_renames(Drain())
+    assert engine._file_dirty and engine._catch_lines == ["[00:00:01] Демьян: начало"]
+    state["fail"] = False
+    engine._retry_at = 0.0
+    engine.step()
+    assert not engine._file_dirty
+    side = (tmp_path / "live_transcript.catchup.md").read_text(encoding="utf-8")
+    assert side == "[00:00:01] Демьян: начало\n"
 
 
 def test_live_line_equal_to_a_catchup_line_goes_to_the_file(tmp_path):
