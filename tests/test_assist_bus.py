@@ -128,3 +128,13 @@ def test_relabel_line_keeps_other_lines():
     assert relabel_line("[00:01:02] Собеседник: да: нет", "Собеседник", "Демьян") == "[00:01:02] Демьян: да: нет"
     assert relabel_line("<!-- ошибка -->", "Собеседник", "Демьян") == "<!-- ошибка -->"
     assert relabel_line("[00:01:02] Вы: да", "Собеседник", "Демьян") == "[00:01:02] Вы: да"
+
+
+def test_each_bus_has_its_own_session_and_visible_lines():
+    a, b = TranscriptBus(), TranscriptBus()
+    assert a.session and a.session != b.session
+    for t in range(3):
+        a.publish(f"l{t}")
+    a.hide([1])
+    assert a.visible_since(0) == ["l0", "l2"]
+    assert a.visible_since(2) == ["l2"]

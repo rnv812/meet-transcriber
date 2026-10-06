@@ -11,7 +11,8 @@ SSE шлёт `event: state` (`state.view()`: сводка, подсказки, �
 когда меняется она, `event: qa_partial` (`{"id", "a"}` — ответ, который ещё
 пишется), `event: line` с `{"t", "speaker", "text", "voice"?}` на каждую новую
 строку ленты и `event: voices` (`{"rev", "speakers", "hidden"}`: подписи голосов,
-пришедшие задним числом, и номера спрятанных строк-дублей) — при каждом
+пришедшие задним числом, номера спрятанных строк-дублей и `session` —
+метка ассистента, к которой относятся номера) — при каждом
 подключении и при смене `rev`; это состояние, а не дельта, и без `id:`. Поток не опрашивает состояние по таймеру: он ждёт сигнала
 `state.changes` (`Notifier`) и шлёт изменения сразу; в тишине — комментарий
 `: keepalive` раз в KEEPALIVE_S. Хвост ленты строками (`transcript` в `state`) — только по
@@ -168,8 +169,9 @@ def build_app(state) -> web.Application:
                 if snapshot != sent:
                     view = state.view()
                     if with_transcript:
-                        lines, _ = state.bus.since(
-                            max(0, state.bus.size() - TRANSCRIPT_TAIL))
+                        start = max(0, state.bus.size() - TRANSCRIPT_TAIL)
+                        visible = getattr(state.bus, "visible_since", None)
+                        lines = visible(start) if visible is not None else state.bus.since(start)[0]
                         view = {**view, "transcript": lines}
                     await resp.write(_event("state", view))
                     sent = snapshot
@@ -190,8 +192,9 @@ def build_app(state) -> web.Application:
                 if voices_of is not None:
                     rev, speakers, hidden = voices_of()
                     if rev != sent_voices:
-                        await resp.write(_event("voices", {"rev": rev, "speakers": speakers,
-                                                           "hidden": hidden}))
+                        await resp.write(_event("voices", {
+                            "rev": rev, "speakers": speakers, "hidden": hidden,
+                            "session": getattr(state.bus, "session", None)}))
                         sent_voices = rev
                         wrote = True
                 entries, size = state.bus.entries_since(cursor)

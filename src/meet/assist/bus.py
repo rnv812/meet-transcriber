@@ -1,3 +1,4 @@
+import secrets
 import threading
 
 from meet.assist.notify import Notifier
@@ -21,6 +22,10 @@ class TranscriptBus:
     Записи не правятся на месте — заменяются копией: другой поток может как
     раз сериализовать прежнюю.
 
+    `session` — метка этой шины (этого ассистента): номера строк и спрятанные
+    у нового ассистента в той же записи начинаются заново, окно по метке
+    отличает их от прежних.
+
     Каждая новая строка и перемена — сигнал `changed` (`Notifier`): тикер
     подсказок и SSE ждут его, а не опрашивают шину по таймеру. `changed`
     можно передать свой — общий сигнал ассистента (строки, сводка, ответы).
@@ -33,6 +38,7 @@ class TranscriptBus:
         self._voices: dict[str, str] = {}
         self._hidden: set[int] = set()
         self._voices_rev = 0
+        self.session = secrets.token_hex(4)
         self.changed = changed if changed is not None else Notifier()
 
     def publish(self, line: str, entry: dict | None = None) -> int:
@@ -89,6 +95,12 @@ class TranscriptBus:
     def hidden(self) -> set[int]:
         with self._lock:
             return set(self._hidden)
+
+    def visible_since(self, index: int) -> list[str]:
+        """Строки с номера `index` без спрятанных дублей."""
+        with self._lock:
+            return [line for i, line in enumerate(self._lines[index:], start=index)
+                    if i not in self._hidden]
 
     def since(self, index: int) -> tuple[list[str], int]:
         with self._lock:

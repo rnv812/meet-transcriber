@@ -740,9 +740,10 @@ export type LiveLine = { t: number; speaker: string | null; text: string; catchu
  * `event: voices`: подписи голосов, пришедшие задним числом (`speakers`:
  * ключ голоса → подпись), и номера спрятанных строк-дублей (`hidden`, как
  * `id:` строк). Состояние целиком, а не дельта: приходит при каждом
- * подключении и при каждой смене `rev`.
+ * подключении и при каждой смене `rev`. `session` — метка ассистента: номера
+ * строк у нового ассистента в той же записи начинаются заново.
  */
-export type LiveVoices = { rev: number; speakers: Record<string, string>; hidden: number[] };
+export type LiveVoices = { rev: number; speakers: Record<string, string>; hidden: number[]; session?: string };
 
 // --- анализ встречи (analysis.json, M2) ------------------------------------------
 

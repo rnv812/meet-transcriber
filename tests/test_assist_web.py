@@ -444,20 +444,24 @@ def test_sse_sends_voices_on_connect_and_on_change():
                 first = await _read_events(resp, 4)
                 voices = next(e for e in first if e[0] == "voices")
                 assert voices[1] is None
-                assert voices[2] == {"rev": 0, "speakers": {}, "hidden": []}
+                session = state.bus.session
+                assert voices[2] == {"rev": 0, "speakers": {}, "hidden": [], "session": session}
                 line = next(e for e in first if e[0] == "line")
                 assert line[2]["voice"] == "sys:0"
                 state.bus.relabel("sys:0", "Демьян")
                 again = await _read_events(resp, 1)
                 assert again[0][0] == "voices" and again[0][1] is None
-                assert again[0][2] == {"rev": 1, "speakers": {"sys:0": "Демьян"}, "hidden": []}
+                assert again[0][2] == {"rev": 1, "speakers": {"sys:0": "Демьян"}, "hidden": [],
+                                       "session": session}
                 state.bus.hide([0])
                 hidden = await _read_events(resp, 1)
-                assert hidden[0][2] == {"rev": 2, "speakers": {"sys:0": "Демьян"}, "hidden": [0]}
+                assert hidden[0][2] == {"rev": 2, "speakers": {"sys:0": "Демьян"}, "hidden": [0],
+                                        "session": session}
             # Переподключение после всех строк: состояние голосов — сразу.
             async with client.get("/events", headers={"Last-Event-ID": "0"}) as resp:
                 events = await _read_events(resp, 3)
-                assert ("voices", None, {"rev": 2, "speakers": {"sys:0": "Демьян"}, "hidden": [0]}) in events
+                assert ("voices", None, {"rev": 2, "speakers": {"sys:0": "Демьян"}, "hidden": [0],
+                                         "session": state.bus.session}) in events
                 assert not [e for e in events if e[0] == "line"]
 
     _run(scenario())
@@ -475,5 +479,22 @@ def test_page_transcript_follows_relabel():
                 events = await _read_events(resp, 2)
                 st = next(e for e in events if e[0] == "state")
                 assert st[2]["transcript"] == ["[00:00:03] Демьян: привет"]
+
+    _run(scenario())
+
+
+def test_page_transcript_drops_hidden_duplicates():
+    """Ревью M6: спрятанная строка-дубль не видна и на странице `?transcript=1`."""
+    async def scenario():
+        state = BusState()
+        state.bus.publish("[00:00:01] Вы: своё", {"t": 1.0, "speaker": "Вы", "text": "своё"})
+        state.bus.publish("[00:00:02] Собеседник рядом: копия",
+                          {"t": 2.0, "speaker": "Собеседник рядом", "text": "копия", "voice": "x/mic:0"})
+        state.bus.hide([1])
+        async with TestClient(TestServer(build_app(state))) as client:
+            async with client.get("/events?transcript=1") as resp:
+                events = await _read_events(resp, 5)
+                st = next(e for e in events if e[0] == "state")
+                assert st[2]["transcript"] == ["[00:00:01] Вы: своё"]
 
     _run(scenario())

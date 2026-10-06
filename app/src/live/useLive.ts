@@ -18,7 +18,10 @@
  * событие `voices` — карта «ключ голоса → подпись» и номера спрятанных
  * строк-дублей, состояние целиком. Строки хранятся как пришли, а лента
  * показывает их через карту (`useMemo`); при каждом подключении ассистент
- * шлёт карту заново — переподключение и новый ассистент её не путают.
+ * шлёт карту заново — переподключение и новый ассистент её не путают. Ключи
+ * голосов несут метку сеанса ассистента, а номера спрятанных строк относятся
+ * только к строкам того же ассистента (`session`): строка помнит, от какого
+ * ассистента пришла.
  *
  * Действие с подсказкой (закрепить, скрыть) видно сразу, до ответа
  * ассистента: оно лежит поверх его состояния, пока следующее `state` не
@@ -39,8 +42,9 @@ const NO_LINK = "Нет связи с ассистентом — перепод�
 /** Частичный ответ в окне — не чаще раза в 100 мс (≤ 10 обновлений в секунду). */
 export const PARTIAL_MS = 100;
 
-/** Строка ленты с её номером в потоке (`id:` события; null — без номера). */
-export type FeedLine = LiveLine & { id: number | null };
+/** Строка ленты с её номером в потоке (`id:` события; null — без номера) и
+ * меткой ассистента, от которого пришла (`session`). */
+export type FeedLine = LiveLine & { id: number | null; session?: string };
 
 /**
  * Новая строка в ленту. Строка догнанного начала встречи (`catchup`)
@@ -97,14 +101,14 @@ export type Live = {
 };
 
 /** Подписи голосов задним числом и спрятанные строки (`event: voices`). */
-type Voices = { speakers: Record<string, string>; hidden: Set<number> };
+type Voices = { speakers: Record<string, string>; hidden: Set<number>; session?: string };
 const NO_VOICES: Voices = { speakers: {}, hidden: new Set() };
 
 /** Лента глазами человека: без спрятанных дублей, с подписями голосов на сейчас. */
 export function voicedLines(lines: FeedLine[], voices: Voices): FeedLine[] {
   if (!voices.hidden.size && !Object.keys(voices.speakers).length) return lines;
   return lines
-    .filter((l) => l.id === null || !voices.hidden.has(l.id))
+    .filter((l) => l.id === null || l.session !== voices.session || !voices.hidden.has(l.id))
     .map((l) => {
       const speaker = l.voice ? voices.speakers[l.voice] : undefined;
       return speaker !== undefined && speaker !== l.speaker ? { ...l, speaker } : l;
@@ -146,6 +150,7 @@ export function useLive(ep: Endpoint | null, active = true): Live {
   const [hintError, setHintError] = useState<{ id: string; text: string; action?: HintAction } | null>(null);
   const [voices, setVoices] = useState<Voices>(NO_VOICES);
   const lastId = useRef(-1);
+  const session = useRef<string | undefined>(undefined);
   const askSeq = useRef(0);
 
   useEffect(() => {
@@ -205,11 +210,13 @@ export function useLive(ep: Endpoint | null, active = true): Live {
             if (id <= lastId.current) return;
             lastId.current = id;
           }
-          setLines((cur) => addLine(cur, { ...line, id }));
+          const from = session.current;
+          setLines((cur) => addLine(cur, { ...line, id, ...(from ? { session: from } : {}) }));
         },
         onVoices: (v) => {
           alive();
-          setVoices({ speakers: v.speakers, hidden: new Set(v.hidden) });
+          session.current = v.session;
+          setVoices({ speakers: v.speakers, hidden: new Set(v.hidden), session: v.session });
         },
         onError: (gaveUp) => {
           if (!gaveUp || closed) return; // браузер переподключится сам

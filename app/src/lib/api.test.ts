@@ -129,8 +129,10 @@ test("openLiveEvents: voices — подписи голосов и спрятан
   const source = FakeEventSource.instances.at(-1)!;
   source.emit("voices", { rev: 2, speakers: { "sys:0": "Демьян", "sys:1": 5 }, hidden: [3, "x"] });
   expect(onVoices).toHaveBeenCalledWith({ rev: 2, speakers: { "sys:0": "Демьян" }, hidden: [3] });
+  source.emit("voices", { rev: 3, speakers: {}, hidden: [], session: "ab12" });
+  expect(onVoices).toHaveBeenLastCalledWith({ rev: 3, speakers: {}, hidden: [], session: "ab12" });
   source.emit("voices", { speakers: {} });
-  expect(onVoices).toHaveBeenCalledTimes(1);
+  expect(onVoices).toHaveBeenCalledTimes(2);
 });
 
 test("openLiveEvents: onError говорит, сдался ли браузер (409) или переподключается сам", () => {

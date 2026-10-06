@@ -226,6 +226,30 @@ test("имя голоса задним числом: прежние строки
   expect(result.current.lines[0]).toEqual({ ...said(0, "sys:0"), id: 0, speaker: "Демьян" });
 });
 
+test("новый ассистент: его имена и спрятанные номера не ложатся на строки прежнего", async () => {
+  vi.useFakeTimers();
+  const { result } = renderHook(() => useLive(ep));
+  const first = liveSources().at(-1)!;
+  act(() => {
+    first.emit("voices", { rev: 0, speakers: {}, hidden: [], session: "a" });
+    first.emit("line", { t: 0, speaker: "Собеседник", text: "старая", voice: "a1/sys:0" }, 0);
+    first.emit("line", { t: 1, speaker: "Собеседник", text: "ещё старая", voice: "a1/sys:0" }, 1);
+  });
+  act(() => first.fail(true));
+  await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+  const second = liveSources().at(-1)!;
+  // Новый ассистент нумерует заново: его sys:0 и строка №1 — другие.
+  act(() => {
+    second.emit("voices", { rev: 2, speakers: { "b2/sys:0": "Демьян" }, hidden: [1], session: "b" });
+    second.emit("line", { t: 5, speaker: "Демьян", text: "новая", voice: "b2/sys:0" }, 2);
+  });
+  expect(result.current.lines.map((l) => [l.text, l.speaker])).toEqual([
+    ["старая", "Собеседник"], ["ещё старая", "Собеседник"], ["новая", "Демьян"],
+  ]);
+  act(() => second.emit("voices", { rev: 3, speakers: { "b2/sys:0": "Демьян" }, hidden: [1, 2], session: "b" }));
+  expect(result.current.lines.map((l) => l.text)).toEqual(["старая", "ещё старая"]);
+});
+
 test("переподключение: карта голосов — заново с каждого подключения", async () => {
   vi.useFakeTimers();
   const { result } = renderHook(() => useLive(ep));

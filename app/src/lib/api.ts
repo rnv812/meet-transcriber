@@ -668,7 +668,8 @@ export function openLiveEvents(
       }
     }
     const hidden = Array.isArray(data.hidden) ? data.hidden.filter((i): i is number => typeof i === "number") : [];
-    handlers.onVoices?.({ rev: data.rev, speakers, hidden });
+    const session = typeof data.session === "string" ? data.session : undefined;
+    handlers.onVoices?.({ rev: data.rev, speakers, hidden, ...(session ? { session } : {}) });
   });
   source.onerror = () => handlers.onError?.(source.readyState === EventSource.CLOSED);
   return { close: () => source.close() };
