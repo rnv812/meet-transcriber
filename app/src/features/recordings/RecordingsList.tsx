@@ -5,7 +5,7 @@ import type { Resident } from "../../state/useResident";
 import type { Library } from "../../state/useLibrary";
 import { deleteRecording, kbExport, mergeRecordings, patchRecording, setRecordingCategory } from "../../lib/api";
 import {
-  defaultOpen, groupBySection, loadSectionPrefs, saveSectionPrefs, withPref, type DateSection, type SectionPrefs,
+  daysBefore, defaultOpen, groupBySection, loadSectionPrefs, saveSectionPrefs, withPref, type DateSection, type SectionPrefs,
 } from "../../lib/dateSections";
 import { errorText, plural } from "../../lib/format";
 import { searchable } from "../../lib/search";
@@ -55,13 +55,25 @@ const NO_FILTER: string[] = [];
 /** Итог действия из меню: строка над списком, закрывается «×». */
 type Notice = { text: string; error: boolean };
 
-/** Сегодняшняя дата для разделов; в полночь — новая («Сегодня» становится «Вчера»). */
-function useToday(): Date {
+/**
+ * Сегодняшняя дата для разделов; в полночь — новая («Сегодня» становится
+ * «Вчера»). После сна машины таймер опаздывает — поэтому и сверка, когда окно
+ * снова видно или в фокусе.
+ */
+export function useToday(): Date {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
+    const check = () => setNow((cur) => { const at = new Date(); return daysBefore(cur, at) === 0 ? cur : at; });
     const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 1);
-    const timer = setTimeout(() => setNow(new Date()), Math.max(1000, midnight.getTime() - Date.now()));
-    return () => clearTimeout(timer);
+    const timer = setTimeout(check, Math.max(1000, midnight.getTime() - Date.now()));
+    const onVisible = () => { if (document.visibilityState === "visible") check(); };
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [now]);
   return now;
 }
@@ -72,8 +84,21 @@ function foundLine(n: number, places: number | null): string {
   return `Найдено: ${meetings}${places ? `, ${places} ${plural(places, "место", "места", "мест")}` : ""}`;
 }
 
-/** Где Ctrl+K не уводит к поиску списка. */
-const KEEP_CTRL_K = "[data-agent-terminal], .xterm, textarea, [contenteditable=''], [contenteditable='true']";
+/**
+ * Где Ctrl+K не уводит к поиску списка: в любом поле ввода текста (там это
+ * клавиша самого поля), в терминале агента (xterm: «стереть до конца строки»)
+ * и под открытым окном или меню.
+ */
+const KEEP_CTRL_K = "textarea, select, [contenteditable=''], [contenteditable='true'], .xterm, [data-agent-terminal], "
+  + "[role=dialog], [role=alertdialog], [aria-modal=true], [role=menu]";
+/** Поля, которые не про текст: из них Ctrl+K к поиску уводит. */
+const NOT_TEXT = new Set(["checkbox", "radio", "button", "submit", "reset", "range", "color", "file", "image"]);
+
+function keepsCtrlK(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target instanceof HTMLInputElement && !NOT_TEXT.has(target.type)) return true;
+  return target.closest(KEEP_CTRL_K) !== null;
+}
 
 /** Запись ещё пишется или обрабатывается — объединять её нельзя: звук не окончательный. */
 const busy = (st: RecStatus) => st.kind === "recording" || st.kind === "queued" || st.kind === "running";
@@ -177,14 +202,15 @@ export function RecordingsList({
   const [inSearch, setInSearch] = useState<SectionPrefs>({});
   useEffect(() => { if (!searching) setInSearch({}); }, [searching]);
   const isOpen = (s: DateSection) => (searching ? inSearch[s.key] ?? true : session[s.key] ?? prefs[s.key] ?? defaultOpen(s));
-  const setOpen = (sections: DateSection[], open: boolean) => {
+  /** Свернуть или развернуть разделы: [раздел, развёрнут] — одним изменением. */
+  const setOpen = (changes: [DateSection, boolean][]) => {
     if (searching) {
-      setInSearch((cur) => ({ ...cur, ...Object.fromEntries(sections.map((s) => [s.key, open])) }));
+      setInSearch((cur) => ({ ...cur, ...Object.fromEntries(changes.map(([s, open]) => [s.key, open])) }));
       return;
     }
-    const keys = new Set(sections.map((s) => s.key));
+    const keys = new Set(changes.map(([s]) => s.key));
     setSession((cur) => Object.fromEntries(Object.entries(cur).filter(([k]) => !keys.has(k))));
-    const next = sections.reduce((acc, s) => withPref(acc, s.key, open, defaultOpen(s)), prefs);
+    const next = changes.reduce((acc, [s, open]) => withPref(acc, s.key, open, defaultOpen(s)), prefs);
     setPrefs(next);
     saveSectionPrefs(next);
   };
@@ -207,8 +233,7 @@ export function RecordingsList({
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.code !== "KeyK" || e.defaultPrevented) return;
-      // В терминале агента и в многострочной правке Ctrl+K — их собственная клавиша.
-      if (e.target instanceof Element && e.target.closest(KEEP_CTRL_K)) return;
+      if (keepsCtrlK(e.target)) return;
       const box = root.current?.querySelector<HTMLInputElement>("input[type=search]");
       if (!box) return;
       e.preventDefault();
@@ -219,6 +244,16 @@ export function RecordingsList({
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
+  // Открытая запись видна: при открытии и когда её раздел развернули (в том числе снова).
+  const selectedOpen = selectedKey ? isOpen(groups.find((g) => g.section.key === selectedKey)!.section) : false;
+  useEffect(() => {
+    if (!selected || !selectedOpen) return;
+    const row = [...(root.current?.querySelectorAll<HTMLElement>("[data-rec-id]") ?? [])]
+      .find((el) => el.dataset.recId === selected);
+    // Под прилипшим заголовком раздела не прячется: у .pane-list есть scroll-padding-top.
+    row?.scrollIntoView?.({ block: "nearest" });
+  }, [selected, selectedOpen]);
+
   // --- выбор нескольких записей ---------------------------------------------------
 
   // Shift-диапазон и Ctrl+A — по видимым строкам: свёрнутые разделы не задеваются.
@@ -228,7 +263,9 @@ export function RecordingsList({
   const chosen = groups.flatMap((g) => g.items.map((r) => r.id)).filter((id) => pickedNow.has(id));
   const picking = chosen.length > 0;
   const pickedSet = new Set(chosen);
-  const statuses = new Map(library.items.map((rec) => [rec.id, statusOf(rec, library.jobs, snapshot)]));
+  // Один раз на смену библиотеки и задач: строки мемоизированы и сравнивают статус по ссылке.
+  const statuses = useMemo(() => new Map(library.items.map((rec) => [rec.id, statusOf(rec, library.jobs, snapshot)])),
+    [library.items, library.jobs, snapshot]);
 
   const clearPicks = () => { setPicked([]); setAnchor(null); };
   const pick = (id: string, how: PickHow) => {
@@ -251,6 +288,11 @@ export function RecordingsList({
     setPicked(on ? [...new Set([...chosen, ...these])] : chosen.filter((id) => !these.has(id)));
   };
   const select = (id: string) => { clearPicks(); onSelect(id); };
+  // Строкам — постоянные обработчики (иначе memo строки бесполезен), внутри — свежие замыкания.
+  const handlers = useRef({ pick, select });
+  handlers.current = { pick, select };
+  const stablePick = useCallback((id: string, how: PickHow) => handlers.current.pick(id, how), []);
+  const stableSelect = useCallback((id: string) => handlers.current.select(id), []);
   const onListKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).tagName === "INPUT" && (e.target as HTMLInputElement).type === "text") return;
     if ((e.ctrlKey || e.metaKey) && e.code === "KeyA") {
@@ -341,8 +383,9 @@ export function RecordingsList({
       <DateSections
         groups={groups}
         isOpen={isOpen}
-        onToggle={(s, open) => setOpen([s], open)}
-        onAll={(open) => setOpen(groups.map((g) => g.section), open)}
+        onToggle={(s, open) => setOpen([[s, open]])}
+        onAll={(open) => setOpen(groups.map((g) => [g.section, open]))}
+        onOthers={(s) => setOpen(groups.map((g) => [g.section, g.section.key === s.key]))}
         picking={picking}
         picked={pickedSet}
         onPickSection={endpoint ? pickSection : undefined}
@@ -355,12 +398,12 @@ export function RecordingsList({
             categories={categories}
             status={statuses.get(rec.id) ?? statusOf(rec, library.jobs, snapshot)}
             selected={rec.id === selected}
-            onSelect={select}
+            onSelect={stableSelect}
             onOpenHit={onOpenHit}
             actions={actions}
             picking={picking}
             picked={pickedSet.has(rec.id)}
-            onPick={endpoint ? pick : undefined}
+            onPick={endpoint ? stablePick : undefined}
             now={now}
           />
         )}

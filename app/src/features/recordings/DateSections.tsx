@@ -6,11 +6,11 @@
  * Клавиатура заголовка: Enter/Пробел — свернуть или развернуть, ← — свернуть,
  * → — развернуть, Alt+↑/↓ — к соседнему заголовку (из строки Alt+↑ — к
  * заголовку её раздела). Правая кнопка (Shift+F10) — меню «Свернуть все» /
- * «Развернуть все». В режиме выбора у заголовка — флажок раздела в трёх
+ * «Развернуть все» / «Свернуть остальные». В режиме выбора у заголовка — флажок раздела в трёх
  * состояниях: он берёт и строки свёрнутого раздела.
  */
 
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, ListCollapse } from "lucide-react";
 import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { DateSection, SectionGroup } from "../../lib/dateSections";
 import { Icon } from "../../ui/Icon";
@@ -19,13 +19,15 @@ import { ItemMenu } from "./ItemMenu";
 const ICON = { size: 16, strokeWidth: 1.75, "aria-hidden": true } as const;
 
 export function DateSections<T extends { id: string }>({
-  groups, isOpen, onToggle, onAll, picking = false, picked, onPickSection, renderItem, onKeyDown, multiselectable,
+  groups, isOpen, onToggle, onAll, onOthers, picking = false, picked, onPickSection, renderItem, onKeyDown, multiselectable,
 }: {
   groups: SectionGroup<T>[];
   isOpen: (section: DateSection) => boolean;
   onToggle: (section: DateSection, open: boolean) => void;
   /** «Свернуть все» / «Развернуть все». */
   onAll: (open: boolean) => void;
+  /** «Свернуть остальные»: этот раздел развернуть, все прочие свернуть. */
+  onOthers: (section: DateSection) => void;
   /** Режим выбора нескольких записей: у заголовков — флажки разделов. */
   picking?: boolean;
   picked?: ReadonlySet<string>;
@@ -38,7 +40,7 @@ export function DateSections<T extends { id: string }>({
 }) {
   const base = useId();
   const heads = useRef(new Map<string, HTMLButtonElement>());
-  const [menu, setMenu] = useState<{ at: { x: number; y: number } | null } | null>(null);
+  const [menu, setMenu] = useState<{ section: DateSection; at: { x: number; y: number } | null } | null>(null);
   /** Заголовок, у которого открыто меню: к нему меню прижимается и на него возвращается фокус. */
   const menuAnchor = useRef<HTMLButtonElement | null>(null);
   const keys = groups.map((g) => g.section.key);
@@ -90,7 +92,7 @@ export function DateSections<T extends { id: string }>({
                     e.preventDefault();
                     menuAnchor.current = e.currentTarget;
                     // Shift+F10 и клавиша меню приходят без координат указателя — меню под заголовком.
-                    setMenu({ at: e.clientX === 0 && e.clientY === 0 ? null : { x: e.clientX, y: e.clientY } });
+                    setMenu({ section, at: e.clientX === 0 && e.clientY === 0 ? null : { x: e.clientX, y: e.clientY } });
                   }}>
                   <Icon as={ChevronRight} size="sm" className="date-sec__chevron" />
                   {section.label}{" "}<span className="date-sec__count num">· {items.length}</span>
@@ -111,6 +113,8 @@ export function DateSections<T extends { id: string }>({
           items={[
             { label: "Свернуть все", icon: <ChevronsDownUp {...ICON} />, onSelect: () => { onAll(false); closeMenu(); } },
             { label: "Развернуть все", icon: <ChevronsUpDown {...ICON} />, onSelect: () => { onAll(true); closeMenu(); } },
+            { label: "Свернуть остальные", icon: <ListCollapse {...ICON} />, hint: `Оставить развёрнутым только «${menu.section.label}»`,
+              onSelect: () => { onOthers(menu.section); closeMenu(); } },
           ]} />
       )}
     </div>

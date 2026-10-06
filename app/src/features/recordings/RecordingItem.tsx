@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { TITLE_MAX } from "../../lib/api";
 import { clock, dayLabel, duration } from "../../lib/format";
 import { categoryOf, NO_CATEGORY_NAME } from "../../lib/categories";
@@ -75,7 +75,11 @@ const RENAME_HINT = "Двойной щелчок или F2 — переимен�
 /** Как отметить запись для групповых действий: Ctrl+щелчок — переключить, Shift+щелчок — диапазон. */
 export type PickHow = "toggle" | "range";
 
-export function RecordingItem({
+/**
+ * Строка записи. Мемоизирована: свернуть раздел или отметить запись — не
+ * перерисовывать тысячу прочих строк (у каждой свои хуки прогресса и агента).
+ */
+export const RecordingItem = memo(function RecordingItem({
   rec,
   status,
   selected,
@@ -202,7 +206,7 @@ export function RecordingItem({
   ];
 
   return (
-    <li className={`rec-item${selected ? " rec-item--selected" : ""}${picking ? " rec-item--picking" : ""}${
+    <li data-rec-id={rec.id} className={`rec-item${selected ? " rec-item--selected" : ""}${picking ? " rec-item--picking" : ""}${
       picked ? " rec-item--picked" : ""}${menu ? " rec-item--menu" : ""}`}
       onContextMenu={actions ? (e) => {
         if (editing) return;
@@ -300,4 +304,4 @@ export function RecordingItem({
       {more > 0 && <div className="rec-hits__more muted">Ещё совпадений: {more}</div>}
     </li>
   );
-}
+});

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingsList } from "./RecordingsList";
 import * as api from "../../lib/api";
@@ -10,6 +10,12 @@ vi.mock("../../lib/api", async (orig) => ({
   kbExport: vi.fn(async () => ({ path: "D:/База/2026-09-30 - Планёрка", files: [], kept: [] })),
   mergeRecordings: vi.fn(),
 }));
+// Строка записи зовёт useAgentLive на каждую отрисовку: по числу вызовов видно, сколько строк перерисовано.
+vi.mock("../card/agentSessions", async (orig) => {
+  const real = await orig<typeof import("../card/agentSessions")>();
+  return { ...real, useAgentLive: vi.fn(real.useAgentLive) };
+});
+import { useAgentLive } from "../card/agentSessions";
 const killed: string[] = [];
 vi.mock("../../lib/shell", async (orig) => ({
   ...(await orig<typeof import("../../lib/shell")>()),
@@ -480,7 +486,8 @@ test("меню заголовка: «Свернуть все», «Разверн
   setup({ library: datedLib, selected: null });
   fireEvent.contextMenu(head("Вчера"), { clientX: 30, clientY: 40 });
   const menu = screen.getByRole("menu", { name: "Разделы" });
-  expect(within(menu).getAllByRole("menuitem").map((m) => m.textContent)).toEqual(["Свернуть все", "Развернуть все"]);
+  expect(within(menu).getAllByRole("menuitem").map((m) => m.textContent))
+    .toEqual(["Свернуть все", "Развернуть все", "Свернуть остальные"]);
   await user.click(within(menu).getByRole("menuitem", { name: "Развернуть все" }));
   expect(expanded()).not.toContain("false");
   expect(stored()).toEqual({ "rest-y:2025": true, "y:2024": true });
@@ -555,12 +562,128 @@ test("Ctrl+K — к поиску списка", async () => {
   head("Сегодня").focus();
   await user.keyboard("{Control>}k{/Control}");
   expect(screen.getByRole("searchbox")).toHaveFocus();
-  // В терминале агента Ctrl+K — его клавиша.
-  const term = document.createElement("textarea");
-  term.setAttribute("data-agent-terminal", "");
-  document.body.append(term);
-  term.focus();
+  // Из флажка раздела (не текст) — тоже к поиску.
+  await user.click(screen.getByRole("searchbox"));
+  await user.type(screen.getByRole("searchbox"), "x");
+  mainOf("Утренняя").focus();
   await user.keyboard("{Control>}k{/Control}");
-  expect(term).toHaveFocus();
+  expect(screen.getByRole("searchbox")).toHaveFocus();
+});
+
+test("Ctrl+K не уводит из полей ввода и из терминала агента", async () => {
+  const user = userEvent.setup();
+  setup({ library: datedLib, selected: null });
+  // Переименование записи — обычное <input>.
+  mainOf("Утренняя").focus();
+  await user.keyboard("{F2}");
+  await user.keyboard("{Control>}k{/Control}");
+  expect(titleInput()).toHaveFocus();
+  await user.keyboard("{Escape}");
+  // Чужие поля: текст, textarea, select, contenteditable.
+  const field = (html: string) => {
+    const box = document.createElement("div");
+    box.innerHTML = html;
+    document.body.append(box);
+    return box;
+  };
+  for (const html of ['<input type="text">', "<textarea></textarea>", "<select><option>а</option></select>",
+    '<div contenteditable="true" tabindex="0"></div>']) {
+    const box = field(html);
+    const el = box.firstElementChild as HTMLElement;
+    el.focus();
+    expect(el).toHaveFocus();
+    await user.keyboard("{Control>}k{/Control}");
+    expect(el).toHaveFocus();
+    box.remove();
+  }
+  // Терминал агента (xterm.js): фокус на его элементе внутри .xterm.
+  const term = field('<div class="xterm"><div class="xterm-screen" tabindex="0"></div></div>');
+  const screenEl = term.querySelector<HTMLElement>(".xterm-screen")!;
+  screenEl.focus();
+  await user.keyboard("{Control>}k{/Control}");
+  expect(screenEl).toHaveFocus();
   term.remove();
+});
+
+test("«Свернуть остальные»: развёрнут только этот раздел", async () => {
+  const user = userEvent.setup();
+  setup({ library: datedLib, selected: null });
+  fireEvent.contextMenu(head("Сентябрь"), { clientX: 30, clientY: 40 });
+  await user.click(screen.getByRole("menuitem", { name: "Свернуть остальные" }));
+  expect(expanded()).toEqual(["false", "false", "true", "false", "false", "false"]);
+  expect(stored()).toEqual({ today: false, yesterday: false, none: false });
+  expect(head("Сентябрь")).toHaveFocus();
+  fireEvent.contextMenu(head("2024"), { clientX: 30, clientY: 40 });
+  await user.click(screen.getByRole("menuitem", { name: "Свернуть остальные" }));
+  expect(expanded()).toEqual(["false", "false", "false", "false", "true", "false"]);
+  expect(stored()).toEqual({ today: false, yesterday: false, none: false, "m:2026-09": false, "y:2024": true });
+});
+
+test("открытая запись прокручивается в видимую часть — и когда её раздел развернули снова", async () => {
+  const scrolled: string[] = [];
+  // jsdom не знает scrollIntoView: заводим, чтобы было что подменить.
+  if (!("scrollIntoView" in Element.prototype)) (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView = () => {};
+  const spy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(function (this: Element) {
+    scrolled.push((this as HTMLElement).dataset.recId ?? "?");
+  });
+  const user = userEvent.setup();
+  const props = { onSelect: vi.fn(), library: datedLib, resident, q: "", onQ: vi.fn() };
+  const { rerender } = render(<RecordingsList selected={null} {...props} />);
+  rerender(<RecordingsList selected="o2" {...props} />);
+  expect(scrolled).toEqual(["o2"]);
+  await user.click(head("2024"));
+  expect(screen.queryByText("Старая")).toBeNull();
+  await user.click(head("2024"));
+  expect(scrolled).toEqual(["o2", "o2"]);
+  spy.mockRestore();
+});
+
+test("в полночь «Сегодня» становится «Вчера»; после сна — при возврате к окну", () => {
+  vi.useRealTimers();
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  vi.setSystemTime(new Date("2026-10-06T23:59:00"));
+  setup({ library: { ...datedLib, items: [rec("t", { title: "Поздняя", started_at: "2026-10-06T22:00:00" })] }, selected: null });
+  expect(heads().map((h) => h.textContent)).toEqual(["Сегодня · 1"]);
+  act(() => { vi.advanceTimersByTime(2 * 60_000); });
+  expect(heads().map((h) => h.textContent)).toEqual(["Вчера · 1"]);
+  // Сон: часы ушли на три дня, таймер на полночь не сработал — сверка по фокусу окна.
+  act(() => { vi.setSystemTime(new Date("2026-10-09T09:00:00")); });
+  expect(heads().map((h) => h.textContent)).toEqual(["Вчера · 1"]);
+  act(() => { window.dispatchEvent(new Event("focus")); });
+  expect(heads().map((h) => h.textContent)).toEqual(["Вторник, 6 октября · 1"]);
+  act(() => { vi.setSystemTime(new Date("2026-10-20T09:00:00")); });
+  act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+  expect(heads().map((h) => h.textContent)).toEqual(["Ранее в октябре · 1"]);
+});
+
+test("1000 записей: свернуть раздел — без перерисовки строк других разделов", () => {
+  const big = [
+    rec("today", { title: "Сегодняшняя", started_at: "2026-10-06T09:00:00" }),
+    ...Array.from({ length: 1000 }, (_, i) => rec(`s${i}`, {
+      title: `Встреча ${i}`, started_at: `2026-09-${String(1 + (i % 28)).padStart(2, "0")}T10:00:00`,
+    })),
+  ];
+  // getByRole по тысяче строк в jsdom идёт секундами — заголовки ищутся напрямую.
+  const fastHead = (name: string) => [...document.querySelectorAll<HTMLButtonElement>(".date-sec__toggle")]
+    .find((b) => b.textContent!.startsWith(`${name} ·`))!;
+  let t0 = performance.now();
+  setup({ library: { ...datedLib, items: big }, selected: null });
+  const first = performance.now() - t0;
+  expect(mains()).toHaveLength(1001);
+  vi.mocked(useAgentLive).mockClear();
+  t0 = performance.now();
+  fireEvent.click(fastHead("Сегодня"));
+  const toggle = performance.now() - t0;
+  expect(fastHead("Сегодня")).toHaveAttribute("aria-expanded", "false");
+  // Тысяча строк сентября не перерисовывалась.
+  expect(vi.mocked(useAgentLive).mock.calls.length).toBeLessThan(5);
+  vi.mocked(useAgentLive).mockClear();
+  fireEvent.click(fastHead("Сентябрь"));
+  expect(mains()).toHaveLength(0);
+  fireEvent.click(fastHead("Сентябрь"));
+  expect(mains()).toHaveLength(1000);
+  // Развернули — отрисованы ровно строки сентября, по разу.
+  expect(vi.mocked(useAgentLive).mock.calls.length).toBe(1000);
+  process.stderr.write(`[замер] 1000 строк: первая отрисовка ${first.toFixed(0)} мс, свернуть «Сегодня» ${toggle.toFixed(0)} мс
+`);
 });

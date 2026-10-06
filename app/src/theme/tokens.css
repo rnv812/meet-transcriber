@@ -195,6 +195,9 @@ body {
 .pane-list {
   width: var(--list-w); flex: none; overflow: auto; scrollbar-gutter: stable;
   border-right: 1px solid var(--line); background: var(--bg);
+  /* Прилипший заголовок раздела по дате (recordings.css): строка, к которой прокручивают
+     (фокус, открытая запись), не прячется под ним. */
+  --date-sec-head-h: 30px; scroll-padding-top: calc(var(--date-sec-head-h) + 2px);
 }
 .pane-detail { flex: 1; min-width: 0; overflow: auto; background: var(--bg); }
 

@@ -77,11 +77,48 @@ test("без даты: нет, пусто, не дата", () => {
   expect(of("2026-13-45T10:00:00", now)).toBe("none | Без даты");
 });
 
-test("parseLocal: время без зоны — местное; только дата — полночь", () => {
+test("parseLocal: время без зоны — местное; только дата — полночь; зона, хвост и 10:75 — не дата", () => {
   expect(parseLocal("2026-10-06T09:05:00")?.getHours()).toBe(9);
   expect(parseLocal("2026-10-06 09:05")?.getMinutes()).toBe(5);
+  expect(parseLocal("2026-10-06T09:05:00.123456")?.getMinutes()).toBe(5);
   expect(parseLocal("2026-10-06")?.getDate()).toBe(6);
   expect(parseLocal("2026-02-31T10:00:00")).toBeNull();
+  expect(parseLocal("2026-10-06T09:05:00Z")).toBeNull();
+  expect(parseLocal("2026-10-06T09:05:00+03:00")).toBeNull();
+  expect(parseLocal("2026-10-06T10:75:00")).toBeNull();
+  expect(parseLocal("2026-10-06T24:00:00")).toBeNull();
+  expect(parseLocal("2026-10-06T09:05:00 лишнее")).toBeNull();
+});
+
+test("29 февраля и граница 12 месяцев с 31 марта", () => {
+  expect(of("2028-02-29T10:00:00", "2028-03-10T12:00:00")).toBe("m:2028-02 | Февраль");
+  expect(of("2026-02-29T10:00:00", "2026-03-10T12:00:00")).toBe("none | Без даты");
+  const now = "2026-03-31T12:00:00";
+  expect(of("2025-04-30T10:00:00", now)).toBe("m:2025-04 | Апрель 2025");
+  expect(of("2025-03-01T10:00:00", now)).toBe("m:2025-03 | Март 2025");
+  expect(of("2025-02-28T23:59:00", now)).toBe("rest-y:2025 | Ранее в 2025");
+  expect(of("2026-03-24T10:00:00", now)).toBe("rest:2026-03 | Ранее в марте");
+});
+
+describe("переход на летнее время (Europe/Berlin)", () => {
+  const tz = process.env.TZ;
+  beforeAll(() => { process.env.TZ = "Europe/Berlin"; });
+  afterAll(() => { if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz; });
+
+  test("сутки по 23 и 25 часов считаются одним днём", () => {
+    // Зона действительно сменилась: в ночь на 29 марта сдвиг меняется.
+    expect(new Date(2026, 2, 28, 12).getTimezoneOffset()).not.toBe(new Date(2026, 2, 29, 12).getTimezoneOffset());
+    expect(of("2026-03-29T00:30:00", "2026-03-29T23:30:00")).toBe("today | Сегодня");
+    expect(of("2026-03-28T23:59:00", "2026-03-29T00:30:00")).toBe("yesterday | Вчера");
+    expect(of("2026-03-29T23:59:00", "2026-03-30T00:01:00")).toBe("yesterday | Вчера");
+    expect(of("2026-03-23T00:10:00", "2026-03-29T23:50:00")).toBe("day:2026-03-23 | Понедельник, 23 марта");
+    expect(of("2026-03-22T23:50:00", "2026-03-29T00:10:00")).toBe("rest:2026-03 | Ранее в марте");
+    // Несуществующее 02:30 ночи перевода — та же дата, а не «Без даты».
+    expect(of("2026-03-29T02:30:00", "2026-03-29T12:00:00")).toBe("today | Сегодня");
+    expect(of("2026-10-25T00:10:00", "2026-10-25T23:50:00")).toBe("today | Сегодня");
+    expect(of("2026-10-24T23:59:00", "2026-10-25T00:01:00")).toBe("yesterday | Вчера");
+    expect(of("2026-10-19T00:00:00", "2026-10-25T23:59:00")).toBe("day:2026-10-19 | Понедельник, 19 октября");
+  });
 });
 
 test("groupBySection: разделы по порядку от новых к старым, «Без даты» последним; порядок внутри — как пришёл", () => {

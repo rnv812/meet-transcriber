@@ -177,10 +177,12 @@
 /* Заготовки строк, пока библиотека загружается впервые. */
 .rec-skel__row { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
 
-/* Разделы по датам (DateSections): заголовок прилипает к верху .pane-list — она прокручивается. */
+/* Разделы по датам (DateSections): заголовок прилипает к верху .pane-list — она прокручивается.
+   Высота заголовка — --date-sec-head-h (tokens.css): под неё у .pane-list scroll-padding-top. */
 .date-secs { display: flex; flex-direction: column; gap: 6px; }
 .date-sec__head {
   position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px;
+  box-sizing: border-box; min-height: var(--date-sec-head-h);
   margin: 0 -8px; padding: 2px 8px; background: var(--bg);
 }
 .date-sec__title { flex: 1; min-width: 0; margin: 0; font-size: 12px; font-weight: 600; }
@@ -200,4 +202,4 @@
    меню (оно fixed внутри строки) сдерживание снимается. */
 .rec-item { content-visibility: auto; contain-intrinsic-size: auto 52px; }
 .rec-item--menu { content-visibility: visible; }
-.rec-item :focus-visible { outline-offset: -2px; }
+.rec-item > .rec-item__main:focus-visible { outline-offset: -2px; }

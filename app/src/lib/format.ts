@@ -1,4 +1,4 @@
-import { daysBefore } from "./dateSections";
+import { daysBefore, parseLocal } from "./dateSections";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -18,13 +18,23 @@ export function duration(s: number): string {
 
 const MONTHS = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
 
+/** ISO-время со сдвигом зоны («…Z», «…+03:00»); иначе и при ошибке — null. */
+function parseZoned(iso: string): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}T.*(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(iso)) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 /**
  * «Сегодня 10:00», «Вчера 10:00», «5 сен 10:00». `short` — строка под разделом
  * по дате (lib/dateSections): в разделах по дням (до 6 дней назад) — только
  * время, старше — «5 сен, 10:00» (месяц или год уже в заголовке раздела).
  */
 export function dayLabel(iso: string, now: Date = new Date(), short = false): string {
-  const d = new Date(iso);
+  // Время без зоны (started_at, голая дата) — местное, как в разделах; ISO с зоной
+  // (время ответа ассистента) — как есть. Не дата — пусто, а не «NaN undefined».
+  const d = parseLocal(iso) ?? parseZoned(iso);
+  if (!d) return "";
   const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const diff = daysBefore(d, now);
   if (short) return diff <= 6 ? time : `${d.getDate()} ${MONTHS[d.getMonth()]}, ${time}`;

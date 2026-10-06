@@ -33,12 +33,18 @@ const MONTHS_BACK = 12;
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-/** «2026-10-06T09:30:00», «2026-10-06 09:30», «2026-10-06» — местное время; не дата — null. */
+/**
+ * «2026-10-06T09:30:00», «2026-10-06 09:30», «2026-10-06» (и доли секунды) —
+ * местное время; со сдвигом зоны («Z», «+03:00»), с хвостом или с 10:75 — null.
+ */
 export function parseLocal(s: string | null | undefined): Date | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(s ?? "");
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?$/.exec(s ?? "");
   if (!m) return null;
   const [y, mo, d, h, mi, sec] = [1, 2, 3, 4, 5, 6].map((i) => Number(m[i] ?? 0)) as
     [number, number, number, number, number, number];
+  // Время проверяется числами, а не обратным чтением из Date: 02:30 в ночь перевода
+  // часов Date сдвинет на 03:30 — это всё ещё та же дата, а не «не дата».
+  if (h > 23 || mi > 59 || sec > 59) return null;
   const date = new Date(y, mo - 1, d, h, mi, sec);
   // 31.02 и 13-й месяц Date молча переносит — такие строки не дата.
   if (date.getFullYear() !== y || date.getMonth() !== mo - 1 || date.getDate() !== d) return null;

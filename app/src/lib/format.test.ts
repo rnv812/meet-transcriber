@@ -20,6 +20,21 @@ test("dayLabel(short): под разделом по дням — только в
   expect(dayLabel("2024-09-05T10:00:00", now, true)).toBe("5 сен, 10:00");
 });
 
+test("dayLabel: время без зоны и голая дата — местные (как разделы); не дата — пусто, а не NaN", () => {
+  const now = new Date("2026-10-06T12:00:00");
+  // Голая дата — местная полночь, а не UTC: в зоне с отрицательным сдвигом иначе был бы прошлый день.
+  expect(dayLabel("2026-10-06", now)).toBe("Сегодня 00:00");
+  expect(dayLabel("2026-10-06", now, true)).toBe("00:00");
+  expect(dayLabel("2026-09-01", now, true)).toBe("1 сен, 00:00");
+  for (const bad of ["вчера", "2026-13-45T10:00:00", "2026-10-06T10:00:00garbage", ""]) {
+    expect(dayLabel(bad, now)).toBe("");
+    expect(dayLabel(bad, now, true)).toBe("");
+  }
+  // ISO с зоной (время ответа ассистента, toISOString) — как и раньше, по местным часам.
+  const at = new Date(2026, 9, 5, 18, 30);
+  expect(dayLabel(at.toISOString(), now)).toBe("Вчера 18:30");
+});
+
 test("errorText: у Error — только сообщение", () => {
   expect(errorText(new Error("сломалось"))).toBe("сломалось");
   expect(errorText("строка")).toBe("строка");
