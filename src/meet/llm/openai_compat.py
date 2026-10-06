@@ -56,7 +56,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
-from meet.llm.base import EMPTY_ERROR, TIMEOUT_ERROR, AgentReply, resume_failure
+from meet.llm.base import EMPTY_ERROR, NO_VISION_NOTE, TIMEOUT_ERROR, AgentReply, resume_failure
 from meet.settings import DEFAULT_LOCAL_BASE_URL
 
 log = logging.getLogger(__name__)
@@ -494,6 +494,7 @@ async def run(
     purpose: str | None = None,
     images=(),
     keep_session: bool = False,
+    deny_paths=(),
 ) -> AgentReply:
     """Вызов модели; ошибки — в AgentReply.error, счёт токенов — в `usage`.
 
@@ -505,8 +506,10 @@ async def run(
     сервером промпт не ошибка (анализ встречи сам отмечает его).
 
     Сеансов и изображений у локальной модели нет (`llm.supports_resume`,
-    `llm.vision` — False): `images` и `keep_session` игнорируются, а `resume`
-    — сразу `resume_failed` (продолжать нечего, нужна затравка)."""
+    `llm.vision` — False): `images` не отправляются (`dropped_images` и
+    NO_VISION_NOTE в ответе), `keep_session` и `deny_paths` (файлов модель
+    не читает) игнорируются, `resume` — сразу `resume_failed` (продолжать
+    нечего, нужна затравка)."""
     if resume:
         return resume_failure("локальная модель сеансов не держит")
     payload = {
@@ -517,5 +520,9 @@ async def run(
         ],
         "stream": False,
     }
-    return await asyncio.to_thread(_complete, base_url, payload, timeout_s, response_schema,
-                                   max_tokens, via_proxy, on_cut, purpose)
+    reply = await asyncio.to_thread(_complete, base_url, payload, timeout_s, response_schema,
+                                    max_tokens, via_proxy, on_cut, purpose)
+    sent = [str(i) for i in images or () if i]
+    if sent:
+        reply.dropped_images, reply.notes = sent, [NO_VISION_NOTE]
+    return reply

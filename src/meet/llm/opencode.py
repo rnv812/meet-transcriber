@@ -39,9 +39,17 @@ V4 (0.3.6, v4-design §12) — нативное продолжение [не п�
   уборка её не тронет; не папка встречи: `--continue` вкладки «Агент» его
   не подхватит);
 * `resume=<id>` — `opencode run --session <id>` в той же папке, без
-  `--title`. Ошибка «не найден» (NotFoundError и т. п.) — `resume_failed`;
+  `--title`. Ошибка «сеанс не найден» — `resume_failed`; главная защита —
+  сверка id: события пришли от другого сеанса (OpenCode начал новый) —
+  `resume_failed`, чужой сеанс удаляется, ответ не используется.
+  Системный промпт продолжению не повторяется: в stdin — только сообщение,
+  длинный промпт (он ушёл первым сообщением) в конфиге заменён коротким;
+* `deny_paths` (`kb_exclude`) — запрет `read` и `external_directory` по
+  путям после разрешений (последнее подходящее правило побеждает); `grep`
+  при запретах выключен: его правило сопоставляется с шаблоном поиска, а
+  не с путём, и он вернул бы строки из закрытых файлов;
 * изображения OpenCode не отправляем (`llm.vision` — False): флаг вложения
-  `--file` не проверен.
+  `--file` не проверен; в ответе — `dropped_images` и NO_VISION_NOTE.
 """
 
 import asyncio
@@ -56,7 +64,8 @@ from pathlib import Path
 
 from meet import netproxy, tempdirs
 from meet.llm.base import (
-    EMPTY_ERROR, TIMEOUT_ERROR, AgentReply, drop_session_markers, kill_tree, resume_failure, run_tree,
+    EMPTY_ERROR, NO_VISION_NOTE, TIMEOUT_ERROR, AgentReply, drop_session_markers, kill_tree, path_variants,
+    resume_failure, run_tree,
 )
 from meet.llm.detect import OPENCODE_NOT_FOUND, find_opencode
 
@@ -74,8 +83,11 @@ WORKDIR = "meet-opencode"
 KEEP_WORKDIR = "meet-opencode-sessions"
 # id сеанса OpenCode (`ses_…`); другое в --session не передаём.
 _SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
-# Сеанса для --session нет [не проверено: формат ошибки OpenCode].
-_RESUME_MISSING = re.compile(r"not ?found|no such session|session.*(missing|unknown)", re.IGNORECASE)
+# Сеанса для --session нет [не проверено: формат ошибки OpenCode]. Только про
+# сеанс: «model not found» (ProviderModelNotFoundError) — не повод забыть сеанс.
+_RESUME_MISSING = re.compile(
+    r"session\b[^\n]{0,60}\bnot ?found|\bnot ?found\b[^\n]{0,60}\bsession|no such session"
+    r"|(?<![A-Za-z])NotFoundError", re.IGNORECASE)
 # Конфиг с системным промптом — в переменной среды; длиннее — промпт в stdin,
 # как у Codex: одна переменная среды Windows — до 32 767 символов.
 ENV_LIMIT = 30_000
@@ -109,28 +121,38 @@ SHIM_UNSAFE = ("OpenCode найден только как сценарий npm (
 _HELPER_TIMEOUT_S = 30
 
 
-def readonly_permission(dirs) -> dict:
+def readonly_permission(dirs, exclude=()) -> dict:
     """Права агента фоновых вызовов. Без папок — никаких инструментов (как у
     Claude Code: анализ, названия, тики). С папками — только чтение в них:
     read (кроме .env), grep, glob, list и доступ к этим папкам вне рабочей;
-    правка, команды, сеть, подагенты — запрещены (`"*": "deny"` первым)."""
+    правка, команды, сеть, подагенты — запрещены (`"*": "deny"` первым).
+
+    `exclude` — закрытые папки (`kb_exclude`): `deny` для read и
+    external_directory — последними (побеждает последнее подходящее), с
+    вариантами пути (настоящий регистр и нижний); grep при этом выключен."""
     dirs = [Path(d) for d in dirs if d]
     if not dirs:
         return {"*": "deny"}
     external = {"*": "deny"}
     for d in dirs:
         external[str(d / "*")] = "allow"
+    read = {"*": "allow", "*.env": "deny", "*.env.*": "deny", "*.env.example": "allow"}
+    closed = [v for e in exclude or () if e for v in path_variants(e)]
+    for v in closed:
+        for pattern in (v, str(Path(v) / "*")):
+            read[pattern] = "deny"
+            external[pattern] = "deny"
     return {
         "*": "deny",
-        "read": {"*": "allow", "*.env": "deny", "*.env.*": "deny", "*.env.example": "allow"},
-        "grep": "allow",
+        "read": read,
+        "grep": "deny" if closed else "allow",
         "glob": "allow",
         "list": "allow",
         "external_directory": external,
     }
 
 
-def config_content(prompt: str, dirs, max_turns: int) -> dict:
+def config_content(prompt: str, dirs, max_turns: int, exclude=()) -> dict:
     """Конфиг поверх конфига человека (`OPENCODE_CONFIG_CONTENT`): агент только
     для чтения, без публикации сеанса, снимков файлов и обновления."""
     return {
@@ -144,7 +166,7 @@ def config_content(prompt: str, dirs, max_turns: int) -> dict:
                 "description": "meet: фоновые вызовы, только чтение",
                 "prompt": prompt,
                 "steps": max(1, int(max_turns)),
-                "permission": readonly_permission(dirs),
+                "permission": readonly_permission(dirs, exclude),
             },
         },
     }
@@ -155,13 +177,20 @@ def _dumps(value) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def prompt_placement(system_prompt: str, prompt: str, dirs, max_turns: int) -> tuple[dict, str]:
+def prompt_placement(system_prompt: str, prompt: str, dirs, max_turns: int, exclude=(),
+                     resume: bool = False) -> tuple[dict, str]:
     """(конфиг, stdin): системный промпт — в конфиг агента, если переменная
-    среды с ним укладывается в ENV_LIMIT; иначе — в начало stdin."""
-    config = config_content(system_prompt, dirs, max_turns)
+    среды с ним укладывается в ENV_LIMIT; иначе — в начало stdin. У
+    продолжения сеанса длинный промпт в stdin не повторяется (он ушёл первым
+    сообщением и уже в истории; иначе каждый ход добавлял бы его заново):
+    конфиг — с коротким промптом, stdin — только сообщение."""
+    config = config_content(system_prompt, dirs, max_turns, exclude)
     if len(_dumps(config)) <= ENV_LIMIT:
         return config, prompt
-    return config_content(SHORT_SYSTEM, dirs, max_turns), f"{system_prompt}\n\n{prompt}"
+    short = config_content(SHORT_SYSTEM, dirs, max_turns, exclude)
+    if resume:
+        return short, prompt
+    return short, f"{system_prompt}\n\n{prompt}"
 
 
 def build_command(exe: str, workdir: str, model: str | None, resume: str | None = None) -> list[str]:
@@ -459,6 +488,10 @@ def _exec(exe: str, root: Path, model: str | None, stdin_text: str, timeout_s: f
         stderr = _ANSI.sub("", (err or b"").decode("utf-8", errors="replace")).strip()
         if _FALLBACK in stderr.lower() or _FALLBACK in (out or b"").decode("utf-8", "replace").lower():
             return AgentReply(text="", error=AGENT_LOST)
+        if resume and events.session_id and events.session_id != resume:
+            # OpenCode начал другой сеанс: без прошлого разговора — не используем, удаляем.
+            delete_session(exe, events.session_id, str(call_dir), env)
+            return resume_failure(f"OpenCode начал другой сеанс ({events.session_id}) вместо {resume}")
         failed = events.error or (stderr if proc.returncode != 0 else "")
         if resume and failed and not events.text and _RESUME_MISSING.search(failed):
             return resume_failure(failed[-_ERR_LIMIT:])
@@ -492,6 +525,7 @@ async def run(
     proxy: str | None = None,
     images=(),
     keep_session: bool = False,
+    deny_paths=(),
 ) -> AgentReply:
     """Один вызов `opencode run`; ошибки — в AgentReply.error. `model` —
     `llm.opencode_model` («провайдер/модель»), `proxy` — `llm.proxy`. Папки
@@ -499,13 +533,16 @@ async def run(
     Отмена (CancelledError) убивает процесс; сеанс убирает поток вызова.
 
     `keep_session` — сеанс сохраняется, id — в ответе; `resume` —
-    продолжить его. `images` не отправляются (модель их не видит)."""
+    продолжить его. `images` не отправляются (модель их не видит) —
+    `dropped_images` и NO_VISION_NOTE. `deny_paths` — закрытые папки
+    (запрет в правах агента)."""
     if resume and not _SESSION_ID.match(resume):
         return resume_failure(f"неверный id сеанса OpenCode: {resume!r}")
     exe = find_opencode()
     if exe is None:
         return AgentReply(text="", error=OPENCODE_NOT_FOUND)
-    config, stdin_text = prompt_placement(system_prompt, prompt, allowed_dirs, max_turns)
+    config, stdin_text = prompt_placement(system_prompt, prompt, allowed_dirs, max_turns,
+                                          deny_paths, resume=bool(resume))
     env = child_env(proxy, config)
     call = _Call()
     keep = bool(keep_session or resume)
@@ -516,4 +553,19 @@ async def run(
         call.cancel()
         raise
     reply.error = netproxy.with_hint(reply.error)
+    sent = [str(i) for i in images or () if i]
+    if sent:
+        reply.dropped_images, reply.notes = sent, [NO_VISION_NOTE]
     return reply
+
+
+def forget_session(session_id: str) -> int:
+    """Удалить сохранённый сеанс (удалили чат встречи; смоук с `--cleanup`):
+    `opencode session delete <id>`. → 1, если команда запускалась, иначе 0."""
+    exe = find_opencode()
+    if exe is None or not session_id or not _SESSION_ID.match(session_id):
+        return 0
+    env = netproxy.child_env(None)
+    drop_session_markers(env)
+    delete_session(exe, session_id, str(_keep_dir()), env)
+    return 1

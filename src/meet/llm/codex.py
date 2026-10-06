@@ -15,17 +15,30 @@ V4 (0.3.6, v4-design §5.1, §12):
   одно изображение (проверено на 0.159.0 без модели: `-i a.png - x` берёт
   `-` и `x` в изображения, `--image=a.png - x` — «unexpected argument 'x'»).
   Запятая в пути делит значение (`value_delimiter`) — такие файлы не шлём;
-* `keep_session=True` — сеанс сохраняется (без `--ephemeral`); его id Codex
-  печатает в шапке (`session id: <uuid>`) — он в `AgentReply.session_id`;
+* `keep_session=True` — сеанс сохраняется (без `--ephemeral`), с `--json`:
+  id — из события `thread.started` (stdout), запасной путь — шапка
+  `session id: <uuid>` (stderr без `--json`); он в `AgentReply.session_id`.
+  Рабочая папка (`-C`) сохраняемых сеансов — своя постоянная
+  KEEP_WORKDIR, не папка встречи и не папка вызывающего: `codex resume
+  --last` вкладки «Агент» отбирает сеансы по папке, а продолжение не
+  зависит от того, что передал вызывающий. Читать песочница read-only
+  может весь диск — пути папок агент берёт из промпта;
 * `resume=<uuid>` — `codex exec <флаги exec> resume <флаги resume> <id> -`.
   `--sandbox` и `-C` подкоманда `exec resume` не принимает — они идут до
   неё (проверено разбором с `--help`). Только UUID: имя, которого нет,
   Codex молча начинает новым сеансом (проверено). Неизвестный UUID —
   «thread/resume failed: no rollout found for thread id …», код 1 →
-  `resume_failed`.
+  `resume_failed`. Продолжение проверяется ещё и по id в ответе: Codex
+  сообщил другой сеанс — тоже `resume_failed`, ответ и id чужого сеанса
+  не используются (в нём нет системного промпта);
+* `deny_paths` (`kb_exclude`) у Codex — только правило в тексте каждого
+  вызова: песочница read-only читает весь диск, запрета по путям в 0.159
+  нет (`llm.deny_enforced("codex")` — False).
 """
 
 import asyncio
+import json
+import os
 import re
 import subprocess
 import sys
@@ -34,8 +47,8 @@ from pathlib import Path
 
 from meet import netproxy, tempdirs
 from meet.llm.base import (
-    CANCELLED_ERROR, EMPTY_ERROR, TIMEOUT_ERROR, AgentReply, drop_session_markers, image_media_type, is_uuid, kill_tree,
-    resume_failure,
+    CANCELLED_ERROR, EMPTY_ERROR, TIMEOUT_ERROR, AgentReply, deny_prompt, drop_session_markers, image_note,
+    is_uuid, kill_tree, resume_failure, split_images,
 )
 from meet.llm.detect import find_codex
 
@@ -45,6 +58,14 @@ _ERR_LIMIT = 500
 _SESSION_LINE = re.compile(r"^\s*session id:\s*([0-9a-fA-F-]{36})\s*$", re.MULTILINE)
 # Сохранённого сеанса нет (0.159.0): «thread/resume failed: no rollout found for thread id …».
 _RESUME_FAILED = re.compile(r"no rollout found|thread/resume", re.IGNORECASE)
+# Постоянная рабочая папка сохраняемых сеансов (во временной папке системы).
+KEEP_WORKDIR = "meet-codex-sessions"
+
+
+def keep_dir() -> str:
+    path = tempdirs.system_temp() / KEEP_WORKDIR
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
 def _kill_tree(proc) -> None:
@@ -69,7 +90,9 @@ def build_command(exe: str, workdir: str, out_file: str, *, effort: str | None =
     Продолжение: песочница и папка — до `resume` (у подкоманды их нет),
     остальное — после неё, id сеанса — перед `-`."""
     head = [exe, "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
-    rest = ["--output-last-message", out_file,
+    # Сохраняемый сеанс — события JSON (id в thread.started; проверено на 0.159.0).
+    events = ["--json"] if keep_session or resume else []
+    rest = [*events, "--output-last-message", out_file,
             *(["-c", f'model_reasoning_effort="{effort}"'] if effort else []),
             *[f"--image={i}" for i in images or ()]]
     if resume:
@@ -79,19 +102,43 @@ def build_command(exe: str, workdir: str, out_file: str, *, effort: str | None =
     return [*head, *keep, "-C", workdir, *rest, "-"]
 
 
-def usable_images(images) -> tuple[list[str], list[str]]:
-    """(что отправить, что пропущено): только существующие файлы PNG/JPEG/
-    GIF/WebP без запятой в пути (Codex делит значение `--image` по запятым)."""
-    sent, skipped = [], []
-    for i in images or ():
-        if not i:
-            continue
-        path = str(i)
-        if "," in path or image_media_type(path) is None or not Path(path).is_file():
-            skipped.append(path)
+def usable_images(images) -> tuple[list[str], list[tuple[str, str]]]:
+    """(что отправить, [(путь, причина)] пропущенного): проверки
+    `base.check_image` (тип по первым байтам, 5 МБ base64, 8 000 px, битый
+    файл) и запятая в пути (Codex делит значение `--image` по запятым)."""
+    good, dropped = split_images(images)
+    sent = []
+    for path, _media, _data in good:
+        if "," in path:
+            dropped.append((path, "в пути есть запятая — Codex её не понимает"))
         else:
             sent.append(path)
-    return sent, skipped
+    return sent, dropped
+
+
+def parse_events(stdout: str) -> tuple[str | None, list[str]]:
+    """События `codex exec --json`: (id сеанса из `thread.started`, тексты
+    ошибок `error`/`turn.failed` по порядку)."""
+    sid, errors = None, []
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("type")
+        if kind == "thread.started" and sid is None and isinstance(event.get("thread_id"), str):
+            sid = event["thread_id"]
+        elif kind == "error" and event.get("message"):
+            errors.append(str(event["message"]))
+        elif kind == "turn.failed":
+            err = event.get("error") if isinstance(event.get("error"), dict) else {}
+            errors.append(str(err.get("message") or "ход не удался"))
+    return sid, errors
 
 
 def session_from(*streams: str) -> str | None:
@@ -155,19 +202,27 @@ def _exec(exe: str, workdir: str, stdin_text: str, timeout_s: float,
             text = out_file.read_text(encoding="utf-8").strip()
         except OSError:
             text = ""
-    sid = (session_from(stderr, stdout) or resume) if (keep_session or resume) else None
+    event_sid, event_errors = parse_events(stdout)
+    reported = event_sid or session_from(stderr, stdout)
     if call is not None and call.cancelled:
-        return AgentReply(text="", error=CANCELLED_ERROR, session_id=sid, cancelled=True)
+        return AgentReply(text="", error=CANCELLED_ERROR, cancelled=True,
+                          session_id=(reported or resume) if (keep_session or resume) else None)
+    if resume and proc.returncode != 0 and _RESUME_FAILED.search(stderr):
+        return resume_failure(stderr[-_ERR_LIMIT:])
+    if resume and reported and reported.lower() != resume.lower():
+        # Codex продолжил не тот сеанс (начал новый): без системного промпта и
+        # без прошлого разговора — ответ и id не используем.
+        return resume_failure(f"Codex начал другой сеанс ({reported}) вместо {resume}")
+    sid = (reported or resume) if (keep_session or resume) else None
+    errors = stderr or "\n".join(event_errors[-3:])
     if proc.returncode != 0:
-        if resume and _RESUME_FAILED.search(stderr):
-            return resume_failure(stderr[-_ERR_LIMIT:])
         return AgentReply(
             text="",
-            error=stderr[-_ERR_LIMIT:] or f"Codex завершился с кодом {proc.returncode}",
+            error=errors[-_ERR_LIMIT:] or f"Codex завершился с кодом {proc.returncode}",
             session_id=sid,
         )
     if not text:
-        return AgentReply(text="", error=stderr[-_ERR_LIMIT:] or EMPTY_ERROR, session_id=sid)
+        return AgentReply(text="", error=errors[-_ERR_LIMIT:] or EMPTY_ERROR, session_id=sid)
     return AgentReply(text=text, session_id=sid)
 
 
@@ -187,32 +242,67 @@ async def run(
     effort: str | None = None,
     images=(),
     keep_session: bool = False,
+    deny_paths=(),
 ) -> AgentReply:
     """Один вызов `codex exec`; ошибки — в AgentReply.error. `proxy` —
     `llm.proxy`: Codex системный прокси Windows сам не видит.
 
-    `images` — пути к изображениям (`--image=`; пропускаются нечитаемые,
-    не PNG/JPEG/GIF/WebP и с запятой в пути); `keep_session` — сохранить
-    сеанс и вернуть его id; `resume` — продолжить сохранённый (UUID).
-    Системный промпт продолжению не повторяется: он уже в сеансе.
-    Отмена задачи (CancelledError, «Стоп») убивает дерево процессов Codex."""
+    `images` — пути к изображениям (`--image=`); негодные не уходят —
+    `dropped_images`, `notes` и пометка модели в тексте. `keep_session` —
+    сохранить сеанс и вернуть его id; `resume` — продолжить сохранённый
+    (UUID). Оба — в постоянной папке KEEP_WORKDIR. Системный промпт
+    продолжению не повторяется: он уже в сеансе. `deny_paths` — правило в
+    тексте (не запрет песочницы). Отмена задачи (CancelledError, «Стоп»)
+    убивает дерево процессов Codex."""
     if resume and not is_uuid(resume):
         return resume_failure(f"неверный id сеанса Codex: {resume!r}")
     exe = find_codex()
     if exe is None:
         return AgentReply(text="", error="не найден Codex CLI (codex)")
-    stdin_text = prompt if resume else f"{system_prompt}\n\n{prompt}"
-    sent, _skipped = usable_images(images)
+    sent, dropped = usable_images(images)
+    notes = [image_note(path, why) for path, why in dropped]
+    body = "\n".join([prompt, *[f"({n})" for n in notes]]) if notes else prompt
+    rule = deny_prompt(deny_paths)
+    if rule:
+        body = f"{body}\n\n{rule}"
+    stdin_text = body if resume else f"{system_prompt}\n\n{body}"
+    workdir = keep_dir() if (keep_session or resume) else _workdir(allowed_dirs, cwd)
     env = netproxy.child_env(proxy)
     drop_session_markers(env)  # сеанс сам по себе, не «вложенный» (llm.base)
     call = _Call()
     try:
         reply = await asyncio.to_thread(
-            _exec, exe, _workdir(allowed_dirs, cwd), stdin_text, timeout_s, env, effort,
+            _exec, exe, workdir, stdin_text, timeout_s, env, effort,
             sent, keep_session, resume, call,
         )
     except asyncio.CancelledError:
         call.cancel()  # «Стоп»: процесс Codex убит, поток дочитает и выйдет
         raise
     reply.error = netproxy.with_hint(reply.error)
+    reply.dropped_images = [path for path, _ in dropped]
+    reply.notes = notes
     return reply
+
+
+def _home() -> Path:
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+
+def forget_session(session_id: str) -> int:
+    """Удалить сохранённый сеанс Codex из его хранилища (у CLI нет команды
+    удаления): файлы `rollout-*-<id>.jsonl` в `sessions/` и
+    `archived_sessions/` CODEX_HOME. Только UUID; → сколько удалено."""
+    if not is_uuid(session_id):
+        return 0
+    removed = 0
+    for sub_dir in ("sessions", "archived_sessions"):
+        root = _home() / sub_dir
+        if not root.is_dir():
+            continue
+        for f in root.rglob(f"rollout-*-{session_id}.jsonl"):
+            try:
+                f.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed

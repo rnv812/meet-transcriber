@@ -7,7 +7,7 @@
 from functools import partial
 from typing import TYPE_CHECKING
 
-from meet.llm.base import AgentReply, Runner
+from meet.llm.base import NO_VISION_NOTE, AgentReply, Runner
 
 if TYPE_CHECKING:
     from meet.settings import Settings
@@ -20,18 +20,25 @@ PROVIDERS = ("claude-code", "codex", "opencode", "openai-compatible")
 AUTO_PROVIDERS = ("claude-code", "codex", "openai-compatible")
 
 __all__ = ["AUTO_PROVIDERS", "LABELS", "NO_VISION_NOTE", "PROVIDERS", "AgentReply", "Runner", "agent_model",
-           "choice_error", "not_found", "describe", "is_local", "label", "models", "provider_ready", "resolve",
-           "runner_for", "session_kwargs", "supports_resume", "tier_kwargs", "vision"]
+           "choice_error", "deny_enforced", "forget_session", "not_found", "describe", "is_local", "label",
+           "models", "provider_ready", "resolve", "runner_for", "session_kwargs", "supports_resume",
+           "tier_kwargs", "vision"]
 
 # Кто видит изображения (v4-design §5.1): Claude Code — блоки base64 в
 # сообщении, Codex — `--image=`. OpenCode (флаг вложения не проверен) и
 # локальная модель (решение концепции) — нет: runner параметр `images`
 # принимает и игнорирует, окно показывает NO_VISION_NOTE.
 VISION_PROVIDERS = ("claude-code", "codex")
-NO_VISION_NOTE = "Модель не видит изображения — ушёл только текст сообщения"
 # Кто продолжает свой сеанс нативно (v4-design §12): Claude Code `--resume`,
 # Codex `exec resume`, OpenCode `--session`. Локальная модель — только затравкой.
 RESUME_PROVIDERS = ("claude-code", "codex", "opencode")
+# Кто сам не даёт читать закрытые папки (`deny_paths`, `kb_exclude`; v4-simple
+# §6): Claude Code — правила Read(//…/**) (проверено, что CLI их принимает при
+# наших флагах; что Grep их соблюдает — смоук); OpenCode — запрет в правах
+# агента [не проверено]; локальная модель файлов не читает вовсе. Codex —
+# только просьба в промпте (песочница read-only читает весь диск): окну
+# стоит сказать «у Codex исключения — просьба, а не запрет».
+DENY_ENFORCED_PROVIDERS = ("claude-code", "opencode", "openai-compatible")
 
 # Имена моделей для человека: окно, подпись итогов, журнал.
 LABELS = {
@@ -256,6 +263,30 @@ def session_kwargs(provider: str | None, session_id: str | None) -> dict:
     if session_id:
         return {"resume": session_id}
     return {"keep_session": True}
+
+
+def deny_enforced(provider: str | None) -> bool:
+    """Соблюдает ли провайдер `deny_paths` сам (не только по просьбе в промпте)."""
+    return provider in DENY_ENFORCED_PROVIDERS
+
+
+def forget_session(provider: str | None, session_id: str | None) -> int:
+    """Удалить сохранённый сеанс провайдера (удалили чат встречи; смоук с
+    `--cleanup`): Claude Code и Codex — файлы сеанса в их хранилище (команды
+    удаления у CLI нет), OpenCode — `opencode session delete`. → сколько
+    удалено (0 — нечего, не тот id или провайдер без сеансов)."""
+    if not session_id:
+        return 0
+    if provider == "claude-code":
+        from meet.llm import claude
+        return claude.forget_session(session_id)
+    if provider == "codex":
+        from meet.llm import codex
+        return codex.forget_session(session_id)
+    if provider == "opencode":
+        from meet.llm import opencode
+        return opencode.forget_session(session_id)
+    return 0
 
 
 def models(cfg: "Settings", found: dict, auto_pick: str | None = None) -> list[dict]:

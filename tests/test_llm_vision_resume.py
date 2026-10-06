@@ -6,6 +6,7 @@
 import asyncio
 import base64
 import inspect
+import sys
 import uuid
 
 import claude_agent_sdk
@@ -37,7 +38,7 @@ def test_resume_support_and_session_kwargs():
 @pytest.mark.parametrize("module", [claude, codex, opencode, openai_compat])
 def test_every_runner_takes_images_and_keep_session(module):
     params = inspect.signature(module.run).parameters
-    for name in ("images", "keep_session", "resume", "session_id"):
+    for name in ("images", "keep_session", "resume", "session_id", "deny_paths"):
         assert name in params, (module.__name__, name)
 
 
@@ -66,6 +67,7 @@ def test_local_model_ignores_images(monkeypatch, tmp_path):
     img.write_bytes(b"\x89PNG")
     reply, seen = _local(monkeypatch, images=[img], keep_session=True)
     assert reply.text == "ок" and reply.session_id is None
+    assert reply.dropped_images == [str(img)] and reply.notes == [llm.NO_VISION_NOTE]
     assert seen["payload"]["messages"][1] == {"role": "user", "content": "вопрос"}
 
 
@@ -130,16 +132,67 @@ def _init():
     return SystemMessage(subtype="init", data={"session_id": "x"})
 
 
+def _png() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (255, 0, 0)).save(buf, "PNG")
+    return buf.getvalue()
+
+
 def test_sdk_images_become_base64_blocks(monkeypatch, tmp_path):
     img = tmp_path / "a.png"
-    img.write_bytes(b"\x89PNG-bytes")
-    reply, seen = _sdk(monkeypatch, [_init(), _result()], images=[img])
+    img.write_bytes(_png())
+    bad = tmp_path / "b.png"
+    bad.write_bytes(b"\x89PNG-bytes")                    # заголовок PNG, внутри мусор
+    reply, seen = _sdk(monkeypatch, [_init(), _result()], images=[img, bad])
     assert reply.text == "ответ"
+    assert reply.dropped_images == [str(bad)] and "«b.png» не отправлено" in reply.notes[0]
     (msg,) = seen["sent"]
     image, text = msg["message"]["content"]
     assert image["source"] == {"type": "base64", "media_type": "image/png",
-                               "data": base64.b64encode(b"\x89PNG-bytes").decode()}
-    assert text == {"type": "text", "text": "что на картинке?"}
+                               "data": base64.b64encode(_png()).decode()}
+    assert text["text"].startswith("что на картинке?\n(Изображение «b.png» не отправлено")
+
+
+def test_sdk_deny_paths_become_rules_and_callback_refusals(monkeypatch, tmp_path):
+    kb = tmp_path / "kb"
+    private = kb / "Private"
+    private.mkdir(parents=True)
+    _, seen = _sdk(monkeypatch, [_init(), _result()], allowed_dirs=(kb,), deny_paths=[private])
+    i = seen["cmd"].index("--disallowedTools")
+    assert any(r.startswith("Read(//") and r.endswith("Private/**)")
+               for r in seen["cmd"][i + 1].split(","))
+
+    async def ask(path):
+        cb = claude.make_permission_callback((kb,), [private])
+        return await cb("Read", {"file_path": str(path)}, None)
+
+    from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
+
+    assert isinstance(asyncio.run(ask(kb / "open.md")), PermissionResultAllow)
+    assert isinstance(asyncio.run(ask(private / "secret.md")), PermissionResultDeny)
+    upper = str(private / "secret.md").upper()
+    if sys.platform == "win32":                          # пути Windows — без учёта регистра
+        assert isinstance(asyncio.run(ask(upper)), PermissionResultDeny)
+
+
+def test_deny_enforced_and_forget_session(monkeypatch, tmp_path):
+    assert llm.deny_enforced("claude-code") and llm.deny_enforced("openai-compatible")
+    assert not llm.deny_enforced("codex")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    sid = str(uuid.uuid4())
+    proj = tmp_path / "projects" / "C--tmp-meet-live"
+    (proj / sid).mkdir(parents=True)
+    (proj / f"{sid}.jsonl").write_text("{}")
+    (proj / "other.jsonl").write_text("{}")
+    assert llm.forget_session("claude-code", sid) == 1
+    assert not (proj / f"{sid}.jsonl").exists() and not (proj / sid).exists()
+    assert (proj / "other.jsonl").exists()
+    assert llm.forget_session("claude-code", "*") == 0
+    assert llm.forget_session("openai-compatible", sid) == 0
 
 
 def test_sdk_keep_session_starts_with_our_uuid(monkeypatch):

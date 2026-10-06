@@ -9,6 +9,7 @@ class FakePopen:
     answer = "ответ"
     code = 0
     stderr = b""
+    stdout = b""
     timeout = False
 
     def __init__(self, cmd, **kw):
@@ -30,7 +31,7 @@ class FakePopen:
                 f.write(FakePopen.answer)
         if self.returncode is None:
             self.returncode = FakePopen.code
-        return b"", FakePopen.stderr
+        return FakePopen.stdout, FakePopen.stderr
 
     def kill(self):
         self.returncode = -9
@@ -42,7 +43,7 @@ class FakePopen:
 def _setup(monkeypatch, **attrs):
     FakePopen.calls = []
     FakePopen.answer, FakePopen.code = "ответ", 0
-    FakePopen.stderr, FakePopen.timeout = b"", False
+    FakePopen.stderr, FakePopen.timeout, FakePopen.stdout = b"", False, b""
     for k, v in attrs.items():
         setattr(FakePopen, k, v)
     monkeypatch.setattr(codex, "find_codex", lambda: "C:/codex.exe")
@@ -224,11 +225,21 @@ BANNER = (f"OpenAI Codex v0.159.0\n--------\nworkdir: C:/x\nsession id: {SID}\n-
           "user\nВопрос?\n").encode("utf-8")
 
 
+def _png() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), (255, 0, 0)).save(buf, "PNG")
+    return buf.getvalue()
+
+
 def _images(tmp_path, *names):
     out = []
     for name in names:
         p = tmp_path / name
-        p.write_bytes(b"\x89PNG")
+        p.write_bytes(_png())
         out.append(p)
     return out
 
@@ -251,9 +262,15 @@ def test_images_go_as_equals_flags_before_stdin_dash(monkeypatch, tmp_path):
 def test_unusable_images_are_skipped(monkeypatch, tmp_path):
     _setup(monkeypatch)
     good, comma, bmp = _images(tmp_path, "ok.png", "a,b.png", "c.bmp")
-    _run(cwd=tmp_path, images=[good, comma, bmp, tmp_path / "нет.png"])
+    bmp.write_bytes(b"BM")
+    reply = _run(cwd=tmp_path, images=[good, comma, bmp, tmp_path / "нет.png"])
     images = [x for x in FakePopen.calls[0].cmd if x.startswith("--image")]
     assert images == [f"--image={good}"]
+    # Пропущенное видно: окну — dropped_images и notes, модели — пометка в тексте.
+    assert set(reply.dropped_images) == {str(comma), str(bmp), str(tmp_path / "нет.png")}
+    assert len(reply.notes) == 3 and all("не отправлено" in n for n in reply.notes)
+    stdin = FakePopen.calls[0].input.decode("utf-8")
+    assert "«c.bmp» не отправлено" in stdin and "запятая" in stdin
 
 
 def test_keep_session_drops_ephemeral_and_returns_the_id(monkeypatch, tmp_path):
@@ -337,3 +354,79 @@ def test_cancel_kills_the_codex_tree(monkeypatch, tmp_path):
 
     asyncio.run(scenario())
     assert killed == [4242]
+
+
+# --- Fix round 1 ---------------------------------------------------------------------
+
+THREAD = f'{{"type":"thread.started","thread_id":"{SID}"}}\n{{"type":"turn.started"}}\n'.encode()
+
+
+def test_saved_sessions_use_json_events_and_a_fixed_neutral_folder(monkeypatch, tmp_path):
+    """I6: -C сохраняемого сеанса — своя постоянная папка, не папка встречи и
+    не база знаний вызывающего; id — из события thread.started (--json)."""
+    _setup(monkeypatch, stdout=THREAD)
+    monkeypatch.setattr(codex.tempdirs, "system_temp", lambda: tmp_path)
+    rec, kb = tmp_path / "rec", tmp_path / "kb"
+    rec.mkdir()
+    kb.mkdir()
+    reply = _run(cwd=rec, allowed_dirs=(rec, kb), keep_session=True)
+    again = _run(cwd=rec, allowed_dirs=(rec, kb), resume=SID)
+    keep = str(tmp_path / codex.KEEP_WORKDIR)
+    for call in FakePopen.calls:
+        assert call.cmd[call.cmd.index("-C") + 1] == keep
+        assert "--json" in call.cmd
+    assert reply.session_id == SID and again.session_id == SID and not again.resume_failed
+    # Без сеанса — как раньше: папка базы знаний, без --json.
+    _run(cwd=rec, allowed_dirs=(rec, kb))
+    plain = FakePopen.calls[-1].cmd
+    assert plain[plain.index("-C") + 1] == str(kb) and "--json" not in plain
+
+
+def test_session_id_falls_back_to_the_banner(monkeypatch, tmp_path):
+    _setup(monkeypatch, stderr=BANNER)
+    assert _run(cwd=tmp_path, keep_session=True).session_id == SID
+
+
+def test_resume_that_lands_in_another_session_is_a_resume_failure(monkeypatch, tmp_path):
+    """I2: Codex сообщил другой id — сеанс начат заново (без системного
+    промпта): ответ и чужой id не используются."""
+    other = "01a112eb-0000-7000-8000-000000000000"
+    _setup(monkeypatch, stdout=f'{{"type":"thread.started","thread_id":"{other}"}}\n'.encode())
+    reply = _run(cwd=tmp_path, resume=SID)
+    assert reply.resume_failed and reply.text == "" and reply.session_id is None
+    assert other in reply.error
+
+
+def test_errors_come_from_json_events_when_stderr_is_empty(monkeypatch, tmp_path):
+    _setup(monkeypatch, code=1, answer=None, stdout=THREAD + (
+        b'{"type":"error","message":"Reconnecting... 1/5"}\n'
+        b'{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized"}}\n'))
+    reply = _run(cwd=tmp_path, keep_session=True)
+    assert "401 Unauthorized" in reply.error and not reply.resume_failed
+
+
+def test_deny_paths_are_a_prompt_rule_every_turn(monkeypatch, tmp_path):
+    """I5: у Codex запрета по путям нет — правило в тексте и при продолжении."""
+    _setup(monkeypatch, stdout=THREAD)
+    private = tmp_path / "kb" / "Личное"
+    _run(cwd=tmp_path, keep_session=True, deny_paths=[private])
+    _run(cwd=tmp_path, resume=SID, deny_paths=[private])
+    for call in FakePopen.calls:
+        text = call.input.decode("utf-8")
+        assert "закрыты" in text and str(private) in text
+    from meet import llm
+
+    assert llm.deny_enforced("codex") is False
+
+
+def test_forget_session_deletes_only_that_rollout(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    day = tmp_path / "sessions" / "2026" / "10" / "07"
+    day.mkdir(parents=True)
+    mine = day / f"rollout-2026-10-07T10-00-00-{SID}.jsonl"
+    other = day / "rollout-2026-10-07T10-00-00-01a112eb-0000-7000-8000-000000000000.jsonl"
+    mine.write_text("{}")
+    other.write_text("{}")
+    assert codex.forget_session(SID) == 1
+    assert not mine.exists() and other.exists()
+    assert codex.forget_session("*") == 0 and other.exists()

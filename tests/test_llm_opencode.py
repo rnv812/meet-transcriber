@@ -596,3 +596,66 @@ def test_images_are_ignored(fake, tmp_path):
     assert reply.text == "Да"
     assert not any("a.png" in a for a in FakePopen.calls[0].cmd)
     assert "a.png" not in FakePopen.calls[0].input.decode("utf-8")
+
+
+# --- Fix round 1 ---------------------------------------------------------------------
+
+
+def test_resume_that_lands_in_another_session_is_refused_and_deleted(fake):
+    """I2: события пришли от другого сеанса — OpenCode начал новый: ответ не
+    используется, чужой сеанс удаляется."""
+    other = "ses_0therSess10n"
+    FakePopen.out = "\n".join(
+        json.dumps({"type": t, "timestamp": 1, "sessionID": other, **extra}) for t, extra in [
+            ("step_start", {"part": {"messageID": "m1"}}),
+            ("text", {"part": {"messageID": "m1", "type": "text", "text": "Да"}}),
+            ("step_finish", {"part": {"messageID": "m1", "reason": "stop"}}),
+        ]) + "\n"
+    reply = _run(resume=SID)
+    assert reply.resume_failed and reply.text == "" and other in reply.error
+    assert fake["deleted"] == [other]
+
+
+def test_resumed_turn_does_not_repeat_a_long_system_prompt(fake):
+    """I4: длинный системный промпт ушёл первым сообщением — продолжению в
+    stdin только сообщение, в конфиге — короткий промпт."""
+    long_system = "Карта базы знаний. " * 3000
+    _run(system_prompt=long_system, keep_session=True)
+    _run(system_prompt=long_system, resume=SID)
+    first, again = FakePopen.calls
+    assert first.input.decode("utf-8").startswith("Карта базы знаний.")
+    assert again.input.decode("utf-8") == "Вопрос?"
+    cfg = json.loads(again.kw["env"]["OPENCODE_CONFIG_CONTENT"])
+    assert cfg["agent"][opencode.AGENT]["prompt"] == opencode.SHORT_SYSTEM
+
+
+def test_deny_paths_close_read_and_external_and_switch_grep_off(fake, tmp_path):
+    kb = tmp_path / "kb"
+    private = kb / "Личное"
+    _run(allowed_dirs=(kb,), deny_paths=[private])
+    perm = json.loads(FakePopen.calls[0].kw["env"]["OPENCODE_PERMISSION"])
+    variants = opencode.path_variants(private)
+    for v in variants:
+        for pattern in (v, str(Path(v) / "*")):
+            assert perm["read"][pattern] == "deny"
+            assert perm["external_directory"][pattern] == "deny"
+    # Запреты — после разрешений: побеждает последнее подходящее правило.
+    keys = list(perm["read"])
+    assert keys.index("*") < keys.index(variants[0])
+    assert perm["grep"] == "deny"
+    assert opencode.readonly_permission([kb])["grep"] == "allow"
+
+
+def test_model_not_found_while_resuming_keeps_the_session(fake):
+    FakePopen.out = error("APIError", "Model not found: openai/gpt-x") + "\n"
+    reply = _run(resume=SID)
+    assert reply.error and not reply.resume_failed
+
+
+def test_ignored_images_are_reported(fake, tmp_path):
+    from meet.llm.base import NO_VISION_NOTE
+
+    img = tmp_path / "a.png"
+    img.write_bytes(b"\x89PNG")
+    reply = _run(images=[img])
+    assert reply.dropped_images == [str(img)] and reply.notes == [NO_VISION_NOTE]
