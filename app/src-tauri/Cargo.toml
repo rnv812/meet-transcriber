@@ -54,6 +54,9 @@ serde_json = "1"
 # SHA-256 колеса meet в маркере движка: пересборка той же версии видна по
 # хэшу, а не по номеру версии (уже есть в дереве через tauri-codegen).
 sha2 = "0.10"
+# macOS: версия Meet.app в образе обновления (`CFBundleShortVersionString`
+# из Info.plist, `mac_update.rs`). Уже есть в дереве через tauri-utils.
+plist = "1"
 # Вкладка «Агент»: псевдоконсоль (ConPTY на Windows) для интерактивного
 # Claude Code / Codex во встроенном терминале окна (`pty.rs`).
 portable-pty = "0.9"

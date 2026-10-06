@@ -2113,6 +2113,7 @@ version = "0.3.3"
 dependencies = [
  "libc",
  "native-tls",
+ "plist",
  "portable-pty",
  "rfd",
  "serde",

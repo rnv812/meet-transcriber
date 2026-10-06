@@ -42,6 +42,12 @@ fn main() {
     if let Some((mode, root)) = install_wait::requested(&args) {
         std::process::exit(install_wait::run(mode, &root));
     }
+    // macOS: помощник обновления на месте (`mac_update.rs`) — ждёт выхода
+    // приложения и меняет пакет, тоже без Tauri и окон.
+    #[cfg(target_os = "macos")]
+    if let Some(job) = mac_update::Apply::from_args(&args) {
+        std::process::exit(mac_update::run_helper(&job));
+    }
     // macOS: PATH терминала (оболочки входа) — до любых потоков и детей:
     // из Finder и Dock приложение видит только PATH launchd, и Claude Code
     // с Codex «не находились».
@@ -192,6 +198,9 @@ fn main() {
             // Прерванный перенос движка и моделей — откатить или довести до
             // того, как надзор будет искать движок (`storage.rs`).
             storage_app::recover_at_startup();
+            // Брошенные прерванным обновлением копии рядом с Meet.app.
+            #[cfg(target_os = "macos")]
+            mac_update::sweep_siblings();
             // Движок, собранный из другого колеса той же версии, и движок
             // новой версии после обновления приложения ставятся в фоне;
             // резидент ждёт конца, чтобы не подняться из старого кода.

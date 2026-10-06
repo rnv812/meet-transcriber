@@ -704,7 +704,7 @@ fn install_blocking(app: &AppHandle, confirmed: bool) -> Result<Outcome, String>
         Some(other) => return Err(other.to_string()),
         None => {}
     }
-    launch_and_quit(app, &target)
+    launch_and_quit(app, &target, &release.version)
 }
 
 /// Скачать в `path`, считая SHA-256 по пути; события прогресса — окну.
@@ -770,7 +770,7 @@ fn download(
 /// приложение (`--quit` в `hooks.nsh`), но выход отсюда быстрее и тот же.
 /// macOS — `mac_update::apply`.
 #[cfg(not(target_os = "macos"))]
-fn launch_and_quit(app: &AppHandle, installer: &Path) -> Result<Outcome, String> {
+fn launch_and_quit(app: &AppHandle, installer: &Path, _version: &str) -> Result<Outcome, String> {
     shell_log!("обновление: запускаю {}", installer.display());
     crate::windows::shell_execute(&installer.to_string_lossy())
         .map_err(|code| format!("Не удалось запустить установщик (код {code})"))?;
@@ -778,10 +778,11 @@ fn launch_and_quit(app: &AppHandle, installer: &Path) -> Result<Outcome, String>
     Ok(Outcome::Installer)
 }
 
-/// macOS: заменить Meet.app на месте или открыть образ (`mac_update.rs`).
+/// macOS: заменить Meet.app на месте или открыть образ (`mac_update.rs`);
+/// `version` — версия выпуска: пакет в образе обязан быть ею.
 #[cfg(target_os = "macos")]
-fn launch_and_quit(app: &AppHandle, image: &Path) -> Result<Outcome, String> {
-    crate::mac_update::apply(app, image)
+fn launch_and_quit(app: &AppHandle, image: &Path, version: &str) -> Result<Outcome, String> {
+    crate::mac_update::apply(app, image, version)
 }
 
 #[cfg(test)]
