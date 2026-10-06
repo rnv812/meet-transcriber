@@ -568,7 +568,7 @@ export function RecordingCard({
       />
       {error && <div className="card__error" role="alert">{error}</div>}
       {status.kind === "ready" && (
-        <AnalysisStatus state={analysis.state} busy={busy}
+        <AnalysisStatus state={analysis.state} busy={busy} durationS={rec.duration_s ?? spokenUntil}
           onRun={canRerun(analysis.state?.state === "failed" ? analysis.state.provider : undefined)
             ? (p) => void doReanalyze(p) : undefined} />
       )}

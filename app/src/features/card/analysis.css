@@ -20,3 +20,5 @@
 .title-suggest__title { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
 .title-suggest__busy { display: flex; align-items: center; gap: 8px; color: var(--text-2); }
 .title-suggest__row { display: flex; justify-content: flex-end; gap: 8px; }
+/* Модель не дала части разметки (главы, важность): сказано прямо, а не пустой полосой. */
+.analysis-status__missing { color: var(--amber); }

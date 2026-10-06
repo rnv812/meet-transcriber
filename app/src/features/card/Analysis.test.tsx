@@ -1,9 +1,9 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingCard } from "./RecordingCard";
-import { AnalysisStatus, analysisJobOf, reanalyzeBlocked } from "./analysis";
+import { AnalysisStatus, analysisJobOf, missingNote, missingParts, reanalyzeBlocked } from "./analysis";
 import * as api from "../../lib/api";
-import type { AnalysisState, Job, Recording, Transcript } from "../../lib/types";
+import type { Analysis, AnalysisState, Job, Recording, Transcript } from "../../lib/types";
 
 vi.mock("../../lib/api", async (orig) => ({
   ...(await orig<typeof import("../../lib/api")>()),
@@ -84,6 +84,56 @@ test("AnalysisStatus: идёт, устарел, не удался", async () => 
   // без модели — без кнопки
   rerender(<AnalysisStatus state={{ state: "failed", error: "нет" }} busy={false} />);
   expect(screen.queryByRole("button")).toBeNull();
+});
+
+const doc = (extra: Partial<Analysis> = {}): Analysis => ({
+  version: 1, model: "openai-compatible:qwen3:8b", llm: { provider: "openai-compatible", model: "qwen3:8b" },
+  created_at: 1759300000, fingerprint: "f", segments: 1,
+  features: ["types", "importance", "chapters", "insights", "category", "title"],
+  phrase_types: {}, importance: { "0": 0.9 }, chapters: [{ start_i: 0, end_i: 0, title: "Бета", short: "Бета" }],
+  insights: [], category: null, title: null, ...extra,
+});
+
+test("анализ без глав — честная строка, а не молча пустая полоса", () => {
+  const warnings = ["часть 1: chapters пустой: нужны главы по смене темы разговора"];
+  render(<AnalysisStatus state={{ state: "ready", analysis: doc({ chapters: [], missing: ["chapters"], warnings }) }}
+    busy={false} />);
+  const note = screen.getByText("Модель вернула анализ без глав — попробуйте другую модель");
+  expect(note).toHaveAttribute("title", warnings[0]);
+  // Какая модель разметила — по-прежнему видно.
+  expect(screen.getByText(/Анализ: Локальная модель \(qwen3:8b\)/)).toBeInTheDocument();
+});
+
+test("строка о недостающих частях: несколько частей, устаревший анализ", () => {
+  expect(missingNote(["chapters", "importance"])).toBe(
+    "Модель вернула анализ без глав и оценок важности — попробуйте другую модель");
+  expect(missingNote(["types", "chapters", "insights"])).toBe(
+    "Модель вернула анализ без глав, типов реплик и наблюдений — попробуйте другую модель");
+  expect(missingNote([])).toBeNull();
+  render(<AnalysisStatus state={{ state: "stale", analysis: doc({ chapters: [], missing: ["chapters"] }) }}
+    busy={false} />);
+  expect(screen.getByText(/Модель вернула анализ без глав/)).toBeInTheDocument();
+});
+
+test("анализ прежних версий без `missing`: пустые главы длинной встречи и пустая важность", () => {
+  expect(missingParts(doc({ chapters: [] }), 1800)).toEqual(["chapters"]);
+  // Короткой встрече главы не положены.
+  expect(missingParts(doc({ chapters: [] }), 120)).toEqual([]);
+  expect(missingParts(doc({ importance: {}, segments: 40 }), 1800)).toEqual(["importance"]);
+  // Главы выключены в настройках — их и не просили.
+  expect(missingParts(doc({ chapters: [], features: ["importance"] }), 1800)).toEqual([]);
+  // Резидент сам сказал, чего нет, — верим ему.
+  expect(missingParts(doc({ chapters: [], missing: [] }), 1800)).toEqual([]);
+});
+
+test("карточка: анализ без глав и важности — строка в карточке", async () => {
+  vi.mocked(api.getAnalysis).mockResolvedValue({
+    state: "ready", analysis: doc({ chapters: [], importance: {}, missing: ["importance", "chapters"] }),
+  });
+  load();
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  expect(await screen.findByText("Модель вернула анализ без глав и оценок важности — попробуйте другую модель"))
+    .toBeInTheDocument();
 });
 
 test("reanalyzeBlocked и задача анализа записи", () => {

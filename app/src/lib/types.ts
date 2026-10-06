@@ -910,6 +910,10 @@ export type Analysis = {
   issues?: { key: string; segments: number[]; spoken: string; confidence: number }[];
   /** Что не разобралось (части, отброшенные проверкой). */
   warnings?: string[];
+  /** Части, которых модель так и не дала (0.3.5): окно говорит об этом, а не показывает пустую полосу. */
+  missing?: AnalysisFeature[];
+  /** Сколько элементов каждой части отброшено проверкой (номер реплики вне встречи и т. п.). */
+  dropped?: Partial<Record<AnalysisFeature, number>>;
 };
 
 export type AnalysisStateName = "none" | "queued" | "running" | "ready" | "stale" | "failed";

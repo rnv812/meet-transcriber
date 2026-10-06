@@ -9,11 +9,11 @@
  * плеере — это M3; здесь только состояние и действия.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, getAnalysis, patchRecording, suggestTitle, type Endpoint } from "../../lib/api";
 import { errorText } from "../../lib/format";
 import { llmLabel, originOf, provenance, retryText } from "../../lib/llm";
-import type { AnalysisState, Job, Recording, TitleSuggestion } from "../../lib/types";
+import type { Analysis, AnalysisFeature, AnalysisState, Job, Recording, TitleSuggestion } from "../../lib/types";
 import { isModelProgress } from "../../lib/progress";
 import { Button } from "../../ui/Button";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
@@ -64,10 +64,54 @@ export function useAnalysis(endpoint: Endpoint, id: string, folder: string | nul
   return { state: shown, reload };
 }
 
+/** Части разметки в строке «Модель вернула анализ без …»: сначала то, что видно на полосе плеера. */
+const MISSING_ORDER: AnalysisFeature[] = ["chapters", "importance", "types", "insights", "title", "category", "issues"];
+const MISSING_NAME: Record<AnalysisFeature, string> = {
+  chapters: "глав", importance: "оценок важности", types: "типов реплик", insights: "наблюдений",
+  title: "названия", category: "категории", issues: "ссылок на задачи",
+};
+/** Короче этого встрече главы не положены (резидент просит 0–2 главы до 5 минут). */
+const CHAPTERS_MIN_S = 300;
+/** С этого числа сегментов пустая важность — сбой модели, а не ответ (как у резидента). */
+const IMPORTANCE_MIN_SEGMENTS = 8;
+
+/**
+ * Каких частей модель не дала. С 0.3.5 резидент пишет это сам (`missing`);
+ * у анализа прежних версий — по виду: запрошены, а пусто (главы длинной
+ * встречи, важность разговора).
+ */
+export function missingParts(a: Analysis | undefined, durationS?: number | null): AnalysisFeature[] {
+  if (!a) return [];
+  if (Array.isArray(a.missing)) return a.missing.filter((f) => f in MISSING_NAME);
+  const asked = a.features ?? [];
+  const out: AnalysisFeature[] = [];
+  if (asked.includes("chapters") && !a.chapters?.length && (durationS ?? 0) >= CHAPTERS_MIN_S) out.push("chapters");
+  if (asked.includes("importance") && a.importance && !Object.keys(a.importance).length
+    && (a.segments ?? 0) >= IMPORTANCE_MIN_SEGMENTS) out.push("importance");
+  return out;
+}
+
+/** «Модель вернула анализ без глав и оценок важности — попробуйте другую модель»; нечего сказать — null. */
+export function missingNote(parts: AnalysisFeature[]): string | null {
+  const names = MISSING_ORDER.filter((f) => parts.includes(f)).map((f) => MISSING_NAME[f]);
+  if (!names.length) return null;
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} и ${names.at(-1)}`;
+  return `Модель вернула анализ без ${list} — попробуйте другую модель`;
+}
+
+/** Строка о недостающих частях; подробности (что не разобралось) — в подсказке. */
+function MissingNote({ analysis, durationS }: { analysis?: Analysis; durationS?: number | null }) {
+  const note = missingNote(missingParts(analysis, durationS));
+  if (!note) return null;
+  return <span className="analysis-status__missing" title={analysis?.warnings?.join("\n") || undefined}>{note}</span>;
+}
+
 /** Тихая строка о состоянии анализа под действиями карточки; нечего сказать — ничего. */
-export function AnalysisStatus({ state, busy, onRun }: {
+export function AnalysisStatus({ state, busy, onRun, durationS }: {
   state: AnalysisState | null;
   busy: boolean;
+  /** Длительность встречи, с: у анализа прежних версий пустые главы короткой встречи — не сбой. */
+  durationS?: number | null;
   /**
    * Переанализировать; нет — без кнопки (модель не подключена). После сбоя
    * выбранной модели — `onRun(её имя)`: повтор ею же.
@@ -93,15 +137,18 @@ export function AnalysisStatus({ state, busy, onRun }: {
     case "ready": {
       // Какая модель разметила встречу: видно, уходила ли она облачной модели.
       const line = provenance("Анализ", originOf(state.analysis), state.analysis?.created_at);
-      return line ? (
+      const missing = <MissingNote analysis={state.analysis} durationS={durationS} />;
+      return line || missingNote(missingParts(state.analysis, durationS)) ? (
         <div className="analysis-status analysis-status--origin">
-          <span className="muted" title="Какая модель разметила встречу">{line}</span>
+          {line && <span className="muted" title="Какая модель разметила встречу">{line}</span>}
+          {missing}
         </div>
       ) : null;
     }
     case "stale":
       return <StaleAnalysis busy={busy} onRun={onRun && (() => onRun())}
-        origin={provenance("Анализ", originOf(state.analysis), state.analysis?.created_at)} />;
+        origin={provenance("Анализ", originOf(state.analysis), state.analysis?.created_at)}
+        missing={<MissingNote analysis={state.analysis} durationS={durationS} />} />;
     case "failed":
       return (
         <div className="analysis-status" role="status">
@@ -153,12 +200,15 @@ export function AnalysisOffer({ busy, onAnswer, onOpenSettings }: {
 }
 
 /** «Анализ устарел» и «Переанализировать…» — с подтверждением: прежняя разметка будет заменена. */
-function StaleAnalysis({ busy, onRun, origin }: { busy: boolean; onRun?: () => void; origin?: string | null }) {
+function StaleAnalysis({ busy, onRun, origin, missing }: {
+  busy: boolean; onRun?: () => void; origin?: string | null; missing?: ReactNode;
+}) {
   const [asking, setAsking] = useState(false);
   return (
     <div className="analysis-status" role="status">
       <span className="muted" title={origin ?? undefined}>Анализ устарел: расшифровку изменили после него</span>
       {onRun && <button type="button" className="link-btn" onClick={() => setAsking(true)} disabled={busy}>Переанализировать…</button>}
+      {missing}
       {asking && onRun && (
         <ConfirmDialog {...CONFIRMS.reanalyze} onCancel={() => setAsking(false)}
           onConfirm={() => { setAsking(false); onRun(); }} />
