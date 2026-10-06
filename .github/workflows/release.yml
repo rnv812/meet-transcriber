@@ -136,8 +136,13 @@ jobs:
             ${{ steps.build.outputs.installer }}
             ${{ steps.build.outputs.sums }}
 
-  # macOS 13+, Apple Silicon. Экспериментально: подписи Apple нет (ad-hoc),
-  # на реальном Mac не проверено. Тесты — подмножество без движка и без
+  # macOS 13+, Apple Silicon. Экспериментально: подписи Apple нет, на
+  # реальном Mac не проверено. Подпись — свой постоянный самоподписанный
+  # сертификат (секреты MACOS_CERT_P12 — base64 .p12, MACOS_CERT_PASSWORD),
+  # уже после сборки: designated requirement одинаков у всех сборок, и macOS
+  # сохраняет разрешения «Микрофон» и «Запись экрана» после обновления. Без
+  # секретов: на теге — сбой, иначе (форк, пробный прогон) — ad-hoc с
+  # предупреждением. Тесты — подмножество без движка и без
   # Windows-модулей; сборка — scripts/build_release_macos.sh.
   macos:
     # Без права записи: ни на теге, ни в пробном прогоне.
@@ -150,6 +155,12 @@ jobs:
         shell: bash
     env:
       PYTHONUTF8: "1"
+      # SHA-1 сертификата подписи (открытые данные): другой сертификат в
+      # секрете — сбой сборки, а не тихая потеря разрешений у всех.
+      MACOS_CERT_SHA1: "68E9E1AE56BD808462A1F52FCFF5083F544ABA73"
+      # Выпуск (тег) без своей подписи — сбой, а не ad-hoc с предупреждением:
+      # его не примет обновление на месте, а разрешения сбросятся у всех.
+      MEET_REQUIRE_SIGNING: ${{ github.ref_type == 'tag' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -245,18 +256,48 @@ jobs:
           # Образ раннера — в ключе: набор системных библиотек влияет на сборку.
           key: ffmpeg-mac-${{ steps.image.outputs.key }}-${{ hashFiles('scripts/macos.sha256', 'scripts/build_release_macos.sh') }}
 
-      - name: Build .dmg
+      # Сборка — без ключа: в ней работает чужой код (npm, crates и их
+      # build.rs, configure/make). Пакет подписан ad-hoc.
+      - name: Build Meet.app (unsigned)
         id: build
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: bash scripts/build_release_macos.sh "$VERSION"
 
+      # Ключ — только здесь и только программам Apple: импорт во временную
+      # связку, codesign с явным requirement, удаление связки, затем образ
+      # (hdiutil). Секреты — только в среду этого шага. Нет их: на теге —
+      # сбой, иначе ad-hoc с предупреждением.
+      - name: Sign and package
+        id: package
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APP: ${{ steps.build.outputs.app }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/sign_macos.sh "$APP" "$VERSION"
+
+      # designated requirement в журнале; при своей подписи — не cdhash, а
+      # явное требование сертификата; образ проходит проверку обновления
+      # (codesign --verify -R, версия в Info.plist).
+      - name: Signature check
+        env:
+          APP: ${{ steps.build.outputs.app }}
+          DMG: ${{ steps.package.outputs.dmg }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash scripts/check_macos_signature.sh "$APP" "$DMG" "$VERSION"
+
+      # Страховка: sign_macos.sh удаляет связку сам сразу после подписи.
+      - name: Remove signing keychain
+        if: always()
+        run: bash scripts/macos_keychain.sh cleanup
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: meet-macos-aarch64
           path: |
-            ${{ steps.build.outputs.dmg }}
-            ${{ steps.build.outputs.sums }}
+            ${{ steps.package.outputs.dmg }}
+            ${{ steps.package.outputs.sums }}
             ${{ steps.build.outputs.sources }}
           if-no-files-found: error
           retention-days: 14
