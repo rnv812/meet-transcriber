@@ -172,3 +172,28 @@ def test_unknown_window_sizes_summaries_for_8k(monkeypatch):
     monkeypatch.setattr(analysis, "local_context", lambda cfg: None)
     assert job_worker._local_context("openai-compatible", settings.Settings()) == 8192
     assert job_worker._local_context("claude-code", settings.Settings()) is None
+
+
+
+@pytest.mark.parametrize("chars_per_turn", [6000, 7000, 8000, 9000, 10000, 11000, 12000])
+def test_plan_refuses_before_any_call_rather_than_at_the_cap(tmp_path, chars_per_turn):
+    # Пересказы по ~4 символа на токен во весь предел: встреча либо проходит
+    # в 40 вызовов, либо получает отказ до первого — не на сороковом.
+    folder = _meeting(tmp_path, chars_per_turn=chars_per_turn)
+    with FakeOllama(context=8192, reply=full("абв")) as server:
+        try:
+            assistant.summarize(folder, _runner(server), None, provider="openai-compatible", context=8192)
+        except RuntimeError as e:
+            assert server.chats() == [], f"отказ после {len(server.chats())} вызовов: {e}"
+        else:
+            assert len(server.chats()) <= assistant.MAX_DIGEST_CALLS
+
+
+def test_draft_that_eats_the_room_is_named_in_the_refusal():
+    room = assistant._final_room(8192)
+    with pytest.raises(assistant.DigestError, match="черновик живого режима") as e:
+        assistant.digest_plan(100_000, 8192, overhead=room - 1000, draft=9000)
+    assert "9000 символов" in str(e.value)
+    with pytest.raises(assistant.DigestError) as plain:
+        assistant.digest_plan(100_000, 8192, overhead=room - 1000)
+    assert "черновик" not in str(plain.value) and "не остаётся места" in str(plain.value)

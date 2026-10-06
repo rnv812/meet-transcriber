@@ -109,6 +109,10 @@ MERGE_ROUNDS = 4
 MIN_PARTS_CONTEXT = 8192
 MAX_DIGEST_CALLS = 40
 MIN_SHRINK = 0.7
+# Пересказ — обычный текст: у моделей с большим словарём до ~4 символов на
+# токен. План считает с этим запасом: встреча, которой не хватило бы 40
+# вызовов, получает отказ до первого вызова, а не на сороковом.
+REPLY_CHARS_PER_TOKEN = 4
 # Окно локальной модели не узнать — итоги считают по 8K (как анализ).
 UNKNOWN_CONTEXT = 8192
 
@@ -250,14 +254,16 @@ def summarize(folder: Path, runner, knowledge_dir, *, provider: str | None = Non
     title, date = library.title_and_date(folder, data, today_if_unknown=True)
     dirs = _allowed_dirs(folder, knowledge_dir)
     head = f"Встреча: {safe_line(title)} ({date})"
-    tail = f"{_live_draft(folder)}{_knowledge_hint(dirs)}"
+    draft = _live_draft(folder)
+    tail = f"{draft}{_knowledge_hint(dirs)}"
     prompt = f"{head}\n\nТранскрипт:\n{fenced_transcript(data)}{tail}"
     system = SUMMARY_SYSTEM + (titles.SUMMARY_TITLE_RULE if want_title else "")
     if context and len(prompt) + len(system) > _final_room(context):
         intro = (f"{head}\n\nВся расшифровка не помещается в окно контекста модели — вот пересказ "
                  f"встречи по частям, по порядку:\n{TRANSCRIPT_OPEN}\n")
         overhead = len(system) + len(intro) + len(f"\n{TRANSCRIPT_CLOSE}") + len(tail)
-        digest = _digest(runner, head, transcript_text(data), context, overhead, dirs=dirs, cwd=folder, bus=bus)
+        digest = _digest(runner, head, transcript_text(data), context, overhead, dirs=dirs, cwd=folder, bus=bus,
+                         draft=len(draft))
         prompt = f"{intro}{digest}\n{TRANSCRIPT_CLOSE}{tail}"
         _progress(bus, "итог")
     text = _call(runner, prompt, system_prompt=system, allowed_dirs=dirs,
@@ -305,36 +311,57 @@ def _reply_tokens(chars: int) -> int:
     return max(1, min(PART_REPLY_TOKENS, tokens_of(chars) // 3))
 
 
-def digest_plan(chars: int, context: int, overhead: int) -> dict:
-    """Сколько вызовов займут итоги по частям встречи из `chars` символов в
-    окне `context` (оценка сверху: пересказ — во весь предел, ~3 символа на
-    токен) → {"parts", "calls", "room"}; не выйдет — DigestError сразу."""
+def _pack(sizes: list[int], limit: int) -> list[int]:
+    """Длины групп, как их соберёт `_chunks` (подряд, не длиннее `limit`)."""
+    out: list[int] = []
+    for size in sizes:
+        for piece in [limit] * (size // limit) + ([size % limit] if size % limit else []) if size > limit else [size]:
+            if out and out[-1] + piece + 1 <= limit:
+                out[-1] += piece + 1
+            else:
+                out.append(piece)
+    return out
+
+
+def digest_plan(chars: int | list[int], context: int, overhead: int, draft: int = 0) -> dict:
+    """Сколько вызовов займут итоги по частям встречи (`chars` — длины частей
+    или всего текста) в окне `context` — по тем же частям и группам, что и
+    работа, с пересказом во весь предел по REPLY_CHARS_PER_TOKEN символов на
+    токен (оценка сверху) → {"parts", "calls", "room"}; не выйдет — DigestError
+    сразу. `draft` — сколько из `overhead` занимает черновик живого режима:
+    место съел он — так и сказать."""
     if context < MIN_PARTS_CONTEXT:
         raise DigestError(f"встреча не помещается в окно контекста модели ({context} токенов), а итогам по "
                           f"частям нужно окно от {MIN_PARTS_CONTEXT // 1024}K — увеличьте контекст модели до 16K+")
     limit = part_chars(context)
     room = _final_room(context) - overhead
-    reply_chars = _reply_tokens(limit) * 3
+    reply_chars = _reply_tokens(limit) * REPLY_CHARS_PER_TOKEN
     if room < 2 * reply_chars:
+        if draft and room + draft >= 2 * reply_chars:
+            raise DigestError(f"черновик живого режима ({draft} символов) занимает место в окне контекста модели "
+                              f"({context} токенов): итогам не остаётся места — увеличьте контекст модели до 16K+")
         raise DigestError(f"в окне контекста модели ({context} токенов) не остаётся места для итогов — "
                           "увеличьте контекст модели до 16K+")
-    parts = -(-chars // limit)
-    # Сведение собирает в группу целые пересказы: считаем штуками, а не символами.
-    calls, count, unit = parts, parts, reply_chars + 2
+    sizes = list(chars) if isinstance(chars, list) else _pack([chars], limit)
+
+    def replies(lengths: list[int], prefix: int) -> list[int]:
+        return [_reply_tokens(n) * REPLY_CHARS_PER_TOKEN + prefix for n in lengths]
+
+    # Пересказы частей («Часть n:\n» + текст), затем сведения групп — как в работе.
+    summaries = replies(sizes, len(f"Часть {len(sizes)}:\n"))
+    calls = len(sizes)
     for _ in range(MERGE_ROUNDS):
-        if count * unit <= room:
+        if sum(summaries) + 2 * (len(summaries) - 1) <= room:
             break
-        per = max(1, limit // unit)
-        groups = -(-count // per)
-        calls += groups
-        unit = min(reply_chars, per * unit // 3) + 2
-        count = groups
+        groups = _pack(summaries, limit)
+        calls += len(groups)
+        summaries = replies(groups, 0)
     # +1 — сами итоги.
-    if count * unit > room or calls + 1 > MAX_DIGEST_CALLS:
+    if sum(summaries) + 2 * (len(summaries) - 1) > room or calls + 1 > MAX_DIGEST_CALLS:
         raise DigestError(f"встреча слишком длинная для окна контекста модели ({context} токенов): итоги по "
                           f"частям заняли бы больше {MAX_DIGEST_CALLS} вызовов модели — увеличьте контекст "
                           "модели до 16K+")
-    return {"parts": parts, "calls": calls, "room": room}
+    return {"parts": len(sizes), "calls": calls, "room": room}
 
 
 class DigestError(RuntimeError):
@@ -389,7 +416,8 @@ def _progress(bus, note: str, n: int | None = None, total: int | None = None) ->
                       key="summary", note=note)
 
 
-def _digest(runner, header: str, transcript: str, context: int, overhead: int, *, dirs, cwd, bus=None) -> str:
+def _digest(runner, header: str, transcript: str, context: int, overhead: int, *, dirs, cwd, bus=None,
+            draft: int = 0) -> str:
     """Пересказ длинной встречи для окна `context` (`overhead` — символов
     итогового промпта кроме пересказа): части расшифровки — пересказы (map);
     вместе не влезают в итоговый промпт с полным пределом итогов — сводятся
@@ -397,9 +425,11 @@ def _digest(runner, header: str, transcript: str, context: int, overhead: int, *
     вызова (`digest_plan`); сведение не сократило пересказы на 30 % — стоп."""
     from meet import llm_progress
 
-    plan = digest_plan(len(transcript), context, overhead)
-    limit, room = part_chars(context), plan["room"]
+    limit = part_chars(context)
     parts = _chunks(transcript.splitlines(), limit)
+    plan = digest_plan([len(chunk) for chunk in parts] if context >= MIN_PARTS_CONTEXT else len(transcript),
+                       context, overhead, draft)
+    room = plan["room"]
     total = plan["calls"] + 1
     llm_progress.plan(bus, [("summary", len(chunk)) for chunk in parts]
                       + [("summary", limit)] * (plan["calls"] - len(parts)) + [("summary", room)])
