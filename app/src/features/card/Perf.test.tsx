@@ -16,6 +16,14 @@ const SMALL = 300;
 const N = 3000;
 /** Во сколько раз 3000 реплик могут быть дольше 300: линейно ×10, запас на шум. */
 const MAX_RATIO = 30;
+/**
+ * Отрисовка в jsdom в десятки раз дороже разметки (3000 реплик — 1,5 с в тишине,
+ * под нагрузкой >20 с и таймаут теста), поэтому сравниваем размеры поменьше:
+ * 240 и 1200 реплик (кратно 12 и 15, как требует meeting()), линейно ×5, квадратично ×25.
+ */
+const DRAW_SMALL = 240;
+const DRAW_N = 1200;
+const DRAW_MAX_RATIO = 12;
 /** Последний рубеж на случай совсем медленной машины — порядок, а не бюджет. */
 const SANITY_MS = 30_000;
 const TYPES: PhraseType[] = ["question", "decision", "task", "risk", "idea", "agreement", "objection"];
@@ -87,9 +95,9 @@ test("разметка, строки ленты, кривая и «Только 
 });
 
 test("отрисовка реплик с разметкой растёт линейно", () => {
-  draw(SMALL)(); // прогрев
-  const small = Math.max(best(3, draw(SMALL)), 5);
-  const large = best(1, draw(N));
+  draw(DRAW_SMALL)(); // прогрев
+  const small = Math.max(best(3, draw(DRAW_SMALL)), 5);
+  const large = best(2, draw(DRAW_N));
   expect(large).toBeLessThan(SANITY_MS);
-  expect(large / small).toBeLessThan(MAX_RATIO);
-});
+  expect(large / small).toBeLessThan(DRAW_MAX_RATIO);
+}, 60_000);

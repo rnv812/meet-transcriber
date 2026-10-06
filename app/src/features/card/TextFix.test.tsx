@@ -81,16 +81,31 @@ function select(p: HTMLElement, start: number, end: number) {
   sel.addRange(range);
 }
 
+/**
+ * Выделить текст мышью и дождаться кнопки «Исправить…». Кнопка появляется после
+ * `setTimeout(0)` после mouseup, а выделение может сбросить поздняя перерисовка
+ * карточки (ответы getAssistant/getSummary приходят асинхронно). Под нагрузкой
+ * это случается: одной попытки с `findBy` (1 с) мало. Поэтому выделяем заново и
+ * повторяем, пока кнопка не появится.
+ */
+async function selectAndOpenFix(text: RegExp, start: number, end: number) {
+  await vi.waitFor(async () => {
+    const p = screen.getByText(text).closest("p")!;
+    select(p, start, end);
+    fireEvent.mouseUp(p);
+    await screen.findByRole("button", { name: "Исправить…" }, { timeout: 2_000 });
+  }, { timeout: 15_000, interval: 50 });
+  await userEvent.click(screen.getByRole("button", { name: "Исправить…" }));
+}
+
 async function turnText(text: RegExp) {
   return (await screen.findByText(text)).closest("p")!;
 }
 
 test("выделение → «Исправить…»: слово целиком, совпадения, исправить одно место и добавить в термины", async () => {
   render(<RecordingCard id="r1" endpoint={ep} />);
-  const p = await turnText(/Поднимем кубер нетис/);
-  select(p, 11, 18); // «бер нет» — дополняется до «кубер нетис»
-  fireEvent.mouseUp(p);
-  await userEvent.click(await screen.findByRole("button", { name: "Исправить…" }));
+  await turnText(/Поднимем кубер нетис/);
+  await selectAndOpenFix(/Поднимем кубер нетис/, 11, 18); // «бер нет» — дополняется до «кубер нетис»
   const box = await screen.findByRole("dialog", { name: "Исправить распознанное" });
   expect(within(box).getByText("кубер нетис")).toBeInTheDocument();
   expect(api.previewTextFix).toHaveBeenCalledWith(ep, "r1", { find: "кубер нетис", segment: 0, offset: 9 });
@@ -125,10 +140,8 @@ test("выделение → «Исправить…»: слово целико�
 test("«Заменить во всей встрече» — показывает совпадения и заменяет все", async () => {
   vi.mocked(api.applyTextFix).mockResolvedValue({ ...result, changed: 2, hotword: undefined });
   render(<RecordingCard id="r1" endpoint={ep} />);
-  const p = await turnText(/Поднимем кубер нетис/);
-  select(p, 9, 20);
-  fireEvent.mouseUp(p);
-  await userEvent.click(await screen.findByRole("button", { name: "Исправить…" }));
+  await turnText(/Поднимем кубер нетис/);
+  await selectAndOpenFix(/Поднимем кубер нетис/, 9, 20);
   const box = await screen.findByRole("dialog", { name: "Исправить распознанное" });
   const all = await within(box).findByRole("checkbox", { name: /Заменить во всей встрече/ });
   expect(all).not.toBeChecked();
