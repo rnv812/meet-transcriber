@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingCard } from "./RecordingCard";
-import { ImproveDialog, ImproveStatus, chosenExtra, chosenGroups, improveJobOf } from "./improve";
+import { ImproveDialog, ImproveStatus, chosenExtra, chosenGroups, cleanTarget, improveJobOf } from "./improve";
 import * as api from "../../lib/api";
 import type { ImproveGroup, ImproveState, Job, Recording, Transcript } from "../../lib/types";
 
@@ -91,7 +91,7 @@ test("окно: группы терминов «апи → API · 12», отме
   const boxes = within(list).getAllByRole("checkbox");
   expect(boxes).toHaveLength(3);
   expect(boxes.every((b) => (b as HTMLInputElement).checked)).toBe(true);
-  expect(within(list).getByText("апи").closest("label")).toHaveTextContent("апи → API· 12");
+  expect(within(list).getByText("апи").closest(".improve__row")).toHaveTextContent("апи → API· 12");
   expect(screen.queryByText("Прочие исправления")).toBeNull();
   expect(screen.getByText("Будет заменено: 20 мест")).toBeInTheDocument();
   // Правила и термины — по умолчанию выключены.
@@ -254,7 +254,7 @@ test("окно: другие места термина — на проверку
     more: [sample(7, 70, "Франц ", "Кафка", " писал романы"), sample(8, 80, "в ", "кафка", " лежат события")],
   };
   const props = dialog({ ...ready, proposal: { ...ready.proposal!, groups: [kafka] } });
-  const label = screen.getByText("кафка").closest("label")!;
+  const label = screen.getByText("кафка").closest(".improve__row")!;
   expect(label).toHaveTextContent("· 1");
   // Свёрнутая строка сразу говорит о непроверенных местах.
   expect(label).toHaveTextContent("· ещё 2 места");
@@ -302,4 +302,168 @@ test("ImproveStatus: только исправления — тоже строк
   render(<ImproveStatus state={{ ...ready, proposal: { ...ready.proposal!, groups: [GROUPS[3]!, GROUPS[4]!] } }}
     busy={false} onOpen={vi.fn()} onRetry={vi.fn()} onDismiss={vi.fn()} />);
   expect(screen.getByRole("status")).toHaveTextContent("ИИ предлагает 2 исправления распознавания");
+});
+
+// --- «как правильно», вписанное человеком ------------------------------------------------------
+
+const rowOf = (find: string) => screen.getByText(find, { selector: ".improve__from" }).closest(".improve__row")! as HTMLElement;
+
+test("правка: щелчок по замене — поле; Enter принимает, отметка «изменено» и вписанное уходит в «Применить»", async () => {
+  const props = dialog();
+  await userEvent.click(within(rowOf("апи")).getByRole("button", { name: "API" }));
+  const input = screen.getByRole("textbox", { name: "Как правильно: апи" });
+  expect(input).toHaveValue("API");
+  expect(input).toHaveFocus();
+  await userEvent.clear(input);
+  await userEvent.type(input, "  MSSP  {Enter}");
+  expect(screen.queryByRole("textbox", { name: "Как правильно: апи" })).toBeNull();
+  const row = rowOf("апи");
+  expect(row).toHaveTextContent("апи → MSSP");
+  expect(within(row).getByText("изменено")).toHaveAttribute("title", "Вписано вручную; ИИ предлагал «API»");
+  expect(within(row).getByRole("checkbox")).toHaveAccessibleName("апи → MSSP");
+  // Количество мест не меняется: вписанное — во всех местах группы.
+  expect(row).toHaveTextContent("· 12");
+  expect(screen.getByText("Будет заменено: 20 мест")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
+  expect(props.onApply).toHaveBeenCalledWith(["g1", "g2", "g3"], {}, false, false, { g1: "MSSP" });
+});
+
+test("правка: ✎ открывает поле, Esc отменяет и не закрывает окно", async () => {
+  const props = dialog();
+  await userEvent.click(screen.getByRole("button", { name: "Изменить замену: кафка" }));
+  const input = screen.getByRole("textbox", { name: "Как правильно: кафка" });
+  await userEvent.type(input, "Z{Escape}");
+  expect(props.onClose).not.toHaveBeenCalled();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  // Фокус — обратно на замену, а не в никуда.
+  expect(within(rowOf("кафка")).getByRole("button", { name: "Kafka" })).toHaveFocus();
+  expect(rowOf("кафка")).toHaveTextContent("кафка → Kafka");
+  expect(within(rowOf("кафка")).queryByText("изменено")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
+  expect(props.onApply).toHaveBeenCalledWith(["g1", "g2", "g3"], {}, false, false);
+});
+
+test("правка: уход из поля принимает; «вернуть предложенное» снимает правку", async () => {
+  const props = dialog();
+  await userEvent.click(screen.getByRole("button", { name: "Изменить замену: кафка" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Как правильно: кафка" }), " Streams");
+  await userEvent.tab();
+  expect(rowOf("кафка")).toHaveTextContent("кафка → Kafka Streams");
+  await userEvent.click(within(rowOf("кафка")).getByRole("button", { name: "вернуть предложенное" }));
+  expect(rowOf("кафка")).toHaveTextContent("кафка → Kafka");
+  expect(within(rowOf("кафка")).queryByText("изменено")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
+  expect(props.onApply).toHaveBeenCalledWith(["g1", "g2", "g3"], {}, false, false);
+});
+
+test("правка: пусто — ошибка, применить нельзя; Esc возвращает предложенное", async () => {
+  const props = dialog();
+  await userEvent.click(screen.getByRole("button", { name: "Изменить замену: апи" }));
+  const input = screen.getByRole("textbox", { name: "Как правильно: апи" });
+  await userEvent.clear(input);
+  await userEvent.type(input, "   {Enter}");
+  expect(screen.getByRole("textbox", { name: "Как правильно: апи" })).toHaveAttribute("aria-invalid", "true");
+  expect(screen.getByRole("alert")).toHaveTextContent("Впишите, как правильно");
+  expect(screen.getByRole("button", { name: "Применить выбранное" })).toBeDisabled();
+  // Уход из поля пустое тоже не принимает.
+  await userEvent.tab();
+  expect(screen.getByRole("textbox", { name: "Как правильно: апи" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Применить выбранное" })).toBeDisabled();
+  await userEvent.type(screen.getByRole("textbox", { name: "Как правильно: апи" }), "{Escape}");
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(rowOf("апи")).toHaveTextContent("апи → API");
+  await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
+  expect(props.onApply).toHaveBeenCalledWith(["g1", "g2", "g3"], {}, false, false);
+});
+
+test("правка: вписали исходное — группа не заменяется; предложенное после пробелов — не правка", async () => {
+  const props = dialog();
+  await userEvent.click(screen.getByRole("button", { name: "Изменить замену: апи" }));
+  const input = screen.getByRole("textbox", { name: "Как правильно: апи" });
+  await userEvent.clear(input);
+  await userEvent.type(input, " апи {Enter}");
+  expect(rowOf("апи")).toHaveTextContent("как в тексте — не заменяется");
+  expect(rowOf("апи")).toHaveTextContent("· 0");
+  expect(screen.getByText("Будет заменено: 8 мест")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Изменить замену: кафка" }));
+  const kafka = screen.getByRole("textbox", { name: "Как правильно: кафка" });
+  await userEvent.clear(kafka);
+  await userEvent.type(kafka, "  Kafka {Enter}");
+  expect(within(rowOf("кафка")).queryByText("изменено")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
+  expect(props.onApply).toHaveBeenCalledWith(["g2", "g3"], {}, false, false);
+});
+
+test("правка: только регистр, смесь кириллицы и латиницы, знаки — как вписано", async () => {
+  const props = dialog();
+  await userEvent.click(screen.getByRole("button", { name: "Изменить замену: апи" }));
+  const input = screen.getByRole("textbox", { name: "Как правильно: апи" });
+  await userEvent.clear(input);
+  await userEvent.type(input, "Api{Enter}");
+  expect(within(rowOf("апи")).getByText("изменено")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Изменить замену: обзор бити" }));
+  const obs = screen.getByRole("textbox", { name: "Как правильно: обзор бити" });
+  await userEvent.clear(obs);
+  await userEvent.type(obs, "Сбер (C++) $1 API-шлюз");
+  // «Применить» сразу из поля: уход из поля принимает правку.
+  await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
+  expect(props.onApply).toHaveBeenCalledWith(["g1", "g2", "g3"], {}, false, false,
+    { g1: "Api", g2: "Сбер (C++) $1 API-шлюз" });
+});
+
+test("правка: исправление обычного слова — тоже; правка снятой группы не уходит", async () => {
+  const props = dialog();
+  await userEvent.click(screen.getByRole("radio", { name: "Термины и явные ошибки распознавания" }));
+  await userEvent.click(screen.getByRole("button", { name: "Показать места: Прочие исправления" }));
+  await userEvent.click(within(rowOf("в торник")).getByRole("checkbox"));
+  await userEvent.click(screen.getByRole("button", { name: "Изменить замену: в торник" }));
+  const input = screen.getByRole("textbox", { name: "Как правильно: в торник" });
+  await userEvent.clear(input);
+  await userEvent.type(input, "в четверг{Enter}");
+  await userEvent.click(screen.getByRole("button", { name: "Изменить замену: кафка" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Как правильно: кафка" }), "2{Enter}");
+  await userEvent.click(within(rowOf("кафка")).getByRole("checkbox"));
+  await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
+  expect(props.onApply).toHaveBeenCalledWith(["g1", "g2", "g4"], {}, false, false, { g4: "в четверг" });
+});
+
+test("правка: новое предложение — правки сброшены", async () => {
+  const props = { state: ready, busy: false, error: null, playable: true, onPlay: vi.fn(), onApply: vi.fn(), onClose: vi.fn() };
+  const { rerender } = render(<ImproveDialog {...props} />);
+  await userEvent.click(screen.getByRole("button", { name: "Изменить замену: апи" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "Как правильно: апи" }), "S{Enter}");
+  expect(rowOf("апи")).toHaveTextContent("апи → APIS");
+  rerender(<ImproveDialog {...props} state={{ ...ready, proposal: { ...ready.proposal!, created_at: 2 } }} />);
+  expect(rowOf("апи")).toHaveTextContent("апи → API");
+  expect(within(rowOf("апи")).queryByText("изменено")).toBeNull();
+});
+
+test("карточка: вписанное уходит в запрос `targets`", async () => {
+  vi.mocked(api.getImprove).mockResolvedValue(ready);
+  vi.mocked(api.applyImprove).mockResolvedValue({
+    rows: [], history: [], pos: 1, trimmed: false, voices_error: null, voice_threshold_default: 0.75,
+    step: { id: "s1", at: "2026-10-02T11:00:00", ops: [], enrolled: [], created_people: [] },
+    changed: 12, groups: [{ from: "апи", to: "MSSP", kind: "term", count: 12, edited: true }],
+  } as unknown as Awaited<ReturnType<typeof api.applyImprove>>);
+  render(<RecordingCard id="r1" endpoint={ep} />);
+  await screen.findByText("ИИ предлагает исправить 3 термина");
+  await userEvent.click(screen.getByRole("button", { name: "Улучшить расшифровку" }));
+  const box = await screen.findByRole("dialog", { name: "Улучшить расшифровку" });
+  await userEvent.click(within(box).getByRole("button", { name: "Изменить замену: апи" }));
+  const input = within(box).getByRole("textbox", { name: "Как правильно: апи" });
+  await userEvent.clear(input);
+  await userEvent.type(input, "MSSP{Enter}");
+  await userEvent.click(within(box).getByRole("checkbox", { name: "кафка → Kafka" }));
+  await userEvent.click(within(box).getByRole("checkbox", { name: /Запомнить как правила/ }));
+  await userEvent.click(within(box).getByRole("button", { name: "Применить выбранное" }));
+  expect(api.applyImprove).toHaveBeenCalledWith(ep, "r1", {
+    groups: ["g1", "g2"], extra: {}, created_at: 1, add_rules: true, add_terms: false, targets: { g1: "MSSP" },
+  });
+});
+
+test("cleanTarget: пробелы по краям и внутри, NFC", () => {
+  expect(cleanTarget("  MS\t SP  ")).toBe("MS SP");
+  expect(cleanTarget("Ё")).toBe("Ё");
+  expect(cleanTarget("   ")).toBe("");
 });

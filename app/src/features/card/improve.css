@@ -27,6 +27,36 @@
 .improve__check input { align-self: center; }
 .improve__pair { min-width: 0; overflow-wrap: anywhere; }
 .improve__from { color: var(--text-2); }
+/* Строка группы: флажок с «как распознано», рядом — «как правильно» своими кнопками. */
+.improve__row { flex-wrap: wrap; row-gap: 2px; }
+.improve__check--pair { flex: 0 1 auto; }
+.improve__to { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; min-width: 0; }
+.improve__target {
+  min-width: 0; padding: 0 2px; margin: 0 -2px; border: 0; border-radius: var(--r-sm); background: none;
+  color: var(--text); font: inherit; text-align: left; overflow-wrap: anywhere; cursor: text;
+}
+.improve__target:hover { background: var(--surface-hover); }
+.improve__pen {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px;
+  align-self: center; padding: 0; border: 0; border-radius: var(--r-sm); background: none;
+  color: var(--text-3); cursor: pointer; opacity: 0.6; transition: opacity var(--t), background var(--t);
+}
+.improve__row:hover .improve__pen, .improve__pen:focus-visible { opacity: 1; }
+.improve__pen:hover { background: var(--surface-hover); color: var(--text); }
+.improve__edited {
+  padding: 0 5px; border: 1px solid var(--line-2); border-radius: 8px; color: var(--text-2);
+  font-size: 11px; line-height: 16px;
+}
+.improve__revert { align-self: baseline; }
+.improve__same { font-size: 12px; }
+.improve__to--edit { flex: 1 1 160px; flex-direction: column; align-items: stretch; gap: 2px; }
+.improve__input {
+  height: 24px; padding: 0 6px; min-width: 0; background: var(--surface); color: var(--text);
+  border: 1px solid var(--accent); border-radius: var(--r-sm); font: inherit; font-weight: 600;
+}
+.improve__input:focus { outline: none; }
+.improve__input[aria-invalid="true"] { border-color: var(--err); }
+.improve__err { color: var(--err); font-size: 11px; }
 
 .improve__places { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 2px 26px; font-size: 12px; }
 .improve__places li { display: flex; align-items: baseline; gap: 8px; line-height: 1.45; }

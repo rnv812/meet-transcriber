@@ -6,12 +6,13 @@
  *
  * Здесь: состояние (`GET /recordings/{id}/improve`), тихая строка в карточке
  * (задача, готовое предложение, подсказка после GigaAM), окно со списком групп
- * «апи → API · 12» (флажок, места с окружением и ▶), итог над репликами с
- * «Отменить» (пока шаг последний, как у «Исправить…»).
+ * «апи → API · 12» (флажок, места с окружением и ▶; «как правильно» можно
+ * вписать своё), итог над репликами с «Отменить» (пока шаг последний, как у
+ * «Исправить…»).
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, Play, Sparkles, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Pencil, Play, Sparkles, X } from "lucide-react";
 import {
   ApiError, applyImprove, dismissImproveHint, getImprove, runImprove, undoSpeakers, type Endpoint,
 } from "../../lib/api";
@@ -29,6 +30,11 @@ const norm = (p: string) => p.replace(/\\/g, "/").toLowerCase();
 /** Сколько мест группы показывать раскрытыми. */
 const PLACES = 5;
 const placesWord = (n: number) => plural(n, "место", "места", "мест");
+/** Сколько символов можно вписать в «как правильно» (как TEXT_MAX резидента). */
+const TARGET_MAX = 200;
+
+/** «Как правильно» из поля: NFC, пробелы по краям сняты, внутри — схлопнуты (как у резидента). */
+export const cleanTarget = (value: string) => value.normalize("NFC").replace(/\s+/g, " ").trim();
 
 export type ImproveScope = "terms" | "all";
 
@@ -150,12 +156,13 @@ export function useImprove({ endpoint, id, folder, jobs, version, head, noModel,
 
   const created = state?.proposal?.created_at;
   const apply = useCallback(async (ids: string[], extra: Record<string, number[]>, addRules: boolean,
-    addTerms: boolean) => {
+    addTerms: boolean, targets?: Record<string, string>) => {
     setBusy(true);
     setError(null);
     try {
       const res = await applyImprove(endpoint, id, {
         groups: ids, extra, created_at: created, add_rules: addRules, add_terms: addTerms,
+        ...(targets && Object.keys(targets).length ? { targets } : {}),
       });
       const terms = res.groups.filter((g) => g.kind === "term").length;
       const parts = [`${improvedText(res.changed, terms)}. Итоги не пересчитываются автоматически.`];
@@ -198,7 +205,7 @@ export function useImprove({ endpoint, id, folder, jobs, version, head, noModel,
   );
   const dialog = open ? (
     <ImproveDialog state={shown} busy={busy} error={error} playable={playable} onPlay={onPlay}
-      onApply={(ids, extra, rules, terms) => void apply(ids, extra, rules, terms)} onRerun={blocked ? undefined : () => void rerun()}
+      onApply={(ids, extra, rules, terms, targets) => void apply(ids, extra, rules, terms, targets)} onRerun={blocked ? undefined : () => void rerun()}
       onClose={() => { setOpen(false); setError(null); }} />
   ) : null;
   const bar = notice ? (
@@ -303,6 +310,103 @@ function Places({ group, playable, onPlay }: {
   );
 }
 
+/**
+ * «Как правильно» группы: жирным, щелчок по нему или ✎ — правка на месте.
+ * Enter или уход из поля принимают, Esc отменяет (окно при этом не
+ * закрывается). Пустое не принимается: ошибка, поле остаётся, «Применить»
+ * ждёт. Вписанное, равное предложенному, — не правка; равное исходному —
+ * группа не заменяется.
+ */
+function Target({ group, value, onChange, onInvalid }: {
+  group: ImproveGroup;
+  /** Вписанное человеком; нет — предложенное ИИ. */
+  value?: string;
+  onChange: (value: string | undefined) => void;
+  /** Поле сейчас с негодным текстом — применять нельзя. */
+  onInvalid: (bad: boolean) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [problem, setProblem] = useState<string | null>(null);
+  /** Поле открыто: blur после Enter/Esc (поле уже убрано) второй раз не принимает. */
+  const open = useRef(false);
+  /** После Enter/Esc фокус — обратно на замену (а не в никуда: поле убрано). */
+  const refocus = useRef(false);
+  const button = useRef<HTMLButtonElement>(null);
+  const invalid = useRef(onInvalid);
+  invalid.current = onInvalid;
+  // Строку убрали (сменили режим), пока в поле было негодное, — «Применить» не ждёт её.
+  useEffect(() => () => invalid.current(false), []);
+  useEffect(() => {
+    if (!editing && refocus.current) { refocus.current = false; button.current?.focus(); }
+  }, [editing]);
+  const shown = value ?? group.replace;
+  const edited = value !== undefined;
+  const same = edited && value === cleanTarget(group.find);
+  const errorId = `improve-target-${group.id}`;
+
+  const begin = () => {
+    open.current = true;
+    setDraft(shown);
+    setProblem(null);
+    setEditing(true);
+  };
+  const close = () => {
+    open.current = false;
+    setEditing(false);
+    setProblem(null);
+    onInvalid(false);
+  };
+  const commit = () => {
+    if (!open.current) return;
+    const text = cleanTarget(draft);
+    const bad = !text ? "Впишите, как правильно, — или Esc, чтобы оставить предложенное"
+      : text.length > TARGET_MAX ? `Слишком длинно: не больше ${TARGET_MAX} символов` : null;
+    if (bad) {
+      refocus.current = false; // поле остаётся — фокус никуда не переносится
+      setProblem(bad);
+      onInvalid(true);
+      return;
+    }
+    close();
+    onChange(text === group.replace ? undefined : text);
+  };
+
+  if (editing) {
+    return (
+      <span className="improve__to improve__to--edit">
+        <input className="improve__input" aria-label={`Как правильно: ${group.find}`} autoFocus value={draft}
+          aria-invalid={problem ? true : undefined} aria-describedby={problem ? errorId : undefined}
+          onFocus={(e) => e.currentTarget.select()}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); refocus.current = true; commit(); }
+            // Esc — только отмена правки: окно по нему не закрывается.
+            if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); refocus.current = true; close(); }
+          }} />
+        {problem && <span id={errorId} className="improve__err" role="alert">{problem}</span>}
+      </span>
+    );
+  }
+  return (
+    <span className="improve__to">
+      <button ref={button} type="button" className="improve__target" title="Изменить: вписать, как правильно" onClick={begin}>
+        <strong>{shown}</strong>
+      </button>
+      <button type="button" className="improve__pen" aria-label={`Изменить замену: ${group.find}`}
+        title="Изменить: вписать, как правильно" onClick={begin}><Icon as={Pencil} size="sm" /></button>
+      {edited && (
+        <span className="improve__edited" title={`Вписано вручную; ИИ предлагал «${group.replace}»`}>изменено</span>
+      )}
+      {edited && (
+        <button type="button" className="spk-link improve__revert" onClick={() => onChange(undefined)}>вернуть предложенное</button>
+      )}
+      {same && <span className="muted improve__same">· как в тексте — не заменяется</span>}
+    </span>
+  );
+}
+
 /** Окно «Улучшить расшифровку»: ход задачи или короткий список замен. */
 export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, onRerun, onClose }: {
   state: ImproveState | null;
@@ -310,7 +414,9 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
   error: string | null;
   playable: boolean;
   onPlay: (start: number, until: number) => void;
-  onApply: (ids: string[], extra: Record<string, number[]>, addRules: boolean, addTerms: boolean) => void;
+  /** `targets` — {группа: вписанное человеком «как правильно»}; без правок — не передаётся. */
+  onApply: (ids: string[], extra: Record<string, number[]>, addRules: boolean, addTerms: boolean,
+    targets?: Record<string, string>) => void;
   /** «Проверить заново»; нет — модель не подключена. */
   onRerun?: () => void;
   onClose: () => void;
@@ -325,6 +431,10 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [rules, setRules] = useState(false);
   const [terms, setTerms] = useState(false);
+  /** Вписанное человеком «как правильно» по группам (только отличное от предложенного). */
+  const [targets, setTargets] = useState<Readonly<Record<string, string>>>({});
+  /** Группы, в поле которых сейчас негодный текст (пусто): применять нельзя. */
+  const [invalid, setInvalid] = useState<ReadonlySet<string>>(new Set());
   const title = useRef<HTMLHeadingElement>(null);
   // Повтор не удался — прежний свежий список всё ещё можно применить.
   const groups = state?.state === "ready" || state?.state === "failed" ? state.proposal?.groups ?? [] : [];
@@ -333,6 +443,7 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
   // Новое предложение — заново выбор по умолчанию.
   useEffect(() => {
     setOff(new Set()); setFixesOn(new Set()); setExtraOn(new Set()); setExpanded(new Set());
+    setTargets({}); setInvalid(new Set());
   }, [created]);
   useEffect(() => { title.current?.focus(); }, []);
   useEffect(() => {
@@ -343,14 +454,27 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
 
   const termGroups = groups.filter((g) => g.kind === "term");
   const fixGroups = groups.filter((g) => g.kind === "fix");
-  const chosen = chosenGroups(groups, scope, off, fixesOn);
-  const extra = chosenExtra(termGroups, extraOn);
+  /** Вписали исходное — замена ничего не меняет: группа как снятая. */
+  const keeps = (g: ImproveGroup) => targets[g.id] === cleanTarget(g.find);
+  const chosen = chosenGroups(groups, scope, off, fixesOn).filter((g) => !keeps(g));
+  const extra = chosenExtra(termGroups.filter((g) => !keeps(g)), extraOn);
   const extraCount = Object.values(extra).reduce((n, x) => n + x.length, 0);
   const total = chosen.reduce((n, g) => n + g.count, 0) + extraCount;
   const fixChosen = fixGroups.filter((g) => fixesOn.has(g.id));
-  const fixCount = fixChosen.reduce((n, g) => n + g.count, 0);
+  const fixCount = fixChosen.filter((g) => !keeps(g)).reduce((n, g) => n + g.count, 0);
+  /** Вписанное — только у применяемых групп. */
+  const sent = Object.fromEntries(Object.entries(targets).filter(([gid]) => chosen.some((g) => g.id === gid) || gid in extra));
   /** Сколько мест группы будет заменено: отмеченные названные и отмеченные остальные. */
-  const willReplace = (g: ImproveGroup) => (off.has(g.id) ? 0 : g.count) + (extra[g.id]?.length ?? 0);
+  const willReplace = (g: ImproveGroup) => (keeps(g) ? 0 : (off.has(g.id) ? 0 : g.count) + (extra[g.id]?.length ?? 0));
+  const targetOf = (g: ImproveGroup) => targets[g.id] ?? g.replace;
+  const target = (g: ImproveGroup) => (
+    <Target group={g} value={targets[g.id]}
+      onChange={(v) => setTargets((t) => {
+        const { [g.id]: _, ...rest } = t;
+        return v === undefined ? rest : { ...rest, [g.id]: v };
+      })}
+      onInvalid={(bad) => setInvalid((x) => (x.has(g.id) === bad ? x : toggle(x, g.id)))} />
+  );
   const toggle = (set: ReadonlySet<string>, key: string) => {
     const next = new Set(set);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -413,19 +537,20 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
               <li key={g.id} className="improve__group">
                 <div className="improve__row">
                   {expander(g.id, g.find)}
-                  <label className="improve__check">
-                    <input type="checkbox" checked={!off.has(g.id)} onChange={() => setOff((x) => toggle(x, g.id))} />
-                    <span className="improve__pair">
-                      <span className="improve__from">{g.find}</span> → <strong>{g.replace}</strong>
-                    </span>
-                    <span className="muted num" title={`Будет заменено: ${n} ${placesWord(n)}`}>· {n}</span>
-                    {unmarked > 0 && (
-                      // Другие места термина видны и в свёрнутой строке: их стоит проверить.
-                      <span className="muted improve__unmarked" title="ИИ их не отмечал — раскройте, чтобы проверить">
-                        · ещё {unmarked} {placesWord(unmarked)}
-                      </span>
-                    )}
+                  {/* Флажок с «как распознано»; «как правильно» — рядом, своими кнопками (не внутри label). */}
+                  <label className="improve__check improve__check--pair">
+                    <input type="checkbox" aria-label={`${g.find} → ${targetOf(g)}`} checked={!off.has(g.id)}
+                      onChange={() => setOff((x) => toggle(x, g.id))} />
+                    <span className="improve__from">{g.find}</span>{" → "}
                   </label>
+                  {target(g)}
+                  <span className="muted num" title={`Будет заменено: ${n} ${placesWord(n)}`}>· {n}</span>
+                  {unmarked > 0 && (
+                    // Другие места термина видны и в свёрнутой строке: их стоит проверить.
+                    <span className="muted improve__unmarked" title="ИИ их не отмечал — раскройте, чтобы проверить">
+                      · ещё {unmarked} {placesWord(unmarked)}
+                    </span>
+                  )}
                 </div>
                 {expanded.has(g.id) && (
                   <>
@@ -473,11 +598,15 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
                 <ul className="improve__fixes">
                   {fixGroups.map((g) => (
                     <li key={g.id}>
-                      <label className="improve__check">
-                        <input type="checkbox" checked={fixesOn.has(g.id)} onChange={() => setFixesOn((x) => toggle(x, g.id))} />
-                        <span className="improve__pair"><span className="improve__from">{g.find}</span> → <strong>{g.replace}</strong></span>
-                        <span className="muted num">· {g.count}</span>
-                      </label>
+                      <div className="improve__row">
+                        <label className="improve__check improve__check--pair">
+                          <input type="checkbox" aria-label={`${g.find} → ${targetOf(g)}`} checked={fixesOn.has(g.id)}
+                            onChange={() => setFixesOn((x) => toggle(x, g.id))} />
+                          <span className="improve__from">{g.find}</span>{" → "}
+                        </label>
+                        {target(g)}
+                        <span className="muted num">· {keeps(g) ? 0 : g.count}</span>
+                      </div>
                       <Places group={g} playable={playable} onPlay={onPlay} />
                     </li>
                   ))}
@@ -537,8 +666,11 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
             )}
             <Button onClick={onClose}>{ready ? "Отмена" : "Закрыть"}</Button>
             {ready && (
-              <Button variant="primary" disabled={busy || !total}
-                onClick={() => onApply(chosen.map((g) => g.id), extra, rules, terms)}>Применить выбранное</Button>
+              <Button variant="primary" disabled={busy || !total || invalid.size > 0}
+                title={invalid.size > 0 ? "Сначала впишите, как правильно, или отмените правку (Esc)" : undefined}
+                onClick={() => (Object.keys(sent).length
+                  ? onApply(chosen.map((g) => g.id), extra, rules, terms, sent)
+                  : onApply(chosen.map((g) => g.id), extra, rules, terms))}>Применить выбранное</Button>
             )}
           </span>
         </div>

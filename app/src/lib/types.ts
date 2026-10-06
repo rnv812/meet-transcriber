@@ -838,12 +838,16 @@ export type ImproveState = {
   job?: Job;
   hint?: boolean;
 };
-/** Применённая группа (в ответе и в шаге истории). */
-export type ImproveApplied = { from: string; to: string; kind: ImproveKind; count: number };
-/** `extra` — {группа: номера отмеченных мест из `more`}; `created_at` — какой список видел человек. */
+/** Применённая группа (в ответе и в шаге истории); `edited` — «как правильно» вписал человек. */
+export type ImproveApplied = { from: string; to: string; kind: ImproveKind; count: number; edited?: boolean };
+/**
+ * `extra` — {группа: номера отмеченных мест из `more`}; `targets` — {группа: «как правильно»,
+ * вписанное человеком вместо предложенного}; `created_at` — какой список видел человек.
+ */
 export type ImproveApplyRequest = {
   groups: string[];
   extra?: Record<string, number[]>;
+  targets?: Record<string, string>;
   created_at?: number;
   add_rules?: boolean;
   add_terms?: boolean;
