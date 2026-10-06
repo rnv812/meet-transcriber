@@ -5,6 +5,7 @@ CLI (`fake_claude_stream.py`), настоящую модель не зовём."
 
 import asyncio
 import base64
+import io
 import json
 import re
 import sys
@@ -12,13 +13,21 @@ import uuid
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from meet.llm import claude_stream
 from meet.llm.base import CANCELLED_ERROR, RESUME_ERROR
 
 FAKE = Path(__file__).with_name("fake_claude_stream.py")
-PNG = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010806000000"
-                    "1f15c4890000000d4944415478da63f8cfc0f01f0005000201a1d1e0e40000000049454e44ae426082")
+
+
+def _png_bytes(size=(4, 4), fmt="PNG") -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", size, (255, 0, 0)).save(buf, fmt)
+    return buf.getvalue()
+
+
+PNG = _png_bytes()
 
 
 @pytest.fixture
@@ -52,18 +61,20 @@ def _messages(records):
 # --- командная строка ---------------------------------------------------------------
 
 
-def test_responder_command_has_read_tools_dirs_and_six_turns(tmp_path):
-    rec = tmp_path / "rec"
-    materials = rec / "assistant" / "files"
+def test_responder_command_has_read_tools_dirs_and_twelve_turns(tmp_path):
+    """v4-simple §6: агент сам читает и ищет — папки встречи, базы знаний и
+    библиотеки передаёт вызывающий, все — в --add-dir."""
+    rec, kb, library = tmp_path / "rec", tmp_path / "kb", tmp_path / "library"
     cmd = claude_stream.build_command(["claude"], system_prompt="s", responder=True,
-                                      add_dirs=(rec, materials, None))
+                                      add_dirs=(rec, kb, library, None))
     assert "--restricted" in cmd
     assert cmd[cmd.index("--tools") + 1] == "Read,Grep,Glob"
     assert cmd[cmd.index("--allowedTools") + 1] == "Read,Grep,Glob"
     assert cmd[cmd.index("--permission-mode") + 1] == "dontAsk"
     dirs = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--add-dir"]
-    assert dirs == [str(rec), str(materials)]          # только переданные: папка встречи и материалы
-    assert cmd[cmd.index("--max-turns") + 1] == "6"
+    assert dirs == [str(rec), str(kb), str(library)]
+    assert cmd[cmd.index("--max-turns") + 1] == "12"
+    assert "--disallowedTools" not in cmd                # запретов не передали — их нет
     # За --add-dir (флаг со многими значениями) сразу идёт другой флаг.
     last_dir = len(cmd) - 1 - cmd[::-1].index("--add-dir")
     assert cmd[last_dir + 2].startswith("--")
@@ -129,22 +140,65 @@ def test_ready_content_blocks_pass_through(fake_cli):
     assert _messages(records)[0]["message"]["content"] == blocks
 
 
-def test_bad_image_is_an_error_without_a_process(fake_cli, tmp_path):
+def test_bad_images_are_dropped_with_a_note_and_the_message_still_goes(fake_cli, tmp_path):
+    """Негодное изображение не роняет сообщение: не уходит, модели — пометка
+    в тексте, окну — `dropped_images` и `notes`."""
     cli, records = fake_cli
     bmp = tmp_path / "a.bmp"
     bmp.write_bytes(b"BM")
+    broken = tmp_path / "broken.png"
+    broken.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 40)   # заголовок PNG, внутри мусор
+    good = tmp_path / "ok.png"
+    good.write_bytes(PNG)
 
     async def scenario():
         conv = _conv(cli)
         try:
-            return await conv.send("x", images=[bmp]), await conv.send("x", images=[tmp_path / "нет.png"])
+            return await conv.send("вопрос", images=[bmp, broken, tmp_path / "нет.png", good])
         finally:
             conv.close()
 
-    wrong, missing = asyncio.run(scenario())
-    assert wrong.error and "изображение" in wrong.error
-    assert missing.error and "изображение" in missing.error
-    assert records() == []
+    reply = asyncio.run(scenario())
+    assert reply.error is None
+    assert reply.dropped_images == [str(bmp), str(broken), str(tmp_path / "нет.png")]
+    assert len(reply.notes) == 3 and all("не отправлено" in n for n in reply.notes)
+    (msg,) = _messages(records)
+    image, text = msg["message"]["content"]
+    assert image["type"] == "image"
+    assert text["text"].startswith("вопрос\n(Изображение «a.bmp» не отправлено")
+
+
+def test_media_type_comes_from_bytes_not_extension(fake_cli, tmp_path):
+    cli, records = fake_cli
+    liar = tmp_path / "photo.png"
+    liar.write_bytes(_png_bytes(fmt="JPEG"))
+
+    async def scenario():
+        conv = _conv(cli)
+        try:
+            return await conv.send("x", images=[liar])
+        finally:
+            conv.close()
+
+    assert asyncio.run(scenario()).error is None
+    image = _messages(records)[0]["message"]["content"][0]
+    assert image["source"]["media_type"] == "image/jpeg"
+
+
+def test_size_limit_is_on_base64_length(tmp_path, monkeypatch):
+    """5 МБ у API — длина base64 (сырые байты × 4/3), не размер файла."""
+    from meet.llm import base
+
+    monkeypatch.setattr(base, "IMAGE_MAX_BASE64", 1000)
+    raw = _png_bytes(size=(1, 1))
+    fits = tmp_path / "fits.png"
+    fits.write_bytes(raw + b"\x00" * (750 - len(raw)))       # base64 ровно 1000
+    over = tmp_path / "over.png"
+    over.write_bytes(raw + b"\x00" * (751 - len(raw)))       # 751 байт → base64 1004
+    assert base.base64_size(750) == 1000 and base.base64_size(751) == 1004
+    assert base.check_image(fits)[0] == "image/png"
+    with pytest.raises(ValueError, match="5 МБ"):
+        base.check_image(over)
 
 
 # --- остановка хода -----------------------------------------------------------------
@@ -371,3 +425,244 @@ def test_responder_adds_no_folder_by_default(fake_cli, monkeypatch):
     asyncio.run(scenario())
     (argv,) = _starts(records)
     assert "--restricted" in argv and "--add-dir" not in argv
+
+
+# --- Fix round 1: «Стоп» без ложной отмены, окна остановки ------------------------
+
+
+def test_turn_that_finished_as_stop_arrived_is_a_normal_reply(fake_cli, monkeypatch):
+    """I1: CLI успел закончить ход до остановки (удачный result, потом
+    control_response «простой») — это обычный ответ с полным текстом: он уже
+    в сеансе модели, и его надо показать."""
+    cli, _ = fake_cli
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "finish")
+
+    async def scenario():
+        conv = _conv(cli)
+        try:
+            return await _interrupt_after_first_text(conv)
+        finally:
+            conv.close()
+
+    ok, reply, _ = asyncio.run(scenario())
+    assert ok is True
+    assert reply.cancelled is False and reply.error is None
+    assert reply.text == "начало ответа и конец"
+
+
+def test_stop_before_the_message_is_sent_skips_the_turn(fake_cli):
+    """Окно «поднимается процесс»: остановка запоминается, ход не начинается."""
+    cli, records = fake_cli
+
+    async def scenario():
+        conv = _conv(cli)
+        gate = asyncio.Event()
+        real = conv._ensure_process
+
+        async def slow():
+            await gate.wait()
+            return await real()
+
+        conv._ensure_process = slow
+        try:
+            turn = asyncio.create_task(conv.send("вопрос"))
+            await asyncio.sleep(0.05)
+            ok = await conv.interrupt()
+            gate.set()
+            return ok, await asyncio.wait_for(turn, 10)
+        finally:
+            conv.close()
+
+    ok, reply = asyncio.run(scenario())
+    assert ok is True and reply.cancelled and reply.text == ""
+    assert not [m for m in _messages(records) if m.get("type") == "user"]
+
+
+def test_stop_while_the_message_is_being_written_is_sent_after_it(fake_cli, monkeypatch):
+    """Окно «сообщение пишется»: остановка не обгоняет сообщение (CLI счёл бы
+    её остановкой простоя) — её посылает сам ход сразу после записи."""
+    cli, records = fake_cli
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "slow")
+    import time as _time
+
+    async def scenario():
+        conv = _conv(cli)
+        real = conv._write_line
+
+        def slow_write(proc, obj):
+            if obj.get("type") == "user":
+                _time.sleep(0.4)
+            real(proc, obj)
+
+        conv._write_line = slow_write
+        try:
+            turn = asyncio.create_task(conv.send("вопрос", timeout_s=20))
+            for _ in range(200):
+                if conv._phase == "writing":
+                    break
+                await asyncio.sleep(0.01)
+            ok = await conv.interrupt()
+            return ok, await asyncio.wait_for(turn, 15)
+        finally:
+            conv.close()
+
+    ok, reply = asyncio.run(scenario())
+    assert ok is True and reply.cancelled
+    kinds = [m.get("type") for m in _messages(records)]
+    assert kinds == ["user", "control_request"]          # остановка — после сообщения
+
+
+def test_stray_events_between_turns_are_drained(fake_cli):
+    cli, _ = fake_cli
+
+    async def scenario():
+        conv = _conv(cli)
+        try:
+            await conv.send("раз")
+            conv._queue.put_nowait({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "ЛИШНЕЕ"}]}})
+            return await conv.send("два")
+        finally:
+            conv.close()
+
+    assert "ЛИШНЕЕ" not in asyncio.run(scenario()).text
+
+
+def test_dead_process_is_not_killed_twice(monkeypatch):
+    killed = []
+    monkeypatch.setattr(claude_stream.procjob, "kill_tree", lambda proc: killed.append(proc))
+
+    class Dead:
+        def poll(self):
+            return 0
+
+    conv = claude_stream.Conversation(system_prompt="s", cli=["x"])
+    proc = Dead()
+    conv._proc = proc
+    conv._kill_if(proc)
+    conv._kill_if(proc)
+    assert killed == [] and conv._proc is None
+
+
+# --- Fix round 1: kb_exclude → правила запрета ------------------------------------
+
+
+def test_deny_paths_become_read_rules_for_the_responder(tmp_path):
+    kb = tmp_path / "База знаний"
+    private = kb / "Личное, черновики"
+    cmd = claude_stream.build_command(["claude"], system_prompt="s", responder=True,
+                                      add_dirs=(kb,), deny_paths=(private,))
+    i = cmd.index("--disallowedTools")
+    rules = []
+    for a in cmd[i + 1:]:
+        if a.startswith("--"):
+            break
+        rules.append(a)
+    assert rules and all(r.startswith("Read(//") and r.endswith("/**)") for r in rules)
+    assert any("Личное, черновики" in r for r in rules)   # пробел и запятая — внутри скобок
+    if sys.platform == "win32":
+        drive = str(private)[0].lower()
+        assert all(r.startswith(f"Read(//{drive}/") for r in rules)
+        assert any(r[5:] == r[5:].lower() for r in rules)  # вариант пути в нижнем регистре
+    # Слушатель без инструментов — запреты ему не нужны.
+    listener = claude_stream.build_command(["claude"], system_prompt="s", deny_paths=(private,))
+    assert "--disallowedTools" not in listener
+
+
+def test_conversation_passes_deny_paths(fake_cli, tmp_path):
+    cli, records = fake_cli
+
+    async def scenario():
+        conv = _conv(cli, responder=True, add_dirs=[tmp_path], deny_paths=[tmp_path / "x"])
+        try:
+            await conv.send("x")
+        finally:
+            conv.close()
+
+    asyncio.run(scenario())
+    (argv,) = _starts(records)
+    assert "--disallowedTools" in argv
+
+
+# --- Fix round 1: изображение отверг API — сеанс не отравлен ------------------------
+
+
+def _rejecting(monkeypatch):
+    monkeypatch.setenv("FAKE_CLAUDE_REJECT_IMAGES", "1")
+
+
+def test_rejected_image_forks_the_session_without_that_turn_and_retries(fake_cli, monkeypatch, tmp_path):
+    cli, records = fake_cli
+    _rejecting(monkeypatch)
+    img = tmp_path / "a.png"
+    img.write_bytes(PNG)
+
+    async def scenario():
+        conv = _conv(cli, persist=True, responder=True)
+        try:
+            first = await conv.send("код — ПЕЛИКАН")
+            sid = conv.session_id
+            monkeypatch.setenv("FAKE_CLAUDE_KNOWN", sid)
+            second = await conv.send("что на картинке?", images=[img])
+            return first, second, sid, conv.session_id
+        finally:
+            conv.close()
+
+    first, second, sid, new_sid = asyncio.run(scenario())
+    assert first.error is None
+    assert second.error is None and second.text == '{"op":"none"}'
+    assert second.dropped_images == [str(img)] and "не приняла" in second.notes[0]
+    rows = records()
+    kept = [r["assistant_uuid"] for r in rows if "assistant_uuid" in r][0]
+    image_turn = [m for m in _messages(records)
+                  if m.get("type") == "user" and isinstance(m["message"]["content"], list)][0]
+    fork_argv = _starts(records)[1]
+    assert f"--resume={sid}" in fork_argv and "--fork-session" in fork_argv
+    assert f"--resume-session-at={kept}" in fork_argv
+    assert f"--resume-drops-turn={image_turn['uuid']}" in fork_argv
+    retry = _messages(records)[-1]
+    assert isinstance(retry["message"]["content"], str) and "не принято моделью" in retry["message"]["content"]
+    assert new_sid != sid and new_sid == [r["fork"]["to"] for r in rows if "fork" in r][0]
+
+
+def test_rejected_image_in_the_first_turn_starts_a_clean_session(fake_cli, monkeypatch, tmp_path):
+    cli, records = fake_cli
+    _rejecting(monkeypatch)
+    img = tmp_path / "a.png"
+    img.write_bytes(PNG)
+
+    async def scenario():
+        conv = _conv(cli, persist=True)
+        try:
+            reply = await conv.send("затравка и вопрос", images=[img])
+            return reply, conv.session_id
+        finally:
+            conv.close()
+
+    reply, sid = asyncio.run(scenario())
+    assert reply.error is None and reply.dropped_images == [str(img)]
+    first, second = _starts(records)
+    first_sid = [a for a in first if a.startswith("--session-id=")][0].split("=", 1)[1]
+    assert any(a.startswith("--session-id=") for a in second) and sid != first_sid
+    assert "затравка и вопрос" in _messages(records)[-1]["message"]["content"]
+
+
+def test_rejected_image_without_a_cut_point_asks_for_a_seed(fake_cli, monkeypatch, tmp_path):
+    """Сеанс продолжен из хранилища, в этом процессе ходов не было — точки
+    усечения нет: сеанс забыт, ответ `resume_failed` (вызывающий — затравка)."""
+    cli, _ = fake_cli
+    _rejecting(monkeypatch)
+    sid = str(uuid.uuid4())
+    monkeypatch.setenv("FAKE_CLAUDE_KNOWN", sid)
+    img = tmp_path / "a.png"
+    img.write_bytes(PNG)
+
+    async def scenario():
+        conv = _conv(cli, resume=sid)
+        try:
+            return await conv.send("что тут?", images=[img]), conv.session_id
+        finally:
+            conv.close()
+
+    reply, current = asyncio.run(scenario())
+    assert reply.resume_failed and reply.dropped_images == [str(img)] and current is None

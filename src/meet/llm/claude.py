@@ -16,7 +16,8 @@ from pathlib import Path
 
 from meet import netproxy
 from meet.llm.base import (
-    TIMEOUT_ERROR, AgentReply, drop_session_markers, image_media_type, is_uuid, resume_failure,
+    TIMEOUT_ERROR, AgentReply, check_image, claude_deny_rules, drop_session_markers, image_note, is_uuid,
+    path_variants, resume_failure, split_images,
 )
 from meet.llm.detect import claude_not_found, find_claude
 
@@ -48,37 +49,46 @@ def text_delta(event) -> str:
     return str(delta.get("text") or "")
 
 
-# Предел одного изображения для Anthropic API — 5 МБ (base64 ещё +⅓);
-# вложения окна заранее ужимаются до ≤ 1 568 px (assist/attachments.py).
-MAX_IMAGE_BYTES = 5 * 1024 * 1024
 # Что пишет CLI, когда сеанса для --resume нет (2.1.292).
 RESUME_MISSING = "no conversation found"
 
 
-def image_block(path) -> dict:
-    """Блок изображения Anthropic API (base64) из файла. Не тот тип или
-    слишком большой — ValueError, не читается — OSError."""
-    media = image_media_type(path)
-    if media is None:
-        raise ValueError(f"не изображение PNG/JPEG/GIF/WebP: {Path(str(path)).name}")
-    data = Path(path).read_bytes()
-    if len(data) > MAX_IMAGE_BYTES:
-        raise ValueError(f"изображение больше 5 МБ: {Path(str(path)).name}")
+def _block(media: str, data: bytes) -> dict:
     return {"type": "image", "source": {"type": "base64", "media_type": media,
                                         "data": base64.b64encode(data).decode("ascii")}}
 
 
-def user_content(text: str, images=()) -> str | list[dict]:
-    """`message.content` сообщения пользователя: без изображений — строка (как
-    раньше), с ними — блоки: изображения, затем текст (порядок, который
-    советует документация Anthropic API для vision)."""
-    images = [i for i in images or () if i]
-    if not images:
-        return text
-    blocks = [image_block(i) for i in images]
+def image_block(path) -> dict:
+    """Блок изображения Anthropic API (base64) из файла; тип — по первым
+    байтам. Не годится (`base.check_image`: тип, 5 МБ base64, 8 000 px,
+    битый файл) — ValueError, не читается — OSError."""
+    media, data = check_image(path)
+    return _block(media, data)
+
+
+def user_content(text: str, images=()) -> tuple[str | list[dict], list[tuple[str, str]]]:
+    """(`message.content`, [(путь, причина)] не отправленных изображений).
+
+    Без изображений — строка (как раньше); с ними — блоки: изображения, затем
+    текст (порядок, который советует документация Anthropic API для vision).
+    Негодное изображение не роняет сообщение: оно не уходит, а модели в
+    текст добавляется пометка «Изображение «…» не отправлено: причина»."""
+    good, dropped = split_images(images)
+    notes = [image_note(path, why) for path, why in dropped]
+    if notes:
+        text = "\n".join([text, *[f"({n})" for n in notes]]) if text else "\n".join(notes)
+    if not good:
+        return text, dropped
+    blocks = [_block(media, data) for _, media, data in good]
     if text:
         blocks.append({"type": "text", "text": text})
-    return blocks
+    return blocks, dropped
+
+
+def dropped_fields(dropped) -> dict:
+    """Поля AgentReply о не отправленных изображениях."""
+    return {"dropped_images": [p for p, _ in dropped],
+            "notes": [image_note(p, why) for p, why in dropped]}
 
 
 def find_cli() -> str | None:
@@ -100,7 +110,9 @@ def drop_api_key() -> bool:
     return True
 
 
-def make_permission_callback(allowed_dirs: tuple[Path, ...]):
+def make_permission_callback(allowed_dirs: tuple[Path, ...], denied_dirs=()):
+    denied = [Path(v) for d in denied_dirs or () if d for v in path_variants(d)]
+
     async def can_use_tool(tool_name, input_data, context):
         from claude_agent_sdk import PermissionResultAllow, PermissionResultDeny
 
@@ -116,6 +128,9 @@ def make_permission_callback(allowed_dirs: tuple[Path, ...]):
                 target = Path(raw).resolve()
             except (OSError, ValueError):
                 return PermissionResultDeny(message="некорректный путь")
+            for bad in denied:  # WindowsPath сравнивает без учёта регистра
+                if target.is_relative_to(bad):
+                    return PermissionResultDeny(message=f"папка закрыта для чтения: {bad}")
             for base in allowed_dirs:
                 if target.is_relative_to(Path(base).resolve()):
                     return PermissionResultAllow()
@@ -143,6 +158,7 @@ async def run(
     thinking: str | None = None,
     images=(),
     keep_session: bool = False,
+    deny_paths=(),
 ) -> AgentReply:
     """Один вызов Claude через Agent SDK: свежая сессия (или resume), строгий
     системный промпт, без настроек проекта; ошибки — в AgentReply.error.
@@ -169,7 +185,9 @@ async def run(
     `keep_session` — начать сохраняемый сеанс со своим UUID (как
     `session_id`, id — в ответе). `resume`, которое не вышло (сеанса нет,
     истёк, CLI отказал до начала хода), — ответ `resume_failed`.
-    `images` — пути к изображениям: блоки base64 в сообщении."""
+    `images` — пути к изображениям: блоки base64 в сообщении (негодные не
+    уходят — `dropped_images`/`notes`). `deny_paths` — папки, закрытые для
+    чтения (`kb_exclude`): правила `Read(//…/**)` и отказ в колбэке."""
     import claude_agent_sdk
     from claude_agent_sdk import (
         AssistantMessage, ClaudeAgentOptions, ResultMessage, StreamEvent, SystemMessage, TextBlock,
@@ -177,10 +195,7 @@ async def run(
 
     if resume and not is_uuid(resume):
         return resume_failure(f"неверный id сеанса: {resume!r}")
-    try:
-        content = user_content(prompt, images)
-    except (OSError, ValueError) as e:
-        return AgentReply(text="", error=f"изображение не отправить: {e}")
+    content, dropped = user_content(prompt, images)
     if keep_session and not (resume or session_id):
         session_id = str(uuid.uuid4())
     drop_api_key()
@@ -197,8 +212,8 @@ async def run(
         setting_sources=[],
         disallowed_tools=ALL_TOOLS_DENIED + (
             [] if allowed_dirs else list(READ_TOOLS)
-        ),
-        can_use_tool=make_permission_callback(allowed_dirs),
+        ) + claude_deny_rules(deny_paths),
+        can_use_tool=make_permission_callback(allowed_dirs, deny_paths),
         max_turns=max_turns,
         session_id=None if resume else session_id,
         extra_args={} if persist else dict(NO_PERSISTENCE),
@@ -263,12 +278,44 @@ async def run(
         error = f"{type(e).__name__}: {e}"
     if resume and error and error != TIMEOUT_ERROR and (
             not began or RESUME_MISSING in str(error).lower()):
-        return resume_failure(str(error))
+        failed = resume_failure(str(error))
+        for key, value in dropped_fields(dropped).items():
+            setattr(failed, key, value)
+        return failed
     return AgentReply(
         text=(result_text or "".join(text_parts)).strip(),
         session_id=(reported or resume or session_id) if persist else None,
         error=netproxy.with_hint(error),
+        **dropped_fields(dropped),
     )
+
+
+def _config_dir() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def forget_session(session_id: str) -> int:
+    """Удалить сохранённый сеанс Claude Code (у CLI нет команды удаления):
+    `projects/<папка>/<id>.jsonl` и папку `<id>/` рядом (вложения, подагенты)
+    в его папке настроек. Только UUID; → сколько удалено."""
+    import shutil
+
+    if not is_uuid(session_id):
+        return 0
+    removed = 0
+    root = _config_dir() / "projects"
+    if not root.is_dir():
+        return 0
+    for f in root.glob(f"*/{session_id}.jsonl"):
+        try:
+            f.unlink()
+            removed += 1
+        except OSError:
+            pass
+    for d in root.glob(f"*/{session_id}"):
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+    return removed
 
 
 async def check_auth(proxy: str | None = None, model: str = "haiku") -> str | None:

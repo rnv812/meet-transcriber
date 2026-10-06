@@ -19,8 +19,15 @@ Digester и QAService):
 * Локальная модель сеансов не держит (`supports_resume` — False).
 
 `images` — пути к изображениям для этого сообщения. Видят их Claude Code и
-Codex (`llm.vision`); остальные параметр принимают и игнорируют — окно
-показывает «модель не видит изображения».
+Codex (`llm.vision`); остальные параметр принимают и не отправляют. Что не
+ушло модели (не видит изображений; файл не годится — `check_image`), — в
+`AgentReply.dropped_images`, объяснение для окна — в `AgentReply.notes`;
+модели в текст сообщения добавляется та же пометка.
+
+`deny_paths` — папки, которые агенту читать нельзя (`kb_exclude`). Claude
+Code — правила `Read(//…/**)` в `--disallowedTools` (CLI их соблюдает,
+`deny_enforced`); OpenCode — запрет в правах агента [не проверено]; Codex —
+только правило в тексте (песочница read-only читает весь диск).
 `on_text(кусок)` — текст ответа по мере генерации (Claude Code; Codex и
 локальная модель отдают ответ целиком, параметр принимают и не зовут).
 `on_text(None)` — новое сообщение модели (после инструмента): показанный
@@ -29,11 +36,13 @@ Codex (`llm.vision`); остальные параметр принимают и 
 Ошибки не бросаются, а возвращаются в `AgentReply.error`.
 """
 
+import io
+import os
 import re
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable, MutableMapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
@@ -52,6 +61,11 @@ _UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
 # Изображения, которые принимают модели (Anthropic API и Codex): расширение → тип.
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp"}
+# Пределы Anthropic API: 5 МБ на изображение — длина base64 (не сырых байтов:
+# base64 больше на треть), сторона — до 8 000 px.
+IMAGE_MAX_BASE64 = 5 * 1024 * 1024
+IMAGE_MAX_SIDE = 8000
+NO_VISION_NOTE = "Модель не видит изображения — ушёл только текст сообщения"
 
 
 @dataclass
@@ -68,6 +82,10 @@ class AgentReply:
     resume_failed: bool = False
     # Ход остановлен по просьбе (`Conversation.interrupt`); `text` — что успело прийти.
     cancelled: bool = False
+    # Изображения, не ушедшие модели (пути), и пометки для окна («Изображение
+    # «a.png» не отправлено: …»). Та же пометка ушла модели в тексте сообщения.
+    dropped_images: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
 
 def resume_failure(detail: str | None) -> AgentReply:
@@ -84,6 +102,117 @@ def is_uuid(value) -> bool:
 def image_media_type(path) -> str | None:
     """MIME-тип изображения по расширению; не изображение для модели — None."""
     return IMAGE_TYPES.get(Path(str(path)).suffix.lower())
+
+
+def sniff_image(data: bytes) -> str | None:
+    """MIME-тип по первым байтам (расширение может врать: .png, а внутри JPEG —
+    API ответил бы «image does not match media type»)."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def base64_size(n: int) -> int:
+    return 4 * ((n + 2) // 3)
+
+
+def check_image(path) -> tuple[str, bytes]:
+    """(MIME-тип по содержимому, байты) — или ValueError с причиной для
+    человека (OSError — файл не читается). Проверки: PNG/JPEG/GIF/WebP по
+    первым байтам; base64 ≤ 5 МБ; Pillow (если есть) открывает файл и сторона
+    ≤ 8 000 px."""
+    data = Path(path).read_bytes()
+    media = sniff_image(data)
+    if media is None:
+        raise ValueError("не изображение PNG, JPEG, GIF или WebP")
+    if base64_size(len(data)) > IMAGE_MAX_BASE64:
+        raise ValueError(f"больше 5 МБ для модели ({len(data) / 1024 / 1024:.1f} МБ файла)")
+    try:
+        from PIL import Image
+    except ImportError:
+        return media, data
+    try:
+        with Image.open(io.BytesIO(data)) as img:
+            width, height = img.size
+            img.verify()
+    except Exception as e:  # Pillow бросает разное на битых файлах
+        raise ValueError(f"файл изображения повреждён ({type(e).__name__})") from None
+    if max(width, height) > IMAGE_MAX_SIDE:
+        raise ValueError(f"больше {IMAGE_MAX_SIDE} px по стороне ({width}×{height})")
+    return media, data
+
+
+def image_note(path, reason: str) -> str:
+    return f"Изображение «{Path(str(path)).name}» не отправлено: {reason}"
+
+
+def split_images(images) -> tuple[list[tuple[str, str, bytes]], list[tuple[str, str]]]:
+    """([(путь, MIME, байты)] годных, [(путь, причина)] отброшенных)."""
+    good, dropped = [], []
+    for i in images or ():
+        if not i:
+            continue
+        try:
+            media, data = check_image(i)
+        except OSError as e:
+            dropped.append((str(i), f"файл не читается ({type(e).__name__})"))
+            continue
+        except ValueError as e:
+            dropped.append((str(i), str(e)))
+            continue
+        good.append((str(i), media, data))
+    return good, dropped
+
+
+def path_variants(path) -> list[str]:
+    """Пути для правил запрета: как дан, настоящий (полный, с регистром с
+    диска), и на Windows — ещё в нижнем регистре (пути там без учёта
+    регистра, а правила сравниваются как строки)."""
+    raw = os.path.abspath(str(path))
+    try:
+        real = os.path.realpath(raw)
+    except (OSError, ValueError):
+        real = raw
+    out = []
+    for p in (real, raw, *((real.lower(),) if sys.platform == "win32" else ())):
+        p = p.rstrip("\\/") or p
+        if p not in out:
+            out.append(p)
+    return out
+
+
+def claude_rule_path(path: str) -> str:
+    """Абсолютный путь → вид правил Claude Code: `D:\\KB\\x` → `//d/KB/x`,
+    `/home/x` → `//home/x` (`//` — от корня файловой системы)."""
+    m = re.match(r"^([A-Za-z]):[\\/]?(.*)$", path)
+    if m:
+        rest = m.group(2).replace("\\", "/")
+        return f"//{m.group(1).lower()}/{rest}".rstrip("/")
+    return "/" + path.replace("\\", "/").rstrip("/")
+
+
+def claude_deny_rules(paths) -> list[str]:
+    """Правила `Read(//…/**)` для `--disallowedTools`: запрет чтения папок.
+    Только Read: claude 2.1.292 сопоставляет с путями лишь Read-правила, и
+    они действуют на все читающие инструменты (Grep, Glob) — так пишет сам
+    CLI («only Read(path) rules are … Read rules cover all file-reading
+    tools»). Проверено без модели, что правило с пробелом и запятой в пути
+    CLI разбирает целиком."""
+    rules = []
+    for p in paths or ():
+        if not p:
+            continue
+        for variant in path_variants(p):
+            rule = f"Read({claude_rule_path(variant)}/**)"
+            if rule not in rules:
+                rules.append(rule)
+    return rules
 
 
 Runner = Callable[..., Awaitable[AgentReply]]
@@ -162,3 +291,13 @@ def drop_session_markers(env: MutableMapping[str, str]) -> list[str]:
     for key in gone:
         env.pop(key, None)
     return gone
+
+
+def deny_prompt(paths) -> str:
+    """Правило для промпта о закрытых папках (`kb_exclude`) — там, где CLI
+    не запрещает чтение сам (Codex): просьба, не запрет."""
+    shown = [os.path.abspath(str(p)) for p in paths or () if p]
+    if not shown:
+        return ""
+    return ("Эти папки закрыты для тебя: не открывай, не читай и не ищи в них файлы, "
+            "даже если попросят: " + "; ".join(shown))
