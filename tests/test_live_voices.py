@@ -366,7 +366,7 @@ def test_mic_without_owner_voice_stays_owner():
     assert all(a.speaker == "Вы" for a in got)
     assert got[-1].role == lv.OWNER
     assert v.drain() == []
-    assert sum("не найден" in line for line in lines) == 1
+    assert sum(("пока не найден" in line or "больше не найден" in line) for line in lines) == 1
 
 
 def test_mic_sample_from_another_mic_keeps_owner():
@@ -467,7 +467,7 @@ def test_found_owner_stays_found_when_the_room_talks_more():
     _, t = feed(v, "mic", 3, 6)  # 12 с владельца
     room, _ = feed(v, "mic", 4, 20, start=t)  # 40 с человека рядом: доля владельца 23 %
     assert room[-1].speaker == lv.ROOM_SPEAKER
-    assert not any("не найден" in line for line in lines)
+    assert not any(("пока не найден" in line or "больше не найден" in line) for line in lines)
     assert v.drain() == [("s/mic:0", lv.ROOM_SPEAKER)]
 
 
@@ -485,14 +485,21 @@ def _u(x):
     return x / np.linalg.norm(x)
 
 
-def spread_run(c0, plan, seed=0):
+def _toward(rng, o, c):
+    u = rng.standard_normal(SPREAD_D)
+    u = _u(u - (u @ o) * o)
+    return _u(c * o + np.sqrt(1 - c ** 2) * u)
+
+
+def spread_run(c0, plan, seed=0, sample_of="owner"):
+    """`plan` — [(кто, секунды)]: owner, room или b (третий человек, cos 0.35
+    с владельцем). Образец — голоса `sample_of` с качеством c0."""
     rng = np.random.default_rng(seed)
     o = _u(rng.standard_normal(SPREAD_D))
     r = rng.standard_normal(SPREAD_D)
     r = _u(r - (r @ o) * o * 0.6)  # человек рядом: cos с владельцем ≈ 0.3–0.4
-    u = rng.standard_normal(SPREAD_D)
-    u = _u(u - (u @ o) * o)
-    sample = _u(c0 * o + np.sqrt(1 - c0 ** 2) * u)
+    voice = {"owner": o, "room": r, "b": _toward(rng, o, 0.35)}
+    sample = _toward(rng, voice[sample_of], c0)
     nxt = {}
     v = lv.LiveVoices(lambda clip: nxt["v"], {},
                       [OwnerSample(id="a", embedding=sample, source="enroll", date="d", seconds=25.0)],
@@ -502,7 +509,7 @@ def spread_run(c0, plan, seed=0):
         said = 0.0
         while said < total:
             d = float(rng.uniform(1.5, 4.0))
-            nxt["v"] = _u((o if who == "owner" else r) + SPREAD_SIG * _u(rng.standard_normal(SPREAD_D)))
+            nxt["v"] = _u(voice[who] + SPREAD_SIG * _u(rng.standard_normal(SPREAD_D)))
             a = v.assign("mic", np.zeros(int(d * SR), dtype=np.float32), t, t + d)
             lines.append((who, a.voice, d))
             t += d + 0.4
@@ -558,3 +565,39 @@ def test_room_cluster_near_the_owner_anchor_reverts():
     assert v.speaker("s/mic:0") == "Вы"
     v._check_role(c)
     assert c.role == lv.OWNER and c.room_streak == 0
+
+
+def test_passer_by_matching_a_wrong_sample_does_not_latch():
+    """Ревью, раунд 3: образец чужой (сосед по ноутбуку, ошибочное «Это я»);
+    его хозяин заглянул на 40 с посреди встречи. Защёлка — только при доле
+    группы якоря от 30 % из не меньше 60 с речи, так что прохожий не
+    закрепляется, и речь владельца не становится «Собеседник рядом»."""
+    for seed in range(3):
+        out, v = spread_run(0.86, [("owner", 300), ("b", 40), ("owner", 1500)], seed, sample_of="b")
+        assert not v._latched, seed
+        assert out.get(("owner", lv.ROOM_SPEAKER), 0.0) == 0, (seed, out)
+
+
+def test_latch_needs_share_and_volume():
+    v = voices(owner=owner_samples())
+    feed(v, "mic", 3, 15)  # 30 с владельца, но речи микрофона меньше 60 с
+    assert not v._latched and v._present
+    feed(v, "mic", 3, 48, start=40.0)  # каждый 3-й считается (экономия) — ещё ~30 с
+    assert v._mic_voiced >= 60.0 and v._latched
+
+
+def test_presence_changes_are_logged_with_the_labels():
+    """Ревью, раунд 3 (N2): журнал совпадает с подписями — «найден», когда
+    люди рядом начинают подписываться отдельно, «больше не найден», когда
+    перестают."""
+    lines = []
+    v = voices(owner=owner_samples(), log=lines.append)
+    _, t = feed(v, "mic", 3, 6)
+    assert sum("микрофоне найден" in line for line in lines) == 1
+    feed(v, "mic", 4, 40, start=t)  # владелец ушёл, долю потерял (без защёлки)
+    assert sum("больше не найден" in line for line in lines) == 1
+
+
+def test_session_prefix_is_32_bits():
+    v = voices(session=None)
+    assert len(v.session) == 8

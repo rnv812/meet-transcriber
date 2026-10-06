@@ -99,8 +99,11 @@ LONG_SEGMENT_S = 4.0
 PINNED_GAP_S = 0.3
 PINNED_EVERY = 2
 # Владелец найден по сильной улике — группа якоря от OWNER_LATCH_S речи с
-# центроидом от T_OWN: дальше «найден» до конца сеанса.
+# центроидом от T_OWN, и она же не меньше OWNER_PRESENT_SHARE речи микрофона
+# от LATCH_VOICED_S: дальше «найден» до конца сеанса. Доля и объём — чтобы не
+# защёлкнуться на прохожем, совпавшем с чужим образцом (ревью, lv_sim6).
 OWNER_LATCH_S = 30.0
+LATCH_VOICED_S = 2 * OWNER_LATCH_S
 # Уже найденный владелец «теряется», только если сходство группы якоря упало
 # ниже T_OTHER − PRESENT_SLACK (у образца среднего качества оно гуляет у порога).
 PRESENT_SLACK = 0.05
@@ -363,7 +366,7 @@ class LiveVoices:
         self._device = device
         self._log = log
         self._clock = clock
-        self.session = session or secrets.token_hex(2)
+        self.session = session or secrets.token_hex(4)
         self._tracks: dict[str, TrackVoices] = {}
         self._shown: dict[str, str] = {}  # подпись ключа в уже выданных строках
         self._embed_error: str | None = None
@@ -557,10 +560,13 @@ class LiveVoices:
 
         Уже найденный остаётся найденным до половины доли и до T_OTHER −
         PRESENT_SLACK (доля и сходство гуляют около порога — подписи «рядом»
-        мигали бы), а при сильной улике
-        (группа владельца от OWNER_LATCH_S с центроидом от T_OWN) — до конца
-        сеанса: «не найден» — про доверие к образцу, а не про то, что владелец
-        сейчас молчит; прошлые строки людей рядом не становятся «Вы»."""
+        мигали бы), а при сильной улике (группа владельца от OWNER_LATCH_S с
+        центроидом от T_OWN, и это от OWNER_PRESENT_SHARE из не меньше чем
+        LATCH_VOICED_S речи микрофона) — до конца сеанса: «не найден» — про
+        доверие к образцу, а не про то, что владелец сейчас молчит; прошлые
+        строки людей рядом не становятся «Вы». Голос, который сначала говорил
+        больше всех и совпал с чужим образцом, так не отличить от владельца,
+        который ушёл, — это неустранимо; прохожий на минуту — отличается."""
         if self._latched:
             return True
         voiced = self._mic_voiced
@@ -577,9 +583,12 @@ class LiveVoices:
             seconds = anchor.seconds + sum(c.seconds for c in near)
             groups.append((_unit(total), seconds))
             score = owner_voice.score(_unit(total), self._owner, self._device)
-            if seconds >= OWNER_LATCH_S and score >= mic_split.T_OWN:
+            if seconds >= OWNER_LATCH_S and score >= mic_split.T_OWN \
+                    and voiced >= LATCH_VOICED_S \
+                    and seconds >= mic_split.OWNER_PRESENT_SHARE * voiced:
                 self._latched = True
-                self._log(f"голоса: голос владельца в микрофоне найден (cos {score:.2f})")
+                self._log(f"голоса: голос владельца закреплён до конца встречи (cos {score:.2f}, "
+                          f"{seconds:.0f} с из {voiced:.0f} с)")
                 return True
         groups += [(c.center, c.seconds) for c in tv.live() if all(c is not n for n in near)]
         present = any(seconds >= share * voiced
@@ -593,7 +602,13 @@ class LiveVoices:
 
     def _review(self, track: str, tv: TrackVoices) -> None:
         if track == "mic":
-            self._present = self._owner_present(tv)
+            was, self._present = self._present, self._owner_present(tv)
+            # Журнал — как подписи: «рядом» появляются и пропадают вместе с этим.
+            if self._present and not was:
+                self._log("голоса: голос владельца в микрофоне найден — люди рядом "
+                          "подписываются отдельно")
+            elif was and not self._present:
+                self._log("голоса: голос владельца больше не найден — микрофон снова весь владельца")
         for c in tv.live():
             if c.into is not None:
                 continue  # слит на этом же обходе
