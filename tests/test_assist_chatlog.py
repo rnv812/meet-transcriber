@@ -82,7 +82,7 @@ def test_reading_missing_journal_creates_nothing(tmp_path):
     log = _log(tmp_path)
     assert log.load() == [] and log.messages() == [] and log.seq == 0
     assert log.context(1000) == ""
-    assert log.session_id("listener", "claude-code") is None
+    assert log.session_id("claude-code") is None
     assert not chatlog.has_chat(tmp_path)
     assert list(tmp_path.iterdir()) == []
 
@@ -200,7 +200,10 @@ def test_broken_lines_in_the_middle_are_skipped_and_counted(tmp_path):
     assert [(m["id"], m["text"]) for m in msgs] == [("m1", "один"), ("m2", "два")]
     st = fresh.stats()
     assert st["broken"] == 7 and st["orphan_patches"] == 1 and st["duplicates"] == 1
-    assert sum("битая строка" in line for line in fresh.lines) == 7
+    # Предупреждения — один раз на строку в процессе: их уже сказал первый
+    # экземпляр (он дочитал файл перед своей записью).
+    assert sum("битая строка" in line for line in log.lines) == 7
+    assert not any("битая строка" in line for line in fresh.lines)
     assert msgs[1]["seq"] == 8          # seq целых строк учтён
 
 
@@ -510,7 +513,9 @@ def test_unicode_and_long_messages_round_trip(tmp_path):
     raw = log.path.read_bytes()
     assert raw.count(b"\n") == 5            # переводы строк внутри — экранированы
     msgs = _log(tmp_path).load()
-    assert [m["text"] for m in msgs] == texts
+    # Одиночный суррогат при записи заменён на U+FFFD, остальное — как было.
+    expected = [*texts[:2], "одиночный суррогат � конец", texts[3]]
+    assert [m["text"] for m in msgs] == expected
     assert msgs[0]["error"] == "сбой «модели» 🙈"
     assert "Ёлка" in raw.decode("utf-8")    # кириллица не экранирована
     assert len(log.context(5000)) <= 5000
@@ -518,34 +523,55 @@ def test_unicode_and_long_messages_round_trip(tmp_path):
     assert "🎉" in md and "очень длинно" in md
 
 
+def test_lone_surrogates_never_break_md_or_seed(tmp_path):
+    log = _log(tmp_path)
+    log.append("user", text="обрывок \udc80 буфера", client_id="c\ud800")
+    mid = log.append("agent", text="пара 😀 суррогатов", say="say \udfff").message["id"]
+    log.patch(mid, {"error": {"detail": ["\ud834"]}, "\udc00key": 1})
+    msgs = _log(tmp_path).load()
+    assert msgs[0]["text"] == "обрывок � буфера" and msgs[0]["client_id"] == "c�"
+    assert msgs[1]["text"] == "пара 😀 суррогатов"        # пара — один символ
+    assert msgs[1]["error"] == {"detail": ["�"]} and msgs[1]["�key"] == 1
+    log.path.read_bytes().decode("utf-8")                  # журнал — чистый UTF-8
+    log.context(10_000).encode("utf-8")
+    md = log.write_md().read_text(encoding="utf-8")
+    assert "обрывок � буфера" in md
+    # Чужая строка с экранированным одиночным суррогатом — тоже чинится при чтении.
+    with open(log.path, "ab") as f:
+        f.write(b'{"v":1,"seq":9,"rec":"msg","id":"m9","kind":"user","text":"x\\ud800y"}\n')
+    assert log.get("m9")["text"] == "x�y"
+    log.context(10_000).encode("utf-8")
+    log.write_md()
+
+
 # --- сеансы провайдеров ----------------------------------------------------------------
 
 def test_session_ids_round_trip(tmp_path):
     clock = Clock(1000.0)
     log = _log(tmp_path, clock=clock)
-    assert log.session_id("listener", "claude-code") is None
-    log.set_session_id("listener", "claude-code", "sess-L")
-    log.set_session_id("responder", "claude-code", "sess-R")
-    log.set_session_id("responder", "codex", "019a-thread")
+    assert log.session_id("claude-code") is None
+    log.set_session_id("claude-code", "sess-L")
+    log.set_session_id("claude-code", "sess-R", head="responder")
+    log.set_session_id("codex", "019a-thread", head="responder")
     other = _log(tmp_path)
-    assert other.session_id("listener", "claude-code") == "sess-L"
-    assert other.session_id("responder", "codex") == "019a-thread"
-    assert other.session_id("listener", "codex") is None
-    assert other.sessions()["listener"]["claude-code"] == {"id": "sess-L", "used_at": 1001.0}
+    assert other.session_id("claude-code") == "sess-L"
+    assert other.session_id("codex", head="responder") == "019a-thread"
+    assert other.session_id("codex") is None
+    assert other.sessions()["agent"]["claude-code"] == {"id": "sess-L", "used_at": 1001.0}
     # Повторная запись того же id — отметка использования.
-    log.set_session_id("listener", "claude-code", "sess-L")
-    assert other.sessions()["listener"]["claude-code"]["used_at"] == 1004.0
-    log.set_session_id("listener", "claude-code", None)
-    assert other.session_id("listener", "claude-code") is None
-    assert "listener" not in other.sessions()
-    log.set_session_id("listener", "nobody", None)       # нечего забывать — не падает
+    log.set_session_id("claude-code", "sess-L")
+    assert other.sessions()["agent"]["claude-code"]["used_at"] == 1004.0
+    log.set_session_id("claude-code", None)
+    assert other.session_id("claude-code") is None
+    assert "agent" not in other.sessions()
+    log.set_session_id("nobody", None)       # нечего забывать — не падает
     data = json.loads((tmp_path / "assistant" / "sessions.json").read_text(encoding="utf-8"))
     assert data["v"] == 1 and set(data["heads"]) == {"responder"}
     assert not list(tmp_path.rglob("*.tmp"))
     with pytest.raises(ValueError):
-        log.set_session_id("", "codex", "x")
+        log.set_session_id("", "x")
     with pytest.raises(ValueError):
-        log.set_session_id("listener", "codex", "")
+        log.set_session_id("codex", "")
 
 
 @pytest.mark.parametrize("content", [
@@ -558,19 +584,19 @@ def test_missing_or_corrupted_sessions_mean_no_session(tmp_path, content):
     log = _log(tmp_path)
     log.dir.mkdir()
     (log.dir / "sessions.json").write_bytes(content)
-    assert log.session_id("listener", "claude-code") is None
+    assert log.session_id("claude-code") is None
     assert log.sessions() == {}
-    log.set_session_id("listener", "claude-code", "fresh")      # битый файл заменяется
-    assert _log(tmp_path).session_id("listener", "claude-code") == "fresh"
+    log.set_session_id("claude-code", "fresh")      # битый файл заменяется
+    assert _log(tmp_path).session_id("claude-code") == "fresh"
 
 
 def test_session_ids_concurrent_writers(tmp_path):
     def writer(head, provider):
         log = _log(tmp_path)
         for i in range(10):
-            log.set_session_id(head, provider, f"{head}-{provider}-{i}")
+            log.set_session_id(provider, f"{head}-{provider}-{i}", head=head)
 
-    pairs = [(h, p) for h in chatlog.HEADS for p in ("claude-code", "codex", "opencode")]
+    pairs = [(h, p) for h in (chatlog.DEFAULT_HEAD, "other") for p in ("claude-code", "codex", "opencode")]
     threads = [threading.Thread(target=writer, args=pair) for pair in pairs]
     for t in threads:
         t.start()
@@ -578,6 +604,546 @@ def test_session_ids_concurrent_writers(tmp_path):
         t.join()
     log = _log(tmp_path)
     for h, p in pairs:
-        assert log.session_id(h, p) == f"{h}-{p}-9"
+        assert log.session_id(p, head=h) == f"{h}-{p}-9"
     # Журнал сеансы не трогают.
     assert not log.path.exists()
+
+
+# --- раунд 1: строгий замок, хвост-запись, сеансы, ответ, который пишется ---------------
+
+_HOLDER = r"""
+import sys
+from pathlib import Path
+from meet import library
+with library.file_lock(Path(sys.argv[1])):
+    print("locked", flush=True)
+    sys.stdin.readline()
+print("released", flush=True)
+"""
+
+
+def _holder(lock_key):
+    env = {**os.environ, "PYTHONPATH": str(SRC), "PYTHONUTF8": "1"}
+    kid = subprocess.Popen([sys.executable, "-c", _HOLDER, str(lock_key)],
+                           stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env)
+    assert kid.stdout.readline().strip() == "locked"
+    return kid
+
+
+def _release(kid):
+    kid.stdin.write("go\n")
+    kid.stdin.flush()
+    kid.communicate(timeout=60)
+
+
+def test_writes_refuse_without_the_lock_and_reads_fall_back(tmp_path):
+    log = _log(tmp_path, lock_wait=0.3, read_wait=0.2)
+    mid = log.append("user", text="до замка").message["id"]
+    log.set_session_id("claude-code", "sess-1")
+    before = log.path.read_bytes()
+    sessions_before = log.sessions_path.read_bytes()
+    kid = _holder(log.dir / chatlog.LOCK_NAME)
+    try:
+        started = time.monotonic()
+        with pytest.raises(library.FileLockTimeout):
+            log.append("user", text="без замка", client_id="c-x")
+        assert time.monotonic() - started < 5
+        with pytest.raises(chatlog.FileLockTimeout):
+            log.patch(mid, {"feedback": "copied"})
+        with pytest.raises(OSError):
+            log.set_session_id("claude-code", "sess-2")
+        with pytest.raises(OSError):
+            log.write_md()
+        assert log.path.read_bytes() == before
+        assert log.sessions_path.read_bytes() == sessions_before
+        assert not (tmp_path / ASSISTANT_CHAT_MD).exists()
+        # Чтение не ждёт бесконечно и не падает.
+        fresh = _log(tmp_path, read_wait=0.2)
+        assert [m["text"] for m in fresh.messages()] == ["до замка"]
+        assert fresh.session_id("claude-code") == "sess-1"
+        assert fresh.context(1000) and fresh.snapshot()["seq"] == 1
+    finally:
+        _release(kid)
+    assert log.append("user", text="после замка", client_id="c-x").created
+    assert [m["text"] for m in _log(tmp_path).load()] == ["до замка", "после замка"]
+
+
+def test_strict_file_lock_in_library(tmp_path):
+    key = tmp_path / "x.lock"
+    with library.file_lock(key):
+        started = time.monotonic()
+        errors = []
+
+        def other():
+            try:
+                with library.file_lock(key, strict=True, wait=0.2):
+                    pass
+            except library.FileLockTimeout as e:
+                errors.append(e)
+
+        t = threading.Thread(target=other)
+        t.start()
+        t.join(10)
+        assert len(errors) == 1 and isinstance(errors[0], OSError)
+        assert time.monotonic() - started < 5
+    # Свободный замок строгий режим берёт; обычный режим не изменился.
+    with library.file_lock(key, strict=True, wait=0.2):
+        pass
+    with library.file_lock(key):
+        pass
+    kid = _holder(key)
+    try:
+        with pytest.raises(library.FileLockTimeout):
+            with library.file_lock(key, strict=True, wait=0.2):
+                pass
+        started = time.monotonic()
+        with library.file_lock(key, wait=0.2):     # обычный: без замка после ожидания
+            pass
+        assert time.monotonic() - started < 5
+    finally:
+        _release(kid)
+
+
+def test_valid_record_without_newline_counts_as_written(tmp_path):
+    log = _log(tmp_path)
+    log.append("user", text="первое")
+    with open(log.path, "ab") as f:      # убит ровно перед `\n`
+        f.write(b'{"v":1,"seq":2,"at":1.0,"rec":"msg","id":"m2","kind":"agent",'
+                b'"text":"OLD-TORN","client_id":"c-old"}')
+    fresh = _log(tmp_path)
+    assert [m["text"] for m in fresh.load()] == ["первое", "OLD-TORN"]
+    assert fresh.stats()["torn_tail"] is False
+    new = fresh.append("user", text="NEW", client_id="c-new")
+    assert new.created and new.message["text"] == "NEW"
+    assert (new.message["id"], new.event["seq"]) == ("m3", 3)
+    again = _log(tmp_path)
+    assert [m["text"] for m in again.load()] == ["первое", "OLD-TORN", "NEW"]
+    assert again.stats() == {"broken": 0, "orphan_patches": 0, "duplicates": 0, "unknown": 0,
+                             "torn_tail": False}
+    assert again.by_client_id("c-new")["id"] == "m3"
+    assert not again.append("user", text="dup", client_id="c-old").created
+
+
+def test_valid_patch_without_newline_and_then_patch(tmp_path):
+    log = _log(tmp_path)
+    mid = log.append("agent", text="x").message["id"]
+    with open(log.path, "ab") as f:
+        f.write(b'{"v":1,"seq":2,"rec":"patch","id":"m1","set":{"status":"held"}}')
+    ev = _log(tmp_path).patch(mid, {"status": "shown"})
+    assert ev["seq"] == 3
+    msg = _log(tmp_path).load()[0]
+    assert msg["status"] == "shown"
+
+
+def test_unconfirmed_write_is_an_error_not_an_old_message(tmp_path, monkeypatch):
+    log = _log(tmp_path)
+    log.append("user", text="старое")
+    monkeypatch.setattr(log, "_write", lambda data, fsync: None)    # запись «пропала»
+    with pytest.raises(chatlog.ChatLogError):
+        log.append("user", text="новое")
+    with pytest.raises(chatlog.ChatLogError):
+        log.patch("m1", {"feedback": "copied"})
+
+
+def test_event_message_is_a_separate_copy(tmp_path):
+    log = _log(tmp_path)
+    res = log.append("user", text="x")
+    res.event["message"]["text"] = "изменено"
+    assert res.message["text"] == "x"
+    assert log.get("m1")["text"] == "x"
+
+
+def test_snapshot_limits(tmp_path):
+    log = _log(tmp_path)
+    for i in range(5):
+        log.append("user", text=str(i))
+    assert [m["text"] for m in log.snapshot(2)["messages"]] == ["3", "4"]
+    assert log.snapshot(0) == {"messages": [], "seq": 5}
+    assert log.snapshot(-3)["messages"] == []
+    assert len(log.snapshot(99)["messages"]) == 5
+
+
+def test_log_callback_runs_outside_the_lock(tmp_path):
+    seen = []
+    holder = {}
+
+    def log_cb(text):
+        seen.append(text)
+        holder["log"].messages()        # под замком это была бы взаимоблокировка
+
+    # Под замком колбэк ждал бы read_wait (замок потоков не повторно входимый).
+    log = ChatLog(tmp_path, log=log_cb, clock=Clock(), read_wait=5.0)
+    holder["log"] = log
+    log.append("user", text="x")
+    with open(log.path, "ab") as f:
+        f.write(b'garbage\n{"torn')
+    started = time.monotonic()
+    t = threading.Thread(target=log.load)
+    t.start()
+    t.join(30)
+    assert not t.is_alive()
+    assert time.monotonic() - started < 4
+    assert any("битая" in s for s in seen) and any("оборванная" in s for s in seen)
+
+
+def test_writing_reply_lifecycle(tmp_path):
+    log = _log(tmp_path)
+    log.append("user", text="вопрос", client_id="c1")
+    started = log.begin_reply(mode="reply", re="m1", lane="responder")
+    rid = started.message["id"]
+    assert started.message["status"] == chatlog.WRITING and started.message["text"] == ""
+    assert chatlog.WRITING in chatlog.STATUSES
+    assert f"· {rid}" not in log.render_md()
+    assert "Ты писал" not in log.context(5000)
+    ev = log.finish_reply(rid, text="Готовый **ответ**", refs=[{"type": "t", "t": 12}])
+    assert ev["set"]["status"] == "shown"
+    assert "Готовый **ответ**" in log.render_md()
+    assert "Готовый **ответ**" in log.context(5000)
+    with pytest.raises(ValueError):
+        log.finish_reply(rid, status=chatlog.WRITING)
+
+    stopped = log.begin_reply(mode="reply").message["id"]
+    log.finish_reply(stopped, status="cancelled", text="Начал отвечать и")
+    failed = log.begin_reply(mode="reply").message["id"]
+    log.finish_reply(failed, status="failed", error="Claude Code недоступен")
+    md = log.render_md()
+    assert "Начал отвечать и" in md and "остановлено" in md
+    assert "ошибка: Claude Code недоступен" in md
+    seed = log.context(5000)
+    assert "[в чате: cancelled]" in seed and "[в чате: failed]" in seed
+
+
+def test_close_interrupted_after_a_crash(tmp_path):
+    log = _log(tmp_path)
+    a = log.begin_reply(mode="reply").message["id"]
+    b = log.begin_reply(mode="proactive", text="частично").message["id"]
+    log.finish_reply(b)
+    events = _log(tmp_path).close_interrupted()
+    assert [e["id"] for e in events] == [a]
+    msg = _log(tmp_path).get(a)
+    assert msg["status"] == "cancelled" and "прерван" in msg["error"]
+    assert _log(tmp_path).close_interrupted() == []
+
+
+def test_context_keeps_status_marks_of_long_replies(tmp_path):
+    log = _log(tmp_path)
+    mid = log.append("agent", text="очень длинная реплика " * 2000, say="фраза").message["id"]
+    log.patch(mid, {"status": "held", "voiced": {"t": 5.0, "line": "сказал"},
+                    "feedback": "not_now", "error": "что-то"})
+    for budget in (700, 1500, 6000, 30_000):
+        text = log.context(budget)
+        assert len(text) <= budget
+        assert "[в чате: held]" in text and "[Озвучено [00:00:05]" in text
+        assert "[Отклик: не сейчас]" in text and "[Ошибка: что-то]" in text
+        assert "[обрезано" in text
+
+
+def test_context_system_lines_are_short_and_errors_skipped(tmp_path):
+    log = _log(tmp_path)
+    for i in range(3):
+        log.append("user", text=f"вопрос {i}")
+    log.append("system", text="Сессия продолжена " + "очень " * 100)
+    log.append("system", text="Claude Code недоступен — повтор через 60 с", error="unavailable")
+    log.append("system", text="уровень ошибки", level="error")
+    text = log.context(10_000, recent=3)
+    assert "Claude Code недоступен" not in text and "уровень ошибки" not in text
+    line = next(ln for ln in text.splitlines() if "Система:" in ln)
+    assert len(line) <= 40 + chatlog.COMPRESSED_LINE_MAX
+    # system не в счёт последних трёх: все три вопроса — дословно.
+    assert "Раньше в чате" not in text
+    assert all(f"Ты получил сообщение: вопрос {i}" in text for i in range(3))
+
+
+def test_write_md_failure_leaves_no_tmp(tmp_path, monkeypatch):
+    log = _log(tmp_path)
+    log.append("user", text="x")
+
+    def boom(tmp, target):
+        raise PermissionError("занят")
+
+    monkeypatch.setattr(library, "replace_atomic", boom)
+    with pytest.raises(PermissionError):
+        log.write_md()
+    with pytest.raises(PermissionError):
+        log.set_session_id("codex", "s")
+    assert not (tmp_path / ASSISTANT_CHAT_MD).exists()
+    assert not [p for p in tmp_path.rglob("*") if p.name.endswith(".tmp")]
+
+
+# --- sessions.json: поля, ошибки чтения, процессы --------------------------------------
+
+def test_session_meta_and_unknown_fields_are_kept(tmp_path):
+    log = _log(tmp_path)
+    log.dir.mkdir()
+    log.sessions_path.write_text(json.dumps({
+        "v": 1, "future": {"x": 1},
+        "heads": {"listener": {"claude-code": {"id": "old", "used_at": 1.0, "cli": "2.1"},
+                               "weird": "not-an-entry"},
+                  "other-head": {"codex": {"id": "c1", "extra": True}}}}), encoding="utf-8")
+    log.set_session_id("claude-code", "r1", head="responder", cwd="C:/tmp/x", model="sonnet")
+    assert log.session("claude-code", head="responder")["cwd"] == "C:/tmp/x"
+    assert log.session("claude-code", head="responder")["model"] == "sonnet"
+    log.set_session_id("claude-code", "r1", head="responder")          # тот же id: поля остаются
+    assert log.session("claude-code", head="responder")["cwd"] == "C:/tmp/x"
+    log.set_session_id("claude-code", "r2", head="responder", model="haiku")   # новый id: заново
+    entry = log.session("claude-code", head="responder")
+    assert entry == {"model": "haiku", "id": "r2", "used_at": entry["used_at"]}
+    data = json.loads(log.sessions_path.read_text(encoding="utf-8"))
+    assert data["future"] == {"x": 1}
+    assert data["heads"]["listener"]["claude-code"]["cli"] == "2.1"
+    assert data["heads"]["listener"]["weird"] == "not-an-entry"
+    assert data["heads"]["other-head"]["codex"]["extra"] is True
+    assert log.session_id("weird", head="listener") is None
+    assert log.session_id("claude-code", head="listener") == "old"
+    with pytest.raises(ValueError):
+        log.set_session_id("codex", "x", used_at=5)
+    with pytest.raises(ValueError):
+        log.set_session_id("codex", "x", id="y")
+    with pytest.raises(TypeError):
+        log.set_session_id("codex", "x", cwd=object())
+
+
+def test_session_read_error_raises_and_never_overwrites(tmp_path, monkeypatch):
+    log = _log(tmp_path)
+    log.set_session_id("claude-code", "keep-me")
+    log.set_session_id("codex", "keep-me-too", head="responder")
+    before = log.sessions_path.read_bytes()
+    real = Path.read_bytes
+    calls = []
+
+    def busy(self):
+        if self.name == chatlog.SESSIONS_JSON:
+            calls.append(1)
+            raise PermissionError("занят сканером")
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", busy)
+    with pytest.raises(PermissionError):
+        log.session_id("claude-code")
+    assert len(calls) == chatlog.SESSIONS_READ_TRIES
+    with pytest.raises(PermissionError):
+        log.set_session_id("claude-code", "new")
+    monkeypatch.setattr(Path, "read_bytes", real)
+    assert log.sessions_path.read_bytes() == before
+
+    # Ошибка на первой попытке — повтор, и всё читается.
+    flaky = {"n": 0}
+
+    def once(self):
+        if self.name == chatlog.SESSIONS_JSON and flaky["n"] == 0:
+            flaky["n"] += 1
+            raise PermissionError("на миг")
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", once)
+    assert log.session_id("codex", head="responder") == "keep-me-too"
+
+
+_SESS_CHILD = r"""
+import sys
+from pathlib import Path
+from meet.assist.chatlog import ChatLog
+folder, name, count = Path(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+log = ChatLog(folder, log=lambda s: None)
+print("ready", flush=True)
+sys.stdin.readline()
+for i in range(count):
+    log.set_session_id(name, f"{name}-{i}", cwd=f"/{name}")
+    assert log.session_id(name) == f"{name}-{i}"
+    log.append("system", text=f"{name}-{i}")
+print("done", flush=True)
+"""
+
+
+def test_sessions_two_processes_and_a_racing_reader(tmp_path):
+    env = {**os.environ, "PYTHONPATH": str(SRC), "PYTHONUTF8": "1"}
+    kids = [subprocess.Popen([sys.executable, "-c", _SESS_CHILD, str(tmp_path), n, "25"],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, env=env)
+            for n in ("claude-code", "codex")]
+    for k in kids:
+        assert k.stdout.readline().strip() == "ready"
+    for k in kids:
+        k.stdin.write("go\n")
+        k.stdin.flush()
+    reader = _log(tmp_path)
+    while any(k.poll() is None for k in kids):
+        for providers in reader.sessions().values():      # не падает и не видит обрывков
+            for p, entry in providers.items():
+                assert entry["id"].startswith(p) and entry["cwd"] == f"/{p}"
+        time.sleep(0.01)
+    for k in kids:
+        out, err = k.communicate(timeout=120)
+        assert k.returncode == 0 and "done" in out, err
+    final = _log(tmp_path)
+    assert final.session_id("claude-code") == "claude-code-24"
+    assert final.session_id("codex") == "codex-24"
+    _check_consistent(tmp_path, 50)
+
+
+# --- реакции человека -------------------------------------------------------------------
+
+def test_reactions_toggle_on_and_off(tmp_path):
+    clock = Clock(5000.0)
+    log = _log(tmp_path, clock=clock)
+    mid = log.append("agent", text="Срок 15.11", t=60.0).message["id"]
+    assert set(chatlog.REACTIONS) == {"👍", "👎", "❓"}
+    events = log.react(mid, "👍", t=70.0)
+    assert [e["op"] for e in events] == ["patch", "add"]
+    assert events[0]["set"] == {"reactions": {"👍": 5002.0}}
+    ev_msg = events[1]["message"]
+    assert (ev_msg["kind"], ev_msg["event"], ev_msg["re"], ev_msg["text"], ev_msg["on"], ev_msg["t"]) == \
+        ("meeting", "reaction", mid, "👍", True, 70.0)
+    log.react(mid, "❓")
+    assert set(log.get(mid)["reactions"]) == {"👍", "❓"}
+    off = log.react(mid, "👍")                       # переключение: снять
+    assert off[0]["set"] == {"reactions": {"❓": log.get(mid)["reactions"]["❓"]}}
+    assert off[1]["message"]["on"] is False
+    log.react(mid, "❓", on=False)
+    assert _log(tmp_path).get(mid)["reactions"] == {}
+    reactions = [m for m in _log(tmp_path).load() if m.get("event") == "reaction"]
+    assert [(m["text"], m["on"]) for m in reactions] == [("👍", True), ("❓", True),
+                                                         ("👍", False), ("❓", False)]
+
+
+def test_reactions_repeat_is_idempotent_and_validated(tmp_path):
+    log = _log(tmp_path)
+    mid = log.append("agent", text="x").message["id"]
+    uid = log.append("user", text="y").message["id"]
+    assert log.react(mid, "👎", on=True)
+    size = log.path.stat().st_size
+    assert log.react(mid, "👎", on=True) == []          # уже стоит
+    assert _log(tmp_path).react(mid, "👎", on=True) == []
+    assert log.react(mid, "❓", on=False) == []          # и так не стоит
+    assert log.react("m99", "👍") == []
+    assert log.path.stat().st_size == size
+    for bad in ("👍🏻", "", "ok"):
+        with pytest.raises(ValueError):
+            log.react(mid, bad)
+    with pytest.raises(ValueError):
+        log.react(uid, "👍")
+    with pytest.raises(ValueError):
+        log.react(mid, "👍", on="yes")
+    # Поле reactions правится и обычным patch.
+    assert log.patch(mid, {"reactions": {}})["set"] == {"reactions": {}}
+
+
+def test_reactions_in_context_order_and_md(tmp_path):
+    log = _log(tmp_path)
+    first = log.append("agent", text="Первая реплика", t=10.0).message["id"]
+    log.append("user", text="вопрос человека", t=20.0)
+    second = log.append("agent", text="Вторая реплика", t=30.0).message["id"]
+    log.react(first, "👍", t=40.0)
+    log.react(second, "❓", t=50.0)
+    log.react(first, "👍", t=60.0)                     # снял
+    log.react(second, "👎", t=70.0)
+    seed = log.context(10_000, recent=3)
+    lines = seed.splitlines()
+    order = [i for i, ln in enumerate(lines) if "Реакция" in ln or "снял реакцию" in ln]
+    assert [lines[i].split("] ", 1)[1] for i in order] == [
+        f"Реакция человека на {first}: 👍 «норм»",
+        f"Реакция человека на {second}: ❓ «вопрос»",
+        f"Человек снял реакцию с {first}: 👍 «норм»",
+        f"Реакция человека на {second}: 👎 «не норм»",
+    ]
+    assert seed.index("Вторая реплика") < seed.index(f"Реакция человека на {second}: ❓")
+    # События реакций не в счёт последних трёх: все три сообщения — дословно.
+    assert "Раньше в чате" not in seed
+    assert "  [Реакции человека: ❓ вопрос, 👎 не норм]" in seed
+    first_block = seed[seed.index("Первая реплика"):seed.index("вопрос человека")]
+    assert "Реакции человека" not in first_block       # снятая не показывается
+    # Сжатые — тоже по строке на своём месте.
+    small = log.context(10_000, recent=0)
+    assert f": Реакция человека на {second}: 👎 «не норм»" in small
+    md = log.render_md()
+    assert "реакции: ❓ вопрос, 👎 не норм" in md
+    assert "Реакция человека" not in md and md.count("**Ассистент**") == 2
+
+
+# --- упрощённая модель: один агент, кнопки, запросы агента (v4-simple) -----------------
+
+def test_single_agent_head_by_default(tmp_path):
+    log = _log(tmp_path)
+    assert chatlog.DEFAULT_HEAD == "agent" and chatlog.HEADS == ("agent",)
+    log.set_session_id("claude-code", "s-1", cwd="C:/x")
+    data = json.loads(log.sessions_path.read_text(encoding="utf-8"))
+    assert list(data["heads"]) == ["agent"]
+    assert data["heads"]["agent"]["claude-code"]["id"] == "s-1"
+    assert log.session("claude-code")["cwd"] == "C:/x"
+
+
+def test_buttons_and_pin_round_trip(tmp_path):
+    log = _log(tmp_path)
+    mid = log.append("agent", text="Посмотреть план запуска?",
+                     buttons=["Глянь", "  Только   сроки ", "Не надо", "Четвёртая", "Глянь"],
+                     pin=True).message["id"]
+    msg = _log(tmp_path).get(mid)
+    assert msg["buttons"] == ["Глянь", "Только сроки", "Не надо"]    # 0–3, лишние отброшены
+    assert msg["pin"] is True
+    long = log.append("agent", text="x", buttons=["я" * 200]).message
+    assert long["buttons"] == ["я" * chatlog.BUTTON_MAX_CHARS]
+    assert log.append("agent", text="без кнопок", buttons=[]).message["buttons"] == []
+    log.patch(mid, {"pin": False, "buttons": ["Глянь"]})
+    msg = _log(tmp_path).get(mid)
+    assert msg["pin"] is False and msg["buttons"] == ["Глянь"]
+    for bad in ({"buttons": "Глянь"}, {"buttons": [1, 2]}, {"pin": "yes"}):
+        with pytest.raises(ValueError):
+            log.append("agent", text="x", **bad)
+        with pytest.raises(ValueError):
+            log.patch(mid, bad)
+
+
+def test_button_click_is_a_user_message(tmp_path):
+    log = _log(tmp_path)
+    mid = log.append("agent", text="Глянуть план?", buttons=["Глянь", "Не надо"],
+                     t=100.0).message["id"]
+    click = log.click_button(mid, "Глянь", client_id="click-1", t=105.0)
+    msg = click.message
+    assert (msg["kind"], msg["text"], msg["via"], msg["re"], msg["t"]) == \
+        ("user", "Глянь", "button", mid, 105.0)
+    assert click.event["op"] == "add"
+    again = _log(tmp_path).click_button(mid, "Глянь", client_id="click-1")   # повтор
+    assert not again.created and again.message["id"] == msg["id"]
+    with pytest.raises(ValueError):
+        log.click_button(mid, "Нет такой")
+    with pytest.raises(ValueError):
+        log.click_button(msg["id"], "Глянь")         # не реплика агента
+    with pytest.raises(ValueError):
+        log.click_button("m99", "Глянь")
+    seed = log.context(5000)
+    assert "  Кнопки: [Глянь] [Не надо]" in seed
+    assert f"Ты получил сообщение (кнопка, к {mid}): Глянь" in seed
+    md = log.render_md()
+    assert "Кнопки: «Глянь» · «Не надо»" in md
+    assert f"**Вы** · кнопка к {mid}" in md
+
+
+def test_tool_records_hidden_from_md_and_compressed_in_seed(tmp_path):
+    log = _log(tmp_path)
+    log.append("user", text="глянь план", t=10.0)
+    req = log.append("tool", event="request", call="read",
+                     args=["Проекты/Альфа/План.md"], t=11.0).message["id"]
+    log.append("tool", event="result", re=req, text="# План\n" + "Срок 15.11. " * 500,
+               chars=6000, t=12.0)
+    bad = log.append("tool", event="request", call="search",
+                     args={"query": "биллинг", "in": "Проекты"}).message["id"]
+    log.append("tool", event="result", re=bad, error="папка вне базы знаний")
+    log.append("agent", text="В плане срок 15.11.", t=13.0)
+    with pytest.raises(ValueError):
+        log.append("tool", event="call")
+    md = log.render_md()
+    assert "План.md" not in md and "Срок 15.11. Срок" not in md and "биллинг" not in md
+    assert "В плане срок 15.11." in md and "глянь план" in md
+    seed = log.context(20_000, recent=2)
+    lines = seed.splitlines()
+    tool_lines = [ln for ln in lines if "запросил" in ln or "Meet:" in ln]
+    assert len(tool_lines) == 4
+    assert all(len(ln) <= 40 + chatlog.COMPRESSED_LINE_MAX for ln in tool_lines)
+    assert 'Ты запросил read: ["Проекты/Альфа/План.md"]' in seed
+    assert f"Meet: ответ на {req} (6000 симв.): # План Срок 15.11." in seed
+    assert f"Meet: запрос {bad} не выполнен — папка вне базы знаний" in seed
+    # Не в счёт recent=2: оба сообщения — дословно, раньшего нет.
+    assert "Раньше в чате" not in seed
+    assert seed.index("глянь план") < seed.index("Ты запросил read") < seed.index("В плане срок")
+    small = log.context(20_000, recent=0)
+    assert ": Ты запросил search:" in small

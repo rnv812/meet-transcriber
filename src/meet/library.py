@@ -468,7 +468,7 @@ def _meta_lock(folder: Path) -> threading.Lock:
         return _META_LOCKS.setdefault(key, threading.Lock())
 
 
-def _replace(tmp: Path, target: Path) -> None:
+def replace_atomic(tmp: Path, target: Path) -> None:
     """os.replace с повтором: на Windows файл, который как раз читает другой
     процесс (окно, задача), заменить нельзя — PermissionError на миг."""
     for attempt in range(REPLACE_TRIES):
@@ -479,6 +479,9 @@ def _replace(tmp: Path, target: Path) -> None:
             if attempt == REPLACE_TRIES - 1:
                 raise
             time.sleep(0.05 * (attempt + 1))
+
+
+_replace = replace_atomic   # прежнее имя: им пользуются модули до 0.3.6
 
 
 META_FILE_LOCK_WAIT_S = 5.0
@@ -498,34 +501,57 @@ def _meta_lock_path(folder: Path) -> Path:
     return tempdirs.system_temp() / "meet-meta-locks" / f"{digest}.lock"
 
 
+class FileLockTimeout(OSError):
+    """Строгий замок (`file_lock(strict=True)`) не взят за отведённое время."""
+
+
 @contextmanager
-def file_lock(path: Path):
+def file_lock(path: Path, *, strict: bool = False, wait: float | None = None):
     """Замок чтения-правки-записи файла (или папки записи — её meta.json):
     и между потоками резидента, и между процессами. Ключ — сам путь; файл
     замка — во временной папке (см. _meta_file_lock). Так правятся meta.json
-    (update_meta) и описания групп (meet.groups)."""
-    with _meta_lock(Path(path)), _meta_file_lock(Path(path)):
-        yield
+    (update_meta) и описания групп (meet.groups).
+
+    `wait` — сколько ждать (по умолчанию META_FILE_LOCK_WAIT_S). Обычный
+    режим, не дождавшись межпроцессного замка, работает без него (потерять
+    запись хуже гонки). `strict=True` — вместо этого FileLockTimeout: для
+    журналов, где запись без замка ломает чужие строки (assist.chatlog)."""
+    wait = META_FILE_LOCK_WAIT_S if wait is None else max(float(wait), 0.0)
+    lock = _meta_lock(Path(path))
+    if not strict:
+        lock.acquire()
+    elif not lock.acquire(timeout=wait):
+        raise FileLockTimeout(f"{path}: замок не взят за {wait:g} с")
+    try:
+        deadline = time.monotonic() + wait
+        with _meta_file_lock(Path(path), strict=strict, deadline=deadline):
+            yield
+    finally:
+        lock.release()
 
 
 @contextmanager
-def _meta_file_lock(folder: Path):
+def _meta_file_lock(folder: Path, *, strict: bool = False, deadline: float | None = None):
     """Замок meta.json между процессами: задачи-подпроцессы (итоги, объединение)
     правят его одновременно с резидентом (переименование из окна), и замок
     потоков одного процесса их не разводит. Файл замка — во временной папке,
     а не в папке записи: там он мешал бы удалению и был бы виден агенту.
-    Не взяли за META_FILE_LOCK_WAIT_S (или замок недоступен) — правим без
-    него: потерять запись хуже, чем гонку."""
+    Не взяли к `deadline` (по умолчанию через META_FILE_LOCK_WAIT_S) или замок
+    недоступен — правим без него: потерять запись хуже, чем гонку. Со
+    `strict` — FileLockTimeout."""
     path = _meta_lock_path(folder)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         handle = open(path, "a+b")
-    except OSError:
+    except OSError as e:
+        if strict:
+            raise FileLockTimeout(f"{folder}: файл замка недоступен: {e}") from e
         yield
         return
     locked = False
     try:
-        deadline = time.monotonic() + META_FILE_LOCK_WAIT_S
+        if deadline is None:
+            deadline = time.monotonic() + META_FILE_LOCK_WAIT_S
         while True:
             try:
                 _lock_file(handle)
@@ -535,6 +561,8 @@ def _meta_file_lock(folder: Path):
                 if time.monotonic() >= deadline:
                     break
                 time.sleep(0.01)
+        if not locked and strict:
+            raise FileLockTimeout(f"{folder}: замок занят другим процессом")
         yield
     finally:
         if locked:
