@@ -110,6 +110,8 @@ SYSTEM_TOKENS = 1500
 LINE_CHARS = 120
 CONTEXT_MARGIN = 0.85
 MIN_WINDOW_CHARS = 3000
+# Окно контекста локальной модели не узнать — режем как для 8K (с запасом).
+UNKNOWN_CONTEXT = 8192
 FINAL_REPLY_TOKENS = 1024
 # Сервер насчитал промпту меньше этой доли оценки — промпт обрезан по контексту.
 CUT_SHARE = 0.5
@@ -1040,7 +1042,7 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
              if isinstance(s, dict)}
     categories = [c.to_raw() for c in cfg.categories]
     category_ids = [c["id"] for c in categories]
-    parts = (windows(lines, limit=window_chars(context) if context else WINDOW_CHARS, max_windows=None)
+    parts = (windows(lines, limit=window_chars(context or UNKNOWN_CONTEXT), max_windows=None)
              if strict else windows(lines))
     multi = len(parts) > 1
     # При нескольких окнах категорию и название даёт отдельный итоговый
@@ -1081,7 +1083,8 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
                                   valid={i for i, _ in part}, category_ids=category_ids,
                                   summary=bool(final_features), texts=texts, projects=jira[0],
                                   need=need, schema=schema, report=report,
-                                  extra={"max_tokens": reply_tokens(len(part))} if strict else None)
+                                  extra={"max_tokens": reply_tokens(len(part)), "on_cut": "keep"}
+                                  if strict else None)
         except (ValueError, RuntimeError) as e:
             errors.append(f"часть {n}: {e}")
             failed.append(str(e))
@@ -1110,7 +1113,8 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
                                   category_ids=category_ids, timeout_s=FINAL_TIMEOUT_S, report=report,
                                   schema=response_schema(final_features, category_ids=category_ids)
                                   if strict else None,
-                                  extra={"max_tokens": FINAL_REPLY_TOKENS} if strict else None)
+                                  extra={"max_tokens": FINAL_REPLY_TOKENS, "on_cut": "keep"}
+                                  if strict else None)
             merged.update({k: v for k, v in got.items() if k in final_features})
             errors += [f"итог: {e}" for e in errs]
         except (ValueError, RuntimeError) as e:

@@ -192,8 +192,13 @@ def find_opencode() -> str | None:
     return shim
 
 
-def local_reachable(base_url: str, timeout: float = 0.5) -> bool:
-    """Слушает ли кто-то адрес локальной модели (TCP-соединение, без запроса)."""
+def local_reachable(base_url: str, timeout: float = 0.5, via_proxy: bool = False) -> bool:
+    """Слушает ли кто-то адрес локальной модели (TCP-соединение, без запроса).
+    «Через прокси» (`via_proxy`): напрямую сервер может быть недоступен —
+    тогда короткий GET списка моделей через прокси; любой ответ HTTP (и
+    401/404) — сервер есть."""
+    if via_proxy:
+        return _reachable_via_proxy(base_url, max(timeout, 1.5))
     try:
         u = urlparse(base_url)
         host = u.hostname
@@ -209,7 +214,23 @@ def local_reachable(base_url: str, timeout: float = 0.5) -> bool:
         return False
 
 
-def available(base_url: str | None = None, probe_local: bool = True) -> dict:
+def _reachable_via_proxy(base_url: str, timeout: float) -> bool:
+    import urllib.error
+    import urllib.request
+
+    from meet.llm import local_models, openai_compat
+
+    try:
+        req = urllib.request.Request(local_models.models_url(base_url), headers={"Accept": "application/json"})
+        with openai_compat.open_url(req, timeout, via_proxy=True):
+            return True
+    except urllib.error.HTTPError:
+        return True  # ответил — значит, есть
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+
+
+def available(base_url: str | None = None, probe_local: bool = True, via_proxy: bool = False) -> dict:
     """Что установлено: CLI найдены, локальная модель отвечает. Без
     `probe_local` локальную модель не спрашиваем (`found: None` — не
     проверялась): это сетевое соединение, а агенту в терминале нужны только
@@ -222,7 +243,7 @@ def available(base_url: str | None = None, probe_local: bool = True) -> dict:
         "claude-code": {"found": claude is not None, "path": claude},
         "codex": {"found": codex is not None, "path": codex},
         "opencode": {"found": opencode is not None, "path": opencode},
-        "openai-compatible": {"found": local_reachable(url) if probe_local else None,
+        "openai-compatible": {"found": local_reachable(url, via_proxy=via_proxy) if probe_local else None,
                               "base_url": url},
     }
 

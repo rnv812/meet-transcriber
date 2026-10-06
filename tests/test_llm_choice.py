@@ -14,7 +14,7 @@ def _env(monkeypatch, *, claude=None, codex=None, opencode=None, local=False, lo
     monkeypatch.setattr(detect, "find_claude", lambda: claude)
     monkeypatch.setattr(detect, "find_codex", lambda: codex)
     monkeypatch.setattr(detect, "find_opencode", lambda: opencode)
-    monkeypatch.setattr(detect, "local_reachable", lambda url, timeout=0.5: local)
+    monkeypatch.setattr(detect, "local_reachable", lambda url, timeout=0.5, via_proxy=False: local)
 
     def fake_logged_in(name, path):
         ok = logged.get(name, True)

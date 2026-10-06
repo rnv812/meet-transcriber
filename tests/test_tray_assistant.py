@@ -72,7 +72,7 @@ def state(app):
 
 
 def _installed(monkeypatch, **found):
-    def available(base_url=None, probe_local=True):
+    def available(base_url=None, probe_local=True, via_proxy=False):
         return {name: {"found": found.get(name.replace("-", "_"), False)}
                 for name in llm.PROVIDERS}
     monkeypatch.setattr(detect, "available", available)

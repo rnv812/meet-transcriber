@@ -499,7 +499,7 @@ def test_attach_from_live_start_checks_the_provider_once(resident, monkeypatch):
 
     calls = []
     monkeypatch.setattr(detect, "available",
-                        lambda base_url=None: calls.append(1) or {"codex": {"found": True}})
+                        lambda base_url=None, **kw: calls.append(1) or {"codex": {"found": True}})
     reply = resident.live_start()
     assert reply["ok"] is True
     assert len(calls) == 1
@@ -835,7 +835,7 @@ def resident(monkeypatch, tmp_path):
         "llm": {"provider": "auto"},
     })
     monkeypatch.setattr(detect, "available",
-                        lambda base_url=None: {"codex": {"found": True}})
+                        lambda base_url=None, **kw: {"codex": {"found": True}})
     # Запись резидента — поддельная (без устройств), с настоящим отводом звука:
     # «запись с ассистентом» — это она плюс подключённый к ней ассистент.
     folder = tmp_path / "recordings" / "2026-10-01_10-00"
@@ -914,7 +914,7 @@ def test_live_start_during_normal_recording_is_bad_request(resident):
 def test_live_start_without_provider_is_conflict(resident, monkeypatch):
     from meet.llm import detect
 
-    monkeypatch.setattr(detect, "available", lambda base_url=None: {})
+    monkeypatch.setattr(detect, "available", lambda base_url=None, **kw: {})
     with pytest.raises(control.Conflict) as e:
         resident.live_start()
     assert "Подключите Claude Code, Codex или OpenCode" in str(e.value)

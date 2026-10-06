@@ -96,10 +96,12 @@ SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}}, "requir
 def _fresh_modes():
     from meet.llm import local_models
 
-    for cache in (openai_compat._schema_mode, local_models._ollama, local_models._trained):
+    caches = (openai_compat._schema_mode, openai_compat._num_ctx, openai_compat._context,
+              local_models._ollama, local_models._trained)
+    for cache in caches:
         cache.clear()
     yield
-    for cache in (openai_compat._schema_mode, local_models._ollama, local_models._trained):
+    for cache in caches:
         cache.clear()
 
 
@@ -191,7 +193,7 @@ def test_usage_is_passed_back(server):
 def ollama():
     """Ollama: /api/version, /api/show и родной /api/chat."""
     state = {"posted": [], "chat": {"message": {"role": "assistant", "content": '{"title": "Т"}'},
-                                    "prompt_eval_count": 5000, "eval_count": 40, "done": True}}
+                                    "prompt_eval_count": 19000, "eval_count": 40, "done": True}}
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, status, body):
@@ -233,7 +235,7 @@ def test_ollama_analysis_goes_to_native_chat_with_a_context_window(ollama):
     reply = asyncio.run(openai_compat.run(prompt, system_prompt="Система.", base_url=ollama["base_url"],
                                           local_model="qwen3:8b", response_schema=SCHEMA, max_tokens=4000,
                                           timeout_s=10))
-    assert reply.text == '{"title": "Т"}' and reply.usage["prompt_tokens"] == 5000
+    assert reply.text == '{"title": "Т"}' and reply.usage["prompt_tokens"] == 19000
     path, body = ollama["posted"][-1]
     assert path == "/api/chat"
     assert body["format"] == SCHEMA and body["stream"] is False
@@ -243,13 +245,55 @@ def test_ollama_analysis_goes_to_native_chat_with_a_context_window(ollama):
     assert "ollama" in openai_compat.accepted_modes()
 
 
-def test_ollama_plain_calls_stay_on_v1(ollama):
-    _ = asyncio.run(openai_compat.run("Вопрос?", system_prompt="С.", base_url=ollama["base_url"],
-                                      local_model="qwen3:8b", timeout_s=10))
-    assert all(path != "/api/chat" for path, _body in ollama["posted"])
+def test_ollama_plain_calls_go_native_too_without_a_schema(ollama):
+    # Итоги, вопросы, тики ассистента — тоже родным путём: /v1 не берёт num_ctx.
+    ollama["chat"] = {"message": {"content": "ответ"}, "prompt_eval_count": 30, "eval_count": 3}
+    reply = asyncio.run(openai_compat.run("Вопрос?", system_prompt="С.", base_url=ollama["base_url"],
+                                          local_model="qwen3:8b", timeout_s=10))
+    assert reply.text == "ответ"
+    path, body = ollama["posted"][-1]
+    assert path == "/api/chat" and "format" not in body
+    assert body["options"] == {"num_ctx": 16384, "num_predict": openai_compat.DEFAULT_MAX_TOKENS}
+    assert "ollama" not in openai_compat.accepted_modes()  # схемы не было
 
 
 def test_ollama_num_ctx_bounds():
     assert openai_compat.ollama_num_ctx(300, 1000, 40960) == 2048
     assert openai_compat.ollama_num_ctx(60000, 6000, 8192) == 8192
     assert openai_compat.ollama_num_ctx(300000, 6000, None) == 32768
+
+
+def test_ollama_window_steps_up_and_never_down():
+    key = ("http://h:11434", "m:latest")
+    assert openai_compat.sticky_num_ctx(key, 5000, 32768) == 8192
+    assert openai_compat.sticky_num_ctx(key, 3000, 32768) == 8192   # не уменьшается
+    assert openai_compat.sticky_num_ctx(key, 20000, 32768) == 32768
+    assert openai_compat.sticky_num_ctx(("h", "small"), 20000, 8192) == 8192  # не больше обученного
+
+
+def test_small_context_is_refused_before_the_call(ollama, monkeypatch):
+    from meet.llm import local_models
+
+    monkeypatch.setattr(local_models, "context_length", lambda *a, **k: {"tokens": 4096, "source": "lmstudio"})
+    reply = asyncio.run(openai_compat.run("Вопрос?", system_prompt="С.", base_url=ollama["base_url"],
+                                          local_model="qwen3:8b", timeout_s=10))
+    assert "слишком маленькое окно контекста: 4096" in reply.error
+    assert not any(path == "/api/chat" for path, _ in ollama["posted"])
+
+
+def test_cut_prompt_on_v1_is_an_error_unless_kept(server):
+    # LM Studio и др.: сервер насчитал 300 токенов на промпт в ~6000 — обрезан.
+    server["body"] = {"choices": [{"message": {"content": "итоги хвоста"}}],
+                      "usage": {"prompt_tokens": 300, "completion_tokens": 50}}
+    prompt = "Реплика встречи. " * 1100
+    reply = asyncio.run(openai_compat.run(prompt, system_prompt="С.", base_url=server["base_url"], timeout_s=10))
+    assert reply.error.startswith("модель видела только часть текста") and reply.text == ""
+    kept = asyncio.run(openai_compat.run(prompt, system_prompt="С.", base_url=server["base_url"], timeout_s=10,
+                                         on_cut="keep"))
+    assert kept.text == "итоги хвоста" and kept.usage["prompt_tokens"] == 300
+
+
+def test_short_prompts_are_not_judged_for_cuts():
+    assert openai_compat.prompt_cut({"prompt_tokens": 5}, 300) is None
+    assert openai_compat.prompt_cut({"prompt_tokens": 900}, 30000) == {"seen": 900, "need": 10000}
+    assert openai_compat.prompt_cut(None, 30000) is None

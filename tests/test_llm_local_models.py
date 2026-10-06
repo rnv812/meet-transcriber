@@ -31,11 +31,11 @@ VLLM = {"object": "list", "data": [
 
 @pytest.fixture(autouse=True)
 def _fresh_caches():
-    local_models._ollama.clear()
-    local_models._trained.clear()
+    from fake_ollama import clear_caches
+
+    clear_caches()
     yield
-    local_models._ollama.clear()
-    local_models._trained.clear()
+    clear_caches()
 
 
 @pytest.fixture
@@ -280,3 +280,46 @@ def test_via_proxy_sends_even_local_addresses_through_the_proxy(server, monkeypa
     monkeypatch.delenv("no_proxy", raising=False)
     server["routes"]["/v1/models"] = (200, LMSTUDIO)
     assert local_models.list_models(server["root"] + "/v1", via_proxy=True)["reason"] == "unreachable"
+
+
+
+def test_lm_studio_without_a_known_field_is_unknown_and_logged(server, caplog):
+    import logging
+
+    server["routes"]["/v1/models"] = (200, LMSTUDIO)
+    server["routes"]["/api/v0/models"] = (200, {"data": [
+        {"id": "qwen2.5-7b-instruct", "type": "llm", "state": "loaded", "ctx": 4096}]})
+    with caplog.at_level(logging.DEBUG, logger="meet.llm.local_models"):
+        got = local_models.context_length(server["root"] + "/v1", "qwen2.5-7b-instruct")
+    assert got == {"tokens": None, "source": None}
+    assert "окна контекста нет ни в одном поле" in caplog.text
+    assert local_models.context_text(None) == "окно контекста не удалось определить"
+
+
+def test_lm_studio_field_found_is_logged(server, caplog):
+    import logging
+
+    server["routes"]["/v1/models"] = (200, LMSTUDIO)
+    server["routes"]["/api/v0/models"] = (200, {"data": [
+        {"id": "qwen2.5-7b-instruct", "type": "llm", "max_context_length": 32768}]})
+    with caplog.at_level(logging.DEBUG, logger="meet.llm.local_models"):
+        assert local_models.context_length(server["root"] + "/v1", "qwen2.5-7b-instruct")["tokens"] == 32768
+    assert "max_context_length" in caplog.text
+
+
+def test_reachability_via_proxy_is_an_http_get(server, monkeypatch):
+    from meet.llm import detect
+
+    server["routes"]["/v1/models"] = (401, {"error": "key"})  # любой ответ HTTP — сервер есть
+    assert detect.local_reachable(server["root"] + "/v1", via_proxy=True) is True
+    assert server["hits"] == ["/v1/models"]
+    # Через прокси (мёртвый) — недоступен, хотя напрямую TCP соединился бы.
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "_opener", None)
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    assert detect.local_reachable(server["root"] + "/v1", via_proxy=True) is False
+    assert detect.local_reachable(server["root"] + "/v1") is True

@@ -206,7 +206,7 @@ def _provider_installed(cfg, provider: str | None = None) -> bool:
     тем же текстом — это осознанно: ждать проверки входа в HTTP нельзя."""
     from meet.llm import AUTO_PROVIDERS, detect
 
-    found = detect.available(cfg.llm.base_url)
+    found = detect.available(cfg.llm.base_url, via_proxy=cfg.llm.local_via_proxy)
     choice = provider or cfg.llm.provider
     if choice == "auto":
         return any(found.get(name, {}).get("found") for name in AUTO_PROVIDERS if name in cfg.llm.enabled)
@@ -3809,7 +3809,7 @@ class TrayControl:
         cfg = settings.load()
         provider, checking = self._providers.get(cfg)
         knowledge = cfg.assistant.knowledge_dir
-        found = detect.available(cfg.llm.base_url, probe_local=probe_local)
+        found = detect.available(cfg.llm.base_url, probe_local=probe_local, via_proxy=cfg.llm.local_via_proxy)
         return {
             "provider": provider,
             "checking": checking,

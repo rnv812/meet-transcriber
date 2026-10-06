@@ -15,7 +15,7 @@ def _env(monkeypatch, *, claude=None, codex=None, opencode=None, local=False, lo
     monkeypatch.setattr(detect, "find_claude", lambda: claude)
     monkeypatch.setattr(detect, "find_codex", lambda: codex)
     monkeypatch.setattr(detect, "find_opencode", lambda: opencode)
-    monkeypatch.setattr(detect, "local_reachable", lambda url, timeout=0.5: local)
+    monkeypatch.setattr(detect, "local_reachable", lambda url, timeout=0.5, via_proxy=False: local)
 
     def fake_logged_in(name, path):
         ok = logged.get(name, True)
@@ -59,7 +59,7 @@ def _real_find_claude(monkeypatch, tmp_path, found):
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setattr(detect.shutil, "which", lambda name: found.get(name))
     monkeypatch.setattr(detect, "find_codex", lambda: "C:/codex.exe")
-    monkeypatch.setattr(detect, "local_reachable", lambda url, timeout=0.5: False)
+    monkeypatch.setattr(detect, "local_reachable", lambda url, timeout=0.5, via_proxy=False: False)
     seen = []
 
     def fake_logged_in(name, path):
@@ -194,7 +194,7 @@ def test_auto_local_model_wins_even_with_opencode_keys_in_env(monkeypatch, tmp_p
     monkeypatch.setattr(detect, "find_claude", lambda: None)
     monkeypatch.setattr(detect, "find_codex", lambda: None)
     monkeypatch.setattr(detect, "find_opencode", lambda: "C:/oc/opencode.exe")
-    monkeypatch.setattr(detect, "local_reachable", lambda url, timeout=0.5: True)
+    monkeypatch.setattr(detect, "local_reachable", lambda url, timeout=0.5, via_proxy=False: True)
     monkeypatch.setenv("HF_TOKEN", "hf_x")
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     (tmp_path / "opencode").mkdir()

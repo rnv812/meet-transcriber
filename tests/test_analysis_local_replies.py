@@ -271,3 +271,16 @@ def test_cli_text_names_unparsed_and_partial_parts():
                                        "partial": {"chapters": "1/3"}})
     assert "Часть встречи не разобрана (2 из 5 кусков): таймаут вызова модели" in text
     assert "Только для части встречи: главы (1/3 кусков)" in text
+
+
+
+def test_unknown_local_context_cuts_windows_as_for_8k(tmp_path, monkeypatch):
+    folder = _long_folder(tmp_path, n=120)
+    lines = analysis.compact_lines(library.read_transcript(folder))
+    expected = analysis.windows(lines, limit=analysis.window_chars(analysis.UNKNOWN_CONTEXT), max_windows=None)
+    assert len(expected) > 1
+    reply = json.dumps({"phrase_types": {}, "insights": []})
+    runner = UsageRunner(*([reply] * len(expected)))
+    analysis.run(folder, runner, _types_only(), provider="openai-compatible")
+    assert len(runner.calls) == len(expected)
+    assert all(c["on_cut"] == "keep" for c in runner.calls)  # обрезку анализ отмечает сам

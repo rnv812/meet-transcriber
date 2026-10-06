@@ -16,15 +16,25 @@ urllib, переменные среды и прокси системы. Оста
 шага): иначе зациклившаяся модель (бесконечные пробелы в ответе по схеме у
 llama.cpp и Ollama) пишет до таймаута вызова.
 
-Ответ по схеме (`response_schema`, анализ встречи):
+Ollama — каждый вызов (итоги, вопросы, названия, улучшение, анализ, живой
+ассистент) идёт в родной `POST /api/chat` (`_ollama_chat`): только там можно
+задать окно контекста на запрос (`options.num_ctx`; маршрут `/v1` его не
+берёт, и Ollama молча обрезает длинный промпт до своего окна по умолчанию —
+2–4 тыс. токенов), длину ответа (`num_predict`) и схему (`format`). Окно —
+ступенями 4K/8K/16K/32K и на модель не уменьшается (`_num_ctx`): Ollama
+перезагружает модель при смене окна, а тики живого ассистента идут подряд.
+Обученное окно модели (`/api/show`) спрашивается раз на процесс.
 
-* Ollama — родной `POST /api/chat`: только там можно задать окно контекста
-  на запрос (`options.num_ctx`; маршрут `/v1` его не берёт, и Ollama молча
-  обрезает длинный промпт до своего окна по умолчанию — 2–4 тыс. токенов),
-  длину ответа (`num_predict`) и схему (`format`).
-* остальные — `response_format` от строгого к свободному: `json_schema`
-  (LM Studio, vLLM, llama.cpp), сервер его не понял — `json_object`, затем без
-  него (схема остаётся в промпте). Сработавший режим запоминается на процесс.
+Ответ по схеме (`response_schema`, анализ встречи) у остальных серверов —
+`response_format` от строгого к свободному: `json_schema` (LM Studio, vLLM,
+llama.cpp), сервер его не понял — `json_object`, затем без него (схема
+остаётся в промпте). Сработавший режим запоминается на процесс.
+
+Окно контекста меньше `local_models.MIN_CONTEXT` — вызов не делается, ошибка
+«слишком маленькое окно контекста» (раз на процесс узнаётся, см.
+`local_models.context_length`). Сервер насчитал промпту намного меньше
+токенов, чем в нём есть (`usage.prompt_tokens`), — промпт обрезан: ошибка
+`CUT_ERROR` (анализ сам решает, что с этим делать: `on_cut="keep"`).
 
 Переполнение контекста (vLLM, llama.cpp отвечают на него 400) — не «формат
 не понят»: ошибка `CONTEXT_ERROR` сразу, без лишних вызовов.
@@ -179,9 +189,24 @@ def ollama_num_ctx(prompt_chars: int, max_tokens: int, trained: int | None) -> i
     return max(2048, min(need, trained or OLLAMA_MAX_CTX, OLLAMA_MAX_CTX))
 
 
-def _ollama_chat(base_url: str, payload: dict, timeout_s: float, schema: dict, max_tokens: int,
+# Ступени окна Ollama и уже выбранное окно модели (адрес, модель) → num_ctx.
+_CTX_STEPS = (4096, 8192, 16384, 32768)
+_num_ctx: dict[tuple[str, str], int] = {}
+
+
+def sticky_num_ctx(key: tuple[str, str], need: int, cap: int) -> int:
+    """Окно на запрос: ступень не меньше `need`, не меньше уже выбранного для
+    модели (Ollama не перезагружает модель) и не больше `cap`."""
+    step = next((s for s in _CTX_STEPS if s >= need), _CTX_STEPS[-1])
+    value = min(cap, max(step, _num_ctx.get(key, 0)))
+    _num_ctx[key] = value
+    return value
+
+
+def _ollama_chat(base_url: str, payload: dict, timeout_s: float, schema: dict | None, max_tokens: int,
                  via_proxy: bool) -> AgentReply | None:
-    """Родной `/api/chat` Ollama с окном контекста по промпту; не Ollama — None."""
+    """Любой вызов локальной модели на Ollama — родной `/api/chat` с окном
+    контекста по промпту; сервер не Ollama — None (тогда `/v1`)."""
     from meet.llm import local_models
 
     root = local_models.server_root(base_url)
@@ -190,27 +215,86 @@ def _ollama_chat(base_url: str, payload: dict, timeout_s: float, schema: dict, m
     model = str(payload.get("model"))
     trained = local_models.ollama_trained_context(base_url, model, via_proxy=via_proxy)
     chars = sum(len(m.get("content") or "") for m in payload["messages"])
-    body = {"model": model, "messages": payload["messages"], "stream": False, "format": schema,
-            "options": {"num_ctx": ollama_num_ctx(chars, max_tokens, trained), "num_predict": max_tokens}}
+    cap = min(trained or OLLAMA_MAX_CTX, OLLAMA_MAX_CTX)
+    num_ctx = sticky_num_ctx((root, local_models.model_key(model)), ollama_num_ctx(chars, max_tokens, trained), cap)
+    body = {"model": model, "messages": payload["messages"], "stream": False,
+            "options": {"num_ctx": num_ctx, "num_predict": max_tokens}}
+    if schema is not None:
+        body["format"] = schema
     data, failed, _status, _detail = _request(f"{root}/api/chat", body, timeout_s, via_proxy)
     if failed is not None:
         return failed
-    _schema_mode[(f"{root}/api/chat", model)] = "ollama"
+    if schema is not None:
+        _schema_mode[(f"{root}/api/chat", model)] = "ollama"
     message = data.get("message") if isinstance(data, dict) else None
     count = data.get("prompt_eval_count") if isinstance(data, dict) else None
     usage = {"prompt_tokens": count, "completion_tokens": data.get("eval_count")} if isinstance(count, int) else None
     return _reply(message.get("content") if isinstance(message, dict) else None, usage)
 
 
+# (адрес, модель) → окно контекста модели (токены) или None: раз на процесс.
+_context: dict[tuple[str, str], int | None] = {}
+# Промпт не короче этого (токенов по оценке) проверяется на обрезку: у
+# коротких шаблон чата добавляет больше, чем ошибается оценка.
+CUT_MIN_TOKENS = 1000
+CUT_SHARE = 0.5
+
+
+def known_context(base_url: str, model: str, via_proxy: bool = False) -> int | None:
+    """Окно контекста модели (`local_models.context_length`), раз на процесс:
+    живому ассистенту — без лишних запросов на каждый тик."""
+    from meet.llm import local_models
+
+    key = (base_url.rstrip("/"), local_models.model_key(model))
+    if key not in _context:
+        try:
+            _context[key] = local_models.context_length(base_url, model, via_proxy=via_proxy)["tokens"]
+        except Exception:  # сведения необязательные
+            _context[key] = None
+    return _context[key]
+
+
+def prompt_cut(usage: dict | None, prompt_chars: int) -> dict | None:
+    """Сервер обрезал промпт: насчитал ему меньше половины оценки →
+    {"seen", "need"}; иначе (или счёта нет) — None."""
+    seen = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+    need = int(prompt_chars / CHARS_PER_TOKEN)
+    if isinstance(seen, int) and not isinstance(seen, bool) and need >= CUT_MIN_TOKENS and seen < need * CUT_SHARE:
+        return {"seen": seen, "need": need}
+    return None
+
+
+def cut_error(cut: dict) -> str:
+    return (f"модель видела только часть текста: контекст сервера ~{cut['seen']} токенов, нужно "
+            f"~{cut['need']} — увеличьте контекст модели до 16K+")
+
+
 def _complete(base_url: str, payload: dict, timeout_s: float, schema: dict | None, max_tokens: int,
-              via_proxy: bool) -> AgentReply:
-    url = base_url.rstrip("/") + "/chat/completions"
-    payload = {**payload, "max_tokens": max_tokens}
-    if schema is None:
-        return _post(url, payload, timeout_s, via_proxy)[0]
+              via_proxy: bool, on_cut: str = "error") -> AgentReply:
+    """Один вызов: окно контекста мало — отказ; Ollama — родной путь;
+    промпт обрезан сервером — ошибка (`on_cut="keep"` — ответ как есть, с `usage`)."""
+    from meet.llm import local_models
+
+    model = str(payload.get("model"))
+    context = known_context(base_url, model, via_proxy)
+    if context and context < local_models.MIN_CONTEXT:
+        return AgentReply(text="", error=local_models.context_text(context))
+    reply = _send(base_url, {**payload, "max_tokens": max_tokens}, timeout_s, schema, max_tokens, via_proxy)
+    chars = sum(len(m.get("content") or "") for m in payload["messages"])
+    cut = prompt_cut(reply.usage, chars) if not reply.error else None
+    if cut and on_cut != "keep":
+        return AgentReply(text="", error=cut_error(cut), usage=reply.usage)
+    return reply
+
+
+def _send(base_url: str, payload: dict, timeout_s: float, schema: dict | None, max_tokens: int,
+          via_proxy: bool) -> AgentReply:
     native = _ollama_chat(base_url, payload, timeout_s, schema, max_tokens, via_proxy)
     if native is not None:
         return native
+    url = base_url.rstrip("/") + "/chat/completions"
+    if schema is None:
+        return _post(url, payload, timeout_s, via_proxy)[0]
     key = (url, str(payload.get("model")))
     modes = SCHEMA_MODES[SCHEMA_MODES.index(_schema_mode[key]):] if key in _schema_mode else SCHEMA_MODES
     reply = AgentReply(text="", error=EMPTY_ERROR)
@@ -243,12 +327,15 @@ async def run(
     response_schema: dict | None = None,
     max_tokens: int | None = None,
     via_proxy: bool = False,
+    on_cut: str = "error",
 ) -> AgentReply:
     """Вызов модели; ошибки — в AgentReply.error, счёт токенов — в `usage`.
 
     `model` (имя модели Claude из общего контракта) не используется: имя
     локальной модели задаёт `local_model`. `response_schema` — JSON Schema
-    ответа (см. начало модуля); `max_tokens` — предел длины ответа."""
+    ответа (см. начало модуля); `max_tokens` — предел длины ответа;
+    `on_cut="keep"` — обрезанный сервером промпт не ошибка (анализ встречи
+    сам отмечает его в analysis.json)."""
     payload = {
         "model": local_model or DEFAULT_MODEL,
         "messages": [
@@ -258,4 +345,4 @@ async def run(
         "stream": False,
     }
     return await asyncio.to_thread(_complete, base_url, payload, timeout_s, response_schema,
-                                   max_tokens or DEFAULT_MAX_TOKENS, via_proxy)
+                                   max_tokens or DEFAULT_MAX_TOKENS, via_proxy, on_cut)

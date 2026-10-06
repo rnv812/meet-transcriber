@@ -277,7 +277,7 @@ def state(monkeypatch, tmp_path):
     llm_queue = jobs.JobQueue(app.bus, spawn=spawn)
     st = tray_control.TrayControl(app, queue=queue, llm_queue=llm_queue)
     st._background = lambda fn, name=None: fn()
-    monkeypatch.setattr(detect, "available", lambda base_url=None, probe_local=True: {
+    monkeypatch.setattr(detect, "available", lambda base_url=None, probe_local=True, via_proxy=False: {
         name: {"found": name == "claude-code"} for name in llm.PROVIDERS})
     try:
         yield st

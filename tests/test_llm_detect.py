@@ -189,7 +189,7 @@ def test_available_shape(monkeypatch):
     monkeypatch.setattr(detect, "find_claude", lambda: None)
     monkeypatch.setattr(detect, "find_codex", lambda: "C:/codex.exe")
     monkeypatch.setattr(detect, "find_opencode", lambda: None)
-    monkeypatch.setattr(detect, "local_reachable", lambda url, timeout=0.5: False)
+    monkeypatch.setattr(detect, "local_reachable", lambda url, timeout=0.5, via_proxy=False: False)
     av = detect.available(base_url="http://127.0.0.1:1234/v1")
     assert av == {
         "claude-code": {"found": False, "path": None},
@@ -254,7 +254,7 @@ def test_available_can_skip_the_local_model_probe(monkeypatch):
     monkeypatch.setattr(detect, "find_codex", lambda: None)
     monkeypatch.setattr(detect, "find_opencode", lambda: None)
     monkeypatch.setattr(detect, "local_reachable",
-                        lambda url, timeout=0.5: (_ for _ in ()).throw(AssertionError("проверка")))
+                        lambda url, timeout=0.5, via_proxy=False: (_ for _ in ()).throw(AssertionError("проверка")))
     av = detect.available(base_url="http://127.0.0.1:1234/v1", probe_local=False)
     assert av["claude-code"] == {"found": True, "path": "C:/claude.exe"}
     assert av["openai-compatible"] == {"found": None, "base_url": "http://127.0.0.1:1234/v1"}

@@ -20,12 +20,15 @@ stdlib: модуль зовёт резидент. Прокси — по прав
 """
 
 import json
+import logging
 import socket
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
 from meet.llm.openai_compat import OLLAMA_MAX_CTX, open_url
+
+log = logging.getLogger(__name__)
 
 TIMEOUT_S = 3.0
 # Окно контекста (токены): меньше MIN_CONTEXT анализ встречи не берётся (в
@@ -176,8 +179,13 @@ def _lmstudio_context(base_url: str, model: str, via_proxy: bool, timeout: float
         item = loaded[0] if len(loaded) == 1 else None
     if item is None:
         return None
-    return (_int(item.get("loaded_context_length")) or _int(item.get("context_length"))
-            or _int(item.get("max_context_length")))
+    # Имя поля у разных версий LM Studio разное: какое нашлось — в журнал.
+    for field in ("loaded_context_length", "context_length", "max_context_length"):
+        if _int(item.get(field)):
+            log.debug("LM Studio: окно контекста %s из поля %s", item[field], field)
+            return _int(item[field])
+    log.debug("LM Studio: окна контекста нет ни в одном поле: %s", sorted(item))
+    return None
 
 
 def _vllm_context(base_url: str, model: str, via_proxy: bool, timeout: float) -> int | None:
@@ -220,7 +228,7 @@ def context_length(base_url: str, model: str | None, *, via_proxy: bool = False,
 def context_text(tokens: int | None) -> str:
     """Окно контекста для человека («Проверить», отказ анализа)."""
     if not tokens:
-        return "окно контекста модели узнать не удалось"
+        return "окно контекста не удалось определить"
     if tokens < MIN_CONTEXT:
         return (f"у модели слишком маленькое окно контекста: {tokens} токенов — для анализа встречи "
                 "увеличьте до 16K+")

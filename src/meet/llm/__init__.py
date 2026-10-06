@@ -97,7 +97,7 @@ def provider_ready(name: str, cfg: "Settings", *, need_login: bool) -> bool:
     from meet.llm import detect
 
     if name == "openai-compatible":
-        return detect.local_reachable(cfg.llm.base_url)
+        return detect.local_reachable(cfg.llm.base_url, via_proxy=cfg.llm.local_via_proxy)
     finders = {"claude-code": detect.find_claude, "codex": detect.find_codex,
                "opencode": detect.find_opencode}
     path = finders[name]() if name in finders else None

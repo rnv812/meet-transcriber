@@ -298,3 +298,10 @@ def test_local_check_follows_the_proxy_setting(monkeypatch):
     seen = _local_env(monkeypatch, model="m", listed=_listed("m"), via_proxy=True)
     asyncio.run(check.check("openai-compatible"))
     assert seen["via_proxy"] is True and seen["calls"][0]["via_proxy"] is True
+
+
+
+def test_local_check_says_when_the_context_is_unknown(monkeypatch):
+    _local_env(monkeypatch, model="m", listed=_listed("m"), context=None)
+    res = asyncio.run(check.check("openai-compatible"))
+    assert res["ok"] is True and res["detail"] == "окно контекста не удалось определить"

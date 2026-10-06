@@ -145,7 +145,7 @@ def test_attach_without_provider_is_conflict(resident, monkeypatch, tmp_path):
     from meet.llm import detect
 
     _recording_resident(resident, monkeypatch, tmp_path)
-    monkeypatch.setattr(detect, "available", lambda base_url=None: {})
+    monkeypatch.setattr(detect, "available", lambda base_url=None, **kw: {})
     try:
         with pytest.raises(control.Conflict, match="Подключите Claude Code, Codex или OpenCode"):
             resident.live_attach()
