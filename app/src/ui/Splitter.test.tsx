@@ -159,3 +159,10 @@ test("нажатие на разделитель переводит на нег�
   expect(el).toHaveFocus();
   up(el, 500);
 });
+
+test("Enter на разделителе — как было (то же, что двойной щелчок)", () => {
+  const { el, onReset, onCommit } = setup();
+  fireEvent.keyDown(el, { key: "Enter" });
+  expect(onReset).toHaveBeenCalledTimes(1);
+  expect(onCommit).not.toHaveBeenCalled();
+});

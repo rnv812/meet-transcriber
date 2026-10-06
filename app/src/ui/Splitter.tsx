@@ -9,8 +9,8 @@ export const isResizing = () => document.documentElement.classList.contains("is-
 
 /**
  * Разделитель панелей: тонкая полоса, которую тянут мышью или двигают
- * клавишами (←/→ по 16 px, Home/End — к пределам); двойной щелчок — ширина по
- * умолчанию. Пока тянут, ширина меняется через `onPreview` (CSS-переменная,
+ * клавишами (←/→ по 16 px, Home/End — к пределам); двойной щелчок или Enter —
+ * ширина по умолчанию. Пока тянут, ширина меняется через `onPreview` (CSS-переменная,
  * без перерисовки React) не чаще кадра; отпустили — `onCommit` один раз.
  * Нажатие переводит фокус на разделитель: дальше можно стрелками.
  *
@@ -111,6 +111,12 @@ export function Splitter({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    // Enter — как двойной щелчок: размер по умолчанию.
+    if (e.key === "Enter") {
+      e.preventDefault();
+      onReset();
+      return;
+    }
     let next: number | null = null;
     // Стрелка в сторону панели — уже, от панели — шире (по высоте — так же: ↑/↓).
     const [toAfter, toBefore] = y ? ["ArrowDown", "ArrowUp"] : ["ArrowRight", "ArrowLeft"];
@@ -137,7 +143,7 @@ export function Splitter({
       aria-valuemin={lo}
       aria-valuemax={max}
       tabIndex={0}
-      title={`Потяните, чтобы изменить ${y ? "высоту" : "ширину"}. Двойной щелчок — как было`}
+      title={`Потяните, чтобы изменить ${y ? "высоту" : "ширину"}. Двойной щелчок или Enter — как было`}
       className={`splitter splitter--${panel}${y ? " splitter--y" : ""} ${className}`.trim()}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
