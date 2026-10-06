@@ -179,6 +179,39 @@ export type JiraRefs = { refs: JiraRef[]; phrases: JiraPhrase[] };
 
 export type RecordingCategory = { id: string | null; source: "ai" | "user" };
 
+/** Группа встреч (`.meet-groups.json` резидента): id стабилен и не переиспользуется. */
+export type Group = { id: string; name: string; color: string; created_at: string };
+/** Группа в `GET /groups`: со счётчиком встреч (с запросом — среди найденного). */
+export type GroupInfo = Pick<Group, "id" | "name" | "color"> & { count: number };
+/** Id группы, который есть в meta.json встреч, но не в списке: «Группа без названия». */
+export type UnknownGroup = { id: string; count: number };
+export type GroupsInfo = { groups: GroupInfo[]; unknown: UnknownGroup[]; scope?: "library" | "search" };
+/** Итог «В группу»/«Убрать из группы»: что поменялось и что не удалось (по записи). */
+export type GroupMembersResult = { changed: string[]; failed: { id: string; error: string }[] };
+/** Участник встреч для подсказок: сколько встреч, когда последняя; `owner` — владелец микрофона. */
+export type Participant = { name: string; meetings: number; last_at: string | null; owner: boolean };
+
+/** Что есть (или нет) у встречи: итоги, анализ, запись с ассистентом, расшифровка. */
+export type LibraryHas = "summary" | "analysis" | "assistant" | "transcript";
+/**
+ * Фильтр библиотеки по карточке (резидент — meet.library_filter, до лимита): категории и группы —
+ * любая из; участники — по началу слов имени, нужны все; даты `from`/`to` — ГГГГ-ММ-ДД включительно
+ * (встреча без даты не проходит); длительность в секундах (без длительности не проходит);
+ * `in: "title"` — поиск только в названиях.
+ */
+export type LibraryFilter = {
+  categories?: string[];
+  groups?: string[];
+  people?: string[];
+  from?: string;
+  to?: string;
+  has?: LibraryHas[];
+  lacks?: LibraryHas[];
+  min_s?: number;
+  max_s?: number;
+  in?: "title";
+};
+
 /** Категория встреч из настроек (`categories`): id стабилен, имя и цвет — для окна, описание — для модели. */
 export type Category = { id: string; name: string; color: string; description: string };
 

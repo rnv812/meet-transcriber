@@ -131,3 +131,21 @@ test("recording.*: запись изменилась в фоне — списо�
   expect(result.current.contentTick).toBe(content + 2);
   expect(result.current.lastEvent?.kind).toBe("recording.updated");
 });
+
+test("groups.changed: список и группы перечитываются, снимок — нет", async () => {
+  vi.mocked(resolveEndpoint).mockResolvedValue({ base: "http://127.0.0.1:1", token: "t" });
+  const { result } = renderHook(() => useResident());
+  await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+  const es = FakeEventSource.instances.at(-1)!;
+  const content = result.current.contentTick;
+  const library = result.current.libraryTick;
+  vi.mocked(getState).mockClear();
+  await act(async () => {
+    es.emit("groups.changed", { kind: "groups.changed", at: 1, op: "members", id: "g-1" });
+    await vi.advanceTimersByTimeAsync(10);
+  });
+  expect(result.current.contentTick).toBe(content + 1);
+  expect(result.current.libraryTick).toBe(library + 1);
+  expect(result.current.groupsTick).toBe(1);
+  expect(getState).not.toHaveBeenCalled();
+});

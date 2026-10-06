@@ -11,7 +11,7 @@
 import { inTauri, invoke } from "./shell";
 import type {
   AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, LiveVoices, Person, PersonCard, ProfilesRemovedNotice,
-  Category, OwnerVoiceStatus, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
+  Category, Group, GroupMembersResult, GroupsInfo, LibraryFilter, OwnerVoiceStatus, Participant, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript, LlmOrigin,
 } from "./types";
@@ -19,7 +19,8 @@ import type {
 export type {
   Analysis, AnalysisChapter, AnalysisFeature, AnalysisInsight, AnalysisState, AnalysisStateName, InsightKind,
   ImproveApplied, ImproveGroup, ImproveKind, ImproveProposal, ImproveState, ImproveStateName, PhraseType, TitleSource, LlmOrigin, ModelChoice,
-  TitleSuggestion, Category, RecordingCategory,
+  TitleSuggestion, Category, RecordingCategory, Group, GroupInfo, GroupsInfo, GroupMembersResult, LibraryFilter,
+  LibraryHas, Participant, UnknownGroup,
 } from "./types";
 
 export type Endpoint = {
@@ -90,19 +91,41 @@ export const getState = (ep: Endpoint) => json<Snapshot>(ep, "/state");
  * а окну старые записи терять нельзя).
  */
 export const LIBRARY_LIMIT = 5000;
-/** `categories` — фильтр по категориям (id и "_none" — «Без категории»); резидент применяет его до лимита списка. */
-export function getRecordings(ep: Endpoint, q?: string, categories?: string[]) {
-  const params = [`limit=${LIBRARY_LIMIT}`, q ? `q=${enc(q)}` : "",
-    categories?.length ? `categories=${enc(categories.join(","))}` : ""].filter(Boolean).join("&");
-  return json<{ root: string; items: Recording[] }>(ep, `/recordings?${params}`);
+
+/**
+ * Параметры фильтра библиотеки для адреса (резидент — meet.library_filter): пустые поля не
+ * передаются, списки — через запятую. Прежний вид — массив категорий.
+ */
+export function libraryFilterParams(filter?: LibraryFilter | string[] | null): string[] {
+  const f: LibraryFilter = Array.isArray(filter) ? { categories: filter } : filter ?? {};
+  const list = (name: string, values?: string[]) => (values?.length ? [`${name}=${enc(values.join(","))}`] : []);
+  const one = (name: string, value?: string | number | null) =>
+    (value === undefined || value === null || value === "" ? [] : [`${name}=${enc(String(value))}`]);
+  return [
+    ...list("categories", f.categories), ...list("groups", f.groups),
+    // Участник — отдельным параметром на каждого (резидент понимает и запятые).
+    ...(f.people ?? []).filter(Boolean).map((p) => `people=${enc(p)}`),
+    ...one("from", f.from), ...one("to", f.to), ...list("has", f.has), ...list("lacks", f.lacks),
+    ...one("min_s", f.min_s), ...one("max_s", f.max_s), ...one("in", f.in),
+  ];
+}
+/** Ключ фильтра: одинаковые фильтры — одна строка (по ней хуки решают, перечитывать ли). */
+export const libraryFilterKey = (filter?: LibraryFilter | string[] | null) => libraryFilterParams(filter).join("&");
+
+const query = (parts: string[]) => (parts.length ? `?${parts.join("&")}` : "");
+
+/** `filter` — фильтр по карточке (категории, группы, участники, даты…); резидент применяет его до лимита. */
+export function getRecordings(ep: Endpoint, q?: string, filter?: LibraryFilter | string[]) {
+  return json<{ root: string; items: Recording[] }>(ep,
+    `/recordings${query([`limit=${LIBRARY_LIMIT}`, ...(q ? [`q=${enc(q)}`] : []), ...libraryFilterParams(filter)])}`);
 }
 /** Несколько самых свежих записей (папки сортируются как даты): панель записи в строке меню. */
 export const getRecentRecordings = (ep: Endpoint, limit: number) =>
   json<{ root: string; items: Recording[] }>(ep, `/recordings?limit=${limit}`);
 /** Поиск по тексту встреч и названиям (правила — lib/search.ts): записи с фрагментами. */
-export const searchLibrary = (ep: Endpoint, q: string, signal?: AbortSignal, categories?: string[]) =>
-  json<{ items: SearchItem[] }>(ep, `/search?q=${enc(q)}${categories?.length
-    ? `&categories=${enc(categories.join(","))}` : ""}`, { signal });
+export const searchLibrary = (ep: Endpoint, q: string, signal?: AbortSignal, filter?: LibraryFilter | string[]) =>
+  json<{ items: SearchItem[] }>(ep,
+    `/search${query([`q=${enc(q)}`, `limit=${LIBRARY_LIMIT}`, ...libraryFilterParams(filter)])}`, { signal });
 export const getRecording = (ep: Endpoint, id: string) =>
   json<Recording & { transcript: Transcript | null }>(ep, `/recordings/${enc(id)}`);
 /** Название записи не длиннее (резидент обрезает так же). */
@@ -125,8 +148,37 @@ export type CategoriesInfo = {
   categories: Category[]; defaults: Category[]; counts: Record<string, number>; none: number;
   scope?: "library" | "search";
 };
-export const getCategoriesInfo = (ep: Endpoint, q?: string) =>
-  json<CategoriesInfo>(ep, `/categories${q ? `?q=${enc(q)}` : ""}`);
+export const getCategoriesInfo = (ep: Endpoint, q?: string, filter?: LibraryFilter) =>
+  json<CategoriesInfo>(ep, `/categories${query([...(q ? [`q=${enc(q)}`] : []), ...libraryFilterParams(filter)])}`);
+
+// --- группы встреч и участники ---------------------------------------------------
+
+/**
+ * Группы по порядку со счётчиками встреч и неизвестные id из meta.json встреч («Группа без
+ * названия»). С запросом `q` и фильтром — счётчики среди найденного (фильтр по группам не учитывается).
+ */
+export const getGroups = (ep: Endpoint, q?: string, filter?: LibraryFilter) =>
+  json<GroupsInfo>(ep, `/groups${query([...(q ? [`q=${enc(q)}`] : []), ...libraryFilterParams(filter)])}`);
+/**
+ * Новая группа `{name, color?}`; `{id, name, color, index}` — вернуть удалённую на прежнее место
+ * («Отменить») или назвать неизвестную группу её же id.
+ */
+export const createGroup = (ep: Endpoint, group: { name: string; color?: string; id?: string; index?: number }) =>
+  json<Group>(ep, "/groups", body("POST", group));
+export const patchGroup = (ep: Endpoint, id: string, patch: { name?: string; color?: string }) =>
+  json<Group>(ep, `/groups/${enc(id)}`, body("PATCH", patch));
+/** Убрать группу из списка: встречи остаются с её id (станет неизвестной); ответ — для «Отменить». */
+export const deleteGroup = (ep: Endpoint, id: string) =>
+  json<{ group: Group; index: number }>(ep, `/groups/${enc(id)}`, { method: "DELETE" });
+/** Новый порядок групп; не названные остаются за ними. */
+export const orderGroups = (ep: Endpoint, ids: string[]) =>
+  json<{ groups: Group[] }>(ep, "/groups/order", body("PUT", { ids }));
+/** Добавить встречи в группу и (или) убрать: каждая — отдельно, неудачные — в `failed`. */
+export const setGroupMembers = (ep: Endpoint, id: string, change: { add?: string[]; remove?: string[] }) =>
+  json<GroupMembersResult>(ep, `/groups/${enc(id)}/members`, body("POST", change));
+/** Участники встреч (имена из расшифровок) для подсказок `участник:`; владелец — последним. */
+export const getParticipants = (ep: Endpoint, q = "", limit = 20) =>
+  json<Participant[]>(ep, `/participants${query([...(q ? [`q=${enc(q)}`] : []), `limit=${limit}`])}`);
 /** Категории из ответа `GET /settings`: битые записи отбрасываются. */
 export function categoriesOf(settings: Record<string, unknown> | null | undefined): Category[] {
   const raw = settings?.categories;
@@ -583,6 +635,8 @@ const EVENT_KINDS = [
   "analysis.updated",
   // «Улучшить расшифровку»: предложение готово, не удалось или применено: {"id", "state"}.
   "improve.updated",
+  // Группы встреч изменились (список, порядок, членство): одно событие на действие.
+  "groups.changed",
 ];
 
 function parseEvent(raw: string): unknown {

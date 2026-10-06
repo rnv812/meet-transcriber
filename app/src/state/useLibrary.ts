@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { ApiError, type Endpoint, getJobs, getRecordings, searchLibrary } from "../lib/api";
+import { ApiError, type Endpoint, getJobs, getRecordings, libraryFilterKey, searchLibrary } from "../lib/api";
 import { errorText } from "../lib/format";
 import { searchable } from "../lib/search";
-import type { Job, LibraryItem } from "../lib/types";
+import type { Job, LibraryFilter, LibraryItem } from "../lib/types";
 
 const SEARCH_DELAY_MS = 250;
 
@@ -11,19 +11,19 @@ const SEARCH_DELAY_MS = 250;
  * С запросом (от двух символов) — поиск по тексту встреч с фрагментами;
  * резидент без него — прежний поиск по названию и тексту. Короче — весь список.
  */
-async function find(ep: Endpoint, q: string, signal: AbortSignal, categories: string[]): Promise<LibraryItem[]> {
+async function find(ep: Endpoint, q: string, signal: AbortSignal, filter: LibraryFilter): Promise<LibraryItem[]> {
   // Без фильтра — прежние вызовы, как у резидента до категорий.
-  const cats = categories.length ? [categories] as const : [] as const;
-  if (!searchable(q)) return (await (cats.length ? getRecordings(ep, undefined, ...cats) : getRecordings(ep))).items;
+  const f = libraryFilterKey(filter) ? [filter] as const : [] as const;
+  if (!searchable(q)) return (await (f.length ? getRecordings(ep, undefined, ...f) : getRecordings(ep))).items;
   try {
-    return (await searchLibrary(ep, q, signal, ...cats)).items;
+    return (await searchLibrary(ep, q, signal, ...f)).items;
   } catch (cause) {
-    if (cause instanceof ApiError && cause.status === 404) return (await getRecordings(ep, q, ...cats)).items;
+    if (cause instanceof ApiError && cause.status === 404) return (await getRecordings(ep, q, ...f)).items;
     throw cause;
   }
 }
 
-const NO_FILTER: string[] = [];
+const NO_FILTER: LibraryFilter = {};
 
 export type Library = {
   items: LibraryItem[];
@@ -41,7 +41,7 @@ export type Library = {
  * полный проход по библиотеке на каждый процент не нужен.
  */
 export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, contentTick = libraryTick,
-  categories: string[] = NO_FILTER): Library {
+  filter: LibraryFilter | string[] = NO_FILTER): Library {
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(false);
@@ -49,10 +49,13 @@ export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, cont
   const seq = useRef(0);
   const qRef = useRef(q);
   qRef.current = q;
-  // Фильтр по категориям — у резидента, до лимита списка: старые записи нужной категории не теряются.
-  const catKey = categories.join(",");
-  const catRef = useRef(categories);
-  catRef.current = categories;
+  // Фильтр (категории, группы, участники…) — у резидента, до лимита списка: старые записи не теряются.
+  // Массив — прежний вид, только категории. Перечитываем по ключу, а не по объекту: новый объект
+  // с теми же условиями на каждом рендере не должен перезапрашивать список.
+  const normalized: LibraryFilter = Array.isArray(filter) ? { categories: filter } : filter;
+  const filterKey = libraryFilterKey(normalized);
+  const filterRef = useRef(normalized);
+  filterRef.current = normalized;
   const pending = useRef<AbortController | null>(null);
   const contentTickRef = useRef(contentTick);
   contentTickRef.current = contentTick;
@@ -67,7 +70,7 @@ export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, cont
     setLoading(true);
     try {
       const [recs, jobList] = await Promise.all([
-        find(ep, qRef.current, controller.signal, catRef.current), getJobs(ep)]);
+        find(ep, qRef.current, controller.signal, filterRef.current), getJobs(ep)]);
       if (mine !== seq.current) return; // пришёл более новый запрос
       setItems(recs);
       setJobs(jobList.items);
@@ -87,7 +90,7 @@ export function useLibrary(ep: Endpoint | null, q: string, libraryTick = 0, cont
     first.current = false;
     const timer = setTimeout(() => void refresh(), delay);
     return () => clearTimeout(timer);
-  }, [ep, q, catKey, refresh]);
+  }, [ep, q, filterKey, refresh]);
 
   const refreshJobs = useCallback(async () => {
     if (!ep) return;

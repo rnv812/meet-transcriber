@@ -5,7 +5,8 @@ const h = vi.hoisted(() => ({
     constructor(public status: number, message: string) { super(message); }
   },
 }));
-vi.mock("../lib/api", () => ({
+vi.mock("../lib/api", async (orig) => ({
+  libraryFilterKey: (await orig<typeof import("../lib/api")>()).libraryFilterKey,
   ApiError: h.ApiError,
   getRecordings: vi.fn().mockResolvedValue({ root: "r", items: [] }),
   searchLibrary: vi.fn().mockResolvedValue({ items: [] }),
@@ -83,11 +84,30 @@ test("фильтр по категориям уходит резиденту (д
   vi.mocked(searchLibrary).mockClear();
   const { rerender } = renderHook(({ cats, q }) => useLibrary(ep, q, 0, 0, cats),
     { initialProps: { cats: ["retro"], q: "" } });
-  await vi.waitFor(() => expect(getRecordings).toHaveBeenCalledWith(ep, undefined, ["retro"]));
+  await vi.waitFor(() => expect(getRecordings).toHaveBeenCalledWith(ep, undefined, { categories: ["retro"] }));
   rerender({ cats: ["retro", "_none"], q: "" });
-  await vi.waitFor(() => expect(getRecordings).toHaveBeenCalledWith(ep, undefined, ["retro", "_none"]));
+  await vi.waitFor(() => expect(getRecordings).toHaveBeenCalledWith(ep, undefined, { categories: ["retro", "_none"] }));
   rerender({ cats: ["retro", "_none"], q: "бюджет" });
-  await vi.waitFor(() => expect(searchLibrary).toHaveBeenCalledWith(ep, "бюджет", expect.any(AbortSignal), ["retro", "_none"]));
+  await vi.waitFor(() => expect(searchLibrary).toHaveBeenCalledWith(ep, "бюджет", expect.any(AbortSignal),
+    { categories: ["retro", "_none"] }));
+});
+
+test("фильтр библиотеки целиком уходит резиденту; тот же фильтр новым объектом не перечитывает", async () => {
+  vi.mocked(getRecordings).mockClear();
+  const filter = { groups: ["g-1"], people: ["Анна"], from: "2026-09-01", has: ["summary" as const] };
+  const { rerender } = renderHook(({ f }) => useLibrary(ep, "", 0, 0, f), { initialProps: { f: filter } });
+  await vi.waitFor(() => expect(getRecordings).toHaveBeenCalledWith(ep, undefined, filter));
+  await act(async () => {});
+  const calls = vi.mocked(getRecordings).mock.calls.length;
+  rerender({ f: { ...filter } });
+  await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
+  expect(vi.mocked(getRecordings).mock.calls.length).toBe(calls);
+  rerender({ f: { ...filter, groups: ["g-2"] } });
+  await vi.waitFor(() => expect(getRecordings).toHaveBeenCalledWith(ep, undefined, { ...filter, groups: ["g-2"] }));
+  // пустой фильтр — прежний вызов, как у старого резидента
+  vi.mocked(getRecordings).mockClear();
+  rerender({ f: {} as typeof filter });
+  await vi.waitFor(() => expect(getRecordings).toHaveBeenCalledWith(ep));
 });
 
 test("прогресс задач (без смены содержимого) не перечитывает список — ни с фильтром, ни без", async () => {

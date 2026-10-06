@@ -24,10 +24,17 @@ export const stateChanging = (e: BusEvent) =>
   e.kind === "record.started" || e.kind === "record.stopped" || e.kind === "record.discarded"
   || e.kind.startsWith("live.") || e.kind.startsWith("recording.");
 
-const refreshWorthy = (e: BusEvent) => e.kind.startsWith("job.") || stateChanging(e);
+/**
+ * Группы встреч изменились (список, порядок, членство) — одно событие на действие. Снимок от этого
+ * не меняется, а список — да: в карточках записей их группы, и фильтр по группе их отбирает.
+ */
+export const GROUPS_CHANGED = "groups.changed";
+
+const refreshWorthy = (e: BusEvent) => e.kind.startsWith("job.") || e.kind === GROUPS_CHANGED || stateChanging(e);
 /** После них меняется само содержимое библиотеки, а не только прогресс задачи. */
 const CONTENT_JOB_EVENTS = new Set(["job.queued", "job.done", "job.failed"]); // отмена приходит как job.failed
-const contentChanging = (e: BusEvent) => CONTENT_JOB_EVENTS.has(e.kind) || stateChanging(e);
+const contentChanging = (e: BusEvent) =>
+  CONTENT_JOB_EVENTS.has(e.kind) || e.kind === GROUPS_CHANGED || stateChanging(e);
 
 export type ResidentStatus = "connecting" | "online" | "offline";
 
@@ -50,6 +57,8 @@ export type Resident = {
   /** Растёт на каждое `job.done`: после расшифровки меняется база людей.
    *  Отдельно от libraryTick — тот растёт и на каждый прогресс задачи. */
   doneTick: number;
+  /** Растёт на каждое `groups.changed`: группы перечитываются (useGroups). */
+  groupsTick: number;
 };
 
 export function useResident(): Resident {
@@ -60,6 +69,7 @@ export function useResident(): Resident {
   const [libraryTick, setLibraryTick] = useState(0);
   const [doneTick, setDoneTick] = useState(0);
   const [contentTick, setContentTick] = useState(0);
+  const [groupsTick, setGroupsTick] = useState(0);
   const [status, setStatus] = useState<ResidentStatus>("connecting");
   const levels = useRef<Record<string, number>>({});
   const lastEventAt = useRef(0);
@@ -120,6 +130,7 @@ export function useResident(): Resident {
           if (refreshWorthy(event)) setLibraryTick((t) => t + 1);
           if (contentChanging(event)) setContentTick((t) => t + 1);
           if (event.kind === "job.done") setDoneTick((t) => t + 1);
+          if (event.kind === GROUPS_CHANGED) setGroupsTick((t) => t + 1);
           if (stateChanging(event)) {
             getState(endpoint).then((s) => { if (!closed) apply(s); }).catch(() => {});
           }
@@ -166,5 +177,6 @@ export function useResident(): Resident {
     };
   }, [endpoint, apply]);
 
-  return { status, endpoint, snapshot, snapshotAt, applySnapshot: apply, lastEvent, libraryTick, contentTick, doneTick };
+  return { status, endpoint, snapshot, snapshotAt, applySnapshot: apply, lastEvent, libraryTick, contentTick, doneTick,
+    groupsTick };
 }

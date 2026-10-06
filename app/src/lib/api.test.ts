@@ -233,3 +233,54 @@ test("список записей окна — все записи (limit=5000),
     "http://h/recordings?limit=5",
   ]);
 });
+
+test("фильтр библиотеки — параметрами адреса, пустые поля не уходят", async () => {
+  expect(api.libraryFilterParams({})).toEqual([]);
+  expect(api.libraryFilterParams(["daily", "_none"])).toEqual(["categories=daily%2C_none"]);
+  const filter = {
+    categories: ["daily"], groups: ["g-1", "g-2"], people: ["Анна", "Борис П"], from: "2026-09-01", to: "",
+    has: ["summary" as const], lacks: ["analysis" as const], min_s: 0, max_s: 3600, in: "title" as const,
+  };
+  expect(api.libraryFilterParams(filter)).toEqual([
+    "categories=daily", "groups=g-1%2Cg-2", "people=%D0%90%D0%BD%D0%BD%D0%B0",
+    "people=%D0%91%D0%BE%D1%80%D0%B8%D1%81%20%D0%9F", "from=2026-09-01", "has=summary", "lacks=analysis",
+    "min_s=0", "max_s=3600", "in=title",
+  ]);
+  expect(api.libraryFilterKey({ groups: ["g-1"] })).toBe(api.libraryFilterKey({ groups: ["g-1"], people: [] }));
+  const f = okFetch();
+  await api.searchLibrary(ep, "план", undefined, { groups: ["g-1"], in: "title" });
+  await api.getRecordings(ep, undefined, { people: ["Анна"] });
+  await api.getCategoriesInfo(ep, "план", { groups: ["g-1"] });
+  expect(f.mock.calls.map(([url]) => url)).toEqual([
+    "http://h/search?q=%D0%BF%D0%BB%D0%B0%D0%BD&limit=5000&groups=g-1&in=title",
+    "http://h/recordings?limit=5000&people=%D0%90%D0%BD%D0%BD%D0%B0",
+    "http://h/categories?q=%D0%BF%D0%BB%D0%B0%D0%BD&groups=g-1",
+  ]);
+});
+
+test("группы и участники: адреса и тела запросов", async () => {
+  const f = okFetch();
+  await api.getGroups(ep);
+  await api.getGroups(ep, "план", { people: ["Анна"] });
+  await api.createGroup(ep, { name: "Проект Альфа" });
+  await api.createGroup(ep, { id: "g-1", name: "Альфа", color: "#123456", index: 2 });
+  await api.patchGroup(ep, "g 1", { color: "#654321" });
+  await api.deleteGroup(ep, "g-1");
+  await api.orderGroups(ep, ["g-2", "g-1"]);
+  await api.setGroupMembers(ep, "g-1", { add: ["r1"], remove: ["r2"] });
+  await api.getParticipants(ep);
+  await api.getParticipants(ep, "ан", 5);
+  const calls = f.mock.calls.map(([url, init]) => [url, (init as RequestInit).method ?? "GET", (init as RequestInit).body]);
+  expect(calls).toEqual([
+    ["http://h/groups", "GET", undefined],
+    ["http://h/groups?q=%D0%BF%D0%BB%D0%B0%D0%BD&people=%D0%90%D0%BD%D0%BD%D0%B0", "GET", undefined],
+    ["http://h/groups", "POST", JSON.stringify({ name: "Проект Альфа" })],
+    ["http://h/groups", "POST", JSON.stringify({ id: "g-1", name: "Альфа", color: "#123456", index: 2 })],
+    ["http://h/groups/g%201", "PATCH", JSON.stringify({ color: "#654321" })],
+    ["http://h/groups/g-1", "DELETE", undefined],
+    ["http://h/groups/order", "PUT", JSON.stringify({ ids: ["g-2", "g-1"] })],
+    ["http://h/groups/g-1/members", "POST", JSON.stringify({ add: ["r1"], remove: ["r2"] })],
+    ["http://h/participants?limit=20", "GET", undefined],
+    ["http://h/participants?q=%D0%B0%D0%BD&limit=5", "GET", undefined],
+  ]);
+});
