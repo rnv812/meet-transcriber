@@ -167,7 +167,7 @@ class FakeVLLM:
     max_tokens (по слову на токен) — ответ обрезан, finish_reason "length"."""
 
     def __init__(self, max_model_len: int, reply="ок", chars_per_token: float = 3.0, thinking: int = 0,
-                 honours_hint: bool = True):
+                 honours_hint: bool = True, rejects_hint: bool = False):
         import threading
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -194,6 +194,9 @@ class FakeVLLM:
                 length = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(length).decode("utf-8"))
                 fake.requests.append(body)
+                if rejects_hint and "chat_template_kwargs" in body:
+                    return self._send(400, {"object": "error", "message": (
+                        "1 validation error: chat_template_kwargs — extra inputs are not permitted")})
                 prompt = int(sum(len(m["content"]) for m in body["messages"]) / chars_per_token)
                 if prompt + body["max_tokens"] > max_model_len:
                     fake.rejected += 1
@@ -383,3 +386,44 @@ def test_title_and_tick_cut_at_the_limit_are_discarded(folder, vllm):
         titles.ask_title(folder, runner)
     reply = asyncio.run(PerCallSession(runner, "Сводка.").send("Новые реплики."))
     assert reply.text == "" and "не хватило места" in reply.error
+
+
+
+def test_old_ollama_without_capabilities_falls_back_to_the_name(folder):
+    # Ollama до ~0.6 не отдаёт capabilities: Qwen3 узнаём по имени.
+    with FakeOllama(thinking=800, capabilities=False, reply=lambda body: "Выпуск экспорта") as server:
+        runner, _cfg = _runner(server)
+        assert titles.ask_title(folder, runner) == "Выпуск экспорта"
+        assert server.chats()[-1]["think"] is False
+
+
+def test_gpt_oss_keeps_the_allowance_even_with_think_off(folder):
+    # gpt-oss на Ollama булево think не слушает — запас на рассуждение остаётся.
+    from meet.llm import openai_compat
+
+    with FakeOllama(thinking=500, reply=lambda body: "Выпуск экспорта") as server:
+        runner, _cfg = _runner(server, "gpt-oss:20b")
+        titles.ask_title(folder, runner)
+        options = server.chats()[-1]["options"]
+    assert options["num_predict"] == 256 + openai_compat.REASONING_ALLOWANCE
+
+
+def test_rejected_thinking_hint_is_remembered(folder, vllm):
+    server = vllm(32768, reply="Выпуск экспорта", rejects_hint=True)
+    runner, _cfg = _runner(server, "qwen3-8b")
+    assert titles.ask_title(folder, runner) == "Выпуск экспорта"
+    assert titles.ask_title(folder, runner) == "Выпуск экспорта"
+    with_hint = [body for body in server.requests if "chat_template_kwargs" in body]
+    assert len(with_hint) == 1 and len(server.requests) == 3  # отказ — один раз на процесс
+
+
+def test_unknown_model_window_does_not_blame_meets_cap(folder):
+    # Обученное окно не узнать — виноват не предел Meet (32K): совет — про модель.
+    long = [dict(s, text=s["text"] + " подробности" * 300) for s in SEGMENTS]
+    library.write_transcript(folder, {"version": 1, "segments": long})
+    with FakeOllama(context=None) as server:
+        runner, _cfg = _runner(server)
+        with pytest.raises(RuntimeError) as e:
+            assistant.ask(folder, "Когда выпуск?", runner, None, provider="openai-compatible")
+    assert "Meet запрашивает" not in str(e.value)
+    assert "возьмите модель с бо́льшим окном контекста" in str(e.value)

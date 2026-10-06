@@ -546,7 +546,7 @@ def _assistant(kind: str, folder_str: str, question: str | None, chosen: str | N
             if kind == "summary":
                 out = assistant.summarize(folder, runner, knowledge, provider=provider,
                                           want_title=cfg.assistant.auto_title, origin=origin,
-                                          context=_local_context(provider, cfg))
+                                          context=_local_context(provider, cfg), bus=bus)
             else:
                 if not (question or "").strip():
                     _emit({"kind": "error", "text": "пустой вопрос"})
@@ -646,9 +646,10 @@ def _local_context(provider: str | None, cfg) -> int | None:
     если не влезает); у остальных провайдеров — None."""
     if provider != "openai-compatible":
         return None
-    from meet.analysis import local_context
+    from meet.analysis import UNKNOWN_CONTEXT, local_context
 
-    return local_context(cfg)
+    # Не узнать — как для 8K (как анализ и улучшение), а не один огромный вызов.
+    return local_context(cfg) or UNKNOWN_CONTEXT
 
 
 def _llm_tracker(bus, kind: str, label: str, provider: str | None, runner, stage: str | None = None):

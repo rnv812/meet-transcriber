@@ -17,6 +17,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -96,10 +97,20 @@ MERGE_SYSTEM = """\
 Сведи их в один сжатый пересказ по тем же пунктам (о чём говорили, решения,
 задачи, договорённости, открытые вопросы), без повторов и без новых фактов."""
 
-# Предел ответа на часть и на сведение частей (токены).
+# Предел ответа на часть и на сведение частей (токены) — и не больше трети
+# самой части: каждое сведение обязано сокращать.
 PART_REPLY_TOKENS = 1200
 # Сколько раз сводить пересказы, если и они не влезают в окно.
 MERGE_ROUNDS = 4
+# Итоги по частям — только с окна от MIN_PARTS_CONTEXT токенов и не больше
+# MAX_DIGEST_CALLS вызовов (с повторами): иначе честный отказ сразу, а не
+# час работы и отказ в конце. Сведение должно сокращать пересказы хотя бы
+# до MIN_SHRINK от прежнего — нет, стоп.
+MIN_PARTS_CONTEXT = 8192
+MAX_DIGEST_CALLS = 40
+MIN_SHRINK = 0.7
+# Окно локальной модели не узнать — итоги считают по 8K (как анализ).
+UNKNOWN_CONTEXT = 8192
 
 ASK_SYSTEM = """\
 Ты — помощник по прошедшей встрече. Тебе дают расшифровку записи (реплики вида
@@ -214,7 +225,8 @@ def _write_atomic(path: Path, text: str) -> None:
 
 
 def summarize(folder: Path, runner, knowledge_dir, *, provider: str | None = None,
-              want_title: bool = False, origin: dict | None = None, context: int | None = None) -> Path:
+              want_title: bool = False, origin: dict | None = None, context: int | None = None,
+              bus=None) -> Path:
     """Итоги встречи → `summary.md`. Ошибка модели — RuntimeError, прежний
     summary.md при этом не трогается.
 
@@ -227,23 +239,27 @@ def summarize(folder: Path, runner, knowledge_dir, *, provider: str | None = Non
     подпись в summary.md, `summary_llm` в meta.json и у предложенного
     названия (U3). Нет — только имя провайдера.
 
-    `context` — окно контекста локальной модели (токены): встреча в него не
-    влезает — итоги по частям (`_digest`), а не отказ."""
+    `context` — окно контекста локальной модели (токены): весь промпт итогов
+    (с черновиком живого режима и базой знаний) с полным пределом ответа в
+    него не влезает — итоги по частям (`_digest`), а не отказ. `bus` — ход
+    частей для окна (meet.llm_progress)."""
     from meet import llm, titles
 
     folder = Path(folder)
     data = _read_transcript(folder)
     title, date = library.title_and_date(folder, data, today_if_unknown=True)
     dirs = _allowed_dirs(folder, knowledge_dir)
-    prompt = (f"Встреча: {safe_line(title)} ({date})\n\nТранскрипт:\n{fenced_transcript(data)}"
-              f"{_live_draft(folder)}{_knowledge_hint(dirs)}")
+    head = f"Встреча: {safe_line(title)} ({date})"
+    tail = f"{_live_draft(folder)}{_knowledge_hint(dirs)}"
+    prompt = f"{head}\n\nТранскрипт:\n{fenced_transcript(data)}{tail}"
     system = SUMMARY_SYSTEM + (titles.SUMMARY_TITLE_RULE if want_title else "")
-    if context and not _fits(prompt + system, context):
-        digest = _digest(runner, f"Встреча: {safe_line(title)} ({date})", transcript_text(data), context,
-                         dirs=dirs, cwd=folder)
-        prompt = (f"Встреча: {safe_line(title)} ({date})\n\nВся расшифровка не помещается в окно контекста "
-                  f"модели — вот пересказ встречи по частям, по порядку:\n{TRANSCRIPT_OPEN}\n{digest}\n"
-                  f"{TRANSCRIPT_CLOSE}{_live_draft(folder)}{_knowledge_hint(dirs)}")
+    if context and len(prompt) + len(system) > _final_room(context):
+        intro = (f"{head}\n\nВся расшифровка не помещается в окно контекста модели — вот пересказ "
+                 f"встречи по частям, по порядку:\n{TRANSCRIPT_OPEN}\n")
+        overhead = len(system) + len(intro) + len(f"\n{TRANSCRIPT_CLOSE}") + len(tail)
+        digest = _digest(runner, head, transcript_text(data), context, overhead, dirs=dirs, cwd=folder, bus=bus)
+        prompt = f"{intro}{digest}\n{TRANSCRIPT_CLOSE}{tail}"
+        _progress(bus, "итог")
     text = _call(runner, prompt, system_prompt=system, allowed_dirs=dirs,
                  cwd=folder, timeout_s=SUMMARY_TIMEOUT_S, purpose="summary")
     suggested, text = titles.split_summary_title(text) if want_title else (None, text)
@@ -264,11 +280,12 @@ def summarize(folder: Path, runner, knowledge_dir, *, provider: str | None = Non
     return path
 
 
-def _fits(text: str, context: int) -> bool:
-    """Влезут ли промпт и минимум итогов в окно (как решает локальная модель)."""
-    from meet.llm.openai_compat import fits
+def _final_room(context: int) -> int:
+    """Сколько символов промпта (с системным) влезет в окно вместе с полным
+    пределом итогов (оценка оптимистичная, как у отказа `openai_compat`)."""
+    from meet.llm.openai_compat import FIT_CHARS_PER_TOKEN, REPLY_BUDGET, WINDOW_MARGIN
 
-    return fits(len(text), context, "summary")
+    return int((context - WINDOW_MARGIN - REPLY_BUDGET["summary"]) * FIT_CHARS_PER_TOKEN)
 
 
 def part_chars(context: int) -> int:
@@ -280,16 +297,66 @@ def part_chars(context: int) -> int:
     return max(3000, int(room * CHARS_PER_TOKEN))
 
 
+def _reply_tokens(chars: int) -> int:
+    """Предел пересказа куска из `chars` символов: не больше трети куска (в
+    токенах) и не больше PART_REPLY_TOKENS — сведение всегда сокращает."""
+    from meet.llm.openai_compat import tokens_of
+
+    return max(1, min(PART_REPLY_TOKENS, tokens_of(chars) // 3))
+
+
+def digest_plan(chars: int, context: int, overhead: int) -> dict:
+    """Сколько вызовов займут итоги по частям встречи из `chars` символов в
+    окне `context` (оценка сверху: пересказ — во весь предел, ~3 символа на
+    токен) → {"parts", "calls", "room"}; не выйдет — DigestError сразу."""
+    if context < MIN_PARTS_CONTEXT:
+        raise DigestError(f"встреча не помещается в окно контекста модели ({context} токенов), а итогам по "
+                          f"частям нужно окно от {MIN_PARTS_CONTEXT // 1024}K — увеличьте контекст модели до 16K+")
+    limit = part_chars(context)
+    room = _final_room(context) - overhead
+    reply_chars = _reply_tokens(limit) * 3
+    if room < 2 * reply_chars:
+        raise DigestError(f"в окне контекста модели ({context} токенов) не остаётся места для итогов — "
+                          "увеличьте контекст модели до 16K+")
+    parts = -(-chars // limit)
+    # Сведение собирает в группу целые пересказы: считаем штуками, а не символами.
+    calls, count, unit = parts, parts, reply_chars + 2
+    for _ in range(MERGE_ROUNDS):
+        if count * unit <= room:
+            break
+        per = max(1, limit // unit)
+        groups = -(-count // per)
+        calls += groups
+        unit = min(reply_chars, per * unit // 3) + 2
+        count = groups
+    # +1 — сами итоги.
+    if count * unit > room or calls + 1 > MAX_DIGEST_CALLS:
+        raise DigestError(f"встреча слишком длинная для окна контекста модели ({context} токенов): итоги по "
+                          f"частям заняли бы больше {MAX_DIGEST_CALLS} вызовов модели — увеличьте контекст "
+                          "модели до 16K+")
+    return {"parts": parts, "calls": calls, "room": room}
+
+
+class DigestError(RuntimeError):
+    """Итоги по частям не получатся — сказать сразу, не тратя вызовы."""
+
+
+_SPEAKER = re.compile(r"^\[([^\]]*)\] ([^:\n]{1,80}): ")
+
+
 def _split_long(line: str, limit: int) -> list[str]:
     """Строка длиннее `limit` (один спикер говорил долго — его реплики
-    склеены) — по словам на куски не длиннее `limit`."""
+    склеены) — по словам на куски не длиннее `limit`; у продолжений —
+    тот же спикер с пометкой «(продолжение)»."""
     if len(line) <= limit:
         return [line]
+    found = _SPEAKER.match(line)
+    prefix = f"[{found.group(1)}] {found.group(2)} (продолжение): " if found else ""
     pieces, current = [], ""
     for word in line.split(" "):
-        if current and len(current) + 1 + len(word) > limit:
+        if current and len(current) + 1 + len(word) > limit - len(prefix):
             pieces.append(current)
-            current = word
+            current = prefix + word
         else:
             current = f"{current} {word}" if current else word
     return pieces + ([current] if current else [])
@@ -309,27 +376,76 @@ def _chunks(lines: list[str], limit: int) -> list[str]:
     return ["\n".join(chunk) for chunk in out]
 
 
-def _digest(runner, header: str, transcript: str, context: int, *, dirs, cwd) -> str:
-    """Пересказ длинной встречи для окна `context`: части расшифровки —
-    пересказы (map); пересказы не влезают вместе — сводятся группами, пока не
-    влезут (reduce, не больше MERGE_ROUNDS раз)."""
-    limit = part_chars(context)
+def _progress(bus, note: str, n: int | None = None, total: int | None = None) -> None:
+    """Ход итогов по частям: «Итоги: часть 3 из 14», «объединение», «итог»."""
+    from meet import llm_progress
+
+    tracker = llm_progress.tracker_of(bus)
+    if tracker is None:
+        return
+    current, planned = getattr(tracker, "n", 0) or 0, getattr(tracker, "total", 0) or 0
+    step = n if n is not None else current + 1
+    llm_progress.part(bus, step, max(step, total or planned), stage="llm", label="итоги встречи",
+                      key="summary", note=note)
+
+
+def _digest(runner, header: str, transcript: str, context: int, overhead: int, *, dirs, cwd, bus=None) -> str:
+    """Пересказ длинной встречи для окна `context` (`overhead` — символов
+    итогового промпта кроме пересказа): части расшифровки — пересказы (map);
+    вместе не влезают в итоговый промпт с полным пределом итогов — сводятся
+    группами, пока не влезут (reduce). Не выйдет — DigestError до первого
+    вызова (`digest_plan`); сведение не сократило пересказы на 30 % — стоп."""
+    from meet import llm_progress
+
+    plan = digest_plan(len(transcript), context, overhead)
+    limit, room = part_chars(context), plan["room"]
     parts = _chunks(transcript.splitlines(), limit)
+    total = plan["calls"] + 1
+    llm_progress.plan(bus, [("summary", len(chunk)) for chunk in parts]
+                      + [("summary", limit)] * (plan["calls"] - len(parts)) + [("summary", room)])
+    calls = {"n": 0}
+
+    def ask(prompt: str, system: str, chars: int) -> str:
+        # Один повтор на часть (таймаут, 5xx); «не помещается» — без повтора.
+        for attempt in range(2):
+            if calls["n"] + 1 >= MAX_DIGEST_CALLS:  # +1 — итоговый вызов
+                raise DigestError(f"итоги по частям заняли бы больше {MAX_DIGEST_CALLS} вызовов модели — "
+                                  "увеличьте контекст модели до 16K+")
+            calls["n"] += 1
+            try:
+                return _call(runner, prompt, system_prompt=system, allowed_dirs=dirs, cwd=cwd,
+                             timeout_s=SUMMARY_TIMEOUT_S, purpose="summary_part", max_tokens=_reply_tokens(chars))
+            except RuntimeError as e:
+                if attempt or str(e).startswith("текст не помещается"):
+                    raise
+        raise AssertionError("недостижимо")
+
     summaries = []
     for n, chunk in enumerate(parts, start=1):
-        text = _call(runner, f"{header}\nЧасть {n} из {len(parts)}.\n\n{TRANSCRIPT_OPEN}\n{chunk}\n"
-                             f"{TRANSCRIPT_CLOSE}", system_prompt=PART_SYSTEM, allowed_dirs=dirs, cwd=cwd,
-                     timeout_s=SUMMARY_TIMEOUT_S, purpose="summary_part", max_tokens=PART_REPLY_TOKENS)
+        _progress(bus, f"Итоги: часть {n} из {len(parts)}", n, total)
+        text = ask(f"{header}\nЧасть {n} из {len(parts)}.\n\n{TRANSCRIPT_OPEN}\n{chunk}\n{TRANSCRIPT_CLOSE}",
+                   PART_SYSTEM, len(chunk))
         summaries.append(f"Часть {n}:\n{text}")
+    step = len(parts)
     for _ in range(MERGE_ROUNDS):
         joined = "\n\n".join(summaries)
-        if _fits(joined + SUMMARY_SYSTEM + header, context) or len(summaries) == 1:
+        if len(joined) <= room:
             return joined
         groups = _chunks(summaries, limit)
-        summaries = [_call(runner, f"{header}\n\n<<<ПЕРЕСКАЗЫ\n{group}\nПЕРЕСКАЗЫ>>>",
-                           system_prompt=MERGE_SYSTEM, allowed_dirs=dirs, cwd=cwd, timeout_s=SUMMARY_TIMEOUT_S,
-                           purpose="summary_part", max_tokens=PART_REPLY_TOKENS) for group in groups]
-    return "\n\n".join(summaries)
+        merged = []
+        for group in groups:
+            step += 1
+            _progress(bus, "объединение", step, max(total, step + 1))
+            merged.append(ask(f"{header}\n\n<<<ПЕРЕСКАЗЫ\n{group}\nПЕРЕСКАЗЫ>>>", MERGE_SYSTEM, len(group)))
+        if len("\n\n".join(merged)) > MIN_SHRINK * len(joined):
+            raise DigestError("пересказы частей встречи не сокращаются при сведении — итоги по частям не "
+                              "получить; увеличьте контекст модели до 16K+ или возьмите другую модель")
+        summaries = merged
+    joined = "\n\n".join(summaries)
+    if len(joined) > room:
+        raise DigestError("пересказ встречи по частям не уместился в окно контекста модели — увеличьте "
+                          "контекст модели до 16K+")
+    return joined
 
 
 def _live_draft(folder: Path) -> str:

@@ -373,6 +373,13 @@ def fits(chars: int, context: int, purpose: str | None = None) -> bool:
     return context - int(chars / FIT_CHARS_PER_TOKEN) - WINDOW_MARGIN >= floor
 
 
+def _reasons_on_ollama(base_url: str, model: str, via_proxy: bool | str) -> bool:
+    from meet.llm import local_models
+
+    caps = local_models.ollama_show(base_url, model, via_proxy=via_proxy)["capabilities"]
+    return "thinking" in caps if caps else reasons_by_name(model)
+
+
 def reasons_by_name(model: str) -> bool:
     """По имени — рассуждающая модель (Qwen3, DeepSeek-R1, gpt-oss, QwQ, *-thinking)."""
     return bool(_REASONING_NAMES.search(model or ""))
@@ -393,12 +400,15 @@ def _complete(base_url: str, payload: dict, timeout_s: float, schema: dict | Non
     context = known_context(base_url, model, via_proxy)
     ollama = local_models.is_ollama(base_url, via_proxy=via_proxy)
     trained = local_models.ollama_trained_context(base_url, model, via_proxy=via_proxy) if ollama else None
-    capped = ollama and (trained is None or trained > OLLAMA_MAX_CTX)
+    # Предел Meet (32K) виноват, только когда модель точно умеет больше.
+    capped = ollama and trained is not None and trained > OLLAMA_MAX_CTX
     # Рассуждение: Ollama его выключает (`think: false`), кроме анализа; там и
     # у остальных серверов (подсказка шаблону не везде действует) — запас.
-    reasoning = local_models.ollama_thinks(base_url, model, via_proxy=via_proxy) if ollama else reasons_by_name(model)
+    # Старая Ollama без `capabilities` — по имени; gpt-oss булево `think` не
+    # слушает (только уровни усилия) — запас ему всегда.
+    reasoning = _reasons_on_ollama(base_url, model, via_proxy) if ollama else reasons_by_name(model)
     think_off = reasoning and purpose != "analysis"
-    if reasoning and not (ollama and think_off):
+    if reasoning and (not (ollama and think_off) or "gpt-oss" in model.lower()):
         budget += REASONING_ALLOWANCE
     if context:
         if context - int(chars / FIT_CHARS_PER_TOKEN) - WINDOW_MARGIN < floor:
@@ -428,6 +438,8 @@ def _complete(base_url: str, payload: dict, timeout_s: float, schema: dict | Non
 # другие с `enable_thinking`). Не проверено на LM Studio: незнакомое поле он,
 # как и прочие серверы, обычно пропускает; отверг — повтор без неё.
 _THINK_OFF_HINT = {"chat_template_kwargs": {"enable_thinking": False}}
+# (адрес, модель) → сервер отверг подсказку (ответ сервера — помним на процесс).
+_hint_rejected: dict[tuple[str, str], bool] = {}
 
 
 def _send(base_url: str, payload: dict, timeout_s: float, schema: dict | None, max_tokens: int,
@@ -436,11 +448,13 @@ def _send(base_url: str, payload: dict, timeout_s: float, schema: dict | None, m
     if native is not None:
         return native
     url = base_url.rstrip("/") + "/chat/completions"
-    if think_off:
-        reply, status, detail = _post(url, {**payload, **_THINK_OFF_HINT}, timeout_s, via_proxy) \
-            if schema is None else (None, None, "")
-        if reply is not None and not (status in (400, 422) and "chat_template_kwargs" in detail):
+    hint_key = (url, str(payload.get("model")))
+    if think_off and schema is None and not _hint_rejected.get(hint_key):
+        reply, status, detail = _post(url, {**payload, **_THINK_OFF_HINT}, timeout_s, via_proxy)
+        if not (status in (400, 422) and "chat_template_kwargs" in detail):
             return reply
+        # Сервер поле не знает (это его ответ — на процесс): дальше без подсказки.
+        _hint_rejected[hint_key] = True
     if schema is None:
         return _post(url, payload, timeout_s, via_proxy)[0]
     key = (url, str(payload.get("model")))

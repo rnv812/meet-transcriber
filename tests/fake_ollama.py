@@ -15,8 +15,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 class FakeOllama:
     def __init__(self, *, context: int = 40960, reply=lambda body: "ок", prompt_tokens=None, native=True,
-                 thinking: int = 0):
+                 thinking: int = 0, capabilities: bool = True):
         self.context = context
+        self.capabilities = capabilities
         self.native = native
         self.reply = reply
         self.prompt_tokens = prompt_tokens
@@ -45,9 +46,10 @@ class FakeOllama:
                 body = json.loads(self.rfile.read(length).decode("utf-8"))
                 fake.posted.append((self.path, body))
                 if self.path == "/api/show":
-                    caps = ["completion"] + (["thinking"] if fake.thinking else [])
-                    return self._send(200, {"model_info": {"qwen3.context_length": fake.context},
-                                            "capabilities": caps})
+                    show = {"model_info": {"qwen3.context_length": fake.context}}
+                    if fake.capabilities:  # Ollama до ~0.6 поля не отдаёт
+                        show["capabilities"] = ["completion"] + (["thinking"] if fake.thinking else [])
+                    return self._send(200, show)
                 if self.path == "/api/chat" and not fake.native:
                     return self._send(404, {"error": "404 page not found"})
                 if self.path == "/v1/chat/completions" and not fake.native:
@@ -96,5 +98,6 @@ def clear_caches() -> None:
     from meet.llm import local_models, openai_compat
 
     for cache in (openai_compat._schema_mode, openai_compat._num_ctx, openai_compat._context,
-                  openai_compat._no_native, local_models._ollama, local_models._trained):
+                  openai_compat._no_native, openai_compat._hint_rejected, local_models._ollama,
+                  local_models._trained):
         cache.clear()

@@ -97,6 +97,7 @@ def _fresh_modes():
     from meet.llm import local_models
 
     caches = (openai_compat._schema_mode, openai_compat._num_ctx, openai_compat._context, openai_compat._no_native,
+              openai_compat._hint_rejected,
               local_models._ollama, local_models._trained)
     for cache in caches:
         cache.clear()
