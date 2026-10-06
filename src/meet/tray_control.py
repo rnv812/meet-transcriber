@@ -156,7 +156,7 @@ class ProviderCache:
 
     @staticmethod
     def _key_of(cfg):
-        return (cfg.llm.provider, cfg.llm.base_url)
+        return (cfg.llm.provider, cfg.llm.base_url, tuple(cfg.llm.enabled))
 
     def get(self, cfg) -> tuple[str | None, bool]:
         key = self._key_of(cfg)
@@ -196,17 +196,20 @@ class ProviderCache:
             self._running = False
 
 
-def _provider_installed(cfg) -> bool:
+def _provider_installed(cfg, provider: str | None = None) -> bool:
     """Дешёвая проверка «есть кому ответить» (без проверки входа и без SDK).
+    `provider` — модель, выбранная человеком: есть ли она сама (модель по
+    умолчанию её не заменяет). Без него — модель по умолчанию; «Авто» — хоть
+    один из своих кандидатов среди включённых.
 
     Задача всё равно спросит `llm.resolve` и, если вход не выполнен, упадёт с
     тем же текстом — это осознанно: ждать проверки входа в HTTP нельзя."""
-    from meet.llm import detect
+    from meet.llm import AUTO_PROVIDERS, detect
 
     found = detect.available(cfg.llm.base_url)
-    choice = cfg.llm.provider
+    choice = provider or cfg.llm.provider
     if choice == "auto":
-        return any(item.get("found") for item in found.values())
+        return any(found.get(name, {}).get("found") for name in AUTO_PROVIDERS if name in cfg.llm.enabled)
     return bool(found.get(choice, {}).get("found"))
 
 
@@ -240,14 +243,16 @@ def _check_provider(provider: str) -> dict:
     return data
 
 
-def _suggest_title(folder: Path) -> dict:
+def _suggest_title(folder: Path, provider: str | None = None) -> dict:
     """`python -m meet.titles <папка>` подпроцессом: вызов модели не живёт в
-    резиденте (как проверка провайдера). → {"title", "from"} или {"error"}."""
+    резиденте (как проверка провайдера). `provider` — модель, выбранная
+    человеком (`--provider`). → {"title", "from", "llm"?} или {"error"}."""
     from meet import netproxy
 
     try:
         out = subprocess.run(
-            [sys.executable, "-m", "meet.titles", str(folder)],
+            [sys.executable, "-m", "meet.titles", str(folder),
+             *([f"--provider={provider}"] if provider else [])],
             env=netproxy.settings_env(),
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=TITLE_TIMEOUT_S,
@@ -265,6 +270,37 @@ def _suggest_title(folder: Path) -> dict:
     if not isinstance(data, dict):
         return {"error": (out.stderr or out.stdout or "нет ответа").strip()[-300:]}
     return data
+
+
+def _job_provider(job) -> str | None:
+    """Модель, выбранная человеком для задачи (`options.provider`); None — по умолчанию."""
+    value = (getattr(job, "options", None) or {}).get("provider")
+    return value if isinstance(value, str) and value else None
+
+
+def _with_provider(options: dict, provider: str | None) -> dict:
+    return {**options, "provider": provider} if provider else options
+
+
+def _marked_provider(mark: dict) -> str | None:
+    """Модель из отметки `pending_analysis`/`pending_improve` (выбор человека)."""
+    from meet import llm
+
+    value = mark.get("provider")
+    return value if value in llm.PROVIDERS else None
+
+
+def _origin(value) -> dict | None:
+    """Происхождение результата {"provider", "model"} — только годное: известный
+    провайдер, модель — строка разумной длины или None (приходит и из окна)."""
+    from meet import llm
+
+    if not isinstance(value, dict) or value.get("provider") not in llm.PROVIDERS:
+        return None
+    model = value.get("model")
+    if model is not None and (not isinstance(model, str) or len(model) > 200):
+        return None
+    return {"provider": value["provider"], "model": model or None}
 
 
 def _bad_request(text: str):
@@ -481,14 +517,16 @@ class TrayControl:
         # Автоматический анализ встречи: записи, где он отложен (идёт запись или
         # живой режим), и записи, где его надо повторить после идущего
         # (расшифровку поменяли, пока он шёл). Ключ — путь без регистра.
-        self._analysis_deferred: dict[str, Path] = {}
-        # Повторить после идущего: ключ — запись, значение — просили ли вручную
-        # (тогда повтор не зависит от `analysis.auto`).
-        self._analysis_rerun: dict[str, bool] = {}
+        # Значение — (папка, просили ли вручную, выбранная модель или None).
+        self._analysis_deferred: dict[str, tuple[Path, bool, str | None]] = {}
+        # Повторить после идущего: ключ — запись, значение — (просили ли вручную
+        # — тогда повтор не зависит от `analysis.auto`, модель идущей задачи).
+        self._analysis_rerun: dict[str, tuple[bool, str | None]] = {}
         self._analysis_lock = threading.Lock()
         # «Улучшить расшифровку» автоматически после распознавания, отложенное до
         # конца записи или живого режима (модель во время встречи не зовём).
-        self._improve_deferred: dict[str, Path] = {}
+        # Значение — (папка, модель, выбранная человеком, или None).
+        self._improve_deferred: dict[str, tuple[Path, str | None]] = {}
         # «Предложить название», которое уже считается: второй запрос по той же
         # записи ждёт его, а не платит за второй вызов модели.
         self._suggesting: dict[str, dict] = {}
@@ -1821,28 +1859,34 @@ class TrayControl:
         # "ai" — человек принял предложенное моделью («Предложить название»);
         # всё остальное — название человека, его модель больше не тронет.
         source = "ai" if (body or {}).get("title_source") == "ai" and title else "user"
+        # Какая модель его предложила (`title_llm` из ответа «Предложить название»).
+        origin = _origin((body or {}).get("title_llm")) if source == "ai" else None
         exported = kb_export.previously_exported(folder)
         old_title = kb_export.meeting(folder)[0] if exported else None
         if title:
             # Принятое предложение модели — выбор человека: автоматически его
             # больше не меняют (title_accepted), бейдж «ИИ» остаётся.
             library.update_meta(folder, lambda meta: {
-                **{k: v for k, v in meta.items() if k != "title_accepted"}, "title": title,
-                "title_source": source, **({"title_accepted": True} if source == "ai" else {})})
+                **{k: v for k, v in meta.items() if k not in ("title_accepted", "title_llm")}, "title": title,
+                "title_source": source, **({"title_accepted": True} if source == "ai" else {}),
+                **({"title_llm": origin} if origin else {})})
         else:
             library.update_meta(folder, lambda meta: {
-                k: v for k, v in meta.items() if k not in ("title", "title_source", "title_accepted")})
+                k: v for k, v in meta.items()
+                if k not in ("title", "title_source", "title_accepted", "title_llm")})
         if exported:
             self._background(lambda: self._follow_title(folder, old_title))
         return library.describe(folder).to_raw()
 
-    def _retitle_ai(self, folder: Path, title, why: str, apply=None) -> str | None:
+    def _retitle_ai(self, folder: Path, title, why: str, apply=None,
+                    origin: dict | None = None) -> str | None:
         """Название от модели (анализ, итоги, тема живого режима) — по правилам
         meet.titles: только при включённом «Придумывать название» и только
         вместо автоматического, прежнего от модели или общего из окна звонка.
         Тот же путь, что переименование из окна: папка в базе знаний следует за
         названием, окно перечитывает список. Фоновый поток: сбой — в журнал.
-        `apply` — правило записи (по умолчанию `titles.apply_ai`)."""
+        `apply` — правило записи (по умолчанию `titles.apply_ai`); `origin` —
+        какая модель придумала название (`title_llm`)."""
         from meet import kb_export, titles
 
         try:
@@ -1851,7 +1895,8 @@ class TrayControl:
                 return None
             exported = kb_export.previously_exported(folder)
             old_title = kb_export.meeting(folder)[0] if exported else None
-            applied = (apply or titles.apply_ai)(folder, title, cfg)
+            applied = (apply(folder, title, cfg) if apply is not None
+                       else titles.apply_ai(folder, title, cfg, origin=_origin(origin)))
         except Exception as e:
             self.tray.log(f"название от модели не поставлено ({Path(folder).name}): "
                           f"{type(e).__name__}: {e}")
@@ -1923,7 +1968,7 @@ class TrayControl:
         """Итоги готовы: название из их первой строки (если его просили)."""
         found = library.read_meta(folder).get("summary_title")
         if isinstance(found, dict) and found.get("title"):
-            self._retitle_ai(folder, found["title"], "итоги")
+            self._retitle_ai(folder, found["title"], "итоги", origin=found.get("llm"))
 
     def _live_title(self, folder: Path) -> None:
         """Черновое название записи с ассистентом по теме его сводки: при
@@ -2796,26 +2841,53 @@ class TrayControl:
         self._refuse_text_only(folder)
         return folder
 
-    def _ready_for_model(self, folder: Path) -> None:
+    def _ready_for_model(self, folder: Path, provider: str | None = None) -> None:
         """409, если модели сейчас нечего дать: транскрипт вот-вот перепишет
-        расшифровка (итоги по нему устарели бы сразу) или не подключён провайдер."""
-        from meet import assistant
+        расшифровка (итоги по нему устарели бы сразу) или не подключён провайдер.
+        `provider` — модель, выбранная человеком: нет её — 409 с причиной,
+        модель по умолчанию вместо неё не берётся."""
+        from meet import assistant, llm
 
         if self.queue.active_for(str(folder), (jobs.TRANSCRIBE, jobs.IMPORT)):
             raise _conflict("Дождитесь окончания расшифровки")
-        if not _provider_installed(settings.load()):
+        cfg = settings.load()
+        if provider is not None and not _provider_installed(cfg, provider):
+            raise _conflict(f"{llm.LABELS[provider]} недоступна: {llm.not_found(provider, cfg)}")
+        if provider is None and not _provider_installed(cfg):
             raise _conflict(assistant.NO_PROVIDER)
 
-    def make_summary(self, recording_id: str) -> dict:
-        """Итоги задачей. Вторая просьба, пока первая ждёт или идёт, — та же задача."""
+    @staticmethod
+    def _chosen(body: dict | None) -> str | None:
+        """Модель, выбранная человеком для одного действия (`provider` в теле
+        запроса): только известная и включённая в настройках — иначе 400.
+        Нет — None: модель по умолчанию."""
+        from meet import llm
+
+        value = (body or {}).get("provider")
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str):
+            raise _bad_request("модель — строка")
+        if value not in llm.PROVIDERS:
+            raise _bad_request(f"неизвестная модель: {value}")
+        if value not in settings.load().llm.enabled:
+            raise _bad_request(f"модель «{llm.LABELS[value]}» не включена в настройках")
+        return value
+
+    def make_summary(self, recording_id: str, body: dict | None = None) -> dict:
+        """Итоги задачей. Вторая просьба, пока первая ждёт или идёт, — та же задача;
+        просьба другой модели в это время — 409 (одни итоги на запись)."""
+        provider = self._chosen(body)
         folder = self._transcribed(recording_id)
         if isinstance(folder, dict):
             return folder
-        self._ready_for_model(folder)
+        self._ready_for_model(folder, provider)
         with self._submit_lock:
             job = self.llm_queue.active_for(str(folder), (jobs.SUMMARY,))
+            if job is not None and _job_provider(job) != provider:
+                raise _conflict("Итоги уже готовятся другой моделью — дождитесь окончания")
             if job is None:
-                job = self.llm_queue.submit(jobs.SUMMARY, str(folder), {})
+                job = self.llm_queue.submit(jobs.SUMMARY, str(folder), _with_provider({}, provider))
         return job.to_raw()
 
     def summary(self, recording_id: str) -> dict:
@@ -2835,6 +2907,7 @@ class TrayControl:
         return found or {"error": "черновика нет"}
 
     def ask(self, recording_id: str, body: dict | None) -> dict:
+        provider = self._chosen(body)
         question = (body or {}).get("question")
         if not isinstance(question, str) or not question.strip():
             raise _bad_request("пустой вопрос")
@@ -2844,8 +2917,9 @@ class TrayControl:
         folder = self._transcribed(recording_id)
         if isinstance(folder, dict):
             return folder
-        self._ready_for_model(folder)
-        return self.llm_queue.submit(jobs.ASK, str(folder), {"question": question}).to_raw()
+        self._ready_for_model(folder, provider)
+        return self.llm_queue.submit(jobs.ASK, str(folder),
+                                     _with_provider({"question": question}, provider)).to_raw()
 
     def qa(self, recording_id: str) -> dict:
         from meet import assistant
@@ -2873,18 +2947,20 @@ class TrayControl:
                    "job": job.to_raw()}
         return out
 
-    def make_analysis(self, recording_id: str) -> dict:
+    def make_analysis(self, recording_id: str, body: dict | None = None) -> dict:
         """«Переанализировать» (и `meet analyze` через приложение): задача
         анализа в очередь модели. Уже ждёт — та же задача, но вперёд фоновых;
         уже идёт — та же, с повтором после неё. 409 — идёт расшифровка, не
-        подключена модель или запись ещё пишется."""
+        подключена модель или запись ещё пишется. `body.provider` — модель,
+        выбранная человеком (см. `_queue_analysis`)."""
+        provider = self._chosen(body)
         folder = self._transcribed(recording_id)
         if isinstance(folder, dict):
             return folder
-        self._ready_for_model(folder)
+        self._ready_for_model(folder, provider)
         if self._key(folder) in self._busy_now():
             raise _conflict("Запись ещё идёт — анализ будет доступен после её окончания")
-        job, _created = self._queue_analysis(folder, low=False, manual=True)
+        job, _created = self._queue_analysis(folder, low=False, manual=True, provider=provider)
         return job.to_raw()
 
     def analysis_consent(self, recording_id: str, body: dict) -> dict:
@@ -2905,21 +2981,26 @@ class TrayControl:
             self._background(lambda: self._auto_analyze(folder), "meet-analysis")
         return {"analysis": updated.analysis.to_raw()}
 
-    def suggest_title(self, recording_id: str) -> dict:
+    def suggest_title(self, recording_id: str, body: dict | None = None) -> dict:
         """«Предложить название»: из свежего анализа сразу, иначе — коротким
         вызовом модели подпроцессом (до TITLE_TIMEOUT_S). Ничего не меняет:
-        применяет окно (PATCH с title_source "ai"). Повторный запрос по той же
-        записи, пока первый считается, ждёт его ответа. → {"title", "from"}."""
+        применяет окно (PATCH с title_source "ai" и title_llm). Повторный запрос
+        по той же записи, пока первый считается, ждёт его ответа. `body.provider`
+        — модель, выбранная человеком: зовём её, а не берём название из анализа.
+        → {"title", "from", "llm"?}."""
         from meet import analysis
 
+        provider = self._chosen(body)
         folder = self._transcribed(recording_id)
         if isinstance(folder, dict):
             return folder
-        title = analysis.fresh_title(folder)
+        title = analysis.fresh_title(folder) if provider is None else None
         if title:
-            return {"title": title, "from": "analysis"}
-        self._ready_for_model(folder)
-        key = self._key(folder)
+            doc = analysis.read(folder) or {}
+            by = _origin(doc.get("llm"))
+            return {"title": title, "from": "analysis", **({"llm": by} if by else {})}
+        self._ready_for_model(folder, provider)
+        key = (self._key(folder), provider)
         with self._suggest_lock:
             entry = self._suggesting.get(key)
             owner = entry is None
@@ -2928,7 +3009,7 @@ class TrayControl:
                 self._suggesting[key] = entry
         if owner:
             try:
-                entry["result"] = _suggest_title(folder)
+                entry["result"] = _suggest_title(folder, provider) if provider else _suggest_title(folder)
             except Exception as e:
                 entry["result"] = {"error": str(e) or type(e).__name__}
             finally:
@@ -2942,52 +3023,69 @@ class TrayControl:
             raise RuntimeError(f"название не предложено: {got['error']}")
         return got
 
-    def _mark_analysis(self, folder: Path, on: bool, *, manual: bool = False) -> None:
+    def _mark_analysis(self, folder: Path, on: bool, *, manual: bool = False,
+                       provider: str | None = None) -> None:
         """`pending_analysis` в meta.json: анализ поставлен или отложен, но не
         закончился. Резидент, закрытый посреди него, при следующем запуске
-        поставит его снова (см. recover, _resume_analysis) — как расшифровку."""
+        поставит его снова (см. recover, _resume_analysis) — как расшифровку.
+        `provider` — модель, выбранная человеком: повтор пойдёт ею же."""
         try:
             if on:
-                library.write_meta(folder, {"pending_analysis": {"at": time.time(), "manual": manual}})
+                library.write_meta(folder, {"pending_analysis": {
+                    "at": time.time(), "manual": manual, **({"provider": provider} if provider else {})}})
             elif "pending_analysis" in library.read_meta(folder):
                 library.update_meta(folder, lambda meta: {
                     k: v for k, v in meta.items() if k != "pending_analysis"})
         except Exception as e:
             self.tray.log(f"отметка об анализе не записана ({Path(folder).name}): {e}")
 
-    def _queue_analysis(self, folder: Path, *, low: bool, manual: bool = False):
+    def _queue_analysis(self, folder: Path, *, low: bool, manual: bool = False,
+                        provider: str | None = None):
         """Одна задача анализа на запись. Ждущая — та же (просьба человека
         поднимает фоновую вперёд); идущая — та же, с пометкой «повторить после»
-        (расшифровку тем временем поменяли). → (задача, поставлена ли новая)."""
+        (расшифровку тем временем поменяли). → (задача, поставлена ли новая).
+
+        `provider` — модель, выбранная человеком (U3). Ждущая задача другой
+        модели заменяется его задачей; идущая другой моделью — 409: молча
+        отдать встречу не той модели нельзя, и повтор после неё был бы не тем,
+        о чём просили. Фоновая просьба довольствуется любой задачей."""
         from meet import storage
 
         with self._submit_lock:
             job = self.llm_queue.active_for(str(folder), (jobs.ANALYZE,))
+            if job is not None and not low and _job_provider(job) != provider:
+                if job.state == jobs.RUNNING:
+                    raise _conflict("Анализ уже идёт другой моделью — дождитесь окончания")
+                self.llm_queue.cancel(job.id)  # ждущая снимается без события
+                job = None
             if job is not None:
                 if job.state == jobs.RUNNING:
                     with self._analysis_lock:
                         key = self._key(folder)
-                        self._analysis_rerun[key] = self._analysis_rerun.get(key, False) or manual
+                        # Повтор — той же моделью, что идущая задача, если о нём просил человек.
+                        again = self._analysis_rerun.get(key, (False, None))[0] or manual
+                        self._analysis_rerun[key] = (again, _job_provider(job) if again else None)
                 elif not low and hasattr(self.llm_queue, "promote"):
                     self.llm_queue.promote(job.id)
                 return job, False
             try:
-                job = self.llm_queue.submit(jobs.ANALYZE, str(folder), {}, low=low)
+                job = self.llm_queue.submit(jobs.ANALYZE, str(folder), _with_provider({}, provider), low=low)
             except storage.Held:
                 # Перенос удерживает резидент: анализ не теряется — отметка
                 # `pending_analysis`, новый резидент поставит его снова.
-                self._mark_analysis(folder, True, manual=manual)
+                self._mark_analysis(folder, True, manual=manual, provider=provider)
                 self.tray.log(f"анализ встречи отложен до конца переноса: {folder.name}")
                 raise
-        self._mark_analysis(folder, True, manual=manual)
+        self._mark_analysis(folder, True, manual=manual, provider=provider)
         return job, True
 
-    def _defer_analysis(self, folder: Path, manual: bool) -> None:
+    def _defer_analysis(self, folder: Path, manual: bool, provider: str | None = None) -> None:
         with self._analysis_lock:
             key = self._key(folder)
-            _, was_manual = self._analysis_deferred.get(key, (folder, False))
-            self._analysis_deferred[key] = (folder, was_manual or manual)
-        self._mark_analysis(folder, True, manual=manual)
+            _, was_manual, was_provider = self._analysis_deferred.get(key, (folder, False, None))
+            self._analysis_deferred[key] = (folder, was_manual or manual,
+                                            provider if manual else was_provider)
+        self._mark_analysis(folder, True, manual=manual, provider=provider)
         self.tray.log(f"анализ встречи отложен до конца записи: {folder.name}")
 
     def _auto_analyze(self, folder: Path, *, stale_only: bool = False) -> None:
@@ -3034,13 +3132,14 @@ class TrayControl:
             self.tray.log(f"анализ встречи не поставлен ({Path(folder).name}): "
                           f"{type(e).__name__}: {e}")
 
-    def _manual_again(self, folder: Path) -> None:
+    def _manual_again(self, folder: Path, provider: str | None = None) -> None:
         """Анализ, о котором просил человек (повтор после идущего, восстановление
-        после перезапуска): без `analysis.auto` и порога длительности."""
+        после перезапуска): без `analysis.auto` и порога длительности; модель —
+        та, что он выбрал (`provider`), иначе по умолчанию."""
         try:
-            if not _provider_installed(settings.load()):
+            if not _provider_installed(settings.load(), provider):
                 return
-            self._queue_analysis(folder, low=False, manual=True)
+            self._queue_analysis(folder, low=False, manual=True, provider=provider)
         except Exception as e:
             self.tray.log(f"анализ встречи не поставлен ({Path(folder).name}): "
                           f"{type(e).__name__}: {e}")
@@ -3053,17 +3152,21 @@ class TrayControl:
         with self._analysis_lock:
             improves = list(self._improve_deferred.values())
             self._improve_deferred.clear()
-        for folder in improves:
-            if folder.is_dir():
+        for folder, provider in improves:
+            if not folder.is_dir():
+                continue
+            if provider:
+                self._improve_again(folder, provider)
+            else:
                 self._auto_improve(folder)
         with self._analysis_lock:
             waiting = list(self._analysis_deferred.values())
             self._analysis_deferred.clear()
-        for folder, manual in waiting:
+        for folder, manual, provider in waiting:
             if not folder.is_dir():
                 continue
             if manual:
-                self._manual_again(folder)
+                self._manual_again(folder, provider)
             else:
                 self._auto_analyze(folder)
 
@@ -3076,6 +3179,7 @@ class TrayControl:
 
         at = mark.get("at")
         manual = bool(mark.get("manual"))
+        provider = _marked_provider(mark)
         if (not isinstance(at, (int, float)) or isinstance(at, bool) or at < cutoff
                 or library.final_transcript(folder) is None or analysis.is_fresh(folder)):
             self._mark_analysis(folder, False)
@@ -3084,12 +3188,16 @@ class TrayControl:
         if not manual and (not cfg.analysis.auto or not analysis.effective_features(cfg)):
             self._mark_analysis(folder, False)
             return False
+        if provider is not None and provider not in cfg.llm.enabled:
+            # Выбранную модель с тех пор выключили — другой эту встречу не отдаём.
+            self._mark_analysis(folder, False)
+            return False
         if self._busy_now():
-            self._defer_analysis(folder, manual)
+            self._defer_analysis(folder, manual, provider)
             return True
-        if not _provider_installed(cfg):
+        if not _provider_installed(cfg, provider):
             return False  # отметка остаётся: модель подключат — поставим при следующем запуске
-        self._queue_analysis(folder, low=not manual, manual=manual)
+        self._queue_analysis(folder, low=not manual, manual=manual, provider=provider)
         self.tray.log(f"анализ встречи восстановлен после перезапуска: {folder.name}")
         return True
 
@@ -3170,15 +3278,16 @@ class TrayControl:
             if job_state == jobs.DONE and got.get("state") == "ready":
                 doc = got.get("analysis") or {}
                 if doc.get("title"):
-                    self._retitle_ai(folder, doc["title"], "анализ встречи")
+                    self._retitle_ai(folder, doc["title"], "анализ встречи", origin=doc.get("llm"))
                 self._recategorize_ai(folder, doc)
             self.bus.emit(ANALYSIS_UPDATED, id=folder.name, state=got.get("state"))
             self._updated(folder)
         except Exception as e:
             self.tray.log(f"анализ встречи не обработан ({folder.name}): {type(e).__name__}: {e}")
         if rerun is not None and job_state != jobs.CANCELLED:
-            if rerun:
-                self._manual_again(folder)
+            manual, provider = rerun
+            if manual:
+                self._manual_again(folder, provider)
             else:
                 self._auto_analyze(folder)
 
@@ -3206,20 +3315,21 @@ class TrayControl:
                 hint = False  # подсказка необязательна
         return {**out, "hint": hint}
 
-    def make_improve(self, recording_id: str) -> dict:
+    def make_improve(self, recording_id: str, body: dict | None = None) -> dict:
         """«Улучшить расшифровку»: задача в очередь модели. Уже ждёт или идёт —
         та же задача. 409 — идёт расшифровка, не подключена модель или запись
-        ещё пишется."""
+        ещё пишется. `body.provider` — модель, выбранная человеком."""
         from meet import improve
 
+        provider = self._chosen(body)
         folder = self._transcribed(recording_id)
         if isinstance(folder, dict):
             return folder
-        self._ready_for_model(folder)
+        self._ready_for_model(folder, provider)
         if self._key(folder) in self._busy_now():
             raise _conflict("Запись ещё идёт — улучшение будет доступно после её окончания")
         improve.hint_done(folder)
-        job, _created = self._queue_improve(folder, low=False, manual=True)
+        job, _created = self._queue_improve(folder, low=False, manual=True, provider=provider)
         return job.to_raw()
 
     def improve_dismiss(self, recording_id: str) -> dict:
@@ -3296,38 +3406,58 @@ class TrayControl:
             return {"added": [], "error": f"не удалось сохранить правила: {e}"}
         return {"added": added}
 
-    def _mark_improve(self, folder: Path, on: bool, *, manual: bool = False) -> None:
+    def _mark_improve(self, folder: Path, on: bool, *, manual: bool = False,
+                      provider: str | None = None) -> None:
         """`pending_improve` в meta.json: улучшение поставлено или отложено, но
-        не закончилось — следующий запуск резидента поставит его снова."""
+        не закончилось — следующий запуск резидента поставит его снова (той же
+        моделью, если её выбрал человек: `provider`)."""
         try:
             if on:
-                library.write_meta(folder, {"pending_improve": {"at": time.time(), "manual": manual}})
+                library.write_meta(folder, {"pending_improve": {
+                    "at": time.time(), "manual": manual, **({"provider": provider} if provider else {})}})
             elif "pending_improve" in library.read_meta(folder):
                 library.update_meta(folder, lambda meta: {
                     k: v for k, v in meta.items() if k != "pending_improve"})
         except Exception as e:
             self.tray.log(f"отметка об улучшении не записана ({Path(folder).name}): {e}")
 
-    def _queue_improve(self, folder: Path, *, low: bool, manual: bool = False):
+    def _queue_improve(self, folder: Path, *, low: bool, manual: bool = False,
+                       provider: str | None = None):
         """Одна задача улучшения на запись: ждущая или идущая — та же (просьба
-        человека поднимает фоновую вперёд). → (задача, поставлена ли новая)."""
+        человека поднимает фоновую вперёд). → (задача, поставлена ли новая).
+        `provider` — модель, выбранная человеком: ждущая задача другой модели
+        заменяется, идущая другой моделью — 409 (как у анализа)."""
         from meet import storage
 
         with self._submit_lock:
             job = self.llm_queue.active_for(str(folder), (jobs.IMPROVE,))
+            if job is not None and not low and _job_provider(job) != provider:
+                if job.state == jobs.RUNNING:
+                    raise _conflict("Улучшение уже идёт другой моделью — дождитесь окончания")
+                self.llm_queue.cancel(job.id)
+                job = None
             if job is not None:
                 if job.state != jobs.RUNNING and not low and hasattr(self.llm_queue, "promote"):
                     self.llm_queue.promote(job.id)
                 return job, False
             try:
-                job = self.llm_queue.submit(jobs.IMPROVE, str(folder), {}, low=low)
+                job = self.llm_queue.submit(jobs.IMPROVE, str(folder), _with_provider({}, provider), low=low)
             except storage.Held:
                 # Как с анализом: отметка остаётся, новый резидент продолжит.
-                self._mark_improve(folder, True, manual=manual)
+                self._mark_improve(folder, True, manual=manual, provider=provider)
                 self.tray.log(f"улучшение расшифровки отложено до конца переноса: {folder.name}")
                 raise
-        self._mark_improve(folder, True, manual=manual)
+        self._mark_improve(folder, True, manual=manual, provider=provider)
         return job, True
+
+    def _improve_again(self, folder: Path, provider: str) -> None:
+        """Улучшение выбранной человеком моделью, отложенное до конца записи."""
+        try:
+            if _provider_installed(settings.load(), provider):
+                self._queue_improve(folder, low=False, manual=True, provider=provider)
+        except Exception as e:
+            self.tray.log(f"улучшение расшифровки не поставлено ({Path(folder).name}): "
+                          f"{type(e).__name__}: {e}")
 
     def _auto_improve(self, folder: Path, *, transcribed: bool = False) -> None:
         """После расшифровки (`transcribed`): прежнее предложение и прежняя
@@ -3358,7 +3488,7 @@ class TrayControl:
                 return
             if self._busy_now():
                 with self._analysis_lock:
-                    self._improve_deferred[self._key(folder)] = folder
+                    self._improve_deferred[self._key(folder)] = (folder, None)
                 self._mark_improve(folder, True)
                 return
             job, created = self._queue_improve(folder, low=True)
@@ -3376,6 +3506,7 @@ class TrayControl:
 
         at = mark.get("at")
         manual = bool(mark.get("manual"))
+        provider = _marked_provider(mark)
         if (not isinstance(at, (int, float)) or isinstance(at, bool) or at < cutoff
                 or library.final_transcript(folder) is None or improve.fresh(folder) is not None
                 or self.queue.active_for(str(folder), jobs.FOLDER_KINDS)):
@@ -3385,13 +3516,16 @@ class TrayControl:
         if not manual and not cfg.analysis.improve_auto:
             self._mark_improve(folder, False)
             return False
+        if provider is not None and provider not in cfg.llm.enabled:
+            self._mark_improve(folder, False)  # выбранную модель выключили — другой не отдаём
+            return False
         if self._busy_now():
             with self._analysis_lock:
-                self._improve_deferred[self._key(folder)] = folder
+                self._improve_deferred[self._key(folder)] = (folder, provider)
             return True
-        if not _provider_installed(cfg):
+        if not _provider_installed(cfg, provider):
             return False  # отметка остаётся: модель подключат — поставим при следующем запуске
-        self._queue_improve(folder, low=not manual, manual=manual)
+        self._queue_improve(folder, low=not manual, manual=manual, provider=provider)
         self.tray.log(f"улучшение расшифровки восстановлено после перезапуска: {folder.name}")
         return True
 
@@ -3474,14 +3608,21 @@ class TrayControl:
         from meet import netproxy
         from meet.llm import detect
 
+        from meet import llm
+
         cfg = settings.load()
         provider, checking = self._providers.get(cfg)
         knowledge = cfg.assistant.knowledge_dir
+        found = detect.available(cfg.llm.base_url, probe_local=probe_local)
         return {
             "provider": provider,
             "checking": checking,
+            # Модель по умолчанию («Авто» или имя) и включённые модели — для
+            # выбора модели у действий карточки (U3).
             "setting": cfg.llm.provider,
-            "available": detect.available(cfg.llm.base_url, probe_local=probe_local),
+            "enabled": list(cfg.llm.enabled),
+            "models": llm.models(cfg, found),
+            "available": found,
             "knowledge_dir": str(knowledge) if knowledge else None,
             # Какой прокси получат Claude Code/Codex (логин и пароль скрыты).
             "proxy": netproxy.describe(cfg),

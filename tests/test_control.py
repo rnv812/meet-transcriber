@@ -190,10 +190,12 @@ class FakeState:
 
     provider_ready = True
 
-    def make_summary(self, rid):
+    def make_summary(self, rid, body=None):
         if not self.provider_ready:
             raise control.Conflict("Подключите Claude Code, Codex или OpenCode в настройках")
         self.calls.append(("summary", rid))
+        if body:
+            self.calls.append(("summary-body", rid, body))
         return {"id": "j1", "kind": "summary"}
 
     def summary(self, rid):
@@ -1096,6 +1098,9 @@ def test_recording_id_in_path_is_url_decoded(server):
 def test_summary_routes(server):
     assert _post(server, "/recordings/r%201/summary")["kind"] == "summary"
     assert ("summary", "r 1") in server.state_obj.calls
+    # Модель для одного действия — телом запроса (U3).
+    _post(server, "/recordings/r1/summary", {"provider": "claude-code"})
+    assert ("summary-body", "r1", {"provider": "claude-code"}) in server.state_obj.calls
     assert _get(server, "/recordings/r1/summary")["markdown"] == "# Итоги"
     assert _get(server, "/recordings/r1/live-draft")["markdown"] == "**Тема:** Т"
     assert _get(server, "/recordings/%D0%BD%D0%B5%D1%82/live-draft", expect=404) == {"error": "черновика нет"}

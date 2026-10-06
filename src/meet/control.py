@@ -71,17 +71,18 @@ IMPORTANT: токен принимается и в query-параметре `?to
     models() -> dict                      каталог моделей и что уже скачано
     download_model(body) -> dict          скачать модель задачей
     remove_model(body) -> dict            удалить скачанную модель GigaAM {"id"}
-    make_summary(id) -> dict              итоги записи задачей (409 без провайдера)
+    make_summary(id, body) -> dict        итоги записи задачей (409 без провайдера);
+                                          body {"provider"} — модель для этой задачи
     summary(id) -> dict                   готовые итоги {"markdown", "created_at"}
     live_draft(id) -> dict                черновик итогов из живого режима
     ask(id, body) -> dict                 вопрос по записи задачей
     qa(id) -> dict                        прошлые вопросы и ответы
     analysis(id) -> dict                  анализ встречи {"state", "analysis"?, "error"?}
-    make_analysis(id) -> dict             «Переанализировать»: задача анализа (409 без модели)
+    make_analysis(id, body) -> dict       «Переанализировать»: задача анализа (409 без модели)
     analysis_consent(id, body) -> dict    ответ на предложение включить авто-анализ {"answer"}
-    suggest_title(id) -> dict             «Предложить название» {"title", "from"}
+    suggest_title(id, body) -> dict       «Предложить название» {"title", "from", "llm"?}
     improve(id) -> dict                   «Улучшить расшифровку» {"state", "proposal"?, "hint"}
-    make_improve(id) -> dict              поставить задачу улучшения (409 без модели)
+    make_improve(id, body) -> dict        поставить задачу улучшения (409 без модели)
     improve_apply(id, body)               выбранные замены — одним шагом истории
     improve_dismiss(id)                   подсказку после GigaAM больше не показывать
     profiles_removed() / dismiss_...()    отметка «профили людей убраны» и «Понятно»
@@ -901,7 +902,7 @@ _PATTERNS = (
     ("POST", re.compile(r"^/recordings/([^/]+)/transcribe$"),
      lambda h, p, rid: _server_of(h).state.transcribe(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/summary$"),
-     lambda h, p, rid: _server_of(h).state.make_summary(unquote(rid))),
+     lambda h, p, rid: _server_of(h).state.make_summary(unquote(rid), h._body())),
     ("GET", re.compile(r"^/recordings/([^/]+)/summary$"),
      lambda h, p, rid: _server_of(h).state.summary(unquote(rid))),
     ("GET", re.compile(r"^/recordings/([^/]+)/live-draft$"),
@@ -911,10 +912,13 @@ _PATTERNS = (
     ("GET", re.compile(r"^/recordings/([^/]+)/qa$"),
      lambda h, p, rid: _server_of(h).state.qa(unquote(rid))),
     # Анализ встречи (analysis.json): состояние и разметка; POST — поставить заново.
+    # У POST итогов, вопроса, анализа, улучшения и названия тело {"provider": …} —
+    # модель, выбранная человеком для этого действия (только из включённых);
+    # без него — модель по умолчанию.
     ("GET", re.compile(r"^/recordings/([^/]+)/analysis$"),
      lambda h, p, rid: _server_of(h).state.analysis(unquote(rid))),
     ("POST", re.compile(r"^/recordings/([^/]+)/analysis$"),
-     lambda h, p, rid: _server_of(h).state.make_analysis(unquote(rid))),
+     lambda h, p, rid: _server_of(h).state.make_analysis(unquote(rid), h._body())),
     # Разовое предложение включить авто-анализ (обновившимся с 0.2.x): ответ.
     ("POST", re.compile(r"^/recordings/([^/]+)/analysis/consent$"),
      lambda h, p, rid: _server_of(h).state.analysis_consent(unquote(rid), h._body())),
@@ -923,7 +927,7 @@ _PATTERNS = (
     ("GET", re.compile(r"^/recordings/([^/]+)/improve$"),
      lambda h, p, rid: _server_of(h).state.improve(unquote(rid))),
     ("POST", re.compile(r"^/recordings/([^/]+)/improve$"),
-     lambda h, p, rid: _server_of(h).state.make_improve(unquote(rid))),
+     lambda h, p, rid: _server_of(h).state.make_improve(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/improve/apply$"),
      lambda h, p, rid: _server_of(h).state.improve_apply(unquote(rid), h._body())),
     ("POST", re.compile(r"^/recordings/([^/]+)/improve/dismiss$"),
@@ -933,7 +937,7 @@ _PATTERNS = (
      lambda h, p, rid: _server_of(h).state.set_category(unquote(rid), h._body())),
     # «Предложить название»: только предложение, применяет окно (PATCH записи).
     ("POST", re.compile(r"^/recordings/([^/]+)/title/suggest$"),
-     lambda h, p, rid: _server_of(h).state.suggest_title(unquote(rid))),
+     lambda h, p, rid: _server_of(h).state.suggest_title(unquote(rid), h._body())),
     # Вкладка «Агент»: transcript.md в папке записи перед запуском Claude Code / Codex;
     # тело {"provider": …} — метка «здесь работал агент» в meta.json.
     ("POST", re.compile(r"^/recordings/([^/]+)/agent-context$"),

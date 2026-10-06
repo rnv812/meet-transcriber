@@ -19,7 +19,7 @@ PROVIDERS = ("claude-code", "codex", "opencode", "openai-compatible")
 # OpenCode, едва тот появился на машине.
 AUTO_PROVIDERS = ("claude-code", "codex", "openai-compatible")
 
-__all__ = ["AUTO_PROVIDERS", "LABELS", "PROVIDERS", "AgentReply", "Runner", "agent_model", "choice_error",
+__all__ = ["AUTO_PROVIDERS", "LABELS", "PROVIDERS", "AgentReply", "Runner", "agent_model", "choice_error", "not_found",
            "describe", "is_local", "label", "models", "provider_ready", "resolve", "runner_for", "tier_kwargs"]
 
 # Имена моделей для человека: окно, подпись итогов, журнал.
@@ -145,10 +145,11 @@ def choice_error(cfg: "Settings", name: str) -> str | None:
         return f"модель «{LABELS[name]}» не включена в настройках (раздел «Ассистент» → «Модели»)"
     if provider_ready(name, cfg, need_login=False):
         return None
-    return _not_found(name, cfg)
+    return not_found(name, cfg)
 
 
-def _not_found(name: str, cfg: "Settings") -> str:
+def not_found(name: str, cfg: "Settings") -> str:
+    """Почему модели `name` нет на машине — текст для человека."""
     from meet.llm import detect
 
     if name == "claude-code":
@@ -215,6 +216,6 @@ def models(cfg: "Settings", found: dict) -> list[dict]:
             "default": cfg.llm.provider == name,
             "local": is_local(name, cfg),
             "available": available,
-            "reason": None if available else _not_found(name, cfg),
+            "reason": None if available else not_found(name, cfg),
         })
     return out

@@ -135,7 +135,7 @@ def test_get_summary_and_qa(state, tmp_path):
     folder = tmp_path / "recordings" / RID
     (folder / "summary.md").write_text("# Итоги — x\n", encoding="utf-8")
     library.write_meta(folder, {"summary_at": 123.0})
-    assert state.summary(RID) == {"markdown": "# Итоги — x\n", "created_at": 123.0}
+    assert state.summary(RID) == {"markdown": "# Итоги — x\n", "created_at": 123.0, "llm": None}
     assert state.qa(RID) == {"items": []}
     (folder / "qa.jsonl").write_text('{"q": "а", "a": "б", "at": 1.0, "provider": "x"}\n',
                                      encoding="utf-8")
@@ -200,7 +200,7 @@ def test_provider_cache_expires_but_serves_stale_value(monkeypatch):
     answers = iter(["codex", "claude-code"])
     cache = tray_control.ProviderCache(resolve=lambda cfg: (next(answers), None),
                                        ttl=60.0, clock=lambda: now[0])
-    cfg = type("Cfg", (), {"llm": type("L", (), {"provider": "auto",
+    cfg = type("Cfg", (), {"llm": type("L", (), {"provider": "auto", "enabled": (),
                                                  "base_url": "u"})()})()
     cache.get(cfg)
     _wait(lambda: cache.get(cfg) == ("codex", False))
@@ -214,7 +214,7 @@ def test_provider_cache_survives_resolve_failure():
         raise OSError("нет")
 
     cache = tray_control.ProviderCache(resolve=boom)
-    cfg = type("Cfg", (), {"llm": type("L", (), {"provider": "auto",
+    cfg = type("Cfg", (), {"llm": type("L", (), {"provider": "auto", "enabled": (),
                                                  "base_url": "u"})()})()
     cache.get(cfg)
     _wait(lambda: cache.get(cfg) == (None, False))
@@ -301,7 +301,7 @@ def test_invalidate_during_refresh_is_not_lost():
         return answers.pop(0), None
 
     cache = tray_control.ProviderCache(resolve=resolve)
-    cfg = type("Cfg", (), {"llm": type("L", (), {"provider": "auto",
+    cfg = type("Cfg", (), {"llm": type("L", (), {"provider": "auto", "enabled": (),
                                                  "base_url": "u"})()})()
     assert cache.get(cfg) == (None, True)
     cache.invalidate()  # проверка ещё идёт
