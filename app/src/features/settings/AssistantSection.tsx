@@ -1,6 +1,12 @@
 /**
- * Настройки «Ассистент»: кто отвечает (провайдер модели), откуда знания, окно
- * живой расшифровки. Куда выгружаются встречи — раздел «Экспорт встреч».
+ * Настройки «Ассистент»: модели (какие включены и какая по умолчанию), откуда
+ * знания, окно живой расшифровки. Куда выгружаются встречи — раздел «Экспорт встреч».
+ *
+ * «Модели» (0.3.4): включённые модели (`llm.enabled`) можно выбрать у действий
+ * карточки — «Переанализировать», «Итоги», «Улучшить расшифровку», «Предложить
+ * название»; модель по умолчанию (`llm.provider`, «Авто» — первая готовая из
+ * включённых) делает всю автоматическую работу. У каждой включённой — куда
+ * уходит текст встречи.
  *
  * Сведения о провайдерах (`GET /assistant`) — не черновик: что найдено на
  * машине и кого выбрал бы «Авто». Резидент кэширует выбор по сохранённым
@@ -20,6 +26,7 @@ import { FolderRow, Row, type Raw, type SetFn } from "./Section";
 import { LiveHintsRows } from "./LiveHintsRows";
 import { AgentLaunchSection, agentLaunchChangesInvalid } from "./AgentLaunchSection";
 import { KnowledgeTip, LiveWindowTip, ProviderTip } from "./tips";
+import { PRIVACY_CLOUD, PRIVACY_LOCAL } from "../../lib/llm";
 
 type Provider = { value: string; label: string; link?: string };
 
@@ -32,8 +39,45 @@ const PROVIDERS: Provider[] = [
 ];
 const LOCAL = "openai-compatible";
 const OPENCODE = "opencode";
+const CLAUDE = "claude-code";
+/** Настоящие модели в порядке окна (как `llm.enabled` у резидента). */
+const CONCRETE = PROVIDERS.filter((p) => p.value !== "auto").map((p) => p.value);
+/** Кандидаты «Авто» — его выбор у конфига без списка включённых. */
+const AUTO_CANDIDATES = ["claude-code", "codex", "openai-compatible"];
 /** Ключи `llm`, по которым идёт проверка и выбор «Авто». */
-const LLM_KEYS = ["provider", "base_url", "local_model", "proxy", "opencode_model"];
+const LLM_KEYS = ["provider", "base_url", "local_model", "proxy", "opencode_model", "enabled"];
+
+/**
+ * Включённые модели из черновика `llm`: список резидента, а у конфига без него
+ * (старый резидент) — как читает резидент: у «Авто» его кандидаты, иначе одна
+ * модель. Модель по умолчанию включена всегда.
+ */
+export function enabledOf(llm: Record<string, unknown> | undefined): string[] {
+  const provider = String(llm?.provider ?? "auto");
+  const raw = Array.isArray(llm?.enabled) ? (llm.enabled as unknown[]) : provider === "auto" ? AUTO_CANDIDATES : [provider];
+  const wanted = new Set(raw.filter((x): x is string => typeof x === "string"));
+  if (provider !== "auto") wanted.add(provider);
+  return CONCRETE.filter((p) => wanted.has(p));
+}
+
+/** Локальная модель на этом компьютере (адрес — localhost/127.x): как `meet.llm.is_local`. */
+export function loopback(baseUrl: string): boolean {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return host === "localhost" || host === "::1" || host.startsWith("127.");
+  } catch {
+    return false;
+  }
+}
+
+/** Куда уходит текст встречи у модели `provider`. */
+export function privacyLine(provider: string, baseUrl: string): string {
+  if (provider !== LOCAL) return PRIVACY_CLOUD;
+  if (loopback(baseUrl)) return PRIVACY_LOCAL;
+  let host = baseUrl;
+  try { host = new URL(baseUrl).host; } catch { /* адрес как есть */ }
+  return `сервер в сети — текст встречи уходит на ${host}`;
+}
 
 /** Подпись `llm.model`: на неё ссылаются подсказки других разделов. */
 export const MODEL_LABEL = "Модель Claude Code";
@@ -157,7 +201,7 @@ export function assistantChangesInvalid(changes: Raw): boolean {
 }
 
 /** Подпись «Авто», пока выбран конкретный провайдер: порядок выбора (llm.resolve). */
-export const AUTO_ORDER = "первый готовый: Claude Code → Codex → локальная (OpenCode — только явным выбором)";
+export const AUTO_ORDER = "первый готовый из включённых: Claude Code → Codex → локальная (OpenCode — только явным выбором)";
 
 const titleOf = (name: string) => PROVIDERS.find((p) => p.value === name)?.label ?? name;
 
@@ -222,6 +266,16 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
 
   const llm = (k: string) => draft.llm?.[k];
   const chosen = String(llm("provider") ?? "auto");
+  const enabled = enabledOf(draft.llm);
+  const on = (name: string) => enabled.includes(name);
+  /** Модель по умолчанию — она же включена. */
+  const makeDefault = (name: string) => {
+    set("llm", "provider", name);
+    if (name !== "auto" && !on(name)) set("llm", "enabled", CONCRETE.filter((p) => p === name || on(p)));
+  };
+  const toggle = (name: string, value: boolean) =>
+    set("llm", "enabled", CONCRETE.filter((p) => (p === name ? value : on(p))));
+  const baseUrl = String(llm("base_url") ?? "");
   const llmDirty = LLM_KEYS.some((k) => JSON.stringify(draft.llm?.[k] ?? null) !== JSON.stringify(saved.llm?.[k] ?? null));
   const win = draft.assist?.window_seconds as number | null | undefined;
   const proxy = String(llm("proxy") ?? "system");
@@ -236,20 +290,33 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
 
   return (
     <>
-      <Row label="Провайдер модели" hint="Готовит итоги, отвечает на вопросы и ведёт живой обзор встречи"
+      <Row label="Модели"
+        hint="Включённые можно выбрать у действий карточки. Модель по умолчанию готовит анализ, итоги и названия автоматически и ведёт живого ассистента"
         help={<ProviderTip />} stack>
-        <div role="radiogroup" aria-label="Провайдер модели" className="providers">
+        <div role="radiogroup" aria-label="Модель по умолчанию" className="providers">
           {PROVIDERS.map((p) => {
             const line = status(p, info);
             const missing = p.link && info?.available[p.value]?.found === false;
             const c = checks[p.value];
+            const concrete = p.value !== "auto";
             return (
               <div key={p.value} role="group" aria-label={p.label} className="provider">
-                <label className="radios__item">
-                  <input type="radio" name="llm-provider" checked={chosen === p.value}
-                    onChange={() => set("llm", "provider", p.value)} />
-                  {p.label}
-                </label>
+                <div className="provider__head">
+                  <label className="radios__item" title="Модель по умолчанию: вся автоматическая работа">
+                    <input type="radio" name="llm-provider" checked={chosen === p.value}
+                      onChange={() => makeDefault(p.value)} />
+                    {p.label}
+                  </label>
+                  {chosen === p.value && <span className="provider__default">по умолчанию</span>}
+                  {concrete && (
+                    <label className="provider__enable"
+                      title={chosen === p.value ? "Модель по умолчанию включена всегда" : "Можно выбрать у действий карточки"}>
+                      <input type="checkbox" aria-label={`Включить: ${p.label}`} checked={on(p.value)}
+                        disabled={chosen === p.value} onChange={(e) => toggle(p.value, e.target.checked)} />
+                      включена
+                    </label>
+                  )}
+                </div>
                 <div className="provider__status">
                   {missing ? (
                     <span className="muted">не найден — установите{" "}
@@ -260,6 +327,11 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
                     </span>
                   ) : line ? <span className="muted">{line}</span> : null}
                 </div>
+                {concrete && on(p.value) && (
+                  <div className={`provider__privacy${p.value === LOCAL && loopback(baseUrl) ? " provider__privacy--local" : ""}`}>
+                    {privacyLine(p.value, baseUrl)}
+                  </div>
+                )}
                 <div className="provider__check">
                   <Button onClick={() => void check(p.value)} disabled={c?.busy}>
                     {c?.busy ? "Проверяю…" : "Проверить"}
@@ -273,7 +345,7 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
           {llmDirty && <span className="muted">Проверяются сохранённые настройки — сначала сохраните изменения</span>}
         </div>
       </Row>
-      {chosen !== LOCAL && chosen !== "codex" && chosen !== OPENCODE && (
+      {on(CLAUDE) && (
         <Row label={MODEL_LABEL} htmlFor="llm-model" help={<ModelTip />}
           hint="Готовит итоги и анализ, отвечает на вопросы и ведёт живого ассистента">
           <input id="llm-model" type="text" placeholder="sonnet"
@@ -281,7 +353,7 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
             onChange={(e) => set("llm", "model", e.target.value)} />
         </Row>
       )}
-      {chosen === OPENCODE && (
+      {on(OPENCODE) && (
         <Row label={OPENCODE_MODEL_LABEL} htmlFor="llm-opencode-model" help={<OpencodeModelTip />}
           hint="Провайдер/модель, как в opencode models. Пусто — модель из настроек OpenCode">
           <input id="llm-opencode-model" type="text" spellCheck={false} placeholder="anthropic/claude-sonnet-4-5"
@@ -289,7 +361,7 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
           {ocModelProblem && <span className="error">{ocModelProblem}</span>}
         </Row>
       )}
-      {chosen === LOCAL && (
+      {on(LOCAL) && (
         <>
           <p className="muted sdesc">Локальная модель не использует базу знаний.</p>
           <Row label="Адрес сервера" htmlFor="llm-base-url" hint="OpenAI-совместимый адрес LM Studio или Ollama">

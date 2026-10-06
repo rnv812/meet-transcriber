@@ -143,11 +143,18 @@
 /* «Ассистент»: провайдеры столбиком, у каждого — статус и «Проверить». */
 .providers { display: flex; flex-direction: column; gap: 10px; align-items: stretch; min-width: 320px; }
 .provider { display: grid; grid-template-columns: 1fr minmax(0, 300px); gap: 2px 12px; align-items: center; }
+/* Первая строка модели: «по умолчанию» (радио), метка и «включена». */
+.provider__head { grid-column: 1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.provider__default { font-size: 11px; color: var(--accent-hi); }
+.provider__enable { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 12px; color: var(--text-2); }
+/* Куда уходит текст встречи у включённой модели. */
+.provider__privacy { grid-column: 1; font-size: 12px; padding-left: 22px; color: var(--text-2); }
+.provider__privacy--local { color: var(--ok); }
 /* Строка статуса есть всегда (пустая, пока сведения не пришли): строки не сдвигаются. */
 .provider__status { grid-column: 1; min-height: 18px; font-size: 12px; word-break: break-all; padding-left: 22px; }
 /* «Проверить» — у правого края во всех строках; итог проверки — слева от кнопки. */
 .provider__check {
-  grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: row-reverse; align-items: center; gap: 8px;
+  grid-column: 2; grid-row: 1 / span 3; display: flex; flex-direction: row-reverse; align-items: center; gap: 8px;
   justify-content: flex-start; min-width: 0;
 }
 .provider__check .btn { min-width: 96px; }

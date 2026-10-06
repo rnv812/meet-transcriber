@@ -1,7 +1,9 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SettingsPane } from "./SettingsPane";
-import { AUTO_ORDER, RECHECK_MS, RECHECK_TRIES, opencodeModelError, proxyError } from "./AssistantSection";
+import {
+  AUTO_ORDER, RECHECK_MS, RECHECK_TRIES, enabledOf, loopback, opencodeModelError, privacyLine, proxyError,
+} from "./AssistantSection";
 import * as api from "../../lib/api";
 import * as shell from "../../lib/shell";
 import type { AssistantInfo, ProviderCheck } from "../../lib/types";
@@ -25,7 +27,8 @@ const ep = { base: "/api", token: null };
 const settings = {
   recording: { speaker_name: "Вы", auto_transcribe: true },
   ui: { notifications: "all" },
-  llm: { provider: "auto", model: "sonnet", base_url: "http://127.0.0.1:1234/v1", local_model: null },
+  llm: { provider: "auto", model: "sonnet", base_url: "http://127.0.0.1:1234/v1", local_model: null,
+    enabled: ["claude-code", "codex"] },
   assist: { vault: null, window_seconds: 20, port: 8765, voices: true },
   assistant: { knowledge_dir: "D:\\kb", notes_dir: null, notes_subdir: "Встречи" },
 };
@@ -157,7 +160,7 @@ test("выбор «Локальная» — поля адреса и модел�
   await userEvent.type(screen.getByRole("textbox", { name: "Имя модели" }), "qwen3");
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
-    llm: { provider: "openai-compatible", local_model: "qwen3" },
+    llm: { provider: "openai-compatible", enabled: ["claude-code", "codex", "openai-compatible"], local_model: "qwen3" },
   }));
   await waitFor(() => expect(api.getAssistant).toHaveBeenCalledTimes(2));
 });
@@ -382,7 +385,7 @@ test("«Только сводка» — число подсказок не вы�
   }
 });
 
-test("модель Claude Code: правка уходит в llm.model; у Codex и локальной поля нет", async () => {
+test("модель Claude Code: правка уходит в llm.model; Claude Code выключен — поля нет", async () => {
   open();
   const model = await screen.findByRole("textbox", { name: "Модель Claude Code" });
   expect(model).toHaveValue("sonnet");
@@ -391,8 +394,9 @@ test("модель Claude Code: правка уходит в llm.model; у Codex
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, { llm: { model: "opus" } }));
   await userEvent.click(screen.getByRole("radio", { name: "Codex" }));
-  expect(screen.queryByRole("textbox", { name: "Модель Claude Code" })).toBeNull();
-  await userEvent.click(screen.getByRole("radio", { name: "Локальная (LM Studio / Ollama)" }));
+  // Модель по умолчанию — Codex, но Claude Code включён: его модель всё ещё задаётся.
+  expect(screen.getByRole("textbox", { name: "Модель Claude Code" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("checkbox", { name: "Включить: Claude Code" }));
   expect(screen.queryByRole("textbox", { name: "Модель Claude Code" })).toBeNull();
 });
 
@@ -408,11 +412,11 @@ test("OpenCode: не найден — ссылка opencode.ai/docs/; найде
   expect(shell.openUrl).toHaveBeenCalledWith("https://opencode.ai/docs/");
 });
 
-test("OpenCode: своё поле модели провайдер/модель, проверка на месте; модели Claude Code нет", async () => {
+test("OpenCode: своё поле модели провайдер/модель, проверка на месте", async () => {
   open();
   await screen.findByText("сейчас: Claude Code");
+  expect(screen.queryByRole("textbox", { name: "Модель OpenCode" })).toBeNull();
   await userEvent.click(screen.getByRole("radio", { name: "OpenCode" }));
-  expect(screen.queryByRole("textbox", { name: "Модель Claude Code" })).toBeNull();
   const model = screen.getByRole("textbox", { name: "Модель OpenCode" });
   expect(model).toHaveValue("");
   await userEvent.type(model, "sonnet");
@@ -423,7 +427,7 @@ test("OpenCode: своё поле модели провайдер/модель, 
   expect(screen.queryByText(/в виде провайдер\/модель/)).toBeNull();
   await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
-    llm: { provider: "opencode", opencode_model: "anthropic/claude-sonnet-4-5" },
+    llm: { provider: "opencode", enabled: ["claude-code", "codex", "opencode"], opencode_model: "anthropic/claude-sonnet-4-5" },
   }));
 });
 
@@ -446,5 +450,45 @@ test("«Проверить» OpenCode уходит провайдеру opencode
 });
 
 test("«Авто» OpenCode не выбирает — так и подписано", async () => {
-  expect(AUTO_ORDER).toBe("первый готовый: Claude Code → Codex → локальная (OpenCode — только явным выбором)");
+  expect(AUTO_ORDER).toBe(
+    "первый готовый из включённых: Claude Code → Codex → локальная (OpenCode — только явным выбором)");
+});
+
+
+// --- «Модели»: несколько включённых и одна по умолчанию (0.3.4) -------------------------
+
+test("включённые модели: старый конфиг читается как у резидента, по умолчанию включена всегда", () => {
+  expect(enabledOf({ provider: "codex" })).toEqual(["codex"]);
+  expect(enabledOf({ provider: "auto" })).toEqual(["claude-code", "codex", "openai-compatible"]);
+  expect(enabledOf({ provider: "opencode", enabled: ["openai-compatible", "x"] })).toEqual(["opencode", "openai-compatible"]);
+});
+
+test("подсказка приватности: локальная — только на этом компьютере", () => {
+  expect(loopback("http://127.0.0.1:1234/v1")).toBe(true);
+  expect(loopback("http://localhost:11434/v1")).toBe(true);
+  expect(loopback("http://10.0.0.5:1234/v1")).toBe(false);
+  expect(privacyLine("openai-compatible", "http://127.0.0.1:1234/v1")).toBe("локальная — данные не покидают компьютер");
+  expect(privacyLine("claude-code", "http://127.0.0.1:1234/v1")).toBe("облачная — текст встречи уходит провайдеру");
+  expect(privacyLine("openai-compatible", "http://10.0.0.5:1234/v1")).toBe("сервер в сети — текст встречи уходит на 10.0.0.5:1234");
+});
+
+test("включить вторую модель: у каждой включённой — куда уходит текст; сохраняется список", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, {
+    llm: { provider: "openai-compatible", enabled: ["openai-compatible"], local_model: "qwen3" },
+  }));
+  open();
+  const local = await screen.findByRole("group", { name: "Локальная (LM Studio / Ollama)" });
+  expect(within(local).getByText("локальная — данные не покидают компьютер")).toBeInTheDocument();
+  expect(within(local).getByText("по умолчанию")).toBeInTheDocument();
+  // Модель по умолчанию выключить нельзя.
+  expect(within(local).getByRole("checkbox", { name: "Включить: Локальная (LM Studio / Ollama)" })).toBeDisabled();
+  const claude = screen.getByRole("group", { name: "Claude Code" });
+  expect(within(claude).queryByText(/облачная/)).toBeNull();
+  await userEvent.click(within(claude).getByRole("checkbox", { name: "Включить: Claude Code" }));
+  expect(within(claude).getByText("облачная — текст встречи уходит провайдеру")).toBeInTheDocument();
+  expect(screen.getByRole("radio", { name: "Локальная (LM Studio / Ollama)" })).toBeChecked();
+  await userEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.patchSettings).toHaveBeenCalledWith(ep, {
+    llm: { enabled: ["claude-code", "openai-compatible"] },
+  }));
 });

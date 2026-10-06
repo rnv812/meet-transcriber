@@ -99,6 +99,8 @@ export type Job = {
   created_at?: number;
   started_at?: number | null;
   finished_at?: number | null;
+  /** Задача модели: модель, выбранная человеком для этого действия (0.3.4); нет — модель по умолчанию. */
+  provider?: string;
 };
 
 export type Recording = {
@@ -115,6 +117,8 @@ export type Recording = {
    * "ai" — предложила модель (бейдж «ИИ»), "site" — заголовок окна звонка. Нет у старых резидентов.
    */
   title_source?: TitleSource;
+  /** Какая модель придумала название «ИИ» (0.3.4); не от модели или неизвестно — null. */
+  title_llm?: LlmOrigin | null;
   source: string;
   /** Когда записан транскрипт (секунды эпохи), нет — null. */
   transcript_at?: number | null;
@@ -550,8 +554,11 @@ export const isLevel = (e: BusEvent): e is LevelEvent => e.kind === "record.leve
 
 // --- ассистент ---------------------------------------------------------------
 
-/** `GET /recordings/{id}/summary`; итогов нет — 404. */
-export type Summary = { markdown: string; created_at: number | null };
+/** Какая модель сделала результат (анализ, итоги, название, улучшение): `model` — имя из настроек, у Codex — null. */
+export type LlmOrigin = { provider: string; model: string | null };
+
+/** `GET /recordings/{id}/summary`; итогов нет — 404. `llm` — какая модель их сделала (с 0.3.4). */
+export type Summary = { markdown: string; created_at: number | null; llm?: LlmOrigin | null };
 
 /** Пара из `qa.jsonl`; `at` — секунды эпохи. */
 export type QaItem = { q: string; a: string; at: number; provider: string | null };
@@ -563,9 +570,28 @@ export type ProviderAvailability = { found: boolean; path?: string | null; base_
  * `GET /assistant`. `provider` — кто ответит сейчас; null при `checking` значит
  * «ещё считается», а не «никого нет».
  */
+/**
+ * Включённая модель для выбора у действий карточки (`GET /assistant` → `models`):
+ * `local` — данные не покидают компьютер, `available` — найдена на машине (вход в CLI
+ * не проверяется), иначе `reason`.
+ */
+export type ModelChoice = {
+  provider: string;
+  model: string | null;
+  label: string;
+  default: boolean;
+  local: boolean;
+  available: boolean;
+  reason: string | null;
+};
+
 export type AssistantInfo = {
   provider: string | null;
+  /** Модель по умолчанию: "auto" или имя провайдера. */
   setting: string;
+  /** Включённые модели (0.3.4); нет у старых резидентов. */
+  enabled?: string[];
+  models?: ModelChoice[];
   available: Record<string, ProviderAvailability>;
   knowledge_dir: string | null;
   checking: boolean;
@@ -767,7 +793,9 @@ export type AnalysisInsight = { id: string; kind: InsightKind; text: string; ref
  */
 export type Analysis = {
   version: 1;
+  /** «claude-code:sonnet» — подпись прежних версий; с 0.3.4 есть и `llm`. */
   model: string;
+  llm?: LlmOrigin;
   created_at: number;
   fingerprint: string;
   /** Сколько сегментов было в расшифровке (M3): устаревший анализ с тем же числом ещё можно показать. */
@@ -797,7 +825,7 @@ export type AnalysisState = {
 };
 
 /** `POST /recordings/{id}/title/suggest`: название и откуда оно (свежий анализ или вызов модели). */
-export type TitleSuggestion = { title: string; from: "analysis" | "model" };
+export type TitleSuggestion = { title: string; from: "analysis" | "model"; llm?: LlmOrigin };
 
 // --- «Улучшить расшифровку» ------------------------------------------------------
 
@@ -823,6 +851,7 @@ export type ImproveGroup = {
 export type ImproveProposal = {
   version: number;
   model: string;
+  llm?: LlmOrigin;
   created_at: number;
   fingerprint: string;
   segments: number;
