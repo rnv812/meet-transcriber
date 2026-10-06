@@ -122,7 +122,7 @@ class VoiceMatcher:
 
     @property
     def enabled(self) -> bool:
-        return self._embed is not None and (bool(self.base) or bool(self.owner))
+        return self._embed is not None and (bool(self.base) or (bool(self.owner) and self.mic is not False))
 
     def _settings(self) -> None:
         """Порог имени и «делить микрофон» — из настроек, если не заданы."""
@@ -156,8 +156,10 @@ class VoiceMatcher:
                 self._log(f"голоса: образец владельца не прочитан ({type(e).__name__}: {e})")
                 self.owner = []
         self._settings()
-        if not self.base and not self.owner:
-            self._log("голоса: база пуста и образца владельца нет - live-имена выключены")
+        if not self.base and not (self.owner and self.mic):
+            # Называть некого, микрофон делить не по чему (или выключено) —
+            # эмбеддер не нужен ни одной дорожке.
+            self._log("голоса: база пуста и микрофон не делится - live-имена выключены")
             return
         if self._embed is None:
             try:

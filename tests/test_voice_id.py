@@ -55,6 +55,22 @@ def test_load_builds_embedder_for_owner_sample_alone(monkeypatch):
     assert m.enabled and m.owner == owner
 
 
+def test_owner_sample_with_mic_split_off_does_not_build_embedder(monkeypatch):
+    """Ревью M1: образец есть, но микрофон не делится, а базы нет — эмбеддер
+    не нужен ни одной дорожке."""
+    import meet.voice_id as vid
+    from meet.owner_voice import OwnerSample
+
+    owner = [OwnerSample(id="a", embedding=np.array([0.0, 1.0]), source="enroll", date="d", seconds=20.0)]
+    built = []
+    monkeypatch.setattr(vid, "load_voices", lambda: {})
+    monkeypatch.setattr("meet.owner_voice.load", lambda voices=None: owner)
+    monkeypatch.setattr(vid, "_load_embedder", lambda: built.append(1) or _embed)
+    m = VoiceMatcher(threshold=0.7, mic=False, log=lambda line: None)
+    m.load()
+    assert built == [] and not m.enabled
+
+
 def test_threshold_and_mic_flag_come_from_settings(monkeypatch):
     import dataclasses
 
