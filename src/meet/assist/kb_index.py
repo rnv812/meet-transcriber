@@ -128,6 +128,54 @@ def _terms_of(path: Path, ref: str) -> list[Term]:
     return out
 
 
+def exclude_prefixes(exclude) -> tuple[str, ...]:
+    """Настройка `assist.kb_exclude` → приставки путей относительно базы
+    («Личное/» → «личное»): разделители — «/», без краевых, без регистра и «ё»."""
+    out: list[str] = []
+    for item in exclude or ():
+        if not isinstance(item, str):
+            continue
+        text = item.strip().replace("\\", "/").strip("/")
+        text = "/".join(p for p in text.split("/") if p and p != ".")
+        if text:
+            out.append(_norm(text).casefold())
+    return tuple(dict.fromkeys(out))
+
+
+def is_excluded(rel: str, prefixes) -> bool:
+    """Путь заметки (относительно базы, через «/») внутри исключённой папки
+    или сам исключённый файл."""
+    key = _norm(rel).casefold().strip("/")
+    return any(key == p or key.startswith(p + "/") for p in prefixes)
+
+
+def walk_kb(root, *, suffixes=SUFFIXES, exclude=(), limit: int | None = None):
+    """Файлы базы (или любой папки) с нужными расширениями по порядку имён:
+    без служебных и скрытых папок и файлов, без исключённых папок
+    (`exclude` — как в `assist.kb_exclude`). Не больше `limit` файлов."""
+    root = Path(root)
+    prefixes = exclude_prefixes(exclude)
+    suffixes = tuple(s.lower() for s in suffixes)
+    count = 0
+    for here, dirs, names in os.walk(root):
+        rel_here = Path(here).relative_to(root).as_posix()
+        rel_here = "" if rel_here == "." else rel_here + "/"
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")
+                         and not is_excluded(rel_here + d, prefixes))
+        for name in sorted(names):
+            if name.startswith(".") or Path(name).suffix.lower() not in suffixes:
+                continue
+            if is_excluded(rel_here + name, prefixes):
+                continue
+            path = Path(here) / name
+            if not path.is_file():
+                continue
+            if limit is not None and count >= limit:
+                return
+            count += 1
+            yield path
+
+
 class TermIndex:
     def __init__(self, terms: list[Term]) -> None:
         self.terms = terms

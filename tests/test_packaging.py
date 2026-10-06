@@ -45,7 +45,7 @@ def _requirements() -> dict[str, str]:
 def test_core_dependencies_cover_resident_imports():
     names = _requirements()
     for needed in ("pystray", "pillow", "pycaw", "psutil", "pyaudiowpatch", "numpy",
-                   "scipy", "aiohttp", "claude-agent-sdk", "keyring", "sounddevice"):
+                   "scipy", "aiohttp", "claude-agent-sdk", "keyring", "sounddevice", "pypdf"):
         assert needed in names
 
 
@@ -56,7 +56,7 @@ def test_windows_only_and_mac_only_dependencies_carry_markers():
     for windows_only in ("pystray", "pycaw", "pyaudiowpatch"):
         assert names[windows_only] == "sys_platform == 'win32'", windows_only
     assert names["sounddevice"] == "sys_platform == 'darwin'"
-    for shared in ("pillow", "psutil", "numpy", "scipy", "aiohttp", "claude-agent-sdk", "keyring"):
+    for shared in ("pillow", "psutil", "numpy", "scipy", "aiohttp", "claude-agent-sdk", "keyring", "pypdf"):
         assert names[shared] == "", shared
 
 
