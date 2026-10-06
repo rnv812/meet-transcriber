@@ -535,12 +535,15 @@ class LiveVoices:
     def _owner_present(self, tv: TrackVoices) -> bool:
         """Владелец в микрофоне найден (mic_split._roles, §2.4): от
         MIN_VOICED_S секунд с голосом и среди кластеров от
-        OWNER_PRESENT_SHARE этой речи есть похожий на образец от T_OTHER."""
+        OWNER_PRESENT_SHARE этой речи есть похожий на образец от T_OTHER.
+        Уже найденный остаётся найденным до половины этой доли: доля владельца
+        в живом микрофоне гуляет около порога, и подписи «рядом» иначе мигали бы."""
         voiced = self._mic_voiced
         if voiced < mic_split.MIN_VOICED_S:
             return False
+        share = mic_split.OWNER_PRESENT_SHARE / (2 if self._present else 1)
         big = [c for c in [tv.owner(), *tv.live()]
-               if c is not None and c.seconds >= mic_split.OWNER_PRESENT_SHARE * voiced]
+               if c is not None and c.seconds >= share * voiced]
         present = any(owner_voice.score(c.center, self._owner, self._device) >= mic_split.T_OTHER
                       for c in big)
         if not present and not self._missing_logged:

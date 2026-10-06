@@ -457,3 +457,15 @@ def test_pinned_speaker_back_to_back_embeds_every_second_segment():
     # С паузой больше PINNED_GAP_S — снова каждый.
     feed(v, "sys", 1, 2, start=t + 1.0, gap=1.0)
     assert len(calls) == n + 4
+
+
+def test_found_owner_stays_found_when_the_room_talks_more():
+    """Доля владельца падает ниже 30 % — найденный владелец не «теряется»
+    (иначе «Собеседник рядом» мигал бы с «Вы»), пока она от 15 %."""
+    lines = []
+    v = voices(owner=owner_samples(), log=lines.append)
+    _, t = feed(v, "mic", 3, 6)  # 12 с владельца
+    room, _ = feed(v, "mic", 4, 20, start=t)  # 40 с человека рядом: доля владельца 23 %
+    assert room[-1].speaker == lv.ROOM_SPEAKER
+    assert not any("не найден" in line for line in lines)
+    assert v.drain() == [("s/mic:0", lv.ROOM_SPEAKER)]
