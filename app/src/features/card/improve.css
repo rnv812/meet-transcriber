@@ -69,6 +69,7 @@
 .improve__foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; }
 .improve__btns { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .improve__total { font-size: 12px; }
+.improve__why { color: var(--err); font-size: 12px; }
 
 .find__tool {
   flex: none; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 9px;

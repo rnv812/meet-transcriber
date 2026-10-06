@@ -1,7 +1,9 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RecordingCard } from "./RecordingCard";
-import { ImproveDialog, ImproveStatus, chosenExtra, chosenGroups, cleanTarget, improveJobOf } from "./improve";
+import {
+  ImproveDialog, ImproveStatus, chosenExtra, chosenGroups, cleanTarget, improveJobOf, targetProblem,
+} from "./improve";
 import * as api from "../../lib/api";
 import type { ImproveGroup, ImproveState, Job, Recording, Transcript } from "../../lib/types";
 
@@ -365,10 +367,15 @@ test("правка: пусто — ошибка, применить нельзя
   expect(screen.getByRole("textbox", { name: "Как правильно: апи" })).toHaveAttribute("aria-invalid", "true");
   expect(screen.getByRole("alert")).toHaveTextContent("Впишите, как правильно");
   expect(screen.getByRole("button", { name: "Применить выбранное" })).toBeDisabled();
-  // Уход из поля пустое тоже не принимает.
+  // Уход из поля пустое тоже не принимает: поле остаётся, фокус — обратно в него.
   await userEvent.tab();
-  expect(screen.getByRole("textbox", { name: "Как правильно: апи" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Применить выбранное" })).toBeDisabled();
+  const still = screen.getByRole("textbox", { name: "Как правильно: апи" });
+  await waitFor(() => expect(still).toHaveFocus());
+  const apply = screen.getByRole("button", { name: "Применить выбранное" });
+  expect(apply).toBeDisabled();
+  // Почему недоступно — видно рядом с кнопкой и связано с ней.
+  expect(screen.getByText("Сначала исправьте, как правильно, или отмените правку (Esc)")).toBeVisible();
+  expect(apply).toHaveAccessibleDescription("Сначала исправьте, как правильно, или отмените правку (Esc)");
   await userEvent.type(screen.getByRole("textbox", { name: "Как правильно: апи" }), "{Escape}");
   expect(screen.queryByRole("alert")).toBeNull();
   expect(rowOf("апи")).toHaveTextContent("апи → API");
@@ -466,4 +473,46 @@ test("cleanTarget: пробелы по краям и внутри, NFC", () => {
   expect(cleanTarget("  MS\t SP  ")).toBe("MS SP");
   expect(cleanTarget("Ё")).toBe("Ё");
   expect(cleanTarget("   ")).toBe("");
+});
+
+test("правка: длиннее 200 символов — ошибка, применить нельзя; укоротили — принимается", async () => {
+  const props = dialog();
+  await userEvent.click(screen.getByRole("button", { name: "Изменить замену: апи" }));
+  const input = screen.getByRole("textbox", { name: "Как правильно: апи" });
+  await userEvent.clear(input);
+  await userEvent.paste("M".repeat(201));
+  await userEvent.keyboard("{Enter}");
+  expect(screen.getByRole("alert")).toHaveTextContent("Слишком длинно: не больше 200 символов");
+  expect(input).toHaveAccessibleDescription("Слишком длинно: не больше 200 символов");
+  expect(screen.getByRole("button", { name: "Применить выбранное" })).toBeDisabled();
+  await userEvent.keyboard("{Backspace}{Enter}");
+  expect(screen.queryByRole("alert")).toBeNull();
+  await userEvent.click(screen.getByRole("button", { name: "Применить выбранное" }));
+  expect(props.onApply).toHaveBeenCalledWith(["g1", "g2", "g3"], {}, false, false, { g1: "M".repeat(200) });
+});
+
+test("правка: одни невидимые знаки — как пусто; управляющие внутри — ошибка", async () => {
+  dialog();
+  await userEvent.click(screen.getByRole("button", { name: "Изменить замену: апи" }));
+  const input = screen.getByRole("textbox", { name: "Как правильно: апи" });
+  await userEvent.clear(input);
+  await userEvent.paste("​‍");
+  await userEvent.keyboard("{Enter}");
+  expect(screen.getByRole("alert")).toHaveTextContent("Впишите, как правильно");
+  await userEvent.paste("MS‮SP");
+  await userEvent.keyboard("{Enter}");
+  expect(screen.getByRole("alert")).toHaveTextContent("Невидимые или управляющие знаки");
+  expect(screen.getByRole("button", { name: "Применить выбранное" })).toBeDisabled();
+});
+
+test("targetProblem: пусто, невидимое, управляющее, длина", () => {
+  for (const v of ["", "​", "﻿", "​‮"]) expect(targetProblem(cleanTarget(v))).toMatch(/^Впишите/);
+  for (const v of ["MS​SP", "MS\x00SP", "MS\x1b[31mSP", "‮MSSP", "MS\ud800SP"]) {
+    expect(targetProblem(cleanTarget(v))).toMatch(/^Невидимые/);
+  }
+  // Переводы строк — просто пробелы.
+  expect(cleanTarget("MS\r\nSP\n")).toBe("MS SP");
+  expect(targetProblem(cleanTarget("MS\nSP"))).toBeNull();
+  expect(targetProblem("M".repeat(201))).toMatch(/^Слишком длинно/);
+  expect(targetProblem("Сбер API-шлюз")).toBeNull();
 });

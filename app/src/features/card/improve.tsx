@@ -35,6 +35,17 @@ const TARGET_MAX = 200;
 
 /** «Как правильно» из поля: NFC, пробелы по краям сняты, внутри — схлопнуты (как у резидента). */
 export const cleanTarget = (value: string) => value.normalize("NFC").replace(/\s+/g, " ").trim();
+/** Управляющие, невидимые (нулевой ширины, смена направления) и одиночные суррогаты — как у резидента. */
+const HIDDEN = /[\p{Cc}\p{Cf}\p{Cs}]/gu;
+/** Почему вписанное (уже через cleanTarget) не годится; null — годится. */
+export function targetProblem(text: string): string | null {
+  if (!text.replace(HIDDEN, "").trim()) return "Впишите, как правильно, — или Esc, чтобы оставить предложенное";
+  if (text.length > TARGET_MAX) return `Слишком длинно: не больше ${TARGET_MAX} символов`;
+  if (text.replace(HIDDEN, "") !== text) return "Невидимые или управляющие знаки — впишите обычным текстом";
+  return null;
+}
+/** Почему «Применить выбранное» недоступно, пока в поле правки негодное. */
+const APPLY_WAITS = "Сначала исправьте, как правильно, или отмените правку (Esc)";
 
 export type ImproveScope = "terms" | "all";
 
@@ -333,6 +344,7 @@ function Target({ group, value, onChange, onInvalid }: {
   /** После Enter/Esc фокус — обратно на замену (а не в никуда: поле убрано). */
   const refocus = useRef(false);
   const button = useRef<HTMLButtonElement>(null);
+  const input = useRef<HTMLInputElement>(null);
   const invalid = useRef(onInvalid);
   invalid.current = onInvalid;
   // Строку убрали (сменили режим), пока в поле было негодное, — «Применить» не ждёт её.
@@ -357,29 +369,31 @@ function Target({ group, value, onChange, onInvalid }: {
     setProblem(null);
     onInvalid(false);
   };
+  /** Принять вписанное; негодное — ошибка, поле остаётся (→ false). */
   const commit = () => {
-    if (!open.current) return;
+    if (!open.current) return true;
     const text = cleanTarget(draft);
-    const bad = !text ? "Впишите, как правильно, — или Esc, чтобы оставить предложенное"
-      : text.length > TARGET_MAX ? `Слишком длинно: не больше ${TARGET_MAX} символов` : null;
+    const bad = targetProblem(text);
     if (bad) {
       refocus.current = false; // поле остаётся — фокус никуда не переносится
       setProblem(bad);
       onInvalid(true);
-      return;
+      return false;
     }
     close();
     onChange(text === group.replace ? undefined : text);
+    return true;
   };
 
   if (editing) {
     return (
       <span className="improve__to improve__to--edit">
-        <input className="improve__input" aria-label={`Как правильно: ${group.find}`} autoFocus value={draft}
+        <input ref={input} className="improve__input" aria-label={`Как правильно: ${group.find}`} autoFocus value={draft}
           aria-invalid={problem ? true : undefined} aria-describedby={problem ? errorId : undefined}
           onFocus={(e) => e.currentTarget.select()}
           onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
+          // Ушли из поля с негодным — фокус обратно в поле: ошибка рядом, «Применить» ждёт.
+          onBlur={() => { if (!commit()) setTimeout(() => input.current?.focus(), 0); }}
           onKeyDown={(e) => {
             if (e.key === "Enter") { e.preventDefault(); refocus.current = true; commit(); }
             // Esc — только отмена правки: окно по нему не закрывается.
@@ -661,13 +675,14 @@ export function ImproveDialog({ state, busy, error, playable, onPlay, onApply, o
             <button type="button" className="link-btn" onClick={onRerun} disabled={busy}>Проверить заново</button>
           ) : <span />}
           <span className="improve__btns">
-            {ready && total > 0 && (
+            {ready && invalid.size > 0 && <span id="improve-apply-why" className="improve__why">{APPLY_WAITS}</span>}
+            {ready && total > 0 && invalid.size === 0 && (
               <span className="muted improve__total">Будет заменено: {total} {placesWord(total)}</span>
             )}
             <Button onClick={onClose}>{ready ? "Отмена" : "Закрыть"}</Button>
             {ready && (
               <Button variant="primary" disabled={busy || !total || invalid.size > 0}
-                title={invalid.size > 0 ? "Сначала впишите, как правильно, или отмените правку (Esc)" : undefined}
+                aria-describedby={invalid.size > 0 ? "improve-apply-why" : undefined}
                 onClick={() => (Object.keys(sent).length
                   ? onApply(chosen.map((g) => g.id), extra, rules, terms, sent)
                   : onApply(chosen.map((g) => g.id), extra, rules, terms))}>Применить выбранное</Button>
