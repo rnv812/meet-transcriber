@@ -382,13 +382,31 @@ def searchable(q: str | None) -> bool:
     return len(nfc(q or "").strip()) >= MIN_QUERY and not parse_query(q).empty
 
 
-def search_library(root: Path, q: str, limit: int = 200, keep=None) -> list[dict]:
+def title_ranges(title: str, q: Query) -> list[list[int]]:
+    """Что подсветить в названии (`nfc(title)`), в единицах UTF-16: слова по
+    основам ключевых и фразы — каждое найденное, даже если всё название
+    запросу не отвечает (встреча нашлась по тексту)."""
+    tokens = tokenize(title)
+    ranges: list[list[int]] = []
+    for phrase in q.phrases:
+        n = len(phrase)
+        for i in range(len(tokens) - n + 1):
+            if all(tokens[i + j][0] == phrase[j] for j in range(n)):
+                ranges.append([tokens[i][1], tokens[i + n - 1][2]])
+    ranges += [[t[1], t[2]] for t in tokens if any(t[0].startswith(s) for s in q.stems)]
+    return [[_utf16(title, a), _utf16(title, b)] for a, b in _merge(ranges)]
+
+
+def search_library(root: Path, q: str, limit: int = 200, keep=None,
+                   title_only: bool = False) -> list[dict]:
     """Записи, где запрос нашёлся в репликах или в названии, от свежих к
     старым: карточка записи и `date`, `hits` (до MAX_HITS: время реплики,
     спикер, фрагмент, подсветка), `total` — сколько реплик подошло,
-    `title_match` — нашлось в названии. Пустой запрос или короче MIN_QUERY
-    символов — пустой ответ. `keep(card)` — фильтр (категории) до поиска и до
-    `limit`: старые записи нужной категории не теряются за свежими."""
+    `title_match` — нашлось в названии, `title_ranges` — что в нём подсветить
+    (UTF-16). Пустой запрос или короче MIN_QUERY символов — пустой ответ.
+    `keep(card)` — фильтр по карточке (meet.library_filter) до поиска и до
+    `limit`: старые записи нужной категории не теряются за свежими.
+    `title_only` — только в названиях (`in=title`), транскрипты не читаются."""
     if not searchable(q):
         return []
     query = parse_query(q)
@@ -397,7 +415,7 @@ def search_library(root: Path, q: str, limit: int = 200, keep=None) -> list[dict
         if keep is not None and not keep(card):
             continue
         hits, total = [], 0
-        if card.get("has_transcript"):
+        if card.get("has_transcript") and not title_only:
             for turn in _CACHE.turns(Path(card["path"])):
                 if not speaker_matches(turn.speaker, query):
                     continue
@@ -417,7 +435,8 @@ def search_library(root: Path, q: str, limit: int = 200, keep=None) -> list[dict
             match_tokens(tokenize(title), query) is not None)
         if total or title_match:
             found.append({**card, "date": (card.get("started_at") or "")[:10] or None,
-                          "hits": hits, "total": total, "title_match": title_match})
+                          "hits": hits, "total": total, "title_match": title_match,
+                          "title_ranges": title_ranges(title, query) if title else []})
             if len(found) >= limit:
                 break
     return found

@@ -946,9 +946,10 @@ def search(root: Path, q: str, limit: int = 200, keep=None) -> list[dict]:
     return search_cards(listing(root, limit=10**9, keep=keep), q, limit)
 
 
-def search_cards(cards, q: str, limit: int = 200) -> list[dict]:
+def search_cards(cards, q: str, limit: int = 200, title_only: bool = False) -> list[dict]:
     """Карточки (по порядку), у которых запрос (без учёта регистра) есть в
-    названии или в тексте любой реплики; пустой запрос — первые `limit`."""
+    названии или в тексте любой реплики (`title_only` — только в названии);
+    пустой запрос — первые `limit`."""
     q = (q or "").strip().lower()
     if not q:
         return list(cards)[:max(0, limit)]
@@ -956,6 +957,10 @@ def search_cards(cards, q: str, limit: int = 200) -> list[dict]:
     for card in cards:
         if len(found) >= limit:
             break
+        if title_only:
+            if q in str(card.get("title") or "").lower():
+                found.append(card)
+            continue
         transcript = read_transcript(Path(card["path"])) or {}
         haystack = [card.get("title") or "", str(transcript.get("title") or "")]
         segments = transcript.get("segments")

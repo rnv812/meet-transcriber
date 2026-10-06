@@ -166,17 +166,21 @@ def matcher(keys, cfg):
     return lambda card: key_of(card, known) in want
 
 
-def counts(root: Path, cfg=None, q: str | None = None) -> dict:
+def counts(root: Path, cfg=None, q: str | None = None, keep=None, title_only: bool = False) -> dict:
     """Сколько встреч в каждой категории: {"counts": {id: n}, "none": n,
     "scope": "library"|"search"}. С запросом поиска (`q`) — среди найденных,
-    иначе — по всей библиотеке. Неизвестный id (категорию удалили) считается
-    «Без категории», как в окне. Карточки — из кеша поиска (meet.search)."""
+    иначе — по всей библиотеке; `keep(card)` — остальные условия фильтра
+    (meet.library_filter без категорий). Неизвестный id (категорию удалили)
+    считается «Без категории», как в окне. Карточки — из кеша поиска (meet.search)."""
     from meet import search, settings
 
     cfg = settings.load() if cfg is None else cfg
     known = set(ids(cfg))
     scoped = bool(q) and search.searchable(q)
-    cards = search.search_library(Path(root), q, limit=10**9) if scoped else search.cards(Path(root))
+    if scoped:
+        cards = search.search_library(Path(root), q, limit=10**9, keep=keep, title_only=title_only)
+    else:
+        cards = [c for c in search.cards(Path(root)) if keep is None or keep(c)]
     out: dict[str, int] = {}
     none = 0
     for card in cards:

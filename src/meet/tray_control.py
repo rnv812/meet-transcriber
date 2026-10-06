@@ -1533,35 +1533,47 @@ class TrayControl:
         return candidate
 
     @staticmethod
-    def _category_filter(keys):
-        """`?categories=a,b,_none` → фильтр карточек (до лимита списка); нет — None."""
-        from meet import categories
+    def _library_filter(categories: str | None = None, filters: dict | None = None):
+        """Фильтр карточек (meet.library_filter) из параметров адреса; прежний
+        `categories` — тот же параметр. Негодное значение — 400 с текстом."""
+        from meet import library_filter
 
-        keys = categories.parse_keys(keys)
-        return categories.matcher(keys, settings.load()) if keys else None
+        params = dict(filters or {})
+        if categories and "categories" not in params:
+            params["categories"] = categories
+        try:
+            return library_filter.from_params(params, settings.load())
+        except library_filter.FilterError as e:
+            raise _bad_request(str(e))
 
-    def recordings(self, limit: int = 200, q: str | None = None, categories: str | None = None) -> dict:
+    def recordings(self, limit: int = 200, q: str | None = None, categories: str | None = None,
+                   filters: dict | None = None) -> dict:
         """Записи от свежих к старым — из кэша карточек поиска (meet.search):
         папки перечитываются, только когда меняются. Окно просит все (5000),
-        трей — последние 200."""
+        трей — последние 200. Фильтр (`filters`, см. meet.library_filter) —
+        до лимита."""
         from meet import search
 
         root = self._root()
-        keep = self._category_filter(categories)
-        cards = [c for c in search.cards(root) if keep is None or keep(c)]
+        flt = self._library_filter(categories, filters)
+        cards = [c for c in search.cards(root) if flt(c)]
         if (q or "").strip():
-            items = library.search_cards(cards, q, limit=limit)
+            items = library.search_cards(cards, q, limit=limit, title_only=flt.title_only)
         else:
             items = cards[:max(0, limit)]
         return {"root": str(root), "items": [dict(c) for c in items]}
 
-    def search(self, q: str, limit: int = 200, categories: str | None = None) -> dict:
-        """Поиск по тексту встреч (и названиям): записи с фрагментами реплик.
-        `categories` — фильтр по категориям (как у списка)."""
+    def search(self, q: str, limit: int = 200, categories: str | None = None,
+               filters: dict | None = None) -> dict:
+        """Поиск по тексту встреч (и названиям): записи с фрагментами реплик и
+        подсветкой названия. Фильтр (`filters`, см. meet.library_filter) — по
+        карточке до чтения транскриптов; `in=title` — только в названиях."""
         from meet import search
 
+        flt = self._library_filter(categories, filters)
         return {"items": search.search_library(self._root(), q or "", limit=limit,
-                                               keep=self._category_filter(categories))}
+                                               keep=flt if flt.active else None,
+                                               title_only=flt.title_only)}
 
     def delete_recording(self, recording_id: str) -> dict:
         """Удалить папку записи целиком. Отказ, пока в неё пишут или над ней
@@ -1959,16 +1971,19 @@ class TrayControl:
                 self._background(lambda: self._auto_kb_export(folder))
         return library.describe(folder).to_raw()
 
-    def categories(self, q: str | None = None) -> dict:
+    def categories(self, q: str | None = None, filters: dict | None = None) -> dict:
         """Категории: нынешний список, стандартный («Сбросить к стандартным»)
         и сколько встреч в каждой (подтверждение удаления, счётчики фильтра в
-        списке). С запросом поиска `q` — счётчики среди найденных."""
+        списке). С запросом поиска `q` — счётчики среди найденных; с фильтром
+        (`filters`) — среди подходящих под остальные его условия."""
         from meet import categories
 
         cfg = settings.load()
+        flt = self._library_filter(None, filters).without("categories")
         return {"categories": [c.to_raw() for c in cfg.categories],
                 "defaults": [c.to_raw() for c in settings.default_categories()],
-                **categories.counts(self._root(), cfg, q)}
+                **categories.counts(self._root(), cfg, q, keep=flt if flt.active else None,
+                                    title_only=flt.title_only)}
 
     def _summary_title(self, folder: Path) -> None:
         """Итоги готовы: название из их первой строки (если его просили)."""

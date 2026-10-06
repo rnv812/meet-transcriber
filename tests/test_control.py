@@ -90,15 +90,20 @@ class FakeState:
         self.calls.append(("update", rid, body))
         return {"id": rid, "title": body.get("title")}
 
-    def recordings(self, limit=200, q=None, categories=None):
+    def recordings(self, limit=200, q=None, filters=None):
         self.calls.append(("recordings", limit, q))
-        self.category_filter = categories
+        self.filters = filters
         return {"items": []}
 
-    def search(self, q, limit=200, categories=None):
+    def search(self, q, limit=200, filters=None):
         self.calls.append(("search", q, limit))
-        self.category_filter = categories
+        self.filters = filters
         return {"items": [{"id": "r1", "hits": [], "total": 0}]}
+
+    def categories(self, q="", filters=None):
+        self.calls.append(("categories", q))
+        self.filters = filters
+        return {"categories": [], "defaults": [], "counts": {}, "none": 0}
 
     def delete_recording(self, rid):
         self.calls.append(("delete", rid))
@@ -499,9 +504,24 @@ def test_recordings_search_passes_query(server):
 
 def test_category_filter_reaches_list_and_search(server):
     _get(server, "/recordings?categories=daily,_none")
-    assert server.state_obj.category_filter == "daily,_none"
+    assert server.state_obj.filters == {"categories": ["daily,_none"]}
     _get(server, "/search?q=cmdb&categories=retro")
-    assert server.state_obj.category_filter == "retro"
+    assert server.state_obj.filters == {"categories": ["retro"]}
+
+
+def test_library_filter_reaches_list_search_and_counts(server):
+    query = ("groups=g-1,g-2&people=%D0%90%D0%BD%D0%BD%D0%B0&people=Bob&from=2026-09-01&to=2026-09-30"
+             "&has=summary&lacks=analysis&min_s=60&max_s=3600&in=title&token=t&limit=5000")
+    want = {"groups": ["g-1,g-2"], "people": ["Анна", "Bob"], "from": ["2026-09-01"],
+            "to": ["2026-09-30"], "has": ["summary"], "lacks": ["analysis"], "min_s": ["60"],
+            "max_s": ["3600"], "in": ["title"]}
+    _get(server, f"/recordings?{query}")
+    assert server.state_obj.filters == want
+    assert ("recordings", 5000, "") in server.state_obj.calls
+    _get(server, f"/search?q=x&{query}")
+    assert server.state_obj.filters == want
+    _get(server, f"/categories?q=x&{query}")
+    assert server.state_obj.filters == want
 
 
 def test_full_text_search_route(server):

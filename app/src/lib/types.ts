@@ -199,10 +199,12 @@ export type SearchItem = Recording & {
   total: number;
   /** Запрос нашёлся в названии. */
   title_match: boolean;
+  /** Что подсветить в названии (UTF-16, по названию в NFC); нет у резидентов до 0.3.5. */
+  title_ranges?: [number, number][];
 };
 
 /** Элемент списка записей: при поиске — с фрагментами. */
-export type LibraryItem = Recording & Partial<Pick<SearchItem, "hits" | "total" | "title_match">>;
+export type LibraryItem = Recording & Partial<Pick<SearchItem, "hits" | "total" | "title_match" | "title_ranges">>;
 
 export type KbExportRecord = {
   path?: string | null;

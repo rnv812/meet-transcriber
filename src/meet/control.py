@@ -34,8 +34,8 @@ IMPORTANT: токен принимается и в query-параметре `?to
     processes() -> dict                  запущенные процессы для выбора клиента
     devices() -> dict                    микрофоны и выводы для настроек «Звук»
     test_device(body) -> dict            ~2 с с устройства → пик (409 при записи)
-    recordings(limit, q) -> dict         библиотека записей (q — поиск)
-    search(q, limit) -> dict             поиск по тексту встреч с фрагментами
+    recordings(limit, q, filters) -> dict  библиотека записей (q — поиск, filters — library_filter)
+    search(q, limit, filters) -> dict    поиск по тексту встреч с фрагментами
     delete_recording(id) -> dict         удалить запись
     merge_recordings(body) -> dict       объединить записи {"ids", "keep_originals"}
     get_hotwords() / put_hotwords(body)  список слов распознавания
@@ -782,7 +782,8 @@ _ROUTES = {
     ("POST", "/owner-voice/suggestion"): lambda h, p: _server_of(h).state.owner_voice_suggestion(h._body()),
     ("PATCH", "/settings"): lambda h, p: _server_of(h).state.patch_settings(h._body()),
     # Редактор категорий: список, стандартный список и сколько встреч в каждой.
-    ("GET", "/categories"): lambda h, p: _server_of(h).state.categories((p.get("q") or [""])[0]),
+    ("GET", "/categories"): lambda h, p: _server_of(h).state.categories(
+        (p.get("q") or [""])[0], filters=_filter_params(p)),
     ("POST", "/recording/start"): lambda h, p: _server_of(h).state.start_recording(),
     ("POST", "/recording/stop"): lambda h, p: _server_of(h).state.stop_recording(),
     ("POST", "/recording/cancel"): lambda h, p: _server_of(h).state.stop_recording(
@@ -790,13 +791,13 @@ _ROUTES = {
     ),
     ("POST", "/recording/adopt"): lambda h, p: _server_of(h).state.adopt_recording(),
     ("POST", "/auto-record"): lambda h, p: _server_of(h).state.set_auto_record(h._body()),
+    # Фильтр по карточке (meet.library_filter): categories, groups, people,
+    # from/to, has/lacks, min_s/max_s, in=title — до лимита.
     ("GET", "/recordings"): lambda h, p: _server_of(h).state.recordings(
-        limit=_int_param(p, "limit", 200), q=(p.get("q") or [""])[0],
-        categories=(p.get("categories") or [""])[0],
+        limit=_int_param(p, "limit", 200), q=(p.get("q") or [""])[0], filters=_filter_params(p),
     ),
     ("GET", "/search"): lambda h, p: _server_of(h).state.search(
-        (p.get("q") or [""])[0], limit=_int_param(p, "limit", 200),
-        categories=(p.get("categories") or [""])[0],
+        (p.get("q") or [""])[0], limit=_int_param(p, "limit", 200), filters=_filter_params(p),
     ),
     ("GET", "/hotwords"): lambda h, p: _server_of(h).state.get_hotwords(),
     ("PUT", "/hotwords"): lambda h, p: _server_of(h).state.put_hotwords(h._body()),
@@ -986,6 +987,14 @@ def _audio_type(path: Path) -> str:
 def _server_of(handler) -> ControlServer:
     """ControlServer, которому принадлежит хендлер (замыкание _make_handler)."""
     return handler._control_server
+
+
+def _filter_params(params: dict) -> dict:
+    """Параметры фильтра библиотеки из адреса (все значения — списком, как у
+    parse_qs: повтор параметра — ещё значение)."""
+    from meet.library_filter import PARAMS
+
+    return {name: params[name] for name in PARAMS if params.get(name)}
 
 
 def _int_param(params: dict, name: str, default: int) -> int:

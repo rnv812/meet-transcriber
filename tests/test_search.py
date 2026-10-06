@@ -232,3 +232,13 @@ def test_break_mark_is_its_own_empty_turn():
         {"start": 1.5, "end": 2, "speaker": None, "text": "два"},
     ])
     assert [t.text for t in turns] == ["раз", "", "два"]
+
+
+def test_title_ranges_are_utf16_and_partial():
+    q = search.parse_query('бюджета "план работ"')
+    # эмодзи — две единицы UTF-16: подсветка сдвигается, как считает окно
+    assert search.title_ranges("😀 Бюджет и план работ", q) == [[3, 9], [12, 22]]
+    # название запросу целиком не отвечает (нет фразы) — слово всё равно подсвечено
+    assert search.title_ranges("Бюджет отдела", q) == [[0, 6]]
+    assert search.title_ranges("Отпуск", q) == []
+    assert search.title_ranges("Бюджет", search.parse_query("спикер:Анна")) == []
