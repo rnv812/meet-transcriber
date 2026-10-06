@@ -255,50 +255,57 @@ pub fn pointer_folder(data_dir: &Path) -> Option<String> {
 
 // --- своя или чужая папка (N1) -------------------------------------------------
 
-/// Id этой установки. Создаётся, только когда файла нет, и атомарно
-/// (`create_new`: из двух одновременных первых вызовов файл создаст один,
-/// второй прочитает его id). Файл есть, но не читается — ошибка, а не новый
-/// id: иначе все свои папки разом стали бы «чужими».
+/// Создание id — по одному в процессе (оболочка одна: single-instance).
+static ID_LOCK: Mutex<()> = Mutex::new(());
+
+/// Id этой установки.
+///
+/// Создаётся, только когда файла нет, и так, что сбой посреди не оставит
+/// пустой файл: id пишется во временный файл, `sync_all`, затем
+/// публикуется жёсткой ссылкой без замены (`hard_link`: занято — значит,
+/// успел другой, читаем его). Пустой файл (сбой старой сборки посреди
+/// создания) — пересоздаётся: пустой id никогда не возвращался, значит, ни
+/// одна метка на него не ссылается. Непустой файл берётся как есть, каким бы
+/// он ни был: его содержимое могло попасть в метки. Другая ошибка чтения —
+/// ошибка (окно её покажет, повтор возможен), а не новый id: иначе все свои
+/// папки разом стали бы «чужими».
 pub fn install_id(data_dir: &Path) -> Result<String, String> {
+    let _guard = ID_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = data_dir.join(INSTALL_ID);
-    let read = |path: &Path| -> Result<Option<String>, String> {
-        match fs::read_to_string(path) {
-            Ok(text) if !text.trim().is_empty() => Ok(Some(text.trim().to_string())),
-            Ok(_) => Ok(None),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(format!("id установки не прочитан: {error}")),
+    match fs::read_to_string(&path) {
+        Ok(text) if !text.trim().is_empty() => return Ok(text.trim().to_string()),
+        Ok(_) => {
+            shell_log!("id установки пуст (сбой при создании) — создаю заново");
+            remove_file(&path).map_err(|error| format!("id установки не пересоздан: {error}"))?;
         }
-    };
-    if let Some(id) = read(&path)? {
-        return Ok(id);
-    }
-    if path.exists() {
-        // Пустой файл: его только что создал другой поток — ждём содержимое.
-        for _ in 0..20 {
-            std::thread::sleep(Duration::from_millis(50));
-            if let Some(id) = read(&path)? {
-                return Ok(id);
-            }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "id установки не прочитан ({error}) — закройте программы, держащие папку данных, и повторите"
+            ))
         }
-        return Err("id установки пуст".into());
     }
     let _ = fs::create_dir_all(data_dir);
     let id = uuid::Uuid::new_v4().to_string();
-    match File::options().write(true).create_new(true).open(&path) {
-        Ok(mut file) => {
-            file.write_all(id.as_bytes())
-                .and_then(|()| file.sync_all())
-                .map_err(|error| format!("id установки не записался: {error}"))?;
-            Ok(id)
-        }
+    let staged = data_dir.join(format!("{INSTALL_ID}.{}.tmp", std::process::id()));
+    {
+        let mut file =
+            File::create(&staged).map_err(|error| format!("id установки не создан: {error}"))?;
+        file.write_all(id.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| format!("id установки не записался: {error}"))?;
+    }
+    let published = fs::hard_link(&staged, &path);
+    let _ = fs::remove_file(&staged);
+    match published {
+        Ok(()) => Ok(id),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            for _ in 0..20 {
-                if let Some(id) = read(&path)? {
-                    return Ok(id);
-                }
-                std::thread::sleep(Duration::from_millis(50));
+            match fs::read_to_string(&path) {
+                Ok(text) if !text.trim().is_empty() => Ok(text.trim().to_string()),
+                _ => Err("id установки не прочитан — повторите".into()),
             }
-            Err("id установки пуст".into())
         }
         Err(error) => Err(format!("id установки не создан: {error}")),
     }
@@ -517,7 +524,15 @@ pub fn check_target(target: &Path, current: &Path, data_dir: &Path) -> Result<()
     }
     // Внутри чьей-то папки движка (своей или чужой): её уборка удалила бы
     // и нашу.
-    for parent in target.ancestors().skip(1) {
+    // По введённому пути и по настоящему (junction, символические ссылки
+    // ведут внутрь помеченной папки под другим именем).
+    let real = norm(target);
+    let parents: Vec<&Path> = target
+        .ancestors()
+        .skip(1)
+        .chain(real.ancestors().skip(1))
+        .collect();
+    for parent in parents {
         if parent.join(MARK).exists() {
             return Err(match owner(parent, data_dir) {
                 Owner::Foreign => FOREIGN.into(),
@@ -926,6 +941,11 @@ pub struct Journal {
     pub from: Option<PathBuf>,
     pub to: PathBuf,
     pub phase: Phase,
+    /// Id новой папки (из метки, записанной `claim`): очередь удаления
+    /// берёт его отсюда, а не с диска — отключённую флешку можно будет
+    /// убрать, когда она вернётся.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 fn version() -> u32 {
@@ -939,6 +959,7 @@ impl Journal {
             from,
             to,
             phase,
+            folder: None,
         }
     }
 
@@ -1060,14 +1081,17 @@ fn write_discards(data_dir: &Path, items: &[Discard]) {
 }
 
 /// Поставить папку в очередь удаления (`All` поглощает `Engine`).
+/// В работе очередь пишут `interrupt` и `abandon` (с id папки из журнала).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn queue_discard(data_dir: &Path, path: &Path, scope: Scope) {
     let _lock = drain_lock();
-    queue_discard_locked(data_dir, path, scope);
+    queue_discard_locked(data_dir, path, scope, None);
 }
 
-/// То же под уже взятым замком очереди.
-fn queue_discard_locked(data_dir: &Path, path: &Path, scope: Scope) {
-    let folder = folder_id(path);
+/// То же под уже взятым замком очереди. `known` — id папки из журнала;
+/// нет — с диска (если папка на месте).
+fn queue_discard_locked(data_dir: &Path, path: &Path, scope: Scope, known: Option<String>) {
+    let folder = known.or_else(|| folder_id(path));
     let mut items = read_discards(data_dir);
     if let Some(item) = items.iter_mut().find(|item| same_path(&item.path, path)) {
         if scope == Scope::All {
@@ -1230,7 +1254,8 @@ pub fn interrupt(data_dir: &Path, journal: &Journal) -> Result<(), String> {
     stopped.phase = Phase::Interrupted;
     write_journal(data_dir, &stopped)?;
     if !same_path(&journal.to, &journal.previous_home(data_dir)) {
-        queue_discard(data_dir, &journal.to, Scope::Engine);
+        let _lock = drain_lock();
+        queue_discard_locked(data_dir, &journal.to, Scope::Engine, journal.folder.clone());
     }
     Ok(())
 }
@@ -1250,7 +1275,7 @@ pub fn abandon(data_dir: &Path, journal: &Journal) -> Result<(), String> {
 fn abandon_locked(data_dir: &Path, journal: &Journal) -> Result<(), String> {
     let live = home(data_dir);
     if !same_path(&journal.to, &live) && !inside(&live, &journal.to) {
-        queue_discard_locked(data_dir, &journal.to, Scope::All);
+        queue_discard_locked(data_dir, &journal.to, Scope::All, journal.folder.clone());
     }
     remove_file(&data_dir.join(JOURNAL)).map_err(|error| error.to_string())
 }
@@ -1366,6 +1391,15 @@ pub fn claim(data_dir: &Path, target: &Path) -> Result<(), String> {
 /// трогаем — о нём спросит окно). Не удалилось (файлы заняты) — журнал
 /// остаётся, следующий запуск попробует снова.
 pub fn finish(data_dir: &Path, journal: &Journal, env: &impl Recover) -> Result<(), String> {
+    // Под замком очереди: `claim` и `repoint` не вклинятся в удаление (их
+    // свежую метку не снесёт хвост этой уборки). Журнал перечитывается под
+    // замком: уборку уже довёл другой поток, а журнал теперь — нового
+    // переноса, — тогда делать нечего, и чужой журнал не удаляем.
+    let _lock = drain_lock();
+    match journal_state(data_dir) {
+        JournalState::Ok(current) if current == *journal && current.phase == Phase::Cleanup => {}
+        _ => return Ok(()),
+    }
     if blocked(data_dir).is_some() {
         return Err("папка движка недоступна — прежнюю уберу, когда она вернётся".into());
     }
@@ -1553,6 +1587,10 @@ pub fn execute(
     version: &str,
 ) -> Result<(), String> {
     journal.phase = Phase::Engine;
+    // Id новой папки — из её метки, только что записанной `claim`.
+    if journal.folder.is_none() {
+        journal.folder = folder_id(&journal.to);
+    }
     write_journal(data_dir, &journal)?;
     env.checkpoint("engine");
     let Err(error) = steps(env, control, data_dir, &mut journal, profile, version) else {

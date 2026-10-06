@@ -1418,13 +1418,11 @@ fn finish_waits_while_the_choice_is_blocked_or_the_old_path_is_the_live_folder()
     fs::create_dir_all(&live).unwrap();
     fs::copy(old.join(MARK), live.join(MARK)).unwrap();
     write_pointer(&data, Some(&live)).unwrap();
-    finish(
-        &data,
-        &Journal::new(Some(old.clone()), live, Phase::Cleanup),
-        &FakeEnv::default(),
-    )
-    .unwrap();
-    assert!(old.join("engine").is_dir());
+    let renamed = Journal::new(Some(old.clone()), live, Phase::Cleanup);
+    write_journal(&data, &renamed).unwrap();
+    finish(&data, &renamed, &FakeEnv::default()).unwrap();
+    assert!(old.join("engine").is_dir(), "по старому пути — живая папка");
+    assert_eq!(read_journal(&data), None, "журнал закрыт");
 }
 
 #[test]
@@ -1575,4 +1573,139 @@ fn rewriting_our_marker_keeps_the_folder_id() {
     assert_eq!(folder_id(&dir).unwrap(), first);
     write_pointer(&data, Some(&dir)).unwrap();
     assert_eq!(pointer_folder(&data), Some(first));
+}
+
+// --- раунд 4 ------------------------------------------------------------------------
+
+#[test]
+fn finish_does_nothing_when_the_journal_changed_under_it() {
+    let t = Temp::new("s1-stale");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let old = ours_with(&t, &data, "Old");
+    let live = ours_with(&t, &data, "Live");
+    write_pointer(&data, Some(&live)).unwrap();
+    let cleanup = Journal::new(Some(old.clone()), live.clone(), Phase::Cleanup);
+    // Уборку уже довёл другой поток, и начался новый перенос — в ту же папку.
+    let next = Journal::new(Some(live), old.clone(), Phase::Engine);
+    write_journal(&data, &next).unwrap();
+    finish(&data, &cleanup, &FakeEnv::default()).unwrap();
+    assert!(
+        old.join("engine").join("0.3.3").is_dir(),
+        "папку нового переноса не трогаем"
+    );
+    assert_eq!(owner(&old, &data), Owner::Ours, "его метка цела");
+    assert_eq!(read_journal(&data), Some(next), "его журнал цел");
+}
+
+#[test]
+fn finish_waits_for_a_running_drain_pass() {
+    let t = Temp::new("s1-lock");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let old = ours_with(&t, &data, "Old");
+    let live = ours_with(&t, &data, "Live");
+    write_pointer(&data, Some(&live)).unwrap();
+    let cleanup = Journal::new(Some(old.clone()), live, Phase::Cleanup);
+    write_journal(&data, &cleanup).unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        let _lock = drain_lock();
+        started_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    });
+    started_rx.recv().unwrap();
+    let data2 = data.clone();
+    let worker = std::thread::spawn(move || {
+        let begin = std::time::Instant::now();
+        finish(&data2, &cleanup, &FakeEnv::default()).unwrap();
+        begin.elapsed()
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    assert!(worker.join().unwrap() >= Duration::from_millis(150));
+    assert!(!old.join("engine").exists());
+}
+
+#[test]
+fn target_unplugged_while_cancelled_is_cleaned_once_it_is_back() {
+    let w = interrupted_world("s2-unplugged");
+    let journal = read_journal(&w.data).unwrap();
+    assert!(
+        journal.folder.is_some(),
+        "id папки — в журнале с первого шага"
+    );
+    // Флешку вынули: «Отменить перенос» ставит её в очередь без диска.
+    let away = w.to.with_file_name("Meet-away");
+    fs::rename(&w.to, &away).unwrap();
+    abandon(&w.data, &journal).unwrap();
+    assert_eq!(
+        drain_once(&w.data, &FakeEnv::default()),
+        1,
+        "ждёт возвращения"
+    );
+    fs::rename(&away, &w.to).unwrap();
+    assert_eq!(drain_once(&w.data, &FakeEnv::default()), 0);
+    assert!(
+        !w.to.join("models").exists(),
+        "вернулась — убрана по id из журнала"
+    );
+}
+
+#[test]
+fn empty_install_id_left_by_a_crash_is_recreated() {
+    let t = Temp::new("s3-empty");
+    let data = t.0.join("data");
+    fs::create_dir_all(&data).unwrap();
+    fs::write(data.join(INSTALL_ID), "").unwrap();
+    let id = install_id(&data).unwrap();
+    assert!(!id.is_empty());
+    assert_eq!(install_id(&data).unwrap(), id, "дальше — тот же");
+    assert_eq!(
+        fs::read_to_string(data.join(INSTALL_ID)).unwrap().trim(),
+        id
+    );
+    let leftovers: Vec<_> = fs::read_dir(&data)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "временный файл убран");
+}
+
+#[test]
+fn link_into_a_marked_folder_is_refused_too() {
+    let t = Temp::new("r3-link");
+    let data = t.0.join("data");
+    t.file("data/config.json");
+    let ours = ours_with(&t, &data, "Ours");
+    let link = t.0.join("Shortcut");
+    let made = if cfg!(windows) {
+        std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(ours.join("engine"))
+            .output()
+            .is_ok_and(|out| out.status.success())
+    } else {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(ours.join("engine"), &link).is_ok()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    };
+    if !made {
+        return; // ссылку не создать — проверять нечего
+    }
+    let target = link.join("Meet");
+    assert_eq!(
+        check_target(&target, &data, &data),
+        Err(INSIDE_OURS.to_string())
+    );
+    let _ = fs::remove_dir(&link);
 }
