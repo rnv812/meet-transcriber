@@ -122,7 +122,9 @@ def test_disabled_features_are_not_requested_nor_written(tmp_path):
     doc = analysis.run(folder, runner, _cfg(types=False, importance=False, insights=False,
                                             category=False, title=False), provider="codex", now=1.0)
     assert doc["features"] == ["chapters"]
-    assert set(doc) == {"version", "model", "created_at", "fingerprint", "segments", "features", "chapters"}
+    assert set(doc) == {"version", "model", "llm", "created_at", "fingerprint", "segments", "features",
+                        "chapters"}
+    assert doc["llm"] == {"provider": "codex", "model": None}
     system = runner.calls[0]["system_prompt"]
     assert '"phrase_types"' not in system and '- "title"' not in system
     # Без инструментов: только текст встречи в промпте.

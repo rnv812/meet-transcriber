@@ -231,10 +231,11 @@ def test_titles_main_prints_ascii_json(tmp_path, monkeypatch, capsys):
     folder = _folder(tmp_path)
     from meet import llm
 
-    monkeypatch.setattr(llm, "resolve", lambda cfg: ("fake", Runner("Запуск беты")))
+    monkeypatch.setattr(llm, "resolve", lambda cfg: ("codex", Runner("Запуск беты")))
     assert titles.main([str(folder)]) == 0
     out = capsys.readouterr().out
-    assert out.isascii() and json.loads(out) == {"title": "Запуск беты", "from": "model"}
+    assert out.isascii() and json.loads(out) == {"title": "Запуск беты", "from": "model",
+                                                  "llm": {"provider": "codex", "model": None}}
     monkeypatch.setattr(llm, "resolve", lambda cfg: (None, None))
     assert titles.main([str(folder)]) == 1
     assert "Подключите" in json.loads(capsys.readouterr().out)["error"]
@@ -246,3 +247,69 @@ def test_control_and_bidi_characters_are_stripped_from_titles(tmp_path):
     assert library.read_meta(folder)["title"] == "Запуск беты"
     title, _ = titles.split_summary_title("Название: Бета\u2066 версия\n## Итоги")
     assert title == "Бета версия"
+
+
+# --- какая модель придумала название (U3) ------------------------------------------
+
+
+def test_ai_title_remembers_its_model_and_user_title_forgets_it(tmp_path):
+    folder = _folder(tmp_path)
+    origin = {"provider": "claude-code", "model": "sonnet"}
+    assert titles.apply_ai(folder, "Запуск беты", _cfg(), origin=origin) == "Запуск беты"
+    assert library.read_meta(folder)["title_llm"] == origin
+    assert library.describe(folder).title_llm == origin
+    # Та же строка от другой модели — новое происхождение.
+    local = {"provider": "openai-compatible", "model": "qwen3"}
+    titles.apply_ai(folder, "Запуск беты", _cfg(), origin=local)
+    assert library.read_meta(folder)["title_llm"] == local
+    # Черновое по теме ассистента — модель неизвестна: подписи нет.
+    titles.write_title(folder, "Моё", "user")
+    assert "title_llm" not in library.read_meta(folder)
+    assert library.describe(folder).title_llm is None
+
+
+def test_live_draft_drops_the_previous_model(tmp_path):
+    folder = _folder(tmp_path)
+    titles.apply_ai(folder, "Запуск", _cfg(), origin={"provider": "codex", "model": None})
+    library.write_meta(folder, {"title": "Черновик", "title_source": "ai", titles.LIVE_DRAFT: "Черновик"})
+    titles.apply_live_draft(folder, "Тема", _cfg())
+    assert "title_llm" not in library.read_meta(folder)
+
+
+def test_suggest_reports_the_model(tmp_path):
+    folder = _folder(tmp_path)
+    origin = {"provider": "codex", "model": None}
+    assert titles.suggest(folder, Runner("Запуск беты"), origin=origin) == {
+        "title": "Запуск беты", "from": "model", "llm": origin}
+    data = library.read_transcript(folder)
+    analysis.write(folder, {"version": 1, "fingerprint": analysis.fingerprint(data), "created_at": 1.0,
+                            "features": ["title"], "title": "Бета", "llm": {"provider": "claude-code",
+                                                                         "model": "opus"}})
+    assert titles.suggest(folder) == {"title": "Бета", "from": "analysis",
+                                      "llm": {"provider": "claude-code", "model": "opus"}}
+
+
+def test_titles_main_with_chosen_provider_skips_the_analysis_and_never_falls_back(tmp_path, monkeypatch, capsys):
+    folder = _folder(tmp_path)
+    data = library.read_transcript(folder)
+    analysis.write(folder, {"version": 1, "fingerprint": analysis.fingerprint(data), "created_at": 1.0,
+                            "features": ["title"], "title": "Из анализа"})
+    from meet import llm
+
+    seen = []
+
+    def fake_resolve(cfg, provider=None):
+        seen.append(provider)
+        return provider, Runner("От выбранной")
+
+    monkeypatch.setattr(llm, "resolve", fake_resolve)
+    monkeypatch.setattr(llm, "choice_error", lambda cfg, name: None)
+    assert titles.main([str(folder), "--provider=claude-code"]) == 0
+    got = json.loads(capsys.readouterr().out)
+    assert got["title"] == "От выбранной" and got["from"] == "model"
+    assert got["llm"]["provider"] == "claude-code"
+    assert seen == ["claude-code"]
+    monkeypatch.setattr(llm, "choice_error", lambda cfg, name: "не найден Codex CLI (codex)")
+    assert titles.main([str(folder), "--provider=codex"]) == 1
+    assert json.loads(capsys.readouterr().out) == {"error": "не найден Codex CLI (codex)"}
+    assert seen == ["claude-code"]

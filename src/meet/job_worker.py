@@ -81,6 +81,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--device")
     parser.add_argument("--derive", action="store_true")
     parser.add_argument("--recordings")
+    # Модель, выбранная человеком для одного действия (итоги, вопрос, анализ,
+    # улучшение); нет — модель по умолчанию из настроек.
+    parser.add_argument("--provider")
     args = parser.parse_args(argv)
     from meet import tempdirs
 
@@ -98,11 +101,11 @@ def _dispatch(args) -> int:
     # meet.diarize.quiet_pyannote, но без импорта numpy в задачах без torch).
     os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "false")
     if args.kind in ("summary", "ask"):
-        return _assistant(args.kind, args.path, args.question)
+        return _assistant(args.kind, args.path, args.question, args.provider or None)
     if args.kind == "analyze":
-        return _analyze(args.path)
+        return _analyze(args.path, args.provider or None)
     if args.kind == "improve":
-        return _improve(args.path)
+        return _improve(args.path, args.provider or None)
     if args.kind == "owner_voice" and args.derive:
         return _owner_derive(args.path, args.recordings or "")
     if args.kind == "owner_voice":
@@ -487,7 +490,35 @@ def _download_model(repo_id: str) -> int:
     return 0
 
 
-def _assistant(kind: str, folder_str: str, question: str | None) -> int:
+class _NoModel(Exception):
+    """Модели для задачи нет: текст для человека."""
+
+
+def _pick(cfg, chosen: str | None):
+    """(провайдер, runner) задачи модели. `chosen` — модель, выбранная
+    человеком для этого действия: только она — не включена или не найдена,
+    задача падает с её ошибкой, модель по умолчанию не зовётся (U3). Без
+    выбора — модель по умолчанию (`llm.resolve`). Нет никого — _NoModel."""
+    from meet import assistant, llm
+
+    try:
+        if chosen:
+            error = llm.choice_error(cfg, chosen)
+            if error:
+                raise _NoModel(error)
+            provider, runner = llm.resolve(cfg, chosen)
+        else:
+            provider, runner = llm.resolve(cfg)
+    except _NoModel:
+        raise
+    except Exception as e:
+        raise _NoModel(f"{type(e).__name__}: {e}") from e
+    if runner is None:
+        raise _NoModel(assistant.NO_PROVIDER)
+    return provider, runner
+
+
+def _assistant(kind: str, folder_str: str, question: str | None, chosen: str | None = None) -> int:
     """Итоги или ответ на вопрос по записи (meet.assistant).
 
     Провайдер выбирается здесь, а не в резиденте: `llm.resolve` проверяет вход
@@ -501,13 +532,11 @@ def _assistant(kind: str, folder_str: str, question: str | None) -> int:
     bus.progress("llm", label="модель думает")
     cfg = settings.load()
     try:
-        provider, runner = llm.resolve(cfg)
-    except Exception as e:
-        _emit({"kind": "error", "text": f"{type(e).__name__}: {e}"})
+        provider, runner = _pick(cfg, chosen)
+    except _NoModel as e:
+        _emit({"kind": "error", "text": str(e)})
         return 2
-    if runner is None:
-        _emit({"kind": "error", "text": assistant.NO_PROVIDER})
-        return 2
+    origin = llm.describe(provider, cfg)
     folder = Path(folder_str)
     knowledge = cfg.assistant.knowledge_dir
     tracker, runner = _llm_tracker(bus, kind, "итоги встречи" if kind == "summary" else "ответ на вопрос",
@@ -516,12 +545,13 @@ def _assistant(kind: str, folder_str: str, question: str | None) -> int:
         with tracker:
             if kind == "summary":
                 out = assistant.summarize(folder, runner, knowledge, provider=provider,
-                                          want_title=cfg.assistant.auto_title)
+                                          want_title=cfg.assistant.auto_title, origin=origin)
             else:
                 if not (question or "").strip():
                     _emit({"kind": "error", "text": "пустой вопрос"})
                     return 3
-                assistant.ask(folder, question.strip(), runner, knowledge, provider=provider)
+                assistant.ask(folder, question.strip(), runner, knowledge, provider=provider,
+                              origin=origin)
                 out = folder / assistant.QA_JSONL
     except RuntimeError as e:
         _emit({"kind": "error", "text": str(e)})
@@ -533,13 +563,13 @@ def _assistant(kind: str, folder_str: str, question: str | None) -> int:
     return 0
 
 
-def _analyze(folder_str: str) -> int:
+def _analyze(folder_str: str, chosen: str | None = None) -> int:
     """«Анализ встречи» (meet.analysis) — тем же провайдером, что итоги
     (`llm.resolve`, прокси из настроек, без инструментов). Ошибка остаётся в
     meta.json записи (`analysis_error`): окно покажет «Повторить»."""
     from pathlib import Path
 
-    from meet import analysis, assistant, events, llm, settings
+    from meet import analysis, events, settings
 
     folder = Path(folder_str)
     bus = events.EventBus()
@@ -553,11 +583,9 @@ def _analyze(folder_str: str) -> int:
         return code
 
     try:
-        provider, runner = llm.resolve(cfg)
-    except Exception as e:
-        return fail(f"{type(e).__name__}: {e}", 2)
-    if runner is None:
-        return fail(assistant.NO_PROVIDER, 2)
+        provider, runner = _pick(cfg, chosen)
+    except _NoModel as e:
+        return fail(str(e), 2)
     tracker, runner = _llm_tracker(bus, "analyze", "анализ встречи", provider, runner)
     try:
         with tracker:
@@ -570,13 +598,13 @@ def _analyze(folder_str: str) -> int:
     return 0
 
 
-def _improve(folder_str: str) -> int:
+def _improve(folder_str: str, chosen: str | None = None) -> int:
     """«Улучшить расшифровку» (meet.improve) — тем же провайдером, что итоги и
     анализ (`llm.resolve`, без инструментов). Ошибка — в meta.json записи
     (`improve_error`): окно покажет «Повторить»."""
     from pathlib import Path
 
-    from meet import assistant, events, improve, llm, settings
+    from meet import events, improve, settings
 
     folder = Path(folder_str)
     bus = events.EventBus()
@@ -590,11 +618,9 @@ def _improve(folder_str: str) -> int:
         return code
 
     try:
-        provider, runner = llm.resolve(cfg)
-    except Exception as e:
-        return fail(f"{type(e).__name__}: {e}", 2)
-    if runner is None:
-        return fail(assistant.NO_PROVIDER, 2)
+        provider, runner = _pick(cfg, chosen)
+    except _NoModel as e:
+        return fail(str(e), 2)
     tracker, runner = _llm_tracker(bus, "improve", "улучшение расшифровки", provider, runner)
     try:
         with tracker:

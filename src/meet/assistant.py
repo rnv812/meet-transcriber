@@ -187,15 +187,19 @@ def _write_atomic(path: Path, text: str) -> None:
 
 
 def summarize(folder: Path, runner, knowledge_dir, *, provider: str | None = None,
-              want_title: bool = False) -> Path:
+              want_title: bool = False, origin: dict | None = None) -> Path:
     """Итоги встречи → `summary.md`. Ошибка модели — RuntimeError, прежний
     summary.md при этом не трогается.
 
     `want_title` — включено «Придумывать название встречи»: модель первой
     строкой пишет «Название: …»; строка в итоги не попадает, а название ложится
     в meta.json (`summary_title`) — применяет его резидент или CLI по правилам
-    `meet.titles`."""
-    from meet import titles
+    `meet.titles`.
+
+    `origin` — какая модель отвечает ({"provider", "model"}, `llm.describe`):
+    подпись в summary.md, `summary_llm` в meta.json и у предложенного
+    названия (U3). Нет — только имя провайдера."""
+    from meet import llm, titles
 
     folder = Path(folder)
     data = _read_transcript(folder)
@@ -211,12 +215,16 @@ def summarize(folder: Path, runner, knowledge_dir, *, provider: str | None = Non
         raise RuntimeError(EMPTY_REPLY)
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     path = folder / SUMMARY_MD
+    origin = origin if origin and origin.get("provider") else (
+        {"provider": provider, "model": None} if provider else None)
     _write_atomic(path, f"# Итоги — {title}\n\n{text}\n\n"
-                        f"_Модель: {provider or 'модель'} · {stamp}_\n")
+                        f"_Модель: {llm.label(origin)} · {stamp}_\n")
     now = time.time()
+    by = {"llm": origin} if origin else {}
     library.update_meta(folder, lambda meta: {
-        **{k: v for k, v in meta.items() if k != "summary_title"}, "summary_at": now,
-        **({"summary_title": {"title": suggested, "at": now}} if suggested and want_title else {})})
+        **{k: v for k, v in meta.items() if k not in ("summary_title", "summary_llm")}, "summary_at": now,
+        **({"summary_llm": origin} if origin else {}),
+        **({"summary_title": {"title": suggested, "at": now, **by}} if suggested and want_title else {})})
     return path
 
 
@@ -236,19 +244,22 @@ def _live_draft(folder: Path) -> str:
 
 
 def read_summary(folder: Path) -> dict | None:
-    """`{"markdown", "created_at"}` или None, если итогов нет."""
+    """`{"markdown", "created_at", "llm"}` или None, если итогов нет. `llm` —
+    какая модель их сделала ({"provider", "model"}); итоги до 0.3.4 — None."""
     path = Path(folder) / SUMMARY_MD
     try:
         markdown = path.read_text(encoding="utf-8")
     except OSError:
         return None
-    created = library.read_meta(Path(folder)).get("summary_at")
+    meta = library.read_meta(Path(folder))
+    origin = meta.get("summary_llm") if isinstance(meta.get("summary_llm"), dict) else None
+    created = meta.get("summary_at")
     if not isinstance(created, (int, float)):
         try:
             created = path.stat().st_mtime
         except OSError:
             created = None
-    return {"markdown": markdown, "created_at": created}
+    return {"markdown": markdown, "created_at": created, "llm": origin}
 
 
 # --- вопросы -------------------------------------------------------------------
@@ -272,7 +283,7 @@ def read_qa(folder: Path) -> list[dict]:
 
 
 def ask(folder: Path, question: str, runner, knowledge_dir, *,
-        provider: str | None = None) -> dict:
+        provider: str | None = None, origin: dict | None = None) -> dict:
     """Вопрос по записи. Ответ дописывается в qa.jsonl; ошибка — RuntimeError."""
     folder = Path(folder)
     data = _read_transcript(folder)
@@ -293,7 +304,8 @@ def ask(folder: Path, question: str, runner, knowledge_dir, *,
     parts += ["", f"Новый вопрос: {question}"]
     answer = _call(runner, "\n".join(parts), system_prompt=ASK_SYSTEM,
                    allowed_dirs=dirs, cwd=folder, timeout_s=ASK_TIMEOUT_S)
-    item = {"q": question, "a": answer, "at": time.time(), "provider": provider}
+    item = {"q": question, "a": answer, "at": time.time(), "provider": provider,
+            "model": (origin or {}).get("model")}
     with (folder / QA_JSONL).open("a", encoding="utf-8") as f:
         f.write(json.dumps(item, ensure_ascii=False) + "\n")
     return item

@@ -76,7 +76,7 @@ def test_summarize_writes_summary_with_title_and_model_line(tmp_path):
     text = path.read_text(encoding="utf-8")
     assert text.startswith("# Итоги — Планёрка\n")
     assert "## Итоги\n- решили X" in text
-    assert "_Модель: codex · " in text
+    assert "_Модель: Codex · " in text
     prompt, kwargs = calls[0]
     assert "[00:05] Демьян: Начнём. Срок пятница." in prompt
     assert kwargs["system_prompt"] == assistant.SUMMARY_SYSTEM

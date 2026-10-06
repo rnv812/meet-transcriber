@@ -67,7 +67,7 @@ def test_summary_and_ask_jobs_report_their_files(tmp_path, monkeypatch, capsys):
     assert job_worker.main(["summary", str(folder)]) == 0
     result = [x for x in _lines(capsys) if x.get("kind") == "job.result"]
     assert result == [{"kind": "job.result", "path": str(folder / "summary.md")}]
-    assert "_Модель: codex · " in (folder / "summary.md").read_text(encoding="utf-8")
+    assert "_Модель: Codex · " in (folder / "summary.md").read_text(encoding="utf-8")
 
     assert job_worker.main(["ask", str(folder), "--question=-что решили?"]) == 0
     result = [x for x in _lines(capsys) if x.get("kind") == "job.result"]

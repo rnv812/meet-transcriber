@@ -60,6 +60,9 @@ class Recording:
     # "user" — задал человек, "ai" — предложила модель, "site" — заголовок
     # окна звонка в браузере.
     title_source: str = "auto"
+    # Какая модель придумала название `ai` ({"provider", "model"}, meta.json
+    # `title_llm`, U3). Название не от модели или модель неизвестна — None.
+    title_llm: dict | None = None
     source: str = "record"
     # mtime транскрипта: окно сравнивает его с концом упавшей перерасшифровки.
     transcript_at: float | None = None
@@ -107,6 +110,7 @@ class Recording:
             "has_voices": self.has_voices,
             "title": self.title,
             "title_source": self.title_source,
+            "title_llm": self.title_llm,
             "source": self.source,
             "transcript_at": self.transcript_at,
             "diarization": self.diarization,
@@ -808,6 +812,8 @@ def describe(folder: Path) -> Recording | None:
         has_voices=bool(list(folder.glob("*_speakers.json"))),
         title=title,
         title_source=title_source(meta),
+        title_llm=meta["title_llm"] if title_source(meta) == "ai" and isinstance(meta.get("title_llm"), dict)
+        else None,
         source=source,
         transcript_at=transcript_at,
         diarization=diarization,

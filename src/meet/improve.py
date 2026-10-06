@@ -532,7 +532,7 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
         now: float | None = None) -> dict:
     """Найти замены → документ improve.json (без записи на диск). Модель не
     ответила ни на одну часть — ImproveError."""
-    from meet import analysis
+    from meet import analysis, llm
 
     folder = Path(folder)
     # Со словами: время каждого места (▶ в окне) — по словам, а не всей фразы.
@@ -574,6 +574,8 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     doc = {
         "version": VERSION,
         "model": analysis.model_label(provider, cfg),
+        # Какая модель предложила замены (U3).
+        "llm": llm.describe(provider, cfg),
         "created_at": time.time() if now is None else now,
         "fingerprint": fp,
         "segments": len(data.get("segments") or []),

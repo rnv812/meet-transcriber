@@ -172,6 +172,10 @@ class Job:
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            # Модель, выбранная человеком для этой задачи модели (U3); нет —
+            # модель по умолчанию, и ключа нет.
+            **({"provider": self.options["provider"]}
+               if isinstance(self.options, dict) and self.options.get("provider") else {}),
         }
 
 
@@ -225,7 +229,12 @@ def worker_argv(job: Job) -> list[str]:
         return argv
     if job.kind == DOWNLOAD_MODEL:
         return argv  # путь задачи — это repo_id модели
-    if job.kind in (SUMMARY, MERGE, ANALYZE, IMPROVE):
+    # Модель, выбранная человеком для одного действия (U3): только она, без
+    # перехода на модель по умолчанию — это проверяет сам подпроцесс.
+    chosen = [f"--provider={options['provider']}"] if options.get("provider") else []
+    if job.kind in (SUMMARY, ANALYZE, IMPROVE):
+        return argv + chosen
+    if job.kind == MERGE:
         return argv
     if job.kind == OWNER_VOICE and options.get("derive"):
         # Поиск голоса по прошлым встречам (meet.owner_derive): папка записей
@@ -253,7 +262,7 @@ def worker_argv(job: Job) -> list[str]:
     if job.kind == ASK:
         # Одним аргументом через «=»: вопрос с ведущим дефисом argparse иначе
         # принял бы за флаг.
-        return argv + [f"--question={options.get('question') or ''}"]
+        return argv + [f"--question={options.get('question') or ''}", *chosen]
     if options.get("speakers"):
         argv += ["--speakers", str(int(options["speakers"]))]
     if options.get("hotwords"):

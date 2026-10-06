@@ -852,6 +852,10 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
     # Число сегментов: устаревший анализ (правили текст) окно показывает, пока
     # номера реплик те же — то есть пока сегментов столько же (M3).
     doc["segments"] = len(data.get("segments") or [])
+    # Какая модель разметила (U3): окно показывает «Анализ: Claude Code (sonnet)».
+    from meet import llm
+
+    doc["llm"] = llm.describe(provider, cfg)
     return doc
 
 

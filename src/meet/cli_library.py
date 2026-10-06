@@ -455,6 +455,13 @@ def _model(args, cfg):
     return provider, runner
 
 
+def _origin(provider, cfg) -> dict:
+    """Какая модель отвечает ({"provider", "model"}) — подпись результата."""
+    from meet import llm
+
+    return llm.describe(provider, cfg)
+
+
 def _summary(args, cfg) -> None:
     from meet import assistant
 
@@ -463,7 +470,8 @@ def _summary(args, cfg) -> None:
     provider, runner = _model(args, cfg)
     try:
         path = assistant.summarize(folder, runner, cfg.assistant.knowledge_dir,
-                                   provider=provider, want_title=cfg.assistant.auto_title)
+                                   provider=provider, want_title=cfg.assistant.auto_title,
+                                   origin=_origin(provider, cfg))
         markdown = path.read_text(encoding="utf-8")
     except (RuntimeError, OSError) as e:
         raise CliError(f"Итоги не получились: {e}")
@@ -501,7 +509,7 @@ def _ask(args, cfg) -> None:
     provider, runner = _model(args, cfg)
     try:
         item = assistant.ask(folder, question, runner, cfg.assistant.knowledge_dir,
-                             provider=provider)
+                             provider=provider, origin=_origin(provider, cfg))
     except (RuntimeError, OSError) as e:
         raise CliError(f"Ответа нет: {e}")
     _result(args, item, item["a"] + "\n")

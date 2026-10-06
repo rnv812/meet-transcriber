@@ -110,44 +110,52 @@ def may_replace(meta: dict, sites=()) -> bool:
 
 
 def write_title(folder: Path, title: str, source: str, *, only_if=None,
-                accepted: bool = False) -> bool:
+                accepted: bool = False, origin: dict | None = None) -> bool:
     """Название и его происхождение — в meta.json под замком папки. `only_if(meta)`
     проверяется там же (человек переименовал запись в эту секунду — не
-    затираем). → поменялось ли что-нибудь."""
+    затираем). `origin` — какая модель придумала название ({"provider",
+    "model"}, `title_llm`): только у `ai`; без него прежняя подпись снимается.
+    → поменялось ли что-нибудь."""
     changed = False
+    by = {TITLE_LLM: origin} if origin and source == "ai" else {}
 
     def change(meta: dict) -> dict:
         nonlocal changed
         if only_if is not None and not only_if(meta):
             return meta
         if (meta.get("title") == title and library.title_source(meta) == source
-                and bool(meta.get("title_accepted")) == accepted):
+                and bool(meta.get("title_accepted")) == accepted
+                and meta.get(TITLE_LLM) == by.get(TITLE_LLM)):
             return meta
         changed = True
-        rest = {k: v for k, v in meta.items() if k != "title_accepted"}
+        rest = {k: v for k, v in meta.items() if k not in ("title_accepted", TITLE_LLM)}
         return {**rest, "title": title, "title_source": source,
-                **({"title_accepted": True} if accepted else {})}
+                **({"title_accepted": True} if accepted else {}), **by}
 
     library.update_meta(Path(folder), change)
     return changed
 
 
-def apply_ai(folder: Path, title, cfg) -> str | None:
+def apply_ai(folder: Path, title, cfg, origin: dict | None = None) -> str | None:
     """Название от модели — если включена настройка и нынешнее можно менять.
-    → поставленное название или None."""
+    `origin` — какая модель его придумала (`title_llm`). → поставленное
+    название или None."""
     if not cfg.assistant.auto_title:
         return None
     title = clean(title)
     if not title:
         return None
     sites = cfg.auto_record.call_sites
-    ok = write_title(folder, title, "ai", only_if=lambda meta: may_replace(meta, sites))
+    ok = write_title(folder, title, "ai", only_if=lambda meta: may_replace(meta, sites), origin=origin)
     return title if ok else None
 
 
 # Черновое название по теме ассистента, поставленное последним (в meta.json):
 # название `ai`, совпадающее с ним, — всё ещё черновик.
 LIVE_DRAFT = "live_title"
+# Какая модель придумала название `ai` (meta.json, {"provider", "model"}, U3).
+# У чернового по теме ассистента подписи нет: модель живого режима здесь неизвестна.
+TITLE_LLM = "title_llm"
 
 
 def apply_live_draft(folder: Path, title, cfg) -> str | None:
@@ -174,7 +182,7 @@ def apply_live_draft(folder: Path, title, cfg) -> str | None:
         if source == "ai" and meta.get("title") == title:
             return meta
         changed = True
-        rest = {k: v for k, v in meta.items() if k != "title_accepted"}
+        rest = {k: v for k, v in meta.items() if k not in ("title_accepted", TITLE_LLM)}
         return {**rest, "title": title, "title_source": "ai", LIVE_DRAFT: title}
 
     library.update_meta(Path(folder), change)
@@ -251,40 +259,63 @@ def ask_title(folder: Path, runner) -> str:
     return title
 
 
-def suggest(folder: Path, runner=None) -> dict:
+def suggest(folder: Path, runner=None, *, origin: dict | None = None,
+            use_analysis: bool = True) -> dict:
     """Название для «Предложить название»: из свежего анализа (без вызова
-    модели), иначе коротким вызовом. → {"title", "from": "analysis"|"model"}.
-    Нужен вызов, а runner не дан — RuntimeError."""
+    модели), иначе коротким вызовом. → {"title", "from": "analysis"|"model",
+    "llm"?} — `llm` — какая модель его придумала (у анализа — его модель).
+    `use_analysis=False` — модель выбрал человек: зовём её, а не берём
+    название из анализа другой модели. Нужен вызов, а runner не дан — RuntimeError."""
     from meet import analysis
 
-    title = analysis.fresh_title(Path(folder))
-    if title:
-        return {"title": title, "from": "analysis"}
+    if use_analysis:
+        title = analysis.fresh_title(Path(folder))
+        if title:
+            doc = analysis.read(Path(folder)) or {}
+            by = doc.get("llm") if isinstance(doc.get("llm"), dict) else None
+            return {"title": title, "from": "analysis", **({"llm": by} if by else {})}
     if runner is None:
         raise RuntimeError("модель не подключена")
-    return {"title": ask_title(folder, runner), "from": "model"}
+    return {"title": ask_title(folder, runner), "from": "model", **({"llm": origin} if origin else {})}
 
 
 def main(argv: list[str] | None = None) -> int:
-    """`python -m meet.titles <папка>` → одна строка JSON {"title", "from"} или
-    {"error"}: подпроцесс резидента для «Предложить название»."""
+    """`python -m meet.titles <папка> [--provider=<модель>]` → одна строка JSON
+    {"title", "from", "llm"} или {"error"}: подпроцесс резидента для
+    «Предложить название». `--provider` — модель, выбранная человеком: только
+    она (не включена, не найдена — ошибка, без перехода на модель по умолчанию),
+    и название из анализа тогда не подставляется."""
     from meet import analysis, llm, settings
 
     args = sys.argv[1:] if argv is None else argv
-    if len(args) != 1:
+    chosen = None
+    rest = []
+    for arg in args:
+        if arg.startswith("--provider="):
+            chosen = arg.split("=", 1)[1] or None
+        else:
+            rest.append(arg)
+    if len(rest) != 1:
         print(json.dumps({"error": "ожидается папка записи"}))
         return 2
-    folder = Path(args[0])
+    folder = Path(rest[0])
     try:
-        if analysis.fresh_title(folder):
+        if chosen is None and analysis.fresh_title(folder):
             out = suggest(folder)
         else:
-            provider, runner = llm.resolve(settings.load())
+            cfg = settings.load()
+            if chosen is not None:
+                error = llm.choice_error(cfg, chosen)
+                if error:
+                    raise RuntimeError(error)
+                provider, runner = llm.resolve(cfg, chosen)
+            else:
+                provider, runner = llm.resolve(cfg)
             if runner is None:
                 from meet.assistant import NO_PROVIDER
 
                 raise RuntimeError(NO_PROVIDER)
-            out = suggest(folder, runner)
+            out = suggest(folder, runner, origin=llm.describe(provider, cfg), use_analysis=chosen is None)
     except Exception as e:
         print(json.dumps({"error": str(e) or type(e).__name__}))
         return 1
