@@ -561,7 +561,7 @@ export type LlmOrigin = { provider: string; model: string | null };
 export type Summary = { markdown: string; created_at: number | null; llm?: LlmOrigin | null };
 
 /** Пара из `qa.jsonl`; `at` — секунды эпохи. */
-export type QaItem = { q: string; a: string; at: number; provider: string | null };
+export type QaItem = { q: string; a: string; at: number; provider: string | null; model?: string | null };
 
 /** Что видит резидент: CLI найдены, локальная модель отвечает. */
 export type ProviderAvailability = { found: boolean; path?: string | null; base_url?: string };
@@ -822,6 +822,8 @@ export type AnalysisState = {
   analysis?: Analysis;
   error?: string;
   job?: Job;
+  /** «failed»: модель, выбранная для упавшей задачи — «Повторить» идёт ею же (0.3.4). */
+  provider?: string;
 };
 
 /** `POST /recordings/{id}/title/suggest`: название и откуда оно (свежий анализ или вызов модели). */
@@ -866,6 +868,8 @@ export type ImproveState = {
   error?: string;
   job?: Job;
   hint?: boolean;
+  /** «failed»: модель, выбранная для упавшей задачи — «Повторить» идёт ею же (0.3.4). */
+  provider?: string;
 };
 /** Применённая группа (в ответе и в шаге истории); `edited` — «как правильно» вписал человек. */
 export type ImproveApplied = { from: string; to: string; kind: ImproveKind; count: number; edited?: boolean };

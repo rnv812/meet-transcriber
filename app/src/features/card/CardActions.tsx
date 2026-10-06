@@ -64,7 +64,7 @@ const NO_MODELS: ModelChoice[] = [];
 export function CardActions({
   canExport, canRetranscribe, busy, onExport, onKbExport, onOpenFolder, onRetranscribe, onRediarize, onReanalyze,
   reanalyzeBlocked = null, reanalyzeLabel = "Переанализировать", onSuggestTitle, onImprove, improveBlocked = null,
-  onDelete, kbPending = false, models = NO_MODELS,
+  onDelete, kbPending = false, models = NO_MODELS, reanalyzePickBlocked = null,
 }: {
   canExport: boolean;
   canRetranscribe: boolean;
@@ -82,6 +82,11 @@ export function CardActions({
   onReanalyze?: (provider?: string) => void;
   /** Почему «Переанализировать» сейчас недоступно (анализ уже идёт, нет модели) — подсказкой; null — доступно. */
   reanalyzeBlocked?: string | null;
+  /**
+   * Почему нельзя выбрать модель для анализа (анализ уже в очереди или идёт);
+   * недоступная модель по умолчанию стрелку не запирает. null — можно.
+   */
+  reanalyzePickBlocked?: string | null;
   /** Подпись пункта: «Анализировать», если анализа ещё не было. */
   reanalyzeLabel?: string;
   /** «Предложить название»; нет — пункта нет. */
@@ -104,7 +109,8 @@ export function CardActions({
   const [pick, setPick] = useState<Pick | null>(null);
   /** Модель, выбранная для «Переанализировать…», ждёт подтверждения. */
   const [chosen, setChosen] = useState<string | undefined>(undefined);
-  const choose = models.length > 1;
+  // Выбирать есть из чего и есть что: больше одной включённой, хоть одна доступна.
+  const choose = models.length > 1 && models.some((m) => m.available);
 
   const close = (focusBack = true) => {
     const kind = menu?.kind;
@@ -145,6 +151,8 @@ export function CardActions({
   /** Стрелка у пункта действия модели — список моделей (если выбирать есть из чего). */
   const splitOf = (kind: Pick): MenuItem["split"] => (choose ? {
     label: pickLabel(pickTitle[kind]), hint: "Выбрать модель для этого действия", onSelect: () => setPick(kind),
+    // Недоступная модель по умолчанию запирает только основное нажатие.
+    disabled: busy || (kind === "reanalyze" && !!reanalyzePickBlocked),
   } : undefined);
 
   let items: MenuItem[] = [];

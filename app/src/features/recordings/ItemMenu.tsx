@@ -37,7 +37,12 @@ export type MenuItem = {
    * Пункт-«разделённая кнопка»: основное нажатие — `onSelect`, стрелка справа —
    * `split.onSelect` (например, выбрать другую модель для этого действия).
    */
-  split?: { label: string; onSelect: () => void; hint?: string };
+  split?: { label: string; onSelect: () => void; hint?: string; disabled?: boolean };
+  /**
+   * Вариант виден и доступен с клавиатуры и экранному диктору (`aria-disabled`,
+   * причина — в `detail`), но не выбирается: недоступная модель.
+   */
+  unavailable?: boolean;
   /** Вторая строка мелким шрифтом под подписью (куда уходит текст, почему недоступно). */
   detail?: string;
 };
@@ -109,9 +114,11 @@ export function ItemMenu({ at, align = "start", label, items, note, anchor, onCl
         const main = (
           <button type="button" role={item.checked === undefined ? "menuitem" : "menuitemradio"}
             aria-checked={item.checked} tabIndex={-1} title={item.hint} disabled={item.disabled}
+            aria-disabled={item.unavailable || undefined}
             data-autofocus={item.autoFocus || undefined}
-            className={`item-menu__item${item.danger ? " item-menu__item--danger" : ""}`}
-            onClick={item.onSelect}>
+            className={`item-menu__item${item.danger ? " item-menu__item--danger" : ""}${
+              item.unavailable ? " item-menu__item--unavailable" : ""}`}
+            onClick={item.unavailable ? undefined : item.onSelect}>
             {item.icon && <span className="item-menu__icon" aria-hidden="true">{item.icon}</span>}
             {item.detail ? (
               <span className="item-menu__text">{item.label}<span className="item-menu__detail">{item.detail}</span></span>
@@ -127,7 +134,7 @@ export function ItemMenu({ at, align = "start", label, items, note, anchor, onCl
               <div className="item-menu__split">
                 {main}
                 <button type="button" role="menuitem" tabIndex={-1} aria-label={item.split.label}
-                  title={item.split.hint ?? item.split.label} disabled={item.disabled}
+                  title={item.split.hint ?? item.split.label} disabled={item.split.disabled ?? item.disabled}
                   className="item-menu__item item-menu__more" onClick={item.split.onSelect}>
                   <Icon as={ChevronRight} size="sm" />
                 </button>

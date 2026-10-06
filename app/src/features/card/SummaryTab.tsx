@@ -19,7 +19,7 @@ import type { AgentRequest } from "../../lib/agentRef";
 import { ApiError, getLiveDraft, getSummary, makeSummary, type Endpoint } from "../../lib/api";
 import { dayLabel, errorText } from "../../lib/format";
 import { JiraLinks } from "../../lib/jira";
-import { llmLabel, modelChoices } from "../../lib/llm";
+import { anyModelReady, llmLabel, modelChoices, modelReady, retryText } from "../../lib/llm";
 import { Markdown, type ItemAction } from "../../lib/markdown";
 import { isActiveJob, modelJobsOf } from "../../lib/status";
 import type { AssistantInfo, Job, LiveDraft, Summary } from "../../lib/types";
@@ -27,7 +27,7 @@ import { AskAgentButton } from "../../ui/AskAgent";
 import { Button } from "../../ui/Button";
 import { useConfirm } from "../../ui/ConfirmDialog";
 import { EmptyState } from "../../ui/EmptyState";
-import { ProviderHint, ThinkingStage, noProvider, useLostJobs } from "./assistant";
+import { ProviderHint, ThinkingStage, noModelText, noProvider, useLostJobs } from "./assistant";
 import { ModelSplitButton } from "./modelPick";
 
 const COPIED_MS = 2000;
@@ -150,20 +150,28 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
   });
 
   const blocked = noProvider(assistant);
-  const hint = blocked ? <ProviderHint onOpenSettings={onOpenSettings} /> : null;
+  const hint = blocked ? <ProviderHint onOpenSettings={onOpenSettings} info={assistant} /> : null;
   const canMake = !busy && !thinking && !blocked;
   const choices = modelChoices(assistant);
+  // Модель по умолчанию недоступна — запирается только основное нажатие:
+  // стрелкой можно выбрать другую доступную включённую модель.
+  const canPick = !busy && !thinking && anyModelReady(choices);
+  const reason = blocked ? noModelText(assistant) : null;
   const makeButton = (
     <ModelSplitButton label="Сделать итоги" variant="primary" choices={choices} disabled={!canMake}
-      onRun={(p) => void make(p)} />
+      pickDisabled={!canPick} reason={reason} onRun={(p) => void make(p)} />
   );
+  // «Повторить» после сбоя — той же моделью, что упавшая задача (не моделью по умолчанию).
+  const retryBy = failed?.provider;
+  const canRetry = !busy && !thinking && (retryBy ? modelReady(choices, retryBy) : !blocked);
 
   let main;
   if (summary) {
     main = (
       <>
         <div className="assist__toolbar">
-          <ModelSplitButton label="Переделать…" choices={choices} disabled={!canMake} onRun={(p) => void remake(p)} />
+          <ModelSplitButton label="Переделать…" choices={choices} disabled={!canMake} pickDisabled={!canPick}
+            reason={reason} onRun={(p) => void remake(p)} />
           {confirmNode}
           <Button onClick={() => copy(summary.markdown)} disabled={busy}>{copied ? "Скопировано" : "Копировать"}</Button>
           {summary.llm && (
@@ -218,7 +226,7 @@ export function SummaryTab({ endpoint, id, folder, jobs, assistant, onOpenSettin
       {failed && (
         <div className="assist__failed">
           <div className="assist__error">{failed.error || "Не удалось сделать итоги"}</div>
-          <Button onClick={() => void make()} disabled={!canMake}>Повторить</Button>
+          <Button onClick={() => void make(retryBy)} disabled={!canRetry}>{retryText(retryBy)}</Button>
           {!summary && hint}
         </div>
       )}

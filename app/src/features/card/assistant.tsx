@@ -95,10 +95,32 @@ export function useLostJobs(ids: readonly string[], jobs: Job[], onLost: (id: st
 export const noProvider = (info: AssistantInfo | null): boolean =>
   info !== null && !info.provider && !info.checking;
 
-export function ProviderHint({ onOpenSettings }: { onOpenSettings?: (section: string) => void }) {
+const CONNECT = "Подключите Claude Code, Codex или OpenCode в настройках";
+
+/**
+ * Почему модель по умолчанию не отвечает — точнее, чем «подключите»: «Авто» не
+ * нашло готовой среди включённых или выбранная по умолчанию недоступна; есть
+ * другая доступная — её можно выбрать стрелкой у действия. Старый резидент (без
+ * списка моделей) — прежний текст.
+ */
+export function noModelText(info: AssistantInfo | null): string {
+  const models = info?.models;
+  if (!info || !models) return CONNECT;
+  const other = models.some((m) => m.available) ? " или выберите другую модель стрелкой у действия" : "";
+  if (info.setting === "auto") {
+    return `«Авто» не нашло готовой модели среди включённых — подключите её в настройках${other}`;
+  }
+  const own = models.find((m) => m.provider === info.setting);
+  return `Модель по умолчанию${own ? ` (${own.label})` : ""} недоступна — проверьте её в настройках${other}`;
+}
+
+export function ProviderHint({ onOpenSettings, info = null }: {
+  onOpenSettings?: (section: string) => void;
+  info?: AssistantInfo | null;
+}) {
   return (
     <div className="assist__hint">
-      <span>Подключите Claude Code, Codex или OpenCode в настройках</span>
+      <span>{noModelText(info)}</span>
       {onOpenSettings && (
         <button type="button" className="link-btn" onClick={() => onOpenSettings("assistant")}>
           Открыть настройки

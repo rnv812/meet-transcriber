@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, getAnalysis, patchRecording, suggestTitle, type Endpoint } from "../../lib/api";
 import { errorText } from "../../lib/format";
-import { llmLabel, originOf, provenance } from "../../lib/llm";
+import { llmLabel, originOf, provenance, retryText } from "../../lib/llm";
 import type { AnalysisState, Job, Recording, TitleSuggestion } from "../../lib/types";
 import { isModelProgress } from "../../lib/progress";
 import { Button } from "../../ui/Button";
@@ -68,8 +68,11 @@ export function useAnalysis(endpoint: Endpoint, id: string, folder: string | nul
 export function AnalysisStatus({ state, busy, onRun }: {
   state: AnalysisState | null;
   busy: boolean;
-  /** Переанализировать; нет — без кнопки (модель не подключена). */
-  onRun?: () => void;
+  /**
+   * Переанализировать; нет — без кнопки (модель не подключена). После сбоя
+   * выбранной модели — `onRun(её имя)`: повтор ею же.
+   */
+  onRun?: (provider?: string) => void;
 }) {
   if (!state) return null;
   switch (state.state) {
@@ -97,13 +100,18 @@ export function AnalysisStatus({ state, busy, onRun }: {
       ) : null;
     }
     case "stale":
-      return <StaleAnalysis busy={busy} onRun={onRun} />;
+      return <StaleAnalysis busy={busy} onRun={onRun && (() => onRun())}
+        origin={provenance("Анализ", originOf(state.analysis), state.analysis?.created_at)} />;
     case "failed":
       return (
         <div className="analysis-status" role="status">
           {/* Подробности (часто длинные и технические) — в подсказке, в строке — коротко. */}
           <span className="muted" title={state.error || undefined}>Анализ не удался</span>
-          {onRun && <button type="button" className="link-btn" onClick={onRun} disabled={busy}>Повторить</button>}
+          {onRun && (
+            <button type="button" className="link-btn" onClick={() => onRun(state.provider)} disabled={busy}>
+              {retryText(state.provider)}
+            </button>
+          )}
         </div>
       );
     default:
@@ -145,11 +153,11 @@ export function AnalysisOffer({ busy, onAnswer, onOpenSettings }: {
 }
 
 /** «Анализ устарел» и «Переанализировать…» — с подтверждением: прежняя разметка будет заменена. */
-function StaleAnalysis({ busy, onRun }: { busy: boolean; onRun?: () => void }) {
+function StaleAnalysis({ busy, onRun, origin }: { busy: boolean; onRun?: () => void; origin?: string | null }) {
   const [asking, setAsking] = useState(false);
   return (
     <div className="analysis-status" role="status">
-      <span className="muted">Анализ устарел: расшифровку изменили после него</span>
+      <span className="muted" title={origin ?? undefined}>Анализ устарел: расшифровку изменили после него</span>
       {onRun && <button type="button" className="link-btn" onClick={() => setAsking(true)} disabled={busy}>Переанализировать…</button>}
       {asking && onRun && (
         <ConfirmDialog {...CONFIRMS.reanalyze} onCancel={() => setAsking(false)}
@@ -163,11 +171,15 @@ function StaleAnalysis({ busy, onRun }: { busy: boolean; onRun?: () => void }) {
 export const reanalyzeLabel = (state: AnalysisState | null): string =>
   state?.state === "none" ? "Анализировать" : "Переанализировать";
 
-/** Почему «Переанализировать» сейчас недоступно; null — доступно. */
-export function reanalyzeBlocked(state: AnalysisState | null, noModel: boolean): string | null {
+/**
+ * Почему «Переанализировать» сейчас недоступно; null — доступно. `noModel` —
+ * модель по умолчанию недоступна (`reason` — точный текст): это запирает только
+ * основное нажатие — выбор другой модели стрелкой проверяется с `noModel=false`.
+ */
+export function reanalyzeBlocked(state: AnalysisState | null, noModel: boolean, reason?: string): string | null {
   if (state?.state === "queued") return "Анализ уже в очереди";
   if (state?.state === "running") return "Анализ уже идёт";
-  if (noModel) return "Подключите Claude Code, Codex или OpenCode в настройках";
+  if (noModel) return reason ?? "Подключите Claude Code, Codex или OpenCode в настройках";
   return null;
 }
 

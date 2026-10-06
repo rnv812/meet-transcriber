@@ -62,6 +62,17 @@ export const modelChoices = (info: AssistantInfo | null | undefined): ModelChoic
 /** Выбирать есть из чего: включено больше одной модели. */
 export const canChooseModel = (info: AssistantInfo | null | undefined): boolean => modelChoices(info).length > 1;
 
+/** Модель `provider` включена и найдена на машине. */
+export const modelReady = (choices: ModelChoice[], provider: string): boolean =>
+  choices.some((c) => c.provider === provider && c.available);
+
+/** Хоть одну включённую модель можно выбрать (стрелка выбора не бесполезна). */
+export const anyModelReady = (choices: ModelChoice[]): boolean => choices.some((c) => c.available);
+
+/** «Повторить» после сбоя: с моделью упавшей задачи, если её выбирали. */
+export const retryText = (provider?: string | null): string =>
+  (provider ? `Повторить (${PROVIDER_LABELS[provider] ?? provider})` : "Повторить");
+
 /** Пункт выбора модели: имя, «по умолчанию», куда уходит текст или почему недоступна. */
 export function choiceHint(choice: ModelChoice): string {
   if (!choice.available) return `Недоступна: ${choice.reason ?? "не найдена"}`;

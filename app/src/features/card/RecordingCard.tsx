@@ -27,8 +27,8 @@ import type { AgentInsert } from "./AgentTab";
 import {
   AnalysisOffer, AnalysisStatus, reanalyzeBlocked, reanalyzeLabel, TitleSuggestPopover, useAnalysis, useTitleSuggest,
 } from "./analysis";
-import { noProvider, useAssistant } from "./assistant";
-import { modelChoices } from "../../lib/llm";
+import { noModelText, noProvider, useAssistant } from "./assistant";
+import { modelChoices, modelReady } from "../../lib/llm";
 import { useImprove } from "./improve";
 import { AudioPlayer, type AudioPlayerHandle } from "./AudioPlayer";
 import { CardActions } from "./CardActions";
@@ -296,7 +296,8 @@ export function RecordingCard({
   // ✦ «Улучшить расшифровку»: задача, окно со списком замен, итог с «Отменить».
   const improve = useImprove({
     endpoint, id, folder: rec?.path ?? null, jobs, version: rec, head: rec?.edit_head,
-    noModel: noProvider(assistantInfo), playable: !!rec && Object.keys(rec.tracks).length > 0 && !audioFailed,
+    noModel: noProvider(assistantInfo), noModelReason: noModelText(assistantInfo),
+    models: modelChoices(assistantInfo), playable: !!rec && Object.keys(rec.tracks).length > 0 && !audioFailed,
     onPlay: playPhrase, onChanged: speakersChanged,
   });
   // Разметка по репликам — один раз на анализ (и на смену расшифровки или настроек).
@@ -372,6 +373,8 @@ export function RecordingCard({
   });
   const doTranscribe = () => act(async () => { await transcribe(endpoint, id); onChanged?.(); await load(); });
   const noModel = noProvider(assistantInfo);
+  /** Повтор возможен: выбранной модели — если она доступна, иначе — модели по умолчанию. */
+  const canRerun = (provider?: string) => (provider ? modelReady(modelChoices(assistantInfo), provider) : !noModel);
   /** `provider` — модель, выбранная для этого анализа; нет — модель по умолчанию. */
   const doReanalyze = (provider?: string) => act(async () => {
     await (provider ? runAnalysis(endpoint, id, provider) : runAnalysis(endpoint, id));
@@ -554,7 +557,8 @@ export function RecordingCard({
         onRetranscribe={doTranscribe}
         onRediarize={status.kind === "ready" && hasAudio ? () => setRediarizeOpen(true) : undefined}
         onReanalyze={status.kind === "ready" ? doReanalyze : undefined}
-        reanalyzeBlocked={reanalyzeBlocked(analysis.state, noModel)}
+        reanalyzeBlocked={reanalyzeBlocked(analysis.state, noModel, noModelText(assistantInfo))}
+        reanalyzePickBlocked={reanalyzeBlocked(analysis.state, false)}
         reanalyzeLabel={reanalyzeLabel(analysis.state)}
         onSuggestTitle={status.kind === "ready" ? titleSuggest.open : undefined}
         onImprove={status.kind === "ready" && turns.length ? (p) => void improve.start(p) : undefined}
@@ -564,7 +568,9 @@ export function RecordingCard({
       />
       {error && <div className="card__error" role="alert">{error}</div>}
       {status.kind === "ready" && (
-        <AnalysisStatus state={analysis.state} busy={busy} onRun={noModel ? undefined : () => void doReanalyze()} />
+        <AnalysisStatus state={analysis.state} busy={busy}
+          onRun={canRerun(analysis.state?.state === "failed" ? analysis.state.provider : undefined)
+            ? (p) => void doReanalyze(p) : undefined} />
       )}
       {offerAnalysis && (
         <AnalysisOffer busy={busy} onAnswer={answerOffer}

@@ -17,8 +17,8 @@ import {
   ApiError, applyImprove, dismissImproveHint, getImprove, runImprove, undoSpeakers, type Endpoint,
 } from "../../lib/api";
 import { clock, errorText, plural } from "../../lib/format";
-import type { ImproveGroup, ImproveState, Job } from "../../lib/types";
-import { llmLabel, originOf } from "../../lib/llm";
+import type { ImproveGroup, ImproveState, Job, ModelChoice } from "../../lib/types";
+import { llmLabel, modelReady, originOf, retryText } from "../../lib/llm";
 import { isModelProgress } from "../../lib/progress";
 import { Button } from "../../ui/Button";
 import { HelpTip, TipLine } from "../../ui/HelpTip";
@@ -50,6 +50,8 @@ const APPLY_WAITS = "Сначала исправьте, как правильн�
 
 export type ImproveScope = "terms" | "all";
 
+const NO_MODELS: ModelChoice[] = [];
+
 /** Задача улучшения этой записи, которая ждёт или идёт. */
 export function improveJobOf(folder: string | null | undefined, jobs: Job[]): Job | null {
   if (!folder) return null;
@@ -57,9 +59,12 @@ export function improveJobOf(folder: string | null | undefined, jobs: Job[]): Jo
     && (j.state === "queued" || j.state === "running")) ?? null;
 }
 
-/** Почему «Улучшить расшифровку» сейчас недоступно; null — доступно. */
-export function improveBlocked(noModel: boolean): string | null {
-  return noModel ? "Подключите Claude Code, Codex или OpenCode в настройках" : null;
+/**
+ * Почему «Улучшить расшифровку» сейчас недоступно; null — доступно. Запирает
+ * только основное нажатие (модель по умолчанию): другую модель выбрать можно.
+ */
+export function improveBlocked(noModel: boolean, reason?: string): string | null {
+  return noModel ? reason ?? "Подключите Claude Code, Codex или OpenCode в настройках" : null;
 }
 
 /** Выбранные группы: термины с флажком и, в режиме «Термины и явные ошибки», — отмеченные исправления. */
@@ -89,7 +94,9 @@ type Notice = { text: string; step?: string; undone?: boolean };
  * (`version`): правка текста делает предложение устаревшим — резидент его
  * выбрасывает.
  */
-export function useImprove({ endpoint, id, folder, jobs, version, head, noModel, playable, onPlay, onChanged }: {
+export function useImprove({
+  endpoint, id, folder, jobs, version, head, noModel, noModelReason, models = NO_MODELS, playable, onPlay, onChanged,
+}: {
   endpoint: Endpoint;
   id: string;
   folder: string | null;
@@ -98,6 +105,10 @@ export function useImprove({ endpoint, id, folder, jobs, version, head, noModel,
   /** Последний применённый шаг истории встречи (`edit_head`). */
   head?: string | null;
   noModel: boolean;
+  /** Почему модель по умолчанию недоступна (точный текст). */
+  noModelReason?: string;
+  /** Включённые модели: «Повторить» после сбоя выбранной — если она доступна. */
+  models?: ModelChoice[];
   playable: boolean;
   onPlay: (start: number, until: number) => void;
   /** Применено или отменено: перечитать запись. */
@@ -141,7 +152,9 @@ export function useImprove({ endpoint, id, folder, jobs, version, head, noModel,
     setError(null);
     setOpen(true);
     const now = job ? "busy" : state?.state;
-    if (now === "busy" || (now === "ready" && !provider)) return;
+    // С выбранной моделью — запрос всегда: ждущую задачу другой модели резидент
+    // заменит, идущую — откажет с объяснением (его текст покажет окно).
+    if ((now === "busy" || now === "ready") && !provider) return;
     setBusy(true);
     try {
       await (provider ? runImprove(endpoint, id, provider) : runImprove(endpoint, id));
@@ -214,10 +227,13 @@ export function useImprove({ endpoint, id, folder, jobs, version, head, noModel,
     }
   }, [endpoint, id, notice, onChanged]);
 
-  const blocked = improveBlocked(noModel);
+  const blocked = improveBlocked(noModel, noModelReason);
+  // «Повторить» после сбоя выбранной модели — ею же, если она доступна.
+  const retryBy = shown?.state === "failed" ? shown.provider : undefined;
+  const retryOk = retryBy ? modelReady(models, retryBy) : !blocked;
 
   const status = (
-    <ImproveStatus state={shown} busy={busy} onOpen={() => void start()} onRetry={blocked ? undefined : () => void start()}
+    <ImproveStatus state={shown} busy={busy} onOpen={() => void start()} onRetry={retryOk ? (p) => void start(p) : undefined}
       onDismiss={() => void dismiss()} />
   );
   const dialog = open ? (
@@ -243,7 +259,7 @@ export function ImproveStatus({ state, busy, onOpen, onRetry, onDismiss }: {
   busy: boolean;
   onOpen: () => void;
   /** Повторить; нет — без кнопки (модель не подключена). */
-  onRetry?: () => void;
+  onRetry?: (provider?: string) => void;
   onDismiss: () => void;
 }) {
   if (!state) return null;
@@ -287,7 +303,11 @@ export function ImproveStatus({ state, busy, onOpen, onRetry, onDismiss }: {
           {state.proposal && state.proposal.groups.length > 0 && (
             <button type="button" className="link-btn" onClick={onOpen} disabled={busy}>Прежний список</button>
           )}
-          {onRetry && <button type="button" className="link-btn" onClick={onRetry} disabled={busy}>Повторить</button>}
+          {onRetry && (
+            <button type="button" className="link-btn" onClick={() => onRetry(state.provider)} disabled={busy}>
+              {retryText(state.provider)}
+            </button>
+          )}
         </div>
       );
     default:

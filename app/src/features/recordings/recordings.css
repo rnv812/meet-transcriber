@@ -147,6 +147,7 @@
 .item-menu__item:hover, .item-menu__item:focus-visible { background: var(--surface-hover); outline: none; }
 .item-menu__item--danger { color: var(--red); }
 .item-menu__item:disabled { opacity: 0.45; cursor: default; background: none; }
+.item-menu__item--unavailable { opacity: 0.55; cursor: default; }
 /* Пункт с выбором варианта: основное действие и узкая стрелка справа (выбрать модель). */
 .item-menu__split { display: flex; align-items: stretch; gap: 2px; }
 .item-menu__split > .item-menu__item:first-child { flex: 1; min-width: 0; }

@@ -273,6 +273,18 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
     set("llm", "provider", name);
     if (name !== "auto" && !on(name)) set("llm", "enabled", CONCRETE.filter((p) => p === name || on(p)));
   };
+  /**
+   * Почему флажок «включена» нельзя снять (null — можно): модель по умолчанию
+   * включена всегда, а у «Авто» должна остаться хоть одна своя модель.
+   */
+  const locked = (name: string): string | null => {
+    if (chosen === name) return "Модель по умолчанию включена всегда";
+    if (chosen === "auto" && on(name) && AUTO_CANDIDATES.includes(name)
+        && enabled.filter((p) => AUTO_CANDIDATES.includes(p)).length === 1) {
+      return "Последняя модель для «Авто»: включите другую, прежде чем выключать эту";
+    }
+    return null;
+  };
   const toggle = (name: string, value: boolean) =>
     set("llm", "enabled", CONCRETE.filter((p) => (p === name ? value : on(p))));
   const baseUrl = String(llm("base_url") ?? "");
@@ -293,7 +305,8 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
       <Row label="Модели"
         hint="Включённые можно выбрать у действий карточки. Модель по умолчанию готовит анализ, итоги и названия автоматически и ведёт живого ассистента"
         help={<ProviderTip />} stack>
-        <div role="radiogroup" aria-label="Модель по умолчанию" className="providers">
+        {/* Радио «по умолчанию» — одна группа по имени (name), рядом с флажками «включена». */}
+        <div role="group" aria-label="Модели" className="providers">
           {PROVIDERS.map((p) => {
             const line = status(p, info);
             const missing = p.link && info?.available[p.value]?.found === false;
@@ -309,10 +322,9 @@ export function AssistantSection({ draft, saved, set, endpoint }: {
                   </label>
                   {chosen === p.value && <span className="provider__default">по умолчанию</span>}
                   {concrete && (
-                    <label className="provider__enable"
-                      title={chosen === p.value ? "Модель по умолчанию включена всегда" : "Можно выбрать у действий карточки"}>
+                    <label className="provider__enable" title={locked(p.value) ?? "Можно выбрать у действий карточки"}>
                       <input type="checkbox" aria-label={`Включить: ${p.label}`} checked={on(p.value)}
-                        disabled={chosen === p.value} onChange={(e) => toggle(p.value, e.target.checked)} />
+                        disabled={locked(p.value) !== null} onChange={(e) => toggle(p.value, e.target.checked)} />
                       включена
                     </label>
                   )}

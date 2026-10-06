@@ -21,7 +21,8 @@ export function modelMenuItems(choices: ModelChoice[], onPick: (provider: string
     icon: c.local ? <Laptop {...ICON} /> : <Cloud {...ICON} />,
     detail: choiceHint(c),
     hint: choiceHint(c),
-    disabled: !c.available,
+    // Недоступная видна и доступна с клавиатуры (причина читается), но не выбирается.
+    unavailable: !c.available,
     autoFocus: c.default && c.available,
     onSelect: () => onPick(c.provider),
   }));
@@ -33,25 +34,32 @@ export const pickLabel = (action: string) => `${action}: выбрать моде
 /**
  * Кнопка действия модели с выбором модели: основное нажатие — `onRun()`
  * (модель по умолчанию), стрелка — меню включённых моделей, выбор —
- * `onRun(provider)`.
+ * `onRun(provider)`. `disabled` запирает основное нажатие (`reason` — почему,
+ * в подсказке), `pickDisabled` — стрелку: модель по умолчанию может быть
+ * недоступна, а другая включённая — нет.
  */
-export function ModelSplitButton({ label, choices, onRun, disabled, variant }: {
+export function ModelSplitButton({ label, choices, onRun, disabled, pickDisabled = disabled, reason, variant }: {
   label: string;
   choices: ModelChoice[];
   onRun: (provider?: string) => void;
   disabled?: boolean;
+  pickDisabled?: boolean;
+  reason?: string | null;
   variant?: ButtonVariant;
 }) {
   const arrow = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  if (choices.length < 2) return <Button variant={variant} onClick={() => onRun()} disabled={disabled}>{label}</Button>;
+  if (choices.length < 2) {
+    return <Button variant={variant} onClick={() => onRun()} disabled={disabled} title={reason ?? undefined}>{label}</Button>;
+  }
   const close = () => { setOpen(false); arrow.current?.focus(); };
   return (
     <span className="split-btn">
-      <Button variant={variant} className="split-btn__main" onClick={() => onRun()} disabled={disabled}>{label}</Button>
+      <Button variant={variant} className="split-btn__main" onClick={() => onRun()} disabled={disabled}
+        title={reason ?? undefined}>{label}</Button>
       <Button ref={arrow} variant={variant} className="split-btn__more" aria-label={pickLabel(label)}
         title="Выбрать модель для этого действия" aria-haspopup="menu" aria-expanded={open}
-        onClick={() => setOpen((o) => !o)} disabled={disabled}>
+        onClick={() => setOpen((o) => !o)} disabled={pickDisabled}>
         <ChevronDown {...ICON} size={14} />
       </Button>
       {open && (

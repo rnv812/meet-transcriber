@@ -492,3 +492,18 @@ test("включить вторую модель: у каждой включён
     llm: { enabled: ["claude-code", "openai-compatible"] },
   }));
 });
+
+test("у «Авто» нельзя выключить последнюю его модель — ни одной включённой не бывает", async () => {
+  vi.mocked(api.getSettings).mockResolvedValue(merge(settings, {
+    llm: { provider: "auto", enabled: ["claude-code", "opencode"] },
+  }));
+  open();
+  const claude = await screen.findByRole("checkbox", { name: "Включить: Claude Code" });
+  expect(claude).toBeDisabled();
+  expect(claude.closest("label")).toHaveAttribute("title", expect.stringMatching(/Последняя модель для «Авто»/));
+  // Включили другую — первую уже можно выключить.
+  await userEvent.click(screen.getByRole("checkbox", { name: "Включить: Codex" }));
+  expect(claude).toBeEnabled();
+  // OpenCode «Авто» не выбирает — его выключать можно всегда.
+  expect(screen.getByRole("checkbox", { name: "Включить: OpenCode" })).toBeEnabled();
+});
