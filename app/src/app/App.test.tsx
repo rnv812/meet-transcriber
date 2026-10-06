@@ -52,6 +52,11 @@ vi.mock("../lib/api", async (orig) => ({
   // По умолчанию — резидент без групп (как до 0.3.5): интерфейс групп скрыт.
   getGroups: vi.fn(async () => { throw new (await import("../lib/api")).ApiError(404, "нет"); }),
   getParticipants: vi.fn(async () => []),
+  getFacets: vi.fn(async () => ({
+    total: 3, scope: "library", categories: { items: [], none: 3 },
+    groups: { items: [{ id: "g-a", count: 2 }, { id: "g-b", count: 1 }], unknown: [], none: 0 },
+    people: [], has: { summary: 0, analysis: 0, assistant: 0, transcript: 3 }, duration: { lt15: 0, m15_60: 3, gt60: 0 },
+  })),
   patchSettings: vi.fn(async () => ({ settings: {}, restart_required: [] })),
 }));
 const engineState = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
@@ -578,4 +583,61 @@ test("после начала установки мастер не убирае�
   } finally {
     vi.useRealTimers();
   }
+});
+
+// --- группы вместе с поиском (интеграция groups-ui и search-ui) ------------------------------
+
+const TWO_GROUPS = {
+  groups: [
+    { id: "g-a", name: "Альфа", color: "#4c8bf5", count: 2 },
+    { id: "g-b", name: "Бета", color: "#e5484d", count: 1 },
+  ],
+  unknown: [], none: 1,
+};
+const field = () => screen.getByRole("combobox", { name: "Поиск по записям" });
+
+async function withGroups() {
+  vi.mocked(api.getGroups).mockResolvedValue(TWO_GROUPS);
+  residentState.current = online();
+  render(<App />);
+  const list = await within(screen.getByRole("navigation")).findByRole("list", { name: "Группы встреч" });
+  return list;
+}
+afterEach(() => window.localStorage.removeItem("meet.groupScope"));
+
+test("область группы и метка «группа:» — пересечение: та же группа — она, другая — ничего", async () => {
+  const list = await withGroups();
+  await userEvent.click(within(list).getByRole("button", { name: /^Альфа,/ }));
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { groups: ["g-a"] }, "");
+  expect(field()).toHaveAttribute("placeholder", "Поиск в «Альфа»");
+  await userEvent.type(field(), "группа:Бета");
+  // У встречи одна группа: «Альфа» ∩ «Бета» пусто — резиденту id, которого нет ни у одной встречи.
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "", 0, 0, { groups: ["0-no-match"] }, "группа:Бета");
+  await userEvent.clear(field());
+  await userEvent.type(field(), "группа:Альфа бюджет");
+  expect(useLibrarySpy).toHaveBeenLastCalledWith(ep, "бюджет", 0, 0, { groups: ["g-a"] }, "группа:Альфа бюджет");
+});
+
+test("счётчики групп — по разобранному запросу: текст без префиксов и условия без групп", async () => {
+  const list = await withGroups();
+  await userEvent.click(within(list).getByRole("button", { name: /^Альфа,/ }));
+  await userEvent.type(field(), "участник:Анна группа:Бета бюджет");
+  // Префиксы — не слова поиска; своя «группа:» в счётчиках групп не участвует (как в «Фильтрах»).
+  await waitFor(() => expect(api.getGroups).toHaveBeenLastCalledWith(ep, "бюджет", { people: ["Анна"] }),
+    { timeout: 2000 });
+});
+
+test("«Фильтры» в области группы: счётчики — в области, измерения «Группа» нет", async () => {
+  const list = await withGroups();
+  await userEvent.click(screen.getByRole("button", { name: "Фильтры" }));
+  await waitFor(() => expect(api.getFacets).toHaveBeenCalled());
+  expect(within(screen.getByRole("dialog", { name: "Фильтры" })).getByText("Группа", { selector: "legend" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Фильтры" }));
+  vi.mocked(api.getFacets).mockClear();
+  await userEvent.click(within(list).getByRole("button", { name: /^Альфа,/ }));
+  await userEvent.click(screen.getByRole("button", { name: "Фильтры" }));
+  await waitFor(() => expect(api.getFacets).toHaveBeenCalledWith(ep, undefined, { groups: ["g-a"] }, expect.any(AbortSignal)));
+  const panel = screen.getByRole("dialog", { name: "Фильтры" });
+  expect(within(panel).queryByText("Группа", { selector: "legend" })).toBeNull();
+  expect(within(panel).getByText("Есть", { selector: "legend" })).toBeInTheDocument();
 });
