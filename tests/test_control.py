@@ -127,6 +127,11 @@ class FakeState:
             raise control.BadRequest("группы нет")
         return {"changed": body.get("add", []), "failed": []}
 
+    def facets(self, q="", filters=None):
+        self.calls.append(("facets", q))
+        self.filters = filters
+        return {"total": 0}
+
     def participants(self, q="", limit=20):
         self.calls.append(("participants", q, limit))
         return [{"name": "Анна", "meetings": 2, "last_at": None, "owner": False}]
@@ -1357,3 +1362,9 @@ def test_participants_route(server):
     assert ("participants", "ан", 5) in server.state_obj.calls
     _get(server, "/participants")
     assert ("participants", "", 20) in server.state_obj.calls
+
+
+def test_facets_route(server):
+    assert _get(server, "/facets?q=x&groups=g-1&has=summary") == {"total": 0}
+    assert ("facets", "x") in server.state_obj.calls
+    assert server.state_obj.filters == {"groups": ["g-1"], "has": ["summary"]}

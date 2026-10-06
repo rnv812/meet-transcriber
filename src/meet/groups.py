@@ -290,9 +290,16 @@ def _unique(items: list[dict], name: str, skip: str | None = None) -> None:
         raise GroupError(f"группа «{name}» уже есть")
 
 
-def create(root: Path, name, color=None, *, gid=None, index=None, taken=(), created_at=None) -> dict:
+# Поля группы, которые задаёт сам create; прочие (`extra`) — чужие: их могла
+# добавить новая версия Meet (например, `parent` у дерева групп).
+OWN_FIELDS = ("id", "name", "color", "created_at")
+
+
+def create(root: Path, name, color=None, *, gid=None, index=None, taken=(), created_at=None,
+           extra: dict | None = None) -> dict:
     """Новая группа (в конец или на место `index`). `gid` — вернуть удалённую
-    («Отменить», с её `created_at`) или назвать неизвестную с тем же id.
+    («Отменить», с её `created_at` и прочими полями `extra` — как было) или
+    назвать неизвестную с тем же id.
     `taken` — id, которые уже встречаются в meta.json встреч: новый id их не
     повторит. Отложен битый файл — в ответе `moved_broken`."""
     name = _name(name)
@@ -310,7 +317,8 @@ def create(root: Path, name, color=None, *, gid=None, index=None, taken=(), crea
         new_id = gid
         while new_id is None or (gid is None and (new_id in taken or any(g["id"] == new_id for g in items))):
             new_id = f"g-{secrets.token_hex(4)}"
-        group = {"id": new_id, "name": name, "color": color or PALETTE[len(items) % len(PALETTE)],
+        kept = {k: v for k, v in (extra or {}).items() if k not in OWN_FIELDS} if gid is not None else {}
+        group = {**kept, "id": new_id, "name": name, "color": color or PALETTE[len(items) % len(PALETTE)],
                  "created_at": created_at or datetime.now().isoformat(timespec="seconds")}
         at = len(items) if index is None else max(0, min(index, len(items)))
         items.insert(at, group)

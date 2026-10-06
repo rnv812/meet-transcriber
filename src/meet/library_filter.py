@@ -30,6 +30,8 @@ from datetime import date
 
 from meet.groups import NONE_KEY as GROUP_NONE
 
+# Измерения фильтра: у каждого фасета «Фильтров» — своё (`has` и `lacks` — одно).
+DIMENSIONS = ("categories", "groups", "people", "dates", "has", "duration")
 PARAMS = ("categories", "groups", "people", "from", "to", "has", "lacks", "min_s", "max_s", "in")
 HAS = ("summary", "analysis", "assistant", "transcript")
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -39,7 +41,8 @@ class FilterError(ValueError):
     """Негодный параметр фильтра (текст — человеку)."""
 
 
-def _has(card: dict, what: str) -> bool:
+def card_has(card: dict, what: str) -> bool:
+    """Есть ли у встречи `what` (HAS)."""
     if what == "summary":
         return bool(card.get("has_summary"))
     if what == "analysis":
@@ -82,30 +85,43 @@ class LibraryFilter:
         считаются среди найденного остальными условиями."""
         return replace(self, **{f: () for f in facets})
 
-    def __call__(self, card: dict) -> bool:
-        if self.categories:
+    def dimensions(self) -> tuple[str, ...]:
+        """Измерения (DIMENSIONS), в которых у фильтра есть условия."""
+        return tuple(d for d, on in (
+            ("categories", self.categories), ("groups", self.groups), ("people", self.people),
+            ("dates", self.date_from or self.date_to), ("has", self.has or self.lacks),
+            ("duration", self.min_s is not None or self.max_s is not None)) if on)
+
+    def check(self, dim: str, card: dict) -> bool:
+        """Проходит ли карточка условие одного измерения."""
+        if dim == "categories":
             from meet.categories import key_of
 
-            if key_of(card, self.known_categories) not in self.categories:
-                return False
-        if self.groups and (card.get("group") or GROUP_NONE) not in self.groups:
-            return False
-        if self.people and not self._people(card.get("people") or ()):
-            return False
-        if self.date_from or self.date_to:
+            return key_of(card, self.known_categories) in self.categories
+        if dim == "groups":
+            return (card.get("group") or GROUP_NONE) in self.groups
+        if dim == "people":
+            return self._people(card.get("people") or ())
+        if dim == "dates":
             day = (card.get("started_at") or "")[:10]
-            if not day or (self.date_from and day < self.date_from) or (self.date_to and day > self.date_to):
-                return False
-        if any(not _has(card, h) for h in self.has) or any(_has(card, h) for h in self.lacks):
+            return bool(day) and not ((self.date_from and day < self.date_from)
+                                      or (self.date_to and day > self.date_to))
+        if dim == "has":
+            return (all(card_has(card, h) for h in self.has)
+                    and not any(card_has(card, h) for h in self.lacks))
+        seconds = card.get("duration_s")
+        if not isinstance(seconds, (int, float)) or isinstance(seconds, bool):
             return False
-        if self.min_s is not None or self.max_s is not None:
-            seconds = card.get("duration_s")
-            if not isinstance(seconds, (int, float)) or isinstance(seconds, bool):
-                return False
-            if (self.min_s is not None and seconds < self.min_s) or (
-                    self.max_s is not None and seconds > self.max_s):
-                return False
-        return True
+        return not ((self.min_s is not None and seconds < self.min_s)
+                    or (self.max_s is not None and seconds > self.max_s))
+
+    def failing(self, card: dict) -> set[str]:
+        """Измерения, условия которых карточка не проходит (для фасетов:
+        счётчик измерения — среди карточек, не прошедших разве что его)."""
+        return {d for d in self.dimensions() if not self.check(d, card)}
+
+    def __call__(self, card: dict) -> bool:
+        return all(self.check(d, card) for d in self.dimensions())
 
     def _people(self, names) -> bool:
         named = [_words(n) for n in names if isinstance(n, str)]
@@ -188,6 +204,86 @@ def from_params(params: dict | None, cfg=None) -> LibraryFilter:
         min_s=_seconds(params, "min_s"), max_s=_seconds(params, "max_s"),
         title_only=where == "title", known_categories=known,
     )
+
+
+# Панель «Фильтры» (GET /facets): участников — столько самых частых.
+FACET_PEOPLE = 20
+
+
+def near(flt: LibraryFilter):
+    """Отбор карточек для фасетов: не прошедшие разве что одно условие (другие
+    ни в один счётчик не попадут, их тексты и проверять незачем). Фильтра нет —
+    None."""
+    dims = flt.dimensions()
+    if not dims:
+        return None
+
+    def keep(card: dict) -> bool:
+        misses = 0
+        for dim in dims:
+            if not flt.check(dim, card):
+                misses += 1
+                if misses > 1:
+                    return False
+        return True
+
+    return keep
+
+
+def facets(cards, flt: LibraryFilter, category_ids, group_items) -> dict:
+    """Счётчики панели «Фильтры» среди `cards` (уже найденных запросом):
+    измерение — по карточкам, не прошедшим разве что его собственное условие,
+    `total` — прошедшим все. Категории и группы — в порядке настроек и списка
+    групп (с нулями), неизвестные группы — по убыванию, участники — FACET_PEOPLE
+    самых частых, длительность — до 15 мин, 15–60 мин, больше часа."""
+    from meet.categories import NONE_KEY, key_of
+
+    known_categories = set(category_ids)
+    known_groups = {g["id"] for g in group_items}
+    cats: dict[str, int] = {}
+    grp: dict[str, int] = {}
+    people: dict[str, int] = {}
+    has = {h: 0 for h in HAS}
+    duration = {"lt15": 0, "m15_60": 0, "gt60": 0}
+    cats_none = grp_none = total = 0
+    active = bool(flt.dimensions())
+    for card in cards:
+        fails = flt.failing(card) if active else set()
+        if not fails:
+            total += 1
+        if fails <= {"categories"}:
+            key = key_of(card, known_categories)
+            if key == NONE_KEY:
+                cats_none += 1
+            else:
+                cats[key] = cats.get(key, 0) + 1
+        if fails <= {"groups"}:
+            gid = card.get("group")
+            if gid:
+                grp[gid] = grp.get(gid, 0) + 1
+            else:
+                grp_none += 1
+        if fails <= {"people"}:
+            for name in card.get("people") or ():
+                people[name] = people.get(name, 0) + 1
+        if fails <= {"has"}:
+            for h in has:
+                has[h] += card_has(card, h)
+        if fails <= {"duration"}:
+            seconds = card.get("duration_s")
+            if isinstance(seconds, (int, float)) and not isinstance(seconds, bool):
+                duration["lt15" if seconds < 900 else "m15_60" if seconds <= 3600 else "gt60"] += 1
+    top = sorted(people.items(), key=lambda item: (-item[1], item[0].casefold()))[:FACET_PEOPLE]
+    unknown = sorted(((g, n) for g, n in grp.items() if g not in known_groups), key=lambda x: (-x[1], x[0]))
+    return {
+        "total": total,
+        "categories": {"items": [{"id": c, "count": cats.get(c, 0)} for c in category_ids], "none": cats_none},
+        "groups": {"items": [{"id": g["id"], "count": grp.get(g["id"], 0)} for g in group_items],
+                   "unknown": [{"id": g, "count": n} for g, n in unknown], "none": grp_none},
+        "people": [{"name": name, "count": n} for name, n in top],
+        "has": has,
+        "duration": duration,
+    }
 
 
 def participants(cards, q: str = "", limit: int = 20, owners=()) -> list[dict]:

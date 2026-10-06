@@ -485,3 +485,19 @@ def test_busy_file_through_the_resident_is_503(state, tmp_path, monkeypatch):
         state.create_group({"name": "Бета"})
     with pytest.raises(control.Unavailable):
         state.groups()
+
+
+def test_undo_keeps_every_field_of_the_group(state, tmp_path):
+    root = tmp_path / "recordings"
+    _rec(root, "2026-10-01_10-00")
+    (root / groups.FILE).write_text(json.dumps({"version": 1, "groups": [
+        {"id": "g-1", "name": "Альфа", "color": "#123456", "created_at": "2025-01-01T00:00:00",
+         "parent": "g-0", "pinned": True}]}), encoding="utf-8")
+    gone = state.delete_group("g-1")
+    assert gone["group"]["parent"] == "g-0"
+    back = state.create_group({**gone["group"], "index": gone["index"]})
+    assert back == gone["group"]  # и будущие поля (parent у дерева групп) — как были
+    assert _file(root)["groups"] == [gone["group"]]
+    # новая группа чужих полей из тела не берёт
+    fresh = state.create_group({"name": "Бета", "parent": "g-1"})
+    assert "parent" not in fresh

@@ -36,7 +36,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from meet import library, search  # noqa: E402
+from meet import library, library_filter, search, settings  # noqa: E402
 
 SYLLABLES = ("ка", "ра", "по", "ли", "ме", "до", "ну", "те", "ва", "со", "би", "ло", "за", "ки", "ст", "пр",
              "ов", "ан", "ен", "ин", "ре", "на", "то", "ми", "го", "ду", "ше", "жи", "ча", "фо")
@@ -148,6 +148,21 @@ def run(root: Path, repeat: int) -> dict:
         out["search"][q] = {"warm_ms": round(ms, 1), "best_ms": best["best"], "repeat_ms": round(again, 1),
                             "meetings": len(found), "places": sum(f["total"] for f in found)}
     out["search_warm_max_ms"] = max(v["warm_ms"] for v in out["search"].values())
+
+    # GET /facets: поиск без фрагментов по встречам «на расстоянии одного условия»
+    # и счётчики всех измерений за один проход (как в резиденте).
+    flt = library_filter.from_params({"groups": "g-alpha", "has": "transcript"}, settings.Settings())
+
+    def facets(q):
+        search._MEMO = None
+        found = search.search_library(root, q, limit=10**9, keep=library_filter.near(flt), count_only=True)
+        return library_filter.facets(found, flt, [], [{"id": "g-alpha"}])
+
+    out["facets"] = {}
+    for q in ("бюджет", "что", RARE):
+        ms, got = _timed(lambda: facets(q), repeat)
+        out["facets"][q] = {"warm_ms": round(ms, 1), "total": got["total"],
+                            "vs_search": round(ms / out["search"][q]["warm_ms"], 2)}
     out["cpu_spin_ms_after"] = _spin()
     size = getattr(search._CACHE, "_size", None)
     if size is not None:

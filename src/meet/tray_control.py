@@ -2025,8 +2025,9 @@ class TrayControl:
 
     def create_group(self, body: dict | None) -> dict:
         """Новая группа {"name", "color"?}; {"id", "name", "color", "index",
-        "created_at"?} — вернуть удалённую на место («Отменить») или назвать
-        неизвестную. Отложен битый файл групп — `moved_broken` в ответе."""
+        "created_at"?, …} — вернуть удалённую на место («Отменить»: группа из
+        ответа DELETE целиком, с чужими полями) или назвать неизвестную.
+        Отложен битый файл групп — `moved_broken` в ответе."""
         from meet import groups, search
 
         body = body if isinstance(body, dict) else {}
@@ -2034,7 +2035,8 @@ class TrayControl:
         taken = {card["group"] for card in search.cards(root) if card.get("group")}
         got = self._group_call(groups.create, root, body.get("name"), body.get("color"),
                                gid=body.get("id"), index=body.get("index"), taken=taken,
-                               created_at=body.get("created_at"))
+                               created_at=body.get("created_at"),
+                               extra={k: v for k, v in body.items() if k != "index"})
         self._groups_changed("create", got["id"], got.get("moved_broken"))
         return got
 
@@ -2082,6 +2084,29 @@ class TrayControl:
         if got.get("changed"):
             self._groups_changed("members", gid)
         return got
+
+    def facets(self, q: str | None = None, filters: dict | None = None) -> dict:
+        """Счётчики панели «Фильтры» при нынешнем запросе и фильтре: каждое
+        измерение — среди встреч, прошедших все *прочие* условия (своё не
+        учитывается: видно, что ещё можно выбрать), `total` — прошедших все.
+        Один проход по текстам на все измерения (поиск без фрагментов, общая
+        с /search память запроса); встречи, не прошедшие два условия и больше,
+        не проверяются вовсе."""
+        from meet import categories, groups, library_filter, search
+
+        root = self._root()
+        cfg = settings.load()
+        flt = self._library_filter(None, filters)
+        keep = library_filter.near(flt)
+        scoped = bool(q) and search.searchable(q)
+        if scoped:
+            cards = search.search_library(root, q, limit=10**9, keep=keep, title_only=flt.title_only,
+                                          count_only=True)
+        else:
+            cards = [c for c in search.cards(root) if keep is None or keep(c)]
+        info = self._group_call(groups.state, root)
+        return {**library_filter.facets(cards, flt, categories.ids(cfg), info["items"]),
+                "scope": "search" if scoped else "library"}
 
     def participants(self, q: str | None = None, limit: int = 20) -> list[dict]:
         """Участники встреч для подсказок `участник:` (имена из расшифровок),

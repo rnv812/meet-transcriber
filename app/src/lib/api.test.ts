@@ -284,3 +284,14 @@ test("группы и участники: адреса и тела запрос�
     ["http://h/participants?q=%D0%B0%D0%BD&limit=5", "GET", undefined],
   ]);
 });
+
+
+test("счётчики панели «Фильтры»: запрос и фильтр — как у поиска", async () => {
+  const f = okFetch();
+  await api.getFacets(ep);
+  await api.getFacets(ep, "план", { groups: ["g-1"], has: ["summary"], min_s: 900 });
+  expect(f.mock.calls.map(([url]) => url)).toEqual([
+    "http://h/facets",
+    "http://h/facets?q=%D0%BF%D0%BB%D0%B0%D0%BD&groups=g-1&has=summary&min_s=900",
+  ]);
+});

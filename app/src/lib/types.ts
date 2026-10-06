@@ -213,6 +213,22 @@ export type GroupMembersResult = { changed: string[]; failed: { id: string; erro
 /** Участник встреч для подсказок: сколько встреч, когда последняя; `owner` — владелец микрофона. */
 export type Participant = { name: string; meetings: number; last_at: string | null; owner: boolean };
 
+/**
+ * Счётчики панели «Фильтры» (`GET /facets`) при нынешнем запросе и фильтре: каждое измерение —
+ * среди встреч, прошедших все прочие условия (своё не учитывается), `total` — прошедших все.
+ * `duration`: до 15 мин, 15–60 мин, больше часа (без длительности — нигде).
+ */
+export type Facets = {
+  total: number;
+  scope: "library" | "search";
+  categories: { items: { id: string; count: number }[]; none: number };
+  groups: { items: { id: string; count: number }[]; unknown: UnknownGroup[]; none: number };
+  /** До 20 самых частых участников. */
+  people: { name: string; count: number }[];
+  has: Record<LibraryHas, number>;
+  duration: { lt15: number; m15_60: number; gt60: number };
+};
+
 /** Что есть (или нет) у встречи: итоги, анализ, запись с ассистентом, расшифровка. */
 export type LibraryHas = "summary" | "analysis" | "assistant" | "transcript";
 /**

@@ -792,6 +792,9 @@ _ROUTES = {
         (p.get("q") or [""])[0], filters=_filter_params(p)),
     ("POST", "/groups"): lambda h, p: _server_of(h).state.create_group(h._body()),
     ("PUT", "/groups/order"): lambda h, p: _server_of(h).state.order_groups(h._body()),
+    # Счётчики панели «Фильтры»: каждое измерение — при прочих условиях (q и фильтр — как у /search).
+    ("GET", "/facets"): lambda h, p: _server_of(h).state.facets(
+        (p.get("q") or [""])[0], filters=_filter_params(p)),
     # Участники встреч для подсказок поиска: [{name, meetings, last_at, owner}].
     ("GET", "/participants"): lambda h, p: _server_of(h).state.participants(
         (p.get("q") or [""])[0], limit=_int_param(p, "limit", 20)),

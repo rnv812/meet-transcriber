@@ -643,17 +643,19 @@ def _search_doc(ref: tuple, doc: _Doc, plan: _Plan, any_only: bool = False) -> t
 
 class _Memo:
     """Память последнего запроса (одна): что нашлось в каждой проверенной
-    встрече — (сколько реплик, фрагменты, точно ли посчитано). Список
-    (`/search`), счётчики категорий и групп по одному запросу проходят
-    тексты один раз; фильтры у них разные, поэтому память — по встречам, а
-    не готовым списком. Устаревает с поколением кэша (_Cache.generation)."""
+    встрече — (отпечаток транскрипта, сколько реплик, фрагменты, точно ли
+    посчитано). Список (`/search`), счётчики категорий, групп и фасетов по
+    одному запросу проходят тексты один раз; фильтры у них разные, поэтому
+    память — по встречам, а не готовым списком. Запись встречи годится, только
+    пока у транскрипта тот же отпечаток: перемену посреди чужого обхода не
+    проглядеть. Вся память устаревает и с поколением кэша (_Cache.generation)."""
 
     __slots__ = ("key", "generation", "results")
 
     def __init__(self, key: tuple, generation: int) -> None:
         self.key = key
         self.generation = generation
-        self.results: dict[str, tuple[int, list, bool]] = {}
+        self.results: dict[str, tuple[tuple | None, int, list, bool]] = {}
 
 
 _MEMO: _Memo | None = None
@@ -695,12 +697,13 @@ def search_library(root: Path, q: str, limit: int = 200, keep=None,
         hits, total = [], 0
         if card.get("has_transcript") and not title_only:
             got = memo.results.get(card["id"])
-            if got is None or (not got[2] and not count_only):
+            if got is None or got[0] != stamp or (not got[3] and not count_only):
                 doc = _CACHE.doc(card["path"], stamp)
                 total, hits = _search_doc(*doc, plan, any_only=count_only) if doc is not None else (0, [])
-                memo.results[card["id"]] = (total, hits, not count_only)
+                # «Нет ни одной» точна и без фрагментов: повторно не проходить.
+                memo.results[card["id"]] = (stamp, total, hits, not count_only or not total)
             else:
-                total, hits = got[0], got[1]
+                total, hits = got[1], got[2]
         title = nfc(card.get("title") or "")
         title_match = bool(title) and query.has_text and not query.speakers and (
             match_tokens(tokenize(title), query) is not None)

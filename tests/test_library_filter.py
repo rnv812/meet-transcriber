@@ -344,3 +344,97 @@ def test_deleted_folders_leave_the_text_cache(state, lib):
     shutil.rmtree(gone)
     state.search("бюджет")
     assert gone not in search._CACHE._items and search._CACHE._size < size
+
+
+def test_query_memory_checks_the_transcript_stamp_of_each_meeting(state, lib, monkeypatch):
+    # Перемена посреди чужого обхода: поколение памяти уже новое, а запись
+    # встречи сделана по старому транскрипту — её отпечаток не совпадёт.
+    assert len(state.search("бюджет")["items"]) == 2
+    memo = search._MEMO
+    monkeypatch.setattr(search, "_memo_for", lambda key: memo)  # та же память, что бы ни случилось
+    folder = lib / "recordings" / "2026-10-01_10-00"
+    library.write_transcript(folder, {"version": 1, "segments": [
+        {"start": 0.0, "end": 1.0, "speaker": "Анна", "text": "Бюджет готов, и отпуск тоже."}]})
+    found = state.search("бюджет")["items"]
+    assert "2026-10-01_10-00" in _ids(found)
+    assert next(i for i in found if i["id"] == "2026-10-01_10-00")["hits"][0]["snippet"].startswith("Бюджет")
+
+
+# --- GET /facets: счётчики панели «Фильтры» -----------------------------------------------
+
+
+@pytest.fixture
+def faceted(state, tmp_path):
+    from meet import categories, groups
+
+    root = tmp_path / "recordings"
+    a = _rec(tmp_path, "2026-09-01_10-00", people=["Анна", "Борис"], seconds=600)       # 10 мин
+    b = _rec(tmp_path, "2026-09-02_10-00", people=["Анна"], seconds=1800)               # 30 мин
+    c = _rec(tmp_path, "2026-09-03_10-00", people=["Борис"], seconds=7200,              # 2 ч
+             text="Про отпуск.")
+    d = _rec(tmp_path, "2026-09-04_10-00", people=["Глеб"])                              # без длительности
+    alpha = groups.create(root, "Альфа")["id"]
+    groups.members(root, alpha, add=[a.name, b.name])
+    library.write_meta(c, {"group": "g-lost"})
+    categories.set_user(a, "daily")
+    categories.set_user(c, "daily")
+    (b / "summary.md").write_text("# Итоги", encoding="utf-8")
+    (c / library.LIVE_STATE_JSON).write_text("{}", encoding="utf-8")
+    return {"alpha": alpha, "a": a.name, "b": b.name, "c": c.name, "d": d.name}
+
+
+def _counts(items, key="id"):
+    return {i[key]: i["count"] for i in items}
+
+
+def test_facets_without_filter_count_the_whole_library(state, faceted):
+    got = state.facets()
+    assert got["total"] == 4 and got["scope"] == "library"
+    assert _counts(got["categories"]["items"])["daily"] == 2 and got["categories"]["none"] == 2
+    assert _counts(got["groups"]["items"]) == {faceted["alpha"]: 2}
+    assert got["groups"]["unknown"] == [{"id": "g-lost", "count": 1}] and got["groups"]["none"] == 1
+    assert got["people"] == [{"name": "Анна", "count": 2}, {"name": "Борис", "count": 2},
+                             {"name": "Глеб", "count": 1}]
+    assert got["has"] == {"summary": 1, "analysis": 0, "assistant": 1, "transcript": 4}
+    assert got["duration"] == {"lt15": 1, "m15_60": 1, "gt60": 1}
+
+
+def test_each_facet_ignores_only_its_own_condition(state, faceted):
+    got = state.facets(filters={"categories": "daily", "groups": faceted["alpha"]})
+    assert got["total"] == 1  # только a: daily и «Альфа»
+    # категории — среди «Альфы» (a daily, b без категории)
+    assert _counts(got["categories"]["items"])["daily"] == 1 and got["categories"]["none"] == 1
+    # группы — среди daily (a в «Альфе», c в неизвестной)
+    assert _counts(got["groups"]["items"]) == {faceted["alpha"]: 1}
+    assert got["groups"]["unknown"] == [{"id": "g-lost", "count": 1}] and got["groups"]["none"] == 0
+    # остальные — среди прошедших всё
+    assert got["people"] == [{"name": "Анна", "count": 1}, {"name": "Борис", "count": 1}]
+    assert got["duration"] == {"lt15": 1, "m15_60": 0, "gt60": 0}
+    assert got["has"]["transcript"] == 1
+    # свой фильтр по наличию не прячет альтернатив
+    got = state.facets(filters={"has": "summary"})
+    assert got["total"] == 1 and got["has"] == {"summary": 1, "analysis": 0, "assistant": 1, "transcript": 4}
+    assert got["duration"] == {"lt15": 0, "m15_60": 1, "gt60": 0}
+    got = state.facets(filters={"min_s": "3600"})
+    assert got["duration"] == {"lt15": 1, "m15_60": 1, "gt60": 1} and got["total"] == 1
+    got = state.facets(filters={"people": ["Анна"]})
+    assert _counts(got["people"], "name") == {"Анна": 2, "Борис": 2, "Глеб": 1} and got["total"] == 2
+
+
+def test_facets_with_a_query_and_a_single_scan(state, faceted, monkeypatch):
+    calls = []
+    real = search._search_doc
+    monkeypatch.setattr(search, "_search_doc", lambda *a, **k: calls.append(1) or real(*a, **k))
+    got = state.facets("бюджет", filters={"groups": faceted["alpha"]})
+    assert got["scope"] == "search" and got["total"] == 2
+    assert got["groups"]["none"] == 1 and got["groups"]["unknown"] == []  # c — про отпуск, d — бюджет без группы
+    assert len(calls) == 4  # один проход: все четыре встречи — на расстоянии одного условия
+    state.facets("бюджет", filters={"groups": faceted["alpha"], "people": ["Глеб"]})
+    assert len(calls) == 4  # память запроса: тексты не перечитаны
+    state.search("бюджет")
+    state.categories("бюджет")
+    # /search нужны фрагменты: заново — только три встречи, где нашлось (c — точно «нет»)
+    assert len(calls) == 4 + 3
+    with pytest.raises(control.BadRequest):
+        state.facets(filters={"from": "вчера"})
+    assert ("GET", "/facets") in control._ROUTES

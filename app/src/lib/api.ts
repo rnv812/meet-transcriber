@@ -11,7 +11,7 @@
 import { inTauri, invoke } from "./shell";
 import type {
   AnalysisState, AssistantInfo, BusEvent, ImproveApplyRequest, ImproveApplyResult, ImproveState, CommandResult, ExportPreview, Job, KbExport, LiveDraft, LiveLine, LiveQa, LiveQaPartial, LiveQuick, LiveState, LiveStatus, LiveVoices, Person, PersonCard, ProfilesRemovedNotice,
-  Category, Group, GroupMembersResult, GroupsInfo, GroupWrite, LibraryFilter, OwnerVoiceStatus, Participant, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
+  Category, Facets, Group, GroupMembersResult, GroupsInfo, GroupWrite, LibraryFilter, OwnerVoiceStatus, Participant, ProviderCheck, QaItem, Recording, Sample, SearchItem, Snapshot, SpeakerOpInput, SpeakersView, RelabelRequest, SplitApply, SplitPreview,
   SplitRequest, SplitStatus, ThresholdPlan, SplitTurnRequest, RediarizeParams, RediarizePreview, Summary,
   TextFixRequest, TextFixResult, TextPreview, TitleSource, TitleSuggestion, Transcript, LlmOrigin,
 } from "./types";
@@ -19,7 +19,7 @@ import type {
 export type {
   Analysis, AnalysisChapter, AnalysisFeature, AnalysisInsight, AnalysisState, AnalysisStateName, InsightKind,
   ImproveApplied, ImproveGroup, ImproveKind, ImproveProposal, ImproveState, ImproveStateName, PhraseType, TitleSource, LlmOrigin, ModelChoice,
-  TitleSuggestion, Category, RecordingCategory, Group, GroupInfo, GroupsInfo, GroupMembersResult, GroupWrite, LibraryFilter,
+  TitleSuggestion, Category, RecordingCategory, Facets, Group, GroupInfo, GroupsInfo, GroupMembersResult, GroupWrite, LibraryFilter,
   LibraryHas, Participant, UnknownGroup,
 } from "./types";
 
@@ -183,6 +183,9 @@ export const orderGroups = (ep: Endpoint, ids: string[]) =>
  */
 export const setGroupMembers = (ep: Endpoint, id: string, change: { add?: string[]; remove?: string[] }) =>
   json<GroupMembersResult>(ep, `/groups/${enc(id)}/members`, body("POST", change));
+/** Счётчики панели «Фильтры»: каждое измерение — при всех прочих условиях запроса и фильтра. */
+export const getFacets = (ep: Endpoint, q?: string, filter?: LibraryFilter, signal?: AbortSignal) =>
+  json<Facets>(ep, `/facets${query([...(q ? [`q=${enc(q)}`] : []), ...libraryFilterParams(filter)])}`, { signal });
 /** Участники встреч (имена из расшифровок) для подсказок `участник:`; владелец — последним. */
 export const getParticipants = (ep: Endpoint, q = "", limit = 20) =>
   json<Participant[]>(ep, `/participants${query([...(q ? [`q=${enc(q)}`] : []), `limit=${limit}`])}`);
