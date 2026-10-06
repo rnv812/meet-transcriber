@@ -189,6 +189,8 @@ ASSIST_ACTIVITIES = ("calm", "active", "summary")
 # пути относительно базы, «/» в конце необязателен.
 KB_EXCLUDE_DEFAULT = ("Личное/", ".trash/")
 HINTS_MODELS = ("agent", "fast")
+# «Как часто писать» агента-участника (0.3.6): реже / обычно / чаще.
+ASSIST_FREQUENCIES = ("less", "normal", "more")
 # Распознавание живого режима: `auto` — GigaAM короткими окнами, если язык
 # русский и модель GigaAM скачана (иначе Whisper); `whisper` — всегда Whisper.
 LIVE_ASR = ("auto", "whisper")
@@ -992,7 +994,13 @@ class Assist:
     ассистенту структуру базы знаний» (папки и названия документов, без
     содержимого; читает он только по просьбе или с согласия человека);
     `kb_exclude` — папки базы (относительно неё), которых ассистент не видит
-    вовсе. Пустой список — исключений нет; не список — значение по умолчанию."""
+    вовсе. Пустой список — исключений нет; не список — значение по умолчанию.
+
+    Агент-участник (0.3.6, `assist.participant`): включён — во время встречи
+    пишет агент-участник (`meet.assist.participant`), прежние подсказки и
+    «Спросить» выключены (сводка остаётся); выключен — как в 0.3.5.
+    `frequency` — «Как часто писать»: `less` / `normal` / `more` (по
+    умолчанию «чаще» — активное участие)."""
 
     vault: Path | None = None
     window_seconds: float = 20.0
@@ -1010,6 +1018,8 @@ class Assist:
     live_asr: str = "auto"
     kb_map: bool = True
     kb_exclude: tuple[str, ...] = KB_EXCLUDE_DEFAULT
+    participant: bool = True
+    frequency: str = "more"
 
     @classmethod
     def from_raw(cls, raw: dict) -> "Assist":
@@ -1033,6 +1043,8 @@ class Assist:
             live_asr=as_choice(raw.get("live_asr"), LIVE_ASR, "auto"),
             kb_map=as_flag(raw.get("kb_map"), True),
             kb_exclude=_kb_exclude(raw.get("kb_exclude")),
+            participant=as_flag(raw.get("participant"), True),
+            frequency=as_choice(raw.get("frequency"), ASSIST_FREQUENCIES, "more"),
         )
 
     def to_raw(self) -> dict:
@@ -1051,6 +1063,8 @@ class Assist:
             "live_asr": self.live_asr,
             "kb_map": self.kb_map,
             "kb_exclude": list(self.kb_exclude),
+            "participant": self.participant,
+            "frequency": self.frequency,
         }
 
 

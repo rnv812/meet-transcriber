@@ -1,0 +1,1407 @@
+"""Агент-участник встречи (V4, задача 4): цикл агента.
+
+Главный документ — `v4-simple.md`: весь интеллект у агента, Meet — «тупая
+труба». Один агент, одна сессия провайдера на встречу. Meet доставляет ему,
+что происходит, исполняет его простые просьбы, показывает его сообщения и
+хранит журнал (`ChatLog`). Никаких порогов полезности, сопоставлений и
+кулдаунов — кроме одной страховки (ниже).
+
+**Сессия.** Системный промпт — `participant_prompts.build_system` (частота
+«Как часто писать», есть ли у модели свои инструменты, карта базы знаний,
+имя владельца, `kb_exclude`, папки). Сессия поднимается лениво, к первому
+ходу: пока на встрече тихо, модель не зовётся.
+
+* Claude Code — постоянный процесс `claude_stream.Conversation` в режиме
+  собеседника: читает сам (`add_dirs` — папка встречи, база знаний,
+  библиотека встреч), `kb_exclude` — правила запрета (`deny_paths`), сеанс
+  сохраняется (`persist`) и продолжается по id из `assistant/sessions.json`.
+* Codex, OpenCode — вызов на ход (`runner`) с родным продолжением сеанса
+  (`llm.session_kwargs`); Codex работает в своей нейтральной папке (так
+  делает провайдер).
+* Локальная модель — без продолжения и без инструментов: затравка из
+  журнала (`participant_prompts.seed`) в каждом ходе, а запросы `read` /
+  `search` / `list` исполняет Meet (`kb_prep`, вне цикла событий, со сроком).
+
+После каждого хода id сеанса перечитывается и сохраняется: ветка сеанса
+после отвергнутой картинки меняет его. Сеанс не продолжить
+(`resume_failed`) — id забывается, ход повторяется в новом сеансе с
+затравкой из журнала.
+
+**Подача.** Реплики шины копятся и уходят дельтой (`participant_prompts.delta`,
+владелец — «Вы (вслух)») в паузе разговора (лента молчит `pause_s`), но не
+реже `max_interval_s`, пока речь идёт; нового нет — вызова нет. Сообщения
+пользователя, нажатия кнопок и реакции — в ближайший ход. Сообщение
+пользователя — вне очереди: идущий ход по репликам прерывается (ответ
+закрывается `held`), сообщение уходит вместе с недоставленными репликами.
+
+**Ответ.** Ход начинается репликой агента `writing` (`begin_reply`), текст
+идёт окну событиями `chat_partial`, затем `parse_reply`: `say` — сообщение
+(`finish_reply`), `silent` — скрытая реплика (`dropped`, `silent: True`),
+`read` / `search` / `list` — только у модели без инструментов (иначе —
+пометка в журнал процесса).
+
+**Страховка** — единственная: не больше одного нового сообщения агента за
+`merge_window_s` (15 с). Лишнее склеивается с последним сообщением агента
+(абзацем), чтобы сломанная модель не завалила ленту. Ответ на сообщение,
+нажатие или реакцию пользователя всегда получает своё сообщение.
+
+Журнал и вызовы модели — блокирующие: журнал пишется в одном своём потоке
+(он же держит порядок записей), разбор вложений и запросы к базе — в
+потоках `asyncio.to_thread`. Цикл событий не блокируется.
+
+API для окна (задача 6): `post_user_message`, `click`, `react`,
+`stop_reply`, `set_frequency`, `snapshot`, `view`; события —
+`add_listener(fn(name, data))`: `chat` (событие журнала), `chat_partial`
+(`{"id","text"}`), `agent` (`view()`).
+"""
+
+import asyncio
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from functools import partial
+from pathlib import Path
+from types import SimpleNamespace
+
+from meet.assist import participant_prompts as pp
+from meet.llm.base import CANCELLED_ERROR, AgentReply
+
+# --- ритм подачи ---
+PAUSE_S = 4.0            # лента молчит столько — пауза в разговоре: ход
+MAX_INTERVAL_S = 25.0    # речь идёт — ход не реже
+MIN_GAP_S = 8.0          # ход по паузе — не чаще (ASR отдаёт реплики пачками)
+MERGE_WINDOW_S = 15.0    # не больше одного нового сообщения агента за столько
+TURN_TIMEOUT_S = 180.0   # ход агента (с чтением файлов) — не дольше
+PARTIAL_EVERY_S = 0.1    # chat_partial — не чаще 10 раз в секунду
+BACKOFF_S = (10.0, 30.0, 60.0, 120.0)
+TURN_LINES_MAX_CHARS = 6_000   # реплик в одну дельту (остальное — следующим ходом)
+SEED_LINES = 400               # реплик шины на затравку (дальше seed режет сам)
+FRESH_AUDIO_TIMEOUT_S = 10.0   # дорасшифровка хвоста перед ответом пользователю
+
+# --- запасной путь: запросы к Meet ---
+TOOL_TIMEOUT_S = 30.0
+TOOL_SEARCH_DEADLINE_S = 20.0
+TOOL_ROUNDS_MAX = 3            # запросов подряд без ответа пользователю
+TOOL_RESULT_MAX = 12_000       # символов ответа Meet модели
+
+MERGED_MAX = 8_000             # склеенное сообщение — не длиннее
+WORKDIR = "meet-agent"         # рабочая папка процесса Claude Code агента
+TOOL_PROVIDERS = ("claude-code", "codex", "opencode")
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff")
+
+LISTENING, WRITING, ERROR = "listening", "writing", "error"
+
+NOTE_INTERRUPTED = ("Твой прошлый ответ прерван новым сообщением пользователя — "
+                    "реплики ниже могли уже прийти тебе.")
+NOTE_STOPPED = "Пользователь остановил твой прошлый ответ — не продолжай его."
+TOOLS_SPENT = "Слишком много запросов подряд — ответь по тому, что уже есть."
+SHUTDOWN_ERROR = "ассистент остановлен"
+_ATTACHMENT_ID = re.compile(r"^a\d{1,9}$")
+
+
+# --- разбор потока: текст сообщения, который уже можно показать ---
+
+_SAY_OPEN = re.compile(r'"say"\s*:\s*"')
+_JSON_HINT = re.compile(r'"(say|silent|read|search|list|buttons)"\s*:')
+_ESCAPES = {"n": "\n", "t": " ", "r": "", '"': '"', "\\": "\\", "/": "/", "b": "", "f": ""}
+
+
+def partial_text(raw: str) -> str:
+    """Видимый текст ответа, который ещё пишется: строки `say` (законченные и
+    начатая) через пустую строку; ответ без JSON — как есть; служебное
+    (`silent`, запросы, начало объекта) — пусто."""
+    from meet.llm.jsonreply import strip_reasoning
+
+    body, _ = strip_reasoning(raw or "")
+    says = []
+    for m in _SAY_OPEN.finditer(body):
+        out: list[str] = []
+        i = m.end()
+        while i < len(body):
+            ch = body[i]
+            if ch == "\\":
+                if i + 1 >= len(body):
+                    break
+                nxt = body[i + 1]
+                if nxt == "u":
+                    code = body[i + 2:i + 6]
+                    if len(code) < 4:
+                        break
+                    try:
+                        out.append(chr(int(code, 16)))
+                    except ValueError:
+                        pass
+                    i += 6
+                    continue
+                out.append(_ESCAPES.get(nxt, nxt))
+                i += 2
+                continue
+            if ch == '"':
+                break
+            out.append(ch)
+            i += 1
+        text = "".join(out).strip()
+        if text:
+            says.append(text)
+    if says:
+        return "\n\n".join(says)
+    plain = body.strip()
+    if not plain or plain.startswith(("{", "[", "`")) or _JSON_HINT.search(plain):
+        return ""
+    return plain
+
+
+# --- сессии провайдеров ---
+
+class _ConversationSession:
+    """Claude Code: постоянный процесс `Conversation` (собеседник, сохраняемый
+    сеанс)."""
+
+    def __init__(self, conversation) -> None:
+        self.conv = conversation
+
+    @property
+    def session_id(self) -> str | None:
+        return getattr(self.conv, "session_id", None)
+
+    @property
+    def has_context(self) -> bool:
+        return bool(getattr(self.conv, "has_context", False))
+
+    async def send(self, text: str, *, images=(), on_text=None, timeout_s: float = TURN_TIMEOUT_S):
+        return await self.conv.send(text, images=list(images or ()), on_text=on_text, timeout_s=timeout_s)
+
+    async def interrupt(self) -> bool:
+        """Ход останавливает сам процесс (`control_request`); True — `send`
+        вернёт ответ `cancelled` сам."""
+        await self.conv.interrupt()
+        return True
+
+    def forget(self) -> None:
+        forget = getattr(self.conv, "forget_session", None)
+        if forget is not None:
+            forget()
+
+    def close(self) -> None:
+        self.conv.close()
+
+
+class _RunnerSession:
+    """Codex, OpenCode, локальная модель: вызов `runner` на ход. Сеанс
+    продолжается по id (`llm.session_kwargs`), у локальной — нет (затравка в
+    каждом ходе)."""
+
+    def __init__(self, runner, provider: str, *, system, session_id: str | None,
+                 resumable: bool, allowed_dirs=(), deny_paths=(), call_kwargs=None) -> None:
+        self._runner = runner
+        self._provider = provider
+        self._system = system          # () -> str: частота могла смениться
+        self._resumable = resumable
+        self.session_id = session_id if resumable else None
+        self._allowed = tuple(allowed_dirs)
+        self._deny = tuple(deny_paths)
+        self._kwargs = dict(call_kwargs or {})
+
+    @property
+    def has_context(self) -> bool:
+        return self._resumable and self.session_id is not None
+
+    async def send(self, text: str, *, images=(), on_text=None, timeout_s: float = TURN_TIMEOUT_S):
+        extra = {}
+        if self._resumable:
+            extra = {"resume": self.session_id} if self.session_id else {"keep_session": True}
+        reply = await self._runner(text, system_prompt=self._system(), images=list(images or ()),
+                                   deny_paths=self._deny, allowed_dirs=self._allowed,
+                                   timeout_s=timeout_s, max_turns=12, on_text=on_text,
+                                   **self._kwargs, **extra)
+        if self._resumable:
+            if reply.resume_failed:
+                self.session_id = None
+            elif reply.session_id:
+                self.session_id = reply.session_id
+        return reply
+
+    async def interrupt(self) -> bool:
+        return False   # вызов отменяется задачей (провайдер убивает процесс)
+
+    def forget(self) -> None:
+        self.session_id = None
+
+    def close(self) -> None:
+        pass
+
+
+def _default_conversation(**kwargs):
+    from meet.llm.claude_stream import Conversation, workdir
+
+    # Своя постоянная служебная папка: сеансы агента в истории Claude Code
+    # лежат под ней, а не под папкой встречи («Агент» их не подхватит).
+    return Conversation(cwd=workdir(WORKDIR), **kwargs)
+
+
+# --- ход ---
+
+@dataclass
+class _Inputs:
+    lines: list = field(default_factory=list)   # записи шины (владелец помечен)
+    start: int = 0                              # курсор шины до хода
+    end: int = 0                                # и после него
+    first_pending_at: float | None = None
+    user: list = field(default_factory=list)    # сообщения и нажатия (журнал + вложения)
+    reactions: list = field(default_factory=list)
+    tools: list = field(default_factory=list)   # ответы Meet на запросы
+    notes: list = field(default_factory=list)
+    frequency: str | None = None
+
+    def empty(self) -> bool:
+        return not (self.lines or self.user or self.reactions or self.tools)
+
+    @property
+    def images(self) -> list[str]:
+        return [p for m in self.user for p in m.get("_images") or ()]
+
+
+@dataclass
+class _Turn:
+    inputs: _Inputs
+    addressed: bool                    # в ходе есть сообщение, нажатие или реакция
+    reply_id: str | None = None
+    raw: list = field(default_factory=list)
+    shown: str = ""
+    partial_at: float = -1e9
+    stop: str | None = None            # "message" | "stop" | "shutdown"
+    send_task: asyncio.Future | None = None
+    task: asyncio.Future | None = None
+    session: object = None
+
+
+class Participant:
+    """Цикл агента-участника одной встречи (см. модуль).
+
+    `bus` — шина реплик; `chatlog` — `ChatLog` папки записи; `provider` —
+    имя провайдера (`llm.PROVIDERS`); `runner` — вызов модели (не Claude
+    Code); `conversation` — фабрика диалога Claude Code
+    (`Conversation(**kwargs)`, тесты подставляют свою); `kb` —
+    `kb_prep.KnowledgeBase` сессии или None; `folder` — папка записи;
+    `library_root` — библиотека встреч; `group` — id группы встречи (None —
+    из meta.json); `owner_*` — подпись и имена владельца; `frequency` —
+    «Как часто писать»; `model`/`proxy` — Claude Code; `on_fresh_audio` —
+    дорасшифровать хвост речи перед ответом пользователю; `clock` — часы
+    (тесты — поддельные)."""
+
+    def __init__(self, bus, chatlog, *, provider: str, folder, runner=None, conversation=None,
+                 kb=None, library_root=None, group=None, owner_name: str = "",
+                 owner_speaker: str = pp.OWNER_SPEAKER, owner_names=(),
+                 frequency=pp.DEFAULT_FREQUENCY, model: str | None = None,
+                 proxy: str | None = None, call_kwargs: dict | None = None,
+                 glossary: str = "", task_context: str = "", on_fresh_audio=None,
+                 clock=time.monotonic, log=print, merge_window_s: float = MERGE_WINDOW_S,
+                 pause_s: float = PAUSE_S, max_interval_s: float = MAX_INTERVAL_S,
+                 min_gap_s: float = MIN_GAP_S, turn_timeout_s: float = TURN_TIMEOUT_S) -> None:
+        from meet import llm
+
+        self._bus = bus
+        self._chatlog = chatlog
+        self.provider = provider
+        self._folder = Path(folder)
+        self._runner = runner
+        self._conversation = conversation or _default_conversation
+        self._kb = kb
+        self._library_root = Path(library_root) if library_root else None
+        self._group = group
+        self._owner_name = owner_name or ""
+        self._owner_speaker = owner_speaker or pp.OWNER_SPEAKER
+        self._owner_names = {n for n in (owner_speaker, *owner_names) if n}
+        self.frequency = pp.normalize_frequency(frequency)
+        self._model = model
+        self._proxy = proxy
+        self._call_kwargs = dict(call_kwargs or {})
+        self._glossary = glossary or ""
+        self._task_context = task_context or ""
+        self._on_fresh_audio = on_fresh_audio
+        self._clock = clock
+        self._log = log
+        self._merge_window = merge_window_s
+        self._pause = pause_s
+        self._max_interval = max_interval_s
+        self._min_gap = min_gap_s
+        self._turn_timeout = turn_timeout_s
+
+        self.tools = provider in TOOL_PROVIDERS
+        self.vision = llm.vision(provider)
+        self.resumable = llm.supports_resume(provider)
+        self.deny_enforced = llm.deny_enforced(provider)
+        self.label = llm.LABELS.get(provider, provider or "модель") + (
+            f" ({model})" if model and provider == "claude-code" else "")
+
+        self._io_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="assist-chat")
+        self._listeners: list = []
+        self.version = 0
+        self.state = LISTENING
+        self.error: str | None = None
+        self.session_state: str | None = None   # "new" | "resumed" | "seeded"
+        self._started = False
+        self._info: dict | None = None
+        self._session = None
+        self._stored_sid: str | None = None
+        self._kb_map = ""
+        self._deny_paths: list[str] = []
+        self._materials = 0
+        self._images = 0
+        # подача
+        self._cursor = 0
+        self._scanned = 0
+        self._last_line_at: float | None = None
+        self._first_pending_at: float | None = None
+        self._last_turn_at: float | None = None
+        self._user: list[dict] = []
+        self._user_fresh = False
+        self._reactions: list[dict] = []
+        self._tool_results: list[dict] = []
+        self._notes: list[str] = []
+        self._frequency_note: str | None = None
+        self._tool_rounds = 0
+        self._failures = 0
+        self._retry_at = 0.0
+        # ход и лента
+        self._turn: _Turn | None = None
+        self._partial: dict | None = None
+        self._last_shown: tuple[str, float] | None = None   # (id, когда создано)
+        self._shown: dict[str, dict] = {}                     # id → текст, кнопки, pin
+        self._agent_texts: dict[str, str] = {}
+        self._kicked: asyncio.Event | None = None
+        self._background: set = set()
+        self.turns = 0
+
+    # --- события ---
+
+    def add_listener(self, fn) -> None:
+        """`fn(name, data)`: `chat` (событие журнала), `chat_partial`, `agent`."""
+        self._listeners.append(fn)
+
+    def _emit(self, name: str, data) -> None:
+        for fn in list(self._listeners):
+            try:
+                fn(name, data)
+            except Exception as e:  # окно не роняет цикл агента
+                self._log(f"агент: сбой обработчика события {name} ({type(e).__name__}: {e})")
+
+    def _emit_chat(self, events) -> None:
+        for ev in events or ():
+            if ev:
+                self._emit("chat", ev)
+
+    def _changed(self) -> None:
+        self.version += 1
+        self._emit("agent", self.view())
+
+    def _set_state(self, state: str, error: str | None = None) -> None:
+        if (state, error) != (self.state, self.error):
+            self.state, self.error = state, error
+            self._changed()
+
+    def _kick(self) -> None:
+        if self._kicked is not None:
+            self._kicked.set()
+
+    async def _io(self, fn, *args, **kwargs):
+        """Журнал — в своём потоке, по одному вызову (порядок записей)."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._io_pool, partial(fn, *args, **kwargs))
+
+    # --- состояние для окна ---
+
+    def view(self) -> dict:
+        """`state.agent`: что с агентом и что он видит."""
+        return {"state": self.state, "error": self.error, "provider": self.provider,
+                "label": self.label, "vision": self.vision, "tools": self.tools,
+                "deny_enforced": self.deny_enforced,
+                "frequency": self.frequency, "session": self.session_state,
+                "writing": self._turn.reply_id if self._turn is not None else None,
+                "sees": {"conversation": True, "kb": bool(self._kb_map),
+                         "materials": self._materials, "images": self._images}}
+
+    async def snapshot(self, limit: int | None = 200) -> dict:
+        """Лента (`ChatLog.snapshot(feed=True)`), состояние агента и текст,
+        который пишется сейчас (переподключение посреди ответа)."""
+        chat = await self._io(self._chatlog.snapshot, limit, feed=True)
+        return {"chat": chat, "agent": self.view(), "partial": self._partial}
+
+    # --- старт и стоп ---
+
+    async def start(self) -> None:
+        """Писатель при старте: недописанные ответы убитого процесса →
+        `cancelled`; id сохранённого сеанса провайдера. Модель не зовётся."""
+        if self._started:
+            return
+        self._started = True
+        from meet.assist.chatlog import has_chat
+
+        try:
+            if await asyncio.to_thread(has_chat, self._folder):
+                self._emit_chat(await self._io(self._chatlog.close_interrupted))
+            if self.resumable:
+                self._stored_sid = await self._io(self._chatlog.session_id, self.provider)
+        except OSError as e:
+            self._log(f"агент: журнал не прочитан при старте ({type(e).__name__}: {e})")
+        await self._load_info()
+
+    async def _load_info(self) -> None:
+        """Карта, запреты, материалы — один раз на сессию (в потоке): шапка
+        окна знает, что агент видит, ещё до первого хода."""
+        if self._info is None:
+            self._info = await asyncio.to_thread(self._gather)
+            self._kb_map, self._deny_paths = self._info["kb_map"], self._info["deny"]
+            self._materials = self._info["materials"]
+            self._changed()
+
+    def skip_existing(self) -> None:
+        """Реплики, уже лежащие в шине (лента прошлого включения ассистента),
+        — не новые: агент знает их из сеанса или затравки."""
+        self._cursor = self._scanned = self._bus.size()
+
+    async def shutdown(self) -> None:
+        """Штатная остановка: идущий ход закрывается (`cancelled`), процесс
+        модели закрывается, поток журнала отпускается."""
+        turn = self._turn
+        if turn is not None and turn.task is not None and not turn.task.done():
+            turn.stop = turn.stop or "shutdown"
+            turn.task.cancel()
+            await asyncio.gather(turn.task, return_exceptions=True)
+        pending = list(self._background)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        await asyncio.to_thread(self.close)
+        self._io_pool.shutdown(wait=False)
+
+    def close(self) -> None:
+        """Закрыть процесс модели (повторно — безопасно)."""
+        session, self._session = self._session, None
+        if session is not None:
+            try:
+                session.close()
+            except Exception as e:
+                self._log(f"агент: процесс модели не закрылся ({type(e).__name__}: {e})")
+
+    # --- настройки на ходу ---
+
+    def set_frequency(self, value) -> str:
+        """«Как часто писать» сменили: пометка агенту в ближайшем ходе (и в
+        системном промпте новых сеансов)."""
+        name = pp.normalize_frequency(value)
+        if name != self.frequency:
+            self.frequency = name
+            self._frequency_note = name
+            self._changed()
+        return name
+
+    def set_task_context(self, text: str) -> None:
+        self._task_context = text or ""
+
+    # --- сессия ---
+
+    def _folders(self) -> dict[str, str]:
+        out = {}
+        if self._kb is not None and getattr(self._kb, "configured", False):
+            out["База знаний"] = str(self._kb.root)
+        if self._library_root is not None:
+            out["Библиотека встреч"] = str(self._library_root)
+        out["Эта встреча"] = str(self._folder)
+        return out
+
+    def system_prompt(self) -> str:
+        return pp.build_system(
+            frequency=self.frequency, tools_available=self.tools, kb_map=self._kb_map,
+            owner_name=self._owner_name,
+            kb_exclude=tuple(getattr(self._kb, "exclude", ()) or ()) if self._kb is not None else (),
+            folders=self._folders() if self.tools else None,
+            glossary=self._glossary, task_context=self._task_context)
+
+    def _gather(self) -> dict:
+        """Карта, запреты, материалы — один раз на сессию (в потоке)."""
+        info = {"kb_map": "", "deny": [], "materials": 0}
+        group = self._group
+        if group is None and self._folder.is_dir():
+            try:
+                from meet import groups, library
+
+                group = groups.of(library.read_meta(self._folder))
+            except Exception:
+                group = None
+        if self._kb is not None:
+            try:
+                info["kb_map"] = self._kb.kb_map(group=group, current=self._folder)
+            except Exception as e:
+                self._log(f"агент: карта базы знаний не собрана ({type(e).__name__}: {e})")
+            try:
+                info["deny"] = list(self._kb.exclude_paths())
+            except Exception as e:
+                self._log(f"агент: исключения базы знаний не собраны ({type(e).__name__}: {e})")
+        info["materials"] = len(self._material_records())
+        return info
+
+    def _material_records(self) -> list[dict]:
+        if not self._folder.is_dir():
+            return []
+        try:
+            from meet import materials
+
+            return materials.records(self._folder)
+        except Exception:
+            return []
+
+    async def _ensure_session(self):
+        if self._session is not None:
+            return self._session
+        await self._load_info()
+        dirs = [str(d) for d in (self._folder,
+                                 self._kb.root if self._kb is not None and self._kb.configured else None,
+                                 self._library_root) if d]
+        if self.provider == "claude-code":
+            conv = self._conversation(
+                system_prompt=self.system_prompt(), model=self._model, proxy=self._proxy,
+                log=self._log, responder=True, add_dirs=dirs, deny_paths=self._deny_paths,
+                persist=True, resume=self._stored_sid)
+            self._session = _ConversationSession(conv)
+        else:
+            if self._runner is None:
+                raise RuntimeError(f"нет вызова модели для {self.provider}")
+            self._session = _RunnerSession(
+                self._runner, self.provider, system=self.system_prompt,
+                session_id=self._stored_sid, resumable=self.resumable,
+                allowed_dirs=dirs, deny_paths=self._deny_paths, call_kwargs=self._call_kwargs)
+        self._changed()
+        return self._session
+
+    async def _store_session(self, session) -> None:
+        """Id сеанса — после каждого хода: ветка после картинки его меняет."""
+        if not self.resumable:
+            return
+        sid = session.session_id
+        if sid == self._stored_sid:
+            return
+        try:
+            await self._io(self._chatlog.set_session_id, self.provider, sid)
+            self._stored_sid = sid
+        except (OSError, ValueError) as e:
+            self._log(f"агент: id сеанса не сохранён ({type(e).__name__}: {e})")
+
+    # --- реплики шины ---
+
+    def _owner(self, entry: dict) -> dict:
+        voice = str(entry.get("voice") or "")
+        if entry.get("speaker") in self._owner_names or voice.endswith("/mic:owner"):
+            return {**entry, "owner": True}
+        return entry
+
+    def _take_lines(self, cursor: int) -> tuple[list[dict], int]:
+        """Новые реплики с `cursor` (без спрятанных дублей) в пределах
+        бюджета дельты → (записи, курсор после них)."""
+        entries, size = self._bus.entries_since(cursor)
+        hidden = self._bus.hidden() if hasattr(self._bus, "hidden") else set()
+        out: list[dict] = []
+        chars = 0
+        end = cursor
+        for i, entry in enumerate(entries, start=cursor):
+            text = str(entry.get("text") or "")
+            if i not in hidden and text.strip():
+                if out and chars + len(text) > TURN_LINES_MAX_CHARS:
+                    break
+                out.append(self._owner(entry))
+                chars += len(text) + 40
+            end = i + 1
+        if any(e.get("catchup") for e in out):
+            out.sort(key=lambda e: e["t"] if isinstance(e.get("t"), (int, float)) else float("inf"))
+        return out, end
+
+    def _history(self, before: int) -> list[dict]:
+        entries, _ = self._bus.entries_since(0)
+        hidden = self._bus.hidden() if hasattr(self._bus, "hidden") else set()
+        lines = [self._owner(e) for i, e in enumerate(entries[:before])
+                 if i not in hidden and str(e.get("text") or "").strip()]
+        lines = lines[-SEED_LINES:]
+        if any(e.get("catchup") for e in lines):
+            texts = [str(e.get("text")) for e in lines]
+            _, lines = _chronological(texts, lines)
+        return lines
+
+    def _now_t(self) -> float | None:
+        entries, _ = self._bus.entries_since(max(0, self._bus.size() - 5))
+        times = [e.get("end") if isinstance(e.get("end"), (int, float)) else e.get("t")
+                 for e in entries]
+        times = [float(t) for t in times if isinstance(t, (int, float)) and not isinstance(t, bool)]
+        return max(times) if times else None
+
+    def _scan(self) -> None:
+        size = self._bus.size()
+        if size <= self._scanned:
+            return
+        self._scanned = size
+        now = self._clock()
+        self._last_line_at = now
+        if self._first_pending_at is None and size > self._cursor:
+            self._first_pending_at = now
+
+    def _has_lines(self) -> bool:
+        return self._bus.size() > self._cursor and bool(self._take_lines(self._cursor)[0])
+
+    # --- когда ход ---
+
+    def turn_due(self, now: float | None = None) -> bool:
+        now = self._clock() if now is None else now
+        if self._turn is not None:
+            return False
+        waiting = self._failures and now < self._retry_at
+        if self._user and (self._user_fresh or not waiting):
+            return True
+        if waiting:
+            return False
+        if self._reactions or self._tool_results:
+            return True
+        if not self._has_lines():
+            return False
+        if self._first_pending_at is not None and now - self._first_pending_at >= self._max_interval:
+            return True
+        quiet = self._last_line_at is None or now - self._last_line_at >= self._pause
+        gap = self._last_turn_at is None or now - self._last_turn_at >= self._min_gap
+        return quiet and gap
+
+    def _wake_in(self, now: float) -> float | None:
+        """Через сколько секунд ход может стать нужен без нового сигнала."""
+        if self._turn is not None:
+            return None
+        wake: list[float] = []
+        if self._failures and self._retry_at > now and (self._user or self._reactions
+                                                        or self._tool_results or self._has_lines()):
+            wake.append(self._retry_at - now)
+        elif self._has_lines():
+            if self._last_line_at is not None:
+                at = self._last_line_at + self._pause
+                if self._last_turn_at is not None:
+                    at = max(at, self._last_turn_at + self._min_gap)
+                wake.append(at - now)
+            if self._first_pending_at is not None:
+                wake.append(self._first_pending_at + self._max_interval - now)
+        wake = [max(w, 0.01) for w in wake]
+        return min(wake) if wake else None
+
+    # --- цикл ---
+
+    async def run(self, stop: asyncio.Event) -> None:
+        """Цикл агента до `stop`: ждёт сигнала шины, своих событий или срока."""
+        loop = asyncio.get_running_loop()
+        self._kicked = asyncio.Event()
+        await self.start()
+        signal = self._bus.changed
+        signal.bind(loop)
+        seen = signal.seq
+        stopped = asyncio.ensure_future(stop.wait())
+        try:
+            while not stop.is_set():
+                now = self._clock()
+                self._scan()
+                if self.turn_due(now):
+                    self._start_turn(now)
+                waiter = asyncio.ensure_future(signal.wait(seen, self._wake_in(now)))
+                kick = asyncio.ensure_future(self._kicked.wait())
+                await asyncio.wait({waiter, kick, stopped}, return_when=asyncio.FIRST_COMPLETED)
+                if waiter.done():
+                    seen = waiter.result()
+                else:
+                    waiter.cancel()
+                kick.cancel()
+                self._kicked.clear()
+        finally:
+            stopped.cancel()
+            await self.shutdown()
+
+    async def tick(self) -> bool:
+        """Один шаг без ожидания (тесты, поддельные часы): нужен ход — сделать
+        его и дождаться. True — ход был."""
+        await self.start()
+        now = self._clock()
+        self._scan()
+        if not self.turn_due(now):
+            return False
+        turn = self._start_turn(now)
+        if turn is None:
+            return False
+        await asyncio.gather(turn.task, return_exceptions=True)
+        return True
+
+    def _collect(self) -> _Inputs:
+        lines, end = self._take_lines(self._cursor)
+        inputs = _Inputs(lines=lines, start=self._cursor, end=end,
+                         first_pending_at=self._first_pending_at,
+                         user=self._user, reactions=self._reactions, tools=self._tool_results,
+                         notes=self._notes, frequency=self._frequency_note)
+        self._cursor = end
+        if self._bus.size() <= end:
+            self._first_pending_at = None
+        self._user, self._reactions, self._tool_results, self._notes = [], [], [], []
+        self._frequency_note = None
+        self._user_fresh = False
+        return inputs
+
+    def _requeue(self, inputs: _Inputs, *, transcript=True, user=True, others=True) -> None:
+        """Недоставленное — назад, в начало очереди."""
+        if transcript and inputs.end > inputs.start:
+            self._cursor = min(self._cursor, inputs.start)
+            self._first_pending_at = inputs.first_pending_at or self._clock()
+        if user:
+            self._user = inputs.user + self._user
+        if others:
+            self._reactions = inputs.reactions + self._reactions
+            self._tool_results = inputs.tools + self._tool_results
+            self._notes = inputs.notes + self._notes
+            if inputs.frequency and self._frequency_note is None:
+                self._frequency_note = inputs.frequency
+
+    def _start_turn(self, now: float) -> _Turn | None:
+        inputs = self._collect()
+        if inputs.empty():
+            self._notes = inputs.notes + self._notes
+            if inputs.frequency and self._frequency_note is None:
+                self._frequency_note = inputs.frequency
+            return None
+        turn = _Turn(inputs=inputs, addressed=bool(inputs.user or inputs.reactions))
+        self._turn = turn
+        self._last_turn_at = now
+        turn.task = asyncio.ensure_future(self._run_turn(turn))
+        return turn
+
+    async def _run_turn(self, turn: _Turn) -> None:
+        try:
+            await self._turn_body(turn)
+        except asyncio.CancelledError:
+            # Остановка ассистента посреди хода: ответ — `cancelled`.
+            if turn.reply_id is not None:
+                with _quiet():
+                    self._emit_chat([await self._io(
+                        self._chatlog.finish_reply, turn.reply_id, status="cancelled",
+                        text=turn.shown, error=SHUTDOWN_ERROR)])
+            raise
+        except Exception as e:  # сбой цикла не роняет ассистента
+            self._log(f"агент: ход упал ({type(e).__name__}: {e})")
+            self._failed(f"{type(e).__name__}: {e}")
+            self._requeue(turn.inputs)
+            if turn.reply_id is not None:
+                with _quiet():
+                    self._emit_chat([await self._io(
+                        self._chatlog.finish_reply, turn.reply_id,
+                        status="failed" if turn.addressed else "dropped",
+                        text=turn.shown, error=f"{type(e).__name__}: {e}"[:300])])
+        finally:
+            if self._turn is turn:
+                self._turn = None
+            self._partial = None
+            if self.state == WRITING:
+                self._set_state(LISTENING)
+            else:
+                self._changed()
+            self._kick()
+
+    async def _fresh_audio(self, turn: _Turn) -> None:
+        """Перед ответом пользователю — дорасшифровать хвост речи (как
+        вопросы): ответ видит и только что сказанное."""
+        if self._on_fresh_audio is None or not turn.inputs.user:
+            return
+        try:
+            await asyncio.wait_for(asyncio.to_thread(self._on_fresh_audio), FRESH_AUDIO_TIMEOUT_S)
+        except Exception as e:
+            self._log(f"агент: хвост речи не дорасшифрован ({type(e).__name__})")
+            return
+        more, end = self._take_lines(turn.inputs.end)
+        if end > turn.inputs.end:
+            turn.inputs.lines += more
+            turn.inputs.end = self._cursor = end
+            self._scanned = max(self._scanned, end)
+
+    async def _turn_body(self, turn: _Turn) -> None:
+        inputs = turn.inputs
+        await self._fresh_audio(turn)
+        session = turn.session = await self._ensure_session()
+        if turn.stop:          # прервали, пока ход собирался
+            self._requeue(inputs)
+            return
+        fields = {"mode": "reply" if turn.addressed else "proactive"}
+        if inputs.user:
+            fields["re"] = inputs.user[-1]["id"]
+        t = self._now_t()
+        if t is not None:
+            fields["t"] = t
+        began = await self._io(self._chatlog.begin_reply, **fields)
+        turn.reply_id = began.message["id"]
+        self._emit_chat([began.event])
+        self._set_state(WRITING)
+        # Запросы к Meet подряд: ход с ответами Meet — продолжение цепочки.
+        self._tool_rounds = self._tool_rounds + 1 if inputs.tools else 0
+        text = await self._io(self._compose, turn, session)
+        if turn.stop:          # прервали, пока ход собирался: модели не шлём
+            await self._finish_stopped(turn, AgentReply(text="", error=CANCELLED_ERROR, cancelled=True))
+            return
+        reply = await self._send(turn, session, text)
+        await self._store_session(session)
+        if reply.resume_failed and not turn.stop:
+            self._log(f"агент: сеанс {self.provider} не продолжить ({reply.error}) — новый с затравкой")
+            session.forget()
+            await self._store_session(session)
+            text = await self._io(self._compose, turn, session, True)
+            reply = await self._send(turn, session, text)
+            await self._store_session(session)
+        if reply.cancelled or turn.stop == "stop" or (turn.stop and reply.error):
+            await self._finish_stopped(turn, reply)
+            return
+        if reply.error:
+            await self._finish_failed(turn, reply)
+            return
+        self._failures = 0
+        self.turns += 1
+        await self._apply(turn, reply)
+        self._set_state(LISTENING)
+
+    def _compose(self, turn: _Turn, session, force_seed: bool = False) -> str:
+        """Сообщение хода: затравка (новая сессия или нет родного продолжения)
+        и дельта. Блокирующее (журнал) — в потоке журнала."""
+        inputs = turn.inputs
+        parts = []
+        if force_seed or not session.has_context:
+            seed = pp.seed(self._chatlog, "", self._materials_summary(),
+                           pp.ParticipantSettings(frequency=self.frequency,
+                                                  owner_speaker=self._owner_speaker),
+                           transcript=self._history(inputs.start), t=self._now_t())
+            parts.append(seed)
+            self.session_state = "seeded" if self._chatlog_has_history() else "new"
+        elif self.session_state is None:
+            self.session_state = "resumed"
+        delta = pp.delta(inputs.lines, inputs.user, (), inputs.reactions,
+                         owner_speaker=self._owner_speaker, tool_results=inputs.tools,
+                         notes=inputs.notes, frequency=inputs.frequency,
+                         agent_texts=self._agent_texts)
+        if delta:
+            parts.append(delta)
+        return "\n\n".join(parts)
+
+    def _chatlog_has_history(self) -> bool:
+        try:
+            return any(m.get("kind") in ("agent", "user") and m.get("status") != "writing"
+                       for m in self._chatlog.messages())
+        except Exception:
+            return False
+
+    def _materials_summary(self) -> str:
+        lines = []
+        for record in self._material_records():
+            meta = record.get("meta") or {}
+            source = (meta.get("source") or {}).get("path") or ""
+            head = f"- {record.get('id')} «{meta.get('title') or Path(source).name}»"
+            if meta.get("kind"):
+                head += f" ({meta['kind']})"
+            text_path = _text_dump_path(self._folder, str(record.get("id") or ""))
+            if text_path.is_file():
+                head += f" — текст: {text_path}"
+            lines.append(head)
+            summary = (record.get("summary") or "").strip()
+            if summary:
+                lines.append("  " + " ".join(summary.split())[:300])
+        return "\n".join(lines)
+
+    async def _send(self, turn: _Turn, session, text: str) -> AgentReply:
+        task = asyncio.ensure_future(session.send(
+            text, images=turn.inputs.images if self.vision else (),
+            on_text=partial(self._on_text, turn), timeout_s=self._turn_timeout))
+        turn.send_task = task
+        try:
+            await asyncio.wait({task})
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        finally:
+            turn.send_task = None
+        if task.cancelled():
+            return AgentReply(text="".join(turn.raw), error=CANCELLED_ERROR, cancelled=True)
+        exc = task.exception()
+        if exc is not None:
+            return AgentReply(text="", error=f"{type(exc).__name__}: {exc}")
+        return task.result()
+
+    def _on_text(self, turn: _Turn, piece) -> None:
+        if piece is None:   # новое сообщение модели после инструмента
+            turn.raw.clear()
+            return
+        turn.raw.append(piece)
+        now = self._clock()
+        if now - turn.partial_at < PARTIAL_EVERY_S or turn.reply_id is None:
+            return
+        turn.partial_at = now
+        text = partial_text("".join(turn.raw))
+        if text and text != turn.shown:
+            turn.shown = text
+            self._partial = {"id": turn.reply_id, "text": text}
+            self._emit("chat_partial", dict(self._partial))
+
+    async def _interrupt(self, turn: _Turn, why: str) -> None:
+        if turn.stop and not (why == "stop" and turn.stop == "message"):
+            return
+        already = turn.stop is not None
+        turn.stop = why
+        if already:
+            return   # остановка уже идёт — только причина другая
+        task = turn.send_task
+        if task is None or task.done():
+            return   # ход ещё не ушёл модели: тело увидит `stop` само
+        handled = False
+        if turn.session is not None:
+            try:
+                handled = await turn.session.interrupt()
+            except Exception as e:
+                self._log(f"агент: остановка хода не удалась ({type(e).__name__}: {e})")
+        if not handled and not task.done():
+            task.cancel()
+
+    async def _finish_stopped(self, turn: _Turn, reply: AgentReply) -> None:
+        shown = partial_text(reply.text or "".join(turn.raw)) or turn.shown
+        if turn.stop == "message":
+            status, note = "held", "прервано сообщением пользователя"
+            self._requeue(turn.inputs)
+            self._notes.insert(0, NOTE_INTERRUPTED)
+        elif turn.stop == "stop":
+            status, note = "cancelled", "остановлено пользователем"
+            self._requeue(turn.inputs, user=False, others=False)
+            self._tool_results = turn.inputs.tools + self._tool_results
+            self._notes.insert(0, NOTE_STOPPED)
+        else:
+            status, note = "cancelled", "ход прерван"
+            self._requeue(turn.inputs)
+        self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id,
+                                        status=status, text=shown, note=note)])
+        self._set_state(LISTENING)
+
+    def _failed(self, error: str) -> None:
+        self._failures += 1
+        pause = BACKOFF_S[min(self._failures, len(BACKOFF_S)) - 1]
+        self._retry_at = self._clock() + pause
+        self._set_state(ERROR, (error or "ошибка модели")[:300])
+
+    async def _finish_failed(self, turn: _Turn, reply: AgentReply) -> None:
+        error = (reply.error or "ошибка модели")[:300]
+        self._log(f"агент: модель не ответила ({error}); повтор позже")
+        self._requeue(turn.inputs)
+        # Ответ пользователю — видимая ошибка; ход по репликам — молча.
+        status = "failed" if turn.addressed else "dropped"
+        self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id,
+                                        status=status, text="", error=error)])
+        self._failed(error)
+
+    # --- ответ ---
+
+    async def _apply(self, turn: _Turn, reply: AgentReply) -> None:
+        actions = pp.parse_reply(reply.text, log=self._log)
+        says = [a for a in actions if a.kind == "say"]
+        requests = [a for a in actions if a.kind in pp.TOOL_KINDS]
+        if reply.dropped_images or reply.notes:
+            await self._mark_dropped(turn, reply)
+        if requests and self.tools:
+            self._log("агент: запросы к Meet пропущены — у модели свои инструменты ("
+                      + ", ".join(a.kind for a in requests) + ")")
+            requests = []
+        if not says:
+            note = "запрос к Meet" if requests else (actions[0].note if actions else "")
+            fields = {"status": "dropped", "silent": True}
+            if note:
+                fields["note"] = note
+            self._emit_chat([await self._io(self._chatlog.finish_reply, turn.reply_id, **fields)])
+        else:
+            await self._show(turn, says)
+        if requests:
+            await self._run_tools(requests)
+
+    async def _mark_dropped(self, turn: _Turn, reply: AgentReply) -> None:
+        """Картинки, которые провайдер не отправил модели (негодный файл, не
+        принята), — пометка у вложения в журнале."""
+        for note in reply.notes:
+            self._log(f"агент: {note}")
+        ids = {}
+        for msg in turn.inputs.user:
+            ids.update(msg.get("_image_ids") or {})
+        note = "; ".join(reply.notes)[:300] or "изображение не отправлено модели"
+        for path in reply.dropped_images:
+            aid = ids.get(str(path))
+            if aid:
+                with _quiet():
+                    self._emit_chat([await self._io(self._chatlog.patch, aid,
+                                                    {"delivered": False, "note": note})])
+
+    async def _show(self, turn: _Turn, says) -> None:
+        """Сообщения ответа с одной страховкой: не больше одного нового
+        сообщения агента за `merge_window_s`, лишнее — абзацем к последнему.
+        Ответ пользователю всегда начинается своим сообщением."""
+        now = self._clock()
+        target = None if turn.addressed else self._last_shown
+        first = True
+        for action in says:
+            fields = action.journal_fields()
+            if target is not None and now - target[1] < self._merge_window:
+                await self._merge(target[0], fields)
+                if first:
+                    self._emit_chat([await self._io(
+                        self._chatlog.finish_reply, turn.reply_id, status="superseded",
+                        merged_into=target[0])])
+            else:
+                if first:
+                    ev = await self._io(self._chatlog.finish_reply, turn.reply_id,
+                                        status="shown", **fields)
+                    self._emit_chat([ev])
+                    mid = turn.reply_id
+                else:
+                    added = await self._io(self._chatlog.append, "agent", status="shown",
+                                           mode="reply" if turn.addressed else "proactive",
+                                           **fields)
+                    self._emit_chat([added.event])
+                    mid = added.message["id"]
+                self._shown[mid] = dict(fields)
+                self._agent_texts[mid] = fields["text"]
+                target = self._last_shown = (mid, now)
+            first = False
+
+    async def _merge(self, mid: str, fields: dict) -> None:
+        old = self._shown.get(mid) or {"text": "", "buttons": [], "pin": False}
+        text = f"{old['text']}\n\n{fields['text']}".strip()
+        if len(text) > MERGED_MAX:
+            text = text[:MERGED_MAX - 1].rstrip() + "…"
+        buttons = list(dict.fromkeys([*old.get("buttons", []), *fields.get("buttons", [])]))[:3]
+        merged = {"text": text, "buttons": buttons, "pin": bool(old.get("pin") or fields.get("pin"))}
+        self._emit_chat([await self._io(self._chatlog.patch, mid, merged)])
+        self._shown[mid] = merged
+        self._agent_texts[mid] = text
+
+    # --- запасной путь: Meet исполняет read / search / list ---
+
+    async def _run_tools(self, requests) -> None:
+        spent = self._tool_rounds >= TOOL_ROUNDS_MAX
+        for action in requests:
+            args = action.tool_args()
+            req = await self._io(self._chatlog.append, "tool", event="request", call=action.kind, args=args)
+            self._emit_chat([req.event])
+            text, error = "", None
+            if spent:
+                error = TOOLS_SPENT
+            else:
+                try:
+                    text, error = await asyncio.wait_for(
+                        asyncio.to_thread(self._tool_call, action), TOOL_TIMEOUT_S)
+                except asyncio.TimeoutError:
+                    error = f"не успел за {TOOL_TIMEOUT_S:.0f} с"
+                except Exception as e:
+                    error = f"{type(e).__name__}: {e}"
+            if len(text) > TOOL_RESULT_MAX:
+                text = text[:TOOL_RESULT_MAX].rstrip() + f"\n[… обрезано: {len(text)} симв.]"
+            result = {"event": "result", "re": req.message["id"], "text": text, "chars": len(text)}
+            if error:
+                result["error"] = error
+            res = await self._io(self._chatlog.append, "tool", call=action.kind, **result)
+            self._emit_chat([res.event])
+            self._tool_results.append({"call": action.kind, "args": args, "text": text, "error": error})
+        self._kick()
+
+    def _tool_call(self, action) -> tuple[str, str | None]:
+        from meet.assist.kb_prep import KnowledgeBase
+
+        kb = self._kb or KnowledgeBase(None, library_root=self._library_root)
+        if action.kind == "read":
+            return _read_text(kb.kb_read(list(action.paths)))
+        if action.kind == "search":
+            return _search_text(kb.kb_search(action.query, action.where or None,
+                                             deadline_s=TOOL_SEARCH_DEADLINE_S))
+        return _list_text(kb.kb_list(action.where or None))
+
+    # --- API окна (задача 6) ---
+
+    async def post_user_message(self, text: str, attachments=(), client_id: str | None = None) -> dict:
+        """Сообщение пользователя (и вложения) → журнал и ближайший ход, вне
+        очереди: идущий ход по репликам прерывается. Вложение — id записи
+        журнала (`a3`), путь к файлу или папке, `{"path"}`, `{"data": bytes,
+        "name"}` (вставленная картинка). → `{"id", "queued", "attachments",
+        "duplicate"?}`."""
+        text = text if isinstance(text, str) else ""
+        if client_id:
+            old = await self._io(self._chatlog.by_client_id, client_id)
+            if old is not None:
+                return {"id": old["id"], "queued": False, "duplicate": True,
+                        "attachments": list(old.get("attachments") or [])}
+        described, images, ids, image_ids = [], [], [], {}
+        for item in attachments or ():
+            record, descriptor, image = await self._attach(item, len(images))
+            if record is None:
+                continue
+            ids.append(record["id"])
+            described.append(descriptor)
+            if image:
+                images.append(image)
+                image_ids[str(image)] = record["id"]
+        fields = {"text": text, "attachments": ids}
+        t = self._now_t()
+        if t is not None:
+            fields["t"] = t
+        added = await self._io(self._chatlog.append, "user", client_id=client_id, **fields)
+        if not added.created:
+            return {"id": added.message["id"], "queued": False, "duplicate": True, "attachments": ids}
+        self._emit_chat([added.event])
+        msg = {**added.message, "attachments": described, "_images": images,
+               "_image_ids": image_ids}
+        self._queue_user(msg)
+        self._interrupt_for_user()
+        self._kick()
+        return {"id": msg["id"], "queued": self._turn is not None, "attachments": ids}
+
+    def _queue_user(self, msg: dict) -> None:
+        self._user.append(msg)
+        self._user_fresh = True
+        self._last_shown = None   # в ленте после него — не склеивать с прежним
+
+    def _interrupt_for_user(self) -> None:
+        """Идущий ход по репликам — прервать (в фоне: подтверждение остановки
+        у Claude Code ждётся до 5 с, а окну нужен ответ сразу)."""
+        turn = self._turn
+        if turn is not None and not turn.addressed and not turn.stop:
+            self._background_task(self._interrupt(turn, "message"))
+
+    def _background_task(self, coro) -> None:
+        task = asyncio.ensure_future(coro)
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
+    async def click(self, mid: str, label: str, client_id: str | None = None) -> dict:
+        """Нажатие кнопки реплики агента = сообщение пользователя с её
+        надписью. Нет такой кнопки — ValueError."""
+        t = self._now_t()
+        added = await self._io(self._chatlog.click_button, mid, label, client_id=client_id, t=t)
+        if added.created:
+            self._emit_chat([added.event])
+            if mid not in self._agent_texts:     # цитата своего сообщения агенту
+                msg = await self._io(self._chatlog.get, mid)
+                self._agent_texts[mid] = (msg or {}).get("text") or ""
+            self._queue_user(dict(added.message))
+            self._interrupt_for_user()
+            self._kick()
+        return added.message
+
+    async def react(self, mid: str, emoji: str, on: bool | None = None) -> list[dict]:
+        """Реакция 👍 / 👎 / ❓ на реплику агента (None — переключить) →
+        события журнала; агент узнает о ней в ближайшем ходе."""
+        events = await self._io(self._chatlog.react, mid, emoji, on, t=self._now_t())
+        if not events:
+            return []
+        self._emit_chat(events)
+        state = next((ev["message"].get("on") for ev in events if ev.get("op") == "add"), on)
+        re_text = self._agent_texts.get(mid)
+        if re_text is None:
+            msg = await self._io(self._chatlog.get, mid)
+            re_text = (msg or {}).get("text") or ""
+        self._reactions.append({"re": mid, "emoji": emoji, "on": state, "re_text": re_text})
+        self._kick()
+        return events
+
+    async def stop_reply(self, mid: str | None = None) -> bool:
+        """«Стоп» у ответа, который пишется. False — такого хода нет."""
+        turn = self._turn
+        if turn is None or (mid is not None and mid != turn.reply_id):
+            return False
+        self._background_task(self._interrupt(turn, "stop"))
+        return True
+
+    # --- вложения ---
+
+    async def _attach(self, item, images: int) -> tuple[dict | None, dict, str | None]:
+        """Вложение → (запись журнала, описание для дельты, путь картинки).
+        `images` — сколько картинок в сообщении уже есть."""
+        from meet.assist import attachments as att
+
+        if isinstance(item, str) and _ATTACHMENT_ID.match(item):
+            record = await self._io(self._chatlog.get, item)
+            if record is None or record.get("kind") != "attachment":
+                self._log(f"агент: вложения {item} нет в журнале")
+                return None, {}, None
+            image = record.get("path") if record.get("type") == "image" and record.get("status") != "failed" else None
+            return record, _descriptor(record, self.vision), image
+        fields: dict
+        image = None
+        try:
+            if _looks_image(item) and images >= att.MAX_PER_MESSAGE:
+                raise att.AttachmentError(f"В сообщении — не больше {att.MAX_PER_MESSAGE} изображений")
+            if isinstance(item, dict) and isinstance(item.get("data"), (bytes, bytearray)):
+                saved = await asyncio.to_thread(att.save, self._folder, bytes(item["data"]),
+                                                name=item.get("name"))
+                fields, image = self._image_fields(saved), saved["path"]
+            else:
+                path = Path(item.get("path") if isinstance(item, dict) else item)
+                if path.suffix.lower() in IMAGE_SUFFIXES and not path.is_dir():
+                    saved = await asyncio.to_thread(att.save_file, self._folder, path)
+                    fields, image = self._image_fields(saved), saved["path"]
+                else:
+                    fields = await asyncio.to_thread(self._add_document, path)
+        except (ValueError, OSError, TypeError) as e:
+            name = _item_name(item)
+            fields = {"type": "image" if _looks_image(item) else "doc", "name": name,
+                      "status": "failed", "error": str(e)[:300], "note": f"не разобрано: {str(e)[:200]}"}
+            image = None
+        added = await self._io(self._chatlog.append, "attachment", **fields)
+        self._emit_chat([added.event])
+        if image:
+            self._images += 1
+        elif fields.get("type") == "doc" and fields.get("status") == "ready":
+            self._materials += 1
+        self._changed()
+        return added.message, _descriptor(added.message, self.vision), image
+
+    def _image_fields(self, saved: dict) -> dict:
+        fields = {"type": "image", "name": saved.get("name") or saved["id"], "status": "ready",
+                  "path": saved["path"], "ref": saved["id"], "vision": self.vision}
+        if not self.vision:
+            from meet.llm.base import NO_VISION_NOTE
+
+            fields["note"] = NO_VISION_NOTE
+        return fields
+
+    def _add_document(self, path: Path) -> dict:
+        """Документ или папка → `materials.add`, текст — рядом (агент с
+        инструментами читает его из папки встречи), сводка — в ограду."""
+        from meet import materials
+
+        desc = materials.add(self._folder, path)
+        aid = desc["id"]
+        record = materials.read(self._folder, aid) or {}
+        summary = desc.get("summary") or materials.outline(SimpleNamespace(chunks=record.get("chunks") or []))
+        dump = _text_dump_path(self._folder, aid)
+        try:
+            _write_text_dump(dump, desc.get("title") or path.name, record.get("chunks") or [])
+            text_path = str(dump)
+        except OSError:
+            text_path = desc.get("path") or str(path)
+        fields = {"type": "doc", "name": desc.get("title") or path.name, "status": "ready",
+                  "path": text_path, "ref": aid, "summary": summary or "",
+                  "chars": desc.get("chars", 0)}
+        if desc.get("warnings"):
+            fields["note"] = "; ".join(desc["warnings"])[:200]
+        if desc.get("duplicate"):
+            fields["duplicate"] = True
+        return fields
+
+
+# --- помощники ---
+
+class _quiet:
+    """Уборка хода не роняет цикл (журнал мог не записаться)."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return exc_type is not None and issubclass(exc_type, Exception)
+
+
+def _chronological(texts, entries):
+    from meet.assist.bus import chronological
+
+    return chronological(texts, entries)
+
+
+def _descriptor(record: dict, vision: bool) -> dict:
+    """Запись журнала о вложении → описание для дельты (`participant_prompts`)."""
+    out = {"id": record.get("id"), "name": record.get("name") or "", "type": record.get("type")}
+    if record.get("path") and record.get("status") != "failed":
+        out["path"] = record["path"]
+    if record.get("summary"):
+        out["summary"] = record["summary"]
+    note = record.get("note")
+    if record.get("type") == "image" and not vision and not note:
+        from meet.llm.base import NO_VISION_NOTE
+
+        note = NO_VISION_NOTE
+    if note:
+        out["note"] = note
+    return out
+
+
+def _item_name(item) -> str:
+    if isinstance(item, dict):
+        return str(item.get("name") or Path(str(item.get("path") or "файл")).name)
+    return Path(str(item)).name
+
+
+def _looks_image(item) -> bool:
+    if isinstance(item, dict) and "data" in item:
+        return True
+    return Path(_item_name(item)).suffix.lower() in IMAGE_SUFFIXES
+
+
+def _text_dump_path(folder: Path, aid: str) -> Path:
+    from meet import materials
+
+    return materials.materials_dir(folder) / f"{aid}.txt"
+
+
+def _write_text_dump(path: Path, title: str, chunks) -> None:
+    parts = [f"# {title}"]
+    for c in chunks:
+        loc = c.get("loc") if isinstance(c, dict) else None
+        text = c.get("text") if isinstance(c, dict) else ""
+        parts.append(f"[{loc}]\n{text}" if loc else str(text or ""))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def _read_text(items) -> tuple[str, str | None]:
+    parts, errors = [], []
+    for item in items or ():
+        if item.get("error"):
+            errors.append(f"{item.get('path')}: {item['error']}")
+            parts.append(f"### {item.get('path')}\n(не прочитан: {item['error']})")
+            continue
+        warn = f"\n(пометки: {'; '.join(item['warnings'])})" if item.get("warnings") else ""
+        parts.append(f"### {item.get('path')}\n{item.get('text') or ''}{warn}")
+    if errors and len(errors) == len(parts):
+        return "", "; ".join(errors)[:500]
+    return "\n\n".join(parts), None
+
+
+def _search_text(res: dict) -> tuple[str, str | None]:
+    if res.get("error"):
+        return "", res["error"]
+    hits = res.get("hits") or []
+    if not hits:
+        lines = [f"Ничего не найдено (просмотрено файлов: {res.get('files', 0)})."]
+    else:
+        lines = [f"- {h.get('path')}{' [' + h['loc'] + ']' if h.get('loc') else ''}: {h.get('snippet')}"
+                 for h in hits]
+    if res.get("more"):
+        lines.append(f"… и ещё совпадений: {res['more']}")
+    if res.get("timed_out"):
+        lines.append("(время поиска вышло — показано найденное к этому моменту)")
+    return "\n".join(lines), None
+
+
+def _list_text(res: dict) -> tuple[str, str | None]:
+    if res.get("error"):
+        return "", res["error"]
+    lines = []
+    if "meetings" in res:
+        for m in res["meetings"]:
+            group = f" · группа «{m['group']}»" if m.get("group") else ""
+            lines.append(f"- {m.get('path')} · {m.get('date') or '—'} · {m.get('title')}{group}")
+    else:
+        if res.get("title"):
+            lines.append(f"Встреча «{res['title']}» {res.get('date') or ''}".rstrip())
+        for f in res.get("folders") or []:
+            lines.append(f"- {f['name']}/ — документов: {f.get('docs', 0)}")
+        for name in res.get("files") or []:
+            lines.append(f"- {name}")
+    if not lines:
+        lines.append("(пусто)")
+    if res.get("more"):
+        lines.append(f"… и ещё: {res['more']}")
+    return "\n".join(lines), None

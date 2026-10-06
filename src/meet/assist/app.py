@@ -26,6 +26,7 @@ import os
 import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -107,6 +108,9 @@ class AssistState:
         self._task_context = ""
         self.qa = None       # проставляет run_assist после создания QAService
         self.digester = None  # аналогично
+        # Агент-участник (`assist.participant`, 0.3.6): тогда qa — None, а
+        # линия подсказок дайджестера выключена (сводка остаётся).
+        self.participant = None
         self.stop_event: asyncio.Event | None = None  # ставит _main
         self.loop: asyncio.AbstractEventLoop | None = None  # ставит _main
         self._stop_early = False  # остановка пришла до _main (конец записи)
@@ -143,6 +147,8 @@ class AssistState:
             self.digester.set_system_prompt(self.digester_system, self.hints_system)
         if self.qa is not None:
             self.qa.set_system_prompt(self.qa_system)
+        if self.participant is not None:
+            self.participant.set_task_context(self._task_context)
 
     async def set_task(self, task: str) -> None:
         if self._vault is not None:
@@ -175,7 +181,8 @@ class AssistState:
         """Меняется — пора слать клиентам новое `state`."""
         catchup = self.catchup_view()
         return (self.live.version, self.status(), self.ready, self.stage,
-                None if catchup is None else (catchup["active"], catchup["percent"]))
+                None if catchup is None else (catchup["active"], catchup["percent"]),
+                self.participant.version if self.participant is not None else None)
 
     def view(self) -> dict:
         """Тело `event: state`: сводка, подсказки, статус. `digest` — сводка
@@ -190,6 +197,8 @@ class AssistState:
             out["catchup"] = catchup
         if not self.ready:
             out["starting"] = self.stage or "запускается…"
+        if self.participant is not None:
+            out["agent"] = self.participant.view()
         return out
 
     def qa_version(self) -> int:
@@ -384,6 +393,8 @@ async def _main(state: AssistState, port: int, *, open_browser: bool = True,
         print(f"Ассистент: {url} (Ctrl-C — стоп)", flush=True)
         digester = asyncio.ensure_future(state.digester.run(stop))
         tasks += [digester, asyncio.ensure_future(stop.wait())]
+        if getattr(state, "participant", None) is not None:
+            tasks.append(asyncio.ensure_future(_run_participant(state.participant, stop)))
         # Выход — по /stop (не ждём сна дайджестера и его вызова модели) или
         # если дайджестер кончился сам; его сбой пробрасываем наружу.
         await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -401,6 +412,18 @@ async def _main(state: AssistState, port: int, *, open_browser: bool = True,
         # при выходе процесса (после engine.stop), не здесь.
         loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
         workers.shutdown(wait=False, cancel_futures=True)
+
+
+async def _run_participant(participant, stop: asyncio.Event) -> None:
+    """Цикл агента-участника; его сбой не останавливает запись и сводку —
+    только в журнал, дальше ждём остановки."""
+    try:
+        await participant.run(stop)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        print(f"агент-участник упал: {type(e).__name__}: {e}", flush=True)
+        await stop.wait()
 
 
 def cadence_of(assist) -> Cadence:
@@ -744,6 +767,11 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         out_dir = Path(out_root) / datetime.now().strftime("%Y-%m-%d_%H-%M")
     bus = TranscriptBus()
     cadence = cadence_of(cfg.assist)
+    participant_on = bool(getattr(cfg.assist, "participant", False))
+    if participant_on:
+        # Агент-участник пишет сам: линии подсказок нет, сводка (черновик
+        # итогов и название) остаётся.
+        cadence = replace(cadence, hints=False)
     live = LiveState(max_hints=cadence.max_hints, hints_enabled=cadence.hints)
     transcript_path = out_dir / "live_transcript.md"
     heard = None
@@ -830,19 +858,27 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
                               owner_names=[cfg.recording.speaker_name,
                                            *cfg.recording.former_speaker_names],
                               on_update=_save_state, log=log)
-    state.qa = QAService(
-        bus, live, system_prompt=state.qa_system,
-        allowed_dirs=state.qa_allowed_dirs, cwd=qa_workdir(provider_name, out_dir),
-        runner=runner, model=llm.agent_model(provider_name, cfg),
-        on_fresh_audio=getattr(engine, "flush_tail", engine.process_window),
-        owner=cfg.recording.speaker_name, changed=bus.changed,
-    )
+    fresh_audio = getattr(engine, "flush_tail", engine.process_window)
+    if participant_on:
+        state.participant = _make_participant(
+            cfg, bus, out_dir, provider_name, runner, knowledge_dir=knowledge_dir,
+            glossary=state._glossary, on_fresh_audio=fresh_audio, log=log)
+    else:
+        state.qa = QAService(
+            bus, live, system_prompt=state.qa_system,
+            allowed_dirs=state.qa_allowed_dirs, cwd=qa_workdir(provider_name, out_dir),
+            runner=runner, model=llm.agent_model(provider_name, cfg),
+            on_fresh_audio=fresh_audio,
+            owner=cfg.recording.speaker_name, changed=bus.changed,
+        )
     if prior:
         for line, entry in prior:
             bus.publish(line, entry)
         skip = getattr(state.digester, "skip_existing", None)
         if skip is not None:
             skip()  # прошлая лента — контекст, не новые реплики
+        if state.participant is not None:
+            state.participant.skip_existing()
     run = {"started": False, "plan": None}
     clock.mark("настройки, провайдер и ассистент собраны", clock._began)
 
@@ -940,6 +976,8 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         close = getattr(state.digester, "close", None)
         if close is not None:
             close()  # процесс диалога подсказок — не сирота, даже при сбое
+        if state.participant is not None:
+            state.participant.close()  # и процесс агента-участника
         engine.stop()
         started, plan = run["started"], run["plan"]
         if started and attached:
@@ -954,6 +992,35 @@ def _run_assist(out_root, window_seconds, hotwords, task, vault, port,
         if started:
             print(f"\nОстановлено: {out_dir}", flush=True)
             print(f'Точный транскрипт: meet transcribe "{out_dir}"', flush=True)
+
+
+def _make_participant(cfg, bus: TranscriptBus, out_dir: Path, provider: str, runner, *,
+                      knowledge_dir=None, glossary: str = "", on_fresh_audio=None, log=print):
+    """Агент-участник встречи (`assist.participant`): журнал папки записи,
+    база знаний на сессию (карта, исключения, запасные запросы), библиотека —
+    папка, где лежит запись."""
+    from meet import llm
+    from meet.assist.chatlog import ChatLog
+    from meet.assist.kb_prep import KnowledgeBase
+    from meet.assist.participant import Participant
+
+    knowledge = knowledge_dir or cfg.assistant.knowledge_dir
+    knowledge = knowledge if knowledge and Path(knowledge).is_dir() else None
+    library_root = out_dir.parent
+    kb = KnowledgeBase(knowledge, exclude=cfg.assist.kb_exclude, library_root=library_root,
+                       show_map=cfg.assist.kb_map)
+    participant = Participant(
+        bus, ChatLog(out_dir, log=log), provider=provider, folder=out_dir, runner=runner, kb=kb,
+        library_root=library_root, owner_name=cfg.recording.speaker_name,
+        owner_speaker=cfg.recording.speaker_name,
+        owner_names=[cfg.recording.speaker_name, *cfg.recording.former_speaker_names],
+        frequency=cfg.assist.frequency, model=llm.agent_model(provider, cfg),
+        proxy=cfg.llm.proxy, glossary=glossary, on_fresh_audio=on_fresh_audio, log=log)
+    # Новое в чате и у агента — сигнал окнам (SSE `state`; маршруты чата — задача 6).
+    participant.add_listener(lambda _name, _data: bus.changed.notify())
+    print(f"агент-участник: {participant.label}, «Как часто писать»: {participant.frequency}",
+          flush=True)
+    return participant
 
 
 # Этапы старта для окна (`live.stage`): что ассистент делает сейчас.

@@ -250,6 +250,10 @@ class _Heavy:
                 pass  # цикл уже закрыт — run_assist и так вышел
 
 
+# Прежний ассистент (подсказки и «Спросить»), без агента-участника.
+OLD_ASSIST = Settings.from_raw({"assist": {"participant": False}})
+
+
 def _run(tmp_path, **kw):
     from meet.assist.app import run_assist
 
@@ -421,7 +425,7 @@ def test_runner_comes_from_llm_resolve(tmp_path, monkeypatch):
         return None
 
     heavy = _Heavy(monkeypatch, resolved=("codex", codex_runner), digester_run=done)
-    _run(tmp_path, open_browser=False, port=0)
+    _run(tmp_path, open_browser=False, port=0, cfg=OLD_ASSIST)
     assert heavy.resolve_calls == 1
     assert heavy.digester_kwargs["runner"] is codex_runner
     assert heavy.qa_kwargs["runner"] is codex_runner
@@ -531,7 +535,7 @@ def test_run_assist_passes_knowledge_dir_to_qa_and_term_index(tmp_path, monkeypa
     (kb / "Шлюз.md").write_text("# Платёжный шлюз\n\nСервис приёма платежей.\n",
                                encoding="utf-8")
     heavy = _Heavy(monkeypatch, digester_run=done)
-    _run(tmp_path, open_browser=False, port=0, knowledge_dir=str(kb))
+    _run(tmp_path, open_browser=False, port=0, knowledge_dir=str(kb), cfg=OLD_ASSIST)
     assert kb in heavy.qa_kwargs["allowed_dirs"]
     assert "allowed_dirs" not in heavy.digester_kwargs  # тики без инструментов
     assert heavy.digester_kwargs["kb"] is None  # старт его не ждёт
@@ -665,7 +669,8 @@ def test_model_comes_from_settings(tmp_path, monkeypatch):
         return None
 
     heavy = _Heavy(monkeypatch, resolved=("claude-code", _never_called_runner), digester_run=done)
-    _run(tmp_path, open_browser=False, port=0, cfg=Settings.from_raw({"llm": {"model": "opus"}}))
+    _run(tmp_path, open_browser=False, port=0,
+         cfg=Settings.from_raw({"llm": {"model": "opus"}, "assist": {"participant": False}}))
     assert heavy.digester_kwargs["call_kwargs"] == {"model": "opus"}
     assert heavy.qa_kwargs["model"] == "opus"
 
@@ -675,7 +680,8 @@ def test_fast_ticks_keep_their_model_but_questions_use_the_configured_one(tmp_pa
         return None
 
     heavy = _Heavy(monkeypatch, resolved=("claude-code", _never_called_runner), digester_run=done)
-    cfg = Settings.from_raw({"llm": {"model": "opus"}, "assist": {"hints_model": "fast"}})
+    cfg = Settings.from_raw({"llm": {"model": "opus"},
+                             "assist": {"hints_model": "fast", "participant": False}})
     _run(tmp_path, open_browser=False, port=0, cfg=cfg)
     assert heavy.digester_kwargs["call_kwargs"] == {"model": "haiku", "thinking": "disabled"}
     assert heavy.qa_kwargs["model"] == "opus"
