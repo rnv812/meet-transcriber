@@ -94,6 +94,15 @@
   background: rgba(94, 106, 210, 0.22); color: var(--accent-hover);
   font-size: 10.5px; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums;
 }
+/* Узкая: полоса ленты (если есть) и вкладка одна над другой. */
+.live-ws__stack { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.live-ws__strip { flex: 0 0 var(--live-feed-h, 35%); min-height: 0; display: flex; flex-direction: column; }
+.live-ws__strip .live-ws__feed { flex: 1; min-height: 0; }
+/* Разделитель полосы — посреди промежутка и виден всегда: области разные. */
+.live-ws__stack > .splitter--y { margin: -4px 0; }
+.live-ws__stack > .splitter.splitter--y::after { background: var(--line); }
+.live-ws__stack > .splitter.splitter--y:hover::after, .live-ws__stack > .splitter.splitter--y[data-dragging]::after,
+.live-ws__stack > .splitter.splitter--y:focus-visible::after { background: var(--accent); }
 .live-ws__panel { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 .live-ws__panel--feed, .live-ws__panel--ask { overflow: hidden; }
 .live-ws__panel--feed .live-ws__feed { flex: 1; min-height: 0; }
@@ -149,7 +158,8 @@
 }
 .live-ws__ask:not(.live-ws__ask--compact) { height: var(--live-ask, auto); }
 .live-ws__ask > .splitter--y { margin: -8px 0 8px; }
-.live-ws__ask > .splitter--y::after { top: -1px; }
+/* Линия — ровно на верхней рамке; специфичнее общего правила splitter.css. */
+.live-ws__ask > .splitter.splitter--y::after { top: -1px; }
 /* Ошибка вопроса видна и в одной строке. */
 .live-ws__ask--compact .live-ask__history, .live-ws__ask--compact .live-ask__quick { display: none; }
 

@@ -6,13 +6,17 @@
  * сводка и подсказки, «Спросить» внизу правой колонки; счётчики не нужны —
  * видно всё. В широкой размеры областей человек подбирает сам: ширину правой
  * колонки, высоту сводки и развёрнутого «Спросить» (разделители, `LIVE_PANES`).
+ * В узкой, если по высоте хватает места, над вкладкой сводки, подсказок или
+ * «Спросить» остаётся полоса ленты — её высоту тоже можно подобрать.
  *
  * Состояние вида (`useLiveView`) живёт у владельца, а не здесь: свёрнутой
  * панели тоже нужно знать, сколько подсказок человек ещё не видел, и куда
  * развернуться по щелчку.
  */
 
-import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent, type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
+} from "react";
 
 import { clock } from "../lib/format";
 import type { LiveCatchup, LiveHint, LiveQuick } from "../lib/types";
@@ -46,10 +50,43 @@ const SIDE_GAP = 10;
 export const LIVE_PANES = {
   feedMin: 240,
   hintsMin: 96,
-  side: { min: 260, max: 960, reserve: 240 + GRID_GAP },
+  /** Минимум колонки — как у сетки по умолчанию (`minmax(280px, 2fr)` в live.css). */
+  side: { min: 280, max: 960, reserve: 240 + GRID_GAP },
   summary: { min: 64, max: 2000 },
   ask: { min: 88, max: 2000, reserve: 96 + 64 + 2 * SIDE_GAP },
+  /** Узкая: полоса ленты над вкладкой (по умолчанию ~35 %), вкладке — не меньше 120 px. */
+  narrowFeed: { min: 48, max: 2000, reserve: 120 + 8 },
+  /**
+   * Полоса ленты в узкой — только если рабочая область не ниже этого: у
+   * плавающей панели это окно от ~360 px (шапка и поля — около 60 px).
+   */
+  stripFrom: 300,
 } as const;
+
+/**
+ * Высота элемента (`find` — после отрисовки, не во время неё); следит
+ * ResizeObserver — меряется, только когда элемент меняет размер, а не на
+ * каждую новую строку. `on: false` — не меряется (0).
+ */
+function useHeight(find: () => HTMLElement | null | undefined, on: boolean): number {
+  const [height, setHeight] = useState(0);
+  const get = useRef(find);
+  get.current = find;
+  useLayoutEffect(() => {
+    const el = on ? get.current() : null;
+    if (!el) {
+      setHeight(0);
+      return;
+    }
+    const measure = () => setHeight(el.offsetHeight);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [on]);
+  return height;
+}
 
 const TABS: { id: LiveTab; label: string }[] = [
   { id: "feed", label: "Лента" },
@@ -213,7 +250,12 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint, 
   const { tab, setTab, focus, jump, draft, setDraft, askAbout, openAsk, unseen, fresh, quiet, wide } = view;
   const uid = useId();
   const side = useRef<HTMLDivElement>(null);
+  const narrow = useRef<HTMLDivElement>(null);
   const key = place === "card" ? "live-card" : "live";
+  // Сколько сейчас занимает «Спросить» (одна строка, развёрнут, растёт ответ) — предел сводки.
+  const askHeight = useHeight(() => side.current?.querySelector<HTMLElement>(".live-ws__ask"), wide);
+  // Узкая: хватает ли высоты на полосу ленты над вкладкой.
+  const tall = useHeight(() => narrow.current, !wide) >= LIVE_PANES.stripFrom;
   const dismissal = useUndoDismiss(live);
   const undoBtn = useRef<HTMLButtonElement>(null);
   const hintAction = (id: string, action: "pin" | "unpin" | "dismiss") => {
@@ -247,8 +289,7 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint, 
 
   if (wide) {
     // Сводке не больше, чем оставляют подсказкам их минимум и «Спросить» — сколько он сейчас занимает.
-    const askNow = () => side.current?.querySelector<HTMLElement>(".live-ws__ask")?.offsetHeight ?? 0;
-    const summarySpec = { ...LIVE_PANES.summary, reserve: () => LIVE_PANES.hintsMin + 2 * SIDE_GAP + askNow() };
+    const summarySpec = { ...LIVE_PANES.summary, reserve: LIVE_PANES.hintsMin + 2 * SIDE_GAP + askHeight };
     return (
       <div className={`live-ws live-ws--wide${catchup ? " live-ws--catchup" : ""}`}>
         {catchup}
@@ -297,8 +338,9 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint, 
     setTab(TABS[next]!.id);
     document.getElementById(`${uid}-tab-${TABS[next]!.id}`)?.focus();
   };
+  const strip = tall && tab !== "feed";
   return (
-    <div className="live-ws">
+    <div ref={narrow} className="live-ws">
       {catchup}
       <div className="live-tabs" role="tablist" aria-label="Ассистент" onKeyDown={onKey}>
         {TABS.map((t) => (
@@ -309,9 +351,20 @@ export function LiveWorkspace({ live, view, onAsk, disabled = false, onAskHint, 
           </button>
         ))}
       </div>
-      <div className={`live-ws__panel live-ws__panel--${tab}`} role="tabpanel" id={`${uid}-panel`}
-        aria-labelledby={`${uid}-tab-${tab}`}>
-        {tab === "feed" ? feed : tab === "summary" ? summary : tab === "hints" ? hints : ask}
+      {/* Над сводкой, подсказками и «Спросить» — полоса ленты (по умолчанию
+          ~35 %), её высота — разделителем; на «Ленте» лента во всю высоту. */}
+      <div className="live-ws__stack">
+        {strip && (
+          <>
+            <div className="live-ws__strip">{feed}</div>
+            <PaneResizer name={`${key}-narrow-feed`} cssVar="--live-feed-h" spec={LIVE_PANES.narrowFeed} panel="before"
+              axis="y" label="Высота ленты" />
+          </>
+        )}
+        <div className={`live-ws__panel live-ws__panel--${tab}`} role="tabpanel" id={`${uid}-panel`}
+          aria-labelledby={`${uid}-tab-${tab}`}>
+          {tab === "feed" ? feed : tab === "summary" ? summary : tab === "hints" ? hints : ask}
+        </div>
       </div>
       {undoBar}
     </div>

@@ -325,19 +325,35 @@ test("в карточке «Спросить агента» у «Вам вопр
 });
 
 /**
- * Раскладка широкой области (jsdom не раскладывает): ширина области 1000,
- * высота правой колонки 600; панели — своих размеров по CSS.
+ * Раскладка (jsdom не раскладывает). Широкая: ширина области 1000, высота
+ * правой колонки 600; панели — своих размеров по CSS. Узкая: рабочая область
+ * `narrow` px, под вкладками — `stack` px, полоса ленты по CSS — 126 px.
  */
-function layout({ room = 1000, column = 600 } = {}) {
+function layout({ room = 1000, column = 600, narrow = 0, stack = 360 } = {}) {
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get")
     .mockImplementation(function (this: HTMLElement) { return this.classList.contains("live-ws--wide") ? room : 0; });
-  vi.spyOn(HTMLElement.prototype, "clientHeight", "get")
-    .mockImplementation(function (this: HTMLElement) { return this.classList.contains("live-ws__side") ? column : 0; });
+  vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("live-ws__side") ? column : this.classList.contains("live-ws__stack") ? stack : 0;
+  });
   const size = (el: HTMLElement) => el.classList.contains("live-ws__side") ? 400
     : el.classList.contains("live-ws__pane--summary") ? 200
-      : el.classList.contains("live-ws__ask") ? (el.classList.contains("live-ws__ask--compact") ? 40 : 150) : 0;
+      : el.classList.contains("live-ws__ask") ? (el.classList.contains("live-ws__ask--compact") ? 40 : 150)
+        : el.classList.contains("live-ws__strip") ? 126
+          : el.classList.contains("live-ws") && !el.classList.contains("live-ws--wide") ? narrow : 0;
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) { return size(this); });
-  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return size(this); });
+  return vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) { return size(this); });
+}
+
+/** ResizeObserver, которого в jsdom нет: `fire()` — «размеры изменились». */
+function observers() {
+  const all: (() => void)[] = [];
+  vi.stubGlobal("ResizeObserver", class {
+    cb: () => void;
+    constructor(cb: () => void) { this.cb = cb; }
+    observe() { all.push(this.cb); }
+    disconnect() { const at = all.indexOf(this.cb); if (at >= 0) all.splice(at, 1); }
+  });
+  return { fire: () => act(() => { [...all].forEach((cb) => cb()); }) };
 }
 
 const ws = () => document.querySelector<HTMLElement>(".live-ws")!;
@@ -348,6 +364,7 @@ describe("размеры областей широкой раскладки", ()
   afterEach(() => {
     localStorage.clear();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   test("узкая (вкладки) — без разделителей; широкая — ширина колонки и высота сводки, по CSS, пока не тянули", () => {
@@ -453,15 +470,108 @@ describe("размеры областей широкой раскладки", ()
     expect(localStorage.getItem("meet.pane.live-side")).toBe("500");
   });
 
-  test("строки идут — размеры не прыгают", () => {
-    layout();
+  test("строки идут — размеры и пределы те же, раскладку при этом не меряют (без принудительных перерасчётов)", () => {
+    observers();
+    const reads = layout();
     localStorage.setItem("meet.pane.live-side", "480");
-    const live = makeLive();
+    // Ответ пишется — «Спросить» развёрнут и растёт кусками.
+    const answer = (a: string) => [{ id: 1, q: "Что решили?", a, error: null, pending: true, at: 1, quick: null }];
+    const live = makeLive({ qa: answer("") });
     const { rerender } = render(<Host live={live} wide />);
+    const snapshot = () => screen.getAllByRole("separator").map((el) =>
+      [el.getAttribute("aria-valuenow"), el.getAttribute("aria-valuemin"), el.getAttribute("aria-valuemax")].join("/"));
+    const before = snapshot();
+    const measured = reads.mock.calls.length;
+    let lines = live.lines;
     for (let i = 0; i < 5; i += 1) {
-      rerender(<Host live={{ ...live, lines: [...live.lines, { t: 200 + i, speaker: "Ольга", text: `ещё ${i}`, id: 10 + i }] }} wide />);
+      lines = [...lines, { t: 200 + i, speaker: "Ольга", text: `ещё ${i}`, id: 10 + i }];
+      rerender(<Host live={{ ...live, lines, qa: answer("ответ ".repeat(i * 10)) }} wide />);
       expect(ws().style.getPropertyValue("--live-side")).toBe("480px");
       expect(side().style.getPropertyValue("--live-summary")).toBe("");
+      expect(snapshot()).toEqual(before);
     }
+    // Ни одного чтения размеров за пять новых строк и кусков ответа: меряет только ResizeObserver.
+    expect(reads.mock.calls.length).toBe(measured);
+  });
+
+  test("«Спросить» развернулся — предел сводки сразу меньше (ResizeObserver), свернулся — снова больше", async () => {
+    const ro = observers();
+    layout();
+    render(<Host live={makeLive()} wide />);
+    const sum = split("Высота сводки");
+    // Подсказкам минимум, промежутки и «Спросить» в одну строку (40).
+    expect(sum).toHaveAttribute("aria-valuemax", String(600 - LIVE_PANES.hintsMin - 20 - 40));
+    await userEvent.click(screen.getByRole("textbox", { name: "Вопрос ассистенту" }));
+    ro.fire();
+    expect(sum).toHaveAttribute("aria-valuemax", String(600 - LIVE_PANES.hintsMin - 20 - 150));
+    fireEvent.keyDown(sum, { key: "End" });
+    expect(side().style.getPropertyValue("--live-summary")).toBe(`0 1 ${600 - LIVE_PANES.hintsMin - 20 - 150}px`);
+    act(() => { (document.activeElement as HTMLElement).blur(); });
+    ro.fire();
+    expect(sum).toHaveAttribute("aria-valuemax", String(600 - LIVE_PANES.hintsMin - 20 - 40));
+  });
+
+  test("узкая: над сводкой, подсказками и «Спросить» — полоса ленты с разделителем; на «Ленте» — без неё", async () => {
+    layout({ narrow: 400 });
+    render(<Host live={makeLive()} />);
+    expect(screen.queryByRole("separator")).toBeNull();
+    expect(screen.getAllByRole("log")).toHaveLength(1);
+    await userEvent.click(screen.getByRole("tab", { name: "Подсказки" }));
+    expect(screen.getByRole("log")).toHaveTextContent("миграцию сделаем к пятнице");
+    expect(screen.getByText("У миграции нет ответственного")).toBeInTheDocument();
+    const feedSplit = split("Высота ленты");
+    expect(feedSplit).toHaveAttribute("aria-orientation", "horizontal");
+    // Пока не тянули — ~35 % по CSS (126 из 360), вкладке — не меньше 120 + промежуток.
+    expect(feedSplit).toHaveAttribute("aria-valuenow", "126");
+    expect(feedSplit).toHaveAttribute("aria-valuemin", String(LIVE_PANES.narrowFeed.min));
+    expect(feedSplit).toHaveAttribute("aria-valuemax", String(360 - LIVE_PANES.narrowFeed.reserve));
+    const stackEl = () => document.querySelector<HTMLElement>(".live-ws__stack")!;
+    expect(stackEl().style.getPropertyValue("--live-feed-h")).toBe("");
+    await userEvent.click(screen.getByRole("tab", { name: "Сводка" }));
+    expect(split("Высота ленты")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "Лента" }));
+    expect(screen.queryByRole("separator")).toBeNull();
+  });
+
+  test("узкая: высота полосы ленты — мышью и клавишами, запоминается, сброс; пределы", async () => {
+    layout({ narrow: 400 });
+    const { unmount } = render(<Host live={makeLive()} />);
+    await userEvent.click(screen.getByRole("tab", { name: "Сводка" }));
+    const stackEl = () => document.querySelector<HTMLElement>(".live-ws__stack")!;
+    const feedSplit = split("Высота ленты");
+    // Полоса над разделителем: ↓ — выше.
+    fireEvent.keyDown(feedSplit, { key: "ArrowDown" });
+    expect(stackEl().style.getPropertyValue("--live-feed-h")).toBe("142px");
+    expect(localStorage.getItem("meet.pane.live-narrow-feed")).toBe("142");
+    fireEvent.pointerDown(feedSplit, { button: 0, clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(feedSplit, { clientY: 900, pointerId: 1 }); // ниже предела — вкладке её минимум
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    fireEvent.pointerUp(feedSplit, { clientY: 900, pointerId: 1 });
+    expect(stackEl().style.getPropertyValue("--live-feed-h")).toBe(`${360 - LIVE_PANES.narrowFeed.reserve}px`);
+    unmount();
+
+    render(<Host live={makeLive()} />);
+    await userEvent.click(screen.getByRole("tab", { name: "Сводка" }));
+    expect(stackEl().style.getPropertyValue("--live-feed-h")).toBe(`${360 - LIVE_PANES.narrowFeed.reserve}px`);
+    fireEvent.keyDown(split("Высота ленты"), { key: "Enter" });
+    expect(stackEl().style.getPropertyValue("--live-feed-h")).toBe("");
+    expect(localStorage.getItem("meet.pane.live-narrow-feed")).toBeNull();
+  });
+
+  test("узкая: низкая панель (меньше ~360 px) — полосы ленты нет; у карточки полоса помнится отдельно", async () => {
+    layout({ narrow: LIVE_PANES.stripFrom - 1 });
+    const { unmount } = render(<Host live={makeLive()} />);
+    await userEvent.click(screen.getByRole("tab", { name: "Сводка" }));
+    expect(screen.queryByRole("log")).toBeNull();
+    expect(screen.queryByRole("separator")).toBeNull();
+    unmount();
+    vi.restoreAllMocks();
+
+    layout({ narrow: 600 });
+    render(<Host live={makeLive()} place="card" />);
+    await userEvent.click(screen.getByRole("tab", { name: "Сводка" }));
+    fireEvent.keyDown(split("Высота ленты"), { key: "ArrowDown" });
+    expect(localStorage.getItem("meet.pane.live-card-narrow-feed")).toBe("142");
+    expect(localStorage.getItem("meet.pane.live-narrow-feed")).toBeNull();
   });
 });
