@@ -434,7 +434,8 @@ export function RecordingsList({
           onBackspaceEmpty={shownChips.length ? () => remove(shownChips[shownChips.length - 1]!) : undefined} />
         {(onCategoryFilter || canChip) && (
           <FiltersButton endpoint={endpoint} q={query.q} filter={scopedFilter} chips={shownChips}
-            categories={categories} groups={groupsUi?.libraryScope ? null : groupList} now={now} onToggle={toggle} onReplace={replaceKinds}
+            categories={categories} groups={groupsUi?.libraryScope ? null : groupList} now={now}
+            scopeName={groupsUi?.libraryScope ? groupsUi.scopeName : null} onToggle={toggle} onReplace={replaceKinds}
             onClear={clearChips} onMorePeople={morePeople} onOpen={commitText} />
         )}
       </div>

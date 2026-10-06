@@ -49,9 +49,11 @@ type Counts = {
 };
 
 export function FiltersButton({
-  endpoint, q, filter, chips, categories, groups, now, onToggle, onReplace, onClear, onMorePeople, onOpen,
+  endpoint, q, filter, chips, categories, groups, now, onToggle, onReplace, onClear, onMorePeople, onOpen, scopeName,
 }: {
   endpoint: Endpoint | null;
+  /** Область группы из левой панели (её имя): числа — в ней, а не по всей библиотеке. */
+  scopeName?: string | null;
   /** Текст поиска: при поиске числа — среди найденного. */
   q: string;
   /** Нынешний фильтр (все условия) — для счётчиков. */
@@ -116,8 +118,10 @@ export function FiltersButton({
   const close = () => { setOpen(false); setPeriod(""); button.current?.focus(); };
   const facets = counts.facets;
   const ctx = { categories, groups: groups ?? [] };
-  const scopeNote = facets ? (facets.scope === "search" ? "Число встреч — среди найденных поиском" : "Число встреч — по всей библиотеке")
-    : counts.categories ? "Число встреч — по всей библиотеке" : "";
+  const where = scopeName ? `в «${scopeName}»` : "по всей библиотеке";
+  const scopeNote = facets ? (facets.scope === "search"
+    ? `Число встреч — среди найденных поиском${scopeName ? ` в «${scopeName}»` : ""}` : `Число встреч — ${where}`)
+    : counts.categories ? `Число встреч — ${where}` : "";
 
   const catCount = (id: string): number | null => {
     if (facets) return id === NO_CATEGORY ? facets.categories.none : facets.categories.items.find((x) => x.id === id)?.count ?? 0;

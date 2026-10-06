@@ -640,4 +640,5 @@ test("«Фильтры» в области группы: счётчики — в
   const panel = screen.getByRole("dialog", { name: "Фильтры" });
   expect(within(panel).queryByText("Группа", { selector: "legend" })).toBeNull();
   expect(within(panel).getByText("Есть", { selector: "legend" })).toBeInTheDocument();
+  expect(panel).toHaveTextContent("Число встреч — в «Альфа»");
 });
