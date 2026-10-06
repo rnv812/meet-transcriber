@@ -247,7 +247,7 @@ def ask_title(folder: Path, runner) -> str:
     if data is None:
         raise RuntimeError("транскрипта нет")
     reply = runner(excerpt(folder, data), system_prompt=TITLE_SYSTEM, allowed_dirs=(),
-                   timeout_s=TITLE_TIMEOUT_S, max_turns=2)
+                   timeout_s=TITLE_TIMEOUT_S, max_turns=2, purpose="title")
     if inspect.isawaitable(reply):
         reply = asyncio.run(reply)
     if reply.error:

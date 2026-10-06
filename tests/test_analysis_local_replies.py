@@ -218,7 +218,7 @@ def test_local_windows_fit_the_context_and_none_are_skipped(tmp_path, monkeypatc
 
 
 def test_window_size_follows_the_context():
-    assert analysis.window_chars(32768) == pytest.approx(54000, rel=0.05)
+    assert analysis.window_chars(32768) == pytest.approx(47500, rel=0.05)
     assert analysis.window_chars(8192) < 12000
     assert analysis.window_chars(131072) == analysis.WINDOW_CHARS
     assert analysis.window_chars(6144) >= analysis.MIN_WINDOW_CHARS
@@ -227,9 +227,11 @@ def test_window_size_follows_the_context():
 def test_prompt_cut_by_the_server_is_reported(folder):
     # Сервер насчитал промпту 300 токенов, а в нём ~1000: обрезан по контексту.
     good = _reply("lmstudio_fenced_prose.txt")
-    runner = UsageRunner(AgentReply(text=good, usage={"prompt_tokens": 300, "completion_tokens": 200}))
+    cut = {"seen": 300, "need": 1300, "window": 4096, "ollama": False}  # решил openai_compat.prompt_cut
+    runner = UsageRunner(AgentReply(text=good, usage={"prompt_tokens": 300, "cut": cut}))
     doc = analysis.run(folder, runner, _cfg(), provider="openai-compatible")
-    assert doc["context_cut"]["seen"] == 300 and doc["context_cut"]["need"] > 1000
+    assert doc["context_cut"] == {"seen": 300, "need": 1300, "ollama": False}
+    assert runner.calls[0]["purpose"] == "analysis" and runner.calls[0]["on_cut"] == "keep"
     assert doc["warnings"][0].startswith("модель видела только часть текста")
 
 

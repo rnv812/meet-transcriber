@@ -206,11 +206,19 @@ def _provider_installed(cfg, provider: str | None = None) -> bool:
     тем же текстом — это осознанно: ждать проверки входа в HTTP нельзя."""
     from meet.llm import AUTO_PROVIDERS, detect
 
-    found = detect.available(cfg.llm.base_url, via_proxy=cfg.llm.local_via_proxy)
+    found = detect.available(cfg.llm.base_url, via_proxy=llm_pkg_route(cfg))
     choice = provider or cfg.llm.provider
     if choice == "auto":
         return any(found.get(name, {}).get("found") for name in AUTO_PROVIDERS if name in cfg.llm.enabled)
     return bool(found.get(choice, {}).get("found"))
+
+
+def llm_pkg_route(cfg, via_proxy: bool | None = None):
+    """`meet.llm.local_route` — путь к серверу локальной модели с прокси из
+    `llm.proxy` (свой адрес резидент берёт из настроек, а не из своей среды)."""
+    from meet.llm import local_route
+
+    return local_route(cfg, via_proxy)
 
 
 def _check_provider(provider: str) -> dict:
@@ -3809,7 +3817,7 @@ class TrayControl:
         cfg = settings.load()
         provider, checking = self._providers.get(cfg)
         knowledge = cfg.assistant.knowledge_dir
-        found = detect.available(cfg.llm.base_url, probe_local=probe_local, via_proxy=cfg.llm.local_via_proxy)
+        found = detect.available(cfg.llm.base_url, probe_local=probe_local, via_proxy=llm_pkg_route(cfg))
         return {
             "provider": provider,
             "checking": checking,
@@ -3854,10 +3862,9 @@ class TrayControl:
             if "model" not in body:
                 model = cfg.llm.local_model
         # «Через прокси» — из черновика окна, если он прислан, иначе сохранённое.
-        via_proxy = body.get("via_proxy")
-        if not isinstance(via_proxy, bool):
-            via_proxy = cfg.llm.local_via_proxy
-        return local_models.list_models(base_url, model, via_proxy=via_proxy)
+        drafted = body.get("via_proxy")
+        return local_models.list_models(base_url, model, via_proxy=llm_pkg_route(
+            cfg, drafted if isinstance(drafted, bool) else None))
 
     def import_file(self, body: dict) -> dict:
         """Импорт чужой записи: папка + задача (копия и расшифровка)."""

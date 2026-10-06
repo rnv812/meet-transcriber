@@ -231,3 +231,14 @@ def test_local_via_proxy_setting():
         settings.Llm.check({"local_via_proxy": "yes"})
     runner = llm.runner_for("openai-compatible", cfg)
     assert runner.keywords["via_proxy"] is True
+
+
+def test_local_route_follows_the_proxy_setting():
+    base = settings.Settings.from_raw({"version": 2, "llm": {"local_via_proxy": True}})
+    assert llm.local_route(base) is True  # «как в системе»
+    explicit = settings.Settings.from_raw({"version": 2, "llm": {"local_via_proxy": True, "proxy": "http://p:3128"}})
+    assert llm.local_route(explicit) == "http://p:3128"
+    off = settings.Settings.from_raw({"version": 2, "llm": {"local_via_proxy": True, "proxy": "none"}})
+    assert llm.local_route(off) is False
+    assert llm.local_route(settings.Settings()) is False
+    assert llm.local_route(settings.Settings(), via_proxy=True) is True  # черновик окна

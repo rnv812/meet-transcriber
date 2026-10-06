@@ -923,7 +923,7 @@ export type Analysis = {
   /** Часть есть не у всех разобравшихся кусков: «1/3» (0.3.5). */
   partial?: Partial<Record<AnalysisFeature, string>>;
   /** Сервер обрезал промпт по своему контексту: сколько токенов видел и сколько было нужно (0.3.5). */
-  context_cut?: { seen: number; need: number };
+  context_cut?: { seen: number; need: number; ollama?: boolean };
 };
 
 export type AnalysisStateName = "none" | "queued" | "running" | "ready" | "stale" | "failed";

@@ -22,11 +22,12 @@ stdlib: модуль зовёт резидент. Прокси — по прав
 import json
 import logging
 import socket
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
 
-from meet.llm.openai_compat import OLLAMA_MAX_CTX, open_url
+from meet.llm.openai_compat import FAIL_TTL_S, OLLAMA_MAX_CTX, open_url
 
 log = logging.getLogger(__name__)
 
@@ -40,8 +41,11 @@ _OLLAMA_PORT = 11434
 # Модели эмбеддингов (LM Studio и Ollama показывают их в общем списке) в чат не годятся.
 _EMBEDDING_MARKERS = ("embed",)
 # На процесс: сервер по адресу — Ollama или нет; окно контекста модели.
-_ollama: dict[str, bool] = {}
-_trained: dict[tuple[str, str], int | None] = {}
+# Значение — (что узнали, когда забыть; None — никогда).
+_ollama: dict[str, tuple[bool, float | None]] = {}
+_trained: dict[tuple[str, str], tuple[int | None, float | None]] = {}
+# Прокси ответил вместо сервера: сам сервер недоступен.
+PROXY_FAIL = (407, 502, 503, 504)
 
 
 class _NotList(ValueError):
@@ -82,7 +86,7 @@ def _tags_url(base_url: str) -> str:
     return f"{server_root(base_url)}/api/tags"
 
 
-def _get(url: str, timeout: float, via_proxy: bool = False, body: dict | None = None):
+def _get(url: str, timeout: float, via_proxy: bool | str = False, body: dict | None = None):
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(url, data=data, method="POST" if body is not None else "GET",
                                  headers={"Accept": "application/json", "Content-Type": "application/json"})
@@ -136,99 +140,132 @@ def _looks_ollama(base_url: str, models: list[dict]) -> bool:
     return port == _OLLAMA_PORT or any(m.get("_owner") == "library" for m in models)
 
 
-def is_ollama(base_url: str, *, via_proxy: bool = False, timeout: float = TIMEOUT_S) -> bool:
-    """Сервер — Ollama (отвечает на `GET /api/version`); запоминается на процесс."""
+def _fresh(cache: dict, key):
+    """Запомненное значение, если не истекло: (есть ли, значение)."""
+    hit = cache.get(key)
+    if hit is None or (hit[1] is not None and hit[1] <= time.monotonic()):
+        return False, None
+    return True, hit[0]
+
+
+def _remember(cache: dict, key, value, definitive: bool) -> None:
+    """Ответ сервера — на процесс; сбой (таймаут, нет связи) — на FAIL_TTL_S."""
+    cache[key] = (value, None if definitive else time.monotonic() + FAIL_TTL_S)
+
+
+def is_ollama(base_url: str, *, via_proxy: bool | str = False, timeout: float = TIMEOUT_S) -> bool:
+    """Сервер — Ollama (отвечает на `GET /api/version`). Ответ сервера (и
+    «нет такого пути») — на процесс, сбой связи — ненадолго."""
     root = server_root(base_url)
-    if root not in _ollama:
-        try:
-            body = _get(f"{root}/api/version", timeout, via_proxy)
-            _ollama[root] = isinstance(body, dict) and isinstance(body.get("version"), str)
-        except (_NotList, urllib.error.URLError, OSError, ValueError):
-            _ollama[root] = False
-    return _ollama[root]
+    hit, value = _fresh(_ollama, root)
+    if hit:
+        return value
+    try:
+        body = _get(f"{root}/api/version", timeout, via_proxy)
+        _remember(_ollama, root, isinstance(body, dict) and isinstance(body.get("version"), str), True)
+    except (_NotList, urllib.error.HTTPError):
+        _remember(_ollama, root, False, True)
+    except (urllib.error.URLError, OSError, ValueError):
+        _remember(_ollama, root, False, False)
+    return _ollama[root][0]
 
 
-def ollama_trained_context(base_url: str, model: str, *, via_proxy: bool = False,
+def ollama_trained_context(base_url: str, model: str, *, via_proxy: bool | str = False,
                            timeout: float = TIMEOUT_S) -> int | None:
     """Обученное окно контекста модели Ollama (`/api/show` → `model_info`
     `<архитектура>.context_length`); не узнать — None."""
     key = (server_root(base_url), model_key(model))
-    if key not in _trained:
+    hit, value = _fresh(_trained, key)
+    if hit:
+        return value
+    try:
+        body = _get(f"{key[0]}/api/show", timeout, via_proxy, body={"model": model})
+        info = body.get("model_info") if isinstance(body, dict) else None
         found = None
-        try:
-            body = _get(f"{key[0]}/api/show", timeout, via_proxy, body={"model": model})
-            info = body.get("model_info") if isinstance(body, dict) else None
-            if isinstance(info, dict):
-                found = next((_int(v) for k, v in info.items()
-                              if str(k).endswith(".context_length") and _int(v)), None)
-        except (_NotList, urllib.error.URLError, OSError, ValueError):
-            found = None
-        _trained[key] = found
-    return _trained[key]
+        if isinstance(info, dict):
+            found = next((_int(v) for k, v in info.items() if str(k).endswith(".context_length") and _int(v)), None)
+        _remember(_trained, key, found, True)
+    except (_NotList, urllib.error.HTTPError):
+        _remember(_trained, key, None, True)
+    except (urllib.error.URLError, OSError, ValueError):
+        _remember(_trained, key, None, False)
+    return _trained[key][0]
 
 
-def _lmstudio_context(base_url: str, model: str, via_proxy: bool, timeout: float) -> int | None:
+def _lmstudio_context(base_url: str, model: str, via_proxy: bool | str, timeout: float):
+    """LM Studio → (окно загруженной модели или None, наибольшее окно модели
+    или None). Окно — только загруженное (`loaded_context_length`):
+    `max_context_length` — сколько модель умеет, а грузится она обычно с
+    меньшим (часто 4096)."""
     body = _get(f"{server_root(base_url)}/api/v0/models", timeout, via_proxy)
     data = body.get("data") if isinstance(body, dict) else None
     if not isinstance(data, list):
-        return None
+        return None, None
     items = [m for m in data if isinstance(m, dict) and m.get("type", "llm") in ("llm", "vlm")]
     item = next((m for m in items if same_model(str(m.get("id") or ""), model)), None)
     if item is None:
         loaded = [m for m in items if m.get("state") == "loaded"]
         item = loaded[0] if len(loaded) == 1 else None
     if item is None:
-        return None
-    # Имя поля у разных версий LM Studio разное: какое нашлось — в журнал.
-    for field in ("loaded_context_length", "context_length", "max_context_length"):
-        if _int(item.get(field)):
-            log.debug("LM Studio: окно контекста %s из поля %s", item[field], field)
-            return _int(item[field])
-    log.debug("LM Studio: окна контекста нет ни в одном поле: %s", sorted(item))
-    return None
+        return None, None
+    most = _int(item.get("max_context_length"))
+    loaded = _int(item.get("loaded_context_length"))
+    if loaded:
+        log.debug("LM Studio: окно загруженной модели %s (поле loaded_context_length)", loaded)
+        return loaded, most
+    log.debug("LM Studio: окна загруженной модели нет (state=%s, поля: %s); наибольшее — %s",
+              item.get("state"), sorted(item), most)
+    return None, most
 
 
-def _vllm_context(base_url: str, model: str, via_proxy: bool, timeout: float) -> int | None:
+def _vllm_context(base_url: str, model: str, via_proxy: bool | str, timeout: float):
     models = _from_openai(_get(models_url(base_url), timeout, via_proxy))
     item = next((m for m in models if same_model(m["id"], model)), models[0] if len(models) == 1 else None)
-    return item["context"] if item else None
+    return (item["context"] if item else None), None
 
 
-def _llamacpp_context(base_url: str, model: str, via_proxy: bool, timeout: float) -> int | None:
+def _llamacpp_context(base_url: str, model: str, via_proxy: bool | str, timeout: float):
+    """llama.cpp `/props`: окно одного слота (`default_generation_settings.n_ctx`)
+    — с `--parallel N` общее `n_ctx` делится на N."""
     body = _get(f"{server_root(base_url)}/props", timeout, via_proxy)
     if not isinstance(body, dict):
-        return None
+        return None, None
     settings = body.get("default_generation_settings")
-    return _int(body.get("n_ctx")) or (_int(settings.get("n_ctx")) if isinstance(settings, dict) else None)
+    per_slot = _int(settings.get("n_ctx")) if isinstance(settings, dict) else None
+    return per_slot or _int(body.get("n_ctx")), None
 
 
-def context_length(base_url: str, model: str | None, *, via_proxy: bool = False,
+def context_length(base_url: str, model: str | None, *, via_proxy: bool | str = False,
                    timeout: float = TIMEOUT_S) -> dict:
     """Окно контекста модели → {"tokens": int|None, "source": "ollama"|"lmstudio"|
-    "vllm"|"llamacpp"|None}. Ollama — сколько анализ сможет попросить на запрос
-    (обученное окно, не больше OLLAMA_MAX_CTX); остальные — окно сервера."""
+    "vllm"|"llamacpp"|None, "max": int|None}. Ollama — сколько Meet сможет
+    попросить на запрос (обученное окно, не больше OLLAMA_MAX_CTX); остальные
+    — окно сервера. `max` — наибольшее окно модели, когда загруженное не
+    узнать (LM Studio)."""
     name = (model or "").strip()
     try:
         if is_ollama(base_url, via_proxy=via_proxy, timeout=timeout):
             trained = ollama_trained_context(base_url, name, via_proxy=via_proxy, timeout=timeout)
-            return {"tokens": min(trained or OLLAMA_MAX_CTX, OLLAMA_MAX_CTX), "source": "ollama"}
+            return {"tokens": min(trained or OLLAMA_MAX_CTX, OLLAMA_MAX_CTX), "source": "ollama", "max": trained}
     except ValueError:
-        return {"tokens": None, "source": None}
+        return {"tokens": None, "source": None, "max": None}
+    most = None
     for source, read in (("vllm", _vllm_context), ("lmstudio", _lmstudio_context),
                          ("llamacpp", _llamacpp_context)):
         try:
-            tokens = read(base_url, name, via_proxy, timeout)
+            tokens, upper = read(base_url, name, via_proxy, timeout)
         except (_NotList, urllib.error.URLError, OSError, ValueError, KeyError, TypeError):
             continue
         if tokens:
-            return {"tokens": tokens, "source": source}
-    return {"tokens": None, "source": None}
+            return {"tokens": tokens, "source": source, "max": upper}
+        most = most or upper
+    return {"tokens": None, "source": None, "max": most}
 
 
-def context_text(tokens: int | None) -> str:
+def context_text(tokens: int | None, most: int | None = None) -> str:
     """Окно контекста для человека («Проверить», отказ анализа)."""
     if not tokens:
-        return "окно контекста не удалось определить"
+        return ("окно контекста не удалось определить" + (f" (модель поддерживает до {most})" if most else ""))
     if tokens < MIN_CONTEXT:
         return (f"у модели слишком маленькое окно контекста: {tokens} токенов — для анализа встречи "
                 "увеличьте до 16K+")
@@ -251,7 +288,7 @@ def _auth(code: int, url: str) -> dict:
 
 
 def list_models(base_url: str, model: str | None = None, timeout: float = TIMEOUT_S,
-                via_proxy: bool = False) -> dict:
+                via_proxy: bool | str = False) -> dict:
     """Модели сервера → {"ok", "models": [{"id", "size", "params", "context"}],
     "source": "openai"|"ollama", "url", "error", "reason", "missing", "warning",
     "timeout"}.
@@ -277,6 +314,8 @@ def list_models(base_url: str, model: str | None = None, timeout: float = TIMEOU
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             return _auth(e.code, url)
+        if via_proxy and e.code in PROXY_FAIL:
+            return _fail("unreachable", f"Прокси не достучался до сервера модели (HTTP {e.code}): {base}")
     except _NotList:
         pass
     except (urllib.error.URLError, OSError) as e:

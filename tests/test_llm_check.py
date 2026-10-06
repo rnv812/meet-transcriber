@@ -305,3 +305,25 @@ def test_local_check_says_when_the_context_is_unknown(monkeypatch):
     _local_env(monkeypatch, model="m", listed=_listed("m"), context=None)
     res = asyncio.run(check.check("openai-compatible"))
     assert res["ok"] is True and res["detail"] == "окно контекста не удалось определить"
+
+
+def test_local_check_names_the_model_maximum_when_the_loaded_window_is_unknown(monkeypatch):
+    from meet.llm import local_models
+
+    _local_env(monkeypatch, model="m", listed=_listed("m"))
+    monkeypatch.setattr(local_models, "context_length",
+                        lambda *a, **k: {"tokens": None, "source": None, "max": 131072})
+    res = asyncio.run(check.check("openai-compatible"))
+    assert res["detail"] == "окно контекста не удалось определить (модель поддерживает до 131072)"
+
+
+def test_local_check_routes_through_an_explicit_proxy_address(monkeypatch):
+    from dataclasses import replace
+
+    from meet import settings
+
+    seen = _local_env(monkeypatch, model="m", listed=_listed("m"), via_proxy=True)
+    cfg = settings.load()
+    monkeypatch.setattr(settings, "load", lambda *a, **k: replace(cfg, llm=replace(cfg.llm, proxy="http://p:3128")))
+    asyncio.run(check.check("openai-compatible"))
+    assert seen["via_proxy"] == "http://p:3128" and seen["calls"][0]["via_proxy"] == "http://p:3128"

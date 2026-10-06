@@ -224,7 +224,7 @@ def test_context_from_ollama_show(server):
     server["routes"]["/api/show"] = (200, {"model_info": {"general.architecture": "qwen3",
                                                           "qwen3.context_length": 8192}})
     got = local_models.context_length(server["root"] + "/v1", "qwen3:8b")
-    assert got == {"tokens": 8192, "source": "ollama"}
+    assert got == {"tokens": 8192, "source": "ollama", "max": 8192}
     assert server["posted"][0] == ("/api/show", {"model": "qwen3:8b"})
 
 
@@ -240,25 +240,26 @@ def test_context_from_lm_studio_prefers_the_loaded_window(server):
         {"id": "qwen2.5-7b-instruct", "type": "llm", "state": "loaded",
          "max_context_length": 32768, "loaded_context_length": 4096}]})
     got = local_models.context_length(server["root"] + "/v1", "qwen2.5-7b-instruct")
-    assert got == {"tokens": 4096, "source": "lmstudio"}
+    assert got == {"tokens": 4096, "source": "lmstudio", "max": 32768}
 
 
 def test_context_from_vllm(server):
     server["routes"]["/v1/models"] = (200, VLLM)
     got = local_models.context_length(server["root"] + "/v1", "Qwen/Qwen2.5-14B-Instruct")
-    assert got == {"tokens": 32768, "source": "vllm"}
+    assert got == {"tokens": 32768, "source": "vllm", "max": None}
 
 
 def test_context_from_llama_cpp_props(server):
     server["routes"]["/v1/models"] = (200, {"data": [{"id": "model.gguf"}]})
     server["routes"]["/props"] = (200, {"default_generation_settings": {"n_ctx": 8192}})
     assert local_models.context_length(server["root"] + "/v1", "model.gguf") == {
-        "tokens": 8192, "source": "llamacpp"}
+        "tokens": 8192, "source": "llamacpp", "max": None}
 
 
 def test_context_unknown(server):
     server["routes"]["/v1/models"] = (200, LMSTUDIO)
-    assert local_models.context_length(server["root"] + "/v1", "x") == {"tokens": None, "source": None}
+    assert local_models.context_length(server["root"] + "/v1", "x") == {"tokens": None, "source": None,
+                                                                          "max": None}
 
 
 def test_timeout_is_marked(server):
@@ -291,20 +292,65 @@ def test_lm_studio_without_a_known_field_is_unknown_and_logged(server, caplog):
         {"id": "qwen2.5-7b-instruct", "type": "llm", "state": "loaded", "ctx": 4096}]})
     with caplog.at_level(logging.DEBUG, logger="meet.llm.local_models"):
         got = local_models.context_length(server["root"] + "/v1", "qwen2.5-7b-instruct")
-    assert got == {"tokens": None, "source": None}
-    assert "окна контекста нет ни в одном поле" in caplog.text
+    assert got == {"tokens": None, "source": None, "max": None}
+    assert "окна загруженной модели нет" in caplog.text
     assert local_models.context_text(None) == "окно контекста не удалось определить"
 
 
-def test_lm_studio_field_found_is_logged(server, caplog):
+def test_lm_studio_maximum_is_not_the_loaded_window(server, caplog):
+    # max_context_length — сколько модель умеет, а загружена она часто с 4096:
+    # окном это не считается (иначе анализ резал бы встречу под 32K).
     import logging
 
     server["routes"]["/v1/models"] = (200, LMSTUDIO)
     server["routes"]["/api/v0/models"] = (200, {"data": [
-        {"id": "qwen2.5-7b-instruct", "type": "llm", "max_context_length": 32768}]})
+        {"id": "qwen2.5-7b-instruct", "type": "llm", "state": "not-loaded", "max_context_length": 32768}]})
     with caplog.at_level(logging.DEBUG, logger="meet.llm.local_models"):
-        assert local_models.context_length(server["root"] + "/v1", "qwen2.5-7b-instruct")["tokens"] == 32768
-    assert "max_context_length" in caplog.text
+        got = local_models.context_length(server["root"] + "/v1", "qwen2.5-7b-instruct")
+    assert got == {"tokens": None, "source": None, "max": 32768}
+    assert "окна загруженной модели нет" in caplog.text
+    assert local_models.context_text(None, 32768) == (
+        "окно контекста не удалось определить (модель поддерживает до 32768)")
+
+
+def test_llama_cpp_prefers_the_per_slot_window(server):
+    # --parallel 4: общее n_ctx 32768, на слот — 8192.
+    server["routes"]["/v1/models"] = (200, {"data": [{"id": "model.gguf"}]})
+    server["routes"]["/props"] = (200, {"n_ctx": 32768, "default_generation_settings": {"n_ctx": 8192}})
+    assert local_models.context_length(server["root"] + "/v1", "model.gguf")["tokens"] == 8192
+
+
+def test_failed_lookups_are_retried_after_a_while(server, monkeypatch):
+    # Сбой связи не запоминается на весь процесс (живой ассистент идёт часами).
+    import urllib.error
+
+    calls = []
+    real = local_models._get
+
+    def flaky(url, *a, **k):
+        calls.append(url)
+        if len(calls) == 1:
+            raise urllib.error.URLError(TimeoutError("timed out"))
+        return real(url, *a, **k)
+
+    monkeypatch.setattr(local_models, "_get", flaky)
+    server["routes"]["/api/version"] = (200, {"version": "0.12.3"})
+    assert local_models.is_ollama(server["root"]) is False
+    assert local_models.is_ollama(server["root"]) is False  # пока не истёк срок — не спрашиваем
+    now = local_models.time.monotonic()
+    monkeypatch.setattr(local_models.time, "monotonic", lambda: now + 31)
+    assert local_models.is_ollama(server["root"]) is True and len(calls) == 2
+    # Ответ сервера — на процесс.
+    assert local_models.is_ollama(server["root"]) is True and len(calls) == 2
+
+
+def test_proxy_failure_answers_mean_unreachable(server):
+    from meet.llm import detect
+
+    server["routes"]["/v1/models"] = (502, "<html>Bad Gateway</html>")
+    assert detect.local_reachable(server["root"] + "/v1", via_proxy=True) is False
+    got = local_models.list_models(server["root"] + "/v1", via_proxy=True)
+    assert got["reason"] == "unreachable" and "Прокси не достучался" in got["error"]
 
 
 def test_reachability_via_proxy_is_an_http_get(server, monkeypatch):

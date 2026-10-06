@@ -96,7 +96,7 @@ SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}}, "requir
 def _fresh_modes():
     from meet.llm import local_models
 
-    caches = (openai_compat._schema_mode, openai_compat._num_ctx, openai_compat._context,
+    caches = (openai_compat._schema_mode, openai_compat._num_ctx, openai_compat._context, openai_compat._no_native,
               local_models._ollama, local_models._trained)
     for cache in caches:
         cache.clear()
@@ -271,14 +271,21 @@ def test_ollama_window_steps_up_and_never_down():
     assert openai_compat.sticky_num_ctx(("h", "small"), 20000, 8192) == 8192  # не больше обученного
 
 
-def test_small_context_is_refused_before_the_call(ollama, monkeypatch):
+def test_small_context_fits_short_calls_and_refuses_what_cannot_fit(server, monkeypatch):
+    # Окно 4096 (сервер запущен с -c 4096): название влезает, а встреча на
+    # 12 тыс. символов — нет: отказ без вызова, со своим текстом у вызова.
     from meet.llm import local_models
 
-    monkeypatch.setattr(local_models, "context_length", lambda *a, **k: {"tokens": 4096, "source": "lmstudio"})
-    reply = asyncio.run(openai_compat.run("Вопрос?", system_prompt="С.", base_url=ollama["base_url"],
-                                          local_model="qwen3:8b", timeout_s=10))
-    assert "слишком маленькое окно контекста: 4096" in reply.error
-    assert not any(path == "/api/chat" for path, _ in ollama["posted"])
+    monkeypatch.setattr(local_models, "context_length", lambda *a, **k: {"tokens": 4096, "source": "llamacpp"})
+    reply = asyncio.run(openai_compat.run("Встреча о выпуске.", system_prompt="С.", base_url=server["base_url"],
+                                          timeout_s=10, purpose="title"))
+    assert reply.error is None and server["requests"][0][1]["max_tokens"] == 256
+    big = asyncio.run(openai_compat.run("Реплика. " * 1400, system_prompt="С.", base_url=server["base_url"],
+                                        timeout_s=10, purpose="summary"))
+    assert big.error == ("текст не помещается в окно контекста модели (4096 токенов): итоги не получить — "
+                         "увеличьте контекст модели до 16K+")
+    assert len(server["requests"]) == 1
+    assert "анализа" not in big.error
 
 
 def test_cut_prompt_on_v1_is_an_error_unless_kept(server):
@@ -295,5 +302,59 @@ def test_cut_prompt_on_v1_is_an_error_unless_kept(server):
 
 def test_short_prompts_are_not_judged_for_cuts():
     assert openai_compat.prompt_cut({"prompt_tokens": 5}, 300) is None
-    assert openai_compat.prompt_cut({"prompt_tokens": 900}, 30000) == {"seen": 900, "need": 10000}
+    assert openai_compat.prompt_cut({"prompt_tokens": 900}, 30000) == {"seen": 900, "need": 12000, "window": None}
     assert openai_compat.prompt_cut(None, 30000) is None
+
+
+def test_cut_needs_a_filled_window():
+    # Сервер считает только не кэшированные токены (общее начало тиков): 900 из
+    # окна 16K — не обрезка. Обрезка заполняет окно.
+    assert openai_compat.prompt_cut({"prompt_tokens": 900}, 30000, window=16384, max_tokens=600) is None
+    cut = openai_compat.prompt_cut({"prompt_tokens": 4000}, 30000, window=4096, max_tokens=256)
+    assert cut == {"seen": 4000, "need": 12000, "window": 4096}
+
+
+def test_format_markers_are_specific(server):
+    # «invalid message format» — не про response_format: не пробуем слабее.
+    server["reject"] = {"json_schema": (400, {"error": "invalid message format"})}
+    reply = _run(server["base_url"], local_model="qwen", response_schema=SCHEMA)
+    assert "400" in reply.error and len(server["requests"]) == 1
+
+
+def test_old_ollama_without_native_chat_falls_back_to_v1(caplog):
+    import logging
+
+    from fake_ollama import FakeOllama
+
+    with FakeOllama(native=False) as fake:
+        with caplog.at_level(logging.INFO, logger="meet.llm.openai_compat"):
+            for _ in range(2):
+                reply = asyncio.run(openai_compat.run("Вопрос?", system_prompt="С.", base_url=fake.base_url,
+                                                      local_model="qwen3:8b", timeout_s=10, purpose="answer"))
+                assert reply.text == "ок"
+        assert sum(1 for p, _ in fake.posted if p == "/api/chat") == 1  # второй раз — сразу /v1
+        assert sum(1 for p, _ in fake.posted if p == "/v1/chat/completions") == 2
+    assert caplog.text.count("без /api/chat") == 1
+
+
+def test_explicit_proxy_address_is_used_for_via_proxy():
+    import urllib.request
+
+    seen = {}
+
+    class Recorder(urllib.request.ProxyHandler):
+        def __init__(self, proxies=None):
+            seen["proxies"] = proxies
+            super().__init__({})
+
+    original = urllib.request.ProxyHandler
+    urllib.request.ProxyHandler = Recorder
+    try:
+        try:
+            openai_compat.open_url(urllib.request.Request("http://127.0.0.1:9/v1/models"), 0.2,
+                                   via_proxy="http://proxy.corp:3128")
+        except OSError:
+            pass
+    finally:
+        urllib.request.ProxyHandler = original
+    assert seen["proxies"] == {"http": "http://proxy.corp:3128", "https": "http://proxy.corp:3128"}

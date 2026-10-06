@@ -193,7 +193,7 @@ class PerCallSession:
     async def send(self, text: str, *, on_text=None, timeout_s: float = TICK_TIMEOUT_S):
         self.turns += 1
         return await self._runner(text, system_prompt=self._system, max_turns=1,
-                                  timeout_s=timeout_s, on_text=on_text, **self._kwargs)
+                                  timeout_s=timeout_s, on_text=on_text, purpose="tick", **self._kwargs)
 
     def close(self) -> None:
         pass
@@ -701,7 +701,7 @@ class Digester:
 
         async def send(text: str, on_text):
             return await self._runner(text, system_prompt=self._summary_system, max_turns=1,
-                                      timeout_s=TICK_TIMEOUT_S, on_text=on_text,
+                                      timeout_s=TICK_TIMEOUT_S, on_text=on_text, purpose="tick",
                                       **self._call_kwargs)
 
         latency = await self._tick(lane, send, prompt, applier,

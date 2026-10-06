@@ -402,19 +402,28 @@ def parse(text: str, texts: dict[int, str]) -> tuple[list[dict], list[str]]:
     return good, dropped
 
 
+def reply_budget(prompt: str) -> int:
+    """Предел ответа локальной модели на кусок: замены — не длиннее самого
+    куска (≈ ×1,3 в токенах), но не меньше 1024 и не больше 8192."""
+    from meet.llm.openai_compat import tokens_of
+
+    return max(1024, min(8192, int(tokens_of(len(prompt)) * 1.3)))
+
+
 def ask_model(runner, prompt: str, texts: dict[int, str], *,
               timeout_s: float = IMPROVE_TIMEOUT_S) -> tuple[list[dict], list[str]]:
     """Вызов с одной попыткой исправления: ответ не разобрался — просим
     исправить. Отброшенные пары — не повод для повтора (частичное принятие)."""
     from meet.analysis import _call, build_repair
 
-    text = _call(runner, prompt, _SYSTEM, timeout_s)
+    extra = {"purpose": "improve", "max_tokens": reply_budget(prompt)}
+    text = _call(runner, prompt, _SYSTEM, timeout_s, extra=extra)
     try:
         return parse(text, texts)
     except ValueError as e:
         error = str(e)
     try:
-        fixed = _call(runner, build_repair(prompt, text, error), _SYSTEM, timeout_s)
+        fixed = _call(runner, build_repair(prompt, text, error), _SYSTEM, timeout_s, extra=extra)
     except RuntimeError as e:
         raise ValueError(f"{error}; {e}") from None
     try:

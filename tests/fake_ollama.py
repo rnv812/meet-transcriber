@@ -9,8 +9,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class FakeOllama:
-    def __init__(self, *, context: int = 40960, reply=lambda body: "ок", prompt_tokens=None):
+    def __init__(self, *, context: int = 40960, reply=lambda body: "ок", prompt_tokens=None, native=True):
         self.context = context
+        self.native = native
         self.reply = reply
         self.prompt_tokens = prompt_tokens
         self.posted: list[tuple[str, dict]] = []
@@ -38,6 +39,10 @@ class FakeOllama:
                 fake.posted.append((self.path, body))
                 if self.path == "/api/show":
                     return self._send(200, {"model_info": {"qwen3.context_length": fake.context}})
+                if self.path == "/api/chat" and not fake.native:
+                    return self._send(404, {"error": "404 page not found"})
+                if self.path == "/v1/chat/completions" and not fake.native:
+                    return self._send(200, {"choices": [{"message": {"content": fake.reply(body)}}]})
                 if self.path == "/api/chat":
                     chars = sum(len(m.get("content") or "") for m in body.get("messages") or [])
                     seen = fake.prompt_tokens if fake.prompt_tokens is not None else int(chars / 2.8) + 20
@@ -71,5 +76,5 @@ def clear_caches() -> None:
     from meet.llm import local_models, openai_compat
 
     for cache in (openai_compat._schema_mode, openai_compat._num_ctx, openai_compat._context,
-                  local_models._ollama, local_models._trained):
+                  openai_compat._no_native, local_models._ollama, local_models._trained):
         cache.clear()

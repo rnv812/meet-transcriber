@@ -102,10 +102,11 @@ FINAL_TIMEOUT_S = 180.0
 IMPORTANCE_MIN_LINES = 20
 
 # Локальная модель: кусок встречи — по окну контекста модели (`window_chars`),
-# все куски, без выборки. Оценки в токенах: русский текст — ~3 символа на
-# токен, системный промпт — до SYSTEM_TOKENS, ответ — `reply_tokens`, реплика
-# в среднем LINE_CHARS символов; запас CONTEXT_MARGIN.
-CHARS_PER_TOKEN = 3.0
+# все куски, без выборки. Оценки в токенах: русский текст — по 2,5 символа на
+# токен с запасом (как `openai_compat.CHARS_PER_TOKEN`: у моделей со словарём
+# 32K выходит ~2–2,3), системный промпт — до SYSTEM_TOKENS, ответ —
+# `reply_tokens`, реплика в среднем LINE_CHARS символов; запас CONTEXT_MARGIN.
+CHARS_PER_TOKEN = 2.5
 SYSTEM_TOKENS = 1500
 LINE_CHARS = 120
 CONTEXT_MARGIN = 0.85
@@ -113,8 +114,6 @@ MIN_WINDOW_CHARS = 3000
 # Окно контекста локальной модели не узнать — режем как для 8K (с запасом).
 UNKNOWN_CONTEXT = 8192
 FINAL_REPLY_TOKENS = 1024
-# Сервер насчитал промпту меньше этой доли оценки — промпт обрезан по контексту.
-CUT_SHARE = 0.5
 
 # Как называть части разметки в промпте и сообщениях об ошибках.
 _SECTION_OF = {"types": "phrase_types", "importance": "importance", "chapters": "chapters",
@@ -255,8 +254,10 @@ def local_context(cfg) -> int | None:
     from meet.llm import local_models
 
     try:
+        from meet.llm import local_route
+
         return local_models.context_length(cfg.llm.base_url, cfg.llm.local_model,
-                                           via_proxy=cfg.llm.local_via_proxy)["tokens"]
+                                           via_proxy=local_route(cfg))["tokens"]
     except Exception:  # сведения необязательные — без них куски по умолчанию
         return None
 
@@ -810,8 +811,9 @@ def _call(runner, prompt: str, system: str, timeout_s: float, schema: dict | Non
           extra: dict | None = None, report: dict | None = None) -> str:
     """Один вызов модели без инструментов (только текст встречи в промпте).
     `schema` — JSON Schema ответа, `extra` — прочие параметры вызова (только
-    локальной модели: `max_tokens`). Сервер насчитал промпту намного меньше
-    токенов, чем в нём есть, — он обрезан по контексту: `report["context_cut"]`."""
+    локальной модели: `max_tokens`, `purpose`, `on_cut`). Промпт обрезан
+    сервером по контексту (решает `openai_compat.prompt_cut`, обрезка — в
+    `usage["cut"]`) — в `report["context_cut"]`, самая большая из обрезок."""
     kwargs = dict(extra or {})
     if schema is not None:
         kwargs["response_schema"] = schema
@@ -819,12 +821,11 @@ def _call(runner, prompt: str, system: str, timeout_s: float, schema: dict | Non
     if inspect.isawaitable(reply):
         reply = asyncio.run(reply)
     usage = getattr(reply, "usage", None)
-    seen = usage.get("prompt_tokens") if isinstance(usage, dict) else None
-    if report is not None and isinstance(seen, int) and not isinstance(seen, bool):
-        need = int((len(prompt) + len(system)) / CHARS_PER_TOKEN)
+    found = usage.get("cut") if isinstance(usage, dict) else None
+    if report is not None and isinstance(found, dict):
         cut = report.get("context_cut")
-        if seen < need * CUT_SHARE and (not cut or need > cut["need"]):
-            report["context_cut"] = {"seen": seen, "need": need}
+        if not cut or found.get("need", 0) > cut.get("need", 0):
+            report["context_cut"] = {k: found[k] for k in ("seen", "need", "ollama") if k in found}
     if reply.error:
         raise RuntimeError(reply.error)
     return reply.text or ""
@@ -1083,7 +1084,8 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
                                   valid={i for i, _ in part}, category_ids=category_ids,
                                   summary=bool(final_features), texts=texts, projects=jira[0],
                                   need=need, schema=schema, report=report,
-                                  extra={"max_tokens": reply_tokens(len(part)), "on_cut": "keep"}
+                                  extra={"max_tokens": reply_tokens(len(part)), "on_cut": "keep",
+                                         "purpose": "analysis"}
                                   if strict else None)
         except (ValueError, RuntimeError) as e:
             errors.append(f"часть {n}: {e}")
@@ -1113,7 +1115,8 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
                                   category_ids=category_ids, timeout_s=FINAL_TIMEOUT_S, report=report,
                                   schema=response_schema(final_features, category_ids=category_ids)
                                   if strict else None,
-                                  extra={"max_tokens": FINAL_REPLY_TOKENS, "on_cut": "keep"}
+                                  extra={"max_tokens": FINAL_REPLY_TOKENS, "on_cut": "keep",
+                                         "purpose": "analysis"}
                                   if strict else None)
             merged.update({k: v for k, v in got.items() if k in final_features})
             errors += [f"итог: {e}" for e in errs]
@@ -1128,8 +1131,9 @@ def run(folder: Path, runner, cfg, *, provider: str | None = None, bus=None,
         errors.insert(0, "ответ модели оборван (лимит токенов или контекста модели) — взяты целые части")
     cut = report.get("context_cut")
     if cut:
-        errors.insert(0, f"модель видела только часть текста: контекст сервера ~{cut['seen']} токенов, "
-                         f"нужно ~{cut['need']} — увеличьте контекст модели до 16K+")
+        from meet.llm.openai_compat import cut_error
+
+        errors.insert(0, cut_error(cut, bool(cut.get("ollama"))))
     doc = to_file(merged, features, fingerprint(data), model=model_label(provider, cfg),
                   now=now, errors=errors)
     if missing:

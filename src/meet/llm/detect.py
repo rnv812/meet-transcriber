@@ -192,13 +192,14 @@ def find_opencode() -> str | None:
     return shim
 
 
-def local_reachable(base_url: str, timeout: float = 0.5, via_proxy: bool = False) -> bool:
+def local_reachable(base_url: str, timeout: float = 0.5, via_proxy: bool | str = False) -> bool:
     """Слушает ли кто-то адрес локальной модели (TCP-соединение, без запроса).
     «Через прокси» (`via_proxy`): напрямую сервер может быть недоступен —
     тогда короткий GET списка моделей через прокси; любой ответ HTTP (и
-    401/404) — сервер есть."""
+    401/404) — сервер есть; кроме ответов самого прокси «не достучался»
+    (407, 502, 503, 504)."""
     if via_proxy:
-        return _reachable_via_proxy(base_url, max(timeout, 1.5))
+        return _reachable_via_proxy(base_url, max(timeout, 1.5), via_proxy)
     try:
         u = urlparse(base_url)
         host = u.hostname
@@ -214,7 +215,7 @@ def local_reachable(base_url: str, timeout: float = 0.5, via_proxy: bool = False
         return False
 
 
-def _reachable_via_proxy(base_url: str, timeout: float) -> bool:
+def _reachable_via_proxy(base_url: str, timeout: float, via_proxy: bool | str = True) -> bool:
     import urllib.error
     import urllib.request
 
@@ -222,15 +223,15 @@ def _reachable_via_proxy(base_url: str, timeout: float) -> bool:
 
     try:
         req = urllib.request.Request(local_models.models_url(base_url), headers={"Accept": "application/json"})
-        with openai_compat.open_url(req, timeout, via_proxy=True):
+        with openai_compat.open_url(req, timeout, via_proxy=via_proxy):
             return True
-    except urllib.error.HTTPError:
-        return True  # ответил — значит, есть
+    except urllib.error.HTTPError as e:
+        return e.code not in local_models.PROXY_FAIL  # ответил сервер — значит, есть
     except (urllib.error.URLError, OSError, ValueError):
         return False
 
 
-def available(base_url: str | None = None, probe_local: bool = True, via_proxy: bool = False) -> dict:
+def available(base_url: str | None = None, probe_local: bool = True, via_proxy: bool | str = False) -> dict:
     """Что установлено: CLI найдены, локальная модель отвечает. Без
     `probe_local` локальную модель не спрашиваем (`found: None` — не
     проверялась): это сетевое соединение, а агенту в терминале нужны только

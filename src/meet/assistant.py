@@ -167,7 +167,9 @@ def _knowledge_hint(dirs: tuple[Path, ...]) -> str:
 
 
 def _call(runner, prompt: str, **kwargs):
-    """Runner провайдера — async; вызываем синхронно (мы в подпроцессе задачи)."""
+    """Runner провайдера — async; вызываем синхронно (мы в подпроцессе задачи).
+    `purpose` — назначение вызова для локальной модели (предел ответа,
+    текст ошибки «не помещается»); CLI-провайдерам он не уходит."""
     reply = runner(prompt, **kwargs)
     if inspect.isawaitable(reply):
         reply = asyncio.run(reply)
@@ -209,7 +211,7 @@ def summarize(folder: Path, runner, knowledge_dir, *, provider: str | None = Non
               f"{_live_draft(folder)}{_knowledge_hint(dirs)}")
     system = SUMMARY_SYSTEM + (titles.SUMMARY_TITLE_RULE if want_title else "")
     text = _call(runner, prompt, system_prompt=system, allowed_dirs=dirs,
-                 cwd=folder, timeout_s=SUMMARY_TIMEOUT_S)
+                 cwd=folder, timeout_s=SUMMARY_TIMEOUT_S, purpose="summary")
     suggested, text = titles.split_summary_title(text) if want_title else (None, text)
     if not text.strip():
         raise RuntimeError(EMPTY_REPLY)
@@ -303,7 +305,7 @@ def ask(folder: Path, question: str, runner, knowledge_dir, *,
         parts.append(hint.strip())
     parts += ["", f"Новый вопрос: {question}"]
     answer = _call(runner, "\n".join(parts), system_prompt=ASK_SYSTEM,
-                   allowed_dirs=dirs, cwd=folder, timeout_s=ASK_TIMEOUT_S)
+                   allowed_dirs=dirs, cwd=folder, timeout_s=ASK_TIMEOUT_S, purpose="answer")
     item = {"q": question, "a": answer, "at": time.time(), "provider": provider,
             "model": (origin or {}).get("model")}
     with (folder / QA_JSONL).open("a", encoding="utf-8") as f:

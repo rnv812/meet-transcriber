@@ -99,20 +99,142 @@ def test_live_ticks_reuse_one_context_window_and_ask_the_model_info_once():
         assert server.shows() == 1 and server.gets.count("/api/version") == 1
 
 
-def test_cut_prompt_is_an_error_not_a_summary_of_the_tail(folder):
-    # Сервер насчитал промпту 200 токенов, а в нём тысячи: итогов по хвосту не пишем.
-    long = [dict(s, text=s["text"] + " подробности" * 40) for s in SEGMENTS]
+def test_meeting_longer_than_the_model_window_is_refused_with_ollama_advice(folder):
+    # Окно Ollama ставит сам Meet — «увеличьте контекст» тут не совет: нужна
+    # модель с бо́льшим окном. Итогов по хвосту не пишем.
+    long = [dict(s, text=s["text"] + " подробности" * 120) for s in SEGMENTS]
     library.write_transcript(folder, {"version": 1, "segments": long})
-    with FakeOllama(reply=lambda body: "## Итоги", prompt_tokens=200) as server:
+    with FakeOllama(context=8192, reply=lambda body: "## Итоги") as server:
         runner, _cfg = _runner(server)
-        with pytest.raises(RuntimeError, match="модель видела только часть текста"):
+        with pytest.raises(RuntimeError) as e:
             assistant.summarize(folder, runner, None, provider="openai-compatible")
+        assert server.chats() == []
+    assert str(e.value) == ("текст не помещается в окно контекста модели (8192 токенов): итоги не получить — "
+                            "окно этой модели меньше нужного — возьмите модель с бо́льшим окном контекста")
     assert not (folder / assistant.SUMMARY_MD).exists()
 
 
-def test_too_small_context_is_refused_without_a_call(folder):
-    with FakeOllama(context=4096, reply=lambda body: "ок") as server:
+def test_small_window_model_still_answers_short_calls(folder):
+    # Окно 4096: отказ «до 6K» — только у анализа; вопрос по короткой встрече идёт.
+    with FakeOllama(context=4096, reply=lambda body: "В пятницу.") as server:
         runner, _cfg = _runner(server)
-        with pytest.raises(RuntimeError, match="слишком маленькое окно контекста: 4096"):
-            assistant.ask(folder, "Когда выпуск?", runner, None, provider="openai-compatible")
-        assert server.chats() == []
+        assert assistant.ask(folder, "Когда выпуск?", runner, None, provider="openai-compatible")["a"] == "В пятницу."
+        assert server.chats()[-1]["options"]["num_ctx"] == 4096
+
+
+def test_title_asks_ollama_for_a_small_window(folder):
+    with FakeOllama(reply=lambda body: "Выпуск экспорта") as server:
+        runner, _cfg = _runner(server)
+        titles.ask_title(folder, runner)
+        options = server.chats()[-1]["options"]
+        assert options["num_predict"] == 256 and options["num_ctx"] <= 8192
+
+
+
+# --- vLLM: промпт + max_tokens должны влезть в max_model_len ------------------------
+
+
+class FakeVLLM:
+    """vLLM: окно `max_model_len` в /v1/models; промпт (настоящий счёт —
+    ~3 символа на токен) + max_tokens больше окна — 400, как у vLLM."""
+
+    def __init__(self, max_model_len: int, reply="ок"):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        fake = self
+        self.requests: list[dict] = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def _send(self, status, body):
+                data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                if self.path == "/v1/models":
+                    return self._send(200, {"data": [{"id": "qwen", "max_model_len": max_model_len}]})
+                return self._send(404, {"detail": "Not Found"})
+
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length).decode("utf-8"))
+                fake.requests.append(body)
+                prompt = sum(len(m["content"]) for m in body["messages"]) // 3
+                if prompt + body["max_tokens"] > max_model_len:
+                    return self._send(400, {"object": "error", "message": (
+                        f"This model's maximum context length is {max_model_len} tokens. However, you "
+                        f"requested {prompt + body['max_tokens']} tokens ({prompt} in the messages, "
+                        f"{body['max_tokens']} in the completion).")})
+                return self._send(200, {"choices": [{"message": {"content": reply}}],
+                                        "usage": {"prompt_tokens": prompt, "completion_tokens": 5}})
+
+            def log_message(self, *a):
+                pass
+
+        self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.base_url = f"http://127.0.0.1:{self._httpd.server_address[1]}/v1"
+        threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+
+    def close(self):
+        self._httpd.shutdown()
+        self._httpd.server_close()
+
+
+@pytest.fixture
+def vllm():
+    servers = []
+
+    def make(max_model_len: int, reply="ок"):
+        fake = FakeVLLM(max_model_len, reply)
+        servers.append(fake)
+        return fake
+
+    yield make
+    for fake in servers:
+        fake.close()
+
+
+def test_vllm_every_caller_fits_its_reply_into_8k(folder, vllm):
+    # До раунда 3 всем шло max_tokens=8192 — и при max_model_len 8192 vLLM
+    # отвергал каждое название, вопрос, итоги и тик.
+    server = vllm(8192, reply="Выпуск экспорта")
+    runner, cfg = _runner(server)
+    assert titles.ask_title(folder, runner) == "Выпуск экспорта"
+    assistant.ask(folder, "Когда выпуск?", runner, None, provider="openai-compatible")
+    assistant.summarize(folder, runner, None, provider="openai-compatible")
+    asyncio.run(PerCallSession(runner, "Сводка.").send("Новые реплики."))
+    budgets = [body["max_tokens"] for body in server.requests]
+    assert budgets == [256, 1500, 3000, 600]
+
+
+def test_vllm_improve_budget_follows_its_input(folder, vllm):
+    server = vllm(16384, reply=json.dumps({"replacements": []}))
+    runner, cfg = _runner(server)
+    improve.run(folder, runner, cfg, provider="openai-compatible")
+    prompt_chars = sum(len(m["content"]) for m in server.requests[0]["messages"])
+    assert server.requests[0]["max_tokens"] == improve.reply_budget("x" * (prompt_chars - len(improve._SYSTEM)))
+
+
+def test_vllm_long_summary_gets_the_rest_of_the_window(folder, vllm):
+    # Итоги длинной встречи: на ответ — сколько осталось в окне, и vLLM это принимает.
+    long = [dict(s, text=s["text"] + " подробности" * 42) for s in SEGMENTS]
+    library.write_transcript(folder, {"version": 1, "segments": long})
+    server = vllm(8192, reply="## Итоги")
+    runner, _cfg = _runner(server)
+    assistant.summarize(folder, runner, None, provider="openai-compatible")
+    sent = server.requests[-1]["max_tokens"]
+    assert 128 <= sent < 3000
+
+
+def test_vllm_meeting_that_cannot_fit_is_refused_before_the_call(folder, vllm):
+    long = [dict(s, text=s["text"] + " подробности" * 200) for s in SEGMENTS]
+    library.write_transcript(folder, {"version": 1, "segments": long})
+    server = vllm(8192)
+    runner, _cfg = _runner(server)
+    with pytest.raises(RuntimeError, match="ответ не получить — увеличьте контекст модели до 16K"):
+        assistant.ask(folder, "Когда выпуск?", runner, None, provider="openai-compatible")
+    assert server.requests == []

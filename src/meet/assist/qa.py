@@ -221,7 +221,7 @@ class QAService:
                 reply = await self._runner(
                     prompt, system_prompt=self._system, resume=resume,
                     allowed_dirs=self._allowed, cwd=self._cwd,
-                    on_text=self._partial(item), **kwargs)
+                    on_text=self._partial(item), purpose="answer", **kwargs)
         except Exception as e:
             self._finish(item, error=f"внутренняя ошибка: {e}")
             raise

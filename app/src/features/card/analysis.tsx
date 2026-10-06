@@ -136,8 +136,10 @@ export function analysisNotes(a: Analysis | undefined, durationS?: number | null
     if (share && got && of) notes.push(`${PART_TITLE[f]} — только для части встречи (${got} из ${of} кусков)`);
   }
   if (a.context_cut) {
+    // Окно Ollama ставит сам Meet: «увеличьте контекст» там не совет — нужна модель с бо́льшим окном.
     notes.push(`Модель видела только часть текста (~${a.context_cut.seen} из ~${a.context_cut.need} токенов) — `
-      + "увеличьте контекст модели до 16K+");
+      + (a.context_cut.ollama ? "окно этой модели меньше нужного, возьмите модель с бо́льшим окном контекста"
+        : "увеличьте контекст модели до 16K+"));
   }
   return notes;
 }

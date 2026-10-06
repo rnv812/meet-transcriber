@@ -102,7 +102,9 @@ async def _check_local() -> tuple[str | None, str | None]:
     from meet.llm import local_models, openai_compat
 
     cfg = settings.load()
-    via_proxy = cfg.llm.local_via_proxy
+    from meet.llm import local_route
+
+    via_proxy = local_route(cfg)
     listed = await asyncio.to_thread(local_models.list_models, cfg.llm.base_url, cfg.llm.local_model,
                                      local_models.TIMEOUT_S, via_proxy)
     if not listed["ok"] and listed["reason"] != "not_openai" and not listed.get("timeout"):
@@ -123,7 +125,7 @@ async def _check_local() -> tuple[str | None, str | None]:
         return reply.error, None
     context = await asyncio.to_thread(local_models.context_length, cfg.llm.base_url, cfg.llm.local_model,
                                       via_proxy=via_proxy)
-    return None, local_models.context_text(context["tokens"])
+    return None, local_models.context_text(context["tokens"], context.get("max"))
 
 
 async def check(provider: str) -> dict:

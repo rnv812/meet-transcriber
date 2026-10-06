@@ -82,12 +82,31 @@ def runner_for(name: str, cfg: "Settings") -> Runner:
     if name == "openai-compatible":
         from meet.llm import openai_compat
         return partial(openai_compat.run, base_url=cfg.llm.base_url,
-                       local_model=cfg.llm.local_model, via_proxy=cfg.llm.local_via_proxy)
+                       local_model=cfg.llm.local_model, via_proxy=local_route(cfg))
     raise ValueError(f"неизвестный провайдер: {name}")
 
 
+def local_route(cfg: "Settings", via_proxy: bool | None = None) -> bool | str:
+    """Как идти к серверу локальной модели (`openai_compat.open_url`): False —
+    свои адреса напрямую; «через прокси» (`llm.local_via_proxy`, или
+    `via_proxy` из черновика окна) — адрес из `llm.proxy`, если он задан
+    явно, иначе True (прокси системы); `llm.proxy = none` — напрямую."""
+    on = cfg.llm.local_via_proxy if via_proxy is None else via_proxy
+    if not on or cfg.llm.proxy == "none":
+        return False
+    return True if cfg.llm.proxy == "system" else cfg.llm.proxy
+
+
+# Параметры вызова, которые понимает только локальная модель: назначение и
+# предел ответа, схема, обрезка. CLI-провайдерам их не передаём.
+LOCAL_ONLY = ("purpose", "max_tokens", "response_schema", "on_cut")
+
+
 async def _call(module, *args, **kwargs):
-    """`module.run` с прокси из настроек (`llm.proxy`)."""
+    """`module.run` с прокси из настроек (`llm.proxy`), без параметров только
+    для локальной модели (`LOCAL_ONLY`)."""
+    for key in LOCAL_ONLY:
+        kwargs.pop(key, None)
     return await module.run(*args, **kwargs)
 
 
@@ -97,7 +116,7 @@ def provider_ready(name: str, cfg: "Settings", *, need_login: bool) -> bool:
     from meet.llm import detect
 
     if name == "openai-compatible":
-        return detect.local_reachable(cfg.llm.base_url, via_proxy=cfg.llm.local_via_proxy)
+        return detect.local_reachable(cfg.llm.base_url, via_proxy=local_route(cfg))
     finders = {"claude-code": detect.find_claude, "codex": detect.find_codex,
                "opencode": detect.find_opencode}
     path = finders[name]() if name in finders else None
