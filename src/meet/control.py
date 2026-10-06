@@ -92,6 +92,7 @@ IMPORTANT: токен принимается и в query-параметре `?to
     export_preview(params) -> dict        как назовётся папка встречи по шаблону
     assistant() -> dict                   кто отвечает, что установлено, папки
     check_provider(body) -> dict          проверить провайдера коротким вызовом
+    local_models(body) -> dict            модели локального сервера {"base_url", "model"}
     live_start() -> dict                  живой режим (409 без провайдера, 400 при записи)
     live_stop() -> dict                   остановить живой режим (ответ сразу)
     live_attach() / live_detach() -> dict включить ассистента посреди обычной
@@ -850,6 +851,7 @@ _ROUTES = {
     ("POST", "/assistant/check"): lambda h, p: _server_of(h).state.check_provider(
         h._body()
     ),
+    ("POST", "/assistant/local-models"): lambda h, p: _server_of(h).state.local_models(h._body()),
     ("POST", "/live/start"): lambda h, p: _server_of(h).state.live_start(),
     ("POST", "/live/stop"): lambda h, p: _server_of(h).state.live_stop(),
     ("POST", "/live/attach"): lambda h, p: _server_of(h).state.live_attach(),

@@ -11,15 +11,20 @@ from meet.llm import openai_compat
 @pytest.fixture
 def server():
     state = {"status": 200, "body": {"choices": [{"message": {"content": "ок"}}]},
-             "requests": []}
+             "requests": [], "reject": {}}
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             length = int(self.headers.get("Content-Length") or 0)
-            state["requests"].append(
-                (self.path, json.loads(self.rfile.read(length).decode("utf-8"))))
-            data = json.dumps(state["body"]).encode("utf-8")
-            self.send_response(state["status"])
+            got = json.loads(self.rfile.read(length).decode("utf-8"))
+            state["requests"].append((self.path, got))
+            kind = (got.get("response_format") or {}).get("type")
+            status, body = state["status"], state["body"]
+            if kind in state["reject"]:
+                # Сервер не понимает этот response_format: (код, текст ошибки).
+                status, body = state["reject"][kind]
+            data = json.dumps(body).encode("utf-8")
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
@@ -82,3 +87,60 @@ def test_empty_choice_is_error(server):
 def test_unreachable():
     reply = _run("http://127.0.0.1:9/v1")
     assert reply.text == "" and reply.error
+
+
+SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}
+
+
+@pytest.fixture(autouse=True)
+def _fresh_modes():
+    openai_compat._schema_mode.clear()
+    yield
+    openai_compat._schema_mode.clear()
+
+
+def _formats(server):
+    return [(body.get("response_format") or {}).get("type") for _, body in server["requests"]]
+
+
+def test_schema_asks_for_json_schema_first(server):
+    # LM Studio, vLLM, llama.cpp: строгий ответ по схеме.
+    reply = _run(server["base_url"], local_model="qwen", response_schema=SCHEMA)
+    assert reply.error is None
+    fmt = server["requests"][0][1]["response_format"]
+    assert fmt == {"type": "json_schema", "json_schema": {"name": "answer", "schema": SCHEMA}}
+
+
+def test_json_schema_rejected_falls_back_to_json_object(server):
+    server["reject"] = {"json_schema": (400, {"error": "response_format json_schema is not supported"})}
+    reply = _run(server["base_url"], local_model="qwen", response_schema=SCHEMA)
+    assert reply.text == "ок" and _formats(server) == ["json_schema", "json_object"]
+    # Сработавший режим запомнен: следующий вызов — сразу им.
+    _run(server["base_url"], local_model="qwen", response_schema=SCHEMA)
+    assert _formats(server)[-1] == "json_object" and len(server["requests"]) == 3
+
+
+def test_both_formats_rejected_falls_back_to_prompt_only(server):
+    # LM Studio: "'response_format.type' must be 'json_schema' or 'text'" — и пусть даже схему не берёт.
+    server["reject"] = {"json_schema": (422, {"error": "bad schema"}),
+                        "json_object": (400, {"error": "'response_format.type' must be 'json_schema' or 'text'"})}
+    reply = _run(server["base_url"], local_model="qwen", response_schema=SCHEMA)
+    assert reply.text == "ок" and _formats(server) == ["json_schema", "json_object", None]
+
+
+def test_grammar_error_500_counts_as_unsupported_format(server):
+    server["reject"] = {"json_schema": (500, {"error": "JSON schema conversion failed: grammar"})}
+    reply = _run(server["base_url"], local_model="qwen", response_schema=SCHEMA)
+    assert reply.text == "ок" and _formats(server) == ["json_schema", "json_object"]
+
+
+def test_other_server_error_is_not_retried_without_format(server):
+    server["status"] = 500
+    server["body"] = {"error": "model crashed"}
+    reply = _run(server["base_url"], local_model="qwen", response_schema=SCHEMA)
+    assert "500" in reply.error and len(server["requests"]) == 1
+
+
+def test_without_schema_no_response_format(server):
+    _run(server["base_url"], local_model="qwen")
+    assert "response_format" not in server["requests"][0][1]

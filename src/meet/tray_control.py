@@ -3837,6 +3837,23 @@ class TrayControl:
         self._providers.invalidate()
         return result
 
+    def local_models(self, body: dict | None) -> dict:
+        """«Найти модели»: список моделей локального сервера по адресу из окна
+        (может быть ещё не сохранён; нет — из настроек). Короткий GET без
+        вызова модели — прямо в резиденте (см. meet.llm.local_models)."""
+        from meet.llm import local_models
+
+        body = body or {}
+        base_url, model = body.get("base_url"), body.get("model")
+        if not all(v is None or isinstance(v, str) for v in (base_url, model)):
+            raise _bad_request("адрес и имя модели — строки")
+        cfg = settings.load()
+        if not (base_url or "").strip():
+            base_url = cfg.llm.base_url
+            if "model" not in body:
+                model = cfg.llm.local_model
+        return local_models.list_models(base_url, model)
+
     def import_file(self, body: dict) -> dict:
         """Импорт чужой записи: папка + задача (копия и расшифровка)."""
         raw = str((body or {}).get("path") or "").strip()

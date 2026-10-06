@@ -193,3 +193,75 @@ def test_opencode_model_missing_names_the_providers_login(monkeypatch):
     monkeypatch.setattr(detect, "opencode_auth_present", lambda provider=None: True)
     res = asyncio.run(check.check("opencode"))
     assert res["error"] == "у OpenCode нет модели"  # вход есть — только причина
+
+
+# --- локальная модель: список моделей сервера, затем короткий вызов ------------------
+
+
+def _local_env(monkeypatch, *, model=None, listed=None, reply=AgentReply(text="Да")):
+    from dataclasses import replace
+
+    from meet import settings
+    from meet.llm import local_models, openai_compat
+
+    cfg = settings.Settings()
+    cfg = replace(cfg, llm=replace(cfg.llm, provider="openai-compatible", local_model=model,
+                                   base_url="http://127.0.0.1:1234/v1"))
+    monkeypatch.setattr(settings, "load", lambda *a, **k: cfg)
+    seen = {"listed": [], "calls": []}
+
+    def fake_list(base_url, model=None, timeout=None):
+        seen["listed"].append((base_url, model))
+        return listed
+
+    async def fake_run(prompt, **kw):
+        seen["calls"].append(kw)
+        return reply
+
+    monkeypatch.setattr(local_models, "list_models", fake_list)
+    monkeypatch.setattr(openai_compat, "run", fake_run)
+    return seen
+
+
+def _listed(*ids, missing=False):
+    return {"ok": True, "models": [{"id": i, "size": None, "params": None, "context": None} for i in ids],
+            "missing": missing, "warning": "Модели «x» на сервере нет — выберите другую из списка" if missing else None,
+            "error": None, "reason": None}
+
+
+def test_local_ok_when_the_model_is_listed_and_answers(monkeypatch):
+    seen = _local_env(monkeypatch, model="qwen3:8b", listed=_listed("qwen3:8b", "gemma3:4b"))
+    res = asyncio.run(check.check("openai-compatible"))
+    assert res["ok"] is True
+    assert seen["listed"] == [("http://127.0.0.1:1234/v1", "qwen3:8b")]
+    assert seen["calls"][0]["local_model"] == "qwen3:8b"  # короткий вызов остаётся
+
+
+def test_local_model_no_longer_listed(monkeypatch):
+    seen = _local_env(monkeypatch, model="llama3", listed=_listed("qwen3:8b", missing=True))
+    res = asyncio.run(check.check("openai-compatible"))
+    assert res["ok"] is False and "нет" in res["error"] and "qwen3:8b" in res["error"]
+    assert seen["calls"] == []
+
+
+def test_local_server_down_is_said_plainly(monkeypatch):
+    down = {"ok": False, "reason": "unreachable", "error": "Сервер не отвечает: http://127.0.0.1:1234/v1",
+            "models": [], "missing": False, "warning": None}
+    seen = _local_env(monkeypatch, model="qwen3:8b", listed=down)
+    res = asyncio.run(check.check("openai-compatible"))
+    assert res["error"].startswith("Сервер не отвечает") and seen["calls"] == []
+
+
+def test_local_without_model_list_still_tries_the_call(monkeypatch):
+    # Сервер без /models (не всякий OpenAI-совместимый его отдаёт) — решает сам вызов.
+    odd = {"ok": False, "reason": "not_openai", "error": "списка моделей нет", "models": [],
+           "missing": False, "warning": None}
+    seen = _local_env(monkeypatch, model="m", listed=odd)
+    assert asyncio.run(check.check("openai-compatible"))["ok"] is True
+    assert len(seen["calls"]) == 1
+
+
+def test_local_without_a_chosen_model_among_several(monkeypatch):
+    seen = _local_env(monkeypatch, model=None, listed=_listed("qwen3:8b", "gemma3:4b"))
+    res = asyncio.run(check.check("openai-compatible"))
+    assert res["ok"] is False and "не выбрана" in res["error"] and seen["calls"] == []

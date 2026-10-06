@@ -292,6 +292,10 @@ class FakeState:
         self.calls.append(("check", body))
         return {"ok": True, "error": None, "provider": body.get("provider")}
 
+    def local_models(self, body):
+        self.calls.append(("local-models", body))
+        return {"ok": True, "models": [{"id": "qwen3:8b"}]}
+
     # --- живой режим ---
 
     live_active = False
@@ -1224,6 +1228,9 @@ def test_assistant_routes(server):
         ("assistant", True), ("assistant", False)]
     got = _post(server, "/assistant/check", {"provider": "codex"})
     assert got == {"ok": True, "error": None, "provider": "codex"}
+    got = _post(server, "/assistant/local-models", {"base_url": "http://localhost:11434/v1"})
+    assert got["models"] == [{"id": "qwen3:8b"}]
+    assert ("local-models", {"base_url": "http://localhost:11434/v1"}) in server.state_obj.calls
 
 
 # --- живой режим -------------------------------------------------------------

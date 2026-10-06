@@ -92,9 +92,22 @@ async def _check_opencode() -> str | None:
 
 async def _check_local() -> str | None:
     from meet import settings
-    from meet.llm import openai_compat
+    from meet.llm import local_models, openai_compat
 
     cfg = settings.load()
+    # Сначала список моделей сервера (выбранная должна в нём быть), затем
+    # короткий вызов. Сервер без списка моделей (не всякий его отдаёт) —
+    # решает сам вызов.
+    listed = await asyncio.to_thread(local_models.list_models, cfg.llm.base_url, cfg.llm.local_model)
+    if not listed["ok"] and listed["reason"] != "not_openai":
+        return listed["error"]
+    if listed["ok"]:
+        ids = [m["id"] for m in listed["models"]]
+        shown = ", ".join(ids[:5]) + (" …" if len(ids) > 5 else "")
+        if listed["missing"]:
+            return f"{listed['warning']} (на сервере: {shown})"
+        if not cfg.llm.local_model and len(ids) > 1:
+            return f"Модель не выбрана, а на сервере их несколько ({shown}) — выберите в «Имя модели»"
     reply = await openai_compat.run(
         PROBE_PROMPT, system_prompt=PROBE_SYSTEM, max_turns=1,
         timeout_s=PROBE_TIMEOUT_S, base_url=cfg.llm.base_url,

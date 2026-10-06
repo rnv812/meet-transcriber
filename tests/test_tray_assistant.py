@@ -254,6 +254,29 @@ def test_check_provider_timeout_is_an_answer(state, monkeypatch):
     assert got["ok"] is False and got["provider"] == "auto" and got["error"]
 
 
+def test_local_models_asks_the_drafted_address(state, monkeypatch):
+    from meet.llm import local_models
+
+    seen = []
+
+    def fake_list(base_url, model=None, timeout=None):
+        seen.append((base_url, model))
+        return {"ok": True, "models": [{"id": "qwen3:8b"}], "missing": False}
+
+    monkeypatch.setattr(local_models, "list_models", fake_list)
+    # Несохранённый адрес из окна — он и спрашивается; модель — из окна же.
+    got = state.local_models({"base_url": "http://192.168.1.5:11434/v1", "model": "qwen3:8b"})
+    assert got["ok"] and seen == [("http://192.168.1.5:11434/v1", "qwen3:8b")]
+    # Без адреса — сохранённый в настройках.
+    state.local_models({})
+    assert seen[-1] == ("http://127.0.0.1:1234/v1", None)
+
+
+def test_local_models_rejects_a_non_string_address(state):
+    with pytest.raises(control.BadRequest):
+        state.local_models({"base_url": ["x"]})
+
+
 def test_check_provider_rejects_unknown(state):
     with pytest.raises(control.BadRequest):
         state.check_provider({"provider": "rm -rf"})
