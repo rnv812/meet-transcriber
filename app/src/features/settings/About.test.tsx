@@ -22,7 +22,8 @@ vi.mock("../../lib/shell", () => ({
 }));
 
 import * as shell from "../../lib/shell";
-import { About, UPDATE_CONFIRM_WORK, megabytes } from "./About";
+import type { InstallOutcome } from "../../lib/shell";
+import { About, LAUNCHED, UPDATE_CONFIRM_WORK, megabytes } from "./About";
 
 const endpoint = { base: "http://127.0.0.1:1", token: "t" };
 const check = vi.mocked(shell.checkUpdate);
@@ -101,7 +102,7 @@ test("нет связи — текст ошибки оболочки", async () 
 test("новая версия: «Что нового» и «Скачать и установить» с ходом загрузки", async () => {
   check.mockResolvedValue(newer);
   let finish: () => void = () => {};
-  install.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+  install.mockImplementation(() => new Promise<InstallOutcome>((resolve) => { finish = () => resolve("installer"); }));
   await renderAbout();
   await userEvent.click(checkButton());
   expect(await screen.findByText(/Доступна версия 0\.2\.0/)).toBeInTheDocument();
@@ -122,10 +123,25 @@ test("новая версия: «Что нового» и «Скачать и у
   expect(await screen.findByText("Установщик запущен, приложение закрывается…")).toBeInTheDocument();
 });
 
+test.each([
+  ["in-place", "Устанавливаю новую версию — Meet закроется и запустится заново…"],
+  ["manual", "Образ открыт в Finder: перетащите Meet в «Программы» с заменой и запустите заново. Приложение закрывается…"],
+  ["installer", "Установщик запущен, приложение закрывается…"],
+] as const)("macOS и Windows: итог установки «%s» назван своими словами", async (outcome, text) => {
+  check.mockResolvedValue({ ...newer, asset_name: "Meet_0.2.0_aarch64.dmg" });
+  install.mockResolvedValue(outcome);
+  await renderAbout();
+  await userEvent.click(checkButton());
+  await userEvent.click(await screen.findByRole("button", { name: "Скачать и установить" }));
+  expect(await screen.findByText(text)).toBeInTheDocument();
+  expect(LAUNCHED[outcome]).toBe(text);
+  expect(checkButton()).toBeDisabled();
+});
+
 test("размер неизвестен — бегущая полоска; «Отменить загрузку» прерывает её", async () => {
   check.mockResolvedValue(newer);
   let fail: (e: unknown) => void = () => {};
-  install.mockImplementation(() => new Promise<void>((_, reject) => { fail = reject; }));
+  install.mockImplementation(() => new Promise<InstallOutcome>((_, reject) => { fail = reject; }));
   vi.mocked(shell.cancelUpdate).mockImplementation(async () => fail("Загрузка обновления отменена"));
   await renderAbout();
   await userEvent.click(checkButton());
@@ -159,7 +175,7 @@ test("отказ во время записи виден рядом с кноп�
 
 test("идёт расшифровка — сначала вопрос, «Обновить сейчас» повторяет с согласием", async () => {
   check.mockResolvedValue(newer);
-  install.mockRejectedValueOnce(UPDATE_CONFIRM_WORK).mockResolvedValueOnce(undefined);
+  install.mockRejectedValueOnce(UPDATE_CONFIRM_WORK).mockResolvedValueOnce("installer");
   await renderAbout();
   await userEvent.click(checkButton());
   await userEvent.click(await screen.findByRole("button", { name: "Скачать и установить" }));

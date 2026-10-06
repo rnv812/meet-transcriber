@@ -3,7 +3,7 @@ import pkg from "../../../package.json";
 import { type Endpoint, getDiagnostics } from "../../lib/api";
 import {
   UPDATE_CANCELLED, cancelUpdate, checkUpdate, installUpdate, onUpdateProgress, openUrl, releasesPage,
-  type UpdateCheck, type UpdateProgress,
+  type InstallOutcome, type UpdateCheck, type UpdateProgress,
 } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { ProgressBar } from "../../ui/ProgressBar";
@@ -52,9 +52,21 @@ function UpdateTip() {
         сумму и запускает. Приложение закроется, установщик предложит «Обновить до» новой версии и
         в конце запустит её. Записи, голоса и настройки сохранятся.
       </TipLine>
+      <TipLine>
+        На macOS новая версия встаёт на место прежней, и Meet запускается заново сам. Если папка
+        с Meet недоступна на запись, откроется образ диска — перетащите Meet в «Программы».
+      </TipLine>
     </HelpTip>
   );
 }
+
+/** Что сказать, когда установка пошла (по ответу оболочки). */
+export const LAUNCHED: Record<InstallOutcome, string> = {
+  installer: "Установщик запущен, приложение закрывается…",
+  "in-place": "Устанавливаю новую версию — Meet закроется и запустится заново…",
+  manual:
+    "Образ открыт в Finder: перетащите Meet в «Программы» с заменой и запустите заново. Приложение закрывается…",
+};
 
 type State =
   | { kind: "idle" }
@@ -63,7 +75,7 @@ type State =
   | { kind: "failed"; error: string }
   | { kind: "installing"; result: UpdateCheck; progress: UpdateProgress | null }
   | { kind: "cancelled"; result: UpdateCheck }
-  | { kind: "launched" }
+  | { kind: "launched"; outcome: InstallOutcome }
   | { kind: "confirm"; result: UpdateCheck }
   | { kind: "install-failed"; result: UpdateCheck; error: string };
 
@@ -97,8 +109,8 @@ function UpdateRow() {
   const install = async (result: UpdateCheck, confirmed = false) => {
     setState({ kind: "installing", result, progress: null });
     try {
-      await installUpdate(confirmed);
-      setState({ kind: "launched" });
+      const outcome = await installUpdate(confirmed);
+      setState({ kind: "launched", outcome: outcome ?? "installer" });
     } catch (cause) {
       const error = errorText(cause);
       setState(error === UPDATE_CONFIRM_WORK ? { kind: "confirm", result }
@@ -160,7 +172,7 @@ function UpdateRow() {
             <Button size="sm" onClick={() => void cancelUpdate()}>Отменить загрузку</Button>
           </>
         )}
-        {state.kind === "launched" && <span>Установщик запущен, приложение закрывается…</span>}
+        {state.kind === "launched" && <span>{LAUNCHED[state.outcome] ?? LAUNCHED.installer}</span>}
       </div>
     </Row>
   );

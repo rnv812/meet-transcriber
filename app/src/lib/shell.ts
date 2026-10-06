@@ -234,13 +234,21 @@ export async function checkUpdate(): Promise<UpdateCheck> {
 }
 
 /**
+ * Чем закончилась установка (`updater::Outcome`): `installer` — установщик
+ * Windows запущен; `in-place` — macOS заменит Meet.app на месте и запустит
+ * новую версию; `manual` — macOS открыла образ в Finder, Meet переносят в
+ * «Программы» вручную.
+ */
+export type InstallOutcome = "installer" | "in-place" | "manual";
+
+/**
  * Скачать, сверить и запустить установщик; после этого приложение выходит.
  * `confirmed` — человек согласился прервать идущую расшифровку (без него
  * оболочка в этом случае отвечает вопросом `UPDATE_CONFIRM_WORK` из About).
  */
-export async function installUpdate(confirmed = false): Promise<void> {
+export async function installUpdate(confirmed = false): Promise<InstallOutcome> {
   if (!inTauri()) throw new Error(NOT_IN_APP);
-  await invoke<void>("install_update", { confirmed });
+  return invoke<InstallOutcome>("install_update", { confirmed });
 }
 
 export const onUpdateProgress = (cb: (p: UpdateProgress) => void) => listenShell("update-progress", cb);
