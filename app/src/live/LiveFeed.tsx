@@ -49,6 +49,18 @@ export function LiveFeed({ lines, className = "", focus = null }: {
     if (el && follow.current) el.scrollTop = el.scrollHeight;
   }, [lines]);
 
+  // Ленту сузили или сделали ниже (разделитель областей, окно): строки
+  // переносятся, высота растёт без новых строк — следящая лента остаётся внизу.
+  useEffect(() => {
+    const el = box.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const watch = new ResizeObserver(() => {
+      if (follow.current) el.scrollTop = el.scrollHeight;
+    });
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, []);
+
   useLayoutEffect(() => {
     if (!focus) return;
     const line = lineAt(lines, focus.t);

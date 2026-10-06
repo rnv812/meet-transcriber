@@ -85,3 +85,31 @@ test("переход к моменту: реплика подсвечена, с�
   expect(screen.getByText("реплика 10").closest("li")).not.toHaveClass("is-target");
   vi.useRealTimers();
 });
+
+test("ленту сузили или сделали ниже (разделитель, окно) — она остаётся внизу; прокрученная вверх — стоит", () => {
+  const observers: (() => void)[] = [];
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(cb: () => void) { observers.push(cb); }
+    observe() {}
+    disconnect() {}
+  });
+  try {
+    render(<LiveFeed lines={[line(0), line(1)]} />);
+    const feed = screen.getByRole("log");
+    const box = fakeScroll(feed, { scrollHeight: 500, clientHeight: 200 });
+    feed.scrollTop = 300;
+    fireEvent.scroll(feed);
+    // Уже — строки переносятся, лента выросла, а новых строк нет.
+    box.grow(180);
+    act(() => observers.forEach((cb) => cb()));
+    expect(feed.scrollTop).toBe(680);
+
+    feed.scrollTop = 100;
+    fireEvent.scroll(feed);
+    box.grow(40);
+    act(() => observers.forEach((cb) => cb()));
+    expect(feed.scrollTop).toBe(100);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
