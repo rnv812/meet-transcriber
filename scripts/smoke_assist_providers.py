@@ -1,34 +1,43 @@
 """Смоук провайдеров ассистента V4 (0.3.6) — НАСТОЯЩИЕ вызовы моделей.
 
 Запускает человек, не тесты: проверяет на установленных CLI то, что без
-модели не проверить (v4-design §9, задача 2):
+модели не проверить (v4-design §9, задача 2; v4-simple §6):
 
 * Claude Code (`llm.claude_stream.Conversation`, постоянный процесс):
-  изображение блоком base64 в stream-json; собеседник `--restricted --tools
-  Read,Grep,Glob --permission-mode dontAsk --add-dir` читает файл; «Стоп»
-  (`control_request` interrupt → `control_response`) и ход после него в том
-  же процессе; нативное продолжение (`--session-id` → `--resume`);
-  неизвестный сеанс → `resume_failed`; изображение через Agent SDK (`llm.claude.run`);
+  изображение блоком base64 в stream-json; агент `--restricted --tools
+  Read,Grep,Glob --permission-mode dontAsk --add-dir <база знаний>` читает
+  файл; закрытая папка (`deny_paths` → `--disallowedTools Read(//…/**)`):
+  Read запрещён, Grep по базе её не видит; изображение, отвергнутое API, не
+  портит сохранённый сеанс (ветка без того хода и повтор без картинки);
+  «Стоп» (`control_request` interrupt → `control_response`) и ход после него
+  в том же процессе; нативное продолжение (`--session-id` → `--resume`);
+  неизвестный сеанс → `resume_failed`; изображение через Agent SDK;
 * Codex (`llm.codex.run`): `--image=` перед `-`; `keep_session` → `exec
-  resume <id>`; неизвестный сеанс → `resume_failed`; «Стоп» — отмена задачи;
+  resume <id>`; продолжение с изображением; неизвестный сеанс →
+  `resume_failed`; «Стоп» — отмена задачи;
 * OpenCode (`llm.opencode.run`), если установлен: `keep_session` →
-  `--session <id>`; неизвестный сеанс → `resume_failed`; «Стоп».
+  `--session <id>`; неизвестный сеанс → `resume_failed`; закрытая папка;
+  «Стоп».
 
-Промпты крошечные (одно слово в ответ), но это расход подписки: около 15
-коротких ходов на все CLI. Сеансы, начатые проверками продолжения,
-остаются в истории CLI (~/.claude/projects/<временная папка>,
-~/.codex/sessions); сеансы OpenCode скрипт удаляет сам.
+Промпты крошечные (одно слово в ответ), но это расход подписки: около 25
+коротких ходов на все CLI. Сеансы проверок продолжения остаются в истории
+CLI (~/.claude/projects/<временная папка>, ~/.codex/sessions), если не
+указать `--cleanup`: тогда скрипт удаляет их файлы (у Claude Code и Codex
+команды удаления нет). Сеансы OpenCode удаляются всегда.
 
     # из корня репозитория, в окружении приложения (uv run / .venv):
     python scripts/smoke_assist_providers.py            # только план, без вызовов
     python scripts/smoke_assist_providers.py --run      # выполнить все проверки
-    python scripts/smoke_assist_providers.py --run --only claude,codex --proxy none
+    python scripts/smoke_assist_providers.py --run --cleanup --only claude,codex --proxy none
+    python scripts/smoke_assist_providers.py --run --check deny,grep,reject-image
 
-Итог — таблица PASS / FAIL / SKIP; код выхода 0, если FAIL нет.
+Итог — таблица PASS / FAIL / SKIP; код выхода 1, если есть FAIL, иначе 0
+(в том числе у плана без `--run`).
 """
 
 import argparse
 import asyncio
+import base64
 import os
 import struct
 import sys
@@ -74,7 +83,19 @@ class Smoke:
         self.proxy = proxy
         self.work = work
         self.rows: list[tuple[str, str, float, str]] = []
+        self.sessions: list[tuple[str, str]] = []   # (провайдер, id) — для --cleanup
         self.image = red_png(work / "red.png")
+        # Папка «как база знаний»: открытая заметка и закрытая подпапка.
+        self.kb = work / "База знаний"
+        self.private = self.kb / "Личное"
+        self.private.mkdir(parents=True)
+        self.open_word, self.secret_word = code_word(), code_word()
+        (self.kb / "открытое.md").write_text(f"MARKER-{self.open_word}\n", encoding="utf-8")
+        (self.private / "секрет.md").write_text(f"MARKER-{self.secret_word}\n", encoding="utf-8")
+
+    def keep(self, provider: str, session_id: str | None) -> None:
+        if session_id and (provider, session_id) not in self.sessions:
+            self.sessions.append((provider, session_id))
 
     async def check(self, name: str, fn) -> None:
         print(f"… {name}", flush=True)
@@ -109,17 +130,61 @@ class Smoke:
         return (not reply.error and "red" in reply.text.lower()), _said(reply)
 
     async def claude_responder(self):
-        notes = self.work / "notes"
-        notes.mkdir(exist_ok=True)
-        word = code_word()
-        (notes / "note.txt").write_text(f"The secret word is {word}.\n", encoding="utf-8")
-        conv = self._conv(responder=True, add_dirs=[notes])
+        conv = self._conv(responder=True, add_dirs=[self.kb])
         try:
-            reply = await conv.send(f"Read the file {notes / 'note.txt'} with your Read tool and reply "
-                                    "with the secret word only.", timeout_s=TIMEOUT_S)
+            reply = await conv.send(f"Read the file {self.kb / 'открытое.md'} with your Read tool and "
+                                    "reply with the word after MARKER- only.", timeout_s=TIMEOUT_S)
         finally:
             conv.close()
-        return (not reply.error and word in reply.text), _said(reply)
+        return (not reply.error and self.open_word in reply.text), _said(reply)
+
+    async def claude_deny_read(self):
+        conv = self._conv(responder=True, add_dirs=[self.kb], deny_paths=[self.private])
+        try:
+            reply = await conv.send(
+                f"Use your Read tool on {self.private / 'секрет.md'} and reply with the word after "
+                "MARKER-. If the tool is denied or fails, reply with exactly: DENIED", timeout_s=TIMEOUT_S)
+        finally:
+            conv.close()
+        leaked = self.secret_word in reply.text
+        return (not reply.error and not leaked), f"{'УТЕЧКА: ' if leaked else ''}{_said(reply)}"
+
+    async def claude_deny_grep(self):
+        conv = self._conv(responder=True, add_dirs=[self.kb], deny_paths=[self.private])
+        try:
+            reply = await conv.send(
+                f"Use your Grep tool to search the folder {self.kb} recursively for the pattern "
+                "'MARKER-'. Reply with every word that follows MARKER- in the results, separated "
+                "by spaces, or NONE.", timeout_s=TIMEOUT_S)
+        finally:
+            conv.close()
+        found_open = self.open_word in reply.text
+        leaked = self.secret_word in reply.text
+        detail = f"открытое найдено: {found_open}, закрытое: {'УТЕЧКА' if leaked else 'нет'}; {_said(reply)}"
+        return (not reply.error and found_open and not leaked), detail
+
+    async def claude_rejected_image(self):
+        """Изображение, которое отвергнет API (заголовок PNG, внутри мусор, в
+        обход проверки — готовыми блоками), не портит сохранённый сеанс."""
+        word = code_word()
+        conv = self._conv(persist=True)
+        try:
+            first = await conv.send(f"Remember this code word: {word}. Reply with exactly: ok",
+                                    timeout_s=TIMEOUT_S)
+            self.keep("claude-code", conv.session_id)
+            if first.error:
+                return False, f"первый ход: {_said(first)}"
+            junk = base64.b64encode(b"\x89PNG\r\n\x1a\n" + os.urandom(256)).decode()
+            bad = await conv.send(content=[
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": junk}},
+                {"type": "text", "text": "What is in this image? One word."}], timeout_s=TIMEOUT_S)
+            self.keep("claude-code", conv.session_id)
+            after = await conv.send("What was the code word? Reply with the word only.", timeout_s=TIMEOUT_S)
+            self.keep("claude-code", conv.session_id)
+        finally:
+            conv.close()
+        ok = not bad.error and bool(bad.notes) and not after.error and word in after.text
+        return ok, f"с картинкой: {_said(bad)} {bad.notes}; после: {_said(after)}"
 
     async def claude_interrupt(self):
         conv = self._conv()
@@ -147,6 +212,7 @@ class Smoke:
             first = await conv.send(f"Remember this code word: {word}. Reply with exactly: ok",
                                     timeout_s=TIMEOUT_S)
             sid = conv.session_id
+            self.keep("claude-code", sid)
         finally:
             conv.close()
         if first.error or not sid:
@@ -190,12 +256,29 @@ class Smoke:
         first = await codex.run(f"Remember this code word: {word}. Reply with exactly: ok",
                                 system_prompt=SYSTEM, keep_session=True, cwd=self.work,
                                 timeout_s=TIMEOUT_S, proxy=self.proxy, effort="low")
+        self.keep("codex", first.session_id)
         if first.error or not first.session_id:
             return False, f"первый ход: {_said(first)}, id={first.session_id}"
         reply = await codex.run("What was the code word? Reply with the word only.", system_prompt=SYSTEM,
                                 resume=first.session_id, cwd=self.work, timeout_s=TIMEOUT_S,
                                 proxy=self.proxy, effort="low")
         return (not reply.error and word in reply.text), f"сеанс {first.session_id}: {_said(reply)}"
+
+    async def codex_resume_image(self):
+        """`exec … resume … --image=<png> <id> -`: порядок аргументов после
+        `resume` и что модель видит картинку в продолженном сеансе."""
+        from meet.llm import codex
+
+        first = await codex.run("Reply with exactly: ok", system_prompt=SYSTEM, keep_session=True,
+                                cwd=self.work, timeout_s=TIMEOUT_S, proxy=self.proxy, effort="low")
+        self.keep("codex", first.session_id)
+        if first.error or not first.session_id:
+            return False, f"первый ход: {_said(first)}, id={first.session_id}"
+        reply = await codex.run(COLOR_ASK, system_prompt=SYSTEM, resume=first.session_id,
+                                images=[self.image], cwd=self.work, timeout_s=TIMEOUT_S,
+                                proxy=self.proxy, effort="low")
+        ok = not reply.error and not reply.resume_failed and "red" in reply.text.lower()
+        return ok, f"сеанс {first.session_id}: {_said(reply)}"
 
     async def codex_resume_missing(self):
         from meet.llm import codex
@@ -226,7 +309,7 @@ class Smoke:
                                        system_prompt=SYSTEM, resume=first.session_id,
                                        timeout_s=TIMEOUT_S, proxy=self.proxy)
         finally:
-            _opencode_forget(first.session_id)
+            opencode.forget_session(first.session_id)
         return (not reply.error and word in reply.text), f"сеанс {first.session_id}: {_said(reply)}"
 
     async def opencode_resume_missing(self):
@@ -235,8 +318,19 @@ class Smoke:
         reply = await opencode.run("hi", system_prompt=SYSTEM, resume="ses_meetsmokeunknown0000",
                                    timeout_s=60, proxy=self.proxy)
         if reply.session_id:
-            _opencode_forget(reply.session_id)
+            opencode.forget_session(reply.session_id)
         return reply.resume_failed, _said(reply)
+
+    async def opencode_deny_read(self):
+        from meet.llm import opencode
+
+        reply = await opencode.run(
+            f"Read the file {self.private / 'секрет.md'} and reply with the word after MARKER-. "
+            "If reading is denied or fails, reply with exactly: DENIED",
+            system_prompt=SYSTEM, allowed_dirs=(self.kb,), deny_paths=[self.private],
+            timeout_s=TIMEOUT_S, proxy=self.proxy)
+        leaked = self.secret_word in reply.text
+        return (not leaked and not reply.error), f"{'УТЕЧКА: ' if leaked else ''}{_said(reply)}"
 
     async def opencode_interrupt(self):
         from meet.llm import opencode
@@ -262,14 +356,6 @@ async def _cancel_after(coro, after_s: float = 6.0):
     return False, "отмена не дошла: ход завершился"
 
 
-def _opencode_forget(session_id: str) -> None:
-    from meet.llm import opencode
-
-    exe = detect.find_opencode()
-    if exe and session_id:
-        opencode.delete_session(exe, session_id, str(opencode._keep_dir()), dict(os.environ))
-
-
 def _said(reply) -> str:
     if reply.error:
         flags = " [resume_failed]" if reply.resume_failed else ""
@@ -278,22 +364,29 @@ def _said(reply) -> str:
     return f"«{text[:80]}»"
 
 
+# (ключ для --check, название, метод)
 CHECKS = {
-    "claude": [("claude: изображение (stream-json)", "claude_image"),
-               ("claude: собеседник читает файл", "claude_responder"),
-               ("claude: стоп + ход после", "claude_interrupt"),
-               ("claude: продолжение сеанса", "claude_resume"),
-               ("claude: неизвестный сеанс", "claude_resume_missing"),
-               ("claude: изображение (Agent SDK)", "claude_sdk_image")],
-    "codex": [("codex: изображение --image=", "codex_image"),
-              ("codex: продолжение сеанса", "codex_resume"),
-              ("codex: неизвестный сеанс", "codex_resume_missing"),
-              ("codex: стоп (kill)", "codex_interrupt")],
-    "opencode": [("opencode: продолжение сеанса", "opencode_resume"),
-                 ("opencode: неизвестный сеанс", "opencode_resume_missing"),
-                 ("opencode: стоп (kill)", "opencode_interrupt")],
+    "claude": [("image", "claude: изображение (stream-json)", "claude_image"),
+               ("read", "claude: агент читает файл базы знаний", "claude_responder"),
+               ("deny", "claude: закрытая папка — Read запрещён", "claude_deny_read"),
+               ("grep", "claude: Grep по базе не видит закрытую папку", "claude_deny_grep"),
+               ("reject-image", "claude: отвергнутое изображение не портит сеанс", "claude_rejected_image"),
+               ("stop", "claude: стоп + ход после", "claude_interrupt"),
+               ("resume", "claude: продолжение сеанса", "claude_resume"),
+               ("resume-missing", "claude: неизвестный сеанс", "claude_resume_missing"),
+               ("sdk-image", "claude: изображение (Agent SDK)", "claude_sdk_image")],
+    "codex": [("image", "codex: изображение --image=", "codex_image"),
+              ("resume", "codex: продолжение сеанса", "codex_resume"),
+              ("resume-image", "codex: продолжение с изображением", "codex_resume_image"),
+              ("resume-missing", "codex: неизвестный сеанс", "codex_resume_missing"),
+              ("stop", "codex: стоп (kill)", "codex_interrupt")],
+    "opencode": [("resume", "opencode: продолжение сеанса", "opencode_resume"),
+                 ("resume-missing", "opencode: неизвестный сеанс", "opencode_resume_missing"),
+                 ("deny", "opencode: закрытая папка — чтение запрещено", "opencode_deny_read"),
+                 ("stop", "opencode: стоп (kill)", "opencode_interrupt")],
 }
 FINDERS = {"claude": detect.find_claude, "codex": detect.find_codex, "opencode": detect.find_opencode}
+PROVIDER = {"claude": "claude-code", "codex": "codex", "opencode": "opencode"}
 
 
 def _versions() -> dict:
@@ -314,24 +407,32 @@ def _versions() -> dict:
     return out
 
 
+def _selected(only, keys):
+    for group in only:
+        for key, title, method in CHECKS.get(group, []):
+            if keys is None or key in keys or f"{group}:{key}" in keys:
+                yield group, title, method
+
+
 async def main_async(args) -> int:
     only = [x.strip() for x in (args.only or "claude,codex,opencode").split(",") if x.strip()]
+    keys = {x.strip() for x in args.check.split(",") if x.strip()} if args.check else None
     versions = _versions()
     print("CLI:", ", ".join(f"{k} = {v or 'не найден'}" for k, v in versions.items()))
     if not args.run:
         print("\nПлан (вызовов модели не было; запустите с --run):")
-        for group in only:
-            for title, _ in CHECKS.get(group, []):
-                print(f"  {title}{'' if versions.get(group) else '  — пропуск: CLI не найден'}")
-        return 2
+        for group, title, _ in _selected(only, keys):
+            print(f"  {title}{'' if versions.get(group) else '  — пропуск: CLI не найден'}")
+        print("\nСеансы проверок продолжения останутся в истории Claude Code и Codex; "
+              "--cleanup удалит их файлы после прогона.")
+        return 0
     with tempfile.TemporaryDirectory(prefix="meet-smoke-") as tmp:
         smoke = Smoke(args.proxy, Path(tmp))
-        for group in only:
-            for title, method in CHECKS.get(group, []):
-                if not versions.get(group):
-                    smoke.skip(title, "CLI не найден")
-                    continue
-                await smoke.check(title, getattr(smoke, method))
+        for group, title, method in _selected(only, keys):
+            if not versions.get(group):
+                smoke.skip(title, "CLI не найден")
+                continue
+            await smoke.check(title, getattr(smoke, method))
     width = max(len(r[0]) for r in smoke.rows) if smoke.rows else 10
     print("\n" + "=" * (width + 60))
     print(f"{'проверка'.ljust(width)}  итог  время   подробности")
@@ -342,6 +443,15 @@ async def main_async(args) -> int:
     failed = sum(1 for r in smoke.rows if r[1] == FAIL)
     print(f"PASS {sum(1 for r in smoke.rows if r[1] == PASS)}, FAIL {failed}, "
           f"SKIP {sum(1 for r in smoke.rows if r[1] == SKIP)}")
+    if smoke.sessions:
+        if args.cleanup:
+            from meet import llm
+
+            gone = sum(llm.forget_session(p, sid) for p, sid in smoke.sessions)
+            print(f"--cleanup: удалено файлов сеансов: {gone} (сеансов: {len(smoke.sessions)})")
+        else:
+            print("Сеансы проверок остались в истории CLI: " +
+                  ", ".join(f"{p} {sid}" for p, sid in smoke.sessions))
     return 1 if failed else 0
 
 
@@ -349,6 +459,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--run", action="store_true", help="выполнить проверки (настоящие вызовы моделей)")
     parser.add_argument("--only", help="группы через запятую: claude,codex,opencode")
+    parser.add_argument("--check", help="только эти проверки: ключи через запятую (deny,grep,reject-image,"
+                                        "resume-image,…) или группа:ключ (codex:resume-image)")
+    parser.add_argument("--cleanup", action="store_true",
+                        help="после прогона удалить сеансы проверок из истории Claude Code и Codex")
     parser.add_argument("--proxy", default="system",
                         help="как llm.proxy: system (по умолчанию), none или http://хост:порт")
     args = parser.parse_args()
