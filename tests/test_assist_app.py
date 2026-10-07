@@ -593,6 +593,46 @@ def test_remove_endpoint_retries_while_resident_reads_it(tmp_path, monkeypatch):
     assert len(calls) == 2 and not ep.exists()
 
 
+def _replace_busy_once(monkeypatch) -> list:
+    """os.replace, первый раз падающий, как на Windows, когда цель держит
+    открытой читатель (sharing violation, WinError 5)."""
+    real, calls = os.replace, []
+
+    def busy_once(src, dst):
+        calls.append(dst)
+        if len(calls) == 1:
+            raise PermissionError(5, "Отказано в доступе")
+        return real(src, dst)
+
+    monkeypatch.setattr(os, "replace", busy_once)
+    return calls
+
+
+def test_write_endpoint_retries_while_resident_reads_it(tmp_path, monkeypatch):
+    """Резидент опрашивает live.json, пока ребёнок переписывает его на каждом
+    этапе старта: замена в миг чтения — PermissionError. Этап не должен
+    ронять ассистента — заменяем со второй попытки."""
+    from meet.assist import app as app_mod
+
+    ep = tmp_path / "live.json"
+    app_mod.write_endpoint(ep, port=5, folder=tmp_path, ready=False, stage="asr")
+    calls = _replace_busy_once(monkeypatch)
+    app_mod.write_endpoint(ep, port=5, folder=tmp_path, ready=True)
+    assert len(calls) == 2
+    assert json.loads(ep.read_text(encoding="utf-8"))["ready"] is True
+    assert [p.name for p in tmp_path.iterdir()] == ["live.json"]  # без хвостов .tmp
+
+
+def test_live_state_save_retries_while_someone_reads_it(tmp_path, monkeypatch):
+    """live_state.json читают окно и итоги когда угодно — та же гонка."""
+    path = tmp_path / LIVE_STATE_JSON
+    LiveState().save(path)
+    calls = _replace_busy_once(monkeypatch)
+    LiveState().save(path)
+    assert len(calls) == 2 and json.loads(path.read_text(encoding="utf-8"))
+    assert [p.name for p in tmp_path.iterdir()] == [LIVE_STATE_JSON]
+
+
 def test_parent_check_sees_death_while_someone_holds_its_handle():
     """Оболочка держит хэндл резидента (std::process::Child): OpenProcess на
     умерший процесс при открытом хэндле удаётся. Мёртвый — по коду выхода."""

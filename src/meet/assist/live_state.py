@@ -33,6 +33,8 @@ import time
 from difflib import SequenceMatcher
 from pathlib import Path
 
+from meet import library
+
 LIVE_STATE_JSON = "live_state.json"
 
 HINT_KINDS = ("ask_you", "question", "risk", "unanswered", "term", "followup")
@@ -663,7 +665,7 @@ class LiveState:
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         try:
             tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-            os.replace(tmp, path)
+            library.replace_atomic(tmp, path)  # читатель держит файл — повтор
         finally:
             tmp.unlink(missing_ok=True)
 

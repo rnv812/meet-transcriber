@@ -30,7 +30,7 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
-from meet import paths
+from meet import library, paths
 from meet.assist.agent import check_auth
 from meet.assist.bus import TranscriptBus
 from meet.assist.context import collect_task_context
@@ -346,7 +346,9 @@ def write_endpoint(path: Path, *, port: int, folder: Path,
         info["devices_fallback"] = devices_fallback
     try:
         tmp.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, path)
+        # Резидент опрашивает файл весь старт: замена в миг его чтения на
+        # Windows — PermissionError, этап ронял бы ассистента. С повтором.
+        library.replace_atomic(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)  # после replace его уже нет
 

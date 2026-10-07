@@ -74,7 +74,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from meet import paths, temp_meeting
+from meet import library, paths, temp_meeting
 
 LIVE_STARTING = "live.starting"
 # Этап старта сменился: {"stage": текст или None, "ready": готов ли}.
@@ -430,7 +430,7 @@ def _mark_cut(folder) -> bool:
     try:
         # Атомарно, как сам ассистент (live_state.save): итоги читают его когда угодно.
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-        os.replace(tmp, path)
+        library.replace_atomic(tmp, path)  # окно может читать её в этот миг
     except OSError:
         return False
     finally:
