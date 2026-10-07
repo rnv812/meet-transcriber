@@ -993,6 +993,8 @@ mod run {
         }
 
         fn check(&self, app: &Path, job: &Apply) -> Result<(), String> {
+            // Своими правами — нарочно против подписи работающего пакета (не
+            // закреплённого сертификата): границы прав этот путь не пересекает.
             let (verdict, detail) = signature(app, job.requirement.as_deref(), &job.identifier);
             if verdict != Verdict::Valid {
                 return Err(format!("подпись: {detail}"));
@@ -1213,7 +1215,9 @@ mod run {
     /// `/Applications/.Meet.app.work-<pid>`. Своя проверка (права копии, на
     /// месте — Meet и не новее), затем обмен с /Applications/Meet.app, запуск
     /// от имени `uid` (не 0), не запустилась — прежняя возвращается. Новая
-    /// версия остаётся root:wheel без записи для других. Строки журнала — в
+    /// версия — root:wheel без записи для других; прежний владелец
+    /// возвращается, только если он был не root (`owner_to_restore`). Строки
+    /// журнала — в
     /// вывод (их пишет в update.log помощник).
     pub fn run_privileged(pid: u32, uid: u32) -> i32 {
         // SAFETY: geteuid без аргументов, ошибок не бывает.
@@ -1242,7 +1246,23 @@ mod run {
             &facts,
             mac_install::BUNDLE_ID,
         );
+        // Владелец прежнего пакета — до обмена (после него там новая версия).
+        let previous = std::fs::symlink_metadata(&target)
+            .ok()
+            .map(|meta| (meta.uid(), meta.gid()));
         let placed = privileged_swap(&ops, pid, guard);
+        if placed == Placed::Updated {
+            if let Some((uid, gid)) = mac_install::owner_to_restore(previous) {
+                let chown = Command::new("/usr/sbin/chown")
+                    .arg("-R")
+                    .arg(format!("{uid}:{gid}"))
+                    .arg(&target)
+                    .status();
+                if !chown.is_ok_and(|status| status.success()) {
+                    ops.log("прежний владелец новой версии не вернулся — остаётся root:wheel");
+                }
+            }
+        }
         let code = mac_install::exit_code(&placed);
         let mut lines = ops.lines.borrow().clone();
         if let Placed::Failed(why) | Placed::Broken(why) = &placed {

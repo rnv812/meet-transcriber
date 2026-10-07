@@ -433,6 +433,15 @@ pub fn parse_check_reply(reply: &str) -> Option<(Vec<Vec<u8>>, Vec<String>)> {
     Some((values, names))
 }
 
+/// Владелец, которого вернуть новой версии после шага от администратора:
+/// прежний, только если прежний пакет был и принадлежал не root (его ставил
+/// пользователь-администратор перетаскиванием). ACL и лишние права копии уже
+/// сняты и проверены — смена владельца ничего сверх прежнего не даёт. Иначе
+/// (`None`) новая версия остаётся root:wheel.
+pub fn owner_to_restore(previous: Option<(u32, u32)>) -> Option<(u32, u32)> {
+    previous.filter(|(uid, _)| *uid != 0)
+}
+
 /// Запись в дереве копии, которая даёт запись кому-то кроме root: владелец не
 /// root, запись для group/other или set-id/sticky (`mode` — `st_mode`).
 pub fn insecure_entry(uid: u32, mode: u32) -> bool {
@@ -1043,9 +1052,16 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn admin_script_round_trips_hostile_arguments_through_osascript() {
-        let marker = std::path::Path::new("/tmp/meet-pwned");
+        // Свой маркер на процесс: параллельные прогоны не мешают друг другу.
+        let marker_text = format!("/tmp/meet-pwned-{}", std::process::id());
+        let marker = std::path::Path::new(&marker_text);
         let _ = std::fs::remove_file(marker);
-        for nasty in HOSTILE {
+        let hostile: Vec<String> = HOSTILE
+            .iter()
+            .map(|path| path.replace("/tmp/meet-pwned", &marker_text))
+            .collect();
+        for nasty in &hostile {
+            let nasty = nasty.as_str();
             let args = admin_command_for(&admin_job(nasty), false).unwrap();
             let out = std::process::Command::new("/usr/bin/osascript")
                 .args(&args)
@@ -1081,7 +1097,7 @@ mod tests {
         // Значение не того вида не проходит дальше проверки (64).
         let mut evil = admin_command_for(&admin_job("/tmp/x/Meet.app"), false).unwrap();
         let n = evil.len();
-        evil[n - 3] = "0.3.7$(touch /tmp/meet-pwned)".into();
+        evil[n - 3] = format!("0.3.7$(touch {marker_text})");
         let out = std::process::Command::new("/usr/bin/osascript")
             .args(&evil)
             .output()
@@ -1101,6 +1117,16 @@ mod tests {
         assert_eq!(values, [b"/tmp".to_vec(), b"42".to_vec()]);
         assert_eq!(env, ["PATH", "PWD", "SHLVL", "_"]);
         assert_eq!(parse_check_reply("zz PATH,"), None);
+    }
+
+    #[test]
+    fn previous_owner_is_restored_only_if_it_was_not_root() {
+        assert_eq!(owner_to_restore(Some((501, 20))), Some((501, 20)));
+        assert_eq!(owner_to_restore(Some((502, 80))), Some((502, 80)));
+        // Прежний — root (или его не было): остаётся root:wheel.
+        assert_eq!(owner_to_restore(Some((0, 80))), None);
+        assert_eq!(owner_to_restore(Some((0, 0))), None);
+        assert_eq!(owner_to_restore(None), None);
     }
 
     #[test]
