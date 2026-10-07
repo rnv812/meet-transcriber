@@ -24,6 +24,15 @@ macro_rules! shell_log {
 }
 pub(crate) use shell_log;
 
+/// Строка в `update.log` (и в `shell.log`) — каждый шаг и решение обновления:
+/// журнал, который человек пришлёт, если обновление не встало на место.
+macro_rules! update_log {
+    ($($arg:tt)*) => {
+        $crate::logs::write_update(&format!($($arg)*))
+    };
+}
+pub(crate) use update_log;
+
 pub fn logs_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("logs")
 }
@@ -34,6 +43,11 @@ pub fn resident_log(data_dir: &Path) -> PathBuf {
 
 pub fn shell_log_path(data_dir: &Path) -> PathBuf {
     logs_dir(data_dir).join("shell.log")
+}
+
+/// Шаги обновления приложения (`update_log!`).
+pub fn update_log_path(data_dir: &Path) -> PathBuf {
+    logs_dir(data_dir).join("update.log")
 }
 
 /// Вывод uv при установке движка (`engine.rs`).
@@ -125,6 +139,15 @@ pub fn write(text: &str) {
     }
 }
 
+/// Записать строку обновления: в `update.log` и в `shell.log`.
+pub fn write_update(text: &str) {
+    write(&format!("обновление: {text}"));
+    let path = update_log_path(&resident::data_dir());
+    if let Ok(mut file) = open_append(&path) {
+        let _ = file.write_all(line(SystemTime::now(), text).as_bytes());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +177,7 @@ mod tests {
         assert_eq!(logs_dir(data), data.join("logs"));
         assert_eq!(resident_log(data), data.join("logs").join("resident.log"));
         assert_eq!(shell_log_path(data), data.join("logs").join("shell.log"));
+        assert_eq!(update_log_path(data), data.join("logs").join("update.log"));
         assert_eq!(
             engine_install_log(data),
             data.join("logs").join("engine-install.log")

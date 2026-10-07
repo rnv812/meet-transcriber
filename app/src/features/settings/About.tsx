@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import pkg from "../../../package.json";
 import { type Endpoint, getDiagnostics } from "../../lib/api";
 import {
-  UPDATE_CANCELLED, cancelUpdate, checkUpdate, installUpdate, onUpdateProgress, openUrl, releasesPage,
-  type InstallOutcome, type UpdateCheck, type UpdateProgress,
+  UPDATE_CANCELLED, cancelUpdate, checkUpdate, installUpdate, moveToApplications, onUpdateProgress, openLogs,
+  openUrl, releasesPage, updateStatus,
+  type InstallOutcome, type InstallResult, type UpdateCheck, type UpdateProgress, type UpdateStatus,
 } from "../../lib/shell";
 import { Button } from "../../ui/Button";
 import { ProgressBar } from "../../ui/ProgressBar";
@@ -53,8 +54,10 @@ function UpdateTip() {
         в конце запустит её. Записи, голоса и настройки сохранятся.
       </TipLine>
       <TipLine>
-        На macOS новая версия встаёт на место прежней, и Meet запускается заново сам. Если папка
-        с Meet недоступна на запись, откроется образ диска — перетащите Meet в «Программы».
+        На macOS новая версия встаёт на место прежней, и Meet запускается заново сам. Если
+        «Программы» недоступны на запись (нет прав администратора), macOS один раз спросит пароль
+        администратора. Образ диска для ручной замены откроется, только если иначе нельзя, — и с
+        причиной; все шаги записываются в журнал update.log.
       </TipLine>
     </HelpTip>
   );
@@ -64,9 +67,27 @@ function UpdateTip() {
 export const LAUNCHED: Record<InstallOutcome, string> = {
   installer: "Установщик запущен, приложение закрывается…",
   "in-place": "Устанавливаю новую версию — Meet закроется и запустится заново…",
+  "in-place-admin":
+    "Устанавливаю новую версию — macOS спросит пароль администратора, затем Meet запустится заново…",
   manual:
     "Образ открыт в Finder: перетащите Meet в «Программы» с заменой и запустите заново. Приложение закрывается…",
 };
+
+/** Текст итога; у ручной установки — с причиной, почему не на месте. */
+export function launchedText(result: InstallResult): string {
+  if (result.outcome === "manual" && result.reason) {
+    return `Обновление на месте не удалось: ${result.reason}. Открыт образ диска: перетащите Meet в «Программы» с заменой и запустите заново. Приложение закрывается…`;
+  }
+  return LAUNCHED[result.outcome] ?? LAUNCHED.installer;
+}
+
+/** Строка о прошлой неудачной попытке («О программе»). */
+export function lastFailureText(status: UpdateStatus | null): string | null {
+  const last = status?.last_failure;
+  if (!last) return null;
+  const when = last.at.replace(/:\d\dZ$/, "").replace("Z", "");
+  return `Прошлое обновление (${when} UTC) не встало на место: ${last.reason ?? "причина в журнале update.log"}`;
+}
 
 type State =
   | { kind: "idle" }
@@ -75,7 +96,7 @@ type State =
   | { kind: "failed"; error: string }
   | { kind: "installing"; result: UpdateCheck; progress: UpdateProgress | null }
   | { kind: "cancelled"; result: UpdateCheck }
-  | { kind: "launched"; outcome: InstallOutcome }
+  | { kind: "launched"; result: InstallResult }
   | { kind: "confirm"; result: UpdateCheck }
   | { kind: "install-failed"; result: UpdateCheck; error: string };
 
@@ -110,7 +131,7 @@ function UpdateRow() {
     setState({ kind: "installing", result, progress: null });
     try {
       const outcome = await installUpdate(confirmed);
-      setState({ kind: "launched", outcome: outcome ?? "installer" });
+      setState({ kind: "launched", result: outcome ?? { outcome: "installer", reason: null } });
     } catch (cause) {
       const error = errorText(cause);
       setState(error === UPDATE_CONFIRM_WORK ? { kind: "confirm", result }
@@ -172,8 +193,38 @@ function UpdateRow() {
             <Button size="sm" onClick={() => void cancelUpdate()}>Отменить загрузку</Button>
           </>
         )}
-        {state.kind === "launched" && <span>{LAUNCHED[state.outcome] ?? LAUNCHED.installer}</span>}
+        {state.kind === "launched" && <span>{launchedText(state.result)}</span>}
       </div>
+    </Row>
+  );
+}
+
+/**
+ * macOS: Meet запущен не из «Программ» (из «Загрузок», образа, App
+ * Translocation) — обновления на месте не работают; кнопка перемещения.
+ */
+function MoveRow({ status }: { status: UpdateStatus }) {
+  const [state, setState] = useState<{ kind: "idle" } | { kind: "moving" } | { kind: "failed"; error: string }>(
+    { kind: "idle" },
+  );
+  const move = async () => {
+    setState({ kind: "moving" });
+    try {
+      await moveToApplications();
+    } catch (cause) {
+      setState({ kind: "failed", error: errorText(cause) });
+    }
+  };
+  return (
+    <Row label="Расположение" hint={status.bundle ?? undefined}>
+      <span className="move" role="status">
+        <span>{status.move_hint ?? "Meet лежит не в «Программах» — обновления не смогут заменить его на месте."}</span>
+        <Button variant="primary" busy={state.kind === "moving"} onClick={() => void move()}>
+          Переместить Meet в Программы
+        </Button>
+        {state.kind === "moving" && <span className="muted">Перемещаю — Meet перезапустится…</span>}
+        {state.kind === "failed" && <span className="update__error">{state.error}</span>}
+      </span>
     </Row>
   );
 }
@@ -205,9 +256,12 @@ export function About({ endpoint }: { endpoint: Endpoint }) {
   const [dataDir, setDataDir] = useState<string | null>(null);
   // Страница выпусков — от оболочки (репозиторий обновлений назван только там).
   const [releases, setReleases] = useState<string | null>(null);
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
   useEffect(() => {
     void releasesPage().then(setReleases);
+    void updateStatus().then(setStatus);
   }, []);
+  const lastFailure = lastFailureText(status);
   useEffect(() => {
     getDiagnostics(endpoint, 1)
       .then((d) => setDataDir((d.paths as Record<string, string> | undefined)?.data_dir ?? null))
@@ -217,6 +271,11 @@ export function About({ endpoint }: { endpoint: Endpoint }) {
     <>
       <Row label="Версия"><span>{pkg.version}</span></Row>
       <UpdateRow />
+      {status?.offer_move && <MoveRow status={status} />}
+      <Row label="Журнал обновления" hint="update.log — пришлите его, если обновление не встало на место">
+        {lastFailure && <span className="update__error">{lastFailure}</span>}
+        <Button onClick={() => void openLogs()}>Открыть папку журналов</Button>
+      </Row>
       <Row
         label="Обновить вручную"
         hint="Скачайте новый установщик и запустите его — данные сохранятся"

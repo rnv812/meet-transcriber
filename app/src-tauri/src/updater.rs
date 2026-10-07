@@ -10,8 +10,10 @@
 // `Meet_<версия>_aarch64.dmg` (заглавная M: шаблон Windows `meet_…_x64-setup.exe`
 // его не примет, и наоборот). Скачанный и сверенный образ ставится на место
 // работающего Meet.app после проверки подписи, приложение перезапускается
-// (`mac_update.rs`); папка недоступна на запись — образ открывается в
-// Finder, и Meet заменяют перетаскиванием, как раньше.
+// (`mac_update.rs`); «Программы» недоступны на запись — с паролем
+// администратора; Meet запущен не из «Программ» — новая версия встаёт в
+// /Applications (`mac_install.rs`). Образ в Finder — только когда иначе
+// нельзя, и с причиной (`Installed::reason`). Шаги — в logs/update.log.
 //
 // Всё, что проверяется без сети, — чистые функции с тестами: сравнение
 // версий, разбор выпуска, выбор файла, разбор сумм, отказ во время записи.
@@ -29,7 +31,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter};
 
 use crate::api;
-use crate::logs::shell_log;
+use crate::logs::{shell_log, update_log};
 use crate::netproxy::{self, InternetSettings};
 use crate::platform::{self, Os};
 use crate::resident;
@@ -378,9 +380,34 @@ pub enum Outcome {
     /// macOS: новая версия встанет на место старой после выхода и запустится.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     InPlace,
+    /// macOS: то же, но замену делает шаг от администратора (macOS спросит
+    /// пароль).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    InPlaceAdmin,
     /// macOS: образ открыт в Finder — заменить Meet перетаскиванием.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Manual,
+}
+
+/// Ответ `install_update`: итог и (для `Manual`) причина, почему не на месте.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Installed {
+    pub outcome: Outcome,
+    pub reason: Option<String>,
+}
+
+/// Ответ `update_status` окну («О программе»).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UpdateStatus {
+    /// macOS: где запущен Meet (`None` — Windows или не из пакета).
+    pub location: Option<crate::mac_install::Location>,
+    pub bundle: Option<String>,
+    /// Предложить «Переместить Meet в Программы».
+    pub offer_move: bool,
+    /// Текст вопроса о перемещении (почему).
+    pub move_hint: Option<String>,
+    /// Последняя неудачная попытка обновления (`logs/update-last.json`).
+    pub last_failure: Option<crate::mac_install::LastAttempt>,
 }
 
 /// Ответ `check_update` окну.
@@ -599,7 +626,7 @@ fn resident_load() -> (Option<Value>, Option<Value>) {
     (state, jobs)
 }
 
-fn refusal_now(confirmed: bool) -> Option<&'static str> {
+pub(crate) fn refusal_now(confirmed: bool) -> Option<&'static str> {
     let (state, jobs) = resident_load();
     install_refusal(state.as_ref(), jobs.as_ref(), confirmed)
 }
@@ -609,14 +636,14 @@ fn refusal_now(confirmed: bool) -> Option<&'static str> {
 /// `confirmed` — человек согласился прервать идущую расшифровку
 /// (см. WORK_IN_PROGRESS).
 #[tauri::command]
-pub async fn install_update(app: AppHandle, confirmed: Option<bool>) -> Result<Outcome, String> {
+pub async fn install_update(app: AppHandle, confirmed: Option<bool>) -> Result<Installed, String> {
     let confirmed = confirmed.unwrap_or(false);
     tauri::async_runtime::spawn_blocking(move || install_blocking(&app, confirmed))
         .await
         .map_err(|error| error.to_string())?
 }
 
-fn install_blocking(app: &AppHandle, confirmed: bool) -> Result<Outcome, String> {
+fn install_blocking(app: &AppHandle, confirmed: bool) -> Result<Installed, String> {
     let _busy = Busy::begin()?;
     CANCEL.store(false, AtomicOrdering::SeqCst);
     if let Some(refusal) = refusal_now(confirmed) {
@@ -635,14 +662,11 @@ fn install_blocking(app: &AppHandle, confirmed: bool) -> Result<Outcome, String>
         .timeout(API_TIMEOUT)
         .call()
         .map_err(|error| {
-            shell_log!("обновление: SHA256SUMS.txt не скачался: {error}");
+            update_log!("SHA256SUMS.txt не скачался: {error}");
             NO_DOWNLOAD.to_string()
         })?;
     if !download_host_ok(sums_reply.get_url()) {
-        shell_log!(
-            "обновление: SHA256SUMS.txt пришёл с {}",
-            sums_reply.get_url()
-        );
+        update_log!("SHA256SUMS.txt пришёл с {}", sums_reply.get_url());
         return Err(FOREIGN_HOST.to_string());
     }
     let sums_text = sums_reply
@@ -670,10 +694,11 @@ fn install_blocking(app: &AppHandle, confirmed: bool) -> Result<Outcome, String>
         let _ = std::fs::remove_file(dir.join(name));
     }
     if ready {
-        shell_log!("обновление: {} уже скачан и сверен", installer.name);
+        update_log!("{} уже скачан и сверен", installer.name);
     } else {
-        shell_log!(
-            "обновление: скачиваю {} ({} байт)",
+        update_log!(
+            "у нас {current}, выпуск {}: скачиваю {} ({} байт)",
+            release.version,
             installer.name,
             installer.size
         );
@@ -689,7 +714,7 @@ fn install_blocking(app: &AppHandle, confirmed: bool) -> Result<Outcome, String>
             return Err(CANCELLED.to_string());
         }
         if actual != expected {
-            shell_log!("обновление: SHA-256 не совпал (ждали {expected}, получили {actual})");
+            update_log!("SHA-256 не совпал (ждали {expected}, получили {actual})");
             let _ = std::fs::remove_file(&partial);
             return Err(CORRUPTED.to_string());
         }
@@ -715,11 +740,11 @@ fn download(
     path: &Path,
 ) -> Result<String, String> {
     let response = agent.get(&asset.url).call().map_err(|error| {
-        shell_log!("обновление: установщик не скачался: {error}");
+        update_log!("установщик не скачался: {error}");
         NO_DOWNLOAD.to_string()
     })?;
     if !download_host_ok(response.get_url()) {
-        shell_log!("обновление: установщик пришёл с {}", response.get_url());
+        update_log!("установщик пришёл с {}", response.get_url());
         return Err(FOREIGN_HOST.to_string());
     }
     let total = response
@@ -735,14 +760,14 @@ fn download(
     let mut last = Instant::now() - PROGRESS_EVERY;
     loop {
         let read = reader.read(&mut buffer).map_err(|error| {
-            shell_log!("обновление: загрузка оборвалась: {error}");
+            update_log!("загрузка оборвалась: {error}");
             NO_DOWNLOAD.to_string()
         })?;
         if read == 0 {
             break;
         }
         if cancel_requested() {
-            shell_log!("обновление: загрузка отменена");
+            update_log!("загрузка отменена");
             return Err(CANCELLED.to_string());
         }
         hasher.update(&buffer[..read]);
@@ -770,19 +795,73 @@ fn download(
 /// приложение (`--quit` в `hooks.nsh`), но выход отсюда быстрее и тот же.
 /// macOS — `mac_update::apply`.
 #[cfg(not(target_os = "macos"))]
-fn launch_and_quit(app: &AppHandle, installer: &Path, _version: &str) -> Result<Outcome, String> {
-    shell_log!("обновление: запускаю {}", installer.display());
+fn launch_and_quit(app: &AppHandle, installer: &Path, _version: &str) -> Result<Installed, String> {
+    update_log!("запускаю {}", installer.display());
     crate::windows::shell_execute(&installer.to_string_lossy())
         .map_err(|code| format!("Не удалось запустить установщик (код {code})"))?;
     crate::tray::quit(app);
-    Ok(Outcome::Installer)
+    Ok(Installed {
+        outcome: Outcome::Installer,
+        reason: None,
+    })
 }
 
 /// macOS: заменить Meet.app на месте или открыть образ (`mac_update.rs`);
 /// `version` — версия выпуска: пакет в образе обязан быть ею.
 #[cfg(target_os = "macos")]
-fn launch_and_quit(app: &AppHandle, image: &Path, version: &str) -> Result<Outcome, String> {
+fn launch_and_quit(app: &AppHandle, image: &Path, version: &str) -> Result<Installed, String> {
     crate::mac_update::apply(app, image, version)
+}
+
+/// Последняя попытка, если она не удалась (иначе `None`).
+pub fn last_failure(text: Option<&str>) -> Option<crate::mac_install::LastAttempt> {
+    text.and_then(crate::mac_install::parse_last_attempt)
+        .filter(crate::mac_install::LastAttempt::failed)
+}
+
+/// «О программе»: где запущен Meet и чем кончилась прошлая попытка.
+#[tauri::command]
+pub fn update_status() -> UpdateStatus {
+    let path = crate::mac_install::last_attempt_path(&resident::data_dir());
+    let last = std::fs::read_to_string(path).ok();
+    #[cfg(target_os = "macos")]
+    let place = crate::mac_update::location();
+    #[cfg(not(target_os = "macos"))]
+    let place: Option<(std::path::PathBuf, crate::mac_install::Location)> = None;
+    let offer_move = place
+        .as_ref()
+        .is_some_and(|(_, location)| crate::mac_install::offers_move(*location));
+    UpdateStatus {
+        location: place.as_ref().map(|(_, location)| *location),
+        bundle: place
+            .as_ref()
+            .map(|(bundle, _)| bundle.to_string_lossy().into_owned()),
+        offer_move,
+        move_hint: place
+            .as_ref()
+            .filter(|_| offer_move)
+            .map(|(_, location)| crate::mac_install::move_question(*location)),
+        last_failure: last_failure(last.as_deref()),
+    }
+}
+
+/// «Переместить Meet в Программы» (macOS): приложение выходит и запускается
+/// из /Applications. Ошибка — текст для окна.
+#[tauri::command]
+pub async fn move_to_applications(app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || move_blocking(&app))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[cfg(target_os = "macos")]
+fn move_blocking(app: &AppHandle) -> Result<(), String> {
+    crate::mac_update::move_to_applications(app)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn move_blocking(_app: &AppHandle) -> Result<(), String> {
+    Err("Перемещение в «Программы» — только на macOS".into())
 }
 
 #[cfg(test)]
@@ -1245,6 +1324,27 @@ mod tests {
         assert_eq!(json!(Outcome::Installer), json!("installer"));
         assert_eq!(json!(Outcome::InPlace), json!("in-place"));
         assert_eq!(json!(Outcome::Manual), json!("manual"));
+        assert_eq!(json!(Outcome::InPlaceAdmin), json!("in-place-admin"));
+        assert_eq!(
+            json!(Installed {
+                outcome: Outcome::Manual,
+                reason: Some("папка недоступна".into())
+            }),
+            json!({"outcome": "manual", "reason": "папка недоступна"})
+        );
+    }
+
+    #[test]
+    fn only_a_failed_last_attempt_is_shown() {
+        let failed = r#"{"at":"2026-10-07 10:00:00Z","finish":"gave-up","reason":"x"}"#;
+        assert_eq!(
+            last_failure(Some(failed)).unwrap().reason.as_deref(),
+            Some("x")
+        );
+        let ok = r#"{"at":"2026-10-07 10:00:00Z","finish":"updated","reason":null}"#;
+        assert_eq!(last_failure(Some(ok)), None);
+        assert_eq!(last_failure(Some("garbage")), None);
+        assert_eq!(last_failure(None), None);
     }
 
     #[test]

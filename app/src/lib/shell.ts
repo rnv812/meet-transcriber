@@ -282,19 +282,52 @@ export async function checkUpdate(): Promise<UpdateCheck> {
 /**
  * Чем закончилась установка (`updater::Outcome`): `installer` — установщик
  * Windows запущен; `in-place` — macOS заменит Meet.app на месте и запустит
- * новую версию; `manual` — macOS открыла образ в Finder, Meet переносят в
- * «Программы» вручную.
+ * новую версию; `in-place-admin` — то же, но macOS сначала спросит пароль
+ * администратора; `manual` — macOS открыла образ в Finder, Meet переносят в
+ * «Программы» вручную (`reason` — почему не на месте).
  */
-export type InstallOutcome = "installer" | "in-place" | "manual";
+export type InstallOutcome = "installer" | "in-place" | "in-place-admin" | "manual";
+export type InstallResult = { outcome: InstallOutcome; reason: string | null };
+
+/** Ответ оболочки: объект `{outcome, reason}` или (старая оболочка) строка. */
+export function toInstallResult(reply: unknown): InstallResult {
+  if (typeof reply === "string") return { outcome: reply as InstallOutcome, reason: null };
+  const value = (reply ?? {}) as Partial<InstallResult>;
+  return { outcome: value.outcome ?? "installer", reason: value.reason ?? null };
+}
 
 /**
  * Скачать, сверить и запустить установщик; после этого приложение выходит.
  * `confirmed` — человек согласился прервать идущую расшифровку (без него
  * оболочка в этом случае отвечает вопросом `UPDATE_CONFIRM_WORK` из About).
  */
-export async function installUpdate(confirmed = false): Promise<InstallOutcome> {
+export async function installUpdate(confirmed = false): Promise<InstallResult> {
   if (!inTauri()) throw new Error(NOT_IN_APP);
-  return invoke<InstallOutcome>("install_update", { confirmed });
+  return toInstallResult(await invoke<unknown>("install_update", { confirmed }));
+}
+
+/** Где запущен Meet (macOS, `mac_install::Location`). */
+export type AppLocation = "applications" | "user-applications" | "translocated" | "disk-image" | "elsewhere";
+/** Итог прошлой попытки обновления (`logs/update-last.json`). */
+export type LastAttempt = { at: string; finish: string; reason: string | null };
+/** `update_status` оболочки: место приложения и прошлая неудача. */
+export type UpdateStatus = {
+  location: AppLocation | null;
+  bundle: string | null;
+  offer_move: boolean;
+  move_hint: string | null;
+  last_failure: LastAttempt | null;
+};
+
+export async function updateStatus(): Promise<UpdateStatus | null> {
+  if (!inTauri()) return null;
+  return invoke<UpdateStatus>("update_status").catch(() => null);
+}
+
+/** «Переместить Meet в Программы» (macOS): приложение перезапустится оттуда. */
+export async function moveToApplications(): Promise<void> {
+  if (!inTauri()) throw new Error(NOT_IN_APP);
+  await invoke<void>("move_to_applications");
 }
 
 export const onUpdateProgress = (cb: (p: UpdateProgress) => void) => listenShell("update-progress", cb);

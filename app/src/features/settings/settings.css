@@ -110,6 +110,8 @@
 }
 .authors { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
 .update__error { color: var(--err); font-size: 12px; }
+/* «Расположение» (macOS, не из «Программ»): пояснение и кнопка перемещения. */
+.move { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; font-size: 12px; }
 .update__progress { flex: 1 1 240px; }
 .sdesc { margin: 8px 0 0; font-size: 12px; }
 .sbar { display: flex; align-items: center; gap: 12px; padding: 14px 0; }

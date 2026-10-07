@@ -1,4 +1,4 @@
-import { saveText } from "./shell";
+import { saveText, toInstallResult } from "./shell";
 
 test("браузер: ссылка в документе на время клика, URL отзывается позже", async () => {
   vi.useFakeTimers();
@@ -43,4 +43,10 @@ test("автозапуск: команды нет в оболочке — нед
     throw "invalid args `enabled` for command `set_autostart`: command set_autostart missing required key enabled";
   })).toBe(true);
   expect(await probeCommand(async () => undefined)).toBe(true);
+});
+
+test("ответ install_update: объект с причиной, а у старой оболочки — строка", () => {
+  expect(toInstallResult({ outcome: "manual", reason: "нет прав" })).toEqual({ outcome: "manual", reason: "нет прав" });
+  expect(toInstallResult("in-place")).toEqual({ outcome: "in-place", reason: null });
+  expect(toInstallResult(undefined)).toEqual({ outcome: "installer", reason: null });
 });

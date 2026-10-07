@@ -15,6 +15,9 @@ vi.mock("../../lib/shell", () => ({
   installUpdate: vi.fn(),
   cancelUpdate: vi.fn(async () => {}),
   UPDATE_CANCELLED: "Загрузка обновления отменена",
+  updateStatus: vi.fn(async () => null),
+  moveToApplications: vi.fn(async () => {}),
+  openLogs: vi.fn(async () => {}),
   onUpdateProgress: vi.fn(async (cb: (p: { done: number; total: number }) => void) => {
     progressListener = cb;
     return () => { progressListener = null; };
@@ -22,8 +25,8 @@ vi.mock("../../lib/shell", () => ({
 }));
 
 import * as shell from "../../lib/shell";
-import type { InstallOutcome } from "../../lib/shell";
-import { About, LAUNCHED, UPDATE_CONFIRM_WORK, megabytes } from "./About";
+import type { InstallResult, UpdateStatus } from "../../lib/shell";
+import { About, LAUNCHED, UPDATE_CONFIRM_WORK, lastFailureText, launchedText, megabytes } from "./About";
 
 const endpoint = { base: "http://127.0.0.1:1", token: "t" };
 const check = vi.mocked(shell.checkUpdate);
@@ -38,10 +41,15 @@ const newer = {
   size: 52428800,
 };
 
+const done = (outcome: InstallResult["outcome"], reason: string | null = null): InstallResult => ({ outcome, reason });
+
 beforeEach(() => {
   check.mockReset();
   install.mockReset();
   vi.mocked(shell.openUrl).mockClear();
+  vi.mocked(shell.updateStatus).mockResolvedValue(null);
+  vi.mocked(shell.moveToApplications).mockReset();
+  vi.mocked(shell.openLogs).mockClear();
 });
 
 async function renderAbout() {
@@ -102,7 +110,7 @@ test("нет связи — текст ошибки оболочки", async () 
 test("новая версия: «Что нового» и «Скачать и установить» с ходом загрузки", async () => {
   check.mockResolvedValue(newer);
   let finish: () => void = () => {};
-  install.mockImplementation(() => new Promise<InstallOutcome>((resolve) => { finish = () => resolve("installer"); }));
+  install.mockImplementation(() => new Promise<InstallResult>((resolve) => { finish = () => resolve(done("installer")); }));
   await renderAbout();
   await userEvent.click(checkButton());
   expect(await screen.findByText(/Доступна версия 0\.2\.0/)).toBeInTheDocument();
@@ -125,11 +133,12 @@ test("новая версия: «Что нового» и «Скачать и у
 
 test.each([
   ["in-place", "Устанавливаю новую версию — Meet закроется и запустится заново…"],
+  ["in-place-admin", "Устанавливаю новую версию — macOS спросит пароль администратора, затем Meet запустится заново…"],
   ["manual", "Образ открыт в Finder: перетащите Meet в «Программы» с заменой и запустите заново. Приложение закрывается…"],
   ["installer", "Установщик запущен, приложение закрывается…"],
 ] as const)("macOS и Windows: итог установки «%s» назван своими словами", async (outcome, text) => {
   check.mockResolvedValue({ ...newer, asset_name: "Meet_0.2.0_aarch64.dmg" });
-  install.mockResolvedValue(outcome);
+  install.mockResolvedValue(done(outcome));
   await renderAbout();
   await userEvent.click(checkButton());
   await userEvent.click(await screen.findByRole("button", { name: "Скачать и установить" }));
@@ -141,7 +150,7 @@ test.each([
 test("размер неизвестен — бегущая полоска; «Отменить загрузку» прерывает её", async () => {
   check.mockResolvedValue(newer);
   let fail: (e: unknown) => void = () => {};
-  install.mockImplementation(() => new Promise<InstallOutcome>((_, reject) => { fail = reject; }));
+  install.mockImplementation(() => new Promise<InstallResult>((_, reject) => { fail = reject; }));
   vi.mocked(shell.cancelUpdate).mockImplementation(async () => fail("Загрузка обновления отменена"));
   await renderAbout();
   await userEvent.click(checkButton());
@@ -175,7 +184,7 @@ test("отказ во время записи виден рядом с кноп�
 
 test("идёт расшифровка — сначала вопрос, «Обновить сейчас» повторяет с согласием", async () => {
   check.mockResolvedValue(newer);
-  install.mockRejectedValueOnce(UPDATE_CONFIRM_WORK).mockResolvedValueOnce("installer");
+  install.mockRejectedValueOnce(UPDATE_CONFIRM_WORK).mockResolvedValueOnce(done("installer"));
   await renderAbout();
   await userEvent.click(checkButton());
   await userEvent.click(await screen.findByRole("button", { name: "Скачать и установить" }));
@@ -222,4 +231,85 @@ test("авторы с ролями и лицензия", async () => {
     "Никита Резников — десктопное приложение и интерфейс",
   ]);
   expect(screen.getByText("Лицензия Apache-2.0")).toBeInTheDocument();
+});
+
+test("macOS: образ открыт — окно говорит, почему не на месте", async () => {
+  check.mockResolvedValue({ ...newer, asset_name: "Meet_0.2.0_aarch64.dmg" });
+  install.mockResolvedValue(done("manual", "в «Программах» уже лежит другое приложение с именем Meet.app"));
+  await renderAbout();
+  await userEvent.click(checkButton());
+  await userEvent.click(await screen.findByRole("button", { name: "Скачать и установить" }));
+  expect(
+    await screen.findByText(
+      "Обновление на месте не удалось: в «Программах» уже лежит другое приложение с именем Meet.app. "
+      + "Открыт образ диска: перетащите Meet в «Программы» с заменой и запустите заново. Приложение закрывается…",
+    ),
+  ).toBeInTheDocument();
+});
+
+test("итог без причины и ответ старой оболочки — прежние тексты", () => {
+  expect(launchedText(done("manual"))).toBe(LAUNCHED.manual);
+  expect(launchedText(done("in-place", "не важно"))).toBe(LAUNCHED["in-place"]);
+});
+
+const translocated: UpdateStatus = {
+  location: "translocated",
+  bundle: "/private/var/folders/x/T/AppTranslocation/1/d/Meet.app",
+  offer_move: true,
+  move_hint: "Meet открыт из «Загрузок» или прямо из образа диска. Переместить его туда и перезапустить?",
+  last_failure: null,
+};
+
+test("macOS не из «Программ»: пояснение и «Переместить Meet в Программы»", async () => {
+  vi.mocked(shell.updateStatus).mockResolvedValue(translocated);
+  await renderAbout();
+  expect(await screen.findByText(translocated.move_hint!)).toBeInTheDocument();
+  expect(screen.getByText(translocated.bundle!)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Переместить Meet в Программы" }));
+  expect(shell.moveToApplications).toHaveBeenCalledTimes(1);
+  expect(await screen.findByText("Перемещаю — Meet перезапустится…")).toBeInTheDocument();
+});
+
+test("перемещение не удалось — причина рядом с кнопкой, можно повторить", async () => {
+  vi.mocked(shell.updateStatus).mockResolvedValue(translocated);
+  vi.mocked(shell.moveToApplications).mockRejectedValue("Не удалось переместить Meet: подпись копии не прошла проверку");
+  await renderAbout();
+  await userEvent.click(await screen.findByRole("button", { name: "Переместить Meet в Программы" }));
+  expect(
+    await screen.findByText("Не удалось переместить Meet: подпись копии не прошла проверку"),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Переместить Meet в Программы" })).toBeEnabled();
+});
+
+test("в «Программах» (и на Windows) вопроса о перемещении нет", async () => {
+  vi.mocked(shell.updateStatus).mockResolvedValue({
+    ...translocated, location: "applications", bundle: "/Applications/Meet.app", offer_move: false, move_hint: null,
+  });
+  await renderAbout();
+  await waitFor(() => expect(shell.updateStatus).toHaveBeenCalled());
+  expect(screen.queryByRole("button", { name: "Переместить Meet в Программы" })).toBeNull();
+});
+
+test("«Открыть папку журналов» и причина прошлой неудачи", async () => {
+  vi.mocked(shell.updateStatus).mockResolvedValue({
+    ...translocated,
+    offer_move: false,
+    last_failure: { at: "2026-10-07 10:15:42Z", finish: "gave-up", reason: "пароль администратора не введён (нажато «Отменить»)" },
+  });
+  await renderAbout();
+  expect(
+    await screen.findByText(
+      "Прошлое обновление (2026-10-07 10:15 UTC) не встало на место: пароль администратора не введён (нажато «Отменить»)",
+    ),
+  ).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Открыть папку журналов" }));
+  expect(shell.openLogs).toHaveBeenCalledTimes(1);
+});
+
+test("без прошлой неудачи строки о ней нет", () => {
+  expect(lastFailureText(null)).toBeNull();
+  expect(lastFailureText({ ...translocated, last_failure: null })).toBeNull();
+  expect(
+    lastFailureText({ ...translocated, last_failure: { at: "2026-10-07 10:15:42Z", finish: "rolled-back", reason: null } }),
+  ).toBe("Прошлое обновление (2026-10-07 10:15 UTC) не встало на место: причина в журнале update.log");
 });
