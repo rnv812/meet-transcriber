@@ -114,11 +114,12 @@ def test_map_without_group_kb_or_when_switched_off(tmp_path):
     no_kb = kb_prep.KnowledgeBase(None, library_root=lib)
     assert no_kb.kb_map(group=alpha).startswith("Прошлые встречи группы «Проект Альфа»")
     off = kb_prep.KnowledgeBase(tmp_path / "kb", library_root=lib, show_map=False)
-    hidden = off.kb_map(group=alpha, current=current)
-    # без структуры базы, но со встречами группы (это данные Meet, не базы)
-    assert "База знаний" not in hidden and "Проекты" not in hidden
-    assert hidden.startswith("Прошлые встречи группы «Проект Альфа»")
-    assert kb_prep.KnowledgeBase(tmp_path / "kb", show_map=False).kb_map() == ""
+    # Карта выключена — ни структуры базы, ни списка прошлых встреч группы
+    # (решение координатора к задаче 9; раньше встречи оставались).
+    assert off.kb_map(group=alpha, current=current) == ""
+    assert off.kb_map() == ""
+    no_kb_off = kb_prep.KnowledgeBase(None, library_root=lib, show_map=False)
+    assert no_kb_off.kb_map(group=alpha, current=current) == ""
 
 
 def test_map_fits_the_budget_on_a_big_kb(tmp_path):
@@ -325,7 +326,7 @@ def test_for_settings(tmp_path):
     assert "Личное" in kb_prep.kb_map(kb)  # исключения — только из настроек
     off = settings.Settings.from_raw({"version": settings.SCHEMA_VERSION,
                                       "assistant": {"knowledge_dir": str(kb_dir)}, "assist": {"kb_map": False}})
-    assert "База знаний" not in kb_prep.for_settings(off, lib).kb_map(group=alpha)
+    assert kb_prep.for_settings(off, lib).kb_map(group=alpha, current=current) == ""
 
 
 def test_exclude_paths_for_provider_deny_rules(tmp_path):
@@ -387,7 +388,7 @@ def test_read_budget_spent_is_an_explicit_error(tmp_path, monkeypatch):
 
 def test_meeting_header_is_dropped_when_no_meeting_fits(tmp_path):
     kb, _lib, alpha, _beta, current = _base(tmp_path)
-    tiny = kb_prep.KnowledgeBase(kb.root, library_root=kb.library_root, show_map=False)
+    tiny = kb_prep.KnowledgeBase(None, library_root=kb.library_root)  # только встречи группы
     assert tiny.kb_map(group=alpha, current=current, budget_chars=70) == ""
 
 

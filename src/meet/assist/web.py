@@ -1,6 +1,14 @@
-"""Локальный веб-интерфейс live-ассистента: сводка, подсказки, вопросы, лента.
+"""Локальный веб-интерфейс live-ассистента: чат с агентом-участником или
+(прежний режим) сводка, подсказки, вопросы, лента.
 
-Отдаёт одну HTML-страницу, поток состояния через SSE (`GET /events`),
+`GET /` — страница для браузера (`meet assist` из консоли открывает её сам):
+при запущенном агенте-участнике — чат (`CHAT_PAGE`: лента, кнопки агента,
+реакции, строка ввода, картинки, «Стоп» — только маршруты `/chat*` и события
+чата ниже), иначе — прежняя `PAGE` (сводка, подсказки, `/ask`). Страница шлёт
+запросы со своего Origin; токен ей не нужен — путь к файлу (`/chat/attach`)
+принимается только от приложения.
+
+Отдаёт поток состояния через SSE (`GET /events`),
 приём вопросов (`POST /ask`: вопрос или быстрое действие `quick`), действия с подсказками (`POST /hint`:
 закрепить, открепить, скрыть), смену задачи-контекста (`POST /task`) и
 штатную остановку (`POST /stop` — так резидент гасит дочерний `meet assist`;
@@ -124,6 +132,572 @@ async function setTask(){const t=document.getElementById('task');
 document.getElementById('q').addEventListener('keydown',
   e => {if(e.key==='Enter') ask();});
 </script></body></html>"""
+
+# Страница чата с агентом-участником (`assist.participant`, по умолчанию с
+# 0.3.6): `GET /` отдаёт её, когда агент запущен, иначе — прежнюю `PAGE`.
+# Без зависимостей: лента из `chat_snapshot` / `chat` / `chat_partial` /
+# `agent` (SSE `/events?transcript=1`), кнопки агента, реакции, строка ввода
+# (Enter — отправить, Shift+Enter — новая строка), картинки (Ctrl+V,
+# перетаскивание, «📎» → `/chat/paste`), «Стоп», «Как часто писать».
+# Текст агента — только через textContent (жирный `**…**` и списки
+# собираются узлами DOM, HTML из ответа не исполняется). Все запросы — со
+# своего Origin; путь к файлу (`/chat/attach`) страница не шлёт: он только
+# для приложения с токеном.
+CHAT_PAGE = r"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>meet assist — чат</title>
+<style>
+:root{color-scheme:light dark;--bg:#fff;--fg:#1d1d1f;--muted:#6b6b72;--line:#e2e2e6;
+  --agent:#f2f3f6;--me:#e5effd;--accent:#2a62d0;--pin:#fff4d6;--err:#b3261e}
+@media (prefers-color-scheme:dark){:root{--bg:#1c1c1f;--fg:#ececf0;--muted:#9c9ca4;
+  --line:#34343a;--agent:#2a2a2f;--me:#1e324f;--accent:#80a8ff;--pin:#3b3420;--err:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;height:100vh;display:flex;flex-direction:column;background:var(--bg);
+  color:var(--fg);font:14px/1.45 "Segoe UI",system-ui,sans-serif}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;padding:8px 16px;
+  border-bottom:1px solid var(--line)}
+header h1{margin:0;font-size:16px}
+.muted{color:var(--muted);font-size:12px}
+#state.error{color:var(--err)}
+#link{color:var(--err);font-size:12px}
+#feed{flex:1;overflow:auto;padding:12px 16px}
+.msg{max-width:46rem;margin:0 0 12px}
+.msg .meta{color:var(--muted);font-size:12px;margin-bottom:2px}
+.msg .body{border-radius:10px;padding:8px 10px;overflow-wrap:anywhere}
+.msg .body p{margin:0 0 4px}
+.msg .body ul,.msg .body ol{margin:2px 0 4px;padding-left:20px}
+.agent .body{background:var(--agent)}
+.agent.pin .body{background:var(--pin)}
+.agent.writing .body{opacity:.75}
+.user{margin-left:auto}
+.user .body{background:var(--me);white-space:pre-wrap}
+.line{color:var(--muted);font-size:12px;text-align:center;margin:0 0 12px}
+.note{color:var(--muted);font-size:12px;margin-top:2px}
+.err{color:var(--err)}
+.row{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+button{font:inherit;cursor:pointer;border:1px solid var(--line);border-radius:14px;
+  padding:2px 10px;background:transparent;color:inherit}
+button:hover{border-color:var(--accent)}
+button:disabled{cursor:default;opacity:.5}
+button.used{border-color:var(--accent);color:var(--accent)}
+.react button{padding:0 6px;opacity:.55}
+.react button[aria-pressed=true]{opacity:1;border-color:var(--accent)}
+footer{border-top:1px solid var(--line);padding:8px 16px}
+#chips{display:flex;flex-wrap:wrap;gap:6px}
+#chips:not(:empty){margin-bottom:6px}
+#chips span{font-size:12px;border:1px solid var(--line);border-radius:10px;padding:1px 8px}
+#composer{display:flex;gap:8px;align-items:flex-end}
+#text{flex:1;resize:none;font:inherit;padding:6px 8px;border:1px solid var(--line);
+  border-radius:8px;background:var(--bg);color:inherit;min-height:2.4em;max-height:10em}
+#notice{min-height:1.2em}
+details{border-top:1px solid var(--line);padding:4px 16px;max-height:24vh;overflow:auto}
+#transcript{white-space:pre-wrap;color:var(--muted);font-size:12px}
+body.drop #feed{outline:2px dashed var(--accent);outline-offset:-6px}
+</style></head><body>
+<header>
+  <h1>Ассистент</h1>
+  <span id="state" class="muted">подключаюсь…</span>
+  <span id="model" class="muted"></span>
+  <span id="sees" class="muted"></span>
+  <span id="notes" class="muted"></span>
+  <label class="muted">Как часто писать
+    <select id="frequency"><option>реже</option><option>обычно</option><option>чаще</option></select>
+  </label>
+  <span id="status" class="muted"></span>
+  <span id="link"></span>
+</header>
+<main id="feed" role="log" aria-live="polite"></main>
+<footer>
+  <div id="chips"></div>
+  <div id="composer">
+    <textarea id="text" rows="2" placeholder="Сообщение ассистенту (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+    <input id="file" type="file" accept="image/*" multiple hidden>
+    <button id="pick" title="Прикрепить изображение">📎</button>
+    <button id="send">Отправить</button>
+    <button id="stop" hidden>Стоп</button>
+  </div>
+  <div id="notice" class="muted" role="status"></div>
+</footer>
+<details><summary class="muted">Расшифровка</summary><div id="transcript"></div></details>
+<script>
+(function () {
+  const HIDDEN = new Set(["held", "dropped", "superseded", "dismissed"]);
+  const REACTIONS = [["👍", "норм"], ["👎", "не норм"], ["❓", "вопрос"]];
+  const PASTE_MAX = 10 * 1024 * 1024;
+  const $ = (id) => document.getElementById(id);
+  const feed = $("feed"), text = $("text");
+  let msgs = new Map(), order = [], seq = -1, partial = null, agent = null;
+  let chips = [], draftId = newId(), sending = false, resyncing = false, noticeTimer = 0;
+  // Узлы ленты по id: перерисовывается только изменившееся сообщение —
+  // фокус, выделение и нажатия на остальных не теряются (ревью I1).
+  const nodes = new Map();
+  // Нажатая кнопка агента до ответа сервера: ряд блокируется сразу (ревью M1).
+  const pendingClicks = new Map();
+  const CHIPS_MAX = 10;
+  let staleTries = 0;
+
+  function newId() {
+    return "web-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+  }
+
+  function notice(msg) {
+    $("notice").textContent = msg || "";
+    clearTimeout(noticeTimer);
+    if (msg) noticeTimer = setTimeout(() => { $("notice").textContent = ""; }, 8000);
+  }
+
+  async function api(method, path, body, headers) {
+    const init = {method: method, headers: headers || {}};
+    if (body instanceof Blob) init.body = body;
+    else if (body !== undefined) {
+      init.headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }
+    const r = await fetch(path, init);
+    const raw = await r.text();
+    if (!r.ok) throw new Error(raw || ("ошибка " + r.status));
+    try { return raw ? JSON.parse(raw) : {}; } catch (e) { return {}; }
+  }
+
+  // --- журнал: снимок и события по номеру ---
+
+  function applySnapshot(s) {
+    if (!s || !Array.isArray(s.messages)) return;
+    msgs = new Map(); order = [];
+    for (const m of s.messages) { if (m && m.id) { msgs.set(m.id, m); order.push(m.id); } }
+    seq = typeof s.seq === "number" ? s.seq : seq;
+    partial = s.partial || null;
+    if (s.agent) agent = s.agent;
+    render();
+  }
+
+  async function resync() {
+    if (resyncing) return;
+    resyncing = true;
+    let again = false;
+    try {
+      const s = await api("GET", "/chat");
+      if (typeof s.seq !== "number" || s.seq >= seq) { applySnapshot(s); staleTries = 0; }
+      else again = true;   // снимок старее применённых событий — повторить (ревью M2)
+    } catch (e) { notice("Чат не обновился: " + e.message); again = true; }
+    finally { resyncing = false; }
+    if (again && staleTries < 5) {
+      staleTries += 1;
+      setTimeout(resync, 500 * staleTries);
+    }
+  }
+
+  function applyEvent(e) {
+    if (!e || typeof e !== "object") return;
+    if (typeof e.seq === "number" && e.seq <= seq) return;
+    if (e.op === "add" && e.message && e.message.id) {
+      if (!msgs.has(e.message.id)) order.push(e.message.id);
+      msgs.set(e.message.id, e.message);
+    } else if (e.op === "patch" && e.id) {
+      const m = msgs.get(e.id);
+      if (!m) { resync(); return; }
+      Object.assign(m, e.set || {});
+      if (m.status !== "writing" && partial && partial.id === m.id) partial = null;
+    } else return;
+    if (typeof e.seq === "number") seq = e.seq;
+    render();
+  }
+
+  // --- текст агента: без HTML, только жирный и списки узлами DOM ---
+
+  function inline(el, s) {
+    const parts = String(s).split("**");
+    parts.forEach((part, i) => {
+      if (i % 2 === 1 && i < parts.length - 1) {
+        const b = document.createElement("b");
+        b.textContent = part;
+        el.appendChild(b);
+      } else {
+        el.appendChild(document.createTextNode(i % 2 === 1 ? "**" + part : part));
+      }
+    });
+  }
+
+  function renderText(el, s) {
+    let list = null;
+    for (const line of String(s || "").split(/\r?\n/)) {
+      const item = /^\s*(?:([-*•])|(\d+)[.)])\s+(.*)$/.exec(line);
+      if (item) {
+        const tag = item[2] ? "ol" : "ul";
+        if (!list || list.tagName.toLowerCase() !== tag) {
+          list = document.createElement(tag);
+          el.appendChild(list);
+        }
+        const li = document.createElement("li");
+        inline(li, item[3]);
+        list.appendChild(li);
+        continue;
+      }
+      list = null;
+      if (!line.trim()) continue;
+      const p = document.createElement("p");
+      inline(p, line);
+      el.appendChild(p);
+    }
+  }
+
+  // --- лента ---
+
+  function clock(t) {
+    if (typeof t !== "number" || !(t >= 0)) return "";
+    const s = Math.floor(t), h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60;
+    const two = (n) => String(n).padStart(2, "0");
+    return (h ? h + ":" + two(m) : String(m)) + ":" + two(s % 60);
+  }
+
+  function partialText(m) {
+    return partial && partial.id === m.id && partial.text ? partial.text : "";
+  }
+
+  function visible(m) {
+    if (!m || typeof m !== "object") return false;
+    if (m.kind === "tool" || m.kind === "attachment") return false;
+    if (m.kind === "meeting" && (m.event === "reaction" || m.event === "voiced")) return false;
+    if (m.kind === "agent") {
+      if (HIDDEN.has(m.status)) return false;
+      // Молчаливый ход сам по себе: пузырь — только с текстом или на ответ вам.
+      if (m.status === "writing" && !m.text && !partialText(m) && m.mode !== "reply") return false;
+    }
+    return true;
+  }
+
+  function usedButtons() {
+    const used = new Map();
+    for (const id of order) {
+      const m = msgs.get(id);
+      if (m && m.kind === "user" && m.via === "button" && m.re) used.set(m.re, m.text);
+    }
+    return used;
+  }
+
+  function el(tag, cls, txt) {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (txt !== undefined) node.textContent = txt;
+    return node;
+  }
+
+  function agentBody(body, m) {
+    body.replaceChildren();
+    const shown = m.text || partialText(m);
+    if (shown) renderText(body, shown);
+    else body.textContent = m.status === "writing" ? "пишет…" : (m.status === "failed" ? "Не удалось получить ответ" : "");
+  }
+
+  function agentNode(m, used) {
+    const box = el("div", "msg agent" + (m.pin ? " pin" : "") + (m.status === "writing" ? " writing" : ""));
+    box.dataset.id = m.id;
+    // Пишется — экранный диктор ждёт готового текста, а не каждого куска.
+    if (m.status === "writing") box.setAttribute("aria-busy", "true");
+    const meta = ["Ассистент", clock(m.t)];
+    if (m.pin) meta.push("вопрос вам");
+    if (m.status === "cancelled" && !m.note) meta.push("остановлено");
+    box.appendChild(el("div", "meta", meta.filter(Boolean).join(" · ")));
+    const body = el("div", "body");
+    agentBody(body, m);
+    box.appendChild(body);
+    if (m.status === "failed" && m.error) box.appendChild(el("div", "note err", m.error));
+    if (m.note) box.appendChild(el("div", "note", m.note));
+    const buttons = Array.isArray(m.buttons) ? m.buttons : [];
+    if (buttons.length && m.status !== "writing") {
+      const row = el("div", "row");
+      const chosen = used.has(m.id) ? used.get(m.id) : pendingClicks.get(m.id);
+      for (const label of buttons) {
+        const b = el("button", label === chosen ? "used" : "", (label === chosen ? "✓ " : "") + label);
+        if (chosen !== undefined) b.disabled = true;
+        b.addEventListener("click", () => click(m.id, label));
+        row.appendChild(b);
+      }
+      box.appendChild(row);
+    }
+    if (m.status === "shown") {
+      const row = el("div", "row react");
+      const set = m.reactions && typeof m.reactions === "object" ? m.reactions : {};
+      for (const [emoji, title] of REACTIONS) {
+        const on = Object.prototype.hasOwnProperty.call(set, emoji);
+        const b = el("button", "", emoji);
+        b.title = title;
+        b.setAttribute("aria-label", title);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+        b.addEventListener("click", () => react(m.id, emoji, !on));
+        row.appendChild(b);
+      }
+      box.appendChild(row);
+    }
+    return box;
+  }
+
+  function userNode(m) {
+    const box = el("div", "msg user");
+    box.dataset.id = m.id;
+    box.appendChild(el("div", "meta", ["Вы", clock(m.t), m.via === "button" ? "кнопка" : ""].filter(Boolean).join(" · ")));
+    if (m.text) box.appendChild(el("div", "body", m.text));
+    for (const aid of Array.isArray(m.attachments) ? m.attachments : []) {
+      const a = msgs.get(aid);
+      if (!a) continue;
+      const parts = ["📎 " + (a.name || aid)];
+      if (a.status === "failed") parts.push("не разобрано");
+      if (a.note) parts.push(a.note);
+      box.appendChild(el("div", "note", parts.join(" · ")));
+    }
+    return box;
+  }
+
+  function signature(m, used) {
+    // Всё, от чего зависит узел, кроме текста, который ещё пишется.
+    const files = m.kind === "user" && Array.isArray(m.attachments)
+      ? m.attachments.map((aid) => { const a = msgs.get(aid) || {}; return [aid, a.name, a.status, a.note]; })
+      : null;
+    const chosen = used.has(m.id) ? used.get(m.id) : pendingClicks.get(m.id);
+    return JSON.stringify([m.kind, m.status, m.text, m.t, m.pin, m.note, m.error, m.buttons,
+      m.reactions, m.via, files, chosen === undefined ? null : chosen,
+      m.status === "writing" && !m.text && !partialText(m)]);
+  }
+
+  function build(m, used) {
+    if (m.kind === "agent") return agentNode(m, used);
+    if (m.kind === "user") return userNode(m);
+    return el("div", "line", m.text);
+  }
+
+  function render() {
+    const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
+    const used = usedButtons();
+    const want = [];
+    const keep = new Set();
+    for (const id of order) {
+      const m = msgs.get(id);
+      if (!visible(m) || (m.kind !== "agent" && m.kind !== "user" && !m.text)) continue;
+      const sig = signature(m, used), part = partialText(m);
+      let entry = nodes.get(id);
+      if (!entry || entry.sig !== sig) {
+        entry = {node: build(m, used), sig: sig, part: part};
+        nodes.set(id, entry);
+      } else if (entry.part !== part) {
+        // Пишется ответ: меняется только текст пузыря, сам узел остаётся.
+        agentBody(entry.node.querySelector(".body"), m);
+        entry.part = part;
+      }
+      keep.add(id);
+      want.push(entry.node);
+    }
+    for (const id of Array.from(nodes.keys())) { if (!keep.has(id)) nodes.delete(id); }
+    want.forEach((node, i) => {
+      if (feed.children[i] !== node) feed.insertBefore(node, feed.children[i] || null);
+    });
+    while (feed.children.length > want.length) feed.lastChild.remove();
+    if (atBottom) feed.scrollTop = feed.scrollHeight;
+    renderAgent();
+  }
+
+  function renderAgent() {
+    const a = agent || {};
+    const st = $("state");
+    st.className = a.state === "error" ? "muted error" : "muted";
+    // «пишет…» — когда пузырь ответа виден; молчаливый ход — «думает…».
+    const bubble = a.writing ? visible(msgs.get(a.writing)) : false;
+    st.textContent = a.state === "error" ? "ошибка" + (a.error ? ": " + a.error : "")
+      : a.state === "writing" ? (bubble ? "пишет…" : "думает…") : (agent ? "слушает" : "подключаюсь…");
+    $("model").textContent = a.label || a.provider || "";
+    const sees = a.sees || {}, parts = [];
+    if (sees.conversation !== false) parts.push("разговор");
+    if (sees.kb) parts.push("структура базы знаний");
+    if (sees.materials > 0) parts.push(sees.materials + " " + plural(sees.materials, "материал", "материала", "материалов"));
+    if (sees.images > 0) parts.push(sees.images + " " + plural(sees.images, "изображение", "изображения", "изображений"));
+    $("sees").textContent = agent ? "видит: " + parts.join(", ") : "";
+    const notes = [];
+    if (agent && !a.vision) notes.push("модель не видит изображения — уходит только текст");
+    if (agent && !a.deny_enforced) notes.push("исключённые папки — только просьба в инструкции");
+    $("notes").textContent = notes.join(" · ");
+    if (a.frequency && document.activeElement !== $("frequency")) $("frequency").value = a.frequency;
+    $("stop").hidden = !bubble;
+  }
+
+  // --- действия ---
+
+  function plural(n, one, few, many) {
+    const d = n % 10, h = n % 100;
+    if (d === 1 && h !== 11) return one;
+    if (d >= 2 && d <= 4 && (h < 12 || h > 14)) return few;
+    return many;
+  }
+
+  async function click(mid, label) {
+    // Второе нажатие (двойной щелчок) — не второе сообщение (ревью M1).
+    if (pendingClicks.has(mid) || usedButtons().has(mid)) return;
+    pendingClicks.set(mid, label);
+    render();
+    try { await api("POST", "/chat/" + encodeURIComponent(mid) + "/click", {label: label, client_id: newId()}); }
+    catch (e) {
+      pendingClicks.delete(mid);
+      render();
+      notice("Кнопка не сработала: " + e.message);
+    }
+  }
+
+  async function react(mid, emoji, on) {
+    try { await api("POST", "/chat/" + encodeURIComponent(mid) + "/react", {emoji: emoji, on: on}); }
+    catch (e) { notice("Реакция не сохранена: " + e.message); }
+  }
+
+  async function send() {
+    if (sending) return;
+    const body = text.value.trim();
+    if (chips.some((c) => c.status === "uploading")) { notice("Подождите: изображение ещё загружается"); return; }
+    const ids = chips.filter((c) => c.status === "ready" && c.id).map((c) => c.id);
+    if (!body && !ids.length) return;
+    sending = true;
+    $("send").disabled = true;
+    try {
+      await api("POST", "/chat", {text: body, attachments: ids, client_id: draftId});
+      text.value = "";
+      chips = [];
+      draftId = newId();
+      renderChips();
+    } catch (e) {
+      notice("Не отправлено: " + e.message);
+    } finally {
+      sending = false;
+      $("send").disabled = false;
+      text.focus();
+    }
+  }
+
+  async function stop() {
+    try { await api("POST", "/chat/stop", agent && agent.writing ? {id: agent.writing} : {}); }
+    catch (e) { notice("Не остановлено: " + e.message); }
+  }
+
+  async function setFrequency(label) {
+    try { await api("PUT", "/agent/frequency", {frequency: label}); }
+    catch (e) {
+      $("frequency").value = (agent && agent.frequency) || "чаще";   // ревью M3
+      notice("Частота не изменена: " + e.message);
+    }
+  }
+
+  // --- изображения: Ctrl+V, перетаскивание, «📎» ---
+
+  function renderChips() {
+    const box = $("chips");
+    box.replaceChildren();
+    for (const c of chips) {
+      const chip = el("span", "", "📎 " + c.name + (c.status === "uploading" ? " · загружается…"
+        : c.status === "failed" ? " · не разобрано" : "") + (c.note ? " · " + c.note : "") + " ");
+      const x = el("button", "", "×");
+      x.title = "Убрать";
+      x.addEventListener("click", () => removeChip(c));
+      chip.appendChild(x);
+      box.appendChild(chip);
+    }
+  }
+
+  async function removeChip(c) {
+    chips = chips.filter((other) => other !== c);
+    c.removed = true;
+    renderChips();
+    if (c.id) {
+      try { await api("POST", "/chat/attachments/" + c.id + "/remove"); } catch (e) { /* уже отправлено */ }
+    }
+  }
+
+  async function upload(file) {
+    if (!file || !/^image\//.test(file.type)) {
+      notice("Здесь прикрепляются только изображения; документы — в окне Meet");
+      return;
+    }
+    if (file.size > PASTE_MAX) { notice("Изображение больше 10 МБ"); return; }
+    if (chips.length >= CHIPS_MAX) { notice("В одном сообщении — не больше 10 вложений"); return; }
+    const c = {name: file.name || "изображение", status: "uploading", id: null};
+    chips.push(c);
+    renderChips();
+    try {
+      const r = await api("POST", "/chat/paste", file,
+        {"Content-Type": file.type, "X-File-Name": encodeURIComponent(c.name)});
+      c.id = r.id || null;
+      c.status = r.status === "ready" ? "ready" : "failed";
+      c.note = r.attachment && r.attachment.note ? r.attachment.note : "";
+      if (c.removed && c.id) await api("POST", "/chat/attachments/" + c.id + "/remove").catch(() => {});
+    } catch (e) {
+      chips = chips.filter((other) => other !== c);
+      notice("Изображение не загружено: " + e.message);
+    }
+    renderChips();
+  }
+
+  text.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+      e.preventDefault();
+      send();
+    }
+  });
+  text.addEventListener("paste", (e) => {
+    const data = e.clipboardData;
+    if (!data || data.types.includes("text/plain") || data.types.includes("text/html")) return;
+    const files = Array.from(data.files || []).filter((f) => /^image\//.test(f.type));
+    if (!files.length) return;
+    e.preventDefault();
+    files.forEach(upload);
+  });
+  document.addEventListener("dragover", (e) => { e.preventDefault(); document.body.classList.add("drop"); });
+  document.addEventListener("dragleave", (e) => {
+    if (!e.relatedTarget) document.body.classList.remove("drop");
+  });
+  document.addEventListener("drop", (e) => {
+    e.preventDefault();
+    document.body.classList.remove("drop");
+    Array.from((e.dataTransfer && e.dataTransfer.files) || []).forEach(upload);
+  });
+  $("pick").addEventListener("click", () => $("file").click());
+  $("file").addEventListener("change", (e) => {
+    Array.from(e.target.files || []).forEach(upload);
+    e.target.value = "";
+  });
+  $("send").addEventListener("click", send);
+  $("stop").addEventListener("click", stop);
+  $("frequency").addEventListener("change", (e) => setFrequency(e.target.value));
+
+  // --- поток событий ---
+
+  function parse(e) { try { return JSON.parse(e.data); } catch (err) { return null; } }
+  const es = new EventSource("/events?transcript=1");
+  es.addEventListener("open", () => { $("link").textContent = ""; });
+  es.addEventListener("error", () => { $("link").textContent = "нет связи — переподключаюсь…"; });
+  es.addEventListener("state", (e) => {
+    const s = parse(e);
+    if (!s) return;
+    $("transcript").textContent = (s.transcript || []).join("\n");
+    $("status").textContent = s.status || "";
+    if (s.agent) { agent = s.agent; renderAgent(); }
+  });
+  es.addEventListener("chat_snapshot", (e) => applySnapshot(parse(e)));
+  es.addEventListener("chat", (e) => applyEvent(parse(e)));
+  es.addEventListener("chat_partial", (e) => {
+    const p = parse(e);
+    if (p && p.id) { partial = p; render(); }
+  });
+  es.addEventListener("agent", (e) => {
+    const a = parse(e);
+    if (a) { agent = a; renderAgent(); }
+  });
+})();
+</script></body></html>"""
+
+# Страницу нельзя встроить в чужую (подсовывание щелчков: «Стоп», кнопки,
+# реакции), и она ничего не грузит со стороны: скрипт и стили — свои, внутри.
+PAGE_HEADERS = {
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+        "img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"),
+    "Referrer-Policy": "no-referrer",
+}
 
 TRANSCRIPT_TAIL = 50
 HINT_ACTIONS = ("pin", "unpin", "dismiss", "restore")
@@ -365,7 +939,10 @@ def _file_name(header: str | None) -> str | None:
 
 def build_app(state) -> web.Application:
     async def index(request):
-        return web.Response(text=PAGE, content_type="text/html")
+        # Агент-участник запущен — страница чата; иначе прежняя (сводка,
+        # подсказки, «Спросить»): `assist.participant=false` или «Только сводка».
+        page = CHAT_PAGE if getattr(state, "participant", None) is not None else PAGE
+        return web.Response(text=page, content_type="text/html", headers=PAGE_HEADERS)
 
     async def events(request):
         resp = web.StreamResponse(headers={

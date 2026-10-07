@@ -1222,3 +1222,33 @@ def test_saving_settings_does_not_persist_the_participant_default(tmp_path):
     # Ключ уже был в файле — снова включённый тоже пишется (не пропадает молча).
     settings_mod.patch({"assist": {"participant": True}}, path)
     assert json.loads(path.read_text(encoding="utf-8"))["assist"]["participant"] is True
+
+
+def test_map_switch_off_hides_kb_structure_and_past_meetings_from_the_agent(tmp_path):
+    """«Показывать ассистенту карту» (`assist.kb_map`) выключена — в инструкцию
+    агента не идёт ни структура базы знаний, ни список прошлых встреч группы
+    (решение координатора к задаче 9). Включена — идёт и то и другое."""
+    from test_assist_kb_prep import _kb as kb_dir_with_docs
+    from test_assist_kb_prep import _library
+
+    root = kb_dir_with_docs(tmp_path)
+    lib, _alpha, _beta, current = _library(tmp_path)
+    systems = {}
+    for show in (True, False):
+        kb = KnowledgeBase(root, library_root=lib, show_map=show)
+        h = _make(tmp_path / str(show), script=[SILENT], kb=kb, folder=Path(current))
+
+        async def main():
+            publish(h, 5, "Олег", "обсудим запуск")
+            h.clock.t = 10
+            assert await h.p.tick()
+            await h.p.shutdown()
+
+        run(main())
+        systems[show] = (h.made[0].kwargs["system_prompt"], h.p.view()["sees"]["kb"])
+    on, on_sees = systems[True]
+    assert "Синк по запуску" in on and "План запуска.md" in on and on_sees is True
+    off, off_sees = systems[False]
+    assert "Синк по запуску" not in off and "Сертификация" not in off
+    assert "План запуска.md" not in off and "Прошлые встречи группы" not in off
+    assert off_sees is False

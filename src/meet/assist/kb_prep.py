@@ -9,8 +9,9 @@
   группы (дата, название). Папка группы (`kb_folder` в `.meet-groups.json`)
   — целиком, первой; остальные папки — по алфавиту: число документов, до
   MAP_TOP_TITLES самых свежих названий и «ещё K». Строится один раз на
-  сессию (кэш по аргументам). Настройка `assist.kb_map` выключает
-  структуру базы; список прошлых встреч группы — данные Meet, он остаётся;
+  сессию (кэш по аргументам). Настройка `assist.kb_map` («Показывать
+  ассистенту карту: базу знаний и прошлые встречи группы») выключает карту
+  целиком — ни структуры базы, ни списка прошлых встреч группы;
 * **называет запреты** для инструментов агента: `kb_exclude_paths` —
   абсолютные пути исключённых папок (`assist.kb_exclude`) как на диске;
   цикл агента отдаёт их провайдеру в `deny_paths`, правила своего CLI
@@ -477,7 +478,11 @@ class KnowledgeBase:
     def kb_map(self, *, group=None, current=None, budget_chars: int = MAP_BUDGET_CHARS) -> str:
         """Карта для промпта агента: папки и названия документов базы (без
         содержимого) и прошлые встречи группы — не длиннее `budget_chars`.
-        Пустая строка — карты нет (выключена, нет ни базы, ни встреч группы)."""
+        Пустая строка — карты нет (выключена, нет ни базы, ни встреч группы).
+        Выключена (`show_map`, `assist.kb_map`) — модели не уходит ни
+        структура базы, ни список прошлых встреч группы."""
+        if not self.show_map:
+            return ""
         info = self._group(group)
         key = (info["id"] if info else None, groups.kb_folder(info) if info else None,
                Path(current).name if current else None, budget_chars)
@@ -546,7 +551,7 @@ class KnowledgeBase:
         meeting_cost = min(sum(len(x) + 1 for x in meeting_lines), budget // 4)
 
         docs: list[tuple[str, float]] = []
-        if self.configured and self.show_map:
+        if self.configured:
             for path in self._kb_files(self.root, MAP_MAX_FILES):
                 try:
                     docs.append((path.relative_to(self.root).as_posix(), path.stat().st_mtime))

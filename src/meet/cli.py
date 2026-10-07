@@ -388,7 +388,7 @@ def main(argv: list[str] | None = None) -> int | None:
     )
 
     p_as = sub.add_parser(
-        "assist", help="live-ассистент: расшифровка + дайджест + вопросы (веб)"
+        "assist", help="живой ассистент: расшифровка и чат с ассистентом на странице в браузере"
     )
     p_as.add_argument("--out", default=None, help=OUT_HELP)
     p_as.add_argument(
