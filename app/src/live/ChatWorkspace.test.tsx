@@ -11,7 +11,7 @@ vi.mock("../lib/api", async (orig) => ({
 import { postChat, setAgentFrequency } from "../lib/api";
 import type { ChatSnapshot, LiveHint } from "../lib/types";
 import { agentInfo, agentMsg } from "../test/chatFixtures";
-import { CHAT_MIN, CHAT_PANES, CHAT_SIDE_MIN } from "./ChatWorkspace";
+import { CHAT_FLOOR, CHAT_MIN, CHAT_PANES, CHAT_SIDE_MIN, TRANSCRIPT_FLOOR } from "./ChatWorkspace";
 import { LiveWorkspace, useLiveView } from "./LiveWorkspace";
 import { EMPTY_SUMMARY } from "./liveModel";
 import { type Chat, useChat } from "./useChat";
@@ -66,14 +66,7 @@ test("участник включён — чат вместо «Подсказо
   expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toHaveTextContent("Срок другой");
   expect(screen.getByRole("group", { name: "Сессия ассистента" })).toHaveTextContent("Claude Code");
   expect(screen.getByRole("region", { name: "Расшифровка" })).toHaveTextContent("начнём с миграции");
-  expect(screen.getByRole("separator", { name: "Высота расшифровки" })).toBeInTheDocument();
-});
-
-test("широкая: расшифровка колонкой сбоку с разделителем ширины", () => {
-  width(900);
-  render(<Host live={makeLive({ agent: agentInfo() })} wide />);
   expect(screen.getByRole("separator", { name: "Ширина расшифровки" })).toBeInTheDocument();
-  expect(screen.getByRole("log", { name: "Лента встречи" })).toBeInTheDocument();
 });
 
 test("таймкод в сообщении — к моменту в расшифровке", async () => {
@@ -85,24 +78,15 @@ test("таймкод в сообщении — к моменту в расшиф
   expect(target).toHaveClass("is-target");
 });
 
-test("компактная (узкая панель): чат и строка расшифровки; щелчок разворачивает полосу", async () => {
+test("узкая панель: та же раскладка (колонка и чат), только плотнее — без «видит:» в шапке", () => {
   width(360);
   render(<Host live={makeLive({ agent: agentInfo() })} />);
   load();
-  expect(screen.queryByRole("log", { name: "Лента встречи" })).toBeNull();
-  const ticker = screen.getByRole("button", { name: "Развернуть расшифровку" });
-  expect(ticker).toHaveTextContent("Игорьмиграцию сделаем к пятнице");
-  await userEvent.click(ticker);
   expect(screen.getByRole("log", { name: "Лента встречи" })).toBeInTheDocument();
+  expect(screen.getByRole("separator", { name: "Ширина расшифровки" })).toBeInTheDocument();
+  expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Убрать расшифровку" })).toBeInTheDocument();
   expect(screen.queryByText(/видит:/)).toBeNull();
-});
-
-test("компактная: переход по таймкоду сам разворачивает полосу", async () => {
-  width(360);
-  render(<Host live={makeLive({ agent: agentInfo() })} />);
-  load();
-  await userEvent.click(screen.getByRole("button", { name: "02:05" }));
-  expect(screen.getByRole("log", { name: "Лента встречи" })).toBeInTheDocument();
 });
 
 test("«Как часто писать» уходит setAgentFrequency и сразу видно выбранное", async () => {
@@ -122,7 +106,7 @@ test("нет связи — писать нельзя, причина видна
   expect(screen.getByText("Нет связи с ассистентом — переподключаюсь…")).toBeInTheDocument();
 });
 
-test("смена раскладки (узкая → широкая → компактная) не теряет текст и вложения строки ввода", async () => {
+test("смена ширины (средняя → широкая → узкая) не теряет текст и вложения строки ввода", async () => {
   let px = 600;
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
     .mockImplementation(() => ({ width: px, height: 600, top: 0, left: 0, right: px, bottom: 600, x: 0, y: 0, toJSON: () => ({}) }));
@@ -155,11 +139,12 @@ test("быстрые вопросы над пустой строкой: щелч
   expect(screen.queryByRole("group", { name: "Быстрые вопросы" })).toBeNull();
 });
 
-test("до первого состояния — «Подключаюсь к ассистенту…», не прежняя раскладка", () => {
+test("до первого состояния — уже чат с «Подключаюсь к ассистенту…», не прежняя раскладка и не пустой экран", () => {
   render(<Host live={makeLive({ loaded: false })} />);
   expect(screen.getByText("Подключаюсь к ассистенту…")).toBeInTheDocument();
   expect(screen.queryByRole("tablist")).toBeNull();
-  expect(screen.queryByRole("log")).toBeNull();
+  expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBeInTheDocument();
+  expect(screen.getByRole("textbox", { name: "Сообщение ассистенту" })).toBeDisabled();
 });
 
 
@@ -169,7 +154,7 @@ test("до первого состояния — «Подключаюсь к а�
 function sideLayout(room: { px: number }, column = 300) {
   width(1200);
   vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
-    return this.classList.contains("chat-ws__body--side") ? room.px : 0;
+    return this.classList.contains("chat-ws__body") ? room.px : 0;
   });
   vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (this: HTMLElement) {
     return this.classList.contains("chat-ws__transcript") ? column : 0;
@@ -183,7 +168,7 @@ function sideLayout(room: { px: number }, column = 300) {
   });
   return { resize: (px: number) => { room.px = px; act(() => { [...all].forEach((cb) => cb()); }); } };
 }
-const body = () => document.querySelector<HTMLElement>(".chat-ws__body--side")!;
+const body = () => document.querySelector<HTMLElement>(".chat-ws__body")!;
 const sideSplit = () => screen.getByRole("separator", { name: "Ширина расшифровки" });
 /** Чату остаётся его минимум и промежуток сетки. */
 const sideMax = (room: number) => room - CHAT_MIN - 12;
@@ -244,5 +229,105 @@ describe("ширина колонки расшифровки", () => {
     expect(localStorage.getItem("meet.pane.live-chat-side")).toBe("1000");   // пожелание остаётся
     win.resize(1600);
     expect(body().style.getPropertyValue("--chat-side")).toBe("1000px");
+  });
+});
+
+
+// --- одна раскладка при любой ширине: чат всегда на месте, расшифровку убирают только сами ------
+
+describe("одна раскладка", () => {
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  const shape = () => ({
+    body: body().className,
+    children: [...body().children].map((el) => el.className.split(" ")[0]),
+  });
+
+  test("ширина 300–1600 px: та же раскладка, чат и строка ввода всегда видны, ничего не пересоздаётся", () => {
+    const room = { px: 1600 };
+    const win = sideLayout(room);
+    const live = makeLive({ agent: agentInfo() });
+    const { rerender } = render(<Host live={live} wide />);
+    load();
+    const chatLog = screen.getByRole("log", { name: "Чат с ассистентом" });
+    const field = screen.getByRole("textbox", { name: "Сообщение ассистенту" });
+    const first = shape();
+    expect(first.children).toEqual(["chat-ws__transcript", "splitter", "chat-ws__edge", "chat-ws__main"]);
+    for (const px of [300, 360, 420, 520, 719, 720, 900, 1280, 1600]) {
+      win.resize(px);
+      rerender(<Host live={{ ...live }} wide={px >= 720} />);
+      expect(shape()).toEqual(first);
+      expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBe(chatLog);
+      expect(chatLog).toBeVisible();
+      expect(screen.getByRole("textbox", { name: "Сообщение ассистенту" })).toBe(field);
+      expect(screen.getByRole("region", { name: "Расшифровка" })).toBeVisible();
+      expect(screen.queryByRole("button", { name: "Развернуть расшифровку" })).toBeNull();   // прежней строки нет
+    }
+  });
+
+  test("совсем узко: обе колонки ужимаются до своих минимумов, ни одна не пропадает", () => {
+    localStorage.setItem("meet.pane.live-chat-side", "900");
+    const room = { px: 1600 };
+    const win = sideLayout(room);
+    render(<Host live={makeLive({ agent: agentInfo() })} />);
+    for (const px of [600, 420, 300, 280]) {
+      win.resize(px);
+      const side = parseInt(body().style.getPropertyValue("--chat-side"), 10);
+      expect(side).toBeGreaterThanOrEqual(TRANSCRIPT_FLOOR);
+      expect(px - side - 12).toBeGreaterThanOrEqual(Math.min(CHAT_MIN, px - TRANSCRIPT_FLOOR - 12));
+      expect(px - side - 12).toBeGreaterThanOrEqual(CHAT_FLOOR);
+      expect(screen.getByRole("region", { name: "Расшифровка" })).toBeInTheDocument();
+    }
+    expect(localStorage.getItem("meet.pane.live-chat-side")).toBe("900");
+  });
+
+  test("расшифровку убирают только сами: «‹» на разделителе, выбор запоминается; «›» возвращает", async () => {
+    const room = { px: 900 };
+    const win = sideLayout(room);
+    const live = makeLive({ agent: agentInfo() });
+    const { unmount } = render(<Host live={live} />);
+    load();
+    await userEvent.click(screen.getByRole("button", { name: "Убрать расшифровку" }));
+    expect(screen.queryByRole("region", { name: "Расшифровка" })).toBeNull();
+    expect(screen.queryByRole("separator", { name: "Ширина расшифровки" })).toBeNull();
+    expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBeVisible();
+    expect(localStorage.getItem("meet.pane.live-chat-side-hidden")).toBe("1");
+    win.resize(1600);                                             // окно шире — сама не возвращается
+    expect(screen.queryByRole("region", { name: "Расшифровка" })).toBeNull();
+    unmount();
+
+    render(<Host live={live} />);                                 // перезапуск — помнит
+    expect(screen.queryByRole("region", { name: "Расшифровка" })).toBeNull();
+    const show = screen.getByRole("button", { name: "Показать расшифровку" });
+    expect(show).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(show);
+    expect(screen.getByRole("region", { name: "Расшифровка" })).toBeInTheDocument();
+    expect(localStorage.getItem("meet.pane.live-chat-side-hidden")).toBeNull();
+  });
+
+  test("при убранной расшифровке таймкод в сообщении возвращает её (действие человека)", async () => {
+    localStorage.setItem("meet.pane.live-chat-side-hidden", "1");
+    sideLayout({ px: 900 });
+    render(<Host live={makeLive({ agent: agentInfo() })} />);
+    load();
+    expect(screen.queryByRole("region", { name: "Расшифровка" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "02:05" }));
+    expect(screen.getByRole("region", { name: "Расшифровка" })).toBeInTheDocument();
+  });
+
+  test("чат не прячется: обрыв связи, агент пропал из состояния, смена «широкая» — лента на месте", () => {
+    sideLayout({ px: 900 });
+    const live = makeLive({ agent: agentInfo() });
+    const { rerender } = render(<Host live={live} wide />);
+    load();
+    const chatLog = screen.getByRole("log", { name: "Чат с ассистентом" });
+    rerender(<Host live={{ ...live, error: "Нет связи с ассистентом — переподключаюсь…" }} />);
+    expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBe(chatLog);
+    rerender(<Host live={{ ...live, agent: null }} wide />);       // состояние без агента — чат остаётся
+    expect(screen.getByRole("log", { name: "Чат с ассистентом" })).toBe(chatLog);
+    expect(screen.queryByRole("tablist")).toBeNull();
   });
 });

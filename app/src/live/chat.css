@@ -1,43 +1,39 @@
 /* Чат агента-участника (0.3.6): рабочая область, лента, строка ввода, шапка сессии. */
 
-/* --- Рабочая область: шапка сессии, полоса расшифровки и чат --- */
+/* --- Рабочая область: шапка сессии, колонка расшифровки и чат --- */
 .chat-ws { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
-/* До первого состояния ассистента: ни прежней раскладки, ни чата. */
-.live-ws--loading { align-items: center; justify-content: center; }
-.live-ws__loading { margin: 0; font-size: 12px; }
-.chat-ws__body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
-.chat-ws__main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.chat-ws__main { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
 .chat-ws__feed { flex: 1; min-height: 0; font-size: 12px; }
-.chat-ws__transcript, .chat-ws__strip { min-height: 0; display: flex; flex-direction: column; }
+.chat-ws__transcript { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 
-/* Широкая: расшифровка — колонкой слева (по умолчанию ~30 %), разделитель на её правой рамке. */
-.chat-ws__body--side {
-  display: grid; gap: 12px;
-  grid-template-columns: var(--chat-side, minmax(160px, 3fr)) minmax(280px, 7fr); grid-template-rows: minmax(0, 1fr);
+/*
+ * Одна раскладка при любой ширине (0.3.7): расшифровка — колонкой слева (по
+ * умолчанию ~30 %, потянули — `--chat-side`), чат — справа и всегда виден.
+ * Разделитель — на правой рамке колонки, на нём же кнопка «‹» / «›».
+ */
+.chat-ws__body {
+  flex: 1; min-height: 0; display: grid; gap: 12px;
+  grid-template-columns: var(--chat-side, clamp(96px, 30%, 480px)) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);
 }
-.chat-ws__body--side > .chat-ws__transcript { grid-column: 1; grid-row: 1; padding-right: 12px; border-right: 1px solid var(--line); }
-.chat-ws__body--side > .chat-ws__main { grid-column: 2; grid-row: 1; }
-.chat-ws__body--side > .chat-ws__split { grid-column: 2; grid-row: 1; justify-self: start; margin-left: -12px; }
-
-/* Узкая: полоса над чатом (по умолчанию ~3 строки). */
-.chat-ws__body--top > .chat-ws__strip { flex: 0 0 var(--chat-strip, 72px); }
-.chat-ws__body--top > .splitter--y { margin: -4px 0; }
-.chat-ws__body--top > .splitter.splitter--y::after { background: var(--line); }
-.chat-ws__body--top > .splitter.splitter--y:hover::after,
-.chat-ws__body--top > .splitter.splitter--y[data-dragging]::after,
-.chat-ws__body--top > .splitter.splitter--y:focus-visible::after { background: var(--accent); }
-
-/* Компактная: одна строка расшифровки; развёрнутая — невысокая полоса. */
-.chat-ws__body--compact { gap: 6px; }
-.chat-ws__strip--compact { flex: 0 0 96px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
-.chat-ticker {
-  flex: none; display: flex; align-items: center; gap: 6px; width: 100%; min-height: 24px; padding: 0 6px;
-  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface);
-  color: var(--text-2); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+.chat-ws__body > .chat-ws__transcript { grid-column: 1; grid-row: 1; padding-right: 12px; border-right: 1px solid var(--line); }
+.chat-ws__body > .chat-ws__main { grid-column: 2; grid-row: 1; }
+.chat-ws__body > .chat-ws__split { grid-column: 2; grid-row: 1; justify-self: start; margin-left: -12px; }
+.chat-ws__body > .chat-ws__edge {
+  grid-column: 2; grid-row: 1; justify-self: start; align-self: start; z-index: 2; margin: 2px 0 0 -22px;
 }
-.chat-ticker:hover { color: var(--text); border-color: var(--line-2); }
-.chat-ticker__mark { flex: none; color: var(--text-3); font-size: 10px; }
-.chat-ticker__text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Расшифровку убрали сами: узкая полоса с «›» и чат на всю ширину. */
+.chat-ws__body.is-hidden { grid-template-columns: 20px minmax(0, 1fr); gap: 6px; }
+.chat-ws__body.is-hidden > .chat-ws__edge {
+  grid-column: 1; justify-self: stretch; align-self: stretch; margin: 0; display: flex; justify-content: center;
+  border-right: 1px solid var(--line);
+}
+.chat-ws__toggle {
+  display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0;
+  border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); color: var(--text-2);
+  font: inherit; font-size: 13px; line-height: 1; cursor: pointer;
+}
+.chat-ws__toggle:hover { color: var(--text); border-color: var(--accent); }
+.chat-ws__toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 /* --- Шапка сессии --- */
 .session-bar {
@@ -152,9 +148,13 @@
 .chat-react__btn:hover:not(:disabled) { opacity: 1; background: var(--surface-hover); }
 .chat-react__btn.is-on { opacity: 1; border-color: rgba(94, 106, 210, 0.55); background: rgba(94, 106, 210, 0.16); }
 .chat-msg--agent .chat-msg__tools > *, .chat-react__btn:not(.is-on) { transition: opacity 0.15s ease; }
-.chat-msg--agent:not(:hover):not(:focus-within) .chat-react__btn:not(.is-on),
+/* Не нажатые реакции вне наведения убраны совсем (не прозрачны): поставленная — чипом с края. */
+.chat-msg--agent:not(:hover):not(:focus-within) .chat-react__btn:not(.is-on) { display: none; }
 .chat-msg--agent:not(:hover):not(:focus-within) .chat-msg__copy { opacity: 0; }
-@media (hover: none) { .chat-msg--agent .chat-react__btn, .chat-msg--agent .chat-msg__copy { opacity: 0.7 !important; } }
+@media (hover: none) {
+  .chat-msg--agent .chat-react__btn { display: inline-flex !important; }
+  .chat-msg--agent .chat-react__btn, .chat-msg--agent .chat-msg__copy { opacity: 0.7 !important; }
+}
 
 /* Отклик окна на 👍 / 👎: держится и гаснет — остаётся нажатая кнопка. */
 .chat-msg__ack { color: var(--accent-hover); font-size: 11px; animation: chat-ack 3.5s ease forwards; }

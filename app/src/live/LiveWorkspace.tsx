@@ -243,14 +243,16 @@ export function participantOn(live: Live, chat?: Chat | null): boolean {
   return !!(chat && (chat.agent || live.agent));
 }
 
-/** До первого состояния ассистента: какой он — чат или прежний, ещё неизвестно. */
+/** До первого состояния ассистента: причина в строке ввода чата. */
 export const CONNECTING = "Подключаюсь к ассистенту…";
 
 /**
  * Рабочая область: с агентом-участником — чат (`ChatWorkspace`), без него
  * (`assist.participant` выключен, «Только сводка») — прежняя раскладка. Пока
- * первое состояние не пришло — нейтральное «Подключаюсь…» (или ошибка связи),
- * а не мелькание прежней раскладки.
+ * первое состояние не пришло — уже чат (агент-участник по умолчанию включён)
+ * с «Подключаюсь…» в строке ввода, а не пустой экран: чат не прячется ни при
+ * подключении, ни при обрыве связи. Агента однажды видели — чат остаётся
+ * (`chat.agent` не сбрасывается), прежняя раскладка — только по настройке.
  */
 export function LiveWorkspace(props: {
   live: Live;
@@ -263,14 +265,7 @@ export function LiveWorkspace(props: {
   chat?: Chat | null;
 }) {
   const { chat, ...rest } = props;
-  if (chat && !props.live.loaded && !participantOn(props.live, chat)) {
-    return (
-      <div className="live-ws live-ws--loading">
-        <p className="live-ws__loading muted" role="status">{props.live.error ?? CONNECTING}</p>
-      </div>
-    );
-  }
-  if (chat && participantOn(props.live, chat)) {
+  if (chat && (participantOn(props.live, chat) || !props.live.loaded)) {
     return <ChatWorkspace live={props.live} chat={chat} view={props.view} disabled={props.disabled} place={props.place} />;
   }
   return <ClassicWorkspace {...rest} />;
